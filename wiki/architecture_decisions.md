@@ -1429,6 +1429,25 @@ production, and the silent-sibling collision becomes a startup error naming the 
 
 ---
 
+### [ADR-091: The Native Streams Lane Is Opt-In at the Build Graph](adr_091_streams_opt_in_registration.md)
+
+**Date:** 2026-08-31 | **Status:** Accepted | **Breaking:** `app.StreamDeclarer` and `ModuleRegistry.DeclareStreams` are removed; a `messaging.streams.uri` without a `messaging/streams` import fails startup
+
+`app` statically imported `messaging/streams`, so every consumer of `app` pulled
+`rabbitmq-stream-go-client` and its transitive tail after `go mod tidy`. The lane is now
+link-time opt-in: `messaging/streams` registers a factory into `internal/streamruntime` at
+init (a blank import is enough), and `app` starts the manager through that seam. A
+configured URI with no registration fails startup naming the import; an absent URI with
+no registration starts clean. Declaration methods, config keys and the manager lifecycle
+are unchanged. The hold port types move onto the same seam so `inbox` does not import the
+vendor package. A build tag and a `go.mod` sub-module were rejected at triage.
+
+**Key Benefits:** a service that never imports `messaging/streams` carries none of the
+stream client; a leftover URI cannot boot as a silent no-op.
+**Migration:** [migrations.md](migrations.md) `[C61.25]`.
+
+---
+
 ### [ADR-088: The Outbox Ledger Is Sequenced, Laned, and Drained by One Leader](adr_088_outbox_ordered_leader_relay.md)
 
 **Date:** 2026-08-30 | **Status:** Accepted | **Breaking:** `config.OutboxConfig` stops being comparable; `outbox.Store` gains `Lead`; a migrated ledger needs an explicit `seq` backfill before the new relay runs
@@ -1965,7 +1984,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-090) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-091) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

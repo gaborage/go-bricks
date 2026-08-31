@@ -4,6 +4,10 @@
 - **Date**: 2026-08-12
 - **Related**: ADR-058 (the AMQP stream-queue lane and the two-lane framing), [ADR-040](adr_040_declaration_args_passthrough.md) (declaration args reach the broker), [ADR-045](adr_045_no_producer_side_manager_interfaces.md) (no exported manager interface), [ADR-041](adr_041_shared_ledger_tenancy.md) (single-tenant fail-fast precedent), [ADR-063](adr_063_streams_native_publishing.md) (native publishing, which lifts the consume-only scope below)
 
+> **Extended by [ADR-091](adr_091_streams_opt_in_registration.md) (2026-08-31):** the lane
+> is no longer linked by `app`'s static import. A process that wants it imports
+> `messaging/streams`; a configured URI without that import fails startup.
+>
 > **Amended (2026-08-13):** super streams, listed below as the third thing the
 > AMQP lane cannot do, are now implemented in this lane. The amendment settles
 > what that costs: super-stream consumption is always a SAC group, offsets are

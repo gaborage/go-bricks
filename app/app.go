@@ -15,7 +15,6 @@ import (
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
-	"github.com/gaborage/go-bricks/messaging/streams"
 	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/observability"
 	"github.com/gaborage/go-bricks/server"
@@ -92,7 +91,7 @@ type App struct {
 
 	// streamsManager exists only from prepareRuntime onward; see streamsSlot in slot.go
 	// for why its probe and closer are registered separately from the build-time walks.
-	streamsManager *streams.Manager
+	streamsManager streamHandle
 	// holdLedgers are the modules offering a hold ledger, captured at registration.
 	// More than one is a configuration error the streams setup reports.
 	holdLedgers []holdLedgerProvider
@@ -265,7 +264,7 @@ func (a *App) RegisterModule(module Module) error {
 		// manager becomes the replayer when the drain that drives it lands; until
 		// then the source answers nil, which is what a module with no drain to run
 		// does with it.
-		setter.SetHoldReplayer(func() streams.HoldReplayer { return nil })
+		setter.SetHoldReplayer(func() HoldReplayer { return nil })
 	}
 	if err := a.registry.Register(module); err != nil {
 		return err

@@ -8,15 +8,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/logger"
-	"github.com/gaborage/go-bricks/messaging/streams"
 )
 
 // fakeHoldModule is a module offering a hold ledger, and receiving the replayer
 // source — the two duck-types the framework detects at registration.
 type fakeHoldModule struct {
 	name     string
-	ledger   streams.HoldLedger
-	replayer func() streams.HoldReplayer
+	ledger   HoldLedger
+	replayer func() HoldReplayer
 }
 
 func (m *fakeHoldModule) Name() string {
@@ -25,16 +24,16 @@ func (m *fakeHoldModule) Name() string {
 	}
 	return m.name
 }
-func (*fakeHoldModule) Init(*ModuleDeps) error                            { return nil }
-func (*fakeHoldModule) Shutdown() error                                   { return nil }
-func (m *fakeHoldModule) HoldLedger() streams.HoldLedger                  { return m.ledger }
-func (m *fakeHoldModule) SetHoldReplayer(src func() streams.HoldReplayer) { m.replayer = src }
+func (*fakeHoldModule) Init(*ModuleDeps) error                    { return nil }
+func (*fakeHoldModule) Shutdown() error                           { return nil }
+func (m *fakeHoldModule) HoldLedger() HoldLedger                  { return m.ledger }
+func (m *fakeHoldModule) SetHoldReplayer(src func() HoldReplayer) { m.replayer = src }
 
 // stubHoldLedger is a ledger that records nothing: these tests are about the
 // wiring, not the parking.
 type stubHoldLedger struct{}
 
-func (*stubHoldLedger) Park(context.Context, *streams.HeldMessage) error { return nil }
+func (*stubHoldLedger) Park(context.Context, *HeldMessage) error { return nil }
 func (*stubHoldLedger) HeldTenants(context.Context, string) ([]string, error) {
 	return nil, nil
 }
@@ -106,7 +105,7 @@ func TestRegisterModuleInjectsTheReplayerSource(t *testing.T) {
 // checked is the manager's own, so the guard dissolves when the manager gains the
 // methods rather than needing a wiring step to be remembered.
 func TestHoldWithoutADrainFailsStartup(t *testing.T) {
-	err := assertHoldIsDrainable(&stubHoldLedger{})
+	err := assertHoldIsDrainable(&stubHoldLedger{}, registeredStreamRuntime())
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot drain it")
@@ -116,7 +115,7 @@ func TestHoldWithoutADrainFailsStartup(t *testing.T) {
 // TestNoHoldNeedsNoDrain is the other half: the guard says nothing at all to a
 // deployment that configured no hold, which is every deployment today.
 func TestNoHoldNeedsNoDrain(t *testing.T) {
-	assert.NoError(t, assertHoldIsDrainable(nil))
+	assert.NoError(t, assertHoldIsDrainable(nil, registeredStreamRuntime()))
 }
 
 // TestARejectedModuleContributesNoLedger pins that registration order matters: a

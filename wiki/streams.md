@@ -2,6 +2,10 @@
 
 GoBricks consumes RabbitMQ streams over the **native stream protocol** (default
 port 5552, `rabbitmq_stream` plugin) through the `messaging/streams` package.
+The lane is **opt-in at the build graph** (ADR-091): import
+`github.com/gaborage/go-bricks/messaging/streams` (a blank import is enough)
+so the package can register its runtime factory. A `messaging.streams.uri`
+without that import fails startup naming it; no URI and no import starts clean.
 Streams are append-only replicated logs: reads are non-destructive, positions are
 offsets, and the broker itself remembers where a named consumer got to.
 
@@ -77,8 +81,9 @@ messaging:
 
 ## Declaring streams and consumers
 
-Implement `app.StreamDeclarer` on a module; the framework calls it during
-startup, validates every declaration at once, and starts the consumers.
+Implement `streams.StreamDeclarer` on a module (`DeclareStreams(*streams.Declarations)`);
+the framework calls it during startup, validates every declaration at once, and starts
+the consumers. The import that declares topology is also the import that links the lane.
 
 ```go
 func (m *Module) DeclareStreams(decls *streams.Declarations) {

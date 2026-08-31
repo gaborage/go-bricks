@@ -318,50 +318,47 @@ func TestRegisterAcceptsModulesWhenDatabaseRequirementDoesNotApply(t *testing.T)
 	}
 }
 
-func TestModuleRegistryDeclareStreamsCollectsFromDeclarers(t *testing.T) {
+func TestStreamRuntimeCollectsDeclarationsFromDeclarers(t *testing.T) {
 	log := logger.New("error", false)
 	registry := NewModuleRegistry(&ModuleDeps{Logger: log, Config: &config.Config{}})
 	declarer := &streamModule{name: "orders", declaration: declareOneConsumer}
 	require.NoError(t, registry.Register(declarer))
 	require.NoError(t, registry.Register(&minimalModule{name: "plain"}))
 
-	decls := streams.NewDeclarations()
-	require.NoError(t, registry.DeclareStreams(decls))
+	rt := registeredStreamRuntime()
+	require.NotNil(t, rt, "app tests import messaging/streams, so the runtime is linked")
+	decls, err := rt.CollectDeclarations(runtimeModules(registry.modules), log)
+	require.NoError(t, err)
 
 	assert.Equal(t, 1, declarer.calls, "a declarer is invoked exactly once")
-	assert.Equal(t, streams.Stats{Streams: 1, Consumers: 1}, decls.Stats())
+	assert.Equal(t, StreamDeclStats{Streams: 1, Consumers: 1}, decls.Stats())
 }
 
-func TestModuleRegistryDeclareStreamsRejectsNilStore(t *testing.T) {
-	registry := NewModuleRegistry(&ModuleDeps{Logger: logger.New("error", false), Config: &config.Config{}})
-
-	err := registry.DeclareStreams(nil)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "stream declarations store is nil")
-}
-
-func TestModuleRegistryDeclareStreamsFailsOnInvalidDeclarations(t *testing.T) {
+func TestStreamRuntimeCollectDeclarationsFailsOnInvalidDeclarations(t *testing.T) {
 	log := logger.New("error", false)
 	registry := NewModuleRegistry(&ModuleDeps{Logger: log, Config: &config.Config{}})
 	require.NoError(t, registry.Register(&streamModule{name: "orders", declaration: func(decls *streams.Declarations) {
 		decls.DeclareConsumer(&streams.ConsumerOptions{Stream: "ghost", Name: testStreamConsumer})
 	}}))
 
-	err := registry.DeclareStreams(streams.NewDeclarations())
+	rt := registeredStreamRuntime()
+	require.NotNil(t, rt)
+	_, err := rt.CollectDeclarations(runtimeModules(registry.modules), log)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "stream declaration validation failed")
 	assert.Contains(t, err.Error(), "references undeclared stream")
 }
 
-func TestModuleRegistryDeclareStreamsWithNoDeclarersIsEmpty(t *testing.T) {
+func TestStreamRuntimeCollectDeclarationsWithNoDeclarersIsEmpty(t *testing.T) {
 	log := logger.New("error", false)
 	registry := NewModuleRegistry(&ModuleDeps{Logger: log, Config: &config.Config{}})
 	require.NoError(t, registry.Register(&minimalModule{name: "plain"}))
 
-	decls := streams.NewDeclarations()
-	require.NoError(t, registry.DeclareStreams(decls))
+	rt := registeredStreamRuntime()
+	require.NotNil(t, rt)
+	decls, err := rt.CollectDeclarations(runtimeModules(registry.modules), log)
+	require.NoError(t, err)
 
 	assert.True(t, decls.IsEmpty())
 }

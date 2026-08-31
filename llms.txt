@@ -2974,8 +2974,9 @@ queue := decls.DeclareStreamQueue("orders.events.stream", &messaging.StreamQueue
 ```
 
 For **server-side offset tracking** (a restart resumes from the last stored offset), single
-active consumer, or super streams, use the native stream protocol instead: implement
-`app.StreamDeclarer` and set `messaging.streams.uri`. Handlers run inline and sequentially
+active consumer, or super streams, use the native stream protocol instead: import
+`messaging/streams` (a blank import is enough if you do not declare topology), implement
+`streams.StreamDeclarer` and set `messaging.streams.uri`. Handlers run inline and sequentially
 within a stream. A handler returning nil advances the *tracked* position, and commits are
 batched — so a restart replays everything handled since the last stored offset. Delivery is
 at-least-once, so make handlers idempotent. See

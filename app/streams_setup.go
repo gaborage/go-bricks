@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/gaborage/go-bricks/messaging/streams"
+	"github.com/gaborage/go-bricks/internal/streamruntime"
 )
 
 // plaintextStreamScheme is the non-TLS stream-protocol scheme
@@ -20,38 +20,50 @@ const plaintextStreamScheme = "rabbitmq-stream"
 // Everything happens at RUNTIME on purpose: the manager does not exist until this
 // function produces it — see streamsSlot in slot.go for why its probe and closer are
 // registered separately from the build-time walks.
+//
+// The lane itself is link-time opt-in (ADR-091). A configured URI with no
+// registered runtime is a startup error naming the missing import; an absent
+// URI with no runtime is a clean start.
 func (a *App) prepareStreamConsumers(ctx context.Context) error {
+	rt := registeredStreamRuntime()
+	if rt == nil {
+		if a.streamsURIConfigured() {
+			return ErrStreamsNotLinked
+		}
+		return nil
+	}
+
 	if a.registry == nil {
 		return errors.New("module registry not initialized")
 	}
 
-	decls := streams.NewDeclarations()
-	if err := a.registry.DeclareStreams(decls); err != nil {
-		return err
+	decls, collectErr := rt.CollectDeclarations(runtimeModules(a.registry.modules), a.logger)
+	if collectErr != nil {
+		return collectErr
 	}
 	if decls.IsEmpty() {
 		return nil
 	}
 
-	if err := a.assertStreamsNotPerTenant(); err != nil {
-		return err
+	if perTenantErr := a.assertStreamsNotPerTenant(); perTenantErr != nil {
+		return perTenantErr
 	}
 
-	if err := a.assertStreamsConfigured(decls); err != nil {
-		return err
+	if configuredErr := a.assertStreamsConfigured(decls); configuredErr != nil {
+		return configuredErr
 	}
 
-	hold, err := a.holdLedger()
-	if err != nil {
-		return err
+	hold, holdErr := a.holdLedger()
+	if holdErr != nil {
+		return holdErr
 	}
-	if err := assertHoldIsDrainable(hold); err != nil {
-		return err
+	if drainErr := assertHoldIsDrainable(hold, rt); drainErr != nil {
+		return drainErr
 	}
 
 	cfg := a.cfg.Messaging.Streams
 	a.warnIfPlaintextStreamURI(cfg.URI)
-	mgr := streams.NewManager(streams.ManagerOptions{
+	mgr := rt.NewManager(&StreamManagerOptions{
 		URI:                 cfg.URI,
 		AddressResolverHost: cfg.AddressResolver.Host,
 		AddressResolverPort: cfg.AddressResolver.Port,
@@ -79,6 +91,18 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 	a.streamsManager = mgr
 
 	return nil
+}
+
+func runtimeModules(mods []Module) []streamruntime.Module {
+	out := make([]streamruntime.Module, len(mods))
+	for i, m := range mods {
+		out[i] = m
+	}
+	return out
+}
+
+func (a *App) streamsURIConfigured() bool {
+	return a.cfg != nil && a.cfg.Messaging.Streams.URI != ""
 }
 
 // assertStreamsNotPerTenant re-asserts the tenancy invariant at runtime: streams
@@ -124,7 +148,7 @@ func (a *App) warnIfPlaintextStreamURI(uri string) {
 // assertStreamsConfigured fails fast when a module declared streams but no
 // stream endpoint is configured — without it the declarations would be silently
 // dropped, exactly as assertMessagingConfiguredIfDeclared prevents for AMQP.
-func (a *App) assertStreamsConfigured(decls *streams.Declarations) error {
+func (a *App) assertStreamsConfigured(decls StreamDeclarations) error {
 	if a.cfg.Messaging.Streams.URI != "" {
 		return nil
 	}
@@ -153,8 +177,8 @@ func (a *App) shutdownStreamConsumers() {
 // offers one. Two providers is a configuration error rather than a choice: the
 // hold's order guarantee is per tenant per consumer, and two ledgers would split
 // one consumer's held set between them.
-func (a *App) holdLedger() (streams.HoldLedger, error) {
-	var found streams.HoldLedger
+func (a *App) holdLedger() (HoldLedger, error) {
+	var found HoldLedger
 	for _, provider := range a.holdLedgers {
 		ledger := provider.HoldLedger()
 		if ledger == nil {
@@ -171,14 +195,14 @@ func (a *App) holdLedger() (streams.HoldLedger, error) {
 // assertHoldIsDrainable refuses a hold nothing can replay. A parked message would
 // wait for a drain that never runs, and only hand-written SQL would release it —
 // so a build without one refuses the configuration instead of accepting messages
-// it cannot give back. The capability is the manager's, so this asks the type
-// itself: the guard dissolves when the manager gains the methods, with no wiring
-// step to remember.
-func assertHoldIsDrainable(hold streams.HoldLedger) error {
+// it cannot give back. The capability is the manager's, so this asks the
+// registered runtime: the guard dissolves when the manager gains the methods,
+// with no wiring step to remember.
+func assertHoldIsDrainable(hold HoldLedger, rt StreamRuntime) error {
 	if hold == nil {
 		return nil
 	}
-	if _, drains := any((*streams.Manager)(nil)).(streams.HoldReplayer); !drains {
+	if rt == nil || !rt.CanDrainHold() {
 		return errors.New("a hold ledger is configured but this build cannot drain it: " +
 			"parked messages would never be replayed; disable inbox.hold.enabled until the hold drain is available")
 	}
