@@ -42,6 +42,20 @@ type section struct {
 	rootField string
 	path      string
 	placement placement
+	// envUnreachable marks a section whose path splices in a FREE-FORM resource key carrying a
+	// dot. keyToEnvVar flattens dots and underscores alike, so a key under such a path names an
+	// environment variable that unflattens to a DIFFERENT key — see missingFieldAction. The
+	// engine suppresses the env half of a rebuilt hint for these; the YAML path, which keeps the
+	// key verbatim, stays correct.
+	envUnreachable bool
+}
+
+// keyIsEnvUnreachable reports whether splicing name into a section path makes the env half of a
+// generated hint name the wrong key. A dot inside the name is the one case: it survives the
+// key-to-variable round trip envVarForKey checks, because the round trip measures in dots, and
+// so gets past that guard while still unflattening to a different tenant or section.
+func keyIsEnvUnreachable(name string) bool {
+	return strings.Contains(name, ".")
 }
 
 // rootCacheSection is the root cache block: `cache`. It may be absent or disabled — that is
@@ -53,7 +67,12 @@ func rootCacheSection() section {
 // tenantCacheSection is one tenant's cache block: `multitenant.tenants.<id>.cache`. Caches have
 // no named siblings — unlike databases, a non-empty cache resource key is always a tenant id.
 func tenantCacheSection(id string) section {
-	return section{rootField: fieldCache, path: "multitenant.tenants." + id + ".cache", placement: placementTenant}
+	return section{
+		rootField:      fieldCache,
+		path:           "multitenant.tenants." + id + ".cache",
+		placement:      placementTenant,
+		envUnreachable: keyIsEnvUnreachable(id),
+	}
 }
 
 // cacheSectionForResourceKey maps a cache resource key onto the section it resolves, the cache
@@ -93,7 +112,7 @@ func (s section) qualify(err error) error {
 	if s.placement == placementRoot {
 		return err
 	}
-	return qualifyConfigError(err, s.path, s.qualifyField)
+	return qualifyConfigError(err, s.path, s.qualifyField, s.envUnreachable)
 }
 
 // qualifyField rewrites one root-spelled field to this section. A key under the kind's own root
@@ -119,14 +138,14 @@ func (s section) qualifyField(field string) string {
 //
 // The one addressing primitive every kind's non-root section.qualify shares, so a producer
 // that reimplements this recipe instead of calling it is exactly the drift #1260 closes.
-func qualifyConfigError(err error, path string, addressField func(string) string) error {
+func qualifyConfigError(err error, path string, addressField func(string) string, envUnreachable bool) error {
 	var cfgErr *ConfigError
 	if !errors.As(err, &cfgErr) {
 		return fmt.Errorf("%s: %w", path, err)
 	}
 	qualified := *cfgErr
 	qualified.Field = addressField(cfgErr.Field)
-	qualified.Action = requalifyAction(cfgErr.Action, cfgErr.Field, qualified.Field)
+	qualified.Action = requalifyAction(cfgErr.Action, cfgErr.Field, qualified.Field, envUnreachable)
 	qualified.Details = slices.Clone(cfgErr.Details)
 	return &qualified
 }
@@ -141,11 +160,15 @@ func qualifyConfigError(err error, path string, addressField func(string) string
 // the key is read out of the hint and re-pointed by the same field-to-field move, which is what
 // keeps that hint from surviving qualification and sending an operator at the root key.
 //
+// The env half of the rebuilt hint is dropped when the section is envUnreachable: recognition
+// still rebuilds from the ORIGINAL key, whose env half was reachable when the constructor
+// emitted it, so only the emitted text changes.
+//
 // A hint shape this function does not recognize is left as it is, which is the safe direction but
 // not a free one: a future constructor whose Action does not rebuild from missingFieldAction —
 // a different lead-in, or two keys in one hint — keeps a root-spelled hint beside a qualified
 // Field until it is taught here.
-func requalifyAction(action, origField, qualifiedField string) string {
+func requalifyAction(action, origField, qualifiedField string, envUnreachable bool) string {
 	if action == "" || origField == "" {
 		return action
 	}
@@ -160,6 +183,9 @@ func requalifyAction(action, origField, qualifiedField string) string {
 	qualifiedKey, ok := reattachHead(key, origField, qualifiedField)
 	if !ok {
 		return action
+	}
+	if envUnreachable {
+		return lead + fmt.Sprintf(actionAddYAMLPath, qualifiedKey)
 	}
 	return lead + missingFieldAction(qualifiedKey)
 }
@@ -205,10 +231,14 @@ func reattachHead(key, oldHead, newHead string) (string, bool) {
 // The guard covers every non-injective case of the transform EXCEPT a dot inside a section
 // or tenant NAME, since the dot is the delimiter the round trip is measured in:
 // multitenant.tenants.acme.corp.database.port round-trips cleanly but unflattens to tenant
-// "acme", sub-key "corp". No producer can reach that today — koanf cannot deliver a map key
-// with an embedded dot, and the connect door raises no missing-field errors — so it is a
-// trap for a future caller rather than a live hole. Suppress the env half explicitly if you
-// ever raise one of these from a free-form key.
+// "acme", sub-key "corp". That case is reachable: TenantStore.AddTenant takes a free-form
+// tenant id — the resolver grammar (ADR-090) constrains the STATIC config, not the dynamic
+// store — and the runtime cache door raises NewMissingFieldError for an empty Redis host, so
+// "acme.corp" would otherwise be handed a variable naming tenant "acme".
+//
+// So the suppression is enforced rather than advised: a section built by splicing a free-form
+// key that carries a dot is marked envUnreachable, and requalifyAction emits the YAML-only
+// form for it. The YAML path keeps the key verbatim and stays correct.
 func missingFieldAction(key string) string {
 	if envVar := envVarForKey(key); envVar != "" {
 		return fmt.Sprintf(actionSetEnvOrYAMLPath, envVar, key)

@@ -170,11 +170,12 @@ func TestRequalifyActionRewritesOnlyItsOwnGeneratedHints(t *testing.T) {
 		qualified = "multitenant.tenants.acme.cache"
 	)
 	tests := []struct {
-		name   string
-		action string
-		origF  string
-		qualF  string
-		want   string
+		name           string
+		action         string
+		origF          string
+		qualF          string
+		envUnreachable bool
+		want           string
 	}{
 		{
 			name:   "missing_field_hint_for_the_field_itself",
@@ -244,11 +245,107 @@ func TestRequalifyActionRewritesOnlyItsOwnGeneratedHints(t *testing.T) {
 			qualF:  qualified,
 			want:   "add cache.enabled to config.yaml",
 		},
+		{
+			// An env-unreachable section keeps the YAML path and drops the variable, even
+			// through the not-configured lead-in — the lead is preserved, the env half is not.
+			name:           "not_configured_hint_loses_its_env_half_when_env_is_unreachable",
+			action:         "to enable: set CACHE_ENABLED env var or add cache.enabled to config.yaml",
+			origF:          orig,
+			qualF:          "multitenant.tenants.acme.corp.cache",
+			envUnreachable: true,
+			want:           "to enable: add multitenant.tenants.acme.corp.cache.enabled to config.yaml",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, requalifyAction(tt.action, tt.origF, tt.qualF))
+			assert.Equal(t, tt.want, requalifyAction(tt.action, tt.origF, tt.qualF, tt.envUnreachable))
 		})
 	}
+}
+
+// dottedKeyTestCases names, per kind, a section built from a tenant id carrying a dot — the
+// free-form spelling TenantStore.AddTenant accepts — beside the YAML path that id must produce
+// verbatim. Every kind that splices a free-form key into its path owes the same suppression, so
+// the guarantee is pinned once across all of them rather than once for cache.
+func dottedKeyTestCases() []struct {
+	name     string
+	sub      section
+	field    string
+	envVar   string
+	yamlPath string
+	wantPath string
+} {
+	return []struct {
+		name     string
+		sub      section
+		field    string
+		envVar   string
+		yamlPath string
+		wantPath string
+	}{
+		{
+			name:     "database",
+			sub:      tenantDatabaseSection("acme.corp"),
+			field:    "database.host",
+			envVar:   "DATABASE_HOST",
+			yamlPath: "database.host",
+			wantPath: "multitenant.tenants.acme.corp.database.host",
+		},
+		{
+			name:     "cache",
+			sub:      tenantCacheSection("acme.corp"),
+			field:    "cache.redis.host",
+			envVar:   "CACHE_REDIS_HOST",
+			yamlPath: "cache.redis.host",
+			wantPath: "multitenant.tenants.acme.corp.cache.redis.host",
+		},
+	}
+}
+
+// TestSectionQualifySuppressesTheEnvHintForADottedKey pins the enforced half of the trap
+// missingFieldAction documents: MULTITENANT_TENANTS_ACME_CORP_<...> unflattens to tenant "acme",
+// sub-key "corp", so the engine emits the YAML-only hint for a section whose free-form key
+// carries a dot. The YAML path keeps the id verbatim and is what the operator must edit.
+func TestSectionQualifySuppressesTheEnvHintForADottedKey(t *testing.T) {
+	for _, tt := range dottedKeyTestCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			err := NewMissingFieldError(tt.field, tt.envVar, tt.yamlPath)
+
+			var qualified *ConfigError
+			require.ErrorAs(t, tt.sub.qualify(err), &qualified)
+
+			assert.True(t, tt.sub.envUnreachable)
+			assert.Equal(t, tt.wantPath, qualified.Field)
+			assert.Equal(t, "add "+tt.wantPath+" to config.yaml", qualified.Action)
+			assert.NotContains(t, qualified.Action, "env var")
+		})
+	}
+}
+
+// TestSectionQualifyKeepsTheEnvHintForADotFreeKey is the other half of the same dimension: an
+// ordinary tenant id still gets the variable, so the suppression above is attributable to the
+// dot rather than to the qualification itself.
+func TestSectionQualifyKeepsTheEnvHintForADotFreeKey(t *testing.T) {
+	for _, tt := range sectionEngineTestCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			field := tt.sub.rootField + ".host"
+			err := NewMissingFieldError(field, "X_HOST", field)
+
+			var qualified *ConfigError
+			require.ErrorAs(t, tt.sub.qualify(err), &qualified)
+
+			assert.False(t, tt.sub.envUnreachable)
+			assert.Contains(t, qualified.Action, "env var")
+		})
+	}
+}
+
+// TestNamedDatabaseSectionMarksADottedName covers the third free-form splice — databases.<name>
+// — which reaches the same flattening trap through a different constructor.
+func TestNamedDatabaseSectionMarksADottedName(t *testing.T) {
+	assert.False(t, namedDatabaseSection("reporting").envUnreachable)
+	assert.True(t, namedDatabaseSection("report.db").envUnreachable)
+	assert.False(t, rootDatabaseSection().envUnreachable)
+	assert.False(t, rootCacheSection().envUnreachable)
 }

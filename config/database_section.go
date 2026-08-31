@@ -24,11 +24,21 @@ func rootDatabaseSection() section {
 }
 
 func namedDatabaseSection(name string) section {
-	return section{rootField: fieldDatabase, path: "databases." + name, placement: placementNamed}
+	return section{
+		rootField:      fieldDatabase,
+		path:           "databases." + name,
+		placement:      placementNamed,
+		envUnreachable: keyIsEnvUnreachable(name),
+	}
 }
 
 func tenantDatabaseSection(id string) section {
-	return section{rootField: fieldDatabase, path: "multitenant.tenants." + id + ".database", placement: placementTenant}
+	return section{
+		rootField:      fieldDatabase,
+		path:           "multitenant.tenants." + id + ".database",
+		placement:      placementTenant,
+		envUnreachable: keyIsEnvUnreachable(id),
+	}
 }
 
 // sectionForResourceKey maps a DBConfigProvider resource key onto the database section it
