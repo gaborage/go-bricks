@@ -246,7 +246,7 @@ For dual-mode log routing, runtime metrics, custom-metric patterns, vendor authe
 | Outbound HTTP client | `httpclient.NewBuilder(...).WithTimeout(d)` | 30s |
 | Cache (Redis) dial / read / write | `cache.redis.dialtimeout`, `cache.redis.readtimeout`, `cache.redis.writetimeout` | 5s / 3s / 3s |
 | AMQP publish readiness pre-flight (cold/reconnecting client); also bounds the startup publisher pre-warm wait (WARN-only, never fails startup) | `messaging.reconnect.readytimeout` | 5s |
-| AMQP publish (call bound) | `readytimeout + maxpublishattempts × connectiontimeout` | **150s warm / 155s ceiling** (5 × 30s confirmation waits; plus up to 5s `readytimeout` when cold) |
+| AMQP publish (call bound) | `readytimeout + maxpublishattempts × connectiontimeout` | **150s warm / 155s ceiling** at default backoffs (5 × 30s confirmation waits; plus up to 5s `readytimeout` when cold; a raised `resenddelay` can stretch the publish-error path) |
 | Scheduler slow-job WARN / shutdown | `scheduler.timeout.slowjob`, `scheduler.timeout.shutdown` | 25s / 30s |
 | Observability export | `observability.trace.export.timeout`, `observability.metrics.export.timeout`, `observability.logs.export.timeout` | 10s when `observability.environment` is `development` (its default — **not** derived from `app.env`) or the signal's endpoint is `stdout`; 60s otherwise |
 

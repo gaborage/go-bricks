@@ -79,6 +79,7 @@ cancel.
 Apply your own deadline if a job step has a known SLO. When that step
 publishes, size the deadline against the real AMQP call bound —
 `readytimeout + maxpublishattempts × connectiontimeout` (**150s warm /
-155s ceiling** at defaults) — not the 30s per-attempt confirmation wait.
-See [context_deadlines.md](context_deadlines.md) and
+155s ceiling** at default backoffs) — not the 30s per-attempt confirmation
+wait. A raised `reconnect.resenddelay` can stretch the publish-error path;
+see [context_deadlines.md](context_deadlines.md) and
 [messaging.md](messaging.md#bounded-publish-retries-reconnectmaxpublishattempts).
