@@ -2,6 +2,7 @@ package streams
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -155,4 +156,44 @@ func TestAReloadNeverErasesAParkThatRacedIt(t *testing.T) {
 	assert.True(t, runner.held.has("acme"), "the park that raced the read survives it")
 	assert.True(t, runner.held.has("globex"), "and the ledger's own listing is applied")
 	assert.Equal(t, 2, reads, "the stale listing was refused and the read ran again")
+}
+
+// TestTheGenerationOnlyEverAdvances pins what makes the counter a GENERATION
+// rather than an arbitrary tag: it must never revisit a value it has already
+// handed out. A replace is accepted on equality alone, so a counter that walked
+// backwards could return to a snapshot a reader still holds and let a listing
+// read two parks ago be applied as if it were current.
+//
+// Equality cannot see the direction on its own — after two parks a counter that
+// went up reads G+2 and one that went down reads G-2, and both differ from G —
+// so the direction is asserted here, where it is the whole point.
+func TestTheGenerationOnlyEverAdvances(t *testing.T) {
+	set := newHeldSet()
+
+	seen := []uint64{set.generationAt()}
+	for _, tenant := range []string{"a", "b", "c", "d"} {
+		set.add(tenant)
+		seen = append(seen, set.generationAt())
+	}
+
+	for i := 1; i < len(seen); i++ {
+		assert.Greater(t, seen[i], seen[i-1], "a park advances the generation, never rewinds it")
+	}
+	assert.Len(t, slices.Compact(slices.Sorted(slices.Values(seen))), len(seen),
+		"and no value is ever handed out twice")
+}
+
+// TestTwoParksStillRefuseAStaleReplace is the behaviour that rests on it: a
+// listing read before several parks is refused, not merely one park.
+func TestTwoParksStillRefuseAStaleReplace(t *testing.T) {
+	set := newHeldSet()
+	snapshot := set.generationAt()
+
+	set.add("acme")
+	set.add("globex")
+
+	assert.False(t, set.replace(snapshot, []string{"initech"}),
+		"a listing older than two parks is as stale as one older than a single park")
+	assert.True(t, set.has("acme"))
+	assert.True(t, set.has("globex"))
 }
