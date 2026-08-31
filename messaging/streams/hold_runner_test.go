@@ -336,3 +336,32 @@ func TestRunnerWithoutAScreenGatesEverything(t *testing.T) {
 
 	assert.Len(t, ledger.parked(), 1, "with no screen there is nothing to ask, so the gate parks")
 }
+
+// TestRunnerHoldsOnlyTheTenantThatFailed pins the isolation the hold exists for
+// (ADR-089) against the poison bypass: with tenant-a held, ANOTHER tenant's
+// poison is skipped without holding it, and that tenant's decodable message is
+// still handled and committed. Skipping poison must not cost the partition its
+// throughput for everyone else.
+func TestRunnerHoldsOnlyTheTenantThatFailed(t *testing.T) {
+	ledger := &fakeHoldLedger{}
+	handled := 0
+	runner := newTypedHoldRunner(t, ledger, func(context.Context, streamOrder, *Message) error {
+		handled++
+		return nil
+	})
+	runner.held.add("tenant-a")
+	storer := &fakeStorer{}
+
+	runner.deliver(testStream, 41, stampedJSONMessage("tenant-b", `{"amount":"notanint"}`), storer)
+
+	assert.Zero(t, handled, "the poison never reaches the handler")
+	assert.Empty(t, ledger.parked(), "and holds nobody")
+	assert.False(t, runner.held.has("tenant-b"), "a payload failure holds no tenant, held partition or not")
+	assert.Empty(t, storer.offsets(), "its offset is skipped")
+
+	runner.deliver(testStream, 42, stampedJSONMessage("tenant-b", `{"reference":"abc","amount":7}`), storer)
+
+	assert.Equal(t, 1, handled, "an unheld tenant keeps flowing past another tenant's hold")
+	assert.Equal(t, []int64{42}, storer.offsets(), "and commits past the skipped offset")
+	assert.True(t, runner.held.has("tenant-a"), "tenant-a is still held throughout")
+}
