@@ -1,9 +1,12 @@
 package builder
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/Masterminds/squirrel"
 
 	"github.com/gaborage/go-bricks/database/internal/sqllex"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -65,6 +68,52 @@ func (oracleRenderer) QuoteIdentifierForClause(identifier string) string {
 	quoted := sqllex.QuoteOracleIdentifier(m[validClauseIdentifierPattern.SubexpIndex("ident")])
 	quoted += strings.ToUpper(m[validClauseIdentifierPattern.SubexpIndex("dir")])
 	return quoted + strings.ToUpper(m[validClauseIdentifierPattern.SubexpIndex("nulls")])
+}
+
+// CaseInsensitiveLike folds both sides with UPPER(): Oracle has no ILIKE, so
+// case insensitivity is spelled in the comparison rather than in the operator.
+func (oracleRenderer) CaseInsensitiveLike(quotedColumn, likePattern string) squirrel.Sqlizer {
+	return squirrel.Like{"UPPER(" + quotedColumn + ")": strings.ToUpper(likePattern)}
+}
+
+// Regex renders REGEXP_LIKE with an optional 'i' match flag, wrapped in NOT(...)
+// when negated: Oracle carries case and negation as arguments and a wrapper, not
+// as four operator spellings.
+func (oracleRenderer) Regex(quotedColumn, pattern string, caseInsensitive, negated bool) squirrel.Sqlizer {
+	expr := "REGEXP_LIKE(" + quotedColumn + ", ?"
+	args := []any{pattern}
+	if caseInsensitive {
+		expr += ", ?"
+		args = append(args, "i")
+	}
+	expr += ")"
+	if negated {
+		expr = "NOT (" + expr + ")"
+	}
+	return squirrel.Expr(expr, args...)
+}
+
+// JSONContains has no clean Oracle equivalent — JSON_EQUAL is exact equality and
+// JSON_EXISTS wants a path predicate — so it reports that rather than rendering a
+// predicate that means something else. The column is never quoted: nothing about
+// it can change this outcome. See
+// https://github.com/gaborage/go-bricks/issues/341.
+func (oracleRenderer) JSONContains(_ any, _ func() (string, error)) squirrel.Sqlizer {
+	return errorSqlizer{err: errors.New("JSONContains: Oracle support not implemented; see https://github.com/gaborage/go-bricks/issues/341")}
+}
+
+// CurrentTimestamp renders SYSDATE.
+func (oracleRenderer) CurrentTimestamp() string { return "SYSDATE" }
+
+// UUIDGeneration renders SYS_GUID(), Oracle's UUID generation.
+func (oracleRenderer) UUIDGeneration() string { return "SYS_GUID()" }
+
+// BooleanValue renders 1/0: Oracle stores booleans as NUMBER(1).
+func (oracleRenderer) BooleanValue(value bool) any {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 // buildOraclePaginationClause constructs an Oracle-compatible pagination clause using OFFSET and FETCH NEXT syntax.

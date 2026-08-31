@@ -3,7 +3,6 @@
 Modern building blocks for Go microservices. GoBricks brings together configuration, HTTP, messaging, database, logging and observability primitives that teams need to ship production-grade services fast.
 
 [![CI](https://github.com/gaborage/go-bricks/workflows/CI/badge.svg)](https://github.com/gaborage/go-bricks/actions)
-[![Go Report Card](https://goreportcard.com/badge/github.com/gaborage/go-bricks)](https://goreportcard.com/report/github.com/gaborage/go-bricks)
 [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=gaborage_go-bricks&metric=coverage)](https://sonarcloud.io/summary/new_code?id=gaborage_go-bricks)
 [![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=gaborage_go-bricks&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=gaborage_go-bricks)
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=gaborage_go-bricks&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=gaborage_go-bricks)
@@ -44,7 +43,7 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 - **Production-ready defaults** for the boring-but-essential pieces (server, logging, configuration, tracing).
 - **Composable module system** that keeps HTTP, database, and messaging concerns organized.
 - **Mission-critical integrations** (PostgreSQL, Oracle, RabbitMQ, Flyway) with unified ergonomics.
-- **Modern Go practices** with type safety, performance optimizations, and Go 1.26 features.
+- **Modern Go practices** with type safety, performance optimizations, and Go 1.27 features.
 - **Extensible design** that works with modern Go idioms and the wider ecosystem.
 
 ---
@@ -106,7 +105,7 @@ runs that step on its own.
 
 ### Requirements
 
-- **Go 1.26** required
+- **Go 1.27** required
 - Modern Go toolchain with module support
 - Docker Desktop or Docker Engine (integration tests only)
 

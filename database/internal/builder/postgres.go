@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/Masterminds/squirrel"
 )
 
 // postgresRenderer is the PostgreSQL half of the vendorRenderer seam. A column
@@ -24,6 +26,48 @@ func (postgresRenderer) QuoteTable(table string) string { return table }
 
 // QuoteIdentifierForClause renders an ORDER BY / GROUP BY item verbatim.
 func (postgresRenderer) QuoteIdentifierForClause(identifier string) string { return identifier }
+
+// CaseInsensitiveLike renders ILIKE, PostgreSQL's case-insensitive operator, so
+// neither side of the comparison has to be folded.
+func (postgresRenderer) CaseInsensitiveLike(quotedColumn, likePattern string) squirrel.Sqlizer {
+	return squirrel.ILike{quotedColumn: likePattern}
+}
+
+// Regex renders the POSIX-regex operators: ~ (CS), ~* (CI), !~ (NOT CS),
+// !~* (NOT CI). Negation and case are operator spellings here, not wrappers.
+func (postgresRenderer) Regex(quotedColumn, pattern string, caseInsensitive, negated bool) squirrel.Sqlizer {
+	op := "~"
+	if negated {
+		op = "!~"
+	}
+	if caseInsensitive {
+		op += "*"
+	}
+	return squirrel.Expr(quotedColumn+" "+op+" ?", pattern)
+}
+
+// JSONContains renders the jsonb containment operator. The payload is settled
+// first and returns early, so a malformed one costs no column quoting.
+func (postgresRenderer) JSONContains(value any, quoteColumn func() (string, error)) squirrel.Sqlizer {
+	jsonStr, err := jsonContainsPayload(value)
+	if err != nil {
+		return errorSqlizer{err: fmt.Errorf("JSONContains: %w", err)}
+	}
+	quotedColumn, quoteErr := quoteColumn()
+	if quoteErr != nil {
+		return errorSqlizer{err: quoteErr}
+	}
+	return squirrel.Expr(quotedColumn+" @> ?::jsonb", jsonStr)
+}
+
+// CurrentTimestamp renders NOW().
+func (postgresRenderer) CurrentTimestamp() string { return sqlFuncNow }
+
+// UUIDGeneration renders gen_random_uuid(), in pgcrypto and in core since 13.
+func (postgresRenderer) UUIDGeneration() string { return "gen_random_uuid()" }
+
+// BooleanValue passes the bool through: PostgreSQL has a native boolean type.
+func (postgresRenderer) BooleanValue(value bool) any { return value }
 
 // buildPostgreSQLUpsert creates a PostgreSQL upsert: ON CONFLICT (columns) DO UPDATE SET ...
 // when update columns are provided, or DO NOTHING otherwise.

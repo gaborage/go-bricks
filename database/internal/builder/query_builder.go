@@ -547,17 +547,7 @@ func (qb *QueryBuilder) BuildCaseInsensitiveLike(column, value string) squirrel.
 		return errorSqlizer{err: err}
 	}
 
-	switch qb.vendor {
-	case dbtypes.PostgreSQL:
-		// PostgreSQL uses ILIKE operator
-		return squirrel.ILike{quotedColumn: likeValue}
-	case dbtypes.Oracle:
-		// Oracle requires UPPER() for case-insensitive matching and quoted column names
-		return squirrel.Like{"UPPER(" + quotedColumn + ")": strings.ToUpper(likeValue)}
-	default:
-		// Default to standard LIKE
-		return squirrel.Like{quotedColumn: likeValue}
-	}
+	return qb.renderer.CaseInsensitiveLike(quotedColumn, likeValue)
 }
 
 // BuildRegex creates a vendor-specific regex match expression.
@@ -575,31 +565,7 @@ func (qb *QueryBuilder) BuildRegex(column, pattern string, caseInsensitive, nega
 		return errorSqlizer{err: err}
 	}
 
-	switch qb.vendor {
-	case dbtypes.PostgreSQL:
-		op := "~"
-		if negated {
-			op = "!~"
-		}
-		if caseInsensitive {
-			op += "*"
-		}
-		return squirrel.Expr(quotedColumn+" "+op+" ?", pattern)
-	case dbtypes.Oracle:
-		expr := "REGEXP_LIKE(" + quotedColumn + ", ?"
-		args := []any{pattern}
-		if caseInsensitive {
-			expr += ", ?"
-			args = append(args, "i")
-		}
-		expr += ")"
-		if negated {
-			expr = "NOT (" + expr + ")"
-		}
-		return squirrel.Expr(expr, args...)
-	default:
-		return errorSqlizer{err: fmt.Errorf("regex matching is not supported for vendor %q", qb.vendor)}
-	}
+	return qb.renderer.Regex(quotedColumn, pattern, caseInsensitive, negated)
 }
 
 // BuildJSONContains creates a JSON containment expression.
@@ -613,22 +579,12 @@ func (qb *QueryBuilder) BuildRegex(column, pattern string, caseInsensitive, nega
 // requires a path predicate) so it returns an error filter for now. See
 // https://github.com/gaborage/go-bricks/issues/341 for follow-up.
 func (qb *QueryBuilder) BuildJSONContains(column string, value any) squirrel.Sqlizer {
-	switch qb.vendor {
-	case dbtypes.PostgreSQL:
-		jsonStr, err := jsonContainsPayload(value)
-		if err != nil {
-			return errorSqlizer{err: fmt.Errorf("JSONContains: %w", err)}
-		}
-		quotedColumn, quoteErr := qb.quoteColumnForQuery(column)
-		if quoteErr != nil {
-			return errorSqlizer{err: quoteErr}
-		}
-		return squirrel.Expr(quotedColumn+" @> ?::jsonb", jsonStr)
-	case dbtypes.Oracle:
-		return errorSqlizer{err: errors.New("JSONContains: Oracle support not implemented; see https://github.com/gaborage/go-bricks/issues/341")}
-	default:
-		return errorSqlizer{err: fmt.Errorf("JSONContains: unsupported vendor %q", qb.vendor)}
-	}
+	// The column is handed over as a deferred quoter, not a quoted string: a
+	// vendor that cannot render this predicate never quotes a column it will
+	// not name, which is what the Oracle and unknown-vendor arms did here.
+	return qb.renderer.JSONContains(value, func() (string, error) {
+		return qb.quoteColumnForQuery(column)
+	})
 }
 
 // jsonContainsPayload converts the caller-supplied value into a JSON string.
@@ -669,41 +625,17 @@ func jsonContainsPayload(value any) (string, error) {
 
 // BuildCurrentTimestamp returns the current timestamp function for the database vendor
 func (qb *QueryBuilder) BuildCurrentTimestamp() string {
-	switch qb.vendor {
-	case dbtypes.PostgreSQL:
-		return sqlFuncNow
-	case dbtypes.Oracle:
-		return "SYSDATE"
-	default:
-		return sqlFuncNow
-	}
+	return qb.renderer.CurrentTimestamp()
 }
 
 // BuildUUIDGeneration returns the UUID generation function for the database vendor
 func (qb *QueryBuilder) BuildUUIDGeneration() string {
-	switch qb.vendor {
-	case dbtypes.PostgreSQL:
-		return "gen_random_uuid()"
-	case dbtypes.Oracle:
-		return "SYS_GUID()" // Oracle's UUID generation
-	default:
-		return "UUID()"
-	}
+	return qb.renderer.UUIDGeneration()
 }
 
 // BuildBooleanValue converts a Go boolean to the appropriate database representation
 func (qb *QueryBuilder) BuildBooleanValue(value bool) any {
-	switch qb.vendor {
-	case dbtypes.PostgreSQL:
-		return value // PostgreSQL has native boolean support
-	case dbtypes.Oracle:
-		if value {
-			return 1 // Oracle uses NUMBER(1) for boolean
-		}
-		return 0
-	default:
-		return value
-	}
+	return qb.renderer.BooleanValue(value)
 }
 
 // EscapeIdentifier escapes a database identifier (table/column name) according to vendor rules
