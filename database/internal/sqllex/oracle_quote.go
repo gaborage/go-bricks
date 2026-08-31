@@ -208,8 +208,12 @@ func (p *identifierParser) finalize() ([]string, bool) {
 	return p.segments, true
 }
 
-// ValidateSegment checks if a segment is valid (quoted or unquoted)
+// ValidateSegment checks if a segment is valid (quoted or unquoted); an empty
+// segment is invalid.
 func ValidateSegment(segment string) bool {
+	if segment == "" {
+		return false
+	}
 	if segment[0] == '"' {
 		return isValidQuotedSegment(segment)
 	}
@@ -253,7 +257,10 @@ func isValidIdentifierSegment(segment string) bool {
 }
 
 // isValidQuotedSegment validates a quoted identifier segment: properly
-// quoted and non-empty inside the quotes.
+// quoted, non-empty inside the quotes, and with every interior quote part
+// of a doubled "" escape — a stray quote would end the identifier early.
 func isValidQuotedSegment(segment string) bool {
-	return IsQuotedString(segment) && segment[1:len(segment)-1] != ""
+	return IsQuotedString(segment) &&
+		segment[1:len(segment)-1] != "" &&
+		!HasUnescapedQuote(segment[1:len(segment)-1])
 }

@@ -132,7 +132,8 @@ func TestIsValidQuotedSegment(t *testing.T) {
 		{"short_string", "a", false},
 
 		// Edge cases
-		{"quotes_in_content", `"test"inside"`, true}, // Valid quoted string
+		{"stray_interior_quote_rejected", `"test"inside"`, false}, // Unescaped interior quote ends the identifier early
+		{"doubled_interior_quote_accepted", `"test""inside"`, true},
 		{"single_char_quoted", `"a"`, true},
 	}
 
@@ -219,6 +220,7 @@ func TestValidateSegment(t *testing.T) {
 		// Edge cases
 		{"single_letter", "A", true},
 		{"single_quoted", `"A"`, true},
+		{"empty_segment_rejected", "", false},
 	}
 
 	for _, tt := range tests {
