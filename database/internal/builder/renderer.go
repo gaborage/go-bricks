@@ -1,6 +1,10 @@
 package builder
 
 import (
+	"fmt"
+
+	"github.com/Masterminds/squirrel"
+
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
@@ -16,8 +20,12 @@ import (
 // takes an already-validated identifier: the renderer renders, it does not
 // judge. EscapeIdentifier is deliberately NOT here — it is exported, so it is a
 // trust boundary rather than a post-validation step.
-// The three methods are the three renderings that differ in KIND between the
-// vendors — reserved-word quoting, alias splitting, direction/NULLS parsing.
+// Every method here is a rendering that differs in KIND between the vendors:
+// three quoting ones — reserved-word quoting, alias splitting, direction/NULLS
+// parsing — and six expression ones, where the vendors disagree about the
+// operator (ILIKE vs a folded LIKE), the shape (POSIX operators vs REGEXP_LIKE),
+// the function name (NOW/SYSDATE, gen_random_uuid/SYS_GUID), the argument type
+// (native bool vs NUMBER(1)), or whether the predicate exists at all.
 // Anything a vendor does the SAME way stays in the builder: a column LIST is
 // rendered element-wise everywhere, and `*` is a wildcard everywhere, so those
 // loops belong to the funnels rather than to two identical adapter methods.
@@ -31,16 +39,84 @@ type vendorRenderer interface {
 	// QuoteIdentifierForClause renders an ORDER BY / GROUP BY item, keeping the
 	// direction and NULLS ordering keywords outside the quoted identifier.
 	QuoteIdentifierForClause(identifier string) string
+
+	// CaseInsensitiveLike renders a case-insensitive containment match. The
+	// column arrives quoted and the pattern arrives already wrapped in its
+	// wildcards, because both are the builder's decision; whether the vendor
+	// spells the match as an operator or as a folded comparison is the
+	// renderer's.
+	CaseInsensitiveLike(quotedColumn, likePattern string) squirrel.Sqlizer
+	// Regex renders a regular-expression match. A vendor with no regex
+	// predicate returns an errorSqlizer: an unsupported expression is a
+	// rendering outcome, not a builder precondition.
+	Regex(quotedColumn, pattern string, caseInsensitive, negated bool) squirrel.Sqlizer
+	// JSONContains renders a JSON containment predicate. The column is passed
+	// as a deferred quoter rather than a quoted string so a vendor never pays
+	// for a quote it will not use: two of the three never name a column here,
+	// and the third abandons the predicate on a malformed payload.
+	JSONContains(value any, quoteColumn func() (string, error)) squirrel.Sqlizer
+	// CurrentTimestamp renders the vendor's current-timestamp function.
+	CurrentTimestamp() string
+	// UUIDGeneration renders the vendor's UUID-generation function.
+	UUIDGeneration() string
+	// BooleanValue renders a Go bool as the vendor's boolean argument.
+	BooleanValue(value bool) any
 }
 
-// rendererFor picks the adapter for a vendor. There are exactly two: Oracle
-// quotes reserved and case-sensitive names, and every other vendor renders a
-// validated identifier verbatim — the behavior postgresRenderer carries and the
-// behavior the deleted `default:` arms had, which is why it also serves an
-// unrecognized vendor.
+// rendererFor picks the adapter for a vendor. Identifier quoting has two
+// behaviors, but expression rendering has three: an unrecognized vendor renders
+// identifiers exactly as PostgreSQL does, yet the deleted `default:` arms spelled
+// four expressions differently from the PostgreSQL arms beside them (LIKE rather
+// than ILIKE, UUID() rather than gen_random_uuid(), and no regex or JSON
+// containment at all). defaultRenderer is where that third behavior lives.
 func rendererFor(vendor dbtypes.Vendor) vendorRenderer {
-	if vendor == dbtypes.Oracle {
+	switch vendor {
+	case dbtypes.Oracle:
 		return oracleRenderer{}
+	case dbtypes.PostgreSQL:
+		return postgresRenderer{}
+	default:
+		return defaultRenderer{vendor: vendor}
 	}
-	return postgresRenderer{}
 }
+
+// defaultRenderer is the unknown-vendor behavior class that already exists on
+// main: generic SQL where a generic spelling exists, and an unsupported-feature
+// error where none does. It is NOT a supported vendor and is not a hook for
+// adding one — GoBricks supports PostgreSQL and Oracle, and a third vendor would
+// arrive as its own adapter with its own tests, not by growing this one.
+//
+// It serves a vendor the builder does not recognize. It embeds
+// postgresRenderer because every identifier-quoting method, the timestamp
+// function and the boolean argument were literally the PostgreSQL arm's
+// behavior; it overrides exactly the four expressions where the `default:` arm
+// said something else. It carries the vendor name because two of those four
+// report it.
+type defaultRenderer struct {
+	postgresRenderer
+	vendor dbtypes.Vendor
+}
+
+var _ vendorRenderer = defaultRenderer{}
+
+// CaseInsensitiveLike renders a plain LIKE: ILIKE is a PostgreSQL extension, so
+// an unknown vendor gets the standard operator and the caller's case.
+func (defaultRenderer) CaseInsensitiveLike(quotedColumn, likePattern string) squirrel.Sqlizer {
+	return squirrel.Like{quotedColumn: likePattern}
+}
+
+// Regex reports that the vendor has no regex predicate this builder can spell.
+func (r defaultRenderer) Regex(_, _ string, _, _ bool) squirrel.Sqlizer {
+	return errorSqlizer{err: fmt.Errorf("regex matching is not supported for vendor %q", r.vendor)}
+}
+
+// JSONContains reports that the vendor has no containment predicate this
+// builder can spell. The column is never quoted and the payload never encoded:
+// neither can change the outcome.
+func (r defaultRenderer) JSONContains(_ any, _ func() (string, error)) squirrel.Sqlizer {
+	return errorSqlizer{err: fmt.Errorf("JSONContains: unsupported vendor %q", r.vendor)}
+}
+
+// UUIDGeneration renders the SQL-standard-ish UUID() rather than PostgreSQL's
+// gen_random_uuid(), which is a PostgreSQL function name.
+func (defaultRenderer) UUIDGeneration() string { return "UUID()" }
