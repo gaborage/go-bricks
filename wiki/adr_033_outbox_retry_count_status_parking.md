@@ -16,8 +16,9 @@
 > stamp that disagrees with the framework's resolved tenant (`ErrTenantStampConflict`). Nothing
 > about the deployment changed — the row's own stamp and the relay's resolved tenant simply do
 > not match, and they will not match on any later cycle either, so it parks rather than
-> retrying forever. All three are config drift on a row already written, so they read the same
-> way every cycle, which is this ADR's own definition of poison. A fifth outcome joins the four: a row can now be PARKED. When an earlier row of the same
+> retrying forever.
+>
+> A fifth OUTCOME joins the four the relay already had. A row can now be PARKED: when an earlier row of the same
 > ordering key failed in this cycle, the row is neither published nor marked and its
 > `retry_count` does NOT advance — it simply waits for the next cycle in sequence order. Only
 > `outcomeFailed` parks a key; a dead-lettered row is terminal and a delivered-but-unrecorded

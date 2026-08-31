@@ -227,6 +227,11 @@ stamp for a stamped AMQP row, the destination (exchange and routing key) for an 
 and the stream plus partition key on the stream lane. A dead-lettered row is terminal and a
 delivered-but-unrecorded row was delivered, so neither parks anything behind it.
 
+A stream producer that is not carrying messages holds back only ITS OWN stream's remaining rows
+for that cycle, rather than each of them paying the publish deadline in turn. Each super stream
+has its own producer, so a stall in one says nothing about the others: rows aimed at a healthy
+stream, and every AMQP row, drain the same cycle.
+
 The guarantee is **causal**, not global: a dependent event's transaction begins after its cause
 committed, so its `seq` is higher. Two independent transactions may commit out of `seq` order
 and the relay claims nothing between them.

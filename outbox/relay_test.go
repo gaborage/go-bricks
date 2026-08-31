@@ -1405,3 +1405,38 @@ func TestRelayUnreadyStreamProducerEndsTheStreamLaneOnly(t *testing.T) {
 		res.published+res.unrecorded+res.failed+res.deadlettered+res.parked,
 		"every fetched row is accounted for exactly once")
 }
+
+// TestRelayOneStalledStreamDoesNotHoldTheOthers pins that the stall is tracked PER STREAM.
+// Each super stream has its own producer, so one unready producer is evidence about that
+// stream alone. Holding every stream's rows on the first stall would let one misconfigured
+// or restarting stream stop delivery for all of them, cycle after cycle.
+func TestRelayOneStalledStreamDoesNotHoldTheOthers(t *testing.T) {
+	down1, down2 := streamRow(), streamRow()
+	down2.ID, down2.PartitionKey = "D2", "beta" // its own key, so parking cannot explain the skip
+	healthy := streamRow()
+	healthy.ID, healthy.Stream, healthy.PartitionKey = "H1", "orders", "acme"
+	records := []Record{down1, healthy, down2}
+	store := &fakeStore{FetchPendingResult: records}
+	amqp := newFakeAMQP()
+	stalled := &fakeStreamPublisher{Err: streams.ErrPublisherNotStarted}
+	ok := &fakeStreamPublisher{}
+	r := newRelayWithFakes(store, amqp, map[string]streamPublisher{
+		"customers": stalled,
+		"orders":    ok,
+	})
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	lead, err := store.Lead(ctx, db)
+	require.NoError(t, err)
+	res := r.runRelayLoop(ctx, ctx.Logger(), db, amqp, lead, records)
+
+	assert.Equal(t, 1, ok.Calls, "the healthy stream's row drains in the same cycle")
+	assert.Equal(t, 1, stalled.Calls, "the stalled stream is attempted once, then held")
+	assert.Equal(t, 1, res.published, "the healthy row is the cycle's one publish")
+	assert.Equal(t, 1, res.failed, "only the row that met the stalled producer is charged")
+	assert.Equal(t, 1, res.parked, "the stalled stream's second row waits; the healthy one did not")
+	assert.Equal(t, len(records),
+		res.published+res.unrecorded+res.failed+res.deadlettered+res.parked,
+		"every fetched row is accounted for exactly once")
+}

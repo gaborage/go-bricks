@@ -226,8 +226,9 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 	// Keys whose head failed this cycle. A later row of a parked key is left untouched —
 	// not even its retry_count moves — so the key keeps its order across cycles.
 	parked := make(map[string]struct{})
-	// Set once the stream producer proves unready; only stream rows are held back after it.
-	streamDown := false
+	// Streams whose producer proved unready this cycle. Held per stream, not batch-wide: one
+	// stalled super stream says nothing about the others, which are separate producers.
+	streamsDown := make(map[string]struct{})
 	for i := range records {
 		// Stop cleanly on shutdown/cancel: leave the rest pending for the next startup
 		// rather than bumping their retry_count on the way down.
@@ -245,9 +246,10 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 		// A decode failure yields nil headers, so the key falls back to the routing key
 		// while publishRecord dead-letters the row as poison.
 		headers, decodeErr := decodeHeaders(records[i].Headers)
-		if streamDown && records[i].Lane == LaneStream {
-			// The producer is not carrying messages; the remaining stream rows wait for the
-			// next cycle untouched rather than each paying the publish deadline.
+		if _, down := streamsDown[records[i].Stream]; down && records[i].Lane == LaneStream {
+			// That stream's producer is not carrying messages; its remaining rows wait for the
+			// next cycle untouched rather than each paying the publish deadline. Rows aimed at
+			// a healthy stream are unaffected.
 			res.parked++
 			continue
 		}
@@ -284,7 +286,7 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 		case outcomeStreamDown:
 			res.failed++
 			parked[key] = struct{}{}
-			streamDown = true
+			streamsDown[records[i].Stream] = struct{}{}
 		case outcomeAborted:
 			// Shutting down mid-publish — stop without counting this record.
 			return res
@@ -548,8 +550,8 @@ func (r *Relay) publishStreamRecord(ctx, pubCtx context.Context, log logger.Logg
 		// deadline, or a broker that would not confirm. None means the message is bad.
 		r.markRecordFailed(ctx, log, db, record.ID, err.Error())
 		if errors.Is(err, streams.ErrPublisherNotStarted) || errors.Is(err, context.DeadlineExceeded) {
-			// Evidence the producer is not carrying messages right now, not that this row is
-			// special. Stop spending the deadline on the rest of the stream rows.
+			// Evidence THIS stream's producer is not carrying messages right now, not that
+			// this row is special. Stop spending the deadline on that stream's other rows.
 			return outcomeStreamDown, nil
 		}
 		return outcomeFailed, nil
