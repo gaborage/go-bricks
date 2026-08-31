@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gaborage/go-bricks/database"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
@@ -28,6 +29,17 @@ const (
 	colLeaseOwner    = "lease_owner"
 	colLeaseUntil    = "lease_until"
 )
+
+// boundedLimit renders a caller's row limit for the builder. A limit is a count,
+// and a negative one would wrap through uint64 into a number no query should
+// carry; anything below one asks for nothing, which the smallest legal limit
+// expresses honestly.
+func boundedLimit(limit int) uint64 {
+	if limit < 1 {
+		return 1
+	}
+	return uint64(limit)
+}
 
 // holdTenantColumns is the six-column tenant projection both vendors select, in
 // the order scanHoldTenants reads them. lastError is the vendor's own expression
@@ -283,4 +295,191 @@ func affectedOne(ctx context.Context, db dbtypes.Interface, what, query string, 
 		return false, fmt.Errorf("inbox hold: rows affected failed: %w", err)
 	}
 	return n > 0, nil
+}
+
+// holdQueries builds the statements whose SQL the query builder makes identical
+// across vendors. What differs between PostgreSQL and Oracle is two expressions —
+// the clock and the "no error" rendering — so they are fields rather than two
+// copies of every method.
+type holdQueries struct {
+	qb          *database.QueryBuilder
+	vendor      string
+	table       string
+	tenantTable string
+	// now is the database's own clock: NOW() or SYSTIMESTAMP. Every lease and due
+	// decision is made in database time so replicas with skewed clocks agree.
+	now string
+	// noError renders an absent last_error as the empty string. Oracle needs a
+	// space where PostgreSQL can use '', because it folds an empty literal to NULL;
+	// the shared scanner trims it back.
+	noError string
+}
+
+func (q *holdQueries) ListTenants(ctx context.Context, db dbtypes.Interface, consumer string) ([]HoldTenant, error) {
+	// SECURITY: Manual SQL review completed - a constant expression over a fixed
+	// column name, no interpolation and no caller input; an Expr only because the
+	// builder's projection accepts identifiers alone.
+	noError, err := q.qb.Expr(q.noError)
+	if err != nil {
+		return nil, q.wrap("build list tenants query failed", err)
+	}
+
+	f := q.qb.Filter()
+	query, args, err := q.qb.Select(holdTenantColumns(noError)...).From(q.tenantTable).
+		Where(f.Eq(colConsumer, consumer)).
+		OrderBy(colHeldSince).
+		ToSQL()
+	if err != nil {
+		return nil, q.wrap("build list tenants query failed", err)
+	}
+	return scanHoldTenants(ctx, db, "list tenants", query, args...)
+}
+
+func (q *holdQueries) DueTenants(ctx context.Context, db dbtypes.Interface, consumer string, limit int) ([]HoldTenant, error) {
+	noError, err := q.qb.Expr(q.noError)
+	if err != nil {
+		return nil, q.wrap("build due tenants query failed", err)
+	}
+
+	f := q.qb.Filter()
+	// SECURITY: Manual SQL review completed - both predicates are constant text
+	// over fixed column names and the database's own clock; no identifier is
+	// interpolated and no caller value concatenated.
+	due := f.Raw(colNextAttemptAt + " <= " + q.now)
+	free := f.Raw("(" + colLeaseUntil + " IS NULL OR " + colLeaseUntil + " < " + q.now + ")")
+
+	query, args, err := q.qb.Select(holdTenantColumns(noError)...).From(q.tenantTable).
+		Where(f.And(f.Eq(colConsumer, consumer), due, free)).
+		OrderBy(colHeldSince).
+		Limit(boundedLimit(limit)).
+		ToSQL()
+	if err != nil {
+		return nil, q.wrap("build due tenants query failed", err)
+	}
+	return scanHoldTenants(ctx, db, "list due tenants", query, args...)
+}
+
+func (q *holdQueries) HeldTenants(ctx context.Context, db dbtypes.Interface, consumer string) ([]string, error) {
+	f := q.qb.Filter()
+	query, args, err := q.qb.Select(colTenantID).From(q.tenantTable).
+		Where(f.Eq(colConsumer, consumer)).
+		ToSQL()
+	if err != nil {
+		return nil, q.wrap("build held tenants query failed", err)
+	}
+	return scanTenantIDs(ctx, db, query, args...)
+}
+
+func (q *holdQueries) NextRows(ctx context.Context, db dbtypes.Interface, consumer, tenant string, limit int) ([]HoldRow, error) {
+	f := q.qb.Filter()
+	query, args, err := q.qb.Select(holdRowColumns()...).From(q.table).
+		Where(f.And(f.Eq(colConsumer, consumer), f.Eq(colTenantID, tenant))).
+		OrderBy(colStream, colStreamOffset).
+		Limit(boundedLimit(limit)).
+		ToSQL()
+	if err != nil {
+		return nil, q.wrap("build next rows query failed", err)
+	}
+	return scanHoldRows(ctx, db, query, args...)
+}
+
+// deleteRow removes a replayed row while this owner still holds the lease. The
+// fence is a subquery in the SAME statement: checking the lease first and
+// deleting second would reopen the window the lease exists to close.
+func (q *holdQueries) DeleteRow(ctx context.Context, db dbtypes.Interface,
+	consumer, stream string, offset int64, tenant, owner string) (bool, error) {
+	f := q.qb.Filter()
+	lease, err := q.leaseHeldBy(f, consumer, tenant, owner)
+	if err != nil {
+		return false, q.wrap("build delete held row query failed", err)
+	}
+
+	query, args, err := q.qb.Delete(q.table).
+		Where(f.And(
+			f.Eq(colConsumer, consumer),
+			f.Eq(colStream, stream),
+			f.Eq(colStreamOffset, offset),
+			f.Exists(lease),
+		)).
+		ToSQL()
+	if err != nil {
+		return false, q.wrap("build delete held row query failed", err)
+	}
+	return affectedOne(ctx, db, "delete held row", query, args...)
+}
+
+// release drops the tenant's marker once its last row is gone, under the lease
+// and in one statement — a tenant whose rows a concurrent park just added must
+// stay held, which a check-then-delete would miss.
+func (q *holdQueries) Release(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string) (bool, error) {
+	f := q.qb.Filter()
+	one, err := q.constantOne()
+	if err != nil {
+		return false, q.wrap("build release tenant query failed", err)
+	}
+
+	rowsRemain := q.qb.Select(one).From(q.table).
+		Where(f.And(f.Eq(colConsumer, consumer), f.Eq(colTenantID, tenant)))
+
+	query, args, err := q.qb.Delete(q.tenantTable).
+		Where(f.And(
+			f.Eq(colConsumer, consumer),
+			f.Eq(colTenantID, tenant),
+			f.Eq(colLeaseOwner, owner),
+			f.Raw(colLeaseUntil+" > "+q.now),
+			f.NotExists(rowsRemain),
+		)).
+		ToSQL()
+	if err != nil {
+		return false, q.wrap("build release tenant query failed", err)
+	}
+	return affectedOne(ctx, db, "release tenant", query, args...)
+}
+
+// releaseLease drops a lease this owner holds.
+func (q *holdQueries) ReleaseLease(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string) error {
+	f := q.qb.Filter()
+	query, args, err := q.qb.Update(q.tenantTable).
+		SetMap(map[string]any{colLeaseOwner: nil, colLeaseUntil: nil}).
+		Where(f.And(f.Eq(colConsumer, consumer), f.Eq(colTenantID, tenant), f.Eq(colLeaseOwner, owner))).
+		ToSQL()
+	if err != nil {
+		return q.wrap("build release lease query failed", err)
+	}
+	if _, err := db.Exec(ctx, query, args...); err != nil {
+		return q.wrap("release lease failed", err)
+	}
+	return nil
+}
+
+// leaseHeldBy is the fence's subquery: this owner holds a live lease on the
+// tenant.
+func (q *holdQueries) leaseHeldBy(f dbtypes.FilterFactory, consumer, tenant, owner string) (dbtypes.SelectQueryBuilder, error) {
+	one, err := q.constantOne()
+	if err != nil {
+		return nil, err
+	}
+
+	return q.qb.Select(one).From(q.tenantTable).
+		Where(f.And(
+			f.Eq(colConsumer, consumer),
+			f.Eq(colTenantID, tenant),
+			f.Eq(colLeaseOwner, owner),
+			// SECURITY: Manual SQL review completed - constant text over a fixed column
+			// and the database's own clock.
+			f.Raw(colLeaseUntil+" > "+q.now),
+		)), nil
+}
+
+// constantOne is the projection an EXISTS ignores.
+//
+// SECURITY: Manual SQL review completed - a literal, no interpolation; an Expr
+// only because the builder's projection accepts identifiers alone.
+func (q *holdQueries) constantOne() (dbtypes.RawExpression, error) {
+	return q.qb.Expr("1")
+}
+
+// wrap names the vendor in an error the way each store's own messages do.
+func (q *holdQueries) wrap(what string, err error) error {
+	return fmt.Errorf("inbox %s: %s: %w", q.vendor, what, err)
 }

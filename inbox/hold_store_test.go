@@ -1,6 +1,7 @@
 package inbox
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -77,5 +78,29 @@ func TestHoldStoreConstructorsRefuseABadTableName(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Nil(t, store)
+	}
+}
+
+// TestBoundedLimitNeverWraps pins the guard on a caller's row limit: it is a
+// count, and a negative one converted to uint64 becomes a number no query should
+// carry. Anything below one asks for nothing, which the smallest legal limit says
+// honestly.
+func TestBoundedLimitNeverWraps(t *testing.T) {
+	tests := []struct {
+		name  string
+		limit int
+		want  uint64
+	}{
+		{name: "an_ordinary_limit_passes_through", limit: 50, want: 50},
+		{name: "the_smallest_limit_passes_through", limit: 1, want: 1},
+		{name: "zero_asks_for_the_smallest", limit: 0, want: 1},
+		{name: "a_negative_limit_never_wraps", limit: -1, want: 1},
+		{name: "the_most_negative_limit_never_wraps", limit: math.MinInt, want: 1},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, boundedLimit(tc.limit))
+		})
 	}
 }

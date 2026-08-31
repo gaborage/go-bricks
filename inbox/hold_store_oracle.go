@@ -59,6 +59,10 @@ type oracleHoldStore struct {
 	table       string
 	tenantTable string
 	qb          *database.QueryBuilder
+	// holdQueries carries every statement the query builder renders identically on
+	// both vendors. What stays in this file is the SQL the builder cannot express,
+	// and the dialect those statements answer in.
+	holdQueries
 }
 
 // NewOracleHoldStore creates an Oracle hold store, refusing a table name whose
@@ -67,10 +71,19 @@ func NewOracleHoldStore(tableName string) (HoldStore, error) {
 	if err := validateHoldTableName(tableName); err != nil {
 		return nil, err
 	}
+	qb := database.NewQueryBuilder(dbtypes.Oracle)
 	return &oracleHoldStore{
 		table:       tableName,
 		tenantTable: tableName + holdTenantTableSuffix,
-		qb:          database.NewQueryBuilder(dbtypes.Oracle),
+		qb:          qb,
+		holdQueries: holdQueries{
+			qb:          qb,
+			vendor:      "oracle",
+			table:       tableName,
+			tenantTable: tableName + holdTenantTableSuffix,
+			now:         "SYSTIMESTAMP",
+			noError:     "NVL(last_error, ' ')",
+		},
 	}, nil
 }
 
@@ -148,69 +161,6 @@ func (s *oracleHoldStore) holdTenantMarker(ctx context.Context, tx dbtypes.Tx, r
 		row.TenantID)
 }
 
-func (s *oracleHoldStore) HeldTenants(ctx context.Context, db dbtypes.Interface, consumer string) ([]string, error) {
-	f := s.qb.Filter()
-	query, args, err := s.qb.Select(colTenantID).From(s.tenantTable).
-		Where(f.Eq(colConsumer, consumer)).
-		ToSQL()
-	if err != nil {
-		return nil, fmt.Errorf("inbox oracle: build held tenants query failed: %w", err)
-	}
-	return scanTenantIDs(ctx, db, query, args...)
-}
-
-func (s *oracleHoldStore) ListTenants(ctx context.Context, db dbtypes.Interface, consumer string) ([]HoldTenant, error) {
-	noError, err := s.noError()
-	if err != nil {
-		return nil, fmt.Errorf("inbox oracle: build list tenants query failed: %w", err)
-	}
-
-	f := s.qb.Filter()
-	query, args, err := s.qb.Select(holdTenantColumns(noError)...).From(s.tenantTable).
-		Where(f.Eq(colConsumer, consumer)).
-		OrderBy(colHeldSince).
-		ToSQL()
-	if err != nil {
-		return nil, fmt.Errorf("inbox oracle: build list tenants query failed: %w", err)
-	}
-	return scanHoldTenants(ctx, db, "list tenants", query, args...)
-}
-
-func (s *oracleHoldStore) DueTenants(ctx context.Context, db dbtypes.Interface, consumer string, limit int) ([]HoldTenant, error) {
-	noError, err := s.noError()
-	if err != nil {
-		return nil, fmt.Errorf("inbox oracle: build due tenants query failed: %w", err)
-	}
-
-	f := s.qb.Filter()
-	// SECURITY: Manual SQL review completed - both predicates are constant text
-	// over fixed column names and the database's own clock; no identifier is
-	// interpolated and no caller value concatenated.
-	due := f.Raw(colNextAttemptAt + ` <= SYSTIMESTAMP`)
-	free := f.Raw(`(` + colLeaseUntil + ` IS NULL OR ` + colLeaseUntil + ` < SYSTIMESTAMP)`)
-
-	query, args, err := s.qb.Select(holdTenantColumns(noError)...).From(s.tenantTable).
-		Where(f.And(f.Eq(colConsumer, consumer), due, free)).
-		OrderBy(colHeldSince).
-		Limit(uint64(limit)).
-		ToSQL()
-	if err != nil {
-		return nil, fmt.Errorf("inbox oracle: build due tenants query failed: %w", err)
-	}
-	return scanHoldTenants(ctx, db, "list due tenants", query, args...)
-}
-
-// noError renders an absent last_error as the empty string.
-//
-// SECURITY: Manual SQL review completed - a constant expression over a fixed
-// column name; it is an Expr only because the builder's projection accepts
-// identifiers alone. NVL rather than COALESCE, and a SPACE rather than ”,
-// because Oracle folds an empty string literal to NULL — the shared scanner
-// trims it back.
-func (s *oracleHoldStore) noError() (dbtypes.RawExpression, error) {
-	return s.qb.Expr(`NVL(` + colLastError + `, ' ')`)
-}
-
 func (s *oracleHoldStore) AcquireLease(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string, lease time.Duration) (bool, error) {
 	// SECURITY: Manual SQL review completed - the only interpolated identifier is
 	// the tenant table from the constructor-validated config; every value is bound.
@@ -225,68 +175,6 @@ func (s *oracleHoldStore) AcquireLease(ctx context.Context, db dbtypes.Interface
 	return affectedOne(ctx, db, "acquire lease", query, owner, lease.Seconds(), consumer, tenant)
 }
 
-func (s *oracleHoldStore) ReleaseLease(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string) error {
-	f := s.qb.Filter()
-	query, args, err := s.qb.Update(s.tenantTable).
-		SetMap(map[string]any{colLeaseOwner: nil, colLeaseUntil: nil}).
-		Where(f.And(f.Eq(colConsumer, consumer), f.Eq(colTenantID, tenant), f.Eq(colLeaseOwner, owner))).
-		ToSQL()
-	if err != nil {
-		return fmt.Errorf("inbox oracle: build release lease query failed: %w", err)
-	}
-	if _, err := db.Exec(ctx, query, args...); err != nil {
-		return fmt.Errorf("inbox oracle: release lease failed: %w", err)
-	}
-	return nil
-}
-
-func (s *oracleHoldStore) NextRows(ctx context.Context, db dbtypes.Interface, consumer, tenant string, limit int) ([]HoldRow, error) {
-	f := s.qb.Filter()
-	query, args, err := s.qb.Select(holdRowColumns()...).From(s.table).
-		Where(f.And(f.Eq(colConsumer, consumer), f.Eq(colTenantID, tenant))).
-		OrderBy(colStream, colStreamOffset).
-		Limit(uint64(limit)).
-		ToSQL()
-	if err != nil {
-		return nil, fmt.Errorf("inbox oracle: build next rows query failed: %w", err)
-	}
-	return scanHoldRows(ctx, db, query, args...)
-}
-
-func (s *oracleHoldStore) DeleteRow(ctx context.Context, db dbtypes.Interface, consumer, stream string, offset int64, tenant, owner string) (bool, error) {
-	f := s.qb.Filter()
-	// SECURITY: Manual SQL review completed - the literal 1 is a constant
-	// projection EXISTS ignores; the clock predicate is constant text over a fixed
-	// column.
-	one, err := s.qb.Expr("1")
-	if err != nil {
-		return false, fmt.Errorf("inbox oracle: build delete held row query failed: %w", err)
-	}
-
-	// The fence is a subquery in the SAME statement as the delete: checking the
-	// lease first and deleting second would reopen the window it exists to close.
-	lease := s.qb.Select(one).From(s.tenantTable).
-		Where(f.And(
-			f.Eq(colConsumer, consumer),
-			f.Eq(colTenantID, tenant),
-			f.Eq(colLeaseOwner, owner),
-			f.Raw(colLeaseUntil+` > SYSTIMESTAMP`),
-		))
-
-	query, args, err := s.qb.Delete(s.table).
-		Where(f.And(
-			f.Eq(colConsumer, consumer),
-			f.Eq(colStream, stream),
-			f.Eq(colStreamOffset, offset),
-			f.Exists(lease),
-		)).
-		ToSQL()
-	if err != nil {
-		return false, fmt.Errorf("inbox oracle: build delete held row query failed: %w", err)
-	}
-	return affectedOne(ctx, db, "delete held row", query, args...)
-}
-
 func (s *oracleHoldStore) Defer(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string, backoff time.Duration, lastErr string) (bool, error) {
 	// SECURITY: Manual SQL review completed - identifier from constructor-validated
 	// config; the backoff, bounded error text, consumer, tenant and owner are bound.
@@ -299,33 +187,6 @@ func (s *oracleHoldStore) Defer(ctx context.Context, db dbtypes.Interface, consu
 		s.tenantTable,
 	)
 	return affectedOne(ctx, db, "defer tenant", query, backoff.Seconds(), ledgererr.Bound(lastErr), consumer, tenant, owner)
-}
-
-func (s *oracleHoldStore) Release(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string) (bool, error) {
-	f := s.qb.Filter()
-	// SECURITY: Manual SQL review completed - as in DeleteRow: a constant
-	// projection and a constant clock predicate, no interpolation, values bound.
-	one, err := s.qb.Expr("1")
-	if err != nil {
-		return false, fmt.Errorf("inbox oracle: build release tenant query failed: %w", err)
-	}
-
-	rowsRemain := s.qb.Select(one).From(s.table).
-		Where(f.And(f.Eq(colConsumer, consumer), f.Eq(colTenantID, tenant)))
-
-	query, args, err := s.qb.Delete(s.tenantTable).
-		Where(f.And(
-			f.Eq(colConsumer, consumer),
-			f.Eq(colTenantID, tenant),
-			f.Eq(colLeaseOwner, owner),
-			f.Raw(colLeaseUntil+` > SYSTIMESTAMP`),
-			f.NotExists(rowsRemain),
-		)).
-		ToSQL()
-	if err != nil {
-		return false, fmt.Errorf("inbox oracle: build release tenant query failed: %w", err)
-	}
-	return affectedOne(ctx, db, "release tenant", query, args...)
 }
 
 func (s *oracleHoldStore) Stats(ctx context.Context, db dbtypes.Interface, consumer string) (HoldStats, error) {
