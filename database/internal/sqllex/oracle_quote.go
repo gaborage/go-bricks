@@ -24,7 +24,7 @@ func QuoteOracleIdentifier(column string) string {
 	// Fast path: a bare segment (no dot, no quote) cannot split and cannot
 	// already be quoted, so the parser never needs to run for it — the
 	// overwhelming case at every door.
-	if strings.IndexByte(trimmed, '.') == -1 && strings.IndexByte(trimmed, '"') == -1 {
+	if !strings.ContainsAny(trimmed, `."`) {
 		if IsOracleReservedWord(trimmed) || oracleNeedsQuoting(trimmed) {
 			return QuoteIdentifierLiteral(trimmed)
 		}
