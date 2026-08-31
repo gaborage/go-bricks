@@ -331,7 +331,9 @@ func TestStreamRuntimeCollectsDeclarationsFromDeclarers(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, declarer.calls, "a declarer is invoked exactly once")
-	assert.Equal(t, StreamDeclStats{Streams: 1, Consumers: 1}, decls.Stats())
+	stats := decls.Stats()
+	assert.Equal(t, 1, stats.Streams)
+	assert.Equal(t, 1, stats.Consumers)
 }
 
 func TestStreamRuntimeCollectDeclarationsFailsOnInvalidDeclarations(t *testing.T) {

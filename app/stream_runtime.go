@@ -12,18 +12,6 @@ var ErrStreamsNotLinked = streamruntime.ErrNotLinked
 // (ADR-045): the concrete manager still lives in messaging/streams.
 type StreamRuntime = streamruntime.Runtime
 
-// StreamDeclarations is the collected, validated declaration set.
-type StreamDeclarations = streamruntime.Declarations
-
-// StreamDeclStats is the operator-facing count the unconfigured-URI error names.
-type StreamDeclStats = streamruntime.DeclStats
-
-// StreamManagerOptions is the subset of manager construction app owns.
-type StreamManagerOptions = streamruntime.ManagerOptions
-
-// StreamHandle is the started (or about-to-start) stream manager as app sees it.
-type StreamHandle = streamruntime.Handle
-
 // HeldMessage is one parked stream delivery as the hold ledger sees it. It
 // lives on this seam so inbox can implement the hold port without importing
 // messaging/streams (and therefore without pulling the vendor client).

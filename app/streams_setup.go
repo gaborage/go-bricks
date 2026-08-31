@@ -63,7 +63,7 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 
 	cfg := a.cfg.Messaging.Streams
 	a.warnIfPlaintextStreamURI(cfg.URI)
-	mgr := rt.NewManager(&StreamManagerOptions{
+	mgr := rt.NewManager(&streamruntime.ManagerOptions{
 		URI:                 cfg.URI,
 		AddressResolverHost: cfg.AddressResolver.Host,
 		AddressResolverPort: cfg.AddressResolver.Port,
@@ -148,7 +148,7 @@ func (a *App) warnIfPlaintextStreamURI(uri string) {
 // assertStreamsConfigured fails fast when a module declared streams but no
 // stream endpoint is configured — without it the declarations would be silently
 // dropped, exactly as assertMessagingConfiguredIfDeclared prevents for AMQP.
-func (a *App) assertStreamsConfigured(decls StreamDeclarations) error {
+func (a *App) assertStreamsConfigured(decls streamruntime.Declarations) error {
 	if a.cfg.Messaging.Streams.URI != "" {
 		return nil
 	}
