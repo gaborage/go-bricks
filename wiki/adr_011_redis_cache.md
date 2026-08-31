@@ -332,7 +332,7 @@ defer c.Delete(ctx, lockKey) // SUPERSEDED (ADR-060): use CompareAndDelete with 
 - **PR #2-8**: 80%+ coverage per PR (SonarCloud enforced)
 - **Integration Tests**: Real Redis via testcontainers (PR #8)
 - **Race Detection**: All tests run with `-race` flag
-- **Multi-Platform CI**: Ubuntu/Windows × Go 1.26
+- **Multi-Platform CI**: Ubuntu/Windows × Go 1.27
 
 ### Success Metrics
 
