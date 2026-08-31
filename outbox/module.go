@@ -444,7 +444,7 @@ type streamPublisher interface {
 }
 
 // DeclareStreams registers one publisher per configured super stream, satisfying
-// app.StreamDeclarer. It is a no-op for a disabled outbox or one with no targets, so a
+// streams.StreamDeclarer. It is a no-op for a disabled outbox or one with no targets, so a
 // deployment that never mentions superstreams declares nothing.
 func (m *Module) DeclareStreams(decls *streams.Declarations) {
 	if !m.cfg.Enabled || len(m.cfg.SuperStreams) == 0 {
@@ -545,5 +545,5 @@ var (
 	_ app.SharedTxRunner = (*lazyPublisher)(nil)
 	// The registry detects StreamDeclarer by duck-typing, so a signature drift here would
 	// silently stop the outbox declaring its publishers rather than fail the build.
-	_ app.StreamDeclarer = (*Module)(nil)
+	_ streams.StreamDeclarer = (*Module)(nil)
 )

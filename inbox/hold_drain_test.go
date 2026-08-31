@@ -13,12 +13,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
-	"github.com/gaborage/go-bricks/messaging/streams"
 )
 
 // fakeHoldJobCtx is the scheduler.JobContext the drain runs under. The embedded
@@ -52,7 +52,7 @@ type fakeHoldReplayer struct {
 
 func (f *fakeHoldReplayer) HoldConsumers() []string { return f.consumers }
 
-func (f *fakeHoldReplayer) Replay(_ context.Context, _ string, msg *streams.HeldMessage) error {
+func (f *fakeHoldReplayer) Replay(_ context.Context, _ string, msg *app.HeldMessage) error {
 	if msg.Offset == f.panicAt && !f.panicked {
 		f.panicked = true
 		panic("replay exploded")
@@ -73,12 +73,12 @@ func (f *fakeHoldReplayer) ReloadHeld(_ context.Context, consumer string) error 
 
 // newHoldDrain builds a drain over one TestDB and one replayer, with the
 // intervals a test can reason about.
-func newHoldDrain(db dbtypes.Interface, replayer streams.HoldReplayer) *HoldDrain {
+func newHoldDrain(db dbtypes.Interface, replayer app.HoldReplayer) *HoldDrain {
 	return &HoldDrain{
 		resolve: func(context.Context) (dbtypes.Interface, HoldStore, error) {
 			return db, mustPostgresHoldStore(), nil
 		},
-		replayer: func() streams.HoldReplayer {
+		replayer: func() app.HoldReplayer {
 			if replayer == nil {
 				return nil
 			}
@@ -585,7 +585,7 @@ func TestOwnerIDFallsBackWhenItsSourcesFail(t *testing.T) {
 
 // drainWithStore wires a drain over one TestDB, replayer and store, for the
 // error-path tests below.
-func drainWithStore(db dbtypes.Interface, replayer streams.HoldReplayer, store HoldStore) *HoldDrain {
+func drainWithStore(db dbtypes.Interface, replayer app.HoldReplayer, store HoldStore) *HoldDrain {
 	drain := newHoldDrain(db, replayer)
 	drain.resolve = func(context.Context) (dbtypes.Interface, HoldStore, error) { return db, store, nil }
 	return drain

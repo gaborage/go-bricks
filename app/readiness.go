@@ -10,7 +10,6 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/messaging"
-	"github.com/gaborage/go-bricks/messaging/streams"
 )
 
 // Readiness is one module: every kind is judged by the same machine from a probe
@@ -293,7 +292,7 @@ func cacheProbe(m *cache.CacheManager, critical, absent, perTenant bool) probeDe
 // streamsProbe describes the native stream-protocol kind: NON-critical (the reliable
 // consumers reconnect on their own, so a broker flap must not take the service out of the
 // load balancer), lease-less, live when every consumer and publisher is open.
-func streamsProbe(m *streams.Manager) probeDescription {
+func streamsProbe(m streamHandle) probeDescription {
 	if m == nil {
 		return disabledProbe(componentStreams)
 	}

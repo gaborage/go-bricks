@@ -68,3 +68,18 @@ Invalid IANA names fail fast at startup. The active zone appears in the
 `GET /_sys/job`. This mirrors the `database.timezone` contract — see
 [ADR-016](adr_016_database_session_timezone.md) and
 [ADR-023](adr_023_scheduler_timezone.md).
+
+## Deadlines
+
+Job contexts are cancel-only: they are cancelled on graceful shutdown
+(`scheduler.timeout.shutdown`) and never carry a deadline.
+`scheduler.timeout.slowjob` (25s) logs WARN after the fact; it does not
+cancel.
+
+Apply your own deadline if a job step has a known SLO. When that step
+publishes, size the deadline against the real AMQP call bound —
+`readytimeout + maxpublishattempts × connectiontimeout` (**150s warm /
+155s ceiling** at default backoffs) — not the 30s per-attempt confirmation
+wait. A raised `reconnect.resenddelay` can stretch the publish-error path;
+see [context_deadlines.md](context_deadlines.md) and
+[messaging.md](messaging.md#bounded-publish-retries-reconnectmaxpublishattempts).

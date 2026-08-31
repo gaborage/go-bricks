@@ -5,16 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/database"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/tenantstore"
-	"github.com/gaborage/go-bricks/messaging/streams"
 )
 
 // HoldLedger is the port the streams lane parks through, or nil when this module
 // runs no hold. The lane reads a nil as "no hold configured" and refuses any
 // consumer that declared one, so the two answers must not be confused.
-func (m *Module) HoldLedger() streams.HoldLedger {
+func (m *Module) HoldLedger() app.HoldLedger {
 	if !m.holdEnabled() {
 		return nil
 	}
@@ -24,7 +24,7 @@ func (m *Module) HoldLedger() streams.HoldLedger {
 // SetHoldReplayer receives the source of the replayer the drain drives. It is a
 // func rather than the value because the streams manager does not exist yet when
 // modules are registered.
-func (m *Module) SetHoldReplayer(src func() streams.HoldReplayer) {
+func (m *Module) SetHoldReplayer(src func() app.HoldReplayer) {
 	m.holdReplayer = src
 }
 
@@ -34,7 +34,7 @@ type holdLedger struct {
 	module *Module
 }
 
-func (l *holdLedger) Park(ctx context.Context, msg *streams.HeldMessage) error {
+func (l *holdLedger) Park(ctx context.Context, msg *app.HeldMessage) error {
 	db, store, err := l.module.holdStoreFor(ctx)
 	if err != nil {
 		return err
@@ -61,7 +61,7 @@ func (l *holdLedger) HeldTenants(ctx context.Context, consumer string) ([]string
 
 // holdRowOf renders one held message as a row. The properties are the producer's
 // own map, stored as the JSON the replay decodes back.
-func holdRowOf(msg *streams.HeldMessage) (*HoldRow, error) {
+func holdRowOf(msg *app.HeldMessage) (*HoldRow, error) {
 	var properties []byte
 	if len(msg.Properties) > 0 {
 		encoded, err := json.Marshal(msg.Properties)
