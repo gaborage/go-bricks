@@ -732,13 +732,31 @@ func (qb *QueryBuilder) EscapeIdentifier(identifier string) string {
 }
 
 // quoteColumnsForSelect renders a SELECT column list through the vendor renderer.
+//
+// The wildcard skip lives here, not in an adapter: `*` and `t.*` are not
+// identifiers on any vendor, so which columns are RENDERABLE is the builder's
+// question, and only how each one is spelled is the renderer's.
 func (qb *QueryBuilder) quoteColumnsForSelect(columns ...string) []string {
-	return qb.renderer.QuoteColumnsForSelect(columns)
+	quoted := make([]string, 0, len(columns))
+	for _, col := range columns {
+		if col == "*" || strings.HasSuffix(col, ".*") {
+			quoted = append(quoted, col)
+			continue
+		}
+		quoted = append(quoted, qb.renderer.QuoteColumn(col))
+	}
+	return quoted
 }
 
 // quoteColumnsForDML renders a DML column list through the vendor renderer.
+// A list is rendered element-wise on every vendor, so the loop is the builder's
+// and the seam only answers for one column at a time.
 func (qb *QueryBuilder) quoteColumnsForDML(columns ...string) []string {
-	return qb.renderer.QuoteColumnsForDML(columns)
+	quoted := make([]string, len(columns))
+	for i, col := range columns {
+		quoted[i] = qb.renderer.QuoteColumn(col)
+	}
+	return quoted
 }
 
 // quoteColumnForQuery validates a column identifier and renders it for the vendor.
@@ -750,8 +768,8 @@ func (qb *QueryBuilder) quoteColumnsForDML(columns ...string) []string {
 // interpolate a column without handling the failure, where a per-door guard is
 // something a reviewer has to notice is missing (ADR-082).
 //
-// The check matters most on PostgreSQL, where the default branch renders the
-// column verbatim, so an unvalidated argument was interpolated as written.
+// The check matters most on PostgreSQL, where the renderer returns the column
+// verbatim, so an unvalidated argument was interpolated as written.
 func (qb *QueryBuilder) quoteColumnForQuery(column string) (string, error) {
 	trimmed, err := validateIdentifier("column", column)
 	if err != nil {

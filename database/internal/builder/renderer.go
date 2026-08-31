@@ -16,14 +16,14 @@ import (
 // takes an already-validated identifier: the renderer renders, it does not
 // judge. EscapeIdentifier is deliberately NOT here — it is exported, so it is a
 // trust boundary rather than a post-validation step.
+// The three methods are the three renderings that differ in KIND between the
+// vendors — reserved-word quoting, alias splitting, direction/NULLS parsing.
+// Anything a vendor does the SAME way stays in the builder: a column LIST is
+// rendered element-wise everywhere, and `*` is a wildcard everywhere, so those
+// loops belong to the funnels rather than to two identical adapter methods.
 type vendorRenderer interface {
-	// QuoteColumnsForSelect renders a SELECT column list. Wildcard selectors
-	// ("*", "t.*") are not identifiers and pass through untouched.
-	QuoteColumnsForSelect(columns []string) []string
-	// QuoteColumnsForDML renders an INSERT/UPDATE column list, preserving the
-	// caller's case verbatim.
-	QuoteColumnsForDML(columns []string) []string
-	// QuoteColumn renders a single column reference for a WHERE/SET position.
+	// QuoteColumn renders a single column reference for a SELECT/WHERE/SET
+	// position, preserving the caller's case verbatim.
 	QuoteColumn(column string) string
 	// QuoteTable renders a FROM/JOIN table argument, keeping an inline alias
 	// ("users u") outside the quoted identifier.

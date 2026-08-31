@@ -29,7 +29,7 @@ func TestQuoteOracleColumnHandlesReservedWords(t *testing.T) {
 func TestQuoteOracleColumnsForDMLPreservesCase(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.Oracle)
 
-	cols := qb.renderer.QuoteColumnsForDML([]string{"id", "number"})
+	cols := qb.quoteColumnsForDML("id", "number")
 	if cols[0] != "id" || cols[1] != `"number"` {
 		t.Fatalf("unexpected quoting result: %v", cols)
 	}

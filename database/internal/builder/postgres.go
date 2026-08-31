@@ -16,12 +16,6 @@ type postgresRenderer struct{}
 
 var _ vendorRenderer = postgresRenderer{}
 
-// QuoteColumnsForSelect renders a SELECT column list verbatim.
-func (postgresRenderer) QuoteColumnsForSelect(columns []string) []string { return columns }
-
-// QuoteColumnsForDML renders an INSERT/UPDATE column list verbatim.
-func (postgresRenderer) QuoteColumnsForDML(columns []string) []string { return columns }
-
 // QuoteColumn renders a column reference verbatim.
 func (postgresRenderer) QuoteColumn(column string) string { return column }
 

@@ -18,32 +18,8 @@ type oracleRenderer struct{}
 
 var _ vendorRenderer = oracleRenderer{}
 
-// QuoteColumnsForSelect quotes each column, leaving wildcard selectors alone:
-// `*` and `t.*` are not identifiers, and quoting them names a column nobody has.
-func (oracleRenderer) QuoteColumnsForSelect(columns []string) []string {
-	quoted := make([]string, 0, len(columns))
-	for _, col := range columns {
-		if col == "*" || strings.HasSuffix(col, ".*") {
-			quoted = append(quoted, col)
-			continue
-		}
-		quoted = append(quoted, sqllex.QuoteOracleIdentifier(col))
-	}
-	return quoted
-}
-
-// QuoteColumnsForDML applies the same reserved-word-only quoting the query
-// conditions use (sqllex.QuoteOracleIdentifier) and preserves the caller's
-// original case verbatim — it does not upper-case reserved words.
-func (oracleRenderer) QuoteColumnsForDML(columns []string) []string {
-	quoted := make([]string, len(columns))
-	for i, col := range columns {
-		quoted[i] = sqllex.QuoteOracleIdentifier(col)
-	}
-	return quoted
-}
-
-// QuoteColumn renders a single column reference.
+// QuoteColumn renders a column reference with reserved-word-only quoting,
+// preserving the caller's original case — it does not upper-case reserved words.
 func (oracleRenderer) QuoteColumn(column string) string {
 	return sqllex.QuoteOracleIdentifier(column)
 }
@@ -197,7 +173,7 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	// quoting the DML paths use) so non-reserved identifiers stay unquoted and Oracle
 	// folds them to the uppercase form created by standard DDL.
 	insertKeys := sortedKeys(insertColumns)
-	quotedInsertCols := qb.renderer.QuoteColumnsForDML(insertKeys)
+	quotedInsertCols := qb.quoteColumnsForDML(insertKeys...)
 	usingValues := make([]string, len(insertKeys))
 	for i, col := range quotedInsertCols {
 		usingValues[i] = fmt.Sprintf(":%d AS %s", i+1, col)
@@ -207,7 +183,7 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	// Build ON clause for conflict detection
 	orderedConflicts := append([]string(nil), conflictColumns...)
 	sort.Strings(orderedConflicts)
-	quotedConflicts := qb.renderer.QuoteColumnsForDML(orderedConflicts)
+	quotedConflicts := qb.quoteColumnsForDML(orderedConflicts...)
 	onConditions := make([]string, len(quotedConflicts))
 	for i, col := range quotedConflicts {
 		onConditions[i] = fmt.Sprintf("target.%s = source.%s", col, col)
@@ -215,7 +191,7 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 
 	// Build UPDATE SET clause
 	updateKeys := sortedKeys(updateColumns)
-	quotedUpdateCols := qb.renderer.QuoteColumnsForDML(updateKeys)
+	quotedUpdateCols := qb.quoteColumnsForDML(updateKeys...)
 	updateSets := make([]string, len(updateKeys))
 	baseIndex := len(insertKeys) + 1
 	for i, col := range quotedUpdateCols {
