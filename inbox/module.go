@@ -12,6 +12,7 @@ import (
 	"github.com/gaborage/go-bricks/internal/tenantstore"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams"
 )
 
 // Module implements the GoBricks Module interface for the consumer-side inbox.
@@ -43,7 +44,20 @@ type Module struct {
 	cfg       config.InboxConfig
 
 	stores tenantstore.Cache[Store] // one store per tenant ("" = single-tenant)
+	// holdStores holds the hold ledger's store. Always the control-plane key: a
+	// hold lives on that database and nowhere else.
+	holdStores   tenantstore.Cache[HoldStore]
+	holdReplayer func() streams.HoldReplayer
+	// holdDrain is created at Init when the hold is on, so the scheduled job and
+	// the gauges read the same snapshots.
+	holdDrain *HoldDrain
+	// unregisterHoldGauges stops the gauge callback at shutdown.
+	unregisterHoldGauges func() error
 }
+
+// moduleName is what this module answers to, and the prefix its store errors and
+// table diagnostics carry.
+const moduleName = "inbox"
 
 // NewModule creates a new inbox Module instance.
 func NewModule() *Module {
@@ -52,7 +66,7 @@ func NewModule() *Module {
 
 // Name implements app.Module.
 func (m *Module) Name() string {
-	return "inbox"
+	return moduleName
 }
 
 // SetSharedResolvers injects the control-plane ("" key) resolvers. Called by
@@ -69,6 +83,10 @@ func (m *Module) SetSharedResolvers(
 // sharedLedger reports whether the inbox is configured for shared
 // (control-plane) tenancy rather than the default per-tenant fan-out.
 func (m *Module) sharedLedger() bool { return m.cfg.Tenancy == config.TenancyShared }
+
+// holdEnabled reports whether this module runs a hold ledger: an enabled inbox
+// that asked for one.
+func (m *Module) holdEnabled() bool { return m.cfg.Enabled && m.cfg.Hold.Enabled }
 
 // Init implements app.Module.
 func (m *Module) Init(deps *app.ModuleDeps) error {
@@ -89,6 +107,15 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		return nil
 	}
 
+	// A hold parks one tenant's messages so the others keep flowing, which only
+	// works on the control-plane ledger: a tenant whose own database is down cannot
+	// hold its own messages there. Checked after the disabled return, so a stray
+	// hold key on a disabled inbox stays the no-op the rest of the module is.
+	if m.cfg.Hold.Enabled && !m.sharedLedger() {
+		return errors.New("inbox: hold requires inbox.tenancy: shared — a tenant whose database is down " +
+			"cannot hold its own messages; set inbox.tenancy: shared or disable inbox.hold")
+	}
+
 	// Guards direct construction only: app.RegisterModule always wires a non-nil
 	// resolver, so this never fires through the normal registration path.
 	// verifyStartupDatabase (below) is the real fail-fast for an enabled inbox.
@@ -103,7 +130,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	// this is a no-op in effect, but the resolver must still have been injected.
 	if m.sharedLedger() {
 		if m.sharedDB == nil {
-			return tenantstore.SharedResolversRequired("inbox")
+			return tenantstore.SharedResolversRequired(moduleName)
 		}
 		m.getDB = m.sharedDB
 		if err := tenantstore.RejectSharedWithStaticTenants("inbox", m.config); err != nil {
@@ -119,12 +146,43 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 
 	m.processor = &Inbox{module: m}
 
+	if m.holdEnabled() {
+		m.startHold(deps)
+	}
+
 	m.logger.Info().
 		Str("table", m.cfg.TableName).
 		Dur("retentionPeriod", m.cfg.RetentionPeriod).
 		Str("tenancy", m.cfg.Tenancy).
 		Msg("Inbox module initialized")
 	return nil
+}
+
+// startHold builds the drain the scheduled job runs and publishes its gauges.
+// Both read the same snapshots, which is why one drain is built here rather than
+// one per caller.
+func (m *Module) startHold(deps *app.ModuleDeps) {
+	m.holdDrain = &HoldDrain{
+		resolve:  m.holdStoreFor,
+		replayer: m.holdReplayer,
+		cfg:      m.cfg.Hold,
+		owner:    holdOwnerID(),
+		now:      time.Now,
+	}
+
+	if deps.MeterProvider == nil {
+		return
+	}
+
+	unregister, err := registerHoldGauges(deps.MeterProvider.Meter(holdMeterName), m.holdDrain)
+	if err != nil {
+		// Reported, not fatal: a hold that drains without publishing its size is
+		// worse observed, not broken, and refusing startup over an instrument would
+		// take the feature down with the metric.
+		m.logger.Warn().Err(err).Msg("Inbox hold gauges unavailable")
+		return
+	}
+	m.unregisterHoldGauges = unregister
 }
 
 // startupDatabaseCheckApplies reports whether Init can statically resolve the
@@ -152,6 +210,10 @@ func (m *Module) verifyStartupDatabase() error {
 	}
 	if _, err := store.DeleteProcessed(ctx, db, time.Unix(0, 0).UTC()); err != nil {
 		return tenantstore.TableUnusableError("inbox", m.cfg.TableName, "inbox.autocreatetable", err)
+	}
+
+	if m.holdEnabled() {
+		return m.verifyHoldDatabase(ctx, db)
 	}
 	return nil
 }
@@ -183,8 +245,19 @@ func (m *Module) InboxProcessor() app.InboxProcessor {
 // RegisterJobs implements app.JobProvider. The inbox has no relay; it registers
 // only the retention cleanup job, and only when retention is positive.
 func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
-	if !m.cfg.Enabled || m.cfg.RetentionPeriod <= 0 {
+	if !m.cfg.Enabled {
 		return nil
+	}
+
+	// The drain registers independently of retention: a hold that is never drained
+	// parks messages forever, and that must not hinge on the cleanup job's config.
+	if m.holdDrain != nil {
+		if err := registrar.FixedRate(holdDrainJobID, m.holdDrain, m.cfg.Hold.DrainInterval); err != nil {
+			return fmt.Errorf("inbox: failed to register hold drain job: %w", err)
+		}
+		m.logger.Info().
+			Dur("drainInterval", m.cfg.Hold.DrainInterval).
+			Msg("Inbox hold drain job registered")
 	}
 
 	// Fail fast on multi-tenant configurations the cleanup job cannot fan out across, so
@@ -235,6 +308,16 @@ func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 
 // Shutdown implements app.Module.
 func (m *Module) Shutdown() error {
+	if m.unregisterHoldGauges != nil {
+		if err := m.unregisterHoldGauges(); err != nil {
+			// Reported, not returned: a gauge that outlives its drain is a metrics
+			// problem, and failing shutdown over it would leave the rest of the
+			// teardown undone.
+			m.logger.Warn().Err(err).Msg("Failed to unregister inbox hold gauges")
+		}
+		m.unregisterHoldGauges = nil
+	}
+
 	m.logger.Info().Msg("Inbox module shut down")
 	return nil
 }

@@ -357,16 +357,19 @@ func runAttempts(ctx context.Context, log logger.Logger, traceID string, req *Re
 			return res
 		}
 
-		if !wait(ctx, backoffFor(req.Retry, attempt+1)) {
+		if !Wait(ctx, backoffFor(req.Retry, attempt+1)) {
 			return res
 		}
 	}
 }
 
-// wait sleeps for d unless the context ends first, reporting whether the caller
+// Wait sleeps for d unless the context ends first, reporting whether the caller
 // may try again. A consumer shutting down must not sleep out its backoff. d comes
 // from backoffFor, which never returns a negative duration.
-func wait(ctx context.Context, d time.Duration) bool {
+//
+// Exported for the lanes: the streams hold stalls a partition on the same rule,
+// and a second copy of a cancelable sleep is a second thing to get wrong.
+func Wait(ctx context.Context, d time.Duration) bool {
 	if ctx.Err() != nil {
 		return false
 	}

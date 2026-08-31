@@ -78,10 +78,12 @@ func (c fakeJobCtx) DB() dbtypes.Interface       { return c.db }
 func (c fakeJobCtx) Messaging() messaging.Client { return nil }
 func (c fakeJobCtx) Config() *config.Config      { return nil }
 
-func newCoverageModule(db dbtypes.Interface, cfg config.InboxConfig) *Module {
+// cfg is taken by pointer: InboxConfig grew past the by-value threshold when the
+// hold block landed on it.
+func newCoverageModule(db dbtypes.Interface, cfg *config.InboxConfig) *Module {
 	return &Module{
 		logger: logger.New("info", false),
-		cfg:    cfg,
+		cfg:    *cfg,
 		getDB:  func(context.Context) (dbtypes.Interface, error) { return db, nil },
 	}
 }
@@ -90,7 +92,7 @@ func TestEnsureStoreInitializedOracleWithAutoCreate(t *testing.T) {
 	db := dbtesting.NewTestDB(dbtypes.Oracle)
 	db.ExpectExec(`CREATE TABLE gobricks_inbox`).WillReturnRowsAffected(0)
 	db.ExpectExec(`CREATE INDEX idx_gobricks_inbox_processed`).WillReturnRowsAffected(0)
-	m := newCoverageModule(db, config.InboxConfig{Enabled: true, TableName: "gobricks_inbox", AutoCreateTable: true})
+	m := newCoverageModule(db, &config.InboxConfig{Enabled: true, TableName: "gobricks_inbox", AutoCreateTable: true})
 
 	store, err := m.ensureStoreInitialized(t.Context())
 	require.NoError(t, err)
@@ -160,7 +162,7 @@ func TestEnsureStoreInitializedSingleTenantIdempotent(t *testing.T) {
 	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 	db.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_inbox`).WillReturnRowsAffected(0)
 	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_inbox_processed`).WillReturnRowsAffected(0)
-	m := newCoverageModule(db, config.InboxConfig{Enabled: true, TableName: "gobricks_inbox", AutoCreateTable: true})
+	m := newCoverageModule(db, &config.InboxConfig{Enabled: true, TableName: "gobricks_inbox", AutoCreateTable: true})
 
 	first, err := m.ensureStoreInitialized(t.Context())
 	require.NoError(t, err)
@@ -176,7 +178,7 @@ func TestLazyStoreDelegates(t *testing.T) {
 	db.ExpectTransaction().ExpectExec(`INSERT INTO gobricks_inbox`).WillReturnRowsAffected(1)
 	db.ExpectExec(`CREATE TABLE`).WillReturnRowsAffected(0)
 	db.ExpectExec(`CREATE INDEX`).WillReturnRowsAffected(0)
-	m := newCoverageModule(db, config.InboxConfig{Enabled: true, TableName: "gobricks_inbox"})
+	m := newCoverageModule(db, &config.InboxConfig{Enabled: true, TableName: "gobricks_inbox"})
 	ls := &lazyStore{module: m}
 
 	tx, err := db.Begin(t.Context())
@@ -191,7 +193,7 @@ func TestLazyStoreDelegates(t *testing.T) {
 func TestCleanupExecute(t *testing.T) {
 	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 	db.ExpectExec(`DELETE FROM gobricks_inbox`).WillReturnRowsAffected(5)
-	m := newCoverageModule(db, config.InboxConfig{Enabled: true, TableName: "gobricks_inbox"})
+	m := newCoverageModule(db, &config.InboxConfig{Enabled: true, TableName: "gobricks_inbox"})
 
 	c := &Cleanup{
 		store:           &lazyStore{module: m},
@@ -217,7 +219,7 @@ func TestCleanupExecuteErrorsWithoutDB(t *testing.T) {
 }
 
 func TestModuleShutdown(t *testing.T) {
-	m := newCoverageModule(dbtesting.NewTestDB(dbtypes.PostgreSQL), config.InboxConfig{})
+	m := newCoverageModule(dbtesting.NewTestDB(dbtypes.PostgreSQL), &config.InboxConfig{})
 	require.NoError(t, m.Shutdown())
 }
 

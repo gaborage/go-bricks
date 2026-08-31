@@ -8,6 +8,7 @@ import (
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams"
 	"github.com/gaborage/go-bricks/server"
 )
 
@@ -46,6 +47,19 @@ type TenantStore interface {
 // declarationSetter is an internal interface for setting messaging declarations
 type declarationSetter interface {
 	SetDeclarations(*messaging.Declarations)
+}
+
+// holdLedgerProvider is implemented by a module that offers a hold ledger — the
+// inbox, when its hold is enabled. The streams lane parks through it.
+type holdLedgerProvider interface {
+	HoldLedger() streams.HoldLedger
+}
+
+// holdReplayerSetter is implemented by the module that drains the hold. The
+// replayer is the streams manager, which does not exist at registration time, so
+// the module receives a source rather than a value.
+type holdReplayerSetter interface {
+	SetHoldReplayer(func() streams.HoldReplayer)
 }
 
 // sharedResolverSetter is an internal interface implemented by ledger modules

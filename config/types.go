@@ -794,15 +794,12 @@ type OutboxConfig struct {
 	// In single-tenant mode both values behave identically.
 	Tenancy string `koanf:"tenancy" json:"tenancy" yaml:"tenancy" toml:"tenancy" mapstructure:"tenancy"`
 
-	// SuperStreams is RESERVED and not yet usable: the relay dispatches every row over
-	// the AMQP lane until the stream leg lands, so a stream-targeted row would reach the
-	// empty exchange and be dropped. Init REJECTS a non-empty value rather than lose
-	// events silently, and setting messaging.streams.uri does not change that.
-	//
-	// Once the stream leg lands this lists the super streams the relay may publish to over
-	// the native streams lane, each of which must be declared as a super stream by a
-	// module's DeclareStreams; the outbox declares its publisher. Default: none — and on
-	// this release, the only accepted value.
+	// SuperStreams lists the super streams the relay may publish to over the native streams
+	// lane. Each name must be declared as a super stream by a module's DeclareStreams; the
+	// outbox declares its own publisher for each. Requires messaging.streams.uri.
+	// Default: none — every event stays on the AMQP lane.
+	// Listing a name here declares one publisher for it, so a super stream the outbox
+	// targets cannot also be published to directly by another module in the process.
 	SuperStreams []string `koanf:"superstreams" json:"superstreams" yaml:"superstreams" toml:"superstreams" mapstructure:"superstreams"`
 }
 
@@ -845,6 +842,42 @@ type InboxConfig struct {
 	//     wiki/outbox.md and ADR-041.
 	// In single-tenant mode both values behave identically.
 	Tenancy string `koanf:"tenancy" json:"tenancy" yaml:"tenancy" toml:"tenancy" mapstructure:"tenancy"`
+
+	// Hold configures per-tenant parking of failed stream deliveries.
+	Hold InboxHoldConfig `koanf:"hold" json:"hold" yaml:"hold" toml:"hold" mapstructure:"hold"`
+}
+
+// InboxHoldConfig holds the per-tenant hold ledger's settings. A hold keeps a
+// tenant's later messages behind a failed one while the rest of the partition
+// keeps flowing, and a scheduled drain replays them in order.
+//
+// It requires inbox.tenancy: shared — a tenant whose own database is down
+// cannot hold its own messages. Held rows are never dropped automatically: only
+// a successful replay removes one, and an operator deletes the rest by hand.
+// The DDL for managed migrations is in wiki/outbox.md.
+type InboxHoldConfig struct {
+	// Enabled activates the hold ledger and its drain job.
+	// Default: false (opt-in).
+	Enabled bool `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
+
+	// TableName is the hold row table; the tenant table is "<tablename>_tenant".
+	// Must be unqualified. Default: "gobricks_inbox_hold".
+	TableName string `koanf:"tablename" json:"tablename" yaml:"tablename" toml:"tablename" mapstructure:"tablename"`
+
+	// DrainInterval is how often the drain job looks for due tenants.
+	// Default: 5s.
+	DrainInterval time.Duration `koanf:"draininterval" json:"draininterval" yaml:"draininterval" toml:"draininterval" mapstructure:"draininterval"`
+
+	// MaxBackoff caps the drain's per-tenant retry backoff. Default: 5m.
+	MaxBackoff time.Duration `koanf:"maxbackoff" json:"maxbackoff" yaml:"maxbackoff" toml:"maxbackoff" mapstructure:"maxbackoff"`
+
+	// MaxAge is how long a tenant may stay held before each drain pass logs one
+	// WARN naming it. Default: 1h.
+	MaxAge time.Duration `koanf:"maxage" json:"maxage" yaml:"maxage" toml:"maxage" mapstructure:"maxage"`
+
+	// LeaseDuration is how long one drainer holds a tenant, and therefore the
+	// time bound on a replayed handler. Default: 60s.
+	LeaseDuration time.Duration `koanf:"leaseduration" json:"leaseduration" yaml:"leaseduration" toml:"leaseduration" mapstructure:"leaseduration"`
 }
 
 // SchedulerConfig holds job scheduler settings.

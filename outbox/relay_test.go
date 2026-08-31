@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,7 +14,9 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/ledgererr"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams"
 	"github.com/gaborage/go-bricks/multitenant"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
@@ -46,9 +47,13 @@ func TestDecodeHeadersInvalidJSON(t *testing.T) {
 // client. tenants is [""], so multitenant.SetTenant is a no-op; getDB reads the db from a
 // context value (dbFromCtx) stashed by newFakeJobCtx, which survives the per-tenant lease
 // scope's context wrapping (ADR-032).
-func newRelayWithFakes(store *fakeStore, amqp *fakeAMQP) *Relay {
+func newRelayWithFakes(store *fakeStore, amqp *fakeAMQP, streamPubs map[string]streamPublisher) *Relay {
 	return &Relay{
 		store: store,
+		streamPublisher: func(name string) (streamPublisher, bool) {
+			p, ok := streamPubs[name]
+			return p, ok
+		},
 		config: config.OutboxConfig{
 			BatchSize:      10,
 			MaxRetries:     3,
@@ -63,7 +68,7 @@ func newRelayWithFakes(store *fakeStore, amqp *fakeAMQP) *Relay {
 }
 
 func TestRelayExecuteReturnsErrorWhenDBUnavailable(t *testing.T) {
-	r := newRelayWithFakes(&fakeStore{}, newFakeAMQP())
+	r := newRelayWithFakes(&fakeStore{}, newFakeAMQP(), nil)
 	ctx := newFakeJobCtx(nil, nil)
 
 	err := r.Execute(ctx)
@@ -107,7 +112,7 @@ func TestRelayAdvancesRetryCountWhenBrokerNotReady(t *testing.T) {
 		{ID: "evt-1", Exchange: "ex", RoutingKey: "rk"},
 		{ID: "evt-2", Exchange: "ex", RoutingKey: "rk"},
 	}}
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -121,7 +126,7 @@ func TestRelayAdvancesRetryCountWhenBrokerNotReady(t *testing.T) {
 
 func TestRelayExecuteWrapsFetchPendingError(t *testing.T) {
 	store := &fakeStore{FetchPendingErr: errors.New("network drop")}
-	r := newRelayWithFakes(store, newFakeAMQP())
+	r := newRelayWithFakes(store, newFakeAMQP(), nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, nil)
 
@@ -133,7 +138,7 @@ func TestRelayExecuteWrapsFetchPendingError(t *testing.T) {
 
 func TestRelayExecuteIsNoOpWhenNoPendingRecords(t *testing.T) {
 	store := &fakeStore{FetchPendingResult: nil}
-	r := newRelayWithFakes(store, newFakeAMQP())
+	r := newRelayWithFakes(store, newFakeAMQP(), nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, nil)
 
@@ -151,7 +156,7 @@ func TestRelayExecutePublishesPendingRecords(t *testing.T) {
 		},
 	}
 	amqp := newFakeAMQP()
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -173,7 +178,7 @@ func TestRelayExecuteCountsFailuresAndContinues(t *testing.T) {
 	amqp.PublishErrFor = map[string]error{
 		"orders:created": errors.New("broker rejected"),
 	}
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -189,7 +194,7 @@ func TestRelayExecuteCountsFailuresAndContinues(t *testing.T) {
 func TestPublishRecordMarksFailedOnInvalidHeaders(t *testing.T) {
 	store := &fakeStore{}
 	amqp := newFakeAMQP()
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -208,7 +213,7 @@ func TestPublishRecordMarksFailedOnInvalidHeaders(t *testing.T) {
 func TestPublishRecordInjectsOutboxMetadataHeaders(t *testing.T) {
 	store := &fakeStore{}
 	amqp := newFakeAMQP()
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -235,7 +240,7 @@ func TestPublishRecordInjectsHeadersWhenRecordHasNone(t *testing.T) {
 	// outbox metadata keys.
 	store := &fakeStore{}
 	amqp := newFakeAMQP()
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -251,7 +256,7 @@ func TestPublishRecordInjectsHeadersWhenRecordHasNone(t *testing.T) {
 func TestPublishRecordReturnsFalseWhenMarkPublishedFails(t *testing.T) {
 	store := &fakeStore{MarkPublishedErr: errors.New("db gone")}
 	amqp := newFakeAMQP()
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -276,7 +281,7 @@ func TestPublishRecordReturnsFalseWhenMarkPublishedFails(t *testing.T) {
 func TestPublishRecordRehydratesTraceContextForPublish(t *testing.T) {
 	store := &fakeStore{}
 	amqp := newFakeAMQP()
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -314,7 +319,7 @@ func TestPublishRecordDoesNotReEmitAPersistedMalformedTraceParent(t *testing.T) 
 	const persisted = "00-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-00f067aa0ba902b7-01"
 	store := &fakeStore{}
 	amqp := newFakeAMQP()
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -344,7 +349,7 @@ func TestMarkRecordFailedLogsButDoesNotPanicOnStoreError(t *testing.T) {
 	// Even if the store fails to record the failure, the relay must continue.
 	store := &fakeStore{MarkFailedErr: errors.New("store unreachable")}
 	amqp := newFakeAMQP()
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -417,7 +422,7 @@ func TestRelayDeadLettersPoisonAtMaxRetries(t *testing.T) {
 		{ID: "poison", Headers: []byte(`{not valid json}`), RetryCount: 2}, // MaxRetries-1
 	}}
 	amqp := newFakeAMQP()
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -440,7 +445,7 @@ func TestRelayDeadLettersInvalidPublishDestinationAtMaxRetries(t *testing.T) {
 	amqp.PublishErrFor = map[string]error{
 		"ex:rk": fmt.Errorf("%w: routing key is 256 bytes, limit is 255", messaging.ErrInvalidPublishDestination),
 	}
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -462,7 +467,7 @@ func TestRelayKeepsInvalidPublishDestinationPendingBelowMaxRetries(t *testing.T)
 	amqp.PublishErrFor = map[string]error{
 		"ex:rk": fmt.Errorf("%w: exchange is 256 bytes, limit is 255", messaging.ErrInvalidPublishDestination),
 	}
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -483,7 +488,7 @@ func TestRelayMarksNackAsConnectivityNeverParks(t *testing.T) {
 	amqp.PublishErrFor = map[string]error{
 		"ex:rk": fmt.Errorf("%w after 5 attempts: %w", messaging.ErrPublishRetriesExhausted, messaging.ErrPublishNacked),
 	}
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -501,7 +506,7 @@ func TestRelayNeverDeadLettersConnectivityEvenPastMaxRetries(t *testing.T) {
 	}}
 	amqp := newFakeAMQP()
 	amqp.PublishErrFor = map[string]error{"ex:rk": messaging.ErrPublishConfirmTimeout}
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -520,7 +525,7 @@ func TestRelayShutdownDuringPublishDoesNotInflateRetryCount(t *testing.T) {
 	}}
 	amqp := newFakeAMQP()
 	amqp.PublishErr = messaging.ErrShutdown
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -540,7 +545,7 @@ func TestRelayPerRecordPublishTimeoutDoesNotStarveBatch(t *testing.T) {
 	}}
 	amqp := newFakeAMQP()
 	amqp.PublishBlock = map[string]bool{"ex:slow": true}
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	r.config.PublishTimeout = 30 * time.Millisecond
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
@@ -577,7 +582,7 @@ func TestRelayStopsBatchWhenBrokerDropsMidBatch(t *testing.T) {
 			f.Ready = false
 		}
 	}
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -615,7 +620,7 @@ func TestRelayMidBatchDropAccountingSumsToTotal(t *testing.T) {
 			f.Ready = false
 		}
 	}
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -647,7 +652,7 @@ func TestRelayContinuesBatchWhenNotConnectedButStillReady(t *testing.T) {
 	amqp.PublishErrFor = map[string]error{
 		"ex:rk1": messaging.ErrNotConnected,
 	}
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -657,60 +662,6 @@ func TestRelayContinuesBatchWhenNotConnectedButStillReady(t *testing.T) {
 	assert.Equal(t, "evt-2", store.MarkPublishedLastID)
 	assert.Equal(t, 1, store.MarkFailedCalls)
 	assert.Equal(t, "evt-1", store.MarkFailedLastID)
-}
-
-func TestBoundPersistedErrorMakesArbitraryTextSafeToStore(t *testing.T) {
-	tests := []struct {
-		name      string
-		in        string
-		wantExact string
-		truncated bool
-	}{
-		{name: "short_text_passes_through", in: "broker rejected", wantExact: "broker rejected"},
-		{name: "empty_stays_empty", in: "", wantExact: ""},
-		// The column is read back into logs and dashboards, so a broker-supplied
-		// newline must not be able to forge a line there.
-		{
-			name:      "control_bytes_become_spaces",
-			in:        "publish failed\r\nlevel=error msg=\"forged\"\x00",
-			wantExact: "publish failed  level=error msg=\"forged\" ",
-		},
-		// PostgreSQL rejects invalid UTF-8 outright: the UPDATE would fail and
-		// retry_count would never advance, retrying forever over text nobody reads.
-		{name: "invalid_utf8_is_dropped", in: "err: " + string([]byte{0xff, 0xfe}) + " tail", wantExact: "err:  tail"},
-		// The pair that matters: invalid BYTES are dropped by ToValidUTF8 above,
-		// so by the time the mapping runs, a U+FFFD is a character the sender
-		// actually wrote. Substituting it would silently discard real content,
-		// and the two cases together pin the seam between the two behaviors.
-		{
-			name:      "a_genuine_replacement_character_survives",
-			in:        "broker said \ufffd here",
-			wantExact: "broker said \ufffd here",
-		},
-		{name: "at_the_cap_is_untouched", in: strings.Repeat("a", maxPersistedErrorBytes), wantExact: strings.Repeat("a", maxPersistedErrorBytes)},
-		{name: "one_over_the_cap_truncates", in: strings.Repeat("a", maxPersistedErrorBytes+1), truncated: true},
-		{name: "pathological_10kb_truncates", in: strings.Repeat("broker unreachable; ", 512), truncated: true},
-		{name: "multibyte_truncates_on_a_rune_boundary", in: strings.Repeat("日", 5000), truncated: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := boundPersistedError(tt.in)
-
-			assert.LessOrEqual(t, len(got), maxPersistedErrorBytes, "the ledger never receives more than the cap")
-			assert.True(t, utf8.ValidString(got), "invalid UTF-8 would be rejected by PostgreSQL and fail the UPDATE")
-			assert.NotContains(t, got, "\x00")
-			assert.NotContains(t, got, "\n")
-			assert.NotContains(t, got, "\r")
-
-			if tt.truncated {
-				assert.True(t, strings.HasSuffix(got, truncationMarker),
-					"a shortened error says so, or a reader cannot tell it from a short one")
-			} else {
-				assert.Equal(t, tt.wantExact, got)
-			}
-		})
-	}
 }
 
 // The helper being correct is not the property that matters: what matters is that
@@ -725,17 +676,17 @@ func TestPublishRecordBoundsTheErrorItPersists(t *testing.T) {
 	}
 	amqp := newFakeAMQP()
 	amqp.PublishErrFor = map[string]error{"orders:created": errors.New(oversized)}
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
 	require.NoError(t, r.Execute(ctx))
 
 	require.Equal(t, 1, store.MarkFailedCalls)
-	assert.Greater(t, len(oversized), maxPersistedErrorBytes, "the fixture is actually oversized")
-	assert.LessOrEqual(t, len(store.MarkFailedLastErr), maxPersistedErrorBytes,
+	assert.Greater(t, len(oversized), ledgererr.MaxBytes, "the fixture is actually oversized")
+	assert.LessOrEqual(t, len(store.MarkFailedLastErr), ledgererr.MaxBytes,
 		"the ledger receives the bounded error, not the broker's whole message")
-	assert.True(t, strings.HasSuffix(store.MarkFailedLastErr, truncationMarker))
+	assert.True(t, strings.HasSuffix(store.MarkFailedLastErr, ledgererr.TruncationMarker))
 	assert.Contains(t, store.MarkFailedLastErr, "broker unreachable",
 		"and it is still diagnostic — truncated, not discarded")
 }
@@ -747,7 +698,7 @@ func TestDeadLetterPoisonBoundsTheErrorItPersists(t *testing.T) {
 
 	store := &fakeStore{}
 	amqp := newFakeAMQP()
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -755,8 +706,8 @@ func TestDeadLetterPoisonBoundsTheErrorItPersists(t *testing.T) {
 	r.deadLetterPoison(ctx, ctx.Logger(), db, rec, oversized)
 
 	require.Equal(t, 1, store.MarkDeadLetteredCalls)
-	assert.LessOrEqual(t, len(store.MarkDeadLetteredLastErr), maxPersistedErrorBytes)
-	assert.True(t, strings.HasSuffix(store.MarkDeadLetteredLastErr, truncationMarker))
+	assert.LessOrEqual(t, len(store.MarkDeadLetteredLastErr), ledgererr.MaxBytes)
+	assert.True(t, strings.HasSuffix(store.MarkDeadLetteredLastErr, ledgererr.TruncationMarker))
 }
 
 // When the ledger write itself fails, the relay's only remaining job is to say
@@ -778,7 +729,7 @@ func TestMarkRecordFailedReportsAFailedLedgerWrite(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &fakeStore{MarkFailedErr: tt.markErr}
-			r := newRelayWithFakes(store, newFakeAMQP())
+			r := newRelayWithFakes(store, newFakeAMQP(), nil)
 			log := newRecordingLogger()
 			db := dbtesting.NewTestDB("postgresql")
 
@@ -813,7 +764,7 @@ func TestDeadLetterPoisonReportsAFailedLedgerWrite(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &fakeStore{MarkDeadLetteredErr: tt.markErr}
-			r := newRelayWithFakes(store, newFakeAMQP())
+			r := newRelayWithFakes(store, newFakeAMQP(), nil)
 			log := newRecordingLogger()
 			db := dbtesting.NewTestDB("postgresql")
 			rec := &Record{ID: "evt-poison", RetryCount: r.config.MaxRetries}
@@ -834,7 +785,7 @@ func TestRelayNotLeaderSkipsCycle(t *testing.T) {
 		FetchPendingResult: []Record{{ID: "evt-1", Exchange: "orders", RoutingKey: "created"}},
 	}
 	amqp := newFakeAMQP()
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 
 	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)), "another instance leading is not a cycle failure")
@@ -849,7 +800,7 @@ func TestRelayLeaderErrorFailsCycle(t *testing.T) {
 		FetchPendingResult: []Record{{ID: "evt-1", Exchange: "orders", RoutingKey: "created"}},
 	}
 	amqp := newFakeAMQP()
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 
 	err := r.Execute(newFakeJobCtx(db, amqp))
@@ -866,7 +817,7 @@ func TestRelayLeaderReleasedAfterCycle(t *testing.T) {
 		},
 	}
 	amqp := newFakeAMQP()
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 
 	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
@@ -886,7 +837,7 @@ func TestRelayLostLeadershipStopsBatch(t *testing.T) {
 		},
 	}
 	amqp := newFakeAMQP()
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 
 	err := r.Execute(newFakeJobCtx(db, amqp))
@@ -911,7 +862,7 @@ func TestRelayFailedKeyParksLaterRowsOfThatKey(t *testing.T) {
 	}
 	amqp := newFakeAMQP()
 	amqp.PublishErrFor = map[string]error{"ex:k": errors.New("broker rejected")}
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 
 	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
@@ -929,7 +880,7 @@ func TestRelayNextCycleReattemptsParkedKeyInOrder(t *testing.T) {
 	store := &fakeStore{FetchPendingResult: records}
 	amqp := newFakeAMQP()
 	amqp.PublishErrFor = map[string]error{"ex:k": errors.New("broker rejected")}
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 
 	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
@@ -951,7 +902,7 @@ func TestRelayStampedAMQPRowsKeyByTenantStamp(t *testing.T) {
 	}
 	amqp := newFakeAMQP()
 	amqp.PublishErrOnce = map[string]error{"ex:a": errors.New("broker rejected")}
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 
 	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
@@ -963,8 +914,8 @@ func TestRelayStampedAMQPRowsKeyByTenantStamp(t *testing.T) {
 }
 
 // TestRelayStreamRowsKeyByPartitionKey pins that a stream-lane row orders under its
-// PARTITION KEY, not its routing key (which it has none of). The stream leg itself lands in
-// a later slice; this asserts only the ordering key, which is what this slice owns.
+// PARTITION KEY, not its routing key (which it has none of). Two rows sharing a key park
+// together; a third on a different key drains past them.
 func TestRelayStreamRowsKeyByPartitionKey(t *testing.T) {
 	store := &fakeStore{
 		FetchPendingResult: []Record{
@@ -974,16 +925,16 @@ func TestRelayStreamRowsKeyByPartitionKey(t *testing.T) {
 		},
 	}
 	amqp := newFakeAMQP()
-	// Every stream-lane row publishes to the empty exchange until the stream leg exists,
-	// so one error configuration fails them all; the first failure is what parks.
-	amqp.PublishErr = errors.New("broker rejected")
-	r := newRelayWithFakes(store, amqp)
+	// Every stream publish fails, so the first row of each key parks the rest of that key.
+	pub := &fakeStreamPublisher{Err: errors.New("broker rejected")}
+	r := newRelayWithFakes(store, amqp, map[string]streamPublisher{"customers": pub})
 	db := dbtesting.NewTestDB("postgresql")
 
 	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
-	assert.Equal(t, 2, amqp.PublishCalls,
+	assert.Equal(t, 2, pub.Calls,
 		"S2 parks behind S1 on their shared partition key; T1's differs, so it is attempted")
 	assert.Equal(t, 2, store.MarkFailedCalls, "only the two attempted rows advance retry_count")
+	assert.Zero(t, amqp.PublishCalls, "a stream row never reaches the AMQP lane")
 }
 
 func TestRelayDeadLetteredRowDoesNotPark(t *testing.T) {
@@ -994,7 +945,7 @@ func TestRelayDeadLetteredRowDoesNotPark(t *testing.T) {
 		},
 	}
 	amqp := newFakeAMQP()
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 
 	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
@@ -1011,7 +962,7 @@ func TestRelayOutagePathMarksUnderLeadership(t *testing.T) {
 	}
 	amqp := newFakeAMQP()
 	amqp.Ready = false
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 
 	err := r.Execute(newFakeJobCtx(db, amqp))
@@ -1026,7 +977,7 @@ func TestRelayOutagePathMarksUnderLeadership(t *testing.T) {
 // stamped "acme" produced the same key, as did two stream rows on DIFFERENT streams sharing a
 // partition key — so a failure on one would park the other for nothing.
 func TestRelayKeyNamespacesDistinctScopes(t *testing.T) {
-	stamped := map[string]any{tenantStampHeader: "acme"}
+	stamped := map[string]any{messaging.TenantStampHeader: "acme"}
 
 	streamOrders := relayKey(&Record{Lane: LaneStream, Stream: "orders", PartitionKey: "acme"}, nil)
 	streamCustomers := relayKey(&Record{Lane: LaneStream, Stream: "customers", PartitionKey: "acme"}, nil)
@@ -1075,7 +1026,7 @@ func TestRelayLoopCountsParkedRows(t *testing.T) {
 	store := &fakeStore{FetchPendingResult: records}
 	amqp := newFakeAMQP()
 	amqp.PublishErrFor = map[string]error{"ex:k": errors.New("broker rejected")}
-	r := newRelayWithFakes(store, amqp)
+	r := newRelayWithFakes(store, amqp, nil)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
@@ -1086,6 +1037,351 @@ func TestRelayLoopCountsParkedRows(t *testing.T) {
 	assert.Equal(t, 2, res.parked, "K2 and K3 both park behind K1")
 	assert.Equal(t, 1, res.failed, "K1 failed")
 	assert.Equal(t, 1, res.published, "J1 published")
+	assert.Equal(t, len(records),
+		res.published+res.unrecorded+res.failed+res.deadlettered+res.parked,
+		"every fetched row is accounted for exactly once")
+}
+
+// --- the stream lane ---------------------------------------------------------
+
+// streamRow mirrors what applyStreamTarget actually persists: the tenant lives in
+// partition_key and NOT in the headers. An earlier version of this fixture hand-wrote an
+// x-tenant-id header the writer never produces, which hid that a real stream row reached the
+// publisher unstamped under shared tenancy.
+func streamRow() Record {
+	return Record{
+		ID: "S1", Lane: LaneStream, Stream: "customers", PartitionKey: "acme",
+		EventType: "customer.created", Payload: []byte("p"),
+		Headers: []byte(`{"traceparent":"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}`),
+	}
+}
+
+func TestRelayStreamRowPublishesWithPartitionKey(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{streamRow()}}
+	amqp := newFakeAMQP()
+	pub := &fakeStreamPublisher{}
+	r := newRelayWithFakes(store, amqp, map[string]streamPublisher{"customers": pub})
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+
+	require.Equal(t, 1, pub.Calls)
+	assert.Equal(t, "acme", pub.LastMsg.RoutingKey, "the partition key selects the partition")
+	assert.Equal(t, []byte("p"), pub.LastMsg.Data)
+	assert.Equal(t, "S1", pub.LastMsg.Properties[HeaderEventID])
+	assert.NotContains(t, pub.LastMsg.Properties, messaging.TenantStampHeader,
+		"the stamp rides the context so the publisher sets it; the relay must not supply one")
+	tenant, ok := multitenant.GetTenant(pub.LastCtx)
+	assert.True(t, ok)
+	assert.Equal(t, "acme", tenant, "the row's stamp is rehydrated onto the publish context")
+	assert.Equal(t, 1, store.MarkPublishedCalls)
+	assert.Zero(t, amqp.PublishCalls, "a stream row never touches the AMQP lane")
+}
+
+func TestRelayStreamRowFailuresAreConnectivity(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "confirmation_failure", err: errors.New(`publish to stream "customers" was not confirmed by the broker`)},
+		{name: "publisher_not_started", err: streams.ErrPublisherNotStarted},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			row := streamRow()
+			row.RetryCount = 99
+			store := &fakeStore{FetchPendingResult: []Record{row}}
+			amqp := newFakeAMQP()
+			pub := &fakeStreamPublisher{Err: tt.err}
+			r := newRelayWithFakes(store, amqp, map[string]streamPublisher{"customers": pub})
+			db := dbtesting.NewTestDB("postgresql")
+
+			require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+			assert.Equal(t, 1, store.MarkFailedCalls)
+			assert.Zero(t, store.MarkDeadLetteredCalls,
+				"connectivity never parks, however far past MaxRetries the row is")
+		})
+	}
+}
+
+func TestRelayStreamRowClosedPublisherAborts(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		streamRow(),
+		{ID: "A1", Exchange: "ex", RoutingKey: "a"},
+	}}
+	amqp := newFakeAMQP()
+	pub := &fakeStreamPublisher{Err: streams.ErrPublisherClosed}
+	r := newRelayWithFakes(store, amqp, map[string]streamPublisher{"customers": pub})
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+	assert.Zero(t, store.MarkFailedCalls, "shutdown is not a delivery failure")
+	assert.Zero(t, store.MarkDeadLetteredCalls)
+	assert.Zero(t, amqp.PublishCalls, "the batch stops; the following AMQP row is not attempted")
+}
+
+func TestRelayStreamRowPoisonCases(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Record)
+	}{
+		{name: "unknown_stream", mutate: func(r *Record) { r.Stream = "payments" }},
+		{name: "empty_partition_key", mutate: func(r *Record) { r.PartitionKey = "" }},
+		{name: "unknown_lane", mutate: func(r *Record) { r.Lane = "carrier-pigeon" }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			row := streamRow()
+			row.RetryCount = 2
+			tt.mutate(&row)
+			store := &fakeStore{FetchPendingResult: []Record{row}}
+			amqp := newFakeAMQP()
+			pub := &fakeStreamPublisher{}
+			r := newRelayWithFakes(store, amqp, map[string]streamPublisher{"customers": pub})
+			db := dbtesting.NewTestDB("postgresql")
+
+			require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+			assert.Equal(t, 1, store.MarkDeadLetteredCalls, "config drift on a persisted row is poison")
+			assert.Zero(t, pub.Calls)
+			assert.Zero(t, amqp.PublishCalls)
+		})
+	}
+}
+
+func TestRelayStreamRowHonorsPublishTimeout(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{streamRow()}}
+	amqp := newFakeAMQP()
+	pub := &fakeStreamPublisher{Block: true}
+	r := newRelayWithFakes(store, amqp, map[string]streamPublisher{"customers": pub})
+	r.config.PublishTimeout = 50 * time.Millisecond
+	db := dbtesting.NewTestDB("postgresql")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		assert.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stuck stream publish was not bounded by PublishTimeout")
+	}
+	assert.Equal(t, 1, store.MarkFailedCalls, "a deadline is connectivity, so it retries")
+}
+
+// TestRelayStreamRowStampsFromPartitionKeyWithoutContextTenant is the shared-tenancy case:
+// the cycle's own context carries no tenant (SetTenant with "" is a no-op) and a stream row
+// keeps its tenant ONLY in partition_key, so reading the header alone would publish unstamped
+// — and a shared-tenancy consumer fails closed on a missing stamp.
+func TestRelayStreamRowStampsFromPartitionKeyWithoutContextTenant(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{streamRow()}}
+	amqp := newFakeAMQP()
+	pub := &fakeStreamPublisher{}
+	r := newRelayWithFakes(store, amqp, map[string]streamPublisher{"customers": pub})
+	r.tenants = []string{""} // shared ledger: no tenant on the cycle's context
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+
+	require.Equal(t, 1, pub.Calls)
+	tenant, ok := multitenant.GetTenant(pub.LastCtx)
+	require.True(t, ok, "the publisher must learn the tenant, or it ships an unstamped message")
+	assert.Equal(t, "acme", tenant, "a stream row's tenant is its partition key")
+	assert.NotContains(t, pub.LastMsg.Properties, messaging.TenantStampHeader,
+		"the framework stamps from context; the relay supplies no header")
+}
+
+// TestRelayStripsAnEmptyValuedStamp pins the presence-not-value rule: the conflict check keys
+// on the header EXISTING, so an empty-valued one left in place would fail every publish.
+func TestRelayStripsAnEmptyValuedStamp(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "A1", Exchange: "ex", RoutingKey: "a", Headers: []byte(`{"x-tenant-id":""}`)},
+	}}
+	amqp := newFakeAMQP()
+	r := newRelayWithFakes(store, amqp, nil)
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+	require.Equal(t, 1, amqp.PublishCalls)
+	assert.NotContains(t, amqp.LastPublishHdrs, messaging.TenantStampHeader,
+		"an empty-valued stamp is still a present header, so it must be removed")
+}
+
+// TestRelayStampConflictIsPoison pins that a stamp conflict parks instead of retrying: it is
+// deterministic in the row, so retrying it forever would never succeed.
+func TestRelayStampConflictIsPoison(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "A1", Exchange: "ex", RoutingKey: "a", RetryCount: 2},
+	}}
+	amqp := newFakeAMQP()
+	amqp.PublishErr = messaging.ErrTenantStampConflict
+	r := newRelayWithFakes(store, amqp, nil)
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+	assert.Equal(t, 1, store.MarkDeadLetteredCalls, "a conflict is message-intrinsic, so it parks")
+	assert.Zero(t, store.MarkFailedCalls)
+}
+
+// TestRelayAMQPOutageDoesNotStallTheStreamLane pins that the two lanes fail independently.
+// The AMQP client being unready says nothing about the stream protocol, which is a separate
+// connection — so a stream row must still publish, and must not have its retry_count advanced
+// for an outage on a transport it never uses.
+func TestRelayAMQPOutageDoesNotStallTheStreamLane(t *testing.T) {
+	streamRec := streamRow()
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "A1", Exchange: "ex", RoutingKey: "a"},
+		streamRec,
+	}}
+	amqp := newFakeAMQP()
+	amqp.Ready = false // the AMQP broker is down for this whole cycle
+	pub := &fakeStreamPublisher{}
+	r := newRelayWithFakes(store, amqp, map[string]streamPublisher{"customers": pub})
+	db := dbtesting.NewTestDB("postgresql")
+
+	err := r.Execute(newFakeJobCtx(db, amqp))
+	require.Error(t, err, "the AMQP half still failed, so the cycle still reports it")
+
+	assert.Equal(t, 1, pub.Calls, "the stream row published despite the AMQP outage")
+	assert.Equal(t, 1, store.MarkPublishedCalls, "and was marked published")
+	assert.Equal(t, 1, store.MarkFailedCalls, "only the AMQP row took the outage path")
+	assert.Zero(t, amqp.PublishCalls, "no AMQP publish was attempted")
+}
+
+// TestRelayUnknownLaneParksDuringAnAMQPOutage pins that a row naming a lane this build does
+// not know needs no broker to be judged: it is poison either way, so an AMQP outage must not
+// divert it into the outage path and bump its retry_count every cycle until the broker returns.
+func TestRelayUnknownLaneParksDuringAnAMQPOutage(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "X1", Lane: "carrier-pigeon", Exchange: "ex", RoutingKey: "a", RetryCount: 2},
+	}}
+	amqp := newFakeAMQP()
+	amqp.Ready = false
+	r := newRelayWithFakes(store, amqp, nil)
+	db := dbtesting.NewTestDB("postgresql")
+
+	err := r.Execute(newFakeJobCtx(db, amqp))
+	require.Error(t, err, "the cycle still reports the AMQP outage")
+	assert.Equal(t, 1, store.MarkDeadLetteredCalls, "an unknown lane is poison, outage or not")
+	assert.Zero(t, store.MarkFailedCalls, "it must not be marked as an outage casualty")
+}
+
+// TestRelayUnknownLaneIsNotParkedBehindAnAMQPRow pins that poison is never parkable. An
+// unknown-lane row used to fall into the AMQP key namespace, so a failing AMQP row aimed at
+// the same destination parked it before publishRecord could classify it — leaving a row that
+// can only ever be poison waiting behind one that merely failed.
+func TestRelayUnknownLaneIsNotParkedBehindAnAMQPRow(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "A1", Exchange: "ex", RoutingKey: "k"}, // fails first, parks "ex:k"
+		{ID: "X1", Lane: "carrier-pigeon", Exchange: "ex", RoutingKey: "k", // same destination
+			RetryCount: 2},
+	}}
+	amqp := newFakeAMQP()
+	amqp.PublishErrFor = map[string]error{"ex:k": errors.New("broker rejected")}
+	r := newRelayWithFakes(store, amqp, nil)
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+
+	assert.Equal(t, 1, store.MarkFailedCalls, "the AMQP row failed and parked its own key")
+	assert.Equal(t, 1, store.MarkDeadLetteredCalls,
+		"the unknown-lane row is classified the same cycle, not parked behind it")
+}
+
+// TestRelayUnknownLanesDoNotParkEachOther pins why the unknown-lane key carries the row's ID
+// rather than a constant. Below MaxRetries, poison handling advances retry_count and returns
+// outcomeFailed — which PARKS the key. Were every unknown-lane row keyed alike, the first
+// would park all the others in the batch, however unrelated their destinations.
+func TestRelayUnknownLanesDoNotParkEachOther(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "X1", Lane: "carrier-pigeon", Exchange: "ex", RoutingKey: "a"},
+		{ID: "X2", Lane: "semaphore", Exchange: "other", RoutingKey: "b"},
+	}}
+	amqp := newFakeAMQP()
+	r := newRelayWithFakes(store, amqp, nil)
+	r.config.MaxRetries = 5 // both rows sit below the ceiling, so both take the failed path
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+
+	assert.Equal(t, 2, store.MarkFailedCalls,
+		"each unknown-lane row is judged on its own; neither parks the other")
+	assert.Zero(t, amqp.PublishCalls, "an unknown lane never reaches a broker")
+}
+
+// TestRelayUnreadyStreamProducerEndsTheStreamLaneOnly pins the stream lane's counterpart to
+// the AMQP outage split. A bound-but-unconfirming producer costs PublishTimeout PER ROW, so a
+// full batch would hold the leader transaction for batchsize × publishtimeout; one such
+// failure is evidence enough to leave the rest of the stream rows for the next cycle. AMQP
+// rows in the same batch are a separate connection and must still drain.
+func TestRelayUnreadyStreamProducerEndsTheStreamLaneOnly(t *testing.T) {
+	s1, s2, s3 := streamRow(), streamRow(), streamRow()
+	// Distinct keys, so parking cannot explain either skip; two of them, so the skip tally has
+	// to ACCUMULATE rather than merely be set.
+	s2.ID, s2.PartitionKey = "S2", "beta"
+	s3.ID, s3.PartitionKey = "S3", "gamma"
+	records := []Record{
+		s1,
+		{ID: "A1", Exchange: "ex", RoutingKey: "a"},
+		s2,
+		s3,
+	}
+	store := &fakeStore{FetchPendingResult: records}
+	amqp := newFakeAMQP()
+	pub := &fakeStreamPublisher{Err: streams.ErrPublisherNotStarted}
+	r := newRelayWithFakes(store, amqp, map[string]streamPublisher{"customers": pub})
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	lead, err := store.Lead(ctx, db)
+	require.NoError(t, err)
+	res := r.runRelayLoop(ctx, ctx.Logger(), db, amqp, lead, records)
+
+	assert.Equal(t, 1, pub.Calls,
+		"the later stream rows are left for the next cycle rather than paying the deadline again")
+	assert.Equal(t, 1, amqp.PublishCalls, "the AMQP row drains; the lanes are separate connections")
+	assert.Equal(t, 1, store.MarkFailedCalls, "only the attempted stream row advanced retry_count")
+	assert.Equal(t, 1, res.failed, "the row that met the stalled producer is charged a failure")
+	assert.Equal(t, 2, res.parked, "both untried stream rows are held, not just the first")
+	assert.Equal(t, 1, res.published, "the AMQP row is the only publish this cycle")
+	assert.Equal(t, len(records),
+		res.published+res.unrecorded+res.failed+res.deadlettered+res.parked,
+		"every fetched row is accounted for exactly once")
+}
+
+// TestRelayOneStalledStreamDoesNotHoldTheOthers pins that the stall is tracked PER STREAM.
+// Each super stream has its own producer, so one unready producer is evidence about that
+// stream alone. Holding every stream's rows on the first stall would let one misconfigured
+// or restarting stream stop delivery for all of them, cycle after cycle.
+func TestRelayOneStalledStreamDoesNotHoldTheOthers(t *testing.T) {
+	down1, down2 := streamRow(), streamRow()
+	down2.ID, down2.PartitionKey = "D2", "beta" // its own key, so parking cannot explain the skip
+	healthy := streamRow()
+	healthy.ID, healthy.Stream, healthy.PartitionKey = "H1", "orders", "acme"
+	records := []Record{down1, healthy, down2}
+	store := &fakeStore{FetchPendingResult: records}
+	amqp := newFakeAMQP()
+	stalled := &fakeStreamPublisher{Err: streams.ErrPublisherNotStarted}
+	ok := &fakeStreamPublisher{}
+	r := newRelayWithFakes(store, amqp, map[string]streamPublisher{
+		"customers": stalled,
+		"orders":    ok,
+	})
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	lead, err := store.Lead(ctx, db)
+	require.NoError(t, err)
+	res := r.runRelayLoop(ctx, ctx.Logger(), db, amqp, lead, records)
+
+	assert.Equal(t, 1, ok.Calls, "the healthy stream's row drains in the same cycle")
+	assert.Equal(t, 1, stalled.Calls, "the stalled stream is attempted once, then held")
+	assert.Equal(t, 1, res.published, "the healthy row is the cycle's one publish")
+	assert.Equal(t, 1, res.failed, "only the row that met the stalled producer is charged")
+	assert.Equal(t, 1, res.parked, "the stalled stream's second row waits; the healthy one did not")
 	assert.Equal(t, len(records),
 		res.published+res.unrecorded+res.failed+res.deadlettered+res.parked,
 		"every fetched row is accounted for exactly once")
