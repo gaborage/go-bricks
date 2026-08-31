@@ -96,14 +96,17 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		return err
 	}
 
-	if len(m.cfg.SuperStreams) > 0 && m.config.Messaging.Streams.URI == "" {
-		return errors.New("outbox: superstreams is set but messaging.streams.uri is not; " +
-			"the relay cannot reach a super stream without the stream protocol")
-	}
-
 	if !m.cfg.Enabled {
 		m.logger.Info().Msg("Outbox module disabled (outbox.enabled=false)")
 		return nil
+	}
+
+	// After the Enabled check on purpose: disabling the outbox is what an operator reaches
+	// for while mitigating an incident, and failing startup then — over a superstreams list
+	// the disabled relay will never read — would break the mitigation itself.
+	if len(m.cfg.SuperStreams) > 0 && m.config.Messaging.Streams.URI == "" {
+		return errors.New("outbox: superstreams is set but messaging.streams.uri is not; " +
+			"the relay cannot reach a super stream without the stream protocol")
 	}
 
 	// Guards direct construction only: app.RegisterModule always wires non-nil

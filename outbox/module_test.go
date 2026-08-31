@@ -1215,3 +1215,15 @@ func TestModuleInitAcceptsTargetsWithStreamURI(t *testing.T) {
 	err := NewModule().Init(newStreamTargetDeps(t, []string{"customers"}, "rabbitmq-stream://x:5552"))
 	require.NoError(t, err)
 }
+
+// TestModuleInitAllowsConfiguredSuperStreamsWhenDisabled pins that disabling the outbox is
+// never blocked by its own stream configuration. Setting outbox.enabled=false is what an
+// operator reaches for while mitigating an incident; failing startup then, over a superstreams
+// list the disabled relay will never read, would break the mitigation.
+func TestModuleInitAllowsConfiguredSuperStreamsWhenDisabled(t *testing.T) {
+	deps := newStreamTargetDeps(t, []string{"customers"}, "") // configured, no stream URI
+	deps.Config.Outbox.Enabled = false
+
+	require.NoError(t, NewModule().Init(deps),
+		"a disabled outbox must boot whatever its stream configuration says")
+}

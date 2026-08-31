@@ -83,6 +83,14 @@ const (
 	// outage semantics markOutage applies at cycle start, instead of letting every
 	// remaining record pay its own serial readiness pre-flight wait.
 	outcomeBrokerDown
+	// outcomeStreamDown is the stream lane's counterpart: this record's publish failed in a
+	// way that says the PRODUCER is not carrying messages — unbound, or bound but not
+	// confirming within the per-record deadline. The row itself is marked failed; what the
+	// outcome adds is that paying the same deadline for every remaining stream row would
+	// hold the leader transaction for batchsize × publishtimeout, so the rest of the stream
+	// rows are left for the next cycle. AMQP rows in the same batch are unaffected: the two
+	// lanes are separate connections and one being down says nothing about the other.
+	outcomeStreamDown
 )
 
 // relayTenant runs a single relay cycle for the given (tenant-scoped) context.
@@ -213,6 +221,8 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 	// Keys whose head failed this cycle. A later row of a parked key is left untouched —
 	// not even its retry_count moves — so the key keeps its order across cycles.
 	parked := make(map[string]struct{})
+	// Set once the stream producer proves unready; only stream rows are held back after it.
+	streamDown := false
 	for i := range records {
 		// Stop cleanly on shutdown/cancel: leave the rest pending for the next startup
 		// rather than bumping their retry_count on the way down.
@@ -230,6 +240,12 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 		// A decode failure yields nil headers, so the key falls back to the routing key
 		// while publishRecord dead-letters the row as poison.
 		headers, decodeErr := decodeHeaders(records[i].Headers)
+		if streamDown && records[i].Lane == LaneStream {
+			// The producer is not carrying messages; the remaining stream rows wait for the
+			// next cycle untouched rather than each paying the publish deadline.
+			res.parked++
+			continue
+		}
 		key := relayKey(&records[i], headers)
 		if _, isParked := parked[key]; isParked {
 			res.parked++
@@ -260,6 +276,10 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 			res.outageErr = pubErr
 			res.failed += r.markOutage(ctx, log, db, lead, records[i+1:])
 			return res
+		case outcomeStreamDown:
+			res.failed++
+			parked[key] = struct{}{}
+			streamDown = true
 		case outcomeAborted:
 			// Shutting down mid-publish — stop without counting this record.
 			return res
@@ -522,6 +542,11 @@ func (r *Relay) publishStreamRecord(ctx, pubCtx context.Context, log logger.Logg
 		// Everything else is connectivity: a publisher not yet started, the per-record
 		// deadline, or a broker that would not confirm. None means the message is bad.
 		r.markRecordFailed(ctx, log, db, record.ID, err.Error())
+		if errors.Is(err, streams.ErrPublisherNotStarted) || errors.Is(err, context.DeadlineExceeded) {
+			// Evidence the producer is not carrying messages right now, not that this row is
+			// special. Stop spending the deadline on the rest of the stream rows.
+			return outcomeStreamDown, nil
+		}
 		return outcomeFailed, nil
 	}
 

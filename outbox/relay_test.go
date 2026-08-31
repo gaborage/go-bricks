@@ -1365,3 +1365,29 @@ func TestRelayUnknownLanesDoNotParkEachOther(t *testing.T) {
 		"each unknown-lane row is judged on its own; neither parks the other")
 	assert.Zero(t, amqp.PublishCalls, "an unknown lane never reaches a broker")
 }
+
+// TestRelayUnreadyStreamProducerEndsTheStreamLaneOnly pins the stream lane's counterpart to
+// the AMQP outage split. A bound-but-unconfirming producer costs PublishTimeout PER ROW, so a
+// full batch would hold the leader transaction for batchsize × publishtimeout; one such
+// failure is evidence enough to leave the rest of the stream rows for the next cycle. AMQP
+// rows in the same batch are a separate connection and must still drain.
+func TestRelayUnreadyStreamProducerEndsTheStreamLaneOnly(t *testing.T) {
+	s1, s2 := streamRow(), streamRow()
+	s2.ID, s2.PartitionKey = "S2", "beta" // a different key, so parking cannot explain the skip
+	store := &fakeStore{FetchPendingResult: []Record{
+		s1,
+		{ID: "A1", Exchange: "ex", RoutingKey: "a"},
+		s2,
+	}}
+	amqp := newFakeAMQP()
+	pub := &fakeStreamPublisher{Err: streams.ErrPublisherNotStarted}
+	r := newRelayWithFakes(store, amqp, map[string]streamPublisher{"customers": pub})
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+
+	assert.Equal(t, 1, pub.Calls,
+		"the second stream row is left for the next cycle rather than paying the deadline again")
+	assert.Equal(t, 1, amqp.PublishCalls, "the AMQP row drains; the lanes are separate connections")
+	assert.Equal(t, 1, store.MarkFailedCalls, "only the attempted stream row advanced retry_count")
+}
