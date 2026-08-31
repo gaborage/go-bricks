@@ -371,6 +371,38 @@ func TestComputeBackoffHandlesDegenerateInputs(t *testing.T) {
 	}
 }
 
+// TestReconnectBackoffRawDelaySequence pins the pre-jitter series
+// computeBackoff samples. Same inputs as the jitter-bound tests above;
+// exact durations, not a half-open interval.
+func TestReconnectBackoffRawDelaySequence(t *testing.T) {
+	base := 1 * time.Second
+	maxDelay := 60 * time.Second
+
+	tests := []struct {
+		name    string
+		base    time.Duration
+		max     time.Duration
+		attempt int
+		want    time.Duration
+	}{
+		{name: "attempt_0_is_base", base: base, max: maxDelay, attempt: 0, want: base},
+		{name: "attempt_1_is_2x_base", base: base, max: maxDelay, attempt: 1, want: 2 * base},
+		{name: "attempt_3_is_8x_base", base: base, max: maxDelay, attempt: 3, want: 8 * base},
+		{name: "attempt_5_is_32x_base", base: base, max: maxDelay, attempt: 5, want: 32 * base},
+		{name: "attempt_6_capped_at_max", base: base, max: maxDelay, attempt: 6, want: maxDelay},
+		{name: "attempt_100_still_capped_at_max", base: base, max: maxDelay, attempt: 100, want: maxDelay},
+		{name: "zero_base_uses_package_default", base: 0, max: maxDelay, attempt: 0, want: defaultReconnectDelay},
+		{name: "zero_cap_uses_package_default", base: base, max: 0, attempt: 100, want: defaultReconnectMaxDelay},
+		{name: "cap_below_base_clamps_up", base: 5 * time.Second, max: time.Second, attempt: 0, want: 5 * time.Second},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, reconnectBackoff(tc.base, tc.max, tc.attempt))
+		})
+	}
+}
+
 // TestPublishConfirmsRoutedByDeliveryTag is the headline regression test for
 // Fix #3 in the W3-D bundle. Pre-fix, all publishes shared a single buffered
 // notifyConfirm channel — whichever publish read first claimed the next ACK
