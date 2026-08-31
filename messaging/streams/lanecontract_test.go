@@ -29,7 +29,7 @@ func streamsLane() lanecontract.Lane {
 		Destination: laneStream,
 		Deliver:     deliverStreams,
 		SpanExtraKeys: []string{
-			attrConsumerName,
+			AttrConsumerName,
 			attrStreamOffset,
 		},
 		OutcomeLines: map[delivery.Outcome]lanecontract.OutcomeLine{

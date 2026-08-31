@@ -3,6 +3,39 @@
 **Status:** Accepted
 **Date:** 2026-06-30
 
+> **Amended (2026-08-30, a second lane and a parked outcome):** this ADR classified the
+> outcomes of ONE lane. The relay now dispatches by the row's `lane`, and the stream lane
+> (ADR-088) answers to the same test rather than a new one: `streams.ErrPublisherClosed` is
+> shutdown and marks nothing, a publisher not yet started and a broker that will not confirm
+> are CONNECTIVITY and retry, and three CONFIG-DRIFT conditions are POISON — a lane this build
+> does not recognise, a stream no longer listed in `outbox.superstreams`, and a row with no
+> partition key. Each is a row that was valid when written and was invalidated by a later
+> deploy, so each reads the same way every cycle.
+>
+> A fourth poison condition is not config drift and belongs on BOTH lanes: a persisted tenant
+> stamp that disagrees with the framework's resolved tenant (`ErrTenantStampConflict`). Nothing
+> about the deployment changed — the row's own stamp and the relay's resolved tenant simply do
+> not match, and they will not match on any later cycle either, so it parks rather than
+> retrying forever.
+>
+> A fifth OUTCOME joins the four the relay already had. A row can now be PARKED: it is
+> neither published nor marked and its `retry_count` does NOT advance — it simply waits for
+> the next cycle in sequence order. Two things park a row, at different scopes.
+>
+> **By ordering key.** An earlier row of the SAME key failed this cycle. `outcomeFailed` and
+> `outcomeStreamDown` both park their key; a dead-lettered row is terminal and a
+> delivered-but-unrecorded row was delivered, so neither holds anything behind it.
+>
+> **By stream.** `outcomeStreamDown` additionally holds every later row of THAT stream,
+> whatever their ordering keys, because the evidence is about the producer rather than the
+> row: a stalled producer would charge each of them the full `outbox.publishtimeout` in turn.
+> It is scoped to the one stream — each super stream has its own producer, so rows aimed at a
+> healthy stream, and every AMQP row, still drain the same cycle. The FIRST stream-down row is
+> attempted and so advances its own `retry_count`; the rows skipped behind it advance nothing.
+>
+> A dashboard reading `retry_count` as liveness should know that a parked row's count is
+> deliberately still.
+>
 > **Amended (2026-08-29, a second poison class):** this ADR classified every broker-side
 > publish failure as connectivity, leaving undecodable headers as its single poison class. That was
 > written before `messaging.ErrInvalidPublishDestination` existed (ADR-070's 2026-08-28

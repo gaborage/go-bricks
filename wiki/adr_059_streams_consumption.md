@@ -4,6 +4,15 @@
 - **Date**: 2026-08-12
 - **Related**: ADR-058 (the AMQP stream-queue lane and the two-lane framing), [ADR-040](adr_040_declaration_args_passthrough.md) (declaration args reach the broker), [ADR-045](adr_045_no_producer_side_manager_interfaces.md) (no exported manager interface), [ADR-041](adr_041_shared_ledger_tenancy.md) (single-tenant fail-fast precedent), [ADR-063](adr_063_streams_native_publishing.md) (native publishing, which lifts the consume-only scope below)
 
+> **Extended by [ADR-089](adr_089_per_tenant_hold_on_the_streams_lane.md) (2026-08-29):**
+> "parking failed messages", named as future work below, now exists as the
+> per-tenant hold, and the decision below is scoped by it. Everything stated
+> here — the offset advancing only on a nil error, a failed message leaving the
+> offset uncommitted, and the skip that follows — is the behavior of a consumer
+> that does NOT declare `Hold`. A holding consumer parks the failed message in
+> the ledger and commits the offset AFTER that write, so its failures neither
+> skip nor replay on restart; see ADR-089.
+>
 > **Amended (2026-08-13):** super streams, listed below as the third thing the
 > AMQP lane cannot do, are now implemented in this lane. The amendment settles
 > what that costs: super-stream consumption is always a SAC group, offsets are
