@@ -1344,3 +1344,24 @@ func TestRelayUnknownLaneIsNotParkedBehindAnAMQPRow(t *testing.T) {
 	assert.Equal(t, 1, store.MarkDeadLetteredCalls,
 		"the unknown-lane row is classified the same cycle, not parked behind it")
 }
+
+// TestRelayUnknownLanesDoNotParkEachOther pins why the unknown-lane key carries the row's ID
+// rather than a constant. Below MaxRetries, poison handling advances retry_count and returns
+// outcomeFailed — which PARKS the key. Were every unknown-lane row keyed alike, the first
+// would park all the others in the batch, however unrelated their destinations.
+func TestRelayUnknownLanesDoNotParkEachOther(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "X1", Lane: "carrier-pigeon", Exchange: "ex", RoutingKey: "a"},
+		{ID: "X2", Lane: "semaphore", Exchange: "other", RoutingKey: "b"},
+	}}
+	amqp := newFakeAMQP()
+	r := newRelayWithFakes(store, amqp, nil)
+	r.config.MaxRetries = 5 // both rows sit below the ceiling, so both take the failed path
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+
+	assert.Equal(t, 2, store.MarkFailedCalls,
+		"each unknown-lane row is judged on its own; neither parks the other")
+	assert.Zero(t, amqp.PublishCalls, "an unknown lane never reaches a broker")
+}
