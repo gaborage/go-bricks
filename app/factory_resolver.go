@@ -206,6 +206,10 @@ func validateRedisCacheConfig(cacheCfg *config.CacheConfig, key string, log logg
 // Its error is a connection failure, not a config-shape one, so it is returned as-is rather
 // than addressed to key — the same as it was before this door's four validation checks were
 // concentrated into validateRedisCacheConfig above.
+//
+// Do not add a config-validation return here: a config-shape check belongs in
+// validateRedisCacheConfig, whose whole return the door qualifies. This function returns
+// connection-dial errors only, which are deliberately not addressed to a config path.
 func connectRedisCache(cacheCfg *config.CacheConfig, key string, log logger.Logger) (cache.Cache, error) {
 	redisCfg := &redis.Config{
 		Host:            cacheCfg.Redis.Host,

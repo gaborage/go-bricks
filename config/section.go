@@ -19,19 +19,17 @@ const (
 	placementTenant                  // multitenant.tenants.<id>.<kind>
 )
 
-// resourceKind resolves a resource key to the section it names, for one config section family
-// the addressing engine knows how to place. The key vocabulary belongs to each kind's own
-// manager and is unchanged by this engine: "" is always the root, a NamedDatabasePrefix key is
-// a named database (database only), and anything else is a tenant id.
+// kindDatabase and kindCache resolve a resource key to the section it names, one per config
+// section family the addressing engine knows how to place. The key vocabulary belongs to each
+// kind's own manager and is unchanged by this engine: "" is always the root, a
+// NamedDatabasePrefix key is a named database (database only), and anything else is a tenant id.
 //
-// kindDatabase and kindCache are the two resource kinds this engine addresses today (#1260
-// scope: database + cache). A messaging kind joins the day a messaging door actually needs
-// addressing — today that would be a one-adapter hypothetical seam.
-type resourceKind func(key string) section
-
+// These are the two resource kinds this engine addresses today (#1260 scope: database + cache).
+// A messaging kind joins the day a messaging door actually needs addressing — today that would
+// be a one-adapter hypothetical seam.
 var (
-	kindDatabase resourceKind = sectionForResourceKey
-	kindCache    resourceKind = cacheSectionForResourceKey
+	kindDatabase = sectionForResourceKey
+	kindCache    = cacheSectionForResourceKey
 )
 
 // section names one resource-kind section: the root-spelled field its kind's error constructors

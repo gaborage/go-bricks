@@ -10,8 +10,10 @@
 > `config/section.go`, keyed by kind (`database`/`cache`) and resource key, backing the
 > "cannot drift" promise for both. `QualifyCacheConfigErrorForKey` and
 > `ApplyDatabasePoolDefaultsForKey` are its two doors; every door wraps its whole return once,
-> at the function boundary, so a forgotten branch (#1248) is now structurally impossible. No
-> Field, Action, or rendered message changed.
+> at the function boundary, so a forgotten branch (#1248) is structurally impossible for every
+> check the door raises. The Redis dial path stays outside the door by design — its errors are
+> connection failures, not config shapes, and are returned unaddressed. No Field, Action, or
+> rendered message changed.
 
 > **Amended (2026-08-30, the runtime CACHE door):** this ADR moved the SECTION path into
 > `Field` for database sections, and `[C60.19]` extended it to the database RUNTIME door, which

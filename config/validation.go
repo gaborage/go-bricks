@@ -1084,11 +1084,11 @@ func ApplyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 // module pinned to a RELEASED go-bricks, so an arity change there cannot compile until the
 // next tag — see C60.19.
 func ApplyDatabasePoolDefaultsForKey(cfg *DatabaseConfig, resourceKey string) error {
-	section := kindDatabase(resourceKey)
+	sec := kindDatabase(resourceKey)
 	if cfg == nil {
-		return section.qualify(NewValidationError(fieldDatabase, "configuration is nil"))
+		return sec.qualify(NewValidationError(fieldDatabase, "configuration is nil"))
 	}
-	return normalizeDatabaseValues(cfg, section, dbStrictnessConnect)
+	return normalizeDatabaseValues(cfg, sec, dbStrictnessConnect)
 }
 
 // applyDatabasePoolDefaults sets production-safe defaults and validates database pool/query/session settings.
