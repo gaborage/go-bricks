@@ -5,13 +5,16 @@
 - **Related**: ADR-058 (the AMQP stream-queue lane and the two-lane framing), [ADR-040](adr_040_declaration_args_passthrough.md) (declaration args reach the broker), [ADR-045](adr_045_no_producer_side_manager_interfaces.md) (no exported manager interface), [ADR-041](adr_041_shared_ledger_tenancy.md) (single-tenant fail-fast precedent), [ADR-063](adr_063_streams_native_publishing.md) (native publishing, which lifts the consume-only scope below)
 
 > **Extended by [ADR-089](adr_089_per_tenant_hold_on_the_streams_lane.md) (2026-08-29):**
-> "parking failed messages", named as future work below, now exists as the
-> per-tenant hold, and the decision below is scoped by it. Everything stated
-> here — the offset advancing only on a nil error, a failed message leaving the
-> offset uncommitted, and the skip that follows — is the behavior of a consumer
-> that does NOT declare `Hold`. A holding consumer parks the failed message in
-> the ledger and commits the offset AFTER that write, so its failures neither
-> skip nor replay on restart; see ADR-089.
+> parking failed messages now exists as the per-tenant hold, and the decision
+> below is scoped by it. Everything stated here — the offset advancing only on a
+> nil error, a failed message leaving the offset uncommitted, and the skip that
+> follows — is the behavior of a consumer that does NOT declare `Hold`. A holding
+> consumer parks the failed message in the ledger and commits the offset AFTER
+> that write, so its failures neither skip nor replay on restart; see ADR-089.
+>
+> **Extended by [ADR-091](adr_091_streams_opt_in_registration.md) (2026-08-31):** the lane
+> is no longer linked by `app`'s static import. A process that wants it imports
+> `messaging/streams`; a configured URI without that import fails startup.
 >
 > **Amended (2026-08-13):** super streams, listed below as the third thing the
 > AMQP lane cannot do, are now implemented in this lane. The amendment settles
@@ -86,8 +89,8 @@ consumption continues. The skip becomes permanent only once a *later* success
 stores a **higher** offset; until that commit lands, a restart resumes from the
 last stored offset and replays the failed message along with everything after
 it. This is inherent to the medium, and stating it plainly is better than a shim
-that pretends otherwise. Parking failed messages (the dead-letter analog) is
-named as future work.
+that pretends otherwise. A consumer that declares `Hold` parks instead — see
+ADR-089; the skip here is the no-hold behavior.
 
 ### Handlers run inline, sequentially — no worker pool
 
@@ -249,8 +252,10 @@ is a slow stream. That is the price of ordered, truthful offsets, and the
 mitigation is partitioning (see the amendment), not threading — adding SAC
 members to a *plain* stream adds standbys, not consumers.
 
-**Negative — a failed message is lost to the consumer.** See above. Until
-parking exists, a handler that must not lose a message has to persist it itself.
+**Negative — a failed message is lost to the consumer.** See above. A consumer
+that does not declare `Hold` still skips; a handler that must not lose a message
+either declares `Hold` ([ADR-089](adr_089_per_tenant_hold_on_the_streams_lane.md))
+or persists it itself.
 
 **Negative — the lane is invisible to multi-tenant deployments.** They keep the
 AMQP lane, with its session-local resume.
@@ -267,7 +272,9 @@ broker flap would be worse than the flap.
   required and supersedes the "Consume only; publishing stays out" section above.
 - Multi-tenant fan-out: per-tenant Environments plus a stream-URI leg on the
   resource source; remove the `single-tenant only` fail-fast then.
-- Parking failed messages instead of skipping them.
+- ~~Parking failed messages instead of skipping them.~~ Done for consumers that
+  declare `Hold` — see [ADR-089](adr_089_per_tenant_hold_on_the_streams_lane.md).
+  The skip above remains the no-hold behavior.
 - Trace-context propagation from AMQP-published stream messages (stream
   deliveries are AMQP 1.0; nothing is extracted today).
 - RabbitMQ 3.13 stream filtering.

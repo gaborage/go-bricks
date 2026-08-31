@@ -1439,6 +1439,31 @@ func TestBackoffDelayFallbacks(t *testing.T) {
 	})
 }
 
+// TestRawBackoffDelaySequence pins the pre-jitter HTTP retry series.
+func TestRawBackoffDelaySequence(t *testing.T) {
+	tests := []struct {
+		name    string
+		delay   time.Duration
+		attempt int
+		want    time.Duration
+	}{
+		{name: "attempt_0_is_base", delay: 50 * time.Millisecond, attempt: 0, want: 50 * time.Millisecond},
+		{name: "attempt_1_is_2x_base", delay: 50 * time.Millisecond, attempt: 1, want: 100 * time.Millisecond},
+		{name: "attempt_2_is_4x_base", delay: 50 * time.Millisecond, attempt: 2, want: 200 * time.Millisecond},
+		{name: "zero_retry_delay_uses_default_base", delay: 0, attempt: 0, want: defaultBackoffBase},
+		{name: "large_base_clamps_to_max_duration", delay: 10 * time.Second, attempt: 5, want: maxBackoffDuration},
+		{name: "attempt_over_max_stays_at_the_attempt_cap", delay: time.Nanosecond, attempt: 40, want: time.Nanosecond << maxBackoffAttempt},
+		{name: "attempt_over_max_then_duration_cap", delay: time.Millisecond, attempt: 1000, want: maxBackoffDuration},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &client{config: &Config{RetryDelay: tc.delay}}
+			assert.Equal(t, tc.want, c.rawBackoff(tc.attempt))
+		})
+	}
+}
+
 // netTimeoutError is a minimal net.Error implementation used to exercise the
 // generic net.Error.Timeout() branch in classifyError without matching any of
 // the more specific error types (DNSError, OpError, etc.).

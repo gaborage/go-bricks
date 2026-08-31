@@ -15,7 +15,6 @@ import (
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
-	"github.com/gaborage/go-bricks/messaging/streams"
 	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/observability"
 	"github.com/gaborage/go-bricks/server"
@@ -92,7 +91,7 @@ type App struct {
 
 	// streamsManager exists only from prepareRuntime onward; see streamsSlot in slot.go
 	// for why its probe and closer are registered separately from the build-time walks.
-	streamsManager *streams.Manager
+	streamsManager streamHandle
 	// holdLedgers are the modules offering a hold ledger, captured at registration.
 	// More than one is a configuration error the streams setup reports.
 	holdLedgers []holdLedgerProvider
@@ -262,13 +261,16 @@ func (a *App) RegisterModule(module Module) error {
 	if setter, ok := module.(holdReplayerSetter); ok {
 		// A source, not a value: the streams manager is built later, in
 		// prepareStreamConsumers, so a value captured here would always be nil. The
-		// nil check keeps a typed-nil *Manager out of the interface, where it would
-		// satisfy it while dereferencing nothing.
-		setter.SetHoldReplayer(func() streams.HoldReplayer {
+		// nil check keeps a typed-nil manager out of the interface, where it would
+		// satisfy HoldReplayer while dereferencing nothing. The field is a
+		// streamHandle (lifecycle methods only), so the drain port is a second
+		// assertion — *streams.Manager implements both.
+		setter.SetHoldReplayer(func() HoldReplayer {
 			if a.streamsManager == nil {
 				return nil
 			}
-			return a.streamsManager
+			replayer, _ := a.streamsManager.(HoldReplayer)
+			return replayer
 		})
 	}
 	if err := a.registry.Register(module); err != nil {

@@ -15,8 +15,8 @@ import (
 // source — the two duck-types the framework detects at registration.
 type fakeHoldModule struct {
 	name     string
-	ledger   streams.HoldLedger
-	replayer func() streams.HoldReplayer
+	ledger   HoldLedger
+	replayer func() HoldReplayer
 }
 
 func (m *fakeHoldModule) Name() string {
@@ -25,16 +25,16 @@ func (m *fakeHoldModule) Name() string {
 	}
 	return m.name
 }
-func (*fakeHoldModule) Init(*ModuleDeps) error                            { return nil }
-func (*fakeHoldModule) Shutdown() error                                   { return nil }
-func (m *fakeHoldModule) HoldLedger() streams.HoldLedger                  { return m.ledger }
-func (m *fakeHoldModule) SetHoldReplayer(src func() streams.HoldReplayer) { m.replayer = src }
+func (*fakeHoldModule) Init(*ModuleDeps) error                    { return nil }
+func (*fakeHoldModule) Shutdown() error                           { return nil }
+func (m *fakeHoldModule) HoldLedger() HoldLedger                  { return m.ledger }
+func (m *fakeHoldModule) SetHoldReplayer(src func() HoldReplayer) { m.replayer = src }
 
 // stubHoldLedger is a ledger that records nothing: these tests are about the
 // wiring, not the parking.
 type stubHoldLedger struct{}
 
-func (*stubHoldLedger) Park(context.Context, *streams.HeldMessage) error { return nil }
+func (*stubHoldLedger) Park(context.Context, *HeldMessage) error { return nil }
 func (*stubHoldLedger) HeldTenants(context.Context, string) ([]string, error) {
 	return nil, nil
 }

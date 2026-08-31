@@ -1,6 +1,10 @@
 // Package streams publishes to and consumes RabbitMQ streams over the native
 // stream protocol (default port 5552, rabbitmq_stream plugin).
 //
+// Importing this package (a blank import is enough) registers the lane with
+// app so a configured messaging.streams.uri starts the manager. A process that
+// never imports it carries none of the vendor client (ADR-091).
+//
 // It complements the AMQP 0.9.1 lane in the parent messaging package: streams
 // declared as AMQP queues (x-queue-type: stream) can be consumed there, but
 // server-side offset tracking and single active consumer need this protocol.

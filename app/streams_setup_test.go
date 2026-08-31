@@ -70,6 +70,35 @@ func newStreamsAppWithLogger(t *testing.T, log logger.Logger, streamsCfg config.
 	return &App{cfg: cfg, logger: log, registry: registry}
 }
 
+func withUnlinkedStreamRuntime(t *testing.T) {
+	t.Helper()
+	prev := swapStreamRuntime(nil)
+	t.Cleanup(func() { swapStreamRuntime(prev) })
+}
+
+func TestPrepareStreamConsumersFailsWhenConfiguredButNotLinked(t *testing.T) {
+	withUnlinkedStreamRuntime(t)
+	a := newStreamsApp(t, config.StreamsConfig{URI: unreachableStreamURI})
+
+	err := a.prepareStreamConsumers(context.Background())
+
+	require.ErrorIs(t, err, ErrStreamsNotLinked)
+	assert.Contains(t, err.Error(), `import _ "github.com/gaborage/go-bricks/messaging/streams"`)
+	assert.Nil(t, a.streamsManager)
+}
+
+func TestPrepareStreamConsumersStartsCleanWhenUnlinkedAndUnconfigured(t *testing.T) {
+	withUnlinkedStreamRuntime(t)
+	a := newStreamsApp(t, config.StreamsConfig{})
+
+	require.NoError(t, a.prepareStreamConsumers(context.Background()))
+	assert.Nil(t, a.streamsManager)
+}
+
+func TestRegisterStreamRuntimeRejectsNil(t *testing.T) {
+	assert.Panics(t, func() { RegisterStreamRuntime(nil) })
+}
+
 func TestPrepareStreamConsumersWithoutDeclarationsIsNoop(t *testing.T) {
 	a := newStreamsApp(t, config.StreamsConfig{}, &minimalModule{name: "plain"})
 

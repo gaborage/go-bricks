@@ -17,6 +17,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 	"go.opentelemetry.io/otel/trace"
 
+	rawbackoff "github.com/gaborage/go-bricks/internal/backoff"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 	"github.com/gaborage/go-bricks/observability"
@@ -438,12 +439,8 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 	// wrong — for the caller's logging and for direct publishers that branch on the cause.
 	var lastCause error
 	for {
-		select {
-		case <-ctx.Done():
-			return c.publishAbort(ctx, options, publishStart, span, ctx.Err(), lastCause)
-		case <-c.done:
-			return c.publishAbort(ctx, options, publishStart, span, errShutdown, lastCause)
-		default:
+		if err := c.publishAttemptGuard(ctx, options, publishStart, span, lastCause); err != nil {
+			return err
 		}
 
 		publishing := preparePublishing(ctx, options, data)
@@ -717,6 +714,49 @@ func (c *AMQPClientImpl) waitForReady(ctx context.Context) error {
 	}
 }
 
+// confirmationWaitUnreachable reports whether ctx's remaining deadline is
+// strictly shorter than one confirmation wait. A context with no deadline
+// never is. A non-positive wait (struct-literal test clients that never set
+// connectionTimeout) never trips the check — there is no confirmation wait
+// to miss.
+func confirmationWaitUnreachable(ctx context.Context, confirmationWait time.Duration) bool {
+	if confirmationWait <= 0 {
+		return false
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return false
+	}
+	return time.Until(deadline) < confirmationWait
+}
+
+// publishAttemptGuard is the top-of-loop check before arming an attempt:
+// already canceled or shut down, or — after a confirmation timeout — a
+// remaining deadline too short to finish another confirmation wait. The
+// latter returns context.DeadlineExceeded as the primary error — the same
+// errors.Is surface as a mid-wait expiry — wrapped with lastCause.
+// Early-stop changes timing, not error identity.
+func (c *AMQPClientImpl) publishAttemptGuard(
+	ctx context.Context, options PublishOptions, startTime time.Time, span trace.Span, lastCause error,
+) error {
+	select {
+	case <-ctx.Done():
+		return c.publishAbort(ctx, options, startTime, span, ctx.Err(), lastCause)
+	case <-c.done:
+		return c.publishAbort(ctx, options, startTime, span, errShutdown, lastCause)
+	default:
+	}
+	// Skip only after a confirmation timeout: that attempt already burned a
+	// full connectionTimeout, so remaining < wait cannot finish another one.
+	// A NACK or publish error returns quickly — the next attempt can still
+	// ACK inside the leftover budget (HTTP handlers inherit
+	// server.timeout.middleware, 5s, below the 30s default).
+	if errors.Is(lastCause, ErrPublishConfirmTimeout) && confirmationWaitUnreachable(ctx, c.connectionTimeout) {
+		return c.publishAbort(ctx, options, startTime, span, context.DeadlineExceeded, lastCause)
+	}
+	return nil
+}
+
 // retryBackoff is the shared tail of every failed-attempt branch. It applies the
 // attempt ceiling (returning a terminal ErrPublishRetriesExhausted once reached) and,
 // if backoff > 0, a cancelable wait that still honors ctx cancel / client shutdown.
@@ -986,6 +1026,16 @@ func (c *AMQPClientImpl) handleReconnect() {
 // wait is a uniform random sample below it, which spreads herd recovery
 // after a broker outage instead of all clients reconnecting at exactly t=cap.
 func computeBackoff(base, maxDelay time.Duration, attempt int) time.Duration {
+	raw := reconnectBackoff(base, maxDelay, attempt)
+	// Full jitter is a load-distribution mechanism, not a security primitive —
+	// math/rand/v2 is the right tool here. crypto/rand would add system-call
+	// overhead per reconnect attempt without changing the herd-spreading behavior.
+	return time.Duration(rand.Int64N(int64(max(raw, 1)))) //#nosec G404 -- jitter randomness, not cryptographic
+}
+
+// reconnectBackoff is the raw (pre-jitter) reconnect/resubscribe series.
+// Zero-value handling stays here, not in the shared helper.
+func reconnectBackoff(base, maxDelay time.Duration, attempt int) time.Duration {
 	if base <= 0 {
 		base = defaultReconnectDelay
 	}
@@ -995,20 +1045,7 @@ func computeBackoff(base, maxDelay time.Duration, attempt int) time.Duration {
 	if maxDelay < base {
 		maxDelay = base
 	}
-	backoff := base
-	for i := 0; i < attempt && backoff < maxDelay; i++ {
-		backoff *= 2
-	}
-	if backoff > maxDelay {
-		backoff = maxDelay
-	}
-	if backoff <= 0 {
-		return base
-	}
-	// Full jitter is a load-distribution mechanism, not a security primitive —
-	// math/rand/v2 is the right tool here. crypto/rand would add system-call
-	// overhead per reconnect attempt without changing the herd-spreading behavior.
-	return time.Duration(rand.Int64N(int64(backoff))) //#nosec G404 -- jitter randomness, not cryptographic
+	return rawbackoff.Saturating(base, maxDelay, attempt)
 }
 
 // connect creates a new AMQP connection.
