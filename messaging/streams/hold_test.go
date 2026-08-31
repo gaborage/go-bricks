@@ -215,7 +215,10 @@ func TestAnEarlierPromotionCannotOpenALaterGate(t *testing.T) {
 
 	first := set.closeGate()
 	second := set.closeGate()
-	require.NotEqual(t, first, second, "each promotion is its own epoch")
+	require.Greater(t, second, first,
+		"each promotion takes a HIGHER epoch: one that walked backwards could hand a "+
+			"later promotion an epoch an earlier reload still carries, and that reload "+
+			"would then open a gate it no longer owns")
 
 	assert.False(t, set.replace(set.generationAt(), first, []string{"acme"}),
 		"the earlier promotion's reload is refused")
@@ -225,4 +228,27 @@ func TestAnEarlierPromotionCannotOpenALaterGate(t *testing.T) {
 		"the later promotion's own reload opens it")
 	assert.False(t, set.gateClosed())
 	assert.True(t, set.has("acme"))
+}
+
+// TestPromotionEpochsNeverRepeat is the invariant the gate's equality check rests
+// on, and the reason the epoch advances rather than merely changes: a value handed
+// out twice would let a reload started for an old promotion satisfy the check for
+// a new one.
+func TestPromotionEpochsNeverRepeat(t *testing.T) {
+	set := newHeldSet()
+
+	seen := make([]uint64, 0, 5)
+	seen = append(seen, set.epochAt())
+	for range 4 {
+		seen = append(seen, set.closeGate())
+		// Opening it again between promotions is the ordinary cycle, and must not
+		// rewind the epoch either.
+		set.replace(set.generationAt(), set.epochAt(), nil)
+	}
+
+	for i := 1; i < len(seen); i++ {
+		assert.Greater(t, seen[i], seen[i-1], "a promotion advances the epoch, never rewinds it")
+	}
+	assert.Len(t, slices.Compact(slices.Sorted(slices.Values(seen))), len(seen),
+		"and no epoch is ever handed out twice")
 }
