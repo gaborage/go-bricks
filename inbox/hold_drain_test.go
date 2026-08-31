@@ -65,8 +65,9 @@ func (f *fakeHoldReplayer) ReloadHeld(consumer string, tenants []string) {
 // intervals a test can reason about.
 func newHoldDrain(db dbtypes.Interface, replayer streams.HoldReplayer) *HoldDrain {
 	return &HoldDrain{
-		storeFor: func(context.Context) (HoldStore, error) { return mustPostgresHoldStore(), nil },
-		getDB:    func(context.Context) (dbtypes.Interface, error) { return db, nil },
+		resolve: func(context.Context) (dbtypes.Interface, HoldStore, error) {
+			return db, mustPostgresHoldStore(), nil
+		},
 		replayer: func() streams.HoldReplayer {
 			if replayer == nil {
 				return nil

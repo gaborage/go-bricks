@@ -6,9 +6,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gaborage/go-bricks/config"
@@ -36,10 +36,11 @@ const (
 // the ledger is the control-plane database, so every replica sees the same holds
 // and the lease is what stops them replaying the same tenant at once.
 type HoldDrain struct {
-	// storeFor resolves the hold store on first use: the vendor is not known until
-	// a connection is, the same reason the inbox ledger's store is lazy.
-	storeFor func(context.Context) (HoldStore, error)
-	getDB    func(context.Context) (dbtypes.Interface, error)
+	// resolve hands back the pass's control-plane database and its store together,
+	// on first use: the vendor is not known until a connection is, the same reason
+	// the inbox ledger's store is lazy. One resolver rather than two, because the
+	// ledger's own calls already take the pair from a single seam.
+	resolve  func(context.Context) (dbtypes.Interface, HoldStore, error)
 	replayer func() streams.HoldReplayer
 	cfg      config.InboxHoldConfig
 	// owner identifies this replica in the lease. Minted once, because a lease
@@ -49,8 +50,8 @@ type HoldDrain struct {
 	// stats is the snapshot the gauges publish, per consumer. The map is guarded:
 	// an observable-gauge callback reads it on the exporter's schedule, which is
 	// not this goroutine.
-	statsMu sync.RWMutex
-	stats   map[string]*atomic.Pointer[HoldStats]
+	statsMu sync.Mutex
+	stats   map[string]*HoldStats
 
 	// now is the Go clock, used only for the age a WARN reports. Every decision
 	// the ledger makes uses database time.
@@ -76,13 +77,9 @@ func (d *HoldDrain) Execute(jobCtx scheduler.JobContext) error {
 		return nil
 	}
 
-	db, err := d.getDB(jobCtx)
+	db, store, err := d.resolve(jobCtx)
 	if err != nil {
-		return fmt.Errorf("inbox hold drain: resolve database failed: %w", err)
-	}
-	store, err := d.storeFor(jobCtx)
-	if err != nil {
-		return fmt.Errorf("inbox hold drain: resolve store failed: %w", err)
+		return err
 	}
 	pass := &holdPass{db: db, store: store}
 
@@ -273,7 +270,7 @@ func (d *HoldDrain) reloadAndSnapshot(ctx context.Context, pass *holdPass,
 	if err != nil {
 		return err
 	}
-	d.snapshot(consumer).Store(&stats)
+	d.setSnapshot(consumer, &stats)
 	return nil
 }
 
@@ -281,37 +278,23 @@ func (d *HoldDrain) reloadAndSnapshot(ctx context.Context, pass *holdPass,
 // visited. Copied under the lock, because the caller iterates it on the
 // exporter's own goroutine while a pass may be adding a consumer.
 func (d *HoldDrain) snapshots() map[string]*HoldStats {
-	d.statsMu.RLock()
-	defer d.statsMu.RUnlock()
-
-	out := make(map[string]*HoldStats, len(d.stats))
-	for consumer, cell := range d.stats {
-		out[consumer] = cell.Load()
-	}
-	return out
-}
-
-// snapshot is this consumer's stats cell, created on first use. The map is
-// guarded because a gauge callback reads it on the exporter's own schedule.
-func (d *HoldDrain) snapshot(consumer string) *atomic.Pointer[HoldStats] {
-	d.statsMu.RLock()
-	cell, ok := d.stats[consumer]
-	d.statsMu.RUnlock()
-	if ok {
-		return cell
-	}
-
 	d.statsMu.Lock()
 	defer d.statsMu.Unlock()
-	if cell, ok = d.stats[consumer]; ok {
-		return cell
-	}
+
+	return maps.Clone(d.stats)
+}
+
+// setSnapshot publishes this consumer's latest reading. Once per pass per
+// consumer, against a read on the exporter's schedule — a plain mutex is the
+// whole synchronization this needs.
+func (d *HoldDrain) setSnapshot(consumer string, stats *HoldStats) {
+	d.statsMu.Lock()
+	defer d.statsMu.Unlock()
+
 	if d.stats == nil {
-		d.stats = map[string]*atomic.Pointer[HoldStats]{}
+		d.stats = map[string]*HoldStats{}
 	}
-	cell = &atomic.Pointer[HoldStats]{}
-	d.stats[consumer] = cell
-	return cell
+	d.stats[consumer] = stats
 }
 
 // backoffFor is the wait before a deferred tenant's next attempt: the drain
@@ -319,15 +302,14 @@ func (d *HoldDrain) snapshot(consumer string) *atomic.Pointer[HoldStats] {
 func (d *HoldDrain) backoffFor(attempts int) time.Duration {
 	wait := d.cfg.DrainInterval
 	for range attempts - 1 {
+		// Stop doubling at the cap rather than past it: attempts is a persisted
+		// counter with no ceiling, and an unbounded shift overflows the duration.
 		if wait >= d.cfg.MaxBackoff {
-			return d.cfg.MaxBackoff
+			break
 		}
 		wait *= 2
 	}
-	if wait > d.cfg.MaxBackoff {
-		return d.cfg.MaxBackoff
-	}
-	return wait
+	return min(wait, d.cfg.MaxBackoff)
 }
 
 // heldMessageOf renders a ledger row as the lane's held message.

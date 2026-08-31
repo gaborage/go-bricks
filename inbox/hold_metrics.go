@@ -7,6 +7,8 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+
+	"github.com/gaborage/go-bricks/messaging/streams"
 )
 
 // The hold's gauges. One reading per consumer, attributed by name, because a
@@ -16,7 +18,7 @@ const (
 	metricHoldRows      = "inbox.hold.rows"
 	metricHoldOldestAge = "inbox.hold.oldest_age"
 
-	attrHoldConsumer = "messaging.consumer.name"
+	attrHoldConsumer = streams.AttrConsumerName
 )
 
 // registerHoldGauges publishes what the drain last saw. The readings come from

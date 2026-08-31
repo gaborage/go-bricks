@@ -163,8 +163,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 // one per caller.
 func (m *Module) startHold(deps *app.ModuleDeps) {
 	m.holdDrain = &HoldDrain{
-		storeFor: m.ensureHoldStoreInitialized,
-		getDB:    m.getDB,
+		resolve:  m.holdStoreFor,
 		replayer: m.holdReplayer,
 		cfg:      m.cfg.Hold,
 		owner:    holdOwnerID(),

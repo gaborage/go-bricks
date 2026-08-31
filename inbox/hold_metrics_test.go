@@ -21,7 +21,7 @@ func TestHoldGaugesReportTheDrainsSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, unregister()) })
 
-	drain.snapshot(testHoldConsumer).Store(&HoldStats{
+	drain.setSnapshot(testHoldConsumer, &HoldStats{
 		Tenants: 2, Rows: 5, OldestHeldSince: time.Now().Add(-90 * time.Second),
 	})
 
@@ -56,7 +56,7 @@ func TestHoldGaugesStopAfterUnregister(t *testing.T) {
 	drain := &HoldDrain{now: time.Now}
 	unregister, err := registerHoldGauges(mp.Meter("test"), drain)
 	require.NoError(t, err)
-	drain.snapshot(testHoldConsumer).Store(&HoldStats{Tenants: 1, Rows: 1})
+	drain.setSnapshot(testHoldConsumer, &HoldStats{Tenants: 1, Rows: 1})
 
 	require.NoError(t, unregister())
 	rm := mp.Collect(t)

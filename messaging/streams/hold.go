@@ -493,7 +493,7 @@ func (r *consumerRunner) replay(ctx context.Context, msg *HeldMessage) error {
 		Destination: msg.Stream,
 		BodySize:    len(msg.Data),
 		SpanExtras: []attribute.KeyValue{
-			attribute.String(attrConsumerName, r.name),
+			attribute.String(AttrConsumerName, r.name),
 			attribute.Int64(attrStreamOffset, msg.Offset),
 			attribute.Bool(attrHoldReplay, true),
 		},
