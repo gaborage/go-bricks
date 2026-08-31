@@ -1304,3 +1304,21 @@ func TestRelayAMQPOutageDoesNotStallTheStreamLane(t *testing.T) {
 	assert.Equal(t, 1, store.MarkFailedCalls, "only the AMQP row took the outage path")
 	assert.Zero(t, amqp.PublishCalls, "no AMQP publish was attempted")
 }
+
+// TestRelayUnknownLaneParksDuringAnAMQPOutage pins that a row naming a lane this build does
+// not know needs no broker to be judged: it is poison either way, so an AMQP outage must not
+// divert it into the outage path and bump its retry_count every cycle until the broker returns.
+func TestRelayUnknownLaneParksDuringAnAMQPOutage(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "X1", Lane: "carrier-pigeon", Exchange: "ex", RoutingKey: "a", RetryCount: 2},
+	}}
+	amqp := newFakeAMQP()
+	amqp.Ready = false
+	r := newRelayWithFakes(store, amqp, nil)
+	db := dbtesting.NewTestDB("postgresql")
+
+	err := r.Execute(newFakeJobCtx(db, amqp))
+	require.Error(t, err, "the cycle still reports the AMQP outage")
+	assert.Equal(t, 1, store.MarkDeadLetteredCalls, "an unknown lane is poison, outage or not")
+	assert.Zero(t, store.MarkFailedCalls, "it must not be marked as an outage casualty")
+}

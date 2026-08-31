@@ -101,8 +101,11 @@ func TestOutboxStoreCreateTableAndOrderIntegration(t *testing.T) {
 			assert.Greater(t, r.Seq, pending[i-1].Seq, "seq is strictly increasing")
 		}
 	}
-	assert.Equal(t, sameInstant.Unix(), pending[0].CreatedAt.UTC().Unix(),
-		"every row shares a created_at, so created_at could not have ordered them")
+	for _, r := range pending {
+		assert.True(t, sameInstant.Equal(r.CreatedAt.UTC()),
+			"every row shares a created_at to the microsecond, so created_at could not have ordered them: %s vs %s",
+			sameInstant, r.CreatedAt.UTC())
+	}
 }
 
 // preSequenceDDL is the outbox table as it stood BEFORE the sequence landed, copied here so

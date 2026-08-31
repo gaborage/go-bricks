@@ -143,13 +143,13 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 		// protocol on a separate connection. Only the rows that would have gone over AMQP
 		// take the outage path; stream rows still drain, so an AMQP outage no longer stalls
 		// a super stream or inflates its rows' retry_count.
-		streamRows, amqpRows := partitionByLane(records)
+		brokerFree, amqpRows := partitionByLane(records)
 		marked := r.markOutage(ctx, log, db, lead, amqpRows)
-		if len(streamRows) == 0 {
+		if len(brokerFree) == 0 {
 			return brokerUnavailableErr(msgErr)
 		}
 
-		res := r.runRelayLoop(ctx, log, db, msgClient, lead, streamRows)
+		res := r.runRelayLoop(ctx, log, db, msgClient, lead, brokerFree)
 		res.failed += marked
 		r.logCycle(log, tenantID, res, len(records))
 		if res.leadershipErr != nil {
@@ -173,19 +173,23 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 	return nil
 }
 
-// partitionByLane splits a batch into the rows the stream lane serves and the rest, keeping
-// each group's sequence order. Only the AMQP group depends on the AMQP client's health.
-func partitionByLane(records []Record) (stream, amqp []Record) {
+// partitionByLane splits a batch into the rows whose delivery depends on the AMQP client and
+// the rest, keeping each group's sequence order. Only an explicit amqp lane — and the empty
+// lane, which is what a row written before the column existed carries — waits on that client.
+// A row naming a lane this build does not know goes with the others: it needs no broker at
+// all, since publishRecord dead-letters it as poison, and routing it through the outage path
+// would instead bump its retry_count every cycle until the broker returned.
+func partitionByLane(records []Record) (other, amqp []Record) {
 	// Indexed rather than ranged by value: a Record is large enough that copying one per
 	// iteration is worth avoiding, and the append copies it anyway.
 	for i := range records {
-		if records[i].Lane == LaneStream {
-			stream = append(stream, records[i])
-		} else {
+		if records[i].Lane == LaneAMQP || records[i].Lane == "" {
 			amqp = append(amqp, records[i])
+		} else {
+			other = append(other, records[i])
 		}
 	}
-	return stream, amqp
+	return other, amqp
 }
 
 // relayBatchResult holds the per-record bookkeeping counts from one relay cycle's
