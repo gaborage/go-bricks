@@ -9,7 +9,9 @@
 > shutdown and marks nothing, a publisher not yet started and a broker that will not confirm
 > are CONNECTIVITY and retry, and three message-intrinsic conditions are POISON — a lane this
 > build does not recognise, a stream no longer listed in `outbox.superstreams`, and a row with
-> no partition key. All three are config drift on a row already written, so they read the same
+> no partition key. A fourth joins them on BOTH lanes: a persisted tenant stamp that disagrees
+> with the framework's resolved tenant (`ErrTenantStampConflict`) will disagree identically
+> every cycle, so it parks rather than retrying forever. All three are config drift on a row already written, so they read the same
 > way every cycle, which is this ADR's own definition of poison. A fifth outcome joins the four: a row can now be PARKED. When an earlier row of the same
 > ordering key failed in this cycle, the row is neither published nor marked and its
 > `retry_count` does NOT advance — it simply waits for the next cycle in sequence order. Only

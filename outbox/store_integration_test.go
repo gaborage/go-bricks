@@ -195,8 +195,13 @@ func TestOutboxStoreManagedAlterIntegration(t *testing.T) {
 }
 
 // TestOutboxRelayTwoInstancesOneLedgerIntegration is the claim the whole leader mechanism
-// exists for: two relays against ONE table publish every row exactly once, and per key in
-// sequence order. A fake cannot prove it — the exclusion is the database's, not the code's.
+// exists for: two relays against ONE table publish every row EXACTLY ONCE and drain every key
+// completely. The exclusion is the database's, not the code's, so no fake can prove it.
+//
+// It deliberately does NOT assert per-key publish ORDER: the AMQP fake records routing keys,
+// and every row of one key carries the same routing key, so the recording cannot distinguish
+// orderings. Sequence order within a key is pinned by the unit tests over relayKey and the
+// parking loop, and by TestOutboxStoreCreateTableAndOrderIntegration for the fetch side.
 func TestOutboxRelayTwoInstancesOneLedgerIntegration(t *testing.T) {
 	ctx := context.Background()
 	conn, store, _ := newPostgresIT(ctx, t)
@@ -243,6 +248,17 @@ func TestOutboxRelayTwoInstancesOneLedgerIntegration(t *testing.T) {
 
 	published := append(append([]string{}, amqpA.PublishOrder...), amqpB.PublishOrder...)
 	assert.Len(t, published, rows, "every row published EXACTLY once across both relays")
+
+	// Every key drained completely rather than partially — a leader that stopped early or a
+	// key parked forever would show as a short count here.
+	perKey := map[string]int{}
+	for _, k := range published {
+		perKey[k]++
+	}
+	require.Len(t, perKey, keys, "every key drained")
+	for k, n := range perKey {
+		assert.Equal(t, rows/keys, n, "key %s drained completely", k)
+	}
 
 	remaining, err := store.FetchPending(ctx, conn, rows)
 	require.NoError(t, err)

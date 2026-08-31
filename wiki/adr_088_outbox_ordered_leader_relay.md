@@ -94,7 +94,7 @@ parks its own later rows for the cycle.**
 
    Rejected: reaching the super stream over AMQP 0.9.1. A super stream is a direct exchange
    with binding keys `"0"…"n-1"`, so the relay would have to carry its own murmur3 and query
-   the partition count — and a hash drift from the vendor's silently re-partitions every
+   the partition count — and a hash drift from the vendor's own silently re-partitions every
    tenant. ADR-063 already guarantees that interop on the native lane.
 
    Rejected: binding publishers lazily at first use. That needs a post-start bind API on the
@@ -107,8 +107,14 @@ parks its own later rows for the cycle.**
    with no partition key. All three are config drift on a persisted row, so they read the same
    way every cycle.
 
-10. **The relay moves the tenant stamp from the row's headers onto the publish context**,
-    before either lane dispatches. ADR-087 makes the framework the stamp's ONLY writer and
+10. **The relay moves the row's tenant onto the publish context**, before either lane
+    dispatches, reading it from where that lane's WRITER put it: `partition_key` for a stream
+    row, whose `applyStreamTarget` records the tenant there and writes no header, and the
+    persisted `x-tenant-id` for an AMQP row. Reading only the header would leave a stream row
+    unstamped under `outbox.tenancy: shared`, where the cycle's own context carries no tenant
+    either — and a shared-tenancy consumer fails closed on a missing stamp. The header is
+    removed whenever it is PRESENT, not merely when it holds a value, because the conflict
+    check keys on presence. ADR-087 makes the framework the stamp's ONLY writer and
     refuses a caller-supplied one that disagrees (`ErrTenantStampConflict`) — and from a
     publisher's point of view a stamp replayed out of a persisted header IS caller-supplied.
     Leaving it in place would therefore either fail the publish or smuggle an unauthenticated

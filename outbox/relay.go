@@ -139,7 +139,23 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 	// level (and, in multi-tenant mode, names the affected tenant) instead of silently
 	// reporting success forever under a permanent misconfiguration.
 	if !brokerUsable {
-		r.markOutage(ctx, log, db, lead, records)
+		// The AMQP client being down says nothing about the stream lane: it is a separate
+		// protocol on a separate connection. Only the rows that would have gone over AMQP
+		// take the outage path; stream rows still drain, so an AMQP outage no longer stalls
+		// a super stream or inflates its rows' retry_count.
+		streamRows, amqpRows := partitionByLane(records)
+		marked := r.markOutage(ctx, log, db, lead, amqpRows)
+		if len(streamRows) == 0 {
+			return brokerUnavailableErr(msgErr)
+		}
+
+		res := r.runRelayLoop(ctx, log, db, msgClient, lead, streamRows)
+		res.failed += marked
+		r.logCycle(log, tenantID, res, len(records))
+		if res.leadershipErr != nil {
+			return res.leadershipErr
+		}
+		// The AMQP half still failed, so the cycle still reports the outage.
 		return brokerUnavailableErr(msgErr)
 	}
 
@@ -155,6 +171,19 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 		return brokerUnavailableErr(res.outageErr)
 	}
 	return nil
+}
+
+// partitionByLane splits a batch into the rows the stream lane serves and the rest, keeping
+// each group's sequence order. Only the AMQP group depends on the AMQP client's health.
+func partitionByLane(records []Record) (stream, amqp []Record) {
+	for _, r := range records {
+		if r.Lane == LaneStream {
+			stream = append(stream, r)
+		} else {
+			amqp = append(amqp, r)
+		}
+	}
+	return stream, amqp
 }
 
 // relayBatchResult holds the per-record bookkeeping counts from one relay cycle's

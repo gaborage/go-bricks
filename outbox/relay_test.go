@@ -1279,3 +1279,28 @@ func TestRelayStampConflictIsPoison(t *testing.T) {
 	assert.Equal(t, 1, store.MarkDeadLetteredCalls, "a conflict is message-intrinsic, so it parks")
 	assert.Zero(t, store.MarkFailedCalls)
 }
+
+// TestRelayAMQPOutageDoesNotStallTheStreamLane pins that the two lanes fail independently.
+// The AMQP client being unready says nothing about the stream protocol, which is a separate
+// connection — so a stream row must still publish, and must not have its retry_count advanced
+// for an outage on a transport it never uses.
+func TestRelayAMQPOutageDoesNotStallTheStreamLane(t *testing.T) {
+	streamRec := streamRow()
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "A1", Exchange: "ex", RoutingKey: "a"},
+		streamRec,
+	}}
+	amqp := newFakeAMQP()
+	amqp.Ready = false // the AMQP broker is down for this whole cycle
+	pub := &fakeStreamPublisher{}
+	r := newRelayWithFakes(store, amqp, map[string]streamPublisher{"customers": pub})
+	db := dbtesting.NewTestDB("postgresql")
+
+	err := r.Execute(newFakeJobCtx(db, amqp))
+	require.Error(t, err, "the AMQP half still failed, so the cycle still reports it")
+
+	assert.Equal(t, 1, pub.Calls, "the stream row published despite the AMQP outage")
+	assert.Equal(t, 1, store.MarkPublishedCalls, "and was marked published")
+	assert.Equal(t, 1, store.MarkFailedCalls, "only the AMQP row took the outage path")
+	assert.Zero(t, amqp.PublishCalls, "no AMQP publish was attempted")
+}

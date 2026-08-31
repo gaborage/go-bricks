@@ -101,6 +101,7 @@ outbox:
 | `Headers` | map[string]any | No | Custom AMQP headers propagated to published message |
 | `Exchange` | string | No | Target AMQP exchange (falls back to `defaultexchange` config) |
 | `RoutingKey` | string | No | AMQP routing key (falls back to `EventType`) |
+| `Stream` | string | No | Selects the native super-stream lane instead of an exchange. Must be listed in `outbox.superstreams`, requires a tenant in context (it becomes the partition key), and is mutually exclusive with `Exchange` and `RoutingKey`. See [Lanes and Ordering](#lanes-and-ordering). |
 
 ## Trace Propagation
 
@@ -220,7 +221,8 @@ cycles later: naming a stream beside an exchange or routing key, naming a stream
 **Ordering.** Rows drain in `seq` order — a per-ledger sequence the database assigns at insert
 — and one relay instance per ledger drains at a time, holding the ledger's `<table>_leader`
 row. When a row fails, the later rows of ITS key are parked for that cycle: not published, not
-marked, `retry_count` untouched, keeping their place for the next cycle. The key is the tenant
+marked, `retry_count` untouched — so a cycle advances the count of every ATTEMPTED record,
+not of every fetched one, keeping their place for the next cycle. The key is the tenant
 stamp for a stamped AMQP row, the destination (exchange and routing key) for an unstamped one,
 and the stream plus partition key on the stream lane. A dead-lettered row is terminal and a
 delivered-but-unrecorded row was delivered, so neither parks anything behind it.
