@@ -1322,3 +1322,25 @@ func TestRelayUnknownLaneParksDuringAnAMQPOutage(t *testing.T) {
 	assert.Equal(t, 1, store.MarkDeadLetteredCalls, "an unknown lane is poison, outage or not")
 	assert.Zero(t, store.MarkFailedCalls, "it must not be marked as an outage casualty")
 }
+
+// TestRelayUnknownLaneIsNotParkedBehindAnAMQPRow pins that poison is never parkable. An
+// unknown-lane row used to fall into the AMQP key namespace, so a failing AMQP row aimed at
+// the same destination parked it before publishRecord could classify it — leaving a row that
+// can only ever be poison waiting behind one that merely failed.
+func TestRelayUnknownLaneIsNotParkedBehindAnAMQPRow(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "A1", Exchange: "ex", RoutingKey: "k"}, // fails first, parks "ex:k"
+		{ID: "X1", Lane: "carrier-pigeon", Exchange: "ex", RoutingKey: "k", // same destination
+			RetryCount: 2},
+	}}
+	amqp := newFakeAMQP()
+	amqp.PublishErrFor = map[string]error{"ex:k": errors.New("broker rejected")}
+	r := newRelayWithFakes(store, amqp, nil)
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+
+	assert.Equal(t, 1, store.MarkFailedCalls, "the AMQP row failed and parked its own key")
+	assert.Equal(t, 1, store.MarkDeadLetteredCalls,
+		"the unknown-lane row is classified the same cycle, not parked behind it")
+}

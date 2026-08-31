@@ -6243,11 +6243,13 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   destination (`exchange` + routing key) otherwise, and stream + partition key on the stream
   lane. Only a FAILURE parks; a dead-lettered row is terminal and an unrecorded one was
   delivered, so neither blocks what follows.
-  `outbox.superstreams` lists the super streams the relay may target. Each listed name gets one
-  publisher declared by the outbox module, so a super stream the outbox publishes to cannot also
-  be published to directly by another module in the same process — the streams manager refuses
-  the second publisher. A stream target with `messaging.streams.uri` unset fails startup rather
-  than dead-lettering every stream row.
+  The super-stream leg is LIVE on this hop, not a later one. `outbox.superstreams` lists the
+  super streams the relay may target, and it is optional: unset — the default — every event
+  stays on the AMQP lane and nothing about publishing changes. Set it and each listed name gets
+  one publisher declared by the outbox module, so a super stream the outbox publishes to cannot
+  also be published to directly by another module in the same process; the streams manager
+  refuses the second publisher. A stream target with `messaging.streams.uri` unset fails startup
+  rather than dead-lettering every stream row.
 
   **The relay now moves the tenant stamp out of a row's persisted headers and onto the publish
   context.** A consumer that read `x-tenant-id` off an outbox-relayed message still reads it —
@@ -6286,8 +6288,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - ref: `outbox/store.go` (`Record`, `Store.Lead`, `Leadership`, `leadRow`) ·
   `outbox/store_postgres.go` · `outbox/store_oracle.go` · `outbox/relay.go` (`relayKey`,
   `runRelayLoop`) · `outbox/publisher.go` · `database/errors.go` (`IsLockNotAvailable`) ·
-  [ADR-088](adr_088_outbox_ordered_leader_relay.md) · issue #1232 · the super-stream leg itself
-  lands on a later hop
+  [ADR-088](adr_088_outbox_ordered_leader_relay.md) · issue #1232
 
 ### [C61.24] a tenant's cache config error is addressed to that tenant · breaking · when: match
 

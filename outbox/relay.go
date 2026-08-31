@@ -283,13 +283,22 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 // arrives with nil headers and is keyed by its destination; it is poison and publishRecord
 // dead-letters it, so it holds its siblings only until it does.
 func relayKey(record *Record, headers map[string]any) string {
-	if record.Lane == LaneStream {
+	switch record.Lane {
+	case LaneStream:
 		return LaneStream + ":" + record.Stream + ":" + record.PartitionKey
+	case LaneAMQP, "":
+		if stamp, ok := headers[messaging.TenantStampHeader].(string); ok && stamp != "" {
+			return LaneAMQP + ":tenant:" + stamp
+		}
+		return LaneAMQP + ":" + record.Exchange + ":" + record.RoutingKey
+	default:
+		// A lane this build does not know is poison, and poison is never parkable: it must
+		// reach publishRecord to be dead-lettered. Sharing the AMQP namespace would let a
+		// failing AMQP row on the same destination park it first, so it would wait behind a
+		// row it has nothing to do with instead of being classified. Its own id shares with
+		// nothing, so it is always attempted and parks nothing else.
+		return "unknown:" + record.ID
 	}
-	if stamp, ok := headers[messaging.TenantStampHeader].(string); ok && stamp != "" {
-		return LaneAMQP + ":tenant:" + stamp
-	}
-	return LaneAMQP + ":" + record.Exchange + ":" + record.RoutingKey
 }
 
 // markOutage advances retry_count for every pending record without attempting a publish,
