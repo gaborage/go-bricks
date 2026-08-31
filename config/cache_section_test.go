@@ -240,6 +240,16 @@ func TestValidateRedisCacheEdgeCases(t *testing.T) {
 			},
 			valid: true,
 		},
+		{
+			// The upper bound is inclusive: 65535 is a port, not one past the end.
+			name: "port_max_valid",
+			redis: RedisConfig{
+				Host:     "localhost",
+				Port:     65535,
+				PoolSize: 10,
+			},
+			valid: true,
+		},
 	}
 
 	for _, tt := range tests {
