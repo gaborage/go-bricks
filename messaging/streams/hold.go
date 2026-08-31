@@ -11,7 +11,10 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/internal/ledgererr"
+	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/delivery"
+	"github.com/gaborage/go-bricks/messaging/internal/tracking"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // HeldMessage is one parked delivery as the ledger sees it. It carries the bytes
@@ -43,7 +46,11 @@ type HoldLedger interface {
 type HoldReplayer interface {
 	HoldConsumers() []string
 	Replay(ctx context.Context, consumer string, msg *HeldMessage) error
-	ReloadHeld(consumer string, tenants []string)
+	// ReloadHeld refreshes one consumer's held set from the ledger. It takes no
+	// listing: the generation that guards the set has to be read BEFORE the ledger
+	// is, and only this package holds it, so the read belongs on this side of the
+	// port.
+	ReloadHeld(ctx context.Context, consumer string) error
 }
 
 // heldSet is one consumer's view of which tenants are held, plus whether the
@@ -208,6 +215,9 @@ const (
 	// attrHoldGated marks a span whose delivery was parked WITHOUT running, so a
 	// success on that span is not mistaken for a handled message.
 	attrHoldGated = "messaging.hold.gated"
+	// attrHoldReplay marks a delivery the drain put back through the lane, so a
+	// replayed failure is not read as a fresh one.
+	attrHoldReplay = "messaging.hold.replay"
 )
 
 // heldMessageOf renders one delivery as the ledger sees it.
@@ -415,4 +425,117 @@ func (m *Manager) reloadUntilLoaded(runner *consumerRunner, epoch uint64) {
 			return
 		}
 	}
+}
+
+// Manager is the replayer the hold's drain drives: it owns the running consumers,
+// which is what a held message has to go back through.
+var _ HoldReplayer = (*Manager)(nil)
+
+// HoldConsumers names the running consumers that hold. A consumer that does not
+// hold has nothing parked, so the drain never asks about it.
+func (m *Manager) HoldConsumers() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var names []string
+	for _, consumer := range m.consumers {
+		if consumer.runner != nil && consumer.runner.hold != nil {
+			names = append(names, consumer.name)
+		}
+	}
+	return names
+}
+
+// ReloadHeld refreshes one consumer's held set from the ledger. A consumer this
+// replica does not run is a no-op: the ledger is shared and deployments differ in
+// which consumers they start.
+//
+// The read happens here rather than in the caller because the generation that
+// makes the replace safe must be taken BEFORE it. A caller that read the ledger
+// first could only hand back a token taken after its own read, which compares
+// equal to itself and erases any park that landed in between.
+func (m *Manager) ReloadHeld(ctx context.Context, consumer string) error {
+	runner := m.runnerFor(consumer)
+	if runner == nil {
+		return nil
+	}
+	return m.loadHeldForEpoch(ctx, runner, runner.held.epochAt())
+}
+
+// Replay puts a held message back through the lane. It returns the handler's own
+// error untouched: the drain decides what a failed replay means — defer the
+// tenant — and this call settles nothing, because the row's fate is the drain's
+// to write.
+func (m *Manager) Replay(ctx context.Context, consumer string, msg *HeldMessage) error {
+	runner := m.runnerFor(consumer)
+	if runner == nil {
+		return fmt.Errorf("streams: no running consumer %q to replay through", consumer)
+	}
+	return runner.replay(ctx, msg)
+}
+
+// runnerFor snapshots one consumer's runner under the lock, so a replay does not
+// hold it across a handler.
+func (m *Manager) runnerFor(consumer string) *consumerRunner {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, running := range m.consumers {
+		if running.name == consumer && running.runner != nil {
+			return running.runner
+		}
+	}
+	return nil
+}
+
+// replay runs one held message through the pipeline again. The tenant comes from
+// the ROW, not from a stamp: the carrier is whatever the producer sent, and the
+// hold already decided whose message this is. No Retry — the drain's own
+// per-tenant backoff is the retry — and no Settle, because there is no offset to
+// commit: this delivery's record is the ledger row the drain deletes or keeps.
+func (r *consumerRunner) replay(ctx context.Context, msg *HeldMessage) error {
+	res := delivery.Run(ctx, &delivery.Request{
+		Carrier:     propertyAccessor(msg.Properties),
+		Destination: msg.Stream,
+		BodySize:    len(msg.Data),
+		SpanExtras: []attribute.KeyValue{
+			attribute.String(AttrConsumerName, r.name),
+			attribute.Int64(attrStreamOffset, msg.Offset),
+			attribute.Bool(attrHoldReplay, true),
+		},
+		Metrics: tracking.StreamConsumeAttributes(msg.Stream),
+		Log:     r.log,
+		Handle: func(msgCtx context.Context, _ logger.Logger, _ string) error {
+			return r.handler(multitenant.SetTenant(msgCtx, msg.TenantID), &Message{
+				Data:       msg.Data,
+				Offset:     msg.Offset,
+				Stream:     msg.Stream,
+				Properties: msg.Properties,
+			})
+		},
+		LogOutcome: func(res *delivery.Result) {
+			r.logReplayOutcome(res, msg)
+		},
+	})
+	return res.Err
+}
+
+// logReplayOutcome writes the lane's line for a replayed delivery, marked as one
+// so an operator reading the failures can tell a retry of a held message from a
+// message failing for the first time.
+func (r *consumerRunner) logReplayOutcome(res *delivery.Result, msg *HeldMessage) {
+	if res.Outcome == delivery.Succeeded {
+		return
+	}
+
+	event := delivery.AppendOutcome(res.Log.Error(), res).
+		Str(logFieldStream, msg.Stream).
+		Str(logFieldConsumer, r.name).
+		Int64(logFieldOffset, msg.Offset).
+		Str("tenant", msg.TenantID).
+		Bool("hold_replay", true)
+	if res.Outcome == delivery.HandlerError {
+		event = event.Str("error", ledgererr.Bound(res.Err.Error()))
+	}
+	event.Msg("Hold replay failed")
 }

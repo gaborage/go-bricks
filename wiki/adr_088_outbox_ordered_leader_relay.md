@@ -1,8 +1,8 @@
-# ADR-088: The Outbox Ledger Is Sequenced, Laned, and Drained by One Leader
+# ADR-088: The Outbox Ledger Is Sequenced, Laned, and Drained by One Leader, and Gains a Stream Lane
 
 - **Status**: Accepted
 - **Date**: 2026-08-30
-- **Related**: [ADR-033](adr_033_outbox_retry_count_status_parking.md) (the connectivity-vs-poison classification a parked key composes with) · [ADR-041](adr_041_shared_ledger_tenancy.md) (the control-plane ledger a leader is taken per) · [ADR-032](adr_032_lease_refcount_tenant_handles.md) (the per-tenant lease scope a relay cycle runs inside)
+- **Related**: [ADR-033](adr_033_outbox_retry_count_status_parking.md) (the connectivity-vs-poison classification a parked key composes with) · [ADR-041](adr_041_shared_ledger_tenancy.md) (the control-plane ledger a leader is taken per) · [ADR-032](adr_032_lease_refcount_tenant_handles.md) (the per-tenant lease scope a relay cycle runs inside) · [ADR-063](adr_063_streams_native_publishing.md) (the confirmed super-stream publisher and its murmur3 interop this lane rides) · [ADR-087](adr_087_messaging_tenancy_and_tenant_stamp.md) (the tenant stamp this lane partitions by, and whose single-writer rule the relay obeys)
 
 ## Context
 
@@ -85,6 +85,42 @@ parks its own later rows for the cycle.**
    the broker-outage path, because its cause is the database: reporting it as "messaging not
    available" sends an operator to a broker that is fine.
 
+9. **A stream lane.** An `OutboxEvent` may target a super stream listed in
+   `outbox.superstreams`; the row records `lane = 'stream'`, its stream, and its partition key
+   — the tenant stamp from the publishing context, required at `Publish`. The outbox module
+   declares one super-stream publisher per listed target (`app.StreamDeclarer`), so binding,
+   startup validation and shutdown ride the streams manager rather than a new seam, and the
+   relay publishes through `streams.Publisher` with `RoutingKey` = the partition key.
+
+   Rejected: reaching the super stream over AMQP 0.9.1. A super stream is a direct exchange
+   with binding keys `"0"…"n-1"`, so the relay would have to carry its own murmur3 and query
+   the partition count — and a hash drift from the vendor's own silently re-partitions every
+   tenant. ADR-063 already guarantees that interop on the native lane.
+
+   Rejected: binding publishers lazily at first use. That needs a post-start bind API on the
+   manager, an app-to-module factory, and a manager that starts with nothing declared — three
+   seams to avoid one config key.
+
+   ADR-033's classification carries over unchanged: a closed publisher is shutdown, a
+   publisher not started and an unconfirmed publish are connectivity, and only
+   message-intrinsic conditions park — an unknown lane, a stream no longer listed, or a row
+   with no partition key. All three are config drift on a persisted row, so they read the same
+   way every cycle.
+
+10. **The relay moves the row's tenant onto the publish context**, before either lane
+    dispatches, reading it from where that lane's WRITER put it: `partition_key` for a stream
+    row, whose `applyStreamTarget` records the tenant there and writes no header, and the
+    persisted `x-tenant-id` for an AMQP row. Reading only the header would leave a stream row
+    unstamped under `outbox.tenancy: shared`, where the cycle's own context carries no tenant
+    either — and a shared-tenancy consumer fails closed on a missing stamp. The header is
+    removed whenever it is PRESENT, not merely when it holds a value, because the conflict
+    check keys on presence. ADR-087 makes the framework the stamp's ONLY writer and
+    refuses a caller-supplied one that disagrees (`ErrTenantStampConflict`) — and from a
+    publisher's point of view a stamp replayed out of a persisted header IS caller-supplied.
+    Leaving it in place would therefore either fail the publish or smuggle an unauthenticated
+    claim to act for a tenant. Rehydrating it onto the context is also how the stream lane's
+    publisher learns which tenant it is publishing for, so the two needs have one answer.
+
 ## Consequences
 
 **A migrated ledger needs an explicit backfill.** Adding an identity column populates existing
@@ -132,6 +168,14 @@ derives must stay distinct under PostgreSQL's 63-byte truncation, and the longes
 is `idx_<name>_published` at +14. Past the bound the failures are silent: truncation emits a
 NOTICE rather than an error, so an index quietly exists under a name nobody wrote, and a
 63-byte name collapses onto its own `_leader` companion.
+
+**An outbox-targeted super stream has the outbox as its ONE publisher in the process.** The
+streams manager refuses a second publisher for the same target, so a module that also publishes
+directly to a stream the outbox owns must publish through the outbox instead.
+
+**A stream target without `messaging.streams.uri` fails startup.** The relay cannot reach a
+super stream over AMQP, so accepting that configuration would dead-letter every stream-lane row
+at `MaxRetries` instead of refusing it once.
 
 **`config.OutboxConfig` stops being comparable** — `SuperStreams []string` makes it so — and
 `outbox.Store` gains `Lead`, which breaks an implementation outside the framework. Both are
