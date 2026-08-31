@@ -9,20 +9,64 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
-func (qb *QueryBuilder) quoteOracleColumn(column string) string {
-	if qb.vendor != dbtypes.Oracle {
-		return column
+// oracleRenderer is the Oracle half of the vendorRenderer seam: reserved words
+// and names outside Oracle's bare-identifier grammar are quoted, everything else
+// is left for Oracle to fold. The rendering itself lives in sqllex; this adapter
+// is dispatch. Its methods carry no vendor test — rendererFor hands this adapter
+// out only for Oracle.
+type oracleRenderer struct{}
+
+var _ vendorRenderer = oracleRenderer{}
+
+// QuoteColumnsForSelect quotes each column, leaving wildcard selectors alone:
+// `*` and `t.*` are not identifiers, and quoting them names a column nobody has.
+func (oracleRenderer) QuoteColumnsForSelect(columns []string) []string {
+	quoted := make([]string, 0, len(columns))
+	for _, col := range columns {
+		if col == "*" || strings.HasSuffix(col, ".*") {
+			quoted = append(quoted, col)
+			continue
+		}
+		quoted = append(quoted, sqllex.QuoteOracleIdentifier(col))
 	}
+	return quoted
+}
+
+// QuoteColumnsForDML applies the same reserved-word-only quoting the query
+// conditions use (sqllex.QuoteOracleIdentifier) and preserves the caller's
+// original case verbatim — it does not upper-case reserved words.
+func (oracleRenderer) QuoteColumnsForDML(columns []string) []string {
+	quoted := make([]string, len(columns))
+	for i, col := range columns {
+		quoted[i] = sqllex.QuoteOracleIdentifier(col)
+	}
+	return quoted
+}
+
+// QuoteColumn renders a single column reference.
+func (oracleRenderer) QuoteColumn(column string) string {
 	return sqllex.QuoteOracleIdentifier(column)
 }
 
-// quoteOracleIdentifierForClause handles Oracle-specific identifier quoting for ORDER BY and GROUP BY clauses
-// It parses expressions to distinguish column references from SQL functions and direction keywords
-func (qb *QueryBuilder) quoteOracleIdentifierForClause(identifier string) string {
-	if qb.vendor != dbtypes.Oracle {
-		return identifier
+// QuoteTable renders a FROM/JOIN table argument.
+func (oracleRenderer) QuoteTable(table string) string {
+	// An inline alias is part of the table argument's grammar ("users u"), so
+	// quote only the identifier and keep the alias: quoting the whole string
+	// produced `FROM "users u"`, one table nobody named (#1156).
+	trimmed := strings.TrimSpace(table)
+	if m := validTableNamePattern.FindStringSubmatch(trimmed); m != nil {
+		return sqllex.QuoteOracleIdentifier(m[validTableNamePattern.SubexpIndex("ident")]) +
+			m[validTableNamePattern.SubexpIndex("alias")]
 	}
+	// Not table-shaped. Unreachable from every door — each validates against
+	// this same pattern first — and total for any future caller, the same
+	// contract QuoteIdentifierForClause's fallback keeps.
+	return sqllex.QuoteOracleIdentifier(trimmed)
+}
 
+// QuoteIdentifierForClause renders an ORDER BY / GROUP BY item, distinguishing
+// the column reference from the direction and NULLS-ordering keywords.
+func (oracleRenderer) QuoteIdentifierForClause(identifier string) string {
 	trimmed := strings.TrimSpace(identifier)
 	if trimmed == "" {
 		return trimmed
@@ -45,22 +89,6 @@ func (qb *QueryBuilder) quoteOracleIdentifierForClause(identifier string) string
 	quoted := sqllex.QuoteOracleIdentifier(m[validClauseIdentifierPattern.SubexpIndex("ident")])
 	quoted += strings.ToUpper(m[validClauseIdentifierPattern.SubexpIndex("dir")])
 	return quoted + strings.ToUpper(m[validClauseIdentifierPattern.SubexpIndex("nulls")])
-}
-
-// quoteOracleColumnsForDML applies Oracle-specific quoting for column lists used in DML statements
-// like INSERT or UPDATE where reserved words must be safely referenced. It delegates to the same
-// reserved-word-only quoting used for query conditions (sqllex.QuoteOracleIdentifier) and preserves the
-// caller's original case verbatim — it does not upper-case reserved words.
-func (qb *QueryBuilder) quoteOracleColumnsForDML(columns ...string) []string {
-	if qb.vendor != dbtypes.Oracle {
-		return columns
-	}
-
-	quoted := make([]string, len(columns))
-	for i, col := range columns {
-		quoted[i] = sqllex.QuoteOracleIdentifier(col)
-	}
-	return quoted
 }
 
 // buildOraclePaginationClause constructs an Oracle-compatible pagination clause using OFFSET and FETCH NEXT syntax.
@@ -169,7 +197,7 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	// quoting the DML paths use) so non-reserved identifiers stay unquoted and Oracle
 	// folds them to the uppercase form created by standard DDL.
 	insertKeys := sortedKeys(insertColumns)
-	quotedInsertCols := qb.quoteOracleColumnsForDML(insertKeys...)
+	quotedInsertCols := qb.renderer.QuoteColumnsForDML(insertKeys)
 	usingValues := make([]string, len(insertKeys))
 	for i, col := range quotedInsertCols {
 		usingValues[i] = fmt.Sprintf(":%d AS %s", i+1, col)
@@ -179,7 +207,7 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	// Build ON clause for conflict detection
 	orderedConflicts := append([]string(nil), conflictColumns...)
 	sort.Strings(orderedConflicts)
-	quotedConflicts := qb.quoteOracleColumnsForDML(orderedConflicts...)
+	quotedConflicts := qb.renderer.QuoteColumnsForDML(orderedConflicts)
 	onConditions := make([]string, len(quotedConflicts))
 	for i, col := range quotedConflicts {
 		onConditions[i] = fmt.Sprintf("target.%s = source.%s", col, col)
@@ -187,7 +215,7 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 
 	// Build UPDATE SET clause
 	updateKeys := sortedKeys(updateColumns)
-	quotedUpdateCols := qb.quoteOracleColumnsForDML(updateKeys...)
+	quotedUpdateCols := qb.renderer.QuoteColumnsForDML(updateKeys)
 	updateSets := make([]string, len(updateKeys))
 	baseIndex := len(insertKeys) + 1
 	for i, col := range quotedUpdateCols {

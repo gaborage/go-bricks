@@ -6,6 +6,31 @@ import (
 	"strings"
 )
 
+// postgresRenderer is the PostgreSQL half of the vendorRenderer seam. A column
+// or table argument has already passed the identifier grammar by the time it
+// gets here, so rendering is the identity: PostgreSQL folds an unquoted name to
+// lower case, and quoting one here would rename it. Making that an adapter
+// rather than a `default:` arm is the point of the seam — the behavior now has
+// a name and a place to grow (#1258).
+type postgresRenderer struct{}
+
+var _ vendorRenderer = postgresRenderer{}
+
+// QuoteColumnsForSelect renders a SELECT column list verbatim.
+func (postgresRenderer) QuoteColumnsForSelect(columns []string) []string { return columns }
+
+// QuoteColumnsForDML renders an INSERT/UPDATE column list verbatim.
+func (postgresRenderer) QuoteColumnsForDML(columns []string) []string { return columns }
+
+// QuoteColumn renders a column reference verbatim.
+func (postgresRenderer) QuoteColumn(column string) string { return column }
+
+// QuoteTable renders a table argument, inline alias included, verbatim.
+func (postgresRenderer) QuoteTable(table string) string { return table }
+
+// QuoteIdentifierForClause renders an ORDER BY / GROUP BY item verbatim.
+func (postgresRenderer) QuoteIdentifierForClause(identifier string) string { return identifier }
+
 // buildPostgreSQLUpsert creates a PostgreSQL upsert: ON CONFLICT (columns) DO UPDATE SET ...
 // when update columns are provided, or DO NOTHING otherwise.
 // Its preconditions are enforced by BuildUpsert, the only caller.
