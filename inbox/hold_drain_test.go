@@ -491,6 +491,13 @@ func TestBackoffForDoublesFromTheDrainInterval(t *testing.T) {
 		{"fourth_doubles_again", 4, 40 * time.Second},
 		{"fifth_is_capped", 5, time.Minute},
 		{"and_stays_capped", 9, time.Minute},
+		// A tenant that has been failing for days: the shift that computes the wait
+		// must saturate at the cap rather than wrap into a nonsense duration.
+		{"an_attempt_count_that_overflows_the_shift_is_capped", 64, time.Minute},
+		{"and_one_far_past_it", 4000, time.Minute},
+		// Guards the clamp's other end: nothing below the first attempt shifts by a
+		// negative count, which would panic.
+		{"a_zero_attempt_count_waits_one_interval", 0, 5 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, drain.backoffFor(tc.attempts))

@@ -336,14 +336,18 @@ func (d *HoldDrain) setSnapshot(consumer string, stats *HoldStats) {
 // backoffFor is the wait before a deferred tenant's next attempt: the drain
 // interval doubled per attempt, capped. Saturating, like the lane's own series.
 func (d *HoldDrain) backoffFor(attempts int) time.Duration {
-	wait := d.cfg.DrainInterval
-	for range attempts - 1 {
-		// Stop doubling at the cap rather than past it: attempts is a persisted
-		// counter with no ceiling, and an unbounded shift overflows the duration.
-		if wait >= d.cfg.MaxBackoff {
-			break
-		}
-		wait *= 2
+	// The doubling is a shift, and the count is clamped rather than compared:
+	// attempts is a persisted counter with no ceiling, and a shift past 62
+	// overflows an int64 duration. min/max bound it without a comparison whose
+	// boundary the cap below would swallow — at the cap, doubling once more and
+	// clamping give the same answer, so such a boundary is untestable by
+	// construction.
+	shift := min(max(attempts-1, 0), 62)
+	wait := d.cfg.DrainInterval << shift
+	if wait <= 0 {
+		// The shift carried every bit out of the duration: the cap is the answer,
+		// and without this a wrapped value would clamp to itself.
+		return d.cfg.MaxBackoff
 	}
 	return min(wait, d.cfg.MaxBackoff)
 }
