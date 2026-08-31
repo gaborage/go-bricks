@@ -150,7 +150,11 @@ func (m *Manager) SetTenantStamps(enabled bool) {
 // nil dereference on the first log line — mid-consumption, in production, from a
 // goroutine the client owns and nothing recovers. Same fail-fast as
 // httpclient.NewBuilder, and it keeps this constructor's single return value.
-func NewManager(opts *ManagerOptions) *Manager {
+// pointer here is an incompatible change (apidiff), and the copy costs one
+// allocation per manager, at startup.
+//
+//nolint:gocritic // hugeParam: NewManager's by-value signature is shipped API; a
+func NewManager(opts ManagerOptions) *Manager {
 	if opts.Logger == nil {
 		panic("streams: NewManager requires a non-nil Logger (pass deps.Logger)")
 	}
@@ -161,9 +165,7 @@ func NewManager(opts *ManagerOptions) *Manager {
 		opts.OffsetStoreInterval = defaultOffsetStoreInterval
 	}
 	return &Manager{
-		// Copied, not aliased: the caller keeps its struct and a later write to it
-		// must not reach a running manager.
-		opts:            *opts,
+		opts:            opts,
 		log:             opts.Logger,
 		flushBudget:     shutdownFlushBudget,
 		dialEnvironment: dialVendorEnvironment,

@@ -220,7 +220,7 @@ func (e *recordedEvent) Enabled() bool                                 { return 
 func recordingManager(t *testing.T, fake *fakeEnvironment) (*Manager, *recordingLogger) {
 	t.Helper()
 	log := &recordingLogger{}
-	m := NewManager(&ManagerOptions{URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: log})
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: log})
 	startOnFake(t, m, fake, oneConsumerDecls())
 	consumer := fake.consumer(testStream)
 	require.NotNil(t, consumer)
@@ -246,7 +246,7 @@ func twoPartitionSuperConsumer(t *testing.T, m *Manager) (*fakeEnvironment, *fak
 
 func testManager(t *testing.T) *Manager {
 	t.Helper()
-	return NewManager(&ManagerOptions{
+	return NewManager(ManagerOptions{
 		URI:    "rabbitmq-stream://localhost:5552/%2f",
 		Logger: logger.New("error", false),
 	})
@@ -270,7 +270,7 @@ func countOf(entries []string, want string) int {
 // committed through the storer that reaches it, and only then is the consumer
 // closed.
 func TestManagerStopConsumersFlushesEveryTrackedStream(t *testing.T) {
-	m := NewManager(&ManagerOptions{
+	m := NewManager(ManagerOptions{
 		URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: logger.New("error", false),
 	})
 	fake, consumer := twoPartitionSuperConsumer(t, m)
@@ -300,7 +300,7 @@ func TestManagerStopConsumersFlushesEveryTrackedStream(t *testing.T) {
 // already spent, and that both are named at WARN so the replay is not silent.
 func TestManagerStopConsumersAbandonsFlushWhenBudgetSpent(t *testing.T) {
 	log := &recordingLogger{}
-	m := NewManager(&ManagerOptions{URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: log})
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: log})
 	m.flushBudget = 50 * time.Millisecond
 
 	fake := newFakeEnvironment()
@@ -358,7 +358,7 @@ func TestManagerStopConsumersAbandonsFlushWhenBudgetSpent(t *testing.T) {
 // abandonment test above.
 func TestManagerStopConsumersFlushesWithinBudget(t *testing.T) {
 	log := &recordingLogger{}
-	m := NewManager(&ManagerOptions{URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: log})
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: log})
 	fake, consumer := twoPartitionSuperConsumer(t, m)
 
 	m.StopConsumers()
@@ -376,7 +376,7 @@ func TestManagerStopConsumersFlushesWithinBudget(t *testing.T) {
 // is reported under the stream it belongs to, which for a super stream is the
 // partition rather than the declared name.
 func TestManagerStatsKeysOffsetsByTrackedStream(t *testing.T) {
-	m := NewManager(&ManagerOptions{
+	m := NewManager(ManagerOptions{
 		URI: unreachableTestURI, OffsetStoreCount: 1, Logger: logger.New("error", false),
 	})
 	twoPartitionSuperConsumer(t, m)
@@ -391,14 +391,14 @@ func TestManagerStatsKeysOffsetsByTrackedStream(t *testing.T) {
 }
 
 func TestNewManagerAppliesOffsetStoreDefaults(t *testing.T) {
-	m := NewManager(&ManagerOptions{URI: "rabbitmq-stream://localhost:5552/", Logger: logger.New("error", false)})
+	m := NewManager(ManagerOptions{URI: "rabbitmq-stream://localhost:5552/", Logger: logger.New("error", false)})
 
 	assert.Equal(t, defaultOffsetStoreCount, m.opts.OffsetStoreCount)
 	assert.Equal(t, defaultOffsetStoreInterval, m.opts.OffsetStoreInterval)
 }
 
 func TestNewManagerKeepsExplicitOffsetStoreTuning(t *testing.T) {
-	m := NewManager(&ManagerOptions{
+	m := NewManager(ManagerOptions{
 		OffsetStoreCount:    7,
 		OffsetStoreInterval: 250 * time.Millisecond,
 		Logger:              logger.New("error", false),
@@ -419,7 +419,7 @@ func TestNewManagerKeepsExplicitOffsetStoreTuning(t *testing.T) {
 func TestManagerSetTenantStampsReachesItsRunners(t *testing.T) {
 	newRunnerFor := func(t *testing.T, enabled, optional bool) *consumerRunner {
 		t.Helper()
-		m := NewManager(&ManagerOptions{
+		m := NewManager(ManagerOptions{
 			URI:    "rabbitmq-stream://localhost:5552/",
 			Logger: logger.New("error", false),
 		})
@@ -448,12 +448,12 @@ func TestManagerSetTenantStampsReachesItsRunners(t *testing.T) {
 func TestNewManagerRequiresLogger(t *testing.T) {
 	assert.PanicsWithValue(t,
 		"streams: NewManager requires a non-nil Logger (pass deps.Logger)",
-		func() { NewManager(&ManagerOptions{URI: unreachableTestURI}) })
+		func() { NewManager(ManagerOptions{URI: unreachableTestURI}) })
 }
 
 func TestManagerStartWithoutDeclarationsDoesNotDial(t *testing.T) {
 	// Port 1 refuses connections, so any dial attempt would surface as an error.
-	m := NewManager(&ManagerOptions{URI: "rabbitmq-stream://guest:guest@127.0.0.1:1/%2f", Logger: logger.New("error", false)})
+	m := NewManager(ManagerOptions{URI: "rabbitmq-stream://guest:guest@127.0.0.1:1/%2f", Logger: logger.New("error", false)})
 
 	require.NoError(t, m.Start(context.Background(), nil))
 	require.NoError(t, m.Start(context.Background(), NewDeclarations()))
@@ -483,7 +483,7 @@ func TestManagerStartDeclaresThroughTheEnvironmentPort(t *testing.T) {
 // The URI is unreachable so a guard that stopped holding surfaces as a dial
 // failure the message assertion rejects, rather than as a lucky local broker.
 func TestManagerStartRejectsSecondStart(t *testing.T) {
-	m := NewManager(&ManagerOptions{URI: unreachableTestURI, Logger: logger.New("error", false)})
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: logger.New("error", false)})
 	fake := newFakeEnvironment()
 	startOnFake(t, m, fake, oneConsumerDecls())
 
@@ -613,7 +613,7 @@ func TestStartConsumersStopsAtTheFirstFailure(t *testing.T) {
 }
 
 func TestManagerStopConsumersFlushesBeforeClosing(t *testing.T) {
-	m := NewManager(&ManagerOptions{
+	m := NewManager(ManagerOptions{
 		URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: logger.New("error", false),
 	})
 	fake := newFakeEnvironment()
@@ -790,7 +790,7 @@ func TestManagerCloseWithoutEnvironmentIsIdempotent(t *testing.T) {
 // guard that swapped the two keys. Nine deliveries hit that threshold so the
 // last one still commits inline, leaving stored_offsets non-empty below.
 func TestManagerStats(t *testing.T) {
-	m := NewManager(&ManagerOptions{
+	m := NewManager(ManagerOptions{
 		URI:                 unreachableTestURI,
 		OffsetStoreCount:    9,
 		OffsetStoreInterval: 2 * time.Second,
@@ -815,7 +815,7 @@ func TestManagerStats(t *testing.T) {
 }
 
 func TestManagerStatsOmitsUncommittedOffsets(t *testing.T) {
-	m := NewManager(&ManagerOptions{
+	m := NewManager(ManagerOptions{
 		URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: logger.New("error", false),
 	})
 	fake := newFakeEnvironment()
@@ -939,7 +939,7 @@ func TestManagerReportOffsetQuery(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			log := &recordingLogger{}
-			m := NewManager(&ManagerOptions{URI: unreachableTestURI, Logger: log})
+			m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
 
 			m.reportOffsetQuery(tt.err, testConsumerName, testPartition0, false)
 
@@ -1057,7 +1057,7 @@ func TestClampedMaxAgeKeepsBothRenderersInAgreement(t *testing.T) {
 
 func TestManagerEnvironmentOptions(t *testing.T) {
 	t.Run("without_address_resolver", func(t *testing.T) {
-		m := NewManager(&ManagerOptions{URI: "rabbitmq-stream://localhost:5552/%2f", Logger: logger.New("error", false)})
+		m := NewManager(ManagerOptions{URI: "rabbitmq-stream://localhost:5552/%2f", Logger: logger.New("error", false)})
 
 		opts := m.environmentOptions()
 
@@ -1067,7 +1067,7 @@ func TestManagerEnvironmentOptions(t *testing.T) {
 	})
 
 	t.Run("with_address_resolver", func(t *testing.T) {
-		m := NewManager(&ManagerOptions{
+		m := NewManager(ManagerOptions{
 			URI:                 "rabbitmq-stream://localhost:5552/%2f",
 			AddressResolverHost: "lb.example.com",
 			AddressResolverPort: 5553,
@@ -1138,7 +1138,7 @@ func TestRedactStreamURI(t *testing.T) {
 // whose Error() renders the raw URI, credentials included.
 func TestManagerStartDoesNotLeakURIOnParseFailure(t *testing.T) {
 	const fixturePassword = "fixture-pw"
-	m := NewManager(&ManagerOptions{
+	m := NewManager(ManagerOptions{
 		// A space makes url.Parse fail inside the client's environment constructor.
 		URI:    "rabbitmq-stream://svc:" + fixturePassword + "@broker:55 52/%2f",
 		Logger: logger.New("error", false),
@@ -1180,7 +1180,7 @@ func TestSafeEnvError(t *testing.T) {
 // TestManagerStartUnwindsAFailedDeclaration, in process against the Environment
 // port.
 func TestManagerStartFailedDialLeavesNothingToDispose(t *testing.T) {
-	m := NewManager(&ManagerOptions{URI: unreachableTestURI, Logger: logger.New("error", false)})
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: logger.New("error", false)})
 	decls := NewDeclarations()
 	decls.DeclareStream(testStream, nil)
 
@@ -1248,7 +1248,7 @@ func TestManagerAbortStartLockedReportsOnlyRealDisposalFailures(t *testing.T) {
 // reach the dial and report a connection failure instead, which is what the
 // message assertion below separates from a genuine refusal.
 func TestManagerStartRefusesRestartAfterStopConsumers(t *testing.T) {
-	m := NewManager(&ManagerOptions{URI: unreachableTestURI, Logger: logger.New("error", false)})
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: logger.New("error", false)})
 	fake := newFakeEnvironment()
 	startOnFake(t, m, fake, oneConsumerDecls())
 
@@ -1500,7 +1500,7 @@ func TestManagerBindPublisherBuildsAPlainProducerForAPlainTarget(t *testing.T) {
 // makes the partition assignment the caller's choice rather than a hash of "".
 func TestManagerRoutingKeyExtractorAnswersTheRegisteredKey(t *testing.T) {
 	log := &recordingLogger{}
-	m := NewManager(&ManagerOptions{URI: unreachableTestURI, Logger: log})
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
 	p := newPublisher(testSuperStream, true)
 	registered := amqp.NewMessage([]byte(testBody))
 	p.pending.add(registered, testRoutingKey)
@@ -1517,7 +1517,7 @@ func TestManagerRoutingKeyExtractorAnswersTheRegisteredKey(t *testing.T) {
 // because a miss means the correlation assumption broke.
 func TestManagerRoutingKeyExtractorReportsAnUnregisteredMessage(t *testing.T) {
 	log := &recordingLogger{}
-	m := NewManager(&ManagerOptions{URI: unreachableTestURI, Logger: log})
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
 	p := newPublisher(testSuperStream, true)
 
 	key := m.routingKeyExtractor(p)(amqp.NewMessage([]byte(testBody)))
@@ -1579,7 +1579,7 @@ func TestManagerStopFailsAnInFlightPublish(t *testing.T) {
 
 func TestManagerStopReportsAPublisherCloseFailure(t *testing.T) {
 	log := &recordingLogger{}
-	m := NewManager(&ManagerOptions{URI: unreachableTestURI, Logger: log})
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
 	fake := newFakeEnvironment()
 	producer := openProducer()
 	producer.closeErr = errors.New("close failed")
@@ -1596,7 +1596,7 @@ func TestManagerStopReportsAPublisherCloseFailure(t *testing.T) {
 
 func TestManagerStopIsSilentOnACleanPublisherClose(t *testing.T) {
 	log := &recordingLogger{}
-	m := NewManager(&ManagerOptions{URI: unreachableTestURI, Logger: log})
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
 	fake := newFakeEnvironment()
 	startOnFake(t, m, fake, onePublisher(t))
 
@@ -1850,7 +1850,7 @@ func TestManagerStartPromotionResolvesTheOffsetAgain(t *testing.T) {
 // process committed a position for the stream itself, so that is the closest
 // truth available and is no older than the broker's.
 func TestManagerStartPromotionFallsBackToTheLocalCommit(t *testing.T) {
-	m := NewManager(&ManagerOptions{
+	m := NewManager(ManagerOptions{
 		URI: unreachableTestURI, OffsetStoreCount: 1, Logger: logger.New("error", false),
 	})
 	fake := newFakeEnvironment()
@@ -1896,7 +1896,7 @@ func TestManagerStartCommitsInFlightThroughTheDeliveringConsumer(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := NewManager(&ManagerOptions{
+			m := NewManager(ManagerOptions{
 				URI: unreachableTestURI, OffsetStoreCount: 1, Logger: logger.New("error", false),
 			})
 			fake := newFakeEnvironment()
@@ -1949,7 +1949,7 @@ func TestManagerStartFlushesPlainThroughTheHandleAndSuperThroughThePort(t *testi
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// A high threshold leaves the delivery pending, so the flush has work.
-			m := NewManager(&ManagerOptions{
+			m := NewManager(ManagerOptions{
 				URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: logger.New("error", false),
 			})
 			fake := newFakeEnvironment()
@@ -1979,7 +1979,7 @@ func TestManagerStartFlushesPlainThroughTheHandleAndSuperThroughThePort(t *testi
 // sees the framework's view of it, and the offset is committed after success.
 func TestManagerStartRunsTheHandlerForADeliveredMessage(t *testing.T) {
 	var got *Message
-	m := NewManager(&ManagerOptions{
+	m := NewManager(ManagerOptions{
 		URI: unreachableTestURI, OffsetStoreCount: 1, Logger: logger.New("error", false),
 	})
 	fake := newFakeEnvironment()

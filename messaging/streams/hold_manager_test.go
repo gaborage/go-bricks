@@ -42,7 +42,7 @@ func TestStartRefusesAHoldWithoutALedger(t *testing.T) {
 // would deliver a held tenant's later message ahead of the one it is held behind.
 func TestStartLoadsTheHeldSetBeforeConsuming(t *testing.T) {
 	ledger := &fakeHoldLedger{held: map[string][]string{testConsumerName: {"tenant-a"}}}
-	m := NewManager(&ManagerOptions{
+	m := NewManager(ManagerOptions{
 		URI:    "rabbitmq-stream://localhost:5552/%2f",
 		Logger: logger.New("error", false),
 		Hold:   ledger,
@@ -61,7 +61,7 @@ func TestStartLoadsTheHeldSetBeforeConsuming(t *testing.T) {
 // partition that cannot learn what is held does not start.
 func TestStartFailsWhenTheHeldSetCannotBeLoaded(t *testing.T) {
 	ledger := &fakeHoldLedger{heldErr: errors.New("ledger unavailable")}
-	m := NewManager(&ManagerOptions{
+	m := NewManager(ManagerOptions{
 		URI:    "rabbitmq-stream://localhost:5552/%2f",
 		Logger: logger.New("error", false),
 		Hold:   ledger,
@@ -94,12 +94,13 @@ func TestAConsumerWithoutAHoldNeedsNoLedger(t *testing.T) {
 // parked while this member stood by.
 func TestPromotionDoesNotConsumeWithAStaleHeldSet(t *testing.T) {
 	ledger := &fakeHoldLedger{heldErr: errors.New("ledger unavailable")}
-	m := NewManager(&ManagerOptions{
+	m := NewManager(ManagerOptions{
 		URI:    "rabbitmq-stream://localhost:5552/%2f",
 		Logger: logger.New("error", false),
 		Hold:   ledger,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	runner := m.newRunner(ctx, &consumerDeclaration{
 		Stream: testStream, Name: testConsumerName, Handler: noopHandler, Hold: true,
 	})
@@ -111,28 +112,32 @@ func TestPromotionDoesNotConsumeWithAStaleHeldSet(t *testing.T) {
 		close(returned)
 	}()
 
+	// Observed, not slept for: the retry is proof the promotion did not proceed,
+	// and waiting a fixed span for it would be a bet on the runner's speed. The
+	// deadline is sized for a loaded CI machine, not for the millisecond backoff.
+	require.Eventually(t, func() bool { return ledger.loads() > 1 }, 30*time.Second, time.Millisecond,
+		"the promotion keeps asking the ledger rather than consuming from an unknown set")
+
 	select {
 	case <-returned:
-		t.Fatal("the promotion returned while the held set was unknown")
-	case <-time.After(20 * time.Millisecond):
-		// Still retrying, which is the point: the partition is not consuming.
+		t.Fatal("the promotion returned while the held set was still unknown")
+	default:
 	}
 
 	// Only stopping the consumer ends the wait, and nothing was consumed meanwhile.
 	cancel()
 	select {
 	case <-returned:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("a stopping consumer must not be stuck in the reload")
 	}
-	assert.Greater(t, ledger.loads(), 1, "it kept asking rather than giving up")
 }
 
 // TestPromotionReloadsTheHeldSetWhenTheLedgerAnswers is the ordinary path: the
 // promoted partition picks up what the ledger holds before it consumes.
 func TestPromotionReloadsTheHeldSetWhenTheLedgerAnswers(t *testing.T) {
 	ledger := &fakeHoldLedger{held: map[string][]string{testConsumerName: {"tenant-a"}}}
-	m := NewManager(&ManagerOptions{
+	m := NewManager(ManagerOptions{
 		URI:    "rabbitmq-stream://localhost:5552/%2f",
 		Logger: logger.New("error", false),
 		Hold:   ledger,
