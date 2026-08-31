@@ -3019,6 +3019,45 @@ decls.DeclareSuperStreamConsumer(&streams.SuperStreamConsumerOptions{
 })
 ```
 
+A failed delivery is skipped by default (the offset is simply not committed). To retry
+in place and then **hold the tenant** instead of skipping — its later messages park in
+order until the backlog drains — set `Retry` and `Hold`. `Hold` needs an `inbox` hold
+ledger with `inbox.tenancy: shared`, and a consumer declaring it without one fails
+startup. See [wiki/streams.md](wiki/streams.md) and ADR-089:
+
+```go
+decls.DeclareSuperStreamConsumer(&streams.SuperStreamConsumerOptions{
+	SuperStream: "orders", Name: "order-projector",
+	Start: streams.OffsetFirst(),
+	// Bounded in-place retries (capped at streams.MaxRetryAttempts / MaxRetryWait).
+	// Omit Retry with Hold: true and streams.DefaultHoldRetry applies.
+	Retry: &streams.RetryOptions{MaxAttempts: 5, InitialBackoff: 200 * time.Millisecond, MaxBackoff: 2 * time.Second},
+	Hold:  true,
+	Handler: func(ctx context.Context, msg *streams.Message) error {
+		if err := m.svc.Project(ctx, msg.Data); err != nil {
+			if errors.Is(err, ErrMalformedOrder) {
+				return streams.Permanent(err) // retrying cannot help: hold it now
+			}
+			return err
+		}
+		return nil
+	},
+})
+```
+
+```yaml
+inbox:
+  enabled: true
+  tenancy: shared          # required by the hold
+  hold:
+    enabled: true
+    tablename: gobricks_inbox_hold   # tenant table is "<tablename>_tenant"
+    draininterval: 5s
+    maxbackoff: 5m
+    maxage: 1h             # WARN once per drain pass past this age
+    leaseduration: 60s
+```
+
 Publishing on this lane is **synchronous and confirmed**: `Publish` blocks until the send
 resolves — broker confirmation, client-side failure, `ctx` expiry, or the publisher closing —
 so a nil error means the broker acknowledged the message. Errors split in two: rejections

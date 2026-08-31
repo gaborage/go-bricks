@@ -363,6 +363,118 @@ inbox:
 See [ADR-041](adr_041_shared_ledger_tenancy.md) for the full design rationale, alternatives
 considered, and the `""`-key resource-source contract.
 
+### Hold ledger
+
+`inbox.hold` is the durable home for the streams lane's **per-tenant hold**
+([ADR-089](adr_089_per_tenant_hold_on_the_streams_lane.md)): a stream consumer
+declaring `Hold: true` parks a tenant's failed message here instead of skipping
+it, and the `inbox-hold-drain` job replays the tenant's rows in order. It lives
+in the control plane on purpose — the tenant whose database is down is exactly
+the tenant that needs to be held — so it **requires `inbox.tenancy: shared`**.
+
+```yaml
+inbox:
+  enabled: true
+  tenancy: shared          # required by the hold
+  hold:
+    enabled: true          # opt-in; nothing below is defaulted while it is false
+    tablename: gobricks_inbox_hold   # tenant table is "<tablename>_tenant"
+    draininterval: 5s      # how often the drain looks for due tenants
+    maxbackoff: 5m         # cap on the per-tenant retry backoff
+    maxage: 1h             # a tenant held longer than this earns one WARN per pass
+    leaseduration: 60s     # one drainer's hold on a tenant, and the replay's time bound
+```
+
+Two tables. The framework creates them only when `inbox.autocreatetable` is on;
+the DDL is here so a migration can own them instead.
+
+**PostgreSQL:**
+
+```sql
+CREATE TABLE IF NOT EXISTS gobricks_inbox_hold (
+    consumer      VARCHAR(255) NOT NULL,
+    stream        VARCHAR(255) NOT NULL,
+    stream_offset BIGINT       NOT NULL,
+    tenant_id     VARCHAR(255) NOT NULL,
+    data          BYTEA,
+    properties    BYTEA,
+    held_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (consumer, stream, stream_offset)
+);
+
+CREATE TABLE IF NOT EXISTS gobricks_inbox_hold_tenant (
+    consumer        VARCHAR(255) NOT NULL,
+    tenant_id       VARCHAR(255) NOT NULL,
+    held_since      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    attempts        INTEGER      NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    last_error      TEXT,
+    lease_owner     VARCHAR(255),
+    lease_until     TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (consumer, tenant_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_gobricks_inbox_hold_tenant_order
+    ON gobricks_inbox_hold (consumer, tenant_id, stream, stream_offset);
+CREATE INDEX IF NOT EXISTS idx_gobricks_inbox_hold_tenant_due
+    ON gobricks_inbox_hold_tenant (consumer, next_attempt_at);
+```
+
+**Oracle:**
+
+```sql
+CREATE TABLE gobricks_inbox_hold (
+    consumer      VARCHAR2(255) NOT NULL,
+    stream        VARCHAR2(255) NOT NULL,
+    stream_offset NUMBER(19)    NOT NULL,
+    tenant_id     VARCHAR2(255) NOT NULL,
+    data          BLOB,
+    properties    BLOB,
+    held_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT pk_gobricks_inbox_hold PRIMARY KEY (consumer, stream, stream_offset)
+);
+
+CREATE TABLE gobricks_inbox_hold_tenant (
+    consumer        VARCHAR2(255) NOT NULL,
+    tenant_id       VARCHAR2(255) NOT NULL,
+    held_since      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    attempts        NUMBER(10)    DEFAULT 0 NOT NULL,
+    next_attempt_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    last_error      CLOB,
+    lease_owner     VARCHAR2(255),
+    lease_until     TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT pk_gobricks_inbox_hold_tenant PRIMARY KEY (consumer, tenant_id)
+);
+
+CREATE INDEX idx_gobricks_inbox_hold_tenant_order
+    ON gobricks_inbox_hold (consumer, tenant_id, stream, stream_offset);
+CREATE INDEX idx_gobricks_inbox_hold_tenant_due
+    ON gobricks_inbox_hold_tenant (consumer, next_attempt_at);
+```
+
+Substitute your own `inbox.hold.tablename` throughout if you changed it; the
+tenant table is always that name with `_tenant` appended, and the index names are
+derived from it, which is why the configured name is bounded at 46 bytes.
+
+**Lease semantics.** `lease_owner` / `lease_until` on the tenant row mean "this
+drainer owns this tenant until this instant". Every write the drain makes carries
+the lease predicate in the statement itself, so a drainer whose lease expired
+mid-pass writes nothing. A crashed drainer costs one `leaseduration` of waiting,
+after which the next pass picks the tenant up. `leaseduration` is therefore also
+the time bound on a replayed handler.
+
+**Operator purge.** A held message is never dropped automatically — there is no
+retention on these tables. To abandon one tenant's backlog, delete its rows
+first, then its marker (the marker cannot be released while rows remain):
+
+```sql
+DELETE FROM gobricks_inbox_hold        WHERE consumer = :consumer AND tenant_id = :tenant;
+DELETE FROM gobricks_inbox_hold_tenant WHERE consumer = :consumer AND tenant_id = :tenant;
+```
+
+Run both against the names your `inbox.hold.tablename` configures. Those messages
+are gone: nothing else holds a copy once the offset was committed.
+
 ## Oracle: Default (Empty) Exchange
 
 The AMQP **default exchange** is the empty string, and a common pattern is "publish straight to a pre-declared queue" with `Exchange: ""` and `RoutingKey: "<queue-name>"`. Because Oracle treats `''` as `NULL`, the `gobricks_outbox.exchange`/`routing_key` columns are **nullable** on Oracle (PostgreSQL stores `''` as a real value). The relay's `FetchPending` maps the stored `NULL` back to `""`, so the default exchange works transparently on both vendors.

@@ -1429,6 +1429,28 @@ production, and the silent-sibling collision becomes a startup error naming the 
 
 ---
 
+### [ADR-089: A Failed Stream Delivery Is Retried, Then Held Per Tenant](adr_089_per_tenant_hold_on_the_streams_lane.md)
+
+**Date:** 2026-08-29 | **Status:** Accepted | **Breaking:** no — a consumer that does not declare `Hold` keeps ADR-059's skip
+
+ADR-059 settled a failed stream delivery by skipping it, which is right for independent events and
+wrong for dependent ones: the funding that follows a failed account creation applies to an account
+that does not exist. Stalling the partition instead punishes every tenant that hashes to it. A
+consumer declaring `Hold: true` now retries in place under a bounded policy (`streams.RetryOptions`,
+capped at 10 attempts and 1m of waiting; `streams.Permanent(err)` ends it early; a panic is never
+retried), then **parks the tenant**: the message and a tenant marker go to the `inbox` hold ledger in
+one durable write, and the offset commits only after it. A held tenant's later messages are gated —
+parked, not delivered — so the tenant's order survives. The `inbox-hold-drain` job takes each due
+tenant under a lease and replays its rows through the consumer's own handler in ledger order,
+deleting each only after its replay succeeds and releasing the tenant when the last row drains. The
+ledger is control-plane (`inbox.tenancy: shared`), because the tenant's own database may be exactly
+what is down; a held message is never auto-dropped.
+
+**Key Benefits:** a tenant's dependent events survive a failure in order, isolated from its partition
+mates, with `inbox.hold.{tenants,rows,oldest_age}` and a max-age WARN over the backlog.
+
+---
+
 ### [ADR-088: The Outbox Ledger Is Sequenced, Laned, and Drained by One Leader](adr_088_outbox_ordered_leader_relay.md)
 
 **Date:** 2026-08-30 | **Status:** Accepted | **Breaking:** `config.OutboxConfig` stops being comparable; `outbox.Store` gains `Lead`; a migrated ledger needs an explicit `seq` backfill before the new relay runs

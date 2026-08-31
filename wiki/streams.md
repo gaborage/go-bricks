@@ -151,14 +151,55 @@ remaining commits are skipped and each is logged at WARN naming its stream
 that at-least-once delivery already allows for, which is why it is preferred
 over a shutdown that hangs and takes `/ready` down with it for the whole drain.
 
-**A failed message is skipped, not redelivered.** Streams have no nack: on a
-handler error (or a recovered panic) the failure is logged and counted, the
-offset is not committed, and the next message is processed. The skip only sticks
-once a later success commits a *higher* offset; restart before that and the
-failed message comes back, along with everything after the last stored offset.
-Anything that must not be lost belongs in the handler's own durable store.
-Parking failed messages is future work
+**A failed message is skipped, not redelivered — unless the consumer holds.**
+Streams have no nack: on a handler error (or a recovered panic) the failure is
+logged and counted, the offset is not committed, and the next message is
+processed. The skip only sticks once a later success commits a *higher* offset;
+restart before that and the failed message comes back, along with everything
+after the last stored offset. Anything that must not be lost belongs in the
+handler's own durable store, or in the hold below
 ([ADR-059](adr_059_streams_consumption.md)).
+
+**Retry, then hold.** A consumer can bound in-place retries with `Retry:
+&streams.RetryOptions{MaxAttempts, InitialBackoff, MaxBackoff}` — `MaxAttempts`
+counts the first attempt, the wait doubles from `InitialBackoff` up to
+`MaxBackoff`, and the whole policy is capped at `streams.MaxRetryAttempts` (10)
+and `streams.MaxRetryWait` (1m) because the waits happen on the partition's own
+delivery goroutine. A handler returning `streams.Permanent(err)` ends the
+delivery on that attempt whatever the policy allows; a recovered panic is never
+retried.
+
+With `Hold: true`, an exhausted delivery is not skipped — the **tenant is
+held** ([ADR-089](adr_089_per_tenant_hold_on_the_streams_lane.md)):
+
+1. **Park.** The message and a tenant marker are written to the `inbox` hold
+   ledger in one durable write, and the offset commits only after it succeeds. If
+   that write fails the partition **stalls** on the message rather than
+   committing past a message the ledger does not have.
+2. **Gate.** While the tenant is held, its later messages on that consumer are
+   parked instead of delivered, so its order is preserved. Other tenants on the
+   same partition keep flowing.
+3. **Drain.** The `inbox-hold-drain` job takes each due tenant under a lease
+   (`inbox.hold.leaseduration`) and replays its rows through the consumer's own
+   handler in ledger order, deleting each row only after its replay succeeds. The
+   first failure stops the pass and defers the tenant under a backoff capped at
+   `inbox.hold.maxbackoff`.
+4. **Release.** Draining the last row deletes the tenant marker and the tenant
+   leaves the held set; a concurrent park keeps it held.
+
+A parked message becomes the ledger's rather than the broker's, and is
+idempotent on `(consumer, stream, offset)`. It is **never auto-dropped** — there
+is no retention on the hold ledger; rows leave through a successful replay or an
+operator's `DELETE`. The backlog is visible as the gauges
+`inbox.hold.tenants`, `inbox.hold.rows` and `inbox.hold.oldest_age` (keyed by
+`messaging.consumer.name`), plus one WARN per drain pass naming any tenant held
+longer than `inbox.hold.maxage`.
+
+A holding consumer that declares no `Retry` gets `streams.DefaultHoldRetry` (3
+attempts, 200ms initial, 2s cap); one that does not hold keeps the single
+attempt above. `Hold: true` requires an `inbox` hold ledger with
+`inbox.tenancy: shared` — see [outbox.md](outbox.md#hold-ledger) for the tables
+and keys — and a consumer declaring `Hold` without one fails startup.
 
 **Handlers run inline and sequentially within a stream — there is no worker
 pool.** A stream is an ordered log: parallel handlers would break that order and
