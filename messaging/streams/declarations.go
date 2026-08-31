@@ -35,6 +35,10 @@ type consumerDeclaration struct {
 	Retry          *RetryOptions
 	Hold           bool
 	TenantOptional bool
+	// Screen rejects a message the consumer's handler could not have accepted,
+	// without running it. Only a typed declaration sets one; nil is "no screen",
+	// which is every hand-written Handler. See consumerRunner.deliver.
+	Screen func(*Message) error
 }
 
 // consumerKey identifies a consumer for duplicate detection.
@@ -153,6 +157,13 @@ func (d *Declarations) DeclareConsumer(opts *ConsumerOptions) {
 		panic(nilDeclarationPanic("consumer", "DeclareConsumer", "ConsumerOptions"))
 	}
 
+	d.declareConsumer(opts, nil)
+}
+
+// declareConsumer is DeclareConsumer plus the poison screen a typed declaration
+// carries. It is unexported because a screen has to decode the same T the handler
+// does, which only the typed helpers can guarantee.
+func (d *Declarations) declareConsumer(opts *ConsumerOptions, screen func(*Message) error) {
 	d.registerConsumer(&consumerDeclaration{
 		Stream:         opts.Stream,
 		Name:           opts.Name,
@@ -162,6 +173,7 @@ func (d *Declarations) DeclareConsumer(opts *ConsumerOptions) {
 		Retry:          copyRetry(opts.Retry),
 		Hold:           opts.Hold,
 		TenantOptional: opts.TenantOptional,
+		Screen:         screen,
 	})
 }
 
@@ -175,6 +187,12 @@ func (d *Declarations) DeclareSuperStreamConsumer(opts *SuperStreamConsumerOptio
 		panic(nilDeclarationPanic("consumer", "DeclareSuperStreamConsumer", "SuperStreamConsumerOptions"))
 	}
 
+	d.declareSuperStreamConsumer(opts, nil)
+}
+
+// declareSuperStreamConsumer is DeclareSuperStreamConsumer plus the poison screen
+// a typed declaration carries; see declareConsumer.
+func (d *Declarations) declareSuperStreamConsumer(opts *SuperStreamConsumerOptions, screen func(*Message) error) {
 	d.registerConsumer(&consumerDeclaration{
 		Stream:         opts.SuperStream,
 		Name:           opts.Name,
@@ -185,6 +203,7 @@ func (d *Declarations) DeclareSuperStreamConsumer(opts *SuperStreamConsumerOptio
 		Retry:          copyRetry(opts.Retry),
 		Hold:           opts.Hold,
 		TenantOptional: opts.TenantOptional,
+		Screen:         screen,
 	})
 }
 

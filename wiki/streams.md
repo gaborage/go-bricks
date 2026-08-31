@@ -121,6 +121,77 @@ Retention values must not be negative: a negative `MaxAge`, `MaxLengthBytes` or
 the broker and silently leave the stream with the broker's default. **Zero is
 different** — it is how a field asks for exactly that default.
 
+## Typed consumers
+
+`DeclareTypedConsumer` is the streams-lane mirror of the AMQP lane's
+[typed consumers](messaging.md#typed-consumers): it decodes the message body into
+a struct, validates it against the same `validate` tags HTTP handlers use, and
+calls your function — so `json.Unmarshal`, the validation call and the two error
+branches stop being copy-pasted into every handler.
+
+```go
+type OrderPlaced struct {
+    Reference string `json:"reference" validate:"required,max=32"`
+    Amount    int64  `json:"amount"    validate:"required,gt=0"`
+}
+
+func (m *Module) DeclareStreams(decls *streams.Declarations) {
+    decls.DeclareStream("orders", nil)
+
+    streams.DeclareTypedConsumer(decls, &streams.ConsumerOptions{
+        Stream: "orders",
+        Name:   "order-projector",
+        Start:  streams.OffsetFirst(),
+    }, m.svc.HandleOrderPlaced)
+}
+
+func (s *Service) HandleOrderPlaced(ctx context.Context, order OrderPlaced) error {
+    return s.project(ctx, order)
+}
+```
+
+`T` is inferred from the function and never spelled out. `ConsumerOptions.Handler`
+must be nil — the declaration builds it — and a nil `*Declarations`, a nil
+`*ConsumerOptions` or a nil function all panic at declaration, as the lane's other
+wiring mistakes do.
+
+Four entry points cover the lane's two axes:
+
+| | plain stream | super stream |
+| --- | --- | --- |
+| `func(ctx, T) error` | `DeclareTypedConsumer` | `DeclareTypedSuperStreamConsumer` |
+| `func(ctx, T, *streams.Message) error` | `DeclareTypedConsumerWithMeta` | `DeclareTypedSuperStreamConsumerWithMeta` |
+
+The `WithMeta` shape is how a typed consumer still reads `msg.Offset`,
+`msg.Stream` (the *partition*, on a super stream) and `msg.Properties`. There is
+deliberately **no exported `NewTypedHandler`** on this lane, unlike the AMQP one:
+a typed declaration carries a poison screen alongside its handler, and a bare
+`streams.Handler` could not carry one — see below.
+
+**A payload failure is deterministic poison** (ADR-092). A body that does not
+decode, or decodes but fails validation, fails identically on every attempt and
+every replica, so the lane:
+
+- does **not** retry it in place, whatever `Retry` says — it is returned
+  `Permanent`;
+- does **not** park it when `Hold` is set, and does not park it behind an
+  already-held tenant either — the screen rejects it before the hold's gate;
+- skips the offset, exactly as ADR-059 settles any failure on a consumer that
+  does not hold.
+
+Parking one would defer that tenant on every drain pass, forever — the opposite
+of what the hold exists for. The consequence is that poison is **dropped**: a
+stream never redelivers, so it survives only in the failure log line and the
+consume metric. A consumer that must keep the body should take `T` without
+`validate` tags and park the rejection itself from inside the handler.
+
+Match the two modes with `errors.Is` against `streams.ErrPayloadUndecodable` and
+`streams.ErrPayloadInvalid`; `errors.As` to `*streams.PayloadError` reaches
+`Consumer`, `Stage` and `Fields()`. **`Error()` and `Fields()` are safe to log;
+`Unwrap()` is not** — the raw cause may carry the rejected literal, the offending
+byte or a partner-supplied map key, which is exactly why the framework's own
+rendering never interpolates it.
+
 ## Offset semantics
 
 **A stored offset always wins over `Start`.** At startup — and at SAC promotion —

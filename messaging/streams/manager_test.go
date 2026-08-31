@@ -2006,3 +2006,27 @@ func TestManagerStartRunsTheHandlerForADeliveredMessage(t *testing.T) {
 	assert.Equal(t, map[string]any{"kind": "test"}, got.Properties)
 	assert.Contains(t, fake.recorded(), callConsumerStore+":"+testConsumerName+"/"+testStream+"=55")
 }
+
+// The poison screen travels declaration → runner, which is the only path that
+// puts it in front of the hold's gate. A declaration without one leaves the
+// runner without one, which is what every hand-written Handler gets.
+func TestManagerNewRunnerCarriesTheDeclarationScreen(t *testing.T) {
+	m := NewManager(ManagerOptions{
+		URI:    "rabbitmq-stream://localhost:5552/",
+		Logger: logger.New("error", false),
+	})
+
+	screened := m.newRunner(context.Background(), &consumerDeclaration{
+		Name:   testConsumerName,
+		Stream: testStream,
+		Screen: func(*Message) error { return errHandlerFailed },
+	})
+	require.NotNil(t, screened.screen)
+	assert.ErrorIs(t, screened.screen(&Message{}), errHandlerFailed)
+
+	plain := m.newRunner(context.Background(), &consumerDeclaration{
+		Name:   testConsumerName,
+		Stream: testStream,
+	})
+	assert.Nil(t, plain.screen)
+}

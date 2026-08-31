@@ -1,4 +1,4 @@
-package messaging
+package streams
 
 import (
 	"errors"
@@ -20,20 +20,27 @@ const (
 var (
 	// ErrPayloadUndecodable reports a message body that could not be decoded into
 	// the consumer's payload type. Match it with errors.Is.
-	ErrPayloadUndecodable = errors.New("messaging: payload could not be decoded")
+	ErrPayloadUndecodable = errors.New("streams: payload could not be decoded")
 
 	// ErrPayloadInvalid reports a payload that decoded but failed struct
 	// validation. Match it with errors.Is.
-	ErrPayloadInvalid = errors.New("messaging: payload failed validation")
+	ErrPayloadInvalid = errors.New("streams: payload failed validation")
 )
 
-// PayloadError describes why a message body could not be turned into a typed
+// PayloadError describes why a stream message could not be turned into a typed
 // payload. It is this lane's thin surface over payloaderr.Body, which owns the
 // rendering rules and the SECURITY rationale behind them: Error() and Fields()
 // are safe to log, Unwrap() is not.
+//
+// It is also the lane's poison marker. A body that does not decode or does not
+// validate fails the same way for every attempt and every replica, so a delivery
+// carrying one is never retried in place and never parked in the hold — see
+// ADR-092 and consumerRunner.parks.
 type PayloadError struct {
-	// EventType is the declared consumer event type the body was routed to.
-	EventType string
+	// Consumer is the declared consumer name the message was routed to. The
+	// stream and offset are on the delivery's own log line and span; naming the
+	// consumer is what tells two typed consumers of the same stream apart.
+	Consumer string
 
 	// Stage is where the failure happened. It is exported to label logs and
 	// metrics with "decode" or "validate"; for control flow, match errors.Is
@@ -48,28 +55,16 @@ type PayloadError struct {
 
 // newPayloadError is the one place a Body becomes this lane's error, so the
 // stage cannot be copied from one field and the body from another.
-func newPayloadError(eventType string, body *payloaderr.Body) *PayloadError {
+func newPayloadError(consumer string, body *payloaderr.Body) *PayloadError {
 	return &PayloadError{
-		EventType: eventType,
-		Stage:     PayloadStage(body.Stage),
-		body:      body,
+		Consumer: consumer,
+		Stage:    PayloadStage(body.Stage),
+		body:     body,
 	}
 }
 
-// newPayloadDecodeError wraps a decode failure. The cause survives for Unwrap
-// only; Error() prints the codec's summary instead.
-func newPayloadDecodeError(eventType string, cause error, summary string) *PayloadError {
-	return newPayloadError(eventType, payloaderr.NewDecode(cause, summary))
-}
-
-// newPayloadValidateError wraps a validation failure, recording the validator's
-// own field namespaces for Fields() to redact on read.
-func newPayloadValidateError(eventType string, cause error) *PayloadError {
-	return newPayloadError(eventType, payloaderr.NewValidate(cause))
-}
-
 // Fields returns the validator field namespaces that failed, e.g.
-// ["CreateReq.Amount"], with every bracketed span redacted. It is empty for
+// ["OrderPayload.Amount"], with every bracketed span redacted. It is empty for
 // decode failures and for a nil receiver.
 func (e *PayloadError) Fields() []string {
 	if e == nil {
@@ -81,10 +76,10 @@ func (e *PayloadError) Fields() []string {
 
 func (e *PayloadError) Error() string {
 	if e == nil {
-		return "messaging: <nil> payload error"
+		return "streams: <nil> payload error"
 	}
 
-	return e.body.Message("messaging", string(e.Stage), fmt.Sprintf("event %q", e.EventType))
+	return e.body.Message("streams", string(e.Stage), fmt.Sprintf("consumer %q", e.Consumer))
 }
 
 // Unwrap exposes the underlying decode or validation error so errors.As can
@@ -116,4 +111,12 @@ func (e *PayloadError) Is(target error) bool {
 	default:
 		return false
 	}
+}
+
+// isPayloadFailure reports whether a finished delivery failed on the payload
+// rather than in the handler. It reads through the wrap chain, because the typed
+// handler marks the error Permanent and a lane caller may wrap it further.
+func isPayloadFailure(err error) bool {
+	var payloadErr *PayloadError
+	return errors.As(err, &payloadErr)
 }

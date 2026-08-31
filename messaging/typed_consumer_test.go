@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/internal/saferender"
+	"github.com/gaborage/go-bricks/messaging/internal/payloaderr"
 )
 
 // errBusiness stands in for a consumer's own sentinel: the adapter must return
@@ -309,7 +310,7 @@ func TestTypedHandlerUsesFrameworkValidator(t *testing.T) {
 	// pinned here is a construction COUNT — validation.New is a plain function
 	// with no seam to count through, and the package-level var is already
 	// resolved by the time any test runs.
-	require.Same(t, typedValidator(), typedValidator())
+	require.Same(t, payloaderr.Validator(), payloaderr.Validator())
 
 	// The instance is the framework's, not a bare validator.New(): an
 	// unregistered mcc_code tag makes validator panic instead of returning.
@@ -804,7 +805,7 @@ func TestJSONCodecSummarize(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := jsonCodec{}.summarize(tc.err, tc.fieldPathIsSchema)
+			got := payloaderr.JSONCodec{}.Summarize(tc.err, tc.fieldPathIsSchema)
 			assert.Equal(t, tc.want, got)
 			if tc.notContains != "" {
 				assert.NotContains(t, got, tc.notContains)

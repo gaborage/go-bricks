@@ -14,6 +14,7 @@ import (
 
 	"github.com/gaborage/go-bricks/internal/saferender"
 	"github.com/gaborage/go-bricks/internal/validation"
+	"github.com/gaborage/go-bricks/messaging/internal/payloaderr"
 )
 
 const (
@@ -105,7 +106,11 @@ func TestPayloadErrorUnwrapReachesCause(t *testing.T) {
 }
 
 func TestPayloadErrorAsRecoversFromWrappedChain(t *testing.T) {
-	err := &PayloadError{EventType: orderEventType, Stage: PayloadStageValidate, fields: []string{fieldAmount}}
+	// Built through the constructor, from a real validator failure: the wrap chain
+	// has to survive the shape production actually produces.
+	validateErr := validation.New().Struct(orderPayload{Reference: "abc"})
+	require.Error(t, validateErr)
+	err := newPayloadValidateError(orderEventType, validateErr)
 	wrapped := fmt.Errorf("consumer %q: %w", testConsumer, err)
 
 	var target *PayloadError
@@ -116,12 +121,9 @@ func TestPayloadErrorAsRecoversFromWrappedChain(t *testing.T) {
 }
 
 func TestPayloadErrorMessageComposition(t *testing.T) {
-	validateErr := &PayloadError{
-		EventType: orderEventType,
-		Stage:     PayloadStageValidate,
-		fields:    []string{fieldReference, fieldAmount},
-		err:       errors.New("2 validation errors"),
-	}
+	cause := validation.New().Struct(orderPayload{Reference: payloadMarker})
+	require.Error(t, cause)
+	validateErr := newPayloadValidateError(orderEventType, cause)
 
 	// The validator's own text is absent by design — the sanitized field list
 	// already carries everything that is safe to render.
@@ -140,7 +142,7 @@ func TestPayloadErrorMessageComposition(t *testing.T) {
 // the field-path gate comes from the destination type the body was decoded into,
 // so a test cannot pass by choosing a friendlier gate than production would.
 func renderDecodeError(cause error, dest any) string {
-	summary := jsonCodec{}.summarize(cause, saferender.FieldPathIsSchema(reflect.TypeOf(dest)))
+	summary := payloaderr.JSONCodec{}.Summarize(cause, saferender.FieldPathIsSchema(reflect.TypeOf(dest)))
 
 	return newPayloadDecodeError(orderEventType, cause, summary).Error()
 }
@@ -316,8 +318,8 @@ func TestPayloadErrorValidateConstructorDerivesFields(t *testing.T) {
 	mapErr := validation.New().Struct(mapKeyPayload{Limits: map[string]int{pan: 99}})
 	require.Error(t, mapErr)
 	stored := newPayloadValidateError(orderEventType, mapErr)
-	require.Len(t, stored.fields, 1)
-	assert.Contains(t, stored.fields[0], pan, "constructor stores the raw namespace")
+	require.Len(t, stored.Fields(), 1)
+	require.Contains(t, mapErr.Error(), pan, "premise: the raw cause carries the key")
 	assert.NotContains(t, stored.Fields()[0], pan, "the accessor is what redacts")
 
 	// A non-validator cause yields no fields rather than a bogus one.
@@ -326,24 +328,24 @@ func TestPayloadErrorValidateConstructorDerivesFields(t *testing.T) {
 	assert.Equal(t, `messaging: validate failed for event "OrderCreated"`, plain.Error())
 }
 
-// The constructor stores namespaces raw, so redaction has to hold on the read
-// path. Build the dirty state directly — which only in-package code can now do —
-// and drive both readers off it.
+// The constructor stores namespaces raw (pinned in payloaderr), so redaction has
+// to hold on this lane's read path too — through Fields() and through the
+// rendered message.
 func TestPayloadErrorFieldsRedactsOnRead(t *testing.T) {
-	raw := "orderPayload.Limits[" + payloadMarker + "]"
-	err := &PayloadError{EventType: orderEventType, Stage: PayloadStageValidate, fields: []string{raw}}
+	cause := validation.New().Struct(mapKeyPayload{Limits: map[string]int{payloadMarker: 99}})
+	require.Error(t, cause)
+	err := newPayloadValidateError(orderEventType, cause)
 
-	assert.Equal(t, []string{"orderPayload.Limits[*]"}, err.Fields())
+	assert.Equal(t, []string{"mapKeyPayload.Limits[*]"}, err.Fields())
 	assert.Equal(t,
-		`messaging: validate failed for event "OrderCreated" (fields: orderPayload.Limits[*])`,
+		`messaging: validate failed for event "OrderCreated" (fields: mapKeyPayload.Limits[*])`,
 		err.Error())
 
-	// A fresh slice per call: a caller cannot reach the stored namespaces through
-	// the one it was handed, and cannot spoil the next read.
+	// A fresh slice per call: a caller cannot spoil the next read through the one
+	// it was handed.
 	got := err.Fields()
 	got[0] = "tampered"
-	assert.Equal(t, []string{"orderPayload.Limits[*]"}, err.Fields())
-	assert.Equal(t, []string{raw}, err.fields, "the accessor must not rewrite in place")
+	assert.Equal(t, []string{"mapKeyPayload.Limits[*]"}, err.Fields())
 }
 
 func TestPayloadErrorConstructorsPropagateEventType(t *testing.T) {
