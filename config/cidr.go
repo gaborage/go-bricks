@@ -206,15 +206,15 @@ func validateCIDRList(field string, list []string) error {
 		return nil
 	}
 	var invalid []string
-	valid := 0
+	sawValid := false
 	for _, entry := range list {
 		if _, _, err := net.ParseCIDR(strings.TrimSpace(entry)); err != nil {
 			invalid = append(invalid, entry)
 			continue
 		}
-		valid++
+		sawValid = true
 	}
-	if valid == 0 {
+	if !sawValid {
 		return &ConfigError{
 			Category: errCategoryInvalid,
 			Field:    field,
