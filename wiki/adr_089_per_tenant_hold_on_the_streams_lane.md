@@ -63,6 +63,13 @@ eligible for them. Five steps, in order:
    — is written to the hold ledger, together with the tenant marker row that puts
    the tenant *in* the held set. Park is a settlement action: it is what the lane
    does instead of committing a skip.
+
+   The stored properties are part of the message, not decoration: they carry the
+   trace context and whatever the producer set, so the replay restores them and a
+   replay without them is not the message that was parked. A row whose properties
+   cannot be decoded is never handed to the handler — the tenant is deferred with
+   the row kept, because no retry repairs a blob and dropping it would lose the
+   message.
 3. **Drain.** A scheduled job (`inbox-hold-drain`, every
    `inbox.hold.draininterval`) takes each due tenant under a lease and replays its
    rows back through the consumer's own handler, in ledger order — the same
@@ -130,7 +137,7 @@ there. One control-plane ledger holds every tenant's parked messages.
 
 ## The race argument
 
-Three hazards, each closed by a specific mechanism rather than by ordering luck:
+Four hazards, each closed by a specific mechanism rather than by ordering luck:
 
 **A park racing a release.** A release that ran between a park's row write and
 its marker write would delete a marker whose row exists — a row held by nobody,
@@ -145,6 +152,16 @@ generation and epoch: a reload that observes a newer epoch discards its result,
 and a reload that cannot finish closes the gate instead of opening it. The
 failure direction is deliberate — a spurious hold costs one extra drain pass, a
 spurious delivery costs the ordering guarantee.
+
+**A park racing the drain's reload.** The drain refreshes a runner's held set
+from the ledger every pass. A park landing between that read and the replace
+would be erased by a listing taken before it — the tenant leaves the held set
+while its message sits parked, and the next message for that tenant is delivered
+ahead of it. Closed by the ordering rule the generation exists for: **the token
+must be read BEFORE the ledger, and passed back to the replace.** A token taken
+after the read compares equal to itself and guards nothing. This is why
+`ReloadHeld` performs the ledger read itself rather than accepting a listing: a
+caller that read first could only offer a token taken too late.
 
 **A drainer racing another drainer.** Two schedulers, or one scheduler and one
 survivor of a partition, could both believe they own a tenant. Closed by the
