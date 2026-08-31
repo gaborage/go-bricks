@@ -316,3 +316,45 @@ func TestOracleQuoteIdentifierDottedQuotedNames(t *testing.T) {
 		})
 	}
 }
+
+// TestQuoteOracleIdentifierNeedsQuotingClasses pins the needs-quoting
+// character classes directly in this package: mutants here run only this
+// package's tests, so the door-level suites in builder cannot kill them.
+func TestQuoteOracleIdentifierNeedsQuotingClasses(t *testing.T) {
+	tests := []struct {
+		name       string
+		identifier string
+		want       string
+	}{
+		{name: "digit_start_quoted", identifier: "1COUNT", want: `"1COUNT"`},
+		{name: "digit_zero_start_quoted", identifier: "0name", want: `"0name"`},
+		{name: "digit_nine_start_quoted", identifier: "9name", want: `"9name"`},
+		{name: "hyphen_quoted", identifier: "foo-bar", want: `"foo-bar"`},
+		{name: "space_quoted", identifier: "us ers", want: `"us ers"`},
+		{name: "interior_digit_zero_bare", identifier: "a0", want: "a0"},
+		{name: "interior_digit_nine_bare", identifier: "z9", want: "z9"},
+		{name: "special_valid_chars_bare", identifier: "a$#_x", want: "a$#_x"},
+		{name: "interior_quote_escaped_whole", identifier: `a"b`, want: `"a""b"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, QuoteOracleIdentifier(tt.identifier))
+		})
+	}
+}
+
+// TestOracleNeedsQuotingEmptyIsFalse pins the guard the exported doors make
+// unreachable: an empty identifier needs no quoting.
+func TestOracleNeedsQuotingEmptyIsFalse(t *testing.T) {
+	assert.False(t, oracleNeedsQuoting(""))
+}
+
+// TestQuoteIdentifierLiteralEscapeBranch covers the collapse-then-double path
+// directly: an already-escaped name survives unchanged, a lone quote gains a
+// partner.
+func TestQuoteIdentifierLiteralEscapeBranch(t *testing.T) {
+	assert.Equal(t, `"a""b"`, QuoteIdentifierLiteral(`a"b`))
+	assert.Equal(t, `"a""b"`, QuoteIdentifierLiteral(`a""b`))
+	assert.Equal(t, `"plain"`, QuoteIdentifierLiteral("plain"))
+}
