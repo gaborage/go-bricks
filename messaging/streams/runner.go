@@ -257,6 +257,14 @@ func (r *consumerRunner) deliver(streamName string, offset int64, message *amqp.
 		Properties: message.ApplicationProperties,
 	}
 
+	// A partition whose gate is closed has not been told what the ledger holds:
+	// delivering now could run a held tenant's later message ahead of the one it
+	// is held behind. Nothing is committed, so the broker redelivers once the
+	// reload lands and the gate opens.
+	if r.hold != nil && r.held.gateClosed() {
+		return
+	}
+
 	// tenant is written by the Handle closure and read by the Settle closure. Both
 	// run on THIS goroutine — the client calls deliver from the partition's own
 	// read loop, one delivery at a time, and Settle runs inside Run's deferred

@@ -1,11 +1,15 @@
 package streams
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/logger"
 )
 
 // TestHeldSetAnswersTheGate pins what the runner asks of it: whether a tenant is
@@ -31,7 +35,7 @@ func TestHeldSetAnswersTheGate(t *testing.T) {
 		set := newHeldSet()
 		set.add("tenant-a")
 
-		set.replace([]string{"tenant-b", "tenant-c"})
+		require.True(t, set.replace(set.generationAt(), []string{"tenant-b", "tenant-c"}))
 
 		assert.False(t, set.has("tenant-a"), "a tenant the ledger no longer holds is released")
 		assert.True(t, set.has("tenant-b"))
@@ -42,7 +46,7 @@ func TestHeldSetAnswersTheGate(t *testing.T) {
 		set := newHeldSet()
 		set.add("tenant-a")
 
-		set.replace(nil)
+		require.True(t, set.replace(set.generationAt(), nil))
 
 		assert.False(t, set.has("tenant-a"))
 	})
@@ -64,7 +68,7 @@ func TestHeldSetIsSafeUnderConcurrentUse(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			set.replace([]string{"tenant-b", "tenant-c"})
+			set.replace(set.generationAt(), []string{"tenant-b", "tenant-c"})
 			_ = i
 		}()
 	}
@@ -112,4 +116,43 @@ func TestBackoffSeriesDoublesToItsCap(t *testing.T) {
 		assert.Equal(t, time.Second, series.take(),
 			"a configured wait never outruns the cap, even before the first double")
 	})
+}
+
+// TestAReloadNeverErasesAParkThatRacedIt pins the ownership rule for the held
+// set: a listing read from the ledger describes the moment it was read, and a
+// park landing during that read is NOT in it. Applying it anyway would release a
+// tenant whose message is already parked, and the next delivery for that tenant
+// would run ahead of its replay.
+//
+// The interleaving is deterministic — the ledger parks while answering — so this
+// pins the rule rather than racing for it.
+func TestAReloadNeverErasesAParkThatRacedIt(t *testing.T) {
+	m := NewManager(ManagerOptions{
+		URI:    "rabbitmq-stream://localhost:5552/%2f",
+		Logger: logger.New("error", false),
+	})
+	runner := &consumerRunner{name: testConsumerName, held: newHeldSet(), log: logger.New("error", false)}
+
+	reads := 0
+	ledger := &fakeHoldLedger{held: map[string][]string{testConsumerName: {"globex"}}}
+	ledger.duringHeldRead = func() {
+		reads++
+		if reads == 1 {
+			// A partition parks acme while the ledger is answering, so the listing
+			// this read returns cannot mention it.
+			runner.held.add("acme")
+		} else {
+			// The second read sees it, as the ledger would once the park committed.
+			ledger.mu.Lock()
+			ledger.held[testConsumerName] = []string{"globex", "acme"}
+			ledger.mu.Unlock()
+		}
+	}
+	runner.hold = ledger
+
+	require.NoError(t, m.loadHeld(context.Background(), runner))
+
+	assert.True(t, runner.held.has("acme"), "the park that raced the read survives it")
+	assert.True(t, runner.held.has("globex"), "and the ledger's own listing is applied")
+	assert.Equal(t, 2, reads, "the stale listing was refused and the read ran again")
 }

@@ -3,6 +3,7 @@ package inbox
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -42,6 +43,21 @@ func validateHoldTableName(name string) error {
 	if len(name) > maxHoldTableNameLen {
 		return fmt.Errorf("hold: table name %q is too long: %d bytes, at most %d are allowed so the derived %q table fits",
 			name, len(name), maxHoldTableNameLen, name+holdTenantTableSuffix)
+	}
+	return nil
+}
+
+// errHoldTenantRequired is returned for a row with no tenant. A hold is keyed by
+// the tenant, so there is nothing to park a tenant-less delivery under — the lane
+// skips such a delivery, and this is the store's backstop for that invariant on
+// BOTH vendors. It also keeps Oracle's empty-string-is-NULL rule off the hold:
+// the column is never handed one.
+var errHoldTenantRequired = errors.New("inbox hold: a held row requires a tenant")
+
+// validateHoldRow checks what every vendor's Park needs before it writes.
+func validateHoldRow(row *HoldRow) error {
+	if row.TenantID == "" {
+		return errHoldTenantRequired
 	}
 	return nil
 }

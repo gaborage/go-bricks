@@ -46,12 +46,23 @@ type HoldReplayer interface {
 	ReloadHeld(consumer string, tenants []string)
 }
 
-// heldSet is one consumer's view of which tenants are held. Partitions read it on
-// every delivery from their own goroutines while the drain replaces it from its
-// own, so it is guarded rather than merely published.
+// heldSet is one consumer's view of which tenants are held, plus whether the
+// gate is CLOSED — the state a partition is in between a promotion and the
+// reload that tells it what the ledger holds.
+//
+// Every write goes through the same lock, and every replace carries the
+// generation it read at: a park landing mid-read must not be erased by a listing
+// taken before it, so a stale replace is refused rather than applied.
 type heldSet struct {
 	mu      sync.RWMutex
 	tenants map[string]struct{}
+	// generation advances on every add, so a replace can tell whether the listing
+	// it carries still describes the set it was read from.
+	generation uint64
+	// closed means the ledger has not been read yet for this partition. Nothing is
+	// delivered while it is up: an empty set would let a held tenant's later
+	// message run ahead of the one it is held behind.
+	closed bool
 }
 
 func newHeldSet() *heldSet {
@@ -66,16 +77,43 @@ func (s *heldSet) has(tenant string) bool {
 	return held
 }
 
-// add holds one tenant, which is what a park does to the partition that owns it.
+// gateClosed reports whether the partition may deliver at all.
+func (s *heldSet) gateClosed() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.closed
+}
+
+// closeGate stops deliveries until a reload lands. Called on promotion, where the
+// set this member inherited may be missing tenants another owner parked while it
+// stood by.
+func (s *heldSet) closeGate() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+}
+
+// add holds one tenant, which is what a park does to the partition that owns it,
+// and advances the generation so a listing read before it cannot erase it.
 func (s *heldSet) add(tenant string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tenants[tenant] = struct{}{}
+	s.generation++
 }
 
-// replace swaps the whole set for what the ledger reports. A tenant the listing
-// omits is released here: only the ledger knows a replay finally succeeded.
-func (s *heldSet) replace(tenants []string) {
+// generationAt is the generation a caller must pass back to replace what it read.
+func (s *heldSet) generationAt() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.generation
+}
+
+// replace swaps the whole set for what the ledger reported, and opens the gate.
+// It REFUSES a listing read before a park landed — reporting false so the caller
+// reads again — because applying it would release a tenant the ledger has not
+// been asked about yet, and one delivery would run ahead of its replay.
+func (s *heldSet) replace(generation uint64, tenants []string) bool {
 	next := make(map[string]struct{}, len(tenants))
 	for _, tenant := range tenants {
 		next[tenant] = struct{}{}
@@ -83,7 +121,12 @@ func (s *heldSet) replace(tenants []string) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.generation != generation {
+		return false
+	}
 	s.tenants = next
+	s.closed = false
+	return true
 }
 
 // holdBackoffDefault and holdBackoffMax bound the wait between failed ledger
@@ -248,33 +291,53 @@ func (m *Manager) requireHoldLedger(decls *Declarations) error {
 // loadHeld fills a holding consumer's set before it consumes. A failure fails
 // startup: a partition that does not know which tenants are held would deliver a
 // held tenant's later message ahead of the one it is held behind.
+//
+// The listing is applied only if no park landed while it was being read. A park
+// during the read means the ledger answered before that tenant was in it, so the
+// listing would release a tenant that is in fact held; the read simply runs again.
 func (m *Manager) loadHeld(ctx context.Context, runner *consumerRunner) error {
 	if runner.hold == nil {
 		return nil
 	}
 
-	tenants, err := runner.hold.HeldTenants(ctx, runner.name)
-	if err != nil {
-		return fmt.Errorf("failed to load held tenants for consumer %q: %w", runner.name, err)
+	for {
+		generation := runner.held.generationAt()
+
+		tenants, err := runner.hold.HeldTenants(ctx, runner.name)
+		if err != nil {
+			return fmt.Errorf("failed to load held tenants for consumer %q: %w", runner.name, err)
+		}
+
+		if runner.held.replace(generation, tenants) {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 	}
-	runner.held.replace(tenants)
-	return nil
 }
 
-// reloadHeldOnPromotion refreshes the set when this member is promoted to a
-// partition, and does not let the partition consume until it succeeds.
+// reloadHeldOnPromotion closes this partition's gate and RETURNS, leaving the
+// reload to the runner's own goroutine.
 //
-// The client offers no way to refuse a promotion, so "does not consume" is
-// spelled as blocking this callback: it returns only once the ledger answered,
-// or once the consumer is stopping. Consuming from a STALE set would deliver a
-// held tenant's later message ahead of the one it is held behind — the ordering
-// the hold exists to keep — and a set is at its stalest right here, on a member
-// that has been standing by while another partition owner parked tenants.
+// The client calls the promotion callback synchronously from the connection's
+// frame reader, which every consumer on that connection shares — waiting here for
+// a ledger that is down would stop delivering for all of them, not just this
+// partition. So the fail-closed rule is kept by the GATE rather than by blocking:
+// nothing is delivered until the reload lands.
 func (m *Manager) reloadHeldOnPromotion(runner *consumerRunner) {
 	if runner.hold == nil {
 		return
 	}
 
+	runner.held.closeGate()
+	go m.reloadUntilLoaded(runner)
+}
+
+// reloadUntilLoaded retries the ledger read until it lands or the consumer stops.
+// It runs off the frame reader, so a slow ledger costs this partition's throughput
+// and nothing else.
+func (m *Manager) reloadUntilLoaded(runner *consumerRunner) {
 	backoff := newBackoffSeries(runner.holdBackoff, holdBackoffMax)
 	logged := false
 
@@ -282,17 +345,17 @@ func (m *Manager) reloadHeldOnPromotion(runner *consumerRunner) {
 		if err := m.loadHeld(runner.baseCtx, runner); err == nil {
 			return
 		} else if !logged {
-			// Once, for the same reason the park logs once: a promotion storm during
-			// a ledger outage should not write a line per retry per partition.
+			// Once: a promotion storm during a ledger outage should not write a line
+			// per retry per partition.
 			logged = true
 			m.log.Error().Err(err).
 				Str(logFieldConsumer, runner.name).
-				Msg("Could not reload held tenants on promotion; not consuming until it succeeds")
+				Msg("Could not reload held tenants on promotion; not delivering until it succeeds")
 		}
 
 		if !delivery.Wait(runner.baseCtx, backoff.take()) {
-			// The consumer is stopping. Nothing has been consumed on this partition,
-			// so a restart reloads the set before it takes a message.
+			// The consumer is stopping. The gate stays closed, and nothing was
+			// delivered — a restart reloads before it takes a message.
 			return
 		}
 	}

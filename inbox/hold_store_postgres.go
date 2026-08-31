@@ -68,6 +68,10 @@ func NewPostgresHoldStore(tableName string) (HoldStore, error) {
 // nothing, and the tenant marker is upserted rather than inserted so a row
 // arriving just after the drain released that tenant holds it again.
 func (s *postgresHoldStore) Park(ctx context.Context, tx dbtypes.Tx, row *HoldRow) (bool, error) {
+	if err := validateHoldRow(row); err != nil {
+		return false, err
+	}
+
 	// The marker FIRST, and with a DO UPDATE that touches the row: an existing
 	// marker is locked by it for the rest of this transaction, so a drain deciding
 	// to release this tenant blocks until the row below is committed and its

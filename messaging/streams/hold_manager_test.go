@@ -88,11 +88,12 @@ func TestAConsumerWithoutAHoldNeedsNoLedger(t *testing.T) {
 	assert.Nil(t, m.consumers[0].runner.hold)
 }
 
-// TestPromotionDoesNotConsumeWithAStaleHeldSet pins decision 14: the reload on
-// SAC promotion fails CLOSED. A partition promoted while the ledger is unreachable
-// waits rather than consuming from a set that may be missing tenants another owner
-// parked while this member stood by.
-func TestPromotionDoesNotConsumeWithAStaleHeldSet(t *testing.T) {
+// TestPromotionClosesTheGateAndReturns pins where the fail-closed rule LIVES: the
+// promotion callback runs on the connection's frame reader, which every consumer
+// on that connection shares, so waiting there for a ledger that is down would
+// stop delivering for all of them. The callback closes this partition's gate and
+// returns; the retry runs on the runner's own goroutine.
+func TestPromotionClosesTheGateAndReturns(t *testing.T) {
 	ledger := &fakeHoldLedger{heldErr: errors.New("ledger unavailable")}
 	m := NewManager(ManagerOptions{
 		URI:    "rabbitmq-stream://localhost:5552/%2f",
@@ -112,30 +113,41 @@ func TestPromotionDoesNotConsumeWithAStaleHeldSet(t *testing.T) {
 		close(returned)
 	}()
 
-	// Observed, not slept for: the retry is proof the promotion did not proceed,
-	// and waiting a fixed span for it would be a bet on the runner's speed. The
-	// deadline is sized for a loaded CI machine, not for the millisecond backoff.
-	require.Eventually(t, func() bool { return ledger.loads() > 1 }, 30*time.Second, time.Millisecond,
-		"the promotion keeps asking the ledger rather than consuming from an unknown set")
-
-	select {
-	case <-returned:
-		t.Fatal("the promotion returned while the held set was still unknown")
-	default:
-	}
-
-	// Only stopping the consumer ends the wait, and nothing was consumed meanwhile.
-	cancel()
 	select {
 	case <-returned:
 	case <-time.After(30 * time.Second):
-		t.Fatal("a stopping consumer must not be stuck in the reload")
+		t.Fatal("the promotion callback must not wait on the ledger")
 	}
+	assert.True(t, runner.held.gateClosed(), "and it leaves the partition gated")
+
+	// The retry is running behind it, and only stopping the consumer ends it.
+	require.Eventually(t, func() bool { return ledger.loads() > 1 }, 30*time.Second, time.Millisecond,
+		"the reload keeps asking the ledger off the callback")
+	cancel()
 }
 
-// TestPromotionReloadsTheHeldSetWhenTheLedgerAnswers is the ordinary path: the
-// promoted partition picks up what the ledger holds before it consumes.
-func TestPromotionReloadsTheHeldSetWhenTheLedgerAnswers(t *testing.T) {
+// TestAGatedPartitionDeliversNothing is the other half of the rule: while the
+// gate is closed nothing runs and nothing commits, so the broker redelivers once
+// the reload lands.
+func TestAGatedPartitionDeliversNothing(t *testing.T) {
+	handled := 0
+	runner := newHoldRunner(t, func(context.Context, *Message) error {
+		handled++
+		return nil
+	}, &fakeHoldLedger{}, newOffsetTracker(1, time.Hour, newFakeClock().Now))
+	runner.held.closeGate()
+	storer := &fakeStorer{}
+
+	runner.deliver(testStream, 41, stampedMessage("tenant-a"), storer)
+
+	assert.Zero(t, handled, "a gated partition runs no handler")
+	assert.Empty(t, storer.offsets(), "and commits nothing, so the message comes back")
+}
+
+// TestPromotionOpensTheGateOnceTheLedgerAnswers pins the ordinary path end to
+// end: the reload lands on its own goroutine, the set is what the ledger holds,
+// and the partition delivers again.
+func TestPromotionOpensTheGateOnceTheLedgerAnswers(t *testing.T) {
 	ledger := &fakeHoldLedger{held: map[string][]string{testConsumerName: {"tenant-a"}}}
 	m := NewManager(ManagerOptions{
 		URI:    "rabbitmq-stream://localhost:5552/%2f",
@@ -148,5 +160,7 @@ func TestPromotionReloadsTheHeldSetWhenTheLedgerAnswers(t *testing.T) {
 
 	m.reloadHeldOnPromotion(runner)
 
+	require.Eventually(t, func() bool { return !runner.held.gateClosed() }, 30*time.Second, time.Millisecond,
+		"the gate opens when the ledger answers")
 	assert.True(t, runner.held.has("tenant-a"))
 }

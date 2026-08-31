@@ -256,11 +256,13 @@ Titles: C1 `feat(messaging): retry a failed stream delivery in place within a bo
       ReleaseLease(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string) error
       // NextRows returns the tenant's rows in (stream, offset) order, at most limit.
       NextRows(ctx context.Context, db dbtypes.Interface, consumer, tenant string, limit int) ([]HoldRow, error)
-      DeleteRow(ctx context.Context, db dbtypes.Interface, consumer, stream string, offset int64) error
+      // Fenced by the lease: a write affecting no rows means the lease was lost, and
+      // the caller discards the replay's outcome rather than failing the drain.
+      DeleteRow(ctx context.Context, db dbtypes.Interface, consumer, stream string, offset int64, tenant, owner string) (deleted bool, err error)
       // Defer records a failed replay: attempts+1, next_attempt_at = NOW()+backoff, last_error bounded, lease cleared.
-      Defer(ctx context.Context, db dbtypes.Interface, consumer, tenant string, backoff time.Duration, lastErr string) error
+      Defer(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string, backoff time.Duration, lastErr string) (updated bool, err error)
       // Release deletes the tenant marker only if no rows remain; released reports whether it did.
-      Release(ctx context.Context, db dbtypes.Interface, consumer, tenant string) (released bool, err error)
+      Release(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string) (released bool, err error)
       Stats(ctx context.Context, db dbtypes.Interface, consumer string) (HoldStats, error)
       CreateTable(ctx context.Context, db dbtypes.Interface) error
   }

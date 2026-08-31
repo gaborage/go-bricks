@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	oranet "github.com/sijms/go-ora/v2/network"
+
 	"github.com/gaborage/go-bricks/database"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/ledgererr"
@@ -15,6 +17,10 @@ import (
 // VARCHAR, SYSTIMESTAMP rather than NOW(), named constraints, and no
 // IF NOT EXISTS — ORA-00955 on an existing object is tolerated by the caller,
 // which treats CreateTable errors as warnings.
+// oracleObjectExistsCode is ORA-00955, "name is already used by an existing
+// object" — what this DDL raises for anything a previous run created.
+const oracleObjectExistsCode = 955
+
 const (
 	oracleCreateHoldTableSQL = `
 CREATE TABLE %s (
@@ -48,13 +54,6 @@ CREATE INDEX idx_%s_tenant_order ON %s (consumer, tenant_id, stream, stream_offs
 CREATE INDEX idx_%s_tenant_due ON %s (consumer, next_attempt_at)`
 )
 
-// errHoldTenantRequired is returned for a row with no tenant. A hold is keyed by
-// the tenant, so there is nothing to park a tenant-less delivery under — the lane
-// skips such a delivery rather than parking it, and this is the store's backstop
-// for that invariant. It also keeps Oracle's empty-string-is-NULL rule off the
-// hold: the column is never handed one.
-var errHoldTenantRequired = errors.New("inbox oracle: a held row requires a tenant")
-
 // oracleHoldStore implements HoldStore for Oracle using :N placeholders.
 type oracleHoldStore struct {
 	table       string
@@ -78,8 +77,8 @@ func NewOracleHoldStore(tableName string) (HoldStore, error) {
 // transaction usable, so a redelivery of a parked offset is detected by catching
 // ORA-00001 rather than by asking the statement to ignore it.
 func (s *oracleHoldStore) Park(ctx context.Context, tx dbtypes.Tx, row *HoldRow) (bool, error) {
-	if row.TenantID == "" {
-		return false, errHoldTenantRequired
+	if err := validateHoldRow(row); err != nil {
+		return false, err
 	}
 
 	// The marker FIRST, and locked for the rest of this transaction, so a drain
@@ -113,23 +112,38 @@ func (s *oracleHoldStore) holdTenantMarker(ctx context.Context, tx dbtypes.Tx, r
 		`SELECT tenant_id FROM %s WHERE consumer = :1 AND tenant_id = :2 FOR UPDATE`,
 		s.tenantTable,
 	)
-	locked, err := markerLocked(ctx, tx, lock, row.Consumer, row.TenantID)
-	if err != nil {
-		return err
-	}
-	if locked {
-		return nil
-	}
-
 	insert := fmt.Sprintf(
 		`INSERT INTO %s (consumer, tenant_id, held_since, attempts, next_attempt_at)
 		 VALUES (:1, :2, SYSTIMESTAMP, 0, SYSTIMESTAMP)`,
 		s.tenantTable,
 	)
-	if _, err := tx.Exec(ctx, insert, row.Consumer, row.TenantID); err != nil && !database.IsUniqueViolation(err) {
-		return fmt.Errorf("inbox oracle: mark tenant held failed: %w", err)
+
+	// Two passes at most: the marker is there and we lock it, or it is not and we
+	// insert it, or someone inserted it between the two and the second pass locks
+	// theirs. Losing that race is not enough on its own — the winner's marker is a
+	// row this transaction holds no lock on, and a release could delete it between
+	// here and the held row's write, which is the race the marker-first order
+	// exists to prevent.
+	for range 2 {
+		locked, err := markerLocked(ctx, tx, lock, row.Consumer, row.TenantID)
+		if err != nil {
+			return err
+		}
+		if locked {
+			return nil
+		}
+
+		_, err = tx.Exec(ctx, insert, row.Consumer, row.TenantID)
+		if err == nil {
+			return nil
+		}
+		if !database.IsUniqueViolation(err) {
+			return fmt.Errorf("inbox oracle: mark tenant held failed: %w", err)
+		}
 	}
-	return nil
+
+	return fmt.Errorf("inbox oracle: mark tenant held failed: tenant %q's marker vanished between the lock and the insert twice",
+		row.TenantID)
 }
 
 func (s *oracleHoldStore) HeldTenants(ctx context.Context, db dbtypes.Interface, consumer string) ([]string, error) {
@@ -239,12 +253,29 @@ func (s *oracleHoldStore) CreateTable(ctx context.Context, db dbtypes.Interface)
 		fmt.Sprintf(oracleCreateHoldOrderIndexSQL, s.table, s.table),
 		fmt.Sprintf(oracleCreateHoldDueIndexSQL, s.table, s.tenantTable),
 	}
+	// Every statement is attempted. Oracle has no IF NOT EXISTS, so an object that
+	// already exists raises ORA-00955 — and returning on the first of those would
+	// skip the tenant table and BOTH indexes whenever the row table happened to
+	// exist, which the startup probe cannot catch: it reads a table, never an
+	// index. Errors are collected instead, so a genuine failure still surfaces.
+	var errs []error
 	for _, stmt := range statements {
-		if _, err := db.Exec(ctx, stmt); err != nil {
-			return fmt.Errorf("inbox oracle: create hold table failed: %w", err)
+		if _, err := db.Exec(ctx, stmt); err != nil && !isOracleObjectExists(err) {
+			errs = append(errs, fmt.Errorf("inbox oracle: create hold table failed: %w", err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
+}
+
+// isOracleObjectExists reports whether err is Oracle's "name is already used by
+// an existing object" (ORA-00955), which is what a re-run of this DDL raises for
+// anything already created.
+func isOracleObjectExists(err error) bool {
+	var oraErr *oranet.OracleError
+	if errors.As(err, &oraErr) {
+		return oraErr.ErrCode == oracleObjectExistsCode
+	}
+	return false
 }
 
 // markerLocked runs the FOR UPDATE probe and reports whether it found the marker.

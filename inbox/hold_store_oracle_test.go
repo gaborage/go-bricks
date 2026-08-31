@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	oranet "github.com/sijms/go-ora/v2/network"
+
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -260,4 +262,68 @@ func TestOracleHoldStoreMarkerLockFailuresAreReported(t *testing.T) {
 		require.Len(t, tx.ExecLog(), 1, "the row is never written without its marker")
 		assert.Contains(t, tx.ExecLog()[0].SQL, holdTenantTable)
 	})
+}
+
+// TestOracleHoldStoreRelocksAfterLosingTheMarkerRace pins the Oracle-only hazard
+// the insert's unique violation hides: the winner's marker is a row THIS
+// transaction holds no lock on, so tolerating the violation and moving on would
+// let a release delete it while the held row is still uncommitted. The probe must
+// run AGAIN and take the lock.
+//
+// TestDB matches expectations first-registered-wins and never consumes one, so a
+// test cannot script "empty, then present" for the same SQL. What it can pin —
+// and what the fix is — is that losing the race sends the store back to the lock
+// rather than onward to the row: two probes for one park, and no row written
+// while the marker is unheld.
+func TestOracleHoldStoreRelocksAfterLosingTheMarkerRace(t *testing.T) {
+	store := newOracleHoldTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.Oracle)
+	tx := db.ExpectTransaction()
+	tx.ExpectQuery(`FOR UPDATE`).WillReturnRows(dbtesting.NewRowSet("tenant_id"))
+	tx.ExpectExec(`INSERT INTO ` + holdTenantTable).WillReturnError(oracleUniqueViolation())
+
+	dbtx, err := db.Begin(t.Context())
+	require.NoError(t, err)
+
+	_, err = store.Park(t.Context(), dbtx, sampleHoldRow())
+
+	require.Error(t, err, "a marker that never appears is not a park that proceeds")
+	assert.Contains(t, err.Error(), "vanished between the lock and the insert")
+	assert.Len(t, tx.QueryLog(), 2, "losing the insert race sends the store back to the lock")
+	for _, exec := range tx.ExecLog() {
+		assert.NotContains(t, exec.SQL, "INSERT INTO "+holdTable+" (consumer, stream",
+			"the held row is never written while its marker is unheld")
+	}
+}
+
+// oracleUniqueViolation is the driver's own ORA-00001, which is what
+// database.IsUniqueViolation recognizes — a bare error carrying the text is not
+// the same thing, and a test built on one would pass against a store that never
+// tolerates a duplicate.
+func oracleUniqueViolation() error {
+	return &oranet.OracleError{ErrCode: 1}
+}
+
+// TestOracleHoldStoreCreatesEveryObjectEvenWhenSomeExist pins what "already
+// exists" must not cost: Oracle has no IF NOT EXISTS, so a re-run raises
+// ORA-00955 for whatever a previous run created. Returning on the first of those
+// would skip the tenant table and both indexes whenever the row table existed —
+// and the startup probe would never notice, because it reads a table, not an
+// index.
+func TestOracleHoldStoreCreatesEveryObjectEvenWhenSomeExist(t *testing.T) {
+	store := newOracleHoldTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.Oracle)
+	// The row table is already there; everything else is not.
+	db.ExpectExec(`CONSTRAINT pk_` + holdTable).WillReturnError(oracleObjectExists())
+	db.ExpectExec(`CONSTRAINT pk_` + holdTenantTable).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE INDEX idx_` + holdTable + `_tenant_order`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE INDEX idx_` + holdTable + `_tenant_due`).WillReturnRowsAffected(0)
+
+	require.NoError(t, store.CreateTable(t.Context(), db))
+	assert.Len(t, db.ExecLog(), 4, "an existing object never stops the rest of the DDL")
+}
+
+// oracleObjectExists is the driver's ORA-00955.
+func oracleObjectExists() error {
+	return &oranet.OracleError{ErrCode: oracleObjectExistsCode}
 }

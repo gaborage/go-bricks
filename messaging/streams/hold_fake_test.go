@@ -20,6 +20,10 @@ type fakeHoldLedger struct {
 	parkErr       error
 	failParkTimes int
 	heldErr       error
+	// duringHeldRead runs inside HeldTenants, before it answers. It is how a test
+	// interleaves a park with a reload deterministically, without a sleep or a
+	// second goroutine.
+	duringHeldRead func()
 }
 
 func (f *fakeHoldLedger) Park(_ context.Context, msg *HeldMessage) error {
@@ -35,8 +39,16 @@ func (f *fakeHoldLedger) Park(_ context.Context, msg *HeldMessage) error {
 
 func (f *fakeHoldLedger) HeldTenants(_ context.Context, consumer string) ([]string, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	during := f.duringHeldRead
 	f.heldCalls++
+	f.mu.Unlock()
+
+	if during != nil {
+		during()
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.heldErr != nil {
 		return nil, f.heldErr
 	}
