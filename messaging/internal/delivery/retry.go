@@ -2,13 +2,13 @@ package delivery
 
 import (
 	"errors"
-	"math"
 	"time"
+
+	"github.com/gaborage/go-bricks/internal/backoff"
 )
 
-// maxDuration is the largest representable backoff, which an uncapped policy
-// saturates at instead of wrapping.
-const maxDuration = time.Duration(math.MaxInt64)
+// maxDuration aliases the shared ceiling so existing tests keep pinning it.
+const maxDuration = backoff.MaxDuration
 
 // Retry bounds how often one delivery's handler is re-invoked in place after a
 // HandlerError. MaxAttempts counts the first attempt, so a policy of 1 retries
@@ -62,18 +62,7 @@ func backoffFor(r *Retry, attempt int) time.Duration {
 		return 0
 	}
 
-	// Named for what it is rather than "wait", which is the cancelable sleep this
-	// package already has. A shift of 63 or more leaves maxDuration>>shift at zero,
-	// which no positive base can be under, so the saturating branch covers it.
-	backoff := maxDuration
-	if shift := attempt - 2; base <= maxDuration>>shift {
-		backoff = base << shift
-	}
-
-	if r.MaxBackoff > 0 {
-		return min(backoff, r.MaxBackoff)
-	}
-	return backoff
+	return backoff.Saturating(base, r.MaxBackoff, attempt-2)
 }
 
 // BackoffBudget reports how long a policy's waits add up to and whether they pass

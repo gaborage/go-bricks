@@ -17,6 +17,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 	"go.opentelemetry.io/otel/trace"
 
+	rawbackoff "github.com/gaborage/go-bricks/internal/backoff"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 	"github.com/gaborage/go-bricks/observability"
@@ -986,6 +987,19 @@ func (c *AMQPClientImpl) handleReconnect() {
 // wait is a uniform random sample below it, which spreads herd recovery
 // after a broker outage instead of all clients reconnecting at exactly t=cap.
 func computeBackoff(base, maxDelay time.Duration, attempt int) time.Duration {
+	raw := reconnectBackoff(base, maxDelay, attempt)
+	if raw <= 0 {
+		return defaultReconnectDelay
+	}
+	// Full jitter is a load-distribution mechanism, not a security primitive —
+	// math/rand/v2 is the right tool here. crypto/rand would add system-call
+	// overhead per reconnect attempt without changing the herd-spreading behavior.
+	return time.Duration(rand.Int64N(int64(raw))) //#nosec G404 -- jitter randomness, not cryptographic
+}
+
+// reconnectBackoff is the raw (pre-jitter) reconnect/resubscribe series.
+// Zero-value handling stays here, not in the shared helper.
+func reconnectBackoff(base, maxDelay time.Duration, attempt int) time.Duration {
 	if base <= 0 {
 		base = defaultReconnectDelay
 	}
@@ -995,20 +1009,7 @@ func computeBackoff(base, maxDelay time.Duration, attempt int) time.Duration {
 	if maxDelay < base {
 		maxDelay = base
 	}
-	backoff := base
-	for i := 0; i < attempt && backoff < maxDelay; i++ {
-		backoff *= 2
-	}
-	if backoff > maxDelay {
-		backoff = maxDelay
-	}
-	if backoff <= 0 {
-		return base
-	}
-	// Full jitter is a load-distribution mechanism, not a security primitive —
-	// math/rand/v2 is the right tool here. crypto/rand would add system-call
-	// overhead per reconnect attempt without changing the herd-spreading behavior.
-	return time.Duration(rand.Int64N(int64(backoff))) //#nosec G404 -- jitter randomness, not cryptographic
+	return rawbackoff.Saturating(base, maxDelay, attempt)
 }
 
 // connect creates a new AMQP connection.

@@ -25,6 +25,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/httpclient/internal/tracking"
+	"github.com/gaborage/go-bricks/internal/backoff"
 	"github.com/gaborage/go-bricks/jose"
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -1041,17 +1042,7 @@ func (c *client) backoffDelay(attempt int) time.Duration {
 	if base <= 0 {
 		base = defaultBackoffBase
 	}
-	// Cap attempt to avoid overflow when computing multiplier
-	if attempt > maxBackoffAttempt {
-		attempt = maxBackoffAttempt
-	}
-	// Exponential backoff: base * 2^attempt
-	mult := 1 << attempt
-	d := base * time.Duration(mult)
-	// Cap to maxBackoffDuration to avoid excessive sleeps
-	if d > maxBackoffDuration {
-		d = maxBackoffDuration
-	}
+	d := c.rawBackoff(attempt)
 	// Full jitter: random duration in [0, d)
 	if d <= 0 {
 		return base
@@ -1063,6 +1054,22 @@ func (c *client) backoffDelay(attempt int) time.Duration {
 		return d
 	}
 	return time.Duration(n.Int64())
+}
+
+// rawBackoff is the raw (pre-jitter) HTTP retry series. Zero-value handling
+// and the attempt cap stay here, not in the shared helper: a tiny RetryDelay
+// with a huge attempt used to stop growing at maxBackoffAttempt, and
+// Saturating alone would keep doubling until maxBackoffDuration.
+func (c *client) rawBackoff(attempt int) time.Duration {
+	base := c.config.RetryDelay
+	if base <= 0 {
+		base = defaultBackoffBase
+	}
+	// Cap attempt to avoid overflow when computing multiplier
+	if attempt > maxBackoffAttempt {
+		attempt = maxBackoffAttempt
+	}
+	return backoff.Saturating(base, maxBackoffDuration, attempt)
 }
 
 // backoffWithContext waits for the backoff delay or returns early if the context is done.
