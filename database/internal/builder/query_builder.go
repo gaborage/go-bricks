@@ -711,7 +711,7 @@ func (qb *QueryBuilder) EscapeIdentifier(identifier string) string {
 	// before embedding it in raw SQL — so unlike the internal renderer it is a
 	// trust boundary, not a post-validation step: a malformed identifier is a
 	// live input here, not an unreachable branch. It stays safe by escaping, and
-	// splitIdentifierSegments hands back the whole string when it cannot parse it.
+	// sqllex.SplitIdentifierSegments hands back the whole string when it cannot parse it.
 	parts := sqllex.SplitIdentifierSegments(identifier)
 	for i, part := range parts {
 		if sqllex.IsQuotedIdentifier(part) {

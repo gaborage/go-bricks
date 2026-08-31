@@ -229,6 +229,74 @@ func TestValidateSegment(t *testing.T) {
 	}
 }
 
+func TestQuoteOracleIdentifierCaseSensitivity(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "lowercase_reserved_word",
+			input:    "number",
+			expected: `"number"`,
+		},
+		{
+			name:     "uppercase_reserved_word",
+			input:    "NUMBER",
+			expected: `"NUMBER"`,
+		},
+		{
+			name:     "mixed_case_reserved_word",
+			input:    "Number",
+			expected: `"Number"`,
+		},
+		{
+			name:     "lowercase_non_reserved",
+			input:    "name",
+			expected: "name",
+		},
+		{
+			name:     "uppercase_non_reserved",
+			input:    "NAME",
+			expected: "NAME",
+		},
+		{
+			name:     "mixed_case_non_reserved",
+			input:    "Name",
+			expected: "Name",
+		},
+		{
+			name:     "already_quoted_lowercase",
+			input:    `"number"`,
+			expected: `"number"`,
+		},
+		{
+			name:     "already_quoted_uppercase",
+			input:    `"NUMBER"`,
+			expected: `"NUMBER"`,
+		},
+		{
+			name:     "multiple_reserved_words",
+			input:    "size",
+			expected: `"size"`,
+		},
+		{
+			name:     "dotted_identifier",
+			input:    "table.number",
+			expected: `"table"."number"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := QuoteOracleIdentifier(tt.input)
+			if result != tt.expected {
+				t.Fatalf("input: %s, expected: %s, got: %s", tt.input, tt.expected, result)
+			}
+		})
+	}
+}
+
 func TestOracleQuoteIdentifierDottedQuotedNames(t *testing.T) {
 	tests := []struct {
 		name       string

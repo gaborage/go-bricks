@@ -178,7 +178,7 @@ func (qb *QueryBuilder) upsertColumnName(column string) string {
 	}
 
 	rendered := sqllex.QuoteOracleIdentifier(column)
-	if len(rendered) >= 2 && rendered[0] == '"' && rendered[len(rendered)-1] == '"' {
+	if sqllex.IsQuotedString(rendered) {
 		// The unescape is kept though no key reaching here can carry a doubled
 		// quote any more: reading an escaped rendering as the name it denotes is
 		// this function's own rule, not a consequence of the door's, and a
@@ -219,9 +219,9 @@ func (qb *QueryBuilder) requireDistinctColumnIdentities(kind string, columns []u
 // can carry on either vendor.
 func isAcceptableUpsertColumnKey(key string) bool {
 	// The two key-only scans come first: they answer with one pass and no
-	// allocation, while oracleQuoteIdentifier parses the key into segments and
-	// may allocate a quoted rendering. A key either of them refuses never pays
-	// for that parse.
+	// allocation, while sqllex.QuoteOracleIdentifier parses the key into segments
+	// and may allocate a quoted rendering. A key either of them refuses never
+	// pays for that parse.
 	return !keyCarriesInteriorQuote(key) &&
 		!keyIsFunctionShaped(key) &&
 		isSingleColumnName(sqllex.QuoteOracleIdentifier(key))
@@ -276,8 +276,9 @@ func keyIsFunctionShaped(key string) bool {
 // and nothing else: not empty, not qualified, a valid segment, and — when
 // quoted — carrying no quote that ends the identifier early.
 //
-// That last test used to be the one with teeth, back when oracleQuoteIdentifier
-// wrapped a key without doubling the quotes inside it and `role" = 'admin', "name`
+// That last test used to be the one with teeth, back when the renderer (now
+// sqllex.QuoteOracleIdentifier) wrapped a key without doubling the quotes
+// inside it and `role" = 'admin', "name`
 // rendered as `"role" = 'admin', "name"` — not a column, but a second assignment
 // in a position no bind parameter guards. The renderer escapes now, so no
 // rendering it produces should reach this with an early-ending quote, and the

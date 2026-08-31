@@ -49,7 +49,7 @@ func (qb *QueryBuilder) quoteOracleIdentifierForClause(identifier string) string
 
 // quoteOracleColumnsForDML applies Oracle-specific quoting for column lists used in DML statements
 // like INSERT or UPDATE where reserved words must be safely referenced. It delegates to the same
-// reserved-word-only quoting used for query conditions (oracleQuoteIdentifier) and preserves the
+// reserved-word-only quoting used for query conditions (sqllex.QuoteOracleIdentifier) and preserves the
 // caller's original case verbatim — it does not upper-case reserved words.
 func (qb *QueryBuilder) quoteOracleColumnsForDML(columns ...string) []string {
 	if qb.vendor != dbtypes.Oracle {

@@ -118,69 +118,52 @@ func TestBuildUpsertNonOracleFallsBack(t *testing.T) {
 	require.NotEmpty(t, args)
 }
 
-func TestOracleQuoteIdentifierCaseSensitivity(t *testing.T) {
-	qb := NewQueryBuilder(dbtypes.Oracle)
+// TestQuoteOracleColumnDelegatesToSqllex is a smoke test only: the exhaustive
+// case-sensitivity / reserved-word / quoted-form / dotted-name matrix lives in
+// sqllex.TestQuoteOracleIdentifierCaseSensitivity now that quoteOracleColumn is
+// a one-line delegate to sqllex.QuoteOracleIdentifier. This keeps just enough
+// cases here to prove the delegation wiring itself, plus the PostgreSQL
+// passthrough branch (vendor != Oracle), which the moved matrix never
+// exercised (it only ever built an Oracle QueryBuilder).
+func TestQuoteOracleColumnDelegatesToSqllex(t *testing.T) {
+	oracle := NewQueryBuilder(dbtypes.Oracle)
+	postgres := NewQueryBuilder(dbtypes.PostgreSQL)
 
 	tests := []struct {
 		name     string
+		qb       *QueryBuilder
 		input    string
 		expected string
 	}{
 		{
-			name:     "lowercase_reserved_word",
+			name:     "oracle_reserved_word_quoted",
+			qb:       oracle,
 			input:    "number",
 			expected: `"number"`,
 		},
 		{
-			name:     "uppercase_reserved_word",
-			input:    "NUMBER",
-			expected: `"NUMBER"`,
-		},
-		{
-			name:     "mixed_case_reserved_word",
-			input:    "Number",
-			expected: `"Number"`,
-		},
-		{
-			name:     "lowercase_non_reserved",
+			name:     "oracle_non_reserved_unchanged",
+			qb:       oracle,
 			input:    "name",
 			expected: "name",
 		},
 		{
-			name:     "uppercase_non_reserved",
-			input:    "NAME",
-			expected: "NAME",
-		},
-		{
-			name:     "mixed_case_non_reserved",
-			input:    "Name",
-			expected: "Name",
-		},
-		{
-			name:     "already_quoted_lowercase",
+			name:     "oracle_already_quoted_unchanged",
+			qb:       oracle,
 			input:    `"number"`,
 			expected: `"number"`,
 		},
 		{
-			name:     "already_quoted_uppercase",
-			input:    `"NUMBER"`,
-			expected: `"NUMBER"`,
-		},
-		{
-			name:     "multiple_reserved_words",
-			input:    "size",
-			expected: `"size"`,
-		},
-		{
-			name:     "dotted_identifier",
-			input:    "table.number",
-			expected: `"table"."number"`,
+			name:     "postgres_passthrough_unchanged",
+			qb:       postgres,
+			input:    "number",
+			expected: "number",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := qb.quoteOracleColumn(tt.input)
+			result := tt.qb.quoteOracleColumn(tt.input)
 			if result != tt.expected {
 				t.Fatalf("input: %s, expected: %s, got: %s", tt.input, tt.expected, result)
 			}
@@ -383,6 +366,7 @@ func TestFixesOriginalOracleIdentifierBug(t *testing.T) {
 	assert.Contains(t, sql, `WHERE "number" = :1`, "WHERE clause should quote reserved word")
 	assert.NotContains(t, sql, `WHERE number = :1`, "WHERE clause should NOT contain unquoted reserved word")
 }
+
 func TestOracleFromClauseQuoting(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.Oracle)
 

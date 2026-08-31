@@ -21,6 +21,20 @@ func QuoteOracleIdentifier(column string) string {
 		return trimmed
 	}
 
+	// Fast path: a bare segment (no dot, no quote) cannot split and cannot
+	// already be quoted, so the parser never needs to run for it — the
+	// overwhelming case at every door.
+	if strings.IndexByte(trimmed, '.') < 0 && strings.IndexByte(trimmed, '"') < 0 {
+		if IsOracleReservedWord(trimmed) || oracleNeedsQuoting(trimmed) {
+			return QuoteIdentifierLiteral(trimmed)
+		}
+		return trimmed
+	}
+
+	if IsQuotedIdentifier(trimmed) {
+		return trimmed
+	}
+
 	if segments := SplitIdentifierSegments(trimmed); len(segments) > 1 {
 		for i, segment := range segments {
 			segments[i] = QuoteOracleIdentifier(segment)
@@ -28,14 +42,11 @@ func QuoteOracleIdentifier(column string) string {
 		return strings.Join(segments, ".")
 	}
 
-	if IsQuotedIdentifier(trimmed) {
-		return trimmed
-	}
-
-	// No separate test for a quote is needed here: oracleNeedsQuoting allows only
-	// [A-Za-z0-9_$#], so a name carrying one already fails it and reaches the
-	// escaping branch. What changed is the branch — it escapes now instead of
-	// wrapping, so a quote can no longer end the identifier early.
+	// A single segment still carrying a quote or dot: not well-formed quoted
+	// (that returned above), so escape it whole if it needs quoting.
+	// oracleNeedsQuoting allows only [A-Za-z0-9_$#], so such a segment always
+	// fails it and reaches the escaping branch — a quote can never end the
+	// identifier early.
 	if IsOracleReservedWord(trimmed) || oracleNeedsQuoting(trimmed) {
 		return QuoteIdentifierLiteral(trimmed)
 	}
@@ -53,11 +64,10 @@ func oracleNeedsQuoting(identifier string) bool {
 		return true
 	}
 
-	for _, r := range identifier {
-		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '$' || r == '#' {
-			continue
+	for i := 0; i < len(identifier); i++ {
+		if !isValidIdentifierChar(identifier[i]) {
+			return true
 		}
-		return true
 	}
 
 	return false
@@ -97,9 +107,9 @@ func IsQuotedString(s string) bool {
 }
 
 // HasUnescapedQuote reports whether text carries a quote that is not part of a
-// doubled "" escape. It reads renderings only: the upsert door judges the KEY
-// with keyCarriesInteriorQuote, which is stricter — a rendering may legitimately
-// carry a doubled quote, a caller's identifier argument may not.
+// doubled "" escape. It reads renderings only: the builder's upsert door judges
+// the KEY with its stricter keyCarriesInteriorQuote check — a rendering may
+// legitimately carry a doubled quote, a caller's identifier argument may not.
 func HasUnescapedQuote(text string) bool {
 	return strings.Contains(strings.ReplaceAll(text, `""`, ""), `"`)
 }
@@ -242,18 +252,8 @@ func isValidIdentifierSegment(segment string) bool {
 	return true
 }
 
-// isValidQuotedSegment validates a quoted identifier segment
-// Must be properly quoted and non-empty inside quotes
+// isValidQuotedSegment validates a quoted identifier segment: properly
+// quoted and non-empty inside the quotes.
 func isValidQuotedSegment(segment string) bool {
-	if len(segment) < 2 {
-		return false
-	}
-
-	// Must start and end with quotes
-	if segment[0] != '"' || segment[len(segment)-1] != '"' {
-		return false
-	}
-
-	// Content inside quotes must not be empty
-	return segment[1:len(segment)-1] != ""
+	return IsQuotedString(segment) && segment[1:len(segment)-1] != ""
 }
