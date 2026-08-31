@@ -13,7 +13,7 @@ Thank you for your interest in contributing to GoBricks! This document provides 
 
 ### Prerequisites
 
-- Go 1.26 or later
+- Go 1.27 or later
 - golangci-lint for linting
 - Make for build automation
 - Node.js on PATH — `make check` runs markdownlint through `npx`; `make lint-md` runs that step on its own

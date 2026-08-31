@@ -43,7 +43,7 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 - **Production-ready defaults** for the boring-but-essential pieces (server, logging, configuration, tracing).
 - **Composable module system** that keeps HTTP, database, and messaging concerns organized.
 - **Mission-critical integrations** (PostgreSQL, Oracle, RabbitMQ, Flyway) with unified ergonomics.
-- **Modern Go practices** with type safety, performance optimizations, and Go 1.26 features.
+- **Modern Go practices** with type safety, performance optimizations, and Go 1.27 features.
 - **Extensible design** that works with modern Go idioms and the wider ecosystem.
 
 ---
@@ -105,7 +105,7 @@ runs that step on its own.
 
 ### Requirements
 
-- **Go 1.26** required
+- **Go 1.27** required
 - Modern Go toolchain with module support
 - Docker Desktop or Docker Engine (integration tests only)
 

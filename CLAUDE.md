@@ -8,7 +8,7 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 
 **Requirements:**
 
-- Go 1.26 required
+- Go 1.27 required
 - Docker Desktop or Docker Engine (integration tests only)
 
 ## Workflow Rules
@@ -282,7 +282,7 @@ For the testing utilities (TestDB fluent expectations, TenantDBMap, MockCache co
 
 - **Unified CI (`ci-v2.yml`):** Single workflow with intelligent path-based job execution via `dorny/paths-filter`.
 - Framework jobs run on Go and build-file changes (the `framework` filter's `**/*.go` intentionally also matches `tools/**/*.go`, so tool changes re-run the framework matrix); the `tools/migration` CLI additionally has its own path-gated jobs.
-- **Test Matrix:** Ubuntu/Windows × Go 1.26.
+- **Test Matrix:** Ubuntu/Windows × Go 1.27.
 - **Coverage:** Merged unit + integration coverage → SonarCloud.
 
 For Windows-specific test patterns, CI workflow internals, and operational issues, see [wiki/troubleshooting.md](wiki/troubleshooting.md).
