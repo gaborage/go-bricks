@@ -126,10 +126,10 @@ func TestPromotionClosesTheGateAndReturns(t *testing.T) {
 	cancel()
 }
 
-// TestAGatedPartitionDeliversNothing is the other half of the rule: while the
-// gate is closed nothing runs and nothing commits, so the broker redelivers once
-// the reload lands.
-func TestAGatedPartitionDeliversNothing(t *testing.T) {
+// TestAGatedPartitionWaitsRatherThanSkipping pins the rule a stream forces: a
+// gated delivery is not skipped, it WAITS. Skipping would lose it — the stream
+// never redelivers, so a later success would commit an offset past it.
+func TestAGatedPartitionWaitsRatherThanSkipping(t *testing.T) {
 	handled := 0
 	runner := newHoldRunner(t, func(context.Context, *Message) error {
 		handled++
@@ -138,10 +138,59 @@ func TestAGatedPartitionDeliversNothing(t *testing.T) {
 	runner.held.closeGate()
 	storer := &fakeStorer{}
 
-	runner.deliver(testStream, 41, stampedMessage("tenant-a"), storer)
+	delivered := make(chan struct{})
+	go func() {
+		runner.deliver(testStream, 41, stampedMessage("tenant-a"), storer)
+		close(delivered)
+	}()
 
-	assert.Zero(t, handled, "a gated partition runs no handler")
-	assert.Empty(t, storer.offsets(), "and commits nothing, so the message comes back")
+	select {
+	case <-delivered:
+		t.Fatal("a gated delivery must not return: skipping it loses the message")
+	case <-time.After(50 * time.Millisecond):
+	}
+	assert.Zero(t, handled, "and it runs no handler while it waits")
+
+	// The reload lands, and the delivery this partition was holding goes through.
+	require.True(t, runner.held.replace(runner.held.generationAt(), runner.held.epochAt(), nil))
+
+	select {
+	case <-delivered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("an opened gate must release the waiting delivery")
+	}
+	assert.Equal(t, 1, handled, "the message is handled once the gate opens")
+	assert.Equal(t, []int64{41}, storer.offsets(), "and committed in its own order")
+}
+
+// TestAGatedPartitionStopsWaitingWhenTheConsumerDoes is the other end: a stopping
+// consumer releases the wait, and commits nothing — a restart resumes from the
+// last stored offset, at or before this message.
+func TestAGatedPartitionStopsWaitingWhenTheConsumerDoes(t *testing.T) {
+	handled := 0
+	runner := newHoldRunner(t, func(context.Context, *Message) error {
+		handled++
+		return nil
+	}, &fakeHoldLedger{}, newOffsetTracker(1, time.Hour, newFakeClock().Now))
+	ctx, cancel := context.WithCancel(context.Background())
+	runner.baseCtx = ctx
+	runner.held.closeGate()
+	storer := &fakeStorer{}
+
+	delivered := make(chan struct{})
+	go func() {
+		runner.deliver(testStream, 41, stampedMessage("tenant-a"), storer)
+		close(delivered)
+	}()
+	cancel()
+
+	select {
+	case <-delivered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("a stopping consumer must not leave a delivery waiting")
+	}
+	assert.Zero(t, handled)
+	assert.Empty(t, storer.offsets(), "nothing is committed, so the restart replays it")
 }
 
 // TestPromotionOpensTheGateOnceTheLedgerAnswers pins the ordinary path end to

@@ -257,11 +257,19 @@ func (r *consumerRunner) deliver(streamName string, offset int64, message *amqp.
 		Properties: message.ApplicationProperties,
 	}
 
-	// A partition whose gate is closed has not been told what the ledger holds:
-	// delivering now could run a held tenant's later message ahead of the one it
-	// is held behind. Nothing is committed, so the broker redelivers once the
-	// reload lands and the gate opens.
-	if r.hold != nil && r.held.gateClosed() {
+	// A partition whose gate is closed has not been told what the ledger holds, so
+	// it WAITS here rather than skipping: a stream never redelivers, and a later
+	// success would commit an offset past the skipped ones, losing them silently.
+	//
+	// Blocking is this consumer's own dispatch goroutine (the client drains one
+	// chunk channel per consumer), so it stalls this consumer and not the
+	// connection — until the chunk buffer fills, at which point the broker is told
+	// to stop sending, which is what a consumer that cannot safely consume should
+	// say. The reload that opens the gate runs on its own goroutine, so it is not
+	// waiting on this one.
+	if r.hold != nil && !r.held.awaitOpen(r.baseCtx) {
+		// The consumer is stopping. Nothing is committed, and a restart resumes from
+		// the last stored offset, which is at or before this message.
 		return
 	}
 

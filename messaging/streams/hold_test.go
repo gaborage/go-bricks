@@ -36,7 +36,7 @@ func TestHeldSetAnswersTheGate(t *testing.T) {
 		set := newHeldSet()
 		set.add("tenant-a")
 
-		require.True(t, set.replace(set.generationAt(), []string{"tenant-b", "tenant-c"}))
+		require.True(t, set.replace(set.generationAt(), set.epochAt(), []string{"tenant-b", "tenant-c"}))
 
 		assert.False(t, set.has("tenant-a"), "a tenant the ledger no longer holds is released")
 		assert.True(t, set.has("tenant-b"))
@@ -47,7 +47,7 @@ func TestHeldSetAnswersTheGate(t *testing.T) {
 		set := newHeldSet()
 		set.add("tenant-a")
 
-		require.True(t, set.replace(set.generationAt(), nil))
+		require.True(t, set.replace(set.generationAt(), set.epochAt(), nil))
 
 		assert.False(t, set.has("tenant-a"))
 	})
@@ -69,7 +69,11 @@ func TestHeldSetIsSafeUnderConcurrentUse(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			set.replace(set.generationAt(), []string{"tenant-b", "tenant-c"})
+			// Retried, not attempted once: a park landing between the read and the
+			// swap refuses it by design, and this test is about the LOCK holding
+			// under concurrent use, not about winning that race on the first try.
+			for !set.replace(set.generationAt(), set.epochAt(), []string{"tenant-b", "tenant-c"}) {
+			}
 			_ = i
 		}()
 	}
@@ -195,8 +199,29 @@ func TestTwoParksStillRefuseAStaleReplace(t *testing.T) {
 	set.add("acme")
 	set.add("globex")
 
-	assert.False(t, set.replace(snapshot, []string{"initech"}),
+	assert.False(t, set.replace(snapshot, set.epochAt(), []string{"initech"}),
 		"a listing older than two parks is as stale as one older than a single park")
 	assert.True(t, set.has("acme"))
 	assert.True(t, set.has("globex"))
+}
+
+// TestAnEarlierPromotionCannotOpenALaterGate pins the epoch: a reload started for
+// one promotion must not open a gate a LATER promotion closed. The set it read
+// describes a partition this member may no longer own the same way, and the later
+// promotion's own reload is the one entitled to speak.
+func TestAnEarlierPromotionCannotOpenALaterGate(t *testing.T) {
+	set := newHeldSet()
+
+	first := set.closeGate()
+	second := set.closeGate()
+	require.NotEqual(t, first, second, "each promotion is its own epoch")
+
+	assert.False(t, set.replace(set.generationAt(), first, []string{"acme"}),
+		"the earlier promotion's reload is refused")
+	assert.True(t, set.gateClosed(), "and the gate stays closed")
+
+	assert.True(t, set.replace(set.generationAt(), second, []string{"acme"}),
+		"the later promotion's own reload opens it")
+	assert.False(t, set.gateClosed())
+	assert.True(t, set.has("acme"))
 }

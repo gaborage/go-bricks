@@ -63,10 +63,17 @@ type heldSet struct {
 	// delivered while it is up: an empty set would let a held tenant's later
 	// message run ahead of the one it is held behind.
 	closed bool
+	// epoch advances on every promotion. A reload carries the epoch it was started
+	// for, so a slow one from an EARLIER promotion cannot open a gate a LATER
+	// promotion closed — the set it read describes a partition this member may no
+	// longer own the same way.
+	epoch uint64
+	// opened broadcasts the gate opening to deliveries waiting on it.
+	opened chan struct{}
 }
 
 func newHeldSet() *heldSet {
-	return &heldSet{tenants: map[string]struct{}{}}
+	return &heldSet{tenants: map[string]struct{}{}, opened: make(chan struct{})}
 }
 
 // has reports whether this tenant is held. It is the gate every delivery passes.
@@ -84,13 +91,38 @@ func (s *heldSet) gateClosed() bool {
 	return s.closed
 }
 
-// closeGate stops deliveries until a reload lands. Called on promotion, where the
-// set this member inherited may be missing tenants another owner parked while it
-// stood by.
-func (s *heldSet) closeGate() {
+// closeGate stops deliveries until a reload lands, and returns the epoch that
+// reload must carry back. Called on promotion, where the set this member
+// inherited may be missing tenants another owner parked while it stood by.
+func (s *heldSet) closeGate() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.closed = true
+
+	if !s.closed {
+		s.closed = true
+		s.opened = make(chan struct{})
+	}
+	s.epoch++
+	return s.epoch
+}
+
+// awaitOpen blocks until the gate opens or the consumer stops, reporting whether
+// the partition may now deliver. It returns immediately on an open gate.
+func (s *heldSet) awaitOpen(ctx context.Context) bool {
+	s.mu.RLock()
+	closed, opened := s.closed, s.opened
+	s.mu.RUnlock()
+
+	if !closed {
+		return true
+	}
+
+	select {
+	case <-opened:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // add holds one tenant, which is what a park does to the partition that owns it,
@@ -113,7 +145,7 @@ func (s *heldSet) generationAt() uint64 {
 // It REFUSES a listing read before a park landed — reporting false so the caller
 // reads again — because applying it would release a tenant the ledger has not
 // been asked about yet, and one delivery would run ahead of its replay.
-func (s *heldSet) replace(generation uint64, tenants []string) bool {
+func (s *heldSet) replace(generation, epoch uint64, tenants []string) bool {
 	next := make(map[string]struct{}, len(tenants))
 	for _, tenant := range tenants {
 		next[tenant] = struct{}{}
@@ -121,12 +153,24 @@ func (s *heldSet) replace(generation uint64, tenants []string) bool {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.generation != generation {
+	if s.generation != generation || s.epoch != epoch {
 		return false
 	}
+
 	s.tenants = next
-	s.closed = false
+	if s.closed {
+		s.closed = false
+		close(s.opened)
+	}
 	return true
+}
+
+// epochAt is the promotion epoch a caller must pass back to open the gate it
+// closed.
+func (s *heldSet) epochAt() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.epoch
 }
 
 // holdBackoffDefault and holdBackoffMax bound the wait between failed ledger
@@ -296,6 +340,14 @@ func (m *Manager) requireHoldLedger(decls *Declarations) error {
 // during the read means the ledger answered before that tenant was in it, so the
 // listing would release a tenant that is in fact held; the read simply runs again.
 func (m *Manager) loadHeld(ctx context.Context, runner *consumerRunner) error {
+	return m.loadHeldForEpoch(ctx, runner, runner.held.epochAt())
+}
+
+// loadHeldForEpoch is loadHeld for one promotion. A reload started by an earlier
+// promotion carries that promotion's epoch, so it cannot open a gate a later one
+// closed: the listing it read describes a partition this member may no longer own
+// the same way, and the later promotion's own reload is the one that speaks.
+func (m *Manager) loadHeldForEpoch(ctx context.Context, runner *consumerRunner, epoch uint64) error {
 	if runner.hold == nil {
 		return nil
 	}
@@ -308,7 +360,11 @@ func (m *Manager) loadHeld(ctx context.Context, runner *consumerRunner) error {
 			return fmt.Errorf("failed to load held tenants for consumer %q: %w", runner.name, err)
 		}
 
-		if runner.held.replace(generation, tenants) {
+		if runner.held.replace(generation, epoch, tenants) {
+			return nil
+		}
+		if runner.held.epochAt() != epoch {
+			// A later promotion owns the gate now; its reload will open it.
 			return nil
 		}
 		if ctx.Err() != nil {
@@ -330,19 +386,19 @@ func (m *Manager) reloadHeldOnPromotion(runner *consumerRunner) {
 		return
 	}
 
-	runner.held.closeGate()
-	go m.reloadUntilLoaded(runner)
+	epoch := runner.held.closeGate()
+	go m.reloadUntilLoaded(runner, epoch)
 }
 
 // reloadUntilLoaded retries the ledger read until it lands or the consumer stops.
 // It runs off the frame reader, so a slow ledger costs this partition's throughput
 // and nothing else.
-func (m *Manager) reloadUntilLoaded(runner *consumerRunner) {
+func (m *Manager) reloadUntilLoaded(runner *consumerRunner, epoch uint64) {
 	backoff := newBackoffSeries(runner.holdBackoff, holdBackoffMax)
 	logged := false
 
 	for {
-		if err := m.loadHeld(runner.baseCtx, runner); err == nil {
+		if err := m.loadHeldForEpoch(runner.baseCtx, runner, epoch); err == nil {
 			return
 		} else if !logged {
 			// Once: a promotion storm during a ledger outage should not write a line
