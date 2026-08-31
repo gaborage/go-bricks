@@ -378,7 +378,9 @@ func (d *HoldDrain) backoffFor(attempts int) time.Duration {
 	return min(wait, d.cfg.MaxBackoff)
 }
 
-// heldMessageOf renders a ledger row as the lane's held message.
+// heldMessageOf converts a ledger row into a held message, preserving its payload,
+// properties, tenant, stream, offset, and hold timestamp. It returns an error when
+// the stored properties are not valid JSON.
 func heldMessageOf(row *HoldRow) (*streams.HeldMessage, error) {
 	// Park stored the producer's properties as JSON. They carry the message's
 	// application properties — the trace carrier among them — so a replay without
@@ -407,14 +409,15 @@ const holdMeterName = "go-bricks/inbox"
 // holdOwnerID identifies this replica in a lease: the host it runs on, its
 // process, and enough randomness that two processes on one host, or a restart
 // reusing a pid, never share an owner. A lease is only safe if its owner is
-// unique to the drainer holding it.
+// holdOwnerID returns an identifier for the replica holding a tenant lease.
 func holdOwnerID() string {
 	return ownerIDFrom(os.Hostname, rand.Read)
 }
 
 // ownerIDFrom is holdOwnerID with its two sources named, because both fallbacks
 // below are unreachable through the real ones: a host that cannot name itself
-// and a crypto/rand that cannot read do not happen on demand.
+// ownerIDFrom creates a replica owner identifier from the host name, process ID, and random bytes.
+// It uses fallback values when obtaining the host name or random bytes fails.
 func ownerIDFrom(hostname func() (string, error), readRandom func([]byte) (int, error)) string {
 	host, err := hostname()
 	if err != nil {
