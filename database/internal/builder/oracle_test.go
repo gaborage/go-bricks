@@ -22,14 +22,14 @@ const (
 func TestQuoteOracleColumnHandlesReservedWords(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.Oracle)
 
-	assert.Equal(t, `"number"`, qb.quoteOracleColumn("number"), "reserved word should be quoted")
-	assert.Equal(t, "name", qb.quoteOracleColumn("name"), "non-reserved word should remain unchanged")
+	assert.Equal(t, `"number"`, qb.renderer.QuoteColumn("number"), "reserved word should be quoted")
+	assert.Equal(t, "name", qb.renderer.QuoteColumn("name"), "non-reserved word should remain unchanged")
 }
 
 func TestQuoteOracleColumnsForDMLPreservesCase(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.Oracle)
 
-	cols := qb.quoteOracleColumnsForDML("id", "number")
+	cols := qb.quoteColumnsForDML("id", "number")
 	if cols[0] != "id" || cols[1] != `"number"` {
 		t.Fatalf("unexpected quoting result: %v", cols)
 	}
@@ -118,14 +118,14 @@ func TestBuildUpsertNonOracleFallsBack(t *testing.T) {
 	require.NotEmpty(t, args)
 }
 
-// TestQuoteOracleColumnDelegatesToSqllex is a smoke test only: the exhaustive
+// TestRendererQuoteColumnDelegatesToSqllex is a smoke test only: the exhaustive
 // case-sensitivity / reserved-word / quoted-form / dotted-name matrix lives in
-// sqllex.TestQuoteOracleIdentifierCaseSensitivity now that quoteOracleColumn is
-// a one-line delegate to sqllex.QuoteOracleIdentifier. This keeps just enough
-// cases here to prove the delegation wiring itself, plus the PostgreSQL
-// passthrough branch (vendor != Oracle), which the moved matrix never
-// exercised (it only ever built an Oracle QueryBuilder).
-func TestQuoteOracleColumnDelegatesToSqllex(t *testing.T) {
+// sqllex.TestQuoteOracleIdentifierCaseSensitivity now that oracleRenderer's
+// QuoteColumn is a one-line delegate to sqllex.QuoteOracleIdentifier. This keeps
+// just enough cases here to prove the delegation wiring itself, plus the
+// PostgreSQL branch — which now pins the SEAM rather than a vendor guard: a
+// PostgreSQL builder holds postgresRenderer, whose QuoteColumn is the identity.
+func TestRendererQuoteColumnDelegatesToSqllex(t *testing.T) {
 	oracle := NewQueryBuilder(dbtypes.Oracle)
 	postgres := NewQueryBuilder(dbtypes.PostgreSQL)
 
@@ -163,7 +163,7 @@ func TestQuoteOracleColumnDelegatesToSqllex(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := tt.qb.quoteOracleColumn(tt.input)
+			result := tt.qb.renderer.QuoteColumn(tt.input)
 			if result != tt.expected {
 				t.Fatalf("input: %s, expected: %s, got: %s", tt.input, tt.expected, result)
 			}
@@ -512,7 +512,7 @@ func TestQuoteOracleIdentifierForClause(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := qb.quoteOracleIdentifierForClause(tt.input)
+			result := qb.renderer.QuoteIdentifierForClause(tt.input)
 			assert.Equal(t, tt.expected, result, assertFormat, tt.input)
 		})
 	}

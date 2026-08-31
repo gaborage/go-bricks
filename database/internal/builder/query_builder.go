@@ -30,6 +30,10 @@ const (
 type QueryBuilder struct {
 	vendor           dbtypes.Vendor
 	statementBuilder squirrel.StatementBuilderType
+	// renderer is the vendor's identifier rendering adapter, resolved once here
+	// so the quoting funnels below dispatch by method call rather than by
+	// re-testing the vendor at each clause. See renderer.go.
+	renderer vendorRenderer
 }
 
 // SelectQueryBuilder provides a type-safe interface for building SELECT queries
@@ -117,6 +121,7 @@ func NewQueryBuilder(vendor dbtypes.Vendor) *QueryBuilder {
 	return &QueryBuilder{
 		vendor:           vendor,
 		statementBuilder: sb,
+		renderer:         rendererFor(vendor),
 	}
 }
 
@@ -726,33 +731,32 @@ func (qb *QueryBuilder) EscapeIdentifier(identifier string) string {
 	return strings.Join(parts, ".")
 }
 
-// quoteColumnsForSelect handles vendor-specific column name quoting for SELECT statements
+// quoteColumnsForSelect renders a SELECT column list through the vendor renderer.
+//
+// The wildcard skip lives here, not in an adapter: `*` and `t.*` are not
+// identifiers on any vendor, so which columns are RENDERABLE is the builder's
+// question, and only how each one is spelled is the renderer's.
 func (qb *QueryBuilder) quoteColumnsForSelect(columns ...string) []string {
-	switch qb.vendor {
-	case dbtypes.Oracle:
-		quoted := make([]string, 0, len(columns))
-		for _, col := range columns {
-			if col == "*" || strings.HasSuffix(col, ".*") {
-				// Do not quote wildcard selectors
-				quoted = append(quoted, col)
-				continue
-			}
-			quoted = append(quoted, qb.quoteOracleColumn(col))
+	quoted := make([]string, 0, len(columns))
+	for _, col := range columns {
+		if col == "*" || strings.HasSuffix(col, ".*") {
+			quoted = append(quoted, col)
+			continue
 		}
-		return quoted
-	default:
-		return columns
+		quoted = append(quoted, qb.renderer.QuoteColumn(col))
 	}
+	return quoted
 }
 
-// quoteColumnsForDML handles vendor-specific column name quoting for DML statements
+// quoteColumnsForDML renders a DML column list through the vendor renderer.
+// A list is rendered element-wise on every vendor, so the loop is the builder's
+// and the seam only answers for one column at a time.
 func (qb *QueryBuilder) quoteColumnsForDML(columns ...string) []string {
-	switch qb.vendor {
-	case dbtypes.Oracle:
-		return qb.quoteOracleColumnsForDML(columns...)
-	default:
-		return columns
+	quoted := make([]string, len(columns))
+	for i, col := range columns {
+		quoted[i] = qb.renderer.QuoteColumn(col)
 	}
+	return quoted
 }
 
 // quoteColumnForQuery validates a column identifier and renders it for the vendor.
@@ -764,40 +768,19 @@ func (qb *QueryBuilder) quoteColumnsForDML(columns ...string) []string {
 // interpolate a column without handling the failure, where a per-door guard is
 // something a reviewer has to notice is missing (ADR-082).
 //
-// The check matters most on PostgreSQL, where the default branch renders the
-// column verbatim, so an unvalidated argument was interpolated as written.
+// The check matters most on PostgreSQL, where the renderer returns the column
+// verbatim, so an unvalidated argument was interpolated as written.
 func (qb *QueryBuilder) quoteColumnForQuery(column string) (string, error) {
 	trimmed, err := validateIdentifier("column", column)
 	if err != nil {
 		return "", err
 	}
-	switch qb.vendor {
-	case dbtypes.Oracle:
-		return qb.quoteOracleColumn(trimmed), nil
-	default:
-		return trimmed, nil
-	}
+	return qb.renderer.QuoteColumn(trimmed), nil
 }
 
-// quoteTableForQuery handles vendor-specific table name quoting for FROM clauses
+// quoteTableForQuery renders a FROM/JOIN table argument through the vendor renderer.
 func (qb *QueryBuilder) quoteTableForQuery(table string) string {
-	switch qb.vendor {
-	case dbtypes.Oracle:
-		// An inline alias is part of the table argument's grammar ("users u"), so
-		// quote only the identifier and keep the alias: quoting the whole string
-		// produced `FROM "users u"`, one table nobody named (#1156).
-		trimmed := strings.TrimSpace(table)
-		if m := validTableNamePattern.FindStringSubmatch(trimmed); m != nil {
-			return qb.quoteOracleColumn(m[validTableNamePattern.SubexpIndex("ident")]) +
-				m[validTableNamePattern.SubexpIndex("alias")]
-		}
-		// Not table-shaped. Unreachable from every door — each validates against
-		// this same pattern first — and total for any future caller, the same
-		// contract quoteOracleIdentifierForClause's fallback keeps.
-		return qb.quoteOracleColumn(trimmed)
-	default:
-		return table
-	}
+	return qb.renderer.QuoteTable(table)
 }
 
 // validateTableReference validates the identifier(s) carried by a FROM/JOIN
@@ -864,15 +847,11 @@ func (qb *QueryBuilder) quoteTableReference(ref normalizedTableRef) string {
 	return quotedName
 }
 
-// quoteIdentifierForClause handles vendor-specific identifier quoting for ORDER BY and GROUP BY clauses
-// It parses expressions to identify column references vs SQL functions and direction keywords
+// quoteIdentifierForClause renders an ORDER BY / GROUP BY item through the
+// vendor renderer, which keeps the direction and NULLS keywords outside the
+// quoted identifier.
 func (qb *QueryBuilder) quoteIdentifierForClause(identifier string) string {
-	switch qb.vendor {
-	case dbtypes.Oracle:
-		return qb.quoteOracleIdentifierForClause(identifier)
-	default:
-		return identifier
-	}
+	return qb.renderer.QuoteIdentifierForClause(identifier)
 }
 
 // Eq creates an equality condition with proper column quoting for the database vendor
