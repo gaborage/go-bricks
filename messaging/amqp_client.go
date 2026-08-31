@@ -988,13 +988,10 @@ func (c *AMQPClientImpl) handleReconnect() {
 // after a broker outage instead of all clients reconnecting at exactly t=cap.
 func computeBackoff(base, maxDelay time.Duration, attempt int) time.Duration {
 	raw := reconnectBackoff(base, maxDelay, attempt)
-	if raw <= 0 {
-		return defaultReconnectDelay
-	}
 	// Full jitter is a load-distribution mechanism, not a security primitive —
 	// math/rand/v2 is the right tool here. crypto/rand would add system-call
 	// overhead per reconnect attempt without changing the herd-spreading behavior.
-	return time.Duration(rand.Int64N(int64(raw))) //#nosec G404 -- jitter randomness, not cryptographic
+	return time.Duration(rand.Int64N(int64(max(raw, 1)))) //#nosec G404 -- jitter randomness, not cryptographic
 }
 
 // reconnectBackoff is the raw (pre-jitter) reconnect/resubscribe series.

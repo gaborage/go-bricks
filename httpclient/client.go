@@ -1065,11 +1065,9 @@ func (c *client) rawBackoff(attempt int) time.Duration {
 	if base <= 0 {
 		base = defaultBackoffBase
 	}
-	// Cap attempt to avoid overflow when computing multiplier
-	if attempt > maxBackoffAttempt {
-		attempt = maxBackoffAttempt
-	}
-	return backoff.Saturating(base, maxBackoffDuration, attempt)
+	// Clamp the attempt so a tiny RetryDelay cannot grow past the pre-helper
+	// exponent ceiling. Written as min so `>` vs `>=` is not an equivalent mutant.
+	return backoff.Saturating(base, maxBackoffDuration, min(attempt, maxBackoffAttempt))
 }
 
 // backoffWithContext waits for the backoff delay or returns early if the context is done.
