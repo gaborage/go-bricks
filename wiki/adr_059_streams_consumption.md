@@ -6,8 +6,12 @@
 
 > **Extended by [ADR-089](adr_089_per_tenant_hold_on_the_streams_lane.md) (2026-08-29):**
 > "parking failed messages", named as future work below, now exists as the
-> per-tenant hold. The skip described below is the behavior of a consumer that
-> does not declare `Hold`.
+> per-tenant hold, and the decision below is scoped by it. Everything stated
+> here — the offset advancing only on a nil error, a failed message leaving the
+> offset uncommitted, and the skip that follows — is the behavior of a consumer
+> that does NOT declare `Hold`. A holding consumer parks the failed message in
+> the ledger and commits the offset AFTER that write, so its failures neither
+> skip nor replay on restart; see ADR-089.
 >
 > **Amended (2026-08-13):** super streams, listed below as the third thing the
 > AMQP lane cannot do, are now implemented in this lane. The amendment settles
@@ -83,8 +87,7 @@ stores a **higher** offset; until that commit lands, a restart resumes from the
 last stored offset and replays the failed message along with everything after
 it. This is inherent to the medium, and stating it plainly is better than a shim
 that pretends otherwise. Parking failed messages (the dead-letter analog) is
-the per-tenant hold, added by ADR-089; a consumer that does not declare `Hold`
-keeps the skip described here.
+named as future work.
 
 ### Handlers run inline, sequentially — no worker pool
 

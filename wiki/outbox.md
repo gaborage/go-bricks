@@ -496,9 +496,14 @@ DELETE FROM gobricks_inbox_hold_tenant WHERE consumer = :consumer AND tenant_id 
 **Quiesce the drain first.** The statements above are fenced, so a purge cannot
 corrupt a drainer's bookkeeping — but a fence does not reach into a handler that
 is already running, and deleting a row mid-replay leaves that replay's side
-effects with nothing recording that they happened. Stop the consumer (or the
-replicas running its drain), wait out one `inbox.hold.leaseduration` so any
-in-flight pass has finished or lost its lease, and only then purge.
+effects with nothing recording that they happened. A live consumer is the second
+reason: a park landing between the two statements writes its row after the rows
+were deleted and before the marker is, stranding a row under a marker that is
+about to go — held by nobody, replayed by nobody.
+
+Stop the consumer FIRST, which is what forecloses that park; then stop (or wait
+out) its drain — one `inbox.hold.leaseduration` is enough for an in-flight pass to
+finish or lose its lease — and only then purge.
 
 Run both against the names your `inbox.hold.tablename` configures. Those messages
 are gone: nothing else holds a copy once the offset was committed.

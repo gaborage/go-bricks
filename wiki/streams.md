@@ -151,7 +151,8 @@ remaining commits are skipped and each is logged at WARN naming its stream
 that at-least-once delivery already allows for, which is why it is preferred
 over a shutdown that hangs and takes `/ready` down with it for the whole drain.
 
-**A failed message is skipped, not redelivered — unless the consumer holds.**
+**Without `Hold`, a failed message is not redelivered once a later success commits
+past it.**
 Streams have no nack. On a consumer WITHOUT `Hold`, a handler error (or a
 recovered panic) is logged and counted, the offset is not committed, and the next
 message is processed. With `Hold: true` the message is parked instead, the offset
@@ -160,7 +161,7 @@ below. The skip only sticks once a later success commits a *higher* offset;
 restart before that and the failed message comes back, along with everything
 after the last stored offset. Anything that must not be lost belongs in the
 handler's own durable store, or in the hold below
-([ADR-059](adr_059_streams_consumption.md)).
+([ADR-089](adr_089_per_tenant_hold_on_the_streams_lane.md)).
 
 **Retry, then hold.** A consumer can bound in-place retries with `Retry:
 &streams.RetryOptions{MaxAttempts, InitialBackoff, MaxBackoff}` — `MaxAttempts`

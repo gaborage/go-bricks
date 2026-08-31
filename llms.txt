@@ -3019,9 +3019,12 @@ decls.DeclareSuperStreamConsumer(&streams.SuperStreamConsumerOptions{
 })
 ```
 
-A failed delivery is skipped by default (the offset is simply not committed). To retry
-in place and then **hold the tenant** instead of skipping — its later messages park in
-order until the backlog drains — set `Retry` and `Hold`. `Hold` needs an `inbox` hold
+A failed delivery is not retried in place by default: the handler runs once, the offset
+is not committed, and the lane moves on. "Skipped" only becomes true once a LATER
+success commits a higher offset — until then the delivery is still replayable, and a
+restart resumes from the last stored offset and redelivers it. To retry in place and then
+**hold the tenant** instead — its later messages park in order until the backlog drains —
+set `Retry` and `Hold`. `Hold` needs an `inbox` hold
 ledger with `inbox.tenancy: shared`, and a consumer declaring it without one fails
 startup. See [wiki/streams.md](wiki/streams.md) and ADR-089:
 
