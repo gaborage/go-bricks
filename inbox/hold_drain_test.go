@@ -38,7 +38,9 @@ type fakeHoldReplayer struct {
 	consumers  []string
 	replayed   []int64
 	properties []map[string]any
-	reloaded   map[string][]string
+	tenants    []string
+	reloaded   []string
+	reloadErr  error
 	failAt     map[int64]error
 	panicAt    int64
 	panicked   bool
@@ -53,14 +55,16 @@ func (f *fakeHoldReplayer) Replay(_ context.Context, _ string, msg *streams.Held
 	}
 	f.replayed = append(f.replayed, msg.Offset)
 	f.properties = append(f.properties, msg.Properties)
+	f.tenants = append(f.tenants, msg.TenantID)
 	return f.failAt[msg.Offset]
 }
 
-func (f *fakeHoldReplayer) ReloadHeld(consumer string, tenants []string) {
-	if f.reloaded == nil {
-		f.reloaded = map[string][]string{}
-	}
-	f.reloaded[consumer] = tenants
+// ReloadHeld records that the drain asked for a reload. The listing itself is no
+// longer the drain's to pass: the generation guarding the held set has to be read
+// before the ledger is, so the manager owns that read.
+func (f *fakeHoldReplayer) ReloadHeld(_ context.Context, consumer string) error {
+	f.reloaded = append(f.reloaded, consumer)
+	return f.reloadErr
 }
 
 // newHoldDrain builds a drain over one TestDB and one replayer, with the
@@ -91,6 +95,25 @@ func newHoldDrain(db dbtypes.Interface, replayer streams.HoldReplayer) *HoldDrai
 type recordingHoldStore struct {
 	HoldStore
 	leasesYielded int
+	released      int
+	// rowsByTenant answers NextRows per tenant. A TestDB expectation is matched by
+	// substring, so every tenant's read matches the same registration and cannot
+	// carry a tenant's own rows; this can.
+	rowsByTenant map[string][]HoldRow
+}
+
+func (r *recordingHoldStore) NextRows(ctx context.Context, db dbtypes.Interface,
+	consumer, tenant string, limit int,
+) ([]HoldRow, error) {
+	if r.rowsByTenant == nil {
+		return r.HoldStore.NextRows(ctx, db, consumer, tenant, limit)
+	}
+	return r.rowsByTenant[tenant], nil
+}
+
+func (r *recordingHoldStore) Release(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string) (bool, error) {
+	r.released++
+	return r.HoldStore.Release(ctx, db, consumer, tenant, owner)
 }
 
 func (r *recordingHoldStore) ReleaseLease(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string) error {
@@ -153,8 +176,8 @@ func TestDrainReplaysInOrderAndReleases(t *testing.T) {
 	require.NoError(t, drain.Execute(drainCtx(db)))
 
 	assert.Equal(t, []int64{3, 4, 5}, replayer.replayed, "oldest offset first")
-	assert.Equal(t, map[string][]string{testHoldConsumer: nil}, replayer.reloaded,
-		"the runners are told the tenant is no longer held")
+	assert.Equal(t, []string{testHoldConsumer}, replayer.reloaded,
+		"the runners are asked to refresh what the ledger still holds")
 }
 
 // TestDrainStopsTheTenantAtTheFirstFailure pins the ordering guarantee: a replay
@@ -175,13 +198,14 @@ func TestDrainStopsTheTenantAtTheFirstFailure(t *testing.T) {
 		consumers: []string{testHoldConsumer},
 		failAt:    map[int64]error{4: errors.New("still failing")},
 	}
+	store := &recordingHoldStore{HoldStore: mustPostgresHoldStore()}
 	drain := newHoldDrain(db, replayer)
+	drain.resolve = func(context.Context) (dbtypes.Interface, HoldStore, error) { return db, store, nil }
 
 	require.NoError(t, drain.Execute(drainCtx(db)), "a deferred tenant is not a failed pass")
 
 	assert.Equal(t, []int64{3, 4}, replayer.replayed, "offset 5 stays parked behind offset 4")
-	assert.Equal(t, map[string][]string{testHoldConsumer: {testHoldTenant}}, replayer.reloaded,
-		"and the tenant is still held")
+	assert.Zero(t, store.released, "and the tenant is not released with rows still behind the failure")
 }
 
 // TestDrainSkipsATenantAnotherReplicaHolds pins the lease: losing it means this
@@ -244,7 +268,6 @@ func TestDrainContinuesAfterATenantPanics(t *testing.T) {
 	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(
 		dueTenantRows(time.Now(), testHoldTenant, otherHoldTenant))
 	db.ExpectExec(`UPDATE ` + holdTenantTable).WillReturnRowsAffected(1)
-	db.ExpectQuery(`ORDER BY stream, stream_offset`).WillReturnRows(heldRows(3, 4, 5))
 	db.ExpectExec(`DELETE FROM ` + holdTable).WillReturnRowsAffected(1)
 	db.ExpectExec(`DELETE FROM ` + holdTenantTable).WillReturnRowsAffected(1)
 	db.ExpectQuery(`SELECT tenant_id FROM ` + holdTenantTable).WillReturnRows(
@@ -254,14 +277,23 @@ func TestDrainContinuesAfterATenantPanics(t *testing.T) {
 
 	// The panic hits the first replay, which belongs to the first due tenant.
 	replayer := &fakeHoldReplayer{consumers: []string{testHoldConsumer}, panicAt: 3}
+	store := &recordingHoldStore{
+		HoldStore: mustPostgresHoldStore(),
+		rowsByTenant: map[string][]HoldRow{
+			testHoldTenant:  {{Consumer: testHoldConsumer, Stream: testHoldStream, Offset: 3, TenantID: testHoldTenant}},
+			otherHoldTenant: {{Consumer: testHoldConsumer, Stream: testHoldStream, Offset: 7, TenantID: otherHoldTenant}},
+		},
+	}
 	drain := newHoldDrain(db, replayer)
+	drain.resolve = func(context.Context) (dbtypes.Interface, HoldStore, error) { return db, store, nil }
 
 	err := drain.Execute(drainCtx(db))
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), testHoldTenant, "the panicking tenant is named")
-	assert.Equal(t, []int64{3, 4, 5}, replayer.replayed,
-		"the tenant behind the panic still drained, in order")
+	assert.Equal(t, []int64{7}, replayer.replayed, "the tenant behind the panic still drained")
+	assert.Equal(t, []string{otherHoldTenant}, replayer.tenants,
+		"and it was replayed as ITS own tenant, not the panicking one")
 }
 
 // heldRowsWithProperties is a batch whose rows carry the JSON blob Park writes.

@@ -297,11 +297,9 @@ func (d *HoldDrain) warnIfTooOld(log logger.Logger, consumer string, tenant *Hol
 func (d *HoldDrain) reloadAndSnapshot(ctx context.Context, pass *holdPass,
 	replayer streams.HoldReplayer, consumer string,
 ) error {
-	held, err := pass.store.HeldTenants(ctx, pass.db, consumer)
-	if err != nil {
+	if err := replayer.ReloadHeld(ctx, consumer); err != nil {
 		return err
 	}
-	replayer.ReloadHeld(consumer, held)
 
 	stats, err := pass.store.Stats(ctx, pass.db, consumer)
 	if err != nil {

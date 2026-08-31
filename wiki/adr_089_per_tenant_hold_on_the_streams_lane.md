@@ -50,9 +50,11 @@ Retry defaults apply **only** to a consumer that declares `Hold: true`, which
 then gets `DefaultHoldRetry` (3 attempts, 200ms initial, 2s cap). A consumer that
 does not hold keeps ADR-059's single attempt unless it names a policy itself.
 
-### 2. When the retries are exhausted, the tenant is held
+### 2. When the delivery settles on a failure, the tenant is held
 
-Five steps, in order:
+Any delivery that ends with an error parks — the retries running out, a
+`streams.Permanent(err)` that refused them, or a recovered panic that was never
+eligible for them. Five steps, in order:
 
 1. **Gate.** Before delivering, the runner checks whether the message's tenant is
    in the consumer's held set. A held tenant's message is not delivered — it is
@@ -110,6 +112,11 @@ A parked message stops being the broker's and becomes the ledger's. The hold row
 is keyed on `(consumer, stream, offset)`, so parking the same message twice is
 idempotent — a redelivery after a crash between the write and the commit lands on
 the row that is already there.
+
+Order is preserved per stream: a tenant's rows replay in `(stream, offset)`
+order, which is the order the broker gave them. A tenant whose messages span
+several partitions of a super stream has no cross-partition order to preserve —
+the lane never defined one, and the hold does not invent one.
 
 A held message is **never auto-dropped**. There is no retention on the hold
 ledger and no expiry path: rows leave only through a successful replay, or

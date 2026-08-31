@@ -152,9 +152,11 @@ that at-least-once delivery already allows for, which is why it is preferred
 over a shutdown that hangs and takes `/ready` down with it for the whole drain.
 
 **A failed message is skipped, not redelivered — unless the consumer holds.**
-Streams have no nack: on a handler error (or a recovered panic) the failure is
-logged and counted, the offset is not committed, and the next message is
-processed. The skip only sticks once a later success commits a *higher* offset;
+Streams have no nack. On a consumer WITHOUT `Hold`, a handler error (or a
+recovered panic) is logged and counted, the offset is not committed, and the next
+message is processed. With `Hold: true` the message is parked instead, the offset
+commits after that ledger write, and the tenant's later messages are gated — see
+below. The skip only sticks once a later success commits a *higher* offset;
 restart before that and the failed message comes back, along with everything
 after the last stored offset. Anything that must not be lost belongs in the
 handler's own durable store, or in the hold below
@@ -169,8 +171,10 @@ delivery goroutine. A handler returning `streams.Permanent(err)` ends the
 delivery on that attempt whatever the policy allows; a recovered panic is never
 retried.
 
-With `Hold: true`, an exhausted delivery is not skipped — the **tenant is
-held** ([ADR-089](adr_089_per_tenant_hold_on_the_streams_lane.md)):
+With `Hold: true`, a delivery that settles on a failure is not skipped — the
+**tenant is held**. That covers all three ways a delivery can fail: the retries
+running out, a `streams.Permanent(err)` that refused them, and a recovered
+panic, which is never retried ([ADR-089](adr_089_per_tenant_hold_on_the_streams_lane.md)):
 
 1. **Park.** The message and a tenant marker are written to the `inbox` hold
    ledger in one durable write, and the offset commits only after it succeeds. If

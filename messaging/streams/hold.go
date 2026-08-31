@@ -46,7 +46,11 @@ type HoldLedger interface {
 type HoldReplayer interface {
 	HoldConsumers() []string
 	Replay(ctx context.Context, consumer string, msg *HeldMessage) error
-	ReloadHeld(consumer string, tenants []string)
+	// ReloadHeld refreshes one consumer's held set from the ledger. It takes no
+	// listing: the generation that guards the set has to be read BEFORE the ledger
+	// is, and only this package holds it, so the read belongs on this side of the
+	// port.
+	ReloadHeld(ctx context.Context, consumer string) error
 }
 
 // heldSet is one consumer's view of which tenants are held, plus whether the
@@ -442,18 +446,20 @@ func (m *Manager) HoldConsumers() []string {
 	return names
 }
 
-// ReloadHeld replaces one consumer's held set with what the ledger reports. A
-// consumer this replica does not run is a no-op: the ledger is shared and
-// deployments differ in which consumers they start.
-func (m *Manager) ReloadHeld(consumer string, tenants []string) {
+// ReloadHeld refreshes one consumer's held set from the ledger. A consumer this
+// replica does not run is a no-op: the ledger is shared and deployments differ in
+// which consumers they start.
+//
+// The read happens here rather than in the caller because the generation that
+// makes the replace safe must be taken BEFORE it. A caller that read the ledger
+// first could only hand back a token taken after its own read, which compares
+// equal to itself and erases any park that landed in between.
+func (m *Manager) ReloadHeld(ctx context.Context, consumer string) error {
 	runner := m.runnerFor(consumer)
 	if runner == nil {
-		return
+		return nil
 	}
-	// Generation-checked like every other replace: the drain read this listing from
-	// the same ledger the parks write to, so a park landing after that read wins
-	// and the drain's next pass carries it.
-	runner.held.replace(runner.held.generationAt(), runner.held.epochAt(), tenants)
+	return m.loadHeldForEpoch(ctx, runner, runner.held.epochAt())
 }
 
 // Replay puts a held message back through the lane. It returns the handler's own

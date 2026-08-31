@@ -90,7 +90,7 @@ func TestManagerReplayRefusesAnUnknownConsumer(t *testing.T) {
 // TestManagerReloadHeldSwapsTheGate pins the drain's other direction: what the
 // ledger holds becomes what the partition gates on.
 func TestManagerReloadHeldSwapsTheGate(t *testing.T) {
-	ledger := &fakeHoldLedger{}
+	ledger := &fakeHoldLedger{held: map[string][]string{testConsumerName: {"globex"}}}
 	handled := map[string]int{}
 	m := holdManagerOn(t, ledger, holdDeclsWithHandler(
 		func(ctx context.Context, _ *Message) error {
@@ -101,7 +101,7 @@ func TestManagerReloadHeldSwapsTheGate(t *testing.T) {
 	runner := m.consumers[0].runner
 	runner.held.add("acme")
 
-	m.ReloadHeld(testConsumerName, []string{"globex"})
+	require.NoError(t, m.ReloadHeld(t.Context(), testConsumerName))
 
 	storer := &fakeStorer{}
 	runner.deliver(testStream, 1, stampedMessage("acme"), storer)
@@ -117,7 +117,9 @@ func TestManagerReloadHeldSwapsTheGate(t *testing.T) {
 func TestManagerReloadHeldIgnoresAnUnknownConsumer(t *testing.T) {
 	m := holdManagerOn(t, &fakeHoldLedger{}, holdDeclsWithHandler(noopHandler))
 
-	assert.NotPanics(t, func() { m.ReloadHeld("nope", []string{"acme"}) })
+	assert.NotPanics(t, func() {
+		assert.NoError(t, m.ReloadHeld(t.Context(), "nope"))
+	})
 }
 
 // TestManagerHoldConsumersListsOnlyHoldingOnes pins what the drain iterates: a
@@ -135,4 +137,34 @@ func TestManagerHoldConsumersListsOnlyHoldingOnes(t *testing.T) {
 	m := holdManagerOn(t, &fakeHoldLedger{}, decls)
 
 	assert.Equal(t, []string{testConsumerName}, m.HoldConsumers())
+}
+
+// TestManagerReloadHeldKeepsAParkThatRacesTheRead pins the generation guard on
+// the drain's reload: a park landing while the ledger listing is in flight must
+// survive it. The listing predates that park, so applying it would un-hold a
+// tenant whose message is already parked — and the next message for that tenant
+// would be delivered ahead of it, which is the ordering guarantee gone.
+func TestManagerReloadHeldKeepsAParkThatRacesTheRead(t *testing.T) {
+	ledger := &fakeHoldLedger{held: map[string][]string{testConsumerName: {"globex"}}}
+	m := holdManagerOn(t, ledger, holdDeclsWithHandler(noopHandler))
+	runner := m.consumers[0].runner
+
+	// Read 1 answers the listing the park is NOT in, and the park lands while that
+	// read is in flight. Read 2 — the retry the refused replace forces — is the one
+	// that sees it. A reload that applies read 1 loses the park.
+	reads := 0
+	ledger.duringHeldRead = func() {
+		reads++
+		switch reads {
+		case 1:
+			runner.held.add("acme")
+		case 2:
+			ledger.held[testConsumerName] = []string{"globex", "acme"}
+		}
+	}
+
+	require.NoError(t, m.ReloadHeld(t.Context(), testConsumerName))
+
+	assert.True(t, runner.held.has("acme"), "the park that raced the read is still held")
+	assert.True(t, runner.held.has("globex"), "and what the ledger reported is held too")
 }
