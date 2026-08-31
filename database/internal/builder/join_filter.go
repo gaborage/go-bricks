@@ -249,10 +249,7 @@ func (jff *JoinFilterFactory) Gte(column string, value any) dbtypes.JoinFilter {
 //	jf.In("status", "active")                       // IN with single value (wrapped automatically)
 func (jff *JoinFilterFactory) In(column string, values any) dbtypes.JoinFilter {
 	// Empty IN list - always false
-	return inListPredicate(jff.qb, column, values, "IN", "(1=0)",
-		func(quotedColumn string, normalized any) squirrel.Sqlizer {
-			return squirrel.Eq{quotedColumn: normalized}
-		}, wrapJoinFilter)
+	return inListPredicate(jff.qb, column, values, false, wrapJoinFilter)
 }
 
 // NotIn creates a NOT IN condition (column NOT IN (values...)).
@@ -265,10 +262,7 @@ func (jff *JoinFilterFactory) In(column string, values any) dbtypes.JoinFilter {
 //	jf.NotIn("status", "deleted")                      // NOT IN with single value (wrapped automatically)
 func (jff *JoinFilterFactory) NotIn(column string, values any) dbtypes.JoinFilter {
 	// Empty NOT IN list - always true
-	return inListPredicate(jff.qb, column, values, "NOT IN", "(1=1)",
-		func(quotedColumn string, normalized any) squirrel.Sqlizer {
-			return squirrel.NotEq{quotedColumn: normalized}
-		}, wrapJoinFilter)
+	return inListPredicate(jff.qb, column, values, true, wrapJoinFilter)
 }
 
 // Like creates a LIKE condition.
@@ -292,17 +286,13 @@ func (jff *JoinFilterFactory) Like(column, pattern string) dbtypes.JoinFilter {
 // Null creates an IS NULL condition.
 // Column names are automatically quoted according to database vendor rules.
 func (jff *JoinFilterFactory) Null(column string) dbtypes.JoinFilter {
-	return nullPredicate(jff.qb, column,
-		func(quotedColumn string) squirrel.Sqlizer { return squirrel.Eq{quotedColumn: nil} },
-		wrapJoinFilter)
+	return nullPredicate(jff.qb, column, false, wrapJoinFilter)
 }
 
 // NotNull creates an IS NOT NULL condition.
 // Column names are automatically quoted according to database vendor rules.
 func (jff *JoinFilterFactory) NotNull(column string) dbtypes.JoinFilter {
-	return nullPredicate(jff.qb, column,
-		func(quotedColumn string) squirrel.Sqlizer { return squirrel.NotEq{quotedColumn: nil} },
-		wrapJoinFilter)
+	return nullPredicate(jff.qb, column, true, wrapJoinFilter)
 }
 
 // Between creates a BETWEEN condition (column BETWEEN lowerBound AND upperBound).

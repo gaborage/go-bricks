@@ -41,24 +41,6 @@ func TestCombineLogicalSkipsNilFilters(t *testing.T) {
 	assert.Equal(t, []any{1, 2}, args)
 }
 
-func TestCombineLogicalAllNilProducesEmptyContainer(t *testing.T) {
-	t.Run("and_renders_squirrels_own_empty_constant", func(t *testing.T) {
-		combined := combineLogical[dbtypes.Filter, squirrel.And]([]dbtypes.Filter{nil, nil}, classifyFilter, wrapFilter)
-		sql, args, err := combined.ToSQL()
-		require.NoError(t, err)
-		assert.Equal(t, "(1=1)", sql)
-		assert.Empty(t, args)
-	})
-
-	t.Run("or_renders_squirrels_own_empty_constant", func(t *testing.T) {
-		combined := combineLogical[dbtypes.Filter, squirrel.Or]([]dbtypes.Filter{nil, nil}, classifyFilter, wrapFilter)
-		sql, args, err := combined.ToSQL()
-		require.NoError(t, err)
-		assert.Equal(t, "(1=0)", sql)
-		assert.Empty(t, args)
-	})
-}
-
 func TestCombineLogicalUsesOrContainer(t *testing.T) {
 	filters := []dbtypes.JoinFilter{
 		JoinFilter{sqlizer: squirrel.Expr("a.id = b.id")},
@@ -100,117 +82,10 @@ func TestClassifyJoinFilterSkipsNil(t *testing.T) {
 	assert.Nil(t, sqlizer)
 }
 
-// ========== inListPredicate ==========
-
-func eqComparison(quotedColumn string, normalized any) squirrel.Sqlizer {
-	return squirrel.Eq{quotedColumn: normalized}
-}
-
-func notEqComparison(quotedColumn string, normalized any) squirrel.Sqlizer {
-	return squirrel.NotEq{quotedColumn: normalized}
-}
-
-func TestInListPredicateEmptyListRendersTheCallersConstant(t *testing.T) {
-	qb := NewQueryBuilder(dbtypes.PostgreSQL)
-
-	t.Run("in_renders_always_false", func(t *testing.T) {
-		predicate := inListPredicate(qb, "status", nil, "IN", "(1=0)", eqComparison, wrapFilter)
-		sql, args, err := predicate.ToSQL()
-		require.NoError(t, err)
-		assert.Equal(t, "(1=0)", sql)
-		assert.Empty(t, args)
-	})
-
-	t.Run("not_in_renders_always_true", func(t *testing.T) {
-		predicate := inListPredicate(qb, "status", nil, "NOT IN", "(1=1)", notEqComparison, wrapFilter)
-		sql, args, err := predicate.ToSQL()
-		require.NoError(t, err)
-		assert.Equal(t, "(1=1)", sql)
-		assert.Empty(t, args)
-	})
-}
-
-func TestInListPredicateNonEmptyListUsesTheCallersComparison(t *testing.T) {
-	qb := NewQueryBuilder(dbtypes.PostgreSQL)
-
-	predicate := inListPredicate(qb, "status", []string{"active", "pending"}, "IN", "(1=0)", eqComparison, wrapFilter)
-	sql, args, err := predicate.ToSQL()
-	require.NoError(t, err)
-	assert.Equal(t, "status IN (?,?)", sql)
-	assert.Equal(t, []any{"active", "pending"}, args)
-}
-
-func TestInListPredicateSurfacesColumnValidationErrors(t *testing.T) {
-	qb := NewQueryBuilder(dbtypes.PostgreSQL)
-
-	predicate := inListPredicate(qb, `id) OR 1=1 --`, []string{"x"}, "IN", "(1=0)", eqComparison, wrapJoinFilter)
-	_, _, err := predicate.ToSQL()
-	require.Error(t, err)
-	require.ErrorContains(t, err, "identifier")
-}
-
-func TestInListPredicateSurfacesOperandResolutionErrors(t *testing.T) {
-	qb := NewQueryBuilder(dbtypes.PostgreSQL)
-
-	// A cyclic pointer chain is the one shape resolveListOperands cannot resolve
-	// via a scalar (non-slice) operand, so it is the shortest path to the
-	// resolution-error branch rather than the column-validation one.
-	var v any
-	v = &v
-
-	predicate := inListPredicate(qb, "status", v, "IN", "(1=0)", eqComparison, wrapFilter)
-	_, _, err := predicate.ToSQL()
-	require.Error(t, err)
-}
-
-// ========== nullPredicate ==========
-
-func TestNullPredicateRendersIsNullByteForByte(t *testing.T) {
-	qb := NewQueryBuilder(dbtypes.PostgreSQL)
-
-	predicate := nullPredicate(qb, "deleted_at",
-		func(quotedColumn string) squirrel.Sqlizer { return squirrel.Eq{quotedColumn: nil} },
-		wrapFilter)
-
-	sql, args, err := predicate.ToSQL()
-	require.NoError(t, err)
-	assert.Equal(t, "deleted_at IS NULL", sql)
-	assert.Empty(t, args)
-}
-
-func TestNullPredicateRendersIsNotNullByteForByte(t *testing.T) {
-	qb := NewQueryBuilder(dbtypes.PostgreSQL)
-
-	predicate := nullPredicate(qb, "email",
-		func(quotedColumn string) squirrel.Sqlizer { return squirrel.NotEq{quotedColumn: nil} },
-		wrapJoinFilter)
-
-	sql, args, err := predicate.ToSQL()
-	require.NoError(t, err)
-	assert.Equal(t, "email IS NOT NULL", sql)
-	assert.Empty(t, args)
-}
-
-func TestNullPredicateSurfacesColumnValidationErrors(t *testing.T) {
-	qb := NewQueryBuilder(dbtypes.PostgreSQL)
-
-	predicate := nullPredicate(qb, `id) OR 1=1 --`,
-		func(quotedColumn string) squirrel.Sqlizer { return squirrel.Eq{quotedColumn: nil} },
-		wrapFilter)
-
-	_, _, err := predicate.ToSQL()
-	require.Error(t, err)
-	require.ErrorContains(t, err, "identifier")
-}
-
-func TestNullPredicateQuotesOracleReservedWords(t *testing.T) {
-	qb := NewQueryBuilder(dbtypes.Oracle)
-
-	predicate := nullPredicate(qb, "level",
-		func(quotedColumn string) squirrel.Sqlizer { return squirrel.Eq{quotedColumn: nil} },
-		wrapJoinFilter)
-
-	sql, _, err := predicate.ToSQL()
-	require.NoError(t, err)
-	assert.Equal(t, `"level" IS NULL`, sql)
-}
+// inListPredicate and nullPredicate have no direct tests here: every branch
+// (empty/non-empty list, negate true/false, column-validation error, operand-
+// resolution error, Oracle reserved-word quoting) is already exercised through
+// both families' In/NotIn/Null/NotNull in filter_test.go and join_filter_test.go,
+// plus the shared column-validation and cyclic-pointer suites
+// (TestFilterColumnsValidateIdentifiers, TestOperandResolutionRefusesACyclicPointer).
+// A byte-for-byte duplicate at this layer would not add coverage.

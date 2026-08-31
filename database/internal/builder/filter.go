@@ -156,10 +156,7 @@ func (ff *FilterFactory) Gte(column string, value any) dbtypes.Filter {
 //	f.In("status", "active")                       // IN with single value (wrapped automatically)
 func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 	// Empty slice special case: generate "1=0" to ensure no matches
-	return inListPredicate(ff.qb, column, values, "IN", "(1=0)",
-		func(quotedColumn string, normalized any) squirrel.Sqlizer {
-			return squirrel.Eq{quotedColumn: normalized}
-		}, wrapFilter)
+	return inListPredicate(ff.qb, column, values, false, wrapFilter)
 }
 
 // NotIn creates a NOT IN filter (column NOT IN (values...)).
@@ -172,10 +169,7 @@ func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 //	f.NotIn("status", "deleted")                      // NOT IN with single value (wrapped automatically)
 func (ff *FilterFactory) NotIn(column string, values any) dbtypes.Filter {
 	// Empty NOT IN list - always true
-	return inListPredicate(ff.qb, column, values, "NOT IN", "(1=1)",
-		func(quotedColumn string, normalized any) squirrel.Sqlizer {
-			return squirrel.NotEq{quotedColumn: normalized}
-		}, wrapFilter)
+	return inListPredicate(ff.qb, column, values, true, wrapFilter)
 }
 
 // Like creates a case-insensitive LIKE filter.
@@ -234,17 +228,13 @@ func (ff *FilterFactory) JSONContains(column string, value any) dbtypes.Filter {
 // Null creates an IS NULL filter.
 // Column names are automatically quoted according to database vendor rules.
 func (ff *FilterFactory) Null(column string) dbtypes.Filter {
-	return nullPredicate(ff.qb, column,
-		func(quotedColumn string) squirrel.Sqlizer { return squirrel.Eq{quotedColumn: nil} },
-		wrapFilter)
+	return nullPredicate(ff.qb, column, false, wrapFilter)
 }
 
 // NotNull creates an IS NOT NULL filter.
 // Column names are automatically quoted according to database vendor rules.
 func (ff *FilterFactory) NotNull(column string) dbtypes.Filter {
-	return nullPredicate(ff.qb, column,
-		func(quotedColumn string) squirrel.Sqlizer { return squirrel.NotEq{quotedColumn: nil} },
-		wrapFilter)
+	return nullPredicate(ff.qb, column, true, wrapFilter)
 }
 
 // Between creates a BETWEEN filter (column BETWEEN lowerBound AND upperBound).
