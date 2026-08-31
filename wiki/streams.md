@@ -433,6 +433,18 @@ shutdown `ErrPublisherClosed` is an unknown outcome, not proof of non-delivery â
 the [post-submission case](#what-the-returned-error-means) above, with the same
 rule: retry only where consumers are idempotent.
 
+### The outbox relay as a super-stream producer
+
+A service that needs its super-stream publishes to survive a crash publishes them through the
+transactional outbox instead of calling a publisher directly: list the target in
+`outbox.superstreams`, give the event a `Stream`, and the relay publishes it on this lane with
+the row's tenant stamp as the partition key ([outbox.md](outbox.md#lanes-and-ordering)).
+
+The consequence to know: the outbox declares one publisher per listed super stream, and a
+super stream accepts only ONE publisher per process. So a target the outbox owns cannot also be
+published to directly by another module in the same service â€” that second declaration is
+refused at startup. Publish through the outbox, or do not list the stream.
+
 ## Observability
 
 Each delivery opens a Consumer-kind span named `"<stream> receive"` under the

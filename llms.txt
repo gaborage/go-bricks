@@ -77,6 +77,7 @@ outbox:
   maxretries: 5
   retentionperiod: 72h
   # tenancy: shared   # single control-plane ledger (pool model, dynamic tenant source; v0.54.0) — see wiki/outbox.md
+  # superstreams: [customers]   # publish these over the native streams lane; needs messaging.streams.uri
 observability:
   enabled: true
   service:
@@ -3356,6 +3357,19 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
 
     return tx.Commit(ctx)
 }
+```
+
+### Event Targeting a Super Stream
+
+```go
+// The stream lane. The tenant in ctx becomes the partition key, so a tenant is REQUIRED;
+// Exchange and RoutingKey must be empty, and the name must be in outbox.superstreams.
+_, err = s.outbox.Publish(ctx, tx, &app.OutboxEvent{
+    EventType:   "customer.created",
+    AggregateID: customer.ID,
+    Payload:     customer,
+    Stream:      "customers",
+})
 ```
 
 ### Event with Custom Headers

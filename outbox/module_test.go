@@ -15,6 +15,7 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams"
 	"github.com/gaborage/go-bricks/multitenant"
 )
 
@@ -1147,25 +1148,82 @@ func TestLazyPublisherPassesConfiguredTargets(t *testing.T) {
 	}
 }
 
-// TestModuleInitRefusesConfiguredSuperStreams pins the interim fail-closed guard: until the
-// relay grows its stream leg, every row is dispatched over PublishToExchange, so a
-// stream-lane row would reach the empty exchange, be dropped, and then be marked published.
-// DELETE this test together with the guard when the super-stream leg lands.
-func TestModuleInitRefusesConfiguredSuperStreams(t *testing.T) {
-	m := NewModule()
-	deps := &app.ModuleDeps{
+// --- stream publishers -------------------------------------------------------
+
+func newStreamTargetDeps(t *testing.T, superStreams []string, streamURI string) *app.ModuleDeps {
+	t.Helper()
+	return &app.ModuleDeps{
 		Logger: logger.New("disabled", true),
 		Config: &config.Config{
-			Outbox: config.OutboxConfig{Enabled: true, SuperStreams: []string{"customers"}},
+			Outbox: config.OutboxConfig{Enabled: true, SuperStreams: superStreams},
+			Messaging: config.MessagingConfig{
+				Broker:  config.BrokerConfig{URL: "amqp://localhost"},
+				Streams: config.StreamsConfig{URI: streamURI},
+			},
 		},
 		DB: func(context.Context) (dbtypes.Interface, error) {
-			return dbtesting.NewTestDB("postgresql"), nil
+			return probeReadyDB("postgresql"), nil
 		},
 		Messaging: func(context.Context) (messaging.AMQPClient, error) { return nil, nil },
 	}
+}
 
-	err := m.Init(deps)
+func TestModuleDeclareStreams(t *testing.T) {
+	tests := []struct {
+		name           string
+		superStreams   []string
+		enabled        bool
+		wantPublishers int
+	}{
+		{
+			name:           "declare_streams_declares_one_publisher_per_target",
+			superStreams:   []string{"customers", "payments"},
+			enabled:        true,
+			wantPublishers: 2,
+		},
+		{name: "declare_streams_noop_without_targets", enabled: true},
+		{name: "declare_streams_noop_when_disabled", superStreams: []string{"customers"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModule()
+			m.cfg = config.OutboxConfig{Enabled: tt.enabled, SuperStreams: tt.superStreams}
+			decls := streams.NewDeclarations()
+
+			m.DeclareStreams(decls)
+
+			assert.Equal(t, tt.wantPublishers, decls.Stats().Publishers)
+			assert.Len(t, m.streamPublishers, tt.wantPublishers)
+			for _, name := range tt.superStreams[:tt.wantPublishers] {
+				assert.Contains(t, m.streamPublishers, name)
+			}
+		})
+	}
+}
+
+// TestModuleInitRequiresStreamURIForTargets pins that a stream target without the stream
+// protocol fails at startup: the relay cannot reach a super stream over AMQP, so accepting
+// the configuration would dead-letter every stream-lane row at MaxRetries instead.
+func TestModuleInitRequiresStreamURIForTargets(t *testing.T) {
+	err := NewModule().Init(newStreamTargetDeps(t, []string{"customers"}, ""))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "outbox.superstreams")
-	assert.Contains(t, err.Error(), "next slice")
+	assert.Contains(t, err.Error(), "messaging.streams.uri")
+}
+
+func TestModuleInitAcceptsTargetsWithStreamURI(t *testing.T) {
+	err := NewModule().Init(newStreamTargetDeps(t, []string{"customers"}, "rabbitmq-stream://x:5552"))
+	require.NoError(t, err)
+}
+
+// TestModuleInitAllowsConfiguredSuperStreamsWhenDisabled pins that disabling the outbox is
+// never blocked by its own stream configuration. Setting outbox.enabled=false is what an
+// operator reaches for while mitigating an incident; failing startup then, over a superstreams
+// list the disabled relay will never read, would break the mitigation.
+func TestModuleInitAllowsConfiguredSuperStreamsWhenDisabled(t *testing.T) {
+	deps := newStreamTargetDeps(t, []string{"customers"}, "") // configured, no stream URI
+	deps.Config.Outbox.Enabled = false
+
+	require.NoError(t, NewModule().Init(deps),
+		"a disabled outbox must boot whatever its stream configuration says")
 }
