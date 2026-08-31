@@ -550,7 +550,20 @@ messaging:
 broker NACK, or confirmation timeout — but the loop is **bounded** by
 `reconnect.maxpublishattempts` (default 5). On exhaustion it returns
 `messaging.ErrPublishRetriesExhausted` **wrapping the last cause**, so callers can classify the
-failure:
+failure.
+
+The worst-case wall clock of one call is
+`readytimeout + maxpublishattempts × connectiontimeout` (defaults: **150s warm-client**,
+**155s ceiling**). The confirmation-timeout path applies no extra backoff, so that product is
+the ceiling, not a mixed-mode estimate. A warm client skips the readiness pre-flight (~0), so
+`5 × 30s = 150s`; a cold or mid-reconnect client can also burn the full 5s `readytimeout`.
+
+When the caller's context carries a deadline and a confirmation timeout leaves less
+budget than `connectiontimeout`, the retry loop does not arm another attempt — it returns
+`context.DeadlineExceeded` (same `errors.Is` surface as a mid-wait expiry). A first
+attempt, and a retry after a fast NACK or publish error, still start: a quick ACK can
+finish inside a short deadline (HTTP handlers inherit `server.timeout.middleware`, 5s).
+Callers with no deadline retry exactly as before.
 
 | Cause sentinel | Meaning |
 | --- | --- |

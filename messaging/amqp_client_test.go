@@ -1545,6 +1545,95 @@ func TestPublishToExchangeReturnsExhaustedOnConfirmTimeout(t *testing.T) {
 	if !errors.Is(err, ErrPublishConfirmTimeout) {
 		t.Fatalf("expected wrapped ErrPublishConfirmTimeout cause, got %v", err)
 	}
+	if got := atomic.LoadUint64(&ch.publishAttempts); got != 3 {
+		t.Fatalf("deadline-free confirm-timeout retries: got %d attempts, want 3", got)
+	}
+}
+
+// TestPublishToExchangeSkipsAttemptDeadlineCannotFinish pins issue #1137:
+// after a confirmation wait that leaves less budget than connectionTimeout,
+// the next attempt is not armed. The error is the same surface a mid-wait
+// expiry already returned — context.DeadlineExceeded as the cause.
+func TestPublishToExchangeSkipsAttemptDeadlineCannotFinish(t *testing.T) {
+	ch := &fakeChannel{}
+	c := newClientWithFakeChannel(t, ch)
+	c.connectionTimeout = 80 * time.Millisecond
+	c.maxPublishAttempts = 5
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded, got %v", err)
+	}
+	if !errors.Is(err, ErrPublishConfirmTimeout) {
+		t.Fatalf("expected wrapped confirm-timeout cause, got %v", err)
+	}
+	if got := atomic.LoadUint64(&ch.publishAttempts); got != 1 {
+		t.Fatalf("doomed second attempt must not be armed: got %d attempts, want 1", got)
+	}
+	if elapsed >= 150*time.Millisecond {
+		t.Fatalf("early-stop must not wait out a second confirmation: elapsed %s", elapsed)
+	}
+}
+
+// TestPublishToExchangeShortDeadlineStillAcks pins the HTTP-shaped case:
+// remaining budget is shorter than connectionTimeout, but a fast ACK still
+// finishes. Skipping the first attempt would refuse every publish under
+// server.timeout.middleware (5s) at the 30s default confirmation wait.
+func TestPublishToExchangeShortDeadlineStillAcks(t *testing.T) {
+	ch := &fakeChannel{}
+	c := newClientWithFakeChannel(t, ch)
+	c.connectionTimeout = 5 * time.Second
+
+	sendConfirmsAfterEachAttempt(t, c, ch,
+		amqp.Confirmation{Ack: true, DeliveryTag: 1},
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	if err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")); err != nil {
+		t.Fatalf("short deadline must still publish when the broker ACKs, got %v", err)
+	}
+	if got := atomic.LoadUint64(&ch.publishAttempts); got != 1 {
+		t.Fatalf("expected one armed attempt, got %d", got)
+	}
+}
+
+func TestConfirmationWaitUnreachable(t *testing.T) {
+	t.Parallel()
+
+	past, pastCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Millisecond))
+	t.Cleanup(pastCancel)
+	short, shortCancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	t.Cleanup(shortCancel)
+	long, longCancel := context.WithTimeout(context.Background(), time.Hour)
+	t.Cleanup(longCancel)
+
+	tests := []struct {
+		name string
+		ctx  context.Context
+		wait time.Duration
+		want bool
+	}{
+		{name: "no_deadline", ctx: context.Background(), wait: time.Second, want: false},
+		{name: "non_positive_wait", ctx: short, wait: 0, want: false},
+		{name: "remaining_shorter_than_wait", ctx: short, wait: time.Second, want: true},
+		{name: "remaining_covers_wait", ctx: long, wait: time.Second, want: false},
+		{name: "already_expired", ctx: past, wait: time.Second, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, confirmationWaitUnreachable(tt.ctx, tt.wait))
+		})
+	}
 }
 
 // TestPublishToExchangeUnboundedWhenMaxAttemptsZero guards finding S11: the

@@ -438,12 +438,8 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 	// wrong — for the caller's logging and for direct publishers that branch on the cause.
 	var lastCause error
 	for {
-		select {
-		case <-ctx.Done():
-			return c.publishAbort(ctx, options, publishStart, span, ctx.Err(), lastCause)
-		case <-c.done:
-			return c.publishAbort(ctx, options, publishStart, span, errShutdown, lastCause)
-		default:
+		if err := c.publishAttemptGuard(ctx, options, publishStart, span, lastCause); err != nil {
+			return err
 		}
 
 		publishing := preparePublishing(ctx, options, data)
@@ -715,6 +711,49 @@ func (c *AMQPClientImpl) waitForReady(ctx context.Context) error {
 	default: // readyWaitTimedOut
 		return errNotConnected
 	}
+}
+
+// confirmationWaitUnreachable reports whether ctx's remaining deadline is
+// strictly shorter than one confirmation wait. A context with no deadline
+// never is. A non-positive wait (struct-literal test clients that never set
+// connectionTimeout) never trips the check — there is no confirmation wait
+// to miss.
+func confirmationWaitUnreachable(ctx context.Context, confirmationWait time.Duration) bool {
+	if confirmationWait <= 0 {
+		return false
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return false
+	}
+	return time.Until(deadline) < confirmationWait
+}
+
+// publishAttemptGuard is the top-of-loop check before arming an attempt:
+// already canceled or shut down, or — after a confirmation timeout — a
+// remaining deadline too short to finish another confirmation wait. The
+// latter returns context.DeadlineExceeded as the primary error — the same
+// errors.Is surface as a mid-wait expiry — wrapped with lastCause.
+// Early-stop changes timing, not error identity.
+func (c *AMQPClientImpl) publishAttemptGuard(
+	ctx context.Context, options PublishOptions, startTime time.Time, span trace.Span, lastCause error,
+) error {
+	select {
+	case <-ctx.Done():
+		return c.publishAbort(ctx, options, startTime, span, ctx.Err(), lastCause)
+	case <-c.done:
+		return c.publishAbort(ctx, options, startTime, span, errShutdown, lastCause)
+	default:
+	}
+	// Skip only after a confirmation timeout: that attempt already burned a
+	// full connectionTimeout, so remaining < wait cannot finish another one.
+	// A NACK or publish error returns quickly — the next attempt can still
+	// ACK inside the leftover budget (HTTP handlers inherit
+	// server.timeout.middleware, 5s, below the 30s default).
+	if errors.Is(lastCause, ErrPublishConfirmTimeout) && confirmationWaitUnreachable(ctx, c.connectionTimeout) {
+		return c.publishAbort(ctx, options, startTime, span, context.DeadlineExceeded, lastCause)
+	}
+	return nil
 }
 
 // retryBackoff is the shared tail of every failed-attempt branch. It applies the
