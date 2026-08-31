@@ -100,25 +100,6 @@ func TestRegisterModuleInjectsTheReplayerSource(t *testing.T) {
 	assert.Nil(t, module.replayer(), "which answers nil until a manager can drain")
 }
 
-// TestHoldWithoutADrainFailsStartup pins the structural guard: a hold ledger
-// nothing can drain is a PERMANENT hold — parked messages would wait for a replay
-// that never runs, and only hand-written SQL would release them. The capability
-// checked is the manager's own, so the guard dissolves when the manager gains the
-// methods rather than needing a wiring step to be remembered.
-func TestHoldWithoutADrainFailsStartup(t *testing.T) {
-	err := assertHoldIsDrainable(&stubHoldLedger{})
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot drain it")
-	assert.Contains(t, err.Error(), "inbox.hold.enabled")
-}
-
-// TestNoHoldNeedsNoDrain is the other half: the guard says nothing at all to a
-// deployment that configured no hold, which is every deployment today.
-func TestNoHoldNeedsNoDrain(t *testing.T) {
-	assert.NoError(t, assertHoldIsDrainable(nil))
-}
-
 // TestARejectedModuleContributesNoLedger pins that registration order matters: a
 // module the registry refuses must not leave its ledger behind, where it would
 // count toward "two modules provide a hold ledger" and refuse a startup that is
@@ -134,4 +115,26 @@ func TestARejectedModuleContributesNoLedger(t *testing.T) {
 	found, ledgerErr := a.holdLedger()
 	require.NoError(t, ledgerErr, "the rejected module's ledger was never counted")
 	assert.NotNil(t, found)
+}
+
+// TestTheReplayerSourceYieldsTheManager pins what replaced the drain guard: the
+// source answers the streams manager once one exists, and nil before that —
+// never a typed-nil *Manager, which would satisfy HoldReplayer while
+// dereferencing nothing.
+func TestTheReplayerSourceYieldsTheManager(t *testing.T) {
+	a := newHoldApp(t)
+	module := &fakeHoldModule{}
+	require.NoError(t, a.RegisterModule(module))
+	require.NotNil(t, module.replayer)
+
+	assert.Nil(t, module.replayer(), "no manager yet, so no replayer")
+
+	a.streamsManager = streams.NewManager(&streams.ManagerOptions{
+		URI:    "rabbitmq-stream://localhost:5552/%2f",
+		Logger: logger.New("error", false),
+	})
+
+	replayer := module.replayer()
+	require.NotNil(t, replayer)
+	assert.Same(t, a.streamsManager, replayer)
 }
