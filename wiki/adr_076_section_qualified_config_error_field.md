@@ -15,6 +15,8 @@
 > connection failures, not config shapes, and are returned unaddressed. No Field, Action, or
 > rendered message changed.
 
+<!-- -->
+
 > **Amended (2026-08-30, the runtime CACHE door):** this ADR moved the SECTION path into
 > `Field` for database sections, and `[C60.19]` extended it to the database RUNTIME door, which
 > resolves a dynamic tenant by resource key. The cache factory beside it was left out and kept
