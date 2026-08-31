@@ -150,87 +150,108 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 			return nil, err
 		}
 
-		if cacheCfg == nil {
-			err = config.QualifyCacheConfigErrorForKey(
-				config.NewValidationError("cache", fmt.Sprintf("configuration is nil for key '%s'", key)), key)
-			log.Error().
-				Str("key", key).
-				Msg("Cache configuration unexpectedly nil")
-			return nil, err
+		if err := validateRedisCacheConfig(cacheCfg, key, log); err != nil {
+			// Wrapped once, at this one call site, for every check validateRedisCacheConfig
+			// raises — the door's own errors cannot forget the wrap the way #1248 did, because
+			// there is only one place left to call it from.
+			return nil, config.QualifyCacheConfigErrorForKey(err, key)
 		}
 
-		if !cacheCfg.Enabled {
-			err = config.QualifyCacheConfigErrorForKey(
-				config.NewNotConfiguredError("cache", "CACHE_ENABLED", "cache.enabled"), key)
-			log.Error().
-				Str("key", key).
-				Msg("Cache configuration has Enabled=false")
-			return nil, err
-		}
+		return connectRedisCache(cacheCfg, key, log)
+	}
+}
 
-		// Validate cache type is "redis" (or empty for backward compatibility)
-		if cacheCfg.Type != "" && cacheCfg.Type != config.CacheTypeRedis {
-			err = config.QualifyCacheConfigErrorForKey(config.NewInvalidFieldError("cache.type",
-				fmt.Sprintf("unsupported type '%s'", cacheCfg.Type),
-				[]string{config.CacheTypeRedis}), key)
-			log.Error().
-				Str("key", key).
-				Str("type", cacheCfg.Type).
-				Msg("Invalid cache type - only 'redis' is supported")
-			return nil, err
-		}
+// validateRedisCacheConfig rejects a cache config this connector cannot build a Redis client
+// from: unexpectedly nil, disabled, an unsupported type, or a missing host. Every error it
+// raises is root-spelled — addressing it to key is the caller's single responsibility, not
+// this function's, which is what makes the wrap impossible to forget for a check added here
+// later.
+func validateRedisCacheConfig(cacheCfg *config.CacheConfig, key string, log logger.Logger) error {
+	if cacheCfg == nil {
+		log.Error().
+			Str("key", key).
+			Msg("Cache configuration unexpectedly nil")
+		return config.NewValidationError("cache", fmt.Sprintf("configuration is nil for key '%s'", key))
+	}
 
-		if cacheCfg.Redis.Host == "" {
-			err = config.QualifyCacheConfigErrorForKey(
-				config.NewMissingFieldError("cache.redis.host", "CACHE_REDIS_HOST", "cache.redis.host"), key)
-			log.Error().
-				Str("key", key).
-				Msg("Redis host is empty - cannot create cache instance")
-			return nil, err
-		}
+	if !cacheCfg.Enabled {
+		log.Error().
+			Str("key", key).
+			Msg("Cache configuration has Enabled=false")
+		return config.NewNotConfiguredError("cache", "CACHE_ENABLED", "cache.enabled")
+	}
 
-		redisCfg := &redis.Config{
-			Host:            cacheCfg.Redis.Host,
-			Port:            cacheCfg.Redis.Port,
-			Password:        cacheCfg.Redis.Password,
-			Database:        cacheCfg.Redis.Database,
-			PoolSize:        cacheCfg.Redis.PoolSize,
-			DialTimeout:     cacheCfg.Redis.DialTimeout,
-			ReadTimeout:     cacheCfg.Redis.ReadTimeout,
-			WriteTimeout:    cacheCfg.Redis.WriteTimeout,
-			MaxRetries:      cacheCfg.Redis.MaxRetries,
-			MinRetryBackoff: cacheCfg.Redis.MinRetryBackoff,
-			MaxRetryBackoff: cacheCfg.Redis.MaxRetryBackoff,
-		}
+	// Validate cache type is "redis" (or empty for backward compatibility)
+	if cacheCfg.Type != "" && cacheCfg.Type != config.CacheTypeRedis {
+		log.Error().
+			Str("key", key).
+			Str("type", cacheCfg.Type).
+			Msg("Invalid cache type - only 'redis' is supported")
+		return config.NewInvalidFieldError("cache.type",
+			fmt.Sprintf("unsupported type '%s'", cacheCfg.Type),
+			[]string{config.CacheTypeRedis})
+	}
 
-		log.Info().
+	if cacheCfg.Redis.Host == "" {
+		log.Error().
+			Str("key", key).
+			Msg("Redis host is empty - cannot create cache instance")
+		return config.NewMissingFieldError("cache.redis.host", "CACHE_REDIS_HOST", "cache.redis.host")
+	}
+
+	return nil
+}
+
+// connectRedisCache builds and dials the Redis client for an already-validated cache config.
+// Its error is a connection failure, not a config-shape one, so it is returned as-is rather
+// than addressed to key — the same as it was before this door's four validation checks were
+// concentrated into validateRedisCacheConfig above.
+//
+// Do not add a config-validation return here: a config-shape check belongs in
+// validateRedisCacheConfig, whose whole return the door qualifies. This function returns
+// connection-dial errors only, which are deliberately not addressed to a config path.
+func connectRedisCache(cacheCfg *config.CacheConfig, key string, log logger.Logger) (cache.Cache, error) {
+	redisCfg := &redis.Config{
+		Host:            cacheCfg.Redis.Host,
+		Port:            cacheCfg.Redis.Port,
+		Password:        cacheCfg.Redis.Password,
+		Database:        cacheCfg.Redis.Database,
+		PoolSize:        cacheCfg.Redis.PoolSize,
+		DialTimeout:     cacheCfg.Redis.DialTimeout,
+		ReadTimeout:     cacheCfg.Redis.ReadTimeout,
+		WriteTimeout:    cacheCfg.Redis.WriteTimeout,
+		MaxRetries:      cacheCfg.Redis.MaxRetries,
+		MinRetryBackoff: cacheCfg.Redis.MinRetryBackoff,
+		MaxRetryBackoff: cacheCfg.Redis.MaxRetryBackoff,
+	}
+
+	log.Info().
+		Str("key", key).
+		Str("host", cacheCfg.Redis.Host).
+		Int("port", cacheCfg.Redis.Port).
+		Int("database", cacheCfg.Redis.Database).
+		Int("pool_size", cacheCfg.Redis.PoolSize).
+		Msg("Creating Redis cache instance")
+
+	// Note: redis.NewClient() does not accept context parameter. It creates its own
+	// 5-second timeout context for the initial PING validation during connection.
+	client, err := redis.NewClient(redisCfg)
+	if err != nil {
+		log.Error().
+			Err(err).
 			Str("key", key).
 			Str("host", cacheCfg.Redis.Host).
 			Int("port", cacheCfg.Redis.Port).
 			Int("database", cacheCfg.Redis.Database).
-			Int("pool_size", cacheCfg.Redis.PoolSize).
-			Msg("Creating Redis cache instance")
-
-		// Note: redis.NewClient() does not accept context parameter. It creates its own
-		// 5-second timeout context for the initial PING validation during connection.
-		client, err := redis.NewClient(redisCfg)
-		if err != nil {
-			log.Error().
-				Err(err).
-				Str("key", key).
-				Str("host", cacheCfg.Redis.Host).
-				Int("port", cacheCfg.Redis.Port).
-				Int("database", cacheCfg.Redis.Database).
-				Msg("Failed to create Redis cache client")
-			return nil, err
-		}
-
-		log.Debug().
-			Str("key", key).
-			Str("host", cacheCfg.Redis.Host).
-			Int("database", cacheCfg.Redis.Database).
-			Msg("Redis cache client created successfully")
-
-		return client, nil
+			Msg("Failed to create Redis cache client")
+		return nil, err
 	}
+
+	log.Debug().
+		Str("key", key).
+		Str("host", cacheCfg.Redis.Host).
+		Int("database", cacheCfg.Redis.Database).
+		Msg("Redis cache client created successfully")
+
+	return client, nil
 }

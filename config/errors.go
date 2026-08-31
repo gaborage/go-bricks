@@ -66,7 +66,7 @@ func (e *ConfigError) Unwrap() error {
 	return nil
 }
 
-// Hint templates for the two halves of a "where do I set this?" Action. dbSection.qualify
+// Hint templates for the two halves of a "where do I set this?" Action. requalifyAction
 // rebuilds a hint from these to recognize one it may re-point, so they must stay the single
 // spelling of that sentence.
 const (
