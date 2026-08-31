@@ -22,7 +22,10 @@ const (
 	tracerName = "go-bricks/messaging"
 
 	// The span attributes this lane adds on top of the four the pipeline sets.
-	attrConsumerName = "messaging.consumer.name"
+	// AttrConsumerName is exported because a hold's gauges carry the same key: an
+	// operator joins the backlog to the consumer's own spans and logs by it, so the
+	// two must never drift apart silently.
+	AttrConsumerName = "messaging.consumer.name"
 	attrStreamOffset = "messaging.stream.offset"
 	messagingSystem  = "rabbitmq"
 
@@ -293,7 +296,7 @@ func (r *consumerRunner) deliver(streamName string, offset int64, message *amqp.
 		Destination:    streamName,
 		BodySize:       len(msg.Data),
 		SpanExtras: []attribute.KeyValue{
-			attribute.String(attrConsumerName, r.name),
+			attribute.String(AttrConsumerName, r.name),
 			attribute.Int64(attrStreamOffset, offset),
 		},
 		Metrics: tracking.StreamConsumeAttributes(streamName),

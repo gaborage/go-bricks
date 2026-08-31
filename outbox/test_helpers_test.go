@@ -13,6 +13,7 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams"
 )
 
 // oversizedShortStr is one byte past what an AMQP shortstr can carry, and
@@ -203,6 +204,34 @@ func (s *fakeStore) CreateTable(_ context.Context, _ dbtypes.Interface) error {
 // tests. The relay only uses IsReady and PublishToExchange; the other
 // AMQPClient methods are present to satisfy the interface and return zero
 // values when invoked.
+// fakeStreamPublisher stands in for a *streams.Publisher so the stream leg is testable
+// without a broker.
+type fakeStreamPublisher struct {
+	mu sync.Mutex
+
+	Err   error
+	Block bool
+
+	Calls   int
+	LastMsg *streams.PublishMessage
+	LastCtx context.Context
+}
+
+func (f *fakeStreamPublisher) Publish(ctx context.Context, msg *streams.PublishMessage) error {
+	f.mu.Lock()
+	f.Calls++
+	f.LastMsg = msg
+	f.LastCtx = ctx
+	block, err := f.Block, f.Err
+	f.mu.Unlock()
+
+	if block {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return err
+}
+
 type fakeAMQP struct {
 	mu sync.Mutex
 
