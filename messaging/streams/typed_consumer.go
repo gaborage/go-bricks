@@ -65,12 +65,32 @@ func (c *typedConsumer[T]) screen(msg *Message) error {
 	return nil
 }
 
-// checkTypedConsumerArgs holds the declaration-time wiring guards shared by
-// every typed declare helper, past the two that need the concrete option type.
-// entry names the caller in every panic message, so a panic always points at the
-// entry point actually used.
-func checkTypedConsumerArgs(handler Handler, fnIsNil bool, entry, optsType string) {
-	if handler != nil {
+// handlerSlot reads the Handler field a typed declaration must find empty. The
+// two option types carry the same slot under the same name, and the method is
+// what lets one guard read either — a generic parameter cannot name a field.
+func (o *ConsumerOptions) handlerSlot() Handler { return o.Handler }
+
+func (o *SuperStreamConsumerOptions) handlerSlot() Handler { return o.Handler }
+
+// checkTypedConsumerArgs holds the declaration-time wiring guards every typed
+// declare helper shares, in the order a caller hits them: no store, no options,
+// an options that already carries a handler, no function. entry names the caller
+// in every panic message, so a panic always points at the entry point actually
+// used.
+//
+// handlerOf is a method expression rather than a field read because opts must be
+// nil-checked before its slot can be touched; passing the accessor keeps that
+// order inside the guard instead of splitting it across the call sites.
+func checkTypedConsumerArgs[O any](decls *Declarations, opts *O, handlerOf func(*O) Handler,
+	fnIsNil bool, entry, optsType string,
+) {
+	if decls == nil {
+		panic("streams: " + entry + " requires a non-nil *Declarations")
+	}
+	if opts == nil {
+		panic(nilDeclarationPanic("consumer", entry, optsType))
+	}
+	if handlerOf(opts) != nil {
 		panic(fmt.Sprintf(
 			"streams: %s builds the handler itself, so %s.Handler must be nil\n"+
 				"  Use DeclareConsumer or DeclareSuperStreamConsumer for a hand-written Handler",
@@ -114,13 +134,7 @@ func DeclareTypedConsumer[T any](decls *Declarations, opts *ConsumerOptions, fn 
 // same poison semantics; msg.Data is the body fn's payload was decoded from.
 func DeclareTypedConsumerWithMeta[T any](decls *Declarations, opts *ConsumerOptions, fn func(context.Context, T, *Message) error) {
 	const entry = "DeclareTypedConsumerWithMeta"
-	if decls == nil {
-		panic("streams: " + entry + " requires a non-nil *Declarations")
-	}
-	if opts == nil {
-		panic(nilDeclarationPanic("consumer", entry, "ConsumerOptions"))
-	}
-	checkTypedConsumerArgs(opts.Handler, fn == nil, entry, "ConsumerOptions")
+	checkTypedConsumerArgs(decls, opts, (*ConsumerOptions).handlerSlot, fn == nil, entry, "ConsumerOptions")
 
 	typed := newTypedConsumer(opts.Name, fn)
 	opts.Handler = typed.handle
@@ -141,13 +155,8 @@ func DeclareTypedSuperStreamConsumer[T any](decls *Declarations, opts *SuperStre
 // arrived on, not the super stream.
 func DeclareTypedSuperStreamConsumerWithMeta[T any](decls *Declarations, opts *SuperStreamConsumerOptions, fn func(context.Context, T, *Message) error) {
 	const entry = "DeclareTypedSuperStreamConsumerWithMeta"
-	if decls == nil {
-		panic("streams: " + entry + " requires a non-nil *Declarations")
-	}
-	if opts == nil {
-		panic(nilDeclarationPanic("consumer", entry, "SuperStreamConsumerOptions"))
-	}
-	checkTypedConsumerArgs(opts.Handler, fn == nil, entry, "SuperStreamConsumerOptions")
+	checkTypedConsumerArgs(decls, opts, (*SuperStreamConsumerOptions).handlerSlot,
+		fn == nil, entry, "SuperStreamConsumerOptions")
 
 	typed := newTypedConsumer(opts.Name, fn)
 	opts.Handler = typed.handle

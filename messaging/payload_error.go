@@ -56,18 +56,6 @@ func newPayloadError(eventType string, body *payloaderr.Body) *PayloadError {
 	}
 }
 
-// newPayloadDecodeError wraps a decode failure. The cause survives for Unwrap
-// only; Error() prints the codec's summary instead.
-func newPayloadDecodeError(eventType string, cause error, summary string) *PayloadError {
-	return newPayloadError(eventType, payloaderr.NewDecode(cause, summary))
-}
-
-// newPayloadValidateError wraps a validation failure, recording the validator's
-// own field namespaces for Fields() to redact on read.
-func newPayloadValidateError(eventType string, cause error) *PayloadError {
-	return newPayloadError(eventType, payloaderr.NewValidate(cause))
-}
-
 // Fields returns the validator field namespaces that failed, e.g.
 // ["CreateReq.Amount"], with every bracketed span redacted. It is empty for
 // decode failures and for a nil receiver.

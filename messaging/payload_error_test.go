@@ -97,7 +97,7 @@ func TestPayloadErrorIsRejectsUnknownStage(t *testing.T) {
 
 func TestPayloadErrorUnwrapReachesCause(t *testing.T) {
 	inner := errors.New("inner cause")
-	err := newPayloadDecodeError(orderEventType, inner, "")
+	err := newPayloadError(orderEventType, payloaderr.NewDecode(inner, ""))
 
 	require.Same(t, inner, err.Unwrap())
 	assert.ErrorIs(t, err, inner)
@@ -110,7 +110,7 @@ func TestPayloadErrorAsRecoversFromWrappedChain(t *testing.T) {
 	// has to survive the shape production actually produces.
 	validateErr := validation.New().Struct(orderPayload{Reference: "abc"})
 	require.Error(t, validateErr)
-	err := newPayloadValidateError(orderEventType, validateErr)
+	err := newPayloadError(orderEventType, payloaderr.NewValidate(validateErr))
 	wrapped := fmt.Errorf("consumer %q: %w", testConsumer, err)
 
 	var target *PayloadError
@@ -123,7 +123,7 @@ func TestPayloadErrorAsRecoversFromWrappedChain(t *testing.T) {
 func TestPayloadErrorMessageComposition(t *testing.T) {
 	cause := validation.New().Struct(orderPayload{Reference: payloadMarker})
 	require.Error(t, cause)
-	validateErr := newPayloadValidateError(orderEventType, cause)
+	validateErr := newPayloadError(orderEventType, payloaderr.NewValidate(cause))
 
 	// The validator's own text is absent by design — the sanitized field list
 	// already carries everything that is safe to render.
@@ -131,7 +131,7 @@ func TestPayloadErrorMessageComposition(t *testing.T) {
 		`messaging: validate failed for event "OrderCreated" (fields: orderPayload.Reference, orderPayload.Amount)`,
 		validateErr.Error())
 
-	decodeErr := newPayloadDecodeError(orderEventType, errors.New("unexpected EOF"), "")
+	decodeErr := newPayloadError(orderEventType, payloaderr.NewDecode(errors.New("unexpected EOF"), ""))
 	assert.Equal(t,
 		`messaging: decode failed for event "OrderCreated": cause withheld (unaudited decoder); use errors.Unwrap for the raw error`,
 		decodeErr.Error())
@@ -144,7 +144,7 @@ func TestPayloadErrorMessageComposition(t *testing.T) {
 func renderDecodeError(cause error, dest any) string {
 	summary := payloaderr.JSONCodec{}.Summarize(cause, saferender.FieldPathIsSchema(reflect.TypeOf(dest)))
 
-	return newPayloadDecodeError(orderEventType, cause, summary).Error()
+	return newPayloadError(orderEventType, payloaderr.NewDecode(cause, summary)).Error()
 }
 
 // Each subtest drives the marker through a REAL producer — encoding/json or the
@@ -260,7 +260,7 @@ func TestPayloadErrorNeverRendersPayloadValues(t *testing.T) {
 			assert.Contains(t, got, payloadMarker, "premise: %s interpolates the map key", name)
 		}
 
-		err := newPayloadValidateError(orderEventType, validateErr)
+		err := newPayloadError(orderEventType, payloaderr.NewValidate(validateErr))
 		require.NotEmpty(t, err.Fields(), "premise: fields were derived")
 		require.Contains(t, err.Error(), "(fields: ", "premise: the field list was rendered")
 
@@ -283,7 +283,7 @@ func TestPayloadErrorNeverRendersPayloadValues(t *testing.T) {
 		require.Error(t, validateErr)
 		require.Contains(t, validateErr.Error(), pan, "premise: the raw cause leaks the map key")
 
-		err := newPayloadValidateError(orderEventType, validateErr)
+		err := newPayloadError(orderEventType, payloaderr.NewValidate(validateErr))
 		require.NotEmpty(t, err.Fields(), "premise: fields were derived")
 
 		assert.Equal(t, []string{"mapKeyPayload.Limits[*]"}, err.Fields())
@@ -295,7 +295,7 @@ func TestPayloadErrorNeverRendersPayloadValues(t *testing.T) {
 		require.Error(t, validateErr)
 		require.Contains(t, validateErr.Error(), "failed on the 'max' tag", "premise: the max rule fired")
 
-		err := newPayloadValidateError(orderEventType, validateErr)
+		err := newPayloadError(orderEventType, payloaderr.NewValidate(validateErr))
 		require.Contains(t, err.Error(), fieldReference, "premise: the field list was rendered")
 		assert.NotContains(t, err.Error(), payloadMarker)
 	})
@@ -305,7 +305,7 @@ func TestPayloadErrorValidateConstructorDerivesFields(t *testing.T) {
 	validateErr := validation.New().Struct(orderPayload{Reference: payloadMarker})
 	require.Error(t, validateErr)
 
-	err := newPayloadValidateError(orderEventType, validateErr)
+	err := newPayloadError(orderEventType, payloaderr.NewValidate(validateErr))
 
 	assert.Equal(t, PayloadStageValidate, err.Stage)
 	assert.Equal(t, []string{fieldReference, fieldAmount}, err.Fields())
@@ -317,13 +317,13 @@ func TestPayloadErrorValidateConstructorDerivesFields(t *testing.T) {
 	// cannot drift into a second sanitization point unnoticed.
 	mapErr := validation.New().Struct(mapKeyPayload{Limits: map[string]int{pan: 99}})
 	require.Error(t, mapErr)
-	stored := newPayloadValidateError(orderEventType, mapErr)
+	stored := newPayloadError(orderEventType, payloaderr.NewValidate(mapErr))
 	require.Len(t, stored.Fields(), 1)
 	require.Contains(t, mapErr.Error(), pan, "premise: the raw cause carries the key")
 	assert.NotContains(t, stored.Fields()[0], pan, "the accessor is what redacts")
 
 	// A non-validator cause yields no fields rather than a bogus one.
-	plain := newPayloadValidateError(orderEventType, errors.New("boom"))
+	plain := newPayloadError(orderEventType, payloaderr.NewValidate(errors.New("boom")))
 	assert.Empty(t, plain.Fields())
 	assert.Equal(t, `messaging: validate failed for event "OrderCreated"`, plain.Error())
 }
@@ -334,7 +334,7 @@ func TestPayloadErrorValidateConstructorDerivesFields(t *testing.T) {
 func TestPayloadErrorFieldsRedactsOnRead(t *testing.T) {
 	cause := validation.New().Struct(mapKeyPayload{Limits: map[string]int{payloadMarker: 99}})
 	require.Error(t, cause)
-	err := newPayloadValidateError(orderEventType, cause)
+	err := newPayloadError(orderEventType, payloaderr.NewValidate(cause))
 
 	assert.Equal(t, []string{"mapKeyPayload.Limits[*]"}, err.Fields())
 	assert.Equal(t,
@@ -351,11 +351,11 @@ func TestPayloadErrorFieldsRedactsOnRead(t *testing.T) {
 func TestPayloadErrorConstructorsPropagateEventType(t *testing.T) {
 	cause := errors.New("boom")
 
-	decodeErr := newPayloadDecodeError(shipmentEventType, cause, "")
+	decodeErr := newPayloadError(shipmentEventType, payloaderr.NewDecode(cause, ""))
 	assert.Equal(t, shipmentEventType, decodeErr.EventType)
 	assert.Contains(t, decodeErr.Error(), shipmentEventType)
 
-	validateErr := newPayloadValidateError(shipmentEventType, cause)
+	validateErr := newPayloadError(shipmentEventType, payloaderr.NewValidate(cause))
 	assert.Equal(t, shipmentEventType, validateErr.EventType)
 	assert.Contains(t, validateErr.Error(), shipmentEventType)
 }

@@ -103,7 +103,7 @@ func NewTypedHandler[T any](eventType string, fn func(context.Context, T) error)
 
 func (h *typedHandler[T]) Handle(ctx context.Context, delivery *amqp.Delivery) error {
 	if delivery == nil {
-		return newPayloadDecodeError(h.eventType, errNilDelivery, nilDeliverySummary)
+		return newPayloadError(h.eventType, payloaderr.NewDecode(errNilDelivery, nilDeliverySummary))
 	}
 
 	// A fresh payload per delivery: workers share the handler, not the value.

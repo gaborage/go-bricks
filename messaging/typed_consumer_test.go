@@ -97,7 +97,7 @@ func TestNewTypedHandlerAllocatesFreshPayloadPerDelivery(t *testing.T) {
 // metadata per instance, so constructing one per delivery re-registers the
 // custom rules and rebuilds the cache every message. Measured, that is ~7-8
 // allocs/op against ~222 — the ceiling has wide margin on both sides and is the
-// only thing that catches Handle bypassing the package-level typedValidator.
+// only thing that catches Handle bypassing the shared payloaderr.Validator.
 func TestNewTypedHandlerReusesOneValidator(t *testing.T) {
 	h := NewTypedHandler(orderEventType, func(_ context.Context, _ orderPayload) error { return nil })
 	ctx := t.Context()
