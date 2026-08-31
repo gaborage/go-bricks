@@ -396,3 +396,26 @@ func TestTrustedProxiesAcceptsValidCIDRs(t *testing.T) {
 	cfg := trustedProxyServerConfig("10.0.0.0/8", "2001:db8::/32", "  172.16.0.0/12  ")
 	assert.NoError(t, checkServer(&cfg))
 }
+
+// TestParseTrustedProxyCIDRRejectsMappedDefaultRoute pins the exported per-entry parser
+// directly. The set-level coverage check also catches this shape, so reverting the parser's
+// own normalization breaks no other test — but ParseTrustedProxyCIDR is exported and
+// server.trustedProxyOptions calls it per entry, so a consumer reaching it without the set
+// check must still be told that "::ffff:0.0.0.0/96" is a default route.
+//
+// Mask.Size() reads it as 96 of 128 bits; Contains re-derives a 4-byte mask and matches
+// every IPv4 address. NormalizeIPNet measures the one Contains will use.
+func TestParseTrustedProxyCIDRRejectsMappedDefaultRoute(t *testing.T) {
+	for _, entry := range []string{"::ffff:0.0.0.0/96", "::ffff:0:0/96", "0:0:0:0:0:ffff:0:0/96"} {
+		t.Run(safeSubtestName(entry), func(t *testing.T) {
+			_, err := ParseTrustedProxyCIDR(entry)
+			require.Error(t, err, "%s matches every IPv4 address", entry)
+			assert.ErrorIs(t, err, errTrustedProxyDefaultRoute)
+		})
+	}
+
+	// A genuine /96 that is NOT v4-mapped stays legal — the rule is about what Contains
+	// will match, not about the number 96.
+	_, err := ParseTrustedProxyCIDR("2001:db8::/96")
+	assert.NoError(t, err)
+}
