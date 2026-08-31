@@ -6290,8 +6290,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   backfill ran before the pending-index creation, and
   `SELECT COUNT(*) FROM gobricks_outbox WHERE seq IS NULL` is 0 — every row has a
   sequence. Do not expect `seq` to match `created_at` order: the backfill is heap
-  order on PostgreSQL and rowid order on Oracle. An unbackfilled ledger drains in
-  an arbitrary order exactly once, invisibly.
+  order on PostgreSQL and rowid order on Oracle. An unbackfilled ledger is not a
+  valid migration — stop before deployment until every row has a non-NULL `seq`;
+  otherwise the backlog drains in undefined order and nothing reports it.
 - ref: `outbox/store.go` (`Record`, `Store.Lead`, `Leadership`, `leadRow`) ·
   `outbox/store_postgres.go` · `outbox/store_oracle.go` · `outbox/relay.go` (`relayKey`,
   `runRelayLoop`) · `outbox/publisher.go` · `database/errors.go` (`IsLockNotAvailable`) ·
