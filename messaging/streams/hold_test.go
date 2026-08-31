@@ -72,7 +72,8 @@ func TestHeldSetIsSafeUnderConcurrentUse(t *testing.T) {
 			// Retried, not attempted once: a park landing between the read and the
 			// swap refuses it by design, and this test is about the LOCK holding
 			// under concurrent use, not about winning that race on the first try.
-			for !set.replace(set.generationAt(), set.epochAt(), []string{"tenant-b", "tenant-c"}) {
+			for swapped := false; !swapped; {
+				swapped = set.replace(set.generationAt(), set.epochAt(), []string{"tenant-b", "tenant-c"})
 			}
 			_ = i
 		}()
