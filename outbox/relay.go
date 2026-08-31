@@ -226,10 +226,6 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 	return res
 }
 
-// tenantStampHeader is the header the messaging layer stamps a tenant into. Mirrored here
-// because messaging keeps its constant unexported; it becomes an import once that is exported.
-const tenantStampHeader = "x-tenant-id"
-
 // relayKey is the key a row is ordered under within a cycle. Every key is namespaced by the
 // scope it orders within, because parking is head-of-line blocking: two rows that share a key
 // but not a destination block each other for nothing.
@@ -248,7 +244,7 @@ func relayKey(record *Record, headers map[string]any) string {
 	if record.Lane == LaneStream {
 		return LaneStream + ":" + record.Stream + ":" + record.PartitionKey
 	}
-	if stamp, ok := headers[tenantStampHeader].(string); ok && stamp != "" {
+	if stamp, ok := headers[messaging.TenantStampHeader].(string); ok && stamp != "" {
 		return LaneAMQP + ":tenant:" + stamp
 	}
 	return LaneAMQP + ":" + record.Exchange + ":" + record.RoutingKey
