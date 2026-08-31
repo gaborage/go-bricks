@@ -469,6 +469,25 @@ consume side, through the shared delivery pipeline.
 - Streams need explicit retention (`MaxAge` / `MaxLengthBytes`); they do not
   shrink when consumed.
 
+### Super-stream `SubEntrySize = 1` (vendor pin)
+
+Pointer-identity confirmation correlation requires the client's default
+`SubEntrySize` of 1 ([ADR-063](adr_063_streams_native_publishing.md)). On a
+plain stream the production options are those defaults verbatim. On a super
+stream the field is not on `SuperStreamProducerOptions` at all: each
+partition producer is built inside the client by `ConnectPartition` calling
+`NewProducerOptions()`, so go-bricks cannot assert the size at startup. A
+client refactor of that construction would break every super-stream publish
+on its deadline with no other signal.
+
+The two guards are:
+
+- the `go.mod` comment on `rabbitmq-stream-go-client` — any version bump must
+  re-verify `ConnectPartition` still constructs partition producers with
+  default `SubEntrySize`;
+- `TestStreamsSuperStreamPublisherPartitionsIntegration` — the only runtime
+  guard, and it stays in the required integration suite.
+
 ## Testing
 
 `testing/containers` boots a broker with the plugin:

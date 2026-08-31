@@ -840,6 +840,13 @@ func assertHashGrouping(t *testing.T, keys []string, indexOf map[string]int, par
 // the publish proof: every message is confirmed and consumed exactly once, and the
 // partition a message lands on is decided by its RoutingKey — see
 // assertHashGrouping for why that last part is asserted as a grouping.
+//
+// This is the only guard for the super-stream SubEntrySize=1 precondition
+// (ADR-063 / gaborage/go-bricks#1014): confirmation correlation is pointer
+// identity, and on this lane that size comes from the client's own
+// ConnectPartition construction, which go-bricks cannot assert at startup.
+// Stay in the required integration suite — never skip, never move behind an
+// optional tag.
 func TestStreamsSuperStreamPublisherPartitionsIntegration(t *testing.T) {
 	ctx := context.Background()
 	opts := streamsTestEnv(ctx, t)

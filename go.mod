@@ -25,6 +25,11 @@ require (
 	github.com/labstack/echo-opentelemetry v0.0.3
 	github.com/labstack/echo/v5 v5.3.1
 	github.com/rabbitmq/amqp091-go v1.14.0
+	// Version-bump canary: re-verify ConnectPartition still constructs
+	// partition producers with default SubEntrySize. Super-stream pointer-
+	// identity confirmation correlation (ADR-063) depends on that vendor-
+	// internal NewProducerOptions(); a change there breaks silently.
+	// See gaborage/go-bricks#1014.
 	github.com/rabbitmq/rabbitmq-stream-go-client v1.8.3
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/rs/zerolog v1.35.1
