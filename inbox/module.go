@@ -260,10 +260,6 @@ func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 			Msg("Inbox hold drain job registered")
 	}
 
-	if m.cfg.RetentionPeriod <= 0 {
-		return nil
-	}
-
 	// Fail fast on multi-tenant configurations the cleanup job cannot fan out across, so
 	// it does not silently never prune any tenant's ledger. ProcessOnce itself is
 	// unaffected (it resolves the tenant from the request context), which is why this

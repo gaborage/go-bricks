@@ -1,8 +1,11 @@
 package streams
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"os"
 	"testing"
 	"time"
 
@@ -167,4 +170,68 @@ func TestManagerReloadHeldKeepsAParkThatRacesTheRead(t *testing.T) {
 
 	assert.True(t, runner.held.has("acme"), "the park that raced the read is still held")
 	assert.True(t, runner.held.has("globex"), "and what the ledger reported is held too")
+}
+
+// heldMessage is one parked row as the drain hands it back.
+func heldMessage(tenant string, offset int64) *HeldMessage {
+	return &HeldMessage{
+		Consumer: testConsumerName, Stream: testStream, Offset: offset, TenantID: tenant,
+		Data: []byte("payload"), HeldAt: time.Now(),
+	}
+}
+
+// captureReplayLogs returns what the lane wrote while fn ran. The framework
+// logger writes to os.Stdout directly, so the logger under test has to be built
+// inside the capture.
+func captureReplayLogs(t *testing.T, fn func()) string {
+	t.Helper()
+	original := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	defer func() { os.Stdout = original }()
+	defer r.Close()
+	os.Stdout = w
+
+	fn()
+
+	require.NoError(t, w.Close())
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, r)
+	require.NoError(t, err)
+	return buf.String()
+}
+
+// TestReplayLogsOnlyFailures pins what a replay writes. A succeeded replay is
+// silent — one line per replayed row would drown the failures an operator is
+// actually watching for — and a failed one is marked as a replay, so a retry of a
+// held message is not read as a message failing for the first time.
+func TestReplayLogsOnlyFailures(t *testing.T) {
+	t.Run("a_succeeded_replay_says_nothing", func(t *testing.T) {
+		out := captureReplayLogs(t, func() {
+			m := holdManagerOn(t, &fakeHoldLedger{}, holdDeclsWithHandler(noopHandler))
+			require.NoError(t, m.Replay(t.Context(), testConsumerName, heldMessage("acme", 7)))
+		})
+		assert.NotContains(t, out, "Hold replay failed", "a replay that worked is not news")
+	})
+
+	t.Run("a_failed_replay_is_logged_as_a_replay", func(t *testing.T) {
+		out := captureReplayLogs(t, func() {
+			m := holdManagerOn(t, &fakeHoldLedger{}, holdDeclsWithHandler(
+				func(context.Context, *Message) error { return errors.New("handler said no") }))
+			require.Error(t, m.Replay(t.Context(), testConsumerName, heldMessage("acme", 7)))
+		})
+		assert.Contains(t, out, "Hold replay failed")
+		assert.Contains(t, out, `"hold_replay":true`, "marked as a replay, not a first failure")
+		assert.Contains(t, out, "handler said no", "and carries the handler's own error")
+	})
+
+	t.Run("a_panicked_replay_is_logged_without_its_value", func(t *testing.T) {
+		out := captureReplayLogs(t, func() {
+			m := holdManagerOn(t, &fakeHoldLedger{}, holdDeclsWithHandler(
+				func(context.Context, *Message) error { panic("secret in the panic value") }))
+			require.Error(t, m.Replay(t.Context(), testConsumerName, heldMessage("acme", 7)))
+		})
+		assert.Contains(t, out, "Hold replay failed")
+		assert.NotContains(t, out, "secret in the panic value", "ADR-081: by type, never by value")
+	})
 }

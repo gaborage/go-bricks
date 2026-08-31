@@ -1,8 +1,12 @@
 package inbox
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,6 +100,12 @@ type recordingHoldStore struct {
 	HoldStore
 	leasesYielded int
 	released      int
+	// deferredBackoff is what Defer was told to wait, which is the only place the
+	// computed attempt number is observable.
+	deferredBackoff time.Duration
+	deferErr        error
+	releaseErr      error
+	statsErr        error
 	// rowsByTenant answers NextRows per tenant. A TestDB expectation is matched by
 	// substring, so every tenant's read matches the same registration and cannot
 	// carry a tenant's own rows; this can.
@@ -113,7 +123,27 @@ func (r *recordingHoldStore) NextRows(ctx context.Context, db dbtypes.Interface,
 
 func (r *recordingHoldStore) Release(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string) (bool, error) {
 	r.released++
+	if r.releaseErr != nil {
+		return false, r.releaseErr
+	}
 	return r.HoldStore.Release(ctx, db, consumer, tenant, owner)
+}
+
+func (r *recordingHoldStore) Defer(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string,
+	backoff time.Duration, lastErr string,
+) (bool, error) {
+	r.deferredBackoff = backoff
+	if r.deferErr != nil {
+		return false, r.deferErr
+	}
+	return r.HoldStore.Defer(ctx, db, consumer, tenant, owner, backoff, lastErr)
+}
+
+func (r *recordingHoldStore) Stats(ctx context.Context, db dbtypes.Interface, consumer string) (HoldStats, error) {
+	if r.statsErr != nil {
+		return HoldStats{}, r.statsErr
+	}
+	return r.HoldStore.Stats(ctx, db, consumer)
 }
 
 func (r *recordingHoldStore) ReleaseLease(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string) error {
@@ -421,4 +451,200 @@ func TestDrainStopsWhenTheLeaseRunsOut(t *testing.T) {
 	assert.Equal(t, []int64{3}, replayer.replayed,
 		"the pass stops at the deadline instead of draining the batch")
 	assert.Equal(t, 1, store.leasesYielded, "a spent lease is handed back, not left to expire")
+}
+
+// captureDrainLogs returns everything the framework logger wrote while fn ran.
+// The logger writes to os.Stdout directly, so this is how a WARN the drain emits
+// on a threshold is observed.
+func captureDrainLogs(t *testing.T, fn func()) string {
+	t.Helper()
+	original := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	defer func() { os.Stdout = original }()
+	defer r.Close()
+	os.Stdout = w
+
+	fn()
+
+	require.NoError(t, w.Close())
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, r)
+	require.NoError(t, err)
+	return buf.String()
+}
+
+// TestBackoffForDoublesFromTheDrainInterval pins the deferred tenant's schedule
+// at every attempt, including the two boundaries: the first attempt waits the
+// drain interval, and the series stops at the cap instead of running past it.
+func TestBackoffForDoublesFromTheDrainInterval(t *testing.T) {
+	drain := &HoldDrain{cfg: config.InboxHoldConfig{DrainInterval: 5 * time.Second, MaxBackoff: time.Minute}}
+
+	for _, tc := range []struct {
+		name     string
+		attempts int
+		want     time.Duration
+	}{
+		{"first_attempt_waits_one_interval", 1, 5 * time.Second},
+		{"second_doubles", 2, 10 * time.Second},
+		{"third_doubles_again", 3, 20 * time.Second},
+		{"fourth_doubles_again", 4, 40 * time.Second},
+		{"fifth_is_capped", 5, time.Minute},
+		{"and_stays_capped", 9, time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, drain.backoffFor(tc.attempts))
+		})
+	}
+}
+
+// TestDrainDefersOnTheNextAttemptNumber pins that a deferred tenant is backed off
+// by the attempt it is ABOUT to make, not the one it already made: a tenant with
+// two attempts behind it waits the third attempt's interval.
+func TestDrainDefersOnTheNextAttemptNumber(t *testing.T) {
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(
+		dbtesting.NewRowSet("consumer", "tenant_id", "held_since", "attempts", "next_attempt_at", "last_error").
+			AddRow(testHoldConsumer, testHoldTenant, time.Now(), 2, time.Now(), ""))
+	db.ExpectExec(`UPDATE ` + holdTenantTable).WillReturnRowsAffected(1)
+	db.ExpectQuery(`ORDER BY stream, stream_offset`).WillReturnRows(heldRows(3))
+	db.ExpectQuery(`SELECT tenant_id FROM ` + holdTenantTable).WillReturnRows(
+		dbtesting.NewRowSet("tenant_id").AddRow(testHoldTenant))
+	db.ExpectQuery(`SELECT COUNT`).WillReturnRows(
+		dbtesting.NewRowSet("tenants", "rows", "oldest").AddRow(int64(1), int64(1), time.Now()))
+
+	replayer := &fakeHoldReplayer{
+		consumers: []string{testHoldConsumer},
+		failAt:    map[int64]error{3: errors.New("still failing")},
+	}
+	store := &recordingHoldStore{HoldStore: mustPostgresHoldStore()}
+	drain := newHoldDrain(db, replayer)
+	drain.resolve = func(context.Context) (dbtypes.Interface, HoldStore, error) { return db, store, nil }
+
+	require.NoError(t, drain.Execute(drainCtx(db)))
+
+	// Two attempts behind it, so the third: 5s doubled twice.
+	assert.Equal(t, 20*time.Second, store.deferredBackoff,
+		"the backoff is the NEXT attempt's, not the last one's")
+}
+
+// TestWarnIfTooOldFiresOnlyPastTheThreshold pins both sides of the max-age
+// boundary: a tenant held exactly the configured age is not yet stuck, and one
+// held longer earns the line an operator watches for.
+func TestWarnIfTooOldFiresOnlyPastTheThreshold(t *testing.T) {
+	now := time.Now()
+	drain := &HoldDrain{cfg: config.InboxHoldConfig{MaxAge: time.Hour}, now: func() time.Time { return now }}
+
+	atThreshold := captureDrainLogs(t, func() {
+		drain.warnIfTooOld(logger.New("warn", false), testHoldConsumer, &HoldTenant{
+			TenantID: testHoldTenant, HeldSince: now.Add(-time.Hour),
+		})
+	})
+	assert.NotContains(t, atThreshold, "Hold exceeds max age", "held exactly the max age is not past it")
+
+	pastThreshold := captureDrainLogs(t, func() {
+		drain.warnIfTooOld(logger.New("warn", false), testHoldConsumer, &HoldTenant{
+			TenantID: testHoldTenant, HeldSince: now.Add(-time.Hour - time.Second),
+		})
+	})
+	assert.Contains(t, pastThreshold, "Hold exceeds max age", "a second past it warns")
+	assert.Contains(t, pastThreshold, testHoldTenant, "and names the tenant")
+}
+
+// TestOwnerIDFallsBackWhenItsSourcesFail pins the two fallbacks in the lease
+// owner. Neither is reachable through the real sources, and both matter: an
+// owner that collides is two replicas believing they hold one tenant.
+func TestOwnerIDFallsBackWhenItsSourcesFail(t *testing.T) {
+	okHost := func() (string, error) { return "host-a", nil }
+	badHost := func() (string, error) { return "", errors.New("no hostname") }
+	okRandom := func(b []byte) (int, error) { return len(b), nil }
+	badRandom := func([]byte) (int, error) { return 0, errors.New("no entropy") }
+
+	full := ownerIDFrom(okHost, okRandom)
+	assert.Contains(t, full, "host-a")
+	assert.Len(t, strings.Split(full, "/"), 3, "host, pid and randomness")
+
+	assert.Contains(t, ownerIDFrom(badHost, okRandom), "unknown-host",
+		"a host that cannot name itself still yields an owner")
+
+	degraded := ownerIDFrom(okHost, badRandom)
+	assert.Contains(t, degraded, "host-a")
+	assert.Len(t, strings.Split(degraded, "/"), 2, "without entropy the owner is host and pid only")
+}
+
+// drainWithStore wires a drain over one TestDB, replayer and store, for the
+// error-path tests below.
+func drainWithStore(db dbtypes.Interface, replayer streams.HoldReplayer, store HoldStore) *HoldDrain {
+	drain := newHoldDrain(db, replayer)
+	drain.resolve = func(context.Context) (dbtypes.Interface, HoldStore, error) { return db, store, nil }
+	return drain
+}
+
+// dueTenantDB is the fixture every error-path test starts from: one due tenant
+// with one row, leased successfully.
+func dueTenantDB(t *testing.T) *dbtesting.TestDB {
+	t.Helper()
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(dueTenantRows(time.Now(), testHoldTenant))
+	db.ExpectExec(`UPDATE ` + holdTenantTable).WillReturnRowsAffected(1)
+	db.ExpectQuery(`ORDER BY stream, stream_offset`).WillReturnRows(heldRows(3))
+	db.ExpectExec(`DELETE FROM ` + holdTable).WillReturnRowsAffected(1)
+	db.ExpectExec(`DELETE FROM ` + holdTenantTable).WillReturnRowsAffected(1)
+	db.ExpectQuery(`SELECT tenant_id FROM ` + holdTenantTable).WillReturnRows(dbtesting.NewRowSet("tenant_id"))
+	db.ExpectQuery(`SELECT COUNT`).WillReturnRows(
+		dbtesting.NewRowSet("tenants", "rows", "oldest").AddRow(int64(0), int64(0), nil))
+	return db
+}
+
+// TestDrainReportsEveryLedgerFailure pins that no ledger error is swallowed. A
+// pass that hides one reports success while the backlog stops moving, which is
+// the failure mode a drain must never have: silent.
+func TestDrainReportsEveryLedgerFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		breaks  func(*recordingHoldStore, *fakeHoldReplayer)
+		wantErr string
+	}{
+		{
+			name: "a_failed_reload_is_reported",
+			breaks: func(_ *recordingHoldStore, r *fakeHoldReplayer) {
+				r.reloadErr = errors.New("reload exploded")
+			},
+			wantErr: "reload exploded",
+		},
+		{
+			name: "a_failed_stats_read_is_reported",
+			breaks: func(s *recordingHoldStore, _ *fakeHoldReplayer) {
+				s.statsErr = errors.New("stats exploded")
+			},
+			wantErr: "stats exploded",
+		},
+		{
+			name: "a_failed_release_is_reported",
+			breaks: func(s *recordingHoldStore, _ *fakeHoldReplayer) {
+				s.releaseErr = errors.New("release exploded")
+			},
+			wantErr: "release exploded",
+		},
+		{
+			name: "a_failed_defer_is_reported",
+			breaks: func(s *recordingHoldStore, r *fakeHoldReplayer) {
+				s.deferErr = errors.New("defer exploded")
+				r.failAt = map[int64]error{3: errors.New("handler said no")}
+			},
+			wantErr: "defer exploded",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := dueTenantDB(t)
+			replayer := &fakeHoldReplayer{consumers: []string{testHoldConsumer}}
+			store := &recordingHoldStore{HoldStore: mustPostgresHoldStore()}
+			tc.breaks(store, replayer)
+
+			err := drainWithStore(db, replayer, store).Execute(drainCtx(db))
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
 }

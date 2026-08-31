@@ -240,7 +240,8 @@ func (d *HoldDrain) replayRow(ctx context.Context, log logger.Logger, pass *hold
 func (d *HoldDrain) deferTenant(ctx context.Context, log logger.Logger, pass *holdPass,
 	consumer string, tenant *HoldTenant, row *HoldRow, replayErr error,
 ) error {
-	backoff := d.backoffFor(tenant.Attempts + 1)
+	attempt := tenant.Attempts + 1
+	backoff := d.backoffFor(attempt)
 
 	if _, err := pass.store.Defer(ctx, pass.db, consumer, tenant.TenantID, d.owner, backoff, replayErr.Error()); err != nil {
 		return err
@@ -251,7 +252,7 @@ func (d *HoldDrain) deferTenant(ctx context.Context, log logger.Logger, pass *ho
 		Str("tenant", tenant.TenantID).
 		Str("stream", row.Stream).
 		Int64("offset", row.Offset).
-		Int("attempts", tenant.Attempts+1).
+		Int("attempts", attempt).
 		Dur("next_attempt_in", backoff).
 		Str("error_type", fmt.Sprintf("%T", replayErr)).
 		Msg("Hold replay failed; tenant deferred")
@@ -378,13 +379,20 @@ const holdMeterName = "go-bricks/inbox"
 // reusing a pid, never share an owner. A lease is only safe if its owner is
 // unique to the drainer holding it.
 func holdOwnerID() string {
-	host, err := os.Hostname()
+	return ownerIDFrom(os.Hostname, rand.Read)
+}
+
+// ownerIDFrom is holdOwnerID with its two sources named, because both fallbacks
+// below are unreachable through the real ones: a host that cannot name itself
+// and a crypto/rand that cannot read do not happen on demand.
+func ownerIDFrom(hostname func() (string, error), readRandom func([]byte) (int, error)) string {
+	host, err := hostname()
 	if err != nil {
 		host = "unknown-host"
 	}
 
 	var random [8]byte
-	if _, err := rand.Read(random[:]); err != nil {
+	if _, err := readRandom(random[:]); err != nil {
 		// crypto/rand does not fail in practice; if it ever does, the pid and host
 		// still separate replicas, and a duplicate owner costs a redundant replay
 		// rather than a lost message.
