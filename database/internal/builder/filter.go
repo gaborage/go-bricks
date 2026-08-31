@@ -155,19 +155,11 @@ func (ff *FilterFactory) Gte(column string, value any) dbtypes.Filter {
 //	f.In("status", []string{"active", "pending"})  // IN with multiple values
 //	f.In("status", "active")                       // IN with single value (wrapped automatically)
 func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
-	quotedColumn, err := ff.qb.quoteColumnForQuery(column)
-	if err != nil {
-		return Filter{sqlizer: errorSqlizer{err: err}}
-	}
-	normalized, empty, err := resolveListOperands("IN", values)
-	if err != nil {
-		return filterOf(nil, err)
-	}
 	// Empty slice special case: generate "1=0" to ensure no matches
-	if empty {
-		return Filter{sqlizer: squirrel.Expr("(1=0)")}
-	}
-	return Filter{sqlizer: squirrel.Eq{quotedColumn: normalized}}
+	return inListPredicate(ff.qb, column, values, "IN", "(1=0)",
+		func(quotedColumn string, normalized any) squirrel.Sqlizer {
+			return squirrel.Eq{quotedColumn: normalized}
+		}, wrapFilter)
 }
 
 // NotIn creates a NOT IN filter (column NOT IN (values...)).
@@ -179,18 +171,11 @@ func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 //	f.NotIn("status", []string{"deleted", "banned"})  // NOT IN with multiple values
 //	f.NotIn("status", "deleted")                      // NOT IN with single value (wrapped automatically)
 func (ff *FilterFactory) NotIn(column string, values any) dbtypes.Filter {
-	quotedColumn, err := ff.qb.quoteColumnForQuery(column)
-	if err != nil {
-		return Filter{sqlizer: errorSqlizer{err: err}}
-	}
-	normalized, empty, err := resolveListOperands("NOT IN", values)
-	if err != nil {
-		return filterOf(nil, err)
-	}
-	if empty {
-		return Filter{sqlizer: squirrel.Expr("(1=1)")} // Empty NOT IN list - always true
-	}
-	return Filter{sqlizer: squirrel.NotEq{quotedColumn: normalized}}
+	// Empty NOT IN list - always true
+	return inListPredicate(ff.qb, column, values, "NOT IN", "(1=1)",
+		func(quotedColumn string, normalized any) squirrel.Sqlizer {
+			return squirrel.NotEq{quotedColumn: normalized}
+		}, wrapFilter)
 }
 
 // Like creates a case-insensitive LIKE filter.
@@ -249,21 +234,17 @@ func (ff *FilterFactory) JSONContains(column string, value any) dbtypes.Filter {
 // Null creates an IS NULL filter.
 // Column names are automatically quoted according to database vendor rules.
 func (ff *FilterFactory) Null(column string) dbtypes.Filter {
-	quotedColumn, err := ff.qb.quoteColumnForQuery(column)
-	if err != nil {
-		return Filter{sqlizer: errorSqlizer{err: err}}
-	}
-	return Filter{sqlizer: squirrel.Eq{quotedColumn: nil}}
+	return nullPredicate(ff.qb, column,
+		func(quotedColumn string) squirrel.Sqlizer { return squirrel.Eq{quotedColumn: nil} },
+		wrapFilter)
 }
 
 // NotNull creates an IS NOT NULL filter.
 // Column names are automatically quoted according to database vendor rules.
 func (ff *FilterFactory) NotNull(column string) dbtypes.Filter {
-	quotedColumn, err := ff.qb.quoteColumnForQuery(column)
-	if err != nil {
-		return Filter{sqlizer: errorSqlizer{err: err}}
-	}
-	return Filter{sqlizer: squirrel.NotEq{quotedColumn: nil}}
+	return nullPredicate(ff.qb, column,
+		func(quotedColumn string) squirrel.Sqlizer { return squirrel.NotEq{quotedColumn: nil} },
+		wrapFilter)
 }
 
 // Between creates a BETWEEN filter (column BETWEEN lowerBound AND upperBound).
@@ -305,21 +286,7 @@ func (ff *FilterFactory) Between(column string, lowerBound, upperBound any) dbty
 //	    f.Gt("age", 18),
 //	)
 func (ff *FilterFactory) And(filters ...dbtypes.Filter) dbtypes.Filter {
-	sqlizers := make(squirrel.And, 0, len(filters))
-	for _, filter := range filters {
-		if filter == nil {
-			continue
-		}
-		// Extract the underlying squirrel.Sqlizer
-		// We know all filters are actually our Filter type
-		if concreteFilter, ok := filter.(Filter); ok {
-			sqlizers = append(sqlizers, concreteFilter.sqlizer)
-		} else {
-			// Fallback: use the filter as-is (it implements Sqlizer via ToSQL)
-			sqlizers = append(sqlizers, filter)
-		}
-	}
-	return Filter{sqlizer: sqlizers}
+	return combineLogical[dbtypes.Filter, squirrel.And](filters, classifyFilter, wrapFilter)
 }
 
 // Or combines multiple filters with OR logic.
@@ -334,20 +301,30 @@ func (ff *FilterFactory) And(filters ...dbtypes.Filter) dbtypes.Filter {
 //	    f.Eq("role", "admin"),
 //	)
 func (ff *FilterFactory) Or(filters ...dbtypes.Filter) dbtypes.Filter {
-	sqlizers := make(squirrel.Or, 0, len(filters))
-	for _, filter := range filters {
-		if filter == nil {
-			continue
-		}
-		// Extract the underlying squirrel.Sqlizer
-		if concreteFilter, ok := filter.(Filter); ok {
-			sqlizers = append(sqlizers, concreteFilter.sqlizer)
-		} else {
-			// Fallback: use the filter as-is
-			sqlizers = append(sqlizers, filter)
-		}
+	return combineLogical[dbtypes.Filter, squirrel.Or](filters, classifyFilter, wrapFilter)
+}
+
+// classifyFilter is combineLogical's per-family classify step for Filter:
+// skip a nil filter (the documented no-op for callers building conditions
+// conditionally), unwrap a same-family Filter to the bare squirrel.Sqlizer it
+// wraps, or use any other dbtypes.Filter implementation as-is — every
+// dbtypes.Filter already IS a squirrel.Sqlizer through the interface
+// embedding.
+func classifyFilter(filter dbtypes.Filter) (sqlizer squirrel.Sqlizer, include bool) {
+	if filter == nil {
+		return nil, false
 	}
-	return Filter{sqlizer: sqlizers}
+	if concreteFilter, ok := filter.(Filter); ok {
+		return concreteFilter.sqlizer, true
+	}
+	return filter, true
+}
+
+// wrapFilter lifts a bare squirrel.Sqlizer into the family's own dbtypes.Filter.
+// It is the constructor combineLogical, inListPredicate and nullPredicate close
+// over for every Filter-family predicate built from a shared helper.
+func wrapFilter(sqlizer squirrel.Sqlizer) dbtypes.Filter {
+	return Filter{sqlizer: sqlizer}
 }
 
 // Not negates a filter.

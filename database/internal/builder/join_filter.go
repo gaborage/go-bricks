@@ -248,19 +248,11 @@ func (jff *JoinFilterFactory) Gte(column string, value any) dbtypes.JoinFilter {
 //	jf.In("status", []string{"active", "pending"})  // IN with multiple values
 //	jf.In("status", "active")                       // IN with single value (wrapped automatically)
 func (jff *JoinFilterFactory) In(column string, values any) dbtypes.JoinFilter {
-	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
-	if err != nil {
-		return joinFilterErr(err)
-	}
-	normalized, empty, err := resolveListOperands("IN", values)
-	if err != nil {
-		return joinFilterErr(err)
-	}
-	// Empty slice special case: generate "1=0" to ensure no matches
-	if empty {
-		return JoinFilter{sqlizer: squirrel.Expr("(1=0)")} // Empty IN list - always false
-	}
-	return JoinFilter{sqlizer: squirrel.Eq{quotedColumn: normalized}}
+	// Empty IN list - always false
+	return inListPredicate(jff.qb, column, values, "IN", "(1=0)",
+		func(quotedColumn string, normalized any) squirrel.Sqlizer {
+			return squirrel.Eq{quotedColumn: normalized}
+		}, wrapJoinFilter)
 }
 
 // NotIn creates a NOT IN condition (column NOT IN (values...)).
@@ -272,18 +264,11 @@ func (jff *JoinFilterFactory) In(column string, values any) dbtypes.JoinFilter {
 //	jf.NotIn("status", []string{"deleted", "banned"})  // NOT IN with multiple values
 //	jf.NotIn("status", "deleted")                      // NOT IN with single value (wrapped automatically)
 func (jff *JoinFilterFactory) NotIn(column string, values any) dbtypes.JoinFilter {
-	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
-	if err != nil {
-		return joinFilterErr(err)
-	}
-	normalized, empty, err := resolveListOperands("NOT IN", values)
-	if err != nil {
-		return joinFilterErr(err)
-	}
-	if empty {
-		return JoinFilter{sqlizer: squirrel.Expr("(1=1)")} // Empty NOT IN list - always true
-	}
-	return JoinFilter{sqlizer: squirrel.NotEq{quotedColumn: normalized}}
+	// Empty NOT IN list - always true
+	return inListPredicate(jff.qb, column, values, "NOT IN", "(1=1)",
+		func(quotedColumn string, normalized any) squirrel.Sqlizer {
+			return squirrel.NotEq{quotedColumn: normalized}
+		}, wrapJoinFilter)
 }
 
 // Like creates a LIKE condition.
@@ -307,21 +292,17 @@ func (jff *JoinFilterFactory) Like(column, pattern string) dbtypes.JoinFilter {
 // Null creates an IS NULL condition.
 // Column names are automatically quoted according to database vendor rules.
 func (jff *JoinFilterFactory) Null(column string) dbtypes.JoinFilter {
-	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
-	if err != nil {
-		return joinFilterErr(err)
-	}
-	return JoinFilter{sqlizer: squirrel.Eq{quotedColumn: nil}}
+	return nullPredicate(jff.qb, column,
+		func(quotedColumn string) squirrel.Sqlizer { return squirrel.Eq{quotedColumn: nil} },
+		wrapJoinFilter)
 }
 
 // NotNull creates an IS NOT NULL condition.
 // Column names are automatically quoted according to database vendor rules.
 func (jff *JoinFilterFactory) NotNull(column string) dbtypes.JoinFilter {
-	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
-	if err != nil {
-		return joinFilterErr(err)
-	}
-	return JoinFilter{sqlizer: squirrel.NotEq{quotedColumn: nil}}
+	return nullPredicate(jff.qb, column,
+		func(quotedColumn string) squirrel.Sqlizer { return squirrel.NotEq{quotedColumn: nil} },
+		wrapJoinFilter)
 }
 
 // Between creates a BETWEEN condition (column BETWEEN lowerBound AND upperBound).
@@ -417,20 +398,7 @@ func (b betweenBound) sqlizer(quotedColumn, op string) squirrel.Sqlizer {
 //	    jf.GtColumn("profiles.created_at", "users.created_at"),
 //	)
 func (jff *JoinFilterFactory) And(filters ...dbtypes.JoinFilter) dbtypes.JoinFilter {
-	sqlizers := make(squirrel.And, 0, len(filters))
-	for _, filter := range filters {
-		if filter == nil {
-			continue // Skip nil filters - treat as no-op
-		}
-		// Extract the underlying squirrel.Sqlizer
-		if concreteFilter, ok := filter.(JoinFilter); ok {
-			sqlizers = append(sqlizers, concreteFilter.sqlizer)
-		} else {
-			// Fallback: use the filter as-is (it implements Sqlizer)
-			sqlizers = append(sqlizers, filter)
-		}
-	}
-	return JoinFilter{sqlizer: sqlizers}
+	return combineLogical[dbtypes.JoinFilter, squirrel.And](filters, classifyJoinFilter, wrapJoinFilter)
 }
 
 // Or combines multiple join filters with OR logic.
@@ -445,20 +413,30 @@ func (jff *JoinFilterFactory) And(filters ...dbtypes.JoinFilter) dbtypes.JoinFil
 //	    jf.EqColumn("users.secondary_email", "contacts.email"),
 //	)
 func (jff *JoinFilterFactory) Or(filters ...dbtypes.JoinFilter) dbtypes.JoinFilter {
-	sqlizers := make(squirrel.Or, 0, len(filters))
-	for _, filter := range filters {
-		if filter == nil {
-			continue // Skip nil filters - treat as no-op
-		}
-		// Extract the underlying squirrel.Sqlizer
-		if concreteFilter, ok := filter.(JoinFilter); ok {
-			sqlizers = append(sqlizers, concreteFilter.sqlizer)
-		} else {
-			// Fallback: use the filter as-is
-			sqlizers = append(sqlizers, filter)
-		}
+	return combineLogical[dbtypes.JoinFilter, squirrel.Or](filters, classifyJoinFilter, wrapJoinFilter)
+}
+
+// classifyJoinFilter is combineLogical's per-family classify step for
+// JoinFilter: skip a nil filter (treated as a no-op), unwrap a same-family
+// JoinFilter to the bare squirrel.Sqlizer it wraps, or use any other
+// dbtypes.JoinFilter implementation as-is — every dbtypes.JoinFilter already
+// IS a squirrel.Sqlizer through the interface embedding.
+func classifyJoinFilter(filter dbtypes.JoinFilter) (sqlizer squirrel.Sqlizer, include bool) {
+	if filter == nil {
+		return nil, false
 	}
-	return JoinFilter{sqlizer: sqlizers}
+	if concreteFilter, ok := filter.(JoinFilter); ok {
+		return concreteFilter.sqlizer, true
+	}
+	return filter, true
+}
+
+// wrapJoinFilter lifts a bare squirrel.Sqlizer into the family's own
+// dbtypes.JoinFilter. It is the constructor combineLogical, inListPredicate
+// and nullPredicate close over for every JoinFilter-family predicate built
+// from a shared helper.
+func wrapJoinFilter(sqlizer squirrel.Sqlizer) dbtypes.JoinFilter {
+	return JoinFilter{sqlizer: sqlizer}
 }
 
 // ========== Raw Escape Hatch ==========
