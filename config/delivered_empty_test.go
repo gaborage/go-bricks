@@ -44,6 +44,10 @@ func assertDeliveredEmptyError(t *testing.T, got string, wantContains, wantNotCo
 	}
 	for i := 1; i < len(wantOrdered); i++ {
 		prev, cur := strings.Index(got, wantOrdered[i-1]), strings.Index(got, wantOrdered[i])
+		// Presence first: a missing entry indexes to -1, which is Less than any
+		// present one, so order would be asserted against a phantom.
+		require.GreaterOrEqual(t, prev, 0, "%s must appear in the message", wantOrdered[i-1])
+		require.GreaterOrEqual(t, cur, 0, "%s must appear in the message", wantOrdered[i])
 		assert.Less(t, prev, cur, "%s must be reported before %s", wantOrdered[i-1], wantOrdered[i])
 	}
 }
@@ -152,7 +156,13 @@ func TestDeliveredEmptyListCheckCoversOnlyAllowedIPs(t *testing.T) {
 			assert: func(t *testing.T, cfg *Config) { assert.Empty(t, cfg.Debug.TrustedProxies) },
 		},
 		{
-			// Empty merges into the shipped defaults rather than disabling masking.
+			// Empty here is empty: the field is REPLACED, not merged, and the
+			// assertion below says so. Masking survives one seam later —
+			// app_builder.go's resolveLoggerFilterConfig merges only when
+			// len(SensitiveFields) > 0, so empty takes the same branch as absent
+			// and hands the logger a nil FilterConfig, which
+			// logger.NewSensitiveDataFilter substitutes DefaultFilterConfig for.
+			// The shipped needles keep masking; only the custom extension is lost.
 			name:   "log_sensitivefields",
 			envVar: "LOG_SENSITIVEFIELDS",
 			assert: func(t *testing.T, cfg *Config) { assert.Empty(t, cfg.Log.SensitiveFields) },
