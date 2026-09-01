@@ -15,7 +15,7 @@
 | `server.tls.keyvalue` | `SERVER_TLS_KEYVALUE` | string | Server private key as a base64-encoded PEM string |
 | `server.tls.minversion` | `SERVER_TLS_MINVERSION` | string | `""` or `"1.2"` (floor, default) \| `"1.3"` |
 
-Exactly one of `certfile`/`certvalue` and exactly one of `keyfile`/`keyvalue` must be set when `enabled` is `true` — both the cert and the key are required (a server always needs a certificate to terminate TLS; there is no CA-only mode as there is for the httpclient's client-cert config). Config validation (`config/validation.go`) checks presence and mutual exclusivity structurally at startup; the PEM material itself is read and parsed at `server.Start()` — a bad path, corrupt PEM, or mismatched cert/key pair fails startup fast rather than degrading to plaintext.
+Exactly one of `certfile`/`certvalue` and exactly one of `keyfile`/`keyvalue` must be set when `enabled` is `true` — both the cert and the key are required (a server always needs a certificate to terminate TLS; there is no CA-only mode as there is for the httpclient's client-cert config). Config validation (`config/server_section.go`) checks presence and mutual exclusivity structurally at startup; the PEM material itself is read and parsed at `server.Start()` — a bad path, corrupt PEM, or mismatched cert/key pair fails startup fast rather than degrading to plaintext.
 
 Full example:
 

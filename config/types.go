@@ -445,7 +445,7 @@ type OutputConfig struct {
 
 // MessagingConfig holds messaging/broker settings.
 // Production-safe defaults are applied unconditionally at startup — even when
-// messaging.broker.url is unset (see config/validation.go: normalizeMessaging).
+// messaging.broker.url is unset (see config/messaging_section.go: normalizeMessaging).
 type MessagingConfig struct {
 	Broker    BrokerConfig        `koanf:"broker" json:"broker" yaml:"broker" toml:"broker" mapstructure:"broker"`
 	Routing   RoutingConfig       `koanf:"routing" json:"routing" yaml:"routing" toml:"routing" mapstructure:"routing"`
@@ -472,7 +472,7 @@ type MessagingConfig struct {
 // StreamsConfig holds native RabbitMQ stream-protocol settings (consumption).
 // Requires single-tenant mode or messaging.tenancy: shared, which consumes once
 // on the control-plane key: multitenant.enabled together with a stream URI under
-// per-tenant tenancy is a startup validation error (see config/validation.go:
+// per-tenant tenancy is a startup validation error (see config/messaging_section.go:
 // checkMessagingStreams).
 type StreamsConfig struct {
 	// URI is the stream-protocol endpoint, scheme rabbitmq-stream:// (or
@@ -574,7 +574,7 @@ type PublisherPoolConfig struct {
 
 	// IdleTTL is the time after which idle publisher clients are evicted.
 	// Default: 1h when multitenant.enabled is false, 10m when true (see
-	// config/validation.go: applyMessagingDefaults). Set lower for
+	// config/messaging_section.go: applyMessagingDefaults). Set lower for
 	// memory-constrained environments.
 	IdleTTL time.Duration `koanf:"idlettl" json:"idlettl" yaml:"idlettl" toml:"idlettl" mapstructure:"idlettl"`
 
