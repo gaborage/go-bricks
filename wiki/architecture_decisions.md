@@ -1402,6 +1402,28 @@ unexports eight debug response types with their JSON unchanged. See
 
 ---
 
+### [ADR-092: A Typed Stream Consumer's Payload Failure Is Skipped, Never Held](adr_092_typed_stream_consumers_skip_poison.md)
+
+**Date:** 2026-08-31 | **Status:** Accepted | **Breaking:** no — additive; `DeclareConsumer` and a hand-written `Handler` are unchanged
+
+`streams.Handler` handed every consumer raw bytes, so each one re-wrote the decode, validation and
+error branches the AMQP lane's `DeclareTypedConsumer` exists to end — including the
+payload-bytes-in-error-text hazard #1176 had to fix. `streams.DeclareTypedConsumer[T]` (plus the
+`WithMeta` and super-stream siblings) now mirrors that shape, and the payload-error core hoists into
+`messaging/internal/payloaderr` so the two deliberately decoupled lanes share the rules rather than
+the package. A decode or validation failure is **deterministic poison**: returned `Permanent` so no
+`RetryOptions` re-runs it, bypassed by `consumerRunner.parks` so ADR-089's hold never takes it, and
+screened BEFORE the hold's gate so a message for an already-held tenant is not parked either —
+parking one would defer that tenant on every drain pass, forever. The offset is skipped, which is
+ADR-059's settlement. There is deliberately no exported `NewTypedHandler` on this lane: a bare
+`Handler` cannot carry the screen, so the declaration is the only typed entry point.
+
+**Key Benefits:** a stream consumer declares a struct instead of a decode branch, the framework's
+rendering carries no partner bytes on either lane, and one malformed message can no longer stop a
+tenant indefinitely.
+
+---
+
 ### [ADR-090: User-Named Config Sections Must Be Reachable By Environment Variable](adr_090_env_reachable_section_names.md)
 
 **Date:** 2026-08-30 | **Status:** Accepted | **Breaking:** a `databases` / `multitenant.tenants` / `keystore.keys` key outside `^[a-z0-9-]+$` now fails startup
@@ -2006,7 +2028,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-091) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-092) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

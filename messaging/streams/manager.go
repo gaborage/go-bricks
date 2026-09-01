@@ -455,6 +455,7 @@ func (m *Manager) newRunner(ctx context.Context, decl *consumerDeclaration) *con
 		tenantOptional: decl.TenantOptional,
 		baseCtx:        ctx,
 		retry:          toDeliveryRetry(resolveRetry(decl)),
+		screen:         decl.Screen,
 	}
 	if decl.Hold {
 		runner.hold = m.opts.Hold

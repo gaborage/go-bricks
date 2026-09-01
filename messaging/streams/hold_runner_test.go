@@ -217,3 +217,151 @@ func TestRunnerDoesNotGateAnotherTenant(t *testing.T) {
 	assert.False(t, runner.held.has("tenant-b"), "a held neighbor does not hold this tenant")
 	assert.Equal(t, []int64{41, 42}, storer.offsets(), "the partition keeps moving")
 }
+
+// newTypedHoldRunner builds a holding runner the way the manager builds one for a
+// TYPED declaration: the typed handler and the poison screen that belongs to it.
+func newTypedHoldRunner[T any](t *testing.T, ledger HoldLedger, fn func(context.Context, T, *Message) error) *consumerRunner {
+	t.Helper()
+
+	typed := newTypedConsumer(testConsumerName, fn)
+	runner := newHoldRunner(t, typed.handle, ledger, newOffsetTracker(1, time.Hour, newFakeClock().Now))
+	runner.screen = typed.screen
+
+	return runner
+}
+
+// TestRunnerNeverParksAPayloadFailure pins the poison bypass on the ordinary
+// path: a body that cannot decode fails identically on every replay, so parking
+// it would hold the tenant behind a message the drain can never delete. It is
+// skipped exactly as a failure on a consumer that does not hold (ADR-092).
+func TestRunnerNeverParksAPayloadFailure(t *testing.T) {
+	ledger := &fakeHoldLedger{}
+	runner := newTypedHoldRunner(t, ledger, func(context.Context, streamOrder, *Message) error {
+		return nil
+	})
+	storer := &fakeStorer{}
+
+	runner.deliver(testStream, 41, stampedJSONMessage("tenant-a", `{"amount":"notanint"}`), storer)
+
+	assert.Empty(t, ledger.parked(), "poison is never written to the ledger")
+	assert.False(t, runner.held.has("tenant-a"), "and the tenant is never held behind it")
+	assert.Empty(t, storer.offsets(), "the offset is skipped, not committed")
+}
+
+// TestRunnerNeverParksAValidationFailure is the other half: validation is as
+// deterministic as decoding, so the same bypass has to cover it.
+func TestRunnerNeverParksAValidationFailure(t *testing.T) {
+	ledger := &fakeHoldLedger{}
+	runner := newTypedHoldRunner(t, ledger, func(context.Context, streamOrder, *Message) error {
+		return nil
+	})
+
+	runner.deliver(testStream, 41, stampedJSONMessage("tenant-a", `{"reference":"waytoolong","amount":0}`), &fakeStorer{})
+
+	assert.Empty(t, ledger.parked())
+	assert.False(t, runner.held.has("tenant-a"))
+}
+
+// TestRunnerStillParksABusinessFailureOnATypedConsumer is the premise the two
+// bypass tests need: the same typed runner DOES park when the handler itself
+// fails, so the assertions above pin the payload branch rather than a hold that
+// stopped working.
+func TestRunnerStillParksABusinessFailureOnATypedConsumer(t *testing.T) {
+	ledger := &fakeHoldLedger{}
+	runner := newTypedHoldRunner(t, ledger, func(context.Context, streamOrder, *Message) error {
+		return errHandlerFailed
+	})
+	storer := &fakeStorer{}
+
+	runner.deliver(testStream, 41, stampedJSONMessage("tenant-a", `{"reference":"abc","amount":7}`), storer)
+
+	require.Len(t, ledger.parked(), 1)
+	assert.True(t, runner.held.has("tenant-a"))
+	assert.Equal(t, []int64{41}, storer.offsets())
+}
+
+// TestRunnerScreensPoisonBeforeTheGate pins the harder half: a HELD tenant's
+// delivery is parked without running, so only the screen can tell that this one
+// would never have decoded. Parking it would leave the tenant held forever behind
+// a row no replay can drain.
+func TestRunnerScreensPoisonBeforeTheGate(t *testing.T) {
+	ledger := &fakeHoldLedger{}
+	handled := 0
+	runner := newTypedHoldRunner(t, ledger, func(context.Context, streamOrder, *Message) error {
+		handled++
+		return nil
+	})
+	runner.held.add("tenant-a")
+	storer := &fakeStorer{}
+
+	runner.deliver(testStream, 41, stampedJSONMessage("tenant-a", `{"amount":"notanint"}`), storer)
+
+	assert.Zero(t, handled, "a held tenant's message still never reaches the handler")
+	assert.Empty(t, ledger.parked(), "and poison is not parked behind the tenant either")
+	assert.True(t, runner.held.has("tenant-a"), "the tenant stays held: the messages before it are still parked")
+	assert.Empty(t, storer.offsets(), "the offset is skipped")
+}
+
+// TestRunnerStillGatesADecodableMessage is the premise for the screen: the same
+// held tenant's DECODABLE message is still parked in order, so the test above
+// pins the screen rather than a gate that stopped parking.
+func TestRunnerStillGatesADecodableMessage(t *testing.T) {
+	ledger := &fakeHoldLedger{}
+	handled := 0
+	runner := newTypedHoldRunner(t, ledger, func(context.Context, streamOrder, *Message) error {
+		handled++
+		return nil
+	})
+	runner.held.add("tenant-a")
+	storer := &fakeStorer{}
+
+	runner.deliver(testStream, 41, stampedJSONMessage("tenant-a", `{"reference":"abc","amount":7}`), storer)
+
+	assert.Zero(t, handled)
+	require.Len(t, ledger.parked(), 1)
+	assert.Equal(t, int64(41), ledger.parked()[0].Offset)
+	assert.Equal(t, []int64{41}, storer.offsets(), "a gated delivery commits: it is durably held")
+}
+
+// A consumer with no screen — every hand-written Handler — keeps the gate it had
+// before typed consumers existed.
+func TestRunnerWithoutAScreenGatesEverything(t *testing.T) {
+	ledger := &fakeHoldLedger{}
+	runner := newHoldRunner(t, func(context.Context, *Message) error { return nil },
+		ledger, newOffsetTracker(1, time.Hour, newFakeClock().Now))
+	require.Nil(t, runner.screen, "premise: a hand-written handler carries no screen")
+	runner.held.add("tenant-a")
+
+	runner.deliver(testStream, 41, stampedJSONMessage("tenant-a", `not json at all`), &fakeStorer{})
+
+	assert.Len(t, ledger.parked(), 1, "with no screen there is nothing to ask, so the gate parks")
+}
+
+// TestRunnerHoldsOnlyTheTenantThatFailed pins the isolation the hold exists for
+// (ADR-089) against the poison bypass: with tenant-a held, ANOTHER tenant's
+// poison is skipped without holding it, and that tenant's decodable message is
+// still handled and committed. Skipping poison must not cost the partition its
+// throughput for everyone else.
+func TestRunnerHoldsOnlyTheTenantThatFailed(t *testing.T) {
+	ledger := &fakeHoldLedger{}
+	handled := 0
+	runner := newTypedHoldRunner(t, ledger, func(context.Context, streamOrder, *Message) error {
+		handled++
+		return nil
+	})
+	runner.held.add("tenant-a")
+	storer := &fakeStorer{}
+
+	runner.deliver(testStream, 41, stampedJSONMessage("tenant-b", `{"amount":"notanint"}`), storer)
+
+	assert.Zero(t, handled, "the poison never reaches the handler")
+	assert.Empty(t, ledger.parked(), "and holds nobody")
+	assert.False(t, runner.held.has("tenant-b"), "a payload failure holds no tenant, held partition or not")
+	assert.Empty(t, storer.offsets(), "its offset is skipped")
+
+	runner.deliver(testStream, 42, stampedJSONMessage("tenant-b", `{"reference":"abc","amount":7}`), storer)
+
+	assert.Equal(t, 1, handled, "an unheld tenant keeps flowing past another tenant's hold")
+	assert.Equal(t, []int64{42}, storer.offsets(), "and commits past the skipped offset")
+	assert.True(t, runner.held.has("tenant-a"), "tenant-a is still held throughout")
+}

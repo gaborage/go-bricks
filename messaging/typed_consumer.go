@@ -2,16 +2,12 @@ package messaging
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
-	"sync"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
-	"github.com/gaborage/go-bricks/internal/saferender"
-	"github.com/gaborage/go-bricks/internal/validation"
+	"github.com/gaborage/go-bricks/messaging/internal/payloaderr"
 )
 
 // errNilDelivery is the cause a nil *amqp.Delivery is reported with. The
@@ -22,40 +18,6 @@ var errNilDelivery = errors.New("messaging: nil delivery")
 // nilDeliverySummary renders errNilDelivery. It is a constant, so the no-payload
 // -bytes guarantee holds trivially.
 const nilDeliverySummary = "nil delivery"
-
-// typedValidator is the one validator instance every typed handler shares.
-// validator caches struct metadata by reflect.Type, so per-message construction
-// would throw that cache away on every delivery; the instance is safe for
-// concurrent use, which is what lets one adapter serve every worker.
-var typedValidator = sync.OnceValue(validation.New)
-
-// codec decodes a raw payload into T. Unexported by design: schema negotiation
-// and non-JSON payloads (issue #346) widen this seam without an API break.
-type codec interface {
-	Unmarshal(data []byte, v any) error
-	// summarize renders a decode failure with NO payload bytes in it. Returning
-	// "" means the shape was not audited; the PayloadError constructor
-	// substitutes the fail-closed phrase, so a codec never spells it out.
-	//
-	// fieldPathIsSchema tells the codec whether a field path the decoder reports
-	// can be trusted as schema-only. The caller decides it from the destination
-	// type, once per registration; a codec must never infer it from the error.
-	summarize(err error, fieldPathIsSchema bool) string
-}
-
-// jsonCodec is the only codec today: AMQP bodies are JSON on every path the
-// framework publishes.
-type jsonCodec struct{}
-
-func (jsonCodec) Unmarshal(data []byte, v any) error {
-	return json.Unmarshal(data, v)
-}
-
-// summarize delegates to the shared safe-rendering seam; see
-// saferender.JSONDecodeSummary for the rules and their rationale.
-func (jsonCodec) summarize(err error, fieldPathIsSchema bool) string {
-	return saferender.JSONDecodeSummary(err, fieldPathIsSchema)
-}
 
 // Metadata exposes read-only delivery facts to a typed consumer without
 // widening fn's payload contract. It is a per-delivery value constructed by
@@ -104,21 +66,17 @@ func (m Metadata) Redelivered() bool {
 // about.
 type typedHandler[T any] struct {
 	eventType string
-	codec     codec
-	// fieldPathIsSchema is the decode-summary gate for T, decided once here
-	// because it depends on T alone. See the function of the same name.
-	fieldPathIsSchema bool
-	fn                func(context.Context, T, Metadata) error
+	decoder   *payloaderr.Decoder[T]
+	fn        func(context.Context, T, Metadata) error
 }
 
-// newTypedHandler is the single construction point, so the field-path gate
-// cannot be forgotten on one of the two exported entry points.
+// newTypedHandler is the single construction point, so the decoder cannot be
+// forgotten on one of the two exported entry points.
 func newTypedHandler[T any](eventType string, fn func(context.Context, T, Metadata) error) *typedHandler[T] {
 	return &typedHandler[T]{
-		eventType:         eventType,
-		codec:             jsonCodec{},
-		fieldPathIsSchema: saferender.FieldPathIsSchema(reflect.TypeFor[T]()),
-		fn:                fn,
+		eventType: eventType,
+		decoder:   payloaderr.NewDecoder[T](payloaderr.JSONCodec{}),
+		fn:        fn,
 	}
 }
 
@@ -145,20 +103,13 @@ func NewTypedHandler[T any](eventType string, fn func(context.Context, T) error)
 
 func (h *typedHandler[T]) Handle(ctx context.Context, delivery *amqp.Delivery) error {
 	if delivery == nil {
-		return newPayloadDecodeError(h.eventType, errNilDelivery, nilDeliverySummary)
+		return newPayloadError(h.eventType, payloaderr.NewDecode(errNilDelivery, nilDeliverySummary))
 	}
 
 	// A fresh payload per delivery: workers share the handler, not the value.
 	var payload T
-	if err := h.codec.Unmarshal(delivery.Body, &payload); err != nil {
-		return newPayloadDecodeError(h.eventType, err, h.codec.summarize(err, h.fieldPathIsSchema))
-	}
-
-	// A non-struct T reaches this with a *validator.InvalidValidationError, which
-	// yields no fields and still matches ErrPayloadInvalid — fail closed on the
-	// first delivery rather than silently skipping validation forever.
-	if err := typedValidator().Struct(payload); err != nil {
-		return newPayloadValidateError(h.eventType, err)
+	if body := h.decoder.Decode(delivery.Body, &payload); body != nil {
+		return newPayloadError(h.eventType, body)
 	}
 
 	return h.fn(ctx, payload, Metadata{delivery: delivery})

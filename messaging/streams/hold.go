@@ -218,8 +218,16 @@ func (r *consumerRunner) gates(tenant string) bool {
 // A delivery with no tenant is skipped as it always was: a hold is keyed by the
 // tenant, and there is nothing to key this one on.
 func (r *consumerRunner) parks(res *delivery.Result, tenant string) bool {
-	// res.Err is the whole test: it is non-nil for exactly the two failing
-	// outcomes, so naming them as well would add a clause no delivery can
+	// A payload failure is deterministic poison: the same bytes fail the same way
+	// on every replay, so parking one would hold the tenant forever behind a
+	// message the drain can never delete (ADR-092). It is skipped like any failure
+	// on a consumer that does not hold.
+	if isPayloadFailure(res.Err) {
+		return false
+	}
+
+	// res.Err is the whole rest of the test: it is non-nil for exactly the two
+	// failing outcomes, so naming them as well would add a clause no delivery can
 	// disagree with.
 	return r.hold != nil && tenant != "" && res.Err != nil
 }

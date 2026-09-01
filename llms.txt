@@ -3050,6 +3050,36 @@ decls.DeclareSuperStreamConsumer(&streams.SuperStreamConsumerOptions{
 })
 ```
 
+**Typed stream consumers.** `streams.DeclareTypedConsumer` decodes + validates the body and calls
+a plain typed function — the streams mirror of `messaging.DeclareTypedConsumer`. `T` is inferred
+from the function; `ConsumerOptions.Handler` must be nil (it panics at declaration otherwise).
+`DeclareTypedConsumerWithMeta` takes `func(ctx, T, *streams.Message) error` when the handler also
+needs `msg.Offset` / `msg.Stream` / `msg.Properties`, and
+`DeclareTypedSuperStreamConsumer[WithMeta]` are the super-stream siblings. There is no exported
+`NewTypedHandler` on this lane. See [wiki/streams.md#typed-consumers](wiki/streams.md#typed-consumers)
+and ADR-092:
+
+```go
+type OrderPlaced struct {
+	Reference string `json:"reference" validate:"required,max=32"`
+	Amount    int64  `json:"amount"    validate:"required,gt=0"`
+}
+
+streams.DeclareTypedConsumer(decls, &streams.ConsumerOptions{
+	Stream: "orders", Name: "order-projector",
+	Start: streams.OffsetFirst(),
+}, func(ctx context.Context, order OrderPlaced) error {
+	return m.svc.Project(ctx, order)
+})
+```
+
+A decode or validation failure is **deterministic poison**: never retried in place (it is returned
+`Permanent`), never parked by `Hold` — not even for an already-held tenant, which is screened
+before the gate — and its offset is skipped. Parking one would defer that tenant on every drain
+pass forever. Match with `errors.Is(err, streams.ErrPayloadUndecodable)` /
+`streams.ErrPayloadInvalid`; `*streams.PayloadError` carries `Consumer`, `Stage` and `Fields()`.
+`Error()` and `Fields()` are safe to log, `Unwrap()` is not — the raw cause may carry payload bytes.
+
 ```yaml
 inbox:
   enabled: true
@@ -3334,6 +3364,7 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 | Atomic publish (with DB) | Use Transactional Outbox — `deps.Outbox.Publish(ctx, tx, event)` |
 | Consumer Handler | `Handle(ctx, *amqp.Delivery) error` + `EventType() string` |
 | Typed consumer (decode + validate) | `messaging.DeclareTypedConsumer(decls, opts, fn)` — `fn` is `func(ctx, T) error` |
+| Typed stream consumer (streams lane) | `streams.DeclareTypedConsumer(decls, opts, fn)` — payload failures skip, never hold (ADR-092) |
 | Typed consumer + delivery metadata | `messaging.DeclareTypedConsumerWithMeta(decls, opts, fn)` — `fn` is `func(ctx, T, messaging.Metadata) error` |
 | ACK | Return `nil` |
 | nack-without-requeue (drop) | Return `error` |

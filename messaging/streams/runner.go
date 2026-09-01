@@ -222,6 +222,10 @@ type consumerRunner struct {
 	log     logger.Logger
 	// retry bounds in-place re-invocation of the handler; nil is one attempt.
 	retry *delivery.Retry
+	// screen rejects a message the handler could not have accepted, without
+	// running it. Only a typed declaration supplies one, and only the hold's gated
+	// path calls it — see deliver.
+	screen func(*Message) error
 
 	// tenantStamps and tenantOptional are handed to the shared delivery pipeline,
 	// which owns the read: both lanes must refuse the same deliveries with the same
@@ -313,6 +317,13 @@ func (r *consumerRunner) deliver(streamName string, offset int64, message *amqp.
 			// runner learns it.
 			tenant, _ = multitenant.TenantID(msgCtx)
 			if r.gates(tenant) {
+				// A body that cannot decode fails identically on every replay, so
+				// parking it would hold this tenant behind a message the drain can
+				// never get past (ADR-092). Screening first skips it instead, and the
+				// tenant's order over the messages that CAN be handled is unaffected.
+				if err := r.screenPoison(msg); err != nil {
+					return err
+				}
 				return r.park(msgCtx, heldMessageOf(r.name, streamName, offset, tenant, msg, message), true)
 			}
 			// The handler signature is unchanged (ADR-069 follow-up decision Q1):
@@ -330,6 +341,17 @@ func (r *consumerRunner) deliver(streamName string, offset int64, message *amqp.
 			r.commitOffset(res, streamName, offset, store)
 		},
 	})
+}
+
+// screenPoison asks a typed consumer's screen whether this message is one its
+// handler could not have accepted. A consumer with no screen — every
+// hand-written Handler — reports nothing, which is the behavior this lane had
+// before typed consumers existed.
+func (r *consumerRunner) screenPoison(msg *Message) error {
+	if r.screen == nil {
+		return nil
+	}
+	return r.screen(msg)
 }
 
 // logOutcome writes this lane's line for a finished delivery. A successful
