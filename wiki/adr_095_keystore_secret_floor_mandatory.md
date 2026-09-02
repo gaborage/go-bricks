@@ -65,7 +65,7 @@ Alternatives rejected:
 - **Breaking, at startup.** `keystore.secretminlength: 0`, or any value below
   32, in YAML, environment (`KEYSTORE_SECRETMINLENGTH`) or a Go literal now
   fails `config.Validate` — and therefore `config.Load` and every `app`
-  construction path (ADR-064). See [migrations.md](migrations.md) `[C62.1]`.
+  construction path (ADR-064). See [migrations.md](migrations.md) `[C62.3]`.
 - A symmetric secret shorter than 32 bytes has no keystore path at all, on
   either door — `config.Validate` rejects the config and `Module.Init` refuses
   a floor that reached it unvalidated. A

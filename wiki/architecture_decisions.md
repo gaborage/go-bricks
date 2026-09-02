@@ -1479,7 +1479,7 @@ repeats the bound as a backstop for the one door that skips `Validate` — a han
 `*app.ModuleDeps` — refusing rather than clamping, since `0` is a widening value. Both WARNs,
 `belowRecommended` and the `0`-means-off branch are deleted. A secret shorter than 32 bytes has
 no keystore path — the consumer loads such a partner key itself. See
-[migrations.md](migrations.md) `[C62.1]`.
+[migrations.md](migrations.md) `[C62.3]`.
 
 **Key Benefits:** the floor is a control rather than a suggestion, one less startup WARN an
 operator learns to ignore, and the `keystore` package no longer carries a deprecation branch.
