@@ -139,7 +139,7 @@ answer is already no.
 | Distributed lock | `CompareAndSet(ctx, key, expectedValue, newValue, ttl)` | Job coordination | Lua script CAS |
 | Lock release | `CompareAndDelete(ctx, key, expectedValue)` | Token-verified release, conditional eviction | Lua script CAD |
 | Type-safe store | `Marshal(v)` + `Set()` | Struct serialization | CBOR encoding |
-| Load-through read | `LoadThrough[T](ctx, c, key, ttl, loader)` | Read-through with origin fallback | Bounded cache leg + per-instance single-flight |
+| Load-through read | `LoadThrough[T](ctx, c, key, ttl, loader)` | Read-through with origin fallback | `cache.loadtimeout`-bounded cache leg + per-instance single-flight |
 
 **Releasing a distributed lock:** acquire with `CompareAndSet` and a **positive** TTL, then
 release with `CompareAndDelete` carrying the same token — never a bare `Delete`, which
@@ -205,8 +205,8 @@ func (s *UserService) User(ctx context.Context, id int64) (User, error) {
 What it guarantees:
 
 - **The cache leg is bounded; the origin is not.** Each cache step runs under a timeout
-  derived from `ctx` — `cache.DefaultLoadCacheTimeout` (500 ms) or
-  `cache.WithCacheTimeout(d)` — so a slow-but-reachable Redis costs at most that slice of
+  derived from `ctx` — the deployment's `cache.loadtimeout` (500 ms by default) or a
+  per-call `cache.WithCacheTimeout(d)` — so a slow-but-reachable Redis costs at most that slice of
   the request budget before the loader runs. The loader receives `ctx` itself, deadline
   and values intact, and keeps whatever budget remains after the cache leg: under the
   default `server.timeout.middleware` of 5 s that is the request's remaining time less
@@ -234,7 +234,35 @@ What it guarantees:
   `ErrNilCache`; `ttl < 0` returns `ErrInvalidTTL`; a non-positive `WithCacheTimeout`
   returns `ErrInvalidCacheTimeout`.
 
-Each fill records `cache.fill.duration` (seconds) with `cache.collapsed=leader|follower`,
+**Configuring the bound.** `cache.loadtimeout` sets it per deployment:
+
+```yaml
+cache:
+  loadtimeout: 250ms   # default 500ms; absent or 0 takes the default
+```
+
+Absent or `0` takes the 500 ms default and a negative value fails startup naming
+`cache.loadtimeout`, so a deployment cannot express an unbounded leg. The value travels on
+the **resolved cache instance**, so a per-tenant `cache.loadtimeout` is honoured without any
+process-wide state, and `cache.WithCacheTimeout(d)` overrides it for one call. Keep it well
+under `server.timeout.middleware` (5 s): it is the slice of the request budget a slow cache
+may spend before the origin is consulted.
+
+One trap if you wrap a `Cache` (metrics, tracing, a test spy): the bound reaches
+`LoadThrough` through an optional `cache.LoadTimeoutProvider` interface, and embedding
+`cache.Cache` in your wrapper promotes only that interface's methods. A wrapper that does not
+forward `LoadTimeout()` silently falls back to 500 ms rather than the configured value:
+
+```go
+func (w *myCache) LoadTimeout() time.Duration {
+    if p, ok := w.Cache.(cache.LoadTimeoutProvider); ok {
+        return p.LoadTimeout()
+    }
+    return 0
+}
+```
+
+Each fill records `cache.fill.duration` (seconds) with `cache.fill.role=leader|follower`,
 `db.namespace` when a tenant is on the context, and `error.type` on failure; hits show up
 as `cache.hit` on the underlying `Get`. Not covered: negative caching (a loader error is
 never stored) and cross-process fill locking — two processes missing at once both load,
@@ -250,7 +278,7 @@ and the later write-back wins.
 **Observability Integration:**
 When `observability.enabled: true`, cache operations automatically emit:
 
-- **Metrics**: `db.client.operation.duration` (histogram, tagged with `error.type` on failure), `cache.hit`/`cache.miss` (counters), `cache.fill.duration` (histogram per `LoadThrough` fill, `cache.collapsed=leader|follower`), `cache.manager.active_caches`, `cache.manager.evictions`, `cache.manager.idle_cleanups`, `cache.manager.total_created`, `cache.manager.errors` — no distributed-tracing spans are emitted today
+- **Metrics**: `db.client.operation.duration` (histogram, tagged with `error.type` on failure), `cache.hit`/`cache.miss` (counters), `cache.fill.duration` (histogram per `LoadThrough` fill, `cache.fill.role=leader|follower`), `cache.manager.active_caches`, `cache.manager.evictions`, `cache.manager.idle_cleanups`, `cache.manager.total_created`, `cache.manager.errors` — no distributed-tracing spans are emitted today
 - **Health**: A probe registered in the `/ready` probe set whenever the cache manager exists. It leases an instance from the manager (`cacheManager.Get(ctx, "")`) and then calls `Cache.Health(ctx)` on it — under the default connector that is one Redis `PING` on a warm poll and three round trips on a cold one (the construction-time `PING`, the `INFO` version check, then the probe's own `PING`); `Health` is connector-defined, so a custom `Options.CacheConnector` costs whatever its own implementation does, which need not touch the network. Its status is surfaced as the top-level `cache` and `cache_stats` keys in the `/ready` **200** body (a `503` carries only `status`, `cache` and `error`), and it fails `/ready` with `503` only under `cache.critical: true` — the default is informational (ADR-094). See [Readiness](#readiness) below
 
 ## Readiness
