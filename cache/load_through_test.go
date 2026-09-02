@@ -244,15 +244,21 @@ func ltOnceLoader(v ltUser, err error) (load cache.Loader[ltUser], calls *atomic
 	return load, calls, started, release
 }
 
-// ltFollowersShareTheLeaderOutcome runs a gated leader on leaderCtx and N followers with
-// short deadlines, then classifies each follower: the leader's outcome means it joined
-// the flight, its own deadline means it arrived after the flight closed and loaded alone.
-func ltFollowersShareTheLeaderOutcome(t *testing.T, leaderCtx context.Context, wantVal ltUser, wantErr error) {
+// ltFollowersShareTheLeaderOutcome runs a gated leader and N followers with short
+// deadlines, then classifies each follower: the leader's outcome means it joined the
+// flight, its own deadline means it arrived after the flight closed and loaded alone.
+// A canceled leader still loads — the loader is gated on release, not on its context.
+func ltFollowersShareTheLeaderOutcome(t *testing.T, leaderCanceled bool, wantVal ltUser, wantErr error) {
 	t.Helper()
 	const followers = 8
 	mock := cachetest.NewMockCache()
 	load, calls, started, release := ltOnceLoader(wantVal, wantErr)
 
+	leaderCtx, cancelLeader := context.WithCancel(t.Context())
+	defer cancelLeader()
+	if leaderCanceled {
+		cancelLeader()
+	}
 	leader := ltRun(leaderCtx, mock, load)
 	<-started
 	results := make([]<-chan ltResult, followers)
@@ -285,13 +291,11 @@ func ltFollowersShareTheLeaderOutcome(t *testing.T, leaderCtx context.Context, w
 }
 
 func TestLoadThroughServesFollowersFromTheLeaderFill(t *testing.T) {
-	ltFollowersShareTheLeaderOutcome(t, t.Context(), ltAlice, nil)
+	ltFollowersShareTheLeaderOutcome(t, false, ltAlice, nil)
 }
 
 func TestLoadThroughServesFollowersFromACanceledLeaderThatStillLoaded(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	ltFollowersShareTheLeaderOutcome(t, ctx, ltAlice, nil)
+	ltFollowersShareTheLeaderOutcome(t, true, ltAlice, nil)
 }
 
 func TestLoadThroughFollowersRecoverFromACanceledLeader(t *testing.T) {
@@ -397,7 +401,7 @@ func TestLoadThroughReportsLoaderPanicByTypeOnly(t *testing.T) {
 }
 
 func TestLoadThroughPropagatesLoaderErrorToEveryWaiter(t *testing.T) {
-	ltFollowersShareTheLeaderOutcome(t, t.Context(), ltUser{}, errors.New("origin down"))
+	ltFollowersShareTheLeaderOutcome(t, false, ltUser{}, errors.New("origin down"))
 }
 
 func TestLoadThroughNeverWritesBackALoaderError(t *testing.T) {
