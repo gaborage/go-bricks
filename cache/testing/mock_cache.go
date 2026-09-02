@@ -546,9 +546,21 @@ var operations = func() []string {
 	return names
 }()
 
-// counter resolves an operation name to its counter; ok is false for any name outside
-// the table.
+// operationAliases are the shorthand spellings OperationCount has always accepted. They
+// resolve to a real counter, so they are not the vacuous-zero footgun #1298 closes, and
+// removing them would break a consumer's test with no migration path. Prefer the Op*
+// constants: these are kept for compatibility, not as a second vocabulary.
+var operationAliases = map[string]string{
+	"CAS": OpCompareAndSet,
+	"CAD": OpCompareAndDelete,
+}
+
+// counter resolves an operation name — an Op* constant or a compatibility alias — to its
+// counter; ok is false for any other name.
 func (m *MockCache) counter(operation string) (c *atomic.Int64, ok bool) {
+	if canonical, isAlias := operationAliases[operation]; isAlias {
+		operation = canonical
+	}
 	for _, oc := range operationCounters {
 		if oc.name == operation {
 			return oc.counter(m), true
@@ -563,8 +575,8 @@ func unknownOperationMessage(operation string) string {
 }
 
 // OperationCount returns the number of times a specific operation was called. operation is
-// one of the Op* constants; any other name panics, naming the valid ones — a misspelled
-// name must not read as "zero calls".
+// one of the Op* constants (or a legacy "CAS"/"CAD" alias); any other name panics, naming
+// the valid ones — a misspelled name must not read as "zero calls".
 func (m *MockCache) OperationCount(operation string) int64 {
 	c, ok := m.counter(operation)
 	if !ok {

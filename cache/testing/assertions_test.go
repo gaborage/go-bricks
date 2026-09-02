@@ -84,6 +84,24 @@ func TestAssertOperationCountRejectsUnknownOperation(t *testing.T) {
 	}
 }
 
+// TestOperationCountAcceptsLegacyAliases pins the compatibility half: "CAS" and "CAD" are
+// shorthand for real counters, not misspellings, so they must keep resolving — dropping
+// them would break a consumer's test with no migration path.
+func TestOperationCountAcceptsLegacyAliases(t *testing.T) {
+	ctx := context.Background()
+	mock := NewMockCache()
+
+	_, err := mock.CompareAndSet(ctx, "key", nil, []byte("value"), time.Minute)
+	require.NoError(t, err)
+	_, err = mock.CompareAndDelete(ctx, "key", []byte("value"))
+	require.NoError(t, err)
+
+	assert.Equal(t, mock.OperationCount(OpCompareAndSet), mock.OperationCount("CAS"))
+	assert.Equal(t, mock.OperationCount(OpCompareAndDelete), mock.OperationCount("CAD"))
+	assert.Equal(t, int64(1), mock.OperationCount("CAS"))
+	assert.Equal(t, int64(1), mock.OperationCount("CAD"))
+}
+
 // TestOperationCountPanicsOnUnknownOperation pins the raw accessor's half of #1298: outside
 // an assertion there is no t to fail, so a misspelled name panics with the same message
 // instead of reading as zero. The expected text is a literal, not the helper's output.

@@ -47,8 +47,8 @@ func AssertCacheMiss(t *testing.T, c cache.Cache, key string) {
 // Only works with MockCache instances.
 //
 // operation is one of the Op* constants (OpGet, OpSet, OpDelete, OpGetOrSet, OpCompareAndSet,
-// OpCompareAndDelete, OpHealth, OpStats, OpClose); any other name fails the test, naming
-// the valid ones, rather than reading as zero calls.
+// OpCompareAndDelete, OpHealth, OpStats, OpClose) or a legacy "CAS"/"CAD" alias; any other
+// name fails the test, naming the valid ones, rather than reading as zero calls.
 //
 // Example:
 //
