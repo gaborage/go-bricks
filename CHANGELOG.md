@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.62.0](https://github.com/gaborage/go-bricks/compare/v0.61.0...v0.62.0) (2026-09-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cache:** demote CacheConfig.Critical to a plain bool ([#1333](https://github.com/gaborage/go-bricks/issues/1333))
+* **keystore:** make the secret-length floor mandatory ([#1317](https://github.com/gaborage/go-bricks/issues/1317))
+* **cache:** default cache.critical to non-critical ([#1313](https://github.com/gaborage/go-bricks/issues/1313))
+* **config:** reject the literal Local timezone ([#1314](https://github.com/gaborage/go-bricks/issues/1314))
+
+### Added
+
+* **app:** expose which resource kinds are configured on ModuleDeps ([#1320](https://github.com/gaborage/go-bricks/issues/1320)) ([0cfbb47](https://github.com/gaborage/go-bricks/commit/0cfbb477719e1b8f388ea25110620964dd08ee8e))
+* **cache:** add LoadThrough value-level load-through helper ([#1323](https://github.com/gaborage/go-bricks/issues/1323)) ([94c640d](https://github.com/gaborage/go-bricks/commit/94c640d545ad4c030ad15f747c49eeba5be1efc9))
+* **cache:** configurable load-through bound, cache.fill.role ([#1328](https://github.com/gaborage/go-bricks/issues/1328)) ([32c4daa](https://github.com/gaborage/go-bricks/commit/32c4daa694a77b70f4038e680ad1408bad1af0ba))
+* **cache:** default cache.critical to non-critical ([#1313](https://github.com/gaborage/go-bricks/issues/1313)) ([3eba221](https://github.com/gaborage/go-bricks/commit/3eba221bab0fe831de7b2b47c7604db5fb94c68d))
+* **cache:** record load-through fills as cache.fill.duration ([#1322](https://github.com/gaborage/go-bricks/issues/1322)) ([6ee58ab](https://github.com/gaborage/go-bricks/commit/6ee58aba94c230ee29d6831efd5cbe25e6210892))
+* **database:** export a vendor-aware bare-identifier validator ([#1334](https://github.com/gaborage/go-bricks/issues/1334)) ([80c7c2d](https://github.com/gaborage/go-bricks/commit/80c7c2d3ff894076c14175f74eb4dd2303154f04))
+* **keystore:** load RSA pairs from password-protected PKCS[#12](https://github.com/gaborage/go-bricks/issues/12) bundles ([#1312](https://github.com/gaborage/go-bricks/issues/1312)) ([a40870a](https://github.com/gaborage/go-bricks/commit/a40870afd690989931aafebf680ddb7403f55782))
+* **keystore:** make the secret-length floor mandatory ([#1317](https://github.com/gaborage/go-bricks/issues/1317)) ([5fc5413](https://github.com/gaborage/go-bricks/commit/5fc54132abfaf1474e92af61c9014f6555ed5531))
+* **messaging:** typed stream consumers skip poison, never hold it ([#1283](https://github.com/gaborage/go-bricks/issues/1283)) ([8962fe3](https://github.com/gaborage/go-bricks/commit/8962fe385ef97797bc942a5a060521a3d01675f5))
+
+
+### Fixed
+
+* **cache:** demote CacheConfig.Critical to a plain bool ([#1333](https://github.com/gaborage/go-bricks/issues/1333)) ([a50a05e](https://github.com/gaborage/go-bricks/commit/a50a05e159c0f8265f7b501183c3ce21b8dcc77c))
+* **cache:** reject unknown MockCache operation names in assertions ([#1319](https://github.com/gaborage/go-bricks/issues/1319)) ([71ac723](https://github.com/gaborage/go-bricks/commit/71ac723a735a9dd82b4d02227d31c5e7a6413c63))
+* **cache:** warn when the cleanup interval cannot beat idle TTL ([#1330](https://github.com/gaborage/go-bricks/issues/1330)) ([885e128](https://github.com/gaborage/go-bricks/commit/885e1282c5b548982ec6e0c401c6282c2e636123))
+* **config:** reject the literal Local timezone ([#1314](https://github.com/gaborage/go-bricks/issues/1314)) ([77b342e](https://github.com/gaborage/go-bricks/commit/77b342e48a88d293b0bd55590743bea6c4b5e563))
+* **database:** render RawExpression inline in Set, SetMap and Values ([#1332](https://github.com/gaborage/go-bricks/issues/1332)) ([02a004e](https://github.com/gaborage/go-bricks/commit/02a004e5b6c3811e0721c7766115d8c6ea25c9ed))
+* **scheduler:** guard the Init timezone door with normalization ([#1331](https://github.com/gaborage/go-bricks/issues/1331)) ([1530d75](https://github.com/gaborage/go-bricks/commit/1530d75caf51fcde5b37836b2217a620930879b5))
+
+
+### Changed
+
+* **config,app:** one addressing engine behind every config-error door ([#1276](https://github.com/gaborage/go-bricks/issues/1276)) ([d662960](https://github.com/gaborage/go-bricks/commit/d66296015e2942dc6c9adc1b16d45f9cdb287ee3))
+* **config:** rename validation.go to defaults.go, matching what remains ([#1293](https://github.com/gaborage/go-bricks/issues/1293)) ([8d41026](https://github.com/gaborage/go-bricks/commit/8d4102656094de53ecd823a749a2c3225f36a08d))
+* **config:** split validation.go — link 1/6 ([#1284](https://github.com/gaborage/go-bricks/issues/1284)) ([31b6705](https://github.com/gaborage/go-bricks/commit/31b67055cfdfb732b1227a2835b45b47e9ccf7e5))
+* **config:** split validation.go — link 2/6 ([#1285](https://github.com/gaborage/go-bricks/issues/1285)) ([fcd2e32](https://github.com/gaborage/go-bricks/commit/fcd2e3230f5469c54afa3991bb049ee734c45ba2))
+* **config:** split validation.go — link 3/6 ([#1286](https://github.com/gaborage/go-bricks/issues/1286)) ([793e579](https://github.com/gaborage/go-bricks/commit/793e5795c174baed72d0093b266fb4ded4f791b2))
+* **config:** split validation.go — link 4/6 ([#1287](https://github.com/gaborage/go-bricks/issues/1287)) ([301dfda](https://github.com/gaborage/go-bricks/commit/301dfdaefaa8236b05540d7e4ba3d01b9b5d2516))
+* **config:** split validation.go — link 5/6 ([#1288](https://github.com/gaborage/go-bricks/issues/1288)) ([bfa9b74](https://github.com/gaborage/go-bricks/commit/bfa9b7478e61a8d7bfef3b495c15c03a9d772411))
+* **config:** split validation.go — link 6/6 ([#1289](https://github.com/gaborage/go-bricks/issues/1289)) ([70cb79c](https://github.com/gaborage/go-bricks/commit/70cb79cfd752116a946fa5ecd7f2037f6cb47407))
+* **database:** dispatch identifier quoting through a vendor renderer ([#1277](https://github.com/gaborage/go-bricks/issues/1277)) ([0878c9e](https://github.com/gaborage/go-bricks/commit/0878c9ed3ce65271bc99487d41569f8ae2b83cf3))
+* **database:** move the expression methods onto the vendor renderer ([#1278](https://github.com/gaborage/go-bricks/issues/1278)) ([788ff42](https://github.com/gaborage/go-bricks/commit/788ff4250f1e52f7e2943ff3f7670320e43d456d))
+
 ## [0.61.0](https://github.com/gaborage/go-bricks/compare/v0.60.0...v0.61.0) (2026-08-31)
 
 
