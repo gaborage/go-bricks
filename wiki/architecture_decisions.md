@@ -1414,10 +1414,10 @@ a fleet-wide `/ready` `503` (every replica leaving the endpoints at once) and ev
 without a Redis failed readiness; the deployment that opted out paid an unsuppressible WARN on every
 boot for the safer choice. An absent key now leaves the probe informational (`cache: "unhealthy"` in
 the `200` body, no `503`, no ERROR line), `critical: true` is the only way into readiness gating, and
-an explicit `false` is a decision, not a smell — the WARN is deleted. The tri-state `*bool` with no
-registered default stays (a registered default would collapse absent and explicit; the type is not
-narrowed to `bool`, which would break hand-built configs for nothing), as does ADR-048's sanitized
-`503` body for the opted-in case. Deriving criticality from a declared fallback was considered and
+an explicit `false` is a decision, not a smell — the WARN is deleted. No koanf default is registered
+for the key, and ADR-048's sanitized `503` body stays for the opted-in case. Amended 2026-09-02
+(#1316): `CacheConfig.Critical` is a plain `bool` — absent and `false` were already one state, so
+the `*bool` the original text kept encoded nothing; a compile-break for code setting the field. Deriving criticality from a declared fallback was considered and
 rejected as implicit. Migration: `[C62.2]`.
 
 **Key Benefits:** a Redis outage degrades the service instead of evicting the fleet; a boot without

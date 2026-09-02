@@ -828,7 +828,7 @@ func TestCollectProbesCacheCriticalFromLoadedConfig(t *testing.T) {
 // error substituted in. The per-constructor tests pin the probes that exist today; this is
 // the only guard that catches a critical probe added tomorrow.
 func TestCollectProbesCriticalProbesRenderNoRawError(t *testing.T) {
-	cfg := &config.Config{Cache: config.CacheConfig{Critical: new(true)}}
+	cfg := &config.Config{Cache: config.CacheConfig{Critical: true}}
 	require.True(t, cfg.IsCacheCritical(), "the cache probe must be opted into criticality, or this test covers only the database probe")
 
 	app := &App{
@@ -977,7 +977,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 			prepare: func(f *testAppFixture) {
 				f.db.On(methodHealth, mock.Anything).Return(nil)
 				f.messaging.SetReady(true)
-				require.Nil(f.t, f.app.cfg.Cache.Critical, "the fixture must leave the key absent")
+				require.False(f.t, f.app.cfg.Cache.Critical, "the fixture must leave the key unset")
 				f.app.cacheManager = createTestCacheManagerWithGetError(f.t,
 					cache.NewConnectionError("ping", redisProbeAddress, errors.New(errorRedisDown)))
 				f.rebuildLifecycle()
@@ -993,7 +993,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 			prepare: func(f *testAppFixture) {
 				f.db.On(methodHealth, mock.Anything).Return(nil)
 				f.messaging.SetReady(true)
-				f.app.cfg.Cache.Critical = new(false)
+				f.app.cfg.Cache.Critical = false
 				f.app.cacheManager = createTestCacheManagerWithGetError(f.t,
 					cache.NewConnectionError("ping", redisProbeAddress, errors.New(errorRedisDown)))
 				f.rebuildLifecycle()
@@ -1011,7 +1011,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 			prepare: func(f *testAppFixture) {
 				f.db.On(methodHealth, mock.Anything).Return(nil)
 				f.messaging.SetReady(true)
-				f.app.cfg.Cache.Critical = new(true)
+				f.app.cfg.Cache.Critical = true
 				f.app.cacheManager = createTestCacheManagerWithGetError(f.t,
 					cache.NewConnectionError("ping", redisProbeAddress, errors.New(errorRedisDown)))
 				f.rebuildLifecycle()
@@ -1029,7 +1029,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 			prepare: func(f *testAppFixture) {
 				f.db.On(methodHealth, mock.Anything).Return(nil)
 				f.messaging.SetReady(true)
-				f.app.cfg.Cache.Critical = new(false)
+				f.app.cfg.Cache.Critical = false
 				f.app.cacheManager = createWarmCacheManagerWithOutage(f.t)
 				f.rebuildLifecycle()
 			},
@@ -1041,7 +1041,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 			prepare: func(f *testAppFixture) {
 				f.db.On(methodHealth, mock.Anything).Return(nil)
 				f.messaging.SetReady(true)
-				f.app.cfg.Cache.Critical = new(true)
+				f.app.cfg.Cache.Critical = true
 				f.app.cacheManager = createWarmCacheManagerWithOutage(f.t)
 				f.rebuildLifecycle()
 			},
@@ -1057,7 +1057,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 			prepare: func(f *testAppFixture) {
 				f.db.On(methodHealth, mock.Anything).Return(nil)
 				f.messaging.SetReady(true)
-				f.app.cfg.Cache.Critical = new(true)
+				f.app.cfg.Cache.Critical = true
 				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusOK,
@@ -1074,7 +1074,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 			prepare: func(f *testAppFixture) {
 				f.db.On(methodHealth, mock.Anything).Return(nil)
 				f.messaging.SetReady(true)
-				f.app.cfg.Cache.Critical = new(true)
+				f.app.cfg.Cache.Critical = true
 				f.app.cacheManager = createTestCacheManagerWithGetError(f.t,
 					config.NewNotConfiguredError("cache", "CACHE_REDIS_HOST", "cache.redis.host"))
 				f.rebuildLifecycle()
