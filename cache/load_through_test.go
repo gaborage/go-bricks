@@ -226,27 +226,72 @@ func TestLoadThroughCollapsesConcurrentMissesIntoOneOriginCall(t *testing.T) {
 	assert.Equal(t, ltAlice, res.val)
 }
 
-func TestLoadThroughServesFollowersFromTheLeaderFill(t *testing.T) {
+// ltOnceLoader answers the first call with v/err once release is closed; every later call
+// blocks until its own context ends, so a follower that re-loads instead of taking the
+// leader's outcome is exposed by its deadline.
+func ltOnceLoader(v ltUser, err error) (load cache.Loader[ltUser], calls *atomic.Int64, started, release chan struct{}) {
+	calls = new(atomic.Int64)
+	started, release = make(chan struct{}), make(chan struct{})
+	load = func(ctx context.Context) (ltUser, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-release
+			return v, err
+		}
+		<-ctx.Done()
+		return ltUser{}, ctx.Err()
+	}
+	return load, calls, started, release
+}
+
+// ltFollowersShareTheLeaderOutcome runs a gated leader on leaderCtx and N followers with
+// short deadlines, then classifies each follower: the leader's outcome means it joined
+// the flight, its own deadline means it arrived after the flight closed and loaded alone.
+func ltFollowersShareTheLeaderOutcome(t *testing.T, leaderCtx context.Context, wantVal ltUser, wantErr error) {
+	t.Helper()
 	const followers = 8
 	mock := cachetest.NewMockCache()
-	gate := newLtGate()
-	load := gate.loader()
+	load, calls, started, release := ltOnceLoader(wantVal, wantErr)
 
-	leader := ltRun(t.Context(), mock, load)
-	<-gate.started
+	leader := ltRun(leaderCtx, mock, load)
+	<-started
 	results := make([]<-chan ltResult, followers)
 	for i := range results {
-		results[i] = ltRun(t.Context(), mock, load)
+		ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+		t.Cleanup(cancel)
+		results[i] = ltRun(ctx, mock, load)
 	}
 	ltWaitGets(t, mock, followers+1)
-	close(gate.release)
+	close(release)
 
-	for _, ch := range append([]<-chan ltResult{leader}, results...) {
-		res := <-ch
-		require.NoError(t, res.err)
-		assert.Equal(t, ltAlice, res.val)
+	res := <-leader
+	assert.ErrorIs(t, res.err, wantErr)
+	assert.Equal(t, wantVal, res.val)
+
+	var joined, late int64
+	for _, ch := range results {
+		fres := <-ch
+		switch {
+		case errors.Is(fres.err, context.DeadlineExceeded):
+			late++
+		default:
+			joined++
+			assert.ErrorIs(t, fres.err, wantErr)
+			assert.Equal(t, wantVal, fres.val)
+		}
 	}
-	assert.LessOrEqual(t, gate.calls.Load(), int64(followers+1))
+	assert.Equal(t, 1+late, calls.Load(), "only the leader and the late arrivals may load")
+	assert.NotZero(t, joined, "every follower arrived late — the flight never collapsed")
+}
+
+func TestLoadThroughServesFollowersFromTheLeaderFill(t *testing.T) {
+	ltFollowersShareTheLeaderOutcome(t, t.Context(), ltAlice, nil)
+}
+
+func TestLoadThroughServesFollowersFromACanceledLeaderThatStillLoaded(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	ltFollowersShareTheLeaderOutcome(t, ctx, ltAlice, nil)
 }
 
 func TestLoadThroughFollowersRecoverFromACanceledLeader(t *testing.T) {
@@ -352,33 +397,27 @@ func TestLoadThroughReportsLoaderPanicByTypeOnly(t *testing.T) {
 }
 
 func TestLoadThroughPropagatesLoaderErrorToEveryWaiter(t *testing.T) {
-	const followers = 4
+	ltFollowersShareTheLeaderOutcome(t, t.Context(), ltUser{}, errors.New("origin down"))
+}
+
+func TestLoadThroughNeverWritesBackALoaderError(t *testing.T) {
 	mock := cachetest.NewMockCache()
-	errOrigin := errors.New("origin down")
-	var calls atomic.Int64
-	started := make(chan struct{})
-	release := make(chan struct{})
-	load := func(context.Context) (ltUser, error) {
-		if calls.Add(1) == 1 {
-			close(started)
-		}
-		<-release
-		return ltUser{}, errOrigin
-	}
+	load := func(context.Context) (ltUser, error) { return ltAlice, errors.New("origin down") }
 
-	leader := ltRun(t.Context(), mock, load)
-	<-started
-	results := make([]<-chan ltResult, followers)
-	for i := range results {
-		results[i] = ltRun(t.Context(), mock, load)
-	}
-	ltWaitGets(t, mock, followers+1)
-	close(release)
-
-	for _, ch := range append([]<-chan ltResult{leader}, results...) {
-		assert.ErrorIs(t, (<-ch).err, errOrigin)
-	}
+	_, err := cache.LoadThrough(t.Context(), mock, ltKey, ltTTL, load)
+	require.Error(t, err)
 	require.Never(t, func() bool { return mock.OperationCount("Set") > 0 }, 100*time.Millisecond, ltWaitTick)
+}
+
+func TestLoadThroughStoresANonNilPointerResult(t *testing.T) {
+	mock := cachetest.NewMockCache()
+	load := func(context.Context) (*ltUser, error) { u := ltAlice; return &u, nil }
+
+	got, err := cache.LoadThrough(t.Context(), mock, ltKey, ltTTL, load)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, ltAlice, *got)
+	require.Eventually(t, func() bool { return mock.Has(ltKey) }, ltWaitFor, ltWaitTick)
 }
 
 func TestLoadThroughWriteBackSurvivesCallerCancellation(t *testing.T) {
