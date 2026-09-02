@@ -281,3 +281,33 @@ func TestValidateRedisCacheEdgeCases(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeCacheLoadTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		given   time.Duration
+		want    time.Duration
+		wantErr bool
+	}{
+		{name: "absent_takes_the_default", enabled: true, given: 0, want: 500 * time.Millisecond},
+		{name: "explicit_zero_takes_the_default", enabled: false, given: 0, want: 500 * time.Millisecond},
+		{name: "operator_value_is_kept", enabled: true, given: 250 * time.Millisecond, want: 250 * time.Millisecond},
+		{name: "disabled_cache_is_normalized_too", enabled: false, given: 3 * time.Second, want: 3 * time.Second},
+		{name: "negative_is_rejected", enabled: true, given: -time.Millisecond, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &CacheConfig{Enabled: tt.enabled, Type: CacheTypeRedis, LoadTimeout: tt.given}
+			cfg.Redis.Host = "localhost"
+			err := normalizeCache(cfg, false)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "cache.loadtimeout")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cfg.LoadTimeout)
+		})
+	}
+}

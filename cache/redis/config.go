@@ -30,6 +30,11 @@ type Config struct {
 	// DialTimeout is the timeout for establishing new connections (default: 5s).
 	DialTimeout time.Duration `config:"dial_timeout" default:"5s"`
 
+	// LoadTimeout bounds each cache leg of cache.LoadThrough (cache.loadtimeout).
+	// Zero leaves the helper on its own fallback; a deployment-resolved config always
+	// carries a positive value.
+	LoadTimeout time.Duration `config:"load_timeout" default:"500ms"`
+
 	// ReadTimeout is the timeout for socket reads (default: 3s).
 	// -1 disables timeout.
 	ReadTimeout time.Duration `config:"read_timeout" default:"3s"`

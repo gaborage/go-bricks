@@ -11,10 +11,20 @@ import (
 	"github.com/gaborage/go-bricks/cache/internal/tracking"
 )
 
-// DefaultLoadCacheTimeout bounds each cache leg of LoadThrough (the lookup and the
-// write-back) when WithCacheTimeout is not given. It is derived from the caller's context,
-// so the origin still receives that context untouched.
-const DefaultLoadCacheTimeout = 500 * time.Millisecond
+// fallbackCacheLegTimeout bounds a cache leg only when the deployment cannot say: the
+// caller passed no WithCacheTimeout AND the Cache does not implement LoadTimeoutProvider.
+// Every framework cache carries `cache.loadtimeout` (default 500ms) and therefore never
+// reaches this; it exists so a hand-written Cache cannot produce an unbounded leg.
+// Deliberately unexported: the configurable bound is the supported surface.
+const fallbackCacheLegTimeout = 500 * time.Millisecond
+
+// LoadTimeoutProvider is implemented by a Cache that knows its deployment's
+// `cache.loadtimeout`. The framework's Redis client implements it, so the bound resolves
+// per cache instance and a per-tenant override is honoured without any global state.
+type LoadTimeoutProvider interface {
+	// LoadTimeout returns the cache-leg bound; a non-positive value means "not configured".
+	LoadTimeout() time.Duration
+}
 
 var (
 	// ErrInvalidCacheTimeout is returned by LoadThrough when WithCacheTimeout was given a
@@ -34,14 +44,29 @@ type Loader[T any] func(ctx context.Context) (T, error)
 type LoadOption func(*loadConfig)
 
 type loadConfig struct {
-	cacheTimeout time.Duration
+	cacheTimeout    time.Duration
+	cacheTimeoutSet bool
 }
 
-// WithCacheTimeout bounds each cache leg of a LoadThrough call in place of
-// DefaultLoadCacheTimeout. Keep it well under the request budget: a slow cache spends at
-// most this much of the caller's deadline before the origin is consulted.
+// WithCacheTimeout bounds each cache leg of a LoadThrough call, overriding the deployment's
+// `cache.loadtimeout` for this call. Keep it well under the request budget: a slow cache
+// spends at most this much of the caller's deadline before the origin is consulted.
 func WithCacheTimeout(d time.Duration) LoadOption {
-	return func(cfg *loadConfig) { cfg.cacheTimeout = d }
+	return func(cfg *loadConfig) { cfg.cacheTimeout, cfg.cacheTimeoutSet = d, true }
+}
+
+// resolveCacheTimeout picks the cache-leg bound: an explicit WithCacheTimeout wins, then
+// the cache instance's configured `cache.loadtimeout`, then the fallback.
+func resolveCacheTimeout(c Cache, opt time.Duration) time.Duration {
+	if opt > 0 {
+		return opt
+	}
+	if p, ok := c.(LoadTimeoutProvider); ok {
+		if d := p.LoadTimeout(); d > 0 {
+			return d
+		}
+	}
+	return fallbackCacheLegTimeout
 }
 
 // LoadThrough serves key from c, loading it from the origin on a miss and writing the
@@ -56,15 +81,19 @@ func WithCacheTimeout(d time.Duration) LoadOption {
 // non-positive WithCacheTimeout returns ErrInvalidCacheTimeout, all before any cache or
 // origin call.
 //
+// The bound comes from the deployment's `cache.loadtimeout` (500ms by default), carried on
+// the resolved cache instance so per-tenant values are honoured; WithCacheTimeout overrides
+// it per call.
+//
 // See wiki/cache.md#load-through-reads for the full contract and the cache.fill.duration
 // metric each fill records.
 func LoadThrough[T any](ctx context.Context, c Cache, key string, ttl time.Duration, load Loader[T], opts ...LoadOption) (T, error) {
 	var zero T
-	cfg := loadConfig{cacheTimeout: DefaultLoadCacheTimeout}
+	var cfg loadConfig
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	if cfg.cacheTimeout <= 0 {
+	if cfg.cacheTimeoutSet && cfg.cacheTimeout <= 0 {
 		return zero, ErrInvalidCacheTimeout
 	}
 	if ttl < 0 {
@@ -73,13 +102,14 @@ func LoadThrough[T any](ctx context.Context, c Cache, key string, ttl time.Durat
 	if isNilValue(c) {
 		return zero, ErrNilCache
 	}
+	timeout := resolveCacheTimeout(c, cfg.cacheTimeout)
 
-	if v, ok := lookup[T](ctx, c, key, cfg.cacheTimeout); ok {
+	if v, ok := lookup[T](ctx, c, key, timeout); ok {
 		return v, nil
 	}
 
 	start := time.Now()
-	v, role, err := fill(ctx, c, key, ttl, load, cfg.cacheTimeout)
+	v, role, err := fill(ctx, c, key, ttl, load, timeout)
 	tracking.RecordCacheFill(ctx, role, time.Since(start), err)
 	return v, err
 }

@@ -380,6 +380,7 @@ func stringToTrimmedSliceHookFunc(sep string) mapstructure.DecodeHookFunc {
 // enforced by test, not by review.
 var derivedDefaultKeys = []string{
 	"app.startup.timeout",
+	"cache.loadtimeout",
 	"cache.redis.port",
 	"cache.redis.poolsize",
 	"cache.redis.dialtimeout",

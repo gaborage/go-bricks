@@ -223,6 +223,7 @@ func connectRedisCache(cacheCfg *config.CacheConfig, key string, log logger.Logg
 		MaxRetries:      cacheCfg.Redis.MaxRetries,
 		MinRetryBackoff: cacheCfg.Redis.MinRetryBackoff,
 		MaxRetryBackoff: cacheCfg.Redis.MaxRetryBackoff,
+		LoadTimeout:     cacheCfg.LoadTimeout,
 	}
 
 	log.Info().

@@ -1582,7 +1582,11 @@ func loadDefaultConfig(t *testing.T) (*Config, error) {
 // if derivation moves any default rather than merely relocating where it is written.
 func TestDerivedDefaultsRenderTheSameValuesAsTheOldLiteral(t *testing.T) {
 	want := map[string]any{
-		"app.startup.timeout":         "10s",
+		"app.startup.timeout": "10s",
+		// cache.loadtimeout is not one of the relocated literals — it is a key that was
+		// born derived (the allowlist is meant to grow, see derivedDefaultKeys) — so it
+		// is pinned here for its value, not as evidence of a move.
+		"cache.loadtimeout":           "500ms",
 		"cache.redis.port":            6379,
 		"cache.redis.poolsize":        10,
 		"cache.redis.dialtimeout":     "5s",
