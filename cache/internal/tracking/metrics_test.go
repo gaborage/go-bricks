@@ -12,6 +12,9 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	"github.com/gaborage/go-bricks/multitenant"
+	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
 const (
@@ -315,4 +318,40 @@ func sumCounterValue(t *testing.T, rm metricdata.ResourceMetrics, metricName str
 func collectHitMissCounts(t *testing.T, rm metricdata.ResourceMetrics) (hits, misses int64) {
 	t.Helper()
 	return sumCounterValue(t, rm, metricCacheHit), sumCounterValue(t, rm, metricCacheMiss)
+}
+
+func TestRecordCacheFill(t *testing.T) {
+	reader := setupTestMeterProvider(t)
+
+	RecordCacheFill(multitenant.SetTenant(context.Background(), "tenant-a"), FillLeader, 40*time.Millisecond, nil)
+	RecordCacheFill(context.Background(), FillFollower, 10*time.Millisecond, errors.New("connection refused"))
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+
+	m := obtest.FindMetric(rm, metricCacheFillDuration)
+	require.NotNil(t, m, "expected %s to be recorded", metricCacheFillDuration)
+	assert.Equal(t, "s", m.Unit)
+	hist, ok := m.Data.(metricdata.Histogram[float64])
+	require.True(t, ok, "expected histogram data")
+	require.Len(t, hist.DataPoints, 2, "one data point per attribute set")
+
+	for _, dp := range hist.DataPoints {
+		role, _ := dp.Attributes.Value(attribute.Key(attrCacheCollapsed))
+		ns, hasNS := dp.Attributes.Value(attribute.Key(attrDBNamespace))
+		errType, hasErr := dp.Attributes.Value(attribute.Key(attrErrorType))
+		switch role.AsString() {
+		case FillLeader:
+			assert.True(t, hasNS, "tenant on ctx must become db.namespace")
+			assert.Equal(t, "tenant-a", ns.AsString())
+			assert.False(t, hasErr, "a successful fill carries no error.type")
+			assert.InDelta(t, 0.04, dp.Sum, 1e-9)
+		case FillFollower:
+			assert.False(t, hasNS, "no tenant on ctx means no db.namespace")
+			assert.True(t, hasErr)
+			assert.Equal(t, errClassConnection, errType.AsString())
+		default:
+			t.Fatalf("unexpected role %q", role.AsString())
+		}
+	}
 }
