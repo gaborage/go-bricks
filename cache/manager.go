@@ -10,6 +10,7 @@ import (
 	"github.com/gaborage/go-bricks/cache/internal/tracking"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/resourcepool"
+	"github.com/gaborage/go-bricks/logger"
 )
 
 // ConfigProvider provides per-key cache configurations.
@@ -93,6 +94,10 @@ type ManagerConfig struct {
 	MaxSize         int           // Maximum number of active cache instances (0 = unlimited)
 	IdleTTL         time.Duration // Idle timeout for cache instances (0 = never timeout)
 	CleanupInterval time.Duration // How often to run idle cleanup (default: 5m)
+	// Logger receives the late-cleanup-interval WARN (CleanupInterval >= IdleTTL). Nil means
+	// no WARN. The database and messaging managers take the logger as a constructor
+	// parameter; it is a field here to keep the NewCacheManager signature stable.
+	Logger logger.Logger
 }
 
 // DefaultManagerConfig returns sensible defaults for the cache manager.
@@ -121,6 +126,9 @@ func NewCacheManager(cfg ManagerConfig, connector Connector) (*CacheManager, err
 
 	if cfg.CleanupInterval <= 0 {
 		cfg.CleanupInterval = 5 * time.Minute
+	}
+	if cfg.Logger != nil {
+		resourcepool.WarnIfCleanupIntervalTooLate(cfg.Logger, "cache.manager", cfg.CleanupInterval, cfg.IdleTTL)
 	}
 
 	pool := resourcepool.New[Cache](cfg.MaxSize, cfg.IdleTTL, func(c Cache) error {

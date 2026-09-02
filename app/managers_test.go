@@ -847,3 +847,27 @@ func createTestFactoryResolver(t *testing.T) *FactoryResolver {
 		},
 	})
 }
+
+// TestResourceManagerFactoryCreateCacheManagerWiresTheLogger pins that the factory hands its
+// logger to cache.NewCacheManager, observed through the only thing the manager logs at
+// construction: the late-cleanup-interval WARN under cache.manager keys.
+func TestResourceManagerFactoryCreateCacheManagerWiresTheLogger(t *testing.T) {
+	configBuilder := NewManagerConfigBuilder(false, 50)
+	configBuilder.cacheConfig = config.CacheManagerConfig{MaxSize: 5, IdleTTL: time.Minute, CleanupInterval: 0}
+	log := &recLogger{}
+	factory := NewResourceManagerFactory(createTestFactoryResolver(t), configBuilder, log)
+
+	manager, err := factory.CreateCacheManager(nil)
+	require.NoError(t, err)
+	defer func() { _ = manager.Close() }()
+
+	var warns []recEvent
+	for _, e := range log.events {
+		if e.level == "warn" {
+			warns = append(warns, e)
+		}
+	}
+	require.Len(t, warns, 1, "the cache manager's advisory must reach the app logger")
+	assert.Contains(t, warns[0].msg, "cache.manager.cleanupinterval is >= cache.manager.idlettl")
+	assert.Equal(t, 5*time.Minute, warns[0].dur["cleanupinterval"])
+}
