@@ -1101,3 +1101,64 @@ func TestDependenciesClosesManagersOnCacheConstructionFailure(t *testing.T) {
 	require.ErrorIs(t, msgErr, messaging.ErrManagerClosed,
 		"dependencies() must have called Close on its messagingManager before returning")
 }
+
+// TestMarkConfiguredMirrorsRootResolver pins the contract behind the three flags: for a
+// static single-tenant config a false flag coincides exactly with the framework's own root
+// resolver answering that kind with not_configured, and every mode that resolves per key at
+// runtime reads true, so a flag is never false while the accessor could still succeed.
+func TestMarkConfiguredMirrorsRootResolver(t *testing.T) {
+	withCfg := func(mutate func(*config.Config)) *config.Config {
+		cfg := &config.Config{}
+		mutate(cfg)
+		return cfg
+	}
+
+	tests := []struct {
+		name          string
+		cfg           *config.Config
+		opts          *Options
+		wantDB        bool
+		wantMessaging bool
+		wantCache     bool
+		crossCheck    bool // static single-tenant: the flags must agree with config.TenantStore
+	}{
+		{name: "nothing_configured", cfg: &config.Config{}, crossCheck: true},
+		{name: "database_only", cfg: withCfg(func(c *config.Config) { c.Database.Host = "localhost" }), wantDB: true, crossCheck: true},
+		{name: "messaging_only", cfg: withCfg(func(c *config.Config) { c.Messaging.Broker.URL = "amqp://localhost" }), wantMessaging: true, crossCheck: true},
+		{name: "cache_enabled", cfg: withCfg(func(c *config.Config) { c.Cache.Enabled = true }), wantCache: true, crossCheck: true},
+		{name: "cache_host_without_enabled_stays_false", cfg: withCfg(func(c *config.Config) { c.Cache.Redis.Host = "localhost" }), crossCheck: true},
+		// DBConfigured speaks for DB only: a named database resolves through databases.<name>,
+		// not the root block, so this deliberately reads false while DBByName would succeed.
+		{name: "named_database_without_root_reads_false", crossCheck: true, cfg: withCfg(func(c *config.Config) {
+			c.Databases = map[string]config.DatabaseConfig{"legacy": {Host: "localhost"}}
+		})},
+		{name: "custom_cache_connector_is_wired", cfg: &config.Config{}, opts: &Options{CacheConnector: func(context.Context, string) (cache.Cache, error) { return nil, nil }}, wantCache: true},
+		{name: "multi_tenant_reads_true_for_every_kind", cfg: withCfg(func(c *config.Config) { c.Multitenant.Enabled = true }), wantDB: true, wantMessaging: true, wantCache: true},
+		{name: "dynamic_config_source_reads_true", cfg: withCfg(func(c *config.Config) { c.Source.Type = config.SourceTypeDynamic }), wantDB: true, wantMessaging: true, wantCache: true},
+		{name: "caller_resource_source_reads_true", cfg: &config.Config{}, opts: &Options{ResourceSource: &dynamicResourceSource{dynamic: false}}, wantDB: true, wantMessaging: true, wantCache: true},
+		{name: "nil_config_reads_true", cfg: nil, wantDB: true, wantMessaging: true, wantCache: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps := &ModuleDeps{}
+			markConfigured(deps, tt.cfg, tt.opts)
+
+			assert.Equal(t, tt.wantDB, deps.DBConfigured, "DBConfigured")
+			assert.Equal(t, tt.wantMessaging, deps.MessagingConfigured, "MessagingConfigured")
+			assert.Equal(t, tt.wantCache, deps.CacheConfigured, "CacheConfigured")
+
+			if !tt.crossCheck {
+				return
+			}
+			ctx := context.Background()
+			store := config.NewTenantStore(tt.cfg)
+			_, dbErr := store.DBConfig(ctx, "")
+			assert.Equal(t, !tt.wantDB, config.IsNotConfigured(dbErr), "DB flag must mirror the root resolver")
+			_, msgErr := store.BrokerURL(ctx, "")
+			assert.Equal(t, !tt.wantMessaging, config.IsNotConfigured(msgErr), "Messaging flag must mirror the root resolver")
+			_, cacheErr := store.CacheConfig(ctx, "")
+			assert.Equal(t, !tt.wantCache, config.IsNotConfigured(cacheErr), "Cache flag must mirror the root resolver")
+		})
+	}
+}

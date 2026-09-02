@@ -1903,6 +1903,13 @@ type Module struct {
 }
 
 func (m *Module) Init(deps *app.ModuleDeps) error {
+    // deps.Cache is never nil: with no cache configured every call returns an error
+    // satisfying config.IsNotConfigured, so `deps.Cache == nil` never fires. Ask the
+    // flag when you only need to know (false is definitive; true can still fail per
+    // tenant), and keep the error path below.
+    if !deps.CacheConfigured {
+        deps.Logger.Warn().Msg("No cache configured; user lookups hit the database every time")
+    }
     m.getCache = deps.Cache  // Store function for tenant-aware resolution
     m.logger = deps.Logger
     return nil
@@ -2327,7 +2334,7 @@ func (s *UserService) fetchAndCache(ctx context.Context, c cache.Cache, id int64
 | `cache.ErrInvalidTTL` | Negative TTL provided (zero is valid — it means no expiration) | Fix code - TTL must be non-negative |
 | `cache.OperationError` | Network/Redis error | Log error, fallback to database |
 | `context.DeadlineExceeded` | Operation timeout | Skip cache, continue with database |
-| `config.ConfigError` (category `not_configured`, check with `config.IsNotConfigured(err)`) | Cache not enabled | Disable cache features gracefully |
+| `config.ConfigError` (category `not_configured`, check with `config.IsNotConfigured(err)`) | Cache not enabled, or no cache for this tenant | Disable cache features gracefully. `deps.CacheConfigured` answers for the ROOT config only — it can be true while this resolve fails for a tenant or runtime-resolved key, so keep handling the error |
 
 **Health Checks & Monitoring:**
 
