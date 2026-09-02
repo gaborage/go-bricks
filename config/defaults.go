@@ -31,6 +31,10 @@ const (
 	// Connection layers compare against this constant to decide whether to
 	// apply per-connection timezone setup.
 	TimezoneDisabledSentinel = "-"
+	// localTimezoneLiteral is the one spelling time.LoadLocation resolves to the
+	// host zone without consulting the IANA database. It is refused so that "-"
+	// stays the only host-local opt-in (ADR-093).
+	localTimezoneLiteral = "Local"
 
 	// DefaultBodyLimitBytes is the maximum request body size (10 MB) applied when
 	// server.bodylimit is unset or resolves to a non-positive value. Single source
@@ -220,11 +224,16 @@ const (
 	identityKeyPort = "port"
 )
 
+// timezoneValidOptions is the Action every timezone rejection renders.
+var timezoneValidOptions = []string{`a valid IANA timezone (e.g. "UTC", "America/New_York") or "-" to disable`}
+
 // normalizeIANATimezone defaults an empty timezone to UTC and validates it as a
 // loadable IANA name. The "-" sentinel passes through unchanged so callers can
-// treat it as "disabled". field labels the validation error. Shared by config
-// sections that carry IANA timezone fields (currently database and scheduler)
-// so the contracts cannot drift.
+// treat it as "disabled"; the literal "Local" is refused because the loader
+// would resolve it to the host zone, making it a second, undocumented opt-in.
+// field labels the validation error. Shared by config sections that carry
+// IANA timezone fields (currently database and scheduler) so the contracts
+// cannot drift.
 func normalizeIANATimezone(field, value string) (string, error) {
 	if value == "" {
 		value = DefaultTimezone
@@ -232,11 +241,18 @@ func normalizeIANATimezone(field, value string) (string, error) {
 	if value == TimezoneDisabledSentinel {
 		return value, nil
 	}
+	if value == localTimezoneLiteral {
+		return value, NewInvalidFieldError(
+			field,
+			`timezone "Local" is not accepted; use "-" to opt into host-local time`,
+			timezoneValidOptions,
+		)
+	}
 	if _, err := time.LoadLocation(value); err != nil {
 		return value, NewInvalidFieldError(
 			field,
 			fmt.Sprintf("invalid IANA timezone %q: %v", value, err),
-			[]string{`a valid IANA timezone (e.g. "UTC", "America/New_York") or "-" to disable`},
+			timezoneValidOptions,
 		)
 	}
 	return value, nil

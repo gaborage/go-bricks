@@ -268,6 +268,15 @@ func TestContains(t *testing.T) {
 	}
 }
 
+func TestNormalizeIANATimezoneRejectsLiteralLocal(t *testing.T) {
+	_, err := normalizeIANATimezone("scheduler.timezone", "Local")
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "scheduler.timezone", cfgErr.Field)
+	assert.Contains(t, cfgErr.Message, `"Local"`)
+	assert.Contains(t, cfgErr.Message, `"-"`)
+}
+
 func assertValidationError(t *testing.T, err error, errorContains string) {
 	// require, not assert: a nil err would otherwise panic on err.Error() below and
 	// take the whole test binary down instead of failing this one case.

@@ -171,6 +171,7 @@ type DatabaseConfig struct {
 	// Validated via time.LoadLocation at startup (fail-fast on invalid names).
 	// Default: "UTC". Set to "-" to disable session-level timezone enforcement
 	// (sessions then inherit the database server's default timezone).
+	// The literal "Local" is rejected; "-" is the only host-local spelling (ADR-093).
 	// Applies to both PostgreSQL (via pgx RuntimeParams) and Oracle (via
 	// ALTER SESSION SET TIME_ZONE on every new physical connection).
 	Timezone string `koanf:"timezone" json:"timezone" yaml:"timezone" toml:"timezone" mapstructure:"timezone"`
@@ -889,6 +890,7 @@ type SchedulerConfig struct {
 	// wall-clock schedules (DailyAt/WeeklyAt/MonthlyAt/HourlyAt). Validated via
 	// time.LoadLocation at startup (fail-fast on invalid names).
 	// Default: "UTC". Set to "-" to use the host's local time (legacy behavior).
+	// The literal "Local" is rejected; "-" is the only host-local spelling (ADR-093).
 	Timezone string `koanf:"timezone" json:"timezone" yaml:"timezone" toml:"timezone" mapstructure:"timezone"`
 }
 

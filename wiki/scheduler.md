@@ -61,6 +61,7 @@ scheduler:
 | unset | UTC (default) |
 | IANA name (`UTC`, `Europe/Madrid`, …) | Jobs fire at that zone's wall-clock time; DST handled by the zone |
 | `"-"` | Host-local time (the process `time.Local`) — legacy behavior |
+| `Local` | Rejected at startup; `"-"` is the only host-local spelling ([ADR-093](adr_093_reject_literal_local_timezone.md)) |
 | numeric offset (`+05:00`) | Rejected at startup; use `Etc/GMT∓N` (inverted sign) |
 
 Invalid IANA names fail fast at startup. The active zone appears in the

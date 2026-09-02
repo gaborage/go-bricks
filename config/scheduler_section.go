@@ -3,7 +3,7 @@ package config
 // normalizeScheduler normalizes the scheduler section:
 //   - Timeout.Shutdown / Timeout.SlowJob: zero applies the default, negative is invalid.
 //   - Timezone: default "UTC", "-" opt-out for host-local, IANA validation — an
-//     invalid zone fails fast at startup.
+//     invalid zone or the literal "Local" fails fast at startup.
 func normalizeScheduler(cfg *SchedulerConfig) error {
 	if err := applyNonNegativeDefault(&cfg.Timeout.Shutdown, defaultSchedulerShutdownTimeout, "scheduler.timeout.shutdown"); err != nil {
 		return err

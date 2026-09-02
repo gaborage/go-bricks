@@ -1402,6 +1402,23 @@ unexports eight debug response types with their JSON unchanged. See
 
 ---
 
+### [ADR-093: The Literal `Local` Timezone Is Refused; `"-"` Is the Only Host-Local Spelling](adr_093_reject_literal_local_timezone.md)
+
+**Date:** 2026-09-01 | **Status:** Accepted | **Breaking:** yes — behavioral; a config that booted with `timezone: Local` now fails startup
+
+Go's `time.LoadLocation` resolves the exact spelling `Local` to the host zone without consulting the
+IANA database, so every timezone key — `scheduler.timezone`, `database.timezone`, the named and
+per-tenant database keys — silently accepted it as a second spelling of the deliberate `"-"` opt-in,
+and on a database key it meant something else again (the application host's zone, not the server's
+default). The shared normalizer now refuses exact `Local` ahead of the loader probe, with a
+`*ConfigError` naming the key and steering to `"-"`. `local`/`LOCAL` already failed as unknown zones
+and a test pins that they still do.
+
+**Key Benefits:** one documented spelling for host-local time on every key, greppable and never
+chosen by accident. See [migrations.md](migrations.md) `[C62.1]`.
+
+---
+
 ### [ADR-092: A Typed Stream Consumer's Payload Failure Is Skipped, Never Held](adr_092_typed_stream_consumers_skip_poison.md)
 
 **Date:** 2026-08-31 | **Status:** Accepted | **Breaking:** no — additive; `DeclareConsumer` and a hand-written `Handler` are unchanged
@@ -2028,7 +2045,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-092) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-093) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

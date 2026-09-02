@@ -3,6 +3,12 @@
 **Status:** Accepted
 **Date:** 2026-06-02
 
+> **Amended (2026-09-01, ADR-093):** the value table below is incomplete on one row. The exact
+> spelling `Local` is not "anything `time.LoadLocation` rejects" — the loader resolves it to
+> `time.Local` without consulting the IANA database, so it silently produced the same host-local
+> schedules the `"-"` sentinel exists to make explicit. `config.Validate` now refuses it and
+> steers to `"-"`. See [ADR-093](adr_093_reject_literal_local_timezone.md).
+
 ## Context
 
 Scheduled jobs (`scheduler` package) had no timezone knob. The framework called
