@@ -8,7 +8,10 @@ the JOSE signature-algorithm allowlist.
 The keystore returns concrete `*rsa.PrivateKey`/`*rsa.PublicKey` types, and the
 JOSE allowlist (`RS256`/`PS256` signing, `RSA-OAEP-256` + `A256GCM` encryption)
 matches what the store can actually serve — `ES256` was removed from the
-allowlist precisely because selecting it would crash at runtime (see PR #334).
+allowlist precisely because selecting it passed registration and then failed
+on every outbound request: go-jose's RSA signer rejects the pairing with
+`ErrUnsupportedAlgorithm`, which `cryptoadapter.Sign` and `jose.Seal` propagate
+as an error (`JOSE_OUTBOUND_FAILED`), not a crash (see PR #334).
 
 Re-enabling it means generalizing the keystore from RSA-only to
 `crypto.Signer`/`crypto.PublicKey` and teaching the crypto adapter to dispatch
@@ -20,8 +23,13 @@ coordinates? per-tenant rotation? — that a concrete integration would answer
 for free. YAGNI applies with extra force to key-management surface: every
 admitted key shape is a permanent review and audit obligation.
 
-The allowlist guard test (`TestAllowlistRejectsES256`) is the enforcement; it
-stays.
+Production enforcement lives in `ParseTag`, which runs
+`Policy.validateAlgorithms` on every `jose:` tag so `sig_alg=ES256` fails
+registration with `JOSE_ALGORITHM_DISALLOWED`; `Seal` re-runs the same check
+as defense in depth, and `Open` threads the allowlist into go-jose's parser so
+an inbound `ES256` header is rejected before verification.
+`TestAllowlistRejectsES256` is regression coverage for the exported allowlist
+only; it stays.
 
 ## Reopen trigger
 
