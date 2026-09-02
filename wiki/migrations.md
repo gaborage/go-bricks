@@ -6482,8 +6482,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   deployment (`cache.enabled: true`, or a custom `Options.CacheConnector`) with NO hit relies on
   the v0.61.0 default. Then grep your alerting and log queries for the WARN line
   `cache.critical is explicitly false`, which stops firing. For the compile-break,
-  `git grep -nE '[.]?Critical[[:space:]]*[:=][[:space:]]*(new\(|&)' -- '*.go'` finds every Go
-  site that hands the field a pointer; `go build ./...` on v0.62.0 finds the same set.
+  `go build ./...` on v0.62.0 is the authoritative check — it fails on every site that hands
+  the field a pointer, compares it to `nil` or dereferences it. To find them before the bump,
+  `git grep -nE 'Critical[[:space:]]*(=|:|==|!=)[[:space:]]*(new\(|&|nil)|\*[A-Za-z_.]*Cache\.Critical' -- '*.go'`
+  covers `Critical: new(true)`, `Critical: nil`, `== nil`/`!= nil` reads and `*cfg.Cache.Critical`.
 - scope: `Config.IsCacheCritical` answers `false` for an unset `Critical` and for a nil
   receiver, so a cache-enabled deployment that says nothing now answers `/ready` `200` through a
   Redis outage, with `cache: "unhealthy"` and a climbing `cache_stats.errors` in the body and NO
@@ -6492,8 +6494,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   line on every poll. An explicit `critical: true` is unchanged: the `503`, its sanitized body
   (ADR-048) and the ERROR line all stand. An explicit `critical: false` is unchanged in effect
   and no longer emits the startup WARN. `config.CacheConfig.Critical` is now a plain `bool`
-  (ADR-094 as amended, #1316): absent and `false` were already one state under
-  `IsCacheCritical`, so the pointer's nil arm encoded nothing. `config.CacheConfig{Critical:
+  (ADR-094 as amended, #1316): under this hop's default absent and `false` are one state for
+  `IsCacheCritical`, so the pointer's nil arm no longer encodes anything (under v0.61.0's
+  ADR-046 default nil meant strict and `false` meant off, so it did then). `config.CacheConfig{Critical:
   new(true)}` and `cfg.Cache.Critical = new(false)` no longer compile; `*cfg.Cache.Critical` and
   `cfg.Cache.Critical == nil` reads do not either. No koanf default is registered for the key,
   so every YAML and env spelling parses as before, a delivered-empty `CACHE_CRITICAL=` still
@@ -6503,7 +6506,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   (`cache.enabled: true`, or a custom `Options.CacheConnector`) that needs a Redis outage to take
   the replica out of rotation — a rate limiter that must fail closed, a session store, an
   idempotency ledger — OR an alert or log query keys on the `cache.critical is explicitly false`
-  WARN line — OR any Go code sets or dereferences `Critical` on a `config.CacheConfig` (a
+  WARN line — OR any Go code sets, nil-compares or dereferences `Critical` on a `config.CacheConfig` (a
   hand-built config, a test fixture, a `DBConfigProvider`-style resolver that fills the struct).
   no-match = `cache.critical` is absent but the cache fronts an origin the service can
   serve from (the new default is the posture you wanted); or `cache.critical` is already set
@@ -6522,7 +6525,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - ref: `config/types.go` (`CacheConfig.Critical`) · `config/config.go` (`IsCacheCritical`) · `app/app_builder.go` (the WARN is deleted) ·
   `app/readiness.go` (`cacheProbe`) ·
   [ADR-094](adr_094_cache_readiness_non_critical_default.md) ·
-  [cache.md#readiness](cache.md#readiness) · issue #1296
+  [cache.md#readiness](cache.md#readiness) · issues #1296, #1316
 
 ---
 

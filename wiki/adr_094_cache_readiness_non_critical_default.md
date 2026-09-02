@@ -62,8 +62,9 @@ the readiness docs.
 3. **An explicit `false` is a decision, not a smell.** The startup WARN and
    `Builder.warnIfCacheCriticalityOptOut` are deleted. `false` is the shipped
    default spelled out, for config review.
-4. **The tri-state stays.** `CacheConfig.Critical` remains a `*bool` with no
-   registered koanf default. ADR-046's reasoning for that shape still holds — a
+4. **The tri-state stays.** *(Historical — reversed by the 2026-09-02 amendment
+   above; the field is a plain `bool` since #1316.)* `CacheConfig.Critical` remains
+   a `*bool` with no registered koanf default. ADR-046's reasoning for that shape still holds — a
    registered default would populate the pointer and collapse absent and explicit
    into one state, which `CONTEXT.md`'s tri-state definition and the
    derivation-denied list in `config/config.go` both rely on — and narrowing the
