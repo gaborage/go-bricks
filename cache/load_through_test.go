@@ -464,6 +464,99 @@ func TestLoadThroughRejectsInvalidArguments(t *testing.T) {
 	}
 }
 
+// ltTimedCache reports a configured cache-leg bound, like the framework's Redis client.
+type ltTimedCache struct {
+	*cachetest.MockCache
+	bound time.Duration
+}
+
+func (c ltTimedCache) LoadTimeout() time.Duration { return c.bound }
+
+// ltObservedBound returns how long the cache leg was allowed to run, measured from the
+// deadline the cache actually received.
+func ltObservedBound(t *testing.T, c cache.Cache, opts ...cache.LoadOption) time.Duration {
+	t.Helper()
+	var seen time.Duration
+	probe := func(context.Context) (ltUser, error) { return ltAlice, nil }
+	deadlines := make(chan time.Duration, 4)
+	spy := &ltDeadlineSpy{Cache: c, deadlines: deadlines}
+	_, err := cache.LoadThrough(t.Context(), spy, ltKey, ltTTL, probe, opts...)
+	require.NoError(t, err)
+	select {
+	case seen = <-deadlines:
+	default:
+		t.Fatal("the cache leg never ran")
+	}
+	return seen
+}
+
+// ltDeadlineSpy records the budget each cache leg was given. It forwards LoadTimeout
+// deliberately: a wrapper around a Cache does NOT inherit the method through the embedded
+// interface, so a decorator that stays silent here would drop the deployment's bound back
+// to the fallback — the same trap any consumer-written middleware faces.
+type ltDeadlineSpy struct {
+	cache.Cache
+	deadlines chan time.Duration
+}
+
+func (s *ltDeadlineSpy) LoadTimeout() time.Duration {
+	if p, ok := s.Cache.(cache.LoadTimeoutProvider); ok {
+		return p.LoadTimeout()
+	}
+	return 0
+}
+
+func TestLoadThroughWrapperMustForwardLoadTimeout(t *testing.T) {
+	configured := ltTimedCache{cachetest.NewMockCache(), 1500 * time.Millisecond}
+	// A wrapper that does not forward LoadTimeout hides it: embedding cache.Cache
+	// promotes only that interface's methods.
+	opaque := struct{ cache.Cache }{configured}
+	_, isProvider := any(opaque).(cache.LoadTimeoutProvider)
+	assert.False(t, isProvider, "an embedding wrapper does not expose LoadTimeout")
+	assert.InDelta(t, 500*time.Millisecond, ltObservedBound(t, opaque), float64(50*time.Millisecond),
+		"a non-forwarding wrapper falls back")
+}
+
+func (s *ltDeadlineSpy) Get(ctx context.Context, key string) ([]byte, error) {
+	if dl, ok := ctx.Deadline(); ok {
+		select {
+		case s.deadlines <- time.Until(dl):
+		default:
+		}
+	}
+	return s.Cache.Get(ctx, key)
+}
+
+func TestLoadThroughBoundComesFromTheCacheConfiguration(t *testing.T) {
+	const configured = 1234 * time.Millisecond
+	tests := []struct {
+		name  string
+		cache cache.Cache
+		opts  []cache.LoadOption
+		want  time.Duration
+	}{
+		{name: "configured_bound_is_used", cache: ltTimedCache{cachetest.NewMockCache(), configured}, want: configured},
+		{name: "option_overrides_configuration", cache: ltTimedCache{cachetest.NewMockCache(), configured}, opts: []cache.LoadOption{cache.WithCacheTimeout(80 * time.Millisecond)}, want: 80 * time.Millisecond},
+		{name: "unconfigured_cache_falls_back", cache: cachetest.NewMockCache(), want: 500 * time.Millisecond},
+		{name: "non_positive_configuration_falls_back", cache: ltTimedCache{cachetest.NewMockCache(), 0}, want: 500 * time.Millisecond},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ltObservedBound(t, tt.cache, tt.opts...)
+			// The observed budget is the bound minus the microseconds spent reaching Get.
+			assert.InDelta(t, tt.want, got, float64(50*time.Millisecond), "cache leg budget")
+		})
+	}
+}
+
+func TestLoadThroughPerTenantBoundsAreIndependent(t *testing.T) {
+	fast := ltTimedCache{cachetest.NewMockCacheWithID("fast"), 200 * time.Millisecond}
+	slow := ltTimedCache{cachetest.NewMockCacheWithID("slow"), 2 * time.Second}
+
+	assert.InDelta(t, 200*time.Millisecond, ltObservedBound(t, fast), float64(50*time.Millisecond))
+	assert.InDelta(t, 2*time.Second, ltObservedBound(t, slow), float64(50*time.Millisecond))
+}
+
 func TestLoadThroughRejectsNilCache(t *testing.T) {
 	tests := []struct {
 		name string
@@ -493,7 +586,7 @@ func TestLoadThroughFailsWhenTheLoadedValueCannotBeEncoded(t *testing.T) {
 	require.Never(t, func() bool { return mock.OperationCount("Set") > 0 }, 100*time.Millisecond, ltWaitTick)
 }
 
-// ltFillCounts sums cache.fill.duration data-point counts by the cache.collapsed attribute.
+// ltFillCounts sums cache.fill.duration data-point counts by the cache.fill.role attribute.
 func ltFillCounts(t *testing.T, rm metricdata.ResourceMetrics) map[string]uint64 {
 	t.Helper()
 	counts := map[string]uint64{}
@@ -504,7 +597,7 @@ func ltFillCounts(t *testing.T, rm metricdata.ResourceMetrics) map[string]uint64
 	hist, ok := m.Data.(metricdata.Histogram[float64])
 	require.True(t, ok, "cache.fill.duration must be a float64 histogram")
 	for _, dp := range hist.DataPoints {
-		role, _ := dp.Attributes.Value(attribute.Key("cache.collapsed"))
+		role, _ := dp.Attributes.Value(attribute.Key("cache.fill.role"))
 		counts[role.AsString()] += dp.Count
 	}
 	return counts

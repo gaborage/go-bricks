@@ -30,6 +30,11 @@ type Config struct {
 	// DialTimeout is the timeout for establishing new connections (default: 5s).
 	DialTimeout time.Duration `config:"dial_timeout" default:"5s"`
 
+	// LoadTimeout bounds each cache leg of cache.LoadThrough (cache.loadtimeout).
+	// Zero leaves the helper on its own fallback; a deployment-resolved config always
+	// carries a positive value.
+	LoadTimeout time.Duration `config:"load_timeout" default:"500ms"`
+
 	// ReadTimeout is the timeout for socket reads (default: 3s).
 	// -1 disables timeout.
 	ReadTimeout time.Duration `config:"read_timeout" default:"3s"`
@@ -78,6 +83,15 @@ func (c *Config) Validate() error {
 
 	if c.WriteTimeout < -1 {
 		return cache.NewConfigError("redis.write_timeout", "write timeout cannot be less than -1", nil)
+	}
+
+	// Zero stays valid: it means "unset", and LoadThrough then uses its own fallback. A
+	// negative is rejected here because a hand-built Config never passes through the config
+	// layer's cache.loadtimeout normalization, and LoadThrough treats a non-positive value
+	// as "not configured" — so without this the operator's value would be silently ignored
+	// rather than corrected or refused.
+	if c.LoadTimeout < 0 {
+		return cache.NewConfigError("redis.load_timeout", "load timeout cannot be negative", nil)
 	}
 
 	return nil

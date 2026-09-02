@@ -15,6 +15,13 @@ import (
 func normalizeCache(cfg *CacheConfig, multitenant bool) error {
 	applyRedisDefaults(&cfg.Redis)
 
+	// Unconditional, like the Redis defaults above: the load-through bound belongs to
+	// the resolved cache instance, and a hand-built enabled cache must not inherit a
+	// zero here. A negative value is rejected rather than normalized.
+	if err := applyNonNegativeDefault(&cfg.LoadTimeout, defaultCacheLoadTimeout, "cache.loadtimeout"); err != nil {
+		return err
+	}
+
 	if cfg.Enabled {
 		return applyCacheManagerDefaults(cfg, multitenant)
 	}

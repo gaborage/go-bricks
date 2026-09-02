@@ -337,7 +337,7 @@ func TestRecordCacheFill(t *testing.T) {
 	require.Len(t, hist.DataPoints, 2, "one data point per attribute set")
 
 	for _, dp := range hist.DataPoints {
-		role, _ := dp.Attributes.Value(attribute.Key(attrCacheCollapsed))
+		role, _ := dp.Attributes.Value(attribute.Key(attrCacheFillRole))
 		ns, hasNS := dp.Attributes.Value(attribute.Key(attrDBNamespace))
 		errType, hasErr := dp.Attributes.Value(attribute.Key(attrErrorType))
 		switch role.AsString() {

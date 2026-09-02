@@ -81,9 +81,10 @@ const (
 
 // Cache manager defaults
 const (
-	defaultCacheMaxSize         = 100              // Maximum tenant cache instances
-	defaultCacheIdleTTL         = 15 * time.Minute // Idle timeout per cache
-	defaultCacheCleanupInterval = 5 * time.Minute  // Cleanup goroutine frequency
+	defaultCacheMaxSize         = 100                    // Maximum tenant cache instances
+	defaultCacheIdleTTL         = 15 * time.Minute       // Idle timeout per cache
+	defaultCacheCleanupInterval = 5 * time.Minute        // Cleanup goroutine frequency
+	defaultCacheLoadTimeout     = 500 * time.Millisecond // cache.LoadThrough cache-leg bound
 )
 
 // Database manager defaults

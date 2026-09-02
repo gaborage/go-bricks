@@ -108,6 +108,16 @@ type Client struct {
 	closed atomic.Bool
 }
 
+// LoadTimeout reports the configured cache-leg bound for cache.LoadThrough, satisfying
+// cache.LoadTimeoutProvider. It is per-instance, so each tenant's client carries its own
+// cache.loadtimeout rather than a process-wide value.
+func (c *Client) LoadTimeout() time.Duration {
+	if c.config == nil {
+		return 0
+	}
+	return c.config.LoadTimeout
+}
+
 // namespace returns the tenant identifier for metric attribution.
 func (c *Client) namespace(ctx context.Context) string {
 	if tenantID, ok := multitenant.GetTenant(ctx); ok {
