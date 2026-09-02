@@ -970,14 +970,15 @@ func TestReadyCheckScenarios(t *testing.T) {
 			},
 		},
 		{
-			// The headline of the non-critical default (ADR-094): cfg.Cache.Critical is left NIL
-			// here, so this only passes while Config.IsCacheCritical's absent-key branch answers
-			// false. The outage still shows in the body — informational, never a 503.
+			// The headline of the non-critical default (ADR-094): cfg.Cache.Critical is left at
+			// its false zero value, the non-critical default, so this only passes while
+			// Config.IsCacheCritical answers false for it. The outage still shows in the body —
+			// informational, never a 503.
 			name: "cache_unset_critical_stays_ready",
 			prepare: func(f *testAppFixture) {
 				f.db.On(methodHealth, mock.Anything).Return(nil)
 				f.messaging.SetReady(true)
-				require.False(f.t, f.app.cfg.Cache.Critical, "the fixture must leave the key unset")
+				require.False(f.t, f.app.cfg.Cache.Critical, "the fixture must leave Critical at its false default")
 				f.app.cacheManager = createTestCacheManagerWithGetError(f.t,
 					cache.NewConnectionError("ping", redisProbeAddress, errors.New(errorRedisDown)))
 				f.rebuildLifecycle()

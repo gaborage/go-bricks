@@ -273,8 +273,8 @@ func TestLoadExplicitBoolEnvUnchanged(t *testing.T) {
 		cfg, err := Load()
 
 		require.NoError(t, err)
-		require.NotNil(t, cfg.Cache.Critical)
-		assert.False(t, cfg.IsCacheCritical(), "an explicit false still decodes as a concrete value, not absence")
+		assert.False(t, cfg.Cache.Critical)
+		assert.False(t, cfg.IsCacheCritical(), "an explicit false decodes cleanly and reads as non-critical")
 	})
 
 	// Both keep-alive cases need a real database section: nil -> true normalization runs

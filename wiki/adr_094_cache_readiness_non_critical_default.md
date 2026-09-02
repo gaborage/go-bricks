@@ -21,7 +21,10 @@
 > for the key, `cache.critical` stays on the derivation-denied list, and the
 > accessor keeps its nil-receiver guard. `cache.critical` is no longer an example
 > of CONTEXT.md's Tri-state setting. Compile-break for code that sets the field;
-> `[C62.2]` covers it on the same hop.
+> `[C62.2]` covers it on the same hop. Decision §1's "when `Cache.Critical` is nil"
+> and the "Register `false` as a koanf default" alternative below keep their
+> pre-#1316 tri-state wording as the historical record; the current contract reads
+> an unset field and an explicit `false` identically.
 
 ## Context
 
