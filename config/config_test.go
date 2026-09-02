@@ -1077,6 +1077,9 @@ func clearEnvironmentVariables() {
 		"DATABASE_POOL_KEEPALIVE_ENABLED", "CACHE_CRITICAL", "CACHE_ENABLED", "SERVER_LOGROUTES",
 		// ADR-078: the unset-keeps-the-loopback-default assertion reads absence.
 		"DEBUG_ALLOWEDIPS",
+		// ADR-095: the floor is mandatory, so an ambient value below 32 fails
+		// Load outright — it would break tests that never mention the keystore.
+		"KEYSTORE_SECRETMINLENGTH",
 	}
 
 	for _, envVar := range envVars {

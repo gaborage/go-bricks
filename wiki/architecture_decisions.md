@@ -1474,7 +1474,9 @@ did, and what the opt-out protected was the silently weak HMAC/HKDF key the floo
 reject. `config.Validate` now rejects any set value below `DefaultKeyStoreSecretMinLength`
 (32) with a `*ConfigError` on `keystore.secretminlength` naming the floor and the ADR, judged
 before the empty-keys return; nil still means 32; the pointer stays so the koanf door can tell
-an explicit `0` from an absent key and reject it rather than silently correct it. Both WARNs,
+an explicit `0` from an absent key and reject it rather than silently correct it. `Module.Init`
+repeats the bound as a backstop for the one door that skips `Validate` — a hand-built
+`*app.ModuleDeps` — refusing rather than clamping, since `0` is a widening value. Both WARNs,
 `belowRecommended` and the `0`-means-off branch are deleted. A secret shorter than 32 bytes has
 no keystore path — the consumer loads such a partner key itself. See
 [migrations.md](migrations.md) `[C62.1]`.

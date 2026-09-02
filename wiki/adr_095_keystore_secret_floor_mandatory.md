@@ -38,6 +38,16 @@ from explicit only — there is no off arm.
 Both deprecation WARNs, `store.belowRecommended` and the `0`-means-off branch
 in `loadSecretEntry` are deleted, not left unreachable.
 
+`keystore.Module.Init` repeats the bound as a backstop. Every framework
+construction path runs `config.Validate` (ADR-064), so the rule is already
+discharged there — but `Init` takes an exported `*app.ModuleDeps`, and a
+hand-built one reaches it without passing through `Validate`. The rejected
+values are the *widening* ones (`0` disables the floor outright), so the
+backstop **refuses** rather than clamps: it returns an error naming the floor,
+before the empty-keys return, and loads nothing. Without it the claim below —
+that a sub-32 secret has no keystore path — would hold only for configs that
+happened to be validated.
+
 Alternatives rejected:
 
 - **Clamp a sub-32 value up to 32.** Silently honoring a config that asked for
@@ -56,7 +66,9 @@ Alternatives rejected:
   32, in YAML, environment (`KEYSTORE_SECRETMINLENGTH`) or a Go literal now
   fails `config.Validate` — and therefore `config.Load` and every `app`
   construction path (ADR-064). See [migrations.md](migrations.md) `[C62.1]`.
-- A symmetric secret shorter than 32 bytes has no keystore path at all. A
+- A symmetric secret shorter than 32 bytes has no keystore path at all, on
+  either door — `config.Validate` rejects the config and `Module.Init` refuses
+  a floor that reached it unvalidated. A
   partner key that is genuinely that short must be loaded by the consumer's
   own code, outside `keystore` — the framework does not weaken the control
   for it.

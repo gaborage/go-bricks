@@ -44,10 +44,12 @@ deprecation window for a documented feature — that is #1036).
 - **Breaking, compile-time for Go literals only.** `SecretMinLength: 0` or
   `SecretMinLength: N` no longer compiles; both become
   `SecretMinLength: new(0)` / `new(N)`. YAML and env config
-  are unchanged — `keystore.secretminlength: 0` still means off. See
+  are unchanged — `keystore.secretminlength: 0` still means off *at this
+  ADR*; ADR-095 later rejects it. See
   [migrations.md](migrations.md) `[C59.13]` (Go literals) and `[C59.14]` (a config that never set it).
 - A hand-built config that treated absence as "off" now gets the 32-byte
   floor — a shorter secret that used to boot now fails startup.
-- The `0` opt-out is deprecated, not removed. A later ADR is expected to
-  remove it and make 32 mandatory, letting `secretminlength` only raise
-  the floor (tracked in #1036).
+- The `0` opt-out is deprecated, not removed *by this ADR*. A later ADR is
+  expected to remove it and make 32 mandatory, letting `secretminlength` only
+  raise the floor (tracked in #1036) — which
+  [ADR-095](adr_095_keystore_secret_floor_mandatory.md) did on 2026-09-01.

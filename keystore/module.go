@@ -1,7 +1,10 @@
 package keystore
 
 import (
+	"fmt"
+
 	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -38,12 +41,25 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.logger = deps.Logger
 
 	cfg := deps.Config.KeyStore
+	// config.Validate rejects a floor below the mandatory minimum (ADR-095) and
+	// every framework construction path runs it (ADR-064), so this repeats a
+	// discharged rule for the one door that skips it: a hand-built ModuleDeps
+	// passed straight to Init. The rejected values are the WIDENING ones — 0
+	// disables the floor entirely — so the backstop refuses rather than clamps,
+	// which would silently honor a weaker floor than the operator wrote. Judged
+	// before the empty-keys return, as checkKeyStore judges it.
+	floor := cfg.SecretFloor()
+	if floor < config.DefaultKeyStoreSecretMinLength {
+		return fmt.Errorf("keystore: secret length floor is %d, but keystore.secretminlength must be at least %d (ADR-095); this config did not pass config.Validate",
+			floor, config.DefaultKeyStoreSecretMinLength)
+	}
+
 	if len(cfg.Keys) == 0 {
 		m.logger.Info().Msg("KeyStore module: no keys configured (keystore.keys is empty)")
 		return nil
 	}
 
-	s, err := newStore(cfg.Keys, cfg.SecretFloor())
+	s, err := newStore(cfg.Keys, floor)
 	if err != nil {
 		return err
 	}

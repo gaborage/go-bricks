@@ -110,8 +110,11 @@ stays a pointer (`SecretMinLength: new(48)` in Go literals) so both
 configuration doors can tell an explicit value from an absent key.
 
 The floor is a defensive control against silently weak HMAC/HKDF keys, so
-there is no configuration that admits a shorter secret. A partner-mandated key
-shorter than 32 bytes must be loaded by your own code, outside the keystore.
+there is no configuration that admits a shorter secret: `config.Validate`
+rejects the config, and `Module.Init` refuses a sub-32 floor that reached it
+unvalidated (a hand-built `ModuleDeps`) rather than clamping it. A
+partner-mandated key shorter than 32 bytes must be loaded by your own code,
+outside the keystore.
 
 ## API
 

@@ -6518,10 +6518,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `must be at least 32: the symmetric-secret length floor is mandatory (ADR-095)`, judged
   before the empty-keys return so a config no key follows is rejected too. Because every
   construction path validates ([C59.12]), `config.Load`, `app.New*` and a hand-built
-  `*config.Config` all fail the same way. The floor is judged before the keys, so a config
-  carrying NO symmetric secret at all — every entry an RSA pair or a PKCS#12 bundle — is
-  rejected too when it sets a value below 32: the floor is configuration, not a per-entry
-  rule, and an inert `0` is still a `0` a later `secret:` entry would silently inherit. `keystore.Module.Init` no longer WARNs about a
+  `*config.Config` all fail the same way. `keystore.Module.Init` refuses the same
+  values itself, so a hand-built `*app.ModuleDeps` handed straight to it — the one
+  door that skips `Validate` — cannot load key material behind a weaker floor either.
+  Both doors judge the floor before the keys, so a config carrying NO symmetric secret
+  at all — every entry an RSA pair or a PKCS#12 bundle — is rejected too when it sets a
+  value below 32: the floor is configuration, not a per-entry rule, and an inert `0` is
+  still a `0` a later `secret:` entry would silently inherit. `keystore.Module.Init` no longer WARNs about a
   disabled floor or an admitted short secret: those paths are deleted. nil still means 32
   and `N ≥ 32` still sets the floor to `N`; the field stays `*int` (`new(n)`).
 - gate: match = any environment or Go literal sets the key to `0` or to a value below 32.

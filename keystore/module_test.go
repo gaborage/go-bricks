@@ -112,6 +112,50 @@ func TestKeystoreModuleInitUnsetFloorRejectsShortSecret(t *testing.T) {
 	assert.ErrorContains(t, err, `key "mac": secret is 16 bytes, minimum is 32`)
 }
 
+// TestKeystoreModuleInitRejectsSubFloorConfig pins ADR-095's backstop on the
+// one door that skips config.Validate: a hand-built ModuleDeps handed straight
+// to Init. Every framework construction path validates (ADR-064), so this is
+// the only way a sub-32 floor reaches the module — and 0 is the widening value,
+// admitting a secret the floor exists to reject. Init refuses rather than
+// clamps, and loads nothing.
+func TestKeystoreModuleInitRejectsSubFloorConfig(t *testing.T) {
+	shortSecret := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef")) // 16 bytes
+	tests := []struct {
+		name string
+		min  int
+		keys map[string]config.KeyPairConfig
+	}{
+		{
+			name: "zero_would_admit_a_short_secret",
+			min:  0,
+			keys: map[string]config.KeyPairConfig{
+				"weak": {Secret: config.KeySourceConfig{Value: shortSecret}},
+			},
+		},
+		{
+			name: "sixteen_would_admit_a_short_secret",
+			min:  16,
+			keys: map[string]config.KeyPairConfig{
+				"weak": {Secret: config.KeySourceConfig{Value: shortSecret}},
+			},
+		},
+		{name: "zero_without_keys", min: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps := newTestDeps(t, config.KeyStoreConfig{SecretMinLength: new(tt.min), Keys: tt.keys})
+			m := NewModule()
+
+			err := m.Init(deps)
+
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "must be at least 32")
+			assert.ErrorContains(t, err, "ADR-095")
+			assert.Nil(t, m.store, "nothing may load behind a refused floor")
+		})
+	}
+}
+
 // TestKeystoreModuleInitRaisedFloorBinds pins the other direction of the
 // wiring: a raised floor reaches the store, so a 32-byte secret fails a
 // 64-byte one.
