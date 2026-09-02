@@ -10,6 +10,8 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 const (
@@ -21,8 +23,9 @@ const (
 	metricCacheOperationDuration = "db.client.operation.duration" // Histogram in seconds
 
 	// Cache-specific metrics
-	metricCacheHit  = "cache.hit"  // Counter for cache hits
-	metricCacheMiss = "cache.miss" // Counter for cache misses
+	metricCacheHit          = "cache.hit"           // Counter for cache hits
+	metricCacheMiss         = "cache.miss"          // Counter for cache misses
+	metricCacheFillDuration = "cache.fill.duration" // Histogram in seconds, per load-through fill
 
 	// Manager metrics (GoBricks-specific)
 	metricCacheManagerActiveCaches = "cache.manager.active_caches" // UpDownCounter
@@ -36,8 +39,15 @@ const (
 	attrDBOperation    = "db.operation.name"
 	attrDBNamespace    = "db.namespace"
 	attrErrorType      = "error.type"
-	attrCacheHitStatus = "cache.hit" // Boolean attribute for hit/miss
-	attrPoolName       = "pool.name" // For multi-tenant cache identification
+	attrCacheHitStatus = "cache.hit"       // Boolean attribute for hit/miss
+	attrPoolName       = "pool.name"       // For multi-tenant cache identification
+	attrCacheCollapsed = "cache.collapsed" // Fill role: leader ran the origin load, follower waited on it
+)
+
+// Fill roles emitted as the cache.collapsed attribute.
+const (
+	FillLeader   = "leader"
+	FillFollower = "follower"
 )
 
 // Cache operation names
@@ -75,6 +85,7 @@ var (
 	cacheOperationDuration metric.Float64Histogram
 	cacheHitCounter        metric.Int64Counter
 	cacheMissCounter       metric.Int64Counter
+	cacheFillDuration      metric.Float64Histogram
 )
 
 // logMetricError logs a metric setup or teardown error to stderr.
@@ -118,6 +129,13 @@ func initCacheMeter() {
 		metric.WithUnit("{miss}"),
 	)
 	logMetricError(metricCacheMiss, err)
+
+	cacheFillDuration, err = cacheMeter.Float64Histogram(
+		metricCacheFillDuration,
+		metric.WithDescription("Duration of load-through fills from the origin"),
+		metric.WithUnit("s"),
+	)
+	logMetricError(metricCacheFillDuration, err)
 
 	metricsInited = true
 }
@@ -169,6 +187,25 @@ func RecordCacheOperation(ctx context.Context, operation string, duration time.D
 	if isLookupOperation(operation) {
 		recordHitMissCounters(ctx, hit, attrs)
 	}
+}
+
+// RecordCacheFill records one load-through fill: role is FillLeader or FillFollower,
+// duration spans the fill from miss to outcome, and err is the fill's error if any. The
+// tenant on ctx, when present, becomes db.namespace.
+func RecordCacheFill(ctx context.Context, role string, duration time.Duration, err error) {
+	ensureCacheMeterInitialized()
+	if cacheFillDuration == nil {
+		return
+	}
+
+	attrs := []attribute.KeyValue{attribute.String(attrCacheCollapsed, role)}
+	if tenantID, ok := multitenant.GetTenant(ctx); ok {
+		attrs = append(attrs, attribute.String(attrDBNamespace, tenantID))
+	}
+	if err != nil {
+		attrs = append(attrs, attribute.String(attrErrorType, classifyError(err)))
+	}
+	cacheFillDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
 }
 
 // classifyError returns an error classification string for metrics.
@@ -385,6 +422,7 @@ func ResetForTesting() {
 	cacheOperationDuration = nil
 	cacheHitCounter = nil
 	cacheMissCounter = nil
+	cacheFillDuration = nil
 	metricsInited = false
 	meterOnce = sync.Once{}
 }
