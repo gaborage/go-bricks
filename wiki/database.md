@@ -293,6 +293,45 @@ cols.As("u")                                              // SAFE
 cols.As("id FROM secrets--")                              // PANICS at the As call
 ```
 
+### Validating an identifier yourself (`database/identifier`)
+
+A service that must check a schema, role or table name it read from a secret
+store *before* opening a connection can call the exported validator instead of
+re-declaring the grammar. `database/identifier` is a leaf package: it imports
+only the standard library and `database/types`.
+
+```go
+import (
+    "fmt"
+
+    "github.com/gaborage/go-bricks/database/identifier"
+    dbtypes "github.com/gaborage/go-bricks/database/types"
+)
+
+if err := identifier.Validate(dbtypes.PostgreSQL, schema); err != nil {
+    return fmt.Errorf("schema from vault: %w", err) // errors.Is(err, identifier.ErrIdentifierTooLong) …
+}
+```
+
+`Validate` takes **one bare, unquoted segment** — no dots, alias, or wildcard;
+validate `schema.table` one segment at a time. The vendor's grammar is the
+vendor's truth:
+
+| Vendor | Grammar | Cap |
+| --- | --- | --- |
+| `dbtypes.PostgreSQL` | `^[A-Za-z_][A-Za-z0-9_$]*$` | 63 **bytes** (NAMEDATALEN-1; longer names are silently truncated, so two 64-byte names sharing a prefix collapse onto one object) |
+| `dbtypes.Oracle` | `^[A-Za-z_][A-Za-z0-9_$#]*$` | 128 **bytes** (Oracle 12.2+) |
+| anything else | — | `ErrUnsupportedVendor` |
+
+Both grammars are a deliberate conservative ASCII subset of the vendor's rule:
+a non-ASCII letter the server would accept is rejected by policy. The value is
+validated as given — never trimmed. Mixed case is accepted, but
+the server folds an unquoted identifier (PostgreSQL to lowercase, Oracle to
+uppercase). Each refusal class has its own `errors.Is`-able sentinel, wrapped
+with the offending value: `ErrEmptyIdentifier`, `ErrIdentifierCharset`,
+`ErrIdentifierTooLong`, `ErrUnsupportedVendor`. The `migration` package's role,
+schema and quiesce-table validators delegate to it.
+
 ### The Filter API parameterizes values; that is not the same as validating columns
 
 `f.Eq(column, value)` takes **two** arguments. The value becomes a placeholder.

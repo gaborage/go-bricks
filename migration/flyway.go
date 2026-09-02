@@ -18,6 +18,8 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
+	"github.com/gaborage/go-bricks/database/identifier"
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -510,8 +512,8 @@ func dbVendor(db *config.DatabaseConfig, fallback string) string {
 // schemaArgs returns the explicit Flyway schema-targeting flags for the
 // supplied database, or nil when no schema is configured. Only PostgreSQL
 // participates: Oracle's schema is the connecting user, which is already
-// per-tenant. The schema name must pass the same conservative identifier
-// check as role provisioning (safePGIdentifier) — it is formatted into
+// per-tenant. The schema name must pass database/identifier.Validate, the
+// same check as role provisioning — it is formatted into
 // subprocess argv, and -schemas is comma-separated, so an unvalidated value
 // could smuggle a second schema.
 func schemaArgs(db *config.DatabaseConfig, vendor string) ([]string, error) {
@@ -522,8 +524,8 @@ func schemaArgs(db *config.DatabaseConfig, vendor string) ([]string, error) {
 	if schema == "" {
 		return nil, nil
 	}
-	if !safePGIdentifier.MatchString(schema) {
-		return nil, fmt.Errorf("%w: database.postgresql.schema=%q", ErrInvalidPGIdentifier, schema)
+	if err := identifier.Validate(dbtypes.PostgreSQL, schema); err != nil {
+		return nil, fmt.Errorf("%w: database.postgresql.schema=%q: %w", ErrInvalidPGIdentifier, schema, err)
 	}
 	return []string{flagSchemas + schema, flagDefaultSchema + schema}, nil
 }

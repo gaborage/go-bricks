@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database/identifier"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -1543,6 +1544,34 @@ func TestMigrateOmitsSchemaFlagsWhenUnset(t *testing.T) {
 	args := string(captured)
 	assert.NotContains(t, args, "-schemas", "no schema configured must not emit -schemas")
 	assert.NotContains(t, args, "-defaultSchema", "no schema configured must not emit -defaultSchema")
+}
+
+func TestSchemaArgsBoundary(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema string
+		wantOK bool
+		want   error
+	}{
+		{name: "dollar_accepted", schema: "tnz_$a", wantOK: true},
+		{name: "sixty_three_bytes", schema: strings.Repeat("s", 63), wantOK: true},
+		{name: "sixty_four_bytes", schema: strings.Repeat("s", 64), want: identifier.ErrIdentifierTooLong},
+		{name: "hash_rejected", schema: "a#b", want: identifier.ErrIdentifierCharset},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := &config.DatabaseConfig{PostgreSQL: config.PostgreSQLConfig{Schema: tt.schema}}
+			args, err := schemaArgs(db, config.PostgreSQL)
+			if tt.wantOK {
+				require.NoError(t, err)
+				assert.Equal(t, []string{flagSchemas + tt.schema, flagDefaultSchema + tt.schema}, args)
+				return
+			}
+			require.ErrorIs(t, err, ErrInvalidPGIdentifier)
+			require.ErrorIs(t, err, tt.want, "identifier sentinel must pass through")
+			assert.Contains(t, err.Error(), "database.postgresql.schema=")
+		})
+	}
 }
 
 func TestMigrateForRejectsInvalidSchemaName(t *testing.T) {
