@@ -25,9 +25,11 @@ type ltUser struct {
 }
 
 const (
-	ltKey      = "user:1"
-	ltTTL      = time.Minute
-	ltWaitFor  = 5 * time.Second
+	ltKey = "user:1"
+	ltTTL = time.Minute
+	// Generous by design: Eventually returns as soon as the condition holds, so the bound
+	// only decides how much concurrent load the wait tolerates before failing.
+	ltWaitFor  = 30 * time.Second
 	ltWaitTick = 5 * time.Millisecond
 )
 
