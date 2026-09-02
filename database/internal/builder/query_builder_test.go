@@ -3404,3 +3404,124 @@ func TestSelectQueryBuilderHavingStringUnchanged(t *testing.T) {
 		assert.Empty(t, args)
 	})
 }
+
+// TestValueDoorsRenderRawExpressionInline pins #1318: Set, SetMap and Values
+// splice a RawExpression verbatim, with no placeholder and no argument, on
+// both vendors, while every other value stays parameterized in order.
+func TestValueDoorsRenderRawExpressionInline(t *testing.T) {
+	vendors := []struct {
+		name   string
+		vendor string
+		p1, p2 string
+	}{
+		{"postgres", dbtypes.PostgreSQL, "$1", "$2"},
+		{"oracle", dbtypes.Oracle, ":1", ":2"},
+	}
+	for _, v := range vendors {
+		t.Run(v.name, func(t *testing.T) {
+			qb := NewQueryBuilder(v.vendor)
+			now := qb.MustExpr("now()")
+
+			t.Run("update_set", func(t *testing.T) {
+				sql, args, err := qb.Update(tableUsers).Set(colName, testJohn).Set("updated_at", now).Set("age", 30).ToSQL()
+				require.NoError(t, err)
+				assert.Equal(t, "UPDATE users SET name = "+v.p1+", updated_at = now(), age = "+v.p2, sql)
+				assert.Equal(t, []any{testJohn, 30}, args)
+			})
+
+			t.Run("update_setmap", func(t *testing.T) {
+				sql, args, err := qb.Update(tableUsers).SetMap(map[string]any{"name": testJohn, "updated_at": now}).ToSQL()
+				require.NoError(t, err)
+				assert.Equal(t, "UPDATE users SET name = "+v.p1+", updated_at = now()", sql)
+				assert.Equal(t, []any{testJohn}, args)
+			})
+
+			t.Run("insert_values", func(t *testing.T) {
+				sql, args, err := qb.Insert(tableUsers).Columns("id", "updated_at", "name").Values(1, now, "x").ToSQL()
+				require.NoError(t, err)
+				assert.Equal(t, "INSERT INTO users (id,updated_at,name) VALUES ("+v.p1+",now(),"+v.p2+")", sql)
+				assert.Equal(t, []any{1, "x"}, args)
+			})
+
+			t.Run("insert_setmap", func(t *testing.T) {
+				sql, args, err := qb.Insert(tableUsers).SetMap(map[string]any{"name": testJohn, "updated_at": now}).ToSQL()
+				require.NoError(t, err)
+				assert.Equal(t, "INSERT INTO users (name,updated_at) VALUES ("+v.p1+",now())", sql)
+				assert.Equal(t, []any{testJohn}, args)
+			})
+
+			t.Run("update_setmap_keeps_keys_that_render_alike", func(t *testing.T) {
+				// Two keys differing only in padding both reach SQL, as insert
+				// SetMap already guarantees, so the database reports the duplicate
+				// instead of one assignment being dropped.
+				sql, args, err := qb.Update(tableUsers).SetMap(map[string]any{paddedNameKey: "a", "name": "b"}).ToSQL()
+				require.NoError(t, err)
+				assert.Equal(t, "UPDATE users SET name = "+v.p1+", name = "+v.p2, sql)
+				assert.Equal(t, []any{"a", "b"}, args)
+			})
+
+			t.Run("values_leaves_caller_slice_untouched", func(t *testing.T) {
+				row := []any{1, now}
+				_, _, err := qb.Insert(tableUsers).Columns("id", "updated_at").Values(row...).ToSQL()
+				require.NoError(t, err)
+				assert.Equal(t, []any{1, now}, row)
+			})
+		})
+	}
+}
+
+// TestValueDoorsRejectInvalidRawExpression pins the failure half of #1318: a
+// struct literal that never passed Expr(), or an alias in value position, is
+// deferred to ToSQL() naming the column (Set/SetMap) or one-based position (Values).
+func TestValueDoorsRejectInvalidRawExpression(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	empty := dbtypes.RawExpression{}
+	aliased := qb.MustExpr("now()", "ts")
+
+	cases := []struct {
+		name    string
+		build   func() (string, []any, error)
+		wantErr error
+		wantMsg string
+	}{
+		{"set_empty", func() (string, []any, error) { return qb.Update(tableUsers).Set("updated_at", empty).ToSQL() }, dbtypes.ErrEmptyExpressionSQL, "updated_at"},
+		{"set_alias", func() (string, []any, error) { return qb.Update(tableUsers).Set("updated_at", aliased).ToSQL() }, dbtypes.ErrAliasInValue, "updated_at"},
+		{"update_setmap_empty", func() (string, []any, error) {
+			return qb.Update(tableUsers).SetMap(map[string]any{"name": "a", "updated_at": empty}).ToSQL()
+		}, dbtypes.ErrEmptyExpressionSQL, "updated_at"},
+		{"update_setmap_alias", func() (string, []any, error) {
+			return qb.Update(tableUsers).SetMap(map[string]any{"updated_at": aliased}).ToSQL()
+		}, dbtypes.ErrAliasInValue, "updated_at"},
+		{"values_empty", func() (string, []any, error) {
+			return qb.Insert(tableUsers).Columns("id", "updated_at").Values(1, empty).ToSQL()
+		}, dbtypes.ErrEmptyExpressionSQL, "position 2"},
+		{"values_alias", func() (string, []any, error) {
+			return qb.Insert(tableUsers).Columns("id", "updated_at").Values(1, aliased).ToSQL()
+		}, dbtypes.ErrAliasInValue, "position 2"},
+		{"insert_setmap_empty", func() (string, []any, error) {
+			return qb.Insert(tableUsers).SetMap(map[string]any{"updated_at": empty}).ToSQL()
+		}, dbtypes.ErrEmptyExpressionSQL, "updated_at"},
+		{"insert_setmap_alias", func() (string, []any, error) {
+			return qb.Insert(tableUsers).SetMap(map[string]any{"updated_at": aliased}).ToSQL()
+		}, dbtypes.ErrAliasInValue, "updated_at"},
+		// Alias is judged before the body, as Having does, so the reported
+		// error does not depend on the body when both are wrong.
+		{"set_empty_with_alias", func() (string, []any, error) {
+			return qb.Update(tableUsers).Set("updated_at", dbtypes.RawExpression{Alias: "ts"}).ToSQL()
+		}, dbtypes.ErrAliasInValue, "updated_at"},
+		// An invalid column still wins over a bad expression in update SetMap.
+		{"update_setmap_bad_column_wins", func() (string, []any, error) {
+			return qb.Update(tableUsers).SetMap(map[string]any{"a;b": 1, "updated_at": empty}).ToSQL()
+		}, nil, `invalid column identifier "a;b"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := tc.build()
+			require.Error(t, err)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+			}
+			assert.Contains(t, err.Error(), tc.wantMsg)
+		})
+	}
+}

@@ -53,6 +53,11 @@ var (
 	// nowhere to render; accepting one silently would drop it.
 	ErrAliasInHaving = errors.New("alias is not allowed in a HAVING predicate")
 
+	// ErrAliasInValue is returned when a RawExpression carrying an alias is passed
+	// to Set, SetMap or Values. A SET or VALUES cell projects nothing, so an alias
+	// has nowhere to render; accepting one silently would drop it.
+	ErrAliasInValue = errors.New("alias is not allowed in a SET or VALUES value")
+
 	// ErrNilSubquery is returned when ValidateSubquery() is called with nil subquery.
 	ErrNilSubquery = errors.New("subquery cannot be nil")
 

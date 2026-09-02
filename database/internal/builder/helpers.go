@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Masterminds/squirrel"
+
 	"github.com/gaborage/go-bricks/database/internal/sqllex"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -38,6 +40,55 @@ func valuesByKeyOrder(m map[string]any, keys []string) []any {
 		vals = append(vals, m[k])
 	}
 	return vals
+}
+
+// valueCell prepares one SET/VALUES cell for squirrel. A dbtypes.RawExpression
+// is validated here — a plain struct can reach this door without passing
+// Expr() — and spliced as squirrel.Expr so no placeholder or argument is
+// emitted; the alias is judged first because a SET or VALUES cell projects
+// nothing. Any other value is returned untouched and stays parameterized.
+// The label names the column or one-based position in the deferred error.
+func valueCell(label string, value any) (any, error) {
+	expr, ok := value.(dbtypes.RawExpression)
+	if !ok {
+		return value, nil
+	}
+	if expr.Alias != "" {
+		return nil, fmt.Errorf("%s: %w: %s", label, dbtypes.ErrAliasInValue, expr.Alias)
+	}
+	if err := expr.Validate(); err != nil {
+		return nil, fmt.Errorf("%s: %w", label, err)
+	}
+	return squirrel.Expr(expr.SQL), nil
+}
+
+// valueCells applies valueCell to every cell, copying the slice on the first
+// RawExpression so a caller's variadic slice is never rewritten; label is
+// called only on the error path.
+func valueCells(values []any, label func(i int) string) ([]any, error) {
+	out := values
+	for i, v := range values {
+		if _, ok := v.(dbtypes.RawExpression); !ok {
+			continue
+		}
+		cell, err := valueCell(label(i), v)
+		if err != nil {
+			return nil, err
+		}
+		if len(out) == len(values) && &out[0] == &values[0] {
+			out = append([]any(nil), values...)
+		}
+		out[i] = cell
+	}
+	return out, nil
+}
+
+// positionLabel labels a VALUES cell by its one-based position.
+func positionLabel(i int) string { return fmt.Sprintf("value position %d", i+1) }
+
+// keyLabel labels a SetMap cell by the caller's column key.
+func keyLabel(keys []string) func(int) string {
+	return func(i int) string { return keys[i] }
 }
 
 // upsertColumn pairs a caller's key with the normalized spelling the statement

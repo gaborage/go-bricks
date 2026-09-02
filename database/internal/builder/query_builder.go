@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Masterminds/squirrel"
@@ -1309,20 +1310,37 @@ func (uqb *UpdateQueryBuilder) Set(column string, value any) dbtypes.UpdateQuery
 // user input. Each is validated against a safe identifier grammar on ALL vendors
 // BEFORE interpolation; anything else surfaces as a ToSQL() error. See ADR-031.
 func (uqb *UpdateQueryBuilder) SetMap(clauses map[string]any) dbtypes.UpdateQueryBuilder {
-	quotedClauses := make(map[string]any, len(clauses))
 	// Sorted so that WHICH invalid column is reported is deterministic when several
-	// are invalid, as InsertQueryBuilder.SetMap already does. This is the reported
-	// error only — the rendered SET order is squirrel's and is untouched (#1185).
-	for _, k := range sortedKeys(clauses) {
+	// are invalid, as InsertQueryBuilder.SetMap already does.
+	keys := sortedKeys(clauses)
+	quotedKeys := make([]string, len(keys))
+	for i, k := range keys {
 		// Validated by the column funnel, as every other column door is.
 		quoted, quoteErr := uqb.qb.quoteColumnForQuery(k)
 		if quoteErr != nil {
 			uqb.failClause(quoteErr)
 			return uqb
 		}
-		quotedClauses[quoted] = clauses[k]
+		quotedKeys[i] = quoted
 	}
-	uqb.updateBuilder = uqb.updateBuilder.SetMap(quotedClauses)
+	values, err := valueCells(valuesByKeyOrder(clauses, keys), keyLabel(keys))
+	if err != nil {
+		uqb.failClause(err)
+		return uqb
+	}
+	// Applied one Set per key, in rendered order — the order squirrel's SetMap
+	// would emit (#1185) — rather than through a map keyed by the rendering: two
+	// keys that differ only in padding render alike, and a map would keep one
+	// assignment and drop the other silently. Both reach SQL, as in
+	// InsertQueryBuilder.SetMap, so the database reports the duplicate.
+	order := make([]int, len(keys))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool { return quotedKeys[order[a]] < quotedKeys[order[b]] })
+	for _, i := range order {
+		uqb.updateBuilder = uqb.updateBuilder.Set(quotedKeys[i], values[i])
+	}
 	return uqb
 }
 
@@ -1364,7 +1382,12 @@ func (uqb *UpdateQueryBuilder) setColumn(column string, value any) (ok bool) {
 		uqb.failClause(err)
 		return false
 	}
-	uqb.updateBuilder = uqb.updateBuilder.Set(quoted, value)
+	cell, err := valueCell(column, value)
+	if err != nil {
+		uqb.failClause(err)
+		return false
+	}
+	uqb.updateBuilder = uqb.updateBuilder.Set(quoted, cell)
 	return true
 }
 
@@ -1475,7 +1498,12 @@ func (iqb *InsertQueryBuilder) Columns(columns ...string) dbtypes.InsertQueryBui
 }
 
 func (iqb *InsertQueryBuilder) Values(values ...any) dbtypes.InsertQueryBuilder {
-	iqb.insertBuilder = iqb.insertBuilder.Values(values...)
+	cells, err := valueCells(values, positionLabel)
+	if err != nil {
+		iqb.failClause(err)
+		return iqb
+	}
+	iqb.insertBuilder = iqb.insertBuilder.Values(cells...)
 	return iqb
 }
 
@@ -1497,9 +1525,14 @@ func (iqb *InsertQueryBuilder) SetMap(clauses map[string]any) dbtypes.InsertQuer
 	// NORMALIZED names; values follow the caller's own keys, so two keys that
 	// differ only in padding stay two columns and the database reports the
 	// duplicate rather than one value being silently dropped.
+	values, err := valueCells(valuesByKeyOrder(clauses, keys), keyLabel(keys))
+	if err != nil {
+		iqb.failClause(err)
+		return iqb
+	}
 	iqb.insertBuilder = iqb.insertBuilder.
 		Columns(iqb.qb.quoteColumnsForDML(normalized...)...).
-		Values(valuesByKeyOrder(clauses, keys)...)
+		Values(values...)
 	return iqb
 }
 
