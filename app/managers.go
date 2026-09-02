@@ -258,6 +258,7 @@ func (f *ResourceManagerFactory) CreateCacheManager(
 
 	cacheConnector := f.factoryResolver.CacheConnector(resourceSource, f.logger)
 	cacheOptions := f.configBuilder.BuildCacheOptions()
+	cacheOptions.Logger = f.logger
 
 	f.warnIfPoolBelowTenantCount("cache", cacheOptions.MaxSize)
 

@@ -16,6 +16,7 @@ import (
 
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/cache/internal/tracking"
+	"github.com/gaborage/go-bricks/logger"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
@@ -1345,4 +1346,104 @@ func TestCacheManagerCloseUnregistersManagerMetrics(t *testing.T) {
 		assert.Empty(t, sum.DataPoints,
 			"cache.manager.* must stop being observed after Close")
 	}
+}
+
+// warnRecorder is a logger.Logger double that captures every Warn() event's message and
+// fields. Other levels are discarded; NewCacheManager logs nothing but this WARN.
+type warnRecorder struct {
+	msgs   []string
+	fields []map[string]any
+}
+
+func (r *warnRecorder) Info() logger.LogEvent  { return &recordedEvent{} }
+func (r *warnRecorder) Error() logger.LogEvent { return &recordedEvent{} }
+func (r *warnRecorder) Debug() logger.LogEvent { return &recordedEvent{} }
+func (r *warnRecorder) Fatal() logger.LogEvent { return &recordedEvent{} }
+func (r *warnRecorder) Warn() logger.LogEvent {
+	return &recordedEvent{sink: r, fields: map[string]any{}}
+}
+func (r *warnRecorder) WithContext(any) logger.Logger           { return r }
+func (r *warnRecorder) WithFields(map[string]any) logger.Logger { return r }
+
+type recordedEvent struct {
+	sink   *warnRecorder
+	fields map[string]any
+}
+
+func (e *recordedEvent) Msg(msg string) {
+	if e.sink != nil {
+		e.sink.msgs = append(e.sink.msgs, msg)
+		e.sink.fields = append(e.sink.fields, e.fields)
+	}
+}
+
+func (e *recordedEvent) set(k string, v any) logger.LogEvent {
+	if e.fields != nil {
+		e.fields[k] = v
+	}
+	return e
+}
+
+func (e *recordedEvent) Msgf(format string, args ...any)               { e.Msg(fmt.Sprintf(format, args...)) }
+func (e *recordedEvent) Err(error) logger.LogEvent                     { return e }
+func (e *recordedEvent) Str(k, v string) logger.LogEvent               { return e.set(k, v) }
+func (e *recordedEvent) Int(string, int) logger.LogEvent               { return e }
+func (e *recordedEvent) Int64(string, int64) logger.LogEvent           { return e }
+func (e *recordedEvent) Uint64(string, uint64) logger.LogEvent         { return e }
+func (e *recordedEvent) Dur(k string, v time.Duration) logger.LogEvent { return e.set(k, v) }
+func (e *recordedEvent) Interface(string, any) logger.LogEvent         { return e }
+func (e *recordedEvent) Bytes(string, []byte) logger.LogEvent          { return e }
+func (e *recordedEvent) Bool(string, bool) logger.LogEvent             { return e }
+func (e *recordedEvent) Enabled() bool                                 { return true }
+
+// TestNewCacheManagerWarnsWhenCleanupIntervalIsNotBelowIdleTTL pins that the cache manager
+// emits the same advisory as the database and messaging managers, under cache.manager keys,
+// and that the 5m fallback for a non-positive CleanupInterval is applied BEFORE the check —
+// a raw 0 would be below any TTL and stay silent, so removing the fallback turns this red.
+// The predicate itself is exhausted in internal/resourcepool/cleanup_warning_test.go.
+func TestNewCacheManagerWarnsWhenCleanupIntervalIsNotBelowIdleTTL(t *testing.T) {
+	tests := []struct {
+		name            string
+		cleanupInterval time.Duration
+		idleTTL         time.Duration
+		wantWarn        bool
+	}{
+		{name: "interval_below_ttl_silent", cleanupInterval: time.Minute, idleTTL: 10 * time.Minute, wantWarn: false},
+		{name: "defaults_silent", cleanupInterval: 5 * time.Minute, idleTTL: 15 * time.Minute, wantWarn: false},
+		{name: "unset_interval_takes_the_default_and_warns_against_a_short_ttl", cleanupInterval: 0, idleTTL: time.Minute, wantWarn: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &warnRecorder{}
+			m, err := cache.NewCacheManager(cache.ManagerConfig{
+				MaxSize:         5,
+				IdleTTL:         tc.idleTTL,
+				CleanupInterval: tc.cleanupInterval,
+				Logger:          rec,
+			}, func(context.Context, string) (cache.Cache, error) { return newMockCache("c"), nil })
+			require.NoError(t, err)
+			defer func() { _ = m.Close() }()
+
+			if !tc.wantWarn {
+				assert.Empty(t, rec.msgs, "a sweep that outpaces the TTL must not WARN")
+				return
+			}
+			require.Len(t, rec.msgs, 1, "the advisory must fire exactly once per manager")
+			assert.Contains(t, rec.msgs[0], "cache.manager.cleanupinterval is >= cache.manager.idlettl")
+			assert.Equal(t, "cache.manager", rec.fields[0]["resource"])
+			assert.Equal(t, 5*time.Minute, rec.fields[0]["cleanupinterval"], "the WARN must report the applied fallback, not the raw 0")
+			assert.Equal(t, time.Minute, rec.fields[0]["idlettl"])
+		})
+	}
+}
+
+// TestNewCacheManagerNilLoggerSkipsTheWarn pins the documented nil-safe default: no Logger
+// means no WARN and no panic, even for a late cleanup interval.
+func TestNewCacheManagerNilLoggerSkipsTheWarn(t *testing.T) {
+	m, err := cache.NewCacheManager(cache.ManagerConfig{
+		MaxSize: 5, IdleTTL: time.Minute, CleanupInterval: 0,
+	}, func(context.Context, string) (cache.Cache, error) { return newMockCache("c"), nil })
+	require.NoError(t, err)
+	require.NoError(t, m.Close())
 }
