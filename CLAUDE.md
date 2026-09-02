@@ -121,7 +121,7 @@ GoBricks is a **production-grade framework for building MVPs fast**: enterprise-
 - **observability/** — OpenTelemetry tracing and metrics
 - **outbox/** — Transactional outbox for reliable event publishing (at-least-once delivery). `outbox.tenancy: shared` runs one control-plane ledger (relayed as a single pass, resolved via the empty `""` key) for pool-model multi-tenant deployments that don't need per-tenant fan-out (ADR-041). See [wiki/outbox.md](wiki/outbox.md).
 - **inbox/** — Exactly-once consumer-side processing (`InboxProcessor`); consumer-side complement to the transactional outbox. `inbox.tenancy: shared` mirrors the outbox's control-plane ledger mode, and `inbox.hold.*` parks a tenant's failed stream deliveries in order and drains them back through the consumer (ADR-089). See [wiki/outbox.md](wiki/outbox.md).
-- **keystore/** — Named key-material management: RSA key pairs and raw symmetric secrets (HMAC/HKDF) from files or base64 env vars; per-entry RSA-or-secret with a startup mutual-exclusivity check. See [keystore.md](wiki/keystore.md)
+- **keystore/** — Named key-material management: RSA key pairs (DER, or a password-protected PKCS#12 bundle whose password comes from `password.env`/`password.file`, never a literal) and raw symmetric secrets (HMAC/HKDF) from files or base64 env vars; per-entry RSA-or-secret-or-PKCS#12 with a startup mutual-exclusivity check. See [keystore.md](wiki/keystore.md)
 - **jose/** — Nested JWE-of-JWS protection on HTTP request and response bodies
 
 ### Module System

@@ -2,9 +2,14 @@ package config
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 )
+
+// envVarNamePattern is the POSIX environment-variable name grammar. A value
+// that fails it is more likely the password itself than a variable name.
+var envVarNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // normalizeKeyStore fills the nil default: an unset SecretMinLength becomes
 // DefaultKeyStoreSecretMinLength (32). An explicit 0 or N is left untouched —
@@ -66,12 +71,25 @@ func checkKeyStore(cfg *KeyStoreConfig) error {
 	return nil
 }
 
-// validateKeyEntry validates a single keystore entry. An entry is either an
-// RSA pair (public required, private optional) or a symmetric secret — a mixed
-// entry is a structural error detected here without an explicit discriminator.
+// validateKeyEntry validates a single keystore entry. An entry is exactly one
+// of an RSA pair (public required, private optional), a symmetric secret, or a
+// PKCS#12 bundle — a mixed entry is a structural error detected here without
+// an explicit discriminator.
 func validateKeyEntry(kp *KeyPairConfig, name string) error {
 	hasSecret := kp.Secret.IsSet()
 	hasAsymmetric := kp.Public.IsSet() || kp.Private.IsSet()
+
+	if kp.PKCS12.IsSet() {
+		if hasSecret || hasAsymmetric {
+			return &ConfigError{
+				Category: errCategoryInvalid,
+				Field:    fmt.Sprintf(keystoreKeysFieldPrefix, name),
+				Message:  "entry has a 'pkcs12' bundle alongside 'secret' or 'public'/'private' material",
+				Action:   "configure an entry as exactly one of a 'secret', an RSA 'public'/'private' pair, or a 'pkcs12' bundle",
+			}
+		}
+		return validatePKCS12Source(&kp.PKCS12, name)
+	}
 
 	if hasSecret && hasAsymmetric {
 		return &ConfigError{
@@ -112,6 +130,42 @@ func validateKeySource(src KeySourceConfig, keyName, keyType string, required bo
 			Field:    fmt.Sprintf("keystore.keys.%s.%s", keyName, keyType),
 			Message:  "key source required",
 			Action:   "set either 'file' (path) or 'value' (base64)",
+		}
+	}
+	return nil
+}
+
+// validatePKCS12Source checks the bundle has exactly one source and the
+// password names exactly one indirection (env or file) — a literal password
+// is not expressible in config.
+func validatePKCS12Source(p *PKCS12SourceConfig, name string) error {
+	if err := validateKeySource(p.Bundle(), name, "pkcs12", true); err != nil {
+		return err
+	}
+	field := fmt.Sprintf("keystore.keys.%s.pkcs12.password", name)
+	hasEnv := p.Password.Env != ""
+	hasFile := p.Password.File != ""
+	switch {
+	case hasEnv && hasFile:
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    field,
+			Message:  "both 'env' and 'file' set",
+			Action:   "use exactly one of 'env' or 'file'",
+		}
+	case !hasEnv && !hasFile:
+		return &ConfigError{
+			Category: errCategoryMissing,
+			Field:    field,
+			Message:  "password source required",
+			Action:   "set 'env' (the variable's name) or 'file' (a path); the password itself is never written in config",
+		}
+	case hasEnv && !envVarNamePattern.MatchString(p.Password.Env):
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    field + ".env",
+			Message:  "not an environment variable name (value elided)",
+			Action:   "set 'env' to the name of the variable holding the password, never the password itself",
 		}
 	}
 	return nil

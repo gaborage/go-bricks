@@ -59,6 +59,7 @@ require (
 	golang.org/x/term v0.45.0
 	google.golang.org/grpc v1.83.2
 	pgregory.net/rapid v1.3.0
+	software.sslmate.com/src/go-pkcs12 v0.7.3
 )
 
 require (

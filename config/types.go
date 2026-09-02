@@ -935,16 +935,49 @@ type KeyStoreConfig struct {
 	SecretMinLength *int `koanf:"secretminlength" json:"secretminlength" yaml:"secretminlength" toml:"secretminlength" mapstructure:"secretminlength"`
 }
 
-// KeyPairConfig holds key material for one logical name. An entry is either an
-// RSA key pair (Public required, Private optional) or a symmetric Secret —
-// never a mix. A mixed entry is rejected at startup (structural detection; no
-// explicit discriminator needed).
+// KeyPairConfig holds key material for one logical name. An entry is exactly
+// one of: an RSA key pair (Public required, Private optional), a symmetric
+// Secret, or a PKCS12 bundle. A mixed entry is rejected at startup (structural
+// detection; no explicit discriminator needed).
 type KeyPairConfig struct {
 	Public  KeySourceConfig `koanf:"public" json:"public" yaml:"public" toml:"public" mapstructure:"public"`
 	Private KeySourceConfig `koanf:"private" json:"private" yaml:"private" toml:"private" mapstructure:"private"`
 	// Secret holds raw symmetric key material (HMAC/CMAC key, HKDF input).
 	// Mutually exclusive with Public/Private.
 	Secret KeySourceConfig `koanf:"secret" json:"secret" yaml:"secret" toml:"secret" mapstructure:"secret"`
+	// PKCS12 loads the RSA pair from a password-protected PKCS#12 bundle.
+	// Mutually exclusive with Public/Private and Secret.
+	PKCS12 PKCS12SourceConfig `koanf:"pkcs12" json:"pkcs12" yaml:"pkcs12" toml:"pkcs12" mapstructure:"pkcs12"`
+}
+
+// PKCS12SourceConfig names a password-protected PKCS#12 (.p12/.pfx) bundle:
+// exactly one of File (path) or Value (base64 DER), plus the Password source.
+type PKCS12SourceConfig struct {
+	File     string               `koanf:"file" json:"file" yaml:"file" toml:"file" mapstructure:"file"`
+	Value    string               `koanf:"value" json:"value" yaml:"value" toml:"value" mapstructure:"value"`
+	Password PasswordSourceConfig `koanf:"password" json:"password" yaml:"password" toml:"password" mapstructure:"password"`
+}
+
+// IsSet reports whether any part of the PKCS#12 stanza is configured.
+func (p *PKCS12SourceConfig) IsSet() bool {
+	return p.File != "" || p.Value != "" || p.Password.IsSet()
+}
+
+// Bundle is the bundle's file-or-value source, for the shared loader path.
+func (p *PKCS12SourceConfig) Bundle() KeySourceConfig {
+	return KeySourceConfig{File: p.File, Value: p.Value}
+}
+
+// PasswordSourceConfig names where a password is read from at startup — the
+// environment variable Env or the file File — never the password itself.
+type PasswordSourceConfig struct {
+	Env  string `koanf:"env" json:"env" yaml:"env" toml:"env" mapstructure:"env"`
+	File string `koanf:"file" json:"file" yaml:"file" toml:"file" mapstructure:"file"`
+}
+
+// IsSet reports whether a password source is configured.
+func (p *PasswordSourceConfig) IsSet() bool {
+	return p.Env != "" || p.File != ""
 }
 
 // KeySourceConfig specifies where to load a key from.

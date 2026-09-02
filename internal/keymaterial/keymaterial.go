@@ -68,11 +68,7 @@ func LoadSecretBytes(file, value string) ([]byte, error) {
 		}
 		data, err := os.ReadFile(file) // #nosec G304 -- deployment configuration, as in LoadBytes
 		if err != nil {
-			var pe *os.PathError
-			if errors.As(err, &pe) {
-				err = pe.Err // strip the embedded path — it may BE the secret
-			}
-			return nil, fmt.Errorf("secret file unreadable (source elided): %w", err)
+			return nil, fmt.Errorf("secret file unreadable (source elided): %w", stripPath(err))
 		}
 		return data, nil
 	}

@@ -5,8 +5,9 @@
 // Material is loaded at startup from files or base64-encoded values (typically
 // injected via environment variables for Kubernetes/EKS deployments). Once
 // loaded, the store is read-only and safe for concurrent access. Each entry is
-// either an RSA pair or a symmetric secret — a mixed entry is rejected by the
-// config layer at startup (structural detection, no explicit discriminator).
+// exactly one of an RSA pair, a symmetric secret, or a password-protected
+// PKCS#12 bundle — a mixed entry is rejected by the config layer at startup
+// (structural detection, no explicit discriminator).
 //
 // # Configuration
 //
@@ -23,6 +24,11 @@
 //	    mac-key:
 //	      secret:
 //	        value: "${MAC_KEY_BASE64}"              # base64 raw key material
+//	    vts:
+//	      pkcs12:
+//	        file: "certs/vts.p12"                   # or value: base64 of the bundle
+//	        password:
+//	          env: "VTS_P12_PASSWORD"               # variable NAME; or file: path
 //
 // # Usage
 //
@@ -162,13 +168,34 @@ func (s *store) belowRecommended() []shortSecret {
 	return short
 }
 
-// loadKeyEntry loads one entry as either a symmetric secret or an RSA pair.
-// The config layer guarantees the two are mutually exclusive.
+// loadKeyEntry loads one entry as a symmetric secret, a PKCS#12 bundle, or an
+// RSA pair. The config layer guarantees the three are mutually exclusive.
 func loadKeyEntry(name string, cfg *config.KeyPairConfig, secretMinLength int) (*keyEntry, error) {
 	if cfg.Secret.IsSet() {
 		return loadSecretEntry(name, cfg.Secret, secretMinLength)
 	}
+	if cfg.PKCS12.IsSet() {
+		return loadPKCS12Entry(name, &cfg.PKCS12)
+	}
 	return loadRSAEntry(name, cfg)
+}
+
+// loadPKCS12Entry loads an RSA pair from a password-protected PKCS#12 bundle.
+// The bundle's CA chain is discarded.
+func loadPKCS12Entry(name string, cfg *config.PKCS12SourceConfig) (*keyEntry, error) {
+	pfx, err := loadKeyBytes(cfg.Bundle(), name, "pkcs12")
+	if err != nil {
+		return nil, err
+	}
+	password, err := keymaterial.LoadPassword(cfg.Password.Env, cfg.Password.File)
+	if err != nil {
+		return nil, fmt.Errorf("keystore: key %q pkcs12 password: %w", name, err)
+	}
+	priv, err := keymaterial.ParsePKCS12RSA(pfx, password)
+	if err != nil {
+		return nil, fmt.Errorf("keystore: key %q pkcs12: %w", name, err)
+	}
+	return &keyEntry{public: &priv.PublicKey, private: priv}, nil
 }
 
 // loadSecretEntry loads raw symmetric key material and enforces the byte floor.
