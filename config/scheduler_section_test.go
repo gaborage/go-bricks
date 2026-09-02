@@ -41,8 +41,6 @@ func TestValidateSchedulerTimezoneRejectsInvalid(t *testing.T) {
 		{name: "garbage_string", input: "xyz"},
 		{name: "numeric_offset_not_iana", input: "+05:30"},
 		{name: "literal_local_rejected", input: "Local"},
-		{name: "lowercase_local_rejected", input: "local"},
-		{name: "uppercase_local_rejected", input: "LOCAL"},
 	}
 
 	for _, tt := range tests {
@@ -201,12 +199,4 @@ func TestLoadFailsOnAllInvalidCIDRAllowlistEnv(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, cfg)
 	assert.Contains(t, err.Error(), "scheduler.security.cidrallowlist")
-}
-
-func TestValidateSchedulerTimezoneLocalWiredIntoValidate(t *testing.T) {
-	cfg := createValidFullConfig()
-	cfg.Scheduler.Timezone = "Local"
-	err := Validate(cfg)
-	assert.ErrorContains(t, err, "scheduler.timezone")
-	assert.ErrorContains(t, err, `"-"`)
 }

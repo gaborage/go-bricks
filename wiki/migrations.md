@@ -6433,6 +6433,8 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   time`; the `Action` is the existing valid-options list. `"-"`, `UTC`, empty (defaulted to
   `UTC`) and every IANA name are unchanged, and so is what `"-"` means at runtime. `local` and
   `LOCAL` fail as they did, as unknown zones — only the exact spelling was ever special-cased.
+  `scheduler.Module.Init` does not re-check: it requires a `config.Validate`-normalized config
+  (ADR-075), so a hand-assembled `ModuleDeps` around an unvalidated config is not covered.
 - gate: match = any timezone key delivered as exactly `Local`, in-repo or from an env/secret
   source. no-match = every timezone value is `"-"`, unset, `UTC` or an IANA name.
 - apply: if host-local was the intent, write `"-"` (quoted, as every example in the wiki spells

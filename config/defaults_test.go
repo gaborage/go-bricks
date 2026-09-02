@@ -277,6 +277,28 @@ func TestNormalizeIANATimezoneRejectsLiteralLocal(t *testing.T) {
 	assert.Contains(t, cfgErr.Message, `"-"`)
 }
 
+func TestNormalizeIANATimezoneCaseVariantsAreUnknownZones(t *testing.T) {
+	// Only the exact spelling is special-cased by time.LoadLocation; the variants
+	// must keep failing on the loader path, never on the Local branch.
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "lowercase_local", input: "local"},
+		{name: "uppercase_local", input: "LOCAL"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := normalizeIANATimezone("database.timezone", tt.input)
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Contains(t, cfgErr.Message, "invalid IANA timezone")
+			assert.NotContains(t, cfgErr.Message, "is not accepted")
+		})
+	}
+}
+
 func assertValidationError(t *testing.T, err error, errorContains string) {
 	// require, not assert: a nil err would otherwise panic on err.Error() below and
 	// take the whole test binary down instead of failing this one case.

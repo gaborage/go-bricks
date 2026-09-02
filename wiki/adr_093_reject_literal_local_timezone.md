@@ -12,9 +12,10 @@
 
 `normalizeIANATimezone` is the one validator behind every timezone key — `scheduler.timezone`,
 `database.timezone`, each `databases.<name>.timezone` and each
-`multitenant.tenants.<id>.database.timezone` — at startup and at the runtime door a dynamic
-`DBConfigProvider` and the `go-bricks-migrate` CLI go through. It defaults an empty value to
-`UTC`, passes the `"-"` sentinel through, and probes everything else with `time.LoadLocation`.
+`multitenant.tenants.<id>.database.timezone` — on every path that validates a config: `config.Validate`
+(which every application construction path runs, ADR-064) and the `ApplyDatabasePoolDefaultsForKey`
+door a dynamic `DBConfigProvider` and the `go-bricks-migrate` CLI go through. It defaults an empty
+value to `UTC`, passes the `"-"` sentinel through, and probes everything else with `time.LoadLocation`.
 
 Go's loader special-cases exactly one spelling before it consults the IANA database: the
 string `Local` returns `time.Local`, the host process's zone. So `Local` passed validation,
@@ -48,7 +49,10 @@ silently.
 v0.62.0. The fix is a one-line rewrite, and the error names the key and the replacement.
 
 **Neutral.** The framework keeps validating through `time.LoadLocation`; the refusal is a
-single string comparison ahead of it, not a second timezone grammar.
+single string comparison ahead of it, not a second timezone grammar. `scheduler.Module.Init` does
+not re-check the value: it requires a `config.Validate`-normalized config (ADR-075) and resolves
+the zone it is handed, so a `ModuleDeps` assembled by hand around an unvalidated config is outside
+this decision exactly as it is outside ADR-075.
 
 ## Alternatives considered
 
