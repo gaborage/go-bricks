@@ -208,17 +208,21 @@ What it guarantees:
   derived from `ctx` — `cache.DefaultLoadCacheTimeout` (500 ms) or
   `cache.WithCacheTimeout(d)` — so a slow-but-reachable Redis costs at most that slice of
   the request budget before the loader runs. The loader receives `ctx` itself, deadline
-  and values intact: under the default `server.timeout.middleware` of 5 s the origin
-  keeps at least 4.5 s.
+  and values intact, and keeps whatever budget remains after the cache leg: under the
+  default `server.timeout.middleware` of 5 s that is the request's remaining time less
+  at most 500 ms, never a fixed figure, because the middleware deadline is already
+  running when the handler starts.
 - **Every cache-side failure degrades to the origin, never to the caller.** A timeout, a
   connection error, `ErrNotFound`, or an entry that no longer decodes as `T` (a schema
   change) all fall through to the loader, and a successful fill overwrites the bad entry.
-- **The write-back is detached.** It runs on its own goroutine under
+- **The write-back is detached.** The value is CBOR-encoded before `LoadThrough` returns
+  (the caller owns it from then on), and the `Set` runs on its own goroutine under
   `context.WithoutCancel(ctx)`, bounded by the same timeout, so a caller that gives up right
-  after the origin answered still fills the cache. Write-back errors are dropped — the cache
-  client's `db.client.operation.duration{error.type}` carries them. A `nil` pointer, map,
-  slice, interface, channel or func result is returned but never stored, so a CBOR null
-  cannot pin the key for the whole TTL.
+  after the origin answered still fills the cache. A value that cannot be encoded fails the
+  call with the `Marshal` error rather than silently never caching; a failed `Set` is
+  dropped — the cache client's `db.client.operation.duration{error.type}` carries it. A
+  `nil` pointer, map, slice, interface, channel or func result is returned but never
+  stored, so a CBOR null cannot pin the key for the whole TTL.
 - **Concurrent misses collapse.** Callers missing on the same cache instance, key and `T`
   share one loader call: one leader loads, the rest wait on their own contexts. The scope
   is the cache instance, so the same key on two tenants' caches never shares a load. A
@@ -226,8 +230,9 @@ What it guarantees:
   load starts a fresh fill instead of inheriting that error — collapsing never becomes an
   availability loss. A loader panic becomes an error naming only the panic value's type
   (ADR-081), delivered to every waiter.
-- **Bad arguments fail before any I/O.** `ttl < 0` returns `ErrInvalidTTL`; a non-positive
-  `WithCacheTimeout` returns `ErrInvalidCacheTimeout`.
+- **Bad arguments fail before any I/O.** A nil `Cache` (including a typed nil) returns
+  `ErrNilCache`; `ttl < 0` returns `ErrInvalidTTL`; a non-positive `WithCacheTimeout`
+  returns `ErrInvalidCacheTimeout`.
 
 Each fill records `cache.fill.duration` (seconds) with `cache.collapsed=leader|follower`,
 `db.namespace` when a tenant is on the context, and `error.type` on failure; hits show up
