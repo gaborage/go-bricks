@@ -1,4 +1,4 @@
-# ADR-093: The Literal `Local` Timezone Is Refused; `"-"` Is the Only Host-Local Spelling
+# ADR-093: The Literal `Local` Timezone Is Refused; `"-"` Is the Only Documented Opt-Out
 
 - **Status**: Accepted
 - **Date**: 2026-09-01
@@ -45,8 +45,11 @@ silently.
 **Positive.** Host-local time has one spelling, the documented one, on every key. A grep for
 `"-"` finds every deployment that opted in; nothing opts in by accident.
 
-**Negative.** A deployment carrying `timezone: Local` booted on v0.61.0 and fails startup on
-v0.62.0. The fix is a one-line rewrite, and the error names the key and the replacement.
+**Negative.** A deployment carrying `timezone: Local` booted on v0.61.0 and is refused on
+v0.62.0 — at startup for a static config, at the tenant's first connection acquisition for a
+dynamic `DBConfigProvider` record, and before dialing in `go-bricks-migrate` (the timing C62.1
+documents per path). The fix is a one-line rewrite, and the error names the key and the
+replacement.
 
 **Neutral.** The framework keeps validating through `time.LoadLocation`; the refusal is a
 single string comparison ahead of it, not a second timezone grammar. `scheduler.Module.Init` does

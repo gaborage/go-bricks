@@ -1402,7 +1402,7 @@ unexports eight debug response types with their JSON unchanged. See
 
 ---
 
-### [ADR-093: The Literal `Local` Timezone Is Refused; `"-"` Is the Only Host-Local Spelling](adr_093_reject_literal_local_timezone.md)
+### [ADR-093: The Literal `Local` Timezone Is Refused; `"-"` Is the Only Documented Opt-Out](adr_093_reject_literal_local_timezone.md)
 
 **Date:** 2026-09-01 | **Status:** Accepted | **Breaking:** yes — behavioral; a config that booted with `timezone: Local` now fails startup
 
