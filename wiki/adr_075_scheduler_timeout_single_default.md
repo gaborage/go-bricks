@@ -1,5 +1,13 @@
 # ADR-075: One normalized default per scheduler timeout key
 
+> **Amendment (2026-09-02, #1315).** The deferred `scheduler.timezone` collapse is
+> done. `Init` refuses an empty value with the same did-not-pass-normalization
+> error class the timeouts use, records host-local for `"-"` without loading,
+> and otherwise calls `time.LoadLocation` once and stores the `*time.Location`
+> for the lazy gocron construction. The empty-string use-time fallback is gone,
+> so the module has one timezone door, at Init, and an unloadable zone fails
+> there instead of at first job registration.
+
 - **Status**: Accepted
 - **Date**: 2026-08-20
 - **Related**: [ADR-064](adr_064_app_validates_every_config.md) — every APPLICATION construction path (`app.New`, `app.NewWithConfig`, `Builder.WithConfig`) runs `config.Validate`, which is what makes normalization the single place a default can live. It does not cover a `*config.Config` handed straight to `Module.Init` or `app.NewModuleRegistry`; that gap is why Init enforces its own precondition below
@@ -62,7 +70,8 @@ enforced once, at the only door.
   fallbacks used to be.
 - `scheduler.timezone` keeps its use-time fallback. It is normalized too, so the
   fallback is redundant rather than divergent; collapsing it belongs with the
-  broader owned-key derivation work, not here.
+  broader owned-key derivation work, not here. (Superseded by the amendment
+  above: the fallback is collapsed.)
 
 Migration: [C60.12](migrations.md).
 

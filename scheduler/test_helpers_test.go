@@ -89,6 +89,7 @@ func newTestScheduler(t *testing.T, shutdownTimeout time.Duration, opts ...testS
 		Logger: logger.New("info", false),
 		Config: &config.Config{
 			Scheduler: config.SchedulerConfig{
+				Timezone: config.DefaultTimezone,
 				Timeout: config.SchedulerTimeoutConfig{
 					Shutdown: shutdownTimeout,
 					// Positive threshold, as config normalization guarantees, so

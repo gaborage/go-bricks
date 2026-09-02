@@ -64,7 +64,11 @@ scheduler:
 | `Local` | Rejected at startup; `"-"` is the only host-local spelling ([ADR-093](adr_093_reject_literal_local_timezone.md)) |
 | numeric offset (`+05:00`) | Rejected at startup; use `Etc/GMT∓N` (inverted sign) |
 
-Invalid IANA names fail fast at startup. The active zone appears in the
+Invalid IANA names fail fast at startup: `config.Validate` refuses them, and
+`scheduler.Module.Init` loads the zone once more as its own precondition, so a
+config handed to `Init` without validation (an empty or unloadable value) fails
+there rather than at first job registration ([ADR-075](adr_075_scheduler_timeout_single_default.md)).
+The active zone appears in the
 "Scheduler initialized" startup log and in the `meta.timezone` field of
 `GET /_sys/job`. This mirrors the `database.timezone` contract — see
 [ADR-016](adr_016_database_session_timezone.md) and

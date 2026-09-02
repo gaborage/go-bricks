@@ -665,58 +665,60 @@ func schedulerTimeoutConfig(shutdown, slowJob time.Duration) *config.Config {
 	}}
 }
 
-func TestSchedulerConfiguredTimezone(t *testing.T) {
+// TestSchedulerInitTimezoneDoor pins scheduler.timezone to the same Init door as
+// the timeouts: an empty value means the config skipped normalization, an
+// unloadable zone fails at Init rather than at first job registration, "-"
+// records host-local without loading, and an IANA name loads once.
+func TestSchedulerInitTimezoneDoor(t *testing.T) {
 	tests := []struct {
-		name     string
-		cfg      *config.Config
-		expected string
+		name      string
+		tz        string
+		wantErr   string
+		wantLabel string
+		wantLoc   string
 	}{
-		{name: "empty_defaults_to_utc", cfg: &config.Config{}, expected: "UTC"},
-		{name: "iana_preserved", cfg: &config.Config{Scheduler: config.SchedulerConfig{Timezone: "America/New_York"}}, expected: "America/New_York"},
-		{name: "sentinel_preserved", cfg: &config.Config{Scheduler: config.SchedulerConfig{Timezone: "-"}}, expected: "-"},
+		{name: "empty_rejected", tz: "", wantErr: "scheduler.timezone must be set; run the config through config.Validate"},
+		{name: "unloadable_rejected", tz: "Mars/Olympus", wantErr: `scheduler: invalid timezone "Mars/Olympus"`},
+		{name: "sentinel_host_local", tz: "-", wantLabel: "host-local", wantLoc: "Local"},
+		{name: "iana_loaded", tz: "Asia/Tokyo", wantLabel: "Asia/Tokyo", wantLoc: "Asia/Tokyo"},
+		{name: "utc", tz: "UTC", wantLabel: "UTC", wantLoc: "UTC"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := &Module{config: tt.cfg}
-			assert.Equal(t, tt.expected, m.configuredTimezone())
+			m := NewModule()
+			cfg := schedulerTimeoutConfig(30*time.Second, 25*time.Second)
+			cfg.Scheduler.Timezone = tt.tz
+			err := m.Init(&app.ModuleDeps{Logger: logger.New("info", false), Config: cfg})
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantLabel, m.timezoneLabel())
+			opts := m.schedulerLocationOptions()
+			if tt.tz == config.TimezoneDisabledSentinel {
+				assert.Nil(t, m.location)
+				assert.Empty(t, opts)
+				return
+			}
+			require.NotNil(t, m.location)
+			assert.Equal(t, tt.wantLoc, m.location.String())
+			assert.Len(t, opts, 1)
 		})
 	}
 }
 
-func TestSchedulerLocationOptions(t *testing.T) {
-	t.Run("sentinel_yields_no_option", func(t *testing.T) {
-		m := &Module{config: &config.Config{Scheduler: config.SchedulerConfig{Timezone: "-"}}}
-		opts, err := m.schedulerLocationOptions()
-		require.NoError(t, err)
-		assert.Empty(t, opts)
-	})
-	t.Run("iana_yields_one_option", func(t *testing.T) {
-		m := &Module{config: &config.Config{Scheduler: config.SchedulerConfig{Timezone: "America/New_York"}}}
-		opts, err := m.schedulerLocationOptions()
-		require.NoError(t, err)
-		assert.Len(t, opts, 1)
-	})
-	t.Run("default_utc_yields_one_option", func(t *testing.T) {
-		m := &Module{config: &config.Config{}}
-		opts, err := m.schedulerLocationOptions()
-		require.NoError(t, err)
-		assert.Len(t, opts, 1)
-	})
-}
+// TestSchedulerInitUnloadableTimezoneWrapsLoadError pins that the Init error
+// carries time.LoadLocation's own error, not a rephrasing of it.
+func TestSchedulerInitUnloadableTimezoneWrapsLoadError(t *testing.T) {
+	_, loadErr := time.LoadLocation("Mars/Olympus")
+	require.Error(t, loadErr)
 
-func TestSchedulerTimezoneLabel(t *testing.T) {
-	t.Run("iana_returns_name", func(t *testing.T) {
-		m := &Module{config: &config.Config{Scheduler: config.SchedulerConfig{Timezone: "Asia/Tokyo"}}}
-		assert.Equal(t, "Asia/Tokyo", m.timezoneLabel())
-	})
-	t.Run("sentinel_returns_host_local", func(t *testing.T) {
-		m := &Module{config: &config.Config{Scheduler: config.SchedulerConfig{Timezone: "-"}}}
-		assert.Equal(t, "host-local", m.timezoneLabel())
-	})
-	t.Run("empty_returns_utc", func(t *testing.T) {
-		m := &Module{config: &config.Config{}}
-		assert.Equal(t, "UTC", m.timezoneLabel())
-	})
+	cfg := schedulerTimeoutConfig(30*time.Second, 25*time.Second)
+	cfg.Scheduler.Timezone = "Mars/Olympus"
+	err := NewModule().Init(&app.ModuleDeps{Logger: logger.New("info", false), Config: cfg})
+
+	require.ErrorContains(t, err, loadErr.Error())
 }
 
 func TestSchedulerAppliesConfiguredTimezoneToJobs(t *testing.T) {
@@ -742,7 +744,7 @@ func TestSchedulerAppliesConfiguredTimezoneToJobs(t *testing.T) {
 }
 
 func TestSchedulerDefaultsToUTCTimezoneForJobs(t *testing.T) {
-	module, registrar := newTestScheduler(t, 5*time.Second) // no withTimezone → UTC default
+	module, registrar := newTestScheduler(t, 5*time.Second) // helper default is UTC
 
 	err := registrar.DailyAt("utc-job", &counterJob{}, ParseTime("09:00"))
 	require.NoError(t, err)
