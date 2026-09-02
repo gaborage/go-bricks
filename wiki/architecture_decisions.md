@@ -1414,8 +1414,9 @@ default). The shared normalizer now refuses exact `Local` ahead of the loader pr
 `*ConfigError` naming the key and steering to `"-"`. `local`/`LOCAL` already failed as unknown zones
 and a test pins that they still do.
 
-**Key Benefits:** one documented spelling for host-local time on every key, greppable and never
-chosen by accident. See [migrations.md](migrations.md) `[C62.1]`.
+**Key Benefits:** one documented opt-out spelling per key — `"-"` is host-local on the scheduler and
+the server's default zone on a database session — greppable and never chosen by accident. See
+[migrations.md](migrations.md) `[C62.1]`.
 
 ---
 

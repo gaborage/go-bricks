@@ -12,10 +12,11 @@
 
 `normalizeIANATimezone` is the one validator behind every timezone key — `scheduler.timezone`,
 `database.timezone`, each `databases.<name>.timezone` and each
-`multitenant.tenants.<id>.database.timezone` — on every path that validates a config: `config.Validate`
-(which every application construction path runs, ADR-064) and the `ApplyDatabasePoolDefaultsForKey`
-door a dynamic `DBConfigProvider` and the `go-bricks-migrate` CLI go through. It defaults an empty
-value to `UTC`, passes the `"-"` sentinel through, and probes everything else with `time.LoadLocation`.
+`multitenant.tenants.<id>.database.timezone` — on every path that validates a config: `config.Validate`,
+which every application construction path runs (ADR-064), and `ApplyDatabasePoolDefaultsForKey`, the
+boundary a dynamic `DBConfigProvider` record and the `go-bricks-migrate` CLI pass through. It defaults
+an empty value to `UTC`, passes the `"-"` sentinel through, and probes everything else with
+`time.LoadLocation`.
 
 Go's loader special-cases exactly one spelling before it consults the IANA database: the
 string `Local` returns `time.Local`, the host process's zone. So `Local` passed validation,
@@ -42,8 +43,9 @@ silently.
 
 ## Consequences
 
-**Positive.** Host-local time has one spelling, the documented one, on every key. A grep for
-`"-"` finds every deployment that opted in; nothing opts in by accident.
+**Positive.** Each key has one documented opt-out spelling, `"-"` — host-local time on the
+scheduler, the server's default zone on a database session — and a grep for it finds every
+deployment that opted out; nothing opts out by accident.
 
 **Negative.** A deployment carrying `timezone: Local` booted on v0.61.0 and is refused on
 v0.62.0 — at startup for a static config, at the tenant's first connection acquisition for a
