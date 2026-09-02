@@ -299,14 +299,17 @@ type ModuleDeps struct {
 
 	// DBConfigured, MessagingConfigured and CacheConfigured answer "is this kind
 	// configured?" for DB, Messaging and Cache without a resolve (DBByName is per name,
-	// see above). The three accessors are never nil — with
-	// nothing configured each is a function whose every call returns an error
-	// satisfying config.IsNotConfigured (Scheduler, Outbox, Inbox and KeyStore differ:
-	// they are nil when absent). False is definitive: the framework's own root resolver
-	// would fail every call. True means the kind is wired, or that the answer is per
-	// key at runtime — multi-tenant, a dynamic config source, a caller-supplied
-	// ResourceSource, a custom CacheConnector — so a resolve can still fail and the
-	// accessor's error path stays.
+	// see above). The three accessors are never nil — with nothing configured each is a
+	// function whose every call returns an error satisfying config.IsNotConfigured
+	// (Scheduler, Outbox, Inbox and KeyStore differ: they are nil when absent).
+	//
+	// The flags speak for the ROOT config, which is the only thing knowable before a
+	// request carries a tenant. False is definitive: the framework's own root resolver
+	// would fail every call. True means the root is wired, or that the answer is per key
+	// at runtime — multi-tenant, a dynamic config source, a caller-supplied
+	// ResourceSource, a custom CacheConnector. In every per-key mode the accessor can
+	// still return IsNotConfigured for the tenant in hand, so a true flag never replaces
+	// the error path; it only spares a throwaway resolve when the answer is already no.
 	DBConfigured        bool
 	MessagingConfigured bool
 	CacheConfigured     bool

@@ -2334,7 +2334,7 @@ func (s *UserService) fetchAndCache(ctx context.Context, c cache.Cache, id int64
 | `cache.ErrInvalidTTL` | Negative TTL provided (zero is valid — it means no expiration) | Fix code - TTL must be non-negative |
 | `cache.OperationError` | Network/Redis error | Log error, fallback to database |
 | `context.DeadlineExceeded` | Operation timeout | Skip cache, continue with database |
-| `config.ConfigError` (category `not_configured`, check with `config.IsNotConfigured(err)`; `deps.CacheConfigured` answers the same question without a resolve) | Cache not enabled | Disable cache features gracefully |
+| `config.ConfigError` (category `not_configured`, check with `config.IsNotConfigured(err)`) | Cache not enabled, or no cache for this tenant | Disable cache features gracefully. `deps.CacheConfigured` answers for the ROOT config only — it can be true while this resolve fails for a tenant or runtime-resolved key, so keep handling the error |
 
 **Health Checks & Monitoring:**
 
