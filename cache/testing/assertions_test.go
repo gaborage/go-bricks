@@ -80,6 +80,9 @@ func TestAssertOperationCountRejectsUnknownOperation(t *testing.T) {
 			for _, op := range operations {
 				assert.Contains(t, rec.errors[0], op, "the message must list every valid operation")
 			}
+			for alias := range operationAliases {
+				assert.Contains(t, rec.errors[0], alias, "the message must name the accepted aliases too")
+			}
 		})
 	}
 }
@@ -109,7 +112,7 @@ func TestOperationCountPanicsOnUnknownOperation(t *testing.T) {
 	mock := NewMockCache()
 
 	assert.PanicsWithValue(t,
-		`cache/testing: unknown cache operation "delete"; valid operations: Get, Set, Delete, GetOrSet, CompareAndSet, CompareAndDelete, Health, Stats, Close`,
+		`cache/testing: unknown cache operation "delete"; valid operations: Get, Set, Delete, GetOrSet, CompareAndSet, CompareAndDelete, Health, Stats, Close (aliases: CAD, CAS)`,
 		func() { mock.OperationCount("delete") })
 }
 

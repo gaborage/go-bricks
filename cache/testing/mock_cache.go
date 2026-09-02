@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -569,9 +570,19 @@ func (m *MockCache) counter(operation string) (c *atomic.Int64, ok bool) {
 	return nil, false
 }
 
+// unknownOperationMessage names every spelling the lookup accepts, aliases included — a
+// caller who reached this message has already guessed wrong once, so a list that omitted the
+// aliases would send them looking for a name that works. Alias order is sorted, not map
+// order, or the message would differ between runs.
 func unknownOperationMessage(operation string) string {
-	return fmt.Sprintf("cache/testing: unknown cache operation %q; valid operations: %s",
-		operation, strings.Join(operations, ", "))
+	aliases := make([]string, 0, len(operationAliases))
+	for alias := range operationAliases {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+
+	return fmt.Sprintf("cache/testing: unknown cache operation %q; valid operations: %s (aliases: %s)",
+		operation, strings.Join(operations, ", "), strings.Join(aliases, ", "))
 }
 
 // OperationCount returns the number of times a specific operation was called. operation is
