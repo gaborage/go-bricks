@@ -176,6 +176,23 @@ func TestNewCacheManager(t *testing.T) {
 		assert.Contains(t, err.Error(), "idlettl cannot be negative")
 	})
 
+	// NewCacheManager's own contract, whatever path config took to reach it: a non-positive
+	// cleanupinterval takes the 5m default rather than failing, unlike the two keys above.
+	// The disabled-cache path that relies on this is pinned at the builder seam in app/.
+	t.Run("NegativeCleanupInterval_FallsBackToDefault", func(t *testing.T) {
+		connector := func(_ context.Context, key string) (cache.Cache, error) {
+			return newMockCache(key), nil
+		}
+
+		config := cache.DefaultManagerConfig()
+		config.CleanupInterval = -1 * time.Second
+
+		mgr, err := cache.NewCacheManager(config, connector)
+		require.NoError(t, err)
+		require.NotNil(t, mgr)
+		require.NoError(t, mgr.Close())
+	})
+
 	t.Run("ZeroMaxSize_Unlimited", func(t *testing.T) {
 		connector := func(_ context.Context, key string) (cache.Cache, error) {
 			return newMockCache(key), nil

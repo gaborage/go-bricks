@@ -501,31 +501,76 @@ func (m *MockCache) Close() error {
 
 // Test utility methods
 
-// OperationCount returns the number of times a specific operation was called.
-// Supported operations: "Get", "Set", "Delete", "GetOrSet", "CompareAndSet", "CompareAndDelete", "Health", "Stats", "Close"
-func (m *MockCache) OperationCount(operation string) int64 {
-	switch operation {
-	case "Get":
-		return m.getCalls.Load()
-	case "Set":
-		return m.setCalls.Load()
-	case "Delete":
-		return m.deleteCalls.Load()
-	case "GetOrSet":
-		return m.getOrSetCalls.Load()
-	case "CompareAndSet", "CAS":
-		return m.compareAndSetCalls.Load()
-	case "CompareAndDelete", "CAD":
-		return m.compareAndDeleteCalls.Load()
-	case "Health":
-		return m.healthCalls.Load()
-	case "Stats":
-		return m.statsCalls.Load()
-	case "Close":
-		return m.closeCalls.Load()
-	default:
-		return 0
+// Operation names accepted by OperationCount and the operation assertions. Use these
+// rather than a string literal: an unknown name panics in OperationCount and fails the test
+// in the assertion helpers, naming the valid ones, so a misspelled assertion cannot pass
+// vacuously (#1298).
+const (
+	OpGet              = "Get"
+	OpSet              = "Set"
+	OpDelete           = "Delete"
+	OpGetOrSet         = "GetOrSet"
+	OpCompareAndSet    = "CompareAndSet"
+	OpCompareAndDelete = "CompareAndDelete"
+	OpHealth           = "Health"
+	OpStats            = "Stats"
+	OpClose            = "Close"
+)
+
+// operationCounter binds an operation name to the field that counts it. The table is the
+// one source of truth for the counted set: counter, OperationCounts, ResetCounters and the
+// unknown-operation message all range over it.
+type operationCounter struct {
+	name    string
+	counter func(*MockCache) *atomic.Int64
+}
+
+var operationCounters = []operationCounter{
+	{name: OpGet, counter: func(m *MockCache) *atomic.Int64 { return &m.getCalls }},
+	{name: OpSet, counter: func(m *MockCache) *atomic.Int64 { return &m.setCalls }},
+	{name: OpDelete, counter: func(m *MockCache) *atomic.Int64 { return &m.deleteCalls }},
+	{name: OpGetOrSet, counter: func(m *MockCache) *atomic.Int64 { return &m.getOrSetCalls }},
+	{name: OpCompareAndSet, counter: func(m *MockCache) *atomic.Int64 { return &m.compareAndSetCalls }},
+	{name: OpCompareAndDelete, counter: func(m *MockCache) *atomic.Int64 { return &m.compareAndDeleteCalls }},
+	{name: OpHealth, counter: func(m *MockCache) *atomic.Int64 { return &m.healthCalls }},
+	{name: OpStats, counter: func(m *MockCache) *atomic.Int64 { return &m.statsCalls }},
+	{name: OpClose, counter: func(m *MockCache) *atomic.Int64 { return &m.closeCalls }},
+}
+
+// operations lists every counted operation name in table order.
+var operations = func() []string {
+	names := make([]string, len(operationCounters))
+	for i, oc := range operationCounters {
+		names[i] = oc.name
 	}
+	return names
+}()
+
+// counter resolves an operation name to its counter; ok is false for any name outside
+// the table.
+func (m *MockCache) counter(operation string) (c *atomic.Int64, ok bool) {
+	for _, oc := range operationCounters {
+		if oc.name == operation {
+			return oc.counter(m), true
+		}
+	}
+	return nil, false
+}
+
+func unknownOperationMessage(operation string) string {
+	return fmt.Sprintf("cache/testing: unknown cache operation %q; valid operations: %s",
+		operation, strings.Join(operations, ", "))
+}
+
+// OperationCount returns the number of times a specific operation was called. operation is
+// one of the Op* constants; any other name panics, naming the valid ones — a misspelled
+// name must not read as "zero calls".
+func (m *MockCache) OperationCount(operation string) int64 {
+	c, ok := m.counter(operation)
+	if !ok {
+		panic(unknownOperationMessage(operation))
+	}
+	return c.Load()
 }
 
 // IsClosed returns whether the cache has been closed.
@@ -554,15 +599,9 @@ func (m *MockCache) Clear() {
 // ResetCounters resets all operation counters to zero.
 // Useful for testing specific code paths without previous noise.
 func (m *MockCache) ResetCounters() {
-	m.getCalls.Store(0)
-	m.setCalls.Store(0)
-	m.deleteCalls.Store(0)
-	m.getOrSetCalls.Store(0)
-	m.compareAndSetCalls.Store(0)
-	m.compareAndDeleteCalls.Store(0)
-	m.healthCalls.Store(0)
-	m.statsCalls.Store(0)
-	m.closeCalls.Store(0)
+	for _, oc := range operationCounters {
+		oc.counter(m).Store(0)
+	}
 }
 
 // ID returns the mock cache ID.

@@ -501,6 +501,21 @@ func TestAppBuilderResolveDependenciesFailsClosedOnInvalidCacheConfig(t *testing
 	}
 }
 
+// TestAppBuilderResolveDependenciesToleratesNegativeCleanupIntervalOnDisabledCache pins the
+// exception wiki/cache.md documents beside the two fatal keys above: config.Validate leaves
+// cache.manager.* alone for a disabled cache, so a negative cleanupinterval reaches the
+// factory unvalidated — and the build succeeds, because NewCacheManager takes its default.
+func TestAppBuilderResolveDependenciesToleratesNegativeCleanupIntervalOnDisabledCache(t *testing.T) {
+	cfg := defaultTestConfig()
+	require.False(t, cfg.Cache.Enabled, "the fixture must leave the cache disabled")
+	cfg.Cache.Manager.CleanupInterval = -time.Second
+
+	builder := NewAppBuilder().WithConfig(cfg, &Options{}).CreateLogger().CreateBootstrap().ResolveDependencies()
+
+	require.NoError(t, builder.err)
+	require.NotNil(t, builder.bundle)
+}
+
 // TestNewWithConfigFailsClosedOnInvalidCacheConfig is the consumer-facing half of the
 // contract above: the same misconfiguration must reach the caller of the public
 // constructor as an error rather than a running App. Every connector is stubbed so a

@@ -28,7 +28,7 @@
 //
 //	mock := testing.NewMockCache()
 //	// ... perform operations ...
-//	AssertOperationCount(t, mock, "Get", 5)
+//	AssertOperationCount(t, mock, OpGet, 5)
 //	AssertCacheHit(t, mock, "user:123")
 //	AssertCacheMiss(t, mock, "missing:key")
 //
