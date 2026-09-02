@@ -20,7 +20,7 @@ const fallbackCacheLegTimeout = 500 * time.Millisecond
 
 // LoadTimeoutProvider is implemented by a Cache that knows its deployment's
 // `cache.loadtimeout`. The framework's Redis client implements it, so the bound resolves
-// per cache instance and a per-tenant override is honoured without any global state.
+// per cache instance and a per-tenant override is honored without any global state.
 type LoadTimeoutProvider interface {
 	// LoadTimeout returns the cache-leg bound; a non-positive value means "not configured".
 	LoadTimeout() time.Duration
@@ -82,7 +82,7 @@ func resolveCacheTimeout(c Cache, opt time.Duration) time.Duration {
 // origin call.
 //
 // The bound comes from the deployment's `cache.loadtimeout` (500ms by default), carried on
-// the resolved cache instance so per-tenant values are honoured; WithCacheTimeout overrides
+// the resolved cache instance so per-tenant values are honored; WithCacheTimeout overrides
 // it per call.
 //
 // See wiki/cache.md#load-through-reads for the full contract and the cache.fill.duration

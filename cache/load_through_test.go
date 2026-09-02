@@ -477,9 +477,7 @@ func (c ltTimedCache) LoadTimeout() time.Duration { return c.bound }
 func ltObservedBound(t *testing.T, c cache.Cache, opts ...cache.LoadOption) time.Duration {
 	t.Helper()
 	var seen time.Duration
-	probe := func(ctx context.Context) (ltUser, error) {
-		return ltAlice, nil
-	}
+	probe := func(context.Context) (ltUser, error) { return ltAlice, nil }
 	deadlines := make(chan time.Duration, 4)
 	spy := &ltDeadlineSpy{Cache: c, deadlines: deadlines}
 	_, err := cache.LoadThrough(t.Context(), spy, ltKey, ltTTL, probe, opts...)

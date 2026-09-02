@@ -375,7 +375,7 @@ type CacheConfig struct {
 	// detached write-back — so a slow-but-reachable cache cannot spend the caller's
 	// whole request budget before the origin loader runs. Default 500ms; 0 means
 	// "unset, use the default" and a negative value is rejected, so there is no way
-	// to express an unbounded leg. Per-tenant values are honoured: the bound travels
+	// to express an unbounded leg. Per-tenant values are honored: the bound travels
 	// on the resolved cache instance, not on a process-wide global.
 	// See wiki/cache.md#load-through-reads.
 	LoadTimeout time.Duration `koanf:"loadtimeout" json:"loadtimeout" yaml:"loadtimeout" toml:"loadtimeout" mapstructure:"loadtimeout"`
