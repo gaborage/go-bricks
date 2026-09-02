@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Masterminds/squirrel"
@@ -1309,10 +1310,8 @@ func (uqb *UpdateQueryBuilder) Set(column string, value any) dbtypes.UpdateQuery
 // user input. Each is validated against a safe identifier grammar on ALL vendors
 // BEFORE interpolation; anything else surfaces as a ToSQL() error. See ADR-031.
 func (uqb *UpdateQueryBuilder) SetMap(clauses map[string]any) dbtypes.UpdateQueryBuilder {
-	quotedClauses := make(map[string]any, len(clauses))
 	// Sorted so that WHICH invalid column is reported is deterministic when several
-	// are invalid, as InsertQueryBuilder.SetMap already does. This is the reported
-	// error only — the rendered SET order is squirrel's and is untouched (#1185).
+	// are invalid, as InsertQueryBuilder.SetMap already does.
 	keys := sortedKeys(clauses)
 	quotedKeys := make([]string, len(keys))
 	for i, k := range keys {
@@ -1329,10 +1328,19 @@ func (uqb *UpdateQueryBuilder) SetMap(clauses map[string]any) dbtypes.UpdateQuer
 		uqb.failClause(err)
 		return uqb
 	}
-	for i, quoted := range quotedKeys {
-		quotedClauses[quoted] = values[i]
+	// Applied one Set per key, in rendered order — the order squirrel's SetMap
+	// would emit (#1185) — rather than through a map keyed by the rendering: two
+	// keys that differ only in padding render alike, and a map would keep one
+	// assignment and drop the other silently. Both reach SQL, as in
+	// InsertQueryBuilder.SetMap, so the database reports the duplicate.
+	order := make([]int, len(keys))
+	for i := range order {
+		order[i] = i
 	}
-	uqb.updateBuilder = uqb.updateBuilder.SetMap(quotedClauses)
+	sort.SliceStable(order, func(a, b int) bool { return quotedKeys[order[a]] < quotedKeys[order[b]] })
+	for _, i := range order {
+		uqb.updateBuilder = uqb.updateBuilder.Set(quotedKeys[i], values[i])
+	}
 	return uqb
 }
 

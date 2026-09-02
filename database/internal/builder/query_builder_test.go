@@ -3450,6 +3450,16 @@ func TestValueDoorsRenderRawExpressionInline(t *testing.T) {
 				assert.Equal(t, []any{testJohn}, args)
 			})
 
+			t.Run("update_setmap_keeps_keys_that_render_alike", func(t *testing.T) {
+				// Two keys differing only in padding both reach SQL, as insert
+				// SetMap already guarantees, so the database reports the duplicate
+				// instead of one assignment being dropped.
+				sql, args, err := qb.Update(tableUsers).SetMap(map[string]any{paddedNameKey: "a", "name": "b"}).ToSQL()
+				require.NoError(t, err)
+				assert.Equal(t, "UPDATE users SET name = "+v.p1+", name = "+v.p2, sql)
+				assert.Equal(t, []any{"a", "b"}, args)
+			})
+
 			t.Run("values_leaves_caller_slice_untouched", func(t *testing.T) {
 				row := []any{1, now}
 				_, _, err := qb.Insert(tableUsers).Columns("id", "updated_at").Values(row...).ToSQL()
