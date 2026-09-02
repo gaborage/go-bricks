@@ -3118,6 +3118,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 ### [C59.13] `keystore.secretminlength` becomes `*int` (nil = 32, 0 = off, deprecated) · compile-break · when: match
 
+> **Superseded on the E62 hop by `[C62.3]`** (ADR-095). The `0` this atom keeps meaning "floor
+> off" is rejected there: `keystore.secretminlength` becomes mandatory at 32 and can only be
+> raised, so `new(0)` fails startup rather than disabling the floor.
+
 - detect: `git grep -n 'SecretMinLength' -- '*.go'` in your service shortlists the files; the hits that
   assign the field (a literal or a `cfg.KeyStore.SecretMinLength = …`) are in scope, reads and helper
   code are not. YAML/env is out of scope for this atom — `keystore.secretminlength: 0`
@@ -3919,6 +3923,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `determineJobSeverity`)
 
 ### [C60.15] a numeric config key delivered empty fails configuration resolution · breaking · when: match
+
+> **Partly superseded on the E62 hop by `[C62.3]`** (ADR-095). `KEYSTORE_SECRETMINLENGTH=0` is
+> still a well-formed zero for this atom's delivered-empty rule, but it stops disabling the
+> keystore floor there and fails startup instead. The rest of this atom is unchanged.
 
 - detect: grep every deployment surface — Helm values, Kustomize overlays, `.env` files,
   Task/Compose definitions, CI secrets — for a go-bricks variable **set to nothing**:
