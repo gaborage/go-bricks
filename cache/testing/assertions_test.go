@@ -3,7 +3,10 @@ package testing
 import (
 	"context"
 	"errors"
+	"fmt"
+	"maps"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -38,8 +41,79 @@ func TestAssertOperationCount(t *testing.T) {
 	mock.Set(ctx, "key1", []byte("value"), time.Minute)
 
 	// Should pass
-	AssertOperationCount(t, mock, "Get", 2)
-	AssertOperationCount(t, mock, "Set", 1)
+	AssertOperationCount(t, mock, OpGet, 2)
+	AssertOperationCount(t, mock, OpSet, 1)
+}
+
+// recordingT captures Errorf output so a helper's failure path can be asserted without
+// failing the test that observes it.
+type recordingT struct{ errors []string }
+
+func (r *recordingT) Helper() {}
+
+func (r *recordingT) Errorf(format string, args ...any) {
+	r.errors = append(r.errors, fmt.Sprintf(format, args...))
+}
+
+var _ testReporter = (*recordingT)(nil)
+
+// TestAssertOperationCountRejectsUnknownOperation pins the footgun #1298 closes: an
+// unrecognized name used to read as zero calls, so `AssertOperationCount(t, m, "delete", 0)`
+// passed without ever counting anything. Both helpers must fail the test and name every
+// valid operation.
+func TestAssertOperationCountRejectsUnknownOperation(t *testing.T) {
+	tests := []struct {
+		name   string
+		assert func(tb testReporter, mock *MockCache)
+	}{
+		{name: "count", assert: func(tb testReporter, mock *MockCache) { assertOperationCount(tb, mock, "delete", 0) }},
+		{name: "at_least", assert: func(tb testReporter, mock *MockCache) { assertOperationCountAtLeast(tb, mock, "delete", 0) }},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &recordingT{}
+			tc.assert(rec, NewMockCache())
+
+			require.Len(t, rec.errors, 1, "an unknown operation must fail the test, not read as zero")
+			assert.Contains(t, rec.errors[0], `unknown cache operation "delete"`)
+			for _, op := range operations {
+				assert.Contains(t, rec.errors[0], op, "the message must list every valid operation")
+			}
+			for alias := range operationAliases {
+				assert.Contains(t, rec.errors[0], alias, "the message must name the accepted aliases too")
+			}
+		})
+	}
+}
+
+// TestOperationCountAcceptsLegacyAliases pins the compatibility half: "CAS" and "CAD" are
+// shorthand for real counters, not misspellings, so they must keep resolving — dropping
+// them would break a consumer's test with no migration path.
+func TestOperationCountAcceptsLegacyAliases(t *testing.T) {
+	ctx := context.Background()
+	mock := NewMockCache()
+
+	_, err := mock.CompareAndSet(ctx, "key", nil, []byte("value"), time.Minute)
+	require.NoError(t, err)
+	_, err = mock.CompareAndDelete(ctx, "key", []byte("value"))
+	require.NoError(t, err)
+
+	assert.Equal(t, mock.OperationCount(OpCompareAndSet), mock.OperationCount("CAS"))
+	assert.Equal(t, mock.OperationCount(OpCompareAndDelete), mock.OperationCount("CAD"))
+	assert.Equal(t, int64(1), mock.OperationCount("CAS"))
+	assert.Equal(t, int64(1), mock.OperationCount("CAD"))
+}
+
+// TestOperationCountPanicsOnUnknownOperation pins the raw accessor's half of #1298: outside
+// an assertion there is no t to fail, so a misspelled name panics with the same message
+// instead of reading as zero. The expected text is a literal, not the helper's output.
+func TestOperationCountPanicsOnUnknownOperation(t *testing.T) {
+	mock := NewMockCache()
+
+	assert.PanicsWithValue(t,
+		`cache/testing: unknown cache operation "delete"; valid operations: Get, Set, Delete, GetOrSet, CompareAndSet, CompareAndDelete, Health, Stats, Close (aliases: CAD, CAS)`,
+		func() { mock.OperationCount("delete") })
 }
 
 func TestAssertOperationCountGreaterThan(t *testing.T) {
@@ -54,7 +128,7 @@ func TestAssertOperationCountGreaterThan(t *testing.T) {
 	AssertOperationCountGreaterThan(t, mock, "Get", 5)
 
 	// New name - clearer semantics
-	AssertOperationCountAtLeast(t, mock, "Get", 10)
+	AssertOperationCountAtLeast(t, mock, OpGet, 10)
 }
 
 func TestAssertCacheClosed(t *testing.T) {
@@ -135,8 +209,8 @@ func TestResetMock(t *testing.T) {
 	ResetMock(mock)
 
 	assert.Empty(t, mock.AllKeys())
-	assert.Equal(t, int64(0), mock.OperationCount("Get"))
-	assert.Equal(t, int64(0), mock.OperationCount("Set"))
+	assert.Equal(t, int64(0), mock.OperationCount(OpGet))
+	assert.Equal(t, int64(0), mock.OperationCount(OpSet))
 }
 
 func TestOperationCounts(t *testing.T) {
@@ -148,23 +222,25 @@ func TestOperationCounts(t *testing.T) {
 	mock.Delete(ctx, "key1")
 
 	counts := OperationCounts(mock)
-	assert.Equal(t, int64(1), counts["Get"])
-	assert.Equal(t, int64(1), counts["Set"])
-	assert.Equal(t, int64(1), counts["Delete"])
+	assert.Equal(t, int64(1), counts[OpGet])
+	assert.Equal(t, int64(1), counts[OpSet])
+	assert.Equal(t, int64(1), counts[OpDelete])
 }
 
-// TestOperationCountsCoversEveryCacheMethod generalizes the guard below: every future
-// cache.Cache method must land in OperationCounts, or AssertNoOperations silently stops
-// covering it. Reflecting over the interface catches the next one without a new test.
+// TestOperationCountsCoversEveryCacheMethod pins the counted set against cache.Cache in
+// both directions: a method without an entry cannot be asserted on and AssertNoOperations,
+// which sums OperationCounts, silently stops covering it; an entry without a method is a
+// name nothing can ever count. Reflecting over the interface catches the next method
+// without a new test.
 func TestOperationCountsCoversEveryCacheMethod(t *testing.T) {
 	iface := reflect.TypeOf((*cache.Cache)(nil)).Elem()
-	counts := OperationCounts(NewMockCache())
-
+	methods := make([]string, 0, iface.NumMethod())
 	for i := range iface.NumMethod() {
-		name := iface.Method(i).Name
-		_, ok := counts[name]
-		assert.True(t, ok, "OperationCounts is missing %s; AssertNoOperations would silently stop covering it", name)
+		methods = append(methods, iface.Method(i).Name)
 	}
+
+	assert.ElementsMatch(t, methods, operations)
+	assert.ElementsMatch(t, methods, slices.Collect(maps.Keys(OperationCounts(NewMockCache()))))
 }
 
 // TestOperationCountsIncludesCompareAndDelete guards AssertNoOperations, which sums
@@ -179,7 +255,7 @@ func TestOperationCountsIncludesCompareAndDelete(t *testing.T) {
 	require.NoError(t, err)
 
 	counts := OperationCounts(mock)
-	assert.Equal(t, int64(1), counts["CompareAndDelete"])
+	assert.Equal(t, int64(1), counts[OpCompareAndDelete])
 }
 
 func TestAssertNoOperations(t *testing.T) {

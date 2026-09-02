@@ -176,6 +176,43 @@ func TestNewCacheManager(t *testing.T) {
 		assert.Contains(t, err.Error(), "idlettl cannot be negative")
 	})
 
+	// NewCacheManager's own contract, whatever path config took to reach it: a non-positive
+	// cleanupinterval is accepted and substituted, where the two keys above reject. Both
+	// spellings of "non-positive" are driven, since a disabled cache can deliver either.
+	//
+	// The substituted VALUE (5m) is NOT covered, here or anywhere: deleting the fallback in
+	// NewCacheManager leaves ./cache/... ./app ./config all green (verified by hand). No
+	// exported surface reports a pool's cleanup interval, and 5m outlasts any test, so the
+	// only honest ways to close it are an accessor or the WarnIfCleanupIntervalTooLate call
+	// database and messaging already make and cache does not — both wider than this change.
+	// What makes the substitution matter IS pinned, one layer down: resourcepool's
+	// TestPoolStartCleanupNoOpConditions fixes that a non-positive interval starts NO cleanup
+	// loop, so passing the raw value through would silently disable idle cleanup rather than
+	// fail. This case pins the half it can see: the manager is built, usable, closes cleanly.
+	for _, interval := range []time.Duration{-1 * time.Second, 0} {
+		t.Run(fmt.Sprintf("NonPositiveCleanupInterval_%s", interval), func(t *testing.T) {
+			connector := func(_ context.Context, key string) (cache.Cache, error) {
+				return newMockCache(key), nil
+			}
+
+			config := cache.DefaultManagerConfig()
+			config.CleanupInterval = interval
+
+			mgr, err := cache.NewCacheManager(config, connector)
+			require.NoError(t, err)
+			require.NotNil(t, mgr)
+			defer mgr.Close()
+
+			instance, release, err := mgr.Get(context.Background(), tenantOne)
+			require.NoError(t, err, "a manager built with a non-positive cleanupinterval must still lease")
+			require.NotNil(t, instance)
+			release()
+
+			assert.Equal(t, 1, mgr.Stats().ActiveCaches)
+			require.NoError(t, mgr.Close())
+		})
+	}
+
 	t.Run("ZeroMaxSize_Unlimited", func(t *testing.T) {
 		connector := func(_ context.Context, key string) (cache.Cache, error) {
 			return newMockCache(key), nil

@@ -657,7 +657,7 @@ func TestMyService(t *testing.T) {
     result, err := svc.GetUser(ctx, 123)
 
     // Assert cache operations
-    cachetest.AssertOperationCount(t, mockCache, "Get", 1)
+    cachetest.AssertOperationCount(t, mockCache, cachetest.OpGet, 1)
 }
 ```
 

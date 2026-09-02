@@ -46,20 +46,49 @@ func AssertCacheMiss(t *testing.T, c cache.Cache, key string) {
 // AssertOperationCount asserts that a specific operation was called a certain number of times.
 // Only works with MockCache instances.
 //
-// Supported operations: "Get", "Set", "Delete", "GetOrSet", "CompareAndSet", "CompareAndDelete", "Health", "Stats", "Close"
+// operation is one of the Op* constants (OpGet, OpSet, OpDelete, OpGetOrSet, OpCompareAndSet,
+// OpCompareAndDelete, OpHealth, OpStats, OpClose) or a legacy "CAS"/"CAD" alias; any other
+// name fails the test, naming the valid ones, rather than reading as zero calls.
 //
 // Example:
 //
 //	mock := NewMockCache()
 //	// ... perform operations ...
-//	AssertOperationCount(t, mock, "Get", 5)
+//	AssertOperationCount(t, mock, OpGet, 5)
 func AssertOperationCount(t *testing.T, mock *MockCache, operation string, expected int64) {
 	t.Helper()
+	assertOperationCount(t, mock, operation, expected)
+}
 
-	actual := mock.OperationCount(operation)
-	if actual != expected {
+// testReporter is the slice of testing.TB the operation assertions use, so a recording
+// double can observe their failure path without embedding a nil testing.TB.
+type testReporter interface {
+	Helper()
+	Errorf(format string, args ...any)
+}
+
+// assertOperationCount is AssertOperationCount over testReporter, so its failure path can
+// be observed by a recording double.
+func assertOperationCount(t testReporter, mock *MockCache, operation string, expected int64) {
+	t.Helper()
+
+	actual, ok := operationCount(t, mock, operation)
+	if ok && actual != expected {
 		t.Errorf("expected %d %s operations, got %d", expected, operation, actual)
 	}
+}
+
+// operationCount reads a counter for an assertion, failing the test — rather than reading
+// zero — when operation is not one of the Op* constants.
+func operationCount(t testReporter, mock *MockCache, operation string) (count int64, ok bool) {
+	t.Helper()
+
+	c, ok := mock.counter(operation)
+	if !ok {
+		t.Errorf("%s", unknownOperationMessage(operation))
+		return 0, false
+	}
+	return c.Load(), true
 }
 
 // AssertOperationCountAtLeast asserts that a specific operation was called at least a certain number of times.
@@ -69,12 +98,18 @@ func AssertOperationCount(t *testing.T, mock *MockCache, operation string, expec
 //
 //	mock := NewMockCache()
 //	// ... perform operations ...
-//	AssertOperationCountAtLeast(t, mock, "Get", 10)
+//	AssertOperationCountAtLeast(t, mock, OpGet, 10)
 func AssertOperationCountAtLeast(t *testing.T, mock *MockCache, operation string, minimum int64) {
 	t.Helper()
+	assertOperationCountAtLeast(t, mock, operation, minimum)
+}
 
-	actual := mock.OperationCount(operation)
-	if actual < minimum {
+// assertOperationCountAtLeast is AssertOperationCountAtLeast over testReporter.
+func assertOperationCountAtLeast(t testReporter, mock *MockCache, operation string, minimum int64) {
+	t.Helper()
+
+	actual, ok := operationCount(t, mock, operation)
+	if ok && actual < minimum {
 		t.Errorf("expected at least %d %s operations, got %d", minimum, operation, actual)
 	}
 }
@@ -235,8 +270,8 @@ func ResetMock(mock *MockCache) {
 	mock.ResetCounters()
 }
 
-// OperationCounts returns a map of all operation counts for debugging.
-// Only works with MockCache instances.
+// OperationCounts returns a map of all operation counts for debugging, keyed by the Op*
+// constants. Only works with MockCache instances.
 //
 // Example:
 //
@@ -245,17 +280,11 @@ func ResetMock(mock *MockCache) {
 //	counts := OperationCounts(mock)
 //	fmt.Printf("Operations: %+v\n", counts)
 func OperationCounts(mock *MockCache) map[string]int64 {
-	return map[string]int64{
-		"Get":              mock.OperationCount("Get"),
-		"Set":              mock.OperationCount("Set"),
-		"Delete":           mock.OperationCount("Delete"),
-		"GetOrSet":         mock.OperationCount("GetOrSet"),
-		"CompareAndSet":    mock.OperationCount("CompareAndSet"),
-		"CompareAndDelete": mock.OperationCount("CompareAndDelete"),
-		"Health":           mock.OperationCount("Health"),
-		"Stats":            mock.OperationCount("Stats"),
-		"Close":            mock.OperationCount("Close"),
+	counts := make(map[string]int64, len(operations))
+	for _, op := range operations {
+		counts[op] = mock.OperationCount(op)
 	}
+	return counts
 }
 
 // AssertNoOperations asserts that no cache operations were performed.

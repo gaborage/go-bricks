@@ -2622,7 +2622,7 @@ user, err := svc.GetUser(ctx, 123)  // Falls back to database
 assert.NoError(t, err)
 
 // Verify operation counts
-cachetest.AssertOperationCount(t, mockCache, "Get", 1)
+cachetest.AssertOperationCount(t, mockCache, cachetest.OpGet, 1)
 ```
 
 **Available Assertion Helpers:**
@@ -2632,9 +2632,10 @@ cachetest.AssertOperationCount(t, mockCache, "Get", 1)
 cachetest.AssertCacheHit(t, mockCache, "user:123")
 cachetest.AssertCacheMiss(t, mockCache, "missing:key")
 
-// Operation counting
-cachetest.AssertOperationCount(t, mockCache, "Get", 5)
-cachetest.AssertOperationCountAtLeast(t, mockCache, "Set", 10)  // At least 10 Set operations
+// Operation counting — names are the cachetest.Op* constants (OpGet … OpClose); an unknown
+// name fails the test instead of reading as zero calls
+cachetest.AssertOperationCount(t, mockCache, cachetest.OpGet, 5)
+cachetest.AssertOperationCountAtLeast(t, mockCache, cachetest.OpSet, 10)  // At least 10 Set operations
 
 // Key existence (ignores expiration)
 cachetest.AssertKeyExists(t, mockCache, "key1")
@@ -2693,8 +2694,8 @@ func TestMultiTenantCacheIsolation(t *testing.T) {
     user2, _ := svc.GetUser(globexCtx, 123)
 
     // Verify isolation
-    cachetest.AssertOperationCount(t, tenantCaches["acme"], "Get", 1)
-    cachetest.AssertOperationCount(t, tenantCaches["globex"], "Get", 1)
+    cachetest.AssertOperationCount(t, tenantCaches["acme"], cachetest.OpGet, 1)
+    cachetest.AssertOperationCount(t, tenantCaches["globex"], cachetest.OpGet, 1)
 }
 ```
 
@@ -2777,8 +2778,8 @@ func TestCacheAsidePattern(t *testing.T) {
     assert.Equal(t, "Alice", user1.Name)
 
     // Verify cache miss then set
-    cachetest.AssertOperationCount(t, mockCache, "Get", 1)
-    cachetest.AssertOperationCount(t, mockCache, "Set", 1)
+    cachetest.AssertOperationCount(t, mockCache, cachetest.OpGet, 1)
+    cachetest.AssertOperationCount(t, mockCache, cachetest.OpSet, 1)
     dbtest.AssertQueryExecuted(t, mockDB, "SELECT")
 
     // Second call - cache hit, no DB query.
@@ -2790,8 +2791,8 @@ func TestCacheAsidePattern(t *testing.T) {
     assert.Equal(t, "Alice", user2.Name)
 
     // Verify cache hit
-    cachetest.AssertOperationCount(t, mockCache, "Get", 2)
-    cachetest.AssertOperationCount(t, mockCache, "Set", 1)  // Still 1
+    cachetest.AssertOperationCount(t, mockCache, cachetest.OpGet, 2)
+    cachetest.AssertOperationCount(t, mockCache, cachetest.OpSet, 1)  // Still 1
     assert.Len(t, mockDB.QueryLog(), queriesBefore, "Should not query DB on cache hit")
 }
 ```

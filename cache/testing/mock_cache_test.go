@@ -332,14 +332,13 @@ func TestMockCacheOperationCounts(t *testing.T) {
 	mock.Health(ctx)
 	mock.Stats()
 
-	assert.Equal(t, int64(2), mock.OperationCount("Get"))
-	assert.Equal(t, int64(1), mock.OperationCount("Set"))
-	assert.Equal(t, int64(1), mock.OperationCount("Delete"))
-	assert.Equal(t, int64(1), mock.OperationCount("GetOrSet"))
-	assert.Equal(t, int64(1), mock.OperationCount("CompareAndSet"))
-	assert.Equal(t, int64(1), mock.OperationCount("CAS")) // Alias
-	assert.Equal(t, int64(1), mock.OperationCount("Health"))
-	assert.Equal(t, int64(1), mock.OperationCount("Stats"))
+	assert.Equal(t, int64(2), mock.OperationCount(OpGet))
+	assert.Equal(t, int64(1), mock.OperationCount(OpSet))
+	assert.Equal(t, int64(1), mock.OperationCount(OpDelete))
+	assert.Equal(t, int64(1), mock.OperationCount(OpGetOrSet))
+	assert.Equal(t, int64(1), mock.OperationCount(OpCompareAndSet))
+	assert.Equal(t, int64(1), mock.OperationCount(OpHealth))
+	assert.Equal(t, int64(1), mock.OperationCount(OpStats))
 }
 
 func TestMockCacheResetCounters(t *testing.T) {
@@ -353,8 +352,8 @@ func TestMockCacheResetCounters(t *testing.T) {
 	// Reset
 	mock.ResetCounters()
 
-	assert.Equal(t, int64(0), mock.OperationCount("Get"))
-	assert.Equal(t, int64(0), mock.OperationCount("Set"))
+	assert.Equal(t, int64(0), mock.OperationCount(OpGet))
+	assert.Equal(t, int64(0), mock.OperationCount(OpSet))
 }
 
 func TestMockCacheClear(t *testing.T) {

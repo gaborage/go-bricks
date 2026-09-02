@@ -407,6 +407,15 @@ GoBricks applies production-safe cache manager defaults when cache is configured
 | `manager.idlettl` | 15m | 15m | Close idle cache connections |
 | `manager.cleanupinterval` | 5m | 5m | Frequency of idle cache cleanup |
 
+**A negative `maxsize` or `idlettl` is fatal even when the cache is disabled.** `config.Validate`
+fills and checks `cache.manager.*` only under `cache.enabled: true`, but the manager is still
+constructed for a disabled cache (that is how `/ready` reports `not_configured`), and
+`cache.NewCacheManager` rejects a negative `maxsize` or `idlettl` — so a disabled cache carrying
+one aborts startup ([ADR-054](adr_054_cache_construction_fails_startup.md),
+[`[C58.3]`](migrations.md)). Absent and `0` are safe in both states. `cleanupinterval` is the
+exception: an enabled cache rejects a negative one at validation, while a disabled cache has the
+manager fall back to its 5m default instead of failing.
+
 **Override defaults** in `config.yaml`:
 
 ```yaml

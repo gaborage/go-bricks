@@ -170,8 +170,9 @@ mockCache := cachetest.NewMockCache().
 user, err := svc.GetUser(ctx, 123)  // Falls back to database
 assert.NoError(t, err)
 
-// Verify cache operation was attempted
-cachetest.AssertOperationCount(t, mockCache, "Get", 1)
+// Verify cache operation was attempted — operation names are the cachetest.Op* constants;
+// an unknown name fails the test instead of reading as zero calls
+cachetest.AssertOperationCount(t, mockCache, cachetest.OpGet, 1)
 ```
 
 **Multi-Tenant Testing:**

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -501,31 +502,98 @@ func (m *MockCache) Close() error {
 
 // Test utility methods
 
-// OperationCount returns the number of times a specific operation was called.
-// Supported operations: "Get", "Set", "Delete", "GetOrSet", "CompareAndSet", "CompareAndDelete", "Health", "Stats", "Close"
-func (m *MockCache) OperationCount(operation string) int64 {
-	switch operation {
-	case "Get":
-		return m.getCalls.Load()
-	case "Set":
-		return m.setCalls.Load()
-	case "Delete":
-		return m.deleteCalls.Load()
-	case "GetOrSet":
-		return m.getOrSetCalls.Load()
-	case "CompareAndSet", "CAS":
-		return m.compareAndSetCalls.Load()
-	case "CompareAndDelete", "CAD":
-		return m.compareAndDeleteCalls.Load()
-	case "Health":
-		return m.healthCalls.Load()
-	case "Stats":
-		return m.statsCalls.Load()
-	case "Close":
-		return m.closeCalls.Load()
-	default:
-		return 0
+// Operation names accepted by OperationCount and the operation assertions. Use these
+// rather than a string literal: an unknown name panics in OperationCount and fails the test
+// in the assertion helpers, naming the valid ones, so a misspelled assertion cannot pass
+// vacuously (#1298).
+const (
+	OpGet              = "Get"
+	OpSet              = "Set"
+	OpDelete           = "Delete"
+	OpGetOrSet         = "GetOrSet"
+	OpCompareAndSet    = "CompareAndSet"
+	OpCompareAndDelete = "CompareAndDelete"
+	OpHealth           = "Health"
+	OpStats            = "Stats"
+	OpClose            = "Close"
+)
+
+// operationCounter binds an operation name to the field that counts it. The table is the
+// one source of truth for the counted set: counter, OperationCounts, ResetCounters and the
+// unknown-operation message all range over it.
+type operationCounter struct {
+	name    string
+	counter func(*MockCache) *atomic.Int64
+}
+
+var operationCounters = []operationCounter{
+	{name: OpGet, counter: func(m *MockCache) *atomic.Int64 { return &m.getCalls }},
+	{name: OpSet, counter: func(m *MockCache) *atomic.Int64 { return &m.setCalls }},
+	{name: OpDelete, counter: func(m *MockCache) *atomic.Int64 { return &m.deleteCalls }},
+	{name: OpGetOrSet, counter: func(m *MockCache) *atomic.Int64 { return &m.getOrSetCalls }},
+	{name: OpCompareAndSet, counter: func(m *MockCache) *atomic.Int64 { return &m.compareAndSetCalls }},
+	{name: OpCompareAndDelete, counter: func(m *MockCache) *atomic.Int64 { return &m.compareAndDeleteCalls }},
+	{name: OpHealth, counter: func(m *MockCache) *atomic.Int64 { return &m.healthCalls }},
+	{name: OpStats, counter: func(m *MockCache) *atomic.Int64 { return &m.statsCalls }},
+	{name: OpClose, counter: func(m *MockCache) *atomic.Int64 { return &m.closeCalls }},
+}
+
+// operations lists every counted operation name in table order.
+var operations = func() []string {
+	names := make([]string, len(operationCounters))
+	for i, oc := range operationCounters {
+		names[i] = oc.name
 	}
+	return names
+}()
+
+// operationAliases are the shorthand spellings OperationCount has always accepted. They
+// resolve to a real counter, so they are not the vacuous-zero footgun #1298 closes, and
+// removing them would break a consumer's test with no migration path. Prefer the Op*
+// constants: these are kept for compatibility, not as a second vocabulary.
+var operationAliases = map[string]string{
+	"CAS": OpCompareAndSet,
+	"CAD": OpCompareAndDelete,
+}
+
+// counter resolves an operation name — an Op* constant or a compatibility alias — to its
+// counter; ok is false for any other name.
+func (m *MockCache) counter(operation string) (c *atomic.Int64, ok bool) {
+	if canonical, isAlias := operationAliases[operation]; isAlias {
+		operation = canonical
+	}
+	for _, oc := range operationCounters {
+		if oc.name == operation {
+			return oc.counter(m), true
+		}
+	}
+	return nil, false
+}
+
+// unknownOperationMessage names every spelling the lookup accepts, aliases included — a
+// caller who reached this message has already guessed wrong once, so a list that omitted the
+// aliases would send them looking for a name that works. Alias order is sorted, not map
+// order, or the message would differ between runs.
+func unknownOperationMessage(operation string) string {
+	aliases := make([]string, 0, len(operationAliases))
+	for alias := range operationAliases {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+
+	return fmt.Sprintf("cache/testing: unknown cache operation %q; valid operations: %s (aliases: %s)",
+		operation, strings.Join(operations, ", "), strings.Join(aliases, ", "))
+}
+
+// OperationCount returns the number of times a specific operation was called. operation is
+// one of the Op* constants (or a legacy "CAS"/"CAD" alias); any other name panics, naming
+// the valid ones — a misspelled name must not read as "zero calls".
+func (m *MockCache) OperationCount(operation string) int64 {
+	c, ok := m.counter(operation)
+	if !ok {
+		panic(unknownOperationMessage(operation))
+	}
+	return c.Load()
 }
 
 // IsClosed returns whether the cache has been closed.
@@ -554,15 +622,9 @@ func (m *MockCache) Clear() {
 // ResetCounters resets all operation counters to zero.
 // Useful for testing specific code paths without previous noise.
 func (m *MockCache) ResetCounters() {
-	m.getCalls.Store(0)
-	m.setCalls.Store(0)
-	m.deleteCalls.Store(0)
-	m.getOrSetCalls.Store(0)
-	m.compareAndSetCalls.Store(0)
-	m.compareAndDeleteCalls.Store(0)
-	m.healthCalls.Store(0)
-	m.statsCalls.Store(0)
-	m.closeCalls.Store(0)
+	for _, oc := range operationCounters {
+		oc.counter(m).Store(0)
+	}
 }
 
 // ID returns the mock cache ID.

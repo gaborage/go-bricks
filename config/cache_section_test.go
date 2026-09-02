@@ -5,12 +5,24 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestValidateCacheDisabled(t *testing.T) {
 	cfg := CacheConfig{Enabled: false}
 	err := checkCache(&cfg)
 	assert.NoError(t, err)
+}
+
+// TestNormalizeCacheLeavesDisabledManagerBlockAlone pins the first link of the chain
+// wiki/cache.md documents: a disabled cache's manager values are neither defaulted nor
+// judged here, so a negative one reaches CreateCacheManager as written (ADR-054).
+func TestNormalizeCacheLeavesDisabledManagerBlockAlone(t *testing.T) {
+	manager := CacheManagerConfig{MaxSize: -1, IdleTTL: -time.Minute, CleanupInterval: -time.Minute}
+	cfg := CacheConfig{Manager: manager}
+
+	require.NoError(t, normalizeCache(&cfg, false))
+	assert.Equal(t, manager, cfg.Manager)
 }
 
 func TestValidateCacheSuccess(t *testing.T) {
