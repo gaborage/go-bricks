@@ -41,10 +41,10 @@ const (
 	attrErrorType      = "error.type"
 	attrCacheHitStatus = "cache.hit"       // Boolean attribute for hit/miss
 	attrPoolName       = "pool.name"       // For multi-tenant cache identification
-	attrCacheCollapsed = "cache.collapsed" // Fill role: leader ran the origin load, follower waited on it
+	attrCacheFillRole  = "cache.fill.role" // Fill role: leader ran the origin load, follower waited on it
 )
 
-// Fill roles emitted as the cache.collapsed attribute.
+// Fill roles emitted as the cache.fill.role attribute.
 const (
 	FillLeader   = "leader"
 	FillFollower = "follower"
@@ -198,7 +198,7 @@ func RecordCacheFill(ctx context.Context, role string, duration time.Duration, e
 		return
 	}
 
-	attrs := []attribute.KeyValue{attribute.String(attrCacheCollapsed, role)}
+	attrs := []attribute.KeyValue{attribute.String(attrCacheFillRole, role)}
 	if tenantID, ok := multitenant.GetTenant(ctx); ok {
 		attrs = append(attrs, attribute.String(attrDBNamespace, tenantID))
 	}
