@@ -318,12 +318,14 @@ serving HTTP (`server.healthCheck`), and unlike `/ready` it has no override seam
 are configurable (`server.path.health`, `server.path.ready`) and are prefixed by
 `server.path.base`, so a service on `base: /api/v1` must be probed at `/api/v1/ready`.
 
-Under `cache.critical: true` the pod never reports Ready while Redis is unreachable: it is kept
-out of the Service endpoints, and a Deployment rollout stalls after taking down at most
+Under `cache.critical: true` a pod that boots while Redis is unreachable never becomes Ready: it
+is kept out of the Service endpoints, and a Deployment rollout stalls after taking down at most
 `maxUnavailable` old replicas (25% under the default RollingUpdate strategy). Set
 `maxUnavailable: 0` if you want a rollout during a Redis outage to cost no serving capacity at
-all. That holds from the very first poll, including at boot — `cache.NewCacheManager`
-validates options without dialing, so the first lease is what connects, and it fails.
+all. That holds from the very first poll — `cache.NewCacheManager` validates options without
+dialing, so the first lease is what connects, and it fails. An already-Ready pod whose Redis
+dies leaves the endpoints only after `failureThreshold` consecutive failed polls (three at the
+setting below), which is the correlated-eviction mitigation described under *Choosing a value*.
 
 What it does **not** do: a failing readiness probe never restarts or kills a container — only a
 liveness probe does. Do not point liveness at `/ready` to get that. It would turn one shared
