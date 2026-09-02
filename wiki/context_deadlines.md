@@ -74,7 +74,11 @@ Under the hood that is the shortening this section describes, and the shape to r
 cacheCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 defer cancel()
 if data, err := c.Get(cacheCtx, key); err == nil {
-    return cache.Unmarshal[*User](data)
+    // A decode failure is a miss too — an entry written before a schema change
+    // must not fail the request.
+    if u, derr := cache.Unmarshal[*User](data); derr == nil {
+        return u, nil
+    }
 }
 return s.queryDatabase(ctx, id) // the ORIGINAL ctx, never cacheCtx
 ```

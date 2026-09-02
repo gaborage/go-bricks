@@ -2238,7 +2238,7 @@ func TestMultiTenantCacheIsolation(t *testing.T) {
 | Lock release | CompareAndDelete(ctx, key, expected) | Token-verified release, conditional eviction | Lua script CAD | ~2ms |
 | Type-safe store | Marshal(v) + Set() | Struct serialization | Single-key | ~1ms + encode |
 | Type-safe retrieve | Get() + Unmarshal[T](data) | Struct deserialization | Single-key | ~1ms + decode |
-| Load-through read | LoadThrough[T](ctx, c, key, ttl, loader) | Read-through with origin fallback | Bounded cache leg + single-flight | ~1ms hit / origin on miss |
+| Load-through read | LoadThrough[T](ctx, c, key, ttl, loader) | Read-through with origin fallback | Bounded cache leg + per-instance single-flight (same instance+key+type; no cross-process lock) | ~1ms hit / origin on miss |
 
 **Error Handling & Graceful Degradation:**
 
