@@ -268,6 +268,7 @@ type ModuleDeps struct {
 	// DB returns a database interface for the current context.
 	// In single-tenant mode, returns the global database instance.
 	// In multi-tenant mode, resolves tenant from context and returns tenant-specific database.
+	// Never nil; absence comes back as a config.IsNotConfigured error — see DBConfigured.
 	DB func(_ context.Context) (database.Interface, error)
 
 	// DBByName returns a named database interface for explicit database selection.
@@ -275,15 +276,38 @@ type ModuleDeps struct {
 	// The name must match a key in the 'databases:' config section.
 	// Example: db, err := deps.DBByName(ctx, "legacy") for databases.legacy config.
 	// Named databases are shared across all tenants in multi-tenant mode.
+	// Never nil; a named database's presence is per name and is reported by this
+	// accessor's error. DBConfigured speaks for DB only — a deployment with no root
+	// database: block and a databases: section reads false there while this resolves.
 	DBByName func(ctx context.Context, name string) (database.Interface, error)
 
 	// Messaging returns a messaging client for the current context.
 	// In single-tenant mode, returns the global messaging client.
 	// In multi-tenant mode, resolves tenant from context and returns tenant-specific client.
+	// Never nil; absence comes back as a config.IsNotConfigured error — see MessagingConfigured.
 	Messaging func(_ context.Context) (messaging.AMQPClient, error)
 
 	// Cache returns a cache instance for the current context.
 	// In single-tenant mode, returns the global cache instance.
 	// In multi-tenant mode, resolves tenant from context and returns tenant-specific cache.
+	// Never nil; `if deps.Cache == nil` is dead code. Detect absence on the error,
+	// or read CacheConfigured when you only need to know:
+	//
+	//	c, err := deps.Cache(ctx)
+	//	if config.IsNotConfigured(err) { /* run without a cache */ }
 	Cache func(_ context.Context) (cache.Cache, error)
+
+	// DBConfigured, MessagingConfigured and CacheConfigured answer "is this kind
+	// configured?" for DB, Messaging and Cache without a resolve (DBByName is per name,
+	// see above). The three accessors are never nil — with
+	// nothing configured each is a function whose every call returns an error
+	// satisfying config.IsNotConfigured (Scheduler, Outbox, Inbox and KeyStore differ:
+	// they are nil when absent). False is definitive: the framework's own root resolver
+	// would fail every call. True means the kind is wired, or that the answer is per
+	// key at runtime — multi-tenant, a dynamic config source, a caller-supplied
+	// ResourceSource, a custom CacheConnector — so a resolve can still fail and the
+	// accessor's error path stays.
+	DBConfigured        bool
+	MessagingConfigured bool
+	CacheConfigured     bool
 }

@@ -163,6 +163,7 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBund
 		Messaging:     provider.Messaging,
 		Cache:         provider.Cache,
 	}
+	markConfigured(deps, b.cfg, b.opts)
 
 	return &dependencyBundle{
 		deps:             deps,
@@ -174,6 +175,20 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBund
 	}, nil
 }
 
+// markConfigured sets the three flags with the content tests config.TenantStore applies
+// before answering a kind with not_configured; per-key modes read true, which is why the
+// two root-absence predicates below are prefixed rather than negated bare — their own
+// exemption sets are narrower on purpose. A custom DatabaseConnector or
+// MessagingClientFactory still reads its config through that resolver, so neither is an
+// exemption. See ModuleDeps.DBConfigured for the contract.
+func markConfigured(deps *ModuleDeps, cfg *config.Config, opts *Options) {
+	perKey := cfg == nil || cfg.Multitenant.Enabled || cfg.Source.Type == config.SourceTypeDynamic ||
+		(opts != nil && opts.ResourceSource != nil)
+	deps.DBConfigured = perKey || !rootDatabaseAbsent(cfg, opts)
+	deps.MessagingConfigured = perKey || config.IsMessagingConfigured(&cfg.Messaging)
+	deps.CacheConfigured = perKey || !rootCacheAbsent(cfg, opts)
+}
+
 // rootDatabaseAbsent reports whether a deployment that expects a root database: block
 // has none. Three modes legitimately leave that block empty, because they resolve
 // database config per tenant at runtime instead: multi-tenant (config validation
@@ -182,7 +197,8 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBund
 // skipPreInit, which enumerates the same three modes for the same reason.
 //
 // This is the single home for the exemption set — see DatabaseRequirer in module.go
-// for why absence needs interpreting at all.
+// for why absence needs interpreting at all. markConfigured reuses it under a wider
+// per-key guard (any caller-supplied ResourceSource), so a change here reaches the flag.
 func rootDatabaseAbsent(cfg *config.Config, opts *Options) bool {
 	if cfg == nil || cfg.Multitenant.Enabled || cfg.Source.Type == config.SourceTypeDynamic {
 		return false
