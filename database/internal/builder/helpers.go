@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Masterminds/squirrel"
+
 	"github.com/gaborage/go-bricks/database/internal/sqllex"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -38,6 +40,42 @@ func valuesByKeyOrder(m map[string]any, keys []string) []any {
 		vals = append(vals, m[k])
 	}
 	return vals
+}
+
+// valueCell prepares one SET/VALUES cell for squirrel. A dbtypes.RawExpression
+// is validated here — it is a plain struct, so a literal can reach this door
+// without passing Expr() — and spliced verbatim as a squirrel expression, so no
+// placeholder and no argument is emitted for that cell; any other value is
+// returned untouched and stays parameterized (#1318). An alias is rejected
+// first: a SET or VALUES cell projects nothing, so it would be dropped silently.
+// The label names the column or one-based position in the deferred error.
+// Audit the SQL body as raw SQL: `git grep -nE 'MustExpr\(|[.]Expr\('`.
+func valueCell(label string, value any) (any, error) {
+	expr, ok := value.(dbtypes.RawExpression)
+	if !ok {
+		return value, nil
+	}
+	if expr.Alias != "" {
+		return nil, fmt.Errorf("%s: %w: %s", label, dbtypes.ErrAliasInValue, expr.Alias)
+	}
+	if err := expr.Validate(); err != nil {
+		return nil, fmt.Errorf("%s: %w", label, err)
+	}
+	return squirrel.Expr(expr.SQL), nil
+}
+
+// valueCells applies valueCell to every cell, labeling each by its one-based
+// position.
+func valueCells(values []any) ([]any, error) {
+	out := make([]any, len(values))
+	for i, v := range values {
+		cell, err := valueCell(fmt.Sprintf("value position %d", i+1), v)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = cell
+	}
+	return out, nil
 }
 
 // upsertColumn pairs a caller's key with the normalized spelling the statement

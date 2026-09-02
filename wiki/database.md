@@ -323,7 +323,14 @@ the builder. The grammar will not accept a computed one.
   struct literal built without the constructor is checked where it is consumed,
   so an empty SQL body, or an alias that is not an unquoted identifier, fails from
   `ToSQL()` (ADR-082 2026-08-24 addendum). The alias was a six-substring denylist
-  until `[C61.9]` replaced it with the grammar.
+  until `[C61.9]` replaced it with the grammar. The doors that consume one are
+  the clause doors `Select`, `GroupBy`, `OrderBy` and `Having`, the nine `f`/`jf`
+  operand doors, and the value doors `Set`, `SetMap` (update and insert) and
+  `Values`: `qb.Update("t").Set("updated_at", qb.MustExpr("now()"))` renders
+  `SET updated_at = now()` with no placeholder and no argument, every other value
+  staying parameterized. An alias in a value position is a `ToSQL()` error
+  (`ErrAliasInValue`) naming the column or one-based position — a `SET` or
+  `VALUES` cell projects nothing, so it could only be dropped silently.
 - **`f.Raw()`, `jf.Raw()`, `database.Raw()` and a STRING predicate passed to
   `Having()`** do. Each admits arbitrary SQL — the first two a WHERE/JOIN fragment,
   `database.Raw` the whole statement, `Having` the group predicate — and each

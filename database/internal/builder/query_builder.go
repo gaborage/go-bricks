@@ -1320,7 +1320,12 @@ func (uqb *UpdateQueryBuilder) SetMap(clauses map[string]any) dbtypes.UpdateQuer
 			uqb.failClause(quoteErr)
 			return uqb
 		}
-		quotedClauses[quoted] = clauses[k]
+		cell, cellErr := valueCell(k, clauses[k])
+		if cellErr != nil {
+			uqb.failClause(cellErr)
+			return uqb
+		}
+		quotedClauses[quoted] = cell
 	}
 	uqb.updateBuilder = uqb.updateBuilder.SetMap(quotedClauses)
 	return uqb
@@ -1364,7 +1369,12 @@ func (uqb *UpdateQueryBuilder) setColumn(column string, value any) (ok bool) {
 		uqb.failClause(err)
 		return false
 	}
-	uqb.updateBuilder = uqb.updateBuilder.Set(quoted, value)
+	cell, err := valueCell(column, value)
+	if err != nil {
+		uqb.failClause(err)
+		return false
+	}
+	uqb.updateBuilder = uqb.updateBuilder.Set(quoted, cell)
 	return true
 }
 
@@ -1474,8 +1484,15 @@ func (iqb *InsertQueryBuilder) Columns(columns ...string) dbtypes.InsertQueryBui
 	return iqb
 }
 
+// Values appends one row. A dbtypes.RawExpression cell is validated and spliced
+// inline (see valueCell); every other cell is parameterized.
 func (iqb *InsertQueryBuilder) Values(values ...any) dbtypes.InsertQueryBuilder {
-	iqb.insertBuilder = iqb.insertBuilder.Values(values...)
+	cells, err := valueCells(values)
+	if err != nil {
+		iqb.failClause(err)
+		return iqb
+	}
+	iqb.insertBuilder = iqb.insertBuilder.Values(cells...)
 	return iqb
 }
 
@@ -1497,9 +1514,18 @@ func (iqb *InsertQueryBuilder) SetMap(clauses map[string]any) dbtypes.InsertQuer
 	// NORMALIZED names; values follow the caller's own keys, so two keys that
 	// differ only in padding stay two columns and the database reports the
 	// duplicate rather than one value being silently dropped.
+	values := valuesByKeyOrder(clauses, keys)
+	for i, k := range keys {
+		cell, cellErr := valueCell(k, values[i])
+		if cellErr != nil {
+			iqb.failClause(cellErr)
+			return iqb
+		}
+		values[i] = cell
+	}
 	iqb.insertBuilder = iqb.insertBuilder.
 		Columns(iqb.qb.quoteColumnsForDML(normalized...)...).
-		Values(valuesByKeyOrder(clauses, keys)...)
+		Values(values...)
 	return iqb
 }
 

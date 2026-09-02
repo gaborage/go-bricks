@@ -211,6 +211,10 @@ type InsertQueryBuilder interface {
 	// use qb.InsertWithColumns or pre-quote via a Columns helper.
 	Columns(columns ...string) InsertQueryBuilder
 
+	// Values and SetMap parameterize every value except a RawExpression, which
+	// is validated and spliced inline with no placeholder; an alias on it is a
+	// ToSQL() error naming the column or one-based position (#1318). The SQL
+	// body is never inspected — review it as raw SQL.
 	Values(values ...any) InsertQueryBuilder
 	SetMap(clauses map[string]any) InsertQueryBuilder
 	Options(options ...string) InsertQueryBuilder
@@ -232,7 +236,10 @@ type InsertQueryBuilder interface {
 // qb.Expr()/Raw() (which require an explicit security annotation) and pass user
 // values through the value side of Set/SetMap. See ADR-031.
 type UpdateQueryBuilder interface {
-	// Data modification
+	// Set and SetMap parameterize every value except a RawExpression, which is
+	// validated and spliced inline with no placeholder; an alias on it is a
+	// ToSQL() error naming the column (#1318). The SQL body is never inspected —
+	// review it as raw SQL.
 	Set(column string, value any) UpdateQueryBuilder
 	SetMap(clauses map[string]any) UpdateQueryBuilder
 
