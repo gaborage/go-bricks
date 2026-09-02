@@ -38,6 +38,9 @@ type grammar struct {
 	maxBytes int
 }
 
+// The patterns are a deliberate conservative ASCII subset of each vendor's
+// unquoted-identifier grammar, not the vendor's full character-set rule:
+// non-ASCII letters the server would accept are rejected by policy.
 var grammars = map[dbtypes.Vendor]grammar{
 	dbtypes.PostgreSQL: {segment: regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$]*$`), maxBytes: MaxPostgreSQLBytes},
 	dbtypes.Oracle:     {segment: regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$#]*$`), maxBytes: MaxOracleBytes},
@@ -51,8 +54,11 @@ var grammars = map[dbtypes.Vendor]grammar{
 //   - dbtypes.Oracle: ^[A-Za-z_][A-Za-z0-9_$#]*$, at most MaxOracleBytes.
 //   - any other vendor: ErrUnsupportedVendor.
 //
-// The value is validated as given — never trimmed — so surrounding whitespace
-// is rejected. Length is byte length and is checked before the grammar, so an
+// Both grammars are a deliberate conservative ASCII subset of the vendor's
+// unquoted-identifier rule: a non-ASCII letter the server itself would accept
+// is rejected here by policy, so accepted names are safe to splice unquoted
+// on every path. The value is validated as given — never trimmed — so
+// surrounding whitespace is rejected. Length is byte length and is checked before the grammar, so an
 // over-long value reports the cap even when it also has a bad character. The
 // cap exists because PostgreSQL silently truncates a longer name, so two
 // over-long names sharing a prefix would collapse onto one object.

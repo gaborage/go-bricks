@@ -302,6 +302,8 @@ only the standard library and `database/types`.
 
 ```go
 import (
+    "fmt"
+
     "github.com/gaborage/go-bricks/database/identifier"
     dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -321,7 +323,9 @@ vendor's truth:
 | `dbtypes.Oracle` | `^[A-Za-z_][A-Za-z0-9_$#]*$` | 128 **bytes** (Oracle 12.2+) |
 | anything else | — | `ErrUnsupportedVendor` |
 
-The value is validated as given — never trimmed. Mixed case is accepted, but
+Both grammars are a deliberate conservative ASCII subset of the vendor's rule:
+a non-ASCII letter the server would accept is rejected by policy. The value is
+validated as given — never trimmed. Mixed case is accepted, but
 the server folds an unquoted identifier (PostgreSQL to lowercase, Oracle to
 uppercase). Each refusal class has its own `errors.Is`-able sentinel, wrapped
 with the offending value: `ErrEmptyIdentifier`, `ErrIdentifierCharset`,
