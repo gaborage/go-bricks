@@ -512,7 +512,11 @@ constructed for a disabled cache (that is how `/ready` reports `not_configured`)
 one aborts startup ([ADR-054](adr_054_cache_construction_fails_startup.md),
 [`[C58.3]`](migrations.md)). Absent and `0` are safe in both states. `cleanupinterval` is the
 exception: an enabled cache rejects a negative one at validation, while a disabled cache has the
-manager fall back to its 5m default instead of failing.
+manager fall back to its 5m default instead of failing. When configured with a logger
+(`ManagerConfig.Logger`, which the application wires automatically), the manager WARNs after that
+fallback (`cache.manager.cleanupinterval is >= cache.manager.idlettl`) when the effective cleanup
+interval is not strictly below `idlettl`, since idle eviction then lags by up to one extra sweep —
+the same advisory the database and messaging managers emit.
 
 **Override defaults** in `config.yaml`:
 
