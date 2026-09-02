@@ -39,7 +39,7 @@ type OracleContainerConfig struct {
 func DefaultOracleConfig() *OracleContainerConfig {
 	return &OracleContainerConfig{
 		// renovate: datasource=docker depName=gvenzl/oracle-free
-		ImageTag:       "23.26.2-slim",
+		ImageTag:       "23.26.3-slim",
 		Password:       "testpass",
 		Database:       "FREEPDB1", // Oracle Free default PDB name
 		AppUser:        "testuser",
