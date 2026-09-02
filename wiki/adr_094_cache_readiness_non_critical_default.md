@@ -8,7 +8,23 @@
   (a delivered-empty `cache.critical` still fails resolution),
   [ADR-054](adr_054_cache_construction_fails_startup.md) (construction failure
   still aborts startup — that is a different question from reachability)
-- **Issue**: #1296 (split from #966, item 5)
+- **Issue**: #1296 (split from #966, item 5); amended by #1316
+
+> **Amendment — 2026-09-02 (#1316).** Decision §4 is reversed: `CacheConfig.Critical`
+> is a plain `bool`, not a `*bool`. Under this ADR's own §1 an absent key and an
+> explicit `false` produce the same answer from `IsCacheCritical`, so the pointer's
+> nil arm encoded nothing — the type now follows the two states that exist. The
+> reason §4 gave for keeping it, that narrowing would break hand-built
+> `config.CacheConfig{Critical: new(true)}` literals, is not one the framework
+> recognises (CLAUDE.md, Backward Compatibility: obsolete shapes are removed and
+> the break documented, not shimmed). What stands: no koanf default is registered
+> for the key, `cache.critical` stays on the derivation-denied list, and the
+> accessor keeps its nil-receiver guard. `cache.critical` is no longer an example
+> of CONTEXT.md's Tri-state setting. Compile-break for code that sets the field;
+> `[C62.2]` covers it on the same hop. Decision §1's "when `Cache.Critical` is nil"
+> and the "Register `false` as a koanf default" alternative below keep their
+> pre-#1316 tri-state wording as the historical record; the current contract reads
+> an unset field and an explicit `false` identically.
 
 ## Context
 
@@ -49,8 +65,9 @@ the readiness docs.
 3. **An explicit `false` is a decision, not a smell.** The startup WARN and
    `Builder.warnIfCacheCriticalityOptOut` are deleted. `false` is the shipped
    default spelled out, for config review.
-4. **The tri-state stays.** `CacheConfig.Critical` remains a `*bool` with no
-   registered koanf default. ADR-046's reasoning for that shape still holds — a
+4. **The tri-state stays.** *(Historical — reversed by the 2026-09-02 amendment
+   above; the field is a plain `bool` since #1316.)* `CacheConfig.Critical` remains
+   a `*bool` with no registered koanf default. ADR-046's reasoning for that shape still holds — a
    registered default would populate the pointer and collapse absent and explicit
    into one state, which `CONTEXT.md`'s tri-state definition and the
    derivation-denied list in `config/config.go` both rely on — and narrowing the

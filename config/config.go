@@ -275,10 +275,10 @@ func (c *KeyStoreConfig) SecretFloor() int {
 // Non-critical by default (ADR-094): only an explicit cache.critical=true opts into
 // readiness gating, so an absent key — and a nil receiver — leaves the probe informational.
 func (c *Config) IsCacheCritical() bool {
-	if c == nil || c.Cache.Critical == nil {
+	if c == nil {
 		return false
 	}
-	return *c.Cache.Critical
+	return c.Cache.Critical
 }
 
 // tryLoadYAMLFile attempts to load a YAML configuration file with both .yaml and .yml extensions.
@@ -400,10 +400,11 @@ var derivedDefaultKeys = []string{
 //
 //   - database identity keys — ADR-051's delivered-empty check reads koanf PRESENCE, so a
 //     preloaded key answers a question the operator never answered.
-//   - posture tri-states (cache.critical, server.logroutes, and the keepalive flag under
-//     database.) — nil means "the shipped default", and a derived value writes a concrete
-//     value that erases that state; for logroutes and keepalive a false also silently flips
-//     the posture (ADR-048, ADR-094).
+//   - posture tri-states (server.logroutes and the keepalive flag under database.) — nil
+//     means "the shipped default", and a derived value writes a concrete value that erases
+//     that state, and a false also silently flips the posture (ADR-048). cache.critical is
+//     a plain bool whose meaning is "only an explicit true gates" (ADR-094), so a derived
+//     value would hand that opt-in to normalize instead of to the operator.
 //   - debug. — its fail-closed check reads the DECODED struct rather than koanf, so deriving
 //     these would hand that posture to whatever normalize fills instead of to the explicit
 //     literals that state it today (which are legitimate and stay).

@@ -55,10 +55,13 @@ _Avoid_: missing, unconfigured, disabled, empty
 **Tri-state setting**:
 A setting whose absence means "the documented default applies", distinct from
 an explicit off and from an explicit value. Encoded as a pointer
-(`cache.critical`) so a hand-built configuration cannot conflate absent with
-off — the koanf door tells them apart by key presence, the literal door only
-by nil. `keystore.secretminlength` keeps the pointer but lost its off arm
-(ADR-095): absent means 32, and a set value below 32 is rejected, not honored.
+(`server.logroutes`, `database.pool.keepalive.enabled`) so a hand-built
+configuration cannot conflate absent with off — the koanf door tells them apart
+by key presence, the literal door only by nil. `keystore.secretminlength` keeps
+the pointer but lost its off arm (ADR-095): absent means 32, and a set value
+below 32 is rejected, not honored. A setting whose absent and off arms mean the
+same thing is not a tri-state and takes a plain type (`cache.critical`, ADR-094
+as amended).
 _Avoid_: optional, nullable, flag, opt-out (for the setting itself)
 
 **Delivered-but-empty**:

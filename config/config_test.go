@@ -273,8 +273,8 @@ func TestLoadExplicitBoolEnvUnchanged(t *testing.T) {
 		cfg, err := Load()
 
 		require.NoError(t, err)
-		require.NotNil(t, cfg.Cache.Critical)
-		assert.False(t, cfg.IsCacheCritical(), "an explicit false still decodes as a concrete value, not absence")
+		assert.False(t, cfg.Cache.Critical)
+		assert.False(t, cfg.IsCacheCritical(), "an explicit false decodes cleanly and reads as non-critical")
 	})
 
 	// Both keep-alive cases need a real database section: nil -> true normalization runs
@@ -324,13 +324,13 @@ func TestLoadEmptyBoolYAMLStringRejected(t *testing.T) {
 
 // TestLoadYAMLNullBoolKeepsTodaysDecode pins the boundary ADR-077 deliberately does NOT
 // cover, matching ADR-074's: a YAML null is different plumbing — koanf delivers a nil
-// value, not the "" the guard judges — so the key still decodes as absent and the cache
+// value, not the "" the guard judges — so the key still decodes as unset and the cache
 // probe keeps the non-critical default.
 func TestLoadYAMLNullBoolKeepsTodaysDecode(t *testing.T) {
 	cfg, err := loadDeliveredEmptyFixture(t, "cache:\n  critical:\n", nil)
 
 	require.NoError(t, err)
-	assert.Nil(t, cfg.Cache.Critical)
+	assert.False(t, cfg.Cache.Critical)
 	assert.False(t, cfg.IsCacheCritical(), "a null key is absence, so the non-critical default still applies")
 }
 
@@ -601,29 +601,28 @@ func TestKeyStoreSecretFloor(t *testing.T) {
 	}
 }
 
-// TestIsCacheCriticalTriState drives both the parsed pointer and the accessor through the
+// TestIsCacheCriticalExplicitOptIn drives both the parsed field and the accessor through the
 // real koanf load path rather than a Go struct literal: a literal would prove nothing about
-// whether an absent YAML key still reaches IsCacheCritical as nil. The sibling
+// whether an absent YAML key still reaches IsCacheCritical as false. The sibling
 // `cache.enabled` assertion proves the block actually parsed, so a case cannot pass on Go's
 // zero value alone.
-func TestIsCacheCriticalTriState(t *testing.T) {
+func TestIsCacheCriticalExplicitOptIn(t *testing.T) {
 	const yamlEnabled = "cache:\n  enabled: true\n"
 
 	tests := []struct {
 		name          string
 		yaml          string
 		env           string
-		expectedPtr   *bool
 		expected      bool
 		expectEnabled bool
 	}{
 		{name: "key_absent_is_non_critical", yaml: yamlEnabled, expected: false, expectEnabled: true},
 		{name: "no_cache_block_at_all_is_non_critical", expected: false},
-		{name: "yaml_false_is_non_critical", yaml: yamlEnabled + "  critical: false\n", expectedPtr: new(false), expected: false, expectEnabled: true},
-		{name: "yaml_true_opts_in", yaml: yamlEnabled + "  critical: true\n", expectedPtr: new(true), expected: true, expectEnabled: true},
-		{name: "env_true_parses_without_yaml", env: "true", expectedPtr: new(true), expected: true},
-		{name: "env_false_overrides_yaml_true", yaml: yamlEnabled + "  critical: true\n", env: "false", expectedPtr: new(false), expected: false, expectEnabled: true},
-		{name: "env_true_overrides_yaml_false", yaml: yamlEnabled + "  critical: false\n", env: "true", expectedPtr: new(true), expected: true, expectEnabled: true},
+		{name: "yaml_false_is_non_critical", yaml: yamlEnabled + "  critical: false\n", expected: false, expectEnabled: true},
+		{name: "yaml_true_opts_in", yaml: yamlEnabled + "  critical: true\n", expected: true, expectEnabled: true},
+		{name: "env_true_parses_without_yaml", env: "true", expected: true},
+		{name: "env_false_overrides_yaml_true", yaml: yamlEnabled + "  critical: true\n", env: "false", expected: false, expectEnabled: true},
+		{name: "env_true_overrides_yaml_false", yaml: yamlEnabled + "  critical: false\n", env: "true", expected: true, expectEnabled: true},
 	}
 
 	for _, tc := range tests {
@@ -643,12 +642,7 @@ func TestIsCacheCriticalTriState(t *testing.T) {
 
 			cfg, err := Load()
 			require.NoError(t, err)
-			if tc.expectedPtr == nil {
-				assert.Nil(t, cfg.Cache.Critical, "absent key must stay nil so IsCacheCritical reads the default")
-			} else {
-				require.NotNil(t, cfg.Cache.Critical)
-				assert.Equal(t, *tc.expectedPtr, *cfg.Cache.Critical)
-			}
+			assert.Equal(t, tc.expected, cfg.Cache.Critical)
 			assert.Equal(t, tc.expectEnabled, cfg.Cache.Enabled)
 			assert.Equal(t, tc.expected, cfg.IsCacheCritical())
 		})

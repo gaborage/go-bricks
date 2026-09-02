@@ -7,10 +7,10 @@
 > **Amendment — 2026-09-01 (ADR-094).** The strict default below is no longer
 > current: an absent `cache.critical` now leaves the cache probe non-critical,
 > `critical: true` is the only way into readiness gating, and the explicit-`false`
-> startup WARN is deleted. What stands from this ADR is the tri-state `*bool` with
-> no registered koanf default, the greppable one-line opt (now an opt-in), and the
-> sanitized `503` body that ADR-048 generalized. The reasoning is kept as the
-> historical record.
+> startup WARN is deleted. What stands from this ADR is the key with no registered
+> koanf default, the greppable one-line opt (now an opt-in), and the sanitized
+> `503` body that ADR-048 generalized; the `*bool` itself went with ADR-094's
+> 2026-09-02 amendment (#1316). The reasoning is kept as the historical record.
 
 ## Context
 

@@ -237,7 +237,7 @@ func TestHealthDebugKeepsFullCacheErrorWhileReadySanitizes(t *testing.T) {
 	// Only an opted-in cache (ADR-094) makes the /ready 503 reachable here.
 	cfg := &config.Config{
 		App:   config.AppConfig{Name: appName, Env: testName, Version: appVersion},
-		Cache: config.CacheConfig{Critical: new(true)},
+		Cache: config.CacheConfig{Critical: true},
 	}
 
 	log := &recLogger{}

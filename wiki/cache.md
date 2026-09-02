@@ -319,9 +319,10 @@ carries `cache` (a status string) alongside `cache_stats` (the manager counters)
 
 - **absent (the default)** — a failing cache probe is reported in the body but never changes
   the status code: `/ready` stays `200` while the cache is dead, with `cache: "unhealthy"`
-  and a climbing `cache_stats.errors` as the signal (ADR-094). The key is a pointer tri-state
-  and is deliberately **not** registered as a koanf default, so "unset" is a state the
-  framework can tell apart from an explicit value.
+  and a climbing `cache_stats.errors` as the signal (ADR-094). The key is deliberately **not**
+  registered as a koanf default, and the field is a plain `bool` (`config.CacheConfig{Critical:
+  true}`): absent and an explicit `false` mean the same thing, so there is no third state to
+  encode (ADR-094 as amended, #1316).
 - `true` — a failing cache probe short-circuits `/ready` with
   `503 {"status": "not ready", "cache": "unhealthy", "error": "cache unavailable"}` — no
   `cache_stats`, and no other component's status. This is the only way into readiness

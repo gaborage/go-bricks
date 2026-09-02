@@ -824,8 +824,8 @@ func TestAppBuilderCreateHealthProbesAppliesCacheCritical(t *testing.T) {
 		cfg              *config.Config
 		expectedCritical bool
 	}{
-		{name: "critical_enabled", cfg: &config.Config{Cache: config.CacheConfig{Critical: new(true)}}, expectedCritical: true},
-		{name: "critical_explicit_false", cfg: &config.Config{Cache: config.CacheConfig{Critical: new(false)}}, expectedCritical: false},
+		{name: "critical_enabled", cfg: &config.Config{Cache: config.CacheConfig{Critical: true}}, expectedCritical: true},
+		{name: "critical_explicit_false", cfg: &config.Config{Cache: config.CacheConfig{Critical: false}}, expectedCritical: false},
 		{name: "critical_unset_is_non_critical", cfg: &config.Config{}, expectedCritical: false},
 		{name: "nil_config", cfg: nil, expectedCritical: false},
 	}
@@ -869,8 +869,8 @@ func TestAppBuilderExplicitFalseCacheCriticalIsSilent(t *testing.T) {
 		cache config.CacheConfig
 		opts  *Options
 	}{
-		{name: "enabled_cache", cache: config.CacheConfig{Enabled: true, Critical: new(false)}},
-		{name: "custom_connector", cache: config.CacheConfig{Critical: new(false)}, opts: customConnector},
+		{name: "enabled_cache", cache: config.CacheConfig{Enabled: true, Critical: false}},
+		{name: "custom_connector", cache: config.CacheConfig{Critical: false}, opts: customConnector},
 	}
 
 	for _, tc := range tests {

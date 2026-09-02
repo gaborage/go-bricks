@@ -363,10 +363,10 @@ type ServiceConfig struct {
 // Production-safe defaults are applied automatically when cache is enabled.
 type CacheConfig struct {
 	Enabled bool `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
-	// Critical fails /ready with 503 when the cache probe errors. Pointer tri-state
-	// (nil = non-critical, the shipped default per ADR-094); read through
-	// Config.IsCacheCritical. See wiki/cache.md#readiness.
-	Critical *bool              `koanf:"critical" json:"critical" yaml:"critical" toml:"critical" mapstructure:"critical"`
+	// Critical fails /ready with 503 when the cache probe errors. Absent means
+	// non-critical (ADR-094), so a plain bool: no koanf default is registered
+	// (#1316). Read through Config.IsCacheCritical. See wiki/cache.md#readiness.
+	Critical bool               `koanf:"critical" json:"critical" yaml:"critical" toml:"critical" mapstructure:"critical"`
 	Type     string             `koanf:"type" json:"type" yaml:"type" toml:"type" mapstructure:"type"` // redis
 	Redis    RedisConfig        `koanf:"redis" json:"redis" yaml:"redis" toml:"redis" mapstructure:"redis"`
 	Manager  CacheManagerConfig `koanf:"manager" json:"manager" yaml:"manager" toml:"manager" mapstructure:"manager"`
