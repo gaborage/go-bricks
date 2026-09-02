@@ -6508,7 +6508,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 ### [C62.3] `keystore.secretminlength` below 32 fails startup · breaking · when: match
 
-- detect: `git grep -nE 'secretminlength|SECRETMINLENGTH|SecretMinLength' -- '*.yaml' '*.yml' '*.env' '*.go' '*.tf' '*.json'`
+- detect: `git grep -nE 'secretminlength|SECRETMINLENGTH|SecretMinLength' -- '*.yaml' '*.yml' '*.toml' '*.env' '*.go' '*.tf' '*.json'`
   over your service AND its deployment repos, then read each hit's VALUE: in scope when it is
   `0` or any number below 32. A hit is only a shortlist — the value may be interpolated from a
   secret manager or a Helm values file the grep does not reach, so check every environment's
