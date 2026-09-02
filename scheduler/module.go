@@ -265,7 +265,9 @@ func (m *Module) ensureSchedulerInitialized() error {
 // value means the config never passed config.Validate (which defaults it to
 // UTC), so it is refused like a zero timeout. The "-" sentinel yields nil so
 // gocron keeps its time.Local default (host-local). Any other value must load
-// as an IANA zone.
+// via time.LoadLocation. The literal "Local" is refused by config.Validate
+// (ADR-093), not here: a config handed straight to Init with "Local" loads
+// host-local, an accepted gap for callers that skip validation (#1315).
 func loadSchedulerLocation(tz string) (*time.Location, error) {
 	if tz == "" {
 		return nil, errors.New("scheduler: scheduler.timezone must be set; run the config through config.Validate")

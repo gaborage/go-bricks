@@ -68,6 +68,9 @@ Invalid IANA names fail fast at startup: `config.Validate` refuses them, and
 `scheduler.Module.Init` loads the zone once more as its own precondition, so a
 config handed to `Init` without validation (an empty or unloadable value) fails
 there rather than at first job registration ([ADR-075](adr_075_scheduler_timeout_single_default.md)).
+The `Local` refusal above lives in `config.Validate` only, so a config handed
+straight to `Module.Init` with `Local` still resolves host-local; that path is
+outside the validated-configuration contract.
 The active zone appears in the
 "Scheduler initialized" startup log and in the `meta.timezone` field of
 `GET /_sys/job`. This mirrors the `database.timezone` contract — see
