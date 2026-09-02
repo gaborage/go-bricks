@@ -563,6 +563,20 @@ func assertReadyBodyOmits(t *testing.T, body map[string]any, forbidden ...string
 
 // assertNoCacheCoordinates applies the whole-body lens above to the Redis coordinates and the
 // raw probe text the cache probe's error carries.
+// assertCacheUnhealthyButReady pins the non-critical shape: the outage is reported in the
+// body — `cache` and `cache_stats.status` both unhealthy — while the status stays ready, no
+// error key is rendered, and no Redis coordinates leak.
+func assertCacheUnhealthyButReady(t *testing.T, body map[string]any) {
+	t.Helper()
+	assert.Equal(t, readyStatus, body[statusKey])
+	assert.Equal(t, unhealthyStatus, body[componentCache])
+	cacheStats, ok := body["cache_stats"].(map[string]any)
+	require.True(t, ok, "cache_stats must be present in the ready body")
+	assert.Equal(t, unhealthyStatus, cacheStats[statusKey])
+	assert.NotContains(t, body, errorKey)
+	assertNoCacheCoordinates(t, body)
+}
+
 func assertNoCacheCoordinates(t *testing.T, body map[string]any) {
 	t.Helper()
 
@@ -969,15 +983,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusOK,
-			assertBody: func(t *testing.T, body map[string]any) {
-				assert.Equal(t, readyStatus, body[statusKey])
-				assert.Equal(t, unhealthyStatus, body[componentCache])
-				cacheStats, ok := body["cache_stats"].(map[string]any)
-				require.True(t, ok, "cache_stats must be present in the ready body")
-				assert.Equal(t, unhealthyStatus, cacheStats[statusKey])
-				assert.NotContains(t, body, errorKey)
-				assertNoCacheCoordinates(t, body)
-			},
+			assertBody:     assertCacheUnhealthyButReady,
 		},
 		{
 			// #860: an unhealthy cache used to be invisible on /ready. Cold pool — the
@@ -993,15 +999,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusOK,
-			assertBody: func(t *testing.T, body map[string]any) {
-				assert.Equal(t, readyStatus, body[statusKey])
-				assert.Equal(t, unhealthyStatus, body[componentCache])
-				cacheStats, ok := body["cache_stats"].(map[string]any)
-				require.True(t, ok, "cache_stats must be present in the ready body")
-				assert.Equal(t, unhealthyStatus, cacheStats[statusKey])
-				assert.NotContains(t, body, errorKey)
-				assertNoCacheCoordinates(t, body)
-			},
+			assertBody:     assertCacheUnhealthyButReady,
 		},
 		{
 			// #860: a pod that opts in with `critical: true` and boots with Redis unreachable
@@ -1036,15 +1034,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusOK,
-			assertBody: func(t *testing.T, body map[string]any) {
-				assert.Equal(t, readyStatus, body[statusKey])
-				assert.Equal(t, unhealthyStatus, body[componentCache])
-				cacheStats, ok := body["cache_stats"].(map[string]any)
-				require.True(t, ok, "cache_stats must be present in the ready body")
-				assert.Equal(t, unhealthyStatus, cacheStats[statusKey])
-				assert.NotContains(t, body, errorKey)
-				assertNoCacheCoordinates(t, body)
-			},
+			assertBody:     assertCacheUnhealthyButReady,
 		},
 		{
 			name: "cache_warm_pool_outage_critical",

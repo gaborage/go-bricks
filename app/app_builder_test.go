@@ -837,29 +837,31 @@ func TestAppBuilderCreateHealthProbesAppliesCacheCritical(t *testing.T) {
 }
 
 // TestAppBuilderExplicitFalseCacheCriticalIsSilent pins ADR-094's second half: an explicit
-// cache.critical=false is a decision, not a smell, so no readiness-posture WARN is emitted
-// at any setting, with or without a probe that can fail. The recorder is swept for the KEY
-// rather than for one message, so a re-worded WARN cannot slip back in.
+// cache.critical=false is a decision, not a smell, so the two shapes whose probe can fail —
+// an enabled cache, and a custom CacheConnector, which never reads cache.enabled — boot with
+// no readiness-posture WARN. The recorder is swept for the KEY rather than for one message,
+// so a re-worded WARN cannot slip back in.
 func TestAppBuilderExplicitFalseCacheCriticalIsSilent(t *testing.T) {
 	customConnector := &Options{CacheConnector: func(context.Context, string) (cache.Cache, error) {
 		return nil, assert.AnError
 	}}
+	// CreateHealthProbes wires the manager into the probe set without leasing from it, so
+	// one instance serves both cases.
+	cacheManager := createTestCacheManager(t)
 
 	tests := []struct {
 		name  string
 		cache config.CacheConfig
 		opts  *Options
 	}{
-		{name: "enabled_and_explicitly_false", cache: config.CacheConfig{Enabled: true, Critical: new(false)}},
-		{name: "enabled_and_unset", cache: config.CacheConfig{Enabled: true}},
-		{name: "enabled_and_explicitly_true", cache: config.CacheConfig{Enabled: true, Critical: new(true)}},
-		{name: "custom_connector_and_explicitly_false", cache: config.CacheConfig{Critical: new(false)}, opts: customConnector},
+		{name: "enabled_cache", cache: config.CacheConfig{Enabled: true, Critical: new(false)}},
+		{name: "custom_connector", cache: config.CacheConfig{Critical: new(false)}, opts: customConnector},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := &recLogger{}
-			app := &App{cfg: &config.Config{Cache: tc.cache}, cacheManager: createTestCacheManager(t)}
+			app := &App{cfg: &config.Config{Cache: tc.cache}, cacheManager: cacheManager}
 			// CreateApp installs the slots CreateHealthProbes walks; this builder skips it.
 			app.installSlots(slotInputs{})
 			builder := &Builder{logger: rec, opts: tc.opts, app: app}
