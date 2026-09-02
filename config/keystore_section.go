@@ -142,7 +142,7 @@ func validatePKCS12Source(p *PKCS12SourceConfig, name string) error {
 	if err := validateKeySource(p.Bundle(), name, "pkcs12", true); err != nil {
 		return err
 	}
-	field := fmt.Sprintf("keystore.keys.%s.pkcs12.password", name)
+	field := fmt.Sprintf(keystoreKeysFieldPrefix+".pkcs12.password", name)
 	hasEnv := p.Password.Env != ""
 	hasFile := p.Password.File != ""
 	switch {

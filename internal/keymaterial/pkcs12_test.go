@@ -1,18 +1,14 @@
 package keymaterial
 
 import (
-	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,26 +17,11 @@ import (
 	testconsts "github.com/gaborage/go-bricks/testing"
 )
 
-func selfSignedCert(t *testing.T, key crypto.Signer) *x509.Certificate {
-	t.Helper()
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "keymaterial-test"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
-	require.NoError(t, err)
-	cert, err := x509.ParseCertificate(der)
-	require.NoError(t, err)
-	return cert
-}
-
 func TestParsePKCS12RSA(t *testing.T) {
 	password := testconsts.FakePassword("p12")
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
-	leaf := selfSignedCert(t, rsaKey)
+	leaf := testconsts.SelfSignedCert(t, rsaKey)
 
 	t.Run("modern_bundle_yields_rsa_key", func(t *testing.T) {
 		pfx, err := pkcs12.Modern.Encode(rsaKey, leaf, nil, password)
@@ -52,9 +33,7 @@ func TestParsePKCS12RSA(t *testing.T) {
 	})
 
 	t.Run("legacy_bundle_with_ca_chain_yields_rsa_key", func(t *testing.T) {
-		caKey, err := rsa.GenerateKey(rand.Reader, 2048)
-		require.NoError(t, err)
-		ca := selfSignedCert(t, caKey)
+		ca := testconsts.SelfSignedCert(t, rsaKey)
 		pfx, err := pkcs12.Legacy.Encode(rsaKey, leaf, []*x509.Certificate{ca}, password)
 		require.NoError(t, err)
 
@@ -86,7 +65,7 @@ func TestParsePKCS12RSA(t *testing.T) {
 	t.Run("ec_only_bundle_names_the_rsa_allowlist", func(t *testing.T) {
 		ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		require.NoError(t, err)
-		pfx, err := pkcs12.Modern.Encode(ecKey, selfSignedCert(t, ecKey), nil, password)
+		pfx, err := pkcs12.Modern.Encode(ecKey, testconsts.SelfSignedCert(t, ecKey), nil, password)
 		require.NoError(t, err)
 
 		_, err = ParsePKCS12RSA(pfx, password)
@@ -99,7 +78,7 @@ func TestParsePKCS12RSA(t *testing.T) {
 	t.Run("certificate_not_matching_key_rejected", func(t *testing.T) {
 		otherKey, err := rsa.GenerateKey(rand.Reader, 2048)
 		require.NoError(t, err)
-		pfx, err := pkcs12.Modern.Encode(rsaKey, selfSignedCert(t, otherKey), nil, password)
+		pfx, err := pkcs12.Modern.Encode(rsaKey, testconsts.SelfSignedCert(t, otherKey), nil, password)
 		require.NoError(t, err)
 
 		_, err = ParsePKCS12RSA(pfx, password)

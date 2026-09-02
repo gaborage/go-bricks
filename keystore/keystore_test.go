@@ -9,12 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -558,12 +556,7 @@ func TestPublicKeyOnSecretEntryRejected(t *testing.T) {
 // password-protected PKCS#12 bundle.
 func pkcs12Fixture(t *testing.T, priv *rsa.PrivateKey, password string) []byte {
 	t.Helper()
-	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), NotAfter: time.Now().Add(time.Hour)}
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
-	require.NoError(t, err)
-	leaf, err := x509.ParseCertificate(certDER)
-	require.NoError(t, err)
-	pfx, err := pkcs12.Modern.Encode(priv, leaf, nil, password)
+	pfx, err := pkcs12.Modern.Encode(priv, testconsts.SelfSignedCert(t, priv), nil, password)
 	require.NoError(t, err)
 	return pfx
 }

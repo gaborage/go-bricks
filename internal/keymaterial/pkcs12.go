@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"software.sslmate.com/src/go-pkcs12"
+
+	"github.com/gaborage/go-bricks/internal/secretfile"
 )
 
 // ParsePKCS12RSA decodes a password-protected PKCS#12 bundle into its RSA
@@ -49,7 +51,7 @@ func LoadPassword(env, file string) (string, error) {
 	case file != "":
 		data, err := os.ReadFile(file) // #nosec G304 -- deployment configuration, as in LoadBytes
 		if err != nil {
-			return "", fmt.Errorf("password file unreadable (source elided): %w", stripPath(err))
+			return "", fmt.Errorf("password file unreadable (source elided): %w", secretfile.Errno(err))
 		}
 		pw := strings.TrimRight(string(data), "\r\n")
 		if pw == "" {
@@ -59,14 +61,4 @@ func LoadPassword(env, file string) (string, error) {
 	default:
 		return "", errors.New("no password source configured")
 	}
-}
-
-// stripPath drops the *os.PathError wrapper, whose embedded path may be the
-// mis-filed secret itself. errors.Is still matches fs.ErrNotExist and friends.
-func stripPath(err error) error {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		return pe.Err
-	}
-	return err
 }

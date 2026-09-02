@@ -921,8 +921,8 @@ type SchedulerTimeoutConfig struct {
 // KeyStoreConfig holds named key material configuration.
 // Keys can be loaded from files (local dev) or base64-encoded values (EKS deployment).
 type KeyStoreConfig struct {
-	// Keys maps logical names to key material configurations. Each entry is
-	// either an RSA pair (public/private) or a symmetric secret — never both.
+	// Keys maps logical names to key material configurations; see
+	// KeyPairConfig for the accepted shapes.
 	// Example names: "signing", "encryption", "legacy", "my-mac-key".
 	Keys map[string]KeyPairConfig `koanf:"keys" json:"keys" yaml:"keys" toml:"keys" mapstructure:"keys"`
 
@@ -960,7 +960,8 @@ type PKCS12SourceConfig struct {
 
 // IsSet reports whether any part of the PKCS#12 stanza is configured.
 func (p *PKCS12SourceConfig) IsSet() bool {
-	return p.File != "" || p.Value != "" || p.Password.IsSet()
+	bundle := p.Bundle()
+	return bundle.IsSet() || p.Password.IsSet()
 }
 
 // Bundle is the bundle's file-or-value source, for the shared loader path.
