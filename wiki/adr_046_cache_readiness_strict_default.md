@@ -1,7 +1,16 @@
 # ADR-046: Cache Readiness Is Strict by Default, with a Visible Opt-Out
 
-**Status:** Accepted
+**Status:** Accepted — default superseded by
+[ADR-094](adr_094_cache_readiness_non_critical_default.md)
 **Date:** 2026-08-04
+
+> **Amendment — 2026-09-01 (ADR-094).** The strict default below is no longer
+> current: an absent `cache.critical` now leaves the cache probe non-critical,
+> `critical: true` is the only way into readiness gating, and the explicit-`false`
+> startup WARN is deleted. What stands from this ADR is the tri-state `*bool` with
+> no registered koanf default, the greppable one-line opt (now an opt-in), and the
+> sanitized `503` body that ADR-048 generalized. The reasoning is kept as the
+> historical record.
 
 ## Context
 

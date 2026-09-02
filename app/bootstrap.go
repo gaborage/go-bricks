@@ -203,8 +203,8 @@ func rootDatabaseAbsent(cfg *config.Config, opts *Options) bool {
 // Diverges from rootDatabaseAbsent in one more way, deliberately: ANY caller-supplied
 // ResourceSource is an exemption, not only a dynamic one. rootDatabaseAbsent gates a
 // startup WARN; this gates whether a probe runs at all, and a false positive would hide a
-// live cache from readiness forever. Options.CacheConnector is exempt for the reason
-// warnIfCacheCriticalityOptOut already records: it never reads cache.enabled.
+// live cache from readiness forever. Options.CacheConnector is exempt because it never
+// reads cache.enabled.
 func rootCacheAbsent(cfg *config.Config, opts *Options) bool {
 	if cfg == nil || cfg.Cache.Enabled || cfg.Source.Type == config.SourceTypeDynamic {
 		return false

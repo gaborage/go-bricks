@@ -785,9 +785,9 @@ func TestCollectProbesCacheCriticalFromLoadedConfig(t *testing.T) {
 		cacheYAML        string
 		expectedCritical bool
 	}{
-		{name: "critical_omitted_is_strict", cacheYAML: cacheEnabled, expectedCritical: true},
-		{name: "critical_false_opts_out", cacheYAML: cacheEnabled + "  critical: false\n", expectedCritical: false},
-		{name: "critical_true_is_strict", cacheYAML: cacheEnabled + "  critical: true\n", expectedCritical: true},
+		{name: "critical_omitted_is_non_critical", cacheYAML: cacheEnabled, expectedCritical: false},
+		{name: "critical_false_is_non_critical", cacheYAML: cacheEnabled + "  critical: false\n", expectedCritical: false},
+		{name: "critical_true_opts_in", cacheYAML: cacheEnabled + "  critical: true\n", expectedCritical: true},
 	}
 
 	for _, tc := range tests {
@@ -814,8 +814,8 @@ func TestCollectProbesCacheCriticalFromLoadedConfig(t *testing.T) {
 // error substituted in. The per-constructor tests pin the probes that exist today; this is
 // the only guard that catches a critical probe added tomorrow.
 func TestCollectProbesCriticalProbesRenderNoRawError(t *testing.T) {
-	cfg := &config.Config{}
-	require.True(t, cfg.IsCacheCritical(), "a zero-value config must leave the cache probe critical, or this test covers only the database probe")
+	cfg := &config.Config{Cache: config.CacheConfig{Critical: new(true)}}
+	require.True(t, cfg.IsCacheCritical(), "the cache probe must be opted into criticality, or this test covers only the database probe")
 
 	app := &App{
 		cfg:              cfg,
@@ -956,11 +956,10 @@ func TestReadyCheckScenarios(t *testing.T) {
 			},
 		},
 		{
-			// The headline of the strict-default flip: cfg.Cache.Critical is left NIL here, so
-			// this only passes while Config.IsCacheCritical's absent-key branch answers true.
-			// The sanitized body is asserted too, because strict-by-default is what makes the
-			// cache 503 (and its address disclosure) reachable without anyone opting in.
-			name: "cache_unset_critical_defaults_to_503",
+			// The headline of the non-critical default (ADR-094): cfg.Cache.Critical is left NIL
+			// here, so this only passes while Config.IsCacheCritical's absent-key branch answers
+			// false. The outage still shows in the body — informational, never a 503.
+			name: "cache_unset_critical_stays_ready",
 			prepare: func(f *testAppFixture) {
 				f.db.On(methodHealth, mock.Anything).Return(nil)
 				f.messaging.SetReady(true)
@@ -969,17 +968,21 @@ func TestReadyCheckScenarios(t *testing.T) {
 					cache.NewConnectionError("ping", redisProbeAddress, errors.New(errorRedisDown)))
 				f.rebuildLifecycle()
 			},
-			expectedStatus: http.StatusServiceUnavailable,
+			expectedStatus: http.StatusOK,
 			assertBody: func(t *testing.T, body map[string]any) {
-				assert.Equal(t, "not ready", body[statusKey])
+				assert.Equal(t, readyStatus, body[statusKey])
 				assert.Equal(t, unhealthyStatus, body[componentCache])
-				assertCacheErrorSanitized(t, body)
+				cacheStats, ok := body["cache_stats"].(map[string]any)
+				require.True(t, ok, "cache_stats must be present in the ready body")
+				assert.Equal(t, unhealthyStatus, cacheStats[statusKey])
+				assert.NotContains(t, body, errorKey)
+				assertNoCacheCoordinates(t, body)
 			},
 		},
 		{
 			// #860: an unhealthy cache used to be invisible on /ready. Cold pool — the
 			// connector fails on the very first lease, modeling boot with Redis unreachable.
-			// Explicit `false` is the only way back to this lenient 200 (decision C's opt-out).
+			// Explicit `false` spells out the shipped default (ADR-094); the unset case above pins it.
 			name: "cache_cold_pool_unreachable_non_critical",
 			prepare: func(f *testAppFixture) {
 				f.db.On(methodHealth, mock.Anything).Return(nil)
@@ -1001,9 +1004,9 @@ func TestReadyCheckScenarios(t *testing.T) {
 			},
 		},
 		{
-			// #860: a pod that boots with Redis unreachable must never be marked Ready — the
-			// runner polls readyCheck exactly once, with no warm-up, so this pins that the
-			// FIRST poll already answers 503. The injected error is the shape the real
+			// #860: a pod that opts in with `critical: true` and boots with Redis unreachable
+			// must never be marked Ready — the runner polls readyCheck exactly once, with no
+			// warm-up, so this pins that the FIRST poll already answers 503. The injected error is the shape the real
 			// connector produces at boot (cache/redis/client.go NewConnectionError on the
 			// PING); it must stay outside config.IsNotConfigured, which would flip this to 200.
 			name: "cache_cold_pool_unreachable_critical",

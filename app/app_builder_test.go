@@ -811,8 +811,8 @@ func TestAppBuilderCreateHealthProbesAppliesCacheCritical(t *testing.T) {
 	}{
 		{name: "critical_enabled", cfg: &config.Config{Cache: config.CacheConfig{Critical: new(true)}}, expectedCritical: true},
 		{name: "critical_explicit_false", cfg: &config.Config{Cache: config.CacheConfig{Critical: new(false)}}, expectedCritical: false},
-		{name: "critical_unset_is_strict", cfg: &config.Config{}, expectedCritical: true},
-		{name: "nil_config", cfg: nil, expectedCritical: true},
+		{name: "critical_unset_is_non_critical", cfg: &config.Config{}, expectedCritical: false},
+		{name: "nil_config", cfg: nil, expectedCritical: false},
 	}
 
 	for _, tc := range tests {
@@ -836,59 +836,36 @@ func TestAppBuilderCreateHealthProbesAppliesCacheCritical(t *testing.T) {
 	}
 }
 
-// TestAppBuilderWarnsOnCacheCriticalityOptOut pins that the deliberately-weakened readiness
-// posture is loud wherever the probe can actually fail: an enabled cache, or any custom
-// CacheConnector (which never reads cache.enabled). The strict default (nil) must stay
-// silent, otherwise every deployment boots with a warning it cannot act on.
-func TestAppBuilderWarnsOnCacheCriticalityOptOut(t *testing.T) {
-	const warnMarker = "cache.critical is explicitly false"
-
+// TestAppBuilderExplicitFalseCacheCriticalIsSilent pins ADR-094's second half: an explicit
+// cache.critical=false is a decision, not a smell, so no readiness-posture WARN is emitted
+// at any setting, with or without a probe that can fail. The recorder is swept for the KEY
+// rather than for one message, so a re-worded WARN cannot slip back in.
+func TestAppBuilderExplicitFalseCacheCriticalIsSilent(t *testing.T) {
 	customConnector := &Options{CacheConnector: func(context.Context, string) (cache.Cache, error) {
 		return nil, assert.AnError
 	}}
 
 	tests := []struct {
-		name       string
-		cache      config.CacheConfig
-		opts       *Options
-		noCacheMgr bool
-		expectLog  bool
+		name  string
+		cache config.CacheConfig
+		opts  *Options
 	}{
-		{name: "enabled_and_explicitly_false_warns", cache: config.CacheConfig{Enabled: true, Critical: new(false)}, expectLog: true},
-		{name: "enabled_and_unset_is_silent", cache: config.CacheConfig{Enabled: true}, expectLog: false},
-		{name: "enabled_and_explicitly_true_is_silent", cache: config.CacheConfig{Enabled: true, Critical: new(true)}, expectLog: false},
-		{name: "disabled_and_explicitly_false_is_silent", cache: config.CacheConfig{Critical: new(false)}, expectLog: false},
-		{name: "disabled_with_custom_connector_warns", cache: config.CacheConfig{Critical: new(false)}, opts: customConnector, expectLog: true},
-		{name: "disabled_with_custom_connector_and_unset_is_silent", opts: customConnector, expectLog: false},
-		{name: "no_cache_manager_with_custom_connector_is_silent", cache: config.CacheConfig{Critical: new(false)}, opts: customConnector, noCacheMgr: true, expectLog: false},
+		{name: "enabled_and_explicitly_false", cache: config.CacheConfig{Enabled: true, Critical: new(false)}},
+		{name: "enabled_and_unset", cache: config.CacheConfig{Enabled: true}},
+		{name: "enabled_and_explicitly_true", cache: config.CacheConfig{Enabled: true, Critical: new(true)}},
+		{name: "custom_connector_and_explicitly_false", cache: config.CacheConfig{Critical: new(false)}, opts: customConnector},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			var cacheManager *cache.CacheManager
-			if !tc.noCacheMgr {
-				cacheManager = createTestCacheManager(t)
-			}
-
 			rec := &recLogger{}
-			app := &App{cfg: &config.Config{Cache: tc.cache}, cacheManager: cacheManager}
+			app := &App{cfg: &config.Config{Cache: tc.cache}, cacheManager: createTestCacheManager(t)}
 			// CreateApp installs the slots CreateHealthProbes walks; this builder skips it.
 			app.installSlots(slotInputs{})
-			builder := &Builder{
-				logger: rec,
-				opts:   tc.opts,
-				app:    app,
-			}
+			builder := &Builder{logger: rec, opts: tc.opts, app: app}
 			require.NoError(t, builder.CreateHealthProbes().err)
 
-			event, logged := loggedEvent(rec, warnMarker)
-			require.Equal(t, tc.expectLog, logged)
-			if tc.expectLog {
-				assert.Contains(t, event.msg, "a dead cache still reports ready",
-					"the WARN must name the consequence, not just the key")
-				assert.Equal(t, "warn", event.level)
-				assert.Equal(t, "cache", event.str["resource"])
-			}
+			assert.False(t, loggedMsgContains(rec, "cache.critical"), "no readiness-posture line may mention the key")
 		})
 	}
 }

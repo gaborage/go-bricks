@@ -272,11 +272,11 @@ func (c *KeyStoreConfig) SecretFloor() int {
 }
 
 // IsCacheCritical reports whether a failing cache probe should fail /ready with 503.
-// Strict by default: only an explicit cache.critical=false opts out, so an absent key —
-// and a nil receiver, the most absent config there is — stays critical.
+// Non-critical by default (ADR-094): only an explicit cache.critical=true opts into
+// readiness gating, so an absent key — and a nil receiver — leaves the probe informational.
 func (c *Config) IsCacheCritical() bool {
 	if c == nil || c.Cache.Critical == nil {
-		return true
+		return false
 	}
 	return *c.Cache.Critical
 }
@@ -401,7 +401,8 @@ var derivedDefaultKeys = []string{
 //     preloaded key answers a question the operator never answered.
 //   - posture tri-states (cache.critical, server.logroutes, and the keepalive flag under
 //     database.) — nil means "the shipped default", and a derived value writes a concrete
-//     false that silently flips it (ADR-046, ADR-048).
+//     value that erases that state; for logroutes and keepalive a false also silently flips
+//     the posture (ADR-048, ADR-094).
 //   - debug. — its fail-closed check reads the DECODED struct rather than koanf, so deriving
 //     these would hand that posture to whatever normalize fills instead of to the explicit
 //     literals that state it today (which are legitimate and stay).

@@ -234,8 +234,11 @@ func TestHealthDebugKeepsFullCacheErrorWhileReadySanitizes(t *testing.T) {
 	cacheManager := createTestCacheManagerWithGetError(t,
 		cache.NewConnectionError("ping", redisProbeAddress, errors.New(errorRedisDown)))
 
-	cfg := &config.Config{App: config.AppConfig{Name: appName, Env: testName, Version: appVersion}}
-	require.Nil(t, cfg.Cache.Critical, "the strict default is what makes the /ready 503 reachable here")
+	// Only an opted-in cache (ADR-094) makes the /ready 503 reachable here.
+	cfg := &config.Config{
+		App:   config.AppConfig{Name: appName, Env: testName, Version: appVersion},
+		Cache: config.CacheConfig{Critical: new(true)},
+	}
 
 	log := &recLogger{}
 	app := &App{cfg: cfg, logger: log, cacheManager: cacheManager}

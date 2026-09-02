@@ -47,8 +47,8 @@ GoBricks provides Redis-based caching with type-safe serialization, multi-tenant
 cache:
   enabled: true
   type: redis
-  # critical: false       # opt-out only; unset = /ready returns 503 when the cache
-                          # probe errors. Setting false WARNs on every boot.
+  # critical: true        # opt-in; unset (the default) = the cache probe never changes
+                          # the /ready status code (ADR-094)
   manager:
     maxsize: 100          # Max tenant cache instances
     idlettl: 15m          # Idle timeout per cache
@@ -181,7 +181,7 @@ See [ADR-060](adr_060_cache_compare_and_delete.md).
 When `observability.enabled: true`, cache operations automatically emit:
 
 - **Metrics**: `db.client.operation.duration` (histogram, tagged with `error.type` on failure), `cache.hit`/`cache.miss` (counters), `cache.manager.active_caches`, `cache.manager.evictions`, `cache.manager.idle_cleanups`, `cache.manager.total_created`, `cache.manager.errors` — no distributed-tracing spans are emitted today
-- **Health**: A probe registered in the `/ready` probe set whenever the cache manager exists. It leases an instance from the manager (`cacheManager.Get(ctx, "")`) and then calls `Cache.Health(ctx)` on it — under the default connector that is one Redis `PING` on a warm poll and three round trips on a cold one (the construction-time `PING`, the `INFO` version check, then the probe's own `PING`); `Health` is connector-defined, so a custom `Options.CacheConnector` costs whatever its own implementation does, which need not touch the network. Its status is surfaced as the top-level `cache` and `cache_stats` keys in the `/ready` **200** body (a `503` carries only `status`, `cache` and `error`), and it fails `/ready` with `503` by default — `cache.critical: false` opts out and emits a startup WARN. See [Readiness](#readiness) below
+- **Health**: A probe registered in the `/ready` probe set whenever the cache manager exists. It leases an instance from the manager (`cacheManager.Get(ctx, "")`) and then calls `Cache.Health(ctx)` on it — under the default connector that is one Redis `PING` on a warm poll and three round trips on a cold one (the construction-time `PING`, the `INFO` version check, then the probe's own `PING`); `Health` is connector-defined, so a custom `Options.CacheConnector` costs whatever its own implementation does, which need not touch the network. Its status is surfaced as the top-level `cache` and `cache_stats` keys in the `/ready` **200** body (a `503` carries only `status`, `cache` and `error`), and it fails `/ready` with `503` only under `cache.critical: true` — the default is informational (ADR-094). See [Readiness](#readiness) below
 
 ## Readiness
 
@@ -213,25 +213,23 @@ carries `cache` (a status string) alongside `cache_stats` (the manager counters)
 | --------------- | ------ | ------------- | ------ |
 | `healthy` | An instance was leased and its `Health(ctx)` `PING` succeeded; `cache_stats.status` is `healthy` | none | no |
 | `not_configured` | With the default connector and `cache.enabled: false`, nothing can resolve under the probe's fixed `""` key, so the probe reports `not_configured` without attempting a lease; `cache_stats` carries the manager counters with `status` `not_configured`. A custom `Options.CacheConnector` never reads `cache.enabled` and is probed regardless | none | no |
-| `unhealthy` | The lease failed — the manager is closed, or a cold pool tried to build the instance and the construction-time `PING` failed; `cache_stats.status` is `unhealthy` | yes | **yes**, unless `critical: false` |
-| `unhealthy` | The lease succeeded but the per-probe `Health(ctx)` `PING` failed or timed out — a live Redis outage against a warm pool; `cache_stats.status` is `unhealthy` | yes | **yes**, unless `critical: false` |
-| `disabled` | **The manager is nil**, so readiness registers a `disabled` description for the kind (nothing is leased). Since [`[C58.3]`](migrations.md) the framework can no longer reach that state on its own: a cache manager that fails to construct aborts startup instead of leaving a nil behind, so this row now describes only an `App` value assembled directly, without a manager. `cache.enabled: false` does **not** land here — that is `not_configured` above; `cache_stats` is `{"status":"disabled"}` | n/a | no — there is no probe to error, so not under the strict default either |
+| `unhealthy` | The lease failed — the manager is closed, or a cold pool tried to build the instance and the construction-time `PING` failed; `cache_stats.status` is `unhealthy` | yes | only under `critical: true` |
+| `unhealthy` | The lease succeeded but the per-probe `Health(ctx)` `PING` failed or timed out — a live Redis outage against a warm pool; `cache_stats.status` is `unhealthy` | yes | only under `critical: true` |
+| `disabled` | **The manager is nil**, so readiness registers a `disabled` description for the kind (nothing is leased). Since [`[C58.3]`](migrations.md) the framework can no longer reach that state on its own: a cache manager that fails to construct aborts startup instead of leaving a nil behind, so this row now describes only an `App` value assembled directly, without a manager. `cache.enabled: false` does **not** land here — that is `not_configured` above; `cache_stats` is `{"status":"disabled"}` | n/a | no — there is no probe to error, so not even under `critical: true` |
 
-**`cache.critical` (strict by default)**
+**`cache.critical` (non-critical by default)**
 
-- **absent (the default)** — a failing cache probe short-circuits `/ready` with
+- **absent (the default)** — a failing cache probe is reported in the body but never changes
+  the status code: `/ready` stays `200` while the cache is dead, with `cache: "unhealthy"`
+  and a climbing `cache_stats.errors` as the signal (ADR-094). The key is a pointer tri-state
+  and is deliberately **not** registered as a koanf default, so "unset" is a state the
+  framework can tell apart from an explicit value.
+- `true` — a failing cache probe short-circuits `/ready` with
   `503 {"status": "not ready", "cache": "unhealthy", "error": "cache unavailable"}` — no
-  `cache_stats`, and no other component's status. The key is a pointer tri-state and is
-  deliberately **not** registered as a koanf default, so "unset" is a state the framework can
-  tell apart from an explicit value: unset means critical (ADR-046).
-- `false` — a failing cache probe is reported in the body but never changes the status code.
-  Readiness stays green while the cache is dead. Any deployment whose cache probe can
-  actually fail — an enabled cache, or any custom `Options.CacheConnector` — emits a startup
-  WARN on every boot naming the key, the consequence, and the remedy; that
-  WARN is the visible marker of a deliberately weakened readiness posture and is not
-  suppressible.
-- `true` — the same as leaving it unset. Set it explicitly only to state the intent in config
-  review.
+  `cache_stats`, and no other component's status. This is the only way into readiness
+  gating; nothing is derived from the rest of the config.
+- `false` — the same as leaving it unset. Set it explicitly only to state the intent in config
+  review; it emits no WARN.
 
 **What the `503` discloses.** The `error` is the fixed string `cache unavailable`, **not** the
 probe error: the connector error names the Redis host, port and resolved dial IP, and `/ready`
@@ -258,20 +256,21 @@ own construction-time `PING` carries a 5s budget racing the 5s default
 `server.timeout.middleware`, and only then spends the 500ms — so a cold probe can run well
 past 500ms and issue two `PING`s plus the `INFO` version-floor check, not one round trip.
 
-**Choosing a value.** The default is strict, so the decision to make is whether to *opt out*.
-Leave it alone for a service that cannot serve correct results without the cache — a rate
-limiter, a session store, an idempotency ledger — because pulling the pod from the
-load-balancer rotation is preferable to serving wrong answers, and a service that configured
-a cache most likely configured it because it needs one. Set `false` when the cache is an
-optimisation in front of a database that can absorb the miss: a Redis blip would otherwise
-drain every replica from rotation at the same moment, converting a latency regression into an
-outage. That correlated-eviction risk is real and accepted rather than engineered around —
-the mitigation is `readinessProbe.failureThreshold` (see [Wiring Kubernetes
+**Choosing a value.** The default is non-critical, so the decision to make is whether to *opt
+in*. Leave it alone when the cache is an optimisation in front of a database that can absorb
+the miss — the common shape — because a Redis blip under `true` drains every replica from
+rotation at the same moment, converting a latency regression into an outage, and a local or
+CI boot without a Redis would never report Ready. Set `true` for a service that cannot serve
+correct results without the cache — a rate limiter that must fail closed, a session store, an
+idempotency ledger — because pulling the pod from the load-balancer rotation is then
+preferable to serving wrong answers. The correlated-eviction risk that comes with `true` is
+real and accepted rather than engineered around — the mitigation is
+`readinessProbe.failureThreshold` (see [Wiring Kubernetes
 probes](#wiring-kubernetes-probes)), which makes a transient blip cost three consecutive
 failed polls instead of one; GoBricks does not add its own consecutive-failure counter on top
-of the orchestrator's. The opt-out is loud by design: every boot logs the WARN, so a lenient
-readiness posture stays visible in the same place an operator looks for everything else, and
-it is deliberately kept rather than banned (ADR-046).
+of the orchestrator's. Neither value is derived from anything else in the config — a declared
+fallback does not make the cache non-critical, and a missing one does not make it critical
+(ADR-094).
 
 **Probe cost is conditional, not flat.** A `disabled` or `not_configured` deployment issues no
 Redis traffic at all — the first registers no probe, and the second (under the default connector
@@ -291,14 +290,14 @@ When the lease itself fails, none of that happens: on boot with Redis unreachabl
 poll after a failed create, since failed builds are not pooled — `Cache.Health` is never
 reached and **no `db.client.operation.duration` sample is recorded at all**, because the
 construction-time `PING` in `redis.NewClient` is untracked. Do not build the boot-time alert on
-a cache metric; on that path the signal is the probe result itself. Under the strict default
+a cache metric; on that path the signal is the probe result itself. Under `cache.critical: true`
 the `503` body is trimmed to `status`/`cache`/`error` with no `cache_stats`, so the in-body
 signal is gone and what remains is the external prober, the `Readiness check failed` ERROR line
 `readyCheck` logs with the full error, and the cache pre-init WARN (`Builder.performPreInitialization`, over the cache slot) — see [Wiring
-Kubernetes probes](#wiring-kubernetes-probes). Under `cache.critical: false` the `200` body
+Kubernetes probes](#wiring-kubernetes-probes). Under the non-critical default the `200` body
 carries `cache: "unhealthy"` and a climbing `cache_stats.errors` instead, and no readiness
 ERROR is logged — that body is the only in-process signal a warm-pool outage produces, which
-is the cost of opting out.
+is the cost of staying non-critical.
 
 The probe's lease also resets `manager.idlettl` and LRU position for the default (`""`) entry,
 so a continuously polled pod stays on the warm-pool path.
@@ -319,7 +318,7 @@ serving HTTP (`server.healthCheck`), and unlike `/ready` it has no override seam
 are configurable (`server.path.health`, `server.path.ready`) and are prefixed by
 `server.path.base`, so a service on `base: /api/v1` must be probed at `/api/v1/ready`.
 
-Under the strict default the pod never reports Ready while Redis is unreachable: it is kept
+Under `cache.critical: true` the pod never reports Ready while Redis is unreachable: it is kept
 out of the Service endpoints, and a Deployment rollout stalls after taking down at most
 `maxUnavailable` old replicas (25% under the default RollingUpdate strategy). Set
 `maxUnavailable: 0` if you want a rollout during a Redis outage to cost no serving capacity at
@@ -374,9 +373,9 @@ error go now that the response body is sanitized. (A failure that is only the ca
 abandoning its own request is logged at WARN instead, so an aborted probe request cannot mint
 ERROR lines on an unauthenticated endpoint. A custom `Options.CacheConnector`'s error text is
 written to this log verbatim on every failing poll — do not embed a DSN or a password in it.)
-Under the strict default a cache outage therefore produces one ERROR line per poll per
-replica, which is a real volume at `periodSeconds: 10` — alert on it, don't tail it. Setting
-`cache.critical: false` removes that line along with the `503`. Beyond it, which in-process
+Under `cache.critical: true` a cache outage therefore produces one ERROR line per poll per
+replica, which is a real volume at `periodSeconds: 10` — alert on it, don't tail it. The
+non-critical default has neither that line nor the `503`. Beyond it, which in-process
 signal you get depends on where the probe fails:
 
 - **No pooled instance yet** (boot, or after the instance was evicted or idle-cleaned): the
@@ -387,9 +386,9 @@ signal you get depends on where the probe fails:
   same per-poll volume as the readiness line above. (A custom `Options.CacheConnector`
   replaces this logging.)
 - **Instance already pooled and its `PING` fails** (Redis died after a healthy start): the
-  connector logs nothing, so under `cache.critical: false` the only in-process signals are the
-  `db.client.operation.duration` sample described above and the `200` body itself. Under the
-  strict default the `Readiness check failed` ERROR line covers it.
+  connector logs nothing, so under the non-critical default the only in-process signals are the
+  `db.client.operation.duration` sample described above and the `200` body itself. Under
+  `cache.critical: true` the `Readiness check failed` ERROR line covers it.
 
 Readiness itself stays observable through the external prober either way — the Pod's `READY`
 column, the `Unhealthy` kubelet event, `kube_pod_status_ready`. Size

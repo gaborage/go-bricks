@@ -594,7 +594,7 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
 - **Lifecycle Management**: Lazy initialization, LRU eviction (max 100 tenants), idle cleanup (15m default)
 - **Atomic Operations**: `GetOrSet` for deduplication, `CompareAndSet` for distributed locking, `CompareAndDelete` for token-verified release (never a bare `Delete`)
 - **Performance**: <1ms latency for Get/Set, 100k ops/sec throughput
-- **Observability**: OpenTelemetry metrics (no distributed-tracing spans today), plus a `/ready` probe that pings Redis — a **cache** probe failure answers `503` by default, and `cache.critical: false` opts that out (the database probe is critical regardless). See [wiki/cache.md](wiki/cache.md#readiness)
+- **Observability**: OpenTelemetry metrics (no distributed-tracing spans today), plus a `/ready` probe that pings Redis — a **cache** probe failure answers `503` only under `cache.critical: true` (the database probe is critical regardless). See [wiki/cache.md](wiki/cache.md#readiness)
 
 ### Configuration
 
@@ -602,8 +602,8 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
 cache:
   enabled: true
   type: redis
-  # critical: false           # opt-out only; unset = /ready returns 503 when the cache
-                              # probe errors. Setting false WARNs at startup.
+  # critical: true            # opt-in; unset (the default) = the cache probe never changes
+                              # the /ready status code (ADR-094)
   manager:
     maxsize: 100              # Max tenant cache instances (LRU-evicted)
     idlettl: 15m              # Close caches idle longer than this
