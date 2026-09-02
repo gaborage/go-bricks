@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/database/identifier"
 )
 
 func TestPGRoleSpecValidateAccepts(t *testing.T) {
@@ -14,6 +16,8 @@ func TestPGRoleSpecValidateAccepts(t *testing.T) {
 		{Schema: "tenant_a", MigratorRole: "migrator", RuntimeRole: "tenant_a_app"},
 		{Schema: "TenantA", MigratorRole: "Mig", RuntimeRole: "App"},
 		{Schema: "_underscore_start", MigratorRole: "_m", RuntimeRole: "_r"},
+		// PostgreSQL accepts $ after the first byte (#1311).
+		{Schema: "tnz_$a", MigratorRole: "mig$1", RuntimeRole: "app$"},
 		// Boundary: 63-char identifier (NAMEDATALEN-1).
 		{
 			Schema:       strings.Repeat("a", 63),
@@ -91,6 +95,12 @@ func TestPGRoleSpecValidateRejects(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.fieldOrReason)
 		})
 	}
+}
+
+func TestPGRoleSpecValidatePassesIdentifierSentinelThrough(t *testing.T) {
+	err := (&PGRoleSpec{Schema: strings.Repeat("a", 64), MigratorRole: "m", RuntimeRole: "r"}).Validate()
+	require.ErrorIs(t, err, ErrInvalidPGIdentifier)
+	require.ErrorIs(t, err, identifier.ErrIdentifierTooLong)
 }
 
 func TestPGRoleProvisioningSQLRejectsInvalidSpec(t *testing.T) {

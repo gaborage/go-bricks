@@ -84,7 +84,7 @@ func (c *PostgresQuiesceController) timestamp() time.Time {
 
 // CreateTable provisions the quiesce table idempotently.
 func (c *PostgresQuiesceController) CreateTable(ctx context.Context) error {
-	// #nosec G201 -- c.quotedTable is quotePGIdent of a safePGIdentifier-validated
+	// #nosec G201 -- c.quotedTable is quotePGIdent of an identifier.Validate-checked
 	// name captured at construction; no user-controlled value reaches the SQL.
 	stmt := fmt.Sprintf(PostgresQuiesceTableDDL, c.quotedTable)
 	if _, err := c.db.ExecContext(ctx, stmt); err != nil { // NOSONAR S2077: validated identifier substitution; no user input

@@ -190,6 +190,14 @@ where its door validates it against the grammar of its identifier context
 first.
 _Avoid_: column name, field, parameter, identifier (unqualified)
 
+**Bare identifier**:
+An unquoted identifier segment — no dot, alias, or wildcard — validated against
+its vendor's grammar and byte cap wherever it arrives from, whether a builder
+door, a migration config field, or a consumer's secret store. It has no door
+of its own: `database/identifier.Validate` is the one grammar, and every door
+that accepts one composes on it.
+_Avoid_: simple identifier, plain name, unqualified column
+
 **Bound value**:
 A caller-supplied value that reaches the database as a placeholder and never as
 syntax. Naming it apart from an identifier argument is what keeps "this API

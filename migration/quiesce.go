@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gaborage/go-bricks/database/identifier"
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -53,9 +55,10 @@ var ErrInvalidQuiesceTTL = errors.New("migration: quiesce TTL must not be negati
 
 // validateAndQuoteQuiesceTable validates an optionally schema-qualified table
 // name ("schema.table" or "table") — matching the per-table behavior of the
-// provisioning store — by checking each segment against the conservative
-// safePGIdentifier subset and returning the double-quoted form. Returns
-// ErrInvalidQuiesceTable on any violation.
+// provisioning store — by checking each segment with
+// database/identifier.Validate for PostgreSQL and returning the double-quoted
+// form. Returns ErrInvalidQuiesceTable, wrapping the identifier sentinel, on
+// any violation.
 func validateAndQuoteQuiesceTable(name string) (string, error) {
 	parts := strings.Split(name, ".")
 	if len(parts) > 2 {
@@ -63,8 +66,8 @@ func validateAndQuoteQuiesceTable(name string) (string, error) {
 	}
 	quoted := make([]string, len(parts))
 	for i, p := range parts {
-		if !safePGIdentifier.MatchString(p) {
-			return "", fmt.Errorf("%w: %q", ErrInvalidQuiesceTable, name)
+		if err := identifier.Validate(dbtypes.PostgreSQL, p); err != nil {
+			return "", fmt.Errorf("%w: %q: %w", ErrInvalidQuiesceTable, name, err)
 		}
 		quoted[i] = quotePGIdent(p)
 	}

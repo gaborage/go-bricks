@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/gaborage/go-bricks/database/identifier"
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
 // pgPasswordLiteralPattern matches the `PASSWORD 'literal'` clause emitted by
@@ -86,27 +89,24 @@ const (
 	pgRoleFieldRuntimePassword  = "RuntimePassword"
 )
 
-// safePGIdentifier matches the conservative ASCII subset of PostgreSQL
-// identifiers permitted in role and schema names: letters, digits, and
-// underscores, starting with a letter or underscore, up to 63 bytes (the
-// NAMEDATALEN-1 default). Tenant IDs sourced from outside should be
-// normalized to this subset upstream; rejecting at the migration boundary
-// gives a single forcing function rather than scattering input filters.
-var safePGIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`)
-
-// Validate reports whether the spec's identifiers pass the safe-identifier
-// check, the two roles differ, and neither password carries CR, LF, or NUL.
-// Returns ErrInvalidPGIdentifier wrapped with the offending field name (and
-// value) for an identifier failure, or ErrPGRolePasswordHasControlChar wrapped
-// with the offending field name — never the value — for a password failure.
+// Validate reports whether the spec's identifiers pass
+// database/identifier.Validate for PostgreSQL (the shared bare-identifier
+// grammar and 63-byte cap), the two roles differ, and neither password carries
+// CR, LF, or NUL. Tenant IDs sourced from outside should be normalized to that
+// grammar upstream; rejecting at the migration boundary gives a single forcing
+// function rather than scattering input filters.
+// Returns ErrInvalidPGIdentifier wrapped with the offending field name, value
+// and the identifier sentinel for an identifier failure, or
+// ErrPGRolePasswordHasControlChar wrapped with the offending field name —
+// never the value — for a password failure.
 func (s *PGRoleSpec) Validate() error {
 	for _, f := range []struct{ name, value string }{
 		{pgRoleFieldSchema, s.Schema},
 		{pgRoleFieldMigratorRole, s.MigratorRole},
 		{pgRoleFieldRuntimeRole, s.RuntimeRole},
 	} {
-		if !safePGIdentifier.MatchString(f.value) {
-			return fmt.Errorf("%w: %s=%q", ErrInvalidPGIdentifier, f.name, f.value)
+		if err := identifier.Validate(dbtypes.PostgreSQL, f.value); err != nil {
+			return fmt.Errorf("%w: %s=%q: %w", ErrInvalidPGIdentifier, f.name, f.value, err)
 		}
 	}
 	if s.MigratorRole == s.RuntimeRole {
@@ -265,7 +265,7 @@ END $$`, quotedIdent, lockdownAttrs),
 }
 
 // quotePGIdent returns the PostgreSQL-safe quoted form of ident. Callers must
-// have verified ident via safePGIdentifier or PGRoleSpec.Validate first;
+// have verified ident via identifier.Validate or PGRoleSpec.Validate first;
 // the double-quote escaping here is belt-and-suspenders for the (regex-
 // rejected) embedded-quote case.
 func quotePGIdent(ident string) string {
