@@ -85,6 +85,15 @@ func (c *Config) Validate() error {
 		return cache.NewConfigError("redis.write_timeout", "write timeout cannot be less than -1", nil)
 	}
 
+	// Zero stays valid: it means "unset", and LoadThrough then uses its own fallback. A
+	// negative is rejected here because a hand-built Config never passes through the config
+	// layer's cache.loadtimeout normalization, and LoadThrough treats a non-positive value
+	// as "not configured" — so without this the operator's value would be silently ignored
+	// rather than corrected or refused.
+	if c.LoadTimeout < 0 {
+		return cache.NewConfigError("redis.load_timeout", "load timeout cannot be negative", nil)
+	}
+
 	return nil
 }
 

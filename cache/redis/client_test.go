@@ -540,6 +540,42 @@ func TestConfigValidate(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid pool size")
 	})
+
+	// A hand-built Config never passes through the config layer's cache.loadtimeout
+	// normalization, and cache.LoadThrough reads a non-positive value as "not configured"
+	// and uses its own fallback. Without this guard the operator's value would be silently
+	// ignored, so zero (meaning unset) stays valid while a negative is refused.
+	t.Run("LoadTimeout", func(t *testing.T) {
+		tests := []struct {
+			name        string
+			loadTimeout time.Duration
+			wantErr     bool
+		}{
+			{name: "zero_means_unset", loadTimeout: 0},
+			{name: "positive_is_accepted", loadTimeout: 250 * time.Millisecond},
+			{name: "negative_is_rejected", loadTimeout: -time.Millisecond, wantErr: true},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				cfg := &Config{
+					Host:        "localhost",
+					Port:        6379,
+					PoolSize:    10,
+					LoadTimeout: tt.loadTimeout,
+				}
+
+				err := cfg.Validate()
+				if !tt.wantErr {
+					assert.NoError(t, err)
+					return
+				}
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "redis.load_timeout")
+				assert.Contains(t, err.Error(), "cannot be negative")
+			})
+		}
+	})
 }
 
 // TestConfigAddress tests the Address method of the Config struct.
