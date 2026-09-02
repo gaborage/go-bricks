@@ -1416,7 +1416,7 @@ an explicit `false` is a decision, not a smell — the WARN is deleted. The tri-
 registered default stays (a registered default would collapse absent and explicit; the type is not
 narrowed to `bool`, which would break hand-built configs for nothing), as does ADR-048's sanitized
 `503` body for the opted-in case. Deriving criticality from a declared fallback was considered and
-rejected as implicit. Migration: `[C62.1]`.
+rejected as implicit. Migration: `[C62.2]`.
 
 **Key Benefits:** a Redis outage degrades the service instead of evicting the fleet; a boot without
 Redis reports ready; the deployment that needs the `503` says so in one greppable line, and the one

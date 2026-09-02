@@ -77,7 +77,7 @@ the readiness docs.
 - **Behavior change, silent.** A cache-enabled deployment relying on the
   v0.56.0–v0.61.0 default to leave rotation during a Redis outage stays in
   rotation after the bump. It must set `critical: true`, which is a no-op on
-  v0.61.0 and can ship ahead — `[C62.1]` in [migrations.md](migrations.md).
+  v0.61.0 and can ship ahead — `[C62.2]` in [migrations.md](migrations.md).
 - **Alerts on the deleted WARN line** (`cache.critical is explicitly false`) stop
   firing.
 - **ADR-046's disclosure argument is moot** — the strict default was what made the
