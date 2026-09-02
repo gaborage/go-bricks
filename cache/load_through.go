@@ -16,9 +16,15 @@ import (
 // so the origin still receives that context untouched.
 const DefaultLoadCacheTimeout = 500 * time.Millisecond
 
-// ErrInvalidCacheTimeout is returned by LoadThrough when WithCacheTimeout was given a
-// non-positive duration.
-var ErrInvalidCacheTimeout = errors.New("cache: load-through cache timeout must be positive")
+var (
+	// ErrInvalidCacheTimeout is returned by LoadThrough when WithCacheTimeout was given a
+	// non-positive duration.
+	ErrInvalidCacheTimeout = errors.New("cache: load-through cache timeout must be positive")
+
+	// ErrNilCache is returned by LoadThrough when the Cache is nil, including a typed nil
+	// behind the interface.
+	ErrNilCache = errors.New("cache: load-through requires a non-nil cache")
+)
 
 // Loader produces the value for a key from the origin when the cache cannot serve it. It
 // receives the LoadThrough caller's context untouched.
@@ -45,8 +51,10 @@ func WithCacheTimeout(d time.Duration) LoadOption {
 // never stores a nil result, and concurrent misses for one cache instance, key and T
 // collapse into a single loader call whose live followers refill rather than inherit the
 // leader's cancellation. A loader panic becomes an error naming only the panic value's
-// type (ADR-081). ttl < 0 returns ErrInvalidTTL and a non-positive WithCacheTimeout
-// returns ErrInvalidCacheTimeout before any cache or origin call.
+// type (ADR-081); a loaded value that cannot be CBOR-encoded fails the call with the
+// Marshal error. A nil c returns ErrNilCache, ttl < 0 returns ErrInvalidTTL and a
+// non-positive WithCacheTimeout returns ErrInvalidCacheTimeout, all before any cache or
+// origin call.
 //
 // See wiki/cache.md#load-through-reads for the full contract and the cache.fill.duration
 // metric each fill records.
@@ -61,6 +69,9 @@ func LoadThrough[T any](ctx context.Context, c Cache, key string, ttl time.Durat
 	}
 	if ttl < 0 {
 		return zero, ErrInvalidTTL
+	}
+	if isNilValue(c) {
+		return zero, ErrNilCache
 	}
 
 	if v, ok := lookup[T](ctx, c, key, cfg.cacheTimeout); ok {
@@ -179,12 +190,20 @@ func fill[T any](ctx context.Context, c Cache, key string, ttl time.Duration, lo
 }
 
 // lead runs the loader for this caller and schedules the write-back of a storable result.
+// The value is encoded here, before it is returned: the caller owns v from then on, so the
+// detached goroutine must not read it.
 func lead[T any](ctx context.Context, c Cache, key string, ttl time.Duration, load Loader[T], timeout time.Duration) (T, error) {
 	v, err := runLoader(ctx, key, load)
-	if err == nil && !isNilValue(v) {
-		go writeBack(ctx, c, key, v, ttl, timeout)
+	if err != nil || isNilValue(v) {
+		return v, err
 	}
-	return v, err
+	data, err := Marshal(v)
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	go writeBack(ctx, c, key, data, ttl, timeout)
+	return v, nil
 }
 
 // runLoader converts a loader panic into an error that names only the panic value's type
@@ -205,13 +224,9 @@ func runLoader[T any](ctx context.Context, key string, load Loader[T]) (v T, err
 	return v, err
 }
 
-// writeBack stores v on a context detached from the caller's cancellation and bounded by
-// timeout. Failures are dropped: the cache client's own operation metrics carry them.
-func writeBack[T any](ctx context.Context, c Cache, key string, v T, ttl, timeout time.Duration) {
-	data, err := Marshal(v)
-	if err != nil {
-		return
-	}
+// writeBack stores data on a context detached from the caller's cancellation and bounded
+// by timeout. A Set failure is dropped: the cache client's own operation metrics carry it.
+func writeBack(ctx context.Context, c Cache, key string, data []byte, ttl, timeout time.Duration) {
 	wbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
 	_ = c.Set(wbCtx, key, data, ttl)

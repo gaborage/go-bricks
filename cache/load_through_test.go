@@ -416,6 +416,35 @@ func TestLoadThroughRejectsInvalidArguments(t *testing.T) {
 	}
 }
 
+func TestLoadThroughRejectsNilCache(t *testing.T) {
+	tests := []struct {
+		name string
+		c    cache.Cache
+	}{
+		{name: "nil_interface", c: nil},
+		{name: "typed_nil", c: (*cachetest.MockCache)(nil)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			load, calls := ltCountingLoader(ltAlice)
+			_, err := cache.LoadThrough(t.Context(), tt.c, ltKey, ltTTL, load)
+			assert.ErrorIs(t, err, cache.ErrNilCache)
+			assert.Zero(t, calls.Load(), "a nil cache must fail before the origin is consulted")
+		})
+	}
+}
+
+func TestLoadThroughFailsWhenTheLoadedValueCannotBeEncoded(t *testing.T) {
+	mock := cachetest.NewMockCache()
+	type unencodable struct{ F func() }
+	load := func(context.Context) (unencodable, error) { return unencodable{F: func() {}}, nil }
+
+	_, err := cache.LoadThrough(t.Context(), mock, ltKey, ltTTL, load)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cbor marshal failed")
+	require.Never(t, func() bool { return mock.OperationCount("Set") > 0 }, 100*time.Millisecond, ltWaitTick)
+}
+
 // ltFillCounts sums cache.fill.duration data-point counts by the cache.collapsed attribute.
 func ltFillCounts(t *testing.T, rm metricdata.ResourceMetrics) map[string]uint64 {
 	t.Helper()
