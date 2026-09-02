@@ -103,10 +103,10 @@ database:
 cache:
   enabled: false                    # Enable/disable cache functionality
   type: redis                        # Cache backend type (currently only "redis" supported)
-  # critical: false                  # OPT-OUT ONLY. Unset (the default) = /ready answers 503 when the
-                                     # cache probe errors. Set false only when the cache is an
-                                     # optimisation the service can serve without — it emits a startup
-                                     # WARN every boot, because a dead cache then still reports ready.
+  # critical: true                   # OPT-IN. Unset (the default) = the cache probe is informational:
+                                     # /ready reports it in the body and stays 200 while the cache is
+                                     # down. Set true only when the service cannot serve correctly
+                                     # without its cache — a Redis outage then answers 503 on every replica.
   redis:
     host: localhost                  # Redis server hostname
     port: 6379                       # Redis server port

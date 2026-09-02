@@ -261,7 +261,7 @@ func messagingProbe(m *messaging.Manager, perTenant bool) probeDescription {
 	}
 }
 
-// cacheProbe describes the cache kind: critical per config (ADR-046), absent when the ""
+// cacheProbe describes the cache kind: critical per config (ADR-094), absent when the ""
 // key can never resolve (rootCacheAbsent), live when a bounded PING of the leased instance
 // passes — a pooled instance is returned without a round trip, so it is pinged explicitly.
 func cacheProbe(m *cache.CacheManager, critical, absent, perTenant bool) probeDescription {

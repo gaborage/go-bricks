@@ -228,8 +228,8 @@ func TestLoadRejectsEmptyBoolEnv(t *testing.T) {
 		// The headline case: keep-alive defaults to TRUE, so an empty value was a
 		// silent default flip, not merely a redundant zero.
 		{name: "database_pool_keepalive_enabled", envVar: "DATABASE_POOL_KEEPALIVE_ENABLED", wantKey: "database.pool.keepalive.enabled"},
-		// ADR-046's strict readiness: *false makes a failing cache probe non-fatal, so /ready
-		// answered 200 straight through a Redis outage.
+		// cache.critical: since ADR-094 a decoded false coincides with the shipped default, so
+		// this pins the delivered-empty rule itself rather than a posture flip.
 		{name: "cache_critical", envVar: "CACHE_CRITICAL", wantKey: "cache.critical"},
 		{name: "server_logroutes", envVar: "SERVER_LOGROUTES", wantKey: "server.logroutes"},
 		// A non-pointer bool is guarded too: false is its zero, so the flip is
@@ -274,7 +274,7 @@ func TestLoadExplicitBoolEnvUnchanged(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, cfg.Cache.Critical)
-		assert.False(t, cfg.IsCacheCritical(), "an explicit false is still the documented way to make the probe non-fatal")
+		assert.False(t, cfg.IsCacheCritical(), "an explicit false still decodes as a concrete value, not absence")
 	})
 
 	// Both keep-alive cases need a real database section: nil -> true normalization runs
@@ -325,13 +325,13 @@ func TestLoadEmptyBoolYAMLStringRejected(t *testing.T) {
 // TestLoadYAMLNullBoolKeepsTodaysDecode pins the boundary ADR-077 deliberately does NOT
 // cover, matching ADR-074's: a YAML null is different plumbing — koanf delivers a nil
 // value, not the "" the guard judges — so the key still decodes as absent and the cache
-// probe stays strict.
+// probe keeps the non-critical default.
 func TestLoadYAMLNullBoolKeepsTodaysDecode(t *testing.T) {
 	cfg, err := loadDeliveredEmptyFixture(t, "cache:\n  critical:\n", nil)
 
 	require.NoError(t, err)
 	assert.Nil(t, cfg.Cache.Critical)
-	assert.True(t, cfg.IsCacheCritical(), "a null key is absence, so the strict default still applies")
+	assert.False(t, cfg.IsCacheCritical(), "a null key is absence, so the non-critical default still applies")
 }
 
 // TestLoadEmptyDurationEnvKeepsItsOwnError pins the guard's one exemption: time.Duration
@@ -573,17 +573,11 @@ func TestLoadDefaultsInternalFunction(t *testing.T) {
 	// KeyStore symmetric-secret floor defaults to 32 bytes.
 	assert.Equal(t, DefaultKeyStoreSecretMinLength, k.Int("keystore.secretminlength"))
 
-	// Cache readiness criticality is strict by default, so the key must stay unregistered:
-	// a default would populate the pointer and erase the absent-vs-explicit-false distinction
-	// that Config.IsCacheCritical (and its startup opt-out WARN) depend on.
+	// cache.critical stays unregistered: a registered default would populate the pointer and
+	// erase the absent-vs-explicit distinction the tri-state keeps for readers (ADR-094).
 	assert.False(t, k.Exists("cache.critical"), "cache.critical must NOT be a registered default")
 }
 
-// TestIsCacheCriticalTriState drives both the parsed pointer and the accessor through the
-// real koanf load path rather than a Go struct literal: a literal would prove nothing about
-// whether an absent YAML key still reaches IsCacheCritical as nil. The sibling
-// `cache.enabled` assertion proves the block actually parsed, so a case cannot pass on Go's
-// zero value alone.
 func TestKeyStoreSecretFloorTriState(t *testing.T) {
 	var nilCfg *KeyStoreConfig
 	assert.Equal(t, DefaultKeyStoreSecretMinLength, nilCfg.SecretFloor())
@@ -605,6 +599,11 @@ func TestKeyStoreSecretFloorTriState(t *testing.T) {
 	}
 }
 
+// TestIsCacheCriticalTriState drives both the parsed pointer and the accessor through the
+// real koanf load path rather than a Go struct literal: a literal would prove nothing about
+// whether an absent YAML key still reaches IsCacheCritical as nil. The sibling
+// `cache.enabled` assertion proves the block actually parsed, so a case cannot pass on Go's
+// zero value alone.
 func TestIsCacheCriticalTriState(t *testing.T) {
 	const yamlEnabled = "cache:\n  enabled: true\n"
 
@@ -616,10 +615,10 @@ func TestIsCacheCriticalTriState(t *testing.T) {
 		expected      bool
 		expectEnabled bool
 	}{
-		{name: "key_absent_is_strict", yaml: yamlEnabled, expected: true, expectEnabled: true},
-		{name: "no_cache_block_at_all_is_strict", expected: true},
-		{name: "yaml_false_opts_out", yaml: yamlEnabled + "  critical: false\n", expectedPtr: new(false), expected: false, expectEnabled: true},
-		{name: "yaml_true_is_strict", yaml: yamlEnabled + "  critical: true\n", expectedPtr: new(true), expected: true, expectEnabled: true},
+		{name: "key_absent_is_non_critical", yaml: yamlEnabled, expected: false, expectEnabled: true},
+		{name: "no_cache_block_at_all_is_non_critical", expected: false},
+		{name: "yaml_false_is_non_critical", yaml: yamlEnabled + "  critical: false\n", expectedPtr: new(false), expected: false, expectEnabled: true},
+		{name: "yaml_true_opts_in", yaml: yamlEnabled + "  critical: true\n", expectedPtr: new(true), expected: true, expectEnabled: true},
 		{name: "env_true_parses_without_yaml", env: "true", expectedPtr: new(true), expected: true},
 		{name: "env_false_overrides_yaml_true", yaml: yamlEnabled + "  critical: true\n", env: "false", expectedPtr: new(false), expected: false, expectEnabled: true},
 		{name: "env_true_overrides_yaml_false", yaml: yamlEnabled + "  critical: false\n", env: "true", expectedPtr: new(true), expected: true, expectEnabled: true},
@@ -643,7 +642,7 @@ func TestIsCacheCriticalTriState(t *testing.T) {
 			cfg, err := Load()
 			require.NoError(t, err)
 			if tc.expectedPtr == nil {
-				assert.Nil(t, cfg.Cache.Critical, "absent key must stay nil so IsCacheCritical defaults strict")
+				assert.Nil(t, cfg.Cache.Critical, "absent key must stay nil so IsCacheCritical reads the default")
 			} else {
 				require.NotNil(t, cfg.Cache.Critical)
 				assert.Equal(t, *tc.expectedPtr, *cfg.Cache.Critical)
@@ -653,11 +652,10 @@ func TestIsCacheCriticalTriState(t *testing.T) {
 		})
 	}
 
-	t.Run("nil_receiver_is_strict", func(t *testing.T) {
+	t.Run("nil_receiver_is_non_critical", func(t *testing.T) {
 		var cfg *Config
-		assert.True(t, cfg.IsCacheCritical(),
-			"a nil config is the most absent config there is; returning false here would make "+
-				"the lenient posture reachable without anyone asking for it")
+		assert.False(t, cfg.IsCacheCritical(),
+			"a nil config is the most absent config there is; readiness gating is opt-in only")
 	})
 }
 

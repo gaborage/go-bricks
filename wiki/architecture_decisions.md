@@ -769,7 +769,7 @@ files and nine `CacheManager` type references.
 
 ### [ADR-046: Cache Readiness Is Strict by Default, with a Visible Opt-Out](adr_046_cache_readiness_strict_default.md)
 
-**Date:** 2026-08-04 | **Status:** Accepted
+**Date:** 2026-08-04 | **Status:** Superseded in part by [ADR-094](adr_094_cache_readiness_non_critical_default.md) — the default is reversed; the tri-state key, the opt line and the sanitized `503` stand
 
 Flips `cache.critical` from opt-in to strict: an absent key now means the cache probe is
 critical, so a cache-enabled service answers `/ready` with `503` while Redis is unreachable
@@ -1399,6 +1399,28 @@ sixteen `app` symbols nothing outside `app/` referenced (`MessagingInitializer` 
 `ConnectionPreWarmer` and their methods, `Options.Database`, `Options.MessagingClient`) and
 unexports eight debug response types with their JSON unchanged. See
 [migrations.md](migrations.md) `[C60.4]`.
+
+---
+
+### [ADR-094: Cache Readiness Is Non-Critical by Default; `critical: true` Opts In](adr_094_cache_readiness_non_critical_default.md)
+
+**Date:** 2026-09-01 | **Status:** Accepted | **Supersedes in part:** ADR-046 | **Breaking:** an absent `cache.critical` no longer fails `/ready` during a Redis outage
+
+Reverses ADR-046's default. Four weeks of the strict posture showed the cost landing on the common
+shape — a cache in front of an origin the service can still serve from — where one Redis blip became
+a fleet-wide `/ready` `503` (every replica leaving the endpoints at once) and every local or CI boot
+without a Redis failed readiness; the deployment that opted out paid an unsuppressible WARN on every
+boot for the safer choice. An absent key now leaves the probe informational (`cache: "unhealthy"` in
+the `200` body, no `503`, no ERROR line), `critical: true` is the only way into readiness gating, and
+an explicit `false` is a decision, not a smell — the WARN is deleted. The tri-state `*bool` with no
+registered default stays (a registered default would collapse absent and explicit; the type is not
+narrowed to `bool`, which would break hand-built configs for nothing), as does ADR-048's sanitized
+`503` body for the opted-in case. Deriving criticality from a declared fallback was considered and
+rejected as implicit. Migration: `[C62.2]`.
+
+**Key Benefits:** a Redis outage degrades the service instead of evicting the fleet; a boot without
+Redis reports ready; the deployment that needs the `503` says so in one greppable line, and the one
+that does not is no longer told off for it.
 
 ---
 
@@ -2046,7 +2068,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-093) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-094) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

@@ -847,7 +847,8 @@ func TestReadyCheckDowngradesCallerCancellationLog(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := &config.Config{App: config.AppConfig{Name: testApp}}
+			// Only a critical failure reaches the 503 and the log line under test (ADR-094).
+			cfg := &config.Config{App: config.AppConfig{Name: testApp}, Cache: config.CacheConfig{Critical: new(true)}}
 			rec := &recLogger{}
 			app := &App{cfg: cfg, logger: rec, cacheManager: createTestCacheManagerWithGetError(t, tc.probeErr)}
 			app.installSlots(slotInputs{})
