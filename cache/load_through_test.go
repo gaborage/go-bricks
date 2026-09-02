@@ -526,6 +526,9 @@ func TestLoadThroughRecordsFillDurationByRole(t *testing.T) {
 	require.NoError(t, (<-leader).err)
 	assert.Equal(t, map[string]uint64{"leader": 1, "follower": followers}, ltFillCounts(t, mp.Collect(t)))
 
+	// The write-back is asynchronous, so wait for the fill to land: a call that raced it
+	// would miss and record a second fill, which is what this assertion must not see.
+	require.Eventually(t, func() bool { return mock.Has(ltKey) }, ltWaitFor, ltWaitTick)
 	_, err := cache.LoadThrough(t.Context(), mock, ltKey, ltTTL, load)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]uint64{"leader": 1, "follower": followers}, ltFillCounts(t, mp.Collect(t)), "a hit records no fill")
