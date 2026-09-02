@@ -244,7 +244,7 @@ func normalizeIANATimezone(field, value string) (string, error) {
 	if value == localTimezoneLiteral {
 		return value, NewInvalidFieldError(
 			field,
-			`timezone "Local" is not accepted; use "-" to opt into host-local time`,
+			`timezone "Local" is not accepted; use "-" for the documented opt-out or an explicit IANA zone`,
 			timezoneValidOptions,
 		)
 	}

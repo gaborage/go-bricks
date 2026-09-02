@@ -32,7 +32,7 @@ those fail as unknown zones already.
 
 The shared normalizer refuses exact `Local` before the `LoadLocation` probe, on every key it
 serves, with a `*ConfigError` whose `Field` is the key and whose message steers to the
-documented form: `timezone "Local" is not accepted; use "-" to opt into host-local time`. The
+documented form: `timezone "Local" is not accepted; use "-" for the documented opt-out or an explicit IANA zone`. The
 `Action` is the valid-options list every other timezone rejection renders.
 
 Nothing else moves. `"-"`, `UTC`, empty and every IANA name normalize as before; what `"-"`

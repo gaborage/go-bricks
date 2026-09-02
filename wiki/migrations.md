@@ -6418,8 +6418,8 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 ### [C62.1] the literal `Local` timezone is refused · breaking · when: match
 
-- detect: `git grep -nE 'timezone: *"?Local"?' -- '*.yaml' '*.yml'` for YAML, and
-  `git grep -nE 'TIMEZONE=+"?Local"?' -- '*.env' '*.yaml' '*.yml' '*.sh'` for the env spelling
+- detect: `git grep -nE "timezone: *[\"']?Local[\"']?" -- '*.yaml' '*.yml'` for YAML, and
+  `git grep -nE "TIMEZONE=+[\"']?Local[\"']?" -- '*.env' '*.yaml' '*.yml' '*.sh'` for the env spelling
   (`SCHEDULER_TIMEZONE`, `DATABASE_TIMEZONE`, `DATABASES_<NAME>_TIMEZONE`,
   `MULTITENANT_TENANTS_<ID>_DATABASE_TIMEZONE`), and `git grep -nE 'Timezone: *"Local"' -- '*.go'`
   for a hand-built `config.Config`. The value also arrives from Helm, Vault, AWS Secrets
@@ -6429,21 +6429,26 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `multitenant.tenants.<id>.database.timezone`, at `config.Validate` and at the runtime door
   (`ApplyDatabasePoolDefaultsForKey`, which the `go-bricks-migrate` CLI and a dynamic
   `DBConfigProvider` go through). Exact `Local` returns a `*ConfigError` whose `Field` is the
-  key and whose message reads `timezone "Local" is not accepted; use "-" to opt into host-local
-  time`; the `Action` is the existing valid-options list. `"-"`, `UTC`, empty (defaulted to
+  key and whose message reads `timezone "Local" is not accepted; use "-" for the documented
+  opt-out or an explicit IANA zone`; the `Action` is the existing valid-options list. `"-"`, `UTC`, empty (defaulted to
   `UTC`) and every IANA name are unchanged, and so is what `"-"` means at runtime. `local` and
   `LOCAL` fail as they did, as unknown zones — only the exact spelling was ever special-cased.
   `scheduler.Module.Init` does not re-check: it requires a `config.Validate`-normalized config
   (ADR-075), so a hand-assembled `ModuleDeps` around an unvalidated config is not covered.
 - gate: match = any timezone key delivered as exactly `Local`, in-repo or from an env/secret
   source. no-match = every timezone value is `"-"`, unset, `UTC` or an IANA name.
-- apply: if host-local was the intent, write `"-"` (quoted, as every example in the wiki spells
-  it); if it was not, write the IANA zone the deployment actually wants. On a database key read
-  ADR-016 first: `"-"` leaves the session on the SERVER's default zone, which is not what `Local`
-  gave you, so a deployment that relied on the application host's zone names that zone
-  explicitly.
-- verify: startup fails naming the key while the value is in place; with `"-"` it starts.
-  `go test ./config/ -run 'Timezone|LiteralLocal'` covers both sections.
+- apply: on `scheduler.timezone`, write `"-"` (quoted, as every example in the wiki spells it)
+  if host-local was the intent, or the IANA zone otherwise. On a database key `"-"` is NOT
+  host-local: it leaves the session on the SERVER's default zone (ADR-016). Write `"-"` there
+  only if that is what you want; if `Local` was giving you the application host's zone, write
+  that zone as an explicit IANA name.
+- verify: the failure point differs by path, so probe each one you run. A static config fails at
+  STARTUP with a `*ConfigError` naming the key. A dynamic `DBConfigProvider` record fails at that
+  tenant's FIRST acquisition, addressed `multitenant.tenants.<id>.database.timezone` (ADR-076) —
+  a green boot says nothing about it, so exercise the tenant. The migrate CLI refuses the tenant
+  before dialing (`go-bricks-migrate info` per tenant is the cheap probe). With `"-"` or an IANA
+  zone in place, each path proceeds. `go test ./config/ -run 'Timezone|LiteralLocal'` covers both
+  sections.
 - ref: gaborage/go-bricks#1292 · [ADR-093](adr_093_reject_literal_local_timezone.md) ·
   `config/defaults.go`
 
