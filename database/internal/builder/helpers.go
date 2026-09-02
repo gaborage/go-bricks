@@ -43,13 +43,11 @@ func valuesByKeyOrder(m map[string]any, keys []string) []any {
 }
 
 // valueCell prepares one SET/VALUES cell for squirrel. A dbtypes.RawExpression
-// is validated here — it is a plain struct, so a literal can reach this door
-// without passing Expr() — and spliced verbatim as a squirrel expression, so no
-// placeholder and no argument is emitted for that cell; any other value is
-// returned untouched and stays parameterized (#1318). An alias is rejected
-// first: a SET or VALUES cell projects nothing, so it would be dropped silently.
+// is validated here — a plain struct can reach this door without passing
+// Expr() — and spliced as squirrel.Expr so no placeholder or argument is
+// emitted; the alias is judged first because a SET or VALUES cell projects
+// nothing. Any other value is returned untouched and stays parameterized.
 // The label names the column or one-based position in the deferred error.
-// Audit the SQL body as raw SQL: `git grep -nE 'MustExpr\(|[.]Expr\('`.
 func valueCell(label string, value any) (any, error) {
 	expr, ok := value.(dbtypes.RawExpression)
 	if !ok {
@@ -64,18 +62,33 @@ func valueCell(label string, value any) (any, error) {
 	return squirrel.Expr(expr.SQL), nil
 }
 
-// valueCells applies valueCell to every cell, labeling each by its one-based
-// position.
-func valueCells(values []any) ([]any, error) {
-	out := make([]any, len(values))
+// valueCells applies valueCell to every cell, copying the slice on the first
+// RawExpression so a caller's variadic slice is never rewritten; label is
+// called only on the error path.
+func valueCells(values []any, label func(i int) string) ([]any, error) {
+	out := values
 	for i, v := range values {
-		cell, err := valueCell(fmt.Sprintf("value position %d", i+1), v)
+		if _, ok := v.(dbtypes.RawExpression); !ok {
+			continue
+		}
+		cell, err := valueCell(label(i), v)
 		if err != nil {
 			return nil, err
+		}
+		if len(out) == len(values) && &out[0] == &values[0] {
+			out = append([]any(nil), values...)
 		}
 		out[i] = cell
 	}
 	return out, nil
+}
+
+// positionLabel labels a VALUES cell by its one-based position.
+func positionLabel(i int) string { return fmt.Sprintf("value position %d", i+1) }
+
+// keyLabel labels a SetMap cell by the caller's column key.
+func keyLabel(keys []string) func(int) string {
+	return func(i int) string { return keys[i] }
 }
 
 // upsertColumn pairs a caller's key with the normalized spelling the statement

@@ -1313,19 +1313,24 @@ func (uqb *UpdateQueryBuilder) SetMap(clauses map[string]any) dbtypes.UpdateQuer
 	// Sorted so that WHICH invalid column is reported is deterministic when several
 	// are invalid, as InsertQueryBuilder.SetMap already does. This is the reported
 	// error only — the rendered SET order is squirrel's and is untouched (#1185).
-	for _, k := range sortedKeys(clauses) {
+	keys := sortedKeys(clauses)
+	quotedKeys := make([]string, len(keys))
+	for i, k := range keys {
 		// Validated by the column funnel, as every other column door is.
 		quoted, quoteErr := uqb.qb.quoteColumnForQuery(k)
 		if quoteErr != nil {
 			uqb.failClause(quoteErr)
 			return uqb
 		}
-		cell, cellErr := valueCell(k, clauses[k])
-		if cellErr != nil {
-			uqb.failClause(cellErr)
-			return uqb
-		}
-		quotedClauses[quoted] = cell
+		quotedKeys[i] = quoted
+	}
+	values, err := valueCells(valuesByKeyOrder(clauses, keys), keyLabel(keys))
+	if err != nil {
+		uqb.failClause(err)
+		return uqb
+	}
+	for i, quoted := range quotedKeys {
+		quotedClauses[quoted] = values[i]
 	}
 	uqb.updateBuilder = uqb.updateBuilder.SetMap(quotedClauses)
 	return uqb
@@ -1484,10 +1489,8 @@ func (iqb *InsertQueryBuilder) Columns(columns ...string) dbtypes.InsertQueryBui
 	return iqb
 }
 
-// Values appends one row. A dbtypes.RawExpression cell is validated and spliced
-// inline (see valueCell); every other cell is parameterized.
 func (iqb *InsertQueryBuilder) Values(values ...any) dbtypes.InsertQueryBuilder {
-	cells, err := valueCells(values)
+	cells, err := valueCells(values, positionLabel)
 	if err != nil {
 		iqb.failClause(err)
 		return iqb
@@ -1514,14 +1517,10 @@ func (iqb *InsertQueryBuilder) SetMap(clauses map[string]any) dbtypes.InsertQuer
 	// NORMALIZED names; values follow the caller's own keys, so two keys that
 	// differ only in padding stay two columns and the database reports the
 	// duplicate rather than one value being silently dropped.
-	values := valuesByKeyOrder(clauses, keys)
-	for i, k := range keys {
-		cell, cellErr := valueCell(k, values[i])
-		if cellErr != nil {
-			iqb.failClause(cellErr)
-			return iqb
-		}
-		values[i] = cell
+	values, err := valueCells(valuesByKeyOrder(clauses, keys), keyLabel(keys))
+	if err != nil {
+		iqb.failClause(err)
+		return iqb
 	}
 	iqb.insertBuilder = iqb.insertBuilder.
 		Columns(iqb.qb.quoteColumnsForDML(normalized...)...).

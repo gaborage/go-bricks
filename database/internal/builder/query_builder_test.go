@@ -3409,7 +3409,6 @@ func TestSelectQueryBuilderHavingStringUnchanged(t *testing.T) {
 // splice a RawExpression verbatim, with no placeholder and no argument, on
 // both vendors, while every other value stays parameterized in order.
 func TestValueDoorsRenderRawExpressionInline(t *testing.T) {
-	now := dbtypes.MustExpr("now()")
 	vendors := []struct {
 		name   string
 		vendor string
@@ -3421,6 +3420,7 @@ func TestValueDoorsRenderRawExpressionInline(t *testing.T) {
 	for _, v := range vendors {
 		t.Run(v.name, func(t *testing.T) {
 			qb := NewQueryBuilder(v.vendor)
+			now := qb.MustExpr("now()")
 
 			t.Run("update_set", func(t *testing.T) {
 				sql, args, err := qb.Update(tableUsers).Set(colName, testJohn).Set("updated_at", now).Set("age", 30).ToSQL()
@@ -3449,6 +3449,13 @@ func TestValueDoorsRenderRawExpressionInline(t *testing.T) {
 				assert.Equal(t, "INSERT INTO users (name,updated_at) VALUES ("+v.p1+",now())", sql)
 				assert.Equal(t, []any{testJohn}, args)
 			})
+
+			t.Run("values_leaves_caller_slice_untouched", func(t *testing.T) {
+				row := []any{1, now}
+				_, _, err := qb.Insert(tableUsers).Columns("id", "updated_at").Values(row...).ToSQL()
+				require.NoError(t, err)
+				assert.Equal(t, []any{1, now}, row)
+			})
 		})
 	}
 }
@@ -3459,7 +3466,7 @@ func TestValueDoorsRenderRawExpressionInline(t *testing.T) {
 func TestValueDoorsRejectInvalidRawExpression(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 	empty := dbtypes.RawExpression{}
-	aliased := dbtypes.MustExpr("now()", "ts")
+	aliased := qb.MustExpr("now()", "ts")
 
 	cases := []struct {
 		name    string
@@ -3487,11 +3494,23 @@ func TestValueDoorsRejectInvalidRawExpression(t *testing.T) {
 		{"insert_setmap_alias", func() (string, []any, error) {
 			return qb.Insert(tableUsers).SetMap(map[string]any{"updated_at": aliased}).ToSQL()
 		}, dbtypes.ErrAliasInValue, "updated_at"},
+		// Alias is judged before the body, as Having does, so the reported
+		// error does not depend on the body when both are wrong.
+		{"set_empty_with_alias", func() (string, []any, error) {
+			return qb.Update(tableUsers).Set("updated_at", dbtypes.RawExpression{Alias: "ts"}).ToSQL()
+		}, dbtypes.ErrAliasInValue, "updated_at"},
+		// An invalid column still wins over a bad expression in update SetMap.
+		{"update_setmap_bad_column_wins", func() (string, []any, error) {
+			return qb.Update(tableUsers).SetMap(map[string]any{"a;b": 1, "updated_at": empty}).ToSQL()
+		}, nil, `invalid column identifier "a;b"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, err := tc.build()
-			require.ErrorIs(t, err, tc.wantErr)
+			require.Error(t, err)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+			}
 			assert.Contains(t, err.Error(), tc.wantMsg)
 		})
 	}

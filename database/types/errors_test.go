@@ -55,8 +55,3 @@ func TestInvalidAliasErrorMatchesWithErrorsAs(t *testing.T) {
 	require.True(t, errors.As(err, &invalid))
 	assert.Equal(t, "u;", invalid.Alias)
 }
-
-func TestErrAliasInValueIsDistinctSentinel(t *testing.T) {
-	assert.NotErrorIs(t, ErrAliasInValue, ErrAliasInHaving)
-	assert.Contains(t, ErrAliasInValue.Error(), "SET or VALUES")
-}

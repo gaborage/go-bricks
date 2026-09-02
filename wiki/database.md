@@ -331,6 +331,8 @@ the builder. The grammar will not accept a computed one.
   staying parameterized. An alias in a value position is a `ToSQL()` error
   (`ErrAliasInValue`) naming the column or one-based position — a `SET` or
   `VALUES` cell projects nothing, so it could only be dropped silently.
+  `BuildUpsert`'s column maps are NOT value doors: a `RawExpression` there is
+  bound as a parameter and fails at the driver.
 - **`f.Raw()`, `jf.Raw()`, `database.Raw()` and a STRING predicate passed to
   `Having()`** do. Each admits arbitrary SQL — the first two a WHERE/JOIN fragment,
   `database.Raw` the whole statement, `Having` the group predicate — and each
