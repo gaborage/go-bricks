@@ -260,10 +260,10 @@ func (c *Config) ShouldLogRoutes() bool {
 }
 
 // SecretFloor is the effective keystore.secretminlength: the documented default
-// when the tri-state pointer is nil, otherwise the configured value (0 = off,
-// deprecated). Validate's normalize fills the pointer with this same answer, so
-// after Validate the two never disagree; the accessor exists for the reader,
-// as IsCacheCritical does for cache.critical.
+// when the pointer is nil, otherwise the configured value, which check has
+// bounded at that default or above (ADR-095). Validate's normalize fills the
+// pointer with this same answer, so after Validate the two never disagree; the
+// accessor exists for the reader, as IsCacheCritical does for cache.critical.
 func (c *KeyStoreConfig) SecretFloor() int {
 	if c == nil || c.SecretMinLength == nil {
 		return DefaultKeyStoreSecretMinLength

@@ -1,6 +1,8 @@
 package keystore
 
 import (
+	"fmt"
+
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -39,12 +41,17 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.logger = deps.Logger
 
 	cfg := deps.Config.KeyStore
-	// The floor is deprecated config whether or not keys follow it, so it is
-	// reported before the empty-keys return.
+	// config.Validate rejects a floor below the mandatory minimum (ADR-095) and
+	// every framework construction path runs it (ADR-064), so this repeats a
+	// discharged rule for the one door that skips it: a hand-built ModuleDeps
+	// passed straight to Init. The rejected values are the WIDENING ones — 0
+	// disables the floor entirely — so the backstop refuses rather than clamps,
+	// which would silently honor a weaker floor than the operator wrote. Judged
+	// before the empty-keys return, as checkKeyStore judges it.
 	floor := cfg.SecretFloor()
-	if floor == 0 {
-		m.logger.Warn().Msg("keystore: secret length floor disabled (keystore.secretminlength: 0) — " +
-			"deprecated, the floor becomes mandatory in a later version (see #1036)")
+	if floor < config.DefaultKeyStoreSecretMinLength {
+		return fmt.Errorf("keystore: secret length floor is %d, but keystore.secretminlength must be at least %d (ADR-095); this config did not pass config.Validate",
+			floor, config.DefaultKeyStoreSecretMinLength)
 	}
 
 	if len(cfg.Keys) == 0 {
@@ -57,17 +64,6 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		return err
 	}
 	m.store = s
-
-	for _, ss := range s.belowRecommended() {
-		// "name", not "key": what is logged is a keystore entry's logical name,
-		// and "name" says so. The filter no longer masks a bare "key" (ADR-072),
-		// so this is no longer a workaround for one — it is just the right word.
-		m.logger.Warn().
-			Str("name", ss.name).
-			Int("bytes", ss.n).
-			Int("recommended", config.DefaultKeyStoreSecretMinLength).
-			Msg("keystore: secret is below the recommended minimum length — it will fail startup once the 32-byte floor becomes mandatory (see #1036)")
-	}
 
 	m.logger.Info().
 		Int("count", len(cfg.Keys)).

@@ -929,11 +929,11 @@ type KeyStoreConfig struct {
 	Keys map[string]KeyPairConfig `koanf:"keys" json:"keys" yaml:"keys" toml:"keys" mapstructure:"keys"`
 
 	// SecretMinLength is the minimum byte length enforced for symmetric secret
-	// entries at startup — a tri-state setting, see CONTEXT.md. nil means the
-	// default applies (DefaultKeyStoreSecretMinLength, 32), filled by
-	// normalize; an explicit 0 keeps the floor off (deprecated, WARNs at
-	// startup — see #1036); N > 0 sets the floor to N. Negative values are
-	// rejected by check.
+	// entries at startup. nil means the default applies
+	// (DefaultKeyStoreSecretMinLength, 32), filled by normalize; a set value
+	// can only raise the floor — anything below 32, the former 0 opt-out
+	// included, is rejected by check (ADR-095). A pointer so the koanf and
+	// literal doors both tell absent from explicit, see CONTEXT.md.
 	SecretMinLength *int `koanf:"secretminlength" json:"secretminlength" yaml:"secretminlength" toml:"secretminlength" mapstructure:"secretminlength"`
 }
 

@@ -95,8 +95,9 @@ parse — but it keeps one rule for what "delivered empty" means.
   two cases: an ABSENT section keeps the no-op posture, a section that is present but
   undecodable aborts startup.
 - `KEYSTORE_SECRETMINLENGTH=` is now a startup error rather than a WARN plus a
-  disabled floor. `KEYSTORE_SECRETMINLENGTH=0` is unchanged — the explicit,
-  deprecated opt-out still works.
+  disabled floor. `KEYSTORE_SECRETMINLENGTH=0` is unchanged *at this ADR* — the
+  explicit, deprecated opt-out still worked then;
+  [ADR-095](adr_095_keystore_secret_floor_mandatory.md) later rejects it too.
 - Unset variables, YAML omission, YAML null, and explicit values behave exactly as
   before.
 - The public `Config.Unmarshal` seam enforces the same rule, so a consumer's own

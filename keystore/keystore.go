@@ -14,7 +14,7 @@
 // Keys are configured in YAML under the "keystore" section:
 //
 //	keystore:
-//	  secretminlength: 32                        # default 32; explicit 0 disables (deprecated, WARNs — #1036)
+//	  secretminlength: 32                        # default 32; a set value can only raise it (ADR-095)
 //	  keys:
 //	    signing:
 //	      public:
@@ -126,18 +126,9 @@ func (s *store) Secret(name string) ([]byte, error) {
 	return bytes.Clone(kp.secret), nil
 }
 
-// shortSecret names a symmetric secret the store admitted below
-// config.DefaultKeyStoreSecretMinLength because the configured floor allowed
-// it. Never carries the material.
-type shortSecret struct {
-	name string
-	n    int
-}
-
 // newStore creates a KeyStore by loading all configured entries.
-// secretMinLength is the byte floor for symmetric secrets (0 disables it —
-// deprecated). Fails fast if any entry cannot be loaded, parsed, or fails
-// the floor.
+// secretMinLength is the byte floor for symmetric secrets. Fails fast if any
+// entry cannot be loaded, parsed, or fails the floor.
 func newStore(keys map[string]config.KeyPairConfig, secretMinLength int) (*store, error) {
 	parsed := make(map[string]*keyEntry, len(keys))
 
@@ -152,20 +143,6 @@ func newStore(keys map[string]config.KeyPairConfig, secretMinLength int) (*store
 	}
 
 	return &store{keys: parsed}, nil
-}
-
-// belowRecommended lists the symmetric secrets shorter than
-// config.DefaultKeyStoreSecretMinLength, sorted by name — the set #1036 will
-// reject once the floor becomes mandatory. Symmetric entries are the ones
-// with material (see keyEntry.secret).
-func (s *store) belowRecommended() []shortSecret {
-	var short []shortSecret
-	for _, name := range slices.Sorted(maps.Keys(s.keys)) {
-		if kp := s.keys[name]; kp.secret != nil && len(kp.secret) < config.DefaultKeyStoreSecretMinLength {
-			short = append(short, shortSecret{name: name, n: len(kp.secret)})
-		}
-	}
-	return short
 }
 
 // loadKeyEntry loads one entry as a symmetric secret, a PKCS#12 bundle, or an
@@ -205,7 +182,7 @@ func loadSecretEntry(name string, src config.KeySourceConfig, secretMinLength in
 		return nil, err
 	}
 	// src.IsSet() is true here, so loadKeyBytes never returns nil without error.
-	if secretMinLength > 0 && len(raw) < secretMinLength {
+	if len(raw) < secretMinLength {
 		return nil, fmt.Errorf("keystore: key %q: secret is %d bytes, minimum is %d", name, len(raw), secretMinLength)
 	}
 	return &keyEntry{secret: raw}, nil

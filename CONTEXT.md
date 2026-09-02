@@ -55,10 +55,10 @@ _Avoid_: missing, unconfigured, disabled, empty
 **Tri-state setting**:
 A setting whose absence means "the documented default applies", distinct from
 an explicit off and from an explicit value. Encoded as a pointer
-(`cache.critical`, `keystore.secretminlength`) so a hand-built configuration
-cannot conflate absent with off — the koanf door tells them apart by key
-presence (`cache.critical`) or by a registered default equal to the documented
-one (`keystore.secretminlength`), the literal door only by nil.
+(`cache.critical`) so a hand-built configuration cannot conflate absent with
+off — the koanf door tells them apart by key presence, the literal door only
+by nil. `keystore.secretminlength` keeps the pointer but lost its off arm
+(ADR-095): absent means 32, and a set value below 32 is rejected, not honored.
 _Avoid_: optional, nullable, flag, opt-out (for the setting itself)
 
 **Delivered-but-empty**:

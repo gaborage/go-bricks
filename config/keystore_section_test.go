@@ -137,21 +137,87 @@ func TestValidateKeyStoreSecretMinLengthNil(t *testing.T) {
 	assert.NoError(t, checkKeyStore(cfg), "nil is left for normalize to fill; check must not reject it")
 }
 
-func TestValidateKeyStoreSecretMinLengthNegative(t *testing.T) {
-	cfg := &KeyStoreConfig{SecretMinLength: new(-1)}
-	err := checkKeyStore(cfg)
-	assert.ErrorContains(t, err, "keystore.secretminlength")
-	assert.ErrorContains(t, err, "must be non-negative")
+// TestValidateKeyStoreSecretMinLengthBelowFloorRejected pins ADR-095: the
+// 32-byte floor is mandatory, so a set value below it — the former 0 opt-out
+// included — fails naming the key, the floor and the ADR, keys or no keys.
+func TestValidateKeyStoreSecretMinLengthBelowFloorRejected(t *testing.T) {
+	secretKeys := map[string]KeyPairConfig{
+		"mac": {Secret: KeySourceConfig{File: "mac.bin"}},
+	}
+	tests := []struct {
+		name string
+		min  int
+		keys map[string]KeyPairConfig
+	}{
+		{name: "zero_former_opt_out", min: 0, keys: secretKeys},
+		{name: "zero_without_keys", min: 0},
+		{name: "sixteen", min: 16, keys: secretKeys},
+		{name: "one_below_floor", min: 31, keys: secretKeys},
+		{name: "negative", min: -1, keys: secretKeys},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &KeyStoreConfig{SecretMinLength: new(tt.min), Keys: tt.keys}
+
+			err := checkKeyStore(cfg)
+
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, "keystore.secretminlength", cfgErr.Field)
+			assert.ErrorContains(t, err, "must be at least 32")
+			assert.ErrorContains(t, err, "ADR-095")
+		})
+	}
 }
 
-func TestValidateKeyStoreSecretMinLengthZeroAllowed(t *testing.T) {
-	cfg := &KeyStoreConfig{
-		SecretMinLength: new(0),
-		Keys: map[string]KeyPairConfig{
-			"mac": {Secret: KeySourceConfig{File: "mac.bin"}},
-		},
+// TestValidateKeyStoreSecretMinLengthAtOrAboveFloorAllowed is the other side:
+// a set value can only raise the floor, so 32 itself and anything above pass.
+func TestValidateKeyStoreSecretMinLengthAtOrAboveFloorAllowed(t *testing.T) {
+	tests := []struct {
+		name string
+		min  int
+	}{
+		{name: "at_floor", min: 32},
+		{name: "raised", min: 64},
 	}
-	assert.NoError(t, checkKeyStore(cfg))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &KeyStoreConfig{
+				SecretMinLength: new(tt.min),
+				Keys: map[string]KeyPairConfig{
+					"mac": {Secret: KeySourceConfig{File: "mac.bin"}},
+				},
+			}
+			assert.NoError(t, checkKeyStore(cfg))
+		})
+	}
+}
+
+// TestValidateKeyStoreSecretMinLengthBelowFloorFailsValidate reaches the
+// rejection through Validate, the gate every construction path runs (ADR-064).
+func TestValidateKeyStoreSecretMinLengthBelowFloorFailsValidate(t *testing.T) {
+	cfg := createValidFullConfig()
+	cfg.KeyStore.SecretMinLength = new(0)
+
+	err := Validate(cfg)
+
+	assert.ErrorContains(t, err, "keystore config")
+	assert.ErrorContains(t, err, "keystore.secretminlength must be at least 32")
+}
+
+// TestLoadKeyStoreSecretMinLengthBelowFloorFailsStartup is the koanf door: an
+// environment still carrying the old opt-out, or any value below 32, fails
+// config.Load — the startup path — instead of booting with a weaker floor.
+func TestLoadKeyStoreSecretMinLengthBelowFloorFailsStartup(t *testing.T) {
+	clearEnvironmentVariables()
+	defer clearEnvironmentVariables()
+	t.Setenv("KEYSTORE_SECRETMINLENGTH", "16")
+
+	_, err := Load()
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "invalid configuration")
+	assert.ErrorContains(t, err, "keystore.secretminlength must be at least 32")
 }
 
 // TestCheckKeyStoreRejectsUnreachableKeyNames: a keystore entry's name reaches
