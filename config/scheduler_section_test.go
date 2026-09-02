@@ -40,6 +40,7 @@ func TestValidateSchedulerTimezoneRejectsInvalid(t *testing.T) {
 		{name: "unknown_iana_name", input: "Not/AZone"},
 		{name: "garbage_string", input: "xyz"},
 		{name: "numeric_offset_not_iana", input: "+05:30"},
+		{name: "literal_local_rejected", input: "Local"},
 	}
 
 	for _, tt := range tests {

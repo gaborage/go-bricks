@@ -3,6 +3,12 @@
 **Status:** Accepted
 **Date:** 2026-04-23
 
+> **Amended (2026-09-01, ADR-093):** the special name `Local` listed under "Accepted timezone
+> identifiers" is no longer accepted. `time.LoadLocation` resolves it to the host zone, which
+> made it an undocumented second spelling of the `"-"` opt-out; `config.Validate` now refuses
+> it on every timezone key and steers to `"-"`. See
+> [ADR-093](adr_093_reject_literal_local_timezone.md).
+
 ## Context
 
 Applications built on go-bricks read and write `time.Time` values against PostgreSQL and Oracle. Today, the framework does nothing to set a session-level timezone — every connection inherits whatever the database server (or, for some Oracle deployments, the host running the DB) decides. In practice this produces three failure modes:

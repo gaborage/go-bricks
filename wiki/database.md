@@ -631,6 +631,7 @@ case err != nil:
 - Unset / empty → defaulted to `UTC` at config validation
 - IANA name (`Asia/Tokyo`, `America/New_York`) → validated via `time.LoadLocation`, applied per-connection
 - `-` sentinel → opt-out; sessions inherit the database server's default (legacy behavior)
+- The literal `Local` → rejected by validation ([ADR-093](adr_093_reject_literal_local_timezone.md)). Here `-` is NOT host-local — it is the server-default opt-out above — so a session that must run in the application host's zone names that zone as an explicit IANA name
 - Numeric offsets like `+05:30` → rejected by validation. Use IANA `Etc/GMT±N` (note inverted sign)
 
 **Why per-connection?** A single `SET TIME ZONE` after `sql.Open` only fixes the first borrowed connection — later pool members revert to the server default. The implementation routes through `pgx.RuntimeParams` and an Oracle `driver.Connector` wrapper so every new physical connection inherits the configured timezone.
