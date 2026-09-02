@@ -52,24 +52,34 @@ When the deadline fires, every in-flight operation observes `ctx.Done()` and ret
 
 ## When to shorten the inherited deadline
 
-The legitimate use case is when one sub-operation should fail fast so the rest of the request budget can do something else. The canonical example is a cache-then-DB lookup, where the cache check should be capped tightly so a Redis hiccup doesn't burn the whole 5s budget:
+The legitimate use case is when one sub-operation should fail fast so the rest of the request budget can do something else. The canonical example is a cache-then-DB lookup, where the cache check should be capped tightly so a Redis hiccup doesn't burn the whole 5s budget. `cache.LoadThrough[T]` is that pattern as a mechanism — the cache leg is bounded from `ctx`, the origin runs on `ctx` itself, the write-back is detached — so this is the call to write:
 
 ```go
 func (s *UserService) Get(ctx context.Context, id int64) (*User, error) {
-    // Cap the cache lookup at 200ms; if Redis is slow we'd rather fall through to DB.
-    cacheCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
-    defer cancel()
-
-    if c, err := s.getCache(cacheCtx); err == nil {
-        if data, err := c.Get(cacheCtx, fmt.Sprintf("user:%d", id)); err == nil {
-            return cache.Unmarshal[*User](data)
-        }
+    c, err := s.getCache(ctx)
+    if err != nil {
+        return s.queryDatabase(ctx, id)
     }
-
-    // DB query keeps the rest of the request budget (~4.8s).
-    return s.queryDatabase(ctx, id)
+    // Cache leg capped at 200ms; the DB query keeps the rest of the request budget (~4.8s).
+    return cache.LoadThrough(ctx, c, fmt.Sprintf("user:%d", id), 5*time.Minute,
+        func(ctx context.Context) (*User, error) { return s.queryDatabase(ctx, id) },
+        cache.WithCacheTimeout(200*time.Millisecond))
 }
 ```
+
+Under the hood that is the shortening this section describes, and the shape to reproduce when a sub-operation has no such helper:
+
+```go
+// Cap the cache lookup at 200ms; if Redis is slow we'd rather fall through to DB.
+cacheCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+defer cancel()
+if data, err := c.Get(cacheCtx, key); err == nil {
+    return cache.Unmarshal[*User](data)
+}
+return s.queryDatabase(ctx, id) // the ORIGINAL ctx, never cacheCtx
+```
+
+See [cache.md#load-through-reads](cache.md#load-through-reads) for the full contract.
 
 Recommended budgets when shortening (these are *upper bounds*, not floors):
 
