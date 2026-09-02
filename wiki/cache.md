@@ -139,6 +139,7 @@ answer is already no.
 | Distributed lock | `CompareAndSet(ctx, key, expectedValue, newValue, ttl)` | Job coordination | Lua script CAS |
 | Lock release | `CompareAndDelete(ctx, key, expectedValue)` | Token-verified release, conditional eviction | Lua script CAD |
 | Type-safe store | `Marshal(v)` + `Set()` | Struct serialization | CBOR encoding |
+| Load-through read | `LoadThrough[T](ctx, c, key, ttl, loader)` | Read-through with origin fallback | Bounded cache leg + per-instance single-flight |
 
 **Releasing a distributed lock:** acquire with `CompareAndSet` and a **positive** TTL, then
 release with `CompareAndDelete` carrying the same token — never a bare `Delete`, which
@@ -183,6 +184,62 @@ one if ignored:
 
 See [ADR-060](adr_060_cache_compare_and_delete.md).
 
+### Load-through reads
+
+`cache.LoadThrough[T]` is the recommended read path when the cache fronts an origin (a
+database, an upstream API). It owns the four steps a hand-rolled read-through gets wrong
+somewhere: a **bounded** cache lookup, an origin call on the caller's **untouched** context,
+a **detached** write-back, and **single-flight** collapsing of concurrent misses.
+
+```go
+func (s *UserService) User(ctx context.Context, id int64) (User, error) {
+    c, err := s.getCache(ctx) // stored accessor, resolved per call
+    if err != nil {
+        return s.repo.User(ctx, id) // no cache at all: straight to the origin
+    }
+    return cache.LoadThrough(ctx, c, fmt.Sprintf("user:%d", id), 5*time.Minute,
+        func(ctx context.Context) (User, error) { return s.repo.User(ctx, id) })
+}
+```
+
+What it guarantees:
+
+- **The cache leg is bounded; the origin is not.** Each cache step runs under a timeout
+  derived from `ctx` — `cache.DefaultLoadCacheTimeout` (500 ms) or
+  `cache.WithCacheTimeout(d)` — so a slow-but-reachable Redis costs at most that slice of
+  the request budget before the loader runs. The loader receives `ctx` itself, deadline
+  and values intact, and keeps whatever budget remains after the cache leg: under the
+  default `server.timeout.middleware` of 5 s that is the request's remaining time less
+  at most 500 ms, never a fixed figure, because the middleware deadline is already
+  running when the handler starts.
+- **Every cache-side failure degrades to the origin, never to the caller.** A timeout, a
+  connection error, `ErrNotFound`, or an entry that no longer decodes as `T` (a schema
+  change) all fall through to the loader, and a successful fill overwrites the bad entry.
+- **The write-back is detached.** The value is CBOR-encoded before `LoadThrough` returns
+  (the caller owns it from then on), and the `Set` runs on its own goroutine under
+  `context.WithoutCancel(ctx)`, bounded by the same timeout, so a caller that gives up right
+  after the origin answered still fills the cache. A value that cannot be encoded fails the
+  call with the `Marshal` error rather than silently never caching; a failed `Set` is
+  dropped — the cache client's `db.client.operation.duration{error.type}` carries it. A
+  `nil` pointer, map, slice, interface, channel or func result is returned but never
+  stored, so a CBOR null cannot pin the key for the whole TTL.
+- **Concurrent misses collapse.** Callers missing on the same cache instance, key and `T`
+  share one loader call: one leader loads, the rest wait on their own contexts. The scope
+  is the cache instance, so the same key on two tenants' caches never shares a load. A
+  follower whose own context is still live when the leader's cancellation fails the shared
+  load starts a fresh fill instead of inheriting that error — collapsing never becomes an
+  availability loss. A loader panic becomes an error naming only the panic value's type
+  (ADR-081), delivered to every waiter.
+- **Bad arguments fail before any I/O.** A nil `Cache` (including a typed nil) returns
+  `ErrNilCache`; `ttl < 0` returns `ErrInvalidTTL`; a non-positive `WithCacheTimeout`
+  returns `ErrInvalidCacheTimeout`.
+
+Each fill records `cache.fill.duration` (seconds) with `cache.collapsed=leader|follower`,
+`db.namespace` when a tenant is on the context, and `error.type` on failure; hits show up
+as `cache.hit` on the underlying `Get`. Not covered: negative caching (a loader error is
+never stored) and cross-process fill locking — two processes missing at once both load,
+and the later write-back wins.
+
 **Multi-Tenant Isolation:**
 
 - Each tenant gets separate Redis database (configurable per-tenant)
@@ -193,7 +250,7 @@ See [ADR-060](adr_060_cache_compare_and_delete.md).
 **Observability Integration:**
 When `observability.enabled: true`, cache operations automatically emit:
 
-- **Metrics**: `db.client.operation.duration` (histogram, tagged with `error.type` on failure), `cache.hit`/`cache.miss` (counters), `cache.manager.active_caches`, `cache.manager.evictions`, `cache.manager.idle_cleanups`, `cache.manager.total_created`, `cache.manager.errors` — no distributed-tracing spans are emitted today
+- **Metrics**: `db.client.operation.duration` (histogram, tagged with `error.type` on failure), `cache.hit`/`cache.miss` (counters), `cache.fill.duration` (histogram per `LoadThrough` fill, `cache.collapsed=leader|follower`), `cache.manager.active_caches`, `cache.manager.evictions`, `cache.manager.idle_cleanups`, `cache.manager.total_created`, `cache.manager.errors` — no distributed-tracing spans are emitted today
 - **Health**: A probe registered in the `/ready` probe set whenever the cache manager exists. It leases an instance from the manager (`cacheManager.Get(ctx, "")`) and then calls `Cache.Health(ctx)` on it — under the default connector that is one Redis `PING` on a warm poll and three round trips on a cold one (the construction-time `PING`, the `INFO` version check, then the probe's own `PING`); `Health` is connector-defined, so a custom `Options.CacheConnector` costs whatever its own implementation does, which need not touch the network. Its status is surfaced as the top-level `cache` and `cache_stats` keys in the `/ready` **200** body (a `503` carries only `status`, `cache` and `error`), and it fails `/ready` with `503` only under `cache.critical: true` — the default is informational (ADR-094). See [Readiness](#readiness) below
 
 ## Readiness

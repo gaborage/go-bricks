@@ -2083,6 +2083,26 @@ func (m *Module) roundTripUser(ctx context.Context) (User, error) {
 }
 ```
 
+**Load-Through Reads (recommended read path):**
+
+```go
+// One call owns the bounded cache leg, the origin call on the UNTOUCHED ctx,
+// the detached write-back, and single-flight collapsing of concurrent misses.
+func (s *UserService) User(ctx context.Context, id int64) (User, error) {
+    c, err := s.getCache(ctx) // stored accessor, resolved per call
+    if err != nil {
+        return s.repo.User(ctx, id) // no cache at all: straight to the origin
+    }
+    return cache.LoadThrough(ctx, c, fmt.Sprintf("user:%d", id), 5*time.Minute,
+        func(ctx context.Context) (User, error) { return s.repo.User(ctx, id) },
+        cache.WithCacheTimeout(200*time.Millisecond), // default: cache.DefaultLoadCacheTimeout (500ms)
+    )
+}
+```
+
+- Cache-side failures (timeout, connection, an entry that no longer decodes as `User`) degrade to the loader; the caller never sees them. Nil cache → `cache.ErrNilCache`; `ttl < 0` → `cache.ErrInvalidTTL`; non-positive `WithCacheTimeout` → `cache.ErrInvalidCacheTimeout`; a value that cannot be CBOR-encoded fails the call.
+- Full contract — detached write-back, nil never stored, single-flight collapse and follower refill, the `cache.fill.duration` metric — in wiki/cache.md#load-through-reads.
+
 **Query Result Caching Pattern:** see `UserService.GetUser` above.
 
 **Deduplication with GetOrSet:**
@@ -2218,6 +2238,7 @@ func TestMultiTenantCacheIsolation(t *testing.T) {
 | Lock release | CompareAndDelete(ctx, key, expected) | Token-verified release, conditional eviction | Lua script CAD | ~2ms |
 | Type-safe store | Marshal(v) + Set() | Struct serialization | Single-key | ~1ms + encode |
 | Type-safe retrieve | Get() + Unmarshal[T](data) | Struct deserialization | Single-key | ~1ms + decode |
+| Load-through read | LoadThrough[T](ctx, c, key, ttl, loader) | Read-through with origin fallback | Bounded cache leg + per-instance single-flight (same instance+key+type; no cross-process lock) | ~1ms hit / origin on miss |
 
 **Error Handling & Graceful Degradation:**
 
@@ -2405,6 +2426,7 @@ When `observability.enabled: true` in config, cache operations automatically emi
 - **Metrics:**
   - `db.client.operation.duration{db.system.name=redis, db.operation.name, db.namespace, error.type}` - Histogram of operation latency
   - `cache.hit` / `cache.miss` - Counters for lookup operations (Get/GetOrSet)
+  - `cache.fill.duration{cache.collapsed=leader|follower, db.namespace, error.type}` - Histogram per `LoadThrough` fill from the origin
   - `cache.manager.active_caches` - UpDownCounter of active tenant caches
   - `cache.manager.evictions`, `cache.manager.idle_cleanups`, `cache.manager.total_created`, `cache.manager.errors` - Manager lifecycle counters
 
