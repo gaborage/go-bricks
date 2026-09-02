@@ -1338,16 +1338,18 @@ same absence through `config.Load` meant 32. The `int` encoding could not tell "
 apart from "never set". `SecretMinLength` becomes `*int` — the same tri-state pattern `cache.critical`
 established (ADR-046): `nil` means "apply the default" (32, the new `config.DefaultKeyStoreSecretMinLength`),
 `0` is an explicit, deprecated opt-out, `N > 0` sets the floor to `N`. `normalizeKeyStore` fills the nil
-case and `KeyStoreConfig.SecretFloor()` reads it (config owns the nil semantics, as `IsCacheCritical` does); `Module.Init` WARNs once when the
-floor is disabled and once per admitted secret under 32 bytes, naming the key and length, never the
-material. Go literals write `new(n)`.
+case and `KeyStoreConfig.SecretFloor()` reads it (config owns the nil semantics, as `IsCacheCritical` does); `Module.Init` WARNed once when the
+floor was disabled and once per admitted secret under 32 bytes, naming the key and length, never the
+material — both WARNs are gone with the opt-out (ADR-095). Go literals write `new(n)`.
 
 **Key Benefits:** Both configuration doors render one value for "nothing configured", and a hand-built
 config can no longer silently disable the floor by omission. **Watch:** this is **breaking** for Go
 literals only — `SecretMinLength: 0` or `: N` no longer compiles; write `new(0)` / `new(N)`. YAML and
 env config are unchanged. A hand-built config that relied on the absent field meaning "off" now enforces
 32 bytes, so a shorter secret that used to boot now fails startup — the fix, not a regression. The `0`
-opt-out stays but is deprecated; ADR-095 has since removed it (#1036). See
+opt-out this ADR deprecated was removed by
+[ADR-095](adr_095_keystore_secret_floor_mandatory.md) (#1036), which made the 32-byte floor
+mandatory. See
 [migrations.md](migrations.md) `[C59.13]` and `[C59.14]`.
 
 ---

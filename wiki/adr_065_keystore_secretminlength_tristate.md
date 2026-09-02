@@ -33,7 +33,7 @@ is kept (it equals the documented default, so the koanf door still yields
 "absent → 32"), and normalize fills the pointer (the derived-defaults work
 in #1023 reads `normalize(zero)`). Go literals write `new(n)`.
 
-`0` still works but is deprecated: `Module.Init` WARNs once when the floor is
+`0` still works *at this ADR* but is deprecated: `Module.Init` WARNs once when the floor is
 disabled, and once per admitted secret shorter than 32 bytes, naming the key
 and length — never the material. Alternatives rejected: a `-1` sentinel (flips
 the meaning of an existing YAML `0`); dropping the opt-out now (no
