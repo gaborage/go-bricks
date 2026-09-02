@@ -195,3 +195,99 @@ func TestCheckKeyStoreAcceptsReachableKeyNames(t *testing.T) {
 
 	require.NoError(t, checkKeyStore(cfg))
 }
+
+func TestValidateKeyStorePKCS12Valid(t *testing.T) {
+	cfg := &KeyStoreConfig{
+		Keys: map[string]KeyPairConfig{
+			"vts-file": {PKCS12: PKCS12SourceConfig{File: "vts.p12", Password: PasswordSourceConfig{Env: "VTS_P12_PASSWORD"}}},
+			"vts-b64":  {PKCS12: PKCS12SourceConfig{Value: "base64data", Password: PasswordSourceConfig{File: "/run/secrets/vts-p12"}}},
+		},
+	}
+	assert.NoError(t, checkKeyStore(cfg))
+}
+
+func TestValidateKeyStorePKCS12MixedEntry(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry KeyPairConfig
+	}{
+		{"with_secret", KeyPairConfig{
+			Secret: KeySourceConfig{File: "mac.bin"},
+			PKCS12: PKCS12SourceConfig{File: "vts.p12", Password: PasswordSourceConfig{Env: "P"}},
+		}},
+		{"with_public", KeyPairConfig{
+			Public: KeySourceConfig{File: "pub.der"},
+			PKCS12: PKCS12SourceConfig{File: "vts.p12", Password: PasswordSourceConfig{Env: "P"}},
+		}},
+		{"with_private", KeyPairConfig{
+			Private: KeySourceConfig{Value: "privb64"},
+			PKCS12:  PKCS12SourceConfig{Value: "p12b64", Password: PasswordSourceConfig{Env: "P"}},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &KeyStoreConfig{Keys: map[string]KeyPairConfig{"mixed": tt.entry}}
+			err := checkKeyStore(cfg)
+			assert.ErrorContains(t, err, "'pkcs12' bundle alongside")
+			assert.ErrorContains(t, err, "keystore.keys.mixed")
+		})
+	}
+}
+
+func TestValidateKeyStorePKCS12BundleBothSourcesSet(t *testing.T) {
+	cfg := &KeyStoreConfig{
+		Keys: map[string]KeyPairConfig{
+			"vts": {PKCS12: PKCS12SourceConfig{File: "vts.p12", Value: "also", Password: PasswordSourceConfig{Env: "P"}}},
+		},
+	}
+	err := checkKeyStore(cfg)
+	assert.ErrorContains(t, err, "both 'file' and 'value' set")
+	assert.ErrorContains(t, err, "keystore.keys.vts.pkcs12")
+}
+
+func TestValidateKeyStorePKCS12BundleRequired(t *testing.T) {
+	cfg := &KeyStoreConfig{
+		Keys: map[string]KeyPairConfig{
+			"vts": {PKCS12: PKCS12SourceConfig{Password: PasswordSourceConfig{Env: "P"}}},
+		},
+	}
+	err := checkKeyStore(cfg)
+	assert.ErrorContains(t, err, "key source required")
+	assert.ErrorContains(t, err, "keystore.keys.vts.pkcs12")
+}
+
+func TestValidateKeyStorePKCS12PasswordRequired(t *testing.T) {
+	cfg := &KeyStoreConfig{
+		Keys: map[string]KeyPairConfig{
+			"vts": {PKCS12: PKCS12SourceConfig{File: "vts.p12"}},
+		},
+	}
+	err := checkKeyStore(cfg)
+	assert.ErrorContains(t, err, "password source required")
+	assert.ErrorContains(t, err, "keystore.keys.vts.pkcs12.password")
+}
+
+func TestValidateKeyStorePKCS12PasswordBothSourcesSet(t *testing.T) {
+	cfg := &KeyStoreConfig{
+		Keys: map[string]KeyPairConfig{
+			"vts": {PKCS12: PKCS12SourceConfig{File: "vts.p12", Password: PasswordSourceConfig{Env: "P", File: "/run/secrets/p"}}},
+		},
+	}
+	err := checkKeyStore(cfg)
+	assert.ErrorContains(t, err, "both 'env' and 'file' set")
+	assert.ErrorContains(t, err, "keystore.keys.vts.pkcs12.password")
+}
+
+func TestValidateKeyStorePKCS12PasswordEnvMustBeAName(t *testing.T) {
+	literal := "hunter 2!"
+	cfg := &KeyStoreConfig{
+		Keys: map[string]KeyPairConfig{
+			"vts": {PKCS12: PKCS12SourceConfig{File: "vts.p12", Password: PasswordSourceConfig{Env: literal}}},
+		},
+	}
+	err := checkKeyStore(cfg)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "not an environment variable name")
+	assert.ErrorContains(t, err, "keystore.keys.vts.pkcs12.password.env")
+	assert.NotContains(t, err.Error(), literal)
+}

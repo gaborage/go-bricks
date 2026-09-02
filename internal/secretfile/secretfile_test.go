@@ -106,14 +106,14 @@ func TestErrnoStripsPathError(t *testing.T) {
 		_, err := os.ReadFile(missing)
 		require.Error(t, err)
 
-		stripped := errno(err)
+		stripped := Errno(err)
 		assert.NotContains(t, stripped.Error(), missing)
 		assert.ErrorIs(t, stripped, fs.ErrNotExist)
 	})
 
 	t.Run("non_path_error_passes_through_unchanged", func(t *testing.T) {
 		plain := errors.New("plain error, not a PathError")
-		assert.Same(t, plain, errno(plain))
+		assert.Same(t, plain, Errno(plain))
 	})
 }
 

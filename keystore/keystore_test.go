@@ -16,9 +16,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"software.sslmate.com/src/go-pkcs12"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/secretfile"
+	testconsts "github.com/gaborage/go-bricks/testing"
 )
 
 // generateTestKeys creates a fresh RSA key pair for testing.
@@ -548,4 +550,104 @@ func TestPublicKeyOnSecretEntryRejected(t *testing.T) {
 	assert.ErrorContains(t, pubErr, "has no public key configured")
 	_, privErr := s.PrivateKey("mac")
 	assert.ErrorContains(t, privErr, "has no private key configured")
+}
+
+// pkcs12Fixture encodes priv and a throwaway self-signed leaf into a
+// password-protected PKCS#12 bundle.
+func pkcs12Fixture(t *testing.T, priv *rsa.PrivateKey, password string) []byte {
+	t.Helper()
+	pfx, err := pkcs12.Modern.Encode(priv, testconsts.SelfSignedCert(t, priv), nil, password)
+	require.NoError(t, err)
+	return pfx
+}
+
+func TestNewStoreWithPKCS12FileSourceAndEnvPassword(t *testing.T) {
+	privKey, pubKey := generateTestKeys(t)
+	password := testconsts.FakePassword("p12")
+	t.Setenv("KEYSTORE_TEST_P12_PASSWORD", password)
+	path := writeDERFile(t, t.TempDir(), "vts.p12", pkcs12Fixture(t, privKey, password))
+
+	s, err := newStore(map[string]config.KeyPairConfig{
+		"vts": {PKCS12: config.PKCS12SourceConfig{
+			File:     path,
+			Password: config.PasswordSourceConfig{Env: "KEYSTORE_TEST_P12_PASSWORD"},
+		}},
+	}, 0)
+	require.NoError(t, err)
+
+	gotPub, err := s.PublicKey("vts")
+	require.NoError(t, err)
+	assert.True(t, pubKey.Equal(gotPub))
+	gotPriv, err := s.PrivateKey("vts")
+	require.NoError(t, err)
+	assert.True(t, privKey.Equal(gotPriv))
+}
+
+func TestNewStoreWithPKCS12Base64SourceAndFilePassword(t *testing.T) {
+	privKey, pubKey := generateTestKeys(t)
+	password := testconsts.FakePassword("p12")
+	pfxB64 := base64.StdEncoding.EncodeToString(pkcs12Fixture(t, privKey, password))
+	passPath := writeDERFile(t, t.TempDir(), "vts.pass", []byte(password+"\n"))
+
+	s, err := newStore(map[string]config.KeyPairConfig{
+		"vts": {PKCS12: config.PKCS12SourceConfig{
+			Value:    pfxB64,
+			Password: config.PasswordSourceConfig{File: passPath},
+		}},
+	}, 0)
+	require.NoError(t, err)
+
+	gotPub, err := s.PublicKey("vts")
+	require.NoError(t, err)
+	assert.True(t, pubKey.Equal(gotPub))
+	_, err = s.Secret("vts")
+	assert.ErrorContains(t, err, "no symmetric secret configured")
+}
+
+func TestNewStorePKCS12WrongPasswordNamesKeyNeverPassword(t *testing.T) {
+	privKey, _ := generateTestKeys(t)
+	password := testconsts.FakePassword("p12")
+	wrong := testconsts.FakePassword("wrong")
+	t.Setenv("KEYSTORE_TEST_P12_PASSWORD", wrong)
+	path := writeDERFile(t, t.TempDir(), "vts.p12", pkcs12Fixture(t, privKey, password))
+
+	_, err := newStore(map[string]config.KeyPairConfig{
+		"vts": {PKCS12: config.PKCS12SourceConfig{
+			File:     path,
+			Password: config.PasswordSourceConfig{Env: "KEYSTORE_TEST_P12_PASSWORD"},
+		}},
+	}, 0)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, `keystore: key "vts" pkcs12: password incorrect`)
+	assert.NotContains(t, err.Error(), password)
+	assert.NotContains(t, err.Error(), wrong)
+}
+
+func TestNewStorePKCS12PasswordUnsetNamesKey(t *testing.T) {
+	privKey, _ := generateTestKeys(t)
+	path := writeDERFile(t, t.TempDir(), "vts.p12", pkcs12Fixture(t, privKey, testconsts.FakePassword("p12")))
+
+	_, err := newStore(map[string]config.KeyPairConfig{
+		"vts": {PKCS12: config.PKCS12SourceConfig{
+			File:     path,
+			Password: config.PasswordSourceConfig{Env: "KEYSTORE_TEST_P12_PASSWORD_UNSET"},
+		}},
+	}, 0)
+	assert.ErrorContains(t, err, `keystore: key "vts" pkcs12 password: environment variable not set`)
+}
+
+func TestNewStorePKCS12BundleUnreadableNamesKeyNeverPath(t *testing.T) {
+	t.Setenv("KEYSTORE_TEST_P12_PASSWORD", testconsts.FakePassword("p12"))
+	misFiled := testconsts.FakePassword("transposed")
+
+	_, err := newStore(map[string]config.KeyPairConfig{
+		"vts": {PKCS12: config.PKCS12SourceConfig{
+			File:     misFiled,
+			Password: config.PasswordSourceConfig{Env: "KEYSTORE_TEST_P12_PASSWORD"},
+		}},
+	}, 0)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, `keystore: key "vts" pkcs12: `)
+	assert.ErrorContains(t, err, "elided")
+	assert.NotContains(t, err.Error(), misFiled)
 }

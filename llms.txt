@@ -3582,10 +3582,11 @@ SELECT count(*) FROM gobricks_outbox WHERE status = 'pending';
 
 ## KeyStore (Named RSA Keys & Symmetric Secrets)
 
-Load DER-encoded RSA keys or raw symmetric secrets (HMAC/CMAC keys, HKDF input)
-from files (local dev) or base64-encoded env vars (EKS). Each entry is **either**
-an RSA pair **or** a secret — a mixed entry fails fast at startup. Keys are loaded
-once and held in memory — no caching or synchronization needed.
+Load DER-encoded RSA keys, password-protected PKCS#12 bundles, or raw symmetric
+secrets (HMAC/CMAC keys, HKDF input) from files (local dev) or base64-encoded env
+vars (EKS). Each entry is **exactly one** of an RSA pair, a secret, or a PKCS#12
+bundle — a mixed entry fails fast at startup. Keys are loaded once and held in
+memory — no caching or synchronization needed.
 
 ### Configuration
 
@@ -3614,6 +3615,11 @@ keystore:
     mac-key-deployed:
       secret:
         value: "${MAC_KEY_BASE64}"       # deployed: base64 raw key
+    vts:                         # RSA pair from a password-protected PKCS#12 bundle
+      pkcs12:
+        file: "certs/vts.p12"            # or value: base64 of the .p12/.pfx bytes
+        password:
+          env: "VTS_P12_PASSWORD"        # the variable's NAME (or file: a mounted secret) — never the password
 ```
 
 ### Module Setup
@@ -3706,6 +3712,9 @@ kstest.AssertKeyNotFound(t, mock, "nonexistent")
   `0` disables the floor (deprecated, WARNs, #1036); positive values set the
   floor; negative values are rejected. Go literals use `new(n)`
 - Exactly one source per key: `file` (raw/DER path) or `value` (base64 string)
+- A `pkcs12` entry loads an RSA pair from a password-protected bundle: `file`/`value`
+  for the bundle, `password.env` (the variable's name) or `password.file` for the
+  password — there is no literal field; mutually exclusive with the other two shapes
 - Fails fast at startup if a key cannot be loaded or parsed, or a symmetric secret
   is shorter than a positive effective floor; a disabled floor admits short
   secrets with a WARN

@@ -155,18 +155,19 @@ func ParseTLSMinVersion(prefix, v string) (uint16, error) {
 
 // ReadError shapes the error from a failed read of an operator-named file so a
 // mis-filed value cannot reach a startup log: SafeRef bounds what is quoted and
-// errno drops the *os.PathError that would otherwise re-echo it in full. The
+// Errno drops the *os.PathError that would otherwise re-echo it in full. The
 // message has no package prefix; callers wrap it with their own (e.g.
 // fmt.Errorf("keystore: key %q: %w", name, err)). errors.Is still matches
 // fs.ErrNotExist and friends through the wrap.
 func ReadError(path string, err error) error {
-	return fmt.Errorf("read file %s: %w", SafeRef(path), errno(err))
+	return fmt.Errorf("read file %s: %w", SafeRef(path), Errno(err))
 }
 
-// errno strips the *os.PathError wrapper, which carries its own copy of the
-// path and would re-echo a value SafeRef elided. errors.Is is unaffected:
-// the bare errno still matches fs.ErrNotExist and friends.
-func errno(err error) error {
+// Errno strips the *os.PathError wrapper, which carries its own copy of the
+// path and would re-echo a value SafeRef elided (the path may BE the secret).
+// errors.Is is unaffected: the bare errno still matches fs.ErrNotExist and
+// friends.
+func Errno(err error) error {
 	var pathErr *os.PathError
 	if errors.As(err, &pathErr) {
 		return pathErr.Err

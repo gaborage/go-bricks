@@ -37,6 +37,11 @@ keystore:
     mac-key-deployed:
       secret:
         value: "${MAC_KEY_BASE64}"              # deployed: base64 raw key
+    vts:                         # RSA pair from a password-protected PKCS#12 bundle
+      pkcs12:
+        file: "certs/vts.p12"                   # or value: base64 of the .p12/.pfx bytes
+        password:
+          env: "VTS_P12_PASSWORD"               # the variable's NAME; or file: a mounted secret
 ```
 
 The `<name>` must match `^[a-z0-9-]+$`, so the entry stays addressable by environment
@@ -51,11 +56,47 @@ Each `keys.<name>` entry resolves to **exactly one** of the following shapes:
 | --- | --- | --- |
 | `public` (+ optional `private`) | `public` | RSA pair. PKCS8 with PKCS1 fallback for private; public/private mismatch is a startup error |
 | `secret` | the source | Raw symmetric bytes. Mutually exclusive with `public`/`private` |
+| `pkcs12` | the bundle source + `password` | RSA pair from a password-protected PKCS#12 bundle (see below). Mutually exclusive with both other shapes |
 
 Within any source, set **exactly one** of `file` (path) or `value`
-(base64-encoded bytes). Setting both, or setting a `secret` alongside
-`public`/`private`, is rejected by the config validation layer at startup with
-a clear `ConfigError`.
+(base64-encoded bytes). Setting both, setting a `secret` alongside
+`public`/`private`, or setting a `pkcs12` alongside either, is rejected by the
+config validation layer at startup with a clear `ConfigError`.
+
+### PKCS#12 bundles
+
+Commercial payment and security platforms hand out RSA material as a
+password-protected PKCS#12 (`.p12`/`.pfx`) bundle. A `pkcs12` entry loads it
+directly, with no out-of-band `openssl pkcs12` conversion:
+
+- **Bundle**: exactly one of `file` (path) or `value` (base64 of the bundle
+  bytes), the same two sources every other shape uses. A bundle that cannot
+  be read or decoded fails startup with the source elided from the error, as
+  a `secret` does — the stanza sits next to its password, so a transposed
+  field never reaches a startup log.
+- **Password**: exactly one of `env` (the **name** of an environment variable)
+  or `file` (a path, typically a mounted Kubernetes/Docker secret; trailing
+  newlines are stripped). The password itself is never written in config:
+  there is no `value` field, an `env` that is not a valid variable name is
+  rejected at validation without echoing it, and an unset variable, an empty
+  value, or an unreadable file fails startup with the source elided from the
+  error.
+- **Content**: exactly one private key and its leaf certificate. The private
+  key must be RSA; an EC key fails startup naming the RSA allowlist (ECDSA is
+  rejected by design, see #347). The leaf certificate's public key becomes the
+  entry's `PublicKey` and is checked against the private key. Any CA chain in
+  the bundle is **dropped**: `app.KeyStore` exposes keys, not certificates,
+  and no consumer (JOSE included) uses `x5c`.
+- **Errors** are distinct and never carry the password: `password incorrect`,
+  `decode: …` (corrupt or not a PKCS#12 file), `private key is
+  *ecdsa.PrivateKey, only RSA is supported`, `certificate does not match
+  private key`.
+
+Decoding uses [`software.sslmate.com/src/go-pkcs12`](https://pkg.go.dev/software.sslmate.com/src/go-pkcs12)
+(pinned). `golang.org/x/crypto/pkcs12` is frozen: it decodes a single
+certificate only and lacks the PBES2 (AES-256-CBC + PBKDF2) scheme that
+OpenSSL 3 and current Java `keytool` emit by default, so most vendor bundles
+would fail with it. Legacy RC2/3DES bundles decode with either.
 
 ### Minimum-length floor
 
@@ -156,6 +197,9 @@ the real store so tests exercise the same ownership contract.
 - No key material appears in logs or error messages: load/parse errors carry
   the logical name, key type, and file path only; the framework logger's
   `SensitiveDataFilter` covers any incidental log lines.
+- A PKCS#12 password reaches the process only through an environment
+  variable or a mounted file; the config shape has no literal field, and
+  password-load errors elide the source.
 - The minimum-length floor is on by default — keep it on for HMAC/HKDF keys;
   only disable it (`secretminlength: 0`) with a deliberate, documented reason,
   and expect the startup WARN — the opt-out is deprecated and will be removed.
