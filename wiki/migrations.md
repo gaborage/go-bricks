@@ -6484,7 +6484,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `cache.critical is explicitly false`, which stops firing. For the compile-break,
   `git grep -nE '[.]?Critical[[:space:]]*[:=][[:space:]]*(new\(|&)' -- '*.go'` finds every Go
   site that hands the field a pointer; `go build ./...` on v0.62.0 finds the same set.
-- scope: `Config.IsCacheCritical` answers `false` for a nil `Critical` pointer and for a nil
+- scope: `Config.IsCacheCritical` answers `false` for an unset `Critical` and for a nil
   receiver, so a cache-enabled deployment that says nothing now answers `/ready` `200` through a
   Redis outage, with `cache: "unhealthy"` and a climbing `cache_stats.errors` in the body and NO
   `Readiness check failed` ERROR line — v0.61.0 answered
