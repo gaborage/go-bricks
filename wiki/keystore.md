@@ -70,7 +70,10 @@ password-protected PKCS#12 (`.p12`/`.pfx`) bundle. A `pkcs12` entry loads it
 directly, with no out-of-band `openssl pkcs12` conversion:
 
 - **Bundle**: exactly one of `file` (path) or `value` (base64 of the bundle
-  bytes), the same two sources every other shape uses.
+  bytes), the same two sources every other shape uses. A bundle that cannot
+  be read or decoded fails startup with the source elided from the error, as
+  a `secret` does — the stanza sits next to its password, so a transposed
+  field never reaches a startup log.
 - **Password**: exactly one of `env` (the **name** of an environment variable)
   or `file` (a path, typically a mounted Kubernetes/Docker secret; trailing
   newlines are stripped). The password itself is never written in config:

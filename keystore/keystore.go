@@ -246,16 +246,17 @@ func loadRSAEntry(name string, cfg *config.KeyPairConfig) (*keyEntry, error) {
 }
 
 // loadKeyBytes resolves a KeySourceConfig to raw bytes — DER for RSA keys,
-// raw key material for secrets. Returns nil if neither file nor value is set.
-// Delegates the file/value resolution mechanism to internal/keymaterial (also
-// consumed by cmd/seal-payload) and adds the keystore error-namespace prefix.
-// Secrets route through LoadSecretBytes: unlike RSA DER, raw symmetric
-// material has no detectable shape, so its loader never echoes the
-// configured source on a failed read.
+// raw key material for secrets, the bundle for PKCS#12. Returns nil if
+// neither file nor value is set. Delegates the file/value resolution
+// mechanism to internal/keymaterial (also consumed by cmd/seal-payload) and
+// adds the keystore error-namespace prefix. Secrets and PKCS#12 bundles route
+// through LoadSecretBytes, whose errors never echo the configured source: raw
+// symmetric material has no detectable shape, and a bundle's stanza sits next
+// to its password, so a transposed field must not reach a startup log.
 func loadKeyBytes(src config.KeySourceConfig, keyName, keyType string) ([]byte, error) {
 	var data []byte
 	var err error
-	if keyType == "secret" {
+	if keyType == "secret" || keyType == "pkcs12" {
 		data, err = keymaterial.LoadSecretBytes(src.File, src.Value)
 	} else {
 		data, err = keymaterial.LoadBytes(src.File, src.Value)

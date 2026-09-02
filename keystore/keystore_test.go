@@ -636,14 +636,18 @@ func TestNewStorePKCS12PasswordUnsetNamesKey(t *testing.T) {
 	assert.ErrorContains(t, err, `keystore: key "vts" pkcs12 password: environment variable not set`)
 }
 
-func TestNewStorePKCS12BundleUnreadableNamesKey(t *testing.T) {
+func TestNewStorePKCS12BundleUnreadableNamesKeyNeverPath(t *testing.T) {
 	t.Setenv("KEYSTORE_TEST_P12_PASSWORD", testconsts.FakePassword("p12"))
+	misFiled := testconsts.FakePassword("transposed")
 
 	_, err := newStore(map[string]config.KeyPairConfig{
 		"vts": {PKCS12: config.PKCS12SourceConfig{
-			File:     filepath.Join(t.TempDir(), "missing.p12"),
+			File:     misFiled,
 			Password: config.PasswordSourceConfig{Env: "KEYSTORE_TEST_P12_PASSWORD"},
 		}},
 	}, 0)
-	assert.ErrorContains(t, err, `keystore: key "vts" pkcs12: read file`)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, `keystore: key "vts" pkcs12: `)
+	assert.ErrorContains(t, err, "elided")
+	assert.NotContains(t, err.Error(), misFiled)
 }
