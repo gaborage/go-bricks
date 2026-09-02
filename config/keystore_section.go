@@ -31,12 +31,10 @@ func normalizeKeyStore(cfg *KeyStoreConfig) {
 // NAME is judged first, against the env-reachability grammar.
 func checkKeyStore(cfg *KeyStoreConfig) error {
 	if cfg.SecretMinLength != nil && *cfg.SecretMinLength < DefaultKeyStoreSecretMinLength {
-		return &ConfigError{
-			Category: errCategoryInvalid,
-			Field:    fieldKeystoreMinLength,
-			Message:  fmt.Sprintf("must be at least %d: the symmetric-secret length floor is mandatory (ADR-095)", DefaultKeyStoreSecretMinLength),
-			Action:   "remove the key to take the default, or set a value at or above it to raise the floor",
-		}
+		err := NewValidationError(fieldKeystoreMinLength,
+			fmt.Sprintf("must be at least %d: the symmetric-secret length floor is mandatory (ADR-095)", DefaultKeyStoreSecretMinLength))
+		err.Action = "remove the key to take the default, or set a value at or above it to raise the floor"
+		return err
 	}
 
 	if len(cfg.Keys) == 0 {

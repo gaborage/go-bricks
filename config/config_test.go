@@ -186,8 +186,8 @@ func TestConfigPerTenantJobKeys(t *testing.T) {
 }
 
 // TestLoadRejectsEmptyNumericEnv pins the delivered-empty rule for numeric keys: a
-// set-but-empty variable used to decode as a legal 0 (defeating ADR-065's tri-state and
-// silently zeroing byte limits), and now fails Load naming the key.
+// set-but-empty variable used to decode as a legal 0 (silently zeroing byte limits, and
+// booting a floor nobody wrote), and now fails Load naming the key.
 func TestLoadRejectsEmptyNumericEnv(t *testing.T) {
 	tests := []struct {
 		name    string
