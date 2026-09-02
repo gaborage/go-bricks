@@ -578,7 +578,10 @@ func TestLoadDefaultsInternalFunction(t *testing.T) {
 	assert.False(t, k.Exists("cache.critical"), "cache.critical must NOT be a registered default")
 }
 
-func TestKeyStoreSecretFloorTriState(t *testing.T) {
+// TestKeyStoreSecretFloor pins the accessor: a nil receiver or a nil pointer
+// reads as the default, and a set value — bounded by check at the default or
+// above (ADR-095) — reads as itself.
+func TestKeyStoreSecretFloor(t *testing.T) {
 	var nilCfg *KeyStoreConfig
 	assert.Equal(t, DefaultKeyStoreSecretMinLength, nilCfg.SecretFloor())
 
@@ -588,8 +591,7 @@ func TestKeyStoreSecretFloorTriState(t *testing.T) {
 		want int
 	}{
 		{name: "nil_applies_default", min: nil, want: DefaultKeyStoreSecretMinLength},
-		{name: "zero_is_off", min: new(0), want: 0},
-		{name: "explicit_floor", min: new(16), want: 16},
+		{name: "raised_floor", min: new(64), want: 64},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

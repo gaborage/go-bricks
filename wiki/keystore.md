@@ -15,7 +15,8 @@ once at startup and held read-only in memory.
   error via structural detection (no `kind:` discriminator needed)
 - **Defensive copies**: `Secret` returns a fresh slice the caller owns and may
   zeroize; the in-memory master is never handed out
-- **Fail-fast minimum length** for secrets (default 32 bytes) so a too-short
+- **Fail-fast minimum length** for secrets (32 bytes, mandatory — a set value
+  can only raise it) so a too-short
   key is rejected at startup rather than silently weakening a digest
 - **Fail-fast at startup**: any entry that cannot be loaded, parsed, mismatched
   (RSA pair), or is below the floor (secret) aborts boot
@@ -24,7 +25,7 @@ once at startup and held read-only in memory.
 
 ```yaml
 keystore:
-  secretminlength: 32          # default 32 when absent; explicit 0 disables the floor (deprecated, WARNs — see #1036)
+  secretminlength: 32          # 32 when absent; a set value can only raise it — below 32 fails startup (ADR-095)
   keys:
     signing:                     # RSA pair (public required, private optional)
       public:
@@ -100,20 +101,17 @@ would fail with it. Legacy RC2/3DES bundles decode with either.
 
 ### Minimum-length floor
 
-`keystore.secretminlength` is a tri-state setting (ADR-065, see
-[CONTEXT.md](../CONTEXT.md)): **absent** (nil in Go) applies the default of
-**32** bytes; an explicit **`0`** disables the floor entirely (deprecated —
-see below); **`N > 0`** sets the floor to `N`. Negative values are rejected
-at config validation. Go literals set the pointer with `new(n)` —
-`SecretMinLength: new(0)` to disable, `new(48)` to raise it.
+`keystore.secretminlength` is the byte floor for symmetric secrets, and it is
+mandatory (ADR-095, closing ADR-065's deprecation window): **absent** (nil in
+Go) applies **32**; **`N ≥ 32`** raises the floor to `N`; anything below 32 —
+`0`, the former opt-out, included — is rejected at config validation with a
+`ConfigError` on `keystore.secretminlength`, before any key is read. The field
+stays a pointer (`SecretMinLength: new(48)` in Go literals) so both
+configuration doors can tell an explicit value from an absent key.
 
 The floor is a defensive control against silently weak HMAC/HKDF keys, so
-disabling it is deprecated and admitting a short secret WARNs at startup
-(tracked in [#1036](https://github.com/gaborage/go-bricks/issues/1036), which
-will make the 32-byte floor mandatory): once if the floor itself is `0`
-(`keystore: secret length floor disabled`), and once per admitted secret
-shorter than 32 bytes, naming the key and its byte length — never the
-material.
+there is no configuration that admits a shorter secret. A partner-mandated key
+shorter than 32 bytes must be loaded by your own code, outside the keystore.
 
 ## API
 
@@ -200,9 +198,8 @@ the real store so tests exercise the same ownership contract.
 - A PKCS#12 password reaches the process only through an environment
   variable or a mounted file; the config shape has no literal field, and
   password-load errors elide the source.
-- The minimum-length floor is on by default — keep it on for HMAC/HKDF keys;
-  only disable it (`secretminlength: 0`) with a deliberate, documented reason,
-  and expect the startup WARN — the opt-out is deprecated and will be removed.
+- The minimum-length floor is mandatory (32 bytes) and can only be raised; a
+  secret that cannot meet it does not belong in the keystore.
 - Derivation (HKDF expansion, etc.) is left to the consumer — the keystore
   intentionally exposes raw material rather than a built-in derive helper
   (smallest viable surface; can layer on later if demand appears).

@@ -3,6 +3,12 @@
 **Status:** Accepted
 **Date:** 2026-08-16
 
+> **Amended (2026-09-01, the opt-out removed):** [ADR-095](adr_095_keystore_secret_floor_mandatory.md)
+> closes the deprecation this ADR opened. The `0` arm and both startup WARNs are
+> gone: `config.Validate` rejects any `keystore.secretminlength` below 32, nil
+> still means 32, and the pointer now separates absent from explicit only. The
+> encoding decision below stands; read "0 = off" as history.
+
 ## Context
 
 ADR-064 made `config.Validate` mandatory on every construction path,

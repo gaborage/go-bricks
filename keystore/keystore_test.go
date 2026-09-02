@@ -422,82 +422,43 @@ func TestNewStoreSecretBelowMinLength(t *testing.T) {
 	assert.ErrorContains(t, err, "minimum is 32")
 }
 
-func TestNewStoreSecretMinLengthDisabled(t *testing.T) {
-	want := []byte("short")
+// TestNewStoreSecretAtFloorAdmitted pins the boundary: a secret exactly at
+// the floor loads.
+func TestNewStoreSecretAtFloorAdmitted(t *testing.T) {
+	want := bytes.Repeat([]byte{0xEF}, 32)
 	s, err := newStore(map[string]config.KeyPairConfig{
-		"weak": {Secret: config.KeySourceConfig{Value: base64.StdEncoding.EncodeToString(want)}},
-	}, 0) // 0 disables the floor
-	require.NoError(t, err)
-
-	got, err := s.Secret("weak")
-	require.NoError(t, err)
-	assert.Equal(t, want, got)
-}
-
-func TestNewStoreReportsShortSecretWhenFloorDisabled(t *testing.T) {
-	want := []byte("0123456789abcdef") // 16 bytes, admitted because the floor is off
-	s, err := newStore(map[string]config.KeyPairConfig{
-		"weak": {Secret: config.KeySourceConfig{Value: base64.StdEncoding.EncodeToString(want)}},
-	}, 0)
-	require.NoError(t, err)
-
-	got, err := s.Secret("weak")
-	require.NoError(t, err)
-	assert.Equal(t, want, got)
-
-	short := s.belowRecommended()
-	require.Len(t, short, 1)
-	assert.Equal(t, "weak", short[0].name)
-	assert.Equal(t, 16, short[0].n)
-}
-
-func TestNewStoreReportsShortSecretBelowRecommendedFloor(t *testing.T) {
-	want := bytes.Repeat([]byte{0xAB}, 20) // 20 bytes, passes a 16-byte floor but is still below 32
-	s, err := newStore(map[string]config.KeyPairConfig{
-		"weak": {Secret: config.KeySourceConfig{Value: base64.StdEncoding.EncodeToString(want)}},
-	}, 16)
-	require.NoError(t, err)
-
-	got, err := s.Secret("weak")
-	require.NoError(t, err)
-	assert.Equal(t, want, got)
-
-	short := s.belowRecommended()
-	require.Len(t, short, 1)
-	assert.Equal(t, "weak", short[0].name)
-	assert.Equal(t, 20, short[0].n)
-}
-
-func TestNewStoreNoShortSecretAtRecommendedFloor(t *testing.T) {
-	want := bytes.Repeat([]byte{0xEF}, 32) // exactly the recommended floor
-	s, err := newStore(map[string]config.KeyPairConfig{
-		"ok": {Secret: config.KeySourceConfig{Value: base64.StdEncoding.EncodeToString(want)}},
-	}, 0)
-	require.NoError(t, err)
-
-	got, err := s.Secret("ok")
-	require.NoError(t, err)
-	assert.Equal(t, want, got)
-	assert.Empty(t, s.belowRecommended())
-}
-
-func TestNewStoreReportsShortSecretForEmptyFile(t *testing.T) {
-	dir := t.TempDir()
-	path := writeDERFile(t, dir, "empty.bin", []byte{}) // 0-byte secret file, floor off
-
-	s, err := newStore(map[string]config.KeyPairConfig{
-		"mac": {Secret: config.KeySourceConfig{File: path}},
-	}, 0)
+		"mac": {Secret: config.KeySourceConfig{Value: base64.StdEncoding.EncodeToString(want)}},
+	}, 32)
 	require.NoError(t, err)
 
 	got, err := s.Secret("mac")
 	require.NoError(t, err)
-	assert.Empty(t, got)
+	assert.Equal(t, want, got)
+}
 
-	short := s.belowRecommended()
-	require.Len(t, short, 1)
-	assert.Equal(t, "mac", short[0].name)
-	assert.Equal(t, 0, short[0].n)
+// TestNewStoreRaisedFloorRejectsDefaultLengthSecret: a set floor can only be
+// raised, and a raised one binds — a 32-byte secret fails a 64-byte floor.
+func TestNewStoreRaisedFloorRejectsDefaultLengthSecret(t *testing.T) {
+	_, err := newStore(map[string]config.KeyPairConfig{
+		"mac": {Secret: config.KeySourceConfig{Value: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xAB}, 32))}},
+	}, 64)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, `key "mac": secret is 32 bytes, minimum is 64`)
+}
+
+// TestNewStoreEmptySecretFileBelowFloor: a 0-byte secret file is the shortest
+// secret there is and fails the floor like any other short one.
+func TestNewStoreEmptySecretFileBelowFloor(t *testing.T) {
+	dir := t.TempDir()
+	path := writeDERFile(t, dir, "empty.bin", []byte{})
+
+	_, err := newStore(map[string]config.KeyPairConfig{
+		"mac": {Secret: config.KeySourceConfig{File: path}},
+	}, 32)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, `key "mac": secret is 0 bytes, minimum is 32`)
 }
 
 func TestSecretNotFound(t *testing.T) {

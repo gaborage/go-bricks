@@ -12,24 +12,31 @@ import (
 var envVarNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // normalizeKeyStore fills the nil default: an unset SecretMinLength becomes
-// DefaultKeyStoreSecretMinLength (32). An explicit 0 or N is left untouched —
-// 0 keeps the floor off (deprecated) and check rejects a negative. Nothing
-// here can fail.
+// DefaultKeyStoreSecretMinLength (32). An explicit value is left untouched for
+// check to judge. Nothing here can fail.
 func normalizeKeyStore(cfg *KeyStoreConfig) {
 	if cfg.SecretMinLength == nil {
 		cfg.SecretMinLength = new(cfg.SecretFloor())
 	}
 }
 
-// checkKeyStore returns nil if no keys are configured. A set SecretMinLength
-// must be non-negative — nil is left alone since white-box tests call
-// checkKeyStore directly, before normalize has filled it. Each entry is
+// checkKeyStore judges the floor first, then each entry. A set SecretMinLength
+// must be at least DefaultKeyStoreSecretMinLength — the floor is mandatory and
+// a set value can only raise it (ADR-095) — and is judged before the
+// empty-keys return, so a config no key follows is still rejected. nil is left
+// alone since white-box tests call checkKeyStore directly, before normalize
+// has filled it. Each entry is
 // either an RSA pair (public required with exactly one source, private
 // optional) or a symmetric secret — a mixed entry is rejected. Each entry's
 // NAME is judged first, against the env-reachability grammar.
 func checkKeyStore(cfg *KeyStoreConfig) error {
-	if cfg.SecretMinLength != nil && *cfg.SecretMinLength < 0 {
-		return NewValidationError("keystore.secretminlength", errMustBeNonNegative)
+	if cfg.SecretMinLength != nil && *cfg.SecretMinLength < DefaultKeyStoreSecretMinLength {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    fieldKeystoreMinLength,
+			Message:  fmt.Sprintf("must be at least %d: the symmetric-secret length floor is mandatory (ADR-095)", DefaultKeyStoreSecretMinLength),
+			Action:   "remove the key to take the default, or set a value at or above it to raise the floor",
+		}
 	}
 
 	if len(cfg.Keys) == 0 {

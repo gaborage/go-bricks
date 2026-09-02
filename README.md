@@ -776,7 +776,7 @@ keystore:
           env: VTS_P12_PASSWORD         # The variable's NAME (or file: a mounted secret) — never the password
 ```
 
-Each key pair has a `public` and `private` source. For required sources, set exactly one of `file:` (DER path) or `value:` (base64-encoded DER, typically referencing an environment variable). For verification-only services, the `private` entry may be omitted. A `secret:` entry supplies raw symmetric material through the same `file:`/`value:` sources, and a `pkcs12:` entry loads an RSA pair from a password-protected PKCS#12 bundle whose password comes from `password.env:` or `password.file:` (a literal is not expressible). An entry must be exactly one of the three shapes — mixed entries fail startup, and `keystore.secretminlength` (default 32 bytes; explicit `0` disables — deprecated, WARNs at startup, #1036) rejects weak material.
+Each key pair has a `public` and `private` source. For required sources, set exactly one of `file:` (DER path) or `value:` (base64-encoded DER, typically referencing an environment variable). For verification-only services, the `private` entry may be omitted. A `secret:` entry supplies raw symmetric material through the same `file:`/`value:` sources, and a `pkcs12:` entry loads an RSA pair from a password-protected PKCS#12 bundle whose password comes from `password.env:` or `password.file:` (a literal is not expressible). An entry must be exactly one of the three shapes — mixed entries fail startup, and `keystore.secretminlength` (32 bytes, mandatory; a set value can only raise it — ADR-095) rejects weak material.
 
 See [wiki/keystore.md](wiki/keystore.md) for full configuration and API documentation.
 

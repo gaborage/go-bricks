@@ -162,6 +162,7 @@ const (
 	fieldDatabases          = "databases"
 	fieldMultitenantTenants = "multitenant.tenants"
 	fieldKeystoreKeys       = "keystore.keys"
+	fieldKeystoreMinLength  = "keystore.secretminlength"
 	fieldDatabasePort       = "database.port"
 	fieldDatabasePassword   = "database.password"
 	fieldMessaging          = "messaging"

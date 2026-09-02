@@ -1347,7 +1347,7 @@ config can no longer silently disable the floor by omission. **Watch:** this is 
 literals only — `SecretMinLength: 0` or `: N` no longer compiles; write `new(0)` / `new(N)`. YAML and
 env config are unchanged. A hand-built config that relied on the absent field meaning "off" now enforces
 32 bytes, so a shorter secret that used to boot now fails startup — the fix, not a regression. The `0`
-opt-out stays but is deprecated; a later ADR is expected to remove it (#1036). See
+opt-out stays but is deprecated; ADR-095 has since removed it (#1036). See
 [migrations.md](migrations.md) `[C59.13]` and `[C59.14]`.
 
 ---
@@ -1461,6 +1461,26 @@ ADR-059's settlement. There is deliberately no exported `NewTypedHandler` on thi
 **Key Benefits:** a stream consumer declares a struct instead of a decode branch, the framework's
 rendering carries no partner bytes on either lane, and one malformed message can no longer stop a
 tenant indefinitely.
+
+---
+
+### [ADR-095: The keystore Secret-Length Floor Is Mandatory](adr_095_keystore_secret_floor_mandatory.md)
+
+**Date:** 2026-09-01 | **Status:** Accepted | **Breaking:** a `keystore.secretminlength` below 32 — the former `0` opt-out included — now fails startup
+
+ADR-065 kept `0` as a deprecated opt-out behind two startup WARNs so a consumer with a
+genuinely short partner key could surface the need before the floor became mandatory. None
+did, and what the opt-out protected was the silently weak HMAC/HKDF key the floor exists to
+reject. `config.Validate` now rejects any set value below `DefaultKeyStoreSecretMinLength`
+(32) with a `*ConfigError` on `keystore.secretminlength` naming the floor and the ADR, judged
+before the empty-keys return; nil still means 32; the pointer stays so the koanf door can tell
+an explicit `0` from an absent key and reject it rather than silently correct it. Both WARNs,
+`belowRecommended` and the `0`-means-off branch are deleted. A secret shorter than 32 bytes has
+no keystore path — the consumer loads such a partner key itself. See
+[migrations.md](migrations.md) `[C62.1]`.
+
+**Key Benefits:** the floor is a control rather than a suggestion, one less startup WARN an
+operator learns to ignore, and the `keystore` package no longer carries a deprecation branch.
 
 ---
 
@@ -2068,7 +2088,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-094) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-095) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

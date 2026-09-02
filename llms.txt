@@ -3602,7 +3602,7 @@ keystore:
 
 # EKS deployment (base64-encoded DER via env vars)
 keystore:
-  secretminlength: 32          # absent -> 32; 0 -> off (deprecated, WARNs); >0 -> floor; <0 -> rejected
+  secretminlength: 32          # absent -> 32; >=32 -> floor; below 32 (0 included) -> rejected at startup (ADR-095)
   keys:
     signing:
       public:
@@ -3708,16 +3708,15 @@ kstest.AssertKeyNotFound(t, mock, "nonexistent")
 - Symmetric `secret` entries are mutually exclusive with `public`/`private` — a
   mixed entry is a startup config error (structural detection, no discriminator)
 - `Secret(name)` returns a **defensive copy**; the caller owns it and may zeroize
-- `keystore.secretminlength` is tri-state (`*int`): absent/nil defaults to 32;
-  `0` disables the floor (deprecated, WARNs, #1036); positive values set the
-  floor; negative values are rejected. Go literals use `new(n)`
+- `keystore.secretminlength` (`*int`, `new(n)` in Go literals): absent/nil
+  defaults to 32; a set value can only raise the floor — anything below 32,
+  `0` included, fails config validation (ADR-095)
 - Exactly one source per key: `file` (raw/DER path) or `value` (base64 string)
 - A `pkcs12` entry loads an RSA pair from a password-protected bundle: `file`/`value`
   for the bundle, `password.env` (the variable's name) or `password.file` for the
   password — there is no literal field; mutually exclusive with the other two shapes
 - Fails fast at startup if a key cannot be loaded or parsed, or a symmetric secret
-  is shorter than a positive effective floor; a disabled floor admits short
-  secrets with a WARN
+  is shorter than the floor
 - PKCS8 with PKCS1 fallback for private keys (handles legacy formats)
 
 ## JOSE Middleware (Nested JWE-of-JWS)
