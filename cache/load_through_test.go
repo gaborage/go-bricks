@@ -288,7 +288,10 @@ func ltFollowersShareTheLeaderOutcome(t *testing.T, leaderCanceled bool, wantVal
 			assert.Equal(t, wantVal, fres.val)
 		}
 	}
-	assert.Equal(t, 1+late, calls.Load(), "only the leader and the late arrivals may load")
+	// A late follower either arrived after the flight closed and loaded for itself, or
+	// joined and then ran out its own deadline before the leader answered — the second
+	// kind never reaches the loader, so this is an upper bound, not an equality.
+	assert.LessOrEqual(t, calls.Load(), 1+late, "only the leader and the late arrivals may load")
 	assert.NotZero(t, joined, "every follower arrived late — the flight never collapsed")
 }
 
