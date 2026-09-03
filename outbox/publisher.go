@@ -50,10 +50,6 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 		return "", errors.New("outbox: aggregate ID must not be empty")
 	}
 
-	// Resolve the AMQP destination once, for the AMQP lane only. A stream-lane row
-	// carries no exchange or routing key, so applying the fallbacks to it would invent
-	// a destination it will never be published to — and then refuse the event when that
-	// invented destination happens to be too long for a frame it never enters.
 	// The tenant is resolved once, for both lanes, before anything else is judged: the
 	// relay runs detached, and under outbox.tenancy=shared its cycle carries no tenant,
 	// so Publish is the only point that still knows it — the same reason it snapshots
@@ -66,27 +62,10 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 		return "", fmt.Errorf("outbox: %w", err)
 	}
 
-	exchange, routingKey := event.Exchange, event.RoutingKey
+	var exchange, routingKey string
 	if event.Stream == "" {
-		if exchange == "" {
-			exchange = p.defaultExchange
-		}
-		if routingKey == "" {
-			routingKey = event.EventType
-		}
-
-		// The values persisted here are the ones the relay later puts on the wire, so
-		// the publish rule runs on the post-fallback destination BEFORE the INSERT: a
-		// row the AMQP frame can never carry is refused at its source rather than
-		// parked by the relay after MaxRetries. Only the caller's header keys are
-		// judged — the trace keys the framework adds are literals. It runs before the
-		// payload and header marshaling because it needs none of it.
-		if err = messaging.ValidatePublishDestination(messaging.PublishOptions{
-			Exchange:   exchange,
-			RoutingKey: routingKey,
-			Headers:    event.Headers,
-		}); err != nil {
-			return "", fmt.Errorf("outbox: %w", err)
+		if exchange, routingKey, err = p.resolveAMQPDestination(event); err != nil {
+			return "", err
 		}
 	}
 
@@ -136,6 +115,35 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 	}
 
 	return record.ID, nil
+}
+
+// resolveAMQPDestination applies the exchange and routing-key fallbacks and judges the
+// result, for the AMQP lane only. A stream-lane row carries no exchange or routing key, so
+// applying the fallbacks to it would invent a destination it will never be published to —
+// and then refuse the event when that invented destination happens to be too long for a
+// frame it never enters.
+//
+// The values returned are the ones the relay later puts on the wire, so the publish rule
+// runs on the post-fallback destination BEFORE the INSERT: a row the AMQP frame can never
+// carry is refused at its source rather than parked by the relay after MaxRetries. Only
+// the caller's header keys are judged — the trace keys the framework adds are literals. It
+// runs before the payload and header marshaling because it needs none of it.
+func (p *outboxPublisher) resolveAMQPDestination(event *app.OutboxEvent) (exchange, routingKey string, err error) {
+	exchange, routingKey = event.Exchange, event.RoutingKey
+	if exchange == "" {
+		exchange = p.defaultExchange
+	}
+	if routingKey == "" {
+		routingKey = event.EventType
+	}
+	if err = messaging.ValidatePublishDestination(messaging.PublishOptions{
+		Exchange:   exchange,
+		RoutingKey: routingKey,
+		Headers:    event.Headers,
+	}); err != nil {
+		return "", "", fmt.Errorf("outbox: %w", err)
+	}
+	return exchange, routingKey, nil
 }
 
 // applyStreamTarget validates a stream-targeted event and fills the record's stream
