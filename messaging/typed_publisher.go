@@ -17,7 +17,10 @@ import (
 // is shared by every goroutine of a module AND, under multi-tenant messaging,
 // by every tenant's client, so any mutable state here would be a data race.
 // Publish therefore hands the client a fresh headers map on every call and
-// never writes back into the handle.
+// never writes back into the handle. The copy is one level deep, the same depth
+// RegisterPublisher, Declarations.Clone and the stamping wrapper copy at:
+// declared default headers are startup config, expected to be scalars (a
+// string, a number, a bool), not nested tables a publish would mutate.
 type Publisher[T any] struct {
 	eventType  string
 	exchange   string

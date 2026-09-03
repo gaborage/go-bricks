@@ -11,6 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	typedPubExchange   = "orders.events"
+	typedPubRoutingKey = "order.created"
+)
+
 type orderCreated struct {
 	OrderID int64 `json:"order_id"`
 }
@@ -54,8 +59,8 @@ func (c *capturingPublishClient) captured() []capturedFrame {
 func declaredOrderPublisher(t *testing.T) *Publisher[orderCreated] {
 	t.Helper()
 	return DeclareTypedPublisher[orderCreated](NewDeclarations(), &PublisherOptions{
-		Exchange:   "orders.events",
-		RoutingKey: "order.created",
+		Exchange:   typedPubExchange,
+		RoutingKey: typedPubRoutingKey,
 		EventType:  "OrderCreated",
 		Headers:    map[string]any{"event_type": "OrderCreated", "schema": "v2"},
 		Mandatory:  true,
@@ -66,8 +71,8 @@ func declaredOrderPublisher(t *testing.T) *Publisher[orderCreated] {
 func TestDeclareTypedPublisherRegistersLikeDeclarePublisher(t *testing.T) {
 	opts := func() *PublisherOptions {
 		return &PublisherOptions{
-			Exchange:    "orders.events",
-			RoutingKey:  "order.created",
+			Exchange:    typedPubExchange,
+			RoutingKey:  typedPubRoutingKey,
 			EventType:   "OrderCreated",
 			Description: "orders",
 			Headers:     map[string]any{"event_type": "OrderCreated"},
@@ -76,12 +81,12 @@ func TestDeclareTypedPublisherRegistersLikeDeclarePublisher(t *testing.T) {
 	}
 
 	typed := NewDeclarations()
-	typed.DeclareTopicExchange("orders.events")
+	typed.DeclareTopicExchange(typedPubExchange)
 	pub := DeclareTypedPublisher[orderCreated](typed, opts())
 	require.NotNil(t, pub)
 
 	raw := NewDeclarations()
-	raw.DeclareTopicExchange("orders.events")
+	raw.DeclareTopicExchange(typedPubExchange)
 	raw.DeclarePublisher(opts(), nil)
 
 	require.Len(t, typed.Publishers, 1)
@@ -91,7 +96,7 @@ func TestDeclareTypedPublisherRegistersLikeDeclarePublisher(t *testing.T) {
 }
 
 func TestDeclareTypedPublisherDuplicateMatchesDeclarePublisher(t *testing.T) {
-	opts := &PublisherOptions{Exchange: "orders.events", RoutingKey: "order.created", EventType: "OrderCreated"}
+	opts := &PublisherOptions{Exchange: typedPubExchange, RoutingKey: typedPubRoutingKey, EventType: "OrderCreated"}
 
 	raw := NewDeclarations()
 	raw.DeclarePublisher(opts, nil)
@@ -128,8 +133,8 @@ func TestPublisherPublishUsesDeclaredDestination(t *testing.T) {
 	require.Len(t, frames, 1)
 	got := frames[0].options
 	assert.NotEqual(t, stale.Exchange, got.Exchange)
-	assert.Equal(t, "orders.events", got.Exchange)
-	assert.Equal(t, "order.created", got.RoutingKey)
+	assert.Equal(t, typedPubExchange, got.Exchange)
+	assert.Equal(t, typedPubRoutingKey, got.RoutingKey)
 	assert.Equal(t, "OrderCreated", got.Headers["event_type"])
 	assert.Equal(t, "v2", got.Headers["schema"])
 	assert.Len(t, got.Headers, 2)
@@ -160,7 +165,7 @@ func TestPublisherPublishHandsOutFreshHeadersPerCall(t *testing.T) {
 
 func TestPublisherPublishIgnoresLaterOptionsMutation(t *testing.T) {
 	decls := NewDeclarations()
-	opts := &PublisherOptions{Exchange: "orders.events", RoutingKey: "order.created", Headers: map[string]any{"schema": "v2"}}
+	opts := &PublisherOptions{Exchange: typedPubExchange, RoutingKey: typedPubRoutingKey, Headers: map[string]any{"schema": "v2"}}
 	pub := DeclareTypedPublisher[orderCreated](decls, opts)
 
 	opts.Exchange = "mutated"
@@ -170,7 +175,7 @@ func TestPublisherPublishIgnoresLaterOptionsMutation(t *testing.T) {
 	require.NoError(t, pub.Publish(t.Context(), client, orderCreated{}))
 
 	got := client.captured()[0].options
-	assert.Equal(t, "orders.events", got.Exchange)
+	assert.Equal(t, typedPubExchange, got.Exchange)
 	assert.Equal(t, "v2", got.Headers["schema"])
 }
 
@@ -216,7 +221,7 @@ func TestPublisherPublishConcurrent(t *testing.T) {
 	frames := client.captured()
 	require.Len(t, frames, publishes)
 	for _, frame := range frames {
-		assert.Equal(t, "orders.events", frame.options.Exchange)
-		assert.Equal(t, "order.created", frame.options.RoutingKey)
+		assert.Equal(t, typedPubExchange, frame.options.Exchange)
+		assert.Equal(t, typedPubRoutingKey, frame.options.RoutingKey)
 	}
 }
