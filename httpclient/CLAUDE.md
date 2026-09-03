@@ -1,6 +1,6 @@
 # httpclient/ — GoBricks package rules
 
-Loaded when work touches `httpclient/`. Repo-wide rules stay in the root [CLAUDE.md](../CLAUDE.md).
+Repo-wide rules stay in the root [CLAUDE.md](../CLAUDE.md).
 
 ## HTTP Client
 

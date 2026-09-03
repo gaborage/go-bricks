@@ -1,6 +1,6 @@
 # cache/ — GoBricks package rules
 
-Loaded when work touches `cache/`. Repo-wide rules stay in the root [CLAUDE.md](../CLAUDE.md).
+Repo-wide rules stay in the root [CLAUDE.md](../CLAUDE.md).
 
 ## Cache Architecture
 

@@ -1,6 +1,6 @@
 # messaging/ — GoBricks package rules
 
-Loaded when work touches `messaging/`. Repo-wide rules stay in the root [CLAUDE.md](../CLAUDE.md).
+Repo-wide rules stay in the root [CLAUDE.md](../CLAUDE.md).
 
 ## Messaging Architecture
 

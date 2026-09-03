@@ -58,6 +58,7 @@ GoBricks is a **production-grade framework for building MVPs fast**: enterprise-
 - **Deterministic > Dynamic Flow** → Same inputs always produce same outputs.
 - **Composition > Inheritance** → Use interfaces and embedding over inheritance.
 - **Robustness** → Handle errors idiomatically, wrap once at boundaries; no silent failures.
+- **Fail Fast** → Module `Init()` errors are fatal; validation crashes at startup.
 - **Patterns, not Over-Design** → Only when they solve real problems; justify abstractions.
 - **Security First** → Input validation mandatory; secrets from env/vault; audit raw-SQL escape hatches (below).
 - **Context-First Design** → Always pass `context.Context` first (tracing, cancellation, deadlines). See [wiki/context_deadlines.md](wiki/context_deadlines.md).
@@ -74,10 +75,6 @@ GoBricks is a **production-grade framework for building MVPs fast**: enterprise-
 - No hardcoded credentials, no secrets in logs or error messages. The framework's logger applies a `SensitiveDataFilter` to every log line; for PII not already covered by defaults (PAN variants, SSN, tax ID) extend the list via `log.sensitivefields` in YAML — additive, merged into the defaults — or in code via `app.Options.LoggerFilterConfig`, which REPLACES the whole config: start from `logger.DefaultFilterConfig()` and append, don't hand it a bare struct literal — see [wiki/observability.md#sensitive-data-filtering](wiki/observability.md#sensitive-data-filtering) for the field list, two-seam injection, matching semantics, and defense-in-depth guidance. The filter also masks INSIDE an opaque payload (ADR-086): a `json.RawMessage`, `[]byte`, `[]json.RawMessage`, the `Bytes()` door or a JSON-looking string — including a DEFINED type over either (`type Blob []byte`, `type JSONText string`), judged by kind, not spelling — is parsed and walked with the same needles, re-encoded only when something matched, with JWK private members (`kty` marker) and PEM `PRIVATE KEY` blocks masked by shape and an unparseable or over-cap payload masked whole (the cap is `FilterConfig.MaxPayloadBytes`, 64 KiB by default — a code-only field, with no YAML key).
 - Audit logging for sensitive operations.
 
-### Practices & Patterns
-
-- **Fail Fast** → Module `Init()` errors are fatal; validation crashes at startup.
-
 ### Framework vs. Application Development
 
 **GoBricks Framework (this codebase):** 80% coverage (SonarCloud enforced), race detection, multi-platform CI. Breaking changes acceptable when justified (documented in ADRs).
@@ -91,7 +88,7 @@ GoBricks is a **production-grade framework for building MVPs fast**: enterprise-
 
 ## Architecture
 
-Per-package rules (API summaries, critical rules, defaults) live in `<pkg>/CLAUDE.md` for `database/`, `cache/`, `httpclient/`, `scheduler/`, `messaging/`, `outbox/`, `jose/`, `observability/`; each loads automatically when you work under that directory.
+The eight packages whose rules had their own section here — `database/`, `cache/`, `httpclient/`, `messaging/`, `scheduler/`, `observability/`, `outbox/`, `jose/` — now keep them in `<pkg>/CLAUDE.md`, loaded automatically when you work under that directory. Every other package's rules are its Core Components bullet plus the linked wiki page.
 
 ### Core Components
 
@@ -116,6 +113,8 @@ Per-package rules (API summaries, critical rules, defaults) live in `<pkg>/CLAUD
 
 Modules implement `app.Module` (`Name` / `Init(*ModuleDeps)` / `Shutdown`); capabilities are opt-in via duck-typing — the framework detects each interface at startup and calls it: `RouteRegisterer` (HTTP routes), `MessagingDeclarer` (AMQP declarations, validated once and replayed per-tenant), `GlobalMiddlewareRegisterer` (middleware that runs once per request after tenant resolution and cannot be skipped per-route — ADR-036), `DatabaseRequirer` (registration, and therefore startup, fails when no database is configured, so a service whose database config never reached it aborts instead of booting green; multi-tenant, dynamic-config and dynamic-resource deployments are exempt). `ModuleDeps` carries the accessors (`DB`, `Cache`, `Messaging`, `Config`, `Logger`, `Scheduler`, `Outbox`, `Tracer`, `MeterProvider`, `DBByName`, …) — see `app/module.go`.
 
+Registration order is a startup contract: `outbox.NewModule()` needs `scheduler.NewModule()` registered (the relay is a scheduled job) and must itself register BEFORE consumer modules; `keystore.NewModule()` registers BEFORE any module declaring jose-tagged routes (details: `outbox/CLAUDE.md`, `jose/CLAUDE.md`).
+
 ### Configuration Injection
 
 Service-specific configuration with automatic validation: declare a struct with `config:` tags and call `deps.Config.InjectInto(&cfg)` in `Init` (full example in [llms.txt](llms.txt)).
@@ -136,11 +135,9 @@ For pointer-vs-value request/response trade-offs (file uploads, bulk exports), *
 
 > **Mental model:** GoBricks treats `context.Context` as the primary carrier of deadlines and cancellation. The framework configures timeouts at every external boundary — HTTP server, HTTP client, database pool, AMQP, Redis, observability exporter, startup — and lets those deadlines propagate. Inside business logic, **the default is to use the inherited deadline**: do not introduce new timeouts unless you have a specific reason to *shorten* what's already in flight.
 
-Per-boundary defaults table: [wiki/context_deadlines.md](wiki/context_deadlines.md).
-
 **The default pattern is to do nothing** — the request context already carries a 5s deadline, and every framework call propagates it. Shorten only when one sub-operation should fail fast (e.g., cap a cache lookup at 200–500ms so Redis hiccups don't burn the whole request budget). For fire-and-forget background work that must outlive the request, use `context.WithoutCancel(ctx)` to inherit values (trace ID, tenant ID) while severing cancellation — never `context.Background()`.
 
-For the full deep dive (when to shorten, when to detach, common pitfalls, why context-only timeouts), see [wiki/context_deadlines.md](wiki/context_deadlines.md).
+For the per-boundary defaults table and the full deep dive (when to shorten, when to detach, common pitfalls, why context-only timeouts), see [wiki/context_deadlines.md](wiki/context_deadlines.md).
 
 ## Testing
 
@@ -168,7 +165,7 @@ For the testing utilities (TestDB fluent expectations, TenantDBMap, MockCache co
 
 ### CI/CD Pipeline
 
-- Framework jobs run on Go and build-file changes (the `framework` filter's `**/*.go` intentionally also matches `tools/**/*.go`, so tool changes re-run the framework matrix); the `tools/migration` CLI additionally has its own path-gated jobs.
+CI is the single path-filtered `ci-v2.yml` workflow. Framework jobs run on Go and build-file changes (the `framework` filter's `**/*.go` intentionally also matches `tools/**/*.go`, so tool changes re-run the framework matrix); the `tools/migration` CLI additionally has its own path-gated jobs.
 
 For Windows-specific test patterns, CI workflow internals, and operational issues, see [wiki/troubleshooting.md](wiki/troubleshooting.md).
 

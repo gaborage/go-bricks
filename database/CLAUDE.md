@@ -1,6 +1,6 @@
 # database/ — GoBricks package rules
 
-Loaded when work touches `database/`. Repo-wide rules stay in the root [CLAUDE.md](../CLAUDE.md).
+Repo-wide rules stay in the root [CLAUDE.md](../CLAUDE.md).
 
 ## Database Architecture
 
@@ -10,7 +10,7 @@ Unified `database.Interface` supporting PostgreSQL (pgx, `$1` placeholders) and 
 
 **Type-Safe Methods:** `f.Eq`, `f.NotEq`, `f.Lt/Lte/Gt/Gte`, `f.In/NotIn`, `f.Like`, `f.Regex*`, `f.JSONContains` (PG only), `f.Null/NotNull`, `f.Between`, `f.Exists`, `f.NotExists`, `f.InSubquery`. Use `qb.Expr()` for complex SQL inside type-safe methods (no placeholders).
 
-**Escape hatch:** `f.Raw(...)`, `jf.Raw(...)`, and `database.Raw(sql, args...)` (the Execute Helpers' hand-written-SQL adapter, broader than `f.Raw` — it replaces the whole statement, see [wiki/database.md#execute-helpers](../wiki/database.md#execute-helpers)) require a `// SECURITY: Manual SQL review completed - <rationale>` annotation at every call site.
+**Escape hatch:** `f.Raw(...)`, `jf.Raw(...)`, and `database.Raw(sql, args...)` (the Execute Helpers' hand-written-SQL adapter, broader than `f.Raw` — it replaces the whole statement, see [wiki/database.md#execute-helpers](../wiki/database.md#execute-helpers)) require a `// SECURITY: Manual SQL review completed - <rationale>` annotation at every call site; the authoritative rule (the `Having()` string-predicate case, the grep patterns) is the root [CLAUDE.md](../CLAUDE.md) Security Guidelines.
 
 **Defaults applied automatically:** Connection pooling (25 max, keepalive 60s), session timezone (`UTC` per ADR-016), Oracle reserved word quoting.
 

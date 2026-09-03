@@ -61,7 +61,7 @@ If that yields nothing, fall back to `git diff HEAD` and `git diff --staged`.
    pair fell out of sync historically — flag any mismatch.
 
 6. **Version / doc drift.** If `go.mod` Go version changed, check `llms.txt`
-   and CLAUDE.md "Requirements" stay in sync. If a new package directory was
+   and README.md "Requirements" stay in sync. If a new package directory was
    added, check it is reflected in CLAUDE.md (Core Components, File
    Organization, Key Interfaces) and has a `wiki/<package>.md` stub.
 
