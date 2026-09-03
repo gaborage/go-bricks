@@ -5,8 +5,9 @@
 // then reliably delivered to the message broker by a background relay.
 //
 // This guarantees at-least-once delivery: events are never lost even if the broker
-// is temporarily unavailable. Consumers MUST be idempotent — use the outbox.HeaderEventID
-// ("x-outbox-event-id") header for deduplication, via outbox.EventIDFromHeaders.
+// is temporarily unavailable. Consumers MUST be idempotent — dedup on the
+// outbox.HeaderEventID ("x-outbox-event-id") header via messaging.Metadata.DedupKey
+// and inbox.ProcessOnce.
 //
 // Usage:
 //

@@ -28,8 +28,9 @@ type Metadata struct {
 	delivery *amqp.Delivery
 }
 
-// Headers returns the AMQP delivery headers (e.g. for
-// outbox.EventIDFromHeaders). Nil when no headers were published. The table is
+// Headers returns the AMQP delivery headers. Nil when no headers were
+// published. For the outbox dedup key prefer DedupKey, which validates as it
+// extracts. The table is
 // the delivery's own, not a copy — read it, do not mutate it. Values are
 // publisher-controlled, so treat them as untrusted input on a queue fed from
 // outside this service.
@@ -165,9 +166,9 @@ func checkTypedConsumerArgs(decls *Declarations, opts *ConsumerOptions, entry st
 }
 
 // NewTypedHandlerWithMeta is NewTypedHandler for consumers that also need
-// delivery metadata — the outbox-dedup shape: read the x-outbox-event-id
-// header via outbox.EventIDFromHeaders(meta.Headers()) and wrap the business
-// logic in inbox.ProcessOnce. Failure and concurrency semantics are identical
+// delivery metadata — the outbox-dedup shape: take meta.DedupKey() (the
+// grammar-validated x-outbox-event-id, or an error to return) and wrap the
+// business logic in inbox.ProcessOnce. Failure and concurrency semantics are identical
 // to NewTypedHandler; fn must be safe for concurrent use.
 func NewTypedHandlerWithMeta[T any](eventType string, fn func(context.Context, T, Metadata) error) MessageHandler {
 	if fn == nil {

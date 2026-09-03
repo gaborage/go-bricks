@@ -3321,7 +3321,7 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 
 Decode/validation failures return a `*messaging.PayloadError` before the function runs — match with `errors.Is(err, messaging.ErrPayloadUndecodable)` / `messaging.ErrPayloadInvalid`. The function's own error passes through unwrapped. `Error()` and `Fields()` carry no payload bytes (map-key namespaces are redacted to `Limits[*]`) and are safe to log; `Unwrap()` returns the raw decoder/validator error and is not. The adapter is stateless, so `Workers` tuning below applies unchanged.
 
-**Need the delivery headers (outbox dedup)?** `DeclareTypedConsumerWithMeta` / `NewTypedHandlerWithMeta[T]` are the same adapter with `fn` as `func(ctx, T, messaging.Metadata) error` — `meta.Headers()` exposes the AMQP headers so an outbox-fed consumer can read `x-outbox-event-id` via `outbox.EventIDFromHeaders` and wrap the body in `deps.Inbox.ProcessOnce`:
+**Need the delivery headers (outbox dedup)?** `DeclareTypedConsumerWithMeta` / `NewTypedHandlerWithMeta[T]` are the same adapter with `fn` as `func(ctx, T, messaging.Metadata) error` — `meta.DedupKey()` returns the `x-outbox-event-id` header once it passes the ledger grammar `^[A-Za-z0-9_-]{1,128}$` (or an error wrapping `messaging.ErrInvalidEventID` — absent or malformed), so an outbox-fed consumer wraps the body in `deps.Inbox.ProcessOnce`; `ProcessOnce` re-checks the grammar at the ledger door, so an id obtained any other way is refused there:
 
 ```go
 // Same DeclareMessaging body as above, with this call REPLACING the
@@ -3331,11 +3331,12 @@ Decode/validation failures return a `*messaging.PayloadError` before the functio
 messaging.DeclareTypedConsumerWithMeta(decls, &messaging.ConsumerOptions{
 	Queue: queue.Name, Consumer: "order-processor", EventType: "OrderCreated",
 }, func(ctx context.Context, evt OrderCreatedEvent, meta messaging.Metadata) error {
-	id, ok := outbox.EventIDFromHeaders(meta.Headers())
-	if !ok {
-		// No id, no dedup key — processing here would repeat the business
-		// write on every redelivery, so fail closed.
-		return fmt.Errorf("missing x-outbox-event-id header")
+	id, err := meta.DedupKey()
+	if err != nil {
+		// No conforming id, no dedup key — processing here would repeat the
+		// business write on every redelivery, so fail closed: nacked without
+		// requeue, the message parks on the DLQ.
+		return err
 	}
 	return m.inbox.ProcessOnce(ctx, id, func(ctx context.Context, tx dbtypes.Tx) error {
 		// Use tx: the business write must commit with the dedup row, or a crash

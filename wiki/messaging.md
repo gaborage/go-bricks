@@ -137,7 +137,7 @@ messaging: decode failed for event "LimitsUpdated": json: type mismatch (want in
 messaging: validate failed for event "OrderCreated" (fields: OrderCreated.Currency)
 ```
 
-**Delivery metadata.** `DeclareTypedConsumerWithMeta` / `messaging.NewTypedHandlerWithMeta[T](eventType, fn)` are the metadata-carrying siblings of `DeclareTypedConsumer` / `NewTypedHandler`: `fn` is `func(ctx context.Context, payload T, meta messaging.Metadata) error`, with the same decode → validate → `fn` pipeline and failure semantics. `Metadata` exposes three read-only accessors — `Headers() amqp.Table`, `EventType() string`, `Redelivered() bool` — so a typed consumer can read `x-outbox-event-id` and wrap its body in `inbox.ProcessOnce`, the canonical composition for an outbox-fed consumer:
+**Delivery metadata.** `DeclareTypedConsumerWithMeta` / `messaging.NewTypedHandlerWithMeta[T](eventType, fn)` are the metadata-carrying siblings of `DeclareTypedConsumer` / `NewTypedHandler`: `fn` is `func(ctx context.Context, payload T, meta messaging.Metadata) error`, with the same decode → validate → `fn` pipeline and failure semantics. `Metadata` exposes read-only accessors — `Headers() amqp.Table`, `EventType() string`, `Redelivered() bool`, `DedupKey() (string, error)` and `Sealed() (SealedEnvelope, bool)` — so a typed consumer can take the ledger key and wrap its body in `inbox.ProcessOnce`, the canonical composition for an outbox-fed consumer. `DedupKey` returns the `x-outbox-event-id` header once it passes the ledger grammar `^[A-Za-z0-9_-]{1,128}$`, or an error wrapping `messaging.ErrInvalidEventID` when the header is absent or malformed; `inbox.ProcessOnce` re-checks the same grammar at the ledger door, so an id obtained any other way is refused there. `Sealed` answers per consumer TYPE: a plain typed consumer gets `(zero, false)` for every delivery, whatever the publisher wrote.
 
 ```go
 // Same DeclareMessaging body as above, with this call REPLACING the
@@ -149,11 +149,12 @@ messaging.DeclareTypedConsumerWithMeta(decls, &messaging.ConsumerOptions{
     Consumer:  "order-processor",
     EventType: "OrderCreated",
 }, func(ctx context.Context, evt OrderCreated, meta messaging.Metadata) error {
-    id, ok := outbox.EventIDFromHeaders(meta.Headers())
-    if !ok {
-        // No id, no dedup key — processing here would repeat the business
-        // write on every redelivery, so fail closed.
-        return fmt.Errorf("missing x-outbox-event-id header")
+    id, err := meta.DedupKey()
+    if err != nil {
+        // No conforming id, no dedup key — processing here would repeat the
+        // business write on every redelivery, so fail closed: the error is
+        // nacked without requeue and the message parks on the DLQ.
+        return err
     }
     return m.inbox.ProcessOnce(ctx, id, func(ctx context.Context, tx dbtypes.Tx) error {
         return processTx(ctx, tx, evt) // business write joins the dedup transaction
@@ -161,9 +162,9 @@ messaging.DeclareTypedConsumerWithMeta(decls, &messaging.ConsumerOptions{
 })
 ```
 
-**Mixed-queue variant.** A queue that also carries directly-published messages has deliveries with no ledger key by design. There, and only there, swap the `!ok` branch for `return process(ctx, evt)` — processed without dedup, so that handler must be idempotent on its own. An outbox-only queue keeps the fail-closed default above.
+**Mixed-queue variant.** A queue that also carries directly-published messages has deliveries with no ledger key by design. There, and only there, swap the `err != nil` branch for `return process(ctx, evt)` — processed without dedup, so that handler must be idempotent on its own. An outbox-only queue keeps the fail-closed default above.
 
-**Headers are publisher-controlled.** AMQP headers come from whoever published the message, so on a queue fed by an exchange outside this service `meta.Headers()` is caller-supplied input — reading it is identification, not authorization. In the dedup shape above the publisher therefore picks the ledger key: replaying a known `x-outbox-event-id` makes `ProcessOnce` skip the handler and ACK (a silent drop), and novel ids each cost a ledger row until retention sweeps them. Omitting the header is a third lever: the relay stamps `x-outbox-event-id` on every message it publishes, so a publisher that simply drops it would opt out of dedup entirely — which is why the example returns an error on `!ok` rather than processing, and why the mixed-queue variant is a deliberate opt-in for a queue whose traffic you know. Broker-side publish authorization is what bounds all three.
+**Headers are publisher-controlled.** AMQP headers come from whoever published the message, so on a queue fed by an exchange outside this service `meta.Headers()` is caller-supplied input — reading it is identification, not authorization. In the dedup shape above the publisher therefore picks the ledger key: replaying a known `x-outbox-event-id` makes `ProcessOnce` skip the handler and ACK (a silent drop), and novel ids each cost a ledger row until retention sweeps them. Omitting the header is a third lever: the relay stamps `x-outbox-event-id` on every message it publishes, so a publisher that simply drops it would opt out of dedup entirely — which is why the example returns the `DedupKey` error rather than processing, and why the mixed-queue variant is a deliberate opt-in for a queue whose traffic you know. Broker-side publish authorization is what bounds all three.
 
 **Concurrency.** One adapter instance serves every worker of the consumer and every tenant replaying the declarations. It holds no mutable state and allocates a fresh payload per delivery, so the concurrency rules below apply unchanged: the default is `NumCPU * 4` workers, and `Workers: 1` still buys sequential processing when ordering matters. Your `fn` must be safe for concurrent use.
 

@@ -337,7 +337,7 @@ outbox:
   enabled: true
   pollinterval: 2s           # Lower latency
   batchsize: 200             # Higher throughput
-  retentionperiod: 168h      # 7-day retention
+  retentionperiod: 168h      # 7-day retention; the replay window (see config.InboxConfig)
 ```
 
 ## Startup Verification
