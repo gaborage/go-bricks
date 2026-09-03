@@ -45,19 +45,23 @@ func TestMockKeyStoreSecretIsolatedFromCallerMutation(t *testing.T) {
 	assert.Equal(t, []byte("original-key"), again, "Secret must return a defensive copy")
 }
 
-func TestMockKeyStoreGenerationsKeepsDeclaredOrder(t *testing.T) {
+func TestMockKeyStoreGenerationsSortsAscendingLikeTheStore(t *testing.T) {
+	// Declared v10, v2, v1: ascending-by-integer output is v1, v2, v10 — a
+	// lexical sort would yield v1, v10, v2 and declaration order v10, v2, v1.
 	mock := NewMockKeyStore().
+		WithGeneration("svc-sign", "v10", keystore.RolePublicOnly).
 		WithGeneration("svc-sign", "v2", keystore.RolePrivate).
 		WithGeneration("svc-sign", "v1", keystore.RolePublicOnly)
 
 	var enumerator keystore.FamilyEnumerator = mock
 	got := enumerator.Generations("svc-sign")
-	require.Len(t, got, 2)
-	assert.Equal(t, "svc-sign-v2", got[0].Kid())
-	assert.Equal(t, keystore.RolePrivate, got[0].Role)
-	assert.Equal(t, "svc-sign-v1", got[1].Kid())
+	require.Len(t, got, 3)
+	assert.Equal(t, "svc-sign-v1", got[0].Kid())
+	assert.Equal(t, "svc-sign-v2", got[1].Kid())
+	assert.Equal(t, keystore.RolePrivate, got[1].Role)
+	assert.Equal(t, "svc-sign-v10", got[2].Kid())
 	assert.Empty(t, enumerator.Generations("nobody"))
 
 	got[0].Version = "tampered"
-	assert.Equal(t, "v2", mock.Generations("svc-sign")[0].Version)
+	assert.Equal(t, "v1", mock.Generations("svc-sign")[0].Version)
 }

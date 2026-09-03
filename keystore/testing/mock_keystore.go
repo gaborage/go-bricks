@@ -45,14 +45,18 @@ func NewMockKeyStore() *MockKeyStore {
 	}
 }
 
-// WithGeneration declares one provisioned generation of a Logical kid, in the
-// order given: the mock applies no grammar and no sorting, so a test controls
-// the exact accept set the module under test sees. Pair it with WithPublicKey
-// and friends on the generation's Kid() when the module also fetches material.
+// WithGeneration declares one provisioned generation of a Logical kid. The
+// mock applies no grammar, so a test controls the exact accept set the module
+// under test sees, but it keeps the FamilyEnumerator ordering contract:
+// Generations returns ascending versions whatever the declaration order. Pair
+// it with WithPublicKey and friends on the generation's Kid() when the module
+// also fetches material.
 func (m *MockKeyStore) WithGeneration(logical, version string, role keystore.Role) *MockKeyStore {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.generations[logical] = append(m.generations[logical], keystore.Generation{Logical: logical, Version: version, Role: role})
+	gens := append(m.generations[logical], keystore.Generation{Logical: logical, Version: version, Role: role})
+	slices.SortFunc(gens, keystore.CompareGenerations)
+	m.generations[logical] = gens
 	return m
 }
 

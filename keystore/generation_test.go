@@ -165,6 +165,14 @@ func TestIndexFamiliesSortsNumericallyAndGroups(t *testing.T) {
 	assert.False(t, plainIndexed)
 }
 
+func TestCompareGenerationsOrdersByInteger(t *testing.T) {
+	g := func(v string) Generation { return Generation{Logical: "f", Version: v} }
+	assert.Negative(t, CompareGenerations(g("v2"), g("v10")))
+	assert.Positive(t, CompareGenerations(g("v10"), g("v2")))
+	assert.Negative(t, CompareGenerations(g("v10"), g("v11")))
+	assert.Zero(t, CompareGenerations(g("v7"), g("v7")))
+}
+
 func TestIndexFamiliesRefusalNamesTheFirstBadEntry(t *testing.T) {
 	entries := map[string]*keyEntry{
 		"zz-v01": {public: &rsa.PublicKey{}},

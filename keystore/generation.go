@@ -151,10 +151,7 @@ func roleOf(entry *keyEntry) Role {
 
 // indexFamilies groups the loaded entries by Logical kid, each family sorted
 // ascending by version. names is the sorted entry order newStore already
-// built, so the first refusal names the same key every run. Versions are
-// canonical decimal, so a shorter digit string is the smaller integer and
-// equal lengths compare lexically — no integer parse, no overflow ceiling on
-// the digit count.
+// built, so the first refusal names the same key every run.
 func indexFamilies(names []string, entries map[string]*keyEntry) (map[string][]Generation, error) {
 	families := make(map[string][]Generation)
 	for _, name := range names {
@@ -167,12 +164,18 @@ func indexFamilies(names []string, entries map[string]*keyEntry) (map[string][]G
 		}
 	}
 	for _, gens := range families {
-		slices.SortFunc(gens, func(a, b Generation) int {
-			if c := len(a.Version) - len(b.Version); c != 0 {
-				return c
-			}
-			return strings.Compare(a.Version, b.Version)
-		})
+		slices.SortFunc(gens, CompareGenerations)
 	}
 	return families, nil
+}
+
+// CompareGenerations orders two generations of one family by version, the
+// order FamilyEnumerator guarantees. Versions are canonical decimal, so a
+// shorter digit string is the smaller integer and equal lengths compare
+// lexically — no integer parse, no overflow ceiling on the digit count.
+func CompareGenerations(a, b Generation) int {
+	if c := len(a.Version) - len(b.Version); c != 0 {
+		return c
+	}
+	return strings.Compare(a.Version, b.Version)
 }
