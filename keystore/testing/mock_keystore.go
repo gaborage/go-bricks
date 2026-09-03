@@ -54,9 +54,8 @@ func NewMockKeyStore() *MockKeyStore {
 func (m *MockKeyStore) WithGeneration(logical, version string, role keystore.Role) *MockKeyStore {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	gens := append(m.generations[logical], keystore.Generation{Logical: logical, Version: version, Role: role})
-	slices.SortFunc(gens, keystore.CompareGenerations)
-	m.generations[logical] = gens
+	m.generations[logical] = append(m.generations[logical], keystore.Generation{Logical: logical, Version: version, Role: role})
+	slices.SortFunc(m.generations[logical], keystore.CompareGenerations)
 	return m
 }
 
