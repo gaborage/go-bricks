@@ -749,3 +749,140 @@ func TestPublisherStreamTargetSkipsTheAMQPDestinationRule(t *testing.T) {
 	assert.Empty(t, store.insertedRecords[0].Exchange, "no invented exchange is persisted")
 	assert.Empty(t, store.insertedRecords[0].RoutingKey)
 }
+
+// TestPublisherPublishPersistsTheTenantStamp pins the write side of ADR-087 §3: an
+// AMQP-lane row published from a tenant-scoped context persists the tenant in its headers
+// beside the caller's, so a relay cycle that carries no tenant of its own (shared tenancy)
+// still finds it.
+func TestPublisherPublishPersistsTheTenantStamp(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers map[string]any
+	}{
+		{name: "without_caller_headers", headers: nil},
+		{name: "beside_caller_headers", headers: map[string]any{"x-priority": "high"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &mockStore{}
+			pub := newPublisher(store, "", nil)
+			ctx := multitenant.SetTenant(context.Background(), "acme")
+
+			_, err := pub.Publish(ctx, &mockTx{}, &app.OutboxEvent{
+				EventType:   eventTypeTest,
+				AggregateID: aggregateTest,
+				Headers:     tt.headers,
+			})
+
+			require.NoError(t, err)
+			require.Len(t, store.insertedRecords, 1)
+			headers := decodeRecordHeaders(t, store.insertedRecords[0])
+			assert.Equal(t, "acme", headers[messaging.TenantStampHeader])
+			for k, v := range tt.headers {
+				assert.Equal(t, v, headers[k], "caller header %q survives beside the stamp", k)
+			}
+			assert.NotContains(t, tt.headers, messaging.TenantStampHeader, "the caller's map is never mutated")
+		})
+	}
+}
+
+// TestPublisherPublishWithoutATenantWritesNoStamp pins that a tenant-less publish persists
+// no x-tenant-id at all — not an empty-valued one. The relay strips the stamp on presence
+// and the publisher's conflict check keys on presence, so an empty value would be a present,
+// malformed stamp that fails every publish of the row.
+func TestPublisherPublishWithoutATenantWritesNoStamp(t *testing.T) {
+	t.Run("no_caller_headers_stores_null", func(t *testing.T) {
+		store := &mockStore{}
+		pub := newPublisher(store, "", nil)
+
+		_, err := pub.Publish(context.Background(), &mockTx{}, &app.OutboxEvent{
+			EventType:   eventTypeTest,
+			AggregateID: aggregateTest,
+		})
+
+		require.NoError(t, err)
+		require.Len(t, store.insertedRecords, 1)
+		assert.Nil(t, store.insertedRecords[0].Headers, "nothing to persist stays a SQL NULL")
+	})
+
+	t.Run("caller_headers_carry_no_stamp_key", func(t *testing.T) {
+		store := &mockStore{}
+		pub := newPublisher(store, "", nil)
+
+		_, err := pub.Publish(context.Background(), &mockTx{}, &app.OutboxEvent{
+			EventType:   eventTypeTest,
+			AggregateID: aggregateTest,
+			Headers:     map[string]any{"x-priority": "high"},
+		})
+
+		require.NoError(t, err)
+		require.Len(t, store.insertedRecords, 1)
+		headers := decodeRecordHeaders(t, store.insertedRecords[0])
+		assert.NotContains(t, headers, messaging.TenantStampHeader)
+		assert.Equal(t, "high", headers["x-priority"])
+	})
+}
+
+// TestPublisherPublishRefusesACallerSuppliedTenantStamp pins that the outbox applies the
+// publisher's own single-writer rule on BOTH lanes: x-tenant-id in the caller's headers is
+// a publish error whatever its value — equal to the context tenant included — and the row
+// never reaches the ledger.
+func TestPublisherPublishRefusesACallerSuppliedTenantStamp(t *testing.T) {
+	tests := []struct {
+		name   string
+		tenant string
+		value  any
+		stream string
+	}{
+		{name: "equal_to_the_context_tenant", tenant: "acme", value: "acme"},
+		{name: "different_from_the_context_tenant", tenant: "acme", value: "beta"},
+		{name: "without_a_context_tenant", tenant: "", value: "acme"},
+		{name: "on_a_stream_lane_row", tenant: "acme", value: "acme", stream: "customers"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &mockStore{}
+			pub := newPublisher(store, "", []string{"customers"})
+			ctx := multitenant.SetTenant(context.Background(), tt.tenant)
+
+			_, err := pub.Publish(ctx, &mockTx{}, &app.OutboxEvent{
+				EventType:   eventTypeTest,
+				AggregateID: aggregateTest,
+				Stream:      tt.stream,
+				Headers:     map[string]any{messaging.TenantStampHeader: tt.value},
+			})
+
+			require.ErrorIs(t, err, messaging.ErrTenantStampConflict)
+			assert.Empty(t, store.insertedRecords, "a refused publish never reaches the ledger")
+		})
+	}
+}
+
+// TestPublisherPublishStampsBesideTheTraceKeys pins that the stamp and the trace keys share
+// one persisted map: neither snapshot evicts the other.
+func TestPublisherPublishStampsBesideTheTraceKeys(t *testing.T) {
+	store := &mockStore{}
+	pub := newPublisher(store, "", nil)
+	ctx := multitenant.SetTenant(context.Background(), "acme")
+	ctx = gobrickstrace.WithTraceParent(ctx, inboundTraceparent)
+
+	_, err := pub.Publish(ctx, &mockTx{}, &app.OutboxEvent{
+		EventType:   eventTypeTest,
+		AggregateID: aggregateTest,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, store.insertedRecords, 1)
+	headers := decodeRecordHeaders(t, store.insertedRecords[0])
+	assert.Equal(t, "acme", headers[messaging.TenantStampHeader])
+	assert.Contains(t, headers, gobrickstrace.HeaderTraceParent)
+}
+
+// decodeRecordHeaders returns a persisted record's headers exactly as the relay reads them.
+func decodeRecordHeaders(t *testing.T, record *Record) map[string]any {
+	t.Helper()
+	headers, err := decodeHeaders(record.Headers)
+	require.NoError(t, err)
+	require.NotNil(t, headers, "a stamped row persists headers")
+	return headers
+}

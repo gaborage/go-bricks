@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -1385,4 +1386,86 @@ func TestRelayOneStalledStreamDoesNotHoldTheOthers(t *testing.T) {
 	assert.Equal(t, len(records),
 		res.published+res.unrecorded+res.failed+res.deadlettered+res.parked,
 		"every fetched row is accounted for exactly once")
+}
+
+// publishedRows runs Publish for each event under ctx and returns the rows exactly as the
+// ledger holds them, so a relay test exercises the stamp the WRITER produced rather than a
+// hand-crafted one.
+func publishedRows(ctx context.Context, t *testing.T, events ...*app.OutboxEvent) []Record {
+	t.Helper()
+	store := &mockStore{}
+	pub := newPublisher(store, "", nil)
+	rows := make([]Record, 0, len(events))
+	for _, event := range events {
+		_, err := pub.Publish(ctx, &mockTx{}, event)
+		require.NoError(t, err)
+		rows = append(rows, *store.insertedRecords[len(store.insertedRecords)-1])
+	}
+	return rows
+}
+
+// TestRelayRelaysTheTenantPublishStamped is the #1340 regression: a row published from a
+// tenant-scoped context reaches the publisher with the tenant on its context — where the
+// pooled stamping publisher reads it — and never as a replayed header. The cycle dimension
+// varies too: a cycle that carries NO tenant (shared outbox tenancy, control-plane key) must
+// find it in the row, and a per-tenant cycle that already carries it must be unchanged.
+func TestRelayRelaysTheTenantPublishStamped(t *testing.T) {
+	tests := []struct {
+		name        string
+		tenant      string
+		cycleTenant string
+	}{
+		{name: "shared_cycle_tenant_scoped_publish", tenant: "acme"},
+		{name: "shared_cycle_other_tenant_scoped_publish", tenant: "beta"},
+		{name: "shared_cycle_tenant_less_publish", tenant: ""},
+		{name: "per_tenant_cycle", tenant: "acme", cycleTenant: "acme"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pubCtx := multitenant.SetTenant(context.Background(), tt.tenant)
+			store := &fakeStore{FetchPendingResult: publishedRows(pubCtx, t, &app.OutboxEvent{
+				EventType: "order.created", AggregateID: "o1", Exchange: "ex", RoutingKey: "a",
+			})}
+			amqp := newFakeAMQP()
+			r := newRelayWithFakes(store, amqp, nil)
+			r.tenants = []string{tt.cycleTenant}
+			db := dbtesting.NewTestDB("postgresql")
+
+			require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+			require.Equal(t, 1, amqp.PublishCalls)
+			got, ok := multitenant.GetTenant(amqp.LastPublishCtx)
+			assert.Equal(t, tt.tenant != "", ok)
+			assert.Equal(t, tt.tenant, got)
+			assert.NotContains(t, amqp.LastPublishHdrs, messaging.TenantStampHeader,
+				"the stamp travels by context; the pooled publisher is its only header writer")
+			assert.Equal(t, 1, store.MarkPublishedCalls)
+		})
+	}
+}
+
+// TestRelayOrdersTheRowsPublishWroteByTenant extends TestRelayStampedAMQPRowsKeyByTenantStamp
+// to the write side: rows written by Publish for two tenants order by the stamp Publish
+// persisted, spanning routing keys within a tenant and not across tenants.
+func TestRelayOrdersTheRowsPublishWroteByTenant(t *testing.T) {
+	acme := multitenant.SetTenant(context.Background(), "acme")
+	beta := multitenant.SetTenant(context.Background(), "beta")
+	rows := publishedRows(acme, t,
+		&app.OutboxEvent{EventType: "e", AggregateID: "A1", Exchange: "ex", RoutingKey: "a"},
+		&app.OutboxEvent{EventType: "e", AggregateID: "A2", Exchange: "ex", RoutingKey: "b"},
+	)
+	rows = append(rows, publishedRows(beta, t,
+		&app.OutboxEvent{EventType: "e", AggregateID: "B1", Exchange: "ex", RoutingKey: "a"},
+	)...)
+	store := &fakeStore{FetchPendingResult: rows}
+	amqp := newFakeAMQP()
+	amqp.PublishErrOnce = map[string]error{"ex:a": errors.New("broker rejected")}
+	r := newRelayWithFakes(store, amqp, nil)
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+	assert.Equal(t, 2, amqp.PublishCalls,
+		"A2 parks behind A1 because Publish stamped them with the same tenant, not because of a routing key")
+	assert.Equal(t, []string{"a", "a"}, amqp.PublishOrder,
+		"B1 publishes although its routing key equals A1's — Publish stamped it for another tenant")
+	assert.Equal(t, rows[2].ID, store.MarkPublishedLastID)
 }
