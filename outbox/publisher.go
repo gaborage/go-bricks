@@ -14,7 +14,6 @@ import (
 	"github.com/gaborage/go-bricks/app"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/messaging"
-	"github.com/gaborage/go-bricks/multitenant"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
@@ -51,31 +50,22 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 		return "", errors.New("outbox: aggregate ID must not be empty")
 	}
 
-	// Resolve the AMQP destination once, for the AMQP lane only. A stream-lane row
-	// carries no exchange or routing key, so applying the fallbacks to it would invent
-	// a destination it will never be published to — and then refuse the event when that
-	// invented destination happens to be too long for a frame it never enters.
-	exchange, routingKey := event.Exchange, event.RoutingKey
-	if event.Stream == "" {
-		if exchange == "" {
-			exchange = p.defaultExchange
-		}
-		if routingKey == "" {
-			routingKey = event.EventType
-		}
+	// The tenant is resolved once, for both lanes, before anything else is judged: the
+	// relay runs detached, and under outbox.tenancy=shared its cycle carries no tenant,
+	// so Publish is the only point that still knows it — the same reason it snapshots
+	// the trace keys (below). The rule is the publisher's own (ADR-087 §3): a
+	// caller-supplied x-tenant-id is refused whatever the lane, then the context tenant
+	// is the stamp. Where it is persisted differs by lane: an AMQP row carries it in its
+	// headers, a stream row as its partition key (applyStreamTarget).
+	stamp, err := messaging.ResolveTenantStamp(ctx, event.Headers)
+	if err != nil {
+		return "", fmt.Errorf("outbox: %w", err)
+	}
 
-		// The values persisted here are the ones the relay later puts on the wire, so
-		// the publish rule runs on the post-fallback destination BEFORE the INSERT: a
-		// row the AMQP frame can never carry is refused at its source rather than
-		// parked by the relay after MaxRetries. Only the caller's header keys are
-		// judged — the trace keys the framework adds are literals. It runs before the
-		// payload and header marshaling because it needs none of it.
-		if err := messaging.ValidatePublishDestination(messaging.PublishOptions{
-			Exchange:   exchange,
-			RoutingKey: routingKey,
-			Headers:    event.Headers,
-		}); err != nil {
-			return "", fmt.Errorf("outbox: %w", err)
+	var exchange, routingKey string
+	if event.Stream == "" {
+		if exchange, routingKey, err = p.resolveAMQPDestination(event); err != nil {
+			return "", err
 		}
 	}
 
@@ -95,7 +85,7 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 	// direct AMQP fast-path performs, keeping outbox + direct publishes
 	// trace-equivalent. Untraced publishes (no trace in context) are left as-is
 	// so background events don't accrue synthetic trace headers.
-	headers, err := marshalHeaders(ctx, event.Headers)
+	headers, err := marshalHeaders(ctx, event.Headers, stamp)
 	if err != nil {
 		return "", fmt.Errorf("outbox: failed to marshal headers: %w", err)
 	}
@@ -111,7 +101,7 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 	}
 
 	if event.Stream != "" {
-		if err := p.applyStreamTarget(ctx, event, record); err != nil {
+		if err := p.applyStreamTarget(stamp, event, record); err != nil {
 			return "", err
 		}
 	} else {
@@ -127,44 +117,83 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 	return record.ID, nil
 }
 
+// resolveAMQPDestination applies the exchange and routing-key fallbacks and judges the
+// result, for the AMQP lane only. A stream-lane row carries no exchange or routing key, so
+// applying the fallbacks to it would invent a destination it will never be published to —
+// and then refuse the event when that invented destination happens to be too long for a
+// frame it never enters.
+//
+// The values returned are the ones the relay later puts on the wire, so the publish rule
+// runs on the post-fallback destination BEFORE the INSERT: a row the AMQP frame can never
+// carry is refused at its source rather than parked by the relay after MaxRetries. Only
+// the caller's header keys are judged — the trace keys the framework adds are literals. It
+// runs before the payload and header marshaling because it needs none of it.
+func (p *outboxPublisher) resolveAMQPDestination(event *app.OutboxEvent) (exchange, routingKey string, err error) {
+	exchange, routingKey = event.Exchange, event.RoutingKey
+	if exchange == "" {
+		exchange = p.defaultExchange
+	}
+	if routingKey == "" {
+		routingKey = event.EventType
+	}
+	if err = messaging.ValidatePublishDestination(messaging.PublishOptions{
+		Exchange:   exchange,
+		RoutingKey: routingKey,
+		Headers:    event.Headers,
+	}); err != nil {
+		return "", "", fmt.Errorf("outbox: %w", err)
+	}
+	return exchange, routingKey, nil
+}
+
 // applyStreamTarget validates a stream-targeted event and fills the record's stream
-// lane fields. The partition key is the tenant stamp, taken here at Publish where the
-// developer sees the refusal, rather than as poison cycles later in the relay.
-func (p *outboxPublisher) applyStreamTarget(ctx context.Context, event *app.OutboxEvent, record *Record) error {
+// lane fields. The partition key is the tenant stamp Publish resolved, refused here at
+// Publish where the developer sees it, rather than as poison cycles later in the relay.
+func (p *outboxPublisher) applyStreamTarget(stamp string, event *app.OutboxEvent, record *Record) error {
 	if event.Exchange != "" || event.RoutingKey != "" {
 		return ErrConflictingTargets
 	}
 	if !slices.Contains(p.streamTargets, event.Stream) {
 		return fmt.Errorf("%w: %q", ErrStreamNotAnOutboxTarget, event.Stream)
 	}
-	tenant, ok := multitenant.GetTenant(ctx)
-	if !ok {
+	if stamp == "" {
 		return ErrStreamTargetRequiresTenant
 	}
 	record.Lane = LaneStream
 	record.Stream = event.Stream
-	record.PartitionKey = tenant
+	record.PartitionKey = stamp
 	return nil
 }
 
 // marshalHeaders JSON-encodes the AMQP headers, first capturing the trace
-// context from ctx so it survives to the relay and consumer. The caller's map
-// is never mutated — trace keys are written to a fresh copy. Returns nil (a SQL
-// NULL) when there are neither caller headers nor a trace context to persist.
-func marshalHeaders(ctx context.Context, eventHeaders map[string]any) ([]byte, error) {
+// context from ctx so it survives to the relay and consumer, then the tenant
+// stamp the caller resolved. The caller's map is never mutated — the framework's
+// keys are written to a fresh copy. Returns nil (a SQL NULL) when there are
+// neither caller headers, nor a trace context, nor a stamp to persist.
+//
+// An empty stamp writes NOTHING, not an empty-valued header: the relay strips the
+// stamp on presence and the conflict check keys on presence, so an empty value
+// persisted here would be a present, malformed stamp.
+func marshalHeaders(ctx context.Context, eventHeaders map[string]any, stamp string) ([]byte, error) {
 	traced := hasTraceContext(ctx)
 
-	// Common path: an untraced publish with no caller headers (every
+	// Common path: an untraced, tenant-less publish with no caller headers (every
 	// background/non-HTTP event). Store SQL NULL without allocating a map.
-	if len(eventHeaders) == 0 && !traced {
+	if len(eventHeaders) == 0 && !traced && stamp == "" {
 		return nil, nil
 	}
 
-	// +3 leaves room for the trace keys (X-Request-ID, traceparent, tracestate).
-	headers := make(map[string]any, len(eventHeaders)+3)
+	// Sized to the caller's headers only: the map grows itself for the trace keys
+	// and the stamp, and a +N in the hint is unobservable — the same reason the
+	// stamping publisher sizes its map this way, and the mutation gate's proof of it
+	// (an operator swap in the hint changes nothing any test can see).
+	headers := make(map[string]any, len(eventHeaders))
 	maps.Copy(headers, eventHeaders)
 	if traced {
 		gobrickstrace.InjectIntoHeaders(ctx, &mapHeaderAccessor{headers: headers})
+	}
+	if stamp != "" {
+		headers[messaging.TenantStampHeader] = stamp
 	}
 	return json.Marshal(headers)
 }

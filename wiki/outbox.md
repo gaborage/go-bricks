@@ -307,11 +307,12 @@ Substitute your configured `outbox.tablename` throughout, and grant the relay's 
 `SELECT … FOR UPDATE` on the leader table. The table's own segment is bounded at 49 bytes so
 every identifier derived from it stays distinct under PostgreSQL's 63-byte truncation.
 
-**The tenant stamp is moved onto the publish context**, not replayed from the row's headers:
-the framework is the stamp's only writer ([ADR-087](adr_087_messaging_tenancy_and_tenant_stamp.md)),
-so a stamp replayed out of storage would be an unauthenticated claim. A consumer still reads
-`x-tenant-id` as before — the framework re-stamps it — but a hand-written stamp in
-`OutboxEvent.Headers` does not reach the broker verbatim.
+**The persisted tenant stamp is rehydrated onto the publish context**, never forwarded as a
+stored header: `Publish` persists it in the row, the relay strips it from the headers and
+`SetTenant`s the publish context with it, and the pooled publisher — the stamp's only writer
+([ADR-087](adr_087_messaging_tenancy_and_tenant_stamp.md)) — re-stamps the frame from that
+context. A consumer still reads `x-tenant-id` as before, and a hand-written stamp in
+`OutboxEvent.Headers` is refused at `Publish` with `messaging.ErrTenantStampConflict`.
 
 ## Outbox Defaults
 
@@ -480,8 +481,9 @@ inbox:
 - **Tenant identity travels in the event as the tenant stamp, not in the ledger schema.** The
   outbox/inbox table schemas are unchanged; the framework writes the tenant into the
   `x-tenant-id` header from the publishing context (ADR-087), so a downstream consumer under shared
-  messaging tenancy reads it back automatically. A caller must not set that header itself — it is a
-  publish error. For anything else the event needs, carry it in the payload (the inbox's `Record` already persists `TenantID` from ctx,
+  messaging tenancy reads it back automatically. The write point is `Publish` itself, which snapshots
+  the stamp beside the trace keys because the relay cycle carries no tenant under shared tenancy. A
+  caller must not set that header itself — it is a publish error. For anything else the event needs, carry it in the payload (the inbox's `Record` already persists `TenantID` from ctx,
   regardless of tenancy mode).
 - **First relay cycle after cold start may log one broker-outage cycle.** The connection pre-warmer
   is single-tenant-only, so a shared-tenancy deployment (which requires `multitenant.enabled: true`)
