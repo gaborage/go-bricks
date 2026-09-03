@@ -225,8 +225,12 @@ func (ks *Keystore) ProvisionPublic(name string, pub *rsa.PublicKey) *Keystore {
 func (ks *Keystore) Remove(name string) *Keystore { delete(ks.entries, name); return ks }
 
 func (ks *Keystore) mustConcrete(name string) {
-	if _, _, ok := SplitConcrete(name); !ok {
+	fam, _, ok := SplitConcrete(name)
+	if !ok {
 		panic(fmt.Sprintf("keystore entry %q is not a concrete generation name (<logical>-v<N>)", name))
+	}
+	if err := ValidateLogicalKid(fam); err != nil {
+		panic(fmt.Sprintf("keystore entry %q: %v", name, err))
 	}
 }
 
@@ -306,9 +310,13 @@ func ResolveActive(ks *Keystore, logical string, act Activation) (string, error)
 
 // Frame is the AMQP delivery stand-in: body + headers.
 type Frame struct {
-	Body    []byte
-	Headers map[string]string
+	Body        []byte
+	Type        string // AMQP delivery.Type — routing-only twin of the signed etyp; the opener never compares it
+	ContentType string // stays application/octet-stream (#1304)
+	Headers     map[string]string
 }
+
+const ContentTypeOctet = "application/octet-stream"
 
 // Producer is the typed-door stand-in for one event type.
 type Producer struct {
@@ -430,7 +438,7 @@ func (p *Producer) Seal(evt any) (Frame, *SealTrace, error) {
 	if p.Tenant != "" {
 		headers[HeaderTenantID] = p.Tenant
 	}
-	return Frame{Body: []byte(compact), Headers: headers}, tr, nil
+	return Frame{Body: []byte(compact), Type: p.EventType, ContentType: ContentTypeOctet, Headers: headers}, tr, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -453,6 +461,8 @@ const (
 	CodeDecryptFailed            Code = "SEAL_DECRYPT_FAILED"
 	CodePayloadUndecodable       Code = "SEAL_PAYLOAD_UNDECODABLE"
 	CodeHeaderIDInvalid          Code = "HEADER_ID_INVALID"
+	CodeHeaderSlotInvalid        Code = "SEAL_HEADER_SLOT_INVALID"
+	CodeStartupError             Code = "STARTUP_ERROR" // not an opener code: a declaration/provisioning error at boot
 	VerdictProcessed                  = "processed"
 	VerdictDuplicate                  = "duplicate — skipped"
 	DispositionPoison                 = "POISON (nack, no requeue → DLQ)"
@@ -499,24 +509,95 @@ type Consumer struct {
 	AcceptUnsealed bool
 	// DisableFamilyPin is a PROTOTYPE-ONLY debug knob for the S4 defense-in-depth step.
 	DisableFamilyPin bool
+
+	spec *SealSpec // scanned ONCE by Startup; Open never re-scans
 }
+
+// Startup is the consumer-side ResolvePolicy-parity fail-fast (#1306 taxonomy): T scans,
+// EventType is declared, at least one sign-family generation resolves PUBLIC, at least one
+// encrypt-family generation resolves PRIVATE, and every provisioned generation of each family
+// holds the inherited role. A declaration error is a startup error, never per-message poison.
+func (c *Consumer) Startup(t reflect.Type) error {
+	spec, err := ScanType(t)
+	if err != nil {
+		return fmt.Errorf("startup: %w", err)
+	}
+	if c.EventType == "" {
+		return errors.New("startup: consumer declares no EventType")
+	}
+	signGens := c.Keystore.Generations(spec.SignLogical)
+	if len(signGens) == 0 {
+		return fmt.Errorf("startup: no generation of sign family %q provisioned (consumer verifies → needs public)", spec.SignLogical)
+	}
+	for _, g := range signGens {
+		if _, ok := c.Keystore.Public(g); !ok {
+			return fmt.Errorf("startup: %s holds no public key (consumer verifies)", g)
+		}
+	}
+	encGens := c.Keystore.Generations(spec.EncryptLogical)
+	if len(encGens) == 0 {
+		return fmt.Errorf("startup: no generation of encrypt family %q provisioned (consumer decrypts → needs private)", spec.EncryptLogical)
+	}
+	for _, g := range encGens {
+		if _, ok := c.Keystore.Private(g); !ok {
+			return fmt.Errorf("startup: %s holds no private key (consumer decrypts)", g)
+		}
+	}
+	c.spec = spec
+	return nil
+}
+
+// Spec exposes the cached scan (nil before Startup).
+func (c *Consumer) Spec() *SealSpec { return c.spec }
 
 // SealedEnvelope is what the WithMeta door exposes after a successful open.
 type SealedEnvelope struct {
-	JTI     string `json:"jti"`
-	IAT     int64  `json:"iat"`
-	ETyp    string `json:"etyp"`
-	TID     string `json:"tid,omitempty"`
-	SignKid string `json:"signKid"`
-	EncKid  string `json:"encKid"`
+	JTI        string `json:"jti"`
+	IAT        int64  `json:"iat"` // informational; never compared to a clock (#1307)
+	ETyp       string `json:"etyp"`
+	TID        string `json:"tid,omitempty"`
+	SignKid    string `json:"signKid"`
+	SignFamily string `json:"signFamily"`
+	EncKid     string `json:"encKid"`
 }
 
 // DedupKey composes `<logical sign family>:<jti>`. The ":" separator sits OUTSIDE the
 // header-id grammar ^[A-Za-z0-9_-]{1,128}$, so no header-sourced id on an unsealed
 // sibling queue can ever spell this key and pre-insert it into a shared ledger.
 func (e SealedEnvelope) DedupKey() string {
-	fam, _, _ := SplitConcrete(e.SignKid)
-	return fam + dedupKeySeparator + e.JTI
+	return e.SignFamily + dedupKeySeparator + e.JTI
+}
+
+// Meta is the WithMeta door's metadata: one DedupKey call in every migration state.
+type Meta struct {
+	envelope *SealedEnvelope
+	headers  map[string]string
+	unsealed bool
+}
+
+// Sealed reports the envelope when the message opened through the sealed path.
+func (m *Meta) Sealed() (SealedEnvelope, bool) {
+	if m == nil || m.envelope == nil {
+		return SealedEnvelope{}, false
+	}
+	return *m.envelope, true
+}
+
+// DedupKey: sealed → `<family>:<jti>`; opened under Accept-unsealed → the grammar-validated
+// x-outbox-event-id; neither → error. The grammar check lives HERE, at the framework's
+// header-extraction seam, so it binds regardless of what the handler does.
+func (m *Meta) DedupKey() (string, error) {
+	if env, ok := m.Sealed(); ok {
+		return env.DedupKey(), nil
+	}
+	if m == nil || !m.unsealed {
+		return "", errors.New("no dedup key: message neither sealed nor opened under accept-unsealed")
+	}
+	id := m.headers[HeaderOutboxEID]
+	if !headerIDPattern.MatchString(id) {
+		return "", fmt.Errorf("%s: header id (len %d) rejected by grammar %s", CodeHeaderIDInvalid, len(id), headerIDPattern)
+	}
+	return id, nil
 }
 
 // OpenTrace captures the intermediates of one open.
@@ -529,16 +610,35 @@ type OpenTrace struct {
 	Warn      string
 }
 
-// Open applies the rule set in order; the first failing rule wins.
-func (c *Consumer) Open(frame Frame, out any) (*SealedEnvelope, *OpenTrace, *OpenError) {
-	spec, err := ScanType(reflect.TypeOf(out))
-	if err != nil {
-		return nil, nil, poison(0, CodePayloadUndecodable, err.Error())
+// Open applies the rule set in order; the first failing rule wins. Rule numbers are a
+// rendering aid; the Code is the identity.
+//
+//	 1 structural sniff            NOT_SEALED (or plaintext path under Accept-unsealed)
+//	 2 outer alg allowlist         SEAL_ALG_NOT_ALLOWED
+//	 3 sign family pin             SEAL_KID_FAMILY_MISMATCH
+//	 4 sign generation resolves    SEAL_KID_UNKNOWN_GENERATION (recoverable)
+//	 5 signature                   SEAL_SIGNATURE_INVALID
+//	 6 slots present + well-formed SEAL_HEADER_SLOT_INVALID  (jti, iat, etyp, sp, tid-when-required)
+//	 7 etyp == declared            SEAL_EVENT_TYPE_MISMATCH
+//	 8 tid vs tenancy              SEAL_TENANT_MISMATCH
+//	 9 sp == declared              SEAL_MANIFEST_MISMATCH
+//	10 inner JWE: alg/enc, iss==kid, encrypt family/generation, decrypt
+//	11 splice + decode into T      SEAL_PAYLOAD_UNDECODABLE
+//	12 envelope
+//
+// All outer-header rules (1–9) precede any inner-JWE work.
+func (c *Consumer) Open(frame Frame, out any) (*Meta, *OpenTrace, *OpenError) {
+	if c.spec == nil {
+		return nil, nil, &OpenError{Rule: 0, Code: CodeStartupError, Detail: "consumer.Startup was never called", Disposition: "startup"}
 	}
+	spec := c.spec
 	tr := &OpenTrace{}
 	body := string(frame.Body)
 
-	// Rule 1 — structural sniff.
+	// Rule 1 — structural sniff: JWS-shaped = exactly 3 dot-segments AND segment 0
+	// base64url-decodes to a JSON object. A plaintext JSON body cannot satisfy it ('{', '[',
+	// '"' are outside base64url), so the never-fallback guarantee is structural: every
+	// JWS-shaped body takes the sealed branch, only non-shaped bodies may reach plaintext.
 	hdr, shaped := sniffJWS(body)
 	if !shaped {
 		if c.AcceptUnsealed {
@@ -548,7 +648,7 @@ func (c *Consumer) Open(frame Frame, out any) (*SealedEnvelope, *OpenTrace, *Ope
 				return nil, tr, poison(1, CodePayloadUndecodable, err.Error())
 			}
 			tr.OpenedDoc = frame.Body
-			return nil, tr, nil
+			return &Meta{headers: frame.Headers, unsealed: true}, tr, nil
 		}
 		return nil, tr, poison(1, CodeNotSealed, "body is not a compact JWS")
 	}
@@ -588,91 +688,140 @@ func (c *Consumer) Open(frame Frame, out any) (*SealedEnvelope, *OpenTrace, *Ope
 	}
 	tr.SealedDoc = sealedDoc
 
-	// Rule 6 — etyp pin.
-	if etyp, _ := hdr["etyp"].(string); etyp != c.EventType {
-		return nil, tr, poison(6, CodeEventTypeMismatch, fmt.Sprintf("etyp present (len %d) ≠ declared EventType %q", len(etyp), c.EventType))
+	// Rule 6 — authenticated slots: present and well-formed (#1307 "all mandatory").
+	// Details carry presence and length only, never the value.
+	if slot, why := checkSlots(hdr, c.Tenancy); slot != "" {
+		return nil, tr, poison(6, CodeHeaderSlotInvalid, "slot "+slot+": "+why)
 	}
 
-	// Rule 7 — tid.
+	// Rule 7 — etyp pin.
+	etyp, _ := hdr["etyp"].(string)
+	if etyp != c.EventType {
+		return nil, tr, poison(7, CodeEventTypeMismatch, fmt.Sprintf("etyp (len %d) ≠ declared EventType %q", len(etyp), c.EventType))
+	}
+
+	// Rule 8 — tid. Carrier presence/validity is the delivery pipeline's gate (before open);
+	// the opener compares the signed tid to the carrier the pipeline admitted.
 	tid, _ := hdr["tid"].(string)
 	switch c.Tenancy {
 	case TenancyShared:
 		if carrier := frame.Headers[HeaderTenantID]; tid != carrier {
-			return nil, tr, poison(7, CodeTenantMismatch, fmt.Sprintf("signed tid %q ≠ %s carrier %q", tid, HeaderTenantID, carrier))
+			return nil, tr, poison(8, CodeTenantMismatch, fmt.Sprintf("signed tid (len %d) ≠ %s carrier (len %d)", len(tid), HeaderTenantID, len(carrier)))
 		}
 	case TenancyPerTenant:
 		if tid != "" && tid != c.ContextTenant {
-			return nil, tr, poison(7, CodeTenantMismatch, fmt.Sprintf("signed tid %q ≠ context tenant %q", tid, c.ContextTenant))
+			return nil, tr, poison(8, CodeTenantMismatch, fmt.Sprintf("signed tid (len %d) ≠ context tenant (len %d)", len(tid), len(c.ContextTenant)))
 		}
 	case TenancySingle:
-		// not specified by #1306/#1307 — see DX findings; prototype ignores tid here
+		// OPEN #1309 QUESTION: #1306/#1307 define shared and per-tenant only. The prototype
+		// ignores tid under single tenancy; the spec must state the rule.
 	}
 
-	// Rule 8 — sp manifest.
+	// Rule 9 — sp manifest.
 	if !equalStrings(anySlice(hdr["sp"]), spec.SealedPaths()) {
-		return nil, tr, poison(8, CodeManifestMismatch, fmt.Sprintf("sp %v ≠ declared %v", hdr["sp"], spec.SealedPaths()))
+		return nil, tr, poison(9, CodeManifestMismatch, fmt.Sprintf("sp %v ≠ declared %v", hdr["sp"], spec.SealedPaths()))
 	}
 
-	// Rule 9 — payload doc, inner JWE checks, decrypt.
+	// Rule 10 — payload doc, inner JWE checks, decrypt.
 	var doc map[string]json.RawMessage
 	if err := json.Unmarshal(sealedDoc, &doc); err != nil {
-		return nil, tr, poison(9, CodePayloadUndecodable, "payload doc: "+err.Error())
+		return nil, tr, poison(10, CodePayloadUndecodable, "payload doc: "+err.Error())
 	}
 	var compact string
 	if err := json.Unmarshal(doc[spec.SubjectPath], &compact); err != nil {
-		return nil, tr, poison(9, CodePayloadUndecodable, "subject value is not a compact JWE string")
+		return nil, tr, poison(10, CodePayloadUndecodable, "subject value is not a compact JWE string")
 	}
 	jweHdr, ok := decodeSegmentHeader(compact, 5)
 	if !ok {
-		return nil, tr, poison(9, CodePayloadUndecodable, "subject value is not a compact JWE")
+		return nil, tr, poison(10, CodePayloadUndecodable, "subject value is not a compact JWE")
 	}
 	tr.JWEHeader = jweHdr
 	if a, _ := jweHdr["alg"].(string); a != string(jose.RSA_OAEP_256) {
-		return nil, tr, poison(9, CodeAlgNotAllowed, "inner alg "+a)
+		return nil, tr, poison(10, CodeAlgNotAllowed, "inner alg "+a)
 	}
 	if e, _ := jweHdr["enc"].(string); e != string(jose.A256GCM) {
-		return nil, tr, poison(9, CodeAlgNotAllowed, "inner enc "+e)
+		return nil, tr, poison(10, CodeAlgNotAllowed, "inner enc "+e)
 	}
 	iss, _ := jweHdr["iss"].(string)
 	if iss != kid {
-		return nil, tr, poison(9, CodeAuthorshipMismatch, fmt.Sprintf("inner iss %q ≠ outer kid %q (strip-and-re-sign)", iss, kid))
+		return nil, tr, poison(10, CodeAuthorshipMismatch, fmt.Sprintf("inner iss %q ≠ outer kid %q (strip-and-re-sign)", iss, kid))
 	}
 	encKid, _ := jweHdr["kid"].(string)
 	encFam, _, ok := SplitConcrete(encKid)
 	if !ok || encFam != spec.EncryptLogical {
-		return nil, tr, poison(9, CodeKidFamilyMismatch, fmt.Sprintf("inner kid %q is not a generation of declared encrypt family %q", encKid, spec.EncryptLogical))
+		return nil, tr, poison(10, CodeKidFamilyMismatch, fmt.Sprintf("inner kid %q is not a generation of declared encrypt family %q", encKid, spec.EncryptLogical))
 	}
 	priv, ok := c.Keystore.Private(encKid)
 	if !ok {
-		return nil, tr, &OpenError{Rule: 9, Code: CodeKidUnknownGen, Disposition: DispositionRecoverable,
-			Detail: fmt.Sprintf("inner kid %q not provisioned as PRIVATE in consumer keystore", encKid)}
+		return nil, tr, &OpenError{Rule: 10, Code: CodeKidUnknownGen, Disposition: DispositionRecoverable,
+			Detail: fmt.Sprintf("inner kid %q not provisioned as PRIVATE in consumer keystore (accept set: %v)", encKid, c.Keystore.Generations(spec.EncryptLogical))}
 	}
 	jwe, err := jose.ParseEncrypted(compact, allowedKeyAlgs, allowedEncs)
 	if err != nil {
-		return nil, tr, poison(9, CodePayloadUndecodable, "JWE parse: "+err.Error())
+		return nil, tr, poison(10, CodePayloadUndecodable, "JWE parse: "+err.Error())
 	}
 	plaintext, err := jwe.Decrypt(priv)
 	if err != nil {
-		return nil, tr, poison(9, CodeDecryptFailed, "sub-check decrypt: "+encKid+" private does not open this JWE")
+		return nil, tr, poison(10, CodeDecryptFailed, "sub-check decrypt: "+encKid+" private does not open this JWE")
 	}
 
-	// Rule 10 — splice and decode.
+	// Rule 11 — splice and decode.
 	doc[spec.SubjectPath] = plaintext
 	opened, err := json.Marshal(doc)
 	if err != nil {
-		return nil, tr, poison(10, CodePayloadUndecodable, err.Error())
+		return nil, tr, poison(11, CodePayloadUndecodable, err.Error())
 	}
 	tr.OpenedDoc = opened
 	if err := json.Unmarshal(opened, out); err != nil {
-		return nil, tr, poison(10, CodePayloadUndecodable, err.Error())
+		return nil, tr, poison(11, CodePayloadUndecodable, err.Error())
 	}
 
-	// Rule 11 — envelope.
-	env := &SealedEnvelope{JTI: str(hdr["jti"]), IAT: num(hdr["iat"]), ETyp: str(hdr["etyp"]), TID: tid, SignKid: kid, EncKid: encKid}
-	if !headerIDPattern.MatchString(env.JTI) {
-		return nil, tr, poison(11, CodeHeaderIDInvalid, "jti fails identifier grammar")
+	// Rule 12 — envelope (every slot already validated by rule 6).
+	env := &SealedEnvelope{JTI: str(hdr["jti"]), IAT: num(hdr["iat"]), ETyp: etyp, TID: tid, SignKid: kid, SignFamily: fam, EncKid: encKid}
+	return &Meta{envelope: env, headers: frame.Headers}, tr, nil
+}
+
+// checkSlots returns the first missing/malformed slot name and why.
+func checkSlots(hdr map[string]any, tenancy Tenancy) (slot, why string) {
+	jti, ok := hdr["jti"].(string)
+	switch {
+	case !ok:
+		return "jti", "absent or not a string"
+	case !headerIDPattern.MatchString(jti):
+		return "jti", fmt.Sprintf("fails identifier grammar (len %d)", len(jti))
 	}
-	return env, tr, nil
+	switch v := hdr["iat"].(type) {
+	case nil:
+		return "iat", "absent"
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return "iat", "not an integer NumericDate"
+		}
+		if n < 0 {
+			return "iat", "negative"
+		}
+	default:
+		return "iat", "not a number"
+	}
+	if etyp, ok := hdr["etyp"].(string); !ok || etyp == "" {
+		return "etyp", "absent or empty"
+	}
+	sp, ok := hdr["sp"].([]any)
+	if !ok || len(sp) == 0 {
+		return "sp", "absent or not a non-empty array"
+	}
+	for _, e := range sp {
+		if s, ok := e.(string); !ok || s == "" {
+			return "sp", "entry is not a non-empty string"
+		}
+	}
+	if tenancy == TenancyShared {
+		if tid, ok := hdr["tid"].(string); !ok || tid == "" {
+			return "tid", "absent under shared tenancy (the pipeline admits only stamped deliveries)"
+		}
+	}
+	return "", ""
 }
 
 // sniffJWS: 3 dot-separated base64url segments with a JSON protected header.
@@ -680,19 +829,22 @@ func sniffJWS(body string) (map[string]any, bool) {
 	return decodeSegmentHeader(body, 3)
 }
 
+// decodeSegmentHeader: exactly `segments` dot-segments and segment 0 base64url-decodes to
+// a JSON object. Segments 1..n are NOT decoded here: a malformed signature segment is rule
+// 5's business (SEAL_SIGNATURE_INVALID), never a reason to fall back to plaintext.
 func decodeSegmentHeader(compact string, segments int) (map[string]any, bool) {
 	parts := strings.Split(compact, ".")
 	if len(parts) != segments {
 		return nil, false
 	}
-	for _, p := range parts {
-		if _, err := base64.RawURLEncoding.DecodeString(p); err != nil {
-			return nil, false
-		}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, false
 	}
-	raw, _ := base64.RawURLEncoding.DecodeString(parts[0])
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.UseNumber()
 	var hdr map[string]any
-	if err := json.Unmarshal(raw, &hdr); err != nil {
+	if err := dec.Decode(&hdr); err != nil || hdr == nil {
 		return nil, false
 	}
 	return hdr, true
@@ -766,15 +918,6 @@ func (l *Ledger) ProcessOnce(key string) string {
 	return VerdictProcessed
 }
 
-// ProcessOnceHeaderID is the UNSEALED path: the id comes from a header and must pass the
-// header-id grammar before it can touch the ledger.
-func (l *Ledger) ProcessOnceHeaderID(id string) (string, error) {
-	if !headerIDPattern.MatchString(id) {
-		return "", fmt.Errorf("%s: header id %q rejected by grammar %s", CodeHeaderIDInvalid, id, headerIDPattern)
-	}
-	return l.ProcessOnce(id), nil
-}
-
 // ---------------------------------------------------------------------------
 // Attack helpers (used by scenarios; kept here because they manipulate the wire form)
 // ---------------------------------------------------------------------------
@@ -792,7 +935,9 @@ func TamperPayload(body []byte, fn func(doc map[string]json.RawMessage)) []byte 
 }
 
 // ResignPayload keeps the verified/extracted payload doc (with the original inner JWE)
-// and signs it under another key: the strip-and-re-sign attack.
+// and signs it under another key: the strip-and-re-sign attack. origHeader must be the
+// TYPED header (SealTrace.JWSHeader) so the forged vector differs from the positive one
+// in exactly the intended field.
 func ResignPayload(sealedDoc []byte, origHeader map[string]any, kid string, priv *rsa.PrivateKey) []byte {
 	return ResignPayloadWithTyp(sealedDoc, origHeader, TypSealedV1, kid, priv)
 }
@@ -812,6 +957,46 @@ func ResignPayloadWithTyp(sealedDoc []byte, origHeader map[string]any, typ, kid 
 	obj, _ := signer.Sign(sealedDoc)
 	s, _ := obj.CompactSerialize()
 	return []byte(s)
+}
+
+// HeaderDiff lists the keys whose values differ between two decoded protected headers
+// (the harness asserts each negative vector differs from the positive one in exactly one).
+func HeaderDiff(a, b map[string]any) []string {
+	var out []string
+	seen := map[string]bool{}
+	for k := range a {
+		seen[k] = true
+	}
+	for k := range b {
+		seen[k] = true
+	}
+	for k := range seen {
+		if fmt.Sprint(a[k]) != fmt.Sprint(b[k]) {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ForgeHeader re-signs sealedDoc under priv with origHeader mutated by fn (nil value deletes).
+func ForgeHeader(sealedDoc []byte, origHeader map[string]any, priv *rsa.PrivateKey, fn func(h map[string]any)) []byte {
+	h := map[string]any{}
+	for k, v := range origHeader {
+		h[k] = v
+	}
+	fn(h)
+	opts := &jose.SignerOptions{}
+	for k, v := range h {
+		if k == "alg" || v == nil {
+			continue
+		}
+		opts = opts.WithHeader(jose.HeaderKey(k), v)
+	}
+	signer, _ := jose.NewSigner(jose.SigningKey{Algorithm: jose.PS256, Key: priv}, opts)
+	obj, _ := signer.Sign(sealedDoc)
+	out, _ := obj.CompactSerialize()
+	return []byte(out)
 }
 
 // JWSPayloadDoc returns the (unverified) payload segment of a compact JWS, for display.
