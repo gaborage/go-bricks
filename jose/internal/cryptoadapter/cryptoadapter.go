@@ -35,6 +35,12 @@ type Header struct {
 	Alg string
 	Enc string
 	Cty string
+	Typ string
+	// Extra holds every protected-header param the adapter does not own (alg, enc, kid,
+	// cty, typ are excluded). Values keep go-jose's decoded shapes: numbers are float64,
+	// arrays are []any — use the typed accessors. From PeekProtectedHeader the contents are
+	// UNAUTHENTICATED wire bytes until Verify succeeds: never log them by value.
+	Extra map[string]any
 }
 
 // DecryptOptions controls strict header validation during JWE decrypt.
@@ -52,12 +58,7 @@ func Decrypt(compact string, key *rsa.PrivateKey, opts *DecryptOptions) ([]byte,
 		return nil, Header{}, ErrParseEncrypted
 	}
 
-	hdr := Header{
-		Kid: jwe.Header.KeyID,
-		Alg: jwe.Header.Algorithm,
-		Enc: extractStringExtra(jwe.Header.ExtraHeaders, "enc"),
-		Cty: extractStringExtra(jwe.Header.ExtraHeaders, jose.HeaderContentType),
-	}
+	hdr := newHeader(jwe.Header.KeyID, jwe.Header.Algorithm, jwe.Header.ExtraHeaders)
 
 	if hdr.Kid == "" {
 		return nil, hdr, ErrKidMissing
@@ -92,11 +93,7 @@ func Verify(compact string, key *rsa.PublicKey, opts *VerifyOptions) ([]byte, He
 	}
 
 	sig := jws.Signatures[0]
-	hdr := Header{
-		Kid: sig.Protected.KeyID,
-		Alg: sig.Protected.Algorithm,
-		Cty: extractStringExtra(sig.Protected.ExtraHeaders, jose.HeaderContentType),
-	}
+	hdr := newHeader(sig.Protected.KeyID, sig.Protected.Algorithm, sig.Protected.ExtraHeaders)
 
 	if hdr.Kid == "" {
 		return nil, hdr, ErrKidMissing
@@ -117,14 +114,28 @@ type SignOptions struct {
 	Kid    string
 	SigAlg jose.SignatureAlgorithm
 	Cty    string
+	Typ    string
+	// Extra is written into the protected header verbatim. Naming an adapter-owned param
+	// (alg, enc, kid, cty, typ) or a JOSE-reserved one (crit, b64, zip, jwk, …) is
+	// ErrExtraCollision, never an overwrite. The map must not be mutated during the call.
+	Extra map[string]any
 }
 
 // Sign produces a compact JWS over payload using the private key.
 func Sign(payload []byte, key *rsa.PrivateKey, opts *SignOptions) (string, error) {
+	if err := checkExtra(opts.Extra); err != nil {
+		return "", err
+	}
 	signerOpts := (&jose.SignerOptions{}).
 		WithHeader(jose.HeaderKey("kid"), opts.Kid)
 	if opts.Cty != "" {
 		signerOpts = signerOpts.WithContentType(jose.ContentType(opts.Cty))
+	}
+	if opts.Typ != "" {
+		signerOpts = signerOpts.WithType(jose.ContentType(opts.Typ))
+	}
+	for k, v := range opts.Extra {
+		signerOpts = signerOpts.WithHeader(jose.HeaderKey(k), v)
 	}
 	signer, err := jose.NewSigner(jose.SigningKey{
 		Algorithm: opts.SigAlg,
@@ -150,14 +161,26 @@ type EncryptOptions struct {
 	KeyAlg jose.KeyAlgorithm
 	Enc    jose.ContentEncryption
 	Cty    string
+	Typ    string
+	// Extra is written into the protected header verbatim; same collision rule as SignOptions.
+	Extra map[string]any
 }
 
 // Encrypt produces a compact JWE over payload using the public key.
 func Encrypt(payload []byte, key *rsa.PublicKey, opts *EncryptOptions) (string, error) {
+	if err := checkExtra(opts.Extra); err != nil {
+		return "", err
+	}
 	encrypterOpts := (&jose.EncrypterOptions{}).
 		WithHeader(jose.HeaderKey("kid"), opts.Kid)
 	if opts.Cty != "" {
 		encrypterOpts = encrypterOpts.WithContentType(jose.ContentType(opts.Cty))
+	}
+	if opts.Typ != "" {
+		encrypterOpts = encrypterOpts.WithType(jose.ContentType(opts.Typ))
+	}
+	for k, v := range opts.Extra {
+		encrypterOpts = encrypterOpts.WithHeader(jose.HeaderKey(k), v)
 	}
 	encrypter, err := jose.NewEncrypter(opts.Enc, jose.Recipient{
 		Algorithm: opts.KeyAlg,
@@ -176,16 +199,4 @@ func Encrypt(payload []byte, key *rsa.PublicKey, opts *EncryptOptions) (string, 
 		return "", ErrEncryptFailed
 	}
 	return compact, nil
-}
-
-func extractStringExtra(extras map[jose.HeaderKey]any, key jose.HeaderKey) string {
-	if extras == nil {
-		return ""
-	}
-	v, ok := extras[key]
-	if !ok {
-		return ""
-	}
-	s, _ := v.(string)
-	return s
 }

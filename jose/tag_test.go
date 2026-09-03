@@ -75,3 +75,25 @@ func TestParseTagInvalid(t *testing.T) {
 		})
 	}
 }
+
+func TestValidKid(t *testing.T) {
+	cases := map[string]struct {
+		in string
+		ok bool
+	}{
+		"alnum":         {"sign-v1_2", true},
+		"single_char":   {"a", true},
+		"empty":         {"", false},
+		"space":         {"sign v1", false},
+		"colon":         {"family:jti", false},
+		"dot":           {"a.b", false},
+		"unicode":       {"kéy", false},
+		"newline":       {"k\n", false},
+		"leading_slash": {"/k", false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.ok, ValidKid(tc.in))
+		})
+	}
+}
