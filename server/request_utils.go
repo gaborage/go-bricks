@@ -1,7 +1,7 @@
 package server
 
 import (
-	"strconv"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v5"
@@ -104,15 +104,17 @@ func safeGetRequestID(c *echo.Context) string {
 const logSafeValueMaxBytes = 256
 
 // logSafeValue returns v rendered log-safe: capped at logSafeValueMaxBytes
-// (a "..." marker replaces the tail) and Go-quoted via strconv.Quote, so
+// (a "..." marker replaces the tail) and Go-quoted via the %q verb, so
 // newlines, other control bytes and invalid UTF-8 appear as escape sequences
-// (\n, \x00) rather than raw bytes. The surrounding quotes are kept: a space
-// inside an unquoted value would otherwise read as a field separator and let
+// (\n, \x00) rather than raw bytes. %q rather than strconv.Quote because it
+// is the form CodeQL's go/log-injection rule recognises as a sanitizer; the
+// output is identical. The surrounding quotes are kept: a space inside an
+// unquoted value would otherwise read as a field separator and let
 // "/x status=200" forge a field on the same line.
 func logSafeValue(v string) string {
 	const marker = "..."
 	if len(v) > logSafeValueMaxBytes {
 		v = v[:logSafeValueMaxBytes-len(marker)] + marker
 	}
-	return strconv.Quote(v)
+	return fmt.Sprintf("%q", v)
 }
