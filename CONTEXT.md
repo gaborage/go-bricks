@@ -197,6 +197,33 @@ is off; it never admits a sealed-shaped body that failed to open.
 _Avoid_: plaintext fallback (the forbidden behavior), compatibility mode,
 lenient mode
 
+**Logical kid**:
+The stable key-family name a sealing declaration carries — it names an
+identity (whose signature, whose readership), never a particular key, so
+rotation never touches the declaration. What travels on the wire is always a
+generation of it.
+_Avoid_: key name (ambiguous with the entry), alias, key id (the wire's word)
+
+**Generation**:
+One concrete key of a logical kid's family, individually named and
+individually retirable. A message is sealed under exactly one generation and
+names it, so overlap during rotation is per-message unambiguous.
+_Avoid_: version (overloaded), key instance, rotation slot
+
+**Accept set**:
+The generations a consumer will open for a declared logical kid: exactly
+those provisioned in its own keystore in the inherited role. Provisioning is
+the sole trust act — no separate list can widen or re-aim it.
+_Avoid_: allowlist (a config shape this deliberately is not), trust list,
+key set
+
+**Activation**:
+The producer's explicit, reviewable choice of which provisioned generation
+seals new traffic. Staging material never activates it; with several
+generations present and no choice made, startup refuses to guess.
+_Avoid_: cutover (the fleet event, not the setting), promotion, current key
+(as a config term)
+
 ### Observability
 
 **Sink**:
