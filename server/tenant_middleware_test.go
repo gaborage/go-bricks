@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
 )
 
@@ -74,9 +75,9 @@ func TestTenantMiddlewareLogsRejection(t *testing.T) {
 
 			require.Len(t, capturer.warns, 1, "exactly one WARN per rejected request")
 			captured := strings.Join(capturer.warns, "\n")
-			assert.Contains(t, captured, "method=GET")
-			assert.Contains(t, captured, "path=/tenant-check")
-			assert.Contains(t, captured, "client=192.0.2.1")
+			assert.Contains(t, captured, `method="GET"`)
+			assert.Contains(t, captured, `path="/tenant-check"`)
+			assert.Contains(t, captured, `client="192.0.2.1"`)
 			assert.Contains(t, captured, "status=400")
 			assert.Contains(t, captured, tc.reason, "each resolver outcome logs its fixed reason")
 			assert.NotContains(t, captured, "tenant=", "no resolved tenant field on the reject path")
@@ -104,4 +105,13 @@ func TestTenantMiddlewareNilLoggerDoesNotPanic(t *testing.T) {
 		e.ServeHTTP(rec, req)
 	})
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// TestTenantRejectionLogEscapesRequestValues varies the attacker-written
+// dimension of logTenantRejection: method, path and client IP must reach the
+// log escaped on both logger paths.
+func TestTenantRejectionLogEscapesRequestValues(t *testing.T) {
+	assertRejectionLogEscapesRequestValues(t, func(l logger.Logger, c *echo.Context) {
+		logTenantRejection(l, c, nil)
+	})
 }

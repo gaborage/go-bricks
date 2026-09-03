@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +12,8 @@ import (
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/logger"
 )
 
 func TestValidateRequestIDAcceptsSafeValues(t *testing.T) {
@@ -165,4 +169,75 @@ func TestRequestIDMiddlewareMissingInboundGeneratesUUID(t *testing.T) {
 
 	require.NoError(t, handler(c))
 	assert.Len(t, rec.Header().Get(echo.HeaderXRequestID), 36)
+}
+
+func TestLogSafeValue(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "plain_value_is_quoted", in: "/users/42", want: `"/users/42"`},
+		{name: "space_stays_inside_the_quotes", in: "/x status=200", want: `"/x status=200"`},
+		{name: "quote_is_escaped", in: `a"b`, want: `"a\"b"`},
+		{name: "invalid_utf8_is_hex_escaped", in: "a\xffb", want: `"a\xffb"`},
+		{name: "at_cap_is_untouched", in: strings.Repeat("x", logSafeValueMaxBytes), want: `"` + strings.Repeat("x", logSafeValueMaxBytes) + `"`},
+		{name: "over_cap_is_truncated_with_marker", in: strings.Repeat("x", logSafeValueMaxBytes+1), want: `"` + strings.Repeat("x", logSafeValueMaxBytes-3) + `..."`},
+		{name: "escaping_expands_at_most_four_x", in: strings.Repeat("\x00", logSafeValueMaxBytes+1), want: `"` + strings.Repeat(`\x00`, logSafeValueMaxBytes-3) + `..."`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, logSafeValue(tt.in))
+		})
+	}
+}
+
+// assertRejectionLogEscapesRequestValues drives emit with a request whose
+// path carries a space-separated forged field, a newline, a forged log
+// prefix and a control byte, and whose
+// client IP (raw-header IPExtractor, the worst case) carries a newline, on
+// both the framework-logger path and the nil-logger stdlib fallback. Each
+// must produce exactly ONE line with the injected bytes rendered as escape
+// sequences (CodeQL go/log-injection). Shared by every server WARN sink that
+// renders request-derived values through logSafeValue.
+func assertRejectionLogEscapesRequestValues(t *testing.T, emit func(l logger.Logger, c *echo.Context)) {
+	t.Helper()
+	const (
+		forgedPath = "/test status=200\n[server] forged=true\x00"
+		forgedIP   = "10.0.0.202\nclient=1.1.1.1"
+	)
+	newCtx := func() *echo.Context {
+		e := echo.New()
+		e.IPExtractor = func(r *http.Request) string { return r.Header.Get(HeaderXRealIP) }
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
+		req.URL.Path = forgedPath // NewRequest rejects control bytes in the target; set the path directly
+		req.Header.Set(HeaderXRealIP, forgedIP)
+		req.RemoteAddr = forgedIP + ":12345"
+		return e.NewContext(req, httptest.NewRecorder())
+	}
+	check := func(t *testing.T, lines []string) {
+		t.Helper()
+		require.Len(t, lines, 1, "injected newline must not forge a second log line: %q", lines)
+		assert.NotContains(t, lines[0], "\n")
+		assert.NotContains(t, lines[0], "\x00")
+		assert.Contains(t, lines[0], `path="/test status=200\n[server] forged=true\x00"`, "space and newline stay inside the quoted value")
+		assert.Contains(t, lines[0], `client="10.0.0.202\nclient=1.1.1.1`)
+	}
+
+	t.Run("framework_logger", func(t *testing.T) {
+		capturer := &capturingLogger{}
+		emit(capturer, newCtx())
+		check(t, capturer.warns)
+	})
+	t.Run("nil_logger_stdlib_fallback", func(t *testing.T) {
+		var buf bytes.Buffer
+		prev := log.Writer()
+		log.SetOutput(&buf)
+		t.Cleanup(func() { log.SetOutput(prev) })
+		emit(nil, newCtx())
+		lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
+		require.NotEmpty(t, lines[0], "stdlib fallback must emit the WARN")
+		assert.Contains(t, lines[0], "WARN [server.")
+		check(t, lines)
+	})
 }

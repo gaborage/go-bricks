@@ -938,10 +938,26 @@ func (c *capturingLogger) Warn() logger.LogEvent { return &capturingLogEvent{sin
 
 type capturingLogEvent struct {
 	noopLogEvent
-	sink *capturingLogger
+	sink   *capturingLogger
+	fields []string
 }
 
-func (e *capturingLogEvent) Msg(msg string) { e.sink.warns = append(e.sink.warns, msg) }
+// Str and Int record structured fields as "key=value" so a Msg assertion can
+// see them beside the message text (mirrors the stdlib fallback's rendering).
+func (e *capturingLogEvent) Str(key, val string) logger.LogEvent {
+	e.fields = append(e.fields, key+"="+val)
+	return e
+}
+
+func (e *capturingLogEvent) Int(key string, val int) logger.LogEvent {
+	e.fields = append(e.fields, fmt.Sprintf("%s=%d", key, val))
+	return e
+}
+
+func (e *capturingLogEvent) Msg(msg string) {
+	e.sink.warns = append(e.sink.warns, strings.Join(append([]string{msg}, e.fields...), " "))
+}
+
 func (e *capturingLogEvent) Msgf(format string, args ...any) {
 	e.sink.warns = append(e.sink.warns, fmt.Sprintf(format, args...))
 }

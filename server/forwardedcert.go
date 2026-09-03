@@ -234,7 +234,7 @@ func forwardedClientCertMiddlewareEcho(cfg config.ForwardedClientCertConfig, ski
 func logForwardedClientCertRejection(l logger.Logger, c *echo.Context) {
 	req := c.Request()
 	warnWithFallback(l, fmt.Sprintf("[server.forwardedclientcert] request rejected: missing identity method=%s path=%s client=%s status=%d reason=%q",
-		req.Method, req.URL.Path, req.RemoteAddr, http.StatusUnauthorized, "forwarded_client_cert_missing"))
+		logSafeValue(req.Method), logSafeValue(req.URL.Path), logSafeValue(req.RemoteAddr), http.StatusUnauthorized, "forwarded_client_cert_missing"))
 }
 
 // logForwardedClientCertDuplicateWarning emits one WARN whenever a request
@@ -246,7 +246,7 @@ func logForwardedClientCertRejection(l logger.Logger, c *echo.Context) {
 func logForwardedClientCertDuplicateWarning(l logger.Logger, c *echo.Context, dupErr error) {
 	req := c.Request()
 	warnWithFallback(l, fmt.Sprintf("[server.forwardedclientcert] duplicated header detected method=%s path=%s client=%s reason=%q detail=%q",
-		req.Method, req.URL.Path, req.RemoteAddr, "forwarded_client_cert_duplicate", dupErr.Error()))
+		logSafeValue(req.Method), logSafeValue(req.URL.Path), logSafeValue(req.RemoteAddr), "forwarded_client_cert_duplicate", dupErr.Error()))
 }
 
 // logForwardedClientCertLeafWarning emits a WARN whenever the -Leaf header
@@ -258,7 +258,7 @@ func logForwardedClientCertDuplicateWarning(l logger.Logger, c *echo.Context, du
 func logForwardedClientCertLeafWarning(l logger.Logger, c *echo.Context, parseErr error, encodedLeaf string) {
 	req := c.Request()
 	warnWithFallback(l, fmt.Sprintf("[server.forwardedclientcert] leaf certificate not decoded method=%s path=%s client=%s reason=%q leaf_bytes=%d",
-		req.Method, req.URL.Path, req.RemoteAddr, parseErr.Error(), len(encodedLeaf)))
+		logSafeValue(req.Method), logSafeValue(req.URL.Path), logSafeValue(req.RemoteAddr), parseErr.Error(), len(encodedLeaf)))
 }
 
 // warnWithFallback routes msg through l.Warn, falling back to the stdlib log

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/logger"
 )
 
 // Test fixtures for the ALB verify-mode identity headers.
@@ -440,6 +442,29 @@ func TestForwardedClientCertMiddlewareDuplicateHeaders(t *testing.T) {
 			require.Len(t, capturer.warns, 1, "the duplicate still leaves a WARN trail even when not required")
 			assert.Contains(t, capturer.warns[0], `reason="forwarded_client_cert_duplicate"`)
 			assert.Contains(t, capturer.warns[0], tc.header, "the WARN must name which header was duplicated")
+		})
+	}
+}
+
+// TestForwardedClientCertWarnsEscapeRequestValues varies the attacker-written
+// dimension of the three forwarded-client-cert WARN sinks: method, path and
+// client must reach the log escaped on both logger paths.
+func TestForwardedClientCertWarnsEscapeRequestValues(t *testing.T) {
+	tests := []struct {
+		name string
+		emit func(l logger.Logger, c *echo.Context)
+	}{
+		{name: "rejection", emit: logForwardedClientCertRejection},
+		{name: "duplicate_warning", emit: func(l logger.Logger, c *echo.Context) {
+			logForwardedClientCertDuplicateWarning(l, c, errors.New("dup"))
+		}},
+		{name: "leaf_warning", emit: func(l logger.Logger, c *echo.Context) {
+			logForwardedClientCertLeafWarning(l, c, errors.New("parse"), "leaf")
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertRejectionLogEscapesRequestValues(t, tt.emit)
 		})
 	}
 }

@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +13,8 @@ import (
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/logger"
 )
 
 const (
@@ -243,36 +247,11 @@ func TestIPPreGuardIntegrationWithOtherMiddleware(t *testing.T) {
 // server-side trail. capturingLogger is defined in cors_test.go.
 func TestIPPreGuardLogsRejection(t *testing.T) {
 	capturer := &capturingLogger{}
-	e := echo.New()
-	e.Use(ipPreGuardEcho(1, capturer)) // threshold 1: burst of 2 allowed, then rejected
-
-	e.GET("/test", func(c *echo.Context) error {
-		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
-	})
-
-	ip := "10.0.0.200"
-	rejected := false
-	for range 5 {
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
-		req.Header.Set(HeaderXRealIP, ip)
-		req.RemoteAddr = ip + portSuffix
-		rec := httptest.NewRecorder()
-
-		e.ServeHTTP(rec, req)
-
-		if rec.Code == http.StatusTooManyRequests {
-			rejected = true
-			break
-		}
-	}
-	require.True(t, rejected, "expected a 429 rejection to trip the WARN log")
-
-	require.Len(t, capturer.warns, 1, "exactly one WARN per rejected request")
-	captured := strings.Join(capturer.warns, "\n")
-	assert.Contains(t, captured, "method=GET")
-	assert.Contains(t, captured, "path=/test")
-	assert.Contains(t, captured, "client=10.0.0.200")
-	assert.Contains(t, captured, "status=429")
+	line := tripIPPreGuard(t, capturer, "/test", "10.0.0.200", func() []string { return capturer.warns })
+	assert.Contains(t, line, `method="GET"`)
+	assert.Contains(t, line, `path="/test"`)
+	assert.Contains(t, line, `client="10.0.0.200"`)
+	assert.Contains(t, line, "status=429")
 }
 
 // TestIPPreGuardNilLoggerDoesNotPanic verifies the nil-logger path (public
@@ -305,4 +284,98 @@ func TestIPPreGuardNilLoggerDoesNotPanic(t *testing.T) {
 		}
 	})
 	assert.True(t, rejected, "expected a 429 rejection even with a nil logger")
+}
+
+// TestIPPreGuardRejectionLogEscapesRequestValues varies the attacker-written
+// dimension of the rejection log: a path carrying a space-separated forged
+// field, a newline, a forged log prefix and a control byte, plus a spoofed X-Forwarded-For with a newline.
+// Both the framework-logger path and the stdlib fallback must emit exactly ONE
+// line with the injected bytes rendered as escape sequences, and an oversized
+// path must be capped (CodeQL go/log-injection).
+func TestIPPreGuardRejectionLogEscapesRequestValues(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		ip   string
+		want []string
+	}{
+		{
+			name: "newline_and_control_byte_are_escaped",
+			path: "/test status=200\n[server.ip_preguard] forged=true\x00",
+			ip:   "10.0.0.202\nclient=1.1.1.1",
+			want: []string{
+				`path="/test status=200\n[server.ip_preguard] forged=true\x00"`,
+				`client="10.0.0.202\nclient=1.1.1.1"`,
+			},
+		},
+		{
+			name: "oversized_path_is_capped",
+			path: "/" + strings.Repeat("a", 2*logSafeValueMaxBytes),
+			ip:   "10.0.0.203",
+			want: []string{"..."},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Run("framework_logger", func(t *testing.T) {
+				capturer := &capturingLogger{}
+				line := tripIPPreGuard(t, capturer, tt.path, tt.ip, func() []string { return capturer.warns })
+				for _, w := range tt.want {
+					assert.Contains(t, line, w)
+				}
+			})
+			t.Run("nil_logger_stdlib_fallback", func(t *testing.T) {
+				var buf bytes.Buffer
+				prev := log.Writer()
+				log.SetOutput(&buf)
+				t.Cleanup(func() { log.SetOutput(prev) })
+				line := tripIPPreGuard(t, nil, tt.path, tt.ip, func() []string {
+					return strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
+				})
+				assert.Contains(t, line, "WARN [server.ip_preguard]")
+				for _, w := range tt.want {
+					assert.Contains(t, line, w)
+				}
+			})
+		})
+	}
+}
+
+// tripIPPreGuard drives requests from ip at path until a 429 is produced,
+// then asserts the captured output is exactly one line and returns it.
+func tripIPPreGuard(t *testing.T, l logger.Logger, path, ip string, lines func() []string) string {
+	t.Helper()
+	e := echo.New()
+	// Echo's default RealIP is the peer address only; a deployment's IPExtractor
+	// (server.go wires ExtractIPFromXFFHeader) is what makes it header-derived.
+	// A raw-header extractor models the worst case: the value reaches the log
+	// exactly as the caller wrote it.
+	e.IPExtractor = func(r *http.Request) string { return r.Header.Get(HeaderXRealIP) }
+	e.Use(ipPreGuardEcho(1, l))
+	e.GET("/*", func(c *echo.Context) error { return c.NoContent(http.StatusOK) })
+
+	rejected := false
+	for range 5 {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
+		req.URL.Path = path // NewRequest rejects control bytes in the target; set the path directly
+		req.Header.Set(HeaderXRealIP, ip)
+		req.RemoteAddr = "10.0.0.1" + portSuffix
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		if rec.Code == http.StatusTooManyRequests {
+			rejected = true
+			break
+		}
+	}
+	require.True(t, rejected, "expected a 429 rejection to trip the WARN log")
+
+	got := lines()
+	require.Len(t, got, 1, "injected newline must not forge a second log line: %q", got)
+	assert.NotContains(t, got[0], "\n")
+	assert.NotContains(t, got[0], "\x00")
+	_, after, _ := strings.Cut(got[0], "path=")
+	field, _, _ := strings.Cut(after, " ")
+	assert.LessOrEqual(t, len(field), logSafeValueMaxBytes+2, "path field must be capped (plus its quotes)")
+	return got[0]
 }
