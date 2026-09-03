@@ -60,8 +60,8 @@ If that yields nothing, fall back to `git diff HEAD` and `git diff --staged`.
    verify `wiki/architecture_decisions.md` has a matching index entry. This
    pair fell out of sync historically — flag any mismatch.
 
-6. **Version / doc drift.** If `go.mod` Go version changed, check `llms.txt`
-   and CLAUDE.md "Requirements" stay in sync. If a new package directory was
+6. **Version / doc drift.** If `go.mod`'s Go version changed, check that BOTH
+   `llms.txt` and README.md `### Requirements` still state it. If a new package directory was
    added, check it is reflected in CLAUDE.md (Core Components, File
    Organization, Key Interfaces) and has a `wiki/<package>.md` stub.
 

@@ -11,6 +11,9 @@ How the engineering skills should consume this repo's domain documentation when 
   work in, then read the linked `wiki/adr_NNN_<slug>.md` file(s).
 - **`wiki/<topic>.md`** — deep dives per subsystem (`database.md`, `messaging.md`, `outbox.md`, …). CLAUDE.md's
   Quick Reference lists them; read the one for the package you're touching.
+- **`<pkg>/CLAUDE.md`** — package-local rules for `database/`, `cache/`, `httpclient/`, `messaging/`, `scheduler/`,
+  `observability/`, `outbox/`, `jose/`. Claude Code loads one automatically when you touch a file under that
+  directory; nothing to open by hand.
 
 If `CONTEXT.md` doesn't exist, **proceed silently**. Don't flag its absence; don't suggest creating it upfront.
 
