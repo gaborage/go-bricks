@@ -175,9 +175,11 @@ func marshalHeaders(ctx context.Context, eventHeaders map[string]any, stamp stri
 		return nil, nil
 	}
 
-	// +4 leaves room for the trace keys (X-Request-ID, traceparent, tracestate)
-	// and the tenant stamp.
-	headers := make(map[string]any, len(eventHeaders)+4)
+	// Sized to the caller's headers only: the map grows itself for the trace keys
+	// and the stamp, and a +N in the hint is unobservable — the same reason the
+	// stamping publisher sizes its map this way, and the mutation gate's proof of it
+	// (an operator swap in the hint changes nothing any test can see).
+	headers := make(map[string]any, len(eventHeaders))
 	maps.Copy(headers, eventHeaders)
 	if traced {
 		gobrickstrace.InjectIntoHeaders(ctx, &mapHeaderAccessor{headers: headers})
