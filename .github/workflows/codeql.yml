@@ -29,34 +29,63 @@ permissions:
   contents: read
 
 jobs:
+  # One leg per Go module. `go.work` scopes a build to the module it runs in,
+  # so a single root build would silently leave tools/migration unanalyzed.
+  # Each leg uploads under its own `category`, which is what keeps two
+  # same-language SARIF uploads from overwriting one another.
   analyze:
-    name: Analyze Go
+    name: Analyze Go (${{ matrix.module }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       security-events: write   # upload SARIF results
       contents: read
 
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: framework
+            directory: .
+            go-version-file: go.mod
+            cache-dependency-path: go.sum
+            category: /language:go/module:framework
+          - module: migrate-tool
+            directory: tools/migration
+            go-version-file: tools/migration/go.mod
+            cache-dependency-path: tools/migration/go.sum
+            category: /language:go/module:migrate-tool
+
     steps:
       - uses: actions/checkout@v7
 
-      # Pin the toolchain to go.mod so CodeQL's autobuild extracts with
-      # the same Go version CI builds with, not the runner's preinstalled one.
+      # Pin the toolchain to the module's go.mod so extraction uses the Go
+      # version CI builds with, not the runner's preinstalled default.
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version-file: ${{ matrix.go-version-file }}
           cache: true
-          cache-dependency-path: go.sum
+          cache-dependency-path: ${{ matrix.cache-dependency-path }}
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: go
-          build-mode: autobuild
+          build-mode: manual
           queries: security-extended
+
+      # Manual rather than autobuild: autobuild always builds from the repo
+      # root, which cannot reach the second module. GOWORK=off matches how
+      # ci-v2.yml builds tools/migration — the workspace would otherwise pull
+      # in the local framework copy instead of the version its go.mod pins.
+      - name: Build ${{ matrix.module }}
+        working-directory: ${{ matrix.directory }}
+        env:
+          GOWORK: 'off'
+        run: go build ./...
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
         with:
-          category: "/language:go"
+          category: ${{ matrix.category }}
