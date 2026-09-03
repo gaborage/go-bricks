@@ -6,11 +6,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 GoBricks is an enterprise-grade Go framework for building microservices with modular, reusable components. It provides a complete foundation for production-ready applications with HTTP servers, AMQP messaging, multi-database connectivity (PostgreSQL/Oracle), and clean architecture patterns.
 
-**Requirements:**
-
-- Go 1.27 required
-- Docker Desktop or Docker Engine (integration tests only)
-
 ## Workflow Rules
 
 - Always run `make check` before committing and pushing. Never commit or push without a passing build.
@@ -81,12 +76,7 @@ GoBricks is a **production-grade framework for building MVPs fast**: enterprise-
 
 ### Practices & Patterns
 
-- **SOLID** → Apply when it simplifies, don't force it.
 - **Fail Fast** → Module `Init()` errors are fatal; validation crashes at startup.
-- **DRY** → Don't repeat yourself (but avoid premature abstractions).
-- **CQS** → Separate commands vs. queries where it adds clarity.
-- **KISS** → Complexity must earn its place.
-- **YAGNI** → Don't build what isn't needed today.
 
 ### Framework vs. Application Development
 
@@ -96,14 +86,12 @@ GoBricks is a **production-grade framework for building MVPs fast**: enterprise-
 
 ### Engineering Principles
 
-- **Observability:** OpenTelemetry, W3C traceparent propagation across HTTP/messaging.
-- **12-Factor App:** Environment variables for config, stateless design, explicit dependencies.
-- **Error Handling:** Idiomatic Go errors (`fmt.Errorf`, `errors.Is/As`), structured errors at API boundaries.
 - **Context Propagation:** No global variables for tenant IDs or trace IDs — always thread context through calls.
-- **Automation:** Makefile/Taskfile, multi-platform CI/CD.
 - **Documentation:** Just enough to understand quickly; examples over exhaustive docs.
 
 ## Architecture
+
+Per-package rules (API summaries, critical rules, defaults) live in `<pkg>/CLAUDE.md` for `database/`, `cache/`, `httpclient/`, `scheduler/`, `messaging/`, `outbox/`, `jose/`, `observability/`; each loads automatically when you work under that directory.
 
 ### Core Components
 
@@ -144,111 +132,11 @@ Use `server.ResultWithMeta[R]` when a handler needs to contribute extra entries 
 
 For pointer-vs-value request/response trade-offs (file uploads, bulk exports), **Raw Response Mode** for Strangler Fig migrations (legacy-shape JSON without the `data`/`meta` envelope), and the `ResultWithMeta` envelope-meta extension hook, see [wiki/handler_patterns.md](wiki/handler_patterns.md).
 
-### Database Architecture
-
-Unified `database.Interface` supporting PostgreSQL (pgx, `$1` placeholders) and Oracle (`:1` placeholders, SEQUENCE built-in, UDT registration) with vendor-specific SQL generation, type-safe WHERE clauses, performance tracking, and connection pooling.
-
-**Type-safe query building is the default pattern:** `qb.Columns(&T{})` (cached per vendor; Oracle reserved words such as `level` are auto-quoted), `qb.Filter()`, then `qb.Select(cols.Cols("ID", "Name")).From("users").Where(f.Eq(cols.Col("Level"), 5))` — full example in [llms.txt](llms.txt).
-
-**Type-Safe Methods:** `f.Eq`, `f.NotEq`, `f.Lt/Lte/Gt/Gte`, `f.In/NotIn`, `f.Like`, `f.Regex*`, `f.JSONContains` (PG only), `f.Null/NotNull`, `f.Between`, `f.Exists`, `f.NotExists`, `f.InSubquery`. Use `qb.Expr()` for complex SQL inside type-safe methods (no placeholders).
-
-**Escape hatch:** `f.Raw(...)`, `jf.Raw(...)`, and `database.Raw(sql, args...)` (the Execute Helpers' hand-written-SQL adapter, broader than `f.Raw` — it replaces the whole statement, see [wiki/database.md#execute-helpers](wiki/database.md#execute-helpers)) require a `// SECURITY: Manual SQL review completed - <rationale>` annotation at every call site.
-
-**Defaults applied automatically:** Connection pooling (25 max, keepalive 60s), session timezone (`UTC` per ADR-016), Oracle reserved word quoting.
-
-For named databases (multi-DB single-tenant), table aliases, mixed JOIN conditions, subqueries, SELECT expressions, Oracle UDT registration, pool defaults, and session-timezone opt-out, see [wiki/database.md](wiki/database.md).
-
-### Cache Architecture
-
-Redis-based caching with type-safe CBOR serialization, multi-tenant isolation, and automatic lifecycle management. Store the accessor function (`deps.Cache`), NOT a resolved instance — resolution is tenant-aware per call (full example in [llms.txt](llms.txt)).
-
-**Operations:** `Get`, `Set`, `GetOrSet` (atomic SET NX), `CompareAndSet` (Lua CAS), `CompareAndDelete` (Lua CAD), `Marshal`/`Unmarshal` (CBOR), `LoadThrough[T]` (the read-through path — cache leg bounded by `cache.loadtimeout`, per-instance single-flight; [wiki/cache.md#load-through-reads](wiki/cache.md#load-through-reads)). Per-tenant cache instances managed automatically (LRU eviction, idle cleanup, singleflight).
-
-For lifecycle defaults, performance benchmarks, configuration, and multi-tenant patterns, see [wiki/cache.md](wiki/cache.md).
-
-### HTTP Client
-
-Production-ready HTTP client: `httpclient.NewBuilder(logger)` fluent chain (`WithTimeout`, `WithRetries`, `WithW3CTrace`, `WithPeerName`) then `Build()`, which returns `(Client, error)` and fails construction when a `WithTransport`/`WithTLSConfig`/`WithHTTPClient` composition would silently discard TLS material or a caller-supplied `RoundTripper` (ADR-044; full example in [llms.txt](llms.txt)). For full options and interceptor patterns, see [wiki/httpclient.md](wiki/httpclient.md).
-
-### Scheduler
-
-gocron-based job scheduling integrated with the module system. Lazy initialization, overlapping prevention, panic recovery, system APIs at `GET /_sys/job` and `POST /_sys/job/:jobId` (CIDR-restricted), OpenTelemetry instrumentation per job.
-Jobs run in **UTC** by default; set `scheduler.timezone` (IANA name; `-` = host-local) to change the zone for all wall-clock schedules.
-
-Jobs implement `Executor` (`Execute(ctx JobContext) error` — JobContext gives JobID, TriggerType, Logger, DB, Messaging, Config) and register in `RegisterJobs(s app.JobRegistrar)` (full example in [llms.txt](llms.txt)).
-
-**Schedule Methods:** `FixedRate(duration)`, `DailyAt(time)`, `WeeklyAt(weekday, time)`, `HourlyAt(minute)`, `MonthlyAt(dayOfMonth, time)`. See [wiki/scheduler.md](wiki/scheduler.md).
-
-### Messaging Architecture
-
-AMQP-based messaging with **validate-once, replay-many** pattern. Declarations validated upfront, replayed per-tenant for isolation. Automatic reconnection with exponential backoff. Context propagation for tenant IDs and tracing.
-
-**Concise declaration pattern (use the helpers, not raw structs):** in `DeclareMessaging`, use `decls.DeclareTopicExchange` / `DeclareQueue` / `DeclareBinding` / `DeclarePublisher` / `DeclareConsumer` (full example in [llms.txt](llms.txt)).
-
-**Critical Rules:**
-
-- Each `queue + consumer_tag + event_type` triple must be registered exactly **once** — duplicates panic at startup.
-- Handler errors and panics → message nacked WITHOUT requeue (no infinite retry loops). Make handlers thread-safe and idempotent; use `DeclareQueueWithDLQ` to park failures in a dead-letter queue instead of dropping them (raw `Args["x-dead-letter-exchange"]` remains the custom-topology escape hatch — set Args before registration; see [wiki/messaging.md](wiki/messaging.md)).
-- Default consumer concurrency is `runtime.NumCPU() * 4` workers (v0.17+ breaking change). Set `Workers: 1` explicitly when message ordering matters.
-
-For helper API, error handling deep dive, panic recovery, concurrency tuning, and reconnection defaults, see [wiki/messaging.md](wiki/messaging.md).
-
-### Outbox
-
-Transactional outbox for reliable event publishing. Solves the dual-write problem: events written to an outbox table in the **same database transaction** as business data, then delivered to the broker by a background relay job.
-
-Registration order matters: `scheduler.NewModule()` is required (the relay runs as a scheduled job) and `outbox.NewModule()` must register BEFORE consumer modules. Publish inside the business transaction: `s.outbox.Publish(ctx, tx, &app.OutboxEvent{...})` before `tx.Commit` (full example in [llms.txt](llms.txt)).
-
-**Delivery Guarantee:** At-least-once. Consumers MUST be idempotent; use the `x-outbox-event-id` header for deduplication.
-
-For configuration, event-struct fields, retry behavior, and operational defaults, see [wiki/outbox.md](wiki/outbox.md).
-
-### JOSE Middleware
-
-Nested JWE-of-JWS protection on HTTP request and response bodies. Designed for **Visa Token Services**-style integrations and any partner API requiring sign-then-encrypt outbound and decrypt-then-verify inbound on every payload.
-
-```go
-type CreateTokenRequest struct {
-    _   struct{} `jose:"decrypt=our-signing,verify=visa-vts-verify"`
-    PAN string   `json:"pan" validate:"required"`
-}
-
-type CreateTokenResponse struct {
-    _     struct{} `jose:"sign=our-signing,encrypt=visa-vts-encrypt"`
-    Token string   `json:"token"`
-}
-```
-
-**Strict allowlist:** `RS256`/`PS256` for signing; `RSA-OAEP-256` + `A256GCM` for encryption. `alg=none`, `HS*`, `RSA1_5` rejected at parse time. Bidirectional symmetry enforced (request and response must both have tags or neither). Pre-trust failures emit minimal `{code,message}` plaintext envelopes; post-trust handler errors emit the standard envelope, encrypted.
-
-Register `keystore.NewModule()` BEFORE any module declaring jose-tagged routes. For tag syntax, key resolution, the full failure-mode → `IAPIError` mapping table, replay-protection notes, and test utilities, see [wiki/jose.md](wiki/jose.md).
-
-### Observability
-
-W3C traceparent propagation, OpenTelemetry metrics (database/HTTP/AMQP/Go runtime), health endpoints (`/health`, `/ready`), dual-mode logging with conditional sampling, export timeouts gated on `observability.environment` (independent of `app.env`, defaults to `development`) and the signal endpoint — 10s for `development`/`stdout`, 60s otherwise.
-
-**Custom metrics via `deps.MeterProvider`:** nil-check it in `Init`, get a `Meter`, create instruments (full example in [llms.txt](llms.txt)).
-
-**Helper Functions:** `CreateCounter`, `CreateHistogram`, `CreateUpDownCounter` in `observability/metrics.go`. When `observability.enabled: false`, a no-op provider is used (zero overhead, nil-safe).
-
-For dual-mode log routing, runtime metrics, custom-metric patterns, vendor authentication (New Relic/Honeycomb/Datadog), and OTLP collector deployment, see [wiki/observability.md](wiki/observability.md).
-
-**Migration audit events**: every Flyway `migrate` emits a `migration.applied` event via the OTel seam; durable delivery is opt-in (`FlywayMigrator.WithAuditRecorder(sink)` — bounded-queue goroutine, sink errors never abort a migration). Operators MUST supply the principal explicitly (`Config.Audit.Principal`, `provisioning.AuditContext.Principal`) — the framework refuses to infer it and emits `<unspecified>` with a warning. Provisioning transitions (`state.transitioned`) and the quiesce flag (`quiesce.set`/`quiesce.cleared`) go through the same `migration.Emitter` seam, so the audit schema can't drift. See [wiki/migration_audit.md](wiki/migration_audit.md) and [ADR-019](wiki/adr_019_migration_audit_delivery.md).
-
 ## Context Deadlines & Timeouts
 
 > **Mental model:** GoBricks treats `context.Context` as the primary carrier of deadlines and cancellation. The framework configures timeouts at every external boundary — HTTP server, HTTP client, database pool, AMQP, Redis, observability exporter, startup — and lets those deadlines propagate. Inside business logic, **the default is to use the inherited deadline**: do not introduce new timeouts unless you have a specific reason to *shorten* what's already in flight.
 
-| Boundary | Config key | Default |
-| --- | --- | --- |
-| HTTP request handler (deadline on `c.Request().Context()`) | `server.timeout.middleware` | **5s** |
-| HTTP server read / write / idle / shutdown | `server.timeout.read`, `server.timeout.write`, `server.timeout.idle`, `server.timeout.shutdown` | 15s / 30s / 60s / 10s |
-| Outbound HTTP client | `httpclient.NewBuilder(...).WithTimeout(d)` | 30s |
-| Cache (Redis) dial / read / write | `cache.redis.dialtimeout`, `cache.redis.readtimeout`, `cache.redis.writetimeout` | 5s / 3s / 3s |
-| AMQP publish readiness pre-flight (cold/reconnecting client); also bounds the startup publisher pre-warm wait (WARN-only, never fails startup) | `messaging.reconnect.readytimeout` | 5s |
-| AMQP publish (call bound) | `readytimeout + maxpublishattempts × connectiontimeout` | **150s warm / 155s ceiling** at default backoffs (5 × 30s confirmation waits; plus up to 5s `readytimeout` when cold; a raised `resenddelay` can stretch the publish-error path) |
-| Scheduler slow-job WARN / shutdown | `scheduler.timeout.slowjob`, `scheduler.timeout.shutdown` | 25s / 30s |
-| Observability export | `observability.trace.export.timeout`, `observability.metrics.export.timeout`, `observability.logs.export.timeout` | 10s when `observability.environment` is `development` (its default — **not** derived from `app.env`) or the signal's endpoint is `stdout`; 60s otherwise |
+Per-boundary defaults table: [wiki/context_deadlines.md](wiki/context_deadlines.md).
 
 **The default pattern is to do nothing** — the request context already carries a 5s deadline, and every framework call propagates it. Shorten only when one sub-operation should fail fast (e.g., cap a cache lookup at 200–500ms so Redis hiccups don't burn the whole request budget). For fire-and-forget background work that must outlive the request, use `context.WithoutCancel(ctx)` to inherit values (trace ID, tenant ID) while severing cancellation — never `context.Background()`.
 
@@ -280,10 +168,7 @@ For the testing utilities (TestDB fluent expectations, TenantDBMap, MockCache co
 
 ### CI/CD Pipeline
 
-- **Unified CI (`ci-v2.yml`):** Single workflow with intelligent path-based job execution via `dorny/paths-filter`.
 - Framework jobs run on Go and build-file changes (the `framework` filter's `**/*.go` intentionally also matches `tools/**/*.go`, so tool changes re-run the framework matrix); the `tools/migration` CLI additionally has its own path-gated jobs.
-- **Test Matrix:** Ubuntu/Windows × Go 1.27.
-- **Coverage:** Merged unit + integration coverage → SonarCloud.
 
 For Windows-specific test patterns, CI workflow internals, and operational issues, see [wiki/troubleshooting.md](wiki/troubleshooting.md).
 
