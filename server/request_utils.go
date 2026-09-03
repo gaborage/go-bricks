@@ -1,6 +1,8 @@
 package server
 
 import (
+	"fmt"
+
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v5"
 
@@ -93,4 +95,26 @@ func safeGetRequestID(c *echo.Context) string {
 		}
 	}
 	return validateRequestID(c.Request().Header.Get(echo.HeaderXRequestID))
+}
+
+// logSafeValueMaxBytes caps a request-derived value before it is escaped for
+// a log line, so an oversized path cannot become an unbounded log entry. The
+// cap applies to the raw bytes: escaping can expand each byte to at most four
+// (\xHH), so the rendered field is bounded by 4x this value.
+const logSafeValueMaxBytes = 256
+
+// logSafeValue returns v rendered log-safe: capped at logSafeValueMaxBytes
+// (a "..." marker replaces the tail) and Go-quoted via the %q verb, so
+// newlines, other control bytes and invalid UTF-8 appear as escape sequences
+// (\n, \x00) rather than raw bytes. %q rather than strconv.Quote because it
+// is the form CodeQL's go/log-injection rule recognizes as a sanitizer; the
+// output is identical. The surrounding quotes are kept: a space inside an
+// unquoted value would otherwise read as a field separator and let
+// "/x status=200" forge a field on the same line.
+func logSafeValue(v string) string {
+	const marker = "..."
+	if len(v) > logSafeValueMaxBytes {
+		v = v[:logSafeValueMaxBytes-len(marker)] + marker
+	}
+	return fmt.Sprintf("%q", v)
 }

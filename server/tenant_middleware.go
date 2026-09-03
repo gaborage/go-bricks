@@ -79,7 +79,7 @@ func logTenantRejection(l logger.Logger, c *echo.Context, resolveErr error) {
 	}
 	req := c.Request()
 	msg := fmt.Sprintf("[server.tenant] request rejected: invalid tenant method=%s path=%s client=%s status=%d reason=%q",
-		req.Method, req.URL.Path, c.RealIP(), http.StatusBadRequest, reason)
+		logSafeValue(req.Method), logSafeValue(req.URL.Path), logSafeValue(c.RealIP()), http.StatusBadRequest, reason)
 	if l == nil {
 		log.Printf("WARN %s", msg)
 		return

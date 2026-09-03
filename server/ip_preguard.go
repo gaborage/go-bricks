@@ -1,7 +1,6 @@
 package server
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -89,13 +88,25 @@ func ipPreGuardEcho(threshold int, l logger.Logger) echo.MiddlewareFunc {
 // it routes through structured WARN-level logging (SensitiveDataFilter,
 // dual-mode routing); with nil (public IPPreGuard construction) it falls
 // back to the stdlib log package, mirroring corsWarnf in cors.go.
+//
+// Method, path and client IP are all caller-written (RealIP reads
+// X-Forwarded-For / X-Real-IP), so each is rendered through logSafeValue —
+// escaped and byte-capped — on both paths: a newline or control byte in the
+// request must not forge a second log line or field.
 func logIPPreGuardRejection(l logger.Logger, c *echo.Context) {
 	req := c.Request()
-	msg := fmt.Sprintf("[server.ip_preguard] request rejected by IP pre-guard method=%s path=%s client=%s status=%d",
-		req.Method, req.URL.Path, c.RealIP(), http.StatusTooManyRequests)
+	method := logSafeValue(req.Method)
+	path := logSafeValue(req.URL.Path)
+	client := logSafeValue(c.RealIP())
 	if l == nil {
-		log.Printf("WARN %s", msg)
+		log.Printf("WARN [server.ip_preguard] request rejected by IP pre-guard method=%s path=%s client=%s status=%d",
+			method, path, client, http.StatusTooManyRequests)
 		return
 	}
-	l.Warn().Msg(msg)
+	l.Warn().
+		Str("method", method).
+		Str("path", path).
+		Str("client", client).
+		Int("status", http.StatusTooManyRequests).
+		Msg("[server.ip_preguard] request rejected by IP pre-guard")
 }
