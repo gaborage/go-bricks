@@ -618,7 +618,7 @@ type OpenTrace struct {
 //	 3 sign family pin             SEAL_KID_FAMILY_MISMATCH
 //	 4 sign generation resolves    SEAL_KID_UNKNOWN_GENERATION (recoverable)
 //	 5 signature                   SEAL_SIGNATURE_INVALID
-//	 6 slots present + well-formed SEAL_HEADER_SLOT_INVALID  (jti, iat, etyp, sp, tid-when-required)
+//	 6 slots present + well-formed SEAL_HEADER_SLOT_INVALID  (jti, iat, etyp, sp; tid is presence-optional)
 //	 7 etyp == declared            SEAL_EVENT_TYPE_MISMATCH
 //	 8 tid vs tenancy              SEAL_TENANT_MISMATCH
 //	 9 sp == declared              SEAL_MANIFEST_MISMATCH
@@ -816,11 +816,10 @@ func checkSlots(hdr map[string]any, tenancy Tenancy) (slot, why string) {
 			return "sp", "entry is not a non-empty string"
 		}
 	}
-	if tenancy == TenancyShared {
-		if tid, ok := hdr["tid"].(string); !ok || tid == "" {
-			return "tid", "absent under shared tenancy (the pipeline admits only stamped deliveries)"
-		}
-	}
+	// tid is presence-optional in every tenancy (#1306: equality with the carrier is the
+	// decided rule; ADR-087 TenantOptional control-plane consumers legitimately receive
+	// unstamped deliveries under shared tenancy). Rule 8 does the equality.
+	_ = tenancy
 	return "", ""
 }
 

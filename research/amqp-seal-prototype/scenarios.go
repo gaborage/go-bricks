@@ -547,7 +547,7 @@ func s7Unsealed(w *World) *Scenario {
 
 func s8Tenant(w *World) *Scenario {
 	s := &Scenario{ID: "s8", Title: "S8 Tenant",
-		Description: "The producer mirrors the ADR-087 stamp into the signed tid. Shared-tenancy consumer: tid must be present (slot) and equal the x-tenant-id carrier the pipeline admitted. Per-tenant consumer: tid present-and-different from the context tenant is poison; absent is accepted."}
+		Description: "The producer mirrors the ADR-087 stamp into the signed tid. Shared-tenancy consumer: the signed tid must equal the x-tenant-id carrier the pipeline admitted (tid is presence-optional). Per-tenant consumer: tid present-and-different from the context tenant is poison; absent is accepted."}
 	p := w.producer()
 	p.Tenant = "tenant-a"
 	st := s.step("1. Seal with tenant-a resolved", "tid = tenant-a in the signed header; x-tenant-id = tenant-a as the unsigned carrier.", codeNone)
@@ -574,8 +574,8 @@ func s8Tenant(w *World) *Scenario {
 	noTid, _ := seal(st, p, sampleEvent())
 	open(s, st, pt, noTid, NewLedger("tenant-b inbox"), sampleEvent())
 
-	st = s.step("6. Shared-tenancy consumer, tid absent", "Carrier presence is the delivery pipeline's gate before open; a shared consumer only ever sees stamped deliveries, so a signed tid is REQUIRED there. Expected: rule 6 SEAL_HEADER_SLOT_INVALID (slot tid).", CodeHeaderSlotInvalid)
-	open(s, st, c, noTid, nil, nil)
+	st = s.step("6. Shared-tenancy consumer, tid absent, carrier absent", "tid absent, carrier absent — equal, so rule 8 accepts (#1306's decided rule is equality with the x-tenant-id carrier; ADR-087 TenantOptional control-plane consumers legitimately receive unstamped deliveries under shared tenancy). Whether shared tenancy should REQUIRE tid is an open #1309 question.", codeNone)
+	open(s, st, c, noTid, NewLedger("shared inbox"), sampleEvent())
 	return s
 }
 
@@ -609,7 +609,7 @@ func s10Sizes(w *World) *Scenario {
 
 func s11Slots(w *World) *Scenario {
 	s := &Scenario{ID: "s11", Title: "S11 Mandatory slots (#1307)",
-		Description: "Every slot is mandatory and validated right after signature verify (rule 6), before any decrypt. Each vector is Alice's payload doc re-signed under Alice's own key with exactly ONE header field changed, so the signature is valid and only the slot rule can be what fires."}
+		Description: "Every slot is mandatory and validated right after signature verify (rule 6), before any decrypt; tid is presence-optional and judged by rule 8 equality only. Each vector is Alice's payload doc re-signed under Alice's own key with exactly ONE header field changed, so the signature is valid and only the slot rule can be what fires."}
 	p, c := w.producer(), w.consumer()
 	st := s.step("1. Positive vector", "Alice's own message.", codeNone)
 	frame, tr := seal(st, p, sampleEvent())
