@@ -224,6 +224,35 @@ generations present and no choice made, startup refuses to guess.
 _Avoid_: cutover (the fleet event, not the setting), promotion, current key
 (as a config term)
 
+**Redelivery**:
+The broker or an operator presenting a message again — a crash before ack, a
+dead-letter drain, a shovel, an outbox row driven again. Always legitimate,
+and byte-identical to its first delivery; the sealing layer must open it
+exactly as it opened the first.
+_Avoid_: retry (the producer's word), replay (the hostile case), resend
+
+**Replay**:
+An attacker re-injecting a captured message. Byte-identical to a redelivery,
+so no cryptography tells them apart: the sealing layer can only make the
+message's identity un-forgeable, never reject the second arrival.
+_Avoid_: redelivery (the legitimate case), duplicate (the observation), attack
+(too broad)
+
+**Duplicate**:
+What a consumer observes when the same message identity arrives again, for
+whichever reason. Judged once, by the consumer's own idempotency contract —
+the ledger — never by the sealing layer.
+_Avoid_: replay, redelivery (the causes), repeat
+
+**Dedup key**:
+The identity a consumer's ledger records for a sealed message: composed by the
+framework from the verified signing identity and the message's signed unique
+id, in a shape nothing outside the sealing layer can produce. Provisioning
+decides who can mint one; a header never can.
+_Avoid_: event id (the outbox row's word), message id (the wire field), jti
+(the slot, not the composed key), idempotency key (the consumer's business
+key)
+
 ### Observability
 
 **Sink**:
