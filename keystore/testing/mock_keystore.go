@@ -6,7 +6,10 @@ import (
 	"bytes"
 	"crypto/rsa"
 	"fmt"
+	"slices"
 	"sync"
+
+	"github.com/gaborage/go-bricks/keystore"
 )
 
 // MockKeyStore implements app.KeyStore for unit testing.
@@ -26,6 +29,7 @@ type MockKeyStore struct {
 	publicKeys  map[string]*rsa.PublicKey
 	privateKeys map[string]*rsa.PrivateKey
 	secrets     map[string][]byte
+	generations map[string][]keystore.Generation
 	publicErr   error
 	privateErr  error
 	secretErr   error
@@ -37,7 +41,26 @@ func NewMockKeyStore() *MockKeyStore {
 		publicKeys:  make(map[string]*rsa.PublicKey),
 		privateKeys: make(map[string]*rsa.PrivateKey),
 		secrets:     make(map[string][]byte),
+		generations: make(map[string][]keystore.Generation),
 	}
+}
+
+// WithGeneration declares one provisioned generation of a Logical kid, in the
+// order given: the mock applies no grammar and no sorting, so a test controls
+// the exact accept set the module under test sees. Pair it with WithPublicKey
+// and friends on the generation's Kid() when the module also fetches material.
+func (m *MockKeyStore) WithGeneration(logical, version string, role keystore.Role) *MockKeyStore {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.generations[logical] = append(m.generations[logical], keystore.Generation{Logical: logical, Version: version, Role: role})
+	return m
+}
+
+// Generations implements keystore.FamilyEnumerator.
+func (m *MockKeyStore) Generations(logical string) []keystore.Generation {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return slices.Clone(m.generations[logical])
 }
 
 // WithPublicKey adds a public key for the given name.

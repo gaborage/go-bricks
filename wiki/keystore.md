@@ -116,6 +116,38 @@ unvalidated (a hand-built `ModuleDeps`) rather than clamping it. A
 partner-mandated key shorter than 32 bytes must be loaded by your own code,
 outside the keystore.
 
+### Generation entries (key families)
+
+An entry named `<logical>-v<N>` is a **generation** of the Logical kid `<logical>`,
+the shape AMQP payload sealing rotates by (spec #1309, issue #1306). The trailing
+`-v<digits>` is the sole generation marker; every other name is an ordinary entry and nothing below applies to it — HTTP jose entries are unaffected.
+
+At startup the store refuses a generation entry whose family part fails the Logical kid
+grammar: the jose kid alphabet `^[A-Za-z0-9_-]+$` (already narrowed to `^[a-z0-9-]+$` by
+the reachability rule above), at most 64 characters, and never itself ending in
+`-v<digits>` — `x-v1-v2` is refused because its family `x-v1` would be a generation, so
+every entry belongs to exactly one family by construction. The version is a
+positive integer without leading zeros: `x-v0` and `x-v01` are refused (`v1`, not `v01`), so
+two spellings can never alias one key.
+
+**Consumer-visible risk:** an existing entry whose name already ends in `-v<digits>`
+acquires generation semantics, and is refused if its family part fails the grammar.
+No shipped example does (0 hits across `wiki/**`, `llms.txt`, `README.md`, the config
+fixtures and the demo project's `config*.yaml` and jose tags).
+
+```go
+type FamilyEnumerator interface {
+    Generations(logical string) []Generation // ascending by version; empty for an unknown family
+}
+```
+
+The store implements `keystore.FamilyEnumerator`; type-assert `deps.KeyStore` to reach it,
+and `MockKeyStore.WithGeneration(logical, version, role)` fakes it in tests.
+Each `Generation` carries its `Logical` name, its `Version` (`"v2"`) and the `Role` its
+material grants (`RolePublicOnly`, `RolePrivate`, `RoleSecret`); `Kid()` joins them into the
+entry name that travels on the wire. The result **is** the accept set: no separate list widens or re-aims it; provisioning material is the
+sole trust act.
+
 ## API
 
 ```go
