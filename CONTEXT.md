@@ -159,6 +159,44 @@ tenants that share its partition.
 _Avoid_: DLQ (where a classic-lane message goes instead), quarantine, retry
 queue, parking lot
 
+### Payload sealing
+
+**Seal**:
+Turning one outbound event into its protected wire form — encrypt the subject,
+sign the whole result — exactly once, before publish. Opening reverses it:
+verify first, decrypt second; a sealed-shaped body that fails any open step is
+poison, never plaintext.
+_Avoid_: encrypt (alone — sealing is both operations), protect, wrap
+
+**Subject**:
+The one field of an event declared sensitive: its value travels encrypted
+while its sibling routing fields stay clear, and its wire name is what the
+signed manifest pins. Everything that is not the subject is signed but
+readable.
+_Avoid_: sensitive fields (the class, not this role), encrypted block, payload
+
+**Two-kid identity**:
+One sealing declaration names two key identities — signing and encryption —
+shared verbatim by producer and consumer; each side derives its own role
+(private or public) from the same two names, so a shared event struct carries
+one contract instead of per-side variants.
+_Avoid_: key pair (ambiguous), sender/receiver keys, role-split kids
+
+**Typed door**:
+The module-facing publish or consume surface that sees an event as its Go
+type — where declaration-driven behavior (sealing, decoding, validation)
+engages. Raw bytes below it are framework plumbing, not a module surface, so
+what the type declares cannot be bypassed at a call site.
+_Avoid_: typed API, generic publisher/consumer (the mechanism, not the seam),
+high-level client
+
+**Accept-unsealed**:
+A consumer's declared, temporary tolerance of unprotected messages during a
+fleet migration. While it stands, that one consumer's authenticity guarantee
+is off; it never admits a sealed-shaped body that failed to open.
+_Avoid_: plaintext fallback (the forbidden behavior), compatibility mode,
+lenient mode
+
 ### Observability
 
 **Sink**:
