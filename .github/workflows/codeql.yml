@@ -58,6 +58,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # Pin the toolchain to the module's go.mod so extraction uses the Go
       # version CI builds with, not the runner's preinstalled default.
