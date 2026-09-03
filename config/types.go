@@ -477,6 +477,23 @@ type MessagingConfig struct {
 	//     ADR-087.
 	// In single-tenant mode both values behave identically.
 	Tenancy string `koanf:"tenancy" json:"tenancy" yaml:"tenancy" toml:"tenancy" mapstructure:"tenancy"`
+
+	// Seal holds the producer-side AMQP payload-sealing settings.
+	Seal SealConfig `koanf:"seal" json:"seal" yaml:"seal" toml:"seal" mapstructure:"seal"`
+}
+
+// SealConfig holds the producer's payload-sealing choices. Key material itself
+// lives in keystore.keys; this block only selects among provisioned generations.
+type SealConfig struct {
+	// Active is the Activation selector: Logical kid -> generation ("v2") that
+	// seals new traffic. Its domain is every Logical kid the producer resolves,
+	// sign and encrypt alike. Absent for a family with exactly one provisioned
+	// generation, that one is active; with several, startup refuses to guess.
+	// The value grammar is ^v[1-9][0-9]*$ (checked here); resolution against
+	// the keystore is keystore.ActiveGeneration. Environment form:
+	// MESSAGING_SEAL_ACTIVE_<LOGICAL>=v2 — a hyphenated Logical kid is settable
+	// only where the runtime permits '-' in a variable name (ADR-090).
+	Active map[string]string `koanf:"active" json:"active" yaml:"active" toml:"active" mapstructure:"active"`
 }
 
 // StreamsConfig holds native RabbitMQ stream-protocol settings (consumption).
