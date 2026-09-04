@@ -74,6 +74,21 @@ func TestScanTypeReturnsNilForUntaggedTypes(t *testing.T) {
 	}
 }
 
+type promotedCard struct {
+	CARD    string
+	Skipped string `json:"-"`
+}
+
+// CARD is an exported non-struct type; embedded untagged, encoding/json emits it as the
+// member "CARD" rather than promoting anything.
+type CARD string
+
+type outerEmbed struct{ promotedCard }
+
+type sealedEmbed struct {
+	Other string `json:"other" seal:"subject"`
+}
+
 func TestScanTypeScanErrors(t *testing.T) {
 	type sub struct{ V string }
 	type embeddedSubject struct {
@@ -130,6 +145,31 @@ func TestScanTypeScanErrors(t *testing.T) {
 			Card string   `seal:"subject"`
 			CARD string
 		}{}), code: sealed.CodeTagSubjectInvalid, msg: "case-folds"},
+		{name: "promoted_field_case_folds", typ: reflect.TypeOf(struct {
+			_ struct{} `seal:"sign=s,encrypt=e"`
+			promotedCard
+			Card *cardData `json:"card" seal:"subject"`
+		}{}), code: sealed.CodeTagSubjectInvalid, msg: "case-folds"},
+		{name: "deeply_promoted_field_case_folds", typ: reflect.TypeOf(struct {
+			_    struct{}  `seal:"sign=s,encrypt=e"`
+			Card *cardData `json:"card" seal:"subject"`
+			outerEmbed
+		}{}), code: sealed.CodeTagSubjectInvalid, msg: "case-folds"},
+		{name: "promoted_pointer_embed_case_folds", typ: reflect.TypeOf(struct {
+			_ struct{} `seal:"sign=s,encrypt=e"`
+			*promotedCard
+			Card *cardData `json:"card" seal:"subject"`
+		}{}), code: sealed.CodeTagSubjectInvalid, msg: "case-folds"},
+		{name: "embedded_non_struct_is_a_named_member", typ: reflect.TypeOf(struct {
+			_ struct{} `seal:"sign=s,encrypt=e"`
+			CARD
+			Card *cardData `json:"card" seal:"subject"`
+		}{}), code: sealed.CodeTagSubjectInvalid, msg: "case-folds"},
+		{name: "embedded_type_carries_seal_tag", typ: reflect.TypeOf(struct {
+			_ struct{} `seal:"sign=s,encrypt=e"`
+			sealedEmbed
+			Card *cardData `json:"card" seal:"subject"`
+		}{}), code: sealed.CodeTagSubjectInvalid, msg: "embedded"},
 		{name: "kid_bad_alphabet", typ: reflect.TypeOf(struct {
 			_ struct{} `seal:"sign=svc.sign,encrypt=e"`
 			A string   `json:"a" seal:"subject"`
@@ -191,14 +231,39 @@ func TestScanTypeScanErrors(t *testing.T) {
 	}
 }
 
+type selfEmbed struct {
+	*selfEmbed
+	Inner string
+}
+
 func TestScanTypeIgnoresSiblingsThatCannotReachTheWire(t *testing.T) {
-	type embedded struct{ Inner string }
+	type embedded struct {
+		Inner string
+		card  string // unexported promoted candidate: never marshaled
+	}
 	spec, err := sealed.ScanType(reflect.TypeOf(struct {
-		_        struct{}  `seal:"sign=s,encrypt=e"`
-		Skipped  string    `json:"-"`
-		Other    string    `json:"CARD_"`
-		embedded           // embedded: promoted members, no member of its own
-		Card     *cardData `json:"card" seal:"subject"`
+		_         struct{}     `seal:"sign=s,encrypt=e"`
+		Skipped   string       `json:"-"`
+		Other     string       `json:"CARD_"`
+		embedded               // untagged embed: promotes Inner only
+		Named     promotedCard `json:"named"` // tagged embed-shaped member: CARD is nested, not promoted
+		Tagged    promotedCard `json:"tagged"`
+		selfEmbed              // recursive embed: walked once, no loop
+		Card      *cardData    `json:"card" seal:"subject"`
+	}{}))
+	require.NoError(t, err)
+	assert.Equal(t, "card", spec.SubjectPath)
+	// The unexported/recursive members exist only to shape the type; touch them so the
+	// linter does not flag them as dead fields.
+	_ = embedded{}.card
+	_ = (&selfEmbed{}).selfEmbed
+}
+
+func TestScanTypeTaggedEmbedIsNotPromoted(t *testing.T) {
+	spec, err := sealed.ScanType(reflect.TypeOf(struct {
+		_            struct{} `seal:"sign=s,encrypt=e"`
+		promotedCard `json:"meta"`
+		Card         *cardData `json:"card" seal:"subject"`
 	}{}))
 	require.NoError(t, err)
 	assert.Equal(t, "card", spec.SubjectPath)

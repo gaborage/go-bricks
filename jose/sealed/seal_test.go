@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
 	"reflect"
 	"sort"
@@ -361,22 +362,31 @@ func TestSealRefusesADocumentWithoutTheSubjectMember(t *testing.T) {
 	assert.Error(t, jerr.Cause)
 }
 
-// leakyNumber carries the Subject as a json.Number holding a PAN-shaped invalid literal:
-// encoding/json's error text quotes the literal, which must never reach the error chain.
-type leakyNumber struct {
-	_    struct{}    `seal:"sign=svc-payments-sign,encrypt=acme-core-enc"`
-	Card json.Number `json:"card" seal:"subject"`
+// leakyCard is a Subject whose MarshalJSON fails with the plaintext in the error text —
+// the class of marshal error encoding/json wraps in *json.MarshalerError. Nothing of that
+// text may reach the error chain.
+type leakyCard struct{ PAN string }
+
+func (c leakyCard) MarshalJSON() ([]byte, error) {
+	return nil, fmt.Errorf("cannot encode card %s", c.PAN)
+}
+
+type leakyEvent struct {
+	_    struct{}  `seal:"sign=svc-payments-sign,encrypt=acme-core-enc"`
+	Card leakyCard `json:"card" seal:"subject"`
 }
 
 func TestSealMarshalFailureNeverCarriesSubjectBytes(t *testing.T) {
-	spec, err := sealed.ScanType(reflect.TypeOf(leakyNumber{}))
+	spec, err := sealed.ScanType(reflect.TypeOf(leakyEvent{}))
 	require.NoError(t, err)
-	_, err = sealed.Seal(leakyNumber{Card: json.Number("4111 1111 1111 1111")}, spec, testOptions(t))
+	_, err = sealed.Seal(leakyEvent{Card: leakyCard{PAN: testPAN}}, spec, testOptions(t))
 	var jerr *jose.Error
 	require.True(t, errors.As(err, &jerr))
 	assert.Equal(t, sealed.CodeSealFailed, jerr.Code)
-	assert.NotContains(t, err.Error(), "4111", "marshal error must be reported by type only")
+	assert.NotContains(t, err.Error(), testPAN, "marshal error must be reported by type only")
+	assert.NotContains(t, err.Error(), "cannot encode card")
 	assert.Contains(t, err.Error(), "MarshalerError")
+	assert.Contains(t, err.Error(), "leakyCard")
 }
 
 func TestOptionsValidateBoundsTheSignedSlots(t *testing.T) {

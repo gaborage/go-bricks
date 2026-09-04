@@ -125,20 +125,51 @@ func applySubject(spec *Spec, field *reflect.StructField) error {
 // checkSiblingName refuses a clear member whose json name case-folds to the Subject's:
 // encoding/json matches struct fields case-insensitively on decode, so such a sibling
 // would let a consumer read the clear twin instead of the sealed member. Siblings scanned
-// before the Subject are remembered and judged once the Subject is known.
+// before the Subject are remembered and judged once the Subject is known. An untagged
+// embedded struct contributes its promoted members, as encoding/json would.
 func checkSiblingName(spec *Spec, field *reflect.StructField) error {
-	if field.Anonymous || !field.IsExported() {
-		return nil
-	}
+	return spec.addSibling(field, map[reflect.Type]bool{})
+}
+
+// addSibling records the wire name a field contributes at the top level, walking untagged
+// embedded structs the way encoding/json promotes them: exported members become names,
+// nested untagged embeds recurse, a type already on the path is visited once (encoding/json
+// ignores such cycles), a tagged embed is a named member, and a `json:"-"` field is nothing.
+func (s *Spec) addSibling(field *reflect.StructField, seen map[reflect.Type]bool) error {
 	name, _, _ := strings.Cut(field.Tag.Get(jsonTagName), ",")
 	if name == jsonSkipMarker {
+		return nil
+	}
+	if field.Anonymous && name == "" {
+		if inner := unwrapPointer(field.Type); inner.Kind() == reflect.Struct {
+			return s.addPromoted(inner, seen)
+		}
+	}
+	if !field.IsExported() {
 		return nil
 	}
 	if name == "" {
 		name = field.Name
 	}
-	spec.siblingNames = append(spec.siblingNames, name)
-	return spec.checkNamesakes()
+	s.siblingNames = append(s.siblingNames, name)
+	return s.checkNamesakes()
+}
+
+func (s *Spec) addPromoted(t reflect.Type, seen map[reflect.Type]bool) error {
+	if seen[t] {
+		return nil
+	}
+	seen[t] = true
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		if _, tagged := field.Tag.Lookup(TagName); tagged {
+			return tagError(CodeTagSubjectInvalid, fmt.Sprintf("embedded %s carries a seal tag on %s; seal tags belong on the event type itself", t, field.Name))
+		}
+		if err := s.addSibling(&field, seen); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Spec) checkNamesakes() error {
