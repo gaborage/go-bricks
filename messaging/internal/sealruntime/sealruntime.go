@@ -170,11 +170,11 @@ type Opener interface {
 	Open(ctx context.Context, body []byte, want TenantRule, out any) (Envelope, error)
 }
 
-// OpenerFactory is the OPTIONAL consume side of a registered Codec: the consumer door
+// OpenerProvider is the OPTIONAL consume side of a registered Codec: the consumer door
 // type-asserts Registered() to it. NewOpener is the consumer's startup fail-fast (families
 // provisioned in the inherited roles) bound to the declaration's EventType. Implemented by
 // messaging/sealed in #1359.
-type OpenerFactory interface {
+type OpenerProvider interface {
 	NewOpener(spec Spec, eventType string, rt *Runtime) (Opener, error)
 }
 

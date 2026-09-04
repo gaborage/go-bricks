@@ -173,7 +173,7 @@ func (h *Publisher[T]) encode(ctx context.Context, client AMQPClient, evt T) ([]
 // publish through client, or ctx unchanged when no tenant is in play.
 func tenantForSeal(ctx context.Context, client AMQPClient) (context.Context, error) {
 	key := ""
-	if src, ok := client.(stampSource); ok {
+	if src, ok := client.(replayKeyProvider); ok {
 		key = src.ReplayKey()
 	}
 	tenant, err := tenantstamp.Resolve(ctx, key)

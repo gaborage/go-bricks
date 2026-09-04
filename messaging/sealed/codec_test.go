@@ -126,7 +126,7 @@ func TestInitRegistersTheCodec(t *testing.T) {
 		_ struct{} `seal:"sign=s,encrypt=e"`
 	}{}))
 	assert.ErrorIs(t, err, josesealed.ErrTagInvalid)
-	_, isFactory := codec.(sealruntime.OpenerFactory)
+	_, isFactory := codec.(sealruntime.OpenerProvider)
 	assert.False(t, isFactory, "the opener side lands in #1359")
 }
 
@@ -365,7 +365,7 @@ func TestSealerRefusesAConflictingTenant(t *testing.T) {
 
 // pooledClient mimics a per-tenant pooled client: it exposes the pool key the stamping
 // wrapper would stamp with. The typed door reads it through messaging's unexported
-// stampSource seam via this method name.
+// replayKeyProvider seam via this method name.
 type pooledClient struct {
 	capturingClient
 	key string
