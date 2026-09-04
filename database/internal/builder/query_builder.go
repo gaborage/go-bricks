@@ -46,10 +46,12 @@ type SelectQueryBuilder struct {
 	offset        uint64 // 0 means no offset
 	// lock is the rendered row-lock clause, "" for none; see row_lock.go.
 	lock string
-	// hasFrom records that From() named at least one table. Oracle has no
-	// table-less SELECT, so ToSQL supplies `FROM dual` when it is false.
-	hasFrom bool
-	err     error // Captured error from filter operations
+	// hasRowSource records that From() or a Join*On named a table. Oracle has
+	// no table-less SELECT, so ToSQL supplies `FROM dual` when it is false — and
+	// only then: a JOIN without a FROM must keep failing loudly rather than be
+	// joined against dual.
+	hasRowSource bool
+	err          error // Captured error from filter operations
 }
 
 // check if SelectQueryBuilder implements dbtypes.SelectQueryBuilder
@@ -869,7 +871,7 @@ func (sqb *SelectQueryBuilder) From(from ...any) dbtypes.SelectQueryBuilder {
 	if len(from) == 0 {
 		return sqb
 	}
-	sqb.hasFrom = true
+	sqb.hasRowSource = true
 
 	// Quote all tables and join with commas for multi-table FROM clause
 	quotedTables := make([]string, len(from))
@@ -997,6 +999,7 @@ func (sqb *SelectQueryBuilder) validateJoinTable(method string, table any) (quot
 //	jf := qb.JoinFilter()
 //	query.JoinOn(Table("profiles").As("p"), jf.EqColumn("users.id", "p.user_id"))
 func (sqb *SelectQueryBuilder) JoinOn(table any, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
+	sqb.hasRowSource = true
 	quotedTable, ok := sqb.validateJoinTable("JoinOn", table)
 	if !ok {
 		return sqb
@@ -1017,6 +1020,7 @@ func (sqb *SelectQueryBuilder) JoinOn(table any, filter dbtypes.JoinFilter) dbty
 // Accepts either a string table name or *TableRef instance with optional alias.
 // The table name is automatically quoted according to vendor rules.
 func (sqb *SelectQueryBuilder) LeftJoinOn(table any, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
+	sqb.hasRowSource = true
 	quotedTable, ok := sqb.validateJoinTable("LeftJoinOn", table)
 	if !ok {
 		return sqb
@@ -1037,6 +1041,7 @@ func (sqb *SelectQueryBuilder) LeftJoinOn(table any, filter dbtypes.JoinFilter) 
 // Accepts either a string table name or *TableRef instance with optional alias.
 // The table name is automatically quoted according to vendor rules.
 func (sqb *SelectQueryBuilder) RightJoinOn(table any, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
+	sqb.hasRowSource = true
 	quotedTable, ok := sqb.validateJoinTable("RightJoinOn", table)
 	if !ok {
 		return sqb
@@ -1057,6 +1062,7 @@ func (sqb *SelectQueryBuilder) RightJoinOn(table any, filter dbtypes.JoinFilter)
 // Accepts either a string table name or *TableRef instance with optional alias.
 // The table name is automatically quoted according to vendor rules.
 func (sqb *SelectQueryBuilder) InnerJoinOn(table any, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
+	sqb.hasRowSource = true
 	quotedTable, ok := sqb.validateJoinTable("InnerJoinOn", table)
 	if !ok {
 		return sqb
@@ -1078,6 +1084,7 @@ func (sqb *SelectQueryBuilder) InnerJoinOn(table any, filter dbtypes.JoinFilter)
 // Cross joins do not have ON conditions, so no JoinFilter is needed.
 // The table name is automatically quoted according to vendor rules.
 func (sqb *SelectQueryBuilder) CrossJoinOn(table any) dbtypes.SelectQueryBuilder {
+	sqb.hasRowSource = true
 	quotedTable, ok := sqb.validateJoinTable("CrossJoinOn", table)
 	if !ok {
 		return sqb
@@ -1285,7 +1292,7 @@ func (sqb *SelectQueryBuilder) ValidateForSubquery() error {
 // suffix, so appending the lock last puts it after pagination on both vendors.
 func (sqb *SelectQueryBuilder) buildSelectBuilder() squirrel.SelectBuilder {
 	builder := sqb.selectBuilder
-	if !sqb.hasFrom && sqb.qb.vendor == dbtypes.Oracle {
+	if !sqb.hasRowSource && sqb.qb.vendor == dbtypes.Oracle {
 		// Oracle has no table-less SELECT: `SELECT 1` and a projection made only
 		// of scalar subqueries both need a row source, and dual is the vendor's
 		// one-row table for exactly that.

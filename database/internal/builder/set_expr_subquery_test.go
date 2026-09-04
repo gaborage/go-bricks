@@ -156,4 +156,11 @@ func TestOracleTableLessSelectRendersFromDual(t *testing.T) {
 	sql, _, err = ora.Select("id").From(tableUsers).ToSQL()
 	require.NoError(t, err)
 	assert.Equal(t, "SELECT id FROM users", sql)
+
+	// A JOIN is a row source too: a caller that forgot From keeps its loud
+	// failure at the database instead of a silent join against dual.
+	jf := ora.JoinFilter()
+	sql, _, err = ora.Select("id").JoinOn("orders", jf.EqColumn("orders.user_id", "users.id")).ToSQL()
+	require.NoError(t, err)
+	assert.NotContains(t, sql, "dual")
 }
