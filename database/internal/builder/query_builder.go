@@ -44,10 +44,7 @@ type SelectQueryBuilder struct {
 	selectBuilder squirrel.SelectBuilder
 	limit         uint64 // 0 means no limit
 	offset        uint64 // 0 means no offset
-	// lock is the rendered row-lock clause, "" for none. Both vendors spell
-	// FOR UPDATE [NOWAIT] identically, so this is not a vendorRenderer concern;
-	// what IS vendor-specific — the clause must follow Oracle's OFFSET/FETCH and
-	// PostgreSQL's LIMIT/OFFSET — is settled by rendering it as the last suffix.
+	// lock is the rendered row-lock clause, "" for none; see row_lock.go.
 	lock string
 	err  error // Captured error from filter operations
 }
@@ -901,18 +898,6 @@ func (sqb *SelectQueryBuilder) Offset(offset uint64) dbtypes.SelectQueryBuilder 
 	return sqb
 }
 
-// ForUpdate appends FOR UPDATE; see dbtypes.SelectQueryBuilder.
-func (sqb *SelectQueryBuilder) ForUpdate() dbtypes.SelectQueryBuilder {
-	sqb.lock = "FOR UPDATE"
-	return sqb
-}
-
-// ForUpdateNoWait appends FOR UPDATE NOWAIT; see dbtypes.SelectQueryBuilder.
-func (sqb *SelectQueryBuilder) ForUpdateNoWait() dbtypes.SelectQueryBuilder {
-	sqb.lock = "FOR UPDATE NOWAIT"
-	return sqb
-}
-
 // Where adds a filter to the WHERE clause.
 // Multiple calls to Where() will be combined with AND logic.
 //
@@ -1274,11 +1259,7 @@ func (sqb *SelectQueryBuilder) ValidateForSubquery() error {
 // OFFSET before any suffix, and the Oracle OFFSET/FETCH clause is itself a
 // suffix, so appending the lock last puts it after pagination on both vendors.
 func (sqb *SelectQueryBuilder) buildSelectBuilder() squirrel.SelectBuilder {
-	builder := sqb.applyPagination(sqb.selectBuilder)
-	if sqb.lock != "" {
-		builder = builder.Suffix(sqb.lock)
-	}
-	return builder
+	return sqb.withRowLock(sqb.applyPagination(sqb.selectBuilder))
 }
 
 // applyPagination renders LIMIT/OFFSET per vendor.
@@ -1312,6 +1293,9 @@ func (sqb *SelectQueryBuilder) ToSQL() (sql string, args []any, err error) {
 	// Return any captured filter errors first
 	if sqb.err != nil {
 		return "", nil, sqb.err
+	}
+	if err := sqb.validateRowLock(); err != nil {
+		return "", nil, err
 	}
 
 	builder := sqb.buildSelectBuilder()

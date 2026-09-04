@@ -648,7 +648,7 @@ if errors.Is(err, database.ErrNoRows) {
 }
 ```
 
-**Row locks.** `ForUpdate()` and `ForUpdateNoWait()` append the lock clause after pagination on both vendors, so a builder SELECT no longer needs `database.Raw` for it. `NOWAIT` fails immediately when another session holds the row — match `database.IsLockNotAvailable(err)` — which is the leader-election shape; plain `FOR UPDATE` blocks. Run either inside `database.WithTx`: the lock lives as long as the transaction.
+**Row locks.** `ForUpdate()` and `ForUpdateNoWait()` append the lock clause after pagination on both vendors, so a builder SELECT no longer needs `database.Raw` for it. `NOWAIT` fails immediately when another session holds the row — match `database.IsLockNotAvailable(err)` — which is the leader-election shape; plain `FOR UPDATE` blocks. Run either inside `database.WithTx`: the lock lives as long as the transaction. On Oracle a lock cannot be combined with `Limit`/`Offset` — the SQL Language Reference's row_limiting_clause restriction — and `ToSQL` fails with `ErrRowLockWithPagination`; PostgreSQL accepts `LIMIT … FOR UPDATE`.
 
 ```go
 // One relay instance leads this ledger: the loser gets 55P03 / ORA-00054, not a wait.
@@ -659,7 +659,7 @@ if database.IsLockNotAvailable(err) {
 }
 ```
 
-"Lock the row if it exists, insert it otherwise" has no single-statement builder form: PostgreSQL's `ON CONFLICT … DO UPDATE SET c = EXCLUDED.c` idiom updates a conflict column, which `BuildUpsert` refuses on every vendor for Oracle MERGE parity (ORA-38104), and Oracle has no equivalent. Write it as two statements under the transaction — `Select(...).ForUpdate()` then `Insert` on `ErrNoRows` — or keep the PostgreSQL idiom as annotated raw SQL.
+"Lock the row if it exists, insert it otherwise" has no single-statement builder form: PostgreSQL's `ON CONFLICT … DO UPDATE SET c = EXCLUDED.c` idiom updates a conflict column, which `BuildUpsert` refuses on every vendor for Oracle MERGE parity (ORA-38104), and Oracle has no equivalent. Write it as two statements under the transaction — `Select(...).ForUpdate()` then `Insert` on `ErrNoRows` — or keep the PostgreSQL idiom as annotated raw SQL. The two-statement form is safe only when the lookup key carries a unique or primary-key constraint: two transactions can both see `ErrNoRows` before either inserts, so the loser's `Insert` fails with a unique violation (`database.IsUniqueViolation`) and must re-read or retry rather than treat it as an error.
 
 `database.Raw(sql string, args ...any)` adapts hand-written SQL to the same helpers — it is an escape hatch on par with `Filter.Raw`/`JoinFilter.Raw`, and broader (the SQL string replaces the whole statement, bypassing the builder's identifier validation entirely). **Every** call site requires the same review annotation `f.Raw()`/`jf.Raw()` do:
 

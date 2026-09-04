@@ -54,14 +54,6 @@ func TestForUpdateRendersAfterPaginationPerVendor(t *testing.T) {
 			wantSQL: `SELECT id FROM users WHERE id = :1 FOR UPDATE NOWAIT`,
 		},
 		{
-			name:   "oracle_after_offset_fetch",
-			vendor: dbtypes.Oracle,
-			build: func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder {
-				return q.Paginate(5, 10).ForUpdateNoWait()
-			},
-			wantSQL: `SELECT id FROM users WHERE id = :1 OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY FOR UPDATE NOWAIT`,
-		},
-		{
 			name:   "last_call_wins",
 			vendor: dbtypes.PostgreSQL,
 			build: func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder {
@@ -82,6 +74,38 @@ func TestForUpdateRendersAfterPaginationPerVendor(t *testing.T) {
 			assert.Equal(t, []any{1}, args, "the lock clause binds nothing")
 		})
 	}
+}
+
+// TestOracleRefusesARowLockWithPagination pins the vendor restriction from the
+// Oracle SQL Language Reference ("Restrictions on the row_limiting_clause: You
+// cannot specify this clause with the for_update_clause"): Limit, Offset and
+// Paginate each make a locked Oracle SELECT fail at ToSQL with the typed error,
+// while the same statement is valid on PostgreSQL and a locked, unpaginated
+// Oracle SELECT still renders.
+func TestOracleRefusesARowLockWithPagination(t *testing.T) {
+	paginations := map[string]func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder{
+		"limit":    func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder { return q.Limit(5) },
+		"offset":   func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder { return q.Offset(10) },
+		"paginate": func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder { return q.Paginate(5, 10) },
+	}
+	for name, paginate := range paginations {
+		t.Run("oracle_"+name, func(t *testing.T) {
+			qb := NewQueryBuilder(dbtypes.Oracle)
+			_, _, err := paginate(qb.Select("id").From(tableUsers)).ForUpdateNoWait().ToSQL()
+			require.ErrorIs(t, err, dbtypes.ErrRowLockWithPagination)
+		})
+		t.Run("postgres_"+name+"_is_fine", func(t *testing.T) {
+			qb := NewQueryBuilder(dbtypes.PostgreSQL)
+			sql, _, err := paginate(qb.Select("id").From(tableUsers)).ForUpdateNoWait().ToSQL()
+			require.NoError(t, err)
+			assert.Contains(t, sql, "FOR UPDATE NOWAIT")
+		})
+	}
+
+	qb := NewQueryBuilder(dbtypes.Oracle)
+	sql, _, err := qb.Select("id").From(tableUsers).ForUpdate().ToSQL()
+	require.NoError(t, err)
+	assert.Equal(t, "SELECT id FROM users FOR UPDATE", sql)
 }
 
 // TestSelectWithoutLockRendersNoClause pins the zero value: a builder that never

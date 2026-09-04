@@ -195,10 +195,11 @@ type SelectQueryBuilder interface {
 	Offset(offset uint64) SelectQueryBuilder
 	Paginate(limit, offset uint64) SelectQueryBuilder
 
-	// ForUpdate appends `FOR UPDATE`, rendered after pagination on both vendors.
-	// ForUpdateNoWait appends `FOR UPDATE NOWAIT` instead; the last call wins.
-	// When to use which, the transaction requirement and the error to match are
-	// in wiki/database.md ("Row locks").
+	// ForUpdate appends `FOR UPDATE`, rendered after pagination; ForUpdateNoWait
+	// appends `FOR UPDATE NOWAIT` instead; the last call wins. On Oracle a lock
+	// combined with Limit/Offset fails ToSQL with ErrRowLockWithPagination
+	// (row_limiting_clause restriction). When to use which, the transaction
+	// requirement and the error to match are in wiki/database.md ("Row locks").
 	ForUpdate() SelectQueryBuilder
 	ForUpdateNoWait() SelectQueryBuilder
 
