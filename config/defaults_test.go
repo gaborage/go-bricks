@@ -60,6 +60,18 @@ func makeSampleTenants() map[string]TenantEntry {
 	}
 }
 
+// TestCleanupIntervalDefaultValues pins the published values of the three
+// cleanup-interval defaults. Every other test now cites these constants, so a
+// typo in one would satisfy all of them; this is the only place a wrong value
+// fails. The literals are deliberate — README and wiki document 5m/5m/2m, and a
+// default nobody can read back (#1321) has nothing else holding it to its
+// documentation.
+func TestCleanupIntervalDefaultValues(t *testing.T) {
+	assert.Equal(t, 5*time.Minute, DefaultDatabaseManagerCleanupInterval, "database.manager.cleanupinterval")
+	assert.Equal(t, 5*time.Minute, DefaultCacheManagerCleanupInterval, "cache.manager.cleanupinterval")
+	assert.Equal(t, 2*time.Minute, DefaultPublisherCleanupInterval, "messaging.publisher.cleanupinterval")
+}
+
 func TestValidateValidConfig(t *testing.T) {
 	cfg := createValidFullConfig()
 	err := Validate(cfg)
