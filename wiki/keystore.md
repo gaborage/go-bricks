@@ -172,9 +172,13 @@ startup, once per Logical kid the producer resolves, sign and encrypt alike:
 | N | names a provisioned generation | that generation |
 | N | names an unprovisioned generation | error naming the selector value |
 
-A hyphenated Logical kid is settable from the environment only where the runtime permits
-`-` in a variable name ([ADR-090](adr_090_env_reachable_section_names.md)); a selector for a
-Logical kid the producer never resolves is ignored here.
+The environment door is narrower than the YAML one. The loader lowercases a variable name
+and maps `_` to `.`, so an `MESSAGING_SEAL_ACTIVE_*` override reaches only a Logical kid
+spelled in `[a-z0-9]` — or one with hyphens where the runtime permits `-` in a variable name
+(Docker and Kubernetes do, POSIX `export` does not,
+[ADR-090](adr_090_env_reachable_section_names.md)). Under POSIX a hyphenated kid such as
+`svc-payments-sign` is YAML-only. A selector for a Logical kid the producer never resolves is
+ignored here.
 
 ## API
 
