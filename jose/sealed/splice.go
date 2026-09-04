@@ -65,6 +65,8 @@ func locateSubject(doc []byte, path string) (subjectSpan, error) {
 	return *found, nil
 }
 
+// expectDelim consumes the next token and requires it to be the delimiter want; any other
+// token, or a decoder failure, is errDocNotObject (decoder failures by type only).
 func expectDelim(dec *json.Decoder, want json.Delim) error {
 	tok, err := dec.Token()
 	if err != nil {
