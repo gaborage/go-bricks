@@ -12,8 +12,10 @@ import (
 // fakeFamilies is a FamilyEnumerator over a literal accept set.
 type fakeFamilies map[string][]Generation
 
+// Generations implements FamilyEnumerator over the literal map.
 func (f fakeFamilies) Generations(logical string) []Generation { return f[logical] }
 
+// gens builds a private-role accept set for logical in the order given.
 func gens(logical string, versions ...string) []Generation {
 	out := make([]Generation, len(versions))
 	for i, v := range versions {
@@ -22,6 +24,8 @@ func gens(logical string, versions ...string) []Generation {
 	return out
 }
 
+// TestActiveGenerationMatrix walks provisioned-count × selector state: 0/1/2
+// generations against absent, valid, unprovisioned and malformed selectors.
 func TestActiveGenerationMatrix(t *testing.T) {
 	const fam = "svc-sign"
 	tests := []struct {
@@ -60,6 +64,8 @@ func TestActiveGenerationMatrix(t *testing.T) {
 	}
 }
 
+// TestActiveGenerationRejectsIllegalLogical: the Logical grammar is judged
+// before any store lookup, even when the store would answer.
 func TestActiveGenerationRejectsIllegalLogical(t *testing.T) {
 	store := fakeFamilies{"svc-sign-v3": gens("svc-sign-v3", "v1")}
 	_, err := ActiveGeneration(store, nil, "svc-sign-v3")
@@ -67,6 +73,8 @@ func TestActiveGenerationRejectsIllegalLogical(t *testing.T) {
 	assert.Contains(t, err.Error(), `keystore: logical kid "svc-sign-v3" must not end in the generation marker`)
 }
 
+// TestActiveGenerationAgainstRealStore resolves through newStore rather than
+// the fake, so the store's own FamilyEnumerator is the one under test.
 func TestActiveGenerationAgainstRealStore(t *testing.T) {
 	s, err := newStore(map[string]config.KeyPairConfig{
 		"svc-mac-v1": secretCfg('a'),

@@ -892,6 +892,8 @@ func newSharedTenancyConfig(rootBroker, tenancy string) *Config {
 	}
 }
 
+// TestCheckMessagingSeal covers the selector shape rules: key reachability
+// and dots, value grammar, and sorted first-error reporting.
 func TestCheckMessagingSeal(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -925,6 +927,8 @@ func TestCheckMessagingSeal(t *testing.T) {
 	}
 }
 
+// TestCheckMessagingRunsSealRule pins that checkMessaging reaches the seal
+// rule, so config.Validate carries it.
 func TestCheckMessagingRunsSealRule(t *testing.T) {
 	cfg := MessagingConfig{Tenancy: TenancyPerTenant, Seal: SealConfig{Active: map[string]string{"svc-sign": "v01"}}}
 	err := checkMessaging(&cfg, false)

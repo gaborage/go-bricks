@@ -53,6 +53,7 @@ func ActiveGeneration(store FamilyEnumerator, active map[string]string, logical 
 		logical, selector, versionList(gens))
 }
 
+// versionList renders the provisioned versions for an error message.
 func versionList(gens []Generation) string {
 	versions := make([]string, len(gens))
 	for i, gen := range gens {
