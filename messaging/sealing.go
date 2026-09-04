@@ -78,14 +78,17 @@ func IsSealTagged(t reflect.Type) bool {
 		return false
 	}
 	if v, ok := sealTagCache.Load(t); ok {
-		return v.(bool)
+		tagged, _ := v.(bool)
+		return tagged
 	}
 	v := hasSealTagIn(t, nil) || misplacedSealTag(t) != ""
 	sealTagCache.Store(t, v)
 	return v
 }
 
-// sealTagCache memoizes IsSealTagged per struct type (reflect.Type is comparable).
+// sealTagCache memoizes IsSealTagged per struct type: keyed by the reflect.Type
+// itself (comparable, unique per named type), never by shape, so two types with
+// identical fields but different tags never alias.
 var sealTagCache sync.Map
 
 // derefType strips every pointer level from t; nil stays nil.

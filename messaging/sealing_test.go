@@ -218,7 +218,29 @@ type selfEmbed struct {
 }
 
 func TestIsSealTaggedTerminatesOnEmbeddingCycle(t *testing.T) {
-	assert.False(t, IsSealTagged(reflect.TypeOf(selfEmbed{})))
+	var node selfEmbed
+	node.selfEmbed = &node // the cycle the walk must survive
+	assert.False(t, IsSealTagged(reflect.TypeOf(node)))
+}
+
+// shapeTwinSealed and shapeTwinPlain have byte-identical field layouts; only the
+// tag differs. The memo is keyed by reflect.Type, so the two must never alias.
+type shapeTwinSealed struct {
+	ID   string `json:"id"`
+	Card string `json:"card" seal:"subject"`
+}
+
+type shapeTwinPlain struct {
+	ID   string `json:"id"`
+	Card string `json:"card"`
+}
+
+func TestIsSealTaggedCacheDoesNotAliasIdenticalShapes(t *testing.T) {
+	assert.True(t, IsSealTagged(reflect.TypeOf(shapeTwinSealed{})))
+	assert.False(t, IsSealTagged(reflect.TypeOf(shapeTwinPlain{})))
+	// Ask again in the other order: both answers now come from the cache.
+	assert.False(t, IsSealTagged(reflect.TypeOf(&shapeTwinPlain{})))
+	assert.True(t, IsSealTagged(reflect.TypeOf(&shapeTwinSealed{})))
 }
 
 func TestDeclareTypedPublisherPlainTypeNeverTouchesTheCodec(t *testing.T) {
