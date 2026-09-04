@@ -546,13 +546,33 @@ func TestDeclarationsValidate(t *testing.T) {
 	})
 
 	t.Run("publisher on the default exchange needs no declaration", func(t *testing.T) {
-		// The empty exchange is AMQP's built-in default: never declared, and every
-		// queue is bound to it under its own name. A declared publisher must be able
-		// to name it, or the typed publish door cannot reach a queue directly.
 		decls := NewDeclarations()
 		decls.RegisterPublisher(&PublisherDeclaration{Exchange: "", RoutingKey: "orders.processing"})
 
 		assert.NoError(t, decls.Validate())
+	})
+
+	t.Run("default-exchange publisher without a routing key is rejected", func(t *testing.T) {
+		// What an omitted Exchange looks like: nothing is bound to "", publishes are
+		// not Mandatory by default, so the broker would take the message and drop it.
+		decls := NewDeclarations()
+		decls.RegisterPublisher(&PublisherDeclaration{Exchange: "", RoutingKey: "", EventType: "OrderCreated"})
+
+		err := decls.Validate()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "publisher on the default exchange has no routing key")
+		assert.Contains(t, err.Error(), `(event type "OrderCreated")`)
+	})
+
+	t.Run("default-exchange publisher error omits an unset event type", func(t *testing.T) {
+		decls := NewDeclarations()
+		decls.RegisterPublisher(&PublisherDeclaration{Exchange: "", RoutingKey: ""})
+
+		err := decls.Validate()
+
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "event type")
 	})
 
 	t.Run("empty declarations are valid", func(t *testing.T) {
@@ -888,9 +908,8 @@ func fillNonZero(t *testing.T, v reflect.Value) {
 // consumer sets apart when only TenantOptional differs. Without it a tenancy change
 // would reuse a cached replay and leave the old fail-closed posture in force.
 // TestDefaultExchangeTypedPublisherPublishesByQueueName pairs the Validate
-// exemption above with what it exists for: a typed publisher declared on the
-// default exchange passes validation and publishes with the queue name as the
-// routing key, which is how AMQP's default exchange reaches a queue directly.
+// exemption with what it exists for: reaching one queue directly through the
+// typed publish door.
 func TestDefaultExchangeTypedPublisherPublishesByQueueName(t *testing.T) {
 	const queue = "orders.processing"
 

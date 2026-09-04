@@ -326,12 +326,17 @@ func (d *Declarations) Validate() error {
 	}
 
 	for _, publisher := range d.Publishers {
-		// The empty exchange is AMQP's built-in default exchange — every queue is
-		// bound to it under its own name, so it is never declared and a publisher
-		// naming it routes by queue name through its RoutingKey. Requiring a
-		// declaration for it would make the default exchange unreachable from a
-		// declared publisher (and so from the typed publish door) for no gain.
+		// AMQP's built-in default exchange: never declared, and every queue is bound
+		// to it under its own name, so this publisher routes by queue name through
+		// its RoutingKey. That makes the routing key load-bearing: with both fields
+		// empty the broker takes the publish and drops it (nothing is bound to ""
+		// and publishes are not Mandatory by default), which is what an omitted
+		// Exchange looks like. Fail startup instead of publishing into a black hole.
 		if publisher.Exchange == "" {
+			if publisher.RoutingKey == "" {
+				return fmt.Errorf("publisher on the default exchange has no routing key: set RoutingKey to the target queue name%s",
+					eventTypeSuffix(publisher.EventType))
+			}
 			continue
 		}
 		if _, exists := d.Exchanges[publisher.Exchange]; !exists {
@@ -340,6 +345,17 @@ func (d *Declarations) Validate() error {
 	}
 
 	return nil
+}
+
+// eventTypeSuffix names the offending declaration in a validation error when its
+// EventType is set — several publishers can share a destination, and EventType is
+// the only field that tells them apart at a call site.
+func eventTypeSuffix(eventType string) string {
+	if eventType == "" {
+		return ""
+	}
+
+	return fmt.Sprintf(" (event type %q)", eventType)
 }
 
 // validateStreamDeclarations enforces the shape RabbitMQ stream queues and

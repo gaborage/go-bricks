@@ -2947,6 +2947,7 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 	// Topology — production-safe defaults: durable=true, auto_delete=false
 	exchange := decls.DeclareTopicExchange("orders.events")
 	queue := decls.DeclareQueue("orders.processing")
+	notices := decls.DeclareQueue("orders.notices") // consumed elsewhere; see the notice publisher below
 	decls.DeclareBinding(queue.Name, exchange.Name, "order.*")
 
 	// Publisher contract — validates routing-key + event-type pair upfront AND hands back
@@ -2960,11 +2961,13 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 		Headers:    map[string]any{"event_type": "OrderCreated"},
 	})
 
-	// Direct send to one queue: the default exchange "" needs no declaration, and the
-	// routing key is the queue name.
+	// Direct send to ONE queue: the default exchange "" needs no declaration, and the
+	// routing key is that queue's name. Give it a queue of its own — a queue's consumer
+	// decodes every delivery as its own event type, so a second payload shape on
+	// orders.processing would reach OrderHandler as a malformed OrderCreatedEvent.
 	m.svc.orderNotice = messaging.DeclareTypedPublisher[OrderNotice](decls, &messaging.PublisherOptions{
 		Exchange:   "",
-		RoutingKey: queue.Name,
+		RoutingKey: notices.Name,
 		EventType:  "OrderNotice",
 	})
 
@@ -3232,9 +3235,9 @@ func (s *OrderService) PublishOrderCreated(ctx context.Context, evt OrderCreated
 		return fmt.Errorf("messaging unavailable: %w", err)
 	}
 
-	// Marshaling and the destination both come from the handle. A marshal failure is
-	// returned wrapped and publishes nothing; every other error is the client's own
-	// (ErrPublishRetriesExhausted, ErrInvalidPublishDestination, ...), returned unwrapped.
+	// A marshal failure is returned wrapped and publishes nothing; every other error is
+	// the client's own (ErrPublishRetriesExhausted, ErrInvalidPublishDestination, ...),
+	// returned unwrapped.
 	return s.orderCreated.Publish(ctx, client, evt)
 	// W3C traceparent header is injected automatically; consumers extract it on receive.
 }
@@ -3250,9 +3253,12 @@ func (s *OrderService) NotifyDirectQueue(ctx context.Context, notice OrderNotice
 ```
 
 The handle is immutable after declaration and safe to share across goroutines and tenants —
-one `*messaging.Publisher[T]` per module, not one per request. A named exchange must be declared
+one `*messaging.Publisher[T]` per module, not one per request. It copies the declared headers
+one level deep, so keep those values scalars: a nested map or slice stays shared, and writing
+to one after declaration races with every publish. A named exchange must be declared
 (`Declarations.Validate` fails startup otherwise); the default exchange `""` is the one exception —
-it is built into AMQP, so it is never declared and its routing key is the queue name.
+it is built into AMQP, so it is never declared and its routing key is the queue name (leave both
+empty and startup fails, since nothing is bound to `""`).
 
 > When a publish must be **atomic with database changes** (e.g. write order + emit `order.created`), use the **Transactional Outbox** instead — events are written in the same SQL transaction and a relay publishes them reliably (see Transactional Outbox section).
 
@@ -3407,7 +3413,7 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 | Concern | API |
 |---|---|
 | Get client (tenant-aware) | `client, err := deps.Messaging(ctx)` |
-| Declare a publisher (returns the handle) | `pub := messaging.DeclareTypedPublisher[T](decls, &messaging.PublisherOptions{Exchange, RoutingKey, EventType, Headers})` |
+| Declare a publisher (returns the handle) | `pub := messaging.DeclareTypedPublisher[OrderCreatedEvent](decls, &messaging.PublisherOptions{Exchange: "orders.events", RoutingKey: "order.created", EventType: "OrderCreated"})` |
 | Publish — routed | `pub.Publish(ctx, client, evt)` — destination and headers come from the declaration |
 | Publish — default exchange | declare with `Exchange: ""` and `RoutingKey: queueName`, then the same `pub.Publish(ctx, client, evt)` |
 | Atomic publish (with DB) | Use Transactional Outbox — `deps.Outbox.Publish(ctx, tx, event)` |

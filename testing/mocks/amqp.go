@@ -14,6 +14,11 @@ import (
 // PublishedFrame is one frame handed to MockAMQPClient.PublishToExchange, kept so
 // a test can assert the destination a messaging.Publisher[T] chose rather than one
 // the test itself re-spelled.
+//
+// testify's own Mock.Calls records the same arguments, but by reference and behind
+// an unexported lock, so reading it while another goroutine publishes races and a
+// later write through the caller's headers map rewrites what was recorded. A frame
+// is a copy taken under this mock's lock, which is what makes it safe to assert on.
 type PublishedFrame struct {
 	Options messaging.PublishOptions
 	Data    []byte
@@ -89,13 +94,15 @@ func (m *MockAMQPClient) capture(options messaging.PublishOptions, data []byte) 
 }
 
 // PublishedFrames returns every frame PublishToExchange received, oldest first, as
-// a snapshot the caller owns outright.
+// a snapshot the caller owns outright. The lock covers only the slice read: capture
+// appends and never rewrites a stored frame, so cloning outside it is safe.
 func (m *MockAMQPClient) PublishedFrames() []PublishedFrame {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	stored := m.published
+	m.mu.RUnlock()
 
-	frames := make([]PublishedFrame, 0, len(m.published))
-	for _, frame := range m.published {
+	frames := make([]PublishedFrame, 0, len(stored))
+	for _, frame := range stored {
 		frames = append(frames, frame.clone())
 	}
 
@@ -105,12 +112,14 @@ func (m *MockAMQPClient) PublishedFrames() []PublishedFrame {
 // LastPublishedFrame returns the most recent frame and whether there was one.
 func (m *MockAMQPClient) LastPublishedFrame() (frame PublishedFrame, ok bool) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if len(m.published) == 0 {
+	stored := m.published
+	m.mu.RUnlock()
+
+	if len(stored) == 0 {
 		return PublishedFrame{}, false
 	}
 
-	return m.published[len(m.published)-1].clone(), true
+	return stored[len(stored)-1].clone(), true
 }
 
 // ClearPublishedFrames drops the capture (for test cleanup); infrastructure
