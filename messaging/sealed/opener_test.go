@@ -232,6 +232,12 @@ func TestNewOpenerStartupMatrix(t *testing.T) {
 			store := withPublic(kstest.NewMockKeyStore(), signFamily, "v1", &signPriv.PublicKey)
 			return withPublic(withPrivate(store, encFamily, "v1", encPriv), encFamily, "v2", &sign2.PublicKey)
 		}, event: eventType, wantIs: sealed.ErrRoleMismatch, text: "acme-core-enc-v2"},
+		{name: "sign_generation_indexed_without_material", store: func(t *testing.T) sealruntime.KeyStore {
+			return vectorConsumerStore(t).WithGeneration(signFamily, "v3", keystore.RolePublicOnly)
+		}, event: eventType, wantIs: sealed.ErrGenerationUnresolvable, text: "sign generation svc-payments-sign-v3"},
+		{name: "encrypt_generation_indexed_without_material", store: func(t *testing.T) sealruntime.KeyStore {
+			return vectorConsumerStore(t).WithGeneration(encFamily, "v2", keystore.RolePrivate)
+		}, event: eventType, wantIs: sealed.ErrGenerationUnresolvable, text: "encrypt generation acme-core-enc-v2"},
 		{name: "sign_generation_is_a_secret", store: func(t *testing.T) sealruntime.KeyStore {
 			keys(t)
 			return withPrivate(withSecret(kstest.NewMockKeyStore(), signFamily, "v1"), encFamily, "v1", encPriv)

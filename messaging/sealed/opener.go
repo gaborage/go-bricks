@@ -17,15 +17,22 @@ import (
 // verify or decrypt, so the consumer never starts.
 var ErrFamilyUnprovisioned = errors.New("messaging/sealed: family has no provisioned generation on this consumer")
 
+// ErrGenerationUnresolvable fires at consumer startup when a provisioned generation
+// is indexed under the right role but the key store cannot hand out its material in
+// that role — a consumer that started anyway would refuse every delivery under that kid.
+var ErrGenerationUnresolvable = errors.New("messaging/sealed: provisioned generation does not resolve in the consumer's role")
+
 var _ sealruntime.OpenerProvider = codec{}
 
 // NewOpener is the consumer's startup fail-fast (#1306 "ResolvePolicy-parity", ADR-097):
 // the sign family has at least one provisioned generation and every generation holds
 // an RSA key (public is enough to verify); the encrypt family has at least one
 // provisioned generation and every generation holds a PRIVATE key (the consumer
-// decrypts with it); the declaration's EventType is non-empty. The accept set IS the
-// local keystore, so this checks provisioning, never activation — the wire kid is
-// resolved per message through jose.KeyResolver.
+// decrypts with it); every generation actually resolves through the resolver in that
+// role, as jose.ResolvePolicy resolves a route's kids at registration; the
+// declaration's EventType is non-empty. The accept set IS the local keystore, so this
+// checks provisioning, never activation — the wire kid is still resolved per message,
+// and the startup resolution is a check, never a cache.
 func (codec) NewOpener(sp sealruntime.Spec, eventType string, rt *sealruntime.Runtime) (sealruntime.Opener, error) {
 	s, ok := sp.(spec)
 	if !ok || s.inner == nil {
@@ -41,19 +48,22 @@ func (codec) NewOpener(sp sealruntime.Spec, eventType string, rt *sealruntime.Ru
 	if eventType == "" {
 		return nil, errors.New("messaging/sealed: a sealed consumer needs a non-empty EventType (the signed etyp is pinned to it)")
 	}
-	if err := provisionedWithRole(families, s.inner.SignLogical, keystore.RolePublicOnly, "sign"); err != nil {
+	keys := jose.NewKeyStoreResolver(rt.KeyStore)
+	if err := provisionedWithRole(families, keys, s.inner.SignLogical, keystore.RolePublicOnly, "sign"); err != nil {
 		return nil, err
 	}
-	if err := provisionedWithRole(families, s.inner.EncryptLogical, keystore.RolePrivate, "encrypt"); err != nil {
+	if err := provisionedWithRole(families, keys, s.inner.EncryptLogical, keystore.RolePrivate, "encrypt"); err != nil {
 		return nil, err
 	}
-	return &opener{spec: s.inner, eventType: eventType, keys: jose.NewKeyStoreResolver(rt.KeyStore)}, nil
+	return &opener{spec: s.inner, eventType: eventType, keys: keys}, nil
 }
 
 // provisionedWithRole checks a family's provisioned generations for the consumer's
-// inherited role: every generation is RSA material, and when need is RolePrivate every
-// generation holds the private key (a private entry also serves as public).
-func provisionedWithRole(families keystore.FamilyEnumerator, logical string, need keystore.Role, side string) error {
+// inherited role: every generation is RSA material, when need is RolePrivate every
+// generation holds the private key (a private entry also serves as public), and each
+// generation resolves through keys in that role — the index says what an entry
+// SHOULD hold, the resolver proves it does.
+func provisionedWithRole(families keystore.FamilyEnumerator, keys jose.KeyResolver, logical string, need keystore.Role, side string) error {
 	gens := families.Generations(logical)
 	if len(gens) == 0 {
 		return fmt.Errorf("%w: %s family %q (expected a keystore.keys entry named %s-v<N>)", ErrFamilyUnprovisioned, side, logical, logical)
@@ -65,8 +75,27 @@ func provisionedWithRole(families keystore.FamilyEnumerator, logical string, nee
 		case need == keystore.RolePrivate && gen.Role != keystore.RolePrivate:
 			return fmt.Errorf("%w: %s generation %s holds no private key (the consumer decrypts with it)", ErrRoleMismatch, side, gen.Kid())
 		}
+		if err := resolveInRole(keys, gen.Kid(), need); err != nil {
+			return fmt.Errorf("%w: %s generation %s: %w", ErrGenerationUnresolvable, side, gen.Kid(), err)
+		}
 	}
 	return nil
+}
+
+// resolveInRole asks the resolver for the material the consumer will use: the private
+// key to decrypt an encrypt generation; the public key to verify a sign generation,
+// which a private entry also serves (its public half is derivable), so a private-only
+// store is accepted for the sign side.
+func resolveInRole(keys jose.KeyResolver, kid string, need keystore.Role) error {
+	if need == keystore.RolePrivate {
+		_, err := keys.PrivateKey(kid)
+		return err
+	}
+	if _, err := keys.PublicKey(kid); err == nil {
+		return nil
+	}
+	_, err := keys.PrivateKey(kid)
+	return err
 }
 
 // opener is bound to one consumer declaration: its Spec, its EventType and the
