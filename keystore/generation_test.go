@@ -24,8 +24,8 @@ func TestValidateLogicalGrammarTable(t *testing.T) {
 		{name: "valid_underscore_and_upper", logical: "Svc_Payments"},
 		{name: "valid_64_chars", logical: strings.Repeat("a", 64)},
 		{name: "invalid_65_chars", logical: strings.Repeat("a", 65), wantErr: "is 65 characters, maximum is 64"},
-		{name: "invalid_dot", logical: "svc.payments", wantErr: "must match"},
-		{name: "invalid_empty", logical: "", wantErr: "must match"},
+		{name: "invalid_dot", logical: "svc.payments", wantErr: "is not a valid jose kid"},
+		{name: "invalid_empty", logical: "", wantErr: "is not a valid jose kid"},
 		{name: "invalid_trailing_generation", logical: "svc-sign-v3", wantErr: "must not end in the generation marker"},
 		{name: "valid_v_without_digits", logical: "svc-v"},
 		{name: "valid_digits_without_hyphen", logical: "svcv3"},
@@ -80,7 +80,7 @@ func TestFamilyOfRefusals(t *testing.T) {
 		{name: "family_ends_in_marker", entry: "x-v1-v2", wantErr: `key "x-v1-v2": logical kid "x-v1" must not end in the generation marker`},
 		{name: "leading_zero_version", entry: "x-v01", wantErr: `key "x-v01": generation "v01" must be a positive integer without leading zeros`},
 		{name: "zero_version", entry: "x-v0", wantErr: `key "x-v0": generation "v0" must be a positive integer without leading zeros`},
-		{name: "empty_family", entry: "-v1", wantErr: `key "-v1": logical kid "" must match`},
+		{name: "empty_family", entry: "-v1", wantErr: `key "-v1": logical kid "" is not a valid jose kid`},
 		{name: "family_too_long", entry: strings.Repeat("a", 65) + "-v1", wantErr: "is 65 characters"},
 	}
 	for _, tt := range tests {

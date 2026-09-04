@@ -148,6 +148,38 @@ material grants (`RolePublicOnly`, `RolePrivate`, `RoleSecret`); `Kid()` joins t
 entry name that travels on the wire. The result **is** the accept set: no separate list widens or re-aims it; provisioning material is the
 sole trust act.
 
+### Activation (`messaging.seal.active`)
+
+The producer picks which provisioned generation seals new traffic, per Logical kid:
+
+```yaml
+messaging:
+  seal:
+    active:
+      svc-payments-sign: v2      # env: MESSAGING_SEAL_ACTIVE_SVC-PAYMENTS-SIGN=v2
+```
+
+`config.Validate` checks the shape — each key is an env-reachable section name, each value
+`v<N>` with `N` a positive integer without leading zeros — and
+`keystore.ActiveGeneration(store, active, logical)` resolves it against the keystore at
+startup, once per Logical kid the producer resolves, sign and encrypt alike:
+
+| Provisioned | Selector | Result |
+| --- | --- | --- |
+| 0 | any | error naming the family |
+| 1 | absent | that generation is active |
+| 2+ | absent | error listing the generations — startup never guesses |
+| N | names a provisioned generation | that generation |
+| N | names an unprovisioned generation | error naming the selector value |
+
+The environment door is narrower than the YAML one. The loader lowercases a variable name
+and maps `_` to `.`, so an `MESSAGING_SEAL_ACTIVE_*` override reaches only a Logical kid
+spelled in `[a-z0-9]` — or one with hyphens where the runtime permits `-` in a variable name
+(Docker and Kubernetes do, POSIX `export` does not,
+[ADR-090](adr_090_env_reachable_section_names.md)). Under POSIX a hyphenated kid such as
+`svc-payments-sign` is YAML-only. A selector for a Logical kid the producer never resolves is
+ignored here.
+
 ## API
 
 ```go

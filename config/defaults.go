@@ -210,6 +210,7 @@ const (
 
 const (
 	fieldMessagingStreamsURI = "messaging.streams.uri"
+	fieldMessagingSealActive = "messaging.seal.active"
 
 	fieldDatabaseTLS = "database.tls"
 

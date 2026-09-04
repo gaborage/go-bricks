@@ -891,3 +891,47 @@ func newSharedTenancyConfig(rootBroker, tenancy string) *Config {
 		Source: SourceConfig{Type: SourceTypeStatic},
 	}
 }
+
+// TestCheckMessagingSeal covers the selector shape rules: key reachability
+// and dots, value grammar, and sorted first-error reporting.
+func TestCheckMessagingSeal(t *testing.T) {
+	tests := []struct {
+		name      string
+		active    map[string]string
+		wantField string
+		wantMsg   string
+	}{
+		{name: "absent", active: nil},
+		{name: "valid", active: map[string]string{"svc-payments-sign": "v2", "svc-enc": "v10"}},
+		{name: "empty_key", active: map[string]string{"": "v1"}, wantField: "messaging.seal.active", wantMsg: "cannot be empty or contain '.'"},
+		{name: "dotted_key", active: map[string]string{"svc.sign": "v1"}, wantField: "messaging.seal.active", wantMsg: "cannot be empty or contain '.'"},
+		{name: "unreachable_key", active: map[string]string{"Svc_Sign": "v1"}, wantField: "messaging.seal.active.Svc_Sign", wantMsg: "not reachable by an environment variable"},
+		{name: "value_missing_v", active: map[string]string{"svc-sign": "2"}, wantField: "messaging.seal.active.svc-sign", wantMsg: `generation "2" must be v<N>`},
+		{name: "value_zero", active: map[string]string{"svc-sign": "v0"}, wantField: "messaging.seal.active.svc-sign", wantMsg: `generation "v0" must be v<N>`},
+		{name: "value_leading_zero", active: map[string]string{"svc-sign": "v01"}, wantField: "messaging.seal.active.svc-sign", wantMsg: `generation "v01" must be v<N>`},
+		{name: "value_with_hyphen", active: map[string]string{"svc-sign": "-v1"}, wantField: "messaging.seal.active.svc-sign", wantMsg: `generation "-v1" must be v<N>`},
+		{name: "first_bad_key_in_sorted_order", active: map[string]string{"zz": "v0", "aa": "v01"}, wantField: "messaging.seal.active.aa", wantMsg: `"v01"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkMessagingSeal(&SealConfig{Active: tt.active})
+			if tt.wantField == "" {
+				assert.NoError(t, err)
+				return
+			}
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+			assert.Contains(t, cfgErr.Message, tt.wantMsg)
+		})
+	}
+}
+
+// TestCheckMessagingRunsSealRule pins that checkMessaging reaches the seal
+// rule, so config.Validate carries it.
+func TestCheckMessagingRunsSealRule(t *testing.T) {
+	cfg := MessagingConfig{Tenancy: TenancyPerTenant, Seal: SealConfig{Active: map[string]string{"svc-sign": "v01"}}}
+	err := checkMessaging(&cfg, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "messaging.seal.active.svc-sign")
+}
