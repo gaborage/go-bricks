@@ -276,6 +276,10 @@ returns every recorded value oldest-first. A `testing/mocks.MockAMQPClient` hand
 `Publisher[T]` fails with `messaging.ErrPublishDoorUnavailable` — it is a client double for
 declarations and consumption, not a publish sink.
 
+## SQL Goldens
+
+A store port is judged by the SQL it emits, not by the unit tests that pin substrings of it: `database/testing.SQLGolden` renders everything a `TestDB` and its transactions recorded — each statement verbatim, then every bound argument with its type — and `dbtesting.AssertGolden(t, path, got, *update)` pins that text under `testdata/sql/`. Capture the goldens BEFORE the port in the port PR's first commit, diff them after, and name every deliberate text change in the commit body. `SQLGolden{FixedClock: fixedAt}` prints the fixture time verbatim and any other clock value (a store's own `time.Now()`) as `<time>`, so a wrong binding fails while a wall clock does not. See `outbox/store_sql_golden_test.go` and `inbox/store_sql_golden_test.go`.
+
 ## Server / HandlerContext Testing
 
 Unit-test a `Handler` or `MiddlewareFunc` without standing up a router by building a
