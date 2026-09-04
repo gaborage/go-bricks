@@ -196,7 +196,7 @@ func TestApplyMessagingDefaultsCleanupInterval(t *testing.T) {
 	t.Run("zero_gets_default", func(t *testing.T) {
 		cfg := &MessagingConfig{Broker: BrokerConfig{URL: testAMQPHost}}
 		require.NoError(t, normalizeMessaging(cfg, false))
-		assert.Equal(t, defaultPublisherCleanupInterval, cfg.Publisher.CleanupInterval)
+		assert.Equal(t, DefaultPublisherCleanupInterval, cfg.Publisher.CleanupInterval)
 	})
 	t.Run("explicit_value_preserved", func(t *testing.T) {
 		cfg := &MessagingConfig{

@@ -105,7 +105,7 @@ func DefaultManagerConfig() ManagerConfig {
 	return ManagerConfig{
 		MaxSize:         100,
 		IdleTTL:         15 * time.Minute,
-		CleanupInterval: 5 * time.Minute,
+		CleanupInterval: config.DefaultCacheManagerCleanupInterval,
 	}
 }
 
@@ -125,7 +125,7 @@ func NewCacheManager(cfg ManagerConfig, connector Connector) (*CacheManager, err
 	}
 
 	if cfg.CleanupInterval <= 0 {
-		cfg.CleanupInterval = 5 * time.Minute
+		cfg.CleanupInterval = config.DefaultCacheManagerCleanupInterval
 	}
 	if cfg.Logger != nil {
 		resourcepool.WarnIfCleanupIntervalTooLate(cfg.Logger, "cache.manager", cfg.CleanupInterval, cfg.IdleTTL)

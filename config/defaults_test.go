@@ -323,7 +323,7 @@ func TestApplyCacheManagerDefaults(t *testing.T) {
 			},
 			expectedMaxSize:         defaultCacheMaxSize,
 			expectedIdleTTL:         defaultCacheIdleTTL,
-			expectedCleanupInterval: defaultCacheCleanupInterval,
+			expectedCleanupInterval: DefaultCacheManagerCleanupInterval,
 		},
 		{
 			name: "explicit_values_preserved",
@@ -351,9 +351,9 @@ func TestApplyCacheManagerDefaults(t *testing.T) {
 					MaxSize: 50, // Only maxsize set
 				},
 			},
-			expectedMaxSize:         50,                          // Preserved
-			expectedIdleTTL:         defaultCacheIdleTTL,         // Defaulted
-			expectedCleanupInterval: defaultCacheCleanupInterval, // Defaulted
+			expectedMaxSize:         50,                                 // Preserved
+			expectedIdleTTL:         defaultCacheIdleTTL,                // Defaulted
+			expectedCleanupInterval: DefaultCacheManagerCleanupInterval, // Defaulted
 		},
 	}
 
@@ -424,7 +424,7 @@ func TestApplyCacheManagerDefaultsModeAware(t *testing.T) {
 		require.NoError(t, applyCacheManagerDefaults(cfg, false))
 		assert.Equal(t, defaultCacheMaxSize, cfg.Manager.MaxSize)
 		assert.Equal(t, defaultCacheIdleTTL, cfg.Manager.IdleTTL)
-		assert.Equal(t, defaultCacheCleanupInterval, cfg.Manager.CleanupInterval)
+		assert.Equal(t, DefaultCacheManagerCleanupInterval, cfg.Manager.CleanupInterval)
 	})
 
 	t.Run("multi_tenant_zero_preserves_maxsize", func(t *testing.T) {
@@ -432,7 +432,7 @@ func TestApplyCacheManagerDefaultsModeAware(t *testing.T) {
 		require.NoError(t, applyCacheManagerDefaults(cfg, true))
 		assert.Zero(t, cfg.Manager.MaxSize)
 		assert.Equal(t, defaultCacheIdleTTL, cfg.Manager.IdleTTL)
-		assert.Equal(t, defaultCacheCleanupInterval, cfg.Manager.CleanupInterval)
+		assert.Equal(t, DefaultCacheManagerCleanupInterval, cfg.Manager.CleanupInterval)
 	})
 
 	t.Run("explicit_values_preserved_single", func(t *testing.T) {
@@ -529,7 +529,7 @@ func TestApplyDatabaseManagerDefaults(t *testing.T) {
 		require.NoError(t, applyDatabaseManagerDefaults(cfg, false))
 		assert.Equal(t, defaultDatabaseManagerMaxSize, cfg.MaxSize)
 		assert.Equal(t, defaultDatabaseManagerIdleTTL, cfg.IdleTTL)
-		assert.Equal(t, defaultDatabaseManagerCleanupInterval, cfg.CleanupInterval)
+		assert.Equal(t, DefaultDatabaseManagerCleanupInterval, cfg.CleanupInterval)
 	})
 
 	t.Run("multi_tenant_zero_preserves_maxsize_uses_30m", func(t *testing.T) {
@@ -537,7 +537,7 @@ func TestApplyDatabaseManagerDefaults(t *testing.T) {
 		require.NoError(t, applyDatabaseManagerDefaults(cfg, true))
 		assert.Zero(t, cfg.MaxSize)
 		assert.Equal(t, defaultDatabaseManagerIdleTTLMultiTenant, cfg.IdleTTL)
-		assert.Equal(t, defaultDatabaseManagerCleanupInterval, cfg.CleanupInterval)
+		assert.Equal(t, DefaultDatabaseManagerCleanupInterval, cfg.CleanupInterval)
 	})
 
 	t.Run("explicit_values_preserved_single", func(t *testing.T) {
@@ -611,7 +611,7 @@ func TestValidateAppliesDatabaseManagerDefaultsOnlyToPrimaryDatabase(t *testing.
 
 	assert.Equal(t, defaultDatabaseManagerMaxSize, cfg.Database.Manager.MaxSize)
 	assert.Equal(t, defaultDatabaseManagerIdleTTL, cfg.Database.Manager.IdleTTL)
-	assert.Equal(t, defaultDatabaseManagerCleanupInterval, cfg.Database.Manager.CleanupInterval)
+	assert.Equal(t, DefaultDatabaseManagerCleanupInterval, cfg.Database.Manager.CleanupInterval)
 	assert.Equal(t, DatabaseManagerConfig{}, cfg.Databases["legacy"].Manager)
 }
 
@@ -665,7 +665,7 @@ func TestValidateMultiTenantAppliesDatabaseManagerDefaultsEndToEnd(t *testing.T)
 
 		assert.Zero(t, cfg.Database.Manager.MaxSize)
 		assert.Equal(t, defaultDatabaseManagerIdleTTLMultiTenant, cfg.Database.Manager.IdleTTL)
-		assert.Equal(t, defaultDatabaseManagerCleanupInterval, cfg.Database.Manager.CleanupInterval)
+		assert.Equal(t, DefaultDatabaseManagerCleanupInterval, cfg.Database.Manager.CleanupInterval)
 	})
 
 	t.Run("negative_maxsize_rejected_through_validate", func(t *testing.T) {
@@ -747,7 +747,7 @@ func TestValidateMultiTenantAppliesCacheManagerDefaultsEndToEnd(t *testing.T) {
 		require.NoError(t, Validate(cfg))
 		assert.Zero(t, cfg.Cache.Manager.MaxSize)
 		assert.Equal(t, defaultCacheIdleTTL, cfg.Cache.Manager.IdleTTL)
-		assert.Equal(t, defaultCacheCleanupInterval, cfg.Cache.Manager.CleanupInterval)
+		assert.Equal(t, DefaultCacheManagerCleanupInterval, cfg.Cache.Manager.CleanupInterval)
 	})
 
 	t.Run("multi_tenant_negative_maxsize_rejected_through_validate", func(t *testing.T) {

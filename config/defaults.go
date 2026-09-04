@@ -5,6 +5,21 @@ import (
 	"time"
 )
 
+// Resource-manager cleanup-interval defaults. Each is the single declaration of
+// its key's default: normalization fills the key with it, and the manager that
+// owns the pool cites the same constant where a hand-built options struct leaves
+// the interval non-positive. Two independent literals per key is what let the
+// ADR-075 scheduler timeouts drift apart, so a manager must reference these
+// rather than repeat the value.
+const (
+	// DefaultDatabaseManagerCleanupInterval is the default for database.manager.cleanupinterval.
+	DefaultDatabaseManagerCleanupInterval = 5 * time.Minute
+	// DefaultCacheManagerCleanupInterval is the default for cache.manager.cleanupinterval.
+	DefaultCacheManagerCleanupInterval = 5 * time.Minute
+	// DefaultPublisherCleanupInterval is the default for messaging.publisher.cleanupinterval.
+	DefaultPublisherCleanupInterval = 2 * time.Minute
+)
+
 // Database pool defaults
 const (
 	defaultSlowQueryThreshold = 200 * time.Millisecond
@@ -66,8 +81,7 @@ const (
 	// multi-tenant fallback — previously unreachable on the production path once this
 	// function unconditionally applied the single-tenant default here first).
 	defaultPublisherIdleTTLMultiTenant = 10 * time.Minute
-	defaultPublisherCleanupInterval    = 2 * time.Minute // Publisher-pool cleanup goroutine frequency
-	defaultMaxPublishAttempts          = 5               // Bounded publish retry attempts before giving up
+	defaultMaxPublishAttempts          = 5 // Bounded publish retry attempts before giving up
 )
 
 // Native stream-protocol (messaging.streams.*) defaults
@@ -81,10 +95,9 @@ const (
 
 // Cache manager defaults
 const (
-	defaultCacheMaxSize         = 100                    // Maximum tenant cache instances
-	defaultCacheIdleTTL         = 15 * time.Minute       // Idle timeout per cache
-	defaultCacheCleanupInterval = 5 * time.Minute        // Cleanup goroutine frequency
-	defaultCacheLoadTimeout     = 500 * time.Millisecond // cache.LoadThrough cache-leg bound
+	defaultCacheMaxSize     = 100                    // Maximum tenant cache instances
+	defaultCacheIdleTTL     = 15 * time.Minute       // Idle timeout per cache
+	defaultCacheLoadTimeout = 500 * time.Millisecond // cache.LoadThrough cache-leg bound
 )
 
 // Database manager defaults
@@ -92,7 +105,6 @@ const (
 	defaultDatabaseManagerMaxSize            = 10
 	defaultDatabaseManagerIdleTTL            = 1 * time.Hour
 	defaultDatabaseManagerIdleTTLMultiTenant = 30 * time.Minute
-	defaultDatabaseManagerCleanupInterval    = 5 * time.Minute
 )
 
 // Redis cache defaults. The top-level cache.* keys receive these via koanf
@@ -306,7 +318,7 @@ func applyCacheManagerDefaults(cfg *CacheConfig, multitenant bool) error {
 	if err := applyNonNegativeDefault(&cfg.Manager.IdleTTL, defaultCacheIdleTTL, "cache.manager.idlettl"); err != nil {
 		return err
 	}
-	if err := applyNonNegativeDefault(&cfg.Manager.CleanupInterval, defaultCacheCleanupInterval, "cache.manager.cleanupinterval"); err != nil {
+	if err := applyNonNegativeDefault(&cfg.Manager.CleanupInterval, DefaultCacheManagerCleanupInterval, "cache.manager.cleanupinterval"); err != nil {
 		return err
 	}
 
@@ -332,7 +344,7 @@ func applyDatabaseManagerDefaults(cfg *DatabaseManagerConfig, multitenant bool) 
 	if err := applyNonNegativeDefault(&cfg.IdleTTL, idleTTLDefault, "database.manager.idlettl"); err != nil {
 		return err
 	}
-	if err := applyNonNegativeDefault(&cfg.CleanupInterval, defaultDatabaseManagerCleanupInterval, "database.manager.cleanupinterval"); err != nil {
+	if err := applyNonNegativeDefault(&cfg.CleanupInterval, DefaultDatabaseManagerCleanupInterval, "database.manager.cleanupinterval"); err != nil {
 		return err
 	}
 

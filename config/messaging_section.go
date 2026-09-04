@@ -189,7 +189,7 @@ func applyMessagingDefaults(cfg *MessagingConfig, multitenant bool) error {
 		{&cfg.Reconnect.ConnectionTimeout, defaultConnectionTimeout, "messaging.reconnect.connectiontimeout"},
 		{&cfg.Reconnect.ReadyTimeout, defaultReadyTimeout, "messaging.reconnect.readytimeout"},
 		{&cfg.Reconnect.MaxDelay, defaultMaxReconnectDelay, "messaging.reconnect.maxdelay"},
-		{&cfg.Publisher.CleanupInterval, defaultPublisherCleanupInterval, "messaging.publisher.cleanupinterval"},
+		{&cfg.Publisher.CleanupInterval, DefaultPublisherCleanupInterval, "messaging.publisher.cleanupinterval"},
 	} {
 		if err := applyNonNegativeDefault(d.field, d.def, d.name); err != nil {
 			return err
