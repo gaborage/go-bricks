@@ -283,23 +283,31 @@ func checkPins(slots *authenticatedSlots, spec *Spec, opts *OpenOptions) error {
 }
 
 // checkOpenArgs is the key-free pre-flight: wiring mistakes, reported with the sealer's
-// SEAL_OPTIONS_INVALID / SEAL_TYPE_MISMATCH codes since they are the same class of error.
+// SEAL_OPTIONS_INVALID / SEAL_TYPE_MISMATCH codes (same sentinel, same class of error) as
+// an *OpenError with Rule 0, so every Open failure is one error type.
 func checkOpenArgs(spec *Spec, opts *OpenOptions, out any) error {
 	switch {
 	case spec == nil || spec.Type == nil:
-		return sealError(CodeOptionsInvalid, "Open requires a Spec from ScanType", nil)
+		return preflightError(CodeOptionsInvalid, "Open requires a Spec from ScanType")
 	case opts == nil:
-		return sealError(CodeOptionsInvalid, "Open requires OpenOptions", nil)
+		return preflightError(CodeOptionsInvalid, "Open requires OpenOptions")
 	case opts.Keys == nil:
-		return sealError(CodeOptionsInvalid, "Open requires a KeyResolver", nil)
+		return preflightError(CodeOptionsInvalid, "Open requires a KeyResolver")
 	case opts.EventType == "":
-		return sealError(CodeOptionsInvalid, "Open requires a non-empty EventType", nil)
+		return preflightError(CodeOptionsInvalid, "Open requires a non-empty EventType")
 	}
 	t := reflect.TypeOf(out)
 	if t == nil || t.Kind() != reflect.Pointer || t.Elem() != spec.Type {
-		return sealError(CodeTypeMismatch, fmt.Sprintf("out must be a *%v, got %v", spec.Type, t), nil)
+		return preflightError(CodeTypeMismatch, fmt.Sprintf("out must be a *%v, got %v", spec.Type, t))
+	}
+	if reflect.ValueOf(out).IsNil() {
+		return preflightError(CodeTypeMismatch, fmt.Sprintf("out must be a non-nil *%v", spec.Type))
 	}
 	return nil
+}
+
+func preflightError(code, msg string) error {
+	return &OpenError{Err: sealError(code, msg, nil)}
 }
 
 // checkHeaderPolicy applies G5 to one layer's protected header: an allowed alg (the caller

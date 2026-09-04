@@ -42,6 +42,16 @@ const (
 	vectorsFile  = "testdata/vectors.json"
 )
 
+// fixtureNote travels inside both fixture files so their provenance is readable in place.
+const fixtureNote = "Generated test material for the jose/sealed opener vectors (go test ./jose/sealed -update): " +
+	"disposable RSA keys and the tokens signed/encrypted under them. Never provisioned anywhere; nothing to rotate."
+
+// keysFile is testdata/keys.json: a provenance note and the fixed test keys, kid -> base64 PKCS#1 DER.
+type keysFileShape struct {
+	Note string            `json:"note"`
+	Keys map[string]string `json:"keys"`
+}
+
 // vectorKeys are the fixed test keys the published vectors are bound to. They exist so the
 // vectors are byte-stable files a partner can replay; they are test material only.
 type vectorKeys struct {
@@ -52,22 +62,22 @@ type vectorKeys struct {
 
 func loadVectorKeys(t *testing.T) *vectorKeys {
 	t.Helper()
-	encoded := map[string]string{}
+	file := keysFileShape{Note: fixtureNote, Keys: map[string]string{}}
 	raw, err := os.ReadFile(keysFile)
 	if errors.Is(err, os.ErrNotExist) && *update {
 		for _, kid := range []string{vecSignKid, vecSignKidV1, vecEncKid, vecRogueKid} {
 			priv, _ := jositest.GenerateTestKeyPair(t)
-			encoded[kid] = base64.StdEncoding.EncodeToString(x509.MarshalPKCS1PrivateKey(priv))
+			file.Keys[kid] = base64.StdEncoding.EncodeToString(x509.MarshalPKCS1PrivateKey(priv))
 		}
-		raw, err = json.MarshalIndent(encoded, "", "  ")
+		raw, err = json.MarshalIndent(file, "", "  ")
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(keysFile, append(raw, '\n'), 0o600))
 	}
 	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(raw, &encoded))
+	require.NoError(t, json.Unmarshal(raw, &file))
 
 	k := &vectorKeys{priv: map[string]*rsa.PrivateKey{}}
-	for kid, b64 := range encoded {
+	for kid, b64 := range file.Keys {
 		der, err := base64.StdEncoding.DecodeString(b64)
 		require.NoError(t, err)
 		k.priv[kid], err = x509.ParsePKCS1PrivateKey(der)
@@ -83,6 +93,7 @@ func loadVectorKeys(t *testing.T) *vectorKeys {
 
 // vectorFile is the published set: one positive body and the negatives derived from it.
 type vectorFile struct {
+	Note     string   `json:"note"`
 	Positive string   `json:"positive"`
 	Vectors  []vector `json:"vectors"`
 }
@@ -317,7 +328,7 @@ func (k *vectorKeys) negativeVectors(t *testing.T) []vector {
 func loadVectors(t *testing.T, k *vectorKeys) *vectorFile {
 	t.Helper()
 	if *update {
-		vf := &vectorFile{Positive: k.build(t, mutation{}), Vectors: k.negativeVectors(t)}
+		vf := &vectorFile{Note: fixtureNote, Positive: k.build(t, mutation{}), Vectors: k.negativeVectors(t)}
 		raw, err := json.MarshalIndent(vf, "", "  ")
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(vectorsFile, append(raw, '\n'), 0o600))
@@ -564,10 +575,17 @@ func TestOpenRejectsWiringMistakes(t *testing.T) {
 		{"out_not_a_pointer", sealed.CodeTypeMismatch, func() error { _, err := sealed.Open(body, spec, opts, evt); return err }},
 		{"out_wrong_type", sealed.CodeTypeMismatch, func() error { _, err := sealed.Open(body, spec, opts, new(cardData)); return err }},
 		{"out_nil", sealed.CodeTypeMismatch, func() error { _, err := sealed.Open(body, spec, opts, nil); return err }},
+		{"out_typed_nil", sealed.CodeTypeMismatch, func() error {
+			_, err := sealed.Open(body, spec, opts, (*paymentAuthorized)(nil))
+			return err
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.call()
+			var oe *sealed.OpenError
+			require.ErrorAs(t, err, &oe, "every Open failure is an *OpenError")
+			assert.Zero(t, oe.Rule, "pre-flight, no rule fired")
 			var je *bricksjose.Error
 			require.ErrorAs(t, err, &je)
 			assert.Equal(t, tc.code, je.Code)
