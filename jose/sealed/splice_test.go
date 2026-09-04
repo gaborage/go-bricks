@@ -21,7 +21,11 @@ func TestLocateSubjectFindsSpanExactly(t *testing.T) {
 		{name: "last_null", doc: `{"a":1,"card":null}`, path: "card", value: `null`},
 		{name: "array_value", doc: `{"card":[1,2,{"n":[]}]}`, path: "card", value: `[1,2,{"n":[]}]`},
 		{name: "nested_same_name_ignored", doc: `{"a":{"card":"inner"},"card":"outer"}`, path: "card", value: `"outer"`},
-		{name: "escaped_key", doc: `{"card":"v"}`, path: "card", value: `"v"`},
+		// The key is compared after JSON decoding: a unicode escape and an escaped
+		// quote in the raw key must still match the path.
+		{name: "escaped_key", doc: `{"c\u0061rd":"v"}`, path: "card", value: `"v"`},
+		{name: "escaped_quote_in_key", doc: `{"a":1,"card\"x":"v"}`, path: `card"x`, value: `"v"`},
+		{name: "escaped_key_not_confused_with_raw_namesake", doc: `{"c\u0061rd":"first","x":{"card":"inner"}}`, path: "card", value: `"first"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
