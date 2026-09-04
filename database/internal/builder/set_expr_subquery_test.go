@@ -59,13 +59,16 @@ func TestSetExprBindsArgumentsPerVendor(t *testing.T) {
 func TestSetExprRefusesAliasAndEmptySQL(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
+	// SECURITY: Manual SQL review completed - test fixture, literal "1", exercises the alias refusal
 	_, _, err := qb.Update(tableUsers).SetExpr("n", dbtypes.RawExpression{SQL: "1", Alias: "x"}).ToSQL()
 	require.ErrorIs(t, err, dbtypes.ErrAliasInValue)
 	assert.Contains(t, err.Error(), "n:")
 
+	// SECURITY: Manual SQL review completed - test fixture, blank body, exercises the empty-SQL refusal
 	_, _, err = qb.Update(tableUsers).SetExpr("n", dbtypes.RawExpression{SQL: "  "}).ToSQL()
 	require.ErrorIs(t, err, dbtypes.ErrEmptyExpressionSQL)
 
+	// SECURITY: Manual SQL review completed - test fixture, literal "1", exercises the column-grammar refusal
 	_, _, err = qb.Update(tableUsers).SetExpr("bad column", qb.MustExpr("1")).ToSQL()
 	require.Error(t, err, "the SET target still goes through the identifier grammar")
 }
@@ -163,4 +166,46 @@ func TestOracleTableLessSelectRendersFromDual(t *testing.T) {
 	sql, _, err = ora.Select("id").JoinOn("orders", jf.EqColumn("orders.user_id", "users.id")).ToSQL()
 	require.NoError(t, err)
 	assert.NotContains(t, sql, "dual")
+}
+
+// vendorRenderedSubquery is an external SelectQueryBuilder that already applied
+// a vendor placeholder format — what the shared renderSubquery must refuse.
+type vendorRenderedSubquery struct {
+	dbtypes.SelectQueryBuilder
+	sql string
+}
+
+func (v vendorRenderedSubquery) ToSQL() (sql string, args []any, err error) {
+	return v.sql, []any{1}, nil
+}
+
+// TestSubqueryColumnRefusesAnExternalVendorPlaceholder pins the outer pass's
+// contract: it rewrites only `?`, so an external implementation that rendered
+// $1 or :1 is refused instead of colliding with the outer numbering.
+func TestSubqueryColumnRefusesAnExternalVendorPlaceholder(t *testing.T) {
+	for name, sql := range map[string]string{
+		"postgres_dollar": "SELECT COUNT(*) FROM held WHERE consumer = $1",
+		"oracle_colon":    "SELECT COUNT(*) FROM held WHERE consumer = :1",
+	} {
+		t.Run(name, func(t *testing.T) {
+			qb := NewQueryBuilder(dbtypes.PostgreSQL)
+			f := qb.Filter()
+			sub := vendorRenderedSubquery{sql: sql}
+
+			_, _, err := qb.Select().SubqueryColumn(sub, "n").ToSQL()
+			require.ErrorIs(t, err, errSubqueryPlaceholderFormat)
+
+			_, _, err = qb.Select("id").From(tableUsers).Where(f.Exists(sub)).ToSQL()
+			require.ErrorIs(t, err, errSubqueryPlaceholderFormat, "the EXISTS door shares the guard")
+		})
+	}
+
+	// A question-mark external subquery is accepted and renumbered.
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	f := qb.Filter()
+	sub := vendorRenderedSubquery{sql: "SELECT COUNT(*) FROM held WHERE consumer = ?"}
+	sql, args, err := qb.Select("id").SubqueryColumn(sub, "n").From(tableUsers).Where(f.Eq("id", 2)).ToSQL()
+	require.NoError(t, err)
+	assert.Equal(t, `SELECT id, (SELECT COUNT(*) FROM held WHERE consumer = $1) AS n FROM users WHERE id = $2`, sql)
+	assert.Equal(t, []any{1, 2}, args)
 }

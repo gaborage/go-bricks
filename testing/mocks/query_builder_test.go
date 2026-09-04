@@ -193,7 +193,7 @@ type MockUpdateQueryBuilder struct {
 }
 
 func (m *MockUpdateQueryBuilder) SetExpr(column string, expr types.RawExpression, args ...any) types.UpdateQueryBuilder {
-	called := m.MethodCalled("SetExpr", column, expr, args)
+	called := m.MethodCalled("SetExpr", append([]any{column, expr}, args...)...)
 	return called.Get(0).(types.UpdateQueryBuilder)
 }
 

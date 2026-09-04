@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -623,11 +624,30 @@ func resolveList(op string, v reflect.Value, values any) (normalized any, empty 
 // with the outer renumbering (duplicate $1 on PostgreSQL, duplicate :1 on
 // Oracle). Another implementation (a mock) falls back to its own ToSQL.
 func renderSubquery(sub dbtypes.SelectQueryBuilder) (sql string, args []any, err error) {
-	if err := dbtypes.ValidateSubquery(sub); err != nil {
-		return "", nil, err
+	if invalid := dbtypes.ValidateSubquery(sub); invalid != nil {
+		return "", nil, invalid
 	}
 	if sqb, ok := sub.(*SelectQueryBuilder); ok {
 		return sqb.buildSelectBuilder().PlaceholderFormat(squirrel.Question).ToSql()
 	}
-	return sub.ToSQL()
+	sql, args, err = sub.ToSQL()
+	if err != nil {
+		return "", nil, err
+	}
+	// Another implementation must hand back question-mark placeholders: the
+	// outer pass rewrites only `?`, so a `$1`/`:1` it rendered would survive
+	// verbatim, collide with the outer statement's numbering, or be invalid on
+	// the other vendor.
+	if vendorPlaceholder.MatchString(sql) {
+		return "", nil, errSubqueryPlaceholderFormat
+	}
+	return sql, args, nil
 }
+
+// vendorPlaceholder spots a positional placeholder already rendered in a
+// vendor format ($1 / :1) inside an external subquery's SQL.
+var vendorPlaceholder = regexp.MustCompile(`[$:]\d+`)
+
+// errSubqueryPlaceholderFormat is the deferred ToSQL error for an external
+// SelectQueryBuilder that rendered vendor placeholders.
+var errSubqueryPlaceholderFormat = errors.New("subquery must render question-mark placeholders, not $N or :N")
