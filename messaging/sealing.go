@@ -89,17 +89,26 @@ func hasSealTagIn(t reflect.Type, seen map[reflect.Type]bool) bool {
 // embed — as a dotted field path, or "" when none. Such a tag would otherwise ship in
 // plaintext silently, so DeclareTypedPublisher refuses the declaration.
 func misplacedSealTag(t reflect.Type) string {
-	return misplacedSealTagIn(t, "", true, map[reflect.Type]bool{})
+	return misplacedSealTagIn(t, "", true, map[sealTagVisit]bool{})
 }
 
-func misplacedSealTagIn(t reflect.Type, path string, supported bool, seen map[reflect.Type]bool) string {
+// sealTagVisit keys the cycle guard by type AND position: the same struct can be
+// reached first as an untagged embed (supported) and again as a named field
+// (unsupported), and the second visit must still judge its tags.
+type sealTagVisit struct {
+	typ       reflect.Type
+	supported bool
+}
+
+func misplacedSealTagIn(t reflect.Type, path string, supported bool, seen map[sealTagVisit]bool) string {
 	for t != nil && t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
-	if t == nil || t.Kind() != reflect.Struct || seen[t] {
+	visit := sealTagVisit{typ: t, supported: supported}
+	if t == nil || t.Kind() != reflect.Struct || seen[visit] {
 		return ""
 	}
-	seen[t] = true
+	seen[visit] = true
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		fieldPath := field.Name

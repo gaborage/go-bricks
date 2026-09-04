@@ -157,6 +157,14 @@ type selfNested struct {
 	ID   string `json:"id"`
 }
 
+// embeddedThenNamed reaches promotedSeal twice: promoted (supported) first, then
+// as a named field. A cycle guard keyed by type alone would skip the second visit
+// and let Inner.Card ship in plaintext.
+type embeddedThenNamed struct {
+	promotedSeal
+	Inner promotedSeal `json:"inner"`
+}
+
 func TestMisplacedSealTag(t *testing.T) {
 	cases := map[string]struct {
 		t    reflect.Type
@@ -170,6 +178,7 @@ func TestMisplacedSealTag(t *testing.T) {
 		"tagged_embed":             {reflect.TypeOf(taggedEmbedSubject{}), "promotedSeal.Card"},
 		"sentinel_plus_nested":     {reflect.TypeOf(sentinelWithNestedSubject{}), "Inner.Card"},
 		"recursive_type":           {reflect.TypeOf(selfNested{}), ""},
+		"embedded_then_named":      {reflect.TypeOf(embeddedThenNamed{}), "Inner.Card"},
 		"non_struct":               {reflect.TypeOf(1), ""},
 	}
 	for name, tc := range cases {
