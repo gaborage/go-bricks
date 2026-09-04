@@ -193,6 +193,14 @@ linters:
           - importas
         path: cmd/seal-payload/
         text: 'go-jose/go-jose/v4'
+      # jose/sealed is the second such file set: it lives under the go-bricks jose
+      # tree (so the parent import must stay `jose`) and its tests decode the wire
+      # with go-jose/v4 directly. Same collision, same resolution, same unanchored
+      # path for the same cache-replay reason.
+      - linters:
+          - importas
+        path: jose/sealed/
+        text: 'go-jose/go-jose/v4'
     paths:
       - third_party$
       - builtin$
