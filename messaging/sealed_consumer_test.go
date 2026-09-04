@@ -203,6 +203,15 @@ func TestDeclareTypedConsumerDoorsRefuseANestedSealTag(t *testing.T) {
 	err = metaLess.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nested member Inner.Card")
+
+	// The publisher's cycle-guard case: a struct met first as an untagged embed and
+	// again as a named field is still refused on the consumer side.
+	again := NewDeclarations()
+	again.DeclareQueue("q")
+	DeclareTypedConsumerWithMeta(again, consumerOpts(false), func(context.Context, embeddedThenNamed, Metadata) error { return nil })
+	err = again.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nested member Inner.Card")
 }
 
 func TestDeclareTypedConsumerWithMetaPlainTypeNeverTouchesTheCodec(t *testing.T) {
