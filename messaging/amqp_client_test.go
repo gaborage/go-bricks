@@ -813,7 +813,8 @@ func TestPublishBytesConfirmTimeoutThenCancel(t *testing.T) {
 	// Use timeout context instead of sleep-based cancellation
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
-	_ = c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	err := c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	require.ErrorIs(t, err, context.DeadlineExceeded, "the confirmation wait must surface the deadline, not succeed or fail for another reason")
 }
 
 func TestConsumeFromQueueSuccess(t *testing.T) {
