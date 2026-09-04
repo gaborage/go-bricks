@@ -52,8 +52,9 @@ func NewWithFilter(level string, pretty bool, filterConfig *FilterConfig) *ZeroL
 
 	if pretty {
 		l = zerolog.New(zerolog.ConsoleWriter{
-			Out:        os.Stdout,
-			TimeFormat: time.RFC3339,
+			Out:           os.Stdout,
+			TimeFormat:    time.RFC3339,
+			FormatPrepare: quoteControlMessage,
 		}).With().Timestamp().CallerWithSkipFrameCount(3).Logger()
 	} else {
 		l = zerolog.New(os.Stdout).With().Timestamp().CallerWithSkipFrameCount(3).Logger()
