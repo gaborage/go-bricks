@@ -448,28 +448,7 @@ func (ff *FilterFactory) NotExists(subquery dbtypes.SelectQueryBuilder) dbtypes.
 
 // buildExistsFilter is a helper that builds EXISTS or NOT EXISTS filters.
 func (ff *FilterFactory) buildExistsFilter(subquery dbtypes.SelectQueryBuilder, keyword string) dbtypes.Filter {
-	if err := dbtypes.ValidateSubquery(subquery); err != nil {
-		return Filter{sqlizer: errorSqlizer{err: err}}
-	}
-
-	// Render the subquery with question-mark placeholders and embed the raw SQL, so the
-	// OUTER query's single final placeholder pass numbers the subquery's and the outer
-	// query's parameters consistently. Passing the SelectBuilder directly would let
-	// squirrel apply the vendor format ($1/:1) to the subquery early, colliding with the
-	// outer query's renumbering (duplicate $1 on PostgreSQL; duplicate :1 on Oracle).
-	if sqb, ok := subquery.(*SelectQueryBuilder); ok {
-		subSQL, subArgs, err := sqb.buildSelectBuilder().PlaceholderFormat(squirrel.Question).ToSql()
-		if err != nil {
-			return Filter{sqlizer: errorSqlizer{err: err}}
-		}
-		return Filter{sqlizer: &existsFilter{
-			sqlizer: squirrel.Expr(keyword+" ("+subSQL+")", subArgs...),
-		}}
-	}
-
-	// Fallback for other implementations (e.g., mocks)
-	// This path calls ToSQL() which may have suboptimal placeholder handling
-	sql, args, err := subquery.ToSQL()
+	sql, args, err := renderSubquery(subquery)
 	if err != nil {
 		return Filter{sqlizer: errorSqlizer{err: err}}
 	}

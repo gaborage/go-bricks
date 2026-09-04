@@ -661,6 +661,20 @@ if database.IsLockNotAvailable(err) {
 
 "Lock the row if it exists, insert it otherwise" has no single-statement builder form: PostgreSQL's `ON CONFLICT … DO UPDATE SET c = EXCLUDED.c` idiom updates a conflict column, which `BuildUpsert` refuses on every vendor for Oracle MERGE parity (ORA-38104), and Oracle has no equivalent. Write it as two statements under the transaction — `Select(...).ForUpdate()` then `Insert` on `ErrNoRows` — or keep the PostgreSQL idiom as annotated raw SQL. The two-statement form is safe only when the lookup key carries a unique or primary-key constraint: two transactions can both see `ErrNoRows` before either inserts, so the loser's `Insert` fails with a unique violation (`database.IsUniqueViolation`) and must re-read or retry rather than treat it as an error. Where that re-read runs depends on the vendor: PostgreSQL aborts the whole transaction on SQLSTATE 23505 (every later statement fails with "current transaction is aborted"), so either run the `Insert` under a savepoint and `ROLLBACK TO SAVEPOINT` before re-reading, or roll back and restart the transaction; Oracle's ORA-00001 is statement-level, the transaction stays usable and the re-read can follow on it directly.
 
+**Expressions in SET.** `Set(col, qb.MustExpr("attempts + 1"))` splices an argument-free expression; `SetExpr(col, expr, args...)` is the form for one that binds a value — `SetExpr("lease_until", qb.MustExpr("NOW() + (? * INTERVAL '1 second')"), secs)` — with its `?` placeholders renumbered into the statement's. `SetExpr` is a raw-SQL door like `f.Raw`: the body is never validated, so every call site carries the `// SECURITY: Manual SQL review completed - …` annotation.
+
+**Scalar subqueries in the projection.** `SubqueryColumn(sub, alias)` appends `(sub) AS alias`, so a stats snapshot is one round trip:
+
+```go
+tenants := qb.Select(qb.MustExpr("COUNT(*)")).From(held).Where(f.Eq("consumer", c))
+oldest := qb.Select(qb.MustExpr("MIN(held_since)")).From(held).Where(f.Eq("consumer", c))
+stats := qb.Select().SubqueryColumn(tenants, "tenants").SubqueryColumn(oldest, "oldest")
+// PostgreSQL: SELECT (SELECT COUNT(*) FROM held WHERE consumer = $1) AS tenants, (…) AS oldest
+// Oracle:     … AS oldest FROM dual   — a table-less SELECT gains FROM dual automatically
+```
+
+The subquery is validated like an `EXISTS` operand and may not carry a row lock; the alias must be an unquoted identifier.
+
 `database.Raw(sql string, args ...any)` adapts hand-written SQL to the same helpers — it is an escape hatch on par with `Filter.Raw`/`JoinFilter.Raw`, and broader (the SQL string replaces the whole statement, bypassing the builder's identifier validation entirely). **Every** call site requires the same review annotation `f.Raw()`/`jf.Raw()` do:
 
 ```go

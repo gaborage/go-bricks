@@ -192,6 +192,11 @@ type MockUpdateQueryBuilder struct {
 	mock.Mock
 }
 
+func (m *MockUpdateQueryBuilder) SetExpr(column string, expr types.RawExpression, args ...any) types.UpdateQueryBuilder {
+	called := m.MethodCalled("SetExpr", append([]any{column, expr}, args...)...)
+	return called.Get(0).(types.UpdateQueryBuilder)
+}
+
 func (m *MockUpdateQueryBuilder) Set(column string, value any) types.UpdateQueryBuilder {
 	args := m.MethodCalled("Set", column, value)
 	return args.Get(0).(types.UpdateQueryBuilder)
@@ -372,6 +377,11 @@ func (m *MockSelectQueryBuilder) Having(pred any, rest ...any) types.SelectQuery
 
 func (m *MockSelectQueryBuilder) OrderBy(orderBys ...any) types.SelectQueryBuilder {
 	args := m.MethodCalled("OrderBy", orderBys...)
+	return args.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockSelectQueryBuilder) SubqueryColumn(sub types.SelectQueryBuilder, alias string) types.SelectQueryBuilder {
+	args := m.MethodCalled("SubqueryColumn", sub, alias)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 

@@ -203,6 +203,14 @@ type SelectQueryBuilder interface {
 	ForUpdate() SelectQueryBuilder
 	ForUpdateNoWait() SelectQueryBuilder
 
+	// SubqueryColumn appends `(sub) AS alias` to the projection — one scalar
+	// subquery per result column, the shape a stats snapshot takes in one round
+	// trip. sub is validated like an EXISTS subquery (ValidateSubquery) and its
+	// placeholders are renumbered with the outer statement's; alias must be an
+	// unquoted identifier (ErrInvalidAlias). A sub carrying a row lock is
+	// refused. On Oracle a SELECT with no From renders `FROM dual`.
+	SubqueryColumn(sub SelectQueryBuilder, alias string) SelectQueryBuilder
+
 	// Composable WHERE clause
 	Where(filter Filter) SelectQueryBuilder
 
@@ -248,6 +256,15 @@ type UpdateQueryBuilder interface {
 	// column (#1318). See RawExpression.
 	Set(column string, value any) UpdateQueryBuilder
 	SetMap(clauses map[string]any) UpdateQueryBuilder
+
+	// SetExpr assigns a RawExpression that carries bound arguments —
+	// `SetExpr("lease_until", qb.MustExpr("NOW() + (? * INTERVAL '1 second')"), secs)` —
+	// which Set cannot: Set splices a RawExpression without arguments. The
+	// expression's `?` placeholders are renumbered with the statement's. This is
+	// a raw-SQL door on par with f.Raw: the SQL body is never validated, so every
+	// call site carries the inline `// SECURITY: Manual SQL review completed -
+	// <what was verified>` annotation. An alias on expr is a ToSQL() error.
+	SetExpr(column string, expr RawExpression, args ...any) UpdateQueryBuilder
 
 	// Struct-based UPDATE (v2.4+)
 	// SetStruct extracts field values from a struct instance for UPDATE.
