@@ -235,6 +235,27 @@ type shapeTwinPlain struct {
 	Card string `json:"card"`
 }
 
+// TestIsSealTaggedIsTheUnionOfProbeAndMisplaced pins the guard's contract to the
+// typed publish door's two refusal rules over one fixture set.
+func TestIsSealTaggedIsTheUnionOfProbeAndMisplaced(t *testing.T) {
+	for name, typ := range map[string]reflect.Type{
+		"plain":                reflect.TypeOf(plainEvent{}),
+		"sealed":               reflect.TypeOf(sealedEvent{}),
+		"promoted_embed":       reflect.TypeOf(promotedSealEvent{}),
+		"named_nested":         reflect.TypeOf(nestedSubject{}),
+		"deep_named_nested":    reflect.TypeOf(deepNestedSubject{}),
+		"tagged_embed":         reflect.TypeOf(taggedEmbedSubject{}),
+		"sentinel_plus_nested": reflect.TypeOf(sentinelWithNestedSubject{}),
+		"recursive":            reflect.TypeOf(selfNested{}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			want := hasSealTagIn(typ, nil) || misplacedSealTag(typ) != ""
+			assert.Equal(t, want, IsSealTagged(typ))
+			assert.Equal(t, name != "plain" && name != "recursive", IsSealTagged(typ), "only the untagged shapes are false")
+		})
+	}
+}
+
 func TestIsSealTaggedCacheDoesNotAliasIdenticalShapes(t *testing.T) {
 	assert.True(t, IsSealTagged(reflect.TypeOf(shapeTwinSealed{})))
 	assert.False(t, IsSealTagged(reflect.TypeOf(shapeTwinPlain{})))
