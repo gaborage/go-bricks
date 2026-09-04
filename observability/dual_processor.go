@@ -232,6 +232,8 @@ type traceAttributeCollector struct {
 // Returns false to stop iteration when all required attributes are found.
 func (c *traceAttributeCollector) collect(kv attribute.KeyValue) bool {
 	switch kv.Key {
+	// Literal on purpose: these mirror logger.FieldTraceID / logger.FieldSpanID, and
+	// observability does not import logger.
 	case "trace_id":
 		if kv.Value.Type() == attribute.STRING {
 			c.traceIDStr = kv.Value.AsString()

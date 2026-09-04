@@ -860,7 +860,7 @@ func (m *Module) logJobResultSummary(
 		Int64("job.execution.duration", duration.Nanoseconds()).
 		Str("job.status", jobStatusFromError(err)).
 		Str("result_code", resultCode).
-		Str("correlation_id", traceID).
+		Str(logger.FieldCorrelationID, traceID).
 		Str("traceparent", traceparent).
 		Int64("db_queries", dbCount).
 		Int64("db_elapsed", dbElapsed).

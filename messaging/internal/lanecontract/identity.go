@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/delivery"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
@@ -26,7 +27,7 @@ type T interface {
 // The spine delivery.AppendOutcome stamps on every lane's outcome line. A lane
 // declares only what it adds beyond these.
 const (
-	fieldCorrelationID  = "correlation_id"
+	fieldCorrelationID  = logger.FieldCorrelationID
 	fieldProcessingTime = "processing_time"
 	fieldPanicType      = "panic_type"
 	fieldStack          = "stack"

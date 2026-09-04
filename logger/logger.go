@@ -117,8 +117,8 @@ func (l *ZeroLogger) WithContext(ctx any) Logger {
 		span := trace.SpanFromContext(c)
 		if span.SpanContext().IsValid() {
 			log := l.zlog.With().
-				Str("trace_id", span.SpanContext().TraceID().String()).
-				Str("span_id", span.SpanContext().SpanID().String()).
+				Str(FieldTraceID, span.SpanContext().TraceID().String()).
+				Str(FieldSpanID, span.SpanContext().SpanID().String()).
 				Logger()
 			return &ZeroLogger{
 				zlog:         &log,

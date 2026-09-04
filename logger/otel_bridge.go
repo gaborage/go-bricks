@@ -158,8 +158,8 @@ func buildLogRecord(entry map[string]any) (rec log.Record, ctx context.Context, 
 	// - Int format (trace_flags) enables fallback enrichment of canonical fields
 	if hasTraceContext {
 		rec.AddAttributes(
-			attribute.String("trace_id", traceIDStr),
-			attribute.String("span_id", spanIDStr),
+			attribute.String(FieldTraceID, traceIDStr),
+			attribute.String(FieldSpanID, spanIDStr),
 			attribute.Int64("trace_flags", int64(traceFlags)),
 		)
 	}
@@ -266,7 +266,7 @@ func extractSpanContext(entry map[string]any) (trace.SpanContext, bool) {
 }
 
 func parseTraceID(entry map[string]any) (trace.TraceID, bool) {
-	traceIDStr, ok := entry["trace_id"].(string)
+	traceIDStr, ok := entry[FieldTraceID].(string)
 	if !ok {
 		return trace.TraceID{}, false
 	}
@@ -274,12 +274,12 @@ func parseTraceID(entry map[string]any) (trace.TraceID, bool) {
 	if err != nil {
 		return trace.TraceID{}, false
 	}
-	delete(entry, "trace_id")
+	delete(entry, FieldTraceID)
 	return traceID, traceID.IsValid()
 }
 
 func parseSpanID(entry map[string]any) (trace.SpanID, bool) {
-	spanIDStr, ok := entry["span_id"].(string)
+	spanIDStr, ok := entry[FieldSpanID].(string)
 	if !ok {
 		return trace.SpanID{}, false
 	}
@@ -287,7 +287,7 @@ func parseSpanID(entry map[string]any) (trace.SpanID, bool) {
 	if err != nil {
 		return trace.SpanID{}, false
 	}
-	delete(entry, "span_id")
+	delete(entry, FieldSpanID)
 	return spanID, spanID.IsValid()
 }
 

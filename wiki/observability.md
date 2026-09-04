@@ -244,7 +244,9 @@ identifiers, and they hold **different values by design**:
 | `trace_id` | the OpenTelemetry trace id of the span the line was written under | only when a tracer provider is registered |
 | `span_id` | the OpenTelemetry span id | only when a tracer provider is registered |
 
-`correlation_id` is not the OTel `trace_id` and is not meant to be. The framework
+`correlation_id` is not the OTel `trace_id` and is not meant to be. The three keys have one
+definition — `logger.FieldCorrelationID`, `logger.FieldTraceID`, `logger.FieldSpanID` — and
+every stamping site in the framework writes through them. The framework
 mints or forwards its own id so correlation survives with tracing switched off;
 the OTel ids exist only while a provider is registered. Inbound identifiers are
 validated before either is used ([ADR-070](adr_070_inbound_trace_identifier_validation.md)):
