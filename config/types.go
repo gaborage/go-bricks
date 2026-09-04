@@ -838,8 +838,11 @@ type InboxConfig struct {
 
 	// RetentionPeriod is how long processed-event records are kept before cleanup.
 	// It MUST exceed the broker's maximum redelivery window, or a late redelivery
-	// could be reprocessed. A zero value is treated as unset and replaced by the
-	// default; increase it to retain longer. Default: 168h (7 days).
+	// could be reprocessed. The same window bounds every DLQ drain and every outbox
+	// re-drive: a message replayed after its ledger row was swept is processed
+	// again, so the retention period IS the replay window a deployment accepts.
+	// A zero value is treated as unset and replaced by the default; increase it to
+	// retain longer. Default: 168h (7 days).
 	RetentionPeriod time.Duration `koanf:"retentionperiod" json:"retentionperiod" yaml:"retentionperiod" toml:"retentionperiod" mapstructure:"retentionperiod"`
 
 	// Tenancy selects where the ledger lives when multitenant.enabled is true:

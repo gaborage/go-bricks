@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -52,6 +54,9 @@ type Module struct {
 	holdDrain *HoldDrain
 	// unregisterHoldGauges stops the gauge callback at shutdown.
 	unregisterHoldGauges func() error
+	// dedupHits counts ProcessOnce short-circuits; nil when no meter provider was
+	// wired, in which case the log line alone carries the hit.
+	dedupHits metric.Int64Counter
 }
 
 // moduleName is what this module answers to, and the prefix its store errors and
@@ -144,6 +149,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	}
 
 	m.processor = &Inbox{module: m}
+	m.registerDedupCounter(deps)
 
 	if m.holdEnabled() {
 		m.startHold(deps)
@@ -173,7 +179,7 @@ func (m *Module) startHold(deps *app.ModuleDeps) {
 		return
 	}
 
-	unregister, err := registerHoldGauges(deps.MeterProvider.Meter(holdMeterName), m.holdDrain)
+	unregister, err := registerHoldGauges(deps.MeterProvider.Meter(inboxMeterName), m.holdDrain)
 	if err != nil {
 		// Reported, not fatal: a hold that drains without publishing its size is
 		// worse observed, not broken, and refusing startup over an instrument would

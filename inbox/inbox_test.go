@@ -3,6 +3,7 @@ package inbox
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -12,18 +13,91 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/outbox"
 )
 
 // newTestInbox builds an Inbox whose module resolves to the given test DB.
-// AutoCreateTable is false, so no logger is needed.
+// AutoCreateTable is false; the logger is what the dedup-hit line writes to.
 func newTestInbox(db dbtypes.Interface) *Inbox {
 	m := &Module{
-		cfg:   config.InboxConfig{Enabled: true, TableName: "gobricks_inbox"},
-		getDB: func(context.Context) (dbtypes.Interface, error) { return db, nil },
+		cfg:    config.InboxConfig{Enabled: true, TableName: "gobricks_inbox"},
+		getDB:  func(context.Context) (dbtypes.Interface, error) { return db, nil },
+		logger: logger.New("info", false),
 	}
 	return &Inbox{module: m}
+}
+
+// TestProcessOnceValidatesTheIDBeforeTheLedger VARIES the id across the grammar
+// ^[A-Za-z0-9_-]{1,128}$. Conforming ids — a 128-byte one included — reach the
+// INSERT; every other shape is refused with messaging.ErrInvalidEventID before
+// a transaction is opened, so nothing is written. The TestDB carries no
+// expectations on the rejecting cases: a Begin would fail the test on its own.
+func TestProcessOnceValidatesTheIDBeforeTheLedger(t *testing.T) {
+	cases := []struct {
+		name string
+		id   string
+		ok   bool
+	}{
+		{"uuid", "9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f", true},
+		{"max_length_128", strings.Repeat("k", 128), true},
+		{"colon", "order:1", false},
+		{"newline", "evt-1\n", false},
+		{"empty", "", false},
+		{"length_129", strings.Repeat("k", 129), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+			if tc.ok {
+				db.ExpectTransaction().ExpectExec(`INSERT INTO gobricks_inbox`).WillReturnRowsAffected(1)
+			}
+			in := newTestInbox(db)
+
+			ran := false
+			err := in.ProcessOnce(t.Context(), tc.id, func(context.Context, dbtypes.Tx) error {
+				ran = true
+				return nil
+			})
+			if tc.ok {
+				require.NoError(t, err)
+				assert.True(t, ran)
+				return
+			}
+			require.ErrorIs(t, err, messaging.ErrInvalidEventID)
+			assert.False(t, ran, "fn never runs for a refused id")
+			assert.Empty(t, db.ExecLog(), "no INSERT reaches the ledger for a refused id")
+		})
+	}
+}
+
+// TestProcessOnceRefusesTheSealedKeyShapeFromAHeader is the negative vector the
+// grammar exists for: a publisher writes a literal `family:jti` — the sealed
+// dedup key spelling — into x-outbox-event-id on an unsealed consumer. It must
+// not enter the ledger, or the legitimate sealed delivery would skip+ACK.
+func TestProcessOnceRefusesTheSealedKeyShapeFromAHeader(t *testing.T) {
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL) // no expectations: any Begin fails
+	in := newTestInbox(db)
+
+	calls := 0
+	handler := messaging.NewTypedHandlerWithMeta("evt", func(ctx context.Context, _ testEvent, meta messaging.Metadata) error {
+		id, ok := outbox.EventIDFromHeaders(meta.Headers())
+		require.True(t, ok, "extraction is permissive; the ledger door is the gate")
+		return in.ProcessOnce(ctx, id, func(context.Context, dbtypes.Tx) error {
+			calls++
+			return nil
+		})
+	})
+
+	err := handler.Handle(t.Context(), &amqp.Delivery{
+		Body:    []byte(`{"reference":"abc"}`),
+		Headers: amqp.Table{outbox.HeaderEventID: "rsa:9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f"},
+	})
+	require.ErrorIs(t, err, messaging.ErrInvalidEventID)
+	assert.Equal(t, 0, calls)
+	assert.Empty(t, db.ExecLog(), "the sealed-shaped key never reaches the store")
+	assert.NotContains(t, err.Error(), "9f0c2b1e", "the error carries the length, never the id")
 }
 
 func TestProcessOnceRunsFnOnFirstEvent(t *testing.T) {

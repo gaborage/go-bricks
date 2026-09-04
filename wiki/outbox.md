@@ -337,8 +337,14 @@ outbox:
   enabled: true
   pollinterval: 2s           # Lower latency
   batchsize: 200             # Higher throughput
-  retentionperiod: 168h      # 7-day retention
+  retentionperiod: 168h      # 7-day retention of PUBLISHED events (outbox side)
 ```
+
+`outbox.retentionperiod` bounds the published-event ledger only. The consumer side has its own:
+`inbox.retentionperiod` (168h default, `config.InboxConfig.RetentionPeriod`) is the **replay
+window** — it must exceed the broker's redelivery window AND cover every DLQ drain or outbox
+re-drive you intend to replay, because a message replayed after its inbox row was swept is
+processed again. Raising outbox retention does not extend it.
 
 ## Startup Verification
 
