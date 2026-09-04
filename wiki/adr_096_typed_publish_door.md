@@ -63,7 +63,7 @@ ADR-091 pattern) and the relay calls `publishdoor.Publish(ctx, client, opts, pay
 
 ### Visibility argument — who can move bytes to the broker after this ADR
 
-No exported symbol lets a module hand `[]byte` to the broker:
+Within the `messaging` AMQP lane, no exported symbol lets a module hand `[]byte` to the broker:
 
 - `bytePublisher` and its one method are unexported, so only types declared in
   package `messaging` implement it, and `reflect` cannot call an unexported method.

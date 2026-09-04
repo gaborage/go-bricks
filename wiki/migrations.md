@@ -6582,7 +6582,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   each call site and a seal-tagged type (ADR-097) could always be marshaled and pushed
   through that raw door in clear. `DeclareTypedPublisher[T]` (v0.62.x, #1367) returns a
   `Publisher[T]` handle bound to the declared destination; this hop removes the raw doors
-  from every exported type with no escape hatch. The framework's own client and the
+  from every exported type of the classic AMQP messaging lane with no escape hatch
+  (streams keep their separate raw `streams.Publisher.Publish`). The framework's own client and the
   stamping wrapper keep an UNEXPORTED bytes door that `Publisher[T].Publish` asserts and the
   outbox relay reaches through `internal/publishdoor` (C63.1, ADR-096).
   Separately on the consume side: `inbox.ProcessOnce` keyed the ledger on whatever string it was handed, and
@@ -6620,7 +6621,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `streams.Publisher.Publish(&streams.PublishMessage{…})` is NOT affected — the streams door
   is unchanged.
 - scope: `DeclareTypedPublisher[T](decls, opts) *Publisher[T]` is the only module-facing
-  publish door. The handle is bound at declaration to the exchange, routing key, event
+  publish door of the classic AMQP messaging lane (streams are separate, below). The handle is bound at declaration to the exchange, routing key, event
   type and default headers you used to re-spell in `PublishOptions`; `h.Publish(ctx, client, evt)`
   JSON-marshals `evt` and publishes through the stamped client you already obtain with
   `deps.Messaging(ctx)`. Retry bounds (ADR-033, `ErrPublishRetriesExhausted`), readiness
