@@ -165,6 +165,8 @@ func TestIndexFamiliesSortsNumericallyAndGroups(t *testing.T) {
 	assert.False(t, plainIndexed)
 }
 
+// TestCompareGenerationsOrdersByInteger pins integer order where lexical
+// order would differ (v2 < v10) and where the two agree (v10 < v11).
 func TestCompareGenerationsOrdersByInteger(t *testing.T) {
 	g := func(v string) Generation { return Generation{Logical: "f", Version: v} }
 	assert.Negative(t, CompareGenerations(g("v2"), g("v10")))
