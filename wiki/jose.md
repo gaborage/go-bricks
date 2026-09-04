@@ -110,6 +110,9 @@ Vanilla `Result[R]` continues to seal raw `data` so VTS-style vendor-prescribed 
 
 ## Sealing test payloads with curl (seal-payload CLI)
 
+> This section is about HTTP request bodies. Field-level sealing of AMQP **events** (the
+> `seal` tag, `jose/sealed`) is a separate door with its own page: [sealing.md](sealing.md).
+
 Exercising a jose-tagged endpoint with `curl` requires a valid nested `JWE(JWS(payload))` body — hand-writing one is impractical outside Go. `cmd/seal-payload` is a small CLI that seals a JSON payload with fixture keys using `jose.Seal` and the keystore's own DER-loading semantics (via `internal/keymaterial`), so a sealed payload is one the middleware will accept by construction.
 
 Install:

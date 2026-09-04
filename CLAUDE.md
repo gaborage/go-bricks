@@ -33,7 +33,7 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 
 **Wiki (deep dives — read on demand):**
 
-- Architecture: [database.md](wiki/database.md) · [cache.md](wiki/cache.md) · [messaging.md](wiki/messaging.md) · [outbox.md](wiki/outbox.md) · [scheduler.md](wiki/scheduler.md) · [httpclient.md](wiki/httpclient.md) · [jose.md](wiki/jose.md) · [keystore.md](wiki/keystore.md) · [observability.md](wiki/observability.md) · [multi_tenant_resolvers.md](wiki/multi_tenant_resolvers.md)
+- Architecture: [database.md](wiki/database.md) · [cache.md](wiki/cache.md) · [messaging.md](wiki/messaging.md) · [outbox.md](wiki/outbox.md) · [scheduler.md](wiki/scheduler.md) · [httpclient.md](wiki/httpclient.md) · [jose.md](wiki/jose.md) · [sealing.md](wiki/sealing.md) · [keystore.md](wiki/keystore.md) · [observability.md](wiki/observability.md) · [multi_tenant_resolvers.md](wiki/multi_tenant_resolvers.md)
 - Patterns: [handler_patterns.md](wiki/handler_patterns.md) · [context_deadlines.md](wiki/context_deadlines.md) · [global_middleware.md](wiki/global_middleware.md) · [testing.md](wiki/testing.md)
 - Reference: [troubleshooting.md](wiki/troubleshooting.md) · [migrations.md](wiki/migrations.md) (breaking changes) · [startup_defaults.md](wiki/startup_defaults.md) · [linting.md](wiki/linting.md) (consumer lint config)
 - ADRs: [wiki/architecture_decisions.md](wiki/architecture_decisions.md), files `wiki/adr_NNN_*.md`
@@ -108,6 +108,7 @@ The eight packages whose rules had their own section here — `database/`, `cach
 - **inbox/** — Exactly-once consumer-side processing (`InboxProcessor`); consumer-side complement to the transactional outbox. `inbox.tenancy: shared` mirrors the outbox's control-plane ledger mode, and `inbox.hold.*` parks a tenant's failed stream deliveries in order and drains them back through the consumer (ADR-089). See [wiki/outbox.md](wiki/outbox.md).
 - **keystore/** — Named key-material management: RSA key pairs (DER, or a password-protected PKCS#12 bundle whose password comes from `password.env`/`password.file`, never a literal) and raw symmetric secrets (HMAC/HKDF) from files or base64 env vars; per-entry RSA-or-secret-or-PKCS#12 with a startup mutual-exclusivity check. See [keystore.md](wiki/keystore.md)
 - **jose/** — Nested JWE-of-JWS protection on HTTP request and response bodies
+- **jose/sealed/** + **messaging/sealed/** — Field-level sealing of AMQP events (ADR-097): one `seal:"subject"` field travels as a compact JWE inside a compact JWS the producer signs; engaged from tags on the typed publish/consume doors, import-gated like streams (keeps `messaging` jose-free and makes a missing import a startup error — not a size win). Tags carry Logical kids, the keystore holds `<logical>-v<N>` generations, `messaging.seal.active` picks the producer's; the seal layer never judges replay — `Meta.DedupKey()` + `inbox.ProcessOnce` do. No accept-unsealed mode. See [sealing.md](wiki/sealing.md)
 
 ### Module System
 
