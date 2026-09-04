@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"reflect"
 	"slices"
 	"time"
 
@@ -237,8 +236,8 @@ func marshalPayload(payload any) ([]byte, error) {
 	if b, ok := payload.([]byte); ok {
 		return b, nil
 	}
-	if t := reflect.TypeOf(payload); messaging.IsSealTagged(t) {
-		return nil, fmt.Errorf("%w (payload type %v)", ErrSealedPayloadNeedsBytes, t)
+	if err := rejectSealedPayload(payload); err != nil {
+		return nil, err
 	}
 
 	return json.Marshal(payload)
