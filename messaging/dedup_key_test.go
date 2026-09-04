@@ -107,3 +107,18 @@ func TestMetadataSealedIsFalseForPlainConsumers(t *testing.T) {
 		})
 	}
 }
+
+func TestMetadataSealedAndDedupKeyForASealedDelivery(t *testing.T) {
+	env := SealedEnvelope{JTI: "jti-1", SignKid: "svc-sign-v2", SignFamily: "svc-sign", EncKid: "aud-enc-v1", EventType: "evt", TenantID: "acme"}
+	meta := Metadata{delivery: &amqp.Delivery{Headers: amqp.Table{HeaderEventID: "header-id"}}, sealed: &env}
+
+	got, ok := meta.Sealed()
+	assert.True(t, ok)
+	assert.Equal(t, env, got)
+
+	key, err := meta.DedupKey()
+	require.NoError(t, err)
+	assert.Equal(t, "svc-sign:jti-1", key, "the sealed key wins over any header the publisher wrote")
+	assert.True(t, IsSealedDedupKey(key))
+	assert.ErrorIs(t, ValidateEventID(key), ErrInvalidEventID, "a sealed key is outside the header grammar by construction")
+}

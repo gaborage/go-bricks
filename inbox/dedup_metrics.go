@@ -18,19 +18,29 @@ const (
 	// attrTenantPresent says whether the hit was keyed under a tenant, as a
 	// bool: the tenant id itself is request-derived and stays out of the label set.
 	attrTenantPresent = "inbox.tenant.present"
-	// attrSealed says whether the key came from a sealed envelope. Always false
-	// until the sealed typed door lands; present now so dashboards do not move.
+	// attrSealed says whether the key came from a sealed envelope
+	// (`<SignFamily>:<jti>`, ADR-097) rather than a header.
 	attrSealed = "inbox.sealed"
 )
 
-// The two label sets a hit can carry, built once: the short-circuit is the path
-// a replay campaign hammers, so it allocates nothing per hit.
-var (
-	dedupHitAttrsTenant = metric.WithAttributes(
-		attribute.Bool(attrTenantPresent, true), attribute.Bool(attrSealed, false))
-	dedupHitAttrsNoTenant = metric.WithAttributes(
-		attribute.Bool(attrTenantPresent, false), attribute.Bool(attrSealed, false))
-)
+// The four label sets a hit can carry, built once: the short-circuit is the path
+// a replay campaign hammers, so it allocates nothing per hit. Indexed by
+// [tenantPresent][sealed].
+var dedupHitAttrs = [2][2]metric.AddOption{
+	{dedupHitAttrsFor(false, false), dedupHitAttrsFor(false, true)},
+	{dedupHitAttrsFor(true, false), dedupHitAttrsFor(true, true)},
+}
+
+func dedupHitAttrsFor(tenantPresent, sealed bool) metric.AddOption {
+	return metric.WithAttributes(attribute.Bool(attrTenantPresent, tenantPresent), attribute.Bool(attrSealed, sealed))
+}
+
+func boolIndex(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
 
 // registerDedupCounter creates the dedup-hit counter under the inbox's meter.
 // An instrument failure is reported, not fatal: a ledger that dedups without
@@ -52,18 +62,14 @@ func (m *Module) registerDedupCounter(deps *app.ModuleDeps) {
 // and one log line. Both carry the id's PRESENCE and LENGTH, never its value —
 // the id is publisher-written, and a replayed one is exactly the value an
 // attacker chose.
-func (m *Module) recordDedupHit(ctx context.Context, tenantID, eventID string) {
+func (m *Module) recordDedupHit(ctx context.Context, tenantID, eventID string, sealed bool) {
 	tenantPresent := tenantID != ""
 	if m.dedupHits != nil {
-		attrs := dedupHitAttrsNoTenant
-		if tenantPresent {
-			attrs = dedupHitAttrsTenant
-		}
-		m.dedupHits.Add(ctx, 1, attrs)
+		m.dedupHits.Add(ctx, 1, dedupHitAttrs[boolIndex(tenantPresent)][boolIndex(sealed)])
 	}
 	m.logger.Info().
 		Bool("tenantPresent", tenantPresent).
 		Int("eventIdLength", len(eventID)).
-		Bool("sealed", false).
+		Bool("sealed", sealed).
 		Msg("Inbox dedup hit: event already processed, handler skipped")
 }

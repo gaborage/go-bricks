@@ -39,17 +39,20 @@ func TestModuleInitRegistersDedupCounterOnlyWithAMeter(t *testing.T) {
 
 // TestProcessOnceDedupHitIsCountedAndLogged pins the short-circuit's two
 // observables: the counter moves by exactly one per hit, labeled by tenant
-// PRESENCE and sealed=false, and one log line carries the id's length — the id
-// value itself appears nowhere.
+// PRESENCE and whether the key was a sealed one, and one log line carries the
+// id's length — the id value itself appears nowhere.
 func TestProcessOnceDedupHitIsCountedAndLogged(t *testing.T) {
 	const replayed = "replayed-id-QZX7"
 	for _, tc := range []struct {
 		name          string
 		ctx           context.Context
 		tenantPresent bool
+		sealed        bool
 	}{
-		{"single_tenant", t.Context(), false},
-		{"tenant", multitenant.SetTenant(t.Context(), "acme"), true},
+		{"single_tenant", t.Context(), false, false},
+		{"tenant", multitenant.SetTenant(t.Context(), "acme"), true, false},
+		{"sealed", t.Context(), false, true},
+		{"sealed_tenant", multitenant.SetTenant(t.Context(), "acme"), true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
@@ -63,25 +66,41 @@ func TestProcessOnceDedupHitIsCountedAndLogged(t *testing.T) {
 			in.module.dedupHits.Add(t.Context(), 1)
 			before := sumOfDedupHits(t, mp)
 
+			key := replayed
+			if tc.sealed {
+				key = "svc-payments-sign:" + replayed
+			}
+			process := func(ctx context.Context) error {
+				return in.ProcessOnce(ctx, key, func(context.Context, dbtypes.Tx) error {
+					t.Error("fn must not run on a dedup hit")
+					return nil
+				})
+			}
 			var err error
 			line := captureDrainLogs(t, func() {
 				// The framework logger binds os.Stdout at construction, so it is built
 				// inside the capture, after the swap.
 				in.module.logger = logger.New("info", false)
-				err = in.ProcessOnce(tc.ctx, replayed, func(context.Context, dbtypes.Tx) error {
-					t.Error("fn must not run on a dedup hit")
-					return nil
-				})
+				if tc.sealed {
+					err = runSealed(t, func(ctx context.Context) error {
+						if tenant, ok := multitenant.GetTenant(tc.ctx); ok {
+							ctx = multitenant.SetTenant(ctx, tenant)
+						}
+						return process(ctx)
+					})
+				} else {
+					err = process(tc.ctx)
+				}
 			})
 			require.NoError(t, err)
 
 			assert.Equal(t, before+1, sumOfDedupHits(t, mp), "exactly one hit is counted")
-			assertDedupHitAttributes(t, mp, tc.tenantPresent)
+			assertDedupHitAttributes(t, mp, tc.tenantPresent, tc.sealed)
 
 			assert.Contains(t, line, "Inbox dedup hit")
-			assert.Contains(t, line, `"eventIdLength":16`)
+			assert.Contains(t, line, `"eventIdLength":`+strconv.Itoa(len(key)))
 			assert.Contains(t, line, `"tenantPresent":`+strconv.FormatBool(tc.tenantPresent))
-			assert.Contains(t, line, `"sealed":false`)
+			assert.Contains(t, line, `"sealed":`+strconv.FormatBool(tc.sealed))
 			assert.NotContains(t, line, replayed, "the id value never reaches the log")
 			assert.NotContains(t, line, "acme", "the tenant id never reaches the log")
 		})
@@ -103,8 +122,8 @@ func sumOfDedupHits(t *testing.T, mp *obtest.TestMeterProvider) int64 {
 }
 
 // assertDedupHitAttributes pins the label set on the data point ProcessOnce
-// wrote: tenant presence as a bool and sealed=false.
-func assertDedupHitAttributes(t *testing.T, mp *obtest.TestMeterProvider, tenantPresent bool) {
+// wrote: tenant presence and sealed, both as bools.
+func assertDedupHitAttributes(t *testing.T, mp *obtest.TestMeterProvider, tenantPresent, sealed bool) {
 	t.Helper()
 	m := obtest.FindMetric(mp.Collect(t), metricDedupHits)
 	require.NotNil(t, m)
@@ -115,9 +134,9 @@ func assertDedupHitAttributes(t *testing.T, mp *obtest.TestMeterProvider, tenant
 			continue // the priming Add carried no attributes
 		}
 		assert.Equal(t, tenantPresent, tenant.AsBool())
-		sealed, hasSealed := dp.Attributes.Value(attribute.Key(attrSealed))
+		gotSealed, hasSealed := dp.Attributes.Value(attribute.Key(attrSealed))
 		require.True(t, hasSealed)
-		assert.False(t, sealed.AsBool())
+		assert.Equal(t, sealed, gotSealed.AsBool())
 		assert.Equal(t, int64(1), dp.Value)
 		return
 	}
