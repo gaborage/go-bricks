@@ -1,10 +1,15 @@
 package keystore
 
 import (
+	"encoding/base64"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/jose"
 )
 
 // TestRoleLogReportsOnlyEntriesUnderBothTags varies the overlap: one tag never
@@ -73,4 +78,26 @@ func TestStoreCarriesTheRoleLog(t *testing.T) {
 	rec.RecordResolution("k", RoleTagJoseRoute)
 	rec.RecordResolution("k", RoleTagSeal)
 	assert.Equal(t, map[string][]string{"k": {RoleTagJoseRoute, RoleTagSeal}}, rep.DualRoleEntries())
+}
+
+// TestJoseRoutePolicyAndSealTagMeetOnARealStore pins the cross-package tag: the
+// "jose-route" string jose.ResolvePolicy records (spelled inside jose, which cannot
+// import this package) must be the one RoleTagJoseRoute names, or a shared kid would
+// never be reported. A real store, the real resolver, one policy, one seal tag.
+func TestJoseRoutePolicyAndSealTagMeetOnARealStore(t *testing.T) {
+	priv, pub := generateTestKeys(t)
+	s, err := newStore(map[string]config.KeyPairConfig{
+		"shared": {
+			Public:  config.KeySourceConfig{Value: base64.StdEncoding.EncodeToString(marshalPublicKeyDER(t, pub))},
+			Private: config.KeySourceConfig{Value: base64.StdEncoding.EncodeToString(marshalPrivateKeyDER(t, priv))},
+		},
+	}, 0)
+	require.NoError(t, err)
+
+	resolver := jose.NewKeyStoreResolver(s)
+	require.NoError(t, jose.ResolvePolicy(resolver, &jose.Policy{Direction: jose.DirectionOutbound, SignKid: "shared", EncryptKid: "shared"}))
+	assert.Empty(t, s.DualRoleEntries(), "an HTTP-only kid is never reported")
+
+	s.RecordResolution("shared", RoleTagSeal)
+	assert.Equal(t, map[string][]string{"shared": {RoleTagJoseRoute, RoleTagSeal}}, s.DualRoleEntries())
 }
