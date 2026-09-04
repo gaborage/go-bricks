@@ -422,7 +422,7 @@ func TestReconnectBackoffRawDelaySequence(t *testing.T) {
 // destination, an early return that skips the attempt — into a HANG until the
 // package timeout, rather than the failure it is. The mutation gate sees that as
 // TIMED OUT, which is not a verdict: the mutants at publish_destination.go's
-// length check and at PublishToExchange's prologue error branch both survived
+// length check and at publishBytes's prologue error branch both survived
 // review as timeouts for exactly this reason (#1123).
 func awaitPublishAttempt(t *testing.T, sig <-chan struct{}) {
 	t.Helper()
@@ -449,15 +449,15 @@ func TestPublishConfirmsRoutedByDeliveryTag(t *testing.T) {
 
 	// Publish A — will get DeliveryTag=1
 	go func() {
-		resultA <- c.PublishToExchange(context.Background(),
-			PublishOptions{Exchange: "ex", RoutingKey: "a"}, []byte("A"))
+		resultA <- c.publishBytes(context.Background(),
+			publishOptions{Exchange: "ex", RoutingKey: "a"}, []byte("A"))
 	}()
 	awaitPublishAttempt(t, sig) // A's PublishWithContext fired → tag 1 registered
 
 	// Publish B — will get DeliveryTag=2
 	go func() {
-		resultB <- c.PublishToExchange(context.Background(),
-			PublishOptions{Exchange: "ex", RoutingKey: "b"}, []byte("B"))
+		resultB <- c.publishBytes(context.Background(),
+			publishOptions{Exchange: "ex", RoutingKey: "b"}, []byte("B"))
 	}()
 	awaitPublishAttempt(t, sig) // B's PublishWithContext fired → tag 2 registered
 
@@ -525,8 +525,8 @@ func TestPublishConcurrentNoTagCollision(t *testing.T) {
 	for i := 0; i < N; i++ {
 		go func() {
 			<-startBarrier
-			results <- c.PublishToExchange(context.Background(),
-				PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+			results <- c.publishBytes(context.Background(),
+				publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 		}()
 	}
 	close(startBarrier)
@@ -631,7 +631,7 @@ func TestPublishStaleConfirmFromOldChannelDoesNotRouteToNewPublisher(t *testing.
 // so callers can retry, log, or escalate — same contract as Subscribe/Consume.
 func TestPublishNotReadyReturnsErrNotConnected(t *testing.T) {
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}}
-	err := c.Publish(context.Background(), "q", []byte("x"))
+	err := c.publishBytes(context.Background(), publishOptions{RoutingKey: "q"}, []byte("x"))
 	if !errors.Is(err, errNotConnected) {
 		t.Fatalf("expected errNotConnected when not ready, got %v", err)
 	}
@@ -674,7 +674,7 @@ func TestPreparePublishingAlignsCorrelationIDWithRequestIDHeader(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pub := preparePublishing(tt.ctx, PublishOptions{}, []byte(testMessageBody))
+			pub := preparePublishing(tt.ctx, publishOptions{}, []byte(testMessageBody))
 
 			header, ok := pub.Headers[gobrickstrace.HeaderXRequestID].(string)
 			require.True(t, ok, "injection writes the request id as a string")
@@ -735,7 +735,7 @@ func TestPreparePublishingRefusesAnUnvalidatedCorrelationID(t *testing.T) {
 			ctx := gobrickstrace.WithTraceID(context.Background(), tt.ctxTraceID)
 			ctx = gobrickstrace.WithTraceParent(ctx, tt.traceparent)
 
-			pub := preparePublishing(ctx, PublishOptions{}, []byte(testMessageBody))
+			pub := preparePublishing(ctx, publishOptions{}, []byte(testMessageBody))
 
 			assert.Empty(t, pub.CorrelationId, "an id the seam refuses never reaches the shortstr")
 			assert.Equal(t, tt.wantHeader, pub.Headers[gobrickstrace.HeaderXRequestID])
@@ -744,13 +744,13 @@ func TestPreparePublishingRefusesAnUnvalidatedCorrelationID(t *testing.T) {
 }
 
 // TestPreparePublishingRegeneratesAMalformedHeaderTraceParent is #1121 at the
-// publish door: application code that hand-sets PublishOptions.Headers, and an
+// publish door: application code that hand-sets publishOptions.Headers, and an
 // outbox row persisted before the ingress seam existed, both arrive here as a
 // pre-set traceparent. A malformed one is discarded rather than re-emitted, so
 // the publish ships a well-formed traceparent and an aligned, non-empty
 // CorrelationId instead of the empty one the poisoned id used to produce.
 func TestPreparePublishingRegeneratesAMalformedHeaderTraceParent(t *testing.T) {
-	pub := preparePublishing(context.Background(), PublishOptions{
+	pub := preparePublishing(context.Background(), publishOptions{
 		Headers: map[string]any{
 			gobrickstrace.HeaderTraceParent: "00-" + strings.Repeat("!", 32) + "-1234567890123456-01",
 			gobrickstrace.HeaderTraceState:  "vendor=stale",
@@ -766,7 +766,7 @@ func TestPreparePublishingRegeneratesAMalformedHeaderTraceParent(t *testing.T) {
 		"a tracestate written beside a refused traceparent describes a trace this hop is not continuing")
 }
 
-func TestPublishToExchangeAckSuccess(t *testing.T) {
+func TestPublishBytesAckSuccess(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
 
@@ -774,12 +774,12 @@ func TestPublishToExchangeAckSuccess(t *testing.T) {
 		amqp.Confirmation{Ack: true, DeliveryTag: 1},
 	)
 
-	if err := c.PublishToExchange(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")); err != nil {
+	if err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")); err != nil {
 		t.Fatalf("publish ack success expected, got %v", err)
 	}
 }
 
-func TestPublishToExchangeNackThenCancel(t *testing.T) {
+func TestPublishBytesNackThenCancel(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -800,12 +800,12 @@ func TestPublishToExchangeNackThenCancel(t *testing.T) {
 		cancel()
 	}()
 
-	if c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")) == nil {
+	if c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")) == nil {
 		t.Fatalf("expected context error after cancel")
 	}
 }
 
-func TestPublishToExchangeConfirmTimeoutThenCancel(t *testing.T) {
+func TestPublishBytesConfirmTimeoutThenCancel(t *testing.T) {
 	t.Helper()
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
@@ -813,7 +813,8 @@ func TestPublishToExchangeConfirmTimeoutThenCancel(t *testing.T) {
 	// Use timeout context instead of sleep-based cancellation
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
-	_ = c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	err := c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	require.ErrorIs(t, err, context.DeadlineExceeded, "the confirmation wait must surface the deadline, not succeed or fail for another reason")
 }
 
 func TestConsumeFromQueueSuccess(t *testing.T) {
@@ -1318,14 +1319,14 @@ func TestConnectDialFailure(t *testing.T) {
 
 // ===== Enhanced Publishing & Confirmation Tests =====
 
-func TestPublishToExchangeShutdownDuringPublish(t *testing.T) {
+func TestPublishBytesShutdownDuringPublish(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
 
 	// Close done channel immediately to simulate shutdown
 	close(c.done)
 
-	err := c.PublishToExchange(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	if err == nil {
 		t.Fatalf("expected shutdown error")
 	}
@@ -1334,7 +1335,7 @@ func TestPublishToExchangeShutdownDuringPublish(t *testing.T) {
 	}
 }
 
-func TestPublishToExchangeShutdownDuringConfirmation(t *testing.T) {
+func TestPublishBytesShutdownDuringConfirmation(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
 
@@ -1344,7 +1345,7 @@ func TestPublishToExchangeShutdownDuringConfirmation(t *testing.T) {
 		close(c.done)
 	}()
 
-	err := c.PublishToExchange(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	if err == nil {
 		t.Fatalf("expected shutdown error")
 	}
@@ -1353,7 +1354,7 @@ func TestPublishToExchangeShutdownDuringConfirmation(t *testing.T) {
 	}
 }
 
-func TestPublishToExchangeRetryLogicWithUnsafePublishFailure(t *testing.T) {
+func TestPublishBytesRetryLogicWithUnsafePublishFailure(t *testing.T) {
 	ch := &fakeChannel{publishErr: errors.New("publish failed")}
 	c := newClientWithFakeChannel(t, ch)
 	c.resendDelay = 1 * time.Millisecond
@@ -1361,7 +1362,7 @@ func TestPublishToExchangeRetryLogicWithUnsafePublishFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
 	defer cancel()
 
-	err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	err := c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	if err == nil {
 		t.Fatalf("expected context timeout error")
 	}
@@ -1390,7 +1391,7 @@ func TestFakeChannelFailedPublishConsumesNoDeliveryTag(t *testing.T) {
 	assert.Equal(t, uint64(3), atomic.LoadUint64(&ch.publishAttempts), "every attempt counts, landed or not")
 }
 
-// TestPublishToExchangeMultipleRetriesBeforeSuccess proves one transient publish
+// TestPublishBytesMultipleRetriesBeforeSuccess proves one transient publish
 // failure is retried and the retry's confirmation is honored.
 //
 // The previous version cleared publishErr from a second goroutine and acked a
@@ -1398,27 +1399,27 @@ func TestFakeChannelFailedPublishConsumesNoDeliveryTag(t *testing.T) {
 // clear landed before the next 1ms retry, and that the failed attempt consumed
 // tag 1. The fake now counts the failure itself and reports the tag it published
 // on, so neither assumption is left to make.
-func TestPublishToExchangeMultipleRetriesBeforeSuccess(t *testing.T) {
+func TestPublishBytesMultipleRetriesBeforeSuccess(t *testing.T) {
 	ch := &fakeChannel{publishFailuresRemaining: 1}
 	c := newClientWithFakeChannel(t, ch)
 	c.resendDelay = 1 * time.Millisecond
 	// The helper's default 15ms confirm timeout would let a scheduler stall abandon
 	// the confirmation wait and retry under a new tag. See the note in
-	// TestPublishToExchangeUnboundedWhenMaxAttemptsZero.
+	// TestPublishBytesUnboundedWhenMaxAttemptsZero.
 	c.connectionTimeout = 5 * time.Second
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	ackNextSuccessfulPublish(ctx, t, c, ch)
 
-	if err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")); err != nil {
+	if err := c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")); err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
 	}
 	assert.Equal(t, uint64(2), atomic.LoadUint64(&ch.publishAttempts),
 		"the failure must have cost one attempt and the retry must have succeeded")
 }
 
-func TestPublishToExchangeCustomHeaders(t *testing.T) {
+func TestPublishBytesCustomHeaders(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
 
@@ -1431,7 +1432,7 @@ func TestPublishToExchangeCustomHeaders(t *testing.T) {
 		"priority":      5,
 	}
 
-	options := PublishOptions{
+	options := publishOptions{
 		Exchange:   "custom-ex",
 		RoutingKey: "custom-rk",
 		Headers:    customHeaders,
@@ -1439,7 +1440,7 @@ func TestPublishToExchangeCustomHeaders(t *testing.T) {
 		Immediate:  false,
 	}
 
-	err := c.PublishToExchange(context.Background(), options, []byte("custom-msg"))
+	err := c.publishBytes(context.Background(), options, []byte("custom-msg"))
 	if err != nil {
 		t.Fatalf("expected success with custom headers, got: %v", err)
 	}
@@ -1472,7 +1473,7 @@ func TestPublishToExchangeCustomHeaders(t *testing.T) {
 	}
 }
 
-func TestPublishToExchangeContextTrackingOnSuccess(t *testing.T) {
+func TestPublishBytesContextTrackingOnSuccess(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
 
@@ -1483,13 +1484,13 @@ func TestPublishToExchangeContextTrackingOnSuccess(t *testing.T) {
 		amqp.Confirmation{Ack: true, DeliveryTag: 1},
 	)
 
-	err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	err := c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
 	}
 }
 
-func TestPublishToExchangeMultipleNacksBeforeTimeout(t *testing.T) {
+func TestPublishBytesMultipleNacksBeforeTimeout(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
 	c.connectionTimeout = 5 * time.Millisecond
@@ -1508,7 +1509,7 @@ func TestPublishToExchangeMultipleNacksBeforeTimeout(t *testing.T) {
 	defer cancel()
 
 	// This should eventually timeout
-	_ = c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	_ = c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	// Test passes if it doesn't hang indefinitely
 }
 
@@ -1523,25 +1524,25 @@ func TestPublishToExchangeMultipleNacksBeforeTimeout(t *testing.T) {
 // failure is connectivity (never park) or poison (park at MaxRetries).
 // ============================================================================
 
-// TestPublishToExchangeReturnsExhaustedOnPersistentPublishError proves the loop
+// TestPublishBytesReturnsExhaustedOnPersistentPublishError proves the loop
 // terminates on a never-succeeding PublishWithContext under a DEADLINE-FREE
 // context — i.e. the attempt ceiling, not a context deadline, stops it.
-func TestPublishToExchangeReturnsExhaustedOnPersistentPublishError(t *testing.T) {
+func TestPublishBytesReturnsExhaustedOnPersistentPublishError(t *testing.T) {
 	ch := &fakeChannel{publishErr: errors.New("publish boom")}
 	c := newClientWithFakeChannel(t, ch)
 	c.resendDelay = time.Millisecond
 	c.maxPublishAttempts = 3
 
-	err := c.PublishToExchange(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	if !errors.Is(err, ErrPublishRetriesExhausted) {
 		t.Fatalf("expected ErrPublishRetriesExhausted, got %v", err)
 	}
 }
 
-// TestPublishToExchangeReturnsExhaustedOnPersistentNack proves a never-acked
+// TestPublishBytesReturnsExhaustedOnPersistentNack proves a never-acked
 // publish stops at the ceiling and that the returned error carries the NACK
 // cause (so the relay classifies it as poison).
-func TestPublishToExchangeReturnsExhaustedOnPersistentNack(t *testing.T) {
+func TestPublishBytesReturnsExhaustedOnPersistentNack(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
 	c.maxPublishAttempts = 3
@@ -1553,7 +1554,7 @@ func TestPublishToExchangeReturnsExhaustedOnPersistentNack(t *testing.T) {
 		amqp.Confirmation{Ack: false, DeliveryTag: 3},
 	)
 
-	err := c.PublishToExchange(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	if !errors.Is(err, ErrPublishRetriesExhausted) {
 		t.Fatalf("expected ErrPublishRetriesExhausted, got %v", err)
 	}
@@ -1562,15 +1563,15 @@ func TestPublishToExchangeReturnsExhaustedOnPersistentNack(t *testing.T) {
 	}
 }
 
-// TestPublishToExchangeReturnsExhaustedOnConfirmTimeout proves a never-confirmed
+// TestPublishBytesReturnsExhaustedOnConfirmTimeout proves a never-confirmed
 // publish stops at the ceiling (deadline-free ctx) carrying the timeout cause.
-func TestPublishToExchangeReturnsExhaustedOnConfirmTimeout(t *testing.T) {
+func TestPublishBytesReturnsExhaustedOnConfirmTimeout(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
 	c.connectionTimeout = 5 * time.Millisecond
 	c.maxPublishAttempts = 3
 
-	err := c.PublishToExchange(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	if !errors.Is(err, ErrPublishRetriesExhausted) {
 		t.Fatalf("expected ErrPublishRetriesExhausted, got %v", err)
 	}
@@ -1582,11 +1583,11 @@ func TestPublishToExchangeReturnsExhaustedOnConfirmTimeout(t *testing.T) {
 	}
 }
 
-// TestPublishToExchangeSkipsAttemptDeadlineCannotFinish pins issue #1137:
+// TestPublishBytesSkipsAttemptDeadlineCannotFinish pins issue #1137:
 // after a confirmation wait that leaves less budget than connectionTimeout,
 // the next attempt is not armed. The error is the same surface a mid-wait
 // expiry already returned — context.DeadlineExceeded as the cause.
-func TestPublishToExchangeSkipsAttemptDeadlineCannotFinish(t *testing.T) {
+func TestPublishBytesSkipsAttemptDeadlineCannotFinish(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
 	c.connectionTimeout = 80 * time.Millisecond
@@ -1596,7 +1597,7 @@ func TestPublishToExchangeSkipsAttemptDeadlineCannotFinish(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	err := c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	elapsed := time.Since(start)
 
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -1613,11 +1614,11 @@ func TestPublishToExchangeSkipsAttemptDeadlineCannotFinish(t *testing.T) {
 	}
 }
 
-// TestPublishToExchangeShortDeadlineStillAcks pins the HTTP-shaped case:
+// TestPublishBytesShortDeadlineStillAcks pins the HTTP-shaped case:
 // remaining budget is shorter than connectionTimeout, but a fast ACK still
 // finishes. Skipping the first attempt would refuse every publish under
 // server.timeout.middleware (5s) at the 30s default confirmation wait.
-func TestPublishToExchangeShortDeadlineStillAcks(t *testing.T) {
+func TestPublishBytesShortDeadlineStillAcks(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
 	c.connectionTimeout = 5 * time.Second
@@ -1629,7 +1630,7 @@ func TestPublishToExchangeShortDeadlineStillAcks(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	if err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")); err != nil {
+	if err := c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")); err != nil {
 		t.Fatalf("short deadline must still publish when the broker ACKs, got %v", err)
 	}
 	if got := atomic.LoadUint64(&ch.publishAttempts); got != 1 {
@@ -1668,7 +1669,7 @@ func TestConfirmationWaitUnreachable(t *testing.T) {
 	}
 }
 
-// TestPublishToExchangeUnboundedWhenMaxAttemptsZero guards finding S11: the
+// TestPublishBytesUnboundedWhenMaxAttemptsZero guards finding S11: the
 // struct-literal test helper leaves maxPublishAttempts at 0, which MUST mean
 // "unbounded" — otherwise a 0-as-ceiling misread would exhaust on attempt 1 and
 // silently break every existing multi-retry test.
@@ -1678,9 +1679,9 @@ func TestConfirmationWaitUnreachable(t *testing.T) {
 // previous version cleared publishErr from a second goroutine and confirmed a
 // hardcoded DeliveryTag 2, which held only while that clear landed before the
 // next 1ms retry; on a loaded runner it did not, the successful publish took a
-// later tag, and the confirmation matched nothing — leaving PublishToExchange
+// later tag, and the confirmation matched nothing — leaving publishBytes
 // blocked on a context.Background() publish until the 10-minute package timeout.
-func TestPublishToExchangeUnboundedWhenMaxAttemptsZero(t *testing.T) {
+func TestPublishBytesUnboundedWhenMaxAttemptsZero(t *testing.T) {
 	const failures = defaultMaxPublishAttempts + 2
 
 	ch := &fakeChannel{publishFailuresRemaining: failures}
@@ -1697,7 +1698,7 @@ func TestPublishToExchangeUnboundedWhenMaxAttemptsZero(t *testing.T) {
 	defer cancel()
 	ackNextSuccessfulPublish(ctx, t, c, ch)
 
-	if err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")); err != nil {
+	if err := c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")); err != nil {
 		t.Fatalf("expected success with unbounded retries (field 0), got %v", err)
 	}
 	assert.Equal(t, uint64(failures+1), atomic.LoadUint64(&ch.publishAttempts),
@@ -1716,13 +1717,13 @@ func TestWithMaxPublishAttemptsOption(t *testing.T) {
 	assert.Equal(t, 7, c.maxPublishAttempts)
 }
 
-// TestPublishToExchangeWaitsForReadyClient reproduces issue #655: a client that
+// TestPublishBytesWaitsForReadyClient reproduces issue #655: a client that
 // is not yet ready (cold start, or mid-reconnect) must NOT fail the publish
 // instantly. It must wait, bounded by readyTimeout, and succeed once the client
 // becomes ready. ON CURRENT MAIN (no pre-flight wait) this returns
 // ErrNotConnected in microseconds and the assertion below fails — see this
 // task's pristine-main repro step for the captured behavioral failure.
-func TestPublishToExchangeWaitsForReadyClient(t *testing.T) {
+func TestPublishBytesWaitsForReadyClient(t *testing.T) {
 	c := &AMQPClientImpl{
 		m:                 &sync.RWMutex{},
 		log:               &stubLogger{},
@@ -1745,7 +1746,7 @@ func TestPublishToExchangeWaitsForReadyClient(t *testing.T) {
 
 	resultCh := make(chan error, 1)
 	go func() {
-		resultCh <- c.PublishToExchange(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+		resultCh <- c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	}()
 
 	// Outlast one 100ms readiness poll tick so the pre-flight wait is actually
@@ -1763,15 +1764,15 @@ func TestPublishToExchangeWaitsForReadyClient(t *testing.T) {
 	case err := <-resultCh:
 		assert.NoError(t, err)
 	case <-time.After(time.Second):
-		t.Fatal("PublishToExchange did not return after the client became ready")
+		t.Fatal("publishBytes did not return after the client became ready")
 	}
 }
 
-// TestPublishToExchangeExcludesReadyWaitFromLatencyMetrics reproduces the follow-up
+// TestPublishBytesExcludesReadyWaitFromLatencyMetrics reproduces the follow-up
 // finding to issue #655: the readiness pre-flight wait must NOT be reported as
-// publish/broker latency. Reuses TestPublishToExchangeWaitsForReadyClient's exact
+// publish/broker latency. Reuses TestPublishBytesWaitsForReadyClient's exact
 // choreography (client becomes ready only after outlasting one 100ms poll tick) and
-// asserts, via the logger.GetAMQPElapsed seam, that the elapsed time PublishToExchange
+// asserts, via the logger.GetAMQPElapsed seam, that the elapsed time publishBytes
 // records on its ACK success path excludes the ~150ms wait.
 //
 // This seam is used instead of asserting against the OTel metrics SDK directly:
@@ -1785,7 +1786,7 @@ func TestPublishToExchangeWaitsForReadyClient(t *testing.T) {
 //
 // ON PRE-FIX CODE (elapsed measured from before the pre-flight wait) this reports
 // >=150ms and the assertion below fails.
-func TestPublishToExchangeExcludesReadyWaitFromLatencyMetrics(t *testing.T) {
+func TestPublishBytesExcludesReadyWaitFromLatencyMetrics(t *testing.T) {
 	c := &AMQPClientImpl{
 		m:                 &sync.RWMutex{},
 		log:               &stubLogger{},
@@ -1810,12 +1811,12 @@ func TestPublishToExchangeExcludesReadyWaitFromLatencyMetrics(t *testing.T) {
 
 	resultCh := make(chan error, 1)
 	go func() {
-		resultCh <- c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+		resultCh <- c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	}()
 
 	// Outlast one 100ms readiness poll tick so the pre-flight wait is actually
 	// exercised (not a lucky first check) — same choreography as
-	// TestPublishToExchangeWaitsForReadyClient.
+	// TestPublishBytesWaitsForReadyClient.
 	time.Sleep(150 * time.Millisecond)
 
 	ch := &fakeChannel{}
@@ -1829,7 +1830,7 @@ func TestPublishToExchangeExcludesReadyWaitFromLatencyMetrics(t *testing.T) {
 	case err := <-resultCh:
 		assert.NoError(t, err)
 	case <-time.After(time.Second):
-		t.Fatal("PublishToExchange did not return after the client became ready")
+		t.Fatal("publishBytes did not return after the client became ready")
 	}
 
 	elapsed := time.Duration(logger.GetAMQPElapsed(ctx))
@@ -1837,11 +1838,11 @@ func TestPublishToExchangeExcludesReadyWaitFromLatencyMetrics(t *testing.T) {
 		"publish-latency elapsed must exclude the ~150ms readiness wait, got %s", elapsed)
 }
 
-// TestPublishToExchangeReadyTimeoutExpires proves that when the client never
+// TestPublishBytesReadyTimeoutExpires proves that when the client never
 // becomes ready, the pre-flight wait gives up after readyTimeout and returns
 // the raw (unwrapped) ErrNotConnected — not wrapped by ErrPublishRetriesExhausted,
 // since the retry loop was never entered.
-func TestPublishToExchangeReadyTimeoutExpires(t *testing.T) {
+func TestPublishBytesReadyTimeoutExpires(t *testing.T) {
 	c := &AMQPClientImpl{
 		m:            &sync.RWMutex{},
 		log:          &stubLogger{},
@@ -1851,19 +1852,19 @@ func TestPublishToExchangeReadyTimeoutExpires(t *testing.T) {
 	}
 
 	start := time.Now()
-	err := c.PublishToExchange(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	elapsed := time.Since(start)
 
 	assert.ErrorIs(t, err, ErrNotConnected)
 	assert.GreaterOrEqual(t, elapsed, 200*time.Millisecond)
 }
 
-// TestPublishToExchangeReadyWaitDisabled proves readyTimeout<=0 is a complete
+// TestPublishBytesReadyWaitDisabled proves readyTimeout<=0 is a complete
 // no-op pre-flight, preserving the pre-#655 instant fail-fast byte-for-byte —
 // this is the Go zero value every existing struct-literal test client already
 // has, so it also guards against a regression in every not-ready test in this
 // file (e.g. TestPublishNotReadyReturnsErrNotConnected).
-func TestPublishToExchangeReadyWaitDisabled(t *testing.T) {
+func TestPublishBytesReadyWaitDisabled(t *testing.T) {
 	c := &AMQPClientImpl{
 		m:    &sync.RWMutex{},
 		log:  &stubLogger{},
@@ -1872,17 +1873,17 @@ func TestPublishToExchangeReadyWaitDisabled(t *testing.T) {
 	}
 
 	start := time.Now()
-	err := c.PublishToExchange(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	elapsed := time.Since(start)
 
 	assert.ErrorIs(t, err, ErrNotConnected)
 	assert.Less(t, elapsed, 50*time.Millisecond)
 }
 
-// TestPublishToExchangeReadyWaitRespectsContext proves a ctx deadline that
+// TestPublishBytesReadyWaitRespectsContext proves a ctx deadline that
 // fires during the pre-flight wait aborts promptly (not waiting out the full
 // readyTimeout), and reports a context-related error.
-func TestPublishToExchangeReadyWaitRespectsContext(t *testing.T) {
+func TestPublishBytesReadyWaitRespectsContext(t *testing.T) {
 	c := &AMQPClientImpl{
 		m:            &sync.RWMutex{},
 		log:          &stubLogger{},
@@ -1895,7 +1896,7 @@ func TestPublishToExchangeReadyWaitRespectsContext(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	err := c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	elapsed := time.Since(start)
 
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
@@ -1914,10 +1915,10 @@ func TestWithReadyTimeoutOption(t *testing.T) {
 	assert.Equal(t, 3*time.Second, c.readyTimeout)
 }
 
-// TestPublishToExchangeNackBackoffHonorsContextCancel proves the new backoff
+// TestPublishBytesNackBackoffHonorsContextCancel proves the new backoff
 // between NACK retries is cancelable (not a blind sleep) — a 1h backoff returns
 // promptly when the context is canceled.
-func TestPublishToExchangeNackBackoffHonorsContextCancel(t *testing.T) {
+func TestPublishBytesNackBackoffHonorsContextCancel(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
 	c.nackBackoff = time.Hour
@@ -1934,17 +1935,17 @@ func TestPublishToExchangeNackBackoffHonorsContextCancel(t *testing.T) {
 		cancel()
 	}()
 
-	err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	err := c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled during nack backoff, got %v", err)
 	}
 }
 
-// TestPublishToExchangeDeadlineAfterNackWrapsNackCause guards finding S5: when a
+// TestPublishBytesDeadlineAfterNackWrapsNackCause guards finding S5: when a
 // context deadline (e.g. the relay's per-record PublishTimeout) fires AFTER a
 // NACK, the returned error must still carry the NACK cause so a genuine poison
 // message is classified as poison rather than connectivity.
-func TestPublishToExchangeDeadlineAfterNackWrapsNackCause(t *testing.T) {
+func TestPublishBytesDeadlineAfterNackWrapsNackCause(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
 	c.nackBackoff = time.Hour // force the deadline to win the race during backoff
@@ -1962,7 +1963,7 @@ func TestPublishToExchangeDeadlineAfterNackWrapsNackCause(t *testing.T) {
 		c.notifyConfirm <- amqp.Confirmation{Ack: false, DeliveryTag: 1} // NACK -> enters 1h backoff
 	}()
 
-	err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	err := c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected DeadlineExceeded, got %v", err)
 	}
@@ -1979,8 +1980,8 @@ func TestPublishBasicMethodDelegation(t *testing.T) {
 		amqp.Confirmation{Ack: true, DeliveryTag: 1},
 	)
 
-	// Test the basic Publish method delegates to PublishToExchange
-	err := c.Publish(context.Background(), testQueue, []byte("msg"))
+	// Test the basic Publish method delegates to publishBytes
+	err := c.publishBytes(context.Background(), publishOptions{RoutingKey: testQueue}, []byte("msg"))
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
 	}

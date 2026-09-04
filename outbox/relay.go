@@ -10,6 +10,7 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/leasescope"
 	"github.com/gaborage/go-bricks/internal/ledgererr"
+	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams"
@@ -440,7 +441,7 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 		return r.deadLetterPoison(ctx, log, db, record, fmt.Sprintf("unknown lane %q", record.Lane)), nil
 	}
 
-	opts := messaging.PublishOptions{
+	opts := publishdoor.Options{
 		Exchange:   record.Exchange,
 		RoutingKey: record.RoutingKey,
 		Headers:    headers,
@@ -450,7 +451,9 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 	// starve the rest of the batch. cancel() is called immediately; Mark* below uses
 	// the parent ctx, never the (possibly expired) recCtx.
 	recCtx, cancel := context.WithTimeout(pubCtx, r.config.PublishTimeout)
-	err := msgClient.PublishToExchange(recCtx, opts, record.Payload)
+	// The relay is a framework internal and keeps moving bytes: it reaches the
+	// client's unexported byte door through internal/publishdoor (ADR-096).
+	err := publishdoor.Publish(recCtx, msgClient, opts, record.Payload)
 	cancel()
 	if err != nil {
 		// Shutdown/cancel is not a delivery failure — do not advance retry_count.

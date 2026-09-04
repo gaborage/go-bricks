@@ -2,10 +2,12 @@ package scheduler
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/types"
@@ -127,8 +129,8 @@ func TestJobContextAccessors(t *testing.T) {
 	})
 
 	t.Run("provides Messaging when configured", func(_ *testing.T) {
-		var mockMessaging messaging.Client // Will be nil but typed
-		mockMessagingResolver := func() messaging.Client { return mockMessaging }
+		var mockMessaging messaging.AMQPClient // Will be nil but typed
+		mockMessagingResolver := func() messaging.AMQPClient { return mockMessaging }
 		ctx := newJobContext(
 			context.Background(),
 			testJobID,
@@ -259,7 +261,7 @@ func TestJobContextMessagingGetterError(t *testing.T) {
 		"manual",
 		logger.New("info", false),
 		nilDBResolver,
-		func() messaging.Client {
+		func() messaging.AMQPClient {
 			// Simulate messaging getter error by returning nil
 			return nil
 		},
@@ -287,6 +289,24 @@ func nilDBResolver() types.Interface {
 	return nil
 }
 
-func nilMessagingResolver() messaging.Client {
+func nilMessagingResolver() messaging.AMQPClient {
 	return nil
+}
+
+// TestJobContextMessagingCarriesNoBytePublishDoor is ADR-096's acceptance check on
+// the scheduler door: the type JobContext.Messaging returns is the module-facing
+// messaging.AMQPClient, and its method set carries neither Publish nor
+// PublishToExchange — a job publishes through a messaging.Publisher[T] its module
+// declared, never by handing bytes to the client.
+func TestJobContextMessagingCarriesNoBytePublishDoor(t *testing.T) {
+	method, ok := reflect.TypeOf((*JobContext)(nil)).Elem().MethodByName("Messaging")
+	require.True(t, ok)
+	returned := method.Type.Out(0)
+
+	assert.Equal(t, reflect.TypeOf((*messaging.AMQPClient)(nil)).Elem(), returned,
+		"JobContext.Messaging returns the same module-facing type as ModuleDeps.Messaging")
+	for _, name := range []string{"Publish", "PublishToExchange", "PublishBytes"} {
+		_, found := returned.MethodByName(name)
+		assert.Falsef(t, found, "JobContext.Messaging()'s type must not expose %s", name)
+	}
 }

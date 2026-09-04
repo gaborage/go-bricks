@@ -71,12 +71,12 @@ type fakeJobCtx struct {
 	db dbtypes.Interface
 }
 
-func (c fakeJobCtx) JobID() string               { return "inbox-cleanup" }
-func (c fakeJobCtx) TriggerType() string         { return "scheduled" }
-func (c fakeJobCtx) Logger() logger.Logger       { return logger.New("info", false) }
-func (c fakeJobCtx) DB() dbtypes.Interface       { return c.db }
-func (c fakeJobCtx) Messaging() messaging.Client { return nil }
-func (c fakeJobCtx) Config() *config.Config      { return nil }
+func (c fakeJobCtx) JobID() string                   { return "inbox-cleanup" }
+func (c fakeJobCtx) TriggerType() string             { return "scheduled" }
+func (c fakeJobCtx) Logger() logger.Logger           { return logger.New("info", false) }
+func (c fakeJobCtx) DB() dbtypes.Interface           { return c.db }
+func (c fakeJobCtx) Messaging() messaging.AMQPClient { return nil }
+func (c fakeJobCtx) Config() *config.Config          { return nil }
 
 // cfg is taken by pointer: InboxConfig grew past the by-value threshold when the
 // hold block landed on it.

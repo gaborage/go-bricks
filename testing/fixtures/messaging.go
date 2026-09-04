@@ -44,7 +44,6 @@ func NewWorkingMessagingClient() *mocks.MockMessagingClient {
 	mockClient := mocks.NewMockMessagingClient()
 
 	mockClient.ExpectIsReady(true)
-	mockClient.ExpectPublishAny(nil)
 	mockClient.ExpectConsumeAny(nil)
 	mockClient.ExpectClose(nil)
 
@@ -61,15 +60,14 @@ func NewFailingMessagingClient(failAfter int) *mocks.MockMessagingClient {
 		// Fail immediately
 		mockClient.SetReady(false)
 		mockClient.ExpectIsReady(false)
-		mockClient.ExpectPublishAny(amqp.ErrClosed)
 		mockClient.ExpectConsumeAny(amqp.ErrClosed)
 	} else {
 		// Succeed initially, then fail
 		mockClient.ExpectIsReady(true)
 		for range failAfter {
-			mockClient.ExpectPublishAny(nil).Once()
+			mockClient.ExpectConsumeAny(nil).Once()
 		}
-		mockClient.ExpectPublishAny(amqp.ErrClosed)
+		mockClient.ExpectConsumeAny(amqp.ErrClosed)
 	}
 
 	return mockClient
@@ -111,7 +109,6 @@ func NewWorkingAMQPClient() *mocks.MockAMQPClient {
 
 	// Setup successful messaging operations
 	mockClient.ExpectIsReady(true)
-	mockClient.ExpectPublishToExchangeAny(nil)
 	mockClient.ExpectClose(nil)
 
 	return mockClient

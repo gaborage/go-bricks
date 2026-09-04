@@ -9,14 +9,11 @@ import (
 )
 
 // Client defines the interface for messaging operations.
-// It provides a simple API for publishing and consuming messages while hiding
-// the complexity of connection management, retries, and protocol-specific details.
+// It provides a simple API for consuming messages while hiding the complexity
+// of connection management, retries, and protocol-specific details. It carries
+// no publish method: a module publishes through the Publisher[T] handle that
+// DeclareTypedPublisher returns, never by handing bytes to the client (ADR-096).
 type Client interface {
-	// Publish sends a message to the specified destination.
-	// destination can be a queue name, exchange, or topic depending on the implementation.
-	// Returns an error if the publish operation fails.
-	Publish(ctx context.Context, destination string, data []byte) error
-
 	// Consume starts consuming messages from the specified destination.
 	// Returns a channel that delivers messages and an error if consumption setup fails.
 	// Messages should be acknowledged by the consumer.
@@ -30,8 +27,11 @@ type Client interface {
 	IsReady() bool
 }
 
-// PublishOptions contains options for publishing messages with AMQP-specific features.
-type PublishOptions struct {
+// publishOptions is the destination of one byte publish. It left the exported
+// surface with the byte publish methods (ADR-096): a Publisher[T] handle carries
+// its declared destination, and the outbox relay reaches this shape through
+// internal/publishdoor.Options.
+type publishOptions struct {
 	Exchange   string         // AMQP exchange name
 	RoutingKey string         // AMQP routing key
 	Headers    map[string]any // Message headers
@@ -55,11 +55,12 @@ type ConsumeOptions struct {
 
 // AMQPClient extends the basic Client interface with AMQP-specific functionality.
 // This allows for more advanced AMQP features while maintaining the simple interface.
+// It is the module-facing type — what ModuleDeps.Messaging and
+// scheduler.JobContext.Messaging return — and carries no byte publish door: the
+// framework's own client and its stamping wrapper implement an unexported one
+// that Publisher[T].Publish and the outbox relay reach (ADR-096).
 type AMQPClient interface {
 	Client
-
-	// PublishToExchange publishes a message to a specific exchange with routing key.
-	PublishToExchange(ctx context.Context, options PublishOptions, data []byte) error
 
 	// ConsumeFromQueue consumes messages from a queue with specific options.
 	ConsumeFromQueue(ctx context.Context, options ConsumeOptions) (<-chan amqp.Delivery, error)

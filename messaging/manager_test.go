@@ -37,11 +37,7 @@ type stubAMQPClient struct {
 	declaredQueues []string
 }
 
-func (s *stubAMQPClient) Publish(ctx context.Context, destination string, data []byte) error {
-	return s.PublishToExchange(ctx, PublishOptions{Exchange: "", RoutingKey: destination}, data)
-}
-
-func (s *stubAMQPClient) PublishToExchange(_ context.Context, _ PublishOptions, _ []byte) error {
+func (s *stubAMQPClient) publishBytes(_ context.Context, _ publishOptions, _ []byte) error {
 	return nil
 }
 
@@ -199,9 +195,9 @@ func TestMessagingManagerStampsEveryClientItHandsOut(t *testing.T) {
 		client := &recordingStubClient{}
 		pub := lease(t, tenantID, client)
 
-		require.NoError(t, pub.PublishToExchange(
-			multitenant.SetTenant(context.Background(), tenantID),
-			PublishOptions{Exchange: genericEx, RoutingKey: "rk"}, []byte("payload")))
+		require.NoError(t, rawPublish(
+			multitenant.SetTenant(context.Background(), tenantID), pub,
+			publishOptions{Exchange: genericEx, RoutingKey: "rk"}, []byte("payload")))
 
 		assert.Equal(t, tenantID, client.lastHeaders[TenantStampHeader])
 	})
@@ -210,8 +206,8 @@ func TestMessagingManagerStampsEveryClientItHandsOut(t *testing.T) {
 		client := &recordingStubClient{}
 		pub := lease(t, tenantID, client)
 
-		require.NoError(t, pub.PublishToExchange(context.Background(),
-			PublishOptions{Exchange: genericEx, RoutingKey: "rk"}, []byte("payload")))
+		require.NoError(t, rawPublish(context.Background(), pub,
+			publishOptions{Exchange: genericEx, RoutingKey: "rk"}, []byte("payload")))
 
 		assert.Equal(t, tenantID, client.lastHeaders[TenantStampHeader])
 	})
@@ -220,8 +216,8 @@ func TestMessagingManagerStampsEveryClientItHandsOut(t *testing.T) {
 		client := &recordingStubClient{}
 		pub := lease(t, "", client)
 
-		require.NoError(t, pub.PublishToExchange(context.Background(),
-			PublishOptions{Exchange: genericEx, RoutingKey: "rk"}, []byte("payload")))
+		require.NoError(t, rawPublish(context.Background(), pub,
+			publishOptions{Exchange: genericEx, RoutingKey: "rk"}, []byte("payload")))
 
 		assert.NotContains(t, client.lastHeaders, TenantStampHeader)
 	})
@@ -230,8 +226,8 @@ func TestMessagingManagerStampsEveryClientItHandsOut(t *testing.T) {
 		client := &recordingStubClient{}
 		pub := lease(t, tenantID, client)
 
-		err := pub.PublishToExchange(multitenant.SetTenant(context.Background(), tenantID),
-			PublishOptions{
+		err := rawPublish(multitenant.SetTenant(context.Background(), tenantID), pub,
+			publishOptions{
 				Exchange: genericEx, RoutingKey: "rk",
 				Headers: map[string]any{TenantStampHeader: tenantID},
 			}, []byte("payload"))
@@ -240,26 +236,13 @@ func TestMessagingManagerStampsEveryClientItHandsOut(t *testing.T) {
 		assert.Zero(t, client.publishes, "a refused publish never reaches the client")
 	})
 
-	// Publish is the second door on the wrapper: it routes through PublishToExchange
-	// so one implementation stamps both, and a future change that gives it its own
-	// body would publish unstamped without this.
-	t.Run("the_plain_publish_door_is_stamped_too", func(t *testing.T) {
-		client := &recordingStubClient{}
-		pub := lease(t, tenantID, client)
-
-		require.NoError(t, pub.Publish(
-			multitenant.SetTenant(context.Background(), tenantID), "some.queue", []byte("payload")))
-
-		assert.Equal(t, tenantID, client.lastHeaders[TenantStampHeader])
-	})
-
 	t.Run("the_callers_header_map_is_never_written_to", func(t *testing.T) {
 		client := &recordingStubClient{}
 		pub := lease(t, tenantID, client)
 		callerHeaders := map[string]any{"keep": "me"}
 
-		require.NoError(t, pub.PublishToExchange(context.Background(),
-			PublishOptions{Exchange: genericEx, RoutingKey: "rk", Headers: callerHeaders},
+		require.NoError(t, rawPublish(context.Background(), pub,
+			publishOptions{Exchange: genericEx, RoutingKey: "rk", Headers: callerHeaders},
 			[]byte("payload")))
 
 		assert.Equal(t, map[string]any{"keep": "me"}, callerHeaders)
@@ -276,11 +259,11 @@ type recordingStubClient struct {
 	publishes   int
 }
 
-func (c *recordingStubClient) Publish(ctx context.Context, destination string, data []byte) error {
-	return c.PublishToExchange(ctx, PublishOptions{RoutingKey: destination}, data)
-}
-
-func (c *recordingStubClient) PublishToExchange(_ context.Context, options PublishOptions, _ []byte) error {
+// publishBytes always succeeds: the stub records what the wrapper handed it, and
+// the interface requires the error result.
+//
+//nolint:unparam // signature fixed by bytePublisher
+func (c *recordingStubClient) publishBytes(_ context.Context, options publishOptions, _ []byte) error {
 	c.publishes++
 	c.lastHeaders = options.Headers
 	return nil
@@ -1485,4 +1468,11 @@ func TestMessagingManagerEnsureConsumersWarmHashLosesToClosedGuard(t *testing.T)
 
 	err := manager.EnsureConsumers(ctx, testTenantID, decls)
 	assert.ErrorIs(t, err, ErrManagerClosed, "a warm replay hash must not beat the closed guard")
+}
+
+// rawPublish reaches the byte door on a leased client the way the typed handle
+// does: through the unexported bytePublisher, which every framework-built or
+// in-package client satisfies.
+func rawPublish(ctx context.Context, client AMQPClient, opts publishOptions, data []byte) error {
+	return publishThroughDoor(ctx, client, opts, data)
 }

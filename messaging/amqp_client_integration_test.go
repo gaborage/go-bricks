@@ -87,7 +87,7 @@ func TestAMQPClientPublishConsumeSimple(t *testing.T) {
 
 	// Publish message
 	testMsg := []byte("hello world")
-	err = client.Publish(ctx, queueName, testMsg)
+	err = client.publishBytes(ctx, publishOptions{RoutingKey: queueName}, testMsg)
 	require.NoError(t, err)
 
 	// Consume message
@@ -247,7 +247,7 @@ func TestAMQPClientDeclareQueueArgsDeadLetter(t *testing.T) {
 	require.NoError(t, err)
 
 	testMsg := []byte("dead-lettered message")
-	require.NoError(t, client.Publish(ctx, workQueueName, testMsg))
+	require.NoError(t, client.publishBytes(ctx, publishOptions{RoutingKey: workQueueName}, testMsg))
 
 	select {
 	case delivery := <-workDeliveries:
@@ -320,7 +320,7 @@ func TestDeclarativeDLQParksFailedDelivery(t *testing.T) {
 	require.NoError(t, err)
 
 	testMsg := []byte("declarative dead-letter")
-	require.NoError(t, client.PublishToExchange(ctx, PublishOptions{
+	require.NoError(t, client.publishBytes(ctx, publishOptions{
 		Exchange:   exchange.Name,
 		RoutingKey: "dlqtest.route",
 	}, testMsg))
@@ -369,7 +369,7 @@ func TestAMQPClientDeclareQueueArgsQuorum(t *testing.T) {
 // Publishing Tests
 // =============================================================================
 
-func TestAMQPClientPublishToExchange(t *testing.T) {
+func TestAMQPClientpublishBytes(t *testing.T) {
 	brokerURL := setupTestBroker(t)
 	log := logger.New("disabled", true)
 
@@ -402,7 +402,7 @@ func TestAMQPClientPublishToExchange(t *testing.T) {
 
 	// Publish to exchange
 	testMsg := []byte("exchange message")
-	err = client.PublishToExchange(ctx, PublishOptions{
+	err = client.publishBytes(ctx, publishOptions{
 		Exchange:   exchangeName,
 		RoutingKey: routingKey,
 	}, testMsg)
@@ -438,7 +438,7 @@ func TestAMQPClientPublisherConfirms(t *testing.T) {
 
 	// Publish multiple messages (tests publisher confirms in init function)
 	for i := 0; i < 10; i++ {
-		err := client.Publish(ctx, queueName, []byte("msg"))
+		err := client.publishBytes(ctx, publishOptions{RoutingKey: queueName}, []byte("msg"))
 		require.NoError(t, err, "All publishes should succeed with confirms")
 	}
 }
@@ -473,7 +473,7 @@ func TestAMQPClientConsumeWithOptions(t *testing.T) {
 	require.NoError(t, err)
 
 	// Publish and consume
-	err = client.Publish(ctx, queueName, []byte("autoack test"))
+	err = client.publishBytes(ctx, publishOptions{RoutingKey: queueName}, []byte("autoack test"))
 	require.NoError(t, err)
 
 	select {
@@ -511,7 +511,7 @@ func TestAMQPClientConsumeManualAck(t *testing.T) {
 	require.NoError(t, err)
 
 	// Publish message
-	err = client.Publish(ctx, queueName, []byte("manual ack test"))
+	err = client.publishBytes(ctx, publishOptions{RoutingKey: queueName}, []byte("manual ack test"))
 	require.NoError(t, err)
 
 	// Consume and manually ack
@@ -556,14 +556,14 @@ func TestAMQPClientClose(t *testing.T) {
 // confirmation for issue #655: publish IMMEDIATELY on a freshly constructed
 // client, WITHOUT the require.Eventually(IsReady) wait every other test in
 // this file uses first. The default 5s messaging.reconnect.readytimeout
-// pre-flight inside PublishToExchange must absorb the connect+channel-init
+// pre-flight inside publishBytes must absorb the connect+channel-init
 // window against a real broker — on unpatched code this regresses to an
 // instant ErrNotConnected.
 func TestAMQPClientPublishImmediatelyOnColdStart(t *testing.T) {
 	brokerURL := setupTestBroker(t)
 	log := logger.New("disabled", true)
 
-	// Topology declaration is unaffected by #655 (only PublishToExchange gets a
+	// Topology declaration is unaffected by #655 (only publishBytes gets a
 	// pre-flight wait), so set it up with a client that has already reached
 	// readiness. The fix is exercised by a SEPARATE, freshly constructed client
 	// below.
@@ -586,7 +586,7 @@ func TestAMQPClientPublishImmediatelyOnColdStart(t *testing.T) {
 	defer cold.Close()
 
 	testMsg := []byte("cold start message")
-	err = cold.PublishToExchange(ctx, PublishOptions{
+	err = cold.publishBytes(ctx, publishOptions{
 		Exchange:   exchangeName,
 		RoutingKey: routingKey,
 	}, testMsg)
@@ -639,7 +639,7 @@ func TestStreamQueueConsumeIntegration(t *testing.T) {
 
 	const messageCount = 5
 	for i := range messageCount {
-		require.NoError(t, client.Publish(ctx, queueName,
+		require.NoError(t, client.publishBytes(ctx, publishOptions{RoutingKey: queueName},
 			[]byte(fmt.Sprintf("stream-message-%d", i))))
 	}
 

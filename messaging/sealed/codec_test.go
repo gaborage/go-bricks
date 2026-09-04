@@ -13,6 +13,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/jose"
 	josesealed "github.com/gaborage/go-bricks/jose/sealed"
 	jositest "github.com/gaborage/go-bricks/jose/testing"
@@ -87,16 +88,17 @@ type familyless struct{ s *kstest.MockKeyStore }
 func (f familyless) PublicKey(n string) (*rsa.PublicKey, error)   { return f.s.PublicKey(n) }
 func (f familyless) PrivateKey(n string) (*rsa.PrivateKey, error) { return f.s.PrivateKey(n) }
 
+// capturingClient records what the handle publishes; TestMain routes the
+// framework's byte door to record for it.
 type capturingClient struct {
 	messaging.AMQPClient
-	opts []messaging.PublishOptions
+	opts []publishdoor.Options
 	data [][]byte
 }
 
-func (c *capturingClient) PublishToExchange(_ context.Context, options messaging.PublishOptions, data []byte) error {
+func (c *capturingClient) record(options publishdoor.Options, data []byte) {
 	c.opts = append(c.opts, options)
 	c.data = append(c.data, data)
-	return nil
 }
 
 func spec(t *testing.T) sealruntime.Spec {
