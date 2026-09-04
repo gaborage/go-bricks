@@ -6739,7 +6739,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   clauses where you hand-wrote them: `database.Raw("… FOR UPDATE")` → `qb.Select(...).ForUpdate()`
   inside `database.WithTx`; `Set(col, qb.MustExpr("… ?"))` that could not bind → `SetExpr(col,
   qb.MustExpr("… ?"), arg)` with a `// SECURITY: Manual SQL review completed - …` line.
-- verify: `go build ./... && go vet ./...`  # clean; then `git grep -nE 'SetExpr\(' -- '*.go'` shows an annotation above every call site
+- verify: `go build ./... && go vet ./...`  # clean; then `git grep -nE 'SetExpr\(' -- '*.go'` — a manual-review list, not a pass: every hit must carry a preceding `// SECURITY: Manual SQL review completed - …` line, the same rule CLAUDE.md sets for `f.Raw`/`database.Raw`; a hit without one is a finding
 - ref: gaborage/go-bricks#1255 · [ADR-098](adr_098_builder_clauses_for_ledger_stores.md) · `database/types/interfaces.go`, `database/internal/builder/row_lock.go`, `wiki/database.md`
 
 ---
