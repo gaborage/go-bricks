@@ -2,12 +2,43 @@ package mocks
 
 import (
 	"context"
+	"maps"
+	"slices"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/gaborage/go-bricks/messaging"
 )
+
+// PublishedFrame is one frame handed to MockAMQPClient.PublishToExchange, kept so
+// a test can assert the destination a messaging.Publisher[T] chose rather than one
+// the test itself re-spelled.
+//
+// testify's own Mock.Calls records the same arguments, but by reference and behind
+// an unexported lock, so reading it while another goroutine publishes races and a
+// later write through the caller's headers map rewrites what was recorded. A frame
+// is a copy taken under this mock's lock, which is what makes it safe to assert on.
+type PublishedFrame struct {
+	Options messaging.PublishOptions
+	Data    []byte
+}
+
+// clone returns a frame sharing no mutable state with f: the headers map is copied
+// one level (declared headers are scalars — the depth the framework copies at too)
+// and the payload is cloned. Both the capture and every read pass through it, so
+// neither a caller reusing its buffer nor a test writing into a returned frame can
+// reach a recorded one.
+func (f PublishedFrame) clone() PublishedFrame {
+	if f.Options.Headers != nil {
+		headers := make(map[string]any, len(f.Options.Headers))
+		maps.Copy(headers, f.Options.Headers)
+		f.Options.Headers = headers
+	}
+	f.Data = slices.Clone(f.Data)
+
+	return f
+}
 
 // MockAMQPClient provides a testify-based mock implementation of the messaging.AMQPClient interface.
 // It extends MockMessagingClient with AMQP-specific operations for advanced testing scenarios.
@@ -26,6 +57,9 @@ type MockAMQPClient struct {
 	declaredQueues    map[string]bool
 	declaredExchanges map[string]bool
 	bindings          map[string]bool
+
+	// Publish capture; guarded by the embedded MockMessagingClient's mutex.
+	published []PublishedFrame
 }
 
 // NewMockAMQPClient creates a new mock AMQP client
@@ -40,10 +74,60 @@ func NewMockAMQPClient() *MockAMQPClient {
 
 var _ messaging.AMQPClient = (*MockAMQPClient)(nil)
 
-// PublishToExchange implements messaging.AMQPClient
+// PublishToExchange implements messaging.AMQPClient. The frame is captured before
+// the expectation is consulted, so a call the mock answers with an error is recorded
+// too — what was attempted is what a publish test asserts on.
 func (m *MockAMQPClient) PublishToExchange(ctx context.Context, options messaging.PublishOptions, data []byte) error {
+	m.capture(options, data)
+
 	arguments := m.Called(ctx, options, data)
 	return arguments.Error(0)
+}
+
+// capture records the frame (see PublishedFrame.clone for what is copied).
+func (m *MockAMQPClient) capture(options messaging.PublishOptions, data []byte) {
+	frame := PublishedFrame{Options: options, Data: data}.clone()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.published = append(m.published, frame)
+}
+
+// PublishedFrames returns every frame PublishToExchange received, oldest first, as
+// a snapshot the caller owns outright. The lock covers only the slice read: capture
+// appends and never rewrites a stored frame, so cloning outside it is safe.
+func (m *MockAMQPClient) PublishedFrames() []PublishedFrame {
+	m.mu.RLock()
+	stored := m.published
+	m.mu.RUnlock()
+
+	frames := make([]PublishedFrame, 0, len(stored))
+	for _, frame := range stored {
+		frames = append(frames, frame.clone())
+	}
+
+	return frames
+}
+
+// LastPublishedFrame returns the most recent frame and whether there was one.
+func (m *MockAMQPClient) LastPublishedFrame() (frame PublishedFrame, ok bool) {
+	m.mu.RLock()
+	stored := m.published
+	m.mu.RUnlock()
+
+	if len(stored) == 0 {
+		return PublishedFrame{}, false
+	}
+
+	return stored[len(stored)-1].clone(), true
+}
+
+// ClearPublishedFrames drops the capture (for test cleanup); infrastructure
+// tracking is left alone, ClearInfrastructure owns that.
+func (m *MockAMQPClient) ClearPublishedFrames() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.published = nil
 }
 
 // ConsumeFromQueue implements messaging.AMQPClient
