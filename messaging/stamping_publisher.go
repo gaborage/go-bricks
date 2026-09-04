@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"fmt"
 	"maps"
 
 	"github.com/gaborage/go-bricks/messaging/internal/tenantstamp"
@@ -19,6 +20,11 @@ import (
 // produced it.
 type stampingPublisher struct {
 	AMQPClient
+	// door is the wrapped client's byte door, asserted ONCE at construction; nil
+	// for a client the framework did not build (an app.Options.MessagingClientFactory
+	// product), which then fails every publish with ErrPublishDoorUnavailable
+	// rather than bypassing the stamp.
+	door bytePublisher
 	// key is the pool key this client was created for: a tenant, or "" for the
 	// control-plane client. It is a stamp source, not a label — see
 	// tenantstamp.Resolve.
@@ -26,7 +32,8 @@ type stampingPublisher struct {
 }
 
 func newStampingPublisher(base AMQPClient, key string) AMQPClient {
-	return &stampingPublisher{AMQPClient: base, key: key}
+	door, _ := base.(bytePublisher)
+	return &stampingPublisher{AMQPClient: base, door: door, key: key}
 }
 
 // replayKeyProvider is what a client exposes so the typed door can resolve the tenant the
@@ -39,18 +46,19 @@ type replayKeyProvider interface {
 
 func (p *stampingPublisher) ReplayKey() string { return p.key }
 
-// Publish routes through PublishToExchange so one implementation stamps both doors.
-func (p *stampingPublisher) Publish(ctx context.Context, destination string, data []byte) error {
-	return p.PublishToExchange(ctx, PublishOptions{Exchange: "", RoutingKey: destination}, data)
-}
-
-func (p *stampingPublisher) PublishToExchange(ctx context.Context, options PublishOptions, data []byte) error {
+// publishBytes is the wrapper's byte door: stamp, then hand the frame to the
+// wrapped client's own door (see the door field for the no-door case).
+func (p *stampingPublisher) publishBytes(ctx context.Context, options publishOptions, data []byte) error {
+	base := p.door
+	if base == nil {
+		return fmt.Errorf("%w: %T", ErrPublishDoorUnavailable, p.AMQPClient)
+	}
 	stamp, err := tenantstamp.ResolveForPublish(ctx, options.Headers, p.key)
 	if err != nil {
 		return err
 	}
 	if stamp == "" {
-		return p.AMQPClient.PublishToExchange(ctx, options, data)
+		return base.publishBytes(ctx, options, data)
 	}
 
 	// The caller's map is never written to: a publish must not mutate the options
@@ -65,8 +73,12 @@ func (p *stampingPublisher) PublishToExchange(ctx context.Context, options Publi
 	maps.Copy(stamped.Headers, options.Headers)
 	tenantstamp.Write(stamp, func(key string, value any) { stamped.Headers[key] = value })
 
-	return p.AMQPClient.PublishToExchange(ctx, stamped, data)
+	return base.publishBytes(ctx, stamped, data)
 }
 
-// compile-time proof the wrapper still satisfies the full client surface.
-var _ AMQPClient = (*stampingPublisher)(nil)
+// compile-time proof the wrapper still satisfies the full client surface AND
+// the byte door.
+var (
+	_ AMQPClient    = (*stampingPublisher)(nil)
+	_ bytePublisher = (*stampingPublisher)(nil)
+)

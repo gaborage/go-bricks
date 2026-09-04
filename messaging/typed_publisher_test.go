@@ -28,7 +28,7 @@ var errMarshalRefused = errors.New("marshal refused")
 
 func (unmarshalableEvent) MarshalJSON() ([]byte, error) { return nil, errMarshalRefused }
 
-// capturingPublishClient records every frame handed to PublishToExchange so a
+// capturingPublishClient records every frame handed to publishBytes so a
 // test can assert the destination the handle chose, not the one a caller
 // might have re-spelled.
 type capturingPublishClient struct {
@@ -39,11 +39,11 @@ type capturingPublishClient struct {
 }
 
 type capturedFrame struct {
-	options PublishOptions
+	options publishOptions
 	data    []byte
 }
 
-func (c *capturingPublishClient) PublishToExchange(_ context.Context, options PublishOptions, data []byte) error {
+func (c *capturingPublishClient) publishBytes(_ context.Context, options publishOptions, data []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.frames = append(c.frames, capturedFrame{options: options, data: data})
@@ -124,8 +124,8 @@ func TestPublisherPublishUsesDeclaredDestination(t *testing.T) {
 	client := &capturingPublishClient{}
 
 	// A stale re-spelling a caller might still hold: the handle must ignore it
-	// entirely, since Publish never takes PublishOptions at all.
-	stale := PublishOptions{Exchange: "legacy.exchange", RoutingKey: "legacy.key", Headers: map[string]any{"schema": "v1"}}
+	// entirely, since Publish never takes publishOptions at all.
+	stale := publishOptions{Exchange: "legacy.exchange", RoutingKey: "legacy.key", Headers: map[string]any{"schema": "v1"}}
 
 	require.NoError(t, pub.Publish(t.Context(), client, orderCreated{OrderID: 42}))
 

@@ -1487,6 +1487,24 @@ no keystore path — the consumer loads such a partner key itself. See
 **Key Benefits:** the floor is a control rather than a suggestion, one less startup WARN an
 operator learns to ignore, and the `keystore` package no longer carries a deprecation branch.
 
+### [ADR-096: The Typed Publish Door Replaces Raw Byte Publishing](adr_096_typed_publish_door.md)
+
+**Date:** 2026-09-04 | **Status:** Accepted | **Breaking:** `Client.Publish`, `AMQPClient.PublishToExchange` and `PublishOptions` leave the exported surface; `ValidatePublishDestination` takes `(exchange, routingKey, headers)`; `JobContext.Messaging()` returns `messaging.AMQPClient`; `testing/mocks` loses its byte publish doubles
+
+`DeclarePublisher` registered a destination and handed back nothing, so every module
+re-spelled exchange and routing key in a `PublishOptions` literal beside a `[]byte` it had
+marshaled itself, and a seal-tagged type (ADR-097) could always be pushed through that raw
+door in clear. `DeclareTypedPublisher[T]` → `Publisher[T]` is now the ONLY module-facing
+publish door: bound at declaration, JSON-marshaling `T`, publishing through the stamped
+client a handler already holds. The bytes door survives as the unexported `bytePublisher`
+inside `messaging` — implemented by the framework client and the stamping wrapper, asserted
+by `Publisher[T].Publish` (a client without it fails with `ErrPublishDoorUnavailable`) and
+reached by the outbox relay through the init-registered `internal/publishdoor` seam (the
+ADR-091 pattern). Additive: `messaging.EventPublisher[T]` and
+`messaging/testing.CapturePublisher[T]` give a module's tests a typed capture instead of a
+byte frame. The streams lane's `Publisher.Publish(*PublishMessage)` is untouched. See
+[migrations.md](migrations.md) `[C63.1]`.
+
 ---
 
 ### [ADR-097: Sealed AMQP Messages — Field-Level JOSE Payload Protection](adr_097_sealed_amqp_messages.md)

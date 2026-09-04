@@ -14,16 +14,6 @@ type MockClient struct {
 	closed  bool
 }
 
-func (m *MockClient) Publish(_ context.Context, _ string, _ []byte) error {
-	if !m.isReady {
-		return errNotConnected
-	}
-	if m.closed {
-		return errAlreadyClosed
-	}
-	return nil
-}
-
 func (m *MockClient) Consume(_ context.Context, _ string) (<-chan amqp.Delivery, error) {
 	if !m.isReady {
 		return nil, errNotConnected
@@ -67,7 +57,7 @@ func NewMockAMQPClient() *MockAMQPClient {
 	}
 }
 
-func (m *MockAMQPClient) PublishToExchange(_ context.Context, _ PublishOptions, _ []byte) error {
+func (m *MockAMQPClient) publishBytes(_ context.Context, _ publishOptions, _ []byte) error {
 	if !m.isReady {
 		return errNotConnected
 	}
@@ -144,7 +134,7 @@ func (m *MockMessageHandler) EventType() string {
 }
 
 func TestPublishOptions(t *testing.T) {
-	options := PublishOptions{
+	options := publishOptions{
 		Exchange:   testExchange,
 		RoutingKey: testRoute,
 		Headers:    map[string]any{"test": "value"},
@@ -175,52 +165,6 @@ func TestConsumeOptions(t *testing.T) {
 	assert.False(t, options.Exclusive)
 	assert.False(t, options.NoLocal)
 	assert.True(t, options.NoWait)
-}
-
-func TestMockClientPublish(t *testing.T) {
-	tests := []struct {
-		name        string
-		isReady     bool
-		closed      bool
-		expectError bool
-	}{
-		{
-			name:        "successful_publish",
-			isReady:     true,
-			closed:      false,
-			expectError: false,
-		},
-		{
-			name:        "not_ready",
-			isReady:     false,
-			closed:      false,
-			expectError: true,
-		},
-		{
-			name:        "client_closed",
-			isReady:     true,
-			closed:      true,
-			expectError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			client := &MockClient{
-				isReady: tt.isReady,
-				closed:  tt.closed,
-			}
-
-			ctx := context.Background()
-			err := client.Publish(ctx, "test-destination", []byte(testMessage))
-
-			if tt.expectError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
 }
 
 func TestMockClientConsume(t *testing.T) {
@@ -304,16 +248,16 @@ func TestMockClientIsReady(t *testing.T) {
 	assert.False(t, client.IsReady())
 }
 
-func TestMockAMQPClientPublishToExchange(t *testing.T) {
+func TestMockAMQPClientPublishBytes(t *testing.T) {
 	client := NewMockAMQPClient()
 
 	ctx := context.Background()
-	options := PublishOptions{
+	options := publishOptions{
 		Exchange:   testExchange,
 		RoutingKey: testRoute,
 	}
 
-	err := client.PublishToExchange(ctx, options, []byte(testMessage))
+	err := client.publishBytes(ctx, options, []byte(testMessage))
 	assert.NoError(t, err)
 }
 
@@ -363,8 +307,8 @@ func TestMockAMQPClientNotReady(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Test PublishToExchange
-	err := client.PublishToExchange(ctx, PublishOptions{}, []byte("test"))
+	// Test publishBytes
+	err := client.publishBytes(ctx, publishOptions{}, []byte("test"))
 	assert.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
 
@@ -396,8 +340,8 @@ func TestMockAMQPClientClosed(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Test PublishToExchange
-	err := client.PublishToExchange(ctx, PublishOptions{}, []byte("test"))
+	// Test publishBytes
+	err := client.publishBytes(ctx, publishOptions{}, []byte("test"))
 	assert.Error(t, err)
 	assert.Equal(t, errAlreadyClosed, err)
 

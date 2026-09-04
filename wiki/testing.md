@@ -250,6 +250,32 @@ assert.Error(t, err)
 
 See [outbox/testing](../outbox/testing/) package for full API documentation.
 
+## Messaging Publish Testing
+
+Since ADR-096 no exported client carries a byte publish method, so a module's publishes are
+observed at the typed handle, not at the client. Store the handle behind
+`messaging.EventPublisher[T]` and inject `messaging/testing.CapturePublisher[T]`:
+
+```go
+type OrderService struct {
+    orders messaging.EventPublisher[OrderCreated] // *messaging.Publisher[OrderCreated] in production
+}
+
+capture := messagingtesting.NewCapturePublisher[OrderCreated]()
+svc := &OrderService{orders: capture}
+
+require.NoError(t, svc.Create(ctx, order))
+
+evt, ok := capture.Last()
+require.True(t, ok)
+assert.Equal(t, order.ID, evt.OrderID) // the typed value, never a byte frame to re-decode
+```
+
+`Fail(err)` makes later publishes return `err` while still recording the attempt; `Events()`
+returns every recorded value oldest-first. A `testing/mocks.MockAMQPClient` handed to a real
+`Publisher[T]` fails with `messaging.ErrPublishDoorUnavailable` — it is a client double for
+declarations and consumption, not a publish sink.
+
 ## Server / HandlerContext Testing
 
 Unit-test a `Handler` or `MiddlewareFunc` without standing up a router by building a

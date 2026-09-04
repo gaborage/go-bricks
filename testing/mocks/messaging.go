@@ -38,12 +38,6 @@ func NewMockMessagingClient() *MockMessagingClient {
 	}
 }
 
-// Publish implements messaging.Client
-func (m *MockMessagingClient) Publish(ctx context.Context, destination string, data []byte) error {
-	arguments := m.MethodCalled("Publish", ctx, destination, data)
-	return arguments.Error(0)
-}
-
 // Consume implements messaging.Client
 func (m *MockMessagingClient) Consume(ctx context.Context, destination string) (<-chan amqp.Delivery, error) {
 	arguments := m.MethodCalled("Consume", ctx, destination)
@@ -152,16 +146,6 @@ func (m *MockMessagingClient) SetReady(ready bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.isReady = ready
-}
-
-// ExpectPublish sets up a publish expectation
-func (m *MockMessagingClient) ExpectPublish(destination string, data []byte, err error) *mock.Call {
-	return m.On("Publish", mock.Anything, destination, data).Return(err)
-}
-
-// ExpectPublishAny sets up a publish expectation for any destination and data
-func (m *MockMessagingClient) ExpectPublishAny(err error) *mock.Call {
-	return m.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(err)
 }
 
 // ExpectConsume sets up a consume expectation

@@ -136,11 +136,7 @@ func (p *outboxPublisher) resolveAMQPDestination(event *app.OutboxEvent) (exchan
 	if routingKey == "" {
 		routingKey = event.EventType
 	}
-	if err = messaging.ValidatePublishDestination(messaging.PublishOptions{
-		Exchange:   exchange,
-		RoutingKey: routingKey,
-		Headers:    event.Headers,
-	}); err != nil {
+	if err = messaging.ValidatePublishDestination(exchange, routingKey, event.Headers); err != nil {
 		return "", "", fmt.Errorf("outbox: %w", err)
 	}
 	return exchange, routingKey, nil

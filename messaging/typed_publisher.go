@@ -105,6 +105,16 @@ func DeclareTypedPublisher[T any](decls *Declarations, opts *PublisherOptions) *
 	return handle
 }
 
+// EventPublisher is the seam a module depends on when it wants to swap the
+// handle in a test: *Publisher[T] satisfies it, and so does the capture double
+// in messaging/testing. Production code declares the handle with
+// DeclareTypedPublisher and stores it behind this interface.
+type EventPublisher[T any] interface {
+	Publish(ctx context.Context, client AMQPClient, evt T) error
+}
+
+var _ EventPublisher[struct{}] = (*Publisher[struct{}])(nil)
+
 // Publish encodes evt and publishes it to the DECLARED exchange and routing
 // key with the declared default headers, through client — the tenant-aware
 // client a handler already holds (the getMessaging(ctx) idiom), so the
@@ -186,15 +196,15 @@ func tenantForSeal(ctx context.Context, client AMQPClient) (context.Context, err
 	return multitenant.SetTenant(ctx, tenant), nil
 }
 
-// publishBytes is the handle's ONE bytes door. It is the only place the handle
-// names the client's raw publish method, so retargeting it — to an internal
-// bytes interface reached by type assertion, say — never touches Publish's
-// exported signature or its callers.
+// publishBytes is the handle's ONE bytes door: it asserts the framework's
+// unexported bytePublisher on client and fails with ErrPublishDoorUnavailable
+// for a client that lacks it — a hand-written AMQPClient, a testing/mocks
+// double — so no exported type ever carries a byte publish method (ADR-096).
 func (h *Publisher[T]) publishBytes(ctx context.Context, client AMQPClient, data []byte) error {
 	headers := make(map[string]any, len(h.headers))
 	maps.Copy(headers, h.headers)
 
-	return client.PublishToExchange(ctx, PublishOptions{
+	return publishThroughDoor(ctx, client, publishOptions{
 		Exchange:   h.exchange,
 		RoutingKey: h.routingKey,
 		Headers:    headers,

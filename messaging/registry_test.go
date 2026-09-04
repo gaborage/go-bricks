@@ -69,11 +69,7 @@ func (m *simpleMockAMQPClient) IsReady() bool {
 	return m.isReady && !m.closed
 }
 
-func (m *simpleMockAMQPClient) Publish(_ context.Context, _ string, _ []byte) error {
-	return nil
-}
-
-func (m *simpleMockAMQPClient) PublishToExchange(_ context.Context, _ PublishOptions, _ []byte) error {
+func (m *simpleMockAMQPClient) publishBytes(_ context.Context, _ publishOptions, _ []byte) error {
 	return nil
 }
 
