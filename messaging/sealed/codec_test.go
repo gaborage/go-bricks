@@ -448,7 +448,6 @@ func TestIsSealTaggedAgreesWithScanType(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 // TestNewSealerTagsTheActiveKidsAsSeal pins the producer half of the dual-role
