@@ -75,14 +75,15 @@ in `jose/sealed` (`ScanType`, `Seal`, `Open`; reusing jose's tag machinery, cryp
 allowlist and error types — forbid-dual-use is a type policy, not a code policy); the
 messaging adapter is `messaging/sealed`, import-gated on the ADR-091 pattern: the
 `messaging` package stays free of go-jose, and the gate's value is dependency hygiene plus
-a loud startup error (`ErrNotLinked`, "import messaging/sealed") for a seal-tagged
+a loud startup error (`messaging.ErrSealingNotLinked`, "import messaging/sealed") for a seal-tagged
 declaration without the import — not binary size, since `go list -deps ./app` already
-carries go-jose for HTTP JOSE. The adapter registers its codec into
-`messaging/internal/sealruntime` from `messaging/sealed`'s `init`; `app` configures the
-runtime (keystore, `messaging.seal.active`, tenancy, meter) before `DeclareMessaging`
-(modules read it via `messaging.SealingRuntime()`), and
-`Declarations.Validate` reports `ErrNotConfigured` / `ErrKeyStoreMissing` for a sealed
-declaration whose runtime is incomplete. Metrics: `seal.operation.duration`
+carries go-jose for HTTP JOSE. `messaging/sealed`'s `init` registers its codec through
+`messaging.RegisterSealCodec` (the seam is `messaging/internal/sealruntime`); `app`
+configures the runtime with `messaging.ConfigureSealing` (a `messaging.SealRuntime`:
+keystore, `messaging.seal.active`, tenancy, meter) before `DeclareMessaging` (modules read
+it via `messaging.SealingRuntime()`), and `Declarations.Validate` reports
+`ErrNotConfigured` / `ErrKeyStoreMissing` for a sealed declaration whose runtime is
+incomplete. Metrics: `seal.operation.duration`
 (`seal.operation = seal|open`) and `seal.open.failures.total` (`seal.error.code`). Sealing engages automatically from tags on the ADR-096
 typed door; the raw consume `Handler` stays (sealed bytes reaching it are ciphertext).
 

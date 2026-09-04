@@ -1,7 +1,5 @@
 # Sealed AMQP Messages
 
-<!-- DRAFT for the #1357 stack: jose/sealed, keystore generations/activation and Meta.DedupKey/Sealed are on main; the messaging/sealed adapter (#1358), the sealed consumer (#1359) and the lane guards (#1360) are named here with their final symbols and land with those links. Remove this banner when #1360 merges. -->
-
 Field-level payload protection for events that cross a broker: one declared **Subject**
 field travels encrypted, every sibling field stays readable, and the whole document is
 signed by the producer. Decision record: [ADR-097](adr_097_sealed_amqp_messages.md).
@@ -14,15 +12,18 @@ doors; import-gated like `messaging/streams`, ADR-091). The gate keeps the `mess
 package free of go-jose and turns a forgotten import into a loud startup error; it does not
 make an app smaller, since HTTP JOSE already links go-jose.
 
-How the adapter is wired (#1358): `messaging/sealed`'s `init` calls
-`sealruntime.Register` (`messaging/internal/sealruntime`) with the codec; `app` calls
-`sealruntime.Configure` with the runtime (`KeyStore`, `Active` = `messaging.seal.active`,
-`Tenancy`, `Meter`) before any `DeclareMessaging`, and modules reach it through
-`messaging.SealingRuntime()`; `Declarations.Validate` fails a seal-tagged declaration with
-`sealruntime.ErrNotLinked` ("import messaging/sealed"), `ErrNotConfigured` or
-`ErrKeyStoreMissing`. `messaging.IsSealTagged` (tag key `messaging.SealTagName`) is the
-one predicate every door asks. `Publisher[T].Seal` and `Publish` seal when `T` is
-seal-tagged; the consumer side opens through an `OpenerFactory` (#1359). Metrics:
+How the adapter is wired: `messaging/sealed`'s `init` calls `messaging.RegisterSealCodec`
+with the codec (the seam lives in `messaging/internal/sealruntime`); `app` calls
+`messaging.ConfigureSealing` with a `messaging.SealRuntime` (key store, the
+`messaging.seal.active` selector, tenancy, meter) before any `DeclareMessaging`, and modules
+reach it through `messaging.SealingRuntime()`. `Declarations.Validate` fails a seal-tagged
+declaration with `messaging.ErrSealingNotLinked` ("import messaging/sealed"),
+`ErrNotConfigured` or `ErrKeyStoreMissing`. `messaging.IsSealTagged` (tag key
+`messaging.SealTagName`) is the one predicate every door asks; the lane guards use it to
+refuse a seal-tagged `T` on streams and on the outbox struct door. `Publisher[T].Publish`
+seals when `T` is seal-tagged and `Publisher[T].Seal(ctx, evt)` returns the same bytes for
+the outbox lane; the consumer side opens through the codec's `messaging.SealOpenerProvider`
+(#1359). Metrics:
 `seal.operation.duration` with `seal.operation = seal|open`, and
 `seal.open.failures.total` with `seal.error.code`.
 
