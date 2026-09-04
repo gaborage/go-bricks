@@ -101,6 +101,8 @@ type namedEmbedEvent struct {
 	promotedSeal `json:"inner"`
 }
 
+// TestIsSealTagged: the probe over every shape class, asked twice so the second
+// answer exercises the per-type cache.
 func TestIsSealTagged(t *testing.T) {
 	cases := map[string]struct {
 		t    reflect.Type
@@ -217,6 +219,8 @@ type selfEmbed struct {
 	ID string `json:"id"`
 }
 
+// TestIsSealTaggedTerminatesOnEmbeddingCycle: a self-embedding type must not
+// recurse forever and is untagged, so false.
 func TestIsSealTaggedTerminatesOnEmbeddingCycle(t *testing.T) {
 	var node selfEmbed
 	node.selfEmbed = &node // the cycle the walk must survive
@@ -256,6 +260,8 @@ func TestIsSealTaggedIsTheUnionOfProbeAndMisplaced(t *testing.T) {
 	}
 }
 
+// TestIsSealTaggedCacheDoesNotAliasIdenticalShapes: two byte-identical layouts
+// that differ only in tags must get their own cache entries.
 func TestIsSealTaggedCacheDoesNotAliasIdenticalShapes(t *testing.T) {
 	assert.True(t, IsSealTagged(reflect.TypeOf(shapeTwinSealed{})))
 	assert.False(t, IsSealTagged(reflect.TypeOf(shapeTwinPlain{})))
