@@ -639,7 +639,7 @@ func TestStreamQueueConsumeIntegration(t *testing.T) {
 
 	const messageCount = 5
 	for i := range messageCount {
-		require.NoError(t, client.Publish(ctx, queueName,
+		require.NoError(t, client.publishBytes(ctx, publishOptions{RoutingKey: queueName},
 			[]byte(fmt.Sprintf("stream-message-%d", i))))
 	}
 
