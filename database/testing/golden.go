@@ -82,14 +82,14 @@ func (g SQLGolden) clock(v time.Time) string {
 	return "<time>"
 }
 
-// Compare pins got against the golden at path. With update true the file is
+// AssertGolden pins got against the golden at path. With update true the file is
 // (re)written instead — only for a deliberate change the commit body names.
-func Compare(t *testing.T, path, got string, update bool) {
+func AssertGolden(t *testing.T, path, got string, update bool) {
 	t.Helper()
 	require.NoError(t, compareGolden(path, got, update))
 }
 
-// compareGolden is Compare's testable core: nil when got matches the file (or
+// compareGolden is AssertGolden's testable core: nil when got matches the file (or
 // was written to it), an error naming the file otherwise.
 func compareGolden(path, got string, update bool) error {
 	if update {

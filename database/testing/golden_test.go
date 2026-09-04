@@ -46,10 +46,10 @@ QUERY: SELECT 1 FROM t WHERE p = $1
 `, got)
 }
 
-// TestCompareWritesOnUpdateAndFailsOnDrift pins the two modes: -update writes
+// TestAssertGoldenWritesOnUpdateAndFailsOnDrift pins the two modes: -update writes
 // the file, an identical rendering passes, and drift is reported naming the
 // file — plus a missing golden, which must not read as a pass.
-func TestCompareWritesOnUpdateAndFailsOnDrift(t *testing.T) {
+func TestAssertGoldenWritesOnUpdateAndFailsOnDrift(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sql", "x.golden")
 
 	require.Error(t, compareGolden(path, "one\n", false), "a missing golden is a failure, not a pass")
@@ -64,5 +64,5 @@ func TestCompareWritesOnUpdateAndFailsOnDrift(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "x.golden")
 
-	Compare(t, path, "one\n", false) // the testing.T door on the passing path
+	AssertGolden(t, path, "one\n", false) // the testing.T door on the passing path
 }

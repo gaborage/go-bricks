@@ -116,7 +116,7 @@ func TestStoreSQLGolden(t *testing.T) {
 			require.NoError(t, err)
 
 			got := captureStoreSQL(t, tc.vendor, store)
-			dbtesting.Compare(t, filepath.Join("testdata", "sql", "outbox_"+tc.vendor+".golden"), got, *updateGoldens)
+			dbtesting.AssertGolden(t, filepath.Join("testdata", "sql", "outbox_"+tc.vendor+".golden"), got, *updateGoldens)
 		})
 	}
 }

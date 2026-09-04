@@ -45,7 +45,7 @@ func permissiveDB(vendor string) (*dbtesting.TestDB, *dbtesting.TestTx) {
 
 func compareGolden(t *testing.T, name, got string) {
 	t.Helper()
-	dbtesting.Compare(t, filepath.Join("testdata", "sql", name+".golden"), got, *updateGoldens)
+	dbtesting.AssertGolden(t, filepath.Join("testdata", "sql", name+".golden"), got, *updateGoldens)
 }
 
 // TestStoreSQLGolden pins the inbox ledger store's SQL per vendor.
