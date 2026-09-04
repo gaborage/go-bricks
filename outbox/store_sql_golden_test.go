@@ -34,15 +34,27 @@ func goldenStatement(kind, sql string, args []any) string {
 	return b.String()
 }
 
-// goldenArg keeps the file stable: byte slices print as text and a time prints
-// as a marker, because MarkPublished binds time.Now() and a wall-clock value
-// would change on every run. The position and type of the argument are what
-// the golden pins; the value of a clock is not.
+// fixedAt is the fixture clock every deterministic argument carries; it prints
+// verbatim so a wrong binding fails the golden. The one non-deterministic
+// argument — MarkPublished's time.Now() — prints as a marker instead.
+var fixedAt = time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+
+// goldenArg keeps the file stable and the fixture visible: byte slices print
+// as text, the fixture time prints as RFC3339, any other clock value prints as
+// <time> (the position and type are what a wall-clock argument pins).
 func goldenArg(a any) any {
 	switch v := a.(type) {
 	case []byte:
 		return string(v)
-	case time.Time, *time.Time:
+	case time.Time:
+		if v.Equal(fixedAt) {
+			return v.UTC().Format(time.RFC3339)
+		}
+		return "<time>"
+	case *time.Time:
+		if v != nil && v.Equal(fixedAt) {
+			return v.UTC().Format(time.RFC3339)
+		}
 		return "<time>"
 	default:
 		return v
@@ -77,7 +89,6 @@ func captureStoreSQL(t *testing.T, vendor string, store Store) string {
 	ctx := context.Background()
 	db, leaderTx, tx := permissiveDB(vendor)
 
-	fixedAt := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 	record := &Record{
 		ID:          "11111111-2222-4333-8444-555555555555",
 		EventType:   "order.created",

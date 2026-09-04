@@ -74,7 +74,7 @@ func NewOracleStore(tableName string) (Store, error) {
 }
 
 // scanOracleRecord reads one FetchPending row. Oracle stores an empty
-// exchange/routing_key (the AMQP default exchange) as NULL, because ” IS NULL
+// exchange/routing_key (the AMQP default exchange) as NULL, because the empty string IS NULL
 // in Oracle — so those columns scan NULL-tolerantly and map NULL -> "". See
 // issue #586.
 func scanOracleRecord(rows *sql.Rows) (Record, error) {
