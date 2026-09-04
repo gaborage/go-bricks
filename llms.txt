@@ -3346,9 +3346,9 @@ messaging.DeclareTypedConsumerWithMeta(decls, &messaging.ConsumerOptions{
 })
 ```
 
-**Mixed-queue variant:** a queue that also carries directly-published messages has deliveries with no ledger key by design. There, and only there, swap the `!ok` branch for `return m.svc.ProcessOrder(ctx, evt.OrderID)` — processed without dedup, so that path must be idempotent on its own.
+**Mixed-queue variant:** a queue that also carries directly-published messages has deliveries with no ledger key by design. There, and only there, let a demonstrably ABSENT header through — `if _, present := meta.Headers()[messaging.HeaderEventID]; !present { return m.svc.ProcessOrder(ctx, evt.OrderID) }` placed BEFORE the `DedupKey` call — processed without dedup, so that path must be idempotent on its own. Keep the `err != nil` branch as is: a header that is present but malformed stays on the failure path, or a publisher could skip the ledger by misspelling the id.
 
-Headers are written by the publisher, so on a queue fed from outside this service they are untrusted input: whoever can publish picks the ledger key. The relay stamps `x-outbox-event-id` on everything it publishes, so a publisher that simply drops it would opt out of dedup entirely — which is why the example returns an error on `!ok` rather than processing, and why the variant above is a deliberate opt-in for a queue whose traffic you know. Authorize publishers at the broker.
+Headers are written by the publisher, so on a queue fed from outside this service they are untrusted input: whoever can publish picks the ledger key. The relay stamps `x-outbox-event-id` on everything it publishes, so a publisher that simply drops it would opt out of dedup entirely — which is why the example returns the `DedupKey` error rather than processing, and why the variant above is a deliberate opt-in for a queue whose traffic you know. Authorize publishers at the broker.
 
 ### Step 5: Wire the Module into `main`
 

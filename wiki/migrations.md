@@ -6626,7 +6626,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `inbox.dedup.hits`: its rate is the replay-campaign signal. Confirm `inbox.retentionperiod`
   (168h default) exceeds the LONGEST path a message can take back to the consumer — broker
   redelivery, a DLQ drain, an outbox re-drive.
-- verify: `go test ./...`  # then publish one message whose x-outbox-event-id carries a `:` to a consumer's queue and confirm it lands on the DLQ with no inbox row (`SELECT count(*) FROM gobricks_inbox WHERE event_id LIKE '%:%'` is 0), and that a redelivered conforming id moves `inbox.dedup.hits` by exactly one
+- verify: `go test ./...`  # then publish one message whose x-outbox-event-id carries a `:` to a consumer's queue and confirm it lands on the DLQ with no inbox row for THAT id (`SELECT count(*) FROM gobricks_inbox WHERE event_id = '<the id you published>'` is 0 — rows v0.62.0 accepted may already carry a `:`, so never scan the whole ledger), and that a redelivered conforming id moves `inbox.dedup.hits` by exactly one
 - ref: gaborage/go-bricks#1353 · #1307 · #1309 (ADR-097 §4 records the grammar as part of the replay stance) · `messaging/dedup_key.go`, `inbox/inbox.go`, `outbox/headers.go`
 
 ---
