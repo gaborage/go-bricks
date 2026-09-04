@@ -5,17 +5,13 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/gaborage/go-bricks/jose"
 )
 
 // maxLogicalKidLen caps a Logical kid so the full entry name stays a
 // tractable header value once a generation suffix is appended (spec G4).
 const maxLogicalKidLen = 64
-
-// TODO(#1351): replace with jose.ValidKid.
-// logicalKidPattern is the jose kid grammar. It is a LOCAL copy until
-// jose.ValidKid ships (#1351); the two must stay identical, and the copy is
-// removed once the export lands.
-var logicalKidPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // generationSuffixPattern detects the Generation marker: a trailing "-v"
 // followed by digits only. Any entry name matching it IS a generation entry
@@ -110,8 +106,8 @@ func splitGeneration(name string) (logical, version string, ok bool) {
 // alphabet, at most maxLogicalKidLen characters, and never itself ending in
 // the generation marker, so every entry belongs to exactly one family.
 func validateLogical(logical string) error {
-	if !logicalKidPattern.MatchString(logical) {
-		return fmt.Errorf("logical kid %q must match %s", logical, logicalKidPattern.String())
+	if !jose.ValidKid(logical) {
+		return fmt.Errorf("logical kid %q is not a valid jose kid (allowed: A-Z a-z 0-9 _ -)", logical)
 	}
 	if len(logical) > maxLogicalKidLen {
 		return fmt.Errorf("logical kid %q is %d characters, maximum is %d", logical, len(logical), maxLogicalKidLen)
