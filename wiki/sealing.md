@@ -118,7 +118,10 @@ type PaymentAuthorized struct {
 Granularity: one sign family per producing service, one encrypt family per audience.
 Per-queue keys are forbidden; per-tenant keys are forbidden in v1 (a tag is a compile-time
 constant, and shared-mode producers hold every key anyway). Distribution is out-of-band —
-no JWKS. Never reuse an entry name between HTTP jose and sealing.
+no JWKS. Never reuse an entry name between HTTP jose and sealing: the keystore records
+which role tag resolved each entry (`keystore.RoleTagJoseRoute` from the server's jose
+wiring, `keystore.RoleTagSeal` from `messaging/sealed`) and WARNs at startup, naming the
+entry, when one entry serves both.
 
 The env door for the selector is narrower than YAML: `MESSAGING_SEAL_ACTIVE_<KID>` reaches a
 kid spelled in `[a-z0-9]` everywhere, a hyphenated kid only where the runtime allows `-` in

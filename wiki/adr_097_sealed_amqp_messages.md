@@ -144,8 +144,8 @@ the tag — sign family: consumers get the new PUBLIC, the producer the PRIVATE,
 flip, drain, retire; encrypt family (G3): consumers get the new PRIVATE first, producers
 the PUBLIC, selector flip, drain, retire. Namespace hygiene: never reuse a kid across HTTP
 jose and sealing; the keystore records the role tag of each resolution request
-(`jose-route`, `seal`) and WARNs at startup when one entry is resolved under both
-(follow-up issue, blocked by #1352 and #1359).
+(`keystore.RoleTagJoseRoute`, `keystore.RoleTagSeal`, through `RoleRecorder`) and its
+`DualRoleReporter` WARNs at startup when one entry is resolved under both (#1363).
 
 **Env door.** `messaging.seal.active` keys are Logical kids; the koanf env transform is
 one global injective function (ADR-024/ADR-090), so an env override reaches `[a-z0-9]`
