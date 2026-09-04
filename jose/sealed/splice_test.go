@@ -1,6 +1,7 @@
 package sealed
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -81,6 +82,22 @@ func TestSpliceRawInsertsReplacementVerbatim(t *testing.T) {
 	out := spliceRaw(doc, span, []byte(`{"pan":"4111"}`))
 	assert.Equal(t, `{"a":1,"card":{"pan":"4111"},"z":true}`, string(out))
 	assert.Equal(t, `{"a":1,"card":"eyJ.x.y","z":true}`, string(doc))
+}
+
+func TestSpliceRawHandlesLargeInputs(t *testing.T) {
+	// A document and a replacement far beyond any realistic event (multi-MiB each): the
+	// splice must be exact with no size arithmetic in play.
+	big := bytes.Repeat([]byte("x"), 4<<20)
+	doc := append(append([]byte(`{"pad":"`), big...), []byte(`","card":"old","z":1}`)...)
+	span, err := locateSubject(doc, "card")
+	require.NoError(t, err)
+	replacement := append(append([]byte(`"`), bytes.Repeat([]byte("A"), 3<<20)...), '"')
+	out := spliceRaw(doc, span, replacement)
+	assert.Len(t, out, len(doc)-len(span.value)+len(replacement))
+	assert.True(t, bytes.HasPrefix(out, doc[:span.start]))
+	assert.True(t, bytes.HasSuffix(out, doc[span.end:]))
+	assert.Equal(t, replacement, out[span.start:span.start+len(replacement)])
+	assert.True(t, json.Valid(out))
 }
 
 func TestSpliceRefusesNonCompactReplacements(t *testing.T) {

@@ -89,22 +89,18 @@ func splice(doc []byte, span subjectSpan, compact string) ([]byte, error) {
 	if !isCompactJOSE(compact) {
 		return nil, errNotCompactJOSE
 	}
-	quoted := make([]byte, 0, len(compact)+2)
-	quoted = append(quoted, '"')
-	quoted = append(quoted, compact...)
-	quoted = append(quoted, '"')
+	quoted := append(append([]byte{'"'}, compact...), '"')
 	return spliceRaw(doc, span, quoted), nil
 }
 
 // spliceRaw returns doc with the span replaced by replacement verbatim — the opener's
 // reverse step (decrypted plaintext back over the JWE string) uses it with raw JSON. The
-// three slices are copied into a fresh buffer; doc is not mutated.
+// three slices are copied into a fresh buffer grown by append (no precomputed size, so no
+// length arithmetic on caller-sized inputs); doc is not mutated.
 func spliceRaw(doc []byte, span subjectSpan, replacement []byte) []byte {
-	out := make([]byte, 0, len(doc)-len(span.value)+len(replacement))
-	out = append(out, doc[:span.start]...)
+	out := append([]byte(nil), doc[:span.start]...)
 	out = append(out, replacement...)
-	out = append(out, doc[span.end:]...)
-	return out
+	return append(out, doc[span.end:]...)
 }
 
 // isCompactJOSE reports whether s consists only of base64url characters and dots.
