@@ -21,6 +21,18 @@ func TestRegisterRejectsNil(t *testing.T) {
 	assert.Panics(t, func() { Register(nil) })
 }
 
+// TestRegisterRefusesASecondDispatcher pins the guard the streams seam has too:
+// only Swap may replace a registered dispatcher.
+func TestRegisterRefusesASecondDispatcher(t *testing.T) {
+	prev := Swap(nil)
+	t.Cleanup(func() { Swap(prev) })
+
+	first := func(context.Context, any, Options, []byte) error { return nil }
+	Register(first)
+	assert.Panics(t, func() { Register(first) })
+	assert.NotNil(t, Swap(nil), "the first registration is still the installed one")
+}
+
 // TestPublishDispatchesEveryArgumentUnchanged pins that the seam forwards the
 // client, the destination and the payload as given: the relay's bytes must reach
 // messaging byte-for-byte.

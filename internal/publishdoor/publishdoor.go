@@ -36,13 +36,17 @@ var ErrNotRegistered = errors.New("publishdoor: no byte publish dispatcher regis
 
 var registered atomic.Pointer[Func]
 
-// Register installs the dispatcher. messaging calls it from init; a second
-// registration replaces the first, which only a test does (see Swap).
+// Register installs the dispatcher. messaging calls it from init, exactly once
+// per process; a second registration panics, as the streams seam does, so a
+// stray registrant cannot silently win by link order. A test that needs to
+// replace the dispatcher uses Swap.
 func Register(fn Func) {
 	if fn == nil {
 		panic("publishdoor: Register requires a non-nil dispatcher")
 	}
-	registered.Store(&fn)
+	if !registered.CompareAndSwap(nil, &fn) {
+		panic("publishdoor: byte publish dispatcher already registered")
+	}
 }
 
 // Swap replaces the dispatcher and returns the previous one, for a test that

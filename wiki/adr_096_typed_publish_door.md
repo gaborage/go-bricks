@@ -80,8 +80,10 @@ No exported symbol lets a module hand `[]byte` to the broker:
   (`json.RawMessage` included), so what reaches the frame is always well-formed JSON
   of a type the module declared — the same thing the sealed door judges by tags.
   Publishing an untagged `T` in clear is the documented default, not a bypass.
-- `go:linkname` into `messaging` is refused by the Go toolchain's default
-  `-checklinkname` and is outside any supported surface.
+- A `go:linkname` pull of `(*AMQPClientImpl).publishBytes` needs `unsafe`, a
+  layout-matching copy of the unexported `publishOptions`, and survives no
+  refactor; it is outside any supported surface and is not a door this ADR
+  reasons about.
 
 `streams.Publisher.Publish(*PublishMessage)` is NOT touched by this decision; the
 streams lane keeps its handle-at-declaration shape (which this ADR mirrors) and its
@@ -128,6 +130,9 @@ raw door until a streams-lane ADR decides otherwise.
   the typed door publishes JSON documents, and the property this break exists for — a
   seal-tagged type never travels in plaintext — is judged by tags, not by `T`'s shape;
   a shape guard would be partial (it cannot see a custom `Marshaler`) and is not needed.
+  The sealed door (ADR-097) judges the STATIC type of `T`: a hand-marshaled sealed struct
+  carried as `json.RawMessage` has no tags and therefore travels in clear — that door
+  should refuse or warn on `T = json.RawMessage`/`[]byte`/`any` when it lands.
 - ADR-033's bounded-retry semantics are unchanged and now described on
   `Publisher[T].Publish`; ADR-087 stamping is unchanged (the handle publishes through
   the stamped client).

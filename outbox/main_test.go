@@ -13,8 +13,8 @@ import (
 // unexported inside messaging (ADR-096), so this swap is how an outbox test
 // observes what the relay handed to the broker.
 func TestMain(m *testing.M) {
-	framework := publishdoor.Swap(nil)
-	publishdoor.Register(func(ctx context.Context, client any, opts publishdoor.Options, data []byte) error {
+	var framework publishdoor.Func
+	framework = publishdoor.Swap(func(ctx context.Context, client any, opts publishdoor.Options, data []byte) error {
 		if f, ok := client.(*fakeAMQP); ok {
 			return f.publishBytes(ctx, opts, data)
 		}
