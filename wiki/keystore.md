@@ -267,6 +267,11 @@ the real store so tests exercise the same ownership contract.
   password-load errors elide the source.
 - The minimum-length floor is mandatory (32 bytes) and can only be raised; a
   secret that cannot meet it does not belong in the keystore.
+- Never reuse a kid across HTTP jose and payload sealing (#1306). The store
+  records the role of every startup resolution (`jose-route` from a route
+  policy, `seal` from a sealed publisher or consumer) and the app logs one
+  WARN per entry seen under both — entry name and roles only, never material.
+  Warn only: there is no enforced prefix partition.
 - Derivation (HKDF expansion, etc.) is left to the consumer — the keystore
   intentionally exposes raw material rather than a built-in derive helper
   (smallest viable surface; can layer on later if demand appears).

@@ -89,6 +89,9 @@ type store struct {
 	keys map[string]*keyEntry
 	// families indexes the generation entries by Logical kid (generation.go).
 	families map[string][]Generation
+	// roleLog remembers which framework feature resolved each entry at startup
+	// (roles.go); it is the one part of the store written after construction.
+	roleLog
 }
 
 // PublicKey returns the RSA public key for the given key pair name.

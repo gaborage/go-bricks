@@ -449,3 +449,20 @@ func TestIsSealTaggedAgreesWithScanType(t *testing.T) {
 		})
 	}
 }
+
+// TestNewSealerTagsTheActiveKidsAsSeal pins the producer half of the dual-role
+// check: startup tags exactly the two active concrete kids under "seal".
+func TestNewSealerTagsTheActiveKidsAsSeal(t *testing.T) {
+	store := producerStore(t)
+	before := len(store.Recorded())
+	_, err := sealruntime.Registered().NewSealer(spec(t), eventType, &sealruntime.Runtime{KeyStore: store})
+	require.NoError(t, err)
+	got := store.Recorded()[before:]
+	assert.ElementsMatch(t, [][2]string{{signFamily + "-v1", keystore.RoleTagSeal}, {encFamily + "-v1", keystore.RoleTagSeal}}, got)
+
+	// A refused producer tags nothing.
+	before = len(store.Recorded())
+	_, err = sealruntime.Registered().NewSealer(spec(t), "", &sealruntime.Runtime{KeyStore: store})
+	require.Error(t, err)
+	assert.Len(t, store.Recorded(), before)
+}

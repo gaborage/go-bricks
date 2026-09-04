@@ -79,6 +79,8 @@ func (codec) NewSealer(sp sealruntime.Spec, eventType string, rt *sealruntime.Ru
 	if err := template.Validate(s.inner); err != nil {
 		return nil, err
 	}
+	// Only a producer that will start tags its kids for the dual-role check.
+	recordSealRole(rt.KeyStore, signGen.Kid(), encGen.Kid())
 	return &sealer{spec: s.inner, template: template}, nil
 }
 

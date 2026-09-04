@@ -55,7 +55,27 @@ func (codec) NewOpener(sp sealruntime.Spec, eventType string, rt *sealruntime.Ru
 	if err := provisionedWithRole(families, keys, s.inner.EncryptLogical, keystore.RolePrivate, "encrypt"); err != nil {
 		return nil, err
 	}
+	// Every generation above resolved in its role, so the tags below name only entries
+	// this consumer can actually open with.
+	for _, logical := range []string{s.inner.SignLogical, s.inner.EncryptLogical} {
+		for _, gen := range families.Generations(logical) {
+			recordSealRole(rt.KeyStore, gen.Kid())
+		}
+	}
 	return &opener{spec: s.inner, eventType: eventType, keys: keys}, nil
+}
+
+// recordSealRole tags the entries sealing startup resolved, so the app can warn when
+// one of them also serves an HTTP jose route (#1306; keystore.RoleTagSeal). A store
+// without a role log records nothing.
+func recordSealRole(ks sealruntime.KeyStore, kids ...string) {
+	rec, ok := ks.(keystore.RoleRecorder)
+	if !ok {
+		return
+	}
+	for _, kid := range kids {
+		rec.RecordResolution(kid, keystore.RoleTagSeal)
+	}
 }
 
 // provisionedWithRole checks a family's provisioned generations for the consumer's
