@@ -195,7 +195,7 @@ type Result struct {
 // the event, so the level, the lane's own fields and the message text stay with
 // the lane.
 func AppendOutcome(e logger.LogEvent, res *Result) logger.LogEvent {
-	e = e.Str("correlation_id", res.TraceID).
+	e = e.Str(logger.FieldCorrelationID, res.TraceID).
 		Dur("processing_time", res.Duration)
 	if res.Outcome == Panicked {
 		// SECURITY: the panic value's TYPE only (ADR-081) — and Result carries only
