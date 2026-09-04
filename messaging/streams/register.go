@@ -35,7 +35,7 @@ func (h declHandle) Stats() streamruntime.DeclStats {
 	return streamruntime.DeclStats{Streams: s.Streams, Consumers: s.Consumers, Publishers: s.Publishers}
 }
 
-func (streamRuntime) CollectDeclarations(modules []streamruntime.Module, log logger.Logger) (streamruntime.Declarations, error) {
+func (streamRuntime) CollectDeclarations(modules []streamruntime.ModuleNamer, log logger.Logger) (streamruntime.Declarations, error) {
 	decls := NewDeclarations()
 	for _, module := range modules {
 		if sd, ok := module.(StreamDeclarer); ok {
