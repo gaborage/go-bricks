@@ -3403,7 +3403,11 @@ gate keeps `messaging` free of go-jose, it does not shrink your binary. Deep div
 
 ```go
 import (
+    "context"
+    "errors"
+
     "github.com/gaborage/go-bricks/app"
+    dbtypes "github.com/gaborage/go-bricks/database/types"
     "github.com/gaborage/go-bricks/messaging"
     _ "github.com/gaborage/go-bricks/messaging/sealed" // import gate: registers the codec
 )
@@ -3425,6 +3429,16 @@ type Module struct {
     authorized *messaging.Publisher[PaymentAuthorized]
     inbox      app.InboxProcessor // deps.Inbox, captured in Init
     svc        *PaymentService
+}
+
+// Init captures the inbox: a sealed consumer dedups through it, so a deployment without
+// the inbox module fails here at startup instead of panicking on the first delivery.
+func (m *Module) Init(deps *app.ModuleDeps) error {
+    if deps.Inbox == nil {
+        return errors.New("payments: register inbox.NewModule() before this module")
+    }
+    m.inbox = deps.Inbox
+    return nil
 }
 
 func (m *Module) DeclareMessaging(decls *messaging.Declarations) {

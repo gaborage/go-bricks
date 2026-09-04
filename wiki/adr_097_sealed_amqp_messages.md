@@ -97,18 +97,24 @@ returns the grammar-validated `x-outbox-event-id` or an error when absent or mal
 one mapping: `messaging.SealedEnvelope` is a plain data struct in `messaging` (strings and
 a time, no jose import — the import gate holds); `jose/sealed.Open` returns its own
 `sealed.Envelope`; `messaging/sealed` maps one to the other. Streams typed declarations
-hard-reject seal-tagged `T` in v1; `outbox.Publish` refuses a seal-tagged struct payload
-(use `Publisher[T].Seal` bytes), and `Seal` on a plain `T` is the typed error
+hard-reject seal-tagged `T` in v1. The outbox flow has one shape: `bytes, err :=
+h.Seal(ctx, evt)` then `deps.Outbox.Publish(ctx, tx, event)` with those bytes as the
+payload; the record persists that single seal result and the relay republishes it
+byte-identical on every drive, so the `jti` never changes across redeliveries — calling
+`Seal` again is a new seal and a new `jti`. `outbox.Publish` refuses a seal-tagged STRUCT
+payload with `outbox.ErrSealedPayloadNeedsBytes` so plaintext can never be persisted, and
+`Seal` on a plain `T` is the typed error
 `messaging.ErrNotSealTagged` — no rename. `messaging.PayloadStageOpen` (payloaderr stage `open`, sentinel
 `messaging.ErrPayloadOpenRefused`, cause `sealruntime.OpenRefusedError`) joins the
 `PayloadError` taxonomy; `outbox.Publish` names its refusal `outbox.ErrSealedPayloadNeedsBytes`
 and `messaging.IsSealTagged` / `messaging.SealTagName` are the shared predicate.
 Logger sensitive-field vocabularies stay independent (docs cross-reference only).
 
-The publish door has no escape hatch: the exported signature is
+The DIRECT broker publish door has no escape hatch: the exported signature is
 `Publish(ctx, client messaging.AMQPClient, evt T) error`; the bytes door is an unexported
 interface inside `messaging` that `Publish` asserts, and no exported symbol lets a module
-hand bytes to the broker. Tests publish through the typed capture double the framework
+hand bytes to the broker. The outbox handoff above is the one sanctioned bytes path, and
+it accepts only what `Seal` produced. Tests publish through the typed capture double the framework
 ships, never a byte-capable mock (ADR-096).
 
 **Default exchange.** An empty `Exchange` on a publisher declaration denotes AMQP's
@@ -160,7 +166,8 @@ the `a_b`/`a-b` ambiguity the reachability rule forbids. Selector keys are const
 
 The seal layer judges the bytes, never the delivery history: no replay, duplicate or
 freshness rejection; `inbox.ProcessOnce` (or the consumer's own idempotency) is the
-sole duplicate mechanism. Slots, all mandatory and signed: `jti` — a fresh UUID minted
+sole duplicate mechanism. Slots, all signed; `jti`, `iat` and `etyp` always present, `tid`
+present exactly when the producer carried a tenant stamp: `jti` — a fresh UUID minted
 by the sealer on both doors, byte-stable across every redelivery; `etyp` — the
 publisher declaration's `EventType`, enforced equal to the consumer's (closes
 cross-type reroute); `iat` — informational, never compared to a clock; `tid` — by
@@ -169,12 +176,15 @@ family, never the concrete Generation, so a rotation does not re-open the replay
 Every header-sourced id (`x-outbox-event-id`) is validated against
 `^[A-Za-z0-9_-]{1,128}$` before the ledger, for unsealed consumers too — `:` is outside
 that grammar, so a header can never mint a sealed key (closes the shared-ledger
-suppression attack). The ledger's `!inserted` short-circuit gains a dedup-hit counter and
+suppression attack). The grammar governs header-SOURCED ids only: the sealed key is
+framework-minted, carries its `:` on purpose, and `inbox.ProcessOnce` admits it under the
+delivery context the sealed door marks (`messaging.IsSealedDelivery`), so the two key
+spaces never collide and neither path can spell the other's key. The ledger's `!inserted` short-circuit gains a dedup-hit counter and
 log — the only observable of a replay campaign.
 
 ### 5. Opener rule order (G5, G7, #1308)
 
-First failing rule wins, one code each — the table is in [sealing.md](sealing.md#failure-codes)
+First failing rule wins, one code each — the table is in [sealing.md](sealing.md#opening-rule-order)
 and the constants in `jose/sealed/open.go`: (1) compact JWS with the v1 `typ` else
 `NOT_SEALED`; (2) `alg` allowlist, `cty` required, `crit` forbidden, unknown params
 ignored (G5); (3) kid family pin; (4) kid resolves to a PUBLIC key else
@@ -186,10 +196,12 @@ carrying presence and length only (G7); (7) `etyp`; (8) `tid`; (9) `sp` manifest
 the inner layer reuses the outer codes with a `layer: jwe` detail, and an unparseable
 payload document or a non-string Subject member is `SEAL_PAYLOAD_UNDECODABLE`; (11) splice
 and decode; (12) envelope. Rules 1–4 run on the peeked, still unauthenticated protected
-header. `tid`: shared tenancy REQUIRES a signed `tid` (absent is poison) unless the
-consumer declares `TenantOptional`, then absent accepted and present equality-checked
-against the carrier (G10); per-tenant tenancy — present-and-different from the context
-tenant is poison, absent accepted; `multitenant.enabled: false` — no rule, value
+header. `tid` truth table (rule 8): shared tenancy — a signed `tid` is REQUIRED, absent is
+poison, present is equality-checked against the carrier's tenant; shared tenancy with the
+consumer declaring `TenantOptional` — absent is accepted, present is equality-checked when
+the carrier carries a tenant and surfaced uncompared on `Meta.Sealed().TenantID` when the
+delivery is unstamped (G10, #1359); per-tenant tenancy — present-and-different from the
+context tenant is poison, absent accepted; `multitenant.enabled: false` — no rule, value
 surfaced (G2).
 
 ### 6. Greenfield premise (S1)

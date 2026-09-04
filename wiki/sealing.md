@@ -21,8 +21,8 @@ declaration with `messaging.ErrSealingNotLinked` ("import messaging/sealed"),
 `ErrNotConfigured` or `ErrKeyStoreMissing`. `messaging.IsSealTagged` (tag key
 `messaging.SealTagName`) is the one predicate every door asks; the lane guards use it to
 refuse a seal-tagged `T` on streams and on the outbox struct door. `Publisher[T].Publish`
-seals when `T` is seal-tagged and `Publisher[T].Seal(ctx, evt)` returns the same bytes for
-the outbox lane; the consumer side opens through the codec's `messaging.SealOpenerProvider`
+seals when `T` is seal-tagged; `Publisher[T].Seal(ctx, evt)` runs the same sealer once and
+returns the body `Publish` would have put on the wire, for the outbox lane; the consumer side opens through the codec's `messaging.SealOpenerProvider`
 (#1359). Metrics:
 `seal.operation.duration` with `seal.operation = seal|open`, and
 `seal.open.failures.total` with `seal.error.code`.
@@ -64,7 +64,9 @@ seals as a JWE of `null`).
 | Outer JWS | `typ: vnd.gobricks.sealed.v1+json` · `cty: application/json` · `alg` (PS256 produced; RS256 accepted) · `kid` = concrete sign Generation · `sp` · `jti` · `iat` · `etyp` · `tid` | `typ` is the only sealed-message marker; there is no `x-sealed` AMQP header. `sp` is the signed sealed-paths manifest — one path in v1, constant per event type. |
 | Inner JWE | `alg: RSA-OAEP-256` · `enc: A256GCM` · `kid` = concrete encrypt Generation · `cty: application/json` · `iss` = the outer `kid` | `iss == kid` is the authorship binding that kills strip-and-re-sign; no stock JOSE library checks it, so the contract carries it as a MUST with a negative vector (`jose/sealed/testdata/vectors.json`). |
 
-Slots (all signed, all mandatory in v1):
+Slots (all signed; `jti`, `iat` and `etyp` always present, `tid` present exactly when the
+producer carried a tenant stamp — its presence rule is the tenancy rule under
+[`tid` by tenancy](#tid-by-tenancy)):
 
 | Slot | Written by the sealer as | Judged by the opener as |
 | --- | --- | --- |
@@ -102,8 +104,12 @@ type PaymentAuthorized struct {
 - A seal-tagged `T` requires the `WithMeta` consume door (`DeclareTypedConsumerWithMeta`) so
   the Dedup key is reachable; the meta-less door refuses it at startup (#1359). Streams typed
   declarations refuse a seal-tagged `T` in v1 (#1360). `outbox.Publish` refuses a seal-tagged struct
-  payload with `outbox.ErrSealedPayloadNeedsBytes` (#1360) — hand it `Publisher[T].Seal`
-  bytes instead; `Seal` on a plain `T` is `messaging.ErrNotSealTagged` (#1358).
+  payload with `outbox.ErrSealedPayloadNeedsBytes` (#1360). The outbox flow is
+  `bytes, err := h.Seal(ctx, evt)` inside the business transaction, then
+  `deps.Outbox.Publish(ctx, tx, event)` with those bytes as the payload: the record keeps
+  that one seal result and the relay republishes it byte-identical on every drive, so the
+  `jti` is stable across redeliveries; a second `Seal` call is a new seal and a new `jti`.
+  `Seal` on a plain `T` is `messaging.ErrNotSealTagged` (#1358).
 
 ## Keys
 
@@ -226,7 +232,7 @@ signature-invalid spike from JSON garbage; the `*sealruntime.OpenRefusedError` w
 
 | Tenancy | Rule |
 | --- | --- |
-| `messaging.tenancy: shared` | a signed `tid` is REQUIRED (absent is poison) unless the consumer declares `TenantOptional`, in which case absent is accepted and present is equality-checked against the carrier (G10) |
+| `messaging.tenancy: shared` | a signed `tid` is REQUIRED (absent is poison) and equality-checked against the carrier's tenant; a consumer declaring `TenantOptional` accepts absent, and a present `tid` is equality-checked whenever the carrier carries a tenant (G10) |
 | shared, `TenantOptional`, delivery unstamped, signed `tid` present | accepted; the `tid` is surfaced on `Meta.Sealed().TenantID` and not compared (an optional consumer accepts unstamped deliveries by declaration; refuse in the handler on `env.TenantID` if that matters) |
 | per-tenant | present-and-different from the context tenant is poison; absent is accepted |
 | `multitenant.enabled: false` | no rule; the value is surfaced on the envelope (G2) |
