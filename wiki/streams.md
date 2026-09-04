@@ -162,6 +162,11 @@ Four entry points cover the lane's two axes:
 | `func(ctx, T) error` | `DeclareTypedConsumer` | `DeclareTypedSuperStreamConsumer` |
 | `func(ctx, T, *streams.Message) error` | `DeclareTypedConsumerWithMeta` | `DeclareTypedSuperStreamConsumerWithMeta` |
 
+All four doors **refuse a seal-tagged `T` at declaration** (a panic naming the entry
+point): payload sealing is classic-lane only in v1, and a stream consumer that decoded a
+sealed body as plaintext would poison every delivery silently. Consume sealed events through
+the AMQP typed consumer ([messaging.md](messaging.md#typed-consumers)).
+
 The `WithMeta` shape is how a typed consumer still reads `msg.Offset`,
 `msg.Stream` (the *partition*, on a super stream) and `msg.Properties`. There is
 deliberately **no exported `NewTypedHandler`** on this lane, unlike the AMQP one:

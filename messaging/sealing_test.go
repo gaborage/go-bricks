@@ -101,7 +101,7 @@ type namedEmbedEvent struct {
 	promotedSeal `json:"inner"`
 }
 
-func TestHasSealTag(t *testing.T) {
+func TestIsSealTagged(t *testing.T) {
 	cases := map[string]struct {
 		t    reflect.Type
 		want bool
@@ -118,11 +118,18 @@ func TestHasSealTag(t *testing.T) {
 			_ struct{} `jose:"sign=a,encrypt=b"`
 		}{}), false},
 		"promoted_embed": {reflect.TypeOf(promotedSealEvent{}), true},
-		"tagged_embed":   {reflect.TypeOf(namedEmbedEvent{}), false},
-		"nested_field":   {reflect.TypeOf(struct{ Inner promotedSeal }{}), false},
+		// Misplaced tags are refused by DeclareTypedPublisher, so the probe says
+		// yes for them too: every lane guard fails closed on the same set.
+		"tagged_embed": {reflect.TypeOf(namedEmbedEvent{}), true},
+		"nested_field": {reflect.TypeOf(struct{ Inner promotedSeal }{}), true},
 	}
 	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) { assert.Equal(t, tc.want, hasSealTag(tc.t)) })
+		t.Run(name, func(t *testing.T) {
+			// Asked twice: the second answer comes from the per-type cache and
+			// must equal the first.
+			assert.Equal(t, tc.want, IsSealTagged(tc.t))
+			assert.Equal(t, tc.want, IsSealTagged(tc.t))
+		})
 	}
 }
 
@@ -201,6 +208,17 @@ func TestDeclareTypedPublisherRefusesANestedSealTag(t *testing.T) {
 	client := &capturingClient{}
 	assert.Equal(t, err, h.Publish(context.Background(), client, nestedSubject{}), "fail closed: no plaintext")
 	assert.Empty(t, client.data)
+}
+
+// selfEmbed embeds itself through a pointer: the cycle guard must terminate the
+// walk and still answer false for a type with no seal tag anywhere on the path.
+type selfEmbed struct {
+	*selfEmbed
+	ID string `json:"id"`
+}
+
+func TestIsSealTaggedTerminatesOnEmbeddingCycle(t *testing.T) {
+	assert.False(t, IsSealTagged(reflect.TypeOf(selfEmbed{})))
 }
 
 func TestDeclareTypedPublisherPlainTypeNeverTouchesTheCodec(t *testing.T) {

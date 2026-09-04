@@ -3,7 +3,9 @@ package streams
 import (
 	"context"
 	"fmt"
+	"reflect"
 
+	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/internal/delivery"
 	"github.com/gaborage/go-bricks/messaging/internal/payloaderr"
 )
@@ -102,6 +104,20 @@ func checkTypedConsumerArgs[O any](decls *Declarations, opts *O, handlerOf func(
 	}
 }
 
+// rejectSealedType is the v1 lane guard: sealing is classic-lane only, so a
+// seal-tagged T on a stream declaration is refused at declaration time, loudly —
+// the alternative is a consumer that silently reads sealed bodies as plaintext
+// and poisons every delivery. Lifting it is the post-classic-lane extension.
+func rejectSealedType[T any](entry string) {
+	if t := reflect.TypeFor[T](); messaging.IsSealTagged(t) {
+		panic(fmt.Sprintf(
+			"streams: %s refuses %v: it carries `seal` tags, and payload sealing is not supported on the stream lane in v1\n"+
+				"  Consume sealed events through the classic AMQP typed consumer",
+			entry, t,
+		))
+	}
+}
+
 // withoutMeta adapts a metadata-free fn to the WithMeta shape the declaration
 // helpers share. It preserves NIL deliberately: wrapping a nil fn would produce a
 // non-nil closure that sails past the declaration's wiring guard and nil-panics
@@ -146,6 +162,7 @@ func DeclareTypedConsumer[T any](decls *Declarations, opts *ConsumerOptions, fn 
 func DeclareTypedConsumerWithMeta[T any](decls *Declarations, opts *ConsumerOptions, fn func(context.Context, T, *Message) error) {
 	const entry = "DeclareTypedConsumerWithMeta"
 	checkTypedConsumerArgs(decls, opts, (*ConsumerOptions).handlerSlot, fn == nil, entry, "ConsumerOptions")
+	rejectSealedType[T](entry)
 
 	typed := newTypedConsumer(opts.Name, fn)
 	opts.Handler = typed.handle
@@ -166,6 +183,7 @@ func DeclareTypedSuperStreamConsumerWithMeta[T any](decls *Declarations, opts *S
 	const entry = "DeclareTypedSuperStreamConsumerWithMeta"
 	checkTypedConsumerArgs(decls, opts, (*SuperStreamConsumerOptions).handlerSlot,
 		fn == nil, entry, "SuperStreamConsumerOptions")
+	rejectSealedType[T](entry)
 
 	typed := newTypedConsumer(opts.Name, fn)
 	opts.Handler = typed.handle
