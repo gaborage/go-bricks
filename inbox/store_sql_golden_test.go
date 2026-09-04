@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,59 +20,12 @@ import (
 // change there is a deliberate one the commit body names, never a side effect.
 var updateGoldens = flag.Bool("update", false, "regenerate the store SQL goldens")
 
-func goldenStatement(kind, sql string, args []any) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s: %s\n", kind, sql)
-	for i, a := range args {
-		fmt.Fprintf(&b, "  arg[%d] %T = %v\n", i, a, goldenArg(a))
-	}
-	return b.String()
-}
-
-// fixedAt is the fixture clock every deterministic argument carries; it prints
-// verbatim so a wrong binding fails the golden. A value that is not the fixture
-// — a store's own time.Now() — prints as a marker.
-var fixedAt = time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
-
-func goldenArg(a any) any {
-	switch v := a.(type) {
-	case []byte:
-		return string(v)
-	case time.Time:
-		if v.Equal(fixedAt) {
-			return v.UTC().Format(time.RFC3339)
-		}
-		return "<time>"
-	case *time.Time:
-		if v != nil && v.Equal(fixedAt) {
-			return v.UTC().Format(time.RFC3339)
-		}
-		return "<time>"
-	default:
-		return v
-	}
-}
-
-func renderLogs(db *dbtesting.TestDB, tx *dbtesting.TestTx) string {
-	var body strings.Builder
-	body.WriteString("# pool queries\n")
-	for _, q := range db.QueryLog() {
-		body.WriteString(goldenStatement("QUERY", q.SQL, q.Args))
-	}
-	body.WriteString("# pool execs\n")
-	for _, e := range db.ExecLog() {
-		body.WriteString(goldenStatement("EXEC", e.SQL, e.Args))
-	}
-	body.WriteString("# tx queries\n")
-	for _, q := range tx.QueryLog() {
-		body.WriteString(goldenStatement("QUERY", q.SQL, q.Args))
-	}
-	body.WriteString("# tx execs\n")
-	for _, e := range tx.ExecLog() {
-		body.WriteString(goldenStatement("EXEC", e.SQL, e.Args))
-	}
-	return body.String()
-}
+// golden renders statements the way testdata/sql pins them; fixedAt is the
+// fixture clock every deterministic argument carries.
+var (
+	fixedAt = time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	golden  = dbtesting.SQLGolden{FixedClock: fixedAt}
+)
 
 // permissiveDB answers every statement: empty rows for queries, one affected
 // row for execs, on the pool and on one transaction.
@@ -93,15 +45,7 @@ func permissiveDB(vendor string) (*dbtesting.TestDB, *dbtesting.TestTx) {
 
 func compareGolden(t *testing.T, name, got string) {
 	t.Helper()
-	path := filepath.Join("testdata", "sql", name+".golden")
-	if *updateGoldens {
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-		require.NoError(t, os.WriteFile(path, []byte(got), 0o644))
-		return
-	}
-	want, err := os.ReadFile(path)
-	require.NoError(t, err, "golden missing — run go test ./inbox -run 'TestStoreSQLGolden|TestHoldStoreSQLGolden' -update")
-	require.Equal(t, string(want), got, "store SQL drifted from testdata/sql/%s; regenerate with -update only for a deliberate change named in the commit body", filepath.Base(path))
+	dbtesting.Compare(t, filepath.Join("testdata", "sql", name+".golden"), got, *updateGoldens)
 }
 
 // TestStoreSQLGolden pins the inbox ledger store's SQL per vendor.
@@ -135,7 +79,7 @@ func TestStoreSQLGolden(t *testing.T) {
 				return err
 			})
 			step("DeleteProcessed", func() error { _, err := store.DeleteProcessed(ctx, db, fixedAt); return err })
-			compareGolden(t, "inbox_"+tc.vendor, out.String()+renderLogs(db, tx))
+			compareGolden(t, "inbox_"+tc.vendor, out.String()+golden.Render(db, tx))
 		})
 	}
 }
@@ -156,8 +100,10 @@ func TestHoldStoreSQLGolden(t *testing.T) {
 			require.NoError(t, err)
 			ctx := context.Background()
 			db, tx := permissiveDB(tc.vendor)
-			row := &HoldRow{Consumer: "orders", Stream: "orders-s", Offset: 7, TenantID: "acme",
-				Data: []byte(`{"id":1}`), Properties: []byte(`{"k":"v"}`), HeldAt: fixedAt}
+			row := &HoldRow{
+				Consumer: "orders", Stream: "orders-s", Offset: 7, TenantID: "acme",
+				Data: []byte(`{"id":1}`), Properties: []byte(`{"k":"v"}`), HeldAt: fixedAt,
+			}
 			var out strings.Builder
 			step := func(name string, fn func() error) {
 				t.Helper()
@@ -185,7 +131,7 @@ func TestHoldStoreSQLGolden(t *testing.T) {
 			step("ReleaseLease", func() error { return store.ReleaseLease(ctx, db, "orders", "acme", "owner-1") })
 			step("Release", func() error { _, err := store.Release(ctx, db, "orders", "acme", "owner-1"); return err })
 			step("Stats", func() error { _, err := store.Stats(ctx, db, "orders"); return err })
-			compareGolden(t, "hold_"+tc.vendor, out.String()+renderLogs(db, tx))
+			compareGolden(t, "hold_"+tc.vendor, out.String()+golden.Render(db, tx))
 		})
 	}
 }

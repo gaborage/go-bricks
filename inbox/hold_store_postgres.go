@@ -7,7 +7,6 @@ import (
 
 	"github.com/gaborage/go-bricks/database"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
-	"github.com/gaborage/go-bricks/internal/ledgererr"
 )
 
 const (
@@ -50,9 +49,9 @@ type postgresHoldStore struct {
 	table       string
 	tenantTable string
 	qb          *database.QueryBuilder
-	// holdQueries carries every statement the query builder renders identically on
-	// both vendors. What stays in this file is the SQL the builder cannot express,
-	// and the dialect those statements answer in.
+	// holdQueries carries every statement the query builder renders for both
+	// vendors; this file supplies the vendor's clock spelling, its DDL, and the
+	// one statement that stays raw by design.
 	holdQueries
 }
 
@@ -68,12 +67,13 @@ func NewPostgresHoldStore(tableName string) (HoldStore, error) {
 		tenantTable: tableName + holdTenantTableSuffix,
 		qb:          qb,
 		holdQueries: holdQueries{
-			qb:          qb,
-			vendor:      "postgres",
-			table:       tableName,
-			tenantTable: tableName + holdTenantTableSuffix,
-			now:         "NOW()",
-			noError:     "COALESCE(last_error, '')",
+			qb:             qb,
+			vendor:         "postgres",
+			table:          tableName,
+			tenantTable:    tableName + holdTenantTableSuffix,
+			now:            "NOW()",
+			secondsFromNow: "NOW() + (? * INTERVAL '1 second')",
+			noError:        "COALESCE(last_error, '')",
 		},
 	}, nil
 }
@@ -138,50 +138,25 @@ func (s *postgresHoldStore) Park(ctx context.Context, tx dbtypes.Tx, row *HoldRo
 // lease_until comparison is the database's own clock, so replicas need not agree
 // on the time, only on the row.
 func (s *postgresHoldStore) AcquireLease(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string, lease time.Duration) (bool, error) {
-	// SECURITY: Manual SQL review completed - the only interpolated identifier is
-	// the tenant table from the constructor-validated config; every value (owner,
-	// lease seconds, consumer, tenant) is bound. Raw because the SET side assigns
-	// an EXPRESSION over the database clock, which the builder's Set carries only
-	// as a bound value — see the migration note in the lane report.
-	query := fmt.Sprintf(
-		`UPDATE %s SET lease_owner = $1, lease_until = NOW() + ($2 * INTERVAL '1 second')
-		 WHERE consumer = $3 AND tenant_id = $4
-		   AND (lease_until IS NULL OR lease_until < NOW() OR lease_owner = $1)`,
-		s.tenantTable,
-	)
-	return affectedOne(ctx, db, "acquire lease", query, owner, lease.Seconds(), consumer, tenant)
+	return execAffectedOne(ctx, db, "acquire lease", s.acquireLease(consumer, tenant, owner, lease))
 }
 
 func (s *postgresHoldStore) Defer(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string, backoff time.Duration, lastErr string) (bool, error) {
-	// SECURITY: Manual SQL review completed - the only interpolated identifier is
-	// the tenant table from the constructor-validated config; the backoff, the
-	// bounded error text, the consumer, the tenant and the owner are all bound.
-	// Raw because the SET side both INCREMENTS a column and assigns an expression
-	// over the database clock, neither of which the builder's Set can carry.
-	query := fmt.Sprintf(
-		`UPDATE %s SET attempts = attempts + 1,
-		        next_attempt_at = NOW() + ($1 * INTERVAL '1 second'),
-		        last_error = $2, lease_owner = NULL, lease_until = NULL
-		 WHERE consumer = $3 AND tenant_id = $4 AND lease_owner = $5 AND lease_until > NOW()`,
-		s.tenantTable,
-	)
-	return affectedOne(ctx, db, "defer tenant", query, backoff.Seconds(), ledgererr.Bound(lastErr), consumer, tenant, owner)
+	return execAffectedOne(ctx, db, "defer tenant", s.deferTenant(consumer, tenant, owner, backoff, lastErr))
 }
 
 func (s *postgresHoldStore) Stats(ctx context.Context, db dbtypes.Interface, consumer string) (HoldStats, error) {
-	// SECURITY: Manual SQL review completed - both table names come from the
-	// constructor-validated config and the consumer is bound three times. Raw
-	// because this is three correlated aggregate subqueries in one projection,
-	// which the builder's Select cannot compose.
-	query := fmt.Sprintf(
-		`SELECT (SELECT COUNT(*) FROM %s WHERE consumer = $1),
-		        (SELECT COUNT(*) FROM %s WHERE consumer = $1),
-		        (SELECT MIN(held_since) FROM %s WHERE consumer = $1)`,
-		s.tenantTable, s.table, s.tenantTable,
-	)
-	return scanHoldStats(ctx, db, query, consumer)
+	query, args, err := s.stats(consumer).ToSQL()
+	if err != nil {
+		return HoldStats{}, fmt.Errorf("inbox hold: build stats failed: %w", err)
+	}
+	return scanHoldStats(ctx, db, query, args...)
 }
 
+// CreateTable runs the DDL, which stays hand-written: the builder has no DDL door.
+//
+// SECURITY: Manual SQL review completed - static DDL constants; only the constructor-validated
+// hold table name (validateHoldTableName) and its derived tenant table are interpolated
 func (s *postgresHoldStore) CreateTable(ctx context.Context, db dbtypes.Interface) error {
 	statements := []string{
 		fmt.Sprintf(postgresCreateHoldTableSQL, s.table),

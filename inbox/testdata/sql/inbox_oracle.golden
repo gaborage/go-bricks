@@ -15,13 +15,13 @@ EXEC:
 CREATE INDEX idx_gobricks_inbox_processed ON gobricks_inbox (processed_at)
 EXEC: DELETE FROM gobricks_inbox WHERE processed_at < :1
   arg[0] time.Time = 2026-09-04T12:00:00Z
-# tx queries
-# tx execs
-EXEC: INSERT INTO gobricks_inbox (tenant_id, event_id, processed_at) VALUES (:1, :2, :3)
+# tx[0] queries
+# tx[0] execs
+EXEC: INSERT INTO gobricks_inbox (tenant_id,event_id,processed_at) VALUES (:1,:2,:3)
   arg[0] string = acme
   arg[1] string = evt-1
   arg[2] time.Time = 2026-09-04T12:00:00Z
-EXEC: INSERT INTO gobricks_inbox (tenant_id, event_id, processed_at) VALUES (:1, :2, :3)
+EXEC: INSERT INTO gobricks_inbox (tenant_id,event_id,processed_at) VALUES (:1,:2,:3)
   arg[0] string = __gobricks_default_tenant__
   arg[1] string = evt-2
   arg[2] time.Time = 2026-09-04T12:00:00Z

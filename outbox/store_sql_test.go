@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,44 +21,12 @@ import (
 // there is a deliberate one the commit body names, never a side effect.
 var updateGoldens = flag.Bool("update", false, "regenerate the store SQL goldens")
 
-// goldenStatement is one statement the store handed the database, rendered the
-// way the golden file records it: the SQL verbatim, then each argument with its
-// Go type so a placeholder-order change or a re-bound argument is visible.
-func goldenStatement(kind, sql string, args []any) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s: %s\n", kind, sql)
-	for i, a := range args {
-		fmt.Fprintf(&b, "  arg[%d] %T = %v\n", i, a, goldenArg(a))
-	}
-	return b.String()
-}
-
-// fixedAt is the fixture clock every deterministic argument carries; it prints
-// verbatim so a wrong binding fails the golden. The one non-deterministic
-// argument — MarkPublished's time.Now() — prints as a marker instead.
-var fixedAt = time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
-
-// goldenArg keeps the file stable and the fixture visible: byte slices print
-// as text, the fixture time prints as RFC3339, any other clock value prints as
-// <time> (the position and type are what a wall-clock argument pins).
-func goldenArg(a any) any {
-	switch v := a.(type) {
-	case []byte:
-		return string(v)
-	case time.Time:
-		if v.Equal(fixedAt) {
-			return v.UTC().Format(time.RFC3339)
-		}
-		return "<time>"
-	case *time.Time:
-		if v != nil && v.Equal(fixedAt) {
-			return v.UTC().Format(time.RFC3339)
-		}
-		return "<time>"
-	default:
-		return v
-	}
-}
+// golden renders statements the way testdata/sql pins them; fixedAt is the
+// fixture clock every deterministic argument carries.
+var (
+	fixedAt = time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	golden  = dbtesting.SQLGolden{FixedClock: fixedAt}
+)
 
 // permissiveDB answers every statement the store can issue, so a run records
 // the SQL of every method without a per-statement expectation: an empty row set
@@ -130,34 +97,7 @@ func captureStoreSQL(t *testing.T, vendor string, store Store) string {
 		return lead.Release(ctx)
 	})
 
-	// Statements are recorded per connection, in call order within each; the
-	// golden lists them grouped by the surface they went through.
-	var body strings.Builder
-	body.WriteString("# pool queries\n")
-	for _, q := range db.QueryLog() {
-		body.WriteString(goldenStatement("QUERY", q.SQL, q.Args))
-	}
-	body.WriteString("# pool execs\n")
-	for _, e := range db.ExecLog() {
-		body.WriteString(goldenStatement("EXEC", e.SQL, e.Args))
-	}
-	body.WriteString("# tx queries\n")
-	for _, q := range tx.QueryLog() {
-		body.WriteString(goldenStatement("QUERY", q.SQL, q.Args))
-	}
-	body.WriteString("# tx execs\n")
-	for _, e := range tx.ExecLog() {
-		body.WriteString(goldenStatement("EXEC", e.SQL, e.Args))
-	}
-	body.WriteString("# leader tx queries\n")
-	for _, q := range leaderTx.QueryLog() {
-		body.WriteString(goldenStatement("QUERY", q.SQL, q.Args))
-	}
-	body.WriteString("# leader tx execs\n")
-	for _, e := range leaderTx.ExecLog() {
-		body.WriteString(goldenStatement("EXEC", e.SQL, e.Args))
-	}
-	return out.String() + body.String()
+	return out.String() + golden.Render(db, tx, leaderTx)
 }
 
 // TestStoreSQLGolden pins the SQL every store emits per vendor. Run with
@@ -176,15 +116,7 @@ func TestStoreSQLGolden(t *testing.T) {
 			require.NoError(t, err)
 
 			got := captureStoreSQL(t, tc.vendor, store)
-			path := filepath.Join("testdata", "sql", "outbox_"+tc.vendor+".golden")
-			if *updateGoldens {
-				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-				require.NoError(t, os.WriteFile(path, []byte(got), 0o644))
-				return
-			}
-			want, err := os.ReadFile(path)
-			require.NoError(t, err, "golden missing — run go test ./outbox -run TestStoreSQLGolden -update")
-			require.Equal(t, string(want), got, "store SQL drifted from testdata/sql/%s; regenerate with -update only for a deliberate change named in the commit body", filepath.Base(path))
+			dbtesting.Compare(t, filepath.Join("testdata", "sql", "outbox_"+tc.vendor+".golden"), got, *updateGoldens)
 		})
 	}
 }

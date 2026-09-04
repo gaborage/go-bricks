@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gaborage/go-bricks/database"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
@@ -24,6 +25,7 @@ CREATE INDEX IF NOT EXISTS idx_%s_processed ON %s (processed_at)`
 // postgresStore implements Store for PostgreSQL using $1-style placeholders.
 type postgresStore struct {
 	tableName string
+	qb        *database.QueryBuilder
 }
 
 // NewPostgresStore creates a new PostgreSQL inbox store.
@@ -32,19 +34,23 @@ func NewPostgresStore(tableName string) (Store, error) {
 	if err := validateTableName(tableName); err != nil {
 		return nil, err
 	}
-	return &postgresStore{tableName: tableName}, nil
+	return &postgresStore{tableName: tableName, qb: database.NewQueryBuilder(dbtypes.PostgreSQL)}, nil
 }
 
 // MarkProcessed inserts the ledger row, using ON CONFLICT DO NOTHING so a
 // duplicate is detected via RowsAffected without raising an error (a 23505 would
 // otherwise poison the transaction on PostgreSQL).
 func (s *postgresStore) MarkProcessed(ctx context.Context, tx dbtypes.Tx, rec Record) (bool, error) {
-	query := fmt.Sprintf(
-		`INSERT INTO %s (tenant_id, event_id, processed_at) VALUES ($1, $2, $3)
-		 ON CONFLICT (tenant_id, event_id) DO NOTHING`,
-		s.tableName,
-	)
-	res, err := tx.Exec(ctx, query, rec.TenantID, rec.EventID, rec.ProcessedAt)
+	// No update columns: the builder renders ON CONFLICT (tenant_id, event_id)
+	// DO NOTHING, and RowsAffected tells a fresh row from a duplicate.
+	query, args, err := s.qb.BuildUpsert(s.tableName,
+		[]string{"tenant_id", "event_id"},
+		map[string]any{"tenant_id": rec.TenantID, "event_id": rec.EventID, "processed_at": rec.ProcessedAt},
+		nil)
+	if err != nil {
+		return false, fmt.Errorf("inbox postgres: build mark processed failed: %w", err)
+	}
+	res, err := tx.Exec(ctx, query, args...)
 	if err != nil {
 		return false, fmt.Errorf("inbox postgres: mark processed failed: %w", err)
 	}
@@ -56,19 +62,14 @@ func (s *postgresStore) MarkProcessed(ctx context.Context, tx dbtypes.Tx, rec Re
 }
 
 func (s *postgresStore) DeleteProcessed(ctx context.Context, db dbtypes.Interface, before time.Time) (int64, error) {
-	query := fmt.Sprintf(`DELETE FROM %s WHERE processed_at < $1`, s.tableName)
-
-	res, err := db.Exec(ctx, query, before)
-	if err != nil {
-		return 0, fmt.Errorf("inbox postgres: delete processed failed: %w", err)
-	}
-	count, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("inbox postgres: rows affected failed: %w", err)
-	}
-	return count, nil
+	return deleteProcessedBefore(ctx, db, s.qb, s.tableName, "inbox postgres: delete processed failed", before)
 }
 
+// CreateTable runs the DDL, which stays hand-written: the builder has no DDL
+// door and the statements interpolate no value.
+//
+// SECURITY: Manual SQL review completed - static DDL constants; only the constructor-validated
+// table name (validateTableName) is interpolated, twice for the index; no caller value
 func (s *postgresStore) CreateTable(ctx context.Context, db dbtypes.Interface) error {
 	if _, err := db.Exec(ctx, fmt.Sprintf(postgresCreateTableSQL, s.tableName)); err != nil {
 		return fmt.Errorf("inbox postgres: create table failed: %w", err)
