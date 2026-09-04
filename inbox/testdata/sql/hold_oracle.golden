@@ -1,0 +1,107 @@
+== CreateTable
+== Park
+== HeldTenants
+== ListTenants
+== DueTenants
+== AcquireLease
+== NextRows
+== DeleteRow
+== Defer
+== ReleaseLease
+== Release
+== Stats
+# pool queries
+QUERY: SELECT tenant_id FROM gobricks_inbox_hold_tenant WHERE consumer = :1
+  arg[0] string = orders
+QUERY: SELECT consumer, tenant_id, held_since, attempts, next_attempt_at, NVL(last_error, ' ') FROM gobricks_inbox_hold_tenant WHERE consumer = :1 ORDER BY held_since
+  arg[0] string = orders
+QUERY: SELECT consumer, tenant_id, held_since, attempts, next_attempt_at, NVL(last_error, ' ') FROM gobricks_inbox_hold_tenant WHERE (consumer = :1 AND next_attempt_at <= SYSTIMESTAMP AND (lease_until IS NULL OR lease_until < SYSTIMESTAMP)) ORDER BY held_since FETCH NEXT 10 ROWS ONLY
+  arg[0] string = orders
+QUERY: SELECT consumer, stream, stream_offset, tenant_id, data, properties, held_at FROM gobricks_inbox_hold WHERE (consumer = :1 AND tenant_id = :2) ORDER BY stream, stream_offset FETCH NEXT 5 ROWS ONLY
+  arg[0] string = orders
+  arg[1] string = acme
+QUERY: SELECT (SELECT COUNT(*) FROM gobricks_inbox_hold_tenant WHERE consumer = :1),
+		        (SELECT COUNT(*) FROM gobricks_inbox_hold WHERE consumer = :1),
+		        (SELECT MIN(held_since) FROM gobricks_inbox_hold_tenant WHERE consumer = :1)
+		 FROM dual
+  arg[0] string = orders
+# pool execs
+EXEC: 
+CREATE TABLE gobricks_inbox_hold (
+    consumer      VARCHAR2(255) NOT NULL,
+    stream        VARCHAR2(255) NOT NULL,
+    stream_offset NUMBER(19)    NOT NULL,
+    tenant_id     VARCHAR2(255) NOT NULL,
+    data          BLOB,
+    properties    BLOB,
+    held_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT pk_gobricks_inbox_hold PRIMARY KEY (consumer, stream, stream_offset)
+)
+EXEC: 
+CREATE TABLE gobricks_inbox_hold_tenant (
+    consumer        VARCHAR2(255) NOT NULL,
+    tenant_id       VARCHAR2(255) NOT NULL,
+    held_since      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    attempts        NUMBER(10)    DEFAULT 0 NOT NULL,
+    next_attempt_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    last_error      CLOB,
+    lease_owner     VARCHAR2(255),
+    lease_until     TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT pk_gobricks_inbox_hold_tenant PRIMARY KEY (consumer, tenant_id)
+)
+EXEC: 
+CREATE INDEX idx_gobricks_inbox_hold_tenant_order ON gobricks_inbox_hold (consumer, tenant_id, stream, stream_offset)
+EXEC: 
+CREATE INDEX idx_gobricks_inbox_hold_tenant_due ON gobricks_inbox_hold_tenant (consumer, next_attempt_at)
+EXEC: UPDATE gobricks_inbox_hold_tenant SET lease_owner = :1, lease_until = SYSTIMESTAMP + NUMTODSINTERVAL(:2, 'SECOND')
+		 WHERE consumer = :3 AND tenant_id = :4
+		   AND (lease_until IS NULL OR lease_until < SYSTIMESTAMP OR lease_owner = :1)
+  arg[0] string = owner-1
+  arg[1] float64 = 30
+  arg[2] string = orders
+  arg[3] string = acme
+EXEC: DELETE FROM gobricks_inbox_hold WHERE (consumer = :1 AND stream = :2 AND stream_offset = :3 AND EXISTS (SELECT 1 FROM gobricks_inbox_hold_tenant WHERE (consumer = :4 AND tenant_id = :5 AND lease_owner = :6 AND lease_until > SYSTIMESTAMP)))
+  arg[0] string = orders
+  arg[1] string = orders-s
+  arg[2] int64 = 7
+  arg[3] string = orders
+  arg[4] string = acme
+  arg[5] string = owner-1
+EXEC: UPDATE gobricks_inbox_hold_tenant SET attempts = attempts + 1,
+		        next_attempt_at = SYSTIMESTAMP + NUMTODSINTERVAL(:1, 'SECOND'),
+		        last_error = :2, lease_owner = NULL, lease_until = NULL
+		 WHERE consumer = :3 AND tenant_id = :4 AND lease_owner = :5 AND lease_until > SYSTIMESTAMP
+  arg[0] float64 = 45
+  arg[1] string = boom
+  arg[2] string = orders
+  arg[3] string = acme
+  arg[4] string = owner-1
+EXEC: UPDATE gobricks_inbox_hold_tenant SET lease_owner = :1, lease_until = :2 WHERE (consumer = :3 AND tenant_id = :4 AND lease_owner = :5)
+  arg[0] <nil> = <nil>
+  arg[1] <nil> = <nil>
+  arg[2] string = orders
+  arg[3] string = acme
+  arg[4] string = owner-1
+EXEC: DELETE FROM gobricks_inbox_hold_tenant WHERE (consumer = :1 AND tenant_id = :2 AND lease_owner = :3 AND lease_until > SYSTIMESTAMP AND NOT EXISTS (SELECT 1 FROM gobricks_inbox_hold WHERE (consumer = :4 AND tenant_id = :5)))
+  arg[0] string = orders
+  arg[1] string = acme
+  arg[2] string = owner-1
+  arg[3] string = orders
+  arg[4] string = acme
+# tx queries
+QUERY: SELECT tenant_id FROM gobricks_inbox_hold_tenant WHERE consumer = :1 AND tenant_id = :2 FOR UPDATE
+  arg[0] string = orders
+  arg[1] string = acme
+# tx execs
+EXEC: INSERT INTO gobricks_inbox_hold_tenant (consumer, tenant_id, held_since, attempts, next_attempt_at)
+		 VALUES (:1, :2, SYSTIMESTAMP, 0, SYSTIMESTAMP)
+  arg[0] string = orders
+  arg[1] string = acme
+EXEC: INSERT INTO gobricks_inbox_hold (consumer, stream, stream_offset, tenant_id, data, properties, held_at)
+		 VALUES (:1, :2, :3, :4, :5, :6, SYSTIMESTAMP)
+  arg[0] string = orders
+  arg[1] string = orders-s
+  arg[2] int64 = 7
+  arg[3] string = acme
+  arg[4] []uint8 = {"id":1}
+  arg[5] []uint8 = {"k":"v"}

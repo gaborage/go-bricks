@@ -1,0 +1,29 @@
+== CreateTable
+== MarkProcessed
+== MarkProcessed_single_tenant
+== DeleteProcessed
+# pool queries
+# pool execs
+EXEC: 
+CREATE TABLE IF NOT EXISTS gobricks_inbox (
+    tenant_id     VARCHAR(255) NOT NULL DEFAULT '',
+    event_id      VARCHAR(255) NOT NULL,
+    processed_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, event_id)
+)
+EXEC: 
+CREATE INDEX IF NOT EXISTS idx_gobricks_inbox_processed ON gobricks_inbox (processed_at)
+EXEC: DELETE FROM gobricks_inbox WHERE processed_at < $1
+  arg[0] time.Time = 2026-09-04T12:00:00Z
+# tx queries
+# tx execs
+EXEC: INSERT INTO gobricks_inbox (tenant_id, event_id, processed_at) VALUES ($1, $2, $3)
+		 ON CONFLICT (tenant_id, event_id) DO NOTHING
+  arg[0] string = acme
+  arg[1] string = evt-1
+  arg[2] time.Time = 2026-09-04T12:00:00Z
+EXEC: INSERT INTO gobricks_inbox (tenant_id, event_id, processed_at) VALUES ($1, $2, $3)
+		 ON CONFLICT (tenant_id, event_id) DO NOTHING
+  arg[0] string = 
+  arg[1] string = evt-2
+  arg[2] time.Time = 2026-09-04T12:00:00Z
