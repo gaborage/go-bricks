@@ -29,6 +29,10 @@ import (
 // Anything a vendor does the SAME way stays in the builder: a column LIST is
 // rendered element-wise everywhere, and `*` is a wildcard everywhere, so those
 // loops belong to the funnels rather than to two identical adapter methods.
+// A difference in statement SHAPE rather than spelling — Oracle's OFFSET/FETCH
+// pagination, MERGE for an upsert, `FROM dual` for a table-less SELECT — stays
+// inline in the builder behind a vendor test too: it is one clause the builder
+// owns, not a rendering every method would repeat.
 type vendorRenderer interface {
 	// QuoteColumn renders a single column reference for a SELECT/WHERE/SET
 	// position, preserving the caller's case verbatim.

@@ -48,7 +48,9 @@ func valuesByKeyOrder(m map[string]any, keys []string) []any {
 // emitted; the alias is judged first because a SET or VALUES cell projects
 // nothing. Any other value is returned untouched and stays parameterized.
 // The label names the column or one-based position in the deferred error.
-func valueCell(label string, value any) (any, error) {
+// args, when given, bind the expression's `?` placeholders (SetExpr's door);
+// Set/Values pass none.
+func valueCell(label string, value any, args ...any) (any, error) {
 	expr, ok := value.(dbtypes.RawExpression)
 	if !ok {
 		return value, nil
@@ -59,7 +61,7 @@ func valueCell(label string, value any) (any, error) {
 	if err := expr.Validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", label, err)
 	}
-	return squirrel.Expr(expr.SQL), nil
+	return squirrel.Expr(expr.SQL, args...), nil
 }
 
 // valueCells applies valueCell to every cell, copying the slice on the first
@@ -612,4 +614,20 @@ func resolveList(op string, v reflect.Value, values any) (normalized any, empty 
 		resolved[i] = element
 	}
 	return resolved, len(resolved) == 0, nil
+}
+
+// renderSubquery validates sub and renders it with question-mark placeholders,
+// so the OUTER statement's single final placeholder pass numbers the subquery's
+// and its own parameters consistently. Passing the SelectBuilder through
+// directly would let squirrel apply the vendor format ($1/:1) early and collide
+// with the outer renumbering (duplicate $1 on PostgreSQL, duplicate :1 on
+// Oracle). Another implementation (a mock) falls back to its own ToSQL.
+func renderSubquery(sub dbtypes.SelectQueryBuilder) (sql string, args []any, err error) {
+	if err := dbtypes.ValidateSubquery(sub); err != nil {
+		return "", nil, err
+	}
+	if sqb, ok := sub.(*SelectQueryBuilder); ok {
+		return sqb.buildSelectBuilder().PlaceholderFormat(squirrel.Question).ToSql()
+	}
+	return sub.ToSQL()
 }
