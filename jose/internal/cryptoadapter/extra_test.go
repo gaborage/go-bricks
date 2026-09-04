@@ -81,7 +81,7 @@ func TestExtraRoundTripInt64(t *testing.T) {
 	const large = int64(1700000000)
 	for _, l := range layers {
 		t.Run(l.name, func(t *testing.T) {
-			hdr := l.build(t, map[string]any{"iat": large, "frac": 1.5, "str": "7", "huge": 1e19})
+			hdr := l.build(t, map[string]any{"iat": large, "frac": 1.5, "str": "7", "huge": 1e19, "edge": float64(maxExactInt)})
 			// go-jose hands numbers back as float64; integrality must survive.
 			_, isFloat := hdr.Extra["iat"].(float64)
 			assert.True(t, isFloat, "fixture must exercise the float64 path")
@@ -96,6 +96,10 @@ func TestExtraRoundTripInt64(t *testing.T) {
 			assert.ErrorIs(t, err, ErrExtraMalformed)
 			_, err = hdr.ExtraInt64("huge")
 			assert.ErrorIs(t, err, ErrExtraMalformed)
+			// 2^53 itself is still exact and must pass; only beyond it is rejected.
+			edge, err := hdr.ExtraInt64("edge")
+			require.NoError(t, err)
+			assert.Equal(t, int64(maxExactInt), edge)
 			_, err = hdr.ExtraInt64("absent")
 			assert.ErrorIs(t, err, ErrExtraAbsent)
 			assert.NotErrorIs(t, err, ErrExtraMalformed)
