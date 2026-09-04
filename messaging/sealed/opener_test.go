@@ -337,3 +337,24 @@ func TestOpenerRefusalCodeFallsBackToTheJoseCode(t *testing.T) {
 	assert.ErrorAs(t, err, &je)
 	assert.False(t, errors.Is(err, josesealed.ErrKidUnknownGeneration))
 }
+
+// TestNewOpenerTagsEveryProvisionedGenerationAsSeal pins the consumer half of the
+// dual-role check: startup tags every provisioned generation of both families
+// under "seal" (the accept set IS the local keystore), and a refused consumer
+// tags nothing.
+func TestNewOpenerTagsEveryProvisionedGenerationAsSeal(t *testing.T) {
+	codec, ok := sealruntime.Registered().(sealruntime.OpenerProvider)
+	require.True(t, ok)
+	store := vectorConsumerStore(t)
+	before := len(store.Recorded())
+	_, err := codec.NewOpener(spec(t), eventType, &sealruntime.Runtime{KeyStore: store})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, [][2]string{
+		{signFamily + "-v1", keystore.RoleTagSeal}, {signFamily + "-v2", keystore.RoleTagSeal}, {encFamily + "-v1", keystore.RoleTagSeal},
+	}, store.Recorded()[before:])
+
+	before = len(store.Recorded())
+	_, err = codec.NewOpener(spec(t), "", &sealruntime.Runtime{KeyStore: store})
+	require.Error(t, err)
+	assert.Len(t, store.Recorded(), before)
+}

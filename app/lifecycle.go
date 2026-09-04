@@ -4,14 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
 )
@@ -62,7 +65,36 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 		return err
 	}
 
+	// Every startup resolution has run (sealing at declaration time above, HTTP jose
+	// at route registration), so the keystore's role log is complete.
+	warnDualRoleKeys(a.logger, a.registry.deps.KeyStore)
+
 	return nil
+}
+
+// warnDualRoleKeys logs one WARN per keystore entry resolved by both HTTP jose and
+// sealing (#1306, ADR-097 namespace hygiene). Warn only: the two protocols must not
+// share a kid, but an enforced partition would break shipped HTTP surface. The line
+// names the entry and its role tags, never key material. A store without a role log
+// (no keystore module, a consumer-supplied store) reports nothing.
+func warnDualRoleKeys(log logger.Logger, ks KeyStore) {
+	reporter, ok := ks.(dualRoleReporter)
+	if !ok {
+		return
+	}
+	dual := reporter.DualRoleEntries()
+	for _, entry := range slices.Sorted(maps.Keys(dual)) {
+		log.Warn().
+			Str("entry", entry).
+			Str("roles", strings.Join(dual[entry], ",")).
+			Msg("keystore entry resolved by both HTTP jose and sealing; never reuse a kid across them")
+	}
+}
+
+// dualRoleReporter is keystore.DualRoleReporter spelled locally: app cannot import
+// keystore (keystore imports app), so the door is a plain-typed method.
+type dualRoleReporter interface {
+	DualRoleEntries() map[string][]string
 }
 
 // startSlots runs every kind's start phase in registration order. A fatal error aborts

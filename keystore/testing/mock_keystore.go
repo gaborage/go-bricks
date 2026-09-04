@@ -33,6 +33,23 @@ type MockKeyStore struct {
 	publicErr   error
 	privateErr  error
 	secretErr   error
+	recorded    [][2]string
+}
+
+// RecordResolution implements keystore.RoleRecorder: the mock remembers every
+// (entry, role) a startup resolution tagged, in call order, so a test can assert
+// which entries the module under test claimed and under which role.
+func (m *MockKeyStore) RecordResolution(entry, role string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.recorded = append(m.recorded, [2]string{entry, role})
+}
+
+// Recorded returns the (entry, role) pairs RecordResolution received, in order.
+func (m *MockKeyStore) Recorded() [][2]string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return slices.Clone(m.recorded)
 }
 
 // NewMockKeyStore creates an empty MockKeyStore.

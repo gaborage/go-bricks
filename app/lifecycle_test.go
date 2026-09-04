@@ -1,12 +1,16 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1115,4 +1119,69 @@ func TestShutdownObservabilityFailureDoesNotMaskCloserFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), errorCloseFailed)
 	assert.NotContains(t, err.Error(), "collector unreachable")
 	assert.NotContains(t, err.Error(), "observability")
+}
+
+// dualRoleStore is a KeyStore that also reports dual-role entries, standing in for
+// the keystore module's store (which this package cannot import).
+type dualRoleStore struct {
+	KeyStore
+	dual map[string][]string
+}
+
+func (s dualRoleStore) DualRoleEntries() map[string][]string { return s.dual }
+
+// TestWarnDualRoleKeysLogsOncePerEntry pins the startup hygiene WARN: one line per
+// entry resolved by both HTTP jose and sealing, naming the entry and the roles and
+// nothing else; a store without the door, or with no overlap, logs nothing.
+func TestWarnDualRoleKeysLogsOncePerEntry(t *testing.T) {
+	cases := []struct {
+		name  string
+		store KeyStore
+		lines int
+	}{
+		{"plain_store_without_the_door", nil, 0},
+		{"no_overlap", dualRoleStore{dual: map[string][]string{}}, 0},
+		{"one_entry", dualRoleStore{dual: map[string][]string{"shared": {"jose-route", "seal"}}}, 1},
+		{"two_entries", dualRoleStore{dual: map[string][]string{"b-key": {"jose-route", "seal"}, "a-key": {"jose-route", "seal"}}}, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := captureStdout(t, func() {
+				warnDualRoleKeys(logger.New("warn", false), tc.store)
+			})
+			lines := strings.Split(strings.TrimSpace(out), "\n")
+			if tc.lines == 0 {
+				assert.Empty(t, strings.TrimSpace(out))
+				return
+			}
+			require.Len(t, lines, tc.lines)
+			for _, line := range lines {
+				assert.Contains(t, line, `"level":"warn"`)
+				assert.Contains(t, line, `"roles":"jose-route,seal"`)
+				assert.Contains(t, line, "keystore entry resolved by both HTTP jose and sealing")
+			}
+			if tc.lines == 2 {
+				assert.Contains(t, lines[0], `"entry":"a-key"`, "entries are reported in sorted order")
+				assert.Contains(t, lines[1], `"entry":"b-key"`)
+			}
+		})
+	}
+}
+
+// captureStdout returns everything written to os.Stdout while fn ran; the framework
+// logger binds stdout at construction, so the logger is built inside fn.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	original := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	defer func() { os.Stdout = original }()
+	defer r.Close()
+	os.Stdout = w
+	fn()
+	require.NoError(t, w.Close())
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, r)
+	require.NoError(t, err)
+	return buf.String()
 }
