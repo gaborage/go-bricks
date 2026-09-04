@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"reflect"
 )
 
 // Publisher is the module-facing handle DeclareTypedPublisher returns: a
@@ -28,6 +29,10 @@ type Publisher[T any] struct {
 	headers    map[string]any
 	mandatory  bool
 	immediate  bool
+	// sealer is set when T carries seal tags: Publish then seals instead of marshaling,
+	// so a plaintext publish of a sealed type is unrepresentable (ADR-097). nil for a
+	// plain T.
+	sealer Sealer
 }
 
 // newTypedPublisher is the single construction point for the handle, so every
@@ -71,27 +76,71 @@ func DeclareTypedPublisher[T any](decls *Declarations, opts *PublisherOptions) *
 		panic("messaging: DeclareTypedPublisher requires non-nil *PublisherOptions")
 	}
 
-	return newTypedPublisher[T](decls.DeclarePublisher(opts, nil))
+	decl := decls.DeclarePublisher(opts, nil)
+	handle := newTypedPublisher[T](decl)
+
+	var zero T
+	if t := reflect.TypeOf(zero); hasSealTag(t) {
+		sealer, err := newSealer(t, decl.EventType)
+		if err != nil {
+			decls.recordSealError(err)
+		}
+		handle.sealer = sealer
+	}
+	return handle
 }
 
-// Publish JSON-marshals evt and publishes it to the DECLARED exchange and
-// routing key with the declared default headers, through client — the
-// tenant-aware client a handler already holds (the getMessaging(ctx) idiom),
-// so the framework's tenant stamping and trace injection apply unchanged.
+// Publish encodes evt and publishes it to the DECLARED exchange and routing
+// key with the declared default headers, through client — the tenant-aware
+// client a handler already holds (the getMessaging(ctx) idiom), so the
+// framework's tenant stamping and trace injection apply unchanged.
 //
-// A marshal failure is returned wrapped and publishes nothing. Every other
-// error is the client's own (ErrInvalidPublishDestination,
+// A plain T is JSON-marshaled. A seal-tagged T is sealed (ADR-097) — once, here,
+// before the client's retry loop, so every attempt and every redelivery carries
+// the same bytes and the same signed jti. A caller-side retry after this call
+// fails is a new seal and a new jti.
+//
+// An encode or seal failure is returned wrapped and publishes nothing. Every
+// other error is the client's own (ErrInvalidPublishDestination,
 // ErrPublishRetriesExhausted, ...) and is returned unwrapped.
 //
 // Safe for concurrent use: the handle is never written after construction and
 // the client receives a fresh copy of the declared headers on every call.
 func (h *Publisher[T]) Publish(ctx context.Context, client AMQPClient, evt T) error {
-	data, err := json.Marshal(evt)
+	data, err := h.encode(ctx, evt)
 	if err != nil {
-		return fmt.Errorf("messaging: marshal %s event: %w", h.eventType, err)
+		return err
 	}
 
 	return h.publishBytes(ctx, client, data)
+}
+
+// Seal returns the sealed wire bytes for evt without publishing them — the outbox
+// lane persists them as-is (persisted-sealed, ADR-097) and the relay moves them
+// byte-identical. A plain T has nothing to seal: it returns ErrNotSealTagged, and the
+// event goes to the outbox as a struct payload the outbox already marshals.
+func (h *Publisher[T]) Seal(ctx context.Context, evt T) ([]byte, error) {
+	if h.sealer == nil {
+		return nil, fmt.Errorf("%w (event type %q)", ErrNotSealTagged, h.eventType)
+	}
+	return h.encode(ctx, evt)
+}
+
+// encode is the one place the handle turns an event into bytes: seal when T is
+// seal-tagged, marshal otherwise.
+func (h *Publisher[T]) encode(ctx context.Context, evt T) ([]byte, error) {
+	if h.sealer != nil {
+		data, err := h.sealer.Seal(ctx, evt)
+		if err != nil {
+			return nil, fmt.Errorf("messaging: seal %s event: %w", h.eventType, err)
+		}
+		return data, nil
+	}
+	data, err := json.Marshal(evt)
+	if err != nil {
+		return nil, fmt.Errorf("messaging: marshal %s event: %w", h.eventType, err)
+	}
+	return data, nil
 }
 
 // publishBytes is the handle's ONE bytes door. It is the only place the handle

@@ -44,6 +44,12 @@ type Declarations struct {
 	consumerIndex  map[consumerKey]*ConsumerDeclaration // Deduplication + O(1) lookup
 	consumerOrder  []consumerKey                        // Deterministic iteration order
 	queueConflicts []queueConflict                      // Incompatible queue re-declarations, reported by Validate
+	sealErrors     []error                              // Seal-tagged declarations that cannot seal, reported by Validate
+}
+
+// recordSealError keeps a sealing startup failure for Validate to report.
+func (d *Declarations) recordSealError(err error) {
+	d.sealErrors = append(d.sealErrors, err)
 }
 
 // NewDeclarations creates a new empty declarations store.
@@ -290,6 +296,12 @@ func (d *Declarations) Consumers() []*ConsumerDeclaration {
 // Validate checks the integrity of all declarations.
 // It ensures that references between declarations are valid.
 func (d *Declarations) Validate() error {
+	// A seal-tagged declaration that cannot seal — codec not linked, runtime not
+	// configured, no key material, a refused declaration or Activation — is a
+	// startup failure, never a publish-time one (ADR-097).
+	if len(d.sealErrors) > 0 {
+		return d.sealErrors[0]
+	}
 	if err := d.validateQueueConflicts(); err != nil {
 		return err
 	}

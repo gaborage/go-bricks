@@ -1,0 +1,414 @@
+package sealed_test
+
+import (
+	"context"
+	"crypto/rsa"
+	"errors"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	"github.com/gaborage/go-bricks/jose"
+	josesealed "github.com/gaborage/go-bricks/jose/sealed"
+	jositest "github.com/gaborage/go-bricks/jose/testing"
+	"github.com/gaborage/go-bricks/keystore"
+	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/internal/sealruntime"
+	"github.com/gaborage/go-bricks/messaging/sealed"
+	"github.com/gaborage/go-bricks/multitenant"
+)
+
+const (
+	signFamily = "svc-payments-sign"
+	encFamily  = "acme-core-enc"
+	eventType  = "payment.authorized"
+	testPAN    = "4111111111111111"
+)
+
+type cardData struct {
+	PAN string `json:"pan"`
+}
+
+type paymentAuthorized struct {
+	_       struct{}  `seal:"sign=svc-payments-sign,encrypt=acme-core-enc"`
+	OrderID string    `json:"orderId"`
+	Card    *cardData `json:"card" seal:"subject"`
+}
+
+type plainEvent struct {
+	ID string `json:"id"`
+}
+
+var (
+	keysOnce sync.Once
+	signPriv *rsa.PrivateKey
+	encPriv  *rsa.PrivateKey
+	sign2    *rsa.PrivateKey
+)
+
+func keys(t *testing.T) {
+	t.Helper()
+	keysOnce.Do(func() {
+		signPriv, _ = jositest.GenerateTestKeyPair(t)
+		encPriv, _ = jositest.GenerateTestKeyPair(t)
+		sign2, _ = jositest.GenerateTestKeyPair(t)
+	})
+}
+
+// fakeStore is a producer-side key store: named entries with a role, plus the family
+// enumeration the keystore module implements.
+type fakeStore struct {
+	priv map[string]*rsa.PrivateKey
+	pub  map[string]*rsa.PublicKey
+	gens map[string][]keystore.Generation
+}
+
+func (s *fakeStore) PublicKey(name string) (*rsa.PublicKey, error) {
+	if k, ok := s.pub[name]; ok {
+		return k, nil
+	}
+	return nil, errors.New("fake: no public key " + name)
+}
+
+func (s *fakeStore) PrivateKey(name string) (*rsa.PrivateKey, error) {
+	if k, ok := s.priv[name]; ok {
+		return k, nil
+	}
+	return nil, errors.New("fake: no private key " + name)
+}
+
+func (s *fakeStore) Generations(logical string) []keystore.Generation { return s.gens[logical] }
+
+func (s *fakeStore) addPrivate(logical, version string, k *rsa.PrivateKey) *fakeStore {
+	kid := logical + "-" + version
+	s.priv[kid], s.pub[kid] = k, &k.PublicKey
+	s.gens[logical] = append(s.gens[logical], keystore.Generation{Logical: logical, Version: version, Role: keystore.RolePrivate})
+	return s
+}
+
+func (s *fakeStore) addPublic(logical, version string, k *rsa.PublicKey) *fakeStore {
+	s.pub[logical+"-"+version] = k
+	s.gens[logical] = append(s.gens[logical], keystore.Generation{Logical: logical, Version: version, Role: keystore.RolePublicOnly})
+	return s
+}
+
+func (s *fakeStore) addSecret(logical, version string) *fakeStore {
+	s.gens[logical] = append(s.gens[logical], keystore.Generation{Logical: logical, Version: version, Role: keystore.RoleSecret})
+	return s
+}
+
+func newStore() *fakeStore {
+	return &fakeStore{priv: map[string]*rsa.PrivateKey{}, pub: map[string]*rsa.PublicKey{}, gens: map[string][]keystore.Generation{}}
+}
+
+// producerStore is the canonical producer: sign PRIVATE v1, encrypt PUBLIC v1.
+func producerStore(t *testing.T) *fakeStore {
+	keys(t)
+	return newStore().addPrivate(signFamily, "v1", signPriv).addPublic(encFamily, "v1", &encPriv.PublicKey)
+}
+
+// consumerResolver is the audience: sign PUBLIC to verify, encrypt PRIVATE to decrypt.
+func consumerResolver(t *testing.T) jose.KeyResolver {
+	keys(t)
+	return jositest.NewTestResolver(map[string]any{signFamily + "-v1": &signPriv.PublicKey, encFamily + "-v1": encPriv})
+}
+
+// familyless is a KeyStore that cannot enumerate generations (no embedding, so nothing
+// is promoted).
+type familyless struct{ s *fakeStore }
+
+func (f familyless) PublicKey(n string) (*rsa.PublicKey, error)   { return f.s.PublicKey(n) }
+func (f familyless) PrivateKey(n string) (*rsa.PrivateKey, error) { return f.s.PrivateKey(n) }
+
+type capturingClient struct {
+	messaging.AMQPClient
+	opts []messaging.PublishOptions
+	data [][]byte
+}
+
+func (c *capturingClient) PublishToExchange(_ context.Context, options messaging.PublishOptions, data []byte) error {
+	c.opts = append(c.opts, options)
+	c.data = append(c.data, data)
+	return nil
+}
+
+func spec(t *testing.T) sealruntime.Spec {
+	t.Helper()
+	sp, err := sealruntime.Registered().ScanType(reflect.TypeOf(paymentAuthorized{}))
+	require.NoError(t, err)
+	require.NotNil(t, sp)
+	return sp
+}
+
+type foreignSpec struct{}
+
+func (foreignSpec) SignLogical() string    { return signFamily }
+func (foreignSpec) EncryptLogical() string { return encFamily }
+
+func TestInitRegistersTheCodec(t *testing.T) {
+	codec := sealruntime.Registered()
+	require.NotNil(t, codec, "importing messaging/sealed must register the codec")
+	sp, err := codec.ScanType(reflect.TypeOf(plainEvent{}))
+	require.NoError(t, err)
+	assert.Nil(t, sp, "a plain type scans to nil")
+	sp, err = codec.ScanType(reflect.TypeOf(paymentAuthorized{}))
+	require.NoError(t, err)
+	assert.Equal(t, signFamily, sp.SignLogical())
+	assert.Equal(t, encFamily, sp.EncryptLogical())
+	_, err = codec.ScanType(reflect.TypeOf(struct {
+		_ struct{} `seal:"sign=s,encrypt=e"`
+	}{}))
+	assert.ErrorIs(t, err, josesealed.ErrTagInvalid)
+	_, isFactory := codec.(sealruntime.OpenerFactory)
+	assert.False(t, isFactory, "the opener side lands in #1359")
+}
+
+func TestNewSealerStartupMatrix(t *testing.T) {
+	codec := sealruntime.Registered()
+	sp := spec(t)
+	cases := []struct {
+		name   string
+		store  func(*testing.T) sealruntime.KeyStore
+		active map[string]string
+		event  string
+		spec   sealruntime.Spec
+		wantIs error
+		text   string
+	}{
+		{name: "happy", store: func(t *testing.T) sealruntime.KeyStore { return producerStore(t) }, event: eventType},
+		{name: "encrypt_private_serves_as_public", store: func(t *testing.T) sealruntime.KeyStore {
+			keys(t)
+			return newStore().addPrivate(signFamily, "v1", signPriv).addPrivate(encFamily, "v1", encPriv)
+		}, event: eventType},
+		{name: "sign_private_missing", store: func(t *testing.T) sealruntime.KeyStore {
+			keys(t)
+			return newStore().addPublic(signFamily, "v1", &signPriv.PublicKey).addPublic(encFamily, "v1", &encPriv.PublicKey)
+		}, event: eventType, wantIs: sealed.ErrRoleMismatch, text: "holds no private key"},
+		{name: "encrypt_family_unprovisioned", store: func(t *testing.T) sealruntime.KeyStore {
+			keys(t)
+			return newStore().addPrivate(signFamily, "v1", signPriv)
+		}, event: eventType, text: "no provisioned generation"},
+		{name: "encrypt_generation_is_a_secret", store: func(t *testing.T) sealruntime.KeyStore {
+			keys(t)
+			return newStore().addPrivate(signFamily, "v1", signPriv).addSecret(encFamily, "v1")
+		}, event: eventType, wantIs: sealed.ErrRoleMismatch, text: "symmetric secret"},
+		{name: "two_sign_generations_no_selector", store: func(t *testing.T) sealruntime.KeyStore {
+			return producerStore(t).addPrivate(signFamily, "v2", sign2)
+		}, event: eventType, text: "no messaging.seal.active"},
+		{name: "selector_picks_second", store: func(t *testing.T) sealruntime.KeyStore {
+			return producerStore(t).addPrivate(signFamily, "v2", sign2)
+		}, active: map[string]string{signFamily: "v2"}, event: eventType},
+		{
+			name: "selector_unprovisioned", store: func(t *testing.T) sealruntime.KeyStore { return producerStore(t) },
+			active: map[string]string{signFamily: "v7"}, event: eventType, text: "unprovisioned generation",
+		},
+		{
+			name: "event_type_empty", store: func(t *testing.T) sealruntime.KeyStore { return producerStore(t) },
+			event: "", wantIs: josesealed.ErrSealFailed, text: "EventType",
+		},
+		{
+			name: "store_without_families", store: func(t *testing.T) sealruntime.KeyStore { return familyless{producerStore(t)} },
+			event: eventType, wantIs: sealed.ErrKeyStoreNoFamilies,
+		},
+		{
+			name: "foreign_spec", store: func(t *testing.T) sealruntime.KeyStore { return producerStore(t) },
+			event: eventType, spec: foreignSpec{}, text: "not produced by this codec",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &sealruntime.Runtime{KeyStore: tc.store(t), Active: tc.active}
+			sp := sp
+			if tc.spec != nil {
+				sp = tc.spec
+			}
+			sealer, err := codec.NewSealer(sp, tc.event, rt)
+			if tc.wantIs == nil && tc.text == "" {
+				require.NoError(t, err)
+				assert.NotNil(t, sealer)
+				return
+			}
+			require.Error(t, err)
+			assert.Nil(t, sealer)
+			if tc.wantIs != nil {
+				assert.ErrorIs(t, err, tc.wantIs)
+			}
+			if tc.text != "" {
+				assert.Contains(t, err.Error(), tc.text)
+			}
+		})
+	}
+	_, err := codec.NewSealer(sp, eventType, nil)
+	assert.ErrorIs(t, err, sealruntime.ErrKeyStoreMissing)
+	_, err = codec.NewSealer(sp, eventType, &sealruntime.Runtime{})
+	assert.ErrorIs(t, err, sealruntime.ErrKeyStoreMissing)
+}
+
+func configure(t *testing.T, tenancy sealruntime.Tenancy) *sdkmetric.ManualReader {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	messaging.ConfigureSealing(&messaging.SealRuntime{
+		KeyStore: producerStore(t),
+		Tenancy:  tenancy,
+		Meter:    sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)),
+	})
+	return reader
+}
+
+func declare(t *testing.T) *messaging.Publisher[paymentAuthorized] {
+	t.Helper()
+	decls := messaging.NewDeclarations()
+	decls.DeclareTopicExchange("payments")
+	h := messaging.DeclareTypedPublisher[paymentAuthorized](decls, &messaging.PublisherOptions{Exchange: "payments", RoutingKey: "payment.authorized", EventType: eventType})
+	require.NoError(t, decls.Validate())
+	return h
+}
+
+func openWire(t *testing.T, body []byte, tenant josesealed.TenantExpectation) (*josesealed.Envelope, paymentAuthorized) {
+	t.Helper()
+	sp, err := josesealed.ScanType(reflect.TypeOf(paymentAuthorized{}))
+	require.NoError(t, err)
+	var out paymentAuthorized
+	env, err := josesealed.Open(body, sp, &josesealed.OpenOptions{EventType: eventType, Tenant: tenant, Keys: consumerResolver(t)}, &out)
+	require.NoError(t, err)
+	return env, out
+}
+
+func sealCount(t *testing.T, reader *sdkmetric.ManualReader) uint64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != sealruntime.MetricOperationDuration {
+				continue
+			}
+			hist, ok := m.Data.(metricdata.Histogram[float64])
+			require.True(t, ok)
+			var n uint64
+			for _, dp := range hist.DataPoints {
+				op, _ := dp.Attributes.Value(sealruntime.AttrOperation)
+				if op.AsString() == sealruntime.OpSeal {
+					n += dp.Count
+				}
+			}
+			return n
+		}
+	}
+	return 0
+}
+
+func TestSealedPublishLandsOneJWSOnTheDeclaredDestination(t *testing.T) {
+	reader := configure(t, sealruntime.TenancyShared)
+	h := declare(t)
+	client := &capturingClient{}
+	ctx := multitenant.SetTenant(context.Background(), "tenant-a")
+	before := sealCount(t, reader)
+
+	require.NoError(t, h.Publish(ctx, client, paymentAuthorized{OrderID: "o1", Card: &cardData{PAN: testPAN}}))
+
+	require.Len(t, client.data, 1)
+	body := client.data[0]
+	assert.Len(t, strings.Split(string(body), "."), 3, "one compact JWS")
+	assert.NotContains(t, string(body), testPAN)
+	assert.Equal(t, "payments", client.opts[0].Exchange)
+	assert.Equal(t, "payment.authorized", client.opts[0].RoutingKey)
+	_, hasMarker := client.opts[0].Headers["x-sealed"]
+	assert.False(t, hasMarker, "no unsigned sealing marker")
+	assert.Equal(t, before+1, sealCount(t, reader), "one seal per Publish")
+
+	env, out := openWire(t, body, josesealed.TenantExpectation{Required: true, Expected: "tenant-a"})
+	assert.Equal(t, "tenant-a", env.TenantID, "signed tid mirrors the context tenant")
+	assert.Equal(t, eventType, env.EventType)
+	assert.Equal(t, signFamily+"-v1", env.SignKid)
+	assert.Equal(t, signFamily, env.SignFamily)
+	assert.Equal(t, encFamily+"-v1", env.EncKid)
+	assert.Equal(t, "o1", out.OrderID)
+	require.NotNil(t, out.Card)
+	assert.Equal(t, testPAN, out.Card.PAN, "the audience reads the Subject back")
+}
+
+func TestSealedPublishOmitsTidWithoutATenant(t *testing.T) {
+	configure(t, sealruntime.TenancyDisabled)
+	h := declare(t)
+	client := &capturingClient{}
+	require.NoError(t, h.Publish(context.Background(), client, paymentAuthorized{OrderID: "o2", Card: &cardData{PAN: testPAN}}))
+	env, _ := openWire(t, client.data[0], josesealed.TenantExpectation{})
+	assert.Empty(t, env.TenantID)
+	_, err := josesealed.Open(client.data[0], mustSpec(t), &josesealed.OpenOptions{EventType: eventType, Tenant: josesealed.TenantExpectation{Required: true}, Keys: consumerResolver(t)}, &paymentAuthorized{})
+	assert.Error(t, err, "a required tid is absent: the opener refuses, proving tid was not written")
+}
+
+func mustSpec(t *testing.T) *josesealed.Spec {
+	t.Helper()
+	sp, err := josesealed.ScanType(reflect.TypeOf(paymentAuthorized{}))
+	require.NoError(t, err)
+	return sp
+}
+
+func TestSealAndPublishProduceTheSameShapeWithFreshJTI(t *testing.T) {
+	reader := configure(t, sealruntime.TenancyDisabled)
+	h := declare(t)
+	evt := paymentAuthorized{OrderID: "o3", Card: &cardData{PAN: testPAN}}
+	client := &capturingClient{}
+	before := sealCount(t, reader)
+	require.NoError(t, h.Publish(context.Background(), client, evt))
+	sealedBytes, err := h.Seal(context.Background(), evt)
+	require.NoError(t, err)
+	assert.Equal(t, before+2, sealCount(t, reader), "Seal is the same one-shot operation Publish runs")
+	assert.Empty(t, client.data[1:], "Seal publishes nothing")
+
+	envA, _ := openWire(t, client.data[0], josesealed.TenantExpectation{})
+	envB, _ := openWire(t, sealedBytes, josesealed.TenantExpectation{})
+	assert.NotEqual(t, envA.JTI, envB.JTI, "seal runs once per call: each call mints its own jti")
+	assert.Equal(t, envA.SignKid, envB.SignKid)
+	assert.Equal(t, envA.EncKid, envB.EncKid)
+	assert.NotEqual(t, client.data[0], sealedBytes)
+}
+
+func TestPublishBytesAreWhatTheClientRetriesWith(t *testing.T) {
+	// The handle seals once and hands ONE byte slice to the client; the client's retry loop
+	// re-sends that slice, so every attempt carries the same jti. A caller-side retry after
+	// the client gives up is a NEW Publish and therefore a new seal — by design.
+	configure(t, sealruntime.TenancyDisabled)
+	h := declare(t)
+	client := &capturingClient{}
+	evt := paymentAuthorized{OrderID: "o4", Card: &cardData{PAN: testPAN}}
+	require.NoError(t, h.Publish(context.Background(), client, evt))
+	require.NoError(t, h.Publish(context.Background(), client, evt))
+	require.Len(t, client.data, 2)
+	envA, _ := openWire(t, client.data[0], josesealed.TenantExpectation{})
+	envB, _ := openWire(t, client.data[1], josesealed.TenantExpectation{})
+	assert.NotEqual(t, envA.JTI, envB.JTI)
+}
+
+func TestSealerRefusesAConflictingTenant(t *testing.T) {
+	configure(t, sealruntime.TenancyPerTenant)
+	h := declare(t)
+	client := &capturingClient{}
+	// tenantstamp.Resolve with an empty replay key accepts any context tenant; a conflict
+	// can only come from the wrapper below. Here the context carries a tenant and the tid follows it.
+	ctx := multitenant.SetTenant(context.Background(), "tenant-b")
+	require.NoError(t, h.Publish(ctx, client, paymentAuthorized{OrderID: "o5", Card: &cardData{PAN: testPAN}}))
+	env, _ := openWire(t, client.data[0], josesealed.TenantExpectation{Expected: "tenant-b"})
+	assert.Equal(t, "tenant-b", env.TenantID)
+}
+
+func TestPlainTypeIsUntouchedByTheCodec(t *testing.T) {
+	configure(t, sealruntime.TenancyDisabled)
+	decls := messaging.NewDeclarations()
+	decls.DeclareTopicExchange("payments")
+	h := messaging.DeclareTypedPublisher[plainEvent](decls, &messaging.PublisherOptions{Exchange: "payments", RoutingKey: "k", EventType: "plain"})
+	require.NoError(t, decls.Validate())
+	client := &capturingClient{}
+	require.NoError(t, h.Publish(context.Background(), client, plainEvent{ID: "p"}))
+	assert.JSONEq(t, `{"id":"p"}`, string(client.data[0]))
+	_, err := h.Seal(context.Background(), plainEvent{ID: "p"})
+	assert.ErrorIs(t, err, messaging.ErrNotSealTagged)
+}
