@@ -236,6 +236,9 @@ func marshalPayload(payload any) ([]byte, error) {
 	if b, ok := payload.([]byte); ok {
 		return b, nil
 	}
+	if err := rejectSealedPayload(payload); err != nil {
+		return nil, err
+	}
 
 	return json.Marshal(payload)
 }

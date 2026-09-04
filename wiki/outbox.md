@@ -103,6 +103,22 @@ outbox:
 | `RoutingKey` | string | No | AMQP routing key (falls back to `EventType`) |
 | `Stream` | string | No | Selects the native super-stream lane instead of an exchange. Must be listed in `outbox.superstreams`, requires a tenant in context (it becomes the partition key), and is mutually exclusive with `Exchange` and `RoutingKey`. See [Lanes and Ordering](#lanes-and-ordering). |
 
+## Sealed Payloads
+
+The outbox is **persisted-sealed only**: a sealed event is sealed *before* it is written, so
+the ledger row already holds the wire form (the compact JWS from `Publisher[T].Seal`) and
+the relay publishes bytes it never needs to open. `Publish` therefore refuses a struct or
+pointer payload whose type carries `seal` tags with `outbox.ErrSealedPayloadNeedsBytes`
+(`errors.Is`-able); the fix is to seal first and hand over the returned `[]byte`. A `[]byte`
+payload is stored as-is whatever it contains — a hand-marshaled plaintext body is the
+documented residual the guard cannot see — and a struct without `seal` tags is JSON-marshaled
+as before.
+
+**Sensitive Authentication Data never rides the outbox lane.** CVV/CVC, full track data and
+PIN blocks may transit a sealed event, but PCI DSS forbids storing them after authorization
+regardless of encryption, and an outbox row *is* storage. Keep SAD out of any event that is
+outboxed; the framework's examples use PAN-class subjects only.
+
 ## Trace Propagation
 
 Outbox publishes are **trace-equivalent to direct AMQP publishes**: the W3C trace

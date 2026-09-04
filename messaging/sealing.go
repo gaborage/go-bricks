@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 
 	"github.com/gaborage/go-bricks/messaging/internal/sealruntime"
 )
@@ -52,33 +53,80 @@ func ConfigureSealing(rt *SealRuntime) { sealruntime.Configure(rt) }
 // SealingRuntime returns the facts ConfigureSealing recorded, or nil before it ran.
 func SealingRuntime() *SealRuntime { return sealruntime.Configured() }
 
-// sealTagName is the struct-tag key of the sealing family. Spelled here rather than
-// imported: the probe must not pull the codec into every build.
-const sealTagName = "seal"
+// SealTagName is the struct-tag key of the sealing family. Spelled here rather than
+// imported from jose/sealed: the probe must not pull the codec into every build, and
+// jose must not import messaging. messaging/sealed pins the two spellings together.
+const SealTagName = "seal"
 
-// hasSealTag reports whether t (pointers unwrapped) is a struct carrying a `seal` tag at
-// the depth jose/sealed.ScanType inspects: its own fields, plus the members an untagged
-// embedded struct promotes (which ScanType refuses). It is a probe, not a scan: the codec
-// judges the declaration, and the probe must say yes wherever the codec would speak.
-func hasSealTag(t reflect.Type) bool {
-	return hasSealTagIn(t, map[reflect.Type]bool{})
+// IsSealTagged reports whether t (pointers unwrapped) is a struct that carries a `seal`
+// tag anywhere the typed publish door would refuse to publish as plaintext: on its own
+// fields or the members an untagged embedded struct promotes (the depth
+// jose/sealed.ScanType inspects), OR misplaced on a named nested field or a tagged embed
+// (which DeclareTypedPublisher refuses outright). It is a probe, not a scan: the codec
+// judges the declaration; the probe must say yes wherever the codec would speak or the
+// door would fail closed. It is the one detector every lane guard shares — the typed
+// publish door, the streams typed declarations (which refuse a sealed T in v1) and the
+// outbox door (which refuses a sealed struct payload) — so a struct is "sealed" in exactly
+// one way.
+//
+// The outbox door asks on every Publish, so the answer is memoized per Go type: the
+// set of payload types a process publishes is small and fixed, and a type's tags
+// never change.
+func IsSealTagged(t reflect.Type) bool {
+	t = derefType(t)
+	if t == nil || t.Kind() != reflect.Struct {
+		return false
+	}
+	if v, ok := sealTagCache.Load(t); ok {
+		tagged, _ := v.(bool)
+		return tagged
+	}
+	v := hasSealTag(t) || misplacedSealTag(t) != ""
+	sealTagCache.Store(t, v)
+	return v
 }
 
-func hasSealTagIn(t reflect.Type, seen map[reflect.Type]bool) bool {
+// hasSealTag is the bare probe at the depth jose/sealed.ScanType inspects — own fields
+// plus the members an untagged embed promotes — with no memo and no misplaced-tag half.
+// The typed doors call it after the misplaced check; IsSealTagged builds on it.
+func hasSealTag(t reflect.Type) bool {
+	return hasSealTagIn(t, nil)
+}
+
+// sealTagCache memoizes IsSealTagged per struct type: keyed by the reflect.Type
+// itself (comparable, unique per named type), never by shape, so two types with
+// identical fields but different tags never alias.
+var sealTagCache sync.Map
+
+// derefType strips every pointer level from t; nil stays nil.
+func derefType(t reflect.Type) reflect.Type {
 	for t != nil && t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
+	return t
+}
+
+// hasSealTagIn walks t's own fields and recurses into untagged embedded structs.
+// seen guards against embedding cycles and is allocated only once recursion
+// starts, so the common flat struct costs no allocation.
+func hasSealTagIn(t reflect.Type, seen map[reflect.Type]bool) bool {
+	t = derefType(t)
 	if t == nil || t.Kind() != reflect.Struct || seen[t] {
 		return false
 	}
-	seen[t] = true
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
-		if _, ok := field.Tag.Lookup(sealTagName); ok {
+		if _, ok := field.Tag.Lookup(SealTagName); ok {
 			return true
 		}
-		if field.Anonymous && field.Tag.Get("json") == "" && hasSealTagIn(field.Type, seen) {
-			return true
+		if field.Anonymous && field.Tag.Get("json") == "" {
+			if seen == nil {
+				seen = map[reflect.Type]bool{}
+			}
+			seen[t] = true
+			if hasSealTagIn(field.Type, seen) {
+				return true
+			}
 		}
 	}
 	return false
@@ -115,7 +163,7 @@ func misplacedSealTagIn(t reflect.Type, path string, supported bool, seen map[se
 		if path != "" {
 			fieldPath = path + "." + field.Name
 		}
-		_, tagged := field.Tag.Lookup(sealTagName)
+		_, tagged := field.Tag.Lookup(SealTagName)
 		if tagged && !supported {
 			return fieldPath
 		}

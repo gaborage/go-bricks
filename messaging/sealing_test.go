@@ -101,7 +101,9 @@ type namedEmbedEvent struct {
 	promotedSeal `json:"inner"`
 }
 
-func TestHasSealTag(t *testing.T) {
+// TestIsSealTagged: the probe over every shape class, asked twice so the second
+// answer exercises the per-type cache.
+func TestIsSealTagged(t *testing.T) {
 	cases := map[string]struct {
 		t    reflect.Type
 		want bool
@@ -118,11 +120,18 @@ func TestHasSealTag(t *testing.T) {
 			_ struct{} `jose:"sign=a,encrypt=b"`
 		}{}), false},
 		"promoted_embed": {reflect.TypeOf(promotedSealEvent{}), true},
-		"tagged_embed":   {reflect.TypeOf(namedEmbedEvent{}), false},
-		"nested_field":   {reflect.TypeOf(struct{ Inner promotedSeal }{}), false},
+		// Misplaced tags are refused by DeclareTypedPublisher, so the probe says
+		// yes for them too: every lane guard fails closed on the same set.
+		"tagged_embed": {reflect.TypeOf(namedEmbedEvent{}), true},
+		"nested_field": {reflect.TypeOf(struct{ Inner promotedSeal }{}), true},
 	}
 	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) { assert.Equal(t, tc.want, hasSealTag(tc.t)) })
+		t.Run(name, func(t *testing.T) {
+			// Asked twice: the second answer comes from the per-type cache and
+			// must equal the first.
+			assert.Equal(t, tc.want, IsSealTagged(tc.t))
+			assert.Equal(t, tc.want, IsSealTagged(tc.t))
+		})
 	}
 }
 
@@ -201,6 +210,64 @@ func TestDeclareTypedPublisherRefusesANestedSealTag(t *testing.T) {
 	client := &capturingClient{}
 	assert.Equal(t, err, h.Publish(context.Background(), client, nestedSubject{}), "fail closed: no plaintext")
 	assert.Empty(t, client.data)
+}
+
+// selfEmbed embeds itself through a pointer: the cycle guard must terminate the
+// walk and still answer false for a type with no seal tag anywhere on the path.
+type selfEmbed struct {
+	*selfEmbed
+	ID string `json:"id"`
+}
+
+// TestIsSealTaggedTerminatesOnEmbeddingCycle: a self-embedding type must not
+// recurse forever and is untagged, so false.
+func TestIsSealTaggedTerminatesOnEmbeddingCycle(t *testing.T) {
+	var node selfEmbed
+	node.selfEmbed = &node // the cycle the walk must survive
+	assert.False(t, IsSealTagged(reflect.TypeOf(node)))
+}
+
+// shapeTwinSealed and shapeTwinPlain have byte-identical field layouts; only the
+// tag differs. The memo is keyed by reflect.Type, so the two must never alias.
+type shapeTwinSealed struct {
+	ID   string `json:"id"`
+	Card string `json:"card" seal:"subject"`
+}
+
+type shapeTwinPlain struct {
+	ID   string `json:"id"`
+	Card string `json:"card"`
+}
+
+// TestIsSealTaggedIsTheUnionOfProbeAndMisplaced pins the guard's contract to the
+// typed publish door's two refusal rules over one fixture set.
+func TestIsSealTaggedIsTheUnionOfProbeAndMisplaced(t *testing.T) {
+	for name, typ := range map[string]reflect.Type{
+		"plain":                reflect.TypeOf(plainEvent{}),
+		"sealed":               reflect.TypeOf(sealedEvent{}),
+		"promoted_embed":       reflect.TypeOf(promotedSealEvent{}),
+		"named_nested":         reflect.TypeOf(nestedSubject{}),
+		"deep_named_nested":    reflect.TypeOf(deepNestedSubject{}),
+		"tagged_embed":         reflect.TypeOf(taggedEmbedSubject{}),
+		"sentinel_plus_nested": reflect.TypeOf(sentinelWithNestedSubject{}),
+		"recursive":            reflect.TypeOf(selfNested{}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			want := hasSealTagIn(typ, nil) || misplacedSealTag(typ) != ""
+			assert.Equal(t, want, IsSealTagged(typ))
+			assert.Equal(t, name != "plain" && name != "recursive", IsSealTagged(typ), "only the untagged shapes are false")
+		})
+	}
+}
+
+// TestIsSealTaggedCacheDoesNotAliasIdenticalShapes: two byte-identical layouts
+// that differ only in tags must get their own cache entries.
+func TestIsSealTaggedCacheDoesNotAliasIdenticalShapes(t *testing.T) {
+	assert.True(t, IsSealTagged(reflect.TypeOf(shapeTwinSealed{})))
+	assert.False(t, IsSealTagged(reflect.TypeOf(shapeTwinPlain{})))
+	// Ask again in the other order: both answers now come from the cache.
+	assert.False(t, IsSealTagged(reflect.TypeOf(&shapeTwinPlain{})))
+	assert.True(t, IsSealTagged(reflect.TypeOf(&shapeTwinSealed{})))
 }
 
 func TestDeclareTypedPublisherPlainTypeNeverTouchesTheCodec(t *testing.T) {
