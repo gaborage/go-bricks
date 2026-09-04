@@ -195,6 +195,13 @@ type SelectQueryBuilder interface {
 	Offset(offset uint64) SelectQueryBuilder
 	Paginate(limit, offset uint64) SelectQueryBuilder
 
+	// ForUpdate appends `FOR UPDATE`, rendered after pagination on both vendors.
+	// ForUpdateNoWait appends `FOR UPDATE NOWAIT` instead; the last call wins.
+	// When to use which, the transaction requirement and the error to match are
+	// in wiki/database.md ("Row locks").
+	ForUpdate() SelectQueryBuilder
+	ForUpdateNoWait() SelectQueryBuilder
+
 	// Composable WHERE clause
 	Where(filter Filter) SelectQueryBuilder
 

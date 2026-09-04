@@ -648,11 +648,24 @@ if errors.Is(err, database.ErrNoRows) {
 }
 ```
 
+**Row locks.** `ForUpdate()` and `ForUpdateNoWait()` append the lock clause after pagination on both vendors, so a builder SELECT no longer needs `database.Raw` for it. `NOWAIT` fails immediately when another session holds the row — match `database.IsLockNotAvailable(err)` — which is the leader-election shape; plain `FOR UPDATE` blocks. Run either inside `database.WithTx`: the lock lives as long as the transaction.
+
+```go
+// One relay instance leads this ledger: the loser gets 55P03 / ORA-00054, not a wait.
+lead := qb.Select("id").From(ledger + "_leader").Where(f.Eq("id", 1)).ForUpdateNoWait()
+err := database.ExecuteQuerySingle(ctx, tx, lead, "lead", &id)
+if database.IsLockNotAvailable(err) {
+    return errAnotherInstanceLeads
+}
+```
+
+"Lock the row if it exists, insert it otherwise" has no single-statement builder form: PostgreSQL's `ON CONFLICT … DO UPDATE SET c = EXCLUDED.c` idiom updates a conflict column, which `BuildUpsert` refuses on every vendor for Oracle MERGE parity (ORA-38104), and Oracle has no equivalent. Write it as two statements under the transaction — `Select(...).ForUpdate()` then `Insert` on `ErrNoRows` — or keep the PostgreSQL idiom as annotated raw SQL.
+
 `database.Raw(sql string, args ...any)` adapts hand-written SQL to the same helpers — it is an escape hatch on par with `Filter.Raw`/`JoinFilter.Raw`, and broader (the SQL string replaces the whole statement, bypassing the builder's identifier validation entirely). **Every** call site requires the same review annotation `f.Raw()`/`jf.Raw()` do:
 
 ```go
 // SECURITY: Manual SQL review completed - static SQL, no user input concatenated, values parameterized via args
-q := database.Raw("SELECT id, name FROM users WHERE tier = $1 FOR UPDATE", tier)
+q := database.Raw("SELECT id, name FROM users WHERE tier = $1 UNION SELECT id, name FROM archived_users WHERE tier = $1", tier)
 err := database.ExecuteQuerySingle(ctx, tx, q, "tier_lookup", &row.ID, &row.Name)
 ```
 

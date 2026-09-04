@@ -44,7 +44,12 @@ type SelectQueryBuilder struct {
 	selectBuilder squirrel.SelectBuilder
 	limit         uint64 // 0 means no limit
 	offset        uint64 // 0 means no offset
-	err           error  // Captured error from filter operations
+	// lock is the rendered row-lock clause, "" for none. Both vendors spell
+	// FOR UPDATE [NOWAIT] identically, so this is not a vendorRenderer concern;
+	// what IS vendor-specific — the clause must follow Oracle's OFFSET/FETCH and
+	// PostgreSQL's LIMIT/OFFSET — is settled by rendering it as the last suffix.
+	lock string
+	err  error // Captured error from filter operations
 }
 
 // check if SelectQueryBuilder implements dbtypes.SelectQueryBuilder
@@ -896,6 +901,18 @@ func (sqb *SelectQueryBuilder) Offset(offset uint64) dbtypes.SelectQueryBuilder 
 	return sqb
 }
 
+// ForUpdate appends FOR UPDATE; see dbtypes.SelectQueryBuilder.
+func (sqb *SelectQueryBuilder) ForUpdate() dbtypes.SelectQueryBuilder {
+	sqb.lock = "FOR UPDATE"
+	return sqb
+}
+
+// ForUpdateNoWait appends FOR UPDATE NOWAIT; see dbtypes.SelectQueryBuilder.
+func (sqb *SelectQueryBuilder) ForUpdateNoWait() dbtypes.SelectQueryBuilder {
+	sqb.lock = "FOR UPDATE NOWAIT"
+	return sqb
+}
+
 // Where adds a filter to the WHERE clause.
 // Multiple calls to Where() will be combined with AND logic.
 //
@@ -1242,15 +1259,30 @@ func (sqb *SelectQueryBuilder) ValidateForSubquery() error {
 	if sqb == nil {
 		return errors.New("subquery cannot be nil")
 	}
+	if sqb.lock != "" {
+		// A row lock belongs to the statement that holds the transaction, never
+		// to a nested SELECT: inside EXISTS/IN it is invalid on PostgreSQL and
+		// meaningless on Oracle, and buildSelectBuilder would render it.
+		return errors.New("subquery cannot carry a row lock (ForUpdate/ForUpdateNoWait)")
+	}
 
 	return sqb.err
 }
 
-// buildSelectBuilder returns the underlying squirrel.SelectBuilder with pagination applied.
+// buildSelectBuilder returns the underlying squirrel.SelectBuilder with
+// pagination and the row lock applied, in that order: squirrel renders LIMIT/
+// OFFSET before any suffix, and the Oracle OFFSET/FETCH clause is itself a
+// suffix, so appending the lock last puts it after pagination on both vendors.
 func (sqb *SelectQueryBuilder) buildSelectBuilder() squirrel.SelectBuilder {
-	builder := sqb.selectBuilder
+	builder := sqb.applyPagination(sqb.selectBuilder)
+	if sqb.lock != "" {
+		builder = builder.Suffix(sqb.lock)
+	}
+	return builder
+}
 
-	// Apply pagination based on vendor
+// applyPagination renders LIMIT/OFFSET per vendor.
+func (sqb *SelectQueryBuilder) applyPagination(builder squirrel.SelectBuilder) squirrel.SelectBuilder {
 	if sqb.limit == 0 && sqb.offset == 0 {
 		return builder
 	}

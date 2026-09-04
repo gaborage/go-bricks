@@ -37,7 +37,7 @@ type SQLProvider interface {
 	ToSQL() (string, []any, error)
 }
 
-// Raw adapts hand-written SQL (UNION, FOR UPDATE, vendor tricks) to SQLProvider
+// Raw adapts hand-written SQL (UNION, vendor tricks) to SQLProvider
 // so it reuses the same Execute* helpers as builder output.
 //
 // SECURITY: Raw is an escape hatch on par with Filter.Raw, and broader — the
