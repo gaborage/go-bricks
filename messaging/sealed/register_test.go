@@ -25,6 +25,6 @@ func TestInitRegistersTheCodec(t *testing.T) {
 		_ struct{} `seal:"sign=s,encrypt=e"`
 	}{}))
 	assert.ErrorIs(t, err, josesealed.ErrTagInvalid)
-	_, isFactory := codec.(sealruntime.OpenerProvider)
-	assert.False(t, isFactory, "the opener side lands in #1359")
+	_, isProvider := codec.(sealruntime.OpenerProvider)
+	assert.True(t, isProvider, "the codec carries its consume side (OpenerProvider)")
 }

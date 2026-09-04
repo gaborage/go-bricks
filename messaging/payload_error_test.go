@@ -15,6 +15,7 @@ import (
 	"github.com/gaborage/go-bricks/internal/saferender"
 	"github.com/gaborage/go-bricks/internal/validation"
 	"github.com/gaborage/go-bricks/messaging/internal/payloaderr"
+	"github.com/gaborage/go-bricks/messaging/internal/sealruntime"
 )
 
 const (
@@ -419,4 +420,20 @@ func TestPayloadErrorNilAndZeroValueAreSafe(t *testing.T) {
 	assert.Nil(t, zero.Fields())
 	assert.NotErrorIs(t, zero, ErrPayloadUndecodable)
 	assert.NotErrorIs(t, zero, ErrPayloadInvalid)
+}
+
+func TestPayloadErrorOpenStage(t *testing.T) {
+	cause := &sealruntime.OpenRefusedError{Code: "SEAL_HEADER_SLOT_INVALID", Details: map[string]string{"slot": "jti", "present": "false"}, Cause: errors.New("rule 6")}
+	err := newPayloadError("OrderCreated", payloaderr.NewOpen(cause))
+
+	assert.Equal(t, PayloadStageOpen, err.Stage)
+	assert.ErrorIs(t, err, ErrPayloadOpenRefused)
+	assert.NotErrorIs(t, err, ErrPayloadUndecodable)
+	assert.NotErrorIs(t, err, ErrPayloadInvalid)
+	assert.Equal(t, `messaging: open failed for event "OrderCreated": sealed open refused: SEAL_HEADER_SLOT_INVALID (present=false, slot=jti)`, err.Error())
+	assert.Empty(t, err.Fields())
+	var refused *sealruntime.OpenRefusedError
+	require.ErrorAs(t, err, &refused)
+	assert.Same(t, cause, refused)
+	assert.NotContains(t, err.Error(), "rule 6", "the cause is reachable, never rendered")
 }

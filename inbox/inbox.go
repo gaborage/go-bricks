@@ -30,14 +30,17 @@ type Inbox struct {
 // id short-circuits (fn is not run), counts one dedup hit and returns nil. The
 // tenant is resolved from ctx; in single-tenant mode the tenant id is empty.
 //
-// eventID must match ^[A-Za-z0-9_-]{1,128}$ (messaging.ValidateEventID); any
-// other id is refused BEFORE the ledger with an error wrapping
+// eventID must match ^[A-Za-z0-9_-]{1,128}$ (messaging.ValidateEventID), or —
+// only under a delivery the sealed typed door opened (messaging.IsSealedDelivery)
+// — the sealed dedup key `<SignFamily>:<jti>` that Metadata.DedupKey composes;
+// any other id is refused BEFORE the ledger with an error wrapping
 // messaging.ErrInvalidEventID and no row is written. The check is here, at the
 // ledger door, rather than only where a header is read, so it holds however the
 // consumer obtained the id — and so a header-sourced id can never spell a sealed
-// dedup key, whose `:` is outside the grammar.
+// dedup key: its `:` is outside the header grammar, and the sealed spelling is
+// admitted only from the framework's own sealed context.
 func (i *Inbox) ProcessOnce(ctx context.Context, eventID string, fn func(ctx context.Context, tx dbtypes.Tx) error) error {
-	if err := messaging.ValidateEventID(eventID); err != nil {
+	if err := messaging.ValidateDedupKey(ctx, eventID); err != nil {
 		return fmt.Errorf("inbox: %w", err)
 	}
 	store, err := i.module.ensureStoreInitialized(ctx)
@@ -58,7 +61,7 @@ func (i *Inbox) ProcessOnce(ctx context.Context, eventID string, fn func(ctx con
 			return err
 		}
 		if !inserted {
-			i.module.recordDedupHit(ctx, tenantID, eventID)
+			i.module.recordDedupHit(ctx, tenantID, eventID, messaging.IsSealedDedupKey(eventID))
 			return nil // already processed: skip fn, commit the no-op
 		}
 		return fn(ctx, tx)

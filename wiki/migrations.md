@@ -6628,6 +6628,15 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   redelivery, a DLQ drain, an outbox re-drive.
 - verify: `go test ./...`  # then publish one message whose x-outbox-event-id carries a `:` to a consumer's queue and confirm it lands on the DLQ with no inbox row for THAT id (`SELECT count(*) FROM gobricks_inbox WHERE event_id = '<the id you published>'` is 0 — rows v0.62.0 accepted may already carry a `:`, so never scan the whole ledger), and that a redelivered conforming id moves `inbox.dedup.hits` by exactly one
 - ref: gaborage/go-bricks#1353 · #1307 · #1309 (ADR-097 §4 records the grammar as part of the replay stance) · `messaging/dedup_key.go`, `inbox/inbox.go`, `outbox/headers.go`
+- amendment (2026-09-04, #1359, additive): `inbox.ProcessOnce` now runs `messaging.ValidateDedupKey(ctx, id)`
+  instead of `ValidateEventID`: a header id passes under the grammar above as before, and a sealed
+  dedup key `<SignFamily>:<jti>` (`messaging.IsSealedDedupKey`) passes ONLY under a delivery the
+  sealed typed door opened (`messaging.IsSealedDelivery(ctx)` — a marker the sealed handler alone
+  sets; a publisher spelling `family:jti` into `x-outbox-event-id` is still refused before the
+  ledger, on every consumer). Footgun: a handler that calls `ProcessOnce` from a goroutine or with
+  a context not derived from the one it was handed (`context.Background()` instead of
+  `context.WithoutCancel(ctx)`) loses the marker and gets `ErrInvalidEventID` — fail closed;
+  derive the context. The dedup-hit counter's `inbox.sealed` label is now `true` for a sealed key.
 
 ---
 

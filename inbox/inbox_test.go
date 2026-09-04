@@ -100,6 +100,37 @@ func TestProcessOnceRefusesTheSealedKeyShapeFromAHeader(t *testing.T) {
 	assert.NotContains(t, err.Error(), "9f0c2b1e", "the error carries the length, never the id")
 }
 
+// TestProcessOnceAdmitsTheSealedKeyOnlyFromTheSealedDoor pins the second door:
+// a sealed dedup key passes only under a delivery the sealed typed door opened
+// (messaging.IsSealedDelivery); the same spelling from any other context — a
+// header, a hand-built key — is refused before the ledger.
+func TestProcessOnceAdmitsTheSealedKeyOnlyFromTheSealedDoor(t *testing.T) {
+	const key = "svc-payments-sign:9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f"
+
+	t.Run("sealed_delivery", func(t *testing.T) {
+		db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectTransaction().ExpectExec(`INSERT INTO gobricks_inbox`).WillReturnRowsAffected(1)
+		in := newTestInbox(db)
+		ran := false
+		err := runSealed(t, func(ctx context.Context) error {
+			return in.ProcessOnce(ctx, key, func(context.Context, dbtypes.Tx) error {
+				ran = true
+				return nil
+			})
+		})
+		require.NoError(t, err)
+		assert.True(t, ran)
+	})
+
+	t.Run("plain_context", func(t *testing.T) {
+		db := dbtesting.NewTestDB(dbtypes.PostgreSQL) // no expectations: any Begin fails
+		in := newTestInbox(db)
+		err := in.ProcessOnce(t.Context(), key, func(context.Context, dbtypes.Tx) error { return nil })
+		require.ErrorIs(t, err, messaging.ErrInvalidEventID)
+		assert.Empty(t, db.ExecLog())
+	})
+}
+
 func TestProcessOnceRunsFnOnFirstEvent(t *testing.T) {
 	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 	db.ExpectTransaction().

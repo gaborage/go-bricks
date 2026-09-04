@@ -15,6 +15,10 @@ type PayloadStage string
 const (
 	PayloadStageDecode   PayloadStage = PayloadStage(payloaderr.StageDecode)
 	PayloadStageValidate PayloadStage = PayloadStage(payloaderr.StageValidate)
+	// PayloadStageOpen is a sealed message the opener refused before decode
+	// (ADR-097): the rule's code is in Error() and the opener's own error is in
+	// the chain for errors.As.
+	PayloadStageOpen PayloadStage = PayloadStage(payloaderr.StageOpen)
 )
 
 var (
@@ -25,6 +29,12 @@ var (
 	// ErrPayloadInvalid reports a payload that decoded but failed struct
 	// validation. Match it with errors.Is.
 	ErrPayloadInvalid = errors.New("messaging: payload failed validation")
+
+	// ErrPayloadOpenRefused reports a sealed message the opener refused —
+	// poison, like the two above; a provisioning-recoverable refusal
+	// (SEAL_KID_UNKNOWN_GENERATION) still takes this path and keeps its code.
+	// Match it with errors.Is.
+	ErrPayloadOpenRefused = errors.New("messaging: sealed payload refused by the opener")
 )
 
 // PayloadError describes why a message body could not be turned into a typed
@@ -36,8 +46,9 @@ type PayloadError struct {
 	EventType string
 
 	// Stage is where the failure happened. It is exported to label logs and
-	// metrics with "decode" or "validate"; for control flow, match errors.Is
-	// against ErrPayloadUndecodable or ErrPayloadInvalid instead.
+	// metrics with "open", "decode" or "validate"; for control flow, match
+	// errors.Is against ErrPayloadOpenRefused, ErrPayloadUndecodable or
+	// ErrPayloadInvalid instead.
 	Stage PayloadStage
 
 	// body carries the cause, the codec's payload-free summary and the raw
@@ -101,6 +112,8 @@ func (e *PayloadError) Is(target error) bool {
 		return target == ErrPayloadUndecodable
 	case PayloadStageValidate:
 		return target == ErrPayloadInvalid
+	case PayloadStageOpen:
+		return target == ErrPayloadOpenRefused
 	default:
 		return false
 	}
