@@ -2,3 +2,6 @@
 # return — not standalone JavaScript) and must stay out of GitHub language
 # detection. Incident record + rationale: .claude/workflows/README.md
 .claude/workflows/*.js linguist-detectable=false
+
+# SQL goldens are diffed byte-for-byte across platforms (#1255)
+**/testdata/sql/*.golden text eol=lf
