@@ -13,13 +13,13 @@ import (
 	"strings"
 	"time"
 
-	gojose "github.com/go-jose/go-jose/v4"
+	jose "github.com/go-jose/go-jose/v4"
 
-	"github.com/gaborage/go-bricks/jose"
+	bricksjose "github.com/gaborage/go-bricks/jose"
 	"github.com/gaborage/go-bricks/jose/internal/cryptoadapter"
 )
 
-// Opener sentinels. Every Open failure is an *OpenError whose embedded *jose.Error carries
+// Opener sentinels. Every Open failure is an *OpenError whose embedded *bricksjose.Error carries
 // one of these as Sentinel, so errors.Is picks the disposition class and Code names the rule.
 var (
 	// ErrNotSealed is the structural sentinel: the body is not a compact JWS carrying TypV1.
@@ -66,9 +66,9 @@ var headerIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 const dedupKeySeparator = ":"
 
 var (
-	openSigAlgs  = []gojose.SignatureAlgorithm{gojose.PS256, gojose.RS256}
-	openKeyAlgs  = []gojose.KeyAlgorithm{keyAlg}
-	openContents = []gojose.ContentEncryption{enc}
+	openSigAlgs  = []jose.SignatureAlgorithm{jose.PS256, jose.RS256}
+	openKeyAlgs  = []jose.KeyAlgorithm{keyAlg}
+	openContents = []jose.ContentEncryption{enc}
 )
 
 // TenantExpectation is the tenancy-agnostic `tid` rule the caller passes: the mapping from
@@ -88,7 +88,7 @@ type OpenOptions struct {
 	// Tenant is the tid rule for this delivery.
 	Tenant TenantExpectation
 	// Keys resolves the two wire kids per message: sign PUBLIC to verify, encrypt PRIVATE to decrypt.
-	Keys jose.KeyResolver
+	Keys bricksjose.KeyResolver
 }
 
 // Envelope is what a verified, decrypted message proves about itself. IssuedAt is the
@@ -110,12 +110,12 @@ func (e *Envelope) DedupKey() string {
 	return e.SignFamily + dedupKeySeparator + e.JTI
 }
 
-// OpenError is the opener's typed error: the *jose.Error every jose failure is (errors.As
+// OpenError is the opener's typed error: the *bricksjose.Error every jose failure is (errors.As
 // reaches it through Unwrap, errors.Is reaches the Sentinel through it) plus the rule that
 // fired and its presence/length details.
 type OpenError struct {
-	// Err is the *jose.Error: Sentinel, Code, Message, Kid and Cause.
-	Err *jose.Error
+	// Err is the *bricksjose.Error: Sentinel, Code, Message, Kid and Cause.
+	Err *bricksjose.Error
 	// Rule is the 1-based rule number that fired. It is a rendering aid for logs and
 	// reports only: callers MUST match on Err.Code or the sentinels, never on Rule, whose
 	// numbering may be renumbered when the rule set grows.
@@ -144,7 +144,7 @@ func (e *OpenError) Error() string {
 	return msg + " [" + strings.Join(parts, " ") + "]"
 }
 
-// Unwrap exposes the embedded *jose.Error, so errors.As(err, &joseErr) works and errors.Is
+// Unwrap exposes the embedded *bricksjose.Error, so errors.As(err, &joseErr) works and errors.Is
 // continues to the Sentinel.
 func (e *OpenError) Unwrap() error {
 	if e == nil {
@@ -236,7 +236,7 @@ func Open(body []byte, spec *Spec, opts *OpenOptions, out any) (*Envelope, error
 // peekOuter runs rules 1–4 on the peeked, still unauthenticated protected header: the
 // structural check and typ, G5 policy, the sign-family pin, and the PUBLIC key for the
 // Generation. It returns the wire kid, its family and the key rule 5 verifies with.
-func peekOuter(compact string, spec *Spec, keys jose.KeyResolver) (kid, family string, key *rsa.PublicKey, err error) {
+func peekOuter(compact string, spec *Spec, keys bricksjose.KeyResolver) (kid, family string, key *rsa.PublicKey, err error) {
 	// Rule 1 — structural: exactly three segments whose first is a JSON object, typ = v1.
 	if strings.Count(compact, ".") != 2 {
 		return "", "", nil, openError(1, ErrNotSealed, CodeNotSealed, "body is not a compact JWS", nil)
@@ -320,7 +320,7 @@ func checkHeaderPolicy(rule int, hdr *cryptoadapter.Header, algAllowed bool, lay
 }
 
 func sigAlgAllowed(alg string) bool {
-	return slices.Contains(openSigAlgs, gojose.SignatureAlgorithm(alg))
+	return slices.Contains(openSigAlgs, jose.SignatureAlgorithm(alg))
 }
 
 // authenticatedSlots is what rule 6 extracted from the verified header for rules 7–12.
@@ -394,7 +394,7 @@ func checkTenant(slots *authenticatedSlots, want TenantExpectation) error {
 // openSubject is the inner half of rule 10: the JWE's protected header under G5 with the
 // outer codes and a layer=jwe detail, iss == the outer kid, the encrypt family pin, a
 // PRIVATE key for the Generation, then the decrypt itself.
-func openSubject(compact, outerKid string, spec *Spec, keys jose.KeyResolver) (plaintext []byte, encKid string, err error) {
+func openSubject(compact, outerKid string, spec *Spec, keys bricksjose.KeyResolver) (plaintext []byte, encKid string, err error) {
 	inner, peekErr := cryptoadapter.PeekProtectedHeader(compact)
 	if peekErr != nil || strings.Count(compact, ".") != 4 {
 		return nil, "", openError(10, ErrOpenFailed, CodePayloadUndecodable, "subject member is not a compact JWE", nil)
@@ -426,7 +426,7 @@ func openSubject(compact, outerKid string, spec *Spec, keys jose.KeyResolver) (p
 // familyError is the sealer's checkFamily verdict (same sentinel, code and wording) at
 // open time, with the rule and layer attached.
 func familyError(rule int, kid, logical, role, layer string) error {
-	var je *jose.Error
+	var je *bricksjose.Error
 	errors.As(checkFamily(kid, logical, role), &je)
 	return &OpenError{Err: je, Rule: rule, Details: layerDetails(layer)}
 }
@@ -440,7 +440,7 @@ func unknownGenerationError(rule int, kid, role string, cause error, layer strin
 
 func openError(rule int, sentinel error, code, msg string, details map[string]string) *OpenError {
 	return &OpenError{
-		Err:     &jose.Error{Sentinel: sentinel, Code: code, Message: msg},
+		Err:     &bricksjose.Error{Sentinel: sentinel, Code: code, Message: msg},
 		Rule:    rule,
 		Details: details,
 	}

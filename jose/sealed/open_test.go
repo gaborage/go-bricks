@@ -17,11 +17,11 @@ import (
 	"testing"
 	"time"
 
-	gojose "github.com/go-jose/go-jose/v4"
+	jose "github.com/go-jose/go-jose/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/gaborage/go-bricks/jose"
+	bricksjose "github.com/gaborage/go-bricks/jose"
 	"github.com/gaborage/go-bricks/jose/sealed"
 	jositest "github.com/gaborage/go-bricks/jose/testing"
 )
@@ -46,8 +46,8 @@ const (
 // vectors are byte-stable files a partner can replay; they are test material only.
 type vectorKeys struct {
 	priv     map[string]*rsa.PrivateKey
-	consumer jose.KeyResolver // sign PUBLIC (v1 and v2) + encrypt PRIVATE — the opener's view
-	inner    string           // the positive vector's Subject JWE, shared by every vector that leaves it alone
+	consumer bricksjose.KeyResolver // sign PUBLIC (v1 and v2) + encrypt PRIVATE — the opener's view
+	inner    string                 // the positive vector's Subject JWE, shared by every vector that leaves it alone
 }
 
 func loadVectorKeys(t *testing.T) *vectorKeys {
@@ -107,8 +107,8 @@ type tenantRule struct {
 // ---- builders: the wire as an attacker (or a stock JOSE library) would produce it ----
 
 type innerOpts struct {
-	alg       gojose.KeyAlgorithm
-	cenc      gojose.ContentEncryption
+	alg       jose.KeyAlgorithm
+	cenc      jose.ContentEncryption
 	cty       string
 	kid, iss  string
 	crit      bool
@@ -118,25 +118,25 @@ type innerOpts struct {
 
 func (k *vectorKeys) innerDefaults() innerOpts {
 	return innerOpts{
-		alg: gojose.RSA_OAEP_256, cenc: gojose.A256GCM, cty: sealed.ContentTypeJSON, kid: vecEncKid, iss: vecSignKid,
+		alg: jose.RSA_OAEP_256, cenc: jose.A256GCM, cty: sealed.ContentTypeJSON, kid: vecEncKid, iss: vecSignKid,
 		pub: &k.priv[vecEncKid].PublicKey, plaintext: []byte(`{"pan":"4111111111111111","exp":"12/29"}`),
 	}
 }
 
 func encryptSubject(t *testing.T, o *innerOpts) string {
 	t.Helper()
-	extra := map[gojose.HeaderKey]any{}
+	extra := map[jose.HeaderKey]any{}
 	if o.iss != "" {
-		extra[gojose.HeaderKey(sealed.HeaderIssuer)] = o.iss
+		extra[jose.HeaderKey(sealed.HeaderIssuer)] = o.iss
 	}
 	if o.crit {
-		extra[gojose.HeaderKey("crit")] = []string{"exp"}
+		extra[jose.HeaderKey("crit")] = []string{"exp"}
 	}
-	opts := (&gojose.EncrypterOptions{ExtraHeaders: extra})
+	opts := (&jose.EncrypterOptions{ExtraHeaders: extra})
 	if o.cty != "" {
-		opts = opts.WithContentType(gojose.ContentType(o.cty))
+		opts = opts.WithContentType(jose.ContentType(o.cty))
 	}
-	encrypter, err := gojose.NewEncrypter(o.cenc, gojose.Recipient{Algorithm: o.alg, Key: o.pub, KeyID: o.kid}, opts)
+	encrypter, err := jose.NewEncrypter(o.cenc, jose.Recipient{Algorithm: o.alg, Key: o.pub, KeyID: o.kid}, opts)
 	require.NoError(t, err)
 	obj, err := encrypter.Encrypt(o.plaintext)
 	require.NoError(t, err)
@@ -167,7 +167,7 @@ func signCompact(t *testing.T, hdr map[string]any, payload []byte, key *rsa.Priv
 	if key != nil {
 		h := sha256.Sum256([]byte(seg(hdrJSON) + "." + seg(signOver)))
 		if hdr["alg"] == "RS256" {
-			sig, err = rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, h[:]) // NOSONAR test vector only; PKCS#1 v1.5 is an allowed alg
+			sig, err = rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, h[:]) // NOSONAR: test vector only; PKCS#1 v1.5 signing is an allowed v1 alg
 		} else {
 			sig, err = rsa.SignPSS(rand.Reader, key, crypto.SHA256, h[:], &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash})
 		}
@@ -289,8 +289,8 @@ func (k *vectorKeys) negativeVectors(t *testing.T) []vector {
 		// Rule 10 — the payload document and the inner JWE.
 		v("subject_not_a_string", sealed.CodePayloadUndecodable, 10, 1, mutation{doc: func(string) string { return `{"orderId":"ord-1","card":{"pan":"x"},"amount":1250}` }}),
 		v("subject_not_a_jwe", sealed.CodePayloadUndecodable, 10, 1, mutation{doc: func(string) string { return `{"orderId":"ord-1","card":"a.b.c","amount":1250}` }}),
-		jwe("inner_alg_rsa1_5", sealed.CodeAlgNotAllowed, mutation{inner: func(o *innerOpts) { o.alg = gojose.RSA1_5 }}),
-		jwe("inner_enc_a128gcm", sealed.CodeAlgNotAllowed, mutation{inner: func(o *innerOpts) { o.cenc = gojose.A128GCM }}),
+		jwe("inner_alg_rsa1_5", sealed.CodeAlgNotAllowed, mutation{inner: func(o *innerOpts) { o.alg = jose.RSA1_5 }}),
+		jwe("inner_enc_a128gcm", sealed.CodeAlgNotAllowed, mutation{inner: func(o *innerOpts) { o.cenc = jose.A128GCM }}),
 		jwe("inner_cty_wrong", sealed.CodeCtyInvalid, mutation{inner: func(o *innerOpts) { o.cty = "text/plain" }}),
 		jwe("inner_cty_absent", sealed.CodeCtyInvalid, mutation{inner: func(o *innerOpts) { o.cty = "" }}),
 		jwe("inner_crit_present", sealed.CodeCritPresent, mutation{inner: func(o *innerOpts) { o.crit = true }}),
@@ -385,8 +385,8 @@ func TestOpenNegativeVectors(t *testing.T) {
 			assert.Equal(t, tc.Layer, oe.Details[sealed.DetailLayer])
 			assert.Equal(t, tc.Slot, oe.Details[sealed.DetailSlot])
 
-			var je *jose.Error
-			require.ErrorAs(t, err, &je, "*jose.Error-compatible")
+			var je *bricksjose.Error
+			require.ErrorAs(t, err, &je, "*bricksjose.Error-compatible")
 			assert.Equal(t, tc.Code, je.Code)
 			switch tc.Code {
 			case sealed.CodeNotSealed:
@@ -568,7 +568,7 @@ func TestOpenRejectsWiringMistakes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.call()
-			var je *jose.Error
+			var je *bricksjose.Error
 			require.ErrorAs(t, err, &je)
 			assert.Equal(t, tc.code, je.Code)
 			assert.ErrorIs(t, err, sealed.ErrSealFailed)
@@ -601,7 +601,7 @@ func TestOpenOpensWhatSealProduced(t *testing.T) {
 }
 
 func TestOpenErrorRendersDetailsSorted(t *testing.T) {
-	err := &sealed.OpenError{Err: &jose.Error{Code: "X", Message: "m"}, Rule: 6, Details: map[string]string{"slot": "jti", "len": "0", "present": "false"}}
+	err := &sealed.OpenError{Err: &bricksjose.Error{Code: "X", Message: "m"}, Rule: 6, Details: map[string]string{"slot": "jti", "len": "0", "present": "false"}}
 	assert.Equal(t, "X: m [len=0 present=false slot=jti]", err.Error())
 	assert.Equal(t, "<nil>", (*sealed.OpenError)(nil).Error())
 	assert.Nil(t, (*sealed.OpenError)(nil).Unwrap())
