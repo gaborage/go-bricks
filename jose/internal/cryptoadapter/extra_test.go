@@ -147,7 +147,10 @@ func TestExtraOwnedParamsNeverLeakIntoExtra(t *testing.T) {
 
 func TestExtraCollisionRejected(t *testing.T) {
 	key := testKey(t)
-	names := []string{"alg", "enc", "kid", "cty", "typ"}
+	names := make([]string, 0, len(ownedParams)+len(reservedParams))
+	for owned := range ownedParams {
+		names = append(names, owned)
+	}
 	for reserved := range reservedParams {
 		names = append(names, reserved)
 	}
