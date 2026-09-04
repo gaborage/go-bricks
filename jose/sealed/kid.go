@@ -41,6 +41,10 @@ func CheckLogicalKid(s string) error {
 // SplitGenerationKid parses a concrete kid `<logical>-v<N>` into its family and Generation.
 // ok is false when the suffix is not `-v[1-9][0-9]*` or the family part is not itself a
 // Logical kid — so `x-v1-v2` is no Generation of anything, and `x-v0`/`x-v01` are refused.
+//
+// keystore.generationSuffixPattern / generationVersionPattern (and
+// config.sealGenerationPattern for the Activation selector) accept exactly this language;
+// keystore must stay free of go-jose, so the grammar is spelled twice — keep in sync.
 func SplitGenerationKid(kid string) (family string, generation int, ok bool) {
 	m := generationKid.FindStringSubmatch(kid)
 	if m == nil {
