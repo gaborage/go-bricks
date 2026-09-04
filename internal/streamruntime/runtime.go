@@ -22,13 +22,13 @@ var ErrNotLinked = errors.New(
 
 // Runtime is the registered streams implementation.
 type Runtime interface {
-	CollectDeclarations(modules []Module, log logger.Logger) (Declarations, error)
+	CollectDeclarations(modules []ModuleNamer, log logger.Logger) (Declarations, error)
 	NewManager(opts *ManagerOptions) Handle
 	CanDrainHold() bool
 }
 
-// Module is the subset of app.Module the runtime needs to walk declarers.
-type Module interface {
+// ModuleNamer is the subset of app.Module the runtime needs to walk declarers.
+type ModuleNamer interface {
 	Name() string
 }
 

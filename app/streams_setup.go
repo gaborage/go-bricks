@@ -90,8 +90,8 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 	return nil
 }
 
-func runtimeModules(mods []Module) []streamruntime.Module {
-	out := make([]streamruntime.Module, len(mods))
+func runtimeModules(mods []Module) []streamruntime.ModuleNamer {
+	out := make([]streamruntime.ModuleNamer, len(mods))
 	for i, m := range mods {
 		out[i] = m
 	}
