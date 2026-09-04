@@ -7,13 +7,8 @@
 == DeletePublished
 == Lead+Probe+Release
 # pool queries
-QUERY: SELECT id, event_type, aggregate_id, payload, headers, exchange, routing_key, lane, stream, partition_key, status, retry_count, created_at, seq
-		 FROM gobricks_outbox
-		 WHERE status = $1
-		 ORDER BY seq ASC
-		 LIMIT $2
+QUERY: SELECT id, event_type, aggregate_id, payload, headers, exchange, routing_key, lane, stream, partition_key, status, retry_count, created_at, seq FROM gobricks_outbox WHERE status = $1 ORDER BY seq ASC LIMIT 25
   arg[0] string = pending
-  arg[1] int = 25
 # pool execs
 EXEC: 
 CREATE TABLE IF NOT EXISTS gobricks_outbox (
@@ -53,13 +48,12 @@ EXEC: UPDATE gobricks_outbox SET retry_count = retry_count + 1, status = $1, err
   arg[0] string = failed
   arg[1] string = poison
   arg[2] string = 11111111-2222-4333-8444-555555555555
-EXEC: DELETE FROM gobricks_outbox WHERE status = $1 AND published_at < $2
+EXEC: DELETE FROM gobricks_outbox WHERE (status = $1 AND published_at < $2)
   arg[0] string = published
   arg[1] time.Time = <time>
 # tx queries
 # tx execs
-EXEC: INSERT INTO gobricks_outbox (id, event_type, aggregate_id, payload, headers, exchange, routing_key, lane, stream, partition_key, status, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+EXEC: INSERT INTO gobricks_outbox (id,event_type,aggregate_id,payload,headers,exchange,routing_key,lane,stream,partition_key,status,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
   arg[0] string = 11111111-2222-4333-8444-555555555555
   arg[1] string = order.created
   arg[2] string = order-42
@@ -73,6 +67,7 @@ EXEC: INSERT INTO gobricks_outbox (id, event_type, aggregate_id, payload, header
   arg[10] string = pending
   arg[11] time.Time = <time>
 # leader tx queries
-QUERY: SELECT id FROM gobricks_outbox_leader WHERE id = 1 FOR UPDATE NOWAIT
+QUERY: SELECT id FROM gobricks_outbox_leader WHERE id = $1 FOR UPDATE NOWAIT
+  arg[0] int = 1
 # leader tx execs
 EXEC: SELECT 1

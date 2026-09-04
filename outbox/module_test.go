@@ -1076,10 +1076,10 @@ func TestOutboxStorePerTenant(t *testing.T) {
 func TestLazyPublisherUsesCallersTenantStore(t *testing.T) {
 	tenants := dbtesting.NewTenantDBMap()
 	dbA := tenants.ForTenantWithVendor("tenant-a", dbtypes.PostgreSQL)
-	dbA.ExpectTransaction().ExpectExec(`VALUES ($1, $2`).WillReturnRowsAffected(1)
+	dbA.ExpectTransaction().ExpectExec(`VALUES ($1,$2`).WillReturnRowsAffected(1)
 
 	dbB := tenants.ForTenantWithVendor("tenant-b", dbtypes.Oracle)
-	dbB.ExpectTransaction().ExpectExec(`VALUES (:1, :2`).WillReturnRowsAffected(1)
+	dbB.ExpectTransaction().ExpectExec(`VALUES (:1,:2`).WillReturnRowsAffected(1)
 
 	m := &Module{
 		logger: logger.New("info", false),

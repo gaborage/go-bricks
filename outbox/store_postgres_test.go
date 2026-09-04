@@ -150,7 +150,8 @@ func TestPostgresStoreFetchPendingSelectsByStatusOnly(t *testing.T) {
 	require.Len(t, q, 1)
 	assert.NotContains(t, q[0].SQL, "retry_count <", "fetch must not gate on retry_count")
 	assert.Contains(t, q[0].SQL, "WHERE status")
-	assert.Equal(t, []any{StatusPending, 10}, q[0].Args)
+	assert.Contains(t, q[0].SQL, "LIMIT 10", "the batch size renders as a literal, not a bound argument")
+	assert.Equal(t, []any{StatusPending}, q[0].Args)
 }
 
 // --- MarkDeadLettered -------------------------------------------------------
