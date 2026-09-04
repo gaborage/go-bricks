@@ -1,12 +1,17 @@
 package inbox
 
 import (
+	"context"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
 // TestValidateHoldTableNameBoundsEveryDerivedName pins the bound both vendors
@@ -101,6 +106,56 @@ func TestBoundedLimitNeverWraps(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, boundedLimit(tc.limit))
+		})
+	}
+}
+
+func TestHoldStoreSQLGolden(t *testing.T) {
+	cases := []struct {
+		vendor string
+		build  func() (HoldStore, error)
+	}{
+		{dbtypes.PostgreSQL, func() (HoldStore, error) { return NewPostgresHoldStore("gobricks_inbox_hold") }},
+		{dbtypes.Oracle, func() (HoldStore, error) { return NewOracleHoldStore("gobricks_inbox_hold") }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.vendor, func(t *testing.T) {
+			store, err := tc.build()
+			require.NoError(t, err)
+			ctx := context.Background()
+			db, tx := permissiveDB(tc.vendor)
+			row := &HoldRow{
+				Consumer: "orders", Stream: "orders-s", Offset: 7, TenantID: "acme",
+				Data: []byte(`{"id":1}`), Properties: []byte(`{"k":"v"}`), HeldAt: fixedAt,
+			}
+			var out strings.Builder
+			step := func(name string, fn func() error) {
+				t.Helper()
+				require.NoError(t, fn(), name)
+				fmt.Fprintf(&out, "== %s\n", name)
+			}
+			step("CreateTable", func() error { return store.CreateTable(ctx, db) })
+			step("Park", func() error { _, err := store.Park(ctx, tx, row); return err })
+			step("HeldTenants", func() error { _, err := store.HeldTenants(ctx, db, "orders"); return err })
+			step("ListTenants", func() error { _, err := store.ListTenants(ctx, db, "orders"); return err })
+			step("DueTenants", func() error { _, err := store.DueTenants(ctx, db, "orders", 10); return err })
+			step("AcquireLease", func() error {
+				_, err := store.AcquireLease(ctx, db, "orders", "acme", "owner-1", 30*time.Second)
+				return err
+			})
+			step("NextRows", func() error { _, err := store.NextRows(ctx, db, "orders", "acme", 5); return err })
+			step("DeleteRow", func() error {
+				_, err := store.DeleteRow(ctx, db, "orders", "orders-s", 7, "acme", "owner-1")
+				return err
+			})
+			step("Defer", func() error {
+				_, err := store.Defer(ctx, db, "orders", "acme", "owner-1", 45*time.Second, "boom")
+				return err
+			})
+			step("ReleaseLease", func() error { return store.ReleaseLease(ctx, db, "orders", "acme", "owner-1") })
+			step("Release", func() error { _, err := store.Release(ctx, db, "orders", "acme", "owner-1"); return err })
+			step("Stats", func() error { _, err := store.Stats(ctx, db, "orders"); return err })
+			compareGolden(t, "hold_"+tc.vendor, out.String()+golden.Render(db, tx))
 		})
 	}
 }
