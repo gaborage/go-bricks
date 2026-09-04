@@ -13,6 +13,13 @@ import (
 // any character that could be misinterpreted by header processing or logging sinks.
 var kidPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+// ValidKid reports whether s is a well-formed key identifier: one or more ASCII
+// alphanumerics, underscores, or hyphens. Exported so every kid check in the module
+// (struct tags today, sealed messaging and the keystore next) shares this one grammar.
+func ValidKid(s string) bool {
+	return kidPattern.MatchString(s)
+}
+
 const TagName = "jose"
 
 // JOSE struct-tag keys.
@@ -146,7 +153,7 @@ func applyTagPair(p *Policy, key, val string) error {
 }
 
 func applyKid(p *Policy, key, val string) error {
-	if !kidPattern.MatchString(val) {
+	if !ValidKid(val) {
 		return &Error{
 			Sentinel: ErrTagInvalid,
 			Code:     codeTagKidInvalid,
