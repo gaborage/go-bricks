@@ -6601,8 +6601,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 ### [C63.1] `Client.Publish` / `AMQPClient.PublishToExchange` leave the module surface — publish through `DeclareTypedPublisher[T]` · compile-break · when: match
 
-- detect: `git grep -nE '[.]PublishToExchange\(|[.]Publish\(ctx, "|messaging[.]PublishOptions\{|messaging[.]ValidatePublishDestination\(' -- '*.go'`
+- detect: `git grep -nE '[.]PublishToExchange\(|[.]Publish\(|messaging[.]PublishOptions\{|messaging[.]ValidatePublishDestination\(' -- '*.go'`
   and `git grep -nE 'Messaging\(\) messaging[.]Client([^A-Za-z0-9_]|$)' -- '*.go'`
+  The `[.]Publish\(` arm over-matches on purpose; classify each hit by its receiver and
+  arity. REMOVED: a three-argument `(ctx, destination string, body []byte)` call on a
+  client from `deps.Messaging(ctx)` or `JobContext.Messaging()`. UNAFFECTED: the typed
+  handle `h.Publish(ctx, client, evt)` (three arguments, a client in the middle), the
+  streams handle `p.Publish(ctx, &streams.PublishMessage{…})` (two arguments), and the
+  outbox `deps.Outbox.Publish(ctx, tx, &app.OutboxEvent{…})`.
   and `git grep -nE 'ExpectPublish(Any|ToExchange|ToExchangeAny)?\(|PublishedFrame|LastPublishedFrame|ClearPublishedFrames|\.On\("Publish(ToExchange)?"' -- '*_test.go'`
   Hits on the first line are compile breaks in module or job code: the methods are gone from
   `messaging.Client` and `messaging.AMQPClient` (what `deps.Messaging(ctx)` and
@@ -6653,7 +6659,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `MockAMQPClient` handed to a real handle now fails with `ErrPublishDoorUnavailable`.
   Any publish through a client your own `MessagingClientFactory` built fails the same way —
   move it onto the framework-built client.
-- verify: `go build ./... && go vet ./...`  # clean; then `git grep -nE '[.]PublishToExchange\(|messaging[.]PublishOptions\{' -- '*.go'` returns nothing outside vendored framework code
+- verify: `go build ./... && go vet ./...`  # clean; then `git grep -nE '[.]PublishToExchange\(|messaging[.]PublishOptions\{' -- '*.go'` returns nothing outside vendored framework code, and every remaining `git grep -nE '[.]Publish\(' -- '*.go'` hit is a typed handle, a streams handle or the outbox — no three-argument `(ctx, string, []byte)` call on a client is left
 - ref: gaborage/go-bricks#1350 · #1305 · #1309 · [ADR-096](adr_096_typed_publish_door.md) · `messaging/typed_publisher.go`, `messaging/bytes_door.go`, `messaging/messaging.go`, `internal/publishdoor/`, `scheduler/job.go`, `testing/mocks/`, `messaging/testing/`
 
 ### [C63.2] header-sourced event ids are validated against `^[A-Za-z0-9_-]{1,128}$` before the inbox ledger · breaking · when: match
