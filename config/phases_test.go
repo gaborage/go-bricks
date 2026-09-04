@@ -176,7 +176,7 @@ func TestNormalizeManagerDefaultsRootOnly(t *testing.T) {
 	require.NoError(t, Validate(cfg))
 
 	assert.Equal(t, defaultDatabaseManagerIdleTTL, cfg.Database.Manager.IdleTTL)
-	assert.Equal(t, defaultDatabaseManagerCleanupInterval, cfg.Database.Manager.CleanupInterval)
+	assert.Equal(t, DefaultDatabaseManagerCleanupInterval, cfg.Database.Manager.CleanupInterval)
 	assert.Equal(t, defaultDatabaseManagerMaxSize, cfg.Database.Manager.MaxSize)
 	assert.Zero(t, cfg.Databases["reporting"].Manager)
 }

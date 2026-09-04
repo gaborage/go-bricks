@@ -56,10 +56,6 @@ type DbManager struct {
 	connector      Connector // Injected for testability
 }
 
-// defaultCleanupInterval is the documented idle-sweep frequency (database.manager.cleanupinterval)
-// applied when the caller supplies none.
-const defaultCleanupInterval = 5 * time.Minute
-
 // DbManagerOptions configures the DbManager
 type DbManagerOptions struct {
 	MaxSize int           // Cached-connection cap; <=0 uses a default (not unlimited).
@@ -79,7 +75,7 @@ func NewDbManager(resourceSource DBConfigProvider, log logger.Logger, opts DbMan
 		opts.IdleTTL = 30 * time.Minute // sensible default
 	}
 	if opts.CleanupInterval <= 0 {
-		opts.CleanupInterval = defaultCleanupInterval
+		opts.CleanupInterval = config.DefaultDatabaseManagerCleanupInterval
 	}
 
 	// Default to real connection factory if none provided
@@ -174,7 +170,7 @@ func (m *DbManager) StartCleanup(interval time.Duration) {
 		return // zero-value manager: nothing to run, consistent with the other nil-pool guards
 	}
 	if interval <= 0 {
-		interval = defaultCleanupInterval
+		interval = config.DefaultDatabaseManagerCleanupInterval
 	}
 	m.pool.StartCleanup(interval)
 }
