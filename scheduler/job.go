@@ -57,8 +57,10 @@ type JobContext interface {
 	// DB returns the database interface (may be nil if not configured in ModuleDeps)
 	DB() types.Interface
 
-	// Messaging returns the messaging client (may be nil if not configured in ModuleDeps)
-	Messaging() messaging.Client
+	// Messaging returns the messaging client (may be nil if not configured in
+	// ModuleDeps) — the same module-facing type ModuleDeps.Messaging resolves, so a
+	// job publishes through a messaging.Publisher[T] its module declared (ADR-096).
+	Messaging() messaging.AMQPClient
 
 	// Config returns the application configuration
 	Config() *config.Config
@@ -74,8 +76,8 @@ type jobContextImpl struct {
 	jobID           string
 	triggerType     string
 	logger          logger.Logger
-	getDB           func() types.Interface  // Resolver for multi-tenant DB
-	getMessaging    func() messaging.Client // Resolver for multi-tenant messaging
+	getDB           func() types.Interface      // Resolver for multi-tenant DB
+	getMessaging    func() messaging.AMQPClient // Resolver for multi-tenant messaging
 	config          *config.Config
 }
 
@@ -88,7 +90,7 @@ func newJobContext(
 	triggerType string,
 	log logger.Logger,
 	getDB func() types.Interface,
-	getMessaging func() messaging.Client,
+	getMessaging func() messaging.AMQPClient,
 	cfg *config.Config,
 ) *jobContextImpl {
 	return &jobContextImpl{
@@ -128,7 +130,7 @@ func (ctx *jobContextImpl) DB() types.Interface {
 
 // Messaging implements JobContext
 // Resolves tenant-specific messaging client dynamically for multi-tenant support
-func (ctx *jobContextImpl) Messaging() messaging.Client {
+func (ctx *jobContextImpl) Messaging() messaging.AMQPClient {
 	if ctx.getMessaging == nil {
 		return nil
 	}

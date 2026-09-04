@@ -87,6 +87,11 @@ type keyEntry struct {
 // All keys are loaded at construction time; access is read-only and thread-safe.
 type store struct {
 	keys map[string]*keyEntry
+	// families indexes the generation entries by Logical kid (generation.go).
+	families map[string][]Generation
+	// roleLog remembers which framework feature resolved each entry at startup
+	// (roles.go); it is the one part of the store written after construction.
+	roleLog
 }
 
 // PublicKey returns the RSA public key for the given key pair name.
@@ -133,7 +138,8 @@ func newStore(keys map[string]config.KeyPairConfig, secretMinLength int) (*store
 	parsed := make(map[string]*keyEntry, len(keys))
 
 	// Sorted so the first error names the same key every run.
-	for _, name := range slices.Sorted(maps.Keys(keys)) {
+	names := slices.Sorted(maps.Keys(keys))
+	for _, name := range names {
 		kpCfg := keys[name]
 		entry, err := loadKeyEntry(name, &kpCfg, secretMinLength)
 		if err != nil {
@@ -142,7 +148,11 @@ func newStore(keys map[string]config.KeyPairConfig, secretMinLength int) (*store
 		parsed[name] = entry
 	}
 
-	return &store{keys: parsed}, nil
+	families, err := indexFamilies(names, parsed)
+	if err != nil {
+		return nil, err
+	}
+	return &store{keys: parsed, families: families}, nil
 }
 
 // loadKeyEntry loads one entry as a symmetric secret, a PKCS#12 bundle, or an

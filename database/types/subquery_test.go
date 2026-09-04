@@ -34,6 +34,12 @@ func (m *mockValidSubquery) OrderBy(_ ...any) SelectQueryBuilder       { return 
 func (m *mockValidSubquery) Limit(_ uint64) SelectQueryBuilder         { return m }
 func (m *mockValidSubquery) Offset(_ uint64) SelectQueryBuilder        { return m }
 func (m *mockValidSubquery) Paginate(_, _ uint64) SelectQueryBuilder   { return m }
+func (m *mockValidSubquery) ForUpdate() SelectQueryBuilder             { return m }
+func (m *mockValidSubquery) ForUpdateNoWait() SelectQueryBuilder       { return m }
+func (m *mockValidSubquery) SubqueryColumn(_ SelectQueryBuilder, _ string) SelectQueryBuilder {
+	return m
+}
+
 func (m *mockValidSubquery) ToSQL() (sql string, args []any, err error) {
 	return "SELECT id FROM test_table WHERE status = :1", []any{"active"}, nil
 }
@@ -63,6 +69,12 @@ func (m *mockInvalidSubquery) OrderBy(_ ...any) SelectQueryBuilder       { retur
 func (m *mockInvalidSubquery) Limit(_ uint64) SelectQueryBuilder         { return m }
 func (m *mockInvalidSubquery) Offset(_ uint64) SelectQueryBuilder        { return m }
 func (m *mockInvalidSubquery) Paginate(_, _ uint64) SelectQueryBuilder   { return m }
+func (m *mockInvalidSubquery) ForUpdate() SelectQueryBuilder             { return m }
+func (m *mockInvalidSubquery) ForUpdateNoWait() SelectQueryBuilder       { return m }
+func (m *mockInvalidSubquery) SubqueryColumn(_ SelectQueryBuilder, _ string) SelectQueryBuilder {
+	return m
+}
+
 func (m *mockInvalidSubquery) ToSQL() (sql string, args []any, err error) {
 	return "", nil, assert.AnError
 }
@@ -92,6 +104,12 @@ func (m *mockEmptySubquery) OrderBy(_ ...any) SelectQueryBuilder       { return 
 func (m *mockEmptySubquery) Limit(_ uint64) SelectQueryBuilder         { return m }
 func (m *mockEmptySubquery) Offset(_ uint64) SelectQueryBuilder        { return m }
 func (m *mockEmptySubquery) Paginate(_, _ uint64) SelectQueryBuilder   { return m }
+func (m *mockEmptySubquery) ForUpdate() SelectQueryBuilder             { return m }
+func (m *mockEmptySubquery) ForUpdateNoWait() SelectQueryBuilder       { return m }
+func (m *mockEmptySubquery) SubqueryColumn(_ SelectQueryBuilder, _ string) SelectQueryBuilder {
+	return m
+}
+
 func (m *mockEmptySubquery) ToSQL() (sql string, args []any, err error) {
 	return "", []any{}, nil
 }

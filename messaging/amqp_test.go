@@ -143,7 +143,7 @@ func TestAMQPHeaderHardeningVariousTypes(t *testing.T) {
 	// neither panic on them nor drop the caller's own entries.
 	pub := preparePublishing(
 		gobrickstrace.WithTraceID(context.Background(), "context-trace-id"),
-		PublishOptions{Headers: map[string]any{
+		publishOptions{Headers: map[string]any{
 			gobrickstrace.HeaderXRequestID:  []byte("byte-array-trace-id"),
 			gobrickstrace.HeaderTraceParent: "00-abcdefabcdefabcdefabcdefabcdefab-1234567890123456-01",
 			"custom-header":                 42,

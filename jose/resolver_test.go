@@ -104,3 +104,48 @@ func TestResolvePolicyMissingKey(t *testing.T) {
 	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, "JOSE_KID_UNKNOWN", jerr.Code)
 }
+
+// recordingKS is a fakeKS that also keeps the keystore's role log door.
+type recordingKS struct {
+	fakeKS
+	recorded [][2]string
+}
+
+func (r *recordingKS) RecordResolution(entry, role string) {
+	r.recorded = append(r.recorded, [2]string{entry, role})
+}
+
+// TestResolvePolicyTagsBothKidsAsJoseRoute pins the dual-role bookkeeping: a
+// resolved policy tags exactly its two kids under "jose-route", a refused one tags
+// nothing, and a store without the door is left alone.
+func TestResolvePolicyTagsBothKidsAsJoseRoute(t *testing.T) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	ks := &recordingKS{fakeKS: fakeKS{
+		priv: map[string]*rsa.PrivateKey{"ours": priv},
+		pub:  map[string]*rsa.PublicKey{"ours": &priv.PublicKey, "peer": &priv.PublicKey},
+	}}
+	r := jose.NewKeyStoreResolver(ks)
+
+	require.NoError(t, jose.ResolvePolicy(r, &jose.Policy{Direction: jose.DirectionInbound, DecryptKid: "ours", VerifyKid: "peer"}))
+	assert.Equal(t, [][2]string{{"ours", "jose-route"}, {"peer", "jose-route"}}, ks.recorded)
+
+	require.NoError(t, jose.ResolvePolicy(r, &jose.Policy{Direction: jose.DirectionOutbound, SignKid: "ours", EncryptKid: "peer"}))
+	assert.Len(t, ks.recorded, 4, "outbound tags its two kids too")
+
+	before := len(ks.recorded)
+	require.Error(t, jose.ResolvePolicy(r, &jose.Policy{Direction: jose.DirectionInbound, DecryptKid: "ours", VerifyKid: "missing"}))
+	assert.Len(t, ks.recorded, before, "a refused policy tags nothing")
+	require.NoError(t, jose.ResolvePolicy(r, nil))
+	assert.Len(t, ks.recorded, before, "a nil policy tags nothing")
+
+	// Per-message resolution never records.
+	_, err = r.PublicKey("peer")
+	require.NoError(t, err)
+	assert.Len(t, ks.recorded, before)
+
+	// A store without the door: same policy resolves, nothing to record, no panic.
+	plain := jose.NewKeyStoreResolver(&ks.fakeKS)
+	require.NoError(t, jose.ResolvePolicy(plain, &jose.Policy{Direction: jose.DirectionInbound, DecryptKid: "ours", VerifyKid: "peer"}))
+	assert.NotPanics(t, func() { (*jose.KeyStoreResolver)(nil).RecordResolution("x", "y") })
+}

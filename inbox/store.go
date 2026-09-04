@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gaborage/go-bricks/database"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/sqlid"
 )
@@ -57,4 +58,11 @@ func validateTableName(name string) error {
 		return fmt.Errorf("inbox: table name %q is too long (max %d; derived Oracle identifiers must fit 128 chars)", name, maxTableNameLen)
 	}
 	return nil
+}
+
+// deleteProcessedBefore is the retention sweep both vendors share: the builder
+// renders the vendor's placeholder, and the rows-affected count is the result.
+func deleteProcessedBefore(ctx context.Context, db dbtypes.Interface, qb *database.QueryBuilder, table, label string, before time.Time) (int64, error) {
+	f := qb.Filter()
+	return database.ExecuteUpdate(ctx, db, qb.Delete(table).Where(f.Lt("processed_at", before)), label)
 }

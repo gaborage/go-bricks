@@ -146,6 +146,7 @@ func DeclareTypedConsumer[T any](decls *Declarations, opts *ConsumerOptions, fn 
 func DeclareTypedConsumerWithMeta[T any](decls *Declarations, opts *ConsumerOptions, fn func(context.Context, T, *Message) error) {
 	const entry = "DeclareTypedConsumerWithMeta"
 	checkTypedConsumerArgs(decls, opts, (*ConsumerOptions).handlerSlot, fn == nil, entry, "ConsumerOptions")
+	rejectSealedType[T](entry)
 
 	typed := newTypedConsumer(opts.Name, fn)
 	opts.Handler = typed.handle
@@ -166,6 +167,7 @@ func DeclareTypedSuperStreamConsumerWithMeta[T any](decls *Declarations, opts *S
 	const entry = "DeclareTypedSuperStreamConsumerWithMeta"
 	checkTypedConsumerArgs(decls, opts, (*SuperStreamConsumerOptions).handlerSlot,
 		fn == nil, entry, "SuperStreamConsumerOptions")
+	rejectSealedType[T](entry)
 
 	typed := newTypedConsumer(opts.Name, fn)
 	opts.Handler = typed.handle

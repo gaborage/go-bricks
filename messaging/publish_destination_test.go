@@ -30,14 +30,14 @@ func boundedClient(t *testing.T, ch *fakeChannel) *AMQPClientImpl {
 	return c
 }
 
-// TestPublishToExchangeRefusesAnOversizedRoutingKey pins the whole point: the
+// TestPublishBytesRefusesAnOversizedRoutingKey pins the whole point: the
 // publish is refused BEFORE the channel is touched, so the shared connection is
 // never put at risk and the bounded retry loop never re-tears it.
-func TestPublishToExchangeRefusesAnOversizedRoutingKey(t *testing.T) {
+func TestPublishBytesRefusesAnOversizedRoutingKey(t *testing.T) {
 	ch := &fakeChannel{}
 	c := boundedClient(t, ch)
 
-	err := c.PublishToExchange(context.Background(), PublishOptions{
+	err := c.publishBytes(context.Background(), publishOptions{
 		Exchange:   "ex",
 		RoutingKey: oversizedShortStr,
 	}, []byte(testMessageBody))
@@ -48,42 +48,42 @@ func TestPublishToExchangeRefusesAnOversizedRoutingKey(t *testing.T) {
 	assert.NotErrorIs(t, err, ErrPublishRetriesExhausted, "this is not a retry outcome")
 }
 
-// TestPublishToExchangeRefusesEveryOversizedShortStr covers the other two fields
+// TestPublishBytesRefusesEveryOversizedShortStr covers the other two fields
 // of the frame the caller controls. A header table's keys are shortstrs at every
 // depth, so a nested table is judged like the top-level one.
-func TestPublishToExchangeRefusesEveryOversizedShortStr(t *testing.T) {
+func TestPublishBytesRefusesEveryOversizedShortStr(t *testing.T) {
 	tests := []struct {
 		name    string
-		options PublishOptions
+		options publishOptions
 		field   string
 	}{
 		{
 			name:    "oversized_exchange",
-			options: PublishOptions{Exchange: oversizedShortStr, RoutingKey: "rk"},
+			options: publishOptions{Exchange: oversizedShortStr, RoutingKey: "rk"},
 			field:   "exchange",
 		},
 		{
 			name:    "oversized_header_key",
-			options: PublishOptions{Exchange: "ex", RoutingKey: "rk", Headers: map[string]any{oversizedShortStr: "v"}},
+			options: publishOptions{Exchange: "ex", RoutingKey: "rk", Headers: map[string]any{oversizedShortStr: "v"}},
 			field:   "header key",
 		},
 		{
 			name: "oversized_key_in_a_table_inside_an_array",
-			options: PublishOptions{Exchange: "ex", RoutingKey: "rk", Headers: map[string]any{
+			options: publishOptions{Exchange: "ex", RoutingKey: "rk", Headers: map[string]any{
 				"outer": []any{amqp.Table{oversizedShortStr: "v"}},
 			}},
 			field: "header key",
 		},
 		{
 			name: "oversized_key_in_a_table_two_arrays_deep",
-			options: PublishOptions{Exchange: "ex", RoutingKey: "rk", Headers: map[string]any{
+			options: publishOptions{Exchange: "ex", RoutingKey: "rk", Headers: map[string]any{
 				"outer": []any{[]any{map[string]any{oversizedShortStr: "v"}}},
 			}},
 			field: "header key",
 		},
 		{
 			name: "oversized_key_in_a_nested_table",
-			options: PublishOptions{Exchange: "ex", RoutingKey: "rk", Headers: map[string]any{
+			options: publishOptions{Exchange: "ex", RoutingKey: "rk", Headers: map[string]any{
 				"outer": amqp.Table{oversizedShortStr: "v"},
 			}},
 			field: "header key",
@@ -95,7 +95,7 @@ func TestPublishToExchangeRefusesEveryOversizedShortStr(t *testing.T) {
 			ch := &fakeChannel{}
 			c := boundedClient(t, ch)
 
-			err := c.PublishToExchange(context.Background(), tt.options, []byte(testMessageBody))
+			err := c.publishBytes(context.Background(), tt.options, []byte(testMessageBody))
 
 			require.ErrorIs(t, err, ErrInvalidPublishDestination)
 			assert.Zero(t, atomic.LoadUint64(&ch.publishAttempts))
@@ -106,17 +106,17 @@ func TestPublishToExchangeRefusesEveryOversizedShortStr(t *testing.T) {
 	}
 }
 
-// TestPublishToExchangeAcceptsTheBoundaryAndEmptyDestinations pins what must
+// TestPublishBytesAcceptsTheBoundaryAndEmptyDestinations pins what must
 // keep working: 255 bytes is the limit, not one below it, and an empty exchange
 // (the default exchange) or routing key is legal AMQP.
-func TestPublishToExchangeAcceptsTheBoundaryAndEmptyDestinations(t *testing.T) {
+func TestPublishBytesAcceptsTheBoundaryAndEmptyDestinations(t *testing.T) {
 	tests := []struct {
 		name    string
-		options PublishOptions
+		options publishOptions
 	}{
-		{name: "routing_key_at_the_limit", options: PublishOptions{Exchange: "ex", RoutingKey: strings.Repeat("k", 255)}},
-		{name: "empty_exchange_and_routing_key", options: PublishOptions{}},
-		{name: "header_key_at_the_limit", options: PublishOptions{Headers: map[string]any{strings.Repeat("h", 255): "v"}}},
+		{name: "routing_key_at_the_limit", options: publishOptions{Exchange: "ex", RoutingKey: strings.Repeat("k", 255)}},
+		{name: "empty_exchange_and_routing_key", options: publishOptions{}},
+		{name: "header_key_at_the_limit", options: publishOptions{Headers: map[string]any{strings.Repeat("h", 255): "v"}}},
 	}
 
 	for _, tt := range tests {
@@ -125,7 +125,7 @@ func TestPublishToExchangeAcceptsTheBoundaryAndEmptyDestinations(t *testing.T) {
 			c := newClientWithFakeChannel(t, ch)
 			sendConfirmsAfterEachAttempt(t, c, ch, amqp.Confirmation{Ack: true, DeliveryTag: 1})
 
-			err := c.PublishToExchange(context.Background(), tt.options, []byte(testMessageBody))
+			err := c.publishBytes(context.Background(), tt.options, []byte(testMessageBody))
 
 			require.NoError(t, err)
 			assert.Equal(t, uint64(1), atomic.LoadUint64(&ch.publishAttempts), "the publish reached the channel")
@@ -139,7 +139,7 @@ func TestPublishRefusesAnOversizedDestination(t *testing.T) {
 	ch := &fakeChannel{}
 	c := boundedClient(t, ch)
 
-	err := c.Publish(context.Background(), oversizedShortStr, []byte(testMessageBody))
+	err := c.publishBytes(context.Background(), publishOptions{RoutingKey: oversizedShortStr}, []byte(testMessageBody))
 
 	require.ErrorIs(t, err, ErrInvalidPublishDestination)
 	assert.Zero(t, atomic.LoadUint64(&ch.publishAttempts))
@@ -308,26 +308,26 @@ func TestValidatePublishDestination(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		options PublishOptions
+		options publishOptions
 		field   string
 	}{
-		{name: "empty_is_legal", options: PublishOptions{}},
+		{name: "empty_is_legal", options: publishOptions{}},
 		{
 			name:    "max_length_fields_are_legal",
-			options: PublishOptions{Exchange: maxLengthShortStr, RoutingKey: maxLengthShortStr, Headers: map[string]any{maxLengthShortStr: "v"}},
+			options: publishOptions{Exchange: maxLengthShortStr, RoutingKey: maxLengthShortStr, Headers: map[string]any{maxLengthShortStr: "v"}},
 		},
-		{name: "oversized_exchange", options: PublishOptions{Exchange: oversizedShortStr}, field: "exchange"},
-		{name: "oversized_routing_key", options: PublishOptions{RoutingKey: oversizedShortStr}, field: "routing key"},
+		{name: "oversized_exchange", options: publishOptions{Exchange: oversizedShortStr}, field: "exchange"},
+		{name: "oversized_routing_key", options: publishOptions{RoutingKey: oversizedShortStr}, field: "routing key"},
 		{
 			name:    "oversized_nested_header_key",
-			options: PublishOptions{Headers: map[string]any{"outer": map[string]any{oversizedShortStr: "v"}}},
+			options: publishOptions{Headers: map[string]any{"outer": map[string]any{oversizedShortStr: "v"}}},
 			field:   "header key",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidatePublishDestination(tt.options)
+			err := ValidatePublishDestination(tt.options.Exchange, tt.options.RoutingKey, tt.options.Headers)
 			if tt.field == "" {
 				require.NoError(t, err)
 				return

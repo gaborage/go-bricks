@@ -29,6 +29,18 @@ type KeyStoreLike interface {
 	PublicKey(name string) (*rsa.PublicKey, error)
 }
 
+// ResolutionRecorder is the optional door a resolver offers so a startup resolution
+// can tag the entry it resolved with the feature that asked (the keystore's role log:
+// HTTP jose and sealing must never share a kid, and the app warns once per entry seen
+// under both). ResolvePolicy records through it; per-message resolution never does.
+type ResolutionRecorder interface {
+	RecordResolution(entry, role string)
+}
+
+// roleTagJoseRoute is the tag ResolvePolicy records; spelled here rather than imported
+// from keystore, which this package must not depend on.
+const roleTagJoseRoute = "jose-route"
+
 // KeyStoreResolver adapts a KeyStoreLike (typically an app.KeyStore) to KeyResolver.
 // It is the default resolver wired into the server when a keystore module is registered.
 type KeyStoreResolver struct {
@@ -37,6 +49,17 @@ type KeyStoreResolver struct {
 
 func NewKeyStoreResolver(ks KeyStoreLike) *KeyStoreResolver {
 	return &KeyStoreResolver{ks: ks}
+}
+
+// RecordResolution implements ResolutionRecorder by forwarding to the store when it
+// keeps a role log; a plain store records nothing.
+func (r *KeyStoreResolver) RecordResolution(entry, role string) {
+	if r == nil {
+		return
+	}
+	if rec, ok := r.ks.(ResolutionRecorder); ok {
+		rec.RecordResolution(entry, role)
+	}
 }
 
 func (r *KeyStoreResolver) PrivateKey(kid string) (*rsa.PrivateKey, error) {
@@ -90,21 +113,25 @@ func ResolvePolicy(r KeyResolver, p *Policy) error {
 	if p == nil {
 		return nil
 	}
+	var private, public string
 	switch p.Direction {
 	case DirectionInbound:
-		if _, err := r.PrivateKey(p.DecryptKid); err != nil {
-			return err
-		}
-		if _, err := r.PublicKey(p.VerifyKid); err != nil {
-			return err
-		}
+		private, public = p.DecryptKid, p.VerifyKid
 	case DirectionOutbound:
-		if _, err := r.PrivateKey(p.SignKid); err != nil {
-			return err
-		}
-		if _, err := r.PublicKey(p.EncryptKid); err != nil {
-			return err
-		}
+		private, public = p.SignKid, p.EncryptKid
+	default:
+		return nil
+	}
+	if _, err := r.PrivateKey(private); err != nil {
+		return err
+	}
+	if _, err := r.PublicKey(public); err != nil {
+		return err
+	}
+	// Both resolved: tag them as HTTP-jose entries for the dual-role check.
+	if rec, ok := r.(ResolutionRecorder); ok {
+		rec.RecordResolution(private, roleTagJoseRoute)
+		rec.RecordResolution(public, roleTagJoseRoute)
 	}
 	return nil
 }

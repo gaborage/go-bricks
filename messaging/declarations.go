@@ -44,6 +44,15 @@ type Declarations struct {
 	consumerIndex  map[consumerKey]*ConsumerDeclaration // Deduplication + O(1) lookup
 	consumerOrder  []consumerKey                        // Deterministic iteration order
 	queueConflicts []queueConflict                      // Incompatible queue re-declarations, reported by Validate
+	sealErr        error                                // First seal-tagged declaration that cannot seal, reported by Validate
+}
+
+// recordSealError keeps the first sealing startup failure for Validate to report; startup
+// stops at the first one, so later failures are not collected.
+func (d *Declarations) recordSealError(err error) {
+	if d.sealErr == nil {
+		d.sealErr = err
+	}
 }
 
 // NewDeclarations creates a new empty declarations store.
@@ -290,6 +299,15 @@ func (d *Declarations) Consumers() []*ConsumerDeclaration {
 // Validate checks the integrity of all declarations.
 // It ensures that references between declarations are valid.
 func (d *Declarations) Validate() error {
+	// A seal-tagged declaration that cannot seal — codec not linked, runtime not
+	// configured, no key material, a refused declaration or Activation — is a
+	// startup failure, never a publish-time one (ADR-097). It is reported before
+	// the topology rules because it names a declaration the module author wrote
+	// and the remedy is theirs (an import, a keystore entry, a selector), whereas
+	// a queue conflict or a dangling binding is a relationship between modules.
+	if d.sealErr != nil {
+		return d.sealErr
+	}
 	if err := d.validateQueueConflicts(); err != nil {
 		return err
 	}
@@ -326,12 +344,47 @@ func (d *Declarations) Validate() error {
 	}
 
 	for _, publisher := range d.Publishers {
-		if _, exists := d.Exchanges[publisher.Exchange]; !exists {
-			return fmt.Errorf("publisher references non-existent exchange: %s", publisher.Exchange)
+		if err := d.validatePublisherDestination(publisher); err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+// validatePublisherDestination checks that one publisher declaration names a
+// destination a publish can actually reach.
+func (d *Declarations) validatePublisherDestination(publisher *PublisherDeclaration) error {
+	// AMQP's built-in default exchange: never declared, and every queue is bound
+	// to it under its own name, so this publisher routes by queue name through
+	// its RoutingKey. That makes the routing key load-bearing: with both fields
+	// empty the broker takes the publish and drops it (nothing is bound to ""
+	// and publishes are not Mandatory by default), which is what an omitted
+	// Exchange looks like. Fail startup instead of publishing into a black hole.
+	if publisher.Exchange == "" {
+		if publisher.RoutingKey == "" {
+			return fmt.Errorf("publisher on the default exchange has no routing key: set RoutingKey to the target queue name%s",
+				eventTypeSuffix(publisher.EventType))
+		}
+		return nil
+	}
+
+	if _, exists := d.Exchanges[publisher.Exchange]; !exists {
+		return fmt.Errorf("publisher references non-existent exchange: %s", publisher.Exchange)
+	}
+
+	return nil
+}
+
+// eventTypeSuffix names the offending declaration in a validation error when its
+// EventType is set — several publishers can share a destination, and EventType is
+// the only field that tells them apart at a call site.
+func eventTypeSuffix(eventType string) string {
+	if eventType == "" {
+		return ""
+	}
+
+	return fmt.Sprintf(" (event type %q)", eventType)
 }
 
 // validateStreamDeclarations enforces the shape RabbitMQ stream queues and
@@ -539,6 +592,7 @@ func (d *Declarations) Clone() *Declarations {
 
 	// A clone that passed a validation its source failed would be a trap.
 	clone.queueConflicts = slices.Clone(d.queueConflicts)
+	clone.sealErr = d.sealErr
 
 	// Clone bindings
 	for _, binding := range d.Bindings {

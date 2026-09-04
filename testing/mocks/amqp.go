@@ -11,14 +11,14 @@ import (
 
 // MockAMQPClient provides a testify-based mock implementation of the messaging.AMQPClient interface.
 // It extends MockMessagingClient with AMQP-specific operations for advanced testing scenarios.
+// It carries no byte publish method (ADR-096): a messaging.Publisher[T] handed this
+// mock fails with messaging.ErrPublishDoorUnavailable. To assert what a module
+// published, swap the handle for messaging/testing's CapturePublisher[T].
 //
 // Example usage:
 //
 //	mockAMQP := mocks.NewMockAMQPClient()
 //	mockAMQP.On("DeclareQueue", mock.Anything, mock.Anything).Return(nil)
-//	mockAMQP.On("PublishToExchange", mock.Anything, mock.MatchedBy(func(opts messaging.PublishOptions) bool {
-//		return opts.Exchange == "test.exchange"
-//	}), mock.Anything).Return(nil)
 type MockAMQPClient struct {
 	*MockMessagingClient
 
@@ -39,12 +39,6 @@ func NewMockAMQPClient() *MockAMQPClient {
 }
 
 var _ messaging.AMQPClient = (*MockAMQPClient)(nil)
-
-// PublishToExchange implements messaging.AMQPClient
-func (m *MockAMQPClient) PublishToExchange(ctx context.Context, options messaging.PublishOptions, data []byte) error {
-	arguments := m.Called(ctx, options, data)
-	return arguments.Error(0)
-}
 
 // ConsumeFromQueue implements messaging.AMQPClient
 func (m *MockAMQPClient) ConsumeFromQueue(ctx context.Context, options messaging.ConsumeOptions) (<-chan amqp.Delivery, error) {
@@ -137,16 +131,6 @@ func (m *MockAMQPClient) ClearInfrastructure() {
 	m.declaredQueues = make(map[string]bool)
 	m.declaredExchanges = make(map[string]bool)
 	m.bindings = make(map[string]bool)
-}
-
-// ExpectPublishToExchange sets up a publish to exchange expectation
-func (m *MockAMQPClient) ExpectPublishToExchange(options messaging.PublishOptions, data []byte, err error) *mock.Call {
-	return m.On("PublishToExchange", mock.Anything, options, data).Return(err)
-}
-
-// ExpectPublishToExchangeAny sets up a publish to exchange expectation for any options and data
-func (m *MockAMQPClient) ExpectPublishToExchangeAny(err error) *mock.Call {
-	return m.On("PublishToExchange", mock.Anything, mock.Anything, mock.Anything).Return(err)
 }
 
 // ExpectConsumeFromQueue sets up a consume from queue expectation

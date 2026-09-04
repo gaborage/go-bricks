@@ -844,7 +844,7 @@ func logProcessing(log logger.Logger, traceID string, delivery *amqp.Delivery, i
 	if !dbg.Enabled() {
 		return
 	}
-	dbg = dbg.Str("correlation_id", traceID)
+	dbg = dbg.Str(logger.FieldCorrelationID, traceID)
 	dbg = strIfSet(dbg, "message_id", id.messageID)
 	dbg = strIfSet(dbg, "routing_key", id.routingKey)
 	dbg = strIfSet(dbg, "exchange", id.exchange)
@@ -877,7 +877,7 @@ func ackMessage(delivery *amqp.Delivery, log logger.Logger, traceID string) {
 	tracking.RecordSettlement(tracking.LaneClassic, tracking.OutcomeAcked, err)
 	if err != nil {
 		log.Error().
-			Str("correlation_id", traceID).
+			Str(logger.FieldCorrelationID, traceID).
 			Err(err).
 			Uint64("delivery_tag", delivery.DeliveryTag).
 			Msg("Failed to ack message")
@@ -895,7 +895,7 @@ func nackMessage(delivery *amqp.Delivery, log logger.Logger, traceID string) {
 	tracking.RecordSettlement(tracking.LaneClassic, tracking.OutcomeNacked, err)
 	if err != nil {
 		log.Error().
-			Str("correlation_id", traceID).
+			Str(logger.FieldCorrelationID, traceID).
 			Err(err).
 			Uint64("delivery_tag", delivery.DeliveryTag).
 			Msg("Failed to nack message")

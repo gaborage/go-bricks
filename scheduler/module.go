@@ -57,7 +57,7 @@ type Module struct {
 	tracer        trace.Tracer
 	meterProvider metric.MeterProvider
 	getDB         func(context.Context) (types.Interface, error)
-	getMessaging  func(context.Context) (messaging.Client, error)
+	getMessaging  func(context.Context) (messaging.AMQPClient, error)
 
 	// OpenTelemetry instruments (pre-created for performance)
 	executionCounter  metric.Int64Counter
@@ -146,7 +146,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 
 	// Store multi-tenant resource resolvers
 	m.getDB = deps.DB
-	m.getMessaging = func(ctx context.Context) (messaging.Client, error) {
+	m.getMessaging = func(ctx context.Context) (messaging.AMQPClient, error) {
 		amqpClient, err := deps.Messaging(ctx)
 		if err != nil {
 			return nil, err
@@ -633,7 +633,7 @@ func (m *Module) runJobBody(entry *jobEntry, triggerType string) {
 			}
 			return db
 		},
-		func() messaging.Client {
+		func() messaging.AMQPClient {
 			msg, err := m.getMessaging(ctx)
 			if err != nil {
 				m.logger.Error().Err(err).Msg("Failed to get Messaging for job execution")
@@ -860,7 +860,7 @@ func (m *Module) logJobResultSummary(
 		Int64("job.execution.duration", duration.Nanoseconds()).
 		Str("job.status", jobStatusFromError(err)).
 		Str("result_code", resultCode).
-		Str("correlation_id", traceID).
+		Str(logger.FieldCorrelationID, traceID).
 		Str("traceparent", traceparent).
 		Int64("db_queries", dbCount).
 		Int64("db_elapsed", dbElapsed).

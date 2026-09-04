@@ -2,26 +2,18 @@ package messaging
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // MockClient implements the Client interface for testing
 type MockClient struct {
 	isReady bool
 	closed  bool
-}
-
-func (m *MockClient) Publish(_ context.Context, _ string, _ []byte) error {
-	if !m.isReady {
-		return errNotConnected
-	}
-	if m.closed {
-		return errAlreadyClosed
-	}
-	return nil
 }
 
 func (m *MockClient) Consume(_ context.Context, _ string) (<-chan amqp.Delivery, error) {
@@ -67,7 +59,7 @@ func NewMockAMQPClient() *MockAMQPClient {
 	}
 }
 
-func (m *MockAMQPClient) PublishToExchange(_ context.Context, _ PublishOptions, _ []byte) error {
+func (m *MockAMQPClient) publishBytes(_ context.Context, _ publishOptions, _ []byte) error {
 	if !m.isReady {
 		return errNotConnected
 	}
@@ -144,7 +136,7 @@ func (m *MockMessageHandler) EventType() string {
 }
 
 func TestPublishOptions(t *testing.T) {
-	options := PublishOptions{
+	options := publishOptions{
 		Exchange:   testExchange,
 		RoutingKey: testRoute,
 		Headers:    map[string]any{"test": "value"},
@@ -175,52 +167,6 @@ func TestConsumeOptions(t *testing.T) {
 	assert.False(t, options.Exclusive)
 	assert.False(t, options.NoLocal)
 	assert.True(t, options.NoWait)
-}
-
-func TestMockClientPublish(t *testing.T) {
-	tests := []struct {
-		name        string
-		isReady     bool
-		closed      bool
-		expectError bool
-	}{
-		{
-			name:        "successful_publish",
-			isReady:     true,
-			closed:      false,
-			expectError: false,
-		},
-		{
-			name:        "not_ready",
-			isReady:     false,
-			closed:      false,
-			expectError: true,
-		},
-		{
-			name:        "client_closed",
-			isReady:     true,
-			closed:      true,
-			expectError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			client := &MockClient{
-				isReady: tt.isReady,
-				closed:  tt.closed,
-			}
-
-			ctx := context.Background()
-			err := client.Publish(ctx, "test-destination", []byte(testMessage))
-
-			if tt.expectError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
 }
 
 func TestMockClientConsume(t *testing.T) {
@@ -304,16 +250,16 @@ func TestMockClientIsReady(t *testing.T) {
 	assert.False(t, client.IsReady())
 }
 
-func TestMockAMQPClientPublishToExchange(t *testing.T) {
+func TestMockAMQPClientPublishBytes(t *testing.T) {
 	client := NewMockAMQPClient()
 
 	ctx := context.Background()
-	options := PublishOptions{
+	options := publishOptions{
 		Exchange:   testExchange,
 		RoutingKey: testRoute,
 	}
 
-	err := client.PublishToExchange(ctx, options, []byte(testMessage))
+	err := client.publishBytes(ctx, options, []byte(testMessage))
 	assert.NoError(t, err)
 }
 
@@ -363,8 +309,8 @@ func TestMockAMQPClientNotReady(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Test PublishToExchange
-	err := client.PublishToExchange(ctx, PublishOptions{}, []byte("test"))
+	// Test publishBytes
+	err := client.publishBytes(ctx, publishOptions{}, []byte("test"))
 	assert.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
 
@@ -396,8 +342,8 @@ func TestMockAMQPClientClosed(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Test PublishToExchange
-	err := client.PublishToExchange(ctx, PublishOptions{}, []byte("test"))
+	// Test publishBytes
+	err := client.publishBytes(ctx, publishOptions{}, []byte("test"))
 	assert.Error(t, err)
 	assert.Equal(t, errAlreadyClosed, err)
 
@@ -470,4 +416,42 @@ func TestErrorConstants(t *testing.T) {
 	assert.Equal(t, "not connected to AMQP broker", errNotConnected.Error())
 	assert.Equal(t, "AMQP client already closed", errAlreadyClosed.Error())
 	assert.Equal(t, "AMQP client is shutting down", errShutdown.Error())
+}
+
+// TestModuleFacingTypesCarryNoBytePublishDoor is ADR-096's acceptance check: the
+// types a module can hold — Client, AMQPClient and the framework's own client and
+// wrapper as seen THROUGH those interfaces — expose neither Publish nor
+// PublishToExchange, so no exported path hands bytes to the broker. The
+// unexported bytePublisher is reachable only from inside this package.
+func TestModuleFacingTypesCarryNoBytePublishDoor(t *testing.T) {
+	for name, typ := range map[string]reflect.Type{
+		"Client":     reflect.TypeOf((*Client)(nil)).Elem(),
+		"AMQPClient": reflect.TypeOf((*AMQPClient)(nil)).Elem(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, reflect.Interface, typ.Kind())
+			assertNoByteDoor(t, typ)
+		})
+	}
+
+	// The concrete types too: a module that type-asserts its client to the
+	// framework implementation must find no exported byte door either.
+	for name, typ := range map[string]reflect.Type{
+		"AMQPClientImpl":    reflect.TypeOf((*AMQPClientImpl)(nil)),
+		"stampingPublisher": reflect.TypeOf((*stampingPublisher)(nil)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			assertNoByteDoor(t, typ)
+		})
+	}
+}
+
+// assertNoByteDoor checks the EXPORTED method set (reflect lists only exported
+// methods for a non-interface type, and every method for an interface).
+func assertNoByteDoor(t *testing.T, typ reflect.Type) {
+	t.Helper()
+	for _, name := range []string{"Publish", "PublishToExchange", "PublishBytes"} {
+		_, found := typ.MethodByName(name)
+		assert.Falsef(t, found, "%s must not expose %s", typ, name)
+	}
 }

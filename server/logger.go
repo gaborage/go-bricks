@@ -228,7 +228,7 @@ func buildLogEvent(event logger.LogEvent, params *logEventParams) logger.LogEven
 	return event.
 		Str("log.type", "action"). // Mark as action log for dual-mode routing
 		Str("request_id", params.metadata.RequestID).
-		Str("correlation_id", params.metadata.TraceID).
+		Str(logger.FieldCorrelationID, params.metadata.TraceID).
 		Str("http.request.method", params.metadata.Method).
 		Int("http.response.status_code", params.status).
 		Int64("http.server.request.duration", params.latency.Nanoseconds()). // OTel uses nanoseconds

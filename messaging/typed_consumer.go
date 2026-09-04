@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
@@ -26,10 +27,15 @@ const nilDeliverySummary = "nil delivery"
 // as read-only, it is shared with the worker loop.
 type Metadata struct {
 	delivery *amqp.Delivery
+	// sealed is the verified envelope when the delivery came through the sealed
+	// typed door; nil on every plain consumer, so Sealed and DedupKey answer by
+	// consumer TYPE and no header can steer them.
+	sealed *SealedEnvelope
 }
 
-// Headers returns the AMQP delivery headers (e.g. for
-// outbox.EventIDFromHeaders). Nil when no headers were published. The table is
+// Headers returns the AMQP delivery headers. Nil when no headers were
+// published. For the outbox dedup key prefer DedupKey, which validates as it
+// extracts. The table is
 // the delivery's own, not a copy — read it, do not mutate it. Values are
 // publisher-controlled, so treat them as untrusted input on a queue fed from
 // outside this service.
@@ -137,6 +143,20 @@ func (h *typedHandler[T]) EventType() string {
 func DeclareTypedConsumer[T any](decls *Declarations, opts *ConsumerOptions, fn func(context.Context, T) error) *ConsumerDeclaration {
 	checkTypedConsumerArgs(decls, opts, "DeclareTypedConsumer")
 
+	// A seal-tagged T on the meta-less door is a startup error (ADR-097 S4): the
+	// dedup key lives on Metadata, and a sealed consumer that cannot reach it
+	// double-processes every redelivery silently. The declaration still
+	// registers so the error names it from Validate.
+	var zero T
+	t := reflect.TypeOf(zero)
+	if err := misplacedConsumerSealTag(t, opts.EventType); err != nil {
+		decls.recordSealError(err)
+	} else if hasSealTag(t) {
+		decls.recordSealError(fmt.Errorf(
+			"messaging: %v carries seal tags, so its consumer must use DeclareTypedConsumerWithMeta (the dedup key is on Metadata)\n"+
+				"  queue=%s consumer=%s event_type=%s", t, opts.Queue, opts.Consumer, opts.EventType))
+	}
+
 	opts.Handler = NewTypedHandler[T](opts.EventType, fn)
 
 	return decls.DeclareConsumer(opts, nil)
@@ -165,9 +185,9 @@ func checkTypedConsumerArgs(decls *Declarations, opts *ConsumerOptions, entry st
 }
 
 // NewTypedHandlerWithMeta is NewTypedHandler for consumers that also need
-// delivery metadata — the outbox-dedup shape: read the x-outbox-event-id
-// header via outbox.EventIDFromHeaders(meta.Headers()) and wrap the business
-// logic in inbox.ProcessOnce. Failure and concurrency semantics are identical
+// delivery metadata — the outbox-dedup shape: take meta.DedupKey() (the
+// grammar-validated x-outbox-event-id, or an error to return) and wrap the
+// business logic in inbox.ProcessOnce. Failure and concurrency semantics are identical
 // to NewTypedHandler; fn must be safe for concurrent use.
 func NewTypedHandlerWithMeta[T any](eventType string, fn func(context.Context, T, Metadata) error) MessageHandler {
 	if fn == nil {
@@ -178,8 +198,36 @@ func NewTypedHandlerWithMeta[T any](eventType string, fn func(context.Context, T
 
 // DeclareTypedConsumerWithMeta is DeclareTypedConsumer for a metadata-aware
 // fn. Same panics, same queue rules, same PayloadError semantics.
+//
+// For a seal-tagged T this is the sealed typed door (ADR-097): every delivery
+// is opened — verified, tid-judged, decrypted — BEFORE decode and validation,
+// a refused one is a *PayloadError at PayloadStageOpen (nacked without
+// requeue), and fn's Metadata carries the verified envelope, so
+// meta.Sealed() is (envelope, true) and meta.DedupKey() is
+// `<SignFamily>:<jti>`. A sealed consumer that cannot start — codec not
+// linked, runtime not configured, no key material, a family missing a
+// provisioned generation in its inherited role — fails Validate.
 func DeclareTypedConsumerWithMeta[T any](decls *Declarations, opts *ConsumerOptions, fn func(context.Context, T, Metadata) error) *ConsumerDeclaration {
 	checkTypedConsumerArgs(decls, opts, "DeclareTypedConsumerWithMeta")
+	if fn == nil {
+		panic("messaging: DeclareTypedConsumerWithMeta requires a non-nil handler function (event_type=" + opts.EventType + ")")
+	}
+
+	var zero T
+	t := reflect.TypeOf(zero)
+	if err := misplacedConsumerSealTag(t, opts.EventType); err != nil {
+		decls.recordSealError(err)
+	} else if hasSealTag(t) {
+		handler, err := newSealedHandler[T](t, opts, fn)
+		if err != nil {
+			decls.recordSealError(err)
+		}
+		if handler != nil {
+			opts.Handler = handler
+			return decls.DeclareConsumer(opts, nil)
+		}
+	}
+
 	opts.Handler = NewTypedHandlerWithMeta[T](opts.EventType, fn)
 	return decls.DeclareConsumer(opts, nil)
 }

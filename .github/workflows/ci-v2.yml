@@ -1096,22 +1096,27 @@ jobs:
         if: steps.baseline.outputs.skip != 'true'
         env:
           GOWORK: "off"
-          # The PR's base: main, or the branch below in a stack. The SHA pins the
-          # snapshot to the base this event describes, so a base that moves during
-          # the run cannot change the subtraction. Passed as env, not inline ${{ }},
-          # so a crafted branch name is read as data.
-          BASE_REF: ${{ github.base_ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          # Defensive pre-clean, matching the base-snapshot step.
+          # The checkout is refs/pull/N/merge: the PR merged into its base's tip at
+          # run start. Its FIRST PARENT is therefore exactly the base the head
+          # snapshot was merged into — main, or the link below in a stack — frozen
+          # for the run, so a base that moves meanwhile cannot skew the
+          # subtraction. The event's pull_request.base.sha is NOT that commit: it
+          # is the PR's merge-base, refreshed only on rebase, so for a branch that
+          # predates a merged break it lags and every break merged since lands in
+          # the delta as if this PR made it (#1233).
+          # Without a second parent HEAD^1 would be the PR head's own parent: refuse.
+          if ! git rev-parse --verify --quiet HEAD^2 >/dev/null; then
+            echo "::error::apidiff expects the refs/pull/N/merge checkout (a merge commit); HEAD has no second parent"
+            exit 1
+          fi
+          base_sha="$(git rev-parse HEAD^1)"
+          echo "base snapshot at first parent of the merge ref: $base_sha"
+          # Defensive pre-clean, matching the baseline step.
           git worktree remove --force /tmp/apidiff-main 2>/dev/null || true
           rm -rf /tmp/apidiff-main
-          git fetch --quiet origin "$BASE_REF"
-          # A force-pushed base may have moved past the event's SHA; fetch it directly.
-          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || git fetch --quiet origin "$BASE_SHA"
-          # Fails closed (set -e) when the SHA is unreachable.
-          git worktree add --detach /tmp/apidiff-main "$BASE_SHA"
+          git worktree add --detach /tmp/apidiff-main "$base_sha"
           ( cd /tmp/apidiff-main \
             && GOWORK=off apidiff -m -w /tmp/apidiff-main.snapshot github.com/gaborage/go-bricks )
 

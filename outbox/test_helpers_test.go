@@ -11,6 +11,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams"
@@ -34,7 +35,7 @@ type fakeJobCtx struct {
 	trigger   string
 	log       logger.Logger
 	db        dbtypes.Interface
-	msgClient messaging.Client
+	msgClient messaging.AMQPClient
 	cfg       *config.Config
 }
 
@@ -45,7 +46,7 @@ type fakeJobCtx struct {
 // multitenant.GetTenant rather than relying on the concrete context type.
 type fakeDBKey struct{}
 
-func newFakeJobCtx(db dbtypes.Interface, msgClient messaging.Client) *fakeJobCtx {
+func newFakeJobCtx(db dbtypes.Interface, msgClient messaging.AMQPClient) *fakeJobCtx {
 	return &fakeJobCtx{
 		Context:   context.WithValue(context.Background(), fakeDBKey{}, db),
 		jobID:     "outbox-test-job",
@@ -63,12 +64,12 @@ func dbFromCtx(ctx context.Context) dbtypes.Interface {
 	return db
 }
 
-func (c *fakeJobCtx) JobID() string               { return c.jobID }
-func (c *fakeJobCtx) TriggerType() string         { return c.trigger }
-func (c *fakeJobCtx) Logger() logger.Logger       { return c.log }
-func (c *fakeJobCtx) DB() dbtypes.Interface       { return c.db }
-func (c *fakeJobCtx) Messaging() messaging.Client { return c.msgClient }
-func (c *fakeJobCtx) Config() *config.Config      { return c.cfg }
+func (c *fakeJobCtx) JobID() string                   { return c.jobID }
+func (c *fakeJobCtx) TriggerType() string             { return c.trigger }
+func (c *fakeJobCtx) Logger() logger.Logger           { return c.log }
+func (c *fakeJobCtx) DB() dbtypes.Interface           { return c.db }
+func (c *fakeJobCtx) Messaging() messaging.AMQPClient { return c.msgClient }
+func (c *fakeJobCtx) Config() *config.Config          { return c.cfg }
 
 // fakeStore implements the outbox Store interface with configurable
 // return values and call-count tracking. Methods are concurrency-safe via
@@ -201,9 +202,11 @@ func (s *fakeStore) CreateTable(_ context.Context, _ dbtypes.Interface) error {
 }
 
 // fakeAMQP is a minimal messaging.AMQPClient implementation for relay
-// tests. The relay only uses IsReady and PublishToExchange; the other
+// tests. The relay only uses IsReady and the byte door; the other
 // AMQPClient methods are present to satisfy the interface and return zero
-// values when invoked.
+// values when invoked. The byte door is unexported inside messaging (ADR-096),
+// so TestMain swaps the internal/publishdoor dispatcher to route a *fakeAMQP
+// to publishBytes below and everything else to the real dispatcher.
 // fakeStreamPublisher stands in for a *streams.Publisher so the stream leg is testable
 // without a broker.
 type fakeStreamPublisher struct {
@@ -236,15 +239,15 @@ type fakeAMQP struct {
 	mu sync.Mutex
 
 	Ready bool
-	// Configurable returns for PublishToExchange. PublishErrFor matches by
+	// Configurable returns for publishBytes. PublishErrFor matches by
 	// exchange + routing key — first hit wins. PublishErr is the fallback.
 	PublishErrFor map[string]error
 	PublishErr    error
-	// PublishBlock, keyed by exchange:routingKey, makes PublishToExchange block
+	// PublishBlock, keyed by exchange:routingKey, makes publishBytes block
 	// until ctx is done and then return ctx.Err() — simulating a stuck broker that
 	// the relay's per-record PublishTimeout must interrupt without starving siblings.
 	PublishBlock map[string]bool
-	// PublishHook, if set, runs synchronously inside PublishToExchange (while
+	// PublishHook, if set, runs synchronously inside publishBytes (while
 	// still holding the internal lock) right after PublishCalls is incremented
 	// and before the configured error is resolved. Lets a test flip Ready
 	// exactly on a specific call number to simulate the broker dropping
@@ -258,7 +261,7 @@ type fakeAMQP struct {
 	// Captured calls.
 	PublishOrder    []string
 	PublishCalls    int
-	LastPublishOpts messaging.PublishOptions
+	LastPublishOpts publishdoor.Options
 	LastPublishData []byte
 	LastPublishHdrs map[string]any
 	LastPublishCtx  context.Context
@@ -270,9 +273,7 @@ func newFakeAMQP() *fakeAMQP {
 
 func (f *fakeAMQP) IsReady() bool { return f.Ready }
 
-func (f *fakeAMQP) Publish(_ context.Context, _ string, _ []byte) error { return nil }
-
-func (f *fakeAMQP) PublishToExchange(ctx context.Context, opts messaging.PublishOptions, data []byte) error {
+func (f *fakeAMQP) publishBytes(ctx context.Context, opts publishdoor.Options, data []byte) error {
 	f.mu.Lock()
 	f.PublishCalls++
 	f.LastPublishOpts = opts

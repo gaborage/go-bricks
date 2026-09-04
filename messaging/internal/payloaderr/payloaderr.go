@@ -23,11 +23,14 @@ import (
 // exports its own string type over these two values.
 type Stage string
 
-// The two stages a Body can carry. A Body whose Stage is neither is not one
+// The stages a Body can carry. A Body whose Stage is none of these is not one
 // this package produced.
 const (
 	StageDecode   Stage = "decode"
 	StageValidate Stage = "validate"
+	// StageOpen is the sealed-message opener refusing a body before decode: the
+	// signature, the key families, the signed slots or the decrypt (ADR-097).
+	StageOpen Stage = "open"
 )
 
 // UnauditedDecoderSummary is the fail-closed rendering for a decode error whose
@@ -87,6 +90,13 @@ func NewDecode(cause error, summary string) *Body {
 	return &Body{Stage: StageDecode, summary: summary, err: cause}
 }
 
+// NewOpen wraps an opener refusal. The cause renders itself as its code and its
+// presence/length details only — the opener seam guarantees no wire value is in
+// that text — so its own rendering is the summary Message() prints.
+func NewOpen(cause error) *Body {
+	return &Body{Stage: StageOpen, summary: cause.Error(), err: cause}
+}
+
 // NewValidate wraps a validation failure and records the validator's own field
 // namespaces verbatim. Redaction is Fields()' job, not the constructor's, so no
 // assembly path can produce a Body whose namespace list reads back unsanitized.
@@ -136,7 +146,7 @@ func (b *Body) Message(prefix, stage, subject string) string {
 	if fields := b.Fields(); len(fields) > 0 {
 		msg += fmt.Sprintf(" (fields: %s)", strings.Join(fields, ", "))
 	}
-	if b != nil && Stage(stage) == StageDecode && b.summary != "" {
+	if b != nil && (Stage(stage) == StageDecode || Stage(stage) == StageOpen) && b.summary != "" {
 		msg += ": " + b.summary
 	}
 

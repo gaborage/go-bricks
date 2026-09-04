@@ -545,6 +545,36 @@ func TestDeclarationsValidate(t *testing.T) {
 		assert.Contains(t, err.Error(), "publisher references non-existent exchange: missing-exchange")
 	})
 
+	t.Run("publisher on the default exchange needs no declaration", func(t *testing.T) {
+		decls := NewDeclarations()
+		decls.RegisterPublisher(&PublisherDeclaration{Exchange: "", RoutingKey: "orders.processing"})
+
+		assert.NoError(t, decls.Validate())
+	})
+
+	t.Run("default-exchange publisher without a routing key is rejected", func(t *testing.T) {
+		// What an omitted Exchange looks like: nothing is bound to "", publishes are
+		// not Mandatory by default, so the broker would take the message and drop it.
+		decls := NewDeclarations()
+		decls.RegisterPublisher(&PublisherDeclaration{Exchange: "", RoutingKey: "", EventType: "OrderCreated"})
+
+		err := decls.Validate()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "publisher on the default exchange has no routing key")
+		assert.Contains(t, err.Error(), `(event type "OrderCreated")`)
+	})
+
+	t.Run("default-exchange publisher error omits an unset event type", func(t *testing.T) {
+		decls := NewDeclarations()
+		decls.RegisterPublisher(&PublisherDeclaration{Exchange: "", RoutingKey: ""})
+
+		err := decls.Validate()
+
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "event type")
+	})
+
 	t.Run("empty declarations are valid", func(t *testing.T) {
 		decls := NewDeclarations()
 
@@ -877,6 +907,30 @@ func fillNonZero(t *testing.T, v reflect.Value) {
 // TestDeclarationsHashSeparatesTenantOptional pins that the replay hash tells two
 // consumer sets apart when only TenantOptional differs. Without it a tenancy change
 // would reuse a cached replay and leave the old fail-closed posture in force.
+// TestDefaultExchangeTypedPublisherPublishesByQueueName pairs the Validate
+// exemption with what it exists for: reaching one queue directly through the
+// typed publish door.
+func TestDefaultExchangeTypedPublisherPublishesByQueueName(t *testing.T) {
+	const queue = "orders.processing"
+
+	decls := NewDeclarations()
+	decls.DeclareQueue(queue)
+	pub := DeclareTypedPublisher[orderCreated](decls, &PublisherOptions{
+		Exchange:   "",
+		RoutingKey: queue,
+		EventType:  "OrderCreated",
+	})
+	require.NoError(t, decls.Validate())
+
+	client := &capturingPublishClient{}
+	require.NoError(t, pub.Publish(t.Context(), client, orderCreated{OrderID: 9}))
+
+	frames := client.captured()
+	require.Len(t, frames, 1)
+	assert.Empty(t, frames[0].options.Exchange, "publishes to the default exchange")
+	assert.Equal(t, queue, frames[0].options.RoutingKey, "routed by queue name")
+}
+
 func TestDeclarationsHashSeparatesTenantOptional(t *testing.T) {
 	build := func(optional bool) *Declarations {
 		d := NewDeclarations()

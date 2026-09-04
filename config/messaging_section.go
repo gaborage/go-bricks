@@ -2,10 +2,21 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"net/url"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
+
+// sealGenerationPattern is the Activation selector's value grammar: a
+// generation marker without its hyphen, a positive integer with no leading
+// zero. It mirrors keystore.generationVersionPattern — keep in sync — so a
+// selector can only ever spell a generation the way the keystore names it.
+// config is the lower layer, so the keystore's vocabulary is not exported
+// from here; the keystore re-checks its own copy at resolution.
+var sealGenerationPattern = regexp.MustCompile(`^v[1-9]\d*$`)
 
 // normalizeMessaging shapes messaging configuration: reconnect/publisher pool
 // defaults (multitenant selects the deployment-mode-dependent Publisher.IdleTTL
@@ -40,7 +51,36 @@ func checkMessaging(cfg *MessagingConfig, multitenant bool) error {
 			[]string{TenancyPerTenant, TenancyShared})
 	}
 
+	if err := checkMessagingSeal(&cfg.Seal); err != nil {
+		return err
+	}
 	return checkMessagingStreams(cfg, multitenant)
+}
+
+// checkMessagingSeal judges the Activation selector's shape: every key is a
+// user-chosen section name (env-reachable, no '.'), every value a canonical
+// generation. Whether the key names a Logical kid the keystore holds is the
+// resolver's question (keystore.ActiveGeneration), asked once the store exists.
+func checkMessagingSeal(cfg *SealConfig) error {
+	for _, logical := range slices.Sorted(maps.Keys(cfg.Active)) {
+		// A '.' would make the constructed path ambiguous, so the parent field
+		// is reported, as the keystore.keys rule does.
+		if logical == "" || strings.Contains(logical, ".") {
+			err := NewValidationError(fieldMessagingSealActive, fmt.Sprintf("logical kid %q cannot be empty or contain '.' (the config path delimiter)", logical))
+			err.Action = "name the messaging.seal.active entry after the keystore family, without dots"
+			return err
+		}
+		field := fieldMessagingSealActive + "." + logical
+		if err := checkSectionName(field, logical); err != nil {
+			return err
+		}
+		if gen := cfg.Active[logical]; !sealGenerationPattern.MatchString(gen) {
+			err := NewValidationError(field, fmt.Sprintf("generation %q must be v<N> with N a positive integer without leading zeros (v1, not v0 or v01)", gen))
+			err.Action = "name the generation exactly as the keystore.keys entry suffix spells it"
+			return err
+		}
+	}
+	return nil
 }
 
 // checkMessagingStreams rejects a stream URI with an unsupported scheme or no
@@ -149,7 +189,7 @@ func applyMessagingDefaults(cfg *MessagingConfig, multitenant bool) error {
 		{&cfg.Reconnect.ConnectionTimeout, defaultConnectionTimeout, "messaging.reconnect.connectiontimeout"},
 		{&cfg.Reconnect.ReadyTimeout, defaultReadyTimeout, "messaging.reconnect.readytimeout"},
 		{&cfg.Reconnect.MaxDelay, defaultMaxReconnectDelay, "messaging.reconnect.maxdelay"},
-		{&cfg.Publisher.CleanupInterval, defaultPublisherCleanupInterval, "messaging.publisher.cleanupinterval"},
+		{&cfg.Publisher.CleanupInterval, DefaultPublisherCleanupInterval, "messaging.publisher.cleanupinterval"},
 	} {
 		if err := applyNonNegativeDefault(d.field, d.def, d.name); err != nil {
 			return err

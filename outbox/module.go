@@ -303,7 +303,7 @@ func (m *Module) validatePublishTimeout() error {
 // messaging publish rule rather than restating the ceiling, and the error names the
 // config KEY and the byte length — never the value, which reaches logs and spans.
 func (m *Module) validateDefaultExchange() error {
-	if err := messaging.ValidatePublishDestination(messaging.PublishOptions{Exchange: m.cfg.DefaultExchange}); err != nil {
+	if err := messaging.ValidatePublishDestination(m.cfg.DefaultExchange, "", nil); err != nil {
 		return fmt.Errorf("outbox: outbox.defaultexchange is invalid: %w", err)
 	}
 	return nil

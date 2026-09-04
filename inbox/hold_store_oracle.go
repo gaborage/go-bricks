@@ -10,7 +10,6 @@ import (
 
 	"github.com/gaborage/go-bricks/database"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
-	"github.com/gaborage/go-bricks/internal/ledgererr"
 )
 
 // Oracle DDL for the hold's two tables and their indexes. VARCHAR2 rather than
@@ -59,9 +58,9 @@ type oracleHoldStore struct {
 	table       string
 	tenantTable string
 	qb          *database.QueryBuilder
-	// holdQueries carries every statement the query builder renders identically on
-	// both vendors. What stays in this file is the SQL the builder cannot express,
-	// and the dialect those statements answer in.
+	// holdQueries carries every statement the query builder renders for both
+	// vendors; this file supplies the vendor's clock spelling, its DDL, and the
+	// one statement that stays raw by design.
 	holdQueries
 }
 
@@ -77,12 +76,13 @@ func NewOracleHoldStore(tableName string) (HoldStore, error) {
 		tenantTable: tableName + holdTenantTableSuffix,
 		qb:          qb,
 		holdQueries: holdQueries{
-			qb:          qb,
-			vendor:      "oracle",
-			table:       tableName,
-			tenantTable: tableName + holdTenantTableSuffix,
-			now:         "SYSTIMESTAMP",
-			noError:     "NVL(last_error, ' ')",
+			qb:             qb,
+			vendor:         "oracle",
+			table:          tableName,
+			tenantTable:    tableName + holdTenantTableSuffix,
+			now:            oracleNow,
+			secondsFromNow: oracleNow + " + NUMTODSINTERVAL(?, 'SECOND')",
+			noError:        "NVL(last_error, ' ')",
 		},
 	}, nil
 }
@@ -104,13 +104,17 @@ func (s *oracleHoldStore) Park(ctx context.Context, tx dbtypes.Tx, row *HoldRow)
 		return false, err
 	}
 
-	insert := fmt.Sprintf(
-		`INSERT INTO %s (consumer, stream, stream_offset, tenant_id, data, properties, held_at)
-		 VALUES (:1, :2, :3, :4, :5, :6, SYSTIMESTAMP)`,
-		s.table,
-	)
+	// SECURITY: Manual SQL review completed - oracleNow is a package constant holding the
+	// vendor clock; every other value is bound
+	insert, insertArgs, err := s.qb.Insert(s.table).
+		Columns(colConsumer, colStream, colStreamOffset, colTenantID, colData, colProperties, colHeldAt).
+		Values(row.Consumer, row.Stream, row.Offset, row.TenantID, row.Data, row.Properties, s.qb.MustExpr(oracleNow)).
+		ToSQL()
+	if err != nil {
+		return false, fmt.Errorf("inbox oracle: build park row failed: %w", err)
+	}
 	inserted := true
-	if _, err := tx.Exec(ctx, insert, row.Consumer, row.Stream, row.Offset, row.TenantID, row.Data, row.Properties); err != nil {
+	if _, err := tx.Exec(ctx, insert, insertArgs...); err != nil {
 		if !database.IsUniqueViolation(err) {
 			return false, fmt.Errorf("inbox oracle: park row failed: %w", err)
 		}
@@ -123,15 +127,23 @@ func (s *oracleHoldStore) Park(ctx context.Context, tx dbtypes.Tx, row *HoldRow)
 // holdTenantMarker holds this tenant, locking the marker when it already exists so
 // a concurrent release cannot delete it while the caller's row is still uncommitted.
 func (s *oracleHoldStore) holdTenantMarker(ctx context.Context, tx dbtypes.Tx, row *HoldRow) error {
-	lock := fmt.Sprintf(
-		`SELECT tenant_id FROM %s WHERE consumer = :1 AND tenant_id = :2 FOR UPDATE`,
-		s.tenantTable,
-	)
-	insert := fmt.Sprintf(
-		`INSERT INTO %s (consumer, tenant_id, held_since, attempts, next_attempt_at)
-		 VALUES (:1, :2, SYSTIMESTAMP, 0, SYSTIMESTAMP)`,
-		s.tenantTable,
-	)
+	f := s.qb.Filter()
+	lock, lockArgs, err := s.qb.Select(colTenantID).From(s.tenantTable).
+		Where(f.And(f.Eq(colConsumer, row.Consumer), f.Eq(colTenantID, row.TenantID))).
+		ForUpdate().
+		ToSQL()
+	if err != nil {
+		return fmt.Errorf("inbox oracle: build tenant marker lock failed: %w", err)
+	}
+	// SECURITY: Manual SQL review completed - oracleNow is a package constant holding the
+	// vendor clock; the consumer and tenant are bound, attempts starts at a literal 0
+	insert, insertArgs, err := s.qb.Insert(s.tenantTable).
+		Columns(colConsumer, colTenantID, colHeldSince, colAttempts, colNextAttemptAt).
+		Values(row.Consumer, row.TenantID, s.qb.MustExpr(oracleNow), 0, s.qb.MustExpr(oracleNow)).
+		ToSQL()
+	if err != nil {
+		return fmt.Errorf("inbox oracle: build tenant marker insert failed: %w", err)
+	}
 
 	// Two passes at most: the marker is there and we lock it, or it is not and we
 	// insert it, or someone inserted it between the two and the second pass locks
@@ -140,7 +152,7 @@ func (s *oracleHoldStore) holdTenantMarker(ctx context.Context, tx dbtypes.Tx, r
 	// here and the held row's write, which is the race the marker-first order
 	// exists to prevent.
 	for range 2 {
-		locked, err := markerLocked(ctx, tx, lock, row.Consumer, row.TenantID)
+		locked, err := markerLocked(ctx, tx, lock, lockArgs...)
 		if err != nil {
 			return err
 		}
@@ -148,7 +160,7 @@ func (s *oracleHoldStore) holdTenantMarker(ctx context.Context, tx dbtypes.Tx, r
 			return nil
 		}
 
-		_, err = tx.Exec(ctx, insert, row.Consumer, row.TenantID)
+		_, err = tx.Exec(ctx, insert, insertArgs...)
 		if err == nil {
 			return nil
 		}
@@ -161,49 +173,29 @@ func (s *oracleHoldStore) holdTenantMarker(ctx context.Context, tx dbtypes.Tx, r
 		row.TenantID)
 }
 
+// oracleNow is the timestamp-with-time-zone clock the hold columns hold.
+const oracleNow = "SYSTIMESTAMP"
+
 func (s *oracleHoldStore) AcquireLease(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string, lease time.Duration) (bool, error) {
-	// SECURITY: Manual SQL review completed - the only interpolated identifier is
-	// the tenant table from the constructor-validated config; every value is bound.
-	// Raw because the SET side assigns an EXPRESSION over the database clock,
-	// which the builder's Set carries only as a bound value.
-	query := fmt.Sprintf(
-		`UPDATE %s SET lease_owner = :1, lease_until = SYSTIMESTAMP + NUMTODSINTERVAL(:2, 'SECOND')
-		 WHERE consumer = :3 AND tenant_id = :4
-		   AND (lease_until IS NULL OR lease_until < SYSTIMESTAMP OR lease_owner = :1)`,
-		s.tenantTable,
-	)
-	return affectedOne(ctx, db, "acquire lease", query, owner, lease.Seconds(), consumer, tenant)
+	return execAffectedOne(ctx, db, "acquire lease", s.acquireLease(consumer, tenant, owner, lease))
 }
 
 func (s *oracleHoldStore) Defer(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string, backoff time.Duration, lastErr string) (bool, error) {
-	// SECURITY: Manual SQL review completed - identifier from constructor-validated
-	// config; the backoff, bounded error text, consumer, tenant and owner are bound.
-	// Raw because the SET side increments a column and assigns a clock expression.
-	query := fmt.Sprintf(
-		`UPDATE %s SET attempts = attempts + 1,
-		        next_attempt_at = SYSTIMESTAMP + NUMTODSINTERVAL(:1, 'SECOND'),
-		        last_error = :2, lease_owner = NULL, lease_until = NULL
-		 WHERE consumer = :3 AND tenant_id = :4 AND lease_owner = :5 AND lease_until > SYSTIMESTAMP`,
-		s.tenantTable,
-	)
-	return affectedOne(ctx, db, "defer tenant", query, backoff.Seconds(), ledgererr.Bound(lastErr), consumer, tenant, owner)
+	return execAffectedOne(ctx, db, "defer tenant", s.deferTenant(consumer, tenant, owner, backoff, lastErr))
 }
 
 func (s *oracleHoldStore) Stats(ctx context.Context, db dbtypes.Interface, consumer string) (HoldStats, error) {
-	// SECURITY: Manual SQL review completed - both table names come from the
-	// constructor-validated config, the consumer is bound three times. Raw because
-	// this is three aggregate subqueries in one projection over dual, which the
-	// builder's Select cannot compose.
-	query := fmt.Sprintf(
-		`SELECT (SELECT COUNT(*) FROM %s WHERE consumer = :1),
-		        (SELECT COUNT(*) FROM %s WHERE consumer = :1),
-		        (SELECT MIN(held_since) FROM %s WHERE consumer = :1)
-		 FROM dual`,
-		s.tenantTable, s.table, s.tenantTable,
-	)
-	return scanHoldStats(ctx, db, query, consumer)
+	query, args, err := s.stats(consumer).ToSQL()
+	if err != nil {
+		return HoldStats{}, fmt.Errorf("inbox hold: build stats failed: %w", err)
+	}
+	return scanHoldStats(ctx, db, query, args...)
 }
 
+// CreateTable runs the DDL, which stays hand-written: the builder has no DDL door.
+//
+// SECURITY: Manual SQL review completed - static DDL constants; only the constructor-validated
+// hold table name (validateHoldTableName) and its derived tenant table are interpolated
 func (s *oracleHoldStore) CreateTable(ctx context.Context, db dbtypes.Interface) error {
 	statements := []string{
 		fmt.Sprintf(oracleCreateHoldTableSQL, s.table, s.table),

@@ -21,10 +21,12 @@ exchange := decls.DeclareTopicExchange("issuance.events")
 queue := decls.DeclareQueue("issuance.events.queue")
 decls.DeclareBinding(queue.Name, exchange.Name, "issuance.*")
 
-decls.DeclarePublisher(&messaging.PublisherOptions{
-    Exchange: exchange.Name, RoutingKey: "issuance.created",
-    EventType: "CreateBatchIssuanceRequest",
-}, nil)
+// Returns the handle publishes go through; keep it on the module or the service.
+m.issuanceCreated = messaging.DeclareTypedPublisher[CreateBatchIssuanceRequest](decls,
+    &messaging.PublisherOptions{
+        Exchange: exchange.Name, RoutingKey: "issuance.created",
+        EventType: "CreateBatchIssuanceRequest",
+    })
 
 decls.DeclareConsumer(&messaging.ConsumerOptions{
     Queue: queue.Name, EventType: "CreateBatchIssuanceRequest",
@@ -41,7 +43,20 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 
 RabbitMQ 4.3.0 denies `transient_nonexcl_queues` by default: a queue declared with both `Durable: false` and `Exclusive: false` gets the connection closed with a 541 instead of the queue created. The helpers above are unaffected — `NewQueue` defaults to `Durable: true` — but a hand-built `QueueDeclaration` using that transient shape needs the broker configured with `deprecated_features.permit.transient_nonexcl_queues = true`, which is what GoBricks' own RabbitMQ test container sets.
 
-**Key Helpers:** `DeclareTopicExchange()`, `DeclareQueue()`, `DeclareBinding()`, `DeclarePublisher()`, `DeclareConsumer()`
+**Key Helpers:** `DeclareTopicExchange()`, `DeclareQueue()`, `DeclareBinding()`, `DeclareTypedPublisher[T]()`, `DeclareConsumer()`
+
+**Publishing** uses the handle from the declaration and the tenant-aware client:
+`m.issuanceCreated.Publish(ctx, client, evt)`, where `client` comes from `deps.Messaging(ctx)`.
+The handle carries the declared exchange, routing key, default headers and delivery flags, so the
+call site never re-spells them; it JSON-marshals `evt` and is itself never written after
+declaration, hence safe to share across goroutines and tenants. The declared headers are copied
+one level deep, so keep those values scalars: a nested map or slice stays shared with the caller,
+and writing to one races with every publish and reaches every tenant. A marshal failure publishes nothing and comes back wrapped; every
+other error is the client's own, returned unwrapped. A named exchange must be declared or
+`Validate` fails startup; the default exchange `""` is the exception — AMQP builds it in, so a
+publisher declared with `Exchange: ""` and the queue name as its `RoutingKey` sends to that queue
+directly and needs no exchange declaration. The routing key is then load-bearing, so a publisher
+with both fields empty fails startup rather than publishing into a black hole.
 
 **Re-declaring one queue name is allowed when the shapes are compatible.** Two declarations of the same queue *merge*: the four flags (`Durable`, `AutoDelete`, `Exclusive`, `NoWait`) must be equal, and any `Args` key they share must carry the same value; the union of their `Args` is what reaches the broker. So `DeclareQueueWithDLQ("orders.events.queue", nil)` and `DeclareQueue("orders.events.queue")` from two different modules now compose, instead of whichever ran last silently dropping the other's dead-letter args — declaration order across modules is invisible at any single call site, and the pre-merge behavior could revert a queue to dropping failed deliveries with no error and no WARN. Incompatible shapes (a differing flag, or one `Args` key with two values) keep the first declaration and fail startup with a single aggregate error naming every conflict:
 
@@ -93,6 +108,9 @@ See the Troubleshooting section in [CLAUDE.md](../CLAUDE.md) for diagnosing dupl
 
 ## Typed Consumers
 
+> A `seal`-tagged event type engages field-level payload sealing from the typed doors and
+> requires the `WithMeta` consumer; see [sealing.md](sealing.md).
+
 `DeclareTypedConsumer` is the consumer mirror of `server.POST(hr, r, path, handler)`: it binds the message body to a struct, validates it against the same `validate` tags HTTP handlers use, and calls your function — so `json.Unmarshal`, the validation call, and the two error branches stop being copy-pasted into every `Handle`.
 
 ```go
@@ -137,7 +155,7 @@ messaging: decode failed for event "LimitsUpdated": json: type mismatch (want in
 messaging: validate failed for event "OrderCreated" (fields: OrderCreated.Currency)
 ```
 
-**Delivery metadata.** `DeclareTypedConsumerWithMeta` / `messaging.NewTypedHandlerWithMeta[T](eventType, fn)` are the metadata-carrying siblings of `DeclareTypedConsumer` / `NewTypedHandler`: `fn` is `func(ctx context.Context, payload T, meta messaging.Metadata) error`, with the same decode → validate → `fn` pipeline and failure semantics. `Metadata` exposes three read-only accessors — `Headers() amqp.Table`, `EventType() string`, `Redelivered() bool` — so a typed consumer can read `x-outbox-event-id` and wrap its body in `inbox.ProcessOnce`, the canonical composition for an outbox-fed consumer:
+**Delivery metadata.** `DeclareTypedConsumerWithMeta` / `messaging.NewTypedHandlerWithMeta[T](eventType, fn)` are the metadata-carrying siblings of `DeclareTypedConsumer` / `NewTypedHandler`: `fn` is `func(ctx context.Context, payload T, meta messaging.Metadata) error`, with the same decode → validate → `fn` pipeline and failure semantics. `Metadata` exposes read-only accessors — `Headers() amqp.Table`, `EventType() string`, `Redelivered() bool`, `DedupKey() (string, error)` and `Sealed() (SealedEnvelope, bool)` — so a typed consumer can take the ledger key and wrap its body in `inbox.ProcessOnce`, the canonical composition for an outbox-fed consumer. `DedupKey` returns the `x-outbox-event-id` header once it passes the ledger grammar `^[A-Za-z0-9_-]{1,128}$`, or an error wrapping `messaging.ErrInvalidEventID` when the header is absent or malformed; `inbox.ProcessOnce` re-checks the same grammar at the ledger door, so an id obtained any other way is refused there. `Sealed` answers per-consumer type: a plain typed consumer gets `(zero, false)` for every delivery, whatever the publisher wrote.
 
 ```go
 // Same DeclareMessaging body as above, with this call REPLACING the
@@ -149,11 +167,12 @@ messaging.DeclareTypedConsumerWithMeta(decls, &messaging.ConsumerOptions{
     Consumer:  "order-processor",
     EventType: "OrderCreated",
 }, func(ctx context.Context, evt OrderCreated, meta messaging.Metadata) error {
-    id, ok := outbox.EventIDFromHeaders(meta.Headers())
-    if !ok {
-        // No id, no dedup key — processing here would repeat the business
-        // write on every redelivery, so fail closed.
-        return fmt.Errorf("missing x-outbox-event-id header")
+    id, err := meta.DedupKey()
+    if err != nil {
+        // No conforming id, no dedup key — processing here would repeat the
+        // business write on every redelivery, so fail closed: the error is
+        // nacked without requeue and the message parks on the DLQ.
+        return err
     }
     return m.inbox.ProcessOnce(ctx, id, func(ctx context.Context, tx dbtypes.Tx) error {
         return processTx(ctx, tx, evt) // business write joins the dedup transaction
@@ -161,9 +180,9 @@ messaging.DeclareTypedConsumerWithMeta(decls, &messaging.ConsumerOptions{
 })
 ```
 
-**Mixed-queue variant.** A queue that also carries directly-published messages has deliveries with no ledger key by design. There, and only there, swap the `!ok` branch for `return process(ctx, evt)` — processed without dedup, so that handler must be idempotent on its own. An outbox-only queue keeps the fail-closed default above.
+**Mixed-queue variant.** A queue that also carries directly-published messages has deliveries with no ledger key by design. There, and only there, let a demonstrably ABSENT header through — `if _, present := meta.Headers()[messaging.HeaderEventID]; !present { return process(ctx, evt) }` placed BEFORE the `DedupKey` call — processed without dedup, so that handler must be idempotent on its own. Keep the `err != nil` branch as is: a header that is present but malformed stays on the failure path (nacked without requeue), or a publisher could skip the ledger by misspelling the id. An outbox-only queue keeps the fail-closed default above.
 
-**Headers are publisher-controlled.** AMQP headers come from whoever published the message, so on a queue fed by an exchange outside this service `meta.Headers()` is caller-supplied input — reading it is identification, not authorization. In the dedup shape above the publisher therefore picks the ledger key: replaying a known `x-outbox-event-id` makes `ProcessOnce` skip the handler and ACK (a silent drop), and novel ids each cost a ledger row until retention sweeps them. Omitting the header is a third lever: the relay stamps `x-outbox-event-id` on every message it publishes, so a publisher that simply drops it would opt out of dedup entirely — which is why the example returns an error on `!ok` rather than processing, and why the mixed-queue variant is a deliberate opt-in for a queue whose traffic you know. Broker-side publish authorization is what bounds all three.
+**Headers are publisher-controlled.** AMQP headers come from whoever published the message, so on a queue fed by an exchange outside this service `meta.Headers()` is caller-supplied input — reading it is identification, not authorization. In the dedup shape above the publisher therefore picks the ledger key: replaying a known `x-outbox-event-id` makes `ProcessOnce` skip the handler and ACK (a silent drop), and novel ids each cost a ledger row until retention sweeps them. Omitting the header is a third lever: the relay stamps `x-outbox-event-id` on every message it publishes, so a publisher that simply drops it would opt out of dedup entirely — which is why the example returns the `DedupKey` error rather than processing, and why the mixed-queue variant is a deliberate opt-in for a queue whose traffic you know. Broker-side publish authorization is what bounds all three.
 
 **Concurrency.** One adapter instance serves every worker of the consumer and every tenant replaying the declarations. It holds no mutable state and allocates a fresh payload per delivery, so the concurrency rules below apply unchanged: the default is `NumCPU * 4` workers, and `Workers: 1` still buys sequential processing when ordering matters. Your `fn` must be safe for concurrent use.
 
@@ -546,7 +565,7 @@ messaging:
 
 ### Bounded publish retries (`reconnect.maxpublishattempts`)
 
-`PublishToExchange` (and the `Publish` convenience) retries a failing publish — publish error,
+A publish through `Publisher[T].Publish` retries a failing publish — publish error,
 broker NACK, or confirmation timeout — but the loop is **bounded** by
 `reconnect.maxpublishattempts` (default 5). On exhaustion it returns
 `messaging.ErrPublishRetriesExhausted` **wrapping the last cause**, so callers can classify the
@@ -604,7 +623,7 @@ busy-spinning. These causes are informational for logging/observability; the out
 **every** publish failure as a recoverable *connectivity* failure that retries and never parks —
 NACK included, and likewise a raw `ErrNotConnected`, though the relay rarely sees one: it checks
 `IsReady()` itself at the start of each cycle and routes a cold broker to its outage path
-(advancing `retry_count` without calling `PublishToExchange` at all). Only undecodable message
+(advancing `retry_count` without attempting a publish at all). Only undecodable message
 headers are poison — see
 [outbox.md](outbox.md#retry--dead-lettering) and [ADR-033](adr_033_outbox_retry_count_status_parking.md).
 
@@ -621,12 +640,12 @@ first publish against a freshly created (or mid-reconnect) client failed instant
 `messaging.ErrNotConnected`, even though the client would have become ready a moment later
 (issue #655).
 
-`PublishToExchange` now runs a bounded, context-aware wait for readiness **before** entering the
+A publish now runs a bounded, context-aware wait for readiness **before** entering the
 retry loop described above. The wait polls every 100ms (the same cadence
 `Registry.DeclareInfrastructure` uses) up to `reconnect.readytimeout` (default 5s):
 
 - If the client becomes ready within the window, the publish proceeds normally into the retry loop.
-- If `reconnect.readytimeout` elapses first, `PublishToExchange` returns the raw
+- If `reconnect.readytimeout` elapses first, the publish returns the raw
   `messaging.ErrNotConnected` — the same unwrapped error **shape** pre-#655 callers received
   (only the timing changed: up to `readytimeout` instead of instant) — without consuming a
   `reconnect.maxpublishattempts` slot, since the wait happens entirely before the retry loop

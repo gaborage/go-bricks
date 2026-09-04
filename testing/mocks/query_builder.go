@@ -268,6 +268,24 @@ func (m *MockQueryBuilder) OrderBy(orderBys ...any) types.SelectQueryBuilder {
 	return arg[types.SelectQueryBuilder](arguments, "OrderBy", 0)
 }
 
+// SubqueryColumn mocks a scalar-subquery projection column.
+func (m *MockQueryBuilder) SubqueryColumn(sub types.SelectQueryBuilder, alias string) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("SubqueryColumn", sub, alias)
+	return arg[types.SelectQueryBuilder](arguments, "SubqueryColumn", 0)
+}
+
+// ForUpdate mocks the FOR UPDATE row-lock clause.
+func (m *MockQueryBuilder) ForUpdate() types.SelectQueryBuilder {
+	arguments := m.MethodCalled("ForUpdate")
+	return arg[types.SelectQueryBuilder](arguments, "ForUpdate", 0)
+}
+
+// ForUpdateNoWait mocks the FOR UPDATE NOWAIT row-lock clause.
+func (m *MockQueryBuilder) ForUpdateNoWait() types.SelectQueryBuilder {
+	arguments := m.MethodCalled("ForUpdateNoWait")
+	return arg[types.SelectQueryBuilder](arguments, "ForUpdateNoWait", 0)
+}
+
 func (m *MockQueryBuilder) Limit(limit uint64) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("Limit", limit)
 	return arg[types.SelectQueryBuilder](arguments, "Limit", 0)

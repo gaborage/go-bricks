@@ -32,6 +32,7 @@ CREATE INDEX idx_%s_processed ON %s (processed_at)`
 // oracleStore implements Store for Oracle using :1-style placeholders.
 type oracleStore struct {
 	tableName string
+	qb        *database.QueryBuilder
 }
 
 // NewOracleStore creates a new Oracle inbox store.
@@ -40,7 +41,7 @@ func NewOracleStore(tableName string) (Store, error) {
 	if err := validateTableName(tableName); err != nil {
 		return nil, err
 	}
-	return &oracleStore{tableName: tableName}, nil
+	return &oracleStore{tableName: tableName, qb: database.NewQueryBuilder(dbtypes.Oracle)}, nil
 }
 
 // oracleEmptyTenantSentinel is the placeholder stored for the empty/default tenant on Oracle.
@@ -72,11 +73,14 @@ func (s *oracleStore) MarkProcessed(ctx context.Context, tx dbtypes.Tx, rec Reco
 		return false, err
 	}
 
-	query := fmt.Sprintf(
-		`INSERT INTO %s (tenant_id, event_id, processed_at) VALUES (:1, :2, :3)`,
-		s.tableName,
-	)
-	_, err = tx.Exec(ctx, query, tenantID, rec.EventID, rec.ProcessedAt)
+	query, args, err := s.qb.Insert(s.tableName).
+		Columns("tenant_id", "event_id", "processed_at").
+		Values(tenantID, rec.EventID, rec.ProcessedAt).
+		ToSQL()
+	if err != nil {
+		return false, fmt.Errorf("inbox oracle: build mark processed failed: %w", err)
+	}
+	_, err = tx.Exec(ctx, query, args...)
 	if err != nil {
 		if database.IsUniqueViolation(err) {
 			return false, nil // already processed
@@ -87,23 +91,16 @@ func (s *oracleStore) MarkProcessed(ctx context.Context, tx dbtypes.Tx, rec Reco
 }
 
 func (s *oracleStore) DeleteProcessed(ctx context.Context, db dbtypes.Interface, before time.Time) (int64, error) {
-	query := fmt.Sprintf(`DELETE FROM %s WHERE processed_at < :1`, s.tableName)
-
-	res, err := db.Exec(ctx, query, before)
-	if err != nil {
-		return 0, fmt.Errorf("inbox oracle: delete processed failed: %w", err)
-	}
-	count, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("inbox oracle: rows affected failed: %w", err)
-	}
-	return count, nil
+	return deleteProcessedBefore(ctx, db, s.qb, s.tableName, "inbox oracle: delete processed failed", before)
 }
 
 // CreateTable creates the inbox table and index in Oracle.
 // Unlike PostgreSQL (which uses IF NOT EXISTS), Oracle DDL returns ORA-00955 if
 // the object already exists; the caller (ensureStoreInitialized) treats all
 // CreateTable errors as warnings, so existing objects are handled gracefully.
+//
+// SECURITY: Manual SQL review completed - static DDL constants; only the constructor-validated
+// table name (validateTableName) is interpolated, for the table, its constraint and its index
 func (s *oracleStore) CreateTable(ctx context.Context, db dbtypes.Interface) error {
 	if _, err := db.Exec(ctx, fmt.Sprintf(oracleCreateTableSQL, s.tableName, s.tableName)); err != nil {
 		return fmt.Errorf("inbox oracle: create table failed: %w", err)

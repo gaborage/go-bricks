@@ -29,12 +29,12 @@ type fakeHoldJobCtx struct {
 	db  dbtypes.Interface
 }
 
-func (c *fakeHoldJobCtx) JobID() string               { return holdDrainJobID }
-func (c *fakeHoldJobCtx) TriggerType() string         { return "scheduled" }
-func (c *fakeHoldJobCtx) Logger() logger.Logger       { return c.log }
-func (c *fakeHoldJobCtx) DB() dbtypes.Interface       { return c.db }
-func (c *fakeHoldJobCtx) Messaging() messaging.Client { return nil }
-func (c *fakeHoldJobCtx) Config() *config.Config      { return nil }
+func (c *fakeHoldJobCtx) JobID() string                   { return holdDrainJobID }
+func (c *fakeHoldJobCtx) TriggerType() string             { return "scheduled" }
+func (c *fakeHoldJobCtx) Logger() logger.Logger           { return c.log }
+func (c *fakeHoldJobCtx) DB() dbtypes.Interface           { return c.db }
+func (c *fakeHoldJobCtx) Messaging() messaging.AMQPClient { return nil }
+func (c *fakeHoldJobCtx) Config() *config.Config          { return nil }
 
 // fakeHoldReplayer records what the drain replayed and what it was told to
 // reload, and can fail or panic for a chosen offset.

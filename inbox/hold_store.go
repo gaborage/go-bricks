@@ -10,6 +10,7 @@ import (
 
 	"github.com/gaborage/go-bricks/database"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/ledgererr"
 )
 
 // The hold's column names, shared by both vendors' statements so a rename moves
@@ -309,6 +310,10 @@ type holdQueries struct {
 	// now is the database's own clock: NOW() or SYSTIMESTAMP. Every lease and due
 	// decision is made in database time so replicas with skewed clocks agree.
 	now string
+	// secondsFromNow is the clock plus a bound number of seconds — the vendor's
+	// interval arithmetic with one ? — composed from now at construction so the two
+	// spellings of the clock cannot drift apart.
+	secondsFromNow string
 	// noError renders an absent last_error as the empty string. Oracle needs a
 	// space where PostgreSQL can use '', because it folds an empty literal to NULL;
 	// the shared scanner trims it back.
@@ -491,4 +496,72 @@ func (q *holdQueries) constantOne() (dbtypes.RawExpression, error) {
 // wrap names the vendor in an error the way each store's own messages do.
 func (q *holdQueries) wrap(what string, err error) error {
 	return fmt.Errorf("inbox %s: %s: %w", q.vendor, what, err)
+}
+
+// stats is the one-round-trip snapshot: three scalar subqueries in one
+// projection, which SubqueryColumn composes and the vendor renders (FROM dual
+// on Oracle).
+func (q *holdQueries) stats(consumer string) dbtypes.SelectQueryBuilder {
+	f := q.qb.Filter()
+	tenants := q.qb.Select(q.qb.MustExpr("COUNT(*)")).From(q.tenantTable).Where(f.Eq(colConsumer, consumer))
+	rows := q.qb.Select(q.qb.MustExpr("COUNT(*)")).From(q.table).Where(f.Eq(colConsumer, consumer))
+	oldest := q.qb.Select(q.qb.MustExpr("MIN(" + colHeldSince + ")")).From(q.tenantTable).Where(f.Eq(colConsumer, consumer))
+	return q.qb.Select().
+		SubqueryColumn(tenants, "tenants").
+		SubqueryColumn(rows, "held_rows").
+		SubqueryColumn(oldest, "oldest")
+}
+
+// acquireLease takes the lease when it is free, expired on the database clock,
+// or already this owner's. secondsFromNow is the vendor's spelling of
+// "now plus ? seconds" with one placeholder for the seconds.
+func (q *holdQueries) acquireLease(consumer, tenant, owner string, lease time.Duration) dbtypes.UpdateQueryBuilder {
+	f := q.qb.Filter()
+	// SECURITY: Manual SQL review completed - secondsFromNow is composed at construction
+	// from the vendor's clock (now + ? seconds, one placeholder); owner, seconds, consumer
+	// and tenant are bound
+	return q.qb.Update(q.tenantTable).
+		Set(colLeaseOwner, owner).
+		SetExpr(colLeaseUntil, q.qb.MustExpr(q.secondsFromNow), lease.Seconds()).
+		Where(f.And(
+			f.Eq(colConsumer, consumer),
+			f.Eq(colTenantID, tenant),
+			// SECURITY: Manual SQL review completed - constant text over a fixed column and
+			// the database's own clock, the same predicate the drain's due query uses.
+			f.Or(f.Null(colLeaseUntil), f.Raw(colLeaseUntil+" < "+q.now), f.Eq(colLeaseOwner, owner)),
+		))
+}
+
+// deferTenant pushes the tenant's next attempt out, records the bounded error
+// and drops the lease — only while this owner still holds it.
+func (q *holdQueries) deferTenant(consumer, tenant, owner string, backoff time.Duration, lastErr string) dbtypes.UpdateQueryBuilder {
+	f := q.qb.Filter()
+	// SECURITY: Manual SQL review completed - secondsFromNow is composed at construction
+	// from the vendor's clock; attempts + 1 and the NULLs are static text; every value bound
+	return q.qb.Update(q.tenantTable).
+		Set(colAttempts, q.qb.MustExpr(colAttempts+" + 1")).
+		SetExpr(colNextAttemptAt, q.qb.MustExpr(q.secondsFromNow), backoff.Seconds()).
+		Set(colLastError, ledgererr.Bound(lastErr)).
+		// Literal NULLs, as the hand-written statement spelled them: a bound nil
+		// would be equivalent but would move the placeholder numbering.
+		Set(colLeaseOwner, q.qb.MustExpr("NULL")).
+		Set(colLeaseUntil, q.qb.MustExpr("NULL")).
+		Where(f.And(
+			f.Eq(colConsumer, consumer),
+			f.Eq(colTenantID, tenant),
+			f.Eq(colLeaseOwner, owner),
+			// SECURITY: Manual SQL review completed - constant text over a fixed column and
+			// the database's own clock.
+			f.Raw(colLeaseUntil+" > "+q.now),
+		))
+}
+
+// execAffectedOne runs q through the framework helper and reports whether a
+// row was touched; the error carries "inbox hold: <what> failed" as its label.
+func execAffectedOne(ctx context.Context, db dbtypes.Interface, what string, q dbtypes.UpdateQueryBuilder) (bool, error) {
+	n, err := database.ExecuteUpdate(ctx, db, q, "inbox hold: "+what+" failed")
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }

@@ -6,7 +6,10 @@ import (
 	"bytes"
 	"crypto/rsa"
 	"fmt"
+	"slices"
 	"sync"
+
+	"github.com/gaborage/go-bricks/keystore"
 )
 
 // MockKeyStore implements app.KeyStore for unit testing.
@@ -26,9 +29,27 @@ type MockKeyStore struct {
 	publicKeys  map[string]*rsa.PublicKey
 	privateKeys map[string]*rsa.PrivateKey
 	secrets     map[string][]byte
+	generations map[string][]keystore.Generation
 	publicErr   error
 	privateErr  error
 	secretErr   error
+	recorded    [][2]string
+}
+
+// RecordResolution implements keystore.RoleRecorder: the mock remembers every
+// (entry, role) a startup resolution tagged, in call order, so a test can assert
+// which entries the module under test claimed and under which role.
+func (m *MockKeyStore) RecordResolution(entry, role string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.recorded = append(m.recorded, [2]string{entry, role})
+}
+
+// Recorded returns the (entry, role) pairs RecordResolution received, in order.
+func (m *MockKeyStore) Recorded() [][2]string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return slices.Clone(m.recorded)
 }
 
 // NewMockKeyStore creates an empty MockKeyStore.
@@ -37,7 +58,29 @@ func NewMockKeyStore() *MockKeyStore {
 		publicKeys:  make(map[string]*rsa.PublicKey),
 		privateKeys: make(map[string]*rsa.PrivateKey),
 		secrets:     make(map[string][]byte),
+		generations: make(map[string][]keystore.Generation),
 	}
+}
+
+// WithGeneration declares one provisioned generation of a Logical kid. The
+// mock applies no grammar, so a test controls the exact accept set the module
+// under test sees, but it keeps the FamilyEnumerator ordering contract:
+// Generations returns ascending versions whatever the declaration order. Pair
+// it with WithPublicKey and friends on the generation's Kid() when the module
+// also fetches material.
+func (m *MockKeyStore) WithGeneration(logical, version string, role keystore.Role) *MockKeyStore {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.generations[logical] = append(m.generations[logical], keystore.Generation{Logical: logical, Version: version, Role: role})
+	slices.SortFunc(m.generations[logical], keystore.CompareGenerations)
+	return m
+}
+
+// Generations implements keystore.FamilyEnumerator.
+func (m *MockKeyStore) Generations(logical string) []keystore.Generation {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return slices.Clone(m.generations[logical])
 }
 
 // WithPublicKey adds a public key for the given name.

@@ -410,8 +410,9 @@ func heldMessageOf(row *HoldRow) (*app.HeldMessage, error) {
 	}, nil
 }
 
-// holdMeterName is the instrumentation scope the hold's gauges report under.
-const holdMeterName = "go-bricks/inbox"
+// inboxMeterName is the instrumentation scope the inbox's instruments — the
+// hold's gauges and the dedup-hit counter — report under.
+const inboxMeterName = "go-bricks/inbox"
 
 // holdOwnerID identifies this replica in a lease: the host it runs on, its
 // process, and enough randomness that two processes on one host, or a restart

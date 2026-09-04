@@ -58,6 +58,13 @@ var (
 	// has nowhere to render; accepting one silently would drop it.
 	ErrAliasInValue = errors.New("alias is not allowed in a SET or VALUES value")
 
+	// ErrRowLockWithPagination is returned by ToSQL on Oracle when a SELECT
+	// carries both a row lock (ForUpdate/ForUpdateNoWait) and a Limit/Offset:
+	// the Oracle SQL Language Reference, "Restrictions on the row_limiting_clause",
+	// states "You cannot specify this clause with the for_update_clause". The
+	// statement is refused here rather than rejected by the database at run time.
+	ErrRowLockWithPagination = errors.New("a row lock cannot be combined with Limit/Offset on Oracle (row_limiting_clause restriction)")
+
 	// ErrNilSubquery is returned when ValidateSubquery() is called with nil subquery.
 	ErrNilSubquery = errors.New("subquery cannot be nil")
 

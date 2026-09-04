@@ -52,14 +52,14 @@ var ErrInvalidPublishDestination = errors.New("amqp: publish destination exceeds
 // the outbox writes exchange, routing key and header keys to a ledger row, and a
 // row the frame can never carry is better refused at the INSERT than parked by the
 // relay after MaxRetries. They run the rule rather than restating the ceiling.
-func ValidatePublishDestination(options PublishOptions) error {
-	if err := checkShortStr("exchange", options.Exchange); err != nil {
+func ValidatePublishDestination(exchange, routingKey string, headers map[string]any) error {
+	if err := checkShortStr("exchange", exchange); err != nil {
 		return err
 	}
-	if err := checkShortStr("routing key", options.RoutingKey); err != nil {
+	if err := checkShortStr("routing key", routingKey); err != nil {
 		return err
 	}
-	return checkTableKeys("header key", options.Headers)
+	return checkTableKeys("header key", headers)
 }
 
 // checkTableKeys walks a table, judging its KEYS, and descends through every

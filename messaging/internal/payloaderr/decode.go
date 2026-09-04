@@ -80,7 +80,14 @@ func (d *Decoder[T]) Decode(data []byte, dst *T) *Body {
 		return NewDecode(err, d.codec.Summarize(err, d.fieldPathIsSchema))
 	}
 
-	if err := Validator().Struct(*dst); err != nil {
+	return ValidateStruct(*dst)
+}
+
+// ValidateStruct runs the shared validator over an already-decoded value — the
+// second half of Decode, exposed for a lane that decoded by other means (the
+// sealed opener splices the plaintext back itself) and still owes validation.
+func ValidateStruct(v any) *Body {
+	if err := Validator().Struct(v); err != nil {
 		return NewValidate(err)
 	}
 

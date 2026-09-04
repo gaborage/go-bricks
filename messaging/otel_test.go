@@ -71,7 +71,7 @@ func TestPublishCreatesSpan(t *testing.T) {
 
 	ackNextSuccessfulPublish(ctx, t, client, fakeCh)
 
-	err := client.Publish(ctx, destination, data)
+	err := client.publishBytes(ctx, publishOptions{RoutingKey: destination}, data)
 	require.NoError(t, err)
 
 	// Verify span was created
@@ -95,7 +95,7 @@ func TestPublishCreatesSpan(t *testing.T) {
 	close(fakeCh.notifyCloseCh)
 }
 
-func TestPublishToExchangeCreatesSpanWithExchangeAttributes(t *testing.T) {
+func TestPublishBytesCreatesSpanWithExchangeAttributes(t *testing.T) {
 	exporter, cleanup := setupTestTracing(t)
 	defer cleanup()
 
@@ -105,7 +105,7 @@ func TestPublishToExchangeCreatesSpanWithExchangeAttributes(t *testing.T) {
 	// Same hardcoded-tag hazard as TestPublishCreatesSpan — see the note there.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	options := PublishOptions{
+	options := publishOptions{
 		Exchange:   testExchange,
 		RoutingKey: testRoutingKey,
 	}
@@ -113,7 +113,7 @@ func TestPublishToExchangeCreatesSpanWithExchangeAttributes(t *testing.T) {
 
 	ackNextSuccessfulPublish(ctx, t, client, fakeCh)
 
-	err := client.PublishToExchange(ctx, options, data)
+	err := client.publishBytes(ctx, options, data)
 	require.NoError(t, err)
 
 	// Verify span attributes
@@ -147,7 +147,7 @@ func TestPublishErrorRecordsSpanError(t *testing.T) {
 	// Cancel context immediately to trigger error
 	cancel()
 
-	err := client.Publish(ctx, destination, data)
+	err := client.publishBytes(ctx, publishOptions{RoutingKey: destination}, data)
 	require.Error(t, err)
 	assert.Equal(t, context.Canceled, err)
 
@@ -181,7 +181,7 @@ func TestRecordPublishFailureKeepsTheErrorMessageOffTheSpan(t *testing.T) {
 	client := &AMQPClientImpl{}
 	publishErr := errors.New("NACK from broker: " + obtest.LeakCanary)
 
-	got := client.recordPublishFailure(ctx, PublishOptions{Exchange: "events", RoutingKey: "orders"}, time.Now(), span, publishErr)
+	got := client.recordPublishFailure(ctx, publishOptions{Exchange: "events", RoutingKey: "orders"}, time.Now(), span, publishErr)
 	span.End()
 
 	require.ErrorIs(t, got, publishErr)
@@ -210,7 +210,7 @@ func TestPublishRetryEventCarriesNoErrorMessage(t *testing.T) {
 	c.resendDelay = time.Millisecond
 	c.maxPublishAttempts = 2
 
-	err := c.PublishToExchange(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	require.ErrorIs(t, err, ErrPublishRetriesExhausted)
 
 	spans := exporter.GetSpans()
@@ -266,7 +266,7 @@ func TestPublishNotReadyRecordsError(t *testing.T) {
 	destination := testQueueOtel
 	data := []byte(testMessage)
 
-	err := client.Publish(ctx, destination, data)
+	err := client.publishBytes(ctx, publishOptions{RoutingKey: destination}, data)
 	// W3-D breaking change: pre-fix returned nil to avoid failing the business
 	// operation; post-fix returns errNotConnected so callers can retry/escalate.
 	require.ErrorIs(t, err, errNotConnected)
@@ -302,7 +302,7 @@ func TestPublishConfirmationTimeoutRecordsError(t *testing.T) {
 	data := []byte(testMessage)
 
 	// Don't send confirmation - let it timeout and then context expires
-	err := client.Publish(ctx, destination, data)
+	err := client.publishBytes(ctx, publishOptions{RoutingKey: destination}, data)
 	// Should return context deadline exceeded. The error now wraps the last retry
 	// cause (ErrPublishConfirmTimeout), so match by errors.Is rather than identity.
 	require.Error(t, err)

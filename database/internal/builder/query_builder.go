@@ -44,7 +44,14 @@ type SelectQueryBuilder struct {
 	selectBuilder squirrel.SelectBuilder
 	limit         uint64 // 0 means no limit
 	offset        uint64 // 0 means no offset
-	err           error  // Captured error from filter operations
+	// lock is the rendered row-lock clause, "" for none; see row_lock.go.
+	lock string
+	// hasRowSource records that From() or a Join*On named a table. Oracle has
+	// no table-less SELECT, so ToSQL supplies `FROM dual` when it is false — and
+	// only then: a JOIN without a FROM must keep failing loudly rather than be
+	// joined against dual.
+	hasRowSource bool
+	err          error // Captured error from filter operations
 }
 
 // check if SelectQueryBuilder implements dbtypes.SelectQueryBuilder
@@ -864,6 +871,7 @@ func (sqb *SelectQueryBuilder) From(from ...any) dbtypes.SelectQueryBuilder {
 	if len(from) == 0 {
 		return sqb
 	}
+	sqb.hasRowSource = true
 
 	// Quote all tables and join with commas for multi-table FROM clause
 	quotedTables := make([]string, len(from))
@@ -893,6 +901,27 @@ func (sqb *SelectQueryBuilder) Limit(limit uint64) dbtypes.SelectQueryBuilder {
 // Offset sets the OFFSET for the query
 func (sqb *SelectQueryBuilder) Offset(offset uint64) dbtypes.SelectQueryBuilder {
 	sqb.offset = offset
+	return sqb
+}
+
+// SubqueryColumn appends a scalar subquery to the projection; see
+// dbtypes.SelectQueryBuilder. The subquery renders with question-mark
+// placeholders so the outer statement's final pass numbers every argument once,
+// exactly as buildExistsFilter does for EXISTS.
+func (sqb *SelectQueryBuilder) SubqueryColumn(sub dbtypes.SelectQueryBuilder, alias string) dbtypes.SelectQueryBuilder {
+	if sqb.err != nil {
+		return sqb
+	}
+	if !sqllex.IsUnquotedIdentifier(alias) {
+		sqb.err = fmt.Errorf("subquery column: %w: %q", dbtypes.ErrInvalidAlias, alias)
+		return sqb
+	}
+	subSQL, subArgs, err := renderSubquery(sub)
+	if err != nil {
+		sqb.err = fmt.Errorf("subquery column %s: %w", alias, err)
+		return sqb
+	}
+	sqb.selectBuilder = sqb.selectBuilder.Column(squirrel.Alias(squirrel.Expr(subSQL, subArgs...), alias))
 	return sqb
 }
 
@@ -970,6 +999,7 @@ func (sqb *SelectQueryBuilder) validateJoinTable(method string, table any) (quot
 //	jf := qb.JoinFilter()
 //	query.JoinOn(Table("profiles").As("p"), jf.EqColumn("users.id", "p.user_id"))
 func (sqb *SelectQueryBuilder) JoinOn(table any, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
+	sqb.hasRowSource = true
 	quotedTable, ok := sqb.validateJoinTable("JoinOn", table)
 	if !ok {
 		return sqb
@@ -990,6 +1020,7 @@ func (sqb *SelectQueryBuilder) JoinOn(table any, filter dbtypes.JoinFilter) dbty
 // Accepts either a string table name or *TableRef instance with optional alias.
 // The table name is automatically quoted according to vendor rules.
 func (sqb *SelectQueryBuilder) LeftJoinOn(table any, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
+	sqb.hasRowSource = true
 	quotedTable, ok := sqb.validateJoinTable("LeftJoinOn", table)
 	if !ok {
 		return sqb
@@ -1010,6 +1041,7 @@ func (sqb *SelectQueryBuilder) LeftJoinOn(table any, filter dbtypes.JoinFilter) 
 // Accepts either a string table name or *TableRef instance with optional alias.
 // The table name is automatically quoted according to vendor rules.
 func (sqb *SelectQueryBuilder) RightJoinOn(table any, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
+	sqb.hasRowSource = true
 	quotedTable, ok := sqb.validateJoinTable("RightJoinOn", table)
 	if !ok {
 		return sqb
@@ -1030,6 +1062,7 @@ func (sqb *SelectQueryBuilder) RightJoinOn(table any, filter dbtypes.JoinFilter)
 // Accepts either a string table name or *TableRef instance with optional alias.
 // The table name is automatically quoted according to vendor rules.
 func (sqb *SelectQueryBuilder) InnerJoinOn(table any, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
+	sqb.hasRowSource = true
 	quotedTable, ok := sqb.validateJoinTable("InnerJoinOn", table)
 	if !ok {
 		return sqb
@@ -1051,6 +1084,7 @@ func (sqb *SelectQueryBuilder) InnerJoinOn(table any, filter dbtypes.JoinFilter)
 // Cross joins do not have ON conditions, so no JoinFilter is needed.
 // The table name is automatically quoted according to vendor rules.
 func (sqb *SelectQueryBuilder) CrossJoinOn(table any) dbtypes.SelectQueryBuilder {
+	sqb.hasRowSource = true
 	quotedTable, ok := sqb.validateJoinTable("CrossJoinOn", table)
 	if !ok {
 		return sqb
@@ -1242,15 +1276,33 @@ func (sqb *SelectQueryBuilder) ValidateForSubquery() error {
 	if sqb == nil {
 		return errors.New("subquery cannot be nil")
 	}
+	if sqb.lock != "" {
+		// A row lock belongs to the statement that holds the transaction, never
+		// to a nested SELECT: inside EXISTS/IN it is invalid on PostgreSQL and
+		// meaningless on Oracle, and buildSelectBuilder would render it.
+		return errors.New("subquery cannot carry a row lock (ForUpdate/ForUpdateNoWait)")
+	}
 
 	return sqb.err
 }
 
-// buildSelectBuilder returns the underlying squirrel.SelectBuilder with pagination applied.
+// buildSelectBuilder returns the underlying squirrel.SelectBuilder with
+// pagination and the row lock applied, in that order: squirrel renders LIMIT/
+// OFFSET before any suffix, and the Oracle OFFSET/FETCH clause is itself a
+// suffix, so appending the lock last puts it after pagination on both vendors.
 func (sqb *SelectQueryBuilder) buildSelectBuilder() squirrel.SelectBuilder {
 	builder := sqb.selectBuilder
+	if !sqb.hasRowSource && sqb.qb.vendor == dbtypes.Oracle {
+		// Oracle has no table-less SELECT: `SELECT 1` and a projection made only
+		// of scalar subqueries both need a row source, and dual is the vendor's
+		// one-row table for exactly that.
+		builder = builder.From("dual")
+	}
+	return sqb.withRowLock(sqb.applyPagination(builder))
+}
 
-	// Apply pagination based on vendor
+// applyPagination renders LIMIT/OFFSET per vendor.
+func (sqb *SelectQueryBuilder) applyPagination(builder squirrel.SelectBuilder) squirrel.SelectBuilder {
 	if sqb.limit == 0 && sqb.offset == 0 {
 		return builder
 	}
@@ -1281,6 +1333,9 @@ func (sqb *SelectQueryBuilder) ToSQL() (sql string, args []any, err error) {
 	if sqb.err != nil {
 		return "", nil, sqb.err
 	}
+	if err := sqb.validateRowLock(); err != nil {
+		return "", nil, err
+	}
 
 	builder := sqb.buildSelectBuilder()
 	return builder.ToSql()
@@ -1300,6 +1355,22 @@ func (uqb *UpdateQueryBuilder) Set(column string, value any) dbtypes.UpdateQuery
 	// no separate pre-check here: a second validateIdentifier on the same string
 	// could never fail once the funnel's had passed.
 	uqb.setColumn(column, value)
+	return uqb
+}
+
+// SetExpr assigns an argument-carrying expression; see dbtypes.UpdateQueryBuilder.
+func (uqb *UpdateQueryBuilder) SetExpr(column string, expr dbtypes.RawExpression, args ...any) dbtypes.UpdateQueryBuilder {
+	quoted, err := uqb.qb.quoteColumnForQuery(column)
+	if err != nil {
+		uqb.failClause(err)
+		return uqb
+	}
+	cell, err := valueCell(column, expr, args...)
+	if err != nil {
+		uqb.failClause(err)
+		return uqb
+	}
+	uqb.updateBuilder = uqb.updateBuilder.Set(quoted, cell)
 	return uqb
 }
 

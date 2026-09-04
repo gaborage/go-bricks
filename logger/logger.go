@@ -52,8 +52,9 @@ func NewWithFilter(level string, pretty bool, filterConfig *FilterConfig) *ZeroL
 
 	if pretty {
 		l = zerolog.New(zerolog.ConsoleWriter{
-			Out:        os.Stdout,
-			TimeFormat: time.RFC3339,
+			Out:           os.Stdout,
+			TimeFormat:    time.RFC3339,
+			FormatPrepare: quoteControlMessage,
 		}).With().Timestamp().CallerWithSkipFrameCount(3).Logger()
 	} else {
 		l = zerolog.New(os.Stdout).With().Timestamp().CallerWithSkipFrameCount(3).Logger()
@@ -116,8 +117,8 @@ func (l *ZeroLogger) WithContext(ctx any) Logger {
 		span := trace.SpanFromContext(c)
 		if span.SpanContext().IsValid() {
 			log := l.zlog.With().
-				Str("trace_id", span.SpanContext().TraceID().String()).
-				Str("span_id", span.SpanContext().SpanID().String()).
+				Str(FieldTraceID, span.SpanContext().TraceID().String()).
+				Str(FieldSpanID, span.SpanContext().SpanID().String()).
 				Logger()
 			return &ZeroLogger{
 				zlog:         &log,

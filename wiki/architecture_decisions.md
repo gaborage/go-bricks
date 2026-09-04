@@ -1487,6 +1487,61 @@ no keystore path — the consumer loads such a partner key itself. See
 **Key Benefits:** the floor is a control rather than a suggestion, one less startup WARN an
 operator learns to ignore, and the `keystore` package no longer carries a deprecation branch.
 
+### [ADR-096: The Typed Publish Door Replaces Raw Byte Publishing](adr_096_typed_publish_door.md)
+
+**Date:** 2026-09-04 | **Status:** Accepted | **Breaking:** `Client.Publish`, `AMQPClient.PublishToExchange` and `PublishOptions` leave the exported surface; `ValidatePublishDestination` takes `(exchange, routingKey, headers)`; `JobContext.Messaging()` returns `messaging.AMQPClient`; `testing/mocks` loses its byte publish doubles
+
+`DeclarePublisher` registered a destination and handed back nothing, so every module
+re-spelled exchange and routing key in a `PublishOptions` literal beside a `[]byte` it had
+marshaled itself, and a seal-tagged type (ADR-097) could always be pushed through that raw
+door in clear. `DeclareTypedPublisher[T]` → `Publisher[T]` is now the ONLY module-facing
+publish door: bound at declaration, JSON-marshaling `T`, publishing through the stamped
+client a handler already holds. The bytes door survives as the unexported `bytePublisher`
+inside `messaging` — implemented by the framework client and the stamping wrapper, asserted
+by `Publisher[T].Publish` (a client without it fails with `ErrPublishDoorUnavailable`) and
+reached by the outbox relay through the init-registered `internal/publishdoor` seam (the
+ADR-091 pattern). Additive: `messaging.EventPublisher[T]` and
+`messaging/testing.CapturePublisher[T]` give a module's tests a typed capture instead of a
+byte frame. The streams lane's `Publisher.Publish(*PublishMessage)` is untouched. See
+[migrations.md](migrations.md) `[C63.1]`.
+
+### [ADR-098: Builder Clauses for the Ledger Stores](adr_098_builder_clauses_for_ledger_stores.md)
+
+**Date:** 2026-09-04 | **Status:** Accepted | **Breaking:** `SelectQueryBuilder` gains `ForUpdate`, `ForUpdateNoWait` and `SubqueryColumn`; `UpdateQueryBuilder` gains `SetExpr` — a consumer type implementing either stops compiling until it grows them
+
+The outbox and inbox ledger stores hand-write their SQL because four recurring shapes had
+no builder form: a row lock (`FOR UPDATE [NOWAIT]`), a SET assigning an expression with a
+bound argument, scalar subqueries in a projection, and Oracle's table-less `SELECT`. Rather
+than wrap them in `qb.Expr` (raw SQL in a builder's coat, rejected by #1255), the builder gains
+`ForUpdate()`/`ForUpdateNoWait()` (rendered after pagination; refused with
+`ErrRowLockWithPagination` on Oracle, whose row_limiting_clause cannot take a for_update_clause,
+and refused as a subquery), `SetExpr(column, expr, args...)` (a raw-SQL door, annotated like
+`f.Raw`), `SubqueryColumn(sub, alias)`, and an implicit `FROM dual` on Oracle. Interfaces grow
+rather than fork into optional side interfaces, per the C61.23 precedent. See
+[migrations.md](migrations.md) `[C63.3]`.
+
+---
+
+### [ADR-097: Sealed AMQP Messages — Field-Level JOSE Payload Protection](adr_097_sealed_amqp_messages.md)
+
+**Date:** 2026-09-03 | **Status:** Accepted | **Breaking:** none in this record — sealing is additive and import-gated; the header-id grammar it relies on is `[C63.2]`, the typed-door removal ADR-096's `[C63.1]`
+
+Payment events cross a broker that ops, tooling and other tenants' consumers can read, and an
+AMQP publish ACL says who may write to an exchange, not who wrote a given message. A sealed
+event is ONE compact JWS whose payload is the business JSON with the single `seal:"subject"`
+field replaced in place by a compact JWE (encrypt-subset-then-sign-whole, so the signature
+covers ciphertext and never a plaintext PAN — a cleartext signature would be a confirmation
+oracle). The outer header carries `typ: vnd.gobricks.sealed.v1+json`, the signed `sp`
+manifest and the `jti`/`iat`/`etyp`/`tid` slots; the inner JWE's `iss` equals the outer `kid`
+(authorship binding). Tags carry stable Logical kids; the keystore holds `<logical>-v<N>`
+Generations, the local keystore IS the accept set, and `messaging.seal.active` picks the
+producer's generation. The seal layer never judges replay — `inbox.ProcessOnce` keyed on the
+framework-composed `<SignFamily>:<jti>` does — and there is no accept-unsealed mode: sealing
+is greenfield. Deep dive: [sealing.md](sealing.md).
+
+**Key Benefits:** broker confidentiality and producer authenticity from one declaration
+shared by both sides, rotation without touching a tag, and a dedup key no header can forge.
+
 ---
 
 ### [ADR-090: User-Named Config Sections Must Be Reachable By Environment Variable](adr_090_env_reachable_section_names.md)
@@ -2093,7 +2148,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-095) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-098) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

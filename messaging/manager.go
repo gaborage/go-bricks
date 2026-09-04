@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/resourcepool"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
@@ -85,10 +86,6 @@ type consumerEntry struct {
 	key      string
 }
 
-// defaultPublisherCleanupInterval is the documented idle-sweep frequency
-// (messaging.publisher.cleanupinterval) applied when the caller supplies none.
-const defaultPublisherCleanupInterval = 2 * time.Minute
-
 // ManagerOptions configures the Manager
 type ManagerOptions struct {
 	MaxPublishers int           // Maximum number of publisher clients to keep cached
@@ -136,7 +133,7 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 		opts.IdleTTL = 1 * time.Hour
 	}
 	if opts.CleanupInterval <= 0 {
-		opts.CleanupInterval = defaultPublisherCleanupInterval
+		opts.CleanupInterval = config.DefaultPublisherCleanupInterval
 	}
 
 	// Default to real client factory if none provided
@@ -448,7 +445,7 @@ func (m *Manager) StartCleanup(interval time.Duration) {
 		return // zero-value manager: nothing to run, consistent with the other nil-pool guards
 	}
 	if interval <= 0 {
-		interval = defaultPublisherCleanupInterval
+		interval = config.DefaultPublisherCleanupInterval
 	}
 	m.pubPool.StartCleanup(interval)
 }

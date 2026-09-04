@@ -70,7 +70,7 @@ type AMQPClientImpl struct {
 
 	// publishSerial serializes the full (channel snapshot → generation snapshot
 	// → GetNextPublishSeqNo → pendingPublishes.Store → PublishWithContext)
-	// sequence inside PublishToExchange and also guards changeChannel() —
+	// sequence inside publishBytes and also guards changeChannel() —
 	// changeChannel rotates the generation and starts a new dispatcher, so it
 	// must not interleave with an in-flight publish that has already captured
 	// the old channel reference. amqp091 takes its own lock around
@@ -87,14 +87,14 @@ type AMQPClientImpl struct {
 	reInitDelay       time.Duration
 	resendDelay       time.Duration
 	connectionTimeout time.Duration
-	// readyTimeout bounds PublishToExchange's pre-flight wait for a not-yet-ready
+	// readyTimeout bounds publishBytes's pre-flight wait for a not-yet-ready
 	// client (cold start or mid-reconnect) to become ready before the publish
 	// attempt begins. Zero or negative disables the wait entirely, reproducing the
 	// pre-#655 instant fail-fast — this is the Go zero value, so struct-literal
 	// test clients that don't set the field keep their old behavior. See
 	// waitForReady.
 	readyTimeout time.Duration
-	// maxPublishAttempts bounds the per-publish retry loop so PublishToExchange
+	// maxPublishAttempts bounds the per-publish retry loop so publishBytes
 	// always returns to its caller. A value <= 0 means unbounded (the historical
 	// behavior) — kept so struct-literal test clients that don't set the field
 	// retain their old semantics.
@@ -115,7 +115,7 @@ const (
 	// typical reconnect (reconnectDelay 5s + reInitDelay 2s) across a few resend
 	// cycles before giving up and returning a classifiable error to the caller.
 	defaultMaxPublishAttempts = 5
-	// defaultReadyTimeout bounds PublishToExchange's pre-flight wait for a cold or
+	// defaultReadyTimeout bounds publishBytes's pre-flight wait for a cold or
 	// mid-reconnect client to become ready before the publish attempt begins. 5s
 	// covers the common case (broker handshake + channel init) without materially
 	// extending a caller's request budget. See issue #655.
@@ -151,7 +151,7 @@ var (
 	// relay treats this (and context.Canceled) as a shutdown abort that must NOT advance an
 	// event's retry_count — it is the one publish error the relay branches on.
 	ErrShutdown = errors.New("AMQP client is shutting down")
-	// ErrPublishRetriesExhausted is returned by PublishToExchange once the bounded retry loop
+	// ErrPublishRetriesExhausted is returned by publishBytes once the bounded retry loop
 	// reaches maxPublishAttempts. It wraps the last attempt's cause (one of ErrPublishNacked,
 	// ErrPublishConfirmTimeout, or the raw publish error) so a caller can see WHY it gave up.
 	ErrPublishRetriesExhausted = errors.New("amqp: publish retries exhausted")
@@ -177,7 +177,7 @@ var (
 type ClientOption func(*AMQPClientImpl)
 
 // WithConnectionTimeout overrides the per-publish broker confirmation timeout —
-// the wait for an ACK/NACK after a confirmed publish (see PublishToExchange).
+// the wait for an ACK/NACK after a confirmed publish (see publishBytes).
 // Non-positive values are ignored, leaving the 30s default in place.
 func WithConnectionTimeout(d time.Duration) ClientOption {
 	return func(c *AMQPClientImpl) {
@@ -188,7 +188,7 @@ func WithConnectionTimeout(d time.Duration) ClientOption {
 }
 
 // WithMaxPublishAttempts bounds the per-publish retry loop: after n failed
-// attempts PublishToExchange returns ErrPublishRetriesExhausted instead of
+// attempts publishBytes returns ErrPublishRetriesExhausted instead of
 // retrying forever. Non-positive values are ignored, leaving the default (5).
 func WithMaxPublishAttempts(n int) ClientOption {
 	return func(c *AMQPClientImpl) {
@@ -198,7 +198,7 @@ func WithMaxPublishAttempts(n int) ClientOption {
 	}
 }
 
-// WithReadyTimeout bounds PublishToExchange's pre-flight wait for a not-yet-ready
+// WithReadyTimeout bounds publishBytes's pre-flight wait for a not-yet-ready
 // client to become ready before the publish attempt begins (see waitForReady).
 // The wait does not consume a maxPublishAttempts slot. Non-positive values are
 // ignored, leaving the 5s default in place.
@@ -294,17 +294,8 @@ func (c *AMQPClientImpl) IsReady() bool {
 	return c.isReady
 }
 
-// Publish sends a message to the specified destination (queue name).
-// Uses default exchange ("") and destination as routing key.
-func (c *AMQPClientImpl) Publish(ctx context.Context, destination string, data []byte) error {
-	return c.PublishToExchange(ctx, PublishOptions{
-		Exchange:   "",
-		RoutingKey: destination,
-	}, data)
-}
-
 // createPublishSpan creates and configures an OpenTelemetry span for AMQP publish operations.
-func createPublishSpan(ctx context.Context, options PublishOptions, dataLen int, startTime time.Time) (context.Context, trace.Span) {
+func createPublishSpan(ctx context.Context, options publishOptions, dataLen int, startTime time.Time) (context.Context, trace.Span) {
 	tracer := otel.Tracer(messagingTracerName)
 	// Prefer Exchange over RoutingKey for destination since exchange is the primary AMQP entity
 	destination := options.Exchange
@@ -338,7 +329,7 @@ func createPublishSpan(ctx context.Context, options PublishOptions, dataLen int,
 }
 
 // preparePublishing creates an AMQP publishing message with headers, trace context, and message IDs.
-func preparePublishing(ctx context.Context, options PublishOptions, data []byte) amqp.Publishing {
+func preparePublishing(ctx context.Context, options publishOptions, data []byte) amqp.Publishing {
 	publishing := amqp.Publishing{
 		ContentType: contentTypeOctetStream,
 		Body:        data,
@@ -407,9 +398,9 @@ func preparePublishing(ctx context.Context, options PublishOptions, data []byte)
 // startTime, because its duration is meant to cover the full call, wait
 // included.
 func (c *AMQPClientImpl) publishPrologue(
-	ctx context.Context, options PublishOptions, dataLen int,
+	ctx context.Context, options publishOptions, dataLen int,
 ) (spanCtx context.Context, span trace.Span, publishStart time.Time, err error) {
-	if err := ValidatePublishDestination(options); err != nil {
+	if err := ValidatePublishDestination(options.Exchange, options.RoutingKey, options.Headers); err != nil {
 		return ctx, nil, time.Time{}, err
 	}
 
@@ -424,8 +415,12 @@ func (c *AMQPClientImpl) publishPrologue(
 	return ctx, span, time.Now(), nil
 }
 
-// PublishToExchange publishes a message to a specific exchange with routing key.
-func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishOptions, data []byte) error {
+// publishBytes publishes data to the exchange and routing key in options — the
+// framework's byte door (bytePublisher). It is unexported by design (ADR-096):
+// a module publishes through Publisher[T].Publish, which asserts this door on
+// the client it is handed; the outbox relay reaches it through
+// internal/publishdoor. The bounded retry loop (ADR-033) lives here.
+func (c *AMQPClientImpl) publishBytes(ctx context.Context, options publishOptions, data []byte) error {
 	ctx, span, publishStart, err := c.publishPrologue(ctx, options, len(data))
 	if err != nil {
 		return err
@@ -605,13 +600,13 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 	}
 }
 
-// publishPreflight runs waitForReady ahead of PublishToExchange's retry loop and
+// publishPreflight runs waitForReady ahead of publishBytes's retry loop and
 // translates the outcome into the same terminal-error shape as every other exit
 // path: a readyTimeout expiry logs the same WARN production always emitted for a
 // not-ready client and returns the raw errNotConnected; a ctx cancel or shutdown
 // is routed through publishAbort like every other abort. Split out of
-// PublishToExchange to keep its cyclomatic complexity within budget (gocyclo).
-func (c *AMQPClientImpl) publishPreflight(ctx context.Context, options PublishOptions, startTime time.Time, span trace.Span) error {
+// publishBytes to keep its cyclomatic complexity within budget (gocyclo).
+func (c *AMQPClientImpl) publishPreflight(ctx context.Context, options publishOptions, startTime time.Time, span trace.Span) error {
 	err := c.waitForReady(ctx)
 	if err == nil {
 		return nil
@@ -682,7 +677,7 @@ func pollUntilReady(ctx context.Context, timeout, interval time.Duration, isRead
 	}
 }
 
-// waitForReady blocks PublishToExchange's pre-flight check until the client
+// waitForReady blocks publishBytes's pre-flight check until the client
 // becomes ready, the bounded readyTimeout elapses, the context is canceled, or
 // the client is shut down — whichever comes first. A readyTimeout <= 0 disables
 // the wait entirely (returns nil immediately without even checking IsReady),
@@ -737,7 +732,7 @@ func confirmationWaitUnreachable(ctx context.Context, confirmationWait time.Dura
 // errors.Is surface as a mid-wait expiry — wrapped with lastCause.
 // Early-stop changes timing, not error identity.
 func (c *AMQPClientImpl) publishAttemptGuard(
-	ctx context.Context, options PublishOptions, startTime time.Time, span trace.Span, lastCause error,
+	ctx context.Context, options publishOptions, startTime time.Time, span trace.Span, lastCause error,
 ) error {
 	select {
 	case <-ctx.Done():
@@ -760,9 +755,9 @@ func (c *AMQPClientImpl) publishAttemptGuard(
 // retryBackoff is the shared tail of every failed-attempt branch. It applies the
 // attempt ceiling (returning a terminal ErrPublishRetriesExhausted once reached) and,
 // if backoff > 0, a cancelable wait that still honors ctx cancel / client shutdown.
-// It returns a non-nil error the caller must RETURN from PublishToExchange, or nil to
+// It returns a non-nil error the caller must RETURN from publishBytes, or nil to
 // CONTINUE the retry loop. (Only the failure branches call it — never the ACK path.)
-func (c *AMQPClientImpl) retryBackoff(ctx context.Context, options PublishOptions, startTime time.Time, span trace.Span, retryCount int, lastCause error, backoff time.Duration) error {
+func (c *AMQPClientImpl) retryBackoff(ctx context.Context, options publishOptions, startTime time.Time, span trace.Span, retryCount int, lastCause error, backoff time.Duration) error {
 	if c.maxPublishAttempts > 0 && retryCount >= c.maxPublishAttempts {
 		return c.publishExhausted(ctx, options, startTime, span, retryCount, lastCause)
 	}
@@ -782,7 +777,7 @@ func (c *AMQPClientImpl) retryBackoff(ctx context.Context, options PublishOption
 // recordPublishFailure stamps the shared terminal metrics/span state for a publish that is
 // ending in failure and returns err unchanged, so the terminal helpers only differ in how
 // they build err.
-func (c *AMQPClientImpl) recordPublishFailure(ctx context.Context, options PublishOptions, startTime time.Time, span trace.Span, err error) error {
+func (c *AMQPClientImpl) recordPublishFailure(ctx context.Context, options publishOptions, startTime time.Time, span trace.Span, err error) error {
 	tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, time.Since(startTime), err)
 	// SECURITY: type only on both span sinks; the log line keeps the message
 	// (ADR-083).
@@ -804,14 +799,14 @@ func wrapCause(primary, lastCause error) error {
 
 // publishAbort records terminal state for a publish ending without success (cancel, deadline,
 // or shutdown) and returns the primary error wrapped with the last retry cause.
-func (c *AMQPClientImpl) publishAbort(ctx context.Context, options PublishOptions, startTime time.Time, span trace.Span, primary, lastCause error) error {
+func (c *AMQPClientImpl) publishAbort(ctx context.Context, options publishOptions, startTime time.Time, span trace.Span, primary, lastCause error) error {
 	return c.recordPublishFailure(ctx, options, startTime, span, wrapCause(primary, lastCause))
 }
 
 // publishExhausted is the terminal return once the bounded retry loop reaches maxPublishAttempts.
 // The returned error wraps ErrPublishRetriesExhausted around the last attempt's cause (publish
 // error, ErrPublishNacked, or ErrPublishConfirmTimeout) so the caller can see why it gave up.
-func (c *AMQPClientImpl) publishExhausted(ctx context.Context, options PublishOptions, startTime time.Time, span trace.Span, attempts int, cause error) error {
+func (c *AMQPClientImpl) publishExhausted(ctx context.Context, options publishOptions, startTime time.Time, span trace.Span, attempts int, cause error) error {
 	err := fmt.Errorf("%w after %d attempts: %w", ErrPublishRetriesExhausted, attempts, cause)
 	return c.recordPublishFailure(ctx, options, startTime, span, err)
 }
@@ -1180,7 +1175,7 @@ func (c *AMQPClientImpl) changeChannel(channel amqpChannel) {
 	// Publish the channel pointer under c.m so a concurrent Close (which reads
 	// c.channel under c.m to tear it down) and the c.m-guarded readers in
 	// DeclareQueue/ConsumeFromQueue cannot race this write. Lock order is
-	// publishSerial → c.m, matching PublishToExchange.
+	// publishSerial → c.m, matching publishBytes.
 	c.m.Lock()
 	c.channel = channel
 	c.m.Unlock()

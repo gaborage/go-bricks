@@ -4,6 +4,9 @@ This document covers GoBricks' built-in Transactional Outbox: the components tha
 
 ## Outbox Architecture
 
+> Sealed events reach the outbox as bytes (`Publisher[T].Seal`, persisted-sealed);
+> `outbox.Publish` refuses a seal-tagged struct payload. See [sealing.md](sealing.md).
+
 GoBricks provides a built-in **Transactional Outbox** for reliable event publishing. It solves the dual-write problem: events are written to an outbox table in the **same database transaction** as business data, then reliably delivered to the message broker by a background relay.
 
 **Core Components:**
@@ -102,6 +105,22 @@ outbox:
 | `Exchange` | string | No | Target AMQP exchange (falls back to `defaultexchange` config) |
 | `RoutingKey` | string | No | AMQP routing key (falls back to `EventType`) |
 | `Stream` | string | No | Selects the native super-stream lane instead of an exchange. Must be listed in `outbox.superstreams`, requires a tenant in context (it becomes the partition key), and is mutually exclusive with `Exchange` and `RoutingKey`. See [Lanes and Ordering](#lanes-and-ordering). |
+
+## Sealed Payloads
+
+The outbox is **persisted-sealed only**: a sealed event is sealed *before* it is written, so
+the ledger row already holds the wire form (the compact JWS from `Publisher[T].Seal`) and
+the relay publishes bytes it never needs to open. `Publish` therefore refuses a struct or
+pointer payload whose type carries `seal` tags with `outbox.ErrSealedPayloadNeedsBytes`
+(`errors.Is`-able); the fix is to seal first and hand over the returned `[]byte`. A `[]byte`
+payload is stored as-is whatever it contains — a hand-marshaled plaintext body is the
+documented residual the guard cannot see — and a struct without `seal` tags is JSON-marshaled
+as before.
+
+**Sensitive Authentication Data never rides the outbox lane.** CVV/CVC, full track data and
+PIN blocks may transit a sealed event, but PCI DSS forbids storing them after authorization
+regardless of encryption, and an outbox row *is* storage. Keep SAD out of any event that is
+outboxed; the framework's examples use PAN-class subjects only.
 
 ## Trace Propagation
 
@@ -337,8 +356,14 @@ outbox:
   enabled: true
   pollinterval: 2s           # Lower latency
   batchsize: 200             # Higher throughput
-  retentionperiod: 168h      # 7-day retention
+  retentionperiod: 168h      # 7-day retention of PUBLISHED events (outbox side)
 ```
+
+`outbox.retentionperiod` bounds the published-event ledger only. The consumer side has its own:
+`inbox.retentionperiod` (168h default, `config.InboxConfig.RetentionPeriod`) is the **replay
+window** — it must exceed the broker's redelivery window AND cover every DLQ drain or outbox
+re-drive you intend to replay, because a message replayed after its inbox row was swept is
+processed again. Raising outbox retention does not extend it.
 
 ## Startup Verification
 

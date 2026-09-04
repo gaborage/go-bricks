@@ -116,6 +116,73 @@ unvalidated (a hand-built `ModuleDeps`) rather than clamping it. A
 partner-mandated key shorter than 32 bytes must be loaded by your own code,
 outside the keystore.
 
+### Generation entries (key families)
+
+> How generations, the accept set and the activation selector fit into a sealing rotation,
+> per family: [sealing.md](sealing.md#rotation-runbooks).
+
+An entry named `<logical>-v<N>` is a **generation** of the Logical kid `<logical>`,
+the shape AMQP payload sealing rotates by (spec #1309, issue #1306). The trailing
+`-v<digits>` is the sole generation marker; every other name is an ordinary entry and nothing below applies to it — HTTP jose entries are unaffected.
+
+At startup the store refuses a generation entry whose family part fails the Logical kid
+grammar: the jose kid alphabet `^[A-Za-z0-9_-]+$` (already narrowed to `^[a-z0-9-]+$` by
+the reachability rule above), at most 64 characters, and never itself ending in
+`-v<digits>` — `x-v1-v2` is refused because its family `x-v1` would be a generation, so
+every entry belongs to exactly one family by construction. The version is a
+positive integer without leading zeros: `x-v0` and `x-v01` are refused (`v1`, not `v01`), so
+two spellings can never alias one key.
+
+**Consumer-visible risk:** an existing entry whose name already ends in `-v<digits>`
+acquires generation semantics, and is refused if its family part fails the grammar.
+No shipped example does (0 hits across `wiki/**`, `llms.txt`, `README.md`, the config
+fixtures and the demo project's `config*.yaml` and jose tags).
+
+```go
+type FamilyEnumerator interface {
+    Generations(logical string) []Generation // ascending by version; empty for an unknown family
+}
+```
+
+The store implements `keystore.FamilyEnumerator`; type-assert `deps.KeyStore` to reach it,
+and `MockKeyStore.WithGeneration(logical, version, role)` fakes it in tests.
+Each `Generation` carries its `Logical` name, its `Version` (`"v2"`) and the `Role` its
+material grants (`RolePublicOnly`, `RolePrivate`, `RoleSecret`); `Kid()` joins them into the
+entry name that travels on the wire. The result **is** the accept set: no separate list widens or re-aims it; provisioning material is the
+sole trust act.
+
+### Activation (`messaging.seal.active`)
+
+The producer picks which provisioned generation seals new traffic, per Logical kid:
+
+```yaml
+messaging:
+  seal:
+    active:
+      svc-payments-sign: v2      # env: MESSAGING_SEAL_ACTIVE_SVC-PAYMENTS-SIGN=v2
+```
+
+`config.Validate` checks the shape — each key is an env-reachable section name, each value
+`v<N>` with `N` a positive integer without leading zeros — and
+`keystore.ActiveGeneration(store, active, logical)` resolves it against the keystore at
+startup, once per Logical kid the producer resolves, sign and encrypt alike:
+
+| Provisioned | Selector | Result |
+| --- | --- | --- |
+| 0 | any | error naming the family |
+| 1 | absent | that generation is active |
+| 2+ | absent | error listing the generations — startup never guesses |
+| N | names a provisioned generation | that generation |
+| N | names an unprovisioned generation | error naming the selector value |
+
+The environment door is narrower than the YAML one. The loader lowercases a variable name
+and maps `_` to `.`, so an `MESSAGING_SEAL_ACTIVE_*` override reaches only a Logical kid
+spelled in `[a-z0-9]` — or one with hyphens where the runtime permits `-` in a variable name
+(Docker and Kubernetes do, POSIX `export` does not,
+[ADR-090](adr_090_env_reachable_section_names.md)). Under POSIX a hyphenated kid such as
+`svc-payments-sign` is YAML-only. A selector for a Logical kid the producer never resolves is
+ignored here.
+
 ## API
 
 ```go
@@ -203,6 +270,11 @@ the real store so tests exercise the same ownership contract.
   password-load errors elide the source.
 - The minimum-length floor is mandatory (32 bytes) and can only be raised; a
   secret that cannot meet it does not belong in the keystore.
+- Never reuse a kid across HTTP jose and payload sealing (#1306). The store
+  records the role of every startup resolution (`jose-route` from a route
+  policy, `seal` from a sealed publisher or consumer) and the app logs one
+  WARN per entry seen under both — entry name and roles only, never material.
+  Warn only: there is no enforced prefix partition.
 - Derivation (HKDF expansion, etc.) is left to the consumer — the keystore
   intentionally exposes raw material rather than a built-in derive helper
   (smallest viable surface; can layer on later if demand appears).
