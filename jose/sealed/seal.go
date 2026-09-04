@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"time"
 
-	gojose "github.com/go-jose/go-jose/v4"
 	"github.com/google/uuid"
 
 	"github.com/gaborage/go-bricks/jose"
@@ -31,9 +30,11 @@ const (
 	HeaderIssuer      = "iss"  // inner: the outer kid, binding authorship to the ciphertext
 
 	// Algorithms are fixed in v1; the opener accepts RS256 as well, the sealer emits PS256.
-	sigAlg = gojose.PS256
-	keyAlg = gojose.RSA_OAEP_256
-	enc    = gojose.A256GCM
+	// Named as untyped strings / parent defaults so this file never imports go-jose under a
+	// second alias; the cryptoadapter option types pin them to go-jose's algorithm types.
+	sigAlg = "PS256"
+	keyAlg = jose.DefaultKeyAlg
+	enc    = jose.DefaultEnc
 )
 
 // Options carries what Seal needs beyond the event and its Spec. The concrete kids are the

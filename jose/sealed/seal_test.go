@@ -15,12 +15,12 @@ import (
 	"testing"
 	"time"
 
-	gojose "github.com/go-jose/go-jose/v4"
+	jose "github.com/go-jose/go-jose/v4"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/gaborage/go-bricks/jose"
+	bricksjose "github.com/gaborage/go-bricks/jose"
 	"github.com/gaborage/go-bricks/jose/sealed"
 	jositest "github.com/gaborage/go-bricks/jose/testing"
 )
@@ -35,7 +35,7 @@ const (
 type sealKeys struct {
 	signPriv *rsa.PrivateKey
 	encPriv  *rsa.PrivateKey
-	resolver jose.KeyResolver
+	resolver bricksjose.KeyResolver
 }
 
 var (
@@ -119,7 +119,7 @@ func topLevelKeys(t *testing.T, doc []byte) []string {
 // the parsed document; the inner JWE is returned as its compact string.
 func openWire(t *testing.T, wire []byte, verify *rsa.PublicKey) (payload []byte, doc map[string]json.RawMessage, innerJWE string) {
 	t.Helper()
-	jws, err := gojose.ParseSigned(string(wire), []gojose.SignatureAlgorithm{gojose.PS256})
+	jws, err := jose.ParseSigned(string(wire), []jose.SignatureAlgorithm{jose.PS256})
 	require.NoError(t, err)
 	payload, err = jws.Verify(verify)
 	require.NoError(t, err, "PS256 signature must verify over the exact payload bytes")
@@ -177,7 +177,7 @@ func TestSealProducesTheDecidedWire(t *testing.T) {
 	}
 
 	// The audience decrypts with the encrypt PRIVATE and gets the Subject's own serialization.
-	jwe, err := gojose.ParseEncrypted(innerJWE, []gojose.KeyAlgorithm{gojose.RSA_OAEP_256}, []gojose.ContentEncryption{gojose.A256GCM})
+	jwe, err := jose.ParseEncrypted(innerJWE, []jose.KeyAlgorithm{jose.RSA_OAEP_256}, []jose.ContentEncryption{jose.A256GCM})
 	require.NoError(t, err)
 	plain, err := jwe.Decrypt(k.encPriv)
 	require.NoError(t, err)
@@ -203,7 +203,7 @@ func TestSealNilSubjectIsJWEOfNull(t *testing.T) {
 	assert.Equal(t, []any{"card"}, outer["sp"], "sp is constant per type, nil subject included")
 	payload, _, innerJWE := openWire(t, wire, &k.signPriv.PublicKey)
 	assert.Equal(t, []string{"orderId", "card", "amount"}, topLevelKeys(t, payload), "subject member present on nil")
-	jwe, err := gojose.ParseEncrypted(innerJWE, []gojose.KeyAlgorithm{gojose.RSA_OAEP_256}, []gojose.ContentEncryption{gojose.A256GCM})
+	jwe, err := jose.ParseEncrypted(innerJWE, []jose.KeyAlgorithm{jose.RSA_OAEP_256}, []jose.ContentEncryption{jose.A256GCM})
 	require.NoError(t, err)
 	plain, err := jwe.Decrypt(k.encPriv)
 	require.NoError(t, err)
@@ -244,7 +244,7 @@ func TestSealFamilyPinRefusesForeignOrLogicalKids(t *testing.T) {
 			wire, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
 			assert.Nil(t, wire)
 			assert.ErrorIs(t, err, sealed.ErrKidFamilyMismatch)
-			var jerr *jose.Error
+			var jerr *bricksjose.Error
 			require.True(t, errors.As(err, &jerr))
 			assert.Equal(t, sealed.CodeKidFamilyMismatch, jerr.Code)
 			assert.Equal(t, tc.wantKid, jerr.Kid)
@@ -257,7 +257,7 @@ func TestSealPropagatesResolverErrors(t *testing.T) {
 	k := testKeys(t)
 	cases := []struct {
 		name     string
-		resolver jose.KeyResolver
+		resolver bricksjose.KeyResolver
 		wantKid  string
 	}{
 		{name: "sign_private_missing", resolver: jositest.NewTestResolver(map[string]any{
@@ -270,8 +270,8 @@ func TestSealPropagatesResolverErrors(t *testing.T) {
 			opts := testOptions(t)
 			opts.Keys = tc.resolver
 			_, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
-			assert.ErrorIs(t, err, jose.ErrKidUnknown, "resolver error propagates verbatim")
-			var jerr *jose.Error
+			assert.ErrorIs(t, err, bricksjose.ErrKidUnknown, "resolver error propagates verbatim")
+			var jerr *bricksjose.Error
 			require.True(t, errors.As(err, &jerr))
 			assert.Equal(t, tc.wantKid, jerr.Kid)
 		})
@@ -305,7 +305,7 @@ func TestSealRejectsInvalidInputs(t *testing.T) {
 			wire, err := sealed.Seal(tc.evt, tc.spec, tc.opts)
 			assert.Nil(t, wire)
 			assert.ErrorIs(t, err, sealed.ErrSealFailed)
-			var jerr *jose.Error
+			var jerr *bricksjose.Error
 			require.True(t, errors.As(err, &jerr))
 			assert.Equal(t, tc.code, jerr.Code)
 		})
@@ -328,7 +328,7 @@ func TestOptionsValidateIsAKeyFreePreflight(t *testing.T) {
 }
 
 type countingResolver struct {
-	inner jose.KeyResolver
+	inner bricksjose.KeyResolver
 	calls int
 }
 
@@ -355,7 +355,7 @@ func TestSealRefusesADocumentWithoutTheSubjectMember(t *testing.T) {
 	spec, err := sealed.ScanType(reflect.TypeOf(selfMarshaling{}))
 	require.NoError(t, err)
 	_, err = sealed.Seal(selfMarshaling{}, spec, testOptions(t))
-	var jerr *jose.Error
+	var jerr *bricksjose.Error
 	require.True(t, errors.As(err, &jerr))
 	assert.Equal(t, sealed.CodeDocumentInvalid, jerr.Code)
 	assert.Contains(t, jerr.Message, `"card"`)
@@ -380,7 +380,7 @@ func TestSealMarshalFailureNeverCarriesSubjectBytes(t *testing.T) {
 	spec, err := sealed.ScanType(reflect.TypeOf(leakyEvent{}))
 	require.NoError(t, err)
 	_, err = sealed.Seal(leakyEvent{Card: leakyCard{PAN: testPAN}}, spec, testOptions(t))
-	var jerr *jose.Error
+	var jerr *bricksjose.Error
 	require.True(t, errors.As(err, &jerr))
 	assert.Equal(t, sealed.CodeSealFailed, jerr.Code)
 	assert.NotContains(t, err.Error(), testPAN, "marshal error must be reported by type only")
@@ -405,7 +405,7 @@ func TestOptionsValidateBoundsTheSignedSlots(t *testing.T) {
 
 func assertOptionsInvalid(t *testing.T, err error, msg string) {
 	t.Helper()
-	var jerr *jose.Error
+	var jerr *bricksjose.Error
 	require.True(t, errors.As(err, &jerr))
 	assert.Equal(t, sealed.CodeOptionsInvalid, jerr.Code)
 	assert.Contains(t, jerr.Message, msg)
@@ -421,7 +421,7 @@ func TestSealReportsMarshalFailure(t *testing.T) {
 	spec, err := sealed.ScanType(reflect.TypeOf(unmarshalable{}))
 	require.NoError(t, err)
 	_, err = sealed.Seal(unmarshalable{Bad: map[bool]int{true: 1}}, spec, testOptions(t))
-	var jerr *jose.Error
+	var jerr *bricksjose.Error
 	require.True(t, errors.As(err, &jerr))
 	assert.Equal(t, sealed.CodeSealFailed, jerr.Code)
 	assert.Contains(t, jerr.Message, "marshal")
@@ -429,7 +429,7 @@ func TestSealReportsMarshalFailure(t *testing.T) {
 
 // brokenKeys returns a resolver whose keys are structurally RSA but cryptographically unusable
 // (a 16-bit modulus), so the crypto primitive itself fails rather than key resolution.
-func brokenKeys(t *testing.T, breakSign, breakEncrypt bool) jose.KeyResolver {
+func brokenKeys(t *testing.T, breakSign, breakEncrypt bool) bricksjose.KeyResolver {
 	t.Helper()
 	k := testKeys(t)
 	tiny := &rsa.PublicKey{N: big.NewInt(3233), E: 17}
@@ -459,7 +459,7 @@ func TestSealReportsCryptoFailures(t *testing.T) {
 			opts.Keys = brokenKeys(t, tc.breakSign, tc.breakEncrypt)
 			wire, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
 			assert.Nil(t, wire)
-			var jerr *jose.Error
+			var jerr *bricksjose.Error
 			require.True(t, errors.As(err, &jerr))
 			assert.Equal(t, sealed.CodeSealFailed, jerr.Code)
 			assert.Contains(t, jerr.Message, tc.msg)
@@ -493,7 +493,7 @@ func TestSealSealsOnlyTheTopLevelSubjectMember(t *testing.T) {
 	assert.JSONEq(t, `{"card":"nested-clear-value","z":"\"card\":\"decoy\""}`, string(doc["meta"]), "nested namesake stays clear and untouched")
 	assert.Equal(t, `"{\"card\":\"another decoy\"}"`, string(doc["note"]), "a string member that spells the subject is untouched")
 	assert.NotContains(t, string(payload), testPAN)
-	jwe, err := gojose.ParseEncrypted(innerJWE, []gojose.KeyAlgorithm{gojose.RSA_OAEP_256}, []gojose.ContentEncryption{gojose.A256GCM})
+	jwe, err := jose.ParseEncrypted(innerJWE, []jose.KeyAlgorithm{jose.RSA_OAEP_256}, []jose.ContentEncryption{jose.A256GCM})
 	require.NoError(t, err)
 	plain, err := jwe.Decrypt(k.encPriv)
 	require.NoError(t, err)
