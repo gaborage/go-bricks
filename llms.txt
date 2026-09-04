@@ -3391,6 +3391,95 @@ func main() {
 }
 ```
 
+### Sealed events (field-level payload protection)
+
+A `seal`-tagged event type encrypts ONE declared Subject and signs the whole document; the
+typed publish and consume doors engage it from the tags alone. Both sides share the struct
+and the two Logical kids; each derives its own role (producer: sign private + encrypt
+public, consumer: sign public + encrypt private). Import `messaging/sealed` once (like
+`messaging/streams`) or a seal-tagged declaration fails `Validate` with `messaging.ErrSealingNotLinked`; the
+gate keeps `messaging` free of go-jose, it does not shrink your binary. Deep dive:
+[wiki/sealing.md](wiki/sealing.md), decision [ADR-097](wiki/adr_097_sealed_amqp_messages.md).
+
+```go
+import (
+    "context"
+    "errors"
+
+    "github.com/gaborage/go-bricks/app"
+    dbtypes "github.com/gaborage/go-bricks/database/types"
+    "github.com/gaborage/go-bricks/messaging"
+    _ "github.com/gaborage/go-bricks/messaging/sealed" // import gate: registers the codec
+)
+
+// Card is the Subject: it travels as a compact JWE; OrderID and Amount stay clear.
+type Card struct {
+    PAN    string `json:"pan"`
+    Expiry string `json:"expiry"`
+}
+
+type PaymentAuthorized struct {
+    _       struct{} `seal:"sign=svc-payments-sign,encrypt=aud-core-encrypt"`
+    OrderID string   `json:"order_id" validate:"required"`
+    Amount  int64    `json:"amount"   validate:"gt=0"`
+    Card    Card     `json:"card"     seal:"subject"` // "card" is the signed sp entry
+}
+
+type Module struct {
+    authorized *messaging.Publisher[PaymentAuthorized]
+    inbox      app.InboxProcessor // deps.Inbox, captured in Init
+    svc        *PaymentService
+}
+
+// Init captures the inbox: a sealed consumer dedups through it, so a deployment without
+// the inbox module fails here at startup instead of panicking on the first delivery.
+func (m *Module) Init(deps *app.ModuleDeps) error {
+    if deps.Inbox == nil {
+        return errors.New("payments: register inbox.NewModule() before this module")
+    }
+    m.inbox = deps.Inbox
+    return nil
+}
+
+func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
+    // Producer side: one typed handle; Publish seals once, before any retry.
+    m.authorized = messaging.DeclareTypedPublisher[PaymentAuthorized](decls, &messaging.PublisherOptions{
+        Exchange: "payments.events", RoutingKey: "payment.authorized", EventType: "payment.authorized",
+    })
+
+    // Consumer side: a seal-tagged T REQUIRES the WithMeta door so the dedup key is reachable.
+    queue := decls.DeclareQueueWithDLQ("core.payments", nil) // open failures park here
+    messaging.DeclareTypedConsumerWithMeta(decls, &messaging.ConsumerOptions{
+        Queue: queue.Name, Consumer: "core-payments", EventType: "payment.authorized",
+    }, m.onPaymentAuthorized)
+}
+
+// AuthorizePayment is the business call site: one Publish, sealing implied by the tags.
+func (m *Module) AuthorizePayment(ctx context.Context, client messaging.AMQPClient, evt PaymentAuthorized) error {
+    return m.authorized.Publish(ctx, client, evt)
+}
+
+func (m *Module) onPaymentAuthorized(ctx context.Context, evt PaymentAuthorized, meta messaging.Metadata) error {
+    key, err := meta.DedupKey() // "<sign family>:<jti>" for a sealed T; never errors here
+    if err != nil {
+        return err
+    }
+    // ctx must derive from the handler's: the sealed door marks it (messaging.IsSealedDelivery)
+    // and ProcessOnce admits a "<family>:<jti>" key only under that marker — never context.Background().
+    return m.inbox.ProcessOnce(ctx, key, func(ctx context.Context, tx dbtypes.Tx) error {
+        return m.svc.RecordAuthorizationTx(ctx, tx, evt.OrderID, evt.Card) // evt.Card is plaintext here only
+    })
+}
+```
+
+Keys: the tag names Logical kids; the keystore holds generations `svc-payments-sign-v1`,
+`aud-core-encrypt-v1`, and the producer picks the active one with
+`messaging.seal.active: {svc-payments-sign: v1, aud-core-encrypt: v1}`. Rotation never
+touches the tag — runbooks per family in [wiki/sealing.md](wiki/sealing.md#rotation-runbooks).
+A body that is not a sealed JWS, or fails any open rule, is poison (nack without requeue,
+DLQ); there is no accept-unsealed mode. Fields you seal likely belong in
+`log.sensitivefields` too.
+
 ### Concurrency Tuning Per Consumer
 
 ```go

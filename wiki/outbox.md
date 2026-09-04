@@ -4,6 +4,9 @@ This document covers GoBricks' built-in Transactional Outbox: the components tha
 
 ## Outbox Architecture
 
+> Sealed events reach the outbox as bytes (`Publisher[T].Seal`, persisted-sealed);
+> `outbox.Publish` refuses a seal-tagged struct payload. See [sealing.md](sealing.md).
+
 GoBricks provides a built-in **Transactional Outbox** for reliable event publishing. It solves the dual-write problem: events are written to an outbox table in the **same database transaction** as business data, then reliably delivered to the message broker by a background relay.
 
 **Core Components:**

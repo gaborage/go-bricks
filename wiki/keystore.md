@@ -118,6 +118,9 @@ outside the keystore.
 
 ### Generation entries (key families)
 
+> How generations, the accept set and the activation selector fit into a sealing rotation,
+> per family: [sealing.md](sealing.md#rotation-runbooks).
+
 An entry named `<logical>-v<N>` is a **generation** of the Logical kid `<logical>`,
 the shape AMQP payload sealing rotates by (spec #1309, issue #1306). The trailing
 `-v<digits>` is the sole generation marker; every other name is an ordinary entry and nothing below applies to it — HTTP jose entries are unaffected.

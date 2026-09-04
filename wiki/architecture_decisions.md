@@ -1489,6 +1489,28 @@ operator learns to ignore, and the `keystore` package no longer carries a deprec
 
 ---
 
+### [ADR-097: Sealed AMQP Messages — Field-Level JOSE Payload Protection](adr_097_sealed_amqp_messages.md)
+
+**Date:** 2026-09-03 | **Status:** Accepted | **Breaking:** none in this record — sealing is additive and import-gated; the header-id grammar it relies on is `[C63.2]`, the typed-door removal ADR-096's `[C63.1]`
+
+Payment events cross a broker that ops, tooling and other tenants' consumers can read, and an
+AMQP publish ACL says who may write to an exchange, not who wrote a given message. A sealed
+event is ONE compact JWS whose payload is the business JSON with the single `seal:"subject"`
+field replaced in place by a compact JWE (encrypt-subset-then-sign-whole, so the signature
+covers ciphertext and never a plaintext PAN — a cleartext signature would be a confirmation
+oracle). The outer header carries `typ: vnd.gobricks.sealed.v1+json`, the signed `sp`
+manifest and the `jti`/`iat`/`etyp`/`tid` slots; the inner JWE's `iss` equals the outer `kid`
+(authorship binding). Tags carry stable Logical kids; the keystore holds `<logical>-v<N>`
+Generations, the local keystore IS the accept set, and `messaging.seal.active` picks the
+producer's generation. The seal layer never judges replay — `inbox.ProcessOnce` keyed on the
+framework-composed `<SignFamily>:<jti>` does — and there is no accept-unsealed mode: sealing
+is greenfield. Deep dive: [sealing.md](sealing.md).
+
+**Key Benefits:** broker confidentiality and producer authenticity from one declaration
+shared by both sides, rotation without touching a tag, and a dedup key no header can forge.
+
+---
+
 ### [ADR-090: User-Named Config Sections Must Be Reachable By Environment Variable](adr_090_env_reachable_section_names.md)
 
 **Date:** 2026-08-30 | **Status:** Accepted | **Breaking:** a `databases` / `multitenant.tenants` / `keystore.keys` key outside `^[a-z0-9-]+$` now fails startup
@@ -2093,7 +2115,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-095) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-097) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

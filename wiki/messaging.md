@@ -108,6 +108,9 @@ See the Troubleshooting section in [CLAUDE.md](../CLAUDE.md) for diagnosing dupl
 
 ## Typed Consumers
 
+> A `seal`-tagged event type engages field-level payload sealing from the typed doors and
+> requires the `WithMeta` consumer; see [sealing.md](sealing.md).
+
 `DeclareTypedConsumer` is the consumer mirror of `server.POST(hr, r, path, handler)`: it binds the message body to a struct, validates it against the same `validate` tags HTTP handlers use, and calls your function — so `json.Unmarshal`, the validation call, and the two error branches stop being copy-pasted into every `Handle`.
 
 ```go
