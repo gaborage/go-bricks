@@ -68,7 +68,7 @@ No exported symbol lets a module hand `[]byte` to the broker:
 - `bytePublisher` and its one method are unexported, so only types declared in
   package `messaging` implement it, and `reflect` cannot call an unexported method.
   A module that type-asserts its `AMQPClient` to `*messaging.AMQPClientImpl` finds no
-  exported publish method (`messaging/surface_test.go` pins the exported method sets
+  exported publish method (`messaging/messaging_test.go` pins the exported method sets
   of `Client`, `AMQPClient`, `AMQPClientImpl` and the stamping wrapper;
   `scheduler/job_test.go` pins `JobContext.Messaging()`'s type).
 - `internal/publishdoor` is under `internal/`, so no module can import it; its

@@ -2,10 +2,12 @@ package messaging
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // MockClient implements the Client interface for testing
@@ -414,4 +416,42 @@ func TestErrorConstants(t *testing.T) {
 	assert.Equal(t, "not connected to AMQP broker", errNotConnected.Error())
 	assert.Equal(t, "AMQP client already closed", errAlreadyClosed.Error())
 	assert.Equal(t, "AMQP client is shutting down", errShutdown.Error())
+}
+
+// TestModuleFacingTypesCarryNoBytePublishDoor is ADR-096's acceptance check: the
+// types a module can hold — Client, AMQPClient and the framework's own client and
+// wrapper as seen THROUGH those interfaces — expose neither Publish nor
+// PublishToExchange, so no exported path hands bytes to the broker. The
+// unexported bytePublisher is reachable only from inside this package.
+func TestModuleFacingTypesCarryNoBytePublishDoor(t *testing.T) {
+	for name, typ := range map[string]reflect.Type{
+		"Client":     reflect.TypeOf((*Client)(nil)).Elem(),
+		"AMQPClient": reflect.TypeOf((*AMQPClient)(nil)).Elem(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, reflect.Interface, typ.Kind())
+			assertNoByteDoor(t, typ)
+		})
+	}
+
+	// The concrete types too: a module that type-asserts its client to the
+	// framework implementation must find no exported byte door either.
+	for name, typ := range map[string]reflect.Type{
+		"AMQPClientImpl":    reflect.TypeOf((*AMQPClientImpl)(nil)),
+		"stampingPublisher": reflect.TypeOf((*stampingPublisher)(nil)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			assertNoByteDoor(t, typ)
+		})
+	}
+}
+
+// assertNoByteDoor checks the EXPORTED method set (reflect lists only exported
+// methods for a non-interface type, and every method for an interface).
+func assertNoByteDoor(t *testing.T, typ reflect.Type) {
+	t.Helper()
+	for _, name := range []string{"Publish", "PublishToExchange", "PublishBytes"} {
+		_, found := typ.MethodByName(name)
+		assert.Falsef(t, found, "%s must not expose %s", typ, name)
+	}
 }
