@@ -87,7 +87,15 @@ func DeclareTypedPublisher[T any](decls *Declarations, opts *PublisherOptions) *
 	handle := newTypedPublisher[T](decl)
 
 	var zero T
-	if t := reflect.TypeOf(zero); hasSealTag(t) {
+	t := reflect.TypeOf(zero)
+	if path := misplacedSealTag(t); path != "" {
+		// A seal tag the codec would never see must not ship in plaintext: fail closed.
+		err := fmt.Errorf("messaging: %v carries a seal tag on nested member %s; seal tags belong on the event type's own fields (event type %q)", t, path, decl.EventType)
+		decls.recordSealError(err)
+		handle.sealErr = err
+		return handle
+	}
+	if hasSealTag(t) {
 		sealer, err := newSealer(t, decl.EventType)
 		if err != nil {
 			decls.recordSealError(err)

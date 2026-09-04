@@ -84,6 +84,40 @@ func hasSealTagIn(t reflect.Type, seen map[reflect.Type]bool) bool {
 	return false
 }
 
+// misplacedSealTag reports the first `seal` tag that sits where neither the probe nor
+// jose/sealed.ScanType looks — on or under a NAMED nested struct field, or inside a tagged
+// embed — as a dotted field path, or "" when none. Such a tag would otherwise ship in
+// plaintext silently, so DeclareTypedPublisher refuses the declaration.
+func misplacedSealTag(t reflect.Type) string {
+	return misplacedSealTagIn(t, "", true, map[reflect.Type]bool{})
+}
+
+func misplacedSealTagIn(t reflect.Type, path string, supported bool, seen map[reflect.Type]bool) string {
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t == nil || t.Kind() != reflect.Struct || seen[t] {
+		return ""
+	}
+	seen[t] = true
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		fieldPath := field.Name
+		if path != "" {
+			fieldPath = path + "." + field.Name
+		}
+		_, tagged := field.Tag.Lookup(sealTagName)
+		if tagged && !supported {
+			return fieldPath
+		}
+		promoted := supported && field.Anonymous && field.Tag.Get("json") == ""
+		if found := misplacedSealTagIn(field.Type, fieldPath, promoted, seen); found != "" {
+			return found
+		}
+	}
+	return ""
+}
+
 // newSealer builds the sealer for a seal-tagged declaration, or reports why it cannot:
 // codec not linked, runtime not configured, no key store, a refused declaration, or a
 // producer that cannot resolve its Activation. Every error is recorded on the

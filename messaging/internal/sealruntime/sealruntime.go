@@ -218,22 +218,41 @@ func Registered() Codec {
 // Configure records the runtime facts. The app is the single writer and calls it before
 // collecting declarations; a later call replaces the facts (the app rebuilds them per
 // process start, tests per case), and the seal instruments are rebuilt from the meter.
+// The Activation selector is copied: a caller's later write to its own map can neither
+// re-aim a generation after bootstrap nor race a declaration being collected.
 func Configure(rt *Runtime) {
 	if rt == nil {
 		panic("sealruntime: Configure called with nil")
 	}
-	rtCopy := *rt
+	rtCopy := rt.snapshot()
 	mu.Lock()
 	defer mu.Unlock()
 	runtime = &rtCopy
 	metrics.Store(newMetrics(rtCopy.Meter))
 }
 
-// Configured returns the runtime facts, or nil before Configure ran.
+// Configured returns an independent snapshot of the runtime facts, or nil before
+// Configure ran. The stored facts cannot be reached through the result.
 func Configured() *Runtime {
 	mu.RLock()
 	defer mu.RUnlock()
-	return runtime
+	if runtime == nil {
+		return nil
+	}
+	rtCopy := runtime.snapshot()
+	return &rtCopy
+}
+
+// snapshot copies the runtime with its own Active map (nil stays nil).
+func (rt *Runtime) snapshot() Runtime {
+	out := *rt
+	if rt.Active != nil {
+		out.Active = make(map[string]string, len(rt.Active))
+		for logical, version := range rt.Active {
+			out.Active[logical] = version
+		}
+	}
+	return out
 }
 
 // Reset clears codec, runtime and metrics. Tests only.

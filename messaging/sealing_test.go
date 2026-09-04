@@ -126,6 +126,74 @@ func TestHasSealTag(t *testing.T) {
 	}
 }
 
+type nestedSubject struct {
+	Inner struct {
+		Card string `seal:"subject"`
+	} `json:"inner"`
+}
+
+type deepNestedSubject struct {
+	Outer struct {
+		Mid struct {
+			Card string `seal:"subject"`
+		}
+	} `json:"outer"`
+}
+
+type taggedEmbedSubject struct {
+	promotedSeal `json:"inner"`
+}
+
+type sentinelWithNestedSubject struct {
+	_     struct{} `seal:"sign=svc-sign,encrypt=aud-enc"`
+	ID    string   `json:"id"`
+	Inner struct {
+		Card string `seal:"subject"`
+	} `json:"inner"`
+}
+
+type selfNested struct {
+	Next *selfNested
+	ID   string `json:"id"`
+}
+
+func TestMisplacedSealTag(t *testing.T) {
+	cases := map[string]struct {
+		t    reflect.Type
+		want string
+	}{
+		"plain":                    {reflect.TypeOf(plainEvent{}), ""},
+		"supported_top_level":      {reflect.TypeOf(sealedEvent{}), ""},
+		"supported_promoted_embed": {reflect.TypeOf(promotedSealEvent{}), ""},
+		"named_nested":             {reflect.TypeOf(nestedSubject{}), "Inner.Card"},
+		"deep_named_nested":        {reflect.TypeOf(&deepNestedSubject{}), "Outer.Mid.Card"},
+		"tagged_embed":             {reflect.TypeOf(taggedEmbedSubject{}), "promotedSeal.Card"},
+		"sentinel_plus_nested":     {reflect.TypeOf(sentinelWithNestedSubject{}), "Inner.Card"},
+		"recursive_type":           {reflect.TypeOf(selfNested{}), ""},
+		"non_struct":               {reflect.TypeOf(1), ""},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) { assert.Equal(t, tc.want, misplacedSealTag(tc.t)) })
+	}
+}
+
+func TestDeclareTypedPublisherRefusesANestedSealTag(t *testing.T) {
+	sealruntime.Reset()
+	t.Cleanup(sealruntime.Reset)
+	codec := &fakeCodec{sealer: &fakeSealer{out: []byte("x")}}
+	sealruntime.Register(codec)
+	sealruntime.Configure(&sealruntime.Runtime{KeyStore: stubKeyStore{}})
+	decls := newSealingDecls()
+	h := DeclareTypedPublisher[nestedSubject](decls, sealedOpts())
+	err := decls.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nested member Inner.Card")
+	assert.Zero(t, codec.scans, "the codec is never consulted for an unsupported shape")
+	client := &capturingClient{}
+	assert.Equal(t, err, h.Publish(context.Background(), client, nestedSubject{}), "fail closed: no plaintext")
+	assert.Empty(t, client.data)
+}
+
 func TestDeclareTypedPublisherPlainTypeNeverTouchesTheCodec(t *testing.T) {
 	sealruntime.Reset()
 	t.Cleanup(sealruntime.Reset)

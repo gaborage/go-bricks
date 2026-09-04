@@ -36,10 +36,15 @@ func TestConfigureCopiesAndReplaces(t *testing.T) {
 	rt := &Runtime{Active: map[string]string{"fam": "v2"}, Tenancy: TenancyShared}
 	Configure(rt)
 	rt.Tenancy = TenancyPerTenant // caller mutation after Configure must not leak
+	rt.Active["fam"] = "v9"       // nor a later write through the caller's map
 	got := Configured()
 	require.NotNil(t, got)
 	assert.Equal(t, TenancyShared, got.Tenancy)
 	assert.Equal(t, "v2", got.Active["fam"])
+	got.Active["fam"] = "v8" // nor a write through a returned snapshot
+	assert.Equal(t, "v2", Configured().Active["fam"])
+	Configure(&Runtime{})
+	assert.Nil(t, Configured().Active, "a nil selector stays nil")
 	Configure(&Runtime{Tenancy: TenancyPerTenant})
 	assert.Equal(t, TenancyPerTenant, Configured().Tenancy, "the app is the single writer and may replace")
 	assert.PanicsWithValue(t, "sealruntime: Configure called with nil", func() { Configure(nil) })
