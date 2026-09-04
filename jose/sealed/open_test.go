@@ -637,6 +637,19 @@ func TestOpenOpensWhatSealProduced(t *testing.T) {
 	assert.Equal(t, "tenant-a", env.TenantID)
 }
 
+// TestOpenAcceptsIssuedAtZero pins the slot rule's lower bound: iat 0 is a valid NumericDate
+// (the epoch), only a negative one is refused.
+func TestOpenAcceptsIssuedAtZero(t *testing.T) {
+	k := loadVectorKeys(t)
+	loadVectors(t, k) // primes the shared positive Subject JWE
+	body := k.build(t, mutation{outer: set("iat", 0)})
+
+	var evt paymentAuthorized
+	env, err := sealed.Open([]byte(body), testSpec(t), vectorOptions(k, nil), &evt)
+	require.NoError(t, err)
+	assert.Equal(t, time.Unix(0, 0).UTC(), env.IssuedAt)
+}
+
 // TestOpenErrorRendersDetailsSorted pins OpenError's text form and nil safety.
 func TestOpenErrorRendersDetailsSorted(t *testing.T) {
 	err := &sealed.OpenError{Err: &bricksjose.Error{Code: "X", Message: "m"}, Rule: 6, Details: map[string]string{"slot": "jti", "len": "0", "present": "false"}}
