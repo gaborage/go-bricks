@@ -7,6 +7,7 @@ import (
 	"maps"
 	"reflect"
 
+	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/messaging/internal/tenantstamp"
 	"github.com/gaborage/go-bricks/multitenant"
 )
@@ -196,15 +197,19 @@ func tenantForSeal(ctx context.Context, client AMQPClient) (context.Context, err
 	return multitenant.SetTenant(ctx, tenant), nil
 }
 
-// publishBytes is the handle's ONE bytes door: it asserts the framework's
-// unexported bytePublisher on client and fails with ErrPublishDoorUnavailable
-// for a client that lacks it — a hand-written AMQPClient, a testing/mocks
-// double — so no exported type ever carries a byte publish method (ADR-096).
+// publishBytes is the handle's ONE bytes door. It goes through the
+// internal/publishdoor seam — the same dispatcher the outbox relay uses —
+// which this package's init points at publishThroughDoor: the framework's
+// unexported bytePublisher is asserted on client and a client that lacks it (a
+// hand-written AMQPClient, a testing/mocks double) fails with
+// ErrPublishDoorUnavailable, so no exported type ever carries a byte publish
+// method (ADR-096). A test outside this package that needs the frames swaps
+// the dispatcher in its TestMain, as outbox and messaging/sealed do.
 func (h *Publisher[T]) publishBytes(ctx context.Context, client AMQPClient, data []byte) error {
 	headers := make(map[string]any, len(h.headers))
 	maps.Copy(headers, h.headers)
 
-	return publishThroughDoor(ctx, client, publishOptions{
+	return publishdoor.Publish(ctx, client, publishdoor.Options{
 		Exchange:   h.exchange,
 		RoutingKey: h.routingKey,
 		Headers:    headers,

@@ -123,9 +123,10 @@ raw door until a streams-lane ADR decides otherwise.
   wrapper refuses rather than bypassing the stamp. Consumer-built clients keep
   consuming and declaring; publishing through them was never stamped by the
   framework's own client either, and re-earns a door through its own ADR if needed.
-- Framework tests outside `messaging` that observe the relay's bytes swap the
-  `publishdoor` dispatcher in `TestMain` (see `outbox/main_test.go`); a module's tests
-  observe typed events through `messaging/testing.CapturePublisher[T]`.
+- The typed handle's own byte door goes through the same `publishdoor` dispatcher, so
+  framework tests outside `messaging` that observe either the relay's or a handle's
+  bytes swap it in `TestMain` (see `outbox/main_test.go`, `messaging/sealed/main_test.go`);
+  a module's tests observe typed events through `messaging/testing.CapturePublisher[T]`.
 - No declaration-time guard rejects `T = json.RawMessage` or a custom `json.Marshaler`:
   the typed door publishes JSON documents, and the property this break exists for — a
   seal-tagged type never travels in plaintext — is judged by tags, not by `T`'s shape;

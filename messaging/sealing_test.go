@@ -495,14 +495,16 @@ func TestValidateReportsTheFirstSealErrorBeforeOtherRules(t *testing.T) {
 	assert.NotContains(t, err.Error(), "payment.captured")
 }
 
-// capturingClient is the minimal AMQPClient double: it records what the handle publishes.
+// capturingClient is the minimal AMQPClient double: it carries the framework's
+// byte door and records what the handle publishes through it.
 type capturingClient struct {
 	AMQPClient
-	opts []PublishOptions
+	opts []publishOptions
 	data [][]byte
 }
 
-func (c *capturingClient) PublishToExchange(_ context.Context, options PublishOptions, data []byte) error {
+//nolint:unparam // the error is the door's signature; the double never fails
+func (c *capturingClient) publishBytes(_ context.Context, options publishOptions, data []byte) error {
 	c.opts = append(c.opts, options)
 	c.data = append(c.data, data)
 	return nil
