@@ -180,7 +180,14 @@ func TestDeclareTypedPublisherSealedStartupFailures(t *testing.T) {
 			decls := newSealingDecls()
 			h := DeclareTypedPublisher[sealedEvent](decls, sealedOpts())
 			assert.Nil(t, h.sealer, "a refused declaration leaves the handle sealer-less")
+			client := &capturingClient{}
+			pubErr := h.Publish(context.Background(), client, sealedEvent{ID: "x", Card: "4111"})
+			require.Error(t, pubErr, "a handle whose sealer failed never publishes plaintext")
+			assert.Empty(t, client.data)
+			_, sealErr := h.Seal(context.Background(), sealedEvent{ID: "x"})
+			assert.Equal(t, pubErr, sealErr)
 			err := decls.Validate()
+			assert.Equal(t, err, pubErr, "Validate and the handle report the same failure")
 			require.Error(t, err)
 			if tc.want != nil {
 				assert.ErrorIs(t, err, tc.want)

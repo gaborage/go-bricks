@@ -36,6 +36,10 @@ type Publisher[T any] struct {
 	// so a plaintext publish of a sealed type is unrepresentable (ADR-097). nil for a
 	// plain T.
 	sealer Sealer
+	// sealErr is why a seal-tagged T could not get its sealer. Validate reports it at
+	// startup; the handle keeps it too, so a caller that publishes before or despite that
+	// report gets the error rather than plaintext.
+	sealErr error
 }
 
 // newTypedPublisher is the single construction point for the handle, so every
@@ -88,7 +92,7 @@ func DeclareTypedPublisher[T any](decls *Declarations, opts *PublisherOptions) *
 		if err != nil {
 			decls.recordSealError(err)
 		}
-		handle.sealer = sealer
+		handle.sealer, handle.sealErr = sealer, err
 	}
 	return handle
 }
@@ -123,7 +127,7 @@ func (h *Publisher[T]) Publish(ctx context.Context, client AMQPClient, evt T) er
 // byte-identical. A plain T has nothing to seal: it returns ErrNotSealTagged, and the
 // event goes to the outbox as a struct payload the outbox already marshals.
 func (h *Publisher[T]) Seal(ctx context.Context, evt T) ([]byte, error) {
-	if h.sealer == nil {
+	if h.sealer == nil && h.sealErr == nil {
 		return nil, fmt.Errorf("%w (event type %q)", ErrNotSealTagged, h.eventType)
 	}
 	return h.encode(ctx, nil, evt)
@@ -136,6 +140,9 @@ func (h *Publisher[T]) Seal(ctx context.Context, evt T) ([]byte, error) {
 // and the x-tenant-id header always name the same tenant. Seal (no client) sees only
 // the context; the outbox lane stamps from the same context later.
 func (h *Publisher[T]) encode(ctx context.Context, client AMQPClient, evt T) ([]byte, error) {
+	if h.sealErr != nil {
+		return nil, h.sealErr
+	}
 	if h.sealer != nil {
 		sealCtx, err := tenantForSeal(ctx, client)
 		if err != nil {
