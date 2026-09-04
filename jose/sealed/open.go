@@ -124,6 +124,7 @@ type OpenError struct {
 	Details map[string]string
 }
 
+// Error renders the *jose.Error text followed by the details, sorted by key.
 func (e *OpenError) Error() string {
 	if e == nil || e.Err == nil {
 		return "<nil>"
@@ -306,6 +307,7 @@ func checkOpenArgs(spec *Spec, opts *OpenOptions, out any) error {
 	return nil
 }
 
+// preflightError is an *OpenError with no rule: the sealer's error for a wiring mistake.
 func preflightError(code, msg string) error {
 	return &OpenError{Err: sealError(code, msg, nil)}
 }
@@ -327,6 +329,7 @@ func checkHeaderPolicy(rule int, hdr *cryptoadapter.Header, algAllowed bool, lay
 	return nil
 }
 
+// sigAlgAllowed reports whether alg is one of the v1 signature algorithms.
 func sigAlgAllowed(alg string) bool {
 	return slices.Contains(openSigAlgs, jose.SignatureAlgorithm(alg))
 }
@@ -374,6 +377,7 @@ func checkSlots(hdr *cryptoadapter.Header) (*authenticatedSlots, error) {
 	return s, nil
 }
 
+// slotError is rule 6's verdict for one slot: its name, presence and length, never its value.
 func slotError(slot string, hdr *cryptoadapter.Header, length int) error {
 	_, present := hdr.Extra[slot]
 	return openError(6, ErrOpenFailed, CodeHeaderSlotInvalid, "authenticated slot is absent or malformed", map[string]string{
@@ -439,6 +443,7 @@ func familyError(rule int, kid, logical, role, layer string) error {
 	return &OpenError{Err: je, Rule: rule, Details: layerDetails(layer)}
 }
 
+// unknownGenerationError is the recoverable class: a well-formed Generation this consumer has not provisioned.
 func unknownGenerationError(rule int, kid, role string, cause error, layer string) error {
 	err := openError(rule, ErrKidUnknownGeneration, CodeKidUnknownGeneration,
 		fmt.Sprintf("%s kid generation is not provisioned on this consumer", role), layerDetails(layer))
@@ -446,6 +451,7 @@ func unknownGenerationError(rule int, kid, role string, cause error, layer strin
 	return err
 }
 
+// openError builds the *OpenError every rule reports through.
 func openError(rule int, sentinel error, code, msg string, details map[string]string) *OpenError {
 	return &OpenError{
 		Err:     &bricksjose.Error{Sentinel: sentinel, Code: code, Message: msg},

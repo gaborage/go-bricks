@@ -60,6 +60,7 @@ type vectorKeys struct {
 	inner    string                 // the positive vector's Subject JWE, shared by every vector that leaves it alone
 }
 
+// loadVectorKeys reads testdata/keys.json, generating it first under -update when absent.
 func loadVectorKeys(t *testing.T) *vectorKeys {
 	t.Helper()
 	file := keysFileShape{Note: fixtureNote, Keys: map[string]string{}}
@@ -127,6 +128,7 @@ type innerOpts struct {
 	plaintext []byte
 }
 
+// innerDefaults is the positive vector's Subject JWE as the sealer would produce it.
 func (k *vectorKeys) innerDefaults() innerOpts {
 	return innerOpts{
 		alg: jose.RSA_OAEP_256, cenc: jose.A256GCM, cty: sealed.ContentTypeJSON, kid: vecEncKid, iss: vecSignKid,
@@ -134,6 +136,7 @@ func (k *vectorKeys) innerDefaults() innerOpts {
 	}
 }
 
+// encryptSubject builds a compact JWE with go-jose directly, so headers the sealer never writes can be produced.
 func encryptSubject(t *testing.T, o *innerOpts) string {
 	t.Helper()
 	extra := map[jose.HeaderKey]any{}
@@ -156,6 +159,7 @@ func encryptSubject(t *testing.T, o *innerOpts) string {
 	return compact
 }
 
+// outerDefaults is the positive vector's outer protected header.
 func outerDefaults() map[string]any {
 	return map[string]any{
 		"alg": "PS256", "kid": vecSignKid, "typ": sealed.TypV1, "cty": sealed.ContentTypeJSON,
@@ -196,6 +200,7 @@ type mutation struct {
 	staleSign bool   // sign over the positive document, then swap the tampered one in
 }
 
+// build renders the positive vector with one mutation applied.
 func (k *vectorKeys) build(t *testing.T, m mutation) string {
 	t.Helper()
 	inner := k.inner
@@ -233,10 +238,13 @@ func (k *vectorKeys) build(t *testing.T, m mutation) string {
 	return signCompact(t, hdr, []byte(doc), key, signOver)
 }
 
+// set is the outer-header mutation that writes one param.
 func set(key string, val any) func(map[string]any) { return func(h map[string]any) { h[key] = val } }
 
+// tamperAmount is the clear-field mutation: a changed amount under a stale signature.
 func tamperAmount(d string) string { return strings.Replace(d, `"amount":1250`, `"amount":1`, 1) }
 
+// del is the outer-header mutation that drops one param.
 func del(key string) func(map[string]any) { return func(h map[string]any) { delete(h, key) } }
 
 // negativeVectors is the published set, in rule order. Every entry differs from the
@@ -325,6 +333,7 @@ func (k *vectorKeys) negativeVectors(t *testing.T) []vector {
 	}
 }
 
+// loadVectors reads testdata/vectors.json, regenerating it first under -update.
 func loadVectors(t *testing.T, k *vectorKeys) *vectorFile {
 	t.Helper()
 	if *update {
@@ -340,6 +349,7 @@ func loadVectors(t *testing.T, k *vectorKeys) *vectorFile {
 	return &vf
 }
 
+// vectorOptions is the consumer's view for opening a vector: declared EventType, tenant rule, keys.
 func vectorOptions(k *vectorKeys, tenant *tenantRule) *sealed.OpenOptions {
 	want := sealed.TenantExpectation{Expected: vecTenant}
 	if tenant != nil {
@@ -350,6 +360,7 @@ func vectorOptions(k *vectorKeys, tenant *tenantRule) *sealed.OpenOptions {
 
 // ---- tests ----
 
+// TestOpenPositiveVector opens the published positive vector and checks the Envelope and DedupKey properties.
 func TestOpenPositiveVector(t *testing.T) {
 	k := loadVectorKeys(t)
 	vf := loadVectors(t, k)
@@ -376,6 +387,7 @@ func TestOpenPositiveVector(t *testing.T) {
 	assert.Equal(t, key, env2.DedupKey())
 }
 
+// TestOpenNegativeVectors asserts the exact code, rule, details and sentinel of every published negative vector.
 func TestOpenNegativeVectors(t *testing.T) {
 	k := loadVectorKeys(t)
 	vf := loadVectors(t, k)
@@ -489,6 +501,7 @@ type parsedVector struct {
 	jwe   string
 }
 
+// parseVector decodes a vector into its outer header, payload members and inner header for the diff count.
 func parseVector(t *testing.T, body string) *parsedVector {
 	t.Helper()
 	segs := strings.Split(body, ".")
@@ -502,6 +515,7 @@ func parseVector(t *testing.T, body string) *parsedVector {
 	return p
 }
 
+// decodeSeg base64url-decodes one compact segment.
 func decodeSeg(t *testing.T, seg string) []byte {
 	t.Helper()
 	raw, err := base64.RawURLEncoding.DecodeString(seg)
@@ -509,6 +523,7 @@ func decodeSeg(t *testing.T, seg string) []byte {
 	return raw
 }
 
+// diff counts the fields o differs from p in (see TestNegativeVectorsDifferInExactlyOneField).
 func (p *parsedVector) diff(o *parsedVector) int {
 	n := countDiffs(p.outer, o.outer)
 	for key := range union(p.doc, o.doc) {
@@ -528,6 +543,7 @@ func (p *parsedVector) diff(o *parsedVector) int {
 	return n
 }
 
+// countDiffs counts the keys whose raw values differ between two objects.
 func countDiffs(a, b map[string]json.RawMessage) int {
 	n := 0
 	for key := range union(a, b) {
@@ -538,6 +554,7 @@ func countDiffs(a, b map[string]json.RawMessage) int {
 	return n
 }
 
+// union is the key set of both objects.
 func union(a, b map[string]json.RawMessage) map[string]struct{} {
 	keys := map[string]struct{}{}
 	for k := range a {
@@ -549,6 +566,7 @@ func union(a, b map[string]json.RawMessage) map[string]struct{} {
 	return keys
 }
 
+// TestOpenRejectsWiringMistakes covers the pre-flight: every wiring mistake is an *OpenError with Rule 0.
 func TestOpenRejectsWiringMistakes(t *testing.T) {
 	k := loadVectorKeys(t)
 	vf := loadVectors(t, k)
@@ -594,6 +612,7 @@ func TestOpenRejectsWiringMistakes(t *testing.T) {
 	}
 }
 
+// TestOpenOpensWhatSealProduced is the Seal → Open round trip a producer and consumer share.
 func TestOpenOpensWhatSealProduced(t *testing.T) {
 	// Seal (random keys, fresh jti) → Open, the round trip a producer and consumer share;
 	// the consumer resolver holds the mirror roles of the producer's.
@@ -618,6 +637,7 @@ func TestOpenOpensWhatSealProduced(t *testing.T) {
 	assert.Equal(t, "tenant-a", env.TenantID)
 }
 
+// TestOpenErrorRendersDetailsSorted pins OpenError's text form and nil safety.
 func TestOpenErrorRendersDetailsSorted(t *testing.T) {
 	err := &sealed.OpenError{Err: &bricksjose.Error{Code: "X", Message: "m"}, Rule: 6, Details: map[string]string{"slot": "jti", "len": "0", "present": "false"}}
 	assert.Equal(t, "X: m [len=0 present=false slot=jti]", err.Error())
@@ -633,6 +653,7 @@ func TestOpenPathReadsNoClock(t *testing.T) {
 	assert.NotRegexp(t, regexp.MustCompile(`time\.(Now|Since)`), string(src))
 }
 
+// TestOpenRefusesReflectMismatchBeforeAnyKey proves a wrong out type is refused before the resolver is consulted.
 func TestOpenRefusesReflectMismatchBeforeAnyKey(t *testing.T) {
 	// A wrong out type is refused before the resolver is consulted.
 	k := loadVectorKeys(t)
