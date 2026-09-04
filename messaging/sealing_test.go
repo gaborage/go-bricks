@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/messaging/internal/sealruntime"
+	"github.com/gaborage/go-bricks/messaging/internal/tenantstamp"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 type sealedEvent struct {
@@ -71,8 +73,8 @@ func (s *fakeSealer) Seal(context.Context, any) ([]byte, error) {
 
 type stubKeyStore struct{}
 
-func (stubKeyStore) PublicKey(string) (*rsaPublicKey, error)   { return nil, errors.New("stub") }
-func (stubKeyStore) PrivateKey(string) (*rsaPrivateKey, error) { return nil, errors.New("stub") }
+func (stubKeyStore) PublicKey(string) (*rsa.PublicKey, error)   { return nil, errors.New("stub") }
+func (stubKeyStore) PrivateKey(string) (*rsa.PrivateKey, error) { return nil, errors.New("stub") }
 
 func sealedOpts() *PublisherOptions {
 	return &PublisherOptions{Exchange: "payments", RoutingKey: "payment.authorized", EventType: "payment.authorized"}
@@ -245,6 +247,89 @@ func TestPublishReturnsSealFailureAndPublishesNothing(t *testing.T) {
 	assert.ErrorIs(t, err, sealErr)
 }
 
+// tenantSealer records the tenant the context carried when Seal ran.
+type tenantSealer struct{ seen []string }
+
+func (s *tenantSealer) Seal(ctx context.Context, _ any) ([]byte, error) {
+	id, _ := multitenant.GetTenant(ctx)
+	s.seen = append(s.seen, id)
+	return []byte("sealed"), nil
+}
+
+type keyedClient struct {
+	capturingClient
+	key string
+}
+
+func (c *keyedClient) ReplayKey() string { return c.key }
+
+func TestSealResolvesTheTenantLikeTheStampingWrapper(t *testing.T) {
+	cases := []struct {
+		name    string
+		ctxID   string
+		client  AMQPClient
+		want    string
+		wantErr error
+	}{
+		{name: "no_tenant_anywhere", client: &capturingClient{}, want: ""},
+		{name: "context_only", ctxID: "t-ctx", client: &capturingClient{}, want: "t-ctx"},
+		{name: "pool_key_only", client: &keyedClient{key: "t-pool"}, want: "t-pool"},
+		{name: "context_and_matching_key", ctxID: "t-a", client: &keyedClient{key: "t-a"}, want: "t-a"},
+		{name: "context_and_conflicting_key", ctxID: "t-a", client: &keyedClient{key: "t-b"}, wantErr: tenantstamp.ErrConflict},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sealruntime.Reset()
+			t.Cleanup(sealruntime.Reset)
+			sealer := &tenantSealer{}
+			sealruntime.Register(&fakeCodec{sealer: &fakeSealer{}})
+			sealruntime.Configure(&sealruntime.Runtime{KeyStore: stubKeyStore{}})
+			decls := newSealingDecls()
+			h := DeclareTypedPublisher[sealedEvent](decls, sealedOpts())
+			require.NoError(t, decls.Validate())
+			h.sealer = sealer // observe the context the door hands the sealer
+			ctx := context.Background()
+			if tc.ctxID != "" {
+				ctx = multitenant.SetTenant(ctx, tc.ctxID)
+			}
+			err := h.Publish(ctx, tc.client, sealedEvent{ID: "x"})
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+				assert.Empty(t, sealer.seen, "a refused tenant never reaches the sealer")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, []string{tc.want}, sealer.seen)
+		})
+	}
+}
+
+func TestSealWithoutAClientUsesTheContextOnly(t *testing.T) {
+	sealruntime.Reset()
+	t.Cleanup(sealruntime.Reset)
+	sealer := &tenantSealer{}
+	sealruntime.Register(&fakeCodec{sealer: &fakeSealer{}})
+	sealruntime.Configure(&sealruntime.Runtime{KeyStore: stubKeyStore{}})
+	decls := newSealingDecls()
+	h := DeclareTypedPublisher[sealedEvent](decls, sealedOpts())
+	require.NoError(t, decls.Validate())
+	h.sealer = sealer
+	_, err := h.Seal(multitenant.SetTenant(context.Background(), "t-out"), sealedEvent{ID: "x"})
+	require.NoError(t, err)
+	_, err = h.Seal(context.Background(), sealedEvent{ID: "x"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"t-out", ""}, sealer.seen)
+}
+
+func TestCloneCarriesTheSealError(t *testing.T) {
+	sealruntime.Reset()
+	t.Cleanup(sealruntime.Reset)
+	decls := newSealingDecls()
+	DeclareTypedPublisher[sealedEvent](decls, sealedOpts())
+	require.ErrorIs(t, decls.Validate(), ErrSealingNotLinked)
+	assert.ErrorIs(t, decls.Clone().Validate(), ErrSealingNotLinked, "a clone must not pass what its source failed")
+}
+
 func TestValidateReportsTheFirstSealErrorBeforeOtherRules(t *testing.T) {
 	sealruntime.Reset()
 	t.Cleanup(sealruntime.Reset)
@@ -256,7 +341,7 @@ func TestValidateReportsTheFirstSealErrorBeforeOtherRules(t *testing.T) {
 	err := decls.Validate()
 	require.ErrorIs(t, err, ErrSealingNotLinked)
 	assert.Contains(t, err.Error(), "payment.authorized", "first recorded error wins")
-	assert.Len(t, decls.sealErrors, 2)
+	assert.NotContains(t, err.Error(), "payment.captured")
 }
 
 // capturingClient is the minimal AMQPClient double: it records what the handle publishes.
@@ -271,8 +356,3 @@ func (c *capturingClient) PublishToExchange(_ context.Context, options PublishOp
 	c.data = append(c.data, data)
 	return nil
 }
-
-type (
-	rsaPublicKey  = rsa.PublicKey
-	rsaPrivateKey = rsa.PrivateKey
-)

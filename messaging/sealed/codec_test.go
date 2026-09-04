@@ -3,7 +3,6 @@ package sealed_test
 import (
 	"context"
 	"crypto/rsa"
-	"errors"
 	"reflect"
 	"strings"
 	"sync"
@@ -18,6 +17,7 @@ import (
 	josesealed "github.com/gaborage/go-bricks/jose/sealed"
 	jositest "github.com/gaborage/go-bricks/jose/testing"
 	"github.com/gaborage/go-bricks/keystore"
+	kstest "github.com/gaborage/go-bricks/keystore/testing"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/internal/sealruntime"
 	"github.com/gaborage/go-bricks/messaging/sealed"
@@ -61,56 +61,17 @@ func keys(t *testing.T) {
 	})
 }
 
-// fakeStore is a producer-side key store: named entries with a role, plus the family
-// enumeration the keystore module implements.
-type fakeStore struct {
-	priv map[string]*rsa.PrivateKey
-	pub  map[string]*rsa.PublicKey
-	gens map[string][]keystore.Generation
-}
-
-func (s *fakeStore) PublicKey(name string) (*rsa.PublicKey, error) {
-	if k, ok := s.pub[name]; ok {
-		return k, nil
-	}
-	return nil, errors.New("fake: no public key " + name)
-}
-
-func (s *fakeStore) PrivateKey(name string) (*rsa.PrivateKey, error) {
-	if k, ok := s.priv[name]; ok {
-		return k, nil
-	}
-	return nil, errors.New("fake: no private key " + name)
-}
-
-func (s *fakeStore) Generations(logical string) []keystore.Generation { return s.gens[logical] }
-
-func (s *fakeStore) addPrivate(logical, version string, k *rsa.PrivateKey) *fakeStore {
-	kid := logical + "-" + version
-	s.priv[kid], s.pub[kid] = k, &k.PublicKey
-	s.gens[logical] = append(s.gens[logical], keystore.Generation{Logical: logical, Version: version, Role: keystore.RolePrivate})
-	return s
-}
-
-func (s *fakeStore) addPublic(logical, version string, k *rsa.PublicKey) *fakeStore {
-	s.pub[logical+"-"+version] = k
-	s.gens[logical] = append(s.gens[logical], keystore.Generation{Logical: logical, Version: version, Role: keystore.RolePublicOnly})
-	return s
-}
-
-func (s *fakeStore) addSecret(logical, version string) *fakeStore {
-	s.gens[logical] = append(s.gens[logical], keystore.Generation{Logical: logical, Version: version, Role: keystore.RoleSecret})
-	return s
-}
-
-func newStore() *fakeStore {
-	return &fakeStore{priv: map[string]*rsa.PrivateKey{}, pub: map[string]*rsa.PublicKey{}, gens: map[string][]keystore.Generation{}}
-}
-
-// producerStore is the canonical producer: sign PRIVATE v1, encrypt PUBLIC v1.
-func producerStore(t *testing.T) *fakeStore {
+// producerStore is the canonical producer: sign PRIVATE v1, encrypt PUBLIC v1, built on
+// the keystore module's own test double (generation index included).
+func producerStore(t *testing.T) *kstest.MockKeyStore {
 	keys(t)
-	return newStore().addPrivate(signFamily, "v1", signPriv).addPublic(encFamily, "v1", &encPriv.PublicKey)
+	return kstest.NewMockKeyStore().
+		WithPrivateKey(signFamily+"-v1", signPriv).WithGeneration(signFamily, "v1", keystore.RolePrivate).
+		WithPublicKey(encFamily+"-v1", &encPriv.PublicKey).WithGeneration(encFamily, "v1", keystore.RolePublicOnly)
+}
+
+func withPrivate(s *kstest.MockKeyStore, logical, version string, k *rsa.PrivateKey) *kstest.MockKeyStore {
+	return s.WithPrivateKey(logical+"-"+version, k).WithGeneration(logical, version, keystore.RolePrivate)
 }
 
 // consumerResolver is the audience: sign PUBLIC to verify, encrypt PRIVATE to decrypt.
@@ -121,7 +82,7 @@ func consumerResolver(t *testing.T) jose.KeyResolver {
 
 // familyless is a KeyStore that cannot enumerate generations (no embedding, so nothing
 // is promoted).
-type familyless struct{ s *fakeStore }
+type familyless struct{ s *kstest.MockKeyStore }
 
 func (f familyless) PublicKey(n string) (*rsa.PublicKey, error)   { return f.s.PublicKey(n) }
 func (f familyless) PrivateKey(n string) (*rsa.PrivateKey, error) { return f.s.PrivateKey(n) }
@@ -184,25 +145,27 @@ func TestNewSealerStartupMatrix(t *testing.T) {
 		{name: "happy", store: func(t *testing.T) sealruntime.KeyStore { return producerStore(t) }, event: eventType},
 		{name: "encrypt_private_serves_as_public", store: func(t *testing.T) sealruntime.KeyStore {
 			keys(t)
-			return newStore().addPrivate(signFamily, "v1", signPriv).addPrivate(encFamily, "v1", encPriv)
+			return withPrivate(withPrivate(kstest.NewMockKeyStore(), signFamily, "v1", signPriv), encFamily, "v1", encPriv)
 		}, event: eventType},
 		{name: "sign_private_missing", store: func(t *testing.T) sealruntime.KeyStore {
 			keys(t)
-			return newStore().addPublic(signFamily, "v1", &signPriv.PublicKey).addPublic(encFamily, "v1", &encPriv.PublicKey)
+			return kstest.NewMockKeyStore().
+				WithPublicKey(signFamily+"-v1", &signPriv.PublicKey).WithGeneration(signFamily, "v1", keystore.RolePublicOnly).
+				WithPublicKey(encFamily+"-v1", &encPriv.PublicKey).WithGeneration(encFamily, "v1", keystore.RolePublicOnly)
 		}, event: eventType, wantIs: sealed.ErrRoleMismatch, text: "holds no private key"},
 		{name: "encrypt_family_unprovisioned", store: func(t *testing.T) sealruntime.KeyStore {
 			keys(t)
-			return newStore().addPrivate(signFamily, "v1", signPriv)
+			return withPrivate(kstest.NewMockKeyStore(), signFamily, "v1", signPriv)
 		}, event: eventType, text: "no provisioned generation"},
 		{name: "encrypt_generation_is_a_secret", store: func(t *testing.T) sealruntime.KeyStore {
 			keys(t)
-			return newStore().addPrivate(signFamily, "v1", signPriv).addSecret(encFamily, "v1")
+			return withPrivate(kstest.NewMockKeyStore(), signFamily, "v1", signPriv).WithGeneration(encFamily, "v1", keystore.RoleSecret)
 		}, event: eventType, wantIs: sealed.ErrRoleMismatch, text: "symmetric secret"},
 		{name: "two_sign_generations_no_selector", store: func(t *testing.T) sealruntime.KeyStore {
-			return producerStore(t).addPrivate(signFamily, "v2", sign2)
+			return withPrivate(producerStore(t), signFamily, "v2", sign2)
 		}, event: eventType, text: "no messaging.seal.active"},
 		{name: "selector_picks_second", store: func(t *testing.T) sealruntime.KeyStore {
-			return producerStore(t).addPrivate(signFamily, "v2", sign2)
+			return withPrivate(producerStore(t), signFamily, "v2", sign2)
 		}, active: map[string]string{signFamily: "v2"}, event: eventType},
 		{
 			name: "selector_unprovisioned", store: func(t *testing.T) sealruntime.KeyStore { return producerStore(t) },
@@ -398,6 +361,30 @@ func TestSealerRefusesAConflictingTenant(t *testing.T) {
 	require.NoError(t, h.Publish(ctx, client, paymentAuthorized{OrderID: "o5", Card: &cardData{PAN: testPAN}}))
 	env, _ := openWire(t, client.data[0], josesealed.TenantExpectation{Expected: "tenant-b"})
 	assert.Equal(t, "tenant-b", env.TenantID)
+}
+
+// pooledClient mimics a per-tenant pooled client: it exposes the pool key the stamping
+// wrapper would stamp with. The typed door reads it through messaging's unexported
+// stampSource seam via this method name.
+type pooledClient struct {
+	capturingClient
+	key string
+}
+
+func (c *pooledClient) ReplayKey() string { return c.key }
+
+func TestSignedTidFollowsThePoolKeyWhenTheContextHasNoTenant(t *testing.T) {
+	configure(t, sealruntime.TenancyPerTenant)
+	h := declare(t)
+	client := &pooledClient{key: "tenant-pool"}
+	require.NoError(t, h.Publish(context.Background(), &client.capturingClient, paymentAuthorized{OrderID: "o6", Card: &cardData{PAN: testPAN}}))
+	env, _ := openWire(t, client.data[0], josesealed.TenantExpectation{})
+	assert.Empty(t, env.TenantID, "a bare capturing client exposes no pool key: nothing to mirror")
+
+	client = &pooledClient{key: "tenant-pool"}
+	require.NoError(t, h.Publish(context.Background(), client, paymentAuthorized{OrderID: "o6", Card: &cardData{PAN: testPAN}}))
+	env, _ = openWire(t, client.data[0], josesealed.TenantExpectation{Expected: "tenant-pool"})
+	assert.Equal(t, "tenant-pool", env.TenantID, "the signed tid mirrors the stamp the wrapper writes from the pool key")
 }
 
 func TestPlainTypeIsUntouchedByTheCodec(t *testing.T) {

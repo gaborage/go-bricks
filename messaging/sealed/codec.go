@@ -107,9 +107,9 @@ type sealer struct {
 }
 
 // Seal mirrors the ADR-087 tenant stamp into the signed tid — the tenant the context
-// carries, absent when none resolves — and runs jose/sealed.Seal once. The stamping
-// wrapper later writes the same tenant onto the AMQP header from the same context, so the
-// signed tid and the carrier agree by construction.
+// carries, absent when none resolves — and runs jose/sealed.Seal once. The typed door
+// has already resolved the tenant the way the stamping wrapper will (context, then the
+// client's pool key) and put it on the context, so the signed tid and the carrier agree.
 func (s *sealer) Seal(ctx context.Context, evt any) ([]byte, error) {
 	start := time.Now()
 	opts := s.template

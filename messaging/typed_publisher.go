@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+
+	"github.com/gaborage/go-bricks/messaging/internal/tenantstamp"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // Publisher is the module-facing handle DeclareTypedPublisher returns: a
@@ -107,7 +110,7 @@ func DeclareTypedPublisher[T any](decls *Declarations, opts *PublisherOptions) *
 // Safe for concurrent use: the handle is never written after construction and
 // the client receives a fresh copy of the declared headers on every call.
 func (h *Publisher[T]) Publish(ctx context.Context, client AMQPClient, evt T) error {
-	data, err := h.encode(ctx, evt)
+	data, err := h.encode(ctx, client, evt)
 	if err != nil {
 		return err
 	}
@@ -123,14 +126,22 @@ func (h *Publisher[T]) Seal(ctx context.Context, evt T) ([]byte, error) {
 	if h.sealer == nil {
 		return nil, fmt.Errorf("%w (event type %q)", ErrNotSealTagged, h.eventType)
 	}
-	return h.encode(ctx, evt)
+	return h.encode(ctx, nil, evt)
 }
 
 // encode is the one place the handle turns an event into bytes: seal when T is
-// seal-tagged, marshal otherwise.
-func (h *Publisher[T]) encode(ctx context.Context, evt T) ([]byte, error) {
+// seal-tagged, marshal otherwise. Before sealing it resolves the tenant exactly as the
+// stamping wrapper will for client — context first, the client's pool key otherwise,
+// a disagreement refused — and carries the answer on the context, so the signed tid
+// and the x-tenant-id header always name the same tenant. Seal (no client) sees only
+// the context; the outbox lane stamps from the same context later.
+func (h *Publisher[T]) encode(ctx context.Context, client AMQPClient, evt T) ([]byte, error) {
 	if h.sealer != nil {
-		data, err := h.sealer.Seal(ctx, evt)
+		sealCtx, err := tenantForSeal(ctx, client)
+		if err != nil {
+			return nil, err
+		}
+		data, err := h.sealer.Seal(sealCtx, evt)
 		if err != nil {
 			return nil, fmt.Errorf("messaging: seal %s event: %w", h.eventType, err)
 		}
@@ -141,6 +152,23 @@ func (h *Publisher[T]) encode(ctx context.Context, evt T) ([]byte, error) {
 		return nil, fmt.Errorf("messaging: marshal %s event: %w", h.eventType, err)
 	}
 	return data, nil
+}
+
+// tenantForSeal returns ctx carrying the tenant the stamping wrapper will write for a
+// publish through client, or ctx unchanged when no tenant is in play.
+func tenantForSeal(ctx context.Context, client AMQPClient) (context.Context, error) {
+	key := ""
+	if src, ok := client.(stampSource); ok {
+		key = src.ReplayKey()
+	}
+	tenant, err := tenantstamp.Resolve(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if tenant == "" {
+		return ctx, nil
+	}
+	return multitenant.SetTenant(ctx, tenant), nil
 }
 
 // publishBytes is the handle's ONE bytes door. It is the only place the handle

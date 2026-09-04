@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -189,7 +190,9 @@ var (
 	mu      sync.RWMutex
 	codec   Codec
 	runtime *Runtime
-	metrics *Metrics
+	// metrics is read on every seal and open; an atomic load keeps the publish path off
+	// the registration mutex.
+	metrics atomic.Pointer[Metrics]
 )
 
 // Register installs the codec. messaging/sealed calls it from init; a second call panics.
@@ -223,7 +226,7 @@ func Configure(rt *Runtime) {
 	mu.Lock()
 	defer mu.Unlock()
 	runtime = &rtCopy
-	metrics = newMetrics(rtCopy.Meter)
+	metrics.Store(newMetrics(rtCopy.Meter))
 }
 
 // Configured returns the runtime facts, or nil before Configure ran.
@@ -237,7 +240,8 @@ func Configured() *Runtime {
 func Reset() {
 	mu.Lock()
 	defer mu.Unlock()
-	codec, runtime, metrics = nil, nil, nil
+	codec, runtime = nil, nil
+	metrics.Store(nil)
 }
 
 // Metric names and attribute keys shared by the seal and open paths.
@@ -257,34 +261,34 @@ type Metrics struct {
 	openFailures metric.Int64Counter
 }
 
+// newMetrics builds the two instruments on mp (no-op when nil). An instrument the meter
+// refuses falls back to its no-op twin — metrics never break sealing.
 func newMetrics(mp metric.MeterProvider) *Metrics {
 	if mp == nil {
 		mp = metricnoop.NewMeterProvider()
 	}
 	meter := mp.Meter(MeterName)
+	noop := metricnoop.NewMeterProvider().Meter(MeterName)
 	duration, err := meter.Float64Histogram(MetricOperationDuration,
 		metric.WithDescription("Duration of a payload seal or open"),
 		metric.WithUnit("s"))
 	if err != nil {
-		duration, _ = metricnoop.NewMeterProvider().Meter(MeterName).Float64Histogram(MetricOperationDuration)
+		duration, _ = noop.Float64Histogram(MetricOperationDuration)
 	}
 	failures, err := meter.Int64Counter(MetricOpenFailures,
 		metric.WithDescription("Sealed messages refused by the opener, by code"))
 	if err != nil {
-		failures, _ = metricnoop.NewMeterProvider().Meter(MeterName).Int64Counter(MetricOpenFailures)
+		failures, _ = noop.Int64Counter(MetricOpenFailures)
 	}
 	return &Metrics{duration: duration, openFailures: failures}
 }
 
 // Instruments returns the configured instruments, or a no-op set before Configure ran.
 func Instruments() *Metrics {
-	mu.RLock()
-	m := metrics
-	mu.RUnlock()
-	if m == nil {
-		return newMetrics(nil)
+	if m := metrics.Load(); m != nil {
+		return m
 	}
-	return m
+	return newMetrics(nil)
 }
 
 // RecordOperation records one seal or open duration.

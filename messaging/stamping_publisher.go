@@ -29,6 +29,16 @@ func newStampingPublisher(base AMQPClient, key string) AMQPClient {
 	return &stampingPublisher{AMQPClient: base, key: key}
 }
 
+// stampSource is what a client exposes so the typed door can resolve the tenant the
+// stamp will carry BEFORE it seals: the signed tid and the header must come from the
+// same two sources (context and pool key), or a per-tenant client used from a context
+// without a tenant would stamp the header and sign no tid.
+type stampSource interface {
+	ReplayKey() string
+}
+
+func (p *stampingPublisher) ReplayKey() string { return p.key }
+
 // Publish routes through PublishToExchange so one implementation stamps both doors.
 func (p *stampingPublisher) Publish(ctx context.Context, destination string, data []byte) error {
 	return p.PublishToExchange(ctx, PublishOptions{Exchange: "", RoutingKey: destination}, data)
