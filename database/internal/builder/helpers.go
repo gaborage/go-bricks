@@ -622,7 +622,11 @@ func resolveList(op string, v reflect.Value, values any) (normalized any, empty 
 // and its own parameters consistently. Passing the SelectBuilder through
 // directly would let squirrel apply the vendor format ($1/:1) early and collide
 // with the outer renumbering (duplicate $1 on PostgreSQL, duplicate :1 on
-// Oracle). Another implementation (a mock) falls back to its own ToSQL.
+// Oracle). Another implementation (a mock) falls back to its own ToSQL, and
+// its output is scanned textually for an already-applied vendor placeholder:
+// a literal $N or :N inside a string or comment of that external SQL is
+// refused too, which is a known limitation — render such a subquery with this
+// package's builder, whose placeholders are never vendor-formatted here.
 func renderSubquery(sub dbtypes.SelectQueryBuilder) (sql string, args []any, err error) {
 	if invalid := dbtypes.ValidateSubquery(sub); invalid != nil {
 		return "", nil, invalid
