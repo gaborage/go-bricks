@@ -92,15 +92,17 @@ func (l *leadership) Release(ctx context.Context) error {
 // word in its errors and the statement Probe uses. The claim query is common SQL, not a
 // dialect difference, so it lives here rather than being mirrored under the stores'
 // file-level dupl exemption, which exists for real dialect divergence.
-func leadRow(ctx context.Context, db dbtypes.Interface, leaderTable, vendor, probeStmt string) (Leadership, error) {
+// leadRow takes the leader row with lockSQL (a SELECT ... FOR UPDATE NOWAIT the
+// builder rendered for the vendor) on a transaction held until Release, and
+// hands the probe statement to the claim.
+func leadRow(ctx context.Context, db dbtypes.Interface, vendor, leaderTable, lockSQL string, lockArgs []any, probeStmt string) (Leadership, error) {
 	tx, err := db.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("outbox %s: begin leader transaction failed: %w", vendor, err)
 	}
 
 	var id int64
-	query := fmt.Sprintf(`SELECT id FROM %s WHERE id = 1 FOR UPDATE NOWAIT`, leaderTable)
-	if err := tx.QueryRow(ctx, query).Scan(&id); err != nil {
+	if err := tx.QueryRow(ctx, lockSQL, lockArgs...).Scan(&id); err != nil {
 		_ = tx.Rollback(ctx)
 		switch {
 		case database.IsLockNotAvailable(err):

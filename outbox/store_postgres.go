@@ -3,8 +3,8 @@ package outbox
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
-	"time"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/sqlid"
@@ -47,9 +47,10 @@ const postgresCreateLeaderTableSQL = `CREATE TABLE IF NOT EXISTS %s (id SMALLINT
 
 const postgresSeedLeaderRowSQL = `INSERT INTO %s (id) VALUES (1) ON CONFLICT (id) DO NOTHING`
 
-// postgresStore implements Store for PostgreSQL using $1-style placeholders.
+// postgresStore is the PostgreSQL outbox store: the shared builder-backed DML
+// with the vendor's DDL and a plain row scanner.
 type postgresStore struct {
-	tableName string
+	sqlStore
 }
 
 // NewPostgresStore creates a new PostgreSQL outbox store.
@@ -58,134 +59,26 @@ func NewPostgresStore(tableName string) (Store, error) {
 	if err := validateTableName(tableName); err != nil {
 		return nil, err
 	}
-	return &postgresStore{tableName: tableName}, nil
+	return &postgresStore{sqlStore: newSQLStore(dbtypes.PostgreSQL, "postgres", tableName, "error", scanPostgresRecord)}, nil
 }
 
-func (s *postgresStore) Insert(ctx context.Context, tx dbtypes.Tx, record *Record) error {
-	query := fmt.Sprintf(
-		`INSERT INTO %s (id, event_type, aggregate_id, payload, headers, exchange, routing_key, lane, stream, partition_key, status, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-		s.tableName,
+// scanPostgresRecord reads one FetchPending row; every column is NOT NULL or
+// has a default on PostgreSQL, so the scan is direct.
+func scanPostgresRecord(rows *sql.Rows) (Record, error) {
+	var r Record
+	err := rows.Scan(
+		&r.ID, &r.EventType, &r.AggregateID, &r.Payload, &r.Headers,
+		&r.Exchange, &r.RoutingKey, &r.Lane, &r.Stream, &r.PartitionKey,
+		&r.Status, &r.RetryCount, &r.CreatedAt, &r.Seq,
 	)
-
-	_, err := tx.Exec(ctx, query,
-		record.ID,
-		record.EventType,
-		record.AggregateID,
-		record.Payload,
-		record.Headers,
-		record.Exchange,
-		record.RoutingKey,
-		laneOrDefault(record.Lane),
-		record.Stream,
-		record.PartitionKey,
-		record.Status,
-		record.CreatedAt,
-	)
-	if err != nil {
-		return fmt.Errorf("outbox postgres: insert failed: %w", err)
-	}
-
-	return nil
+	return r, err
 }
 
-func (s *postgresStore) FetchPending(ctx context.Context, db dbtypes.Interface, batchSize int) ([]Record, error) {
-	query := fmt.Sprintf(
-		`SELECT id, event_type, aggregate_id, payload, headers, exchange, routing_key, lane, stream, partition_key, status, retry_count, created_at, seq
-		 FROM %s
-		 WHERE status = $1
-		 ORDER BY seq ASC
-		 LIMIT $2`,
-		s.tableName,
-	)
-
-	rows, err := db.Query(ctx, query, StatusPending, batchSize)
-	if err != nil {
-		return nil, fmt.Errorf("outbox postgres: fetch pending failed: %w", err)
-	}
-	defer rows.Close()
-
-	var records []Record
-	for rows.Next() {
-		var r Record
-		if err := rows.Scan(
-			&r.ID, &r.EventType, &r.AggregateID, &r.Payload, &r.Headers,
-			&r.Exchange, &r.RoutingKey, &r.Lane, &r.Stream, &r.PartitionKey,
-			&r.Status, &r.RetryCount, &r.CreatedAt, &r.Seq,
-		); err != nil {
-			return nil, fmt.Errorf("outbox postgres: scan failed: %w", err)
-		}
-		records = append(records, r)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("outbox postgres: rows iteration failed: %w", err)
-	}
-
-	return records, nil
-}
-
-func (s *postgresStore) MarkPublished(ctx context.Context, db dbtypes.Interface, eventID string) error {
-	query := fmt.Sprintf(
-		`UPDATE %s SET status = $1, published_at = $2 WHERE id = $3`,
-		s.tableName,
-	)
-
-	_, err := db.Exec(ctx, query, StatusPublished, time.Now(), eventID)
-	if err != nil {
-		return fmt.Errorf("outbox postgres: mark published failed: %w", err)
-	}
-
-	return nil
-}
-
-func (s *postgresStore) MarkFailed(ctx context.Context, db dbtypes.Interface, eventID, errMsg string) error {
-	query := fmt.Sprintf(
-		`UPDATE %s SET retry_count = retry_count + 1, error = $1 WHERE id = $2`,
-		s.tableName,
-	)
-
-	_, err := db.Exec(ctx, query, errMsg, eventID)
-	if err != nil {
-		return fmt.Errorf("outbox postgres: mark failed failed: %w", err)
-	}
-
-	return nil
-}
-
-func (s *postgresStore) MarkDeadLettered(ctx context.Context, db dbtypes.Interface, eventID, errMsg string) error {
-	query := fmt.Sprintf(
-		`UPDATE %s SET retry_count = retry_count + 1, status = $1, error = $2 WHERE id = $3`,
-		s.tableName,
-	)
-
-	_, err := db.Exec(ctx, query, StatusFailed, errMsg, eventID)
-	if err != nil {
-		return fmt.Errorf("outbox postgres: mark dead-lettered failed: %w", err)
-	}
-
-	return nil
-}
-
-func (s *postgresStore) DeletePublished(ctx context.Context, db dbtypes.Interface, before time.Time) (int64, error) {
-	query := fmt.Sprintf(
-		`DELETE FROM %s WHERE status = $1 AND published_at < $2`,
-		s.tableName,
-	)
-
-	result, err := db.Exec(ctx, query, StatusPublished, before)
-	if err != nil {
-		return 0, fmt.Errorf("outbox postgres: delete published failed: %w", err)
-	}
-
-	count, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("outbox postgres: rows affected failed: %w", err)
-	}
-
-	return count, nil
-}
-
+// CreateTable runs the DDL, which stays hand-written: the builder has no DDL
+// door and the statements interpolate no value.
+//
+// SECURITY: Manual SQL review completed - static DDL constants; only the constructor-validated
+// table name (validateTableName, ADR-031 grammar) and sqlid's derivations of it are interpolated; no caller value
 func (s *postgresStore) CreateTable(ctx context.Context, db dbtypes.Interface) error {
 	idxBase := sqlid.IndexBaseName(s.tableName)
 
@@ -211,10 +104,4 @@ func (s *postgresStore) CreateTable(ctx context.Context, db dbtypes.Interface) e
 	}
 
 	return nil
-}
-
-// Lead takes the ledger's leader row FOR UPDATE NOWAIT in a transaction held until
-// Release. The row lock IS the claim, so the transaction stays open for the cycle.
-func (s *postgresStore) Lead(ctx context.Context, db dbtypes.Interface) (Leadership, error) {
-	return leadRow(ctx, db, sqlid.LeaderTableName(s.tableName), "postgres", `SELECT 1`)
 }

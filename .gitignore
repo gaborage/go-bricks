@@ -75,6 +75,8 @@
 !**/testdata/**/*.sql
 # Golden / fixture spec files under testdata/.
 !**/testdata/**/*.yaml
+# SQL goldens the #1255 store ports are diffed against.
+!**/testdata/**/*.golden
 
 # ...even if they are in subdirectories
 !*/
