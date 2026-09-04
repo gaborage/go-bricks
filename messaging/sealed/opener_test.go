@@ -165,20 +165,51 @@ func failureCount(t *testing.T, reader *sdkmetric.ManualReader, code string) int
 	return 0
 }
 
+// openerCase is one row of the consumer startup matrix.
+type openerCase struct {
+	name   string
+	store  func(*testing.T) sealruntime.KeyStore
+	event  string
+	spec   sealruntime.Spec
+	rt     func(store sealruntime.KeyStore) *sealruntime.Runtime
+	wantIs error
+	text   string
+}
+
+// runtime builds the Runtime the case hands NewOpener: the store, unless the case
+// overrides the whole runtime (nil, or one without a key store).
+func (tc *openerCase) runtime(store sealruntime.KeyStore) *sealruntime.Runtime {
+	if tc.rt != nil {
+		return tc.rt(store)
+	}
+	return &sealruntime.Runtime{KeyStore: store}
+}
+
+// check asserts NewOpener's outcome: an opener when nothing is expected to fail,
+// otherwise a nil opener and an error matching the sentinel and/or text given.
+func (tc *openerCase) check(t *testing.T, opener sealruntime.Opener, err error) {
+	t.Helper()
+	if tc.wantIs == nil && tc.text == "" {
+		require.NoError(t, err)
+		assert.NotNil(t, opener)
+		return
+	}
+	require.Error(t, err)
+	assert.Nil(t, opener)
+	if tc.wantIs != nil {
+		assert.ErrorIs(t, err, tc.wantIs)
+	}
+	if tc.text != "" {
+		assert.Contains(t, err.Error(), tc.text)
+	}
+}
+
 func TestNewOpenerStartupMatrix(t *testing.T) {
 	codec, ok := sealruntime.Registered().(sealruntime.OpenerProvider)
 	require.True(t, ok, "the codec carries its consume side")
 	sp := spec(t)
 	consumer := func(t *testing.T) sealruntime.KeyStore { return vectorConsumerStore(t) }
-	cases := []struct {
-		name   string
-		store  func(*testing.T) sealruntime.KeyStore
-		event  string
-		spec   sealruntime.Spec
-		rt     func(store sealruntime.KeyStore) *sealruntime.Runtime
-		wantIs error
-		text   string
-	}{
+	cases := []openerCase{
 		{name: "happy", store: consumer, event: eventType},
 		{name: "sign_private_serves_as_public", store: func(t *testing.T) sealruntime.KeyStore {
 			keys(t)
@@ -214,28 +245,12 @@ func TestNewOpenerStartupMatrix(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			store := tc.store(t)
-			rt := &sealruntime.Runtime{KeyStore: store}
-			if tc.rt != nil {
-				rt = tc.rt(store)
-			}
 			s := tc.spec
 			if s == nil {
 				s = sp
 			}
-			opener, err := codec.NewOpener(s, tc.event, rt)
-			if tc.wantIs == nil && tc.text == "" {
-				require.NoError(t, err)
-				assert.NotNil(t, opener)
-				return
-			}
-			require.Error(t, err)
-			assert.Nil(t, opener)
-			if tc.wantIs != nil {
-				assert.ErrorIs(t, err, tc.wantIs)
-			}
-			if tc.text != "" {
-				assert.Contains(t, err.Error(), tc.text)
-			}
+			opener, err := codec.NewOpener(s, tc.event, tc.runtime(store))
+			tc.check(t, opener, err)
 		})
 	}
 }
