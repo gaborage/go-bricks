@@ -79,7 +79,8 @@ a loud startup error (`ErrNotLinked`, "import messaging/sealed") for a seal-tagg
 declaration without the import — not binary size, since `go list -deps ./app` already
 carries go-jose for HTTP JOSE. The adapter registers its codec into
 `messaging/internal/sealruntime` from `messaging/sealed`'s `init`; `app` configures the
-runtime (keystore, `messaging.seal.active`, tenancy, meter) before `DeclareMessaging`, and
+runtime (keystore, `messaging.seal.active`, tenancy, meter) before `DeclareMessaging`
+(modules read it via `messaging.SealingRuntime()`), and
 `Declarations.Validate` reports `ErrNotConfigured` / `ErrKeyStoreMissing` for a sealed
 declaration whose runtime is incomplete. Metrics: `seal.operation.duration`
 (`seal.operation = seal|open`) and `seal.open.failures.total` (`seal.error.code`). Sealing engages automatically from tags on the ADR-096
@@ -97,8 +98,10 @@ a time, no jose import — the import gate holds); `jose/sealed.Open` returns it
 `sealed.Envelope`; `messaging/sealed` maps one to the other. Streams typed declarations
 hard-reject seal-tagged `T` in v1; `outbox.Publish` refuses a seal-tagged struct payload
 (use `Publisher[T].Seal` bytes), and `Seal` on a plain `T` is the typed error
-`ErrNotSealTagged` — no rename. `PayloadStageOpen` (payloaderr stage `open`, sentinel `ErrPayloadOpenRefused`) joins the
-`PayloadError` taxonomy.
+`messaging.ErrNotSealTagged` — no rename. `messaging.PayloadStageOpen` (payloaderr stage `open`, sentinel
+`messaging.ErrPayloadOpenRefused`, cause `sealruntime.OpenRefusedError`) joins the
+`PayloadError` taxonomy; `outbox.Publish` names its refusal `outbox.ErrSealedPayloadNeedsBytes`
+and `messaging.IsSealTagged` / `messaging.SealTagName` are the shared predicate.
 Logger sensitive-field vocabularies stay independent (docs cross-reference only).
 
 The publish door has no escape hatch: the exported signature is
@@ -251,6 +254,13 @@ the prototype asset that still shows the knob stays as-is (throwaway, dated).
   business-key idempotency remains the consumer's contract.
 - A stateless sealed consumer (no ledger) leaves every replay class open; the
   `WithMeta` requirement is the structural nudge, documentation the rest.
+- `inbox.ProcessOnce` admits a sealed Dedup key only under the delivery context the sealed
+  door handed the handler (`messaging.IsSealedDelivery`): derive from the handler's context
+  (`context.WithoutCancel(ctx)` for background work, never `context.Background()`) or the
+  marker is lost and the call fails closed with `ErrInvalidEventID`.
+- Shared tenancy with `TenantOptional`: an unstamped delivery carrying a signed `tid` is
+  accepted and the `tid` is surfaced on `Meta.Sealed().TenantID` without comparison; a
+  consumer that cares refuses in the handler on `env.TenantID`.
 - Rotation-overlap replay is true at the seal layer and irrelevant at the effect layer:
   an old-generation replay lands in the ledger as a duplicate of the same key.
 - A keystore YAML entry binding a name to material remains a trust act — same class

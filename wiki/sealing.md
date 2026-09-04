@@ -1,6 +1,6 @@
 # Sealed AMQP Messages
 
-<!-- DRAFT for the #1357 stack: jose/sealed, keystore generations/activation and Meta.DedupKey/Sealed are on main; the messaging/sealed adapter, the WithMeta/streams/outbox refusals and PayloadStageOpen land with #1358-#1360. Every TODO(#NNNN) marker names the link that fixes its symbol; remove this banner when #1360 merges. -->
+<!-- DRAFT for the #1357 stack: jose/sealed, keystore generations/activation and Meta.DedupKey/Sealed are on main; the messaging/sealed adapter (#1358), the sealed consumer (#1359) and the lane guards (#1360) are named here with their final symbols and land with those links. Remove this banner when #1360 merges. -->
 
 Field-level payload protection for events that cross a broker: one declared **Subject**
 field travels encrypted, every sibling field stays readable, and the whole document is
@@ -14,13 +14,15 @@ doors; import-gated like `messaging/streams`, ADR-091). The gate keeps the `mess
 package free of go-jose and turns a forgotten import into a loud startup error; it does not
 make an app smaller, since HTTP JOSE already links go-jose.
 
-How the adapter is wired <!-- TODO(#1358): symbol names may still move until B2a merges -->:
-`messaging/sealed`'s `init` registers the codec into `messaging/internal/sealruntime`;
-`app` calls `Configure` with the runtime (`KeyStore`, `Active` = `messaging.seal.active`,
-`Tenancy`, `Meter`) before any `DeclareMessaging`; `Declarations.Validate` fails a
-seal-tagged declaration with `ErrNotLinked` ("import messaging/sealed"), `ErrNotConfigured`
-or `ErrKeyStoreMissing`. `Publisher[T].Seal` and `Publish` seal when `T` is seal-tagged; the
-consumer side opens through an `OpenerFactory` (#1359). Metrics:
+How the adapter is wired (#1358): `messaging/sealed`'s `init` calls
+`sealruntime.Register` (`messaging/internal/sealruntime`) with the codec; `app` calls
+`sealruntime.Configure` with the runtime (`KeyStore`, `Active` = `messaging.seal.active`,
+`Tenancy`, `Meter`) before any `DeclareMessaging`, and modules reach it through
+`messaging.SealingRuntime()`; `Declarations.Validate` fails a seal-tagged declaration with
+`sealruntime.ErrNotLinked` ("import messaging/sealed"), `ErrNotConfigured` or
+`ErrKeyStoreMissing`. `messaging.IsSealTagged` (tag key `messaging.SealTagName`) is the
+one predicate every door asks. `Publisher[T].Seal` and `Publish` seal when `T` is
+seal-tagged; the consumer side opens through an `OpenerFactory` (#1359). Metrics:
 `seal.operation.duration` with `seal.operation = seal|open`, and
 `seal.open.failures.total` with `seal.error.code`.
 
@@ -99,8 +101,8 @@ type PaymentAuthorized struct {
 - A seal-tagged `T` requires the `WithMeta` consume door (`DeclareTypedConsumerWithMeta`) so
   the Dedup key is reachable; the meta-less door refuses it at startup (#1359). Streams typed
   declarations refuse a seal-tagged `T` in v1 (#1360). `outbox.Publish` refuses a seal-tagged struct
-  payload (#1360) — hand it `Publisher[T].Seal` bytes instead; `Seal` on a plain `T` is
-  `ErrNotSealTagged` (#1358). <!-- TODO(#1358/#1360): confirm both names when those links merge. -->
+  payload with `outbox.ErrSealedPayloadNeedsBytes` (#1360) — hand it `Publisher[T].Seal`
+  bytes instead; `Seal` on a plain `T` is `messaging.ErrNotSealTagged` (#1358).
 
 ## Keys
 
@@ -211,15 +213,17 @@ Every failure is one `*sealed.OpenError`: `errors.Is` reaches the sentinel
 (`ErrNotSealed` vs `ErrOpenFailed`), `Code` names the rule, and details carry presence,
 length and layer only — a signed value is not a log-safe value (ADR-081). On the consume
 door an open failure is a nack without requeue into the standard DLQ path as a
-`*messaging.PayloadError` at stage `open` (`PayloadStageOpen`, sentinel
-`ErrPayloadOpenRefused` — match with `errors.Is`), so ops can tell a signature-invalid
-spike from JSON garbage; the `*sealed.OpenError` stays in the chain. <!-- TODO(#1359): confirm the two names when the sealed consumer merges. -->
+`*messaging.PayloadError` at payloaderr stage `open` (`messaging.PayloadStageOpen`,
+sentinel `messaging.ErrPayloadOpenRefused` — match with `errors.Is`), so ops can tell a
+signature-invalid spike from JSON garbage; the `*sealruntime.OpenRefusedError` wrapping the
+`*sealed.OpenError` stays in the chain (#1359).
 
 ### `tid` by tenancy
 
 | Tenancy | Rule |
 | --- | --- |
 | `messaging.tenancy: shared` | a signed `tid` is REQUIRED (absent is poison) unless the consumer declares `TenantOptional`, in which case absent is accepted and present is equality-checked against the carrier (G10) |
+| shared, `TenantOptional`, delivery unstamped, signed `tid` present | accepted; the `tid` is surfaced on `Meta.Sealed().TenantID` and not compared (an optional consumer accepts unstamped deliveries by declaration; refuse in the handler on `env.TenantID` if that matters) |
 | per-tenant | present-and-different from the context tenant is poison; absent is accepted |
 | `multitenant.enabled: false` | no rule; the value is surfaced on the envelope (G2) |
 
@@ -240,6 +244,11 @@ rejection**; its one replay-related job is to make the message's identity un-for
   errors; the Logical family, not the Generation, so a rotation does not re-open the
   window); for a plain `T` the `x-outbox-event-id` header once it passes
   `^[A-Za-z0-9_-]{1,128}$`, or an error wrapping `messaging.ErrInvalidEventID`.
+- `Meta.DedupKey()` on a sealed consumer is `<SignFamily>:<jti>`; `inbox.ProcessOnce` admits it
+  only under the delivery context the sealed door handed the handler
+  (`messaging.IsSealedDelivery`). Call `ProcessOnce` with a context derived from the
+  handler's — `context.WithoutCancel(ctx)` for background work, never `context.Background()`
+  — or the marker is lost and the call fails closed with `ErrInvalidEventID`.
 - `:` is outside the header-id grammar, so no header can spell a sealed key: a publish-ACL
   holder on an unsealed sibling queue cannot pre-insert a sealed message's key and have the
   real one skip+ACK (the shared-ledger suppression attack). That grammar applies to

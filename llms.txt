@@ -3405,7 +3405,7 @@ gate keeps `messaging` free of go-jose, it does not shrink your binary. Deep div
 import (
     "github.com/gaborage/go-bricks/app"
     "github.com/gaborage/go-bricks/messaging"
-    _ "github.com/gaborage/go-bricks/messaging/sealed" // TODO(#1358): confirm the import-gate path
+    _ "github.com/gaborage/go-bricks/messaging/sealed" // import gate: registers the codec (#1358)
 )
 
 // Card is the Subject: it travels as a compact JWE; OrderID and Amount stay clear.
@@ -3450,6 +3450,8 @@ func (m *Module) onPaymentAuthorized(ctx context.Context, evt PaymentAuthorized,
     if err != nil {
         return err
     }
+    // ctx must derive from the handler's: the sealed door marks it (messaging.IsSealedDelivery)
+    // and ProcessOnce admits a "<family>:<jti>" key only under that marker — never context.Background().
     return m.inbox.ProcessOnce(ctx, key, func(ctx context.Context, tx dbtypes.Tx) error {
         return m.svc.RecordAuthorizationTx(ctx, tx, evt.OrderID, evt.Card) // evt.Card is plaintext here only
     })
