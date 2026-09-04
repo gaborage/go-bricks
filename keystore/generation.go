@@ -25,8 +25,9 @@ var generationSuffixPattern = regexp.MustCompile(`-v\d+$`)
 
 // generationVersionPattern is the canonical form of a version: a positive
 // integer with no leading zero, so "v1" and "v01" can never name the same key
-// and "v0" is not a generation. The Activation selector value
-// (messaging.seal.active) is held to the same grammar.
+// and "v0" is not a generation. config.sealGenerationPattern holds the
+// Activation selector value (messaging.seal.active) to the same grammar —
+// keep in sync.
 var generationVersionPattern = regexp.MustCompile(`^v[1-9]\d*$`)
 
 // Role is the material an entry holds, which decides what a sealing side can

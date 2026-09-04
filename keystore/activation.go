@@ -17,7 +17,10 @@ import (
 //     naming the selector value.
 //
 // The caller (the component owning sealing declarations) calls it once per
-// Logical kid it resolves, sign and encrypt alike, at startup.
+// Logical kid it resolves, sign and encrypt alike, at startup. active is the
+// bare map rather than config.SealConfig by decision: the keystore stays
+// decoupled from a messaging-owned config type, and the grammar re-check
+// below covers a map that never passed config.Validate.
 func ActiveGeneration(store FamilyEnumerator, active map[string]string, logical string) (Generation, error) {
 	if err := validateLogical(logical); err != nil {
 		return Generation{}, fmt.Errorf("keystore: %w", err)

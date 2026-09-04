@@ -12,8 +12,10 @@ import (
 
 // sealGenerationPattern is the Activation selector's value grammar: a
 // generation marker without its hyphen, a positive integer with no leading
-// zero. It mirrors the keystore's entry-name suffix grammar so a selector can
-// only ever spell a generation the way the keystore names it.
+// zero. It mirrors keystore.generationVersionPattern — keep in sync — so a
+// selector can only ever spell a generation the way the keystore names it.
+// config is the lower layer, so the keystore's vocabulary is not exported
+// from here; the keystore re-checks its own copy at resolution.
 var sealGenerationPattern = regexp.MustCompile(`^v[1-9]\d*$`)
 
 // normalizeMessaging shapes messaging configuration: reconnect/publisher pool
