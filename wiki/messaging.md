@@ -21,10 +21,12 @@ exchange := decls.DeclareTopicExchange("issuance.events")
 queue := decls.DeclareQueue("issuance.events.queue")
 decls.DeclareBinding(queue.Name, exchange.Name, "issuance.*")
 
-decls.DeclarePublisher(&messaging.PublisherOptions{
-    Exchange: exchange.Name, RoutingKey: "issuance.created",
-    EventType: "CreateBatchIssuanceRequest",
-}, nil)
+// Returns the handle publishes go through; keep it on the module or the service.
+m.issuanceCreated = messaging.DeclareTypedPublisher[CreateBatchIssuanceRequest](decls,
+    &messaging.PublisherOptions{
+        Exchange: exchange.Name, RoutingKey: "issuance.created",
+        EventType: "CreateBatchIssuanceRequest",
+    })
 
 decls.DeclareConsumer(&messaging.ConsumerOptions{
     Queue: queue.Name, EventType: "CreateBatchIssuanceRequest",
@@ -41,7 +43,17 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 
 RabbitMQ 4.3.0 denies `transient_nonexcl_queues` by default: a queue declared with both `Durable: false` and `Exclusive: false` gets the connection closed with a 541 instead of the queue created. The helpers above are unaffected — `NewQueue` defaults to `Durable: true` — but a hand-built `QueueDeclaration` using that transient shape needs the broker configured with `deprecated_features.permit.transient_nonexcl_queues = true`, which is what GoBricks' own RabbitMQ test container sets.
 
-**Key Helpers:** `DeclareTopicExchange()`, `DeclareQueue()`, `DeclareBinding()`, `DeclarePublisher()`, `DeclareConsumer()`
+**Key Helpers:** `DeclareTopicExchange()`, `DeclareQueue()`, `DeclareBinding()`, `DeclareTypedPublisher[T]()`, `DeclareConsumer()`
+
+**Publishing** uses the handle from the declaration and the tenant-aware client:
+`m.issuanceCreated.Publish(ctx, client, evt)`, where `client` comes from `deps.Messaging(ctx)`.
+The handle carries the declared exchange, routing key, default headers and delivery flags, so the
+call site never re-spells them; it JSON-marshals `evt` and is immutable, hence safe to share
+across goroutines and tenants. A marshal failure publishes nothing and comes back wrapped; every
+other error is the client's own, returned unwrapped. A named exchange must be declared or
+`Validate` fails startup; the default exchange `""` is the exception — AMQP builds it in, so a
+publisher declared with `Exchange: ""` and the queue name as its `RoutingKey` sends to that queue
+directly and needs no exchange declaration.
 
 **Re-declaring one queue name is allowed when the shapes are compatible.** Two declarations of the same queue *merge*: the four flags (`Durable`, `AutoDelete`, `Exclusive`, `NoWait`) must be equal, and any `Args` key they share must carry the same value; the union of their `Args` is what reaches the broker. So `DeclareQueueWithDLQ("orders.events.queue", nil)` and `DeclareQueue("orders.events.queue")` from two different modules now compose, instead of whichever ran last silently dropping the other's dead-letter args — declaration order across modules is invisible at any single call site, and the pre-merge behavior could revert a queue to dropping failed deliveries with no error and no WARN. Incompatible shapes (a differing flag, or one `Args` key with two values) keep the first declaration and fail startup with a single aggregate error naming every conflict:
 
@@ -547,7 +559,7 @@ messaging:
 
 ### Bounded publish retries (`reconnect.maxpublishattempts`)
 
-`PublishToExchange` (and the `Publish` convenience) retries a failing publish — publish error,
+A publish through `Publisher[T].Publish` retries a failing publish — publish error,
 broker NACK, or confirmation timeout — but the loop is **bounded** by
 `reconnect.maxpublishattempts` (default 5). On exhaustion it returns
 `messaging.ErrPublishRetriesExhausted` **wrapping the last cause**, so callers can classify the
@@ -605,7 +617,7 @@ busy-spinning. These causes are informational for logging/observability; the out
 **every** publish failure as a recoverable *connectivity* failure that retries and never parks —
 NACK included, and likewise a raw `ErrNotConnected`, though the relay rarely sees one: it checks
 `IsReady()` itself at the start of each cycle and routes a cold broker to its outage path
-(advancing `retry_count` without calling `PublishToExchange` at all). Only undecodable message
+(advancing `retry_count` without attempting a publish at all). Only undecodable message
 headers are poison — see
 [outbox.md](outbox.md#retry--dead-lettering) and [ADR-033](adr_033_outbox_retry_count_status_parking.md).
 
@@ -622,12 +634,12 @@ first publish against a freshly created (or mid-reconnect) client failed instant
 `messaging.ErrNotConnected`, even though the client would have become ready a moment later
 (issue #655).
 
-`PublishToExchange` now runs a bounded, context-aware wait for readiness **before** entering the
+A publish now runs a bounded, context-aware wait for readiness **before** entering the
 retry loop described above. The wait polls every 100ms (the same cadence
 `Registry.DeclareInfrastructure` uses) up to `reconnect.readytimeout` (default 5s):
 
 - If the client becomes ready within the window, the publish proceeds normally into the retry loop.
-- If `reconnect.readytimeout` elapses first, `PublishToExchange` returns the raw
+- If `reconnect.readytimeout` elapses first, the publish returns the raw
   `messaging.ErrNotConnected` — the same unwrapped error **shape** pre-#655 callers received
   (only the timing changed: up to `readytimeout` instead of instant) — without consuming a
   `reconnect.maxpublishattempts` slot, since the wait happens entirely before the retry loop

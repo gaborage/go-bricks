@@ -326,6 +326,14 @@ func (d *Declarations) Validate() error {
 	}
 
 	for _, publisher := range d.Publishers {
+		// The empty exchange is AMQP's built-in default exchange — every queue is
+		// bound to it under its own name, so it is never declared and a publisher
+		// naming it routes by queue name through its RoutingKey. Requiring a
+		// declaration for it would make the default exchange unreachable from a
+		// declared publisher (and so from the typed publish door) for no gain.
+		if publisher.Exchange == "" {
+			continue
+		}
 		if _, exists := d.Exchanges[publisher.Exchange]; !exists {
 			return fmt.Errorf("publisher references non-existent exchange: %s", publisher.Exchange)
 		}

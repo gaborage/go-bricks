@@ -337,7 +337,7 @@ type ModuleDeps struct {
     KeyStore      KeyStore                                               // Named RSA key pairs & symmetric secrets (nil if not configured)
     DB            func(ctx context.Context) (database.Interface, error)  // Tenant-aware database
     DBByName      func(ctx context.Context, name string) (database.Interface, error) // Named databases
-    Messaging     func(ctx context.Context) (messaging.AMQPClient, error) // Tenant-aware messaging
+    Messaging     func(ctx context.Context) (messaging.AMQPClient, error) // Tenant-aware messaging; publish through a messaging.Publisher[T] handle
     Cache         func(ctx context.Context) (cache.Cache, error)         // Tenant-aware cache
 }
 ```
@@ -837,7 +837,7 @@ multitenant:
       messaging: { url: "..." }
 ```
 
-Modules access tenant resources via `deps.DB(ctx)` and `deps.Messaging(ctx)`.
+Modules access tenant resources via `deps.DB(ctx)` and `deps.Messaging(ctx)`; the messaging client is what a `messaging.Publisher[T]` handle publishes through.
 
 ### Custom Integration
 

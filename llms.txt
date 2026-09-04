@@ -2949,12 +2949,24 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 	queue := decls.DeclareQueue("orders.processing")
 	decls.DeclareBinding(queue.Name, exchange.Name, "order.*")
 
-	// Publisher contract — validates routing-key + event-type pair upfront
-	decls.DeclarePublisher(&messaging.PublisherOptions{
+	// Publisher contract — validates routing-key + event-type pair upfront AND hands back
+	// the typed handle every publish goes through. Keep it (there is no deps accessor to
+	// look one up again); DeclareMessaging runs after Init, so m.svc already exists.
+	// Headers declared here ride every publish; per-call values belong in the payload.
+	m.svc.orderCreated = messaging.DeclareTypedPublisher[OrderCreatedEvent](decls, &messaging.PublisherOptions{
 		Exchange:   exchange.Name,
 		RoutingKey: "order.created",
 		EventType:  "OrderCreated",
-	}, nil)
+		Headers:    map[string]any{"event_type": "OrderCreated"},
+	})
+
+	// Direct send to one queue: the default exchange "" needs no declaration, and the
+	// routing key is the queue name.
+	m.svc.orderNotice = messaging.DeclareTypedPublisher[OrderNotice](decls, &messaging.PublisherOptions{
+		Exchange:   "",
+		RoutingKey: queue.Name,
+		EventType:  "OrderNotice",
+	})
 
 	// Consumer — auto-scales to NumCPU*4 workers for I/O-bound handlers
 	decls.DeclareConsumer(&messaging.ConsumerOptions{
@@ -3166,22 +3178,22 @@ err = m.pub.Publish(ctx, &streams.PublishMessage{
 
 ### Step 3: Implement the Producer (publish messages)
 
-The `messaging.AMQPClient` returned by `deps.Messaging(ctx)` exposes two publish APIs:
+Publishing goes through the `messaging.Publisher[T]` handle Step 2 declared, together with the
+`messaging.AMQPClient` from `deps.Messaging(ctx)`:
 
-| Method | Use when |
+| Call | What it does |
 |---|---|
-| `client.PublishToExchange(ctx, PublishOptions{...}, body)` | Routed publishing through a declared exchange (preferred) |
-| `client.Publish(ctx, destination, body)` | Direct send to a queue via the default exchange `""` (destination becomes routing key) |
+| `messaging.DeclareTypedPublisher[T](decls, opts)` | Declaration-time: registers the publisher exactly as `DeclarePublisher` does, and returns the handle |
+| `pub.Publish(ctx, client, evt)` | Call-time: JSON-marshals `evt` and publishes it to the DECLARED exchange, routing key, headers and delivery flags — the call site never re-spells them |
 
 ```go
 package orders
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
-	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 )
@@ -3194,9 +3206,17 @@ type OrderCreatedEvent struct {
 	Total      float64 `json:"total"       validate:"required,gt=0"`
 }
 
+// OrderNotice is what the direct default-exchange send below carries.
+type OrderNotice struct {
+	OrderID int64  `json:"order_id" validate:"required"`
+	Text    string `json:"text"     validate:"required"`
+}
+
 type OrderService struct {
 	getDB        func(context.Context) (database.Interface, error)
 	getMessaging func(context.Context) (messaging.AMQPClient, error)
+	orderCreated *messaging.Publisher[OrderCreatedEvent] // set in Module.DeclareMessaging (Step 2)
+	orderNotice  *messaging.Publisher[OrderNotice]       // default-exchange handle, same place
 	logger       logger.Logger
 }
 
@@ -3205,38 +3225,34 @@ func NewOrderService(getDB func(context.Context) (database.Interface, error),
 	return &OrderService{getDB: getDB, getMessaging: getMessaging}
 }
 
-// PublishOrderCreated — preferred: routed through the declared topic exchange
+// PublishOrderCreated — routed through the topic exchange the handle was declared on
 func (s *OrderService) PublishOrderCreated(ctx context.Context, evt OrderCreatedEvent) error {
 	client, err := s.getMessaging(ctx)
 	if err != nil {
 		return fmt.Errorf("messaging unavailable: %w", err)
 	}
 
-	payload, err := json.Marshal(evt)
-	if err != nil {
-		return fmt.Errorf("marshal event: %w", err)
-	}
-
-	return client.PublishToExchange(ctx, messaging.PublishOptions{
-		Exchange:   "orders.events",   // matches DeclareTopicExchange in Step 2
-		RoutingKey: "order.created",   // matches DeclarePublisher in Step 2
-		Headers: map[string]any{
-			"event_type":     "OrderCreated",
-			"correlation_id": fmt.Sprintf("order-%d", evt.OrderID),
-		},
-	}, payload)
+	// Marshaling and the destination both come from the handle. A marshal failure is
+	// returned wrapped and publishes nothing; every other error is the client's own
+	// (ErrPublishRetriesExhausted, ErrInvalidPublishDestination, ...), returned unwrapped.
+	return s.orderCreated.Publish(ctx, client, evt)
 	// W3C traceparent header is injected automatically; consumers extract it on receive.
 }
 
-// NotifyDirectQueue — fallback: send directly via default exchange "" (destination is the queue name)
-func (s *OrderService) NotifyDirectQueue(ctx context.Context, queueName string, body []byte) error {
+// NotifyDirectQueue — direct send via the default exchange declared in Step 2
+func (s *OrderService) NotifyDirectQueue(ctx context.Context, notice OrderNotice) error {
 	client, err := s.getMessaging(ctx)
 	if err != nil {
 		return err
 	}
-	return client.Publish(ctx, queueName, body) // default exchange "" + destination as routing key
+	return s.orderNotice.Publish(ctx, client, notice)
 }
 ```
+
+The handle is immutable after declaration and safe to share across goroutines and tenants —
+one `*messaging.Publisher[T]` per module, not one per request. A named exchange must be declared
+(`Declarations.Validate` fails startup otherwise); the default exchange `""` is the one exception —
+it is built into AMQP, so it is never declared and its routing key is the queue name.
 
 > When a publish must be **atomic with database changes** (e.g. write order + emit `order.created`), use the **Transactional Outbox** instead — events are written in the same SQL transaction and a relay publishes them reliably (see Transactional Outbox section).
 
@@ -3391,8 +3407,9 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 | Concern | API |
 |---|---|
 | Get client (tenant-aware) | `client, err := deps.Messaging(ctx)` |
-| Publish — routed (preferred) | `client.PublishToExchange(ctx, messaging.PublishOptions{Exchange, RoutingKey, Headers}, body)` |
-| Publish — default exchange | `client.Publish(ctx, queueName, body)` |
+| Declare a publisher (returns the handle) | `pub := messaging.DeclareTypedPublisher[T](decls, &messaging.PublisherOptions{Exchange, RoutingKey, EventType, Headers})` |
+| Publish — routed | `pub.Publish(ctx, client, evt)` — destination and headers come from the declaration |
+| Publish — default exchange | declare with `Exchange: ""` and `RoutingKey: queueName`, then the same `pub.Publish(ctx, client, evt)` |
 | Atomic publish (with DB) | Use Transactional Outbox — `deps.Outbox.Publish(ctx, tx, event)` |
 | Consumer Handler | `Handle(ctx, *amqp.Delivery) error` + `EventType() string` |
 | Typed consumer (decode + validate) | `messaging.DeclareTypedConsumer(decls, opts, fn)` — `fn` is `func(ctx, T) error` |
@@ -4781,7 +4798,7 @@ When `observability.enabled: true`, the framework auto-emits:
 |---|---|---|---|
 | HTTP server | `HTTP {method} {route}` | `http.request.method`, `http.route`, `http.response.status_code`, `http.request.body_size` | Every incoming request |
 | Database | `db.query` / `db.exec` | `db.system.name`, `db.query.text`, `db.namespace` | Every `Query`/`Exec`/`QueryRow` |
-| AMQP publish | `{destination} publish` | `messaging.system`, `messaging.destination.name`, `messaging.rabbitmq.destination.routing_key` | Every `Publish`/`PublishToExchange` |
+| AMQP publish | `{destination} publish` | `messaging.system`, `messaging.destination.name`, `messaging.rabbitmq.destination.routing_key` | Every `Publisher[T].Publish` |
 | AMQP consume | `{queue} receive` | `messaging.system`, `messaging.destination.name`, `messaging.rabbitmq.exchange` | Every message received |
 | Outbound HTTP | propagates `traceparent` | `url.path`, `http.request.method` | Via `httpclient` package |
 | JOSE | `jose.decode_request` / `jose.encode_response` | `jose.direction`; `jose.error.code` on failure | Every JOSE-tagged route |
@@ -5275,7 +5292,7 @@ func main() {
 |-----------|-----------|----------------|---------|
 | HTTP server | `HTTP {method} {route}` | `http.request.method`, `http.route`, `http.response.status_code` | Every incoming request |
 | Database | `db.query` / `db.exec` | `db.system.name`, `db.query.text` | Every `Query()`/`Exec()` call |
-| AMQP publish | `{destination} publish` | `messaging.system`, `messaging.destination.name`, `messaging.operation.name` | Every `Publish()`/`PublishToExchange()` call |
+| AMQP publish | `{destination} publish` | `messaging.system`, `messaging.destination.name`, `messaging.operation.name` | Every `Publisher[T].Publish()` call |
 | AMQP consume | `{queue} receive` | `messaging.system`, `messaging.destination.name`, `messaging.operation.name` | Every message received |
 | Outbound HTTP | Propagates `traceparent` | `url.path`, `http.request.method` | Via `httpclient` package |
 

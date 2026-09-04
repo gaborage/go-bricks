@@ -545,6 +545,16 @@ func TestDeclarationsValidate(t *testing.T) {
 		assert.Contains(t, err.Error(), "publisher references non-existent exchange: missing-exchange")
 	})
 
+	t.Run("publisher on the default exchange needs no declaration", func(t *testing.T) {
+		// The empty exchange is AMQP's built-in default: never declared, and every
+		// queue is bound to it under its own name. A declared publisher must be able
+		// to name it, or the typed publish door cannot reach a queue directly.
+		decls := NewDeclarations()
+		decls.RegisterPublisher(&PublisherDeclaration{Exchange: "", RoutingKey: "orders.processing"})
+
+		assert.NoError(t, decls.Validate())
+	})
+
 	t.Run("empty declarations are valid", func(t *testing.T) {
 		decls := NewDeclarations()
 
@@ -877,6 +887,31 @@ func fillNonZero(t *testing.T, v reflect.Value) {
 // TestDeclarationsHashSeparatesTenantOptional pins that the replay hash tells two
 // consumer sets apart when only TenantOptional differs. Without it a tenancy change
 // would reuse a cached replay and leave the old fail-closed posture in force.
+// TestDefaultExchangeTypedPublisherPublishesByQueueName pairs the Validate
+// exemption above with what it exists for: a typed publisher declared on the
+// default exchange passes validation and publishes with the queue name as the
+// routing key, which is how AMQP's default exchange reaches a queue directly.
+func TestDefaultExchangeTypedPublisherPublishesByQueueName(t *testing.T) {
+	const queue = "orders.processing"
+
+	decls := NewDeclarations()
+	decls.DeclareQueue(queue)
+	pub := DeclareTypedPublisher[orderCreated](decls, &PublisherOptions{
+		Exchange:   "",
+		RoutingKey: queue,
+		EventType:  "OrderCreated",
+	})
+	require.NoError(t, decls.Validate())
+
+	client := &capturingPublishClient{}
+	require.NoError(t, pub.Publish(t.Context(), client, orderCreated{OrderID: 9}))
+
+	frames := client.captured()
+	require.Len(t, frames, 1)
+	assert.Empty(t, frames[0].options.Exchange, "publishes to the default exchange")
+	assert.Equal(t, queue, frames[0].options.RoutingKey, "routed by queue name")
+}
+
 func TestDeclarationsHashSeparatesTenantOptional(t *testing.T) {
 	build := func(optional bool) *Declarations {
 		d := NewDeclarations()
