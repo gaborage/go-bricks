@@ -44,6 +44,15 @@ type Declarations struct {
 	consumerIndex  map[consumerKey]*ConsumerDeclaration // Deduplication + O(1) lookup
 	consumerOrder  []consumerKey                        // Deterministic iteration order
 	queueConflicts []queueConflict                      // Incompatible queue re-declarations, reported by Validate
+	sealErr        error                                // First seal-tagged declaration that cannot seal, reported by Validate
+}
+
+// recordSealError keeps the first sealing startup failure for Validate to report; startup
+// stops at the first one, so later failures are not collected.
+func (d *Declarations) recordSealError(err error) {
+	if d.sealErr == nil {
+		d.sealErr = err
+	}
 }
 
 // NewDeclarations creates a new empty declarations store.
@@ -290,6 +299,15 @@ func (d *Declarations) Consumers() []*ConsumerDeclaration {
 // Validate checks the integrity of all declarations.
 // It ensures that references between declarations are valid.
 func (d *Declarations) Validate() error {
+	// A seal-tagged declaration that cannot seal — codec not linked, runtime not
+	// configured, no key material, a refused declaration or Activation — is a
+	// startup failure, never a publish-time one (ADR-097). It is reported before
+	// the topology rules because it names a declaration the module author wrote
+	// and the remedy is theirs (an import, a keystore entry, a selector), whereas
+	// a queue conflict or a dangling binding is a relationship between modules.
+	if d.sealErr != nil {
+		return d.sealErr
+	}
 	if err := d.validateQueueConflicts(); err != nil {
 		return err
 	}
@@ -574,6 +592,7 @@ func (d *Declarations) Clone() *Declarations {
 
 	// A clone that passed a validation its source failed would be a trap.
 	clone.queueConflicts = slices.Clone(d.queueConflicts)
+	clone.sealErr = d.sealErr
 
 	// Clone bindings
 	for _, binding := range d.Bindings {
