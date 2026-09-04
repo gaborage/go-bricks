@@ -140,6 +140,8 @@ func openCount(t *testing.T, reader *sdkmetric.ManualReader) uint64 {
 	return 0
 }
 
+// failureCount sums the open-failure counter for one code, or across every code
+// when code is "".
 func failureCount(t *testing.T, reader *sdkmetric.ManualReader, code string) int64 {
 	t.Helper()
 	var rm metricdata.ResourceMetrics
@@ -153,7 +155,7 @@ func failureCount(t *testing.T, reader *sdkmetric.ManualReader, code string) int
 			require.True(t, ok)
 			var n int64
 			for _, dp := range sum.DataPoints {
-				if c, _ := dp.Attributes.Value(sealruntime.AttrCode); c.AsString() == code {
+				if c, _ := dp.Attributes.Value(sealruntime.AttrCode); code == "" || c.AsString() == code {
 					n += dp.Value
 				}
 			}
