@@ -95,7 +95,7 @@ func DeclareTypedPublisher[T any](decls *Declarations, opts *PublisherOptions) *
 		handle.sealErr = err
 		return handle
 	}
-	if IsSealTagged(t) {
+	if hasSealTag(t) {
 		sealer, err := newSealer(t, decl.EventType)
 		if err != nil {
 			decls.recordSealError(err)

@@ -81,9 +81,16 @@ func IsSealTagged(t reflect.Type) bool {
 		tagged, _ := v.(bool)
 		return tagged
 	}
-	v := hasSealTagIn(t, nil) || misplacedSealTag(t) != ""
+	v := hasSealTag(t) || misplacedSealTag(t) != ""
 	sealTagCache.Store(t, v)
 	return v
+}
+
+// hasSealTag is the bare probe at the depth jose/sealed.ScanType inspects — own fields
+// plus the members an untagged embed promotes — with no memo and no misplaced-tag half.
+// The typed doors call it after the misplaced check; IsSealTagged builds on it.
+func hasSealTag(t reflect.Type) bool {
+	return hasSealTagIn(t, nil)
 }
 
 // sealTagCache memoizes IsSealTagged per struct type: keyed by the reflect.Type
