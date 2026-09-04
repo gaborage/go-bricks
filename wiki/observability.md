@@ -53,7 +53,7 @@ Span helpers: `AssertSpanName`, `AssertSpanAttribute`, `AssertSpanStatus`, `Asse
 
 **Common Issues:** Spans not appearing (check `observability.enabled`, wait for batch timeout), logs not exported (verify `observability.logs.enabled`, set `log.pretty: false`), pretty mode conflict (fails fast at startup). See the Troubleshooting section in [wiki/troubleshooting.md](troubleshooting.md#observability-issues) for details
 
-**Log format selection (`log.output.format`):** Defaults to `auto`, which resolves to console (colored) output when stdout is a terminal AND OTLP log export is not active; otherwise structured JSON. Explicit values: `console` / `pretty` (always colored), `json` / `structured` (always JSON). The legacy `log.pretty: true` still works and overrides `log.output.format`. Combining pretty output with `observability.logs.enabled: true` still panics at startup — `auto` is the safe default that keeps local dev colored and production JSON without manual configuration.
+**Log format selection (`log.output.format`):** Defaults to `auto`, which resolves to console (colored) output when stdout is a terminal AND OTLP log export is not active; otherwise structured JSON. Explicit values: `console` / `pretty` (always colored), `json` / `structured` (always JSON). The legacy `log.pretty: true` still works and overrides `log.output.format`. Combining pretty output with `observability.logs.enabled: true` still panics at startup — `auto` is the safe default that keeps local dev colored and production JSON without manual configuration. Console mode renders a message containing a control byte (below 0x20, or 0x7f) Go-quoted, so a single event cannot span lines; messages without control bytes render unquoted.
 
 ## Sensitive Data Filtering
 
