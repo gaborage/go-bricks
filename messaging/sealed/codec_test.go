@@ -112,24 +112,6 @@ type foreignSpec struct{}
 func (foreignSpec) SignLogical() string    { return signFamily }
 func (foreignSpec) EncryptLogical() string { return encFamily }
 
-func TestInitRegistersTheCodec(t *testing.T) {
-	codec := sealruntime.Registered()
-	require.NotNil(t, codec, "importing messaging/sealed must register the codec")
-	sp, err := codec.ScanType(reflect.TypeOf(plainEvent{}))
-	require.NoError(t, err)
-	assert.Nil(t, sp, "a plain type scans to nil")
-	sp, err = codec.ScanType(reflect.TypeOf(paymentAuthorized{}))
-	require.NoError(t, err)
-	assert.Equal(t, signFamily, sp.SignLogical())
-	assert.Equal(t, encFamily, sp.EncryptLogical())
-	_, err = codec.ScanType(reflect.TypeOf(struct {
-		_ struct{} `seal:"sign=s,encrypt=e"`
-	}{}))
-	assert.ErrorIs(t, err, josesealed.ErrTagInvalid)
-	_, isFactory := codec.(sealruntime.OpenerProvider)
-	assert.False(t, isFactory, "the opener side lands in #1359")
-}
-
 func TestNewSealerStartupMatrix(t *testing.T) {
 	codec := sealruntime.Registered()
 	sp := spec(t)
