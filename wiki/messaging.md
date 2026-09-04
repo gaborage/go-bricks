@@ -48,8 +48,10 @@ RabbitMQ 4.3.0 denies `transient_nonexcl_queues` by default: a queue declared wi
 **Publishing** uses the handle from the declaration and the tenant-aware client:
 `m.issuanceCreated.Publish(ctx, client, evt)`, where `client` comes from `deps.Messaging(ctx)`.
 The handle carries the declared exchange, routing key, default headers and delivery flags, so the
-call site never re-spells them; it JSON-marshals `evt` and is immutable, hence safe to share
-across goroutines and tenants. A marshal failure publishes nothing and comes back wrapped; every
+call site never re-spells them; it JSON-marshals `evt` and is itself never written after
+declaration, hence safe to share across goroutines and tenants. The declared headers are copied
+one level deep, so keep those values scalars: a nested map or slice stays shared with the caller,
+and writing to one races with every publish and reaches every tenant. A marshal failure publishes nothing and comes back wrapped; every
 other error is the client's own, returned unwrapped. A named exchange must be declared or
 `Validate` fails startup; the default exchange `""` is the exception — AMQP builds it in, so a
 publisher declared with `Exchange: ""` and the queue name as its `RoutingKey` sends to that queue
@@ -150,7 +152,7 @@ messaging: decode failed for event "LimitsUpdated": json: type mismatch (want in
 messaging: validate failed for event "OrderCreated" (fields: OrderCreated.Currency)
 ```
 
-**Delivery metadata.** `DeclareTypedConsumerWithMeta` / `messaging.NewTypedHandlerWithMeta[T](eventType, fn)` are the metadata-carrying siblings of `DeclareTypedConsumer` / `NewTypedHandler`: `fn` is `func(ctx context.Context, payload T, meta messaging.Metadata) error`, with the same decode → validate → `fn` pipeline and failure semantics. `Metadata` exposes read-only accessors — `Headers() amqp.Table`, `EventType() string`, `Redelivered() bool`, `DedupKey() (string, error)` and `Sealed() (SealedEnvelope, bool)` — so a typed consumer can take the ledger key and wrap its body in `inbox.ProcessOnce`, the canonical composition for an outbox-fed consumer. `DedupKey` returns the `x-outbox-event-id` header once it passes the ledger grammar `^[A-Za-z0-9_-]{1,128}$`, or an error wrapping `messaging.ErrInvalidEventID` when the header is absent or malformed; `inbox.ProcessOnce` re-checks the same grammar at the ledger door, so an id obtained any other way is refused there. `Sealed` answers per consumer TYPE: a plain typed consumer gets `(zero, false)` for every delivery, whatever the publisher wrote.
+**Delivery metadata.** `DeclareTypedConsumerWithMeta` / `messaging.NewTypedHandlerWithMeta[T](eventType, fn)` are the metadata-carrying siblings of `DeclareTypedConsumer` / `NewTypedHandler`: `fn` is `func(ctx context.Context, payload T, meta messaging.Metadata) error`, with the same decode → validate → `fn` pipeline and failure semantics. `Metadata` exposes read-only accessors — `Headers() amqp.Table`, `EventType() string`, `Redelivered() bool`, `DedupKey() (string, error)` and `Sealed() (SealedEnvelope, bool)` — so a typed consumer can take the ledger key and wrap its body in `inbox.ProcessOnce`, the canonical composition for an outbox-fed consumer. `DedupKey` returns the `x-outbox-event-id` header once it passes the ledger grammar `^[A-Za-z0-9_-]{1,128}$`, or an error wrapping `messaging.ErrInvalidEventID` when the header is absent or malformed; `inbox.ProcessOnce` re-checks the same grammar at the ledger door, so an id obtained any other way is refused there. `Sealed` answers per-consumer type: a plain typed consumer gets `(zero, false)` for every delivery, whatever the publisher wrote.
 
 ```go
 // Same DeclareMessaging body as above, with this call REPLACING the

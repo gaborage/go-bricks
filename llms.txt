@@ -2929,6 +2929,7 @@ type Module struct {
 	svc          *OrderService
 	getMessaging func(context.Context) (messaging.AMQPClient, error)
 	pub          *streams.Publisher // native-stream publisher handle; set in DeclareStreams
+	inbox        app.InboxProcessor // for the outbox-dedup consumer further down
 	logger       logger.Logger
 }
 
@@ -2938,6 +2939,7 @@ func (m *Module) Shutdown() error { return nil }
 func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.logger = deps.Logger
 	m.getMessaging = deps.Messaging                  // function-based: tenant-aware
+	m.inbox = deps.Inbox                             // nil unless the inbox module is registered
 	m.svc = NewOrderService(deps.DB, deps.Messaging) // see Step 3
 	return nil
 }
