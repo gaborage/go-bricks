@@ -44,7 +44,9 @@ type SelectQueryBuilder struct {
 	selectBuilder squirrel.SelectBuilder
 	limit         uint64 // 0 means no limit
 	offset        uint64 // 0 means no offset
-	err           error  // Captured error from filter operations
+	// lock is the rendered row-lock clause, "" for none; see row_lock.go.
+	lock string
+	err  error // Captured error from filter operations
 }
 
 // check if SelectQueryBuilder implements dbtypes.SelectQueryBuilder
@@ -1242,15 +1244,26 @@ func (sqb *SelectQueryBuilder) ValidateForSubquery() error {
 	if sqb == nil {
 		return errors.New("subquery cannot be nil")
 	}
+	if sqb.lock != "" {
+		// A row lock belongs to the statement that holds the transaction, never
+		// to a nested SELECT: inside EXISTS/IN it is invalid on PostgreSQL and
+		// meaningless on Oracle, and buildSelectBuilder would render it.
+		return errors.New("subquery cannot carry a row lock (ForUpdate/ForUpdateNoWait)")
+	}
 
 	return sqb.err
 }
 
-// buildSelectBuilder returns the underlying squirrel.SelectBuilder with pagination applied.
+// buildSelectBuilder returns the underlying squirrel.SelectBuilder with
+// pagination and the row lock applied, in that order: squirrel renders LIMIT/
+// OFFSET before any suffix, and the Oracle OFFSET/FETCH clause is itself a
+// suffix, so appending the lock last puts it after pagination on both vendors.
 func (sqb *SelectQueryBuilder) buildSelectBuilder() squirrel.SelectBuilder {
-	builder := sqb.selectBuilder
+	return sqb.withRowLock(sqb.applyPagination(sqb.selectBuilder))
+}
 
-	// Apply pagination based on vendor
+// applyPagination renders LIMIT/OFFSET per vendor.
+func (sqb *SelectQueryBuilder) applyPagination(builder squirrel.SelectBuilder) squirrel.SelectBuilder {
 	if sqb.limit == 0 && sqb.offset == 0 {
 		return builder
 	}
@@ -1280,6 +1293,9 @@ func (sqb *SelectQueryBuilder) ToSQL() (sql string, args []any, err error) {
 	// Return any captured filter errors first
 	if sqb.err != nil {
 		return "", nil, sqb.err
+	}
+	if err := sqb.validateRowLock(); err != nil {
+		return "", nil, err
 	}
 
 	builder := sqb.buildSelectBuilder()

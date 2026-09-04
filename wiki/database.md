@@ -648,11 +648,24 @@ if errors.Is(err, database.ErrNoRows) {
 }
 ```
 
+**Row locks.** `ForUpdate()` and `ForUpdateNoWait()` append the lock clause after pagination on both vendors, so a builder SELECT no longer needs `database.Raw` for it. `NOWAIT` fails immediately when another session holds the row — match `database.IsLockNotAvailable(err)` — which is the leader-election shape; plain `FOR UPDATE` blocks. Run either inside `database.WithTx`: the lock lives as long as the transaction. On Oracle a lock cannot be combined with `Limit`/`Offset` — the SQL Language Reference's row_limiting_clause restriction — and `ToSQL` fails with `ErrRowLockWithPagination`; PostgreSQL accepts `LIMIT … FOR UPDATE`.
+
+```go
+// One relay instance leads this ledger: the loser gets 55P03 / ORA-00054, not a wait.
+lead := qb.Select("id").From(ledger + "_leader").Where(f.Eq("id", 1)).ForUpdateNoWait()
+err := database.ExecuteQuerySingle(ctx, tx, lead, "lead", &id)
+if database.IsLockNotAvailable(err) {
+    return errAnotherInstanceLeads
+}
+```
+
+"Lock the row if it exists, insert it otherwise" has no single-statement builder form: PostgreSQL's `ON CONFLICT … DO UPDATE SET c = EXCLUDED.c` idiom updates a conflict column, which `BuildUpsert` refuses on every vendor for Oracle MERGE parity (ORA-38104), and Oracle has no equivalent. Write it as two statements under the transaction — `Select(...).ForUpdate()` then `Insert` on `ErrNoRows` — or keep the PostgreSQL idiom as annotated raw SQL. The two-statement form is safe only when the lookup key carries a unique or primary-key constraint: two transactions can both see `ErrNoRows` before either inserts, so the loser's `Insert` fails with a unique violation (`database.IsUniqueViolation`) and must re-read or retry rather than treat it as an error. Where that re-read runs depends on the vendor: PostgreSQL aborts the whole transaction on SQLSTATE 23505 (every later statement fails with "current transaction is aborted"), so either run the `Insert` under a savepoint and `ROLLBACK TO SAVEPOINT` before re-reading, or roll back and restart the transaction; Oracle's ORA-00001 is statement-level, the transaction stays usable and the re-read can follow on it directly.
+
 `database.Raw(sql string, args ...any)` adapts hand-written SQL to the same helpers — it is an escape hatch on par with `Filter.Raw`/`JoinFilter.Raw`, and broader (the SQL string replaces the whole statement, bypassing the builder's identifier validation entirely). **Every** call site requires the same review annotation `f.Raw()`/`jf.Raw()` do:
 
 ```go
 // SECURITY: Manual SQL review completed - static SQL, no user input concatenated, values parameterized via args
-q := database.Raw("SELECT id, name FROM users WHERE tier = $1 FOR UPDATE", tier)
+q := database.Raw("SELECT id, name FROM users WHERE tier = $1 UNION SELECT id, name FROM archived_users WHERE tier = $1", tier)
 err := database.ExecuteQuerySingle(ctx, tx, q, "tier_lookup", &row.ID, &row.Name)
 ```
 

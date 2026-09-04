@@ -375,6 +375,16 @@ func (m *MockSelectQueryBuilder) OrderBy(orderBys ...any) types.SelectQueryBuild
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
+func (m *MockSelectQueryBuilder) ForUpdate() types.SelectQueryBuilder {
+	args := m.MethodCalled("ForUpdate")
+	return args.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockSelectQueryBuilder) ForUpdateNoWait() types.SelectQueryBuilder {
+	args := m.MethodCalled("ForUpdateNoWait")
+	return args.Get(0).(types.SelectQueryBuilder)
+}
+
 func (m *MockSelectQueryBuilder) Limit(limit uint64) types.SelectQueryBuilder {
 	args := m.MethodCalled("Limit", limit)
 	return args.Get(0).(types.SelectQueryBuilder)
