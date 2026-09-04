@@ -80,8 +80,8 @@ func NewOracleHoldStore(tableName string) (HoldStore, error) {
 			vendor:         "oracle",
 			table:          tableName,
 			tenantTable:    tableName + holdTenantTableSuffix,
-			now:            "SYSTIMESTAMP",
-			secondsFromNow: "SYSTIMESTAMP + NUMTODSINTERVAL(?, 'SECOND')",
+			now:            oracleNow,
+			secondsFromNow: oracleNow + " + NUMTODSINTERVAL(?, 'SECOND')",
 			noError:        "NVL(last_error, ' ')",
 		},
 	}, nil
@@ -104,6 +104,8 @@ func (s *oracleHoldStore) Park(ctx context.Context, tx dbtypes.Tx, row *HoldRow)
 		return false, err
 	}
 
+	// SECURITY: Manual SQL review completed - oracleNow is a package constant holding the
+	// vendor clock; every other value is bound
 	insert, insertArgs, err := s.qb.Insert(s.table).
 		Columns(colConsumer, colStream, colStreamOffset, colTenantID, colData, colProperties, colHeldAt).
 		Values(row.Consumer, row.Stream, row.Offset, row.TenantID, row.Data, row.Properties, s.qb.MustExpr(oracleNow)).
@@ -133,6 +135,8 @@ func (s *oracleHoldStore) holdTenantMarker(ctx context.Context, tx dbtypes.Tx, r
 	if err != nil {
 		return fmt.Errorf("inbox oracle: build tenant marker lock failed: %w", err)
 	}
+	// SECURITY: Manual SQL review completed - oracleNow is a package constant holding the
+	// vendor clock; the consumer and tenant are bound, attempts starts at a literal 0
 	insert, insertArgs, err := s.qb.Insert(s.tenantTable).
 		Columns(colConsumer, colTenantID, colHeldSince, colAttempts, colNextAttemptAt).
 		Values(row.Consumer, row.TenantID, s.qb.MustExpr(oracleNow), 0, s.qb.MustExpr(oracleNow)).

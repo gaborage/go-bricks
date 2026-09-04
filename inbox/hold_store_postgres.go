@@ -55,6 +55,9 @@ type postgresHoldStore struct {
 	holdQueries
 }
 
+// pgNow is the PostgreSQL clock the hold columns hold.
+const pgNow = "NOW()"
+
 // NewPostgresHoldStore creates a PostgreSQL hold store, refusing a table name
 // whose derived names would not fit.
 func NewPostgresHoldStore(tableName string) (HoldStore, error) {
@@ -71,8 +74,8 @@ func NewPostgresHoldStore(tableName string) (HoldStore, error) {
 			vendor:         "postgres",
 			table:          tableName,
 			tenantTable:    tableName + holdTenantTableSuffix,
-			now:            "NOW()",
-			secondsFromNow: "NOW() + (? * INTERVAL '1 second')",
+			now:            pgNow,
+			secondsFromNow: pgNow + " + (? * INTERVAL '1 second')",
 			noError:        "COALESCE(last_error, '')",
 		},
 	}, nil
