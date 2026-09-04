@@ -326,22 +326,33 @@ func (d *Declarations) Validate() error {
 	}
 
 	for _, publisher := range d.Publishers {
-		// AMQP's built-in default exchange: never declared, and every queue is bound
-		// to it under its own name, so this publisher routes by queue name through
-		// its RoutingKey. That makes the routing key load-bearing: with both fields
-		// empty the broker takes the publish and drops it (nothing is bound to ""
-		// and publishes are not Mandatory by default), which is what an omitted
-		// Exchange looks like. Fail startup instead of publishing into a black hole.
-		if publisher.Exchange == "" {
-			if publisher.RoutingKey == "" {
-				return fmt.Errorf("publisher on the default exchange has no routing key: set RoutingKey to the target queue name%s",
-					eventTypeSuffix(publisher.EventType))
-			}
-			continue
+		if err := d.validatePublisherDestination(publisher); err != nil {
+			return err
 		}
-		if _, exists := d.Exchanges[publisher.Exchange]; !exists {
-			return fmt.Errorf("publisher references non-existent exchange: %s", publisher.Exchange)
+	}
+
+	return nil
+}
+
+// validatePublisherDestination checks that one publisher declaration names a
+// destination a publish can actually reach.
+func (d *Declarations) validatePublisherDestination(publisher *PublisherDeclaration) error {
+	// AMQP's built-in default exchange: never declared, and every queue is bound
+	// to it under its own name, so this publisher routes by queue name through
+	// its RoutingKey. That makes the routing key load-bearing: with both fields
+	// empty the broker takes the publish and drops it (nothing is bound to ""
+	// and publishes are not Mandatory by default), which is what an omitted
+	// Exchange looks like. Fail startup instead of publishing into a black hole.
+	if publisher.Exchange == "" {
+		if publisher.RoutingKey == "" {
+			return fmt.Errorf("publisher on the default exchange has no routing key: set RoutingKey to the target queue name%s",
+				eventTypeSuffix(publisher.EventType))
 		}
+		return nil
+	}
+
+	if _, exists := d.Exchanges[publisher.Exchange]; !exists {
+		return fmt.Errorf("publisher references non-existent exchange: %s", publisher.Exchange)
 	}
 
 	return nil
