@@ -58,7 +58,10 @@ func Decrypt(compact string, key *rsa.PrivateKey, opts *DecryptOptions) ([]byte,
 		return nil, Header{}, ErrParseEncrypted
 	}
 
-	hdr := newHeader(jwe.Header.KeyID, jwe.Header.Algorithm, jwe.Header.ExtraHeaders)
+	hdr, ok := parsedHeader(compact)
+	if !ok {
+		return nil, Header{}, ErrParseEncrypted
+	}
 
 	if hdr.Kid == "" {
 		return nil, hdr, ErrKidMissing
@@ -92,8 +95,10 @@ func Verify(compact string, key *rsa.PublicKey, opts *VerifyOptions) ([]byte, He
 		return nil, Header{}, ErrParseSigned
 	}
 
-	sig := jws.Signatures[0]
-	hdr := newHeader(sig.Protected.KeyID, sig.Protected.Algorithm, sig.Protected.ExtraHeaders)
+	hdr, ok := parsedHeader(compact)
+	if !ok {
+		return nil, Header{}, ErrParseSigned
+	}
 
 	if hdr.Kid == "" {
 		return nil, hdr, ErrKidMissing

@@ -120,24 +120,45 @@ func PeekProtectedHeader(compact string) (Header, error) {
 	if len(segments[0]) > maxPeekHeaderBytes {
 		return Header{}, fmt.Errorf("%w: segment 0 exceeds %d bytes", ErrPeekMalformed, maxPeekHeaderBytes)
 	}
-	raw, err := base64.RawURLEncoding.DecodeString(segments[0])
+	params, err := decodeProtected(segments[0])
 	if err != nil {
-		return Header{}, fmt.Errorf("%w: segment 0 is not base64url", ErrPeekMalformed)
+		return Header{}, err
+	}
+	return newHeader(params), nil
+}
+
+// decodeProtected base64url-decodes one protected-header segment into its JSON object.
+func decodeProtected(segment string) (map[string]any, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(segment)
+	if err != nil {
+		return nil, fmt.Errorf("%w: segment 0 is not base64url", ErrPeekMalformed)
 	}
 	var params map[string]any
 	if err := json.Unmarshal(raw, &params); err != nil || params == nil {
-		return Header{}, fmt.Errorf("%w: segment 0 is not a JSON object", ErrPeekMalformed)
+		return nil, fmt.Errorf("%w: segment 0 is not a JSON object", ErrPeekMalformed)
 	}
-	return newHeader(stringParam(params, "kid"), stringParam(params, "alg"), params), nil
+	return params, nil
 }
 
-// newHeader builds a Header from the promoted kid/alg and a protected-header param map
-// (go-jose's ExtraHeaders, or the raw object PeekProtectedHeader decodes). Owned params
-// fill the typed fields; everything else lands in Extra, nil when nothing remains.
-func newHeader[K ~string](kid, alg string, params map[K]any) Header {
+// parsedHeader rebuilds the Header for a compact serialization go-jose has already
+// accepted. It decodes segment 0 itself rather than reading go-jose's ExtraHeaders, which
+// omits the params go-jose promotes to struct fields (jwk, nonce, x5c); this keeps Extra
+// identical to what PeekProtectedHeader returned for the same bytes.
+func parsedHeader(compact string) (Header, bool) {
+	segment, _, _ := strings.Cut(compact, ".")
+	params, err := decodeProtected(segment)
+	if err != nil {
+		return Header{}, false
+	}
+	return newHeader(params), true
+}
+
+// newHeader builds a Header from a decoded protected-header object. Owned params fill the
+// typed fields; everything else lands in Extra, nil when nothing remains.
+func newHeader(params map[string]any) Header {
 	return Header{
-		Kid:   kid,
-		Alg:   alg,
+		Kid:   stringParam(params, "kid"),
+		Alg:   stringParam(params, "alg"),
 		Enc:   stringParam(params, "enc"),
 		Cty:   stringParam(params, string(jose.HeaderContentType)),
 		Typ:   stringParam(params, string(jose.HeaderType)),
@@ -145,21 +166,21 @@ func newHeader[K ~string](kid, alg string, params map[K]any) Header {
 	}
 }
 
-func stringParam[K ~string](params map[K]any, name string) string {
-	s, _ := params[K(name)].(string)
+func stringParam(params map[string]any, name string) string {
+	s, _ := params[name].(string)
 	return s
 }
 
-func filterOwned[K ~string](params map[K]any) map[string]any {
+func filterOwned(params map[string]any) map[string]any {
 	var out map[string]any
 	for k, v := range params {
-		if _, owned := ownedParams[string(k)]; owned {
+		if _, owned := ownedParams[k]; owned {
 			continue
 		}
 		if out == nil {
 			out = make(map[string]any, len(params))
 		}
-		out[string(k)] = v
+		out[k] = v
 	}
 	return out
 }

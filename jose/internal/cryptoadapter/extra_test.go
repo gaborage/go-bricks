@@ -199,6 +199,32 @@ func TestPeekProtectedHeaderReturnsHeaderWithoutKey(t *testing.T) {
 	assert.Equal(t, verified, hdr)
 }
 
+func TestVerifyExtraKeepsParamsGoJosePromotes(t *testing.T) {
+	// go-jose lifts jwk, nonce and x5c out of ExtraHeaders into struct fields. Extra must
+	// still carry them so the verified header equals the peeked one for the same bytes.
+	key := testKey(t)
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: key},
+		(&jose.SignerOptions{EmbedJWK: true}).WithHeader("kid", "k").WithHeader("nonce", "n-1"))
+	require.NoError(t, err)
+	obj, err := signer.Sign([]byte(`{}`))
+	require.NoError(t, err)
+	compact, err := obj.CompactSerialize()
+	require.NoError(t, err)
+
+	_, verified, err := Verify(compact, &key.PublicKey, &VerifyOptions{AllowedSigAlgs: []jose.SignatureAlgorithm{jose.RS256}})
+	require.NoError(t, err)
+	nonce, ok := verified.ExtraString("nonce")
+	assert.True(t, ok)
+	assert.Equal(t, "n-1", nonce)
+	jwk, isObj := verified.Extra["jwk"].(map[string]any)
+	assert.True(t, isObj, "jwk must survive as the decoded JSON object")
+	assert.Equal(t, "RSA", jwk["kty"])
+
+	peeked, err := PeekProtectedHeader(compact)
+	require.NoError(t, err)
+	assert.Equal(t, peeked, verified)
+}
+
 func TestPeekProtectedHeaderOnJWEReadsEnc(t *testing.T) {
 	key := testKey(t)
 	compact, err := Encrypt([]byte(`{}`), &key.PublicKey, &EncryptOptions{Kid: "enc-1", KeyAlg: jose.RSA_OAEP_256, Enc: jose.A256GCM})
