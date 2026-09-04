@@ -5,7 +5,7 @@ go 1.27.0
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/squirrel v1.5.4
-	github.com/alicebob/miniredis/v2 v2.38.0
+	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/fxamacker/cbor/v2 v2.9.3
 	github.com/go-co-op/gocron/v2 v2.22.0
 	github.com/go-jose/go-jose/v4 v4.1.4
