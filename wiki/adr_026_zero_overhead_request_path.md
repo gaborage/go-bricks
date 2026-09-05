@@ -6,8 +6,9 @@
 > **Amended (2026-09-05, #1179):** The allocation guard for the default
 > middleware chain lives in `server/route_registrar_test.go`. It was not added by
 > this ADR — #627 (`b0ef71d1`, three weeks later) introduced it with a measured
-> baseline of 53 allocs/op. It reads 62 today, and this records where the six
-> came from. The decision below is unchanged.
+> baseline of 53 allocs/op. `defaultMiddlewareChainBaselineAllocs` is 62 today and
+> the ceiling it asserts against is 69; this records where the nine between 53 and
+> 62 came from, six of which are post-toolchain. The decision below is unchanged.
 >
 > - **Toolchain, 53 → 56** (#1177). Not this project's code: the anchor commit
 >   `b0ef71d1` reads 53 on go1.26.x and 56 on go1.27.1.
@@ -27,10 +28,18 @@
 >   head (removing both by overlay: 62 → 60), so the same commit gave one back
 >   elsewhere on this path; that half was not decomposed further.
 >
-> Net: five of the six are test-harness bookkeeping, one is a deliberate ingress
-> cost, and the toolchain adds three on top of the original 53. Every number was
-> measured on go1.27.1, three runs, all agreeing. Giving the guard a values-free
-> logger double and re-pinning to 57 is tracked in #1439.
+> Net of the nine: three toolchain, five test-harness bookkeeping, one a
+> deliberate ingress cost. Giving the guard a values-free logger double and
+> re-pinning to 57 is tracked in #1439.
+>
+> To reproduce: `go test -count=1 -run TestDefaultMiddlewareChainAllocsStable -v
+> ./server/` and read the value the test logs — `make test-alloc` runs the guard
+> but only asserts the ceiling. Three runs per data point, taking the value all
+> three agree on, since `AllocsPerRun` averages. The 57 comes from deleting the
+> two lines in `testLogEvent.Str` that build and fill `e.values` and re-running.
+> Every number here was produced on go1.27.1; `go.mod` pins go 1.27.0 and the
+> guard comment records the baseline as measured on 1.27.0, a patch-level
+> difference that does not move these counts.
 
 ## Context
 
