@@ -1505,6 +1505,15 @@ ADR-091 pattern). Additive: `messaging.EventPublisher[T]` and
 byte frame. The streams lane's `Publisher.Publish(*PublishMessage)` is untouched. See
 [migrations.md](migrations.md) `[C63.1]`.
 
+### [ADR-101: A Shipped Test Helper Aborts on the Failure That Invalidates the Rest](adr_101_test_helpers_abort_on_first_failure.md)
+
+**Date:** 2026-09-05 | **Status:** Accepted | **Breaking:** `keystore/testing.AssertKeyNotFound` aborts the caller's test when the public key is unexpectedly found, instead of recording the failure and judging the private key too
+
+`assert.Error` records and continues, so the helper went on to assert about the private key
+of a keystore already known to be in the wrong state — and that second result, pass or fail,
+is noise in a consumer's test output. The public-key check is now `require.Error`; the
+private-key check stays `assert.Error` because it is the last statement and invalidates
+nothing. The exported signature is unchanged. See [migrations.md](migrations.md) `[C64.4]`.
 ### [ADR-100: The Vendor's Identifier Grammar Lives Behind the Renderer Seam](adr_100_vendor_identifier_grammar_behind_renderer.md)
 
 **Date:** 2026-09-05 | **Status:** Accepted | **Breaking:** a PostgreSQL identifier argument containing `#` is refused at `ToSQL()` instead of failing at execution
@@ -2187,7 +2196,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-100) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-101) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
