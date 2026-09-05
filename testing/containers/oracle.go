@@ -18,6 +18,10 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
+// oraclePort is the container-side port every Oracle wait strategy and MappedPort
+// lookup addresses.
+const oraclePort = "1521/tcp"
+
 // OracleContainerConfig holds configuration for Oracle test container
 type OracleContainerConfig struct {
 	// ImageTag specifies the Oracle version (default: the pin in DefaultOracleConfig)
@@ -112,6 +116,27 @@ func StartOracleContainerForTestMain(ctx context.Context, cfg *OracleContainerCo
 	return cc, true, nil
 }
 
+// oracleContainerRequest builds the Oracle container request, wait strategy included.
+//
+// Composite wait strategy: log message (fast early signal) + port listening (network
+// verification) avoids a race where the log appears before Oracle is ready to accept
+// connections.
+func oracleContainerRequest(cfg *OracleContainerConfig) testcontainers.ContainerRequest {
+	return testcontainers.ContainerRequest{
+		Image:        fmt.Sprintf("gvenzl/oracle-free:%s", cfg.ImageTag),
+		ExposedPorts: []string{oraclePort},
+		Env: map[string]string{
+			"ORACLE_PASSWORD":   cfg.Password,
+			"APP_USER":          cfg.AppUser,
+			"APP_USER_PASSWORD": cfg.Password,
+		},
+		WaitingFor: waitAllWithin(cfg.StartupTimeout,
+			wait.ForLog("DATABASE IS READY TO USE!"),
+			wait.ForListeningPort(oraclePort),
+		),
+	}
+}
+
 // startOracleContainerInternal does the actual testcontainer setup without
 // any *testing.T interaction. Both StartOracleContainer (which adds *T-bound
 // Skip/Logf) and StartOracleContainerForTestMain wrap it.
@@ -120,27 +145,8 @@ func startOracleContainerInternal(ctx context.Context, cfg *OracleContainerConfi
 		cfg = DefaultOracleConfig()
 	}
 
-	env := map[string]string{
-		"ORACLE_PASSWORD":   cfg.Password,
-		"APP_USER":          cfg.AppUser,
-		"APP_USER_PASSWORD": cfg.Password,
-	}
-
-	// Composite wait strategy: log message (fast early signal) + port listening
-	// (network verification) avoids a race where the log appears before Oracle
-	// is ready to accept connections.
-	req := testcontainers.ContainerRequest{
-		Image:        fmt.Sprintf("gvenzl/oracle-free:%s", cfg.ImageTag),
-		ExposedPorts: []string{"1521/tcp"},
-		Env:          env,
-		WaitingFor: wait.ForAll(
-			wait.ForLog("DATABASE IS READY TO USE!"),
-			wait.ForListeningPort("1521/tcp"),
-		).WithStartupTimeout(cfg.StartupTimeout),
-	}
-
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
+		ContainerRequest: oracleContainerRequest(cfg),
 		Started:          true,
 	})
 	if err != nil {
@@ -153,7 +159,7 @@ func startOracleContainerInternal(ctx context.Context, cfg *OracleContainerConfi
 		return nil, fmt.Errorf("failed to get Oracle container host: %w", err)
 	}
 
-	mappedPort, err := container.MappedPort(ctx, "1521")
+	mappedPort, err := container.MappedPort(ctx, oraclePort)
 	if err != nil {
 		_ = container.Terminate(ctx)
 		return nil, fmt.Errorf("failed to get Oracle container port: %w", err)
