@@ -32,7 +32,7 @@ func TestJobRegistrarFixedRate(t *testing.T) {
 		require.NoError(t, err)
 
 		err = registrar.FixedRate(duplicatedJobID, job2, 60*time.Second)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), duplicatedJobID)
 		assert.Contains(t, err.Error(), "already registered")
 	})
@@ -42,7 +42,7 @@ func TestJobRegistrarFixedRate(t *testing.T) {
 		job := &testJob{}
 
 		err := registrar.FixedRate(testJobID, job, 0)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "interval")
 	})
 
@@ -51,7 +51,7 @@ func TestJobRegistrarFixedRate(t *testing.T) {
 		job := &testJob{}
 
 		err := registrar.FixedRate(testJobID, job, -10*time.Second)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "interval")
 	})
 }
@@ -77,7 +77,7 @@ func TestJobRegistrarDailyAt(t *testing.T) {
 		require.NoError(t, err)
 
 		err = registrar.DailyAt(duplicatedJobID, job2, localTime)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), duplicatedJobID)
 	})
 
@@ -121,7 +121,7 @@ func TestJobRegistrarWeeklyAt(t *testing.T) {
 		require.NoError(t, err)
 
 		err = registrar.WeeklyAt(duplicatedJobID, job2, time.Tuesday, localTime)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), duplicatedJobID)
 	})
 
@@ -161,7 +161,7 @@ func TestJobRegistrarHourlyAt(t *testing.T) {
 		require.NoError(t, err)
 
 		err = registrar.HourlyAt(duplicatedJobID, job2, 30)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), duplicatedJobID)
 	})
 
@@ -186,7 +186,7 @@ func TestJobRegistrarHourlyAt(t *testing.T) {
 		job := &testJob{}
 
 		err := registrar.HourlyAt(testJobID, job, 60)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "minute")
 	})
 
@@ -195,7 +195,7 @@ func TestJobRegistrarHourlyAt(t *testing.T) {
 		job := &testJob{}
 
 		err := registrar.HourlyAt(testJobID, job, -1)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "minute")
 	})
 }
@@ -221,7 +221,7 @@ func TestJobRegistrarMonthlyAt(t *testing.T) {
 		require.NoError(t, err)
 
 		err = registrar.MonthlyAt(duplicatedJobID, job2, 15, localTime)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), duplicatedJobID)
 	})
 
@@ -249,7 +249,7 @@ func TestJobRegistrarMonthlyAt(t *testing.T) {
 		localTime := mustParseTime("00:00")
 
 		err := registrar.MonthlyAt(testJobID, job, 0, localTime)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "day")
 	})
 
@@ -259,7 +259,7 @@ func TestJobRegistrarMonthlyAt(t *testing.T) {
 		localTime := mustParseTime("00:00")
 
 		err := registrar.MonthlyAt(testJobID, job, 32, localTime)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "day")
 	})
 }

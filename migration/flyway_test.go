@@ -389,7 +389,7 @@ func TestRunMigrationsAtStartup(t *testing.T) {
 			}
 
 			err := fm.RunMigrationsAtStartup(context.Background())
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			captured, readErr := os.ReadFile(capturePath)
 			require.NoError(t, readErr)
@@ -560,7 +560,7 @@ func TestRunFlywayCommandErrorHandling(t *testing.T) {
 
 		ctx := context.Background()
 		_, err := fm.Migrate(ctx, mcfg)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "flyway command failed")
 	})
 
@@ -574,7 +574,7 @@ func TestRunFlywayCommandErrorHandling(t *testing.T) {
 
 		ctx := context.Background()
 		_, err := fm.Migrate(ctx, mcfg)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid flyway path")
 	})
 
@@ -593,7 +593,7 @@ func TestRunFlywayCommandErrorHandling(t *testing.T) {
 
 		ctx := context.Background()
 		_, err := fm.Migrate(ctx, mcfg)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "flyway command failed")
 	})
 }
@@ -910,7 +910,7 @@ func TestMigrateEdgeCases(t *testing.T) {
 		}
 
 		_, err := fm.Migrate(context.Background(), nil)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		captured, readErr := os.ReadFile(capturePath)
 		require.NoError(t, readErr)
@@ -968,7 +968,7 @@ func TestInfoEdgeCases(t *testing.T) {
 		}
 
 		err := fm.Info(context.Background(), nil)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		captured, readErr := os.ReadFile(capturePath)
 		require.NoError(t, readErr)
@@ -1026,7 +1026,7 @@ func TestValidateEdgeCases(t *testing.T) {
 		}
 
 		err := fm.Validate(context.Background(), nil)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		captured, readErr := os.ReadFile(capturePath)
 		require.NoError(t, readErr)
@@ -1288,7 +1288,7 @@ func TestMigrateReturnsErrorOnUnparseableOutput(t *testing.T) {
 	fm, mcfg := newMigrateFixture(t, stub, "longenough-pw")
 	_, err := fm.Migrate(context.Background(), mcfg)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrFlywayOutputUnparsed)
+	require.ErrorIs(t, err, ErrFlywayOutputUnparsed)
 	assert.ErrorIs(t, err, errEmptyFlywayOutput, "no-'{' output maps to the empty sentinel underneath")
 }
 
@@ -1300,8 +1300,8 @@ func TestMigrateReturnsErrorOnMalformedJSON(t *testing.T) {
 	fm, mcfg := newMigrateFixture(t, stub, "longenough-pw")
 	_, err := fm.Migrate(context.Background(), mcfg)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrFlywayOutputUnparsed)
-	assert.NotErrorIs(t, err, errEmptyFlywayOutput, "malformed JSON is distinct from empty output")
+	require.ErrorIs(t, err, ErrFlywayOutputUnparsed)
+	require.NotErrorIs(t, err, errEmptyFlywayOutput, "malformed JSON is distinct from empty output")
 	assert.NotErrorIs(t, err, ErrFlywayReportedFailure)
 }
 
@@ -1313,11 +1313,11 @@ func TestMigrateReturnsErrorOnErrorEnvelopeExitZero(t *testing.T) {
 	fm, mcfg := newMigrateFixture(t, stub, "longenough-pw")
 	res, err := fm.Migrate(context.Background(), mcfg)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrFlywayReportedFailure, "a success:false envelope must surface even at exit 0")
 	assert.False(t, res.Success)
 	assert.Equal(t, "VALIDATE_ERROR", res.ErrorCode)
 	assert.NotContains(t, err.Error(), "checksum mismatch", "free-text ErrorMessage must not leak into the error")
 	assert.NotContains(t, err.Error(), "longenough-pw", "password must never appear in the error")
+	require.ErrorIs(t, err, ErrFlywayReportedFailure, "a success:false envelope must surface even at exit 0")
 }
 
 func TestMigrateRejectsShortPassword(t *testing.T) {
@@ -1331,9 +1331,9 @@ func TestMigrateRejectsShortPassword(t *testing.T) {
 	fm, mcfg := newMigrateFixture(t, stub, "pw12345") // 7 bytes, distinct from the error text
 	_, err := fm.Migrate(context.Background(), mcfg)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrDatabasePasswordTooShort)
-	assert.NotErrorIs(t, err, ErrFlywayOutputUnparsed, "rejected before Flyway runs, not a parse failure")
 	assert.NotContains(t, err.Error(), "pw12345", "the error must not echo the password")
+	assert.ErrorIs(t, err, ErrDatabasePasswordTooShort)
+	require.NotErrorIs(t, err, ErrFlywayOutputUnparsed, "rejected before Flyway runs, not a parse failure")
 }
 
 func TestMigrateForRejectsShortTenantPassword(t *testing.T) {
@@ -1517,12 +1517,12 @@ func TestRunFlywayCommandParentCancelSignalsUnknownState(t *testing.T) {
 	select {
 	case err := <-done:
 		require.Error(t, err)
-		require.ErrorIs(t, err, ErrFlywayCanceled)
-		assert.NotErrorIs(t, err, ErrFlywayTimeout, "a parent-cancel kill must not also classify as a timeout")
 		assert.Contains(t, err.Error(), "schema state is unknown")
 		// The kill scope is build-tagged: the message must report what this platform
 		// actually terminated, never a hardcoded process-group claim (false on Windows).
 		assert.Contains(t, err.Error(), killScopeDesc)
+		assert.ErrorIs(t, err, ErrFlywayCanceled)
+		require.NotErrorIs(t, err, ErrFlywayTimeout, "a parent-cancel kill must not also classify as a timeout")
 	case <-time.After(flywayKillGraceDelay + 5*time.Second):
 		t.Fatal("Migrate did not return within the guard deadline — cancel-kill classification regressed to a hang")
 	}

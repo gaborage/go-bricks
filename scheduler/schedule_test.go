@@ -1,7 +1,6 @@
 package scheduler
 
 import (
-	"errors"
 	"testing"
 	"time"
 
@@ -35,13 +34,13 @@ func TestScheduleConfigurationValidateFixedRate(t *testing.T) {
 
 		// Test error type
 		var valErr *ValidationError
-		assert.True(t, errors.As(err, &valErr))
+		require.ErrorAs(t, err, &valErr)
 		assert.Equal(t, "interval", valErr.Field)
 		assert.Contains(t, valErr.Message, "must be positive")
 		assert.Contains(t, valErr.Action, "Choose a duration greater than 0")
 
 		// Test sentinel error
-		assert.True(t, errors.Is(err, ErrInvalidInterval))
+		assert.ErrorIs(t, err, ErrInvalidInterval)
 	})
 
 	t.Run("negative interval", func(t *testing.T) {
@@ -54,9 +53,9 @@ func TestScheduleConfigurationValidateFixedRate(t *testing.T) {
 		require.Error(t, err)
 
 		var valErr *ValidationError
-		assert.True(t, errors.As(err, &valErr))
+		require.ErrorAs(t, err, &valErr)
 		assert.Equal(t, "interval", valErr.Field)
-		assert.True(t, errors.Is(err, ErrInvalidInterval))
+		assert.ErrorIs(t, err, ErrInvalidInterval)
 	})
 }
 
@@ -103,12 +102,12 @@ func TestScheduleConfigurationValidateDaily(t *testing.T) {
 		require.Error(t, err)
 
 		var valErr *ValidationError
-		assert.True(t, errors.As(err, &valErr))
+		require.ErrorAs(t, err, &valErr)
 		assert.Equal(t, "hour", valErr.Field)
 		assert.Contains(t, valErr.Message, "0-23")
 		assert.Contains(t, valErr.Message, "-1")
 		assert.Contains(t, valErr.Action, "Choose a value between 0 and 23")
-		assert.True(t, errors.Is(err, ErrInvalidTimeRange))
+		assert.ErrorIs(t, err, ErrInvalidTimeRange)
 	})
 
 	t.Run("hour too high", func(t *testing.T) {
@@ -122,10 +121,10 @@ func TestScheduleConfigurationValidateDaily(t *testing.T) {
 		require.Error(t, err)
 
 		var valErr *ValidationError
-		assert.True(t, errors.As(err, &valErr))
+		require.ErrorAs(t, err, &valErr)
 		assert.Equal(t, "hour", valErr.Field)
 		assert.Contains(t, valErr.Message, "24")
-		assert.True(t, errors.Is(err, ErrInvalidTimeRange))
+		assert.ErrorIs(t, err, ErrInvalidTimeRange)
 	})
 
 	t.Run("minute too low", func(t *testing.T) {
@@ -139,11 +138,11 @@ func TestScheduleConfigurationValidateDaily(t *testing.T) {
 		require.Error(t, err)
 
 		var valErr *ValidationError
-		assert.True(t, errors.As(err, &valErr))
+		require.ErrorAs(t, err, &valErr)
 		assert.Equal(t, "minute", valErr.Field)
 		assert.Contains(t, valErr.Message, "0-59")
 		assert.Contains(t, valErr.Message, "-1")
-		assert.True(t, errors.Is(err, ErrInvalidTimeRange))
+		assert.ErrorIs(t, err, ErrInvalidTimeRange)
 	})
 
 	t.Run("minute too high", func(t *testing.T) {
@@ -157,10 +156,10 @@ func TestScheduleConfigurationValidateDaily(t *testing.T) {
 		require.Error(t, err)
 
 		var valErr *ValidationError
-		assert.True(t, errors.As(err, &valErr))
+		require.ErrorAs(t, err, &valErr)
 		assert.Equal(t, "minute", valErr.Field)
 		assert.Contains(t, valErr.Message, "60")
-		assert.True(t, errors.Is(err, ErrInvalidTimeRange))
+		assert.ErrorIs(t, err, ErrInvalidTimeRange)
 	})
 }
 
@@ -211,11 +210,11 @@ func TestScheduleConfigurationValidateWeekly(t *testing.T) {
 		require.Error(t, err)
 
 		var valErr *ValidationError
-		assert.True(t, errors.As(err, &valErr))
+		require.ErrorAs(t, err, &valErr)
 		assert.Equal(t, "dayOfWeek", valErr.Field)
 		assert.Contains(t, valErr.Message, "invalid value")
 		assert.Contains(t, valErr.Action, "Sunday=0 to Saturday=6")
-		assert.True(t, errors.Is(err, ErrInvalidTimeRange))
+		assert.ErrorIs(t, err, ErrInvalidTimeRange)
 	})
 
 	t.Run("invalid day of week - too high", func(t *testing.T) {
@@ -230,9 +229,9 @@ func TestScheduleConfigurationValidateWeekly(t *testing.T) {
 		require.Error(t, err)
 
 		var valErr *ValidationError
-		assert.True(t, errors.As(err, &valErr))
+		require.ErrorAs(t, err, &valErr)
 		assert.Equal(t, "dayOfWeek", valErr.Field)
-		assert.True(t, errors.Is(err, ErrInvalidTimeRange))
+		assert.ErrorIs(t, err, ErrInvalidTimeRange)
 	})
 
 	t.Run("invalid hour", func(t *testing.T) {
@@ -247,9 +246,9 @@ func TestScheduleConfigurationValidateWeekly(t *testing.T) {
 		require.Error(t, err)
 
 		var valErr *ValidationError
-		assert.True(t, errors.As(err, &valErr))
+		require.ErrorAs(t, err, &valErr)
 		assert.Equal(t, "hour", valErr.Field)
-		assert.True(t, errors.Is(err, ErrInvalidTimeRange))
+		assert.ErrorIs(t, err, ErrInvalidTimeRange)
 	})
 
 	t.Run("invalid minute", func(t *testing.T) {
@@ -264,9 +263,9 @@ func TestScheduleConfigurationValidateWeekly(t *testing.T) {
 		require.Error(t, err)
 
 		var valErr *ValidationError
-		assert.True(t, errors.As(err, &valErr))
+		require.ErrorAs(t, err, &valErr)
 		assert.Equal(t, "minute", valErr.Field)
-		assert.True(t, errors.Is(err, ErrInvalidTimeRange))
+		assert.ErrorIs(t, err, ErrInvalidTimeRange)
 	})
 }
 
@@ -309,11 +308,11 @@ func TestScheduleConfigurationValidateHourly(t *testing.T) {
 		require.Error(t, err)
 
 		var valErr *ValidationError
-		assert.True(t, errors.As(err, &valErr))
+		require.ErrorAs(t, err, &valErr)
 		assert.Equal(t, "minute", valErr.Field)
 		assert.Contains(t, valErr.Message, "0-59")
 		assert.Contains(t, valErr.Message, "-1")
-		assert.True(t, errors.Is(err, ErrInvalidTimeRange))
+		assert.ErrorIs(t, err, ErrInvalidTimeRange)
 	})
 
 	t.Run("minute too high", func(t *testing.T) {
@@ -326,10 +325,10 @@ func TestScheduleConfigurationValidateHourly(t *testing.T) {
 		require.Error(t, err)
 
 		var valErr *ValidationError
-		assert.True(t, errors.As(err, &valErr))
+		require.ErrorAs(t, err, &valErr)
 		assert.Equal(t, "minute", valErr.Field)
 		assert.Contains(t, valErr.Message, "60")
-		assert.True(t, errors.Is(err, ErrInvalidTimeRange))
+		assert.ErrorIs(t, err, ErrInvalidTimeRange)
 	})
 }
 
@@ -380,11 +379,11 @@ func TestScheduleConfigurationValidateMonthly(t *testing.T) {
 		require.Error(t, err)
 
 		var valErr *ValidationError
-		assert.True(t, errors.As(err, &valErr))
+		require.ErrorAs(t, err, &valErr)
 		assert.Equal(t, "dayOfMonth", valErr.Field)
 		assert.Contains(t, valErr.Message, "1-31")
 		assert.Contains(t, valErr.Message, "0")
-		assert.True(t, errors.Is(err, ErrInvalidTimeRange))
+		assert.ErrorIs(t, err, ErrInvalidTimeRange)
 	})
 
 	t.Run("day of month too high", func(t *testing.T) {
@@ -399,10 +398,10 @@ func TestScheduleConfigurationValidateMonthly(t *testing.T) {
 		require.Error(t, err)
 
 		var valErr *ValidationError
-		assert.True(t, errors.As(err, &valErr))
+		require.ErrorAs(t, err, &valErr)
 		assert.Equal(t, "dayOfMonth", valErr.Field)
 		assert.Contains(t, valErr.Message, "32")
-		assert.True(t, errors.Is(err, ErrInvalidTimeRange))
+		assert.ErrorIs(t, err, ErrInvalidTimeRange)
 	})
 
 	t.Run("invalid hour", func(t *testing.T) {
@@ -417,9 +416,9 @@ func TestScheduleConfigurationValidateMonthly(t *testing.T) {
 		require.Error(t, err)
 
 		var valErr *ValidationError
-		assert.True(t, errors.As(err, &valErr))
+		require.ErrorAs(t, err, &valErr)
 		assert.Equal(t, "hour", valErr.Field)
-		assert.True(t, errors.Is(err, ErrInvalidTimeRange))
+		assert.ErrorIs(t, err, ErrInvalidTimeRange)
 	})
 
 	t.Run("invalid minute", func(t *testing.T) {
@@ -434,9 +433,9 @@ func TestScheduleConfigurationValidateMonthly(t *testing.T) {
 		require.Error(t, err)
 
 		var valErr *ValidationError
-		assert.True(t, errors.As(err, &valErr))
+		require.ErrorAs(t, err, &valErr)
 		assert.Equal(t, "minute", valErr.Field)
-		assert.True(t, errors.Is(err, ErrInvalidTimeRange))
+		assert.ErrorIs(t, err, ErrInvalidTimeRange)
 	})
 }
 
@@ -451,12 +450,12 @@ func TestScheduleConfigurationValidateUnknownType(t *testing.T) {
 		require.Error(t, err)
 
 		var valErr *ValidationError
-		assert.True(t, errors.As(err, &valErr))
+		require.ErrorAs(t, err, &valErr)
 		assert.Equal(t, "type", valErr.Field)
 		assert.Contains(t, valErr.Message, "unknown schedule type")
 		assert.Contains(t, valErr.Message, "invalid-type")
 		assert.Contains(t, valErr.Action, "fixed-rate, daily, weekly, hourly, monthly")
-		assert.True(t, errors.Is(err, ErrInvalidScheduleType))
+		assert.ErrorIs(t, err, ErrInvalidScheduleType)
 	})
 
 	t.Run("empty schedule type", func(t *testing.T) {
@@ -468,9 +467,9 @@ func TestScheduleConfigurationValidateUnknownType(t *testing.T) {
 		require.Error(t, err)
 
 		var valErr *ValidationError
-		assert.True(t, errors.As(err, &valErr))
+		require.ErrorAs(t, err, &valErr)
 		assert.Equal(t, "type", valErr.Field)
-		assert.True(t, errors.Is(err, ErrInvalidScheduleType))
+		assert.ErrorIs(t, err, ErrInvalidScheduleType)
 	})
 }
 
@@ -499,23 +498,23 @@ func TestNewRangeError(t *testing.T) {
 	err := NewRangeError("hour", 0, 23, 25)
 
 	var valErr *ValidationError
-	require.True(t, errors.As(err, &valErr))
+	require.ErrorAs(t, err, &valErr)
 	assert.Equal(t, "hour", valErr.Field)
 	assert.Contains(t, valErr.Message, "must be 0-23")
 	assert.Contains(t, valErr.Message, "(got 25)")
 	assert.Contains(t, valErr.Action, "Choose a value between 0 and 23")
-	assert.True(t, errors.Is(err, ErrInvalidTimeRange))
+	assert.ErrorIs(t, err, ErrInvalidTimeRange)
 }
 
 func TestNewInvalidValueError(t *testing.T) {
 	err := NewInvalidValueError("dayOfWeek", 99, "Choose a valid weekday")
 
 	var valErr *ValidationError
-	require.True(t, errors.As(err, &valErr))
+	require.ErrorAs(t, err, &valErr)
 	assert.Equal(t, "dayOfWeek", valErr.Field)
 	assert.Contains(t, valErr.Message, "invalid value 99")
 	assert.Equal(t, "Choose a valid weekday", valErr.Action)
-	assert.True(t, errors.Is(err, ErrInvalidTimeRange))
+	assert.ErrorIs(t, err, ErrInvalidTimeRange)
 }
 
 // TestScheduleConfigurationToCronExpression verifies conversion of schedule configurations to cron expressions
@@ -573,7 +572,7 @@ func TestScheduleConfigurationToCronExpression(t *testing.T) {
 		config := ScheduleConfiguration{
 			Type: ScheduleType("unknown"),
 		}
-		assert.Equal(t, "", config.ToCronExpression())
+		assert.Empty(t, config.ToCronExpression())
 	})
 }
 
@@ -695,6 +694,6 @@ func TestScheduleConfigurationToHumanReadable(t *testing.T) {
 		config := ScheduleConfiguration{
 			Type: ScheduleType("unknown"),
 		}
-		assert.Equal(t, "", config.ToHumanReadable())
+		assert.Empty(t, config.ToHumanReadable())
 	})
 }

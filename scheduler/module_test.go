@@ -80,7 +80,7 @@ func TestJobExecutionOverlappingPrevention(t *testing.T) {
 
 	// Job should have executed, but overlapping triggers should be skipped
 	count := job.count()
-	assert.Greater(t, count, 0, "Job should execute at least once")
+	assert.Positive(t, count, "Job should execute at least once")
 	assert.Less(t, count, 10, "Overlapping executions should be skipped")
 }
 
@@ -384,7 +384,7 @@ func TestSlowJobThresholdWarning(t *testing.T) {
 	waitFor(t, func() bool { return job.count() > 0 })
 
 	// Verify job was executed
-	assert.Greater(t, job.count(), 0, "Job should have executed")
+	assert.Positive(t, job.count(), "Job should have executed")
 }
 
 // TestDetermineJobSeverityUsesConfiguredSlowJobThreshold pins the severity
@@ -429,7 +429,7 @@ func TestJobExecutionWithoutTracer(t *testing.T) {
 	waitFor(t, func() bool { return job.count() > 0 })
 
 	// Verify job executed successfully without tracer
-	assert.Greater(t, job.count(), 0, "Job should execute without tracer")
+	assert.Positive(t, job.count(), "Job should execute without tracer")
 }
 
 // TestJobExecutionWithTracer verifies span creation when tracer is configured

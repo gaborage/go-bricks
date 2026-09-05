@@ -87,7 +87,7 @@ func TestSchedulerLifecycleGracefulShutdown(t *testing.T) {
 	err = module.Shutdown()
 	shutdownDuration := time.Since(shutdownStart)
 
-	assert.NoError(t, err, "Shutdown should succeed")
+	require.NoError(t, err, "Shutdown should succeed")
 
 	// Verify job completed (not canceled mid-execution)
 	assert.True(t, job.Completed(), "Job should have completed")

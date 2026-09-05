@@ -1,7 +1,6 @@
 package migration
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
@@ -90,9 +89,9 @@ func TestPGRoleSpecValidateRejects(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.spec.Validate()
 			require.Error(t, err)
-			assert.True(t, errors.Is(err, ErrInvalidPGIdentifier),
-				"want wrapped ErrInvalidPGIdentifier, got %v", err)
 			assert.Contains(t, err.Error(), tt.fieldOrReason)
+			require.ErrorIs(t, err, ErrInvalidPGIdentifier,
+				"want wrapped ErrInvalidPGIdentifier, got %v", err)
 		})
 	}
 }
@@ -106,7 +105,7 @@ func TestPGRoleSpecValidatePassesIdentifierSentinelThrough(t *testing.T) {
 func TestPGRoleProvisioningSQLRejectsInvalidSpec(t *testing.T) {
 	_, err := PGRoleProvisioningSQL(&PGRoleSpec{})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrInvalidPGIdentifier))
+	assert.ErrorIs(t, err, ErrInvalidPGIdentifier)
 }
 
 func TestPGRoleProvisioningSQLRejectsNilSpec(t *testing.T) {
@@ -384,11 +383,13 @@ func TestPGRoleSpecValidateRejectsControlCharPasswords(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.spec.Validate()
 			require.Error(t, err)
-			assert.True(t, errors.Is(err, ErrPGRolePasswordHasControlChar),
-				"want wrapped ErrPGRolePasswordHasControlChar, got %v", err)
+			// The non-disclosure check must run even when the error is the wrong
+			// kind, so the identity assertion goes last.
 			assert.Contains(t, err.Error(), tt.field)
 			assert.NotContains(t, err.Error(), tt.badValue,
 				"the error must name the field, never the password value")
+			assert.ErrorIs(t, err, ErrPGRolePasswordHasControlChar,
+				"want wrapped ErrPGRolePasswordHasControlChar, got %v", err)
 		})
 	}
 

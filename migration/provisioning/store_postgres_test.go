@@ -2,7 +2,6 @@ package provisioning
 
 import (
 	"database/sql"
-	"errors"
 	"strings"
 	"testing"
 
@@ -72,7 +71,7 @@ func TestNewPostgresStoreRejectsInvalidNames(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			_, err := NewPostgresStore(db, name)
 			require.Error(t, err)
-			assert.True(t, errors.Is(err, ErrInvalidTableName))
+			assert.ErrorIs(t, err, ErrInvalidTableName)
 		})
 	}
 }
@@ -111,7 +110,7 @@ func TestPostgresStateTableIndexNamesFitNAMEDATALEN(t *testing.T) {
 		// Pull out the index name (between CREATE INDEX IF NOT EXISTS and ON).
 		idx := strings.Index(stmt, "idx_")
 		end := strings.Index(stmt[idx:], " ")
-		require.Greater(t, end, 0, "could not locate index-name suffix in %q", stmt)
+		require.Positive(t, end, "could not locate index-name suffix in %q", stmt)
 		idxName := stmt[idx : idx+end]
 		assert.LessOrEqual(t, len(idxName), pgNameDataLen,
 			"index name %q exceeds NAMEDATALEN-1 at the maxPGTableSegment boundary", idxName)

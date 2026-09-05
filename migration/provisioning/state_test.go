@@ -70,14 +70,14 @@ func TestValidateTransitionRejectsIllegalEdges(t *testing.T) {
 		t.Run(fmt.Sprintf("%s->%s", c.from, c.to), func(t *testing.T) {
 			err := ValidateTransition(c.from, c.to)
 			require.Error(t, err)
-			assert.True(t, errors.Is(err, ErrIllegalTransition))
+			assert.ErrorIs(t, err, ErrIllegalTransition)
 		})
 	}
 }
 
 func TestStepsValidate(t *testing.T) {
 	full := okSteps(t)
-	assert.NoError(t, full.Validate())
+	require.NoError(t, full.Validate())
 
 	mutators := []struct {
 		name    string
@@ -165,7 +165,7 @@ func TestExecutorTerminalJobIsNoOp(t *testing.T) {
 
 	calls.reset()
 	require.NoError(t, exec.Run(context.Background(), job.ID), "re-running a Ready job must be a no-op")
-	assert.Equal(t, 0, len(calls.order()), "no steps should run on a Ready job")
+	assert.Empty(t, calls.order(), "no steps should run on a Ready job")
 }
 
 func TestExecutorFailingStepEntersCleanupAndFails(t *testing.T) {
@@ -262,13 +262,15 @@ func TestExecutorRespectsContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err = exec.Run(ctx, job.ID)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, context.Canceled)
+	runErr := exec.Run(ctx, job.ID)
+	require.Error(t, runErr)
 
+	// The stored state is an independent property, so it is checked before the
+	// error identity: an unexpected error kind must not hide a state that advanced.
 	final, err := store.Get(context.Background(), job.ID)
 	require.NoError(t, err)
 	assert.Equal(t, StatePending, final.State, "cancellation before any step must not advance state")
+	assert.ErrorIs(t, runErr, context.Canceled)
 }
 
 // ---- helpers ----

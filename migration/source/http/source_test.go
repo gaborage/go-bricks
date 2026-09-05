@@ -52,7 +52,7 @@ func TestHTTPTenantSourceNewValidation(t *testing.T) {
 			if tt.wantErr {
 				require.Error(t, err)
 				if tt.errIs != nil {
-					assert.ErrorIs(t, err, tt.errIs)
+					require.ErrorIs(t, err, tt.errIs)
 				}
 				return
 			}
@@ -65,7 +65,7 @@ func TestHTTPTenantSourceListTenantsSinglePage(t *testing.T) {
 	srv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 		assert.Equal(t, "/tenants", r.URL.Path)
 		assert.Equal(t, "100", r.URL.Query().Get("limit"))
-		assert.Equal(t, "", r.URL.Query().Get("cursor"))
+		assert.Empty(t, r.URL.Query().Get("cursor"))
 		assert.Empty(t, r.Header.Get("Authorization"))
 
 		writeJSON(w, stdhttp.StatusOK, writeEnvelope{
@@ -92,7 +92,7 @@ func TestHTTPTenantSourceListTenantsPagination(t *testing.T) {
 		n := atomic.AddInt32(&calls, 1)
 		switch n {
 		case 1:
-			assert.Equal(t, "", r.URL.Query().Get("cursor"))
+			assert.Empty(t, r.URL.Query().Get("cursor"))
 			writeJSON(w, stdhttp.StatusOK, writeEnvelope{
 				Data: map[string]any{
 					"tenants":     []map[string]string{{"id": "a"}, {"id": "b"}},
@@ -270,8 +270,9 @@ func TestHTTPTenantSourceRefusesSchemeDowngradeRedirect(t *testing.T) {
 
 	_, err = src.ListTenants(context.Background())
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrInsecureScheme) // must be the scheme branch, not the host branch
 	assert.Nil(t, hc.CheckRedirect, "New must not mutate the caller's client")
+	// Last, so a wrong error kind still leaves the mutation check above reported.
+	assert.ErrorIs(t, err, ErrInsecureScheme) // must be the scheme branch, not the host branch
 }
 
 func TestHTTPTenantSourceRefusesOffHostRedirect(t *testing.T) {

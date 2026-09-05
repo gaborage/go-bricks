@@ -375,21 +375,25 @@ func TestCIDRMiddlewareInvalidCIDR(t *testing.T) {
 	// Invalid CIDR should fall back to localhost-only
 	mw := CIDRMiddleware(nil, []string{"not-a-valid-cidr", "also invalid"}, []string{})
 
-	// Test localhost is allowed
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
-	req.RemoteAddr = testLocalhostAddr
+	// The two halves of the fallback are independent, so each is its own subtest:
+	// a regression in the allow half must not stop the block half being exercised.
+	t.Run("localhost_is_allowed", func(t *testing.T) {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
+		req.RemoteAddr = testLocalhostAddr
 
-	nextCalled, err := invokeCIDRMiddleware(mw, req)
-	assert.True(t, nextCalled, "localhost should be allowed in localhost-only fallback")
-	assert.NoError(t, err)
+		nextCalled, err := invokeCIDRMiddleware(mw, req)
+		require.NoError(t, err)
+		assert.True(t, nextCalled, "localhost should be allowed in localhost-only fallback")
+	})
 
-	// Test external IP is blocked
-	req2 := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
-	req2.RemoteAddr = "192.168.1.1:12345"
+	t.Run("external_ip_is_blocked", func(t *testing.T) {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
+		req.RemoteAddr = "192.168.1.1:12345"
 
-	nextCalled2, err2 := invokeCIDRMiddleware(mw, req2)
-	assert.False(t, nextCalled2, "external IP must be blocked in localhost-only fallback")
-	assertForbidden(t, err2, msgAccessDeniedLocalhost)
+		nextCalled, err := invokeCIDRMiddleware(mw, req)
+		assert.False(t, nextCalled, "external IP must be blocked in localhost-only fallback")
+		assertForbidden(t, err, msgAccessDeniedLocalhost)
+	})
 }
 
 // TestParseCIDRAllowlistReturnsInvalidEntries verifies the parser surfaces invalid
