@@ -2,7 +2,8 @@
 // mechanism shared by the keystore module and the cmd/seal-payload CLI.
 // keystore wraps these calls with its "keystore: key %q ..." error prefixes;
 // cmd/seal-payload consumes them directly, so the CLI can never accept a key
-// format the middleware's keystore would reject.
+// format the middleware's keystore would reject. It also hosts the producer-role
+// resolver the sealing CLIs hand to jose once their keys are parsed.
 package keymaterial
 
 import (
@@ -108,4 +109,58 @@ func ParseRSAPrivateKey(der []byte) (*rsa.PrivateKey, error) {
 		return nil, fmt.Errorf("PKCS8 failed (%w), PKCS1 fallback also failed: %w", err, err2)
 	}
 	return rsaKey, nil
+}
+
+// LoadRSAPrivateKey is LoadBytes followed by ParseRSAPrivateKey: the whole
+// file-or-value-to-key hop a CLI needs for its own signing key. It adds no
+// error prefix of its own, so callers keep whatever role wording they already
+// use ("sign key: %w"). With neither source set LoadBytes yields nil DER and
+// the parse rejects it — there is no silent nil key.
+func LoadRSAPrivateKey(file, value string) (*rsa.PrivateKey, error) {
+	der, err := LoadBytes(file, value)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRSAPrivateKey(der)
+}
+
+// LoadRSAPublicKey is LoadBytes followed by ParseRSAPublicKey, the public-key
+// counterpart of LoadRSAPrivateKey and with the same no-prefix contract.
+func LoadRSAPublicKey(file, value string) (*rsa.PublicKey, error) {
+	der, err := LoadBytes(file, value)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRSAPublicKey(der)
+}
+
+// ProducerKeys resolves the two kids a producer holds: its own sign PRIVATE
+// key and the audience's encrypt PUBLIC key. Any other kid is an error naming
+// the kid and nothing else.
+//
+// The method set is exactly jose.KeyResolver's (and jose.KeyStoreLike's), so a
+// *ProducerKeys satisfies both structurally — this package deliberately does
+// not import jose: keystore imports keymaterial, and the dependency would drag
+// go-jose into the keystore module for no gain.
+type ProducerKeys struct {
+	SignKid    string
+	SignPriv   *rsa.PrivateKey
+	EncryptKid string
+	EncPub     *rsa.PublicKey
+}
+
+// PrivateKey returns the sign key for SignKid; every other kid is unknown.
+func (k *ProducerKeys) PrivateKey(kid string) (*rsa.PrivateKey, error) {
+	if kid == k.SignKid {
+		return k.SignPriv, nil
+	}
+	return nil, fmt.Errorf("no private key registered for kid %q", kid)
+}
+
+// PublicKey returns the encrypt key for EncryptKid; every other kid is unknown.
+func (k *ProducerKeys) PublicKey(kid string) (*rsa.PublicKey, error) {
+	if kid == k.EncryptKid {
+		return k.EncPub, nil
+	}
+	return nil, fmt.Errorf("no public key registered for kid %q", kid)
 }
