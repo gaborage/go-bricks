@@ -79,13 +79,55 @@ type RabbitMQContainer struct {
 func StartRabbitMQContainer(ctx context.Context, t *testing.T, cfg *RabbitMQContainerConfig) (*RabbitMQContainer, error) {
 	t.Helper()
 
-	if cfg == nil {
-		cfg = DefaultRabbitMQConfig()
+	if !isDockerAvailable(ctx) {
+		t.Skip(DockerUnavailableSkipMessage)
+		return nil, nil // Never reached due to Skip, but satisfies return
 	}
 
+	cc, err := startRabbitMQContainerInternal(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	t.Logf("RabbitMQ container started successfully at %s:%d", cc.host, cc.port)
+	// A non-zero stream port is exactly what EnableStreamPlugin produced, and reading
+	// it back from the container keeps this wrapper independent of a nil cfg.
+	if cc.streamPort != 0 {
+		t.Logf("RabbitMQ stream protocol available at %s:%d", cc.host, cc.streamPort)
+	}
+
+	return cc, nil
+}
+
+// StartRabbitMQContainerForTestMain starts a RabbitMQ test container without
+// requiring a *testing.T. Intended for package-level TestMain usage where
+// container provisioning must happen before m.Run() and *T is unavailable.
+//
+// Returns (container, true, nil) on success.
+// Returns (nil, false, nil) when Docker is unavailable — what that means is the
+// caller's decision: a package whose tests are all integration tests may log and
+// os.Exit(0), while a package that also holds unit tests hands the tuple to
+// containers.Shared, which skips only the requesting test.
+// Returns (nil, true, err) when Docker is available but startup failed.
+//
+// Callers are responsible for invoking Terminate after m.Run().
+func StartRabbitMQContainerForTestMain(ctx context.Context, cfg *RabbitMQContainerConfig) (container *RabbitMQContainer, dockerAvailable bool, err error) {
 	if !isDockerAvailable(ctx) {
-		t.Skip("Docker is not available - skipping integration test. Install Docker Desktop or ensure Docker daemon is running.")
-		return nil, nil // Never reached due to Skip, but satisfies return
+		return nil, false, nil
+	}
+	cc, err := startRabbitMQContainerInternal(ctx, cfg)
+	if err != nil {
+		return nil, true, err
+	}
+	return cc, true, nil
+}
+
+// startRabbitMQContainerInternal does the actual testcontainer setup without
+// any *testing.T interaction. Both StartRabbitMQContainer (which adds *T-bound
+// Skip/Logf) and StartRabbitMQContainerForTestMain wrap it.
+func startRabbitMQContainerInternal(ctx context.Context, cfg *RabbitMQContainerConfig) (*RabbitMQContainer, error) {
+	if cfg == nil {
+		cfg = DefaultRabbitMQConfig()
 	}
 
 	// Use composite wait strategy: log message (fast early signal) + port listening (network verification)
@@ -137,8 +179,6 @@ func StartRabbitMQContainer(ctx context.Context, t *testing.T, cfg *RabbitMQCont
 
 	port := int(mappedPort.Num())
 
-	t.Logf("RabbitMQ container started successfully at %s:%d", host, port)
-
 	container := &RabbitMQContainer{
 		container: rmqContainer,
 		brokerURL: amqpURL,
@@ -155,7 +195,6 @@ func StartRabbitMQContainer(ctx context.Context, t *testing.T, cfg *RabbitMQCont
 			return nil, err
 		}
 		container.streamPort = streamPort
-		t.Logf("RabbitMQ stream protocol available at %s:%d", host, streamPort)
 	}
 
 	return container, nil

@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/logger"
-	"github.com/gaborage/go-bricks/testing/containers"
 )
 
 const (
@@ -25,24 +24,16 @@ const (
 // uniqueName generates a unique resource name for tests to prevent cross-test pollution
 func uniqueName(t *testing.T, prefix string) string {
 	t.Helper()
-	// Use test name and unix nano timestamp for uniqueness
+	// A unix nano timestamp is the whole uniqueness source: the tests run
+	// sequentially, so no two calls can land on the same nanosecond.
 	return fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
 }
 
-// setupTestBroker starts a RabbitMQ testcontainer and returns the broker URL
+// setupTestBroker returns the URL of the package-wide RabbitMQ container,
+// starting it on first use (see integration_main_test.go)
 func setupTestBroker(t *testing.T) string {
 	t.Helper()
-
-	// Create context with timeout to prevent indefinite hangs
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-
-	// Register cleanup to cancel context
-	t.Cleanup(func() {
-		cancel()
-	})
-
-	rmqContainer := containers.MustStartRabbitMQContainer(ctx, t, nil).WithCleanup(t)
-	return rmqContainer.BrokerURL()
+	return pkgBroker.Get(t).BrokerURL()
 }
 
 // =============================================================================

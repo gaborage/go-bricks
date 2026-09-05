@@ -4,6 +4,21 @@
 **Date:** 2026-05-12
 **Related issues:** [#402](https://github.com/gaborage/go-bricks/issues/402) (this decision — investigation/exploration), [#404](https://github.com/gaborage/go-bricks/issues/404) (implementation, merged via [PR #406](https://github.com/gaborage/go-bricks/pull/406)).
 
+> **Amended (2026-09-04, the pattern extends to RabbitMQ, PostgreSQL and Redis):** the
+> per-test container boot §Context measured for Oracle differs from the other packages in
+> size, not in kind — measured per-run wall time before this change was 114s for
+> `messaging`, 98s for `messaging/streams` and 79s for `database/postgresql`, nearly all
+> of it startup. Those packages now share one container per test binary through the
+> generic `containers.Shared` primitive (`testing/containers/shared.go`), with
+> `PostgreSQLContainer.NewDatabase(t)` handing each test its own database exactly as
+> `NewSchema` hands each Oracle test its own schema, and `cache/redis` sharing one server
+> behind a per-test `FLUSHDB`. The "PostgreSQL is fine because Postgres is fast to start"
+> reading below is therefore superseded: fast still costs 20 boots. One difference from
+> the Oracle rollout: these packages also hold unit tests, so the container starts lazily
+> on the first integration test that asks for it and a missing Docker skips only the
+> requesting test — the eager `os.Exit(0)` in TestMain would have silenced their unit
+> tests as well.
+
 ## Context
 
 The `framework-integration-test` job is the dominant cost in CI today and the most flake-prone. Doc-only PRs [#398](https://github.com/gaborage/go-bricks/pull/398) and [#399](https://github.com/gaborage/go-bricks/pull/399) both timed out on `database/oracle` at the 10-minute Go test ceiling on 2026-05-12, requiring manual `gh run rerun --failed`. Even successful runs sit right against that ceiling. PR [#401](https://github.com/gaborage/go-bricks/pull/401) addresses doc-only PRs by skipping the integration job when no `.go` files change, but the flake class remains for any PR that *does* touch `.go`.
