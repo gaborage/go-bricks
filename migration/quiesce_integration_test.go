@@ -47,7 +47,7 @@ func TestPostgresQuiesceControllerLifecycle(t *testing.T) {
 	assert.False(t, set)
 
 	_, err = ctrl.Clear(ctx, "op2@ci")
-	assert.ErrorIs(t, err, ErrQuiesceNotSet, "clearing an inactive flag returns ErrQuiesceNotSet")
+	require.ErrorIs(t, err, ErrQuiesceNotSet, "clearing an inactive flag returns ErrQuiesceNotSet")
 
 	// Audit: the successful Set + Clear each emitted; the no-op second Clear did not.
 	require.NoError(t, em.Close(ctx))

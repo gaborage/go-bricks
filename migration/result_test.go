@@ -27,7 +27,7 @@ func TestParseFlywayJSONMigrateSuccess(t *testing.T) {
 	assert.Equal(t, "migrate", got.Operation)
 	assert.True(t, got.Success)
 	assert.Equal(t, []string{"1", "2"}, got.AppliedVersions)
-	assert.Equal(t, "", got.StartingVersion, "fresh schema starts at null/empty")
+	assert.Empty(t, got.StartingVersion, "fresh schema starts at null/empty")
 	assert.Equal(t, "2", got.EndingVersion)
 	assert.Equal(t, int64(8), got.DurationMillis)
 	assert.Equal(t, "12.8.1", got.FlywayVersion)
@@ -61,7 +61,7 @@ func TestParseFlywayJSONChecksumFailure(t *testing.T) {
 
 func TestParseFlywayJSONEmptyOutput(t *testing.T) {
 	_, err := parseFlywayJSON("")
-	assert.ErrorIs(t, err, errEmptyFlywayOutput)
+	require.ErrorIs(t, err, errEmptyFlywayOutput)
 
 	_, err = parseFlywayJSON("   \n\t  ")
 	assert.ErrorIs(t, err, errEmptyFlywayOutput)
@@ -74,7 +74,7 @@ func TestParseFlywayJSONMalformed(t *testing.T) {
 	// "no JSON at all" case apart from "JSON arrived but corrupt".
 	_, err := parseFlywayJSON(`{"success": notabool}`)
 	require.Error(t, err)
-	assert.False(t, errors.Is(err, errEmptyFlywayOutput))
+	assert.NotErrorIs(t, err, errEmptyFlywayOutput)
 }
 
 func TestParseFlywayJSONNoJSONObject(t *testing.T) {
@@ -138,30 +138,30 @@ func TestParseFlywayJSONNoFlywayEnvelopeIsUnparsed(t *testing.T) {
 	// classify as unparsed, not as a spurious reported failure.
 	src := `{"level":"warn","logger":"a","msg":"one"}` + "\n" + `{"level":"warn","logger":"b","msg":"two"}`
 	_, err := parseFlywayJSON(src)
-	assert.ErrorIs(t, err, errEmptyFlywayOutput)
+	require.ErrorIs(t, err, errEmptyFlywayOutput)
 
 	outcomeErr := migrateOutcome(nil, err, nil)
-	assert.ErrorIs(t, outcomeErr, ErrFlywayOutputUnparsed)
-	assert.False(t, errors.Is(outcomeErr, ErrFlywayReportedFailure))
+	require.ErrorIs(t, outcomeErr, ErrFlywayOutputUnparsed)
+	assert.NotErrorIs(t, outcomeErr, ErrFlywayReportedFailure)
 }
 
 func TestMigrateOutcomeRunErrorWins(t *testing.T) {
 	runErr := errors.New("flyway command failed: exit status 1")
 	err := migrateOutcome(runErr, errEmptyFlywayOutput, &Result{})
-	assert.ErrorIs(t, err, runErr, "subprocess error takes precedence")
-	assert.False(t, errors.Is(err, ErrFlywayOutputUnparsed), "parse error must not shadow the subprocess error")
+	require.ErrorIs(t, err, runErr, "subprocess error takes precedence")
+	assert.NotErrorIs(t, err, ErrFlywayOutputUnparsed, "parse error must not shadow the subprocess error")
 }
 
 func TestMigrateOutcomeParseErrorWrapped(t *testing.T) {
 	err := migrateOutcome(nil, errEmptyFlywayOutput, &Result{})
-	assert.ErrorIs(t, err, ErrFlywayOutputUnparsed, "unparsable output surfaces as an error")
+	require.ErrorIs(t, err, ErrFlywayOutputUnparsed, "unparsable output surfaces as an error")
 	assert.ErrorIs(t, err, errEmptyFlywayOutput, "the underlying parse cause stays inspectable via the %w:%w chain")
 }
 
 func TestMigrateOutcomeEnvelopeFailure(t *testing.T) {
 	res := Result{Success: false, ErrorCode: "VALIDATE_ERROR", ErrorMessage: "checksum mismatch on V1 -> host secret leak"}
 	err := migrateOutcome(nil, nil, &res)
-	assert.ErrorIs(t, err, ErrFlywayReportedFailure, "a success:false envelope surfaces even at exit 0")
+	require.ErrorIs(t, err, ErrFlywayReportedFailure, "a success:false envelope surfaces even at exit 0")
 	assert.Contains(t, err.Error(), "VALIDATE_ERROR", "the errorCode enum is safe to surface")
 	assert.NotContains(t, err.Error(), "host secret leak",
 		"result.ErrorMessage is free-text and must never enter the propagated error string")

@@ -381,7 +381,7 @@ func TestCIDRMiddlewareInvalidCIDR(t *testing.T) {
 
 	nextCalled, err := invokeCIDRMiddleware(mw, req)
 	assert.True(t, nextCalled, "localhost should be allowed in localhost-only fallback")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Test external IP is blocked
 	req2 := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)

@@ -97,7 +97,7 @@ func TestExecutorQuiesceDoesNotStrandCleanup(t *testing.T) {
 	// Run must complete the rollback, not park in cleanup.
 	err := exec.Run(context.Background(), "job-cleanup")
 	require.Error(t, err) // ends in failed state
-	assert.NotErrorIs(t, err, ErrQuiesced, "a cleanup-state job must not be parked by quiesce")
+	require.NotErrorIs(t, err, ErrQuiesced, "a cleanup-state job must not be parked by quiesce")
 
 	final, err := store.Get(context.Background(), "job-cleanup")
 	require.NoError(t, err)

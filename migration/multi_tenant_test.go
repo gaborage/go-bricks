@@ -127,7 +127,7 @@ func TestMigrateAllSequentialSuccess(t *testing.T) {
 	assert.Empty(t, res.Failed())
 	assert.Equal(t, 3, hookCalls)
 	for _, r := range res.Results {
-		assert.NoError(t, r.Err)
+		require.NoError(t, r.Err)
 		assert.Equal(t, "postgresql", r.Vendor)
 	}
 }
@@ -317,10 +317,10 @@ func TestMigrateAllNilArguments(t *testing.T) {
 	lister := &fakeLister{}
 
 	_, err := MigrateAll(context.Background(), nil, lister, provider, ActionMigrate, MigrateAllOptions{})
-	assert.Error(t, err)
+	require.Error(t, err)
 
 	_, err = MigrateAll(context.Background(), fm, nil, provider, ActionMigrate, MigrateAllOptions{})
-	assert.ErrorIs(t, err, ErrNoLister)
+	require.ErrorIs(t, err, ErrNoLister)
 
 	_, err = MigrateAll(context.Background(), fm, lister, nil, ActionMigrate, MigrateAllOptions{})
 	assert.ErrorIs(t, err, ErrNoConfigProvider)
@@ -529,6 +529,6 @@ func TestMigrateAllRejectsNilTenantConfig(t *testing.T) {
 	require.NotNil(t, res)
 	require.Len(t, res.Results, 1)
 	one := res.Results[0]
-	assert.ErrorIs(t, one.Err, database.ErrNoDatabaseConfig)
+	require.ErrorIs(t, one.Err, database.ErrNoDatabaseConfig)
 	assert.Empty(t, one.Vendor)
 }

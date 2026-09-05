@@ -63,7 +63,7 @@ func TestListJobsHandlerEmptyScheduler(t *testing.T) {
 
 	assert.Nil(t, apiErr)
 	assert.Equal(t, 200, result.Status)
-	assert.Len(t, result.Data.Data, 0)
+	assert.Empty(t, result.Data.Data)
 	assert.Equal(t, 0, result.Data.Meta["total"])
 }
 
@@ -106,7 +106,7 @@ func TestTriggerJobHandler(t *testing.T) {
 		}
 	}
 
-	assert.Greater(t, job.Count(), int64(0), "Job should have executed at least once")
+	assert.Positive(t, job.Count(), "Job should have executed at least once")
 }
 
 // TestTriggerJobHandlerNotFound verifies 404 for unknown job

@@ -223,7 +223,7 @@ func TestSecretsProviderDBConfigNumericDurationGuard(t *testing.T) {
 		p := &SecretsProvider{Fetch: func(context.Context, string) ([]byte, error) { return payload, nil }}
 		_, err := p.DBConfig(context.Background(), "x")
 		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrSecretMalformed)
+		require.ErrorIs(t, err, ErrSecretMalformed)
 		assert.ErrorContains(t, err, "unit-less numeric duration 60")
 	})
 
@@ -293,8 +293,8 @@ func TestSecretsProviderDBConfigEmptyScalarGuard(t *testing.T) {
 
 			if tt.wantErr {
 				require.Error(t, err)
-				assert.ErrorIs(t, err, ErrSecretMalformed)
-				assert.ErrorContains(t, err, "delivered empty")
+				require.ErrorIs(t, err, ErrSecretMalformed)
+				require.ErrorContains(t, err, "delivered empty")
 				// The error travels to logs and operator consoles; the payload it was
 				// decoding is secret material, so no value from it may ride along.
 				assert.NotContains(t, err.Error(), leakCanaryPassword)
@@ -436,7 +436,7 @@ func TestSecretsProviderNameForErrorWrapsRealName(t *testing.T) {
 
 	_, err := p.DBConfig(context.Background(), "tenant-a")
 	require.Error(t, err)
-	assert.ErrorIs(t, err, boom)
+	require.ErrorIs(t, err, boom)
 	assert.Contains(t, err.Error(), "/prod/platform/tenant-a/db")
 	assert.NotContains(t, err.Error(), "gobricks/migrate/tenant-a")
 }

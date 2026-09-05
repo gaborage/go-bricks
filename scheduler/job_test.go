@@ -35,7 +35,7 @@ func TestJobInterface(t *testing.T) {
 		)
 
 		err := job.Execute(ctx)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.True(t, job.executed, "Job should have been executed")
 	})
 }
@@ -183,13 +183,13 @@ func TestJobContextContextBehavior(t *testing.T) {
 		)
 
 		// Before cancellation
-		assert.NoError(t, ctx.Err())
+		require.NoError(t, ctx.Err())
 
 		// Trigger cancellation
 		cancel()
 
 		// After cancellation
-		assert.Error(t, ctx.Err())
+		require.Error(t, ctx.Err())
 		assert.Equal(t, context.Canceled, ctx.Err())
 	})
 
@@ -208,7 +208,7 @@ func TestJobContextContextBehavior(t *testing.T) {
 		<-parentCtx.Done()
 
 		// Should be canceled
-		assert.Error(t, ctx.Err())
+		require.Error(t, ctx.Err())
 		assert.Equal(t, context.DeadlineExceeded, ctx.Err())
 	})
 

@@ -2,7 +2,6 @@ package provisioning
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -64,7 +63,7 @@ func TestMemoryStoreTransitionGuardsStateGraph(t *testing.T) {
 	// Illegal edge.
 	err = s.Transition(ctx, "j1", StatePending, StateMigrated, nil, "")
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrIllegalTransition))
+	assert.ErrorIs(t, err, ErrIllegalTransition)
 }
 
 func TestMemoryStoreTransitionEnforcesOptimisticConcurrency(t *testing.T) {
@@ -79,13 +78,13 @@ func TestMemoryStoreTransitionEnforcesOptimisticConcurrency(t *testing.T) {
 	// Second writer with the stale `from` must be rejected.
 	err = s.Transition(ctx, "j1", StatePending, StateSchemaCreated, nil, "")
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrStaleRead))
+	assert.ErrorIs(t, err, ErrStaleRead)
 }
 
 func TestMemoryStoreTransitionReturnsErrJobNotFound(t *testing.T) {
 	err := NewMemoryStore().Transition(context.Background(), "missing", StatePending, StateSchemaCreated, nil, "")
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrJobNotFound))
+	assert.ErrorIs(t, err, ErrJobNotFound)
 }
 
 func TestMemoryStoreTransitionUpdatesAttemptsAndMetadata(t *testing.T) {
@@ -139,7 +138,7 @@ func TestMemoryStoreUpsertRejectsSecondActiveJobForTenant(t *testing.T) {
 
 	_, err = s.Upsert(ctx, &Job{ID: "job-2", TenantID: "tenant-x"})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrTenantBusy), "want wrapped ErrTenantBusy, got %v", err)
+	assert.ErrorIs(t, err, ErrTenantBusy, "want wrapped ErrTenantBusy, got %v", err)
 }
 
 // TestMemoryStoreUpsertAllowsReprovisionAfterTerminal verifies the exclusion
@@ -174,7 +173,7 @@ func TestMemoryStoreUpsertSameIDIsNotBusy(t *testing.T) {
 	again, err := s.Upsert(ctx, &Job{ID: "job-1", TenantID: "tenant-x"})
 	require.NoError(t, err)
 	assert.Equal(t, first.State, again.State)
-	assert.False(t, errors.Is(err, ErrTenantBusy))
+	assert.NotErrorIs(t, err, ErrTenantBusy)
 }
 
 func TestMemoryStoreUpsertRejectsInvalidJob(t *testing.T) {
@@ -192,7 +191,7 @@ func TestMemoryStoreUpsertRejectsInvalidJob(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := s.Upsert(context.Background(), tt.job)
 			require.Error(t, err)
-			assert.True(t, errors.Is(err, ErrInvalidJob), "want wrapped ErrInvalidJob, got %v", err)
+			require.ErrorIs(t, err, ErrInvalidJob, "want wrapped ErrInvalidJob, got %v", err)
 			assert.Contains(t, err.Error(), tt.wantField)
 		})
 	}

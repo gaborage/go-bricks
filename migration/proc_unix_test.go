@@ -48,6 +48,6 @@ func TestConfigureProcessGroupCancelKillsGroup(t *testing.T) {
 	require.NoError(t, cmd.Cancel(), "killing a live process group must succeed")
 
 	_ = cmd.Wait() // reap; the process was SIGKILLed
-	assert.ErrorIs(t, syscall.Kill(-pid, 0), syscall.ESRCH, "process group must be gone")
+	require.ErrorIs(t, syscall.Kill(-pid, 0), syscall.ESRCH, "process group must be gone")
 	assert.ErrorIs(t, cmd.Cancel(), os.ErrProcessDone, "ESRCH must map to os.ErrProcessDone")
 }

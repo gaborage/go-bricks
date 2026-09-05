@@ -196,10 +196,13 @@ func baseEvent() *AuditEvent {
 }
 
 func TestAuditEventTypesArePublishedConstants(t *testing.T) {
-	assert.Equal(t, AuditEventType("migration.applied"), AuditEventTypeMigrationApplied)
-	assert.Equal(t, AuditEventType("state.transitioned"), AuditEventTypeStateTransitioned)
-	assert.Equal(t, AuditEventType("quiesce.set"), AuditEventTypeQuiesceSet)
-	assert.Equal(t, AuditEventType("quiesce.cleared"), AuditEventTypeQuiesceCleared)
+	// The wire string is the contract, so it stays in the expected position; comparing
+	// the constant's underlying string keeps it there without a typed conversion the
+	// linter reads as the actual value.
+	assert.Equal(t, "migration.applied", string(AuditEventTypeMigrationApplied))
+	assert.Equal(t, "state.transitioned", string(AuditEventTypeStateTransitioned))
+	assert.Equal(t, "quiesce.set", string(AuditEventTypeQuiesceSet))
+	assert.Equal(t, "quiesce.cleared", string(AuditEventTypeQuiesceCleared))
 }
 
 func TestErrorClassValuesMatchADR019Taxonomy(t *testing.T) {
@@ -400,7 +403,7 @@ func TestEmitterEmitDoesNotMutateCallerPrincipal(t *testing.T) {
 
 	emitter.Emit(context.Background(), ev)
 
-	assert.Equal(t, "", ev.AppliedByPrincipal,
+	assert.Empty(t, ev.AppliedByPrincipal,
 		"Emit must not write PrincipalUnspecified back into the caller's struct")
 
 	require.NoError(t, emitter.Close(context.Background()))
@@ -601,7 +604,7 @@ func TestMigrateForRecordsFailedOutcomeOnErrorEnvelope(t *testing.T) {
 
 	_, err := fm.Migrate(context.Background(), mcfg)
 	require.Error(t, err, "a success:false envelope at exit 0 must be reported as a failure")
-	assert.ErrorIs(t, err, ErrFlywayReportedFailure)
+	require.ErrorIs(t, err, ErrFlywayReportedFailure)
 
 	sink.waitForFirst(t, 2*time.Second)
 	events := sink.snapshot()
@@ -645,7 +648,7 @@ func TestMigrateForRecordsFailedOutcomeOnUnparseableOutput(t *testing.T) {
 
 	_, err := fm.Migrate(context.Background(), mcfg)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrFlywayOutputUnparsed)
+	require.ErrorIs(t, err, ErrFlywayOutputUnparsed)
 
 	sink.waitForFirst(t, 2*time.Second)
 	events := sink.snapshot()
