@@ -19,15 +19,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/logger"
-	"github.com/gaborage/go-bricks/testing/containers"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 const (
-	itStream       = "it-orders"
-	itConsumerName = "it-group"
-	itSuperStream  = "it-orders-super"
-	itSuperGroup   = "it-super-group"
 	itPartitions   = 3
 	itWaitTimeout  = 20 * time.Second
 	itPollInterval = 50 * time.Millisecond
@@ -93,14 +88,12 @@ func (r *recorder) propertiesSnapshot() []map[string]any {
 	return append([]map[string]any(nil), r.properties...)
 }
 
-// streamsTestEnv boots RabbitMQ with the stream plugin and returns the manager
-// options every test in this file uses.
-func streamsTestEnv(ctx context.Context, t *testing.T) ManagerOptions {
+// streamsTestEnv points the manager options every test in this file uses at the
+// stream-enabled broker the whole test binary shares (see integration_main_test.go).
+func streamsTestEnv(t *testing.T) ManagerOptions {
 	t.Helper()
 
-	cfg := containers.DefaultRabbitMQConfig()
-	cfg.EnableStreamPlugin = true
-	container := containers.MustStartRabbitMQContainer(ctx, t, cfg).WithCleanup(t)
+	container := pkgBroker.Get(t)
 
 	return ManagerOptions{
 		URI: container.StreamURI(),
@@ -114,15 +107,21 @@ func streamsTestEnv(ctx context.Context, t *testing.T) ManagerOptions {
 	}
 }
 
+// streamEnvironmentOptions is how both the tests and the cleanup dial the broker:
+// the manager's URI plus the address resolver the container demands, since the
+// broker advertises an address only reachable from inside it.
+func streamEnvironmentOptions(opts ManagerOptions) *stream.EnvironmentOptions {
+	return stream.NewEnvironmentOptions().
+		SetUri(opts.URI).
+		SetAddressResolver(stream.AddressResolver{Host: opts.AddressResolverHost, Port: opts.AddressResolverPort})
+}
+
 // testEnvironment dials the broker the way the manager does, for the test's own
 // producing and querying.
 func testEnvironment(t *testing.T, opts ManagerOptions) *stream.Environment {
 	t.Helper()
 
-	envOpts := stream.NewEnvironmentOptions().
-		SetUri(opts.URI).
-		SetAddressResolver(stream.AddressResolver{Host: opts.AddressResolverHost, Port: opts.AddressResolverPort})
-	env, err := stream.NewEnvironment(envOpts)
+	env, err := stream.NewEnvironment(streamEnvironmentOptions(opts))
 	require.NoError(t, err)
 	return env
 }
@@ -154,14 +153,14 @@ func bodiesFrom(prefix string, from, count int) []string {
 	return out
 }
 
-func startManager(t *testing.T, opts ManagerOptions, handler Handler) *Manager {
+func startManager(t *testing.T, opts ManagerOptions, names itNames, handler Handler) *Manager {
 	t.Helper()
 
 	decls := NewDeclarations()
-	decls.DeclareStream(itStream, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
+	decls.DeclareStream(names.stream, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
 	decls.DeclareConsumer(&ConsumerOptions{
-		Stream:  itStream,
-		Name:    itConsumerName,
+		Stream:  names.stream,
+		Name:    names.consumer,
 		Start:   OffsetFirst(),
 		Handler: handler,
 	})
@@ -181,13 +180,13 @@ func waitForCount(t *testing.T, r *recorder, want int) {
 // offset contract end to end: a restarted manager with the same consumer name
 // resumes after the last committed offset instead of replaying the stream.
 func TestStreamsManagerConsumesAndRestoresOffsetIntegration(t *testing.T) {
-	ctx := context.Background()
-	opts := streamsTestEnv(ctx, t)
+	opts := streamsTestEnv(t)
+	names := newITNames(t, opts)
 
 	first := &recorder{failAt: -1}
-	m := startManager(t, opts, first.handle)
+	m := startManager(t, opts, names, first.handle)
 
-	publish(t, opts, itStream, bodiesFrom("msg", 0, 10))
+	publish(t, opts, names.stream, bodiesFrom("msg", 0, 10))
 	waitForCount(t, first, 10)
 
 	offsets, bodies := first.snapshot()
@@ -199,7 +198,7 @@ func TestStreamsManagerConsumesAndRestoresOffsetIntegration(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		stored, ok := m.Stats()["stored_offsets"].(map[string]int64)
-		return ok && stored[itStream+"/"+itConsumerName] == offsets[9]
+		return ok && stored[names.stream+"/"+names.consumer] == offsets[9]
 	}, itWaitTimeout, itPollInterval, "the last handled offset must reach the broker")
 
 	m.StopConsumers()
@@ -207,13 +206,13 @@ func TestStreamsManagerConsumesAndRestoresOffsetIntegration(t *testing.T) {
 
 	// A fresh manager under the same consumer name must not re-read the first 10.
 	second := &recorder{failAt: -1}
-	m2 := startManager(t, opts, second.handle)
+	m2 := startManager(t, opts, names, second.handle)
 	t.Cleanup(func() {
 		m2.StopConsumers()
 		require.NoError(t, m2.Close())
 	})
 
-	publish(t, opts, itStream, bodiesFrom("msg", 10, 3))
+	publish(t, opts, names.stream, bodiesFrom("msg", 10, 3))
 	waitForCount(t, second, 3)
 
 	_, secondBodies := second.snapshot()
@@ -225,14 +224,14 @@ func TestStreamsManagerConsumesAndRestoresOffsetIntegration(t *testing.T) {
 // TestStreamsManagerSkipsFailedMessageIntegration pins the documented consequence
 // of committing only after success: a failed message is skipped, never redelivered.
 func TestStreamsManagerSkipsFailedMessageIntegration(t *testing.T) {
-	ctx := context.Background()
-	opts := streamsTestEnv(ctx, t)
+	opts := streamsTestEnv(t)
+	names := newITNames(t, opts)
 
 	// Offset 4 is the fifth message in a fresh stream.
 	failing := &recorder{failAt: 4}
-	m := startManager(t, opts, failing.handle)
+	m := startManager(t, opts, names, failing.handle)
 
-	publish(t, opts, itStream, bodiesFrom("msg", 0, 10))
+	publish(t, opts, names.stream, bodiesFrom("msg", 0, 10))
 	waitForCount(t, failing, 10)
 
 	offsets, _ := failing.snapshot()
@@ -241,20 +240,20 @@ func TestStreamsManagerSkipsFailedMessageIntegration(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		stored, ok := m.Stats()["stored_offsets"].(map[string]int64)
-		return ok && stored[itStream+"/"+itConsumerName] == int64(9)
+		return ok && stored[names.stream+"/"+names.consumer] == int64(9)
 	}, itWaitTimeout, itPollInterval, "a later success commits a HIGHER offset than the failed one")
 
 	m.StopConsumers()
 	require.NoError(t, m.Close())
 
 	replay := &recorder{failAt: -1}
-	m2 := startManager(t, opts, replay.handle)
+	m2 := startManager(t, opts, names, replay.handle)
 	t.Cleanup(func() {
 		m2.StopConsumers()
 		require.NoError(t, m2.Close())
 	})
 
-	publish(t, opts, itStream, bodiesFrom("msg", 10, 2))
+	publish(t, opts, names.stream, bodiesFrom("msg", 10, 2))
 	waitForCount(t, replay, 2)
 
 	_, replayed := replay.snapshot()
@@ -272,12 +271,12 @@ func partitionName(superStream string, index int) string {
 // publishing into it directly is exactly what a routing strategy would do — and it
 // keeps which body lands on which partition deterministic, which a hash strategy
 // would not.
-func publishAcrossPartitions(t *testing.T, opts ManagerOptions, bodies []string) map[string][]string {
+func publishAcrossPartitions(t *testing.T, opts ManagerOptions, names itNames, bodies []string) map[string][]string {
 	t.Helper()
 
 	perPartition := make(map[string][]string, itPartitions)
 	for i, body := range bodies {
-		name := partitionName(itSuperStream, i%itPartitions)
+		name := partitionName(names.superStream, i%itPartitions)
 		perPartition[name] = append(perPartition[name], body)
 	}
 	for name, batch := range perPartition {
@@ -287,14 +286,14 @@ func publishAcrossPartitions(t *testing.T, opts ManagerOptions, bodies []string)
 }
 
 // startSuperStreamManager starts one super-stream consumer group member.
-func startSuperStreamManager(t *testing.T, opts ManagerOptions, handler Handler) *Manager {
+func startSuperStreamManager(t *testing.T, opts ManagerOptions, names itNames, handler Handler) *Manager {
 	t.Helper()
 
 	decls := NewDeclarations()
-	decls.DeclareSuperStream(itSuperStream, itPartitions, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
+	decls.DeclareSuperStream(names.superStream, itPartitions, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
 	decls.DeclareSuperStreamConsumer(&SuperStreamConsumerOptions{
-		SuperStream: itSuperStream,
-		Name:        itSuperGroup,
+		SuperStream: names.superStream,
+		Name:        names.superGroup,
 		Start:       OffsetFirst(),
 		Handler:     handler,
 	})
@@ -359,7 +358,7 @@ func roundOwnership(members []*recorder, baselines []map[string]int) (owners map
 // consumer-connection vs locator-connection window ADR-059 accepts), which is why the
 // gate needs a second agreeing round and why the whole thing retries. The returned
 // bodies must stay out of whatever the caller measures.
-func warmUpGroup(t *testing.T, opts ManagerOptions, members ...*recorder) []string {
+func warmUpGroup(t *testing.T, opts ManagerOptions, names itNames, members ...*recorder) []string {
 	t.Helper()
 
 	warmUp := bodiesFrom("warmup", 0, itPartitions)
@@ -368,7 +367,7 @@ func warmUpGroup(t *testing.T, opts ManagerOptions, members ...*recorder) []stri
 	var previous map[string]int
 	for range rounds {
 		baselines := partitionBaselines(members)
-		publishAcrossPartitions(t, opts, warmUp)
+		publishAcrossPartitions(t, opts, names, warmUp)
 
 		var current map[string]int
 		deadline := time.Now().Add(itWaitTimeout / rounds)
@@ -413,19 +412,19 @@ func handledSince(r *recorder, baseline int, want []string) []string {
 // preserved within each one, offsets are committed per partition, and a restarted
 // group member resumes on each partition independently instead of replaying it.
 func TestStreamsManagerConsumesSuperStreamPartitionsIntegration(t *testing.T) {
-	ctx := context.Background()
-	opts := streamsTestEnv(ctx, t)
+	opts := streamsTestEnv(t)
+	names := newITNames(t, opts)
 
 	first := &recorder{failAt: -1}
-	m := startSuperStreamManager(t, opts, first.handle)
+	m := startSuperStreamManager(t, opts, names, first.handle)
 
-	published := publishAcrossPartitions(t, opts, bodiesFrom("msg", 0, 30))
+	published := publishAcrossPartitions(t, opts, names, bodiesFrom("msg", 0, 30))
 	waitForCount(t, first, 30)
 
 	offsets, bodies := first.perStream()
 	require.Len(t, bodies, itPartitions, "every partition delivered")
 	for i := range itPartitions {
-		name := partitionName(itSuperStream, i)
+		name := partitionName(names.superStream, i)
 		assert.Equal(t, published[name], bodies[name], "partition %s keeps its publish order", name)
 		for j := 1; j < len(offsets[name]); j++ {
 			assert.Greater(t, offsets[name][j], offsets[name][j-1],
@@ -439,7 +438,7 @@ func TestStreamsManagerConsumesSuperStreamPartitionsIntegration(t *testing.T) {
 			return false
 		}
 		for i := range itPartitions {
-			if stored[partitionName(itSuperStream, i)+"/"+itSuperGroup] != 9 {
+			if stored[partitionName(names.superStream, i)+"/"+names.superGroup] != 9 {
 				return false
 			}
 		}
@@ -450,10 +449,10 @@ func TestStreamsManagerConsumesSuperStreamPartitionsIntegration(t *testing.T) {
 
 	// A fresh member under the same group name must resume on every partition.
 	second := &recorder{failAt: -1}
-	m2 := startSuperStreamManager(t, opts, second.handle)
+	m2 := startSuperStreamManager(t, opts, names, second.handle)
 	t.Cleanup(func() { stopManager(t, m2) })
 
-	resumed := publishAcrossPartitions(t, opts, bodiesFrom("msg", 30, 9))
+	resumed := publishAcrossPartitions(t, opts, names, bodiesFrom("msg", 30, 9))
 	waitForCount(t, second, 9)
 
 	_, secondBodies := second.perStream()
@@ -466,22 +465,22 @@ func TestStreamsManagerConsumesSuperStreamPartitionsIntegration(t *testing.T) {
 // message is handled by exactly one of them, and stopping the first hands its
 // partitions to the second, resumed from the offsets it had committed.
 func TestStreamsManagerSuperStreamDistributesPartitionsIntegration(t *testing.T) {
-	ctx := context.Background()
-	opts := streamsTestEnv(ctx, t)
+	opts := streamsTestEnv(t)
+	names := newITNames(t, opts)
 
 	firstMember := &recorder{failAt: -1}
-	m1 := startSuperStreamManager(t, opts, firstMember.handle)
+	m1 := startSuperStreamManager(t, opts, names, firstMember.handle)
 	secondMember := &recorder{failAt: -1}
-	m2 := startSuperStreamManager(t, opts, secondMember.handle)
+	m2 := startSuperStreamManager(t, opts, names, secondMember.handle)
 	t.Cleanup(func() { stopManager(t, m2) })
 
 	// Exclusivity is a property of a settled group, so nothing is measured until the
 	// join's rebalance has demonstrably landed on both members.
-	warmUp := warmUpGroup(t, opts, firstMember, secondMember)
+	warmUp := warmUpGroup(t, opts, names, firstMember, secondMember)
 	firstBase, secondBase := firstMember.count(), secondMember.count()
 
 	measured := bodiesFrom("msg", 0, 30)
-	publishAcrossPartitions(t, opts, measured)
+	publishAcrossPartitions(t, opts, names, measured)
 	// Gate on the measured bodies themselves: a raw count is satisfied by duplicates.
 	require.Eventually(t, func() bool {
 		seen := slices.Concat(handledSince(firstMember, firstBase, measured),
@@ -506,7 +505,7 @@ func TestStreamsManagerSuperStreamDistributesPartitionsIntegration(t *testing.T)
 	handedOver := secondMember.count()
 
 	newBodies := bodiesFrom("msg", 30, 15)
-	publishAcrossPartitions(t, opts, newBodies)
+	publishAcrossPartitions(t, opts, names, newBodies)
 	// Gate on the new bodies themselves: a raw count is satisfied by 15 replays alone.
 	require.Eventually(t, func() bool {
 		_, seen := secondMember.snapshot()
@@ -534,17 +533,18 @@ func TestStreamsManagerSuperStreamDistributesPartitionsIntegration(t *testing.T)
 // partition count is accepted and the existing topology is kept.
 func TestStreamsManagerSuperStreamPartitionMismatchIsSilentIntegration(t *testing.T) {
 	ctx := context.Background()
-	opts := streamsTestEnv(ctx, t)
+	opts := streamsTestEnv(t)
+	names := newITNames(t, opts)
 
 	first := NewManager(opts)
 	firstDecls := NewDeclarations()
-	firstDecls.DeclareSuperStream(itSuperStream, itPartitions, nil)
+	firstDecls.DeclareSuperStream(names.superStream, itPartitions, nil)
 	require.NoError(t, first.Start(ctx, firstDecls))
 	stopManager(t, first)
 
 	second := NewManager(opts)
 	conflicting := NewDeclarations()
-	conflicting.DeclareSuperStream(itSuperStream, itPartitions+2, nil)
+	conflicting.DeclareSuperStream(names.superStream, itPartitions+2, nil)
 
 	err := second.Start(ctx, conflicting)
 
@@ -553,7 +553,7 @@ func TestStreamsManagerSuperStreamPartitionMismatchIsSilentIntegration(t *testin
 
 	env := testEnvironment(t, opts)
 	defer func() { require.NoError(t, env.Close()) }()
-	partitions, err := env.QueryPartitions(itSuperStream)
+	partitions, err := env.QueryPartitions(names.superStream)
 	require.NoError(t, err)
 	assert.Len(t, partitions, itPartitions,
 		"the declared widening never reached the topology - the first declaration still stands")
@@ -561,14 +561,14 @@ func TestStreamsManagerSuperStreamPartitionMismatchIsSilentIntegration(t *testin
 
 // startSACManager starts a single active consumer, whose promotion callback is the
 // code path the client invokes from its own read-loop goroutine.
-func startSACManager(t *testing.T, opts ManagerOptions, handler Handler) *Manager {
+func startSACManager(t *testing.T, opts ManagerOptions, names itNames, handler Handler) *Manager {
 	t.Helper()
 
 	decls := NewDeclarations()
-	decls.DeclareStream(itStream, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
+	decls.DeclareStream(names.stream, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
 	decls.DeclareConsumer(&ConsumerOptions{
-		Stream:  itStream,
-		Name:    itConsumerName,
+		Stream:  names.stream,
+		Name:    names.consumer,
 		Start:   OffsetFirst(),
 		SAC:     true,
 		Handler: handler,
@@ -584,13 +584,13 @@ func startSACManager(t *testing.T, opts ManagerOptions, handler Handler) *Manage
 // the environment snapshot that callback closes over: reading m.env there instead
 // would be an unsynchronized read of a field Close nils.
 func TestStreamsManagerSingleActiveConsumerIntegration(t *testing.T) {
-	ctx := context.Background()
-	opts := streamsTestEnv(ctx, t)
+	opts := streamsTestEnv(t)
+	names := newITNames(t, opts)
 
 	first := &recorder{failAt: -1}
-	m := startSACManager(t, opts, first.handle)
+	m := startSACManager(t, opts, names, first.handle)
 
-	publish(t, opts, itStream, bodiesFrom("msg", 0, 6))
+	publish(t, opts, names.stream, bodiesFrom("msg", 0, 6))
 	waitForCount(t, first, 6)
 
 	_, bodies := first.snapshot()
@@ -598,7 +598,7 @@ func TestStreamsManagerSingleActiveConsumerIntegration(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		stored, ok := m.Stats()["stored_offsets"].(map[string]int64)
-		return ok && stored[itStream+"/"+itConsumerName] == 5
+		return ok && stored[names.stream+"/"+names.consumer] == 5
 	}, itWaitTimeout, itPollInterval, "the promoted consumer commits its offsets")
 
 	m.StopConsumers()
@@ -606,13 +606,13 @@ func TestStreamsManagerSingleActiveConsumerIntegration(t *testing.T) {
 
 	// A new group member is promoted in turn and must resume from the stored offset.
 	second := &recorder{failAt: -1}
-	m2 := startSACManager(t, opts, second.handle)
+	m2 := startSACManager(t, opts, names, second.handle)
 	t.Cleanup(func() {
 		m2.StopConsumers()
 		require.NoError(t, m2.Close())
 	})
 
-	publish(t, opts, itStream, bodiesFrom("msg", 6, 2))
+	publish(t, opts, names.stream, bodiesFrom("msg", 6, 2))
 	waitForCount(t, second, 2)
 
 	_, resumed := second.snapshot()
@@ -630,11 +630,12 @@ func TestStreamsManagerSingleActiveConsumerIntegration(t *testing.T) {
 // repeated here.
 func TestStreamsManagerRejectsAConflictingRetentionIntegration(t *testing.T) {
 	ctx := context.Background()
-	opts := streamsTestEnv(ctx, t)
+	opts := streamsTestEnv(t)
+	names := newITNames(t, opts)
 
 	first := NewManager(opts)
 	firstDecls := NewDeclarations()
-	firstDecls.DeclareStream(itStream, &StreamSpec{MaxAge: time.Hour})
+	firstDecls.DeclareStream(names.stream, &StreamSpec{MaxAge: time.Hour})
 	require.NoError(t, first.Start(ctx, firstDecls))
 	first.StopConsumers()
 	require.NoError(t, first.Close())
@@ -642,7 +643,7 @@ func TestStreamsManagerRejectsAConflictingRetentionIntegration(t *testing.T) {
 	// Same stream, different retention: the broker rejects the declaration.
 	second := NewManager(opts)
 	conflicting := NewDeclarations()
-	conflicting.DeclareStream(itStream, &StreamSpec{MaxAge: 48 * time.Hour})
+	conflicting.DeclareStream(names.stream, &StreamSpec{MaxAge: 48 * time.Hour})
 
 	err := second.Start(ctx, conflicting)
 
@@ -662,19 +663,20 @@ func TestStreamsManagerRejectsAConflictingRetentionIntegration(t *testing.T) {
 // consumer receives, application properties included.
 func TestStreamsPublisherRoundTripIntegration(t *testing.T) {
 	ctx := context.Background()
-	opts := streamsTestEnv(ctx, t)
+	opts := streamsTestEnv(t)
+	names := newITNames(t, opts)
 
 	received := &recorder{failAt: -1}
 
 	decls := NewDeclarations()
-	decls.DeclareStream(itStream, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
+	decls.DeclareStream(names.stream, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
 	decls.DeclareConsumer(&ConsumerOptions{
-		Stream:  itStream,
-		Name:    itConsumerName,
+		Stream:  names.stream,
+		Name:    names.consumer,
 		Start:   OffsetFirst(),
 		Handler: received.handle,
 	})
-	publisher := decls.DeclarePublisher(&PublisherOptions{Stream: itStream})
+	publisher := decls.DeclarePublisher(&PublisherOptions{Stream: names.stream})
 	require.NoError(t, decls.Validate())
 
 	m := NewManager(opts)
@@ -849,19 +851,20 @@ func assertHashGrouping(t *testing.T, keys []string, indexOf map[string]int, par
 // optional tag.
 func TestStreamsSuperStreamPublisherPartitionsIntegration(t *testing.T) {
 	ctx := context.Background()
-	opts := streamsTestEnv(ctx, t)
+	opts := streamsTestEnv(t)
+	names := newITNames(t, opts)
 
 	received := &recorder{failAt: -1}
 
 	decls := NewDeclarations()
-	decls.DeclareSuperStream(itSuperStream, itPartitions, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
+	decls.DeclareSuperStream(names.superStream, itPartitions, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
 	decls.DeclareSuperStreamConsumer(&SuperStreamConsumerOptions{
-		SuperStream: itSuperStream,
-		Name:        itSuperGroup,
+		SuperStream: names.superStream,
+		Name:        names.superGroup,
 		Start:       OffsetFirst(),
 		Handler:     received.handle,
 	})
-	publisher := decls.DeclareSuperStreamPublisher(&SuperStreamPublisherOptions{SuperStream: itSuperStream})
+	publisher := decls.DeclareSuperStreamPublisher(&SuperStreamPublisherOptions{SuperStream: names.superStream})
 	require.NoError(t, decls.Validate())
 
 	m := NewManager(opts)
@@ -889,11 +892,12 @@ func TestStreamsSuperStreamPublisherPartitionsIntegration(t *testing.T) {
 // than publishing into an environment about to be disposed.
 func TestStreamsPublisherRejectedAfterStopIntegration(t *testing.T) {
 	ctx := context.Background()
-	opts := streamsTestEnv(ctx, t)
+	opts := streamsTestEnv(t)
+	names := newITNames(t, opts)
 
 	decls := NewDeclarations()
-	decls.DeclareStream(itStream, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
-	publisher := decls.DeclarePublisher(&PublisherOptions{Stream: itStream})
+	decls.DeclareStream(names.stream, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
+	publisher := decls.DeclarePublisher(&PublisherOptions{Stream: names.stream})
 	require.NoError(t, decls.Validate())
 
 	m := NewManager(opts)
