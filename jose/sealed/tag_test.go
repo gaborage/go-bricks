@@ -222,12 +222,14 @@ func TestScanTypeScanErrors(t *testing.T) {
 			spec, err := sealed.ScanType(tc.typ)
 			assert.Nil(t, spec)
 			require.Error(t, err)
-			require.ErrorIs(t, err, sealed.ErrTagInvalid)
 			var jerr *jose.Error
 			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, tc.code, jerr.Code)
 			assert.Contains(t, jerr.Message, tc.msg)
 			assert.NotContains(t, jerr.Message, "%!", "message must be fully formatted")
+			// Sentinel last: a wrong sentinel must not abort before the
+			// fully-formatted-message guard above.
+			require.ErrorIs(t, err, sealed.ErrTagInvalid)
 		})
 	}
 }

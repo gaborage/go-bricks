@@ -70,9 +70,11 @@ func TestScanErrorCarriesSentinelAndCode(t *testing.T) {
 		Card string `json:"card" seal:"subject"`
 	}{}))
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrTagInvalid)
-	require.NotErrorIs(t, err, ErrSealFailed)
 	var je *jose.Error
 	require.ErrorAs(t, err, &je)
 	assert.Equal(t, CodeTagSentinelMissing, je.Code)
+	// Sentinels last: they are require, and a mismatch must not abort before the
+	// code assertion above, which is an independent property of the same error.
+	require.ErrorIs(t, err, ErrTagInvalid)
+	require.NotErrorIs(t, err, ErrSealFailed)
 }

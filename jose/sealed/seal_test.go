@@ -242,12 +242,14 @@ func TestSealFamilyPinRefusesForeignOrLogicalKids(t *testing.T) {
 			opts.SignKid, opts.EncryptKid = tc.sign, tc.encrypt
 			wire, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
 			assert.Nil(t, wire)
-			require.ErrorIs(t, err, sealed.ErrKidFamilyMismatch)
 			var jerr *bricksjose.Error
 			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, sealed.CodeKidFamilyMismatch, jerr.Code)
 			assert.Equal(t, tc.wantKid, jerr.Kid)
 			assert.Contains(t, jerr.Message, tc.role+" kid")
+			// Sentinel last: which kid was rejected is an independent property, and
+			// a sentinel regression must not abort before it.
+			require.ErrorIs(t, err, sealed.ErrKidFamilyMismatch)
 		})
 	}
 }
@@ -269,10 +271,12 @@ func TestSealPropagatesResolverErrors(t *testing.T) {
 			opts := testOptions(t)
 			opts.Keys = tc.resolver
 			_, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
-			require.ErrorIs(t, err, bricksjose.ErrKidUnknown, "resolver error propagates verbatim")
 			var jerr *bricksjose.Error
 			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, tc.wantKid, jerr.Kid)
+			// Sentinel last: the kid the resolver was asked for is independent of
+			// which sentinel propagated.
+			require.ErrorIs(t, err, bricksjose.ErrKidUnknown, "resolver error propagates verbatim")
 		})
 	}
 }
@@ -303,10 +307,11 @@ func TestSealRejectsInvalidInputs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			wire, err := sealed.Seal(tc.evt, tc.spec, tc.opts)
 			assert.Nil(t, wire)
-			require.ErrorIs(t, err, sealed.ErrSealFailed)
 			var jerr *bricksjose.Error
 			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, tc.code, jerr.Code)
+			// Sentinel last: the code is an independent property of the same error.
+			require.ErrorIs(t, err, sealed.ErrSealFailed)
 		})
 	}
 }
@@ -320,7 +325,7 @@ func TestOptionsValidateIsAKeyFreePreflight(t *testing.T) {
 	assert.Zero(t, counting.calls, "Validate must not touch key material")
 
 	opts.SignKid = "svc-orders-sign-v1"
-	require.ErrorIs(t, opts.Validate(spec), sealed.ErrKidFamilyMismatch)
+	assert.ErrorIs(t, opts.Validate(spec), sealed.ErrKidFamilyMismatch)
 
 	var nilOpts *sealed.Options
 	assert.ErrorIs(t, nilOpts.Validate(spec), sealed.ErrSealFailed)

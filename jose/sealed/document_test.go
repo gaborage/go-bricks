@@ -64,11 +64,13 @@ func TestNewDocumentSpecRejectsInvalidArguments(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			spec, err := sealed.NewDocumentSpec(tc.sign, tc.encrypt, tc.path)
 			assert.Nil(t, spec)
-			require.ErrorIs(t, err, sealed.ErrTagInvalid)
 			var jerr *bricksjose.Error
 			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, tc.code, jerr.Code)
 			assert.Equal(t, tc.kid, jerr.Kid)
+			// Sentinel last: it is require, and a wrong sentinel must not abort
+			// before the code and kid above, which are independent properties.
+			require.ErrorIs(t, err, sealed.ErrTagInvalid)
 		})
 	}
 }
@@ -146,7 +148,6 @@ func TestSealDocumentRejectsInvalidDocuments(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			wire, err := sealed.SealDocument([]byte(tc.doc), documentSpec(t), testOptions(t))
 			assert.Nil(t, wire)
-			require.ErrorIs(t, err, sealed.ErrSealFailed)
 			var jerr *bricksjose.Error
 			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, sealed.CodeDocumentInvalid, jerr.Code)
@@ -155,6 +156,9 @@ func TestSealDocumentRejectsInvalidDocuments(t *testing.T) {
 			assert.NotContains(t, err.Error(), "Card")
 			assert.NotContains(t, err.Error(), "CARD")
 			assert.NotContains(t, err.Error(), testPAN)
+			// Sentinel last: a wrong sentinel must not abort before the PAN and
+			// case-fold-twin leak checks above, which are what this test guards.
+			require.ErrorIs(t, err, sealed.ErrSealFailed)
 		})
 	}
 }

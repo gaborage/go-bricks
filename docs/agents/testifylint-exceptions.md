@@ -59,9 +59,19 @@ test, not inferred from the diff.
 
 ## jose (#1092 / W3-P7)
 
-Both shapes here are the checker being mechanically right and substantively wrong about what
-the assertion pins. Neither is a `require-error` ordering case, so neither could be resolved
-by reordering.
+Three shapes. The `encoded-compare` and `float-compare` rows are the checker being
+mechanically right and substantively wrong about what the assertion pins; those two shapes are
+not ordering cases, so reordering could not resolve them. The `require-error` rows below them
+ARE ordering cases, but of the kind that reordering cannot fix either: they are independent
+PEER probes of different branches, not a leader with a follower.
+
+Sites where a sentinel check preceded an independent assertion were REORDERED rather than
+listed — the independent assertions now run first and the sentinel is last as `require`. The
+distinction that decides it: converting an error-EXISTENCE check (`assert.Error`,
+`assert.NoError`) is safe when the followers need the error to exist at all, because an abort
+loses nothing they could still have checked; converting a sentinel-IDENTITY check
+(`assert.ErrorIs`) is not, because a wrong sentinel leaves every other property of the error
+still checkable, and aborting throws that away.
 
 | site | checker | why it stays as written | directive FINAL inserts |
 | --- | --- | --- | --- |
@@ -70,6 +80,16 @@ by reordering.
 | `jose/sealed/splice_test.go:113` | encoded-compare | `TestSpliceRawInsertsReplacementVerbatim` — "verbatim" is byte-exactness by name. | `//nolint:testifylint // verbatim insertion is a byte-level property` |
 | `jose/sealed/splice_test.go:114` | encoded-compare | Same test, the unmutated-input half. | `//nolint:testifylint // asserts the input buffer is byte-identical` |
 | `jose/sealed/seal_test.go:150` | float-compare | `iat` is whole seconds, decoded from JSON as `float64`, inside a block pinning "exactly the decided protected header set and values". A tolerance would let a drifting `iat` pass, which is the one thing the assertion exists to catch. | `//nolint:testifylint // exact issued-at; a tolerance would accept a drifting iat` |
+| `jose/internal/cryptoadapter/extra_test.go:94` | require-error | `TestExtraRoundTripInt64` probes four INDEPENDENT branches of `ExtraInt64` in one test — fractional, non-numeric, magnitude, absent. `require` on any one abandons the rest, including the 2^53 boundary case that must PASS. | `//nolint:testifylint // independent branch probe; require would abort the peers` |
+| `jose/internal/cryptoadapter/extra_test.go:96` | require-error | Same test, the non-numeric branch. | `//nolint:testifylint // independent branch probe` |
+| `jose/internal/cryptoadapter/extra_test.go:98` | require-error | Same test, the magnitude branch. | `//nolint:testifylint // independent branch probe` |
+| `jose/internal/cryptoadapter/extra_test.go:104` | require-error | Same test, the absent branch, which also pins that absence is NOT reported as malformed. | `//nolint:testifylint // independent branch probe` |
+| `jose/internal/cryptoadapter/extra_test.go:122` | require-error | `TestExtraRoundTripStringSlice`: the inner not-a-string branch, independent of the outer not-an-array branch below it. | `//nolint:testifylint // independent branch probe` |
+| `jose/internal/cryptoadapter/extra_test.go:124` | require-error | Same test, the outer not-an-array branch. | `//nolint:testifylint // independent branch probe` |
+| `jose/internal/cryptoadapter/extra_test.go:165` | require-error | `Sign` and `Encrypt` call `checkExtra` at separate sites; the following line probes `Encrypt` independently, so a `Sign` regression must not hide an `Encrypt` one. | `//nolint:testifylint // Encrypt's own collision check follows` |
+| `jose/internal/cryptoadapter/extra_test.go:280` | require-error | The oversized-segment branch; the line below probes the separate segment-COUNT branch with the same function. | `//nolint:testifylint // separate segment-count branch follows` |
+| `jose/internal/cryptoadapter/extra_test.go:302` | require-error | `ExtraInt64`'s nil-guard; the line below probes `ExtraStringSlice`'s own nil-guard, a different method. | `//nolint:testifylint // a different accessor's nil-guard follows` |
+| `jose/sealed/seal_test.go:328` | require-error | The family-mismatch branch of `Options.Validate`; the line below exercises the separate nil-receiver branch, so one regression must not mask the other. | `//nolint:testifylint // nil-receiver branch probed below` |
 
 Harvest note for the FINAL author: P5, P6 and P9 documented their false positives in their PR
 bodies rather than here (this file postdates them) — pull those rows in before converting.

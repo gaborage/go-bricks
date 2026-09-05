@@ -410,6 +410,13 @@ func TestOpenNegativeVectors(t *testing.T) {
 			var je *bricksjose.Error
 			require.ErrorAs(t, err, &je, "*bricksjose.Error-compatible")
 			assert.Equal(t, tc.Code, je.Code)
+			// Never a slot value in the error text (#1307): presence and lengths only.
+			// This runs BEFORE the sentinel switch: the switch is require, and a
+			// sentinel regression must not abort before the leak check, which is an
+			// independent property of the same error.
+			for _, secret := range []string{vecJTI, eventType, vecTenant, "payment.voided", "tenant-b", "has:colon"} {
+				assert.NotContains(t, err.Error(), secret)
+			}
 			switch tc.Code {
 			case sealed.CodeNotSealed:
 				require.ErrorIs(t, err, sealed.ErrNotSealed)
@@ -419,10 +426,6 @@ func TestOpenNegativeVectors(t *testing.T) {
 				require.ErrorIs(t, err, sealed.ErrKidFamilyMismatch)
 			default:
 				require.ErrorIs(t, err, sealed.ErrOpenFailed)
-			}
-			// Never a slot value in the error text (#1307): presence and lengths only.
-			for _, secret := range []string{vecJTI, eventType, vecTenant, "payment.voided", "tenant-b", "has:colon"} {
-				assert.NotContains(t, err.Error(), secret)
 			}
 		})
 	}
