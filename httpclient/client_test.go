@@ -842,17 +842,20 @@ func TestClientRetries(t *testing.T) {
 	})
 
 	t.Run("retries on timeout then fails", func(t *testing.T) {
-		var calls atomic.Int32
 		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
-			calls.Add(1)
 			time.Sleep(50 * time.Millisecond)
 			w.WriteHeader(nethttp.StatusOK)
 		}))
 		defer server.Close()
 
+		var attempts atomic.Int32
 		client, buildErr := NewBuilder(log).
 			WithTimeout(10*time.Millisecond).
 			WithRetries(1, 5*time.Millisecond).
+			WithRequestInterceptor(func(_ context.Context, _ *nethttp.Request) error {
+				attempts.Add(1)
+				return nil
+			}).
 			Build()
 		require.NoError(t, buildErr)
 
@@ -860,7 +863,11 @@ func TestClientRetries(t *testing.T) {
 		_, err := client.Get(context.Background(), req)
 		require.Error(t, err)
 		assert.True(t, IsErrorType(err, TimeoutError))
-		assert.Equal(t, int32(2), calls.Load()) // initial + one retry
+		// The count is taken in the client's goroutine: runRequestInterceptors
+		// runs once per attempt inside buildRequest. A handler-goroutine counter
+		// races this assertion, which fires as soon as the client gives up 10ms
+		// in, while the second attempt's handler may not have been dispatched.
+		assert.Equal(t, int32(2), attempts.Load()) // initial + one retry
 	})
 }
 
