@@ -14,37 +14,29 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/internal/dbtestlog"
-	"github.com/gaborage/go-bricks/testing/containers"
 )
 
 const (
 	shouldCreateTableMsg = "Should create test table"
-	containerHostErr     = "Failed to get container host"
-	containerPortErr     = "Failed to get container port"
 )
 
-// setupTestContainer starts a PostgreSQL testcontainer and returns the connection
-// The container is automatically cleaned up when the test finishes
+// setupTestContainer gives the calling test its own database on the package-wide
+// PostgreSQL container and returns a connection bound to it. The database is
+// dropped when the test finishes.
 func setupTestContainer(t *testing.T) (*Connection, context.Context) {
 	t.Helper()
 
-	// Create context with timeout to prevent indefinite hangs
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx := t.Context()
 
-	// Register cleanup to cancel context and close connection
-	t.Cleanup(func() {
-		cancel()
-	})
-
-	// Start PostgreSQL container with default configuration
-	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
+	// Give this test its own database on the package-wide container
+	db := pkgPG.Get(t).NewDatabase(t)
 
 	// Create logger for tests (disabled output)
 	log := dbtestlog.NewDisabledTestLogger()
 
-	// Create config using connection string from container
+	// Create config using the per-test database connection string
 	cfg := &config.DatabaseConfig{
-		ConnectionString: pgContainer.ConnectionString(),
+		ConnectionString: db.ConnectionString(),
 		Pool: config.PoolConfig{
 			Max: config.PoolMaxConfig{
 				Connections: 25,
@@ -63,11 +55,9 @@ func setupTestContainer(t *testing.T) (*Connection, context.Context) {
 	conn, err := NewConnection(cfg, log)
 	require.NoError(t, err, "Failed to create PostgreSQL connection")
 
-	// Register cleanup to close connection before container terminates
+	// Register cleanup to close the connection before the database is dropped
 	t.Cleanup(func() {
-		if conn != nil {
-			_ = conn.Close()
-		}
+		_ = conn.Close()
 	})
 
 	// Verify connection works
@@ -353,17 +343,12 @@ func TestConnectionTransactionIsolation(t *testing.T) {
 // =============================================================================
 
 func TestConnectionPoolConfiguration(t *testing.T) {
-	// Create context with timeout to prevent indefinite hangs
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-
-	// Start container
-	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
+	db := pkgPG.Get(t).NewDatabase(t)
 	log := dbtestlog.NewDisabledTestLogger()
 
 	// Create connection with specific pool configuration
 	cfg := &config.DatabaseConfig{
-		ConnectionString: pgContainer.ConnectionString(),
+		ConnectionString: db.ConnectionString(),
 		Pool: config.PoolConfig{
 			Max: config.PoolMaxConfig{
 				Connections: 5,
@@ -400,22 +385,11 @@ func TestConnectionPoolConfiguration(t *testing.T) {
 // - TCP socket SetKeepAlive() and SetKeepAlivePeriod() calls
 // Coverage target: makeKeepAliveDialer() lines 40-64
 func TestConnectionWithTCPKeepAlive(t *testing.T) {
-	// Create context with timeout to prevent indefinite hangs
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
+	ctx := t.Context()
 
-	// Start container
-	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
+	// Give this test its own database on the package-wide container
+	db := pkgPG.Get(t).NewDatabase(t)
 	log := dbtestlog.NewDisabledTestLogger()
-
-	// Get host and port from container
-	host, err := pgContainer.Host(ctx)
-	require.NoError(t, err, containerHostErr)
-	port, err := pgContainer.MappedPort(ctx)
-	require.NoError(t, err, containerPortErr)
-
-	// Use default config values for credentials
-	defaultCfg := containers.DefaultPostgreSQLConfig()
 
 	// Use host/port config (not ConnectionString) with KeepAlive enabled
 	// This ensures:
@@ -423,11 +397,11 @@ func TestConnectionWithTCPKeepAlive(t *testing.T) {
 	// 2. Keep-alive dialer is configured (lines 131-136)
 	// 3. Actual TCP connection with keep-alive settings (lines 47-62)
 	cfg := &config.DatabaseConfig{
-		Host:     host,
-		Port:     port,
-		Username: defaultCfg.Username,
-		Password: defaultCfg.Password,
-		Database: defaultCfg.Database,
+		Host:     db.Host,
+		Port:     db.Port,
+		Username: db.Username,
+		Password: db.Password,
+		Database: db.Database,
 		Pool: config.PoolConfig{
 			Max: config.PoolMaxConfig{
 				Connections: 5,
@@ -469,31 +443,20 @@ func TestConnectionWithTCPKeepAlive(t *testing.T) {
 // This exercises quoteDSN() and the DSN building logic in NewConnection.
 // Coverage target: NewConnection lines 109-122
 func TestConnectionWithHostPort(t *testing.T) {
-	// Create context with timeout to prevent indefinite hangs
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
+	ctx := t.Context()
 
-	// Start container
-	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
+	// Give this test its own database on the package-wide container
+	db := pkgPG.Get(t).NewDatabase(t)
 	log := dbtestlog.NewDisabledTestLogger()
-
-	// Get host and port from container
-	host, err := pgContainer.Host(ctx)
-	require.NoError(t, err, containerHostErr)
-	port, err := pgContainer.MappedPort(ctx)
-	require.NoError(t, err, containerPortErr)
-
-	// Use default config values for credentials
-	defaultCfg := containers.DefaultPostgreSQLConfig()
 
 	// Use host/port config (without ConnectionString)
 	// This exercises the DSN building path instead of the ConnectionString bypass
 	cfg := &config.DatabaseConfig{
-		Host:     host,
-		Port:     port,
-		Username: defaultCfg.Username,
-		Password: defaultCfg.Password,
-		Database: defaultCfg.Database,
+		Host:     db.Host,
+		Port:     db.Port,
+		Username: db.Username,
+		Password: db.Password,
+		Database: db.Database,
 		Pool: config.PoolConfig{
 			Max: config.PoolMaxConfig{
 				Connections: 10,
@@ -525,30 +488,19 @@ func TestConnectionWithHostPort(t *testing.T) {
 // which should use the default interval. This exercises the zero-interval handling.
 // Coverage target: makeKeepAliveDialer with zero interval
 func TestConnectionWithKeepAliveDefaultInterval(t *testing.T) {
-	// Create context with timeout to prevent indefinite hangs
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
+	ctx := t.Context()
 
-	// Start container
-	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
+	// Give this test its own database on the package-wide container
+	db := pkgPG.Get(t).NewDatabase(t)
 	log := dbtestlog.NewDisabledTestLogger()
-
-	// Get host and port from container
-	host, err := pgContainer.Host(ctx)
-	require.NoError(t, err, containerHostErr)
-	port, err := pgContainer.MappedPort(ctx)
-	require.NoError(t, err, containerPortErr)
-
-	// Use default config values for credentials
-	defaultCfg := containers.DefaultPostgreSQLConfig()
 
 	// Use keep-alive with zero interval (should use default)
 	cfg := &config.DatabaseConfig{
-		Host:     host,
-		Port:     port,
-		Username: defaultCfg.Username,
-		Password: defaultCfg.Password,
-		Database: defaultCfg.Database,
+		Host:     db.Host,
+		Port:     db.Port,
+		Username: db.Username,
+		Password: db.Password,
+		Database: db.Database,
 		Pool: config.PoolConfig{
 			Max: config.PoolMaxConfig{
 				Connections: 5,
@@ -579,30 +531,19 @@ func TestConnectionWithKeepAliveDefaultInterval(t *testing.T) {
 // TestConnectionWithTLSMode verifies TLS configuration path in DSN building
 // Coverage target: NewConnection lines 117-119 (TLS mode branch)
 func TestConnectionWithTLSMode(t *testing.T) {
-	// Create context with timeout to prevent indefinite hangs
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
+	ctx := t.Context()
 
-	// Start container
-	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
+	// Give this test its own database on the package-wide container
+	db := pkgPG.Get(t).NewDatabase(t)
 	log := dbtestlog.NewDisabledTestLogger()
-
-	// Get host and port from container
-	host, err := pgContainer.Host(ctx)
-	require.NoError(t, err, containerHostErr)
-	port, err := pgContainer.MappedPort(ctx)
-	require.NoError(t, err, containerPortErr)
-
-	// Use default config values for credentials
-	defaultCfg := containers.DefaultPostgreSQLConfig()
 
 	// Use TLS mode configuration (disable since test container doesn't have TLS)
 	cfg := &config.DatabaseConfig{
-		Host:     host,
-		Port:     port,
-		Username: defaultCfg.Username,
-		Password: defaultCfg.Password,
-		Database: defaultCfg.Database,
+		Host:     db.Host,
+		Port:     db.Port,
+		Username: db.Username,
+		Password: db.Password,
+		Database: db.Database,
 		TLS: config.TLSConfig{
 			Mode: "disable", // Exercises the TLS mode branch
 		},
@@ -643,29 +584,22 @@ func queryPostgresTimezone(t *testing.T, ctx context.Context, conn *Connection) 
 	return tz
 }
 
-// newConnectionWithTimezone is a helper for the timezone tests that boots a
-// Postgres container, then opens a connection with the given timezone setting.
+// newConnectionWithTimezone is a helper for the timezone tests that takes a
+// database on the package-wide container, then opens a connection to it with the
+// given timezone setting.
 func newConnectionWithTimezone(t *testing.T, timezone string) (*Connection, context.Context) {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	t.Cleanup(cancel)
-
-	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
+	ctx := t.Context()
+	db := pkgPG.Get(t).NewDatabase(t)
 	log := dbtestlog.NewDisabledTestLogger()
 
-	host, err := pgContainer.Host(ctx)
-	require.NoError(t, err, containerHostErr)
-	port, err := pgContainer.MappedPort(ctx)
-	require.NoError(t, err, containerPortErr)
-
-	defaults := containers.DefaultPostgreSQLConfig()
 	cfg := &config.DatabaseConfig{
-		Host:     host,
-		Port:     port,
-		Username: defaults.Username,
-		Password: defaults.Password,
-		Database: defaults.Database,
+		Host:     db.Host,
+		Port:     db.Port,
+		Username: db.Username,
+		Password: db.Password,
+		Database: db.Database,
 		Timezone: timezone,
 		Pool: config.PoolConfig{
 			Max:      config.PoolMaxConfig{Connections: 5},
@@ -697,23 +631,15 @@ func TestConnectionSessionTimezoneOptOutPreservesServerDefault(t *testing.T) {
 	// a raw connection that bypasses our framework entirely. Otherwise a
 	// regression that forces UTC on the opt-out path would silently pass when
 	// the container's server default also happens to be UTC.
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	t.Cleanup(cancel)
-
-	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
+	ctx := t.Context()
+	db := pkgPG.Get(t).NewDatabase(t)
 	log := dbtestlog.NewDisabledTestLogger()
-
-	host, err := pgContainer.Host(ctx)
-	require.NoError(t, err, containerHostErr)
-	port, err := pgContainer.MappedPort(ctx)
-	require.NoError(t, err, containerPortErr)
-	defaults := containers.DefaultPostgreSQLConfig()
 
 	// Baseline: open a connection through database/sql directly using the pgx
 	// driver — no framework involvement, no RuntimeParams injection. Whatever
 	// session timezone this reports is what the unmodified server would give us.
 	baselineDSN := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
-		host, port, defaults.Username, defaults.Password, defaults.Database)
+		db.Host, db.Port, db.Username, db.Password, db.Database)
 	rawDB, err := sql.Open("pgx", baselineDSN)
 	require.NoError(t, err)
 	defer rawDB.Close()
@@ -723,11 +649,11 @@ func TestConnectionSessionTimezoneOptOutPreservesServerDefault(t *testing.T) {
 
 	// Opt-out via our framework: must match the baseline exactly.
 	cfg := &config.DatabaseConfig{
-		Host:     host,
-		Port:     port,
-		Username: defaults.Username,
-		Password: defaults.Password,
-		Database: defaults.Database,
+		Host:     db.Host,
+		Port:     db.Port,
+		Username: db.Username,
+		Password: db.Password,
+		Database: db.Database,
 		Timezone: "-",
 		Pool: config.PoolConfig{
 			Max:      config.PoolMaxConfig{Connections: 5},

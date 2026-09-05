@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/cache"
-	"github.com/gaborage/go-bricks/testing/containers"
 )
 
 const (
@@ -22,32 +21,40 @@ const (
 	getOrSetSucceedMsg = "GetOrSet should succeed"
 )
 
-// setupRealRedis creates a real Redis container and client for integration testing.
+// setupRealRedis returns a client on the package-wide Redis container, scoped to
+// its own logical database and emptied first, so the test starts from exactly
+// what a freshly booted server would give it (see integration_main_test.go).
+//
+// Isolation invariant: the server offers 16 logical databases, each setup call
+// claims the next index round-robin and flushes that index on entry, so tests
+// never share a keyspace and t.Parallel() would be safe up to 16 concurrent ones.
 func setupRealRedis(t *testing.T) (*Client, context.Context) {
 	t.Helper()
 
-	// Create context with timeout to prevent indefinite hangs
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx := t.Context()
 
-	// Register cleanup to cancel context
-	t.Cleanup(func() {
-		cancel()
-	})
+	redisContainer := pkgRedis.Get(t)
 
-	// Start Redis container with default configuration
-	redisContainer := containers.MustStartRedisContainer(ctx, t, nil).WithCleanup(t)
+	// Masking rather than %: 16 is a power of two, so the index stays in [0,15]
+	// (what Config.Validate accepts) even if the counter ever wrapped negative.
+	db := int(redisDBCounter.Add(1)-1) & (redisLogicalDatabases - 1)
 
 	// Create Redis client config
 	cfg := &Config{
 		Host:     redisContainer.Host(),
 		Port:     redisContainer.Port(),
-		Database: 0,
+		Database: db,
 		PoolSize: 10,
 	}
 
 	// Create Redis client
 	client, err := NewClient(cfg)
 	require.NoError(t, err, "Failed to create Redis client")
+
+	// The server is shared, the keyspace is not. This flushes the database the
+	// client just selected, not DB 0, so a -count>16 run — which wraps the
+	// counter back onto an index an earlier pass used — still starts clean.
+	require.NoError(t, client.client.FlushDB(ctx).Err(), "Failed to flush Redis keyspace")
 
 	return client, ctx
 }
