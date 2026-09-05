@@ -203,9 +203,12 @@ func assertForwardedCertVector(t *testing.T, tt *forwardedCertVectorCase, cert F
 	t.Helper()
 
 	if tt.wantDuplicate {
+		// The zero-value check runs FIRST: the two sentinel assertions below are
+		// require, and a sentinel regression must not abort before the assertion
+		// that nothing leaked out of the rejected header.
+		assert.Equal(t, ForwardedClientCert{}, cert, "a duplicate must return the zero value — no Subject, Issuer, SerialNumber, or Leaf leaks")
 		require.ErrorIs(t, err, errDuplicateForwardedHeader)
 		require.NotErrorIs(t, err, errNoForwardedCert, "a duplicate must never be confused with absence")
-		assert.Equal(t, ForwardedClientCert{}, cert, "a duplicate must return the zero value — no Subject, Issuer, SerialNumber, or Leaf leaks")
 		if tt.wantErrContains != "" {
 			require.ErrorContains(t, err, tt.wantErrContains)
 		}
