@@ -7011,8 +7011,12 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   (b) no-match — the helper is the last statement, or everything after it only runs on the
   passing path. (c) no-match — the key under test is always genuinely absent, which is every
   green test today.
-- apply: (a) Move the trailing work into `t.Cleanup`, or split the case so the helper is the
-  last statement of its own subtest. Do NOT reach for a copy of the old two-assert body to
+- apply: (a) Sort the trailing work by what it is. Mandatory TEARDOWN — closing a file,
+  stopping a server, restoring a global — moves to `t.Cleanup`, which runs on termination
+  including the abort. Work that must CONTINUE the test — a later assertion, or reading a
+  value the helper's subject produced — cannot go there, because `t.Cleanup` runs at the
+  end and never resumes the aborted body: run the helper inside a child `t.Run` and do that
+  work in the parent after it returns. Do NOT reach for a copy of the old two-assert body to
   keep the continue semantics: the test was reporting on a keystore already in the wrong
   state, and the second result was noise either way. (b) and (c) Nothing to do.
 - verify: `go test ./...` in your tree  # then (a) confirm the moved cleanup still runs by

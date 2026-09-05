@@ -1514,6 +1514,9 @@ of a keystore already known to be in the wrong state — and that second result,
 is noise in a consumer's test output. The public-key check is now `require.Error`; the
 private-key check stays `assert.Error` because it is the last statement and invalidates
 nothing. The exported signature is unchanged. See [migrations.md](migrations.md) `[C64.4]`.
+
+---
+
 ### [ADR-100: The Vendor's Identifier Grammar Lives Behind the Renderer Seam](adr_100_vendor_identifier_grammar_behind_renderer.md)
 
 **Date:** 2026-09-05 | **Status:** Accepted | **Breaking:** a PostgreSQL identifier argument containing `#` is refused at `ToSQL()` instead of failing at execution
