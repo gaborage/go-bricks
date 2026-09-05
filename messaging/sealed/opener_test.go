@@ -6,7 +6,6 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -197,7 +196,7 @@ func (tc *openerCase) check(t *testing.T, opener sealruntime.Opener, err error) 
 	require.Error(t, err)
 	assert.Nil(t, opener)
 	if tc.wantIs != nil {
-		assert.ErrorIs(t, err, tc.wantIs)
+		require.ErrorIs(t, err, tc.wantIs)
 	}
 	if tc.text != "" {
 		assert.Contains(t, err.Error(), tc.text)
@@ -311,8 +310,8 @@ func TestOpenerMapsEveryPublishedVector(t *testing.T) {
 			assert.Equal(t, tc.Slot, refused.Details["slot"])
 			assert.Equal(t, tc.Code == josesealed.CodeKidUnknownGeneration, refused.Recoverable)
 			var oe *josesealed.OpenError
-			assert.ErrorAs(t, err, &oe, "the codec's error stays in the chain")
 			assert.Equal(t, before+1, failureCount(t, reader, tc.Code), "counted once under its code")
+			require.ErrorAs(t, err, &oe, "the codec's error stays in the chain")
 			for _, secret := range []string{"0f4b7c1e", vecTenant, "tenant-b", "payment.voided", "has:colon"} {
 				assert.NotContains(t, err.Error(), secret)
 			}
@@ -331,11 +330,11 @@ func TestOpenerRefusalCodeFallsBackToTheJoseCode(t *testing.T) {
 	var refused *sealruntime.OpenRefusedError
 	require.ErrorAs(t, err, &refused)
 	assert.Equal(t, josesealed.CodeNotSealed, refused.Code)
-	assert.ErrorIs(t, err, josesealed.ErrNotSealed)
 	assert.False(t, refused.Recoverable)
+	require.ErrorIs(t, err, josesealed.ErrNotSealed)
 	var je *jose.Error
 	assert.ErrorAs(t, err, &je)
-	assert.False(t, errors.Is(err, josesealed.ErrKidUnknownGeneration))
+	require.NotErrorIs(t, err, josesealed.ErrKidUnknownGeneration)
 }
 
 // TestNewOpenerTagsEveryProvisionedGenerationAsSeal pins the consumer half of the

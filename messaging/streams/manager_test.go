@@ -548,10 +548,11 @@ func TestManagerStartupAbortsOnACanceledContext(t *testing.T) {
 
 			var err error
 			require.NotPanics(t, func() { err = tt.phase(m, ctx) })
+			require.Error(t, err)
 
-			assert.ErrorIs(t, err, context.Canceled)
 			assert.Contains(t, err.Error(), tt.wantPhase,
 				"the caller must be told which startup phase the cancellation stopped")
+			require.ErrorIs(t, err, context.Canceled)
 		})
 	}
 }
@@ -1751,7 +1752,7 @@ func TestManagerStartUnwindsAFailedConsumerStart(t *testing.T) {
 	producer := fake.producer(testStream)
 	require.NotNil(t, producer)
 	assert.True(t, producer.isClosed(), "the publisher bound before the failure is closed")
-	assert.ErrorIs(t, publisher.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)}),
+	require.ErrorIs(t, publisher.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)}),
 		ErrPublisherClosed)
 	assert.Contains(t, fake.recorded(), callClose)
 	assert.Nil(t, m.env)
@@ -2022,7 +2023,7 @@ func TestManagerNewRunnerCarriesTheDeclarationScreen(t *testing.T) {
 		Screen: func(*Message) error { return errHandlerFailed },
 	})
 	require.NotNil(t, screened.screen)
-	assert.ErrorIs(t, screened.screen(&Message{}), errHandlerFailed)
+	require.ErrorIs(t, screened.screen(&Message{}), errHandlerFailed)
 
 	plain := m.newRunner(context.Background(), &consumerDeclaration{
 		Name:   testConsumerName,

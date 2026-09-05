@@ -380,7 +380,7 @@ func TestPublisherCloseReportsTheClientCloseError(t *testing.T) {
 func TestPublisherCloseWithoutABindingIsANoop(t *testing.T) {
 	p := newPublisher(testStream, false)
 
-	assert.NoError(t, p.closeBound())
+	require.NoError(t, p.closeBound())
 	assert.ErrorIs(t, p.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)}), ErrPublisherClosed)
 }
 
@@ -399,8 +399,8 @@ func TestPublisherPublishAfterCloseIsClosed(t *testing.T) {
 
 	err := p.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)})
 
-	assert.ErrorIs(t, err, ErrPublisherClosed)
 	assert.Zero(t, handle.sentCount(), "a closed publisher never reaches the client")
+	require.ErrorIs(t, err, ErrPublisherClosed)
 }
 
 func TestPublisherPublishRejectsANilMessage(t *testing.T) {
@@ -638,7 +638,7 @@ func TestPublisherRegisterSendResolvesASendThatRacedTheCloseSweep(t *testing.T) 
 	w, live := p.registerSend(clientMsg, "")
 
 	assert.False(t, live, "a publisher that closed mid-registration must not reach the client")
-	assert.ErrorIs(t, resolvedError(t, w), ErrPublisherClosed, "the caller is failed, never left waiting")
+	require.ErrorIs(t, resolvedError(t, w), ErrPublisherClosed, "the caller is failed, never left waiting")
 	assert.Zero(t, pendingCount(p), "and the entry does not outlive the sweep")
 	assert.Zero(t, handle.sentCount())
 }
@@ -692,7 +692,7 @@ func TestPublisherConcurrentPublishesSurviveAClose(t *testing.T) {
 
 	close(results)
 	for err := range results {
-		assert.Error(t, err, "a publish racing a close fails, it never succeeds by accident")
+		require.Error(t, err, "a publish racing a close fails, it never succeeds by accident")
 	}
 	assert.Zero(t, pendingCount(p), "the close leaves no correlation entry behind")
 }

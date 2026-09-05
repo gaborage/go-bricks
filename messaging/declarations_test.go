@@ -510,7 +510,7 @@ func TestDeclarationsValidate(t *testing.T) {
 
 		err := decls.Validate()
 
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "binding references non-existent queue: missing-queue")
 	})
 
@@ -521,7 +521,7 @@ func TestDeclarationsValidate(t *testing.T) {
 
 		err := decls.Validate()
 
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "binding references non-existent exchange: missing-exchange")
 	})
 
@@ -531,7 +531,7 @@ func TestDeclarationsValidate(t *testing.T) {
 
 		err := decls.Validate()
 
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "consumer references non-existent queue: missing-queue")
 	})
 
@@ -541,7 +541,7 @@ func TestDeclarationsValidate(t *testing.T) {
 
 		err := decls.Validate()
 
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "publisher references non-existent exchange: missing-exchange")
 	})
 
@@ -611,7 +611,7 @@ func TestDeclarationsReplayToRegistry(t *testing.T) {
 
 		err := decls.ReplayToRegistry(mockReg)
 
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		mockReg.AssertExpectations(t)
 
 		// Verify order: exchanges first, then queues, then bindings, then publishers/consumers
@@ -627,7 +627,7 @@ func TestDeclarationsReplayToRegistry(t *testing.T) {
 
 		err := decls.ReplayToRegistry(nil)
 
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "registry is nil")
 	})
 
@@ -637,7 +637,7 @@ func TestDeclarationsReplayToRegistry(t *testing.T) {
 
 		err := decls.ReplayToRegistry(mockReg)
 
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Empty(t, mockReg.exchanges)
 		assert.Empty(t, mockReg.queues)
 		assert.Empty(t, mockReg.bindings)
@@ -711,11 +711,11 @@ func TestDeclarationsClone(t *testing.T) {
 		clone := decls.Clone()
 
 		// Verify all counts match
-		assert.Equal(t, len(decls.Exchanges), len(clone.Exchanges))
-		assert.Equal(t, len(decls.Queues), len(clone.Queues))
-		assert.Equal(t, len(decls.Bindings), len(clone.Bindings))
-		assert.Equal(t, len(decls.Publishers), len(clone.Publishers))
-		assert.Equal(t, len(decls.Consumers()), len(clone.Consumers()))
+		assert.Len(t, clone.Exchanges, len(decls.Exchanges))
+		assert.Len(t, clone.Queues, len(decls.Queues))
+		assert.Len(t, clone.Bindings, len(decls.Bindings))
+		assert.Len(t, clone.Publishers, len(decls.Publishers))
+		assert.Len(t, clone.Consumers(), len(decls.Consumers()))
 
 		// Verify deep copy of exchanges
 		originalExchange := decls.Exchanges[testExchange]
@@ -822,7 +822,7 @@ func TestReplayToRegistryPreservesWorkerPoolConfig(t *testing.T) {
 	registry.On("RegisterConsumer", mock.Anything).Return()
 
 	err := decls.ReplayToRegistry(registry)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	assert.Len(t, registry.consumers, 1)
 	assert.Equal(t, 48, registry.consumers[0].Workers, "Workers should propagate through ReplayToRegistry")
@@ -945,7 +945,11 @@ func TestDeclarationsHashSeparatesTenantOptional(t *testing.T) {
 	}
 
 	assert.NotEqual(t, build(false).Hash(), build(true).Hash())
-	assert.Equal(t, build(true).Hash(), build(true).Hash(), "the hash stays deterministic")
+	// Hoisted: two independent calls, not one expression compared with itself —
+	// that is the determinism this pins.
+	firstHash := build(true).Hash()
+	secondHash := build(true).Hash()
+	assert.Equal(t, firstHash, secondHash, "the hash stays deterministic")
 }
 
 // TestDeclarationsHashCoversAllArgTypes exercises Hash() with a publisher whose
@@ -1276,7 +1280,7 @@ func TestRegisterQueueUncomparableArgsValues(t *testing.T) {
 			}})
 		})
 
-		assert.NoError(t, d.Validate())
+		require.NoError(t, d.Validate())
 		assert.Equal(t, []string{"a"}, d.Queues[testQueue].Args[testKey])
 	})
 

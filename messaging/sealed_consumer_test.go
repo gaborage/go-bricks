@@ -272,14 +272,14 @@ func TestSealedHandlerRefusalIsPayloadStageOpenAndNacksWithoutRequeue(t *testing
 	assert.Zero(t, calls, "fn never runs for a refused message")
 
 	var pe *PayloadError
+	assert.Contains(t, err.Error(), "open failed")
+	assert.Contains(t, err.Error(), "SEAL_SIGNATURE_INVALID (len=3)")
+	assert.NotContains(t, err.Error(), "inner", "the opener's cause is in the chain, never in the text")
 	require.ErrorAs(t, err, &pe)
 	assert.Equal(t, PayloadStageOpen, pe.Stage)
 	assert.Equal(t, "payment.authorized", pe.EventType)
 	assert.ErrorIs(t, err, ErrPayloadOpenRefused)
 	assert.NotErrorIs(t, err, ErrPayloadUndecodable)
-	assert.Contains(t, err.Error(), "open failed")
-	assert.Contains(t, err.Error(), "SEAL_SIGNATURE_INVALID (len=3)")
-	assert.NotContains(t, err.Error(), "inner", "the opener's cause is in the chain, never in the text")
 	var got *sealruntime.OpenRefusedError
 	require.ErrorAs(t, err, &got)
 	assert.Same(t, refused, got)
@@ -306,16 +306,16 @@ func TestSealedHandlerValidatesThePlaintext(t *testing.T) {
 	var pe *PayloadError
 	require.ErrorAs(t, err, &pe)
 	assert.Equal(t, PayloadStageValidate, pe.Stage)
-	assert.ErrorIs(t, err, ErrPayloadInvalid)
 	assert.Equal(t, []string{"sealedEvt.Amount"}, pe.Fields())
+	require.ErrorIs(t, err, ErrPayloadInvalid)
 }
 
 func TestSealedHandlerNilDeliveryIsADecodeFailure(t *testing.T) {
 	opener := &fakeOpener{}
 	handler := declareSealed(t, opener, sealruntime.TenancyDisabled, false, func(context.Context, sealedEvt, Metadata) error { return nil })
 	err := handler.Handle(t.Context(), nil)
-	assert.ErrorIs(t, err, ErrPayloadUndecodable)
 	assert.Empty(t, opener.rules, "the opener is never asked for a nil delivery")
+	require.ErrorIs(t, err, ErrPayloadUndecodable)
 }
 
 // TestSealedHandlerTenantRuleMatrix pins the tid expectation the door derives per
@@ -361,11 +361,11 @@ func TestValidateDedupKeyAdmitsSealedKeysOnlyFromSealedDeliveries(t *testing.T) 
 	plain := t.Context()
 	sealed := context.WithValue(plain, sealedDeliveryKey{}, true)
 
-	assert.NoError(t, ValidateDedupKey(sealed, "svc-sign:jti-1"))
-	assert.ErrorIs(t, ValidateDedupKey(plain, "svc-sign:jti-1"), ErrInvalidEventID, "the same spelling from a header is refused")
+	require.NoError(t, ValidateDedupKey(sealed, "svc-sign:jti-1"))
+	require.ErrorIs(t, ValidateDedupKey(plain, "svc-sign:jti-1"), ErrInvalidEventID, "the same spelling from a header is refused")
 	assert.NoError(t, ValidateDedupKey(plain, "jti-1"))
 	assert.NoError(t, ValidateDedupKey(sealed, "jti-1"))
-	assert.ErrorIs(t, ValidateDedupKey(sealed, "a:b:c"), ErrInvalidEventID)
+	require.ErrorIs(t, ValidateDedupKey(sealed, "a:b:c"), ErrInvalidEventID)
 	assert.ErrorIs(t, ValidateDedupKey(sealed, ""), ErrInvalidEventID)
 }
 

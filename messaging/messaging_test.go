@@ -207,10 +207,10 @@ func TestMockClientConsume(t *testing.T) {
 			ch, err := client.Consume(ctx, "test-destination")
 
 			if tt.expectError {
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.Nil(t, ch)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.NotNil(t, ch)
 			}
 		})
@@ -225,12 +225,12 @@ func TestMockClientClose(t *testing.T) {
 
 	// First close should succeed
 	err := client.Close()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.False(t, client.IsReady())
 
 	// Second close should return error
 	err = client.Close()
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, errAlreadyClosed, err)
 }
 
@@ -273,7 +273,7 @@ func TestMockAMQPClientConsumeFromQueue(t *testing.T) {
 	}
 
 	ch, err := client.ConsumeFromQueue(ctx, options)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, ch)
 }
 
@@ -281,7 +281,7 @@ func TestMockAMQPClientDeclareQueue(t *testing.T) {
 	client := NewMockAMQPClient()
 
 	err := client.DeclareQueue(context.Background(), &QueueDeclaration{Name: testQueue, Durable: true})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, client.queues[testQueue])
 }
 
@@ -289,7 +289,7 @@ func TestMockAMQPClientDeclareExchange(t *testing.T) {
 	client := NewMockAMQPClient()
 
 	err := client.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: testExchange, Type: "topic", Durable: true})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, client.exchanges[testExchange])
 }
 
@@ -297,7 +297,7 @@ func TestMockAMQPClientBindQueue(t *testing.T) {
 	client := NewMockAMQPClient()
 
 	err := client.BindQueue(context.Background(), &BindingDeclaration{Queue: testQueue, Exchange: testExchange, RoutingKey: testRoute})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	bindingKey := "test-queue:test-exchange:test.route"
 	assert.True(t, client.bindings[bindingKey])
@@ -311,28 +311,28 @@ func TestMockAMQPClientNotReady(t *testing.T) {
 
 	// Test publishBytes
 	err := client.publishBytes(ctx, publishOptions{}, []byte("test"))
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
 
 	// Test ConsumeFromQueue
 	ch, err := client.ConsumeFromQueue(ctx, ConsumeOptions{})
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, ch)
 	assert.Equal(t, errNotConnected, err)
 
 	// Test DeclareQueue
 	err = client.DeclareQueue(context.Background(), &QueueDeclaration{Name: "test", Durable: true})
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
 
 	// Test DeclareExchange
 	err = client.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: "test", Type: "topic", Durable: true})
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
 
 	// Test BindQueue
 	err = client.BindQueue(context.Background(), &BindingDeclaration{Queue: "queue", Exchange: "exchange", RoutingKey: "route"})
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
 }
 
@@ -344,12 +344,12 @@ func TestMockAMQPClientClosed(t *testing.T) {
 
 	// Test publishBytes
 	err := client.publishBytes(ctx, publishOptions{}, []byte("test"))
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, errAlreadyClosed, err)
 
 	// Test ConsumeFromQueue
 	ch, err := client.ConsumeFromQueue(ctx, ConsumeOptions{})
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, ch)
 	assert.Equal(t, errAlreadyClosed, err)
 }
@@ -366,7 +366,7 @@ func TestMockMessageHandlerHandle(t *testing.T) {
 
 	ctx := context.Background()
 	err := handler.Handle(ctx, &delivery)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Len(t, handler.handled, 1)
 	assert.Equal(t, testMessage, string(handler.handled[0].Body))
 }
@@ -383,7 +383,7 @@ func TestMockMessageHandlerHandleError(t *testing.T) {
 
 	ctx := context.Background()
 	err := handler.Handle(ctx, &delivery)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Len(t, handler.handled, 1)
 }
 

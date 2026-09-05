@@ -96,12 +96,15 @@ func perModuleLine(entries []map[string]any, module string) map[string]any {
 	return nil
 }
 
+// assertCounts compares the four count fields of one per-module line. The values
+// arrive from encoding/json, so they are float64 carrying an integral count; a zero
+// tolerance says "exactly this count" without inviting a float-equality warning.
 func assertCounts(t *testing.T, line map[string]any, streams, superStreams, consumers, publishers float64) {
 	t.Helper()
-	assert.Equal(t, streams, line["streams"], "streams count")
-	assert.Equal(t, superStreams, line["superstreams"], "superstreams count")
-	assert.Equal(t, consumers, line["consumers"], "consumers count")
-	assert.Equal(t, publishers, line["publishers"], "publishers count")
+	assert.InDelta(t, streams, line["streams"], 0, "streams count")
+	assert.InDelta(t, superStreams, line["superstreams"], 0, "superstreams count")
+	assert.InDelta(t, consumers, line["consumers"], 0, "consumers count")
+	assert.InDelta(t, publishers, line["publishers"], 0, "publishers count")
 }
 
 func TestCollectDeclarationsAttributesCountsPerModule(t *testing.T) {
@@ -137,8 +140,8 @@ func TestCollectDeclarationsLeavesAggregateLineUnchanged(t *testing.T) {
 		}
 	}
 	require.NotNil(t, aggregate, "aggregate line is emitted")
-	assert.Equal(t, float64(4), aggregate["streams"])
-	assert.Equal(t, float64(2), aggregate["consumers"])
+	assert.InDelta(t, 4, aggregate["streams"], 0)
+	assert.InDelta(t, 2, aggregate["consumers"], 0)
 	assert.NotContains(t, aggregate, "publishers", "the aggregate line keeps its existing fields")
 }
 

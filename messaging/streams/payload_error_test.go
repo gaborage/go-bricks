@@ -30,7 +30,7 @@ func TestPayloadErrorIsMatchesStageSentinel(t *testing.T) {
 
 			assert.ErrorIs(t, err, tc.match)
 			assert.NotErrorIs(t, err, tc.notMatch)
-			assert.NotErrorIs(t, err, errHandlerFailed)
+			require.NotErrorIs(t, err, errHandlerFailed)
 		})
 	}
 }
@@ -42,7 +42,7 @@ func TestPayloadErrorIsRejectsUnknownStage(t *testing.T) {
 		err := &PayloadError{Consumer: testConsumerName, Stage: stage}
 
 		assert.NotErrorIs(t, err, ErrPayloadUndecodable, "stage %q", stage)
-		assert.NotErrorIs(t, err, ErrPayloadInvalid, "stage %q", stage)
+		require.NotErrorIs(t, err, ErrPayloadInvalid, "stage %q", stage)
 	}
 }
 
@@ -73,10 +73,10 @@ func TestPayloadErrorUnwrapReachesCause(t *testing.T) {
 	err := newPayloadError(testConsumerName, payloaderr.NewDecode(inner, ""))
 
 	require.Same(t, inner, err.Unwrap())
+	assert.Contains(t, err.Error(), payloaderr.UnauditedDecoderSummary)
 	assert.ErrorIs(t, err, inner)
 	// The sentinel mapping must survive alongside the unwrap chain.
-	assert.ErrorIs(t, err, ErrPayloadUndecodable)
-	assert.Contains(t, err.Error(), payloaderr.UnauditedDecoderSummary)
+	require.ErrorIs(t, err, ErrPayloadUndecodable)
 }
 
 // A nil receiver is reachable from a caller holding a typed nil, and must render
@@ -84,9 +84,9 @@ func TestPayloadErrorUnwrapReachesCause(t *testing.T) {
 func TestPayloadErrorNilReceiverIsInert(t *testing.T) {
 	var err *PayloadError
 
+	require.NoError(t, err.Unwrap())
 	assert.Equal(t, "streams: <nil> payload error", err.Error())
 	assert.Nil(t, err.Fields())
-	assert.NoError(t, err.Unwrap())
 	assert.False(t, err.Is(ErrPayloadUndecodable))
 }
 

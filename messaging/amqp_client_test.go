@@ -1794,7 +1794,7 @@ func TestPublishBytesWaitsForReadyClient(t *testing.T) {
 
 	select {
 	case err := <-resultCh:
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	case <-time.After(time.Second):
 		t.Fatal("publishBytes did not return after the client became ready")
 	}
@@ -1860,7 +1860,7 @@ func TestPublishBytesExcludesReadyWaitFromLatencyMetrics(t *testing.T) {
 
 	select {
 	case err := <-resultCh:
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	case <-time.After(time.Second):
 		t.Fatal("publishBytes did not return after the client became ready")
 	}
@@ -1887,8 +1887,8 @@ func TestPublishBytesReadyTimeoutExpires(t *testing.T) {
 	err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	elapsed := time.Since(start)
 
-	assert.ErrorIs(t, err, ErrNotConnected)
 	assert.GreaterOrEqual(t, elapsed, 200*time.Millisecond)
+	require.ErrorIs(t, err, ErrNotConnected)
 }
 
 // TestPublishBytesReadyWaitDisabled proves readyTimeout<=0 is a complete
@@ -1908,8 +1908,8 @@ func TestPublishBytesReadyWaitDisabled(t *testing.T) {
 	err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	elapsed := time.Since(start)
 
-	assert.ErrorIs(t, err, ErrNotConnected)
 	assert.Less(t, elapsed, 50*time.Millisecond)
+	require.ErrorIs(t, err, ErrNotConnected)
 }
 
 // TestPublishBytesReadyWaitRespectsContext proves a ctx deadline that
@@ -1931,8 +1931,8 @@ func TestPublishBytesReadyWaitRespectsContext(t *testing.T) {
 	err := c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	elapsed := time.Since(start)
 
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Less(t, elapsed, 200*time.Millisecond)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 // TestWithReadyTimeoutOption mirrors TestWithMaxPublishAttemptsOption: the
@@ -2057,7 +2057,7 @@ func TestAMQPClientDeclareQueueNotReadyError(t *testing.T) {
 	// Client not ready
 	err := client.DeclareQueue(context.Background(), &QueueDeclaration{Name: testQueue, Durable: true})
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
 }
 
@@ -2073,7 +2073,7 @@ func TestAMQPClientDeclareExchangeNotReadyError(t *testing.T) {
 	// Client not ready
 	err := client.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: "test-exchange", Type: "topic", Durable: true})
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
 }
 
@@ -2089,7 +2089,7 @@ func TestAMQPClientBindQueueNotReadyError(t *testing.T) {
 	// Client not ready
 	err := client.BindQueue(context.Background(), &BindingDeclaration{Queue: testQueue, Exchange: "test-exchange", RoutingKey: "test.key"})
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
 }
 
@@ -2107,7 +2107,7 @@ func TestAMQPClientConsumeFromQueueNotReadyError(t *testing.T) {
 		Queue: testQueue,
 	})
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
 }
 
@@ -2126,7 +2126,7 @@ func TestAMQPClientConsumeFromQueueChannelError(t *testing.T) {
 		Queue: testQueue,
 	})
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "consume channel error")
 }
 
@@ -2143,7 +2143,7 @@ func TestAMQPClientInitChannelCreationFailure(t *testing.T) {
 	mockConn := &stubConn{}
 	err := client.init(mockConn)
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no channel")
 	assert.False(t, client.IsReady())
 }

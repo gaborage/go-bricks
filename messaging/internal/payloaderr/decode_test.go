@@ -107,7 +107,11 @@ func TestNewDecoderDefaultsToJSON(t *testing.T) {
 // framework's, not a bare validator.New() — an unregistered mcc_code tag would
 // make validator panic instead of returning an error.
 func TestValidatorIsOneSharedFrameworkInstance(t *testing.T) {
-	require.Same(t, Validator(), Validator())
+	// Hoisted so the assertion compares two independent lookups rather than one
+	// expression with itself — returning the same instance is the contract.
+	first := Validator()
+	second := Validator()
+	require.Same(t, first, second)
 
 	type mccPayload struct {
 		MCC string `json:"mcc" validate:"mcc_code"`

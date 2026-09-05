@@ -232,8 +232,8 @@ func TestTypedConsumerScreenAgreesWithTheHandler(t *testing.T) {
 	// A body the handler accepts is one the screen passes, even when fn then
 	// fails: the screen judges the payload, not the outcome.
 	good := &Message{Data: []byte(validOrderBody(t))}
-	assert.NoError(t, typed.screen(good))
-	assert.ErrorIs(t, typed.handle(t.Context(), good), errHandlerFailed)
+	require.NoError(t, typed.screen(good))
+	require.ErrorIs(t, typed.handle(t.Context(), good), errHandlerFailed)
 	assert.Equal(t, 1, calls)
 }
 

@@ -304,7 +304,7 @@ func TestPublishConfirmationTimeoutRecordsError(t *testing.T) {
 	// Should return context deadline exceeded. The error now wraps the last retry
 	// cause (ErrPublishConfirmTimeout), so match by errors.Is rather than identity.
 	require.Error(t, err)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 
 	// Verify span was created and recorded error
 	spans := exporter.GetSpans()
@@ -332,7 +332,7 @@ func TestPublishConfirmationTimeoutRecordsError(t *testing.T) {
 			}
 			if attr.Key == "retry_count" {
 				foundRetryCount = true
-				assert.Greater(t, int(attr.Value.AsInt64()), 0, "retry_count should be greater than 0")
+				assert.Positive(t, int(attr.Value.AsInt64()), "retry_count should be greater than 0")
 			}
 		}
 		assert.True(t, foundReason, "Expected 'reason' attribute with value 'confirmation timeout'")
