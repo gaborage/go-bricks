@@ -4,6 +4,15 @@
 [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md)
 **Date:** 2026-06-16
 
+> **Amended (2026-09-05, #1197):** one more statement below is no longer current
+> and is left in place as the historical record — "The deferred error lives on
+> each builder (`SelectQueryBuilder`/`UpdateQueryBuilder`/`DeleteQueryBuilder`
+> each carry an `err` field)" in Decision. It lives in
+> `database/internal/deferred.Error` now, embedded in all four builders —
+> `InsertQueryBuilder` included — and `Fail` / `Err()` are the only doors to it,
+> so a direct assignment no longer compiles. The first-wins rule that sentence
+> describes is unchanged; only its owner is.
+>
 > **Amendment — 2026-08-23 (ADR-082).** Two statements below are no longer
 > current, and are left in place because the reasoning is the historical record
 > rather than because it still holds:

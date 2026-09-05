@@ -12,6 +12,7 @@ import (
 	"github.com/Masterminds/squirrel"
 
 	colreg "github.com/gaborage/go-bricks/database/internal/columns"
+	"github.com/gaborage/go-bricks/database/internal/deferred"
 	"github.com/gaborage/go-bricks/database/internal/sqllex"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -50,7 +51,7 @@ type SelectQueryBuilder struct {
 	// only then: a JOIN without a FROM must keep failing loudly rather than be
 	// joined against dual.
 	hasRowSource bool
-	err          error // Captured error from filter operations
+	deferred.Error
 }
 
 // check if SelectQueryBuilder implements dbtypes.SelectQueryBuilder
@@ -70,7 +71,7 @@ type InsertQueryBuilder struct {
 	// builder whose TABLE failed validation still reaches this field.
 	qb            *QueryBuilder
 	insertBuilder squirrel.InsertBuilder
-	err           error // deferred error surfaced by ToSQL()
+	deferred.Error
 }
 
 // check if InsertQueryBuilder implements dbtypes.InsertQueryBuilder
@@ -81,7 +82,7 @@ var _ dbtypes.InsertQueryBuilder = (*InsertQueryBuilder)(nil)
 type UpdateQueryBuilder struct {
 	qb            *QueryBuilder
 	updateBuilder squirrel.UpdateBuilder
-	err           error // deferred error surfaced by ToSQL()
+	deferred.Error
 }
 
 // check if UpdateQueryBuilder implements dbtypes.UpdateQueryBuilder
@@ -92,7 +93,7 @@ var _ dbtypes.UpdateQueryBuilder = (*UpdateQueryBuilder)(nil)
 type DeleteQueryBuilder struct {
 	qb            *QueryBuilder
 	deleteBuilder squirrel.DeleteBuilder
-	err           error // deferred error surfaced by ToSQL()
+	deferred.Error
 }
 
 // check if DeleteQueryBuilder implements dbtypes.DeleteQueryBuilder
@@ -295,11 +296,12 @@ func (qb *QueryBuilder) Select(columns ...any) *SelectQueryBuilder {
 	}
 
 	selectBuilder := qb.statementBuilder.Select(processedColumns...)
-	return &SelectQueryBuilder{
+	sqb := &SelectQueryBuilder{
 		qb:            qb,
 		selectBuilder: selectBuilder,
-		err:           firstErr,
 	}
+	sqb.Fail(firstErr)
+	return sqb
 }
 
 // Insert creates an INSERT query builder for the specified table.
@@ -320,7 +322,9 @@ func (qb *QueryBuilder) Insert(table string) dbtypes.InsertQueryBuilder {
 func (qb *QueryBuilder) newInsertBuilder(context, table string) *InsertQueryBuilder {
 	normalized, err := validateTableName(table)
 	if err != nil {
-		return &InsertQueryBuilder{qb: qb, err: fmt.Errorf("%s: %w", context, err)}
+		iqb := &InsertQueryBuilder{qb: qb}
+		iqb.Fail(fmt.Errorf("%s: %w", context, err))
+		return iqb
 	}
 	return &InsertQueryBuilder{qb: qb, insertBuilder: qb.statementBuilder.Insert(qb.quoteTableForQuery(normalized))}
 }
@@ -330,12 +334,12 @@ func (qb *QueryBuilder) newInsertBuilder(context, table string) *InsertQueryBuil
 // Table names are automatically quoted according to database vendor rules to handle reserved words.
 func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) dbtypes.InsertQueryBuilder {
 	iqb := qb.newInsertBuilder("InsertWithColumns", table)
-	if iqb.err != nil {
+	if iqb.Err() != nil {
 		return iqb
 	}
 	normalized, err := validateIdentifiers("insert column", columns)
 	if err != nil {
-		iqb.failClause(err)
+		iqb.Fail(err)
 		return iqb
 	}
 	iqb.insertBuilder = iqb.insertBuilder.Columns(qb.quoteColumnsForDML(normalized...)...)
@@ -400,7 +404,7 @@ func (qb *QueryBuilder) InsertStruct(table string, instance any) dbtypes.InsertQ
 	}
 
 	iqb := qb.newInsertBuilder("InsertStruct", table)
-	if iqb.err != nil {
+	if iqb.Err() != nil {
 		return iqb
 	}
 	iqb.insertBuilder = iqb.insertBuilder.
@@ -439,7 +443,7 @@ func (qb *QueryBuilder) InsertFields(table string, instance any, fields ...strin
 	}
 
 	iqb := qb.newInsertBuilder("InsertFields", table)
-	if iqb.err != nil {
+	if iqb.Err() != nil {
 		return iqb
 	}
 	iqb.insertBuilder = iqb.insertBuilder.
@@ -508,7 +512,7 @@ func (qb *QueryBuilder) Update(table string) dbtypes.UpdateQueryBuilder {
 	// table is a raw-interpolation (M9) vector. Surface a violation from ToSQL().
 	normalized, err := validateTableName(table)
 	if err != nil {
-		uqb.failClause(fmt.Errorf("Update: %w", err))
+		uqb.Fail(fmt.Errorf("Update: %w", err))
 		return uqb
 	}
 	uqb.updateBuilder = qb.statementBuilder.Update(qb.quoteTableForQuery(normalized))
@@ -532,7 +536,7 @@ func (qb *QueryBuilder) Delete(table string) dbtypes.DeleteQueryBuilder {
 	// raw-interpolation guard as Update/From. Surface a violation from ToSQL().
 	normalized, err := validateTableName(table)
 	if err != nil {
-		dqb.failClause(fmt.Errorf("Delete: %w", err))
+		dqb.Fail(fmt.Errorf("Delete: %w", err))
 		return dqb
 	}
 	dqb.deleteBuilder = qb.statementBuilder.Delete(qb.quoteTableForQuery(normalized))
@@ -888,7 +892,7 @@ func (sqb *SelectQueryBuilder) From(from ...any) dbtypes.SelectQueryBuilder {
 		// the FROM clause cannot be used as a SQL injection vector (M9).
 		ref, err := sqb.qb.validateTableReference(table)
 		if err != nil {
-			sqb.failClause(fmt.Errorf("From: %w", err))
+			sqb.Fail(fmt.Errorf("From: %w", err))
 			return sqb
 		}
 		quotedTables[i] = sqb.qb.quoteTableReference(ref)
@@ -917,16 +921,16 @@ func (sqb *SelectQueryBuilder) Offset(offset uint64) dbtypes.SelectQueryBuilder 
 // placeholders so the outer statement's final pass numbers every argument once,
 // exactly as buildExistsFilter does for EXISTS.
 func (sqb *SelectQueryBuilder) SubqueryColumn(sub dbtypes.SelectQueryBuilder, alias string) dbtypes.SelectQueryBuilder {
-	if sqb.err != nil {
+	if sqb.Err() != nil {
 		return sqb
 	}
 	if !sqllex.IsUnquotedIdentifier(alias) {
-		sqb.err = fmt.Errorf("subquery column: %w: %q", dbtypes.ErrInvalidAlias, alias)
+		sqb.Fail(fmt.Errorf("subquery column: %w: %q", dbtypes.ErrInvalidAlias, alias))
 		return sqb
 	}
 	subSQL, subArgs, err := renderSubquery(sub)
 	if err != nil {
-		sqb.err = fmt.Errorf("subquery column %s: %w", alias, err)
+		sqb.Fail(fmt.Errorf("subquery column %s: %w", alias, err))
 		return sqb
 	}
 	sqb.selectBuilder = sqb.selectBuilder.Column(squirrel.Alias(squirrel.Expr(subSQL, subArgs...), alias))
@@ -989,7 +993,7 @@ func (sqb *SelectQueryBuilder) Where(filter dbtypes.Filter) dbtypes.SelectQueryB
 func (sqb *SelectQueryBuilder) validateJoinTable(method string, table any) (quoted string, ok bool) {
 	ref, err := sqb.qb.validateTableReference(table)
 	if err != nil {
-		sqb.failClause(fmt.Errorf("%s: %w", method, err))
+		sqb.Fail(fmt.Errorf("%s: %w", method, err))
 		return "", false
 	}
 	return sqb.qb.quoteTableReference(ref), true
@@ -1015,7 +1019,7 @@ func (sqb *SelectQueryBuilder) JoinOn(table any, filter dbtypes.JoinFilter) dbty
 	condition, args, err := filter.ToSQL()
 	if err != nil {
 		// Capture error to be returned from ToSQL()
-		sqb.failClause(fmt.Errorf("JoinOn filter error: %w", err))
+		sqb.Fail(fmt.Errorf("JoinOn filter error: %w", err))
 		return sqb
 	}
 
@@ -1036,7 +1040,7 @@ func (sqb *SelectQueryBuilder) LeftJoinOn(table any, filter dbtypes.JoinFilter) 
 	condition, args, err := filter.ToSQL()
 	if err != nil {
 		// Capture error to be returned from ToSQL()
-		sqb.failClause(fmt.Errorf("LeftJoinOn filter error: %w", err))
+		sqb.Fail(fmt.Errorf("LeftJoinOn filter error: %w", err))
 		return sqb
 	}
 
@@ -1057,7 +1061,7 @@ func (sqb *SelectQueryBuilder) RightJoinOn(table any, filter dbtypes.JoinFilter)
 	condition, args, err := filter.ToSQL()
 	if err != nil {
 		// Capture error to be returned from ToSQL()
-		sqb.failClause(fmt.Errorf("RightJoinOn filter error: %w", err))
+		sqb.Fail(fmt.Errorf("RightJoinOn filter error: %w", err))
 		return sqb
 	}
 
@@ -1078,7 +1082,7 @@ func (sqb *SelectQueryBuilder) InnerJoinOn(table any, filter dbtypes.JoinFilter)
 	condition, args, err := filter.ToSQL()
 	if err != nil {
 		// Capture error to be returned from ToSQL()
-		sqb.failClause(fmt.Errorf("InnerJoinOn filter error: %w", err))
+		sqb.Fail(fmt.Errorf("InnerJoinOn filter error: %w", err))
 		return sqb
 	}
 
@@ -1125,7 +1129,7 @@ func (sqb *SelectQueryBuilder) OrderBy(orderBys ...any) dbtypes.SelectQueryBuild
 		sqb.appendClauseValue(&processedOrderBys, orderBy, "orderBy", sqb.qb.quoteIdentifierForClause)
 	}
 
-	if sqb.err != nil {
+	if sqb.Err() != nil {
 		return sqb
 	}
 
@@ -1155,21 +1159,12 @@ func (sqb *SelectQueryBuilder) GroupBy(groupBys ...any) dbtypes.SelectQueryBuild
 		sqb.appendClauseValue(&processedGroupBys, groupBy, "groupBy", sqb.qb.quoteIdentifierForClause)
 	}
 
-	if sqb.err != nil {
+	if sqb.Err() != nil {
 		return sqb
 	}
 
 	sqb.selectBuilder = sqb.selectBuilder.GroupBy(processedGroupBys...)
 	return sqb
-}
-
-// failClause records the FIRST violation and leaves any later one alone — the
-// deferred-error rule ADR-031 established. The builder is doomed from here, which
-// is why every clause door consults sqb.err before reading the next value.
-func (sqb *SelectQueryBuilder) failClause(err error) {
-	if sqb.err == nil {
-		sqb.err = err
-	}
 }
 
 // appendClauseString validates an identifier argument (with its optional
@@ -1179,7 +1174,7 @@ func (sqb *SelectQueryBuilder) failClause(err error) {
 func (sqb *SelectQueryBuilder) appendClauseString(processed *[]string, value, clauseName string, stringFormatter func(string) string) {
 	normalized, err := validateClauseIdentifier(clauseName, value)
 	if err != nil {
-		sqb.failClause(err)
+		sqb.Fail(err)
 		return
 	}
 	*processed = append(*processed, stringFormatter(normalized))
@@ -1189,7 +1184,7 @@ func (sqb *SelectQueryBuilder) appendClauseString(processed *[]string, value, cl
 // RawExpression struct literal never passed through Expr() (#1153).
 func (sqb *SelectQueryBuilder) appendClauseExpr(processed *[]string, expr dbtypes.RawExpression) {
 	if err := expr.Validate(); err != nil {
-		sqb.failClause(err)
+		sqb.Fail(err)
 		return
 	}
 	*processed = append(*processed, expr.SQL)
@@ -1211,7 +1206,7 @@ func appendClauseValuesOf[T any](sqb *SelectQueryBuilder, processed *[]string, v
 // surface as that deferred error rather than as a panic from this function's
 // default branch.
 func (sqb *SelectQueryBuilder) appendClauseValue(processed *[]string, value any, clauseName string, stringFormatter func(string) string) {
-	if sqb.err != nil {
+	if sqb.Err() != nil {
 		return
 	}
 
@@ -1256,11 +1251,11 @@ func (sqb *SelectQueryBuilder) Having(pred any, rest ...any) dbtypes.SelectQuery
 		// ErrAliasInHaving. Validating first would return that other error instead
 		// and make the sentinel a function of the alias's CONTENT.
 		if expr.Alias != "" {
-			sqb.failClause(fmt.Errorf("%w: %s", dbtypes.ErrAliasInHaving, expr.Alias))
+			sqb.Fail(fmt.Errorf("%w: %s", dbtypes.ErrAliasInHaving, expr.Alias))
 			return sqb
 		}
 		if err := expr.Validate(); err != nil {
-			sqb.failClause(err)
+			sqb.Fail(err)
 			return sqb
 		}
 		sqb.selectBuilder = sqb.selectBuilder.Having(expr.SQL, rest...)
@@ -1291,7 +1286,7 @@ func (sqb *SelectQueryBuilder) ValidateForSubquery() error {
 		return errors.New("subquery cannot carry a row lock (ForUpdate/ForUpdateNoWait)")
 	}
 
-	return sqb.err
+	return sqb.Err()
 }
 
 // buildSelectBuilder returns the underlying squirrel.SelectBuilder with
@@ -1338,8 +1333,8 @@ func (sqb *SelectQueryBuilder) applyPagination(builder squirrel.SelectBuilder) s
 // For Oracle, pagination uses OFFSET...FETCH syntax; for others, uses LIMIT/OFFSET.
 func (sqb *SelectQueryBuilder) ToSQL() (sql string, args []any, err error) {
 	// Return any captured filter errors first
-	if sqb.err != nil {
-		return "", nil, sqb.err
+	if sqb.Err() != nil {
+		return "", nil, sqb.Err()
 	}
 	if err := sqb.validateRowLock(); err != nil {
 		return "", nil, err
@@ -1370,12 +1365,12 @@ func (uqb *UpdateQueryBuilder) Set(column string, value any) dbtypes.UpdateQuery
 func (uqb *UpdateQueryBuilder) SetExpr(column string, expr dbtypes.RawExpression, args ...any) dbtypes.UpdateQueryBuilder {
 	quoted, err := uqb.qb.quoteColumnForQuery(column)
 	if err != nil {
-		uqb.failClause(err)
+		uqb.Fail(err)
 		return uqb
 	}
 	cell, err := valueCell(column, expr, args...)
 	if err != nil {
-		uqb.failClause(err)
+		uqb.Fail(err)
 		return uqb
 	}
 	uqb.updateBuilder = uqb.updateBuilder.Set(quoted, cell)
@@ -1394,12 +1389,12 @@ func (uqb *UpdateQueryBuilder) SetMap(clauses map[string]any) dbtypes.UpdateQuer
 	// this door's own error context, unchanged.
 	keys, quotedKeys, err := uqb.qb.quotedColumnsInNameOrder("column", clauses)
 	if err != nil {
-		uqb.failClause(err)
+		uqb.Fail(err)
 		return uqb
 	}
 	values, err := valueCells(valuesByKeyOrder(clauses, keys), keyLabel(keys))
 	if err != nil {
-		uqb.failClause(err)
+		uqb.Fail(err)
 		return uqb
 	}
 	// Applied one Set per key rather than through a map keyed by the rendering:
@@ -1410,6 +1405,27 @@ func (uqb *UpdateQueryBuilder) SetMap(clauses map[string]any) dbtypes.UpdateQuer
 		uqb.updateBuilder = uqb.updateBuilder.Set(quotedKeys[i], values[i])
 	}
 	return uqb
+}
+
+// setColumn renders one SET target through the column funnel and records it,
+// reporting whether the caller may continue. Hoisted out of SetStruct's two
+// branches so neither has to nest the funnel's failure inside its own loop.
+func (uqb *UpdateQueryBuilder) setColumn(column string, value any) (ok bool) {
+	quoted, err := uqb.qb.quoteColumnForQuery(column)
+	if err != nil {
+		// Defense in depth: every caller feeds this a column parsed from a db tag,
+		// and the tag parser rejects an unsafe identifier by panicking, so no test
+		// can reach this branch today.
+		uqb.Fail(err)
+		return false
+	}
+	cell, err := valueCell(column, value)
+	if err != nil {
+		uqb.Fail(err)
+		return false
+	}
+	uqb.updateBuilder = uqb.updateBuilder.Set(quoted, cell)
+	return true
 }
 
 // SetStruct sets multiple columns from a struct instance in the UPDATE statement.
@@ -1430,35 +1446,6 @@ func (uqb *UpdateQueryBuilder) SetMap(clauses map[string]any) dbtypes.UpdateQuer
 //	// UPDATE users SET name = ?, status = ? WHERE id = ?
 //
 // Panics if instance is not a struct or any field name is invalid.
-// setColumn renders one SET target through the column funnel and records it,
-// failClause records the FIRST violation and leaves any later one alone — the
-// same deferred-error rule the other builders follow (ADR-031).
-func (uqb *UpdateQueryBuilder) failClause(err error) {
-	if uqb.err == nil {
-		uqb.err = err
-	}
-}
-
-// reporting whether the caller may continue. Hoisted out of SetStruct's two
-// branches so neither has to nest the funnel's failure inside its own loop.
-func (uqb *UpdateQueryBuilder) setColumn(column string, value any) (ok bool) {
-	quoted, err := uqb.qb.quoteColumnForQuery(column)
-	if err != nil {
-		// Defense in depth: every caller feeds this a column parsed from a db tag,
-		// and the tag parser rejects an unsafe identifier by panicking, so no test
-		// can reach this branch today.
-		uqb.failClause(err)
-		return false
-	}
-	cell, err := valueCell(column, value)
-	if err != nil {
-		uqb.failClause(err)
-		return false
-	}
-	uqb.updateBuilder = uqb.updateBuilder.Set(quoted, cell)
-	return true
-}
-
 func (uqb *UpdateQueryBuilder) SetStruct(instance any, fields ...string) dbtypes.UpdateQueryBuilder {
 	cols := uqb.qb.Columns(instance)
 	fieldMap := cols.FieldMap(instance)
@@ -1495,8 +1482,8 @@ func (uqb *UpdateQueryBuilder) Where(filter dbtypes.Filter) dbtypes.UpdateQueryB
 
 // ToSQL generates the final SQL query and arguments.
 func (uqb *UpdateQueryBuilder) ToSQL() (sql string, args []any, err error) {
-	if uqb.err != nil {
-		return "", nil, uqb.err
+	if uqb.Err() != nil {
+		return "", nil, uqb.Err()
 	}
 	return uqb.updateBuilder.ToSql()
 }
@@ -1519,14 +1506,6 @@ func (dqb *DeleteQueryBuilder) Limit(limit uint64) dbtypes.DeleteQueryBuilder {
 
 // OrderBy adds ORDER BY clauses to the DELETE statement.
 // Note: ORDER BY in DELETE is not standard SQL and may not be supported by all databases.
-// failClause records the FIRST violation and leaves any later one alone — the
-// same deferred-error rule the other builders follow (ADR-031).
-func (dqb *DeleteQueryBuilder) failClause(err error) {
-	if dqb.err == nil {
-		dqb.err = err
-	}
-}
-
 func (dqb *DeleteQueryBuilder) OrderBy(orderBys ...string) dbtypes.DeleteQueryBuilder {
 	quotedOrderBys := make([]string, 0, len(orderBys))
 	for _, orderBy := range orderBys {
@@ -1534,7 +1513,7 @@ func (dqb *DeleteQueryBuilder) OrderBy(orderBys ...string) dbtypes.DeleteQueryBu
 		// BEFORE interpolation on ALL vendors so it cannot inject SQL (M9).
 		normalized, err := validateClauseIdentifier("orderBy", orderBy)
 		if err != nil {
-			dqb.failClause(err)
+			dqb.Fail(err)
 			return dqb
 		}
 		quotedOrderBys = append(quotedOrderBys, dqb.qb.quoteIdentifierForClause(normalized))
@@ -1545,8 +1524,8 @@ func (dqb *DeleteQueryBuilder) OrderBy(orderBys ...string) dbtypes.DeleteQueryBu
 
 // ToSQL generates the final SQL query and arguments.
 func (dqb *DeleteQueryBuilder) ToSQL() (sql string, args []any, err error) {
-	if dqb.err != nil {
-		return "", nil, dqb.err
+	if dqb.Err() != nil {
+		return "", nil, dqb.Err()
 	}
 	return dqb.deleteBuilder.ToSql()
 }
@@ -1558,7 +1537,7 @@ func (iqb *InsertQueryBuilder) Columns(columns ...string) dbtypes.InsertQueryBui
 	// same guard UpdateQueryBuilder.SetMap has applied since ADR-031.
 	normalized, err := validateIdentifiers("insert column", columns)
 	if err != nil {
-		iqb.failClause(err)
+		iqb.Fail(err)
 		return iqb
 	}
 	iqb.insertBuilder = iqb.insertBuilder.Columns(iqb.qb.quoteColumnsForDML(normalized...)...)
@@ -1568,7 +1547,7 @@ func (iqb *InsertQueryBuilder) Columns(columns ...string) dbtypes.InsertQueryBui
 func (iqb *InsertQueryBuilder) Values(values ...any) dbtypes.InsertQueryBuilder {
 	cells, err := valueCells(values, positionLabel)
 	if err != nil {
-		iqb.failClause(err)
+		iqb.Fail(err)
 		return iqb
 	}
 	iqb.insertBuilder = iqb.insertBuilder.Values(cells...)
@@ -1583,7 +1562,7 @@ func (iqb *InsertQueryBuilder) SetMap(clauses map[string]any) dbtypes.InsertQuer
 	// "SetMap column" is this door's own error context, unchanged.
 	keys, quoted, err := iqb.qb.quotedColumnsInNameOrder("SetMap column", clauses)
 	if err != nil {
-		iqb.failClause(err)
+		iqb.Fail(err)
 		return iqb
 	}
 	// Values follow the caller's own keys, so two keys that differ only in padding
@@ -1591,7 +1570,7 @@ func (iqb *InsertQueryBuilder) SetMap(clauses map[string]any) dbtypes.InsertQuer
 	// value being silently dropped.
 	values, err := valueCells(valuesByKeyOrder(clauses, keys), keyLabel(keys))
 	if err != nil {
-		iqb.failClause(err)
+		iqb.Fail(err)
 		return iqb
 	}
 	iqb.insertBuilder = iqb.insertBuilder.
@@ -1622,29 +1601,21 @@ func (iqb *InsertQueryBuilder) Suffix(sql string, args ...any) dbtypes.InsertQue
 // those, the error is deferred to ToSQL() rather than panicking.
 func (iqb *InsertQueryBuilder) Select(sb dbtypes.SelectQueryBuilder) dbtypes.InsertQueryBuilder {
 	if err := dbtypes.ValidateSubquery(sb); err != nil {
-		iqb.failClause(fmt.Errorf("InsertQueryBuilder.Select: %w", err))
+		iqb.Fail(fmt.Errorf("InsertQueryBuilder.Select: %w", err))
 		return iqb
 	}
 	concrete, ok := sb.(*SelectQueryBuilder)
 	if !ok {
-		iqb.failClause(fmt.Errorf("InsertQueryBuilder.Select: unsupported subquery type %T", sb))
+		iqb.Fail(fmt.Errorf("InsertQueryBuilder.Select: unsupported subquery type %T", sb))
 		return iqb
 	}
 	iqb.insertBuilder = iqb.insertBuilder.Select(concrete.buildSelectBuilder())
 	return iqb
 }
 
-// failClause records the FIRST violation and leaves any later one alone — the
-// same deferred-error rule SelectQueryBuilder follows (ADR-031).
-func (iqb *InsertQueryBuilder) failClause(err error) {
-	if iqb.err == nil {
-		iqb.err = err
-	}
-}
-
 func (iqb *InsertQueryBuilder) ToSQL() (sql string, args []any, err error) {
-	if iqb.err != nil {
-		return "", nil, iqb.err
+	if iqb.Err() != nil {
+		return "", nil, iqb.Err()
 	}
 	return iqb.insertBuilder.ToSql()
 }
