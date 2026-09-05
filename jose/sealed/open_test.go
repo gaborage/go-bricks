@@ -12,7 +12,6 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -413,13 +412,13 @@ func TestOpenNegativeVectors(t *testing.T) {
 			assert.Equal(t, tc.Code, je.Code)
 			switch tc.Code {
 			case sealed.CodeNotSealed:
-				assert.ErrorIs(t, err, sealed.ErrNotSealed)
+				require.ErrorIs(t, err, sealed.ErrNotSealed)
 			case sealed.CodeKidUnknownGeneration:
-				assert.ErrorIs(t, err, sealed.ErrKidUnknownGeneration)
+				require.ErrorIs(t, err, sealed.ErrKidUnknownGeneration)
 			case sealed.CodeKidFamilyMismatch:
-				assert.ErrorIs(t, err, sealed.ErrKidFamilyMismatch)
+				require.ErrorIs(t, err, sealed.ErrKidFamilyMismatch)
 			default:
-				assert.ErrorIs(t, err, sealed.ErrOpenFailed)
+				require.ErrorIs(t, err, sealed.ErrOpenFailed)
 			}
 			// Never a slot value in the error text (#1307): presence and lengths only.
 			for _, secret := range []string{vecJTI, eventType, vecTenant, "payment.voided", "tenant-b", "has:colon"} {
@@ -655,7 +654,7 @@ func TestOpenErrorRendersDetailsSorted(t *testing.T) {
 	err := &sealed.OpenError{Err: &bricksjose.Error{Code: "X", Message: "m"}, Rule: 6, Details: map[string]string{"slot": "jti", "len": "0", "present": "false"}}
 	assert.Equal(t, "X: m [len=0 present=false slot=jti]", err.Error())
 	assert.Equal(t, "<nil>", (*sealed.OpenError)(nil).Error())
-	assert.Nil(t, (*sealed.OpenError)(nil).Unwrap())
+	assert.NoError(t, (*sealed.OpenError)(nil).Unwrap())
 }
 
 // TestOpenPathReadsNoClock is the grep test: iat is informational, so the open path never
@@ -663,7 +662,7 @@ func TestOpenErrorRendersDetailsSorted(t *testing.T) {
 func TestOpenPathReadsNoClock(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join(".", "open.go"))
 	require.NoError(t, err)
-	assert.NotRegexp(t, regexp.MustCompile(`time\.(Now|Since)`), string(src))
+	assert.NotRegexp(t, `time\.(Now|Since)`, string(src))
 }
 
 // TestOpenRefusesReflectMismatchBeforeAnyKey proves a wrong out type is refused before the resolver is consulted.

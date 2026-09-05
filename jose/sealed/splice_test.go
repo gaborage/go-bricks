@@ -33,7 +33,7 @@ func TestLocateSubjectFindsSpanExactly(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tc.value, string(span.value))
 			assert.Equal(t, tc.value, tc.doc[span.start:span.end], "span must address the value bytes")
-			assert.Equal(t, span.end-span.start, len(span.value))
+			assert.Len(t, span.value, span.end-span.start)
 		})
 	}
 }

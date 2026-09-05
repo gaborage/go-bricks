@@ -5,7 +5,6 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math/big"
 	"reflect"
@@ -243,9 +242,9 @@ func TestSealFamilyPinRefusesForeignOrLogicalKids(t *testing.T) {
 			opts.SignKid, opts.EncryptKid = tc.sign, tc.encrypt
 			wire, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
 			assert.Nil(t, wire)
-			assert.ErrorIs(t, err, sealed.ErrKidFamilyMismatch)
+			require.ErrorIs(t, err, sealed.ErrKidFamilyMismatch)
 			var jerr *bricksjose.Error
-			require.True(t, errors.As(err, &jerr))
+			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, sealed.CodeKidFamilyMismatch, jerr.Code)
 			assert.Equal(t, tc.wantKid, jerr.Kid)
 			assert.Contains(t, jerr.Message, tc.role+" kid")
@@ -270,9 +269,9 @@ func TestSealPropagatesResolverErrors(t *testing.T) {
 			opts := testOptions(t)
 			opts.Keys = tc.resolver
 			_, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
-			assert.ErrorIs(t, err, bricksjose.ErrKidUnknown, "resolver error propagates verbatim")
+			require.ErrorIs(t, err, bricksjose.ErrKidUnknown, "resolver error propagates verbatim")
 			var jerr *bricksjose.Error
-			require.True(t, errors.As(err, &jerr))
+			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, tc.wantKid, jerr.Kid)
 		})
 	}
@@ -304,9 +303,9 @@ func TestSealRejectsInvalidInputs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			wire, err := sealed.Seal(tc.evt, tc.spec, tc.opts)
 			assert.Nil(t, wire)
-			assert.ErrorIs(t, err, sealed.ErrSealFailed)
+			require.ErrorIs(t, err, sealed.ErrSealFailed)
 			var jerr *bricksjose.Error
-			require.True(t, errors.As(err, &jerr))
+			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, tc.code, jerr.Code)
 		})
 	}
@@ -321,7 +320,7 @@ func TestOptionsValidateIsAKeyFreePreflight(t *testing.T) {
 	assert.Zero(t, counting.calls, "Validate must not touch key material")
 
 	opts.SignKid = "svc-orders-sign-v1"
-	assert.ErrorIs(t, opts.Validate(spec), sealed.ErrKidFamilyMismatch)
+	require.ErrorIs(t, opts.Validate(spec), sealed.ErrKidFamilyMismatch)
 
 	var nilOpts *sealed.Options
 	assert.ErrorIs(t, nilOpts.Validate(spec), sealed.ErrSealFailed)
@@ -356,7 +355,7 @@ func TestSealRefusesADocumentWithoutTheSubjectMember(t *testing.T) {
 	require.NoError(t, err)
 	_, err = sealed.Seal(selfMarshaling{}, spec, testOptions(t))
 	var jerr *bricksjose.Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, sealed.CodeDocumentInvalid, jerr.Code)
 	assert.Contains(t, jerr.Message, `"card"`)
 	assert.Error(t, jerr.Cause)
@@ -383,7 +382,7 @@ func TestSealRefusesACaseFoldTwinTheScanCannotSee(t *testing.T) {
 	wire, err := sealed.Seal(twinMarshaling{Card: &cardData{PAN: testPAN, Exp: "12/29"}}, spec, testOptions(t))
 	assert.Nil(t, wire, "a document with a clear twin of the subject is never signed")
 	var jerr *bricksjose.Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, sealed.CodeDocumentInvalid, jerr.Code)
 	assert.Contains(t, jerr.Message, `"card"`)
 	assert.NotContains(t, err.Error(), "Card", "the twin's own name is document data")
@@ -409,7 +408,7 @@ func TestSealMarshalFailureNeverCarriesSubjectBytes(t *testing.T) {
 	require.NoError(t, err)
 	_, err = sealed.Seal(leakyEvent{Card: leakyCard{PAN: testPAN}}, spec, testOptions(t))
 	var jerr *bricksjose.Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, sealed.CodeSealFailed, jerr.Code)
 	assert.NotContains(t, err.Error(), testPAN, "marshal error must be reported by type only")
 	assert.NotContains(t, err.Error(), "cannot encode card")
@@ -434,7 +433,7 @@ func TestOptionsValidateBoundsTheSignedSlots(t *testing.T) {
 func assertOptionsInvalid(t *testing.T, err error, msg string) {
 	t.Helper()
 	var jerr *bricksjose.Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, sealed.CodeOptionsInvalid, jerr.Code)
 	assert.Contains(t, jerr.Message, msg)
 }
@@ -450,7 +449,7 @@ func TestSealReportsMarshalFailure(t *testing.T) {
 	require.NoError(t, err)
 	_, err = sealed.Seal(unmarshalable{Bad: map[bool]int{true: 1}}, spec, testOptions(t))
 	var jerr *bricksjose.Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, sealed.CodeSealFailed, jerr.Code)
 	assert.Contains(t, jerr.Message, "marshal")
 }
@@ -488,7 +487,7 @@ func TestSealReportsCryptoFailures(t *testing.T) {
 			wire, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
 			assert.Nil(t, wire)
 			var jerr *bricksjose.Error
-			require.True(t, errors.As(err, &jerr))
+			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, sealed.CodeSealFailed, jerr.Code)
 			assert.Contains(t, jerr.Message, tc.msg)
 			assert.Error(t, jerr.Cause)

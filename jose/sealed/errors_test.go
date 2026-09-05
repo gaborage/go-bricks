@@ -70,8 +70,8 @@ func TestScanErrorCarriesSentinelAndCode(t *testing.T) {
 		Card string `json:"card" seal:"subject"`
 	}{}))
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrTagInvalid)
-	assert.NotErrorIs(t, err, ErrSealFailed)
+	require.ErrorIs(t, err, ErrTagInvalid)
+	require.NotErrorIs(t, err, ErrSealFailed)
 	var je *jose.Error
 	require.ErrorAs(t, err, &je)
 	assert.Equal(t, CodeTagSentinelMissing, je.Code)

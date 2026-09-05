@@ -32,15 +32,44 @@ test, not inferred from the diff.
 
 | site | checker | why it stays `assert` | directive FINAL inserts |
 | --- | --- | --- | --- |
-| `app/app_builder_test.go:491` | require-error | The cause string is one property; lines below then drive `CreateApp().Build()` and pin that startup aborts with a nil app and a live logger — a second phase that cannot be hoisted above it. | `//nolint:testifylint // require would abort before the Build-propagation assertions` |
-| `app/app_builder_test.go:539` | require-error | Paired with `:540` — two clauses of ONE wrapped error ("cache manager", "maxsize cannot be negative"); the final clause is now `require`. | `//nolint:testifylint // second clause of the same wrapped error follows` |
-| `app/app_builder_test.go:579` | require-error | The ADR-067 point is the lines below: the bundle is read off the builder and all three managers are probed observably closed. Aborting on a message change hides the leak check. | `//nolint:testifylint // require would abort before the manager-close assertions` |
-| `app/app_test.go:1197` | require-error | Paired with the line below — the two errors an aggregate wraps. `TestShutdownAggregatesErrors` exists to pin BOTH; the final one is now `require`. | `//nolint:testifylint // second wrapped error asserted on the next line` |
-| `app/bootstrap_test.go:605` | require-error | Guarded by a `require.Error` above, so nil-deref is impossible; this is the first of two clauses of one error, the second of which is now `require`. | `//nolint:testifylint // guarded by require.Error above; second clause follows` |
-| `app/lifecycle_test.go:1081` | require-error | A table subtest whose branch below returns early on the nil arm, so it cannot be hoisted above this assertion; both messages state a conjunction — teardown never fails the shutdown AND closers still run. | `//nolint:testifylint // branch-dependent log assertions follow` |
-| `app/messaging_setup_test.go:110` | require-error | Paired with the line below (sentinel + message clause); the message clause is now `require` and the independent call-count assertion has moved above both. | `//nolint:testifylint // paired error-clause assertion follows` |
-| `app/module_test.go:294` | require-error | Paired with the line below — both errors joined into one shutdown error; the second is now `require`. | `//nolint:testifylint // second joined error asserted on the next line` |
-| `app/factory_resolver_integration_test.go:492` | require-error | The tenant-B isolation check below reads the SAME `sharedKey` through tenant B's client, which is what makes it an isolation check, and is the property this test exists to pin; a require aborts on any non-nil error that is not `ErrNotFound` and the regression goes unreported. | `//nolint:testifylint // the tenant-isolation check below is a separate phase` |
+| `app/app_builder_test.go:491` | require-error | The cause string is one property; lines below then drive `CreateApp().Build()` and pin that startup aborts with a nil app and a live logger. | `//nolint:testifylint // require would abort before the Build-propagation assertions` |
+| `app/app_builder_test.go:539` | require-error | Paired with `:540` — two clauses of ONE wrapped error ("cache manager", "maxsize cannot be negative"). | `//nolint:testifylint // second clause of the same wrapped error follows` |
+| `app/app_builder_test.go:577` | require-error | The ADR-067 point is the lines below: app nil, logger live, and all three bundle managers observably closed. Aborting on a message change hides the leak check. | `//nolint:testifylint // require would abort before the manager-close assertions` |
+| `app/app_test.go:1196` | require-error | Paired with `:1197` — the two errors an aggregate wraps. `TestShutdownAggregatesErrors` exists to pin BOTH. | `//nolint:testifylint // second wrapped error asserted on the next line` |
+| `app/app_test.go:1197` | require-error | Same pair, other half. | `//nolint:testifylint // paired aggregate-error assertion` |
+| `app/bootstrap_test.go:604` | require-error | Already guarded by a `require.Error` above, so nil-deref is impossible; `:604`/`:605` are two clauses of one error. | `//nolint:testifylint // guarded by require.Error above; second clause follows` |
+| `app/bootstrap_test.go:605` | require-error | Same pair, other half. | `//nolint:testifylint // paired error-clause assertion` |
+| `app/lifecycle_test.go:175` | require-error | Followed by a `Less(duration, 1s)` bound — correctness and timing are independent properties of one shutdown. | `//nolint:testifylint // timing bound asserted independently below` |
+| `app/lifecycle_test.go:358` | require-error | Followed by the log-recorder check that the pre-warm WARN was NOT emitted — a differently-sourced property the test's comment declares. | `//nolint:testifylint // log-emission assertion follows, from a different source` |
+| `app/lifecycle_test.go:1081` | require-error | Both assertion messages state a conjunction: teardown never fails the shutdown AND closers still run. | `//nolint:testifylint // closer-ran assertion follows` |
+| `app/messaging_setup_test.go:109` | require-error | Paired with `:110` (sentinel + message clause), then an independent call-count assertion. | `//nolint:testifylint // paired clause plus an independent call-count assertion follow` |
+| `app/messaging_setup_test.go:110` | require-error | Same pair, other half. | `//nolint:testifylint // paired error-clause assertion` |
+| `app/module_test.go:289` | require-error | Paired with `:290` — both errors joined into one shutdown error, then both module names in the message. | `//nolint:testifylint // second joined error asserted on the next line` |
+| `app/module_test.go:290` | require-error | Same pair, other half. | `//nolint:testifylint // paired aggregate-error assertion` |
+| `app/module_test.go:319` | require-error | Followed by `Contains("failing-module")` and `NotContains("ok-module")`; the EXCLUSION of the clean module is an independent property. | `//nolint:testifylint // module-name inclusion/exclusion assertions follow` |
+| `app/prewarm_test.go:199` | require-error | Followed by `Less(elapsed, time.Second)` — error identity and the elapsed bound are independent properties of one cancellation. | `//nolint:testifylint // elapsed-time bound asserted independently below` |
+| `app/readiness_test.go:98` | require-error | Probe results carry several independently-regressable fields; lease bookkeeping (`acquired`/`released`) is computed by a different path and asserted below. | `//nolint:testifylint // lease-bookkeeping assertions follow, from a different code path` |
+| `app/readiness_test.go:100` | require-error | Same table, no-error arm; same lease assertions follow. | `//nolint:testifylint // lease-bookkeeping assertions follow` |
+| `app/readiness_test.go:213` | require-error | Followed by `True(result.Critical)` under a comment stating criticality is retained deliberately — a different code path from `Err`. | `//nolint:testifylint // criticality assertion follows, from a different code path` |
+| `app/readiness_test.go:271` | require-error | Followed by `False(got.Critical, "messaging is never critical")`. | `//nolint:testifylint // criticality assertion follows` |
+| `app/readiness_test.go:308` | require-error | Followed by the #860 regression pin, a timeout bound — which IS the point of the test. | `//nolint:testifylint // probe-timeout bound is the regression this test pins` |
+| `app/readiness_test.go:318` | require-error | Followed by `Contains(Details, "active_caches")` — counters must render on the not-configured path regardless of the error. | `//nolint:testifylint // details-rendering assertion follows` |
+| `app/readiness_test.go:360` | require-error | Followed by `False(got.Critical)` and `Contains(Details, "stored_offsets")`. | `//nolint:testifylint // criticality and details assertions follow` |
+| `app/slot_test.go:531` | require-error | `fatal` and `advisory` are two distinct return values; a require on `fatal` erases the whole advisory arm the test is named for. | `//nolint:testifylint // the advisory return value is asserted separately below` |
+
+## jose (#1092 / W3-P7)
+
+Both shapes here are the checker being mechanically right and substantively wrong about what
+the assertion pins. Neither is a `require-error` ordering case, so neither could be resolved
+by reordering.
+
+| site | checker | why it stays as written | directive FINAL inserts |
+| --- | --- | --- | --- |
+| `jose/sealed/splice_test.go:103` | encoded-compare | `TestSpliceReplacesOnlyTheSpan` pins that splice rewrites the located span and nothing else, so key order and spacing are the property. `JSONEq` compares semantically and would pass a splice that reordered the document. | `//nolint:testifylint // byte-exact output is the property; JSONEq ignores key order` |
+| `jose/sealed/splice_test.go:104` | encoded-compare | Same test, the "input must not be mutated" half: byte identity of the caller's buffer. | `//nolint:testifylint // asserts the input buffer is byte-identical` |
+| `jose/sealed/splice_test.go:113` | encoded-compare | `TestSpliceRawInsertsReplacementVerbatim` — "verbatim" is byte-exactness by name. | `//nolint:testifylint // verbatim insertion is a byte-level property` |
+| `jose/sealed/splice_test.go:114` | encoded-compare | Same test, the unmutated-input half. | `//nolint:testifylint // asserts the input buffer is byte-identical` |
+| `jose/sealed/seal_test.go:150` | float-compare | `iat` is whole seconds, decoded from JSON as `float64`, inside a block pinning "exactly the decided protected header set and values". A tolerance would let a drifting `iat` pass, which is the one thing the assertion exists to catch. | `//nolint:testifylint // exact issued-at; a tolerance would accept a drifting iat` |
 
 Harvest note for the FINAL author: P5, P6 and P9 documented their false positives in their PR
 bodies rather than here (this file postdates them) — pull those rows in before converting.

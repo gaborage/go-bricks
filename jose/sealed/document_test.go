@@ -2,7 +2,6 @@ package sealed_test
 
 import (
 	"encoding/json"
-	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -65,9 +64,9 @@ func TestNewDocumentSpecRejectsInvalidArguments(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			spec, err := sealed.NewDocumentSpec(tc.sign, tc.encrypt, tc.path)
 			assert.Nil(t, spec)
-			assert.ErrorIs(t, err, sealed.ErrTagInvalid)
+			require.ErrorIs(t, err, sealed.ErrTagInvalid)
 			var jerr *bricksjose.Error
-			require.True(t, errors.As(err, &jerr))
+			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, tc.code, jerr.Code)
 			assert.Equal(t, tc.kid, jerr.Kid)
 		})
@@ -147,9 +146,9 @@ func TestSealDocumentRejectsInvalidDocuments(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			wire, err := sealed.SealDocument([]byte(tc.doc), documentSpec(t), testOptions(t))
 			assert.Nil(t, wire)
-			assert.ErrorIs(t, err, sealed.ErrSealFailed)
+			require.ErrorIs(t, err, sealed.ErrSealFailed)
 			var jerr *bricksjose.Error
-			require.True(t, errors.As(err, &jerr))
+			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, sealed.CodeDocumentInvalid, jerr.Code)
 			// The refusal names the declared subject path and nothing the document carries.
 			assert.Contains(t, jerr.Message, `"`+docSubjectPath+`"`)
@@ -183,7 +182,7 @@ func TestSealDocumentRejectsInvalidOptions(t *testing.T) {
 			wire, err := sealed.SealDocument(sampleDocument(), tc.spec, tc.opts)
 			assert.Nil(t, wire)
 			var jerr *bricksjose.Error
-			require.True(t, errors.As(err, &jerr))
+			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, tc.code, jerr.Code)
 		})
 	}
@@ -197,7 +196,7 @@ func TestTypedDoorsRefuseADocumentSpec(t *testing.T) {
 
 	_, err := sealed.Seal(sampleEvent(), spec, testOptions(t))
 	var sealErr *bricksjose.Error
-	require.True(t, errors.As(err, &sealErr))
+	require.ErrorAs(t, err, &sealErr)
 	assert.Equal(t, sealed.CodeOptionsInvalid, sealErr.Code)
 	assert.Contains(t, sealErr.Message, "ScanType")
 
@@ -210,7 +209,7 @@ func TestTypedDoorsRefuseADocumentSpec(t *testing.T) {
 	require.ErrorAs(t, err, &openErr)
 	assert.Zero(t, openErr.Rule, "pre-flight, no rule fired")
 	var jerr *bricksjose.Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, sealed.CodeOptionsInvalid, jerr.Code)
 	assert.Contains(t, jerr.Message, "ScanType")
 }

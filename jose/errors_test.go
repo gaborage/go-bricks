@@ -5,11 +5,12 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestErrorIsMatchesSentinel(t *testing.T) {
 	e := &Error{Sentinel: ErrDecryptFailed, Code: "JOSE_DECRYPT_FAILED"}
-	assert.ErrorIs(t, e, ErrDecryptFailed)
+	require.ErrorIs(t, e, ErrDecryptFailed)
 	assert.NotErrorIs(t, e, ErrSignatureInvalid)
 }
 
@@ -30,5 +31,5 @@ func TestErrorErrorIncludesCodeAndCause(t *testing.T) {
 func TestErrorNilSafe(t *testing.T) {
 	var e *Error
 	assert.Equal(t, "<nil>", e.Error())
-	assert.Nil(t, e.Unwrap())
+	assert.NoError(t, e.Unwrap())
 }
