@@ -46,7 +46,8 @@ test, not inferred from the diff.
 `server/middleware_test.go` is **deferred, not excepted**: Lane L (#1453) rewrote the file, so
 its 12 findings belong to a later sweep rather than to this table. They are real and must be
 fixed there — do not read their absence here as a disposition. Reconcile this section with
-`EXCLUDE_RE='server/middleware_test\.go'`, which yields `live: 8 rows: 8`.
+`EXCLUDE_RE='server/middleware_test\.go'`, which yields `live: 14 rows: 14` — the count is
+this table's rows, and it must be updated whenever a row is added or removed.
 
 | site | checker | why it stays `assert` | directive FINAL inserts |
 | --- | --- | --- | --- |
