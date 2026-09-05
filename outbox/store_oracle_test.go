@@ -51,8 +51,8 @@ func TestOracleStoreInsertExecError(t *testing.T) {
 
 	err = store.Insert(t.Context(), tx, sampleRecord())
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "insert failed")
+	require.ErrorIs(t, err, wantErr)
 }
 
 // TestOracleCreateTableDDLAllowsEmptyExchange guards issue #586: the exchange/routing_key
@@ -141,8 +141,8 @@ func TestOracleStoreFetchPendingQueryError(t *testing.T) {
 
 	_, err := store.FetchPending(t.Context(), db, 10)
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "fetch pending failed")
+	require.ErrorIs(t, err, wantErr)
 }
 
 // --- MarkPublished ----------------------------------------------------------
@@ -163,8 +163,8 @@ func TestOracleStoreMarkPublishedExecError(t *testing.T) {
 
 	err := store.MarkPublished(t.Context(), db, "evt-1")
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "mark published failed")
+	require.ErrorIs(t, err, wantErr)
 }
 
 // TestOracleStoreFetchPendingSelectsByStatusOnly mirrors the Postgres test: the
@@ -216,8 +216,8 @@ func TestOracleStoreMarkDeadLetteredExecError(t *testing.T) {
 
 	err := store.MarkDeadLettered(t.Context(), db, "evt-1", "poison")
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "mark dead-lettered failed")
+	require.ErrorIs(t, err, wantErr)
 }
 
 // --- MarkFailed -------------------------------------------------------------
@@ -238,8 +238,8 @@ func TestOracleStoreMarkFailedExecError(t *testing.T) {
 
 	err := store.MarkFailed(t.Context(), db, "evt-1", "broker offline")
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "mark failed failed")
+	require.ErrorIs(t, err, wantErr)
 }
 
 // --- DeletePublished --------------------------------------------------------
@@ -262,8 +262,8 @@ func TestOracleStoreDeletePublishedExecError(t *testing.T) {
 
 	_, err := store.DeletePublished(t.Context(), db, time.Now())
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "delete published failed")
+	require.ErrorIs(t, err, wantErr)
 }
 
 // --- CreateTable ------------------------------------------------------------
@@ -309,8 +309,8 @@ func TestOracleStoreCreateTableErrorOnTable(t *testing.T) {
 
 	err := store.CreateTable(t.Context(), db)
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "create table failed")
+	require.ErrorIs(t, err, wantErr)
 }
 
 func TestOracleStoreCreateTableErrorOnPendingIndex(t *testing.T) {
@@ -322,8 +322,8 @@ func TestOracleStoreCreateTableErrorOnPendingIndex(t *testing.T) {
 
 	err := store.CreateTable(t.Context(), db)
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "create pending index failed")
+	require.ErrorIs(t, err, wantErr)
 }
 
 func TestOracleStoreCreateTableErrorOnPublishedIndex(t *testing.T) {
@@ -336,8 +336,8 @@ func TestOracleStoreCreateTableErrorOnPublishedIndex(t *testing.T) {
 
 	err := store.CreateTable(t.Context(), db)
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "create published index failed")
+	require.ErrorIs(t, err, wantErr)
 }
 
 // Compile-time guard: ensure oracleStore satisfies the Store interface.

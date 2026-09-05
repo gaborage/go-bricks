@@ -595,13 +595,13 @@ func TestPublisherRefusesADestinationTheFrameCannotCarry(t *testing.T) {
 				return
 			}
 			require.Error(t, err)
-			require.ErrorIs(t, err, messaging.ErrInvalidPublishDestination)
 			assert.Empty(t, eventID)
 			assert.Equal(t, 0, store.InsertCalls, "an unpublishable destination never reaches the ledger")
 			assert.Contains(t, err.Error(), "outbox:")
 			assert.Contains(t, err.Error(), tt.field)
 			assert.Contains(t, err.Error(), "256 bytes")
 			assert.NotContains(t, err.Error(), oversizedShortStr, "the error reports the length, never the value")
+			require.ErrorIs(t, err, messaging.ErrInvalidPublishDestination)
 		})
 	}
 }
@@ -712,10 +712,10 @@ func TestPublisherStreamTarget(t *testing.T) {
 			if tt.wantErr != nil {
 				require.Error(t, err)
 				assert.Empty(t, store.insertedRecords, "a refused event never reaches the store")
-				require.ErrorIs(t, err, tt.wantErr)
 				if tt.wantErrFrag != "" {
-					require.ErrorContains(t, err, tt.wantErrFrag)
+					assert.ErrorContains(t, err, tt.wantErrFrag)
 				}
+				require.ErrorIs(t, err, tt.wantErr)
 				return
 			}
 

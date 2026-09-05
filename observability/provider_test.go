@@ -1018,9 +1018,9 @@ func TestNewProviderCleansUpOnMetricsInitFailure(t *testing.T) {
 	provider, err := NewProvider(cfg)
 	require.Error(t, err, "expected metrics init hook failure")
 	assert.Nil(t, provider, "provider should be nil on failure")
-	require.ErrorIs(t, err, metricsInitErr)
 	require.NotNil(t, recordingTraceExporter, "trace exporter should be created before failure")
 	assert.True(t, recordingTraceExporter.ShutdownCalled(), "trace exporter should be shutdown via cleanup")
+	require.ErrorIs(t, err, metricsInitErr)
 
 	// The test verifies that:
 	// 1. NewProvider returns an error (metrics init failed)
@@ -1083,11 +1083,11 @@ func TestNewProviderCleansUpOnLogsInitFailure(t *testing.T) {
 	provider, err := NewProvider(cfg)
 	require.Error(t, err, "expected logs init hook failure")
 	assert.Nil(t, provider, "provider should be nil on failure")
-	require.ErrorIs(t, err, logsInitErr)
 	require.NotNil(t, recordingTraceExporter, "trace exporter should be created before failure")
 	require.NotNil(t, metricExporterRecorder, "metric exporter should be created before failure")
 	assert.True(t, recordingTraceExporter.ShutdownCalled(), "trace exporter should be shutdown via cleanup")
 	assert.True(t, metricExporterRecorder.ShutdownCalled(), "metric exporter should be shutdown via cleanup")
+	require.ErrorIs(t, err, logsInitErr)
 
 	// The test verifies that:
 	// 1. NewProvider returns an error (logs init failed)

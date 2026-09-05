@@ -49,12 +49,19 @@ bodies rather than here (this file postdates them) — pull those rows in before
 
 | site | checker | why | directive |
 | --- | --- | --- | --- |
-| `observability/testing/helpers.go:286` | float-compare | Shipped helper; exact-equality contract. `AssertSpanAttribute` proves a span carries the attribute value the caller passed — a round-trip through the OTel attribute set, not a computation — so a tolerance would let a genuinely different value pass. The neighbouring metric helpers use `InDelta` because those values ARE computed; this one must not. | `//nolint:testifylint // exact equality is this helper's contract` |
+| `observability/dual_processor_test.go:821` | require-error | Two sentinel checks on ONE aggregated error: `Shutdown` joins the action and trace processors' failures and the test proves both are present. A `require` on either hides the other, and no ordering clears the checker because whichever error assertion is not last is the one it flags. | `//nolint:testifylint // both sentinels of one aggregated error; a require hides the other` |
+| `observability/dual_processor_test.go:855` | require-error | Same shape for the aggregated `ForceFlush` error: both `errAction` and `errTrace` must be shown present, so neither check may abort the other. | `//nolint:testifylint // both sentinels of one aggregated error; a require hides the other` |
+| `observability/processor_attribute_exporter_test.go:219` | require-error | The memoization property IS the pair: the first `Shutdown` and the memoized second must report the same sentinel. A `require` on the first hides whether the second was memoized, which is the only thing this test exists to prove. | `//nolint:testifylint // first and memoized second result; a require hides the second` |
+| `observability/testing/helpers.go:286` | float-compare | Shipped helper; exact-equality contract. `AssertSpanAttribute` proves a span carries the attribute value the caller passed — a round trip through the OTel attribute set, not a computation — so a tolerance would let a genuinely different value pass. The neighbouring metric helpers use `InDelta` because those values ARE computed; this one must not. | `//nolint:testifylint // exact equality is this helper's contract` |
 
 ## outbox
 
-No exceptions. All 51 findings were resolved in the test files: 40 converted to
-`require` where the follower dereferenced the error or would have failed
-redundantly, 10 resolved by reordering so the error assertion comes last, and
-one `error-is-as` plus two `empty` findings fixed by the assertion the checker
-named.
+Error-EXISTENCE checks converted to `require` where the follower dereferenced
+the error or would only have failed redundantly; error-IDENTITY checks did not,
+and were reordered so the identity assertion comes last. One `error-is-as` and
+two `empty` findings were fixed by the assertion the checker named. One site
+could not be resolved by ordering:
+
+| site | checker | why | directive |
+| --- | --- | --- | --- |
+| `outbox/publisher_test.go:716` | require-error | `ErrorContains` and the `ErrorIs` that follows it are independent properties of one error: a `%v`-for-`%w` regression breaks only the sentinel chain, a message edit breaks only the text. A `require` on the message check would hide the sentinel check, so the message assertion stays non-fatal and the sentinel assertion stays last. | `//nolint:testifylint // message and sentinel are independent; a require hides the sentinel` |

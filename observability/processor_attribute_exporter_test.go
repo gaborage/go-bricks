@@ -216,7 +216,7 @@ func TestProcessorAttributeExporterShutdown(t *testing.T) {
 		second := enricher.Shutdown(context.Background())
 
 		assert.Equal(t, 1, wrapped.shutdownCount)
-		require.ErrorIs(t, first, wantErr)
+		assert.ErrorIs(t, first, wantErr)
 		assert.ErrorIs(t, second, wantErr)
 	})
 
@@ -244,8 +244,9 @@ func TestProcessorAttributeExporterForceFlush(t *testing.T) {
 		wrapped := &fakeLogExporter{flushErr: wantErr}
 		enricher := newTraceEnricher(wrapped)
 
-		require.ErrorIs(t, enricher.ForceFlush(context.Background()), wantErr)
+		err := enricher.ForceFlush(context.Background())
 		assert.Equal(t, 1, wrapped.flushCount)
+		require.ErrorIs(t, err, wantErr)
 	})
 }
 

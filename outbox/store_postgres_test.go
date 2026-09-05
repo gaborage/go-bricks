@@ -69,8 +69,8 @@ func TestPostgresStoreInsertExecError(t *testing.T) {
 
 	err = store.Insert(t.Context(), tx, sampleRecord())
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "insert failed")
+	require.ErrorIs(t, err, wantErr)
 }
 
 // --- FetchPending -----------------------------------------------------------
@@ -125,8 +125,8 @@ func TestPostgresStoreFetchPendingQueryError(t *testing.T) {
 
 	_, err := store.FetchPending(t.Context(), db, 10)
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "fetch pending failed")
+	require.ErrorIs(t, err, wantErr)
 }
 
 // TestPostgresStoreFetchPendingSelectsByStatusOnly pins the parking-semantics
@@ -178,8 +178,8 @@ func TestPostgresStoreMarkDeadLetteredExecError(t *testing.T) {
 
 	err := store.MarkDeadLettered(t.Context(), db, "evt-1", "poison")
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "mark dead-lettered failed")
+	require.ErrorIs(t, err, wantErr)
 }
 
 // --- MarkPublished ----------------------------------------------------------
@@ -200,8 +200,8 @@ func TestPostgresStoreMarkPublishedExecError(t *testing.T) {
 
 	err := store.MarkPublished(t.Context(), db, "evt-1")
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "mark published failed")
+	require.ErrorIs(t, err, wantErr)
 }
 
 // --- MarkFailed -------------------------------------------------------------
@@ -222,8 +222,8 @@ func TestPostgresStoreMarkFailedExecError(t *testing.T) {
 
 	err := store.MarkFailed(t.Context(), db, "evt-1", "broker offline")
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "mark failed failed")
+	require.ErrorIs(t, err, wantErr)
 }
 
 // --- DeletePublished --------------------------------------------------------
@@ -246,8 +246,8 @@ func TestPostgresStoreDeletePublishedExecError(t *testing.T) {
 
 	_, err := store.DeletePublished(t.Context(), db, time.Now())
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "delete published failed")
+	require.ErrorIs(t, err, wantErr)
 }
 
 // --- CreateTable ------------------------------------------------------------
@@ -272,8 +272,8 @@ func TestPostgresStoreCreateTableErrorOnTable(t *testing.T) {
 
 	err := store.CreateTable(t.Context(), db)
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "create table failed")
+	require.ErrorIs(t, err, wantErr)
 }
 
 func TestPostgresStoreCreateTableErrorOnPendingIndex(t *testing.T) {
@@ -285,8 +285,8 @@ func TestPostgresStoreCreateTableErrorOnPendingIndex(t *testing.T) {
 
 	err := store.CreateTable(t.Context(), db)
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "create pending index failed")
+	require.ErrorIs(t, err, wantErr)
 }
 
 func TestPostgresStoreCreateTableErrorOnPublishedIndex(t *testing.T) {
@@ -299,8 +299,8 @@ func TestPostgresStoreCreateTableErrorOnPublishedIndex(t *testing.T) {
 
 	err := store.CreateTable(t.Context(), db)
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "create published index failed")
+	require.ErrorIs(t, err, wantErr)
 }
 
 func TestPostgresStoreCreateTableSchemaQualified(t *testing.T) {
@@ -437,8 +437,8 @@ func TestPostgresStoreCreateTableSeedErrorIsReported(t *testing.T) {
 
 	err := store.CreateTable(t.Context(), db)
 	require.Error(t, err)
-	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "leader")
+	require.ErrorIs(t, err, wantErr)
 }
 
 // TestPostgresStoreFetchPendingEmptyStreamIsAMQPLane pins C1: the stream-lane columns are
@@ -523,10 +523,11 @@ func TestPostgresStoreLeadProbeReportsDeadTransaction(t *testing.T) {
 
 	lead, err := store.Lead(t.Context(), db)
 	require.NoError(t, err)
-	require.ErrorIs(t, lead.Probe(t.Context()), wantErr)
+	probeErr := lead.Probe(t.Context())
 
 	// A failed probe does not release the claim: the caller still must, and Release must
 	// succeed so the transaction is rolled back rather than left open.
 	require.NoError(t, lead.Release(t.Context()))
 	dbtesting.AssertRolledBack(t, tx)
+	require.ErrorIs(t, probeErr, wantErr)
 }

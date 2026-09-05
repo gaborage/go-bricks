@@ -844,12 +844,12 @@ func TestRelayLostLeadershipStopsBatch(t *testing.T) {
 
 	err := r.Execute(newFakeJobCtx(db, amqp))
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrNotLeader, "a lost leader row is reported as such")
 	assert.NotContains(t, err.Error(), "messaging not available",
 		"the cause is the database, so it must not be reported as a broker outage")
 	assert.Equal(t, 1, amqp.PublishCalls, "a deposed leader publishes nothing further")
 	assert.Zero(t, store.MarkFailedCalls, "the unattempted remainder is left pending, not marked")
 	assert.Equal(t, 1, store.ReleaseCalls)
+	require.ErrorIs(t, err, ErrNotLeader, "a lost leader row is reported as such")
 }
 
 // --- key-ordered draining ----------------------------------------------------
