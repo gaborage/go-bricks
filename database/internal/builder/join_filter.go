@@ -12,7 +12,7 @@ import (
 // nil and slices are meaningful for equality and refused for ordering.
 const (
 	opEqual    = "="
-	opNotEqual = "!="
+	opNotEqual = "<>"
 )
 
 // JoinFilter represents a composable JOIN ON condition that compares columns to other columns.
@@ -87,14 +87,14 @@ func (jff *JoinFilterFactory) EqColumn(leftColumn, rightColumn string) dbtypes.J
 	return JoinFilter{sqlizer: columnComparison{left, "=", right}}
 }
 
-// NotEqColumn creates an inequality join condition (leftColumn != rightColumn).
+// NotEqColumn creates an inequality join condition (leftColumn <> rightColumn).
 // Column names are automatically quoted according to database vendor rules.
 func (jff *JoinFilterFactory) NotEqColumn(leftColumn, rightColumn string) dbtypes.JoinFilter {
 	left, right, err := jff.columnPair(leftColumn, rightColumn)
 	if err != nil {
 		return joinFilterErr(err)
 	}
-	return JoinFilter{sqlizer: columnComparison{left, "!=", right}}
+	return JoinFilter{sqlizer: columnComparison{left, opNotEqual, right}}
 }
 
 // LtColumn creates a less-than join condition (leftColumn < rightColumn).
@@ -167,12 +167,9 @@ func (jff *JoinFilterFactory) compare(column, op string, value any) dbtypes.Join
 	// constant. `col = ?` bound nil to a placeholder (never true) and a slice to
 	// one argument the driver rejects (#1167).
 	//
-	// A SCALAR keeps the `col op ?` form deliberately, rather than delegating
-	// unconditionally: squirrel.NotEq spells inequality `<>` where this door has
-	// always emitted `!=`, so delegating every operand would rewrite working SQL
-	// for every caller to fix two broken shapes. The two doors still agree on
-	// meaning; they differ in one token for scalar inequality, which is the
-	// smaller debt and the one the issue scoped.
+	// A SCALAR keeps the `col op ?` form: it renders the same token squirrel's
+	// construct would (#1200), so the two doors agree on spelling as well as on
+	// meaning, and the ordering operators keep one code path.
 	if nullOrList {
 		switch op {
 		case opEqual:
@@ -204,7 +201,7 @@ func (jff *JoinFilterFactory) Eq(column string, value any) dbtypes.JoinFilter {
 	return jff.compare(column, opEqual, value)
 }
 
-// NotEq creates an inequality condition (column != value).
+// NotEq creates an inequality condition (column <> value).
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
 func (jff *JoinFilterFactory) NotEq(column string, value any) dbtypes.JoinFilter {

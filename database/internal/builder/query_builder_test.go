@@ -2857,6 +2857,69 @@ func TestInsertQueryBuilderSetMapQuoting(t *testing.T) {
 	})
 }
 
+// setMapOrderFixture is the three-key map both SetMap doors are pinned against:
+// a plain name between two Oracle reserved words, so a column list ordered by
+// the quoted spelling ("level", "size", id) cannot coincide with the name order
+// (id, level, size) by chance, and the values differ from the keys' rank so a
+// wrong order moves the bind arguments too.
+func setMapOrderFixture() map[string]any {
+	return map[string]any{colLevel: 3, colID: 1, "size": 2}
+}
+
+// TestSetMapOrdersColumnsByCallerNameOnBothDoors pins #1185: UPDATE ordered its
+// SET pairs by the QUOTED key, so on Oracle a reserved word led the statement
+// while INSERT — the same map, the same builder — ordered by the caller's name.
+// Both doors now go through quotedColumnsInNameOrder, and PostgreSQL, which
+// quotes nothing, is asserted byte-for-byte to show the fix moved only Oracle.
+func TestSetMapOrdersColumnsByCallerNameOnBothDoors(t *testing.T) {
+	tests := []struct {
+		name     string
+		vendor   string
+		update   string
+		insert   string
+		wantArgs []any
+	}{
+		{
+			name:     "oracle_orders_reserved_words_by_bare_name",
+			vendor:   dbtypes.Oracle,
+			update:   `UPDATE accounts SET id = :1, "level" = :2, "size" = :3`,
+			insert:   `INSERT INTO accounts (id,"level","size") VALUES (:1,:2,:3)`,
+			wantArgs: []any{1, 3, 2},
+		},
+		{
+			name:     "postgresql_is_byte_identical",
+			vendor:   dbtypes.PostgreSQL,
+			update:   "UPDATE accounts SET id = $1, level = $2, size = $3",
+			insert:   "INSERT INTO accounts (id,level,size) VALUES ($1,$2,$3)",
+			wantArgs: []any{1, 3, 2},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Run("update", func(t *testing.T) {
+				qb := NewQueryBuilder(tt.vendor)
+
+				sql, args, err := qb.Update(tableAccounts).SetMap(setMapOrderFixture()).ToSQL()
+
+				require.NoError(t, err)
+				assert.Equal(t, tt.update, sql)
+				assert.Equal(t, tt.wantArgs, args, "bind arguments follow the emitted column order")
+			})
+
+			t.Run("insert", func(t *testing.T) {
+				qb := NewQueryBuilder(tt.vendor)
+
+				sql, args, err := qb.Insert(tableAccounts).SetMap(setMapOrderFixture()).ToSQL()
+
+				require.NoError(t, err)
+				assert.Equal(t, tt.insert, sql)
+				assert.Equal(t, tt.wantArgs, args, "bind arguments follow the emitted column order")
+			})
+		})
+	}
+}
+
 const (
 	firstViolation  = "first-violation"
 	secondViolation = "second-violation"
@@ -3100,8 +3163,8 @@ func TestUpdateDeleteFirstDeferredErrorWins(t *testing.T) {
 
 // TestUpdateSetMapReportsTheSameInvalidColumnEveryTime pins the DIAGNOSTIC half
 // of #1148 at this door: with several invalid keys, WHICH one is reported was a
-// map-iteration accident. The rendered SET order is squirrel's and is not this
-// change's concern (#1185).
+// map-iteration accident. The rendered SET order is pinned separately, by
+// TestSetMapOrdersColumnsByCallerNameOnBothDoors (#1185).
 func TestUpdateSetMapReportsTheSameInvalidColumnEveryTime(t *testing.T) {
 	clauses := map[string]any{
 		"aaa; DROP TABLE users": 1,

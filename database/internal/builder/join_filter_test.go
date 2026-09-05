@@ -79,7 +79,7 @@ func TestJoinFilterComparisons(t *testing.T) {
 		{
 			name:        "NotEqColumn",
 			filter:      jf.NotEqColumn("a.id", "b.id"),
-			expectedSQL: "a.id != b.id",
+			expectedSQL: "a.id <> b.id",
 		},
 		{
 			name:        "LtColumn",
@@ -365,7 +365,7 @@ func TestJoinFilterComparisonOperators(t *testing.T) {
 		{
 			name:         "NotEq",
 			filter:       jf.NotEq("status", "deleted"),
-			expectedSQL:  "status != ?",
+			expectedSQL:  "status <> ?",
 			expectedArgs: []any{"deleted"},
 		},
 		{
@@ -416,7 +416,7 @@ func TestJoinFilterComparisonWithExpressions(t *testing.T) {
 		{
 			name:        "NotEq_expression",
 			filter:      jf.NotEq("col1", qb.MustExpr("UPPER(o.field1)")),
-			expectedSQL: "col1 != UPPER(o.field1)",
+			expectedSQL: "col1 <> UPPER(o.field1)",
 		},
 		{
 			name:        "Lt_expression",
@@ -757,9 +757,8 @@ func TestJoinFilterEqOperandsMatchFilter(t *testing.T) {
 	const column = "u.id"
 
 	// Only nil and list operands are aligned. A SCALAR keeps this door's own
-	// `col op ?` form — squirrel spells inequality `<>` where jf has always
-	// emitted `!=` — so scalars are pinned separately, below, against the
-	// historical spelling rather than against f.
+	// `col op ?` form — the same token squirrel emits since #1200, but built
+	// here — so scalars are pinned separately, below.
 	operands := map[string]any{
 		"nil":               nil,
 		"typed_slice":       []int{1, 2},
@@ -811,7 +810,7 @@ func TestJoinFilterEqOperandsMatchFilter(t *testing.T) {
 }
 
 // TestJoinFilterScalarRenderingUnchanged pins what the alignment must NOT move:
-// a scalar keeps `= ?` / `!= ?`, and a []byte counts as a scalar rather than a
+// a scalar keeps `= ?` / `<> ?`, and a []byte counts as a scalar rather than a
 // list — squirrel's own rule, which is why it does not become an IN.
 func TestJoinFilterScalarRenderingUnchanged(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
@@ -824,7 +823,7 @@ func TestJoinFilterScalarRenderingUnchanged(t *testing.T) {
 		wantArg any
 	}{
 		{name: "eq_scalar", filter: jf.Eq("u.id", 42), wantSQL: "u.id = ?", wantArg: 42},
-		{name: "not_eq_scalar", filter: jf.NotEq("u.id", 42), wantSQL: "u.id != ?", wantArg: 42},
+		{name: "not_eq_scalar", filter: jf.NotEq("u.id", 42), wantSQL: "u.id <> ?", wantArg: 42},
 		{name: "eq_byte_slice", filter: jf.Eq("u.id", []byte("raw")), wantSQL: "u.id = ?", wantArg: []byte("raw")},
 		// A Valuer that HOLDS a value is a scalar, so it takes the placeholder
 		// path — and it binds the value the door ALREADY resolved to classify it,
@@ -835,7 +834,7 @@ func TestJoinFilterScalarRenderingUnchanged(t *testing.T) {
 			wantSQL: "u.id = ?",
 			wantArg: int64(5),
 		},
-		{name: "not_eq_byte_slice", filter: jf.NotEq("u.id", []byte("raw")), wantSQL: "u.id != ?", wantArg: []byte("raw")},
+		{name: "not_eq_byte_slice", filter: jf.NotEq("u.id", []byte("raw")), wantSQL: "u.id <> ?", wantArg: []byte("raw")},
 	}
 
 	for _, tt := range tests {
@@ -1163,4 +1162,22 @@ func TestJoinFilterBetweenResolvesTheBoundBesideAnExpression(t *testing.T) {
 		assert.Equal(t, "(u.id >= 18 AND u.id <= ?)", sql)
 		assert.Equal(t, []any{int64(5)}, args)
 	})
+}
+
+// TestNotEqSpellsInequalityLikeTheFilterFamily pins the scalar half of #1200:
+// the JoinFilter door renders the one token f.NotEq renders, so the families no
+// longer differ in spelling. It asserts against f's OWN rendering rather than a
+// literal, so the two cannot drift apart again. The column-to-column door is
+// pinned by TestJoinFilterComparisons/NotEqColumn.
+func TestNotEqSpellsInequalityLikeTheFilterFamily(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+	wantSQL, wantArgs, wantErr := qb.Filter().NotEq("u.id", 42).ToSQL()
+	require.NoError(t, wantErr)
+
+	sql, args, err := qb.JoinFilter().NotEq("u.id", 42).ToSQL()
+
+	require.NoError(t, err)
+	assert.Equal(t, wantSQL, sql)
+	assert.Equal(t, wantArgs, args)
 }

@@ -86,6 +86,32 @@ func valueCells(values []any, label func(i int) string) ([]any, error) {
 	return out, nil
 }
 
+// quotedColumnsInNameOrder sorts a map-shaped column set by the CALLER's names,
+// validates each key under the caller's error context, and renders the
+// normalized spelling through the vendor renderer — in that order.
+//
+// Both SetMap doors call it so a map cannot be ordered one way by UPDATE and
+// another by INSERT: quoting before sorting orders Oracle by the leading quote
+// ("level" ahead of id) and PostgreSQL by the bare name, which is the divergence
+// #1185 reported. Sorting names first is also what keeps WHICH invalid key is
+// reported deterministic.
+//
+// The returned keys are the caller's own, so values still follow them: two keys
+// differing only in padding normalize alike but stay two cells, and the database
+// reports the duplicate instead of one value being silently dropped.
+func (qb *QueryBuilder) quotedColumnsInNameOrder(context string, clauses map[string]any) (keys, quoted []string, err error) {
+	keys = sortedKeys(clauses)
+	quoted = make([]string, len(keys))
+	for i, key := range keys {
+		rendered, keyErr := qb.quoteColumnWithContext(context, key)
+		if keyErr != nil {
+			return nil, nil, keyErr
+		}
+		quoted[i] = rendered
+	}
+	return keys, quoted, nil
+}
+
 // positionLabel labels a VALUES cell by its one-based position.
 func positionLabel(i int) string { return fmt.Sprintf("value position %d", i+1) }
 
