@@ -50,20 +50,65 @@ bodies rather than here (this file postdates them) — pull those rows in before
 | site | checker | why it stays `assert` | directive FINAL inserts |
 | --- | --- | --- | --- |
 | `config/config_test.go:1743` | require-error | `err` is REASSIGNED below and re-asserted for the derived-map sub-case; a require here skips that second phase entirely. | `//nolint:testifylint // a second sub-case reassigns and re-asserts err` |
-| `config/converters_test.go:155` | float-compare | `toFloat64`'s table is ParseFloat round-trips (`"123.45"` -> `123.45`), where the Go literal and `ParseFloat` produce identical float64 bits. Exact equality IS the converter's contract; a tolerance would let a lossy conversion pass. | `//nolint:testifylint // exact equality is the converter's contract` |
 | `config/injection_test.go:110` | require-error | A second phase below sets the env var, reloads the config and pins the default-value behavior; a require here aborts on any message drift and that phase never runs. | `//nolint:testifylint // a reload-and-defaults phase follows` |
 | `config/converters_test.go:23` | require-error | `floatToInt64(NaN)` rejection, followed by the `Inf` rejection through a different branch of the converter — a require hides the Inf case whenever NaN regresses. | `//nolint:testifylint // the Inf-rejection case follows through a different branch` |
-| `config/injection_test.go:170` | float-compare | Env-var round-trip of `1024.5`, exactly representable in float64. The test pins that the value arrives intact, not that it arrives close. | `//nolint:testifylint // exact equality is the injection contract` |
 | `config/tenant_store_test.go:231` | require-error | Followed by removing a non-existent tenant and asserting the store did not mutate — a distinct second phase, independent of the lookup error. | `//nolint:testifylint // an independent no-mutation property follows` |
 | `config/tenant_store_test.go:76` | require-error | Followed by an Error assertion on `BrokerURL`, a different resolver path through the same store. | `//nolint:testifylint // a different resolver path is asserted next` |
 
-## Deferred, not excepted
+## deferred sets, triaged (#1092 / W3-FINAL-a)
 
-`config/getters_test.go` carries 10 live findings (6 `require-error`, 3 `float-compare`, 1
-`empty`) and is deliberately UNTOUCHED by W3-P3: Lane M's #1438 rewrote that file, so it joins a
-later sweep or FINAL. They are not exceptions and have no rationale yet — whoever picks the file
-up must triage them, and FINAL will red on them until someone does. Recorded here so the count
-is not mistaken for a clean package.
+The five files earlier recorded as "Deferred, not excepted" carried 53 live findings between
+them. FINAL-a triaged all 53 against a fresh whole-repo measurement: every one is now either
+converted or carries a row here with its reason, so none is left unexamined. Three of the rows —
+`config/getters_test.go:141`, `:144`, `:147` — are excepted only PENDING #1471, which dissolves
+them by splitting `TestNilConfigAccessors` into per-probe subtests; they are a deferred fix, not a
+permanent exception, and #1471 is the tracked home for that.
+
+The nine rows below are this five-file cohort's complete residue, and they correspond one-to-one
+with the cohort's live findings. That bijection is scoped to the cohort — the document as a whole
+covers 125 sites across every section, and FINAL-b is what checks the whole-file correspondence
+before converting each row to a directive.
+
+Do not read the nine as "nine of the 53". Four of them (`app/managers_test.go:802`, `:806`, `:828`,
+`:829`) are SECOND-ORDER: findings the conversions themselves created. Hoisting an independent
+check above a pair of message clauses puts an error assertion in front of other assertions, which
+is what `require-error` reports; demoting a clause back to `assert` does the same. The same effect
+raised a `formatter` finding in `server/middleware_test.go` when a `contains` site was converted.
+That is the operational lesson for FINAL-b: converting under one checker can raise a finding under
+another, so re-measure after every conversion pass rather than once at the end.
+
+Three techniques removed exceptions that a first pass had written down, and are worth reusing:
+an error assertion placed LAST in its block draws no `require-error` finding at all, so extracting
+the call under test to a local (`closeErr := p.Close()`) and asserting on it after the state checks
+beats a directive; an independent follower that only reads the error can be HOISTED above the
+message clauses instead of holding them at `assert`; and where the mechanically-right form is
+avoided for a reason, check whether the reason still holds — the `strings.Contains` sites in
+`server/middleware_test.go` were kept off `assert.NotContains` to avoid printing a panic payload,
+but the payload is a synthetic constant declared in that same file and the neighbouring
+`server/panic_guard_test.go` already spells the same absence with `NotContains`.
+
+No `config` site is excepted for `float-compare`. Where exact equality genuinely IS the
+contract — a default passed straight back, a `ParseFloat` round-trip, an env-var value that must
+arrive intact — `assert.InDelta(t, want, got, 0)` states that with no permanent directive to
+maintain, so it is the fix rather than a `//nolint`; where the expected value is zero,
+`assert.Zero` is simpler still and draws no finding. The two rows this file used to carry for
+`config/converters_test.go:155` and `config/injection_test.go:170` were converted that way and
+dropped. FINAL-b applies the same rule to the `float-compare` rows in the other sections: each one
+whose contract is exact equality converts to `InDelta(…, 0)` rather than gaining a directive, and
+a row survives only where `InDelta` cannot express the check (`logger/adapter_test.go:564,565`
+pins float64 precision loss at the int64 boundary, so it stays).
+
+| site | checker | why it stays `assert` | directive FINAL inserts |
+| --- | --- | --- | --- |
+| `app/managers_test.go:802` | require-error | Deliberately hoisted ABOVE the two message clauses so a clause mismatch cannot hide it: `%w`-not-`%v` is an independent property, and it is the regression this subtest exists to catch. A require here would invert that and hide the clauses instead. | `//nolint:testifylint // hoisted above the message clauses on purpose; require would hide them` |
+| `app/managers_test.go:806` | require-error | `"cache manager"` is the WRAPPER's prefix (`app/managers.go:276`) while `tt.wantCause` on the next line is the wrapped cache error's own detail (`cache/manager.go`). Two code paths, so a wrapper-prefix regression must not abort before the cause clause is checked; the final clause is the `require`. | `//nolint:testifylint // wrapper prefix; the independent inner-cause clause follows` |
+| `app/managers_test.go:828` | require-error | Wrapper clause (`maxsize=%d` in `app/managers.go:276`), followed by a second wrapper clause and then by the wrapped `cache/manager.go` cause. Aborting here hides both. | `//nolint:testifylint // wrapper clause; a second clause and the inner cause follow` |
+| `app/managers_test.go:829` | require-error | The key half of the same format string. It still precedes the independent inner-cause clause, so it stays non-fatal even though its sibling above tests the SAME rendering — the rule is about what follows, not about which clauses share a format string. | `//nolint:testifylint // wrapper clause; the independent inner-cause clause follows` |
+| `config/getters_test.go:141` | require-error | `TestNilConfigAccessors` probes a zero-valued `&Config{}` for nil-safety; the `RequiredString` and `Unmarshal` probes below reach different accessors and the function has no other aborting assertion to piggyback on. Splitting the probes into subtests removes this row and the two below it — #1471. | `//nolint:testifylint // the RequiredString and Unmarshal nil-safety probes below are independent` |
+| `config/getters_test.go:144` | require-error | Same function; followed by the `Unmarshal` probe and by the `Exists`/`All`/`Custom` checks, which pin the zero value's SHAPE rather than its errors. Dissolved by #1471. | `//nolint:testifylint // the Unmarshal probe and the Exists/All/Custom checks below are independent` |
+| `config/getters_test.go:147` | require-error | Same function; followed by the `Exists`/`All`/`Custom` checks, which are what pin that a zero-valued config stays empty rather than materializing defaults. Dissolved by #1471. | `//nolint:testifylint // the Exists/All/Custom checks below are independent` |
+| `internal/resourcepool/resourcepool_test.go:295` | require-error | A require aborts before `unblock()` two lines down, so the leader goroutine stays blocked on `<-release` for the life of the test binary — the file's own `getOrCreateBounded` calls `unblock()` before its `t.Fatal` for exactly that reason. It would also skip the second half of the documented contract: that the abandoning waiter did NOT cancel the leader's in-flight create. | `//nolint:testifylint // a require would skip unblock() and leak the leader goroutine; a second phase follows` |
+| `internal/resourcepool/resourcepool_test.go:1187` | require-error | First of two `errors.Join` members. `TestPoolCloseClosesAllAndJoinsErrors` exists to pin that `errors.Is` matches EACH one, so a require on the key-2 member would hide whether key-3 still surfaces; the key-3 assertion on the next line is the `require`. | `//nolint:testifylint // the second joined close error is asserted on the next line` |
 
 ## cache, httpclient (#1092 / W3-P5)
 
