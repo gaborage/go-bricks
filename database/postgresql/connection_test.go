@@ -86,7 +86,7 @@ func createPostgreSQLConfig(connType, value string) *config.DatabaseConfig {
 func testConnectionExpectedError(t *testing.T, cfg *config.DatabaseConfig) {
 	log := dbtestlog.NewTestLogger()
 	_, err := NewConnection(cfg, log)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), postgrePingErrorMsg)
 }
 
@@ -436,7 +436,7 @@ func TestConnectionNewConnectionInvalidConfig(t *testing.T) {
 	_, err := NewConnection(cfg, log)
 
 	// Should fail at config parsing stage
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to parse PostgreSQL config")
 }
 
@@ -484,7 +484,7 @@ func TestConnectionNewConnectionParseErrorPreservesChain(t *testing.T) {
 
 	require.Error(t, err)
 	var pgErr *pgconn.ParseConfigError
-	require.True(t, errors.As(err, &pgErr), "pgx error must stay reachable via errors.As")
+	require.ErrorAs(t, err, &pgErr, "pgx error must stay reachable via errors.As")
 }
 
 func TestStatementQueryAndQueryRow(t *testing.T) {
@@ -599,8 +599,7 @@ func TestTransactionPrepareError(t *testing.T) {
 
 	stmt, err := trx.Prepare(context.Background(), "INSERT INTO fail(id) VALUES ($1)")
 	assert.Nil(t, stmt)
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, prepareErr)
+	require.ErrorIs(t, err, prepareErr)
 
 	mock.ExpectRollback()
 	require.NoError(t, trx.Rollback(context.Background()))
@@ -633,7 +632,7 @@ func TestConnectionQueryOperationsErrorHandling(t *testing.T) {
 	// Test Query error
 	mock.ExpectQuery("SELECT").WillReturnError(sql.ErrConnDone)
 	rows, err := c.Query(ctx, "SELECT * FROM test")
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sql: connection is already closed")
 	assert.Nil(t, rows)
 
@@ -649,7 +648,7 @@ func TestConnectionQueryOperationsErrorHandling(t *testing.T) {
 	// Test Prepare error
 	mock.ExpectPrepare("INVALID SQL").WillReturnError(sql.ErrTxDone)
 	_, err = c.Prepare(ctx, "INVALID SQL")
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sql: transaction has already been committed or rolled back")
 
 	// Verify all expectations were met
@@ -681,7 +680,7 @@ func TestConnectionTransactionOperationsErrorHandling(t *testing.T) {
 	// Test successful Prepare error in statement
 	mock.ExpectPrepare("SELECT").WillReturnError(sql.ErrConnDone)
 	_, err = c.Prepare(ctx, "SELECT * FROM test")
-	assert.Error(t, err)
+	require.Error(t, err)
 
 	// Verify all expectations were met
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -1024,7 +1023,7 @@ func TestConnectionStatsWithNilConfig(t *testing.T) {
 	}
 
 	stats, err := c.Stats()
-	assert.NoError(t, err, "Stats() should succeed with nil config")
+	require.NoError(t, err, "Stats() should succeed with nil config")
 	assert.NotNil(t, stats, "Stats should not be nil")
 
 	// Verify basic stats keys are present
@@ -1058,7 +1057,7 @@ func TestConnectionCloseWithNilMetricsCleanup(t *testing.T) {
 	}
 
 	err = c.Close()
-	assert.NoError(t, err, "Close() should succeed with nil metricsCleanup")
+	require.NoError(t, err, "Close() should succeed with nil metricsCleanup")
 
 	// Verify all expectations were met
 	err = mock.ExpectationsWereMet()

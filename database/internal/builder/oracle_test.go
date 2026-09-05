@@ -411,7 +411,7 @@ func TestOracleFromClauseQuoting(t *testing.T) {
 			}
 			query := qb.Select("*").From(tables...)
 			sql, _, err := query.ToSQL()
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Contains(t, sql, tt.expectedSQL, "SQL should contain expected FROM clause")
 		})
 	}
@@ -468,7 +468,7 @@ func TestOracleOrderByGroupByQuoting(t *testing.T) {
 			}
 
 			sql, _, err := query.ToSQL()
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			for _, expected := range tt.expectedSQL {
 				assert.Contains(t, sql, expected, "SQL should contain expected clause: %s", expected)

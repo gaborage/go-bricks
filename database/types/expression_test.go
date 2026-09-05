@@ -2,7 +2,6 @@
 package types
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -19,7 +18,7 @@ func TestExpr(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, countClause, expr.SQL)
-		assert.Equal(t, "", expr.Alias)
+		assert.Empty(t, expr.Alias)
 	})
 
 	t.Run("Valid expression with alias", func(t *testing.T) {
@@ -57,19 +56,19 @@ func TestExpr(t *testing.T) {
 	t.Run("Empty SQL returns error", func(t *testing.T) {
 		_, err := Expr("")
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrEmptyExpressionSQL))
+		assert.ErrorIs(t, err, ErrEmptyExpressionSQL)
 	})
 
 	t.Run("Whitespace-only SQL returns error", func(t *testing.T) {
 		_, err := Expr("   ")
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrEmptyExpressionSQL))
+		assert.ErrorIs(t, err, ErrEmptyExpressionSQL)
 	})
 
 	t.Run("Multiple aliases return error", func(t *testing.T) {
 		_, err := Expr(countClause, "total", "count")
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrTooManyAliases))
+		assert.ErrorIs(t, err, ErrTooManyAliases)
 	})
 
 	// The alias is judged against the shared bare-identifier grammar, not a
@@ -106,7 +105,7 @@ func TestExpr(t *testing.T) {
 			t.Run("rejects_"+name, func(t *testing.T) {
 				_, err := Expr(countClause, alias)
 				require.Error(t, err)
-				assert.True(t, errors.Is(err, ErrInvalidAlias))
+				assert.ErrorIs(t, err, ErrInvalidAlias)
 			})
 		}
 	})

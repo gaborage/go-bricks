@@ -97,7 +97,7 @@ func TestConnectionHealth(t *testing.T) {
 	conn, ctx := setupTestSchema(t)
 
 	err := conn.Health(ctx)
-	assert.NoError(t, err, "Health check should succeed")
+	require.NoError(t, err, "Health check should succeed")
 
 	// Health check should work multiple times
 	err = conn.Health(ctx)
@@ -108,7 +108,7 @@ func TestConnectionStats(t *testing.T) {
 	conn, _ := setupTestSchema(t)
 
 	stats, err := conn.Stats()
-	assert.NoError(t, err, "Stats retrieval should succeed")
+	require.NoError(t, err, "Stats retrieval should succeed")
 	assert.NotNil(t, stats, "Stats should not be nil")
 
 	// Verify expected stats keys
@@ -136,11 +136,11 @@ func TestConnectionClose(t *testing.T) {
 
 	// Connection should work before close
 	err := conn.Health(ctx)
-	assert.NoError(t, err, "Health check should succeed before close")
+	require.NoError(t, err, "Health check should succeed before close")
 
 	// Close connection
 	err = conn.Close()
-	assert.NoError(t, err, "Close should succeed")
+	require.NoError(t, err, "Close should succeed")
 
 	// Health check should fail after close
 	err = conn.Health(ctx)
@@ -230,7 +230,7 @@ func TestConnectionCreateMigrationTableIntegration(t *testing.T) {
 
 	// Create migration table (executes 2 PL/SQL blocks)
 	err := conn.CreateMigrationTable(ctx)
-	assert.NoError(t, err, "CreateMigrationTable should succeed")
+	require.NoError(t, err, "CreateMigrationTable should succeed")
 
 	// Verify table exists by querying it
 	rows, err := conn.Query(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", conn.MigrationTable()))
@@ -796,7 +796,7 @@ func TestOracleUDTRegistrationError(t *testing.T) {
 	err := conn.RegisterType("NONEXISTENT_TYPE", "NONEXISTENT_TABLE", FakeType{})
 
 	// Verify error handling path is executed
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to register Oracle type NONEXISTENT_TYPE")
 }
 
@@ -848,7 +848,7 @@ func TestOracleUDTRegistrationErrorWithOwner(t *testing.T) {
 	err := conn.RegisterTypeWithOwner("INVALID_SCHEMA", "FAKE_TYPE", "", FakeType{})
 
 	// Verify error handling path is executed
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to register Oracle type INVALID_SCHEMA.FAKE_TYPE")
 }
 
@@ -988,7 +988,7 @@ func TestConnectionWithTCPKeepAlive(t *testing.T) {
 
 	// Verify connection works with keep-alive enabled
 	err = conn.Health(ctx)
-	assert.NoError(t, err, "Health check should succeed with TCP keep-alive")
+	require.NoError(t, err, "Health check should succeed with TCP keep-alive")
 
 	// Execute a query to ensure the connection is fully functional
 	var result int

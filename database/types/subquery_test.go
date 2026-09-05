@@ -124,21 +124,21 @@ func TestValidateSubquery(t *testing.T) {
 	t.Run("Nil subquery returns error", func(t *testing.T) {
 		err := ValidateSubquery(nil)
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrNilSubquery))
+		assert.ErrorIs(t, err, ErrNilSubquery)
 	})
 
 	t.Run("Invalid subquery returns error", func(t *testing.T) {
 		subquery := &mockInvalidSubquery{}
 		err := ValidateSubquery(subquery)
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrInvalidSubquery))
+		assert.ErrorIs(t, err, ErrInvalidSubquery)
 	})
 
 	t.Run("Empty SQL subquery returns error", func(t *testing.T) {
 		subquery := &mockEmptySubquery{}
 		err := ValidateSubquery(subquery)
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrEmptySubquerySQL))
+		assert.ErrorIs(t, err, ErrEmptySubquerySQL)
 	})
 }
 
@@ -182,8 +182,7 @@ func TestValidateSubqueryReturnsEarlyOnValidatorInterfaceSuccess(t *testing.T) {
 func TestValidateSubqueryWrapsValidatorInterfaceError(t *testing.T) {
 	subquery := &mockValidatingSubquery{validateErr: errors.New("missing FROM clause")}
 	err := ValidateSubquery(subquery)
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrInvalidSubquery),
+	require.ErrorIs(t, err, ErrInvalidSubquery,
 		"validator error must be wrapped as ErrInvalidSubquery for caller pattern-matching")
 	assert.Contains(t, err.Error(), "missing FROM clause")
 }

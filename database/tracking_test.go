@@ -108,11 +108,10 @@ func TestTrackedConnectionQueryWithError(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(selectAllInvalid)).WillReturnError(expectedErr)
 
 	rows, err := tracked.Query(ctx, selectAllInvalid)
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, expectedErr)
 	assert.Nil(t, rows)
 
 	assertDBCounter(ctx, t, 1)
+	require.ErrorIs(t, err, expectedErr)
 }
 
 func TestTrackedConnectionQueryRow(t *testing.T) {
@@ -560,10 +559,9 @@ func TestTrackedDBQueryContextError(t *testing.T) {
 	ctx := logger.WithDBCounter(context.Background())
 	rows, err := trackedDB.QueryContext(ctx, selectAllInvalid)
 
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, expectedErr)
 	assert.Nil(t, rows)
 	assertDBCounter(ctx, t, 1)
+	require.ErrorIs(t, err, expectedErr)
 }
 
 func TestTrackedDBQueryRowContext(t *testing.T) {
@@ -640,10 +638,9 @@ func TestTrackedDBExecContextError(t *testing.T) {
 	ctx := logger.WithDBCounter(context.Background())
 	result, err := trackedDB.ExecContext(ctx, insertIntoUsersOracle, "")
 
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, expectedErr)
 	assert.Nil(t, result)
 	assertDBCounter(ctx, t, 1)
+	require.ErrorIs(t, err, expectedErr)
 }
 
 func TestTrackedDBClose(t *testing.T) {
@@ -699,10 +696,9 @@ func TestTrackedDBPrepareContextError(t *testing.T) {
 	ctx := logger.WithDBCounter(context.Background())
 	stmt, err := trackedDB.PrepareContext(ctx, "INVALID SQL")
 
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, expectedErr)
 	assert.Nil(t, stmt)
 	assertDBCounter(ctx, t, 1)
+	require.ErrorIs(t, err, expectedErr)
 }
 
 // =============================================================================

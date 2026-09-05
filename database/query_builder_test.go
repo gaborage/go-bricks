@@ -682,7 +682,7 @@ func TestQueryBuilderBuildUpsertOracle(t *testing.T) {
 	sql, args, err := qb.BuildUpsert("users", conflictColumns, insertColumns, updateColumns)
 
 	// Oracle implementation now provides working MERGE statement
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Contains(t, sql, "MERGE INTO users")
 	assert.Contains(t, sql, "WHEN MATCHED THEN UPDATE")
 	assert.Contains(t, sql, "WHEN NOT MATCHED THEN INSERT")
@@ -704,7 +704,7 @@ func TestQueryBuilderBuildUpsertUnknown(t *testing.T) {
 	sql, args, err := qb.BuildUpsert("users", conflictColumns, insertColumns, updateColumns)
 
 	// Unknown vendor now returns proper error instead of empty results
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "upsert not supported for database vendor")
 	assert.Empty(t, sql)
 	assert.Empty(t, args)

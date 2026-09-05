@@ -101,7 +101,7 @@ func createOracleConfig(connType, value string) *config.DatabaseConfig {
 func testConnectionExpectedError(t *testing.T, cfg *config.DatabaseConfig) {
 	log := dbtestlog.NewTestLogger()
 	_, err := NewConnection(cfg, log)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), oraclePingErrorMsg)
 }
 
@@ -595,7 +595,7 @@ func TestConnectionCreateMigrationTableFirstError(t *testing.T) {
 	mock.ExpectExec(`BEGIN`).WillReturnError(sql.ErrConnDone)
 
 	err := c.CreateMigrationTable(ctx)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to create Oracle migration table")
 
 	// Verify all expectations were met
@@ -712,8 +712,7 @@ func TestOracleTransactionPrepareError(t *testing.T) {
 
 	stmt, err := trx.Prepare(context.Background(), "INSERT INTO fail(id) VALUES (:1)")
 	assert.Nil(t, stmt)
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, prepareErr)
+	require.ErrorIs(t, err, prepareErr)
 
 	mock.ExpectRollback()
 	require.NoError(t, trx.Rollback(context.Background()))
@@ -730,7 +729,7 @@ func TestConnectionCreateMigrationTableSecondError(t *testing.T) {
 	mock.ExpectExec(`BEGIN`).WillReturnError(sql.ErrTxDone)
 
 	err := c.CreateMigrationTable(ctx)
-	assert.Error(t, err)
+	require.Error(t, err)
 
 	// Verify all expectations were met
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -745,7 +744,7 @@ func TestConnectionQueryOperationsErrorHandling(t *testing.T) {
 	// Test Query error
 	mock.ExpectQuery("SELECT").WillReturnError(sql.ErrConnDone)
 	rows, err := c.Query(ctx, "SELECT * FROM test")
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sql: connection is already closed")
 	assert.Nil(t, rows)
 
@@ -761,7 +760,7 @@ func TestConnectionQueryOperationsErrorHandling(t *testing.T) {
 	// Test Prepare error
 	mock.ExpectPrepare("INVALID SQL").WillReturnError(sql.ErrTxDone)
 	_, err = c.Prepare(ctx, "INVALID SQL")
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sql: transaction has already been committed or rolled back")
 
 	// Verify all expectations were met
@@ -793,7 +792,7 @@ func TestConnectionTransactionOperationsErrorHandling(t *testing.T) {
 	// Test successful Prepare error in statement
 	mock.ExpectPrepare("SELECT").WillReturnError(sql.ErrConnDone)
 	_, err = c.Prepare(ctx, "SELECT * FROM test")
-	assert.Error(t, err)
+	require.Error(t, err)
 
 	// Verify all expectations were met
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -919,15 +918,15 @@ func TestConnectionValidationIntegration(t *testing.T) {
 
 			if tt.errorContains == oraclePingErrorMsg {
 				// Config validation should pass, only connection should fail
-				assert.NoError(t, err, "Configuration validation should pass")
+				require.NoError(t, err, "Configuration validation should pass")
 
 				// Now attempt to create connection (this should fail with connection error)
 				_, connErr := NewConnection(tt.config, log)
-				assert.Error(t, connErr)
+				require.Error(t, connErr)
 				assert.Contains(t, connErr.Error(), tt.errorContains)
 			} else {
 				// Config validation should fail
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errorContains)
 			}
 		})
@@ -1365,7 +1364,7 @@ func TestKeepAliveDialerDialContextError(t *testing.T) {
 
 	// Try to connect to a non-existent address (port 59999 is unlikely to be in use)
 	conn, err := dialer.DialContext(ctx, "tcp", "127.0.0.1:59999")
-	assert.Error(t, err, "should fail when connecting to non-existent address")
+	require.Error(t, err, "should fail when connecting to non-existent address")
 	assert.Nil(t, conn)
 }
 
@@ -1403,7 +1402,7 @@ func TestNewConnectionPingFailure(t *testing.T) {
 	mock.ExpectClose() // DB should be closed on ping failure
 
 	conn, err := NewConnection(cfg, log)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, conn)
 	assert.Contains(t, err.Error(), oraclePingErrorMsg)
 }
@@ -1504,7 +1503,7 @@ func TestConnectionStatsWithNilConfig(t *testing.T) {
 	}
 
 	stats, err := c.Stats()
-	assert.NoError(t, err, "Stats() should succeed with nil config")
+	require.NoError(t, err, "Stats() should succeed with nil config")
 	assert.NotNil(t, stats, "Stats should not be nil")
 
 	// Verify basic stats keys are present

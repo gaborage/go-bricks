@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -82,10 +83,10 @@ func TestTrackedRowScan(t *testing.T) {
 		var dest []any
 		err := trackedRow.Scan(dest...)
 
-		assert.NoError(t, err)
 		assert.Equal(t, 1, finishCallCount, finishCallCountErrorMsg)
-		assert.NoError(t, finishErr)
 		mockRow.AssertExpectations(t)
+		require.NoError(t, err)
+		require.NoError(t, finishErr)
 	})
 
 	t.Run("scan error calls finish with error", func(t *testing.T) {
@@ -170,10 +171,10 @@ func TestTrackedRowErr(t *testing.T) {
 
 		err := trackedRow.Err()
 
-		assert.NoError(t, err)
 		assert.Equal(t, 1, finishCallCount, finishCallCountErrorMsg)
-		assert.NoError(t, finishErr)
 		mockRow.AssertExpectations(t)
+		require.NoError(t, err)
+		require.NoError(t, finishErr)
 	})
 }
 

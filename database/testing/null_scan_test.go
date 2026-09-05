@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -21,7 +22,7 @@ func TestNullScanBehavior(t *testing.T) {
 
 		var name string
 		err := db.QueryRow(context.Background(), "SELECT name FROM users", nil).Scan(&name)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "converting NULL to string is unsupported")
 	})
 
@@ -33,7 +34,7 @@ func TestNullScanBehavior(t *testing.T) {
 
 		var name *string
 		err := db.QueryRow(context.Background(), "SELECT name FROM users", nil).Scan(&name)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Nil(t, name)
 	})
 
@@ -45,7 +46,7 @@ func TestNullScanBehavior(t *testing.T) {
 
 		var age int
 		err := db.QueryRow(context.Background(), "SELECT age FROM users", nil).Scan(&age)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "converting NULL to int is unsupported")
 	})
 
@@ -57,7 +58,7 @@ func TestNullScanBehavior(t *testing.T) {
 
 		var age *int
 		err := db.QueryRow(context.Background(), "SELECT age FROM users", nil).Scan(&age)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Nil(t, age)
 	})
 
@@ -69,7 +70,7 @@ func TestNullScanBehavior(t *testing.T) {
 
 		var id int64
 		err := db.QueryRow(context.Background(), "SELECT id FROM users", nil).Scan(&id)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "converting NULL to int64 is unsupported")
 	})
 
@@ -81,7 +82,7 @@ func TestNullScanBehavior(t *testing.T) {
 
 		var id *int64
 		err := db.QueryRow(context.Background(), "SELECT id FROM users", nil).Scan(&id)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Nil(t, id)
 	})
 
@@ -93,7 +94,7 @@ func TestNullScanBehavior(t *testing.T) {
 
 		var active bool
 		err := db.QueryRow(context.Background(), "SELECT active FROM users", nil).Scan(&active)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "converting NULL to bool is unsupported")
 	})
 
@@ -105,7 +106,7 @@ func TestNullScanBehavior(t *testing.T) {
 
 		var active *bool
 		err := db.QueryRow(context.Background(), "SELECT active FROM users", nil).Scan(&active)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Nil(t, active)
 	})
 
@@ -117,7 +118,7 @@ func TestNullScanBehavior(t *testing.T) {
 
 		var price float64
 		err := db.QueryRow(context.Background(), "SELECT price FROM products", nil).Scan(&price)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "converting NULL to float64 is unsupported")
 	})
 
@@ -129,7 +130,7 @@ func TestNullScanBehavior(t *testing.T) {
 
 		var price *float64
 		err := db.QueryRow(context.Background(), "SELECT price FROM products", nil).Scan(&price)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Nil(t, price)
 	})
 
@@ -141,7 +142,7 @@ func TestNullScanBehavior(t *testing.T) {
 
 		var count uint
 		err := db.QueryRow(context.Background(), "SELECT count FROM stats", nil).Scan(&count)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "converting NULL to uint is unsupported")
 	})
 
@@ -153,7 +154,7 @@ func TestNullScanBehavior(t *testing.T) {
 
 		var count *uint
 		err := db.QueryRow(context.Background(), "SELECT count FROM stats", nil).Scan(&count)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Nil(t, count)
 	})
 
@@ -165,7 +166,7 @@ func TestNullScanBehavior(t *testing.T) {
 
 		var data []byte
 		err := db.QueryRow(context.Background(), "SELECT data FROM blobs", nil).Scan(&data)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Nil(t, data)
 	})
 
@@ -177,7 +178,7 @@ func TestNullScanBehavior(t *testing.T) {
 
 		var value any
 		err := db.QueryRow(context.Background(), "SELECT value FROM metadata", nil).Scan(&value)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Nil(t, value)
 	})
 }

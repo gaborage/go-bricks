@@ -215,9 +215,9 @@ func TestDbManagerGetRecoversSourcePanic(t *testing.T) {
 	_, rel, err := manager.Get(ctx, tenantA)
 	require.Error(t, err)
 	assert.Nil(t, rel)
-	assert.ErrorContains(t, err, "panic during create")
-	assert.ErrorContains(t, err, "*errors.errorString")
 	assert.NotContains(t, err.Error(), marker, "the panic value must never reach the error text")
+	require.ErrorContains(t, err, "panic during create")
+	require.ErrorContains(t, err, "*errors.errorString")
 
 	db, rel2, err := manager.Get(ctx, tenantA)
 	require.NoError(t, err)
@@ -239,11 +239,10 @@ func TestDbManagerGetAfterCloseReturnsError(t *testing.T) {
 	require.NoError(t, m.Close())
 
 	conn, release, err := m.Get(ctx, "a")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, errManagerClosed, "Get after Close must fail closed, not resurrect a connection (F22)")
 	assert.Nil(t, conn)
 	assert.Nil(t, release)
 	assert.Equal(t, 0, m.Size(), "no connection may be created on a closed manager")
+	require.ErrorIs(t, err, errManagerClosed, "Get after Close must fail closed, not resurrect a connection (F22)")
 }
 
 // TestDbManagerCloseAggregatesErrors pins the aggregate Close contract: when MULTIPLE cached
@@ -292,9 +291,9 @@ func TestDbManagerZeroValueMethodsAreSafe(t *testing.T) {
 	assert.Equal(t, 0, m.Size(), "zero-value Size must be 0, not panic")
 
 	conn, release, err := m.Get(context.Background(), "any")
-	assert.ErrorIs(t, err, errManagerClosed, "zero-value Get must fail closed, not panic")
 	assert.Nil(t, conn)
 	assert.Nil(t, release)
+	require.ErrorIs(t, err, errManagerClosed, "zero-value Get must fail closed, not panic")
 
 	assert.NotPanics(t, func() {
 		m.StartCleanup(time.Minute)
@@ -743,12 +742,11 @@ func TestDbManagerGetRejectsNilConfigFromProvider(t *testing.T) {
 	require.NotPanics(t, func() {
 		conn, release, err = manager.Get(ctx, tenantA)
 	})
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNoDatabaseConfig)
-	assert.ErrorContains(t, err, tenantA)
 	assert.Nil(t, conn)
 	assert.Nil(t, release)
 	assert.Equal(t, 0, manager.Size())
+	require.ErrorIs(t, err, ErrNoDatabaseConfig)
+	require.ErrorContains(t, err, tenantA)
 }
 
 // togglingConfigSource returns (nil, nil) until ready flips, then a usable config. It tallies
@@ -797,12 +795,11 @@ func TestDbManagerGetNilConfigCollapsesAndRecovers(t *testing.T) {
 	}
 	wg.Wait()
 	close(errs)
-	for err := range errs {
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrNoDatabaseConfig)
-	}
 	assert.Equal(t, 0, manager.Size())
 	assert.Equal(t, int32(1), source.calls.Load(), "singleflight must collapse the failing resolution to one provider call")
+	for err := range errs {
+		require.ErrorIs(t, err, ErrNoDatabaseConfig)
+	}
 
 	source.ready.Store(true)
 	conn, release, err := manager.Get(ctx, tenantA)

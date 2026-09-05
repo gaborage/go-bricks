@@ -75,7 +75,7 @@ func TestValidateDatabaseTypeFailure(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := ValidateDatabaseType(tt.dbType)
-			assert.Error(t, err)
+			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectedError)
 		})
 	}
@@ -100,7 +100,7 @@ func TestNewConnectionUnsupportedType(t *testing.T) {
 	}
 
 	conn, err := NewConnection(cfg, log)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, conn)
 	assert.Contains(t, err.Error(), errUnsupportedDatabaseType+`: "unsupported"`)
 }
@@ -120,7 +120,7 @@ func TestNewConnectionPostgreSQLConfigValidation(t *testing.T) {
 	// The function should not panic even with bad config
 	// It will try to connect and fail, but that's expected behavior
 	conn, err := NewConnection(cfg, log)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, conn)
 }
 
@@ -138,7 +138,7 @@ func TestNewConnectionOracleConfigValidation(t *testing.T) {
 
 	// The function should not panic even with bad config
 	conn, err := NewConnection(cfg, log)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, conn)
 }
 
@@ -397,7 +397,7 @@ func TestNewConnectionSuccessfulPostgreSQLMocked(t *testing.T) {
 	conn, err := NewConnection(cfg, log)
 	// We expect this to fail in test environment, but the important thing is that
 	// the function executes through all the logic paths including wrapping
-	assert.Error(t, err) // Expected to fail without real DB
+	require.Error(t, err) // Expected to fail without real DB
 	assert.Nil(t, conn)
 }
 
@@ -428,7 +428,7 @@ func TestNewConnectionSuccessfulOracleMocked(t *testing.T) {
 	conn, err := NewConnection(cfg, log)
 	// We expect this to fail in test environment, but the important thing is that
 	// the function executes through all the logic paths including wrapping
-	assert.Error(t, err) // Expected to fail without real DB
+	require.Error(t, err) // Expected to fail without real DB
 	assert.Nil(t, conn)
 }
 
@@ -476,12 +476,12 @@ func TestNewConnectionWithDifferentDatabaseTypes(t *testing.T) {
 
 			if tt.dbType == "mysql" {
 				// Unsupported type should fail with specific error
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.Contains(t, err.Error(), errUnsupportedDatabaseType)
 				assert.Nil(t, conn)
 			} else {
 				// Supported types will fail due to no real DB, but that's expected
-				assert.Error(t, err) // Expected to fail without real DB
+				require.Error(t, err) // Expected to fail without real DB
 				assert.Nil(t, conn)
 			}
 		})
@@ -502,7 +502,7 @@ func TestNewConnectionNilConfig(t *testing.T) {
 	conn, err := NewConnection(nil, log)
 	// This will likely panic or error, both are acceptable behaviors
 	if err != nil {
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Nil(t, conn)
 	}
 }
@@ -633,13 +633,13 @@ func TestNewConnectionCodePaths(t *testing.T) {
 			conn, err := NewConnection(cfg, log)
 
 			if tc.shouldError {
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.Nil(t, conn)
 				if tc.errorContains != "" {
 					assert.Contains(t, err.Error(), tc.errorContains)
 				}
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.NotNil(t, conn)
 			}
 		})
