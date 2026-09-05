@@ -52,10 +52,10 @@ func TestGenerateTraceParentFormat(t *testing.T) {
 	parts := strings.Split(tp, "-")
 	require.Len(t, parts, 4)
 	// version, trace-id, span-id, flags
-	assert.Equal(t, 2, len(parts[0]))
-	assert.Equal(t, 32, len(parts[1]))
-	assert.Equal(t, 16, len(parts[2]))
-	assert.Equal(t, 2, len(parts[3]))
+	assert.Len(t, parts[0], 2)
+	assert.Len(t, parts[1], 32)
+	assert.Len(t, parts[2], 16)
+	assert.Len(t, parts[3], 2)
 	// Lowercase hex
 	hexRe := regexp.MustCompile(`^[0-9a-f]+$`)
 	assert.True(t, hexRe.MatchString(parts[1]))
@@ -170,20 +170,20 @@ func TestHeaderStringAndSafeToString(t *testing.T) {
 	assert.Equal(t, "bytes-id", value)
 	assert.True(t, carried)
 	value, carried = headerString(&mapAccessor{}, "missing")
-	assert.Equal(t, "", value)
+	assert.Empty(t, value)
 	assert.False(t, carried)
 
 	assert.Equal(t, "str", safeToString("str"))
 	assert.Equal(t, "abc", safeToString([]byte("abc")))
 	assert.Equal(t, "123", safeToString(123))
 	var p *int
-	assert.Equal(t, "", safeToString(p))
+	assert.Empty(t, safeToString(p))
 }
 
 func TestExtractTraceIDAndForceAlign(t *testing.T) {
 	// extractTraceIDFromParent
 	assert.Equal(t, "0123456789abcdef0123456789abcdef", extractTraceIDFromParent("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"))
-	assert.Equal(t, "", extractTraceIDFromParent("bad-parent"))
+	assert.Empty(t, extractTraceIDFromParent("bad-parent"))
 
 	// alignTraceID
 	assert.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", alignTraceID("orig", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))

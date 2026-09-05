@@ -149,9 +149,9 @@ func TestKeystoreModuleInitRejectsSubFloorConfig(t *testing.T) {
 			err := m.Init(deps)
 
 			require.Error(t, err)
-			assert.ErrorContains(t, err, "must be at least 32")
-			assert.ErrorContains(t, err, "ADR-095")
 			assert.Nil(t, m.store, "nothing may load behind a refused floor")
+			assert.ErrorContains(t, err, "must be at least 32")
+			require.ErrorContains(t, err, "ADR-095")
 		})
 	}
 }

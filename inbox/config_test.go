@@ -70,7 +70,7 @@ func TestValidateConfigTenancy(t *testing.T) {
 			c := &config.InboxConfig{TableName: "gobricks_inbox", RetentionPeriod: time.Hour, Tenancy: tt.tenancy}
 			err := validateConfig(c)
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.Contains(t, err.Error(), "tenancy")
 			} else {
 				assert.NoError(t, err)

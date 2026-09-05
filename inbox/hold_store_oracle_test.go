@@ -240,9 +240,9 @@ func TestOracleHoldStoreMarkerLockFailuresAreReported(t *testing.T) {
 		_, err = store.Park(t.Context(), dbtx, sampleHoldRow())
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, wantErr)
 		assert.Contains(t, err.Error(), "lock tenant marker failed")
 		assert.Empty(t, tx.ExecLog(), "neither the marker nor the row is written")
+		require.ErrorIs(t, err, wantErr)
 	})
 
 	t.Run("a_failed_marker_insert_never_writes_the_row", func(t *testing.T) {
@@ -260,9 +260,9 @@ func TestOracleHoldStoreMarkerLockFailuresAreReported(t *testing.T) {
 		_, err = store.Park(t.Context(), dbtx, sampleHoldRow())
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, wantErr)
 		require.Len(t, tx.ExecLog(), 1, "the row is never written without its marker")
 		assert.Contains(t, tx.ExecLog()[0].SQL, holdTenantTable)
+		require.ErrorIs(t, err, wantErr)
 	})
 }
 

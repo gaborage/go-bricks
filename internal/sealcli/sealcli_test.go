@@ -6,7 +6,6 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
-	"errors"
 	"flag"
 	"io"
 	"os"
@@ -89,20 +88,20 @@ func TestPositionalPath(t *testing.T) {
 		_, err := PositionalPath(newFlagSet(t), []string{"a", "b"})
 		require.Error(t, err)
 		assert.Equal(t, "expected at most one payload-file argument", err.Error())
-		assert.False(t, errors.Is(err, ErrUsage), "the FlagSet never printed this one, so the caller must")
+		assert.NotErrorIs(t, err, ErrUsage, "the FlagSet never printed this one, so the caller must")
 	})
 
 	t.Run("unknown_flag_wrapped_in_err_usage", func(t *testing.T) {
 		_, err := PositionalPath(newFlagSet(t), []string{"-nope"})
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrUsage), "got %q", err.Error())
+		assert.ErrorIs(t, err, ErrUsage, "got %q", err.Error())
 	})
 
 	t.Run("help_wrapped_in_err_usage", func(t *testing.T) {
 		_, err := PositionalPath(newFlagSet(t), []string{"-h"})
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, flag.ErrHelp), "the caller exits 0 on this one")
-		assert.True(t, errors.Is(err, ErrUsage), "and must not reprint what the FlagSet printed")
+		assert.ErrorIs(t, err, flag.ErrHelp, "the caller exits 0 on this one")
+		require.ErrorIs(t, err, ErrUsage, "and must not reprint what the FlagSet printed")
 	})
 }
 

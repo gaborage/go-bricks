@@ -5,7 +5,6 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -207,9 +206,9 @@ func TestSealPayloadKidBinding(t *testing.T) {
 		t.Helper()
 		err := openErr(compact, mirror, resolver)
 		require.Error(t, err)
-		require.True(t, errors.Is(err, jose.ErrKidUnknown))
+		require.ErrorIs(t, err, jose.ErrKidUnknown)
 		var joseErr *jose.Error
-		require.True(t, errors.As(err, &joseErr))
+		require.ErrorAs(t, err, &joseErr)
 		// The TOKEN's header kid, not the policy's — proves the token was
 		// parsed and its header compared, not merely that resolution against
 		// the policy kid failed.

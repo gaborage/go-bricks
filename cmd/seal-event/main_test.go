@@ -6,7 +6,6 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
-	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -201,7 +200,7 @@ func openCode(t *testing.T, err error) string {
 	t.Helper()
 	require.Error(t, err)
 	var oe *sealed.OpenError
-	require.True(t, errors.As(err, &oe), "not an *sealed.OpenError: %v", err)
+	require.ErrorAs(t, err, &oe, "not an *sealed.OpenError: %v", err)
 	return oe.Err.Code
 }
 

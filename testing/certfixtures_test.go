@@ -28,7 +28,7 @@ func TestSelfSignedCertPairsWithTheKeyItWasIssuedFor(t *testing.T) {
 			pub, ok := key.Public().(interface{ Equal(crypto.PublicKey) bool })
 			require.True(t, ok)
 			assert.True(t, pub.Equal(cert.PublicKey))
-			assert.NoError(t, cert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature))
+			require.NoError(t, cert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature))
 			assert.True(t, time.Now().Before(cert.NotAfter))
 		})
 	}

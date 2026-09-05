@@ -26,7 +26,7 @@ func captureCallerPackage() string {
 func TestGetCallerPackage(t *testing.T) {
 	expected := reflect.TypeOf(sampleType{}).PkgPath()
 	assert.Equal(t, expected, captureCallerPackage())
-	assert.Equal(t, "", GetCallerPackage(1000))
+	assert.Empty(t, GetCallerPackage(1000))
 }
 
 func TestGetCallerPackageNoCaller(t *testing.T) {
@@ -36,7 +36,7 @@ func TestGetCallerPackageNoCaller(t *testing.T) {
 	}
 	t.Cleanup(func() { callerFn = originalCaller })
 
-	assert.Equal(t, "", GetCallerPackage(0))
+	assert.Empty(t, GetCallerPackage(0))
 }
 
 func TestGetCallerPackageNilFunc(t *testing.T) {
@@ -53,7 +53,7 @@ func TestGetCallerPackageNilFunc(t *testing.T) {
 		funcForPCFn = originalFunc
 	})
 
-	assert.Equal(t, "", GetCallerPackage(0))
+	assert.Empty(t, GetCallerPackage(0))
 }
 
 func TestGetCallerPackageFallback(t *testing.T) {
@@ -97,8 +97,8 @@ func TestExtractHandlerName(t *testing.T) {
 	assert.Equal(t, "sampleFunction", ExtractHandlerName(sampleFunction))
 	methodName := ExtractHandlerName(sampleType{}.method)
 	assert.True(t, strings.HasPrefix(methodName, "method"))
-	assert.Equal(t, "", ExtractHandlerName(nil))
-	assert.Equal(t, "", ExtractHandlerName(42))
+	assert.Empty(t, ExtractHandlerName(nil))
+	assert.Empty(t, ExtractHandlerName(42))
 }
 
 func TestExtractHandlerNameNilRuntimeFunc(t *testing.T) {
@@ -106,7 +106,7 @@ func TestExtractHandlerNameNilRuntimeFunc(t *testing.T) {
 	funcForPCFn = func(uintptr) *runtime.Func { return nil }
 	t.Cleanup(func() { funcForPCFn = originalFunc })
 
-	assert.Equal(t, "", ExtractHandlerName(sampleFunction))
+	assert.Empty(t, ExtractHandlerName(sampleFunction))
 }
 
 func TestExtractHandlerNameFromName(t *testing.T) {
@@ -119,12 +119,12 @@ func TestGetTypeName(t *testing.T) {
 	expected := reflect.TypeOf(sampleType{}).PkgPath() + ".sampleType"
 	assert.Equal(t, expected, GetTypeName(ptrType))
 	assert.Equal(t, "int", GetTypeName(reflect.TypeOf(42)))
-	assert.Equal(t, "", GetTypeName(nil))
+	assert.Empty(t, GetTypeName(nil))
 }
 
 func TestGetTypeNameShort(t *testing.T) {
 	ptrType := reflect.TypeOf(&sampleType{})
 	assert.Equal(t, "sampleType", GetTypeNameShort(ptrType))
 	assert.Equal(t, "int", GetTypeNameShort(reflect.TypeOf(42)))
-	assert.Equal(t, "", GetTypeNameShort(nil))
+	assert.Empty(t, GetTypeNameShort(nil))
 }
