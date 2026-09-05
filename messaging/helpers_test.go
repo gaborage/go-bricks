@@ -323,9 +323,9 @@ func TestDeclarationsQueue(t *testing.T) {
 
 		assert.Len(t, decls.Queues, 1)
 		registered := decls.Queues["test.queue"]
+		require.NoError(t, decls.Validate())
 		// The incumbent's args survive the second declaration
 		assert.Equal(t, "value1", registered.Args["first"])
-		require.NoError(t, decls.Validate())
 		assert.NotNil(t, q1)
 		assert.NotNil(t, q2)
 	})

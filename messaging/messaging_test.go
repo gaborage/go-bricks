@@ -207,11 +207,11 @@ func TestMockClientConsume(t *testing.T) {
 			ch, err := client.Consume(ctx, "test-destination")
 
 			if tt.expectError {
-				assert.Nil(t, ch)
 				require.Error(t, err)
+				assert.Nil(t, ch)
 			} else {
-				assert.NotNil(t, ch)
 				require.NoError(t, err)
+				assert.NotNil(t, ch)
 			}
 		})
 	}
@@ -225,8 +225,8 @@ func TestMockClientClose(t *testing.T) {
 
 	// First close should succeed
 	err := client.Close()
-	assert.False(t, client.IsReady())
 	require.NoError(t, err)
+	assert.False(t, client.IsReady())
 
 	// Second close should return error
 	err = client.Close()
@@ -273,24 +273,24 @@ func TestMockAMQPClientConsumeFromQueue(t *testing.T) {
 	}
 
 	ch, err := client.ConsumeFromQueue(ctx, options)
-	assert.NotNil(t, ch)
 	require.NoError(t, err)
+	assert.NotNil(t, ch)
 }
 
 func TestMockAMQPClientDeclareQueue(t *testing.T) {
 	client := NewMockAMQPClient()
 
 	err := client.DeclareQueue(context.Background(), &QueueDeclaration{Name: testQueue, Durable: true})
-	assert.True(t, client.queues[testQueue])
 	require.NoError(t, err)
+	assert.True(t, client.queues[testQueue])
 }
 
 func TestMockAMQPClientDeclareExchange(t *testing.T) {
 	client := NewMockAMQPClient()
 
 	err := client.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: testExchange, Type: "topic", Durable: true})
-	assert.True(t, client.exchanges[testExchange])
 	require.NoError(t, err)
+	assert.True(t, client.exchanges[testExchange])
 }
 
 func TestMockAMQPClientBindQueue(t *testing.T) {
@@ -366,9 +366,9 @@ func TestMockMessageHandlerHandle(t *testing.T) {
 
 	ctx := context.Background()
 	err := handler.Handle(ctx, &delivery)
+	require.NoError(t, err)
 	assert.Len(t, handler.handled, 1)
 	assert.Equal(t, testMessage, string(handler.handled[0].Body))
-	require.NoError(t, err)
 }
 
 func TestMockMessageHandlerHandleError(t *testing.T) {
@@ -383,8 +383,8 @@ func TestMockMessageHandlerHandleError(t *testing.T) {
 
 	ctx := context.Background()
 	err := handler.Handle(ctx, &delivery)
-	assert.Len(t, handler.handled, 1)
 	require.Error(t, err)
+	assert.Len(t, handler.handled, 1)
 }
 
 func TestMockMessageHandlerEventType(t *testing.T) {

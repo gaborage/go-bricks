@@ -47,7 +47,23 @@ bodies rather than here (this file postdates them) — pull those rows in before
 
 ## messaging (#1092 / W3-P2)
 
+Two shapes: a nil/zero-receiver safety sweep whose followers probe other methods, and PEER
+sentinel probes where several claims are made about ONE error. In both, an aborting `require`
+would report the first claim and hide the rest; the final assertion in each block is `require`,
+so `require-error` is satisfied.
+
 | site | checker | why it stays `assert` | directive FINAL inserts |
 | --- | --- | --- | --- |
-| `messaging/payload_error_test.go:412` | require-error | `TestPayloadErrorNilAndZeroValueAreSafe` pins that EVERY method on a nil `*PayloadError` is safe. The followers assert `nilErr.Fields()` and `nilErr.Is(...)` — they never touch the asserted `nilErr.Unwrap()` result, so `require` would abort the sweep at the first method and hide whether the rest are safe. | `//nolint:testifylint // require would abort the remaining nil-receiver method checks` |
-| `messaging/payload_error_test.go:419` | require-error | Same test, zero-value half: the followers assert `zero.Fields()` and two `NotErrorIs(zero, ...)` sentinels, none touching the asserted `zero.Unwrap()` result. | `//nolint:testifylint // require would abort the remaining zero-value method checks` |
+| `messaging/payload_error_test.go:412` | require-error | `TestPayloadErrorNilAndZeroValueAreSafe` pins that EVERY method on a nil `*PayloadError` is safe; the followers read `Fields()` and `Is()` on the receiver, never the asserted `Unwrap()` result, so `require` would abort the sweep at the first method. | `//nolint:testifylint // require would abort the remaining nil-receiver method checks` |
+| `messaging/payload_error_test.go:418` | require-error | Same test, zero-value half: the followers exercise the other methods on `zero`, not the asserted `Unwrap()` result. | `//nolint:testifylint // require would abort the remaining zero-value method checks` |
+| `messaging/payload_error_test.go:421` | require-error | Peer sentinel probe: `ErrPayloadUndecodable` and `ErrPayloadInvalid` are two claims about one zero value, and reporting only the first hides which mapping regressed. | `//nolint:testifylint // peer sentinel probe; the next assertion probes a different sentinel` |
+| `messaging/payload_error_test.go:432` | require-error | Peer sentinel probe over one error: the positive mapping and the two negative ones are separate classifications. | `//nolint:testifylint // peer sentinel probe; two further sentinels follow` |
+| `messaging/payload_error_test.go:433` | require-error | Same block, second peer. | `//nolint:testifylint // peer sentinel probe; a further sentinel follows` |
+| `messaging/publish_destination_test.go:47` | require-error | Peer of the `NotErrorIs(ErrPublishRetriesExhausted)` below it: the destination error must be the invalid-destination one AND not a retry-exhaustion, and the block's `Zero(publishAttempts)` proves the channel was never touched. | `//nolint:testifylint // peer sentinel probe; the retry-exhaustion claim follows` |
+| `messaging/sealed_consumer_test.go:278` | require-error | `ErrorAs` populates `pe`; the assertions that read `pe.Stage` and `pe.EventType` are pinned after it, so this one cannot be the block's final `require`. | `//nolint:testifylint // ErrorAs producer; its target's field checks follow` |
+| `messaging/sealed_consumer_test.go:281` | require-error | Peer sentinel probe on the same error as the `NotErrorIs` that follows. | `//nolint:testifylint // peer sentinel probe; the negative claim follows` |
+| `messaging/streams/payload_error_test.go:77` | require-error | Peer of the sentinel-mapping assertion the comment below it introduces: the unwrap chain and the sentinel mapping are separate claims. | `//nolint:testifylint // peer sentinel probe; the sentinel mapping follows` |
+| `messaging/streams/runner_test.go:410` | require-error | Peer probe over a DIFFERENT partition's error: each partition's failure is classified independently, and aborting on one hides the other. | `//nolint:testifylint // peer probe over a different partition's error` |
+| `messaging/typed_consumer_test.go:120` | require-error | Peer sentinel probe: the business error must surface AND not be reclassified as a payload error; the negatives that follow are the other half. | `//nolint:testifylint // peer sentinel probe; the negative claims follow` |
+| `messaging/typed_consumer_test.go:121` | require-error | Same block, second peer. | `//nolint:testifylint // peer sentinel probe; a further negative claim follows` |
+| `messaging/typed_consumer_test.go:122` | require-error | Same block, third peer; a `NotErrorAs` type check follows. | `//nolint:testifylint // peer sentinel probe; a NotErrorAs type check follows` |

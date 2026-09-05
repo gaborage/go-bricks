@@ -73,10 +73,10 @@ func TestPayloadErrorUnwrapReachesCause(t *testing.T) {
 	err := newPayloadError(testConsumerName, payloaderr.NewDecode(inner, ""))
 
 	require.Same(t, inner, err.Unwrap())
-	require.ErrorIs(t, err, inner)
+	assert.Contains(t, err.Error(), payloaderr.UnauditedDecoderSummary)
+	assert.ErrorIs(t, err, inner)
 	// The sentinel mapping must survive alongside the unwrap chain.
 	require.ErrorIs(t, err, ErrPayloadUndecodable)
-	assert.Contains(t, err.Error(), payloaderr.UnauditedDecoderSummary)
 }
 
 // A nil receiver is reachable from a caller holding a typed nil, and must render
@@ -84,9 +84,9 @@ func TestPayloadErrorUnwrapReachesCause(t *testing.T) {
 func TestPayloadErrorNilReceiverIsInert(t *testing.T) {
 	var err *PayloadError
 
+	require.NoError(t, err.Unwrap())
 	assert.Equal(t, "streams: <nil> payload error", err.Error())
 	assert.Nil(t, err.Fields())
-	require.NoError(t, err.Unwrap())
 	assert.False(t, err.Is(ErrPayloadUndecodable))
 }
 

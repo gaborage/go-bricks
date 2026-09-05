@@ -928,11 +928,11 @@ func TestDeclareConsumerCopiesTheCallersPolicy(t *testing.T) {
 	callers.MaxAttempts = MaxRetryAttempts + 1
 	callers.InitialBackoff = time.Hour
 
+	require.NoError(t, d.Validate(), "the validated policy is unchanged by the caller's write")
 	require.Len(t, d.consumers, 1)
 	assert.NotSame(t, callers, d.consumers[0].Retry, "the declaration keeps its own copy")
 	assert.Equal(t, 2, d.consumers[0].Retry.MaxAttempts)
 	assert.Equal(t, time.Second, d.consumers[0].Retry.InitialBackoff)
-	require.NoError(t, d.Validate(), "the validated policy is unchanged by the caller's write")
 
 	m := testManager(t)
 	runner := m.newRunner(context.Background(), d.consumers[0])

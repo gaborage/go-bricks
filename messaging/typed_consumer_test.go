@@ -116,10 +116,10 @@ func TestNewTypedHandlerReturnsFnResult(t *testing.T) {
 
 	err := h.Handle(t.Context(), &amqp.Delivery{Body: validBody(t)})
 
-	require.ErrorIs(t, err, errBusiness)
 	require.Same(t, errBusiness, err, "fn's error must pass through unwrapped")
-	require.NotErrorIs(t, err, ErrPayloadUndecodable)
-	require.NotErrorIs(t, err, ErrPayloadInvalid)
+	assert.ErrorIs(t, err, errBusiness)
+	assert.NotErrorIs(t, err, ErrPayloadUndecodable)
+	assert.NotErrorIs(t, err, ErrPayloadInvalid)
 	assert.NotErrorAs(t, err, new(*PayloadError))
 }
 
@@ -283,8 +283,8 @@ func TestNewTypedHandlerNilDeliveryAndEmptyBody(t *testing.T) {
 			require.NotPanics(t, func() { err = h.Handle(t.Context(), tc.delivery) })
 
 			require.Error(t, err)
-			require.ErrorIs(t, err, ErrPayloadUndecodable)
 			assert.Equal(t, tc.want, err.Error())
+			require.ErrorIs(t, err, ErrPayloadUndecodable)
 		})
 	}
 }

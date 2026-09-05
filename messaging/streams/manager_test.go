@@ -549,9 +549,9 @@ func TestManagerStartupAbortsOnACanceledContext(t *testing.T) {
 			var err error
 			require.NotPanics(t, func() { err = tt.phase(m, ctx) })
 
-			require.ErrorIs(t, err, context.Canceled)
 			assert.Contains(t, err.Error(), tt.wantPhase,
 				"the caller must be told which startup phase the cancellation stopped")
+			require.ErrorIs(t, err, context.Canceled)
 		})
 	}
 }

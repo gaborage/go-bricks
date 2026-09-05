@@ -272,14 +272,14 @@ func TestSealedHandlerRefusalIsPayloadStageOpenAndNacksWithoutRequeue(t *testing
 	assert.Zero(t, calls, "fn never runs for a refused message")
 
 	var pe *PayloadError
-	require.ErrorAs(t, err, &pe)
-	assert.Equal(t, PayloadStageOpen, pe.Stage)
-	assert.Equal(t, "payment.authorized", pe.EventType)
-	require.ErrorIs(t, err, ErrPayloadOpenRefused)
-	require.NotErrorIs(t, err, ErrPayloadUndecodable)
 	assert.Contains(t, err.Error(), "open failed")
 	assert.Contains(t, err.Error(), "SEAL_SIGNATURE_INVALID (len=3)")
 	assert.NotContains(t, err.Error(), "inner", "the opener's cause is in the chain, never in the text")
+	assert.ErrorAs(t, err, &pe)
+	assert.Equal(t, PayloadStageOpen, pe.Stage)
+	assert.Equal(t, "payment.authorized", pe.EventType)
+	assert.ErrorIs(t, err, ErrPayloadOpenRefused)
+	require.NotErrorIs(t, err, ErrPayloadUndecodable)
 	var got *sealruntime.OpenRefusedError
 	require.ErrorAs(t, err, &got)
 	assert.Same(t, refused, got)

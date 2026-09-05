@@ -182,9 +182,9 @@ func TestRunReportsSucceededForAHandlerThatReturnsNil(t *testing.T) {
 		return nil
 	})
 
+	require.NoError(t, res.Err)
 	require.NotNil(t, res)
 	assert.Equal(t, Succeeded, res.Outcome)
-	require.NoError(t, res.Err)
 	assert.Empty(t, res.PanicType)
 	assert.Nil(t, res.Stack)
 	assert.GreaterOrEqual(t, res.Duration, time.Millisecond)
@@ -543,9 +543,9 @@ func TestRunKeepsAHandlerErrorMessageOffTheSpan(t *testing.T) {
 	// The on-platform sink keeps the message: the lane hands the error itself to
 	// LogOutcome, which is where the log line is built.
 	require.Error(t, res.Err)
+	require.Error(t, h.rec.seen[0].Err)
 	assert.Contains(t, res.Err.Error(), marker)
 	require.Len(t, h.rec.seen, 1)
-	require.Error(t, h.rec.seen[0].Err)
 	assert.Contains(t, h.rec.seen[0].Err.Error(), marker)
 }
 

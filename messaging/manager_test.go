@@ -389,18 +389,18 @@ func TestMessagingManagerHashBasedIdempotency(t *testing.T) {
 
 		// First call - should create client and registry
 		err := manager.EnsureConsumers(ctx, tenantID, decls)
-		assert.Equal(t, 1, clientCallCount, "First call should create client")
 		require.NoError(t, err)
+		assert.Equal(t, 1, clientCallCount, "First call should create client")
 
 		// Second call with identical declarations - should be idempotent
 		err = manager.EnsureConsumers(ctx, tenantID, decls)
-		assert.Equal(t, 1, clientCallCount, "Second call should reuse existing setup")
 		require.NoError(t, err)
+		assert.Equal(t, 1, clientCallCount, "Second call should reuse existing setup")
 
 		// Third call - still idempotent
 		err = manager.EnsureConsumers(ctx, tenantID, decls)
-		assert.Equal(t, 1, clientCallCount, "Third call should still be idempotent")
 		require.NoError(t, err)
+		assert.Equal(t, 1, clientCallCount, "Third call should still be idempotent")
 	})
 
 	t.Run("different declarations for same key - error", func(t *testing.T) {
@@ -496,18 +496,18 @@ func TestMessagingManagerHashBasedIdempotency(t *testing.T) {
 
 		// Setup for tenant1
 		err := manager.EnsureConsumers(ctx, tenant1ID, decls)
-		assert.Equal(t, 1, clientCallCount)
 		require.NoError(t, err)
+		assert.Equal(t, 1, clientCallCount)
 
 		// Setup for tenant2 with same declarations - should create new client
 		err = manager.EnsureConsumers(ctx, tenant2ID, decls)
-		assert.Equal(t, 2, clientCallCount, "Different keys should have independent setups")
 		require.NoError(t, err)
+		assert.Equal(t, 2, clientCallCount, "Different keys should have independent setups")
 
 		// Replay to tenant1 - should be idempotent
 		err = manager.EnsureConsumers(ctx, tenant1ID, decls)
-		assert.Equal(t, 2, clientCallCount, "Replay to tenant1 should be idempotent")
 		require.NoError(t, err)
+		assert.Equal(t, 2, clientCallCount, "Replay to tenant1 should be idempotent")
 	})
 
 	t.Run("hash recorded after successful setup", func(t *testing.T) {

@@ -415,10 +415,10 @@ func TestPayloadErrorNilAndZeroValueAreSafe(t *testing.T) {
 	require.NotErrorIs(t, error(nilErr), ErrPayloadUndecodable)
 
 	zero := &PayloadError{}
-	assert.NotPanics(t, func() { _ = zero.Error() })
 	assert.NoError(t, zero.Unwrap())
+	assert.NotPanics(t, func() { _ = zero.Error() })
 	assert.Nil(t, zero.Fields())
-	require.NotErrorIs(t, zero, ErrPayloadUndecodable)
+	assert.NotErrorIs(t, zero, ErrPayloadUndecodable)
 	assert.NotErrorIs(t, zero, ErrPayloadInvalid)
 }
 
@@ -427,11 +427,11 @@ func TestPayloadErrorOpenStage(t *testing.T) {
 	err := newPayloadError("OrderCreated", payloaderr.NewOpen(cause))
 
 	assert.Equal(t, PayloadStageOpen, err.Stage)
-	require.ErrorIs(t, err, ErrPayloadOpenRefused)
-	require.NotErrorIs(t, err, ErrPayloadUndecodable)
-	require.NotErrorIs(t, err, ErrPayloadInvalid)
 	assert.Equal(t, `messaging: open failed for event "OrderCreated": sealed open refused: SEAL_HEADER_SLOT_INVALID (present=false, slot=jti)`, err.Error())
 	assert.Empty(t, err.Fields())
+	assert.ErrorIs(t, err, ErrPayloadOpenRefused)
+	assert.NotErrorIs(t, err, ErrPayloadUndecodable)
+	require.NotErrorIs(t, err, ErrPayloadInvalid)
 	var refused *sealruntime.OpenRefusedError
 	require.ErrorAs(t, err, &refused)
 	assert.Same(t, cause, refused)
