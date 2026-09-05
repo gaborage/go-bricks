@@ -1,9 +1,10 @@
 // Package keymaterial hosts the file-or-value key loading and DER parsing
-// mechanism shared by the keystore module and the cmd/seal-payload CLI.
-// keystore wraps these calls with its "keystore: key %q ..." error prefixes;
-// cmd/seal-payload consumes them directly, so the CLI can never accept a key
-// format the middleware's keystore would reject. It also hosts the producer-role
-// resolver the sealing CLIs hand to jose once their keys are parsed.
+// mechanism shared by the keystore module and internal/sealcli, through which
+// the seal-payload and seal-event CLIs reach it. keystore wraps these calls
+// with its "keystore: key %q ..." error prefixes; sealcli consumes them
+// directly, so a key the CLIs accept is never one the middleware's keystore
+// would reject. It also hosts the producer-role resolver sealcli assembles and
+// the CLIs hand to jose once their keys are parsed.
 package keymaterial
 
 import (
