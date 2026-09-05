@@ -125,6 +125,14 @@ exception event (the same rule one layer down), and
 `AssertNoExceptionEvent` READ what a sink wrote — they are the assertion every
 converted site shares, so the property is pinned in one place too.
 
+The exception-event half of that grep is now enforced rather than remembered:
+`forbidigo` in `.golangci.yml` fails `make check` on `trace.Span.RecordError` and
+on `semconv.Exception*` outside `_test.go`, `observability/span_error.go` and
+`observability/testing/helpers.go` — the two shipped files named above. The
+attribute-shaped half stays a grep on purpose: the thirteen live
+`attribute.*(…err…)` sites are all legitimate classifications, so a pattern
+broad enough to catch a leaked message would be noise at every one of them.
+
 `fmt.Sprintf("%T", err)` allocates on a path that only runs on failure, which is
 the right place to spend it.
 

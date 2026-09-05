@@ -12,6 +12,7 @@ linters:
     - errname                   # checks that error variables/types follow the errFoo/FooError convention
     - errorlint                 # finds code that may cause problems with the Go 1.13 error wrapping scheme
     - exhaustive                # checks exhaustiveness of enum switch statements
+    - forbidigo                 # forbids identifiers by pattern (here: raw span-error recording, ADR-083)
     - forcetypeassert           # finds unchecked type assertions (uber-go: Handle Type Assertion Failures)
     - gocheckcompilerdirectives # validates go compiler directive comments (//go:)
     - gochecknoinits            # checks that no init functions are present
@@ -52,6 +53,24 @@ linters:
       threshold: 100
     exhaustive:
       default-signifies-exhaustive: true
+    forbidigo:
+      # ADR-083: a span records an error by TYPE, through the one helper
+      # observability.RecordErrorByType. The invariant used to be a grep in the
+      # ADR; these patterns fail `make check` on the two spellings that bypass
+      # the helper instead of waiting for a reviewer to notice.
+      #
+      # analyze-types replaces the source text with `<package>.<type>.<method>`
+      # before matching, so both patterns are package-qualified: an unrelated
+      # third-party RecordError expands to its own type and cannot match, and
+      # the semconv pattern keys off the package NAME rather than the
+      # version-stamped import path (go.opentelemetry.io/otel/semconv/v1.NN.0),
+      # which would go stale and silently match nothing after the next bump.
+      analyze-types: true
+      forbid:
+        - pattern: ^trace\.Span\.RecordError$
+          msg: record span errors by type through observability.RecordErrorByType (ADR-083) — RecordError writes the error's message into the span.
+        - pattern: ^semconv\.Exception[A-Za-z]*$
+          msg: build the exception event through observability.RecordErrorByType (ADR-083) rather than assembling semconv exception attributes by hand.
     goconst:
       min-len: 4
       min-occurrences: 3
@@ -162,6 +181,7 @@ linters:
       - linters:
           - dupl
           - errcheck
+          - forbidigo
           - forcetypeassert
           - goconst
           - gocyclo
@@ -175,6 +195,14 @@ linters:
       - linters:
           - staticcheck
         text: 'SA9003:'
+      # The two shipped files ADR-083 names as legitimate: span_error.go IS the
+      # single helper, and observability/testing/helpers.go asserts on what a
+      # sink wrote, so it must name the same semconv keys to read them back.
+      # Deliberately unanchored, for the same cache-replay reason spelled out on
+      # the cmd/seal-payload rule below.
+      - linters:
+          - forbidigo
+        path: observability/(span_error|testing/helpers)\.go
       # zerologlint cannot follow the LogEventAdapter wrapper which dispatches via its own Send/Msg
       - linters:
           - zerologlint
