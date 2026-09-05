@@ -262,13 +262,15 @@ func TestExecutorRespectsContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err = exec.Run(ctx, job.ID)
-	require.Error(t, err)
-	require.ErrorIs(t, err, context.Canceled)
+	runErr := exec.Run(ctx, job.ID)
+	require.Error(t, runErr)
 
+	// The stored state is an independent property, so it is checked before the
+	// error identity: an unexpected error kind must not hide a state that advanced.
 	final, err := store.Get(context.Background(), job.ID)
 	require.NoError(t, err)
 	assert.Equal(t, StatePending, final.State, "cancellation before any step must not advance state")
+	assert.ErrorIs(t, runErr, context.Canceled)
 }
 
 // ---- helpers ----

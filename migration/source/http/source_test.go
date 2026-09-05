@@ -270,8 +270,9 @@ func TestHTTPTenantSourceRefusesSchemeDowngradeRedirect(t *testing.T) {
 
 	_, err = src.ListTenants(context.Background())
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrInsecureScheme) // must be the scheme branch, not the host branch
 	assert.Nil(t, hc.CheckRedirect, "New must not mutate the caller's client")
+	// Last, so a wrong error kind still leaves the mutation check above reported.
+	assert.ErrorIs(t, err, ErrInsecureScheme) // must be the scheme branch, not the host branch
 }
 
 func TestHTTPTenantSourceRefusesOffHostRedirect(t *testing.T) {
