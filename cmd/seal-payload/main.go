@@ -100,11 +100,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	resolver := jose.NewKeyStoreResolver(&fixedKeys{
-		signKid:  cfg.signKid,
-		signPriv: signPriv,
-		encKid:   cfg.encryptKid,
-		encPub:   encPub,
+	resolver := jose.NewKeyStoreResolver(&keymaterial.ProducerKeys{
+		SignKid:    cfg.signKid,
+		SignPriv:   signPriv,
+		EncryptKid: cfg.encryptKid,
+		EncPub:     encPub,
 	})
 
 	compact, err := jose.Seal(payload, p, resolver)
@@ -188,20 +188,12 @@ func exactlyOne(a, b string) bool {
 // key via internal/keymaterial — the same DER-loading mechanism the keystore
 // module uses, so a key the CLI accepts is always one the middleware accepts.
 func loadKeys(cfg *cliConfig) (signPriv *rsa.PrivateKey, encPub *rsa.PublicKey, err error) {
-	signDER, err := keymaterial.LoadBytes(cfg.signKeyFile, cfg.signKeyValue)
-	if err != nil {
-		return nil, nil, fmt.Errorf("sign key: %w", err)
-	}
-	signPriv, err = keymaterial.ParseRSAPrivateKey(signDER)
+	signPriv, err = keymaterial.LoadRSAPrivateKey(cfg.signKeyFile, cfg.signKeyValue)
 	if err != nil {
 		return nil, nil, fmt.Errorf("sign key: %w", err)
 	}
 
-	encDER, err := keymaterial.LoadBytes(cfg.encryptKeyFile, cfg.encryptKeyValue)
-	if err != nil {
-		return nil, nil, fmt.Errorf("encrypt key: %w", err)
-	}
-	encPub, err = keymaterial.ParseRSAPublicKey(encDER)
+	encPub, err = keymaterial.LoadRSAPublicKey(cfg.encryptKeyFile, cfg.encryptKeyValue)
 	if err != nil {
 		return nil, nil, fmt.Errorf("encrypt key: %w", err)
 	}
@@ -226,28 +218,4 @@ func readPayload(cfg *cliConfig, stdin io.Reader) ([]byte, error) {
 		return nil, fmt.Errorf("read payload file: %w", err)
 	}
 	return data, nil
-}
-
-// fixedKeys is a two-entry jose.KeyStoreLike backed by the CLI's own
-// sign/encrypt flags — the same resolver seam the production
-// KeyStoreResolver adapts, so Seal's key-resolution path is exercised as-is.
-type fixedKeys struct {
-	signKid  string
-	signPriv *rsa.PrivateKey
-	encKid   string
-	encPub   *rsa.PublicKey
-}
-
-func (k *fixedKeys) PrivateKey(kid string) (*rsa.PrivateKey, error) {
-	if kid == k.signKid {
-		return k.signPriv, nil
-	}
-	return nil, fmt.Errorf("no private key registered for kid %q", kid)
-}
-
-func (k *fixedKeys) PublicKey(kid string) (*rsa.PublicKey, error) {
-	if kid == k.encKid {
-		return k.encPub, nil
-	}
-	return nil, fmt.Errorf("no public key registered for kid %q", kid)
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/jose"
 	testconsts "github.com/gaborage/go-bricks/testing"
 )
 
@@ -223,5 +224,132 @@ func TestParseRSAPrivateKey(t *testing.T) {
 		_, err = ParseRSAPrivateKey(der)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "PKCS8 parsed but not RSA")
+	})
+}
+
+// ProducerKeys carries jose's resolver method set without importing jose from
+// the package itself; this assertion is where that structural claim is pinned.
+var _ jose.KeyResolver = (*ProducerKeys)(nil)
+
+func TestLoadRSAPrivateKey(t *testing.T) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	privDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	require.NoError(t, err)
+	pubDER, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	require.NoError(t, err)
+
+	t.Run("file_path", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "sign.der")
+		require.NoError(t, os.WriteFile(path, privDER, 0o600))
+
+		got, err := LoadRSAPrivateKey(path, "")
+		require.NoError(t, err)
+		assert.Equal(t, priv.D, got.D)
+	})
+
+	t.Run("base64_value", func(t *testing.T) {
+		got, err := LoadRSAPrivateKey("", base64.StdEncoding.EncodeToString(privDER))
+		require.NoError(t, err)
+		assert.Equal(t, priv.D, got.D)
+	})
+
+	t.Run("neither_set_errors", func(t *testing.T) {
+		got, err := LoadRSAPrivateKey("", "")
+		require.Error(t, err)
+		assert.Nil(t, got)
+	})
+
+	t.Run("wrong_key_class_errors", func(t *testing.T) {
+		_, err := LoadRSAPrivateKey("", base64.StdEncoding.EncodeToString(pubDER))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "PKCS1 fallback also failed")
+	})
+}
+
+func TestLoadRSAPublicKey(t *testing.T) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	privDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	require.NoError(t, err)
+	pubDER, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	require.NoError(t, err)
+
+	t.Run("file_path", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "enc.der")
+		require.NoError(t, os.WriteFile(path, pubDER, 0o600))
+
+		got, err := LoadRSAPublicKey(path, "")
+		require.NoError(t, err)
+		assert.Equal(t, priv.N, got.N)
+	})
+
+	t.Run("base64_value", func(t *testing.T) {
+		got, err := LoadRSAPublicKey("", base64.StdEncoding.EncodeToString(pubDER))
+		require.NoError(t, err)
+		assert.Equal(t, priv.N, got.N)
+	})
+
+	t.Run("neither_set_errors", func(t *testing.T) {
+		got, err := LoadRSAPublicKey("", "")
+		require.Error(t, err)
+		assert.Nil(t, got)
+	})
+
+	t.Run("wrong_key_class_errors", func(t *testing.T) {
+		_, err := LoadRSAPublicKey("", base64.StdEncoding.EncodeToString(privDER))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ParsePKIXPublicKey")
+	})
+}
+
+func TestProducerKeys(t *testing.T) {
+	signPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	encPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	require.NotEqual(t, signPriv.N, encPriv.N, "the two roles must hold distinct keys for the cross-role cases to bite")
+
+	keys := &ProducerKeys{
+		SignKid:    "sign-v1",
+		SignPriv:   signPriv,
+		EncryptKid: "enc-v1",
+		EncPub:     &encPriv.PublicKey,
+	}
+
+	t.Run("sign_kid_returns_private", func(t *testing.T) {
+		got, err := keys.PrivateKey("sign-v1")
+		require.NoError(t, err)
+		assert.Equal(t, signPriv.D, got.D)
+	})
+
+	t.Run("encrypt_kid_returns_public", func(t *testing.T) {
+		got, err := keys.PublicKey("enc-v1")
+		require.NoError(t, err)
+		assert.Equal(t, encPriv.N, got.N)
+	})
+
+	t.Run("unknown_private_kid_errors", func(t *testing.T) {
+		_, err := keys.PrivateKey("nope-v9")
+		require.Error(t, err)
+		assert.Equal(t, `no private key registered for kid "nope-v9"`, err.Error())
+	})
+
+	t.Run("unknown_public_kid_errors", func(t *testing.T) {
+		_, err := keys.PublicKey("nope-v9")
+		require.Error(t, err)
+		assert.Equal(t, `no public key registered for kid "nope-v9"`, err.Error())
+	})
+
+	// A kid valid in the OTHER role must not resolve: the sign kid is not a
+	// public-key kid and the encrypt kid is not a private-key kid.
+	t.Run("cross_role_kid_errors", func(t *testing.T) {
+		_, err := keys.PrivateKey("enc-v1")
+		require.Error(t, err)
+		assert.Equal(t, `no private key registered for kid "enc-v1"`, err.Error())
+
+		_, err = keys.PublicKey("sign-v1")
+		require.Error(t, err)
+		assert.Equal(t, `no public key registered for kid "sign-v1"`, err.Error())
 	})
 }
