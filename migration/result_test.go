@@ -161,10 +161,10 @@ func TestMigrateOutcomeParseErrorWrapped(t *testing.T) {
 func TestMigrateOutcomeEnvelopeFailure(t *testing.T) {
 	res := Result{Success: false, ErrorCode: "VALIDATE_ERROR", ErrorMessage: "checksum mismatch on V1 -> host secret leak"}
 	err := migrateOutcome(nil, nil, &res)
-	require.ErrorIs(t, err, ErrFlywayReportedFailure, "a success:false envelope surfaces even at exit 0")
 	assert.Contains(t, err.Error(), "VALIDATE_ERROR", "the errorCode enum is safe to surface")
 	assert.NotContains(t, err.Error(), "host secret leak",
 		"result.ErrorMessage is free-text and must never enter the propagated error string")
+	require.ErrorIs(t, err, ErrFlywayReportedFailure, "a success:false envelope surfaces even at exit 0")
 }
 
 func TestMigrateOutcomeSuccessIsNil(t *testing.T) {

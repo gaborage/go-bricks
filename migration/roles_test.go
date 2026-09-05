@@ -89,9 +89,9 @@ func TestPGRoleSpecValidateRejects(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.spec.Validate()
 			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.fieldOrReason)
 			require.ErrorIs(t, err, ErrInvalidPGIdentifier,
 				"want wrapped ErrInvalidPGIdentifier, got %v", err)
-			assert.Contains(t, err.Error(), tt.fieldOrReason)
 		})
 	}
 }

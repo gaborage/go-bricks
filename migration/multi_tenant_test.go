@@ -541,6 +541,6 @@ func TestMigrateAllRejectsNilTenantConfig(t *testing.T) {
 	require.NotNil(t, res)
 	require.Len(t, res.Results, 1)
 	one := res.Results[0]
-	require.ErrorIs(t, one.Err, database.ErrNoDatabaseConfig)
 	assert.Empty(t, one.Vendor)
+	require.ErrorIs(t, one.Err, database.ErrNoDatabaseConfig)
 }

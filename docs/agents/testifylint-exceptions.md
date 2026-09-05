@@ -45,22 +45,14 @@ test, not inferred from the diff.
 Harvest note for the FINAL author: P5, P6 and P9 documented their false positives in their PR
 bodies rather than here (this file postdates them) — pull those rows in before converting.
 
-## config (#1092 / W3-P3)
+## scheduler, migration (#1092 / W3-P6)
+
+Peer identity probes: each block asserts several sentinels against ONE error, and the
+non-final peers stay `assert` so a mismatch on one still reports the others. The final
+peer in each block is `require`, so `require-error` is satisfied.
 
 | site | checker | why it stays `assert` | directive FINAL inserts |
 | --- | --- | --- | --- |
-| `config/config_test.go:1743` | require-error | `err` is REASSIGNED below and re-asserted for the derived-map sub-case; a require here skips that second phase entirely. | `//nolint:testifylint // a second sub-case reassigns and re-asserts err` |
-| `config/converters_test.go:155` | float-compare | `toFloat64`'s table is ParseFloat round-trips (`"123.45"` -> `123.45`), where the Go literal and `ParseFloat` produce identical float64 bits. Exact equality IS the converter's contract; a tolerance would let a lossy conversion pass. | `//nolint:testifylint // exact equality is the converter's contract` |
-| `config/injection_test.go:110` | require-error | A second phase below sets the env var, reloads the config and pins the default-value behavior; a require here aborts on any message drift and that phase never runs. | `//nolint:testifylint // a reload-and-defaults phase follows` |
-| `config/converters_test.go:23` | require-error | `floatToInt64(NaN)` rejection, followed by the `Inf` rejection through a different branch of the converter — a require hides the Inf case whenever NaN regresses. | `//nolint:testifylint // the Inf-rejection case follows through a different branch` |
-| `config/injection_test.go:170` | float-compare | Env-var round-trip of `1024.5`, exactly representable in float64. The test pins that the value arrives intact, not that it arrives close. | `//nolint:testifylint // exact equality is the injection contract` |
-| `config/tenant_store_test.go:231` | require-error | Followed by removing a non-existent tenant and asserting the store did not mutate — a distinct second phase, independent of the lookup error. | `//nolint:testifylint // an independent no-mutation property follows` |
-| `config/tenant_store_test.go:76` | require-error | Followed by an Error assertion on `BrokerURL`, a different resolver path through the same store. | `//nolint:testifylint // a different resolver path is asserted next` |
-
-## Deferred, not excepted
-
-`config/getters_test.go` carries 10 live findings (6 `require-error`, 3 `float-compare`, 1
-`empty`) and is deliberately UNTOUCHED by W3-P3: Lane M's #1438 rewrote that file, so it joins a
-later sweep or FINAL. They are not exceptions and have no rationale yet — whoever picks the file
-up must triage them, and FINAL will red on them until someone does. Recorded here so the count
-is not mistaken for a clean package.
+| `migration/flyway_test.go:1335` | require-error | Peer of `NotErrorIs(err, ErrFlywayOutputUnparsed)` below it: "too short" and "not a parse failure" are separate classifications of one error, and the block's `NotContains(err.Error(), "pw12345")` password check must run whichever way the sentinel lands. | `//nolint:testifylint // peer sentinel probe; the next assertion classifies the same error` |
+| `migration/flyway_test.go:1524` | require-error | Peer of `NotErrorIs(err, ErrFlywayTimeout)`: a cancel-kill must classify as canceled AND not as a timeout, and reporting only the first hides which half regressed. | `//nolint:testifylint // peer sentinel probe; the next assertion classifies the same error` |
+| `migration/secrets_test.go:299` | require-error | Peer of the `ErrorContains` clause that follows: the sentinel and the message are separate claims about one malformed-secret error. | `//nolint:testifylint // peer sentinel probe; the message clause follows` |

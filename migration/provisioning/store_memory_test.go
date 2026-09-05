@@ -193,8 +193,8 @@ func TestMemoryStoreUpsertRejectsInvalidJob(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := s.Upsert(context.Background(), tt.job)
 			require.Error(t, err)
-			require.ErrorIs(t, err, ErrInvalidJob, "want wrapped ErrInvalidJob, got %v", err)
 			assert.Contains(t, err.Error(), tt.wantField)
+			require.ErrorIs(t, err, ErrInvalidJob, "want wrapped ErrInvalidJob, got %v", err)
 		})
 	}
 }

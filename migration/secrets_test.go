@@ -293,11 +293,11 @@ func TestSecretsProviderDBConfigEmptyScalarGuard(t *testing.T) {
 
 			if tt.wantErr {
 				require.Error(t, err)
-				require.ErrorIs(t, err, ErrSecretMalformed)
-				require.ErrorContains(t, err, "delivered empty")
 				// The error travels to logs and operator consoles; the payload it was
 				// decoding is secret material, so no value from it may ride along.
 				assert.NotContains(t, err.Error(), leakCanaryPassword)
+				assert.ErrorIs(t, err, ErrSecretMalformed)
+				require.ErrorContains(t, err, "delivered empty")
 				return
 			}
 			require.NoError(t, err)
@@ -436,9 +436,9 @@ func TestSecretsProviderNameForErrorWrapsRealName(t *testing.T) {
 
 	_, err := p.DBConfig(context.Background(), "tenant-a")
 	require.Error(t, err)
-	require.ErrorIs(t, err, boom)
 	assert.Contains(t, err.Error(), "/prod/platform/tenant-a/db")
 	assert.NotContains(t, err.Error(), "gobricks/migrate/tenant-a")
+	require.ErrorIs(t, err, boom)
 }
 
 func TestSecretsProviderNameForNilIsUnchanged(t *testing.T) {
