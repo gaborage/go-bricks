@@ -7,6 +7,18 @@ import (
 	"strings"
 )
 
+// normalizeServer fills the server defaults this package owns. Only the body
+// limit today: an unset (zero) server.bodylimit becomes DefaultBodyLimitBytes
+// here, so the config seam decides that default rather than the wire-up in
+// server.SetupMiddlewares.
+//
+// The zero/negative rule comes from applyNonNegativeDefault rather than a fourth
+// hand-written copy of it: a negative is an operator error and must surface as
+// one, never be laundered into the default.
+func normalizeServer(cfg *ServerConfig) error {
+	return applyNonNegativeDefault(&cfg.BodyLimit, DefaultBodyLimitBytes, "server.bodylimit")
+}
+
 // checkServer rejects a server section the server could not start from.
 func checkServer(cfg *ServerConfig) error {
 	if cfg.Port <= 0 || cfg.Port > 65535 {
@@ -44,9 +56,8 @@ func checkServer(cfg *ServerConfig) error {
 		return NewValidationError("server.gzip.minlength", errMustBeNonNegative)
 	}
 
-	// A negative body limit is an operator error (a typo silently reverting to the
-	// default is worse than a startup failure). Zero is permitted and resolves to
-	// the framework default at wire-up (see server.SetupMiddlewares).
+	// Unreachable on the Validate path: normalizeServer has already filled a zero
+	// and refused a negative. Kept for callers that reach checkServer directly.
 	if cfg.BodyLimit < 0 {
 		return NewValidationError("server.bodylimit", errMustBeNonNegative)
 	}

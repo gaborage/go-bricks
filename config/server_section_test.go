@@ -419,3 +419,52 @@ func TestParseTrustedProxyCIDRRejectsMappedDefaultRoute(t *testing.T) {
 	_, err := ParseTrustedProxyCIDR("2001:db8::/96")
 	assert.NoError(t, err)
 }
+
+// TestNormalizeServerBodyLimit pins server.bodylimit on both configuration doors.
+// Every literal-door case runs through Validate rather than checkServer alone:
+// normalization and rejection are one contract, and only the whole path shows that
+// a zero is filled while a negative is refused instead of quietly defaulted.
+func TestNormalizeServerBodyLimit(t *testing.T) {
+	tests := []struct {
+		name          string
+		bodyLimit     int64
+		expected      int64
+		expectedError string
+	}{
+		// Zero means "unset": koanf's default and a struct literal look identical
+		// here, so this is the case the ownership move exists for.
+		{name: "literal_door_zero_fills_default", bodyLimit: 0, expected: DefaultBodyLimitBytes},
+		// An operator who wrote a number keeps it, including one below the default.
+		{name: "literal_door_explicit_value_survives", bodyLimit: 1024, expected: 1024},
+		{name: "literal_door_value_above_default_survives", bodyLimit: DefaultBodyLimitBytes * 2, expected: DefaultBodyLimitBytes * 2},
+		// The case that separates "fill a zero" from "fill anything non-positive":
+		// a negative must reach validation as an operator error, never be laundered
+		// into the default.
+		{name: "literal_door_negative_is_rejected", bodyLimit: -1, expectedError: "server.bodylimit"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := createValidFullConfig()
+			cfg.Server.BodyLimit = tt.bodyLimit
+
+			err := Validate(cfg)
+
+			if tt.expectedError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectedError)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, cfg.Server.BodyLimit)
+		})
+	}
+
+	// The other door: an absent key must render the same 10 MB, so the koanf default
+	// and the normalize fill cannot drift apart unnoticed.
+	t.Run("koanf_door_absent_defaults", func(t *testing.T) {
+		cfg, err := loadDefaultConfig(t)
+		require.NoError(t, err)
+		assert.Equal(t, DefaultBodyLimitBytes, cfg.Server.BodyLimit)
+	})
+}
