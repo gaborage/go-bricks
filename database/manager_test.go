@@ -293,12 +293,12 @@ func TestDbManagerZeroValueMethodsAreSafe(t *testing.T) {
 	conn, release, err := m.Get(context.Background(), "any")
 	assert.Nil(t, conn)
 	assert.Nil(t, release)
-	require.ErrorIs(t, err, errManagerClosed, "zero-value Get must fail closed, not panic")
-
 	assert.NotPanics(t, func() {
 		m.StartCleanup(time.Minute)
 		m.StopCleanup()
 	}, "zero-value StartCleanup/StopCleanup must be no-ops, not panic")
+
+	require.ErrorIs(t, err, errManagerClosed, "zero-value Get must fail closed, not panic")
 
 	assert.NoError(t, m.Close(), "closing a never-initialized manager is a no-op")
 }

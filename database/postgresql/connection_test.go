@@ -599,10 +599,9 @@ func TestTransactionPrepareError(t *testing.T) {
 
 	stmt, err := trx.Prepare(context.Background(), "INSERT INTO fail(id) VALUES ($1)")
 	assert.Nil(t, stmt)
-	require.ErrorIs(t, err, prepareErr)
-
 	mock.ExpectRollback()
 	require.NoError(t, trx.Rollback(context.Background()))
+	require.ErrorIs(t, err, prepareErr)
 }
 
 func TestConnectionCreateMigrationTable(t *testing.T) {

@@ -2629,9 +2629,9 @@ func TestRawExpressionLiteralValidatedAtConsumption(t *testing.T) {
 					qb := NewQueryBuilder(vendor)
 					sql, args, err := door.build(qb, tc.expr).ToSQL()
 
-					require.ErrorIs(t, err, tc.wantErr)
 					assert.Empty(t, sql)
 					assert.Empty(t, args)
+					require.ErrorIs(t, err, tc.wantErr)
 				})
 			}
 		}

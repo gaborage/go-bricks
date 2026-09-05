@@ -25,7 +25,12 @@ The rule applied here, in the order it decides. A site CONVERTS when the asserti
 DEREFERENCES the error, for one of two reasons. `err.Error()` — bare, or inside a `Contains` —
 PANICS on a nil error, so `require` turns a crash into a clean failure. `errors.Is/As` and
 `ErrorContains(t, err, …)` do NOT panic on nil; they simply fail a second time, so `require`
-there buys one clean failure instead of two reports of the same fault.
+there buys one clean failure instead of two reports of the same fault. The rule covers
+error-EXISTENCE checks only: an error-IDENTITY assertion (`ErrorIs`/`ErrorAs`/`NotErrorIs`)
+that fails while `err` is merely the WRONG error still aborts every follower, so those are
+reordered — independent assertions first, identity last — unless the follower consumes what
+the identity assertion produced (an `ErrorAs` target) or dereferences `err` and so needs the
+non-nil guarantee to sit above it.
 
 Where the follower is instead an INDEPENDENT property — an instrumentation counter, a mock's
 recorded calls, a rollback flag, a manager size, a log-buffer leak check — the assertions were
@@ -39,8 +44,8 @@ that depends on this one having run.
 | `database/identifier/identifier_test.go:61` | require-error | Block of independent per-input validations (`:58`-`:63`), each its own `Validate(vendor, input)` over a DIFFERENT input; requiring abandons the rest of the batch. Order cannot help — every line in the run is an error assertion. | `//nolint:testifylint // batch of independent per-input validations` |
 | `database/identifier/identifier_test.go:62` | require-error | Same block as `:61`. | `//nolint:testifylint // batch of independent per-input validations` |
 | `database/internal/builder/renderer_test.go:46` | require-error | Pairs with `:47` over a DIFFERENT input (`a#b` vs `plain_name`); both lines are error assertions, so reordering cannot save the second. | `//nolint:testifylint // paired one-line checks over different inputs` |
-| `database/oracle/connection_test.go:782` | require-error | `TestConnectionTransactionOperationsErrorHandling` runs three scenarios in one body, each `mock.Expect…` then assert; the Begin scenario cannot move below the BeginTx/Prepare ones without breaking the mock ordering it sets up. | `//nolint:testifylint // independent scenario follows in same test` |
-| `database/oracle/connection_test.go:790` | require-error | Same test, BeginTx scenario; the Prepare scenario's mock setup follows it. | `//nolint:testifylint // independent scenario follows in same test` |
-| `database/postgresql/connection_test.go:670` | require-error | Mirror of `oracle/connection_test.go:782`. | `//nolint:testifylint // independent scenario follows in same test` |
-| `database/postgresql/connection_test.go:678` | require-error | Mirror of `oracle/connection_test.go:790`. | `//nolint:testifylint // independent scenario follows in same test` |
+| `database/oracle/connection_test.go:781` | require-error | `TestConnectionTransactionOperationsErrorHandling` runs three scenarios in one body, each `mock.Expect…` then assert; the Begin scenario cannot move below the BeginTx/Prepare ones without breaking the mock ordering it sets up. | `//nolint:testifylint // independent scenario follows in same test` |
+| `database/oracle/connection_test.go:789` | require-error | Same test, BeginTx scenario; the Prepare scenario's mock setup follows it. | `//nolint:testifylint // independent scenario follows in same test` |
+| `database/postgresql/connection_test.go:669` | require-error | Mirror of `oracle/connection_test.go:781`. | `//nolint:testifylint // independent scenario follows in same test` |
+| `database/postgresql/connection_test.go:677` | require-error | Mirror of `oracle/connection_test.go:789`. | `//nolint:testifylint // independent scenario follows in same test` |
 | `database/tracking_test.go:230` | require-error | Followed by the test's SECOND phase, which re-arms the mock (`expectedBeginTxErr`, a fresh `ExpectBegin`) and asserts the BeginTx path; the phase depends on this one having run, so it cannot be hoisted above it. | `//nolint:testifylint // the BeginTx phase is asserted after this` |

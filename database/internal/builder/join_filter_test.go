@@ -711,9 +711,9 @@ func TestJoinFilterRejectsRawExpressionLiteral(t *testing.T) {
 			qb := NewQueryBuilder(dbtypes.PostgreSQL)
 			sql, args, err := tt.filter(qb.JoinFilter()).ToSQL()
 
-			require.ErrorIs(t, err, dbtypes.ErrEmptyExpressionSQL)
 			assert.Empty(t, sql)
 			assert.Empty(t, args)
+			require.ErrorIs(t, err, dbtypes.ErrEmptyExpressionSQL)
 		})
 	}
 }
@@ -740,9 +740,9 @@ func TestJoinFilterRejectsRawExpressionAlias(t *testing.T) {
 			qb := NewQueryBuilder(dbtypes.PostgreSQL)
 			sql, args, err := tt.filter(qb.JoinFilter()).ToSQL()
 
-			require.ErrorIs(t, err, dbtypes.ErrInvalidAlias)
 			assert.Empty(t, sql)
 			assert.Empty(t, args)
+			require.ErrorIs(t, err, dbtypes.ErrInvalidAlias)
 		})
 	}
 }
@@ -998,10 +998,10 @@ func TestJoinFilterValuerErrorSurfacesCause(t *testing.T) {
 		t.Run(door.name, func(t *testing.T) {
 			sql, args, err := door.fn("u.id", operand).ToSQL()
 
-			require.ErrorIs(t, err, errBoom)
-			require.NotErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
 			assert.Empty(t, sql)
 			assert.Empty(t, args)
+			require.ErrorIs(t, err, errBoom)
+			require.NotErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
 		})
 	}
 }
