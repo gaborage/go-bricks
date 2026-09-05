@@ -21,25 +21,30 @@ test, not inferred from the diff.
 
 ## database (#1092 / W3-P1)
 
-The rule applied here, in the order it decides. A site CONVERTS when the assertion that follows
-DEREFERENCES the error, for one of two reasons. `err.Error()` — bare, or inside a `Contains` —
-PANICS on a nil error, so `require` turns a crash into a clean failure. `errors.Is/As` and
-`ErrorContains(t, err, …)` do NOT panic on nil; they simply fail a second time, so `require`
-there buys one clean failure instead of two reports of the same fault. The rule covers
-error-EXISTENCE checks only: an error-IDENTITY assertion (`ErrorIs`/`ErrorAs`/`NotErrorIs`)
-that fails while `err` is merely the WRONG error still aborts every follower, so those are
-reordered — independent assertions first, identity last — unless the follower consumes what
-the identity assertion produced (an `ErrorAs` target) or dereferences `err` and so needs the
-non-nil guarantee to sit above it. Where TWO specificity checks land on one error — a wrap-chain
-check and a message check — no ordering can make both final, so the non-final one stays `assert`
-and takes a row; the rule is direction-free.
+The rule applied here, in the order it decides.
 
-Where the follower is instead an INDEPENDENT property — an instrumentation counter, a mock's
-recorded calls, a rollback flag, a manager size, a log-buffer leak check — the assertions were
-REORDERED so the independent one runs first and the error assertion still converts, rather than
-recording an exception: 15 sites were resolved that way. A row below therefore means the order
-CANNOT change — the follower is itself an error assertion over a different input, or a later phase
-that depends on this one having run.
+1. **The follower would PANIC.** `err.Error()` — bare, or inside a `Contains` — dereferences a
+   nil error, so the existence check above it converts to `require` and a crash becomes a clean
+   failure.
+2. **The follower would fail REDUNDANTLY.** `errors.Is/As` and `ErrorContains(t, err, …)` are
+   nil-safe: they report a second time on the same fault. Converting buys one clean failure
+   instead of two, so it is a signal decision, not a safety one.
+3. **The follower is an INDEPENDENT property** — an instrumentation counter, a mock's recorded
+   calls, a rollback flag, a manager size, a log-buffer leak check. Here the assertions were
+   REORDERED so the independent one runs first and the error assertion still converts, rather
+   than recording an exception: 15 sites were resolved that way.
+4. **Two SPECIFICITY checks land on one error** — a wrap-chain check and a message check. They
+   test different defect classes (`%v`-for-`%w` breaks one, a text edit the other) and no
+   ordering makes both final, so the non-final one stays `assert` and takes a row. Direction-free.
+
+Rules 1 and 2 govern error-EXISTENCE checks. An error-IDENTITY assertion is different: it can
+fail while `err` is merely the WRONG error, aborting every follower, so those are reordered
+under rule 3 — UNLESS the follower consumes what the identity assertion produced (an `ErrorAs`
+target, which would be nil) or dereferences `err` and so needs the non-nil guarantee above it.
+An existence guard is never hoisted past; only specificity assertions move.
+
+A row below therefore means the order CANNOT change: the follower is itself an error assertion
+over a different input, or a later phase that depends on this one having run.
 
 | site | checker | why it stays `assert` | directive FINAL inserts |
 | --- | --- | --- | --- |
