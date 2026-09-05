@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"maps"
+	"math"
 	"net/url"
 	"regexp"
 	"slices"
@@ -79,17 +80,20 @@ func checkMessagingPublishTimeout(cfg *MessagingConfig) error {
 	if cfg.PublishTimeout == 0 {
 		return nil
 	}
-	floor := cfg.Reconnect.ReadyTimeout + cfg.Reconnect.ConnectionTimeout
 	// Both operands are non-negative here (normalizeMessaging rejects a negative
-	// one), so a floor below either of them can only be an int64 nanosecond wrap:
-	// time.ParseDuration accepts values up to ~2562047h, and two of them sum past
-	// the type. Left unguarded the wrapped floor is negative, every positive bound
-	// clears it, and the check silently stops enforcing anything.
-	if floor < cfg.Reconnect.ReadyTimeout {
+	// one), but time.ParseDuration accepts values up to ~2562047h and two of them
+	// sum past int64 nanoseconds. A wrapped floor is negative, every positive bound
+	// clears it, and the check silently stops enforcing anything — so test the sum
+	// BEFORE computing it. Stated as headroom rather than as a post-hoc "floor came
+	// out smaller than an operand": that spelling has a boundary no configuration
+	// can reach, since a floor equal to readytimeout needs a zero connectiontimeout
+	// and normalizeMessaging has already defaulted that to 30s.
+	if cfg.Reconnect.ConnectionTimeout > math.MaxInt64-cfg.Reconnect.ReadyTimeout {
 		return NewValidationError(fieldMessagingPublishTimeout, fmt.Sprintf(
 			"messaging.reconnect.readytimeout (%s) + messaging.reconnect.connectiontimeout (%s) overflows time.Duration",
 			cfg.Reconnect.ReadyTimeout, cfg.Reconnect.ConnectionTimeout))
 	}
+	floor := cfg.Reconnect.ReadyTimeout + cfg.Reconnect.ConnectionTimeout
 	if cfg.PublishTimeout < floor {
 		return NewValidationError(fieldMessagingPublishTimeout, fmt.Sprintf(
 			"%s must be >= messaging.reconnect.readytimeout (%s) + messaging.reconnect.connectiontimeout (%s) = %s; "+

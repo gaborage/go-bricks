@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -1044,6 +1045,33 @@ func TestValidateMessagingPublishTimeout(t *testing.T) {
 				},
 			},
 			wantPublishTimeout: 2000000 * time.Hour,
+		},
+		{
+			// The exact edge of the overflow guard: the operands sum to precisely
+			// math.MaxInt64, the largest floor that does NOT wrap. Accepting it is
+			// what makes the guard's comparison a `>` and not a `>=`; without this
+			// case that boundary is invisible and either spelling passes.
+			name: "floor_operands_summing_to_exactly_maxint64_accepted",
+			config: MessagingConfig{
+				PublishTimeout: math.MaxInt64,
+				Reconnect: ReconnectConfig{
+					ReadyTimeout:      5 * time.Second,
+					ConnectionTimeout: math.MaxInt64 - 5*time.Second,
+				},
+			},
+			wantPublishTimeout: math.MaxInt64,
+		},
+		{
+			// One nanosecond past that edge is the smallest overflowing pair.
+			name: "floor_operands_one_nanosecond_past_maxint64_rejected",
+			config: MessagingConfig{
+				PublishTimeout: math.MaxInt64,
+				Reconnect: ReconnectConfig{
+					ReadyTimeout:      5 * time.Second,
+					ConnectionTimeout: math.MaxInt64 - 5*time.Second + 1,
+				},
+			},
+			errorContains: []string{"messaging.publishtimeout", "overflows time.Duration"},
 		},
 		{
 			name: "at_custom_floor_accepted",
