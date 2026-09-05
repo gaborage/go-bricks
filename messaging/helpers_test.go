@@ -689,7 +689,7 @@ func TestDeclareQueueWithDLQArgsSurviveRegistration(t *testing.T) {
 }
 
 // TestDeclareQueueReturnedArgsAreACopy pins the semantic DeclareQueue's doc comment
-// promises: RegisterQueue stores a deep copy, so the returned pointer is a dead end for
+// promises: RegisterQueue stores a copy, so the returned pointer is a dead end for
 // Args, while the two documented doors both reach the registered declaration. Each case
 // varies the door, not the value, so a regression in the copy fails exactly one of them.
 func TestDeclareQueueReturnedArgsAreACopy(t *testing.T) {
@@ -746,6 +746,35 @@ func TestDeclareQueueReturnedArgsAreACopy(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDeclareQueueArgsCopyIsOneLevelDeep pins the limit the doc comment states: the Args
+// map is new, but a map stored as a VALUE inside it is the caller's, so mutating it after
+// registration does reach the registered declaration. Pinning this keeps the comment
+// honest — a future recursive copy must update the sentence, not silently diverge.
+func TestDeclareQueueArgsCopyIsOneLevelDeep(t *testing.T) {
+	decls := NewDeclarations()
+
+	nested := map[string]any{"initial": 1}
+	q := NewQueue("orders.queue")
+	q.Args["x-nested"] = nested
+	decls.RegisterQueue(q)
+
+	// Top level: a NEW key on the caller's map does not reach the registered copy.
+	q.Args["x-top-level"] = "late"
+	// One level down: the caller still holds the same map the registered copy points at.
+	nested["late"] = 2
+
+	registered := decls.Queues["orders.queue"]
+	require.NotNil(t, registered)
+
+	_, topLevelLeaked := registered.Args["x-top-level"]
+	assert.False(t, topLevelLeaked, "the Args map itself is copied, so late top-level keys must not leak")
+
+	storedNested, ok := registered.Args["x-nested"].(map[string]any)
+	require.True(t, ok, "the nested value must survive registration")
+	assert.Equal(t, 2, storedNested["late"],
+		"the copy is one level deep: a nested map is shared, so a late write DOES reach the registered copy")
 }
 
 func TestDeclareQueueWithDLQSharedDLXSingleBinding(t *testing.T) {
