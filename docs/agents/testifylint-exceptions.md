@@ -10,9 +10,12 @@ Several package PRs are in flight at once, so more than one may create this file
 one merged wins; every later PR rebases onto it and appends its section rather than recreating
 the file.**
 
-An error-IDENTITY assertion (`ErrorIs`/`ErrorAs`/`NotErrorIs`, and `ErrorContains` on a message)
-aborts whenever the sentinel or message does not match — INCLUDING when the error is non-nil and
-merely different — so it hides every follower in exactly the case a reader most wants explained.
+An error-IDENTITY assertion (`ErrorIs`/`ErrorAs`, and `ErrorContains` on a message) aborts
+whenever the sentinel or message does not match — INCLUDING when the error is non-nil and merely
+different — so it hides every follower in exactly the case a reader most needs to understand.
+`NotErrorIs` is the mirror image and belongs to the same class for the same reason: it aborts
+when the chain DOES match the sentinel it is asserting absent, which is likewise a failure on a
+non-nil error that takes its followers down with it.
 Where that follower is an independent non-clause property (a negative `NotContains`, a leak
 check, a state or count check, a distinct second phase) the site is reordered so the independent
 assertion runs first, or reverted to `assert` and listed here. Where the follower is another
