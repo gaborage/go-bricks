@@ -127,7 +127,8 @@ converted site shares, so the property is pinned in one place too. That half is
 now enforced rather than remembered: `forbidigo` in `.golangci.yml` fails
 `make check` on both spellings, in tests as well as shipped code. There is no
 file-level exemption: the only escapes are inline `//nolint`s on the individual
-lines of the helper and of the reader-side assertions. Inline, because a
+lines of the helper, of the reader-side assertions, and of a test that wants a
+raw exception event on purpose. Inline, because a
 standalone directive above a call expands to the whole statement and would
 silently cover a message attribute added beside the type one; per-line, so a
 second function in either file has to earn its own; and in tests too, because a
