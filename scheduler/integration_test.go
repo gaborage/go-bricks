@@ -27,8 +27,13 @@ func TestSchedulerLifecycleMVP(t *testing.T) {
 	// Observe the 3rd execution on the job's own counter rather than sleeping past it.
 	require.Eventually(t, func() bool { return job.Count() >= 3 }, 10*time.Second, 10*time.Millisecond,
 		"Job should execute at least 3 times")
-	assert.GreaterOrEqual(t, time.Since(start), 3*time.Second-50*time.Millisecond,
+	elapsed := time.Since(start)
+	assert.GreaterOrEqual(t, elapsed, 3*time.Second-50*time.Millisecond,
 		"3 executions cannot arrive faster than 3 intervals")
+	// A rate that regressed to 2s would need ~6s for 3 executions; 5s tolerates
+	// two full seconds of scheduler jitter while still catching that.
+	assert.Less(t, elapsed, 5*time.Second,
+		"3 executions should arrive within 3 intervals plus jitter")
 
 	count := job.Count()
 	assert.LessOrEqual(t, count, int64(4), "Job should not execute more than 4 times (allowing timing buffer)")

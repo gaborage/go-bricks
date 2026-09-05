@@ -1369,21 +1369,21 @@ func TestMigrateNoopStillSucceeds(t *testing.T) {
 // sleeps past the caller's timeout, and then writes survivedMarker. The stub
 // itself also sleeps past the timeout before exiting.
 //
-// spawnedMarker is touched immediately after the background job is forked — so
-// its existence proves the grandchild was actually created. Without it, a stub
-// killed before it ever forked would leave survivedMarker absent for the wrong
-// reason and the caller's kill assertion would pass vacuously.
+// spawnedMarker is touched by the grandchild itself, immediately before its
+// sleep — so its existence proves the grandchild was actually running, and its
+// mtime is when that sleep began. Without it, a stub killed before it ever forked
+// would leave survivedMarker absent for the wrong reason and the caller's kill
+// assertion would pass vacuously.
 func createOrphanSpawningFlywayStub(t *testing.T, survivedMarker, spawnedMarker string, sleep time.Duration) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "flyway-orphan.sh")
 	secs := shellSeconds(sleep)
 	content := fmt.Sprintf(`#!/bin/sh
-( sleep %s; touch '%s' ) &
-touch '%s'
+( touch '%s'; sleep %s; touch '%s' ) &
 sleep %s
 exit 0
-`, secs, survivedMarker, spawnedMarker, secs)
+`, spawnedMarker, secs, survivedMarker, secs)
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o755))
 	return path
 }
