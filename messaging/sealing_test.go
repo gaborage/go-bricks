@@ -445,8 +445,8 @@ func TestSealResolvesTheTenantLikeTheStampingWrapper(t *testing.T) {
 			}
 			err := h.Publish(ctx, tc.client, sealedEvent{ID: "x"})
 			if tc.wantErr != nil {
-				require.ErrorIs(t, err, tc.wantErr)
 				assert.Empty(t, sealer.seen, "a refused tenant never reaches the sealer")
+				require.ErrorIs(t, err, tc.wantErr)
 				return
 			}
 			require.NoError(t, err)

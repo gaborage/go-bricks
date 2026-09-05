@@ -389,18 +389,18 @@ func TestMessagingManagerHashBasedIdempotency(t *testing.T) {
 
 		// First call - should create client and registry
 		err := manager.EnsureConsumers(ctx, tenantID, decls)
-		require.NoError(t, err)
 		assert.Equal(t, 1, clientCallCount, "First call should create client")
+		require.NoError(t, err)
 
 		// Second call with identical declarations - should be idempotent
 		err = manager.EnsureConsumers(ctx, tenantID, decls)
-		require.NoError(t, err)
 		assert.Equal(t, 1, clientCallCount, "Second call should reuse existing setup")
+		require.NoError(t, err)
 
 		// Third call - still idempotent
 		err = manager.EnsureConsumers(ctx, tenantID, decls)
-		require.NoError(t, err)
 		assert.Equal(t, 1, clientCallCount, "Third call should still be idempotent")
+		require.NoError(t, err)
 	})
 
 	t.Run("different declarations for same key - error", func(t *testing.T) {
@@ -496,18 +496,18 @@ func TestMessagingManagerHashBasedIdempotency(t *testing.T) {
 
 		// Setup for tenant1
 		err := manager.EnsureConsumers(ctx, tenant1ID, decls)
-		require.NoError(t, err)
 		assert.Equal(t, 1, clientCallCount)
+		require.NoError(t, err)
 
 		// Setup for tenant2 with same declarations - should create new client
 		err = manager.EnsureConsumers(ctx, tenant2ID, decls)
-		require.NoError(t, err)
 		assert.Equal(t, 2, clientCallCount, "Different keys should have independent setups")
+		require.NoError(t, err)
 
 		// Replay to tenant1 - should be idempotent
 		err = manager.EnsureConsumers(ctx, tenant1ID, decls)
-		require.NoError(t, err)
 		assert.Equal(t, 2, clientCallCount, "Replay to tenant1 should be idempotent")
+		require.NoError(t, err)
 	})
 
 	t.Run("hash recorded after successful setup", func(t *testing.T) {
@@ -798,9 +798,9 @@ func TestMessagingManagerPublisherAfterCloseReturnsError(t *testing.T) {
 
 	pub, release, err := m.Publisher(ctx, "a")
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrManagerClosed, "Publisher after Close must fail closed, not resurrect a publisher (F22)")
 	assert.Nil(t, pub)
 	assert.Nil(t, release)
+	require.ErrorIs(t, err, ErrManagerClosed, "Publisher after Close must fail closed, not resurrect a publisher (F22)")
 }
 
 // TestMessagingManagerPublisherMidCloseWindowFailsClosed pins the gap CodeRabbit flagged on PR
@@ -837,10 +837,10 @@ func TestMessagingManagerPublisherMidCloseWindowFailsClosed(t *testing.T) {
 	manager.closed.Store(true)
 
 	pub, rel, err := manager.Publisher(ctx, tenant1ID)
-	require.ErrorIs(t, err, ErrManagerClosed, "Publisher must fail closed once Close begins, even while the pool is still open")
 	assert.Nil(t, pub, "a manager mid-Close must not hand back the still-cached publisher")
 	assert.Nil(t, rel)
 	assert.Equal(t, created, manager.pubPool.Stats().TotalCreated, "the still-open pool must not create anything new during the close window")
+	require.ErrorIs(t, err, ErrManagerClosed, "Publisher must fail closed once Close begins, even while the pool is still open")
 }
 
 // TestMessagingManagerStatsSurfacesPoolErrors pins that a deferred-close failure — a publisher
@@ -889,9 +889,9 @@ func TestMessagingManagerZeroValueMethodsAreSafe(t *testing.T) {
 	assert.Equal(t, 0, stats["idle_cleanups"])
 
 	pub, release, err := m.Publisher(context.Background(), "any")
-	require.ErrorIs(t, err, ErrManagerClosed, "zero-value Publisher must fail closed, not panic")
 	assert.Nil(t, pub)
 	assert.Nil(t, release)
+	require.ErrorIs(t, err, ErrManagerClosed, "zero-value Publisher must fail closed, not panic")
 
 	assert.NotPanics(t, func() {
 		m.StartCleanup(time.Minute)
@@ -1380,8 +1380,8 @@ func TestMessagingManagerEnsureConsumersAfterCloseDoesNotDialNewKey(t *testing.T
 	snapshot := callCount()
 
 	err := manager.EnsureConsumers(ctx, tenant2ID, decls)
-	require.ErrorIs(t, err, ErrManagerClosed, "a new key must fail closed once the manager is closed")
 	assert.Equal(t, snapshot, callCount(), "a closed manager must not dial a new broker connection")
+	require.ErrorIs(t, err, ErrManagerClosed, "a new key must fail closed once the manager is closed")
 }
 
 // TestMessagingManagerEnsureConsumersInternalRechecksClosedUnderLock pins Step 1.4

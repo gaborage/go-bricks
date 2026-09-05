@@ -1887,8 +1887,8 @@ func TestPublishBytesReadyTimeoutExpires(t *testing.T) {
 	err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	elapsed := time.Since(start)
 
-	require.ErrorIs(t, err, ErrNotConnected)
 	assert.GreaterOrEqual(t, elapsed, 200*time.Millisecond)
+	require.ErrorIs(t, err, ErrNotConnected)
 }
 
 // TestPublishBytesReadyWaitDisabled proves readyTimeout<=0 is a complete
@@ -1908,8 +1908,8 @@ func TestPublishBytesReadyWaitDisabled(t *testing.T) {
 	err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	elapsed := time.Since(start)
 
-	require.ErrorIs(t, err, ErrNotConnected)
 	assert.Less(t, elapsed, 50*time.Millisecond)
+	require.ErrorIs(t, err, ErrNotConnected)
 }
 
 // TestPublishBytesReadyWaitRespectsContext proves a ctx deadline that
@@ -1931,8 +1931,8 @@ func TestPublishBytesReadyWaitRespectsContext(t *testing.T) {
 	err := c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	elapsed := time.Since(start)
 
-	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Less(t, elapsed, 200*time.Millisecond)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 // TestWithReadyTimeoutOption mirrors TestWithMaxPublishAttemptsOption: the

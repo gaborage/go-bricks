@@ -258,11 +258,11 @@ func TestRegistryDeclareInfrastructureSuccessSimple(t *testing.T) {
 	ctx := context.Background()
 	err := registry.DeclareInfrastructure(ctx)
 
-	require.NoError(t, err)
 	assert.True(t, registry.declared)
 	assert.Contains(t, client.declaredExchanges, testExchangeName)
 	assert.Contains(t, client.declaredQueues, testQueueName)
 	assert.Contains(t, client.bindings, "test-queue:test-exchange:test.key")
+	require.NoError(t, err)
 }
 
 // TestRegistryDeclareInfrastructurePassesArgs guards the replay path in
@@ -289,10 +289,10 @@ func TestRegistryDeclareInfrastructurePassesArgs(t *testing.T) {
 
 	err := registry.DeclareInfrastructure(t.Context())
 
-	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"alternate-exchange": "orders.alt"}, client.exchangeArgsFor("args.exchange"))
 	assert.Equal(t, map[string]any{"x-dead-letter-exchange": "orders.dlx"}, client.queueArgsFor("args.queue"))
 	assert.Equal(t, map[string]any{"x-match": "all"}, client.bindingArgsFor("args.queue:args.exchange:orders.*"))
+	require.NoError(t, err)
 }
 
 func TestRegistryDeclareInfrastructureClientNotReadyTimeoutSimple(t *testing.T) {
@@ -350,9 +350,9 @@ func TestRegistryStartConsumersSuccessSimple(t *testing.T) {
 
 	err := registry.StartConsumers(context.Background())
 
-	require.NoError(t, err)
 	assert.True(t, registry.consumersActive)
 	assert.NotNil(t, registry.cancelConsumers)
+	require.NoError(t, err)
 
 	// Clean up
 	registry.StopConsumers()
@@ -515,8 +515,8 @@ func TestRegistryDeclareInfrastructureAlreadyDeclaredSimple(t *testing.T) {
 
 	// First declaration
 	err := registry.DeclareInfrastructure(t.Context())
-	require.NoError(t, err)
 	assert.True(t, registry.declared)
+	require.NoError(t, err)
 
 	// Second declaration should be no-op
 	err = registry.DeclareInfrastructure(context.Background())
@@ -566,9 +566,9 @@ func TestRegistryStartConsumersNoHandlersSimple(t *testing.T) {
 
 	err := registry.StartConsumers(context.Background())
 
-	require.NoError(t, err)
 	assert.True(t, registry.consumersActive) // Should still be marked active
 	assert.NotNil(t, registry.cancelConsumers)
+	require.NoError(t, err)
 
 	// Clean up
 	registry.StopConsumers()
@@ -767,8 +767,8 @@ func TestRegistryDeclareInfrastructureClientBecomesReady(t *testing.T) {
 	// Should complete successfully after readiness signal
 	select {
 	case err := <-done:
-		require.NoError(t, err)
 		assert.True(t, registry.declared)
+		require.NoError(t, err)
 	case <-time.After(1 * time.Second):
 		t.Fatal("DeclareInfrastructure did not complete within timeout")
 	}
@@ -1672,8 +1672,8 @@ func TestRegistryStartConsumersWithMultipleConsumers(t *testing.T) {
 	})
 
 	err := registry.StartConsumers(context.Background())
-	require.NoError(t, err)
 	assert.True(t, registry.consumersActive)
+	require.NoError(t, err)
 
 	// Clean up
 	close(deliveries1)
@@ -1755,13 +1755,13 @@ func TestRegistryStartConsumersAlreadyStarted(t *testing.T) {
 
 	// Start consumers first time
 	err := registry.StartConsumers(context.Background())
-	require.NoError(t, err)
 	assert.True(t, registry.consumersActive)
+	require.NoError(t, err)
 
 	// Start consumers second time - should be no-op
 	err = registry.StartConsumers(context.Background())
-	require.NoError(t, err)
 	assert.True(t, registry.consumersActive)
+	require.NoError(t, err)
 
 	// Clean up
 	registry.StopConsumers()
@@ -1787,8 +1787,8 @@ func TestRegistryStartConsumersOnlyDocumentationConsumers(t *testing.T) {
 	})
 
 	err := registry.StartConsumers(context.Background())
-	require.NoError(t, err)
 	assert.True(t, registry.consumersActive)
+	require.NoError(t, err)
 
 	// Clean up
 	registry.StopConsumers()

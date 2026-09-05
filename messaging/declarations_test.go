@@ -637,12 +637,12 @@ func TestDeclarationsReplayToRegistry(t *testing.T) {
 
 		err := decls.ReplayToRegistry(mockReg)
 
-		require.NoError(t, err)
 		assert.Empty(t, mockReg.exchanges)
 		assert.Empty(t, mockReg.queues)
 		assert.Empty(t, mockReg.bindings)
 		assert.Empty(t, mockReg.publishers)
 		assert.Empty(t, mockReg.consumers)
+		require.NoError(t, err)
 	})
 }
 

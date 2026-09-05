@@ -310,8 +310,8 @@ func TestOpenerMapsEveryPublishedVector(t *testing.T) {
 			assert.Equal(t, tc.Slot, refused.Details["slot"])
 			assert.Equal(t, tc.Code == josesealed.CodeKidUnknownGeneration, refused.Recoverable)
 			var oe *josesealed.OpenError
-			require.ErrorAs(t, err, &oe, "the codec's error stays in the chain")
 			assert.Equal(t, before+1, failureCount(t, reader, tc.Code), "counted once under its code")
+			require.ErrorAs(t, err, &oe, "the codec's error stays in the chain")
 			for _, secret := range []string{"0f4b7c1e", vecTenant, "tenant-b", "payment.voided", "has:colon"} {
 				assert.NotContains(t, err.Error(), secret)
 			}
@@ -330,8 +330,8 @@ func TestOpenerRefusalCodeFallsBackToTheJoseCode(t *testing.T) {
 	var refused *sealruntime.OpenRefusedError
 	require.ErrorAs(t, err, &refused)
 	assert.Equal(t, josesealed.CodeNotSealed, refused.Code)
-	require.ErrorIs(t, err, josesealed.ErrNotSealed)
 	assert.False(t, refused.Recoverable)
+	require.ErrorIs(t, err, josesealed.ErrNotSealed)
 	var je *jose.Error
 	require.ErrorAs(t, err, &je)
 	assert.NotErrorIs(t, err, josesealed.ErrKidUnknownGeneration)

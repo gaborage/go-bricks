@@ -399,8 +399,8 @@ func TestPublisherPublishAfterCloseIsClosed(t *testing.T) {
 
 	err := p.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)})
 
-	require.ErrorIs(t, err, ErrPublisherClosed)
 	assert.Zero(t, handle.sentCount(), "a closed publisher never reaches the client")
+	require.ErrorIs(t, err, ErrPublisherClosed)
 }
 
 func TestPublisherPublishRejectsANilMessage(t *testing.T) {

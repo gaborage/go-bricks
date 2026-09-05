@@ -306,16 +306,16 @@ func TestSealedHandlerValidatesThePlaintext(t *testing.T) {
 	var pe *PayloadError
 	require.ErrorAs(t, err, &pe)
 	assert.Equal(t, PayloadStageValidate, pe.Stage)
-	require.ErrorIs(t, err, ErrPayloadInvalid)
 	assert.Equal(t, []string{"sealedEvt.Amount"}, pe.Fields())
+	require.ErrorIs(t, err, ErrPayloadInvalid)
 }
 
 func TestSealedHandlerNilDeliveryIsADecodeFailure(t *testing.T) {
 	opener := &fakeOpener{}
 	handler := declareSealed(t, opener, sealruntime.TenancyDisabled, false, func(context.Context, sealedEvt, Metadata) error { return nil })
 	err := handler.Handle(t.Context(), nil)
-	require.ErrorIs(t, err, ErrPayloadUndecodable)
 	assert.Empty(t, opener.rules, "the opener is never asked for a nil delivery")
+	require.ErrorIs(t, err, ErrPayloadUndecodable)
 }
 
 // TestSealedHandlerTenantRuleMatrix pins the tid expectation the door derives per
