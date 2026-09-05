@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.63.0](https://github.com/gaborage/go-bricks/compare/v0.62.0...v0.63.0) (2026-09-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **jose/sealed:** add SealDocument raw-document door ([#1415](https://github.com/gaborage/go-bricks/issues/1415))
+* **database:** add SetExpr, SubqueryColumn and Oracle FROM dual ([#1391](https://github.com/gaborage/go-bricks/issues/1391))
+* **database:** add ForUpdate and ForUpdateNoWait to the select builder ([#1390](https://github.com/gaborage/go-bricks/issues/1390))
+* **messaging:** remove the raw byte publish doors from the module surface ([#1388](https://github.com/gaborage/go-bricks/issues/1388))
+* **inbox:** validate header-sourced event ids before the ledger ([#1371](https://github.com/gaborage/go-bricks/issues/1371))
+
+### Added
+
+* **cmd:** add seal-event CLI for sealed AMQP events ([#1417](https://github.com/gaborage/go-bricks/issues/1417)) ([23fb233](https://github.com/gaborage/go-bricks/commit/23fb2335864b2a4611af6375bf9b4e93241a1399))
+* **database:** add ForUpdate and ForUpdateNoWait to the select builder ([#1390](https://github.com/gaborage/go-bricks/issues/1390)) ([e2663ea](https://github.com/gaborage/go-bricks/commit/e2663ea276decbe26881947df47289123db59bf0))
+* **database:** add SetExpr, SubqueryColumn and Oracle FROM dual ([#1391](https://github.com/gaborage/go-bricks/issues/1391)) ([00c5168](https://github.com/gaborage/go-bricks/commit/00c5168e94c2ba7a203ab5bdc39da728a22c737a))
+* **jose/sealed:** add SealDocument raw-document door ([#1415](https://github.com/gaborage/go-bricks/issues/1415)) ([b2ff342](https://github.com/gaborage/go-bricks/commit/b2ff3423cb66487cb13533f6ea462f334a8b89c4))
+* **jose:** add cryptoadapter extra-header seams and header peek ([#1369](https://github.com/gaborage/go-bricks/issues/1369)) ([22b29bc](https://github.com/gaborage/go-bricks/commit/22b29bcf9faa3894b19b55806e56096eab33cae0))
+* **jose:** add jose/sealed seal tag scanner and Seal ([#1370](https://github.com/gaborage/go-bricks/issues/1370)) ([4e5e3e2](https://github.com/gaborage/go-bricks/commit/4e5e3e2eafa73c1b719d93b8ef6357ae17d2d013))
+* **jose:** add sealed.Open with the ordered rule set and vectors ([#1374](https://github.com/gaborage/go-bricks/issues/1374)) ([3131ac6](https://github.com/gaborage/go-bricks/commit/3131ac6b20a26dc67435de51075bb2a847b6d4bb))
+* **keystore:** generation entry grammar and family enumeration ([#1368](https://github.com/gaborage/go-bricks/issues/1368)) ([e8c3494](https://github.com/gaborage/go-bricks/commit/e8c3494054ef649ebb4a634eb415e938c6f9dffa))
+* **keystore:** messaging.seal.active selector and ActiveGeneration ([#1372](https://github.com/gaborage/go-bricks/issues/1372)) ([4d62c00](https://github.com/gaborage/go-bricks/commit/4d62c0047b67b1c6ec19b9b56786c065b34242f0))
+* **keystore:** warn when one entry serves both HTTP jose and sealing ([#1382](https://github.com/gaborage/go-bricks/issues/1382)) ([6d449e2](https://github.com/gaborage/go-bricks/commit/6d449e22c1802d6c6b16120811250a04fa2ede1a))
+* **messaging:** add DeclareTypedPublisher and Publisher[T] handle ([#1367](https://github.com/gaborage/go-bricks/issues/1367)) ([a869cee](https://github.com/gaborage/go-bricks/commit/a869ceebc911b7c813bae6ab3cd5cb4aab3fb9be))
+* **messaging:** import-gated sealing adapter and the sealed typed publisher ([#1377](https://github.com/gaborage/go-bricks/issues/1377)) ([1423844](https://github.com/gaborage/go-bricks/commit/1423844a16bf3bec1ff39154dfb53cdd71eed3f3))
+* **messaging:** publish through the typed publisher handle ([#1376](https://github.com/gaborage/go-bricks/issues/1376)) ([45de896](https://github.com/gaborage/go-bricks/commit/45de8967ac1b57122d28b0840b55946979afe0ae))
+* **messaging:** sealed typed consumer, tid rules and PayloadStageOpen ([#1378](https://github.com/gaborage/go-bricks/issues/1378)) ([2c7309a](https://github.com/gaborage/go-bricks/commit/2c7309a4022429e48c8b6092eba9e60d0f30a080))
+* **messaging:** v1 lane guards refuse seal-tagged types on streams and outbox ([#1384](https://github.com/gaborage/go-bricks/issues/1384)) ([ba4bb90](https://github.com/gaborage/go-bricks/commit/ba4bb906a39d94878acf6264bea8aec6349db1e2))
+
+
+### Fixed
+
+* **deps:** update aws-sdk-go-v2 monorepo ([#1291](https://github.com/gaborage/go-bricks/issues/1291)) ([32a9920](https://github.com/gaborage/go-bricks/commit/32a992098da98654b5f4cf4e339b4297d696242c))
+* **deps:** update module github.com/alicebob/miniredis/v2 to v2.39.0 ([#1329](https://github.com/gaborage/go-bricks/issues/1329)) ([cc500e0](https://github.com/gaborage/go-bricks/commit/cc500e0347aafed6c0799918c3c4016429c884ff))
+* **deps:** update module github.com/go-jose/go-jose/v4 to v4.1.5 ([#1365](https://github.com/gaborage/go-bricks/issues/1365)) ([a354165](https://github.com/gaborage/go-bricks/commit/a354165a0bd483b0b15bf17bf769407fc14965c9))
+* **deps:** update module github.com/go-playground/validator/v10 to v10.30.4 ([#1366](https://github.com/gaborage/go-bricks/issues/1366)) ([4a3c442](https://github.com/gaborage/go-bricks/commit/4a3c442f5a0c9e6a55aa899eef9b422e30cf7189))
+* **inbox:** validate header-sourced event ids before the ledger ([#1371](https://github.com/gaborage/go-bricks/issues/1371)) ([726b41e](https://github.com/gaborage/go-bricks/commit/726b41ee99e3bbe5c3cb04bf5d298d3c88b05db2))
+* **logger:** quote console messages that carry control bytes ([#1373](https://github.com/gaborage/go-bricks/issues/1373)) ([d58e4a7](https://github.com/gaborage/go-bricks/commit/d58e4a7afb1511b2a65362df656359401adeb276))
+* **messaging:** remove the raw byte publish doors from the module surface ([#1388](https://github.com/gaborage/go-bricks/issues/1388)) ([99e60ba](https://github.com/gaborage/go-bricks/commit/99e60ba960bdcb4ee1926287cd3ce9483258d7fb))
+* **outbox:** persist the tenant stamp on shared-tenancy AMQP rows ([#1342](https://github.com/gaborage/go-bricks/issues/1342)) ([375886b](https://github.com/gaborage/go-bricks/commit/375886b4bd851f1f89400ad2e3d868979ea3e958))
+* **server:** escape request-derived values in IP pre-guard rejection log ([#1343](https://github.com/gaborage/go-bricks/issues/1343)) ([2ddc22b](https://github.com/gaborage/go-bricks/commit/2ddc22b1c20c92d511bf360847d9525b613f57a9))
+
+
+### Changed
+
+* **config:** single-source the cleanup-interval defaults ([#1385](https://github.com/gaborage/go-bricks/issues/1385)) ([a1ad5e6](https://github.com/gaborage/go-bricks/commit/a1ad5e6c021ccf97e54eb5bde5c5aa9dd9cef7de))
+* **inbox:** port the ledger and hold store DML to the query builder ([#1394](https://github.com/gaborage/go-bricks/issues/1394)) ([bd3893e](https://github.com/gaborage/go-bricks/commit/bd3893e677feb51b17d664dc812284a4b50e9261))
+* **keymaterial:** add producer-key loader and two-kid resolver ([#1410](https://github.com/gaborage/go-bricks/issues/1410)) ([daeedb0](https://github.com/gaborage/go-bricks/commit/daeedb0036a614e71a7ae9f51a7e1d919d3a6f4e))
+* **logger:** give the identity log fields one exported definition ([#1389](https://github.com/gaborage/go-bricks/issues/1389)) ([817a1c1](https://github.com/gaborage/go-bricks/commit/817a1c118a07d171e3f68c280817a5acd73ad175))
+* **outbox:** port the store DML to the query builder ([#1393](https://github.com/gaborage/go-bricks/issues/1393)) ([8562e72](https://github.com/gaborage/go-bricks/commit/8562e726b9b695acba2b19ba5c7fa2aee5b454bc))
+* **streamruntime:** name the single-method interface per S8196 ([#1407](https://github.com/gaborage/go-bricks/issues/1407)) ([8bebd27](https://github.com/gaborage/go-bricks/commit/8bebd2789ce12dba05c2c70fbbbbaf152d8e0f46))
+
 ## [0.62.0](https://github.com/gaborage/go-bricks/compare/v0.61.0...v0.62.0) (2026-09-02)
 
 
