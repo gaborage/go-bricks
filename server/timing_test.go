@@ -11,6 +11,7 @@ import (
 
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/internal/testutil"
 )
@@ -64,16 +65,16 @@ func TestTiming(t *testing.T) {
 
 				// Parse the duration from header
 				headerDuration, err := time.ParseDuration(responseTimeHeader)
-				assert.NoError(t, err, "X-Response-Time should be a valid duration")
+				require.NoError(t, err, "X-Response-Time should be a valid duration")
 
 				// The header duration should be reasonable (within actual request time)
-				assert.True(t, headerDuration <= actualDuration,
+				assert.LessOrEqual(t, headerDuration, actualDuration,
 					"Header duration (%v) should not exceed actual duration (%v)",
 					headerDuration, actualDuration)
 
 				// For slow handlers, verify the timing is approximately correct
 				if tt.handlerDelay >= 50*time.Millisecond {
-					assert.True(t, headerDuration >= tt.handlerDelay-10*time.Millisecond,
+					assert.GreaterOrEqual(t, headerDuration, tt.handlerDelay-10*time.Millisecond,
 						"Header duration (%v) should be close to handler delay (%v)",
 						headerDuration, tt.handlerDelay)
 				}
@@ -108,8 +109,8 @@ func TestTimingErrorHandler(t *testing.T) {
 
 	// Parse and verify duration
 	headerDuration, err := time.ParseDuration(responseTimeHeader)
-	assert.NoError(t, err, "X-Response-Time should be a valid duration")
-	assert.True(t, headerDuration >= 40*time.Millisecond,
+	require.NoError(t, err, "X-Response-Time should be a valid duration")
+	assert.GreaterOrEqual(t, headerDuration, 40*time.Millisecond,
 		"Duration should reflect the actual processing time including the sleep")
 
 	// Verify error response
@@ -152,8 +153,8 @@ func TestTimingPanicHandler(t *testing.T) {
 
 	// Parse duration
 	headerDuration, err := time.ParseDuration(responseTimeHeader)
-	assert.NoError(t, err, "X-Response-Time should be a valid duration")
-	assert.True(t, headerDuration >= 20*time.Millisecond,
+	require.NoError(t, err, "X-Response-Time should be a valid duration")
+	assert.GreaterOrEqual(t, headerDuration, 20*time.Millisecond,
 		"Duration should reflect processing time before panic")
 }
 
@@ -209,11 +210,11 @@ func TestTimingConcurrentRequests(t *testing.T) {
 		expectedDuration := time.Duration(res.delay) * time.Millisecond
 		tolerance := 20 * time.Millisecond
 
-		assert.True(t, res.duration >= expectedDuration-tolerance,
+		assert.GreaterOrEqual(t, res.duration, expectedDuration-tolerance,
 			"Duration (%v) should be at least expected delay (%v) minus tolerance",
 			res.duration, expectedDuration)
 
-		assert.True(t, res.duration <= expectedDuration+tolerance+50*time.Millisecond,
+		assert.LessOrEqual(t, res.duration, expectedDuration+tolerance+50*time.Millisecond,
 			"Duration (%v) should not exceed expected delay (%v) plus reasonable overhead",
 			res.duration, expectedDuration)
 	}
@@ -237,7 +238,7 @@ func TestTimingHeaderFormat(t *testing.T) {
 
 	// Verify the header format is a valid Go duration string
 	_, err := time.ParseDuration(responseTimeHeader)
-	assert.NoError(t, err, "X-Response-Time should be in valid Go duration format")
+	require.NoError(t, err, "X-Response-Time should be in valid Go duration format")
 
 	// Verify it contains common duration suffixes
 	validSuffixes := []string{"ns", "µs", "ms", "s"}
@@ -290,9 +291,9 @@ func TestTimingWithOtherMiddleware(t *testing.T) {
 
 	// Verify timing includes all middleware processing
 	duration, err := time.ParseDuration(responseTimeHeader)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Should be at least 40ms (25ms middleware + 25ms handler) minus some tolerance
-	assert.True(t, duration >= 35*time.Millisecond,
+	assert.GreaterOrEqual(t, duration, 35*time.Millisecond,
 		"Duration (%v) should include all middleware and handler processing time", duration)
 }

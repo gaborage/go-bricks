@@ -92,6 +92,9 @@ func TestRequestEnrichShortCircuitsOnCancelledContext(t *testing.T) {
 
 	err := handler(c)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, context.Canceled)
+	// Whether the next handler ran is an independent property of this case, so it
+	// is asserted before the error: require aborts, and the "did the middleware
+	// short-circuit" signal is the one a reader needs when the error regresses.
 	assert.False(t, nextCalled, "next handler must not run for an already-canceled context")
+	require.ErrorIs(t, err, context.Canceled)
 }

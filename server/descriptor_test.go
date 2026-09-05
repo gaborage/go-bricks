@@ -104,7 +104,7 @@ func TestRouteRegistryOperations(t *testing.T) {
 
 	// Test clearing
 	registry.Clear()
-	assert.Len(t, registry.Routes(), 0)
+	assert.Empty(t, registry.Routes())
 }
 
 func TestBackwardCompatibility(t *testing.T) {

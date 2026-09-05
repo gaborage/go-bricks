@@ -386,7 +386,7 @@ func TestTraceContextConcurrentRequests(t *testing.T) {
 	}
 
 	// All trace IDs should be unique
-	assert.Equal(t, 10, len(receivedTraceIDs),
+	assert.Len(t, receivedTraceIDs, 10,
 		"All requests should have unique trace IDs")
 }
 

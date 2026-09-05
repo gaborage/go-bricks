@@ -991,7 +991,7 @@ func TestExtractTenantIDAbsent(t *testing.T) {
 
 	tenantID := extractTenantID(ctx)
 
-	assert.Equal(t, "", tenantID, "Should return empty string when no tenant")
+	assert.Empty(t, tenantID, "Should return empty string when no tenant")
 }
 
 // TestNewRequestLogger verifies constructor creates valid instance.
@@ -1419,8 +1419,8 @@ func TestExtractRequestMetadataMissingBothRequestAndResponseHeaders(t *testing.T
 
 	assert.Equal(t, "GET", metadata.Method)
 	assert.Equal(t, "/api/no-headers", metadata.URI)
-	assert.Equal(t, "", metadata.RequestID, "Should return empty string when headers missing everywhere")
-	assert.Equal(t, "", metadata.Traceparent, "Should return empty string when headers missing everywhere")
+	assert.Empty(t, metadata.RequestID, "Should return empty string when headers missing everywhere")
+	assert.Empty(t, metadata.Traceparent, "Should return empty string when headers missing everywhere")
 }
 
 // TestExtractRequestMetadataDropsAnInvalidTraceparent pins the access-log door of

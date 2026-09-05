@@ -125,8 +125,8 @@ func TestRouteGroupFullPathAndRelative(t *testing.T) {
 	assert.Equal(t, "/api", rg.FullPath(""))
 	assert.Equal(t, childRoute, (&routeGroup{}).FullPath(childRoute))
 
-	assert.Equal(t, "", rg.relativePath("/"))
-	assert.Equal(t, "", rg.relativePath("/api"))
+	assert.Empty(t, rg.relativePath("/"))
+	assert.Empty(t, rg.relativePath("/api"))
 	assert.Equal(t, childRoute, rg.relativePath("/api/child"))
 	assert.Equal(t, childRoute, rg.relativePath("child"))
 	assert.Equal(t, "/apples", rg.relativePath("/apples"))

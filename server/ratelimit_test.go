@@ -128,7 +128,7 @@ func TestRateLimitDifferentIPs(t *testing.T) {
 
 			// Each IP should get some allowed requests (at least burst)
 			assert.GreaterOrEqual(t, allowedCount, 4, "Each IP should get at least burst capacity")
-			assert.Greater(t, blockedCount, 0, "Some requests should be blocked")
+			assert.Positive(t, blockedCount, "Some requests should be blocked")
 		})
 	}
 }
@@ -247,8 +247,8 @@ func TestRateLimitIPExtraction(t *testing.T) {
 			}
 
 			// Should have some allowed and some blocked requests
-			assert.Greater(t, allowedCount, 0, "Should have some allowed requests")
-			assert.Greater(t, blockedCount, 0, "Should have some blocked requests")
+			assert.Positive(t, allowedCount, "Should have some allowed requests")
+			assert.Positive(t, blockedCount, "Should have some blocked requests")
 
 			// The bucket identity itself — the assertion that fails if the
 			// engine stops deriving the client IP through trusted proxies.
