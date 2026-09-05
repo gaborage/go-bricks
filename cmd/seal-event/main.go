@@ -52,6 +52,7 @@ type cliConfig struct {
 	payloadPath     string // positional arg; "" or "-" means read stdin
 }
 
+// main exits with run's status so the shell sees 0 / 1 / 2.
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }

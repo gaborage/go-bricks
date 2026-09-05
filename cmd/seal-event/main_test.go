@@ -61,6 +61,7 @@ func runCLI(args []string, stdin []byte) (stdout, stderr string, code int) {
 	return outBuf.String(), errBuf.String(), code
 }
 
+// derPKCS8Private renders a private key in the PKCS#8 DER form the -sign-key flags take.
 func derPKCS8Private(t *testing.T, priv *rsa.PrivateKey) []byte {
 	t.Helper()
 	der, err := x509.MarshalPKCS8PrivateKey(priv)
@@ -68,6 +69,7 @@ func derPKCS8Private(t *testing.T, priv *rsa.PrivateKey) []byte {
 	return der
 }
 
+// derPKIXPublic renders a public key in the PKIX DER form the -encrypt-key flags take.
 func derPKIXPublic(t *testing.T, pub *rsa.PublicKey) []byte {
 	t.Helper()
 	der, err := x509.MarshalPKIXPublicKey(pub)
@@ -75,6 +77,7 @@ func derPKIXPublic(t *testing.T, pub *rsa.PublicKey) []byte {
 	return der
 }
 
+// writeFile drops data into dir under name and returns the path, for the file-source flags.
 func writeFile(t *testing.T, dir, name string, data []byte) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -114,6 +117,7 @@ type keyPairs struct {
 	encPriv  *rsa.PrivateKey
 }
 
+// newCLIFixture gives one subtest the shared keys plus its own temp dir and key files.
 func newCLIFixture(t *testing.T) *cliFixture {
 	t.Helper()
 	keys := sharedKeys()
