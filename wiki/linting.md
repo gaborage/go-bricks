@@ -59,6 +59,8 @@ Pick the order that moves you *toward* your existing convention, not away from i
 Every entry under `linters.exclusions.rules` is a GoBricks path and means nothing in your
 repo — `logger/adapter.go` (zerologlint), `cmd/seal-payload/` (an importas carve-out), and
 a few rules scoped to `_test.go`. Delete them all and add your own as findings justify.
+Drop the `forbidigo` settings block too: its patterns enforce a GoBricks architecture
+decision (ADR-083) and mean nothing outside this repo.
 
 Recheck your own exclusions periodically: an exclusion that matches on message `text` stops
 matching when the linter rewords the message, and it fails **silently** in either
