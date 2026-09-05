@@ -62,6 +62,11 @@ a few rules scoped to `_test.go`. Delete them all and add your own as findings j
 Drop the `forbidigo` settings block too: its patterns enforce a GoBricks architecture
 decision (ADR-083) and mean nothing outside this repo.
 
+The `testifylint` block is the opposite case — copy it as-is. Nothing in it is
+GoBricks-specific: it enforces testify usage that any repo using testify wants, and its
+`disable:` list is a ratchet over this repo's remaining findings (#1092), so in a repo
+with none you can drop the list and keep `enable-all: true`.
+
 Recheck your own exclusions periodically: an exclusion that matches on message `text` stops
 matching when the linter rewords the message, and it fails **silently** in either
 direction. GoBricks carried two `text: "var-naming: avoid package names"` stanzas that were
