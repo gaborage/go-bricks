@@ -356,6 +356,18 @@ func TestFeature(t *testing.T) {
 }
 ```
 
+### Reaper lifetime across packages
+
+Every integration binary in one `go test ./...` invocation shares a single Ryuk reaper: CI pins `TESTCONTAINERS_SESSION_ID` to the run id (PR #943), and locally testcontainers derives the same id from the parent `go test` process.
+
+Ryuk exits 10s after its last client disconnects, packages run alphabetically, and the `internal/*` packages between the database/inbox group and `messaging` take about that long — so `messaging` can look up a reaper that is already exiting.
+
+testcontainers-go v0.44.0 then hangs until the 60s deadline (`wait for reaper <id>: context deadline exceeded`), or gets a handshake EOF and loses its freshly created container to Ryuk's exit prune (`Reaper handshake failed: read ack: EOF`, then `RWLayer of container <id> is unexpectedly nil`).
+
+`TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT=2m` (the `framework-integration-test` env in `.github/workflows/ci-v2.yml`, and an exported variable in the `Makefile`) keeps the reaper alive across any inter-package gap; it only takes effect in the process that *creates* the reaper, so it must be set before the first integration binary starts, never from inside a package.
+
+Recognising a recurrence: grep the job log for `wait for reaper`, `Reaper handshake failed: read ack: EOF`, or `is unexpectedly nil` — all three are this race, not a broken container image.
+
 ### Oracle: shared container + per-test schema (ADR-020)
 
 The `database/oracle` integration suite provisions exactly one Oracle container per test-binary execution (via package-level `TestMain`) and isolates each test in its own randomly-named schema. This avoids the ~18.5s per-test cold-start that previously pushed the package against the 10-minute Go test timeout.
