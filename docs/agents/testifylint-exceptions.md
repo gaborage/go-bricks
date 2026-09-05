@@ -58,8 +58,15 @@ bodies rather than here (this file postdates them) — pull those rows in before
 ## deferred sets, triaged (#1092 / W3-FINAL-a)
 
 The five files earlier recorded as "Deferred, not excepted" carried 53 live findings between
-them. FINAL-a triaged all 53 against a fresh whole-repo measurement: 48 are converted and the 5
-below stay `assert`. Nothing is deferred any more.
+them. FINAL-a triaged all 53 against a fresh whole-repo measurement: 48 are converted and 5 stay
+`assert`. Nothing is deferred.
+
+The table below has SIX rows for those five sites. `app/managers_test.go:802` is the extra: it is
+not one of the 53 but a finding the conversion itself CREATED — hoisting the independent unwrap
+check above the two message clauses put an error assertion in front of other assertions, which is
+exactly what `require-error` reports. Converting under one checker can raise a finding under
+another (the same hoist's sibling raised a `formatter` finding in `server/middleware_test.go`), so
+the measurement has to be re-run after each conversion pass rather than once at the end.
 
 Three techniques removed exceptions that a first pass had written down, and are worth reusing:
 an error assertion placed LAST in its block draws no `require-error` finding at all, so extracting
@@ -71,7 +78,7 @@ avoided for a reason, check whether the reason still holds — the `strings.Cont
 but the payload is a synthetic constant declared in that same file and the neighbouring
 `server/panic_guard_test.go` already spells the same absence with `NotContains`.
 
-No `config` site is excepted for `float-compare` any more. Where exact equality genuinely IS the
+No `config` site is excepted for `float-compare`. Where exact equality genuinely IS the
 contract — a default passed straight back, a `ParseFloat` round-trip, an env-var value that must
 arrive intact — `assert.InDelta(t, want, got, 0)` states that with no permanent directive to
 maintain, so it is the fix rather than a `//nolint`; where the expected value is zero,
