@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/Masterminds/squirrel"
@@ -711,7 +710,16 @@ func (qb *QueryBuilder) quoteColumnsForDML(columns ...string) []string {
 // The check matters most on PostgreSQL, where the renderer returns the column
 // verbatim, so an unvalidated argument was interpolated as written.
 func (qb *QueryBuilder) quoteColumnForQuery(column string) (string, error) {
-	trimmed, err := validateIdentifier("column", column)
+	return qb.quoteColumnWithContext("column", column)
+}
+
+// quoteColumnWithContext is quoteColumnForQuery with the error context named by
+// the caller, for the doors whose diagnostics say something more specific than
+// "column" (InsertQueryBuilder.SetMap's "SetMap column"). It exists so those
+// doors reuse the funnel rather than re-spelling validate-then-render, which is
+// the pair that must not drift.
+func (qb *QueryBuilder) quoteColumnWithContext(context, column string) (string, error) {
+	trimmed, err := validateIdentifier(context, column)
 	if err != nil {
 		return "", err
 	}
@@ -1381,35 +1389,24 @@ func (uqb *UpdateQueryBuilder) SetExpr(column string, expr dbtypes.RawExpression
 // user input. Each is validated against a safe identifier grammar on ALL vendors
 // BEFORE interpolation; anything else surfaces as a ToSQL() error. See ADR-031.
 func (uqb *UpdateQueryBuilder) SetMap(clauses map[string]any) dbtypes.UpdateQueryBuilder {
-	// Sorted so that WHICH invalid column is reported is deterministic when several
-	// are invalid, as InsertQueryBuilder.SetMap already does.
-	keys := sortedKeys(clauses)
-	quotedKeys := make([]string, len(keys))
-	for i, k := range keys {
-		// Validated by the column funnel, as every other column door is.
-		quoted, quoteErr := uqb.qb.quoteColumnForQuery(k)
-		if quoteErr != nil {
-			uqb.failClause(quoteErr)
-			return uqb
-		}
-		quotedKeys[i] = quoted
+	// One helper orders and quotes for both SetMap doors, so a map cannot render
+	// its columns one way here and another way in INSERT (#1185). "column" is
+	// this door's own error context, unchanged.
+	keys, quotedKeys, err := uqb.qb.quotedColumnsInNameOrder("column", clauses)
+	if err != nil {
+		uqb.failClause(err)
+		return uqb
 	}
 	values, err := valueCells(valuesByKeyOrder(clauses, keys), keyLabel(keys))
 	if err != nil {
 		uqb.failClause(err)
 		return uqb
 	}
-	// Applied one Set per key, in rendered order — the order squirrel's SetMap
-	// would emit (#1185) — rather than through a map keyed by the rendering: two
-	// keys that differ only in padding render alike, and a map would keep one
+	// Applied one Set per key rather than through a map keyed by the rendering:
+	// two keys that differ only in padding render alike, and a map would keep one
 	// assignment and drop the other silently. Both reach SQL, as in
 	// InsertQueryBuilder.SetMap, so the database reports the duplicate.
-	order := make([]int, len(keys))
-	for i := range order {
-		order[i] = i
-	}
-	sort.SliceStable(order, func(a, b int) bool { return quotedKeys[order[a]] < quotedKeys[order[b]] })
-	for _, i := range order {
+	for i := range keys {
 		uqb.updateBuilder = uqb.updateBuilder.Set(quotedKeys[i], values[i])
 	}
 	return uqb
@@ -1582,27 +1579,23 @@ func (iqb *InsertQueryBuilder) SetMap(clauses map[string]any) dbtypes.InsertQuer
 	// Mirrors UpdateQueryBuilder.SetMap, which has validated its keys since
 	// ADR-031. That the two disagreed is the defect ADR-082 names: one shape, two
 	// builders, opposite safety, nothing in either signature to tell them apart.
-	// sortedKeys keeps the reported column deterministic when several are invalid.
-	keys := sortedKeys(clauses)
-	normalized, err := validateIdentifiers("SetMap column", keys)
+	// The shared helper is what keeps them from disagreeing on ORDER too (#1185);
+	// "SetMap column" is this door's own error context, unchanged.
+	keys, quoted, err := iqb.qb.quotedColumnsInNameOrder("SetMap column", clauses)
 	if err != nil {
 		iqb.failClause(err)
 		return iqb
 	}
-	// Not squirrel's SetMap: it sorts the keys it is handed, so quoting first
-	// would order Oracle's columns by the leading quote ("level" ahead of id)
-	// rather than by name. Sorting the caller's names first and quoting in that
-	// order keeps the column order both vendors emit today. The columns are the
-	// NORMALIZED names; values follow the caller's own keys, so two keys that
-	// differ only in padding stay two columns and the database reports the
-	// duplicate rather than one value being silently dropped.
+	// Values follow the caller's own keys, so two keys that differ only in padding
+	// stay two columns and the database reports the duplicate rather than one
+	// value being silently dropped.
 	values, err := valueCells(valuesByKeyOrder(clauses, keys), keyLabel(keys))
 	if err != nil {
 		iqb.failClause(err)
 		return iqb
 	}
 	iqb.insertBuilder = iqb.insertBuilder.
-		Columns(iqb.qb.quoteColumnsForDML(normalized...)...).
+		Columns(quoted...).
 		Values(values...)
 	return iqb
 }

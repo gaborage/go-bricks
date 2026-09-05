@@ -817,3 +817,98 @@ func TestBuildUpsertMatchesQuotedAndUnquotedKeysOnPostgreSQL(t *testing.T) {
 		require.Contains(t, sql, `ON CONFLICT ("ID", "id")`)
 	})
 }
+
+// TestQuotedColumnsInNameOrderSortsBeforeQuoting pins the ordering rule the two
+// SetMap doors share: the caller's names decide the order, and the vendor
+// spelling is applied afterwards. Oracle is the vendor that can tell the two
+// apart, because only there does a reserved word gain a leading quote.
+func TestQuotedColumnsInNameOrderSortsBeforeQuoting(t *testing.T) {
+	tests := []struct {
+		name       string
+		vendor     string
+		wantQuoted []string
+	}{
+		{
+			name:       "oracle_quotes_after_sorting",
+			vendor:     dbtypes.Oracle,
+			wantQuoted: []string{"id", `"level"`, `"size"`},
+		},
+		{
+			name:       "postgresql_renders_bare_names",
+			vendor:     dbtypes.PostgreSQL,
+			wantQuoted: []string{"id", "level", "size"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := NewQueryBuilder(tt.vendor)
+
+			keys, quoted, err := qb.quotedColumnsInNameOrder("column", map[string]any{
+				"level": 3,
+				"id":    1,
+				"size":  2,
+			})
+
+			require.NoError(t, err)
+			require.Equal(t, []string{"id", "level", "size"}, keys,
+				"keys are the caller's own spelling, in name order")
+			require.Equal(t, tt.wantQuoted, quoted)
+		})
+	}
+}
+
+// TestQuotedColumnsInNameOrderNormalizesBeforeRendering pins that the RENDERED
+// half is the normalized spelling while the returned keys stay the caller's, so
+// two keys differing only in padding still reach SQL as two cells and the
+// database — not the builder — reports the duplicate.
+func TestQuotedColumnsInNameOrderNormalizesBeforeRendering(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+	keys, quoted, err := qb.quotedColumnsInNameOrder("column", map[string]any{
+		paddedNameKey: 1,
+		"name":        2,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []string{paddedNameKey, "name"}, keys)
+	require.Equal(t, []string{"name", "name"}, quoted)
+}
+
+// TestQuotedColumnsInNameOrderReportsTheCallersLabel pins that the helper never
+// invents an error context: each door keeps the wording it had before the two
+// were merged, so no consumer matching on the text sees it change.
+func TestQuotedColumnsInNameOrderReportsTheCallersLabel(t *testing.T) {
+	for _, label := range []string{"column", "SetMap column"} {
+		t.Run(label, func(t *testing.T) {
+			qb := NewQueryBuilder(dbtypes.Oracle)
+
+			_, _, err := qb.quotedColumnsInNameOrder(label, map[string]any{"a;b": 1})
+
+			require.Error(t, err)
+			require.Contains(t, err.Error(), label)
+		})
+	}
+}
+
+// TestQuotedColumnsInNameOrderReportsTheFirstInvalidKey pins the diagnostic the
+// name sort buys: with several invalid keys, the alphabetically first one is
+// reported on every run, never a map-iteration accident.
+func TestQuotedColumnsInNameOrderReportsTheFirstInvalidKey(t *testing.T) {
+	clauses := map[string]any{
+		"aaa;drop": 1,
+		"mmm;drop": 2,
+		"zzz;drop": 3,
+	}
+
+	for range 20 {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		keys, quoted, err := qb.quotedColumnsInNameOrder("column", clauses)
+
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "aaa;drop")
+		require.Nil(t, keys)
+		require.Nil(t, quoted)
+	}
+}
