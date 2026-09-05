@@ -441,7 +441,7 @@ func TestInvalidData(t *testing.T) {
 		invalidData := []byte{0xFF, 0xFF, 0xFF}
 
 		_, err := Unmarshal[SimpleStruct](invalidData)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "cbor unmarshal failed")
 	})
 
@@ -462,7 +462,7 @@ func TestMarshalError(t *testing.T) {
 
 	data, err := Marshal(UnsupportedStruct{Ch: make(chan int)})
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cbor marshal failed")
 	assert.Nil(t, data)
 }

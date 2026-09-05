@@ -144,7 +144,7 @@ func TestNewCacheManager(t *testing.T) {
 
 	t.Run("NilConnector", func(t *testing.T) {
 		mgr, err := cache.NewCacheManager(cache.DefaultManagerConfig(), nil)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Nil(t, mgr)
 		assert.Contains(t, err.Error(), "connector function is required")
 	})
@@ -158,7 +158,7 @@ func TestNewCacheManager(t *testing.T) {
 		config.MaxSize = -1
 
 		mgr, err := cache.NewCacheManager(config, connector)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Nil(t, mgr)
 		assert.Contains(t, err.Error(), "maxsize cannot be negative")
 	})
@@ -172,7 +172,7 @@ func TestNewCacheManager(t *testing.T) {
 		config.IdleTTL = -1 * time.Second
 
 		mgr, err := cache.NewCacheManager(config, connector)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Nil(t, mgr)
 		assert.Contains(t, err.Error(), "idlettl cannot be negative")
 	})
@@ -307,7 +307,7 @@ func TestCacheManagerGet(t *testing.T) {
 
 		ctx := context.Background()
 		c, _, err := mgr.Get(ctx, tenantOne)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Nil(t, c)
 		assert.Contains(t, err.Error(), "failed to create cache")
 		assert.Contains(t, err.Error(), "connection failed")
@@ -649,7 +649,7 @@ func TestCacheManagerRemoveWithCloseError(t *testing.T) {
 
 	// Remove cache (Close() will fail)
 	err = mgr.Remove(tenantOne)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), closeFailedMsg)
 
 	// CRITICAL: Entry should still be removed from bookkeeping
@@ -1247,9 +1247,9 @@ func TestCacheManagerCreateRacingCloseDoesNotResurrect(t *testing.T) {
 	require.NoError(t, err)
 
 	_, _, gErr := mgr.Get(context.Background(), tenantOne)
-	assert.ErrorIs(t, gErr, cache.ErrManagerClosed, "Get must report closed, not resurrect the map")
 	assert.True(t, instanceClosed.Load(), "the just-created instance must be closed, not leaked")
 	assert.Equal(t, 0, mgr.Stats().ActiveCaches, "the map must not be resurrected with a new entry")
+	require.ErrorIs(t, gErr, cache.ErrManagerClosed, "Get must report closed, not resurrect the map")
 }
 
 // TestCacheManagerZeroValueMethodsAreSafe pins that a zero-value CacheManager (never built via
@@ -1259,11 +1259,11 @@ func TestCacheManagerZeroValueMethodsAreSafe(t *testing.T) {
 	m := &cache.CacheManager{}
 
 	inst, release, getErr := m.Get(context.Background(), tenantOne)
-	assert.ErrorIs(t, getErr, cache.ErrManagerClosed, "zero-value Get must fail closed, not panic")
 	assert.Nil(t, inst)
 	assert.Nil(t, release)
+	require.ErrorIs(t, getErr, cache.ErrManagerClosed, "zero-value Get must fail closed, not panic")
 
-	assert.ErrorIs(t, m.Remove(tenantOne), cache.ErrManagerClosed, "zero-value Remove must fail closed, not panic")
+	require.ErrorIs(t, m.Remove(tenantOne), cache.ErrManagerClosed, "zero-value Remove must fail closed, not panic")
 
 	assert.Equal(t, cache.ManagerStats{}, m.Stats(), "zero-value Stats must report empty stats, not panic")
 

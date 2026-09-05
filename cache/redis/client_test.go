@@ -64,11 +64,11 @@ func TestNewClient(t *testing.T) {
 		}
 
 		client, err := NewClient(cfg)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Nil(t, client)
 
 		var configErr *cache.ConfigError
-		assert.True(t, errors.As(err, &configErr))
+		assert.ErrorAs(t, err, &configErr)
 	})
 
 	t.Run("ConnectionFailed", func(t *testing.T) {
@@ -80,7 +80,7 @@ func TestNewClient(t *testing.T) {
 		}
 
 		client, err := NewClient(cfg)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Nil(t, client)
 	})
 }
@@ -106,9 +106,9 @@ func TestClientGet(t *testing.T) {
 
 		ctx := context.Background()
 		result, err := client.Get(ctx, "nonexistent")
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Nil(t, result)
-		assert.True(t, errors.Is(err, cache.ErrNotFound))
+		assert.ErrorIs(t, err, cache.ErrNotFound)
 	})
 
 	t.Run("Closed", func(t *testing.T) {
@@ -118,9 +118,9 @@ func TestClientGet(t *testing.T) {
 
 		ctx := context.Background()
 		result, err := client.Get(ctx, testKey1)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Nil(t, result)
-		assert.True(t, errors.Is(err, cache.ErrClosed))
+		assert.ErrorIs(t, err, cache.ErrClosed)
 	})
 }
 
@@ -159,8 +159,8 @@ func TestClientSet(t *testing.T) {
 
 		ctx := context.Background()
 		err := client.Set(ctx, testKey1, []byte("value"), -1*time.Second)
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, cache.ErrInvalidTTL))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, cache.ErrInvalidTTL)
 	})
 
 	t.Run("Closed", func(t *testing.T) {
@@ -170,8 +170,8 @@ func TestClientSet(t *testing.T) {
 
 		ctx := context.Background()
 		err := client.Set(ctx, testKey1, []byte("value"), 5*time.Minute)
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, cache.ErrClosed))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, cache.ErrClosed)
 	})
 }
 
@@ -208,8 +208,8 @@ func TestClientDelete(t *testing.T) {
 
 		ctx := context.Background()
 		err := client.Delete(ctx, testKey1)
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, cache.ErrClosed))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, cache.ErrClosed)
 	})
 }
 
@@ -258,7 +258,7 @@ func TestClientGetOrSet(t *testing.T) {
 		ctx := context.Background()
 		// TTL=0 means no expiration (should succeed)
 		value, wasSet, err := client.GetOrSet(ctx, testKey1, []byte("value"), 0)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.True(t, wasSet)
 		assert.Equal(t, []byte("value"), value)
 	})
@@ -270,10 +270,10 @@ func TestClientGetOrSet(t *testing.T) {
 
 		ctx := context.Background()
 		value, wasSet, err := client.GetOrSet(ctx, testKey1, []byte("value"), 5*time.Minute)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.False(t, wasSet)
 		assert.Nil(t, value)
-		assert.True(t, errors.Is(err, cache.ErrClosed))
+		assert.ErrorIs(t, err, cache.ErrClosed)
 	})
 }
 
@@ -354,7 +354,7 @@ func TestClientCompareAndSet(t *testing.T) {
 		ctx := context.Background()
 		// TTL=0 means no expiration (should succeed)
 		success, err := client.CompareAndSet(ctx, testKey1, nil, []byte("value"), 0)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.True(t, success)
 	})
 
@@ -365,9 +365,9 @@ func TestClientCompareAndSet(t *testing.T) {
 
 		ctx := context.Background()
 		success, err := client.CompareAndSet(ctx, testKey1, nil, []byte("value"), 5*time.Minute)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.False(t, success)
-		assert.True(t, errors.Is(err, cache.ErrClosed))
+		assert.ErrorIs(t, err, cache.ErrClosed)
 	})
 }
 
@@ -390,8 +390,8 @@ func TestClientHealth(t *testing.T) {
 
 		ctx := context.Background()
 		err := client.Health(ctx)
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, cache.ErrClosed))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, cache.ErrClosed)
 	})
 }
 
@@ -422,9 +422,9 @@ func TestClientStats(t *testing.T) {
 		client.Close()
 
 		stats, err := client.Stats()
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Nil(t, stats)
-		assert.True(t, errors.Is(err, cache.ErrClosed))
+		assert.ErrorIs(t, err, cache.ErrClosed)
 	})
 }
 
@@ -435,14 +435,14 @@ func TestClientClose(t *testing.T) {
 		_ = mr // miniredis instance not needed for this test
 
 		err := client.Close()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.True(t, client.closed.Load())
 
 		// Verify operations fail after close
 		ctx := context.Background()
 		_, err = client.Get(ctx, testKey1)
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, cache.ErrClosed))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, cache.ErrClosed)
 	})
 
 	t.Run("AlreadyClosed", func(t *testing.T) {
@@ -451,8 +451,8 @@ func TestClientClose(t *testing.T) {
 		client.Close()
 
 		err := client.Close()
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, cache.ErrClosed))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, cache.ErrClosed)
 	})
 }
 
@@ -477,7 +477,7 @@ func TestConfigValidate(t *testing.T) {
 		}
 
 		err := cfg.Validate()
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "host is required")
 	})
 
@@ -499,7 +499,7 @@ func TestConfigValidate(t *testing.T) {
 				}
 
 				err := cfg.Validate()
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.Contains(t, err.Error(), "invalid port")
 			})
 		}
@@ -523,7 +523,7 @@ func TestConfigValidate(t *testing.T) {
 				}
 
 				err := cfg.Validate()
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.Contains(t, err.Error(), "invalid database number")
 			})
 		}
@@ -537,7 +537,7 @@ func TestConfigValidate(t *testing.T) {
 		}
 
 		err := cfg.Validate()
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid pool size")
 	})
 
@@ -865,9 +865,9 @@ func TestClientCompareAndDeleteNilExpectedIsRejected(t *testing.T) {
 
 	deleted, err := client.CompareAndDelete(ctx, testKey1, nil)
 	assert.False(t, deleted)
-	assert.ErrorIs(t, err, cache.ErrNilExpectedValue)
 	assert.Equal(t, before, mr.CommandCount())
 	assert.True(t, mr.Exists(testKey1))
+	require.ErrorIs(t, err, cache.ErrNilExpectedValue)
 }
 
 func TestClientCompareAndDeleteEmptySliceComparesAgainstEmptyString(t *testing.T) {

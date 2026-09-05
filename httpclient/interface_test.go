@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Test constants to avoid string duplication
@@ -21,12 +22,12 @@ func TestNewTraceIDInterceptor(t *testing.T) {
 		interceptor := NewTraceIDInterceptor()
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, testExampleURL, http.NoBody)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		ctx := WithTraceID(context.Background(), "test-trace-123")
 
 		err = interceptor(ctx, req)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		assert.Equal(t, "test-trace-123", req.Header.Get(HeaderXRequestID))
 	})
@@ -35,7 +36,7 @@ func TestNewTraceIDInterceptor(t *testing.T) {
 		interceptor := NewTraceIDInterceptor()
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, testExampleURL, http.NoBody)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Set an existing trace ID
 		req.Header.Set(HeaderXRequestID, "existing-trace-456")
@@ -43,7 +44,7 @@ func TestNewTraceIDInterceptor(t *testing.T) {
 		ctx := WithTraceID(context.Background(), "new-trace-789")
 
 		err = interceptor(ctx, req)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Should preserve the existing header
 		assert.Equal(t, "existing-trace-456", req.Header.Get(HeaderXRequestID))
@@ -53,15 +54,15 @@ func TestNewTraceIDInterceptor(t *testing.T) {
 		interceptor := NewTraceIDInterceptor()
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, testExampleURL, http.NoBody)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Use empty context - should generate a new trace ID
 		err = interceptor(context.Background(), req)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		traceID := req.Header.Get(HeaderXRequestID)
 		assert.NotEmpty(t, traceID)
-		assert.NotEqual(t, "", traceID)
+		assert.NotEmpty(t, traceID)
 	})
 }
 
@@ -72,12 +73,12 @@ func TestNewTraceIDInterceptorFor(t *testing.T) {
 		interceptor := NewTraceIDInterceptorFor(customHeader)
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, testExampleURL, http.NoBody)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		ctx := WithTraceID(context.Background(), "custom-trace-123")
 
 		err = interceptor(ctx, req)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		assert.Equal(t, "custom-trace-123", req.Header.Get(customHeader))
 		assert.Empty(t, req.Header.Get(HeaderXRequestID)) // Default header should not be set
@@ -87,12 +88,12 @@ func TestNewTraceIDInterceptorFor(t *testing.T) {
 		interceptor := NewTraceIDInterceptorFor("")
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, testExampleURL, http.NoBody)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		ctx := WithTraceID(context.Background(), "fallback-trace-456")
 
 		err = interceptor(ctx, req)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		assert.Equal(t, "fallback-trace-456", req.Header.Get(HeaderXRequestID))
 	})
@@ -102,7 +103,7 @@ func TestNewTraceIDInterceptorFor(t *testing.T) {
 		interceptor := NewTraceIDInterceptorFor(customHeader)
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, testExampleURL, http.NoBody)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Set existing value in custom header
 		req.Header.Set(customHeader, "existing-custom-789")
@@ -110,7 +111,7 @@ func TestNewTraceIDInterceptorFor(t *testing.T) {
 		ctx := WithTraceID(context.Background(), "new-trace-000")
 
 		err = interceptor(ctx, req)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Should preserve existing custom header
 		assert.Equal(t, "existing-custom-789", req.Header.Get(customHeader))
@@ -132,13 +133,13 @@ func TestNewTraceIDInterceptorFor(t *testing.T) {
 				interceptor := NewTraceIDInterceptorFor(tc.header)
 
 				req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, testExampleURL, http.NoBody)
-				assert.NoError(t, err)
+				require.NoError(t, err)
 
 				expectedTraceID := "trace-for-" + tc.name
 				ctx := WithTraceID(context.Background(), expectedTraceID)
 
 				err = interceptor(ctx, req)
-				assert.NoError(t, err)
+				require.NoError(t, err)
 
 				assert.Equal(t, expectedTraceID, req.Header.Get(tc.header))
 			})
@@ -150,16 +151,16 @@ func TestNewTraceIDInterceptorFor(t *testing.T) {
 		interceptor2 := NewTraceIDInterceptorFor("X-Trace-B")
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, testExampleURL, http.NoBody)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		ctx := WithTraceID(context.Background(), testMultiTrace)
 
 		// Apply both interceptors
 		err = interceptor1(ctx, req)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		err = interceptor2(ctx, req)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Both headers should be set
 		assert.Equal(t, testMultiTrace, req.Header.Get("X-Trace-A"))
@@ -171,15 +172,15 @@ func TestNewTraceIDInterceptorFor(t *testing.T) {
 		interceptor := NewTraceIDInterceptorFor(customHeader)
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, testExampleURL, http.NoBody)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Use empty context - should generate a new trace ID
 		err = interceptor(context.Background(), req)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		traceID := req.Header.Get(customHeader)
 		assert.NotEmpty(t, traceID)
-		assert.NotEqual(t, "", traceID)
+		assert.NotEmpty(t, traceID)
 	})
 }
 
@@ -189,7 +190,7 @@ func TestTraceIDInterceptorIntegration(t *testing.T) {
 		interceptor := NewTraceIDInterceptorFor(testPriorityTrace)
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, testExampleURL, http.NoBody)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Pre-populate header with existing value
 		req.Header.Set(testPriorityTrace, "priority-value")
@@ -198,7 +199,7 @@ func TestTraceIDInterceptorIntegration(t *testing.T) {
 		ctx := WithTraceID(context.Background(), "context-value")
 
 		err = interceptor(ctx, req)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Header value should remain unchanged (priority to existing header)
 		assert.Equal(t, "priority-value", req.Header.Get(testPriorityTrace))
@@ -208,14 +209,14 @@ func TestTraceIDInterceptorIntegration(t *testing.T) {
 		interceptor := NewTraceIDInterceptorFor("X-W3C-Trace")
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, testExampleURL, http.NoBody)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Set up context with both trace ID and W3C traceparent
 		ctx := WithTraceID(context.Background(), "w3c-trace-123")
 		ctx = WithTraceParent(ctx, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
 
 		err = interceptor(ctx, req)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Should use the trace ID from context
 		assert.Equal(t, "w3c-trace-123", req.Header.Get("X-W3C-Trace"))

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/internal/testutil"
 )
@@ -31,9 +32,18 @@ func TestSentinelErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.NotNil(t, tt.err)
-			assert.Error(t, tt.err)
-			assert.True(t, errors.Is(tt.err, tt.err))
+			require.Error(t, tt.err)
+			assert.NotEmpty(t, tt.err.Error(), "a sentinel carries a message")
+
+			// The property callers actually rely on when they branch on these:
+			// each sentinel is distinguishable from every other one. Matching a
+			// sentinel against itself would hold for any error at all.
+			for _, other := range tests {
+				if other.name == tt.name {
+					continue
+				}
+				assert.NotErrorIs(t, tt.err, other.err, "sentinels must not alias one another")
+			}
 		})
 	}
 }
@@ -45,7 +55,7 @@ func TestConfigError(t *testing.T) {
 		assert.NotNil(t, err)
 		assert.Equal(t, redisHostConfig, err.Field)
 		assert.Equal(t, redisHostRequiredErrMsg, err.Message)
-		assert.Nil(t, err.Err)
+		require.NoError(t, err.Err)
 		assert.Contains(t, err.Error(), "cache configuration error")
 		assert.Contains(t, err.Error(), redisHostConfig)
 		assert.Contains(t, err.Error(), redisHostRequiredErrMsg)
@@ -58,7 +68,7 @@ func TestConfigError(t *testing.T) {
 		assert.NotNil(t, err)
 		assert.Equal(t, redisPortConfig, err.Field)
 		assert.Equal(t, redisHostRequiredErrMsg, err.Message)
-		assert.Equal(t, underlying, err.Err)
+		require.Equal(t, underlying, err.Err)
 		assert.Contains(t, err.Error(), "cache configuration error")
 		assert.Contains(t, err.Error(), redisPortConfig)
 		assert.Contains(t, err.Error(), "invalid port number")
@@ -68,8 +78,8 @@ func TestConfigError(t *testing.T) {
 		underlying := errors.New("validation failed")
 		err := NewConfigError("cache.type", "unsupported type", underlying)
 
-		assert.True(t, errors.Is(err, underlying))
 		assert.Equal(t, underlying, errors.Unwrap(err))
+		require.ErrorIs(t, err, underlying)
 	})
 }
 
@@ -92,7 +102,7 @@ func TestConnectionError(t *testing.T) {
 		underlying := errors.New("timeout")
 		err := NewConnectionError("ping", "redis.example.com:6379", underlying)
 
-		assert.Equal(t, "ping", err.Op)
+		require.Equal(t, "ping", err.Op)
 		assert.Equal(t, "redis.example.com:6379", err.Address)
 		assert.Contains(t, err.Error(), "ping")
 		assert.Contains(t, err.Error(), "timeout")
@@ -102,8 +112,8 @@ func TestConnectionError(t *testing.T) {
 		underlying := errors.New("network unreachable")
 		err := NewConnectionError("dial", "192.168.1.1:6379", underlying)
 
-		assert.True(t, errors.Is(err, underlying))
 		assert.Equal(t, underlying, errors.Unwrap(err))
+		require.ErrorIs(t, err, underlying)
 	})
 
 	t.Run("WithoutUnderlyingError", func(t *testing.T) {
@@ -112,7 +122,7 @@ func TestConnectionError(t *testing.T) {
 		assert.NotNil(t, err)
 		assert.Equal(t, "dial", err.Op)
 		assert.Equal(t, testRedisHost, err.Address)
-		assert.Nil(t, err.Err)
+		require.NoError(t, err.Err)
 		assert.Contains(t, err.Error(), "cache connection error")
 		assert.Contains(t, err.Error(), "dial")
 		assert.Contains(t, err.Error(), testRedisHost)
@@ -150,15 +160,15 @@ func TestOperationError(t *testing.T) {
 
 		assert.Equal(t, "cas", err.Op)
 		assert.Equal(t, "lock:job:456", err.Key)
-		assert.True(t, errors.Is(err, ErrCASFailed))
+		assert.ErrorIs(t, err, ErrCASFailed)
 	})
 
 	t.Run("ErrorUnwrap", func(t *testing.T) {
 		underlying := ErrNotFound
 		err := NewOperationError("get", "missing:key", underlying)
 
-		assert.True(t, errors.Is(err, ErrNotFound))
 		assert.Equal(t, underlying, errors.Unwrap(err))
+		require.ErrorIs(t, err, ErrNotFound)
 	})
 
 	t.Run("NestedWrapping", func(t *testing.T) {
@@ -166,8 +176,8 @@ func TestOperationError(t *testing.T) {
 		baseErr := errors.New("base error")
 		opErr := NewOperationError("get", "key:123", baseErr)
 
-		assert.True(t, errors.Is(opErr, baseErr))
 		assert.Contains(t, opErr.Error(), "base error")
+		require.ErrorIs(t, opErr, baseErr)
 	})
 
 	t.Run("WithoutUnderlyingError", func(t *testing.T) {
@@ -176,9 +186,9 @@ func TestOperationError(t *testing.T) {
 		assert.NotNil(t, err)
 		assert.Equal(t, "get", err.Op)
 		assert.Equal(t, testRedisKey1, err.Key)
-		assert.Nil(t, err.Err)
+		require.NoError(t, err.Err)
 		assert.Contains(t, err.Error(), "cache operation error")
-		assert.Contains(t, err.Error(), "get")
+		require.Contains(t, err.Error(), "get")
 		assert.Contains(t, err.Error(), testRedisKey1)
 		assert.NotContains(t, err.Error(), "<nil>")
 	})
@@ -188,17 +198,17 @@ func TestErrorWrapping(t *testing.T) {
 	t.Run("NotFoundWrappedInOperationError", func(t *testing.T) {
 		err := NewOperationError("get", "user:999", ErrNotFound)
 
-		assert.True(t, errors.Is(err, ErrNotFound))
 		assert.Contains(t, err.Error(), "get")
 		assert.Contains(t, err.Error(), "user:999")
+		require.ErrorIs(t, err, ErrNotFound)
 	})
 
 	t.Run("CASFailedWrappedInOperationError", func(t *testing.T) {
 		err := NewOperationError("cas", "lock:123", ErrCASFailed)
 
-		assert.True(t, errors.Is(err, ErrCASFailed))
-		assert.Contains(t, err.Error(), "cas")
+		require.Contains(t, err.Error(), "cas")
 		assert.Contains(t, err.Error(), "lock:123")
+		require.ErrorIs(t, err, ErrCASFailed)
 	})
 
 	t.Run("MultipleWrappingLevels", func(t *testing.T) {
@@ -207,8 +217,8 @@ func TestErrorWrapping(t *testing.T) {
 		opErr := NewOperationError("get", "key:abc", connErr)
 
 		// Should be able to unwrap to the base error
-		assert.True(t, errors.Is(opErr, baseErr))
-		assert.True(t, errors.Is(opErr, connErr))
+		require.ErrorIs(t, opErr, baseErr)
+		require.ErrorIs(t, opErr, connErr)
 	})
 }
 
