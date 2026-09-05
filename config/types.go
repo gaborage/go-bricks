@@ -107,9 +107,9 @@ type ServerConfig struct {
 	// changing who is trusted.
 	TrustedProxies []string `koanf:"trustedproxies" json:"trustedproxies" yaml:"trustedproxies" toml:"trustedproxies" mapstructure:"trustedproxies"`
 
-	// BodyLimit is the maximum request body size in bytes. A value of 0 resolves
-	// to the framework default (10 MB) at wire-up; a negative value is rejected by
-	// config validation.
+	// BodyLimit is the maximum request body size in bytes. A value of 0 is filled
+	// with the framework default (10 MB) by config normalization; a negative value
+	// is rejected by config validation.
 	BodyLimit int64 `koanf:"bodylimit" json:"bodylimit" yaml:"bodylimit" toml:"bodylimit" mapstructure:"bodylimit"`
 
 	ResponseTime ResponseTimeConfig `koanf:"responsetime" json:"responsetime" yaml:"responsetime" toml:"responsetime" mapstructure:"responsetime"`

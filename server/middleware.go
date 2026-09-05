@@ -144,10 +144,13 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	// This prevents goroutine panics when the context is canceled mid-flight.
 	e.Use(timeoutEcho(cfg.Server.Timeout.Middleware))
 
-	// Body limit — configurable via server.bodylimit (bytes). Config validation
-	// rejects a negative value; this <=0 fallback is defense-in-depth for callers
-	// that construct the server directly (bypassing Validate) and for an explicit
-	// 0, so the limit can never be silently disabled.
+	// Body limit — configurable via server.bodylimit (bytes). config.normalizeServer
+	// owns the default; this <=0 guard is a backstop for the callers that never run
+	// config.Validate (see trustedProxyOptions for the same rationale). Note which way
+	// it fails: echo compares `req.ContentLength > LimitBytes`, so BodyLimit(0) rejects
+	// every request carrying a body and a negative rejects even empty ones. An
+	// unvalidated 0 would take the service down, not uncap it — the guard converts that
+	// outage into the documented default.
 	bodyLimit := cfg.Server.BodyLimit
 	if bodyLimit <= 0 {
 		bodyLimit = config.DefaultBodyLimitBytes

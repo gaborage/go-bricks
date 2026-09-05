@@ -493,11 +493,14 @@ func TestMiddlewareBodyLimitFromConfig(t *testing.T) {
 	})
 
 	t.Run("non_positive_limit_falls_back_to_default", func(t *testing.T) {
-		// Both 0 and a negative limit must resolve to the shared 10 MB default rather than
-		// disabling the cap. Pin the boundary tightly against DefaultBodyLimitBytes: a body
-		// just under it passes, one just over it is rejected. (A negative reaches the <=0
-		// guard only for direct SetupMiddlewares callers; config.Validate rejects it on the
-		// Load path — see config/validation.go.)
+		// This pins the BACKSTOP, not the default's owner: config.normalizeServer fills a
+		// zero and refuses a negative, so neither value reaches here on a validated path.
+		// What is tested is the construction paths trustedProxyOptions names, which never
+		// run Validate — for those, a 0 or -1 must still resolve to the shared 10 MB cap.
+		// Handing echo BodyLimit(0) would not uncap the server, it would 413 every request
+		// with a body (echo compares ContentLength > LimitBytes), so the guard is what
+		// keeps an unvalidated config serving at all. Pin the boundary tightly against
+		// DefaultBodyLimitBytes: a body just under it passes, one just over it is rejected.
 		underDefault := int(config.DefaultBodyLimitBytes) - 1024
 		overDefault := int(config.DefaultBodyLimitBytes) + 1024
 		for _, limit := range []int64{0, -1} {

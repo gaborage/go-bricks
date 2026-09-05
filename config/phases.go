@@ -46,6 +46,10 @@ func normalize(cfg *Config) error {
 		return fmt.Errorf("app config: %w", err)
 	}
 
+	if err := normalizeServer(&cfg.Server); err != nil {
+		return fmt.Errorf("server config: %w", err)
+	}
+
 	if err := normalizeScheduler(&cfg.Scheduler); err != nil {
 		return fmt.Errorf("scheduler config: %w", err)
 	}

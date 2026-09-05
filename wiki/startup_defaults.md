@@ -46,6 +46,8 @@ app:
 | --- | --- | --- |
 | `server.bodylimit` | 10 MB (10485760 bytes) | Maximum accepted HTTP request body size |
 
+The default is applied by config normalization: an unset (zero) value becomes 10 MB during `config.Validate`, and a negative value is rejected there rather than quietly reverting to the default.
+
 Raise it for endpoints that accept large uploads or bulk imports, or lower it to tighten the boundary:
 
 ```yaml

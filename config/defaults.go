@@ -52,9 +52,9 @@ const (
 	localTimezoneLiteral = "Local"
 
 	// DefaultBodyLimitBytes is the maximum request body size (10 MB) applied when
-	// server.bodylimit is unset or resolves to a non-positive value. Single source
-	// of truth for both the koanf default (loadDefaults) and the server-side
-	// wire-up fallback (server.SetupMiddlewares).
+	// server.bodylimit is unset. The normalize fill applies it (normalizeServer);
+	// the koanf default still renders it separately (see #1447), and the <=0 guard
+	// in server.SetupMiddlewares is a backstop for callers that never run Validate.
 	DefaultBodyLimitBytes int64 = 10 * 1024 * 1024
 
 	// DefaultKeyStoreSecretMinLength is the byte floor for symmetric keystore
