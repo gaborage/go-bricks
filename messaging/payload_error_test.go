@@ -78,8 +78,8 @@ func TestPayloadErrorIsMatchesStageSentinel(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := &PayloadError{EventType: orderEventType, Stage: tc.stage}
 
-			assert.ErrorIs(t, err, tc.match)
-			assert.NotErrorIs(t, err, tc.notMatch)
+			require.ErrorIs(t, err, tc.match)
+			require.NotErrorIs(t, err, tc.notMatch)
 			assert.NotErrorIs(t, err, ErrNotConnected)
 		})
 	}
@@ -91,7 +91,7 @@ func TestPayloadErrorIsRejectsUnknownStage(t *testing.T) {
 	for _, stage := range []PayloadStage{"", "decoding", "DECODE"} {
 		err := &PayloadError{EventType: orderEventType, Stage: stage}
 
-		assert.NotErrorIs(t, err, ErrPayloadUndecodable, "stage %q", stage)
+		require.NotErrorIs(t, err, ErrPayloadUndecodable, "stage %q", stage)
 		assert.NotErrorIs(t, err, ErrPayloadInvalid, "stage %q", stage)
 	}
 }
@@ -101,7 +101,7 @@ func TestPayloadErrorUnwrapReachesCause(t *testing.T) {
 	err := newPayloadError(orderEventType, payloaderr.NewDecode(inner, ""))
 
 	require.Same(t, inner, err.Unwrap())
-	assert.ErrorIs(t, err, inner)
+	require.ErrorIs(t, err, inner)
 	// The sentinel mapping must survive alongside the unwrap chain.
 	assert.ErrorIs(t, err, ErrPayloadUndecodable)
 }
@@ -310,7 +310,7 @@ func TestPayloadErrorValidateConstructorDerivesFields(t *testing.T) {
 
 	assert.Equal(t, PayloadStageValidate, err.Stage)
 	assert.Equal(t, []string{fieldReference, fieldAmount}, err.Fields())
-	assert.ErrorIs(t, err, ErrPayloadInvalid)
+	require.ErrorIs(t, err, ErrPayloadInvalid)
 	require.ErrorAs(t, err, new(validator.ValidationErrors))
 
 	// Redaction is Fields()' job, not the constructor's — pin that the stored
@@ -409,16 +409,16 @@ func TestPayloadErrorNilAndZeroValueAreSafe(t *testing.T) {
 		_ = nilErr.Fields()
 		_ = nilErr.Is(ErrPayloadInvalid)
 	})
-	assert.Nil(t, nilErr.Unwrap())
+	assert.NoError(t, nilErr.Unwrap())
 	assert.Nil(t, nilErr.Fields())
 	assert.False(t, nilErr.Is(ErrPayloadInvalid))
-	assert.NotErrorIs(t, error(nilErr), ErrPayloadUndecodable)
+	require.NotErrorIs(t, error(nilErr), ErrPayloadUndecodable)
 
 	zero := &PayloadError{}
 	assert.NotPanics(t, func() { _ = zero.Error() })
-	assert.Nil(t, zero.Unwrap())
+	assert.NoError(t, zero.Unwrap())
 	assert.Nil(t, zero.Fields())
-	assert.NotErrorIs(t, zero, ErrPayloadUndecodable)
+	require.NotErrorIs(t, zero, ErrPayloadUndecodable)
 	assert.NotErrorIs(t, zero, ErrPayloadInvalid)
 }
 
@@ -427,9 +427,9 @@ func TestPayloadErrorOpenStage(t *testing.T) {
 	err := newPayloadError("OrderCreated", payloaderr.NewOpen(cause))
 
 	assert.Equal(t, PayloadStageOpen, err.Stage)
-	assert.ErrorIs(t, err, ErrPayloadOpenRefused)
-	assert.NotErrorIs(t, err, ErrPayloadUndecodable)
-	assert.NotErrorIs(t, err, ErrPayloadInvalid)
+	require.ErrorIs(t, err, ErrPayloadOpenRefused)
+	require.NotErrorIs(t, err, ErrPayloadUndecodable)
+	require.NotErrorIs(t, err, ErrPayloadInvalid)
 	assert.Equal(t, `messaging: open failed for event "OrderCreated": sealed open refused: SEAL_HEADER_SLOT_INVALID (present=false, slot=jti)`, err.Error())
 	assert.Empty(t, err.Fields())
 	var refused *sealruntime.OpenRefusedError

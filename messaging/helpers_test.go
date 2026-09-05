@@ -28,7 +28,7 @@ func TestNewTopicExchange(t *testing.T) {
 	t.Run("handles empty name", func(t *testing.T) {
 		exchange := NewTopicExchange("")
 
-		assert.Equal(t, "", exchange.Name)
+		assert.Empty(t, exchange.Name)
 		assert.Equal(t, exchangeTypeTopic, exchange.Type)
 		assert.True(t, exchange.Durable)
 	})
@@ -61,7 +61,7 @@ func TestNewQueue(t *testing.T) {
 	t.Run("handles empty name", func(t *testing.T) {
 		queue := NewQueue("")
 
-		assert.Equal(t, "", queue.Name)
+		assert.Empty(t, queue.Name)
 		assert.True(t, queue.Durable)
 	})
 
@@ -92,7 +92,7 @@ func TestNewBinding(t *testing.T) {
 	t.Run("handles empty routing key", func(t *testing.T) {
 		binding := NewBinding("queue", "exchange", "")
 
-		assert.Equal(t, "", binding.RoutingKey)
+		assert.Empty(t, binding.RoutingKey)
 	})
 
 	t.Run("creates independent instances", func(t *testing.T) {
@@ -143,8 +143,8 @@ func TestNewPublisher(t *testing.T) {
 
 		assert.Equal(t, "minimal.exchange", publisher.Exchange)
 		assert.Equal(t, "minimal.key", publisher.RoutingKey)
-		assert.Equal(t, "", publisher.EventType)
-		assert.Equal(t, "", publisher.Description)
+		assert.Empty(t, publisher.EventType)
+		assert.Empty(t, publisher.Description)
 		assert.False(t, publisher.Mandatory)
 		assert.False(t, publisher.Immediate)
 		assert.NotNil(t, publisher.Headers)
@@ -220,8 +220,8 @@ func TestNewConsumer(t *testing.T) {
 
 		assert.Equal(t, "minimal.queue", consumer.Queue)
 		assert.Equal(t, testConsumer, consumer.Consumer)
-		assert.Equal(t, "", consumer.EventType)
-		assert.Equal(t, "", consumer.Description)
+		assert.Empty(t, consumer.EventType)
+		assert.Empty(t, consumer.Description)
 		assert.Nil(t, consumer.Handler)
 		assert.False(t, consumer.AutoAck)
 		assert.False(t, consumer.Exclusive)
@@ -325,7 +325,7 @@ func TestDeclarationsQueue(t *testing.T) {
 		registered := decls.Queues["test.queue"]
 		// The incumbent's args survive the second declaration
 		assert.Equal(t, "value1", registered.Args["first"])
-		assert.NoError(t, decls.Validate())
+		require.NoError(t, decls.Validate())
 		assert.NotNil(t, q1)
 		assert.NotNil(t, q2)
 	})
@@ -403,7 +403,7 @@ func TestDeclarationsPublisher(t *testing.T) {
 		assert.Equal(t, "test.exchange", decls.Publishers[0].Exchange)
 
 		// Verify exchange NOT auto-registered
-		assert.Len(t, decls.Exchanges, 0)
+		assert.Empty(t, decls.Exchanges)
 	})
 
 	t.Run("auto-registers exchange when provided", func(t *testing.T) {
@@ -491,7 +491,7 @@ func TestDeclarationsConsumer(t *testing.T) {
 		assert.Equal(t, "test.queue", consumers[0].Queue)
 
 		// Verify queue NOT auto-registered
-		assert.Len(t, decls.Queues, 0)
+		assert.Empty(t, decls.Queues)
 	})
 
 	t.Run("auto-registers queue when provided", func(t *testing.T) {
@@ -609,7 +609,7 @@ func TestDeclareQueueWithDLQDefaults(t *testing.T) {
 	binding := decls.Bindings[0]
 	assert.Equal(t, "orders.queue.dlq", binding.Queue)
 	assert.Equal(t, "orders.queue.dlx", binding.Exchange)
-	assert.Equal(t, "", binding.RoutingKey)
+	assert.Empty(t, binding.RoutingKey)
 
 	primary, ok := decls.Queues["orders.queue"]
 	assert.True(t, ok)
@@ -657,7 +657,7 @@ func TestDeclareQueueWithDLQValidatesAndHashes(t *testing.T) {
 	decls1 := build()
 	decls2 := build()
 
-	assert.NoError(t, decls1.Validate())
+	require.NoError(t, decls1.Validate())
 	assert.Equal(t, decls1.Hash(), decls2.Hash())
 
 	withoutDLQ := NewDeclarations()
@@ -906,7 +906,7 @@ func TestHelpersIntegrationWorkflow(t *testing.T) {
 		// Replay to registry
 		err := decls.ReplayToRegistry(mockReg)
 
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		mockReg.AssertExpectations(t)
 	})
 
@@ -924,8 +924,8 @@ func TestHelpersIntegrationWorkflow(t *testing.T) {
 		clone := decls.Clone()
 
 		// Verify clone has same structure
-		assert.Equal(t, len(decls.Exchanges), len(clone.Exchanges))
-		assert.Equal(t, len(decls.Queues), len(clone.Queues))
+		assert.Len(t, clone.Exchanges, len(decls.Exchanges))
+		assert.Len(t, clone.Queues, len(decls.Queues))
 
 		// Verify deep copy
 		clonedExchange := clone.Exchanges["clone.exchange"]

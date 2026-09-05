@@ -118,8 +118,8 @@ func TestNewTypedHandlerReturnsFnResult(t *testing.T) {
 
 	require.ErrorIs(t, err, errBusiness)
 	require.Same(t, errBusiness, err, "fn's error must pass through unwrapped")
-	assert.NotErrorIs(t, err, ErrPayloadUndecodable)
-	assert.NotErrorIs(t, err, ErrPayloadInvalid)
+	require.NotErrorIs(t, err, ErrPayloadUndecodable)
+	require.NotErrorIs(t, err, ErrPayloadInvalid)
 	assert.NotErrorAs(t, err, new(*PayloadError))
 }
 
@@ -160,8 +160,8 @@ func TestNewTypedHandlerDecodeFailure(t *testing.T) {
 			err := h.Handle(t.Context(), &amqp.Delivery{Body: []byte(tc.body)})
 
 			require.Error(t, err)
-			assert.ErrorIs(t, err, ErrPayloadUndecodable)
-			assert.NotErrorIs(t, err, ErrPayloadInvalid)
+			require.ErrorIs(t, err, ErrPayloadUndecodable)
+			require.NotErrorIs(t, err, ErrPayloadInvalid)
 
 			var perr *PayloadError
 			require.ErrorAs(t, err, &perr)
@@ -188,8 +188,8 @@ func TestNewTypedHandlerValidationFailure(t *testing.T) {
 	err := h.Handle(t.Context(), &amqp.Delivery{Body: body})
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrPayloadInvalid)
-	assert.NotErrorIs(t, err, ErrPayloadUndecodable)
+	require.ErrorIs(t, err, ErrPayloadInvalid)
+	require.NotErrorIs(t, err, ErrPayloadUndecodable)
 
 	var perr *PayloadError
 	require.ErrorAs(t, err, &perr)
@@ -239,8 +239,8 @@ func TestNewTypedHandlerNonStructPayloadFailsClosed(t *testing.T) {
 	})
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrPayloadInvalid, "the failure is validate-stage, not decode-stage")
-	assert.NotErrorIs(t, err, ErrPayloadUndecodable)
+	require.ErrorIs(t, err, ErrPayloadInvalid, "the failure is validate-stage, not decode-stage")
+	require.NotErrorIs(t, err, ErrPayloadUndecodable)
 	require.ErrorAs(t, err, new(*validator.InvalidValidationError))
 
 	var perr *PayloadError
@@ -283,7 +283,7 @@ func TestNewTypedHandlerNilDeliveryAndEmptyBody(t *testing.T) {
 			require.NotPanics(t, func() { err = h.Handle(t.Context(), tc.delivery) })
 
 			require.Error(t, err)
-			assert.ErrorIs(t, err, ErrPayloadUndecodable)
+			require.ErrorIs(t, err, ErrPayloadUndecodable)
 			assert.Equal(t, tc.want, err.Error())
 		})
 	}
@@ -310,7 +310,10 @@ func TestTypedHandlerUsesFrameworkValidator(t *testing.T) {
 	// pinned here is a construction COUNT — validation.New is a plain function
 	// with no seam to count through, and the package-level var is already
 	// resolved by the time any test runs.
-	require.Same(t, payloaderr.Validator(), payloaderr.Validator())
+	// Hoisted for the same reason as the payloaderr test: two independent lookups.
+	firstValidator := payloaderr.Validator()
+	secondValidator := payloaderr.Validator()
+	require.Same(t, firstValidator, secondValidator)
 
 	// The instance is the framework's, not a bare validator.New(): an
 	// unregistered mcc_code tag makes validator panic instead of returning.
@@ -324,7 +327,7 @@ func TestTypedHandlerUsesFrameworkValidator(t *testing.T) {
 	require.NotPanics(t, func() {
 		invalid = h.Handle(t.Context(), &amqp.Delivery{Body: []byte(`{"mcc":"12"}`)})
 	})
-	assert.ErrorIs(t, invalid, ErrPayloadInvalid)
+	require.ErrorIs(t, invalid, ErrPayloadInvalid)
 
 	require.NoError(t, h.Handle(t.Context(), &amqp.Delivery{Body: []byte(`{"mcc":"5411"}`)}))
 	assert.Equal(t, int64(1), calls.Load())

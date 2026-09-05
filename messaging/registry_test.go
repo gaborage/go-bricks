@@ -258,7 +258,7 @@ func TestRegistryDeclareInfrastructureSuccessSimple(t *testing.T) {
 	ctx := context.Background()
 	err := registry.DeclareInfrastructure(ctx)
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, registry.declared)
 	assert.Contains(t, client.declaredExchanges, testExchangeName)
 	assert.Contains(t, client.declaredQueues, testQueueName)
@@ -289,7 +289,7 @@ func TestRegistryDeclareInfrastructurePassesArgs(t *testing.T) {
 
 	err := registry.DeclareInfrastructure(t.Context())
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"alternate-exchange": "orders.alt"}, client.exchangeArgsFor("args.exchange"))
 	assert.Equal(t, map[string]any{"x-dead-letter-exchange": "orders.dlx"}, client.queueArgsFor("args.queue"))
 	assert.Equal(t, map[string]any{"x-match": "all"}, client.bindingArgsFor("args.queue:args.exchange:orders.*"))
@@ -305,7 +305,7 @@ func TestRegistryDeclareInfrastructureClientNotReadyTimeoutSimple(t *testing.T) 
 
 	err := registry.DeclareInfrastructure(ctx)
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	// Could be either timeout or context canceled depending on timing
 	assert.True(t,
 		strings.Contains(err.Error(), "timeout waiting for AMQP client") ||
@@ -327,7 +327,7 @@ func TestRegistryDeclareInfrastructureExchangeDeclarationErrorSimple(t *testing.
 
 	err := registry.DeclareInfrastructure(t.Context())
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to declare exchange test-exchange")
 }
 
@@ -350,7 +350,7 @@ func TestRegistryStartConsumersSuccessSimple(t *testing.T) {
 
 	err := registry.StartConsumers(context.Background())
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, registry.consumersActive)
 	assert.NotNil(t, registry.cancelConsumers)
 
@@ -363,7 +363,7 @@ func TestRegistryStartConsumersClientNotReadySimple(t *testing.T) {
 
 	err := registry.StartConsumers(context.Background())
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "AMQP client is not ready")
 }
 
@@ -485,7 +485,7 @@ func TestRegistryRegisterAfterDeclaredSimple(t *testing.T) {
 
 	// Declare infrastructure first
 	err := registry.DeclareInfrastructure(t.Context())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Now try to register new components (should log warnings but not fail)
 	registry.RegisterExchange(&ExchangeDeclaration{
@@ -515,7 +515,7 @@ func TestRegistryDeclareInfrastructureAlreadyDeclaredSimple(t *testing.T) {
 
 	// First declaration
 	err := registry.DeclareInfrastructure(t.Context())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, registry.declared)
 
 	// Second declaration should be no-op
@@ -528,7 +528,7 @@ func TestRegistryDeclareInfrastructureNilClientSimple(t *testing.T) {
 
 	err := registry.DeclareInfrastructure(t.Context())
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "AMQP client is not available")
 }
 
@@ -548,7 +548,7 @@ func TestRegistryStartConsumersConsumeErrorSimple(t *testing.T) {
 
 	err := registry.StartConsumers(context.Background())
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to start consumer for queue test-queue")
 	assert.False(t, registry.consumersActive)
 }
@@ -566,7 +566,7 @@ func TestRegistryStartConsumersNoHandlersSimple(t *testing.T) {
 
 	err := registry.StartConsumers(context.Background())
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, registry.consumersActive) // Should still be marked active
 	assert.NotNil(t, registry.cancelConsumers)
 
@@ -704,7 +704,7 @@ func TestRegistryDeclareInfrastructureQueueDeclarationError(t *testing.T) {
 
 	err := registry.DeclareInfrastructure(t.Context())
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to declare queue test-queue")
 }
 
@@ -723,7 +723,7 @@ func TestRegistryDeclareInfrastructureBindingError(t *testing.T) {
 
 	err := registry.DeclareInfrastructure(t.Context())
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to bind queue test-queue to exchange test-exchange")
 }
 
@@ -738,7 +738,7 @@ func TestRegistryDeclareInfrastructureContextCancellation(t *testing.T) {
 
 	err := registry.DeclareInfrastructure(ctx)
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "context canceled while waiting for AMQP client")
 }
 
@@ -767,7 +767,7 @@ func TestRegistryDeclareInfrastructureClientBecomesReady(t *testing.T) {
 	// Should complete successfully after readiness signal
 	select {
 	case err := <-done:
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.True(t, registry.declared)
 	case <-time.After(1 * time.Second):
 		t.Fatal("DeclareInfrastructure did not complete within timeout")
@@ -1672,7 +1672,7 @@ func TestRegistryStartConsumersWithMultipleConsumers(t *testing.T) {
 	})
 
 	err := registry.StartConsumers(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, registry.consumersActive)
 
 	// Clean up
@@ -1705,7 +1705,7 @@ func TestRegistryStartConsumersWithPartialFailure(t *testing.T) {
 	})
 
 	err := registry.StartConsumers(context.Background())
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to start consumer for queue failing-queue")
 	assert.False(t, registry.consumersActive)
 }
@@ -1755,12 +1755,12 @@ func TestRegistryStartConsumersAlreadyStarted(t *testing.T) {
 
 	// Start consumers first time
 	err := registry.StartConsumers(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, registry.consumersActive)
 
 	// Start consumers second time - should be no-op
 	err = registry.StartConsumers(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, registry.consumersActive)
 
 	// Clean up
@@ -1771,7 +1771,7 @@ func TestRegistryStartConsumersNilClient(t *testing.T) {
 	registry := NewRegistry(nil, &stubLogger{})
 
 	err := registry.StartConsumers(context.Background())
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "AMQP client is not ready")
 }
 
@@ -1787,7 +1787,7 @@ func TestRegistryStartConsumersOnlyDocumentationConsumers(t *testing.T) {
 	})
 
 	err := registry.StartConsumers(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, registry.consumersActive)
 
 	// Clean up
@@ -1799,7 +1799,7 @@ func TestRegistryRegisterPublisherNeverBlocked(t *testing.T) {
 
 	// Publishers can be registered even after declaration (unlike exchanges/queues/bindings)
 	err := registry.DeclareInfrastructure(t.Context())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// This should work fine
 	registry.RegisterPublisher(&PublisherDeclaration{
@@ -1817,7 +1817,7 @@ func TestRegistryRegisterConsumerNeverBlocked(t *testing.T) {
 
 	// Consumers can be registered even after declaration (unlike exchanges/queues/bindings)
 	err := registry.DeclareInfrastructure(t.Context())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// This should work fine
 	registry.RegisterConsumer(&ConsumerDeclaration{

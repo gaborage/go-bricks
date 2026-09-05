@@ -28,8 +28,8 @@ func TestPayloadErrorIsMatchesStageSentinel(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := &PayloadError{Consumer: testConsumerName, Stage: tc.stage}
 
-			assert.ErrorIs(t, err, tc.match)
-			assert.NotErrorIs(t, err, tc.notMatch)
+			require.ErrorIs(t, err, tc.match)
+			require.NotErrorIs(t, err, tc.notMatch)
 			assert.NotErrorIs(t, err, errHandlerFailed)
 		})
 	}
@@ -41,7 +41,7 @@ func TestPayloadErrorIsRejectsUnknownStage(t *testing.T) {
 	for _, stage := range []PayloadStage{"", "decoding", "DECODE"} {
 		err := &PayloadError{Consumer: testConsumerName, Stage: stage}
 
-		assert.NotErrorIs(t, err, ErrPayloadUndecodable, "stage %q", stage)
+		require.NotErrorIs(t, err, ErrPayloadUndecodable, "stage %q", stage)
 		assert.NotErrorIs(t, err, ErrPayloadInvalid, "stage %q", stage)
 	}
 }
@@ -73,9 +73,9 @@ func TestPayloadErrorUnwrapReachesCause(t *testing.T) {
 	err := newPayloadError(testConsumerName, payloaderr.NewDecode(inner, ""))
 
 	require.Same(t, inner, err.Unwrap())
-	assert.ErrorIs(t, err, inner)
+	require.ErrorIs(t, err, inner)
 	// The sentinel mapping must survive alongside the unwrap chain.
-	assert.ErrorIs(t, err, ErrPayloadUndecodable)
+	require.ErrorIs(t, err, ErrPayloadUndecodable)
 	assert.Contains(t, err.Error(), payloaderr.UnauditedDecoderSummary)
 }
 
@@ -86,7 +86,7 @@ func TestPayloadErrorNilReceiverIsInert(t *testing.T) {
 
 	assert.Equal(t, "streams: <nil> payload error", err.Error())
 	assert.Nil(t, err.Fields())
-	assert.NoError(t, err.Unwrap())
+	require.NoError(t, err.Unwrap())
 	assert.False(t, err.Is(ErrPayloadUndecodable))
 }
 

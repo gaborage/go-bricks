@@ -24,7 +24,7 @@ func TestInitRegistersTheCodec(t *testing.T) {
 	_, err = codec.ScanType(reflect.TypeOf(struct {
 		_ struct{} `seal:"sign=s,encrypt=e"`
 	}{}))
-	assert.ErrorIs(t, err, josesealed.ErrTagInvalid)
+	require.ErrorIs(t, err, josesealed.ErrTagInvalid)
 	_, isProvider := codec.(sealruntime.OpenerProvider)
 	assert.True(t, isProvider, "the codec carries its consume side (OpenerProvider)")
 }

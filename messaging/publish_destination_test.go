@@ -43,7 +43,7 @@ func TestPublishBytesRefusesAnOversizedRoutingKey(t *testing.T) {
 	}, []byte(testMessageBody))
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrInvalidPublishDestination)
+	require.ErrorIs(t, err, ErrInvalidPublishDestination)
 	assert.Zero(t, atomic.LoadUint64(&ch.publishAttempts), "the channel is never touched")
 	assert.NotErrorIs(t, err, ErrPublishRetriesExhausted, "this is not a retry outcome")
 }
@@ -333,7 +333,7 @@ func TestValidatePublishDestination(t *testing.T) {
 				return
 			}
 			require.Error(t, err)
-			assert.ErrorIs(t, err, ErrInvalidPublishDestination)
+			require.ErrorIs(t, err, ErrInvalidPublishDestination)
 			assert.Contains(t, err.Error(), tt.field)
 			assert.Contains(t, err.Error(), "256 bytes")
 			assert.NotContains(t, err.Error(), oversizedShortStr, "the error reports the length, never the value")

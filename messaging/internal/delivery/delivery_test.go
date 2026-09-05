@@ -184,7 +184,7 @@ func TestRunReportsSucceededForAHandlerThatReturnsNil(t *testing.T) {
 
 	require.NotNil(t, res)
 	assert.Equal(t, Succeeded, res.Outcome)
-	assert.NoError(t, res.Err)
+	require.NoError(t, res.Err)
 	assert.Empty(t, res.PanicType)
 	assert.Nil(t, res.Stack)
 	assert.GreaterOrEqual(t, res.Duration, time.Millisecond)
@@ -542,10 +542,10 @@ func TestRunKeepsAHandlerErrorMessageOffTheSpan(t *testing.T) {
 
 	// The on-platform sink keeps the message: the lane hands the error itself to
 	// LogOutcome, which is where the log line is built.
-	require.NotNil(t, res.Err)
+	require.Error(t, res.Err)
 	assert.Contains(t, res.Err.Error(), marker)
 	require.Len(t, h.rec.seen, 1)
-	require.NotNil(t, h.rec.seen[0].Err)
+	require.Error(t, h.rec.seen[0].Err)
 	assert.Contains(t, h.rec.seen[0].Err.Error(), marker)
 }
 
@@ -1547,15 +1547,16 @@ func TestRunReportsAttemptsOnTheSpan(t *testing.T) {
 // TestPermanentWrapsWithoutHidingTheCause pins the wrapper's three properties: it
 // renders as its cause, it unwraps to it, and nil stays nil.
 func TestPermanentWrapsWithoutHidingTheCause(t *testing.T) {
-	assert.NoError(t, Permanent(nil))
+	require.NoError(t, Permanent(nil))
 	assert.False(t, IsPermanent(nil))
 
 	wrapped := Permanent(errSentinel)
 	assert.Equal(t, errSentinel.Error(), wrapped.Error())
-	assert.True(t, errors.Is(wrapped, errSentinel))
 	assert.True(t, IsPermanent(wrapped))
 	assert.True(t, IsPermanent(fmt.Errorf("wrapped again: %w", wrapped)))
 	assert.False(t, IsPermanent(errSentinel))
+	// Last, so the permanence checks above still report if unwrapping regresses.
+	assert.ErrorIs(t, wrapped, errSentinel)
 }
 
 var errSentinel = errors.New("sentinel")

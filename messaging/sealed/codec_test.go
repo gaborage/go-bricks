@@ -184,7 +184,7 @@ func TestNewSealerStartupMatrix(t *testing.T) {
 			require.Error(t, err)
 			assert.Nil(t, sealer)
 			if tc.wantIs != nil {
-				assert.ErrorIs(t, err, tc.wantIs)
+				require.ErrorIs(t, err, tc.wantIs)
 			}
 			if tc.text != "" {
 				assert.Contains(t, err.Error(), tc.text)
@@ -192,7 +192,7 @@ func TestNewSealerStartupMatrix(t *testing.T) {
 		})
 	}
 	_, err := codec.NewSealer(sp, eventType, nil)
-	assert.ErrorIs(t, err, sealruntime.ErrKeyStoreMissing)
+	require.ErrorIs(t, err, sealruntime.ErrKeyStoreMissing)
 	_, err = codec.NewSealer(sp, eventType, &sealruntime.Runtime{})
 	assert.ErrorIs(t, err, sealruntime.ErrKeyStoreMissing)
 }

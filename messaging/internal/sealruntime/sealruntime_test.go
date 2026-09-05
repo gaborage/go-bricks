@@ -62,7 +62,7 @@ func TestOpenRefusedErrorRendersCodeAndSortedDetailsOnly(t *testing.T) {
 	cause := errors.New("codec detail")
 	e := &OpenRefusedError{Code: "SEAL_HEADER_SLOT_INVALID", Details: map[string]string{"slot": "jti", "present": "false"}, Cause: cause}
 	assert.Equal(t, "sealed open refused: SEAL_HEADER_SLOT_INVALID (present=false, slot=jti)", e.Error())
-	assert.ErrorIs(t, e, cause)
+	require.ErrorIs(t, e, cause)
 	assert.Equal(t, "sealed open refused: NOT_SEALED", (&OpenRefusedError{Code: "NOT_SEALED"}).Error())
 	var nilErr *OpenRefusedError
 	assert.Equal(t, "<nil>", nilErr.Error())

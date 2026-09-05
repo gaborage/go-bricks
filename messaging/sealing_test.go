@@ -334,7 +334,7 @@ func TestDeclareTypedPublisherSealedStartupFailures(t *testing.T) {
 			assert.Equal(t, err, pubErr, "Validate and the handle report the same failure")
 			require.Error(t, err)
 			if tc.want != nil {
-				assert.ErrorIs(t, err, tc.want)
+				require.ErrorIs(t, err, tc.want)
 			}
 			if tc.text != "" {
 				assert.Contains(t, err.Error(), tc.text)
@@ -391,7 +391,7 @@ func TestPublishReturnsSealFailureAndPublishesNothing(t *testing.T) {
 	require.NoError(t, decls.Validate())
 	client := &capturingClient{}
 	err := h.Publish(context.Background(), client, sealedEvent{ID: "o1"})
-	assert.ErrorIs(t, err, sealErr)
+	require.ErrorIs(t, err, sealErr)
 	assert.Contains(t, err.Error(), "seal payment.authorized event")
 	assert.Empty(t, client.data)
 	_, err = h.Seal(context.Background(), sealedEvent{ID: "o1"})
@@ -445,7 +445,7 @@ func TestSealResolvesTheTenantLikeTheStampingWrapper(t *testing.T) {
 			}
 			err := h.Publish(ctx, tc.client, sealedEvent{ID: "x"})
 			if tc.wantErr != nil {
-				assert.ErrorIs(t, err, tc.wantErr)
+				require.ErrorIs(t, err, tc.wantErr)
 				assert.Empty(t, sealer.seen, "a refused tenant never reaches the sealer")
 				return
 			}

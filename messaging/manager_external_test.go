@@ -47,7 +47,7 @@ func TestMessagingManagerErrManagerClosedMatchesFromExternalPackage(t *testing.T
 	t.Run("publisher after close", func(t *testing.T) {
 		pub, release, err := manager.Publisher(context.Background(), "any-key")
 		require.Error(t, err)
-		assert.ErrorIs(t, err, messaging.ErrManagerClosed)
+		require.ErrorIs(t, err, messaging.ErrManagerClosed)
 		assert.Nil(t, pub)
 		assert.Nil(t, release)
 	})

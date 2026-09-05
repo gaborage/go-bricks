@@ -45,22 +45,9 @@ test, not inferred from the diff.
 Harvest note for the FINAL author: P5, P6 and P9 documented their false positives in their PR
 bodies rather than here (this file postdates them) — pull those rows in before converting.
 
-## config (#1092 / W3-P3)
+## messaging (#1092 / W3-P2)
 
 | site | checker | why it stays `assert` | directive FINAL inserts |
 | --- | --- | --- | --- |
-| `config/config_test.go:1743` | require-error | `err` is REASSIGNED below and re-asserted for the derived-map sub-case; a require here skips that second phase entirely. | `//nolint:testifylint // a second sub-case reassigns and re-asserts err` |
-| `config/converters_test.go:155` | float-compare | `toFloat64`'s table is ParseFloat round-trips (`"123.45"` -> `123.45`), where the Go literal and `ParseFloat` produce identical float64 bits. Exact equality IS the converter's contract; a tolerance would let a lossy conversion pass. | `//nolint:testifylint // exact equality is the converter's contract` |
-| `config/injection_test.go:110` | require-error | A second phase below sets the env var, reloads the config and pins the default-value behavior; a require here aborts on any message drift and that phase never runs. | `//nolint:testifylint // a reload-and-defaults phase follows` |
-| `config/converters_test.go:23` | require-error | `floatToInt64(NaN)` rejection, followed by the `Inf` rejection through a different branch of the converter — a require hides the Inf case whenever NaN regresses. | `//nolint:testifylint // the Inf-rejection case follows through a different branch` |
-| `config/injection_test.go:170` | float-compare | Env-var round-trip of `1024.5`, exactly representable in float64. The test pins that the value arrives intact, not that it arrives close. | `//nolint:testifylint // exact equality is the injection contract` |
-| `config/tenant_store_test.go:231` | require-error | Followed by removing a non-existent tenant and asserting the store did not mutate — a distinct second phase, independent of the lookup error. | `//nolint:testifylint // an independent no-mutation property follows` |
-| `config/tenant_store_test.go:76` | require-error | Followed by an Error assertion on `BrokerURL`, a different resolver path through the same store. | `//nolint:testifylint // a different resolver path is asserted next` |
-
-## Deferred, not excepted
-
-`config/getters_test.go` carries 10 live findings (6 `require-error`, 3 `float-compare`, 1
-`empty`) and is deliberately UNTOUCHED by W3-P3: Lane M's #1438 rewrote that file, so it joins a
-later sweep or FINAL. They are not exceptions and have no rationale yet — whoever picks the file
-up must triage them, and FINAL will red on them until someone does. Recorded here so the count
-is not mistaken for a clean package.
+| `messaging/payload_error_test.go:412` | require-error | `TestPayloadErrorNilAndZeroValueAreSafe` pins that EVERY method on a nil `*PayloadError` is safe. The followers assert `nilErr.Fields()` and `nilErr.Is(...)` — they never touch the asserted `nilErr.Unwrap()` result, so `require` would abort the sweep at the first method and hide whether the rest are safe. | `//nolint:testifylint // require would abort the remaining nil-receiver method checks` |
+| `messaging/payload_error_test.go:419` | require-error | Same test, zero-value half: the followers assert `zero.Fields()` and two `NotErrorIs(zero, ...)` sentinels, none touching the asserted `zero.Unwrap()` result. | `//nolint:testifylint // require would abort the remaining zero-value method checks` |

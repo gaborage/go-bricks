@@ -284,7 +284,7 @@ func TestMessagingManagerEnsureConsumersIdempotent(t *testing.T) {
 
 	for i := 0; i < 2; i++ {
 		err := manager.EnsureConsumers(ctx, tenantID, decls)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	}
 
 	assert.Equal(t, 1, client.consumerCount())
@@ -389,17 +389,17 @@ func TestMessagingManagerHashBasedIdempotency(t *testing.T) {
 
 		// First call - should create client and registry
 		err := manager.EnsureConsumers(ctx, tenantID, decls)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, 1, clientCallCount, "First call should create client")
 
 		// Second call with identical declarations - should be idempotent
 		err = manager.EnsureConsumers(ctx, tenantID, decls)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, 1, clientCallCount, "Second call should reuse existing setup")
 
 		// Third call - still idempotent
 		err = manager.EnsureConsumers(ctx, tenantID, decls)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, 1, clientCallCount, "Third call should still be idempotent")
 	})
 
@@ -419,7 +419,7 @@ func TestMessagingManagerHashBasedIdempotency(t *testing.T) {
 		decls1.RegisterConsumer(&ConsumerDeclaration{Queue: genericQueue, Consumer: genericConsumer, EventType: eventA, Handler: &mockMessageHandler{}})
 
 		err := manager.EnsureConsumers(ctx, tenantID, decls1)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Second set of declarations - different structure
 		decls2 := NewDeclarations()
@@ -428,7 +428,7 @@ func TestMessagingManagerHashBasedIdempotency(t *testing.T) {
 		decls2.RegisterConsumer(&ConsumerDeclaration{Queue: genericQueue, Consumer: genericConsumer, EventType: eventA, Handler: &mockMessageHandler{}})
 
 		err = manager.EnsureConsumers(ctx, tenantID, decls2)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "attempt to replay different declarations")
 	})
 
@@ -467,7 +467,7 @@ func TestMessagingManagerHashBasedIdempotency(t *testing.T) {
 
 		// Check all calls succeeded
 		for err := range errChan {
-			assert.NoError(t, err)
+			require.NoError(t, err)
 		}
 
 		// Singleflight should ensure only one client was created
@@ -496,17 +496,17 @@ func TestMessagingManagerHashBasedIdempotency(t *testing.T) {
 
 		// Setup for tenant1
 		err := manager.EnsureConsumers(ctx, tenant1ID, decls)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, 1, clientCallCount)
 
 		// Setup for tenant2 with same declarations - should create new client
 		err = manager.EnsureConsumers(ctx, tenant2ID, decls)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, 2, clientCallCount, "Different keys should have independent setups")
 
 		// Replay to tenant1 - should be idempotent
 		err = manager.EnsureConsumers(ctx, tenant1ID, decls)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, 2, clientCallCount, "Replay to tenant1 should be idempotent")
 	})
 
@@ -524,7 +524,7 @@ func TestMessagingManagerHashBasedIdempotency(t *testing.T) {
 		decls.RegisterConsumer(&ConsumerDeclaration{Queue: genericQueue, Consumer: genericConsumer, EventType: eventTestEvent, Handler: &mockMessageHandler{}})
 
 		err := manager.EnsureConsumers(ctx, tenantID, decls)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Check that hash was recorded
 		manager.consMu.RLock()
@@ -798,7 +798,7 @@ func TestMessagingManagerPublisherAfterCloseReturnsError(t *testing.T) {
 
 	pub, release, err := m.Publisher(ctx, "a")
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrManagerClosed, "Publisher after Close must fail closed, not resurrect a publisher (F22)")
+	require.ErrorIs(t, err, ErrManagerClosed, "Publisher after Close must fail closed, not resurrect a publisher (F22)")
 	assert.Nil(t, pub)
 	assert.Nil(t, release)
 }
@@ -837,7 +837,7 @@ func TestMessagingManagerPublisherMidCloseWindowFailsClosed(t *testing.T) {
 	manager.closed.Store(true)
 
 	pub, rel, err := manager.Publisher(ctx, tenant1ID)
-	assert.ErrorIs(t, err, ErrManagerClosed, "Publisher must fail closed once Close begins, even while the pool is still open")
+	require.ErrorIs(t, err, ErrManagerClosed, "Publisher must fail closed once Close begins, even while the pool is still open")
 	assert.Nil(t, pub, "a manager mid-Close must not hand back the still-cached publisher")
 	assert.Nil(t, rel)
 	assert.Equal(t, created, manager.pubPool.Stats().TotalCreated, "the still-open pool must not create anything new during the close window")
@@ -889,7 +889,7 @@ func TestMessagingManagerZeroValueMethodsAreSafe(t *testing.T) {
 	assert.Equal(t, 0, stats["idle_cleanups"])
 
 	pub, release, err := m.Publisher(context.Background(), "any")
-	assert.ErrorIs(t, err, ErrManagerClosed, "zero-value Publisher must fail closed, not panic")
+	require.ErrorIs(t, err, ErrManagerClosed, "zero-value Publisher must fail closed, not panic")
 	assert.Nil(t, pub)
 	assert.Nil(t, release)
 
@@ -1380,7 +1380,7 @@ func TestMessagingManagerEnsureConsumersAfterCloseDoesNotDialNewKey(t *testing.T
 	snapshot := callCount()
 
 	err := manager.EnsureConsumers(ctx, tenant2ID, decls)
-	assert.ErrorIs(t, err, ErrManagerClosed, "a new key must fail closed once the manager is closed")
+	require.ErrorIs(t, err, ErrManagerClosed, "a new key must fail closed once the manager is closed")
 	assert.Equal(t, snapshot, callCount(), "a closed manager must not dial a new broker connection")
 }
 
@@ -1407,7 +1407,7 @@ func TestMessagingManagerEnsureConsumersInternalRechecksClosedUnderLock(t *testi
 	manager.closed.Store(true)
 
 	err := manager.ensureConsumersInternal(context.Background(), testTenantID, decls, decls.Hash())
-	assert.ErrorIs(t, err, ErrManagerClosed, "ensureConsumersInternal must re-check closed under consMu")
+	require.ErrorIs(t, err, ErrManagerClosed, "ensureConsumersInternal must re-check closed under consMu")
 
 	mu.Lock()
 	defer mu.Unlock()

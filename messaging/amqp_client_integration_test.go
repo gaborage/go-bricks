@@ -510,7 +510,7 @@ func TestAMQPClientConsumeManualAck(t *testing.T) {
 	case delivery := <-deliveries:
 		assert.Equal(t, []byte("manual ack test"), delivery.Body)
 		err = delivery.Ack(false)
-		assert.NoError(t, err, "Manual ack should succeed")
+		require.NoError(t, err, "Manual ack should succeed")
 	case <-time.After(5 * time.Second):
 		t.Fatal("Timeout waiting for manual ack message")
 	}
@@ -533,7 +533,7 @@ func TestAMQPClientClose(t *testing.T) {
 
 	// Close client (tests Close function at 94.1% coverage)
 	err := client.Close()
-	assert.NoError(t, err, "Close should succeed")
+	require.NoError(t, err, "Close should succeed")
 
 	// Client should no longer be ready
 	assert.False(t, client.IsReady(), "Client should not be ready after close")
