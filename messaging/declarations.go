@@ -78,7 +78,8 @@ func (d *Declarations) RegisterExchange(e *ExchangeDeclaration) {
 		return
 	}
 
-	// Deep copy to prevent shared mutable state
+	// Copy into a new declaration so the caller's pointer is not the stored one.
+	// One level deep: the map is new, values inside it are still the caller's.
 	decl := &ExchangeDeclaration{
 		Name:       e.Name,
 		Type:       e.Type,
@@ -116,13 +117,14 @@ func (d *Declarations) RegisterQueue(q *QueueDeclaration) {
 			d.recordQueueConflict(conflict)
 			return
 		}
-		// The incumbent is already our own deep copy, so merging in place
-		// cannot reach a caller's map.
+		// The incumbent's Args map is already our own, so merging in place cannot
+		// reach the caller's map (a map stored as a VALUE inside it still is).
 		maps.Copy(incumbent.Args, q.Args)
 		return
 	}
 
-	// Deep copy to prevent shared mutable state
+	// Copy into a new declaration so the caller's pointer is not the stored one.
+	// One level deep: the map is new, values inside it are still the caller's.
 	decl := &QueueDeclaration{
 		Name:       q.Name,
 		Durable:    q.Durable,
@@ -194,7 +196,8 @@ func (d *Declarations) RegisterBinding(b *BindingDeclaration) {
 		return
 	}
 
-	// Deep copy to prevent shared mutable state
+	// Copy into a new declaration so the caller's pointer is not the stored one.
+	// One level deep: the map is new, values inside it are still the caller's.
 	decl := &BindingDeclaration{
 		Queue:      b.Queue,
 		Exchange:   b.Exchange,
@@ -216,7 +219,8 @@ func (d *Declarations) RegisterPublisher(p *PublisherDeclaration) {
 		return
 	}
 
-	// Deep copy to prevent shared mutable state
+	// Copy into a new declaration so the caller's pointer is not the stored one.
+	// One level deep: the map is new, values inside it are still the caller's.
 	decl := &PublisherDeclaration{
 		Exchange:    p.Exchange,
 		RoutingKey:  p.RoutingKey,
@@ -261,7 +265,8 @@ func (d *Declarations) RegisterConsumer(c *ConsumerDeclaration) {
 		))
 	}
 
-	// Deep copy to prevent shared mutable state
+	// Copy into a new declaration so the caller's pointer is not the stored one.
+	// One level deep: the map is new, values inside it are still the caller's.
 	decl := &ConsumerDeclaration{
 		Queue:          c.Queue,
 		Consumer:       c.Consumer,
@@ -554,8 +559,9 @@ func (d *Declarations) IsEmpty() bool {
 		s.Publishers == 0 && s.Consumers == 0
 }
 
-// Clone creates a deep copy of the declarations.
-// This is useful for creating per-tenant copies during replay.
+// Clone copies the declarations for per-tenant replay. Each declaration and its
+// Args/Headers map is new, but the copy is one level deep: a map or slice stored
+// as a VALUE inside one of those maps is shared with the original.
 func (d *Declarations) Clone() *Declarations {
 	clone := NewDeclarations()
 
