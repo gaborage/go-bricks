@@ -865,9 +865,9 @@ func TestClientCompareAndDeleteNilExpectedIsRejected(t *testing.T) {
 
 	deleted, err := client.CompareAndDelete(ctx, testKey1, nil)
 	assert.False(t, deleted)
-	require.ErrorIs(t, err, cache.ErrNilExpectedValue)
 	assert.Equal(t, before, mr.CommandCount())
 	assert.True(t, mr.Exists(testKey1))
+	require.ErrorIs(t, err, cache.ErrNilExpectedValue)
 }
 
 func TestClientCompareAndDeleteEmptySliceComparesAgainstEmptyString(t *testing.T) {

@@ -78,8 +78,8 @@ func TestConfigError(t *testing.T) {
 		underlying := errors.New("validation failed")
 		err := NewConfigError("cache.type", "unsupported type", underlying)
 
-		require.ErrorIs(t, err, underlying)
 		assert.Equal(t, underlying, errors.Unwrap(err))
+		require.ErrorIs(t, err, underlying)
 	})
 }
 
@@ -112,8 +112,8 @@ func TestConnectionError(t *testing.T) {
 		underlying := errors.New("network unreachable")
 		err := NewConnectionError("dial", "192.168.1.1:6379", underlying)
 
-		require.ErrorIs(t, err, underlying)
 		assert.Equal(t, underlying, errors.Unwrap(err))
+		require.ErrorIs(t, err, underlying)
 	})
 
 	t.Run("WithoutUnderlyingError", func(t *testing.T) {
@@ -167,8 +167,8 @@ func TestOperationError(t *testing.T) {
 		underlying := ErrNotFound
 		err := NewOperationError("get", "missing:key", underlying)
 
-		require.ErrorIs(t, err, ErrNotFound)
 		assert.Equal(t, underlying, errors.Unwrap(err))
+		require.ErrorIs(t, err, ErrNotFound)
 	})
 
 	t.Run("NestedWrapping", func(t *testing.T) {
@@ -176,8 +176,8 @@ func TestOperationError(t *testing.T) {
 		baseErr := errors.New("base error")
 		opErr := NewOperationError("get", "key:123", baseErr)
 
-		require.ErrorIs(t, opErr, baseErr)
 		assert.Contains(t, opErr.Error(), "base error")
+		require.ErrorIs(t, opErr, baseErr)
 	})
 
 	t.Run("WithoutUnderlyingError", func(t *testing.T) {
@@ -198,17 +198,17 @@ func TestErrorWrapping(t *testing.T) {
 	t.Run("NotFoundWrappedInOperationError", func(t *testing.T) {
 		err := NewOperationError("get", "user:999", ErrNotFound)
 
-		require.ErrorIs(t, err, ErrNotFound)
 		assert.Contains(t, err.Error(), "get")
 		assert.Contains(t, err.Error(), "user:999")
+		require.ErrorIs(t, err, ErrNotFound)
 	})
 
 	t.Run("CASFailedWrappedInOperationError", func(t *testing.T) {
 		err := NewOperationError("cas", "lock:123", ErrCASFailed)
 
-		require.ErrorIs(t, err, ErrCASFailed)
 		require.Contains(t, err.Error(), "cas")
 		assert.Contains(t, err.Error(), "lock:123")
+		require.ErrorIs(t, err, ErrCASFailed)
 	})
 
 	t.Run("MultipleWrappingLevels", func(t *testing.T) {
@@ -218,7 +218,7 @@ func TestErrorWrapping(t *testing.T) {
 
 		// Should be able to unwrap to the base error
 		require.ErrorIs(t, opErr, baseErr)
-		assert.ErrorIs(t, opErr, connErr)
+		require.ErrorIs(t, opErr, connErr)
 	})
 }
 

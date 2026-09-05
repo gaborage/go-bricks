@@ -290,7 +290,7 @@ func TestMockCacheWithCompareAndDeleteFailure(t *testing.T) {
 
 	_, err := mock.CompareAndDelete(ctx, "key", nil)
 	require.ErrorIs(t, err, customErr)
-	assert.NotErrorIs(t, err, cache.ErrNilExpectedValue)
+	require.NotErrorIs(t, err, cache.ErrNilExpectedValue)
 }
 
 func TestMockCacheWithHealthFailure(t *testing.T) {
@@ -440,8 +440,8 @@ func TestMockCacheWaitDelayCancelledContextShortCircuits(t *testing.T) {
 			// Seeded so a nil value witnesses the skipped read; an absent key returns nil either way.
 			seed(t, m)
 			value, err := m.Get(ctx, "key")
-			require.ErrorIs(t, err, context.Canceled)
 			assert.Nil(t, value)
+			require.ErrorIs(t, err, context.Canceled)
 		}},
 		{name: "set", check: func(t *testing.T, m *MockCache) {
 			require.ErrorIs(t, m.Set(ctx, "key", []byte("value"), time.Minute), context.Canceled)
@@ -449,22 +449,22 @@ func TestMockCacheWaitDelayCancelledContextShortCircuits(t *testing.T) {
 		}},
 		{name: "get_or_set", check: func(t *testing.T, m *MockCache) {
 			_, wasSet, err := m.GetOrSet(ctx, "key", []byte("value"), time.Minute)
-			require.ErrorIs(t, err, context.Canceled)
 			assert.False(t, wasSet)
 			assert.False(t, m.Has("key"))
+			require.ErrorIs(t, err, context.Canceled)
 		}},
 		{name: "compare_and_set", check: func(t *testing.T, m *MockCache) {
 			swapped, err := m.CompareAndSet(ctx, "key", nil, []byte("value"), time.Minute)
-			require.ErrorIs(t, err, context.Canceled)
 			assert.False(t, swapped)
 			assert.False(t, m.Has("key"))
+			require.ErrorIs(t, err, context.Canceled)
 		}},
 		{name: "compare_and_delete", check: func(t *testing.T, m *MockCache) {
 			seed(t, m)
 			deleted, err := m.CompareAndDelete(ctx, "key", []byte("value"))
-			require.ErrorIs(t, err, context.Canceled)
 			assert.False(t, deleted)
 			assert.True(t, m.Has("key"))
+			require.ErrorIs(t, err, context.Canceled)
 		}},
 		{name: "delete", check: func(t *testing.T, m *MockCache) {
 			seed(t, m)

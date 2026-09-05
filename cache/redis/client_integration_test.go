@@ -76,7 +76,7 @@ func TestRealRedisTTLExpiration(t *testing.T) {
 
 	// Immediately retrieve - should exist
 	retrieved, err := client.Get(ctx, key)
-	assert.NoError(t, err, "Get should succeed immediately after Set")
+	require.NoError(t, err, "Get should succeed immediately after Set")
 	assert.Equal(t, value, retrieved, "Retrieved value should match")
 
 	// Wait for expiration with polling (more reliable than fixed sleep in CI)
@@ -110,11 +110,11 @@ func TestRealRedisTTLZeroNoExpiration(t *testing.T) {
 
 	// Zero TTL should work (no expiration)
 	err := client.Set(ctx, key, value, 0)
-	assert.NoError(t, err, "Set with zero TTL should succeed (no expiration)")
+	require.NoError(t, err, "Set with zero TTL should succeed (no expiration)")
 
 	// Value should still exist (no expiration)
 	retrieved, err := client.Get(ctx, key)
-	assert.NoError(t, err, "Get should succeed for key with no expiration")
+	require.NoError(t, err, "Get should succeed for key with no expiration")
 	assert.Equal(t, value, retrieved, "Retrieved value should match")
 
 	// Cleanup
@@ -283,7 +283,7 @@ func TestRealRedisGetOrSetConcurrentDeduplication(t *testing.T) {
 
 	// Assert no errors occurred in goroutines (safe in main goroutine)
 	for err := range errChan {
-		assert.NoError(t, err, getOrSetSucceedMsg)
+		require.NoError(t, err, getOrSetSucceedMsg)
 	}
 
 	// Exactly ONE goroutine should have set (wasSet=true), rest should have loaded (wasSet=false)
@@ -452,7 +452,7 @@ func TestRealRedisContextCancellation(t *testing.T) {
 
 	// Operations should fail with context error
 	_, err := client.Get(ctx, "test:key")
-	assert.Error(t, err, "Get should fail with cancelled context")
+	require.Error(t, err, "Get should fail with cancelled context")
 	assert.Contains(t, err.Error(), "context canceled", "Error should mention context cancellation")
 }
 

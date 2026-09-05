@@ -273,8 +273,8 @@ func ltFollowersShareTheLeaderOutcome(t *testing.T, leaderCanceled bool, wantVal
 	close(release)
 
 	res := <-leader
-	require.ErrorIs(t, res.err, wantErr)
 	assert.Equal(t, wantVal, res.val)
+	require.ErrorIs(t, res.err, wantErr)
 
 	var joined, late int64
 	for _, ch := range results {
@@ -284,8 +284,8 @@ func ltFollowersShareTheLeaderOutcome(t *testing.T, leaderCanceled bool, wantVal
 			late++
 		default:
 			joined++
-			require.ErrorIs(t, fres.err, wantErr)
 			assert.Equal(t, wantVal, fres.val)
+			require.ErrorIs(t, fres.err, wantErr)
 		}
 	}
 	// A late follower either arrived after the flight closed and loaded for itself, or
@@ -457,8 +457,8 @@ func TestLoadThroughRejectsInvalidArguments(t *testing.T) {
 			mock := cachetest.NewMockCache()
 			load, calls := ltCountingLoader(ltAlice)
 			_, err := cache.LoadThrough(t.Context(), mock, ltKey, tt.ttl, load, tt.opts...)
-			require.ErrorIs(t, err, tt.want)
 			assert.Zero(t, calls.Load())
+			require.ErrorIs(t, err, tt.want)
 			cachetest.AssertOperationCount(t, mock, "Get", 0)
 		})
 	}
@@ -569,8 +569,8 @@ func TestLoadThroughRejectsNilCache(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			load, calls := ltCountingLoader(ltAlice)
 			_, err := cache.LoadThrough(t.Context(), tt.c, ltKey, ltTTL, load)
-			require.ErrorIs(t, err, cache.ErrNilCache)
 			assert.Zero(t, calls.Load(), "a nil cache must fail before the origin is consulted")
+			require.ErrorIs(t, err, cache.ErrNilCache)
 		})
 	}
 }
