@@ -527,7 +527,7 @@ func formatJOSEPostTrustError(c *echo.Context, apiErr IAPIError, p *jose.Policy,
 //
 // SECURITY: details reach the wire only through devDetails, the same gate the enveloped
 // and raw renderers use (app.debug AND a development environment, ADR-084). Encryption to
-// an authenticated peer is not a licence to widen the policy: the ciphertext is decrypted
+// an authenticated peer is not a license to widen the policy: the ciphertext is decrypted
 // and often logged on the peer's side, so a production envelope carries code, message and
 // meta only.
 func buildErrorEnvelope(c *echo.Context, apiErr IAPIError, cfg *config.Config) map[string]any {

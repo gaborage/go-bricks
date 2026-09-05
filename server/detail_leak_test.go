@@ -378,7 +378,7 @@ func TestJOSEDetailsMatchStandardChannel(t *testing.T) {
 	assert.Equal(t, standard.Error.Details["error"], joseDetails["error"],
 		"the two renderers must disclose the same handler-set detail")
 	assert.Contains(t, joseDetails, stackTraceDetailKey,
-		"stackTrace is injected by devDetails, so funnelling must carry it onto the JOSE envelope too")
+		"stackTrace is injected by devDetails, so funneling must carry it onto the JOSE envelope too")
 	assert.Contains(t, standard.Error.Details, stackTraceDetailKey,
 		"precondition: the standard channel injects stackTrace for this fixture")
 }
