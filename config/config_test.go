@@ -209,7 +209,6 @@ func TestLoadRejectsEmptyNumericEnv(t *testing.T) {
 
 			_, err := Load()
 
-			require.Error(t, err)
 			require.ErrorContains(t, err, tt.wantKey)
 			assert.ErrorContains(t, err, "delivered empty")
 		})
@@ -244,7 +243,6 @@ func TestLoadRejectsEmptyBoolEnv(t *testing.T) {
 
 			_, err := Load()
 
-			require.Error(t, err)
 			require.ErrorContains(t, err, tt.wantKey)
 			assert.ErrorContains(t, err, "boolean value delivered empty")
 		})
@@ -317,7 +315,6 @@ func TestLoadExplicitBoolEnvUnchanged(t *testing.T) {
 func TestLoadEmptyBoolYAMLStringRejected(t *testing.T) {
 	_, err := loadDeliveredEmptyFixture(t, "cache:\n  critical: \"\"\n", nil)
 
-	require.Error(t, err)
 	require.ErrorContains(t, err, "critical")
 	assert.ErrorContains(t, err, "boolean value delivered empty")
 }
@@ -343,7 +340,6 @@ func TestLoadEmptyDurationEnvKeepsItsOwnError(t *testing.T) {
 
 	_, err := Load()
 
-	require.Error(t, err)
 	require.ErrorContains(t, err, "invalid duration")
 	assert.NotContains(t, err.Error(), "delivered empty",
 		"the duration parser owns this target; guarding it here would only change the message")
@@ -354,7 +350,6 @@ func TestLoadEmptyDurationEnvKeepsItsOwnError(t *testing.T) {
 func TestLoadEmptyNumericYAMLStringRejected(t *testing.T) {
 	_, err := loadDeliveredEmptyFixture(t, "keystore:\n  secretminlength: \"\"\n", nil)
 
-	require.Error(t, err)
 	require.ErrorContains(t, err, "secretminlength")
 	assert.ErrorContains(t, err, "delivered empty")
 }
@@ -1249,7 +1244,6 @@ func TestLoadRejectsUnitlessNumericDurationEndToEnd(t *testing.T) {
 	t.Chdir(dir)
 
 	_, err := Load()
-	require.Error(t, err)
 	require.ErrorContains(t, err, "unit-less numeric duration 300")
 	assert.ErrorContains(t, err, "messaging.reconnect.delay")
 }
@@ -1662,7 +1656,6 @@ func TestDerivedDefaultsRejectAZeroValuedKey(t *testing.T) {
 
 	_, err := derivedDefaults()
 
-	require.Error(t, err)
 	require.ErrorContains(t, err, "server.responsetime.enabled")
 	assert.ErrorContains(t, err, "zero value")
 }
@@ -1689,7 +1682,6 @@ func TestDerivedDefaultsRejectAFailClosedKeySpace(t *testing.T) {
 
 			_, err := derivedDefaults()
 
-			require.Error(t, err)
 			require.ErrorContains(t, err, tt.key)
 			assert.ErrorContains(t, err, "must stay absent")
 		})

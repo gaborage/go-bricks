@@ -215,7 +215,6 @@ func TestLoadKeyStoreSecretMinLengthBelowFloorFailsStartup(t *testing.T) {
 
 	_, err := Load()
 
-	require.Error(t, err)
 	require.ErrorContains(t, err, "invalid configuration")
 	assert.ErrorContains(t, err, "keystore.secretminlength must be at least 32")
 }
@@ -352,7 +351,6 @@ func TestValidateKeyStorePKCS12PasswordEnvMustBeAName(t *testing.T) {
 		},
 	}
 	err := checkKeyStore(cfg)
-	require.Error(t, err)
 	require.ErrorContains(t, err, "not an environment variable name")
 	require.ErrorContains(t, err, "keystore.keys.vts.pkcs12.password.env")
 	assert.NotContains(t, err.Error(), literal)
