@@ -688,6 +688,66 @@ func TestDeclareQueueWithDLQArgsSurviveRegistration(t *testing.T) {
 	assert.False(t, injected, "keys added to the returned declaration after registration must not leak into the registered copy")
 }
 
+// TestDeclareQueueReturnedArgsAreACopy pins the semantic DeclareQueue's doc comment
+// promises: RegisterQueue stores a deep copy, so the returned pointer is a dead end for
+// Args, while the two documented doors both reach the registered declaration. Each case
+// varies the door, not the value, so a regression in the copy fails exactly one of them.
+func TestDeclareQueueReturnedArgsAreACopy(t *testing.T) {
+	const (
+		queueName = "orders.queue"
+		argKey    = "x-max-length"
+	)
+
+	tests := []struct {
+		name       string
+		setArgs    func(decls *Declarations)
+		wantStored bool
+	}{
+		{
+			name: "mutate_returned_after_declare",
+			setArgs: func(decls *Declarations) {
+				returned := decls.DeclareQueue(queueName)
+				returned.Args[argKey] = 1000
+			},
+			wantStored: false,
+		},
+		{
+			name: "set_args_before_register",
+			setArgs: func(decls *Declarations) {
+				q := NewQueue(queueName)
+				q.Args[argKey] = 1000
+				decls.RegisterQueue(q)
+			},
+			wantStored: true,
+		},
+		{
+			name: "mutate_stored_copy",
+			setArgs: func(decls *Declarations) {
+				decls.DeclareQueue(queueName)
+				decls.Queues[queueName].Args[argKey] = 1000
+			},
+			wantStored: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decls := NewDeclarations()
+			tt.setArgs(decls)
+
+			registered := decls.Queues[queueName]
+			require.NotNil(t, registered, "the queue must be registered whichever door was used")
+
+			got, present := registered.Args[argKey]
+			assert.Equal(t, tt.wantStored, present,
+				"whether the registered copy carries the arg must match the door used")
+			if tt.wantStored {
+				assert.Equal(t, 1000, got)
+			}
+		})
+	}
+}
+
 func TestDeclareQueueWithDLQSharedDLXSingleBinding(t *testing.T) {
 	decls := NewDeclarations()
 	spec := &DeadLetterSpec{Exchange: "shared.dlx", ParkingQueue: "shared.dlq"}
