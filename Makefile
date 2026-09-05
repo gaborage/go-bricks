@@ -52,6 +52,13 @@ MUTATE_COOLDOWN ?= 30s
 # package in the diff. The cache only ever stores a package whose changed lines
 # came back entirely clean, so this is a debugging lever, not a correctness one.
 MUTATE_NO_CACHE ?=
+# testcontainers derives one session id per `go test` parent process, so every
+# integration binary shares one Ryuk reaper. Ryuk exits 10s after its last client
+# disconnects, and the internal/* packages queued between inbox and messaging fill
+# the -p run slots for about that long, so messaging could reuse a reaper that was
+# already exiting (a 60s "wait for reaper" hang). 2m outlives any inter-package gap;
+# ci-v2.yml sets the same.
+export RYUK_RECONNECTION_TIMEOUT ?= 2m
 # Default target
 help: ## Show this help message
 	@echo "Available targets:"
