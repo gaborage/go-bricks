@@ -109,10 +109,15 @@ func (qb *QueryBuilder) normalizeAgainst(pattern *regexp.Regexp, identifier stri
 func (qb *QueryBuilder) validateVendorSegments(argument string, pattern *regexp.Regexp, match []string) error {
 	// match[0] is the whole match, which every pattern here anchors, so it is the
 	// trimmed value the caller judged.
+	// SubexpIndex reports -1 for a group the pattern does not have, so the
+	// absence test compares against that sentinel rather than ordering against
+	// zero: no named group can ever land at index 0, which is the whole match,
+	// so `> 0` and `>= 0` would be the same predicate and a mutation between
+	// them would be unkillable by any test.
 	tokens := []string{match[0]}
-	if i := pattern.SubexpIndex("ident"); i > 0 {
+	if i := pattern.SubexpIndex("ident"); i != -1 {
 		tokens = []string{match[i]}
-		if a := pattern.SubexpIndex("alias"); a > 0 && match[a] != "" {
+		if a := pattern.SubexpIndex("alias"); a != -1 && match[a] != "" {
 			tokens = append(tokens, strings.TrimSpace(match[a]))
 		}
 	}

@@ -318,8 +318,10 @@ follows PostgreSQL's grammar.
 
 Two things are deliberately NOT judged at the doors: struct `db:"..."` tag names
 at the INSERT struct doors (`InsertStruct`, `InsertFields`), which the `columns`
-package judges against the union alphabet — `UpdateQueryBuilder.SetStruct` does
-judge them, because it goes through the column funnel — and identifier byte caps
+package judges against the union alphabet
+([#1449](https://github.com/gaborage/go-bricks/issues/1449)) —
+`UpdateQueryBuilder.SetStruct` does judge them, because it goes through the
+column funnel — and identifier byte caps
 ([#1437](https://github.com/gaborage/go-bricks/issues/1437)).
 
 ### Validating an identifier yourself (`database/identifier`)

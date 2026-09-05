@@ -103,8 +103,8 @@ panic.
   do not agree, which is itself the argument for closing this. Tag names are
   developer constants judged by the `columns` package against the union alphabet,
   and closing it means threading a vendor into that package — out of scope here,
-  and pinned by a test that RECORDS the current split so the day it changes is
-  visible.
+  tracked as #1449, and pinned by a test that RECORDS the current split so the
+  day it changes is visible.
 - **Residual: byte caps are still unenforced at the doors** (#1437). On
   PostgreSQL an over-long name is silently truncated at 63 bytes, so two names
   sharing a prefix can collapse onto one object.
@@ -117,4 +117,4 @@ panic.
 - `database/identifier/identifier.go` (`ValidateCharset`),
   `database/internal/builder/renderer.go` (`ValidateSegment`),
   `database/internal/builder/identifiers.go` (`validateVendorSegments`)
-- Issues #1202, #1311, #1437
+- Issues #1202, #1311, #1437 (byte caps), #1449 (struct db-tag names)

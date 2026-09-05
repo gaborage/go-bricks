@@ -6938,12 +6938,19 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 ### [C64.3] PostgreSQL refuses `#` in an unquoted identifier argument at every builder door · breaking · when: match
 
-- detect: `git grep -nE '"[^"]*#' -- '*.go'` over the code that CALLS the builder, narrowed to
-  identifier positions: a column, table, alias, ORDER BY / GROUP BY item, insert or SetMap key,
-  or upsert column carrying `#` in a string handed to the builder. A `#` inside a VALUE, inside
-  a `qb.Expr()`/`Raw()` body, or inside an already-quoted identifier (`"a#b"`) is unaffected, so
-  the population is identifier ARGUMENTS only. Oracle-only deployments match nothing. A struct
-  `db:"a#b"` tag also matches this grep and is NOT covered by the change — see scope.
+- detect: `git grep -nE '[`"][^`"]*#' -- '*.go'` over the code that CALLS the builder, narrowed
+  to identifier positions: a column, table, alias, ORDER BY / GROUP BY item, insert or SetMap
+  key, or upsert column carrying `#` in a string handed to the builder. A `#` inside a VALUE,
+  inside a `qb.Expr()`/`Raw()` body, or inside an already-quoted identifier (`"a#b"`) is
+  unaffected, so the population is identifier ARGUMENTS only. Oracle-only deployments match
+  nothing. A struct `db:"a#b"` tag also matches this grep and is NOT covered by the change —
+  see scope.
+  **The grep is a shortlist, not the population.** It reads LITERALS only, so it cannot see an
+  identifier that arrives at the builder as a variable — read from config, from schema
+  metadata, from a tenant record, or built by string concatenation. If any door in your code
+  is handed a computed identifier, that source has to be inventoried by hand (or exercised
+  against a PostgreSQL instance on the new version), because a clean grep does NOT mean a
+  clean deployment.
 - scope: every builder door validates each unquoted segment of every identifier argument
   against the VENDOR's alphabet after the existing shape grammar: on PostgreSQL
   `[A-Za-z_][A-Za-z0-9_$]*` (no `#`), on Oracle `[A-Za-z_][A-Za-z0-9_$#]*` (unchanged). The doors
@@ -6956,11 +6963,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   NOT covered: `InsertStruct` and `InsertFields` render struct-derived columns without the
   vendor check, so a `db:"a#b"` field still reaches PostgreSQL unquoted and still fails at
   execution — db-tag names are developer constants judged by the `columns` package against the
-  union alphabet. `UpdateQueryBuilder.SetStruct` DOES judge them, since it goes through the
-  column funnel. Identifier byte caps stay unjudged at every door (#1437).
+  union alphabet (#1449). `UpdateQueryBuilder.SetStruct` DOES judge them, since it goes through
+  the column funnel. Identifier byte caps stay unjudged at every door (#1437).
 - gate: (a) identifier arguments — match = any PostgreSQL (or unknown-vendor) deployment hands
-  the builder an identifier argument containing `#`. no-match = Oracle-only, or no `#` in any
-  identifier position. (b) error-path assertions — match = a test or caller asserts that a
+  the builder an identifier argument containing `#`, whether written as a literal or computed
+  at runtime. no-match = Oracle-only, or every identifier argument is a literal and none of
+  them carries `#` — a no-match on the literal grep ALONE is not a no-match when identifiers
+  come from config or metadata. (b) error-path assertions — match = a test or caller asserts that a
   `#`-bearing identifier BUILDS (a golden SQL string containing it, a `require.NoError` around
   such a `ToSQL()`), which now returns an error on PostgreSQL. no-match = nothing asserts on
   those statements.
@@ -6972,8 +6981,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   Oracle if you run both — the two vendors deliberately disagree here.
 - verify: `go build ./... && go test ./...`  # then (a) run one statement per affected door on
   PostgreSQL and confirm the error names the argument and the vendor rather than the server
-  rejecting it later, and (b) `git grep -nE '"[^"]*#' -- '*_test.go'` returns no identifier-position
-  expectation that still expects a build
+  rejecting it later — exercise the doors fed by COMPUTED identifiers too, since no grep
+  reaches them — and (b) `git grep -nE '[`"][^`"]*#' -- '*_test.go'` returns no
+  identifier-position expectation that still expects a build
 - ref: gaborage/go-bricks#1202 · [ADR-100](adr_100_vendor_identifier_grammar_behind_renderer.md) · follow-up gaborage/go-bricks#1437 · `database/identifier/identifier.go`, `database/internal/builder/renderer.go`, `database/internal/builder/identifiers.go`
 
 ---
