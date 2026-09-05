@@ -51,8 +51,49 @@ func StartRedisContainer(ctx context.Context, t *testing.T, cfg *RedisContainerC
 	}
 
 	if !isDockerAvailable(ctx) {
-		t.Skip("Docker is not available - skipping integration test. Install Docker Desktop or ensure Docker daemon is running.")
+		t.Skip(DockerUnavailableSkipMessage)
 		return nil, nil // Never reached due to Skip, but satisfies return
+	}
+
+	cc, err := startRedisContainerInternal(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	t.Logf("Redis container started successfully at %s:%d", cc.host, cc.port)
+
+	return cc, nil
+}
+
+// StartRedisContainerForTestMain starts a Redis test container without
+// requiring a *testing.T. Intended for package-level TestMain usage where
+// container provisioning must happen before m.Run() and *T is unavailable.
+//
+// Returns (container, true, nil) on success.
+// Returns (nil, false, nil) when Docker is unavailable — what that means is the
+// caller's decision: a package whose tests are all integration tests may log and
+// os.Exit(0), while a package that also holds unit tests hands the tuple to
+// containers.Shared, which skips only the requesting test.
+// Returns (nil, true, err) when Docker is available but startup failed.
+//
+// Callers are responsible for invoking Terminate after m.Run().
+func StartRedisContainerForTestMain(ctx context.Context, cfg *RedisContainerConfig) (container *RedisContainer, dockerAvailable bool, err error) {
+	if !isDockerAvailable(ctx) {
+		return nil, false, nil
+	}
+	cc, err := startRedisContainerInternal(ctx, cfg)
+	if err != nil {
+		return nil, true, err
+	}
+	return cc, true, nil
+}
+
+// startRedisContainerInternal does the actual testcontainer setup without
+// any *testing.T interaction. Both StartRedisContainer (which adds *T-bound
+// Skip/Logf) and StartRedisContainerForTestMain wrap it.
+func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig) (*RedisContainer, error) {
+	if cfg == nil {
+		cfg = DefaultRedisConfig()
 	}
 
 	// Use composite wait strategy: log message (fast early signal) + port listening (network verification)
@@ -83,8 +124,6 @@ func StartRedisContainer(ctx context.Context, t *testing.T, cfg *RedisContainerC
 	}
 
 	port := int(mappedPort.Num())
-
-	t.Logf("Redis container started successfully at %s:%d", host, port)
 
 	return &RedisContainer{
 		container: redisContainer,
