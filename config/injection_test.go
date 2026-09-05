@@ -167,7 +167,7 @@ func TestConfigInjectionComplexTypes(t *testing.T) {
 	assert.Equal(t, 60*time.Second, serviceConfig.WriteTimeout)
 	assert.True(t, serviceConfig.DebugMode)
 	assert.Equal(t, int64(8), serviceConfig.WorkerCount)
-	assert.Equal(t, 1024.5, serviceConfig.MaxMemory)
+	assert.InDelta(t, 1024.5, serviceConfig.MaxMemory, 0)
 	assert.Equal(t, "premium", serviceConfig.OptionalFeature)
 	assert.True(t, serviceConfig.OptionalFlag)
 }

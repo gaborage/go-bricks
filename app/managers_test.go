@@ -539,7 +539,7 @@ func TestManagerConfigBuilderConsistency(t *testing.T) {
 		assert.Equal(t, tenantLimit, msgOptions.MaxPublishers)
 
 		// Database has longer TTL than messaging in multi-tenant mode
-		assert.True(t, dbOptions.IdleTTL > msgOptions.IdleTTL)
+		assert.Greater(t, dbOptions.IdleTTL, msgOptions.IdleTTL)
 	})
 
 	t.Run("builder instance immutability", func(t *testing.T) {
@@ -554,9 +554,9 @@ func TestManagerConfigBuilderConsistency(t *testing.T) {
 		assert.Equal(t, dbOptions1, dbOptions2)
 		assert.Equal(t, msgOptions1, msgOptions2)
 
-		// Getters should return same values
-		assert.Equal(t, builder.IsMultiTenant(), builder.IsMultiTenant())
-		assert.Equal(t, builder.TenantLimit(), builder.TenantLimit())
+		// Getters keep reporting the constructor arguments after the repeated Build calls
+		assert.True(t, builder.IsMultiTenant())
+		assert.Equal(t, 100, builder.TenantLimit())
 	})
 }
 
@@ -593,7 +593,7 @@ func TestManagerConfigBuilderEdgeCases(t *testing.T) {
 		// Multi-tenant: DB (30min) > Messaging (10min)
 		assert.Equal(t, 30*time.Minute, dbOptions.IdleTTL)
 		assert.Equal(t, 10*time.Minute, msgOptions.IdleTTL)
-		assert.True(t, dbOptions.IdleTTL > msgOptions.IdleTTL)
+		assert.Greater(t, dbOptions.IdleTTL, msgOptions.IdleTTL)
 	})
 
 	t.Run("single-tenant ignores tenant limit parameter", func(t *testing.T) {
@@ -759,7 +759,7 @@ func TestResourceManagerFactoryCreateCacheManager(t *testing.T) {
 		// Verify Get() operations fail with the connector error
 		ctx := context.Background()
 		_, _, getErr := manager.Get(ctx, "test-key")
-		assert.Error(t, getErr)
+		require.Error(t, getErr)
 		assert.ErrorContains(t, getErr, "cache connector failed")
 	})
 }
@@ -796,10 +796,12 @@ func TestResourceManagerFactoryCreateCacheManagerFailsClosed(t *testing.T) {
 
 			require.Error(t, err)
 			assert.Nil(t, manager, "a rejected configuration must not yield a usable manager")
-			assert.ErrorContains(t, err, "cache manager")
-			assert.ErrorContains(t, err, tt.wantCause)
 			// %w, not %v: consumers must be able to unwrap to the cache package's cause.
-			assert.NotNil(t, errors.Unwrap(err), "the underlying cause must stay unwrappable")
+			// Hoisted above the message clauses: it is an independent property, so a
+			// clause mismatch must not hide it.
+			assert.Error(t, errors.Unwrap(err), "the underlying cause must stay unwrappable")
+			require.ErrorContains(t, err, "cache manager")
+			require.ErrorContains(t, err, tt.wantCause)
 		})
 	}
 }
@@ -817,8 +819,8 @@ func TestResourceManagerFactoryCreateCacheManagerReportsResolvedPoolSize(t *test
 
 	require.Error(t, err)
 	assert.Nil(t, manager)
-	assert.ErrorContains(t, err, "maxsize=-1", "the resolved pool size must appear in the error")
-	assert.ErrorContains(t, err, "multitenant.limits.tenants", "and the key it actually came from")
+	require.ErrorContains(t, err, "maxsize=-1", "the resolved pool size must appear in the error")
+	require.ErrorContains(t, err, "multitenant.limits.tenants", "and the key it actually came from")
 	assert.ErrorContains(t, err, "maxsize cannot be negative")
 }
 

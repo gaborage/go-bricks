@@ -152,7 +152,7 @@ func TestFloat64Conversions(t *testing.T) {
 				assert.Error(t, err)
 			} else {
 				require.NoError(t, err)
-				assert.Equal(t, tt.expected, result)
+				assert.InDelta(t, tt.expected, result, 0)
 			}
 		})
 	}
