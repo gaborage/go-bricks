@@ -301,8 +301,9 @@ func BenchmarkMiddlewareAdapter(b *testing.B) {
 // layer (~10 middlewares ⇒ a clearly detectable jump) — the ADR-026 invariant. Measured
 // baseline: 62 allocs/op on go1.27.0 (59 on go1.26.6; the +3 was a uniform toolchain
 // shift, #1177); the +7 margin keeps the ceiling below the ~72 a full flat-adapter
-// conversion would produce from 62. NOTE: 59 on the pinned toolchain vs ADR-026's
-// original 53 is accumulated in-ceiling growth, tracked separately (#1179).
+// conversion would produce from 62. ADR-026's amendment attributes the growth from the
+// original 53 (#1179): five of it is this test's own logger double, which is why the
+// number is worth re-pinning to 57 once that double is values-free (#1439).
 const (
 	defaultMiddlewareChainBaselineAllocs = 62
 	defaultMiddlewareChainAllocsMargin   = 7

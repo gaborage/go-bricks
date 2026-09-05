@@ -3,6 +3,35 @@
 **Status:** Accepted
 **Date:** 2026-06-06
 
+> **Amended (2026-09-05, #1179):** The allocation guard for the default
+> middleware chain lives in `server/route_registrar_test.go`. It was not added by
+> this ADR — #627 (`b0ef71d1`, three weeks later) introduced it with a measured
+> baseline of 53 allocs/op. It reads 62 today, and this records where the six
+> came from. The decision below is unchanged.
+>
+> - **Toolchain, 53 → 56** (#1177). Not this project's code: the anchor commit
+>   `b0ef71d1` reads 53 on go1.26.x and 56 on go1.27.1.
+> - **`d93dc743` (#682), 56 → 61 — the test harness, not the chain.**
+>   `testLogEvent.Str` began recording values into a `map[string]string` so tests
+>   could assert on `SensitiveDataFilter` masking, and `buildLogEvent` makes ten
+>   unconditional `Str` calls per request, so every measured request now builds
+>   and fills that map. The commit's only non-test file is `server/server.go`,
+>   and every path it changes hangs off the error handler — `classifyError`'s
+>   `status >= 500` branch and the panic branch — which a 200 OK never enters.
+>   Proven by patching the map out at the head and re-measuring: 62 → 57.
+> - **`d715a7c5` (#1128), 61 → 62 — justified feature cost.**
+>   [ADR-070](adr_070_inbound_trace_identifier_validation.md) made the HTTP door
+>   shadow both inherited W3C keys unconditionally, so a request carrying no
+>   `traceparent` now pays for context values the old present-header-only path
+>   skipped. The step measures +1 net. The two shadow lines cost 2 at today's
+>   head (removing both by overlay: 62 → 60), so the same commit gave one back
+>   elsewhere on this path; that half was not decomposed further.
+>
+> Net: five of the six are test-harness bookkeeping, one is a deliberate ingress
+> cost, and the toolchain adds three on top of the original 53. Every number was
+> measured on go1.27.1, three runs, all agreeing. Giving the guard a values-free
+> logger double and re-pinning to 57 is tracked in #1439.
+
 ## Context
 
 Profiling the framework on a default-config read workload (perf iteration-1)
@@ -102,3 +131,6 @@ Rejected alternatives:
 
 - ADR-013 (interface naming) — prior public-interface evolution precedent.
 - ADR-025 (pool idle tracks max) — the sibling perf iteration-1 change.
+- [ADR-070](adr_070_inbound_trace_identifier_validation.md) (inbound trace identifier
+  validation) — its unconditional W3C key clear at the HTTP door is the one allocation
+  this path has gained since, per the amendment above.
