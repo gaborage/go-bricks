@@ -484,9 +484,11 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		// Tenant A's key should be gone
 		_, err = cacheA.Get(ctx, sharedKey)
 		// assert, not require: the tenant-B isolation check below is the property this
-		// test exists to pin, and it runs on a different key through a different client.
-		// A require here aborts on any non-nil error that is not ErrNotFound and the
-		// isolation regression goes unreported (#1092 exceptions file).
+		// test exists to pin. It reads the SAME sharedKey through tenant B's client —
+		// which is exactly what makes it an isolation check, since a namespacing
+		// regression would have let tenant A's delete reach tenant B's copy. A require
+		// here aborts on any non-nil error that is not ErrNotFound, and that regression
+		// goes unreported (#1092 exceptions file).
 		assert.ErrorIs(t, err, cachepkg.ErrNotFound, "Tenant A's key should be deleted")
 
 		// Tenant B's key should still exist (isolation verified)
