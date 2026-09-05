@@ -4,6 +4,12 @@
 [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md)
 **Date:** 2026-06-16
 
+> **Amended (2026-09-05, #1197):** the deferred error no longer lives on each
+> builder as its own `err` field. It lives in `database/internal/deferred.Error`,
+> embedded in all four builders — `InsertQueryBuilder` included — and `Fail` /
+> `Err()` are the only doors to it, so a direct assignment no longer compiles.
+> The first-wins rule the text below describes is unchanged; only its owner is.
+>
 > **Amendment — 2026-08-23 (ADR-082).** Two statements below are no longer
 > current, and are left in place because the reasoning is the historical record
 > rather than because it still holds:
