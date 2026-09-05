@@ -1,7 +1,6 @@
 package types
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -52,6 +51,6 @@ func TestInvalidAliasErrorMatchesWithErrorsAs(t *testing.T) {
 	var err error = &InvalidAliasError{Alias: "u;"}
 
 	var invalid *InvalidAliasError
-	require.True(t, errors.As(err, &invalid))
+	require.ErrorAs(t, err, &invalid)
 	assert.Equal(t, "u;", invalid.Alias)
 }

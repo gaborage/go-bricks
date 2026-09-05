@@ -697,7 +697,7 @@ func TestJoinFilterErrorPropagation(t *testing.T) {
 		sql, args, err := query.ToSQL()
 
 		// Error should be propagated, not injected into SQL
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "JoinOn filter error")
 		assert.Contains(t, err.Error(), joinFilterErrorMsg)
 		assert.Empty(t, sql)
@@ -711,7 +711,7 @@ func TestJoinFilterErrorPropagation(t *testing.T) {
 
 		sql, args, err := query.ToSQL()
 
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "LeftJoinOn filter error")
 		assert.Contains(t, err.Error(), joinFilterErrorMsg)
 		assert.Empty(t, sql)
@@ -725,7 +725,7 @@ func TestJoinFilterErrorPropagation(t *testing.T) {
 
 		sql, args, err := query.ToSQL()
 
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "RightJoinOn filter error")
 		assert.Contains(t, err.Error(), joinFilterErrorMsg)
 		assert.Empty(t, sql)
@@ -739,7 +739,7 @@ func TestJoinFilterErrorPropagation(t *testing.T) {
 
 		sql, args, err := query.ToSQL()
 
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "InnerJoinOn filter error")
 		assert.Contains(t, err.Error(), joinFilterErrorMsg)
 		assert.Empty(t, sql)
@@ -758,7 +758,7 @@ func TestJoinFilterErrorPropagation(t *testing.T) {
 		sql, args, err := query.ToSQL()
 
 		// Original error should still be returned
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "JoinOn filter error")
 		assert.Empty(t, sql)
 		assert.Nil(t, args)
@@ -1727,7 +1727,7 @@ func TestColumnAliasingUnaliased(t *testing.T) {
 	assert.Equal(t, colID, cols.Col(fieldID))
 	assert.Equal(t, colName, cols.Col(fieldName))
 	assert.Equal(t, colEmail, cols.Col(fieldEmail))
-	assert.Equal(t, "", cols.Alias())
+	assert.Empty(t, cols.Alias())
 
 	// Cols should return bare column names
 	result := cols.Cols(fieldID, fieldName)
@@ -1765,7 +1765,7 @@ func TestColumnAliasingWithAlias(t *testing.T) {
 
 	// Original should remain unaliased
 	assert.Equal(t, colID, cols.Col(fieldID))
-	assert.Equal(t, "", cols.Alias())
+	assert.Empty(t, cols.Alias())
 }
 
 func TestColumnAliasingOracleReservedWords(t *testing.T) {
@@ -2629,10 +2629,9 @@ func TestRawExpressionLiteralValidatedAtConsumption(t *testing.T) {
 					qb := NewQueryBuilder(vendor)
 					sql, args, err := door.build(qb, tc.expr).ToSQL()
 
-					require.Error(t, err)
-					assert.ErrorIs(t, err, tc.wantErr)
 					assert.Empty(t, sql)
 					assert.Empty(t, args)
+					require.ErrorIs(t, err, tc.wantErr)
 				})
 			}
 		}

@@ -2,7 +2,6 @@
 package types
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,7 +13,7 @@ func TestTableRef(t *testing.T) {
 		table, err := Table("users")
 		require.NoError(t, err)
 		assert.Equal(t, "users", table.Name())
-		assert.Equal(t, "", table.Alias())
+		assert.Empty(t, table.Alias())
 		assert.False(t, table.HasAlias())
 	})
 
@@ -53,7 +52,7 @@ func TestTableRefValidation(t *testing.T) {
 	t.Run("Empty table name returns error", func(t *testing.T) {
 		_, err := Table("")
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrEmptyTableName))
+		assert.ErrorIs(t, err, ErrEmptyTableName)
 	})
 
 	t.Run("Empty alias returns error", func(t *testing.T) {
@@ -61,7 +60,7 @@ func TestTableRefValidation(t *testing.T) {
 		require.NoError(t, err)
 		_, err = table.As("")
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrEmptyTableAlias))
+		assert.ErrorIs(t, err, ErrEmptyTableAlias)
 	})
 
 	t.Run("Valid table name succeeds", func(t *testing.T) {
@@ -113,6 +112,6 @@ func TestTableRefAsReturnsErrorOnNilReceiver(t *testing.T) {
 	var t1 *TableRef // typed-nil receiver
 	_, err := t1.As("x")
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrNilTableRef),
+	assert.ErrorIs(t, err, ErrNilTableRef,
 		"nil receiver must fail with ErrNilTableRef rather than panic")
 }

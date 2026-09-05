@@ -314,8 +314,8 @@ func TestCreateDBSpanQueryTruncation(t *testing.T) {
 	}
 
 	// Query should be truncated
-	assert.True(t, len(queryAttr) <= 2000, "Query should be truncated to max 2000 characters")
-	assert.True(t, len(queryAttr) < len(longQuery), "Query should be truncated")
+	assert.LessOrEqual(t, len(queryAttr), 2000, "Query should be truncated to max 2000 characters")
+	assert.Less(t, len(queryAttr), len(longQuery), "Query should be truncated")
 	if len(longQuery) > 2000 {
 		assert.Contains(t, queryAttr, "...", "Truncated query should contain ellipsis")
 	}

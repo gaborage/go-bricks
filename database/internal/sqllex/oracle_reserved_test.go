@@ -121,7 +121,7 @@ func TestIsOracleReservedWordAllEntries(t *testing.T) {
 		assert.True(t, IsOracleReservedWord(word), "IsOracleReservedWord should return true for map entry %q", word)
 		count++
 	}
-	assert.Greater(t, count, 0, "Should have tested at least one reserved word")
+	assert.Positive(t, count, "Should have tested at least one reserved word")
 }
 
 // TestOracleQuotingFailureWithMissingReservedWords reproduces M10: the map was missing

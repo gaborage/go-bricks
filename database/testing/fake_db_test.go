@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -39,7 +40,7 @@ func TestTestDBQueryRow(t *testing.T) {
 		var name string
 		err := row.Scan(&id, &name)
 
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, int64(123), id)
 		assert.Equal(t, "Alice", name)
 	})
@@ -67,18 +68,18 @@ func TestTestDBQuery(t *testing.T) {
 				AddRow(int64(2), "Bob"))
 
 		rows, err := db.Query(context.Background(), testQuery)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		defer rows.Close()
 
 		var ids []int64
 		for rows.Next() {
 			var id int64
 			var name string
-			assert.NoError(t, rows.Scan(&id, &name))
+			require.NoError(t, rows.Scan(&id, &name))
 			ids = append(ids, id)
 		}
 
-		assert.NoError(t, rows.Err())
+		require.NoError(t, rows.Err())
 		assert.Equal(t, []int64{1, 2}, ids)
 	})
 
@@ -88,7 +89,7 @@ func TestTestDBQuery(t *testing.T) {
 			WillReturnRows(NewRowSet("id", "name"))
 
 		rows, err := db.Query(context.Background(), "SELECT * FROM users WHERE 1=0")
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		defer rows.Close()
 
 		assert.False(t, rows.Next())
@@ -105,7 +106,7 @@ func TestTestDBExec(t *testing.T) {
 
 		result, err := db.Exec(context.Background(), "INSERT INTO users VALUES ($1, $2)", "Alice", "alice@example.com")
 
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		affected, _ := result.RowsAffected()
 		assert.Equal(t, int64(5), affected)
 	})
@@ -138,10 +139,10 @@ func TestTestTxCommitRollback(t *testing.T) {
 		tx := db.ExpectTransaction()
 
 		txInstance, err := db.Begin(context.Background())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		err = txInstance.Commit(context.Background())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.True(t, tx.IsCommitted())
 		assert.False(t, tx.IsRolledBack())
 	})
@@ -151,10 +152,10 @@ func TestTestTxCommitRollback(t *testing.T) {
 		tx := db.ExpectTransaction()
 
 		txInstance, err := db.Begin(context.Background())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		err = txInstance.Rollback(context.Background())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.False(t, tx.IsCommitted())
 		assert.True(t, tx.IsRolledBack())
 	})
@@ -171,29 +172,29 @@ func TestTestTxExpectationOrdering(t *testing.T) {
 		ExpectExec("INSERT SECOND").WillReturnRowsAffected(5)
 
 	txConn, err := db.Begin(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer txConn.Rollback(context.Background()) // No-op if committed
 
 	row := txConn.QueryRow(context.Background(), "SELECT FIRST")
 	var first int64
-	assert.NoError(t, row.Scan(&first))
+	require.NoError(t, row.Scan(&first))
 	assert.Equal(t, int64(1), first)
 
 	row = txConn.QueryRow(context.Background(), "SELECT SECOND")
 	var second int64
-	assert.NoError(t, row.Scan(&second))
+	require.NoError(t, row.Scan(&second))
 	assert.Equal(t, int64(2), second)
 
 	result, err := txConn.Exec(context.Background(), "INSERT FIRST")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	rowsAffected, err := result.RowsAffected()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, int64(1), rowsAffected)
 
 	result, err = txConn.Exec(context.Background(), "INSERT SECOND")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	rowsAffected, err = result.RowsAffected()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, int64(5), rowsAffected)
 }
 
@@ -213,38 +214,38 @@ func TestMultipleTransactionExpectations(t *testing.T) {
 
 		// First transaction
 		txConn1, err := db.Begin(context.Background())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		defer txConn1.Rollback(context.Background()) // No-op if committed
 		result1, err := txConn1.Exec(context.Background(), "INSERT INTO orders VALUES (1)")
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		rowsAffected1, _ := result1.RowsAffected()
 		assert.Equal(t, int64(1), rowsAffected1)
 		err = txConn1.Commit(context.Background())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.True(t, tx1.IsCommitted())
 
 		// Second transaction
 		txConn2, err := db.Begin(context.Background())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		defer txConn2.Rollback(context.Background()) // No-op if committed
 		result2, err := txConn2.Exec(context.Background(), "INSERT INTO products VALUES (1)")
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		rowsAffected2, _ := result2.RowsAffected()
 		assert.Equal(t, int64(2), rowsAffected2)
 		err = txConn2.Commit(context.Background())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.True(t, tx2.IsCommitted())
 
 		// Third transaction
 		txConn3, err := db.Begin(context.Background())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		defer txConn3.Rollback(context.Background()) // No-op if committed
 		result3, err := txConn3.Exec(context.Background(), "INSERT INTO users VALUES (1)")
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		rowsAffected3, _ := result3.RowsAffected()
 		assert.Equal(t, int64(3), rowsAffected3)
 		err = txConn3.Commit(context.Background())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.True(t, tx3.IsCommitted())
 	})
 
@@ -253,7 +254,7 @@ func TestMultipleTransactionExpectations(t *testing.T) {
 
 		// Try to begin without setting up expectations
 		_, err := db.Begin(context.Background())
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unexpected Begin() call")
 	})
 
@@ -265,12 +266,12 @@ func TestMultipleTransactionExpectations(t *testing.T) {
 
 		// First Begin succeeds
 		tx, err := db.Begin(context.Background())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		defer tx.Rollback(context.Background()) // No-op: test transaction, cleanup not critical
 
 		// Second Begin fails (no more expectations)
 		_, err = db.Begin(context.Background())
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unexpected Begin() call")
 	})
 
@@ -283,10 +284,10 @@ func TestMultipleTransactionExpectations(t *testing.T) {
 
 		// Start both transactions
 		txConn1, err := db.Begin(context.Background())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		defer txConn1.Rollback(context.Background()) // No-op if committed
 		txConn2, err := db.Begin(context.Background())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		defer txConn2.Rollback(context.Background()) // No-op if committed
 
 		// Commit both
@@ -364,7 +365,7 @@ func TestRowSet(t *testing.T) {
 		var scannedEmail *string
 
 		err := row.Scan(&scannedName, &scannedAge, &scannedEmail)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, "Alice", scannedName)
 		assert.Equal(t, int64(30), scannedAge)
 		assert.Nil(t, scannedEmail)
@@ -387,7 +388,7 @@ func TestDeterministicExpectationMatching(t *testing.T) {
 		row := db.QueryRow(context.Background(), testQuery)
 		var id int64
 		err := row.Scan(&id)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, int64(1), id, "first expectation should match")
 	})
 
@@ -402,7 +403,7 @@ func TestDeterministicExpectationMatching(t *testing.T) {
 
 		// First expectation should match
 		result, err := db.Exec(context.Background(), "INSERT INTO users VALUES (1, 'Alice')")
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		affected, _ := result.RowsAffected()
 		assert.Equal(t, int64(10), affected, "first expectation should match")
 	})
@@ -420,13 +421,13 @@ func TestDeterministicExpectationMatching(t *testing.T) {
 		row := db.QueryRow(context.Background(), testQuery)
 		var id int64
 		err := row.Scan(&id)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, int64(100), id, "first duplicate expectation should match")
 
 		// Subsequent queries also match the first expectation
 		row = db.QueryRow(context.Background(), "SELECT * FROM orders")
 		err = row.Scan(&id)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, int64(100), id, "first expectation matches subsequent queries")
 	})
 }
@@ -451,7 +452,7 @@ func TestConvertAssignUnsignedTypes(t *testing.T) {
 		var u uint
 		err := row.Scan(&u8, &u16, &u32, &u64, &u)
 
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, uint8(255), u8)
 		assert.Equal(t, uint16(65535), u16)
 		assert.Equal(t, uint32(4294967295), u32)
@@ -477,7 +478,7 @@ func TestConvertAssignUnsignedTypes(t *testing.T) {
 		var u *uint
 		err := row.Scan(&u8, &u16, &u32, &u64, &u)
 
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.NotNil(t, u8)
 		assert.Equal(t, uint8(100), *u8)
 		assert.NotNil(t, u16)
@@ -508,7 +509,7 @@ func TestConvertAssignUnsignedTypes(t *testing.T) {
 		var u *uint
 		err := row.Scan(&u8, &u16, &u32, &u64, &u)
 
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Nil(t, u8)
 		assert.Nil(t, u16)
 		assert.Nil(t, u32)
@@ -526,7 +527,7 @@ func TestConvertAssignUnsignedTypes(t *testing.T) {
 		var u64 uint64
 		err := row.Scan(&u64)
 
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, uint64(42), u64)
 	})
 
@@ -540,7 +541,7 @@ func TestConvertAssignUnsignedTypes(t *testing.T) {
 		var u64 uint64
 		err := row.Scan(&u64)
 
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "cannot convert negative value")
 	})
 }
@@ -558,7 +559,7 @@ func TestConvertAssignTimePointer(t *testing.T) {
 		var createdAt *time.Time
 		err := row.Scan(&createdAt)
 
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.NotNil(t, createdAt)
 		assert.Equal(t, testTime, *createdAt)
 	})
@@ -573,7 +574,7 @@ func TestConvertAssignTimePointer(t *testing.T) {
 		var deletedAt *time.Time
 		err := row.Scan(&deletedAt)
 
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Nil(t, deletedAt)
 	})
 }
@@ -590,7 +591,7 @@ func TestTestTxWillReturnErrorOnQuery(t *testing.T) {
 			ExpectQuery("SELECT").WillReturnError(wantErr)
 
 		tx, err := db.Begin(context.Background())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		defer tx.Rollback(context.Background())
 
 		rows, err := tx.Query(context.Background(), "SELECT 1")
@@ -604,7 +605,7 @@ func TestTestTxWillReturnErrorOnQuery(t *testing.T) {
 			ExpectQuery("SELECT").WillReturnError(wantErr)
 
 		tx, err := db.Begin(context.Background())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		defer tx.Rollback(context.Background())
 
 		var dst int
@@ -623,7 +624,7 @@ func TestTestTxWillReturnErrorOnExec(t *testing.T) {
 		ExpectExec("INSERT").WillReturnError(wantErr)
 
 	tx, err := db.Begin(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer tx.Rollback(context.Background())
 
 	result, err := tx.Exec(context.Background(), "INSERT INTO t VALUES (1)")
@@ -645,12 +646,12 @@ func TestTestTxWillReturnErrorTargetsMostRecent(t *testing.T) {
 			ExpectExec("INSERT").WillReturnError(execErr)
 
 		tx, err := db.Begin(context.Background())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		defer tx.Rollback(context.Background())
 
 		// Query still succeeds — error landed on the exec.
 		var id int64
-		assert.NoError(t, tx.QueryRow(context.Background(), "SELECT 1").Scan(&id))
+		require.NoError(t, tx.QueryRow(context.Background(), "SELECT 1").Scan(&id))
 		assert.Equal(t, int64(1), id)
 
 		// Exec returns the error.
@@ -665,12 +666,12 @@ func TestTestTxWillReturnErrorTargetsMostRecent(t *testing.T) {
 			ExpectQuery("SELECT").WillReturnError(queryErr)
 
 		tx, err := db.Begin(context.Background())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		defer tx.Rollback(context.Background())
 
 		// Exec still succeeds — error landed on the query.
 		result, err := tx.Exec(context.Background(), "INSERT INTO t VALUES (1)")
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		affected, _ := result.RowsAffected()
 		assert.Equal(t, int64(1), affected)
 

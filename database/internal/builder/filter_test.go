@@ -3,7 +3,6 @@ package builder
 import (
 	dbsql "database/sql"
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
@@ -937,7 +936,7 @@ func TestFilterSubqueryErrorCases(t *testing.T) {
 		filter := f.Exists(nil)
 		_, _, err := filter.ToSQL()
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, dbtypes.ErrNilSubquery))
+		assert.ErrorIs(t, err, dbtypes.ErrNilSubquery)
 	})
 
 	t.Run("Nil subquery returns error on NotExists", func(t *testing.T) {
@@ -947,7 +946,7 @@ func TestFilterSubqueryErrorCases(t *testing.T) {
 		filter := f.NotExists(nil)
 		_, _, err := filter.ToSQL()
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, dbtypes.ErrNilSubquery))
+		assert.ErrorIs(t, err, dbtypes.ErrNilSubquery)
 	})
 
 	t.Run("Nil subquery returns error on InSubquery", func(t *testing.T) {
@@ -957,7 +956,7 @@ func TestFilterSubqueryErrorCases(t *testing.T) {
 		filter := f.InSubquery("user_id", nil)
 		_, _, err := filter.ToSQL()
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, dbtypes.ErrNilSubquery))
+		assert.ErrorIs(t, err, dbtypes.ErrNilSubquery)
 	})
 }
 
@@ -1443,8 +1442,7 @@ func TestFilterOrderingRefusesNilSlicesAndArrays(t *testing.T) {
 			t.Run(door.name+"_"+operandName, func(t *testing.T) {
 				_, _, err := door.fn("u.id", operand).ToSQL()
 
-				require.Error(t, err)
-				assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+				require.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
 				assert.Contains(t, err.Error(), door.op)
 			})
 		}
@@ -1497,16 +1495,14 @@ func TestBetweenRefusesNilAndSetBoundsAtBothFactories(t *testing.T) {
 			t.Run(family.name+"_lower_"+operandName, func(t *testing.T) {
 				_, _, err := family.call(NewQueryBuilder(dbtypes.PostgreSQL), operand, 10)
 
-				require.Error(t, err)
-				assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+				require.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
 				assert.Contains(t, err.Error(), ">=")
 			})
 
 			t.Run(family.name+"_upper_"+operandName, func(t *testing.T) {
 				_, _, err := family.call(NewQueryBuilder(dbtypes.PostgreSQL), 1, operand)
 
-				require.Error(t, err)
-				assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+				require.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
 				assert.Contains(t, err.Error(), "<=")
 			})
 		}

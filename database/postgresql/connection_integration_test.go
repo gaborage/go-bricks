@@ -75,7 +75,7 @@ func TestConnectionHealth(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
 
 	err := conn.Health(ctx)
-	assert.NoError(t, err, "Health check should succeed")
+	require.NoError(t, err, "Health check should succeed")
 
 	// Health check should work multiple times
 	err = conn.Health(ctx)
@@ -86,7 +86,7 @@ func TestConnectionStats(t *testing.T) {
 	conn, _ := setupTestContainer(t)
 
 	stats, err := conn.Stats()
-	assert.NoError(t, err, "Stats retrieval should succeed")
+	require.NoError(t, err, "Stats retrieval should succeed")
 	assert.NotNil(t, stats, "Stats should not be nil")
 
 	// Verify expected stats keys
@@ -114,11 +114,11 @@ func TestConnectionClose(t *testing.T) {
 
 	// Connection should work before close
 	err := conn.Health(ctx)
-	assert.NoError(t, err, "Health check should succeed before close")
+	require.NoError(t, err, "Health check should succeed before close")
 
 	// Close connection
 	err = conn.Close()
-	assert.NoError(t, err, "Close should succeed")
+	require.NoError(t, err, "Close should succeed")
 
 	// Health check should fail after close
 	err = conn.Health(ctx)
@@ -134,7 +134,7 @@ func TestConnectionCreateMigrationTableIntegration(t *testing.T) {
 
 	// Create migration table
 	err := conn.CreateMigrationTable(ctx)
-	assert.NoError(t, err, "CreateMigrationTable should succeed")
+	require.NoError(t, err, "CreateMigrationTable should succeed")
 
 	// Verify table exists by querying it
 	rows, err := conn.Query(ctx, "SELECT COUNT(*) FROM "+conn.MigrationTable())
@@ -236,7 +236,7 @@ func TestConnectionPrepareStatement(t *testing.T) {
 		require.True(t, rows.Next(), "Should return inserted ID")
 		var id int
 		require.NoError(t, rows.Scan(&id))
-		assert.Greater(t, id, 0, "Inserted ID should be positive")
+		assert.Positive(t, id, "Inserted ID should be positive")
 		rows.Close()
 	}
 
@@ -426,7 +426,7 @@ func TestConnectionWithTCPKeepAlive(t *testing.T) {
 
 	// Verify connection works with keep-alive enabled
 	err = conn.Health(ctx)
-	assert.NoError(t, err, "Health check should succeed with TCP keep-alive")
+	require.NoError(t, err, "Health check should succeed with TCP keep-alive")
 
 	// Execute a query to ensure the connection is fully functional
 	rows, err := conn.Query(ctx, "SELECT 1")
@@ -477,11 +477,11 @@ func TestConnectionWithHostPort(t *testing.T) {
 
 	// Verify connection works
 	err = conn.Health(ctx)
-	assert.NoError(t, err, "Health check should succeed")
 
 	// Verify database type
 	pgConn := conn.(*Connection)
 	assert.Equal(t, "postgresql", pgConn.DatabaseType())
+	require.NoError(t, err, "Health check should succeed")
 }
 
 // TestConnectionWithKeepAliveDefaultInterval tests keep-alive with Interval=0

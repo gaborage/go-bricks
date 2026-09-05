@@ -72,6 +72,6 @@ func TestSqlRowAdapterErrDelegatesToUnderlyingSQLRow(t *testing.T) {
 	wrapped := NewRowFromSQL(row)
 	require.NotNil(t, wrapped)
 
-	assert.Error(t, wrapped.Err(), "deferred query error must surface through Err() delegation")
+	require.Error(t, wrapped.Err(), "deferred query error must surface through Err() delegation")
 	require.NoError(t, mock.ExpectationsWereMet())
 }

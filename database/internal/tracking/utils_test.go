@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 
@@ -621,11 +622,11 @@ func TestTrackDBOperationRedactsDriverErrorMessage(t *testing.T) {
 		t.Fatalf("unexpected message: %q", event.Msg)
 	}
 
-	assert.Nil(t, event.Err, "the raw driver error must not be attached via .Err()")
 	assert.NotContains(t, event.Msg, sensitiveValue, "log message must not leak the sensitive value")
 	assert.NotContains(t, event.Msg, rawMessage, "log message must not leak the raw driver error")
 
 	assertNoFieldsLeak(t, event.Fields, sensitiveValue, rawMessage)
+	require.NoError(t, event.Err, "the raw driver error must not be attached via .Err()")
 
 	assert.Equal(t, dbErrorClass(driverErr), event.Fields["error_type"], "error_type must hold the error's Go type")
 }

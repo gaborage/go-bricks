@@ -711,10 +711,9 @@ func TestJoinFilterRejectsRawExpressionLiteral(t *testing.T) {
 			qb := NewQueryBuilder(dbtypes.PostgreSQL)
 			sql, args, err := tt.filter(qb.JoinFilter()).ToSQL()
 
-			require.Error(t, err)
-			assert.ErrorIs(t, err, dbtypes.ErrEmptyExpressionSQL)
 			assert.Empty(t, sql)
 			assert.Empty(t, args)
+			require.ErrorIs(t, err, dbtypes.ErrEmptyExpressionSQL)
 		})
 	}
 }
@@ -741,10 +740,9 @@ func TestJoinFilterRejectsRawExpressionAlias(t *testing.T) {
 			qb := NewQueryBuilder(dbtypes.PostgreSQL)
 			sql, args, err := tt.filter(qb.JoinFilter()).ToSQL()
 
-			require.Error(t, err)
-			assert.ErrorIs(t, err, dbtypes.ErrInvalidAlias)
 			assert.Empty(t, sql)
 			assert.Empty(t, args)
+			require.ErrorIs(t, err, dbtypes.ErrInvalidAlias)
 		})
 	}
 }
@@ -899,8 +897,7 @@ func TestJoinFilterOrderingRefusesNilSlicesAndArrays(t *testing.T) {
 			t.Run(door.name+"_"+operandName, func(t *testing.T) {
 				_, _, err := door.fn("u.id", operand).ToSQL()
 
-				require.Error(t, err)
-				assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+				require.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
 				assert.Contains(t, err.Error(), door.op)
 			})
 		}
@@ -1001,11 +998,10 @@ func TestJoinFilterValuerErrorSurfacesCause(t *testing.T) {
 		t.Run(door.name, func(t *testing.T) {
 			sql, args, err := door.fn("u.id", operand).ToSQL()
 
-			require.Error(t, err)
-			assert.ErrorIs(t, err, errBoom)
-			assert.NotErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
 			assert.Empty(t, sql)
 			assert.Empty(t, args)
+			require.ErrorIs(t, err, errBoom)
+			require.NotErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
 		})
 	}
 }

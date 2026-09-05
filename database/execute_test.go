@@ -200,7 +200,7 @@ func (rowsAffectedErrExecutor) Exec(context.Context, string, ...any) (sql.Result
 func assertExecError(t *testing.T, err error, stage database.ExecStage, op string, cause error) {
 	t.Helper()
 	var ee *database.ExecError
-	require.True(t, errors.As(err, &ee))
+	require.ErrorAs(t, err, &ee)
 	assert.Equal(t, stage, ee.Stage)
 	assert.Equal(t, op, ee.Op)
 	if cause != nil {
@@ -214,12 +214,12 @@ func assertExecError(t *testing.T, err error, stage database.ExecStage, op strin
 // assertion depth identical across ExecuteQuerySingle and ExecuteUpdateOne.
 func assertNoRows(t *testing.T, err error, op string) {
 	t.Helper()
-	assert.ErrorIs(t, err, database.ErrNoRows)
-	assert.ErrorIs(t, err, sql.ErrNoRows)
+	require.ErrorIs(t, err, database.ErrNoRows)
+	require.ErrorIs(t, err, sql.ErrNoRows)
 	assert.True(t, database.IsNotFound(err))
 	assert.Contains(t, err.Error(), op)
 	var ee *database.ExecError
-	assert.False(t, errors.As(err, &ee), "no-rows must not be an ExecError")
+	assert.NotErrorAs(t, err, &ee, "no-rows must not be an ExecError")
 }
 
 func TestExecuteQuerySingleScansRow(t *testing.T) {

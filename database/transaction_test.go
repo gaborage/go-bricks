@@ -42,8 +42,8 @@ func TestWithTxRollsBackAndReturnsFnError(t *testing.T) {
 		captured = tx
 		return sentinel
 	})
-	assert.ErrorIs(t, err, sentinel, "WithTx must return the original fn error")
 	assert.True(t, captured.(*dbtesting.TestTx).IsRolledBack(), "tx should be rolled back on fn error")
+	require.ErrorIs(t, err, sentinel, "WithTx must return the original fn error")
 }
 
 func TestWithTxRollsBackAndRepanics(t *testing.T) {
