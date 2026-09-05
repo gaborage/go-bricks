@@ -105,7 +105,7 @@ func TestConfigInjectionDefaultValues(t *testing.T) {
 	err = cfg.InjectInto(&serviceConfig)
 
 	// Should fail due to required field. assert, not require: a second phase below sets
-	// the variable, reloads, and pins the default-value behaviour — a require here aborts
+	// the variable, reloads, and pins the default-value behavior — a require here aborts
 	// on any message drift and that phase never runs (#1092 exceptions file).
 	assert.ErrorContains(t, err, "api.key")
 

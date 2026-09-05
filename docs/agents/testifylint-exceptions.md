@@ -31,7 +31,7 @@ test, not inferred from the diff.
 | --- | --- | --- | --- |
 | `config/config_test.go:1743` | require-error | `err` is REASSIGNED below and re-asserted for the derived-map sub-case; a require here skips that second phase entirely. | `//nolint:testifylint // a second sub-case reassigns and re-asserts err` |
 | `config/converters_test.go:155` | float-compare | `toFloat64`'s table is ParseFloat round-trips (`"123.45"` -> `123.45`), where the Go literal and `ParseFloat` produce identical float64 bits. Exact equality IS the converter's contract; a tolerance would let a lossy conversion pass. | `//nolint:testifylint // exact equality is the converter's contract` |
-| `config/injection_test.go:110` | require-error | A second phase below sets the env var, reloads the config and pins the default-value behaviour; a require here aborts on any message drift and that phase never runs. | `//nolint:testifylint // a reload-and-defaults phase follows` |
+| `config/injection_test.go:110` | require-error | A second phase below sets the env var, reloads the config and pins the default-value behavior; a require here aborts on any message drift and that phase never runs. | `//nolint:testifylint // a reload-and-defaults phase follows` |
 | `config/converters_test.go:23` | require-error | `floatToInt64(NaN)` rejection, followed by the `Inf` rejection through a different branch of the converter — a require hides the Inf case whenever NaN regresses. | `//nolint:testifylint // the Inf-rejection case follows through a different branch` |
 | `config/injection_test.go:170` | float-compare | Env-var round-trip of `1024.5`, exactly representable in float64. The test pins that the value arrives intact, not that it arrives close. | `//nolint:testifylint // exact equality is the injection contract` |
 | `config/tenant_store_test.go:231` | require-error | Followed by removing a non-existent tenant and asserting the store did not mutate — a distinct second phase, independent of the lookup error. | `//nolint:testifylint // an independent no-mutation property follows` |
@@ -49,7 +49,7 @@ is not mistaken for a clean package.
 
 W3-P4 (PR #1456) carries its own 24 app rows plus a harvest note, in ITS copy of this file. This
 paragraph is an annotation to be merged INTO that section — **whoever resolves the conflict must
-keep P4's rows and add this note; resolving in favour of this file alone destroys 24 site
+keep P4's rows and add this note; resolving in favor of this file alone destroys 24 site
 locations.**
 
 The rows were recorded before the fleet rule was settled, and most fail it: a site stays `assert`
