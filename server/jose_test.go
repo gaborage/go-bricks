@@ -108,9 +108,16 @@ func (f *joseFixture) peerInbound() *jose.Policy {
 // the registration path is exercised separately via the registration-panic tests.
 func newJOSETestServer(t *testing.T, f *joseFixture, handler HandlerFunc[joseTokenReq, joseTokenResp]) (*echo.Echo, echo.HandlerFunc) {
 	t.Helper()
+	return newJOSETestServerWithConfig(t, f, &config.Config{App: config.AppConfig{Env: "development"}}, handler)
+}
+
+// newJOSETestServerWithConfig is newJOSETestServer with the app config supplied by
+// the caller, so a test can vary the debug × environment quadrant that gates
+// response details (ADR-084).
+func newJOSETestServerWithConfig(t *testing.T, f *joseFixture, cfg *config.Config, handler HandlerFunc[joseTokenReq, joseTokenResp]) (*echo.Echo, echo.HandlerFunc) {
+	t.Helper()
 	e := echo.New()
 	e.Validator = NewValidator()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
 
 	obs := newJOSEObservability(nil, nil, nil)
 	joseCfg := &joseRouteConfig{Inbound: f.inbound, Outbound: f.outbound, Resolver: f.resolver, Obs: obs}
