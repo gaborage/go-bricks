@@ -25,6 +25,10 @@ import (
 // maxDatabaseNameLen is PostgreSQL's identifier length limit (NAMEDATALEN-1).
 const maxDatabaseNameLen = 63
 
+// postgreSQLPort is the container-side port every PostgreSQL wait strategy and
+// MappedPort lookup addresses.
+const postgreSQLPort = "5432/tcp"
+
 // errAdminAfterTerminate is what admin() returns once Terminate has closed the
 // pool, so a NewDatabase running after the suite tore the container down fails
 // with a named cause instead of "sql: database is closed".
@@ -140,7 +144,7 @@ func startPostgreSQLContainerInternal(ctx context.Context, cfg *PostgreSQLContai
 			wait.ForAll(
 				wait.ForLog("database system is ready to accept connections").
 					WithOccurrence(2), // Postgres restarts after initial setup
-				wait.ForListeningPort("5432/tcp"),
+				wait.ForListeningPort(postgreSQLPort),
 			).WithStartupTimeout(cfg.StartupTimeout),
 		),
 	)
@@ -160,7 +164,7 @@ func startPostgreSQLContainerInternal(ctx context.Context, cfg *PostgreSQLContai
 		return nil, fmt.Errorf("failed to get PostgreSQL host: %w", err)
 	}
 
-	mappedPort, err := pgContainer.MappedPort(ctx, "5432/tcp")
+	mappedPort, err := pgContainer.MappedPort(ctx, postgreSQLPort)
 	if err != nil {
 		_ = pgContainer.Terminate(ctx)
 		return nil, fmt.Errorf("failed to get PostgreSQL port: %w", err)
@@ -236,7 +240,7 @@ func (p *PostgreSQLContainer) MappedPort(ctx context.Context) (int, error) {
 	if p.container == nil {
 		return 0, fmt.Errorf("container not initialized")
 	}
-	mappedPort, err := p.container.MappedPort(ctx, "5432/tcp")
+	mappedPort, err := p.container.MappedPort(ctx, postgreSQLPort)
 	if err != nil {
 		return 0, err
 	}
@@ -325,7 +329,7 @@ func (p *PostgreSQLContainer) NewDatabase(t *testing.T) *PostgreSQLDatabase {
 	// delimited-identifier quoting coincide — but %q is Go string-literal
 	// quoting, not PG identifier quoting, so do not extend this site to
 	// caller-controlled input.
-	if _, err := admin.ExecContext(ctx, fmt.Sprintf(`CREATE DATABASE %q`, name)); err != nil {
+	if _, err := admin.ExecContext(ctx, fmt.Sprintf(`CREATE DATABASE %q`, name)); err != nil { // NOSONAR: identifier is [a-z0-9_] from randomDatabaseName; CREATE DATABASE takes no bind parameters
 		t.Fatalf("create test database %s: %v", name, err)
 	}
 
@@ -340,7 +344,7 @@ func (p *PostgreSQLContainer) NewDatabase(t *testing.T) *PostgreSQLDatabase {
 		// is Go quoting, not PG quoting — do not extend to caller-controlled
 		// input. FORCE evicts connections the test left open so the drop cannot
 		// be blocked by a leaked pool member.
-		if _, dropErr := admin.ExecContext(dropCtx, fmt.Sprintf(`DROP DATABASE IF EXISTS %q WITH (FORCE)`, name)); dropErr != nil {
+		if _, dropErr := admin.ExecContext(dropCtx, fmt.Sprintf(`DROP DATABASE IF EXISTS %q WITH (FORCE)`, name)); dropErr != nil { // NOSONAR: same identifier as the CREATE above
 			t.Logf("Warning: failed to drop test database %s: %v", name, dropErr)
 		}
 	})
