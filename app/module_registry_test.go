@@ -17,7 +17,7 @@ import (
 )
 
 // recLogger is a recording logger.Logger that captures each event's level, Str
-// fields, Err text and terminal Msg, so tests can assert emissions without
+// and Int fields, Err text and terminal Msg, so tests can assert emissions without
 // swapping the process-global os.Stdout.
 type recLogger struct {
 	mu     sync.Mutex
@@ -28,13 +28,14 @@ type recEvent struct {
 	l     *recLogger
 	str   map[string]string
 	dur   map[string]time.Duration
+	ints  map[string]int
 	level string
 	err   string
 	msg   string
 }
 
 func (l *recLogger) event(level string) logger.LogEvent {
-	return &recEvent{l: l, level: level, str: map[string]string{}, dur: map[string]time.Duration{}}
+	return &recEvent{l: l, level: level, str: map[string]string{}, dur: map[string]time.Duration{}, ints: map[string]int{}}
 }
 func (l *recLogger) Info() logger.LogEvent                     { return l.event("info") }
 func (l *recLogger) Error() logger.LogEvent                    { return l.event("error") }
@@ -70,7 +71,7 @@ func (e *recEvent) Err(err error) logger.LogEvent {
 	}
 	return e
 }
-func (e *recEvent) Int(_ string, _ int) logger.LogEvent           { return e }
+func (e *recEvent) Int(k string, v int) logger.LogEvent           { e.ints[k] = v; return e }
 func (e *recEvent) Int64(_ string, _ int64) logger.LogEvent       { return e }
 func (e *recEvent) Uint64(_ string, _ uint64) logger.LogEvent     { return e }
 func (e *recEvent) Dur(k string, v time.Duration) logger.LogEvent { e.dur[k] = v; return e }
@@ -376,4 +377,149 @@ func (l *recLogger) warnLines() []recEvent {
 		}
 	}
 	return out
+}
+
+// declaringDeclarerModule declares a lopsided topology: 1 exchange, 2 queues,
+// 3 bindings, 4 publishers and 5 consumers. No two of the five per-module counts
+// can be swapped, dropped or turned into a running total without an assertion
+// noticing.
+type declaringDeclarerModule struct {
+	name string
+}
+
+func (m *declaringDeclarerModule) Name() string             { return m.name }
+func (m *declaringDeclarerModule) Init(_ *ModuleDeps) error { return nil }
+func (m *declaringDeclarerModule) Shutdown() error          { return nil }
+func (m *declaringDeclarerModule) DeclareMessaging(decls *messaging.Declarations) {
+	const exchange = "orders.events"
+	const ordersQueue = "orders.events.queue"
+	const paymentsQueue = "payments.events.queue"
+
+	decls.DeclareTopicExchange(exchange)
+	decls.DeclareQueue(ordersQueue)
+	decls.DeclareQueue(paymentsQueue)
+	decls.DeclareBinding(ordersQueue, exchange, "order.created")
+	decls.DeclareBinding(ordersQueue, exchange, "order.updated")
+	decls.DeclareBinding(paymentsQueue, exchange, "payment.settled")
+	for _, eventType := range []string{"order.created", "order.updated", "payment.settled", "payment.refunded"} {
+		decls.DeclarePublisher(&messaging.PublisherOptions{Exchange: exchange, RoutingKey: eventType, EventType: eventType}, nil)
+	}
+	for _, consumer := range []string{"orders-worker", "orders-auditor", "orders-projector"} {
+		decls.DeclareConsumer(&messaging.ConsumerOptions{Queue: ordersQueue, Consumer: consumer, EventType: "order.created"}, nil)
+	}
+	for _, consumer := range []string{"payments-worker", "payments-auditor"} {
+		decls.DeclareConsumer(&messaging.ConsumerOptions{Queue: paymentsQueue, Consumer: consumer, EventType: "payment.settled"}, nil)
+	}
+}
+
+// firstLine returns a copy of the first recorded event matching pred, or nil
+// when none did. The copy keeps callers off the mutex-guarded slice.
+func (l *recLogger) firstLine(pred func(*recEvent) bool) *recEvent {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i := range l.events {
+		if e := l.events[i]; pred(&e) {
+			return &e
+		}
+	}
+	return nil
+}
+
+// collectionLine returns the per-module collection line recorded for the named
+// module, or nil when that module contributed no line at all.
+func (l *recLogger) collectionLine(module string) *recEvent {
+	return l.firstLine(func(e *recEvent) bool {
+		return e.msg == "Collecting module messaging declarations" && e.str["module"] == module
+	})
+}
+
+// aggregateLine returns the post-loop aggregate line, or nil when it was never
+// emitted (a validation failure returns before it).
+func (l *recLogger) aggregateLine() *recEvent {
+	return l.firstLine(func(e *recEvent) bool {
+		return e.msg == "Messaging declarations collected and validated successfully"
+	})
+}
+
+// newDeclRegistry builds a registry over a recording logger and registers mods in
+// argument order — which IS registration order, and is load-bearing at every call
+// site below.
+func newDeclRegistry(t *testing.T, mods ...Module) (*ModuleRegistry, *recLogger) {
+	t.Helper()
+	rec := &recLogger{}
+	reg := NewModuleRegistry(&ModuleDeps{Logger: rec, Config: &config.Config{}})
+	for _, m := range mods {
+		require.NoError(t, reg.Register(m))
+	}
+	return reg, rec
+}
+
+// assertDeclarationCounts compares all five count fields of one collection or
+// aggregate line.
+func assertDeclarationCounts(t *testing.T, line *recEvent, exchanges, queues, bindings, publishers, consumers int) {
+	t.Helper()
+	assert.Equal(t, exchanges, line.ints["exchanges"], "exchanges count")
+	assert.Equal(t, queues, line.ints["queues"], "queues count")
+	assert.Equal(t, bindings, line.ints["bindings"], "bindings count")
+	assert.Equal(t, publishers, line.ints["publishers"], "publishers count")
+	assert.Equal(t, consumers, line.ints["consumers"], "consumers count")
+}
+
+func TestDeclareMessagingAttributesCountsPerModule(t *testing.T) {
+	t.Parallel()
+
+	const declaring, plain = "orders", "plain"
+	// declarationCounterModule asserts MessagingDeclarer but declares nothing;
+	// minimalModule does not implement it at all.
+	//
+	// Registration order is load-bearing, do not "simplify" it: the lopsided module
+	// goes FIRST, so its own before-counts are zero and an arithmetic mutant on a
+	// delta (`after.X-before.X` flipped to `+`) still reads correctly on its line.
+	// The zero-declarer registered AFTER it is what kills every such mutant — by
+	// then before-counts are nonzero, so a sum shows 2/4/6/8/10 instead of zeros.
+	silent := &declarationCounterModule{}
+	reg, log := newDeclRegistry(t, &declaringDeclarerModule{name: declaring}, silent, &minimalModule{name: plain})
+
+	require.NoError(t, reg.DeclareMessaging(messaging.NewDeclarations()))
+
+	declaringLine := log.collectionLine(declaring)
+	require.NotNil(t, declaringLine, "declaring module has a per-module line")
+	assertDeclarationCounts(t, declaringLine, 1, 2, 3, 4, 5)
+
+	silentLine := log.collectionLine(silent.Name())
+	require.NotNil(t, silentLine, "a declarer that adds nothing new is still reported")
+	assertDeclarationCounts(t, silentLine, 0, 0, 0, 0, 0)
+
+	assert.Nil(t, log.collectionLine(plain), "a module that does not implement MessagingDeclarer contributes no line")
+}
+
+func TestDeclareMessagingLeavesAggregateLineUnchanged(t *testing.T) {
+	t.Parallel()
+
+	reg, log := newDeclRegistry(t, &declaringDeclarerModule{name: "orders"})
+
+	require.NoError(t, reg.DeclareMessaging(messaging.NewDeclarations()))
+
+	aggregate := log.aggregateLine()
+	require.NotNil(t, aggregate, "aggregate line is emitted")
+	assertDeclarationCounts(t, aggregate, 1, 2, 3, 4, 5)
+	assert.NotContains(t, aggregate.str, "module", "the aggregate line stays module-agnostic")
+}
+
+func TestDeclareMessagingAttributesCountsBeforeValidationFailure(t *testing.T) {
+	t.Parallel()
+
+	const broken = "orders"
+	reg, log := newDeclRegistry(t, &queueConflictModule{name: broken, queue: "orders.events.queue"})
+
+	err := reg.DeclareMessaging(messaging.NewDeclarations())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "declaration validation failed")
+
+	line := log.collectionLine(broken)
+	require.NotNil(t, line, "the offending module is still attributed")
+	// The second RegisterQueue conflicts rather than adding, so the queue count is 1.
+	assertDeclarationCounts(t, line, 0, 1, 0, 0, 0)
+	assert.Nil(t, log.aggregateLine(), "validation failure returns before the aggregate line")
 }

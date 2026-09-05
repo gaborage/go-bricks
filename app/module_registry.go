@@ -280,11 +280,21 @@ func (r *ModuleRegistry) DeclareMessaging(decls *messaging.Declarations) error {
 
 	for _, module := range r.modules {
 		if md, ok := module.(MessagingDeclarer); ok {
+			// Per-module attribution, not the running total, so a topology conflict
+			// names its owner. Zeros mean the module added nothing new: exchanges are
+			// map-keyed and RegisterQueue merges, so re-declaring a neighbor's
+			// topology contributes none.
+			before := decls.Stats()
+			md.DeclareMessaging(decls)
+			after := decls.Stats()
 			r.logger.Info().
 				Str("module", module.Name()).
+				Int("exchanges", after.Exchanges-before.Exchanges).
+				Int("queues", after.Queues-before.Queues).
+				Int("bindings", after.Bindings-before.Bindings).
+				Int("publishers", after.Publishers-before.Publishers).
+				Int("consumers", after.Consumers-before.Consumers).
 				Msg("Collecting module messaging declarations")
-
-			md.DeclareMessaging(decls)
 		}
 	}
 

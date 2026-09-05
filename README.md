@@ -350,7 +350,7 @@ func register(framework *app.App) error {
 }
 ```
 
-`Init` is called once to capture dependencies and `Shutdown` releases resources. Route registration and messaging are opt-in: if your module implements `RouteRegisterer`, the framework calls `RegisterRoutes` to attach HTTP handlers; if it implements `MessagingDeclarer`, `DeclareMessaging` is called to declare AMQP infrastructure (validated once, replayed per-tenant). Modules that don't need HTTP or AMQP simply omit the interface. The framework ensures proper lifecycle ordering and error handling across all module hooks.
+`Init` is called once to capture dependencies and `Shutdown` releases resources. Route registration and messaging are opt-in: if your module implements `RouteRegisterer`, the framework calls `RegisterRoutes` to attach HTTP handlers; if it implements `MessagingDeclarer`, `DeclareMessaging` is called to declare AMQP infrastructure (validated once, replayed per-tenant). Modules that don't need HTTP or AMQP simply omit the interface. Both hooks are discovered by type assertion, so a drifted method name or signature is a silent no-op — pin the implementation with `var _ app.MessagingDeclarer = (*Module)(nil)` to make that drift a compile error. The framework ensures proper lifecycle ordering and error handling across all module hooks.
 
 ---
 
