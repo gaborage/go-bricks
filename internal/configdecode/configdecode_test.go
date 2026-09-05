@@ -60,7 +60,7 @@ func TestNumericToDurationGuardHookFunc(t *testing.T) {
 			if tc.wantErr {
 				require.Error(t, err)
 				for _, s := range tc.errSubstr {
-					require.ErrorContains(t, err, s)
+					assert.ErrorContains(t, err, s)
 				}
 				return
 			}

@@ -120,11 +120,11 @@ func TestCacheGetReturnsGetDBError(t *testing.T) {
 
 	store, err := c.Get(t.Context(), d)
 	require.Error(t, err)
-	require.ErrorIs(t, err, cause)
 	assert.Contains(t, err.Error(), "testmod: database unavailable")
 	assert.Nil(t, store)
 	_, ok := c.Cached("")
 	assert.False(t, ok, "a failed init caches nothing, so it can retry")
+	require.ErrorIs(t, err, cause)
 }
 
 func TestCacheGetReturnsConstructorError(t *testing.T) {

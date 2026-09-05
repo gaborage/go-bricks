@@ -100,8 +100,8 @@ func TestPositionalPath(t *testing.T) {
 	t.Run("help_wrapped_in_err_usage", func(t *testing.T) {
 		_, err := PositionalPath(newFlagSet(t), []string{"-h"})
 		require.Error(t, err)
-		require.ErrorIs(t, err, flag.ErrHelp, "the caller exits 0 on this one")
-		assert.ErrorIs(t, err, ErrUsage, "and must not reprint what the FlagSet printed")
+		assert.ErrorIs(t, err, flag.ErrHelp, "the caller exits 0 on this one")
+		require.ErrorIs(t, err, ErrUsage, "and must not reprint what the FlagSet printed")
 	})
 }
 

@@ -77,38 +77,27 @@ exact equality is the contract, so the directive is a nolint, never a tolerance.
 | `logger/adapter_test.go:621,642,662,682` | float-compare | Sensitive-field filter tests: the assertion is that a non-sensitive numeric field is NOT masked, i.e. the exact value survives. | `//nolint:testifylint // integer round-tripped through JSON; exact equality is the contract` |
 | `logger/otel_bridge_test.go:314` | float-compare | OTel gauge `AsFloat64()` of an exact integer 7. | `//nolint:testifylint // exact integer value, not a computed float` |
 
-### require-error — the follower never touches `err` and pins an independent property
+### require-error — the block cannot be reordered into guard-first shape
 
-Per the fleet rule: a site stays `assert` only when the following assertion is BOTH independent of
-the error AND the property the test exists to pin. Three shapes were converted rather than listed
-here, though an earlier draft kept them.
-
-1. A follower that DIRECTLY dereferences the error — `err.Error()`, including inside
-   `Contains(err.Error(), …)` — panics on a nil error, so `require` turns a crash into a clean
-   failure.
-2. A follower that merely consumes the error — `errors.Is(err, …)`, `ErrorContains(t, err, …)` —
-   does NOT panic: `errors.Is(nil, target)` returns false and testify's `ErrorContains` guards
-   with `Error(t, err)` before touching `err.Error()`. These were still converted, but for a
-   weaker reason: with a nil error the follower fails anyway, so `require` collapses two
-   cascading failures into one. Do not justify these as panic safety.
-3. The correlated half of one `(value, err)` outcome (`Nil(store)` beside `Error(err)`) is not an
-   independent property. Trailing `AssertExpectations()` hygiene was likewise converted.
+The canonical shape is `require.Error(t, err)` first, then every follower that is independent of
+which sentinel matched (leak, state, counter and message-clause checks — now safe to dereference
+`err`), then the identity assertions last in their original order with the FINAL one as `require`.
+Applied wherever it fits; the sites below are the residue where it does not.
 
 | site | checker | why it stays `assert` | directive FINAL inserts |
 | --- | --- | --- | --- |
-| `inbox/hold_store_oracle_test.go:263` | require-error | Followed by `require.Len(tx.ExecLog(), 1)` and a SQL-content check — the partial-write shape ("the row is never written without its marker") is the property, and neither follower touches `err`. | `//nolint:testifylint // exec-log shape asserted below, independent of err` |
-| `inbox/testing/mock_inbox_test.go:42` | require-error | Followed by `AssertProcessCount(m, 0)`: that an errored call is NOT recorded is the mock's counter contract, not trailing hygiene. | `//nolint:testifylint // mock call-count contract asserted below` |
-| `inbox/testing/mock_inbox_test.go:53` | require-error | Followed by `AssertProcessed` + `AssertProcessCount(m, 1)`: the call IS recorded despite the error. | `//nolint:testifylint // mock recording contract asserted below` |
-| `internal/publishdoor/publishdoor_test.go:71` | require-error | Followed by `Nil(Swap(first))`, which performs a SECOND swap — a distinct phase, not a property of the first error. | `//nolint:testifylint // a second swap is exercised below` |
-| `internal/sealcli/sealcli_test.go:219` | require-error | Followed by an independent `keys.PublicKey` lookup and its own assertion; aborting never attempts it. | `//nolint:testifylint // an independent second lookup follows` |
-| `keystore/generation_test.go:111` | require-error | Inside a `for` over names with the name as the failure message: the loop accumulates one result per case, and `False(ok, name)` never touches `err`. | `//nolint:testifylint // loop accumulates one result per case` |
-| `keystore/generation_test.go:228` | require-error | Followed by a second call (`PrivateKey`) whose own error is asserted separately. | `//nolint:testifylint // an independent second lookup follows` |
-| `keystore/keystore_test.go:510` | require-error | Followed by an independent `PrivateKey` lookup asserting a DIFFERENT error variable — the same shape as the shipped `assertions.go:46` line reserved for PB. | `//nolint:testifylint // an independent private-key lookup follows` |
-| `testing/certfixtures_test.go:31` | require-error | Followed by the `NotAfter` bound: signature validity and expiry are independent properties of one fixture, and the bound never touches the signature error. | `//nolint:testifylint // expiry bound asserted independently below` |
+| `internal/configdecode/configdecode_test.go:63` | require-error | Loop over expected substrings — a peer SET, not a sequence; `require` would abort at the first missing substring and hide the rest. | `//nolint:testifylint // loop over substring peers; abort would hide the rest` |
+| `internal/publishdoor/publishdoor_test.go:71` | require-error | The follower performs a SECOND swap; it is a distinct phase, not a property of this error, so it cannot be hoisted above it. | `//nolint:testifylint // a second swap phase follows` |
+| `internal/sealcli/sealcli_test.go:103` | require-error | Non-final identity peer: two sentinels (`flag.ErrHelp`, `ErrUsage`) on one error, either regressing alone. The final peer carries the `require`. | `//nolint:testifylint // non-final identity peer; second sentinel is the require` |
+| `internal/sealcli/sealcli_test.go:219` | require-error | The follower is an independent `keys.PublicKey` lookup — a second phase that cannot run before the first is asserted. | `//nolint:testifylint // an independent second lookup follows` |
+| `keystore/generation_test.go:111` | require-error | Loop over names with the name as the message: a peer set accumulating one result per case. | `//nolint:testifylint // loop over case peers; abort would hide the rest` |
+| `keystore/generation_test.go:228` | require-error | Follower is a second `PrivateKey` call with its own error — a distinct phase. | `//nolint:testifylint // an independent second lookup follows` |
+| `keystore/keystore_test.go:347` | require-error | Non-final identity peer: this message check sits beside an `ErrorIs(fs.ErrNotExist)` on the same error, which carries the `require`. | `//nolint:testifylint // non-final identity peer; the sentinel check is the require` |
+| `keystore/keystore_test.go:420` | require-error | Non-final identity peer: two independent clauses of one message, the second carrying the `require`. | `//nolint:testifylint // non-final identity peer; second clause is the require` |
+| `keystore/keystore_test.go:510` | require-error | Follower is a `PrivateKey` lookup asserting a DIFFERENT error variable — the same shape as the shipped `assertions.go:46` line reserved for PB. | `//nolint:testifylint // an independent private-key lookup follows` |
+| `keystore/keystore_test.go:611` | require-error | Non-final identity peer: prefix clause beside the "elided" clause, which carries the `require`. | `//nolint:testifylint // non-final identity peer; the elided clause is the require` |
+| `keystore/module_test.go:153` | require-error | Non-final identity peer: the byte-floor clause beside the ADR-095 clause, which carries the `require`. | `//nolint:testifylint // non-final identity peer; the ADR clause is the require` |
 
-`keystore/testing/assertions.go:46` is NOT listed here: it is a SHIPPED (non-test) line reserved
-for the `fix(testing)!:` PR, which changes the helper's behaviour rather than annotating it. It is
-therefore the one finding in this lane's packages that has no row BY DESIGN — a bidirectional
-check of rows against live findings must expect it.
-`internal/resourcepool/resourcepool_test.go` is out of this lane's scope (8 findings) — #1445 is
-open against that file, so they join the `app` package PR.
+`internal/tenantstore/tenantstore_test.go:382` is deliberately absent: its only follower is
+`Nil(db)`, the correlated half of one `(value, err)` outcome, so the identity check is the final
+assertion and carries the `require`.

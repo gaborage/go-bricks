@@ -101,9 +101,9 @@ func TestPostgresHoldStoreParkWritesRowAndTenantTogether(t *testing.T) {
 		_, err = store.Park(t.Context(), dbtx, sampleHoldRow())
 
 		require.Error(t, err)
-		require.ErrorIs(t, err, wantErr)
 		assert.Contains(t, err.Error(), "mark tenant held failed")
 		assert.Len(t, tx.ExecLog(), 1, "the row is never written without its marker")
+		require.ErrorIs(t, err, wantErr)
 	})
 }
 
