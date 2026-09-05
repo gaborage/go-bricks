@@ -1046,6 +1046,38 @@ func TestNewMessagingManagerDefaultFactoryForwardsReconnectOptions(t *testing.T)
 	assert.Equal(t, 11*time.Second, client.resendDelay)
 }
 
+// TestNewMessagingManagerDefaultFactoryForwardsPublishTimeout pins the last hop
+// of messaging.publishtimeout: ManagerOptions -> default client factory ->
+// AMQPClientImpl.publishTimeout. 41s is deliberately not any client default, so
+// a dropped or cross-wired assignment cannot pass by coincidence.
+func TestNewMessagingManagerDefaultFactoryForwardsPublishTimeout(t *testing.T) {
+	oldDial := getAmqpDialFunc()
+	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
+	t.Cleanup(func() { setAmqpDialFunc(oldDial) })
+
+	log := logger.New("error", false)
+	manager := NewMessagingManager(&stubMessagingSource{}, log, ManagerOptions{
+		MaxPublishers:  1,
+		IdleTTL:        time.Minute,
+		PublishTimeout: 41 * time.Second,
+	}, nil)
+
+	client := manager.clientFactory(amqpHost, log).(*AMQPClientImpl)
+	t.Cleanup(func() { closeAndWaitForReconnect(client) })
+
+	assert.Equal(t, 41*time.Second, client.publishTimeout)
+
+	// Unset stays unbounded: the option ignores the zero, so no deployment that
+	// never configured the key acquires a deadline.
+	unbounded := NewMessagingManager(&stubMessagingSource{}, log, ManagerOptions{
+		MaxPublishers: 1,
+		IdleTTL:       time.Minute,
+	}, nil)
+	unboundedClient := unbounded.clientFactory(amqpHost, log).(*AMQPClientImpl)
+	t.Cleanup(func() { closeAndWaitForReconnect(unboundedClient) })
+	assert.Equal(t, time.Duration(0), unboundedClient.publishTimeout)
+}
+
 // newSetupDeclarations builds the exchange/queue/binding/consumer set the consumer-setup tests
 // share, so a fixture change lands in one place instead of three.
 func newSetupDeclarations() *Declarations {

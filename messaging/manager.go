@@ -102,6 +102,11 @@ type ManagerOptions struct {
 	// ReadyTimeout bounds the pre-flight readiness wait for clients created by the
 	// default factory. Zero (or negative) leaves the client default (5s).
 	ReadyTimeout time.Duration
+	// PublishTimeout is the aggregate per-publish bound (messaging.publishtimeout)
+	// applied to clients created by the default factory: the readiness pre-flight
+	// plus the whole retry loop run under it, layered under any tighter caller
+	// deadline. Zero (or negative) leaves the publish unbounded.
+	PublishTimeout time.Duration
 	// Reconnect delays for clients created by the default factory. Zero (or negative)
 	// leaves the client defaults (5s/60s/2s/5s). See the WithReconnect*/WithResendDelay
 	// option docs for each knob's exact scope (jitter semantics, publish-error-only).
@@ -143,6 +148,7 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 				WithConnectionTimeout(opts.ConnectionTimeout),
 				WithMaxPublishAttempts(opts.MaxPublishAttempts),
 				WithReadyTimeout(opts.ReadyTimeout),
+				WithPublishTimeout(opts.PublishTimeout),
 				WithReconnectDelay(opts.ReconnectDelay),
 				WithReconnectMaxDelay(opts.ReconnectMaxDelay),
 				WithReinitDelay(opts.ReinitDelay),

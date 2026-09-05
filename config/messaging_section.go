@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"maps"
+	"math"
 	"net/url"
 	"regexp"
 	"slices"
@@ -35,14 +36,18 @@ func normalizeMessaging(cfg *MessagingConfig, multitenant bool) error {
 	return applyStreamsDefaults(&cfg.Streams)
 }
 
-// checkMessaging rejects an inverted reconnect.maxdelay/delay pair and an
-// unknown tenancy, then the streams block.
+// checkMessaging rejects an inverted reconnect.maxdelay/delay pair, an
+// out-of-range publishtimeout, and an unknown tenancy, then the streams block.
 func checkMessaging(cfg *MessagingConfig, multitenant bool) error {
 	// Both sides are defaulted by normalizeMessaging, so this compares effective
 	// values. computeBackoff silently clamps an inverted pair (maxdelay <
 	// delay), which would leave the configured ceiling ignored.
 	if cfg.Reconnect.MaxDelay < cfg.Reconnect.Delay {
 		return NewValidationError("messaging.reconnect.maxdelay", "must be >= messaging.reconnect.delay")
+	}
+
+	if err := checkMessagingPublishTimeout(cfg); err != nil {
+		return err
 	}
 
 	if cfg.Tenancy != TenancyPerTenant && cfg.Tenancy != TenancyShared {
@@ -55,6 +60,47 @@ func checkMessaging(cfg *MessagingConfig, multitenant bool) error {
 		return err
 	}
 	return checkMessagingStreams(cfg, multitenant)
+}
+
+// checkMessagingPublishTimeout judges messaging.publishtimeout, the aggregate
+// per-publish bound. Zero is the unset sentinel (unbounded, the pre-key
+// behavior), so this is a check and not a default: it lives here rather than in
+// normalizeMessaging because the floor reads readytimeout and connectiontimeout,
+// which normalizeMessaging has already materialized by the time check runs.
+//
+// The floor mirrors the outbox's publish-timeout rationale: a bound shorter than
+// one cold-path first attempt (readiness pre-flight + a single broker
+// confirmation wait) would truncate a healthy publish whose confirmation was
+// still in flight into a false failure, which for a retrying publisher is a
+// duplicate-delivery loop rather than a slow success.
+func checkMessagingPublishTimeout(cfg *MessagingConfig) error {
+	if cfg.PublishTimeout < 0 {
+		return NewValidationError(fieldMessagingPublishTimeout, errMustBeNonNegative+" (0 means unbounded)")
+	}
+	if cfg.PublishTimeout == 0 {
+		return nil
+	}
+	// Both operands are non-negative here (normalizeMessaging rejects a negative
+	// one), but time.ParseDuration accepts values up to ~2562047h and two of them
+	// sum past int64 nanoseconds. A wrapped floor is negative, every positive bound
+	// clears it, and the check silently stops enforcing anything — so test the sum
+	// BEFORE computing it. Stated as headroom rather than as a post-hoc "floor came
+	// out smaller than an operand": that spelling has a boundary no configuration
+	// can reach, since a floor equal to readytimeout needs a zero connectiontimeout
+	// and normalizeMessaging has already defaulted that to 30s.
+	if cfg.Reconnect.ConnectionTimeout > math.MaxInt64-cfg.Reconnect.ReadyTimeout {
+		return NewValidationError(fieldMessagingPublishTimeout, fmt.Sprintf(
+			"messaging.reconnect.readytimeout (%s) + messaging.reconnect.connectiontimeout (%s) overflows time.Duration",
+			cfg.Reconnect.ReadyTimeout, cfg.Reconnect.ConnectionTimeout))
+	}
+	floor := cfg.Reconnect.ReadyTimeout + cfg.Reconnect.ConnectionTimeout
+	if cfg.PublishTimeout < floor {
+		return NewValidationError(fieldMessagingPublishTimeout, fmt.Sprintf(
+			"%s must be >= messaging.reconnect.readytimeout (%s) + messaging.reconnect.connectiontimeout (%s) = %s; "+
+				"a shorter bound truncates a healthy cold-path first attempt into a false failure",
+			cfg.PublishTimeout, cfg.Reconnect.ReadyTimeout, cfg.Reconnect.ConnectionTimeout, floor))
+	}
+	return nil
 }
 
 // checkMessagingSeal judges the Activation selector's shape: every key is a

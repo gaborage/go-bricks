@@ -102,6 +102,12 @@ type AMQPClientImpl struct {
 	// nackBackoff is the cancelable delay inserted between NACK retries, replacing
 	// the old zero-delay hot-spin. Zero means no delay.
 	nackBackoff time.Duration
+	// publishTimeout is the aggregate per-publish bound (messaging.publishtimeout):
+	// when > 0, publishBytes derives a context deadline of this duration covering the
+	// readiness pre-flight AND the whole retry loop, layered under any tighter caller
+	// deadline. Zero or negative means unbounded — the Go zero value, so
+	// struct-literal test clients that don't set it keep the historical behavior.
+	publishTimeout time.Duration
 }
 
 // Reconnection delays
@@ -206,6 +212,20 @@ func WithReadyTimeout(d time.Duration) ClientOption {
 	return func(c *AMQPClientImpl) {
 		if d > 0 {
 			c.readyTimeout = d
+		}
+	}
+}
+
+// WithPublishTimeout sets the aggregate per-publish bound: publishBytes runs the
+// readiness pre-flight and the entire retry loop under a derived context deadline
+// of d, layered under any tighter caller deadline (the shorter wins). A value
+// below maxPublishAttempts x connectionTimeout deliberately lowers the effective
+// retry count. Non-positive values are ignored, leaving the publish unbounded —
+// the default.
+func WithPublishTimeout(d time.Duration) ClientOption {
+	return func(c *AMQPClientImpl) {
+		if d > 0 {
+			c.publishTimeout = d
 		}
 	}
 }
@@ -421,6 +441,30 @@ func (c *AMQPClientImpl) publishPrologue(
 // the client it is handed; the outbox relay reaches it through
 // internal/publishdoor. The bounded retry loop (ADR-033) lives here.
 func (c *AMQPClientImpl) publishBytes(ctx context.Context, options publishOptions, data []byte) error {
+	// The aggregate bound (messaging.publishtimeout) is derived BEFORE the
+	// prologue, not around the retry loop alone: its startup floor is
+	// readytimeout + connectiontimeout, so the budget it names covers the
+	// readiness pre-flight the prologue performs plus one confirmation wait.
+	// Deriving it here also keeps one context for the whole call — the publish
+	// span is created from the bounded ctx inside the prologue, so the span's
+	// context and the loop's context are the same lineage. WithTimeout already
+	// yields min(caller deadline, bound); a non-positive publishTimeout leaves
+	// the caller's context untouched (unbounded, the pre-key behavior).
+	//
+	// What the bound does NOT cover: an in-flight write. amqp091-go's
+	// PublishWithContext checks the context once before starting and then calls
+	// the blocking Publish (channel.go), and publishSerial below is a plain
+	// mutex, so a broker that stops reading holds this publish — and every
+	// publisher queued on publishSerial — until the write returns. The deadline
+	// is observed at the next cancellation point, which is why it bounds the
+	// waiting (readiness pre-flight, confirmation waits, retry arming) rather
+	// than every syscall.
+	if c.publishTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.publishTimeout)
+		defer cancel()
+	}
+
 	ctx, span, publishStart, err := c.publishPrologue(ctx, options, len(data))
 	if err != nil {
 		return err

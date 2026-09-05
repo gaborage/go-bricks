@@ -826,7 +826,8 @@ func TestNewManagerConfigBuilderFromConfig(t *testing.T) {
 				ReinitDelay:        3 * time.Second,
 				ResendDelay:        11 * time.Second,
 			},
-			Publisher: config.PublisherPoolConfig{MaxCached: 12, IdleTTL: 13 * time.Minute},
+			Publisher:      config.PublisherPoolConfig{MaxCached: 12, IdleTTL: 13 * time.Minute},
+			PublishTimeout: 41 * time.Second,
 		},
 		Cache:    config.CacheConfig{Manager: config.CacheManagerConfig{MaxSize: 14}},
 		Database: config.DatabaseConfig{Manager: config.DatabaseManagerConfig{MaxSize: 15}},
@@ -840,6 +841,7 @@ func TestNewManagerConfigBuilderFromConfig(t *testing.T) {
 	assert.Equal(t, 31*time.Second, b.connectionTimeout)
 	assert.Equal(t, 6, b.maxPublishAttempts)
 	assert.Equal(t, 7*time.Second, b.readyTimeout)
+	assert.Equal(t, 41*time.Second, b.publishTimeout)
 	assert.Equal(t, 8*time.Second, b.reconnectDelay)
 	assert.Equal(t, 91*time.Second, b.reconnectMaxDelay)
 	assert.Equal(t, 3*time.Second, b.reInitDelay)

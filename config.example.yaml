@@ -185,6 +185,7 @@ messaging:
   headers:
     x-app-name: my-service
     x-environment: development
+  # publishtimeout: 40s   # Aggregate bound on one whole publish; unset = unbounded. Must be >= reconnect.readytimeout + reconnect.connectiontimeout (35s at defaults). See wiki/messaging.md#aggregate-publish-bound-publishtimeout
   # Native stream-protocol consumption (OPTIONAL - see wiki/streams.md).
   # Required only when a module declares streams or consumers via streams.StreamDeclarer.
   # Separate listener (default port 5552, rabbitmq_stream plugin); never derived

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -934,4 +935,182 @@ func TestCheckMessagingRunsSealRule(t *testing.T) {
 	err := checkMessaging(&cfg, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "messaging.seal.active.svc-sign")
+}
+
+// TestValidateMessagingPublishTimeout pins messaging.publishtimeout's three
+// states — unset (unbounded), negative (rejected), and set-below-the-floor
+// (rejected) — against NORMALIZED reconnect operands. The floor is
+// readytimeout + connectiontimeout: a shorter bound could truncate a healthy
+// cold-path first attempt (readiness wait + one confirmation) into a false
+// failure, the same hazard outbox.validatePublishTimeout refuses startup over.
+func TestValidateMessagingPublishTimeout(t *testing.T) {
+	// The floor at defaults, derived rather than spelled: a change to either
+	// default must move this test's boundary with it, not silently desync from it.
+	const defaultFloor = defaultReadyTimeout + defaultConnectionTimeout
+
+	tests := []struct {
+		name               string
+		config             MessagingConfig
+		errorContains      []string
+		wantPublishTimeout time.Duration
+	}{
+		{
+			// The opt-in default: absent key stays 0 after normalization, so no
+			// deployment acquires a bound it never configured.
+			name:               "unset_stays_zero_and_is_accepted",
+			config:             MessagingConfig{},
+			wantPublishTimeout: 0,
+		},
+		{
+			name:          "negative_rejected",
+			config:        MessagingConfig{PublishTimeout: -time.Second},
+			errorContains: []string{"messaging.publishtimeout"},
+		},
+		{
+			// Exactly at the floor is the smallest legal bound: the check is <,
+			// not <=. Without this case a `<=` mutant survives.
+			name:               "exactly_at_floor_accepted",
+			config:             MessagingConfig{PublishTimeout: defaultFloor},
+			wantPublishTimeout: defaultFloor,
+		},
+		{
+			// One nanosecond under the floor is the tightest rejection: it pins
+			// the comparison AND its arithmetic, since any wrong operand pairing
+			// moves the boundary by whole seconds.
+			name:   "floor_minus_one_nanosecond_rejected",
+			config: MessagingConfig{PublishTimeout: defaultFloor - time.Nanosecond},
+			errorContains: []string{
+				"messaging.publishtimeout",
+				"messaging.reconnect.readytimeout",
+				"messaging.reconnect.connectiontimeout",
+			},
+		},
+		{
+			// The floor reads NORMALIZED values: readytimeout is unset here, so
+			// its 5s default must participate. Against the explicit 20s
+			// connectiontimeout the floor is 25s, and 24s is under it — a check
+			// that compared pre-normalization values would see readytimeout 0,
+			// compute a 20s floor, and wrongly accept.
+			name: "floor_uses_normalized_readytimeout_default",
+			config: MessagingConfig{
+				PublishTimeout: 24 * time.Second,
+				Reconnect:      ReconnectConfig{ConnectionTimeout: 20 * time.Second},
+			},
+			errorContains: []string{"messaging.publishtimeout"},
+		},
+		{
+			// Same normalized floor of 25s, one second above it: the pair proves
+			// the rejection above is the boundary and not a blanket refusal.
+			name: "above_normalized_floor_accepted",
+			config: MessagingConfig{
+				PublishTimeout: 26 * time.Second,
+				Reconnect:      ReconnectConfig{ConnectionTimeout: 20 * time.Second},
+			},
+			wantPublishTimeout: 26 * time.Second,
+		},
+		{
+			// Custom operands on both sides: floor 10s+40s = 50s, so 49s is
+			// rejected. This is the case a swapped or dropped operand fails.
+			name: "floor_sums_both_explicit_operands",
+			config: MessagingConfig{
+				PublishTimeout: 49 * time.Second,
+				Reconnect:      ReconnectConfig{ReadyTimeout: 10 * time.Second, ConnectionTimeout: 40 * time.Second},
+			},
+			errorContains: []string{"messaging.publishtimeout"},
+		},
+		{
+			// time.ParseDuration accepts either operand alone, but their int64
+			// nanosecond sum wraps negative — and a negative floor would let EVERY
+			// positive bound through, silently disabling the check. Rejected as an
+			// overflow rather than compared against the wrapped value.
+			name: "floor_operands_overflowing_duration_rejected",
+			config: MessagingConfig{
+				PublishTimeout: time.Second,
+				Reconnect: ReconnectConfig{
+					ReadyTimeout:      2000000 * time.Hour,
+					ConnectionTimeout: 2000000 * time.Hour,
+				},
+			},
+			errorContains: []string{"messaging.publishtimeout", "overflows time.Duration"},
+		},
+		{
+			// The same operands one notch below the wrap still sum cleanly, so the
+			// guard rejects an overflow and not merely a large configuration.
+			name: "large_but_non_overflowing_floor_accepted",
+			config: MessagingConfig{
+				PublishTimeout: 2000000 * time.Hour,
+				Reconnect: ReconnectConfig{
+					ReadyTimeout:      1000 * time.Hour,
+					ConnectionTimeout: 1000 * time.Hour,
+				},
+			},
+			wantPublishTimeout: 2000000 * time.Hour,
+		},
+		{
+			// The exact edge of the overflow guard: the operands sum to precisely
+			// math.MaxInt64, the largest floor that does NOT wrap. Accepting it is
+			// what makes the guard's comparison a `>` and not a `>=`; without this
+			// case that boundary is invisible and either spelling passes.
+			name: "floor_operands_summing_to_exactly_maxint64_accepted",
+			config: MessagingConfig{
+				PublishTimeout: math.MaxInt64,
+				Reconnect: ReconnectConfig{
+					ReadyTimeout:      5 * time.Second,
+					ConnectionTimeout: math.MaxInt64 - 5*time.Second,
+				},
+			},
+			wantPublishTimeout: math.MaxInt64,
+		},
+		{
+			// One nanosecond past that edge is the smallest overflowing pair.
+			name: "floor_operands_one_nanosecond_past_maxint64_rejected",
+			config: MessagingConfig{
+				PublishTimeout: math.MaxInt64,
+				Reconnect: ReconnectConfig{
+					ReadyTimeout:      5 * time.Second,
+					ConnectionTimeout: math.MaxInt64 - 5*time.Second + 1,
+				},
+			},
+			errorContains: []string{"messaging.publishtimeout", "overflows time.Duration"},
+		},
+		{
+			name: "at_custom_floor_accepted",
+			config: MessagingConfig{
+				PublishTimeout: 50 * time.Second,
+				Reconnect:      ReconnectConfig{ReadyTimeout: 10 * time.Second, ConnectionTimeout: 40 * time.Second},
+			},
+			wantPublishTimeout: 50 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.config
+			err := normalizeAndCheckMessaging(&cfg, false)
+
+			if len(tt.errorContains) == 0 {
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantPublishTimeout, cfg.PublishTimeout,
+					"normalization must leave messaging.publishtimeout exactly as configured")
+				return
+			}
+			require.Error(t, err)
+			for _, want := range tt.errorContains {
+				assert.Contains(t, err.Error(), want)
+			}
+		})
+	}
+}
+
+// TestValidateMessagingPublishTimeoutFloorIsModeIndependent guards the rule
+// against the deployment-mode flag: multitenant only selects Publisher.IdleTTL
+// and MaxCached defaults, so the floor must reject and accept identically.
+func TestValidateMessagingPublishTimeoutFloorIsModeIndependent(t *testing.T) {
+	rejected := MessagingConfig{PublishTimeout: 34 * time.Second} // floor at defaults is 35s
+	err := normalizeAndCheckMessaging(&rejected, true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "messaging.publishtimeout")
+
+	accepted := MessagingConfig{PublishTimeout: 35 * time.Second}
+	require.NoError(t, normalizeAndCheckMessaging(&accepted, true))
 }

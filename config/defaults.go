@@ -221,8 +221,9 @@ const (
 )
 
 const (
-	fieldMessagingStreamsURI = "messaging.streams.uri"
-	fieldMessagingSealActive = "messaging.seal.active"
+	fieldMessagingStreamsURI     = "messaging.streams.uri"
+	fieldMessagingSealActive     = "messaging.seal.active"
+	fieldMessagingPublishTimeout = "messaging.publishtimeout"
 
 	fieldDatabaseTLS = "database.tls"
 
