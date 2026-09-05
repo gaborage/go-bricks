@@ -123,7 +123,27 @@ legitimate neighbours also surface and are not sinks: `observability/provider.go
 exception event (the same rule one layer down), and
 `observability/testing/helpers.go`, whose `AssertExceptionTypeOnly` /
 `AssertNoExceptionEvent` READ what a sink wrote — they are the assertion every
-converted site shares, so the property is pinned in one place too.
+converted site shares, so the property is pinned in one place too. That half is
+now enforced rather than remembered: `forbidigo` in `.golangci.yml` fails
+`make check` on both spellings, in tests as well as shipped code. There is no
+file-level exemption: the only escapes are inline `//nolint`s on the individual
+lines of the helper, of the reader-side assertions, and of a test that wants a
+raw exception event on purpose. Inline, because a
+standalone directive above a call expands to the whole statement and would
+silently cover a message attribute added beside the type one; per-line, so a
+second function in either file has to earn its own; and in tests too, because a
+test that wants a raw exception event should say so in a directive a reviewer
+sees rather than inherit a blanket pass.
+The `RecordError` pattern resolves through the `trace.Span` INTERFACE, so a sink
+holding a concrete span type would expand to a different name and slip past it;
+no such site exists today.
+
+The attribute-shaped half stays a grep because forbidigo matches IDENTIFIERS and
+the leak is an ARGUMENT SHAPE — `attribute.String(k, err.Error())` — which it
+cannot express; `^error\.Error$` would fire on every log line in the repo. Not
+because a rule would be noisy: all thirteen live sites render a classification,
+so a leak-shaped rule would be silent today. Writing one wants a `gocritic`
+ruleguard pattern, which is its own change.
 
 `fmt.Sprintf("%T", err)` allocates on a path that only runs on failure, which is
 the right place to spend it.

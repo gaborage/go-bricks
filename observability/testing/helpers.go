@@ -319,13 +319,13 @@ func AssertExceptionTypeOnly(t TB, span *tracetest.SpanStub, wantType string) {
 
 	var found int
 	for i := range span.Events {
-		if span.Events[i].Name != string(semconv.ExceptionEventName) {
+		if span.Events[i].Name != string(semconv.ExceptionEventName) { //nolint:forbidigo // ADR-083: reader-side assertion helper
 			continue
 		}
 		found++
 		require.Len(t, span.Events[i].Attributes, 1,
 			"the exception event carries exception.type and nothing else")
-		assert.Equal(t, string(semconv.ExceptionTypeKey), string(span.Events[i].Attributes[0].Key))
+		assert.Equal(t, string(semconv.ExceptionTypeKey), string(span.Events[i].Attributes[0].Key)) //nolint:forbidigo // ADR-083: reader-side assertion helper
 		assert.Equal(t, wantType, span.Events[i].Attributes[0].Value.AsString())
 	}
 	assert.Equal(t, 1, found, "expected exactly one exception event")
@@ -337,7 +337,7 @@ func AssertNoExceptionEvent(t TB, span *tracetest.SpanStub) {
 	t.Helper()
 
 	for i := range span.Events {
-		assert.NotEqual(t, string(semconv.ExceptionEventName), span.Events[i].Name,
+		assert.NotEqual(t, string(semconv.ExceptionEventName), span.Events[i].Name, //nolint:forbidigo // ADR-083: reader-side assertion helper
 			"span records an exception event it should not have")
 	}
 }

@@ -34,8 +34,8 @@ func RecordErrorByType(span trace.Span, err error) {
 	errType := fmt.Sprintf("%T", err)
 	// semconv spells both the event and the attribute; exception.message is
 	// deliberately absent.
-	span.AddEvent(string(semconv.ExceptionEventName), trace.WithAttributes(
-		semconv.ExceptionType(errType),
+	span.AddEvent(string(semconv.ExceptionEventName), trace.WithAttributes( //nolint:forbidigo // ADR-083: this file IS the single helper
+		semconv.ExceptionType(errType), //nolint:forbidigo // ADR-083: this file IS the single helper
 	))
 	span.SetStatus(codes.Error, errType)
 }

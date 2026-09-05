@@ -12,6 +12,7 @@ linters:
     - errname                   # checks that error variables/types follow the errFoo/FooError convention
     - errorlint                 # finds code that may cause problems with the Go 1.13 error wrapping scheme
     - exhaustive                # checks exhaustiveness of enum switch statements
+    - forbidigo                 # forbids identifiers by pattern (here: raw span-error recording, ADR-083)
     - forcetypeassert           # finds unchecked type assertions (uber-go: Handle Type Assertion Failures)
     - gocheckcompilerdirectives # validates go compiler directive comments (//go:)
     - gochecknoinits            # checks that no init functions are present
@@ -52,6 +53,24 @@ linters:
       threshold: 100
     exhaustive:
       default-signifies-exhaustive: true
+    forbidigo:
+      # analyze-types is load-bearing, not a precaution: it rewrites the source
+      # to `<package>.<type>.<method>` before matching, so the first pattern
+      # resolves the interface method and an unrelated third-party RecordError
+      # expands to its own type and cannot match. Without it the match text is
+      # the literal `span.RecordError`, which fires on any variable named span
+      # and misses one named s. The semconv pattern keys off the package NAME to
+      # dodge the versioned-import-path staleness the importas note below flags.
+      # It costs nothing here: golangci-lint pins forbidigo to LoadModeTypesInfo
+      # regardless of this setting, and govet/staticcheck/gosec already put the
+      # shared loader there. spancheck's record-error/set-status checks stay off:
+      # enabling them would demand the very RecordError call this forbids.
+      analyze-types: true
+      forbid:
+        - pattern: ^trace\.Span\.RecordError$
+          msg: record span errors by type through observability.RecordErrorByType (ADR-083) — RecordError writes the error's message into the span.
+        - pattern: ^semconv\.Exception.*$
+          msg: build the exception event through observability.RecordErrorByType (ADR-083) rather than assembling semconv exception attributes by hand.
     goconst:
       min-len: 4
       min-occurrences: 3
