@@ -321,7 +321,13 @@ rabbitmqadmin publish exchange=payments routing_key=payment.authorized \
   properties='{"content_type":"application/octet-stream","headers":{"x-tenant-id":"t1"}}'
 ```
 
-Pitfalls, each one a consumer-side rejection rather than a publish failure:
+Local failures — the CLI exits 1 before signing:
+
+- The Subject named by `-subject` is the JSON member name, and it must be present exactly
+  once in the document; an absent Subject, a case-fold twin of it, a non-object document or
+  trailing content after it is `SEAL_DOCUMENT_INVALID`.
+
+Consumer-side rejections — the publish succeeds, the open refuses:
 
 - `-tenant-id` writes the signed `tid`; under shared tenancy it must equal the
   `x-tenant-id` header you publish with, or the open fails `SEAL_TENANT_MISMATCH`.
@@ -331,11 +337,9 @@ Pitfalls, each one a consumer-side rejection rather than a publish failure:
   `<logical>-v<N>`, never the bare Logical kid. A wrong family is
   `SEAL_KID_FAMILY_MISMATCH`; a right family the consumer has not provisioned is the
   recoverable `SEAL_KID_UNKNOWN_GENERATION`.
-- PS256 only — there is no `-sig-alg`; the opener also accepts RS256, but the CLI never
-  emits it.
-- The Subject named by `-subject` is the JSON member name, and it must be present exactly
-  once in the document; an absent Subject, a case-fold twin of it, a non-object document or
-  trailing content after it is `SEAL_DOCUMENT_INVALID`.
+
+PS256 only — there is no `-sig-alg`; the opener also accepts RS256, but the CLI never
+emits it.
 
 Each invocation is a fresh seal with a fresh `jti`, so publishing the same `body.txt` twice
 is the dedup test and re-running the CLI is not. Go test authors do not need the binary:
