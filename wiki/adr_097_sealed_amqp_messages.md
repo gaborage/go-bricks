@@ -15,6 +15,13 @@
   branches `research/amqp-envelope-standards`, `research/amqp-seal-seams`; prototype
   `prototype/amqp-seal-open`. Deep dive: [sealing.md](sealing.md).
 
+> **Amended (2026-09-04, #1408):** a second door, `jose/sealed.SealDocument` with
+> `NewDocumentSpec`, seals an already-serialized document for tooling (`cmd/seal-event`) and
+> JSON-fixture tests — same envelope, same invariants, the caller's bytes signed verbatim
+> except the Subject value. The typed door stays the production path. The G9 case-fold twin
+> rule now runs on the serialized bytes for BOTH doors, closing the gap where a custom
+> `MarshalJSON` emitted a clear twin the struct scan never saw (`[C64.2]`, breaking).
+
 ## Context
 
 Payment events cross a broker that ops, tooling and other tenants' consumers can

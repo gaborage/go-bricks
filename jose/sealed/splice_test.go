@@ -38,6 +38,32 @@ func TestLocateSubjectFindsSpanExactly(t *testing.T) {
 	}
 }
 
+// TestLocateSubjectIgnoresCaseFoldTwins is the opener's half of the G9 rule: walkToSubject
+// refuses a clear twin only for the sealer (pinSubject passes true), so locateSubject — the
+// door Open goes through at rule 10 — must keep returning the span. Without this, a change
+// that made the opener ask for the rule too would refuse messages sealed before the rule
+// existed, and no other test would notice.
+func TestLocateSubjectIgnoresCaseFoldTwins(t *testing.T) {
+	cases := []struct {
+		name  string
+		doc   string
+		value string
+	}{
+		{name: "twin_before_the_subject", doc: `{"Card":"clear","card":"sealed"}`, value: `"sealed"`},
+		{name: "twin_after_the_subject", doc: `{"card":"sealed","CARD":"clear"}`, value: `"sealed"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			span, err := locateSubject([]byte(tc.doc), "card")
+			require.NoError(t, err, "the opener judges no case-fold twin")
+			assert.Equal(t, tc.value, string(span.value))
+
+			_, sealErr := pinSubject([]byte(tc.doc), "card")
+			assert.ErrorIs(t, sealErr, errSubjectCaseFoldTwin, "the sealer does")
+		})
+	}
+}
+
 func TestLocateSubjectRejectsBadDocuments(t *testing.T) {
 	cases := []struct {
 		name string
