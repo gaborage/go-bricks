@@ -145,6 +145,10 @@ func TestIsValidQuotedSegment(t *testing.T) {
 	}
 }
 
+// TestParseQualifiedIdentifier is the behavior contract for the walker behind
+// SplitIdentifierSegments: which dots separate segments, which quotes escape a
+// partner rather than closing a run, and which inputs are rejected outright. A
+// rejected input yields nil segments, so the table leaves expected empty there.
 func TestParseQualifiedIdentifier(t *testing.T) {
 	tests := []struct {
 		name     string
