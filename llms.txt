@@ -3029,9 +3029,13 @@ active consumer, or super streams, use the native stream protocol instead: impor
 within a stream. A handler returning nil advances the *tracked* position, and commits are
 batched — so a restart replays everything handled since the last stored offset. Delivery is
 at-least-once, so make handlers idempotent. See
-[wiki/streams.md#offset-semantics](wiki/streams.md#offset-semantics):
+[wiki/streams.md#offset-semantics](wiki/streams.md#offset-semantics). Declarers are found by
+type assertion, so a misspelled or mis-signatured `DeclareStreams` is a silent no-op at startup —
+the `var _` assertion below makes it a compile error instead:
 
 ```go
+var _ streams.StreamDeclarer = (*Module)(nil)
+
 func (m *Module) DeclareStreams(decls *streams.Declarations) {
 	decls.DeclareStream("orders", &streams.StreamSpec{MaxAge: 7 * 24 * time.Hour})
 	decls.DeclareConsumer(&streams.ConsumerOptions{
