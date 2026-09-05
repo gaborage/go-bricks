@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"errors"
+	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace/noop"
+	"google.golang.org/grpc"
 )
 
 const (
@@ -887,7 +889,33 @@ func TestNewProviderNilSampleRateGetsDefault(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// startUnimplementedGRPCServer serves gRPC on an ephemeral loopback port with no
+// services registered, and returns its "host:port". Every RPC is answered with
+// codes.Unimplemented, so an OTLP export fails at once instead of retrying a
+// refused dial.
+func startUnimplementedGRPCServer(t *testing.T) string {
+	t.Helper()
+
+	lc := net.ListenConfig{}
+	lis, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	srv := grpc.NewServer()
+	go func() {
+		_ = srv.Serve(lis)
+	}()
+	t.Cleanup(srv.Stop)
+
+	return lis.Addr().String()
+}
+
 func TestNewProviderEnvironmentAwareBatchTimeout(t *testing.T) {
+	// A local gRPC server with no services registered: the export RPC fails
+	// immediately with codes.Unimplemented, which the OTLP client does not
+	// retry. A dead port instead makes Shutdown's inherited export burn the
+	// full export timeout on dial retries (10s per gRPC case).
+	grpcEndpoint := startUnimplementedGRPCServer(t)
+
 	tests := []struct {
 		name        string
 		environment string
@@ -896,7 +924,7 @@ func TestNewProviderEnvironmentAwareBatchTimeout(t *testing.T) {
 		{
 			name:        "development_environment",
 			environment: "development",
-			endpoint:    testOTLPGRPCEndpoint,
+			endpoint:    grpcEndpoint,
 		},
 		{
 			name:        "stdout_endpoint",
@@ -906,7 +934,7 @@ func TestNewProviderEnvironmentAwareBatchTimeout(t *testing.T) {
 		{
 			name:        "production_environment",
 			environment: "production",
-			endpoint:    testOTLPGRPCEndpoint,
+			endpoint:    grpcEndpoint,
 		},
 	}
 
@@ -925,6 +953,7 @@ func TestNewProviderEnvironmentAwareBatchTimeout(t *testing.T) {
 					Enabled:  BoolPtr(true),
 					Endpoint: tt.endpoint,
 					Protocol: ProtocolGRPC, // gRPC for non-stdout tests
+					Insecure: true,         // plain-TCP local listener, no TLS
 				},
 			}
 
