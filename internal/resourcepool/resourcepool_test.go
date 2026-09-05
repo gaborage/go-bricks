@@ -1792,3 +1792,50 @@ func TestPoolSlowCloseDoesNotBlockConcurrentGet(t *testing.T) {
 	<-evictDone
 	require.NoError(t, p.Close())
 }
+
+// TestPoolErrorCounterCountsEveryConcurrentFailure pins the atomic error counter: eight
+// goroutines drive the incErrors path concurrently through failing creates on distinct keys —
+// distinct so singleflight never collapses them — and the counter must end at exactly the number
+// of injected failures, with no lost update. It asserts the DELTA from a baseline snapshot rather
+// than an absolute count, so it stays honest if the pool ever counts something else on the way in.
+//
+// The -race detector is the other half of the assertion, but note what it does and does not
+// prove: the previous mu-guarded int was already safe here and passes this test too. What it
+// catches is the counter's synchronization being REMOVED later — an unguarded plain int fails
+// immediately under this write-write contention.
+func TestPoolErrorCounterCountsEveryConcurrentFailure(t *testing.T) {
+	const (
+		creators       = 8
+		failsPerWriter = 25
+	)
+
+	wantErr := errors.New("create failed")
+	// The closer must fail: no entry can be installed when every create errors, so the
+	// require.NoError on Close below is what proves none slipped through.
+	closeErr := errors.New("close failed")
+	p := New(0, 0, func(any) error { return closeErr })
+
+	baseline := p.Stats().Errors
+
+	var wg sync.WaitGroup
+	for w := range creators {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range failsPerWriter {
+				key := fmt.Sprintf("race-key-%d-%d", w, i)
+				_, _, err := p.GetOrCreate(t.Context(), key, func(context.Context) (any, error) {
+					return nil, wantErr
+				})
+				assert.ErrorIs(t, err, wantErr)
+			}
+		}()
+	}
+	wg.Wait()
+
+	got := p.Stats().Errors - baseline
+	assert.Equal(t, creators*failsPerWriter, got,
+		"every injected create failure must be counted exactly once, with no lost update")
+
+	require.NoError(t, p.Close(), "no entry was ever installed, so Close has nothing to fail on")
+}

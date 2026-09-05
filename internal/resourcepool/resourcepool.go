@@ -118,7 +118,10 @@ type Pool[V any] struct {
 	totalCreated int
 	evictions    int
 	idleCleanups int
-	errors       int
+
+	// errors counts create failures and tracked close failures. Atomic so incErrors and
+	// noteCleanupCloseErr can bump it without taking mu.
+	errors atomic.Int64
 
 	// cleanupErrs retains close failures from the idle-cleanup path (guarded by mu) so Close can
 	// surface them through its errors.Join contract. They are only recoverable because StopCleanup
@@ -601,10 +604,12 @@ func (p *Pool[V]) cleanupIdle() {
 
 // noteCleanupCloseErr counts an idle-cleanup close failure AND retains it for Close. The cleanup
 // goroutine has no caller to return an error to, so without this the failure only ever showed up as
-// a statistic. Must be called without mu held.
+// a statistic. Must be called without mu held: the counter is atomic, but the cleanupErrs append
+// still takes mu.
 func (p *Pool[V]) noteCleanupCloseErr(err error) {
+	p.errors.Add(1)
+
 	p.mu.Lock()
-	p.errors++
 	p.cleanupErrs = append(p.cleanupErrs, err)
 	p.mu.Unlock()
 }
@@ -682,7 +687,7 @@ func (p *Pool[V]) Stats() PoolStats {
 		TotalCreated: p.totalCreated,
 		Evictions:    p.evictions,
 		IdleCleanups: p.idleCleanups,
-		Errors:       p.errors,
+		Errors:       int(p.errors.Load()),
 		IdleTTL:      p.idleTTL,
 	}
 }
@@ -699,9 +704,8 @@ func (p *Pool[V]) Snapshot() []EntrySnapshot {
 	return out
 }
 
-// incErrors bumps the error counter. Must be called without mu held.
+// incErrors bumps the error counter. Safe to call with or without mu held: the
+// counter is atomic and takes no lock of its own.
 func (p *Pool[V]) incErrors() {
-	p.mu.Lock()
-	p.errors++
-	p.mu.Unlock()
+	p.errors.Add(1)
 }
