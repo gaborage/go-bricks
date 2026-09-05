@@ -65,7 +65,7 @@ func TestTiming(t *testing.T) {
 
 				// Parse the duration from header
 				headerDuration, err := time.ParseDuration(responseTimeHeader)
-				require.NoError(t, err, "X-Response-Time should be a valid duration")
+				assert.NoError(t, err, "X-Response-Time should be a valid duration")
 
 				// The header duration should be reasonable (within actual request time)
 				assert.LessOrEqual(t, headerDuration, actualDuration,
@@ -109,7 +109,7 @@ func TestTimingErrorHandler(t *testing.T) {
 
 	// Parse and verify duration
 	headerDuration, err := time.ParseDuration(responseTimeHeader)
-	require.NoError(t, err, "X-Response-Time should be a valid duration")
+	assert.NoError(t, err, "X-Response-Time should be a valid duration")
 	assert.GreaterOrEqual(t, headerDuration, 40*time.Millisecond,
 		"Duration should reflect the actual processing time including the sleep")
 

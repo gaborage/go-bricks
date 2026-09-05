@@ -58,6 +58,12 @@ fixed there — do not read their absence here as a disposition. Reconcile this 
 | `server/handler_test.go:1923` | float-compare | Same, a handler-supplied `meta.page`. | `//nolint:testifylint // integer pagination value` |
 | `server/jose_test.go:269` | float-compare | Same shape on the decrypted JOSE envelope's `meta.total`. | `//nolint:testifylint // integer count decoded as float64` |
 | `server/jose_test.go:324` | float-compare | Same, `meta.page` on the JOSE path. | `//nolint:testifylint // integer pagination value` |
+| `server/timing_test.go:68` | require-error | Inside `if tt.expectHeader`; the unconditional `assert.Equal(http.StatusOK, rec.Code)` at `:86` sits AFTER the whole if/else. A header-format regression must not abort before the status-code check, which is independent of it. | `//nolint:testifylint // unconditional status check follows the enclosing block` |
+| `server/timing_test.go:112` | require-error | Same shape in `TestTimingErrorHandler`: the `assert.Equal(http.StatusBadRequest, rec.Code)` below the block is independent of whether the duration parses. | `//nolint:testifylint // status check follows the enclosing block` |
+| `server/performance_stats_test.go:101` | require-error | The error-expectation if/else is followed by the whole counter block — `amqpCount`, `dbCount`, `amqpElapsed`, `dbElapsed`. The handler sets those BEFORE returning, so they are checkable whatever the error was; aborting here throws away the counters this test exists to verify. | `//nolint:testifylint // counter assertions follow the enclosing block` |
+| `server/performance_stats_test.go:103` | require-error | Same if/else, the no-error arm. | `//nolint:testifylint // counter assertions follow the enclosing block` |
+| `server/validator_test.go:613` | require-error | The nil-pointer case; the lines below run a SECOND, independent `Validate` call proving a valid pointer passes. One input's regression must not hide the other's. | `//nolint:testifylint // an independent second Validate call follows` |
+| `server/validator_test.go:648` | require-error | Same shape for the empty-slice case and its valid-slice counterpart. | `//nolint:testifylint // an independent second Validate call follows` |
 
 Converted rather than listed, for the record: a site whose follower would PANIC on a nil error
 (`err.Error()`, bare or inside a `Contains`) converts, and so does one whose follower would

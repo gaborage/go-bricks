@@ -98,9 +98,9 @@ func TestPerformanceStats(t *testing.T) {
 
 			// Assert error expectation
 			if tt.expectError {
-				require.Error(t, err)
+				assert.Error(t, err)
 			} else {
-				require.NoError(t, err)
+				assert.NoError(t, err)
 			}
 
 			// Verify context has been modified with performance tracking
