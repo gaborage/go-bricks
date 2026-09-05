@@ -360,7 +360,7 @@ func TestFeature(t *testing.T) {
 
 Every integration binary in one `go test ./...` invocation shares a single Ryuk reaper: CI pins `TESTCONTAINERS_SESSION_ID` to the run id (PR #943), and locally testcontainers derives the same id from the parent `go test` process.
 
-Ryuk exits 10s after its last client disconnects, packages run alphabetically, and the `internal/*` packages between the database/inbox group and `messaging` take about that long — so `messaging` can look up a reaper that is already exiting.
+Ryuk exits 10s after its last client disconnects; `go test` starts packages in list order, up to `-p` at a time, and the ~20 tiny `internal/*` packages queued between the database/inbox group and `messaging` fill the slots for about that long — so `messaging` can look up a reaper that is already exiting.
 
 testcontainers-go v0.44.0 then hangs until the 60s deadline (`wait for reaper <id>: context deadline exceeded`), or gets a handshake EOF and loses its freshly created container to Ryuk's exit prune (`Reaper handshake failed: read ack: EOF`, then `RWLayer of container <id> is unexpectedly nil`).
 

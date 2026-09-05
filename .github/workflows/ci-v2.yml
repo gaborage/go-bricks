@@ -279,12 +279,13 @@ jobs:
       FLYWAY_SHA256: 53eb61daae221b3d5aa0068f1b821a58c58202f22f9d9f9e2190172fd2e6b492
       TESTCONTAINERS_SESSION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       # Every test binary shares the reaper above, and Ryuk exits 10s after its
-      # last client disconnects. `go test ./...` runs packages alphabetically, and
-      # the ~20 tiny internal/* packages between the database/inbox group and
-      # messaging take ~9-10s, so messaging reused a reaper that was already
-      # exiting ("wait for reaper <id>: context deadline exceeded", or a handshake
-      # EOF followed by "RWLayer of container <id> is unexpectedly nil" when Ryuk's
-      # exit prune deleted the fresh container). 2m outlives any inter-package gap.
+      # last client disconnects. `go test ./...` starts packages in list order, up
+      # to -p at a time; the ~20 tiny internal/* packages queued between the
+      # database/inbox group and messaging fill the slots for ~9-10s, so messaging
+      # reused a reaper that was already exiting ("wait for reaper <id>: context
+      # deadline exceeded", or a handshake EOF followed by "RWLayer of container
+      # <id> is unexpectedly nil" when Ryuk's exit prune deleted the fresh
+      # container). 2m outlives any inter-package gap.
       TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT: 2m
 
     steps:
