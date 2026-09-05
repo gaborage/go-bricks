@@ -20,7 +20,7 @@
 > JSON-fixture tests — same envelope, same invariants, the caller's bytes signed verbatim
 > except the Subject value. The typed door stays the production path. The G9 case-fold twin
 > rule now runs on the serialized bytes for BOTH doors, closing the gap where a custom
-> `MarshalJSON` emitted a clear twin the struct scan never saw (`[C64.2]`, breaking).
+> `MarshalJSON` emitted a clear twin the struct scan never saw (`[C63.5]`, breaking).
 
 ## Context
 
