@@ -28,6 +28,23 @@ independent property: `require` aborts, so converting would hide a real regressi
 unrelated failure. A site is only listed after that independence was checked by reading the
 test, not inferred from the diff.
 
+## app (#1092 / W3-P4)
+
+| site | checker | why it stays `assert` | directive FINAL inserts |
+| --- | --- | --- | --- |
+| `app/app_builder_test.go:491` | require-error | The cause string is one property; lines below then drive `CreateApp().Build()` and pin that startup aborts with a nil app and a live logger — a second phase that cannot be hoisted above it. | `//nolint:testifylint // require would abort before the Build-propagation assertions` |
+| `app/app_builder_test.go:539` | require-error | Paired with `:540` — two clauses of ONE wrapped error ("cache manager", "maxsize cannot be negative"); the final clause is now `require`. | `//nolint:testifylint // second clause of the same wrapped error follows` |
+| `app/app_builder_test.go:579` | require-error | The ADR-067 point is the lines below: the bundle is read off the builder and all three managers are probed observably closed. Aborting on a message change hides the leak check. | `//nolint:testifylint // require would abort before the manager-close assertions` |
+| `app/app_test.go:1197` | require-error | Paired with the line below — the two errors an aggregate wraps. `TestShutdownAggregatesErrors` exists to pin BOTH; the final one is now `require`. | `//nolint:testifylint // second wrapped error asserted on the next line` |
+| `app/bootstrap_test.go:605` | require-error | Guarded by a `require.Error` above, so nil-deref is impossible; this is the first of two clauses of one error, the second of which is now `require`. | `//nolint:testifylint // guarded by require.Error above; second clause follows` |
+| `app/lifecycle_test.go:1081` | require-error | A table subtest whose branch below returns early on the nil arm, so it cannot be hoisted above this assertion; both messages state a conjunction — teardown never fails the shutdown AND closers still run. | `//nolint:testifylint // branch-dependent log assertions follow` |
+| `app/messaging_setup_test.go:110` | require-error | Paired with the line below (sentinel + message clause); the message clause is now `require` and the independent call-count assertion has moved above both. | `//nolint:testifylint // paired error-clause assertion follows` |
+| `app/module_test.go:294` | require-error | Paired with the line below — both errors joined into one shutdown error; the second is now `require`. | `//nolint:testifylint // second joined error asserted on the next line` |
+| `app/factory_resolver_integration_test.go:492` | require-error | The tenant-B isolation check below reads the SAME `sharedKey` through tenant B's client, which is what makes it an isolation check, and is the property this test exists to pin; a require aborts on any non-nil error that is not `ErrNotFound` and the regression goes unreported. | `//nolint:testifylint // the tenant-isolation check below is a separate phase` |
+
+Harvest note for the FINAL author: P5, P6 and P9 documented their false positives in their PR
+bodies rather than here (this file postdates them) — pull those rows in before converting.
+
 ## config (#1092 / W3-P3)
 
 | site | checker | why it stays `assert` | directive FINAL inserts |
@@ -47,25 +64,3 @@ test, not inferred from the diff.
 later sweep or FINAL. They are not exceptions and have no rationale yet — whoever picks the file
 up must triage them, and FINAL will red on them until someone does. Recorded here so the count
 is not mistaken for a clean package.
-
-## app (#1092 / W3-P4) — annotation, NOT a replacement section
-
-W3-P4 (PR #1456) carries its own 24 app rows plus a harvest note, in ITS copy of this file. This
-paragraph is an annotation to be merged INTO that section — **whoever resolves the conflict must
-keep P4's rows and add this note; resolving in favor of this file alone destroys 24 site
-locations.**
-
-The rows were recorded before the fleet rule was settled, and most fail it: a site stays `assert`
-only when the following assertion is BOTH independent of the error AND the property the test
-exists to pin. It converts whenever that assertion reads the error, for one of two reasons:
-a bare `err.Error()` (including inside `Contains`/`NotContains`) would PANIC on a nil error, so
-`require` turns a panic into a clean failure; `errors.Is` and `ErrorContains` merely return false
-or fail redundantly on nil, so `require` there buys one clean failure rather than two, not safety.
-
-By that rule roughly 18 of P4's 24 rows should be CONVERTED rather than annotated: the seven
-`readiness_test.go` rows and the paired-clause rows in `bootstrap_test.go`, `module_test.go`,
-`app_builder_test.go` and `app_test.go` are correlated halves of one outcome, not independent
-properties. The likely survivors are `prewarm_test.go:199` and `lifecycle_test.go:175` (an
-elapsed-time bound is genuinely independent), with `lifecycle_test.go:358` (a log-emission check
-from a different source) and `slot_test.go:531` (a second return value) as probable keeps.
-PR #1456 was already merge-ready when the rule landed, so this is FINAL's work, not a reopen.
