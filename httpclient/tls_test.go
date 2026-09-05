@@ -718,7 +718,7 @@ func TestTLSConfigCarriesMaterialPerClause(t *testing.T) {
 			}
 			require.Error(t, err, "this field is TLS material; Build must refuse to replace it silently")
 			assert.Nil(t, built)
-			assert.ErrorIs(t, err, ErrUnsafeTransportComposition)
+			require.ErrorIs(t, err, ErrUnsafeTransportComposition)
 			assert.Contains(t, err.Error(), "WithTLSConfig was called after WithTransport",
 				"the failure must be the incumbent-displacement branch, not another Build issue")
 		})

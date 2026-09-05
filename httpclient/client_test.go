@@ -451,7 +451,7 @@ func TestClientHTTPMethods(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Equal(t, nethttp.StatusOK, resp.StatusCode)
-			assert.Equal(t, `{"status": "ok"}`, string(resp.Body))
+			assert.JSONEq(t, `{"status": "ok"}`, string(resp.Body))
 			// Note: Real HTTP requests typically have measurable overhead,
 			// but use >= 0 for robustness across all platforms
 			assert.GreaterOrEqual(t, resp.Stats.ElapsedTime, time.Duration(0))
@@ -737,7 +737,7 @@ func TestClientErrorHandling(t *testing.T) {
 		// Response should still be available even with error
 		assert.NotNil(t, resp)
 		assert.Equal(t, nethttp.StatusNotFound, resp.StatusCode)
-		assert.Equal(t, `{"error": "not found"}`, string(resp.Body))
+		assert.JSONEq(t, `{"error": "not found"}`, string(resp.Body))
 	})
 
 	t.Run("network error", func(t *testing.T) {
@@ -1123,13 +1123,13 @@ func TestTraceIDUtilities(t *testing.T) {
 		require.NoError(t, err)
 
 		err = interceptor(ctx, req)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, "test-trace", req.Header.Get(HeaderXRequestID))
 
 		// Test that it doesn't override existing header
 		req.Header.Set(HeaderXRequestID, "existing-trace")
 		err = interceptor(ctx, req)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, "existing-trace", req.Header.Get(HeaderXRequestID))
 	})
 }
@@ -2642,11 +2642,11 @@ func TestBuildErrorIsUnsafeTransportComposition(t *testing.T) {
 		stub := &stubRoundTripper{name: "opaque"}
 		_, err := NewBuilder(log).WithHTTPClient(&nethttp.Client{Transport: stub}).WithJOSE(JOSEConfig{}).Build()
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrUnsafeTransportComposition))
+		require.ErrorIs(t, err, ErrUnsafeTransportComposition)
 
 		// The sentinel still classifies after an Init()-style wrap.
 		wrapped := fmt.Errorf("module init: %w", err)
-		assert.True(t, errors.Is(wrapped, ErrUnsafeTransportComposition))
+		assert.ErrorIs(t, wrapped, ErrUnsafeTransportComposition)
 	})
 
 	t.Run("successful_build_returns_nil_error", func(t *testing.T) {
@@ -2784,7 +2784,7 @@ func TestBuildRejectsJOSEPolicyWithDisallowedAlgorithm(t *testing.T) {
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "invalid JOSE policy")
-			assert.NotErrorIs(t, err, ErrUnsafeTransportComposition,
+			require.NotErrorIs(t, err, ErrUnsafeTransportComposition,
 				"a policy failure is its own error path, not a transport-slot displacement")
 
 			var jerr *jose.Error

@@ -191,7 +191,7 @@ func TestClientLogRequest(t *testing.T) {
 		}
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://api.example.com/users", http.NoBody)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		req.Header.Set("Authorization", "Bearer token")
 		req.Header.Set(testContentTypeHeader, testContentType)
 
@@ -214,7 +214,7 @@ func TestClientLogRequest(t *testing.T) {
 
 		// Should not have debug events when LogPayloads is false
 		debugEvents := fakeLog.eventsByLevel("debug")
-		assert.Len(t, debugEvents, 0)
+		assert.Empty(t, debugEvents)
 	})
 
 	t.Run("request with empty body", func(t *testing.T) {
@@ -225,7 +225,7 @@ func TestClientLogRequest(t *testing.T) {
 		}
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://api.example.com/status", http.NoBody)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		c.logRequest(req, nil, "trace-456")
 
@@ -255,7 +255,7 @@ func TestClientLogRequest(t *testing.T) {
 		}
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, "https://api.example.com/resource", http.NoBody)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		req.Header.Set("X-API-Key", "secret")
 		req.Header.Set(testContentTypeHeader, testContentType)
 
@@ -294,7 +294,7 @@ func TestClientLogRequest(t *testing.T) {
 		}
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://api.example.com/upload", http.NoBody)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		largeBody := []byte("This is a very long body that should be truncated for logging purposes")
 		c.logRequest(req, largeBody, "trace-truncate")
@@ -306,7 +306,7 @@ func TestClientLogRequest(t *testing.T) {
 		assert.Equal(t, len(largeBody), debugEvent.fields["body_size"])
 		assert.Equal(t, "true", debugEvent.fields["body_truncated"])
 		// Plain text body (no Content-Type) → bytes dropped, not logged
-		assert.Equal(t, "", debugEvent.fields["body_content_type"])
+		assert.Empty(t, debugEvent.fields["body_content_type"])
 		assert.Equal(t, 10, debugEvent.fields["body_preview_dropped"])
 		assert.Nil(t, debugEvent.fields["body_preview"])
 	})
@@ -322,7 +322,7 @@ func TestClientLogRequest(t *testing.T) {
 		}
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://api.example.com/upload", http.NoBody)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Exactly MaxPayloadLogBytes: pins the boundary as `>` and not `>=`,
 		// which would report a truncation that did not happen.
@@ -348,7 +348,7 @@ func TestClientLogRequest(t *testing.T) {
 		}
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://api.example.com/test", http.NoBody)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Create a body larger than 1024 bytes
 		largeBody := make([]byte, 1500)
@@ -365,7 +365,7 @@ func TestClientLogRequest(t *testing.T) {
 		assert.Equal(t, len(largeBody), debugEvent.fields["body_size"])
 		assert.Equal(t, "true", debugEvent.fields["body_truncated"])
 		// Plain text body (no Content-Type) → bytes dropped, not logged; preview size is capped at default 1024
-		assert.Equal(t, "", debugEvent.fields["body_content_type"])
+		assert.Empty(t, debugEvent.fields["body_content_type"])
 		assert.Equal(t, 1024, debugEvent.fields["body_preview_dropped"])
 		assert.Nil(t, debugEvent.fields["body_preview"])
 	})
@@ -409,7 +409,7 @@ func TestClientLogResponse(t *testing.T) {
 
 		// Should not have debug events when LogPayloads is false
 		debugEvents := fakeLog.eventsByLevel("debug")
-		assert.Len(t, debugEvents, 0)
+		assert.Empty(t, debugEvents)
 	})
 
 	t.Run("response with empty body", func(t *testing.T) {
@@ -482,8 +482,7 @@ func TestClientLogResponse(t *testing.T) {
 		// JSON response body is parsed and logged via Interface (filter can walk keys)
 		preview, ok := debugEvent.fields["body_preview"].(map[string]any)
 		assert.True(t, ok, "JSON body_preview should be a parsed map")
-		assert.Equal(t, float64(123), preview["id"])
-		assert.Equal(t, true, preview["created"])
+		assert.Equal(t, map[string]any{"id": float64(123), "created": true}, preview)
 	})
 
 	t.Run("response with large body truncation", func(t *testing.T) {
@@ -516,7 +515,7 @@ func TestClientLogResponse(t *testing.T) {
 		assert.Equal(t, len(largeResponseBody), debugEvent.fields["body_size"])
 		assert.Equal(t, "true", debugEvent.fields["body_truncated"])
 		// No Content-Type on response headers → bytes dropped, not logged
-		assert.Equal(t, "", debugEvent.fields["body_content_type"])
+		assert.Empty(t, debugEvent.fields["body_content_type"])
 		assert.Equal(t, 15, debugEvent.fields["body_preview_dropped"])
 		assert.Nil(t, debugEvent.fields["body_preview"])
 	})
@@ -606,7 +605,7 @@ func TestLoggingIntegration(t *testing.T) {
 
 		debugEvent := fakeLog.eventsByLevel("debug")[0]
 		// Plain text body (no Content-Type) → bytes dropped, not logged
-		assert.Equal(t, "", debugEvent.fields["body_content_type"])
+		assert.Empty(t, debugEvent.fields["body_content_type"])
 		assert.Equal(t, len(body), debugEvent.fields["body_preview_dropped"])
 		assert.Nil(t, debugEvent.fields["body_preview"])
 		assert.Equal(t, "false", debugEvent.fields["body_truncated"])
@@ -675,7 +674,7 @@ func TestClientLogRequestJSONBodyParsedAsMap(t *testing.T) {
 	}
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://api.example.com/auth", http.NoBody)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	req.Header.Set(testContentTypeHeader, testContentType)
 
 	body := []byte(`{"username": "alice", "password": "s3cr3t!", "amount": 100}`)
@@ -690,7 +689,9 @@ func TestClientLogRequestJSONBodyParsedAsMap(t *testing.T) {
 	preview, ok := debugEvent.fields["body_preview"].(map[string]any)
 	assert.True(t, ok, "JSON body_preview must be a parsed map[string]any to enable filter walking")
 	assert.Equal(t, "alice", preview["username"])
-	assert.Equal(t, float64(100), preview["amount"])
+	// InDelta with a zero tolerance is exact equality: the value is a JSON-decoded
+	// integral literal, not a computed float, so no tolerance is wanted.
+	assert.InDelta(t, 100, preview["amount"], 0)
 	assert.Contains(t, preview, "password", "parsed map must contain all JSON keys")
 }
 
@@ -757,7 +758,7 @@ func TestClientLogRequestRedactsURL(t *testing.T) {
 			}
 
 			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, tc.rawURL, http.NoBody)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			c.logRequest(req, nil, "trace-redact")
 
@@ -798,7 +799,7 @@ func TestLogBodyPreviewPrimitiveRootDropped(t *testing.T) {
 			}
 
 			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://api.example.com/x", http.NoBody)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			req.Header.Set(testContentTypeHeader, testContentType)
 
 			c.logRequest(req, tc.body, "trace-123")
@@ -827,7 +828,7 @@ func TestLogBodyPreviewMalformedJSONLogsDroppedCount(t *testing.T) {
 	// A 10-byte truncation of valid JSON produces invalid JSON (cut mid-token)
 	body := []byte(`{"username": "alice", "password": "s3cr3t"}`)
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://api.example.com/x", http.NoBody)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	req.Header.Set(testContentTypeHeader, testContentType)
 
 	c.logRequest(req, body, "trace-123")
@@ -878,7 +879,7 @@ func TestClientLogRequestSkipsPayloadFieldBuildWhenDebugDisabled(t *testing.T) {
 	}
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://api.example.com/users", http.NoBody)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	req.Header.Set("Authorization", "Bearer token")
 	req.Header.Set(testContentTypeHeader, testContentType)
 

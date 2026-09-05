@@ -97,7 +97,7 @@ func TestLoadThroughBoundsTheCacheLegAndHandsTheOriginAnUntouchedContext(t *test
 	got, err := cache.LoadThrough(ctx, mock, ltKey, ltTTL, load, cache.WithCacheTimeout(20*time.Millisecond))
 	require.NoError(t, err)
 	assert.Equal(t, ltAlice, got)
-	assert.True(t, gotCtx == ctx, "origin must receive the caller's context, not a derived one")
+	assert.Same(t, ctx, gotCtx, "origin must receive the caller's context, not a derived one")
 	assert.True(t, liveAtOrigin, "the slow cache leg must not spend the caller's budget")
 }
 
@@ -217,7 +217,7 @@ func TestLoadThroughCollapsesConcurrentMissesIntoOneOriginCall(t *testing.T) {
 	}
 	for _, ch := range results {
 		res := <-ch
-		assert.ErrorIs(t, res.err, context.DeadlineExceeded, "a follower leaves on its own deadline")
+		require.ErrorIs(t, res.err, context.DeadlineExceeded, "a follower leaves on its own deadline")
 	}
 	// A follower that failed to join would have called the loader before blocking.
 	assert.Equal(t, int64(1), gate.calls.Load(), "followers must wait on the leader's fill, not start their own")
@@ -273,7 +273,7 @@ func ltFollowersShareTheLeaderOutcome(t *testing.T, leaderCanceled bool, wantVal
 	close(release)
 
 	res := <-leader
-	assert.ErrorIs(t, res.err, wantErr)
+	require.ErrorIs(t, res.err, wantErr)
 	assert.Equal(t, wantVal, res.val)
 
 	var joined, late int64
@@ -284,7 +284,7 @@ func ltFollowersShareTheLeaderOutcome(t *testing.T, leaderCanceled bool, wantVal
 			late++
 		default:
 			joined++
-			assert.ErrorIs(t, fres.err, wantErr)
+			require.ErrorIs(t, fres.err, wantErr)
 			assert.Equal(t, wantVal, fres.val)
 		}
 	}
@@ -329,7 +329,7 @@ func TestLoadThroughFollowersRecoverFromACanceledLeader(t *testing.T) {
 	cancelLeader()
 
 	res := <-leader
-	assert.ErrorIs(t, res.err, context.Canceled)
+	require.ErrorIs(t, res.err, context.Canceled)
 	for _, ch := range results {
 		fres := <-ch
 		require.NoError(t, fres.err, "the leader's cancellation must not reach a live follower")
@@ -457,7 +457,7 @@ func TestLoadThroughRejectsInvalidArguments(t *testing.T) {
 			mock := cachetest.NewMockCache()
 			load, calls := ltCountingLoader(ltAlice)
 			_, err := cache.LoadThrough(t.Context(), mock, ltKey, tt.ttl, load, tt.opts...)
-			assert.ErrorIs(t, err, tt.want)
+			require.ErrorIs(t, err, tt.want)
 			assert.Zero(t, calls.Load())
 			cachetest.AssertOperationCount(t, mock, "Get", 0)
 		})
@@ -569,7 +569,7 @@ func TestLoadThroughRejectsNilCache(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			load, calls := ltCountingLoader(ltAlice)
 			_, err := cache.LoadThrough(t.Context(), tt.c, ltKey, ltTTL, load)
-			assert.ErrorIs(t, err, cache.ErrNilCache)
+			require.ErrorIs(t, err, cache.ErrNilCache)
 			assert.Zero(t, calls.Load(), "a nil cache must fail before the origin is consulted")
 		})
 	}

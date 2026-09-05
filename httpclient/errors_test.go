@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/internal/testutil"
 )
@@ -125,11 +126,11 @@ func TestErrorUnwrapping(t *testing.T) {
 		}
 
 		// Test errors.Is functionality
-		assert.True(t, errors.Is(netErr, underlyingErr))
+		require.ErrorIs(t, netErr, underlyingErr)
 
 		// Test errors.As functionality
 		var target *networkError
-		assert.True(t, errors.As(netErr, &target))
+		require.ErrorAs(t, netErr, &target)
 		assert.Equal(t, "failed to connect", target.message)
 	})
 
@@ -137,7 +138,7 @@ func TestErrorUnwrapping(t *testing.T) {
 		netErr := NewNetworkError("no connection", nil)
 
 		if unwrapper, ok := netErr.(interface{ Unwrap() error }); ok {
-			assert.Nil(t, unwrapper.Unwrap())
+			assert.NoError(t, unwrapper.Unwrap())
 		}
 	})
 
@@ -153,11 +154,11 @@ func TestErrorUnwrapping(t *testing.T) {
 		}
 
 		// Test errors.Is functionality
-		assert.True(t, errors.Is(intErr, underlyingErr))
+		require.ErrorIs(t, intErr, underlyingErr)
 
 		// Test errors.As functionality
 		var target *interceptorError
-		assert.True(t, errors.As(intErr, &target))
+		require.ErrorAs(t, intErr, &target)
 		assert.Equal(t, "interceptor failed", target.message)
 		assert.Equal(t, "request", target.stage)
 	})
@@ -166,7 +167,7 @@ func TestErrorUnwrapping(t *testing.T) {
 		intErr := NewInterceptorError("failed", "response", nil)
 
 		if unwrapper, ok := intErr.(interface{ Unwrap() error }); ok {
-			assert.Nil(t, unwrapper.Unwrap())
+			assert.NoError(t, unwrapper.Unwrap())
 		}
 	})
 }
@@ -343,16 +344,16 @@ func TestErrorChaining(t *testing.T) {
 		interceptor := NewInterceptorError("request processing failed", "pre-request", network)
 
 		// Test that we can find the underlying error through the chain
-		assert.True(t, errors.Is(interceptor, underlying))
-		assert.True(t, errors.Is(interceptor, network))
+		require.ErrorIs(t, interceptor, underlying)
+		require.ErrorIs(t, interceptor, network)
 
 		// Test that we can extract specific error types from the chain
 		var netErr *networkError
-		assert.True(t, errors.As(interceptor, &netErr))
+		require.ErrorAs(t, interceptor, &netErr)
 		assert.Equal(t, "connection lost", netErr.message)
 
 		var intErr *interceptorError
-		assert.True(t, errors.As(interceptor, &intErr))
+		require.ErrorAs(t, interceptor, &intErr)
 		assert.Equal(t, "pre-request", intErr.stage)
 	})
 
