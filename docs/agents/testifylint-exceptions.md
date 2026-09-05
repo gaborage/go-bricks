@@ -22,10 +22,14 @@ test, not inferred from the diff.
 ## database (#1092 / W3-P1)
 
 The rule applied here, in the order it decides. A site CONVERTS when the assertion that follows
-DEREFERENCES the error (`err.Error()`, `errors.Is/As`, a second `ErrorIs`/`ErrorContains` on the
-same `err`). Where the follower is instead an INDEPENDENT property — an instrumentation counter,
-a mock's recorded calls, a rollback flag, a manager size, a log-buffer leak check — the assertions
-were REORDERED so the independent one runs first and the error assertion converts, rather than
+DEREFERENCES the error, for one of two reasons. `err.Error()` — bare, or inside a `Contains` —
+PANICS on a nil error, so `require` turns a crash into a clean failure. `errors.Is/As` and
+`ErrorContains(t, err, …)` do NOT panic on nil; they simply fail a second time, so `require`
+there buys one clean failure instead of two reports of the same fault.
+
+Where the follower is instead an INDEPENDENT property — an instrumentation counter, a mock's
+recorded calls, a rollback flag, a manager size, a log-buffer leak check — the assertions were
+REORDERED so the independent one runs first and the error assertion still converts, rather than
 recording an exception: 15 sites were resolved that way. A row below therefore means the order
 CANNOT change — the follower is itself an error assertion over a different input, or a later phase
 that depends on this one having run.
