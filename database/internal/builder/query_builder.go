@@ -231,7 +231,7 @@ func (qb *QueryBuilder) appendSelectColumn(processed *[]string, col any) error {
 	case nil:
 		panic("nil column in Select")
 	case string:
-		normalized, err := validateSelectIdentifier(v)
+		normalized, err := qb.validateSelectIdentifier(v)
 		if err != nil {
 			return err
 		}
@@ -320,7 +320,7 @@ func (qb *QueryBuilder) Insert(table string) dbtypes.InsertQueryBuilder {
 // returned builder still fails there; the callers below stop early only to avoid
 // mutating a builder that carries no statement.
 func (qb *QueryBuilder) newInsertBuilder(context, table string) *InsertQueryBuilder {
-	normalized, err := validateTableName(table)
+	normalized, err := qb.validateTableName(table)
 	if err != nil {
 		iqb := &InsertQueryBuilder{qb: qb}
 		iqb.Fail(fmt.Errorf("%s: %w", context, err))
@@ -337,7 +337,7 @@ func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) dbtyp
 	if iqb.Err() != nil {
 		return iqb
 	}
-	normalized, err := validateIdentifiers("insert column", columns)
+	normalized, err := qb.validateIdentifiers("insert column", columns)
 	if err != nil {
 		iqb.Fail(err)
 		return iqb
@@ -354,10 +354,10 @@ func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) dbtyp
 // own input: validating a trimmed value while rendering the untrimmed one is what
 // let `Select("t.* ")` render as `t."*"` (ADR-082), and returning the value is
 // what stops the two from disagreeing again (#1158).
-func validateIdentifiers(context string, columns []string) (normalized []string, err error) {
+func (qb *QueryBuilder) validateIdentifiers(context string, columns []string) (normalized []string, err error) {
 	normalized = make([]string, 0, len(columns))
 	for _, col := range columns {
-		trimmed, colErr := validateIdentifier(context, col)
+		trimmed, colErr := qb.validateIdentifier(context, col)
 		if colErr != nil {
 			return nil, colErr
 		}
@@ -510,7 +510,7 @@ func (qb *QueryBuilder) Update(table string) dbtypes.UpdateQueryBuilder {
 	// Validate the table identifier before interpolation (all vendors): on
 	// PostgreSQL quoteTableForQuery returns the name verbatim, so an unvalidated
 	// table is a raw-interpolation (M9) vector. Surface a violation from ToSQL().
-	normalized, err := validateTableName(table)
+	normalized, err := qb.validateTableName(table)
 	if err != nil {
 		uqb.Fail(fmt.Errorf("Update: %w", err))
 		return uqb
@@ -534,7 +534,7 @@ func (qb *QueryBuilder) Delete(table string) dbtypes.DeleteQueryBuilder {
 	dqb := &DeleteQueryBuilder{qb: qb}
 	// Validate the table identifier before interpolation (all vendors) — same M9
 	// raw-interpolation guard as Update/From. Surface a violation from ToSQL().
-	normalized, err := validateTableName(table)
+	normalized, err := qb.validateTableName(table)
 	if err != nil {
 		dqb.Fail(fmt.Errorf("Delete: %w", err))
 		return dqb
@@ -723,7 +723,7 @@ func (qb *QueryBuilder) quoteColumnForQuery(column string) (string, error) {
 // doors reuse the funnel rather than re-spelling validate-then-render, which is
 // the pair that must not drift.
 func (qb *QueryBuilder) quoteColumnWithContext(context, column string) (string, error) {
-	trimmed, err := validateIdentifier(context, column)
+	trimmed, err := qb.validateIdentifier(context, column)
 	if err != nil {
 		return "", err
 	}
@@ -744,17 +744,17 @@ func (qb *QueryBuilder) validateTableReference(table any) (normalizedTableRef, e
 	switch t := table.(type) {
 	case string:
 		// Plain string table names may carry an inline alias ("users u").
-		normalized, err := validateTableName(t)
+		normalized, err := qb.validateTableName(t)
 		return normalizedTableRef{name: normalized, supported: true}, err
 	case *dbtypes.TableRef:
 		// TableRef carries name and alias separately; each is a bare identifier.
-		name, err := validateIdentifier("table", t.Name())
+		name, err := qb.validateIdentifier("table", t.Name())
 		if err != nil {
 			return normalizedTableRef{}, err
 		}
 		ref := normalizedTableRef{name: name, supported: true}
 		if t.HasAlias() {
-			if ref.alias, err = validateIdentifier("table alias", t.Alias()); err != nil {
+			if ref.alias, err = qb.validateIdentifier("table alias", t.Alias()); err != nil {
 				return normalizedTableRef{}, err
 			}
 		}
@@ -1172,7 +1172,7 @@ func (sqb *SelectQueryBuilder) GroupBy(groupBys ...any) dbtypes.SelectQueryBuild
 // crafted clause argument cannot inject a second statement or comment (M9). Use
 // qb.Expr() for complex expressions that legitimately need raw SQL.
 func (sqb *SelectQueryBuilder) appendClauseString(processed *[]string, value, clauseName string, stringFormatter func(string) string) {
-	normalized, err := validateClauseIdentifier(clauseName, value)
+	normalized, err := sqb.qb.validateClauseIdentifier(clauseName, value)
 	if err != nil {
 		sqb.Fail(err)
 		return
@@ -1511,7 +1511,7 @@ func (dqb *DeleteQueryBuilder) OrderBy(orderBys ...string) dbtypes.DeleteQueryBu
 	for _, orderBy := range orderBys {
 		// Validate the ORDER BY identifier (with optional ASC/DESC [NULLS …])
 		// BEFORE interpolation on ALL vendors so it cannot inject SQL (M9).
-		normalized, err := validateClauseIdentifier("orderBy", orderBy)
+		normalized, err := dqb.qb.validateClauseIdentifier("orderBy", orderBy)
 		if err != nil {
 			dqb.Fail(err)
 			return dqb
@@ -1535,7 +1535,7 @@ func (dqb *DeleteQueryBuilder) ToSQL() (sql string, args []any, err error) {
 func (iqb *InsertQueryBuilder) Columns(columns ...string) dbtypes.InsertQueryBuilder {
 	// Validate each column identifier BEFORE interpolation (all vendors, M9), the
 	// same guard UpdateQueryBuilder.SetMap has applied since ADR-031.
-	normalized, err := validateIdentifiers("insert column", columns)
+	normalized, err := iqb.qb.validateIdentifiers("insert column", columns)
 	if err != nil {
 		iqb.Fail(err)
 		return iqb

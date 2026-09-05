@@ -10,6 +10,12 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
+// identifierQB builds the QueryBuilder these grammar tests validate through.
+// Oracle is deliberate: its segment alphabet IS the shape grammar these cases
+// were written against (`col#` included), so the rows below keep asserting the
+// same thing once the vendor supplies the segment rule.
+func identifierQB() *QueryBuilder { return NewQueryBuilder(dbtypes.Oracle) }
+
 // TestValidateIdentifierAcceptsSafeForms verifies the column/SET-target validator
 // accepts simple, qualified, and framework-quoted identifiers (M9 / ADR-031).
 func TestValidateIdentifierAcceptsSafeForms(t *testing.T) {
@@ -27,7 +33,7 @@ func TestValidateIdentifierAcceptsSafeForms(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c, func(t *testing.T) {
-			normalized, err := validateIdentifier("column", c)
+			normalized, err := identifierQB().validateIdentifier("column", c)
 			require.NoError(t, err, "expected %q to be accepted", c)
 			require.Equal(t, strings.TrimSpace(c), normalized, "an accepted identifier must come back normalized")
 		})
@@ -53,7 +59,7 @@ func TestValidateIdentifierRejectsInjection(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := validateIdentifier("column", c.input)
+			_, err := identifierQB().validateIdentifier("column", c.input)
 			require.Error(t, err, "expected %q to be rejected", c.input)
 		})
 	}
@@ -77,7 +83,7 @@ func TestValidateClauseIdentifierAcceptsDirections(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c, func(t *testing.T) {
-			normalized, err := validateClauseIdentifier("orderBy", c)
+			normalized, err := identifierQB().validateClauseIdentifier("orderBy", c)
 			require.NoError(t, err, "expected %q to be accepted", c)
 			require.Equal(t, strings.TrimSpace(c), normalized, "an accepted identifier must come back normalized")
 		})
@@ -104,7 +110,7 @@ func TestValidateClauseIdentifierRejectsInjection(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := validateClauseIdentifier("orderBy", c.input)
+			_, err := identifierQB().validateClauseIdentifier("orderBy", c.input)
 			require.Error(t, err, "expected %q to be rejected", c.input)
 		})
 	}
@@ -123,7 +129,7 @@ func TestValidateTableNameAcceptsAliasForms(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c, func(t *testing.T) {
-			normalized, err := validateTableName(c)
+			normalized, err := identifierQB().validateTableName(c)
 			require.NoError(t, err, "expected %q to be accepted", c)
 			require.Equal(t, strings.TrimSpace(c), normalized, "an accepted identifier must come back normalized")
 		})
@@ -145,7 +151,7 @@ func TestValidateTableNameRejectsInjection(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := validateTableName(c.input)
+			_, err := identifierQB().validateTableName(c.input)
 			require.Error(t, err, "expected %q to be rejected", c.input)
 		})
 	}

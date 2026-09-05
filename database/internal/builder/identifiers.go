@@ -89,7 +89,7 @@ func normalizeAgainst(pattern *regexp.Regexp, identifier string, mkErr func() er
 // aliases, UPDATE SET targets) that fall outside the safe simple/qualified-
 // identifier grammar.
 // Returns a descriptive error naming the rejected value.
-func validateIdentifier(context, identifier string) (normalized string, err error) {
+func (qb *QueryBuilder) validateIdentifier(context, identifier string) (normalized string, err error) {
 	return normalizeAgainst(validIdentifierPattern, identifier, func() error {
 		return fmt.Errorf("invalid %s identifier %q: must be a simple or qualified identifier "+
 			"matching %s — use qb.Expr()/Raw() for complex expressions", context, identifier, sqllex.Segment)
@@ -98,7 +98,7 @@ func validateIdentifier(context, identifier string) (normalized string, err erro
 
 // validateTableName rejects table-name arguments that fall outside the safe
 // simple/qualified-identifier grammar plus an optional inline alias ("users u").
-func validateTableName(identifier string) (normalized string, err error) {
+func (qb *QueryBuilder) validateTableName(identifier string) (normalized string, err error) {
 	return normalizeAgainst(validTableNamePattern, identifier, func() error {
 		return fmt.Errorf("invalid table identifier %q: must be a simple or qualified identifier "+
 			"with an optional alias (e.g. \"users\" or \"users u\") — use qb.Expr()/Raw() for complex expressions",
@@ -115,7 +115,7 @@ func validateTableName(identifier string) (normalized string, err error) {
 // one lets the two disagree: the renderer's wildcard bypass is a suffix test, so
 // `t.* ` passed validation and then rendered as `t."*"` on Oracle — a blessed
 // input the renderer mangles.
-func validateSelectIdentifier(identifier string) (normalized string, err error) {
+func (qb *QueryBuilder) validateSelectIdentifier(identifier string) (normalized string, err error) {
 	return normalizeAgainst(validSelectIdentifierPattern, identifier, func() error {
 		return fmt.Errorf("invalid select identifier %q: must be a simple or qualified identifier, "+
 			"or a wildcard (\"*\", \"t.*\") — use qb.Expr()/Raw() for expressions and aliases",
@@ -127,7 +127,7 @@ func validateSelectIdentifier(identifier string) (normalized string, err error) 
 // outside the safe identifier-plus-optional-direction grammar. The bounded
 // trailing direction (ASC/DESC [NULLS FIRST|LAST]) is permitted; everything
 // else — extra tokens, semicolons, comment markers — is rejected.
-func validateClauseIdentifier(context, identifier string) (normalized string, err error) {
+func (qb *QueryBuilder) validateClauseIdentifier(context, identifier string) (normalized string, err error) {
 	return normalizeAgainst(validClauseIdentifierPattern, identifier, func() error {
 		return fmt.Errorf("invalid %s identifier %q: must be a simple or qualified identifier with an "+
 			"optional ASC/DESC [NULLS FIRST|LAST] direction — use qb.Expr()/Raw() for complex expressions",
