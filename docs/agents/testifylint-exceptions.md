@@ -80,11 +80,19 @@ exact equality is the contract, so the directive is a nolint, never a tolerance.
 ### require-error — the follower never touches `err` and pins an independent property
 
 Per the fleet rule: a site stays `assert` only when the following assertion is BOTH independent of
-the error AND the property the test exists to pin. Two shapes were converted rather than listed
-here, though an earlier draft kept them: a follower that DEREFERENCES the error (`err.Error()`,
-`ErrorContains`, `errors.Is`) would panic on a nil error anyway, so `require` turns a panic into a
-clean failure; and the correlated half of one `(value, err)` outcome (`Nil(store)` beside
-`Error(err)`) is not independent. Trailing `AssertExpectations()` hygiene was likewise converted.
+the error AND the property the test exists to pin. Three shapes were converted rather than listed
+here, though an earlier draft kept them.
+
+1. A follower that DIRECTLY dereferences the error — `err.Error()`, including inside
+   `Contains(err.Error(), …)` — panics on a nil error, so `require` turns a crash into a clean
+   failure.
+2. A follower that merely consumes the error — `errors.Is(err, …)`, `ErrorContains(t, err, …)` —
+   does NOT panic: `errors.Is(nil, target)` returns false and testify's `ErrorContains` guards
+   with `Error(t, err)` before touching `err.Error()`. These were still converted, but for a
+   weaker reason: with a nil error the follower fails anyway, so `require` collapses two
+   cascading failures into one. Do not justify these as panic safety.
+3. The correlated half of one `(value, err)` outcome (`Nil(store)` beside `Error(err)`) is not an
+   independent property. Trailing `AssertExpectations()` hygiene was likewise converted.
 
 | site | checker | why it stays `assert` | directive FINAL inserts |
 | --- | --- | --- | --- |
