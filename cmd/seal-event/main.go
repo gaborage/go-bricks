@@ -23,33 +23,25 @@
 package main
 
 import (
-	"crypto/rsa"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 
-	"github.com/gaborage/go-bricks/internal/keymaterial"
+	"github.com/gaborage/go-bricks/internal/sealcli"
 	"github.com/gaborage/go-bricks/jose/sealed"
 )
 
-// errUsage marks flag-parse failures whose message the FlagSet already
-// printed to stderr itself — run must not print them a second time.
-var errUsage = errors.New("usage error")
-
 // cliConfig holds the parsed command-line configuration for one seal invocation.
 type cliConfig struct {
-	signKeyFile     string
-	signKeyValue    string
-	encryptKeyFile  string
-	encryptKeyValue string
-	signKid         string
-	encryptKid      string
-	subject         string
-	eventType       string
-	tenantID        string
-	payloadPath     string // positional arg; "" or "-" means read stdin
+	keys        *sealcli.KeySources
+	signKid     string
+	encryptKid  string
+	subject     string
+	eventType   string
+	tenantID    string
+	payloadPath string // positional arg; "" or "-" means read stdin
 }
 
 // main exits with run's status so the shell sees 0 / 1 / 2.
@@ -68,7 +60,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
-		if !errors.Is(err, errUsage) {
+		if !errors.Is(err, sealcli.ErrUsage) {
 			fmt.Fprintln(stderr, err)
 		}
 		return 2
@@ -89,13 +81,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	signPriv, encPub, err := loadKeys(cfg)
+	keys, err := cfg.keys.Load(cfg.signKid, cfg.encryptKid)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 
-	doc, err := readPayload(cfg, stdin)
+	doc, err := sealcli.ReadPayload(cfg.payloadPath, stdin)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -106,12 +98,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		EncryptKid: cfg.encryptKid,
 		EventType:  cfg.eventType,
 		TenantID:   cfg.tenantID,
-		Keys: &keymaterial.ProducerKeys{
-			SignKid:    cfg.signKid,
-			SignPriv:   signPriv,
-			EncryptKid: cfg.encryptKid,
-			EncPub:     encPub,
-		},
+		Keys:       keys,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -129,14 +116,7 @@ func parseFlags(args []string, stderr io.Writer) (*cliConfig, error) {
 	fs.SetOutput(stderr)
 
 	cfg := &cliConfig{}
-	fs.StringVar(&cfg.signKeyFile, "sign-key-file", "",
-		"path to a DER-encoded RSA private key (PKCS#8 or PKCS#1) used to sign the sealed document")
-	fs.StringVar(&cfg.signKeyValue, "sign-key-value", "",
-		"base64-encoded DER RSA private key (alternative to -sign-key-file; argv is process-visible — fixture keys only)")
-	fs.StringVar(&cfg.encryptKeyFile, "encrypt-key-file", "",
-		"path to a DER-encoded RSA public key (PKIX) used to encrypt the subject member")
-	fs.StringVar(&cfg.encryptKeyValue, "encrypt-key-value", "",
-		"base64-encoded DER RSA public key (alternative to -encrypt-key-file)")
+	cfg.keys = sealcli.KeyFlags(fs, "used to sign the sealed document", "used to encrypt the subject member")
 	fs.StringVar(&cfg.signKid, "sign-kid", "",
 		"concrete sign generation written to the JWS header; must be a provisioned generation of the consumer's sign= family (required)")
 	fs.StringVar(&cfg.encryptKid, "encrypt-kid", "",
@@ -160,26 +140,21 @@ func parseFlags(args []string, stderr io.Writer) (*cliConfig, error) {
 		fs.PrintDefaults()
 	}
 
-	if err := fs.Parse(args); err != nil {
-		return nil, fmt.Errorf("%w: %w", errUsage, err)
+	path, err := sealcli.PositionalPath(fs, args)
+	if err != nil {
+		return nil, err
 	}
-	if fs.NArg() > 1 {
-		return nil, errors.New("expected at most one payload-file argument")
-	}
-	cfg.payloadPath = fs.Arg(0)
+	cfg.payloadPath = path
 	return cfg, nil
 }
 
-// validateConfig enforces exactly-one-of per key source pair (keymaterial's
-// loaders let the file source win when both are set, so the choice has to be
-// refused here) and the four required flags. Kid GRAMMAR is checked later, in
-// documentSpec, where the family it derives is what the Spec needs.
+// validateConfig enforces exactly-one-of per key source pair (delegated to
+// sealcli, which owns the refusal strings) and the four required flags. Kid
+// GRAMMAR is checked later, in documentSpec, where the family it derives is
+// what the Spec needs.
 func validateConfig(cfg *cliConfig) error {
-	if !exactlyOne(cfg.signKeyFile, cfg.signKeyValue) {
-		return errors.New("exactly one of -sign-key-file or -sign-key-value is required")
-	}
-	if !exactlyOne(cfg.encryptKeyFile, cfg.encryptKeyValue) {
-		return errors.New("exactly one of -encrypt-key-file or -encrypt-key-value is required")
+	if err := cfg.keys.Validate(); err != nil {
+		return err
 	}
 	if cfg.signKid == "" {
 		return errors.New("-sign-kid is required")
@@ -194,29 +169,6 @@ func validateConfig(cfg *cliConfig) error {
 		return errors.New("-event-type is required")
 	}
 	return nil
-}
-
-// exactlyOne reports whether precisely one of a, b is a non-empty string.
-func exactlyOne(a, b string) bool {
-	return (a != "") != (b != "")
-}
-
-// loadKeys resolves and parses the signing private key and the audience's
-// encryption public key via internal/keymaterial — the same DER-loading
-// mechanism the keystore module uses, so a key the CLI accepts is always one
-// the consumer's keystore would accept.
-func loadKeys(cfg *cliConfig) (signPriv *rsa.PrivateKey, encPub *rsa.PublicKey, err error) {
-	signPriv, err = keymaterial.LoadRSAPrivateKey(cfg.signKeyFile, cfg.signKeyValue)
-	if err != nil {
-		return nil, nil, fmt.Errorf("sign key: %w", err)
-	}
-
-	encPub, err = keymaterial.LoadRSAPublicKey(cfg.encryptKeyFile, cfg.encryptKeyValue)
-	if err != nil {
-		return nil, nil, fmt.Errorf("encrypt key: %w", err)
-	}
-
-	return signPriv, encPub, nil
 }
 
 // documentSpec derives each Logical family from its concrete Generation and
@@ -243,23 +195,4 @@ func splitFamily(flagName, kid string) (string, error) {
 		return "", fmt.Errorf("%s %q is not a generation: expected <logical>-v<N> with N a positive integer without leading zeros", flagName, kid)
 	}
 	return family, nil
-}
-
-// readPayload reads the JSON document from the positional file argument, or
-// from stdin when the argument is absent or "-".
-func readPayload(cfg *cliConfig, stdin io.Reader) ([]byte, error) {
-	if cfg.payloadPath == "" || cfg.payloadPath == "-" {
-		data, err := io.ReadAll(stdin)
-		if err != nil {
-			return nil, fmt.Errorf("read stdin: %w", err)
-		}
-		return data, nil
-	}
-
-	// #nosec G304,G703 -- operator-named CLI input file; reading it is this command's purpose
-	data, err := os.ReadFile(cfg.payloadPath)
-	if err != nil {
-		return nil, fmt.Errorf("read payload file: %w", err)
-	}
-	return data, nil
 }
