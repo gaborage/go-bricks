@@ -134,23 +134,46 @@ func NewConsumer(opts *ConsumerOptions) *ConsumerDeclaration {
 }
 
 // DeclareTopicExchange creates and registers a topic exchange in one step.
-// Returns the created exchange declaration for reference.
+// RegisterExchange copies the Args map into a new declaration, so — as with
+// DeclareQueue — the returned pointer is not the stored one and Args set on it
+// afterwards are discarded. Set them on d.Exchanges[name].Args, or build with
+// NewTopicExchange and register that.
 func (d *Declarations) DeclareTopicExchange(name string) *ExchangeDeclaration {
 	exchange := NewTopicExchange(name)
 	d.RegisterExchange(exchange)
 	return exchange
 }
 
-// DeclareQueue creates and registers a queue in one step.
-// Returns the created queue declaration for reference.
+// DeclareQueue creates and registers a queue in one step. It registers
+// IMMEDIATELY, and RegisterQueue copies Args into a new declaration, so the
+// returned pointer is NOT the stored one: setting Args on it afterwards changes
+// nothing and reports no error.
+//
+// Use either of the following instead:
+//
+//	q := NewQueue(name); q.Args["x-max-length"] = 1000; d.RegisterQueue(q)
+//	d.DeclareQueue(name); d.Queues[name].Args["x-max-length"] = 1000
+//
+// The copy is one level deep: the Args map is new, but a map or slice stored as
+// a value inside it is still shared with the caller. The returned value is for
+// reading the declaration's shape, not for editing it.
 func (d *Declarations) DeclareQueue(name string) *QueueDeclaration {
 	queue := NewQueue(name)
 	d.RegisterQueue(queue)
 	return queue
 }
 
-// DeclareBinding creates and registers a binding in one step.
-// Returns the created binding declaration for reference.
+// DeclareBinding creates and registers a binding in one step. RegisterBinding
+// copies the Args map into a new declaration, so — as with DeclareQueue — the
+// returned pointer is not the stored one and Args set on it afterwards are
+// discarded. Build with
+// NewBinding, set Args, then RegisterBinding.
+//
+// Note that bindings are APPENDED, never merged by name — unlike queues and
+// exchanges, which are map-backed and idempotent. Declaring one twice adds a
+// second entry, which issues a redundant BindQueue at startup and changes
+// Hash(), so a caller that may run more than once has to guard the call itself
+// (DeclareQueueWithDLQ's hasParkingBinding is the in-tree precedent).
 func (d *Declarations) DeclareBinding(queue, exchange, routingKey string) *BindingDeclaration {
 	binding := NewBinding(queue, exchange, routingKey)
 	d.RegisterBinding(binding)
@@ -182,7 +205,13 @@ type DeadLetterSpec struct {
 // parking queue bound to it retains the message with the x-death header.
 // Lowers to ordinary exchange/queue/binding declarations plus queue Args, so
 // per-tenant replay, validation, and topology hashing behave as if declared
-// by hand. Returns the primary queue declaration.
+// by hand.
+//
+// Returns the primary queue declaration. As with DeclareQueue, RegisterQueue
+// copies Args into a new declaration, so Args set on the returned pointer
+// afterwards are discarded — this helper works because it fills Args BEFORE registering. To
+// add your own, set them on d.Queues[name].Args, or build the queue with
+// NewQueue and register it (re-declaring one name merges compatible shapes).
 func (d *Declarations) DeclareQueueWithDLQ(name string, dl *DeadLetterSpec) *QueueDeclaration {
 	if dl == nil {
 		dl = &DeadLetterSpec{}
@@ -250,7 +279,12 @@ type StreamQueueSpec struct {
 // offset, instead of a classic queue's destructive consume. Consumers pick a
 // start position with the x-stream-offset consumer Arg (see
 // wiki/messaging.md). A nil spec declares the queue with broker-default
-// retention. Returns the registered queue declaration.
+// retention.
+//
+// Returns the caller's declaration, NOT the registered one: RegisterQueue
+// copies Args into a new declaration, so — as with DeclareQueue — Args set on
+// the returned pointer afterwards are discarded. This helper works because it fills Args
+// before registering; add your own via d.Queues[name].Args.
 func (d *Declarations) DeclareStreamQueue(name string, spec *StreamQueueSpec) *QueueDeclaration {
 	queue := NewQueue(name)
 	queue.Args[argQueueType] = queueTypeStream
@@ -279,6 +313,11 @@ func (d *Declarations) DeclareStreamQueue(name string, spec *StreamQueueSpec) *Q
 // Usage:
 //   - Pass nil if exchange is already registered separately
 //   - Pass exchange declaration to auto-register (convenience for simple cases)
+//
+// RegisterPublisher copies Headers into a new declaration, so the returned
+// pointer is not the stored one: set Headers on opts BEFORE this call.
+// Publishers are stored in the d.Publishers slice rather than keyed by name, so
+// reaching the stored entry afterwards means indexing that slice.
 func (d *Declarations) DeclarePublisher(opts *PublisherOptions, exchange *ExchangeDeclaration) *PublisherDeclaration {
 	if exchange != nil {
 		if _, exists := d.Exchanges[exchange.Name]; !exists {
@@ -301,6 +340,11 @@ func (d *Declarations) DeclarePublisher(opts *PublisherOptions, exchange *Exchan
 // Usage:
 //   - Pass nil if queue is already registered separately
 //   - Pass queue declaration to auto-register (convenience for simple cases)
+//
+// RegisterConsumer copies Args into a new declaration, so the returned pointer
+// is not the stored one: set Args on opts BEFORE this call. The consumer index
+// is unexported and re-registering one key panics, so reaching the stored entry
+// afterwards means d.Consumers(), which returns the stored pointers.
 func (d *Declarations) DeclareConsumer(opts *ConsumerOptions, queue *QueueDeclaration) *ConsumerDeclaration {
 	if queue != nil {
 		d.RegisterQueue(queue)
