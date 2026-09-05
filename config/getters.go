@@ -4,8 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/knadh/koanf/v2"
+
+	"github.com/gaborage/go-bricks/logger"
 )
 
 const (
@@ -14,6 +17,56 @@ const (
 	errMsgConfigNotInitialized = "configuration not initialized"
 	errMsgRequiredKeyInvalid   = "required configuration key '%s' is invalid: %w"
 )
+
+// Failure classes reported by the lenient getters. A key is either present and
+// empty, or present and holding something no converter accepts.
+const (
+	classEmpty       = "empty"
+	classUnparseable = "unparseable"
+)
+
+// warnedKeys remembers which keys already produced a warning, so a getter on a
+// hot path reports each unusable key once per process rather than once per call.
+// It is also what keeps warnUnusable's logger construction off that hot path.
+var warnedKeys sync.Map
+
+// warnUnusable reports a key whose value the caller asked for as kind but no
+// converter accepted, once per key per process. The logger is built from the
+// config's own Log section on this cold path.
+//
+// SECURITY: the value itself is never rendered — neither directly nor through
+// err.Error(), because strconv quotes its input in the parse error it returns.
+// Only the key, the requested type and the failure class are logged.
+func (c *Config) warnUnusable(key, kind string, err error) {
+	if _, alreadyWarned := warnedKeys.LoadOrStore(key, struct{}{}); alreadyWarned {
+		return
+	}
+
+	class := classUnparseable
+	if errors.Is(err, errEmptyString) {
+		class = classEmpty
+	}
+
+	// Built here rather than held on the Config: the once-per-key guard above means
+	// this runs at most once per unusable key, so it costs nothing on a hot getter,
+	// it honors a hand-built Config's own log settings, and Load pays nothing for a
+	// process that never reads an unusable key.
+	//
+	// An unset level is normalized rather than passed through: zerolog parses "" to
+	// NoLevel WITHOUT an error, so logger.New keeps it and the warning would be
+	// dropped instead of reported. An unparseable level does error there and already
+	// degrades to info, which reports.
+	level := strings.TrimSpace(c.Log.Level)
+	if level == "" {
+		level = logger.LevelInfo
+	}
+
+	logger.New(level, c.Log.Pretty).Warn().
+		Str("key", key).
+		Str("type", kind).
+		Str("class", class).
+		Msg("Configuration key is present but unusable; returning the default")
+}
 
 // String retrieves a string value from the configuration or the provided default.
 func (c *Config) String(key string, defaultVal ...string) string {
@@ -26,60 +79,52 @@ func (c *Config) String(key string, defaultVal ...string) string {
 	return c.k.String(key)
 }
 
-// Int retrieves an int value from the configuration or the provided default.
-func (c *Config) Int(key string, defaultVal ...int) int {
+// getLenient is the shared body of the lenient typed getters: an absent key
+// returns the default silently, a present-but-unusable one returns the default
+// and warns once. It is a free function because a method cannot introduce its
+// own type parameter.
+func getLenient[T any](c *Config, key, kind string, convert func(any) (T, error), defaultVal ...T) T {
+	var zero T
+
 	val, ok := c.rawValue(key)
 	if !ok {
-		return optionalDefault(0, defaultVal...)
+		return optionalDefault(zero, defaultVal...)
 	}
 
-	n, err := toInt(val)
+	converted, err := convert(val)
 	if err != nil {
-		return optionalDefault(0, defaultVal...)
+		c.warnUnusable(key, kind, err)
+		return optionalDefault(zero, defaultVal...)
 	}
-	return n
+	return converted
+}
+
+// Int retrieves an int value from the configuration or the provided default.
+// See getLenient for the absent / unusable contract; RequiredInt is the
+// error-returning door.
+func (c *Config) Int(key string, defaultVal ...int) int {
+	return getLenient(c, key, "int", toInt, defaultVal...)
 }
 
 // Int64 retrieves an int64 value from the configuration or the provided default.
+// See getLenient for the absent / unusable contract; RequiredInt64 is the
+// error-returning door.
 func (c *Config) Int64(key string, defaultVal ...int64) int64 {
-	val, ok := c.rawValue(key)
-	if !ok {
-		return optionalDefault(int64(0), defaultVal...)
-	}
-
-	n, err := toInt64(val)
-	if err != nil {
-		return optionalDefault(int64(0), defaultVal...)
-	}
-	return n
+	return getLenient(c, key, "int64", toInt64, defaultVal...)
 }
 
 // Float64 retrieves a float64 value from the configuration or the provided default.
+// See getLenient for the absent / unusable contract; RequiredFloat64 is the
+// error-returning door.
 func (c *Config) Float64(key string, defaultVal ...float64) float64 {
-	val, ok := c.rawValue(key)
-	if !ok {
-		return optionalDefault(float64(0), defaultVal...)
-	}
-
-	f, err := toFloat64(val)
-	if err != nil {
-		return optionalDefault(float64(0), defaultVal...)
-	}
-	return f
+	return getLenient(c, key, "float64", toFloat64, defaultVal...)
 }
 
 // Bool retrieves a bool value from the configuration or the provided default.
+// See getLenient for the absent / unusable contract; RequiredBool is the
+// error-returning door.
 func (c *Config) Bool(key string, defaultVal ...bool) bool {
-	val, ok := c.rawValue(key)
-	if !ok {
-		return optionalDefault(false, defaultVal...)
-	}
-
-	b, err := toBool(val)
-	if err != nil {
-		return optionalDefault(false, defaultVal...)
-	}
-	return b
+	return getLenient(c, key, "bool", toBool, defaultVal...)
 }
 
 // RequiredString retrieves a required string value from the configuration.

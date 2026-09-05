@@ -1,6 +1,12 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/observability"
 )
 
@@ -274,4 +281,223 @@ func TestUnmarshalStringToSliceKeepsSingleElementWrap(t *testing.T) {
 	require.NoError(t, cfg.Unmarshal("custom", &out))
 	require.Len(t, out.Tags, 1)
 	assert.Equal(t, "a,b,c", out.Tags[0])
+}
+
+// ========================================
+// UNUSABLE-KEY WARNING TESTS
+// ========================================
+
+// captureWarns returns the JSON log lines the getters wrote while fn ran. The
+// framework logger binds stdout at construction, and warnUnusable builds it
+// inside the call, so the redirect has to wrap the getter itself.
+//
+// Every key a case touches is released from the once-per-key sentinel afterwards:
+// that sentinel is process-wide, so a later test naming the same key would
+// otherwise see silence.
+func captureWarns(t *testing.T, keys []string, fn func()) []map[string]any {
+	t.Helper()
+
+	t.Cleanup(func() {
+		for _, key := range keys {
+			warnedKeys.Delete(key)
+		}
+	})
+
+	original := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	defer func() { os.Stdout = original }()
+	defer r.Close()
+	os.Stdout = w
+
+	fn()
+
+	require.NoError(t, w.Close())
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, r)
+	require.NoError(t, err)
+
+	var lines []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &entry), "log line is not JSON: %s", line)
+		lines = append(lines, entry)
+	}
+	return lines
+}
+
+func TestLenientGettersWarnOnUnusableValue(t *testing.T) {
+	tests := []struct {
+		name      string
+		rawValue  string
+		wantClass string
+	}{
+		{name: "present_but_empty", rawValue: "", wantClass: classEmpty},
+		{name: "present_but_unparseable", rawValue: "abc", wantClass: classUnparseable},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// One key per getter, so the once-per-key sentinel cannot hide a getter
+			// that failed to warn.
+			intKey := "custom.warn_int_" + tc.name
+			int64Key := "custom.warn_int64_" + tc.name
+			floatKey := "custom.warn_float_" + tc.name
+			boolKey := "custom.warn_bool_" + tc.name
+
+			cfg := setupTestConfig(t, map[string]any{
+				intKey:   tc.rawValue,
+				int64Key: tc.rawValue,
+				floatKey: tc.rawValue,
+				boolKey:  tc.rawValue,
+			})
+
+			warns := captureWarns(t, []string{intKey, int64Key, floatKey, boolKey}, func() {
+				// The caller's default comes back on every one of them.
+				assert.Equal(t, 7, cfg.Int(intKey, 7))
+				assert.Equal(t, int64(9), cfg.Int64(int64Key, 9))
+				assert.InDelta(t, 1.5, cfg.Float64(floatKey, 1.5), 0)
+				assert.True(t, cfg.Bool(boolKey, true))
+			})
+
+			require.Len(t, warns, 4, "one warning per unusable key")
+			byType := map[string]map[string]any{}
+			for _, w := range warns {
+				byType[w["type"].(string)] = w
+			}
+
+			for wantType, wantKey := range map[string]string{
+				"int":     intKey,
+				"int64":   int64Key,
+				"float64": floatKey,
+				"bool":    boolKey,
+			} {
+				warn, ok := byType[wantType]
+				require.True(t, ok, "a warning names type %s", wantType)
+				assert.Equal(t, wantKey, warn["key"])
+				assert.Equal(t, tc.wantClass, warn["class"])
+				assert.Equal(t, "warn", warn["level"])
+			}
+		})
+	}
+}
+
+// TestLenientGetterZeroValueWithoutDefault pins the other default shape: with no
+// default argument the getter returns the zero value, and still warns.
+func TestLenientGetterZeroValueWithoutDefault(t *testing.T) {
+	key := "custom.warn_zero_value"
+	cfg := setupTestConfig(t, map[string]any{key: ""})
+
+	warns := captureWarns(t, []string{key}, func() {
+		assert.Equal(t, 0, cfg.Int(key))
+	})
+
+	require.Len(t, warns, 1)
+	assert.Equal(t, classEmpty, warns[0]["class"])
+}
+
+// TestLenientGetterWarnOmitsRawValue pins the security property: strconv quotes
+// its input in the error it returns, so a warning built from err.Error() would
+// carry the value a config key was hiding. No field and no message may contain it.
+func TestLenientGetterWarnOmitsRawValue(t *testing.T) {
+	const secretish = "sup3rs3cret-value"
+	key := "custom.warn_raw_value"
+
+	cfg := setupTestConfig(t, map[string]any{key: secretish})
+
+	warns := captureWarns(t, []string{key}, func() {
+		assert.Equal(t, 0, cfg.Int(key))
+	})
+
+	require.Len(t, warns, 1)
+	for field, value := range warns[0] {
+		assert.NotContains(t, fmt.Sprint(value), secretish, "field %s carries the raw value", field)
+	}
+	assert.Equal(t, classUnparseable, warns[0]["class"])
+}
+
+// TestLenientGetterWarnsOncePerKey is also what keeps logger construction off the
+// hot path: the warning, and the logger built to carry it, happen once per key.
+func TestLenientGetterWarnsOncePerKey(t *testing.T) {
+	firstKey := "custom.warn_once_first"
+	secondKey := "custom.warn_once_second"
+
+	cfg := setupTestConfig(t, map[string]any{firstKey: "", secondKey: ""})
+
+	warns := captureWarns(t, []string{firstKey, secondKey}, func() {
+		cfg.Int(firstKey)
+		cfg.Int(firstKey)
+		cfg.Int(firstKey)
+	})
+	require.Len(t, warns, 1, "three reads of one unusable key warn once")
+	assert.Equal(t, firstKey, warns[0]["key"])
+
+	// A different key gets its own line: the sentinel is per key, not a global latch.
+	more := captureWarns(t, []string{secondKey}, func() {
+		cfg.Int(secondKey)
+	})
+	require.Len(t, more, 1)
+	assert.Equal(t, secondKey, more[0]["key"])
+}
+
+// TestLenientGetterUsableKeysAreSilent guards the other half of the contract: a
+// key that is absent or converts cleanly produces no log line at all.
+func TestLenientGetterUsableKeysAreSilent(t *testing.T) {
+	presentKey := "custom.silent_present"
+	absentKey := "custom.silent_absent"
+
+	cfg := setupTestConfig(t, map[string]any{presentKey: "42"})
+
+	warns := captureWarns(t, []string{presentKey, absentKey}, func() {
+		assert.Equal(t, 42, cfg.Int(presentKey))
+		assert.Equal(t, 5, cfg.Int(absentKey, 5))
+	})
+	assert.Empty(t, warns, "a usable value and an absent key are both silent")
+}
+
+// TestLenientGetterWarnsUnderUnusableLogLevel covers the config that cannot
+// configure its own reporting: an empty or unparseable log.level must not swallow
+// the warning — logger.New degrades to info, which still emits a warn.
+func TestLenientGetterWarnsUnderUnusableLogLevel(t *testing.T) {
+	tests := []struct {
+		name  string
+		level string
+	}{
+		{name: "empty_level", level: ""},
+		{name: "unparseable_level", level: "shout"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			key := "custom.warn_level_" + tc.name
+			cfg := setupTestConfig(t, map[string]any{key: ""})
+			cfg.Log.Level = tc.level
+
+			warns := captureWarns(t, []string{key}, func() {
+				assert.Equal(t, 4, cfg.Int(key, 4))
+			})
+
+			require.Len(t, warns, 1, "the warning renders whatever log.level says")
+			assert.Equal(t, key, warns[0]["key"])
+			assert.Equal(t, classEmpty, warns[0]["class"])
+		})
+	}
+}
+
+// TestLenientGetterHonorsConfigLogSection pins what the config-local logger buys:
+// a hand-built Config's own log settings decide the level the warning is written
+// at, with no Load() call and no framework wiring.
+func TestLenientGetterHonorsConfigLogSection(t *testing.T) {
+	key := "custom.warn_honors_log_section"
+	cfg := setupTestConfig(t, map[string]any{key: ""})
+	cfg.Log.Level = logger.LevelError
+
+	warns := captureWarns(t, []string{key}, func() {
+		assert.Equal(t, 2, cfg.Int(key, 2))
+	})
+
+	assert.Empty(t, warns, "a config that asked for error-level logging gets no warn line")
 }

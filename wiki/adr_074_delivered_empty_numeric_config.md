@@ -109,6 +109,9 @@ parse — but it keeps one rule for what "delivered empty" means.
   the typed getters `Config.Int`/`Int64`/`Float64`/`Bool` still return their default for
   a present-but-empty key rather than reporting it (#1111). Both are the same defect
   class at different seams; neither is numeric-decode, which is what this ADR closes.
+  The getter half is since closed: those four now still return the default but emit one
+  WARN per key naming the key, the requested type and the failure class (#1111). The
+  decode layer this ADR governs is unchanged.
 
 Migration: [C60.15](migrations.md).
 
