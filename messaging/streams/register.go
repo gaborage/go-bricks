@@ -39,10 +39,20 @@ func (streamRuntime) CollectDeclarations(modules []streamruntime.ModuleNamer, lo
 	decls := NewDeclarations()
 	for _, module := range modules {
 		if sd, ok := module.(StreamDeclarer); ok {
+			// The counts are the module's own contribution, not the running total:
+			// a declarer whose DeclareStreams is misspelled or mis-signatured never
+			// asserts here and so has no line at all, and one that asserts but
+			// declares nothing shows zeros instead of hiding behind its neighbors.
+			before := decls.Stats()
+			sd.DeclareStreams(decls)
+			after := decls.Stats()
 			log.Info().
 				Str("module", module.Name()).
+				Int("streams", after.Streams-before.Streams).
+				Int("superstreams", after.SuperStreams-before.SuperStreams).
+				Int("consumers", after.Consumers-before.Consumers).
+				Int("publishers", after.Publishers-before.Publishers).
 				Msg("Collecting module stream declarations")
-			sd.DeclareStreams(decls)
 		}
 	}
 

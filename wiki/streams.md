@@ -85,7 +85,16 @@ Implement `streams.StreamDeclarer` on a module (`DeclareStreams(*streams.Declara
 the framework calls it during startup, validates every declaration at once, and starts
 the consumers. The import that declares topology is also the import that links the lane.
 
+The framework discovers declarers by type assertion, so a misspelled or mis-signatured
+`DeclareStreams` is a silent no-op at startup rather than a compile error — assert the
+interface next to the method to turn it into one. At runtime the startup log names every
+module whose type assertion succeeded — whether or not it carries the `var _` line — with the
+counts that module contributed, so a declarer that declares nothing shows zeros rather than
+vanishing; a module with the wrong method name or signature has no line at all.
+
 ```go
+var _ streams.StreamDeclarer = (*Module)(nil)
+
 func (m *Module) DeclareStreams(decls *streams.Declarations) {
     decls.DeclareStream("orders", &streams.StreamSpec{
         MaxAge:         7 * 24 * time.Hour, // whole seconds (floors at 1s), as in the AMQP lane
