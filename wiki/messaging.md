@@ -542,7 +542,7 @@ cross-field validators like the outbox `publishtimeout` guards read these effect
 | `reconnect.readytimeout` | 5s | Bounded pre-flight wait for a not-yet-ready client before a publish begins (see below) |
 | `reconnect.maxpublishattempts` | 5 | Max publish attempts before returning `ErrPublishRetriesExhausted` (see below) |
 | `reconnect.maxdelay` | 60s | Maximum backoff cap for exponential retry |
-| `publishtimeout` | unset (unbounded) | Aggregate bound on one whole publish — pre-flight plus the entire retry loop (see below). Note it is a top-level `messaging.` key, not a `reconnect.` one |
+| `messaging.publishtimeout` | unset (unbounded) | Aggregate bound on one whole publish — pre-flight plus the entire retry loop (see below). Spelled in full because it is the one key here that is NOT under `reconnect.` |
 | `publisher.maxcached` | 50 single-tenant / unset multi-tenant (pool scales to `multitenant.limits.tenants`) | Maximum cached publisher channels |
 | `publisher.idlettl` | 1h single-tenant / 10m multi-tenant | TTL for idle publisher channels |
 | `publisher.cleanupinterval` | 2m | How often the idle-publisher cleanup goroutine runs |

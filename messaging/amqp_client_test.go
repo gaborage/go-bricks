@@ -2352,24 +2352,28 @@ func TestPublishBytesUnsetBoundLeavesContextUnbounded(t *testing.T) {
 // distinct expected ceiling so a wrap that ignored the caller (or ignored the key)
 // shows up as a deadline from the wrong operand rather than as a passing test.
 func TestPublishBytesEffectiveDeadlineIsTheTighterOfCallerAndBound(t *testing.T) {
+	// Every case here sets at least one of the two operands, so every case expects
+	// a deadline. The neither-set case is
+	// TestPublishBytesUnsetBoundLeavesContextUnbounded, which owns that regression
+	// by name; repeating it here would assert the same call with the same inputs
+	// twice. maxRemaining is the TIGHTER operand — the looser one is always at
+	// least 10x larger, so picking the wrong one overshoots by an order of
+	// magnitude rather than by a margin.
+	const (
+		tight = 200 * time.Millisecond
+		loose = 30 * time.Second
+	)
 	tests := []struct {
 		name string
 		// callerTimeout <= 0 means the caller passes a deadline-free context.
 		callerTimeout  time.Duration
 		publishTimeout time.Duration
-		wantDeadline   bool
-		// maxRemaining bounds what the fake may observe: the tighter operand.
-		// The looser operand is always at least 10x larger, so an implementation
-		// that picked the wrong one overshoots this by an order of magnitude.
-		maxRemaining time.Duration
+		maxRemaining   time.Duration
 	}{
-		{name: "caller_tighter_than_bound", callerTimeout: 200 * time.Millisecond, publishTimeout: 30 * time.Second, wantDeadline: true, maxRemaining: 200 * time.Millisecond},
-		{name: "bound_tighter_than_caller", callerTimeout: 30 * time.Second, publishTimeout: 200 * time.Millisecond, wantDeadline: true, maxRemaining: 200 * time.Millisecond},
-		{name: "bound_only", callerTimeout: 0, publishTimeout: 200 * time.Millisecond, wantDeadline: true, maxRemaining: 200 * time.Millisecond},
-		{name: "caller_only", callerTimeout: 200 * time.Millisecond, publishTimeout: 0, wantDeadline: true, maxRemaining: 200 * time.Millisecond},
-		// The neither-set case is TestPublishBytesUnsetBoundLeavesContextUnbounded,
-		// which owns that regression by name; repeating it here would assert the
-		// same call with the same inputs twice.
+		{name: "caller_tighter_than_bound", callerTimeout: tight, publishTimeout: loose, maxRemaining: tight},
+		{name: "bound_tighter_than_caller", callerTimeout: loose, publishTimeout: tight, maxRemaining: tight},
+		{name: "bound_only", callerTimeout: 0, publishTimeout: tight, maxRemaining: tight},
+		{name: "caller_only", callerTimeout: tight, publishTimeout: 0, maxRemaining: tight},
 	}
 
 	for _, tt := range tests {
@@ -2378,31 +2382,42 @@ func TestPublishBytesEffectiveDeadlineIsTheTighterOfCallerAndBound(t *testing.T)
 			c := publishBoundClient(t, ch, tt.publishTimeout, time.Second)
 			ackNextSuccessfulPublish(t.Context(), t, c, ch)
 
-			ctx := context.Background()
-			if tt.callerTimeout > 0 {
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithTimeout(ctx, tt.callerTimeout)
-				defer cancel()
-			}
-
-			if err := c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("x")); err != nil {
+			if err := c.publishBytes(callerContext(t, tt.callerTimeout), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("x")); err != nil {
 				t.Fatalf("publish failed: %v", err)
 			}
 
-			deadline, ok := ch.lastPublishCtxDeadline()
-			if ok != tt.wantDeadline {
-				t.Fatalf("deadline present = %v, want %v", ok, tt.wantDeadline)
-			}
-			if !tt.wantDeadline {
-				return
-			}
-			remaining := time.Until(deadline)
-			if remaining > tt.maxRemaining {
-				t.Errorf("effective deadline came from the looser operand: %s remaining, want <= %s", remaining, tt.maxRemaining)
-			}
-			if remaining <= 0 {
-				t.Errorf("effective deadline already expired at the publish attempt: %s remaining", remaining)
-			}
+			assertEffectiveDeadline(t, ch, tt.maxRemaining)
 		})
+	}
+}
+
+// callerContext builds the context a caller would pass: deadline-free when
+// timeout is non-positive, otherwise bounded by it for the life of the test.
+func callerContext(t *testing.T, timeout time.Duration) context.Context {
+	t.Helper()
+	if timeout <= 0 {
+		return context.Background()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+// assertEffectiveDeadline checks the deadline the client's derived context
+// actually carried into the broker call: present, not already expired, and no
+// looser than maxRemaining — which is how a wrap that consulted the wrong
+// operand shows up.
+func assertEffectiveDeadline(t *testing.T, ch *fakeChannel, maxRemaining time.Duration) {
+	t.Helper()
+	deadline, ok := ch.lastPublishCtxDeadline()
+	if !ok {
+		t.Fatal("publish attempt carried no deadline, want one from the tighter of caller and bound")
+	}
+	remaining := time.Until(deadline)
+	if remaining > maxRemaining {
+		t.Errorf("effective deadline came from the looser operand: %s remaining, want <= %s", remaining, maxRemaining)
+	}
+	if remaining <= 0 {
+		t.Errorf("effective deadline already expired at the publish attempt: %s remaining", remaining)
 	}
 }
