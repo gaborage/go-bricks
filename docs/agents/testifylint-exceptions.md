@@ -58,8 +58,16 @@ bodies rather than here (this file postdates them) — pull those rows in before
 ## deferred sets, triaged (#1092 / W3-FINAL-a)
 
 The five files earlier recorded as "Deferred, not excepted" carried 53 live findings between
-them. FINAL-a triaged all 53 against a fresh whole-repo measurement. Nothing is deferred, and the
-nine rows below are the complete residue — the file as a whole is bijective with the live findings.
+them. FINAL-a triaged all 53 against a fresh whole-repo measurement: every one is now either
+converted or carries a row here with its reason, so none is left unexamined. Three of the rows —
+`config/getters_test.go:141`, `:144`, `:147` — are excepted only PENDING #1471, which dissolves
+them by splitting `TestNilConfigAccessors` into per-probe subtests; they are a deferred fix, not a
+permanent exception, and #1471 is the tracked home for that.
+
+The nine rows below are this five-file cohort's complete residue, and they correspond one-to-one
+with the cohort's live findings. That bijection is scoped to the cohort — the document as a whole
+covers 125 sites across every section, and FINAL-b is what checks the whole-file correspondence
+before converting each row to a directive.
 
 Do not read the nine as "nine of the 53". Four of them (`app/managers_test.go:802`, `:806`, `:828`,
 `:829`) are SECOND-ORDER: findings the conversions themselves created. Hoisting an independent
