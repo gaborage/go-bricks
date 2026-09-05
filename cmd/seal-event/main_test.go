@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -91,23 +93,44 @@ type cliFixture struct {
 	dir      string
 }
 
+// sharedKeys mints the two RSA pairs once for the whole package. RSA-2048 generation is
+// ~37ms and the suite builds a fixture per subtest, so per-test pairs cost ~2s of the ~3s
+// run for no isolation gain: no test mutates a key, and what each test does need to itself
+// — its key FILES and its temp dir — still comes fresh from t.TempDir() below.
+var sharedKeys = sync.OnceValue(func() *keyPairs {
+	signPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic("seal-event test: generate sign key: " + err.Error())
+	}
+	encPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic("seal-event test: generate encrypt key: " + err.Error())
+	}
+	return &keyPairs{signPriv: signPriv, encPriv: encPriv}
+})
+
+type keyPairs struct {
+	signPriv *rsa.PrivateKey
+	encPriv  *rsa.PrivateKey
+}
+
 func newCLIFixture(t *testing.T) *cliFixture {
 	t.Helper()
-	signPriv, signPub := jositest.GenerateTestKeyPair(t)
-	encPriv, encPub := jositest.GenerateTestKeyPair(t)
+	keys := sharedKeys()
 	dir := t.TempDir()
 	return &cliFixture{
-		signPub:  signPub,
-		signPriv: signPriv,
-		encPriv:  encPriv,
-		signPath: writeFile(t, dir, "sign.der", derPKCS8Private(t, signPriv)),
-		encPath:  writeFile(t, dir, "enc.pub.der", derPKIXPublic(t, encPub)),
+		signPub:  &keys.signPriv.PublicKey,
+		signPriv: keys.signPriv,
+		encPriv:  keys.encPriv,
+		signPath: writeFile(t, dir, "sign.der", derPKCS8Private(t, keys.signPriv)),
+		encPath:  writeFile(t, dir, "enc.pub.der", derPKIXPublic(t, &keys.encPriv.PublicKey)),
 		dir:      dir,
 	}
 }
 
 // baseArgs is the minimal valid flag set: file key sources, both concrete kids, the
-// Subject member and the event type. Cases append or override.
+// Subject member and the event type. Cases append to it, or override one slot through
+// withFlag.
 func (fx *cliFixture) baseArgs() []string {
 	return []string{
 		"-sign-key-file", fx.signPath,
@@ -117,6 +140,23 @@ func (fx *cliFixture) baseArgs() []string {
 		"-subject", subjectMember,
 		"-event-type", testEventType,
 	}
+}
+
+// withFlag returns a copy of args with flagName's value replaced, addressing the flag by
+// NAME rather than by offset: baseArgs can then be reordered or extended without silently
+// repointing a case at a different flag than its name and assertion claim. A flag that is
+// not there is a bug in the case, not a scenario, so it fails the test loudly.
+func withFlag(t *testing.T, args []string, flagName, value string) []string {
+	t.Helper()
+	out := append([]string(nil), args...)
+	for i := 0; i+1 < len(out); i += 2 {
+		if out[i] == flagName {
+			out[i+1] = value
+			return out
+		}
+	}
+	t.Fatalf("flag %s is not part of baseArgs", flagName)
+	return nil
 }
 
 // consumerSpec scans the consumer declaration once per test.
@@ -137,12 +177,14 @@ func (fx *cliFixture) consumerResolver() map[string]any {
 	}
 }
 
-// openBody runs the real opener over the CLI's stdout with the given expectations.
-func (fx *cliFixture) openBody(t *testing.T, stdout, eventType string, tenant sealed.TenantExpectation) (*paymentAuthorized, *sealed.Envelope, error) {
+// openBody runs the real opener over the CLI's stdout. The declared EventType is always
+// testEventType: it is the CONSUMER's declaration, fixed by the seal tag it belongs with —
+// the etyp cases vary the CLI's -event-type flag instead, which is the half that can drift.
+func (fx *cliFixture) openBody(t *testing.T, stdout string, tenant sealed.TenantExpectation) (*paymentAuthorized, *sealed.Envelope, error) {
 	t.Helper()
 	var got paymentAuthorized
 	env, err := sealed.Open([]byte(strings.TrimSpace(stdout)), consumerSpec(t), &sealed.OpenOptions{
-		EventType: eventType,
+		EventType: testEventType,
 		Tenant:    tenant,
 		Keys:      jositest.NewTestResolver(fx.consumerResolver()),
 	}, &got)
@@ -168,7 +210,7 @@ func TestSealEventRoundTrip(t *testing.T) {
 		stdout, stderr, code := runCLI(append(fx.baseArgs(), "-tenant-id", testTenant), []byte(docJSON))
 		require.Equal(t, 0, code, "stderr: %s", stderr)
 
-		got, env, err := fx.openBody(t, stdout, testEventType, sealed.TenantExpectation{Required: true, Expected: testTenant})
+		got, env, err := fx.openBody(t, stdout, sealed.TenantExpectation{Required: true, Expected: testTenant})
 		require.NoError(t, err)
 
 		assert.Equal(t, "o-1", got.OrderID)
@@ -190,11 +232,11 @@ func TestSealEventRoundTrip(t *testing.T) {
 
 		// Absent -tenant-id means no signed tid at all: an opener that does not demand one
 		// sees an empty TenantID, and one that does refuses the very same body.
-		_, env, err := fx.openBody(t, stdout, testEventType, sealed.TenantExpectation{})
+		_, env, err := fx.openBody(t, stdout, sealed.TenantExpectation{})
 		require.NoError(t, err)
 		assert.Empty(t, env.TenantID)
 
-		_, _, err = fx.openBody(t, stdout, testEventType, sealed.TenantExpectation{Required: true})
+		_, _, err = fx.openBody(t, stdout, sealed.TenantExpectation{Required: true})
 		assert.Equal(t, sealed.CodeTenantMismatch, openCode(t, err))
 	})
 
@@ -207,9 +249,9 @@ func TestSealEventRoundTrip(t *testing.T) {
 		fromFile, stderr, code := runCLI(append(fx.baseArgs(), docPath), nil)
 		require.Equal(t, 0, code, "stderr: %s", stderr)
 
-		stdinEvt, _, err := fx.openBody(t, fromStdin, testEventType, sealed.TenantExpectation{})
+		stdinEvt, _, err := fx.openBody(t, fromStdin, sealed.TenantExpectation{})
 		require.NoError(t, err)
-		fileEvt, _, err := fx.openBody(t, fromFile, testEventType, sealed.TenantExpectation{})
+		fileEvt, _, err := fx.openBody(t, fromFile, sealed.TenantExpectation{})
 		require.NoError(t, err)
 		assert.Equal(t, stdinEvt, fileEvt)
 	})
@@ -219,7 +261,7 @@ func TestSealEventRoundTrip(t *testing.T) {
 
 		stdout, stderr, code := runCLI(append(fx.baseArgs(), "-"), []byte(docJSON))
 		require.Equal(t, 0, code, "stderr: %s", stderr)
-		_, _, err := fx.openBody(t, stdout, testEventType, sealed.TenantExpectation{})
+		_, _, err := fx.openBody(t, stdout, sealed.TenantExpectation{})
 		require.NoError(t, err)
 	})
 
@@ -236,7 +278,7 @@ func TestSealEventRoundTrip(t *testing.T) {
 		}, []byte(docJSON))
 		require.Equal(t, 0, code, "stderr: %s", stderr)
 
-		got, _, err := fx.openBody(t, stdout, testEventType, sealed.TenantExpectation{})
+		got, _, err := fx.openBody(t, stdout, sealed.TenantExpectation{})
 		require.NoError(t, err)
 		assert.Equal(t, "4111111111111111", got.Card.PAN)
 	})
@@ -252,9 +294,9 @@ func TestSealEventFreshJTI(t *testing.T) {
 	second, stderr, code := runCLI(fx.baseArgs(), []byte(docJSON))
 	require.Equal(t, 0, code, "stderr: %s", stderr)
 
-	_, firstEnv, err := fx.openBody(t, first, testEventType, sealed.TenantExpectation{})
+	_, firstEnv, err := fx.openBody(t, first, sealed.TenantExpectation{})
 	require.NoError(t, err)
-	_, secondEnv, err := fx.openBody(t, second, testEventType, sealed.TenantExpectation{})
+	_, secondEnv, err := fx.openBody(t, second, sealed.TenantExpectation{})
 	require.NoError(t, err)
 
 	assert.NotEqual(t, firstEnv.JTI, secondEnv.JTI)
@@ -271,49 +313,45 @@ func TestSealEventKidBinding(t *testing.T) {
 		// A well-formed Generation of a DIFFERENT family: the CLI derives "rogue-sign" and
 		// seals happily; the consumer's spec declares svc-payments-sign, so the family pin
 		// (rule 3) fires before any key is resolved.
-		args := append(fx.baseArgs(), "-tenant-id", testTenant)
-		args[5] = "rogue-sign-v1" // -sign-kid value
+		args := withFlag(t, append(fx.baseArgs(), "-tenant-id", testTenant), "-sign-kid", "rogue-sign-v1")
 		stdout, stderr, code := runCLI(args, []byte(docJSON))
 		require.Equal(t, 0, code, "stderr: %s", stderr)
 
-		_, _, err := fx.openBody(t, stdout, testEventType, sealed.TenantExpectation{})
+		_, _, err := fx.openBody(t, stdout, sealed.TenantExpectation{})
 		assert.Equal(t, sealed.CodeKidFamilyMismatch, openCode(t, err))
 	})
 
 	t.Run("wrong_event_type_fails_open", func(t *testing.T) {
 		fx := newCLIFixture(t)
 
-		args := fx.baseArgs()
-		args[11] = "payment.declined" // -event-type value
+		args := withFlag(t, fx.baseArgs(), "-event-type", "payment.declined")
 		stdout, stderr, code := runCLI(args, []byte(docJSON))
 		require.Equal(t, 0, code, "stderr: %s", stderr)
 
-		_, _, err := fx.openBody(t, stdout, testEventType, sealed.TenantExpectation{})
+		_, _, err := fx.openBody(t, stdout, sealed.TenantExpectation{})
 		assert.Equal(t, sealed.CodeEventTypeMismatch, openCode(t, err))
 	})
 
 	t.Run("non_generation_kids_rejected", func(t *testing.T) {
 		cases := []struct {
-			name     string
-			index    int
-			kid      string
-			wantFlag string
+			name string
+			flag string
+			kid  string
 		}{
-			{name: "bare_logical_sign_kid", index: 5, kid: signFamily, wantFlag: "-sign-kid"},
-			{name: "zero_generation_sign_kid", index: 5, kid: "x-v0", wantFlag: "-sign-kid"},
-			{name: "bare_logical_encrypt_kid", index: 7, kid: encFamily, wantFlag: "-encrypt-kid"},
-			{name: "zero_generation_encrypt_kid", index: 7, kid: "x-v0", wantFlag: "-encrypt-kid"},
+			{name: "bare_logical_sign_kid", flag: "-sign-kid", kid: signFamily},
+			{name: "zero_generation_sign_kid", flag: "-sign-kid", kid: "x-v0"},
+			{name: "bare_logical_encrypt_kid", flag: "-encrypt-kid", kid: encFamily},
+			{name: "zero_generation_encrypt_kid", flag: "-encrypt-kid", kid: "x-v0"},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				fx := newCLIFixture(t)
-				args := fx.baseArgs()
-				args[tc.index] = tc.kid
+				args := withFlag(t, fx.baseArgs(), tc.flag, tc.kid)
 
 				stdout, stderr, code := runCLI(args, []byte(docJSON))
 				require.Equal(t, 1, code)
 				assert.Empty(t, stdout)
-				assert.Contains(t, stderr, tc.wantFlag)
+				assert.Contains(t, stderr, tc.flag)
 			})
 		}
 	})
@@ -323,12 +361,6 @@ func TestSealEventKidBinding(t *testing.T) {
 // Each case asserts the exit code AND a distinguishing stderr fragment, so a mutation that
 // collapses two failures into one is not silently green.
 func TestSealEventRejections(t *testing.T) {
-	// fxArgs edits one slot of the minimal valid argv, so each case differs from a
-	// PASSING invocation in exactly the dimension it names.
-	fxArgs := func(fx *cliFixture, mutate func(args []string) []string) []string {
-		return mutate(fx.baseArgs())
-	}
-
 	type tableCase struct {
 		name       string
 		build      func(t *testing.T, fx *cliFixture) []string
@@ -352,8 +384,8 @@ func TestSealEventRejections(t *testing.T) {
 		},
 		{
 			name: "neither_sign_key_source",
-			build: func(_ *testing.T, fx *cliFixture) []string {
-				return fxArgs(fx, func(args []string) []string { args[1] = ""; return args })
+			build: func(t *testing.T, fx *cliFixture) []string {
+				return withFlag(t, fx.baseArgs(), "-sign-key-file", "")
 			},
 			stdin:      docJSON,
 			wantCode:   1,
@@ -371,8 +403,8 @@ func TestSealEventRejections(t *testing.T) {
 		},
 		{
 			name: "neither_encrypt_key_source",
-			build: func(_ *testing.T, fx *cliFixture) []string {
-				return fxArgs(fx, func(args []string) []string { args[3] = ""; return args })
+			build: func(t *testing.T, fx *cliFixture) []string {
+				return withFlag(t, fx.baseArgs(), "-encrypt-key-file", "")
 			},
 			stdin:      docJSON,
 			wantCode:   1,
@@ -380,8 +412,8 @@ func TestSealEventRejections(t *testing.T) {
 		},
 		{
 			name: "missing_sign_kid",
-			build: func(_ *testing.T, fx *cliFixture) []string {
-				return fxArgs(fx, func(args []string) []string { args[5] = ""; return args })
+			build: func(t *testing.T, fx *cliFixture) []string {
+				return withFlag(t, fx.baseArgs(), "-sign-kid", "")
 			},
 			stdin:      docJSON,
 			wantCode:   1,
@@ -389,8 +421,8 @@ func TestSealEventRejections(t *testing.T) {
 		},
 		{
 			name: "missing_encrypt_kid",
-			build: func(_ *testing.T, fx *cliFixture) []string {
-				return fxArgs(fx, func(args []string) []string { args[7] = ""; return args })
+			build: func(t *testing.T, fx *cliFixture) []string {
+				return withFlag(t, fx.baseArgs(), "-encrypt-kid", "")
 			},
 			stdin:      docJSON,
 			wantCode:   1,
@@ -398,8 +430,8 @@ func TestSealEventRejections(t *testing.T) {
 		},
 		{
 			name: "missing_subject",
-			build: func(_ *testing.T, fx *cliFixture) []string {
-				return fxArgs(fx, func(args []string) []string { args[9] = ""; return args })
+			build: func(t *testing.T, fx *cliFixture) []string {
+				return withFlag(t, fx.baseArgs(), "-subject", "")
 			},
 			stdin:      docJSON,
 			wantCode:   1,
@@ -407,8 +439,8 @@ func TestSealEventRejections(t *testing.T) {
 		},
 		{
 			name: "missing_event_type",
-			build: func(_ *testing.T, fx *cliFixture) []string {
-				return fxArgs(fx, func(args []string) []string { args[11] = ""; return args })
+			build: func(t *testing.T, fx *cliFixture) []string {
+				return withFlag(t, fx.baseArgs(), "-event-type", "")
 			},
 			stdin:      docJSON,
 			wantCode:   1,
@@ -458,7 +490,7 @@ func TestSealEventRejections(t *testing.T) {
 			name: "garbage_sign_key_der",
 			build: func(t *testing.T, fx *cliFixture) []string {
 				garbage := writeFile(t, fx.dir, "garbage.der", []byte{0x00, 0x01, 0x02})
-				return fxArgs(fx, func(args []string) []string { args[1] = garbage; return args })
+				return withFlag(t, fx.baseArgs(), "-sign-key-file", garbage)
 			},
 			stdin:      docJSON,
 			wantCode:   1,
@@ -468,7 +500,7 @@ func TestSealEventRejections(t *testing.T) {
 			name: "garbage_encrypt_key_der",
 			build: func(t *testing.T, fx *cliFixture) []string {
 				garbage := writeFile(t, fx.dir, "garbage.pub.der", []byte{0x00, 0x01, 0x02})
-				return fxArgs(fx, func(args []string) []string { args[3] = garbage; return args })
+				return withFlag(t, fx.baseArgs(), "-encrypt-key-file", garbage)
 			},
 			stdin:      docJSON,
 			wantCode:   1,
