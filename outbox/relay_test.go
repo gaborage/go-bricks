@@ -415,9 +415,9 @@ func TestRelayExecuteIsolatesPerTenantFailures(t *testing.T) {
 
 // --- Status-driven parking: poison (corrupt) vs connectivity (everything else) ---
 
-// TestRelayDeadLettersPoisonAtMaxRetries: the ONLY genuine poison is an undecodable
-// (broker-independent) message — corrupt headers. At MaxRetries it is dead-lettered to
-// status=failed rather than retried forever.
+// TestRelayDeadLettersPoisonAtMaxRetries: an undecodable (broker-independent) message —
+// corrupt headers — is one of the poison classes enumerated at deadLetterPoison. At
+// MaxRetries it is dead-lettered to status=failed rather than retried forever.
 func TestRelayDeadLettersPoisonAtMaxRetries(t *testing.T) {
 	store := &fakeStore{FetchPendingResult: []Record{
 		{ID: "poison", Headers: []byte(`{not valid json}`), RetryCount: 2}, // MaxRetries-1
@@ -436,8 +436,9 @@ func TestRelayDeadLettersPoisonAtMaxRetries(t *testing.T) {
 
 // TestRelayDeadLettersInvalidPublishDestinationAtMaxRetries: a publish refused with
 // messaging.ErrInvalidPublishDestination is message-intrinsic — the frame is unwritable
-// whatever the broker's state — so it is the second poison class and parks at MaxRetries
-// rather than being re-attempted for the life of the table.
+// whatever the broker's state — so it is one of the poison classes enumerated at
+// deadLetterPoison and parks at MaxRetries rather than being re-attempted for the life
+// of the table.
 func TestRelayDeadLettersInvalidPublishDestinationAtMaxRetries(t *testing.T) {
 	store := &fakeStore{FetchPendingResult: []Record{
 		{ID: "unpublishable", Exchange: "ex", RoutingKey: "rk", RetryCount: 99}, // past MaxRetries

@@ -166,10 +166,10 @@ type Store interface {
 
 	// MarkDeadLettered increments retry count, records the error, and sets the event
 	// status to "failed" — a terminal state the relay stops retrying. Used ONLY for
-	// poison events (undecodable headers, or a destination the AMQP frame can never carry)
-	// that exhaust MaxRetries. Connectivity failures
-	// (broker down, NACK, confirmation timeout) must never call this — they advance
-	// retry_count via MarkFailed and keep retrying indefinitely.
+	// poison events — the message-intrinsic classes enumerated at Relay.deadLetterPoison —
+	// that exhaust MaxRetries. Connectivity failures (broker down, NACK, confirmation
+	// timeout) must never call this — they advance retry_count via MarkFailed and keep
+	// retrying indefinitely.
 	MarkDeadLettered(ctx context.Context, db dbtypes.Interface, eventID, errMsg string) error
 
 	// DeletePublished removes events that were published before the given time.

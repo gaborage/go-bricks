@@ -5,7 +5,7 @@ proposed for this commit. A follow-on build plan (sketched at the end) executes 
 
 ## Problem
 
-When the outbox relay exhausts retries on a **poison** event (undecodable headers, or a destination past the AMQP shortstr limit), it
+When the outbox relay exhausts retries on a **poison** event (one of the classes enumerated at `deadLetterPoison` in `outbox/relay.go`), it
 parks the row at `status='failed'` via `MarkDeadLettered` and emits one WARN. After that
 the event is invisible to an operator:
 
@@ -22,10 +22,12 @@ deny the runtime DB role. The wiki even *promises* visibility that today only ca
 "visible to someone with SQL access" (`wiki/outbox.md:164-165`: failed rows "are
 intentionally never auto-deleted so they stay visible").
 
-**Scope honesty.** Only poison (undecodable headers, or a destination the AMQP frame can never carry) ever parks. Every connectivity failure
-(broker down, NACK, confirmation timeout) advances `retry_count` but keeps retrying forever
-and is *never* parked (`outbox/relay.go:319-333` and the `MaxRetries` doc at
-`config/types.go:748-754`). So the real-world dead-letter backlog is **low-volume but
+**Scope honesty.** Only poison (the classes enumerated at `deadLetterPoison` in `outbox/relay.go`) is ever
+dead-lettered. Every connectivity failure (broker down, NACK, confirmation timeout) advances
+`retry_count` but keeps retrying forever and is *never* moved to `status='failed'` by `MaxRetries`
+(see `Relay.publishRecord` and `OutboxConfig.MaxRetries`' doc comment). Note that "parked" is used
+elsewhere in a second sense — a row held behind a failed ordering key, or behind a stalled stream
+producer, for one cycle — which is unrelated to dead-lettering and does apply to connectivity. So the real-world dead-letter backlog is **low-volume but
 high-signal**: every parked row is a bug or a corruption artifact, not routine churn. That
 shapes the design — a cheap standing count and a small list/retry surface, not a
 high-throughput queue console.

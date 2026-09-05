@@ -6282,8 +6282,13 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   implemented outside the framework, OR your code compares `config.OutboxConfig` values, OR
   `outbox.tablename` names a table whose last segment exceeds 49 bytes. no-match = the outbox is
   disabled everywhere and you neither implement `Store` nor compare the config struct.
-- apply: with `outbox.autocreatetable: true`, nothing — the new columns, the index and the leader
-  table are created for you. With MANAGED migrations, run the statements for your vendor from
+- apply: `outbox.autocreatetable: true` covers a FRESH database only. `CreateTable` just CREATEs
+  (`CREATE TABLE IF NOT EXISTS` on PostgreSQL; ORA-00955 on an existing Oracle table) and never
+  `ALTER`s, so a table retained from before this hop needs the migration whatever the setting says
+  — and skipping it breaks the relay either way: as a startup `TableUnusableError` naming
+  `outbox.autocreatetable` (which is not the fix — #1426) where the startup check applies, or as
+  a failing first poll under per-tenant fan-out and dynamic sources, which that check exempts.
+  With an EXISTING table, run the statements for your vendor from
   [wiki/outbox.md](outbox.md) BEFORE deploying, in their documented order: the `ALTER`, then the
   `seq` backfill, then the index. The backfill is EXPLICIT and not optional — an identity column
   populates existing rows in the order the rewrite reads them (heap order on PostgreSQL, rowid

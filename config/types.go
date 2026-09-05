@@ -755,9 +755,8 @@ type SourceConfig struct {
 //   - AutoCreateTable: false (opt-in; set true to create the table on first use)
 //   - PollInterval: 5s (relay poll frequency)
 //   - BatchSize: 100 (events per relay cycle)
-//   - MaxRetries: 5 (poison-event dead-letter ceiling — undecodable headers or an unpublishable
-//     destination; connectivity failures advance retry_count but are never dead-lettered by this
-//     count — see the MaxRetries field doc)
+//   - MaxRetries: 5 (poison-event dead-letter ceiling; connectivity failures advance
+//     retry_count but are never dead-lettered by this count — see the MaxRetries field doc)
 //   - RetentionPeriod: 72h (cleanup published events older than this)
 //   - PublishTimeout: 60s (per-record relay publish bound)
 type OutboxConfig struct {
@@ -791,12 +790,12 @@ type OutboxConfig struct {
 	// Default: 100. Higher values improve throughput but increase memory usage.
 	BatchSize int `koanf:"batchsize" json:"batchsize" yaml:"batchsize" toml:"batchsize" mapstructure:"batchsize"`
 
-	// MaxRetries is the retry ceiling after which a *poison* event — undecodable headers,
-	// or a destination past the AMQP shortstr limit that the broker can never accept, both
-	// deterministic and broker-independent — is dead-lettered to status "failed"
-	// and stops being retried. Connectivity failures (broker down, NACK, confirmation
-	// timeout) advance retry_count but are NEVER dead-lettered by this count, so neither a
-	// prolonged outage nor a transient broker fault can park healthy events. Default: 5.
+	// MaxRetries is the retry ceiling after which a *poison* event — one of the
+	// deterministic, broker-independent classes enumerated in wiki/outbox.md under
+	// Retry & Dead-Lettering — is dead-lettered to status "failed" and stops being
+	// retried. Connectivity failures (broker down, NACK, confirmation timeout) advance
+	// retry_count but are NEVER dead-lettered by this count, so neither a prolonged outage
+	// nor a transient broker fault can park healthy events. Default: 5.
 	MaxRetries int `koanf:"maxretries" json:"maxretries" yaml:"maxretries" toml:"maxretries" mapstructure:"maxretries"`
 
 	// RetentionPeriod is how long published events are kept before cleanup.

@@ -3,6 +3,10 @@
 **Status:** Accepted
 **Date:** 2026-06-30
 
+> **Amended (2026-09-05, the poison classes are enumerated in code):** the class count below is
+> the one this decision was written with. `deadLetterPoison` in `outbox/relay.go` carries the
+> current enumeration, mirrored in [wiki/outbox.md](outbox.md) under Retry & Dead-Lettering.
+>
 > **Amended (2026-08-30, a second lane and a parked outcome):** this ADR classified the
 > outcomes of ONE lane. The relay now dispatches by the row's `lane`, and the stream lane
 > (ADR-088) answers to the same test rather than a new one: `streams.ErrPublisherClosed` is
