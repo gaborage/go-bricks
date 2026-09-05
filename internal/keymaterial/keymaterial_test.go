@@ -265,6 +265,19 @@ func TestLoadRSAPrivateKey(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "PKCS1 fallback also failed")
 	})
+
+	// The load hop can fail before any DER exists to parse; its error must
+	// surface as LoadBytes worded it, with no prefix of the loader's own —
+	// callers supply their own role wording ("sign key: %w").
+	t.Run("load_error_propagates", func(t *testing.T) {
+		_, err := LoadRSAPrivateKey(filepath.Join(t.TempDir(), "missing.der"), "")
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "PKCS8 failed", "a load failure must not be reported as a parse failure")
+
+		_, err = LoadRSAPrivateKey("", "!!!not-base64!!!")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "base64 decode")
+	})
 }
 
 func TestLoadRSAPublicKey(t *testing.T) {
@@ -300,6 +313,18 @@ func TestLoadRSAPublicKey(t *testing.T) {
 		_, err := LoadRSAPublicKey("", base64.StdEncoding.EncodeToString(privDER))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "ParsePKIXPublicKey")
+	})
+
+	// Mirror of the private loader's case: a load-hop failure surfaces
+	// unprefixed, never mislabelled as a parse failure.
+	t.Run("load_error_propagates", func(t *testing.T) {
+		_, err := LoadRSAPublicKey(filepath.Join(t.TempDir(), "missing.der"), "")
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "ParsePKIXPublicKey", "a load failure must not be reported as a parse failure")
+
+		_, err = LoadRSAPublicKey("", "!!!not-base64!!!")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "base64 decode")
 	})
 }
 
