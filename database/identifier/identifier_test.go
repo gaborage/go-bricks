@@ -103,3 +103,41 @@ func TestPackageImportsOnlyStdlibAndTypes(t *testing.T) {
 	}
 	require.NotZero(t, seen)
 }
+
+// TestValidateCharsetJudgesCharactersWithoutTheCap pins the door the builder
+// uses: the same per-vendor alphabet Validate applies, with the byte cap left
+// out, so enforcing the cap at the builder doors stays a deliberate later step
+// rather than something that arrives silently with this one.
+func TestValidateCharsetJudgesCharactersWithoutTheCap(t *testing.T) {
+	longPGName := "a" + strings.Repeat("b", identifier.MaxPostgreSQLBytes)
+
+	tests := []struct {
+		name    string
+		vendor  string
+		value   string
+		wantErr error
+	}{
+		{name: "postgresql_accepts_dollar", vendor: dbtypes.PostgreSQL, value: "a$b"},
+		{name: "postgresql_refuses_hash", vendor: dbtypes.PostgreSQL, value: "a#b", wantErr: identifier.ErrIdentifierCharset},
+		{name: "oracle_accepts_hash", vendor: dbtypes.Oracle, value: "a#b"},
+		{name: "empty_is_refused", vendor: dbtypes.PostgreSQL, value: "", wantErr: identifier.ErrEmptyIdentifier},
+		{name: "unknown_vendor_is_refused", vendor: "mystery", value: "ok", wantErr: identifier.ErrUnsupportedVendor},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := identifier.ValidateCharset(tt.vendor, tt.value)
+
+			if tt.wantErr == nil {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, tt.wantErr)
+		})
+	}
+
+	// The cap is the ONE thing the two doors disagree about, so it is asserted
+	// as a pair rather than as two separate cases.
+	require.NoError(t, identifier.ValidateCharset(dbtypes.PostgreSQL, longPGName))
+	require.ErrorIs(t, identifier.Validate(dbtypes.PostgreSQL, longPGName), identifier.ErrIdentifierTooLong)
+}

@@ -140,12 +140,20 @@ type upsertColumn struct {
 // It is vendor-neutral on purpose: one rule at both doors is the point of #1187,
 // and the Oracle rendering it judges against is the canonical single-token form
 // of a key rather than the SQL either vendor emits.
-func normalizeUpsertColumns(kind string, columns []string) ([]upsertColumn, error) {
+func (qb *QueryBuilder) normalizeUpsertColumns(kind string, columns []string) ([]upsertColumn, error) {
 	normalized := make([]upsertColumn, len(columns))
 	for i, col := range columns {
 		trimmed := strings.TrimSpace(col)
 		if !isAcceptableUpsertColumnKey(trimmed) {
 			return nil, fmt.Errorf("%s column %q is not a single column name for upsert", kind, col)
+		}
+		// The KEY shape is vendor-neutral (#1187); which characters a bare key
+		// may carry is not, so the vendor judges it here as at every other door
+		// (#1202). A quoted key keeps the union grammar.
+		if !sqllex.IsQuotedIdentifier(trimmed) {
+			if err := qb.renderer.ValidateCharset(trimmed); err != nil {
+				return nil, fmt.Errorf("%s column %q for %s: %w", kind, col, qb.vendor, err)
+			}
 		}
 		normalized[i] = upsertColumn{key: col, normalized: trimmed}
 	}

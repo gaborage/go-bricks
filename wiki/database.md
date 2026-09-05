@@ -293,6 +293,35 @@ cols.As("u")                                              // SAFE
 cols.As("id FROM secrets--")                              // PANICS at the As call
 ```
 
+### The vendor judges the characters (ADR-100)
+
+The grammar above is the SHAPE — which tokens of an argument are identifiers,
+where one segment ends and the next begins. Which characters a bare segment may
+actually carry is the vendor's answer, and the two disagree about one: `#` is an
+ordinary identifier character on Oracle and an operator on PostgreSQL.
+
+```go
+qb.Select("a#b")                     // Oracle: renders. PostgreSQL: ToSQL() error
+qb.MustExpr("1", "a#b")              // same — the alias is an identifier position
+qb.Select(`"a#b"`)                   // SAFE on both: a quoted identifier escapes the alphabet
+qb.Insert("t").SetMap(map[string]any{"a#b": 1})   // PostgreSQL: ToSQL() error
+```
+
+Every door does this — columns, tables, inline and explicit aliases, ORDER BY /
+GROUP BY items, Filter and JoinFilter columns, insert and `SetMap` keys, and
+`BuildUpsert`'s table and columns. The refusal is a deferred `ToSQL()` error
+naming the argument, the vendor and the offending segment; before ADR-100 the
+statement was built and PostgreSQL rejected it at execution. Quoting is the
+escape hatch on both vendors — but the server then treats the name as
+case-sensitive, so `"a#b"` and `a#b` are not interchangeable. An unknown vendor
+follows PostgreSQL's grammar.
+
+Two things are deliberately NOT judged at the doors: struct `db:"..."` tag names
+at the INSERT struct doors (`InsertStruct`, `InsertFields`), which the `columns`
+package judges against the union alphabet — `UpdateQueryBuilder.SetStruct` does
+judge them, because it goes through the column funnel — and identifier byte caps
+([#1437](https://github.com/gaborage/go-bricks/issues/1437)).
+
 ### Validating an identifier yourself (`database/identifier`)
 
 A service that must check a schema, role or table name it read from a secret

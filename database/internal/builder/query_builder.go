@@ -244,6 +244,14 @@ func (qb *QueryBuilder) appendSelectColumn(processed *[]string, col any) error {
 			return err
 		}
 		if v.Alias != "" {
+			// Validate() judges the alias against the union shape grammar, which
+			// is all a vendor-blind value type can do; the vendor's own alphabet
+			// is applied here, where the alias becomes SQL (#1202). This is the
+			// door the issue names: `qb.MustExpr("1", "a#b")` rendered
+			// `SELECT 1 AS a#b` on PostgreSQL.
+			if err := qb.renderer.ValidateCharset(v.Alias); err != nil {
+				return fmt.Errorf("expression alias %q for %s: %w", v.Alias, qb.vendor, err)
+			}
 			*processed = append(*processed, fmt.Sprintf("%s AS %s", v.SQL, v.Alias))
 		} else {
 			*processed = append(*processed, v.SQL)
@@ -926,6 +934,12 @@ func (sqb *SelectQueryBuilder) SubqueryColumn(sub dbtypes.SelectQueryBuilder, al
 	}
 	if !sqllex.IsUnquotedIdentifier(alias) {
 		sqb.Fail(fmt.Errorf("subquery column: %w: %q", dbtypes.ErrInvalidAlias, alias))
+		return sqb
+	}
+	// The alias is interpolated unquoted, so the vendor's segment alphabet
+	// applies to it as to any other identifier position (#1202).
+	if err := sqb.qb.renderer.ValidateCharset(alias); err != nil {
+		sqb.Fail(fmt.Errorf("subquery column alias %q for %s: %w", alias, sqb.qb.vendor, err))
 		return sqb
 	}
 	subSQL, subArgs, err := renderSubquery(sub)

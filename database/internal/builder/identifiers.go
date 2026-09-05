@@ -77,12 +77,56 @@ var validTableNamePattern = regexp.MustCompile(
 // render as `t."*"` on Oracle (ADR-082) and left padded identifiers in the SQL at
 // every other door (#1158). mkErr builds the rejection, so each door keeps its own
 // wording.
-func normalizeAgainst(pattern *regexp.Regexp, identifier string, mkErr func() error) (normalized string, err error) {
+func (qb *QueryBuilder) normalizeAgainst(pattern *regexp.Regexp, identifier string, mkErr func() error) (normalized string, err error) {
 	trimmed := strings.TrimSpace(identifier)
-	if !pattern.MatchString(trimmed) {
+	match := pattern.FindStringSubmatch(trimmed)
+	if match == nil {
 		return "", mkErr()
 	}
+	if err := qb.validateVendorSegments(identifier, pattern, match); err != nil {
+		return "", err
+	}
 	return trimmed, nil
+}
+
+// validateVendorSegments applies the VENDOR's segment alphabet to every
+// identifier position the shape grammar just accepted. The two grammars answer
+// different questions and both have to hold: the pattern says which tokens of
+// the argument are identifiers (and which are a direction keyword, an alias or
+// the wildcard), and the renderer says which characters this vendor takes in
+// one bare segment — `#` is an Oracle identifier character and a PostgreSQL
+// operator, so only the vendor can judge it (#1202, ADR-100).
+//
+// The identifier-bearing tokens are read through the patterns' NAMED groups, the
+// same contract the Oracle clause and table renderers read, so inserting a group
+// cannot renumber what gets judged the way a positional read would. It does NOT
+// by itself guarantee a future identifier-bearing group would be seen — only
+// `ident` and `alias` are read — so the closed vocabulary of group names is
+// asserted by TestIdentifierPatternGroupNamesAreKnown. A pattern with no `ident`
+// group is entirely one identifier, wildcard included.
+// Quoted segments are skipped: a quoted identifier is legal on both vendors
+// whatever it contains, and it is the framework's own reserved-word form.
+func (qb *QueryBuilder) validateVendorSegments(argument string, pattern *regexp.Regexp, match []string) error {
+	// match[0] is the whole match, which every pattern here anchors, so it is the
+	// trimmed value the caller judged.
+	tokens := []string{match[0]}
+	if i := pattern.SubexpIndex("ident"); i > 0 {
+		tokens = []string{match[i]}
+		if a := pattern.SubexpIndex("alias"); a > 0 && match[a] != "" {
+			tokens = append(tokens, strings.TrimSpace(match[a]))
+		}
+	}
+	for _, token := range tokens {
+		for _, segment := range sqllex.SplitIdentifierSegments(token) {
+			if segment == "*" || sqllex.IsQuotedIdentifier(segment) {
+				continue
+			}
+			if err := qb.renderer.ValidateCharset(segment); err != nil {
+				return fmt.Errorf("invalid identifier %q for %s: %w", argument, qb.vendor, err)
+			}
+		}
+	}
+	return nil
 }
 
 // validateIdentifier rejects identifier arguments (column names, table names/
@@ -90,7 +134,7 @@ func normalizeAgainst(pattern *regexp.Regexp, identifier string, mkErr func() er
 // identifier grammar.
 // Returns a descriptive error naming the rejected value.
 func (qb *QueryBuilder) validateIdentifier(context, identifier string) (normalized string, err error) {
-	return normalizeAgainst(validIdentifierPattern, identifier, func() error {
+	return qb.normalizeAgainst(validIdentifierPattern, identifier, func() error {
 		return fmt.Errorf("invalid %s identifier %q: must be a simple or qualified identifier "+
 			"matching %s — use qb.Expr()/Raw() for complex expressions", context, identifier, sqllex.Segment)
 	})
@@ -99,7 +143,7 @@ func (qb *QueryBuilder) validateIdentifier(context, identifier string) (normaliz
 // validateTableName rejects table-name arguments that fall outside the safe
 // simple/qualified-identifier grammar plus an optional inline alias ("users u").
 func (qb *QueryBuilder) validateTableName(identifier string) (normalized string, err error) {
-	return normalizeAgainst(validTableNamePattern, identifier, func() error {
+	return qb.normalizeAgainst(validTableNamePattern, identifier, func() error {
 		return fmt.Errorf("invalid table identifier %q: must be a simple or qualified identifier "+
 			"with an optional alias (e.g. \"users\" or \"users u\") — use qb.Expr()/Raw() for complex expressions",
 			identifier)
@@ -116,7 +160,7 @@ func (qb *QueryBuilder) validateTableName(identifier string) (normalized string,
 // `t.* ` passed validation and then rendered as `t."*"` on Oracle — a blessed
 // input the renderer mangles.
 func (qb *QueryBuilder) validateSelectIdentifier(identifier string) (normalized string, err error) {
-	return normalizeAgainst(validSelectIdentifierPattern, identifier, func() error {
+	return qb.normalizeAgainst(validSelectIdentifierPattern, identifier, func() error {
 		return fmt.Errorf("invalid select identifier %q: must be a simple or qualified identifier, "+
 			"or a wildcard (\"*\", \"t.*\") — use qb.Expr()/Raw() for expressions and aliases",
 			identifier)
@@ -128,7 +172,7 @@ func (qb *QueryBuilder) validateSelectIdentifier(identifier string) (normalized 
 // trailing direction (ASC/DESC [NULLS FIRST|LAST]) is permitted; everything
 // else — extra tokens, semicolons, comment markers — is rejected.
 func (qb *QueryBuilder) validateClauseIdentifier(context, identifier string) (normalized string, err error) {
-	return normalizeAgainst(validClauseIdentifierPattern, identifier, func() error {
+	return qb.normalizeAgainst(validClauseIdentifierPattern, identifier, func() error {
 		return fmt.Errorf("invalid %s identifier %q: must be a simple or qualified identifier with an "+
 			"optional ASC/DESC [NULLS FIRST|LAST] direction — use qb.Expr()/Raw() for complex expressions",
 			context, identifier)
