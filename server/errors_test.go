@@ -59,7 +59,7 @@ func TestBaseAPIError(t *testing.T) {
 
 	t.Run("nil_error_string", func(t *testing.T) {
 		var err *BaseAPIError
-		assert.Equal(t, "", err.Error())
+		assert.Empty(t, err.Error())
 	})
 
 	t.Run("empty_code_error_string", func(t *testing.T) {

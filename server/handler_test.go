@@ -191,7 +191,7 @@ func TestRequestBinderAdvancedBinding(t *testing.T) {
 	assert.Equal(t, 5, got.ID)
 	assert.Equal(t, []string{"a", "b"}, got.Names)
 	require.NotNil(t, got.Active)
-	assert.Equal(t, true, *got.Active)
+	assert.True(t, *got.Active)
 	assert.Equal(t, []string{"a", "b", "c"}, got.HeaderVals)
 	// time parsed correctly (in UTC)
 	assert.Equal(t, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), got.When.UTC())
@@ -1060,11 +1060,11 @@ func packageCallerNested() string {
 
 func TestExtractHandlerName(t *testing.T) {
 	t.Run("nil handler", func(t *testing.T) {
-		assert.Equal(t, "", extractHandlerName(nil))
+		assert.Empty(t, extractHandlerName(nil))
 	})
 
 	t.Run("non function", func(t *testing.T) {
-		assert.Equal(t, "", extractHandlerName(123))
+		assert.Empty(t, extractHandlerName(123))
 	})
 
 	t.Run("plain function", func(t *testing.T) {

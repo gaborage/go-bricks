@@ -2,7 +2,6 @@ package server
 
 import (
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -299,7 +298,7 @@ func TestValidatorValidateNonStruct(t *testing.T) {
 			require.Error(t, err)
 
 			var validationErr *ValidationError
-			assert.False(t, errors.As(err, &validationErr),
+			assert.NotErrorAs(t, err, &validationErr,
 				"Non-struct validation should not return ValidationError")
 		})
 	}
@@ -438,7 +437,7 @@ func TestValidatorMCCCodeRule(t *testing.T) {
 			if tt.expected {
 				assert.NoError(t, err)
 			} else {
-				assert.Error(t, err)
+				require.Error(t, err)
 				var validationErr *ValidationError
 				require.ErrorAs(t, err, &validationErr)
 				assert.Len(t, validationErr.Errors, 1)

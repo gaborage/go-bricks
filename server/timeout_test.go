@@ -267,7 +267,7 @@ func TestContextCancellationDuringHandlerExecution(t *testing.T) {
 	// Verify it's valid JSON with proper structure
 	var response map[string]any
 	err := json.Unmarshal(rec.Body.Bytes(), &response)
-	assert.NoError(t, err, "Response should be valid JSON")
+	require.NoError(t, err, "Response should be valid JSON")
 	assert.NotNil(t, response["error"], "Response should have error field")
 	assert.NotNil(t, response["meta"], "Response should have meta field")
 }
@@ -329,7 +329,7 @@ func TestTimeoutWithLoggerMiddleware(t *testing.T) {
 	// Verify the response is a properly formatted API error
 	var response map[string]any
 	err := json.Unmarshal(rec.Body.Bytes(), &response)
-	assert.NoError(t, err, "Response should be valid JSON")
+	require.NoError(t, err, "Response should be valid JSON")
 	assert.NotNil(t, response["error"], "Response should have error field")
 	assert.NotNil(t, response["meta"], "Response should have meta field")
 }
