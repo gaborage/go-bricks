@@ -26,7 +26,7 @@ func TestValidateSchedulerTimezoneDefault(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &SchedulerConfig{Timezone: tt.input}
 			err := normalizeScheduler(cfg)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, tt.expectedTimezone, cfg.Timezone)
 		})
 	}
@@ -56,7 +56,7 @@ func TestValidateSchedulerTimezoneWiredIntoValidate(t *testing.T) {
 	cfg := createValidFullConfig()
 	cfg.Scheduler.Timezone = "Not/AZone"
 	err := Validate(cfg)
-	assert.ErrorContains(t, err, "scheduler config:")
+	require.ErrorContains(t, err, "scheduler config:")
 	assert.ErrorContains(t, err, "scheduler.timezone")
 }
 

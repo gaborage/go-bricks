@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // normalizeAndCheckResolver runs both halves of the resolver split in phase
@@ -139,8 +140,7 @@ func TestValidateMultitenantResolver(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := normalizeAndCheckResolver(&tt.config)
 			if tt.expectError {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errorContains)
+				require.ErrorContains(t, err, tt.errorContains)
 			} else {
 				assert.NoError(t, err)
 				// Check if default header was set
@@ -252,11 +252,10 @@ func TestResolverOrderValidationRejectsUnknown(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := normalizeAndCheckResolver(&tt.config)
 			if tt.expectError {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errorContains)
+				require.ErrorContains(t, err, tt.errorContains)
 				return
 			}
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, tt.expectedOrder, tt.config.Order)
 		})
 	}

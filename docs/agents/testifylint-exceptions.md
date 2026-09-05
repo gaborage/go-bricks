@@ -6,25 +6,39 @@ FINAL PR (`ci(lint): enable the remaining testifylint checkers`) converts every 
 cannot be added earlier — while a checker still sits in `.golangci.yml`'s `disable:` list,
 `nolintlint` reports the directive as unused and reddens `make check`.
 
+Several package PRs are in flight at once, so more than one may create this file. **The first
+one merged wins; every later PR rebases onto it and appends its section rather than recreating
+the file.**
+
 Every row is a site where the checker is mechanically right and substantively wrong. The
 recurring shape is `require-error` on an assertion whose FOLLOWING assertion pins an
 independent property: `require` aborts, so converting would hide a real regression behind an
 unrelated failure. A site is only listed after that independence was checked by reading the
 test, not inferred from the diff.
 
-## app (#1092 / W3-P4)
+## config (#1092 / W3-P3)
 
 | site | checker | why it stays `assert` | directive FINAL inserts |
 | --- | --- | --- | --- |
-| `app/app_builder_test.go:491` | require-error | The cause string is one property; lines below then drive `CreateApp().Build()` and pin that startup aborts with a nil app and a live logger — a second phase that cannot be hoisted above it. | `//nolint:testifylint // require would abort before the Build-propagation assertions` |
-| `app/app_builder_test.go:539` | require-error | Paired with `:540` — two clauses of ONE wrapped error ("cache manager", "maxsize cannot be negative"); the final clause is now `require`. | `//nolint:testifylint // second clause of the same wrapped error follows` |
-| `app/app_builder_test.go:579` | require-error | The ADR-067 point is the lines below: the bundle is read off the builder and all three managers are probed observably closed. Aborting on a message change hides the leak check. | `//nolint:testifylint // require would abort before the manager-close assertions` |
-| `app/app_test.go:1197` | require-error | Paired with the line below — the two errors an aggregate wraps. `TestShutdownAggregatesErrors` exists to pin BOTH; the final one is now `require`. | `//nolint:testifylint // second wrapped error asserted on the next line` |
-| `app/bootstrap_test.go:605` | require-error | Guarded by a `require.Error` above, so nil-deref is impossible; this is the first of two clauses of one error, the second of which is now `require`. | `//nolint:testifylint // guarded by require.Error above; second clause follows` |
-| `app/lifecycle_test.go:1081` | require-error | A table subtest whose branch below returns early on the nil arm, so it cannot be hoisted above this assertion; both messages state a conjunction — teardown never fails the shutdown AND closers still run. | `//nolint:testifylint // branch-dependent log assertions follow` |
-| `app/messaging_setup_test.go:110` | require-error | Paired with the line below (sentinel + message clause); the message clause is now `require` and the independent call-count assertion has moved above both. | `//nolint:testifylint // paired error-clause assertion follows` |
-| `app/module_test.go:294` | require-error | Paired with the line below — both errors joined into one shutdown error; the second is now `require`. | `//nolint:testifylint // second joined error asserted on the next line` |
-| `app/factory_resolver_integration_test.go:492` | require-error | The tenant-B isolation check below reads the SAME `sharedKey` through tenant B's client, which is what makes it an isolation check, and is the property this test exists to pin; a require aborts on any non-nil error that is not `ErrNotFound` and the regression goes unreported. | `//nolint:testifylint // the tenant-isolation check below is a separate phase` |
+| `config/config_test.go:1750` | require-error | `err` is REASSIGNED below and re-asserted for the derived-map sub-case; a require here skips that second phase entirely. | `//nolint:testifylint // a second sub-case reassigns and re-asserts err` |
+| `config/converters_test.go:155` | float-compare | `toFloat64`'s table is ParseFloat round-trips (`"123.45"` -> `123.45`), where the Go literal and `ParseFloat` produce identical float64 bits. Exact equality IS the converter's contract; a tolerance would let a lossy conversion pass. | `//nolint:testifylint // exact equality is the converter's contract` |
+| `config/converters_test.go:23` | require-error | `floatToInt64(NaN)` rejection, followed by the `Inf` rejection through a different branch of the converter — a require hides the Inf case whenever NaN regresses. | `//nolint:testifylint // the Inf-rejection case follows through a different branch` |
+| `config/injection_test.go:168` | float-compare | Env-var round-trip of `1024.5`, exactly representable in float64. The test pins that the value arrives intact, not that it arrives close. | `//nolint:testifylint // exact equality is the injection contract` |
+| `config/tenant_store_test.go:231` | require-error | Followed by removing a non-existent tenant and asserting the store did not mutate — a distinct second phase, independent of the lookup error. | `//nolint:testifylint // an independent no-mutation property follows` |
+| `config/tenant_store_test.go:76` | require-error | Followed by an Error assertion on `BrokerURL`, a different resolver path through the same store. | `//nolint:testifylint // a different resolver path is asserted next` |
 
-Harvest note for the FINAL author: P5, P6 and P9 documented their false positives in their PR
-bodies rather than here (this file postdates them) — pull those rows in before converting.
+## app (#1092 / W3-P4) — re-check pending
+
+W3-P4 (#1456) recorded 24 rows before the fleet rule below was settled, and most of them fail it:
+a site stays `assert` only when the following assertion is BOTH independent of the error AND the
+property the test exists to pin, and it converts whenever that assertion dereferences the error
+(`err.Error()`, `errors.Is`, `Contains`/`NotContains` on the message) — a nil error would panic
+there anyway, so `require` turns a panic into a clean failure and loses nothing.
+
+By that rule roughly 18 of P4's 24 rows should be CONVERTED rather than annotated: the seven
+`readiness_test.go` rows and the paired-clause rows in `bootstrap_test.go`, `module_test.go`,
+`app_builder_test.go` and `app_test.go` are correlated halves of one outcome, not independent
+properties. The likely survivors are `prewarm_test.go:199` and `lifecycle_test.go:175` (an
+elapsed-time bound is genuinely independent), with `lifecycle_test.go:358` (a log-emission check
+from a different source) and `slot_test.go:531` (a second return value) as probable keeps.
+#1456 was already merge-ready when the rule landed, so this is FINAL's work, not a reopen.

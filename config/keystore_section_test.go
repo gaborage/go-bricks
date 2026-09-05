@@ -69,7 +69,7 @@ func TestValidateKeyStoreWiredIntoValidate(t *testing.T) {
 		},
 	}
 	err := Validate(cfg)
-	assert.ErrorContains(t, err, "keystore config")
+	require.ErrorContains(t, err, "keystore config")
 	assert.ErrorContains(t, err, "both 'file' and 'value' set")
 }
 
@@ -101,7 +101,7 @@ func TestValidateKeyStoreSecretBothSourcesSet(t *testing.T) {
 		},
 	}
 	err := checkKeyStore(cfg)
-	assert.ErrorContains(t, err, "both 'file' and 'value' set")
+	require.ErrorContains(t, err, "both 'file' and 'value' set")
 	assert.ErrorContains(t, err, "keystore.keys.mac.secret")
 }
 
@@ -115,7 +115,7 @@ func TestValidateKeyStoreMixedEntrySecretPlusPublic(t *testing.T) {
 		},
 	}
 	err := checkKeyStore(cfg)
-	assert.ErrorContains(t, err, "both a symmetric 'secret' and asymmetric")
+	require.ErrorContains(t, err, "both a symmetric 'secret' and asymmetric")
 	assert.ErrorContains(t, err, "keystore.keys.mixed")
 }
 
@@ -164,7 +164,7 @@ func TestValidateKeyStoreSecretMinLengthBelowFloorRejected(t *testing.T) {
 			var cfgErr *ConfigError
 			require.ErrorAs(t, err, &cfgErr)
 			assert.Equal(t, "keystore.secretminlength", cfgErr.Field)
-			assert.ErrorContains(t, err, "must be at least 32")
+			require.ErrorContains(t, err, "must be at least 32")
 			assert.ErrorContains(t, err, "ADR-095")
 		})
 	}
@@ -201,7 +201,7 @@ func TestValidateKeyStoreSecretMinLengthBelowFloorFailsValidate(t *testing.T) {
 
 	err := Validate(cfg)
 
-	assert.ErrorContains(t, err, "keystore config")
+	require.ErrorContains(t, err, "keystore config")
 	assert.ErrorContains(t, err, "keystore.secretminlength must be at least 32")
 }
 
@@ -216,7 +216,7 @@ func TestLoadKeyStoreSecretMinLengthBelowFloorFailsStartup(t *testing.T) {
 	_, err := Load()
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "invalid configuration")
+	require.ErrorContains(t, err, "invalid configuration")
 	assert.ErrorContains(t, err, "keystore.secretminlength must be at least 32")
 }
 
@@ -294,7 +294,7 @@ func TestValidateKeyStorePKCS12MixedEntry(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &KeyStoreConfig{Keys: map[string]KeyPairConfig{"mixed": tt.entry}}
 			err := checkKeyStore(cfg)
-			assert.ErrorContains(t, err, "'pkcs12' bundle alongside")
+			require.ErrorContains(t, err, "'pkcs12' bundle alongside")
 			assert.ErrorContains(t, err, "keystore.keys.mixed")
 		})
 	}
@@ -307,7 +307,7 @@ func TestValidateKeyStorePKCS12BundleBothSourcesSet(t *testing.T) {
 		},
 	}
 	err := checkKeyStore(cfg)
-	assert.ErrorContains(t, err, "both 'file' and 'value' set")
+	require.ErrorContains(t, err, "both 'file' and 'value' set")
 	assert.ErrorContains(t, err, "keystore.keys.vts.pkcs12")
 }
 
@@ -318,7 +318,7 @@ func TestValidateKeyStorePKCS12BundleRequired(t *testing.T) {
 		},
 	}
 	err := checkKeyStore(cfg)
-	assert.ErrorContains(t, err, "key source required")
+	require.ErrorContains(t, err, "key source required")
 	assert.ErrorContains(t, err, "keystore.keys.vts.pkcs12")
 }
 
@@ -329,7 +329,7 @@ func TestValidateKeyStorePKCS12PasswordRequired(t *testing.T) {
 		},
 	}
 	err := checkKeyStore(cfg)
-	assert.ErrorContains(t, err, "password source required")
+	require.ErrorContains(t, err, "password source required")
 	assert.ErrorContains(t, err, "keystore.keys.vts.pkcs12.password")
 }
 
@@ -340,7 +340,7 @@ func TestValidateKeyStorePKCS12PasswordBothSourcesSet(t *testing.T) {
 		},
 	}
 	err := checkKeyStore(cfg)
-	assert.ErrorContains(t, err, "both 'env' and 'file' set")
+	require.ErrorContains(t, err, "both 'env' and 'file' set")
 	assert.ErrorContains(t, err, "keystore.keys.vts.pkcs12.password")
 }
 
@@ -353,7 +353,7 @@ func TestValidateKeyStorePKCS12PasswordEnvMustBeAName(t *testing.T) {
 	}
 	err := checkKeyStore(cfg)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "not an environment variable name")
-	assert.ErrorContains(t, err, "keystore.keys.vts.pkcs12.password.env")
+	require.ErrorContains(t, err, "not an environment variable name")
+	require.ErrorContains(t, err, "keystore.keys.vts.pkcs12.password.env")
 	assert.NotContains(t, err.Error(), literal)
 }

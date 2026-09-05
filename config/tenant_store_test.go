@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -34,11 +35,11 @@ func TestTenantStoreDefaults(t *testing.T) {
 
 	source := NewTenantStore(cfg)
 	dbCfg, err := source.DBConfig(context.Background(), "")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Same(t, &cfg.Database, dbCfg)
 
 	url, err := source.BrokerURL(context.Background(), "")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, cfg.Messaging.Broker.URL, url)
 }
 
@@ -64,11 +65,11 @@ func TestTenantStoreTenantOverrides(t *testing.T) {
 
 	source := NewTenantStore(cfg)
 	dbCfg, err := source.DBConfig(context.Background(), tenantA)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, cfg.Multitenant.Tenants[tenantA].Database, *dbCfg)
 
 	url, err := source.BrokerURL(context.Background(), tenantA)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, tenantAMQPURL, url)
 
 	_, err = source.DBConfig(context.Background(), "unknown")
@@ -94,12 +95,12 @@ func TestTenantStoreSingleTenantWithoutMessaging(t *testing.T) {
 
 	// Database should work
 	dbCfg, err := source.DBConfig(context.Background(), "")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Same(t, &cfg.Database, dbCfg)
 
 	// Messaging should return descriptive error
 	url, err := source.BrokerURL(context.Background(), "")
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Empty(t, url)
 	assert.Contains(t, err.Error(), "messaging")
 }
@@ -128,12 +129,12 @@ func TestTenantStoreMultiTenantWithoutMessaging(t *testing.T) {
 
 	// Database should work
 	dbCfg, err := source.DBConfig(context.Background(), tenantA)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, cfg.Multitenant.Tenants[tenantA].Database, *dbCfg)
 
 	// Messaging should return descriptive error
 	url, err := source.BrokerURL(context.Background(), tenantA)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Empty(t, url)
 	assert.Contains(t, err.Error(), "messaging")
 }
@@ -151,7 +152,7 @@ func TestTenantStoreAddTenant(t *testing.T) {
 	store := NewTenantStore(cfg)
 
 	// Initially no tenants
-	assert.Equal(t, 0, len(store.Tenants()))
+	assert.Empty(t, store.Tenants())
 	assert.False(t, store.HasTenant(newTenant))
 
 	// Add a new tenant
@@ -169,15 +170,15 @@ func TestTenantStoreAddTenant(t *testing.T) {
 
 	// Verify tenant was added
 	assert.True(t, store.HasTenant(newTenant))
-	assert.Equal(t, 1, len(store.Tenants()))
+	assert.Len(t, store.Tenants(), 1)
 
 	// Verify we can retrieve configuration for new tenant
 	dbCfg, err := store.DBConfig(context.Background(), newTenant)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, "new-tenant.db", dbCfg.Host)
 
 	url, err := store.BrokerURL(context.Background(), newTenant)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, "amqp://new-tenant", url)
 }
 
@@ -213,7 +214,7 @@ func TestTenantStoreRemoveTenant(t *testing.T) {
 	store := NewTenantStore(cfg)
 
 	// Initially 2 tenants
-	assert.Equal(t, 2, len(store.Tenants()))
+	assert.Len(t, store.Tenants(), 2)
 	assert.True(t, store.HasTenant(tenantA))
 	assert.True(t, store.HasTenant(tenantB))
 
@@ -223,7 +224,7 @@ func TestTenantStoreRemoveTenant(t *testing.T) {
 	// Verify tenant-a is gone
 	assert.False(t, store.HasTenant(tenantA))
 	assert.True(t, store.HasTenant(tenantB))
-	assert.Equal(t, 1, len(store.Tenants()))
+	assert.Len(t, store.Tenants(), 1)
 
 	// Verify we get error when trying to access removed tenant
 	_, err := store.DBConfig(context.Background(), tenantA)
@@ -231,7 +232,7 @@ func TestTenantStoreRemoveTenant(t *testing.T) {
 
 	// Remove non-existent tenant (should not panic)
 	store.RemoveTenant("non-existent")
-	assert.Equal(t, 1, len(store.Tenants()))
+	assert.Len(t, store.Tenants(), 1)
 }
 
 func TestTenantStoreTenants(t *testing.T) {
@@ -267,7 +268,7 @@ func TestTenantStoreTenants(t *testing.T) {
 
 	// Get all tenants
 	tenants := store.Tenants()
-	assert.Equal(t, 2, len(tenants))
+	assert.Len(t, tenants, 2)
 	assert.Contains(t, tenants, tenantA)
 	assert.Contains(t, tenants, tenantB)
 
@@ -348,28 +349,28 @@ func TestTenantStoreNamedDatabases(t *testing.T) {
 
 	t.Run("returns default database for empty key", func(t *testing.T) {
 		dbCfg, err := store.DBConfig(context.Background(), "")
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, defaultDB, dbCfg.Host)
 		assert.Equal(t, PostgreSQL, dbCfg.Type)
 	})
 
 	t.Run("returns named database for named prefix", func(t *testing.T) {
 		dbCfg, err := store.DBConfig(context.Background(), NamedDatabasePrefix+"legacy")
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, legacyDB, dbCfg.Host)
 		assert.Equal(t, Oracle, dbCfg.Type)
 	})
 
 	t.Run("returns different named database", func(t *testing.T) {
 		dbCfg, err := store.DBConfig(context.Background(), NamedDatabasePrefix+"analytics")
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, analyticsDB, dbCfg.Host)
 		assert.Equal(t, PostgreSQL, dbCfg.Type)
 	})
 
 	t.Run("returns error for unknown named database", func(t *testing.T) {
 		_, err := store.DBConfig(context.Background(), NamedDatabasePrefix+"unknown")
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unknown")
 		assert.Contains(t, err.Error(), "not found")
 	})
@@ -435,14 +436,14 @@ func TestTenantStoreNamedDatabasesWithMultitenant(t *testing.T) {
 	t.Run("named database works in multi-tenant mode", func(t *testing.T) {
 		// Named database (shared across tenants)
 		dbCfg, err := store.DBConfig(context.Background(), NamedDatabasePrefix+"shared-analytics")
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, "shared-analytics.db", dbCfg.Host)
 	})
 
 	t.Run("tenant database still works", func(t *testing.T) {
 		// Tenant-specific database
 		dbCfg, err := store.DBConfig(context.Background(), tenantA)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, tenantADB, dbCfg.Host)
 	})
 }
@@ -490,7 +491,7 @@ func TestTenantStoreDBConfigDefaultKeyResolvesWhenConfigured(t *testing.T) {
 
 	got, err := store.DBConfig(context.Background(), "")
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, &cfg.Database, got)
 }
 

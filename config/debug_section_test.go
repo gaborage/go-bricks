@@ -19,7 +19,7 @@ func TestValidateDebugTrustedProxiesWiredIntoValidate(t *testing.T) {
 	cfg := createValidFullConfig()
 	cfg.Debug.TrustedProxies = []string{"bad-cidr"}
 	err := Validate(cfg)
-	assert.ErrorContains(t, err, "debug config:")
+	require.ErrorContains(t, err, "debug config:")
 	assert.ErrorContains(t, err, "debug.trustedproxies")
 }
 

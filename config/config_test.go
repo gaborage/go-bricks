@@ -56,12 +56,12 @@ func TestLoadWithDefaults(t *testing.T) {
 
 	// Database should be disabled by default (no defaults provided)
 	assert.False(t, IsDatabaseConfigured(&cfg.Database))
-	assert.Equal(t, "", cfg.Database.Type)
-	assert.Equal(t, "", cfg.Database.Host)
+	assert.Empty(t, cfg.Database.Type)
+	assert.Empty(t, cfg.Database.Host)
 	assert.Equal(t, 0, cfg.Database.Port)
-	assert.Equal(t, "", cfg.Database.Database)
-	assert.Equal(t, "", cfg.Database.Username)
-	assert.Equal(t, "", cfg.Database.TLS.Mode)
+	assert.Empty(t, cfg.Database.Database)
+	assert.Empty(t, cfg.Database.Username)
+	assert.Empty(t, cfg.Database.TLS.Mode)
 	assert.Equal(t, int32(0), cfg.Database.Pool.Max.Connections)
 	assert.Equal(t, int32(0), cfg.Database.Pool.Idle.Connections)
 	assert.Equal(t, time.Duration(0), cfg.Database.Pool.Lifetime.Max)
@@ -70,7 +70,7 @@ func TestLoadWithDefaults(t *testing.T) {
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.False(t, cfg.Log.Pretty)
 	assert.Equal(t, "auto", cfg.Log.Output.Format)
-	assert.Equal(t, "", cfg.Log.Output.File)
+	assert.Empty(t, cfg.Log.Output.File)
 }
 
 func TestLoadWithEnvironmentVariables(t *testing.T) {
@@ -210,7 +210,7 @@ func TestLoadRejectsEmptyNumericEnv(t *testing.T) {
 			_, err := Load()
 
 			require.Error(t, err)
-			assert.ErrorContains(t, err, tt.wantKey)
+			require.ErrorContains(t, err, tt.wantKey)
 			assert.ErrorContains(t, err, "delivered empty")
 		})
 	}
@@ -245,7 +245,7 @@ func TestLoadRejectsEmptyBoolEnv(t *testing.T) {
 			_, err := Load()
 
 			require.Error(t, err)
-			assert.ErrorContains(t, err, tt.wantKey)
+			require.ErrorContains(t, err, tt.wantKey)
 			assert.ErrorContains(t, err, "boolean value delivered empty")
 		})
 	}
@@ -318,7 +318,7 @@ func TestLoadEmptyBoolYAMLStringRejected(t *testing.T) {
 	_, err := loadDeliveredEmptyFixture(t, "cache:\n  critical: \"\"\n", nil)
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "critical")
+	require.ErrorContains(t, err, "critical")
 	assert.ErrorContains(t, err, "boolean value delivered empty")
 }
 
@@ -344,7 +344,7 @@ func TestLoadEmptyDurationEnvKeepsItsOwnError(t *testing.T) {
 	_, err := Load()
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "invalid duration")
+	require.ErrorContains(t, err, "invalid duration")
 	assert.NotContains(t, err.Error(), "delivered empty",
 		"the duration parser owns this target; guarding it here would only change the message")
 }
@@ -355,7 +355,7 @@ func TestLoadEmptyNumericYAMLStringRejected(t *testing.T) {
 	_, err := loadDeliveredEmptyFixture(t, "keystore:\n  secretminlength: \"\"\n", nil)
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "secretminlength")
+	require.ErrorContains(t, err, "secretminlength")
 	assert.ErrorContains(t, err, "delivered empty")
 }
 
@@ -529,7 +529,7 @@ func TestLoadValidationFailure(t *testing.T) {
 	os.Setenv("DATABASE_HOST", "") // Required field
 
 	cfg, err := Load()
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, cfg)
 	assert.Contains(t, err.Error(), "invalid configuration")
 }
@@ -559,16 +559,16 @@ func TestLoadDefaultsInternalFunction(t *testing.T) {
 	assert.Equal(t, int64(10*1024*1024), k.Int64("server.bodylimit"))
 
 	// Database defaults should NOT be provided
-	assert.Equal(t, "", k.String("database.type"))
-	assert.Equal(t, "", k.String("database.host"))
+	assert.Empty(t, k.String("database.type"))
+	assert.Empty(t, k.String("database.host"))
 	assert.Equal(t, 0, k.Int("database.port"))
-	assert.Equal(t, "", k.String("database.tls.mode"))
+	assert.Empty(t, k.String("database.tls.mode"))
 	assert.Equal(t, 0, k.Int("database.pool.max.connections"))
 
 	assert.Equal(t, "info", k.String("log.level"))
 	assert.False(t, k.Bool("log.pretty"))
 	assert.Equal(t, "auto", k.String("log.output.format"))
-	assert.Equal(t, "", k.String("log.output.file"))
+	assert.Empty(t, k.String("log.output.file"))
 
 	// KeyStore symmetric-secret floor defaults to 32 bytes.
 	assert.Equal(t, DefaultKeyStoreSecretMinLength, k.Int("keystore.secretminlength"))
@@ -664,7 +664,7 @@ func TestLoadEdgeCases(t *testing.T) {
 		os.Setenv("DATABASE_HOST", "")
 
 		cfg, err := Load()
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Nil(t, cfg)
 	})
 
@@ -675,7 +675,7 @@ func TestLoadEdgeCases(t *testing.T) {
 		os.Setenv(testDatabaseMaxConns, "0")
 
 		cfg, err := Load()
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Nil(t, cfg)
 	})
 
@@ -685,7 +685,7 @@ func TestLoadEdgeCases(t *testing.T) {
 		os.Setenv("APP_RATE_LIMIT", "-1")
 
 		cfg, err := Load()
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Nil(t, cfg)
 	})
 }
@@ -746,13 +746,12 @@ func TestLoadCustomConfiguration(t *testing.T) {
 
 		// Test required field that exists
 		apiKey, err := cfg.RequiredString("custom.api.key")
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, "secret-key-123", apiKey)
 
 		// Test required field that doesn't exist
 		_, err = cfg.RequiredString("custom.missing.required")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "missing")
+		require.ErrorContains(t, err, "missing")
 	})
 
 	t.Run("custom_config_unmarshal_struct", func(t *testing.T) {
@@ -776,7 +775,7 @@ func TestLoadCustomConfiguration(t *testing.T) {
 
 		var svcConfig ServiceConfig
 		err = cfg.Unmarshal("custom.service", &svcConfig)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, appName, svcConfig.Name)
 		assert.Equal(t, 8090, svcConfig.Port)
 		assert.True(t, svcConfig.Enabled)
@@ -1103,8 +1102,8 @@ func TestLoadDatabaseDisabled(t *testing.T) {
 
 	// Verify database is configured as disabled
 	assert.False(t, IsDatabaseConfigured(&cfg.Database))
-	assert.Equal(t, "", cfg.Database.Host)
-	assert.Equal(t, "", cfg.Database.Type)
+	assert.Empty(t, cfg.Database.Host)
+	assert.Empty(t, cfg.Database.Type)
 
 	// Verify other config still works
 	assert.Equal(t, appName, cfg.App.Name)
@@ -1120,7 +1119,7 @@ func TestLoadDatabasePartialConfig(t *testing.T) {
 	// Missing required fields like DATABASE_TYPE, DATABASE_DATABASE, etc.
 
 	cfg, err := Load()
-	assert.Error(t, err) // Should fail validation
+	require.Error(t, err) // Should fail validation
 	assert.Nil(t, cfg)
 	// Error should mention missing required database config
 	assert.Contains(t, err.Error(), "database.type")
@@ -1160,7 +1159,7 @@ func TestLoadDatabaseCompleteConfig(t *testing.T) {
 	assert.Equal(t, 60*time.Second, cfg.Database.Pool.KeepAlive.Interval) // Default: probe interval
 
 	// Verify database fields that should be zero/empty since no defaults
-	assert.Equal(t, "", cfg.Database.TLS.Mode) // No default provided
+	assert.Empty(t, cfg.Database.TLS.Mode) // No default provided
 }
 
 // unitlessDurationBaseConfig is a full, otherwise-valid config.yaml whose only variable
@@ -1227,7 +1226,7 @@ func TestBuildDecoderConfigRejectsUnitlessNumericDuration(t *testing.T) {
 			if tc.wantErr {
 				require.Error(t, err)
 				for _, s := range tc.errSubstr {
-					assert.ErrorContains(t, err, s)
+					require.ErrorContains(t, err, s)
 				}
 				return
 			}
@@ -1251,7 +1250,7 @@ func TestLoadRejectsUnitlessNumericDurationEndToEnd(t *testing.T) {
 
 	_, err := Load()
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "unit-less numeric duration 300")
+	require.ErrorContains(t, err, "unit-less numeric duration 300")
 	assert.ErrorContains(t, err, "messaging.reconnect.delay")
 }
 
@@ -1664,7 +1663,7 @@ func TestDerivedDefaultsRejectAZeroValuedKey(t *testing.T) {
 	_, err := derivedDefaults()
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "server.responsetime.enabled")
+	require.ErrorContains(t, err, "server.responsetime.enabled")
 	assert.ErrorContains(t, err, "zero value")
 }
 
@@ -1691,7 +1690,7 @@ func TestDerivedDefaultsRejectAFailClosedKeySpace(t *testing.T) {
 			_, err := derivedDefaults()
 
 			require.Error(t, err)
-			assert.ErrorContains(t, err, tt.key)
+			require.ErrorContains(t, err, tt.key)
 			assert.ErrorContains(t, err, "must stay absent")
 		})
 	}

@@ -105,8 +105,7 @@ func TestConfigInjectionDefaultValues(t *testing.T) {
 	err = cfg.InjectInto(&serviceConfig)
 
 	// Should fail due to required field
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "api.key")
+	require.ErrorContains(t, err, "api.key")
 
 	// Test with only required field set
 	require.NoError(t, os.Setenv("API_KEY", testAPIKey))
@@ -213,8 +212,7 @@ func TestConfigInjectionRequiredFieldMissing(t *testing.T) {
 	var serviceConfig BasicServiceConfig
 	err = cfg.InjectInto(&serviceConfig)
 
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "api.key")
+	require.ErrorContains(t, err, "api.key")
 }
 
 func TestConfigInjectionRequiredFieldEmpty(t *testing.T) {
@@ -227,8 +225,7 @@ func TestConfigInjectionRequiredFieldEmpty(t *testing.T) {
 	var serviceConfig BasicServiceConfig
 	err = cfg.InjectInto(&serviceConfig)
 
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "api.key")
+	require.ErrorContains(t, err, "api.key")
 }
 
 func TestConfigInjectionInvalidTypes(t *testing.T) {
@@ -246,8 +243,7 @@ func TestConfigInjectionInvalidTypes(t *testing.T) {
 	var serviceConfig BasicServiceConfig
 	err = cfg.InjectInto(&serviceConfig)
 
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "is not a valid duration")
+	require.ErrorContains(t, err, "is not a valid duration")
 }
 
 func TestConfigInjectionUnsupportedFieldType(t *testing.T) {
@@ -261,8 +257,7 @@ func TestConfigInjectionUnsupportedFieldType(t *testing.T) {
 	var invalidConfig InvalidConfig
 	err = cfg.InjectInto(&invalidConfig)
 
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported type")
+	require.ErrorContains(t, err, "unsupported type")
 }
 
 func TestConfigInjectionNotAStruct(t *testing.T) {
@@ -272,8 +267,7 @@ func TestConfigInjectionNotAStruct(t *testing.T) {
 	var notAStruct string
 	err = cfg.InjectInto(&notAStruct)
 
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "must be pointer to struct")
+	require.ErrorContains(t, err, "must be pointer to struct")
 }
 
 func TestConfigInjectionNotAPointer(t *testing.T) {
@@ -283,8 +277,7 @@ func TestConfigInjectionNotAPointer(t *testing.T) {
 	var serviceConfig BasicServiceConfig
 	err = cfg.InjectInto(serviceConfig) // Not a pointer
 
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "must be pointer to struct")
+	require.ErrorContains(t, err, "must be pointer to struct")
 }
 
 func TestConfigInjectionNoConfigTags(t *testing.T) {
@@ -296,7 +289,7 @@ func TestConfigInjectionNoConfigTags(t *testing.T) {
 
 	// Should succeed but do nothing
 	require.NoError(t, err)
-	assert.Zero(t, noTagsConfig.Field1)
+	assert.Empty(t, noTagsConfig.Field1)
 	assert.Zero(t, noTagsConfig.Field2)
 }
 
@@ -305,8 +298,7 @@ func TestConfigInjectionNilConfig(t *testing.T) {
 	var serviceConfig BasicServiceConfig
 
 	err := cfg.InjectInto(&serviceConfig)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not initialized")
+	require.ErrorContains(t, err, "not initialized")
 }
 
 func TestConfigInjectionIntegerOverflow(t *testing.T) {
@@ -323,8 +315,7 @@ func TestConfigInjectionIntegerOverflow(t *testing.T) {
 	var serviceConfig BasicServiceConfig
 	err = cfg.InjectInto(&serviceConfig)
 
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "is not a valid integer")
+	require.ErrorContains(t, err, "is not a valid integer")
 }
 
 func TestConfigInjectionBooleanConversion(t *testing.T) {

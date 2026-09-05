@@ -2,9 +2,11 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/internal/testutil"
 )
@@ -108,7 +110,7 @@ func TestConfigErrorUnwrap(t *testing.T) {
 		}
 
 		unwrapped := err.Unwrap()
-		assert.Nil(t, unwrapped, "Unwrap should always return nil for leaf errors")
+		assert.NoError(t, unwrapped, "Unwrap should always return nil for leaf errors")
 	})
 
 	t.Run("Unwrap compatible with errors.Unwrap", func(t *testing.T) {
@@ -118,7 +120,7 @@ func TestConfigErrorUnwrap(t *testing.T) {
 		}
 
 		unwrapped := errors.Unwrap(err)
-		assert.Nil(t, unwrapped, "errors.Unwrap should return nil for ConfigError")
+		assert.NoError(t, unwrapped, "errors.Unwrap should return nil for ConfigError")
 	})
 }
 
@@ -387,8 +389,7 @@ func TestConfigErrorAsError(t *testing.T) {
 			Message:  "required",
 		}
 
-		assert.NotNil(t, err)
-		assert.Contains(t, err.Error(), testField)
+		require.ErrorContains(t, err, testField)
 	})
 
 	t.Run("ConfigError can be wrapped with errors.Is", func(t *testing.T) {
@@ -397,8 +398,9 @@ func TestConfigErrorAsError(t *testing.T) {
 			Field:    testField,
 		}
 
-		// ConfigError is a leaf error, so errors.Is with itself should work
-		assert.True(t, errors.Is(configErr, configErr))
+		// ConfigError is a leaf error, so a wrapping chain must still find it.
+		wrapped := fmt.Errorf("load config: %w", configErr)
+		assert.ErrorIs(t, wrapped, configErr)
 	})
 }
 

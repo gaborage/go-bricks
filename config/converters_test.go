@@ -56,7 +56,7 @@ func TestUnsignedIntConversions(t *testing.T) {
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tt.expected, result)
 			}
 		})
@@ -85,7 +85,7 @@ func TestSignedIntConversions(t *testing.T) {
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tt.expected, result)
 			}
 		})
@@ -96,7 +96,7 @@ func TestSignedIntConversions(t *testing.T) {
 func TestInt64Conversions(t *testing.T) {
 	t.Run("string with spaces", func(t *testing.T) {
 		result, err := toInt64("  12345  ")
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, int64(12345), result)
 	})
 
@@ -151,7 +151,7 @@ func TestFloat64Conversions(t *testing.T) {
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tt.expected, result)
 			}
 		})
@@ -209,7 +209,7 @@ func TestBoolConversions(t *testing.T) {
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tt.expected, result)
 			}
 		})
@@ -252,7 +252,7 @@ func TestFloatToInt64Conversions(t *testing.T) {
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tt.expected, result)
 			}
 		})
@@ -281,7 +281,7 @@ func TestIntEdgeCases(t *testing.T) {
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tt.expected, result)
 			}
 		})
@@ -307,7 +307,7 @@ func TestInt64EdgeCases(t *testing.T) {
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tt.expected, result)
 			}
 		})
@@ -332,7 +332,7 @@ func TestBoolEdgeCases(t *testing.T) {
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tt.expected, result)
 			}
 		})
@@ -371,7 +371,7 @@ func TestRequiredAccessorErrorPaths(t *testing.T) {
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				_, err := cfg.RequiredString(tt.key)
-				assert.Error(t, err)
+				require.Error(t, err)
 				if tt.name == emptyString {
 					assert.Contains(t, err.Error(), "empty")
 				} else {
@@ -446,7 +446,7 @@ func TestGetStringEdgeCases(t *testing.T) {
 
 	t.Run("missing key with no default", func(t *testing.T) {
 		result := cfg.String("missing.key")
-		assert.Equal(t, "", result)
+		assert.Empty(t, result)
 	})
 }
 
@@ -465,8 +465,7 @@ func TestAdditionalEdgeCases(t *testing.T) {
 		}()
 
 		_, err := Load()
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid configuration")
+		require.ErrorContains(t, err, "invalid configuration")
 	})
 
 	// Test platform-specific int overflow if needed

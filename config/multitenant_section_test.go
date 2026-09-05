@@ -463,8 +463,7 @@ func TestValidateMultitenantFailures(t *testing.T) {
 				sourceConfig = &SourceConfig{Type: SourceTypeStatic}
 			}
 			err := normalizeTenantsAndCheckMultitenant(t, tt.mtConfig, tt.dbConfig, tt.msgConfig, sourceConfig)
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), tt.expectedError)
+			require.ErrorContains(t, err, tt.expectedError)
 		})
 	}
 }
@@ -515,15 +514,14 @@ func TestValidateMultitenantLimits(t *testing.T) {
 	t.Run("supports upper bound", func(t *testing.T) {
 		cfg := LimitsConfig{Tenants: 1000}
 		err := checkMultitenantLimits(&cfg)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, 1000, cfg.Tenants)
 	})
 
 	t.Run("rejects exceeding upper bound", func(t *testing.T) {
 		cfg := LimitsConfig{Tenants: 1001}
 		err := checkMultitenantLimits(&cfg)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "multitenant.limits.tenants cannot exceed 1000")
+		require.ErrorContains(t, err, "multitenant.limits.tenants cannot exceed 1000")
 	})
 }
 
@@ -555,8 +553,7 @@ func TestValidateSourceConfig(t *testing.T) {
 			cfg := &SourceConfig{Type: tt.sourceType}
 			err := validateSourceConfig(cfg)
 			if tt.expectError {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "source.type")
+				require.ErrorContains(t, err, "source.type")
 			} else {
 				assert.NoError(t, err)
 			}
@@ -627,8 +624,7 @@ func TestValidateMultitenantDynamicSource(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := checkMultitenant(tt.mtConfig, &DatabaseConfig{}, &MessagingConfig{}, tt.sourceConfig)
 			if tt.expectError {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errorText)
+				require.ErrorContains(t, err, tt.errorText)
 			} else {
 				assert.NoError(t, err)
 			}
