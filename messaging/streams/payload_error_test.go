@@ -28,9 +28,9 @@ func TestPayloadErrorIsMatchesStageSentinel(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := &PayloadError{Consumer: testConsumerName, Stage: tc.stage}
 
-			require.ErrorIs(t, err, tc.match)
-			require.NotErrorIs(t, err, tc.notMatch)
-			assert.NotErrorIs(t, err, errHandlerFailed)
+			assert.ErrorIs(t, err, tc.match)
+			assert.NotErrorIs(t, err, tc.notMatch)
+			require.NotErrorIs(t, err, errHandlerFailed)
 		})
 	}
 }
@@ -41,8 +41,8 @@ func TestPayloadErrorIsRejectsUnknownStage(t *testing.T) {
 	for _, stage := range []PayloadStage{"", "decoding", "DECODE"} {
 		err := &PayloadError{Consumer: testConsumerName, Stage: stage}
 
-		require.NotErrorIs(t, err, ErrPayloadUndecodable, "stage %q", stage)
-		assert.NotErrorIs(t, err, ErrPayloadInvalid, "stage %q", stage)
+		assert.NotErrorIs(t, err, ErrPayloadUndecodable, "stage %q", stage)
+		require.NotErrorIs(t, err, ErrPayloadInvalid, "stage %q", stage)
 	}
 }
 

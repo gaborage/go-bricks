@@ -182,8 +182,8 @@ func TestRunReportsSucceededForAHandlerThatReturnsNil(t *testing.T) {
 		return nil
 	})
 
-	require.NoError(t, res.Err)
 	require.NotNil(t, res)
+	require.NoError(t, res.Err)
 	assert.Equal(t, Succeeded, res.Outcome)
 	assert.Empty(t, res.PanicType)
 	assert.Nil(t, res.Stack)

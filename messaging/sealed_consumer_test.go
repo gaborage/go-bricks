@@ -279,7 +279,7 @@ func TestSealedHandlerRefusalIsPayloadStageOpenAndNacksWithoutRequeue(t *testing
 	assert.Equal(t, PayloadStageOpen, pe.Stage)
 	assert.Equal(t, "payment.authorized", pe.EventType)
 	assert.ErrorIs(t, err, ErrPayloadOpenRefused)
-	require.NotErrorIs(t, err, ErrPayloadUndecodable)
+	assert.NotErrorIs(t, err, ErrPayloadUndecodable)
 	var got *sealruntime.OpenRefusedError
 	require.ErrorAs(t, err, &got)
 	assert.Same(t, refused, got)

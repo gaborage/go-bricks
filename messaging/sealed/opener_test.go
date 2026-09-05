@@ -333,8 +333,8 @@ func TestOpenerRefusalCodeFallsBackToTheJoseCode(t *testing.T) {
 	assert.False(t, refused.Recoverable)
 	require.ErrorIs(t, err, josesealed.ErrNotSealed)
 	var je *jose.Error
-	require.ErrorAs(t, err, &je)
-	assert.NotErrorIs(t, err, josesealed.ErrKidUnknownGeneration)
+	assert.ErrorAs(t, err, &je)
+	require.NotErrorIs(t, err, josesealed.ErrKidUnknownGeneration)
 }
 
 // TestNewOpenerTagsEveryProvisionedGenerationAsSeal pins the consumer half of the

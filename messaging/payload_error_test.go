@@ -78,9 +78,9 @@ func TestPayloadErrorIsMatchesStageSentinel(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := &PayloadError{EventType: orderEventType, Stage: tc.stage}
 
-			require.ErrorIs(t, err, tc.match)
-			require.NotErrorIs(t, err, tc.notMatch)
-			assert.NotErrorIs(t, err, ErrNotConnected)
+			assert.ErrorIs(t, err, tc.match)
+			assert.NotErrorIs(t, err, tc.notMatch)
+			require.NotErrorIs(t, err, ErrNotConnected)
 		})
 	}
 }
@@ -91,8 +91,8 @@ func TestPayloadErrorIsRejectsUnknownStage(t *testing.T) {
 	for _, stage := range []PayloadStage{"", "decoding", "DECODE"} {
 		err := &PayloadError{EventType: orderEventType, Stage: stage}
 
-		require.NotErrorIs(t, err, ErrPayloadUndecodable, "stage %q", stage)
-		assert.NotErrorIs(t, err, ErrPayloadInvalid, "stage %q", stage)
+		assert.NotErrorIs(t, err, ErrPayloadUndecodable, "stage %q", stage)
+		require.NotErrorIs(t, err, ErrPayloadInvalid, "stage %q", stage)
 	}
 }
 
@@ -431,7 +431,7 @@ func TestPayloadErrorOpenStage(t *testing.T) {
 	assert.Empty(t, err.Fields())
 	assert.ErrorIs(t, err, ErrPayloadOpenRefused)
 	assert.NotErrorIs(t, err, ErrPayloadUndecodable)
-	require.NotErrorIs(t, err, ErrPayloadInvalid)
+	assert.NotErrorIs(t, err, ErrPayloadInvalid)
 	var refused *sealruntime.OpenRefusedError
 	require.ErrorAs(t, err, &refused)
 	assert.Same(t, cause, refused)

@@ -116,7 +116,7 @@ func TestNewTypedHandlerReturnsFnResult(t *testing.T) {
 
 	err := h.Handle(t.Context(), &amqp.Delivery{Body: validBody(t)})
 
-	require.Same(t, errBusiness, err, "fn's error must pass through unwrapped")
+	assert.Same(t, errBusiness, err, "fn's error must pass through unwrapped")
 	assert.ErrorIs(t, err, errBusiness)
 	assert.NotErrorIs(t, err, ErrPayloadUndecodable)
 	assert.NotErrorIs(t, err, ErrPayloadInvalid)

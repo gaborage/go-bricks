@@ -391,6 +391,7 @@ func TestPublishReturnsSealFailureAndPublishesNothing(t *testing.T) {
 	require.NoError(t, decls.Validate())
 	client := &capturingClient{}
 	err := h.Publish(context.Background(), client, sealedEvent{ID: "o1"})
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "seal payment.authorized event")
 	assert.Empty(t, client.data)
 	require.ErrorIs(t, err, sealErr)
