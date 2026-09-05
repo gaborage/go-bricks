@@ -145,6 +145,10 @@ func TestIsValidQuotedSegment(t *testing.T) {
 	}
 }
 
+// TestParseQualifiedIdentifier is the behavior contract for the walker behind
+// SplitIdentifierSegments: which dots separate segments, which quotes escape a
+// partner rather than closing a run, and which inputs are rejected outright. A
+// rejected input yields nil segments, so the table leaves expected empty there.
 func TestParseQualifiedIdentifier(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -173,6 +177,26 @@ func TestParseQualifiedIdentifier(t *testing.T) {
 		// quote from reading the one before it.
 		{"quoted_empty_segment", `"".x`, []string{`""`, "x"}, true},
 		{"segment_ends_with_doubled_quote", `"a""".b`, []string{`"a"""`, "b"}, true},
+		{"doubled_quote_at_segment_start", `"""a".b`, []string{`"""a"`, "b"}, true},
+		{"doubled_quote_in_segment_middle", `"a""b".c`, []string{`"a""b"`, "c"}, true},
+		{"segment_only_doubled_quotes", `""""`, []string{`""""`}, true},
+		{"only_doubled_quotes_non_leading_segment", `x.""""`, []string{"x", `""""`}, true},
+		{"empty_quoted_last_segment", `x.""`, []string{"x", `""`}, true},
+
+		// A dot inside quotes is data, not a separator, and an escaped quote does
+		// not close the segment that carries it -- so the dot after `""` is still
+		// inside the quoted run.
+		{"dot_inside_quotes_is_literal", `"a.b".c`, []string{`"a.b"`, "c"}, true},
+		{"escaped_quote_then_dot_inside_quotes", `"a"".b"`, []string{`"a"".b"`}, true},
+
+		// Unbalanced quotes are rejected wherever the run opens. The contrast with
+		// segment_ends_with_doubled_quote is the point: there a third quote closes
+		// the segment, here the run stays open to the end of the input.
+		{"escaped_quote_then_dot_unbalanced", `"a"".b`, nil, false},
+		{"unbalanced_open_at_start", `"a.b`, nil, false},
+		{"unbalanced_open_in_middle_segment", `a."b.c`, nil, false},
+		{"unbalanced_open_at_end", `a.b"`, nil, false},
+		{"lone_quote_only", `"`, nil, false},
 
 		// Edge cases
 		{"single_dot", ".", nil, false},

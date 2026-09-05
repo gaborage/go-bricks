@@ -132,29 +132,28 @@ func SplitIdentifierSegments(identifier string) []string {
 // parseQualifiedIdentifier splits a qualified identifier into segments and validates them
 // Handles quoted segments and ensures balanced quotes
 func parseQualifiedIdentifier(name string) ([]string, bool) {
-	parser := &identifierParser{
-		input: name,
-	}
-	return parser.parse()
+	parser := &identifierParser{}
+	return parser.parse(name)
 }
 
 // identifierParser encapsulates the state and logic for parsing qualified identifiers
 type identifierParser struct {
-	input    string
 	inQuotes bool
 	segments []string
 	current  strings.Builder
 }
 
-// parse processes the input string and returns the parsed segments
-func (p *identifierParser) parse() ([]string, bool) {
-	for i := 0; i < len(p.input); i++ {
-		c := p.input[i]
+// parse processes the input string and returns the parsed segments. It walks a
+// shrinking slice rather than an index: the escaped-quote partner is consumed by
+// handing back a shorter rest, so no arithmetic on the loop variable can move the
+// cursor backwards and spin.
+func (p *identifierParser) parse(input string) ([]string, bool) {
+	for rest := input; rest != ""; {
+		c := rest[0]
+		rest = rest[1:]
 		switch c {
 		case '"':
-			if p.handleQuote(i) {
-				i++ // skip escaped quote partner
-			}
+			rest = p.handleQuote(rest)
 		case '.':
 			if !p.handleDot() {
 				return nil, false
@@ -166,17 +165,18 @@ func (p *identifierParser) parse() ([]string, bool) {
 	return p.finalize()
 }
 
-// handleQuote processes quote characters and escaped quotes
-func (p *identifierParser) handleQuote(pos int) bool {
+// handleQuote processes quote characters and escaped quotes. rest is the input
+// AFTER the quote just read; the returned rest has the escaped quote's partner
+// consumed when there was one.
+func (p *identifierParser) handleQuote(rest string) string {
 	// Handle escaped quotes: "" inside quoted string
-	if p.inQuotes && pos+1 < len(p.input) && p.input[pos+1] == '"' {
-		p.current.WriteByte('"')
-		p.current.WriteByte('"')
-		return true // indicate to skip next character
+	if p.inQuotes && rest != "" && rest[0] == '"' {
+		p.current.WriteString(`""`)
+		return rest[1:]
 	}
 	p.inQuotes = !p.inQuotes
 	p.current.WriteByte('"')
-	return false
+	return rest
 }
 
 // handleDot processes dot separators (only outside quotes)
