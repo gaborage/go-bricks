@@ -125,11 +125,14 @@ exception event (the same rule one layer down), and
 `AssertNoExceptionEvent` READ what a sink wrote — they are the assertion every
 converted site shares, so the property is pinned in one place too. That half is
 now enforced rather than remembered: `forbidigo` in `.golangci.yml` fails
-`make check` on both spellings. The only exemptions are `_test.go` and inline
-`//nolint`s on the individual lines of the helper and of the reader-side
-assertions — inline, because a standalone directive above a call expands to the
-whole statement and would silently cover a message attribute added beside the
-type one, and per-line, so a second function in either file has to earn its own.
+`make check` on both spellings, in tests as well as shipped code. There is no
+file-level exemption: the only escapes are inline `//nolint`s on the individual
+lines of the helper and of the reader-side assertions. Inline, because a
+standalone directive above a call expands to the whole statement and would
+silently cover a message attribute added beside the type one; per-line, so a
+second function in either file has to earn its own; and in tests too, because a
+test that wants a raw exception event should say so in a directive a reviewer
+sees rather than inherit a blanket pass.
 The `RecordError` pattern resolves through the `trace.Span` INTERFACE, so a sink
 holding a concrete span type would expand to a different name and slip past it;
 no such site exists today.

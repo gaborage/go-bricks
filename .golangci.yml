@@ -181,7 +181,6 @@ linters:
       - linters:
           - dupl
           - errcheck
-          - forbidigo
           - forcetypeassert
           - goconst
           - gocyclo
