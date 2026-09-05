@@ -745,7 +745,7 @@ func TestDbManagerGetRejectsNilConfigFromProvider(t *testing.T) {
 	assert.Nil(t, conn)
 	assert.Nil(t, release)
 	assert.Equal(t, 0, manager.Size())
-	require.ErrorIs(t, err, ErrNoDatabaseConfig)
+	assert.ErrorIs(t, err, ErrNoDatabaseConfig)
 	require.ErrorContains(t, err, tenantA)
 }
 

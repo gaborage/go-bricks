@@ -30,7 +30,9 @@ error-EXISTENCE checks only: an error-IDENTITY assertion (`ErrorIs`/`ErrorAs`/`N
 that fails while `err` is merely the WRONG error still aborts every follower, so those are
 reordered — independent assertions first, identity last — unless the follower consumes what
 the identity assertion produced (an `ErrorAs` target) or dereferences `err` and so needs the
-non-nil guarantee to sit above it.
+non-nil guarantee to sit above it. Where TWO specificity checks land on one error — a wrap-chain
+check and a message check — no ordering can make both final, so the non-final one stays `assert`
+and takes a row; the rule is direction-free.
 
 Where the follower is instead an INDEPENDENT property — an instrumentation counter, a mock's
 recorded calls, a rollback flag, a manager size, a log-buffer leak check — the assertions were
@@ -44,6 +46,7 @@ that depends on this one having run.
 | `database/identifier/identifier_test.go:61` | require-error | Block of independent per-input validations (`:58`-`:63`), each its own `Validate(vendor, input)` over a DIFFERENT input; requiring abandons the rest of the batch. Order cannot help — every line in the run is an error assertion. | `//nolint:testifylint // batch of independent per-input validations` |
 | `database/identifier/identifier_test.go:62` | require-error | Same block as `:61`. | `//nolint:testifylint // batch of independent per-input validations` |
 | `database/internal/builder/renderer_test.go:46` | require-error | Pairs with `:47` over a DIFFERENT input (`a#b` vs `plain_name`); both lines are error assertions, so reordering cannot save the second. | `//nolint:testifylint // paired one-line checks over different inputs` |
+| `database/manager_test.go:748` | require-error | Followed by `require.ErrorContains(t, err, tenantA)` — a MESSAGE check, a different defect class from this wrap-chain check: a `%v`-for-`%w` regression breaks only the `ErrorIs`, a text edit breaks only the `ErrorContains`. Both are error assertions on the same `err`, so no ordering makes both final; the non-final one stays `assert`. | `//nolint:testifylint // a message check on the same error follows` |
 | `database/oracle/connection_test.go:781` | require-error | `TestConnectionTransactionOperationsErrorHandling` runs three scenarios in one body, each `mock.Expect…` then assert; the Begin scenario cannot move below the BeginTx/Prepare ones without breaking the mock ordering it sets up. | `//nolint:testifylint // independent scenario follows in same test` |
 | `database/oracle/connection_test.go:789` | require-error | Same test, BeginTx scenario; the Prepare scenario's mock setup follows it. | `//nolint:testifylint // independent scenario follows in same test` |
 | `database/postgresql/connection_test.go:669` | require-error | Mirror of `oracle/connection_test.go:781`. | `//nolint:testifylint // independent scenario follows in same test` |
