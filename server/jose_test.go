@@ -174,6 +174,9 @@ func TestJOSETamperedCiphertextReturnsPlaintextError(t *testing.T) {
 	assert.NotContains(t, body, "data", "minimal envelope must not include data")
 	assert.NotContains(t, body, "meta", "minimal envelope must not include meta (would leak traceId)")
 	assert.NotContains(t, body, "error", "minimal envelope uses top-level code/message, not nested error object")
+	// #1163: the pre-trust envelope is not a fourth details renderer — joseAPIError
+	// carries no details by construction, so there is nothing here to gate.
+	assert.NotContains(t, body, "details", "minimal envelope must not include details — this peer is unauthenticated")
 
 	// Status: 4xx (decrypt-failed = 401, malformed = 400 are both acceptable depending on which segment was tampered).
 	assert.Contains(t, []int{http.StatusBadRequest, http.StatusUnauthorized}, rec.Code)

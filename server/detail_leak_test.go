@@ -265,10 +265,12 @@ func TestValidationFieldSurvivesNamespaceTruncation(t *testing.T) {
 // postJOSE drives a JOSE-protected route end to end under cfg and returns the
 // DECRYPTED envelope. Decrypting is the point: an assertion against the
 // ciphertext would pass no matter what the envelope contains.
-func postJOSE(t *testing.T, cfg *config.Config, handler HandlerFunc[joseTokenReq, joseTokenResp], body string) (envelope map[string]any, status int) {
+// The fixture is a parameter, not built here: its two RSA keypairs cost ~40ms
+// each and are invariant across every quadrant, so the 16-subtest matrix shares
+// one fixture instead of generating 32 keys it cannot tell apart.
+func postJOSE(t *testing.T, f *joseFixture, cfg *config.Config, handler HandlerFunc[joseTokenReq, joseTokenResp], body string) (envelope map[string]any, status int) {
 	t.Helper()
 
-	f := newJOSEFixture(t)
 	e, h := newJOSETestServerWithConfig(t, f, cfg, handler)
 
 	compactReq := jositest.SealForTest(t, []byte(body), f.peerOutbound(), f.resolver)
@@ -285,7 +287,7 @@ func postJOSE(t *testing.T, cfg *config.Config, handler HandlerFunc[joseTokenReq
 	return envelope, rec.Code
 }
 
-// joseErrorDetail returns the decrypted envelope's error object.
+// joseErrorObject returns the decrypted envelope's error object.
 func joseErrorObject(t *testing.T, envelope map[string]any) map[string]any {
 	t.Helper()
 	errObj, ok := envelope["error"].(map[string]any)
@@ -293,10 +295,17 @@ func joseErrorObject(t *testing.T, envelope map[string]any) map[string]any {
 	return errObj
 }
 
-func joseDetailsHandler(_ joseTokenReq, _ HandlerContext) (joseTokenResp, IAPIError) {
+// detailsBearingBadRequest is the single fixture the two channels are compared
+// on. Both TestJOSEDetailsMatchStandardChannel handlers build their error here,
+// so the comparison cannot drift into comparing two different errors.
+func detailsBearingBadRequest() IAPIError {
 	apiErr := NewBadRequestError("nope")
 	apiErr.WithDetails("error", "some detail")
-	return joseTokenResp{}, apiErr
+	return apiErr
+}
+
+func joseDetailsHandler(_ joseTokenReq, _ HandlerContext) (joseTokenResp, IAPIError) {
+	return joseTokenResp{}, detailsBearingBadRequest()
 }
 
 func joseInternalHandler(_ joseTokenReq, _ HandlerContext) (joseTokenResp, IAPIError) {
@@ -317,8 +326,8 @@ var joseDetailSources = []struct {
 }{
 	{name: "bind_failure", body: `{"pan":`, handler: joseOKHandler},
 	{name: "validation_failure", body: `{}`, handler: joseOKHandler},
-	{name: "handler_with_details", body: `{"pan":"4111111111111111"}`, handler: joseDetailsHandler},
-	{name: "unhandled_5xx", body: `{"pan":"4111111111111111"}`, handler: joseInternalHandler},
+	{name: "handler_with_details", body: `{"pan":"` + panShapedKey + `"}`, handler: joseDetailsHandler},
+	{name: "unhandled_5xx", body: `{"pan":"` + panShapedKey + `"}`, handler: joseInternalHandler},
 }
 
 // TestJOSEDetailsGateQuadrants is the #1163 regression pin: the encrypted
@@ -330,12 +339,13 @@ func TestJOSEDetailsGateQuadrants(t *testing.T) {
 	// not otherwise have, and it makes the production-quadrant assertions bite on
 	// the worst thing this envelope could disclose — server file paths.
 	withStackCapture(t, true)
+	f := newJOSEFixture(t)
 
 	for _, src := range joseDetailSources {
 		for _, q := range detailsGateQuadrants {
 			t.Run(src.name+"/"+q.name, func(t *testing.T) {
 				cfg := &config.Config{App: config.AppConfig{Env: q.env, Debug: q.debug}}
-				envelope, status := postJOSE(t, cfg, src.handler, src.body)
+				envelope, status := postJOSE(t, f, cfg, src.handler, src.body)
 
 				require.GreaterOrEqual(t, status, http.StatusBadRequest,
 					"precondition: this source must fail in every quadrant")
@@ -362,15 +372,13 @@ func TestJOSEDetailsMatchStandardChannel(t *testing.T) {
 	withStackCapture(t, true)
 	cfg := devDebugConfig()
 
-	envelope, _ := postJOSE(t, cfg, joseDetailsHandler, `{"pan":"4111111111111111"}`)
+	envelope, _ := postJOSE(t, newJOSEFixture(t), cfg, joseDetailsHandler, `{"pan":"`+panShapedKey+`"}`)
 	joseDetails, ok := joseErrorObject(t, envelope)["details"].(map[string]any)
 	require.True(t, ok, "debug+development JOSE envelope must carry a details object")
 
 	// Same IAPIError shape through the standard enveloped renderer.
 	standard, _, _ := postJSON(t, cfg, func(_ mapFreeRequest, _ HandlerContext) (mapFreeRequest, IAPIError) {
-		apiErr := NewBadRequestError("nope")
-		apiErr.WithDetails("error", "some detail")
-		return mapFreeRequest{}, apiErr
+		return mapFreeRequest{}, detailsBearingBadRequest()
 	}, `{"amount":1,"name":"x"}`)
 	require.NotNil(t, standard.Error)
 	require.NotNil(t, standard.Error.Details)
@@ -381,24 +389,4 @@ func TestJOSEDetailsMatchStandardChannel(t *testing.T) {
 		"stackTrace is injected by devDetails, so funneling must carry it onto the JOSE envelope too")
 	assert.Contains(t, standard.Error.Details, stackTraceDetailKey,
 		"precondition: the standard channel injects stackTrace for this fixture")
-}
-
-// TestJOSEPreTrustEnvelopeCarriesNoDetails pins that the pre-trust plaintext
-// envelope is not a fourth renderer: joseAPIError.Details() is nil by
-// construction, so no gate is needed there and none was added.
-func TestJOSEPreTrustEnvelopeCarriesNoDetails(t *testing.T) {
-	withStackCapture(t, true)
-	f := newJOSEFixture(t)
-
-	plainReq := []byte(`{"pan":"4111111111111111"}`)
-	compactReq := jositest.SealForTest(t, plainReq, f.peerOutbound(), f.resolver)
-	tampered := []byte(compactReq)
-	tampered[len(tampered)/2] ^= 0x01
-
-	rec, body := driveJOSEInbound(t, f, jose.ContentType, bytes.NewReader(tampered), 0, nil)
-
-	require.NotEqual(t, jose.ContentType, rec.Header().Get(echo.HeaderContentType),
-		"precondition: a tampered request is rejected pre-trust, in plaintext")
-	assert.NotContains(t, body, "details",
-		"the pre-trust envelope must stay {code,message} — it reaches an unauthenticated peer")
 }
