@@ -58,15 +58,16 @@ bodies rather than here (this file postdates them) — pull those rows in before
 ## deferred sets, triaged (#1092 / W3-FINAL-a)
 
 The five files earlier recorded as "Deferred, not excepted" carried 53 live findings between
-them. FINAL-a triaged all 53 against a fresh whole-repo measurement: 48 are converted and 5 stay
-`assert`. Nothing is deferred.
+them. FINAL-a triaged all 53 against a fresh whole-repo measurement. Nothing is deferred, and the
+nine rows below are the complete residue — the file as a whole is bijective with the live findings.
 
-The table below has SIX rows for those five sites. `app/managers_test.go:802` is the extra: it is
-not one of the 53 but a finding the conversion itself CREATED — hoisting the independent unwrap
-check above the two message clauses put an error assertion in front of other assertions, which is
-exactly what `require-error` reports. Converting under one checker can raise a finding under
-another (the same hoist's sibling raised a `formatter` finding in `server/middleware_test.go`), so
-the measurement has to be re-run after each conversion pass rather than once at the end.
+Do not read the nine as "nine of the 53". Four of them (`app/managers_test.go:802`, `:806`, `:828`,
+`:829`) are SECOND-ORDER: findings the conversions themselves created. Hoisting an independent
+check above a pair of message clauses puts an error assertion in front of other assertions, which
+is what `require-error` reports; demoting a clause back to `assert` does the same. The same effect
+raised a `formatter` finding in `server/middleware_test.go` when a `contains` site was converted.
+That is the operational lesson for FINAL-b: converting under one checker can raise a finding under
+another, so re-measure after every conversion pass rather than once at the end.
 
 Three techniques removed exceptions that a first pass had written down, and are worth reusing:
 an error assertion placed LAST in its block draws no `require-error` finding at all, so extracting
@@ -92,6 +93,9 @@ pins float64 precision loss at the int64 boundary, so it stays).
 | site | checker | why it stays `assert` | directive FINAL inserts |
 | --- | --- | --- | --- |
 | `app/managers_test.go:802` | require-error | Deliberately hoisted ABOVE the two message clauses so a clause mismatch cannot hide it: `%w`-not-`%v` is an independent property, and it is the regression this subtest exists to catch. A require here would invert that and hide the clauses instead. | `//nolint:testifylint // hoisted above the message clauses on purpose; require would hide them` |
+| `app/managers_test.go:806` | require-error | `"cache manager"` is the WRAPPER's prefix (`app/managers.go:276`) while `tt.wantCause` on the next line is the wrapped cache error's own detail (`cache/manager.go`). Two code paths, so a wrapper-prefix regression must not abort before the cause clause is checked; the final clause is the `require`. | `//nolint:testifylint // wrapper prefix; the independent inner-cause clause follows` |
+| `app/managers_test.go:828` | require-error | Wrapper clause (`maxsize=%d` in `app/managers.go:276`), followed by a second wrapper clause and then by the wrapped `cache/manager.go` cause. Aborting here hides both. | `//nolint:testifylint // wrapper clause; a second clause and the inner cause follow` |
+| `app/managers_test.go:829` | require-error | The key half of the same format string. It still precedes the independent inner-cause clause, so it stays non-fatal even though its sibling above tests the SAME rendering — the rule is about what follows, not about which clauses share a format string. | `//nolint:testifylint // wrapper clause; the independent inner-cause clause follows` |
 | `config/getters_test.go:141` | require-error | `TestNilConfigAccessors` probes a zero-valued `&Config{}` for nil-safety; the `RequiredString` and `Unmarshal` probes below reach different accessors and the function has no other aborting assertion to piggyback on. Splitting the probes into subtests removes this row and the two below it — #1471. | `//nolint:testifylint // the RequiredString and Unmarshal nil-safety probes below are independent` |
 | `config/getters_test.go:144` | require-error | Same function; followed by the `Unmarshal` probe and by the `Exists`/`All`/`Custom` checks, which pin the zero value's SHAPE rather than its errors. Dissolved by #1471. | `//nolint:testifylint // the Unmarshal probe and the Exists/All/Custom checks below are independent` |
 | `config/getters_test.go:147` | require-error | Same function; followed by the `Exists`/`All`/`Custom` checks, which are what pin that a zero-valued config stays empty rather than materializing defaults. Dissolved by #1471. | `//nolint:testifylint // the Exists/All/Custom checks below are independent` |
