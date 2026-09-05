@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -115,7 +116,7 @@ func TestLogEventAdapterInt(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the integer field (JSON unmarshals numbers as float64)
-	assert.Equal(t, float64(42), logEntry["count"])
+	assert.InDelta(t, float64(42), logEntry["count"], 0)
 	assert.Equal(t, "processing items", logEntry["message"])
 }
 
@@ -131,7 +132,7 @@ func TestLogEventAdapterInt64(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the int64 field
-	assert.Equal(t, float64(1640995200), logEntry["timestamp"])
+	assert.InDelta(t, float64(1640995200), logEntry["timestamp"], 0)
 	assert.Equal(t, "event occurred", logEntry["message"])
 }
 
@@ -147,7 +148,7 @@ func TestLogEventAdapterUint64(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the uint64 field
-	assert.Equal(t, float64(1024), logEntry["size"])
+	assert.InDelta(t, float64(1024), logEntry["size"], 0)
 	assert.Equal(t, "file processed", logEntry["message"])
 }
 
@@ -164,7 +165,7 @@ func TestLogEventAdapterDur(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the duration field (zerolog stores duration in milliseconds)
-	assert.Equal(t, float64(150), logEntry["processing_time"])
+	assert.InDelta(t, float64(150), logEntry["processing_time"], 0)
 	assert.Equal(t, "request completed", logEntry["message"])
 }
 
@@ -252,8 +253,8 @@ func TestLogEventAdapterChainedFields(t *testing.T) {
 
 	// Verify all chained fields
 	assert.Equal(t, "alice", logEntry["user"])
-	assert.Equal(t, float64(3), logEntry["attempt"])
-	assert.Equal(t, float64(250), logEntry["duration"])
+	assert.InDelta(t, float64(3), logEntry["attempt"], 0)
+	assert.InDelta(t, float64(250), logEntry["duration"], 0)
 	assert.Equal(t, "chained error", logEntry["error"])
 	assert.Equal(t, "failed operation", logEntry["message"])
 	assert.Equal(t, "error", logEntry["level"])
@@ -342,10 +343,10 @@ func TestLogEventAdapterMutateInPlaceAccumulatesAllFields(t *testing.T) {
 	// All fields accumulated with correct values despite mutate-and-return.
 	assert.Equal(t, testutil.TestError, entry["error"])
 	assert.Equal(t, "alice", entry["user"])
-	assert.Equal(t, float64(3), entry["attempt"])
-	assert.Equal(t, float64(1640995200), entry["timestamp"])
-	assert.Equal(t, float64(1024), entry["size"])
-	assert.Equal(t, float64(250), entry["duration"])
+	assert.InDelta(t, float64(3), entry["attempt"], 0)
+	assert.InDelta(t, float64(1640995200), entry["timestamp"], 0)
+	assert.InDelta(t, float64(1024), entry["size"], 0)
+	assert.InDelta(t, float64(250), entry["duration"], 0)
 	data, ok := entry["data"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "v", data["k"])
@@ -561,8 +562,8 @@ func TestLogEventAdapterLargeValues(t *testing.T) {
 	// Verify large values are handled correctly
 	assert.Equal(t, largeString, logEntry["large_string"])
 	assert.NotEmpty(t, logEntry["large_bytes"]) // base64 encoded bytes
-	assert.Equal(t, float64(9223372036854775807), logEntry["max_int64"])
-	assert.Equal(t, float64(18446744073709551615), logEntry["max_uint64"])
+	assert.InDelta(t, float64(math.MaxInt64), logEntry["max_int64"], 0)
+	assert.InDelta(t, float64(math.MaxUint64), logEntry["max_uint64"], 0)
 }
 
 func TestLogEventAdapterSpecialCharacters(t *testing.T) {
@@ -618,7 +619,7 @@ func TestLogEventAdapterTypedMethodsMaskSensitiveKeys(t *testing.T) {
 			logger.Info().Int(key, 42).Msg("x")
 			var entry map[string]any
 			require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
-			assert.Equal(t, float64(42), entry[key], "Int(%q) must not be masked", key)
+			assert.InDelta(t, float64(42), entry[key], 0, "Int(%q) must not be masked", key)
 		}
 	})
 
@@ -639,7 +640,7 @@ func TestLogEventAdapterTypedMethodsMaskSensitiveKeys(t *testing.T) {
 		logger.Info().Int64("user_id", 9876543210).Msg("x")
 		var entry map[string]any
 		require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
-		assert.Equal(t, float64(9876543210), entry["user_id"], "Int64 non-sensitive must not be masked")
+		assert.InDelta(t, float64(9876543210), entry["user_id"], 0, "Int64 non-sensitive must not be masked")
 	})
 
 	t.Run("Uint64_sensitive_masked", func(t *testing.T) {
@@ -659,7 +660,7 @@ func TestLogEventAdapterTypedMethodsMaskSensitiveKeys(t *testing.T) {
 		logger.Info().Uint64("file_size", 1024).Msg("x")
 		var entry map[string]any
 		require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
-		assert.Equal(t, float64(1024), entry["file_size"], "Uint64 non-sensitive must not be masked")
+		assert.InDelta(t, float64(1024), entry["file_size"], 0, "Uint64 non-sensitive must not be masked")
 	})
 
 	t.Run("Dur_sensitive_masked", func(t *testing.T) {
@@ -679,7 +680,7 @@ func TestLogEventAdapterTypedMethodsMaskSensitiveKeys(t *testing.T) {
 		logger.Info().Dur("elapsed", 250*time.Millisecond).Msg("x")
 		var entry map[string]any
 		require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
-		assert.Equal(t, float64(250), entry["elapsed"], "Dur non-sensitive must not be masked")
+		assert.InDelta(t, float64(250), entry["elapsed"], 0, "Dur non-sensitive must not be masked")
 	})
 
 	t.Run("Bytes_sensitive_masked", func(t *testing.T) {

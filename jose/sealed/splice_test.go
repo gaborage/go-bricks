@@ -100,8 +100,8 @@ func TestSpliceReplacesOnlyTheSpan(t *testing.T) {
 	require.NoError(t, err)
 	out, err := splice(doc, span, "eyJ.hdr.body")
 	require.NoError(t, err)
-	assert.Equal(t, `{"a":1,"card":"eyJ.hdr.body","z":true}`, string(out))
-	assert.Equal(t, `{"a":1,"card":{"pan":"4111"},"z":true}`, string(doc), "input must not be mutated")
+	assert.Equal(t, `{"a":1,"card":"eyJ.hdr.body","z":true}`, string(out))                              //nolint:testifylint // byte-exact output is the property; JSONEq ignores key order
+	assert.Equal(t, `{"a":1,"card":{"pan":"4111"},"z":true}`, string(doc), "input must not be mutated") //nolint:testifylint // asserts the input buffer is byte-identical
 	assert.True(t, json.Valid(out))
 }
 
@@ -110,8 +110,8 @@ func TestSpliceRawInsertsReplacementVerbatim(t *testing.T) {
 	span, err := locateSubject(doc, "card")
 	require.NoError(t, err)
 	out := spliceRaw(doc, span, []byte(`{"pan":"4111"}`))
-	assert.Equal(t, `{"a":1,"card":{"pan":"4111"},"z":true}`, string(out))
-	assert.Equal(t, `{"a":1,"card":"eyJ.x.y","z":true}`, string(doc))
+	assert.Equal(t, `{"a":1,"card":{"pan":"4111"},"z":true}`, string(out)) //nolint:testifylint // verbatim insertion is a byte-level property
+	assert.Equal(t, `{"a":1,"card":"eyJ.x.y","z":true}`, string(doc))      //nolint:testifylint // asserts the input buffer is byte-identical
 }
 
 func TestSpliceRawHandlesLargeInputs(t *testing.T) {

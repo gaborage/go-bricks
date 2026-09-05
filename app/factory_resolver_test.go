@@ -29,7 +29,7 @@ func TestFactoryResolverCacheConnector(t *testing.T) {
 		// Default connector should return "not configured" error (stub returns Enabled=false)
 		c, err := connector(context.Background(), testCacheKey)
 		assert.Nil(t, c)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.True(t, config.IsNotConfigured(err), notConfiguredErrMsg)
 	})
 
@@ -46,7 +46,7 @@ func TestFactoryResolverCacheConnector(t *testing.T) {
 		// Default connector should return "not configured" error
 		c, err := connector(context.Background(), testCacheKey)
 		assert.Nil(t, c)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.True(t, config.IsNotConfigured(err), notConfiguredErrMsg)
 	})
 
@@ -69,7 +69,7 @@ func TestFactoryResolverCacheConnector(t *testing.T) {
 
 		// Custom connector should be called
 		result, err := connector(context.Background(), testCacheKey)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, expectedCache, result)
 		assert.True(t, customConnectorCalled, "custom connector should have been called")
 	})
@@ -98,7 +98,7 @@ func TestFactoryResolverCacheConnector(t *testing.T) {
 
 		_, err := connector(context.Background(), testCacheKey)
 
-		assert.Error(t, err)
+		require.Error(t, err)
 
 		// Check that it's a ConfigError with "not_configured"
 		assert.True(t, config.IsNotConfigured(err), notConfiguredErrMsg)
@@ -221,11 +221,11 @@ func TestFactoryResolverDefensiveValidation(t *testing.T) {
 		c, err := connector(context.Background(), testCacheKey)
 
 		assert.Nil(t, c)
-		assert.Error(t, err)
+		require.Error(t, err)
 
 		// Should return typed ConfigError with "invalid" category
 		var configErr *config.ConfigError
-		assert.ErrorAs(t, err, &configErr)
+		require.ErrorAs(t, err, &configErr)
 		assert.Equal(t, "invalid", configErr.Category)
 		assert.Contains(t, err.Error(), "configuration is nil")
 	})
@@ -240,13 +240,13 @@ func TestFactoryResolverDefensiveValidation(t *testing.T) {
 		c, err := connector(context.Background(), testCacheKey)
 
 		assert.Nil(t, c)
-		assert.Error(t, err)
+		require.Error(t, err)
 
 		// Should return typed ConfigError with "not_configured" category
 		assert.True(t, config.IsNotConfigured(err), "error should be 'not configured' type")
 
 		var configErr *config.ConfigError
-		assert.ErrorAs(t, err, &configErr)
+		require.ErrorAs(t, err, &configErr)
 		assert.Equal(t, "not_configured", configErr.Category)
 		// testCacheKey is a resource key, so the error is addressed to that tenant (C61.23).
 		assert.Equal(t, "multitenant.tenants.test-key.cache", configErr.Field)
@@ -262,11 +262,11 @@ func TestFactoryResolverDefensiveValidation(t *testing.T) {
 		c, err := connector(context.Background(), testCacheKey)
 
 		assert.Nil(t, c)
-		assert.Error(t, err)
+		require.Error(t, err)
 
 		// Should return typed ConfigError with "invalid" category
 		var configErr *config.ConfigError
-		assert.ErrorAs(t, err, &configErr)
+		require.ErrorAs(t, err, &configErr)
 		assert.Equal(t, "invalid", configErr.Category)
 		assert.Equal(t, "multitenant.tenants.test-key.cache.type", configErr.Field)
 		assert.Contains(t, err.Error(), "memcached")
@@ -283,11 +283,11 @@ func TestFactoryResolverDefensiveValidation(t *testing.T) {
 		c, err := connector(context.Background(), testCacheKey)
 
 		assert.Nil(t, c)
-		assert.Error(t, err)
+		require.Error(t, err)
 
 		// Should return typed ConfigError with "missing" category
 		var configErr *config.ConfigError
-		assert.ErrorAs(t, err, &configErr)
+		require.ErrorAs(t, err, &configErr)
 		assert.Equal(t, "missing", configErr.Category)
 		assert.Equal(t, "multitenant.tenants.test-key.cache.redis.host", configErr.Field)
 		assert.Contains(t, err.Error(), "MULTITENANT_TENANTS_TEST-KEY_CACHE_REDIS_HOST")
@@ -305,7 +305,7 @@ func TestFactoryResolverDefensiveValidation(t *testing.T) {
 		c, err := connector(context.Background(), testCacheKey)
 
 		assert.Nil(t, c)
-		assert.Error(t, err)
+		require.Error(t, err)
 
 		// Should return cache.ConfigError from redis.Config.Validate()
 		// This tests the error logging path at factory_resolver.go:174-182

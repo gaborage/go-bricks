@@ -292,7 +292,7 @@ func TestPoolGetOrCreateWaiterHonorsOwnContext(t *testing.T) {
 	dead, cancel := context.WithCancel(context.Background())
 	cancel()
 	abandoned := getOrCreateBounded(dead, t, p, keyOne, create, unblock)
-	assert.ErrorIs(t, abandoned.err, context.Canceled,
+	assert.ErrorIs(t, abandoned.err, context.Canceled, //nolint:testifylint // a require would skip unblock() and leak the leader goroutine; a second phase follows
 		"a waiter must fail on its OWN context, not block on the leader's create")
 	assert.Nil(t, abandoned.v)
 	assert.Nil(t, abandoned.rel)
@@ -577,10 +577,11 @@ func TestPoolCloseSurfacesCleanupCloseError(t *testing.T) {
 	}
 
 	// Close joins the cleanup loop first, so the recorded failure is complete before it drains.
-	assert.ErrorIs(t, p.Close(), wantErr, "an idle-cleanup close failure must reach Close's errors.Join")
+	closeErr := p.Close()
 	st := p.Stats()
 	assert.GreaterOrEqual(t, st.IdleCleanups, 1, "the failure came from the cleanup path, not Close's own drain")
 	assert.Equal(t, 1, st.Errors, "the failure is still counted exactly once")
+	assert.ErrorIs(t, closeErr, wantErr, "an idle-cleanup close failure must reach Close's errors.Join")
 }
 
 // TestPoolEvictWhileLeasedDefersClose pins invariant 2 and is the mutation-check target for the
@@ -671,8 +672,8 @@ func TestPoolGetOrCreateAfterCloseReturnsErrPoolClosed(t *testing.T) {
 	_, rel, err := p.GetOrCreate(context.Background(), keyOne, func(c context.Context) (*fakeResource, error) {
 		return keyedConnector()(c, keyOne)
 	})
-	assert.ErrorIs(t, err, ErrPoolClosed)
 	assert.Nil(t, rel)
+	require.ErrorIs(t, err, ErrPoolClosed)
 }
 
 // TestPoolCreateRacingCloseDoesNotResurrect drives Close into the window between the top closed
@@ -689,9 +690,9 @@ func TestPoolCreateRacingCloseDoesNotResurrect(t *testing.T) {
 		once.Do(func() { _ = p.Close() }) // Close lands before createEntry takes the lock
 		return newFakeResource(keyOne), nil
 	})
-	assert.ErrorIs(t, err, ErrPoolClosed, "GetOrCreate must report closed, not resurrect the map")
 	assert.True(t, tr.wasClosed(keyOne), "the just-created resource must be closed, not leaked")
 	assert.Equal(t, 0, p.Size(), "the map must not be resurrected with a new entry")
+	require.ErrorIs(t, err, ErrPoolClosed, "GetOrCreate must report closed, not resurrect the map")
 }
 
 // TestPoolCreateErrorPropagatesAndCounts verifies a create failure is returned and counted.
@@ -704,7 +705,6 @@ func TestPoolCreateErrorPropagatesAndCounts(t *testing.T) {
 	v, rel, err := p.GetOrCreate(context.Background(), keyOne, func(context.Context) (*fakeResource, error) {
 		return nil, wantErr
 	})
-	assert.ErrorIs(t, err, wantErr)
 	assert.Nil(t, v)
 	assert.Nil(t, rel)
 
@@ -712,6 +712,7 @@ func TestPoolCreateErrorPropagatesAndCounts(t *testing.T) {
 	assert.Equal(t, 0, st.Size)
 	assert.Equal(t, 1, st.Errors)
 	assert.Equal(t, 0, st.TotalCreated)
+	require.ErrorIs(t, err, wantErr)
 }
 
 // TestPoolConcurrentCreateFailureCountsErrorOnce pins that a create failure collapsed across N
@@ -1176,15 +1177,15 @@ func TestPoolCloseClosesAllAndJoinsErrors(t *testing.T) {
 	}
 
 	err := p.Close()
-	// Close joins EVERY close failure via errors.Join — errors.Is matches each individual one,
-	// so a consumer aggregating them (DbManager) surfaces all, not just the first.
-	assert.ErrorIs(t, err, errTwo, "Close surfaces the key-2 close error")
-	assert.ErrorIs(t, err, errThree, "Close surfaces the key-3 close error")
 	assert.True(t, tr.wasClosed(keyOne))
 	assert.True(t, tr.wasClosed(keyTwo))
 	assert.True(t, tr.wasClosed(keyThree))
 	assert.Equal(t, 0, p.Size())
 	assert.Equal(t, 2, p.Stats().Errors, "each close failure counts once")
+	// Close joins EVERY close failure via errors.Join — errors.Is matches each individual one,
+	// so a consumer aggregating them (DbManager) surfaces all, not just the first.
+	assert.ErrorIs(t, err, errTwo, "Close surfaces the key-2 close error") //nolint:testifylint // the second joined close error is asserted on the next line
+	require.ErrorIs(t, err, errThree, "Close surfaces the key-3 close error")
 }
 
 // TestPoolCloseIsIdempotent verifies Close can be called repeatedly.
@@ -1239,9 +1240,10 @@ func TestPoolCloseClosesUnborrowedImmediately(t *testing.T) {
 	require.NoError(t, err)
 	rel() // no borrower left
 
-	assert.ErrorIs(t, p.Close(), errBoom)
+	closeErr := p.Close()
 	assert.Equal(t, 1, tr.count(v.id))
 	assert.Equal(t, 1, p.Stats().Errors)
+	assert.ErrorIs(t, closeErr, errBoom)
 }
 
 // TestPoolCloseThenReleaseCountsBorrowedCloseError verifies a borrowed entry's deferred close

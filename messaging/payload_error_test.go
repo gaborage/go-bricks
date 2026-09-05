@@ -78,8 +78,8 @@ func TestPayloadErrorIsMatchesStageSentinel(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := &PayloadError{EventType: orderEventType, Stage: tc.stage}
 
-			assert.ErrorIs(t, err, tc.match)
-			assert.NotErrorIs(t, err, tc.notMatch)
+			assert.ErrorIs(t, err, tc.match)       //nolint:testifylint // peer sentinel probe; the paired negative claim follows
+			assert.NotErrorIs(t, err, tc.notMatch) //nolint:testifylint // peer sentinel probe; a third sentinel check follows
 			require.NotErrorIs(t, err, ErrNotConnected)
 		})
 	}
@@ -91,7 +91,7 @@ func TestPayloadErrorIsRejectsUnknownStage(t *testing.T) {
 	for _, stage := range []PayloadStage{"", "decoding", "DECODE"} {
 		err := &PayloadError{EventType: orderEventType, Stage: stage}
 
-		assert.NotErrorIs(t, err, ErrPayloadUndecodable, "stage %q", stage)
+		assert.NotErrorIs(t, err, ErrPayloadUndecodable, "stage %q", stage) //nolint:testifylint // peer sentinel probe; the second sentinel claim follows
 		require.NotErrorIs(t, err, ErrPayloadInvalid, "stage %q", stage)
 	}
 }
@@ -409,16 +409,16 @@ func TestPayloadErrorNilAndZeroValueAreSafe(t *testing.T) {
 		_ = nilErr.Fields()
 		_ = nilErr.Is(ErrPayloadInvalid)
 	})
-	assert.NoError(t, nilErr.Unwrap())
+	assert.NoError(t, nilErr.Unwrap()) //nolint:testifylint // require would abort the remaining nil-receiver method checks
 	assert.Nil(t, nilErr.Fields())
 	assert.False(t, nilErr.Is(ErrPayloadInvalid))
 	require.NotErrorIs(t, error(nilErr), ErrPayloadUndecodable)
 
 	zero := &PayloadError{}
-	assert.NoError(t, zero.Unwrap())
+	assert.NoError(t, zero.Unwrap()) //nolint:testifylint // require would abort the remaining zero-value method checks
 	assert.NotPanics(t, func() { _ = zero.Error() })
 	assert.Nil(t, zero.Fields())
-	assert.NotErrorIs(t, zero, ErrPayloadUndecodable)
+	assert.NotErrorIs(t, zero, ErrPayloadUndecodable) //nolint:testifylint // peer sentinel probe; the next assertion probes a different sentinel
 	assert.NotErrorIs(t, zero, ErrPayloadInvalid)
 }
 
@@ -429,9 +429,9 @@ func TestPayloadErrorOpenStage(t *testing.T) {
 	assert.Equal(t, PayloadStageOpen, err.Stage)
 	assert.Equal(t, `messaging: open failed for event "OrderCreated": sealed open refused: SEAL_HEADER_SLOT_INVALID (present=false, slot=jti)`, err.Error())
 	assert.Empty(t, err.Fields())
-	assert.ErrorIs(t, err, ErrPayloadOpenRefused)
-	assert.NotErrorIs(t, err, ErrPayloadUndecodable)
-	assert.NotErrorIs(t, err, ErrPayloadInvalid)
+	assert.ErrorIs(t, err, ErrPayloadOpenRefused)    //nolint:testifylint // peer sentinel probe; two further sentinels follow
+	assert.NotErrorIs(t, err, ErrPayloadUndecodable) //nolint:testifylint // peer sentinel probe; a further sentinel follows
+	assert.NotErrorIs(t, err, ErrPayloadInvalid)     //nolint:testifylint // peer sentinel probe; the cause and redaction checks follow
 	var refused *sealruntime.OpenRefusedError
 	require.ErrorAs(t, err, &refused)
 	assert.Same(t, cause, refused)

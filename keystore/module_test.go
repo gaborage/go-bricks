@@ -150,7 +150,7 @@ func TestKeystoreModuleInitRejectsSubFloorConfig(t *testing.T) {
 
 			require.Error(t, err)
 			assert.Nil(t, m.store, "nothing may load behind a refused floor")
-			assert.ErrorContains(t, err, "must be at least 32")
+			assert.ErrorContains(t, err, "must be at least 32") //nolint:testifylint // non-final identity peer; the ADR clause is the require
 			require.ErrorContains(t, err, "ADR-095")
 		})
 	}

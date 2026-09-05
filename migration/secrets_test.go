@@ -296,7 +296,7 @@ func TestSecretsProviderDBConfigEmptyScalarGuard(t *testing.T) {
 				// The error travels to logs and operator consoles; the payload it was
 				// decoding is secret material, so no value from it may ride along.
 				assert.NotContains(t, err.Error(), leakCanaryPassword)
-				assert.ErrorIs(t, err, ErrSecretMalformed)
+				assert.ErrorIs(t, err, ErrSecretMalformed) //nolint:testifylint // peer sentinel probe; the message clause follows
 				require.ErrorContains(t, err, "delivered empty")
 				return
 			}

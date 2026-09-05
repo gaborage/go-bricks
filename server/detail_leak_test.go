@@ -217,9 +217,9 @@ func TestBindErrorNilSafety(t *testing.T) {
 	var nilErr *bindError
 
 	assert.Equal(t, unauditedBindSummary, nilErr.Error())
-	assert.NoError(t, nilErr.Unwrap())
+	assert.NoError(t, nilErr.Unwrap()) //nolint:testifylint // peer nil-safety probes; require would abort the sweep
 	assert.Equal(t, unauditedBindSummary, (&bindError{}).Error())
-	assert.NoError(t, (&bindError{}).Unwrap())
+	assert.NoError(t, (&bindError{}).Unwrap()) //nolint:testifylint // peer nil-safety probe
 	assert.Equal(t, assertAnError{}, (&bindError{err: assertAnError{}}).Unwrap())
 }
 

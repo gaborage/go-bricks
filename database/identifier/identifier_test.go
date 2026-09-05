@@ -58,8 +58,8 @@ func TestValidateOracle(t *testing.T) {
 	assert.NoError(t, identifier.Validate(dbtypes.Oracle, "a#b"))
 	assert.NoError(t, identifier.Validate(dbtypes.Oracle, "a$b"))
 	assert.NoError(t, identifier.Validate(dbtypes.Oracle, strings.Repeat("o", 128)))
-	assert.ErrorIs(t, identifier.Validate(dbtypes.Oracle, strings.Repeat("o", 129)), identifier.ErrIdentifierTooLong)
-	assert.ErrorIs(t, identifier.Validate(dbtypes.Oracle, "a-b"), identifier.ErrIdentifierCharset)
+	assert.ErrorIs(t, identifier.Validate(dbtypes.Oracle, strings.Repeat("o", 129)), identifier.ErrIdentifierTooLong) //nolint:testifylint // batch of independent per-input validations
+	assert.ErrorIs(t, identifier.Validate(dbtypes.Oracle, "a-b"), identifier.ErrIdentifierCharset)                    //nolint:testifylint // batch of independent per-input validations
 	assert.ErrorIs(t, identifier.Validate(dbtypes.Oracle, ""), identifier.ErrEmptyIdentifier)
 }
 

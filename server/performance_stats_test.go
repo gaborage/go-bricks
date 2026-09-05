@@ -98,9 +98,9 @@ func TestPerformanceStats(t *testing.T) {
 
 			// Assert error expectation
 			if tt.expectError {
-				assert.Error(t, err)
+				assert.Error(t, err) //nolint:testifylint // counter assertions follow the enclosing block
 			} else {
-				assert.NoError(t, err)
+				assert.NoError(t, err) //nolint:testifylint // counter assertions follow the enclosing block
 			}
 
 			// Verify context has been modified with performance tracking

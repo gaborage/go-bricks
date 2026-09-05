@@ -1194,7 +1194,7 @@ func TestShutdownAggregatesErrors(t *testing.T) {
 	err := fixture.app.Shutdown(context.Background())
 	require.Error(t, err)
 	closer.AssertExpectations(t)
-	assert.ErrorIs(t, err, serverErr)
+	assert.ErrorIs(t, err, serverErr) //nolint:testifylint // second wrapped error asserted on the next line
 	require.ErrorIs(t, err, resourceErr)
 }
 

@@ -266,7 +266,7 @@ func TestJOSEResultWithMetaSealsEnvelope(t *testing.T) {
 	assert.Equal(t, "tok-test-pan-001", dataObj["token"])
 
 	metaObj, _ := envelope["meta"].(map[string]any)
-	assert.Equal(t, float64(1), metaObj["total"])
+	assert.InDelta(t, float64(1), metaObj["total"], 0)
 	assert.Equal(t, false, metaObj["hasMore"])
 	// Framework keys present.
 	assert.Contains(t, metaObj, "timestamp")
@@ -321,7 +321,7 @@ func TestJOSEResultWithMetaReservedKeyDroppedInsideSeal(t *testing.T) {
 	assert.Equal(t, "real-jose-trace", metaObj["traceId"])
 	assert.NotEqual(t, "attacker-controlled-trace", metaObj["traceId"])
 	assert.NotEqual(t, "attacker-controlled-timestamp", metaObj["timestamp"])
-	assert.Equal(t, float64(7), metaObj["page"])
+	assert.InDelta(t, float64(7), metaObj["page"], 0)
 
 	// WARN logs fired for both reserved keys on the JOSE path too. Asserts on
 	// presence + content rather than exact event count so a future refactor that

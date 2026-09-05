@@ -44,7 +44,7 @@ func TestPublishBytesRefusesAnOversizedRoutingKey(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Zero(t, atomic.LoadUint64(&ch.publishAttempts), "the channel is never touched")
-	assert.ErrorIs(t, err, ErrInvalidPublishDestination)
+	assert.ErrorIs(t, err, ErrInvalidPublishDestination) //nolint:testifylint // peer sentinel probe; the retry-exhaustion claim follows
 	assert.NotErrorIs(t, err, ErrPublishRetriesExhausted, "this is not a retry outcome")
 }
 

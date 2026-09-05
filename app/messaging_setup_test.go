@@ -107,7 +107,7 @@ func TestPrepareRuntimeConsumersFailsStartupOnEnsureError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Equal(t, 1, source.callCount(), "the error must come from consumer bootstrap")
-	assert.ErrorIs(t, err, errBrokerLookupFailed)
+	assert.ErrorIs(t, err, errBrokerLookupFailed) //nolint:testifylint // paired error-clause assertion follows
 	require.ErrorContains(t, err, "failed to start consumers on the control-plane key")
 }
 

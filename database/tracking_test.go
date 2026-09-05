@@ -227,7 +227,7 @@ func TestTrackedConnectionBeginErrors(t *testing.T) {
 
 	_, err = tracked.Begin(context.Background())
 	require.Error(t, err)
-	assert.ErrorIs(t, err, expectedBeginErr)
+	assert.ErrorIs(t, err, expectedBeginErr) //nolint:testifylint // the BeginTx phase is asserted after this
 
 	expectedBeginTxErr := errors.New("begin tx failed")
 	mock.ExpectBegin().WillReturnError(expectedBeginTxErr)

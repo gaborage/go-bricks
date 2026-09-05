@@ -410,8 +410,8 @@ func TestMiddlewareOrder(t *testing.T) {
 		}
 	}
 
-	assert.True(t, preIndex < postIndex, "pre-setup should come before post-setup")
-	assert.True(t, postIndex < handlerIndex, "post-setup should come before handler")
+	assert.Less(t, preIndex, postIndex, "pre-setup should come before post-setup")
+	assert.Less(t, postIndex, handlerIndex, "post-setup should come before handler")
 }
 
 func TestMiddlewareBodyLimit(t *testing.T) {
@@ -559,7 +559,7 @@ func TestGzipMiddleware(t *testing.T) {
 		assert.Empty(t, rec.Header().Get("Content-Encoding"))
 
 		// Uncompressed response should match original length
-		assert.Equal(t, len(largeResponse), len(rec.Body.String()))
+		assert.Len(t, rec.Body.String(), len(largeResponse))
 	})
 }
 
@@ -868,20 +868,20 @@ func TestRecoveredPanicNeverReachesTheSpan(t *testing.T) {
 			spans := exporter.GetSpans()
 			require.NotEmpty(t, spans, "the OTel middleware must have produced a span")
 			for _, s := range spans {
-				// SECURITY: panic value - synthetic constant, and rendering it IS the
-				// assertion that proves absence. assert.False so a FAILURE does not
-				// print the container and disclose the payload it is asserting is gone.
-				// This is a test asserting the rule, not a site subject to it.
-				assert.False(t, strings.Contains(s.Status.Description, recoverProbeSecret),
+				// SECURITY: panic value - recoverProbeSecret is a synthetic constant
+				// declared in this file, so printing it on failure discloses nothing.
+				// NotContains is deliberate: the container is what a maintainer needs to
+				// see, and panic_guard_test.go asserts the same absence the same way.
+				assert.NotContains(t, s.Status.Description, recoverProbeSecret,
 					"span status description discloses the panic value")
 				assert.Contains(t, s.Status.Description, tt.wantType,
 					"span status description should name the panic value's TYPE")
 				for _, ev := range s.Events {
 					for _, attr := range ev.Attributes {
-						// SECURITY: panic value - see above; assert.False keeps the
-						// payload out of failure output.
-						assert.False(t, strings.Contains(attr.Value.String(), recoverProbeSecret),
-							fmt.Sprintf("span event attribute %q discloses the panic value", attr.Key))
+						// SECURITY: panic value - see above; the constant is synthetic,
+						// so NotContains may render the attribute.
+						assert.NotContainsf(t, attr.Value.String(), recoverProbeSecret,
+							"span event attribute %q discloses the panic value", attr.Key)
 					}
 				}
 			}
@@ -931,11 +931,11 @@ func TestSanitizePanicValueStillYieldsAPanicStackError(t *testing.T) {
 	e.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/boom", http.NoBody))
 
 	var pse *middleware.PanicStackError
-	require.True(t, errors.As(seen, &pse), "server.New's errors.As branch must still match")
+	require.ErrorAs(t, seen, &pse, "server.New's errors.As branch must still match")
 	assert.NotEmpty(t, pse.Stack, "the stack must survive — it identifies the panic site")
-	// SECURITY: panic value - see the span assertions above; assert.False keeps the
-	// payload out of failure output.
-	assert.False(t, strings.Contains(seen.Error(), recoverProbeSecret),
+	// SECURITY: panic value - see the span assertions above; the constant is
+	// synthetic, so NotContains may render the error.
+	assert.NotContains(t, seen.Error(), recoverProbeSecret,
 		"the rendered error discloses the panic value")
 	assert.Contains(t, seen.Error(), "panic (type: string)")
 
@@ -946,7 +946,7 @@ func TestSanitizePanicValueStillYieldsAPanicStackError(t *testing.T) {
 	// avoid — while the message text above still reads correctly. Assert the TYPE, or
 	// the regression is silent.
 	var typed *panicTypeError
-	assert.True(t, errors.As(pse.Unwrap(), &typed),
+	assert.ErrorAs(t, pse.Unwrap(), &typed,
 		"Echo must adopt the sanitized error verbatim; if it renders it instead, the true panic type is lost")
 }
 
@@ -967,12 +967,12 @@ func TestSanitizePanicValueKeepsTheOriginalFrameInTheStack(t *testing.T) {
 	e.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/boom", http.NoBody))
 
 	var pse *middleware.PanicStackError
-	require.True(t, errors.As(seen, &pse))
+	require.ErrorAs(t, seen, &pse)
 	assert.Contains(t, string(pse.Stack), "theOriginalPanickingHandler",
 		"the stack must still name the function that panicked, not just the sanitizer")
-	// SECURITY: panic value - see the span assertions above; assert.False keeps the
-	// payload out of failure output.
-	assert.False(t, strings.Contains(string(pse.Stack), recoverProbeSecret),
+	// SECURITY: panic value - see the span assertions above; the constant is
+	// synthetic, so NotContains may render the stack.
+	assert.NotContains(t, string(pse.Stack), recoverProbeSecret,
 		"the stack discloses the panic value")
 }
 
@@ -1003,12 +1003,11 @@ func TestSanitizePanicValueRefusesAWrappedAbortSentinel(t *testing.T) {
 	// SECURITY: panic value - synthetic constant, and rendering it IS the assertion
 	// that proves absence: a type check alone would pass for a *panicTypeError whose
 	// own field carried the payload, so this half is load-bearing and stays.
-	// assert.False so a FAILURE does not print the rendering and disclose it.
-	// This is a test asserting the rule, not a site subject to it.
+	// NotContains may render it: the constant is declared in this file.
 	rendered := fmt.Sprintf("%v", recovered)
-	assert.False(t, strings.Contains(rendered, recoverProbeSecret),
+	assert.NotContains(t, rendered, recoverProbeSecret,
 		"a wrapped abort sentinel must NOT take the bypass — it carries a payload")
 	var typed *panicTypeError
-	require.True(t, errors.As(recovered.(error), &typed),
+	require.ErrorAs(t, recovered.(error), &typed,
 		"only the exact sentinel bypasses sanitizing")
 }

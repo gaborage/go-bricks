@@ -141,20 +141,20 @@ func TestParseFlywayJSONNoFlywayEnvelopeIsUnparsed(t *testing.T) {
 	require.ErrorIs(t, err, errEmptyFlywayOutput)
 
 	outcomeErr := migrateOutcome(nil, err, nil)
-	assert.ErrorIs(t, outcomeErr, ErrFlywayOutputUnparsed)
+	assert.ErrorIs(t, outcomeErr, ErrFlywayOutputUnparsed) //nolint:testifylint // peer sentinel probe; the negative claim follows
 	require.NotErrorIs(t, outcomeErr, ErrFlywayReportedFailure)
 }
 
 func TestMigrateOutcomeRunErrorWins(t *testing.T) {
 	runErr := errors.New("flyway command failed: exit status 1")
 	err := migrateOutcome(runErr, errEmptyFlywayOutput, &Result{})
-	assert.ErrorIs(t, err, runErr, "subprocess error takes precedence")
+	assert.ErrorIs(t, err, runErr, "subprocess error takes precedence") //nolint:testifylint // peer sentinel probe; the precedence claim's negative half follows
 	require.NotErrorIs(t, err, ErrFlywayOutputUnparsed, "parse error must not shadow the subprocess error")
 }
 
 func TestMigrateOutcomeParseErrorWrapped(t *testing.T) {
 	err := migrateOutcome(nil, errEmptyFlywayOutput, &Result{})
-	assert.ErrorIs(t, err, ErrFlywayOutputUnparsed, "unparsable output surfaces as an error")
+	assert.ErrorIs(t, err, ErrFlywayOutputUnparsed, "unparsable output surfaces as an error") //nolint:testifylint // peer sentinel probe; the underlying-cause claim follows
 	require.ErrorIs(t, err, errEmptyFlywayOutput, "the underlying parse cause stays inspectable via the %w:%w chain")
 }
 

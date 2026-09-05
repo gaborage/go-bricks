@@ -1740,7 +1740,7 @@ func TestMergeDefaultsEnforcesItsTwoRules(t *testing.T) {
 	t.Run("denied_prefix_from_either_map_is_refused", func(t *testing.T) {
 		_, err := mergeDefaults(map[string]any{"database.host": "db"}, nil)
 		require.Error(t, err)
-		assert.ErrorContains(t, err, "must stay absent")
+		assert.ErrorContains(t, err, "must stay absent") //nolint:testifylint // a second sub-case reassigns and re-asserts err
 
 		_, err = mergeDefaults(map[string]any{}, map[string]any{"multitenant.tenants.acme.database.host": "db"})
 		require.Error(t, err)

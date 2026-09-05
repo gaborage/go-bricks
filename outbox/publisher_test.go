@@ -713,7 +713,7 @@ func TestPublisherStreamTarget(t *testing.T) {
 				require.Error(t, err)
 				assert.Empty(t, store.insertedRecords, "a refused event never reaches the store")
 				if tt.wantErrFrag != "" {
-					assert.ErrorContains(t, err, tt.wantErrFrag)
+					assert.ErrorContains(t, err, tt.wantErrFrag) //nolint:testifylint // message and sentinel are independent; a require hides the sentinel
 				}
 				require.ErrorIs(t, err, tt.wantErr)
 				return

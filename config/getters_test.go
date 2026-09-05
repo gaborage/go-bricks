@@ -54,7 +54,7 @@ func TestString(t *testing.T) {
 
 	assert.Equal(t, "test-service", cfg.String(name))
 	assert.Equal(t, "fallback", cfg.String(missing, "fallback"))
-	assert.Equal(t, "", cfg.String("custom.empty"))
+	assert.Empty(t, cfg.String("custom.empty"))
 }
 
 func TestNumericAndBool(t *testing.T) {
@@ -76,7 +76,7 @@ func TestNumericAndBool(t *testing.T) {
 	assert.Equal(t, int64(5), cfg.Int64("custom.missing_long", 5))
 
 	assert.InEpsilon(t, 0.75, cfg.Float64(threshold), 0.001)
-	assert.Equal(t, 1.5, cfg.Float64("custom.missing_float", 1.5))
+	assert.InDelta(t, 1.5, cfg.Float64("custom.missing_float", 1.5), 0)
 
 	assert.True(t, cfg.Bool(enabled))
 	assert.False(t, cfg.Bool("custom.missing_bool"))
@@ -102,14 +102,14 @@ func TestRequiredAccessors(t *testing.T) {
 	assert.Equal(t, "example", val)
 
 	_, err = cfg.RequiredString(missing)
-	assert.Error(t, err)
+	require.Error(t, err)
 
 	vInt, err := cfg.RequiredInt(port)
 	require.NoError(t, err)
 	assert.Equal(t, 8080, vInt)
 
 	_, err = cfg.RequiredInt(invalidInt)
-	assert.Error(t, err)
+	require.Error(t, err)
 
 	vInt64, err := cfg.RequiredInt64(retries)
 	require.NoError(t, err)
@@ -134,17 +134,17 @@ func TestNilConfigAccessors(t *testing.T) {
 	assert.Equal(t, "fallback", cfg.String("any", "fallback"))
 	assert.Equal(t, 0, cfg.Int("any"))
 	assert.Equal(t, int64(0), cfg.Int64("any"))
-	assert.Equal(t, 0.0, cfg.Float64("any"))
+	assert.Zero(t, cfg.Float64("any"))
 	assert.False(t, cfg.Bool("any"))
 
 	_, err := cfg.RequiredInt("any")
-	assert.Error(t, err)
+	assert.Error(t, err) //nolint:testifylint // the RequiredString and Unmarshal nil-safety probes below are independent
 
 	_, err = cfg.RequiredString("any")
-	assert.Error(t, err)
+	assert.Error(t, err) //nolint:testifylint // the Unmarshal probe and the Exists/All/Custom checks below are independent
 
 	err = cfg.Unmarshal("custom", &struct{}{})
-	assert.Error(t, err)
+	assert.Error(t, err) //nolint:testifylint // the Exists/All/Custom checks below are independent
 
 	assert.False(t, cfg.Exists("any"))
 	assert.Nil(t, cfg.All())
@@ -211,7 +211,7 @@ func TestInvalidTypesReturnDefaults(t *testing.T) {
 
 	assert.Equal(t, 5, cfg.Int(port, 5))
 	assert.Equal(t, int64(7), cfg.Int64("custom.int64", 7))
-	assert.Equal(t, 9.9, cfg.Float64("custom.float", 9.9))
+	assert.InDelta(t, 9.9, cfg.Float64("custom.float", 9.9), 0)
 	assert.True(t, cfg.Bool("custom.bool", true))
 
 	_, err := cfg.RequiredBool("custom.bool_invalid")
@@ -263,7 +263,7 @@ func TestUnmarshalRejectsDeliveredEmptyBool(t *testing.T) {
 	err := cfg.Unmarshal("custom", &out)
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "boolean value delivered empty")
+	require.ErrorContains(t, err, "boolean value delivered empty")
 	assert.ErrorContains(t, err, "strict", "the koanf key reaches the operator, not just the message")
 }
 
