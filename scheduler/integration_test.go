@@ -1,7 +1,6 @@
 package scheduler
 
 import (
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,7 +10,8 @@ import (
 )
 
 // TestSchedulerLifecycleMVP verifies the complete scheduler lifecycle per User Story 1 MVP test:
-// Register a simple job, schedule it to run every 5 seconds, wait 15 seconds, verify it executed 3 times.
+// Register a simple job scheduled every 1 second, observe three executions, and check they took
+// at least three intervals to arrive (so the rate itself is pinned, not just the count).
 func TestSchedulerLifecycleMVP(t *testing.T) {
 	// Create a test job that counts executions
 	job := &counterJob{}
@@ -19,17 +19,18 @@ func TestSchedulerLifecycleMVP(t *testing.T) {
 	// Create and initialize scheduler module
 	module, registrar := newTestScheduler(t, 5*time.Second)
 
-	// Register job to run every 5 seconds (MVP test criteria)
-	err := registrar.FixedRate("test-job", job, 5*time.Second)
+	// Register job to run every 1 second (MVP test criteria, scaled 1:5)
+	start := time.Now()
+	err := registrar.FixedRate("test-job", job, 1*time.Second)
 	require.NoError(t, err, "Job registration should succeed")
 
-	// Wait 15 seconds for 3 executions (MVP test criteria)
-	// Add buffer for timing variations
-	time.Sleep(16 * time.Second)
+	// Observe the 3rd execution on the job's own counter rather than sleeping past it.
+	require.Eventually(t, func() bool { return job.Count() >= 3 }, 10*time.Second, 10*time.Millisecond,
+		"Job should execute at least 3 times")
+	assert.GreaterOrEqual(t, time.Since(start), 3*time.Second-50*time.Millisecond,
+		"3 executions cannot arrive faster than 3 intervals")
 
-	// Verify job executed at least 3 times
 	count := job.Count()
-	assert.GreaterOrEqual(t, count, int64(3), "Job should execute at least 3 times in 15 seconds")
 	assert.LessOrEqual(t, count, int64(4), "Job should not execute more than 4 times (allowing timing buffer)")
 
 	// Graceful shutdown
@@ -48,15 +49,13 @@ func TestSchedulerLifecycleAllSchedulingPatterns(t *testing.T) {
 	// Create jobs for each pattern
 	fixedRateJob := &counterJob{}
 
-	// Fixed rate: every 2 seconds
-	err := registrar.FixedRate("fixed-rate-job", fixedRateJob, 2*time.Second)
+	// Fixed rate: every 500 milliseconds
+	err := registrar.FixedRate("fixed-rate-job", fixedRateJob, 500*time.Millisecond)
 	require.NoError(t, err)
 
-	// Wait for fixed-rate job to execute
-	time.Sleep(5 * time.Second)
-
-	// Verify fixed-rate job executed
-	assert.GreaterOrEqual(t, fixedRateJob.Count(), int64(2), "Fixed-rate job should execute at least twice")
+	// Wait for the 2nd fixed-rate execution on the job's own counter, not a sleep.
+	require.Eventually(t, func() bool { return fixedRateJob.Count() >= 2 },
+		5*time.Second, 10*time.Millisecond, "Fixed-rate job should execute at least twice")
 
 	// Graceful shutdown
 	err = module.Shutdown()
@@ -68,13 +67,15 @@ func TestSchedulerLifecycleGracefulShutdown(t *testing.T) {
 	module, registrar := newTestScheduler(t, 10*time.Second)
 
 	// Create a long-running job
-	job := &longRunningJob{duration: 2 * time.Second}
+	const inFlightJobDuration = 500 * time.Millisecond
+	job := &longRunningJob{duration: inFlightJobDuration}
 
-	err := registrar.FixedRate("long-job", job, 1*time.Second)
+	err := registrar.FixedRate("long-job", job, 250*time.Millisecond)
 	require.NoError(t, err)
 
-	// Wait for job to start
-	time.Sleep(1500 * time.Millisecond)
+	// Wait for job to start — on the job's own signal, not a sleep, so shutdown
+	// is guaranteed to land mid-execution however loaded the machine is.
+	waitFor(t, job.Started)
 
 	// Initiate shutdown while job is running
 	shutdownStart := time.Now()
@@ -87,7 +88,7 @@ func TestSchedulerLifecycleGracefulShutdown(t *testing.T) {
 	assert.True(t, job.Completed(), "Job should have completed")
 
 	// Verify shutdown waited for job
-	assert.GreaterOrEqual(t, shutdownDuration, 500*time.Millisecond, "Shutdown should wait for in-flight job")
+	assert.GreaterOrEqual(t, shutdownDuration, inFlightJobDuration/4, "Shutdown should wait for in-flight job")
 }
 
 // TestSchedulerLifecycleNoJobsRegistered verifies scheduler handles no jobs gracefully
@@ -118,23 +119,22 @@ func (j *counterJob) Count() int64 {
 // longRunningJob simulates a long-running task
 type longRunningJob struct {
 	duration  time.Duration
-	completed bool
-	mu        sync.Mutex
+	started   atomic.Bool
+	completed atomic.Bool
 }
 
 func (j *longRunningJob) Execute(_ JobContext) error {
+	j.started.Store(true)
+
 	// Simulate work
 	time.Sleep(j.duration)
 
-	j.mu.Lock()
-	j.completed = true
-	j.mu.Unlock()
+	j.completed.Store(true)
 
 	return nil
 }
 
-func (j *longRunningJob) Completed() bool {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	return j.completed
-}
+// Started reports whether Execute has begun, so callers can observe the job entering flight.
+func (j *longRunningJob) Started() bool { return j.started.Load() }
+
+func (j *longRunningJob) Completed() bool { return j.completed.Load() }

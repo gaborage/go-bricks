@@ -26,8 +26,14 @@ type recordingSink struct {
 	mu     sync.Mutex
 	events []AuditEvent
 	err    error
-	delay  time.Duration
 	hits   chan struct{}
+	// block, when non-nil, parks every Record call until the channel is closed
+	// or a 2s escape hatch fires. Set before the emitter starts consuming; the
+	// channel itself is the synchronization, so no mutex is needed to read it.
+	// The escape hatch matters: an unbounded park would let a regression that
+	// makes Emit block hang the test binary to its 10-minute timeout instead of
+	// failing the sub-second assertion the stall exists to protect.
+	block chan struct{}
 }
 
 func newRecordingSink() *recordingSink {
@@ -35,8 +41,11 @@ func newRecordingSink() *recordingSink {
 }
 
 func (s *recordingSink) Record(_ context.Context, event *AuditEvent) error {
-	if s.delay > 0 {
-		time.Sleep(s.delay)
+	if s.block != nil {
+		select {
+		case <-s.block:
+		case <-time.After(2 * time.Second):
+		}
 	}
 	s.mu.Lock()
 	s.events = append(s.events, *event)
@@ -796,16 +805,17 @@ func TestEmitterConcurrentEmitAndCloseDoesNotPanic(t *testing.T) {
 func TestEmitterQueueFullDropsRatherThanBlocks(t *testing.T) {
 	setupTestTracer(t)
 	sink := newRecordingSink()
-	sink.delay = 50 * time.Millisecond // slow sink so the queue can saturate
+	sink.block = make(chan struct{}) // stalled sink so the queue can saturate
 	emitter := newAuditEmitter(disabledLogger(), sink)
 	t.Cleanup(func() {
+		close(sink.block) // release the sink first so Close drains promptly
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = emitter.Close(ctx)
 	})
 
 	// Emit auditSinkQueueCap + 8 events as fast as possible. The emitter
-	// must never block, even though the sink is slow — overflow events are
+	// must never block, even though the sink is stalled — overflow events are
 	// dropped silently (with a counter increment).
 	overflow := 8
 	start := time.Now()
@@ -814,9 +824,9 @@ func TestEmitterQueueFullDropsRatherThanBlocks(t *testing.T) {
 	}
 	elapsed := time.Since(start)
 
-	// If emit blocked on the sink we'd see at least (auditSinkQueueCap+8) *
-	// 50ms ~= 13s; the non-blocking design completes the enqueue loop in
-	// well under one second.
+	// If emit blocked on the sink the loop would never return — the sink is
+	// parked indefinitely; the non-blocking design completes the enqueue loop
+	// in well under one second.
 	require.Less(t, elapsed, time.Second,
 		"emit() must not block on a slow sink; took %s", elapsed)
 }
@@ -889,7 +899,7 @@ func TestMigrateEmitsTimedOutAuditAttribute(t *testing.T) {
 	t.Cleanup(func() { _ = fm.Close(context.Background()) })
 
 	mcfg := &Config{
-		FlywayPath:    createSlowFlywayStub(t, 5),
+		FlywayPath:    createSlowFlywayStub(t, 5*time.Second),
 		ConfigPath:    filepath.Join(t.TempDir(), "flyway.conf"),
 		MigrationPath: filepath.Join(t.TempDir(), "migrations"),
 		Timeout:       500 * time.Millisecond,

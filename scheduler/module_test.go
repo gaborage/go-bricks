@@ -69,14 +69,14 @@ func TestJobExecutionOverlappingPrevention(t *testing.T) {
 	_, registrar := newTestScheduler(t, 5*time.Second)
 
 	// Create a slow job that takes longer than the interval
-	job := &slowJob{duration: 500 * time.Millisecond}
+	job := &slowJob{duration: 250 * time.Millisecond}
 
-	// Schedule it to run every 100ms (faster than execution time)
-	err := registrar.FixedRate("slow-job", job, 100*time.Millisecond)
+	// Schedule it to run every 50ms (faster than execution time)
+	err := registrar.FixedRate("slow-job", job, 50*time.Millisecond)
 	require.NoError(t, err)
 
 	// Wait for multiple trigger attempts
-	time.Sleep(1 * time.Second)
+	time.Sleep(500 * time.Millisecond)
 
 	// Job should have executed, but overlapping triggers should be skipped
 	count := job.count()
@@ -380,8 +380,8 @@ func TestSlowJobThresholdWarning(t *testing.T) {
 	err := module.FixedRate("slow-job", job, 100*time.Millisecond)
 	require.NoError(t, err)
 
-	// Wait for job to execute (job takes 150ms, so wait longer)
-	time.Sleep(400 * time.Millisecond)
+	// Wait until the job executes (<=1s)
+	waitFor(t, func() bool { return job.count() > 0 })
 
 	// Verify job was executed
 	assert.Greater(t, job.count(), 0, "Job should have executed")
@@ -425,8 +425,8 @@ func TestJobExecutionWithoutTracer(t *testing.T) {
 	err := module.FixedRate("no-tracer-job", job, 100*time.Millisecond)
 	require.NoError(t, err)
 
-	// Wait for job to execute
-	time.Sleep(200 * time.Millisecond)
+	// Wait until the job executes (<=1s)
+	waitFor(t, func() bool { return job.count() > 0 })
 
 	// Verify job executed successfully without tracer
 	assert.Greater(t, job.count(), 0, "Job should execute without tracer")
@@ -440,10 +440,12 @@ func TestJobExecutionWithTracer(t *testing.T) {
 
 	module, _ := newTestScheduler(t, 5*time.Second, withTracer(tp.Tracer("test-scheduler")))
 
-	// Create a simple job. Use a 1s interval so a second tick cannot race the
-	// assertion window, and stop the scheduler before counting spans.
+	// Create a simple job. Use a 500ms interval so a second tick cannot race the
+	// assertion window — gocron fires the first tick one full interval in, so the
+	// Eventually below returns at ~510ms and the second tick is at 1s, leaving
+	// ~490ms for Shutdown — and stop the scheduler before counting spans.
 	job := &slowJob{duration: 10 * time.Millisecond}
-	err := module.FixedRate("traced-job", job, 1*time.Second)
+	err := module.FixedRate("traced-job", job, 500*time.Millisecond)
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool { return job.count() >= 1 },
@@ -465,12 +467,14 @@ func TestJobExecutionWithTracerPropagatesContext(t *testing.T) {
 
 	module, _ := newTestScheduler(t, 5*time.Second, withTracer(tp.Tracer("test-scheduler")))
 
-	// Job that creates a child span to verify context propagation. Use a 1s
-	// interval so a second tick cannot race the assertion window, and stop the
+	// Job that creates a child span to verify context propagation. Use a 500ms
+	// interval so a second tick cannot race the assertion window — gocron fires the
+	// first tick one full interval in, so the Eventually below returns at ~510ms and
+	// the second tick is at 1s, leaving ~490ms for Shutdown — and stop the
 	// scheduler before counting spans.
 	tracer := tp.Tracer("test-child")
 	job := &spanCapturingJob{tracer: tracer}
-	err := module.FixedRate("ctx-propagation-job", job, 1*time.Second)
+	err := module.FixedRate("ctx-propagation-job", job, 500*time.Millisecond)
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool { return job.count() >= 1 },

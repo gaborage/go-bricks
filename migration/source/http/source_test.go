@@ -182,8 +182,13 @@ func TestHTTPTenantSourceContractErrorWithoutEnvelope(t *testing.T) {
 }
 
 func TestHTTPTenantSourceContextCancellation(t *testing.T) {
-	srv := httptest.NewServer(stdhttp.HandlerFunc(func(_ stdhttp.ResponseWriter, _ *stdhttp.Request) {
-		time.Sleep(200 * time.Millisecond)
+	srv := httptest.NewServer(stdhttp.HandlerFunc(func(_ stdhttp.ResponseWriter, r *stdhttp.Request) {
+		// Outlast the client deadline, but unblock srv.Close() as soon as the
+		// client gives up instead of holding the handler for the full 200ms.
+		select {
+		case <-time.After(200 * time.Millisecond):
+		case <-r.Context().Done():
+		}
 	}))
 	defer srv.Close()
 

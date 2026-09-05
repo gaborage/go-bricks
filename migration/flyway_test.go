@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -496,31 +497,38 @@ exit 1
 	return path
 }
 
+// shellSeconds renders d as the fractional-seconds argument every stub below
+// passes to `sleep`, which POSIX shells accept on the unix-only platforms these
+// stubs run on. Millisecond resolution is enough for the timeout windows tests pin.
+func shellSeconds(d time.Duration) string {
+	return strconv.FormatFloat(d.Seconds(), 'f', 3, 64)
+}
+
 // Helper function to create a slow stub for testing timeout scenarios
-func createSlowFlywayStub(t *testing.T, delaySeconds int) string {
+func createSlowFlywayStub(t *testing.T, delay time.Duration) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "flyway-slow.sh")
 	content := fmt.Sprintf(`#!/bin/sh
-sleep %d
+sleep %s
 exit 0
-`, delaySeconds)
+`, shellSeconds(delay))
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o755))
 	return path
 }
 
 // createReadySignalingFlywayStub writes a stub that touches readyMarker the moment
-// it starts, then sleeps delaySeconds. Tests wait for that marker before acting so a
+// it starts, then sleeps for delay. Tests wait for that marker before acting so a
 // cancel/kill deterministically lands on an in-flight subprocess, not on test setup.
-func createReadySignalingFlywayStub(t *testing.T, readyMarker string, delaySeconds int) string {
+func createReadySignalingFlywayStub(t *testing.T, readyMarker string, delay time.Duration) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "flyway-ready.sh")
 	content := fmt.Sprintf(`#!/bin/sh
 touch %q
-sleep %d
+sleep %s
 exit 0
-`, readyMarker, delaySeconds)
+`, readyMarker, shellSeconds(delay))
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o755))
 	return path
 }
@@ -571,12 +579,12 @@ func TestRunFlywayCommandErrorHandling(t *testing.T) {
 	})
 
 	t.Run("timeout_scenario", func(t *testing.T) {
-		stub := createSlowFlywayStub(t, 5) // 5 second delay
+		stub := createSlowFlywayStub(t, 5*time.Second) // killed at Timeout, never waited out
 		mcfg := &Config{
 			FlywayPath:    stub,
 			ConfigPath:    filepath.Join(t.TempDir(), "flyway.conf"),
 			MigrationPath: filepath.Join(t.TempDir(), "migrations"),
-			Timeout:       1_000_000_000, // 1 second timeout
+			Timeout:       300 * time.Millisecond,
 		}
 
 		// Ensure paths exist
@@ -1358,17 +1366,24 @@ func TestMigrateNoopStillSucceeds(t *testing.T) {
 
 // createOrphanSpawningFlywayStub models the orphaned-JVM shape: the stub
 // spawns a background grandchild that inherits its stdout (the output pipe),
-// sleeps past the caller's timeout, and then writes a marker file. The stub
+// sleeps past the caller's timeout, and then writes survivedMarker. The stub
 // itself also sleeps past the timeout before exiting.
-func createOrphanSpawningFlywayStub(t *testing.T, markerPath string, sleepSeconds int) string {
+//
+// spawnedMarker is touched immediately after the background job is forked — so
+// its existence proves the grandchild was actually created. Without it, a stub
+// killed before it ever forked would leave survivedMarker absent for the wrong
+// reason and the caller's kill assertion would pass vacuously.
+func createOrphanSpawningFlywayStub(t *testing.T, survivedMarker, spawnedMarker string, sleep time.Duration) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "flyway-orphan.sh")
+	secs := shellSeconds(sleep)
 	content := fmt.Sprintf(`#!/bin/sh
-( sleep %d; touch '%s' ) &
-sleep %d
+( sleep %s; touch '%s' ) &
+touch '%s'
+sleep %s
 exit 0
-`, sleepSeconds, markerPath, sleepSeconds)
+`, secs, survivedMarker, spawnedMarker, secs)
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o755))
 	return path
 }
@@ -1383,11 +1398,17 @@ func TestRunFlywayCommandKillsChildProcessGroup(t *testing.T) {
 	}
 
 	// Must outlast cfg.Timeout below so a working group-kill catches the
-	// grandchild mid-sleep, before it writes its marker.
-	const grandchildSleepSeconds = 1
+	// grandchild mid-sleep, before it writes its marker. cfg.Timeout in turn has
+	// to outlast the stub's own fork+exec, whose tail is fat on a loaded box
+	// (measured p99 ~120ms, max ~1.8s under heavy parallel load) — a timeout that
+	// fires before the fork leaves nothing to kill, which the spawn guard below
+	// reports rather than passing vacuously.
+	const grandchildSleep = 2400 * time.Millisecond
 
-	markerPath := filepath.Join(t.TempDir(), "grandchild-survived.marker")
-	stub := createOrphanSpawningFlywayStub(t, markerPath, grandchildSleepSeconds)
+	markerDir := t.TempDir()
+	markerPath := filepath.Join(markerDir, "grandchild-survived.marker")
+	spawnedMarker := filepath.Join(markerDir, "spawned.marker")
+	stub := createOrphanSpawningFlywayStub(t, markerPath, spawnedMarker, grandchildSleep)
 
 	cfg := &config.Config{
 		Database: config.DatabaseConfig{Type: "postgresql"},
@@ -1399,7 +1420,7 @@ func TestRunFlywayCommandKillsChildProcessGroup(t *testing.T) {
 		FlywayPath:    stub,
 		ConfigPath:    filepath.Join(t.TempDir(), "flyway.conf"),
 		MigrationPath: filepath.Join(t.TempDir(), "migrations"),
-		Timeout:       500 * time.Millisecond,
+		Timeout:       2 * time.Second,
 	}
 	require.NoError(t, os.WriteFile(mcfg.ConfigPath, []byte(""), 0o644))
 	require.NoError(t, os.MkdirAll(mcfg.MigrationPath, 0o755))
@@ -1422,9 +1443,23 @@ func TestRunFlywayCommandKillsChildProcessGroup(t *testing.T) {
 		t.Fatal("Migrate did not return within the guard deadline — process-group kill regressed to a hang")
 	}
 
+	// The absence assertion below only means something if the grandchild existed
+	// to be killed, so prove the fork happened before reading the survival marker.
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(spawnedMarker)
+		return err == nil
+	}, 2*time.Second, 10*time.Millisecond,
+		"stub never spawned its grandchild — the timeout fired before the process group existed, so the kill assertion would be vacuous")
+	spawnedInfo, err := os.Stat(spawnedMarker)
+	require.NoError(t, err)
+
 	// Give the grandchild's own sleep time to elapse in case it survived a
 	// (supposedly) working group kill, then confirm it never wrote its marker.
-	time.Sleep(grandchildSleepSeconds*time.Second + 500*time.Millisecond)
+	// The deadline is anchored on the marker's own mtime — the instant the fork
+	// actually happened — so neither the window already burned by the timeout is
+	// waited out twice, nor a slow fork+exec shifts the survivor's write past the
+	// check and turns a real regression into a silent pass.
+	time.Sleep(time.Until(spawnedInfo.ModTime().Add(grandchildSleep + 200*time.Millisecond)))
 	_, statErr := os.Stat(markerPath)
 	assert.True(t, os.IsNotExist(statErr), "grandchild marker file exists — orphaned grandchild survived the timeout kill")
 }
@@ -1443,7 +1478,7 @@ func TestRunFlywayCommandParentCancelSignalsUnknownState(t *testing.T) {
 	}
 
 	readyMarker := filepath.Join(t.TempDir(), "flyway-started.marker")
-	stub := createReadySignalingFlywayStub(t, readyMarker, 5) // sleeps 5s; signals readiness first
+	stub := createReadySignalingFlywayStub(t, readyMarker, 5*time.Second) // sleeps 5s; signals readiness first
 	cfg := &config.Config{
 		Database: config.DatabaseConfig{Type: "postgresql"},
 		App:      config.AppConfig{Env: "test"},
