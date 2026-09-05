@@ -16,6 +16,7 @@ The session model (Fable) is the orchestrator, not the worker. Fable is the most
 - **Tripwire (added after Fable did a 5-file change inline, 2026-08-26): before the first Edit/Write, count the files the change will touch. Three or more, or any screenshot/browser-proof chore: stop and spawn agents instead. Inline Fable work is only sequential diagnosis (each command depends on the previous answer) and 1-2 file edits.**
 
 Token rules:
+
 - Batch independent agent launches in a single message so they run concurrently.
 - Give agents file paths and constraints up front so they don't rediscover this file's contents; paste the relevant doctrine into the prompt.
 - Never re-read files an agent already summarized; trust the report, spot-check only what you'll edit.
