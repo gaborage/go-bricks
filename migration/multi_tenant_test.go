@@ -127,8 +127,12 @@ func TestMigrateAllSequentialSuccess(t *testing.T) {
 	assert.Empty(t, res.Failed())
 	assert.Equal(t, 3, hookCalls)
 	for _, r := range res.Results {
-		require.NoError(t, r.Err)
-		assert.Equal(t, "postgresql", r.Vendor)
+		// One subtest per tenant: the tenants are independent, so a failure on one
+		// must not stop the others from being checked.
+		t.Run(r.TenantID, func(t *testing.T) {
+			require.NoError(t, r.Err)
+			assert.Equal(t, "postgresql", r.Vendor)
+		})
 	}
 }
 
@@ -316,14 +320,22 @@ func TestMigrateAllNilArguments(t *testing.T) {
 	provider := newFakeConfigProvider(nil)
 	lister := &fakeLister{}
 
-	_, err := MigrateAll(context.Background(), nil, lister, provider, ActionMigrate, MigrateAllOptions{})
-	require.Error(t, err)
+	// Each nil argument is an independent contract, so each gets its own subtest:
+	// bundled, the first failure would hide whether the others still hold.
+	t.Run("nil_migrator", func(t *testing.T) {
+		_, err := MigrateAll(context.Background(), nil, lister, provider, ActionMigrate, MigrateAllOptions{})
+		require.Error(t, err)
+	})
 
-	_, err = MigrateAll(context.Background(), fm, nil, provider, ActionMigrate, MigrateAllOptions{})
-	require.ErrorIs(t, err, ErrNoLister)
+	t.Run("nil_lister", func(t *testing.T) {
+		_, err := MigrateAll(context.Background(), fm, nil, provider, ActionMigrate, MigrateAllOptions{})
+		require.ErrorIs(t, err, ErrNoLister)
+	})
 
-	_, err = MigrateAll(context.Background(), fm, lister, nil, ActionMigrate, MigrateAllOptions{})
-	assert.ErrorIs(t, err, ErrNoConfigProvider)
+	t.Run("nil_config_provider", func(t *testing.T) {
+		_, err := MigrateAll(context.Background(), fm, lister, nil, ActionMigrate, MigrateAllOptions{})
+		require.ErrorIs(t, err, ErrNoConfigProvider)
+	})
 }
 
 func TestActionString(t *testing.T) {

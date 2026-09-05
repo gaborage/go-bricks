@@ -189,7 +189,6 @@ func TestJobContextContextBehavior(t *testing.T) {
 		cancel()
 
 		// After cancellation
-		require.Error(t, ctx.Err())
 		assert.Equal(t, context.Canceled, ctx.Err())
 	})
 
@@ -208,7 +207,6 @@ func TestJobContextContextBehavior(t *testing.T) {
 		<-parentCtx.Done()
 
 		// Should be canceled
-		require.Error(t, ctx.Err())
 		assert.Equal(t, context.DeadlineExceeded, ctx.Err())
 	})
 

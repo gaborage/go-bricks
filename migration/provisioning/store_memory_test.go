@@ -170,10 +170,12 @@ func TestMemoryStoreUpsertSameIDIsNotBusy(t *testing.T) {
 	first, err := s.Upsert(ctx, &Job{ID: "job-1", TenantID: "tenant-x"})
 	require.NoError(t, err)
 
+	// require.NoError already rules out ErrTenantBusy — a re-upsert of the same job
+	// returns no error at all — so a separate NotErrorIs on the same nil err would
+	// assert nothing.
 	again, err := s.Upsert(ctx, &Job{ID: "job-1", TenantID: "tenant-x"})
 	require.NoError(t, err)
 	assert.Equal(t, first.State, again.State)
-	assert.NotErrorIs(t, err, ErrTenantBusy)
 }
 
 func TestMemoryStoreUpsertRejectsInvalidJob(t *testing.T) {
