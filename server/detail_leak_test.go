@@ -304,14 +304,20 @@ func detailsBearingBadRequest() IAPIError {
 	return apiErr
 }
 
+// joseDetailsHandler returns an error carrying a handler-set detail entry —
+// the disclosure source a consumer's own WithDetails call produces.
 func joseDetailsHandler(_ joseTokenReq, _ HandlerContext) (joseTokenResp, IAPIError) {
 	return joseTokenResp{}, detailsBearingBadRequest()
 }
 
+// joseInternalHandler returns a 500 with no details of its own, so the only
+// thing devDetails can disclose for it is the injected stackTrace.
 func joseInternalHandler(_ joseTokenReq, _ HandlerContext) (joseTokenResp, IAPIError) {
 	return joseTokenResp{}, NewInternalServerError("boom")
 }
 
+// joseOKHandler succeeds, so the error under test comes from bind or validation
+// before the handler is ever reached.
 func joseOKHandler(req joseTokenReq, _ HandlerContext) (joseTokenResp, IAPIError) {
 	return joseTokenResp{Token: "tok-" + req.Pan}, nil
 }
