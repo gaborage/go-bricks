@@ -784,8 +784,8 @@ func TestAppUsesProvidedResourceSource(t *testing.T) {
 	require.NoError(t, err)
 	msgRelease()
 
-	assert.Greater(t, resource.dbCalls, 0)
-	assert.Greater(t, resource.msgCalls, 0)
+	assert.Positive(t, resource.dbCalls)
+	assert.Positive(t, resource.msgCalls)
 }
 
 // TestCollectProbesCacheCriticalFromLoadedConfig walks the whole seam a deployment
@@ -1171,8 +1171,7 @@ func TestRunPropagatesServerError(t *testing.T) {
 
 	err := fixture.app.Run()
 
-	require.Error(t, err)
-	assert.ErrorIs(t, err, startErr)
+	require.ErrorIs(t, err, startErr)
 
 	signalHandler.AssertExpectations(t)
 	timeoutProvider.AssertExpectations(t)
@@ -1194,9 +1193,9 @@ func TestShutdownAggregatesErrors(t *testing.T) {
 
 	err := fixture.app.Shutdown(context.Background())
 	require.Error(t, err)
-	assert.ErrorIs(t, err, serverErr)
-	assert.ErrorIs(t, err, resourceErr)
 	closer.AssertExpectations(t)
+	assert.ErrorIs(t, err, serverErr)
+	require.ErrorIs(t, err, resourceErr)
 }
 
 func TestNewWithConfigUsesConnectors(t *testing.T) {
@@ -1326,7 +1325,7 @@ func TestNew(t *testing.T) {
 
 		app, log, err := NewWithOptions(opts)
 
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Nil(t, app)
 		assert.NotNil(t, log) // Logger should always be available even on failure
 
@@ -1469,7 +1468,7 @@ func TestNewWithConfigErrors(t *testing.T) {
 	t.Run("nil config causes error", func(t *testing.T) {
 		app, log, err := NewWithConfig(nil, &Options{})
 
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Nil(t, app)
 		assert.NotNil(t, log) // Logger should always be available
 	})

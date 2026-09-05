@@ -172,8 +172,8 @@ func TestShutdownTiming(t *testing.T) {
 	err := app.Shutdown(context.TODO())
 	duration := time.Since(start)
 
-	assert.NoError(t, err)
 	assert.Less(t, duration, 1*time.Second, "Shutdown should complete quickly with no components")
+	require.NoError(t, err)
 
 	t.Logf("Shutdown completed in %v", duration)
 }
@@ -210,14 +210,14 @@ func TestPrepareRuntimeWithScheduler(t *testing.T) {
 	scheduler := &MockSchedulerModule{name: "scheduler"}
 	scheduler.On("Init", deps).Return(nil)
 	err := registry.Register(scheduler)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Register JobProvider module
 	jobProvider := &MockJobProviderModule{name: "job-provider"}
 	jobProvider.On("Init", deps).Return(nil)
 	jobProvider.On("RegisterJobs", scheduler).Return(nil)
 	err = registry.Register(jobProvider)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Create minimal app with mocked server
 	mockSrv := newMockServer()
@@ -233,7 +233,7 @@ func TestPrepareRuntimeWithScheduler(t *testing.T) {
 
 	// Call prepareRuntime
 	err = app.prepareRuntime(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Verify RegisterJobs was called on the provider
 	jobProvider.AssertExpectations(t)
@@ -354,11 +354,11 @@ func TestPrepareRuntimeAbortsWhenDeclaredConsumersCannotStart(t *testing.T) {
 	err := a.prepareRuntime(context.Background())
 
 	require.Error(t, err, "a declared-but-unstartable consumer set must abort startup")
-	assert.Contains(t, err.Error(), "failed to start consumers on the control-plane key")
-	assert.ErrorIs(t, err, errBrokerLookupFailed)
-
 	_, emitted := loggedEvent(rec, preWarmWarnMsg)
 	assert.False(t, emitted, "a fatal bootstrap aborts startup; it is never demoted to the pre-warm WARN")
+
+	assert.Contains(t, err.Error(), "failed to start consumers on the control-plane key")
+	require.ErrorIs(t, err, errBrokerLookupFailed)
 }
 
 // TestPrepareRuntimeReCollectsProbesAfterTheStartPhase pins the re-collect that replaced

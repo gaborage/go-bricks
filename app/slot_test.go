@@ -528,10 +528,10 @@ func TestDatabaseSlotStartReportsPreWarmFailureAsAdvisory(t *testing.T) {
 
 	advisory, fatal := slotOf(t, a, componentDatabase).start(context.Background())
 
-	assert.NoError(t, fatal, "pre-warming is never fatal")
+	require.NoError(t, fatal, "pre-warming is never fatal")
 	require.Error(t, advisory)
 	assert.Contains(t, advisory.Error(), "database pre-warming failed")
-	assert.ErrorIs(t, advisory, errNeverReachTheConnector)
+	require.ErrorIs(t, advisory, errNeverReachTheConnector)
 }
 
 // TestStreamsSlotStartRegistersItsCloser pins the half of the runtime registration the slot

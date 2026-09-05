@@ -56,21 +56,21 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		testValue := []byte("test-value-single")
 
 		err = c.Set(ctx, testKey, testValue, time.Minute)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		retrievedValue, err := c.Get(ctx, testKey)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, testValue, retrievedValue)
 
 		// Test cache expiration
 		err = c.Set(ctx, "short-ttl", []byte("expires-soon"), 200*time.Millisecond)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		time.Sleep(300 * time.Millisecond)
 
 		expiredValue, err := c.Get(ctx, "short-ttl")
-		assert.ErrorIs(t, err, cachepkg.ErrNotFound, "expired key should return ErrNotFound")
 		assert.Empty(t, expiredValue)
+		require.ErrorIs(t, err, cachepkg.ErrNotFound, "expired key should return ErrNotFound")
 	})
 
 	t.Run("single tenant - cache disabled", func(t *testing.T) {
@@ -91,7 +91,7 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		// Should return "not configured" error
 		c, err := connector(ctx, "")
 		assert.Nil(t, c)
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.True(t, config.IsNotConfigured(err), "error should be 'not configured' type")
 	})
 
@@ -133,10 +133,10 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		testValue := []byte("test-value-acme")
 
 		err = c.Set(ctx, testKey, testValue, time.Minute)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		retrievedValue, err := c.Get(ctx, testKey)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, testValue, retrievedValue)
 	})
 
@@ -158,8 +158,7 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		// Should return error for non-existent tenant
 		c, err := connector(ctx, "nonexistent")
 		assert.Nil(t, c)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "configuration not found")
+		require.ErrorContains(t, err, "configuration not found")
 	})
 
 	t.Run("multi tenant - cache disabled for tenant", func(t *testing.T) {
@@ -186,8 +185,7 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		// Should return "not enabled" error
 		c, err := connector(ctx, "globex")
 		assert.Nil(t, c)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not enabled")
+		require.ErrorContains(t, err, "not enabled")
 	})
 
 	t.Run("custom connector override", func(t *testing.T) {
@@ -390,7 +388,7 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 
 		// Health check
 		err = c.Health(ctx)
-		assert.NoError(t, err, "Health check should pass")
+		require.NoError(t, err, "Health check should pass")
 
 		// Perform some operations to generate stats
 		_ = c.Set(ctx, "stats:test", []byte("value"), time.Minute)
@@ -485,6 +483,12 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 
 		// Tenant A's key should be gone
 		_, err = cacheA.Get(ctx, sharedKey)
+		// assert, not require: the tenant-B isolation check below is the property this
+		// test exists to pin. It reads the SAME sharedKey through tenant B's client —
+		// which is exactly what makes it an isolation check, since a namespacing
+		// regression would have let tenant A's delete reach tenant B's copy. A require
+		// here aborts on any non-nil error that is not ErrNotFound, and that regression
+		// goes unreported (#1092 exceptions file).
 		assert.ErrorIs(t, err, cachepkg.ErrNotFound, "Tenant A's key should be deleted")
 
 		// Tenant B's key should still exist (isolation verified)

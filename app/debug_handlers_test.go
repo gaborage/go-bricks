@@ -143,7 +143,7 @@ func TestIPWhitelistMiddlewareTrustedProxy(t *testing.T) {
 			nextCalled, err := invokeDebugMiddleware(mw, req)
 
 			if tc.wantStatus == http.StatusOK {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.True(t, nextCalled, "next should run when the client IP is allowed")
 			} else {
 				assert.False(t, nextCalled, "next must not run when access is denied")
@@ -219,7 +219,7 @@ func TestAuthMiddleware(t *testing.T) {
 			nextCalled, err := invokeDebugMiddleware(authMiddleware, req)
 
 			if tt.expectedStatusCode == http.StatusOK {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.True(t, nextCalled, "next should run on valid token")
 			} else {
 				assert.False(t, nextCalled, "next must not run when auth fails")
@@ -267,7 +267,7 @@ func TestAuthMiddlewareConstantTimeComparison(t *testing.T) {
 			nextCalled, err := invokeDebugMiddleware(authMiddleware, req)
 
 			if tt.expected {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.True(t, nextCalled)
 			} else {
 				assert.False(t, nextCalled)

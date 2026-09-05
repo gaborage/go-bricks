@@ -67,7 +67,7 @@ func TestModuleRegistryRegisterSuccess(t *testing.T) {
 	module.On("Init", deps).Return(nil)
 
 	err := registry.Register(module)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Len(t, registry.modules, 1)
 	assert.Equal(t, module, registry.modules[0])
 
@@ -139,7 +139,6 @@ func TestModuleRegistryRegisterInitError(t *testing.T) {
 	module.On("Init", deps).Return(expectedErr)
 
 	err := registry.Register(module)
-	assert.Error(t, err)
 	assert.Equal(t, expectedErr, err)
 	assert.Empty(t, registry.modules)
 
@@ -217,7 +216,7 @@ func TestModuleRegistryDeclareMessaging(t *testing.T) {
 	// Collect messaging declarations from modules
 	decls := &messaging.Declarations{}
 	err := registry.DeclareMessaging(decls)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, decls)
 
 	module.AssertExpectations(t)
@@ -254,7 +253,7 @@ func TestModuleRegistryShutdownWithModules(t *testing.T) {
 	module2.On("Shutdown").Return(nil)
 
 	err := registry.Shutdown()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	module1.AssertExpectations(t)
 	module2.AssertExpectations(t)
@@ -287,13 +286,13 @@ func TestModuleRegistryShutdownWithErrors(t *testing.T) {
 	// Both modules still shut down; the joined error surfaces both failures.
 	err := registry.Shutdown()
 	require.Error(t, err)
-	assert.ErrorIs(t, err, err1)
-	assert.ErrorIs(t, err, err2)
-	assert.Contains(t, err.Error(), "failing-module1")
-	assert.Contains(t, err.Error(), "failing-module2")
-
 	module1.AssertExpectations(t)
 	module2.AssertExpectations(t)
+
+	assert.Contains(t, err.Error(), "failing-module1")
+	assert.Contains(t, err.Error(), "failing-module2")
+	assert.ErrorIs(t, err, err1)
+	require.ErrorIs(t, err, err2)
 }
 
 func TestModuleRegistryShutdownMixedSuccessAndFailure(t *testing.T) {
@@ -317,13 +316,13 @@ func TestModuleRegistryShutdownMixedSuccessAndFailure(t *testing.T) {
 
 	err := registry.Shutdown()
 	require.Error(t, err)
-	assert.ErrorIs(t, err, failErr)
+	okModule.AssertExpectations(t)
+	failModule.AssertExpectations(t)
+
 	assert.Contains(t, err.Error(), "failing-module")
 	// A cleanly-shut-down module must not appear in the joined error.
 	assert.NotContains(t, err.Error(), "ok-module")
-
-	okModule.AssertExpectations(t)
-	failModule.AssertExpectations(t)
+	require.ErrorIs(t, err, failErr)
 }
 
 func TestModuleRegistryShutdownSingleModule(t *testing.T) {
@@ -343,7 +342,7 @@ func TestModuleRegistryShutdownSingleModule(t *testing.T) {
 	module.On("Shutdown").Return(nil)
 
 	err := registry.Shutdown()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	module.AssertExpectations(t)
 }
@@ -383,7 +382,7 @@ func TestModuleRegistryRegisterSchedulerModule(t *testing.T) {
 	scheduler.On("Init", deps).Return(nil)
 
 	err := registry.Register(scheduler)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Verify scheduler was wired into deps
 	assert.NotNil(t, deps.Scheduler, "Scheduler should be wired into deps")
@@ -407,7 +406,7 @@ func TestModuleRegistryRegisterNonSchedulerModule(t *testing.T) {
 	module.On("Init", deps).Return(nil)
 
 	err := registry.Register(module)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Verify deps.Scheduler is still nil
 	assert.Nil(t, deps.Scheduler, "Scheduler should remain nil for non-scheduler modules")
@@ -433,7 +432,7 @@ func TestRegisterJobsNoScheduler(t *testing.T) {
 
 	// Call RegisterJobs - should skip silently
 	err := registry.RegisterJobs()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Verify RegisterJobs was NOT called on the provider
 	jobProvider.AssertNotCalled(t, "RegisterJobs")
@@ -461,7 +460,7 @@ func TestRegisterJobsNoJobProviders(t *testing.T) {
 
 	// Call RegisterJobs
 	err := registry.RegisterJobs()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// No jobs should be registered
 	scheduler.AssertExpectations(t)
@@ -496,7 +495,7 @@ func TestRegisterJobsSuccess(t *testing.T) {
 
 	// Call RegisterJobs
 	err := registry.RegisterJobs()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Verify both providers were called
 	provider1.AssertExpectations(t)
@@ -526,8 +525,7 @@ func TestRegisterJobsWithError(t *testing.T) {
 
 	// Call RegisterJobs - should return error
 	err := registry.RegisterJobs()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failing-provider")
+	require.ErrorContains(t, err, "failing-provider")
 	assert.Contains(t, err.Error(), "registration failed")
 
 	provider.AssertExpectations(t)
@@ -548,7 +546,7 @@ func TestModuleRegistryRegisterKeyStoreModule(t *testing.T) {
 	module.On("Init", deps).Return(nil)
 
 	err := registry.Register(module)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Verify KeyStore was wired into deps
 	assert.NotNil(t, deps.KeyStore, "KeyStore should be wired into deps")
@@ -577,8 +575,7 @@ func TestModuleRegistryRegisterDuplicateKeyStoreProvider(t *testing.T) {
 	ks2.On("Init", deps).Return(nil)
 	err := registry.Register(ks2)
 
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "multiple KeyStore providers")
+	require.ErrorContains(t, err, "multiple KeyStore providers")
 	assert.Contains(t, err.Error(), "keystore-2")
 }
 
@@ -596,7 +593,7 @@ func TestModuleRegistryRegisterNonKeyStoreModule(t *testing.T) {
 	module.On("Init", deps).Return(nil)
 
 	err := registry.Register(module)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	assert.Nil(t, deps.KeyStore, "KeyStore should remain nil for non-keystore modules")
 
@@ -630,7 +627,7 @@ func TestModuleRegistryKeyStoreAvailableDuringInit(t *testing.T) {
 	}).Return(nil)
 
 	err := registry.Register(consumer)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	ksModule.AssertExpectations(t)
 	consumer.AssertExpectations(t)
@@ -772,7 +769,7 @@ func TestDeclareMessagingSkipsModulesWithoutMessagingDeclarer(t *testing.T) {
 	// Call DeclareMessaging — minimal should be skipped, counter should be called
 	decls := messaging.NewDeclarations()
 	err := registry.DeclareMessaging(decls)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	assert.Equal(t, 1, counter.callCount, "MessagingDeclarer module should have DeclareMessaging called")
 }

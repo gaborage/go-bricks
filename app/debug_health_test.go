@@ -129,7 +129,7 @@ func TestDebugHealthHandlers(t *testing.T) {
 			c := server.NewHandlerContextForTest(rec, req, nil)
 
 			err := debugHandlers.handleHealthDebug(c)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, tt.expectedStatus, rec.Code)
 
 			if tt.checkResponse != nil {
@@ -165,9 +165,9 @@ func TestGetAppInfo(t *testing.T) {
 				assert.Equal(t, "test-service", info.Name)
 				assert.Equal(t, "production", info.Environment)
 				assert.Equal(t, "2.1.0", info.Version)
-				assert.Greater(t, info.PID, 0)
-				assert.Greater(t, info.Goroutines, 0)
-				assert.Greater(t, info.MemoryUsage, uint64(0))
+				assert.Positive(t, info.PID)
+				assert.Positive(t, info.Goroutines)
+				assert.Positive(t, info.MemoryUsage)
 			},
 		},
 		{
@@ -182,9 +182,9 @@ func TestGetAppInfo(t *testing.T) {
 				assert.Empty(t, info.Name)
 				assert.Empty(t, info.Environment)
 				assert.Empty(t, info.Version)
-				assert.Greater(t, info.PID, 0)
-				assert.Greater(t, info.Goroutines, 0)
-				assert.Greater(t, info.MemoryUsage, uint64(0))
+				assert.Positive(t, info.PID)
+				assert.Positive(t, info.Goroutines)
+				assert.Positive(t, info.MemoryUsage)
 			},
 		},
 	}

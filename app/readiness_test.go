@@ -94,11 +94,6 @@ func TestProbeDescriptionJudge(t *testing.T) {
 			assert.Equal(t, tt.wantStatus, got.Status)
 			assert.Equal(t, tt.critical, got.Critical)
 			assert.Equal(t, tt.wantStatus, got.Details[statusKey], "details.status mirrors the verdict")
-			if tt.wantErr != nil {
-				assert.ErrorIs(t, got.Err, tt.wantErr)
-			} else {
-				assert.NoError(t, got.Err)
-			}
 			assert.Equal(t, tt.wantAcquired, stub.acquired, "lease attempts")
 			assert.Equal(t, tt.wantReleased, stub.released, "lease releases")
 			if tt.wantReleased == 1 {
@@ -106,6 +101,11 @@ func TestProbeDescriptionJudge(t *testing.T) {
 			}
 			if tt.stub.stats != nil {
 				assert.Equal(t, 1, got.Details["active"], "kind statistics are carried into details")
+			}
+			if tt.wantErr != nil {
+				require.ErrorIs(t, got.Err, tt.wantErr)
+			} else {
+				require.NoError(t, got.Err)
 			}
 		})
 	}
@@ -210,11 +210,11 @@ func TestDatabaseProbeReportsNotConfigured(t *testing.T) {
 	result := databaseProbe(newRealConnectorDBManager(&config.Config{}), false).Run(context.Background())
 
 	assert.Equal(t, notConfiguredStatus, result.Status)
-	assert.NoError(t, result.Err, "an absent database is not a readiness failure")
 	assert.Equal(t, notConfiguredStatus, result.Details[statusKey])
 	// Criticality is retained deliberately: a database that IS configured and down must
 	// still fail readiness. Absence is handled by the status, never by demoting the probe.
 	assert.True(t, result.Critical)
+	require.NoError(t, result.Err, "an absent database is not a readiness failure")
 }
 
 func TestDatabaseProbeStaysUnhealthyForUnsupportedType(t *testing.T) {
@@ -268,8 +268,8 @@ func TestMessagingProbeNotReadyIsUnhealthyWithError(t *testing.T) {
 	got := messagingProbe(m, false).Run(context.Background())
 
 	assert.Equal(t, unhealthyStatus, got.Status)
-	assert.ErrorIs(t, got.Err, errPublisherNotReady)
 	assert.False(t, got.Critical, "messaging is never critical")
+	require.ErrorIs(t, got.Err, errPublisherNotReady)
 }
 
 func TestMessagingProbeCountsItsOwnPublisher(t *testing.T) {
@@ -305,8 +305,8 @@ func TestCacheProbeBoundsTheWarmPathPing(t *testing.T) {
 	got := cacheProbe(m, true, false, false).Run(context.Background())
 
 	assert.Equal(t, unhealthyStatus, got.Status)
-	assert.Error(t, got.Err)
 	assert.Less(t, time.Since(start), cacheProbePingTimeout+200*time.Millisecond)
+	require.Error(t, got.Err)
 }
 
 func TestCacheProbeAbsentNeverLeases(t *testing.T) {
@@ -315,8 +315,8 @@ func TestCacheProbeAbsentNeverLeases(t *testing.T) {
 	got := cacheProbe(m, true, true, false).Run(context.Background())
 
 	assert.Equal(t, notConfiguredStatus, got.Status)
-	assert.NoError(t, got.Err)
 	assert.Contains(t, got.Details, "active_caches", "manager counters still render")
+	require.NoError(t, got.Err)
 }
 
 // TestCacheProbeReportsPerTenantWhenDefaultKeyIsUnconfigured is the cache half of the
@@ -357,9 +357,9 @@ func TestStreamsProbeNotOpenIsUnhealthy(t *testing.T) {
 
 	assert.Equal(t, componentStreams, got.Name)
 	assert.Equal(t, unhealthyStatus, got.Status)
-	assert.ErrorIs(t, got.Err, errStreamsNotOpen)
 	assert.False(t, got.Critical, "a reconnecting stream consumer must not 503 the whole service")
 	assert.Contains(t, got.Details, "stored_offsets")
+	require.ErrorIs(t, got.Err, errStreamsNotOpen)
 }
 
 func TestConvertCacheStatsToMap(t *testing.T) {
