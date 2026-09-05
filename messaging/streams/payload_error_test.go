@@ -28,8 +28,8 @@ func TestPayloadErrorIsMatchesStageSentinel(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := &PayloadError{Consumer: testConsumerName, Stage: tc.stage}
 
-			assert.ErrorIs(t, err, tc.match)
-			assert.NotErrorIs(t, err, tc.notMatch)
+			assert.ErrorIs(t, err, tc.match)       //nolint:testifylint // peer sentinel probe; the paired negative claim follows
+			assert.NotErrorIs(t, err, tc.notMatch) //nolint:testifylint // peer sentinel probe; a third sentinel check follows
 			require.NotErrorIs(t, err, errHandlerFailed)
 		})
 	}
@@ -41,7 +41,7 @@ func TestPayloadErrorIsRejectsUnknownStage(t *testing.T) {
 	for _, stage := range []PayloadStage{"", "decoding", "DECODE"} {
 		err := &PayloadError{Consumer: testConsumerName, Stage: stage}
 
-		assert.NotErrorIs(t, err, ErrPayloadUndecodable, "stage %q", stage)
+		assert.NotErrorIs(t, err, ErrPayloadUndecodable, "stage %q", stage) //nolint:testifylint // peer sentinel probe; the second sentinel claim follows
 		require.NotErrorIs(t, err, ErrPayloadInvalid, "stage %q", stage)
 	}
 }
@@ -74,7 +74,7 @@ func TestPayloadErrorUnwrapReachesCause(t *testing.T) {
 
 	require.Same(t, inner, err.Unwrap())
 	assert.Contains(t, err.Error(), payloaderr.UnauditedDecoderSummary)
-	assert.ErrorIs(t, err, inner)
+	assert.ErrorIs(t, err, inner) //nolint:testifylint // peer sentinel probe; the sentinel mapping follows
 	// The sentinel mapping must survive alongside the unwrap chain.
 	require.ErrorIs(t, err, ErrPayloadUndecodable)
 }

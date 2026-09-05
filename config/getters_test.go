@@ -138,13 +138,13 @@ func TestNilConfigAccessors(t *testing.T) {
 	assert.False(t, cfg.Bool("any"))
 
 	_, err := cfg.RequiredInt("any")
-	assert.Error(t, err)
+	assert.Error(t, err) //nolint:testifylint // the RequiredString and Unmarshal nil-safety probes below are independent
 
 	_, err = cfg.RequiredString("any")
-	assert.Error(t, err)
+	assert.Error(t, err) //nolint:testifylint // the Unmarshal probe and the Exists/All/Custom checks below are independent
 
 	err = cfg.Unmarshal("custom", &struct{}{})
-	assert.Error(t, err)
+	assert.Error(t, err) //nolint:testifylint // the Exists/All/Custom checks below are independent
 
 	assert.False(t, cfg.Exists("any"))
 	assert.Nil(t, cfg.All())

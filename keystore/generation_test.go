@@ -108,7 +108,7 @@ func TestFamilyOfOrdinaryEntryIsNotJudged(t *testing.T) {
 	// ordinary (HTTP jose) entry name carries no family part to judge.
 	for _, name := range []string{strings.Repeat("a", 65), "svc.legacy"} {
 		_, ok, err := familyOf(name, &keyEntry{public: &rsa.PublicKey{}})
-		assert.NoError(t, err, name)
+		assert.NoError(t, err, name) //nolint:testifylint // loop over case peers; abort would hide the rest
 		assert.False(t, ok, name)
 	}
 }
@@ -225,7 +225,7 @@ func TestNewStoreGenerationsEnumeratesProvisionedOnly(t *testing.T) {
 
 	// Name-addressed access to generation entries is untouched.
 	_, err = s.PrivateKey("svc-sign-v2")
-	assert.NoError(t, err)
+	assert.NoError(t, err) //nolint:testifylint // an independent second lookup follows
 	_, err = s.PrivateKey("svc-sign-v1")
 	assert.Error(t, err)
 }

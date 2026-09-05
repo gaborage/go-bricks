@@ -43,6 +43,6 @@ func TestNewQueryBuilderHoldsTheVendorRenderer(t *testing.T) {
 func TestDefaultRendererUsesPostgreSQLSegmentGrammar(t *testing.T) {
 	renderer := rendererFor("mystery")
 
-	assert.Error(t, renderer.ValidateCharset("a#b"))
+	assert.Error(t, renderer.ValidateCharset("a#b")) //nolint:testifylint // paired one-line checks over different inputs
 	assert.NoError(t, renderer.ValidateCharset("plain_name"))
 }

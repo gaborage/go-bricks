@@ -73,7 +73,7 @@ func TestTenantStoreTenantOverrides(t *testing.T) {
 	assert.Equal(t, tenantAMQPURL, url)
 
 	_, err = source.DBConfig(context.Background(), "unknown")
-	assert.Error(t, err)
+	assert.Error(t, err) //nolint:testifylint // a different resolver path is asserted next
 
 	_, err = source.BrokerURL(context.Background(), "unknown")
 	assert.Error(t, err)
@@ -228,7 +228,7 @@ func TestTenantStoreRemoveTenant(t *testing.T) {
 
 	// Verify we get error when trying to access removed tenant
 	_, err := store.DBConfig(context.Background(), tenantA)
-	assert.Error(t, err)
+	assert.Error(t, err) //nolint:testifylint // an independent no-mutation property follows
 
 	// Remove non-existent tenant (should not panic)
 	store.RemoveTenant("non-existent")

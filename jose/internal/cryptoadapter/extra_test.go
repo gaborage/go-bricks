@@ -91,17 +91,17 @@ func TestExtraRoundTripInt64(t *testing.T) {
 			assert.Equal(t, large, got)
 
 			_, err = hdr.ExtraInt64("frac")
-			assert.ErrorIs(t, err, ErrExtraMalformed)
+			assert.ErrorIs(t, err, ErrExtraMalformed) //nolint:testifylint // independent branch probe; require would abort the peers
 			_, err = hdr.ExtraInt64("str")
-			assert.ErrorIs(t, err, ErrExtraMalformed)
+			assert.ErrorIs(t, err, ErrExtraMalformed) //nolint:testifylint // independent branch probe
 			_, err = hdr.ExtraInt64("huge")
-			assert.ErrorIs(t, err, ErrExtraMalformed)
+			assert.ErrorIs(t, err, ErrExtraMalformed) //nolint:testifylint // independent branch probe
 			// 2^53 itself is still exact and must pass; only beyond it is rejected.
 			edge, err := hdr.ExtraInt64("edge")
 			require.NoError(t, err)
 			assert.Equal(t, int64(maxExactInt), edge)
 			_, err = hdr.ExtraInt64("absent")
-			assert.ErrorIs(t, err, ErrExtraAbsent)
+			assert.ErrorIs(t, err, ErrExtraAbsent) //nolint:testifylint // independent branch probe
 			assert.NotErrorIs(t, err, ErrExtraMalformed)
 		})
 	}
@@ -119,9 +119,9 @@ func TestExtraRoundTripStringSlice(t *testing.T) {
 			assert.Equal(t, []string{"subject", "card"}, got)
 
 			_, err = hdr.ExtraStringSlice("mixed")
-			assert.ErrorIs(t, err, ErrExtraMalformed)
+			assert.ErrorIs(t, err, ErrExtraMalformed) //nolint:testifylint // independent branch probe
 			_, err = hdr.ExtraStringSlice("scalar")
-			assert.ErrorIs(t, err, ErrExtraMalformed)
+			assert.ErrorIs(t, err, ErrExtraMalformed) //nolint:testifylint // independent branch probe
 			_, err = hdr.ExtraStringSlice("absent")
 			assert.ErrorIs(t, err, ErrExtraAbsent)
 		})
@@ -162,7 +162,7 @@ func TestExtraCollisionRejected(t *testing.T) {
 		t.Run(owned, func(t *testing.T) {
 			extra := map[string]any{owned: "evil"}
 			_, err := Sign([]byte(`{}`), key, &SignOptions{Kid: "k", SigAlg: jose.RS256, Extra: extra})
-			assert.ErrorIs(t, err, ErrExtraCollision)
+			assert.ErrorIs(t, err, ErrExtraCollision) //nolint:testifylint // Encrypt's own collision check follows
 			_, err = Encrypt([]byte(`{}`), &key.PublicKey, &EncryptOptions{Kid: "k", KeyAlg: jose.RSA_OAEP_256, Enc: jose.A256GCM, Extra: extra})
 			assert.ErrorIs(t, err, ErrExtraCollision)
 		})
@@ -277,7 +277,7 @@ func TestPeekProtectedHeaderRejectsOversizedSegment0(t *testing.T) {
 
 	over := strings.Repeat("A", maxPeekHeaderBytes+1)
 	_, err = PeekProtectedHeader(over + ".p.s")
-	assert.ErrorIs(t, err, ErrPeekMalformed)
+	assert.ErrorIs(t, err, ErrPeekMalformed) //nolint:testifylint // separate segment-count branch follows
 	// Many dots never allocate more than six segments before rejection.
 	_, err = PeekProtectedHeader(strings.Repeat(".", 1<<16))
 	assert.ErrorIs(t, err, ErrPeekMalformed)
@@ -299,7 +299,7 @@ func TestNilHeaderAccessorsReportAbsent(t *testing.T) {
 	_, ok := hdr.ExtraString("x")
 	assert.False(t, ok)
 	_, err := hdr.ExtraInt64("x")
-	assert.ErrorIs(t, err, ErrExtraAbsent)
+	assert.ErrorIs(t, err, ErrExtraAbsent) //nolint:testifylint // a different accessor's nil-guard follows
 	_, err = hdr.ExtraStringSlice("x")
 	assert.ErrorIs(t, err, ErrExtraAbsent)
 }

@@ -68,6 +68,6 @@ func TestSwapReturnsThePreviousDispatcher(t *testing.T) {
 
 	returned := Swap(nil)
 	require.NotNil(t, returned)
-	assert.EqualError(t, returned(t.Context(), nil, Options{}, nil), "first")
+	assert.EqualError(t, returned(t.Context(), nil, Options{}, nil), "first") //nolint:testifylint // a second swap phase follows
 	assert.Nil(t, Swap(first), "after a nil swap nothing is registered")
 }

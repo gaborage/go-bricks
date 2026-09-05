@@ -610,7 +610,7 @@ func TestValidatorEdgeCases(t *testing.T) {
 
 		// Nil pointer should fail required validation
 		err := validator.Validate(PointerStruct{Name: nil})
-		assert.Error(t, err)
+		assert.Error(t, err) //nolint:testifylint // an independent second Validate call follows
 
 		// Valid pointer should pass
 		name := "Test Name"
@@ -645,7 +645,7 @@ func TestValidatorEdgeCases(t *testing.T) {
 
 		// Empty slice should fail
 		err := validator.Validate(SliceStruct{Items: []string{}})
-		assert.Error(t, err)
+		assert.Error(t, err) //nolint:testifylint // an independent second Validate call follows
 
 		// Valid slice should pass
 		err = validator.Validate(SliceStruct{Items: []string{"item1", "item2"}})

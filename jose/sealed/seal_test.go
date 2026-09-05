@@ -147,7 +147,7 @@ func TestSealProducesTheDecidedWire(t *testing.T) {
 	assert.Equal(t, []any{"card"}, outer["sp"])
 	assert.Equal(t, eventType, outer["etyp"])
 	assert.Equal(t, "tenant-a", outer["tid"])
-	assert.Equal(t, float64(now.Unix()), outer["iat"])
+	assert.InDelta(t, float64(now.Unix()), outer["iat"], 0)
 	jti, _ := outer["jti"].(string)
 	_, err = uuid.Parse(jti)
 	require.NoError(t, err, "jti must be a UUID")
@@ -325,7 +325,7 @@ func TestOptionsValidateIsAKeyFreePreflight(t *testing.T) {
 	assert.Zero(t, counting.calls, "Validate must not touch key material")
 
 	opts.SignKid = "svc-orders-sign-v1"
-	assert.ErrorIs(t, opts.Validate(spec), sealed.ErrKidFamilyMismatch)
+	assert.ErrorIs(t, opts.Validate(spec), sealed.ErrKidFamilyMismatch) //nolint:testifylint // nil-receiver branch probed below
 
 	var nilOpts *sealed.Options
 	assert.ErrorIs(t, nilOpts.Validate(spec), sealed.ErrSealFailed)

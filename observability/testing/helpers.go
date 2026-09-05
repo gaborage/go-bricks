@@ -283,7 +283,7 @@ func AssertSpanAttribute(t *testing.T, span *tracetest.SpanStub, key string, exp
 			case int64:
 				assert.Equal(t, v, attr.Value.AsInt64(), attrValueMismatchErrMsg, key)
 			case float64:
-				assert.Equal(t, v, attr.Value.AsFloat64(), attrValueMismatchErrMsg, key)
+				assert.InDelta(t, v, attr.Value.AsFloat64(), 0, attrValueMismatchErrMsg, key)
 			case bool:
 				assert.Equal(t, v, attr.Value.AsBool(), attrValueMismatchErrMsg, key)
 			default:

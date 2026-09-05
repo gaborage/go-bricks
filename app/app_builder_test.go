@@ -488,7 +488,7 @@ func TestAppBuilderResolveDependenciesFailsClosedOnInvalidCacheConfig(t *testing
 
 			require.Error(t, builder.err)
 			assert.Nil(t, builder.bundle, "a failed resolution must not publish a partial bundle")
-			assert.ErrorContains(t, builder.err, tt.wantCause)
+			assert.ErrorContains(t, builder.err, tt.wantCause) //nolint:testifylint // require would abort before the Build-propagation assertions
 
 			app, log, err := builder.CreateApp().Build()
 			require.Error(t, err, "startup must abort, not continue with a nil cache manager")
@@ -536,7 +536,7 @@ func TestNewWithConfigFailsClosedOnInvalidCacheConfig(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, app)
 	assert.NotNil(t, log)
-	assert.ErrorContains(t, err, "cache manager")
+	assert.ErrorContains(t, err, "cache manager") //nolint:testifylint // second clause of the same wrapped error follows
 	require.ErrorContains(t, err, "maxsize cannot be negative")
 }
 
@@ -576,7 +576,7 @@ func TestBuildClosesBundleManagersWhenALaterStepAborts(t *testing.T) {
 	require.Error(t, err, "an unreachable database must abort startup at pre-initialization")
 	assert.Nil(t, app)
 	assert.NotNil(t, log)
-	assert.ErrorContains(t, err, "connection failed during startup")
+	assert.ErrorContains(t, err, "connection failed during startup") //nolint:testifylint // require would abort before the manager-close assertions
 
 	bundle := builder.bundle
 	require.NotNil(t, bundle, "the abort must come after the bundle was built, or this pins nothing")

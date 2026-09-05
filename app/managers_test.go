@@ -799,11 +799,11 @@ func TestResourceManagerFactoryCreateCacheManagerFailsClosed(t *testing.T) {
 			// %w, not %v: consumers must be able to unwrap to the cache package's cause.
 			// Hoisted above the message clauses: it is an independent property, so a
 			// clause mismatch must not hide it.
-			assert.Error(t, errors.Unwrap(err), "the underlying cause must stay unwrappable")
+			assert.Error(t, errors.Unwrap(err), "the underlying cause must stay unwrappable") //nolint:testifylint // hoisted above the message clauses on purpose; require would hide them
 			// "cache manager" is the WRAPPER's prefix (app/managers.go) and tt.wantCause
 			// is the inner error's detail (cache/manager.go) — two code paths, so a
 			// wrapper regression must not hide whether the cause still surfaces.
-			assert.ErrorContains(t, err, "cache manager")
+			assert.ErrorContains(t, err, "cache manager") //nolint:testifylint // wrapper prefix; the independent inner-cause clause follows
 			require.ErrorContains(t, err, tt.wantCause)
 		})
 	}
@@ -825,8 +825,8 @@ func TestResourceManagerFactoryCreateCacheManagerReportsResolvedPoolSize(t *test
 	// The first two clauses are one format string in app/managers.go; the third is the
 	// wrapped cache error. Neither wrapper clause may abort, or a prefix regression hides
 	// whether the inner cause still reaches the operator.
-	assert.ErrorContains(t, err, "maxsize=-1", "the resolved pool size must appear in the error")
-	assert.ErrorContains(t, err, "multitenant.limits.tenants", "and the key it actually came from")
+	assert.ErrorContains(t, err, "maxsize=-1", "the resolved pool size must appear in the error")   //nolint:testifylint // wrapper clause; a second clause and the inner cause follow
+	assert.ErrorContains(t, err, "multitenant.limits.tenants", "and the key it actually came from") //nolint:testifylint // wrapper clause; the independent inner-cause clause follows
 	require.ErrorContains(t, err, "maxsize cannot be negative")
 }
 

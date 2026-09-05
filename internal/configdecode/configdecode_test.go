@@ -60,7 +60,7 @@ func TestNumericToDurationGuardHookFunc(t *testing.T) {
 			if tc.wantErr {
 				require.Error(t, err)
 				for _, s := range tc.errSubstr {
-					assert.ErrorContains(t, err, s)
+					assert.ErrorContains(t, err, s) //nolint:testifylint // loop over substring peers; abort would hide the rest
 				}
 				return
 			}

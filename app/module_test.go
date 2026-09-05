@@ -291,7 +291,7 @@ func TestModuleRegistryShutdownWithErrors(t *testing.T) {
 
 	assert.Contains(t, err.Error(), "failing-module1")
 	assert.Contains(t, err.Error(), "failing-module2")
-	assert.ErrorIs(t, err, err1)
+	assert.ErrorIs(t, err, err1) //nolint:testifylint // second joined error asserted on the next line
 	require.ErrorIs(t, err, err2)
 }
 

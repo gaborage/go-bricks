@@ -32,7 +32,7 @@ func TestFetcherFromClientReturnsSecretString(t *testing.T) {
 	fetcher := FetcherFromClient(client)
 	got, err := fetcher(context.Background(), "gobricks/migrate/tenant-a")
 	require.NoError(t, err)
-	assert.Equal(t, `{"type":"postgresql"}`, string(got))
+	assert.Equal(t, `{"type":"postgresql"}`, string(got)) //nolint:testifylint // verbatim secret bytes, not JSON equivalence
 	require.NotNil(t, client.captured)
 	assert.Equal(t, "gobricks/migrate/tenant-a", aws.ToString(client.captured.SecretId))
 }
@@ -47,7 +47,7 @@ func TestFetcherFromClientReturnsSecretBinary(t *testing.T) {
 	fetcher := FetcherFromClient(client)
 	got, err := fetcher(context.Background(), "gobricks/migrate/tenant-b")
 	require.NoError(t, err)
-	assert.Equal(t, `{"type":"oracle"}`, string(got))
+	assert.Equal(t, `{"type":"oracle"}`, string(got)) //nolint:testifylint // verbatim secret bytes, not JSON equivalence
 }
 
 func TestFetcherFromClientPropagatesError(t *testing.T) {

@@ -344,7 +344,7 @@ func TestLoadKeyBytesRejectsMaterialInFileField(t *testing.T) {
 		// %q-quoted, so on Windows the separators arrive escaped — comparing
 		// against the raw path fails there for a reason unrelated to the code.
 		assert.Contains(t, err.Error(), fmt.Sprintf("%q", missing))
-		assert.ErrorContains(t, err, "read file")
+		assert.ErrorContains(t, err, "read file") //nolint:testifylint // non-final identity peer; the sentinel check is the require
 		require.ErrorIs(t, err, fs.ErrNotExist, "Errno must not break errors.Is matching")
 	})
 
@@ -417,7 +417,7 @@ func TestNewStoreSecretBelowMinLength(t *testing.T) {
 		"weak": {Secret: config.KeySourceConfig{Value: base64.StdEncoding.EncodeToString([]byte("short"))}},
 	}, 32)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, `key "weak"`)
+	assert.ErrorContains(t, err, `key "weak"`) //nolint:testifylint // non-final identity peer; second clause is the require
 	require.ErrorContains(t, err, "minimum is 32")
 }
 
@@ -507,7 +507,7 @@ func TestPublicKeyOnSecretEntryRejected(t *testing.T) {
 	require.NoError(t, err)
 
 	_, pubErr := s.PublicKey("mac")
-	assert.ErrorContains(t, pubErr, "has no public key configured")
+	assert.ErrorContains(t, pubErr, "has no public key configured") //nolint:testifylint // an independent private-key lookup follows
 	_, privErr := s.PrivateKey("mac")
 	assert.ErrorContains(t, privErr, "has no private key configured")
 }
@@ -608,6 +608,6 @@ func TestNewStorePKCS12BundleUnreadableNamesKeyNeverPath(t *testing.T) {
 	}, 0)
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), misFiled)
-	assert.ErrorContains(t, err, `keystore: key "vts" pkcs12: `)
+	assert.ErrorContains(t, err, `keystore: key "vts" pkcs12: `) //nolint:testifylint // non-final identity peer; the elided clause is the require
 	require.ErrorContains(t, err, "elided")
 }

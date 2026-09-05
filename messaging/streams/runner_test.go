@@ -407,7 +407,7 @@ func TestOffsetBookFlushReportsEveryFailure(t *testing.T) {
 	assert.ElementsMatch(t, []string{testPartition0, testPartition2}, reported,
 		"both failing partitions are named, in whatever order the map yielded them")
 	assert.Equal(t, []int64{42}, landing.offsets(), "the healthy partition still commits")
-	assert.ErrorIs(t, errByStream[testPartition0], errPartition0, "each failure carries its own partition's error")
+	assert.ErrorIs(t, errByStream[testPartition0], errPartition0, "each failure carries its own partition's error") //nolint:testifylint // peer probe over a different partition's error
 	require.ErrorIs(t, errByStream[testPartition2], errPartition2)
 }
 

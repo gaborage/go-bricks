@@ -1078,7 +1078,7 @@ func TestShutdownObservabilityFailureIsBestEffort(t *testing.T) {
 
 			err := a.Shutdown(context.Background())
 
-			assert.NoError(t, err, "observability teardown must never fail the shutdown")
+			assert.NoError(t, err, "observability teardown must never fail the shutdown") //nolint:testifylint // branch-dependent log assertions follow
 			assert.True(t, closer.closed, "closers must still run after an observability failure")
 
 			if tc.shutdownErr == nil {

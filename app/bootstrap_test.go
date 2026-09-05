@@ -602,7 +602,7 @@ observability:
 
 		require.Error(t, err)
 		assert.Nil(t, provider, "a caller must not receive a silently degraded provider")
-		assert.ErrorContains(t, err, "present but invalid")
+		assert.ErrorContains(t, err, "present but invalid") //nolint:testifylint // guarded by require.Error above; second clause follows
 		require.ErrorContains(t, err, "delivered empty")
 	})
 

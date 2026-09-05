@@ -100,7 +100,7 @@ func TestPositionalPath(t *testing.T) {
 	t.Run("help_wrapped_in_err_usage", func(t *testing.T) {
 		_, err := PositionalPath(newFlagSet(t), []string{"-h"})
 		require.Error(t, err)
-		assert.ErrorIs(t, err, flag.ErrHelp, "the caller exits 0 on this one")
+		assert.ErrorIs(t, err, flag.ErrHelp, "the caller exits 0 on this one") //nolint:testifylint // non-final identity peer; second sentinel is the require
 		require.ErrorIs(t, err, ErrUsage, "and must not reprint what the FlagSet printed")
 	})
 }
@@ -216,7 +216,7 @@ func TestKeySourcesLoad(t *testing.T) {
 
 		// The kids are not interchangeable: each door knows only its own.
 		_, err = keys.PrivateKey(testEncKid)
-		assert.Error(t, err)
+		assert.Error(t, err) //nolint:testifylint // an independent second lookup follows
 		_, err = keys.PublicKey(testSignKid)
 		assert.Error(t, err)
 	})
@@ -228,7 +228,7 @@ func TestReadPayload(t *testing.T) {
 		// stdin holds different bytes, so reading it instead would be visible.
 		data, err := ReadPayload(path, bytes.NewBufferString("STDIN"))
 		require.NoError(t, err)
-		assert.Equal(t, payloadJSON, string(data))
+		assert.Equal(t, payloadJSON, string(data)) //nolint:testifylint // byte-exact read-back, not JSON equivalence
 	})
 
 	stdinCases := []struct{ name, path string }{
@@ -239,7 +239,7 @@ func TestReadPayload(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			data, err := ReadPayload(tt.path, bytes.NewBufferString(payloadJSON))
 			require.NoError(t, err)
-			assert.Equal(t, payloadJSON, string(data))
+			assert.Equal(t, payloadJSON, string(data)) //nolint:testifylint // byte-exact read-back, not JSON equivalence
 		})
 	}
 
