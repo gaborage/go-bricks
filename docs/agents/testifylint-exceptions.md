@@ -44,9 +44,10 @@ locations.**
 
 The rows were recorded before the fleet rule was settled, and most fail it: a site stays `assert`
 only when the following assertion is BOTH independent of the error AND the property the test
-exists to pin, and it converts whenever that assertion dereferences the error (`err.Error()`,
-`errors.Is`, `Contains`/`NotContains` on the message) — a nil error would panic there anyway, so
-`require` turns a panic into a clean failure and loses nothing.
+exists to pin. It converts whenever that assertion reads the error, for one of two reasons:
+a bare `err.Error()` (including inside `Contains`/`NotContains`) would PANIC on a nil error, so
+`require` turns a panic into a clean failure; `errors.Is` and `ErrorContains` merely return false
+or fail redundantly on nil, so `require` there buys one clean failure rather than two, not safety.
 
 By that rule roughly 18 of P4's 24 rows should be CONVERTED rather than annotated: the seven
 `readiness_test.go` rows and the paired-clause rows in `bootstrap_test.go`, `module_test.go`,
