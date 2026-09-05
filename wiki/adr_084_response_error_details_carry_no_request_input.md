@@ -8,8 +8,22 @@
 > exception this ADR recorded. `server/jose.go`'s `buildErrorEnvelope` discarded its
 > `*config.Config` and copied `IAPIError.Details()` to the wire ungated; it now renders
 > `details` through `devDetails`, so all three renderers — enveloped, raw and JOSE —
-> share one gate. The Decision below still reads that the JOSE envelope "stays ungated
-> here"; that sentence is superseded and kept only as the historical record.
+> share one gate.
+>
+> Two sentences in the Decision below are SUPERSEDED by this amendment and are kept
+> only as the historical record:
+>
+> > Both response renderers — the standard envelope and raw mode — already funnel
+> > through it, so the predicate lives there once and applies to every status rather
+> > than only the 5xx path `[C60.30]` reached.
+>
+> Three renderers funnel through it now, not two.
+>
+> > The JOSE envelope is the third renderer and stays ungated here: it is encrypted to
+> > an authenticated peer, and unifying the three is #1163's job.
+>
+> That job is done, in this amendment's change; the JOSE envelope is gated exactly like
+> the other two.
 >
 > The original reasoning was that ciphertext to an authenticated peer is not
 > disclosure. That does not hold: the peer decrypts the body and routinely logs it, so
