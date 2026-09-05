@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.64.0](https://github.com/gaborage/go-bricks/compare/v0.63.0...v0.64.0) (2026-09-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **testing:** AssertKeyNotFound aborts on an unexpected public key
+* **database:** refuse # in PostgreSQL identifiers at every builder door
+* **server:** route JOSE error details through the single dev gate
+* **database:** order Oracle SET pairs by name; jf.NotEq renders <>
+
+### Added
+
+* **messaging:** add messaging.publishtimeout aggregate publish bound ([11e098c](https://github.com/gaborage/go-bricks/commit/11e098c384e034fabb2b551f7d669d4705affcb8)), closes [#1250](https://github.com/gaborage/go-bricks/issues/1250)
+* **streams:** attribute declared streams per module ([b57fcad](https://github.com/gaborage/go-bricks/commit/b57fcad6cce41d8a9f1f6615e501ea5d7451bca0)), closes [#1414](https://github.com/gaborage/go-bricks/issues/1414)
+
+
+### Fixed
+
+* **config:** warn when a lenient getter swallows a value ([c51efc1](https://github.com/gaborage/go-bricks/commit/c51efc120d621a35f91f19fb2b701a035ee5e84a)), closes [#1111](https://github.com/gaborage/go-bricks/issues/1111)
+* **database:** order Oracle SET pairs by name; jf.NotEq renders &lt;&gt; ([dcc3eb4](https://github.com/gaborage/go-bricks/commit/dcc3eb4e1d89ccf05d7b1de0e05d7439916d4f81)), closes [#1185](https://github.com/gaborage/go-bricks/issues/1185) [#1200](https://github.com/gaborage/go-bricks/issues/1200)
+* **database:** refuse # in PostgreSQL identifiers at every builder door ([84b60aa](https://github.com/gaborage/go-bricks/commit/84b60aa29a1c794b4e5893faad14eb5aa3aa9d99)), closes [#1202](https://github.com/gaborage/go-bricks/issues/1202)
+* **server:** route JOSE error details through the single dev gate ([421f58b](https://github.com/gaborage/go-bricks/commit/421f58b60e1d8b84af4888b8ad9d75659c6459f0)), closes [#1163](https://github.com/gaborage/go-bricks/issues/1163)
+* **testing:** AssertKeyNotFound aborts on an unexpected public key ([cde7691](https://github.com/gaborage/go-bricks/commit/cde76910e171d91ffdfd9e37b8f059be3c16c7ee))
+* **testing:** restore OTel globals without shutting down the delegate ([6331fa1](https://github.com/gaborage/go-bricks/commit/6331fa1b47ceee1ac207824ce3f75b5b7b0ea5aa)), closes [#1093](https://github.com/gaborage/go-bricks/issues/1093)
+
+
+### Changed
+
+* **app:** make the resourcepool error counter lock-free ([9877974](https://github.com/gaborage/go-bricks/commit/9877974a573b9fe1b29bdf5672ab79e20bb1c776)), closes [#1236](https://github.com/gaborage/go-bricks/issues/1236)
+* **config:** normalization owns the server.bodylimit default ([0546c69](https://github.com/gaborage/go-bricks/commit/0546c69e36f61e1fbe347d4d110f6a321108a2bf)), closes [#1031](https://github.com/gaborage/go-bricks/issues/1031)
+* **database:** give the deferred builder error a single owner ([0df2815](https://github.com/gaborage/go-bricks/commit/0df2815c24b57e1349d4c6b37d02ad9ec33f1f92)), closes [#1197](https://github.com/gaborage/go-bricks/issues/1197)
+* **database:** make sqlid compose on the shared identifier grammar ([f79a7bb](https://github.com/gaborage/go-bricks/commit/f79a7bbb44ae6faa7363ab9c1c754502fb3cf723)), closes [#1201](https://github.com/gaborage/go-bricks/issues/1201)
+* **database:** make the identifier parser's escape skip index-free ([45f2d38](https://github.com/gaborage/go-bricks/commit/45f2d38a3924c14d33d72f232064133098ff0059)), closes [#1193](https://github.com/gaborage/go-bricks/issues/1193)
+* **database:** thread the renderer through identifier validators ([e1c513c](https://github.com/gaborage/go-bricks/commit/e1c513caa4be3380a6f87bba51c3c3f94a2bdefe))
+
 ## [0.63.0](https://github.com/gaborage/go-bricks/compare/v0.62.0...v0.63.0) (2026-09-05)
 
 
