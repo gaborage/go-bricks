@@ -258,7 +258,7 @@ func TestPeekProtectedHeaderRejectsNonCompact(t *testing.T) {
 	for name, in := range cases {
 		t.Run(name, func(t *testing.T) {
 			hdr, err := PeekProtectedHeader(in)
-			assert.ErrorIs(t, err, ErrPeekMalformed)
+			require.ErrorIs(t, err, ErrPeekMalformed)
 			assert.Equal(t, Header{}, hdr)
 		})
 	}
@@ -271,7 +271,7 @@ func TestPeekProtectedHeaderRejectsOversizedSegment0(t *testing.T) {
 	rawLen := maxPeekHeaderBytes / 4 * 3
 	pad := strings.Repeat("a", rawLen-len(`{"x":""}`))
 	inLimit := base64.RawURLEncoding.EncodeToString([]byte(`{"x":"` + pad + `"}`))
-	require.Equal(t, maxPeekHeaderBytes, len(inLimit))
+	require.Len(t, inLimit, maxPeekHeaderBytes)
 	_, err := PeekProtectedHeader(inLimit + ".p.s")
 	require.NoError(t, err)
 

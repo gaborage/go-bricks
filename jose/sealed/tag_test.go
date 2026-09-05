@@ -1,9 +1,7 @@
 package sealed_test
 
 import (
-	"errors"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -68,8 +66,11 @@ func TestScanTypeReturnsNilForUntaggedTypes(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			spec, err := sealed.ScanType(typ)
-			assert.NoError(t, err)
+			// The nil spec is an independent property of this case, so it is
+			// asserted before the error: require aborts, and a reader should
+			// still learn what the parser returned when the error regresses.
 			assert.Nil(t, spec)
+			require.NoError(t, err)
 		})
 	}
 }
@@ -221,12 +222,14 @@ func TestScanTypeScanErrors(t *testing.T) {
 			spec, err := sealed.ScanType(tc.typ)
 			assert.Nil(t, spec)
 			require.Error(t, err)
-			assert.ErrorIs(t, err, sealed.ErrTagInvalid)
 			var jerr *jose.Error
-			require.True(t, errors.As(err, &jerr))
+			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, tc.code, jerr.Code)
 			assert.Contains(t, jerr.Message, tc.msg)
-			assert.False(t, strings.Contains(jerr.Message, "%!"), "message must be fully formatted")
+			assert.NotContains(t, jerr.Message, "%!", "message must be fully formatted")
+			// Sentinel last: a wrong sentinel must not abort before the
+			// fully-formatted-message guard above.
+			require.ErrorIs(t, err, sealed.ErrTagInvalid)
 		})
 	}
 }
@@ -275,7 +278,7 @@ func TestScanTypeKidInvalidCarriesTheKid(t *testing.T) {
 		A string   `json:"a" seal:"subject"`
 	}{}))
 	var jerr *jose.Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, "bad.kid", jerr.Kid)
 	assert.Contains(t, jerr.Message, "for encrypt")
 }
