@@ -29,9 +29,14 @@ const (
 func ExampleNewTestTraceProvider() {
 	// Create a test trace provider with in-memory exporter
 	tp := obtest.NewTestTraceProvider()
-	defer tp.Shutdown(context.Background())
 
-	// Set as global provider (or use directly)
+	// Set as global provider (or use directly), and restore the previous one when
+	// done. Do NOT shut tp down: otel binds its global delegate to the first
+	// provider installed in the binary and never rebinds (internal/global/state.go
+	// sync.Once, #1093), so shutting it down would silence every later otel.Tracer
+	// call in this process.
+	prev := otel.GetTracerProvider()
+	defer otel.SetTracerProvider(prev)
 	otel.SetTracerProvider(tp)
 
 	// Your code that creates spans
@@ -55,9 +60,11 @@ func ExampleNewTestTraceProvider() {
 func ExampleNewTestMeterProvider() {
 	// Create a test meter provider with manual reader
 	mp := obtest.NewTestMeterProvider()
-	defer mp.Shutdown(context.Background())
 
-	// Set as global provider (or use directly)
+	// Set as global provider (or use directly), and restore the previous one when
+	// done. Do NOT shut mp down — see ExampleNewTestTraceProvider (#1093).
+	prev := otel.GetMeterProvider()
+	defer otel.SetMeterProvider(prev)
 	otel.SetMeterProvider(mp)
 
 	// Your code that records metrics
@@ -268,12 +275,18 @@ func TestExampleModuleInstrumentation(t *testing.T) {
 
 	// Setup test providers
 	tp := obtest.NewTestTraceProvider()
-	defer tp.Shutdown(context.Background())
-
 	mp := obtest.NewTestMeterProvider()
-	defer mp.Shutdown(context.Background())
 
-	// Set global providers (if your code uses global otel.GetTracerProvider())
+	// Set global providers (if your code uses global otel.GetTracerProvider()),
+	// restoring the previous ones when done and shutting neither down — otel's
+	// global delegate binds to the first provider installed in the binary and is
+	// never rebound (#1093).
+	prevTP := otel.GetTracerProvider()
+	prevMP := otel.GetMeterProvider()
+	defer func() {
+		otel.SetTracerProvider(prevTP)
+		otel.SetMeterProvider(prevMP)
+	}()
 	otel.SetTracerProvider(tp)
 	otel.SetMeterProvider(mp)
 

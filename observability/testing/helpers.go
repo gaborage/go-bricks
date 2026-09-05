@@ -6,9 +6,15 @@
 //
 // Usage:
 //
-//	// Create test trace provider
+//	// Create test trace provider and install it globally, restoring the
+//	// previous provider afterwards. Never Shutdown a provider you installed:
+//	// otel binds its global delegate to the first one installed in the binary
+//	// and never rebinds (internal/global/state.go sync.Once), so shutting it
+//	// down silences every later otel.Tracer call in the process.
 //	tp := NewTestTraceProvider()
-//	defer tp.Shutdown(context.Background())
+//	prev := otel.GetTracerProvider()
+//	defer otel.SetTracerProvider(prev)
+//	otel.SetTracerProvider(tp)
 //
 //	// Run your code that creates spans
 //	tracer := tp.TestTracer()
@@ -64,9 +70,11 @@ type TestTraceProvider struct {
 // Example:
 //
 //	tp := NewTestTraceProvider()
-//	defer tp.Shutdown(context.Background())
 //
-//	// Use the provider in your tests
+//	// Install it globally and restore the previous provider afterwards; do not
+//	// Shutdown it (see the package doc — otel's delegate binds once).
+//	prev := otel.GetTracerProvider()
+//	defer otel.SetTracerProvider(prev)
 //	otel.SetTracerProvider(tp)
 //
 //	// Later, get spans for assertions
@@ -115,9 +123,11 @@ type TestMeterProvider struct {
 // Example:
 //
 //	mp := NewTestMeterProvider()
-//	defer mp.Shutdown(context.Background())
 //
-//	// Use the provider in your tests
+//	// Install it globally and restore the previous provider afterwards; do not
+//	// Shutdown it (see the package doc — otel's delegate binds once).
+//	prev := otel.GetMeterProvider()
+//	defer otel.SetMeterProvider(prev)
 //	otel.SetMeterProvider(mp)
 //	meter := mp.Meter("test")
 //	counter, _ := meter.Int64Counter("test.counter")

@@ -91,17 +91,12 @@ func setupTelemetry(t *testing.T, processors ...sdktrace.SpanProcessor) (*tracet
 	ResetTracerForTesting()
 
 	t.Cleanup(func() {
-		// Restore and reset BEFORE asserting: require.NoError runs Goexit on
-		// failure, which would skip everything after it and leave a shut-down
-		// provider installed process-wide, with sharedTracer still pinned to it —
-		// so every later test in the binary would silently record nothing.
+		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
 		otel.SetTracerProvider(prevTP)
 		otel.SetTextMapPropagator(prevProp)
 		otel.SetMeterProvider(prevMP)
 		tracking.ResetMeterForTesting()
 		ResetTracerForTesting()
-		require.NoError(t, ttp.Shutdown(context.Background()))
-		require.NoError(t, mp.Shutdown(context.Background()))
 	})
 
 	return ttp.Exporter, mp

@@ -21,12 +21,15 @@ import (
 // collection and a cleanup function.
 func setupTestMeterProvider(t *testing.T) (mp *obtest.TestMeterProvider, cleanup func()) {
 	t.Helper()
+	prev := otel.GetMeterProvider()
 	mp = obtest.NewTestMeterProvider()
 	otel.SetMeterProvider(mp)
 	ResetMeterForTesting()
 	InitHTTPMeter()
 	cleanup = func() {
-		require.NoError(t, mp.Shutdown(context.Background()))
+		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
+		otel.SetMeterProvider(prev)
+		ResetMeterForTesting()
 	}
 	return mp, cleanup
 }

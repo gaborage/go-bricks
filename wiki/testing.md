@@ -61,6 +61,31 @@ A test fixture that *looks* like a credential is flagged by org secret scanners,
 - **Race detection:** All tests run with `-race` in CI
 - **Coverage target:** 80% (SonarCloud)
 
+## OTel Providers in Tests
+
+A test that installs a provider globally (`otel.SetTracerProvider` / `otel.SetMeterProvider`)
+must **restore the previous provider and never `Shutdown` the one it installed**. OpenTelemetry
+binds its global delegating wrapper to the *first* provider installed in a test binary and never
+rebinds it (`internal/global/state.go`, a `sync.Once`). Restoring `prev` in a cleanup restores
+the identity the global reports, but every instrument the wrapper already handed out keeps
+routing into that first provider — so shutting it down leaves the wrapper delegating into a dead
+provider, and every later `otel.Meter(...)` / `otel.Tracer(...)` call in the process silently
+records nothing. The failure is invisible: no error, no panic, just empty assertions in whichever
+test happens to run later (#1093).
+
+```go
+prev := otel.GetMeterProvider()
+mp := obtest.NewTestMeterProvider()
+otel.SetMeterProvider(mp)
+// no Shutdown: the first-installed provider is otel's permanent delegate
+t.Cleanup(func() { otel.SetMeterProvider(prev) })
+```
+
+Nothing leaks: `obtest.NewTestMeterProvider` is a `ManualReader` with no exporter and no
+background goroutine, and `NewTestTraceProvider` exports in-memory. A provider you never install
+globally is yours alone — shut it down as usual. `observability/testing`'s
+`TestRestoredGlobalStillDeliversAfterCleanup` pins the property.
+
 ## Database Testing
 
 GoBricks provides `database/testing` package for easy database mocking without sqlmock complexity (**73% less boilerplate**).

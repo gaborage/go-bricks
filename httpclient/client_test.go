@@ -924,6 +924,23 @@ func TestRequestInterceptorRunsPerAttempt(t *testing.T) {
 func TestTraceIDPropagation(t *testing.T) {
 	log := createTestLogger()
 
+	// Force a non-recording span for these subtests. Process-wide otel state can
+	// carry a real, still-live TracerProvider installed by an earlier test in
+	// this binary (the global delegate is permanently bound to the first
+	// installed provider — internal/global/state.go sync.Once, #1093), which
+	// would otherwise route ensureTraceContextHeaders down the "real span"
+	// branch instead of the legacy synthetic path these subtests exercise.
+	originalTP := otel.GetTracerProvider()
+	originalProp := otel.GetTextMapPropagator()
+	otel.SetTracerProvider(tracenoop.NewTracerProvider())
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	tracking.ResetTracerForTesting()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(originalTP)
+		otel.SetTextMapPropagator(originalProp)
+		tracking.ResetTracerForTesting()
+	})
+
 	t.Run("automatically adds trace ID when none present", func(t *testing.T) {
 		var requestHeaders nethttp.Header
 		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
@@ -1139,9 +1156,9 @@ func setupClientTestMeterProvider(t *testing.T) (mp *obtest.TestMeterProvider, c
 	tracking.ResetMeterForTesting()
 	tracking.InitHTTPMeter()
 	return mp, func() {
+		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
 		otel.SetMeterProvider(prev)
 		tracking.ResetMeterForTesting()
-		require.NoError(t, mp.Shutdown(context.Background()))
 	}
 }
 

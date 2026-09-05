@@ -2410,9 +2410,9 @@ func setupConsumeMetrics(t *testing.T) (mp *obtest.TestMeterProvider, cleanup fu
 	otel.SetMeterProvider(mp)
 	tracking.ResetMeterForTesting()
 	return mp, func() {
+		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
 		otel.SetMeterProvider(prev)
 		tracking.ResetMeterForTesting()
-		require.NoError(t, mp.Shutdown(context.Background()))
 	}
 }
 

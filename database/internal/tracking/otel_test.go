@@ -46,9 +46,7 @@ func setupTestTracerProvider(t *testing.T) (exporter *tracetest.InMemoryExporter
 
 	// Return cleanup function
 	cleanup = func() {
-		if err := tp.Shutdown(context.Background()); err != nil {
-			t.Logf("Failed to shutdown test tracer provider: %v", err)
-		}
+		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
 		otel.SetTracerProvider(originalTP)
 		otel.SetTextMapPropagator(originalPropagator)
 	}
@@ -446,12 +444,7 @@ func setupTestObservabilityProviders(t *testing.T) (
 
 	// Return cleanup function
 	cleanup = func() {
-		if err := tp.Shutdown(context.Background()); err != nil {
-			t.Logf("Failed to shutdown test tracer provider: %v", err)
-		}
-		if err := meterProvider.Shutdown(context.Background()); err != nil {
-			t.Logf("Failed to shutdown test meter provider: %v", err)
-		}
+		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
 		otel.SetTracerProvider(originalTP)
 		otel.SetMeterProvider(originalMP)
 		otel.SetTextMapPropagator(originalPropagator)

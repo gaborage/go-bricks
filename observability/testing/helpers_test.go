@@ -2,10 +2,12 @@ package testing
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
@@ -14,14 +16,15 @@ import (
 )
 
 const (
-	testCounter       = "test.counter"
-	testSpanName      = "span-1"
-	httpRequestAttr   = "http-request"
-	dbSystemAttr      = "db.system"
-	nonExistentMetric = "does.not.exist"
-	testHistogram     = "test.histogram"
-	dbQuery           = "db.query"
-	dbOperationAttr   = "db.operation"
+	testCounter          = "test.counter"
+	testSpanName         = "span-1"
+	httpRequestAttr      = "http-request"
+	dbSystemAttr         = "db.system"
+	nonExistentMetric    = "does.not.exist"
+	testHistogram        = "test.histogram"
+	laterProviderCounter = "later.provider.counter"
+	dbQuery              = "db.query"
+	dbOperationAttr      = "db.operation"
 )
 
 func TestNewTestTraceProvider(t *testing.T) {
@@ -562,4 +565,100 @@ func TestAssertMetricValueGauge(t *testing.T) {
 
 	// Assert gauge value
 	AssertMetricValue(t, rm, "test.gauge", int64(100))
+}
+
+// --- otel's permanent first delegate (#1093) ---
+
+const (
+	// delegateMeterName is this file's own instrumentation scope for the
+	// first-delegate tests, kept distinct from TestTracerName so a datapoint
+	// recorded here cannot be confused with one from another test.
+	delegateMeterName = "gobricks/1093"
+	// firstInstallerHint is the diagnosis a future reorder needs. The positive
+	// half below only holds while this test is the FIRST otel.SetMeterProvider in
+	// the observability/testing binary: otel binds its delegating wrapper to the
+	// first provider installed and never rebinds (internal/global/state.go's
+	// sync.Once), so an earlier installer would own the delegate and this test's
+	// reader would legitimately see nothing.
+	firstInstallerHint = "another test in this binary installed a meter provider first — this test must stay the first installer"
+)
+
+var (
+	firstDelegateOnce sync.Once
+	firstDelegate     *TestMeterProvider
+)
+
+// installFirstDelegate installs a TestMeterProvider as the binary's first meter
+// provider and immediately restores the previous global WITHOUT shutting it down
+// — the cleanup shape this change adopts — returning the provider otel's wrapper
+// is now permanently bound to.
+//
+// The install happens once per PROCESS, not once per call, because that is what
+// the mechanism under test is: otel binds its delegate on the first
+// SetMeterProvider and never rebinds. A per-call install would make this test
+// pass under `go test` and fail under `-count=2`, where the second iteration is
+// no longer the first installer and would be reading a provider the global never
+// routes to — a false red that says nothing about the code under test.
+func installFirstDelegate() *TestMeterProvider {
+	firstDelegateOnce.Do(func() {
+		prev := otel.GetMeterProvider()
+		firstDelegate = NewTestMeterProvider()
+		otel.SetMeterProvider(firstDelegate)
+		otel.SetMeterProvider(prev)
+	})
+	return firstDelegate
+}
+
+// TestRestoredGlobalStillDeliversAfterCleanup pins the property that makes
+// "restore the previous provider, do NOT shut yours down" the correct cleanup
+// shape. otel.SetMeterProvider binds the global delegating wrapper to the first
+// provider installed in the binary, permanently (internal/global/state.go,
+// sync.Once). Restoring `prev` afterwards restores the identity the global
+// REPORTS, but every instrument the wrapper already delegates keeps routing into
+// the first provider — so that provider has to stay alive. A cleanup that shuts
+// it down leaves the wrapper pointing at a corpse and every later otel.Meter call
+// in the process silently records nothing, which is exactly the class #1093 fixes.
+func TestRestoredGlobalStillDeliversAfterCleanup(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("restored_global_still_reaches_the_first_provider", func(t *testing.T) {
+		mp := installFirstDelegate()
+
+		counter, err := otel.Meter(delegateMeterName).Int64Counter(testCounter)
+		require.NoError(t, err)
+		counter.Add(ctx, 1)
+
+		rm := mp.Collect(t)
+		metric := FindMetric(rm, testCounter)
+		require.NotNil(t, metric,
+			"a counter created through the restored global recorded nothing into the first-installed provider; %s", firstInstallerHint)
+	})
+
+	t.Run("a_later_provider_never_receives_the_globals_traffic", func(t *testing.T) {
+		// The mirror image, and the reason the rule is about the FIRST provider
+		// rather than the most recent one: a provider installed later is never
+		// reached through the global at all, because the wrapper is already bound.
+		// Shutting this one down is therefore harmless — which is precisely why
+		// shutting the FIRST one down is not.
+		prev := otel.GetMeterProvider()
+		later := NewTestMeterProvider()
+		otel.SetMeterProvider(later)
+		require.NoError(t, later.Shutdown(ctx))
+		otel.SetMeterProvider(prev)
+
+		counter, err := otel.Meter(delegateMeterName).Int64Counter(laterProviderCounter)
+		require.NoError(t, err)
+		counter.Add(ctx, 1)
+
+		// Read the reader directly: Collect(t) would fail the test on the error a
+		// shut-down provider returns, and the absence of the datapoint is the point.
+		var rm metricdata.ResourceMetrics
+		if err := later.Reader.Collect(ctx, &rm); err != nil {
+			// A shut-down reader reporting an error is one valid shape of "nothing
+			// arrived here"; the datapoint assertion below covers the other.
+			return
+		}
+		assert.Nil(t, FindMetric(rm, laterProviderCounter),
+			"a provider installed after the first one received traffic from the global; otel's delegate is supposed to be bound once")
+	})
 }
