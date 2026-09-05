@@ -58,7 +58,7 @@ MUTATE_NO_CACHE ?=
 # the -p run slots for about that long, so messaging could reuse a reaper that was
 # already exiting (a 60s "wait for reaper" hang). 2m outlives any inter-package gap;
 # ci-v2.yml sets the same.
-export TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT ?= 2m
+export RYUK_RECONNECTION_TIMEOUT ?= 2m
 # Default target
 help: ## Show this help message
 	@echo "Available targets:"

@@ -286,7 +286,7 @@ jobs:
       # deadline exceeded", or a handshake EOF followed by "RWLayer of container
       # <id> is unexpectedly nil" when Ryuk's exit prune deleted the fresh
       # container). 2m outlives any inter-package gap.
-      TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT: 2m
+      RYUK_RECONNECTION_TIMEOUT: 2m
 
     steps:
       - uses: actions/checkout@v7
