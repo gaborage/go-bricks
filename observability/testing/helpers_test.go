@@ -669,11 +669,11 @@ func TestRestoredGlobalStillDeliversAfterCleanup(t *testing.T) {
 // change across an operation rather than on an absolute total.
 func counterSum(t *testing.T, mp *TestMeterProvider, name string) int64 {
 	t.Helper()
-	metric := FindMetric(mp.Collect(t), name)
-	if metric == nil {
+	found := FindMetric(mp.Collect(t), name)
+	if found == nil {
 		return 0
 	}
-	sum, ok := metric.Data.(metricdata.Sum[int64])
+	sum, ok := found.Data.(metricdata.Sum[int64])
 	require.True(t, ok, "%s is not an Int64 sum", name)
 	var total int64
 	for i := range sum.DataPoints {
