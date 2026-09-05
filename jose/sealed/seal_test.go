@@ -362,6 +362,34 @@ func TestSealRefusesADocumentWithoutTheSubjectMember(t *testing.T) {
 	assert.Error(t, jerr.Cause)
 }
 
+// twinMarshaling passes the struct scan — no Go field declares a namesake of the Subject —
+// but its MarshalJSON emits a clear "Card" beside the sealed "card". encoding/json matches
+// members case-insensitively on decode, so a consumer would read the clear twin; only a
+// check on the serialized bytes can see it.
+type twinMarshaling struct {
+	_    struct{}  `seal:"sign=svc-payments-sign,encrypt=acme-core-enc"`
+	Card *cardData `json:"card" seal:"subject"`
+}
+
+func (twinMarshaling) MarshalJSON() ([]byte, error) {
+	return []byte(`{"Card":{"pan":"` + testPAN + `"},"card":{"pan":"` + testPAN + `","exp":"12/29"}}`), nil
+}
+
+func TestSealRefusesACaseFoldTwinTheScanCannotSee(t *testing.T) {
+	spec, err := sealed.ScanType(reflect.TypeOf(twinMarshaling{}))
+	require.NoError(t, err)
+	require.Equal(t, "card", spec.SubjectPath, "the scan sees one member and accepts the type")
+
+	wire, err := sealed.Seal(twinMarshaling{Card: &cardData{PAN: testPAN, Exp: "12/29"}}, spec, testOptions(t))
+	assert.Nil(t, wire, "a document with a clear twin of the subject is never signed")
+	var jerr *bricksjose.Error
+	require.True(t, errors.As(err, &jerr))
+	assert.Equal(t, sealed.CodeDocumentInvalid, jerr.Code)
+	assert.Contains(t, jerr.Message, `"card"`)
+	assert.NotContains(t, err.Error(), "Card", "the twin's own name is document data")
+	assert.NotContains(t, err.Error(), testPAN)
+}
+
 // leakyCard is a Subject whose MarshalJSON fails with the plaintext in the error text —
 // the class of marshal error encoding/json wraps in *json.MarshalerError. Nothing of that
 // text may reach the error chain.

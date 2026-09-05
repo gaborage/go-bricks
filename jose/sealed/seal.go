@@ -66,12 +66,29 @@ type Options struct {
 // resolver cannot supply propagates the resolver's own error; everything else carries one
 // of this package's sentinels and codes.
 func Seal(evt any, spec *Spec, opts *Options) ([]byte, error) {
+	if spec == nil || spec.Type == nil {
+		return nil, sealError(CodeOptionsInvalid, "Seal requires a Spec from ScanType", nil)
+	}
 	if err := opts.Validate(spec); err != nil {
 		return nil, err
 	}
 	if t := unwrapPointer(reflect.TypeOf(evt)); t != spec.Type {
 		return nil, sealError(CodeTypeMismatch, fmt.Sprintf("event type %v does not match the scanned %v", t, spec.Type), nil)
 	}
+	plain, err := json.Marshal(evt)
+	if err != nil {
+		// SECURITY: encoding/json embeds value bytes in some marshal errors (an invalid
+		// json.Number literal, a MarshalJSON syntax error); the Subject may be among them,
+		// so the cause is reported by type only (ADR-081 class).
+		return nil, sealError(CodeSealFailed, "failed to marshal event", marshalErrorType(err))
+	}
+	return sealCore(plain, spec, opts)
+}
+
+// sealCore is the body both doors share: it takes the serialized document, pins the Subject
+// member, encrypts it, splices the compact JWE in its place and signs the result. Only the
+// origin of the bytes differs above it — Seal marshals an event, SealDocument is handed one.
+func sealCore(plain []byte, spec *Spec, opts *Options) ([]byte, error) {
 	signKey, err := opts.Keys.PrivateKey(opts.SignKid)
 	if err != nil {
 		return nil, err
@@ -80,15 +97,7 @@ func Seal(evt any, spec *Spec, opts *Options) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	plain, err := json.Marshal(evt)
-	if err != nil {
-		// SECURITY: encoding/json embeds value bytes in some marshal errors (an invalid
-		// json.Number literal, a MarshalJSON syntax error); the Subject may be among them,
-		// so the cause is reported by type only (ADR-081 class).
-		return nil, sealError(CodeSealFailed, "failed to marshal event", marshalErrorType(err))
-	}
-	span, err := locateSubject(plain, spec.SubjectPath)
+	span, err := pinSubject(plain, spec.SubjectPath)
 	if err != nil {
 		return nil, sealError(CodeDocumentInvalid, fmt.Sprintf("cannot pin subject member %q", spec.SubjectPath), err)
 	}
@@ -157,19 +166,22 @@ func marshalErrorType(err error) error {
 	return fmt.Errorf("%T", err)
 }
 
-// Validate is the key-free pre-flight Seal runs first: the Spec and Options are complete
-// and both concrete kids are Generations of the Spec's Logical kids. A producer can call it
-// at declaration time to fail startup before any event or key material is involved.
+// Validate is the key-free pre-flight both doors run first: the Spec and Options are
+// complete and both concrete kids are Generations of the Spec's Logical kids. A producer can
+// call it at declaration time to fail startup on any of those before an event or key material
+// is involved. It accepts a scanned Spec and a document Spec alike and so does NOT check which
+// door the Spec fits — requiring a scanned one is Seal's own rule, checked before this runs,
+// which is why a declaration-time caller holding a scanned Spec sees no change.
 func (o *Options) Validate(spec *Spec) error {
 	switch {
-	case spec == nil || spec.Type == nil:
-		return sealError(CodeOptionsInvalid, "Seal requires a Spec from ScanType", nil)
+	case spec == nil:
+		return sealError(CodeOptionsInvalid, "sealing requires a Spec", nil)
 	case o == nil:
-		return sealError(CodeOptionsInvalid, "Seal requires Options", nil)
+		return sealError(CodeOptionsInvalid, "sealing requires Options", nil)
 	case o.Keys == nil:
-		return sealError(CodeOptionsInvalid, "Seal requires a KeyResolver", nil)
+		return sealError(CodeOptionsInvalid, "sealing requires a KeyResolver", nil)
 	case o.EventType == "":
-		return sealError(CodeOptionsInvalid, "Seal requires a non-empty EventType", nil)
+		return sealError(CodeOptionsInvalid, "sealing requires a non-empty EventType", nil)
 	case len(o.EventType) > MaxEventTypeLen:
 		return sealError(CodeOptionsInvalid, fmt.Sprintf("EventType exceeds %d bytes (length %d)", MaxEventTypeLen, len(o.EventType)), nil)
 	case len(o.TenantID) > MaxTenantIDLen:

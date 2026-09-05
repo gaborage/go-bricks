@@ -225,6 +225,20 @@ func applyKid(spec *Spec, key, val string) error {
 	default:
 		return tagError(CodeTagInvalid, fmt.Sprintf("unknown seal sentinel key %q", key))
 	}
+	if err := checkSentinelKid(key, val); err != nil {
+		return err
+	}
+	if key == tagKeySign {
+		spec.SignLogical = val
+	} else {
+		spec.EncryptLogical = val
+	}
+	return nil
+}
+
+// checkSentinelKid refuses a Logical kid for the sign or encrypt position with the scan's
+// own code and the offending kid attached; NewDocumentSpec reports the same failures.
+func checkSentinelKid(key, val string) error {
 	if err := CheckLogicalKid(val); err != nil {
 		return &jose.Error{
 			Sentinel: ErrTagInvalid,
@@ -232,11 +246,6 @@ func applyKid(spec *Spec, key, val string) error {
 			Message:  fmt.Sprintf("logical kid %q for %s: %v", val, key, err),
 			Kid:      val,
 		}
-	}
-	if key == tagKeySign {
-		spec.SignLogical = val
-	} else {
-		spec.EncryptLogical = val
 	}
 	return nil
 }

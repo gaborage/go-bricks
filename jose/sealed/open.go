@@ -289,7 +289,7 @@ func checkPins(slots *authenticatedSlots, spec *Spec, opts *OpenOptions) error {
 func checkOpenArgs(spec *Spec, opts *OpenOptions, out any) error {
 	switch {
 	case spec == nil || spec.Type == nil:
-		return preflightError(CodeOptionsInvalid, "Open requires a Spec from ScanType")
+		return preflightError(CodeOptionsInvalid, "Open requires a Spec from ScanType (a document Spec cannot open)")
 	case opts == nil:
 		return preflightError(CodeOptionsInvalid, "Open requires OpenOptions")
 	case opts.Keys == nil:
