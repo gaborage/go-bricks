@@ -1505,6 +1505,23 @@ ADR-091 pattern). Additive: `messaging.EventPublisher[T]` and
 byte frame. The streams lane's `Publisher.Publish(*PublishMessage)` is untouched. See
 [migrations.md](migrations.md) `[C63.1]`.
 
+### [ADR-100: The Vendor's Identifier Grammar Lives Behind the Renderer Seam](adr_100_vendor_identifier_grammar_behind_renderer.md)
+
+**Date:** 2026-09-05 | **Status:** Accepted | **Breaking:** a PostgreSQL identifier argument containing `#` is refused at `ToSQL()` instead of failing at execution
+
+The builder judged every identifier argument against `sqllex.IdentifierSegment`, the UNION of
+both vendors' alphabets, so `#` — an identifier character on Oracle, an operator on
+PostgreSQL — passed every door and `qb.MustExpr("1", "a#b")` rendered `SELECT 1 AS a#b` for
+the server to reject. `vendorRenderer` now supplies `ValidateSegment` over
+`database/identifier`, and each door runs the shape grammar first and then the vendor's
+alphabet on every unquoted segment of every identifier position, reading the patterns' named
+groups to know which tokens those are. Quoted segments and the wildcard are skipped, an
+unknown vendor inherits PostgreSQL's grammar by embedding, and Oracle is unchanged. Byte caps
+(#1437) and struct db-tag names remain unjudged at the doors — both recorded as residuals. See
+[migrations.md](migrations.md) `[C64.3]`.
+
+---
+
 ### [ADR-099: One Column Order for Map-Shaped Doors, One Inequality Spelling for the Filter Families](adr_099_one_column_order_one_inequality_spelling.md)
 
 **Date:** 2026-09-05 | **Status:** Accepted | **Breaking:** Oracle `SetMap` UPDATEs order their SET pairs by the caller's column names, moving the bind positions; `jf.NotEq` and `jff.NotEqColumn` render `<>` instead of `!=`
@@ -2170,7 +2187,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-099) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-100) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

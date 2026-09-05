@@ -8,6 +8,7 @@ import (
 
 	"github.com/Masterminds/squirrel"
 
+	dbident "github.com/gaborage/go-bricks/database/identifier"
 	"github.com/gaborage/go-bricks/database/internal/sqllex"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -20,6 +21,12 @@ import (
 type oracleRenderer struct{}
 
 var _ vendorRenderer = oracleRenderer{}
+
+// ValidateCharset judges one bare segment against Oracle's unquoted alphabet,
+// which admits `#` (and `$`) where PostgreSQL does not.
+func (oracleRenderer) ValidateCharset(segment string) error {
+	return dbident.ValidateCharset(dbtypes.Oracle, segment)
+}
 
 // QuoteColumn renders a column reference with reserved-word-only quoting,
 // preserving the caller's original case — it does not upper-case reserved words.
@@ -168,17 +175,17 @@ func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, inse
 	// one whole token, so no key that would defeat it may reach them. They then
 	// compare the NORMALIZED spelling, which is the one the builders render, so
 	// no door judges a key the statement does not carry (#1196).
-	conflicts, conflictNameErr := normalizeUpsertColumns("conflict", conflictColumns)
+	conflicts, conflictNameErr := qb.normalizeUpsertColumns("conflict", conflictColumns)
 	if conflictNameErr != nil {
 		return "", nil, conflictNameErr
 	}
 
-	insertKeys, insertNameErr := normalizeUpsertColumns("insert", sortedKeys(insertColumns))
+	insertKeys, insertNameErr := qb.normalizeUpsertColumns("insert", sortedKeys(insertColumns))
 	if insertNameErr != nil {
 		return "", nil, insertNameErr
 	}
 
-	updateKeys, updateNameErr := normalizeUpsertColumns("update", sortedKeys(updateColumns))
+	updateKeys, updateNameErr := qb.normalizeUpsertColumns("update", sortedKeys(updateColumns))
 	if updateNameErr != nil {
 		return "", nil, updateNameErr
 	}

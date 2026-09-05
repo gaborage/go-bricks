@@ -7,6 +7,15 @@ import "regexp"
 // packages judge against it — the query builder and the columns package — and the
 // builder imports the columns package, so neither can own it without a cycle.
 const (
+	// IdentifierSegment is the SHAPE alphabet — the union of both vendors'
+	// unquoted identifier characters, used to decide where one segment ends and
+	// the next begins. It is deliberately NOT the vendor's own grammar: `#` is
+	// an identifier character on Oracle and an operator on PostgreSQL, so which
+	// characters a segment may actually carry is the vendor's answer, given by
+	// database/identifier and reached through the builder's renderer seam
+	// (ADR-100). Judging an argument here alone would accept `a#b` on
+	// PostgreSQL, which is what #1202 fixed.
+	//
 	// IdentifierSegment is a single unquoted identifier: a leading letter or
 	// underscore followed by letters, digits, underscore, $ or # — the same
 	// alphabet enforced for db-tag struct fields by the columns package.

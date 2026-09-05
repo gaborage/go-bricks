@@ -16,9 +16,13 @@ import (
 // `switch qb.vendor` (#1156, e7816760).
 //
 // The adapter is chosen once, in NewQueryBuilder, and held on QueryBuilder, so
-// a dispatch point is a method call rather than a vendor test. Every method
-// takes an already-validated identifier: the renderer renders, it does not
-// judge. EscapeIdentifier is deliberately NOT here — it is exported, so it is a
+// a dispatch point is a method call rather than a vendor test. Every RENDERING
+// method takes an already-validated identifier: the renderer renders, it does
+// not judge. The one judgement it does supply is ValidateCharset, the vendor's
+// unquoted-segment grammar — which characters this vendor accepts is a vendor
+// fact and belongs beside the vendor's quoting, while WHICH tokens of an
+// argument are identifier positions stays the door's question (#1202).
+// EscapeIdentifier is deliberately NOT here — it is exported, so it is a
 // trust boundary rather than a post-validation step.
 // Every method here is a rendering that differs in KIND between the vendors:
 // three quoting ones — reserved-word quoting, alias splitting, direction/NULLS
@@ -43,6 +47,13 @@ type vendorRenderer interface {
 	// QuoteIdentifierForClause renders an ORDER BY / GROUP BY item, keeping the
 	// direction and NULLS ordering keywords outside the quoted identifier.
 	QuoteIdentifierForClause(identifier string) string
+
+	// ValidateCharset reports whether segment is legal as ONE bare, unquoted
+	// identifier segment on this vendor. The door splits an argument into
+	// segments and skips the quoted ones and the wildcard; this answers only
+	// the character question, and only for the vendor's own alphabet — the
+	// byte cap is not judged here.
+	ValidateCharset(segment string) error
 
 	// CaseInsensitiveLike renders a case-insensitive containment match. The
 	// column arrives quoted and the pattern arrives already wrapped in its

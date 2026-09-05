@@ -80,6 +80,30 @@ func Validate(vendor dbtypes.Vendor, value string) error {
 	if len(value) > g.maxBytes {
 		return fmt.Errorf("%w (%d): %q", ErrIdentifierTooLong, g.maxBytes, value)
 	}
+	return ValidateCharset(vendor, value)
+}
+
+// ValidateCharset is Validate without the byte cap: it reports whether value is
+// one bare, unquoted segment under vendor's CHARACTER grammar, and says nothing
+// about length. The vendor and empty rules are Validate's.
+//
+// The two doors are separate because a caller can be sure of one rule and not
+// the other. The query builder judges every identifier argument's charset at
+// the door, where a rejected `#` is the difference between failing at ToSQL()
+// and failing at execution on PostgreSQL; it does not yet judge length, because
+// the cap interacts with qualified names and aliases the builder assembles
+// itself. Reaching for Validate there and discarding ErrIdentifierTooLong would
+// couple the door to the error taxonomy and turn the eventual cap enforcement
+// into a silent behavior change; this door makes that a deliberate, separate
+// step.
+func ValidateCharset(vendor dbtypes.Vendor, value string) error {
+	g, ok := grammars[vendor]
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrUnsupportedVendor, vendor)
+	}
+	if value == "" {
+		return ErrEmptyIdentifier
+	}
 	if !g.segment.MatchString(value) {
 		return fmt.Errorf("%w: %q", ErrIdentifierCharset, value)
 	}

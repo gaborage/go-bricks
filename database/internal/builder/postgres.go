@@ -6,6 +6,9 @@ import (
 	"strings"
 
 	"github.com/Masterminds/squirrel"
+
+	dbident "github.com/gaborage/go-bricks/database/identifier"
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
 // postgresRenderer is the PostgreSQL half of the vendorRenderer seam. A column
@@ -26,6 +29,14 @@ func (postgresRenderer) QuoteTable(table string) string { return table }
 
 // QuoteIdentifierForClause renders an ORDER BY / GROUP BY item verbatim.
 func (postgresRenderer) QuoteIdentifierForClause(identifier string) string { return identifier }
+
+// ValidateCharset judges one bare segment against PostgreSQL's unquoted
+// alphabet. `#` is the notable exclusion: it is an operator character on
+// PostgreSQL, so a name carrying one has to be quoted, while Oracle takes it
+// bare — which is why the grammar cannot live in the shared lexer (#1202).
+func (postgresRenderer) ValidateCharset(segment string) error {
+	return dbident.ValidateCharset(dbtypes.PostgreSQL, segment)
+}
 
 // CaseInsensitiveLike renders ILIKE, PostgreSQL's case-insensitive operator, so
 // neither side of the comparison has to be folded.

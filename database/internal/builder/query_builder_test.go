@@ -3789,3 +3789,105 @@ func TestSubqueryColumnRefusesAnExternalVendorPlaceholder(t *testing.T) {
 	assert.Equal(t, `SELECT id, (SELECT COUNT(*) FROM held WHERE consumer = $1) AS n FROM users WHERE id = $2`, sql)
 	assert.Equal(t, []any{1, 2}, args)
 }
+
+// hashDoors enumerates every builder door that interpolates an identifier
+// argument, each one handed the SAME `#`-bearing value. The rows vary exactly
+// one dimension — the vendor — so a door that stops consulting the renderer
+// shows up as one row flipping rather than as a whole test going quiet.
+func hashDoors() map[string]func(qb *QueryBuilder) (string, []any, error) {
+	const hashed = "a#b"
+
+	return map[string]func(qb *QueryBuilder) (string, []any, error){
+		"select_column": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Select(hashed).From(tableUsers).ToSQL()
+		},
+		"select_expression_alias": func(qb *QueryBuilder) (string, []any, error) {
+			expr := qb.MustExpr("1")
+			expr.Alias = hashed
+			return qb.Select(expr).From(tableUsers).ToSQL()
+		},
+		"subquery_column_alias": func(qb *QueryBuilder) (string, []any, error) {
+			sub := qb.Select(colID).From(tableOrders)
+			return qb.Select(colID).SubqueryColumn(sub, hashed).From(tableUsers).ToSQL()
+		},
+		"from_table": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Select(colID).From("t#1").ToSQL()
+		},
+		"from_inline_alias": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Select(colID).From("users u#").ToSQL()
+		},
+		"from_table_as_alias": func(qb *QueryBuilder) (string, []any, error) {
+			ref, err := dbtypes.MustTable(tableUsers).As("u#")
+			if err != nil {
+				return "", nil, err
+			}
+			return qb.Select(colID).From(ref).ToSQL()
+		},
+		"join_table": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Select(colID).From(tableUsers).
+				JoinOn("o#1", qb.JoinFilter().EqColumn("users.id", "o.user_id")).ToSQL()
+		},
+		"order_by": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Select(colID).From(tableUsers).OrderBy(hashed + " DESC").ToSQL()
+		},
+		"group_by": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Select(colID).From(tableUsers).GroupBy(hashed).ToSQL()
+		},
+		"where_column": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Select(colID).From(tableUsers).Where(qb.Filter().Eq(hashed, 1)).ToSQL()
+		},
+		"insert_with_columns": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.InsertWithColumns(tableUsers, hashed).Values(1).ToSQL()
+		},
+		"insert_columns": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Insert(tableUsers).Columns(hashed).Values(1).ToSQL()
+		},
+		"insert_setmap": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Insert(tableUsers).SetMap(map[string]any{hashed: 1}).ToSQL()
+		},
+		"update_table": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Update("t#").Set(colID, 1).ToSQL()
+		},
+		"update_set": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Update(tableUsers).Set(hashed, 1).ToSQL()
+		},
+		"update_setmap": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Update(tableUsers).SetMap(map[string]any{hashed: 1}).ToSQL()
+		},
+		"delete_table": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Delete("t#").ToSQL()
+		},
+	}
+}
+
+// TestEveryDoorRefusesHashOnPostgreSQL is the PostgreSQL half of the pair: `#`
+// is an operator there, so an identifier carrying one has to be quoted, and a
+// door that interpolates it bare builds SQL that fails at execution. Every door
+// now refuses it at ToSQL() instead (#1202, ADR-100).
+func TestEveryDoorRefusesHashOnPostgreSQL(t *testing.T) {
+	for name, door := range hashDoors() {
+		t.Run(name, func(t *testing.T) {
+			sql, args, err := door(NewQueryBuilder(dbtypes.PostgreSQL))
+
+			require.Error(t, err, "the door must refuse a # identifier on PostgreSQL")
+			assert.Contains(t, err.Error(), "#", "the message names the offending value")
+			assert.Contains(t, err.Error(), dbtypes.PostgreSQL, "the message names the vendor")
+			assert.Empty(t, sql)
+			assert.Empty(t, args)
+		})
+	}
+}
+
+// TestEveryDoorAcceptsHashOnOracle is the other half of the same pair, and the
+// reason the check lives behind the renderer rather than in the shared lexer:
+// `#` is an ordinary identifier character on Oracle, so nothing here moves.
+func TestEveryDoorAcceptsHashOnOracle(t *testing.T) {
+	for name, door := range hashDoors() {
+		t.Run(name, func(t *testing.T) {
+			sql, _, err := door(NewQueryBuilder(dbtypes.Oracle))
+
+			require.NoError(t, err, "Oracle takes # in a bare identifier")
+			assert.NotEmpty(t, sql)
+		})
+	}
+}

@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -345,6 +346,74 @@ func TestBuilderRejectsIdentifierInjectionBothVendors(t *testing.T) {
 				assert.Contains(t, sql, "UPDATE users SET")
 				assert.NotEmpty(t, args)
 			})
+		})
+	}
+}
+
+// TestVendorSegmentCheckSkipsQuotedAndWildcard pins the two exemptions the
+// vendor check deliberately keeps, each against its own BARE twin so the row
+// proves the skip rather than the vendor. A quoted identifier is legal on both
+// vendors whatever it contains — it is the framework's own reserved-word form —
+// and the wildcard is not an identifier at all.
+func TestVendorSegmentCheckSkipsQuotedAndWildcard(t *testing.T) {
+	tests := []struct {
+		name      string
+		column    string
+		wantError bool
+	}{
+		{name: "quoted_hash_is_accepted", column: `"a#b"`},
+		{name: "bare_hash_is_refused", column: "a#b", wantError: true},
+		{name: "qualified_quoted_hash_is_accepted", column: `u."a#b"`},
+		{name: "qualified_bare_hash_is_refused", column: "u.a#b", wantError: true},
+		{name: "wildcard_is_accepted", column: "*"},
+		{name: "qualified_wildcard_is_accepted", column: "t.*"},
+		{name: "qualified_wildcard_on_hashed_table_is_refused", column: "t#1.*", wantError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+			_, _, err := qb.Select(tt.column).From(tableUsers).ToSQL()
+
+			if tt.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+// TestIdentifierPatternGroupNamesAreKnown closes the gap between what
+// validateVendorSegments' comment claims and what the code enforces. That helper
+// finds identifier positions by reading the `ident` and `alias` groups, so a
+// pattern that later grows a THIRD identifier-bearing group under some other
+// name would be skipped silently — no compiler and no other test would notice.
+// This asserts the closed vocabulary instead: every named group in every
+// identifier pattern is either an identifier position (ident, alias) or one of
+// the keyword tails the vendor grammar must NOT judge (dir, nulls).
+func TestIdentifierPatternGroupNamesAreKnown(t *testing.T) {
+	identifierPositions := map[string]bool{"ident": true, "alias": true}
+	keywordTails := map[string]bool{"dir": true, "nulls": true}
+
+	patterns := map[string]*regexp.Regexp{
+		"validIdentifierPattern":       validIdentifierPattern,
+		"validClauseIdentifierPattern": validClauseIdentifierPattern,
+		"validSelectIdentifierPattern": validSelectIdentifierPattern,
+		"validTableNamePattern":        validTableNamePattern,
+	}
+
+	for name, pattern := range patterns {
+		t.Run(name, func(t *testing.T) {
+			for _, group := range pattern.SubexpNames() {
+				if group == "" {
+					continue
+				}
+				assert.True(t, identifierPositions[group] || keywordTails[group],
+					"group %q is neither a known identifier position nor a keyword tail: "+
+						"if it holds an identifier, validateVendorSegments must be taught to read it", group)
+			}
 		})
 	}
 }

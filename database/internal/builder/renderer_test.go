@@ -34,3 +34,15 @@ func TestNewQueryBuilderHoldsTheVendorRenderer(t *testing.T) {
 	assert.IsType(t, postgresRenderer{}, NewQueryBuilder(dbtypes.PostgreSQL).renderer)
 	assert.IsType(t, defaultRenderer{}, NewQueryBuilder("mystery-db").renderer)
 }
+
+// TestDefaultRendererUsesPostgreSQLSegmentGrammar pins the unknown-vendor
+// answer. defaultRenderer embeds postgresRenderer, so it inherits the stricter
+// alphabet rather than the union — the same choice its identifier QUOTING
+// already makes, and the safe direction: a name this refuses is one the caller
+// can always quote.
+func TestDefaultRendererUsesPostgreSQLSegmentGrammar(t *testing.T) {
+	renderer := rendererFor("mystery")
+
+	assert.Error(t, renderer.ValidateCharset("a#b"))
+	assert.NoError(t, renderer.ValidateCharset("plain_name"))
+}

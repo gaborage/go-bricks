@@ -930,3 +930,106 @@ func TestOracleFromAliasQuoting(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildUpsertVendorSegmentGrammar covers the third map-shaped door, which
+// reaches its columns through normalizeUpsertColumns rather than the identifier
+// funnels — so it needs its own pair or a `#` key would keep rendering on
+// PostgreSQL after every other door stopped (#1202).
+func TestBuildUpsertVendorSegmentGrammar(t *testing.T) {
+	tests := []struct {
+		name      string
+		vendor    string
+		table     string
+		column    string
+		wantError bool
+	}{
+		{name: "postgresql_refuses_hashed_column", vendor: dbtypes.PostgreSQL, table: tableAccounts, column: "a#b", wantError: true},
+		{name: "postgresql_refuses_hashed_table", vendor: dbtypes.PostgreSQL, table: "t#x", column: colName, wantError: true},
+		{name: "oracle_accepts_hashed_column", vendor: dbtypes.Oracle, table: tableAccounts, column: "a#b"},
+		{name: "oracle_accepts_hashed_table", vendor: dbtypes.Oracle, table: "t#x", column: colName},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := NewQueryBuilder(tt.vendor)
+
+			sql, _, err := qb.BuildUpsert(
+				tt.table,
+				[]string{colID},
+				map[string]any{colID: 1, tt.column: 2},
+				map[string]any{tt.column: 2},
+			)
+
+			if tt.wantError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "#")
+				assert.Empty(t, sql)
+				return
+			}
+			require.NoError(t, err)
+			assert.NotEmpty(t, sql)
+		})
+	}
+}
+
+// TestStructDoorsDisagreeOnDbTagGrammar RECORDS a known residual rather than
+// asserting desired behavior, and pins WHICH doors it covers: the INSERT struct
+// doors render db-tag columns through quoteColumnsForDML without a validator, so
+// a `db:"a#b"` tag reaches PostgreSQL unquoted and fails at execution, while
+// SetStruct routes columns through the column funnel and refuses it like any
+// other column. The rows vary only the door, which is what makes the
+// disagreement the visible fact. Struct tags are developer constants judged by
+// the columns package against the union alphabet, which is why the INSERT half
+// was left out of #1202's sweep (ADR-100). If an INSERT row starts failing
+// because the statement is refused, the residual has been closed — delete the
+// row, do not "fix" it.
+func TestStructDoorsDisagreeOnDbTagGrammar(t *testing.T) {
+	type hashTagged struct {
+		ID   int64  `db:"id"`
+		Name string `db:"a#b"`
+	}
+
+	tests := []struct {
+		name    string
+		build   func(qb *QueryBuilder) (string, []any, error)
+		wantErr bool
+		wantSQL string
+	}{
+		{
+			name: "insert_struct_still_renders_the_tag",
+			build: func(qb *QueryBuilder) (string, []any, error) {
+				return qb.InsertStruct(tableAccounts, &hashTagged{ID: 1, Name: "x"}).ToSQL()
+			},
+			wantSQL: "a#b",
+		},
+		{
+			name: "insert_fields_still_renders_the_tag",
+			build: func(qb *QueryBuilder) (string, []any, error) {
+				return qb.InsertFields(tableAccounts, &hashTagged{ID: 1, Name: "x"}, "Name").ToSQL()
+			},
+			wantSQL: "a#b",
+		},
+		{
+			name: "set_struct_refuses_the_tag",
+			build: func(qb *QueryBuilder) (string, []any, error) {
+				return qb.Update(tableAccounts).SetStruct(&hashTagged{ID: 1, Name: "x"}).ToSQL()
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+			sql, _, err := tt.build(qb)
+
+			if tt.wantErr {
+				require.Error(t, err, "SetStruct judges db-tag columns through the column funnel")
+				return
+			}
+			require.NoError(t, err, "the INSERT struct doors do not consult the vendor grammar today")
+			assert.Contains(t, sql, tt.wantSQL, "the tag name reaches the statement unquoted")
+		})
+	}
+}
