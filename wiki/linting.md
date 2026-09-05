@@ -62,6 +62,21 @@ a few rules scoped to `_test.go`. Delete them all and add your own as findings j
 Drop the `forbidigo` settings block too: its patterns enforce a GoBricks architecture
 decision (ADR-083) and mean nothing outside this repo.
 
+The `testifylint` block is the opposite case — keep the linter, but do not copy the
+`disable:` list. Everything else in it is portable: `enable-all: true`, the `go-require`
+setting, and `testifylint` in `linters.enable`. The `disable:` list is a ratchet over
+*this* repo's outstanding findings (#1092), so copying it verbatim suppresses fifteen
+checkers you never measured while the config still reads as if the linter were fully on.
+Generate your own instead: enable everything, run it, and disable exactly what your tree
+reports.
+
+Measure that list against **itself**, not against `enable-all`. testifylint's checkers are
+priority-ordered and one checker claims a given call site, so a sweep with everything
+enabled hides a lower-priority checker behind a higher one — disable the higher one and
+the finding reappears under a different name. Re-run after each round and stop when a run
+comes back empty; GoBricks needed two rounds, and the second one added a checker the first
+had reported as clean.
+
 Recheck your own exclusions periodically: an exclusion that matches on message `text` stops
 matching when the linter rewords the message, and it fails **silently** in either
 direction. GoBricks carried two `text: "var-naming: avoid package names"` stanzas that were

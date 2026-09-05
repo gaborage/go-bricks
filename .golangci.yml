@@ -42,6 +42,7 @@ linters:
     - spancheck                 # checks for mistakes with OpenTelemetry/Census spans
     - sqlclosecheck             # checks that sql.Rows and sql.Stmt are closed
     - staticcheck               # staticcheck is a go vet on steroids, applying a ton of static analysis checks
+    - testifylint               # checks usage of testify assertions (ratchet: see settings, #1092)
     - unconvert                 # removes unnecessary type conversions
     - unparam                   # reports unused function parameters
     - usestdlibvars             # prefers stdlib constants (http.MethodGet) over string literals
@@ -170,6 +171,50 @@ linters:
         - -ST1020
         - -ST1021
         - -ST1022
+    testifylint:
+      # Ratchet (#1092): every checker is on, and the fourteen with findings on
+      # this tree are switched off one package PR at a time. Each PR clears its
+      # package's findings and the FINAL PR deletes this disable list, so the
+      # remaining debt is always readable from git history rather than from a
+      # spreadsheet. Measured with testifylint v1.6.4 under the vet driver:
+      # 1,188 findings across 14 checkers. `formatter` is the fifteenth and is
+      # here for a subtler reason: testifylint's registry is priority-ordered and
+      # one checker claims a call site, so measuring with everything enabled
+      # MASKS a lower-priority checker behind a higher one. server/middleware_test.go:884
+      # reports `contains` while contains is on, and `formatter` the moment it is
+      # off — which is this config. Measure the disable list against ITSELF, not
+      # against enable-all, and iterate until a run comes back empty. The other
+      # ten are clean under this exact config and are enforced from this PR on.
+      # Deliberately NOT added to the _test.go exclusion rule below — testify
+      # assertions live in test files, so excluding them there would disable the
+      # linter entirely.
+      # When `disable:` empties out, delete THIS comment with it: only
+      # `enable-all: true` and the go-require block below survive into the end
+      # state, and a rationale left behind describes a list that is gone.
+      enable-all: true
+      disable:
+        - bool-compare        # 1
+        - compares            # 14
+        - contains            # 6
+        - empty               # 69
+        - encoded-compare     # 10
+        - error-is-as         # 138
+        - error-nil           # 37
+        - expected-actual     # 4
+        - float-compare       # 34
+        - formatter           # 1, and only visible once `contains` is off — see below
+        - len                 # 22
+        - negative-positive   # 18
+        - regexp              # 1
+        - require-error       # 829
+        - useless-assert      # 5
+      # Default, written out because it is the load-bearing half of go-require:
+      # false keeps the checker looking inside http.HandlerFunc bodies, where a
+      # require call aborts the server goroutine instead of the test. Sixty test
+      # files here spawn a goroutine or an httptest server, so this is the guard
+      # that makes go-require worth enabling.
+      go-require:
+        ignore-http-handlers: false
   exclusions:
     generated: lax
     presets:
