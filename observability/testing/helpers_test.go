@@ -638,16 +638,21 @@ func TestRestoredGlobalStillDeliversAfterCleanup(t *testing.T) {
 			"a counter created through the restored global recorded nothing into the first-installed provider; %s", firstInstallerHint)
 	})
 
-	t.Run("a_later_provider_never_receives_the_globals_traffic", func(t *testing.T) {
+	t.Run("a_restored_default_bypasses_a_later_provider", func(t *testing.T) {
 		// The mirror image, and the reason the rule names the FIRST provider rather
-		// than the most recent one: a provider installed later is never reached
-		// through the global at all, because the wrapper is already bound.
+		// than the most recent one. Note the scope precisely: while `later` IS the
+		// current global, otel.Meter reaches it directly — SetMeterProvider stores
+		// each argument as the current provider. What binds once is the DEFAULT
+		// delegating provider, so the moment `prev` (that default) is restored,
+		// instruments created through it route to the FIRST provider ever
+		// installed, never to `later`. This subtest records only after the
+		// restoration, which is the window the claim covers.
 		//
-		// This one is deliberately NOT shut down. Shutting it down would make
+		// `later` is deliberately NOT shut down. Shutting it down would make
 		// later.Reader.Collect return ErrReaderShutdown unconditionally, and an
 		// assertion that only runs when Collect succeeds is an assertion that never
 		// runs — the subtest would pass even if a later provider HAD received the
-		// global's traffic, which is the one thing it exists to rule out.
+		// post-restoration traffic, which is the one thing it exists to rule out.
 		prev := otel.GetMeterProvider()
 		later := NewTestMeterProvider()
 		otel.SetMeterProvider(later)
@@ -660,7 +665,7 @@ func TestRestoredGlobalStillDeliversAfterCleanup(t *testing.T) {
 		var rm metricdata.ResourceMetrics
 		require.NoError(t, later.Reader.Collect(ctx, &rm))
 		assert.Nil(t, FindMetric(rm, laterProviderCounter),
-			"a provider installed after the first one received traffic from the global; otel's delegate is supposed to be bound once")
+			"a provider installed after the first one received traffic recorded through the RESTORED default provider; the default delegate is supposed to be bound once, to the first provider installed")
 	})
 }
 

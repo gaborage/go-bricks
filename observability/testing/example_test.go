@@ -31,10 +31,10 @@ func ExampleNewTestTraceProvider() {
 	tp := obtest.NewTestTraceProvider()
 
 	// Set as global provider (or use directly), and restore the previous one when
-	// done. Do NOT shut tp down: otel binds its global delegate to the first
-	// provider installed in the binary and never rebinds (internal/global/state.go
-	// sync.Once, #1093), so shutting it down would silence every later otel.Tracer
-	// call in this process.
+	// done. Do NOT shut tp down: otel's default delegating provider binds to the
+	// first provider installed in the binary and never rebinds
+	// (internal/global/state.go sync.Once, #1093), so shutting tp down can silence
+	// otel.Tracer calls made through that restored default afterwards.
 	prev := otel.GetTracerProvider()
 	defer otel.SetTracerProvider(prev)
 	otel.SetTracerProvider(tp)

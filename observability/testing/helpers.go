@@ -8,9 +8,12 @@
 //
 //	// Create test trace provider and install it globally, restoring the
 //	// previous provider afterwards. Never Shutdown a provider you installed:
-//	// otel binds its global delegate to the first one installed in the binary
-//	// and never rebinds (internal/global/state.go sync.Once), so shutting it
-//	// down silences every later otel.Tracer call in the process.
+//	// otel's DEFAULT delegating provider binds to the first one installed in
+//	// the binary and never rebinds (internal/global/state.go sync.Once), so
+//	// shutting yours down can silence otel.Tracer calls made through that
+//	// restored default provider afterwards. (While your provider is the
+//	// current global, calls reach it directly — the hazard is what happens
+//	// after you put the default back.)
 //	tp := NewTestTraceProvider()
 //	prev := otel.GetTracerProvider()
 //	defer otel.SetTracerProvider(prev)

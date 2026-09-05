@@ -64,13 +64,14 @@ A test fixture that *looks* like a credential is flagged by org secret scanners,
 ## OTel Providers in Tests
 
 A test that installs a provider globally (`otel.SetTracerProvider` / `otel.SetMeterProvider`)
-must **restore the previous provider and never `Shutdown` the one it installed**. OpenTelemetry
-binds its global delegating wrapper to the *first* provider installed in a test binary and never
-rebinds it (`internal/global/state.go`, a `sync.Once`). Restoring `prev` in a cleanup restores
-the identity the global reports, but every instrument the wrapper already handed out keeps
-routing into that first provider — so shutting it down leaves the wrapper delegating into a dead
-provider, and every later `otel.Meter(...)` / `otel.Tracer(...)` call in the process silently
-records nothing. The failure is invisible: no error, no panic, just empty assertions in whichever
+must **restore the previous provider and never `Shutdown` the one it installed**. Each
+`Set*Provider` call stores its argument as the current global, so while your provider is
+installed it receives signals directly. What binds only once is OpenTelemetry's *default
+delegating* provider: it latches onto the first provider installed in the binary and never
+rebinds (`internal/global/state.go`, a `sync.Once`). So once a cleanup restores that default,
+instruments obtained through it route into the first-installed provider — and if that one was
+shut down, `otel.Meter(...)` / `otel.Tracer(...)` calls made afterwards silently record
+nothing. The failure is invisible: no error, no panic, just empty assertions in whichever
 test happens to run later (#1093).
 
 ```go
