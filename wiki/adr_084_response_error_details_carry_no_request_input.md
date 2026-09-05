@@ -4,6 +4,29 @@
 - **Date**: 2026-08-24
 - **Related**: [ADR-081](adr_081_recovered_panic_values_reported_by_type.md) (`[C60.30]` put the 5xx body's `details.error` behind `app.debug` AND a development env; this ADR finishes that posture at every status) · [ADR-001](adr_001_enhanced_handler_system.md) (the "details in development" rule this narrows) · [ADR-022](adr_022_env_policy.md) (the alias sets both gates read)
 
+> **Amended (2026-09-05):** the JOSE post-trust error envelope is no longer the
+> exception this ADR recorded. `server/jose.go`'s `buildErrorEnvelope` discarded its
+> `*config.Config` and copied `IAPIError.Details()` to the wire ungated; it now renders
+> `details` through `devDetails`, so all three renderers — enveloped, raw and JOSE —
+> share one gate. The Decision below still reads that the JOSE envelope "stays ungated
+> here"; that sentence is superseded and kept only as the historical record.
+>
+> The original reasoning was that ciphertext to an authenticated peer is not
+> disclosure. That does not hold: the peer decrypts the body and routinely logs it, so
+> an ungated envelope pushed handler-set details, bind and validation diagnostics, and
+> a captured `stackTrace` into the peer's log estate. Encryption bounds who reads the
+> body, not what the body may say.
+>
+> `formatJOSEPlaintextError` is deliberately NOT routed through the funnel: the
+> pre-trust envelope is built from a `joseAPIError`, whose `Details()` returns nil by
+> construction, so it has no key to gate and adding a second gate would only invite the
+> two to drift. `classifyError`'s attach-side gate is likewise kept, as defense in
+> depth — it bounds what reaches `details` before any renderer sees it.
+>
+> The wire change ships as `[C64.2]`: a production JOSE error envelope carries `code`,
+> `message` and `meta` only, and a peer parsing `error.details` outside
+> debug + development stops receiving the key.
+
 ## Context
 
 Two of the framework's own 400 details echoed caller-controlled text verbatim.

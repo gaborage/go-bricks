@@ -1739,7 +1739,12 @@ at every status and on both renderers.
 
 **Key Benefits:** one owner for a rule two transports need; a `FieldError` that cannot leak
 because it holds nothing to leak; and a bind summary whose inputs are all author-written.
-**Migration:** [migrations.md](migrations.md) `[C61.1]`, `[C61.2]`.
+Amended 2026-09-05: the JOSE post-trust envelope was the third renderer and was left ungated
+here on the grounds that ciphertext to an authenticated peer is not disclosure; the peer
+decrypts and logs the body, so `buildErrorEnvelope` now renders `details` through the same
+`devDetails` funnel and a production JOSE error carries `code`, `message` and `meta` only
+(#1163).
+**Migration:** [migrations.md](migrations.md) `[C61.1]`, `[C61.2]`, `[C64.2]`.
 
 ---
 
