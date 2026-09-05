@@ -385,10 +385,10 @@ func brokerUnavailableErr(msgErr error) error {
 // error the caller surfaces as the job-level outage error (see relayTenant).
 func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes.Interface, msgClient messaging.AMQPClient, record *Record, headers map[string]any, decodeErr error) (publishOutcome, error) {
 	// Corrupt headers are deterministic, broker-independent corruption (poison), so they
-	// dead-letter at MaxRetries rather than retrying forever. Poison has one other class: a
-	// destination the frame can never carry (below). Every remaining broker-side publish
-	// failure is connectivity. The decode itself happens once per record in the caller, which
-	// also needs it to derive the ordering key.
+	// dead-letter at MaxRetries rather than retrying forever. They are one of the poison
+	// classes enumerated at deadLetterPoison; every remaining broker-side publish failure is
+	// connectivity. The decode itself happens once per record in the caller, which also needs
+	// it to derive the ordering key.
 	if decodeErr != nil {
 		return r.deadLetterPoison(ctx, log, db, record, decodeErr.Error()), nil
 	}
@@ -475,8 +475,8 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 		// could not take responsibility for the message. A RabbitMQ NACK is a transient broker
 		// condition (disk alarm, mirror resync, failover), and a missing exchange surfaces as a
 		// synthesized NACK too — neither means the message is bad, so neither parks. We advance
-		// retry_count and retry (at-least-once); only the two poison classes above — undecodable
-		// headers and an unpublishable destination — ever park.
+		// retry_count and retry (at-least-once); only the poison classes enumerated at
+		// deadLetterPoison ever park.
 		r.markRecordFailed(ctx, log, db, record.ID, err.Error())
 		// A not-connected error AND a still-not-ready client (checked fresh, not
 		// inferred from the error alone) means the broker dropped mid-batch — the
@@ -562,11 +562,27 @@ func (r *Relay) publishStreamRecord(ctx, pubCtx context.Context, log logger.Logg
 	return r.recordPublished(ctx, log, db, record), nil
 }
 
-// deadLetterPoison handles a poison record — undecodable headers, or a destination past the
-// AMQP shortstr ceiling that no broker state can accept: it advances retry_count and,
-// once the record has reached MaxRetries, parks it to status=failed (the only auto-parking path).
-// Below the ceiling it just advances retry_count and leaves the record pending. Connectivity
-// failures never reach here — they call markRecordFailed directly and are never parked.
+// deadLetterPoison handles a poison record: it advances retry_count and, once the record has
+// reached MaxRetries, parks it to status=failed (the only auto-parking path). Below the ceiling
+// it only advances retry_count and leaves the record pending.
+//
+// Poison is message-intrinsic — the row reads the same way every cycle, so no broker state can
+// make it publishable. Six classes park here, each from a call site above:
+//   - undecodable headers: the stored JSON does not parse, so no frame can be built.
+//   - unknown lane: the row names a lane this build does not know.
+//   - unpublishable destination: an exchange, routing key or header key past the AMQP shortstr
+//     ceiling, refused before any channel work (messaging.ErrInvalidPublishDestination).
+//   - tenant-stamp conflict: the row's own stamp contradicts the publish context
+//     (messaging.ErrTenantStampConflict). ONE class, reachable on BOTH the AMQP and the
+//     stream lane.
+//   - stream not an outbox target: the streams lane is not wired at all, or the row's stream
+//     left outbox.superstreams between deploys (publishStreamRecord).
+//   - stream row with no partition key: nothing to hash a partition from (publishStreamRecord).
+//
+// Connectivity never reaches here: a broker NACK, a missing exchange, a not-connected client or
+// a confirmation timeout on the AMQP lane, a publisher not yet started on the stream lane, and
+// the per-record deadline on either, all call markRecordFailed directly and never park, however
+// high retry_count climbs.
 func (r *Relay) deadLetterPoison(ctx context.Context, log logger.Logger, db dbtypes.Interface, record *Record, errMsg string) publishOutcome {
 	if record.RetryCount+1 >= r.config.MaxRetries {
 		if err := r.store.MarkDeadLettered(ctx, db, record.ID, ledgererr.Bound(errMsg)); err != nil {

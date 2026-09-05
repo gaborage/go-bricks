@@ -76,7 +76,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
 2. The **relay job** (`outbox-relay` via scheduler) polls for pending events every `pollinterval`
 3. Each pending event is published to the target AMQP exchange with `x-outbox-event-id` header
 4. Successfully published events are marked as `published`
-5. Failed events have their `retry_count` advanced and stay `pending` for the next cycle — on **every** failed attempt, including while the broker is unavailable; only a **poison** event (undecodable headers, or a destination the AMQP frame can never carry) is parked once `retry_count` reaches `maxretries` (see [Retry & Dead-Lettering](#retry--dead-lettering) below)
+5. Failed events have their `retry_count` advanced and stay `pending` for the next cycle — on **every** failed attempt, including while the broker is unavailable; only a **poison** event — one of the classes listed under [Retry & Dead-Lettering](#retry--dead-lettering) below — is parked once `retry_count` reaches `maxretries`
 6. The **cleanup job** (`outbox-cleanup`) removes published events older than `retentionperiod`
 
 **Configuration:**
@@ -89,7 +89,7 @@ outbox:
   defaultexchange: ""              # Fallback if Event.Exchange empty (≤255 bytes; Init fails otherwise)
   pollinterval: 5s                 # Relay poll frequency
   batchsize: 100                   # Events per relay cycle
-  maxretries: 5                    # Dead-letter ceiling for POISON (undecodable headers, unpublishable destination) — see below
+  maxretries: 5                    # Dead-letter ceiling for POISON events only — see Retry & Dead-Lettering below
   publishtimeout: 60s              # Per-record publish bound (MUST be >= messaging connectiontimeout)
   retentionperiod: 72h             # Keep published events (0=disable cleanup)
 ```
@@ -159,7 +159,7 @@ the failure's class:
 | Class | Causes | Behavior |
 | --- | --- | --- |
 | **Connectivity** | broker down / not ready, **broker NACK**, confirmation timeout, per-record `publishtimeout` elapsed, missing exchange (surfaces as a synthesized NACK) | `retry_count` advances; **never** dead-lettered. The event stays `pending` and delivers once the broker recovers or the config is fixed. |
-| **Poison** | corrupt / undecodable headers, or a destination past the AMQP shortstr limit (`messaging.ErrInvalidPublishDestination`) — both deterministic, broker-independent failures | `retry_count` advances; once it reaches `maxretries` the event is **dead-lettered** to `status = 'failed'` and stops being retried. |
+| **Poison** | six message-intrinsic classes, each of which reads the same way every cycle: undecodable headers; an unknown `lane`; a destination past the AMQP shortstr limit (`messaging.ErrInvalidPublishDestination`); a tenant-stamp conflict (`messaging.ErrTenantStampConflict`, reachable on the AMQP **and** the stream lane, one class either way); a stream that is not an outbox target (the streams lane is unwired, or the row's stream left `outbox.superstreams`); a stream row with no `partition_key` | `retry_count` advances; once it reaches `maxretries` the event is **dead-lettered** to `status = 'failed'` and stops being retried. |
 
 Consequences worth knowing:
 
@@ -167,9 +167,9 @@ Consequences worth knowing:
   confirm is a *transient broker condition* (disk alarm, mirror resync, node failover), not a
   statement that the message is bad — so the event is retried (at-least-once), never auto-parked.
   A permanently mis-named exchange likewise surfaces as a NACK and keeps retrying, so it delivers
-  the moment an operator creates the exchange. Auto-parking is reserved for deterministic,
-  broker-independent failures: undecodable headers (which the framework essentially never produces)
-  and a destination the AMQP frame cannot carry.
+  the moment an operator creates the exchange. Auto-parking is reserved for the six deterministic,
+  broker-independent classes in the table above — the row itself is unpublishable, so no broker
+  state can change the outcome. `deadLetterPoison` in `outbox/relay.go` carries the canonical list.
 - **An over-long destination parks rather than retrying forever.** A row whose exchange, routing key
   (which carries the `EventType` when `RoutingKey` is empty) or header key exceeds 255 bytes is refused before any channel work, identically on every cycle, so
   it is poison: `retry_count` climbs and it is dead-lettered at `maxretries`. `Publish()` and the
@@ -257,9 +257,19 @@ and the relay claims nothing between them.
 
 ### Managed migration (existing deployments)
 
-`outbox.autocreatetable: true` applies all of this on the next start. A deployment that manages
-its own schema runs these BEFORE deploying the new relay, in this order — the backfill after the
-`ALTER` and before the index, so the index is built once over final values.
+`outbox.autocreatetable: true` creates this shape only on a FRESH database. It cannot upgrade a
+table retained from before this hop: `CreateTable` only ever CREATEs (`CREATE TABLE IF NOT EXISTS`
+on PostgreSQL; on Oracle an existing table raises ORA-00955) and never `ALTER`s, so on a retained
+table `seq`, `lane`, `stream` and `partition_key` never appear — the existing table and its indexes
+are left exactly as they are.
+Where the startup check applies (see [Startup Verification](#startup-verification)) that
+surfaces as a `TableUnusableError` naming `outbox.autocreatetable`, which is not the fix (#1426);
+per-tenant fan-out and dynamic sources are exempt from that check, so there the first relay poll
+fails instead. Either way EVERY deployment with an existing table runs the statements below
+BEFORE deploying the new relay (or, on a drained ledger only, drops and recreates the table —
+recreating one with pending rows discards undelivered events), whatever `autocreatetable` is
+set to, in this order — the backfill after the `ALTER` and before the index,
+so the index is built once over final values.
 
 The backfill is **not optional**. Adding an identity column populates existing rows in the order
 the rewrite reads them (heap order on PostgreSQL, rowid order on Oracle), which is not
@@ -344,7 +354,7 @@ GoBricks applies production-safe outbox defaults when outbox is enabled:
 | `outbox.pollinterval` | `5s` | Relay poll frequency |
 | `outbox.batchsize` | `100` | Events per relay cycle |
 | `outbox.defaultexchange` | `""` | Fallback exchange when `Event.Exchange` is empty; **must be ≤ 255 bytes** (Init fails otherwise) |
-| `outbox.maxretries` | `5` | Dead-letter ceiling for **poison** events only (undecodable headers, a destination past the AMQP shortstr limit, an unknown lane, a stream not listed below, or a stream row with no partition key) |
+| `outbox.maxretries` | `5` | Dead-letter ceiling for **poison** events only — the classes enumerated under [Retry & Dead-Lettering](#retry--dead-lettering) |
 | `outbox.superstreams` | none | Super streams the relay may publish to over the native streams lane. Requires `messaging.streams.uri`; each listed name gets one publisher declared by the outbox |
 | `outbox.publishtimeout` | `60s` | Per-record publish bound; **must be ≥ `messaging.reconnect.connectiontimeout`** (Init fails otherwise) |
 | `outbox.retentionperiod` | `72h` | Published event retention |
