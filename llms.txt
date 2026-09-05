@@ -3479,6 +3479,8 @@ touches the tag — runbooks per family in [wiki/sealing.md](wiki/sealing.md#rot
 A body that is not a sealed JWS, or fails any open rule, is poison (nack without requeue,
 DLQ); there is no accept-unsealed mode. Fields you seal likely belong in
 `log.sensitivefields` too.
+Minting a test body from the shell (openssl fixture keys, `cmd/seal-event`, `rabbitmqadmin
+publish`): [wiki/sealing.md#minting-test-events-with-rabbitmqadmin-seal-event-cli](wiki/sealing.md#minting-test-events-with-rabbitmqadmin-seal-event-cli).
 
 ### Concurrency Tuning Per Consumer
 

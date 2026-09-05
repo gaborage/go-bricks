@@ -277,6 +277,71 @@ rejection**; its one replay-related job is to make the message's identity un-for
   `jti`; business-key idempotency stays the consumer's contract. A stateless sealed consumer
   (no ledger) leaves every replay class open — the `WithMeta` requirement is the nudge.
 
+## Minting test events with rabbitmqadmin (seal-event CLI)
+
+Publishing a sealed event by hand is impractical: the body is a compact JWS whose payload
+is the marshaled event with one member replaced by a compact JWE, signed over exactly those
+bytes. `cmd/seal-event` mints one from a JSON document using the production
+`sealed.SealDocument` path and the keystore's own DER loaders (`internal/keymaterial`), so a
+body it emits is one the sealed consume door opens by construction.
+
+Install:
+
+```sh
+go install github.com/gaborage/go-bricks/cmd/seal-event@latest
+```
+
+Generate DER fixture keys with openssl. The CLI holds the PRODUCER role: the sign PRIVATE
+half and the encrypt PUBLIC half. The consumer holds the mirror image — the sign public and
+the encrypt private — under the same generation names.
+
+```sh
+# Sign pair — the PUBLIC half is what the consumer provisions as
+# svc-payments-sign-v1 in its keystore
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out sign.der
+openssl pkey -inform DER -in sign.der -pubout -outform DER -out sign.pub.der
+
+# Encrypt pair — the audience's key; the CLI needs only the PKIX DER public half,
+# the consumer provisions the private half as aud-core-encrypt-v1
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out enc.der
+openssl pkey -inform DER -in enc.der -pubout -outform DER -out enc.pub.der
+```
+
+Seal one event body and publish it:
+
+```sh
+echo '{"order_id":"o-1","amount":100,"card":{"pan":"4111111111111111","expiry":"12/30"}}' \
+  | seal-event \
+    -sign-key-file sign.der -encrypt-key-file enc.pub.der \
+    -sign-kid svc-payments-sign-v1 -encrypt-kid aud-core-encrypt-v1 \
+    -subject card -event-type payment.authorized -tenant-id t1 > body.txt
+
+rabbitmqadmin publish exchange=payments routing_key=payment.authorized \
+  payload="$(cat body.txt)" \
+  properties='{"content_type":"application/octet-stream","headers":{"x-tenant-id":"t1"}}'
+```
+
+Pitfalls, each one a consumer-side rejection rather than a publish failure:
+
+- `-tenant-id` writes the signed `tid`; under shared tenancy it must equal the
+  `x-tenant-id` header you publish with, or the open fails `SEAL_TENANT_MISMATCH`.
+- `-event-type` must equal the consumer declaration's `EventType` — the signed `etyp` is
+  compared verbatim (`SEAL_EVENT_TYPE_MISMATCH`).
+- Both kids must be provisioned Generations of the tag's families on the consumer:
+  `<logical>-v<N>`, never the bare Logical kid. A wrong family is
+  `SEAL_KID_FAMILY_MISMATCH`; a right family the consumer has not provisioned is the
+  recoverable `SEAL_KID_UNKNOWN_GENERATION`.
+- PS256 only — there is no `-sig-alg`; the opener also accepts RS256, but the CLI never
+  emits it.
+- The Subject named by `-subject` is the JSON member name, and it must be present exactly
+  once in the document; an absent Subject, a case-fold twin of it, a non-object document or
+  trailing content after it is `SEAL_DOCUMENT_INVALID`.
+
+Each invocation is a fresh seal with a fresh `jti`, so publishing the same `body.txt` twice
+is the dedup test and re-running the CLI is not. Go test authors do not need the binary:
+mint from a JSON fixture in-process with `sealed.NewDocumentSpec` plus `sealed.SealDocument`,
+which is the same path this CLI runs.
+
 ## Residuals
 
 - ≈1.4 KB wire floor per message; ciphertext length reveals the Subject's size class.
