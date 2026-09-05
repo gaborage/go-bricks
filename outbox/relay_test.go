@@ -24,8 +24,8 @@ import (
 
 func TestDecodeHeadersEmpty(t *testing.T) {
 	headers, err := decodeHeaders(nil)
-	assert.NoError(t, err)
 	assert.Nil(t, headers)
+	assert.NoError(t, err)
 }
 
 func TestDecodeHeadersValid(t *testing.T) {
@@ -39,7 +39,7 @@ func TestDecodeHeadersValid(t *testing.T) {
 func TestDecodeHeadersInvalidJSON(t *testing.T) {
 	data := []byte(`{invalid json}`)
 	headers, err := decodeHeaders(data)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, headers)
 	assert.Contains(t, err.Error(), "invalid headers JSON")
 }
@@ -204,11 +204,11 @@ func TestPublishRecordMarksFailedOnInvalidHeaders(t *testing.T) {
 	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec, hdrs, decodeErr)
 
 	assert.Equal(t, outcomeFailed, out, "corrupt headers are a (poison) failure")
-	assert.NoError(t, outErr)
 	assert.Equal(t, 0, amqp.PublishCalls, "publish never attempted with bad headers")
 	assert.Equal(t, 1, store.MarkFailedCalls)
 	assert.Equal(t, "evt-bad-hdr", store.MarkFailedLastID)
 	assert.Contains(t, store.MarkFailedLastErr, "invalid headers JSON")
+	assert.NoError(t, outErr)
 }
 
 func TestPublishRecordInjectsOutboxMetadataHeaders(t *testing.T) {
@@ -266,10 +266,10 @@ func TestPublishRecordReturnsFalseWhenMarkPublishedFails(t *testing.T) {
 	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec, hdrs, decodeErr)
 
 	assert.Equal(t, outcomePublishedUnrecorded, out, "the message WAS delivered; a MarkPublished failure must not bump retry_count")
-	assert.NoError(t, outErr)
 	assert.Equal(t, 1, amqp.PublishCalls)
 	assert.Equal(t, 1, store.MarkPublishedCalls)
 	assert.Equal(t, 0, store.MarkFailedCalls, "MarkFailed not called when only MarkPublished failed")
+	assert.NoError(t, outErr)
 }
 
 // TestPublishRecordRehydratesTraceContextForPublish asserts that the relay
@@ -634,10 +634,10 @@ func TestRelayMidBatchDropAccountingSumsToTotal(t *testing.T) {
 	assert.Equal(t, 0, res.unrecorded)
 	assert.Equal(t, 0, res.deadlettered)
 	assert.Equal(t, 2, res.failed, "record 2 (failed attempt) AND record 3 (outage remainder) both count as failed")
-	assert.ErrorIs(t, res.outageErr, messaging.ErrNotConnected)
 	sum := res.published + res.unrecorded + res.failed + res.deadlettered + res.parked
 	assert.Equal(t, len(records), sum, "cycle accounting must sum to the batch total")
 	assert.Equal(t, res.failed, store.MarkFailedCalls, "result count matches what was actually marked failed in the DB")
+	assert.ErrorIs(t, res.outageErr, messaging.ErrNotConnected)
 }
 
 // TestRelayContinuesBatchWhenNotConnectedButStillReady locks in the "AND IsReady()"
@@ -844,7 +844,7 @@ func TestRelayLostLeadershipStopsBatch(t *testing.T) {
 
 	err := r.Execute(newFakeJobCtx(db, amqp))
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotLeader, "a lost leader row is reported as such")
+	require.ErrorIs(t, err, ErrNotLeader, "a lost leader row is reported as such")
 	assert.NotContains(t, err.Error(), "messaging not available",
 		"the cause is the database, so it must not be reported as a broker outage")
 	assert.Equal(t, 1, amqp.PublishCalls, "a deposed leader publishes nothing further")

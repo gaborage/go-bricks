@@ -178,7 +178,7 @@ func TestDualModeLogProcessorCreation(t *testing.T) {
 	assert.NotNil(t, dualProc)
 	assert.NotNil(t, dualProc.actionProcessor)
 	assert.NotNil(t, dualProc.traceProcessor)
-	assert.Equal(t, 0.5, dualProc.samplingRate)
+	assert.InDelta(t, 0.5, dualProc.samplingRate, 1e-9)
 }
 
 func TestDualModeLogProcessorRoutesActionLogs(t *testing.T) {
@@ -818,7 +818,7 @@ func TestShutdownWithErrors(t *testing.T) {
 		dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
 
 		err := dualProc.Shutdown(context.Background())
-		assert.ErrorIs(t, err, errAction, "Should contain action processor error")
+		require.ErrorIs(t, err, errAction, "Should contain action processor error")
 		assert.ErrorIs(t, err, errTrace, "Should contain trace processor error")
 	})
 }
@@ -852,7 +852,7 @@ func TestForceFlushWithErrors(t *testing.T) {
 		dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
 
 		err := dualProc.ForceFlush(context.Background())
-		assert.ErrorIs(t, err, errAction, "Should contain action processor error")
+		require.ErrorIs(t, err, errAction, "Should contain action processor error")
 		assert.ErrorIs(t, err, errTrace, "Should contain trace processor error")
 	})
 }

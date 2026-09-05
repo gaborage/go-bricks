@@ -55,25 +55,25 @@ func TestValidateTableNameInvalid(t *testing.T) {
 
 func TestNewPostgresStoreValidTableName(t *testing.T) {
 	store, err := NewPostgresStore("gobricks_outbox")
-	assert.NoError(t, err)
 	assert.NotNil(t, store)
+	assert.NoError(t, err)
 }
 
 func TestNewPostgresStoreInvalidTableName(t *testing.T) {
 	_, err := NewPostgresStore("invalid;table")
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "dangerous SQL")
 }
 
 func TestNewOracleStoreValidTableName(t *testing.T) {
 	store, err := NewOracleStore("gobricks_outbox")
-	assert.NoError(t, err)
 	assert.NotNil(t, store)
+	assert.NoError(t, err)
 }
 
 func TestNewOracleStoreInvalidTableName(t *testing.T) {
 	_, err := NewOracleStore("invalid;table")
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "dangerous SQL")
 }
 

@@ -186,7 +186,7 @@ func TestPublisherPublishNilEvent(t *testing.T) {
 
 	_, err := pub.Publish(context.Background(), &mockTx{}, nil)
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "event must not be nil")
 }
 
@@ -201,7 +201,7 @@ func TestPublisherPublishEmptyEventType(t *testing.T) {
 
 	_, err := pub.Publish(context.Background(), &mockTx{}, event)
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "event type must not be empty")
 }
 
@@ -216,7 +216,7 @@ func TestPublisherPublishEmptyAggregateID(t *testing.T) {
 
 	_, err := pub.Publish(context.Background(), &mockTx{}, event)
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "aggregate ID must not be empty")
 }
 
@@ -263,7 +263,7 @@ func TestPublisherPublishNilTransaction(t *testing.T) {
 
 	_, err := pub.Publish(context.Background(), nil, event)
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "transaction must not be nil")
 }
 
@@ -595,7 +595,7 @@ func TestPublisherRefusesADestinationTheFrameCannotCarry(t *testing.T) {
 				return
 			}
 			require.Error(t, err)
-			assert.ErrorIs(t, err, messaging.ErrInvalidPublishDestination)
+			require.ErrorIs(t, err, messaging.ErrInvalidPublishDestination)
 			assert.Empty(t, eventID)
 			assert.Equal(t, 0, store.InsertCalls, "an unpublishable destination never reaches the ledger")
 			assert.Contains(t, err.Error(), "outbox:")
@@ -711,11 +711,11 @@ func TestPublisherStreamTarget(t *testing.T) {
 
 			if tt.wantErr != nil {
 				require.Error(t, err)
-				assert.ErrorIs(t, err, tt.wantErr)
-				if tt.wantErrFrag != "" {
-					assert.ErrorContains(t, err, tt.wantErrFrag)
-				}
 				assert.Empty(t, store.insertedRecords, "a refused event never reaches the store")
+				require.ErrorIs(t, err, tt.wantErr)
+				if tt.wantErrFrag != "" {
+					require.ErrorContains(t, err, tt.wantErrFrag)
+				}
 				return
 			}
 

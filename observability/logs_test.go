@@ -112,10 +112,10 @@ func TestCreateOTLPHTTPLogExporter(t *testing.T) {
 			exporter, err := p.createOTLPHTTPLogExporter(context.Background())
 
 			if tt.wantErr {
-				assert.Error(t, err)
 				assert.Nil(t, exporter)
+				assert.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				require.NotNil(t, exporter)
 				if tt.checkFunc != nil {
 					tt.checkFunc(t, exporter)
@@ -227,10 +227,10 @@ func TestCreateOTLPGRPCLogExporter(t *testing.T) {
 			exporter, err := p.createOTLPGRPCLogExporter(context.Background())
 
 			if tt.wantErr {
-				assert.Error(t, err)
 				assert.Nil(t, exporter)
+				assert.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				require.NotNil(t, exporter)
 				if tt.checkFunc != nil {
 					tt.checkFunc(t, exporter)
@@ -256,7 +256,7 @@ func TestCreateLogExporterInvalidProtocol(t *testing.T) {
 	}
 
 	exporter, err := p.createLogExporter(context.Background())
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, exporter)
 	assert.ErrorIs(t, err, ErrInvalidProtocol)
 }
@@ -272,7 +272,7 @@ func TestCreateLogExporterStdout(t *testing.T) {
 	}
 
 	exporter, err := p.createLogExporter(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, exporter)
 
 	// Cleanup
@@ -327,10 +327,11 @@ func TestCreateDualModeProcessor(t *testing.T) {
 
 			processor := p.createDualModeProcessor(baseExporter)
 			assert.NotNil(t, processor)
-			assert.NoError(t, processor.Shutdown(context.Background()))
+			shutdownErr := processor.Shutdown(context.Background())
 
 			// Cleanup base exporter
 			_ = baseExporter.Shutdown(context.Background())
+			assert.NoError(t, shutdownErr)
 		})
 	}
 }
@@ -554,7 +555,7 @@ func TestInitLogProviderSuccess(t *testing.T) {
 	}
 
 	err := p.initLogProvider(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, p.loggerProvider)
 
 	// Cleanup
@@ -594,9 +595,9 @@ func TestInitLogProviderWithHookFailure(t *testing.T) {
 	}
 
 	err := p.initLogProvider(context.Background())
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, expectedErr)
 	assert.Nil(t, p.loggerProvider)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, expectedErr)
 }
 
 func TestNewProviderWithLogsEnabled(t *testing.T) {

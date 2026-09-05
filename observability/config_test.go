@@ -387,7 +387,7 @@ metrics:
 
 	// Verify deeply nested trace sample config
 	require.NotNil(t, obsCfg.Trace.Sample.Rate, "Sample rate should not be nil")
-	assert.Equal(t, 0.5, *obsCfg.Trace.Sample.Rate, "Sample rate should be 0.5")
+	assert.InDelta(t, 0.5, *obsCfg.Trace.Sample.Rate, 1e-9, "Sample rate should be 0.5")
 
 	// Verify deeply nested trace batch config
 	assert.Equal(t, 10*time.Second, obsCfg.Trace.Batch.Timeout, "Batch timeout should be 10s")
@@ -731,7 +731,7 @@ func TestCloneHeaderMapWithValues(t *testing.T) {
 
 	// Verify contents match
 	require.NotNil(t, clone)
-	assert.Equal(t, len(original), len(clone))
+	assert.Len(t, clone, len(original))
 	for k, v := range original {
 		assert.Equal(t, v, clone[k], "Clone should have same value for key %s", k)
 	}

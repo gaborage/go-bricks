@@ -51,7 +51,7 @@ func TestOracleStoreInsertExecError(t *testing.T) {
 
 	err = store.Insert(t.Context(), tx, sampleRecord())
 	require.Error(t, err)
-	assert.ErrorIs(t, err, wantErr)
+	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "insert failed")
 }
 
@@ -112,8 +112,8 @@ func TestOracleStoreFetchPendingHandlesNullExchangeAndRoutingKey(t *testing.T) {
 	out, err := store.FetchPending(t.Context(), db, 10)
 	require.NoError(t, err)
 	require.Len(t, out, 1)
-	assert.Equal(t, "", out[0].Exchange, "NULL exchange must map to the empty (default) exchange")
-	assert.Equal(t, "", out[0].RoutingKey, "NULL routing_key must map to empty")
+	assert.Empty(t, out[0].Exchange, "NULL exchange must map to the empty (default) exchange")
+	assert.Empty(t, out[0].RoutingKey, "NULL routing_key must map to empty")
 }
 
 func TestOracleStoreFetchPendingEmpty(t *testing.T) {
@@ -141,7 +141,7 @@ func TestOracleStoreFetchPendingQueryError(t *testing.T) {
 
 	_, err := store.FetchPending(t.Context(), db, 10)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, wantErr)
+	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "fetch pending failed")
 }
 
@@ -163,7 +163,7 @@ func TestOracleStoreMarkPublishedExecError(t *testing.T) {
 
 	err := store.MarkPublished(t.Context(), db, "evt-1")
 	require.Error(t, err)
-	assert.ErrorIs(t, err, wantErr)
+	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "mark published failed")
 }
 
@@ -216,7 +216,7 @@ func TestOracleStoreMarkDeadLetteredExecError(t *testing.T) {
 
 	err := store.MarkDeadLettered(t.Context(), db, "evt-1", "poison")
 	require.Error(t, err)
-	assert.ErrorIs(t, err, wantErr)
+	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "mark dead-lettered failed")
 }
 
@@ -238,7 +238,7 @@ func TestOracleStoreMarkFailedExecError(t *testing.T) {
 
 	err := store.MarkFailed(t.Context(), db, "evt-1", "broker offline")
 	require.Error(t, err)
-	assert.ErrorIs(t, err, wantErr)
+	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "mark failed failed")
 }
 
@@ -262,7 +262,7 @@ func TestOracleStoreDeletePublishedExecError(t *testing.T) {
 
 	_, err := store.DeletePublished(t.Context(), db, time.Now())
 	require.Error(t, err)
-	assert.ErrorIs(t, err, wantErr)
+	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "delete published failed")
 }
 
@@ -309,7 +309,7 @@ func TestOracleStoreCreateTableErrorOnTable(t *testing.T) {
 
 	err := store.CreateTable(t.Context(), db)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, wantErr)
+	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "create table failed")
 }
 
@@ -322,7 +322,7 @@ func TestOracleStoreCreateTableErrorOnPendingIndex(t *testing.T) {
 
 	err := store.CreateTable(t.Context(), db)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, wantErr)
+	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "create pending index failed")
 }
 
@@ -336,7 +336,7 @@ func TestOracleStoreCreateTableErrorOnPublishedIndex(t *testing.T) {
 
 	err := store.CreateTable(t.Context(), db)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, wantErr)
+	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "create published index failed")
 }
 
@@ -520,7 +520,7 @@ func TestOracleStoreLeadNotLeader(t *testing.T) {
 
 	lead, err := store.Lead(t.Context(), db)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotLeader)
 	assert.Nil(t, lead)
 	dbtesting.AssertRolledBack(t, tx)
+	assert.ErrorIs(t, err, ErrNotLeader)
 }
