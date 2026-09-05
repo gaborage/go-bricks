@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -104,11 +105,11 @@ func TestHeaderResolverResolveTenant(t *testing.T) {
 			}
 
 			if tt.expectError {
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.Equal(t, ErrTenantResolutionFailed, err)
 				assert.Empty(t, tenantID)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tt.expected, tenantID)
 			}
 		})
@@ -214,11 +215,11 @@ func TestCompositeResolverResolveTenant(t *testing.T) {
 			tenantID, err := tt.resolver.ResolveTenant(ctx, req)
 
 			if tt.expectError {
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.Equal(t, ErrTenantResolutionFailed, err)
 				assert.Empty(t, tenantID)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tt.expected, tenantID)
 			}
 		})
@@ -300,11 +301,11 @@ func TestValidatingResolverResolveTenant(t *testing.T) {
 			tenantID, err := tt.resolver.ResolveTenant(ctx, req)
 
 			if tt.expectError {
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.Equal(t, ErrTenantResolutionFailed, err)
 				assert.Empty(t, tenantID)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tt.expected, tenantID)
 			}
 		})
@@ -318,7 +319,7 @@ func TestHeaderResolverResolveTenantNilRequest(t *testing.T) {
 
 	tenantID, err := resolver.ResolveTenant(ctx, nil)
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, ErrTenantResolutionFailed, err)
 	assert.Empty(t, tenantID)
 }
@@ -432,11 +433,11 @@ func TestSubdomainResolverResolveTenant(t *testing.T) {
 			}
 
 			if tt.expectError {
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.Equal(t, ErrTenantResolutionFailed, err)
 				assert.Empty(t, tenantID)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tt.expected, tenantID)
 			}
 		})
@@ -599,11 +600,11 @@ func TestPathResolverResolveTenant(t *testing.T) {
 			req := setupPathRequest(tc.path)
 			tenantID, err := tc.resolver.ResolveTenant(ctx, req)
 			if tc.expectError {
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.Equal(t, ErrTenantResolutionFailed, err)
 				assert.Empty(t, tenantID)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tc.expected, tenantID)
 			}
 		})
@@ -650,7 +651,7 @@ func TestCompositeResolverWithPathSubresolver(t *testing.T) {
 		req := setupPathRequest("/itsp/clientA/lifecycle")
 		req.Header.Set(tenantIDHeader, "fallback-tenant")
 		tenantID, err := composite.ResolveTenant(ctx, req)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, "clientA", tenantID)
 	})
 
@@ -658,7 +659,7 @@ func TestCompositeResolverWithPathSubresolver(t *testing.T) {
 		req := setupPathRequest("/health")
 		req.Header.Set(tenantIDHeader, "header-tenant")
 		tenantID, err := composite.ResolveTenant(ctx, req)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, "header-tenant", tenantID)
 	})
 

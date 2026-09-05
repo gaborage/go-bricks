@@ -6,6 +6,7 @@ import (
 	"github.com/Masterminds/squirrel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/database/types"
 )
@@ -630,7 +631,7 @@ func TestMockFilterNilSafeToSQL(t *testing.T) {
 
 		assert.Equal(t, "status = ?", sql)
 		assert.Nil(t, args) // nil args is valid, not a panic
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		mockFilter.AssertExpectations(t)
 	})
 
@@ -644,7 +645,7 @@ func TestMockFilterNilSafeToSQL(t *testing.T) {
 
 		assert.Equal(t, "id = ?", sql)
 		assert.Nil(t, args)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		mockFilter2.AssertExpectations(t)
 	})
 
@@ -657,7 +658,7 @@ func TestMockFilterNilSafeToSQL(t *testing.T) {
 
 		assert.Equal(t, "status = ? AND age > ?", sql)
 		assert.Equal(t, expectedArgs, args)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		mockFilter3.AssertExpectations(t)
 	})
 }
@@ -674,7 +675,7 @@ func TestMockUpdateQueryBuilderNilSafeToSQL(t *testing.T) {
 
 		assert.Equal(t, "UPDATE users SET name = ?", sql)
 		assert.Nil(t, args) // nil args is valid
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		mockUpdate.AssertExpectations(t)
 	})
 
@@ -687,7 +688,7 @@ func TestMockUpdateQueryBuilderNilSafeToSQL(t *testing.T) {
 
 		assert.Equal(t, "UPDATE users SET name = ? WHERE id = ?", sql)
 		assert.Equal(t, expectedArgs, args)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		mockUpdate.AssertExpectations(t)
 	})
 
@@ -699,7 +700,7 @@ func TestMockUpdateQueryBuilderNilSafeToSQL(t *testing.T) {
 
 		assert.Empty(t, sql)
 		assert.Nil(t, args)
-		assert.Error(t, err)
+		require.Error(t, err)
 		mockUpdate.AssertExpectations(t)
 	})
 }
@@ -716,7 +717,7 @@ func TestMockDeleteQueryBuilderNilSafeToSQL(t *testing.T) {
 
 		assert.Equal(t, "DELETE FROM users", sql)
 		assert.Nil(t, args)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		mockDelete.AssertExpectations(t)
 	})
 
@@ -729,7 +730,7 @@ func TestMockDeleteQueryBuilderNilSafeToSQL(t *testing.T) {
 
 		assert.Equal(t, "DELETE FROM users WHERE id = ?", sql)
 		assert.Equal(t, expectedArgs, args)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		mockDelete.AssertExpectations(t)
 	})
 
@@ -741,7 +742,7 @@ func TestMockDeleteQueryBuilderNilSafeToSQL(t *testing.T) {
 
 		assert.Empty(t, sql)
 		assert.Nil(t, args)
-		assert.Error(t, err)
+		require.Error(t, err)
 		mockDelete.AssertExpectations(t)
 	})
 }
@@ -758,7 +759,7 @@ func TestMockSelectQueryBuilderNilSafeToSQL(t *testing.T) {
 
 		assert.Equal(t, "SELECT * FROM users", sql)
 		assert.Nil(t, args)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		mockSelect.AssertExpectations(t)
 	})
 
@@ -771,7 +772,7 @@ func TestMockSelectQueryBuilderNilSafeToSQL(t *testing.T) {
 
 		assert.Equal(t, "SELECT * FROM users WHERE status = ? AND age > ?", sql)
 		assert.Equal(t, expectedArgs, args)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		mockSelect.AssertExpectations(t)
 	})
 
@@ -783,7 +784,7 @@ func TestMockSelectQueryBuilderNilSafeToSQL(t *testing.T) {
 
 		assert.Empty(t, sql)
 		assert.Nil(t, args)
-		assert.Error(t, err)
+		require.Error(t, err)
 		mockSelect.AssertExpectations(t)
 	})
 }
@@ -798,7 +799,7 @@ func TestMockInsertQueryBuilderNilSafeToSQL(t *testing.T) {
 
 		assert.Equal(t, "INSERT INTO users(name) VALUES(?)", sql)
 		assert.Nil(t, args)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		mockInsert.AssertExpectations(t)
 	})
 
@@ -811,7 +812,7 @@ func TestMockInsertQueryBuilderNilSafeToSQL(t *testing.T) {
 
 		assert.Equal(t, "INSERT INTO users(name,email) VALUES(?,?)", sql)
 		assert.Equal(t, expectedArgs, args)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		mockInsert.AssertExpectations(t)
 	})
 
@@ -823,7 +824,7 @@ func TestMockInsertQueryBuilderNilSafeToSQL(t *testing.T) {
 
 		assert.Empty(t, sql)
 		assert.Nil(t, args)
-		assert.Error(t, err)
+		require.Error(t, err)
 		mockInsert.AssertExpectations(t)
 	})
 }

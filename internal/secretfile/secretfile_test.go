@@ -142,7 +142,7 @@ func TestReadErrorDoesNotEchoOverLongValues(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "read file")
 		assert.Contains(t, err.Error(), fmt.Sprintf("%q", path))
-		assert.True(t, errors.Is(err, fs.ErrNotExist))
+		assert.ErrorIs(t, err, fs.ErrNotExist)
 	})
 }
 

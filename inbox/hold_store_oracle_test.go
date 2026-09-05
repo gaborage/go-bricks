@@ -240,7 +240,7 @@ func TestOracleHoldStoreMarkerLockFailuresAreReported(t *testing.T) {
 		_, err = store.Park(t.Context(), dbtx, sampleHoldRow())
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, wantErr)
+		require.ErrorIs(t, err, wantErr)
 		assert.Contains(t, err.Error(), "lock tenant marker failed")
 		assert.Empty(t, tx.ExecLog(), "neither the marker nor the row is written")
 	})

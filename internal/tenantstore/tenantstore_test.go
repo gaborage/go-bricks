@@ -120,7 +120,7 @@ func TestCacheGetReturnsGetDBError(t *testing.T) {
 
 	store, err := c.Get(t.Context(), d)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, cause)
+	require.ErrorIs(t, err, cause)
 	assert.Contains(t, err.Error(), "testmod: database unavailable")
 	assert.Nil(t, store)
 	_, ok := c.Cached("")
@@ -379,7 +379,7 @@ func TestStartupDatabaseUnreachable(t *testing.T) {
 	defer cancel()
 	require.Error(t, err)
 	assert.Equal(t, "inbox: database unreachable at startup: dial tcp: connection refused", err.Error())
-	assert.ErrorIs(t, err, cause)
+	require.ErrorIs(t, err, cause)
 	assert.Nil(t, db)
 }
 

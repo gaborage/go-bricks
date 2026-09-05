@@ -45,22 +45,62 @@ test, not inferred from the diff.
 Harvest note for the FINAL author: P5, P6 and P9 documented their false positives in their PR
 bodies rather than here (this file postdates them) — pull those rows in before converting.
 
-## config (#1092 / W3-P3)
+## tail packages (#1092 / W3-P9)
+
+Unlike the `require-error` rows above, every row here is `encoded-compare`, whose failure mode is
+different: it keys off the identifier NAME rather than the value, and it cannot see that a test is
+pinning BYTES rather than a JSON document. `JSONEq` unmarshals both sides, so it passes on any
+reformatting — which is exactly the regression these four assertions exist to catch.
 
 | site | checker | why it stays `assert` | directive FINAL inserts |
 | --- | --- | --- | --- |
-| `config/config_test.go:1743` | require-error | `err` is REASSIGNED below and re-asserted for the derived-map sub-case; a require here skips that second phase entirely. | `//nolint:testifylint // a second sub-case reassigns and re-asserts err` |
-| `config/converters_test.go:155` | float-compare | `toFloat64`'s table is ParseFloat round-trips (`"123.45"` -> `123.45`), where the Go literal and `ParseFloat` produce identical float64 bits. Exact equality IS the converter's contract; a tolerance would let a lossy conversion pass. | `//nolint:testifylint // exact equality is the converter's contract` |
-| `config/injection_test.go:110` | require-error | A second phase below sets the env var, reloads the config and pins the default-value behavior; a require here aborts on any message drift and that phase never runs. | `//nolint:testifylint // a reload-and-defaults phase follows` |
-| `config/converters_test.go:23` | require-error | `floatToInt64(NaN)` rejection, followed by the `Inf` rejection through a different branch of the converter — a require hides the Inf case whenever NaN regresses. | `//nolint:testifylint // the Inf-rejection case follows through a different branch` |
-| `config/injection_test.go:170` | float-compare | Env-var round-trip of `1024.5`, exactly representable in float64. The test pins that the value arrives intact, not that it arrives close. | `//nolint:testifylint // exact equality is the injection contract` |
-| `config/tenant_store_test.go:231` | require-error | Followed by removing a non-existent tenant and asserting the store did not mutate — a distinct second phase, independent of the lookup error. | `//nolint:testifylint // an independent no-mutation property follows` |
-| `config/tenant_store_test.go:76` | require-error | Followed by an Error assertion on `BrokerURL`, a different resolver path through the same store. | `//nolint:testifylint // a different resolver path is asserted next` |
+| `internal/sealcli/sealcli_test.go:231` | encoded-compare | Flagged only because the expected value is the variable `payloadJSON`. The property is a byte-exact read-back — the test's own comment says "stdin holds different bytes, so reading it instead would be visible", which `JSONEq` erases. | `//nolint:testifylint // byte-exact read-back, not JSON equivalence` |
+| `internal/sealcli/sealcli_test.go:242` | encoded-compare | Same variable, the stdin arm of the table; same byte-exactness. | `//nolint:testifylint // byte-exact read-back, not JSON equivalence` |
+| `tools/migration/internal/awssm/fetcher_test.go:35` | encoded-compare | The value IS JSON, but the property is that the fetcher returns `SecretString` VERBATIM. `JSONEq` would keep passing if the fetcher reformatted the secret. | `//nolint:testifylint // verbatim secret bytes, not JSON equivalence` |
+| `tools/migration/internal/awssm/fetcher_test.go:50` | encoded-compare | Same contract on the `SecretBinary` path. | `//nolint:testifylint // verbatim secret bytes, not JSON equivalence` |
 
-## Deferred, not excepted
+### float-compare — integers round-tripped through JSON (logger, otel)
 
-`config/getters_test.go` carries 10 live findings (6 `require-error`, 3 `float-compare`, 1
-`empty`) and is deliberately UNTOUCHED by W3-P3: Lane M's #1438 rewrote that file, so it joins a
-later sweep or FINAL. They are not exceptions and have no rationale yet — whoever picks the file
-up must triage them, and FINAL will red on them until someone does. Recorded here so the count
-is not mistaken for a clean package.
+`json.Unmarshal` into `map[string]any` decodes every number as `float64`, so a test that logs an
+`Int`/`Int64`/`Uint64`/`Dur` and reads it back necessarily compares `float64` values that are
+EXACT integers. The contract is exact representation, not proximity, so `InDelta`/`InEpsilon`
+would weaken all of them — and would destroy `:564`/`:565` outright, whose whole point is what
+float64 does at the precision boundary (`float64(9223372036854775807)` is the deliberately
+rounded expectation). Same ruling the plan already applies to `observability/testing/helpers.go:273`:
+exact equality is the contract, so the directive is a nolint, never a tolerance.
+
+| site | checker | why it stays `assert.Equal` | directive FINAL inserts |
+| --- | --- | --- | --- |
+| `logger/adapter_test.go:118,134,150,167` | float-compare | Integer field logged then JSON-decoded; exact round-trip is the property. | `//nolint:testifylint // integer round-tripped through JSON; exact equality is the contract` |
+| `logger/adapter_test.go:255,256,345,346,347,348` | float-compare | Same, across the multi-field and structured-entry cases. | `//nolint:testifylint // integer round-tripped through JSON; exact equality is the contract` |
+| `logger/adapter_test.go:564,565` | float-compare | `max_int64`/`max_uint64` — the test EXISTS to pin float64 behaviour at the precision boundary; a tolerance erases it. | `//nolint:testifylint // pins float64 precision loss at the int64/uint64 boundary` |
+| `logger/adapter_test.go:621,642,662,682` | float-compare | Sensitive-field filter tests: the assertion is that a non-sensitive numeric field is NOT masked, i.e. the exact value survives. | `//nolint:testifylint // integer round-tripped through JSON; exact equality is the contract` |
+| `logger/otel_bridge_test.go:314` | float-compare | OTel gauge `AsFloat64()` of an exact integer 7. | `//nolint:testifylint // exact integer value, not a computed float` |
+
+### require-error — the follower never touches `err` and pins an independent property
+
+Per the fleet rule: a site stays `assert` only when the following assertion is BOTH independent of
+the error AND the property the test exists to pin. Two shapes were converted rather than listed
+here, though an earlier draft kept them: a follower that DEREFERENCES the error (`err.Error()`,
+`ErrorContains`, `errors.Is`) would panic on a nil error anyway, so `require` turns a panic into a
+clean failure; and the correlated half of one `(value, err)` outcome (`Nil(store)` beside
+`Error(err)`) is not independent. Trailing `AssertExpectations()` hygiene was likewise converted.
+
+| site | checker | why it stays `assert` | directive FINAL inserts |
+| --- | --- | --- | --- |
+| `inbox/hold_store_oracle_test.go:263` | require-error | Followed by `require.Len(tx.ExecLog(), 1)` and a SQL-content check — the partial-write shape ("the row is never written without its marker") is the property, and neither follower touches `err`. | `//nolint:testifylint // exec-log shape asserted below, independent of err` |
+| `inbox/testing/mock_inbox_test.go:42` | require-error | Followed by `AssertProcessCount(m, 0)`: that an errored call is NOT recorded is the mock's counter contract, not trailing hygiene. | `//nolint:testifylint // mock call-count contract asserted below` |
+| `inbox/testing/mock_inbox_test.go:53` | require-error | Followed by `AssertProcessed` + `AssertProcessCount(m, 1)`: the call IS recorded despite the error. | `//nolint:testifylint // mock recording contract asserted below` |
+| `internal/publishdoor/publishdoor_test.go:71` | require-error | Followed by `Nil(Swap(first))`, which performs a SECOND swap — a distinct phase, not a property of the first error. | `//nolint:testifylint // a second swap is exercised below` |
+| `internal/sealcli/sealcli_test.go:219` | require-error | Followed by an independent `keys.PublicKey` lookup and its own assertion; aborting never attempts it. | `//nolint:testifylint // an independent second lookup follows` |
+| `keystore/generation_test.go:111` | require-error | Inside a `for` over names with the name as the failure message: the loop accumulates one result per case, and `False(ok, name)` never touches `err`. | `//nolint:testifylint // loop accumulates one result per case` |
+| `keystore/generation_test.go:228` | require-error | Followed by a second call (`PrivateKey`) whose own error is asserted separately. | `//nolint:testifylint // an independent second lookup follows` |
+| `keystore/keystore_test.go:510` | require-error | Followed by an independent `PrivateKey` lookup asserting a DIFFERENT error variable — the same shape as the shipped `assertions.go:46` line reserved for PB. | `//nolint:testifylint // an independent private-key lookup follows` |
+| `testing/certfixtures_test.go:31` | require-error | Followed by the `NotAfter` bound: signature validity and expiry are independent properties of one fixture, and the bound never touches the signature error. | `//nolint:testifylint // expiry bound asserted independently below` |
+
+`keystore/testing/assertions.go:46` is NOT listed here: it is a SHIPPED (non-test) line reserved
+for the `fix(testing)!:` PR, which changes the helper's behaviour rather than annotating it. It is
+therefore the one finding in this lane's packages that has no row BY DESIGN — a bidirectional
+check of rows against live findings must expect it.
+`internal/resourcepool/resourcepool_test.go` is out of this lane's scope (8 findings) — #1445 is
+open against that file, so they join the `app` package PR.

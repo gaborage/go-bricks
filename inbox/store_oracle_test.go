@@ -126,7 +126,7 @@ func TestOracleStoreMarkProcessedNonUniqueError(t *testing.T) {
 
 	_, err = store.MarkProcessed(t.Context(), tx, sampleRecord())
 	require.Error(t, err)
-	assert.ErrorIs(t, err, wantErr)
+	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "mark processed failed")
 }
 

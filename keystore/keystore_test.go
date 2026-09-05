@@ -6,7 +6,6 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -321,7 +320,7 @@ func TestLoadKeyBytesRejectsMaterialInFileField(t *testing.T) {
 			data, err := loadKeyBytes(config.KeySourceConfig{File: tt.encoded}, "test", tt.keyType)
 			require.Error(t, err)
 			assert.Nil(t, data)
-			assert.ErrorContains(t, err, "looks like key material")
+			require.ErrorContains(t, err, "looks like key material")
 			assert.NotContains(t, err.Error(), tt.encoded, "the error must not echo the key material")
 		})
 	}
@@ -342,11 +341,11 @@ func TestLoadKeyBytesRejectsMaterialInFileField(t *testing.T) {
 		data, err := loadKeyBytes(config.KeySourceConfig{File: missing}, "test", "public")
 		require.Error(t, err)
 		assert.Nil(t, data)
-		assert.ErrorContains(t, err, "read file")
+		require.ErrorContains(t, err, "read file")
 		// %q-quoted, so on Windows the separators arrive escaped — comparing
 		// against the raw path fails there for a reason unrelated to the code.
 		assert.Contains(t, err.Error(), fmt.Sprintf("%q", missing))
-		assert.True(t, errors.Is(err, fs.ErrNotExist), "Errno must not break errors.Is matching")
+		assert.ErrorIs(t, err, fs.ErrNotExist, "Errno must not break errors.Is matching")
 	})
 
 	// The quadrant SafeRef alone cannot cover: an over-long value that is not key
@@ -418,7 +417,7 @@ func TestNewStoreSecretBelowMinLength(t *testing.T) {
 		"weak": {Secret: config.KeySourceConfig{Value: base64.StdEncoding.EncodeToString([]byte("short"))}},
 	}, 32)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, `key "weak"`)
+	require.ErrorContains(t, err, `key "weak"`)
 	assert.ErrorContains(t, err, "minimum is 32")
 }
 
@@ -579,7 +578,7 @@ func TestNewStorePKCS12WrongPasswordNamesKeyNeverPassword(t *testing.T) {
 		}},
 	}, 0)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, `keystore: key "vts" pkcs12: password incorrect`)
+	require.ErrorContains(t, err, `keystore: key "vts" pkcs12: password incorrect`)
 	assert.NotContains(t, err.Error(), password)
 	assert.NotContains(t, err.Error(), wrong)
 }
@@ -608,7 +607,7 @@ func TestNewStorePKCS12BundleUnreadableNamesKeyNeverPath(t *testing.T) {
 		}},
 	}, 0)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, `keystore: key "vts" pkcs12: `)
-	assert.ErrorContains(t, err, "elided")
+	require.ErrorContains(t, err, `keystore: key "vts" pkcs12: `)
+	require.ErrorContains(t, err, "elided")
 	assert.NotContains(t, err.Error(), misFiled)
 }

@@ -147,7 +147,7 @@ func TestMaybeLoadFileStorePropagatesError(t *testing.T) {
 		CredentialsFrom: credsSourceFile,
 	})
 	require.Error(t, err)
-	assert.True(t, strings.Contains(err.Error(), "/definitely/does/not/exist.yaml"))
+	assert.Contains(t, err.Error(), "/definitely/does/not/exist.yaml")
 }
 
 func TestValidateConfigPathRejectsUnsafe(t *testing.T) {
