@@ -44,10 +44,13 @@ type MessagingClientFactoryOptions struct {
 	ConnectionTimeout  time.Duration
 	MaxPublishAttempts int
 	ReadyTimeout       time.Duration
-	ReconnectDelay     time.Duration
-	ReconnectMaxDelay  time.Duration
-	ReinitDelay        time.Duration
-	ResendDelay        time.Duration
+	// PublishTimeout is the aggregate per-publish bound (messaging.publishtimeout);
+	// zero leaves the publish unbounded.
+	PublishTimeout    time.Duration
+	ReconnectDelay    time.Duration
+	ReconnectMaxDelay time.Duration
+	ReinitDelay       time.Duration
+	ResendDelay       time.Duration
 }
 
 // MessagingClientFactory returns the appropriate messaging client factory function.
@@ -88,6 +91,7 @@ func (f *FactoryResolver) MessagingClientFactoryWithOptions(opts MessagingClient
 			messaging.WithConnectionTimeout(opts.ConnectionTimeout),
 			messaging.WithMaxPublishAttempts(opts.MaxPublishAttempts),
 			messaging.WithReadyTimeout(opts.ReadyTimeout),
+			messaging.WithPublishTimeout(opts.PublishTimeout),
 			messaging.WithReconnectDelay(opts.ReconnectDelay),
 			messaging.WithReconnectMaxDelay(opts.ReconnectMaxDelay),
 			messaging.WithReinitDelay(opts.ReinitDelay),

@@ -244,6 +244,22 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 		assert.Equal(t, time.Duration(0), zero.BuildMessagingOptions().ReadyTimeout)
 	})
 
+	t.Run("publish_timeout_propagated_to_options", func(t *testing.T) {
+		// 41s is not any client or config default, so a dropped assignment shows
+		// up as a zero rather than as a plausible-looking value.
+		builder := NewManagerConfigBuilder(false, 100)
+		builder.publishTimeout = 41 * time.Second
+		assert.Equal(t, 41*time.Second, builder.BuildMessagingOptions().PublishTimeout)
+
+		mt := NewManagerConfigBuilder(true, 100)
+		mt.publishTimeout = 41 * time.Second
+		assert.Equal(t, 41*time.Second, mt.BuildMessagingOptions().PublishTimeout)
+
+		// Unset stays zero, which the client reads as unbounded.
+		zero := NewManagerConfigBuilder(false, 100)
+		assert.Equal(t, time.Duration(0), zero.BuildMessagingOptions().PublishTimeout)
+	})
+
 	t.Run("reconnect_delays_propagated_to_options", func(t *testing.T) {
 		// Four distinct values so a cross-field swap is caught.
 		b := NewManagerConfigBuilder(false, 100)

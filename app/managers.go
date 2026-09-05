@@ -34,6 +34,9 @@ type ManagerConfigBuilder struct {
 	// readyTimeout bounds the pre-flight readiness wait, sourced from
 	// messaging.reconnect.readytimeout and set by bootstrap.
 	readyTimeout time.Duration
+	// publishTimeout is the aggregate per-publish bound, sourced from
+	// messaging.publishtimeout and set by bootstrap. Zero means unbounded.
+	publishTimeout time.Duration
 	// Reconnect delays, sourced from messaging.reconnect.{delay,maxdelay,reinitdelay,resenddelay}
 	// and set by bootstrap.
 	reconnectDelay    time.Duration
@@ -86,6 +89,7 @@ func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions 
 		ConnectionTimeout:  b.connectionTimeout,
 		MaxPublishAttempts: b.maxPublishAttempts,
 		ReadyTimeout:       b.readyTimeout,
+		PublishTimeout:     b.publishTimeout,
 		ReconnectDelay:     b.reconnectDelay,
 		ReconnectMaxDelay:  b.reconnectMaxDelay,
 		ReinitDelay:        b.reInitDelay,
@@ -226,6 +230,7 @@ func (f *ResourceManagerFactory) CreateMessagingManager(
 		ConnectionTimeout:  msgOptions.ConnectionTimeout,
 		MaxPublishAttempts: msgOptions.MaxPublishAttempts,
 		ReadyTimeout:       msgOptions.ReadyTimeout,
+		PublishTimeout:     msgOptions.PublishTimeout,
 		ReconnectDelay:     msgOptions.ReconnectDelay,
 		ReconnectMaxDelay:  msgOptions.ReconnectMaxDelay,
 		ReinitDelay:        msgOptions.ReinitDelay,

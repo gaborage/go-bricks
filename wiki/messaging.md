@@ -542,6 +542,7 @@ cross-field validators like the outbox `publishtimeout` guards read these effect
 | `reconnect.readytimeout` | 5s | Bounded pre-flight wait for a not-yet-ready client before a publish begins (see below) |
 | `reconnect.maxpublishattempts` | 5 | Max publish attempts before returning `ErrPublishRetriesExhausted` (see below) |
 | `reconnect.maxdelay` | 60s | Maximum backoff cap for exponential retry |
+| `publishtimeout` | unset (unbounded) | Aggregate bound on one whole publish — pre-flight plus the entire retry loop (see below). Note it is a top-level `messaging.` key, not a `reconnect.` one |
 | `publisher.maxcached` | 50 single-tenant / unset multi-tenant (pool scales to `multitenant.limits.tenants`) | Maximum cached publisher channels |
 | `publisher.idlettl` | 1h single-tenant / 10m multi-tenant | TTL for idle publisher channels |
 | `publisher.cleanupinterval` | 2m | How often the idle-publisher cleanup goroutine runs |
@@ -589,7 +590,42 @@ budget than `connectiontimeout`, the retry loop does not arm another attempt —
 `context.DeadlineExceeded` (same `errors.Is` surface as a mid-wait expiry). A first
 attempt, and a retry after a fast NACK or publish error, still start: a quick ACK can
 finish inside a short deadline (HTTP handlers inherit `server.timeout.middleware`, 5s).
-Callers with no deadline retry exactly as before.
+Callers with no deadline retry exactly as before — unless `messaging.publishtimeout`
+gives them one.
+
+### Aggregate publish bound (`publishtimeout`)
+
+`messaging.publishtimeout` caps one whole publish. When set (> 0) the client derives a
+context deadline of that duration covering the readiness pre-flight **and** the entire
+retry loop, so a deadline-free caller — a scheduler job, an AMQP consumer handler — stops
+riding the 150s figure above. It is layered under the caller's own deadline: the effective
+bound is always the shorter of the two, and the deadline-aware retry skip described above
+then does the rest.
+
+```yaml
+messaging:
+  publishtimeout: 40s   # >= readytimeout + connectiontimeout (5s + 30s at defaults)
+```
+
+- **Unset or `0`** — unbounded, byte-identical to the behavior described above. The key is
+  opt-in; no deployment acquires a deadline it did not configure.
+- **Negative** — startup validation error.
+- **Below `readytimeout + connectiontimeout`** — startup validation error naming all three
+  keys. A shorter bound could truncate a healthy cold-path first attempt (readiness wait
+  plus one confirmation) into a false failure, which for a retrying publisher means
+  duplicate deliveries rather than a slow success — the same hazard
+  `outbox.publishtimeout` refuses startup over.
+- **Below `maxpublishattempts × connectiontimeout`** — accepted, with no warning. It
+  deliberately lowers the effective retry count: the bound expires before the attempt
+  ceiling is reached. That is the point of setting the key. At defaults, `40s` buys the
+  pre-flight plus roughly one confirmation wait, not five.
+
+Expiry surfaces as `context.DeadlineExceeded`, wrapping the last cause
+(`ErrPublishNacked` / `ErrPublishConfirmTimeout`) exactly as a caller-supplied deadline
+does, so nothing downstream has to distinguish the two.
+
+The outbox relay keeps its own `outbox.publishtimeout` per-record wrapper; the two bounds
+nest and the shorter one wins.
 
 | Cause sentinel | Meaning |
 | --- | --- |

@@ -480,6 +480,18 @@ type MessagingConfig struct {
 
 	// Seal holds the producer-side AMQP payload-sealing settings.
 	Seal SealConfig `koanf:"seal" json:"seal" yaml:"seal" toml:"seal" mapstructure:"seal"`
+
+	// PublishTimeout is the aggregate per-publish bound: when set (> 0), the whole
+	// publish — readiness pre-flight plus the entire retry loop — runs under a
+	// context deadline of this duration, layered under any tighter caller deadline.
+	// Unset or zero is unbounded (the pre-key behavior). Startup rejects a negative
+	// value, and any value below messaging.reconnect.readytimeout +
+	// messaging.reconnect.connectiontimeout, which could truncate a healthy
+	// cold-path first attempt into a false failure. A value below
+	// reconnect.maxpublishattempts × reconnect.connectiontimeout deliberately
+	// lowers the effective retry count, and is accepted without a warning.
+	// See wiki/messaging.md#aggregate-publish-bound-publishtimeout.
+	PublishTimeout time.Duration `koanf:"publishtimeout" json:"publishtimeout" yaml:"publishtimeout" toml:"publishtimeout" mapstructure:"publishtimeout"`
 }
 
 // SealConfig holds the producer's payload-sealing choices. Key material itself

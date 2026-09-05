@@ -51,6 +51,7 @@ func newManagerConfigBuilderFromConfig(cfg *config.Config) *ManagerConfigBuilder
 	configBuilder.connectionTimeout = cfg.Messaging.Reconnect.ConnectionTimeout
 	configBuilder.maxPublishAttempts = cfg.Messaging.Reconnect.MaxPublishAttempts
 	configBuilder.readyTimeout = cfg.Messaging.Reconnect.ReadyTimeout
+	configBuilder.publishTimeout = cfg.Messaging.PublishTimeout
 	configBuilder.reconnectDelay = cfg.Messaging.Reconnect.Delay
 	configBuilder.reconnectMaxDelay = cfg.Messaging.Reconnect.MaxDelay
 	configBuilder.reInitDelay = cfg.Messaging.Reconnect.ReinitDelay

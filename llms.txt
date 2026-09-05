@@ -2903,6 +2903,7 @@ messaging:
     connectiontimeout: 30s                # Per-publish broker ACK/NACK confirmation wait
     readytimeout: 5s                      # Bounded pre-flight wait for a cold/reconnecting client to become ready before a publish begins
     maxpublishattempts: 5                 # Bounded publish retries before ErrPublishRetriesExhausted
+  publishtimeout: 40s                     # OPTIONAL aggregate bound on one whole publish (pre-flight + retry loop), under any tighter caller deadline; unset = unbounded. Must be >= readytimeout + connectiontimeout; a value below maxpublishattempts x connectiontimeout lowers the effective retry count on purpose
   publisher:
     maxcached: 50                         # Cached publisher channels (per tenant)
     idlettl: 1h                           # Explicit override; unset default is 1h single-tenant / 10m multi-tenant

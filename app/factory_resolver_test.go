@@ -139,7 +139,7 @@ func TestFactoryResolverMessagingClientFactory(t *testing.T) {
 		t.Cleanup(func() { _ = client.Close() })
 	})
 
-	t.Run("WithOptions variant carries ReadyTimeout, old method stays byte-identical", func(t *testing.T) {
+	t.Run("WithOptions variant carries ReadyTimeout and PublishTimeout, old method stays byte-identical", func(t *testing.T) {
 		resolver := NewFactoryResolver(nil)
 
 		// Old 2-arg method must still work unchanged.
@@ -153,6 +153,7 @@ func TestFactoryResolverMessagingClientFactory(t *testing.T) {
 			ConnectionTimeout:  7 * time.Second,
 			MaxPublishAttempts: 5,
 			ReadyTimeout:       9 * time.Second,
+			PublishTimeout:     41 * time.Second,
 			ReconnectDelay:     7 * time.Second,
 			ReconnectMaxDelay:  90 * time.Second,
 			ReinitDelay:        3 * time.Second,

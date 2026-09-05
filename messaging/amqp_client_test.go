@@ -85,6 +85,12 @@ type fakeChannel struct {
 	// test confirms the tag the fake actually used instead of assuming which
 	// attempt won. Buffered by the test; sent non-blocking.
 	publishSucceeded chan uint64
+	// publishCtxDeadline / publishCtxHasDeadline record what ctx.Deadline() reported
+	// on the LAST PublishWithContext call — the only place a test can observe the
+	// context publishBytes actually derived (caller deadline, publishTimeout bound,
+	// or neither). Read through lastPublishCtxDeadline, never directly.
+	publishCtxDeadline    time.Time
+	publishCtxHasDeadline bool
 	// Mutex to protect concurrent access to fields
 	mu sync.RWMutex
 	// nextDeliveryTag is incremented by GetNextPublishSeqNo to mimic the
@@ -96,8 +102,9 @@ func (f *fakeChannel) Confirm(_ bool) error       { return f.confirmErr }
 func (f *fakeChannel) Qos(_, _ int, _ bool) error { return f.qosErr }
 
 //nolint:gocritic // test fake implements interface; signature must match
-func (f *fakeChannel) PublishWithContext(_ context.Context, exchange, key string, mandatory, immediate bool, msg amqp.Publishing) error {
+func (f *fakeChannel) PublishWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg amqp.Publishing) error {
 	f.mu.Lock()
+	f.publishCtxDeadline, f.publishCtxHasDeadline = ctx.Deadline()
 	f.lastPublishing = msg
 	f.lastPublishArgs = struct {
 		exchange, key        string
@@ -135,6 +142,14 @@ func (f *fakeChannel) PublishWithContext(_ context.Context, exchange, key string
 	}
 	f.mu.Unlock()
 	return err
+}
+
+// lastPublishCtxDeadline reports the deadline the client's derived context carried
+// into the most recent publish attempt, and whether it had one at all.
+func (f *fakeChannel) lastPublishCtxDeadline() (deadline time.Time, ok bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.publishCtxDeadline, f.publishCtxHasDeadline
 }
 
 func (f *fakeChannel) Consume(_, _ string, _, _, _, _ bool, args amqp.Table) (<-chan amqp.Delivery, error) {
@@ -228,6 +243,16 @@ func sendConfirmsAfterEachAttempt(t *testing.T, c *AMQPClientImpl, ch *fakeChann
 // Caller must NOT pre-set ch.publishSucceeded — this helper owns it.
 func ackNextSuccessfulPublish(ctx context.Context, t *testing.T, c *AMQPClientImpl, ch *fakeChannel) {
 	t.Helper()
+	ackNextSuccessfulPublishAfter(ctx, t, c, ch, 0)
+}
+
+// ackNextSuccessfulPublishAfter is ackNextSuccessfulPublish with the ACK held
+// back by delay, for a test that needs the confirmation to land at a chosen
+// point inside a deadline rather than immediately. A zero delay is the plain
+// helper's behavior. The wait is cancelable, so an abandoned test does not leave
+// a timer-bound goroutine behind.
+func ackNextSuccessfulPublishAfter(ctx context.Context, t *testing.T, c *AMQPClientImpl, ch *fakeChannel, delay time.Duration) {
+	t.Helper()
 	ch.mu.Lock()
 	if ch.publishSucceeded != nil {
 		ch.mu.Unlock()
@@ -239,6 +264,13 @@ func ackNextSuccessfulPublish(ctx context.Context, t *testing.T, c *AMQPClientIm
 	go func() {
 		select {
 		case tag := <-succeeded:
+			if delay > 0 {
+				select {
+				case <-time.After(delay):
+				case <-ctx.Done():
+					return
+				}
+			}
 			select {
 			case c.notifyConfirm <- amqp.Confirmation{Ack: true, DeliveryTag: tag}:
 			case <-ctx.Done():
@@ -1915,6 +1947,20 @@ func TestWithReadyTimeoutOption(t *testing.T) {
 	assert.Equal(t, 3*time.Second, c.readyTimeout)
 }
 
+// TestWithPublishTimeoutOption mirrors TestWithReadyTimeoutOption: the
+// constructor option sets the aggregate bound and ignores non-positive values,
+// which is what keeps an unset messaging.publishtimeout unbounded rather than
+// stamping a zero deadline on every publish.
+func TestWithPublishTimeoutOption(t *testing.T) {
+	c := &AMQPClientImpl{}
+	WithPublishTimeout(3 * time.Second)(c)
+	assert.Equal(t, 3*time.Second, c.publishTimeout)
+	WithPublishTimeout(0)(c)
+	assert.Equal(t, 3*time.Second, c.publishTimeout)
+	WithPublishTimeout(-1 * time.Second)(c)
+	assert.Equal(t, 3*time.Second, c.publishTimeout)
+}
+
 // TestPublishBytesNackBackoffHonorsContextCancel proves the new backoff
 // between NACK retries is cancelable (not a blind sleep) — a 1h backoff returns
 // promptly when the context is canceled.
@@ -2206,6 +2252,157 @@ func TestAMQPClientConsumeFromQueuePassesArgs(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, out)
 			assert.Equal(t, tt.want, ch.gotConsumeArgs)
+		})
+	}
+}
+
+// --- messaging.publishtimeout: the aggregate per-publish bound (#1250) ---
+
+// publishBoundClient builds a ready fake-channel client whose per-publish knobs
+// are set explicitly, so a bound test never inherits newClientWithFakeChannel's
+// 15ms confirmation wait by accident.
+func publishBoundClient(t *testing.T, ch *fakeChannel, publishTimeout, connectionTimeout time.Duration) *AMQPClientImpl {
+	t.Helper()
+	c := newClientWithFakeChannel(t, ch)
+	c.publishTimeout = publishTimeout
+	c.connectionTimeout = connectionTimeout
+	// The production default attempt ceiling: every bound test wants the bound,
+	// not the ceiling, to be what ends the publish.
+	c.maxPublishAttempts = defaultMaxPublishAttempts
+	return c
+}
+
+// TestPublishBytesAggregateBoundFires pins the point of the key: a publish the
+// broker never confirms ends in a deadline error inside the bound instead of
+// riding readytimeout + maxpublishattempts x connectiontimeout to the attempt
+// ceiling. Without the bound the same client returns ErrPublishRetriesExhausted
+// (never context.DeadlineExceeded) after every attempt has burned a full
+// confirmation wait — that is the failure this asserts away.
+func TestPublishBytesAggregateBoundFires(t *testing.T) {
+	ch := &fakeChannel{}
+	// 150ms bound over a 50ms confirmation wait: attempt 1 and 2 time out inside
+	// the bound, and the third is refused (or expires mid-wait) — either exit is
+	// context.DeadlineExceeded. Unbounded, the 5-attempt ceiling would take 250ms
+	// and report ErrPublishRetriesExhausted.
+	c := publishBoundClient(t, ch, 150*time.Millisecond, 50*time.Millisecond)
+
+	start := time.Now()
+	err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("x"))
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded from the aggregate bound, got %v", err)
+	}
+	// The cause chain still reports WHY the attempts were failing, so a caller
+	// that branches on the cause is not left with a bare deadline.
+	if !errors.Is(err, ErrPublishConfirmTimeout) {
+		t.Errorf("expected the confirm-timeout cause wrapped into the deadline error, got %v", err)
+	}
+	// Generous upper margin only — the assertion of record is the error identity,
+	// not the clock. 3s is far below the unbounded ceiling this test would hit if
+	// the bound were dropped for a much slower confirmation wait.
+	if elapsed > 3*time.Second {
+		t.Errorf("publish did not return inside a generous margin: took %s", elapsed)
+	}
+}
+
+// TestPublishBytesConfirmationInsideBoundIsNotAFailure is the hazard the floor
+// validation exists for: a confirmation that lands INSIDE the bound must be a
+// success, never a truncated false failure. A per-attempt wrap, a bound applied
+// to the wrong context, or a cancel that fires early would turn this ACK into an
+// error — this is the guard that keeps the bound from manufacturing duplicates.
+func TestPublishBytesConfirmationInsideBoundIsNotAFailure(t *testing.T) {
+	ch := &fakeChannel{}
+	// The confirmation wait (1s) is longer than the bound (400ms) on purpose: the
+	// only thing that can end this publish early is the bound, so an ACK at
+	// roughly a quarter of it proves the bound did not truncate a healthy publish.
+	c := publishBoundClient(t, ch, 400*time.Millisecond, time.Second)
+
+	ackNextSuccessfulPublishAfter(t.Context(), t, c, ch, 100*time.Millisecond)
+
+	err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("x"))
+	if err != nil {
+		t.Fatalf("confirmation inside the bound must succeed, got %v", err)
+	}
+	if errors.Is(err, ErrPublishConfirmTimeout) {
+		t.Errorf("confirmation inside the bound reported as a confirm timeout: %v", err)
+	}
+}
+
+// TestPublishBytesUnsetBoundLeavesContextUnbounded is the byte-identical-behavior
+// regression guard: with the key unset, a deadline-free caller must still reach
+// the broker with a deadline-free context — the key is opt-in, so an unset
+// deployment must not acquire a deadline it never asked for.
+func TestPublishBytesUnsetBoundLeavesContextUnbounded(t *testing.T) {
+	ch := &fakeChannel{}
+	c := publishBoundClient(t, ch, 0, time.Second)
+	ackNextSuccessfulPublish(t.Context(), t, c, ch)
+
+	if err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("x")); err != nil {
+		t.Fatalf("unbounded publish failed: %v", err)
+	}
+
+	if _, ok := ch.lastPublishCtxDeadline(); ok {
+		t.Error("unset messaging.publishtimeout must leave the publish context deadline-free")
+	}
+}
+
+// TestPublishBytesEffectiveDeadlineIsTheTighterOfCallerAndBound pins the layering
+// rule: the derived context carries min(caller deadline, bound). Each case names a
+// distinct expected ceiling so a wrap that ignored the caller (or ignored the key)
+// shows up as a deadline from the wrong operand rather than as a passing test.
+func TestPublishBytesEffectiveDeadlineIsTheTighterOfCallerAndBound(t *testing.T) {
+	tests := []struct {
+		name string
+		// callerTimeout <= 0 means the caller passes a deadline-free context.
+		callerTimeout  time.Duration
+		publishTimeout time.Duration
+		wantDeadline   bool
+		// maxRemaining bounds what the fake may observe: the tighter operand.
+		// The looser operand is always at least 10x larger, so an implementation
+		// that picked the wrong one overshoots this by an order of magnitude.
+		maxRemaining time.Duration
+	}{
+		{name: "caller_tighter_than_bound", callerTimeout: 200 * time.Millisecond, publishTimeout: 30 * time.Second, wantDeadline: true, maxRemaining: 200 * time.Millisecond},
+		{name: "bound_tighter_than_caller", callerTimeout: 30 * time.Second, publishTimeout: 200 * time.Millisecond, wantDeadline: true, maxRemaining: 200 * time.Millisecond},
+		{name: "bound_only", callerTimeout: 0, publishTimeout: 200 * time.Millisecond, wantDeadline: true, maxRemaining: 200 * time.Millisecond},
+		{name: "caller_only", callerTimeout: 200 * time.Millisecond, publishTimeout: 0, wantDeadline: true, maxRemaining: 200 * time.Millisecond},
+		// The neither-set case is TestPublishBytesUnsetBoundLeavesContextUnbounded,
+		// which owns that regression by name; repeating it here would assert the
+		// same call with the same inputs twice.
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch := &fakeChannel{}
+			c := publishBoundClient(t, ch, tt.publishTimeout, time.Second)
+			ackNextSuccessfulPublish(t.Context(), t, c, ch)
+
+			ctx := context.Background()
+			if tt.callerTimeout > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tt.callerTimeout)
+				defer cancel()
+			}
+
+			if err := c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("x")); err != nil {
+				t.Fatalf("publish failed: %v", err)
+			}
+
+			deadline, ok := ch.lastPublishCtxDeadline()
+			if ok != tt.wantDeadline {
+				t.Fatalf("deadline present = %v, want %v", ok, tt.wantDeadline)
+			}
+			if !tt.wantDeadline {
+				return
+			}
+			remaining := time.Until(deadline)
+			if remaining > tt.maxRemaining {
+				t.Errorf("effective deadline came from the looser operand: %s remaining, want <= %s", remaining, tt.maxRemaining)
+			}
+			if remaining <= 0 {
+				t.Errorf("effective deadline already expired at the publish attempt: %s remaining", remaining)
+			}
 		})
 	}
 }
