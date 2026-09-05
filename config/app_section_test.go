@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestValidateAppSuccess(t *testing.T) {
@@ -194,8 +195,7 @@ func TestValidateAppFailures(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := checkApp(&tt.cfg)
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), tt.expectedError)
+			require.ErrorContains(t, err, tt.expectedError)
 		})
 	}
 }
@@ -274,7 +274,7 @@ func TestApplyStartupDefaults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := applyStartupDefaults(&tt.config)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, tt.expectedTimeout, tt.config.Timeout, "Timeout mismatch")
 			assert.Equal(t, tt.expectedDatabase, tt.config.Database, "Database mismatch")
 			assert.Equal(t, tt.expectedMessaging, tt.config.Messaging, "Messaging mismatch")

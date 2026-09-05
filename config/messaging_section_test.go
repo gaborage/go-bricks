@@ -82,7 +82,7 @@ func TestApplyMessagingDefaults(t *testing.T) {
 			// single-tenant IdleTTL default; see TestApplyMessagingDefaultsIdleTTLModeAware
 			// for the mode-dependent IdleTTL behavior.
 			err := normalizeMessaging(&tt.config, false)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, tt.expectedReconnectDelay, tt.config.Reconnect.Delay, "Reconnect.Delay mismatch")
 			assert.Equal(t, tt.expectedReinitDelay, tt.config.Reconnect.ReinitDelay, "Reconnect.ReinitDelay mismatch")
 			assert.Equal(t, tt.expectedResendDelay, tt.config.Reconnect.ResendDelay, "Reconnect.ResendDelay mismatch")

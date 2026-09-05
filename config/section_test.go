@@ -143,8 +143,8 @@ func TestQualifyCacheConfigErrorForKeyAddressesResourceKey(t *testing.T) {
 // door's own convenience rather than a generic engine guarantee — section.qualify is never
 // invoked with a nil err by any other caller, so the guard lives here, not on the engine.
 func TestQualifyCacheConfigErrorForKeyNilErrorIsNil(t *testing.T) {
-	assert.Nil(t, QualifyCacheConfigErrorForKey(nil, "acme"))
-	assert.Nil(t, QualifyCacheConfigErrorForKey(nil, ""))
+	assert.NoError(t, QualifyCacheConfigErrorForKey(nil, "acme"))
+	assert.NoError(t, QualifyCacheConfigErrorForKey(nil, ""))
 }
 
 // TestCheckTenantCacheAddressesTheTenant pins the STARTUP door's spelling across the extraction:

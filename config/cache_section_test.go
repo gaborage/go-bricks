@@ -79,8 +79,7 @@ func TestValidateCacheTypeFailures(t *testing.T) {
 			}
 
 			err := checkCache(&cfg)
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), tt.expectedError)
+			require.ErrorContains(t, err, tt.expectedError)
 		})
 	}
 }
@@ -200,8 +199,7 @@ func TestValidateRedisCacheFailures(t *testing.T) {
 			}
 
 			err := checkCache(&cfg)
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), tt.expectedError)
+			require.ErrorContains(t, err, tt.expectedError)
 		})
 	}
 }

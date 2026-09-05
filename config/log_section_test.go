@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestValidateLogSuccess(t *testing.T) {
@@ -57,8 +58,7 @@ func TestValidateLogFailures(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := checkLog(&tt.cfg)
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), tt.expectedError)
+			require.ErrorContains(t, err, tt.expectedError)
 		})
 	}
 }

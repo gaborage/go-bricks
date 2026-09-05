@@ -729,8 +729,7 @@ func TestValidateDatabaseFailures(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := normalizeDatabaseSection(&tt.cfg, rootDatabaseSection())
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), tt.expectedError)
+			require.ErrorContains(t, err, tt.expectedError)
 		})
 	}
 }
@@ -1047,7 +1046,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := normalizeDatabaseSection(&tt.config, rootDatabaseSection())
 			if tt.expectError {
-				assert.Error(t, err)
+				require.Error(t, err)
 				if tt.errorContains != "" {
 					assert.Contains(t, err.Error(), tt.errorContains)
 				}
@@ -1170,8 +1169,7 @@ func TestValidateDatabaseWithConnectionStringEdgeCases(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := normalizeDatabaseSection(&tt.config, rootDatabaseSection())
 			if tt.expectError {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errorContains)
+				require.ErrorContains(t, err, tt.errorContains)
 			} else {
 				assert.NoError(t, err)
 				// Verify defaults were applied
@@ -1295,7 +1293,7 @@ func TestValidateNamedDatabaseInfersTypeFromConnectionString(t *testing.T) {
 }
 
 func assertValidationSuccess(t *testing.T, err error, config *DatabaseConfig) {
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	// Verify defaults were applied
 	if config.Pool.Max.Connections == 0 {
 		assert.Equal(t, int32(25), config.Pool.Max.Connections)
@@ -1535,7 +1533,7 @@ func TestApplyDatabasePoolDefaultsKeepAlive(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := normalizeDatabaseSection(&tt.config, rootDatabaseSection())
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			require.NotNil(t, tt.config.Pool.KeepAlive.Enabled,
 				"KeepAlive.Enabled must be non-nil after defaulting")
 			assert.Equal(t, tt.expectedEnabled, *tt.config.Pool.KeepAlive.Enabled,
@@ -1726,7 +1724,7 @@ func TestApplyDatabasePoolDefaultsIdleAndLifetime(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := normalizeDatabaseSection(&tt.config, rootDatabaseSection())
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, tt.expectedIdleTime, tt.config.Pool.Idle.Time,
 				"Pool.Idle.Time mismatch")
 			assert.Equal(t, tt.expectedLifetimeMax, tt.config.Pool.Lifetime.Max,
@@ -1823,7 +1821,7 @@ func TestApplyDatabaseTimezoneDefault(t *testing.T) {
 				Timezone: tt.input,
 			}
 			err := normalizeDatabaseSection(cfg, rootDatabaseSection())
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, tt.expectedTimezone, cfg.Timezone)
 		})
 	}
@@ -1864,7 +1862,7 @@ func TestApplyDatabaseTimezoneAppliesViaConnectionString(t *testing.T) {
 		ConnectionString: "host=localhost port=5432 dbname=testdb user=testuser",
 	}
 	err := normalizeDatabaseSection(cfg, rootDatabaseSection())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, "UTC", cfg.Timezone)
 }
 
@@ -2436,8 +2434,7 @@ func TestValidateNamedDatabasesFailures(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := normalizeAndCheckNamedDatabases(tt.databases, &tt.mt)
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), tt.errContains)
+			require.ErrorContains(t, err, tt.errContains)
 		})
 	}
 }
