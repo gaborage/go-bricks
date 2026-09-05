@@ -4,6 +4,43 @@
 - **Date**: 2026-08-24
 - **Related**: [ADR-081](adr_081_recovered_panic_values_reported_by_type.md) (`[C60.30]` put the 5xx body's `details.error` behind `app.debug` AND a development env; this ADR finishes that posture at every status) · [ADR-001](adr_001_enhanced_handler_system.md) (the "details in development" rule this narrows) · [ADR-022](adr_022_env_policy.md) (the alias sets both gates read)
 
+> **Amended (2026-09-05):** the JOSE post-trust error envelope is no longer the
+> exception this ADR recorded. `server/jose.go`'s `buildErrorEnvelope` discarded its
+> `*config.Config` and copied `IAPIError.Details()` to the wire ungated; it now renders
+> `details` through `devDetails`, so all three renderers — enveloped, raw and JOSE —
+> share one gate.
+>
+> Two sentences in the Decision below are SUPERSEDED by this amendment and are kept
+> only as the historical record:
+>
+> > Both response renderers — the standard envelope and raw mode — already funnel
+> > through it, so the predicate lives there once and applies to every status rather
+> > than only the 5xx path `[C60.30]` reached.
+>
+> Three renderers funnel through it now, not two.
+>
+> > The JOSE envelope is the third renderer and stays ungated here: it is encrypted to
+> > an authenticated peer, and unifying the three is #1163's job.
+>
+> That job is done, in this amendment's change; the JOSE envelope is gated exactly like
+> the other two.
+>
+> The original reasoning was that ciphertext to an authenticated peer is not
+> disclosure. That does not hold: the peer decrypts the body and routinely logs it, so
+> an ungated envelope pushed handler-set details, bind and validation diagnostics, and
+> a captured `stackTrace` into the peer's log estate. Encryption bounds who reads the
+> body, not what the body may say.
+>
+> `formatJOSEPlaintextError` is deliberately NOT routed through the funnel: the
+> pre-trust envelope is built from a `joseAPIError`, whose `Details()` returns nil by
+> construction, so it has no key to gate and adding a second gate would only invite the
+> two to drift. `classifyError`'s attach-side gate is likewise kept, as defense in
+> depth — it bounds what reaches `details` before any renderer sees it.
+>
+> The wire change ships as `[C64.2]`: a production JOSE error envelope carries `code`,
+> `message` and `meta` only, and a peer parsing `error.details` outside
+> debug + development stops receiving the key.
+
 ## Context
 
 Two of the framework's own 400 details echoed caller-controlled text verbatim.

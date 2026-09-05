@@ -5888,7 +5888,7 @@ type IAPIError interface {
 | `NewInternalServerError(msg)` | 500 | `INTERNAL_ERROR` | Unexpected server errors |
 | `NewServiceUnavailableError(msg)` | 503 | `SERVICE_UNAVAILABLE` | Dependency down, maintenance |
 
-All types embed `*BaseAPIError` which provides `WithDetails(key, value)` for adding metadata (chainable). Details are included in responses only when `app.debug: true` AND `app.env` is a development alias — for every HTTP status code, on both the enveloped and the raw renderer (ADR-084). Any other pairing, production included, hides the whole `details` map. The framework's own entries carry no request input: a validation `FieldError` is `{field, message}` with the bracketed namespace span redacted (`Limits[*]`) and no rejected value, and a bind failure's `details.error` is a payload-free summary, never the decoder's or strconv's own text.
+All types embed `*BaseAPIError` which provides `WithDetails(key, value)` for adding metadata (chainable). Details are included in responses only when `app.debug: true` AND `app.env` is a development alias — for every HTTP status code, on the enveloped renderer, the raw renderer and the encrypted JOSE post-trust envelope alike (ADR-084). Any other pairing, production included, hides the whole `details` map. The framework's own entries carry no request input: a validation `FieldError` is `{field, message}` with the bracketed namespace span redacted (`Limits[*]`) and no rejected value, and a bind failure's `details.error` is a payload-free summary, never the decoder's or strconv's own text.
 
 ### Step 1: Define Domain Errors
 

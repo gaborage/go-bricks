@@ -108,9 +108,16 @@ func (f *joseFixture) peerInbound() *jose.Policy {
 // the registration path is exercised separately via the registration-panic tests.
 func newJOSETestServer(t *testing.T, f *joseFixture, handler HandlerFunc[joseTokenReq, joseTokenResp]) (*echo.Echo, echo.HandlerFunc) {
 	t.Helper()
+	return newJOSETestServerWithConfig(t, f, &config.Config{App: config.AppConfig{Env: "development"}}, handler)
+}
+
+// newJOSETestServerWithConfig is newJOSETestServer with the app config supplied by
+// the caller, so a test can vary the debug × environment quadrant that gates
+// response details (ADR-084).
+func newJOSETestServerWithConfig(t *testing.T, f *joseFixture, cfg *config.Config, handler HandlerFunc[joseTokenReq, joseTokenResp]) (*echo.Echo, echo.HandlerFunc) {
+	t.Helper()
 	e := echo.New()
 	e.Validator = NewValidator()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
 
 	obs := newJOSEObservability(nil, nil, nil)
 	joseCfg := &joseRouteConfig{Inbound: f.inbound, Outbound: f.outbound, Resolver: f.resolver, Obs: obs}
@@ -167,6 +174,9 @@ func TestJOSETamperedCiphertextReturnsPlaintextError(t *testing.T) {
 	assert.NotContains(t, body, "data", "minimal envelope must not include data")
 	assert.NotContains(t, body, "meta", "minimal envelope must not include meta (would leak traceId)")
 	assert.NotContains(t, body, "error", "minimal envelope uses top-level code/message, not nested error object")
+	// #1163: the pre-trust envelope is not a fourth details renderer — joseAPIError
+	// carries no details by construction, so there is nothing here to gate.
+	assert.NotContains(t, body, "details", "minimal envelope must not include details — this peer is unauthenticated")
 
 	// Status: 4xx (decrypt-failed = 401, malformed = 400 are both acceptable depending on which segment was tampered).
 	assert.Contains(t, []int{http.StatusBadRequest, http.StatusUnauthorized}, rec.Code)

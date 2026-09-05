@@ -1267,15 +1267,15 @@ func formatErrorResponse(c *echo.Context, apiErr IAPIError, cfg *config.Config) 
 // The IAPIError interface does not guarantee Details() returns a copy
 // (BaseAPIError happens to, but user-defined error types may not), so we always
 // copy before injecting stackTrace to avoid mutating caller-owned state.
-// SECURITY: devDetails is the gate on the enveloped and raw response detail
-// maps — both renderers funnel through it — and it requires app.debug AND a
-// development environment — the posture #1161 set for
+// SECURITY: devDetails is the gate on every response detail map — the enveloped,
+// the raw and the JOSE post-trust renderers all funnel through it — and it
+// requires app.debug AND a development environment — the posture #1161 set for
 // the 500 path, now applied to every status (ADR-084). Response bodies never pass
 // through the logger's SensitiveDataFilter, so a detail entry that turns out to
 // carry request text is exposed to the caller verbatim; the framework's own
 // entries are payload-free by construction, and the gate bounds a handler's.
-// The JOSE envelope renders its own details ungated (#1163); it is encrypted to
-// an authenticated peer, and unifying the three renderers is that issue's job.
+// The pre-trust JOSE plaintext envelope is not a fourth renderer: joseAPIError
+// carries no details by construction (jose.go, Details returns nil).
 func devDetails(apiErr IAPIError, cfg *config.Config) map[string]any {
 	if !cfg.App.Debug || !cfg.App.IsDevelopment() {
 		return nil

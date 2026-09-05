@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/jose"
+	jositest "github.com/gaborage/go-bricks/jose/testing"
 )
 
 // panShapedKey is the marker every leak assertion below hunts for. It is
@@ -250,4 +253,146 @@ func TestValidationFieldSurvivesNamespaceTruncation(t *testing.T) {
 	assert.Contains(t, raw, "Limits[*]", "the field must still read as a redacted span")
 	assert.NotContains(t, raw, panShapedKey, "the input map key must not reach the response body")
 	assert.NotContains(t, raw, "AAAA", "no run of the key may reach the response body")
+}
+
+// --- JOSE post-trust axis (#1163) -------------------------------------------
+//
+// The JOSE envelope used to copy IAPIError.Details() to the wire ungated, on the
+// reasoning that ciphertext to an authenticated peer is not disclosure. It is:
+// the peer decrypts and frequently logs the body, so a production envelope must
+// carry the same fields as the standard channel. These tests pin the funnel.
+
+// postJOSE drives a JOSE-protected route end to end under cfg and returns the
+// DECRYPTED envelope. Decrypting is the point: an assertion against the
+// ciphertext would pass no matter what the envelope contains.
+// The fixture is a parameter, not built here: its two RSA keypairs cost ~40ms
+// each and are invariant across every quadrant, so the 16-subtest matrix shares
+// one fixture instead of generating 32 keys it cannot tell apart.
+func postJOSE(t *testing.T, f *joseFixture, cfg *config.Config, handler HandlerFunc[joseTokenReq, joseTokenResp], body string) (envelope map[string]any, status int) {
+	t.Helper()
+
+	e, h := newJOSETestServerWithConfig(t, f, cfg, handler)
+
+	compactReq := jositest.SealForTest(t, []byte(body), f.peerOutbound(), f.resolver)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens", bytes.NewReader([]byte(compactReq)))
+	req.Header.Set(echo.HeaderContentType, jose.ContentType)
+	rec := httptest.NewRecorder()
+
+	require.NoError(t, h(e.NewContext(req, rec)))
+	require.Equal(t, jose.ContentType, rec.Header().Get(echo.HeaderContentType),
+		"precondition: a post-trust error must still be encrypted, else this test proves nothing about the JOSE renderer")
+
+	plainResp, _ := jositest.OpenForTest(t, rec.Body.String(), f.peerInbound(), f.resolver)
+	require.NoError(t, json.Unmarshal(plainResp, &envelope))
+	return envelope, rec.Code
+}
+
+// joseErrorObject returns the decrypted envelope's error object.
+func joseErrorObject(t *testing.T, envelope map[string]any) map[string]any {
+	t.Helper()
+	errObj, ok := envelope["error"].(map[string]any)
+	require.True(t, ok, "envelope must carry a nested error object, got %v", envelope)
+	return errObj
+}
+
+// detailsBearingBadRequest is the single fixture the two channels are compared
+// on. Both TestJOSEDetailsMatchStandardChannel handlers build their error here,
+// so the comparison cannot drift into comparing two different errors.
+func detailsBearingBadRequest() IAPIError {
+	apiErr := NewBadRequestError("nope")
+	apiErr.WithDetails("error", "some detail")
+	return apiErr
+}
+
+// joseDetailsHandler returns an error carrying a handler-set detail entry —
+// the disclosure source a consumer's own WithDetails call produces.
+func joseDetailsHandler(_ joseTokenReq, _ HandlerContext) (joseTokenResp, IAPIError) {
+	return joseTokenResp{}, detailsBearingBadRequest()
+}
+
+// joseInternalHandler returns a 500 with no details of its own, so the only
+// thing devDetails can disclose for it is the injected stackTrace.
+func joseInternalHandler(_ joseTokenReq, _ HandlerContext) (joseTokenResp, IAPIError) {
+	return joseTokenResp{}, NewInternalServerError("boom")
+}
+
+// joseOKHandler succeeds, so the error under test comes from bind or validation
+// before the handler is ever reached.
+func joseOKHandler(req joseTokenReq, _ HandlerContext) (joseTokenResp, IAPIError) {
+	return joseTokenResp{Token: "tok-" + req.Pan}, nil
+}
+
+// joseDetailSources are the ways an IAPIError with details reaches the JOSE
+// renderer. Each must obey the gate, so a leak reintroduced on any single one of
+// them fails here rather than hiding behind the others.
+var joseDetailSources = []struct {
+	name    string
+	body    string
+	handler HandlerFunc[joseTokenReq, joseTokenResp]
+}{
+	{name: "bind_failure", body: `{"pan":`, handler: joseOKHandler},
+	{name: "validation_failure", body: `{}`, handler: joseOKHandler},
+	{name: "handler_with_details", body: `{"pan":"` + panShapedKey + `"}`, handler: joseDetailsHandler},
+	{name: "unhandled_5xx", body: `{"pan":"` + panShapedKey + `"}`, handler: joseInternalHandler},
+}
+
+// TestJOSEDetailsGateQuadrants is the #1163 regression pin: the encrypted
+// post-trust envelope renders details in exactly the quadrant the enveloped and
+// raw renderers do. It reuses detailsGateQuadrants so the JOSE matrix cannot
+// drift from theirs.
+func TestJOSEDetailsGateQuadrants(t *testing.T) {
+	// Stack capture on: it gives the unhandled-5xx source a details map it would
+	// not otherwise have, and it makes the production-quadrant assertions bite on
+	// the worst thing this envelope could disclose — server file paths.
+	withStackCapture(t, true)
+	f := newJOSEFixture(t)
+
+	for _, src := range joseDetailSources {
+		for _, q := range detailsGateQuadrants {
+			t.Run(src.name+"/"+q.name, func(t *testing.T) {
+				cfg := &config.Config{App: config.AppConfig{Env: q.env, Debug: q.debug}}
+				envelope, status := postJOSE(t, f, cfg, src.handler, src.body)
+
+				require.GreaterOrEqual(t, status, http.StatusBadRequest,
+					"precondition: this source must fail in every quadrant")
+				errObj := joseErrorObject(t, envelope)
+				assert.Contains(t, errObj, "code", "code survives the gate in every quadrant")
+
+				if q.wantDetails {
+					assert.Contains(t, errObj, "details",
+						"debug+development is the one quadrant that discloses details")
+					return
+				}
+				assert.NotContains(t, errObj, "details",
+					"SECURITY REGRESSION (#1163): production JOSE envelope disclosed error.details")
+			})
+		}
+	}
+}
+
+// TestJOSEDetailsMatchStandardChannel is the other half of the funnel claim: in
+// the disclosing quadrant the JOSE envelope must render the SAME details the
+// enveloped renderer does for the same error, stackTrace included. Asserting
+// only absence would leave a renderer free to disclose something different.
+func TestJOSEDetailsMatchStandardChannel(t *testing.T) {
+	withStackCapture(t, true)
+	cfg := devDebugConfig()
+
+	envelope, _ := postJOSE(t, newJOSEFixture(t), cfg, joseDetailsHandler, `{"pan":"`+panShapedKey+`"}`)
+	joseDetails, ok := joseErrorObject(t, envelope)["details"].(map[string]any)
+	require.True(t, ok, "debug+development JOSE envelope must carry a details object")
+
+	// Same IAPIError shape through the standard enveloped renderer.
+	standard, _, _ := postJSON(t, cfg, func(_ mapFreeRequest, _ HandlerContext) (mapFreeRequest, IAPIError) {
+		return mapFreeRequest{}, detailsBearingBadRequest()
+	}, `{"amount":1,"name":"x"}`)
+	require.NotNil(t, standard.Error)
+	require.NotNil(t, standard.Error.Details)
+
+	assert.Equal(t, standard.Error.Details["error"], joseDetails["error"],
+		"the two renderers must disclose the same handler-set detail")
+	assert.Contains(t, joseDetails, stackTraceDetailKey,
+		"stackTrace is injected by devDetails, so funneling must carry it onto the JOSE envelope too")
+	assert.Contains(t, standard.Error.Details, stackTraceDetailKey,
+		"precondition: the standard channel injects stackTrace for this fixture")
 }
