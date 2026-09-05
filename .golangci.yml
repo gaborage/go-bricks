@@ -188,6 +188,9 @@ linters:
       # Deliberately NOT added to the _test.go exclusion rule below — testify
       # assertions live in test files, so excluding them there would disable the
       # linter entirely.
+      # When `disable:` empties out, delete THIS comment with it: only
+      # `enable-all: true` and the go-require block below survive into the end
+      # state, and a rationale left behind describes a list that is gone.
       enable-all: true
       disable:
         - bool-compare        # 1
