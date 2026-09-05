@@ -61,6 +61,42 @@ A test fixture that *looks* like a credential is flagged by org secret scanners,
 - **Race detection:** All tests run with `-race` in CI
 - **Coverage target:** 80% (SonarCloud)
 
+## OTel Providers in Tests
+
+A test that installs a provider globally (`otel.SetTracerProvider` / `otel.SetMeterProvider`)
+must **restore the previous provider and never `Shutdown` the one it installed**. Each
+`Set*Provider` call stores its argument as the current global, so while your provider is
+installed it receives signals directly. What binds only once is OpenTelemetry's *default
+delegating* provider: it latches onto the first provider installed in the binary and never
+rebinds (`internal/global/state.go`, a `sync.Once`). So once a cleanup restores that default,
+instruments obtained through it route into the first-installed provider — and if that one was
+shut down, `otel.Meter(...)` / `otel.Tracer(...)` calls made afterwards silently record
+nothing. The failure is invisible: no error, no panic, just empty assertions in whichever
+test happens to run later (#1093).
+
+```go
+prev := otel.GetMeterProvider()
+mp := obtest.NewTestMeterProvider()
+otel.SetMeterProvider(mp)
+// no Shutdown: the first-installed provider is otel's permanent delegate
+t.Cleanup(func() { otel.SetMeterProvider(prev) })
+```
+
+No goroutine, socket, or file handle leaks: `obtest.NewTestMeterProvider` is a `ManualReader`
+with no exporter, and `NewTestTraceProvider` exports in-memory through a synchronous processor.
+What an un-shut-down in-memory span exporter *does* keep is its spans, for the life of the test
+binary — bounded by the run and reachable by nothing outside it. If that ever matters, call
+`exporter.Reset()` in the cleanup; do not bring the `Shutdown` back.
+
+**Install only inert providers globally.** The rule above is what makes a globally-installed
+provider un-shut-down-able, so a batching or exporting provider — `sdktrace.WithBatcher`, a
+`PeriodicReader`, anything with an OTLP exporter — must not be installed globally in a test at
+all: pass it to the code under test directly instead, and shut it down normally. A provider you
+never install globally is yours alone.
+
+`observability/testing`'s `TestRestoredGlobalStillDeliversAfterCleanup` pins the delegation
+property; `cache/internal/tracking/metrics_test.go` carries the same rule from #1091.
+
 ## Database Testing
 
 GoBricks provides `database/testing` package for easy database mocking without sqlmock complexity (**73% less boilerplate**).

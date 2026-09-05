@@ -36,9 +36,7 @@ func setupTestMeterProvider(t *testing.T) (mp *obtest.TestMeterProvider, cleanup
 
 	// Return cleanup function
 	cleanup = func() {
-		if err := mp.Shutdown(context.Background()); err != nil {
-			t.Logf("Failed to shutdown test meter provider: %v", err)
-		}
+		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
 		otel.SetMeterProvider(originalMP)
 		// Reset state for other tests
 		meterOnce = sync.Once{}

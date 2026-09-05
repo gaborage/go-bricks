@@ -842,16 +842,12 @@ func TestRecoveredPanicNeverReachesTheSpan(t *testing.T) {
 			exporter := tracetest.NewInMemoryExporter()
 			tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
 
-			// Restore the process-wide provider and shut this one down, following
-			// the precedent in messaging/internal/delivery/delivery_test.go: the
-			// OTel middleware caches the provider at SETUP time, so a provider left
-			// installed — or left running — outlives this test and silently changes
-			// what every later test in the binary records.
+			// Restore the process-wide provider: the OTel middleware caches the
+			// provider at SETUP time, so a provider left installed outlives this
+			// test and silently changes what every later test in the binary records.
 			prevTP := otel.GetTracerProvider()
-			t.Cleanup(func() {
-				otel.SetTracerProvider(prevTP)
-				_ = tp.Shutdown(context.Background())
-			})
+			// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
+			t.Cleanup(func() { otel.SetTracerProvider(prevTP) })
 			otel.SetTracerProvider(tp)
 
 			cfg := &config.Config{}

@@ -41,9 +41,7 @@ func setupTestTracing(t *testing.T) (exporter *tracetest.InMemoryExporter, clean
 	pipeline.ResetTracerForTesting() // the delivery pipeline caches its tracer; bind it to tp
 
 	cleanup = func() {
-		if err := tp.Shutdown(context.Background()); err != nil {
-			t.Logf("Failed to shutdown test tracer provider: %v", err)
-		}
+		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
 		otel.SetTracerProvider(originalTP)
 		otel.SetTextMapPropagator(originalPropagator)
 		pipeline.ResetTracerForTesting()

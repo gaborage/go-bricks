@@ -44,9 +44,7 @@ func TestOTelMiddlewareAbsentWhenObservabilityDisabled(t *testing.T) {
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 	t.Cleanup(func() {
-		if err := tp.Shutdown(context.Background()); err != nil {
-			t.Logf("Failed to shutdown test tracer provider: %v", err)
-		}
+		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
 		otel.SetTracerProvider(originalTP)
 		otel.SetTextMapPropagator(originalProp)
 	})
@@ -99,12 +97,7 @@ func setupTestServerWithTracing(t *testing.T) (*echo.Echo, *tracetest.InMemoryEx
 
 	// Cleanup: restore original global state after test completes
 	t.Cleanup(func() {
-		// Shutdown the test tracer provider to flush any pending spans
-		if err := tp.Shutdown(context.Background()); err != nil {
-			t.Logf("Failed to shutdown test tracer provider: %v", err)
-		}
-
-		// Restore original global state
+		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
 		otel.SetTracerProvider(originalTP)
 		otel.SetTextMapPropagator(originalPropagator)
 	})
@@ -496,9 +489,7 @@ func TestOTelMiddlewareWithCustomBasePath(t *testing.T) {
 
 	// Cleanup: restore original global state
 	t.Cleanup(func() {
-		if err := tp.Shutdown(context.Background()); err != nil {
-			t.Logf("Failed to shutdown test tracer provider: %v", err)
-		}
+		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
 		otel.SetTracerProvider(originalTP)
 		otel.SetTextMapPropagator(originalPropagator)
 	})
@@ -552,9 +543,7 @@ func setupTestServerWithMetrics(t *testing.T) (*echo.Echo, *obtest.TestMeterProv
 	otel.SetMeterProvider(mp)
 
 	t.Cleanup(func() {
-		if err := mp.Shutdown(context.Background()); err != nil {
-			t.Logf("Failed to shutdown test meter provider: %v", err)
-		}
+		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
 		otel.SetMeterProvider(originalMP)
 	})
 

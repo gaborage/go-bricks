@@ -148,7 +148,7 @@ func setupTestTracer(t *testing.T) *tracetest.InMemoryExporter {
 	previous := otel.GetTracerProvider()
 	otel.SetTracerProvider(tp)
 	t.Cleanup(func() {
-		_ = tp.Shutdown(context.Background())
+		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
 		otel.SetTracerProvider(previous)
 	})
 	return exporter
@@ -162,7 +162,7 @@ func setupTestMeter(t *testing.T) *obtest.TestMeterProvider {
 	previous := otel.GetMeterProvider()
 	otel.SetMeterProvider(mp)
 	t.Cleanup(func() {
-		_ = mp.Shutdown(context.Background())
+		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
 		otel.SetMeterProvider(previous)
 	})
 	return mp

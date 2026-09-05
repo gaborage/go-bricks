@@ -311,8 +311,8 @@ func TestPublisherPublishKeepsTheSendErrorMessageOffTheSpan(t *testing.T) {
 	original := otel.GetTracerProvider()
 	otel.SetTracerProvider(tp)
 	t.Cleanup(func() {
+		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
 		otel.SetTracerProvider(original)
-		require.NoError(t, tp.Shutdown(context.Background()))
 	})
 
 	handle := &fakeProducer{status: ha.StatusOpen, sendErr: errors.New("frame rejected: " + obtest.LeakCanary)}

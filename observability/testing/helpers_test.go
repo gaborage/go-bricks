@@ -2,10 +2,12 @@ package testing
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
@@ -14,14 +16,15 @@ import (
 )
 
 const (
-	testCounter       = "test.counter"
-	testSpanName      = "span-1"
-	httpRequestAttr   = "http-request"
-	dbSystemAttr      = "db.system"
-	nonExistentMetric = "does.not.exist"
-	testHistogram     = "test.histogram"
-	dbQuery           = "db.query"
-	dbOperationAttr   = "db.operation"
+	testCounter          = "test.counter"
+	testSpanName         = "span-1"
+	httpRequestAttr      = "http-request"
+	dbSystemAttr         = "db.system"
+	nonExistentMetric    = "does.not.exist"
+	testHistogram        = "test.histogram"
+	laterProviderCounter = "later.provider.counter"
+	dbQuery              = "db.query"
+	dbOperationAttr      = "db.operation"
 )
 
 func TestNewTestTraceProvider(t *testing.T) {
@@ -562,4 +565,124 @@ func TestAssertMetricValueGauge(t *testing.T) {
 
 	// Assert gauge value
 	AssertMetricValue(t, rm, "test.gauge", int64(100))
+}
+
+// --- otel's permanent first delegate (#1093) ---
+
+const (
+	// delegateMeterName is this file's own instrumentation scope for the
+	// first-delegate tests, kept distinct from TestTracerName so a datapoint
+	// recorded here cannot be confused with one from another test.
+	delegateMeterName = "gobricks/1093"
+	// firstInstallerHint is the diagnosis a future reorder needs. The positive
+	// half below only holds while this test is the FIRST otel.SetMeterProvider in
+	// the observability/testing binary: otel binds its delegating wrapper to the
+	// first provider installed and never rebinds (internal/global/state.go's
+	// sync.Once), so an earlier installer would own the delegate and this test's
+	// reader would legitimately see nothing.
+	firstInstallerHint = "another test in this binary installed a meter provider first — this test must stay the first installer"
+)
+
+var (
+	firstDelegateOnce sync.Once
+	firstDelegate     *TestMeterProvider
+)
+
+// installFirstDelegate installs a TestMeterProvider as the binary's first meter
+// provider and immediately restores the previous global WITHOUT shutting it down
+// — the cleanup shape this change adopts — returning the provider otel's wrapper
+// is now permanently bound to.
+//
+// The install happens once per PROCESS, not once per call, because that is what
+// the mechanism under test is: otel binds its delegate on the first
+// SetMeterProvider and never rebinds. A per-call install would make this test
+// pass under `go test` and fail under `-count=2`, where the second iteration is
+// no longer the first installer and would be reading a provider the global never
+// routes to — a false red that says nothing about the code under test.
+func installFirstDelegate() *TestMeterProvider {
+	firstDelegateOnce.Do(func() {
+		prev := otel.GetMeterProvider()
+		firstDelegate = NewTestMeterProvider()
+		otel.SetMeterProvider(firstDelegate)
+		otel.SetMeterProvider(prev)
+	})
+	return firstDelegate
+}
+
+// TestRestoredGlobalStillDeliversAfterCleanup pins the property that makes
+// "restore the previous provider, do NOT shut yours down" the correct cleanup
+// shape. otel.SetMeterProvider binds the global delegating wrapper to the first
+// provider installed in the binary, permanently (internal/global/state.go,
+// sync.Once). Restoring `prev` afterwards restores the identity the global
+// REPORTS, but every instrument the wrapper already delegates keeps routing into
+// the first provider — so that provider has to stay alive. A cleanup that shuts
+// it down leaves the wrapper pointing at a corpse and every later otel.Meter call
+// in the process silently records nothing, which is exactly the class #1093 fixes.
+func TestRestoredGlobalStillDeliversAfterCleanup(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("restored_global_still_reaches_the_first_provider", func(t *testing.T) {
+		mp := installFirstDelegate()
+
+		// Assert the DELTA, not the presence of a datapoint: the reader is
+		// cumulative and never reset, so under -count=2 the second iteration would
+		// find iteration one's residue and pass even if delegation had stopped
+		// working.
+		before := counterSum(t, mp, testCounter)
+
+		counter, err := otel.Meter(delegateMeterName).Int64Counter(testCounter)
+		require.NoError(t, err)
+		counter.Add(ctx, 1)
+
+		assert.Equal(t, before+1, counterSum(t, mp, testCounter),
+			"a counter created through the restored global recorded nothing into the first-installed provider; %s", firstInstallerHint)
+	})
+
+	t.Run("a_restored_default_bypasses_a_later_provider", func(t *testing.T) {
+		// The mirror image, and the reason the rule names the FIRST provider rather
+		// than the most recent one. Note the scope precisely: while `later` IS the
+		// current global, otel.Meter reaches it directly — SetMeterProvider stores
+		// each argument as the current provider. What binds once is the DEFAULT
+		// delegating provider, so the moment `prev` (that default) is restored,
+		// instruments created through it route to the FIRST provider ever
+		// installed, never to `later`. This subtest records only after the
+		// restoration, which is the window the claim covers.
+		//
+		// `later` is deliberately NOT shut down. Shutting it down would make
+		// later.Reader.Collect return ErrReaderShutdown unconditionally, and an
+		// assertion that only runs when Collect succeeds is an assertion that never
+		// runs — the subtest would pass even if a later provider HAD received the
+		// post-restoration traffic, which is the one thing it exists to rule out.
+		prev := otel.GetMeterProvider()
+		later := NewTestMeterProvider()
+		otel.SetMeterProvider(later)
+		otel.SetMeterProvider(prev)
+
+		counter, err := otel.Meter(delegateMeterName).Int64Counter(laterProviderCounter)
+		require.NoError(t, err)
+		counter.Add(ctx, 1)
+
+		var rm metricdata.ResourceMetrics
+		require.NoError(t, later.Reader.Collect(ctx, &rm))
+		assert.Nil(t, FindMetric(rm, laterProviderCounter),
+			"a provider installed after the first one received traffic recorded through the RESTORED default provider; the default delegate is supposed to be bound once, to the first provider installed")
+	})
+}
+
+// counterSum reports the cumulative value of an Int64 counter in mp, or 0 when
+// the instrument has not recorded anything yet — so a caller can assert on the
+// change across an operation rather than on an absolute total.
+func counterSum(t *testing.T, mp *TestMeterProvider, name string) int64 {
+	t.Helper()
+	found := FindMetric(mp.Collect(t), name)
+	if found == nil {
+		return 0
+	}
+	sum, ok := found.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "%s is not an Int64 sum", name)
+	var total int64
+	for i := range sum.DataPoints {
+		total += sum.DataPoints[i].Value
+	}
+	return total
 }

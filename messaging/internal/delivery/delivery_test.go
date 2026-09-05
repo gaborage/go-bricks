@@ -71,6 +71,11 @@ var _ logger.Logger = (*bindingLogger)(nil)
 // restored on cleanup, plus any span processor the test needs on that same
 // provider. The tracking meter and the pipeline's tracer are package singletons,
 // so both resets bracket the test on both sides.
+//
+// Neither provider is shut down (#1093), and by extension neither are the
+// processors passed here — so pass only inert ones. A BatchSpanProcessor would
+// leak its goroutine for the life of the test binary; today's callers pass
+// recorders whose Shutdown is a no-op.
 func setupTelemetry(t *testing.T, processors ...sdktrace.SpanProcessor) (*tracetest.InMemoryExporter, *obtest.TestMeterProvider) {
 	t.Helper()
 
@@ -91,17 +96,12 @@ func setupTelemetry(t *testing.T, processors ...sdktrace.SpanProcessor) (*tracet
 	ResetTracerForTesting()
 
 	t.Cleanup(func() {
-		// Restore and reset BEFORE asserting: require.NoError runs Goexit on
-		// failure, which would skip everything after it and leave a shut-down
-		// provider installed process-wide, with sharedTracer still pinned to it —
-		// so every later test in the binary would silently record nothing.
+		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
 		otel.SetTracerProvider(prevTP)
 		otel.SetTextMapPropagator(prevProp)
 		otel.SetMeterProvider(prevMP)
 		tracking.ResetMeterForTesting()
 		ResetTracerForTesting()
-		require.NoError(t, ttp.Shutdown(context.Background()))
-		require.NoError(t, mp.Shutdown(context.Background()))
 	})
 
 	return ttp.Exporter, mp

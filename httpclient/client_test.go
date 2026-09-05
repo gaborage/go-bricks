@@ -924,6 +924,12 @@ func TestRequestInterceptorRunsPerAttempt(t *testing.T) {
 func TestTraceIDPropagation(t *testing.T) {
 	log := createTestLogger()
 
+	// Force a non-recording span for these subtests: process-wide otel state can
+	// carry a real, still-live TracerProvider installed by an earlier test in this
+	// binary, which would route ensureTraceContextHeaders down the "real span"
+	// branch instead of the legacy synthetic path these subtests exercise.
+	installNoopTracer(t)
+
 	t.Run("automatically adds trace ID when none present", func(t *testing.T) {
 		var requestHeaders nethttp.Header
 		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
@@ -1139,9 +1145,9 @@ func setupClientTestMeterProvider(t *testing.T) (mp *obtest.TestMeterProvider, c
 	tracking.ResetMeterForTesting()
 	tracking.InitHTTPMeter()
 	return mp, func() {
+		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
 		otel.SetMeterProvider(prev)
 		tracking.ResetMeterForTesting()
-		require.NoError(t, mp.Shutdown(context.Background()))
 	}
 }
 
@@ -1748,11 +1754,17 @@ func TestClientDoInjectsRealTraceparentWhenSpanActive(t *testing.T) {
 
 // TestClientDoSyntheticTraceparentWhenNoTracerActive exercises the legacy
 // synthetic-traceparent fallback in ensureTraceContextHeaders — the path
-// taken when no recording span exists on the request context. We install a
-// noop TracerProvider so StartHTTPClientSpan returns a non-recording span
-// whose SpanContext is invalid; ensureTraceContextHeaders's IsValid() branch
-// then fails over to GenerateTraceParent().
-func TestClientDoSyntheticTraceparentWhenNoTracerActive(t *testing.T) {
+// installNoopTracer installs a no-op TracerProvider and the W3C propagator for
+// the duration of t, restoring both afterwards and resetting the package's
+// cached tracer on the way in and out.
+//
+// It exists because otel's global delegate is bound permanently to the FIRST
+// provider installed in a binary (internal/global/state.go sync.Once, #1093):
+// a real provider installed by an earlier test stays reachable, so a test that
+// needs "no recording span" has to say so explicitly rather than assume the
+// global is empty. Nothing is shut down — see wiki/testing.md.
+func installNoopTracer(t *testing.T) {
+	t.Helper()
 	originalTP := otel.GetTracerProvider()
 	originalProp := otel.GetTextMapPropagator()
 	otel.SetTracerProvider(tracenoop.NewTracerProvider())
@@ -1763,6 +1775,14 @@ func TestClientDoSyntheticTraceparentWhenNoTracerActive(t *testing.T) {
 		otel.SetTextMapPropagator(originalProp)
 		tracking.ResetTracerForTesting()
 	})
+}
+
+// taken when no recording span exists on the request context. We install a
+// noop TracerProvider so StartHTTPClientSpan returns a non-recording span
+// whose SpanContext is invalid; ensureTraceContextHeaders's IsValid() branch
+// then fails over to GenerateTraceParent().
+func TestClientDoSyntheticTraceparentWhenNoTracerActive(t *testing.T) {
+	installNoopTracer(t)
 
 	var receivedTP string
 	server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
