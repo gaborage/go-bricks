@@ -6843,9 +6843,12 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   (a reserved word such as `level`, `size`, `number`, or any name needing quotes) can move;
   a single-key map, a PostgreSQL-only deployment and an all-bare-name map all render exactly
   as before. For the spelling half, `git grep -nE 'jf\.NotEq\(|NotEqColumn\(' -- '*.go'`
-  gives the call sites, and `git grep -rn '!=' -- '*_test.go' '*.sql' 'testdata'` narrows to
-  the assertions that pin the rendered token. The doors themselves keep their signatures, so
-  nothing here is a compile error — the population is your ASSERTIONS, not your call sites.
+  gives the call sites, and `git grep -nE '!= [?]|!= [$:][0-9]' -- '*_test.go' '*.sql' 'testdata'`
+  finds the SCALAR assertions that pin the rendered token: anchoring on the placeholder that
+  follows it is what excludes Go's own `err != nil`, which no `?`/`$N`/`:N` follows. The
+  column-to-column form has no placeholder to anchor on, so read the expectations belonging
+  to the `NotEqColumn(` call sites the first grep returned. The doors themselves keep their
+  signatures, so nothing here is a compile error — the population is your ASSERTIONS, not your call sites.
 - scope: `UpdateQueryBuilder.SetMap` and `InsertQueryBuilder.SetMap` both render their
   columns in the caller's name order (Go `sort.Strings`) on every vendor; on Oracle a quoted
   reserved word therefore takes its place by its bare name (`SET id = :1, "level" = :2,
@@ -6869,13 +6872,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   regenerate-and-commit hides. If a statement's column order matters to something outside
   the builder (a trigger, a change-data-capture consumer reading column order, an audit
   diff), name the columns explicitly with `Set` instead of handing over a map. (b) Rewrite
-  `!=` to `<>` in every expectation the detect grep returned; there is no configuration flag
+  `!=` to `<>` in every expectation the detect greps returned whose SQL this door built — a
+  match belonging to some other statement stays as it is; there is no configuration flag
   and no opt-out, and the two spellings are equivalent to PostgreSQL and Oracle alike, so
   only the assertions change.
 - verify: `go build ./... && go test ./...`  # then (a) run one multi-column Oracle `SetMap`
   UPDATE through your own logging and confirm the SET pairs read in bare-name order with the
-  bind values in the same order, and (b) `git grep -n '!=' -- '*_test.go' 'testdata'` returns
-  no rendered-SQL literal for a `jf.NotEq` / `jff.NotEqColumn` expectation
+  bind values in the same order, and (b) `git grep -nE '!= [?]|!= [$:][0-9]' -- '*_test.go' 'testdata'`
+  is empty and no `NotEqColumn` expectation still reads `!=`
 - ref: gaborage/go-bricks#1185, gaborage/go-bricks#1200 · [ADR-099](adr_099_one_column_order_one_inequality_spelling.md) · `database/internal/builder/helpers.go`, `database/internal/builder/query_builder.go`, `database/internal/builder/join_filter.go`
 
 ---
