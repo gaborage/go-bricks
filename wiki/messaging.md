@@ -620,6 +620,15 @@ messaging:
   ceiling is reached. That is the point of setting the key. At defaults, `40s` buys the
   pre-flight plus roughly one confirmation wait, not five.
 
+The bound governs **waiting**, not an in-flight socket write. `amqp091-go`'s
+`PublishWithContext` checks the context once before it starts and then performs a
+blocking write, and the client's publish serialization lock is a plain mutex, so a
+broker that stops reading can hold one publish — and the publishers queued behind
+it — past the deadline until that write returns. Within the client the deadline is
+observed at the next cancellation point: the readiness pre-flight, the confirmation
+wait, and the retry-arming guard. Size a hard end-to-end SLO with a transport-level
+control (a socket write deadline or connection heartbeat), not this key alone.
+
 Expiry surfaces as `context.DeadlineExceeded`, wrapping the last cause
 (`ErrPublishNacked` / `ErrPublishConfirmTimeout`) exactly as a caller-supplied deadline
 does, so nothing downstream has to distinguish the two.

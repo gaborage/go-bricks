@@ -490,6 +490,11 @@ type MessagingConfig struct {
 	// cold-path first attempt into a false failure. A value below
 	// reconnect.maxpublishattempts × reconnect.connectiontimeout deliberately
 	// lowers the effective retry count, and is accepted without a warning.
+	// The bound governs waiting, not an in-flight socket write: amqp091-go's
+	// PublishWithContext checks the context only before it starts, and the
+	// publish serialization lock is not context-aware, so a broker that stops
+	// reading can hold a publish — and the publishers queued behind it — past
+	// the deadline until the write returns.
 	// See wiki/messaging.md#aggregate-publish-bound-publishtimeout.
 	PublishTimeout time.Duration `koanf:"publishtimeout" json:"publishtimeout" yaml:"publishtimeout" toml:"publishtimeout" mapstructure:"publishtimeout"`
 }

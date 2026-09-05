@@ -450,6 +450,15 @@ func (c *AMQPClientImpl) publishBytes(ctx context.Context, options publishOption
 	// context and the loop's context are the same lineage. WithTimeout already
 	// yields min(caller deadline, bound); a non-positive publishTimeout leaves
 	// the caller's context untouched (unbounded, the pre-key behavior).
+	//
+	// What the bound does NOT cover: an in-flight write. amqp091-go's
+	// PublishWithContext checks the context once before starting and then calls
+	// the blocking Publish (channel.go), and publishSerial below is a plain
+	// mutex, so a broker that stops reading holds this publish — and every
+	// publisher queued on publishSerial — until the write returns. The deadline
+	// is observed at the next cancellation point, which is why it bounds the
+	// waiting (readiness pre-flight, confirmation waits, retry arming) rather
+	// than every syscall.
 	if c.publishTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, c.publishTimeout)
