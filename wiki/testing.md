@@ -364,9 +364,9 @@ Ryuk exits 10s after its last client disconnects; `go test` starts packages in l
 
 testcontainers-go v0.44.0 then hangs until the 60s deadline (`wait for reaper <id>: context deadline exceeded`), or gets a handshake EOF and loses its freshly created container to Ryuk's exit prune (`Reaper handshake failed: read ack: EOF`, then `RWLayer of container <id> is unexpectedly nil`).
 
-`TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT=2m` (the `framework-integration-test` env in `.github/workflows/ci-v2.yml`, and an exported variable in the `Makefile`) keeps the reaper alive across any inter-package gap; it only takes effect in the process that *creates* the reaper, so it must be set before the first integration binary starts, never from inside a package.
+`TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT=2m` (the `framework-integration-test` env in `.github/workflows/ci-v2.yml`, and an exported variable in the `Makefile`) keeps the reaper alive across inter-package gaps of up to two minutes (the observed gap is ~10s); it only takes effect in the process that *creates* the reaper, so it must be set before the first integration binary starts, never from inside a package.
 
-Recognising a recurrence: grep the job log for `wait for reaper`, `Reaper handshake failed: read ack: EOF`, or `is unexpectedly nil` — all three are this race, not a broken container image.
+Recognising a recurrence: grep the job log for `wait for reaper` or `Reaper handshake failed: read ack: EOF`. Either string points at the reaper rather than at the container image; confirm the race by checking that the failing package started roughly `RYUK_RECONNECTION_TIMEOUT` after the previous container-using package exited, and that the reaper container's env carries the 2m value. `RWLayer of container <id> is unexpectedly nil` on its own is the daemon reporting a container removed mid-create by anything; it is this race only when the same package's log shows the handshake EOF just before it.
 
 ### Oracle: shared container + per-test schema (ADR-020)
 
