@@ -792,9 +792,10 @@ type OutboxConfig struct {
 
 	// MaxRetries is the retry ceiling after which a *poison* event — one of the
 	// deterministic, broker-independent classes enumerated in wiki/outbox.md under
-	// Retry & Dead-Lettering — is dead-lettered to status "failed" and stops being retried. Connectivity failures (broker down, NACK, confirmation
-	// timeout) advance retry_count but are NEVER dead-lettered by this count, so neither a
-	// prolonged outage nor a transient broker fault can park healthy events. Default: 5.
+	// Retry & Dead-Lettering — is dead-lettered to status "failed" and stops being
+	// retried. Connectivity failures (broker down, NACK, confirmation timeout) advance
+	// retry_count but are NEVER dead-lettered by this count, so neither a prolonged outage
+	// nor a transient broker fault can park healthy events. Default: 5.
 	MaxRetries int `koanf:"maxretries" json:"maxretries" yaml:"maxretries" toml:"maxretries" mapstructure:"maxretries"`
 
 	// RetentionPeriod is how long published events are kept before cleanup.
