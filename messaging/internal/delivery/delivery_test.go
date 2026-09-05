@@ -71,6 +71,11 @@ var _ logger.Logger = (*bindingLogger)(nil)
 // restored on cleanup, plus any span processor the test needs on that same
 // provider. The tracking meter and the pipeline's tracer are package singletons,
 // so both resets bracket the test on both sides.
+//
+// Neither provider is shut down (#1093), and by extension neither are the
+// processors passed here — so pass only inert ones. A BatchSpanProcessor would
+// leak its goroutine for the life of the test binary; today's callers pass
+// recorders whose Shutdown is a no-op.
 func setupTelemetry(t *testing.T, processors ...sdktrace.SpanProcessor) (*tracetest.InMemoryExporter, *obtest.TestMeterProvider) {
 	t.Helper()
 

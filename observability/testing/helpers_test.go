@@ -624,41 +624,60 @@ func TestRestoredGlobalStillDeliversAfterCleanup(t *testing.T) {
 	t.Run("restored_global_still_reaches_the_first_provider", func(t *testing.T) {
 		mp := installFirstDelegate()
 
+		// Assert the DELTA, not the presence of a datapoint: the reader is
+		// cumulative and never reset, so under -count=2 the second iteration would
+		// find iteration one's residue and pass even if delegation had stopped
+		// working.
+		before := counterSum(t, mp, testCounter)
+
 		counter, err := otel.Meter(delegateMeterName).Int64Counter(testCounter)
 		require.NoError(t, err)
 		counter.Add(ctx, 1)
 
-		rm := mp.Collect(t)
-		metric := FindMetric(rm, testCounter)
-		require.NotNil(t, metric,
+		assert.Equal(t, before+1, counterSum(t, mp, testCounter),
 			"a counter created through the restored global recorded nothing into the first-installed provider; %s", firstInstallerHint)
 	})
 
 	t.Run("a_later_provider_never_receives_the_globals_traffic", func(t *testing.T) {
-		// The mirror image, and the reason the rule is about the FIRST provider
-		// rather than the most recent one: a provider installed later is never
-		// reached through the global at all, because the wrapper is already bound.
-		// Shutting this one down is therefore harmless — which is precisely why
-		// shutting the FIRST one down is not.
+		// The mirror image, and the reason the rule names the FIRST provider rather
+		// than the most recent one: a provider installed later is never reached
+		// through the global at all, because the wrapper is already bound.
+		//
+		// This one is deliberately NOT shut down. Shutting it down would make
+		// later.Reader.Collect return ErrReaderShutdown unconditionally, and an
+		// assertion that only runs when Collect succeeds is an assertion that never
+		// runs — the subtest would pass even if a later provider HAD received the
+		// global's traffic, which is the one thing it exists to rule out.
 		prev := otel.GetMeterProvider()
 		later := NewTestMeterProvider()
 		otel.SetMeterProvider(later)
-		require.NoError(t, later.Shutdown(ctx))
 		otel.SetMeterProvider(prev)
 
 		counter, err := otel.Meter(delegateMeterName).Int64Counter(laterProviderCounter)
 		require.NoError(t, err)
 		counter.Add(ctx, 1)
 
-		// Read the reader directly: Collect(t) would fail the test on the error a
-		// shut-down provider returns, and the absence of the datapoint is the point.
 		var rm metricdata.ResourceMetrics
-		if err := later.Reader.Collect(ctx, &rm); err != nil {
-			// A shut-down reader reporting an error is one valid shape of "nothing
-			// arrived here"; the datapoint assertion below covers the other.
-			return
-		}
+		require.NoError(t, later.Reader.Collect(ctx, &rm))
 		assert.Nil(t, FindMetric(rm, laterProviderCounter),
 			"a provider installed after the first one received traffic from the global; otel's delegate is supposed to be bound once")
 	})
+}
+
+// counterSum reports the cumulative value of an Int64 counter in mp, or 0 when
+// the instrument has not recorded anything yet — so a caller can assert on the
+// change across an operation rather than on an absolute total.
+func counterSum(t *testing.T, mp *TestMeterProvider, name string) int64 {
+	t.Helper()
+	metric := FindMetric(mp.Collect(t), name)
+	if metric == nil {
+		return 0
+	}
+	sum, ok := metric.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "%s is not an Int64 sum", name)
+	var total int64
+	for i := range sum.DataPoints {
+		total += sum.DataPoints[i].Value
+	}
+	return total
 }

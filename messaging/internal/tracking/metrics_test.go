@@ -63,18 +63,7 @@ func TestInitAMQPMeter(t *testing.T) {
 }
 
 func TestRecordAMQPPublishMetricsSuccess(t *testing.T) {
-	// Setup test meter provider
-	prev := otel.GetMeterProvider()
-	mp := obtest.NewTestMeterProvider()
-	defer func() {
-		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
-		otel.SetMeterProvider(prev)
-	}()
-	otel.SetMeterProvider(mp)
-
-	// Reset and reinitialize meter
-	resetMeterForTesting()
-	initAMQPMeter()
+	mp := setupMeter(t)
 
 	ctx := context.Background()
 	duration := 150 * time.Millisecond
@@ -114,18 +103,7 @@ func TestRecordAMQPPublishMetricsSuccess(t *testing.T) {
 }
 
 func TestRecordAMQPPublishMetricsFailure(t *testing.T) {
-	// Setup test meter provider
-	prev := otel.GetMeterProvider()
-	mp := obtest.NewTestMeterProvider()
-	defer func() {
-		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
-		otel.SetMeterProvider(prev)
-	}()
-	otel.SetMeterProvider(mp)
-
-	// Reset and reinitialize meter
-	resetMeterForTesting()
-	initAMQPMeter()
+	mp := setupMeter(t)
 
 	ctx := context.Background()
 	duration := 50 * time.Millisecond
@@ -160,18 +138,7 @@ func TestRecordAMQPPublishMetricsFailure(t *testing.T) {
 }
 
 func TestRecordAMQPPublishMetricsDefaultExchange(t *testing.T) {
-	// Setup test meter provider
-	prev := otel.GetMeterProvider()
-	mp := obtest.NewTestMeterProvider()
-	defer func() {
-		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
-		otel.SetMeterProvider(prev)
-	}()
-	otel.SetMeterProvider(mp)
-
-	// Reset and reinitialize meter
-	resetMeterForTesting()
-	initAMQPMeter()
+	mp := setupMeter(t)
 
 	ctx := context.Background()
 	exchange := "" // Default exchange
@@ -196,18 +163,7 @@ func TestRecordAMQPPublishMetricsDefaultExchange(t *testing.T) {
 }
 
 func TestRecordPublishRetry(t *testing.T) {
-	// Setup test meter provider
-	prev := otel.GetMeterProvider()
-	mp := obtest.NewTestMeterProvider()
-	defer func() {
-		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
-		otel.SetMeterProvider(prev)
-	}()
-	otel.SetMeterProvider(mp)
-
-	// Reset and reinitialize meter
-	resetMeterForTesting()
-	initAMQPMeter()
+	mp := setupMeter(t)
 
 	ctx := context.Background()
 
@@ -248,18 +204,7 @@ func TestRecordPublishRetry(t *testing.T) {
 }
 
 func TestRecordConnectionEvent(t *testing.T) {
-	// Setup test meter provider
-	prev := otel.GetMeterProvider()
-	mp := obtest.NewTestMeterProvider()
-	defer func() {
-		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
-		otel.SetMeterProvider(prev)
-	}()
-	otel.SetMeterProvider(mp)
-
-	// Reset and reinitialize meter
-	resetMeterForTesting()
-	initAMQPMeter()
+	mp := setupMeter(t)
 
 	// Record connection create
 	RecordConnectionEvent("create", nil)
@@ -288,18 +233,7 @@ func TestRecordConnectionEvent(t *testing.T) {
 }
 
 func TestRecordChannelEvent(t *testing.T) {
-	// Setup test meter provider
-	prev := otel.GetMeterProvider()
-	mp := obtest.NewTestMeterProvider()
-	defer func() {
-		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
-		otel.SetMeterProvider(prev)
-	}()
-	otel.SetMeterProvider(mp)
-
-	// Reset and reinitialize meter
-	resetMeterForTesting()
-	initAMQPMeter()
+	mp := setupMeter(t)
 
 	// Record channel create
 	RecordChannelEvent("create", nil)
@@ -320,18 +254,7 @@ func TestRecordChannelEvent(t *testing.T) {
 }
 
 func TestHistogramBucketBoundaries(t *testing.T) {
-	// Setup test meter provider
-	prev := otel.GetMeterProvider()
-	mp := obtest.NewTestMeterProvider()
-	defer func() {
-		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
-		otel.SetMeterProvider(prev)
-	}()
-	otel.SetMeterProvider(mp)
-
-	// Reset and reinitialize meter
-	resetMeterForTesting()
-	initAMQPMeter()
+	mp := setupMeter(t)
 
 	ctx := context.Background()
 	exchange := "test"
@@ -515,16 +438,7 @@ func assertAttributeAbsent(t *testing.T, attrs []attribute.KeyValue, key string)
 }
 
 func TestRecordStreamPublishSuccess(t *testing.T) {
-	prev := otel.GetMeterProvider()
-	mp := obtest.NewTestMeterProvider()
-	defer func() {
-		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
-		otel.SetMeterProvider(prev)
-	}()
-	otel.SetMeterProvider(mp)
-
-	resetMeterForTesting()
-	initAMQPMeter()
+	mp := setupMeter(t)
 
 	RecordStreamPublish(context.Background(), testStreamName, 12*time.Millisecond, nil)
 
@@ -552,16 +466,7 @@ func TestRecordStreamPublishSuccess(t *testing.T) {
 // TestRecordStreamPublishFailureIsNotCounted mirrors the AMQP lane: a publish that
 // failed is timed but never counted as sent.
 func TestRecordStreamPublishFailureIsNotCounted(t *testing.T) {
-	prev := otel.GetMeterProvider()
-	mp := obtest.NewTestMeterProvider()
-	defer func() {
-		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
-		otel.SetMeterProvider(prev)
-	}()
-	otel.SetMeterProvider(mp)
-
-	resetMeterForTesting()
-	initAMQPMeter()
+	mp := setupMeter(t)
 
 	RecordStreamPublish(context.Background(), testStreamName, 7*time.Millisecond, errors.New("not confirmed"))
 
@@ -577,16 +482,7 @@ func TestRecordStreamPublishFailureIsNotCounted(t *testing.T) {
 }
 
 func TestRecordStreamPublishZeroDurationSkipsHistogram(t *testing.T) {
-	prev := otel.GetMeterProvider()
-	mp := obtest.NewTestMeterProvider()
-	defer func() {
-		// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
-		otel.SetMeterProvider(prev)
-	}()
-	otel.SetMeterProvider(mp)
-
-	resetMeterForTesting()
-	initAMQPMeter()
+	mp := setupMeter(t)
 
 	RecordStreamPublish(context.Background(), testStreamName, 0, nil)
 

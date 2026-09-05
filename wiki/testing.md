@@ -81,10 +81,20 @@ otel.SetMeterProvider(mp)
 t.Cleanup(func() { otel.SetMeterProvider(prev) })
 ```
 
-Nothing leaks: `obtest.NewTestMeterProvider` is a `ManualReader` with no exporter and no
-background goroutine, and `NewTestTraceProvider` exports in-memory. A provider you never install
-globally is yours alone — shut it down as usual. `observability/testing`'s
-`TestRestoredGlobalStillDeliversAfterCleanup` pins the property.
+No goroutine, socket, or file handle leaks: `obtest.NewTestMeterProvider` is a `ManualReader`
+with no exporter, and `NewTestTraceProvider` exports in-memory through a synchronous processor.
+What an un-shut-down in-memory span exporter *does* keep is its spans, for the life of the test
+binary — bounded by the run and reachable by nothing outside it. If that ever matters, call
+`exporter.Reset()` in the cleanup; do not bring the `Shutdown` back.
+
+**Install only inert providers globally.** The rule above is what makes a globally-installed
+provider un-shut-down-able, so a batching or exporting provider — `sdktrace.WithBatcher`, a
+`PeriodicReader`, anything with an OTLP exporter — must not be installed globally in a test at
+all: pass it to the code under test directly instead, and shut it down normally. A provider you
+never install globally is yours alone.
+
+`observability/testing`'s `TestRestoredGlobalStillDeliversAfterCleanup` pins the delegation
+property; `cache/internal/tracking/metrics_test.go` carries the same rule from #1091.
 
 ## Database Testing
 

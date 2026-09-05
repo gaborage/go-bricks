@@ -846,10 +846,8 @@ func TestRecoveredPanicNeverReachesTheSpan(t *testing.T) {
 			// provider at SETUP time, so a provider left installed outlives this
 			// test and silently changes what every later test in the binary records.
 			prevTP := otel.GetTracerProvider()
-			t.Cleanup(func() {
-				// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
-				otel.SetTracerProvider(prevTP)
-			})
+			// no Shutdown: the first-installed provider is otel's permanent delegate (internal/global/state.go sync.Once, #1093)
+			t.Cleanup(func() { otel.SetTracerProvider(prevTP) })
 			otel.SetTracerProvider(tp)
 
 			cfg := &config.Config{}
