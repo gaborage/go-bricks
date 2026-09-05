@@ -210,14 +210,14 @@ func TestPrepareRuntimeWithScheduler(t *testing.T) {
 	scheduler := &MockSchedulerModule{name: "scheduler"}
 	scheduler.On("Init", deps).Return(nil)
 	err := registry.Register(scheduler)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Register JobProvider module
 	jobProvider := &MockJobProviderModule{name: "job-provider"}
 	jobProvider.On("Init", deps).Return(nil)
 	jobProvider.On("RegisterJobs", scheduler).Return(nil)
 	err = registry.Register(jobProvider)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Create minimal app with mocked server
 	mockSrv := newMockServer()
@@ -233,7 +233,7 @@ func TestPrepareRuntimeWithScheduler(t *testing.T) {
 
 	// Call prepareRuntime
 	err = app.prepareRuntime(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Verify RegisterJobs was called on the provider
 	jobProvider.AssertExpectations(t)

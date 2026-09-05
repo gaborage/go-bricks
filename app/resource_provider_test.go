@@ -137,8 +137,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 
 		db, err := provider.DB(context.Background())
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "database")
+		require.ErrorContains(t, err, "database")
 		assert.Contains(t, err.Error(), "not_configured")
 		assert.Nil(t, db)
 	})
@@ -149,8 +148,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 
 		db, err := provider.DB(context.Background())
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "connection failed")
+		require.ErrorContains(t, err, "connection failed")
 		assert.Nil(t, db)
 	})
 
@@ -170,8 +168,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 
 		db, err := provider.DBByName(context.Background(), "legacy")
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "database")
+		require.ErrorContains(t, err, "database")
 		assert.Contains(t, err.Error(), "not_configured")
 		assert.Nil(t, db)
 	})
@@ -183,8 +180,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 
 		db, err := provider.DBByName(context.Background(), "")
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "database_name")
+		require.ErrorContains(t, err, "database_name")
 		assert.Contains(t, err.Error(), "cannot be empty")
 		assert.Nil(t, db)
 	})
@@ -195,8 +191,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 
 		db, err := provider.DBByName(context.Background(), "legacy")
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), testNamedDBConnError)
+		require.ErrorContains(t, err, testNamedDBConnError)
 		assert.Nil(t, db)
 	})
 
@@ -207,8 +202,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 
 		db, err := provider.DBByName(context.Background(), "unknown_db")
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "unknown_db")
+		require.ErrorContains(t, err, "unknown_db")
 		assert.Contains(t, err.Error(), "not found")
 		assert.Nil(t, db)
 	})
@@ -247,8 +241,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 
 		client, err := provider.Messaging(context.Background())
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "messaging")
+		require.ErrorContains(t, err, "messaging")
 		assert.Contains(t, err.Error(), "not_configured")
 		assert.Nil(t, client)
 	})
@@ -284,8 +277,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 
 		c, err := provider.Cache(context.Background())
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "cache")
+		require.ErrorContains(t, err, "cache")
 		assert.Contains(t, err.Error(), "not_configured")
 		assert.Nil(t, c)
 	})
@@ -343,9 +335,10 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		client, err := provider.Messaging(context.Background())
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrNoTenantInContext)
-		assert.ErrorIs(t, err, multitenant.ErrNoTenant,
+		// app.ErrNoTenantInContext IS multitenant.ErrNoTenant (app.go:50), so one
+		// ErrorIs covers both spellings; asserting each name separately tested the
+		// alias twice rather than testing two properties.
+		require.ErrorIs(t, err, ErrNoTenantInContext,
 			"the app sentinel is the multitenant one, so errors.Is matches through either name")
 		assert.Nil(t, client)
 	})
@@ -356,8 +349,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		db, err := provider.DB(ctx)
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "database")
+		require.ErrorContains(t, err, "database")
 		assert.Contains(t, err.Error(), "not_configured")
 		assert.Nil(t, db)
 	})
@@ -368,8 +360,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		db, err := provider.DB(context.Background())
 
-		assert.Error(t, err)
-		assert.ErrorIs(t, err, ErrNoTenantInContext)
+		require.ErrorIs(t, err, ErrNoTenantInContext)
 		assert.Nil(t, db)
 	})
 
@@ -380,8 +371,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		db, err := provider.DB(ctx)
 
-		assert.Error(t, err)
-		assert.ErrorIs(t, err, ErrNoTenantInContext)
+		require.ErrorIs(t, err, ErrNoTenantInContext)
 		assert.Nil(t, db)
 	})
 
@@ -404,8 +394,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		db, err := provider.DBByName(context.Background(), "legacy")
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "databases")
+		require.ErrorContains(t, err, "databases")
 		assert.Contains(t, err.Error(), "not_configured")
 		assert.Nil(t, db)
 	})
@@ -417,8 +406,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		db, err := provider.DBByName(context.Background(), "")
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "database_name")
+		require.ErrorContains(t, err, "database_name")
 		assert.Contains(t, err.Error(), "cannot be empty")
 		assert.Nil(t, db)
 	})
@@ -429,8 +417,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		db, err := provider.DBByName(context.Background(), "legacy")
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), testNamedDBConnError)
+		require.ErrorContains(t, err, testNamedDBConnError)
 		assert.Nil(t, db)
 	})
 
@@ -441,8 +428,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		db, err := provider.DBByName(context.Background(), "unknown_db")
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "unknown_db")
+		require.ErrorContains(t, err, "unknown_db")
 		assert.Contains(t, err.Error(), "not found")
 		assert.Nil(t, db)
 	})
@@ -456,8 +442,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		client, err := provider.Messaging(ctx)
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "messaging")
+		require.ErrorContains(t, err, "messaging")
 		assert.Contains(t, err.Error(), "not_configured")
 		assert.Nil(t, client)
 	})
@@ -468,8 +453,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		client, err := provider.Messaging(context.Background())
 
-		assert.Error(t, err)
-		assert.ErrorIs(t, err, ErrNoTenantInContext)
+		require.ErrorIs(t, err, ErrNoTenantInContext)
 		assert.Nil(t, client)
 	})
 
@@ -480,8 +464,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		client, err := provider.Messaging(ctx)
 
-		assert.Error(t, err)
-		assert.ErrorIs(t, err, ErrNoTenantInContext)
+		require.ErrorIs(t, err, ErrNoTenantInContext)
 		assert.Nil(t, client)
 	})
 
@@ -518,8 +501,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		c, err := provider.Cache(ctx)
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "cache")
+		require.ErrorContains(t, err, "cache")
 		assert.Contains(t, err.Error(), "not_configured")
 		assert.Nil(t, c)
 	})
@@ -530,8 +512,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		c, err := provider.Cache(context.Background())
 
-		assert.Error(t, err)
-		assert.ErrorIs(t, err, ErrNoTenantInContext)
+		require.ErrorIs(t, err, ErrNoTenantInContext)
 		assert.Nil(t, c)
 	})
 
@@ -542,8 +523,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		c, err := provider.Cache(ctx)
 
-		assert.Error(t, err)
-		assert.ErrorIs(t, err, ErrNoTenantInContext)
+		require.ErrorIs(t, err, ErrNoTenantInContext)
 		assert.Nil(t, c)
 	})
 }

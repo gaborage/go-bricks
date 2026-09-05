@@ -527,7 +527,7 @@ func TestHandleGC(t *testing.T) {
 	err := debugHandlers.handleGC(c)
 
 	// Verify response
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "mem_before")
 	assert.Contains(t, rec.Body.String(), "heap_objects")
@@ -555,7 +555,7 @@ func TestHandleForceGC(t *testing.T) {
 	err := debugHandlers.handleForceGC(c)
 
 	// Verify response
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "mem_before")
 	assert.Contains(t, rec.Body.String(), "mem_after")

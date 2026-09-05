@@ -36,7 +36,7 @@ func TestNewAppBuilder(t *testing.T) {
 	assert.Nil(t, builder.cfg)
 	assert.Nil(t, builder.opts)
 	assert.Nil(t, builder.logger)
-	assert.Nil(t, builder.err)
+	assert.NoError(t, builder.err)
 }
 
 func TestAppBuilderWithConfig(t *testing.T) {
@@ -48,7 +48,7 @@ func TestAppBuilderWithConfig(t *testing.T) {
 		assert.NotNil(t, builder)
 		assert.Equal(t, cfg, builder.cfg)
 		assert.Equal(t, opts, builder.opts)
-		assert.Nil(t, builder.err)
+		assert.NoError(t, builder.err)
 	})
 
 	t.Run(shouldSkipWithPreviousError, func(t *testing.T) {
@@ -102,8 +102,7 @@ func TestAppBuilderCreateLoggerErrors(t *testing.T) {
 		builder := NewAppBuilder()
 		result := builder.CreateLogger()
 
-		assert.NotNil(t, result.err)
-		assert.Contains(t, result.err.Error(), "configuration required before creating logger")
+		require.ErrorContains(t, result.err, "configuration required before creating logger")
 		assert.Nil(t, result.logger)
 	})
 
@@ -120,7 +119,7 @@ func TestAppBuilderCreateLoggerErrors(t *testing.T) {
 		builder := NewAppBuilder().WithConfig(cfg, &Options{})
 		result := builder.CreateLogger()
 
-		assert.Nil(t, result.err)
+		require.NoError(t, result.err)
 		assert.NotNil(t, result.logger)
 	})
 }
@@ -137,7 +136,7 @@ func TestAppBuilderCreateLoggerWithFormat(t *testing.T) {
 			cfg.Log.Output.Format = format
 
 			result := NewAppBuilder().WithConfig(cfg, &Options{}).CreateLogger()
-			assert.Nil(t, result.err)
+			require.NoError(t, result.err)
 			assert.NotNil(t, result.logger)
 		})
 	}
@@ -199,7 +198,7 @@ func TestResolveLoggerFilterConfig(t *testing.T) {
 		assert.Contains(t, got.SensitiveFields, "cvv2")
 		assert.Contains(t, got.SensitiveFields, "ssn")
 		// Length sanity check.
-		assert.Equal(t, len(defaults)+3, len(got.SensitiveFields))
+		assert.Len(t, got.SensitiveFields, len(defaults)+3)
 	})
 
 	t.Run("yaml_merge_path_leaves_error_redactor_nil", func(t *testing.T) {
@@ -264,7 +263,7 @@ func TestAppBuilderCreateLoggerWithFilterConfig(t *testing.T) {
 			},
 		}
 		result := NewAppBuilder().WithConfig(cfg, opts).CreateLogger()
-		assert.Nil(t, result.err)
+		require.NoError(t, result.err)
 		assert.NotNil(t, result.logger)
 	})
 
@@ -272,7 +271,7 @@ func TestAppBuilderCreateLoggerWithFilterConfig(t *testing.T) {
 		cfg := defaultTestConfig()
 		cfg.Log.SensitiveFields = []string{"pan", "cvv2", "otp"}
 		result := NewAppBuilder().WithConfig(cfg, &Options{}).CreateLogger()
-		assert.Nil(t, result.err)
+		require.NoError(t, result.err)
 		assert.NotNil(t, result.logger)
 	})
 
@@ -429,8 +428,7 @@ func TestAppBuilderCreateBootstrapErrors(t *testing.T) {
 		builder := NewAppBuilder().WithConfig(cfg, &Options{})
 		result := builder.CreateBootstrap()
 
-		assert.NotNil(t, result.err)
-		assert.Contains(t, result.err.Error(), "logger required before creating bootstrap")
+		require.ErrorContains(t, result.err, "logger required before creating bootstrap")
 		assert.Nil(t, result.bootstrap)
 	})
 
@@ -447,8 +445,7 @@ func TestAppBuilderResolveDependenciesErrors(t *testing.T) {
 		builder := NewAppBuilder()
 		result := builder.ResolveDependencies()
 
-		assert.NotNil(t, result.err)
-		assert.Contains(t, result.err.Error(), "bootstrap required before resolving dependencies")
+		require.ErrorContains(t, result.err, "bootstrap required before resolving dependencies")
 		assert.Nil(t, result.bundle)
 	})
 
@@ -603,8 +600,7 @@ func TestAppBuilderCreateAppErrors(t *testing.T) {
 		builder := NewAppBuilder()
 		result := builder.CreateApp()
 
-		assert.NotNil(t, result.err)
-		assert.Contains(t, result.err.Error(), "dependencies required before creating app")
+		require.ErrorContains(t, result.err, "dependencies required before creating app")
 		assert.Nil(t, result.app)
 	})
 
@@ -621,8 +617,7 @@ func TestAppBuilderInitializeRegistryErrors(t *testing.T) {
 		builder := NewAppBuilder()
 		result := builder.InitializeRegistry()
 
-		assert.NotNil(t, result.err)
-		assert.Contains(t, result.err.Error(), "app instance required before initializing registry")
+		require.ErrorContains(t, result.err, "app instance required before initializing registry")
 	})
 
 	t.Run(shouldSkipWithPreviousError, func(t *testing.T) {
@@ -671,8 +666,7 @@ func TestAppBuilderConfigureRuntimeHelpersErrors(t *testing.T) {
 		builder := NewAppBuilder()
 		result := builder.ConfigureRuntimeHelpers()
 
-		assert.NotNil(t, result.err)
-		assert.Contains(t, result.err.Error(), "app instance required before configuring runtime helpers")
+		require.ErrorContains(t, result.err, "app instance required before configuring runtime helpers")
 	})
 
 	t.Run(shouldSkipWithPreviousError, func(t *testing.T) {
@@ -807,8 +801,7 @@ func TestAppBuilderCreateHealthProbesErrors(t *testing.T) {
 		builder := NewAppBuilder()
 		result := builder.CreateHealthProbes()
 
-		assert.NotNil(t, result.err)
-		assert.Contains(t, result.err.Error(), "app instance required before creating health probes")
+		require.ErrorContains(t, result.err, "app instance required before creating health probes")
 	})
 
 	t.Run(shouldSkipWithPreviousError, func(t *testing.T) {
@@ -984,8 +977,7 @@ func TestAppBuilderRegisterClosersErrors(t *testing.T) {
 		builder := NewAppBuilder()
 		result := builder.RegisterClosers()
 
-		assert.NotNil(t, result.err)
-		assert.Contains(t, result.err.Error(), "app instance required before registering closers")
+		require.ErrorContains(t, result.err, "app instance required before registering closers")
 	})
 
 	t.Run(shouldSkipWithPreviousError, func(t *testing.T) {
@@ -1000,8 +992,7 @@ func TestAppBuilderRegisterReadyHandlerErrors(t *testing.T) {
 		builder := NewAppBuilder()
 		result := builder.RegisterReadyHandler()
 
-		assert.NotNil(t, result.err)
-		assert.Contains(t, result.err.Error(), "app instance required before registering ready handler")
+		require.ErrorContains(t, result.err, "app instance required before registering ready handler")
 	})
 
 	t.Run(shouldSkipWithPreviousError, func(t *testing.T) {
@@ -1016,7 +1007,6 @@ func TestAppBuilderBuildErrors(t *testing.T) {
 		builder := &Builder{err: assert.AnError}
 		app, log, err := builder.Build()
 
-		assert.Error(t, err)
 		assert.Equal(t, assert.AnError, err)
 		assert.Nil(t, app)
 		assert.NotNil(t, log) // Logger should always be available
@@ -1026,8 +1016,7 @@ func TestAppBuilderBuildErrors(t *testing.T) {
 		builder := NewAppBuilder()
 		app, log, err := builder.Build()
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "app building incomplete")
+		require.ErrorContains(t, err, "app building incomplete")
 		assert.Nil(t, app)
 		assert.NotNil(t, log) // Logger should always be available
 	})
@@ -1037,7 +1026,7 @@ func TestAppBuilderError(t *testing.T) {
 	t.Run("no error", func(t *testing.T) {
 		builder := NewAppBuilder()
 		err := builder.Error()
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 	})
 
 	t.Run("with error", func(t *testing.T) {
@@ -1059,8 +1048,7 @@ func TestAppBuilderChainValidation(t *testing.T) {
 			ResolveDependencies(). // Should skip due to previous error
 			CreateApp()            // Should skip due to previous error
 
-		assert.NotNil(t, result.err)
-		assert.Contains(t, result.err.Error(), "configuration required")
+		require.ErrorContains(t, result.err, "configuration required")
 		assert.Nil(t, result.logger)
 		assert.Nil(t, result.bootstrap)
 		assert.Nil(t, result.bundle)
@@ -1268,7 +1256,7 @@ func TestAppBuilderErrorRecovery(t *testing.T) {
 
 		// Trigger an error
 		builder.CreateLogger() // Will fail due to missing config
-		require.NotNil(t, builder.err)
+		require.Error(t, builder.err)
 
 		// Subsequent calls should not crash and maintain error state
 		builder.CreateBootstrap()
