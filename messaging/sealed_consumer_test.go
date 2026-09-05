@@ -278,8 +278,8 @@ func TestSealedHandlerRefusalIsPayloadStageOpenAndNacksWithoutRequeue(t *testing
 	require.ErrorAs(t, err, &pe)
 	assert.Equal(t, PayloadStageOpen, pe.Stage)
 	assert.Equal(t, "payment.authorized", pe.EventType)
-	assert.ErrorIs(t, err, ErrPayloadOpenRefused)
-	assert.NotErrorIs(t, err, ErrPayloadUndecodable)
+	assert.ErrorIs(t, err, ErrPayloadOpenRefused)    //nolint:testifylint // peer sentinel probe; the negative claim follows
+	assert.NotErrorIs(t, err, ErrPayloadUndecodable) //nolint:testifylint // peer sentinel probe; a second ErrorAs target follows
 	var got *sealruntime.OpenRefusedError
 	require.ErrorAs(t, err, &got)
 	assert.Same(t, refused, got)

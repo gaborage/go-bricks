@@ -117,9 +117,9 @@ func TestNewTypedHandlerReturnsFnResult(t *testing.T) {
 	err := h.Handle(t.Context(), &amqp.Delivery{Body: validBody(t)})
 
 	assert.Same(t, errBusiness, err, "fn's error must pass through unwrapped")
-	assert.ErrorIs(t, err, errBusiness)
-	assert.NotErrorIs(t, err, ErrPayloadUndecodable)
-	assert.NotErrorIs(t, err, ErrPayloadInvalid)
+	assert.ErrorIs(t, err, errBusiness)              //nolint:testifylint // peer sentinel probe; the negative claims follow
+	assert.NotErrorIs(t, err, ErrPayloadUndecodable) //nolint:testifylint // peer sentinel probe; a further negative claim follows
+	assert.NotErrorIs(t, err, ErrPayloadInvalid)     //nolint:testifylint // peer sentinel probe; a NotErrorAs type check follows
 	assert.NotErrorAs(t, err, new(*PayloadError))
 }
 

@@ -1830,9 +1830,9 @@ func TestWrapHandlerMergesEnvelopeMeta(t *testing.T) {
 	var resp APIResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 
-	assert.Equal(t, float64(123), resp.Meta["total"])
-	assert.Equal(t, float64(50), resp.Meta["limit"])
-	assert.Equal(t, float64(0), resp.Meta["offset"])
+	assert.InDelta(t, float64(123), resp.Meta["total"], 0)
+	assert.InDelta(t, float64(50), resp.Meta["limit"], 0)
+	assert.InDelta(t, float64(0), resp.Meta["offset"], 0)
 	assert.Equal(t, true, resp.Meta["hasMore"])
 	// Framework keys still present and authoritative.
 	assert.Equal(t, "merge-trace", resp.Meta["traceId"])
@@ -1920,7 +1920,7 @@ func TestWrapHandlerEnvelopeMetaReservedKeyOverwriteAndWarn(t *testing.T) {
 	// Framework keys win — neither "fake-ts" nor "fake-trace" must appear.
 	assert.Equal(t, "real-trace", resp.Meta["traceId"])
 	assert.NotEqual(t, "fake-ts", resp.Meta["timestamp"])
-	assert.Equal(t, float64(1), resp.Meta["page"])
+	assert.InDelta(t, float64(1), resp.Meta["page"], 0)
 
 	// Severity must be WARN (regression guard for the documented contract) and BOTH
 	// offending keys must be surfaced. Asserts on presence + content rather than exact

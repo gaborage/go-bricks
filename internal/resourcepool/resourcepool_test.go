@@ -292,7 +292,7 @@ func TestPoolGetOrCreateWaiterHonorsOwnContext(t *testing.T) {
 	dead, cancel := context.WithCancel(context.Background())
 	cancel()
 	abandoned := getOrCreateBounded(dead, t, p, keyOne, create, unblock)
-	assert.ErrorIs(t, abandoned.err, context.Canceled,
+	assert.ErrorIs(t, abandoned.err, context.Canceled, //nolint:testifylint // a require would skip unblock() and leak the leader goroutine; a second phase follows
 		"a waiter must fail on its OWN context, not block on the leader's create")
 	assert.Nil(t, abandoned.v)
 	assert.Nil(t, abandoned.rel)
@@ -1184,7 +1184,7 @@ func TestPoolCloseClosesAllAndJoinsErrors(t *testing.T) {
 	assert.Equal(t, 2, p.Stats().Errors, "each close failure counts once")
 	// Close joins EVERY close failure via errors.Join — errors.Is matches each individual one,
 	// so a consumer aggregating them (DbManager) surfaces all, not just the first.
-	assert.ErrorIs(t, err, errTwo, "Close surfaces the key-2 close error")
+	assert.ErrorIs(t, err, errTwo, "Close surfaces the key-2 close error") //nolint:testifylint // the second joined close error is asserted on the next line
 	require.ErrorIs(t, err, errThree, "Close surfaces the key-3 close error")
 }
 

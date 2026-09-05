@@ -818,7 +818,7 @@ func TestShutdownWithErrors(t *testing.T) {
 		dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
 
 		err := dualProc.Shutdown(context.Background())
-		assert.ErrorIs(t, err, errAction, "Should contain action processor error")
+		assert.ErrorIs(t, err, errAction, "Should contain action processor error") //nolint:testifylint // both sentinels of one aggregated error; a require hides the other
 		assert.ErrorIs(t, err, errTrace, "Should contain trace processor error")
 	})
 }
@@ -852,7 +852,7 @@ func TestForceFlushWithErrors(t *testing.T) {
 		dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
 
 		err := dualProc.ForceFlush(context.Background())
-		assert.ErrorIs(t, err, errAction, "Should contain action processor error")
+		assert.ErrorIs(t, err, errAction, "Should contain action processor error") //nolint:testifylint // both sentinels of one aggregated error; a require hides the other
 		assert.ErrorIs(t, err, errTrace, "Should contain trace processor error")
 	})
 }

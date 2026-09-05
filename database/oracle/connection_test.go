@@ -778,7 +778,7 @@ func TestConnectionTransactionOperationsErrorHandling(t *testing.T) {
 	if tx != nil {
 		defer tx.Rollback(ctx) // Safety: should never execute since Begin is expected to fail
 	}
-	assert.Error(t, err)
+	assert.Error(t, err) //nolint:testifylint // independent scenario follows in same test
 
 	// Test BeginTx error
 	mock.ExpectBegin().WillReturnError(sql.ErrTxDone)
@@ -786,7 +786,7 @@ func TestConnectionTransactionOperationsErrorHandling(t *testing.T) {
 	if txOpts != nil {
 		defer txOpts.Rollback(ctx) // Safety: should never execute since BeginTx is expected to fail
 	}
-	assert.Error(t, err)
+	assert.Error(t, err) //nolint:testifylint // independent scenario follows in same test
 
 	// Test successful Prepare error in statement
 	mock.ExpectPrepare("SELECT").WillReturnError(sql.ErrConnDone)

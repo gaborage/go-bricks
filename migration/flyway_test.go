@@ -1332,7 +1332,7 @@ func TestMigrateRejectsShortPassword(t *testing.T) {
 	_, err := fm.Migrate(context.Background(), mcfg)
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "pw12345", "the error must not echo the password")
-	assert.ErrorIs(t, err, ErrDatabasePasswordTooShort)
+	assert.ErrorIs(t, err, ErrDatabasePasswordTooShort) //nolint:testifylint // peer sentinel probe; the next assertion classifies the same error
 	require.NotErrorIs(t, err, ErrFlywayOutputUnparsed, "rejected before Flyway runs, not a parse failure")
 }
 
@@ -1521,7 +1521,7 @@ func TestRunFlywayCommandParentCancelSignalsUnknownState(t *testing.T) {
 		// The kill scope is build-tagged: the message must report what this platform
 		// actually terminated, never a hardcoded process-group claim (false on Windows).
 		assert.Contains(t, err.Error(), killScopeDesc)
-		assert.ErrorIs(t, err, ErrFlywayCanceled)
+		assert.ErrorIs(t, err, ErrFlywayCanceled) //nolint:testifylint // peer sentinel probe; the next assertion classifies the same error
 		require.NotErrorIs(t, err, ErrFlywayTimeout, "a parent-cancel kill must not also classify as a timeout")
 	case <-time.After(flywayKillGraceDelay + 5*time.Second):
 		t.Fatal("Migrate did not return within the guard deadline — cancel-kill classification regressed to a hang")

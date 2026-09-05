@@ -311,7 +311,7 @@ func TestBuildLogRecordDefaultsLogTypeToTrace(t *testing.T) {
 
 		require.Equal(t, 1, count, "log.type must appear exactly once — a type-assertion mistake would add a second, defaulted occurrence")
 		assert.Equal(t, attribute.FLOAT64, lastValue.Type())
-		assert.Equal(t, float64(7), lastValue.AsFloat64())
+		assert.InDelta(t, float64(7), lastValue.AsFloat64(), 0)
 	})
 }
 

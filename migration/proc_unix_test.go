@@ -47,7 +47,7 @@ func TestConfigureProcessGroupCancelKillsGroup(t *testing.T) {
 	pid := cmd.Process.Pid
 	require.NoError(t, cmd.Cancel(), "killing a live process group must succeed")
 
-	_ = cmd.Wait() // reap; the process was SIGKILLed
-	assert.ErrorIs(t, syscall.Kill(-pid, 0), syscall.ESRCH, "process group must be gone")
+	_ = cmd.Wait()                                                                        // reap; the process was SIGKILLed
+	assert.ErrorIs(t, syscall.Kill(-pid, 0), syscall.ESRCH, "process group must be gone") //nolint:testifylint // peer probe over a different subject; the cmd-side claim follows
 	require.ErrorIs(t, cmd.Cancel(), os.ErrProcessDone, "ESRCH must map to os.ErrProcessDone")
 }

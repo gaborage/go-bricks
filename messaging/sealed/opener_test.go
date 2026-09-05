@@ -333,7 +333,7 @@ func TestOpenerRefusalCodeFallsBackToTheJoseCode(t *testing.T) {
 	assert.False(t, refused.Recoverable)
 	require.ErrorIs(t, err, josesealed.ErrNotSealed)
 	var je *jose.Error
-	assert.ErrorAs(t, err, &je)
+	assert.ErrorAs(t, err, &je) //nolint:testifylint // peer sentinel probe; the negative claim follows
 	require.NotErrorIs(t, err, josesealed.ErrKidUnknownGeneration)
 }
 

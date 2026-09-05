@@ -90,7 +90,7 @@ func noOpCleanup() func() {
 // asInt64 attempts to convert various numeric types to int64 safely.
 // It handles signed and unsigned integers, as well as floating-point numbers.
 //
-//nolint:gocyclo
+//nolint:gocyclo // one type switch over every numeric kind; splitting it would only scatter the arms
 func asInt64(v any) (int64, bool) {
 	if v == nil {
 		return 0, false

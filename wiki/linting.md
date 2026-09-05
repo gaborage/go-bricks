@@ -62,20 +62,97 @@ a few rules scoped to `_test.go`. Delete them all and add your own as findings j
 Drop the `forbidigo` settings block too: its patterns enforce a GoBricks architecture
 decision (ADR-083) and mean nothing outside this repo.
 
-The `testifylint` block is the opposite case — keep the linter, but do not copy the
-`disable:` list. Everything else in it is portable: `enable-all: true`, the `go-require`
-setting, and `testifylint` in `linters.enable`. The `disable:` list is a ratchet over
-*this* repo's outstanding findings (#1092), so copying it verbatim suppresses fifteen
-checkers you never measured while the config still reads as if the linter were fully on.
-Generate your own instead: enable everything, run it, and disable exactly what your tree
-reports.
+The `testifylint` block is portable in full — copy it as it stands:
 
-Measure that list against **itself**, not against `enable-all`. testifylint's checkers are
-priority-ordered and one checker claims a given call site, so a sweep with everything
-enabled hides a lower-priority checker behind a higher one — disable the higher one and
-the finding reappears under a different name. Re-run after each round and stop when a run
-comes back empty; GoBricks needed two rounds, and the second one added a checker the first
-had reported as clean.
+```yaml
+linters:
+  enable:
+    - testifylint
+  settings:
+    testifylint:
+      enable-all: true
+      go-require:
+        ignore-http-handlers: false
+```
+
+**No checker is disabled.** The block once carried a `disable:` list, and it is worth knowing
+why so you do not mistake it for the end state if you find it in an older tag. Turning
+`enable-all` on over an existing suite surfaced ~1,200 findings across fourteen checkers at
+once — too many to fix in one reviewable change and too many to leave red. The list was a
+ratchet: every checker on, the ones with outstanding findings switched off, then one package
+at a time cleared its findings and deleted its entry (#1092). It is gone now, and the residual
+sites carry inline directives instead.
+
+`go-require`'s `ignore-http-handlers: false` is the load-bearing half and is written out
+rather than left to default: it keeps the checker looking inside `http.HandlerFunc` bodies,
+where a `require` call aborts the server goroutine instead of the test.
+
+**Directive convention.** A site that should stay `assert` carries the reason inline:
+
+```go
+assert.ErrorIs(t, err, errTwo, "Close surfaces the key-2 close error") //nolint:testifylint // the second joined close error is asserted on the next line
+```
+
+One directive per site, on the assertion's own line, with a `//` reason that names the
+property at stake — not the checker. One trap is worth knowing before you write one:
+`encoded-compare` keys off the IDENTIFIER NAME rather than the value, so a constant holding
+`"application/json"` is flagged wherever its name contains `JSON`, while the same literal inline
+is not. Renaming only clears it if the new name drops that token — which for a media-type
+constant means making the name worse, so a directive is the right answer there. Check the
+identifier before assuming the checker read your value. Keep `nolintlint` on with all three of
+`allow-unused: false`, `require-explanation: true` and `require-specific: true`. They cover
+different failures and you want every one: `allow-unused` turns a directive that stopped applying
+into a lint error instead of quiet debt, `require-specific` stops a bare `//nolint` from silencing
+every linter at once, and `require-explanation` is what keeps the reason there at all — which
+matters most once the reason on the line is the only record, with no exceptions document behind
+it. Together they make the convention self-enforcing rather than aspirational.
+
+Adopt it the same way: enable everything, measure, then convert rather than suppress. Most
+findings are mechanical, and two shapes account for nearly all of the judgment calls.
+
+**The `require-error` doctrine.** The checker wants every `assert.Error*` to be `require`.
+Decide per site:
+
+- *Existence converts.* `assert.Error` / `assert.NoError` — the guard everything below depends
+  on — becomes `require`. So does any assertion whose target is consumed below it: an
+  `assert.ErrorAs` whose target is dereferenced on the next line is a nil-panic waiting for its
+  first regression, not a style choice. **Producers stay `require`.**
+- *Specificity aborts.* An identity or message assertion (`ErrorIs`, `ErrorAs`, `ErrorContains`,
+  `NotErrorIs`) fails on any non-matching error, including a non-nil one, so converting it hides
+  every follower in exactly the case a reader most needs. Convert only when nothing independently
+  checkable follows — and look one scope up, not just to the end of the block: a `t.Run` body's
+  last line still has the parent's assertions after it.
+- *Consecutive message clauses are not automatically siblings.* Several `ErrorContains` calls
+  against one `err` may be converted down to the last one only when they test the SAME rendering —
+  one format string. When one clause comes from a wrapper and another from the error it wrapped
+  with `%w`, they are produced by different code and are independent properties: a wrapper-prefix
+  regression must not abort before the inner cause is checked. Note the rule is about what FOLLOWS
+  a clause, not about which clauses were rendered together — two clauses sharing a format string
+  still both stay non-fatal if an independent clause comes after them.
+- *Prefer position over a directive.* An error assertion placed LAST in its block draws no
+  finding at all. If the assertion wraps the call under test, extract the call
+  (`closeErr := p.Close()`), keep the state checks in place, and assert on the local afterwards.
+- *Releasers stay reachable.* Never convert an assertion sitting above a statement that releases
+  something — `unblock()`, `cancel()`, `close(ch)`, a `rel()`. `require` aborts via `Goexit`,
+  which runs deferred calls but not the rest of the block, so the release never happens: the
+  counterpart goroutine blocks for the life of the test binary and any second phase is lost.
+  The question is not what the assertion reads, it is what the abort SKIPS.
+
+For `float-compare`, if exact equality really is the contract say so with
+`assert.InDelta(t, want, got, 0)` (or `assert.Zero`); a zero delta IS exact equality and costs
+no permanent directive. Note it compares numerically, so unlike `assert.Equal` it will not also
+pin that a JSON-decoded value arrived as `float64` — add `require.IsType` where that matters.
+
+Two measurement traps. First, measure your disable list against **itself**, not against
+`enable-all`: testifylint's checkers are priority-ordered and one checker claims a given call
+site, so a sweep with everything enabled hides a lower-priority checker behind a higher one —
+disable the higher one and the finding reappears under a different name. The same effect bites
+during conversion, where fixing a site under one checker can expose it to another, so re-measure
+after every pass rather than once at the end. Second, if you measure with the vet driver
+(`go vet -vettool=<testifylint> -enable-all ./...`), give each run a throwaway `GOCACHE` and
+delete it afterwards: vet caches its results, so a second run over an unchanged tree prints
+nothing at all, which is indistinguishable from a clean tree. And `./...` under `GOWORK=off`
+covers only the module you are standing in — a repo with a second module needs its own run.
 
 Recheck your own exclusions periodically: an exclusion that matches on message `text` stops
 matching when the linter rewords the message, and it fails **silently** in either

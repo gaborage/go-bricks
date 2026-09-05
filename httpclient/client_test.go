@@ -34,14 +34,14 @@ import (
 
 // Test constants to avoid string duplication
 const (
-	testAPIKey         = "X-API-Key"
-	testAPIValue       = "test-key"
-	testUserAgent      = "User-Agent"
-	testAgentValue     = "test-agent"
-	testIntercepted    = "X-Intercepted"
-	testCustomTrace    = "custom-trace-123"
-	testContentTypeHdr = "Content-Type"
-	testJSONType       = "application/json"
+	testAPIKey          = "X-API-Key"
+	testAPIValue        = "test-key"
+	testUserAgent       = "User-Agent"
+	testAgentValue      = "test-agent"
+	testIntercepted     = "X-Intercepted"
+	testCustomTrace     = "custom-trace-123"
+	testContentTypeHdr  = "Content-Type"
+	testContentTypeJSON = "application/json"
 )
 
 // createTestLogger creates a logger that outputs to a buffer for testing
@@ -484,7 +484,7 @@ func TestClientHeaders(t *testing.T) {
 
 	t.Run("request headers", func(t *testing.T) {
 		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
-			assert.Equal(t, testJSONType, r.Header.Get(testContentTypeHdr))
+			assert.Equal(t, testContentTypeJSON, r.Header.Get(testContentTypeHdr)) //nolint:testifylint // Content-Type header value, not a JSON document
 			assert.Equal(t, "test-value", r.Header.Get("X-Custom-Header"))
 			w.WriteHeader(nethttp.StatusOK)
 		}))
@@ -494,7 +494,7 @@ func TestClientHeaders(t *testing.T) {
 		req := &Request{
 			URL: server.URL,
 			Headers: map[string]string{
-				testContentTypeHdr: testJSONType,
+				testContentTypeHdr: testContentTypeJSON,
 				"X-Custom-Header":  "test-value",
 			},
 		}
@@ -603,7 +603,7 @@ func TestDefaultContentTypeWhenBodyPresent(t *testing.T) {
 	log := createTestLogger()
 	server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 		// Content-Type should default to application/json when body is present
-		assert.Equal(t, testJSONType, r.Header.Get(testContentTypeHdr))
+		assert.Equal(t, testContentTypeJSON, r.Header.Get(testContentTypeHdr)) //nolint:testifylint // Content-Type header value, not a JSON document
 		w.WriteHeader(nethttp.StatusOK)
 	}))
 	defer server.Close()
@@ -2740,7 +2740,7 @@ func (c *capturingRoundTripper) RoundTrip(req *nethttp.Request) (*nethttp.Respon
 	c.contentType = req.Header.Get(testContentTypeHdr)
 	return &nethttp.Response{
 		StatusCode: nethttp.StatusOK,
-		Header:     nethttp.Header{testContentTypeHdr: []string{testJSONType}},
+		Header:     nethttp.Header{testContentTypeHdr: []string{testContentTypeJSON}},
 		Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
 		Request:    req,
 	}, nil

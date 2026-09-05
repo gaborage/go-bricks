@@ -216,7 +216,7 @@ func TestProcessorAttributeExporterShutdown(t *testing.T) {
 		second := enricher.Shutdown(context.Background())
 
 		assert.Equal(t, 1, wrapped.shutdownCount)
-		assert.ErrorIs(t, first, wantErr)
+		assert.ErrorIs(t, first, wantErr) //nolint:testifylint // first and memoized second result; a require hides the second
 		assert.ErrorIs(t, second, wantErr)
 	})
 
