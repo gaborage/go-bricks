@@ -537,7 +537,7 @@ func TestNewWithConfigFailsClosedOnInvalidCacheConfig(t *testing.T) {
 	assert.Nil(t, app)
 	assert.NotNil(t, log)
 	assert.ErrorContains(t, err, "cache manager")
-	assert.ErrorContains(t, err, "maxsize cannot be negative")
+	require.ErrorContains(t, err, "maxsize cannot be negative")
 }
 
 // TestBuildClosesBundleManagersWhenALaterStepAborts pins the Builder half of the ADR-067 leak
@@ -574,9 +574,9 @@ func TestBuildClosesBundleManagersWhenALaterStepAborts(t *testing.T) {
 		Build()
 
 	require.Error(t, err, "an unreachable database must abort startup at pre-initialization")
-	assert.ErrorContains(t, err, "connection failed during startup")
 	assert.Nil(t, app)
 	assert.NotNil(t, log)
+	assert.ErrorContains(t, err, "connection failed during startup")
 
 	bundle := builder.bundle
 	require.NotNil(t, bundle, "the abort must come after the bundle was built, or this pins nothing")

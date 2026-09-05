@@ -601,9 +601,9 @@ observability:
 		provider, err := bootstrap.initializeObservability(context.Background())
 
 		require.Error(t, err)
-		assert.ErrorContains(t, err, "present but invalid")
-		assert.ErrorContains(t, err, "delivered empty")
 		assert.Nil(t, provider, "a caller must not receive a silently degraded provider")
+		assert.ErrorContains(t, err, "present but invalid")
+		require.ErrorContains(t, err, "delivered empty")
 	})
 
 	t.Run("absent_section_never_reaches_construction", func(t *testing.T) {

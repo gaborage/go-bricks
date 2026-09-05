@@ -106,9 +106,9 @@ func TestPrepareRuntimeConsumersFailsStartupOnEnsureError(t *testing.T) {
 	err := a.prepareRuntimeConsumers(context.Background(), declarationsWithConsumer())
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, errBrokerLookupFailed)
-	assert.ErrorContains(t, err, "failed to start consumers on the control-plane key")
 	assert.Equal(t, 1, source.callCount(), "the error must come from consumer bootstrap")
+	assert.ErrorIs(t, err, errBrokerLookupFailed)
+	require.ErrorContains(t, err, "failed to start consumers on the control-plane key")
 }
 
 // TestPrepareRuntimeConsumersWarnsOnlyWithoutConsumers pins the gate on the

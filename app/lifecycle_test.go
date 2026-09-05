@@ -172,8 +172,8 @@ func TestShutdownTiming(t *testing.T) {
 	err := app.Shutdown(context.TODO())
 	duration := time.Since(start)
 
-	assert.NoError(t, err)
 	assert.Less(t, duration, 1*time.Second, "Shutdown should complete quickly with no components")
+	require.NoError(t, err)
 
 	t.Logf("Shutdown completed in %v", duration)
 }
@@ -354,11 +354,11 @@ func TestPrepareRuntimeAbortsWhenDeclaredConsumersCannotStart(t *testing.T) {
 	err := a.prepareRuntime(context.Background())
 
 	require.Error(t, err, "a declared-but-unstartable consumer set must abort startup")
-	assert.Contains(t, err.Error(), "failed to start consumers on the control-plane key")
-	assert.ErrorIs(t, err, errBrokerLookupFailed)
-
 	_, emitted := loggedEvent(rec, preWarmWarnMsg)
 	assert.False(t, emitted, "a fatal bootstrap aborts startup; it is never demoted to the pre-warm WARN")
+
+	assert.Contains(t, err.Error(), "failed to start consumers on the control-plane key")
+	require.ErrorIs(t, err, errBrokerLookupFailed)
 }
 
 // TestPrepareRuntimeReCollectsProbesAfterTheStartPhase pins the re-collect that replaced

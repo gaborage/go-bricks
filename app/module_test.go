@@ -286,13 +286,13 @@ func TestModuleRegistryShutdownWithErrors(t *testing.T) {
 	// Both modules still shut down; the joined error surfaces both failures.
 	err := registry.Shutdown()
 	require.Error(t, err)
-	assert.ErrorIs(t, err, err1)
-	assert.ErrorIs(t, err, err2)
-	assert.Contains(t, err.Error(), "failing-module1")
-	assert.Contains(t, err.Error(), "failing-module2")
-
 	module1.AssertExpectations(t)
 	module2.AssertExpectations(t)
+
+	assert.Contains(t, err.Error(), "failing-module1")
+	assert.Contains(t, err.Error(), "failing-module2")
+	assert.ErrorIs(t, err, err1)
+	require.ErrorIs(t, err, err2)
 }
 
 func TestModuleRegistryShutdownMixedSuccessAndFailure(t *testing.T) {
@@ -316,13 +316,13 @@ func TestModuleRegistryShutdownMixedSuccessAndFailure(t *testing.T) {
 
 	err := registry.Shutdown()
 	require.Error(t, err)
-	assert.ErrorIs(t, err, failErr)
+	okModule.AssertExpectations(t)
+	failModule.AssertExpectations(t)
+
 	assert.Contains(t, err.Error(), "failing-module")
 	// A cleanly-shut-down module must not appear in the joined error.
 	assert.NotContains(t, err.Error(), "ok-module")
-
-	okModule.AssertExpectations(t)
-	failModule.AssertExpectations(t)
+	require.ErrorIs(t, err, failErr)
 }
 
 func TestModuleRegistryShutdownSingleModule(t *testing.T) {

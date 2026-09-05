@@ -1193,9 +1193,9 @@ func TestShutdownAggregatesErrors(t *testing.T) {
 
 	err := fixture.app.Shutdown(context.Background())
 	require.Error(t, err)
-	assert.ErrorIs(t, err, serverErr)
-	assert.ErrorIs(t, err, resourceErr)
 	closer.AssertExpectations(t)
+	assert.ErrorIs(t, err, serverErr)
+	require.ErrorIs(t, err, resourceErr)
 }
 
 func TestNewWithConfigUsesConnectors(t *testing.T) {

@@ -196,8 +196,8 @@ func TestMessagingSlotStartPropagatesContextCancellation(t *testing.T) {
 	// Cancellation means shutdown/startup abort, not a broker-readiness problem —
 	// it propagates instead of being mislabeled by the generic not-ready WARN.
 	require.NoError(t, fatal, "pre-warming is never fatal")
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Less(t, elapsed, time.Second, "must return once ctx expires")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 // TestPreWarmGateIsPerKind pins WHICH gate each slot hands preWarmKind. The two
