@@ -3,6 +3,44 @@
 **Status:** Accepted
 **Date:** 2026-06-06
 
+> **Amended (2026-09-05, #1179):** The allocation guard for the default
+> middleware chain lives in `server/route_registrar_test.go`. It was not added by
+> this ADR — #627 (`b0ef71d1`, three weeks later) introduced it with a measured
+> baseline of 53 allocs/op. `defaultMiddlewareChainBaselineAllocs` is 62 today and
+> the ceiling it asserts against is 69; this records where the nine between 53 and
+> 62 came from, six of which are post-toolchain. The decision below is unchanged.
+>
+> - **Toolchain, 53 → 56** (#1177). Not this project's code: the anchor commit
+>   `b0ef71d1` reads 53 on go1.26.x and 56 on go1.27.1.
+> - **`d93dc743` (#682), 56 → 61 — the test harness, not the chain.**
+>   `testLogEvent.Str` began recording values into a `map[string]string` so tests
+>   could assert on `SensitiveDataFilter` masking, and `buildLogEvent` makes ten
+>   unconditional `Str` calls per request, so every measured request now builds
+>   and fills that map. The commit's only non-test file is `server/server.go`,
+>   and every path it changes hangs off the error handler — `classifyError`'s
+>   `status >= 500` branch and the panic branch — which a 200 OK never enters.
+>   Proven by patching the map out at the head and re-measuring: 62 → 57.
+> - **`d715a7c5` (#1128), 61 → 62 — justified feature cost.**
+>   [ADR-070](adr_070_inbound_trace_identifier_validation.md) made the HTTP door
+>   shadow both inherited W3C keys unconditionally, so a request carrying no
+>   `traceparent` now pays for context values the old present-header-only path
+>   skipped. The step measures +1 net. The two shadow lines cost 2 at today's
+>   head (removing both by overlay: 62 → 60), so the same commit gave one back
+>   elsewhere on this path; that half was not decomposed further.
+>
+> Net of the nine: three toolchain, five test-harness bookkeeping, one a
+> deliberate ingress cost. Giving the guard a values-free logger double and
+> re-pinning to 57 is tracked in #1439.
+>
+> To reproduce: `go test -count=1 -run TestDefaultMiddlewareChainAllocsStable -v
+> ./server/` and read the value the test logs — `make test-alloc` runs the guard
+> but only asserts the ceiling. Three runs per data point, taking the value all
+> three agree on, since `AllocsPerRun` averages. The 57 comes from deleting the
+> two lines in `testLogEvent.Str` that build and fill `e.values` and re-running.
+> Every number here was produced on go1.27.1; `go.mod` pins go 1.27.0 and the
+> guard comment records the baseline as measured on 1.27.0, a patch-level
+> difference that does not move these counts.
+
 ## Context
 
 Profiling the framework on a default-config read workload (perf iteration-1)
@@ -102,3 +140,6 @@ Rejected alternatives:
 
 - ADR-013 (interface naming) — prior public-interface evolution precedent.
 - ADR-025 (pool idle tracks max) — the sibling perf iteration-1 change.
+- [ADR-070](adr_070_inbound_trace_identifier_validation.md) (inbound trace identifier
+  validation) — its unconditional W3C key clear at the HTTP door is the one allocation
+  this path has gained since, per the amendment above.
