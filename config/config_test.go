@@ -340,9 +340,10 @@ func TestLoadEmptyDurationEnvKeepsItsOwnError(t *testing.T) {
 
 	_, err := Load()
 
-	require.ErrorContains(t, err, "invalid duration")
+	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "delivered empty",
 		"the duration parser owns this target; guarding it here would only change the message")
+	require.ErrorContains(t, err, "invalid duration")
 }
 
 // TestLoadEmptyNumericYAMLStringRejected covers the same rule arriving through YAML: an

@@ -10,6 +10,15 @@ Several package PRs are in flight at once, so more than one may create this file
 one merged wins; every later PR rebases onto it and appends its section rather than recreating
 the file.**
 
+An error-IDENTITY assertion (`ErrorIs`/`ErrorAs`/`NotErrorIs`, and `ErrorContains` on a message)
+aborts whenever the sentinel or message does not match — INCLUDING when the error is non-nil and
+merely different — so it hides every follower in exactly the case a reader most wants explained.
+Where that follower is an independent non-clause property (a negative `NotContains`, a leak
+check, a state or count check, a distinct second phase) the site is reordered so the independent
+assertion runs first, or reverted to `assert` and listed here. Where the follower is another
+CLAUSE of the same error's message it stays converted: a wrong message fails both clauses
+together, so nothing is really hidden.
+
 Every row is a site where the checker is mechanically right and substantively wrong. The
 recurring shape is `require-error` on an assertion whose FOLLOWING assertion pins an
 independent property: `require` aborts, so converting would hide a real regression behind an
@@ -20,10 +29,11 @@ test, not inferred from the diff.
 
 | site | checker | why it stays `assert` | directive FINAL inserts |
 | --- | --- | --- | --- |
-| `config/config_test.go:1742` | require-error | `err` is REASSIGNED below and re-asserted for the derived-map sub-case; a require here skips that second phase entirely. | `//nolint:testifylint // a second sub-case reassigns and re-asserts err` |
+| `config/config_test.go:1743` | require-error | `err` is REASSIGNED below and re-asserted for the derived-map sub-case; a require here skips that second phase entirely. | `//nolint:testifylint // a second sub-case reassigns and re-asserts err` |
 | `config/converters_test.go:155` | float-compare | `toFloat64`'s table is ParseFloat round-trips (`"123.45"` -> `123.45`), where the Go literal and `ParseFloat` produce identical float64 bits. Exact equality IS the converter's contract; a tolerance would let a lossy conversion pass. | `//nolint:testifylint // exact equality is the converter's contract` |
+| `config/injection_test.go:110` | require-error | A second phase below sets the env var, reloads the config and pins the default-value behaviour; a require here aborts on any message drift and that phase never runs. | `//nolint:testifylint // a reload-and-defaults phase follows` |
 | `config/converters_test.go:23` | require-error | `floatToInt64(NaN)` rejection, followed by the `Inf` rejection through a different branch of the converter — a require hides the Inf case whenever NaN regresses. | `//nolint:testifylint // the Inf-rejection case follows through a different branch` |
-| `config/injection_test.go:168` | float-compare | Env-var round-trip of `1024.5`, exactly representable in float64. The test pins that the value arrives intact, not that it arrives close. | `//nolint:testifylint // exact equality is the injection contract` |
+| `config/injection_test.go:170` | float-compare | Env-var round-trip of `1024.5`, exactly representable in float64. The test pins that the value arrives intact, not that it arrives close. | `//nolint:testifylint // exact equality is the injection contract` |
 | `config/tenant_store_test.go:231` | require-error | Followed by removing a non-existent tenant and asserting the store did not mutate — a distinct second phase, independent of the lookup error. | `//nolint:testifylint // an independent no-mutation property follows` |
 | `config/tenant_store_test.go:76` | require-error | Followed by an Error assertion on `BrokerURL`, a different resolver path through the same store. | `//nolint:testifylint // a different resolver path is asserted next` |
 

@@ -351,7 +351,11 @@ func TestValidateKeyStorePKCS12PasswordEnvMustBeAName(t *testing.T) {
 		},
 	}
 	err := checkKeyStore(cfg)
+	require.Error(t, err)
+	// The leak check runs FIRST: a require on either message clause aborts whenever the
+	// wording drifts, and the property that the password literal never reaches the error
+	// string is the one this test exists to pin (ADR-095).
+	assert.NotContains(t, err.Error(), literal)
 	require.ErrorContains(t, err, "not an environment variable name")
 	require.ErrorContains(t, err, "keystore.keys.vts.pkcs12.password.env")
-	assert.NotContains(t, err.Error(), literal)
 }
