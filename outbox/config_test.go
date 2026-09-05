@@ -62,7 +62,7 @@ func TestValidateConfigNegativePublishTimeout(t *testing.T) {
 		PublishTimeout: -1 * time.Second,
 	}
 	err := validateConfig(cfg)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "publishtimeout")
 }
 
@@ -94,7 +94,7 @@ func TestValidateConfigNegativePollInterval(t *testing.T) {
 		BatchSize:    100,
 	}
 	err := validateConfig(cfg)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pollinterval")
 }
 
@@ -104,7 +104,7 @@ func TestValidateConfigZeroBatchSize(t *testing.T) {
 		BatchSize:    0,
 	}
 	err := validateConfig(cfg)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "batchsize")
 }
 
@@ -115,7 +115,7 @@ func TestValidateConfigNegativeMaxRetries(t *testing.T) {
 		MaxRetries:   -1,
 	}
 	err := validateConfig(cfg)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "maxretries")
 }
 
@@ -126,7 +126,7 @@ func TestValidateConfigNegativeRetentionPeriod(t *testing.T) {
 		RetentionPeriod: -1 * time.Hour,
 	}
 	err := validateConfig(cfg)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "retentionperiod")
 }
 
@@ -161,7 +161,7 @@ func TestValidateConfigTenancy(t *testing.T) {
 			}
 			err := validateConfig(cfg)
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.Contains(t, err.Error(), "tenancy")
 			} else {
 				assert.NoError(t, err)

@@ -178,7 +178,7 @@ func TestDualModeLogProcessorCreation(t *testing.T) {
 	assert.NotNil(t, dualProc)
 	assert.NotNil(t, dualProc.actionProcessor)
 	assert.NotNil(t, dualProc.traceProcessor)
-	assert.Equal(t, 0.5, dualProc.samplingRate)
+	assert.InDelta(t, 0.5, dualProc.samplingRate, 1e-9)
 }
 
 func TestDualModeLogProcessorRoutesActionLogs(t *testing.T) {

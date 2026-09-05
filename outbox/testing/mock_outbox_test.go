@@ -55,7 +55,7 @@ func TestMockOutboxPublishWithError(t *testing.T) {
 
 	_, err := mock.Publish(context.Background(), nil, event)
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outbox unavailable")
 	assert.Empty(t, mock.Events())
 }

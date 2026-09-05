@@ -294,10 +294,10 @@ func TestModuleInitRejectsAnOversizedDefaultExchange(t *testing.T) {
 
 	err := m.Init(deps)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, messaging.ErrInvalidPublishDestination)
 	assert.Contains(t, err.Error(), "outbox.defaultexchange")
 	assert.Contains(t, err.Error(), "256 bytes")
 	assert.NotContains(t, err.Error(), oversizedShortStr, "the error names the key and the length, never the value")
+	require.ErrorIs(t, err, messaging.ErrInvalidPublishDestination)
 }
 
 // TestModuleInitAllowsAMaxLengthDefaultExchange pins the boundary: 255 bytes is what
@@ -1138,8 +1138,8 @@ func TestLazyPublisherPassesConfiguredTargets(t *testing.T) {
 
 			if tt.wantErr != nil {
 				require.Error(t, err)
-				assert.ErrorIs(t, err, tt.wantErr)
 				assert.Empty(t, tx.ExecLog(), "a refused event never reaches the store")
+				assert.ErrorIs(t, err, tt.wantErr)
 				return
 			}
 			require.NoError(t, err)

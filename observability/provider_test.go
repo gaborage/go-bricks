@@ -138,7 +138,7 @@ func TestNewProviderInvalidConfig(t *testing.T) {
 	}
 
 	provider, err := NewProvider(cfg)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, provider)
 	assert.ErrorIs(t, err, ErrMissingServiceName)
 }
@@ -199,7 +199,7 @@ func TestNewProviderTracingEnabled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	err = provider.ForceFlush(ctx)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Should be able to shutdown
 	ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
@@ -399,7 +399,7 @@ func TestNewProviderUnsupportedProtocol(t *testing.T) {
 	}
 
 	provider, err := NewProvider(cfg)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, provider)
 	assert.ErrorIs(t, err, ErrInvalidProtocol)
 }
@@ -473,7 +473,7 @@ func TestProviderShutdownTimeout(t *testing.T) {
 
 	// Shutdown should return error due to timeout
 	err := provider.Shutdown(ctx)
-	assert.Error(t, err, "expected error from shutdown timeout")
+	require.Error(t, err, "expected error from shutdown timeout")
 	assert.Contains(t, err.Error(), "failed to shutdown trace provider")
 
 	// Cleanup: unblock the exporter
@@ -521,7 +521,7 @@ func TestProviderMultipleShutdowns(t *testing.T) {
 
 	// First shutdown
 	err = provider.Shutdown(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Second shutdown should not panic (errors are acceptable for already-shutdown providers)
 	_ = provider.Shutdown(context.Background()) // Intentionally ignore error from second shutdown
@@ -1016,11 +1016,11 @@ func TestNewProviderCleansUpOnMetricsInitFailure(t *testing.T) {
 	}
 
 	provider, err := NewProvider(cfg)
-	assert.Error(t, err, "expected metrics init hook failure")
+	require.Error(t, err, "expected metrics init hook failure")
 	assert.Nil(t, provider, "provider should be nil on failure")
-	assert.ErrorIs(t, err, metricsInitErr)
 	require.NotNil(t, recordingTraceExporter, "trace exporter should be created before failure")
 	assert.True(t, recordingTraceExporter.ShutdownCalled(), "trace exporter should be shutdown via cleanup")
+	require.ErrorIs(t, err, metricsInitErr)
 
 	// The test verifies that:
 	// 1. NewProvider returns an error (metrics init failed)
@@ -1081,13 +1081,13 @@ func TestNewProviderCleansUpOnLogsInitFailure(t *testing.T) {
 	}
 
 	provider, err := NewProvider(cfg)
-	assert.Error(t, err, "expected logs init hook failure")
+	require.Error(t, err, "expected logs init hook failure")
 	assert.Nil(t, provider, "provider should be nil on failure")
-	assert.ErrorIs(t, err, logsInitErr)
 	require.NotNil(t, recordingTraceExporter, "trace exporter should be created before failure")
 	require.NotNil(t, metricExporterRecorder, "metric exporter should be created before failure")
 	assert.True(t, recordingTraceExporter.ShutdownCalled(), "trace exporter should be shutdown via cleanup")
 	assert.True(t, metricExporterRecorder.ShutdownCalled(), "metric exporter should be shutdown via cleanup")
+	require.ErrorIs(t, err, logsInitErr)
 
 	// The test verifies that:
 	// 1. NewProvider returns an error (logs init failed)
@@ -1141,8 +1141,8 @@ func TestNewProviderNoCleanupOnSuccess(t *testing.T) {
 
 	// Proper shutdown (not cleanup)
 	err = provider.Shutdown(context.Background())
-	assert.NoError(t, err)
 	assert.True(t, recordingTraceExporter.ShutdownCalled(), "provider shutdown should trigger exporter shutdown")
+	assert.NoError(t, err)
 }
 
 // exportStartedSpanExporter announces the first ExportSpans call. The OTLP

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
@@ -45,13 +46,13 @@ func TestNoopProviderMultipleOperations(t *testing.T) {
 
 	// Multiple calls should not error
 	err := provider.ForceFlush(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	err = provider.Shutdown(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	err = provider.Shutdown(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// TracerProvider should still work after shutdown
 	tp := provider.TracerProvider()

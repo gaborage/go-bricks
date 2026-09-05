@@ -2,7 +2,6 @@ package outbox
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -66,5 +65,5 @@ func TestPublisherPublishRefusesSealTaggedStructPayload(t *testing.T) {
 
 // TestErrSealedPayloadNeedsBytesIsDistinct: the new sentinel is its own identity.
 func TestErrSealedPayloadNeedsBytesIsDistinct(t *testing.T) {
-	assert.False(t, errors.Is(ErrSealedPayloadNeedsBytes, ErrConflictingTargets))
+	assert.NotErrorIs(t, ErrSealedPayloadNeedsBytes, ErrConflictingTargets)
 }

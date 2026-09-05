@@ -201,8 +201,8 @@ func TestProcessorAttributeExporterExport(t *testing.T) {
 
 		err := enricher.Export(context.Background(), []sdklog.Record{newTestRecord()})
 
-		assert.ErrorIs(t, err, wantErr)
 		assert.Len(t, wrapped.batches, 1)
+		assert.ErrorIs(t, err, wantErr)
 	})
 }
 
@@ -215,17 +215,17 @@ func TestProcessorAttributeExporterShutdown(t *testing.T) {
 		first := enricher.Shutdown(context.Background())
 		second := enricher.Shutdown(context.Background())
 
+		assert.Equal(t, 1, wrapped.shutdownCount)
 		assert.ErrorIs(t, first, wantErr)
 		assert.ErrorIs(t, second, wantErr)
-		assert.Equal(t, 1, wrapped.shutdownCount)
 	})
 
 	t.Run("memoizes_nil_result", func(t *testing.T) {
 		wrapped := &fakeLogExporter{}
 		enricher := newTraceEnricher(wrapped)
 
-		assert.NoError(t, enricher.Shutdown(context.Background()))
-		assert.NoError(t, enricher.Shutdown(context.Background()))
+		require.NoError(t, enricher.Shutdown(context.Background()))
+		require.NoError(t, enricher.Shutdown(context.Background()))
 		assert.Equal(t, 1, wrapped.shutdownCount)
 	})
 }
@@ -235,7 +235,7 @@ func TestProcessorAttributeExporterForceFlush(t *testing.T) {
 		wrapped := &fakeLogExporter{}
 		enricher := newTraceEnricher(wrapped)
 
-		assert.NoError(t, enricher.ForceFlush(context.Background()))
+		require.NoError(t, enricher.ForceFlush(context.Background()))
 		assert.Equal(t, 1, wrapped.flushCount)
 	})
 
@@ -244,8 +244,9 @@ func TestProcessorAttributeExporterForceFlush(t *testing.T) {
 		wrapped := &fakeLogExporter{flushErr: wantErr}
 		enricher := newTraceEnricher(wrapped)
 
-		assert.ErrorIs(t, enricher.ForceFlush(context.Background()), wantErr)
+		err := enricher.ForceFlush(context.Background())
 		assert.Equal(t, 1, wrapped.flushCount)
+		require.ErrorIs(t, err, wantErr)
 	})
 }
 

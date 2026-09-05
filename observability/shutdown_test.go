@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/metric"
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
@@ -51,8 +52,8 @@ func TestShutdownSuccess(t *testing.T) {
 	mock := &mockProvider{}
 
 	err := Shutdown(mock, 1*time.Second)
-	assert.NoError(t, err)
 	assert.True(t, mock.shutdownCalled)
+	assert.NoError(t, err)
 }
 
 func TestShutdownNilProvider(t *testing.T) {
@@ -64,25 +65,25 @@ func TestShutdownError(t *testing.T) {
 	mock := &mockProvider{shutdownErr: expectedErr}
 
 	err := Shutdown(mock, 1*time.Second)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "observability shutdown failed")
+	require.Error(t, err)
 	assert.True(t, mock.shutdownCalled)
+	assert.Contains(t, err.Error(), "observability shutdown failed")
 }
 
 func TestShutdownDefaultTimeout(t *testing.T) {
 	mock := &mockProvider{}
 
 	err := Shutdown(mock, 0) // Should use DefaultShutdownTimeout
-	assert.NoError(t, err)
 	assert.True(t, mock.shutdownCalled)
+	assert.NoError(t, err)
 }
 
 func TestShutdownNegativeTimeout(t *testing.T) {
 	mock := &mockProvider{}
 
 	err := Shutdown(mock, -1*time.Second) // Should use DefaultShutdownTimeout
-	assert.NoError(t, err)
 	assert.True(t, mock.shutdownCalled)
+	assert.NoError(t, err)
 }
 
 func TestMustShutdownSuccess(t *testing.T) {
@@ -131,7 +132,7 @@ func TestForceFlushBothProvidersFail(t *testing.T) {
 	}
 
 	provider, err := NewProvider(cfg)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Create a context that expires immediately to force errors
 	ctx, cancel := context.WithCancel(context.Background())
@@ -139,7 +140,7 @@ func TestForceFlushBothProvidersFail(t *testing.T) {
 
 	// ForceFlush should return an error aggregating both providers' errors
 	err = provider.ForceFlush(ctx)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "flush errors")
 
 	// Cleanup

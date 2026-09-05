@@ -572,7 +572,7 @@ func TestInitMeterProviderWithDeltaTemporality(t *testing.T) {
 	}
 
 	err := p.initMeterProvider(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, p.meterProvider)
 
 	// Verify meter provider can create meters
@@ -612,7 +612,7 @@ func TestInitMeterProviderWithExponentialHistogram(t *testing.T) {
 	}
 
 	err := p.initMeterProvider(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, p.meterProvider)
 
 	// Verify meter provider can create meters
@@ -708,10 +708,10 @@ func TestCreateOTLPHTTPMetricExporterWithCompression(t *testing.T) {
 			exporter, err := p.createOTLPHTTPMetricExporter(context.Background(), useInsecure, tt.config.Headers)
 
 			if tt.wantErr {
-				assert.Error(t, err)
 				assert.Nil(t, exporter)
+				assert.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				require.NotNil(t, exporter)
 
 				// Cleanup
@@ -802,10 +802,10 @@ func TestCreateOTLPGRPCMetricExporterWithCompression(t *testing.T) {
 			exporter, err := p.createOTLPGRPCMetricExporter(context.Background(), useInsecure, tt.config.Headers)
 
 			if tt.wantErr {
-				assert.Error(t, err)
 				assert.Nil(t, exporter)
+				assert.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				require.NotNil(t, exporter)
 
 				// Cleanup
