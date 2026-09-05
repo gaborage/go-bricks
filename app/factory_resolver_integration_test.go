@@ -69,8 +69,8 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 
 		expiredValue, err := c.Get(ctx, "short-ttl")
-		require.ErrorIs(t, err, cachepkg.ErrNotFound, "expired key should return ErrNotFound")
 		assert.Empty(t, expiredValue)
+		require.ErrorIs(t, err, cachepkg.ErrNotFound, "expired key should return ErrNotFound")
 	})
 
 	t.Run("single tenant - cache disabled", func(t *testing.T) {
@@ -483,7 +483,11 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 
 		// Tenant A's key should be gone
 		_, err = cacheA.Get(ctx, sharedKey)
-		require.ErrorIs(t, err, cachepkg.ErrNotFound, "Tenant A's key should be deleted")
+		// assert, not require: the tenant-B isolation check below is the property this
+		// test exists to pin, and it runs on a different key through a different client.
+		// A require here aborts on any non-nil error that is not ErrNotFound and the
+		// isolation regression goes unreported (#1092 exceptions file).
+		assert.ErrorIs(t, err, cachepkg.ErrNotFound, "Tenant A's key should be deleted")
 
 		// Tenant B's key should still exist (isolation verified)
 		retrievedB, err = cacheB.Get(ctx, sharedKey)

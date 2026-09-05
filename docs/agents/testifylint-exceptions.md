@@ -39,6 +39,7 @@ test, not inferred from the diff.
 | `app/readiness_test.go:308` | require-error | Followed by the #860 regression pin, a timeout bound — which IS the point of the test. | `//nolint:testifylint // probe-timeout bound is the regression this test pins` |
 | `app/readiness_test.go:318` | require-error | Followed by `Contains(Details, "active_caches")` — counters must render on the not-configured path regardless of the error. | `//nolint:testifylint // details-rendering assertion follows` |
 | `app/readiness_test.go:360` | require-error | Followed by `False(got.Critical)` and `Contains(Details, "stored_offsets")`. | `//nolint:testifylint // criticality and details assertions follow` |
+| `app/factory_resolver_integration_test.go:490` | require-error | The tenant-B isolation check below runs on a different key through a different client and is the property this test exists to pin; a require aborts on any non-nil error that is not `ErrNotFound` and the isolation regression goes unreported. | `//nolint:testifylint // the tenant-isolation check below is a separate phase` |
 | `app/slot_test.go:531` | require-error | `fatal` and `advisory` are two distinct return values; a require on `fatal` erases the whole advisory arm the test is named for. | `//nolint:testifylint // the advisory return value is asserted separately below` |
 
 Harvest note for the FINAL author: P5, P6 and P9 documented their false positives in their PR

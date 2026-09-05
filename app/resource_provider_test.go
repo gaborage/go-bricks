@@ -338,9 +338,9 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 		// app.ErrNoTenantInContext IS multitenant.ErrNoTenant (app.go:50), so one
 		// ErrorIs covers both spellings; asserting each name separately tested the
 		// alias twice rather than testing two properties.
+		assert.Nil(t, client)
 		require.ErrorIs(t, err, ErrNoTenantInContext,
 			"the app sentinel is the multitenant one, so errors.Is matches through either name")
-		assert.Nil(t, client)
 	})
 
 	t.Run("GetDB with nil database manager", func(t *testing.T) {
@@ -360,8 +360,8 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		db, err := provider.DB(context.Background())
 
-		require.ErrorIs(t, err, ErrNoTenantInContext)
 		assert.Nil(t, db)
+		require.ErrorIs(t, err, ErrNoTenantInContext)
 	})
 
 	t.Run("GetDB with empty tenant in context", func(t *testing.T) {
@@ -371,8 +371,8 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		db, err := provider.DB(ctx)
 
-		require.ErrorIs(t, err, ErrNoTenantInContext)
 		assert.Nil(t, db)
+		require.ErrorIs(t, err, ErrNoTenantInContext)
 	})
 
 	// Note: Database manager error testing with tenant would require complex tenant configuration
@@ -453,8 +453,8 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		client, err := provider.Messaging(context.Background())
 
-		require.ErrorIs(t, err, ErrNoTenantInContext)
 		assert.Nil(t, client)
+		require.ErrorIs(t, err, ErrNoTenantInContext)
 	})
 
 	t.Run("GetMessaging with empty tenant in context", func(t *testing.T) {
@@ -464,8 +464,8 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		client, err := provider.Messaging(ctx)
 
-		require.ErrorIs(t, err, ErrNoTenantInContext)
 		assert.Nil(t, client)
+		require.ErrorIs(t, err, ErrNoTenantInContext)
 	})
 
 	// Note: EnsureConsumers error testing is complex due to concrete Manager type
@@ -512,8 +512,8 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		c, err := provider.Cache(context.Background())
 
-		require.ErrorIs(t, err, ErrNoTenantInContext)
 		assert.Nil(t, c)
+		require.ErrorIs(t, err, ErrNoTenantInContext)
 	})
 
 	t.Run("GetCache with empty tenant in context", func(t *testing.T) {
@@ -523,8 +523,8 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		c, err := provider.Cache(ctx)
 
-		require.ErrorIs(t, err, ErrNoTenantInContext)
 		assert.Nil(t, c)
+		require.ErrorIs(t, err, ErrNoTenantInContext)
 	})
 }
 
