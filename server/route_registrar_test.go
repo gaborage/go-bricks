@@ -3,15 +3,19 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/logger"
 )
 
 const (
@@ -293,19 +297,108 @@ func BenchmarkMiddlewareAdapter(b *testing.B) {
 	})
 }
 
+// guardLogEntry is the record guardLogEvent.Msg appends: testLogEntry (server_test.go)
+// minus its values map.
+type guardLogEntry struct {
+	level  string
+	msg    string
+	fields []string
+}
+
+// guardLogger is the allocation guard's own logger double: testLogger's per-request
+// allocation profile — a fresh event struct per level call, a field-name append per field,
+// and Msg's two slice appends — with no field VALUES recorded, since that map serves the
+// masking assertions in server_test.go (#682), not this measurement. The rest of the
+// profile is load-bearing; a double that also drops the Msg bookkeeping measures 54.
+// ADR-026's amendment decomposes the number.
+type guardLogger struct {
+	mu      sync.Mutex
+	entries []string
+	logs    []guardLogEntry
+}
+
+type guardLogEvent struct {
+	logger *guardLogger
+	level  string
+	fields []string
+}
+
+func (l *guardLogger) Info() logger.LogEvent  { return &guardLogEvent{logger: l, level: "info"} }
+func (l *guardLogger) Error() logger.LogEvent { return &guardLogEvent{logger: l, level: "error"} }
+func (l *guardLogger) Debug() logger.LogEvent { return &guardLogEvent{logger: l, level: "debug"} }
+func (l *guardLogger) Warn() logger.LogEvent  { return &guardLogEvent{logger: l, level: "warn"} }
+func (l *guardLogger) Fatal() logger.LogEvent { return &guardLogEvent{logger: l, level: "fatal"} }
+
+func (l *guardLogger) WithContext(any) logger.Logger { return l }
+
+func (l *guardLogger) WithFields(map[string]any) logger.Logger { return l }
+
+// entryCount reports how many entries the double recorded, under the lock.
+func (l *guardLogger) entryCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.entries)
+}
+
+func (e *guardLogEvent) Msg(msg string) {
+	e.logger.mu.Lock()
+	defer e.logger.mu.Unlock()
+	e.logger.entries = append(e.logger.entries, fmt.Sprintf("%s:%s", e.level, msg))
+	e.logger.logs = append(e.logger.logs, guardLogEntry{level: e.level, msg: msg, fields: e.fields})
+}
+
+func (e *guardLogEvent) Msgf(format string, args ...any) { e.Msg(fmt.Sprintf(format, args...)) }
+
+// Err records the field name only. testLogEvent keeps the error VALUE for the debug-detail
+// assertions (#1182); those live in server_test.go and are not measured here.
+func (e *guardLogEvent) Err(err error) logger.LogEvent {
+	if err == nil {
+		// Mirrors testLogEvent.Err: zerolog emits nothing for a nil error, so neither
+		// double records a field the real sink never writes.
+		return e
+	}
+	return e.field("error")
+}
+
+// field records a field NAME, the whole of what this double keeps: every typed setter
+// funnels here so the append that costs the allocation lives in one place.
+func (e *guardLogEvent) field(key string) logger.LogEvent {
+	e.fields = append(e.fields, key)
+	return e
+}
+
+func (e *guardLogEvent) Str(key, _ string) logger.LogEvent { return e.field(key) }
+
+func (e *guardLogEvent) Int(key string, _ int) logger.LogEvent { return e.field(key) }
+
+func (e *guardLogEvent) Int64(key string, _ int64) logger.LogEvent { return e.field(key) }
+
+func (e *guardLogEvent) Uint64(key string, _ uint64) logger.LogEvent { return e.field(key) }
+
+func (e *guardLogEvent) Dur(key string, _ time.Duration) logger.LogEvent { return e.field(key) }
+
+func (e *guardLogEvent) Interface(key string, _ any) logger.LogEvent { return e.field(key) }
+
+func (e *guardLogEvent) Bytes(key string, _ []byte) logger.LogEvent { return e.field(key) }
+
+func (e *guardLogEvent) Bool(key string, _ bool) logger.LogEvent { return e.field(key) }
+
+func (e *guardLogEvent) Enabled() bool { return true }
+
 // Tripwire guard (CONTEXT.md § Testing): re-pin the baseline on a toolchain shift, never
-// widen the margin, which must stay below the ~+10 flat-adapter signal. Locks the
+// widen the margin, which must stay below the ~+12 flat-adapter signal. Locks the
 // allocation count of the FULL default middleware chain (registered echo-native via e.Use
 // inside SetupMiddlewares); it fails if a future change routes the default chain through
 // adaptMiddleware (the flat adapter), which would add one baton allocation per middleware
-// layer (~10 middlewares ⇒ a clearly detectable jump) — the ADR-026 invariant. Measured
-// baseline: 62 allocs/op on go1.27.0 (59 on go1.26.6; the +3 was a uniform toolchain
-// shift, #1177); the +7 margin keeps the ceiling below the ~72 a full flat-adapter
-// conversion would produce from 62. ADR-026's amendment attributes the growth from the
-// original 53 (#1179): five of it is this test's own logger double, which is why the
-// number is worth re-pinning to 57 once that double is values-free (#1439).
+// layer — this config registers 12 unconditional layers, so 57 + ~12 = ~69 clears the
+// ceiling of 64 — the ADR-026 invariant. Measured baseline: 57 allocs/op on go1.27.x, down
+// from 62 because the guard now measures guardLogger above instead of the recording double:
+// the five allocations that left were the #682 testLogEvent values map. About nine harness
+// allocations remain at 57 (the per-call event struct, fields-slice growth and Msg
+// bookkeeping), so this number is not all chain. ADR-026's amendment decomposes the growth
+// from the original 53.
 const (
-	defaultMiddlewareChainBaselineAllocs = 62
+	defaultMiddlewareChainBaselineAllocs = 57
 	defaultMiddlewareChainAllocsMargin   = 7
 	defaultMiddlewareChainMaxAllocs      = defaultMiddlewareChainBaselineAllocs + defaultMiddlewareChainAllocsMargin
 )
@@ -317,7 +410,8 @@ func TestDefaultMiddlewareChainAllocsStable(t *testing.T) {
 	if raceDetectorEnabled {
 		t.Skip("testing.AllocsPerRun is unreliable under -race; alloc baseline enforced in the non-race matrix")
 	}
-	srv := newTestServer("", "", "")
+	log := &guardLogger{}
+	srv := New(newTestConfig("", "", ""), log)
 	hr := NewHandlerRegistry(srv.cfg)
 	GET(hr, srv.ModuleGroup(), "/chain-bench", func(_ EmptyRequest, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: "ok"}, nil
@@ -331,6 +425,7 @@ func TestDefaultMiddlewareChainAllocsStable(t *testing.T) {
 		rec := httptest.NewRecorder()
 		srv.echo.ServeHTTP(rec, req)
 	})
+	require.Positive(t, log.entryCount(), "the measured request never reached the logger middleware, so the baseline would not cover the logging path")
 	t.Logf("default middleware chain allocs/op = %.1f (ceiling %d)", got, defaultMiddlewareChainMaxAllocs)
 	assert.LessOrEqual(t, got, float64(defaultMiddlewareChainMaxAllocs),
 		"default middleware chain allocs/op regressed — a flat-adapter on the default path would add one baton alloc per middleware (ADR-026)")

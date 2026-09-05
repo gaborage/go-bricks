@@ -73,7 +73,7 @@ test: ## Run unit tests only
 	go test -race $(PKGS)
 
 test-alloc: ## Enforce ADR-026 alloc-stability guards WITHOUT -race (the detector inflates testing.AllocsPerRun counts; see server/alloc_guard_*_test.go)
-	go test ./server/ -run 'AllocsStable' -count=1
+	go test ./server/ -run 'AllocsStable' -count=1 -v
 
 test-integration: docker-check ## Run integration tests (requires Docker)
 	@echo "Running integration tests with testcontainers..."

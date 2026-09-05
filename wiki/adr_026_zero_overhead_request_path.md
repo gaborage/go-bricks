@@ -6,9 +6,15 @@
 > **Amended (2026-09-05, #1179):** The allocation guard for the default
 > middleware chain lives in `server/route_registrar_test.go`. It was not added by
 > this ADR — #627 (`b0ef71d1`, three weeks later) introduced it with a measured
-> baseline of 53 allocs/op. `defaultMiddlewareChainBaselineAllocs` is 62 today and
-> the ceiling it asserts against is 69; this records where the nine between 53 and
-> 62 came from, six of which are post-toolchain. The decision below is unchanged.
+> baseline of 53 allocs/op. `defaultMiddlewareChainBaselineAllocs` is 57 today
+> (since #1439) and the ceiling it asserts against is 64; this records where the
+> nine between 53 and the pre-change 62 came from, six of which are
+> post-toolchain, and how the harness share of those nine then left the
+> measurement. The decision below is unchanged. The first three steps were measured
+> before that last one, when the guard still built its server through
+> `newTestServer` and so through the recording double; their numbers, and the
+> patch-out recipe in the second one, read against that construction and its
+> baseline of 62, not against today's head.
 >
 > - **Toolchain, 53 → 56** (#1177). Not this project's code: the anchor commit
 >   `b0ef71d1` reads 53 on go1.26.x and 56 on go1.27.1.
@@ -27,18 +33,27 @@
 >   skipped. The step measures +1 net. The two shadow lines cost 2 at today's
 >   head (removing both by overlay: 62 → 60), so the same commit gave one back
 >   elsewhere on this path; that half was not decomposed further.
+> - **#1439, 62 → 57 — the harness left the measurement.** The guard builds its
+>   server with `guardLogger`, a values-free double declared beside it in
+>   `server/route_registrar_test.go`: it keeps the recording double's per-request
+>   profile (a fresh event per level call, a field-name append per field, the same
+>   `Msg` bookkeeping) and drops only the values map, so the five allocations
+>   attributed above are no longer part of the number. `testLogger` is unchanged
+>   and still records values for the masking assertions. Baseline re-pinned to 57,
+>   margin unchanged at 7, ceiling 64.
 >
 > Net of the nine: three toolchain, five test-harness bookkeeping, one a
-> deliberate ingress cost. Giving the guard a values-free logger double and
-> re-pinning to 57 is tracked in #1439.
+> deliberate ingress cost — the five left the measurement in #1439 (above). About
+> nine harness allocations remain at 57, the double's own event struct, `fields`
+> growth and `Msg` bookkeeping, so the baseline is not all chain.
 >
-> To reproduce: `go test -count=1 -run TestDefaultMiddlewareChainAllocsStable -v
-> ./server/` and read the value the test logs — `make test-alloc` runs the guard
-> but only asserts the ceiling. Three runs per data point, taking the value all
-> three agree on, since `AllocsPerRun` averages. The 57 comes from deleting the
-> two lines in `testLogEvent.Str` that build and fill `e.values` and re-running.
-> Every number here was produced on go1.27.1; `go.mod` pins go 1.27.0 and the
-> guard comment records the baseline as measured on 1.27.0, a patch-level
+> To reproduce: `make test-alloc` and read the value the guard logs (the target
+> passes `-v`, so CI logs it too). Three runs per data point, taking the value all
+> three agree on, since `AllocsPerRun` averages. The 62 → 57 A/B is the guard's own
+> `guardLogger` against the recording double: restoring the old
+> `newTestServer("", "", "")` construction in the guard reads 62, `guardLogger`
+> reads 57. Every number here was produced on go1.27.1; `go.mod` pins go 1.27.0 and
+> the guard comment records the baseline as measured on go1.27.x, a patch-level
 > difference that does not move these counts.
 
 ## Context
