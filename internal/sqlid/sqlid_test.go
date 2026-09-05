@@ -6,15 +6,16 @@ import (
 	"testing"
 )
 
+// TestValidateTableName is the parity fixture for the move onto
+// database/identifier: the accept/reject verdicts were recorded by running the
+// hand-written regexp this validator used beforehand, and only over_cap_part
+// differs. Every row pins the exact error text, not just accept/reject,
+// because outbox and inbox wrap this error with their own prefix and their
+// tests match on it — so a reworded message is a break.
 func TestValidateTableName(t *testing.T) {
 	part128 := "a" + strings.Repeat("b", 127)
 	part129 := "a" + strings.Repeat("b", 128)
 
-	// Every row pins the exact error text, not just accept/reject: outbox and
-	// inbox wrap this error with their own prefix and their tests match on it,
-	// so a reworded message is a break. The set is the parity fixture recorded
-	// against the hand-written regexp this validator used before it composed
-	// on database/identifier; only over_cap_part differs (see below).
 	cases := []struct {
 		name    string
 		input   string
