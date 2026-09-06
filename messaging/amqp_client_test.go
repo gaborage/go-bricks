@@ -621,7 +621,7 @@ func TestPublishStaleConfirmFromOldChannelDoesNotRouteToNewPublisher(t *testing.
 	// New publisher registers against channel 2; its expected tag is 1
 	// (channel 2's broker session starts fresh).
 	confirmCh2 := make(chan amqp.Confirmation, 1)
-	c.publishSerial.Lock()
+	c.publishSerial.acquireUncond()
 	c.m.RLock()
 	channel2 := c.channel
 	gen2 := c.generation
@@ -632,7 +632,7 @@ func TestPublishStaleConfirmFromOldChannelDoesNotRouteToNewPublisher(t *testing.
 	}
 	key2 := confirmKey{generation: gen2, tag: tag2}
 	c.pendingPublishes.Store(key2, confirmCh2)
-	c.publishSerial.Unlock()
+	c.publishSerial.release()
 
 	// Inject a "late" confirm for tag 1 into the OLD generation's notify
 	// channel. The OLD dispatcher (pinned to gen1) reads it and looks up
