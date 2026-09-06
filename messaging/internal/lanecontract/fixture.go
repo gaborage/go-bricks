@@ -1,14 +1,12 @@
 package lanecontract
 
 import (
-	"context"
 	"fmt"
 	"slices"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -49,17 +47,16 @@ func SetupTelemetry(t *testing.T) (*tracetest.InMemoryExporter, *obtest.TestMete
 	delivery.ResetTracerForTesting()
 
 	t.Cleanup(func() {
-		// Restore and reset BEFORE asserting: require.NoError runs Goexit on
-		// failure, which would skip everything after it and leave a shut-down
-		// provider installed process-wide, so every later test in the binary
-		// would silently record nothing.
+		// Restore the previous providers and never shut down the ones installed
+		// above, per wiki/testing.md "OTel Providers in Tests": otel's default
+		// delegating provider latches onto the FIRST provider installed in the
+		// binary and never rebinds, so shutting one down would make every later
+		// otel.Tracer/otel.Meter caller record nothing, with no error.
 		otel.SetTracerProvider(prevTP)
 		otel.SetTextMapPropagator(prevProp)
 		otel.SetMeterProvider(prevMP)
 		tracking.ResetMeterForTesting()
 		delivery.ResetTracerForTesting()
-		require.NoError(t, ttp.Shutdown(context.Background()))
-		require.NoError(t, mp.Shutdown(context.Background()))
 	})
 
 	return ttp.Exporter, mp
