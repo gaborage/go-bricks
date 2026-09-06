@@ -7054,8 +7054,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   configured table name — a PostgreSQL inbox store now bounds it at 49 bytes.
   **The grep is a shortlist, not the population.** It reads LITERALS only, so an identifier that
   reaches a door as a variable — from config, schema metadata, a tenant record, or string
-  concatenation — is invisible to it. Any such source has to be inventoried by hand, because a
-  clean grep does NOT mean a clean deployment. Nothing in a build fails here either way.
+  concatenation — is invisible to it. It is also ASCII- and bare-name-shaped: the character
+  class after the opening quote is `[A-Za-z_]`, so a QUOTED identifier whose interior opens with
+  a digit, punctuation, whitespace or a multibyte character never matches, however long it is —
+  and those interiors are capped by this change too. `git grep -E` cannot count bytes, so there
+  is no pattern that closes this; quoted names have to be inventoried by hand alongside the
+  computed ones. Any such source has to be listed that way, because a clean grep does NOT mean a
+  clean deployment. Nothing in a build fails here either way.
 - scope: two clauses. (a) Every builder door validates each identifier SEGMENT against the
   vendor's byte cap — PostgreSQL 63, Oracle 128, unknown vendor 63 — supplied by the renderer's
   new `MaxBytes()` and judged by one funnel before the ADR-100 charset check, so an over-long
