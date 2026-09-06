@@ -125,6 +125,24 @@ func StartPostgreSQLContainerForTestMain(ctx context.Context, cfg *PostgreSQLCon
 	return cc, true, nil
 }
 
+// postgreSQLOptions builds the container customizers, wait strategy included.
+//
+// Composite wait strategy: log message (fast early signal) + port listening (network
+// verification) prevents a race where the log appears but PostgreSQL is not ready to
+// accept connections.
+func postgreSQLOptions(cfg *PostgreSQLContainerConfig) []testcontainers.ContainerCustomizer {
+	return []testcontainers.ContainerCustomizer{
+		postgres.WithDatabase(cfg.Database),
+		postgres.WithUsername(cfg.Username),
+		postgres.WithPassword(cfg.Password),
+		waitOptionWithin(cfg.StartupTimeout,
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2), // Postgres restarts after initial setup
+			wait.ForListeningPort(postgreSQLPort),
+		),
+	}
+}
+
 // startPostgreSQLContainerInternal does the actual testcontainer setup without
 // any *testing.T interaction. Both StartPostgreSQLContainer (which adds *T-bound
 // Skip/Logf) and StartPostgreSQLContainerForTestMain wrap it.
@@ -133,20 +151,9 @@ func startPostgreSQLContainerInternal(ctx context.Context, cfg *PostgreSQLContai
 		cfg = DefaultPostgreSQLConfig()
 	}
 
-	// Use composite wait strategy: log message (fast early signal) + port listening (network verification)
-	// This prevents race conditions where the log appears but PostgreSQL isn't ready to accept connections
 	pgContainer, err := postgres.Run(ctx,
 		fmt.Sprintf("postgres:%s", cfg.ImageTag),
-		postgres.WithDatabase(cfg.Database),
-		postgres.WithUsername(cfg.Username),
-		postgres.WithPassword(cfg.Password),
-		testcontainers.WithWaitStrategy(
-			wait.ForAll(
-				wait.ForLog("database system is ready to accept connections").
-					WithOccurrence(2), // Postgres restarts after initial setup
-				wait.ForListeningPort(postgreSQLPort),
-			).WithStartupTimeout(cfg.StartupTimeout),
-		),
+		postgreSQLOptions(cfg)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start PostgreSQL container: %w", err)

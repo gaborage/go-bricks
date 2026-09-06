@@ -1586,6 +1586,7 @@ func TestDerivedDefaultsRenderTheSameValuesAsTheOldLiteral(t *testing.T) {
 		"keystore.secretminlength":    32,
 		"scheduler.timeout.shutdown":  "30s",
 		"scheduler.timeout.slowjob":   "25s",
+		"server.bodylimit":            int64(10485760),
 	}
 
 	got, err := derivedDefaults()
@@ -1616,6 +1617,7 @@ func TestDerivedDefaultsDecodeToTypedFields(t *testing.T) {
 	assert.Equal(t, 32, *cfg.KeyStore.SecretMinLength)
 	assert.Equal(t, 30*time.Second, cfg.Scheduler.Timeout.Shutdown)
 	assert.Equal(t, 25*time.Second, cfg.Scheduler.Timeout.SlowJob)
+	assert.Equal(t, int64(10*1024*1024), cfg.Server.BodyLimit)
 }
 
 // TestDerivedDefaultKeysAreDisjointFromKoanfOnly enforces one mechanism PER KEY: a key
@@ -1627,6 +1629,36 @@ func TestDerivedDefaultKeysAreDisjointFromKoanfOnly(t *testing.T) {
 		_, collides := koanfOnly[key]
 		assert.False(t, collides, "%q is both derived and hand-written", key)
 	}
+}
+
+// TestKoanfOnlyDefaultsAreNotFilledByNormalize closes the other half of the one-mechanism
+// rule. TestDerivedDefaultKeysAreDisjointFromKoanfOnly catches a key written in BOTH maps;
+// this catches the same defect arriving from the other side — a key koanfOnlyDefaults
+// hand-writes that normalize also fills is two renderings of one default, free to drift,
+// with nothing naming the collision. Keys under derivationDeniedPrefixes are exempt: their
+// derivation is barred by design, so being normalize-filled and hand-written is legitimate
+// there and an unexempted sweep would red the next time one of them gains a fill.
+func TestKoanfOnlyDefaultsAreNotFilledByNormalize(t *testing.T) {
+	bare, err := flattenConfig(&Config{})
+	require.NoError(t, err)
+
+	checked := 0
+	// Both modes: a fill that only lands under multitenant (applyCacheManagerDefaults gives
+	// cache.manager.maxsize a per-mode value) would otherwise escape the sweep entirely.
+	for _, multitenant := range []bool{false, true} {
+		normalized := flattenNormalizedZero(t, multitenant)
+		for key := range koanfOnlyDefaults() {
+			if _, denied := deniedDerivation(key); denied {
+				continue
+			}
+			checked++
+			assert.Equal(t, bare[key], normalized[key],
+				"%q is hand-written in koanfOnlyDefaults yet normalize fills it (multitenant=%t): one mechanism "+
+					"per key, so either move it to derivedDefaultKeys or drop the fill", key, multitenant)
+		}
+	}
+	require.Positive(t, checked,
+		"the sweep asserted nothing — koanfOnlyDefaults is empty or every key is derivation-denied")
 }
 
 // TestDerivedDefaultKeysAreActuallyFilledByNormalize keeps the allowlist honest. Presence
