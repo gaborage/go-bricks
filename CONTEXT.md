@@ -276,6 +276,23 @@ its shape, never of naming fields.
 _Avoid_: pre-encoded payload (one cause, not the class), raw payload (collides
 with `RawMessage` and the raw-SQL doors), blob
 
+**Installed provider**:
+The tracer or meter provider a test or the application hands the OTel global
+setter, replacing whatever was there. Tests install one to capture spans or
+metrics and put the previous provider back when they finish; they never shut
+an installed provider down.
+_Avoid_: global provider, active provider, current provider, test provider (the
+double itself, not its installed role)
+
+**Delegate**:
+OTel's process-wide forwarder standing in for tracers and meters obtained
+before any provider was installed. It latches onto the first installed
+provider in the binary and never rebinds, so restoring a previous provider is
+safe while shutting any installed provider down can silence every caller that
+still goes through it.
+_Avoid_: global tracer, default provider, singleton, noop (the delegate is not
+the noop it starts as)
+
 ### Query building
 
 **Identifier argument**:
