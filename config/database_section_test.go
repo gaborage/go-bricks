@@ -283,9 +283,10 @@ func TestSectionForResourceKey(t *testing.T) {
 	}
 }
 
-// TestApplyDatabasePoolDefaultsForKeyAddressesResourceKey drives the EXPORTED runtime door, the
-// one DbManager and the migrate CLI call, so the key-to-section translation is pinned at the
-// surface a consumer actually sees rather than only at the internal seam.
+// TestApplyDatabasePoolDefaultsForKeyAddressesResourceKey drives the EXPORTED
+// runtime door, the one DbManager and the migrate CLI call, so the key-to-section
+// translation is pinned at the surface a consumer actually sees rather than only
+// at the internal seam.
 func TestApplyDatabasePoolDefaultsForKeyAddressesResourceKey(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -2724,9 +2725,9 @@ func TestApplyDatabasePoolDefaultsNilConfig(t *testing.T) {
 }
 
 // TestValidateNoDeliveredEmptyDatabaseViaLoad drives validateNoDeliveredEmptyDatabase
-// through the real Load() path (env + YAML), since the koanf presence semantics it
-// relies on cannot be exercised through a hand-built Config literal (see
-// TestValidateNoDeliveredEmptyDatabaseInertForLiteral for that guarantee instead).
+// through the real Load() path (env + YAML), since the presence recorded at the
+// merge seam cannot be produced by a hand-built Config literal (see
+// TestValidateNoDeliveredEmptyDatabaseAbsentForLiteral for that guarantee instead).
 func TestValidateNoDeliveredEmptyDatabaseViaLoad(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -2828,29 +2829,26 @@ func TestValidateNoDeliveredEmptyDatabaseViaLoad(t *testing.T) {
 	}
 }
 
-// TestValidateNoDeliveredEmptyDatabaseInertForLiteral pins the Exists nil-safety the
-// whole design leans on: a hand-built Config (no koanf instance) never trips the
-// validator, regardless of how empty its Database section is. The function is called
-// directly so the pin does not depend on which other step of Validate rejects the
-// zero Config first.
-func TestValidateNoDeliveredEmptyDatabaseInertForLiteral(t *testing.T) {
-	cfg := &Config{}
-	assert.NoError(t, validateNoDeliveredEmptyDatabase(cfg))
+// TestValidateNoDeliveredEmptyDatabasePassesForLiteral pins the literal path at the level
+// that now decides it: a hand-built Config has no source, so every identity key reads
+// absent (ADR-104 — pinned by TestPresenceAbsentForConfigLiteral) and the validator is
+// inert regardless of how empty its Database section is. The function is called directly so
+// the pin does not depend on which other step of Validate rejects the zero Config first.
+func TestValidateNoDeliveredEmptyDatabasePassesForLiteral(t *testing.T) {
+	assert.NoError(t, validateNoDeliveredEmptyDatabase(&Config{}))
 }
 
-// TestLoadDefaultsCarryNoDatabaseIdentityKeys pins the enabling invariant this whole
-// design rests on (config/config.go's loadDefaults registers no database.* keys): if a
-// default is ever added for one of these keys, every deployment would read as
-// "delivered" and this test fails.
+// TestLoadDefaultsCarryNoDatabaseIdentityKeys pins the ADR-047 invariant that outlived
+// preloadDeniedPrefixes (ADR-104): the loaded defaults register no database identity key.
+// Presence can no longer be faked by a default, but IsDatabaseConfigured reads the
+// DECODED section, so a default written under any of these keys would turn a
+// database-free deployment into an attempted connection.
 func TestLoadDefaultsCarryNoDatabaseIdentityKeys(t *testing.T) {
-	clearEnvironmentVariables()
-	defer clearEnvironmentVariables()
-	t.Chdir(t.TempDir())
-
-	cfg, err := Load()
+	cfg, err := loadConfigFixture(t, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
+	assert.False(t, IsDatabaseConfigured(&cfg.Database), "a bare Load must read as database absence")
 	for _, k := range databaseIdentityKeys {
 		assert.False(t, cfg.Exists("database."+k), "database.%s must not be a registered default", k)
 	}

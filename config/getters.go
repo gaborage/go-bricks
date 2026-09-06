@@ -70,13 +70,14 @@ func (c *Config) warnUnusable(key, kind string, err error) {
 
 // String retrieves a string value from the configuration or the provided default.
 func (c *Config) String(key string, defaultVal ...string) string {
-	if c == nil || c.k == nil || !c.k.Exists(key) {
+	k := c.koanfTree()
+	if k == nil || !k.Exists(key) {
 		if len(defaultVal) > 0 {
 			return defaultVal[0]
 		}
 		return ""
 	}
-	return c.k.String(key)
+	return k.String(key)
 }
 
 // getLenient is the shared body of the lenient typed getters: an absent key
@@ -129,11 +130,12 @@ func (c *Config) Bool(key string, defaultVal ...bool) bool {
 
 // RequiredString retrieves a required string value from the configuration.
 func (c *Config) RequiredString(key string) (string, error) {
-	if c == nil || c.k == nil || !c.k.Exists(key) {
+	k := c.koanfTree()
+	if k == nil || !k.Exists(key) {
 		return "", fmt.Errorf(errMsgRequiredKeyMissing, key)
 	}
 
-	val := strings.TrimSpace(c.k.String(key))
+	val := strings.TrimSpace(k.String(key))
 	if val == "" {
 		return "", fmt.Errorf("required configuration key '%s' is empty", key)
 	}
@@ -198,38 +200,42 @@ func (c *Config) RequiredBool(key string) (bool, error) {
 
 // Unmarshal unmarshals a configuration section into the provided struct.
 func (c *Config) Unmarshal(key string, out any) error {
-	if c == nil || c.k == nil {
+	k := c.koanfTree()
+	if k == nil {
 		return errors.New(errMsgConfigNotInitialized)
 	}
 	// UnmarshalWithConf with our decoder chain so bare numeric time.Duration fields are
 	// rejected here too; empty Tag keeps koanf's "koanf" TagName (field-name fallback).
 	// unmarshalDecoderConfig (no slice hook) preserves koanf's default string -> []string
 	// single-element wrap on this public seam.
-	return c.k.UnmarshalWithConf(key, out, koanf.UnmarshalConf{DecoderConfig: unmarshalDecoderConfig()})
+	return k.UnmarshalWithConf(key, out, koanf.UnmarshalConf{DecoderConfig: unmarshalDecoderConfig()})
 }
 
 // Exists checks if a configuration key exists.
 func (c *Config) Exists(key string) bool {
-	if c == nil || c.k == nil {
+	k := c.koanfTree()
+	if k == nil {
 		return false
 	}
-	return c.k.Exists(key)
+	return k.Exists(key)
 }
 
 // All returns all configuration as a flattened map.
 func (c *Config) All() map[string]any {
-	if c == nil || c.k == nil {
+	k := c.koanfTree()
+	if k == nil {
 		return nil
 	}
-	return c.k.All()
+	return k.All()
 }
 
 // Custom returns the values under the `custom` namespace.
 func (c *Config) Custom() map[string]any {
-	if c == nil || c.k == nil {
+	k := c.koanfTree()
+	if k == nil {
 		return nil
 	}
-	raw := c.k.Get("custom")
+	raw := k.Get("custom")
 	if m, ok := raw.(map[string]any); ok {
 		return m
 	}
@@ -238,21 +244,23 @@ func (c *Config) Custom() map[string]any {
 
 // rawValue retrieves a raw configuration value.
 func (c *Config) rawValue(key string) (any, bool) {
-	if c == nil || c.k == nil || !c.k.Exists(key) {
+	k := c.koanfTree()
+	if k == nil || !k.Exists(key) {
 		return nil, false
 	}
-	return c.k.Get(key), true
+	return k.Get(key), true
 }
 
 // rawRequiredValue retrieves a raw configuration value for required fields.
 func (c *Config) rawRequiredValue(key string) (any, error) {
-	if c == nil || c.k == nil {
+	k := c.koanfTree()
+	if k == nil {
 		return nil, errors.New(errMsgConfigNotInitialized)
 	}
-	if !c.k.Exists(key) {
+	if !k.Exists(key) {
 		return nil, fmt.Errorf(errMsgRequiredKeyMissing, key)
 	}
-	return c.k.Get(key), nil
+	return k.Get(key), nil
 }
 
 // optionalDefault returns the first override if provided, otherwise returns zero value.

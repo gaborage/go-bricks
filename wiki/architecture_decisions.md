@@ -1518,6 +1518,26 @@ the caller's context, so a queued publisher is released at its deadline with the
 surface moved. The reconnect path keeps an unconditional acquire, and the one publish already
 inside the write remains the documented residual.
 
+### [ADR-104: Key Presence Is Recorded Once, at the Merge Seam](adr_104_key_presence_recorded_at_merge_seam.md)
+
+**Date:** 2026-09-06 | **Status:** Accepted
+
+Whether a key was DELIVERED by the deployment's own layers — as opposed to filled by a
+framework default — was judged by four different substrates (the configdecode target kind,
+koanf `Exists`, a raw koanf `Get`, the decoded value), three of which went inert on a
+struct-literal `Config` through their own `cfg.k == nil` guards. koanf keeps no per-layer
+provenance, so `Exists` could not tell a preloaded default from a delivery and the framework
+paid for the distinction with `preloadDeniedPrefixes`, a deny-list that bent defaulting
+around one door's reading habit. Presence is now recorded once inside `config.Load`: each
+user-layer load carries a merge function that records the leaf keys which actually reached
+the tree, and the koanf instance and that set are one unexported source value. A literal
+`Config` has no source and therefore delivers nothing — a declared property replacing
+ADR-051's "blind spot 1". The ADR-051 identity door and the ADR-078 `debug.allowedips` door
+ask Presence; `InjectInto`, the lenient getters, `RequiredString` and the ADR-074/077
+empty-scalar hook deliberately do not, because "is there a resolvable value" must include
+defaults. `preloadDeniedPrefixes` is retired; `derivationDeniedPrefixes` stays. Non-breaking:
+no exported identifier or error string moves.
+
 ---
 
 ### [ADR-102: A Key-Absence Helper Checks the Returned Key, Not Only the Error](adr_102_key_not_found_helper_checks_the_value.md)
@@ -2229,7 +2249,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-103) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-104) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

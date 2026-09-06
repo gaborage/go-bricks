@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/knadh/koanf/providers/confmap"
-	"github.com/knadh/koanf/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -35,11 +34,10 @@ const (
 func setupTestConfig(t *testing.T, data map[string]any) *Config {
 	t.Helper()
 
-	k := koanf.New(".")
-	err := k.Load(confmap.Provider(data, "."), nil)
-	require.NoError(t, err)
+	src := newConfigSource()
+	require.NoError(t, src.loadRecording(confmap.Provider(data, koanfDelim), nil, nil))
 
-	return &Config{k: k}
+	return &Config{src: src}
 }
 
 // ========================================

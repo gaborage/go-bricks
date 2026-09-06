@@ -535,11 +535,12 @@ func TestLoadValidationFailure(t *testing.T) {
 }
 
 func TestLoadDefaultsInternalFunction(t *testing.T) {
-	// Create a new koanf instance for testing
-	k := koanf.New(".")
+	// Create a new source for testing
+	src := newConfigSource()
 
-	err := loadDefaults(k)
+	err := loadDefaults(src)
 	require.NoError(t, err)
+	k := src.k
 
 	// Verify non-database defaults are loaded
 	assert.Equal(t, appName, k.String("app.name"))
@@ -711,7 +712,7 @@ func TestLoadCustomConfiguration(t *testing.T) {
 		cfg, err := Load()
 		require.NoError(t, err)
 		require.NotNil(t, cfg)
-		require.NotNil(t, cfg.k, "Koanf instance should be set")
+		require.NotNil(t, cfg.src, "config source should be set")
 
 		// Test accessing custom configuration
 		assert.True(t, cfg.Bool("custom.feature.enabled"))
@@ -1556,10 +1557,11 @@ app:
 // same way Load does, so a test can inspect the resulting typed Config.
 func loadDefaultConfig(t *testing.T) (*Config, error) {
 	t.Helper()
-	k := koanf.New(".")
-	if err := loadDefaults(k); err != nil {
+	src := newConfigSource()
+	if err := loadDefaults(src); err != nil {
 		return nil, err
 	}
+	k := src.k
 	var cfg Config
 	if err := k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{
 		DecoderConfig: buildDecoderConfig(),
@@ -1699,9 +1701,9 @@ func TestDerivedDefaultsRejectAZeroValuedKey(t *testing.T) {
 }
 
 // TestDerivedDefaultsRejectAFailClosedKeySpace pins the ADR-051 / ADR-049 postures by
-// construction. Both read koanf ABSENCE, so a preloaded key silently answers a question the
-// operator never answered — for database identity that boots the misconfiguration ADR-051
-// exists to catch.
+// construction. Neither reads presence from the defaults any more (ADR-104 records it at the
+// merge seam), but a derived value would still decide in normalize what the operator never
+// answered — whether a database section exists at all, or what the debug allowlist holds.
 func TestDerivedDefaultsRejectAFailClosedKeySpace(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1739,49 +1741,32 @@ func TestDerivedDefaultsRejectAMissingKey(t *testing.T) {
 	assert.ErrorContains(t, err, "does not fill")
 }
 
-// TestLoadDefaultsCarriesNoPreloadedFailClosedKey runs the PRODUCTION predicate over the real
-// merged map. A hand-written literal under one of these prefixes would read as "configured"
-// to ADR-051's presence check and abort every database-free deployment, and the allowlist is
-// not the only door it can come through.
-func TestLoadDefaultsCarriesNoPreloadedFailClosedKey(t *testing.T) {
+// TestDebugAllowedIPsKeepsItsHandWrittenDefault pins the half of the old preload rule that
+// still says something: debug.allowedips carries a hand-written loopback literal and must
+// NOT be derived, which would hand its fail-closed posture to whatever normalize does or
+// does not fill (ADR-049). Presence no longer depends on any key staying out of the
+// defaults — ADR-104 records it at the merge seam.
+func TestDebugAllowedIPsKeepsItsHandWrittenDefault(t *testing.T) {
 	derived, err := derivedDefaults()
 	require.NoError(t, err)
 
 	merged, err := mergeDefaults(koanfOnlyDefaults(), derived)
-
-	// mergeDefaults itself refuses a denied key, so this is the assertion that matters; the
-	// loop below only names the offender when it fires.
 	require.NoError(t, err)
-	for key := range merged {
-		prefix, denied := matchesPrefix(key, preloadDeniedPrefixes)
-		assert.False(t, denied, "%q is under %q and must stay absent unless configured", key, prefix)
-	}
 
-	// debug.* literals are legitimate and must NOT be caught by this rule — they are the
-	// explicit map ADR-049 reads through the decoded struct.
 	assert.Contains(t, merged, "debug.allowedips")
+	assert.NotContains(t, derivedDefaultKeys, "debug.allowedips")
 }
 
-// TestMergeDefaultsEnforcesItsTwoRules pins the rules that hold at load time. Neither is
-// reachable through derivedDefaultKeys today — a colliding key would fail the zero-value gate
-// first, and no hand-written literal sits under a denied prefix — so they are exercised
-// directly rather than left as branches that only look protective.
-func TestMergeDefaultsEnforcesItsTwoRules(t *testing.T) {
+// TestMergeDefaultsRefusesACollision pins the rule that holds at load time. It is not
+// reachable through derivedDefaultKeys today — a colliding key would fail the zero-value
+// gate first — so it is exercised directly rather than left as a branch that only looks
+// protective.
+func TestMergeDefaultsRefusesACollision(t *testing.T) {
 	t.Run("collision_is_refused", func(t *testing.T) {
 		_, err := mergeDefaults(map[string]any{"app.name": "hand"}, map[string]any{"app.name": "derived"})
 
 		require.Error(t, err)
 		assert.ErrorContains(t, err, "both derived and hand-written")
-	})
-
-	t.Run("denied_prefix_from_either_map_is_refused", func(t *testing.T) {
-		_, err := mergeDefaults(map[string]any{"database.host": "db"}, nil)
-		require.Error(t, err)
-		assert.ErrorContains(t, err, "must stay absent") //nolint:testifylint // a second sub-case reassigns and re-asserts err
-
-		_, err = mergeDefaults(map[string]any{}, map[string]any{"multitenant.tenants.acme.database.host": "db"})
-		require.Error(t, err)
-		assert.ErrorContains(t, err, "must stay absent")
 	})
 
 	t.Run("clean_maps_merge", func(t *testing.T) {
@@ -1830,24 +1815,4 @@ func TestRenderDefaultRejectsANilPointer(t *testing.T) {
 
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "keystore.secretminlength")
-}
-
-// TestDefaultsPreloadNoDatabaseIdentityKey guards ADR-051 by construction rather than by
-// discipline: its delivered-empty check reads koanf key PRESENCE, so a preloaded identity key
-// would make an empty one look configured and boot the misconfiguration it exists to catch.
-// Full derivation would have done exactly that, which is why the allowlist is narrow.
-func TestDefaultsPreloadNoDatabaseIdentityKey(t *testing.T) {
-	k := koanf.New(".")
-	require.NoError(t, loadDefaults(k))
-
-	for _, key := range databaseIdentityKeys {
-		assert.False(t, k.Exists(fieldDatabase+"."+key), "database.%s must not be preloaded", key)
-	}
-	assert.False(t, k.Exists(fieldDatabases), "the named-database subtree must not be preloaded")
-	assert.False(t, k.Exists("multitenant.tenants"), "the tenant subtree carries the third ADR-051 section")
-	// debug.allowedips keeps its hand-written loopback default (that is today's koanf
-	// behavior); what must never happen is DERIVING it, which would hand its fail-closed
-	// posture to whatever normalize does or does not fill (ADR-049).
-	assert.NotContains(t, derivedDefaultKeys, "debug.allowedips")
-	assert.True(t, k.Exists("debug.allowedips"), "the hand-written loopback default stands")
 }

@@ -4,6 +4,16 @@
 - **Date**: 2026-08-21
 - **Related**: [ADR-049](adr_049_debug_endpoints_fail_closed.md) (the fail-closed gate this closes a hole in; its premises are amended in an addendum there) · [ADR-051](adr_051_delivered_empty_database_identity.md) (the presence-check shape this copies) · [ADR-074](adr_074_delivered_empty_numeric_config.md) / [ADR-077](adr_077_delivered_empty_bool_config.md) (the delivered-empty family, at the decode seam rather than this one)
 
+> **Amended (2026-09-06, [ADR-104](adr_104_key_presence_recorded_at_merge_seam.md)):**
+> the door asks Presence — the key set recorded at the merge seam when each user layer
+> merges — rather than reading the raw koanf value through `Get` to infer delivery. The
+> reasoning below that "`Exists` cannot tell the cases apart — the key carries a
+> default, so it is always present" is superseded: it is true of `Exists`, and it is
+> the reason Presence exists as a separate question. The raw-value table still governs
+> which deliveries count as producing no entries; the decoder-rule emptiness test and
+> the error text are unchanged. Inertness for hand-built configs is now a declared
+> property of the literal source, not a `cfg.k == nil` guard.
+
 ## Context
 
 `debug.allowedips` is the only list key in the framework whose default is a

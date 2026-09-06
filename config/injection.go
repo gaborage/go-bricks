@@ -23,7 +23,7 @@ const actionSetEnvOrYAML = "set %s env var or add '%s' to config.yaml"
 // Supported field types: string, int, int64, float64, bool, time.Duration, []string
 // ([]string accepts a comma-separated string from env/default tags or a native YAML sequence)
 func (c *Config) InjectInto(target any) error {
-	if c == nil || c.k == nil {
+	if c.koanfTree() == nil {
 		return &ConfigError{
 			Category: errCategoryInvalid,
 			Field:    "config",
@@ -105,8 +105,11 @@ func (c *Config) setFieldValue(field reflect.Value, configKey string, required b
 }
 
 func (c *Config) resolveFieldValue(configKey string, required bool, defaultValue string, hasDefault bool) (value any, shouldSet bool, err error) {
-	if c.k.Exists(configKey) {
-		return c.k.Get(configKey), true, nil
+	// InjectInto refuses a Config with no tree before it reaches here, so the tree is
+	// non-nil on every path into this function.
+	k := c.koanfTree()
+	if k.Exists(configKey) {
+		return k.Get(configKey), true, nil
 	}
 
 	if required {

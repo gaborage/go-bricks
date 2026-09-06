@@ -52,15 +52,20 @@ var configSections = map[string]bool{
 // 1. Environment variables (highest priority)
 // 2. YAML configuration files
 // 3. Default values (lowest priority)
+//
+// The three operator layers (both YAML files and the environment) load through the
+// source's recording merge, so presence — which keys the operator actually delivered —
+// is recorded at the merge seam itself; the defaults load silently (ADR-104).
 func Load() (*Config, error) {
-	k := koanf.New(".")
+	src := newConfigSource()
+	k := src.k
 
-	if err := loadDefaults(k); err != nil {
+	if err := loadDefaults(src); err != nil {
 		return nil, fmt.Errorf("failed to load defaults: %w", err)
 	}
 
 	// Load from YAML file (if exists) - try both .yaml and .yml extensions
-	if err := tryLoadYAMLFile(k, "config"); err != nil {
+	if err := tryLoadYAMLFile(src, "config"); err != nil {
 		return nil, err
 	}
 
@@ -71,7 +76,7 @@ func Load() (*Config, error) {
 	env := resolveEnvOverlaySuffix(k)
 	if env != "" {
 		envFile := fmt.Sprintf("config.%s", env)
-		if err := tryLoadYAMLFile(k, envFile); err != nil {
+		if err := tryLoadYAMLFile(src, envFile); err != nil {
 			return nil, err
 		}
 	}
@@ -95,7 +100,7 @@ func Load() (*Config, error) {
 	//
 	// Both preserve the InjectInto escape hatch: service-specific config:"..." keys arrive with
 	// a sub-path at fresh leaves, so they bypass guard 1 and merge normally under guard 2.
-	if err := k.Load(envprovider.Provider(".", envprovider.Opt{
+	if err := src.loadRecording(envprovider.Provider(".", envprovider.Opt{
 		TransformFunc: func(k, v string) (string, any) {
 			k = envVarToKey(k)
 			// Drop a bare top-level section name (no sub-key); see SECURITY (M4) above.
@@ -104,7 +109,7 @@ func Load() (*Config, error) {
 			}
 			return k, v
 		},
-	}), nil, koanf.WithMergeFunc(skipScalarOverMapMerge)); err != nil {
+	}), nil, skipScalarOverMapMerge); err != nil {
 		return nil, fmt.Errorf("failed to load environment variables: %w", err)
 	}
 
@@ -115,8 +120,8 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
-	// Store the Koanf instance for flexible access
-	cfg.k = k
+	// Attach the loaded tree and its presence record — one value, one point.
+	cfg.src = src
 
 	if err := Validate(&cfg); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
@@ -285,9 +290,11 @@ func (c *Config) IsCacheCritical() bool {
 // It tries .yaml first, then falls back to .yml if .yaml is not found.
 // Both extensions are optional - no error is returned if neither file exists.
 // However, syntax errors, permission errors, and other I/O errors are propagated.
-func tryLoadYAMLFile(k *koanf.Koanf, baseName string) error {
+// Whichever extension wins loads through the recording merge, so a key an operator wrote
+// in either file counts as delivered.
+func tryLoadYAMLFile(s *configSource, baseName string) error {
 	yamlFile := baseName + ".yaml"
-	if err := k.Load(file.Provider(yamlFile), yaml.Parser()); err != nil {
+	if err := s.loadRecording(file.Provider(yamlFile), yaml.Parser(), nil); err != nil {
 		// If file doesn't exist, try .yml fallback
 		if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("failed to load %s: %w", yamlFile, err)
@@ -295,7 +302,7 @@ func tryLoadYAMLFile(k *koanf.Koanf, baseName string) error {
 
 		// Try .yml extension as fallback
 		ymlFile := baseName + ".yml"
-		if err := k.Load(file.Provider(ymlFile), yaml.Parser()); err != nil {
+		if err := s.loadRecording(file.Provider(ymlFile), yaml.Parser(), nil); err != nil {
 			// File not found is OK - config files are optional
 			if !errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("failed to load %s: %w", ymlFile, err)
@@ -369,10 +376,8 @@ func stringToTrimmedSliceHookFunc(sep string) mapstructure.DecodeHookFunc {
 // app.name, server.port, server.timeout.*, log.level — stay hand-written in koanfOnlyDefaults,
 // because deriving them would silently turn a required key into a defaulted one.
 //
-// Full derivation is barred for two reasons beyond that. It would hand debug.allowedips to
-// whatever normalize fills, deciding the fail-closed posture ADR-049 depends on somewhere
-// other than the explicit map that states it today. And it would preload the database
-// identity keys, disarming the koanf-presence check ADR-051's delivered-empty rule reads.
+// Full derivation is barred beyond that: see derivationDeniedPrefixes for the key spaces
+// that must never be derived and why.
 //
 // A key joins this list only when normalize owns its fill AND its value is mode-invariant —
 // a default that differs between single- and multi-tenant (the manager pool sizes, where zero
@@ -399,8 +404,11 @@ var derivedDefaultKeys = []string{
 // says, because their meaning is built on what the explicit map states rather than on what
 // normalize fills:
 //
-//   - database identity keys — ADR-051's delivered-empty check reads koanf PRESENCE, so a
-//     preloaded key answers a question the operator never answered.
+//   - database identity keys (database., databases, multitenant.tenants) — a derived value
+//     would decide, in normalize, whether a section exists at all, and ADR-047 reads the
+//     decoded absence of one as the supported database-free posture. It no longer fakes
+//     ADR-051 delivery — ADR-104 records presence at the merge seam, so preloading cannot —
+//     but it would still answer a question the operator never answered.
 //   - posture tri-states (server.logroutes and the keepalive flag under database.) — nil
 //     means "the shipped default", and a derived value writes a concrete value that erases
 //     that state, and a false also silently flips the posture (ADR-048). cache.critical is
@@ -408,7 +416,13 @@ var derivedDefaultKeys = []string{
 //     value would hand that opt-in to normalize instead of to the operator.
 //   - debug. — its fail-closed check reads the DECODED struct rather than koanf, so deriving
 //     these would hand that posture to whatever normalize fills instead of to the explicit
-//     literals that state it today (which are legitimate and stay).
+//     literals that state it today (which are legitimate and stay). debug.allowedips is the
+//     key that makes it matter: ADR-049's fail-closed posture would be decided by normalize
+//     rather than by the explicit map that states it.
+//
+// The entries blanket whole sections — database. also covers the pool sizes, debug. the
+// non-posture keys — because an identity or posture key is not separable from its section by
+// prefix; the cost is that a few derivable keys are denied along with them.
 var derivationDeniedPrefixes = []string{
 	"database.",
 	"databases",
@@ -416,16 +430,6 @@ var derivationDeniedPrefixes = []string{
 	"multitenant.tenants",
 	"cache.critical",
 	"server.logroutes",
-}
-
-// preloadDeniedPrefixes are key spaces that must not appear in the loaded defaults AT ALL,
-// from either map. These are the ones whose semantics read koanf presence directly, so a
-// hand-written literal breaks them exactly as a derived value would: ADR-051 would read a
-// preloaded identity key as "configured" and abort every database-free deployment.
-var preloadDeniedPrefixes = []string{
-	"database.",
-	"databases",
-	"multitenant.tenants",
 }
 
 // derivedDefaults renders the allowlisted keys by normalizing a zero Config and picking them
@@ -513,7 +517,7 @@ func flattenConfig(cfg *Config) (map[string]any, error) {
 		return nil, fmt.Errorf("deriving koanf defaults: %w", err)
 	}
 
-	flat, _ := maps.Flatten(nested, nil, ".") // second return is the key-path index, unused here
+	flat, _ := maps.Flatten(nested, nil, koanfDelim) // second return is the key-path index, unused here
 	return flat, nil
 }
 
@@ -545,7 +549,10 @@ func renderDefault(key string, value any) (any, error) {
 	}
 }
 
-func loadDefaults(k *koanf.Koanf) error {
+// loadDefaults seeds the framework's own answers. It loads SILENTLY — presence is recorded
+// only for the operator's layers (ADR-104), so no default can read as delivered whatever it
+// writes into the tree.
+func loadDefaults(s *configSource) error {
 	defaults := koanfOnlyDefaults()
 
 	derived, err := derivedDefaults()
@@ -557,26 +564,18 @@ func loadDefaults(k *koanf.Koanf) error {
 		return err
 	}
 
-	return k.Load(confmap.Provider(merged, "."), nil)
+	return s.k.Load(confmap.Provider(merged, koanfDelim), nil)
 }
 
-// mergeDefaults joins the hand-written and derived maps under two rules that hold at load
-// time rather than in review: a key may not be written by both (merge order would silently
-// pick the winner), and no key may fall under a preload-denied prefix, whichever map it came
-// from — a hand-written identity literal breaks ADR-051's presence check exactly as a derived
-// one would.
+// mergeDefaults joins the hand-written and derived maps under the one rule that holds at
+// load time rather than in review: a key may not be written by both, because merge order
+// would silently pick the winner.
 func mergeDefaults(handWritten, derived map[string]any) (map[string]any, error) {
 	for key, value := range derived {
 		if _, collides := handWritten[key]; collides {
 			return nil, fmt.Errorf("loading defaults: %q is both derived and hand-written", key)
 		}
 		handWritten[key] = value
-	}
-
-	for key := range handWritten {
-		if prefix, denied := matchesPrefix(key, preloadDeniedPrefixes); denied {
-			return nil, fmt.Errorf("loading defaults: %q is under %q, which must stay absent unless configured", key, prefix)
-		}
 	}
 	return handWritten, nil
 }
