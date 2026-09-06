@@ -575,6 +575,10 @@ const (
 	// first-delegate tests, kept distinct from TestTracerName so a datapoint
 	// recorded here cannot be confused with one from another test.
 	delegateMeterName = "gobricks/1093"
+	// installedCounter is the delegate proof's own instrument, kept distinct from
+	// testCounter so this test and TestRestoredGlobalStillDeliversAfterCleanup
+	// never accumulate into the same counter on the shared first delegate.
+	installedCounter = "install.counter"
 	// firstInstallerHint is the diagnosis a future reorder needs. The positive
 	// half below only holds while this test is the FIRST otel.SetMeterProvider in
 	// the observability/testing binary: otel binds its delegating wrapper to the
@@ -780,13 +784,13 @@ func TestInstalledProvidersStillRecordAfterCleanup(t *testing.T) {
 			InstallTestMeterProvider(t)
 		})
 
-		before := counterSum(t, first, testCounter)
+		before := counterSum(t, first, installedCounter)
 
-		counter, err := otel.Meter(delegateMeterName).Int64Counter(testCounter)
+		counter, err := otel.Meter(delegateMeterName).Int64Counter(installedCounter)
 		require.NoError(t, err)
 		counter.Add(ctx, 1)
 
-		assert.Equal(t, before+1, counterSum(t, first, testCounter),
+		assert.Equal(t, before+1, counterSum(t, first, installedCounter),
 			"a counter created through the restored global recorded nothing into the first-installed provider; %s", firstInstallerHint)
 	})
 }
