@@ -1505,6 +1505,21 @@ ADR-091 pattern). Additive: `messaging.EventPublisher[T]` and
 byte frame. The streams lane's `Publisher.Publish(*PublishMessage)` is untouched. See
 [migrations.md](migrations.md) `[C63.1]`.
 
+### [ADR-102: A Key-Absence Helper Checks the Returned Key, Not Only the Error](adr_102_key_not_found_helper_checks_the_value.md)
+
+**Date:** 2026-09-06 | **Status:** Accepted | **Breaking:** `keystore/testing.AssertKeyNotFound` fails when a lookup hands back a key alongside its error, instead of reading error-ness alone
+
+The helper discarded both lookups' returned keys, so a consumer `app.KeyStore` that
+returns a cached key TOGETHER with an error — a refresh failure falling back to what it
+holds — passed the helper while handing the key back. Each lookup's returned key is now
+checked inside a nil guard and a non-nil key fails the test, with the stray key reported by
+dynamic TYPE (`%T`) only, never by value. The verbs follow ADR-101's
+positional rule — the public-key arm aborts, the private-key arm records. The exported
+signature is unchanged, and `app.KeyStore`'s interface doc now states that a lookup
+returning an error returns no key. See [migrations.md](migrations.md) `[C64.6]`.
+
+---
+
 ### [ADR-101: A Shipped Test Helper Aborts on the Failure That Invalidates the Rest](adr_101_test_helpers_abort_on_first_failure.md)
 
 **Date:** 2026-09-05 | **Status:** Accepted | **Breaking:** `keystore/testing.AssertKeyNotFound` aborts the caller's test when the public key is unexpectedly found, instead of recording the failure and judging the private key too
@@ -2199,7 +2214,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-101) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-102) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

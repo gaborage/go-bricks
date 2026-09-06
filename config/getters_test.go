@@ -129,26 +129,53 @@ func TestRequiredAccessors(t *testing.T) {
 // ========================================
 
 func TestNilConfigAccessors(t *testing.T) {
-	cfg := &Config{}
+	cases := []struct {
+		name  string
+		probe func(t *testing.T, cfg *Config)
+	}{
+		{name: "string_returns_fallback", probe: func(t *testing.T, cfg *Config) {
+			assert.Equal(t, "fallback", cfg.String("any", "fallback"))
+		}},
+		{name: "int_returns_zero", probe: func(t *testing.T, cfg *Config) {
+			assert.Equal(t, 0, cfg.Int("any"))
+		}},
+		{name: "int64_returns_zero", probe: func(t *testing.T, cfg *Config) {
+			assert.Equal(t, int64(0), cfg.Int64("any"))
+		}},
+		{name: "float64_returns_zero", probe: func(t *testing.T, cfg *Config) {
+			assert.Zero(t, cfg.Float64("any"))
+		}},
+		{name: "bool_returns_false", probe: func(t *testing.T, cfg *Config) {
+			assert.False(t, cfg.Bool("any"))
+		}},
+		{name: "required_int_errors", probe: func(t *testing.T, cfg *Config) {
+			_, err := cfg.RequiredInt("any")
+			require.Error(t, err)
+		}},
+		{name: "required_string_errors", probe: func(t *testing.T, cfg *Config) {
+			_, err := cfg.RequiredString("any")
+			require.Error(t, err)
+		}},
+		{name: "unmarshal_errors", probe: func(t *testing.T, cfg *Config) {
+			err := cfg.Unmarshal("custom", &struct{}{})
+			require.Error(t, err)
+		}},
+		{name: "exists_is_false", probe: func(t *testing.T, cfg *Config) {
+			assert.False(t, cfg.Exists("any"))
+		}},
+		{name: "all_is_nil", probe: func(t *testing.T, cfg *Config) {
+			assert.Nil(t, cfg.All())
+		}},
+		{name: "custom_is_nil", probe: func(t *testing.T, cfg *Config) {
+			assert.Nil(t, cfg.Custom())
+		}},
+	}
 
-	assert.Equal(t, "fallback", cfg.String("any", "fallback"))
-	assert.Equal(t, 0, cfg.Int("any"))
-	assert.Equal(t, int64(0), cfg.Int64("any"))
-	assert.Zero(t, cfg.Float64("any"))
-	assert.False(t, cfg.Bool("any"))
-
-	_, err := cfg.RequiredInt("any")
-	assert.Error(t, err) //nolint:testifylint // the RequiredString and Unmarshal nil-safety probes below are independent
-
-	_, err = cfg.RequiredString("any")
-	assert.Error(t, err) //nolint:testifylint // the Unmarshal probe and the Exists/All/Custom checks below are independent
-
-	err = cfg.Unmarshal("custom", &struct{}{})
-	assert.Error(t, err) //nolint:testifylint // the Exists/All/Custom checks below are independent
-
-	assert.False(t, cfg.Exists("any"))
-	assert.Nil(t, cfg.All())
-	assert.Nil(t, cfg.Custom())
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.probe(t, &Config{})
+		})
+	}
 }
 
 func TestUnmarshalAndCustom(t *testing.T) {
@@ -263,8 +290,8 @@ func TestUnmarshalRejectsDeliveredEmptyBool(t *testing.T) {
 	err := cfg.Unmarshal("custom", &out)
 
 	require.Error(t, err)
-	require.ErrorContains(t, err, "boolean value delivered empty")
-	assert.ErrorContains(t, err, "strict", "the koanf key reaches the operator, not just the message")
+	assert.ErrorContains(t, err, "boolean value delivered empty") //nolint:testifylint // configdecode message; the independent decoder key clause follows
+	require.ErrorContains(t, err, "strict", "the koanf key reaches the operator, not just the message")
 }
 
 // TestUnmarshalStringToSliceKeepsSingleElementWrap pins the public-seam behavior of

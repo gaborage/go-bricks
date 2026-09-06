@@ -1,7 +1,21 @@
 # ADR-101: A Shipped Test Helper Aborts on the Failure That Invalidates the Rest
 
-**Status:** Accepted
+**Status:** Accepted (amended 2026-09-06)
 **Date:** 2026-09-05
+
+## Amendment — 2026-09-06: the value gap is closed (ADR-102, #1457)
+
+The tracking note in the Consequences section below — the helper judging absence by
+error-ness alone, so a `KeyStore` returning a key ALONGSIDE an error still satisfied
+it — is **closed**. [ADR-102](adr_102_key_not_found_helper_checks_the_value.md) has
+each lookup's returned key checked as well as its error, with a stray key reported by
+dynamic TYPE only so no key material reaches the test log.
+
+The positional rule this ADR decided is unchanged and now governs the value checks
+too: the public-key arm aborts (`require.Fail`), the private-key arm records
+(`assert.Fail`), being the last statement. See `[C64.6]`.
+
+The Context and Decision sections below are the original record and are unchanged.
 
 ## Context
 
@@ -72,11 +86,12 @@ than one of several.
 When the key is genuinely absent — the passing path, and every existing green
 test — nothing changes: both lookups return errors and both assertions pass.
 
-What this does not fix, and #1457 tracks: the helper judges absence purely by
-error-ness, so a KeyStore returning a key ALONGSIDE an error still satisfies it.
+The helper judged absence purely by error-ness when this ADR was written, so a
+KeyStore returning a key ALONGSIDE an error still satisfied it. That gap is closed by
+[ADR-102](adr_102_key_not_found_helper_checks_the_value.md); see the amendment above.
 
 ## References
 
 - #1092 (testifylint adoption; `require-error`)
-- [migrations.md](migrations.md) `[C64.4]`
+- [migrations.md](migrations.md) `[C64.4]`, `[C64.6]`
 - `cache/testing/assertions.go` — the delegate + recording-double precedent

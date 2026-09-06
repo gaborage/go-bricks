@@ -1244,10 +1244,10 @@ func TestEnsureConsumersRecoversPanicFromSetup(t *testing.T) {
 
 	err := manager.EnsureConsumers(context.Background(), testTenantID, decls)
 	require.Error(t, err, "a panicking setup must surface as an error, not escape the process")
-	require.ErrorContains(t, err, "panic during consumer setup")
+	assert.ErrorContains(t, err, "panic during consumer setup") //nolint:testifylint // message clause; the independent ADR-081 leak check and retry assertion follow
 	// ADR-081: the error is returned to the caller and reaches its logs; report the
 	// panic value's type, never the value.
-	require.ErrorContains(t, err, "(type: string)")
+	assert.ErrorContains(t, err, "(type: string)") //nolint:testifylint // message clause; the independent ADR-081 leak check and retry assertion follow
 	require.NotContains(t, err.Error(), setupPanicSecret,
 		"the setup panic value must not ride along in the returned error")
 

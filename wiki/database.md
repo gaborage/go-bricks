@@ -316,13 +316,12 @@ escape hatch on both vendors — but the server then treats the name as
 case-sensitive, so `"a#b"` and `a#b` are not interchangeable. An unknown vendor
 follows PostgreSQL's grammar.
 
-Two things are deliberately NOT judged at the doors: struct `db:"..."` tag names
-at the INSERT struct doors (`InsertStruct`, `InsertFields`), which the `columns`
-package judges against the union alphabet
-([#1449](https://github.com/gaborage/go-bricks/issues/1449)) —
-`UpdateQueryBuilder.SetStruct` does judge them, because it goes through the
-column funnel — and identifier byte caps
-([#1437](https://github.com/gaborage/go-bricks/issues/1437)).
+One thing is deliberately NOT judged at the doors: identifier byte caps
+([#1437](https://github.com/gaborage/go-bricks/issues/1437)). Struct `db:"..."`
+tag names are judged like any other column — `InsertStruct`, `InsertFields` and
+`UpdateQueryBuilder.SetStruct` all route them through the column funnel, so a
+tag the `columns` package admits against the union alphabet can still be refused
+by the builder's vendor.
 
 ### Validating an identifier yourself (`database/identifier`)
 
