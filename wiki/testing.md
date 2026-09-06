@@ -75,17 +75,15 @@ nothing. The failure is invisible: no error, no panic, just empty assertions in 
 test happens to run later (#1093).
 
 ```go
-prev := otel.GetMeterProvider()
-mp := obtest.NewTestMeterProvider()
-otel.SetMeterProvider(mp)
-// no Shutdown: the first-installed provider is otel's permanent delegate
-t.Cleanup(func() { otel.SetMeterProvider(prev) })
+// restores the previous provider in t.Cleanup; no Shutdown, because the
+// first-installed provider is otel's permanent delegate
+mp := obtest.InstallTestMeterProvider(t)
 ```
 
 No goroutine, socket, or file handle leaks: `obtest.NewTestMeterProvider` is a `ManualReader`
 with no exporter, and `NewTestTraceProvider` exports in-memory through a synchronous processor.
-What an un-shut-down in-memory span exporter *does* keep is its spans, for the life of the test
-binary — bounded by the run and reachable by nothing outside it. If that ever matters, call
+What an un-shut-down in-memory span exporter *does* keep is its spans — bounded by the run and
+reachable by nothing outside it. If that ever matters, call
 `exporter.Reset()` in the cleanup; do not bring the `Shutdown` back.
 
 **Install only inert providers globally.** The rule above is what makes a globally-installed

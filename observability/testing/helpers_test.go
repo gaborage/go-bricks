@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
@@ -685,4 +686,107 @@ func counterSum(t *testing.T, mp *TestMeterProvider, name string) int64 {
 		total += sum.DataPoints[i].Value
 	}
 	return total
+}
+
+// TestInstallTestTraceProviderRestoresProviderAndPropagator pins the contract of
+// InstallTestTraceProvider: while the subtest runs, the global tracer provider IS
+// the returned provider and the propagator is a W3C TraceContext; once the
+// subtest's t.Cleanup has run, both globals are the values that were there
+// before. Identity is the right assertion here because otel.GetTracerProvider
+// returns the stored provider itself.
+func TestInstallTestTraceProviderRestoresProviderAndPropagator(t *testing.T) {
+	prev := otel.GetTracerProvider()
+	prevProp := otel.GetTextMapPropagator()
+
+	var installed *TestTraceProvider
+
+	t.Run("installed_for_the_subtest", func(t *testing.T) {
+		installed = InstallTestTraceProvider(t)
+
+		require.NotNil(t, installed)
+		assert.Same(t, installed, otel.GetTracerProvider(), "the helper must install the provider it returns")
+		assert.IsType(t, propagation.TraceContext{}, otel.GetTextMapPropagator(), "the helper must install a W3C trace-context propagator")
+	})
+
+	assert.Same(t, prev, otel.GetTracerProvider(), "cleanup must restore the previous tracer provider")
+	assert.Same(t, prevProp, otel.GetTextMapPropagator(), "cleanup must restore the previous propagator")
+}
+
+// TestInstallTestMeterProviderRestoresProvider is the meter-side restore pin. The
+// helper does not touch the propagator, so only the provider identity is asserted.
+func TestInstallTestMeterProviderRestoresProvider(t *testing.T) {
+	// Claim the binary's first-installer slot for this file's own scaffolding
+	// before installing anything here. Otherwise whichever meter provider this
+	// test installs first would own otel's delegate for the rest of the run, and
+	// the delegate half of TestInstalledProvidersStillRecordAfterCleanup would go
+	// red under a -run filter that happens to order this test first — a false red
+	// about test order, not about the helper.
+	installFirstDelegate()
+
+	prev := otel.GetMeterProvider()
+	prevProp := otel.GetTextMapPropagator()
+
+	var installed *TestMeterProvider
+
+	t.Run("installed_for_the_subtest", func(t *testing.T) {
+		installed = InstallTestMeterProvider(t)
+
+		require.NotNil(t, installed)
+		assert.Same(t, installed, otel.GetMeterProvider(), "the helper must install the provider it returns")
+		assert.Same(t, prevProp, otel.GetTextMapPropagator(), "the meter helper must not touch the propagator")
+	})
+
+	assert.Same(t, prev, otel.GetMeterProvider(), "cleanup must restore the previous meter provider")
+}
+
+// TestInstalledProvidersStillRecordAfterCleanup is the never-Shutdown proof: a
+// provider the helper installed is still usable once its cleanup has run.
+//
+// The two halves cover the two orders this can run in, because which provider
+// otel's delegate is bound to depends on which test in the binary installed
+// first. The trace half asserts on the helper's OWN provider — a shut-down SDK
+// provider exports nothing, so a surviving span proves the helper left it alive
+// regardless of the delegate. The meter half goes through the delegate: it makes
+// this file's process-first provider the delegate, runs the helper inside a
+// subtest, and then records through otel.Meter after that subtest's cleanup, so
+// a helper that shut its provider down would break the route.
+//
+// Both halves assert DELTAS: the exporter and the manual reader accumulate for
+// the life of the binary, so an absolute count would pass on a second -count
+// iteration off the previous one's residue.
+func TestInstalledProvidersStillRecordAfterCleanup(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("the_trace_provider_still_exports", func(t *testing.T) {
+		var installed *TestTraceProvider
+
+		t.Run("install_and_clean_up", func(t *testing.T) {
+			installed = InstallTestTraceProvider(t)
+		})
+
+		before := len(installed.Exporter.GetSpans())
+
+		_, span := installed.TestTracer().Start(ctx, testSpanName)
+		span.End()
+
+		assert.Len(t, installed.Exporter.GetSpans(), before+1,
+			"the provider the helper installed exported nothing after its cleanup ran; a cleanup that shut it down would look exactly like this")
+	})
+
+	t.Run("the_delegate_still_reaches_the_first_provider", func(t *testing.T) {
+		first := installFirstDelegate()
+
+		t.Run("install_and_clean_up", func(t *testing.T) {
+			InstallTestMeterProvider(t)
+		})
+
+		before := counterSum(t, first, testCounter)
+
+		counter, err := otel.Meter(delegateMeterName).Int64Counter(testCounter)
+		require.NoError(t, err)
+		counter.Add(ctx, 1)
+
+		assert.Equal(t, before+1, counterSum(t, first, testCounter),
+			"a counter created through the restored global recorded nothing into the first-installed provider; %s", firstInstallerHint)
+	})
 }

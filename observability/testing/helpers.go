@@ -6,18 +6,15 @@
 //
 // Usage:
 //
-//	// Create test trace provider and install it globally, restoring the
-//	// previous provider afterwards. Never Shutdown a provider you installed:
-//	// otel's DEFAULT delegating provider binds to the first one installed in
-//	// the binary and never rebinds (internal/global/state.go sync.Once), so
-//	// shutting yours down can silence otel.Tracer calls made through that
-//	// restored default provider afterwards. (While your provider is the
-//	// current global, calls reach it directly — the hazard is what happens
-//	// after you put the default back.)
-//	tp := NewTestTraceProvider()
-//	prev := otel.GetTracerProvider()
-//	defer otel.SetTracerProvider(prev)
-//	otel.SetTracerProvider(tp)
+//	// Install a test trace provider globally; the helper restores the previous
+//	// provider (and propagator) in t.Cleanup. Never Shutdown a provider you
+//	// installed: otel's DEFAULT delegating provider binds to the first one
+//	// installed in the binary and never rebinds (internal/global/state.go
+//	// sync.Once), so shutting yours down can silence otel.Tracer calls made
+//	// through that restored default provider afterwards. (While your provider
+//	// is the current global, calls reach it directly — the hazard is what
+//	// happens after you put the default back.)
+//	tp := InstallTestTraceProvider(t)
 //
 //	// Run your code that creates spans
 //	tracer := tp.TestTracer()
@@ -37,8 +34,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -74,11 +73,9 @@ type TestTraceProvider struct {
 //
 //	tp := NewTestTraceProvider()
 //
-//	// Install it globally and restore the previous provider afterwards; do not
-//	// Shutdown it (see the package doc — otel's delegate binds once).
-//	prev := otel.GetTracerProvider()
-//	defer otel.SetTracerProvider(prev)
-//	otel.SetTracerProvider(tp)
+//	// To install it globally, use InstallTestTraceProvider(t), which restores
+//	// the previous provider in t.Cleanup; never Shutdown a provider you
+//	// installed (see the package doc — otel's delegate binds once).
 //
 //	// Later, get spans for assertions
 //	spans := tp.Exporter.GetSpans()
@@ -98,6 +95,41 @@ func NewTestTraceProvider() *TestTraceProvider {
 		TracerProvider: provider,
 		Exporter:       exporter,
 	}
+}
+
+// InstallTestTraceProvider creates a test trace provider, installs it as the
+// global tracer provider together with a W3C trace-context propagator, and
+// registers a t.Cleanup that restores the previous provider and propagator.
+//
+// It never calls Shutdown, on the provider it created or any other: otel's
+// default delegating provider binds to the FIRST provider installed in the
+// binary via a sync.Once and never rebinds, so a later otel.Tracer call made
+// through that restored default still routes into the first-installed
+// provider. Shutting one down would make those calls record nothing, with no
+// error. Restoring the previous provider is safe; shutting one down is not.
+//
+// Example:
+//
+//	tp := InstallTestTraceProvider(t)
+//	_, span := tp.TestTracer().Start(context.Background(), "operation")
+//	span.End()
+//	spans := tp.Exporter.GetSpans()
+func InstallTestTraceProvider(t *testing.T) *TestTraceProvider {
+	t.Helper()
+
+	prev := otel.GetTracerProvider()
+	prevProp := otel.GetTextMapPropagator()
+
+	tp := NewTestTraceProvider()
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prev)
+		otel.SetTextMapPropagator(prevProp)
+	})
+
+	return tp
 }
 
 // TestTracer returns a tracer with the standard test name.
@@ -127,11 +159,9 @@ type TestMeterProvider struct {
 //
 //	mp := NewTestMeterProvider()
 //
-//	// Install it globally and restore the previous provider afterwards; do not
-//	// Shutdown it (see the package doc — otel's delegate binds once).
-//	prev := otel.GetMeterProvider()
-//	defer otel.SetMeterProvider(prev)
-//	otel.SetMeterProvider(mp)
+//	// To install it globally, use InstallTestMeterProvider(t), which restores
+//	// the previous provider in t.Cleanup; never Shutdown a provider you
+//	// installed (see the package doc — otel's delegate binds once).
 //	meter := mp.Meter("test")
 //	counter, _ := meter.Int64Counter("test.counter")
 //	counter.Add(context.Background(), 1)
@@ -148,6 +178,36 @@ func NewTestMeterProvider() *TestMeterProvider {
 		MeterProvider: provider,
 		Reader:        reader,
 	}
+}
+
+// InstallTestMeterProvider creates a test meter provider, installs it as the
+// global meter provider, and registers a t.Cleanup that restores the previous
+// provider. It leaves the text-map propagator alone.
+//
+// Like InstallTestTraceProvider it never calls Shutdown: otel's default
+// delegating provider binds to the FIRST provider installed in the binary via
+// a sync.Once and never rebinds, so shutting an installed provider down would
+// silently stop every later otel.Meter call that routes through that delegate.
+//
+// Example:
+//
+//	mp := InstallTestMeterProvider(t)
+//	counter, _ := otel.Meter("test").Int64Counter("test.counter")
+//	counter.Add(context.Background(), 1)
+//	rm := mp.Collect(t)
+func InstallTestMeterProvider(t *testing.T) *TestMeterProvider {
+	t.Helper()
+
+	prev := otel.GetMeterProvider()
+
+	mp := NewTestMeterProvider()
+	otel.SetMeterProvider(mp)
+
+	t.Cleanup(func() {
+		otel.SetMeterProvider(prev)
+	})
+
+	return mp
 }
 
 // Collect reads all metrics from the provider and returns them as ResourceMetrics.
