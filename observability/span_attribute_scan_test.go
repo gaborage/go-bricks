@@ -22,6 +22,11 @@ const minScannedGoFiles = 500
 // attributePackagePath is the package whose constructors build span attributes.
 const attributePackagePath = "go.opentelemetry.io/otel/attribute"
 
+// semconvPathFragment matches the version-stamped semantic-convention packages
+// (go.opentelemetry.io/otel/semconv/v1.NN.0), whose helpers also return an
+// attribute.KeyValue and so are constructors for this scan's purposes.
+const semconvPathFragment = "go.opentelemetry.io/otel/semconv"
+
 // scanSkipDirs are directory names never descended into at any depth: testdata/
 // holds deliberately malformed or illustrative sources, and the rest are not
 // source at all. tools/ is handled by skipDir, anchored to the module root.
@@ -133,15 +138,22 @@ func scanAttributeCalls(file *ast.File) (findings []token.Pos, constructors int)
 	return findings, constructors
 }
 
-// attributeBindings returns the local names go.opentelemetry.io/otel/attribute
-// is bound to in file, and whether it is dot-imported. The conventional name is
-// always included so a parsed snippet carrying no import declaration still
+// attributeBindings returns the local names the attribute-producing packages are
+// bound to in file, and whether either is dot-imported. Both conventional names
+// are always included so a parsed snippet carrying no import declaration still
 // matches; an alias (`attr "…/attribute"`) adds its own name, which is what
 // keeps the gate from being defeated by a rename that golangci does not forbid.
+// semconv counts because its helpers return an attribute.KeyValue too: an
+// unguarded `semconv.SomeText(err.Error())` reaches a span the same way (the
+// exception helpers are separately banned by forbidigo, ADR-083).
 func attributeBindings(file *ast.File) (names map[string]bool, dotImported bool) {
-	names = map[string]bool{"attribute": true}
+	names = map[string]bool{"attribute": true, "semconv": true}
 	for _, imp := range file.Imports {
-		if strings.Trim(imp.Path.Value, `"`) != attributePackagePath || imp.Name == nil {
+		path := strings.Trim(imp.Path.Value, `"`)
+		if path != attributePackagePath && !strings.HasPrefix(path, semconvPathFragment) {
+			continue
+		}
+		if imp.Name == nil {
 			continue
 		}
 		if imp.Name.Name == "." {
@@ -154,10 +166,12 @@ func attributeBindings(file *ast.File) (names map[string]bool, dotImported bool)
 }
 
 // isAttributeConstructor reports whether fun names a constructor on the
-// attribute package under any of its local bindings (attribute.String,
-// attr.Stringer, or a bare String under a dot-import).
+// attribute (or semconv) package under any of its local bindings
+// (attribute.String, attr.Stringer, semconv.ExceptionMessage, or a bare String
+// under a dot-import). Parentheses around the callee are unwrapped first:
+// `(attribute.String)(k, v)` is the same call.
 func isAttributeConstructor(fun ast.Expr, names map[string]bool, dotImported bool) bool {
-	switch callee := fun.(type) {
+	switch callee := ast.Unparen(fun).(type) {
 	case *ast.SelectorExpr:
 		pkg, ok := callee.X.(*ast.Ident)
 		return ok && names[pkg.Name]
@@ -181,7 +195,7 @@ func containsErrorMessageCall(expr ast.Expr) bool {
 		if !ok || len(call.Args) != 0 {
 			return true
 		}
-		if sel, isSel := call.Fun.(*ast.SelectorExpr); isSel && sel.Sel.Name == "Error" {
+		if sel, isSel := ast.Unparen(call.Fun).(*ast.SelectorExpr); isSel && sel.Sel.Name == "Error" {
 			leaks = true
 			return false
 		}
@@ -252,6 +266,25 @@ func TestScanAttributeCallsJudgesArgumentShape(t *testing.T) {
 			name:         "dot_imported_constructor_is_still_matched",
 			imports:      dotImport,
 			body:         `String("error", err.Error())`,
+			findings:     1,
+			constructors: 1,
+		},
+		{
+			name:         "semconv_helper_carrying_the_message_is_matched",
+			imports:      `import semconv "go.opentelemetry.io/otel/semconv/v1.32.0"`,
+			body:         `span.AddEvent("failed", trace.WithAttributes(semconv.ExceptionMessage(err.Error())))`,
+			findings:     1,
+			constructors: 1,
+		},
+		{
+			name:         "parenthesized_constructor_is_matched",
+			body:         `(attribute.String)("error", err.Error())`,
+			findings:     1,
+			constructors: 1,
+		},
+		{
+			name:         "parenthesized_error_callee_is_matched",
+			body:         `attribute.String("error", (err.Error)())`,
 			findings:     1,
 			constructors: 1,
 		},
