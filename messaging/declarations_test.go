@@ -844,6 +844,37 @@ func TestDeclarationsIsEmpty(t *testing.T) {
 	})
 }
 
+// TestDeclarationsIsEmptyMatchesZeroStats pins IsEmpty to the zero-value
+// comparison for every declaration kind on its own, so a kind whose count
+// IsEmpty stops consulting shows up here.
+func TestDeclarationsIsEmptyMatchesZeroStats(t *testing.T) {
+	tests := []struct {
+		name     string
+		register func(*Declarations)
+		want     DeclarationStats
+	}{
+		{"exchange_only", func(d *Declarations) {
+			d.RegisterExchange(&ExchangeDeclaration{Name: shortExchange1, Type: exchangeTypeTopic})
+		}, DeclarationStats{Exchanges: 1}},
+		{"queue_only", func(d *Declarations) { d.RegisterQueue(&QueueDeclaration{Name: shortQueue1}) }, DeclarationStats{Queues: 1}},
+		{"binding_only", func(d *Declarations) {
+			d.RegisterBinding(&BindingDeclaration{Queue: shortQueue1, Exchange: shortExchange1})
+		}, DeclarationStats{Bindings: 1}},
+		{"publisher_only", func(d *Declarations) { d.RegisterPublisher(&PublisherDeclaration{Exchange: shortExchange1}) }, DeclarationStats{Publishers: 1}},
+		{"consumer_only", func(d *Declarations) { d.RegisterConsumer(&ConsumerDeclaration{Queue: shortQueue1}) }, DeclarationStats{Consumers: 1}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewDeclarations()
+			tt.register(d)
+			assert.Equal(t, tt.want, d.Stats())
+			assert.Equal(t, tt.want == DeclarationStats{}, d.IsEmpty(),
+				"IsEmpty must track the zero-value comparison; the oracle is the table's expected Stats, not a re-call of IsEmpty's own body")
+		})
+	}
+}
+
 // TestRegisterConsumerCopiesEveryField is a tripwire, not a behavior test.
 // RegisterConsumer deep-copies a ConsumerDeclaration field by field, so a field
 // added to the struct but forgotten in that copy is silently dropped — which is
@@ -871,6 +902,27 @@ func TestRegisterConsumerCopiesEveryField(t *testing.T) {
 	original.Args["added-after-registration"] = true
 	assert.NotContains(t, stored.Args, "added-after-registration",
 		"Args aliases the caller's map; a later caller mutation would rewrite a registered declaration")
+}
+
+// TestDeclarationStatsFieldSetIsPinned is a tripwire, not a behavior test. A
+// sixth DeclarationStats field compiles and passes the suite today, so the
+// struct can grow while the sites enumerating its fields fall behind. This pins
+// the ordered field set so an addition fails here, naming those sites. It only
+// ALERTS: it does not enforce that they were updated, and a maintainer can
+// satisfy it by editing the golden list alone. A RENAME needs no coverage — it
+// is already a hard compile break through Stats() and IsEmpty().
+func TestDeclarationStatsFieldSetIsPinned(t *testing.T) {
+	statsType := reflect.TypeOf(DeclarationStats{})
+	fields := make([]string, 0, statsType.NumField())
+	for i := range statsType.NumField() {
+		fields = append(fields, statsType.Field(i).Name)
+	}
+
+	assert.Equal(t, []string{"Exchanges", "Queues", "Bindings", "Publishers", "Consumers"}, fields,
+		"DeclarationStats changed shape; update every site that enumerates its fields: "+
+			"logDeclStats, Declarations.Stats, Declarations.IsEmpty, "+
+			"assertMessagingConfiguredIfDeclared, assertDeclarationCounts, TestDeclarationsStats, "+
+			"wiki/messaging.md and llms.txt")
 }
 
 // fillNonZero sets every field of a struct to a non-zero value of its type, so a
