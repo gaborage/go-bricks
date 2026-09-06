@@ -209,8 +209,9 @@ func TestLoadRejectsEmptyNumericEnv(t *testing.T) {
 
 			_, err := Load()
 
-			require.ErrorContains(t, err, tt.wantKey)
-			assert.ErrorContains(t, err, "delivered empty")
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tt.wantKey) //nolint:testifylint // decoder key decoration; the independent configdecode message clause follows
+			require.ErrorContains(t, err, "delivered empty")
 		})
 	}
 }
@@ -243,8 +244,9 @@ func TestLoadRejectsEmptyBoolEnv(t *testing.T) {
 
 			_, err := Load()
 
-			require.ErrorContains(t, err, tt.wantKey)
-			assert.ErrorContains(t, err, "boolean value delivered empty")
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tt.wantKey) //nolint:testifylint // decoder key decoration; the independent configdecode message clause follows
+			require.ErrorContains(t, err, "boolean value delivered empty")
 		})
 	}
 }
@@ -315,8 +317,9 @@ func TestLoadExplicitBoolEnvUnchanged(t *testing.T) {
 func TestLoadEmptyBoolYAMLStringRejected(t *testing.T) {
 	_, err := loadDeliveredEmptyFixture(t, "cache:\n  critical: \"\"\n", nil)
 
-	require.ErrorContains(t, err, "critical")
-	assert.ErrorContains(t, err, "boolean value delivered empty")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "critical") //nolint:testifylint // decoder key decoration; the independent configdecode message clause follows
+	require.ErrorContains(t, err, "boolean value delivered empty")
 }
 
 // TestLoadYAMLNullBoolKeepsTodaysDecode pins the boundary ADR-077 deliberately does NOT
@@ -351,8 +354,9 @@ func TestLoadEmptyDurationEnvKeepsItsOwnError(t *testing.T) {
 func TestLoadEmptyNumericYAMLStringRejected(t *testing.T) {
 	_, err := loadDeliveredEmptyFixture(t, "keystore:\n  secretminlength: \"\"\n", nil)
 
-	require.ErrorContains(t, err, "secretminlength")
-	assert.ErrorContains(t, err, "delivered empty")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "secretminlength") //nolint:testifylint // decoder key decoration; the independent configdecode message clause follows
+	require.ErrorContains(t, err, "delivered empty")
 }
 
 // TestLoadYAMLNullNumericKeepsTodaysDecode pins the boundary the guard deliberately does
@@ -1245,8 +1249,9 @@ func TestLoadRejectsUnitlessNumericDurationEndToEnd(t *testing.T) {
 	t.Chdir(dir)
 
 	_, err := Load()
-	require.ErrorContains(t, err, "unit-less numeric duration 300")
-	assert.ErrorContains(t, err, "messaging.reconnect.delay")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "unit-less numeric duration 300") //nolint:testifylint // configdecode message; the independent decoder key clause follows
+	require.ErrorContains(t, err, "messaging.reconnect.delay")
 }
 
 // TestLoadUnitlessNumericDurationZeroUsesDefault proves the zero-is-unset exemption: an

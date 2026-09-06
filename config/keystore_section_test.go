@@ -69,8 +69,9 @@ func TestValidateKeyStoreWiredIntoValidate(t *testing.T) {
 		},
 	}
 	err := Validate(cfg)
-	require.ErrorContains(t, err, "keystore config")
-	assert.ErrorContains(t, err, "both 'file' and 'value' set")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "keystore config") //nolint:testifylint // wrapper prefix; the independent inner-cause clause follows
+	require.ErrorContains(t, err, "both 'file' and 'value' set")
 }
 
 func TestValidateKeyStoreSecretValid(t *testing.T) {
@@ -201,8 +202,9 @@ func TestValidateKeyStoreSecretMinLengthBelowFloorFailsValidate(t *testing.T) {
 
 	err := Validate(cfg)
 
-	require.ErrorContains(t, err, "keystore config")
-	assert.ErrorContains(t, err, "keystore.secretminlength must be at least 32")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "keystore config") //nolint:testifylint // wrapper prefix; the independent inner-cause clause follows
+	require.ErrorContains(t, err, "keystore.secretminlength must be at least 32")
 }
 
 // TestLoadKeyStoreSecretMinLengthBelowFloorFailsStartup is the koanf door: an
@@ -215,8 +217,9 @@ func TestLoadKeyStoreSecretMinLengthBelowFloorFailsStartup(t *testing.T) {
 
 	_, err := Load()
 
-	require.ErrorContains(t, err, "invalid configuration")
-	assert.ErrorContains(t, err, "keystore.secretminlength must be at least 32")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "invalid configuration") //nolint:testifylint // wrapper prefix; the independent inner-cause clause follows
+	require.ErrorContains(t, err, "keystore.secretminlength must be at least 32")
 }
 
 // TestCheckKeyStoreRejectsUnreachableKeyNames: a keystore entry's name reaches

@@ -3,6 +3,7 @@ package builder
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -208,10 +209,10 @@ func TestBuildUpsertEnforcesPreconditionsForEveryVendor(t *testing.T) {
 			qb := NewQueryBuilder(vendor)
 
 			_, _, emptyErr := qb.BuildUpsert("users", nil, map[string]any{"id": 1}, nil)
-			require.EqualError(t, emptyErr, "conflict columns required for upsert")
+			assert.EqualError(t, emptyErr, "conflict columns required for upsert") //nolint:testifylint // first precondition; the independent missing/overlap preconditions follow
 
 			_, _, missingErr := qb.BuildUpsert("users", []string{"tenant_id"}, map[string]any{"id": 1}, nil)
-			require.ErrorContains(t, missingErr, "must be present in insert columns for upsert")
+			assert.ErrorContains(t, missingErr, "must be present in insert columns for upsert") //nolint:testifylint // second precondition; the independent overlap precondition follows
 
 			_, _, overlapErr := qb.BuildUpsert("users",
 				[]string{"id"}, map[string]any{"id": 1, "name": "a"}, map[string]any{"id": 2})

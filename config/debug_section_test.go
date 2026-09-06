@@ -19,8 +19,9 @@ func TestValidateDebugTrustedProxiesWiredIntoValidate(t *testing.T) {
 	cfg := createValidFullConfig()
 	cfg.Debug.TrustedProxies = []string{"bad-cidr"}
 	err := Validate(cfg)
-	require.ErrorContains(t, err, "debug config:")
-	assert.ErrorContains(t, err, "debug.trustedproxies")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "debug config:") //nolint:testifylint // wrapper prefix; the independent inner-cause clause follows
+	require.ErrorContains(t, err, "debug.trustedproxies")
 }
 
 func TestValidateDebugTrustedProxiesAcceptsValidCases(t *testing.T) {

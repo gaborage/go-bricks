@@ -290,8 +290,8 @@ func TestUnmarshalRejectsDeliveredEmptyBool(t *testing.T) {
 	err := cfg.Unmarshal("custom", &out)
 
 	require.Error(t, err)
-	require.ErrorContains(t, err, "boolean value delivered empty")
-	assert.ErrorContains(t, err, "strict", "the koanf key reaches the operator, not just the message")
+	assert.ErrorContains(t, err, "boolean value delivered empty") //nolint:testifylint // configdecode message; the independent decoder key clause follows
+	require.ErrorContains(t, err, "strict", "the koanf key reaches the operator, not just the message")
 }
 
 // TestUnmarshalStringToSliceKeepsSingleElementWrap pins the public-seam behavior of
