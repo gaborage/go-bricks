@@ -122,6 +122,14 @@ with the vendor environment as its production adapter and an in-memory fake
 for tests.
 _Avoid_: env, client (ambiguous with the AMQP client), connection
 
+**Publish bound**:
+The aggregate deadline `messaging.publishtimeout` derives for one publish. It
+governs waiting — connection readiness and the serialized publish slot — never
+an in-flight socket write, so a broker that stops reading can hold one publish
+past the bound until that write returns.
+_Avoid_: publish timeout (the key, not the concept), write deadline, socket
+timeout
+
 ### Tenancy
 
 **Control-plane key**:

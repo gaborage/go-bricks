@@ -188,10 +188,18 @@ Consequences worth knowing:
   spaces (the column is read back into logs and dashboards, and a broker-supplied newline must
   not be able to forge a line there) and invalid UTF-8 is dropped, which PostgreSQL would
   otherwise reject outright — failing the UPDATE and leaving `retry_count` un-advanced.
-- **One stuck record cannot starve the batch:** each publish is bounded by `outbox.publishtimeout`
-  (default 60s). It **must be ≥ `messaging.reconnect.connectiontimeout`** (default 30s) — the module
-  **fails to start** otherwise, because a shorter value truncates every legitimate confirmation into a
+- **Each publish is bounded by `outbox.publishtimeout`** (default 60s). It **must be ≥
+  `messaging.reconnect.connectiontimeout`** (default 30s) — the module **fails to start**
+  otherwise, because a shorter value truncates every legitimate confirmation into a
   connectivity failure and re-publishes the (already-delivered) event every cycle.
+- **Whether that bound stops one stuck record from starving the batch depends on the leg.**
+  On the **AMQP** leg it does not, quite: the bound governs waiting (readiness and the
+  serialized publish slot, both acquired under the context), never an in-flight socket write,
+  so a record whose write is already inside `PublishWithContext` when the broker stops reading
+  holds the batch past `outbox.publishtimeout` until that write returns. On the **streams** leg
+  it does: the blocking send runs on a goroutine the call is willing to abandon while the
+  caller waits on the confirmation channel or `ctx.Done()`, so no record holds the batch past
+  the deadline.
 - **Underneath, the AMQP publish itself is bounded** by `messaging.reconnect.maxpublishattempts`
   (default 5), after which it returns `messaging.ErrPublishRetriesExhausted` wrapping the cause.
   Note the two ceilings interact on the relay path: with default `connectiontimeout` (30s) a
