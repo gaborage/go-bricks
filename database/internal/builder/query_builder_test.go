@@ -3930,6 +3930,52 @@ const upsertCapDoor = "build_upsert_column"
 // struct-door-specific length check for it, because it inherits the cap through
 // validateIdentifiers — the row below still probes that door, to pin the
 // inheritance (#1437).
+// capDoorBuild is one door's build-and-render step: hand it a builder, get the
+// statement back. capDoors keys these by door name.
+type capDoorBuild = func(qb *QueryBuilder) (string, []any, error)
+
+// runCapDoors subtests fn against every cap door for one identifier, skipping
+// the upsert door on a vendor that refuses the upsert before any column is
+// judged. It exists so the at-cap and over-cap sweeps share one iteration and
+// one skip rule instead of restating both.
+func runCapDoors(t *testing.T, name, suffix string, noUpsert bool, fn func(t *testing.T, build capDoorBuild)) {
+	t.Helper()
+	for door, build := range capDoors(name) {
+		if noUpsert && door == upsertCapDoor {
+			continue
+		}
+		t.Run(door+suffix, func(t *testing.T) { fn(t, build) })
+	}
+}
+
+// assertDoorAcceptsAtCap pins the row that gives the refusal row its meaning: a
+// segment of exactly the cap still builds, so a `>` widened to `>=` fails here.
+func assertDoorAcceptsAtCap(t *testing.T, vendor string, build capDoorBuild) {
+	t.Helper()
+	var sql string
+	var err error
+	require.NotPanics(t, func() { sql, _, err = build(NewQueryBuilder(vendor)) })
+	require.NoError(t, err, "a segment of exactly the cap is legal")
+	assert.NotEmpty(t, sql)
+}
+
+// assertDoorRefusesOverCap pins the refusal: a deferred ToSQL() error carrying
+// ErrIdentifierTooLong, no half-built statement, and a message naming the
+// argument, the limit and the vendor.
+func assertDoorRefusesOverCap(t *testing.T, vendor, name string, capBytes int, build capDoorBuild) {
+	t.Helper()
+	var sql string
+	var args []any
+	var err error
+	require.NotPanics(t, func() { sql, args, err = build(NewQueryBuilder(vendor)) })
+	require.ErrorIs(t, err, dbident.ErrIdentifierTooLong)
+	assert.Empty(t, sql, "the refusal is a deferred error, not a half-built statement")
+	assert.Nil(t, args)
+	assert.Contains(t, err.Error(), name, "the message names the argument")
+	assert.Contains(t, err.Error(), strconv.Itoa(capBytes), "the message names the limit")
+	assert.Contains(t, err.Error(), vendor, "the message names the vendor")
+}
+
 func capDoors(name string) map[string]func(qb *QueryBuilder) (string, []any, error) {
 	tagged := reflect.New(reflect.StructOf([]reflect.StructField{
 		{Name: "Val", Type: reflect.TypeOf(int64(0)), Tag: reflect.StructTag(fmt.Sprintf("db:%q", name))},
@@ -3985,37 +4031,14 @@ func TestRepresentativeDoorsEnforceTheVendorByteCap(t *testing.T) {
 
 	for _, v := range vendors {
 		t.Run(v.name, func(t *testing.T) {
-			for door, build := range capDoors(capName(v.cap)) {
-				if v.noUpsert && door == upsertCapDoor {
-					continue
-				}
-				t.Run(door+"_accepts_at_cap", func(t *testing.T) {
-					var sql string
-					var err error
-					require.NotPanics(t, func() { sql, _, err = build(NewQueryBuilder(v.vendor)) })
-					require.NoError(t, err, "a segment of exactly the cap is legal")
-					assert.NotEmpty(t, sql)
-				})
-			}
+			atCap, overCap := capName(v.cap), capName(v.cap+1)
 
-			over := capName(v.cap + 1)
-			for door, build := range capDoors(over) {
-				if v.noUpsert && door == upsertCapDoor {
-					continue
-				}
-				t.Run(door+"_refuses_one_byte_over_cap", func(t *testing.T) {
-					var sql string
-					var args []any
-					var err error
-					require.NotPanics(t, func() { sql, args, err = build(NewQueryBuilder(v.vendor)) })
-					require.ErrorIs(t, err, dbident.ErrIdentifierTooLong)
-					assert.Empty(t, sql, "the refusal is a deferred error, not a half-built statement")
-					assert.Nil(t, args)
-					assert.Contains(t, err.Error(), over, "the message names the argument")
-					assert.Contains(t, err.Error(), strconv.Itoa(v.cap), "the message names the limit")
-					assert.Contains(t, err.Error(), v.vendor, "the message names the vendor")
-				})
-			}
+			runCapDoors(t, atCap, "_accepts_at_cap", v.noUpsert, func(t *testing.T, build capDoorBuild) {
+				assertDoorAcceptsAtCap(t, v.vendor, build)
+			})
+			runCapDoors(t, overCap, "_refuses_one_byte_over_cap", v.noUpsert, func(t *testing.T, build capDoorBuild) {
+				assertDoorRefusesOverCap(t, v.vendor, overCap, v.cap, build)
+			})
 		})
 	}
 }
