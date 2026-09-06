@@ -96,13 +96,6 @@ func TestPerformanceStats(t *testing.T) {
 			// Execute
 			err := handler(c)
 
-			// Assert error expectation
-			if tt.expectError {
-				assert.Error(t, err) //nolint:testifylint // counter assertions follow the enclosing block
-			} else {
-				assert.NoError(t, err) //nolint:testifylint // counter assertions follow the enclosing block
-			}
-
 			// Verify context has been modified with performance tracking
 			ctx := c.Request().Context()
 			assert.NotNil(t, ctx)
@@ -138,6 +131,13 @@ func TestPerformanceStats(t *testing.T) {
 				assert.Equal(t, int64(1), dbCount, "DB counter should be 1")
 				assert.Equal(t, int64(0), amqpElapsed, "AMQP elapsed should be 0")
 				assert.Equal(t, int64(1250000), dbElapsed, "DB elapsed should be 1.25ms in nanoseconds")
+			}
+
+			// Assert error expectation
+			if tt.expectError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
 			}
 		})
 	}

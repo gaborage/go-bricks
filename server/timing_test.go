@@ -58,6 +58,9 @@ func TestTiming(t *testing.T) {
 			e.ServeHTTP(rec, req)
 			actualDuration := time.Since(start)
 
+			// Verify response is successful
+			assert.Equal(t, http.StatusOK, rec.Code)
+
 			// Verify response time header is present
 			responseTimeHeader := rec.Header().Get(HeaderXResponseTime)
 			if tt.expectHeader {
@@ -65,7 +68,7 @@ func TestTiming(t *testing.T) {
 
 				// Parse the duration from header
 				headerDuration, err := time.ParseDuration(responseTimeHeader)
-				assert.NoError(t, err, "X-Response-Time should be a valid duration") //nolint:testifylint // unconditional status check follows the enclosing block
+				require.NoError(t, err, "X-Response-Time should be a valid duration")
 
 				// The header duration should be reasonable (within actual request time)
 				assert.LessOrEqual(t, headerDuration, actualDuration,
@@ -81,9 +84,6 @@ func TestTiming(t *testing.T) {
 			} else {
 				assert.Empty(t, responseTimeHeader, "X-Response-Time header should not be present")
 			}
-
-			// Verify response is successful
-			assert.Equal(t, http.StatusOK, rec.Code)
 		})
 	}
 }
@@ -103,18 +103,18 @@ func TestTimingErrorHandler(t *testing.T) {
 
 	e.ServeHTTP(rec, req)
 
+	// Verify error response
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
 	// Verify timing header is still added even when handler returns error
 	responseTimeHeader := rec.Header().Get(HeaderXResponseTime)
 	assert.NotEmpty(t, responseTimeHeader, "X-Response-Time header should be present even on error")
 
 	// Parse and verify duration
 	headerDuration, err := time.ParseDuration(responseTimeHeader)
-	assert.NoError(t, err, "X-Response-Time should be a valid duration") //nolint:testifylint // status check follows the enclosing block
+	require.NoError(t, err, "X-Response-Time should be a valid duration")
 	assert.GreaterOrEqual(t, headerDuration, 40*time.Millisecond,
 		"Duration should reflect the actual processing time including the sleep")
-
-	// Verify error response
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
 func TestTimingPanicHandler(t *testing.T) {
