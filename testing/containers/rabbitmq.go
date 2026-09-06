@@ -19,6 +19,10 @@ import (
 )
 
 const (
+	// amqpPortSpec is the container-side AMQP port every RabbitMQ wait strategy and
+	// MappedPort lookup addresses.
+	amqpPortSpec = "5672/tcp"
+
 	// streamPortSpec is the native stream-protocol port the rabbitmq_stream plugin binds.
 	streamPortSpec = "5552/tcp"
 
@@ -122,24 +126,18 @@ func StartRabbitMQContainerForTestMain(ctx context.Context, cfg *RabbitMQContain
 	return cc, true, nil
 }
 
-// startRabbitMQContainerInternal does the actual testcontainer setup without
-// any *testing.T interaction. Both StartRabbitMQContainer (which adds *T-bound
-// Skip/Logf) and StartRabbitMQContainerForTestMain wrap it.
-func startRabbitMQContainerInternal(ctx context.Context, cfg *RabbitMQContainerConfig) (*RabbitMQContainer, error) {
-	if cfg == nil {
-		cfg = DefaultRabbitMQConfig()
-	}
-
-	// Use composite wait strategy: log message (fast early signal) + port listening (network verification)
-	// This prevents race conditions where the log appears but RabbitMQ isn't ready to accept connections
+// rabbitMQOptions builds the container customizers, wait strategy included.
+//
+// Composite wait strategy: log message (fast early signal) + port listening (network
+// verification) prevents a race where the log appears but RabbitMQ is not ready to accept
+// connections.
+func rabbitMQOptions(cfg *RabbitMQContainerConfig) []testcontainers.ContainerCustomizer {
 	opts := []testcontainers.ContainerCustomizer{
 		rabbitmq.WithAdminUsername(cfg.Username),
 		rabbitmq.WithAdminPassword(cfg.Password),
-		testcontainers.WithWaitStrategy(
-			wait.ForAll(
-				wait.ForLog("Server startup complete"),
-				wait.ForListeningPort("5672/tcp"),
-			).WithStartupTimeout(cfg.StartupTimeout),
+		waitOptionWithin(cfg.StartupTimeout,
+			wait.ForLog("Server startup complete"),
+			wait.ForListeningPort(amqpPortSpec),
 		),
 		testcontainers.WithFiles(testcontainers.ContainerFile{
 			Reader:            strings.NewReader(permitDeprecatedFeaturesConf),
@@ -152,8 +150,18 @@ func startRabbitMQContainerInternal(ctx context.Context, cfg *RabbitMQContainerC
 		// enabled after boot, so it cannot join the wait strategy above.
 		opts = append(opts, testcontainers.WithExposedPorts(streamPortSpec))
 	}
+	return opts
+}
 
-	rmqContainer, err := rabbitmq.Run(ctx, fmt.Sprintf("rabbitmq:%s", cfg.ImageTag), opts...)
+// startRabbitMQContainerInternal does the actual testcontainer setup without
+// any *testing.T interaction. Both StartRabbitMQContainer (which adds *T-bound
+// Skip/Logf) and StartRabbitMQContainerForTestMain wrap it.
+func startRabbitMQContainerInternal(ctx context.Context, cfg *RabbitMQContainerConfig) (*RabbitMQContainer, error) {
+	if cfg == nil {
+		cfg = DefaultRabbitMQConfig()
+	}
+
+	rmqContainer, err := rabbitmq.Run(ctx, fmt.Sprintf("rabbitmq:%s", cfg.ImageTag), rabbitMQOptions(cfg)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start RabbitMQ container: %w", err)
 	}
@@ -171,7 +179,7 @@ func startRabbitMQContainerInternal(ctx context.Context, cfg *RabbitMQContainerC
 		return nil, fmt.Errorf("failed to get RabbitMQ host: %w", err)
 	}
 
-	mappedPort, err := rmqContainer.MappedPort(ctx, "5672/tcp")
+	mappedPort, err := rmqContainer.MappedPort(ctx, amqpPortSpec)
 	if err != nil {
 		_ = rmqContainer.Terminate(ctx)
 		return nil, fmt.Errorf("failed to get RabbitMQ port: %w", err)

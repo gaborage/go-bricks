@@ -13,6 +13,10 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
+// redisPort is the container-side port every Redis wait strategy and MappedPort lookup
+// addresses.
+const redisPort = "6379/tcp"
+
 // RedisContainerConfig holds configuration for Redis test container
 type RedisContainerConfig struct {
 	// ImageTag specifies the Redis version (default: the pin in DefaultRedisConfig)
@@ -88,6 +92,20 @@ func StartRedisContainerForTestMain(ctx context.Context, cfg *RedisContainerConf
 	return cc, true, nil
 }
 
+// redisOptions builds the container customizers, wait strategy included.
+//
+// Composite wait strategy: log message (fast early signal) + port listening (network
+// verification) prevents a race where the log appears but Redis is not ready to accept
+// connections.
+func redisOptions(cfg *RedisContainerConfig) []testcontainers.ContainerCustomizer {
+	return []testcontainers.ContainerCustomizer{
+		waitOptionWithin(cfg.StartupTimeout,
+			wait.ForLog("Ready to accept connections"),
+			wait.ForListeningPort(redisPort),
+		),
+	}
+}
+
 // startRedisContainerInternal does the actual testcontainer setup without
 // any *testing.T interaction. Both StartRedisContainer (which adds *T-bound
 // Skip/Logf) and StartRedisContainerForTestMain wrap it.
@@ -96,16 +114,9 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 		cfg = DefaultRedisConfig()
 	}
 
-	// Use composite wait strategy: log message (fast early signal) + port listening (network verification)
-	// This prevents race conditions where the log appears but Redis isn't ready to accept connections
 	redisContainer, err := redis.Run(ctx,
 		fmt.Sprintf("redis:%s", cfg.ImageTag),
-		testcontainers.WithWaitStrategy(
-			wait.ForAll(
-				wait.ForLog("Ready to accept connections"),
-				wait.ForListeningPort("6379/tcp"),
-			).WithStartupTimeout(cfg.StartupTimeout),
-		),
+		redisOptions(cfg)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start Redis container: %w", err)
@@ -117,7 +128,7 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 		return nil, fmt.Errorf("failed to get Redis host: %w", err)
 	}
 
-	mappedPort, err := redisContainer.MappedPort(ctx, "6379/tcp")
+	mappedPort, err := redisContainer.MappedPort(ctx, redisPort)
 	if err != nil {
 		_ = redisContainer.Terminate(ctx)
 		return nil, fmt.Errorf("failed to get Redis port: %w", err)
