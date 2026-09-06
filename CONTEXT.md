@@ -285,10 +285,11 @@ _Avoid_: global provider, active provider, current provider, test provider (the
 double itself, not its installed role)
 
 **Delegate**:
-OTel's process-wide forwarder that every `otel.Tracer` and `otel.Meter` call
-routes through. It latches onto the first installed provider in the binary and
-never rebinds, so restoring a previous provider is safe while shutting any
-installed provider down can silence every later caller.
+OTel's process-wide forwarder standing in for tracers and meters obtained
+before any provider was installed. It latches onto the first installed
+provider in the binary and never rebinds, so restoring a previous provider is
+safe while shutting any installed provider down can silence every caller that
+still goes through it.
 _Avoid_: global tracer, default provider, singleton, noop (the delegate is not
 the noop it starts as)
 
