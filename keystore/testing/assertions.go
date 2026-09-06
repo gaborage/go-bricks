@@ -46,15 +46,18 @@ type keyStoreReporter interface {
 	Helper()
 }
 
-// AssertKeyNotFound verifies that retrieving a key with the given name returns an error
-// from both PublicKey and PrivateKey. Note that this does not distinguish between
-// "key name not found" and "no private key configured" — it only asserts that both
-// lookups return a non-nil error.
+// AssertKeyNotFound verifies that retrieving a key with the given name is a miss on both
+// PublicKey and PrivateKey: each lookup must return a non-nil error AND no key. Note that
+// this does not distinguish between "key name not found" and "no private key configured" —
+// error-ness alone is all it reads from the error.
 //
-// An unexpectedly FOUND public key aborts the caller's test rather than recording a
-// failure and continuing: the private-key assertion that follows would otherwise run
-// against a keystore already known to be in the wrong state, and its result — pass or
-// fail — says nothing useful once the first lookup has succeeded (ADR-101).
+// A stray key is reported by dynamic TYPE only, never by value (ADR-102).
+//
+// An unexpectedly FOUND public key — an error-free lookup, or a key handed back alongside
+// the error — aborts the caller's test rather than recording a failure and continuing: the
+// private-key assertion that follows would otherwise run against a keystore already known
+// to be in the wrong state, and its result — pass or fail — says nothing useful once the
+// first lookup has produced a key (ADR-101).
 func AssertKeyNotFound(t *testing.T, ks app.KeyStore, name string) {
 	t.Helper()
 	assertKeyNotFound(t, ks, name)
@@ -62,9 +65,18 @@ func AssertKeyNotFound(t *testing.T, ks app.KeyStore, name string) {
 
 func assertKeyNotFound(t keyStoreReporter, ks app.KeyStore, name string) {
 	t.Helper()
-	_, pubErr := ks.PublicKey(name)
+	// The value guard precedes the error assertion on both arms so that each arm's error
+	// assertion stays its block's last statement, which is what testifylint's require-error
+	// rule reads to allow the private arm to stay assert.Error (ADR-101's positional rule).
+	pubKey, pubErr := ks.PublicKey(name)
+	if pubKey != nil {
+		require.Fail(t, "unexpected key returned", "public key %q should not be found, but a %T was returned", name, pubKey)
+	}
 	require.Error(t, pubErr, "public key %q should not be found", name)
 
-	_, privErr := ks.PrivateKey(name)
+	privKey, privErr := ks.PrivateKey(name)
+	if privKey != nil {
+		assert.Fail(t, "unexpected key returned", "private key %q should not be found, but a %T was returned", name, privKey)
+	}
 	assert.Error(t, privErr, "private key %q should not be found", name)
 }
