@@ -345,7 +345,7 @@ func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) dbtyp
 	if iqb.Err() != nil {
 		return iqb
 	}
-	normalized, err := qb.validateIdentifiers("insert column", columns)
+	normalized, err := qb.validateInsertColumns(columns)
 	if err != nil {
 		iqb.Fail(err)
 		return iqb
@@ -354,18 +354,23 @@ func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) dbtyp
 	return iqb
 }
 
-// validateIdentifiers checks a column list against the identifier grammar,
-// reporting the FIRST violation so the error names the first bad column rather
-// than the last — the same first-violation-wins rule the fluent builders follow.
+// validateInsertColumns checks an INSERT column list against the identifier
+// grammar, reporting the FIRST violation so the error names the first bad column
+// rather than the last — the same first-violation-wins rule the fluent builders
+// follow. The name carries the constraint the signature no longer states: every
+// caller occupies the same identifier position, so the diagnostic context is the
+// function's own rather than a parameter four doors repeat. A list-shaped door
+// in another position gets its own wrapper, the way `quoteColumnForQuery` wraps
+// `quoteColumnWithContext`.
 //
 // It returns the NORMALIZED list, and callers must render that rather than their
 // own input: validating a trimmed value while rendering the untrimmed one is what
 // let `Select("t.* ")` render as `t."*"` (ADR-082), and returning the value is
 // what stops the two from disagreeing again (#1158).
-func (qb *QueryBuilder) validateIdentifiers(context string, columns []string) (normalized []string, err error) {
+func (qb *QueryBuilder) validateInsertColumns(columns []string) (normalized []string, err error) {
 	normalized = make([]string, 0, len(columns))
 	for _, col := range columns {
-		trimmed, colErr := qb.validateIdentifier(context, col)
+		trimmed, colErr := qb.validateIdentifier("insert column", col)
 		if colErr != nil {
 			return nil, colErr
 		}
@@ -415,8 +420,13 @@ func (qb *QueryBuilder) InsertStruct(table string, instance any) dbtypes.InsertQ
 	if iqb.Err() != nil {
 		return iqb
 	}
+	normalized, err := qb.validateInsertColumns(columns)
+	if err != nil {
+		iqb.Fail(err)
+		return iqb
+	}
 	iqb.insertBuilder = iqb.insertBuilder.
-		Columns(qb.quoteColumnsForDML(columns...)...).
+		Columns(qb.quoteColumnsForDML(normalized...)...).
 		Values(values...)
 	return iqb
 }
@@ -454,8 +464,13 @@ func (qb *QueryBuilder) InsertFields(table string, instance any, fields ...strin
 	if iqb.Err() != nil {
 		return iqb
 	}
+	normalized, err := qb.validateInsertColumns(columns)
+	if err != nil {
+		iqb.Fail(err)
+		return iqb
+	}
 	iqb.insertBuilder = iqb.insertBuilder.
-		Columns(qb.quoteColumnsForDML(columns...)...).
+		Columns(qb.quoteColumnsForDML(normalized...)...).
 		Values(values...)
 	return iqb
 }
@@ -1427,9 +1442,9 @@ func (uqb *UpdateQueryBuilder) SetMap(clauses map[string]any) dbtypes.UpdateQuer
 func (uqb *UpdateQueryBuilder) setColumn(column string, value any) (ok bool) {
 	quoted, err := uqb.qb.quoteColumnForQuery(column)
 	if err != nil {
-		// Defense in depth: every caller feeds this a column parsed from a db tag,
-		// and the tag parser rejects an unsafe identifier by panicking, so no test
-		// can reach this branch today.
+		// Reachable: the tag parser judges a db tag against the union alphabet of
+		// every vendor, so a tag it admits (`a#b`) can still be outside the
+		// grammar of the builder's vendor, which is what the funnel judges.
 		uqb.Fail(err)
 		return false
 	}
@@ -1549,7 +1564,7 @@ func (dqb *DeleteQueryBuilder) ToSQL() (sql string, args []any, err error) {
 func (iqb *InsertQueryBuilder) Columns(columns ...string) dbtypes.InsertQueryBuilder {
 	// Validate each column identifier BEFORE interpolation (all vendors, M9), the
 	// same guard UpdateQueryBuilder.SetMap has applied since ADR-031.
-	normalized, err := iqb.qb.validateIdentifiers("insert column", columns)
+	normalized, err := iqb.qb.validateInsertColumns(columns)
 	if err != nil {
 		iqb.Fail(err)
 		return iqb

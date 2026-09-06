@@ -972,64 +972,62 @@ func TestBuildUpsertVendorSegmentGrammar(t *testing.T) {
 	}
 }
 
-// TestStructDoorsDisagreeOnDbTagGrammar RECORDS a known residual rather than
-// asserting desired behavior, and pins WHICH doors it covers: the INSERT struct
-// doors render db-tag columns through quoteColumnsForDML without a validator, so
-// a `db:"a#b"` tag reaches PostgreSQL unquoted and fails at execution, while
-// SetStruct routes columns through the column funnel and refuses it like any
-// other column. The rows vary only the door, which is what makes the
-// disagreement the visible fact. Struct tags are developer constants judged by
-// the columns package against the union alphabet, which is why the INSERT half
-// was left out of #1202's sweep (ADR-100). If an INSERT row starts failing
-// because the statement is refused, the residual has been closed — delete the
-// row, do not "fix" it.
-func TestStructDoorsDisagreeOnDbTagGrammar(t *testing.T) {
+// TestStructDoorsRefuseDbTagOnUnknownVendor covers the axis hashDoors() cannot:
+// the vendor FALLBACK and the no-panic promise. The PostgreSQL-refuses and
+// Oracle-accepts halves of #1449 live in hashDoors() (query_builder_test.go)
+// alongside every other door, so a struct door that stops consulting the funnel
+// flips one row there. What remains here is that an unregistered vendor string
+// inherits the default renderer's (PostgreSQL's) alphabet at all three struct
+// doors, and that the refusal is a deferred ToSQL() error rather than a panic
+// (ADR-031, [C64.3]) — the columns package refuses a tag by panicking, so the
+// door's own channel is the thing worth pinning.
+func TestStructDoorsRefuseDbTagOnUnknownVendor(t *testing.T) {
 	type hashTagged struct {
 		ID   int64  `db:"id"`
 		Name string `db:"a#b"`
 	}
 
-	tests := []struct {
-		name    string
-		build   func(qb *QueryBuilder) (string, []any, error)
-		wantErr bool
-		wantSQL string
+	doors := []struct {
+		name  string
+		build func(qb *QueryBuilder) (string, []any, error)
 	}{
 		{
-			name: "insert_struct_still_renders_the_tag",
+			name: "insert_struct",
 			build: func(qb *QueryBuilder) (string, []any, error) {
 				return qb.InsertStruct(tableAccounts, &hashTagged{ID: 1, Name: "x"}).ToSQL()
 			},
-			wantSQL: "a#b",
 		},
 		{
-			name: "insert_fields_still_renders_the_tag",
+			name: "insert_fields",
 			build: func(qb *QueryBuilder) (string, []any, error) {
 				return qb.InsertFields(tableAccounts, &hashTagged{ID: 1, Name: "x"}, "Name").ToSQL()
 			},
-			wantSQL: "a#b",
 		},
 		{
-			name: "set_struct_refuses_the_tag",
+			name: "set_struct",
 			build: func(qb *QueryBuilder) (string, []any, error) {
 				return qb.Update(tableAccounts).SetStruct(&hashTagged{ID: 1, Name: "x"}).ToSQL()
 			},
-			wantErr: true,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	for _, door := range doors {
+		t.Run(door.name, func(t *testing.T) {
+			qb := NewQueryBuilder("unknown")
 
-			sql, _, err := tt.build(qb)
+			var (
+				sql  string
+				args []any
+				err  error
+			)
+			require.NotPanics(t, func() {
+				sql, args, err = door.build(qb)
+			}, "a tag outside the vendor grammar is a deferred error, never a panic")
 
-			if tt.wantErr {
-				require.Error(t, err, "SetStruct judges db-tag columns through the column funnel")
-				return
-			}
-			require.NoError(t, err, "the INSERT struct doors do not consult the vendor grammar today")
-			assert.Contains(t, sql, tt.wantSQL, "the tag name reaches the statement unquoted")
+			require.Error(t, err, "an unknown vendor inherits the default renderer's alphabet")
+			assert.Contains(t, err.Error(), `invalid identifier "a#b"`, "the error names the offending column")
+			assert.Empty(t, sql, "a refused statement renders no SQL")
+			assert.Nil(t, args, "a refused statement carries no args")
 		})
 	}
 }

@@ -9,6 +9,28 @@
   (the renderer seam this extends)
 - **Issue**: #1202; the byte-cap half is deferred to #1437
 
+## Amendment (2026-09-06): the INSERT struct doors judge db-tag names too
+
+The Consequences below recorded a residual: `InsertStruct` and `InsertFields`
+rendered struct-derived columns without the vendor grammar, so a `db:"a#b"` tag
+built `err == nil` and SQL PostgreSQL rejected, while `SetStruct` refused the
+same tag. #1449 closes it: both doors now run the same
+`validateInsertColumns` funnel `InsertWithColumns` uses and render the
+normalized slice it returns. All three struct doors now agree on every vendor.
+On Oracle the effect is narrower than the sentence above suggests: the `columns`
+registry has already quoted a reserved-word tag by the time the door sees it, and
+a quoted segment is exempt from the charset check by construction — so the
+vendor's alphabet binds on the segments the registry left bare.
+
+The check lives at the door, not in the `columns` registry. The registry is
+vendor-keyed, so a check there is feasible, but its only refusal channel is a
+`panic` at first use, which contradicts the "never a panic" promise and would
+demote `SetStruct`'s correct deferred error. Per ADR-082 (one funnel per
+identifier argument, at the door) and ADR-031 (deferred, first violation wins),
+the registry stays a parser of the union alphabet and the door judges the
+vendor's. The `[C64.3]` atom is amended in place rather than superseded: the E64
+hop is unreleased, so the residual never reached a consumer.
+
 ## Context
 
 The query builder judged every identifier argument against ONE grammar,
@@ -93,18 +115,8 @@ panic.
   atom is `[C64.3]`.
 - Oracle behavior is unchanged, which is the point of putting the rule behind the
   vendor seam rather than in the shared lexer.
-- **Residual: the INSERT struct doors do not judge db-tag names.** `InsertStruct`
-  and `InsertFields` render struct-derived columns through `quoteColumnsForDML`
-  without passing a validator, so a `db:"a#b"` tag still reaches PostgreSQL
-  unquoted and fails at execution (`database/internal/builder/query_builder.go:395`
-  and `:435`, both via `:705`). `UpdateQueryBuilder.SetStruct` is NOT in this
-  residual: it routes every column through `setColumn` → `quoteColumnForQuery`,
-  so a `#` tag is refused there like any other column — the three struct doors
-  do not agree, which is itself the argument for closing this. Tag names are
-  developer constants judged by the `columns` package against the union alphabet,
-  and closing it means threading a vendor into that package — out of scope here,
-  tracked as #1449, and pinned by a test that RECORDS the current split so the
-  day it changes is visible.
+- **Closed by #1449 (see the Amendment above): the INSERT struct doors judge
+  db-tag names**, so the three struct doors no longer disagree.
 - **Residual: byte caps are still unenforced at the doors** (#1437). On
   PostgreSQL an over-long name is silently truncated at 63 bytes, so two names
   sharing a prefix can collapse onto one object.
@@ -117,4 +129,4 @@ panic.
 - `database/identifier/identifier.go` (`ValidateCharset`),
   `database/internal/builder/renderer.go` (`ValidateSegment`),
   `database/internal/builder/identifiers.go` (`validateVendorSegments`)
-- Issues #1202, #1311, #1437 (byte caps), #1449 (struct db-tag names)
+- Issues #1202, #1311, #1437 (byte caps), #1449 (struct db-tag names, closed)
