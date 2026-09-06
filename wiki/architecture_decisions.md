@@ -1505,6 +1505,21 @@ ADR-091 pattern). Additive: `messaging.EventPublisher[T]` and
 byte frame. The streams lane's `Publisher.Publish(*PublishMessage)` is untouched. See
 [migrations.md](migrations.md) `[C63.1]`.
 
+### [ADR-103: The Publish Bound Governs Every Wait It Can Reach](adr_103_publish_bound_governs_waiting.md)
+
+**Date:** 2026-09-06 | **Status:** Accepted
+
+`messaging.publishtimeout` bounds waiting, not an in-flight socket write — but the client's
+publish serialization primitive was a plain `sync.Mutex` held across `amqp091-go`'s blocking
+`PublishWithContext`, so a publisher queued behind a stuck write learned of its own expiry
+only after that write returned (~8x late). The slot is now a one-place channel acquired under
+the caller's context, so a queued publisher is released at its deadline with the same wrapped
+`context.DeadlineExceeded` the late path already returned — no new sentinel, no exported
+surface moved. The reconnect path keeps an unconditional acquire, and the one publish already
+inside the write remains the documented residual.
+
+---
+
 ### [ADR-102: A Key-Absence Helper Checks the Returned Key, Not Only the Error](adr_102_key_not_found_helper_checks_the_value.md)
 
 **Date:** 2026-09-06 | **Status:** Accepted | **Breaking:** `keystore/testing.AssertKeyNotFound` fails when a lookup hands back a key alongside its error, instead of reading error-ness alone
@@ -2214,7 +2229,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-102) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-103) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

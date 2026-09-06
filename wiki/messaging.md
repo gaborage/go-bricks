@@ -636,14 +636,19 @@ messaging:
   ceiling is reached. That is the point of setting the key. At defaults, `40s` buys the
   pre-flight plus roughly one confirmation wait, not five.
 
-The bound governs **waiting**, not an in-flight socket write. `amqp091-go`'s
-`PublishWithContext` checks the context once before it starts and then performs a
-blocking write, and the client's publish serialization lock is a plain mutex, so a
-broker that stops reading can hold one publish — and the publishers queued behind
-it — past the deadline until that write returns. Within the client the deadline is
-observed at the next cancellation point: the readiness pre-flight, the confirmation
-wait, and the retry-arming guard. Size a hard end-to-end SLO with a transport-level
-control (a socket write deadline or connection heartbeat), not this key alone.
+The bound governs **waiting**, not an in-flight socket write: every cancellation-aware
+wait on the publish path — the readiness pre-flight, the publish slot, and the retry
+loop's confirmation and backoff waits — is bounded by the deadline; the socket write is
+not. `amqp091-go`'s `PublishWithContext` checks the context once before it starts and
+then performs a blocking write, so a broker that stops reading can hold **that one
+publish** past the deadline until the write returns. The publishers queued behind it are
+no longer held with it — the client's publish slot is acquired under the caller's
+context, so each queued publisher is released at its own deadline with
+`context.DeadlineExceeded`.
+Within the client the deadline is observed at the next cancellation point: the
+readiness pre-flight, the publish slot, the confirmation wait, and the retry-arming
+guard. Size a hard end-to-end SLO with a transport-level control (a socket write
+deadline or connection heartbeat), not this key alone.
 
 Expiry surfaces as `context.DeadlineExceeded`, wrapping the last cause
 (`ErrPublishNacked` / `ErrPublishConfirmTimeout`) exactly as a caller-supplied deadline
