@@ -201,10 +201,10 @@ func (a *App) assertMessagingConfiguredIfDeclared(decls *messaging.Declarations)
 	}
 	s := decls.Stats()
 	return fmt.Errorf("messaging declarations were registered "+
-		"(publishers=%d, consumers=%d, exchanges=%d, queues=%d, bindings=%d) "+
+		"(exchanges=%d, queues=%d, bindings=%d, publishers=%d, consumers=%d) "+
 		"but messaging is not configured; "+
 		"set messaging.broker.url (or env MESSAGING_BROKER_URL)",
-		s.Publishers, s.Consumers, s.Exchanges, s.Queues, s.Bindings)
+		s.Exchanges, s.Queues, s.Bindings, s.Publishers, s.Consumers)
 }
 
 // registerDebugHandlers sets up debug endpoints if enabled in configuration. The error is

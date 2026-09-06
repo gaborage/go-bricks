@@ -920,8 +920,10 @@ func TestDeclarationStatsFieldSetIsPinned(t *testing.T) {
 
 	assert.Equal(t, []string{"Exchanges", "Queues", "Bindings", "Publishers", "Consumers"}, fields,
 		"DeclarationStats changed shape; update every site that enumerates its fields: "+
-			"logDeclStats, Declarations.Stats, Declarations.IsEmpty, "+
+			"logDeclStats, Declarations.Stats, "+
 			"assertMessagingConfiguredIfDeclared, assertDeclarationCounts, TestDeclarationsStats, "+
+			"TestDeclarationsIsEmptyMatchesZeroStats, "+
+			"TestPrepareRuntimeErrorListsDeclarationCountsInStructOrder, "+
 			"wiki/messaging.md and llms.txt")
 }
 
