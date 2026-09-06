@@ -301,6 +301,27 @@ func TestPrepareRuntimeFailsWhenDeclarationsExistAndMessagingUnconfigured(t *tes
 	assert.Contains(t, err.Error(), "publishers=1")
 }
 
+// TestPrepareRuntimeErrorListsDeclarationCountsInStructOrder pins the order of
+// the counts in the #366 startup error against the DeclarationStats struct order
+// that Stats() and the declarer log lines already use. declaringDeclarerModule's
+// lopsided topology makes the five counts pairwise distinct, so a swapped pair
+// renders differently; the whole parenthesised group is asserted as ONE
+// substring, closing paren included, because five separate assertions would pin
+// presence rather than order and a prefix would not notice a sixth count.
+func TestPrepareRuntimeErrorListsDeclarationCountsInStructOrder(t *testing.T) {
+	cfg := &config.Config{
+		App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
+		Multitenant: config.MultitenantConfig{Enabled: false},
+		// Messaging.Broker.URL intentionally empty.
+	}
+	app := newLifecycleCheckApp(t, cfg)
+	require.NoError(t, app.RegisterModule(&declaringDeclarerModule{name: "distinct-counts"}))
+
+	err := app.prepareRuntime(context.Background())
+
+	require.ErrorContains(t, err, "(exchanges=1, queues=2, bindings=3, publishers=4, consumers=5)")
+}
+
 // TestPrepareRuntimeAllowsEmptyDeclarationsWithMessagingUnconfigured verifies
 // that the check does not fire when no module declared messaging — startup
 // without messaging configured remains valid for apps that don't use AMQP.
