@@ -2317,9 +2317,9 @@ func TestInsertDoorsValidateTable(t *testing.T) {
 				sql, args, err := build(qb, payload).ToSQL()
 
 				require.Error(t, err)
-				require.ErrorContains(t, err, "invalid table identifier",
+				assert.ErrorContains(t, err, "invalid table identifier", //nolint:testifylint // message clause; the independent no-SQL/no-args checks follow
 					"rejected the call, but not because of the table identifier")
-				require.ErrorContains(t, err, door, "the error should name the door it came from")
+				assert.ErrorContains(t, err, door, "the error should name the door it came from") //nolint:testifylint // message clause; the independent no-SQL/no-args checks follow
 				require.Empty(t, sql, "a rejected call emits no SQL")
 				require.Empty(t, args, "a rejected call binds no arguments")
 			})

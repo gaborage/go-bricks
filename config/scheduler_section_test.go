@@ -56,8 +56,9 @@ func TestValidateSchedulerTimezoneWiredIntoValidate(t *testing.T) {
 	cfg := createValidFullConfig()
 	cfg.Scheduler.Timezone = "Not/AZone"
 	err := Validate(cfg)
-	require.ErrorContains(t, err, "scheduler config:")
-	assert.ErrorContains(t, err, "scheduler.timezone")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "scheduler config:") //nolint:testifylint // wrapper prefix; the independent inner-cause clause follows
+	require.ErrorContains(t, err, "scheduler.timezone")
 }
 
 func TestNormalizeSchedulerTimeoutDefaults(t *testing.T) {

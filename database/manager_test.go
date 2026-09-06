@@ -216,8 +216,8 @@ func TestDbManagerGetRecoversSourcePanic(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, rel)
 	assert.NotContains(t, err.Error(), marker, "the panic value must never reach the error text")
-	require.ErrorContains(t, err, "panic during create")
-	require.ErrorContains(t, err, "*errors.errorString")
+	assert.ErrorContains(t, err, "panic during create") //nolint:testifylint // message clause; the independent retry-after-panic assertion follows
+	assert.ErrorContains(t, err, "*errors.errorString") //nolint:testifylint // message clause; the independent retry-after-panic assertion follows
 
 	db, rel2, err := manager.Get(ctx, tenantA)
 	require.NoError(t, err)
