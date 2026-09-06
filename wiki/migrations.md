@@ -7069,8 +7069,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   each legal still builds. A QUOTED segment's interior is capped too — quoting escapes the
   alphabet, not the length — so `"<64 bytes>"` is refused where the charset check would have
   waved it through. An alias the FRAMEWORK derives is subject to the same cap (vacuous today:
-  the Oracle MERGE emits only the fixed `target`/`source` literals). Refusals are deferred
-  `ToSQL()` errors naming the argument, the limit and the vendor — never a panic; the door
+  the Oracle MERGE emits only the fixed `target`/`source` literals). A refusal names the
+  argument, the limit and the vendor and is never a panic: the fluent doors defer it to
+  `ToSQL()`, while `BuildUpsert` returns it directly as its third result. The door
   signatures do not move. (b) The inbox store's table-name bound follows the STORE's vendor:
   PostgreSQL 49, Oracle still 114, each the vendor's cap minus `len("idx__processed")`, the
   longest name the store derives. `sqlid.ValidateTableName` is UNCHANGED — Oracle's 128 for
@@ -7088,15 +7089,17 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   is measured — and neither does qualifying it, since the cap was never on the whole. A name you
   cannot shorten is a name the server could not have stored intact anyway: on PostgreSQL it was
   being truncated at 63 bytes, so check first whether two prefix-sharing names had already
-  collapsed onto one object. (b) Update those assertions to expect the `ToSQL()` error on the
-  vendor whose cap the name exceeds, keeping the accepting row for the vendor where it still
+  collapsed onto one object. (b) Update those assertions to expect the refusal on the
+  vendor whose cap the name exceeds — the `ToSQL()` error on a fluent door, `BuildUpsert`'s
+  own returned error at that one — keeping the accepting row for the vendor where it still
   fits. (c) Rename the inbox table to 49 bytes or fewer BEFORE the bump — this one fails at
   startup, not at a query, so it takes the deployment down rather than one statement.
 - verify: `go build ./... && go test ./...`  # then (a) run one statement per affected door on
   your vendor and confirm the error names the argument, the limit and the vendor — exercise the
   doors fed by COMPUTED identifiers too, since no grep reaches them; (b) ``git grep -nE
-  '[`"][A-Za-z_][A-Za-z0-9_$#]{63,}' -- '*_test.go'`` returns no identifier-position expectation
-  that still expects a build; (c) boot the service against a PostgreSQL inbox and confirm startup
+  '[`"][A-Za-z_][A-Za-z0-9_$#]{63,}' -- '*_test.go'`` — raise the `{63,}` to `{128,}` on an
+  Oracle-only deployment, as in detect, or it flags identifiers Oracle still accepts — returns
+  no identifier-position expectation that still expects a build; (c) boot the service against a PostgreSQL inbox and confirm startup
   is green with the renamed table
 - ref: gaborage/go-bricks#1437 · [ADR-100](adr_100_vendor_identifier_grammar_behind_renderer.md)
   and its byte-cap amendment · `database/internal/builder/renderer.go` (`MaxBytes`),

@@ -23,8 +23,10 @@ accepted, because it is the object names the server bounds, not the reference.
 A quoted segment's INTERIOR is capped too — quoting escapes the alphabet, not the
 length — so the charset exemption this ADR blessed stays exactly as it was. The
 cap is judged BEFORE the charset, so an over-long name that also carries a bad
-character reports too-long rather than the character. Refusals stay deferred
-`ToSQL()` errors naming the argument, the limit and the vendor, never a panic.
+character reports too-long rather than the character. A refusal names the
+argument, the limit and the vendor, and is never a panic: on the fluent builders
+it is the deferred `ToSQL()` error, while `BuildUpsert` — which is not fluent —
+returns it directly as its third result.
 Forward-binding rule: an alias the FRAMEWORK derives is subject to the same cap.
 That is vacuous today — the Oracle MERGE emits only the fixed `target`/`source`
 literals — but it binds the next derived name rather than leaving it to be
