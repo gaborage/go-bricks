@@ -80,6 +80,11 @@ test happens to run later (#1093).
 mp := obtest.InstallTestMeterProvider(t)
 ```
 
+`obtest.InstallTestTraceProvider(t)` is the tracer-side helper. It additionally installs a
+`propagation.TraceContext{}` text-map propagator and restores the previous one in the same
+cleanup, because a test that installs a tracer provider almost always wants the W3C propagator
+too; the meter helper leaves the propagator alone.
+
 No goroutine, socket, or file handle leaks: `obtest.NewTestMeterProvider` is a `ManualReader`
 with no exporter, and `NewTestTraceProvider` exports in-memory through a synchronous processor.
 What an un-shut-down in-memory span exporter *does* keep is its spans — bounded by the run and
