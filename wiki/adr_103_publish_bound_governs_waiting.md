@@ -98,8 +98,8 @@ resolve their waiter explicitly and neither pins a shared serialization slot.
 
 - Issue #1434 (the aggregate bound arrives ~8x late behind a stuck write)
 - Issue #1250 (`messaging.publishtimeout`)
-- [ADR-033](adr_033_outbox_retry_count_status_parking.md) — outbox retry accounting,
-  which option D would leave unable to distinguish a sent record from an unsent one
+- [ADR-033](adr_033_outbox_retry_count_status_parking.md) — outbox retry accounting;
+  option D would leave it unable to distinguish a sent record from an unsent one
 - [ADR-088](adr_088_outbox_ordered_leader_relay.md) — the ordered relay whose batch a
   stuck publish stalls
 - [ADR-063](adr_063_streams_native_publishing.md) — the streams publish path and its
