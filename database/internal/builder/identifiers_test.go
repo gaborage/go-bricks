@@ -351,12 +351,14 @@ func TestBuilderRejectsIdentifierInjectionBothVendors(t *testing.T) {
 	}
 }
 
-// TestVendorSegmentCheckSkipsQuotedAndWildcard pins the two exemptions the
-// vendor check deliberately keeps, each against its own BARE twin so the row
-// proves the skip rather than the vendor. A quoted identifier is legal on both
-// vendors whatever it contains — it is the framework's own reserved-word form —
-// and the wildcard is not an identifier at all.
-func TestVendorSegmentCheckSkipsQuotedAndWildcard(t *testing.T) {
+// TestVendorSegmentCheckSkipsQuotedCharsetAndWildcard pins the two exemptions
+// the vendor check deliberately keeps, each against its own BARE twin so the row
+// proves the skip rather than the vendor. The exemptions are not the same size:
+// the wildcard is skipped ENTIRELY — it is not an identifier at all — while a
+// quoted segment skips only the CHARSET check (it is the framework's own
+// reserved-word form, so any alphabet is legal on both vendors) and still has
+// its interior judged against the vendor's byte cap.
+func TestVendorSegmentCheckSkipsQuotedCharsetAndWildcard(t *testing.T) {
 	tests := []struct {
 		name      string
 		column    string

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gaborage/go-bricks/database"
+	dbident "github.com/gaborage/go-bricks/database/identifier"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/ledgererr"
 )
@@ -61,10 +62,10 @@ func holdRowColumns() []any {
 const holdTenantTableSuffix = "_tenant"
 
 // postgresMaxIdentifierLen is PostgreSQL's effective identifier limit. It is the
-// binding one across both vendors — Oracle's is 128 — and PostgreSQL TRUNCATES
-// past it rather than refusing, which would quietly point two deployments at one
-// table.
-const postgresMaxIdentifierLen = 63
+// binding one across both vendors — Oracle's is the looser — and PostgreSQL
+// TRUNCATES past it rather than refusing, which would quietly point two
+// deployments at one table.
+const postgresMaxIdentifierLen = dbident.MaxPostgreSQLBytes
 
 // holdLongestDerivedAffix is the longest thing appended to the configured name:
 // the order index, `idx_<name>_tenant_order`. It is longer than the tenant table's

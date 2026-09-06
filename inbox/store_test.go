@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	dbident "github.com/gaborage/go-bricks/database/identifier"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -142,7 +143,7 @@ func TestValidateTableNameForVendorErrorNamesCapAndVendor(t *testing.T) {
 	_, err = NewOracleStore(strings.Repeat("a", maxTableNameLen+1))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "114")
-	require.Contains(t, err.Error(), "derived Oracle identifiers must fit 128 chars")
+	require.Contains(t, err.Error(), fmt.Sprintf("derived Oracle identifiers must fit %d chars", dbident.MaxOracleBytes))
 }
 
 // TestValidateTableNameConfigBoundUnchanged pins the vendor-blind, config-time
@@ -153,5 +154,5 @@ func TestValidateTableNameConfigBoundUnchanged(t *testing.T) {
 
 	err := validateTableName(strings.Repeat("a", maxTableNameLen+1))
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "derived Oracle identifiers must fit 128 chars")
+	require.Contains(t, err.Error(), fmt.Sprintf("derived Oracle identifiers must fit %d chars", dbident.MaxOracleBytes))
 }

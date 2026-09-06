@@ -68,7 +68,7 @@ func validateTableName(name string) error {
 		return fmt.Errorf("inbox: table name %q must be unqualified (no schema prefix)", name)
 	}
 	if len(name) > maxTableNameLen {
-		return fmt.Errorf("inbox: table name %q is too long (max %d; derived Oracle identifiers must fit 128 chars)", name, maxTableNameLen)
+		return fmt.Errorf("inbox: table name %q is too long (max %d; derived Oracle identifiers must fit %d chars)", name, maxTableNameLen, dbident.MaxOracleBytes)
 	}
 	return nil
 }

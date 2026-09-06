@@ -3918,16 +3918,18 @@ func TestEveryDoorAcceptsHashOnOracle(t *testing.T) {
 // letter and n-1 filler letters, so only the LENGTH varies between rows.
 func capName(n int) string { return "a" + strings.Repeat("b", n-1) }
 
-// capDoors enumerates every door that judges an identifier SEGMENT against the
-// vendor's byte cap, each handed the SAME name so the rows vary exactly one
-// dimension — the byte length — the way hashDoors() varies exactly the vendor.
-// The struct door's `db` tag is built through reflect because a tag cannot be
-// computed as a literal; it inherits the cap through validateIdentifiers, so it
-// needs no door-specific check of its own (#1437).
 // upsertCapDoor names the one door BuildUpsert owns; it refuses an unregistered
 // vendor before any column is judged, so that row skips it.
 const upsertCapDoor = "build_upsert_column"
 
+// capDoors enumerates one door per validation funnel that judges an identifier
+// SEGMENT against the vendor's byte cap, each handed the SAME name so the rows
+// vary exactly one dimension — the byte length — the way hashDoors() varies
+// exactly the vendor. The struct door's `db` tag is built through reflect
+// because a tag cannot be computed as a literal; the BUILDER grew no
+// struct-door-specific length check for it, because it inherits the cap through
+// validateIdentifiers — the row below still probes that door, to pin the
+// inheritance (#1437).
 func capDoors(name string) map[string]func(qb *QueryBuilder) (string, []any, error) {
 	tagged := reflect.New(reflect.StructOf([]reflect.StructField{
 		{Name: "Val", Type: reflect.TypeOf(int64(0)), Tag: reflect.StructTag(fmt.Sprintf("db:%q", name))},
@@ -3960,12 +3962,16 @@ func capDoors(name string) map[string]func(qb *QueryBuilder) (string, []any, err
 	}
 }
 
-// TestEveryDoorEnforcesTheVendorByteCap walks every identifier door on BOTH
-// sides of every vendor's cap. The exactly-at-cap row is what makes the refusal
-// row mean anything: without it a `>` widened to `>=` would still pass (#1437).
-// The unknown vendor is the third row because defaultRenderer embeds the
-// PostgreSQL one, so it inherits 63 rather than having no cap at all.
-func TestEveryDoorEnforcesTheVendorByteCap(t *testing.T) {
+// TestRepresentativeDoorsEnforceTheVendorByteCap walks capDoors' seven doors on
+// BOTH sides of every vendor's cap. Those seven are one representative per
+// validation funnel rather than the whole door surface: every other identifier
+// door hashDoors() enumerates reaches the same validateSegment, and it is that
+// funnel — not any single door — that the boundary rows pin. The exactly-at-cap
+// row is what makes the refusal row mean anything: without it a `>` widened to
+// `>=` would still pass (#1437). The unknown vendor is the third row because
+// defaultRenderer embeds the PostgreSQL one, so it inherits 63 rather than
+// having no cap at all.
+func TestRepresentativeDoorsEnforceTheVendorByteCap(t *testing.T) {
 	vendors := []struct {
 		name     string
 		vendor   string
