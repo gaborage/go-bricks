@@ -200,6 +200,55 @@ func TestPublishSlotExcludesReconnect(t *testing.T) {
 	}
 }
 
+// abortShapeCase is one early-vs-late pair: the two ways a publish can end on the
+// caller's deadline, plus the prior attempt cause both exits must carry.
+type abortShapeCase struct {
+	name  string
+	early func(t *testing.T) error
+	late  func(t *testing.T) error
+	// wantCause, when non-nil, must appear in the errors.Is chain and the
+	// message must carry the "; last attempt:" wrapper.
+	wantCause error
+}
+
+// assertAbortShape pins one exit's terminal error: the deadline in its errors.Is
+// chain, the prior cause when one is expected, and the message prefix. A prior
+// cause is rendered as a suffix, so the expected prefix is the bare deadline
+// message plus the wrapper when one is expected — never a hardcoded full text of
+// the cause.
+func assertAbortShape(t *testing.T, label string, err, wantCause error) {
+	t.Helper()
+	prefix := deadlineExceededMsg
+	if wantCause != nil {
+		prefix += "; last attempt:"
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("%s exit: expected context.DeadlineExceeded in the chain, got %v", label, err)
+	}
+	if wantCause != nil && !errors.Is(err, wantCause) {
+		t.Fatalf("%s exit: expected %v in the chain, got %v", label, wantCause, err)
+	}
+	if !strings.HasPrefix(err.Error(), prefix) {
+		t.Fatalf("%s exit: expected message prefixed %q, got %q", label, prefix, err.Error())
+	}
+}
+
+// runBothExits drives one case's early and late exits and holds the identity
+// claim itself: each exit has the right shape, and the two render the SAME
+// message.
+func runBothExits(t *testing.T, tc abortShapeCase) {
+	t.Helper()
+	earlyErr := tc.early(t)
+	lateErr := tc.late(t)
+
+	assertAbortShape(t, "early", earlyErr, tc.wantCause)
+	assertAbortShape(t, "late", lateErr, tc.wantCause)
+
+	if earlyErr.Error() != lateErr.Error() {
+		t.Fatalf("early and late aborts disagree: early %q vs late %q", earlyErr.Error(), lateErr.Error())
+	}
+}
+
 // TestPublishSlotAbortShapeMatchesConfirmAbort is the load-bearing identity
 // check: the NEW early exit (deadline while queued on the slot) must produce
 // exactly the terminal error the long-standing late exit (deadline while waiting
@@ -208,14 +257,7 @@ func TestPublishSlotExcludesReconnect(t *testing.T) {
 // Asserted as errors.Is plus the message prefix and an early-vs-late equality,
 // never as a hardcoded full text of the cause.
 func TestPublishSlotAbortShapeMatchesConfirmAbort(t *testing.T) {
-	tests := []struct {
-		name  string
-		early func(t *testing.T) error
-		late  func(t *testing.T) error
-		// wantCause, when non-nil, must appear in the errors.Is chain and the
-		// message must carry the "; last attempt:" wrapper.
-		wantCause error
-	}{
+	tests := []abortShapeCase{
 		{
 			name:  "no_prior_cause",
 			early: earlySlotDeadline,
@@ -231,37 +273,7 @@ func TestPublishSlotAbortShapeMatchesConfirmAbort(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			earlyErr := tt.early(t)
-			lateErr := tt.late(t)
-
-			// A prior cause is rendered as a suffix, so the expected prefix is the
-			// bare deadline message plus the wrapper when one is expected.
-			prefix := deadlineExceededMsg
-			if tt.wantCause != nil {
-				prefix += "; last attempt:"
-			}
-			exits := []struct {
-				label string
-				err   error
-			}{
-				{label: "early", err: earlyErr},
-				{label: "late", err: lateErr},
-			}
-			for _, exit := range exits {
-				if !errors.Is(exit.err, context.DeadlineExceeded) {
-					t.Fatalf("%s exit: expected context.DeadlineExceeded in the chain, got %v", exit.label, exit.err)
-				}
-				if tt.wantCause != nil && !errors.Is(exit.err, tt.wantCause) {
-					t.Fatalf("%s exit: expected %v in the chain, got %v", exit.label, tt.wantCause, exit.err)
-				}
-				if !strings.HasPrefix(exit.err.Error(), prefix) {
-					t.Fatalf("%s exit: expected message prefixed %q, got %q", exit.label, prefix, exit.err.Error())
-				}
-			}
-
-			if earlyErr.Error() != lateErr.Error() {
-				t.Fatalf("early and late aborts disagree: early %q vs late %q", earlyErr.Error(), lateErr.Error())
-			}
+			runBothExits(t, tt)
 		})
 	}
 }
