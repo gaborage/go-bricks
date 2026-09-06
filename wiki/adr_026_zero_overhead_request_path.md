@@ -52,9 +52,10 @@
 > three agree on, since `AllocsPerRun` averages. The 62 → 57 A/B is the guard's own
 > `guardLogger` against the recording double: restoring the old
 > `newTestServer("", "", "")` construction in the guard reads 62, `guardLogger`
-> reads 57. Every number here was produced on go1.27.1; `go.mod` pins go 1.27.0 and
-> the guard comment records the baseline as measured on go1.27.x, a patch-level
-> difference that does not move these counts.
+> reads 57. Every number here was produced on go1.27.1 except the 53 in the
+> toolchain step, which is the go1.26.x reading that step exists to contrast;
+> `go.mod` pins go 1.27.0 and the guard comment records the baseline as measured on
+> go1.27.x, a patch-level difference that does not move these counts.
 
 ## Context
 
