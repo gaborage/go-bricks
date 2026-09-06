@@ -191,6 +191,8 @@ type InboxProvider interface {
 // KeyStore provides access to named RSA key pairs loaded at startup.
 // Keys are loaded from DER files or base64-encoded values during module initialization.
 // All methods are safe for concurrent use (the store is read-only after init).
+// An implementation must not return key material alongside an error: on the error path the
+// returned key or secret is nil.
 // This interface is defined here to avoid circular imports between app and keystore packages.
 type KeyStore interface {
 	// PublicKey returns the parsed RSA public key for the given certificate name.
