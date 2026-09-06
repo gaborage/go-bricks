@@ -10,6 +10,22 @@ AMQP-based messaging with **validate-once, replay-many** pattern:
 - Automatic reconnection with exponential backoff
 - Context propagation for tenant IDs and tracing
 
+### Declarer Discovery
+
+The framework discovers declarers by type assertion on `app.MessagingDeclarer`, so a
+misspelled or mis-signatured `DeclareMessaging` is a silent no-op at startup rather than a
+compile error — assert the interface next to the method to turn it into one:
+
+```go
+var _ app.MessagingDeclarer = (*Module)(nil)
+```
+
+At startup the log names each asserting module with the exchanges, queues, bindings,
+publishers and consumers it **added** — "added", because exchanges are map-keyed and
+`RegisterQueue` merges a compatible re-declaration, so zeros mean the module added nothing
+new, not that its declarer is empty. A module with the wrong method name or signature has no
+line at all.
+
 ## Helper Functions for Simplified Declarations
 
 GoBricks provides production-safe defaults to reduce AMQP boilerplate (~50+ lines → ~15 lines):

@@ -38,6 +38,18 @@ type RouteRegisterer interface {
 // AMQP exchanges, queues, bindings, publishers, and consumers.
 // Modules that implement this interface will have DeclareMessaging called automatically
 // during application startup.
+//
+// Detection is a runtime type assertion, so a drifted method name or signature is a
+// silent no-op: the module is skipped, contributes no collection log line, and startup
+// still succeeds. Pin the implementation at compile time with
+//
+//	var _ app.MessagingDeclarer = (*Module)(nil)
+//
+// which turns that drift into a build failure.
+//
+// The startup line naming the module and what it declared is emitted after
+// DeclareMessaging returns, so a declarer that panics or blocks leaves no line of
+// its own — the last module named in the log is the one before it.
 type MessagingDeclarer interface {
 	DeclareMessaging(decls *messaging.Declarations)
 }

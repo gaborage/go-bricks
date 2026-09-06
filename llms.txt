@@ -2909,11 +2909,11 @@ messaging:
     idlettl: 1h                           # Explicit override; unset default is 1h single-tenant / 10m multi-tenant
 ```
 
-Omit the entire `messaging:` block to disable AMQP. Modules implementing `MessagingDeclarer` will fail-fast at startup if messaging isn't configured (no silent degradation). For multi-tenant setups, override per tenant via `tenants.<id>.messaging.url`.
+Omit the entire `messaging:` block to disable AMQP. Modules implementing `MessagingDeclarer` will fail-fast at startup if messaging isn't configured — but only once some module actually declared something. For multi-tenant setups, override per tenant via `tenants.<id>.messaging.url`.
 
 ### Step 2: Declare the Topology (`MessagingDeclarer`)
 
-A module implements `MessagingDeclarer` to declare its exchanges, queues, bindings, publishers, and consumers. The framework validates this once at startup, then replays per tenant for isolation.
+A module implements `MessagingDeclarer` to declare its exchanges, queues, bindings, publishers, and consumers. The framework validates this once at startup, then replays per tenant for isolation. Declarers are found by type assertion, so a misspelled or mis-signatured `DeclareMessaging` is a silent no-op at startup — the `var _ app.MessagingDeclarer = (*Module)(nil)` assertion below makes it a compile error instead. The startup log names each asserting module with what it added; zeros mean it added nothing new, not that its declarer is empty.
 
 ```go
 package orders
@@ -2945,7 +2945,9 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	return nil
 }
 
-// DeclareMessaging is detected at startup via duck-typing — the framework calls it for you.
+var _ app.MessagingDeclarer = (*Module)(nil)
+
+// DeclareMessaging is detected at startup by type assertion — the framework calls it for you.
 func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 	// Topology — production-safe defaults: durable=true, auto_delete=false
 	exchange := decls.DeclareTopicExchange("orders.events")
