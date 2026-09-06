@@ -100,7 +100,7 @@ func Load() (*Config, error) {
 	//
 	// Both preserve the InjectInto escape hatch: service-specific config:"..." keys arrive with
 	// a sub-path at fresh leaves, so they bypass guard 1 and merge normally under guard 2.
-	if err := src.loadRecording(envprovider.Provider(".", envprovider.Opt{
+	if err := src.loadRecording(envprovider.Provider(koanfDelim, envprovider.Opt{
 		TransformFunc: func(k, v string) (string, any) {
 			k = envVarToKey(k)
 			// Drop a bare top-level section name (no sub-key); see SECURITY (M4) above.

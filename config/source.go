@@ -30,9 +30,9 @@ func newConfigSource() *configSource {
 // default merge (maps.Merge), so a layer that carried no custom merge keeps byte-identical
 // semantics once it is wrapped for recording.
 //
-// Passing any merge func makes koanf copy the whole destination tree before merging
-// (maps.Copy in koanf's Load), so recording costs one extra deep copy per operator layer at
-// startup — sub-millisecond and startup-only, but not free.
+// koanf deep-copies the whole destination tree (maps.Copy in its merge) whenever a merge
+// func is set, so the two YAML layers newly pay that copy while the environment layer, which
+// already carried one, does not — sub-millisecond and startup-only, but not free.
 func (s *configSource) loadRecording(p koanf.Provider, pa koanf.Parser, merge mergeFunc) error {
 	if merge == nil {
 		merge = func(src, dest map[string]any) error {
@@ -96,13 +96,19 @@ func (c *Config) koanfTree() *koanf.Koanf {
 	return c.src.k
 }
 
-// delivered reports whether key was delivered by one of the operator's configuration
-// layers (ADR-104). It is presence only: a delivered key may still hold an empty value,
-// and each door composes delivery with its own emptiness rule. It answers for LEAF keys
-// only — "database.host", never "database"; a section path is never delivered.
+// delivered reports whether key was recorded by one of the operator's configuration layers
+// AND is still present in the final merged tree (ADR-104). Recording is append-only, so the
+// second half is what evicts a key a later layer replaced or nulled at an ancestor path —
+// exactly as koanf's own Exists did before presence was recorded. It is presence only: a
+// delivered key may still hold an empty value, and each door composes delivery with its own
+// emptiness rule.
+//
+// Doors query LEAF keys — "database.host", never "database". A YAML null written AT a
+// section path is itself a leaf and records that path, so a section path must not be used as
+// a door key: it would read as delivered for the very shape that empties the section.
 func (c *Config) delivered(key string) bool {
 	if c == nil || c.src == nil {
 		return false
 	}
-	return c.src.delivered[key]
+	return c.src.delivered[key] && c.src.k.Exists(key)
 }

@@ -16,7 +16,7 @@ target kind inside the `internal/configdecode` hook, koanf's `Exists` (ADR-051),
 koanf `Get` (ADR-078), and the decoded value (`InjectInto`). Three of them went inert
 on a `Config` built as a struct literal, each through its own `cfg.k == nil` guard —
 an inertness documented in ADR-051's Consequences as "blind spot 1" and pinned by
-`TestValidateNoDeliveredEmptyDatabaseInertForLiteral` and
+`TestValidateNoDeliveredEmptyDatabasePassesForLiteral` and
 `TestNormalizeLiteralDoorIncompleteSurfaces`, but never declared anywhere as a
 property.
 
@@ -38,8 +38,11 @@ carries a default, so `Exists` is always true — and reached for the raw tree i
   actually reached the tree — after the existing scalar-over-map skip has decided —
   and then delegates to the existing merge. Base configuration, environment overlay
   and environment variables all record; defaults are loaded first exactly as before
-  and record nothing. Presence is recorded for LEAF keys only — `database.host`, never
-  `database` — so a section path is never delivered.
+  and record nothing. Presence is therefore **recorded by an operator layer and still
+  present in the final tree** — a later layer that replaces or nulls an ancestor evicts
+  its descendants, exactly as `Exists` did. Doors query LEAF keys — `database.host`,
+  never `database`; a YAML null written AT a section path is itself a leaf and records
+  that path, so a section path must not be used as a door key.
 - **The koanf instance and the delivered set are one unexported source value**,
   attached at one point. A koanf cannot exist on a `Config` without the set it came
   with, so the two cannot drift and no door has to check for a half-built pair.
@@ -100,7 +103,9 @@ attaches the pair.
   with one invariant that outlives the deny-list: `IsDatabaseConfigured` reads the
   DECODED section, so a default written under a database identity key would turn
   ADR-047 absence into an attempted connection. That is pinned by
-  `TestLoadDefaultsCarryNoDatabaseIdentityKeys`, not by a prefix list.
+  `TestLoadDefaultsCarryNoDatabaseIdentityKeys`, not by a prefix list; that test now
+  sweeps all three retired prefixes — `database.`, `databases` and
+  `multitenant.tenants` — so the deny-list's whole surface stays pinned.
 - **A presence-sensitive door asks Presence, never `Exists`.** `Exists` answers "is
   there a resolvable value" on the merged tree, which includes defaults; it is the
   right question for the four doors listed above and the wrong one for a delivery

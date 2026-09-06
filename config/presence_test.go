@@ -101,3 +101,51 @@ func TestPresenceAbsentForPreloadedDefault(t *testing.T) {
 		assert.False(t, cfg.delivered(key), "%s must not be recorded as delivered", key)
 	}
 }
+
+// presenceIdentityDatabaseYAML is a complete, valid root database section: the base layer
+// delivers every identity key, so an overlay that nulls the section is the only thing that
+// can move the verdict.
+const presenceIdentityDatabaseYAML = "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n" +
+	"database:\n  type: postgresql\n  host: db.internal\n  port: 5432\n" +
+	"  database: appdb\n  username: app\n  password: s3cretpw\n"
+
+// TestPresenceEvictedWhenOverlayNullsTheSection pins the eviction half of Presence
+// (ADR-104): recording is append-only, but delivery is only meaningful for a key the FINAL
+// tree still holds. An overlay that writes a bare `database:` replaces the merged section
+// with a YAML null, so ADR-047 reads absence — and Presence must agree, or ADR-051's door
+// aborts startup naming identity keys the tree no longer carries.
+func TestPresenceEvictedWhenOverlayNullsTheSection(t *testing.T) {
+	cfg, err := loadConfigFixture(t, map[string]string{
+		testConfigFileYAML: presenceIdentityDatabaseYAML,
+		"config.prod.yaml": "database:\n",
+	}, map[string]string{"APP_ENV": "prod"})
+
+	require.NoError(t, err, "a nulled section is ADR-047 absence, not a delivered-empty identity")
+	require.NotNil(t, cfg)
+	assert.False(t, cfg.delivered("database.host"), "the overlay's null evicted the base layer's delivery")
+	assert.False(t, IsDatabaseConfigured(&cfg.Database), "the decoded section carries no identity")
+}
+
+// TestPresenceEvictedWhenOverlayNullsDebugSection is the same eviction for the other door
+// (ADR-078): debug.allowedips was delivered by the base layer and nulled by the overlay, so
+// the delivered-empty check must not fire on a key the final tree does not hold. The
+// delivered-empty message is asserted against first, so a failure here is attributed to this
+// door rather than to any other reason a nulled debug section might be rejected; Load
+// succeeding is the pre-ADR-104 behavior this must restore.
+func TestPresenceEvictedWhenOverlayNullsDebugSection(t *testing.T) {
+	const base = "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n" +
+		"debug:\n  enabled: true\n  bearertoken: sekritsekritsekrit\n  allowedips: \"10.0.0.1\"\n"
+
+	cfg, err := loadConfigFixture(t, map[string]string{
+		testConfigFileYAML: base,
+		"config.prod.yaml": "debug:\n",
+	}, map[string]string{"APP_ENV": "prod"})
+	if err != nil {
+		assert.NotContains(t, err.Error(), "delivered empty",
+			"the overlay's null evicted debug.allowedips; the delivered-empty door must stay quiet")
+	}
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.False(t, cfg.delivered(fieldDebugAllowedIPs), "the overlay's null evicted the base layer's delivery")
+	assert.Empty(t, cfg.Debug.AllowedIPs, "the nulled section carries no allowlist")
+}

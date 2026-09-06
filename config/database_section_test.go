@@ -2840,10 +2840,12 @@ func TestValidateNoDeliveredEmptyDatabasePassesForLiteral(t *testing.T) {
 }
 
 // TestLoadDefaultsCarryNoDatabaseIdentityKeys pins the ADR-047 invariant that outlived
-// preloadDeniedPrefixes (ADR-104): the loaded defaults register no database identity key.
-// Presence can no longer be faked by a default, but IsDatabaseConfigured reads the
-// DECODED section, so a default written under any of these keys would turn a
-// database-free deployment into an attempted connection.
+// preloadDeniedPrefixes (ADR-104): the loaded defaults register nothing under any of the
+// three prefixes the retired deny-list covered — database., databases, and
+// multitenant.tenants. Presence can no longer be faked by a default, but
+// IsDatabaseConfigured reads the DECODED section, so a default written under any of these
+// would turn a database-free deployment into an attempted connection, and a defaulted
+// databases/tenants entry would conjure a section for forEachDatabaseSection to walk.
 func TestLoadDefaultsCarryNoDatabaseIdentityKeys(t *testing.T) {
 	cfg, err := loadConfigFixture(t, nil, nil)
 	require.NoError(t, err)
@@ -2853,6 +2855,11 @@ func TestLoadDefaultsCarryNoDatabaseIdentityKeys(t *testing.T) {
 	for _, k := range databaseIdentityKeys {
 		assert.False(t, cfg.Exists("database."+k), "database.%s must not be a registered default", k)
 	}
+
+	assert.False(t, cfg.Exists(fieldDatabases), "databases must not be a registered default")
+	assert.False(t, cfg.Exists("multitenant.tenants"), "multitenant.tenants must not be a registered default")
+	assert.Empty(t, cfg.Databases, "a bare Load must decode no named databases")
+	assert.Empty(t, cfg.Multitenant.Tenants, "a bare Load must decode no static tenants")
 }
 
 // TestDatabaseIdentityKeysMatchPredicate pins the one direction it can enforce

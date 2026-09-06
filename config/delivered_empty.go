@@ -37,9 +37,9 @@ func validateNoDeliveredEmptyList(cfg *Config) error {
 		if !cfg.delivered(key) {
 			continue
 		}
-		// Delivery implies the key is in the tree, so the value is read once with no
-		// presence re-check; Get returns nil for a YAML null, which is a delivered empty.
-		if !deliveredEmptyValue(cfg.src.k.Get(key)) {
+		// Delivery now means "recorded AND still in the final tree" by definition, so one
+		// Get suffices; it returns nil for a YAML null, which is a delivered empty.
+		if !deliveredEmptyValue(cfg.koanfTree().Get(key)) {
 			continue
 		}
 		return &ConfigError{
