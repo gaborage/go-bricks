@@ -9,6 +9,7 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // negativeWindow is how long a "this must NOT have happened yet" assertion
@@ -351,4 +352,139 @@ func lateConfirmDeadlineAfterNack(t *testing.T) error {
 	ctx, cancel := context.WithTimeout(context.Background(), nackCallerDeadline)
 	defer cancel()
 	return awaitResult(t, publishAsync(ctx, c))
+}
+
+// TestPublishSlotShutdownDuringReleaseNeverPublishes pins the property that makes
+// acquire's uniform select choice harmless: even when the slot becomes free at the
+// same moment the client shuts down — so BOTH the send arm and the c.done arm of
+// acquire are ready and Go may pick either — a queued publisher never reaches the
+// broker and never returns success.
+//
+// Why both outcomes are correct, and why the winner is genuinely nondeterministic:
+// close(c.done) has exactly one call site, inside Close(), and it runs while Close
+// holds c.m.Lock(); the very next statement under that same lock is
+// c.isReady = false. publishSlotted, immediately after a successful acquire, takes
+// c.m.RLock() and reads isReady BEFORE it ever calls PublishWithContext. So a
+// publisher that won the send arm cannot be granted the read lock until Close has
+// released the write lock, by which point isReady is already false: it releases the
+// slot and returns errNotConnected. The done arm returns errShutdown. Asserting the
+// disjunction is the point — asserting one arm would encode a coin flip.
+//
+// The load-bearing assertion is the attempt count: whichever arm wins, the fake
+// channel must record ZERO PublishWithContext calls.
+func TestPublishSlotShutdownDuringReleaseNeverPublishes(t *testing.T) {
+	ch := &fakeChannel{}
+	c := readyClientForSlotTest(t, ch)
+
+	release := holdSlot(t, c)
+	defer release()
+
+	// No deadline of its own: the ctx arm of acquire can never fire, so the
+	// outcome is attributable to the shutdown path alone.
+	result := publishAsync(context.Background(), c)
+	select {
+	case err := <-result:
+		t.Fatalf("publisher returned %v while the slot was held and the client was still ready", err)
+	case <-time.After(negativeWindow):
+		// Expected: parked on the slot, with nothing else that can release it.
+	}
+
+	// The contended moment: shut down first (close(c.done) + isReady = false,
+	// both under c.m.Lock inside Close), then free the slot. Now acquire's send
+	// arm and done arm are ready together.
+	_ = c.Close()
+	release()
+
+	err := awaitResult(t, result)
+	if !errors.Is(err, ErrShutdown) && !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("expected ErrShutdown (done arm) or ErrNotConnected (send arm + isReady gate), got %v", err)
+	}
+	if attempts := atomic.LoadUint64(&ch.publishAttempts); attempts != 0 {
+		t.Fatalf("a publisher reached the broker after shutdown: %d publish attempts", attempts)
+	}
+}
+
+// slotContentionRounds is how many independent contended acquires
+// TestPublishSlotAcquireAfterShutdownNeverPublishes drives in one run. Go picks
+// uniformly among ready select arms, so a few dozen rounds make both arms
+// overwhelmingly likely to appear inside a single run rather than only across
+// repeated runs.
+const slotContentionRounds = 64
+
+// noopPublishSpan is the span the direct publishSlotted call needs. The abort
+// and not-ready paths both record on it; a span pulled from a bare context is
+// the no-op implementation, which accepts every call.
+func noopPublishSpan() trace.Span {
+	return trace.SpanFromContext(context.Background())
+}
+
+// assertShutdownRefusal pins the property both acquire arms must satisfy: the
+// publisher ends on a non-nil terminal error that is either ErrShutdown (the
+// done arm won) or ErrNotConnected (the send arm won and the isReady gate
+// immediately after it turned it away), and the broker saw nothing.
+func assertShutdownRefusal(t *testing.T, ch *fakeChannel, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("publish after shutdown returned success")
+	}
+	if !errors.Is(err, ErrShutdown) && !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("expected ErrShutdown (done arm) or ErrNotConnected (send arm + isReady gate), got %v", err)
+	}
+	if attempts := atomic.LoadUint64(&ch.publishAttempts); attempts != 0 {
+		t.Fatalf("a publisher reached the broker after shutdown: %d publish attempts", attempts)
+	}
+}
+
+// TestPublishSlotAcquireAfterShutdownNeverPublishes is the CONTENDED case, the
+// one the parked-publisher test cannot reach: the slot is free and c.done is
+// already closed when acquire runs, so its send arm and its done arm are ready
+// at the SAME select and Go picks uniformly. Either may win; neither may
+// publish.
+//
+// The send arm is safe because of Close()'s lock ordering: close(c.done) and
+// c.isReady = false happen under one c.m.Lock(), and publishSlotted takes
+// c.m.RLock() to read isReady before it can call PublishWithContext. A
+// publisher that wins the send arm therefore cannot observe isReady == true —
+// it releases the slot and returns errNotConnected.
+//
+// The two subtests enter at different depths on purpose. via_publish_path is
+// the consumer-visible claim (a publish issued after Close never reaches the
+// broker), but it does NOT reach acquire: publishAttemptGuard's select sees the
+// closed c.done and its default arm loses to a ready case, so the loop aborts
+// one frame earlier, deterministically. via_slotted_handshake calls
+// publishSlotted directly — the frame that owns acquire and the isReady gate —
+// which is the only way to put both arms in contention.
+func TestPublishSlotAcquireAfterShutdownNeverPublishes(t *testing.T) {
+	t.Run("via_publish_path", func(t *testing.T) {
+		ch := &fakeChannel{}
+		c := readyClientForSlotTest(t, ch)
+		_ = c.Close()
+
+		assertShutdownRefusal(t, ch, awaitResult(t, publishAsync(context.Background(), c)))
+	})
+
+	t.Run("via_slotted_handshake", func(t *testing.T) {
+		for i := 0; i < slotContentionRounds; i++ {
+			ch := &fakeChannel{}
+			c := readyClientForSlotTest(t, ch)
+			_ = c.Close()
+
+			publishing := amqp.Publishing{Body: []byte("msg")}
+			confirmCh, _, publishErr, termErr := c.publishSlotted(
+				context.Background(),
+				publishOptions{Exchange: "ex", RoutingKey: "rk"},
+				&publishing,
+				time.Now(),
+				noopPublishSpan(),
+				nil,
+			)
+			if publishErr != nil {
+				t.Fatalf("round %d: the handshake reached the broker and failed there: %v", i, publishErr)
+			}
+			if confirmCh != nil {
+				t.Fatalf("round %d: a confirmation was registered for a publish that must not have happened", i)
+			}
+			assertShutdownRefusal(t, ch, termErr)
+		}
+	})
 }
