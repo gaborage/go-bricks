@@ -68,18 +68,13 @@ type AMQPClientImpl struct {
 	// channel+generation pair that is mutually consistent.
 	generation uint64
 
-	// publishSerial serializes the full (channel snapshot → generation snapshot
-	// → GetNextPublishSeqNo → pendingPublishes.Store → PublishWithContext)
-	// sequence inside publishBytes and also guards changeChannel() —
-	// changeChannel rotates the generation and starts a new dispatcher, so it
-	// must not interleave with an in-flight publish that has already captured
-	// the old channel reference. amqp091 takes its own lock around
-	// GetNextPublishSeqNo and PublishWithContext separately, so without this
-	// serialization two concurrent publishes can both read the same "next"
-	// seq number, both register under that tag (second overwrites first), and
-	// end up receiving each other's (or no) confirmations. The per-publish
-	// confirm wait stays outside the lock and remains concurrent.
-	publishSerial sync.Mutex
+	// publishSerial is the one-place semaphore that serializes the publish
+	// handshake in publishSlotted and also guards changeChannel(), which
+	// rotates the generation and starts a new dispatcher and so must not
+	// interleave with an in-flight publish that has already captured the old
+	// channel reference. Why that section has to be atomic is documented at
+	// the acquire site in publishSlotted.
+	publishSerial publishSlot
 
 	// Configuration
 	reconnectDelay    time.Duration
@@ -108,6 +103,47 @@ type AMQPClientImpl struct {
 	// deadline. Zero or negative means unbounded — the Go zero value, so
 	// struct-literal test clients that don't set it keep the historical behavior.
 	publishTimeout time.Duration
+}
+
+// publishSlot is a one-place semaphore serializing the publish handshake. It
+// replaces a sync.Mutex so waiting for the slot is context-aware: a publisher
+// queued behind a peer stuck in a blocking socket write observes its own
+// deadline (or client shutdown) instead of parking until that write returns.
+// Its zero value is usable — the channel is created on first use — so the many
+// struct-literal test clients that never run NewAMQPClient keep working.
+type publishSlot struct {
+	once sync.Once
+	ch   chan struct{}
+}
+
+// slot returns the backing channel, creating it on first use.
+func (s *publishSlot) slot() chan struct{} {
+	s.once.Do(func() { s.ch = make(chan struct{}, 1) })
+	return s.ch
+}
+
+// acquire takes the slot, giving up when ctx is done or the client shuts down.
+// The returned error is the caller's terminal cause (ctx.Err() or errShutdown).
+func (s *publishSlot) acquire(ctx context.Context, done <-chan bool) error {
+	select {
+	case s.slot() <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+		return errShutdown
+	}
+}
+
+// acquireUncond takes the slot unconditionally, for the reconnect path, which
+// has no caller deadline and must keep exclusion with in-flight publishes.
+func (s *publishSlot) acquireUncond() {
+	s.slot() <- struct{}{}
+}
+
+// release frees the slot for the next waiter.
+func (s *publishSlot) release() {
+	<-s.slot()
 }
 
 // Reconnection delays
@@ -435,6 +471,76 @@ func (c *AMQPClientImpl) publishPrologue(
 	return ctx, span, time.Now(), nil
 }
 
+// publishSlotted runs the slot-guarded publish handshake for one attempt of
+// publishBytes's retry loop: acquire publishSerial, snapshot readiness/channel/
+// generation, register the pending confirmation, and hand the publishing to the
+// broker. Split out of publishBytes to keep its cyclomatic complexity within
+// budget (gocyclo).
+//
+// The two error results are deliberately distinct. termErr is terminal: the
+// caller must return it unchanged (a bounded-wait abort routed through
+// publishAbort, or the bare errNotConnected of a not-ready client). publishErr
+// is the raw PublishWithContext failure the caller retries on — the pending
+// registration is still live on that path, and the caller drops it.
+func (c *AMQPClientImpl) publishSlotted(
+	ctx context.Context,
+	options publishOptions,
+	publishing *amqp.Publishing,
+	publishStart time.Time,
+	span trace.Span,
+	lastCause error,
+) (confirmCh chan amqp.Confirmation, key confirmKey, publishErr, termErr error) {
+	// publishSerial guards the full critical section: readiness check,
+	// channel snapshot, generation snapshot, GetNextPublishSeqNo,
+	// pendingPublishes.Store, and PublishWithContext. Holding it across
+	// all of these means:
+	//   1. The channel and generation are mutually consistent — a
+	//      changeChannel() rotation cannot interleave between our
+	//      channel capture and our generation capture.
+	//   2. amqp091's separately-locked GetNextPublishSeqNo and
+	//      PublishWithContext become atomic from the publisher's POV,
+	//      so concurrent publishers cannot collide on the same tag.
+	// The per-publish confirm wait (in publishBytes, after this returns)
+	// stays concurrent. Acquiring the slot is bounded by ctx, so a publisher
+	// queued behind a stalled write aborts on its own deadline like every
+	// other wait here.
+	if err := c.publishSerial.acquire(ctx, c.done); err != nil {
+		return nil, confirmKey{}, nil, c.publishAbort(ctx, options, publishStart, span, err, lastCause)
+	}
+	c.m.RLock()
+	isReady := c.isReady
+	channel := c.channel
+	gen := c.generation
+	c.m.RUnlock()
+	if !isReady {
+		c.publishSerial.release()
+		c.log.Warn().
+			Str("exchange", options.Exchange).
+			Str("routing_key", options.RoutingKey).
+			Msg("AMQP client not ready, message not published")
+		observability.RecordErrorByType(span, errNotConnected)
+		// BREAKING CHANGE: previously returned nil, silently dropping the message.
+		// Returning the error gives callers a chance to retry, log, or escalate
+		// instead of believing publish succeeded.
+		return nil, confirmKey{}, nil, errNotConnected
+	}
+	expectedTag := channel.GetNextPublishSeqNo()
+	key = confirmKey{generation: gen, tag: expectedTag}
+	confirmCh = make(chan amqp.Confirmation, 1)
+	c.pendingPublishes.Store(key, confirmCh)
+	publishErr = channel.PublishWithContext(
+		ctx,
+		options.Exchange,
+		options.RoutingKey,
+		options.Mandatory,
+		options.Immediate,
+		*publishing,
+	)
+	c.publishSerial.release()
+
+	return confirmCh, key, publishErr, nil
+}
+
 // publishBytes publishes data to the exchange and routing key in options — the
 // framework's byte door (bytePublisher). It is unexported by design (ADR-096):
 // a module publishes through Publisher[T].Publish, which asserts this door on
@@ -453,9 +559,10 @@ func (c *AMQPClientImpl) publishBytes(ctx context.Context, options publishOption
 	//
 	// What the bound does NOT cover: an in-flight write. amqp091-go's
 	// PublishWithContext checks the context once before starting and then calls
-	// the blocking Publish (channel.go), and publishSerial below is a plain
-	// mutex, so a broker that stops reading holds this publish — and every
-	// publisher queued on publishSerial — until the write returns. The deadline
+	// the blocking Publish (channel.go), so a broker that stops reading holds
+	// this publish until the write returns. Waiting for publishSerial below IS
+	// bounded — a publisher queued on the slot leaves on its own deadline — but
+	// the in-flight write of the publisher holding it is not. The deadline
 	// is observed at the next cancellation point, which is why it bounds the
 	// waiting (readiness pre-flight, confirmation waits, retry arming) rather
 	// than every syscall.
@@ -486,48 +593,10 @@ func (c *AMQPClientImpl) publishBytes(ctx context.Context, options publishOption
 		messageID := publishing.MessageId
 		correlationID := publishing.CorrelationId
 
-		// publishSerial guards the full critical section: readiness check,
-		// channel snapshot, generation snapshot, GetNextPublishSeqNo,
-		// pendingPublishes.Store, and PublishWithContext. Holding it across
-		// all of these means:
-		//   1. The channel and generation are mutually consistent — a
-		//      changeChannel() rotation cannot interleave between our
-		//      channel capture and our generation capture.
-		//   2. amqp091's separately-locked GetNextPublishSeqNo and
-		//      PublishWithContext become atomic from the publisher's POV,
-		//      so concurrent publishers cannot collide on the same tag.
-		// The per-publish confirm wait (below the Unlock) stays concurrent.
-		confirmCh := make(chan amqp.Confirmation, 1)
-		c.publishSerial.Lock()
-		c.m.RLock()
-		isReady := c.isReady
-		channel := c.channel
-		gen := c.generation
-		c.m.RUnlock()
-		if !isReady {
-			c.publishSerial.Unlock()
-			c.log.Warn().
-				Str("exchange", options.Exchange).
-				Str("routing_key", options.RoutingKey).
-				Msg("AMQP client not ready, message not published")
-			observability.RecordErrorByType(span, errNotConnected)
-			// BREAKING CHANGE: previously returned nil, silently dropping the message.
-			// Returning the error gives callers a chance to retry, log, or escalate
-			// instead of believing publish succeeded.
-			return errNotConnected
+		confirmCh, key, err, termErr := c.publishSlotted(ctx, options, &publishing, publishStart, span, lastCause)
+		if termErr != nil {
+			return termErr
 		}
-		expectedTag := channel.GetNextPublishSeqNo()
-		key := confirmKey{generation: gen, tag: expectedTag}
-		c.pendingPublishes.Store(key, confirmCh)
-		err := channel.PublishWithContext(
-			ctx,
-			options.Exchange,
-			options.RoutingKey,
-			options.Mandatory,
-			options.Immediate,
-			publishing,
-		)
-		c.publishSerial.Unlock()
 
 		if err != nil {
 			// Publish never made it to the broker — drop our pending registration.
@@ -1204,11 +1273,12 @@ type confirmKey struct {
 // pending publishes from the previous incarnation (synthetic NACK so their
 // waiters retry on the new channel instead of hanging on a tag the new
 // generation will never emit), and starts a fresh dispatcher pinned to the
-// new generation. Acquires publishSerial so it is mutually exclusive with
+// new generation. Acquires publishSerial unconditionally — this is the
+// reconnect path, with no caller deadline — so it is mutually exclusive with
 // in-flight publish-handshake critical sections.
 func (c *AMQPClientImpl) changeChannel(channel amqpChannel) {
-	c.publishSerial.Lock()
-	defer c.publishSerial.Unlock()
+	c.publishSerial.acquireUncond()
+	defer c.publishSerial.release()
 
 	oldGen := c.generation
 	c.drainPendingPublishesWithNack(oldGen)
