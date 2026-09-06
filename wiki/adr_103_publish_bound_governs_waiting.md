@@ -71,10 +71,12 @@ against fixing it.
 **D — abandon the blocking publish on a goroutine.** Run `PublishWithContext` on a
 goroutine and return at `ctx.Done()`. Rejected for the AMQP leg: the goroutine still
 holds the slot, so nothing is unblocked; it leaks until the write returns; and a write
-that lands after the caller has already reported failure is a duplicate delivery the
-outbox's at-least-once contract does not cover — the record is retried on the
-assumption that nothing was sent. GoBricks does use this shape where the trade works
-out — `messaging/streams/publisher.go:284-303` and `messaging/streams/manager.go:807-822`
+that lands after the caller has already reported failure leaves the send ambiguous —
+the relay retries the record with no way to know the original write succeeded, so the
+duplicate is untracked. At-least-once permits the duplicate itself; what it does not
+supply is an answer to whether one was created. GoBricks does use this shape where
+the trade works out — `messaging/streams/publisher.go:284-303` and
+`messaging/streams/manager.go:807-822`
 both abandon a send whose only cancellation point is the caller's context — but both
 resolve their waiter explicitly and neither pins a shared serialization slot.
 
@@ -96,8 +98,8 @@ resolve their waiter explicitly and neither pins a shared serialization slot.
 
 - Issue #1434 (the aggregate bound arrives ~8x late behind a stuck write)
 - Issue #1250 (`messaging.publishtimeout`)
-- [ADR-033](adr_033_outbox_retry_count_status_parking.md) — outbox retry accounting, the
-  at-least-once contract option D would violate
+- [ADR-033](adr_033_outbox_retry_count_status_parking.md) — outbox retry accounting,
+  which option D would leave unable to distinguish a sent record from an unsent one
 - [ADR-088](adr_088_outbox_ordered_leader_relay.md) — the ordered relay whose batch a
   stuck publish stalls
 - [ADR-063](adr_063_streams_native_publishing.md) — the streams publish path and its
