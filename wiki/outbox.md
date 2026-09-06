@@ -188,10 +188,22 @@ Consequences worth knowing:
   spaces (the column is read back into logs and dashboards, and a broker-supplied newline must
   not be able to forge a line there) and invalid UTF-8 is dropped, which PostgreSQL would
   otherwise reject outright — failing the UPDATE and leaving `retry_count` un-advanced.
-- **Each publish is bounded by `outbox.publishtimeout`** (default 60s). It **must be ≥
-  `messaging.reconnect.connectiontimeout`** (default 30s) — the module **fails to start**
-  otherwise, because a shorter value truncates every legitimate confirmation into a
-  connectivity failure and re-publishes the (already-delivered) event every cycle.
+- **Each publish is bounded by `outbox.publishtimeout`** (default 60s), and that bound has
+  **three floors**, all enforced fail-fast at startup by `outbox.Module.validatePublishTimeout`
+  (`outbox/module.go`) — the module **fails to start**, it does not warn. It must be ≥
+  **`messaging.reconnect.connectiontimeout`** (default 30s, checked when > 0), because a shorter
+  value truncates every legitimate confirmation into a connectivity failure: the broker actually
+  receives and routes the message, but the relay never marks it published and re-publishes it
+  every cycle — an unbounded duplicate-delivery loop. It must be ≥
+  **`messaging.reconnect.readytimeout`** (checked when > 0), because a shorter value expires
+  *inside* the client's readiness pre-flight, so a not-ready broker surfaces as
+  `context.DeadlineExceeded` instead of `ErrNotConnected` — which defeats the relay's mid-batch
+  broker-drop detection (`outcomeBrokerDown` never fires) and reintroduces the serial per-record
+  stall that detection exists to cap. And it must be ≥ **`messaging.reconnect.resenddelay`**
+  (checked when > 0 **and** `messaging.reconnect.maxpublishattempts != 1`), because a shorter
+  value expires inside a single publish-retry wait, so each retryable event burns its whole
+  timeout delivering nothing; `maxpublishattempts == 1` is exempt because the attempt ceiling
+  fires before any wait.
 - **Whether that bound stops one stuck record from starving the batch depends on the leg.**
   On the **AMQP** leg it does not, quite: the bound governs waiting (readiness and the
   serialized publish slot, both acquired under the context), never an in-flight socket write,
