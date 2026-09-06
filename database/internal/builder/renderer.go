@@ -52,8 +52,14 @@ type vendorRenderer interface {
 	// identifier segment on this vendor. The door splits an argument into
 	// segments and skips the quoted ones and the wildcard; this answers only
 	// the character question, and only for the vendor's own alphabet — the
-	// byte cap is not judged here.
+	// cap is MaxBytes.
 	ValidateCharset(segment string) error
+
+	// MaxBytes is the vendor's identifier byte cap: the longest a single bare
+	// segment may be before the server truncates or refuses it. The door judges
+	// length against this, per segment, and judges the charset separately —
+	// quoting escapes the alphabet but not the cap.
+	MaxBytes() int
 
 	// CaseInsensitiveLike renders a case-insensitive containment match. The
 	// column arrives quoted and the pattern arrives already wrapped in its

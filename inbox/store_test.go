@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	dbident "github.com/gaborage/go-bricks/database/identifier"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -86,3 +87,72 @@ func TestStoreSQLGolden(t *testing.T) {
 
 // TestHoldStoreSQLGolden pins the hold ledger store's SQL per vendor: every
 // HoldStore method, driven with fixed fixtures.
+
+// TestInboxTableNameByteCapsAreVendorDerived pins the two derived bounds by
+// value: gremlins does not mutate a const declaration, so only an assertion on
+// the numbers keeps a future edit to the derivation honest.
+func TestInboxTableNameByteCapsAreVendorDerived(t *testing.T) {
+	require.Equal(t, 14, inboxLongestDerivedAffix)
+	require.Equal(t, 114, maxTableNameLen, "Oracle's 128-byte cap less the derived index affix")
+	require.Equal(t, 49, maxPostgresTableNameLen, "PostgreSQL's 63-byte cap less the derived index affix")
+}
+
+// TestValidateTableNameForVendorBounds walks both sides of both vendors'
+// boundaries through the store constructors, which are the only callers of the
+// vendor-aware check.
+func TestValidateTableNameForVendorBounds(t *testing.T) {
+	tests := []struct {
+		name      string
+		newStore  func(string) (Store, error)
+		nameLen   int
+		wantError bool
+	}{
+		{"postgres_at_cap_accepted", NewPostgresStore, maxPostgresTableNameLen, false},
+		{"postgres_one_over_cap_refused", NewPostgresStore, maxPostgresTableNameLen + 1, true},
+		{"postgres_oracle_length_refused", NewPostgresStore, maxTableNameLen, true},
+		{"oracle_accepts_postgres_over_cap", NewOracleStore, maxPostgresTableNameLen + 1, false},
+		{"oracle_at_cap_accepted", NewOracleStore, maxTableNameLen, false},
+		{"oracle_one_over_cap_refused", NewOracleStore, maxTableNameLen + 1, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, err := tt.newStore(strings.Repeat("a", tt.nameLen))
+			if !tt.wantError {
+				require.NoError(t, err)
+				require.NotNil(t, store)
+				return
+			}
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "too long")
+		})
+	}
+}
+
+// TestValidateTableNameForVendorErrorNamesCapAndVendor pins the refusal text:
+// an operator reading it must learn which vendor refused and at what length.
+func TestValidateTableNameForVendorErrorNamesCapAndVendor(t *testing.T) {
+	// A name that boots on Oracle today but exceeds PostgreSQL's budget.
+	_, err := NewPostgresStore(strings.Repeat("a", maxTableNameLen))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "49")
+	require.Contains(t, err.Error(), dbtypes.PostgreSQL)
+	require.Contains(t, err.Error(), "63-byte cap")
+
+	// Oracle's own bound equals the vendor-blind one, so an over-long Oracle
+	// name is refused by the shared check first — with the shared text.
+	_, err = NewOracleStore(strings.Repeat("a", maxTableNameLen+1))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "114")
+	require.Contains(t, err.Error(), fmt.Sprintf("derived Oracle identifiers must fit %d chars", dbident.MaxOracleBytes))
+}
+
+// TestValidateTableNameConfigBoundUnchanged pins the vendor-blind, config-time
+// path at Oracle's bound, so a later edit cannot silently tighten what an
+// operator may configure.
+func TestValidateTableNameConfigBoundUnchanged(t *testing.T) {
+	require.NoError(t, validateTableName(strings.Repeat("a", maxTableNameLen)))
+
+	err := validateTableName(strings.Repeat("a", maxTableNameLen+1))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), fmt.Sprintf("derived Oracle identifiers must fit %d chars", dbident.MaxOracleBytes))
+}

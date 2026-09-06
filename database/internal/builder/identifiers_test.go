@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	dbident "github.com/gaborage/go-bricks/database/identifier"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
@@ -350,12 +351,14 @@ func TestBuilderRejectsIdentifierInjectionBothVendors(t *testing.T) {
 	}
 }
 
-// TestVendorSegmentCheckSkipsQuotedAndWildcard pins the two exemptions the
-// vendor check deliberately keeps, each against its own BARE twin so the row
-// proves the skip rather than the vendor. A quoted identifier is legal on both
-// vendors whatever it contains — it is the framework's own reserved-word form —
-// and the wildcard is not an identifier at all.
-func TestVendorSegmentCheckSkipsQuotedAndWildcard(t *testing.T) {
+// TestVendorSegmentCheckSkipsQuotedCharsetAndWildcard pins the two exemptions
+// the vendor check deliberately keeps, each against its own BARE twin so the row
+// proves the skip rather than the vendor. The exemptions are not the same size:
+// the wildcard is skipped ENTIRELY — it is not an identifier at all — while a
+// quoted segment skips only the CHARSET check (it is the framework's own
+// reserved-word form, so any alphabet is legal on both vendors) and still has
+// its interior judged against the vendor's byte cap.
+func TestVendorSegmentCheckSkipsQuotedCharsetAndWildcard(t *testing.T) {
 	tests := []struct {
 		name      string
 		column    string
@@ -368,6 +371,16 @@ func TestVendorSegmentCheckSkipsQuotedAndWildcard(t *testing.T) {
 		{name: "wildcard_is_accepted", column: "*"},
 		{name: "qualified_wildcard_is_accepted", column: "t.*"},
 		{name: "qualified_wildcard_on_hashed_table_is_refused", column: "t#1.*", wantError: true},
+		// Quoting escapes the vendor's ALPHABET, not its byte cap, and the cap is
+		// judged on the interior — the pair kills a len(segment)-2 arithmetic slip
+		// as well as the exemption being widened to length (#1437).
+		{name: "quoted_interior_at_cap_is_accepted", column: `"` + capName(dbident.MaxPostgreSQLBytes) + `"`},
+		{name: "quoted_interior_over_cap_is_refused", column: `"` + capName(dbident.MaxPostgreSQLBytes+1) + `"`, wantError: true},
+		// The cap is per SEGMENT: this whole is 81 bytes, every segment 27.
+		{
+			name:   "qualified_whole_over_cap_with_short_segments_is_accepted",
+			column: capName(27) + "." + capName(27) + "." + capName(27),
+		},
 	}
 
 	for _, tt := range tests {
@@ -416,4 +429,18 @@ func TestIdentifierPatternGroupNamesAreKnown(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestVendorSegmentCheckJudgesLengthBeforeCharset pins the ORDER of the two
+// halves. A segment that violates both must report the cap: reversing the two
+// checks still refuses the value, so only the error CLASS can tell the order
+// apart (#1437).
+func TestVendorSegmentCheckJudgesLengthBeforeCharset(t *testing.T) {
+	tooLongAndHashed := capName(dbident.MaxPostgreSQLBytes) + "#"
+
+	_, _, err := NewQueryBuilder(dbtypes.PostgreSQL).Select(tooLongAndHashed).From(tableUsers).ToSQL()
+
+	require.ErrorIs(t, err, dbident.ErrIdentifierTooLong)
+	assert.NotErrorIs(t, err, dbident.ErrIdentifierCharset,
+		"length is judged first, so the charset half never runs on an over-cap segment")
 }

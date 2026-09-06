@@ -7,7 +7,38 @@
   [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) (one funnel per
   door, not a per-door guard), [ADR-098](adr_098_builder_clauses_for_ledger_stores.md)
   (the renderer seam this extends)
-- **Issue**: #1202; the byte-cap half is deferred to #1437
+- **Issue**: #1202; the byte-cap half landed in #1437
+
+## Amendment (2026-09-06): the doors judge the byte cap per segment
+
+The Consequences below recorded a second residual: the doors judged the vendor's
+alphabet but not its length limit, so PostgreSQL silently truncated an over-long
+name at 63 bytes and two names sharing a prefix could collapse onto one object.
+Issue #1437 closes it. The renderer gained `MaxBytes()` — 63 on PostgreSQL, 128
+on Oracle — so the unknown-vendor class inherits PostgreSQL's 63 the same way it
+inherits PostgreSQL's alphabet, and one builder funnel (`validateSegment`) does
+the judging for every door. The cap is judged PER SEGMENT and never on the
+rendered whole: an 81-byte `schema.table.column` whose segments are each legal is
+accepted, because it is the object names the server bounds, not the reference.
+A quoted segment's INTERIOR is capped too — quoting escapes the alphabet, not the
+length — so the charset exemption this ADR blessed stays exactly as it was. The
+cap is judged BEFORE the charset, so an over-long name that also carries a bad
+character reports too-long rather than the character. A refusal names the
+argument, the limit and the vendor, and is never a panic: on the fluent builders
+it is the deferred `ToSQL()` error, while `BuildUpsert` — which is not fluent —
+returns it directly as its third result.
+Forward-binding rule: an alias the FRAMEWORK derives is subject to the same cap.
+That is vacuous today — the Oracle MERGE emits only the fixed `target`/`source`
+literals — but it binds the next derived name rather than leaving it to be
+argued.
+
+Second clause, outside the builder: the inbox store's table-name bound now
+follows the STORE's vendor — PostgreSQL 49, Oracle still 114, both derived as
+the vendor's cap minus `len("idx__processed")`, the longest name the store
+derives from the table name. `sqlid.ValidateTableName` stays at Oracle's 128 for
+every vendor, because its callers judge configuration before a connection
+exists and have no vendor in scope; the doors, which do, are the vendor-aware
+gate.
 
 ## Amendment (2026-09-06): the INSERT struct doors judge db-tag names too
 
@@ -103,7 +134,8 @@ panic.
   door to the error taxonomy, and it would make the eventual cap enforcement a
   silent behavior flip. The cap needs its own decisions (per segment or per
   rendered whole, quoted names, framework-derived aliases) and has its own issue,
-  #1437.
+  #1437. Those decisions were taken there — per segment, quoted interiors
+  included, cap before charset — and are recorded in the first Amendment above.
 - **A vendor `switch` at each door.** Rejected as the ADR-082 defect this seam
   exists to prevent — the divergence that record names began as exactly that.
 
@@ -117,9 +149,9 @@ panic.
   vendor seam rather than in the shared lexer.
 - **Closed by #1449 (see the Amendment above): the INSERT struct doors judge
   db-tag names**, so the three struct doors no longer disagree.
-- **Residual: byte caps are still unenforced at the doors** (#1437). On
-  PostgreSQL an over-long name is silently truncated at 63 bytes, so two names
-  sharing a prefix can collapse onto one object.
+- **Closed by #1437 (see the first Amendment above): the doors judge the byte
+  cap per segment**, so an over-long PostgreSQL name is refused at `ToSQL()`
+  instead of being silently truncated at 63 bytes onto a colliding object.
 - A third vendor would arrive as its own renderer with its own `ValidateSegment`,
   and `database/identifier` is the one place its alphabet would be written down.
 

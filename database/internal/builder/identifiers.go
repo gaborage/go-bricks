@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	dbident "github.com/gaborage/go-bricks/database/identifier"
 	"github.com/gaborage/go-bricks/database/internal/sqllex"
 )
 
@@ -104,8 +105,11 @@ func (qb *QueryBuilder) normalizeAgainst(pattern *regexp.Regexp, identifier stri
 // `ident` and `alias` are read — so the closed vocabulary of group names is
 // asserted by TestIdentifierPatternGroupNamesAreKnown. A pattern with no `ident`
 // group is entirely one identifier, wildcard included.
-// Quoted segments are skipped: a quoted identifier is legal on both vendors
-// whatever it contains, and it is the framework's own reserved-word form.
+// The quoted exemption is the CHARSET's alone: a quoted identifier is legal on
+// both vendors whatever alphabet it contains, and it is the framework's own
+// reserved-word form. The byte cap still applies to a quoted segment's interior,
+// because quoting escapes the vendor's alphabet, not its length limit — every
+// segment goes through validateSegment, which judges length first.
 func (qb *QueryBuilder) validateVendorSegments(argument string, pattern *regexp.Regexp, match []string) error {
 	// match[0] is the whole match, which every pattern here anchors, so it is the
 	// trimmed value the caller judged.
@@ -123,15 +127,34 @@ func (qb *QueryBuilder) validateVendorSegments(argument string, pattern *regexp.
 	}
 	for _, token := range tokens {
 		for _, segment := range sqllex.SplitIdentifierSegments(token) {
-			if segment == "*" || sqllex.IsQuotedIdentifier(segment) {
-				continue
-			}
-			if err := qb.renderer.ValidateCharset(segment); err != nil {
+			if err := qb.validateSegment(segment); err != nil {
 				return fmt.Errorf("invalid identifier %q for %s: %w", argument, qb.vendor, err)
 			}
 		}
 	}
 	return nil
+}
+
+// validateSegment judges ONE identifier segment for a door. Length is judged
+// first and always: quoting escapes the vendor's alphabet, not its byte cap —
+// PostgreSQL truncates a quoted 64-byte name exactly as it truncates a bare
+// one. The charset half then applies only to an unquoted segment, which is the
+// exemption ADR-100 blessed. The wildcard is neither.
+func (qb *QueryBuilder) validateSegment(segment string) error {
+	if segment == "*" {
+		return nil
+	}
+	value, quoted := segment, sqllex.IsQuotedIdentifier(segment)
+	if quoted {
+		value = segment[1 : len(segment)-1]
+	}
+	if limit := qb.renderer.MaxBytes(); len(value) > limit {
+		return fmt.Errorf("%w (%d): %q", dbident.ErrIdentifierTooLong, limit, value)
+	}
+	if quoted {
+		return nil
+	}
+	return qb.renderer.ValidateCharset(segment)
 }
 
 // validateIdentifier rejects identifier arguments (column names, table names/

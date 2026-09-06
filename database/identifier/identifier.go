@@ -87,15 +87,14 @@ func Validate(vendor dbtypes.Vendor, value string) error {
 // one bare, unquoted segment under vendor's CHARACTER grammar, and says nothing
 // about length. The vendor and empty rules are Validate's.
 //
-// The two doors are separate because a caller can be sure of one rule and not
-// the other. The query builder judges every identifier argument's charset at
-// the door, where a rejected `#` is the difference between failing at ToSQL()
-// and failing at execution on PostgreSQL; it does not yet judge length, because
-// the cap interacts with qualified names and aliases the builder assembles
-// itself. Reaching for Validate there and discarding ErrIdentifierTooLong would
-// couple the door to the error taxonomy and turn the eventual cap enforcement
-// into a silent behavior change; this door makes that a deliberate, separate
-// step.
+// This is the charset half of Validate, and it stays a door of its own because
+// the query builder needs the two halves apart. The builder judges every
+// identifier argument's charset here — where a rejected `#` is the difference
+// between failing at ToSQL() and failing at execution on PostgreSQL — and
+// judges length separately, per segment, against the renderer's MaxBytes().
+// The split is not bookkeeping: the exemption for a quoted segment is the
+// charset's alone. A quoted segment's interior is still capped, because quoting
+// escapes the vendor's alphabet, not its byte limit.
 func ValidateCharset(vendor dbtypes.Vendor, value string) error {
 	g, ok := grammars[vendor]
 	if !ok {

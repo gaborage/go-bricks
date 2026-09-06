@@ -36,11 +36,11 @@ func TestNewPostgresStoreRejectsBadTableName(t *testing.T) {
 	_, err = NewPostgresStore("myschema.gobricks_inbox")
 	require.Error(t, err, "qualified names must be rejected")
 
-	_, err = NewPostgresStore(strings.Repeat("a", maxTableNameLen+1))
+	_, err = NewPostgresStore(strings.Repeat("a", maxPostgresTableNameLen+1))
 	require.Error(t, err, "over-length names must be rejected")
 	assert.Contains(t, err.Error(), "too long")
 
-	_, err = NewPostgresStore(strings.Repeat("a", maxTableNameLen))
+	_, err = NewPostgresStore(strings.Repeat("a", maxPostgresTableNameLen))
 	require.NoError(t, err, "a name at the max length is accepted")
 }
 

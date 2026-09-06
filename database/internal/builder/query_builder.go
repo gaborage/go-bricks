@@ -249,7 +249,7 @@ func (qb *QueryBuilder) appendSelectColumn(processed *[]string, col any) error {
 			// is applied here, where the alias becomes SQL (#1202). This is the
 			// door the issue names: `qb.MustExpr("1", "a#b")` rendered
 			// `SELECT 1 AS a#b` on PostgreSQL.
-			if err := qb.renderer.ValidateCharset(v.Alias); err != nil {
+			if err := qb.validateSegment(v.Alias); err != nil {
 				return fmt.Errorf("expression alias %q for %s: %w", v.Alias, qb.vendor, err)
 			}
 			*processed = append(*processed, fmt.Sprintf("%s AS %s", v.SQL, v.Alias))
@@ -953,7 +953,7 @@ func (sqb *SelectQueryBuilder) SubqueryColumn(sub dbtypes.SelectQueryBuilder, al
 	}
 	// The alias is interpolated unquoted, so the vendor's segment alphabet
 	// applies to it as to any other identifier position (#1202).
-	if err := sqb.qb.renderer.ValidateCharset(alias); err != nil {
+	if err := sqb.qb.validateSegment(alias); err != nil {
 		sqb.Fail(fmt.Errorf("subquery column alias %q for %s: %w", alias, sqb.qb.vendor, err))
 		return sqb
 	}

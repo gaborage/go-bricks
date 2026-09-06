@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gaborage/go-bricks/database"
+	dbident "github.com/gaborage/go-bricks/database/identifier"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/sqlid"
 )
@@ -38,10 +39,22 @@ type Store interface {
 	CreateTable(ctx context.Context, db dbtypes.Interface) error
 }
 
-// maxTableNameLen bounds the inbox table name so the longest derived Oracle
-// identifier — the index "idx_<name>_processed" (14 extra chars) — stays within
-// Oracle's 128-character identifier limit.
-const maxTableNameLen = 128 - len("idx__processed")
+// inboxLongestDerivedAffix is the longest thing appended to the configured name:
+// the index "idx_<name>_processed". Budgeting for it covers every derived name,
+// since the table itself and the Oracle primary-key constraint are shorter.
+const inboxLongestDerivedAffix = len("idx__processed")
+
+// maxTableNameLen is the vendor-blind bound: Oracle's, the loosest of the two.
+// It is what the config-time check can enforce, because the vendor is not in
+// scope when the configuration is validated.
+const maxTableNameLen = dbident.MaxOracleBytes - inboxLongestDerivedAffix
+
+// maxPostgresTableNameLen is the same budget against PostgreSQL's tighter cap.
+// It matters because the two vendors fail differently: Oracle raises ORA-00972
+// on an over-long identifier, while PostgreSQL TRUNCATES past NAMEDATALEN-1
+// rather than refusing — so two over-long names sharing a prefix collapse onto
+// one object, and a second CREATE INDEX would quietly target the first one.
+const maxPostgresTableNameLen = dbident.MaxPostgreSQLBytes - inboxLongestDerivedAffix
 
 // validateTableName checks that name is a safe, unqualified SQL identifier.
 // The inbox requires an unqualified name (no schema prefix) because the Oracle
@@ -55,7 +68,29 @@ func validateTableName(name string) error {
 		return fmt.Errorf("inbox: table name %q must be unqualified (no schema prefix)", name)
 	}
 	if len(name) > maxTableNameLen {
-		return fmt.Errorf("inbox: table name %q is too long (max %d; derived Oracle identifiers must fit 128 chars)", name, maxTableNameLen)
+		return fmt.Errorf("inbox: table name %q is too long (max %d; derived Oracle identifiers must fit %d chars)", name, maxTableNameLen, dbident.MaxOracleBytes)
+	}
+	return nil
+}
+
+// maxTableNameLenFor is the configured-name budget for a store's own vendor.
+func maxTableNameLenFor(vendor dbtypes.Vendor) int {
+	if vendor == dbtypes.PostgreSQL {
+		return maxPostgresTableNameLen
+	}
+	return maxTableNameLen
+}
+
+// validateTableNameForVendor is validateTableName plus the bound of the vendor
+// the store actually talks to. Only the store constructors call it: they each
+// know their vendor, while the config-time check does not.
+func validateTableNameForVendor(vendor dbtypes.Vendor, name string) error {
+	if err := validateTableName(name); err != nil {
+		return err
+	}
+	if maxLen := maxTableNameLenFor(vendor); len(name) > maxLen {
+		return fmt.Errorf("inbox: table name %q is too long for %s (max %d; derived identifiers must fit the vendor's %d-byte cap)",
+			name, vendor, maxLen, maxLen+inboxLongestDerivedAffix)
 	}
 	return nil
 }
