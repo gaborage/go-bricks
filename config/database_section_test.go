@@ -2727,7 +2727,8 @@ func TestApplyDatabasePoolDefaultsNilConfig(t *testing.T) {
 // TestValidateNoDeliveredEmptyDatabaseViaLoad drives validateNoDeliveredEmptyDatabase
 // through the real Load() path (env + YAML), since the presence recorded at the
 // merge seam cannot be produced by a hand-built Config literal (see
-// TestValidateNoDeliveredEmptyDatabaseAbsentForLiteral for that guarantee instead).
+// TestPresenceAbsentForConfigLiteral for that guarantee, and
+// TestValidateNoDeliveredEmptyDatabasePassesForLiteral for the door staying inert).
 func TestValidateNoDeliveredEmptyDatabaseViaLoad(t *testing.T) {
 	tests := []struct {
 		name           string

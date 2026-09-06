@@ -150,10 +150,10 @@ func TestNormalizeDeliveredEmptyWinsOverIncomplete(t *testing.T) {
 }
 
 // TestNormalizeLiteralDoorIncompleteSurfaces pins the complementary door: a
-// hand-built Config literal carries no source, so every key reads absent and
-// validateNoDeliveredEmptyDatabase is inert for it (see
-// TestValidateNoDeliveredEmptyDatabaseAbsentForLiteral) and normalizeDatabaseSection's
-// own rejection must surface instead.
+// hand-built Config literal carries no source, so every key reads absent (see
+// TestPresenceAbsentForConfigLiteral), validateNoDeliveredEmptyDatabase is inert for
+// it (see TestValidateNoDeliveredEmptyDatabasePassesForLiteral), and
+// normalizeDatabaseSection's own rejection must surface instead.
 func TestNormalizeLiteralDoorIncompleteSurfaces(t *testing.T) {
 	cfg := createValidFullConfig()
 	cfg.Database = DatabaseConfig{Host: "db.internal"}
