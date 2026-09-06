@@ -392,6 +392,7 @@ var derivedDefaultKeys = []string{
 	"keystore.secretminlength",
 	"scheduler.timeout.shutdown",
 	"scheduler.timeout.slowjob",
+	"server.bodylimit",
 }
 
 // derivationDeniedPrefixes are key spaces that must never be DERIVED, whatever the allowlist
@@ -594,6 +595,8 @@ func koanfOnlyDefaults() map[string]any {
 		"app.rate.ippreguard.enabled":   true,
 		"app.rate.ippreguard.threshold": 2000,
 
+		// Server defaults. The bodylimit key is DERIVED — see derivedDefaultKeys — so
+		// only the keys normalize does not own are written here.
 		"server.host":               "0.0.0.0",
 		fieldServerPort:             8080,
 		"server.timeout.read":       "15s",
@@ -605,7 +608,6 @@ func koanfOnlyDefaults() map[string]any {
 		"server.path.health":        "/health",
 		"server.path.ready":         "/ready",
 		"server.gzip.minlength":     1024,
-		"server.bodylimit":          DefaultBodyLimitBytes,
 		fieldServerTrustedProxies:   []string{},
 
 		// Database defaults not provided for deterministic behavior
