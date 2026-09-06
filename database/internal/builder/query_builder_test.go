@@ -3790,13 +3790,32 @@ func TestSubqueryColumnRefusesAnExternalVendorPlaceholder(t *testing.T) {
 }
 
 // hashDoors enumerates every builder door that interpolates an identifier
-// argument, each one handed the SAME `#`-bearing value. The rows vary exactly
-// one dimension — the vendor — so a door that stops consulting the renderer
-// shows up as one row flipping rather than as a whole test going quiet.
+// argument, each one handed the SAME `#`-bearing value — as a string argument at
+// most doors, and as a struct `db` tag at the three struct doors (#1449). The
+// rows vary exactly one dimension — the vendor — so a door that stops consulting
+// the renderer shows up as one row flipping rather than as a whole test going
+// quiet.
 func hashDoors() map[string]func(qb *QueryBuilder) (string, []any, error) {
 	const hashed = "a#b"
 
+	// hashTaggedStruct carries the same `#` name as a db TAG rather than as a
+	// string argument, which is how it reaches the three struct doors (#1449).
+	type hashTaggedStruct struct {
+		ID   int64  `db:"id"`
+		Name string `db:"a#b"`
+	}
+	instance := &hashTaggedStruct{ID: 1, Name: "x"}
+
 	return map[string]func(qb *QueryBuilder) (string, []any, error){
+		"insert_struct_db_tag": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.InsertStruct(tableUsers, instance).ToSQL()
+		},
+		"insert_fields_db_tag": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.InsertFields(tableUsers, instance, "Name").ToSQL()
+		},
+		"update_set_struct_db_tag": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Update(tableUsers).SetStruct(instance).ToSQL()
+		},
 		"select_column": func(qb *QueryBuilder) (string, []any, error) {
 			return qb.Select(hashed).From(tableUsers).ToSQL()
 		},
