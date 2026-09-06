@@ -222,7 +222,7 @@ resolved relative to the working directory (sub-modules break), and you must set
 `failOn: dsl,import` (or `all`) or a rules file that fails to load is silently empty.
 `failOn: dsl` alone is not enough — it catches DSL syntax errors but still logs-and-skips
 when an import cannot be resolved, which is the most likely failure since the rules file
-must import `.../go-ruleguard/dsl`.
+must import `.../go-ruleguard/dsl`. GoBricks enforces the one rule it wanted from ruleguard — ADR-083's attribute half, no error message into a span attribute — as a `go test` AST scan in the `observability` package instead, so consumers inherit neither the rule nor a dependency.
 
 ## Measuring before you adopt
 

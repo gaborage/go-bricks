@@ -4,6 +4,32 @@
 - **Date**: 2026-08-24
 - **Related**: [ADR-081](adr_081_recovered_panic_values_reported_by_type.md) (the same rule for recovered panic values, which this generalizes to every error) · [ADR-079](adr_079_log_filter_walks_slices_without_comparing.md) (the field-name matcher whose reach is the whole issue) · [ADR-068](adr_068_delivery_pipeline.md) (a service driving its own consume loop starts its own span, so the helper is exported)
 
+## Amendment — 2026-09-06: the attribute half is machine-checked (#1435)
+
+The Consequences paragraph below that leaves the attribute-shaped half "a grep
+because forbidigo matches IDENTIFIERS and the leak is an ARGUMENT SHAPE" is
+**superseded and kept as history**. That half is now a gate:
+`TestNoErrorMessageReachesSpanAttributes` in package `observability` parses every
+`.go` file under the module root — build-tagged files included, tests included,
+the separate `tools/` module and `testdata/` skipped — and fails `go test` on an
+`.Error()` call anywhere inside the arguments of an `attribute.*` constructor.
+It anchors on the constructor call itself, so nesting context is irrelevant and
+no list of wrappers (`SetAttributes`, `AddEvent`, `WithAttributes`) can go stale
+by omission; an aliased or dot-import of the attribute package is resolved from
+the file's import declarations. The
+`git grep -nE 'attribute\.[A-Za-z]+\([^)]*[Ee]rr'` prescribed below is now the
+fallback for a human reading the sites, not the enforcement.
+
+The scan is syntactic and keyed on the `.Error()` CALL, never on the identifier
+`err`, so it stays silent on the classification renders. Two evasions are out of
+its reach and remain review's job: an aliased message (`msg := err.Error()` and
+then `attribute.String(k, msg)`), and an error-typed operand passed without
+`.Error()` (`attribute.Stringer(k, err)`). Judging either needs a type-checked
+load of the tree, which is its own change; the syntactic scan buys the shape
+check without one, and without the `dsl` dependency that rejected a `gocritic`
+ruleguard rule (see [linting.md](linting.md)). The forbidigo
+patterns covering the exception-event half are unchanged.
+
 ## Context
 
 `span.RecordError(err)` ships `err.Error()` to the tracing backend as an
