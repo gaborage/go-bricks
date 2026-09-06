@@ -420,12 +420,18 @@ func TestDefaultMiddlewareChainAllocsStable(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/chain-bench", http.NoBody)
 	// Warm one-time lazy state before measuring.
 	srv.echo.ServeHTTP(httptest.NewRecorder(), req)
+	warmupEntries := log.entryCount()
+	require.Positive(t, warmupEntries, "the warm-up request never reached the logger middleware")
 
 	got := testing.AllocsPerRun(100, func() {
 		rec := httptest.NewRecorder()
 		srv.echo.ServeHTTP(rec, req)
 	})
-	require.Positive(t, log.entryCount(), "the measured request never reached the logger middleware, so the baseline would not cover the logging path")
+	// Compare against the warm-up count, not zero: the warm-up alone would satisfy a
+	// Positive check even if every measured request bypassed the logger middleware, and
+	// then the baseline would not cover the logging path it claims to measure.
+	require.Greater(t, log.entryCount(), warmupEntries,
+		"the measured requests never reached the logger middleware, so the baseline would not cover the logging path")
 	t.Logf("default middleware chain allocs/op = %.1f (ceiling %d)", got, defaultMiddlewareChainMaxAllocs)
 	assert.LessOrEqual(t, got, float64(defaultMiddlewareChainMaxAllocs),
 		"default middleware chain allocs/op regressed — a flat-adapter on the default path would add one baton alloc per middleware (ADR-026)")
