@@ -287,13 +287,7 @@ func (r *ModuleRegistry) DeclareMessaging(decls *messaging.Declarations) error {
 			before := decls.Stats()
 			md.DeclareMessaging(decls)
 			after := decls.Stats()
-			r.logger.Info().
-				Str("module", module.Name()).
-				Int("exchanges", after.Exchanges-before.Exchanges).
-				Int("queues", after.Queues-before.Queues).
-				Int("bindings", after.Bindings-before.Bindings).
-				Int("publishers", after.Publishers-before.Publishers).
-				Int("consumers", after.Consumers-before.Consumers).
+			logDeclStats(r.logger.Info().Str("module", module.Name()), before, after).
 				Msg("Collecting module messaging declarations")
 		}
 	}
@@ -306,15 +300,21 @@ func (r *ModuleRegistry) DeclareMessaging(decls *messaging.Declarations) error {
 	}
 
 	stats := decls.Stats()
-	r.logger.Info().
-		Int("exchanges", stats.Exchanges).
-		Int("queues", stats.Queues).
-		Int("bindings", stats.Bindings).
-		Int("publishers", stats.Publishers).
-		Int("consumers", stats.Consumers).
+	logDeclStats(r.logger.Info(), messaging.DeclarationStats{}, stats).
 		Msg("Messaging declarations collected and validated successfully")
 
 	return nil
+}
+
+// logDeclStats is the single enumeration of the DeclarationStats field set for the
+// declarer log lines; the field names and their order are an operator-facing contract.
+func logDeclStats(e logger.LogEvent, before, after messaging.DeclarationStats) logger.LogEvent {
+	return e.
+		Int("exchanges", after.Exchanges-before.Exchanges).
+		Int("queues", after.Queues-before.Queues).
+		Int("bindings", after.Bindings-before.Bindings).
+		Int("publishers", after.Publishers-before.Publishers).
+		Int("consumers", after.Consumers-before.Consumers)
 }
 
 // RegisterJobs calls RegisterJobs on modules that implement JobProvider interface.

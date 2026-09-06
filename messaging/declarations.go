@@ -552,11 +552,11 @@ func (d *Declarations) Stats() DeclarationStats {
 	}
 }
 
-// IsEmpty reports whether no declarations have been registered.
+// IsEmpty reports whether no declarations have been registered. Comparing the
+// whole zero value keeps a declaration kind added to Stats() later from being
+// forgotten here.
 func (d *Declarations) IsEmpty() bool {
-	s := d.Stats()
-	return s.Exchanges == 0 && s.Queues == 0 && s.Bindings == 0 &&
-		s.Publishers == 0 && s.Consumers == 0
+	return d.Stats() == DeclarationStats{}
 }
 
 // Clone copies the declarations for per-tenant replay. Each declaration and its
