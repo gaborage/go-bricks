@@ -31,7 +31,7 @@ type postgresStore struct {
 // NewPostgresStore creates a new PostgreSQL inbox store.
 // Returns an error if the table name is not a safe, unqualified identifier.
 func NewPostgresStore(tableName string) (Store, error) {
-	if err := validateTableName(tableName); err != nil {
+	if err := validateTableNameForVendor(dbtypes.PostgreSQL, tableName); err != nil {
 		return nil, err
 	}
 	return &postgresStore{tableName: tableName, qb: database.NewQueryBuilder(dbtypes.PostgreSQL)}, nil

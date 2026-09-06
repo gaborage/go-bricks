@@ -337,8 +337,8 @@ branches on the vendor itself. Validation happens at the door against an
 identifier context; rendering happens behind the renderer's seam. The renderer
 also supplies the vendor's segment grammar (ADR-100) — which characters a bare
 identifier may carry, `#` being Oracle-only — while the door still decides which
-tokens of an argument are identifier positions. Byte caps are not judged at the
-doors yet (#1437).
+tokens of an argument are identifier positions. The renderer also supplies the
+vendor's byte cap (`MaxBytes()`), judged per segment behind the same seam.
 _Avoid_: dialect, driver, vendor handler, quoting helper
 
 ### Testing

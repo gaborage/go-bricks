@@ -2,6 +2,9 @@ package builder
 
 import (
 	"errors"
+	"fmt"
+	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	dbident "github.com/gaborage/go-bricks/database/identifier"
 	"github.com/gaborage/go-bricks/database/internal/columns"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -3906,6 +3910,106 @@ func TestEveryDoorAcceptsHashOnOracle(t *testing.T) {
 
 			require.NoError(t, err, "Oracle takes # in a bare identifier")
 			assert.NotEmpty(t, sql)
+		})
+	}
+}
+
+// capName builds an otherwise-valid identifier of exactly n bytes: a leading
+// letter and n-1 filler letters, so only the LENGTH varies between rows.
+func capName(n int) string { return "a" + strings.Repeat("b", n-1) }
+
+// capDoors enumerates every door that judges an identifier SEGMENT against the
+// vendor's byte cap, each handed the SAME name so the rows vary exactly one
+// dimension — the byte length — the way hashDoors() varies exactly the vendor.
+// The struct door's `db` tag is built through reflect because a tag cannot be
+// computed as a literal; it inherits the cap through validateIdentifiers, so it
+// needs no door-specific check of its own (#1437).
+// upsertCapDoor names the one door BuildUpsert owns; it refuses an unregistered
+// vendor before any column is judged, so that row skips it.
+const upsertCapDoor = "build_upsert_column"
+
+func capDoors(name string) map[string]func(qb *QueryBuilder) (string, []any, error) {
+	tagged := reflect.New(reflect.StructOf([]reflect.StructField{
+		{Name: "Val", Type: reflect.TypeOf(int64(0)), Tag: reflect.StructTag(fmt.Sprintf("db:%q", name))},
+	})).Interface()
+
+	return map[string]func(qb *QueryBuilder) (string, []any, error){
+		"where_column": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Select(colID).From(tableUsers).Where(qb.Filter().Eq(name, 1)).ToSQL()
+		},
+		"from_table": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Select(colID).From(name).ToSQL()
+		},
+		"select_expression_alias": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Select(qb.MustExpr("1", name)).From(tableUsers).ToSQL()
+		},
+		"subquery_column_alias": func(qb *QueryBuilder) (string, []any, error) {
+			sub := qb.Select(colID).From(tableOrders)
+			return qb.Select(colID).SubqueryColumn(sub, name).From(tableUsers).ToSQL()
+		},
+		"insert_with_columns": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.InsertWithColumns(tableUsers, name).Values(1).ToSQL()
+		},
+		"insert_struct_db_tag": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.InsertStruct(tableUsers, tagged).ToSQL()
+		},
+		upsertCapDoor: func(qb *QueryBuilder) (string, []any, error) {
+			return qb.BuildUpsert(tableUsers, []string{colID},
+				map[string]any{colID: 1, name: 2}, map[string]any{name: 2})
+		},
+	}
+}
+
+// TestEveryDoorEnforcesTheVendorByteCap walks every identifier door on BOTH
+// sides of every vendor's cap. The exactly-at-cap row is what makes the refusal
+// row mean anything: without it a `>` widened to `>=` would still pass (#1437).
+// The unknown vendor is the third row because defaultRenderer embeds the
+// PostgreSQL one, so it inherits 63 rather than having no cap at all.
+func TestEveryDoorEnforcesTheVendorByteCap(t *testing.T) {
+	vendors := []struct {
+		name     string
+		vendor   string
+		cap      int
+		noUpsert bool
+	}{
+		{name: "postgresql", vendor: dbtypes.PostgreSQL, cap: dbident.MaxPostgreSQLBytes},
+		{name: "oracle", vendor: dbtypes.Oracle, cap: dbident.MaxOracleBytes},
+		{name: "unknown_vendor_inherits_postgresql", vendor: "nosuchvendor", cap: dbident.MaxPostgreSQLBytes, noUpsert: true},
+	}
+
+	for _, v := range vendors {
+		t.Run(v.name, func(t *testing.T) {
+			for door, build := range capDoors(capName(v.cap)) {
+				if v.noUpsert && door == upsertCapDoor {
+					continue
+				}
+				t.Run(door+"_accepts_at_cap", func(t *testing.T) {
+					var sql string
+					var err error
+					require.NotPanics(t, func() { sql, _, err = build(NewQueryBuilder(v.vendor)) })
+					require.NoError(t, err, "a segment of exactly the cap is legal")
+					assert.NotEmpty(t, sql)
+				})
+			}
+
+			over := capName(v.cap + 1)
+			for door, build := range capDoors(over) {
+				if v.noUpsert && door == upsertCapDoor {
+					continue
+				}
+				t.Run(door+"_refuses_one_byte_over_cap", func(t *testing.T) {
+					var sql string
+					var args []any
+					var err error
+					require.NotPanics(t, func() { sql, args, err = build(NewQueryBuilder(v.vendor)) })
+					require.ErrorIs(t, err, dbident.ErrIdentifierTooLong)
+					assert.Empty(t, sql, "the refusal is a deferred error, not a half-built statement")
+					assert.Nil(t, args)
+					assert.Contains(t, err.Error(), over, "the message names the argument")
+					assert.Contains(t, err.Error(), strconv.Itoa(v.cap), "the message names the limit")
+					assert.Contains(t, err.Error(), v.vendor, "the message names the vendor")
+				})
+			}
 		})
 	}
 }

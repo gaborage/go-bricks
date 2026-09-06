@@ -316,8 +316,14 @@ escape hatch on both vendors — but the server then treats the name as
 case-sensitive, so `"a#b"` and `a#b` are not interchangeable. An unknown vendor
 follows PostgreSQL's grammar.
 
-One thing is deliberately NOT judged at the doors: identifier byte caps
-([#1437](https://github.com/gaborage/go-bricks/issues/1437)). Struct `db:"..."`
+Identifier byte caps are judged at the doors too, per segment and never on the
+rendered whole: PostgreSQL 63 bytes, Oracle 128, an unknown vendor the same 63 it
+inherits everywhere else. A quoted segment's interior is measured as well —
+quoting escapes the alphabet, not the length — and the cap is taken before the
+charset check, so an over-long name carrying a bad character reports too-long.
+The one thing left uncovered is a bound outside the builder: the outbox bounds
+only the table segment of a schema-qualified name, so an over-long schema prefix
+still reaches its doors. Struct `db:"..."`
 tag names are judged like any other column — `InsertStruct`, `InsertFields` and
 `UpdateQueryBuilder.SetStruct` all route them through the column funnel, so a
 tag the `columns` package admits against the union alphabet can still be refused

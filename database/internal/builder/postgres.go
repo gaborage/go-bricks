@@ -38,6 +38,10 @@ func (postgresRenderer) ValidateCharset(segment string) error {
 	return dbident.ValidateCharset(dbtypes.PostgreSQL, segment)
 }
 
+// MaxBytes is NAMEDATALEN-1. PostgreSQL silently truncates a longer name, so
+// two over-long names sharing a prefix collapse onto one object.
+func (postgresRenderer) MaxBytes() int { return dbident.MaxPostgreSQLBytes }
+
 // CaseInsensitiveLike renders ILIKE, PostgreSQL's case-insensitive operator, so
 // neither side of the comparison has to be folded.
 func (postgresRenderer) CaseInsensitiveLike(quotedColumn, likePattern string) squirrel.Sqlizer {

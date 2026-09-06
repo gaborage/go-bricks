@@ -28,6 +28,10 @@ func (oracleRenderer) ValidateCharset(segment string) error {
 	return dbident.ValidateCharset(dbtypes.Oracle, segment)
 }
 
+// MaxBytes is Oracle 12.2+'s identifier limit; Oracle raises ORA-00972
+// rather than truncating.
+func (oracleRenderer) MaxBytes() int { return dbident.MaxOracleBytes }
+
 // QuoteColumn renders a column reference with reserved-word-only quoting,
 // preserving the caller's original case — it does not upper-case reserved words.
 func (oracleRenderer) QuoteColumn(column string) string {

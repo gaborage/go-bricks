@@ -149,11 +149,11 @@ func (qb *QueryBuilder) normalizeUpsertColumns(kind string, columns []string) ([
 		}
 		// The KEY shape is vendor-neutral (#1187); which characters a bare key
 		// may carry is not, so the vendor judges it here as at every other door
-		// (#1202). A quoted key keeps the union grammar.
-		if !sqllex.IsQuotedIdentifier(trimmed) {
-			if err := qb.renderer.ValidateCharset(trimmed); err != nil {
-				return nil, fmt.Errorf("%s column %q for %s: %w", kind, col, qb.vendor, err)
-			}
+		// (#1202). A quoted key keeps the union grammar, but not an exemption from
+		// the vendor's byte cap: validateSegment judges length first and applies
+		// the charset half only to a bare key.
+		if err := qb.validateSegment(trimmed); err != nil {
+			return nil, fmt.Errorf("%s column %q for %s: %w", kind, col, qb.vendor, err)
 		}
 		normalized[i] = upsertColumn{key: col, normalized: trimmed}
 	}
@@ -380,11 +380,11 @@ func isSingleColumnName(rendered string) bool {
 		return false
 	}
 	if rendered[0] != '"' {
-		// validateSegment took the unquoted branch, whose charset excludes the
+		// sqllex.ValidateSegment took the unquoted branch, whose charset excludes the
 		// quote character outright.
 		return true
 	}
-	// validateSegment's quoted branch has already established both wrapping
+	// sqllex.ValidateSegment's quoted branch has already established both wrapping
 	// quotes and a non-empty interior, so these bounds are exact and need no
 	// guard of their own. A quote surviving between them ends the identifier
 	// early and turns the remainder into SQL.
