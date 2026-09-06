@@ -777,6 +777,27 @@ func TestInstalledProvidersStillRecordAfterCleanup(t *testing.T) {
 			"the provider the helper installed exported nothing after its cleanup ran; a cleanup that shut it down would look exactly like this")
 	})
 
+	t.Run("the_meter_provider_still_records", func(t *testing.T) {
+		var installed *TestMeterProvider
+
+		t.Run("install_and_clean_up", func(t *testing.T) {
+			installed = InstallTestMeterProvider(t)
+		})
+
+		// Through the helper's OWN provider, not the global: the delegate subtest
+		// below records through otel.Meter, which routes to the process-first
+		// provider, so it stays green even if the helper shut down the provider it
+		// created. This is the assertion that fails when it does.
+		before := counterSum(t, installed, installedCounter)
+
+		counter, err := installed.Meter(delegateMeterName).Int64Counter(installedCounter)
+		require.NoError(t, err)
+		counter.Add(ctx, 1)
+
+		assert.Equal(t, before+1, counterSum(t, installed, installedCounter),
+			"the meter provider the helper installed recorded nothing after its cleanup ran; a cleanup that shut it down would look exactly like this")
+	})
+
 	t.Run("the_delegate_still_reaches_the_first_provider", func(t *testing.T) {
 		first := installFirstDelegate()
 

@@ -108,6 +108,12 @@ func NewTestTraceProvider() *TestTraceProvider {
 // provider. Shutting one down would make those calls record nothing, with no
 // error. Restoring the previous provider is safe; shutting one down is not.
 //
+// The OTel globals are process-wide, so the install-to-cleanup window is not
+// safe to overlap: do not call this from a t.Parallel test, and do not nest it
+// inside another install whose cleanup runs later. Cleanups unwind LIFO, so
+// sequential nesting restores correctly, but two overlapping installs can
+// capture each other's provider and restore the wrong one.
+//
 // Example:
 //
 //	tp := InstallTestTraceProvider(t)
@@ -188,6 +194,12 @@ func NewTestMeterProvider() *TestMeterProvider {
 // delegating provider binds to the FIRST provider installed in the binary via
 // a sync.Once and never rebinds, so shutting an installed provider down would
 // silently stop every later otel.Meter call that routes through that delegate.
+//
+// The OTel globals are process-wide, so the install-to-cleanup window is not
+// safe to overlap: do not call this from a t.Parallel test, and do not nest it
+// inside another install whose cleanup runs later. Cleanups unwind LIFO, so
+// sequential nesting restores correctly, but two overlapping installs can
+// capture each other's provider and restore the wrong one.
 //
 // Example:
 //
