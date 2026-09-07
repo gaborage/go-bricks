@@ -7173,27 +7173,28 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
 
 ### [C64.7] the outbox store bounds its table name's schema segment by the store's vendor · breaking · when: match
 
-- detect: `git grep -nE 'outbox\.tablename|OutboxConfig' -- '*.go' '*.yaml' '*.yml'`
-  finds the configured outbox table name; measure the part BEFORE the dot. A PostgreSQL
-  deployment whose schema segment is 64 bytes or more is the population. **The grep is a
-  shortlist, not the population:** a table name assembled from an environment variable, a
-  tenant record or string concatenation never appears as a literal, so a computed schema
-  prefix has to be inventoried by hand. An unqualified name (no dot) is out of the
-  population entirely. Nothing in a build fails here.
-- scope: `NewPostgresStore` and `NewOracleStore` judge the table name's schema segment
-  against the STORE vendor's raw identifier cap — `identifier.MaxPostgreSQLBytes` (63) and
+- detect: `grep -rniE 'outbox:' -A6 config*.yaml | grep -iE 'tablename\s*:\s*\S+\.\S+'` finds
+  the schema-qualified YAML form, whose key is nested and so invisible to a flat
+  `outbox\.tablename` grep; `grep -rniE 'OUTBOX_TABLENAME' .` catches the env form, and `git
+  grep -nE 'OutboxConfig' -- '*.go'` the hand-built one. Measure the part BEFORE the dot. A
+  PostgreSQL deployment whose schema segment is 64 bytes or more is the population. **The grep
+  is a shortlist, not the population:** a table name assembled from an environment variable, a
+  tenant record or string concatenation never appears as a literal, so a computed schema prefix
+  has to be inventoried by hand. An unqualified name (no dot) is out of the population
+  entirely. Nothing in a build fails here.
+- scope: `NewPostgresStore` and `NewOracleStore` judge the table name's schema segment against
+  the STORE vendor's raw identifier cap — `identifier.MaxPostgreSQLBytes` (63) and
   `identifier.MaxOracleBytes` (128) — where both used to accept everything the shared
   `sqlid.ValidateTableName` grammar admits, which judges every vendor at Oracle's 128. Only
   PostgreSQL tightens: Oracle's arm restates the 128 that grammar already enforces, and is
-  spelled out because the vendor split is the thing that moved. The
-  cap is the RAW one because no derived name decorates the schema: `IndexBaseName` strips
-  it and `LeaderTableName` appends to the table segment. The refusal names the segment, its
-  byte length and the cap. The table segment's own 49-byte derived-affix budget is
-  unchanged, `sqlid.ValidateTableName` is unchanged, and the constructor signatures do not
-  move — only their refusal set widens. This retracts [C64.5]'s "the outbox schema-prefix
-  bound is untouched". Mirrors [C64.5]'s inbox clause without being identical to it — the
-  outbox hands an unknown vendor PostgreSQL's cap, the inbox Oracle's — and #1503 folds the
-  two into one helper and settles that.
+  spelled out because the vendor split is the thing that moved. The cap is the RAW one because
+  no derived name decorates the schema: `IndexBaseName` strips it and `LeaderTableName` appends
+  to the table segment. The refusal names the segment, its byte length and the cap. The table
+  segment's own 49-byte derived-affix budget is unchanged, `sqlid.ValidateTableName` is
+  unchanged, and the constructor signatures do not move — only their refusal set widens. This
+  retracts [C64.5]'s "the outbox schema-prefix bound is untouched". Mirrors [C64.5]'s inbox
+  clause without being identical to it — the outbox hands an unknown vendor PostgreSQL's cap,
+  the inbox Oracle's — and #1503 folds the two into one helper and settles that.
 - gate: match — a PostgreSQL outbox store is configured with a schema-qualified table name
   whose schema segment is 64 bytes or more, which now fails at construction where it used
   to be admitted up to 128. no-match — the schema segment fits 63 bytes, the name is
