@@ -1,11 +1,15 @@
 package outbox
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	dbident "github.com/gaborage/go-bricks/database/identifier"
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
 func TestValidateTableNameValid(t *testing.T) {
@@ -113,24 +117,40 @@ func TestValidateTableNameLengthBound(t *testing.T) {
 	}
 }
 
-// TestNewPostgresStoreSchemaSegmentBound pins the schema segment against PostgreSQL's raw
-// identifier cap at construction. No derived name decorates the schema — IndexBaseName
-// strips it and LeaderTableName appends to the table segment — so the whole 63 bytes are
-// spendable, and one byte more is refused here instead of inside the first ToSQL.
-func TestNewPostgresStoreSchemaSegmentBound(t *testing.T) {
+// TestStoreSchemaSegmentBound pins the schema segment against the STORE vendor's raw
+// identifier cap at construction. No derived name decorates a schema — IndexBaseName
+// strips it and LeaderTableName appends to the table segment — so the whole cap is
+// spendable there. The decisive row is the 64-byte schema Oracle accepts and PostgreSQL
+// refuses: it is what proves the bound follows the store's vendor rather than one shared
+// number. The 128/129 pair is the Oracle boundary, and its refusal is owned by the shared
+// sqlid grammar, not by this door — the assertion names sqlid's message to say so.
+func TestStoreSchemaSegmentBound(t *testing.T) {
 	tests := []struct {
-		name   string
-		schema string
-		want   bool
+		name     string
+		newStore func(string) (Store, error)
+		schema   string
+		want     string
 	}{
-		{name: "schema_at_the_postgresql_cap", schema: strings.Repeat("s", 63)},
-		{name: "schema_one_byte_over_the_postgresql_cap", schema: strings.Repeat("s", 64), want: true},
+		{name: "postgresql_schema_at_the_cap", newStore: NewPostgresStore, schema: strings.Repeat("s", dbident.MaxPostgreSQLBytes)},
+		{
+			name: "postgresql_schema_one_byte_over_the_cap", newStore: NewPostgresStore,
+			schema: strings.Repeat("s", dbident.MaxPostgreSQLBytes+1),
+			want: fmt.Sprintf("is %d bytes; the maximum for %s is %d",
+				dbident.MaxPostgreSQLBytes+1, dbtypes.PostgreSQL, dbident.MaxPostgreSQLBytes),
+		},
+		{name: "schema_over_the_postgresql_cap_is_fine_on_oracle", newStore: NewOracleStore, schema: strings.Repeat("s", dbident.MaxPostgreSQLBytes+1)},
+		{name: "oracle_schema_at_the_cap", newStore: NewOracleStore, schema: strings.Repeat("s", dbident.MaxOracleBytes)},
+		{
+			name: "oracle_schema_one_byte_over_the_cap", newStore: NewOracleStore,
+			schema: strings.Repeat("s", dbident.MaxOracleBytes+1),
+			want:   fmt.Sprintf("exceeds %d bytes", dbident.MaxOracleBytes),
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			store, err := NewPostgresStore(tt.schema + ".gobricks_outbox")
-			if !tt.want {
+			store, err := tt.newStore(tt.schema + ".gobricks_outbox")
+			if tt.want == "" {
 				require.NoError(t, err)
 				assert.NotNil(t, store)
 				return
@@ -138,37 +158,7 @@ func TestNewPostgresStoreSchemaSegmentBound(t *testing.T) {
 			require.Error(t, err)
 			assert.Nil(t, store)
 			assert.Contains(t, err.Error(), tt.schema)
-			assert.Contains(t, err.Error(), "64")
-			assert.Contains(t, err.Error(), "63")
-		})
-	}
-}
-
-// TestNewOracleStoreSchemaSegmentBound pins the other side of the vendor split: Oracle
-// spends 128 bytes on the schema segment, so a 64-byte schema that PostgreSQL refuses
-// still boots here, and only 129 is over the cap.
-func TestNewOracleStoreSchemaSegmentBound(t *testing.T) {
-	tests := []struct {
-		name   string
-		schema string
-		want   bool
-	}{
-		{name: "schema_over_the_postgresql_cap_is_fine_on_oracle", schema: strings.Repeat("s", 64)},
-		{name: "schema_at_the_oracle_cap", schema: strings.Repeat("s", 128)},
-		{name: "schema_one_byte_over_the_oracle_cap", schema: strings.Repeat("s", 129), want: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			store, err := NewOracleStore(tt.schema + ".gobricks_outbox")
-			if !tt.want {
-				require.NoError(t, err)
-				assert.NotNil(t, store)
-				return
-			}
-			require.Error(t, err)
-			assert.Nil(t, store)
-			assert.Contains(t, err.Error(), "128")
+			assert.Contains(t, err.Error(), tt.want)
 		})
 	}
 }

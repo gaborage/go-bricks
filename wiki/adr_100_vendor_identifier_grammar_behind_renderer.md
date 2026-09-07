@@ -18,8 +18,16 @@ outbox store constructors now judge the table name's schema segment against the
 STORE vendor's raw identifier cap — `identifier.MaxPostgreSQLBytes` (63),
 `identifier.MaxOracleBytes` (128) — so a PostgreSQL ledger configured with a
 64-to-128-byte schema prefix is refused at construction instead of booting and
-failing at the first `ToSQL()`, or, on a dynamic-config or multi-tenant
-deployment that skips the startup probe, at the first publish.
+failing at the first `ToSQL()`. Store construction is lazy, so WHERE that lands
+depends on the deployment: a static-source, single-tenant-or-shared-ledger
+service constructs during `Init` and now fails at startup, while a
+dynamic-config or per-tenant deployment constructs on first use — there the
+refusal is still inside the first publish, but before any statement is built
+and before the `autocreatetable` DDL runs, and it names the real fault instead
+of arriving as tenantstore's "missing table or insufficient privileges".
+Only PostgreSQL tightens: Oracle's arm restates the 128 that
+`sqlid.ValidateTableName` already enforces on every part, and is written out
+because the vendor split, not the one live number, is what binds here.
 
 The cap on the schema is the RAW one, not the derived-affix budget the table
 segment spends: no name the store derives decorates the schema —

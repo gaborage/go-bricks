@@ -48,7 +48,11 @@ func validateTableName(name string) error {
 
 // maxSchemaSegmentLenFor is the schema segment's budget under a store's own vendor.
 // Nothing decorates a schema prefix — IndexBaseName strips it and LeaderTableName
-// appends to the table segment — so the raw identifier cap is the whole budget.
+// appends to the table segment — so the raw identifier cap is the whole budget. The
+// Oracle arm restates a floor sqlid already enforces on every part, so the tightening
+// this adds is PostgreSQL's alone; it is spelled out because the vendor split, not the
+// one live number, is what #1503's shared helper folds — and because an unknown vendor
+// inherits PostgreSQL's cap here the way it does at the builder doors (ADR-100).
 func maxSchemaSegmentLenFor(vendor dbtypes.Vendor) int {
 	if vendor == dbtypes.Oracle {
 		return dbident.MaxOracleBytes
