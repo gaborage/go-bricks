@@ -153,3 +153,73 @@ func TestIsCompactJOSEAcceptsEveryBase64URLByteAndDots(t *testing.T) {
 	assert.False(t, isCompactJOSE("AB/C"))
 	assert.False(t, isCompactJOSE("AB:C"))
 }
+
+func TestNextMemberReadsOneMember(t *testing.T) {
+	cases := []struct {
+		name    string
+		doc     string
+		key     string
+		value   string
+		wantErr error
+	}{
+		{name: "string_value", doc: `{"card":"x"}`, key: "card", value: `"x"`},
+		{name: "object_value", doc: `{"card":{"pan":"4111"},"z":1}`, key: "card", value: `{"pan":"4111"}`},
+		{name: "escaped_key_decoded", doc: `{"c\u0061rd":1}`, key: "card", value: `1`},
+		{name: "truncated_key", doc: `{"card`, wantErr: errDocNotObject},
+		{name: "missing_value", doc: `{"card":}`, wantErr: errDocNotObject},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dec := json.NewDecoder(bytes.NewReader([]byte(tc.doc)))
+			require.NoError(t, expectDelim(dec, '{'))
+			key, raw, err := nextMember(dec)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				assert.Empty(t, key)
+				assert.Nil(t, raw)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.key, key)
+			assert.Equal(t, tc.value, string(raw))
+		})
+	}
+}
+
+func TestFinishWalkJudgesTheEndOfTheWalk(t *testing.T) {
+	span := subjectSpan{value: json.RawMessage(`1`), start: 5, end: 6}
+	cases := []struct {
+		name  string
+		doc   string
+		drain bool
+		found *subjectSpan
+		want  error
+	}{
+		{name: "closed_with_subject", doc: `{"a":1}`, drain: true, found: &span},
+		{name: "closed_without_subject", doc: `{"a":1}`, drain: true, want: errSubjectAbsent},
+		{name: "trailing_content", doc: `{"a":1} {"b":2}`, drain: true, found: &span, want: errDocTrailingContent},
+		// The close is judged before the find: a document that never closed with a brace is
+		// refused even though the Subject was already located.
+		{name: "not_closed_by_brace", doc: `[`, found: &span, want: errDocNotObject},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dec := json.NewDecoder(bytes.NewReader([]byte(tc.doc)))
+			if tc.drain {
+				require.NoError(t, expectDelim(dec, '{'))
+				for dec.More() {
+					_, _, err := nextMember(dec)
+					require.NoError(t, err)
+				}
+			}
+			got, err := finishWalk(dec, tc.found)
+			if tc.want != nil {
+				require.ErrorIs(t, err, tc.want)
+				assert.Equal(t, subjectSpan{}, got)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, *tc.found, got)
+		})
+	}
+}
