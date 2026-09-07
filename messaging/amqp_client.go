@@ -589,127 +589,142 @@ func (c *AMQPClientImpl) publishBytes(ctx context.Context, options publishOption
 			return err
 		}
 
-		publishing := preparePublishing(ctx, options, data)
-		messageID := publishing.MessageId
-		correlationID := publishing.CorrelationId
-
-		confirmCh, key, err, termErr := c.publishSlotted(ctx, options, &publishing, publishStart, span, lastCause)
+		arm, termErr := c.publishAttempt(ctx, options, data, publishStart, span, lastCause)
 		if termErr != nil {
 			return termErr
 		}
-
-		if err != nil {
-			// Publish never made it to the broker — drop our pending registration.
-			// (A stray broker confirmation for this tag, if it somehow arrives later,
-			// will be silently dropped by the dispatcher's unmatched-tag handling.)
-			c.pendingPublishes.Delete(key)
-			retryCount++
-			lastCause = err
-			c.log.Warn().Err(err).Int("retry_count", retryCount).Msg("Publish failed, retrying...")
-
-			tracking.RecordPublishRetry(ctx, options.Exchange, options.RoutingKey, "publish_error")
-
-			// SECURITY: the event's attributes are an off-platform sink, and a
-			// broker error's Reason is server-authored — type only, like every
-			// other span sink (ADR-083). The WARN above keeps the message.
-			span.AddEvent(eventPublishRetry, trace.WithAttributes(
-				attribute.String("reason", "publish error"),
-				attribute.String("error.type", fmt.Sprintf("%T", err)),
-				attribute.Int("retry_count", retryCount),
-			))
-			if termErr := c.retryBackoff(ctx, options, publishStart, span, retryCount, lastCause, c.resendDelay); termErr != nil {
-				return termErr
-			}
-			continue
+		if arm == nil {
+			return nil
 		}
 
-		// Wait for confirmation on OUR per-publish channel — the dispatcher
-		// goroutine routes only the confirmation whose (generation, DeliveryTag)
-		// matches our key here.
-		select {
-		case <-ctx.Done():
-			// Cleanup so the dispatcher doesn't hold a stale chan reference.
-			c.pendingPublishes.Delete(key)
-			return c.publishAbort(ctx, options, publishStart, span, ctx.Err(), lastCause)
-		case <-c.done:
-			c.pendingPublishes.Delete(key)
-			return c.publishAbort(ctx, options, publishStart, span, errShutdown, lastCause)
-		case confirm := <-confirmCh:
-			if confirm.Ack {
-				// Track elapsed time and increment AMQP counter in context for request tracking.
-				// publishStart (not startTime) excludes the pre-flight readiness wait so a
-				// cold-start publish doesn't misreport that wait as broker latency.
-				elapsed := time.Since(publishStart)
-				logger.IncrementAMQPCounter(ctx)
-				logger.AddAMQPElapsed(ctx, elapsed.Nanoseconds())
+		retryCount++
+		lastCause = arm.cause
+		if termErr := c.publishRetryEpilogue(ctx, options, publishStart, span, retryCount, arm); termErr != nil {
+			return termErr
+		}
+	}
+}
 
-				// Record AMQP publish metrics
-				tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, nil)
+// retryArm describes one failed publish attempt: the cause the next attempt
+// carries as lastCause, how the failure is named on each sink, and how long to
+// wait before retrying. The metric and span vocabularies are independent by
+// design — neither string is derived from the other.
+type retryArm struct {
+	cause        error   // ErrPublishNacked, ErrPublishConfirmTimeout, or the raw publish error
+	logCause     error   // publish-error arm only: logged, and rendered by TYPE on the span (ADR-083)
+	deliveryTag  *uint64 // NACK arm only
+	logMsg       string
+	metricReason string // publish_error | nack | timeout
+	spanReason   string // publish error | message not acknowledged | confirmation timeout
+	backoff      time.Duration
+}
 
-				c.log.Debug().
-					Str("exchange", options.Exchange).
-					Str("routing_key", options.RoutingKey).
-					Uint64("delivery_tag", confirm.DeliveryTag).
-					Msg("Message published successfully")
+// armPublishFailure returns the retry arm for a publish that never reached the
+// broker, or nil when there was no such failure. The pending registration is
+// dropped here: a stray broker confirmation for this tag, if it somehow arrives
+// later, is silently dropped by the dispatcher's unmatched-tag handling.
+func (c *AMQPClientImpl) armPublishFailure(key confirmKey, err error) *retryArm {
+	if err == nil {
+		return nil
+	}
+	c.pendingPublishes.Delete(key)
+	return &retryArm{
+		cause:        err,
+		logCause:     err,
+		logMsg:       "Publish failed, retrying...",
+		metricReason: "publish_error",
+		spanReason:   "publish error",
+		backoff:      c.resendDelay,
+	}
+}
 
-				// Add message IDs to span for cross-system correlation
-				span.SetAttributes(
-					semconv.MessagingMessageID(messageID),
-					semconv.MessagingMessageConversationID(correlationID),
-				)
-				span.SetStatus(codes.Ok, "")
-				return nil
-			}
-			// NACK received - retry the publish
-			retryCount++
-			lastCause = ErrPublishNacked
-			c.log.Warn().
+// publishAttempt arms and sends one publish, then waits for its confirmation.
+// It returns (nil, nil) once the broker ACKs, the failed attempt's retryArm when
+// the loop should retry, or a terminal error the caller must return.
+func (c *AMQPClientImpl) publishAttempt(
+	ctx context.Context, options publishOptions, data []byte, publishStart time.Time, span trace.Span, lastCause error,
+) (*retryArm, error) {
+	publishing := preparePublishing(ctx, options, data)
+	messageID := publishing.MessageId
+	correlationID := publishing.CorrelationId
+
+	confirmCh, key, err, termErr := c.publishSlotted(ctx, options, &publishing, publishStart, span, lastCause)
+	if termErr != nil {
+		return nil, termErr
+	}
+
+	if arm := c.armPublishFailure(key, err); arm != nil {
+		return arm, nil
+	}
+
+	// Wait for confirmation on OUR per-publish channel — the dispatcher
+	// goroutine routes only the confirmation whose (generation, DeliveryTag)
+	// matches our key here.
+	select {
+	case <-ctx.Done():
+		// Cleanup so the dispatcher doesn't hold a stale chan reference.
+		c.pendingPublishes.Delete(key)
+		return nil, c.publishAbort(ctx, options, publishStart, span, ctx.Err(), lastCause)
+	case <-c.done:
+		c.pendingPublishes.Delete(key)
+		return nil, c.publishAbort(ctx, options, publishStart, span, errShutdown, lastCause)
+	case confirm := <-confirmCh:
+		if confirm.Ack {
+			// Track elapsed time and increment AMQP counter in context for request tracking.
+			// publishStart (not startTime) excludes the pre-flight readiness wait so a
+			// cold-start publish doesn't misreport that wait as broker latency.
+			elapsed := time.Since(publishStart)
+			logger.IncrementAMQPCounter(ctx)
+			logger.AddAMQPElapsed(ctx, elapsed.Nanoseconds())
+
+			// Record AMQP publish metrics
+			tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, nil)
+
+			c.log.Debug().
+				Str("exchange", options.Exchange).
+				Str("routing_key", options.RoutingKey).
 				Uint64("delivery_tag", confirm.DeliveryTag).
-				Int("retry_count", retryCount).
-				Msg("Message publish not acknowledged, retrying...")
+				Msg("Message published successfully")
 
-			tracking.RecordPublishRetry(ctx, options.Exchange, options.RoutingKey, "nack")
-
-			span.AddEvent(eventPublishRetry, trace.WithAttributes(
-				attribute.String("reason", "message not acknowledged"),
-				// #nosec G115 -- delivery tags are sequential and never overflow int in practice
-				semconv.MessagingRabbitMQMessageDeliveryTag(int(confirm.DeliveryTag)),
-				attribute.Int("retry_count", retryCount),
-			))
-			// retryBackoff applies the attempt ceiling and a cancelable backoff between
-			// NACK retries — replacing the old zero-delay hot-spin so a transiently-
-			// unroutable publish gets a few spaced attempts without pinning a core.
-			if termErr := c.retryBackoff(ctx, options, publishStart, span, retryCount, lastCause, c.nackBackoff); termErr != nil {
-				return termErr
-			}
-			continue
-		case <-time.After(c.connectionTimeout):
-			// Drop this attempt's waiter from pendingPublishes before retrying.
-			// Unlike the NACK path (where the dispatcher already consumed the
-			// entry via LoadAndDelete before forwarding the confirmation), the
-			// timeout path bails BEFORE any confirmation arrives, so the entry
-			// is still registered. Without this delete every timeout leaks one
-			// pendingPublishes entry until the channel is torn down, and a
-			// silently-stuck broker can grow the map unboundedly.
-			c.pendingPublishes.Delete(key)
-			// Confirmation timeout - retry the publish
-			retryCount++
-			lastCause = ErrPublishConfirmTimeout
-			c.log.Warn().Int("retry_count", retryCount).Msg("Publish confirmation timeout, retrying...")
-
-			tracking.RecordPublishRetry(ctx, options.Exchange, options.RoutingKey, "timeout")
-
-			span.AddEvent(eventPublishRetry, trace.WithAttributes(
-				attribute.String("reason", "confirmation timeout"),
-				attribute.Int("retry_count", retryCount),
-			))
-			// No extra backoff — this path already waited connectionTimeout; just
-			// apply the attempt ceiling before retrying.
-			if termErr := c.retryBackoff(ctx, options, publishStart, span, retryCount, lastCause, 0); termErr != nil {
-				return termErr
-			}
-			continue
+			// Add message IDs to span for cross-system correlation
+			span.SetAttributes(
+				semconv.MessagingMessageID(messageID),
+				semconv.MessagingMessageConversationID(correlationID),
+			)
+			span.SetStatus(codes.Ok, "")
+			return nil, nil
 		}
+		// NACK received - retry the publish
+		tag := confirm.DeliveryTag
+		return &retryArm{
+			cause:        ErrPublishNacked,
+			deliveryTag:  &tag,
+			logMsg:       "Message publish not acknowledged, retrying...",
+			metricReason: "nack",
+			spanReason:   "message not acknowledged",
+			// nackBackoff spaces NACK retries — replacing the old zero-delay hot-spin
+			// so a transiently-unroutable publish gets a few spaced attempts without
+			// pinning a core.
+			backoff: c.nackBackoff,
+		}, nil
+	case <-time.After(c.connectionTimeout):
+		// Drop this attempt's waiter from pendingPublishes before retrying.
+		// Unlike the NACK path (where the dispatcher already consumed the
+		// entry via LoadAndDelete before forwarding the confirmation), the
+		// timeout path bails BEFORE any confirmation arrives, so the entry
+		// is still registered. Without this delete every timeout leaks one
+		// pendingPublishes entry until the channel is torn down, and a
+		// silently-stuck broker can grow the map unboundedly.
+		c.pendingPublishes.Delete(key)
+		return &retryArm{
+			cause:        ErrPublishConfirmTimeout,
+			logMsg:       "Publish confirmation timeout, retrying...",
+			metricReason: "timeout",
+			spanReason:   "confirmation timeout",
+			// No extra backoff — this path already waited connectionTimeout; just
+			// the attempt ceiling applies before retrying.
+			backoff: 0,
+		}, nil
 	}
 }
 
@@ -865,24 +880,53 @@ func (c *AMQPClientImpl) publishAttemptGuard(
 	return nil
 }
 
-// retryBackoff is the shared tail of every failed-attempt branch. It applies the
-// attempt ceiling (returning a terminal ErrPublishRetriesExhausted once reached) and,
-// if backoff > 0, a cancelable wait that still honors ctx cancel / client shutdown.
-// It returns a non-nil error the caller must RETURN from publishBytes, or nil to
-// CONTINUE the retry loop. (Only the failure branches call it — never the ACK path.)
-func (c *AMQPClientImpl) retryBackoff(ctx context.Context, options publishOptions, startTime time.Time, span trace.Span, retryCount int, lastCause error, backoff time.Duration) error {
-	if c.maxPublishAttempts > 0 && retryCount >= c.maxPublishAttempts {
-		return c.publishExhausted(ctx, options, startTime, span, retryCount, lastCause)
+// publishRetryEpilogue is the shared tail of every failed-attempt branch. It
+// records the arm on all three sinks (WARN log, retry metric, span event), applies
+// the attempt ceiling (returning a terminal ErrPublishRetriesExhausted once reached)
+// and, if the arm carries a backoff, a cancelable wait that still honors ctx cancel /
+// client shutdown. It returns a non-nil error the caller must RETURN from
+// publishBytes, or nil to CONTINUE the retry loop. (Only the failure arms reach it —
+// never the ACK path.)
+func (c *AMQPClientImpl) publishRetryEpilogue(
+	ctx context.Context, options publishOptions, startTime time.Time, span trace.Span, retryCount int, arm *retryArm,
+) error {
+	event := c.log.Warn()
+	if arm.logCause != nil {
+		event = event.Err(arm.logCause)
 	}
-	if backoff <= 0 {
+	if arm.deliveryTag != nil {
+		event = event.Uint64("delivery_tag", *arm.deliveryTag)
+	}
+	event.Int("retry_count", retryCount).Msg(arm.logMsg)
+
+	tracking.RecordPublishRetry(ctx, options.Exchange, options.RoutingKey, arm.metricReason)
+
+	// SECURITY: the event's attributes are an off-platform sink, and a broker
+	// error's Reason is server-authored — type only, like every other span sink
+	// (ADR-083). The WARN above keeps the message.
+	attrs := []attribute.KeyValue{attribute.String("reason", arm.spanReason)}
+	if arm.logCause != nil {
+		attrs = append(attrs, attribute.String("error.type", fmt.Sprintf("%T", arm.logCause)))
+	}
+	if arm.deliveryTag != nil {
+		// #nosec G115 -- delivery tags are sequential and never overflow int in practice
+		attrs = append(attrs, semconv.MessagingRabbitMQMessageDeliveryTag(int(*arm.deliveryTag)))
+	}
+	attrs = append(attrs, attribute.Int("retry_count", retryCount))
+	span.AddEvent(eventPublishRetry, trace.WithAttributes(attrs...))
+
+	if c.maxPublishAttempts > 0 && retryCount >= c.maxPublishAttempts {
+		return c.publishExhausted(ctx, options, startTime, span, retryCount, arm.cause)
+	}
+	if arm.backoff <= 0 {
 		return nil
 	}
 	select {
 	case <-ctx.Done():
-		return c.publishAbort(ctx, options, startTime, span, ctx.Err(), lastCause)
+		return c.publishAbort(ctx, options, startTime, span, ctx.Err(), arm.cause)
 	case <-c.done:
-		return c.publishAbort(ctx, options, startTime, span, errShutdown, lastCause)
-	case <-time.After(backoff):
+		return c.publishAbort(ctx, options, startTime, span, errShutdown, arm.cause)
+	case <-time.After(arm.backoff):
 		return nil
 	}
 }
