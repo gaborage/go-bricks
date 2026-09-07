@@ -4,6 +4,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"math"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -22,18 +23,26 @@ type lineRange struct {
 var hunkRe = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 
 // parseHunkRange reads the new-file side of a hunk header. ok=false for a
-// non-hunk line and for a pure deletion (+n,0), which touches no new line.
+// non-hunk line, for a pure deletion (+n,0), which touches no new line, and for
+// a header whose numbers do not fit an int: the regexp only proves they are
+// digits, so an out-of-range Atoi (which yields MaxInt) or a start+count past
+// MaxInt would otherwise be silently turned into a wrapped, bogus range.
 func parseHunkRange(line string) (lineRange, bool) {
 	m := hunkRe.FindStringSubmatch(line)
 	if m == nil {
 		return lineRange{}, false
 	}
-	start, _ := strconv.Atoi(m[1])
+	start, err := strconv.Atoi(m[1])
+	if err != nil {
+		return lineRange{}, false
+	}
 	count := 1
 	if m[2] != "" {
-		count, _ = strconv.Atoi(m[2])
+		if count, err = strconv.Atoi(m[2]); err != nil {
+			return lineRange{}, false
+		}
 	}
-	if count == 0 {
+	if count == 0 || count > math.MaxInt-start {
 		return lineRange{}, false
 	}
 	return lineRange{Start: start, End: start + count}, true

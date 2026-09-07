@@ -99,13 +99,21 @@ func accumulateShards(merged *mergedReport, paths []string, absOut string, out i
 }
 
 // setRates derives the two percentages from the folded counters. Efficacy is
-// over verdicted mutants only; coverage is over every mutant seen.
+// over verdicted mutants only; coverage is over every mutant seen. The
+// denominators are summed in float64: accumulateShards bounds each counter, but
+// nothing bounds their sum, and an int sum of near-MaxInt counters wraps
+// negative — which reads as "nothing seen" and silently zeroes the rate.
+// float64 has no failure mode to report here, so it is preferred over
+// extending the checked arithmetic into this write-only helper.
 func setRates(merged *mergedReport) {
-	if verdicted := merged.MutantsKilled + merged.MutantsLived; verdicted > 0 {
-		merged.TestEfficacy = float64(merged.MutantsKilled) * 100 / float64(verdicted)
+	killed := float64(merged.MutantsKilled)
+	lived := float64(merged.MutantsLived)
+	notCovered := float64(merged.MutantsNotCovered)
+	if verdicted := killed + lived; verdicted > 0 {
+		merged.TestEfficacy = killed * 100 / verdicted
 	}
-	if seen := merged.MutantsKilled + merged.MutantsLived + merged.MutantsNotCovered; seen > 0 {
-		merged.MutationsCoverage = float64(merged.MutantsKilled+merged.MutantsLived) * 100 / float64(seen)
+	if seen := killed + lived + notCovered; seen > 0 {
+		merged.MutationsCoverage = (killed + lived) * 100 / seen
 	}
 }
 

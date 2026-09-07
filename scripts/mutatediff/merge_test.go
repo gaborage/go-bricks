@@ -359,6 +359,10 @@ func TestSetRatesDerivesPercentages(t *testing.T) {
 		{"all_killed", 4, 0, 0, 100, 100},
 		{"no_verdicts_but_not_covered", 0, 0, 5, 0, 0},
 		{"nothing_seen", 0, 0, 0, 0, 0},
+		// Counters this large only reach setRates through a corrupt shard, but the
+		// int sum of the three wraps negative and would zero the coverage rate.
+		{"maxint_scale_counters", math.MaxInt / 2, math.MaxInt / 2, math.MaxInt / 2, 50, 200.0 / 3},
+		{"maxint_counters_wrap_the_verdicted_sum", math.MaxInt, math.MaxInt, 0, 50, 100},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -371,5 +375,30 @@ func TestSetRatesDerivesPercentages(t *testing.T) {
 				t.Errorf("coverage = %v, want %v", merged.MutationsCoverage, tt.wantCoverage)
 			}
 		})
+	}
+}
+
+func TestSetRatesKeepsPercentagesFiniteAtMaxIntScale(t *testing.T) {
+	merged := mergedReport{
+		MutantsKilled:     math.MaxInt / 2,
+		MutantsLived:      math.MaxInt / 2,
+		MutantsNotCovered: math.MaxInt / 2,
+	}
+	setRates(&merged)
+	for _, r := range []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"test_efficacy", merged.TestEfficacy, 50},
+		{"mutations_coverage", merged.MutationsCoverage, 200.0 / 3},
+	} {
+		if math.IsNaN(r.got) || math.IsInf(r.got, 0) {
+			t.Errorf("%s = %v, want a finite percentage", r.name, r.got)
+			continue
+		}
+		if math.Abs(r.got-r.want) > 1e-9 {
+			t.Errorf("%s = %v, want %v", r.name, r.got, r.want)
+		}
 	}
 }
