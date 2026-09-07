@@ -123,6 +123,20 @@ func HasUnescapedQuote(text string) bool {
 // a single segment. Rendering fewer segments than the caller wrote would be the
 // silent variant; one whole (escaped) identifier is not.
 func SplitIdentifierSegments(identifier string) []string {
+	// Fast path: input with neither a separator dot nor a quote is one segment,
+	// so the parser would only walk it byte by byte to hand back what TrimSpace
+	// gives here — the same gate QuoteOracleIdentifier already applies, hoisted
+	// to the splitter for the validation door that calls it on every identifier
+	// (#1491). The trim is the behavior, not a tidy-up: finalize trims each
+	// segment, and an all-whitespace input trims to empty, which finalize
+	// REJECTS — hence the untrimmed fallback below, identical to the parser's.
+	if !strings.ContainsAny(identifier, `."`) {
+		if trimmed := strings.TrimSpace(identifier); trimmed != "" {
+			return []string{trimmed}
+		}
+		return []string{identifier}
+	}
+
 	if segments, ok := parseQualifiedIdentifier(identifier); ok {
 		return segments
 	}

@@ -444,3 +444,30 @@ func TestVendorSegmentCheckJudgesLengthBeforeCharset(t *testing.T) {
 	assert.NotErrorIs(t, err, dbident.ErrIdentifierCharset,
 		"length is judged first, so the charset half never runs on an over-cap segment")
 }
+
+// BenchmarkNormalizeAgainstBareName measures the identifier door every builder
+// call goes through — trim, pattern match, then vendor-segment validation — for
+// the overwhelming input shape: a bare, qualified-free name. It exists to hold
+// the allocation count on that path (#1491), so it reports allocs; the qualified
+// row is the contrast, not the target.
+func BenchmarkNormalizeAgainstBareName(b *testing.B) {
+	cases := []struct {
+		name       string
+		identifier string
+	}{
+		{"bare", "user_name"},
+		{"qualified", "schema.users.user_name"},
+	}
+	for _, bc := range cases {
+		b.Run(bc.name, func(b *testing.B) {
+			qb := identifierQB()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if _, err := qb.validateIdentifier("column", bc.identifier); err != nil {
+					b.Fatalf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}

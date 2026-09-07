@@ -382,3 +382,34 @@ func TestQuoteIdentifierLiteralEscapeBranch(t *testing.T) {
 	assert.Equal(t, `"a""b"`, QuoteIdentifierLiteral(`a""b`))
 	assert.Equal(t, `"plain"`, QuoteIdentifierLiteral("plain"))
 }
+
+// TestSplitIdentifierSegmentsBareNames pins what the splitter returns for input
+// carrying neither a separator dot nor a quote — the shape the bare-name fast
+// path answers without running the parser (#1491). Every row here holds on the
+// parser path too, which is the point: the fast path is behavior-preserving
+// only if the trim survives, and all-whitespace input still falls back to the
+// untrimmed original because the parser rejects an empty final segment.
+func TestSplitIdentifierSegmentsBareNames(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{"bare_name", "col", []string{"col"}},
+		{"space_padded_bare_name", " col ", []string{"col"}},
+		{"tab_and_newline_padded", "\tcol\n", []string{"col"}},
+		{"all_whitespace_returns_input_untrimmed", "   ", []string{"   "}},
+		{"empty_returns_input", "", []string{""}},
+		// The dotted and quoted rows guard the gate itself: widen it and these
+		// stop splitting.
+		{"padded_qualified_name_still_splits", " a . b ", []string{"a", "b"}},
+		{"quoted_name_keeps_its_quotes", `"col"`, []string{`"col"`}},
+		{"dot_inside_quotes_is_one_segment", `"a.b"`, []string{`"a.b"`}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, SplitIdentifierSegments(tt.input))
+		})
+	}
+}
