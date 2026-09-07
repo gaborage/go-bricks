@@ -57,7 +57,8 @@ type Info struct {
 func (d *DebugHandlers) handleHealthDebug(c server.HandlerContext) error {
 	start := time.Now()
 
-	components := runReadinessProbes(c.RequestContext(), d.app.healthProbes).debugComponents()
+	report := d.app.judge.full(c.RequestContext())
+	components := report.debugComponents()
 
 	healthInfo := &healthDebugInfo{
 		Components: components,

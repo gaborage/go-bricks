@@ -313,9 +313,9 @@ func (b *Builder) performPreInitialization() {
 	}
 }
 
-// CreateHealthProbes creates health check probes for all managers. prepareRuntime
-// re-collects the set after the start phase (streamsSlot.probe, slot.go), so this
-// build-time list is only what an App built but never Run would report.
+// CreateHealthProbes installs the readiness judge over the slot list (ADR-067 decision 5
+// keeps the step's name). It collects nothing: each slot seals its own description inside
+// the startSlots walk (ADR-066 as amended).
 func (b *Builder) CreateHealthProbes() *Builder {
 	if b.err != nil {
 		return b
@@ -331,7 +331,7 @@ func (b *Builder) CreateHealthProbes() *Builder {
 	}
 
 	b.warnIfQueryParameterLogging()
-	b.app.healthProbes = b.app.collectProbes()
+	b.app.judge = readinessJudge{slots: b.app.slots}
 
 	return b
 }

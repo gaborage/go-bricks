@@ -22,11 +22,14 @@ type HealthStatus struct {
 	Critical  bool
 }
 
-// Prober exposes a uniform interface for readiness probes. SECURITY: the /ready body is
-// unauthenticated, so publicProbeError never renders HealthStatus.Err — an implementation
-// that wants wording other than the synthesized "<name> unavailable" sets
-// HealthStatus.PublicErr, which must be a fixed string and never derived from config. The
-// same constraint binds Name, which the synthesized default interpolates.
+// Prober is the probe description's own contract, implemented by the framework's own
+// descriptions (probeDescription) and by nothing else — there is no registration door for a
+// foreign Prober, and the judge only ever walks the slot list (ADR-066 as amended).
+// SECURITY: the /ready body is unauthenticated, so publicProbeError never renders
+// HealthStatus.Err — a description that wants wording other than the synthesized
+// "<name> unavailable" sets HealthStatus.PublicErr, which must be a fixed string and never
+// derived from config. The same constraint binds Name, which the synthesized default
+// interpolates.
 type Prober interface {
 	Run(ctx context.Context) HealthStatus
 }

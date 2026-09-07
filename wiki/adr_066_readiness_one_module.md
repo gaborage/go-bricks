@@ -6,6 +6,31 @@
 readiness), [ADR-048](adr_048_ready_sanitize_by_default.md) (sanitized `/ready` errors)
 — both preserved; this ADR changes where the readiness decision lives, not what it decides.
 
+> **Amended (2026-09-06):** readiness asks the SLOTS at judgement time. Each slot
+> seals its own probe description once, inside the `startSlots` walk, immediately after its
+> `start` returns without a fatal error; `readinessJudge` walks the slot list per request
+> and reads those sealed descriptions. There is no cached description set —
+> `App.healthProbes` and `App.collectProbes` are gone, and `Builder.CreateHealthProbes`
+> (the name is kept, ADR-067 decision 5) now installs the judge and collects nothing. The
+> four `xxxProbe` constructors fold into each slot's `describe()`, beside that kind's
+> `start` and `closer`. The exported `Prober` stays the description's own contract —
+> `probeDescription` implements it — but nothing foreign reaches the judge any more: the
+> render path's type assertion and the test-only foreign seam are both gone. Two
+> consequences for the text below: the `/ready` GATE — and it alone — fails closed before
+> the `startSlots` walk completed, answering **503** under the fixed component name
+> `readiness` (unreachable through `Run`, which installs the judge before it starts
+> anything, and `prepareRuntime` now refuses to start at all when `CreateHealthProbes` was
+> skipped), while a started application with no kind to render answers a normal `200`; the
+> access-controlled debug view carries no such guard, because its handlers are registered
+> after that walk — it walks the slots and reports honestly, empty included; and the streams
+> sentence's "keeps registering at
+> runtime" is now the seal — the streams slot withholds a description while its manager
+> does not exist, so a streams-free service still renders neither streams key. The
+> paragraph below also claims the cache-criticality opt-out WARN stays in
+> `Builder.CreateHealthProbes`: that WARN no longer exists anywhere
+> (`grep warnIfCacheCriticalityOptOut` over the code returns nothing — ADR-094 deleted it),
+> so the sentence is stale on its own terms and not because of this change.
+
 ## Context
 
 Readiness was written once per kind. `app/health.go` carried three copies of the same
@@ -60,8 +85,9 @@ Three rules follow from "one machine":
 The three classic kinds always register (a nil manager is a `disabled` description);
 the streams description keeps registering at runtime until the lifecycle-slot work
 (ADR-067) gives streams a build-time slot. Probe order is `database → messaging → cache →
-streams`. The cache-criticality opt-out WARN stays in `Builder.CreateHealthProbes`, which
-holds the `Options` the check needs.
+streams`. ~~The cache-criticality opt-out WARN stays in `Builder.CreateHealthProbes`, which
+holds the `Options` the check needs.~~ (ADR-094 deleted that WARN; `CreateHealthProbes` now
+installs the judge — see the 2026-09-06 amendment above.)
 
 ## Delivery
 

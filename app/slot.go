@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -17,13 +18,26 @@ import (
 // nothing about it.
 type resourceSlot interface {
 	// name is the kind's fixed component identifier, used in the startup log lines and the
-	// fatal startup error. The /ready body's name comes from the probe constructors in
-	// readiness.go, which use the same constants — never a tenant, host or database name.
+	// fatal startup error. The /ready body's name is that same identifier: seal stamps it
+	// onto what describe() built — never a tenant, host or database name.
 	name() string
 
-	// probe returns the kind's readiness description and whether it is registered at all.
-	// Only the streams slot withholds one — see streamsSlot.probe.
-	probe() (probeDescription, bool)
+	// describe builds the kind's probe description, and reports whether the kind renders at
+	// all. It is called once per slot, from the startSlots walk. Only the streams slot
+	// withholds a description — see streamsSlot.describe.
+	describe() (probeDescription, bool)
+
+	// seal stores what describe built, stamping the slot's own kind onto it as the rendered
+	// name. Called exactly once, inside the startSlots walk, immediately after this slot's
+	// start returned without a fatal error; nothing rewrites it afterwards, so a /ready
+	// overlapping stopSlots reads a stable value.
+	seal(description probeDescription, shown bool)
+
+	// readiness returns the description this slot sealed, or nil when the kind renders
+	// nothing — it has not sealed yet, or its describe withheld one. The pointer aims into
+	// the slot's own storage, so reading it allocates nothing; Run's own allocations are
+	// unaffected.
+	readiness() *probeDescription
 
 	// preInit establishes the kind's fixed-"" -key connection during Builder construction.
 	// It returns the raw failure; preInitFatal decides what that costs.
@@ -69,10 +83,10 @@ type slotInputs struct {
 // walk without rebuilding the list.
 func (a *App) installSlots(inputs slotInputs) {
 	a.slots = []resourceSlot{
-		&databaseSlot{app: a},
-		&messagingSlot{app: a},
-		&cacheSlot{app: a, absent: inputs.cacheAbsent},
-		&streamsSlot{app: a},
+		&databaseSlot{sealedReadiness: sealedReadiness{kind: componentDatabase}, app: a},
+		&messagingSlot{sealedReadiness: sealedReadiness{kind: componentMessaging}, app: a},
+		&cacheSlot{sealedReadiness: sealedReadiness{kind: componentCache}, app: a, absent: inputs.cacheAbsent},
+		&streamsSlot{sealedReadiness: sealedReadiness{kind: componentStreams}, app: a},
 	}
 }
 
@@ -87,16 +101,17 @@ func (a *App) requireSlots(step string) error {
 	return nil
 }
 
-// collectProbes is the readiness walk: every slot that has a description to register, in
-// registration order.
-func (a *App) collectProbes() []Prober {
-	probes := make([]Prober, 0, len(a.slots))
-	for _, s := range a.slots {
-		if description, ok := s.probe(); ok {
-			probes = append(probes, description)
-		}
+// requireJudge is prepareRuntime's second precondition, beside requireSlots: the readiness
+// judge was installed over the slot list. startSlots ends by marking the judge started, so
+// a chain that ran CreateApp but skipped CreateHealthProbes would leave an EMPTY judge
+// marked started — /ready answering 200 with nothing gated on at all, and the service
+// booting green with no database and no consumers behind it. Called after requireSlots, so
+// an empty judge beside a non-empty slot list can only mean the step never ran.
+func (a *App) requireJudge() error {
+	if len(a.judge.slots) == 0 {
+		return errors.New("readiness judge not installed before prepareRuntime — Builder.CreateHealthProbes must run first")
 	}
-	return probes
+	return nil
 }
 
 // registerSlotCloser appends one slot's closer to the FIFO close list, if it has one.
@@ -113,13 +128,59 @@ func (a *App) registerSlotClosers() {
 	}
 }
 
+// sealedReadiness is the readiness storage every production slot embeds: the kind's fixed
+// name and the description it sealed once, after its start phase (ADR-066 as amended).
+type sealedReadiness struct {
+	description *probeDescription
+	kind        string
+}
+
+// name is the kind's fixed component identifier, shared by the startup log lines and the
+// /ready body — never a tenant, host or database name.
+func (s *sealedReadiness) name() string { return s.kind }
+
+// seal stores what the slot's describe built; a kind that renders nothing seals nil. The
+// rendered name is stamped here from the slot's own kind, so each kind is spelled once —
+// at installSlots — instead of again in every describe literal.
+func (s *sealedReadiness) seal(description probeDescription, shown bool) {
+	if !shown {
+		s.description = nil
+		return
+	}
+	description.name = s.kind
+	s.description = &description
+}
+
+// readiness hands the judge the sealed description, or nil when the kind renders nothing.
+func (s *sealedReadiness) readiness() *probeDescription { return s.description }
+
 // databaseSlot owns the database kind.
-type databaseSlot struct{ app *App }
+type databaseSlot struct {
+	sealedReadiness
+	app *App
+}
 
-func (s *databaseSlot) name() string { return componentDatabase }
-
-func (s *databaseSlot) probe() (probeDescription, bool) {
-	return databaseProbe(s.app.dbManager, s.app.multiTenant()), true
+// describe builds the database kind's description: critical, leased through the fixed ""
+// key, live when the leased connection's Health passes. perTenant only relabels a
+// not-configured verdict — the lease is always attempted (probeDescription.perTenant).
+func (s *databaseSlot) describe() (probeDescription, bool) {
+	m := s.app.dbManager
+	if m == nil {
+		return disabledProbe(s.kind), true
+	}
+	return probeDescription{
+		critical:    true,
+		perTenant:   s.app.multiTenant(),
+		publicStats: databasePublicStats,
+		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
+			conn, release, err := m.Get(ctx, "")
+			if err != nil {
+				return nil, nil, err
+			}
+			return conn.Health, release, nil
+		},
+		stats: m.Stats,
+	}, true
 }
 
 func (s *databaseSlot) preInitFatal() bool { return true }
@@ -155,12 +216,35 @@ func (s *databaseSlot) closer() (namedCloser, bool) {
 }
 
 // messagingSlot owns the AMQP kind.
-type messagingSlot struct{ app *App }
+type messagingSlot struct {
+	sealedReadiness
+	app *App
+}
 
-func (s *messagingSlot) name() string { return componentMessaging }
-
-func (s *messagingSlot) probe() (probeDescription, bool) {
-	return messagingProbe(s.app.messagingManager, s.app.multiTenant()), true
+// describe builds the messaging kind's description: never critical, leased through the
+// fixed "" key, live when the leased client reports ready.
+func (s *messagingSlot) describe() (probeDescription, bool) {
+	m := s.app.messagingManager
+	if m == nil {
+		return disabledProbe(s.kind), true
+	}
+	return probeDescription{
+		perTenant:   s.app.multiTenant(),
+		publicStats: messagingPublicStats,
+		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
+			client, release, err := m.Publisher(ctx, "")
+			if err != nil {
+				return nil, nil, err
+			}
+			return func(context.Context) error {
+				if !client.IsReady() {
+					return errPublisherNotReady
+				}
+				return nil
+			}, release, nil
+		},
+		stats: m.Stats,
+	}, true
 }
 
 func (s *messagingSlot) preInitFatal() bool { return true }
@@ -203,16 +287,40 @@ func (s *messagingSlot) closer() (namedCloser, bool) {
 
 // cacheSlot owns the cache kind.
 type cacheSlot struct {
+	sealedReadiness
 	app *App
 	// absent is the Builder's rootCacheAbsent verdict, captured once at installSlots because
 	// it reads Options, which App does not hold.
 	absent bool
 }
 
-func (s *cacheSlot) name() string { return componentCache }
-
-func (s *cacheSlot) probe() (probeDescription, bool) {
-	return cacheProbe(s.app.cacheManager, s.app.cfg.IsCacheCritical(), s.absent, s.app.multiTenant()), true
+// describe builds the cache kind's description: critical per config (ADR-094), absent when
+// the fixed "" key can never resolve (rootCacheAbsent), live when a bounded PING of the
+// leased instance passes — a pooled instance is returned without a round trip, so it is
+// pinged explicitly.
+func (s *cacheSlot) describe() (probeDescription, bool) {
+	m := s.app.cacheManager
+	if m == nil {
+		return disabledProbe(s.kind), true
+	}
+	return probeDescription{
+		critical:    s.app.cfg.IsCacheCritical(),
+		absent:      s.absent,
+		perTenant:   s.app.multiTenant(),
+		publicStats: cachePublicStats,
+		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
+			instance, release, err := m.Get(ctx, "")
+			if err != nil {
+				return nil, nil, err
+			}
+			return func(ctx context.Context) error {
+				pingCtx, cancel := context.WithTimeout(ctx, cacheProbePingTimeout)
+				defer cancel()
+				return instance.Health(pingCtx)
+			}, release, nil
+		},
+		stats: func() map[string]any { return convertCacheStatsToMap(m.Stats()) },
+	}, true
 }
 
 func (s *cacheSlot) preInitFatal() bool { return false }
@@ -251,20 +359,35 @@ func (s *cacheSlot) closer() (namedCloser, bool) {
 
 // streamsSlot owns the native stream-protocol kind. Its manager does not exist until
 // prepareStreamConsumers builds it, at runtime.
-type streamsSlot struct{ app *App }
+type streamsSlot struct {
+	sealedReadiness
+	app *App
+}
 
-func (s *streamsSlot) name() string { return componentStreams }
-
-// probe withholds a description until the manager exists. Registering a disabled one at
-// build time would add "streams" and "streams_stats" to the /ready body of every service in
-// the fleet, the overwhelming majority of which never declared a stream (ADR-066 rule 5
-// renders every registered kind). prepareRuntime re-collects after the start phase, so the
-// description appears exactly where the runtime registration put it.
-func (s *streamsSlot) probe() (probeDescription, bool) {
-	if s.app.streamsManager == nil {
+// describe withholds a description until the manager exists. Sealing a disabled one would
+// add "streams" and "streams_stats" to the /ready body of every service in the fleet, the
+// overwhelming majority of which never declared a stream (ADR-066 rule 5 renders every
+// kind that renders at all). The seal runs after this slot's start, so a service that did
+// declare streams has its manager by then.
+//
+// Otherwise: NON-critical (the reliable consumers reconnect on their own, so a broker flap
+// must not take the service out of the load balancer), lease-less, live when every consumer
+// and publisher is open.
+func (s *streamsSlot) describe() (probeDescription, bool) {
+	m := s.app.streamsManager
+	if m == nil {
 		return probeDescription{}, false
 	}
-	return streamsProbe(s.app.streamsManager), true
+	return probeDescription{
+		publicStats: streamsPublicStats,
+		live: func(context.Context) error {
+			if !m.Ready() {
+				return errStreamsNotOpen
+			}
+			return nil
+		},
+		stats: m.Stats,
+	}, true
 }
 
 func (s *streamsSlot) preInit(context.Context) error { return nil }

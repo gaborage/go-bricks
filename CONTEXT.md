@@ -98,9 +98,10 @@ _Avoid_: health check, prober (the exported interface), probe config
 
 **Readiness**:
 The single judgment of whether the application may take traffic, and the two
-views of it — the `/ready` verdict and body, and the debug detail — both
-produced from the same probe descriptions and the same list of statuses that
-count as ready.
+views of it — the `/ready` verdict and body, and the debug detail. Both are
+produced from the probe descriptions each slot sealed once after its own start,
+asked of the slot list at judgment time and never cached as a set of their own,
+and from the same list of statuses that count as ready.
 _Avoid_: health (as the noun for this), liveness, ready check
 
 ### Messaging

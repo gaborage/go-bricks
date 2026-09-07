@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/gaborage/go-bricks/config"
@@ -27,9 +28,9 @@ const (
 )
 
 // publicProjection copies the allowlisted counters out of a kind's details and stamps the
-// kind's own status, so <name>_stats mirrors <name> even for a Prober that reports no
-// details at all. It copies rather than filtering in place because the debug view renders
-// that same map unredacted.
+// kind's own status, so <name>_stats mirrors <name> even for a kind that reports no details
+// at all. It copies rather than filtering in place because the debug view renders that same
+// map unredacted.
 func publicProjection(result *HealthStatus, allow []string) map[string]any {
 	public := make(map[string]any, len(allow))
 	for _, key := range allow {
@@ -50,50 +51,76 @@ type probeResult struct {
 	duration    time.Duration
 }
 
-// readinessReport is every registered probe's result, in registration order.
+// readinessReport is every rendered kind's result, in slot order.
 type readinessReport []probeResult
 
-// runProbe runs one probe and records its outcome, its description's allowlist and its
-// timing. Both traversals below go through it, so the two views cannot disagree about what
-// a result is.
-func runProbe(ctx context.Context, probe Prober) probeResult {
-	startedAt := time.Now()
-	result := probeResult{status: probe.Run(ctx), startedAt: startedAt}
-	result.duration = time.Since(startedAt)
-	// SECURITY: only the framework's own descriptions declare an allowlist. A Prober from
-	// outside publishes its status and nothing else, because nothing here knows which of
-	// its detail keys are safe on an unauthenticated body.
-	if description, ok := probe.(probeDescription); ok {
-		result.publicStats = description.publicStats
-	}
-	return result
+// readinessJudge is the one traversal behind both readiness views (ADR-066 rules 2 and 3,
+// ADR-067). It holds the slot list and, at judgement time, asks each slot for the probe
+// description that slot sealed after its start phase — no description is built and no
+// Prober is boxed per request.
+type readinessJudge struct {
+	slots []resourceSlot
+	// started records that the startSlots walk completed, so a judge asked before it can
+	// fail closed instead of reading an empty report as "nothing to gate on". It is written
+	// once at the end of that walk, before serve() starts the listener goroutine, and the
+	// goroutine start orders that write before every request's read of it.
+	started bool
 }
 
-// runReadinessProbes runs every registered probe once, in registration order. This is the
-// debug view's traversal: it reports one entry per kind, so it cannot stop early.
-func runReadinessProbes(ctx context.Context, probes []Prober) readinessReport {
-	report := make(readinessReport, 0, len(probes))
-	for _, probe := range probes {
-		report = append(report, runProbe(ctx, probe))
+// gate is /ready's judgement: the walk ends at the first failing critical kind, which is the
+// 503 and the reason a database outage costs the probes ahead of it and no more.
+func (j readinessJudge) gate(ctx context.Context) (report readinessReport, blocking HealthStatus, found bool) {
+	if !j.started {
+		return nil, notStartedResult(), true
 	}
+	return j.walk(ctx, true)
+}
+
+// full is the debug view's judgement: every kind is judged, whatever the gate would have
+// decided. It carries no fail-closed guard of its own — the debug handlers are registered
+// after the startSlots walk, so it is never reached before the seal, and an honest empty
+// report is the right answer if it ever were. Failing closed is the gate's job alone.
+func (j readinessJudge) full(ctx context.Context) readinessReport {
+	report, _, _ := j.walk(ctx, false)
 	return report
 }
 
-// runUntilBlocking is /ready's traversal: judge in registration order and stop at the first
-// failing critical kind, which is the 503. Nothing after it runs — a database outage must
-// not add a publisher lease and a Redis PING to every poll of an endpoint that carries no
-// authentication and no IP allowlist. The returned report is complete whenever found is
-// false, which is exactly when readyBody renders it.
-func runUntilBlocking(ctx context.Context, probes []Prober) (report readinessReport, blocking HealthStatus, found bool) {
-	report = make(readinessReport, 0, len(probes))
-	for _, probe := range probes {
-		result := runProbe(ctx, probe)
+// walk judges every slot's sealed description in slot order, optionally stopping at the
+// first failing critical kind. A kind whose readiness is nil renders nothing at all.
+func (j readinessJudge) walk(ctx context.Context, stopAtCritical bool) (report readinessReport, blocking HealthStatus, found bool) {
+	report = make(readinessReport, 0, len(j.slots))
+	for _, slot := range j.slots {
+		description := slot.readiness()
+		if description == nil {
+			continue
+		}
+		startedAt := time.Now()
+		result := probeResult{
+			status:      description.Run(ctx),
+			publicStats: description.publicStats,
+			startedAt:   startedAt,
+		}
+		result.duration = time.Since(startedAt)
 		report = append(report, result)
-		if isFailing(result.status.Status) && result.status.Critical {
+		if stopAtCritical && isFailing(result.status.Status) && result.status.Critical {
 			return report, result.status, true
 		}
 	}
 	return report, HealthStatus{}, false
+}
+
+// notStartedResult is the blocking result a judge asked before the start walk completed
+// synthesizes: nothing started, so nothing may take traffic.
+//
+// SECURITY: componentReadiness is a fixed component identifier, like every other name that
+// reaches the unauthenticated /ready body (ADR-048).
+func notStartedResult() HealthStatus {
+	return HealthStatus{
+		Name:     componentReadiness,
+		Status:   unhealthyStatus,
+		Critical: true,
+		Err:      errors.New("the application has not started"),
+	}
 }
 
 // isFailing is the one predicate both views share: a kind is failing exactly when its
@@ -188,9 +215,7 @@ func (r readinessReport) debugComponents() map[string]componentHealth {
 }
 
 // summarizeHealth aggregates the debug view from the predicate /ready gates on, so the two
-// views cannot disagree about what counts as a failure. unknown survives for the two shapes
-// the vocabulary does not cover: no probes at all, and a consumer Prober reporting a status
-// of its own invention.
+// views cannot disagree about what counts as a failure.
 func summarizeHealth(components map[string]componentHealth) healthSummary {
 	summary := healthSummary{TotalProbes: len(components)}
 	for _, component := range components {
@@ -213,6 +238,9 @@ func summarizeHealth(components map[string]componentHealth) healthSummary {
 	case summary.TotalProbes > 0 && summary.HealthyCount == summary.TotalProbes:
 		summary.OverallStatus = healthyStatus
 	default:
+		// Reachable only at zero probes now that probeDescription is the one Prober the
+		// judge sees (ADR-066 as amended): every status it can report is covered above, so
+		// nothing else can land here.
 		summary.OverallStatus = unknownStatus
 	}
 	return summary

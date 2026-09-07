@@ -7,6 +7,14 @@
 (no producer-side manager interface), [ADR-029](adr_029_graceful_shutdown_order.md)
 (shutdown order) — all preserved.
 
+> **Amended (2026-09-06):** the probe side now seals per slot exactly as the closer
+> side registers per slot — `probe()` becomes `describe()` plus a `seal`/`readiness()` pair
+> over per-slot storage, written once inside the `startSlots` walk, and readiness walks the
+> slot list at judgement time instead of a collected probe set (ADR-066 as amended). The
+> symmetry is partial: `streamsSlot.start` still registers its own closer out of band via
+> `registerSlotCloser`, because its manager does not exist until that start runs — tracked
+> as #1513.
+
 ## Context
 
 Every resource kind's application lifecycle facts — construct, expose, pre-init, probe,

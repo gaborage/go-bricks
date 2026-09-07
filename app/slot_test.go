@@ -81,14 +81,30 @@ func slotNames(a *App) []string {
 	return names
 }
 
-// probeNames runs every collected probe and reports the component name each reported.
-func probeNames(t *testing.T, probes []Prober) []string {
-	t.Helper()
-	names := make([]string, 0, len(probes))
-	for _, p := range probes {
-		names = append(names, p.Run(context.Background()).Name)
+// describedKinds asks every slot for its description and reports the component names of the
+// kinds that render at all — the set the startSlots walk seals. The name comes from the
+// slot rather than the description, because seal is what stamps it.
+func describedKinds(a *App) []string {
+	names := make([]string, 0, len(a.slots))
+	for _, s := range a.slots {
+		if _, ok := s.describe(); ok {
+			names = append(names, s.name())
+		}
 	}
 	return names
+}
+
+// slotDescription is one kind's description as the judge would see it, demanded to exist:
+// described and then sealed, because seal is what stamps the rendered name.
+func slotDescription(t *testing.T, a *App, kind string) probeDescription {
+	t.Helper()
+	slot := slotOf(t, a, kind)
+	description, ok := slot.describe()
+	require.Truef(t, ok, "the %s slot must describe its kind", kind)
+	slot.seal(description, ok)
+	sealed := slot.readiness()
+	require.NotNilf(t, sealed, "the %s slot must seal what it described", kind)
+	return *sealed
 }
 
 // assertCloserIdentity pins that every registered closer is the very manager its own slot
@@ -182,7 +198,7 @@ func TestSlotWalksCoverEveryKind(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a := newSlotTestApp(t, tc.withDB, tc.withMsg)
 
-			assert.Equal(t, classicProbes, probeNames(t, a.collectProbes()))
+			assert.Equal(t, classicProbes, describedKinds(a))
 
 			a.registerSlotClosers()
 			assert.Equal(t, tc.wantClosers, closerNames(a))
@@ -199,20 +215,19 @@ func TestCacheSlotContributesItsProbeAndCloser(t *testing.T) {
 
 	assert.Equal(t,
 		[]string{componentDatabase, componentMessaging, componentCache},
-		probeNames(t, a.collectProbes()))
+		describedKinds(a))
 
 	a.registerSlotClosers()
 	assert.Equal(t, []string{cacheCloserName}, closerNames(a))
 	assertCloserIdentity(t, a)
 }
 
-// TestCollectProbesWithholdsStreamsUntilItsManagerExists pins the one kind whose
-// description is withheld: registering a disabled streams description at build time would
-// add "streams" and "streams_stats" to every service's /ready body (ADR-066 rule 5), which
-// nothing asked for. See the plan's decision 1.
-func TestCollectProbesWithholdsStreamsUntilItsManagerExists(t *testing.T) {
+// TestStreamsSlotWithholdsItsDescriptionUntilItsManagerExists pins the one kind whose
+// description is withheld: sealing a disabled streams description would add "streams" and
+// "streams_stats" to every service's /ready body (ADR-066 rule 5), which nothing asked for.
+func TestStreamsSlotWithholdsItsDescriptionUntilItsManagerExists(t *testing.T) {
 	a := newSlotTestApp(t, false, false)
-	require.Len(t, a.collectProbes(), 3, "a streams-free service registers three kinds")
+	require.Len(t, describedKinds(a), 3, "a streams-free service describes three kinds")
 
 	a.streamsManager = streams.NewManager(streams.ManagerOptions{
 		URI:    unreachableStreamURI,
@@ -220,12 +235,10 @@ func TestCollectProbesWithholdsStreamsUntilItsManagerExists(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = a.streamsManager.Close() })
 
-	probes := a.collectProbes()
-	require.Len(t, probes, 4)
 	assert.Equal(t,
 		[]string{componentDatabase, componentMessaging, componentCache, componentStreams},
-		probeNames(t, probes),
-		"streams registers last, exactly where the runtime append put it")
+		describedKinds(a),
+		"streams describes last, in the one registration order")
 }
 
 // TestStreamsSlotContributesItsCloserOnceItsManagerExists is the close-walk half of the
@@ -264,23 +277,25 @@ func TestCacheSlotTakesAbsenceFromItsInputs(t *testing.T) {
 		return a
 	}
 
-	absent := newApp(true).collectProbes()[2].Run(context.Background())
-	present := newApp(false).collectProbes()[2].Run(context.Background())
+	absent := slotDescription(t, newApp(true), componentCache).Run(context.Background())
+	present := slotDescription(t, newApp(false), componentCache).Run(context.Background())
 
 	assert.Equal(t, notConfiguredStatus, absent.Status, "an absent cache is judged without leasing")
 	assert.Equal(t, unhealthyStatus, present.Status, "a present cache leases and reports the connector's failure")
 }
 
-// TestSlotProbesTrackLiveManagers pins that the slots read App's manager fields at probe
-// time rather than snapshotting them at install time: the fixtures below swap a manager out
-// after installSlots and expect the next collection to follow.
-func TestSlotProbesTrackLiveManagers(t *testing.T) {
+// TestSlotDescriptionsTrackLiveManagers pins that the slots read App's manager fields when
+// they describe rather than snapshotting them at install time: the fixture below swaps a
+// manager out after installSlots and expects the next description to follow.
+func TestSlotDescriptionsTrackLiveManagers(t *testing.T) {
 	a := newSlotTestApp(t, true, true)
-	require.Equal(t, healthyStatus, a.collectProbes()[1].Run(context.Background()).Status)
+	require.Equal(t, healthyStatus,
+		slotDescription(t, a, componentMessaging).Run(context.Background()).Status)
 
 	a.messagingManager = nil
 
-	assert.Equal(t, disabledStatus, a.collectProbes()[1].Run(context.Background()).Status)
+	assert.Equal(t, disabledStatus,
+		slotDescription(t, a, componentMessaging).Run(context.Background()).Status)
 }
 
 // TestSlotPreInitFatality pins the classification the spec fixes: database and messaging
@@ -407,10 +422,10 @@ func TestStartSlotsRunsEveryKindInRegistrationOrder(t *testing.T) {
 	order := []string{}
 	a := &App{logger: logger.New("error", false)}
 	a.slots = []resourceSlot{
-		&recordingSlot{kind: componentDatabase, order: &order},
-		&recordingSlot{kind: componentMessaging, order: &order},
-		&recordingSlot{kind: componentCache, order: &order},
-		&recordingSlot{kind: componentStreams, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentDatabase}, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentMessaging}, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentCache}, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentStreams}, order: &order},
 	}
 
 	require.NoError(t, a.startSlots(context.Background()))
@@ -426,8 +441,8 @@ func TestStartSlotsStopsAtTheFirstFatalKind(t *testing.T) {
 	order := []string{}
 	a := &App{logger: logger.New("error", false)}
 	a.slots = []resourceSlot{
-		&recordingSlot{kind: componentMessaging, order: &order, startFatal: assert.AnError},
-		&recordingSlot{kind: componentStreams, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentMessaging}, order: &order, startFatal: assert.AnError},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentStreams}, order: &order},
 	}
 
 	err := a.startSlots(context.Background())
@@ -444,8 +459,8 @@ func TestStartSlotsAggregatesAdvisoriesIntoOneWarn(t *testing.T) {
 	rec := &recLogger{}
 	a := &App{logger: rec}
 	a.slots = []resourceSlot{
-		&recordingSlot{kind: componentDatabase, order: &order, startAdvice: errors.New("db-advisory")},
-		&recordingSlot{kind: componentMessaging, order: &order, startAdvice: errors.New("msg-advisory")},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentDatabase}, order: &order, startAdvice: errors.New("db-advisory")},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentMessaging}, order: &order, startAdvice: errors.New("msg-advisory")},
 	}
 
 	require.NoError(t, a.startSlots(context.Background()),
@@ -464,7 +479,7 @@ func TestStartSlotsStaysSilentWithoutAdvisories(t *testing.T) {
 	order := []string{}
 	rec := &recLogger{}
 	a := &App{logger: rec}
-	a.slots = []resourceSlot{&recordingSlot{kind: componentDatabase, order: &order}}
+	a.slots = []resourceSlot{&recordingSlot{sealedReadiness: sealedReadiness{kind: componentDatabase}, order: &order}}
 
 	require.NoError(t, a.startSlots(context.Background()))
 
@@ -478,8 +493,8 @@ func TestStopSlotsRunsEveryKindInRegistrationOrder(t *testing.T) {
 	order := []string{}
 	a := &App{logger: logger.New("error", false)}
 	a.slots = []resourceSlot{
-		&recordingSlot{kind: componentMessaging, order: &order},
-		&recordingSlot{kind: componentStreams, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentMessaging}, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentStreams}, order: &order},
 	}
 
 	a.stopSlots(context.Background())
@@ -621,19 +636,17 @@ func TestSlotStopDrivesItsOwnKindsTeardown(t *testing.T) {
 // the walks can be pinned on order and short-circuiting without standing up four real
 // managers. Every field defaults to "this phase succeeds and does nothing".
 type recordingSlot struct {
+	sealedReadiness
 	order        *[]string
 	preInitErr   error
 	startAdvice  error
 	startFatal   error
-	kind         string
 	fatalPreInit bool
 }
 
 func (s *recordingSlot) record(phase string) { *s.order = append(*s.order, phase+":"+s.kind) }
 
-func (s *recordingSlot) name() string { return s.kind }
-
-func (s *recordingSlot) probe() (probeDescription, bool) { return probeDescription{}, false }
+func (s *recordingSlot) describe() (probeDescription, bool) { return probeDescription{}, false }
 
 func (s *recordingSlot) preInit(context.Context) error {
 	s.record("preinit")

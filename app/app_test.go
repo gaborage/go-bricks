@@ -494,11 +494,11 @@ func newTestAppFixture(t *testing.T, opts ...fixtureOption) *testAppFixture {
 	return fixture
 }
 
-// rebuildLifecycle re-runs the two Builder steps that snapshot the slot walks, after a test
-// has swapped a manager in or out. It calls exactly what Builder.CreateHealthProbes and
-// Builder.RegisterClosers call, so the fixture cannot drift from production wiring.
+// rebuildLifecycle re-seals every slot and re-registers the closers, after a test has
+// swapped a manager in or out. It stands in for the startSlots seal and the two Builder
+// steps that walk the slot list, so the fixture cannot drift from production wiring.
 func (f *testAppFixture) rebuildLifecycle() {
-	f.app.healthProbes = f.app.collectProbes()
+	sealAndJudge(f.app)
 	f.app.closers = nil
 	f.app.registerSlotClosers()
 }
@@ -788,10 +788,10 @@ func TestAppUsesProvidedResourceSource(t *testing.T) {
 	assert.Positive(t, resource.msgCalls)
 }
 
-// TestCollectProbesCacheCriticalFromLoadedConfig walks the whole seam a deployment
-// walks — YAML through koanf into IsCacheCritical into the probe — because a Go struct
-// literal cannot show that an omitted key survives the load as nil.
-func TestCollectProbesCacheCriticalFromLoadedConfig(t *testing.T) {
+// TestCacheSlotCriticalityFromLoadedConfig walks the whole seam a deployment walks — YAML
+// through koanf into IsCacheCritical into the cache slot's description — because a Go
+// struct literal cannot show that an omitted key survives the load as nil.
+func TestCacheSlotCriticalityFromLoadedConfig(t *testing.T) {
 	const cacheEnabled = "\ncache:\n  enabled: true\n  redis:\n    host: localhost\n    port: 6379\n"
 
 	tests := []struct {
@@ -810,24 +810,22 @@ func TestCollectProbesCacheCriticalFromLoadedConfig(t *testing.T) {
 			app := &App{cfg: cfg, logger: logger.New("error", false), cacheManager: createTestCacheManager(t)}
 
 			app.installSlots(slotInputs{})
-			probes := app.collectProbes()
-			require.Len(t, probes, 3)
 
-			status := probes[2].Run(context.Background())
+			status := slotDescription(t, app, componentCache).Run(context.Background())
 			assert.Equal(t, componentCache, status.Name)
 			assert.Equal(t, tc.expectedCritical, status.Critical)
 		})
 	}
 }
 
-// TestCollectProbesCriticalProbesRenderNoRawError enforces the Prober contract over
-// every probe the app actually wires, rather than probe by probe. SECURITY: readyCheck
+// TestCriticalSlotDescriptionsRenderNoRawError enforces the Prober contract over
+// every kind the app actually wires, rather than kind by kind. SECURITY: readyCheck
 // renders a critical probe's failure into the unauthenticated /ready 503 body, so what
 // matters is the rendered string, not whether the probe remembered to declare one — the
 // assertion drives each probe's status through publicProbeError with an identity-bearing
 // error substituted in. The per-constructor tests pin the probes that exist today; this is
 // the only guard that catches a critical probe added tomorrow.
-func TestCollectProbesCriticalProbesRenderNoRawError(t *testing.T) {
+func TestCriticalSlotDescriptionsRenderNoRawError(t *testing.T) {
 	cfg := &config.Config{Cache: config.CacheConfig{Critical: true}}
 	require.True(t, cfg.IsCacheCritical(), "the cache probe must be opted into criticality, or this test covers only the database probe")
 
@@ -840,12 +838,16 @@ func TestCollectProbesCriticalProbesRenderNoRawError(t *testing.T) {
 	}
 
 	app.installSlots(slotInputs{})
-	probes := app.collectProbes()
-	require.Len(t, probes, 3)
+
+	// The real described set, not a hand-listed one: a kind added to installSlots tomorrow
+	// is covered here the day it lands. The tripwire keeps the claim honest — a describe()
+	// that starts withholding its kind would otherwise shrink this walk silently.
+	kinds := describedKinds(app)
+	require.Len(t, kinds, len(app.slots)-1, "every kind but streams (no manager here) describes itself")
 
 	criticalSeen := 0
-	for _, probe := range probes {
-		st := probe.Run(context.Background())
+	for _, kind := range kinds {
+		st := slotDescription(t, app, kind).Run(context.Background())
 		if !st.Critical {
 			continue
 		}

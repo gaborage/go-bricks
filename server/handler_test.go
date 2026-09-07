@@ -18,6 +18,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
+	"github.com/gaborage/go-bricks/internal/racedetect"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
@@ -2844,7 +2845,7 @@ const (
 // below the locked baseline — proving newHandlerContext + accessors + the addEcho seam add
 // no allocation (ADR-026).
 func TestTypedHandlerPathAllocsStable(t *testing.T) {
-	if raceDetectorEnabled {
+	if racedetect.Enabled {
 		t.Skip("testing.AllocsPerRun is unreliable under -race; alloc baseline enforced in the non-race matrix")
 	}
 	e, req := newTypedPathServer(t)

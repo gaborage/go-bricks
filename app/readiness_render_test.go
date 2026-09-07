@@ -41,23 +41,16 @@ func describeNotConfigured(name string, critical, perTenant bool, stats map[stri
 	}
 }
 
-// foreignProbe is a Prober from outside the framework: it declares no allowlist, so the
-// unauthenticated body may carry its status and nothing else.
-type foreignProbe struct {
-	result HealthStatus
-}
-
-func (p *foreignProbe) Run(context.Context) HealthStatus { return p.result }
-
-// mustNotRunProbe fails the test if it is ever invoked — the standing proof that /ready
-// stops at the first failing critical probe rather than paying for the rest.
-type mustNotRunProbe struct {
-	t *testing.T
-}
-
-func (p mustNotRunProbe) Run(context.Context) HealthStatus {
-	p.t.Error("no probe after the first failing critical one may run")
-	return HealthStatus{Name: "never"}
+// mustNotRunDescription fails the test if it is ever judged — the standing proof that
+// /ready stops at the first failing critical kind rather than paying for the rest.
+func mustNotRunDescription(t *testing.T) probeDescription {
+	return probeDescription{
+		name: "never",
+		live: func(context.Context) error {
+			t.Error("no probe after the first failing critical one may run")
+			return nil
+		},
+	}
 }
 
 // jsonKey spells a map key the way encoding/json renders it. A forbidden key that is also
@@ -123,7 +116,7 @@ func TestReadinessViews(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		probes        []Prober
+		descriptions  []probeDescription
 		wantCode      int
 		wantReadyRuns int // probes /ready evaluates before it answers
 		wantBody      map[string]any
@@ -135,7 +128,7 @@ func TestReadinessViews(t *testing.T) {
 	}{
 		{
 			name: "every_registered_kind_renders_status_and_stats",
-			probes: []Prober{
+			descriptions: []probeDescription{
 				describe(componentDatabase, true, nil, dbStats, databasePublicStats),
 				disabledProbe(componentMessaging),
 				describeNotConfigured(componentCache, true, false, cacheStats, cachePublicStats),
@@ -167,7 +160,7 @@ func TestReadinessViews(t *testing.T) {
 		},
 		{
 			name: "first_failing_critical_kind_gates_and_sanitizes",
-			probes: []Prober{
+			descriptions: []probeDescription{
 				describe(componentDatabase, true, errors.New(driverError), dbStats, databasePublicStats),
 				describe(componentCache, true, errors.New(redisAddr+": connection refused"), cacheStats, cachePublicStats),
 			},
@@ -187,7 +180,7 @@ func TestReadinessViews(t *testing.T) {
 		},
 		{
 			name: "non_critical_failure_stays_ready_and_reads_degraded",
-			probes: []Prober{
+			descriptions: []probeDescription{
 				describe(componentDatabase, true, nil, dbStats, databasePublicStats),
 				describe(componentStreams, false, errStreamsNotOpen, streamStats, streamsPublicStats),
 			},
@@ -213,7 +206,7 @@ func TestReadinessViews(t *testing.T) {
 		},
 		{
 			name: "absence_is_ready_equivalent_in_both_views",
-			probes: []Prober{
+			descriptions: []probeDescription{
 				describeNotConfigured(componentDatabase, true, false, dbStats, databasePublicStats),
 				describeNotConfigured(componentMessaging, false, true, nil, messagingPublicStats),
 				disabledProbe(componentCache),
@@ -240,13 +233,11 @@ func TestReadinessViews(t *testing.T) {
 			wantSummary: healthSummary{OverallStatus: healthyStatus, TotalProbes: 3, HealthyCount: 3},
 		},
 		{
-			name: "foreign_probe_publishes_only_its_status",
-			probes: []Prober{
-				&foreignProbe{result: HealthStatus{
-					Name:    "vault",
-					Status:  healthyStatus,
-					Details: map[string]any{statusKey: healthyStatus, "addr": "10.0.0.9:8200"},
-				}},
+			// A kind that declares no allowlist: its statistics stay on the debug view and
+			// the unauthenticated body carries its status alone.
+			name: "description_without_an_allowlist_publishes_only_its_status",
+			descriptions: []probeDescription{
+				describe("vault", false, nil, map[string]any{"addr": "10.0.0.9:8200"}, nil),
 			},
 			wantCode:      200,
 			wantReadyRuns: 1,
@@ -264,11 +255,11 @@ func TestReadinessViews(t *testing.T) {
 			wantSummary: healthSummary{OverallStatus: healthyStatus, TotalProbes: 1, HealthyCount: 1},
 		},
 		{
-			// A Prober may report no Details at all. /ready still mirrors its status under
-			// <name>_stats, while the debug entry's nil guard renders an empty object.
-			name: "prober_without_details_mirrors_its_status",
-			probes: []Prober{
-				&foreignProbe{result: HealthStatus{Name: "vault", Status: healthyStatus}},
+			// A kind with no statistics at all: /ready still mirrors its status under
+			// <name>_stats, and the debug entry carries that mirror and nothing else.
+			name: "description_without_statistics_mirrors_its_status",
+			descriptions: []probeDescription{
+				{name: "vault", live: func(context.Context) error { return nil }},
 			},
 			wantCode:      200,
 			wantReadyRuns: 1,
@@ -280,32 +271,16 @@ func TestReadinessViews(t *testing.T) {
 				"vault" + statsSuffix: map[string]any{statusKey: healthyStatus},
 			},
 			wantComponents: map[string]wantComponent{
-				"vault": {status: healthyStatus, details: map[string]any{}},
+				"vault": {status: healthyStatus, details: map[string]any{statusKey: healthyStatus}},
 			},
 			wantSummary: healthSummary{OverallStatus: healthyStatus, TotalProbes: 1, HealthyCount: 1},
 		},
 		{
-			name: "status_outside_the_vocabulary_reads_unknown",
-			probes: []Prober{
-				&foreignProbe{result: HealthStatus{Name: "vault", Status: "starting", Details: map[string]any{statusKey: "starting"}}},
-			},
-			wantCode:      200,
-			wantReadyRuns: 1,
-			wantBody: map[string]any{
-				statusKey:             readyStatus,
-				timeKey:               fixedUnix,
-				"app":                 appBody,
-				"vault":               "starting",
-				"vault" + statsSuffix: map[string]any{statusKey: "starting"},
-			},
-			wantComponents: map[string]wantComponent{
-				"vault": {status: "starting", details: map[string]any{statusKey: "starting"}},
-			},
-			wantSummary: healthSummary{OverallStatus: unknownStatus, TotalProbes: 1},
-		},
-		{
-			name:          "no_probes_renders_the_envelope_alone",
-			probes:        []Prober{},
+			// A started application where no kind renders: the envelope alone, 200. The
+			// before-start 503 is a different fact entirely — see
+			// TestJudgeBeforeTheStartWalkFailsClosed.
+			name:          "no_kind_renders_is_a_normal_ready",
+			descriptions:  []probeDescription{},
 			wantCode:      200,
 			wantReadyRuns: 0,
 			wantBody: map[string]any{
@@ -320,8 +295,8 @@ func TestReadinessViews(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// /ready's run: registration order, stopping at the first failing critical kind.
-			report, blocking, found := runUntilBlocking(context.Background(), tt.probes)
+			// /ready's run: slot order, stopping at the first failing critical kind.
+			report, blocking, found := judgeOf(tt.descriptions...).gate(context.Background())
 
 			var body map[string]any
 			if found {
@@ -332,14 +307,14 @@ func TestReadinessViews(t *testing.T) {
 
 			wantFound := tt.wantCode == 503
 			assert.Equal(t, wantFound, found, "the gate decides the status code")
-			assert.Len(t, report, tt.wantReadyRuns, "/ready must not evaluate past the blocking probe")
+			assert.Len(t, report, tt.wantReadyRuns, "/ready must not evaluate past the blocking kind")
 			assert.Equal(t, tt.wantBody, body)
 
 			assertReadyBodyOmits(t, body, tt.forbidden...)
 
-			// The debug view's run: every probe, whatever /ready decided.
-			full := runReadinessProbes(context.Background(), tt.probes)
-			require.Len(t, full, len(tt.probes), "the debug view reports every registered kind")
+			// The debug view's run: every kind, whatever /ready decided.
+			full := judgeOf(tt.descriptions...).full(context.Background())
+			require.Len(t, full, len(tt.descriptions), "the debug view reports every kind that renders")
 
 			components := full.debugComponents()
 			require.Len(t, components, len(tt.wantComponents))
@@ -365,12 +340,12 @@ func TestReadinessViews(t *testing.T) {
 // gate's "first failing critical" — follows registration order, which is what makes the
 // 503 body name the database rather than whichever kind the map iteration happened to hit.
 func TestReadinessProbeOrderIsRegistrationOrder(t *testing.T) {
-	report := runReadinessProbes(context.Background(), []Prober{
+	report := judgeOf(
 		disabledProbe(componentDatabase),
 		disabledProbe(componentMessaging),
 		disabledProbe(componentCache),
 		disabledProbe(componentStreams),
-	})
+	).full(context.Background())
 
 	names := make([]string, 0, len(report))
 	for i := range report {
@@ -393,32 +368,32 @@ func TestIsFailingAndIsReadyEquivalentPartitionTheVocabulary(t *testing.T) {
 	assert.False(t, isReadyEquivalent("starting"))
 }
 
-// TestRunUntilBlockingStopsAtTheFirstBlockingProbe pins both halves of /ready's traversal:
+// TestJudgeStopsAtTheFirstBlockingKind pins both halves of /ready's traversal:
 // a non-critical failure never gates, however early it is registered (the messaging and
 // streams kinds depend on that), and nothing after the blocking probe runs at all — which
 // is what keeps a database outage from adding a Redis PING and a publisher lease to every
 // poll of an unauthenticated endpoint. The trailing probe fails the test if it is reached.
-func TestRunUntilBlockingStopsAtTheFirstBlockingProbe(t *testing.T) {
-	report, blocking, found := runUntilBlocking(context.Background(), []Prober{
+func TestJudgeStopsAtTheFirstBlockingKind(t *testing.T) {
+	report, blocking, found := judgeOf(
 		describe(componentStreams, false, errStreamsNotOpen, nil, streamsPublicStats),
 		describe(componentCache, true, errors.New("connection refused"), nil, cachePublicStats),
-		mustNotRunProbe{t: t},
-	})
+		mustNotRunDescription(t),
+	).gate(context.Background())
 
 	require.True(t, found)
 	assert.Equal(t, componentCache, blocking.Name, "the non-critical failure ahead of it must not gate")
 	assert.Len(t, report, 2, "evaluation stops at the blocking probe")
 }
 
-// TestRunUntilBlockingRunsEveryProbeWhenNothingBlocks is the other direction: with no
+// TestJudgeRunsEveryKindWhenNothingBlocks is the other direction: with no
 // blocking kind, /ready's run reaches every probe, so a healthy deployment's body still
 // carries all of them.
-func TestRunUntilBlockingRunsEveryProbeWhenNothingBlocks(t *testing.T) {
-	report, _, found := runUntilBlocking(context.Background(), []Prober{
+func TestJudgeRunsEveryKindWhenNothingBlocks(t *testing.T) {
+	report, _, found := judgeOf(
 		describe(componentDatabase, true, nil, nil, databasePublicStats),
 		describe(componentStreams, false, errStreamsNotOpen, nil, streamsPublicStats),
 		describe(componentCache, false, errors.New("connection refused"), nil, cachePublicStats),
-	})
+	).gate(context.Background())
 
 	assert.False(t, found)
 	assert.Len(t, report, 3, "a non-critical failure must not truncate the body")
@@ -503,8 +478,8 @@ func TestPublicProjectionWithoutAnAllowlist(t *testing.T) {
 // friends, so renaming a key's value would keep that table green while every consumer of
 // /ready broke; this row is what fails instead.
 func TestReadyBodyPinsTheWireFormat(t *testing.T) {
-	body := runReadinessProbes(context.Background(), []Prober{disabledProbe("cache")}).
-		readyBody(&config.AppConfig{Name: "svc", Env: "test", Version: "1.0.0"}, time.Unix(1755300000, 0))
+	report := judgeOf(disabledProbe("cache")).full(context.Background())
+	body := report.readyBody(&config.AppConfig{Name: "svc", Env: "test", Version: "1.0.0"}, time.Unix(1755300000, 0))
 
 	encoded, err := json.Marshal(body)
 	require.NoError(t, err)

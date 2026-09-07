@@ -41,6 +41,9 @@ const (
 	componentMessaging = "messaging"
 	componentCache     = "cache"
 	componentStreams   = "streams"
+	// componentReadiness names readiness itself on the 503 body an application that never
+	// started renders — no kind sealed a description, so no kind's name can carry it.
+	componentReadiness = "readiness"
 	errorKey           = "error"
 )
 
@@ -90,18 +93,22 @@ type App struct {
 	messagingDeclarations *messaging.Declarations
 
 	// streamsManager exists only from prepareRuntime onward; see streamsSlot in slot.go
-	// for why its probe and closer are registered separately from the build-time walks.
+	// for why its description is withheld until then and its closer is registered from
+	// start rather than from the build-time walk.
 	streamsManager streamHandle
 	// holdLedgers are the modules offering a hold ledger, captured at registration.
 	// More than one is a configuration error the streams setup reports.
 	holdLedgers []holdLedgerProvider
 
-	closers      []namedCloser
-	healthProbes []Prober
+	closers []namedCloser
 
 	// slots is the one per-kind lifecycle list every phase walks, in the fixed order
 	// database → messaging → cache → streams (installSlots, ADR-067).
 	slots []resourceSlot
+	// judge is the readiness traversal over that slot list, installed by
+	// Builder.CreateHealthProbes. It caches no description: it asks each slot for the one
+	// that slot sealed after start (ADR-066 as amended).
+	judge readinessJudge
 }
 
 // multiTenant reports whether this deployment resolves its resources per tenant. Nil-guarded
