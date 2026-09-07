@@ -3,16 +3,14 @@ package config
 import (
 	"slices"
 	"time"
-
-	"github.com/knadh/koanf/v2"
 )
 
 // Config represents the overall application configuration structure.
 // It includes sections for application settings, server parameters,
 // database connection details, logging preferences, and messaging options.
-// The underlying koanf.Koanf instance (the unexported k field) allows for
-// flexible access to additional custom configurations not explicitly defined
-// in the struct.
+// The underlying source (the unexported src field) allows for flexible access
+// to additional custom configurations not explicitly defined in the struct, and
+// carries the presence record the delivered-empty doors read (ADR-104).
 type Config struct {
 	App         AppConfig                 `koanf:"app" json:"app" yaml:"app" toml:"app" mapstructure:"app"`
 	Server      ServerConfig              `koanf:"server" json:"server" yaml:"server" toml:"server" mapstructure:"server"`
@@ -29,8 +27,8 @@ type Config struct {
 	Inbox       InboxConfig               `koanf:"inbox" json:"inbox" yaml:"inbox" toml:"inbox" mapstructure:"inbox"`
 	KeyStore    KeyStoreConfig            `koanf:"keystore" json:"keystore" yaml:"keystore" toml:"keystore" mapstructure:"keystore"`
 
-	// k holds the underlying Koanf instance for flexible access to custom configurations
-	k *koanf.Koanf `json:"-" yaml:"-" toml:"-" mapstructure:"-"`
+	// src holds the loaded koanf tree and the presence set recorded alongside it
+	src *configSource `json:"-" yaml:"-" toml:"-" mapstructure:"-"`
 }
 
 // AppConfig holds general application settings.

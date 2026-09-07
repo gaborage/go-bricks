@@ -239,8 +239,9 @@ var pgTLSMandatorySSLModes = []string{sslModeRequire, sslModeVerifyCA, sslModeVe
 
 // validateNoDeliveredEmptyDatabase fails startup when any database section the
 // deployment consumes was delivered with only empty identity fields — the shape
-// ADR-047 could not see (ADR-051). Inert for hand-built Config literals (no
-// koanf instance) and for dynamic-source tenant configs (never in koanf). Every
+// ADR-047 could not see (ADR-051). Presence is the recorded delivery of the key
+// by an operator layer (ADR-104), so it is naturally inert for hand-built Config
+// literals (no source) and for dynamic-source tenant configs (never loaded). Every
 // offending key is reported, not just the first: the error promises
 // "field(s)", and an operator who clears only the one named would hit the same
 // abort again. Sorted, so the startup error is deterministic.
@@ -251,7 +252,7 @@ func validateNoDeliveredEmptyDatabase(cfg *Config) error {
 			return nil
 		}
 		for _, k := range databaseIdentityKeys {
-			if key := sec.path + "." + k; cfg.Exists(key) {
+			if key := sec.path + "." + k; cfg.delivered(key) {
 				offending = append(offending, key)
 			}
 		}
@@ -285,10 +286,10 @@ func validateNoDeliveredEmptyDatabase(cfg *Config) error {
 // A field delivered as an EMPTY string (an empty secretKeyRef, envsubst over an
 // unset variable) is indistinguishable from an unset one here and reads as
 // absence — but that shape is now caught at Load time by
-// validateNoDeliveredEmptyDatabase (ADR-051), which consults koanf key presence
-// rather than decoded values. The remaining blind spots are hand-built Config
-// values (no koanf instance to consult) and dynamic-source tenant configs
-// (resolved from a remote store, never koanf). TLS material is likewise
+// validateNoDeliveredEmptyDatabase (ADR-051), which consults the presence
+// recorded at the merge seam (ADR-104) rather than decoded values. The remaining
+// blind spots are hand-built Config values (no source, so every key reads absent)
+// and dynamic-source tenant configs (resolved from a remote store, never loaded). TLS material is likewise
 // excluded from this predicate — it identifies no database on its own.
 //
 // The answer must not change across normalizeDatabaseSection: normalization

@@ -3,6 +3,17 @@
 **Status:** Accepted
 **Date:** 2026-08-06
 
+> **Amended (2026-09-06, [ADR-104](adr_104_key_presence_recorded_at_merge_seam.md)):**
+> the identity door asks Presence — the key set recorded at the merge seam when each
+> user layer merges — rather than `cfg.Exists` on the merged koanf. Blind spot 1 below
+> (hand-built `Config` literals) is no longer a by-construction accident: a literal
+> carries no source, and a `Config` with no source delivers nothing, so every key is
+> absent by declared rule. `preloadDeniedPrefixes`, which kept `database.`, `databases`
+> and `multitenant.tenants` out of the preloaded defaults so `Exists` would not read a
+> default as a delivery, is retired — preloading can no longer fake delivery. Blind
+> spot 2 (dynamic-source tenant configs), the emptiness rule and the error text are
+> unchanged.
+
 ## Context
 
 `config.IsDatabaseConfigured` (ADR-047) infers intent from decoded VALUES: any

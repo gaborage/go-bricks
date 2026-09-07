@@ -4,6 +4,13 @@
 - **Date**: 2026-08-20
 - **Related**: [ADR-051](adr_051_delivered_empty_database_identity.md) (the delivered-empty rule this extends from database identity keys to numeric keys) · [ADR-065](adr_065_keystore_secretminlength_tristate.md) (the tri-state this silently defeated) · [ADR-077](adr_077_delivered_empty_bool_config.md) (extends the same rule to bool targets; the hook named below is renamed `EmptyStringToScalarGuardHookFunc` there, and the `*bool` gap this ADR left open is closed)
 
+> **Amended (2026-09-06, [ADR-104](adr_104_key_presence_recorded_at_merge_seam.md)):**
+> the ADR-051 reader named below is now Presence — the key set recorded at the merge
+> seam when each user layer merges — not `Config.Exists`. The "must not prune"
+> constraint below is no longer load-bearing for presence, since Presence is recorded
+> before any decode-time pruning could run; the decision it shaped — reject at decode,
+> never prune — stands on its own.
+
 ## Context
 
 `FOO=` in a Kubernetes manifest, a `secretKeyRef` whose stored value is empty (an

@@ -47,9 +47,19 @@ a supported posture, ADR-047), `normalized`, or the untyped-DSN outcome that
 only the caller can judge fatal. Absence is a verdict, never an error.
 _Avoid_: result, status, outcome (as a noun in code)
 
+**Presence**:
+Whether a configuration key was delivered by the deployment's own layers — the
+base configuration, the environment overlay, the environment itself. Two arms:
+a key is either absent or delivered. A framework default never delivers a key,
+however deep the default sits, and a configuration hand-built in Go delivers
+nothing at all, so every one of its keys is absent.
+_Avoid_: existence, presence check, provided, set (as a verb for delivery),
+exists
+
 **Absence**:
-A database section that carries no identity field at all. Anything less than
-absence and less than complete is misconfiguration.
+A database section that carries no identity field at all — every identity key
+absent in Presence terms. Anything less than absence and less than complete is
+misconfiguration.
 _Avoid_: missing, unconfigured, disabled, empty
 
 **Tri-state setting**:
@@ -66,8 +76,9 @@ _Avoid_: optional, nullable, flag, opt-out (for the setting itself)
 
 **Delivered-but-empty**:
 A database section whose identity keys were delivered but every value is
-empty (an unset envsubst variable, an empty secretKeyRef). Misconfiguration,
-not absence (ADR-051).
+empty (an unset envsubst variable, an empty secretKeyRef): Presence's delivered
+arm combined with an empty value, where each door owns what counts as empty.
+Misconfiguration, not absence (ADR-051).
 _Avoid_: blank, partial, half-configured
 
 ### Application lifecycle

@@ -14,11 +14,12 @@ package config
 var deliveredEmptyRejectingKeys = []string{"debug.allowedips"}
 
 // validateNoDeliveredEmptyList fails startup when one of those keys was delivered as an
-// empty STRING rather than an empty list. The distinction is the whole check and it lives in
-// the raw koanf value, not in Exists: these keys carry defaults, so Exists is true even when
-// nothing was configured. koanf keeps what the source actually delivered —
+// empty STRING rather than an empty list. It is a composite of two questions. PRESENCE is
+// the recorded delivery of the key by an operator layer (ADR-104) — these keys carry
+// defaults, so the framework's own preload must not answer it. EMPTINESS is then read from
+// the raw koanf value, which keeps the shape the source actually delivered —
 //
-//	unset                  -> []string{"127.0.0.1", "::1"}   (the default; untouched)
+//	unset                  -> []string{"127.0.0.1", "::1"}   (the default; not delivered)
 //	DEBUG_ALLOWEDIPS=      -> ""                             (delivered empty; rejected)
 //	allowedips: ""         -> ""                             (same shape, same rejection)
 //	allowedips: []         -> []interface{}{}                (deliberate clear; allowed)
@@ -28,18 +29,17 @@ var deliveredEmptyRejectingKeys = []string{"debug.allowedips"}
 // keeps ADR-049's sanctioned token-only posture expressible, which is why this rejects the
 // shape rather than the outcome.
 //
-// Inert for hand-built Config literals (no koanf instance), exactly as
-// validateNoDeliveredEmptyDatabase is: the app-layer ADR-049 gate remains the second seam.
+// A hand-built Config literal has no source, so every key reads absent and this is inert for
+// it without a check of its own, exactly as validateNoDeliveredEmptyDatabase is: the
+// app-layer ADR-049 gate remains the second seam.
 func validateNoDeliveredEmptyList(cfg *Config) error {
-	if cfg == nil || cfg.k == nil {
-		return nil
-	}
 	for _, key := range deliveredEmptyRejectingKeys {
-		raw, ok := cfg.rawValue(key)
-		if !ok {
+		if !cfg.delivered(key) {
 			continue
 		}
-		if !deliveredEmptyValue(raw) {
+		// Delivery now means "recorded AND still in the final tree" by definition, so one
+		// Get suffices; it returns nil for a YAML null, which is a delivered empty.
+		if !deliveredEmptyValue(cfg.koanfTree().Get(key)) {
 			continue
 		}
 		return &ConfigError{

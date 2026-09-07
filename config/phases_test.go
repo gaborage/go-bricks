@@ -81,17 +81,17 @@ func TestValidateIsIdempotent(t *testing.T) {
 		require.NoError(t, err)
 
 		// b is validated twice: once by Load, once more explicitly; the second
-		// pass must keep the koanf handle it was given.
+		// pass must keep the source it was given.
 		b, err := Load()
 		require.NoError(t, err)
-		k := b.k
+		src := b.src
 		require.NoError(t, Validate(b))
-		require.Same(t, k, b.k)
+		require.Same(t, src, b.src)
 
-		// Two Load calls hold two distinct *koanf.Koanf, so compare copies with
-		// the handle blanked rather than mutating the values under test.
+		// Two Load calls hold two distinct sources, so compare copies with the
+		// handle blanked rather than mutating the values under test.
 		ax, bx := *a, *b
-		ax.k, bx.k = nil, nil
+		ax.src, bx.src = nil, nil
 		require.Equal(t, ax, bx)
 	})
 }
@@ -150,10 +150,10 @@ func TestNormalizeDeliveredEmptyWinsOverIncomplete(t *testing.T) {
 }
 
 // TestNormalizeLiteralDoorIncompleteSurfaces pins the complementary door: a
-// hand-built Config literal carries no koanf handle, so
-// validateNoDeliveredEmptyDatabase is inert for it (see
-// TestValidateNoDeliveredEmptyDatabaseInertForLiteral) and normalizeDatabaseSection's
-// own rejection must surface instead.
+// hand-built Config literal carries no source, so every key reads absent (see
+// TestPresenceAbsentForConfigLiteral), validateNoDeliveredEmptyDatabase is inert for
+// it (see TestValidateNoDeliveredEmptyDatabasePassesForLiteral), and
+// normalizeDatabaseSection's own rejection must surface instead.
 func TestNormalizeLiteralDoorIncompleteSurfaces(t *testing.T) {
 	cfg := createValidFullConfig()
 	cfg.Database = DatabaseConfig{Host: "db.internal"}

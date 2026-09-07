@@ -10,18 +10,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// loadDeliveredEmptyFixture stages one TestValidateNoDeliveredEmptyDatabaseViaLoad
-// case — a scratch working directory holding yaml (when non-empty) plus env — and
-// returns Load()'s results from inside it. t.Cleanup rather than defer, so the
-// environment is cleared at subtest end from within a helper.
-func loadDeliveredEmptyFixture(t *testing.T, yaml string, env map[string]string) (*Config, error) {
+// loadConfigFixture stages one case — a scratch working directory holding the named
+// YAML files plus environment variables — and returns Load()'s results from inside it.
+// t.Cleanup rather than defer, so the environment is cleared at subtest end from within
+// a helper.
+func loadConfigFixture(t *testing.T, files, env map[string]string) (*Config, error) {
 	t.Helper()
 	clearEnvironmentVariables()
 	t.Cleanup(clearEnvironmentVariables)
 
 	dir := t.TempDir()
-	if yaml != "" {
-		require.NoError(t, os.WriteFile(filepath.Join(dir, testConfigFileYAML), []byte(yaml), 0o600))
+	for name, body := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600))
 	}
 	t.Chdir(dir)
 
@@ -29,6 +29,17 @@ func loadDeliveredEmptyFixture(t *testing.T, yaml string, env map[string]string)
 		t.Setenv(k, v)
 	}
 	return Load()
+}
+
+// loadDeliveredEmptyFixture is the single-file spelling: yaml lands in config.yaml, or in
+// no file at all when it is empty.
+func loadDeliveredEmptyFixture(t *testing.T, yaml string, env map[string]string) (*Config, error) {
+	t.Helper()
+	var files map[string]string
+	if yaml != "" {
+		files = map[string]string{testConfigFileYAML: yaml}
+	}
+	return loadConfigFixture(t, files, env)
 }
 
 // assertDeliveredEmptyError checks a rendered startup error against one case's
