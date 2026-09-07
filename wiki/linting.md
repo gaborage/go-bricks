@@ -195,8 +195,11 @@ These four are calibrated for a framework:
 | `gocyclo.min-complexity` | 15 | 15–20; raise before adding `//nolint` |
 | `lll.line-length` | 215 | whatever your editor is set to |
 
-`gocognit` mirrors SonarCloud's S3776 cognitive-complexity rule, so a finding here is the one
-the PR would have raised on SonarCloud; unlike `gocyclo`, it also judges `_test.go` files.
+`gocognit` implements the same cognitive-complexity algorithm and the same threshold as
+SonarCloud's S3776, and the two were spot-checked against this repo's recent S3776 findings —
+the scores matched exactly. Test files are judged here because `sonar.tests` and
+`sonar.test.inclusions` admit them to Sonar's analysis too; `gocyclo`, by contrast, is excluded
+for `_test.go`.
 
 ## Linters measured and rejected
 
