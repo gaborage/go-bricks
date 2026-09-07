@@ -16,6 +16,7 @@ linters:
     - forcetypeassert           # finds unchecked type assertions (uber-go: Handle Type Assertion Failures)
     - gocheckcompilerdirectives # validates go compiler directive comments (//go:)
     - gochecknoinits            # checks that no init functions are present
+    - gocognit                  # computes and checks the cognitive complexity of functions (Sonar S3776)
     - goconst                   # finds repeated strings that could be replaced by a constant
     - gocritic                  # provides diagnostics that check for bugs, performance and style issues
     - gocyclo                   # computes and checks the cyclomatic complexity of functions
@@ -72,6 +73,8 @@ linters:
           msg: record span errors by type through observability.RecordErrorByType (ADR-083) — RecordError writes the error's message into the span.
         - pattern: ^semconv\.Exception.*$
           msg: build the exception event through observability.RecordErrorByType (ADR-083) rather than assembling semconv exception attributes by hand.
+    gocognit:
+      min-complexity: 15
     goconst:
       min-len: 4
       min-occurrences: 3
@@ -192,6 +195,8 @@ linters:
       - legacy
       - std-error-handling
     rules:
+      # gocognit is deliberately NOT in this list: SonarCloud's S3776 judges
+      # _test.go too, and the local gate mirrors it. gocyclo stays excluded.
       - linters:
           - dupl
           - errcheck
