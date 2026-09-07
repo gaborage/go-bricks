@@ -106,6 +106,13 @@ _Avoid_: health (as the noun for this), liveness, ready check
 
 ### Messaging
 
+**Lane**:
+One of the two broker transports a message travels on: the classic AMQP 0.9.1
+lane, or the streams lane. A row, a delivery and a producer each belong to
+exactly one; the two are separate connections, so one being down says nothing
+about the other.
+_Avoid_: transport, channel, path, mode
+
 **Delivery pipeline**:
 Everything that happens to one consumed message between "bytes arrived" and
 "outcome recorded", regardless of lane: trace extraction, span, per-message
@@ -142,6 +149,16 @@ backoff waits — never an in-flight socket write, so a broker that stops readin
 can hold one publish past the bound until that write returns.
 _Avoid_: publish timeout (the key, not the concept), write deadline, socket
 timeout
+
+**Shipper**:
+The relay's per-lane adapter. It reports whether its lane is usable where it has
+a lane-wide answer (the stream lane's handles are per target, so it answers per
+target, inside the attempt), plans one ledger row into a delivery without
+reaching a broker, makes exactly one attempt at it, and classifies its own
+failure into the relay's outcome vocabulary.
+Everything a delivery shares across lanes — leadership, the ledger writes,
+ordering and the publish bound — stays outside it.
+_Avoid_: publisher (messaging's word), sender, transport, lane client, courier
 
 ### Tenancy
 

@@ -11,6 +11,14 @@
 - **Issue**: #1305 (decision), #1309 (spec), #1347 (stack), #1350 (this PR);
   inventory on branch `research/publish-surface-inventory`; #1308 (prototype)
 
+> **Amended (2026-09-07, #1512):**
+> the outbox relay's AMQP adapter reaches the dispatcher through a func field that
+> defaults to `publishdoor.Publish`, so an outbox test injects a fake publish instead of
+> swapping the process-wide dispatcher; `outbox/main_test.go` and its `TestMain` are gone.
+> The rule (no exported bytes symbol) and the mechanism (an init-registered dispatcher,
+> `Swap` reserved for tests inside the framework) are unchanged, and
+> `messaging/sealed/main_test.go` still swaps.
+
 ## Context
 
 `Declarations.DeclarePublisher` registers a destination — exchange, routing key,
@@ -125,7 +133,9 @@ raw door until a streams-lane ADR decides otherwise.
   framework's own client either, and re-earns a door through its own ADR if needed.
 - The typed handle's own byte door goes through the same `publishdoor` dispatcher, so
   framework tests outside `messaging` that observe either the relay's or a handle's
-  bytes swap it in `TestMain` (see `outbox/main_test.go`, `messaging/sealed/main_test.go`);
+  bytes swap it in `TestMain` (see `messaging/sealed/main_test.go`) or, where the caller
+  reaches the door through a substitutable field, inject one (the outbox relay's AMQP
+  shipper — see the amendment above);
   a module's tests observe typed events through `messaging/testing.CapturePublisher[T]`.
 - No declaration-time guard rejects `T = json.RawMessage` or a custom `json.Marshaler`:
   the typed door publishes JSON documents, and the property this break exists for — a

@@ -263,7 +263,7 @@ func (m *Module) verifyStartupDatabase() error {
 // It also requires publishtimeout >= messaging.reconnect.readytimeout: a shorter value makes
 // the per-record deadline expire INSIDE the client's readiness pre-flight, so a not-ready
 // broker surfaces as context.DeadlineExceeded instead of ErrNotConnected — which silently
-// defeats the relay's mid-batch broker-drop detection (outcomeBrokerDown never fires) and
+// defeats the relay's mid-batch broker-drop detection (shipBrokerDown never fires) and
 // reintroduces the serial per-record stall it exists to cap.
 //
 // It also requires publishtimeout >= messaging.reconnect.resenddelay unless
@@ -344,17 +344,13 @@ func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 		tenants = []string{""} // single control-plane pass; no fan-out
 	}
 
-	relay := &Relay{
-		store:        &lazyStore{module: m},
-		config:       m.cfg,
-		getDB:        m.getDB,
-		getMessaging: m.getMsg,
-		tenants:      tenants,
-		streamPublisher: func(name string) (streamPublisher, bool) {
+	relay := newRelay(&lazyStore{module: m}, &m.cfg, m.getDB, tenants, map[string]shipper{
+		LaneAMQP: newAMQPShipper(m.getMsg),
+		LaneStream: newStreamShipper(func(name string) (streamPublisher, bool) {
 			p, ok := m.streamPublishers[name]
 			return p, ok
-		},
-	}
+		}),
+	})
 
 	if err := registrar.FixedRate("outbox-relay", relay, m.cfg.PollInterval); err != nil {
 		return fmt.Errorf("outbox: failed to register relay job: %w", err)
@@ -441,6 +437,14 @@ func (p *lazyPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app.O
 // the outbox's stream leg can be faked without a broker.
 type streamPublisher interface {
 	Publish(ctx context.Context, msg *streams.PublishMessage) error
+	// Ready reports whether the producer is carrying messages, so the stream lane's
+	// adapter can hold back an unusable target without paying the publish bound.
+	Ready() bool
+	// Closed reports whether the producer was closed. The shutdown window makes this
+	// distinct from an unready one: stopSlots closes the stream publishers BEFORE the
+	// scheduler cancels the relay's job context, so a row that meets a closed producer
+	// met a shutdown, not a failure, and nothing about it may be written.
+	Closed() bool
 }
 
 // DeclareStreams registers one publisher per configured super stream, satisfying

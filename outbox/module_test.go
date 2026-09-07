@@ -905,6 +905,31 @@ func TestModuleRegisterJobsRegistersRelayAndCleanup(t *testing.T) {
 	assert.Equal(t, 4, reg.DailyAtCalls[0].LocalTime.Hour())
 }
 
+// TestModuleRegisterJobsWiresBothLaneShippers pins the wiring the relay depends on: the
+// map it resolves a row's lane through carries BOTH production adapters, and each one
+// reaches its own broker. Without this the relay would dead-letter a whole lane's rows as
+// "unknown lane" rather than failing to start.
+func TestModuleRegisterJobsWiresBothLaneShippers(t *testing.T) {
+	m, _ := initEnabledModule(t, "postgresql", 24*time.Hour)
+
+	reg := &fakeRegistrar{}
+	require.NoError(t, m.RegisterJobs(reg))
+	require.Len(t, reg.FixedRateCalls, 1)
+	relay, ok := reg.FixedRateCalls[0].Job.(*Relay)
+	require.True(t, ok)
+
+	require.Len(t, relay.shippers, 2, "one shipper per lane, and no more")
+	amqpLane, ok := relay.shippers[LaneAMQP].(*amqpShipper)
+	require.True(t, ok, "the amqp lane must hold the AMQP adapter")
+	assert.NotNil(t, amqpLane.client, "the adapter resolves the tenant's client itself")
+	assert.NotNil(t, amqpLane.publish, "the byte door defaults to publishdoor.Publish (ADR-096)")
+	streamLane, ok := relay.shippers[LaneStream].(*streamShipper)
+	require.True(t, ok, "the stream lane must hold the streams adapter")
+	require.NotNil(t, streamLane.lookup)
+	_, found := streamLane.lookup("never-declared")
+	assert.False(t, found, "an undeclared super stream resolves to nothing, which the adapter calls poison")
+}
+
 func TestModuleRegisterJobsPropagatesRelayError(t *testing.T) {
 	m, _ := initEnabledModule(t, "postgresql", 24*time.Hour)
 

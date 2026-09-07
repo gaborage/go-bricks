@@ -4,6 +4,31 @@
 - **Date**: 2026-08-30
 - **Related**: [ADR-033](adr_033_outbox_retry_count_status_parking.md) (the connectivity-vs-poison classification a parked key composes with) · [ADR-041](adr_041_shared_ledger_tenancy.md) (the control-plane ledger a leader is taken per) · [ADR-032](adr_032_lease_refcount_tenant_handles.md) (the per-tenant lease scope a relay cycle runs inside) · [ADR-063](adr_063_streams_native_publishing.md) (the confirmed super-stream publisher and its murmur3 interop this lane rides) · [ADR-087](adr_087_messaging_tenancy_and_tenant_stamp.md) (the tenant stamp this lane partitions by, and whose single-writer rule the relay obeys)
 
+> **Amended (2026-09-07, #1512):**
+> the relay no longer switches on a row's lane. Each lane is a **Shipper** — an
+> unexported adapter that reports its lane's readiness, plans one row into a
+> shipment without touching a client, ships it once, and classifies its own failure —
+> and the relay holds one per lane, resolving `Record.Lane` (empty means `amqp`) in a
+> single map lookup; a lane with no shipper is poison, as before. Every outcome and its
+> semantics are unchanged: connectivity advances `retry_count` and parks the key, poison
+> dead-letters at `maxretries`, a shutdown-aborted attempt counts nothing, a lane that
+> drops mid-batch routes the unattempted remainder through the outage path, and a stalled
+> super stream holds back only its own rows. Two things are new. The stream lane now asks
+> `(*streams.Publisher).Closed()` and then `Ready()` before it publishes: a producer the
+> manager already stopped is a shutdown, so its row aborts and nothing is written (the
+> shutdown closes the publishers before the job context is cancelled, so the row's context
+> is still live when it meets one), and a producer that is reconnecting or not yet bound is
+> held without paying a publish bound to discover it — the residual named below narrows to
+> an OPEN producer that has stopped confirming, which still costs one bound on the first
+> stalled row of a cycle. And the cycle summary gains
+> per-lane counts (`published_amqp`, `failed_stream`, …) plus `stall_wait_ms`, the longest
+> a single shipment waited before reporting its lane or its scope down. Scoping an outage
+> more finely than "the whole AMQP lane" is #1511. Two parity residuals with the pre-shipper
+> relay are tracked by #1523: the cycle-start pre-flight asks EVERY registered lane, not only
+> the lanes the fetched batch actually names, and a row whose headers will not decode parks
+> the destination key while its stamped successors key by tenant, so a corrupt row holds a
+> narrower key than the rows behind it.
+
 ## Context
 
 The outbox relay drained a ledger by fetching pending rows and publishing each one
