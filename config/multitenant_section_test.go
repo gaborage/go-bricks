@@ -701,3 +701,93 @@ func TestCheckMultitenantLeavesDynamicTenantIDsToTheResolver(t *testing.T) {
 	require.Error(t, checkMultitenant(static, &DatabaseConfig{}, &MessagingConfig{}, &SourceConfig{Type: SourceTypeStatic}),
 		"the same ID under a static source is still rejected")
 }
+
+// TestCheckStaticTenantMap drives the extracted static-tenant-map checker
+// directly: the empty-map rejection, the two messaging invariants, the
+// per-entry rules, and the sorted iteration that makes the reported tenant the
+// same one every run. Error strings are asserted exactly — this helper carries
+// checkMultitenant's own "tenants: " prefix, and the prefix is part of the
+// contract callers match on.
+func TestCheckStaticTenantMap(t *testing.T) {
+	tenantWithMessaging := TenantEntry{
+		Database:  DatabaseConfig{Type: PostgreSQL, Host: testTenantDBHost, Port: 5432, Database: "tenant_a", Username: "tenant_user"},
+		Messaging: TenantMessagingConfig{URL: "amqp://tenant-a"},
+	}
+	tenantWithoutMessaging := TenantEntry{
+		Database: DatabaseConfig{Type: PostgreSQL, Host: "tenant-b.db.local", Port: 5432, Database: "tenant_b", Username: "tenant_user"},
+	}
+
+	tests := []struct {
+		name    string
+		tenants map[string]TenantEntry
+		msg     *MessagingConfig
+		wantErr string
+	}{
+		{
+			name:    "empty_map",
+			tenants: map[string]TenantEntry{},
+			msg:     &MessagingConfig{},
+			wantErr: "tenants: empty map provided - either omit tenants section or provide at least one tenant for static source",
+		},
+		{
+			name:    "valid_map",
+			tenants: map[string]TenantEntry{tenantA: tenantWithoutMessaging, "tenant-b": tenantWithoutMessaging},
+			msg:     &MessagingConfig{},
+			wantErr: "",
+		},
+		{
+			name:    "inconsistent_messaging",
+			tenants: map[string]TenantEntry{tenantA: tenantWithMessaging, "tenant-b": tenantWithoutMessaging},
+			msg:     &MessagingConfig{},
+			wantErr: "tenants: config_invalid: multitenant.tenants.*.messaging inconsistent configuration " +
+				"either all tenants must have messaging configured or none should",
+		},
+		{
+			name:    "unreachable_messaging_under_shared_tenancy",
+			tenants: map[string]TenantEntry{tenantA: tenantWithMessaging},
+			msg:     &MessagingConfig{Tenancy: TenancyShared},
+			wantErr: "tenants: config_invalid: multitenant.tenants.*.messaging unreachable under messaging.tenancy: shared " +
+				"remove the per-tenant messaging blocks or set messaging.tenancy: per-tenant",
+		},
+		{
+			name:    "invalid_tenant_entry",
+			tenants: map[string]TenantEntry{"tenant.a": tenantWithoutMessaging},
+			msg:     &MessagingConfig{},
+			wantErr: `tenants: config_invalid: multitenant.tenants tenant ID "tenant.a" cannot contain '.' (the config path delimiter)`,
+		},
+		{
+			// Two tenants break the same rule: the sorted loop must name the
+			// lexicographically first one, not whichever the map hands over.
+			name:    "two_malformed_tenants_report_the_first_in_sorted_order",
+			tenants: map[string]TenantEntry{"zeta_z": tenantWithoutMessaging, "acme_a": tenantWithoutMessaging},
+			msg:     &MessagingConfig{},
+			wantErr: `tenants: config_invalid: multitenant.tenants.acme_a name "acme_a" is not reachable by an environment variable ` +
+				"rename it using lowercase letters, digits and '-' only: an environment variable lowercases and maps '_' to " +
+				"the config path delimiter, so any other name is unaddressable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkStaticTenantMap(tt.tenants, tt.msg)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err, tt.wantErr)
+		})
+	}
+}
+
+// TestCheckStaticTenantMapEmptyMapErrorIsNotAConfigError pins the shape the
+// extraction deliberately preserved: the empty-map rejection is a bare
+// errors.New carrying its own prefix, NOT a *ConfigError and not wrapped a
+// second time by the caller. A consumer matching on *ConfigError must keep
+// missing it, exactly as before the extraction.
+func TestCheckStaticTenantMapEmptyMapErrorIsNotAConfigError(t *testing.T) {
+	err := checkStaticTenantMap(map[string]TenantEntry{}, &MessagingConfig{})
+
+	require.Error(t, err)
+	var cfgErr *ConfigError
+	require.NotErrorAs(t, err, &cfgErr, "the empty-map rejection stays a plain error")
+}
