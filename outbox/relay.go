@@ -93,10 +93,13 @@ const (
 	//
 	// Residual, deliberately: the FIRST stalled row of a cycle still pays one PublishTimeout,
 	// because a stall is only observable by waiting for it. That is bounded at one timeout
-	// per cycle rather than one per row. streams.Publisher.Ready() is the probe that removes
-	// that residual, and it belongs in front of this same outcome; wiring it in is a follow-up,
-	// so the first stalled row of a cycle still pays its one timeout until then. D1 does that
-	// wiring by widening the outbox's unexported streamPublisher interface with Ready() bool.
+	// per cycle rather than one per row. streams.Publisher.Ready() is the probe that narrows
+	// that residual, and it belongs in front of this same outcome; wiring it in is a follow-up.
+	// It only narrows it: Ready() reports the HA layer's connection status, so it catches a
+	// producer that is reconnecting, closed, or not yet bound, but an OPEN producer that has
+	// stopped confirming still looks ready — that case keeps paying one publish timeout on the
+	// first stalled row of a cycle. #1512 wires it by widening the outbox's unexported
+	// streamPublisher interface with Ready() bool.
 	outcomeStreamDown
 )
 

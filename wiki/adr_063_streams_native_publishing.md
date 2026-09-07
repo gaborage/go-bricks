@@ -4,7 +4,7 @@
 - **Date**: 2026-08-15
 - **Related**: [ADR-059](adr_059_streams_consumption.md) (the consume side, whose Environment this reuses), [ADR-058](adr_058_consumer_scoped_amqp_arguments.md) (the AMQP stream-queue lane), [ADR-045](adr_045_no_producer_side_manager_interfaces.md) (no exported manager interface), [ADR-033](adr_033_outbox_retry_count_status_parking.md) (bounded publish on the AMQP lane)
 
-> **Amended (2026-09-06, PR #TBD):**
+> **Amended (2026-09-06):**
 > `Publisher.Ready()` is exported. It answers the broker connectivity of that one
 > publisher's producer as the client's HA layer reports it — `ha.StatusOpen` is ready;
 > reconnecting, closed, and not-yet-bound are not — read from the same `bound` pointer
@@ -13,7 +13,7 @@
 > because the manager also judges its consumers. It is a snapshot, not a delivery
 > guarantee. Its intended consumer is the outbox relay's stream lane, which is planned
 > to pre-flight with it so a cycle skips a publisher that cannot send instead of paying
-> one publish timeout to discover the same thing. That wiring is deferred to a follow-up;
+> one publish timeout to discover the same thing. That wiring is deferred to #1512;
 > this amendment only exports the probe.
 > No other exported surface changes; `Publish`, the correlation rules and the
 > confirmation contract below are unchanged.
