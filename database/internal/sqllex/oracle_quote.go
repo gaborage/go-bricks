@@ -24,7 +24,7 @@ func QuoteOracleIdentifier(column string) string {
 	// Fast path: a bare segment (no dot, no quote) cannot split and cannot
 	// already be quoted, so the parser never needs to run for it — the
 	// overwhelming case at every door.
-	if !strings.ContainsAny(trimmed, `."`) {
+	if !hasQualifierOrQuote(trimmed) {
 		if IsOracleReservedWord(trimmed) || oracleNeedsQuoting(trimmed) {
 			return QuoteIdentifierLiteral(trimmed)
 		}
@@ -123,10 +123,33 @@ func HasUnescapedQuote(text string) bool {
 // a single segment. Rendering fewer segments than the caller wrote would be the
 // silent variant; one whole (escaped) identifier is not.
 func SplitIdentifierSegments(identifier string) []string {
-	if segments, ok := parseQualifiedIdentifier(identifier); ok {
+	// Fast path: input with neither a separator dot nor a quote is one segment,
+	// so the parser would only walk it byte by byte to hand back what TrimSpace
+	// gives here (#1491). QuoteOracleIdentifier gates on the same predicate, but
+	// that gate shields only its own call; this one serves the splitter's other
+	// callers — the validation door, which pays on every identifier.
+	//
+	// The trim is the behavior, not a tidy-up: finalize trims each segment. An
+	// all-whitespace input trims to empty, which finalize REJECTS, so it falls
+	// through to the shared return below — the same untrimmed input the parser
+	// path yields, stated once for both arms.
+	if !hasQualifierOrQuote(identifier) {
+		if trimmed := strings.TrimSpace(identifier); trimmed != "" {
+			return []string{trimmed}
+		}
+	} else if segments, ok := parseQualifiedIdentifier(identifier); ok {
 		return segments
 	}
 	return []string{identifier}
+}
+
+// hasQualifierOrQuote reports whether an identifier carries either character
+// that makes it more than one bare segment. Both fast paths in this file gate
+// on it, and they compose — QuoteOracleIdentifier's correctness argument for a
+// single segment still carrying a quote or dot holds only while the splitter
+// draws the line at the same characters, so they read it from one place.
+func hasQualifierOrQuote(identifier string) bool {
+	return strings.ContainsAny(identifier, `."`)
 }
 
 // parseQualifiedIdentifier splits a qualified identifier into segments and validates them

@@ -1,11 +1,15 @@
 package outbox
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	dbident "github.com/gaborage/go-bricks/database/identifier"
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
 func TestValidateTableNameValid(t *testing.T) {
@@ -109,6 +113,52 @@ func TestValidateTableNameLengthBound(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.want)
 			assert.Contains(t, err.Error(), "_published")
+		})
+	}
+}
+
+// TestStoreSchemaSegmentBound pins the schema segment against the STORE vendor's raw
+// identifier cap at construction. No derived name decorates a schema — IndexBaseName
+// strips it and LeaderTableName appends to the table segment — so the whole cap is
+// spendable there. The decisive row is oracle_schema_over_the_postgresql_cap — the 64-byte
+// schema Oracle accepts and PostgreSQL refuses: it is what proves the bound follows the store's vendor rather than one shared
+// number. The 128/129 pair is the Oracle boundary, and its refusal is owned by the shared
+// sqlid grammar, not by this door — the assertion names sqlid's message to say so.
+func TestStoreSchemaSegmentBound(t *testing.T) {
+	tests := []struct {
+		name     string
+		newStore func(string) (Store, error)
+		schema   string
+		want     string
+	}{
+		{name: "postgresql_schema_at_the_cap", newStore: NewPostgresStore, schema: strings.Repeat("s", dbident.MaxPostgreSQLBytes)},
+		{
+			name: "postgresql_schema_one_byte_over_the_cap", newStore: NewPostgresStore,
+			schema: strings.Repeat("s", dbident.MaxPostgreSQLBytes+1),
+			want: fmt.Sprintf("is %d bytes; the maximum for %s is %d",
+				dbident.MaxPostgreSQLBytes+1, dbtypes.PostgreSQL, dbident.MaxPostgreSQLBytes),
+		},
+		{name: "oracle_schema_over_the_postgresql_cap", newStore: NewOracleStore, schema: strings.Repeat("s", dbident.MaxPostgreSQLBytes+1)},
+		{name: "oracle_schema_at_the_cap", newStore: NewOracleStore, schema: strings.Repeat("s", dbident.MaxOracleBytes)},
+		{
+			name: "oracle_schema_one_byte_over_the_cap", newStore: NewOracleStore,
+			schema: strings.Repeat("s", dbident.MaxOracleBytes+1),
+			want:   fmt.Sprintf("exceeds %d bytes", dbident.MaxOracleBytes),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, err := tt.newStore(tt.schema + ".gobricks_outbox")
+			if tt.want == "" {
+				require.NoError(t, err)
+				assert.NotNil(t, store)
+				return
+			}
+			require.Error(t, err)
+			assert.Nil(t, store)
+			assert.Contains(t, err.Error(), tt.schema)
+			assert.Contains(t, err.Error(), tt.want)
 		})
 	}
 }

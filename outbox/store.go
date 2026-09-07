@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gaborage/go-bricks/database"
+	dbident "github.com/gaborage/go-bricks/database/identifier"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/sqlid"
 )
@@ -19,7 +21,7 @@ import (
 // CreateTable would skip creating the leader table and aim the seed at the ledger — and a
 // 50-to-56-byte name truncates the two index names into each other. Applied for both
 // vendors because PostgreSQL's limit is the binding one; Oracle allows 128.
-const maxTableNameLen = 63 - len(longestDerivedPrefix) - len(longestDerivedSuffix)
+const maxTableNameLen = dbident.MaxPostgreSQLBytes - len(longestDerivedPrefix) - len(longestDerivedSuffix)
 
 const (
 	leaderSuffix         = "_leader"
@@ -40,6 +42,43 @@ func validateTableName(name string) error {
 		return fmt.Errorf("outbox: table name segment %q is %d bytes; the maximum is %d so the derived %q%s%s index and %q%s companion table stay distinct identifiers under PostgreSQL's 63-byte truncation",
 			segment, len(segment), maxTableNameLen,
 			longestDerivedPrefix, "<name>", longestDerivedSuffix, "<name>", leaderSuffix)
+	}
+	return nil
+}
+
+// maxSchemaSegmentLenFor is the schema segment's budget under a store's own vendor.
+// Nothing decorates a schema prefix — IndexBaseName strips it and LeaderTableName
+// appends to the table segment — so the raw identifier cap is the whole budget. The
+// Oracle arm restates a floor sqlid already enforces on every part, so the tightening
+// this adds is PostgreSQL's alone; it is spelled out because the vendor split, not the
+// one live number, is what #1503's shared helper folds — and because an unknown vendor
+// inherits PostgreSQL's cap here the way it does at the builder doors (ADR-100). The
+// inbox's maxTableNameLenFor defaults the OTHER way, to Oracle's looser cap; #1503
+// reconciles the two rather than this change flipping one of them in passing.
+func maxSchemaSegmentLenFor(vendor dbtypes.Vendor) int {
+	if vendor == dbtypes.Oracle {
+		return dbident.MaxOracleBytes
+	}
+	return dbident.MaxPostgreSQLBytes
+}
+
+// validateTableNameForVendor is validateTableName plus the schema-segment bound of the
+// vendor the store actually talks to. Only the store constructors call it: they each know
+// their vendor, while the config-time check does not, and the shared grammar judges every
+// segment at Oracle's 128 bytes. Without it a 64-to-128-byte schema boots on PostgreSQL
+// and is refused later, inside the first ToSQL. Issue #1503 folds this into a shared
+// name-budget helper alongside the inbox's twin.
+func validateTableNameForVendor(vendor dbtypes.Vendor, name string) error {
+	if err := validateTableName(name); err != nil {
+		return err
+	}
+	schema, _, qualified := strings.Cut(name, ".")
+	if !qualified {
+		return nil
+	}
+	if maxLen := maxSchemaSegmentLenFor(vendor); len(schema) > maxLen {
+		return fmt.Errorf("outbox: table name schema segment %q is %d bytes; the maximum for %s is %d",
+			schema, len(schema), vendor, maxLen)
 	}
 	return nil
 }

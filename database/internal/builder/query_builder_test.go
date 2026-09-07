@@ -4042,3 +4042,26 @@ func TestRepresentativeDoorsEnforceTheVendorByteCap(t *testing.T) {
 		})
 	}
 }
+
+// TestEscapeIdentifierTrimsBareNames pins the exported door's output for input
+// the splitter's bare-name fast path answers (#1491). EscapeIdentifier forwards
+// consumer input untrimmed, so the trim the splitter applies is observable here:
+// drop it and " col " renders as `" col "`, a different column. One vendor is
+// enough — EscapeIdentifier reads no renderer, and
+// TestEscapeIdentifierDoublesInteriorQuotes already pins that both vendors
+// agree on this door.
+func TestEscapeIdentifierTrimsBareNames(t *testing.T) {
+	tests := []identifierEscapeCase{
+		{name: "space_padded_bare_name_is_trimmed", identifier: " col ", escaped: `"col"`},
+		{name: "tab_and_newline_padded_is_trimmed", identifier: "\tcol\n", escaped: `"col"`},
+		{name: "all_whitespace_is_escaped_verbatim", identifier: "   ", escaped: `"   "`},
+		{name: "empty_is_escaped_verbatim", identifier: "", escaped: `""`},
+	}
+
+	qb := NewQueryBuilder(dbtypes.Oracle)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.escaped, qb.EscapeIdentifier(tt.identifier))
+		})
+	}
+}

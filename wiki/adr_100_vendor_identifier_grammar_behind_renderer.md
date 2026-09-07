@@ -9,6 +9,49 @@
   (the renderer seam this extends)
 - **Issue**: #1202; the byte-cap half landed in #1437
 
+## Amendment (2026-09-06): the outbox store bounds its schema segment by the store's vendor
+
+The byte-cap amendment below closed the builder half and the inbox store's
+table-name bound, and it recorded that "the outbox schema-prefix bound is
+untouched". That sentence is RETRACTED. #1495 closes the residual it named: both
+outbox store constructors now judge the table name's schema segment against the
+STORE vendor's raw identifier cap — `identifier.MaxPostgreSQLBytes` (63),
+`identifier.MaxOracleBytes` (128) — so a PostgreSQL ledger configured with a
+64-to-128-byte schema prefix is refused at construction instead of booting and
+failing at the first `ToSQL()`. Store construction is lazy, so WHERE that lands
+depends on the deployment: a static-source, single-tenant-or-shared-ledger
+service constructs during `Init` and now fails at startup, while a
+dynamic-config or per-tenant deployment constructs on FIRST USE — the first
+publish, or the first relay poll, since the enabled relay resolves the same lazy
+store through `lazyStore.Lead`, so such a deployment can meet the refusal with no
+event ever published. There it is still inside that first call, but before any
+statement is built
+and before the `autocreatetable` DDL runs, and it names the real fault instead
+of arriving as tenantstore's "missing table or insufficient privileges".
+Only PostgreSQL tightens: Oracle's arm restates the 128 that
+`sqlid.ValidateTableName` already enforces on every part, and is written out
+because the vendor split, not the one live number, is what binds here.
+
+The cap on the schema is the RAW one, not the derived-affix budget the table
+segment spends: no name the store derives decorates the schema —
+`sqlid.IndexBaseName` strips it and `sqlid.LeaderTableName` appends to the table
+segment — so the whole 63 or 128 bytes are spendable there. The table segment
+keeps its 49-byte bound on both vendors, since PostgreSQL's truncation is the
+binding one for the `idx_<segment>_published` name.
+
+The split this ADR drew holds unchanged: `sqlid.ValidateTableName` stays at
+Oracle's 128 for every vendor, because its config-time callers judge
+configuration before a connection exists and have no vendor in scope; the store
+constructors, which know their vendor, are the vendor-aware gate. The
+constructor signatures do not move — only their refusal set widens. The outbox's
+new validator deliberately duplicates the inbox's rather than sharing one: #1503
+owns the shared name-budget helper and folds both into it. The two are not
+identical, and the difference is left standing for that helper to settle: the
+outbox's default arm hands an unknown vendor PostgreSQL's cap, as this ADR's
+builder rule does, while the inbox's `maxTableNameLenFor` defaults to Oracle's
+looser one. Both are vacuous today — each is reached only from its own two
+vendor-literal constructors.
+
 ## Amendment (2026-09-06): the doors judge the byte cap per segment
 
 The Consequences below recorded a second residual: the doors judged the vendor's

@@ -908,7 +908,7 @@ func (m *Manager) readyLocked() bool {
 		}
 	}
 	for _, p := range m.publishers {
-		if p.status() != ha.StatusOpen {
+		if !p.Ready() {
 			return false
 		}
 	}
