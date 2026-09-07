@@ -282,3 +282,86 @@ func TestScanTypeKidInvalidCarriesTheKid(t *testing.T) {
 	assert.Equal(t, "bad.kid", jerr.Kid)
 	assert.Contains(t, jerr.Message, "for encrypt")
 }
+
+// TestScanTypeReadsFieldsInDeclarationOrder pins the field walk itself: the classification of
+// each field is independent of where it sits, so a sentinel may follow its Subject and clear
+// members may sit anywhere around both.
+func TestScanTypeReadsFieldsInDeclarationOrder(t *testing.T) {
+	cases := []struct {
+		name string
+		typ  reflect.Type
+	}{
+		{name: "sentinel_first", typ: reflect.TypeOf(struct {
+			_    struct{} `seal:"sign=s,encrypt=e"`
+			Note string   `json:"note"`
+			Card string   `json:"card" seal:"subject"`
+		}{})},
+		{name: "sentinel_between", typ: reflect.TypeOf(struct {
+			Note string   `json:"note"`
+			_    struct{} `seal:"sign=s,encrypt=e"`
+			Card string   `json:"card" seal:"subject"`
+		}{})},
+		{name: "sentinel_last", typ: reflect.TypeOf(struct {
+			Card string   `json:"card" seal:"subject"`
+			Note string   `json:"note"`
+			_    struct{} `seal:"sign=s,encrypt=e"`
+		}{})},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, err := sealed.ScanType(tc.typ)
+			require.NoError(t, err)
+			require.NotNil(t, spec)
+			assert.Equal(t, "Card", spec.SubjectField)
+			assert.Equal(t, "card", spec.SubjectPath)
+			assert.Equal(t, "s", spec.SignLogical)
+			assert.Equal(t, "e", spec.EncryptLogical)
+		})
+	}
+}
+
+// TestScanTypeResolvesSentinelAndSubjectCounts walks the outcome matrix of the two counts the
+// field walk reports: only one sentinel with exactly one Subject yields a Spec, and an absent
+// declaration is the sole non-error nil.
+func TestScanTypeResolvesSentinelAndSubjectCounts(t *testing.T) {
+	cases := []struct {
+		name string
+		typ  reflect.Type
+		code string
+		msg  string
+	}{
+		{name: "neither_present", typ: reflect.TypeOf(struct {
+			Card string `json:"card"`
+		}{})},
+		{name: "sentinel_with_one_subject", typ: reflect.TypeOf(struct {
+			_    struct{} `seal:"sign=s,encrypt=e"`
+			Card string   `json:"card" seal:"subject"`
+		}{}), msg: "card"},
+		{name: "sentinel_with_three_subjects", typ: reflect.TypeOf(struct {
+			_ struct{} `seal:"sign=s,encrypt=e"`
+			A string   `json:"a" seal:"subject"`
+			B string   `json:"b" seal:"subject"`
+			C string   `json:"c" seal:"subject"`
+		}{}), code: sealed.CodeTagSubjectMultiple, msg: "3 fields tagged"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, err := sealed.ScanType(tc.typ)
+			switch {
+			case tc.code != "":
+				var jerr *jose.Error
+				require.ErrorAs(t, err, &jerr)
+				assert.Nil(t, spec)
+				assert.Equal(t, tc.code, jerr.Code)
+				assert.Contains(t, jerr.Message, tc.msg)
+			case tc.msg == "":
+				require.NoError(t, err)
+				assert.Nil(t, spec, "an untagged type is the only silent nil")
+			default:
+				require.NoError(t, err)
+				require.NotNil(t, spec)
+				assert.Equal(t, tc.msg, spec.SubjectPath)
+			}
+		})
+	}
+}
