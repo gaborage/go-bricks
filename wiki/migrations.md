@@ -7173,15 +7173,22 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
 
 ### [C64.7] the outbox store bounds its table name's schema segment by the store's vendor · breaking · when: match
 
-- detect: `grep -rniE 'outbox:' -A6 config*.yaml | grep -iE 'tablename\s*:\s*\S+\.\S+'` finds
-  the schema-qualified YAML form, whose key is nested and so invisible to a flat
-  `outbox\.tablename` grep; `grep -rniE 'OUTBOX_TABLENAME' .` catches the env form, and `git
-  grep -nE 'OutboxConfig' -- '*.go'` the hand-built one. Measure the part BEFORE the dot. A
-  PostgreSQL deployment whose schema segment is 64 bytes or more is the population. **The grep
-  is a shortlist, not the population:** a table name assembled from an environment variable, a
-  tenant record or string concatenation never appears as a literal, so a computed schema prefix
-  has to be inventoried by hand. An unqualified name (no dot) is out of the population
-  entirely. Nothing in a build fails here.
+- detect: `grep -rniE
+  '^[[:space:]]*tablename[[:space:]]*:[[:space:]]*[^[:space:]]+\.[^[:space:]]+'
+  --include='*.yaml' --include='*.yml' .` finds every schema-qualified `tablename:` in the
+  tree. Search the WHOLE repository, not `config*.yaml`: that glob expands only root-level
+  files and misses `.yml` entirely, and anchoring on `outbox:` with a fixed `-A6` window misses
+  a `tablename:` written more than six lines below it — a false no-match here skips the rename.
+  The character classes are POSIX, not `\s`, so the pattern behaves the same under BSD grep on
+  macOS as under GNU grep. It matches any `tablename:` key, so confirm each hit sits under
+  `outbox:` and not `inbox:`. Then `grep -rniE 'OUTBOX_TABLENAME' .` for the env form and `git
+  grep -nE 'OutboxConfig' -- '*.go'` for the hand-built one. Measure the part BEFORE the dot: a
+  PostgreSQL deployment whose schema segment is 64 bytes or more is the population. **The greps
+  are a shortlist, not the population:** where YAML is not the source — a config server, a
+  secret manager, a tenant record, a name built by string concatenation — every configuration
+  source has to be inventoried BY HAND, because nothing in a build fails here and no grep
+  reaches a value that never appears as a literal. An unqualified name (no dot) is out of the
+  population entirely.
 - scope: `NewPostgresStore` and `NewOracleStore` judge the table name's schema segment against
   the STORE vendor's raw identifier cap — `identifier.MaxPostgreSQLBytes` (63) and
   `identifier.MaxOracleBytes` (128) — where both used to accept everything the shared
