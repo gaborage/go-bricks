@@ -59,30 +59,42 @@ func checkMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *MessagingC
 	// For static sources, validate tenants if provided (optional but must be valid if present)
 	// For dynamic sources, tenants are optional and loaded from external store
 	if source.Type == SourceTypeStatic && mt.Tenants != nil {
-		if len(mt.Tenants) == 0 {
-			return errors.New("tenants: empty map provided - either omit tenants section or provide at least one tenant for static source")
-		}
-
-		if err := checkTenantMessagingConsistency(mt.Tenants); err != nil {
-			return fmt.Errorf("tenants: %w", err)
-		}
-
-		if err := checkTenantMessagingReachable(mt.Tenants, msg); err != nil {
-			return fmt.Errorf("tenants: %w", err)
-		}
-
-		// Sorted, like forEachDatabaseSection: with several malformed tenants the
-		// startup error names the same one every run.
-		for _, tenantID := range slices.Sorted(maps.Keys(mt.Tenants)) {
-			tenant := mt.Tenants[tenantID]
-			if err := checkMultitenantTenantEntry(tenantID, &tenant); err != nil {
-				return fmt.Errorf("tenants: %w", err)
-			}
+		if err := checkStaticTenantMap(mt.Tenants, msg); err != nil {
+			return err
 		}
 	}
 
 	if hasStaticTenants(source, mt) {
 		return validateNoSingleTenantConflict(db, msg)
+	}
+
+	return nil
+}
+
+// checkStaticTenantMap rejects a delivered static tenant map: an empty one,
+// messaging configured for some tenants but not others, per-tenant messaging
+// shared tenancy would never read, and whatever checkMultitenantTenantEntry
+// rejects. Errors carry checkMultitenant's own "tenants: " prefix.
+func checkStaticTenantMap(tenants map[string]TenantEntry, msg *MessagingConfig) error {
+	if len(tenants) == 0 {
+		return errors.New("tenants: empty map provided - either omit tenants section or provide at least one tenant for static source")
+	}
+
+	if err := checkTenantMessagingConsistency(tenants); err != nil {
+		return fmt.Errorf("tenants: %w", err)
+	}
+
+	if err := checkTenantMessagingReachable(tenants, msg); err != nil {
+		return fmt.Errorf("tenants: %w", err)
+	}
+
+	// Sorted, like forEachDatabaseSection: with several malformed tenants the
+	// startup error names the same one every run.
+	for _, tenantID := range slices.Sorted(maps.Keys(tenants)) {
+		tenant := tenants[tenantID]
+		if err := checkMultitenantTenantEntry(tenantID, &tenant); err != nil {
+			return fmt.Errorf("tenants: %w", err)
+		}
 	}
 
 	return nil
