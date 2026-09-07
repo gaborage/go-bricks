@@ -1470,3 +1470,123 @@ func TestRelayOrdersTheRowsPublishWroteByTenant(t *testing.T) {
 		"B1 publishes although its routing key equals A1's — Publish stamped it for another tenant")
 	assert.Equal(t, rows[2].ID, store.MarkPublishedLastID)
 }
+
+// publishStamp decides which of the row's two tenant carriers wins, so each lane needs its
+// own case: the stream lane must read the partition key even when a header stamp is also
+// present, or a stream row would publish under the wrong tenant.
+func TestPublishStamp(t *testing.T) {
+	tests := []struct {
+		name    string
+		record  Record
+		headers map[string]any
+		want    string
+	}{
+		{
+			name:    "stream_lane_prefers_partition_key",
+			record:  Record{Lane: LaneStream, PartitionKey: "acme"},
+			headers: map[string]any{messaging.TenantStampHeader: "globex"},
+			want:    "acme",
+		},
+		{
+			name:   "stream_lane_without_partition_key",
+			record: Record{Lane: LaneStream},
+			want:   "",
+		},
+		{
+			name:    "amqp_lane_reads_the_persisted_header",
+			record:  Record{Lane: LaneAMQP, PartitionKey: "ignored"},
+			headers: map[string]any{messaging.TenantStampHeader: "acme"},
+			want:    "acme",
+		},
+		{
+			name:    "empty_lane_reads_the_persisted_header",
+			record:  Record{},
+			headers: map[string]any{messaging.TenantStampHeader: "acme"},
+			want:    "acme",
+		},
+		{
+			name:   "amqp_lane_without_a_stamp_header",
+			record: Record{Lane: LaneAMQP},
+			want:   "",
+		},
+		{
+			name:    "non_string_stamp_header",
+			record:  Record{Lane: LaneAMQP},
+			headers: map[string]any{messaging.TenantStampHeader: 42},
+			want:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, publishStamp(&tt.record, tt.headers))
+		})
+	}
+}
+
+// classifyPublishFailure is the whole poison-vs-connectivity decision for the AMQP lane, so
+// every arm is pinned here: which errors abort without touching the ledger, which park, and
+// which advance retry_count — plus the fresh IsReady() half that separates a mid-batch broker
+// drop from a flap that already recovered.
+func TestRelayClassifyPublishFailure(t *testing.T) {
+	tests := []struct {
+		name             string
+		err              error
+		ready            bool
+		retryCount       int
+		want             publishOutcome
+		wantErr          bool
+		wantMarkFailed   int
+		wantDeadLettered int
+	}{
+		{name: "canceled_aborts", err: context.Canceled, ready: true, want: outcomeAborted},
+		{name: "shutdown_aborts", err: messaging.ErrShutdown, ready: true, want: outcomeAborted},
+		{
+			name: "invalid_destination_parks_at_max_retries", err: messaging.ErrInvalidPublishDestination,
+			ready: true, retryCount: 2, want: outcomeDeadLettered, wantDeadLettered: 1,
+		},
+		{
+			name: "stamp_conflict_parks_at_max_retries", err: messaging.ErrTenantStampConflict,
+			ready: true, retryCount: 2, want: outcomeDeadLettered, wantDeadLettered: 1,
+		},
+		{
+			name: "invalid_destination_stays_pending_below_max_retries", err: messaging.ErrInvalidPublishDestination,
+			ready: true, want: outcomeFailed, wantMarkFailed: 1,
+		},
+		{
+			name: "nack_is_connectivity", err: errors.New("NACK from broker"),
+			ready: true, retryCount: 9, want: outcomeFailed, wantMarkFailed: 1,
+		},
+		{
+			name: "not_connected_but_ready_again_is_an_ordinary_failure", err: messaging.ErrNotConnected,
+			ready: true, want: outcomeFailed, wantMarkFailed: 1,
+		},
+		{
+			name: "not_connected_and_still_unready_is_a_broker_drop", err: messaging.ErrNotConnected,
+			ready: false, want: outcomeBrokerDown, wantErr: true, wantMarkFailed: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeStore{}
+			amqp := newFakeAMQP()
+			amqp.Ready = tt.ready
+			r := newRelayWithFakes(store, amqp, nil)
+			record := Record{ID: "evt-1", Exchange: "orders", RoutingKey: "created", RetryCount: tt.retryCount}
+
+			outcome, err := r.classifyPublishFailure(context.Background(), newRecordingLogger(),
+				dbtesting.NewTestDB("postgresql"), amqp, &record, tt.err)
+
+			assert.Equal(t, tt.want, outcome)
+			if tt.wantErr {
+				require.ErrorIs(t, err, tt.err, "the connectivity error travels up as the job-level outage error")
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantMarkFailed, store.MarkFailedCalls)
+			assert.Equal(t, tt.wantDeadLettered, store.MarkDeadLetteredCalls)
+			assert.Zero(t, store.MarkPublishedCalls, "a failed publish never records a delivery")
+		})
+	}
+}

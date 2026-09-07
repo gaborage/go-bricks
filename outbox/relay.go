@@ -416,18 +416,8 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 	// writer (ADR-087), and a stamp replayed out of storage is caller-supplied from a
 	// publisher's point of view — so any header spelling it must go, and the value must
 	// travel by context instead.
-	//
-	// Where the row keeps its tenant differs by lane, because the writers differ: a
-	// stream-lane row records it as the PARTITION KEY (Publish refuses one without a
-	// tenant) and never in its headers, while an AMQP row carries whatever stamp was
-	// persisted with it. Reading only the header would leave a stream row unstamped under
-	// outbox.tenancy=shared, where the cycle's own context carries no tenant either.
-	stamp := ""
-	if record.Lane == LaneStream {
-		stamp = record.PartitionKey
-	} else if persisted, ok := headers[messaging.TenantStampHeader].(string); ok {
-		stamp = persisted
-	}
+	// Where the row keeps its tenant differs by lane (see publishStamp).
+	stamp := publishStamp(record, headers)
 	// Delete on PRESENCE, not on a non-empty value: the conflict check keys on the header
 	// existing at all, so an empty-valued one left behind fails every publish.
 	delete(headers, messaging.TenantStampHeader)
@@ -461,41 +451,63 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 	err := publishdoor.Publish(recCtx, msgClient, opts, record.Payload)
 	cancel()
 	if err != nil {
-		// Shutdown/cancel is not a delivery failure — do not advance retry_count.
-		if errors.Is(err, context.Canceled) || errors.Is(err, messaging.ErrShutdown) {
-			return outcomeAborted, nil
-		}
-		// A destination the frame can never carry (over-long exchange, routing key or
-		// header key) is refused before any channel work and is refused identically
-		// every cycle: message-intrinsic, so it is poison on the same path as an
-		// undecodable header rather than connectivity.
-		if errors.Is(err, messaging.ErrInvalidPublishDestination) ||
-			errors.Is(err, messaging.ErrTenantStampConflict) {
-			// A stamp conflict is deterministic in the row, not the broker: it will read
-			// the same way every cycle, so it parks rather than retrying forever.
-			return r.deadLetterPoison(ctx, log, db, record, err.Error()), nil
-		}
-		// Every other broker-side publish failure — NOT-connected, confirmation timeout, deadline,
-		// and even a broker NACK — is CONNECTIVITY: the broker either could not be reached or
-		// could not take responsibility for the message. A RabbitMQ NACK is a transient broker
-		// condition (disk alarm, mirror resync, failover), and a missing exchange surfaces as a
-		// synthesized NACK too — neither means the message is bad, so neither parks. We advance
-		// retry_count and retry (at-least-once); only the poison classes enumerated at
-		// deadLetterPoison ever park.
-		r.markRecordFailed(ctx, log, db, record.ID, err.Error())
-		// A not-connected error AND a still-not-ready client (checked fresh, not
-		// inferred from the error alone) means the broker dropped mid-batch — the
-		// caller stops attempting the rest rather than letting each remaining
-		// record pay its own serial readiness pre-flight wait. If IsReady() has
-		// already flipped back to true (a brief flap), fall through to the normal
-		// per-record failed outcome and keep the batch going.
-		if errors.Is(err, messaging.ErrNotConnected) && !msgClient.IsReady() {
-			return outcomeBrokerDown, err
-		}
-		return outcomeFailed, nil
+		return r.classifyPublishFailure(ctx, log, db, msgClient, record, err)
 	}
 
 	return r.recordPublished(ctx, log, db, record), nil
+}
+
+// publishStamp is the tenant the row publishes under. The lanes keep it in different
+// places: a stream-lane row records it as the PARTITION KEY (Publish refuses one without a
+// tenant) and never in its headers, while an AMQP row carries whatever stamp was persisted
+// with it. Reading only the header would leave a stream row unstamped under
+// outbox.tenancy=shared, where the cycle's own context carries no tenant either.
+func publishStamp(record *Record, headers map[string]any) string {
+	if record.Lane == LaneStream {
+		return record.PartitionKey
+	}
+	if persisted, ok := headers[messaging.TenantStampHeader].(string); ok {
+		return persisted
+	}
+	return ""
+}
+
+// classifyPublishFailure maps a failed AMQP-lane publish to its bookkeeping outcome.
+// Split out of publishRecord to keep that function's cognitive complexity within budget
+// (gocognit).
+func (r *Relay) classifyPublishFailure(ctx context.Context, log logger.Logger, db dbtypes.Interface, msgClient messaging.AMQPClient, record *Record, err error) (publishOutcome, error) {
+	// Shutdown/cancel is not a delivery failure — do not advance retry_count.
+	if errors.Is(err, context.Canceled) || errors.Is(err, messaging.ErrShutdown) {
+		return outcomeAborted, nil
+	}
+	// A destination the frame can never carry (over-long exchange, routing key or
+	// header key) is refused before any channel work and is refused identically
+	// every cycle: message-intrinsic, so it is poison on the same path as an
+	// undecodable header rather than connectivity.
+	if errors.Is(err, messaging.ErrInvalidPublishDestination) ||
+		errors.Is(err, messaging.ErrTenantStampConflict) {
+		// A stamp conflict is deterministic in the row, not the broker: it will read
+		// the same way every cycle, so it parks rather than retrying forever.
+		return r.deadLetterPoison(ctx, log, db, record, err.Error()), nil
+	}
+	// Every other broker-side publish failure — NOT-connected, confirmation timeout, deadline,
+	// and even a broker NACK — is CONNECTIVITY: the broker either could not be reached or
+	// could not take responsibility for the message. A RabbitMQ NACK is a transient broker
+	// condition (disk alarm, mirror resync, failover), and a missing exchange surfaces as a
+	// synthesized NACK too — neither means the message is bad, so neither parks. We advance
+	// retry_count and retry (at-least-once); only the poison classes enumerated at
+	// deadLetterPoison ever park.
+	r.markRecordFailed(ctx, log, db, record.ID, err.Error())
+	// A not-connected error AND a still-not-ready client (checked fresh, not
+	// inferred from the error alone) means the broker dropped mid-batch — the
+	// caller stops attempting the rest rather than letting each remaining
+	// record pay its own serial readiness pre-flight wait. If IsReady() has
+	// already flipped back to true (a brief flap), fall through to the normal
+	// per-record failed outcome and keep the batch going.
+	if errors.Is(err, messaging.ErrNotConnected) && !msgClient.IsReady() {
+		return outcomeBrokerDown, err
+	}
+	return outcomeFailed, nil
 }
 
 // recordPublished marks a delivered record published. Shared by both lanes: the delivery
