@@ -21,8 +21,11 @@ STORE vendor's raw identifier cap — `identifier.MaxPostgreSQLBytes` (63),
 failing at the first `ToSQL()`. Store construction is lazy, so WHERE that lands
 depends on the deployment: a static-source, single-tenant-or-shared-ledger
 service constructs during `Init` and now fails at startup, while a
-dynamic-config or per-tenant deployment constructs on first use — there the
-refusal is still inside the first publish, but before any statement is built
+dynamic-config or per-tenant deployment constructs on FIRST USE — the first
+publish, or the first relay poll, since the enabled relay resolves the same lazy
+store through `lazyStore.Lead`, so such a deployment can meet the refusal with no
+event ever published. There it is still inside that first call, but before any
+statement is built
 and before the `autocreatetable` DDL runs, and it names the real fault instead
 of arriving as tenantstore's "missing table or insufficient privileges".
 Only PostgreSQL tightens: Oracle's arm restates the 128 that
