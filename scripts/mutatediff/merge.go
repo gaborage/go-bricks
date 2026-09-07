@@ -70,6 +70,44 @@ func readShard(p string, out io.Writer) (shardReport, bool) {
 	return s, true
 }
 
+// accumulateShards folds every shard except absOut into merged, in the order
+// given. overflow names the first shard whose counters would wrap the
+// aggregate; merged is then left partially folded and must not be written.
+func accumulateShards(merged *mergedReport, paths []string, absOut string, out io.Writer) (readable, skipped int, overflow string) {
+	for _, p := range paths {
+		if abs, absErr := filepath.Abs(p); absErr == nil && abs == absOut {
+			continue // never slurp our own output on a re-run
+		}
+		s, ok := readShard(p, out)
+		if !ok {
+			skipped++
+			continue
+		}
+		if merged.MutantsKilled > math.MaxInt-s.MutantsKilled ||
+			merged.MutantsLived > math.MaxInt-s.MutantsLived ||
+			merged.MutantsNotCovered > math.MaxInt-s.MutantsNotCovered {
+			return readable, skipped, p
+		}
+		readable++
+		merged.MutantsKilled += s.MutantsKilled
+		merged.MutantsLived += s.MutantsLived
+		merged.MutantsNotCovered += s.MutantsNotCovered
+		merged.Files = append(merged.Files, s.Files...)
+	}
+	return readable, skipped, ""
+}
+
+// setRates derives the two percentages from the folded counters. Efficacy is
+// over verdicted mutants only; coverage is over every mutant seen.
+func setRates(merged *mergedReport) {
+	if verdicted := merged.MutantsKilled + merged.MutantsLived; verdicted > 0 {
+		merged.TestEfficacy = float64(merged.MutantsKilled) * 100 / float64(verdicted)
+	}
+	if seen := merged.MutantsKilled + merged.MutantsLived + merged.MutantsNotCovered; seen > 0 {
+		merged.MutationsCoverage = float64(merged.MutantsKilled+merged.MutantsLived) * 100 / float64(seen)
+	}
+}
+
 // mergeShards aggregates every *.json shard in dir into a single report at
 // outPath. An unparsable shard is skipped with a WARN (the baseline is
 // advisory; one bad shard must not erase the rest). Zero readable shards is
@@ -87,37 +125,14 @@ func mergeShards(dir, outPath string, out io.Writer) int {
 
 	var merged mergedReport
 	merged.Files = []json.RawMessage{}
-	readable, skipped := 0, 0
-	for _, p := range paths {
-		if abs, absErr := filepath.Abs(p); absErr == nil && abs == absOut {
-			continue // never slurp our own output on a re-run
-		}
-		s, ok := readShard(p, out)
-		if !ok {
-			skipped++
-			continue
-		}
-		if merged.MutantsKilled > math.MaxInt-s.MutantsKilled ||
-			merged.MutantsLived > math.MaxInt-s.MutantsLived ||
-			merged.MutantsNotCovered > math.MaxInt-s.MutantsNotCovered {
-			return fail("aggregate counters would overflow at %s — refusing to write a corrupt report", p)
-		}
-		readable++
-		merged.MutantsKilled += s.MutantsKilled
-		merged.MutantsLived += s.MutantsLived
-		merged.MutantsNotCovered += s.MutantsNotCovered
-		merged.Files = append(merged.Files, s.Files...)
+	readable, skipped, overflow := accumulateShards(&merged, paths, absOut, out)
+	if overflow != "" {
+		return fail("aggregate counters would overflow at %s — refusing to write a corrupt report", overflow)
 	}
 	if readable == 0 {
 		return fail("no readable shards in %s — refusing to write an empty report", dir)
 	}
-
-	if verdicted := merged.MutantsKilled + merged.MutantsLived; verdicted > 0 {
-		merged.TestEfficacy = float64(merged.MutantsKilled) * 100 / float64(verdicted)
-	}
-	if seen := merged.MutantsKilled + merged.MutantsLived + merged.MutantsNotCovered; seen > 0 {
-		merged.MutationsCoverage = float64(merged.MutantsKilled+merged.MutantsLived) * 100 / float64(seen)
-	}
+	setRates(&merged)
 
 	encoded, err := json.Marshal(merged)
 	if err != nil {

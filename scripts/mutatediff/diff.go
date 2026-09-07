@@ -21,6 +21,24 @@ type lineRange struct {
 
 var hunkRe = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 
+// parseHunkRange reads the new-file side of a hunk header. ok=false for a
+// non-hunk line and for a pure deletion (+n,0), which touches no new line.
+func parseHunkRange(line string) (lineRange, bool) {
+	m := hunkRe.FindStringSubmatch(line)
+	if m == nil {
+		return lineRange{}, false
+	}
+	start, _ := strconv.Atoi(m[1])
+	count := 1
+	if m[2] != "" {
+		count, _ = strconv.Atoi(m[2])
+	}
+	if count == 0 {
+		return lineRange{}, false
+	}
+	return lineRange{Start: start, End: start + count}, true
+}
+
 func parseUnifiedDiff(diff string) (map[string][]lineRange, error) {
 	changes := map[string][]lineRange{}
 	var current string
@@ -37,19 +55,9 @@ func parseUnifiedDiff(diff string) (map[string][]lineRange, error) {
 			if current == "" {
 				continue
 			}
-			m := hunkRe.FindStringSubmatch(line)
-			if m == nil {
-				continue
+			if r, ok := parseHunkRange(line); ok {
+				changes[current] = append(changes[current], r)
 			}
-			start, _ := strconv.Atoi(m[1])
-			count := 1
-			if m[2] != "" {
-				count, _ = strconv.Atoi(m[2])
-			}
-			if count == 0 {
-				continue
-			}
-			changes[current] = append(changes[current], lineRange{Start: start, End: start + count})
 		}
 	}
 	if err := sc.Err(); err != nil {

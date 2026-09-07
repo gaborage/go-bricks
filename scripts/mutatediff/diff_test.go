@@ -96,3 +96,48 @@ func TestParseUnifiedDiffErrorsOnScanFailure(t *testing.T) {
 		t.Error("expected error for an oversized diff line")
 	}
 }
+
+func TestParseHunkRangePinsNewSideBoundaries(t *testing.T) {
+	tests := []struct {
+		name   string
+		line   string
+		want   lineRange
+		wantOK bool
+	}{
+		{"multi_line_hunk", "@@ -25,0 +26,3 @@ func x() {", lineRange{Start: 26, End: 29}, true},
+		{"count_omitted_means_one", "@@ -40 +44 @@", lineRange{Start: 44, End: 45}, true},
+		{"explicit_count_one", "@@ -40,1 +44,1 @@", lineRange{Start: 44, End: 45}, true},
+		{"new_file_from_line_one", "@@ -0,0 +1,2 @@", lineRange{Start: 1, End: 3}, true},
+		{"pure_deletion", "@@ -10,2 +9,0 @@", lineRange{}, false},
+		{"not_a_hunk_header", "@@ nonsense", lineRange{}, false},
+		{"trailing_junk_before_at", "x@@ -1 +1 @@", lineRange{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := parseHunkRange(tt.line)
+			if ok != tt.wantOK {
+				t.Fatalf("parseHunkRange(%q) ok = %v, want %v", tt.line, ok, tt.wantOK)
+			}
+			if got != tt.want {
+				t.Errorf("parseHunkRange(%q) = %+v, want %+v", tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
+// End is exclusive, so a 3-line hunk starting at 26 must cover exactly 26..28.
+func TestParseHunkRangeEndIsExclusive(t *testing.T) {
+	got, ok := parseHunkRange("@@ -25,0 +26,3 @@")
+	if !ok {
+		t.Fatal("parseHunkRange rejected a valid hunk")
+	}
+	if got.Start != 26 {
+		t.Errorf("first line = %d, want 26", got.Start)
+	}
+	if got.End-1 != 28 {
+		t.Errorf("last line = %d, want 28", got.End-1)
+	}
+	if got.End-got.Start != 3 {
+		t.Errorf("span = %d, want 3", got.End-got.Start)
+	}
+}
