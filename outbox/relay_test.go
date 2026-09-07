@@ -760,8 +760,16 @@ func TestRelayBoundsEachPreflightReadinessCheck(t *testing.T) {
 	var hasDeadline bool
 	amqpLane.ReadyFn = func(ctx context.Context) error {
 		_, hasDeadline = ctx.Deadline()
-		<-ctx.Done()
-		return ctx.Err()
+		// Never block unboundedly: a correct bound closes ctx.Done() well inside 500ms
+		// (r.readyTimeout is 20ms below), so this fires only under a mutant that skips
+		// the bound — turning what would otherwise be gremlins' TIMED OUT non-verdict
+		// into a fast, deterministic assertion failure instead.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+			return errors.New("ready check was not bounded")
+		}
 	}
 
 	start := time.Now()
