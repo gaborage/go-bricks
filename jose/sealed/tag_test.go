@@ -111,6 +111,12 @@ func TestScanTypeScanErrors(t *testing.T) {
 			A string   `json:"a" seal:"subject"`
 			B string   `json:"b" seal:"subject"`
 		}{}), code: sealed.CodeTagSubjectMultiple, msg: "2 fields tagged"},
+		{name: "three_subjects", typ: reflect.TypeOf(struct {
+			_ struct{} `seal:"sign=s,encrypt=e"`
+			A string   `json:"a" seal:"subject"`
+			B string   `json:"b" seal:"subject"`
+			C string   `json:"c" seal:"subject"`
+		}{}), code: sealed.CodeTagSubjectMultiple, msg: "3 fields tagged"},
 		{name: "subject_without_sentinel", typ: reflect.TypeOf(struct {
 			A string `json:"a" seal:"subject"`
 		}{}), code: sealed.CodeTagSentinelMissing, msg: "without a sentinel"},
@@ -281,4 +287,41 @@ func TestScanTypeKidInvalidCarriesTheKid(t *testing.T) {
 	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, "bad.kid", jerr.Kid)
 	assert.Contains(t, jerr.Message, "for encrypt")
+}
+
+// TestScanTypeReadsFieldsInDeclarationOrder pins the field walk itself: the classification of
+// each field is independent of where it sits, so a sentinel may follow its Subject and clear
+// members may sit anywhere around both.
+func TestScanTypeReadsFieldsInDeclarationOrder(t *testing.T) {
+	cases := []struct {
+		name string
+		typ  reflect.Type
+	}{
+		{name: "sentinel_first", typ: reflect.TypeOf(struct {
+			_    struct{} `seal:"sign=s,encrypt=e"`
+			Note string   `json:"note"`
+			Card string   `json:"card" seal:"subject"`
+		}{})},
+		{name: "sentinel_between", typ: reflect.TypeOf(struct {
+			Note string   `json:"note"`
+			_    struct{} `seal:"sign=s,encrypt=e"`
+			Card string   `json:"card" seal:"subject"`
+		}{})},
+		{name: "sentinel_last", typ: reflect.TypeOf(struct {
+			Card string   `json:"card" seal:"subject"`
+			Note string   `json:"note"`
+			_    struct{} `seal:"sign=s,encrypt=e"`
+		}{})},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, err := sealed.ScanType(tc.typ)
+			require.NoError(t, err)
+			require.NotNil(t, spec)
+			assert.Equal(t, "Card", spec.SubjectField)
+			assert.Equal(t, "card", spec.SubjectPath)
+			assert.Equal(t, "s", spec.SignLogical)
+			assert.Equal(t, "e", spec.EncryptLogical)
+		})
+	}
 }

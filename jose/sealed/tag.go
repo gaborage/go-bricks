@@ -55,33 +55,42 @@ func ScanType(t reflect.Type) (*Spec, error) {
 	}
 
 	spec := &Spec{Type: t}
-	sentinelSeen := false
-	subjects := 0
+	sentinelSeen, subjects, err := scanFields(spec, t)
+	if err != nil {
+		return nil, err
+	}
+	return resolveSpec(spec, sentinelSeen, subjects)
+}
+
+// scanFields classifies every field in declaration order and stops at the first refusal: an
+// untagged field contributes sibling names, a `seal:"subject"` field is counted and applied,
+// and the first other seal tag is the sentinel.
+func scanFields(spec *Spec, t reflect.Type) (sentinelSeen bool, subjects int, err error) {
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		tag, ok := field.Tag.Lookup(TagName)
-		if !ok {
-			if err := checkSiblingName(spec, &field); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		if tag == tagValSubject {
+		switch {
+		case !ok:
+			err = checkSiblingName(spec, &field)
+		case tag == tagValSubject:
 			subjects++
-			if err := applySubject(spec, &field); err != nil {
-				return nil, err
-			}
-			continue
+			err = applySubject(spec, &field)
+		case sentinelSeen:
+			err = tagError(CodeTagInvalid, fmt.Sprintf("seal sentinel declared twice (second on field %s)", field.Name))
+		default:
+			sentinelSeen = true
+			err = parseSentinel(spec, tag)
 		}
-		if sentinelSeen {
-			return nil, tagError(CodeTagInvalid, fmt.Sprintf("seal sentinel declared twice (second on field %s)", field.Name))
-		}
-		sentinelSeen = true
-		if err := parseSentinel(spec, tag); err != nil {
-			return nil, err
+		if err != nil {
+			return sentinelSeen, subjects, err
 		}
 	}
+	return sentinelSeen, subjects, nil
+}
 
+// resolveSpec judges what the walk counted: no seal tag at all is (nil, nil), anything else
+// must be one sentinel plus exactly one Subject.
+func resolveSpec(spec *Spec, sentinelSeen bool, subjects int) (*Spec, error) {
 	switch {
 	case !sentinelSeen && subjects == 0:
 		return nil, nil

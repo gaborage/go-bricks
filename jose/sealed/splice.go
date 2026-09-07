@@ -62,14 +62,9 @@ func walkToSubject(doc []byte, path string, refuseCaseFoldTwin bool) (subjectSpa
 	}
 	var found *subjectSpan
 	for dec.More() {
-		tok, err := dec.Token()
+		key, raw, err := nextMember(dec)
 		if err != nil {
-			return subjectSpan{}, docError(err)
-		}
-		key, _ := tok.(string) // in key position the decoder yields a string or an error, never another token
-		var raw json.RawMessage
-		if err := dec.Decode(&raw); err != nil {
-			return subjectSpan{}, docError(err)
+			return subjectSpan{}, err
 		}
 		if key != path {
 			if refuseCaseFoldTwin && strings.EqualFold(key, path) {
@@ -83,6 +78,26 @@ func walkToSubject(doc []byte, path string, refuseCaseFoldTwin bool) (subjectSpa
 		end := int(dec.InputOffset())
 		found = &subjectSpan{value: raw, start: end - len(raw), end: end}
 	}
+	return finishWalk(dec, found)
+}
+
+// nextMember consumes one member of the object being walked: its decoded name and its value
+// copied verbatim, both refused by type only when the decoder fails.
+func nextMember(dec *json.Decoder) (key string, raw json.RawMessage, err error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return "", nil, docError(err)
+	}
+	key, _ = tok.(string) // in key position the decoder yields a string or an error, never another token
+	if err := dec.Decode(&raw); err != nil {
+		return "", nil, docError(err)
+	}
+	return key, raw, nil
+}
+
+// finishWalk closes the object and judges what the walk found: the document must end there,
+// and the Subject member must have been seen.
+func finishWalk(dec *json.Decoder, found *subjectSpan) (subjectSpan, error) {
 	if err := expectDelim(dec, '}'); err != nil {
 		return subjectSpan{}, err
 	}
