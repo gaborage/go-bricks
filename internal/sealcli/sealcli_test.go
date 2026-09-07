@@ -170,8 +170,11 @@ func TestKeySourcesLoad(t *testing.T) {
 	for _, tt := range refusalCases {
 		t.Run(tt.name, func(t *testing.T) {
 			keys, err := tt.keys.Load(testSignKid, testEncKid)
+			// Reported by TYPE, never by value (ADR-102).
+			if keys != nil {
+				assert.Fail(t, "unexpected keys returned", "expected no keys, got a %T", keys)
+			}
 			require.Error(t, err)
-			assert.Nil(t, keys)
 			assert.Equal(t, tt.want, err.Error())
 		})
 	}
