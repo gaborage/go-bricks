@@ -1,7 +1,9 @@
 package main
 
 import (
+	"math"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -94,5 +96,105 @@ func TestPackagesOfDedupesAndSorts(t *testing.T) {
 func TestParseUnifiedDiffErrorsOnScanFailure(t *testing.T) {
 	if _, err := parseUnifiedDiff(strings.Repeat("x", 2<<20)); err == nil {
 		t.Error("expected error for an oversized diff line")
+	}
+}
+
+func TestParseHunkRangePinsNewSideBoundaries(t *testing.T) {
+	tests := []struct {
+		name   string
+		line   string
+		want   lineRange
+		wantOK bool
+	}{
+		{"multi_line_hunk", "@@ -25,0 +26,3 @@ func x() {", lineRange{Start: 26, End: 29}, true},
+		{"count_omitted_means_one", "@@ -40 +44 @@", lineRange{Start: 44, End: 45}, true},
+		{"explicit_count_one", "@@ -40,1 +44,1 @@", lineRange{Start: 44, End: 45}, true},
+		{"new_file_from_line_one", "@@ -0,0 +1,2 @@", lineRange{Start: 1, End: 3}, true},
+		{"pure_deletion", "@@ -10,2 +9,0 @@", lineRange{}, false},
+		{"empty_new_side_with_omitted_count", "@@ -1 +0 @@", lineRange{}, false},
+		{"empty_new_side_with_explicit_zero_count", "@@ -1 +0,0 @@", lineRange{}, false},
+		{"not_a_hunk_header", "@@ nonsense", lineRange{}, false},
+		{"trailing_junk_before_at", "x@@ -1 +1 @@", lineRange{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := parseHunkRange(tt.line)
+			if ok != tt.wantOK {
+				t.Fatalf("parseHunkRange(%q) ok = %v, want %v", tt.line, ok, tt.wantOK)
+			}
+			if got != tt.want {
+				t.Errorf("parseHunkRange(%q) = %+v, want %+v", tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
+// End is exclusive, so a 3-line hunk starting at 26 must cover exactly 26..28.
+func TestParseHunkRangeEndIsExclusive(t *testing.T) {
+	got, ok := parseHunkRange("@@ -25,0 +26,3 @@")
+	if !ok {
+		t.Fatal("parseHunkRange rejected a valid hunk")
+	}
+	if got.Start != 26 {
+		t.Errorf("first line = %d, want 26", got.Start)
+	}
+	if got.End-1 != 28 {
+		t.Errorf("last line = %d, want 28", got.End-1)
+	}
+	if got.End-got.Start != 3 {
+		t.Errorf("span = %d, want 3", got.End-got.Start)
+	}
+}
+
+func TestParseHunkRangeRejectsUnrepresentableHeaders(t *testing.T) {
+	const tooBig = "99999999999999999999999" // parses to MaxInt with ErrRange
+	maxInt := strconv.Itoa(math.MaxInt)
+	tests := []struct {
+		name string
+		line string
+	}{
+		{"count_out_of_int_range", "@@ -1,1 +1," + tooBig + " @@"},
+		{"count_out_of_int_range_at_line_zero", "@@ -1,1 +0," + tooBig + " @@"},
+		{"start_out_of_int_range", "@@ -1,1 +" + tooBig + ",1 @@"},
+		{"start_plus_count_overflows", "@@ -1,1 +" + maxInt + ",2 @@"},
+		{"implicit_count_overflows_at_max_start", "@@ -1,1 +" + maxInt + " @@"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := parseHunkRange(tt.line)
+			if ok {
+				t.Errorf("parseHunkRange(%q) = %#v, true; want ok=false", tt.line, got)
+			}
+			if got != (lineRange{}) {
+				t.Errorf("parseHunkRange(%q) range = %#v, want zero value", tt.line, got)
+			}
+		})
+	}
+}
+
+func TestParseHunkRangeAcceptsTheLargestRepresentableHeader(t *testing.T) {
+	line := "@@ -1,1 +" + strconv.Itoa(math.MaxInt-1) + ",1 @@"
+	got, ok := parseHunkRange(line)
+	if !ok {
+		t.Fatalf("parseHunkRange(%q) = _, false; want ok=true", line)
+	}
+	want := lineRange{Start: math.MaxInt - 1, End: math.MaxInt}
+	if got != want {
+		t.Errorf("parseHunkRange(%q) = %#v, want %#v", line, got, want)
+	}
+}
+
+func TestParseUnifiedDiffSkipsUnrepresentableHunks(t *testing.T) {
+	diff := "--- a/f.go\n+++ b/f.go\n" +
+		"@@ -1,1 +0,99999999999999999999999 @@\n+x\n" +
+		"@@ -9,1 +" + strconv.Itoa(math.MaxInt) + ",2 @@\n+y\n" +
+		"@@ -20,0 +21,2 @@\n+ok1\n+ok2\n"
+	got, err := parseUnifiedDiff(diff)
+	if err != nil {
+		t.Fatalf("parseUnifiedDiff: %v", err)
+	}
+	want := map[string][]lineRange{"f.go": {{Start: 21, End: 23}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parseUnifiedDiff = %#v, want %#v", got, want)
 	}
 }

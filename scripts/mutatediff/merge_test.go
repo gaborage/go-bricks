@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -216,5 +219,186 @@ func TestMergeShardsAcceptsRealCaptureShapedShard(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"mutants_not_covered":42`) {
 		t.Fatalf("not_covered lost in merge: %s", data)
+	}
+}
+
+func shardPaths(dir string, names ...string) []string {
+	paths := make([]string, 0, len(names))
+	for _, n := range names {
+		paths = append(paths, filepath.Join(dir, n))
+	}
+	return paths
+}
+
+type accumulateCase struct {
+	name         string
+	shards       map[string]string
+	order        []string
+	absOutName   string
+	wantReadable int
+	wantSkipped  int
+	wantOverflow string
+	wantKilled   int
+	wantLived    int
+	wantNotCov   int
+	wantFiles    []string
+}
+
+func runAccumulateCase(t *testing.T, tt *accumulateCase) {
+	t.Helper()
+	dir := t.TempDir()
+	for name, content := range tt.shards {
+		writeShard(t, dir, name, content)
+	}
+	absOut := ""
+	if tt.absOutName != "" {
+		abs, err := filepath.Abs(filepath.Join(dir, tt.absOutName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		absOut = abs
+	}
+
+	merged := mergedReport{Files: []json.RawMessage{}}
+	readable, skipped, err := accumulateShards(&merged, shardPaths(dir, tt.order...), absOut, io.Discard)
+
+	if readable != tt.wantReadable || skipped != tt.wantSkipped {
+		t.Errorf("readable/skipped = %d/%d, want %d/%d", readable, skipped, tt.wantReadable, tt.wantSkipped)
+	}
+	switch {
+	case tt.wantOverflow == "":
+		if err != nil {
+			t.Errorf("accumulateShards err = %v, want nil", err)
+		}
+	case err == nil:
+		t.Errorf("accumulateShards err = nil, want an overflow naming %s", tt.wantOverflow)
+	default:
+		want := "aggregate counters would overflow at " + filepath.Join(dir, tt.wantOverflow) +
+			" — refusing to write a corrupt report"
+		if err.Error() != want {
+			t.Errorf("accumulateShards err = %q, want %q", err, want)
+		}
+	}
+	if merged.MutantsKilled != tt.wantKilled || merged.MutantsLived != tt.wantLived || merged.MutantsNotCovered != tt.wantNotCov {
+		t.Errorf("counters = %d/%d/%d, want %d/%d/%d",
+			merged.MutantsKilled, merged.MutantsLived, merged.MutantsNotCovered,
+			tt.wantKilled, tt.wantLived, tt.wantNotCov)
+	}
+	got := make([]string, 0, len(merged.Files))
+	for _, f := range merged.Files {
+		got = append(got, string(f))
+	}
+	if !reflect.DeepEqual(got, tt.wantFiles) {
+		t.Errorf("files = %v, want %v", got, tt.wantFiles)
+	}
+}
+
+func TestAccumulateShardsFoldsCountersAndFiles(t *testing.T) {
+	const a = `{"mutants_total":60,"mutants_killed":51,"mutants_lived":7,"mutants_not_covered":2,"files":["a"]}`
+	const b = `{"mutants_total":7,"mutants_killed":7,"mutants_lived":0,"mutants_not_covered":0,"files":["b"]}`
+	const broken = `{truncated`
+	const maxKilled = `{"mutants_total":9223372036854775807,"mutants_killed":9223372036854775807,"files":["m"]}`
+
+	tests := []accumulateCase{
+		{
+			name:         "two_shards_sum_and_keep_path_order",
+			shards:       map[string]string{"1.json": a, "2.json": b},
+			order:        []string{"1.json", "2.json"},
+			wantReadable: 2, wantKilled: 58, wantLived: 7, wantNotCov: 2,
+			wantFiles: []string{`"a"`, `"b"`},
+		},
+		{
+			name:         "reversed_paths_reverse_files",
+			shards:       map[string]string{"1.json": a, "2.json": b},
+			order:        []string{"2.json", "1.json"},
+			wantReadable: 2, wantKilled: 58, wantLived: 7, wantNotCov: 2,
+			wantFiles: []string{`"b"`, `"a"`},
+		},
+		{
+			name:         "unreadable_shard_is_skipped_not_counted",
+			shards:       map[string]string{"1.json": a, "2.json": broken},
+			order:        []string{"1.json", "2.json"},
+			wantReadable: 1, wantSkipped: 1, wantKilled: 51, wantLived: 7, wantNotCov: 2,
+			wantFiles: []string{`"a"`},
+		},
+		{
+			name:         "own_output_is_never_folded",
+			shards:       map[string]string{"1.json": a, "merged.json": b},
+			order:        []string{"1.json", "merged.json"},
+			absOutName:   "merged.json",
+			wantReadable: 1, wantKilled: 51, wantLived: 7, wantNotCov: 2,
+			wantFiles: []string{`"a"`},
+		},
+		{
+			name:         "overflow_names_the_offending_shard",
+			shards:       map[string]string{"1.json": maxKilled, "2.json": maxKilled},
+			order:        []string{"1.json", "2.json"},
+			wantOverflow: "2.json",
+			wantReadable: 1, wantKilled: math.MaxInt,
+			wantFiles: []string{`"m"`},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) { runAccumulateCase(t, &tt) })
+	}
+}
+
+func TestSetRatesDerivesPercentages(t *testing.T) {
+	tests := []struct {
+		name         string
+		killed       int
+		lived        int
+		notCovered   int
+		wantEfficacy float64
+		wantCoverage float64
+	}{
+		{"real_capture", 330, 26, 42, 92.69662921348315, 89.44723618090453},
+		{"single_shard", 51, 7, 2, 87.93103448275862, 96.66666666666667},
+		{"not_covered_excluded_from_efficacy", 1, 1, 98, 50, 2},
+		{"all_killed", 4, 0, 0, 100, 100},
+		{"no_verdicts_but_not_covered", 0, 0, 5, 0, 0},
+		{"nothing_seen", 0, 0, 0, 0, 0},
+		// Counters this large only reach setRates through a corrupt shard, but the
+		// int sum of the three wraps negative and would zero the coverage rate.
+		{"maxint_scale_counters", math.MaxInt / 2, math.MaxInt / 2, math.MaxInt / 2, 50, 200.0 / 3},
+		{"maxint_counters_wrap_the_verdicted_sum", math.MaxInt, math.MaxInt, 0, 50, 100},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			merged := mergedReport{MutantsKilled: tt.killed, MutantsLived: tt.lived, MutantsNotCovered: tt.notCovered}
+			setRates(&merged)
+			if math.Abs(merged.TestEfficacy-tt.wantEfficacy) > 1e-9 {
+				t.Errorf("efficacy = %v, want %v", merged.TestEfficacy, tt.wantEfficacy)
+			}
+			if math.Abs(merged.MutationsCoverage-tt.wantCoverage) > 1e-9 {
+				t.Errorf("coverage = %v, want %v", merged.MutationsCoverage, tt.wantCoverage)
+			}
+		})
+	}
+}
+
+func TestSetRatesKeepsPercentagesFiniteAtMaxIntScale(t *testing.T) {
+	merged := mergedReport{
+		MutantsKilled:     math.MaxInt / 2,
+		MutantsLived:      math.MaxInt / 2,
+		MutantsNotCovered: math.MaxInt / 2,
+	}
+	setRates(&merged)
+	for _, r := range []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"test_efficacy", merged.TestEfficacy, 50},
+		{"mutations_coverage", merged.MutationsCoverage, 200.0 / 3},
+	} {
+		if math.IsNaN(r.got) || math.IsInf(r.got, 0) {
+			t.Errorf("%s = %v, want a finite percentage", r.name, r.got)
+			continue
+		}
+		if math.Abs(r.got-r.want) > 1e-9 {
+			t.Errorf("%s = %v, want %v", r.name, r.got, r.want)
+		}
 	}
 }

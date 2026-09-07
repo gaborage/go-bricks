@@ -4,6 +4,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"math"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -21,6 +22,35 @@ type lineRange struct {
 
 var hunkRe = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 
+// parseHunkRange reads the new-file side of a hunk header. ok=false for a
+// non-hunk line, for a pure deletion (+n,0), which touches no new line, for a
+// non-empty range starting at line 0, which no file has, and for a header whose
+// numbers do not fit an int: the regexp only proves they are digits, so an
+// out-of-range Atoi (which yields MaxInt) or a start+count past MaxInt would
+// otherwise be silently turned into a wrapped, bogus range.
+func parseHunkRange(line string) (lineRange, bool) {
+	m := hunkRe.FindStringSubmatch(line)
+	if m == nil {
+		return lineRange{}, false
+	}
+	start, err := strconv.Atoi(m[1])
+	if err != nil {
+		return lineRange{}, false
+	}
+	count := 1
+	if m[2] != "" {
+		if count, err = strconv.Atoi(m[2]); err != nil {
+			return lineRange{}, false
+		}
+	}
+	// start == 0 is reachable only with a count, since the zero count is already
+	// out: `@@ -1 +0 @@` means "no new lines" but its omitted count defaults to 1.
+	if count == 0 || start == 0 || count > math.MaxInt-start {
+		return lineRange{}, false
+	}
+	return lineRange{Start: start, End: start + count}, true
+}
+
 func parseUnifiedDiff(diff string) (map[string][]lineRange, error) {
 	changes := map[string][]lineRange{}
 	var current string
@@ -37,19 +67,9 @@ func parseUnifiedDiff(diff string) (map[string][]lineRange, error) {
 			if current == "" {
 				continue
 			}
-			m := hunkRe.FindStringSubmatch(line)
-			if m == nil {
-				continue
+			if r, ok := parseHunkRange(line); ok {
+				changes[current] = append(changes[current], r)
 			}
-			start, _ := strconv.Atoi(m[1])
-			count := 1
-			if m[2] != "" {
-				count, _ = strconv.Atoi(m[2])
-			}
-			if count == 0 {
-				continue
-			}
-			changes[current] = append(changes[current], lineRange{Start: start, End: start + count})
 		}
 	}
 	if err := sc.Err(); err != nil {
