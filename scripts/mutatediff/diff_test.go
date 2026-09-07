@@ -111,6 +111,8 @@ func TestParseHunkRangePinsNewSideBoundaries(t *testing.T) {
 		{"explicit_count_one", "@@ -40,1 +44,1 @@", lineRange{Start: 44, End: 45}, true},
 		{"new_file_from_line_one", "@@ -0,0 +1,2 @@", lineRange{Start: 1, End: 3}, true},
 		{"pure_deletion", "@@ -10,2 +9,0 @@", lineRange{}, false},
+		{"empty_new_side_with_omitted_count", "@@ -1 +0 @@", lineRange{}, false},
+		{"empty_new_side_with_explicit_zero_count", "@@ -1 +0,0 @@", lineRange{}, false},
 		{"not_a_hunk_header", "@@ nonsense", lineRange{}, false},
 		{"trailing_junk_before_at", "x@@ -1 +1 @@", lineRange{}, false},
 	}

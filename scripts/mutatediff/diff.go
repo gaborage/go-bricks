@@ -23,10 +23,11 @@ type lineRange struct {
 var hunkRe = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 
 // parseHunkRange reads the new-file side of a hunk header. ok=false for a
-// non-hunk line, for a pure deletion (+n,0), which touches no new line, and for
-// a header whose numbers do not fit an int: the regexp only proves they are
-// digits, so an out-of-range Atoi (which yields MaxInt) or a start+count past
-// MaxInt would otherwise be silently turned into a wrapped, bogus range.
+// non-hunk line, for a pure deletion (+n,0), which touches no new line, for a
+// non-empty range starting at line 0, which no file has, and for a header whose
+// numbers do not fit an int: the regexp only proves they are digits, so an
+// out-of-range Atoi (which yields MaxInt) or a start+count past MaxInt would
+// otherwise be silently turned into a wrapped, bogus range.
 func parseHunkRange(line string) (lineRange, bool) {
 	m := hunkRe.FindStringSubmatch(line)
 	if m == nil {
@@ -42,7 +43,9 @@ func parseHunkRange(line string) (lineRange, bool) {
 			return lineRange{}, false
 		}
 	}
-	if count == 0 || count > math.MaxInt-start {
+	// start == 0 is reachable only with a count, since the zero count is already
+	// out: `@@ -1 +0 @@` means "no new lines" but its omitted count defaults to 1.
+	if count == 0 || start == 0 || count > math.MaxInt-start {
 		return lineRange{}, false
 	}
 	return lineRange{Start: start, End: start + count}, true
