@@ -198,7 +198,7 @@ Consequences worth knowing:
   **`messaging.reconnect.readytimeout`** (checked when > 0), because a shorter value expires
   *inside* the client's readiness pre-flight, so a not-ready broker surfaces as
   `context.DeadlineExceeded` instead of `ErrNotConnected` — which defeats the relay's mid-batch
-  broker-drop detection (`outcomeBrokerDown` never fires) and reintroduces the serial per-record
+  broker-drop detection (`shipBrokerDown` never fires) and reintroduces the serial per-record
   stall that detection exists to cap. And it must be ≥ **`messaging.reconnect.resenddelay`**
   (checked when > 0 **and** `messaging.reconnect.maxpublishattempts != 1`), because a shorter
   value expires inside a single publish-retry wait, so each retryable event burns its whole
@@ -271,15 +271,19 @@ for that cycle, rather than each of them paying the publish deadline in turn. Ea
 has its own producer, so a stall in one says nothing about the others: rows aimed at a healthy
 stream, and every AMQP row, drain the same cycle.
 
-Each lane is served by its own **shipper** — the relay's per-lane adapter, which reports the
-lane's readiness once per cycle, plans a row without touching a client, makes one attempt, and
-classifies its own failure ([ADR-088](adr_088_outbox_ordered_leader_relay.md)). The AMQP lane's
-pre-flight is the client's `IsReady()`, taken once for the whole lane. The stream lane's is per
-TARGET rather than lane-wide: before publishing, it asks that super stream's
-`(*streams.Publisher).Ready()`, so a producer that is reconnecting, closed or not yet bound is
-held back for free. It narrows the stall, it does not remove it — an OPEN producer that has
-stopped confirming still looks ready, and the first such row of a cycle pays one
-`outbox.publishtimeout` before the rest of that stream's rows are held.
+Each lane is served by its own **shipper** — the relay's per-lane adapter that plans a row
+without touching a client, makes one attempt, and classifies its own failure
+([ADR-088](adr_088_outbox_ordered_leader_relay.md)). Only the AMQP lane has a lane-wide
+pre-flight: its `Ready()` asks the client's `IsReady()` once per cycle, so a down broker holds
+back the whole lane before any row in the batch is attempted. The stream lane's `Ready()`
+always returns nil — its handles are per super stream, so there is no lane-wide outage check to
+run — and readiness is judged per TARGET instead, inside `Ship`: a closed producer aborts the
+row (the shutdown window, not a failure), and a producer whose `(*streams.Publisher).Ready()`
+is false holds back only that target's remaining rows for the cycle as `shipScopeDown`, so a
+producer that is reconnecting or not yet bound costs nothing to the others. It narrows the
+stall, it does not remove it — an OPEN producer that has stopped confirming still looks ready,
+and the first such row of a cycle pays one `outbox.publishtimeout` before the rest of that
+stream's rows are held.
 
 The guarantee is **causal**, not global: a dependent event's transaction begins after its cause
 committed, so its `seq` is higher. Two independent transactions may commit out of `seq` order

@@ -263,7 +263,7 @@ func (m *Module) verifyStartupDatabase() error {
 // It also requires publishtimeout >= messaging.reconnect.readytimeout: a shorter value makes
 // the per-record deadline expire INSIDE the client's readiness pre-flight, so a not-ready
 // broker surfaces as context.DeadlineExceeded instead of ErrNotConnected — which silently
-// defeats the relay's mid-batch broker-drop detection (outcomeBrokerDown never fires) and
+// defeats the relay's mid-batch broker-drop detection (shipBrokerDown never fires) and
 // reintroduces the serial per-record stall it exists to cap.
 //
 // It also requires publishtimeout >= messaging.reconnect.resenddelay unless

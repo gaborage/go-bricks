@@ -64,11 +64,19 @@ func (s *amqpShipper) Plan(rec *Record, headers map[string]any) shipment {
 // that is not a shutdown and not an unwritable frame is connectivity — a NACK included,
 // since a NACK is a transient broker condition rather than a bad message.
 func (s *amqpShipper) Ship(ctx context.Context, sh *shipment) verdict {
+	start := time.Now()
 	client, err := s.client(ctx)
 	if err != nil {
 		// The client resolved at pre-flight and is gone now: an outage mid-batch, not a
 		// fault of this row, so the remainder must not each pay for discovering it.
 		return verdict{Kind: shipBrokerDown, Err: err}
+	}
+	if client == nil {
+		// Ready already treats a resolver returning (nil, nil) as the lane being
+		// unusable; Ship must read the same condition identically instead of falling
+		// into the publish path, where the door's own nil-client error would classify
+		// as an ordinary retry and advance only this row instead of stopping the cycle.
+		return verdict{Kind: shipBrokerDown, Err: brokerUnavailableErr(nil), Waited: time.Since(start)}
 	}
 
 	opts := publishdoor.Options{
@@ -83,7 +91,6 @@ func (s *amqpShipper) Ship(ctx context.Context, sh *shipment) verdict {
 	if publish == nil {
 		publish = registeredDoor
 	}
-	start := time.Now()
 	err = publish(ctx, client, opts, sh.Record.Payload)
 
 	switch {

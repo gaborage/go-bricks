@@ -128,11 +128,16 @@ func TestAMQPShipperShipsTheRecordToItsDestination(t *testing.T) {
 func TestAMQPShipperClassifiesItsPublishFailures(t *testing.T) {
 	destinationErr := fmt.Errorf("%w: routing key is 256 bytes, limit is 255", messaging.ErrInvalidPublishDestination)
 	nackErr := fmt.Errorf("%w after 5 attempts: %w", messaging.ErrPublishRetriesExhausted, messaging.ErrPublishNacked)
+	// The resolver Ready already reports as "the lane is unusable" — a nil client with no
+	// error. Ship must read that condition identically, so the expected text is asked of
+	// Ready itself rather than hand-spelled, and the two can never drift apart.
+	nilClientResolver := func(context.Context) (messaging.AMQPClient, error) { return nil, nil }
 
 	tests := []struct {
 		name       string
 		publishErr error
 		dropsReady bool
+		client     func(context.Context) (messaging.AMQPClient, error)
 		wantKind   verdictKind
 		wantReason string
 	}{
@@ -157,6 +162,10 @@ func TestAMQPShipperClassifiesItsPublishFailures(t *testing.T) {
 		},
 		{name: "a_nack_is_an_ordinary_failure", publishErr: nackErr, wantKind: shipRetry},
 		{name: "confirmation_timeout_is_an_ordinary_failure", publishErr: messaging.ErrPublishConfirmTimeout, wantKind: shipRetry},
+		{
+			name: "nil_client_is_broker_down", client: nilClientResolver,
+			wantKind: shipBrokerDown, wantReason: "messaging not ready",
+		},
 	}
 
 	for _, tt := range tests {
@@ -167,6 +176,9 @@ func TestAMQPShipperClassifiesItsPublishFailures(t *testing.T) {
 				f.PublishHook = func(f *fakeAMQP) { f.Ready = false }
 			}
 			s := newAMQPShipperWithFake(f)
+			if tt.client != nil {
+				s = &amqpShipper{client: tt.client}
+			}
 			rec := &Record{ID: "evt-1", Exchange: "ex", RoutingKey: "rk"}
 
 			v := s.Ship(context.Background(), &shipment{Record: rec, Headers: map[string]any{}})
@@ -175,7 +187,7 @@ func TestAMQPShipperClassifiesItsPublishFailures(t *testing.T) {
 			if tt.wantReason != "" {
 				assert.Equal(t, tt.wantReason, v.Err.Error(), "the poison text is what the ledger records")
 			}
-			if tt.wantKind == shipRetry || tt.wantKind == shipBrokerDown {
+			if tt.client == nil && (tt.wantKind == shipRetry || tt.wantKind == shipBrokerDown) {
 				assert.ErrorIs(t, v.Err, tt.publishErr, "the relay writes this error into the ledger")
 			}
 		})
