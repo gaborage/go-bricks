@@ -759,3 +759,64 @@ func TestPublisherBindingReturnsTheInstalledProducer(t *testing.T) {
 	require.NotNil(t, bound)
 	assert.Same(t, handle, bound.handle)
 }
+
+// TestPublisherReadyWhenProducerOpen is the readiness probe's positive case: a
+// publisher Manager.Start bound to a producer the vendor HA layer reports as
+// open is ready. It builds the publisher the way production does, through a real
+// Start, so the probe is asserted on a binding Start actually installed.
+func TestPublisherReadyWhenProducerOpen(t *testing.T) {
+	fake := newFakeEnvironment()
+	fake.useProducer(openProducer())
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	publisher := decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
+
+	startOnFake(t, testManager(t), fake, decls)
+
+	assert.True(t, publisher.Ready())
+}
+
+// TestPublisherNotReadyWhileReconnecting is the case a probe exists for: the
+// binding is installed and Publish would accept the call, yet the vendor HA layer
+// is rebuilding the connection underneath it, so the publisher is not ready.
+func TestPublisherNotReadyWhileReconnecting(t *testing.T) {
+	fake := newFakeEnvironment()
+	fake.useProducer(&fakeProducer{status: ha.StatusReconnecting})
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	publisher := decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
+
+	startOnFake(t, testManager(t), fake, decls)
+
+	assert.False(t, publisher.Ready())
+}
+
+// TestPublisherNotReadyOnceClosed pins the shutdown answer: once the manager has
+// stopped, the publisher is no longer ready even though the producer it was bound
+// to would still report itself open. A probe that kept saying yes here would keep
+// routing work at a publisher whose binding is gone.
+func TestPublisherNotReadyOnceClosed(t *testing.T) {
+	fake := newFakeEnvironment()
+	fake.useProducer(openProducer())
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	publisher := decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
+	m := testManager(t)
+	startOnFake(t, m, fake, decls)
+	require.True(t, publisher.Ready(), "publisher should be ready while bound to an open producer")
+
+	m.StopConsumers()
+
+	assert.False(t, publisher.Ready())
+}
+
+// TestPublisherNotReadyBeforeStart pins the pre-Start answer: a declared but
+// unbound publisher is not ready. This is the state a readiness endpoint sees
+// while the application is still wiring itself up.
+func TestPublisherNotReadyBeforeStart(t *testing.T) {
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	publisher := decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
+
+	assert.False(t, publisher.Ready())
+}
