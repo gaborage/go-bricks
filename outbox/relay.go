@@ -163,19 +163,16 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 	downLanes, laneErr := r.preflight(ctx)
 
 	var res relayBatchResult
-	runnable := records
-	if len(downLanes) > 0 {
-		// Outage path: a lane is unreachable/not-ready but there ARE pending events on it.
-		// Advance every such record's retry_count (the operator's "still retrying" signal)
-		// without a publish call, so an outage no longer freezes the count, and report the
-		// failure at the job level rather than silently succeeding forever.
-		var outaged []Record
-		runnable, outaged = splitOnDownLanes(records, downLanes)
-		r.markOutage(ctx, log, db, lead, outaged, &res)
-		if len(runnable) == 0 {
-			r.logCycle(log, tenantID, &res, len(records))
-			return laneErr
-		}
+	// Outage path: a lane that is unreachable/not-ready still has pending events on it.
+	// Advance every such record's retry_count (the operator's "still retrying" signal)
+	// without a publish call, so an outage no longer freezes the count, and report the
+	// failure at the job level rather than silently succeeding forever. With no lane down
+	// the split hands every row back as runnable and outages nothing.
+	runnable, outaged := splitOnDownLanes(records, downLanes)
+	r.markOutage(ctx, log, db, lead, outaged, &res)
+	if len(runnable) == 0 {
+		r.logCycle(log, tenantID, &res, len(records))
+		return laneErr
 	}
 
 	r.runRelayLoop(ctx, log, db, lead, runnable, &res)
