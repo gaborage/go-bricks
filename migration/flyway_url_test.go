@@ -950,3 +950,122 @@ func TestURLDatabaseSegmentKeepsAPlusLiteral(t *testing.T) {
 	assert.Contains(t, got, "/bill%2Bing?")
 	assert.NotContains(t, got, "/bill+ing")
 }
+
+// TestConfOwnedURLError pins the deferral boundary directly: which conf-owned
+// shapes fail closed, and which hand the URL to flyway.conf with a nil error.
+func TestConfOwnedURLError(t *testing.T) {
+	tests := []struct {
+		name    string
+		db      *config.DatabaseConfig
+		vendor  string
+		wantErr error
+	}{
+		{name: "nil_config_defers", vendor: config.PostgreSQL},
+		{
+			name:   "oracle_defers_even_with_tls",
+			db:     &config.DatabaseConfig{Type: config.Oracle, Host: "db.internal", TLS: config.TLSConfig{Mode: "require"}},
+			vendor: config.Oracle,
+		},
+		{
+			name:   "bare_connectionstring_defers",
+			db:     &config.DatabaseConfig{Type: config.PostgreSQL, ConnectionString: "postgres://db/billing"},
+			vendor: config.PostgreSQL,
+		},
+		{
+			name:    "connectionstring_with_tls_fails",
+			db:      &config.DatabaseConfig{Type: config.PostgreSQL, ConnectionString: "postgres://db/billing", TLS: config.TLSConfig{Mode: "require"}},
+			vendor:  config.PostgreSQL,
+			wantErr: ErrMigrationTLSWithConnectionString,
+		},
+		{
+			name:   "no_target_and_no_tls_defers",
+			db:     &config.DatabaseConfig{Type: config.PostgreSQL, Password: "longenough-pw"},
+			vendor: config.PostgreSQL,
+		},
+		{
+			name:    "partial_target_fails",
+			db:      &config.DatabaseConfig{Type: config.PostgreSQL, Database: "billing"},
+			vendor:  config.PostgreSQL,
+			wantErr: ErrIncompleteMigrationTarget,
+		},
+		{
+			name:    "tls_without_target_fails",
+			db:      &config.DatabaseConfig{Type: config.PostgreSQL, TLS: config.TLSConfig{Mode: "verify-full"}},
+			vendor:  config.PostgreSQL,
+			wantErr: ErrIncompleteMigrationTarget,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := confOwnedURLError(tt.db, tt.vendor)
+			if tt.wantErr == nil {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, tt.wantErr)
+		})
+	}
+}
+
+// TestValidateURLFields pins each guard the framework-built URL depends on, and
+// the normalized mode/CA a valid config hands back.
+func TestValidateURLFields(t *testing.T) {
+	tests := []struct {
+		name     string
+		apply    func(*config.DatabaseConfig)
+		wantMode string
+		wantCA   string
+		wantErr  error
+	}{
+		{name: "valid_without_tls", apply: func(*config.DatabaseConfig) {}},
+		{
+			name:     "valid_trims_mode_and_ca",
+			apply:    func(c *config.DatabaseConfig) { c.TLS.Mode = " verify-full "; c.TLS.CAFile = " " + testTLSCAPath + " " },
+			wantMode: sslModeVerifyFull,
+			wantCA:   testTLSCAPath,
+		},
+		{
+			name:    "control_character_rejected",
+			apply:   func(c *config.DatabaseConfig) { c.Database = "bill\ning" },
+			wantErr: ErrEnvFieldHasControlChar,
+		},
+		{
+			name:    "bad_host_rejected",
+			apply:   func(c *config.DatabaseConfig) { c.Host = "h/?sslmode=disable" },
+			wantErr: ErrInvalidMigrationHost,
+		},
+		{
+			name:    "bad_port_rejected",
+			apply:   func(c *config.DatabaseConfig) { c.Port = 65536 },
+			wantErr: ErrInvalidMigrationPort,
+		},
+		{
+			name:    "bad_tls_mode_rejected",
+			apply:   func(c *config.DatabaseConfig) { c.TLS.Mode = "Require" },
+			wantErr: ErrInvalidMigrationTLSMode,
+		},
+		{
+			name:    "ca_without_verify_mode_rejected",
+			apply:   func(c *config.DatabaseConfig) { c.TLS.Mode = "require"; c.TLS.CAFile = testTLSCAPath },
+			wantErr: ErrMigrationTLSCARequiresVerify,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := pgURLConfig()
+			tt.apply(db)
+
+			mode, ca, err := validateURLFields(db)
+
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				assert.Empty(t, mode)
+				assert.Empty(t, ca)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantMode, mode)
+			assert.Equal(t, tt.wantCA, ca)
+		})
+	}
+}

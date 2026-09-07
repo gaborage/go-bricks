@@ -328,42 +328,59 @@ func unbracket(host string) string {
 	return host
 }
 
+// confOwnedURLError names the two ways a conf-owned PostgreSQL run still fails
+// rather than defers. A DSN carries its own TLS, so a database.tls block beside
+// one cannot reach the connection; and a partially filled block is a broken
+// target. Everything else — Oracle, a bare DSN, a block naming no target and no
+// TLS — defers, and gets a nil error.
+func confOwnedURLError(db *config.DatabaseConfig, vendor string) error {
+	if vendor != config.PostgreSQL || db == nil {
+		return nil
+	}
+	switch {
+	case db.ConnectionString != "":
+		if hasTLSSettings(db) {
+			return ErrMigrationTLSWithConnectionString
+		}
+	case namesURLTarget(db) || hasTLSSettings(db):
+		return ErrIncompleteMigrationTarget
+	}
+	return nil
+}
+
+// validateURLFields runs every check the framework-built URL depends on, in the
+// order their errors are documented, and returns the normalized TLS mode and CA
+// file the URL builder needs.
+func validateURLFields(db *config.DatabaseConfig) (tlsMode, caFile string, err error) {
+	if envErr := validateEnvFields(db); envErr != nil {
+		return "", "", envErr
+	}
+	if hostErr := validateMigrationHost(db.Host); hostErr != nil {
+		return "", "", hostErr
+	}
+	if portErr := validateMigrationPort(db.Port); portErr != nil {
+		return "", "", portErr
+	}
+	tlsMode, err = validateMigrationTLSMode(db.TLS.Mode)
+	if err != nil {
+		return "", "", err
+	}
+	caFile, err = validateMigrationTLSCA(db.TLS.CAFile, tlsMode)
+	if err != nil {
+		return "", "", err
+	}
+	return tlsMode, caFile, nil
+}
+
 // urlArgs returns the `-url=` flag for runs the framework owns the URL for, or
 // nil for the documented conf-owned cases (Oracle, bare connectionstring). Host and
 // database reach argv from here, so validateEnvFields runs before they do — the
 // same guard buildEnvironmentVariables applies to the subprocess environment.
 func urlArgs(db *config.DatabaseConfig, vendor, appName string) ([]string, error) {
 	if !usesFrameworkOwnedURL(db, vendor) {
-		// Two ways a conf-owned PostgreSQL run still fails rather than defers. A DSN
-		// carries its own TLS, so a database.tls block beside one cannot reach the
-		// connection; and a partially filled block is a broken target. Everything else
-		// — Oracle, a bare DSN, a block naming no target and no TLS — defers.
-		if vendor == config.PostgreSQL && db != nil {
-			switch {
-			case db.ConnectionString != "":
-				if hasTLSSettings(db) {
-					return nil, ErrMigrationTLSWithConnectionString
-				}
-			case namesURLTarget(db) || hasTLSSettings(db):
-				return nil, ErrIncompleteMigrationTarget
-			}
-		}
-		return nil, nil
+		return nil, confOwnedURLError(db, vendor)
 	}
-	if err := validateEnvFields(db); err != nil {
-		return nil, err
-	}
-	if err := validateMigrationHost(db.Host); err != nil {
-		return nil, err
-	}
-	if err := validateMigrationPort(db.Port); err != nil {
-		return nil, err
-	}
-	tlsMode, err := validateMigrationTLSMode(db.TLS.Mode)
-	if err != nil {
-		return nil, err
-	}
-	caFile, err := validateMigrationTLSCA(db.TLS.CAFile, tlsMode)
+	tlsMode, caFile, err := validateURLFields(db)
 	if err != nil {
 		return nil, err
 	}
