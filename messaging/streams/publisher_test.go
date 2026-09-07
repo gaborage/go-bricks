@@ -759,3 +759,50 @@ func TestPublisherBindingReturnsTheInstalledProducer(t *testing.T) {
 	require.NotNil(t, bound)
 	assert.Same(t, handle, bound.handle)
 }
+
+// TestPublisherReadyTracksProducerStatus pins the readiness probe across every
+// state a publisher's binding can be in. Bound to a producer the vendor HA layer
+// reports as open, it is ready; bound while that layer is rebuilding the
+// connection underneath it, it is not. Once the manager has stopped it is no
+// longer ready even though the producer it was bound to would still report itself
+// open — a probe that kept saying yes there would keep routing work at a publisher
+// whose binding is gone. A declared but never-started publisher is not ready
+// either: that is the state a readiness endpoint sees while the application is
+// still wiring itself up. Each started case goes through a real Start, so the
+// probe is asserted on a binding Start actually installed.
+func TestPublisherReadyTracksProducerStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		start  bool
+		stop   bool
+		want   bool
+	}{
+		{name: "producer_open", status: ha.StatusOpen, start: true, want: true},
+		{name: "producer_reconnecting", status: ha.StatusReconnecting, start: true, want: false},
+		{name: "closed_after_stop", status: ha.StatusOpen, start: true, stop: true, want: false},
+		{name: "before_start", status: ha.StatusOpen, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decls := NewDeclarations()
+			decls.DeclareStream(testStream, nil)
+			publisher := decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
+
+			if tt.start {
+				fake := newFakeEnvironment()
+				fake.useProducer(&fakeProducer{status: tt.status})
+				m := testManager(t)
+				startOnFake(t, m, fake, decls)
+
+				if tt.stop {
+					require.True(t, publisher.Ready(), "publisher should be ready while bound to an open producer")
+					m.StopConsumers()
+				}
+			}
+
+			assert.Equal(t, tt.want, publisher.Ready())
+		})
+	}
+}

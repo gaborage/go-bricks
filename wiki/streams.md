@@ -570,6 +570,14 @@ reports `unhealthy` unless every bound publisher's connection is open, and the
 exists for a publisher-only service too — the manager is built whenever anything
 was declared.
 
+`Publisher.Ready()` answers the same question for one publisher: whether its
+producer is connected to the broker as the HA layer reports it (`open` is ready;
+reconnecting, closed, and not-yet-bound are not). It is a snapshot, not a
+delivery guarantee — a broker failure can invalidate it before the next
+`Publish`. Its relation to `Manager.Ready()` is one-way: a publisher that is not
+ready makes the manager not ready, while a ready one does not make the manager
+ready, because the manager judges its consumers too.
+
 On shutdown the consumers stop first and the publishers close after them,
 because a handler may publish on its way out. Closing the producer gives
 in-flight confirmations a last chance to arrive; every publish still awaiting

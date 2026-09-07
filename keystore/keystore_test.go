@@ -55,6 +55,16 @@ func marshalPrivateKeyDER(t *testing.T, priv *rsa.PrivateKey) []byte {
 	return der
 }
 
+// assertNoKeyBytes fails when bytes were returned, reporting their LENGTH only —
+// never the bytes themselves (ADR-102). It records rather than aborts; a site whose
+// later assertions would be meaningless past a stray buffer needs its own require.
+func assertNoKeyBytes(t *testing.T, data []byte) {
+	t.Helper()
+	if data != nil {
+		assert.Fail(t, "unexpected key bytes returned", "expected no bytes, got %d", len(data))
+	}
+}
+
 func TestNewStoreWithFileSource(t *testing.T) {
 	privKey, pubKey := generateTestKeys(t)
 	dir := t.TempDir()
@@ -291,8 +301,8 @@ func TestLoadKeyBytesFromBase64(t *testing.T) {
 
 func TestLoadKeyBytesNeitherSet(t *testing.T) {
 	data, err := loadKeyBytes(config.KeySourceConfig{}, "test", "public")
+	assertNoKeyBytes(t, data)
 	require.NoError(t, err)
-	assert.Nil(t, data)
 }
 
 func TestLoadKeyBytesRejectsMaterialInFileField(t *testing.T) {
@@ -318,8 +328,8 @@ func TestLoadKeyBytesRejectsMaterialInFileField(t *testing.T) {
 	for _, tt := range materialTests {
 		t.Run(tt.name, func(t *testing.T) {
 			data, err := loadKeyBytes(config.KeySourceConfig{File: tt.encoded}, "test", tt.keyType)
+			assertNoKeyBytes(t, data)
 			require.Error(t, err)
-			assert.Nil(t, data)
 			assert.NotContains(t, err.Error(), tt.encoded, "the error must not echo the key material")
 			require.ErrorContains(t, err, "looks like key material")
 		})
@@ -339,8 +349,8 @@ func TestLoadKeyBytesRejectsMaterialInFileField(t *testing.T) {
 		missing := filepath.Join(t.TempDir(), "absent.der")
 
 		data, err := loadKeyBytes(config.KeySourceConfig{File: missing}, "test", "public")
+		assertNoKeyBytes(t, data)
 		require.Error(t, err)
-		assert.Nil(t, data)
 		// %q-quoted, so on Windows the separators arrive escaped — comparing
 		// against the raw path fails there for a reason unrelated to the code.
 		assert.Contains(t, err.Error(), fmt.Sprintf("%q", missing))
@@ -358,8 +368,8 @@ func TestLoadKeyBytesRejectsMaterialInFileField(t *testing.T) {
 		require.Greater(t, len(junk), secretfile.MaxPathEcho, "the point of this case is that eliding cannot save us otherwise")
 
 		data, err := loadKeyBytes(config.KeySourceConfig{File: junk}, "test", "public")
+		assertNoKeyBytes(t, data)
 		require.Error(t, err)
-		assert.Nil(t, data)
 		assert.NotContains(t, err.Error(), junk, "an over-long value must not be echoed")
 		assert.Contains(t, err.Error(), "char value elided")
 	})
