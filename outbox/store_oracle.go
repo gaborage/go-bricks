@@ -67,7 +67,7 @@ type oracleStore struct {
 // NewOracleStore creates a new Oracle outbox store.
 // Returns an error if the table name contains invalid identifier characters.
 func NewOracleStore(tableName string) (Store, error) {
-	if err := validateTableName(tableName); err != nil {
+	if err := validateTableNameForVendor(dbtypes.Oracle, tableName); err != nil {
 		return nil, err
 	}
 	return &oracleStore{sqlStore: newSQLStore(dbtypes.Oracle, "oracle", tableName, "error_msg", scanOracleRecord)}, nil
