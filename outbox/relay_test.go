@@ -1535,7 +1535,6 @@ func TestRelayClassifyPublishFailure(t *testing.T) {
 		ready            bool
 		retryCount       int
 		want             publishOutcome
-		wantErr          bool
 		wantMarkFailed   int
 		wantDeadLettered int
 	}{
@@ -1563,7 +1562,7 @@ func TestRelayClassifyPublishFailure(t *testing.T) {
 		},
 		{
 			name: "not_connected_and_still_unready_is_a_broker_drop", err: messaging.ErrNotConnected,
-			ready: false, want: outcomeBrokerDown, wantErr: true, wantMarkFailed: 1,
+			ready: false, want: outcomeBrokerDown, wantMarkFailed: 1,
 		},
 	}
 
@@ -1579,7 +1578,9 @@ func TestRelayClassifyPublishFailure(t *testing.T) {
 				dbtesting.NewTestDB("postgresql"), amqp, &record, tt.err)
 
 			assert.Equal(t, tt.want, outcome)
-			if tt.wantErr {
+			// Only the broker-down outcome carries the error up; every other arm
+			// reports its outcome and swallows the cause.
+			if tt.want == outcomeBrokerDown {
 				require.ErrorIs(t, err, tt.err, "the connectivity error travels up as the job-level outage error")
 			} else {
 				require.NoError(t, err)

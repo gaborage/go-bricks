@@ -319,7 +319,9 @@ func relayKey(record *Record, headers map[string]any) string {
 	case LaneStream:
 		return LaneStream + ":" + record.Stream + ":" + record.PartitionKey
 	case LaneAMQP, "":
-		if stamp, ok := headers[messaging.TenantStampHeader].(string); ok && stamp != "" {
+		// publishStamp owns the lane-tenant rule; off the stream lane it reads the same
+		// persisted header this key has always used.
+		if stamp := publishStamp(record, headers); stamp != "" {
 			return LaneAMQP + ":tenant:" + stamp
 		}
 		return LaneAMQP + ":" + record.Exchange + ":" + record.RoutingKey
@@ -473,8 +475,6 @@ func publishStamp(record *Record, headers map[string]any) string {
 }
 
 // classifyPublishFailure maps a failed AMQP-lane publish to its bookkeeping outcome.
-// Split out of publishRecord to keep that function's cognitive complexity within budget
-// (gocognit).
 func (r *Relay) classifyPublishFailure(ctx context.Context, log logger.Logger, db dbtypes.Interface, msgClient messaging.AMQPClient, record *Record, err error) (publishOutcome, error) {
 	// Shutdown/cancel is not a delivery failure — do not advance retry_count.
 	if errors.Is(err, context.Canceled) || errors.Is(err, messaging.ErrShutdown) {
