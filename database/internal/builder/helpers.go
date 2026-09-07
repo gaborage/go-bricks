@@ -429,6 +429,19 @@ func (w *operandWalk) follow(r reflect.Value) error {
 	return nil
 }
 
+// settlePointer performs the walk's first contract step for one level: a nil
+// pointer settles the whole walk as an untyped nil, a non-nil one is recorded
+// through follow, and a non-pointer level settles nothing.
+func (w *operandWalk) settlePointer(r reflect.Value) (isNil bool, err error) {
+	if r.Kind() != reflect.Pointer {
+		return false, nil
+	}
+	if r.IsNil() {
+		return true, nil
+	}
+	return false, w.follow(r)
+}
+
 // askValuer spends the walk's single Valuer question, replacing *value with the
 // answer and reporting whether it asked. Asking at most once is what stops a
 // Valuer that answers with another Valuer from spinning the loop.
@@ -501,13 +514,12 @@ func resolveOperand(value any) (resolved any, nullOrList bool, err error) {
 	walk := operandWalk{}
 	r := reflect.ValueOf(value)
 	for {
-		if r.Kind() == reflect.Pointer {
-			if r.IsNil() {
-				return nil, true, nil
-			}
-			if cycleErr := walk.follow(r); cycleErr != nil {
-				return nil, false, cycleErr
-			}
+		isNil, settleErr := walk.settlePointer(r)
+		if settleErr != nil {
+			return nil, false, settleErr
+		}
+		if isNil {
+			return nil, true, nil
 		}
 
 		asked, valuerErr := walk.askValuer(&value)
@@ -526,14 +538,22 @@ func resolveOperand(value any) (resolved any, nullOrList bool, err error) {
 		r = reflect.ValueOf(value)
 	}
 
+	resolved, nullOrList = classifyOperand(value, r)
+	return resolved, nullOrList, nil
+}
+
+// classifyOperand classifies a fully resolved operand and the reflect.Value the
+// walk ended on, the way squirrel's own isListType does: an untyped nil is null,
+// a driver.Value — []byte included — is a scalar, and only a slice or array is a
+// list.
+func classifyOperand(value any, r reflect.Value) (resolved any, nullOrList bool) {
 	if value == nil {
-		return nil, true, nil
+		return nil, true
 	}
-	// squirrel's own isListType: a driver.Value — []byte included — is a scalar.
 	if driver.IsValue(value) {
-		return value, false, nil
+		return value, false
 	}
-	return value, r.Kind() == reflect.Slice || r.Kind() == reflect.Array, nil
+	return value, r.Kind() == reflect.Slice || r.Kind() == reflect.Array
 }
 
 // orderingOperand resolves an ordering operand and fails closed on the shapes an
