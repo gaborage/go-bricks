@@ -56,7 +56,7 @@ type postgresStore struct {
 // NewPostgresStore creates a new PostgreSQL outbox store.
 // Returns an error if the table name contains invalid identifier characters.
 func NewPostgresStore(tableName string) (Store, error) {
-	if err := validateTableName(tableName); err != nil {
+	if err := validateTableNameForVendor(dbtypes.PostgreSQL, tableName); err != nil {
 		return nil, err
 	}
 	return &postgresStore{sqlStore: newSQLStore(dbtypes.PostgreSQL, "postgres", tableName, "error", scanPostgresRecord)}, nil

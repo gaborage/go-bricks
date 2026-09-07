@@ -9,6 +9,33 @@
   (the renderer seam this extends)
 - **Issue**: #1202; the byte-cap half landed in #1437
 
+## Amendment (2026-09-06): the outbox store bounds its schema segment by the store's vendor
+
+The byte-cap amendment below closed the builder half and the inbox store's
+table-name bound, and it recorded that "the outbox schema-prefix bound is
+untouched". That sentence is RETRACTED. #1495 closes the residual it named: both
+outbox store constructors now judge the table name's schema segment against the
+STORE vendor's raw identifier cap — `identifier.MaxPostgreSQLBytes` (63),
+`identifier.MaxOracleBytes` (128) — so a PostgreSQL ledger configured with a
+64-to-128-byte schema prefix is refused at construction instead of booting and
+failing at the first `ToSQL()`, or, on a dynamic-config or multi-tenant
+deployment that skips the startup probe, at the first publish.
+
+The cap on the schema is the RAW one, not the derived-affix budget the table
+segment spends: no name the store derives decorates the schema —
+`sqlid.IndexBaseName` strips it and `sqlid.LeaderTableName` appends to the table
+segment — so the whole 63 or 128 bytes are spendable there. The table segment
+keeps its 49-byte bound on both vendors, since PostgreSQL's truncation is the
+binding one for the `idx_<segment>_published` name.
+
+The split this ADR drew holds unchanged: `sqlid.ValidateTableName` stays at
+Oracle's 128 for every vendor, because its config-time callers judge
+configuration before a connection exists and have no vendor in scope; the store
+constructors, which know their vendor, are the vendor-aware gate. The
+constructor signatures do not move — only their refusal set widens. The outbox's
+new validator deliberately duplicates the inbox's twin rather than sharing one: #1503
+owns the shared name-budget helper and folds both into it.
+
 ## Amendment (2026-09-06): the doors judge the byte cap per segment
 
 The Consequences below recorded a second residual: the doors judged the vendor's

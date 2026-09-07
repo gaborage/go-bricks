@@ -112,3 +112,63 @@ func TestValidateTableNameLengthBound(t *testing.T) {
 		})
 	}
 }
+
+// TestNewPostgresStoreSchemaSegmentBound pins the schema segment against PostgreSQL's raw
+// identifier cap at construction. No derived name decorates the schema — IndexBaseName
+// strips it and LeaderTableName appends to the table segment — so the whole 63 bytes are
+// spendable, and one byte more is refused here instead of inside the first ToSQL.
+func TestNewPostgresStoreSchemaSegmentBound(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema string
+		want   bool
+	}{
+		{name: "schema_at_the_postgresql_cap", schema: strings.Repeat("s", 63)},
+		{name: "schema_one_byte_over_the_postgresql_cap", schema: strings.Repeat("s", 64), want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, err := NewPostgresStore(tt.schema + ".gobricks_outbox")
+			if !tt.want {
+				require.NoError(t, err)
+				assert.NotNil(t, store)
+				return
+			}
+			require.Error(t, err)
+			assert.Nil(t, store)
+			assert.Contains(t, err.Error(), tt.schema)
+			assert.Contains(t, err.Error(), "64")
+			assert.Contains(t, err.Error(), "63")
+		})
+	}
+}
+
+// TestNewOracleStoreSchemaSegmentBound pins the other side of the vendor split: Oracle
+// spends 128 bytes on the schema segment, so a 64-byte schema that PostgreSQL refuses
+// still boots here, and only 129 is over the cap.
+func TestNewOracleStoreSchemaSegmentBound(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema string
+		want   bool
+	}{
+		{name: "schema_over_the_postgresql_cap_is_fine_on_oracle", schema: strings.Repeat("s", 64)},
+		{name: "schema_at_the_oracle_cap", schema: strings.Repeat("s", 128)},
+		{name: "schema_one_byte_over_the_oracle_cap", schema: strings.Repeat("s", 129), want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, err := NewOracleStore(tt.schema + ".gobricks_outbox")
+			if !tt.want {
+				require.NoError(t, err)
+				assert.NotNil(t, store)
+				return
+			}
+			require.Error(t, err)
+			assert.Nil(t, store)
+			assert.Contains(t, err.Error(), "128")
+		})
+	}
+}
