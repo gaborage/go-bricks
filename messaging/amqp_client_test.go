@@ -2435,16 +2435,6 @@ func assertEffectiveDeadline(t *testing.T, ch *fakeChannel, maxRemaining time.Du
 // publishes on.
 var publishRetryTestOptions = publishOptions{Exchange: "ex", RoutingKey: "rk"}
 
-// spanAttribute returns the value written under key, and whether it was present.
-func spanAttribute(attrs []attribute.KeyValue, key string) (attribute.Value, bool) {
-	for _, kv := range attrs {
-		if string(kv.Key) == key {
-			return kv.Value, true
-		}
-	}
-	return attribute.Value{}, false
-}
-
 // attributeKeys returns the attribute keys in emission order, so a test pins the
 // span event's shape and not just its contents.
 func attributeKeys(attrs []attribute.KeyValue) []string {
@@ -2475,24 +2465,22 @@ func retryReasonsFromMetrics(t *testing.T, rm metricdata.ResourceMetrics) []stri
 	return reasons
 }
 
-// TestPublishRetryEpilogueRecordsEveryArm pins the two independent retry
-// vocabularies on the epilogue the three failed-attempt arms share: the METRIC
-// reason (publish_error / nack / timeout) and the SPAN-EVENT reason (publish
-// error / message not acknowledged / confirmation timeout), plus the NACK arm's
-// delivery tag on both the log and the span.
+// TestPublishRetryEpilogueRecordsEveryArm pins the ROUTING the epilogue applies
+// to each of the three failed-attempt arms: the arm's log message and its metric
+// and span-event reasons each reach their own sink, along with the log fields and
+// the span-event attribute keys in emission order, plus the NACK arm's delivery
+// tag on both the log and the span. The reason vocabularies themselves are pinned
+// against the production arms by TestPublishAttemptClassifiesTheOutcome.
 func TestPublishRetryEpilogueRecordsEveryArm(t *testing.T) {
 	publishErr := errors.New("boom")
 	nackTag := uint64(7)
 
 	tests := []struct {
-		name             string
-		arm              *retryArm
-		wantMsg          string
-		wantLogPairs     [][2]string
-		wantMetricReason string
-		wantSpanReason   string
-		wantAttrKeys     []string
-		wantSpanTag      int64 // 0 when the arm carries no delivery tag
+		name         string
+		arm          *retryArm
+		wantLogPairs [][2]string
+		wantAttrKeys []string
+		wantSpanTag  int64 // 0 when the arm carries no delivery tag
 	}{
 		{
 			name: "publish_error_arm",
@@ -2503,11 +2491,8 @@ func TestPublishRetryEpilogueRecordsEveryArm(t *testing.T) {
 				metricReason: "publish_error",
 				spanReason:   "publish error",
 			},
-			wantMsg:          "Publish failed, retrying...",
-			wantLogPairs:     [][2]string{{"error", "boom"}, {"retry_count", "3"}},
-			wantMetricReason: "publish_error",
-			wantSpanReason:   "publish error",
-			wantAttrKeys:     []string{"reason", "error.type", "retry_count"},
+			wantLogPairs: [][2]string{{"error", "boom"}, {"retry_count", "3"}},
+			wantAttrKeys: []string{"reason", "error.type", "retry_count"},
 		},
 		{
 			name: "nack_arm",
@@ -2518,10 +2503,7 @@ func TestPublishRetryEpilogueRecordsEveryArm(t *testing.T) {
 				metricReason: "nack",
 				spanReason:   "message not acknowledged",
 			},
-			wantMsg:          "Message publish not acknowledged, retrying...",
-			wantLogPairs:     [][2]string{{"delivery_tag", "7"}, {"retry_count", "3"}},
-			wantMetricReason: "nack",
-			wantSpanReason:   "message not acknowledged",
+			wantLogPairs: [][2]string{{"delivery_tag", "7"}, {"retry_count", "3"}},
 			wantAttrKeys: []string{
 				"reason",
 				string(semconv.MessagingRabbitMQMessageDeliveryTagKey),
@@ -2537,11 +2519,8 @@ func TestPublishRetryEpilogueRecordsEveryArm(t *testing.T) {
 				metricReason: "timeout",
 				spanReason:   "confirmation timeout",
 			},
-			wantMsg:          "Publish confirmation timeout, retrying...",
-			wantLogPairs:     [][2]string{{"retry_count", "3"}},
-			wantMetricReason: "timeout",
-			wantSpanReason:   "confirmation timeout",
-			wantAttrKeys:     []string{"reason", "retry_count"},
+			wantLogPairs: [][2]string{{"retry_count", "3"}},
+			wantAttrKeys: []string{"reason", "retry_count"},
 		},
 	}
 
@@ -2559,8 +2538,8 @@ func TestPublishRetryEpilogueRecordsEveryArm(t *testing.T) {
 			require.NoError(t, c.publishRetryEpilogue(ctx, publishRetryTestOptions, time.Now(), span, 3, tt.arm))
 			span.End()
 
-			assert.Equal(t, tt.wantLogPairs, log.Line(t, tt.wantMsg).Pairs)
-			assert.Equal(t, []string{tt.wantMetricReason}, retryReasonsFromMetrics(t, mp.Collect(t)))
+			assert.Equal(t, tt.wantLogPairs, log.Line(t, tt.arm.logMsg).Pairs)
+			assert.Equal(t, []string{tt.arm.metricReason}, retryReasonsFromMetrics(t, mp.Collect(t)))
 
 			spans := exporter.GetSpans()
 			require.Len(t, spans, 1)
@@ -2568,11 +2547,9 @@ func TestPublishRetryEpilogueRecordsEveryArm(t *testing.T) {
 			event := spans[0].Events[0]
 			assert.Equal(t, eventPublishRetry, event.Name)
 			assert.Equal(t, tt.wantAttrKeys, attributeKeys(event.Attributes))
-			assertAttributeValue(t, event.Attributes, "reason", tt.wantSpanReason)
+			assertAttributeValue(t, event.Attributes, "reason", tt.arm.spanReason)
 			if tt.wantSpanTag != 0 {
-				tag, ok := spanAttribute(event.Attributes, string(semconv.MessagingRabbitMQMessageDeliveryTagKey))
-				require.True(t, ok)
-				assert.Equal(t, tt.wantSpanTag, tag.AsInt64())
+				assertAttribute(t, event.Attributes, string(semconv.MessagingRabbitMQMessageDeliveryTagKey), tt.wantSpanTag)
 			}
 		})
 	}
@@ -2623,6 +2600,9 @@ func TestPublishRetryEpilogueCeilingAndBackoff(t *testing.T) {
 			maxAttempts: 5,
 			retryCount:  1,
 			backoff:     0,
+			// Nothing is waited on, so the epilogue must return well inside the
+			// ceiling the other skipping rows use.
+			wantMaxElapsed: 100 * time.Millisecond,
 		},
 		{
 			name:           "cancel_during_backoff_aborts",
@@ -2706,16 +2686,12 @@ func TestPublishRetryEpilogueZeroBackoffSkipsTheWait(t *testing.T) {
 	}
 }
 
-// TestPublishAttemptClassifiesTheOutcome pins which arm each failed attempt
-// hands back — including the backoff it selects and the NACK arm's delivery tag —
-// and that a broker ACK produces no arm at all.
 // publishAttemptCase is one expected classification of a failed or confirmed
-// attempt.
+// attempt. A nil wantCause is the ACKed case, which must produce no arm at all.
 type publishAttemptCase struct {
 	name         string
 	publishErr   error
 	confirm      *amqp.Confirmation
-	wantArm      bool
 	wantCause    error
 	wantLogCause bool
 	wantTag      uint64 // 0 when the arm carries no delivery tag
@@ -2725,12 +2701,14 @@ type publishAttemptCase struct {
 	wantBackoff  time.Duration
 }
 
+// TestPublishAttemptClassifiesTheOutcome pins which arm each failed attempt
+// hands back — including the backoff it selects and the NACK arm's delivery tag —
+// and that a broker ACK produces no arm at all.
 func TestPublishAttemptClassifiesTheOutcome(t *testing.T) {
 	tests := []publishAttemptCase{
 		{
 			name:         "publish_error_arm",
 			publishErr:   errFakePublishTransient,
-			wantArm:      true,
 			wantCause:    errFakePublishTransient,
 			wantLogCause: true,
 			wantLogMsg:   "Publish failed, retrying...",
@@ -2741,7 +2719,6 @@ func TestPublishAttemptClassifiesTheOutcome(t *testing.T) {
 		{
 			name:        "nack_arm",
 			confirm:     &amqp.Confirmation{Ack: false, DeliveryTag: 1},
-			wantArm:     true,
 			wantCause:   ErrPublishNacked,
 			wantTag:     1,
 			wantLogMsg:  "Message publish not acknowledged, retrying...",
@@ -2751,7 +2728,6 @@ func TestPublishAttemptClassifiesTheOutcome(t *testing.T) {
 		},
 		{
 			name:        "confirm_timeout_arm",
-			wantArm:     true,
 			wantCause:   ErrPublishConfirmTimeout,
 			wantLogMsg:  "Publish confirmation timeout, retrying...",
 			wantMetric:  "timeout",
@@ -2789,7 +2765,7 @@ func TestPublishAttemptClassifiesTheOutcome(t *testing.T) {
 // assertArm checks the arm publishAttempt handed back against the case.
 func (tc *publishAttemptCase) assertArm(t *testing.T, arm *retryArm) {
 	t.Helper()
-	if !tc.wantArm {
+	if tc.wantCause == nil {
 		assert.Nil(t, arm, "an ACKed publish must not produce a retry arm")
 		return
 	}
