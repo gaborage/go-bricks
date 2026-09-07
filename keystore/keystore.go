@@ -86,6 +86,8 @@ type keyEntry struct {
 // store implements app.KeyStore.
 // All keys are loaded at construction time; access is read-only and thread-safe.
 type store struct {
+	// keys holds entries BY POINTER: a test asserting on this map renders each
+	// value as an address, not as the secret it points at (ADR-102).
 	keys map[string]*keyEntry
 	// families indexes the generation entries by Logical kid (generation.go).
 	families map[string][]Generation

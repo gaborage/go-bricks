@@ -23,6 +23,15 @@ import (
 // that could be mistaken for a real secret if echoed by a bug under test.
 var syntheticSecret = bytes.Repeat([]byte{0xAB}, 32)
 
+// assertNoKeyBytes fails when bytes were returned, reporting their LENGTH only —
+// never the bytes themselves (ADR-102).
+func assertNoKeyBytes(t *testing.T, data []byte) {
+	t.Helper()
+	if data != nil {
+		assert.Fail(t, "unexpected key bytes returned", "expected no bytes, got %d", len(data))
+	}
+}
+
 func TestLoadBytes(t *testing.T) {
 	t.Run("file_path_reads", func(t *testing.T) {
 		dir := t.TempDir()
@@ -47,7 +56,7 @@ func TestLoadBytes(t *testing.T) {
 	t.Run("neither_set_nil_nil", func(t *testing.T) {
 		got, err := LoadBytes("", "")
 		require.NoError(t, err)
-		assert.Nil(t, got)
+		assertNoKeyBytes(t, got)
 	})
 
 	t.Run("both_set_file_wins", func(t *testing.T) {
@@ -106,7 +115,7 @@ func TestLoadSecretBytes(t *testing.T) {
 	t.Run("neither_set_nil_nil", func(t *testing.T) {
 		got, err := LoadSecretBytes("", "")
 		require.NoError(t, err)
-		assert.Nil(t, got)
+		assertNoKeyBytes(t, got)
 	})
 
 	t.Run("pem_in_file_field_rejected_echo_free", func(t *testing.T) {
@@ -257,7 +266,9 @@ func TestLoadRSAPrivateKey(t *testing.T) {
 	t.Run("neither_set_errors", func(t *testing.T) {
 		got, err := LoadRSAPrivateKey("", "")
 		require.Error(t, err)
-		assert.Nil(t, got)
+		if got != nil {
+			assert.Fail(t, "unexpected key returned", "expected no key, got a %T", got)
+		}
 	})
 
 	t.Run("wrong_key_class_errors", func(t *testing.T) {
@@ -306,7 +317,9 @@ func TestLoadRSAPublicKey(t *testing.T) {
 	t.Run("neither_set_errors", func(t *testing.T) {
 		got, err := LoadRSAPublicKey("", "")
 		require.Error(t, err)
-		assert.Nil(t, got)
+		if got != nil {
+			assert.Fail(t, "unexpected key returned", "expected no key, got a %T", got)
+		}
 	})
 
 	t.Run("wrong_key_class_errors", func(t *testing.T) {

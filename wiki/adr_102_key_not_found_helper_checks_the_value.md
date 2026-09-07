@@ -102,6 +102,10 @@ The passing path is unchanged. When the key is genuinely absent and the store
 returns `nil`, both lookups error, both keys are nil, and every assertion passes as
 before.
 
+The TYPE-not-value rule was swept across the framework's own key-loading tests in
+`keystore`, `internal/keymaterial`, `internal/secretfile` and `internal/sealcli`, where
+every absent-material assertion now reports the operand's type or byte length (#1493).
+
 In-repo blast radius is zero: the framework's own keystore and its `MockKeyStore`
 return `nil` on every error path, so no test in this tree changes behaviour.
 
