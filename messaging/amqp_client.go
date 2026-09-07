@@ -620,14 +620,12 @@ type retryArm struct {
 }
 
 // armPublishFailure returns the retry arm for a publish that never reached the
-// broker, or nil when there was no such failure. The pending registration is
-// dropped here: a stray broker confirmation for this tag, if it somehow arrives
-// later, is silently dropped by the dispatcher's unmatched-tag handling.
-func (c *AMQPClientImpl) armPublishFailure(key confirmKey, err error) *retryArm {
+// broker, or nil when there was no such failure. It is pure: the caller drops
+// the pending registration, beside the other two cleanups on this path.
+func (c *AMQPClientImpl) armPublishFailure(err error) *retryArm {
 	if err == nil {
 		return nil
 	}
-	c.pendingPublishes.Delete(key)
 	return &retryArm{
 		cause:        err,
 		logCause:     err,
@@ -653,7 +651,11 @@ func (c *AMQPClientImpl) publishAttempt(
 		return nil, termErr
 	}
 
-	if arm := c.armPublishFailure(key, err); arm != nil {
+	if arm := c.armPublishFailure(err); arm != nil {
+		// Publish never made it to the broker — drop our pending registration.
+		// (A stray broker confirmation for this tag, if it somehow arrives later,
+		// will be silently dropped by the dispatcher's unmatched-tag handling.)
+		c.pendingPublishes.Delete(key)
 		return arm, nil
 	}
 

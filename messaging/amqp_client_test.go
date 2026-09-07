@@ -3,7 +3,7 @@ package messaging
 import (
 	"context"
 	"errors"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2461,7 +2461,7 @@ func retryReasonsFromMetrics(t *testing.T, rm metricdata.ResourceMetrics) []stri
 			reasons = append(reasons, value.AsString())
 		}
 	}
-	sort.Strings(reasons)
+	slices.Sort(reasons)
 	return reasons
 }
 
@@ -2699,6 +2699,32 @@ type publishAttemptCase struct {
 	wantMetric   string
 	wantSpan     string
 	wantBackoff  time.Duration
+}
+
+// TestArmPublishFailureBuildsOnlyForAFailure pins the helper's two contracts:
+// it answers nil when the publish reached the broker, and it is PURE — dropping
+// the pending registration belongs to the caller, beside the other cleanups on
+// that path.
+func TestArmPublishFailureBuildsOnlyForAFailure(t *testing.T) {
+	c := &AMQPClientImpl{resendDelay: 250 * time.Millisecond}
+	key := confirmKey{generation: 7, tag: 42}
+	c.pendingPublishes.Store(key, make(chan amqp.Confirmation, 1))
+
+	require.Nil(t, c.armPublishFailure(nil), "a publish that reached the broker has no retry arm")
+
+	cause := errors.New("dial tcp: connection refused")
+	arm := c.armPublishFailure(cause)
+	require.NotNil(t, arm)
+	assert.Equal(t, cause, arm.cause)
+	assert.Equal(t, cause, arm.logCause, "the publish-error arm is the one that logs a cause")
+	assert.Nil(t, arm.deliveryTag, "only the NACK arm carries a delivery tag")
+	assert.Equal(t, "Publish failed, retrying...", arm.logMsg)
+	assert.Equal(t, "publish_error", arm.metricReason)
+	assert.Equal(t, "publish error", arm.spanReason)
+	assert.Equal(t, 250*time.Millisecond, arm.backoff)
+
+	_, still := c.pendingPublishes.Load(key)
+	assert.True(t, still, "the helper must not drop the pending registration")
 }
 
 // TestPublishAttemptClassifiesTheOutcome pins which arm each failed attempt
