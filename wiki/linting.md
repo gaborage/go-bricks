@@ -186,13 +186,17 @@ fixes into a repo-wide sweep with no style-guide mandate behind it.
 
 GoBricks holds itself to a stricter standard than it expects of applications built on it
 (80% coverage, production-grade stability; see the Developer Manifesto in `CLAUDE.md`).
-These three are calibrated for a framework:
+These four are calibrated for a framework:
 
 | Setting | GoBricks | Consider for a service |
 | --- | --- | --- |
 | `dupl.threshold` | 100 | 150+, or drop `dupl` — handler/test symmetry trips it |
+| `gocognit.min-complexity` | 15 | 15–20; raise before adding `//nolint` |
 | `gocyclo.min-complexity` | 15 | 15–20; raise before adding `//nolint` |
 | `lll.line-length` | 215 | whatever your editor is set to |
+
+`gocognit` mirrors SonarCloud's S3776 cognitive-complexity rule, so a finding here is the one
+the PR would have raised on SonarCloud; unlike `gocyclo`, it also judges `_test.go` files.
 
 ## Linters measured and rejected
 
