@@ -7207,12 +7207,17 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   pg_tables WHERE tablename = '<your table segment>'`) and rename to THAT, or move the rows, or
   those already written are left behind. Check for collisions too: two configured schemas
   sharing their first 63 bytes truncated onto ONE schema, so their ledgers may be interleaved
-  in the same table. WHEN the refusal fires depends on the deployment, because store
-  construction is lazy: a static-source, single-tenant-or-shared-ledger service constructs the
-  store during `Init` and so fails at STARTUP, while a dynamic config source or a per-tenant
-  multi-tenant deployment constructs on first use and fails at the first publish or the first
-  relay poll — earlier than before, since the refusal now lands before any statement is built,
-  but not at boot.
+  in the same table. Then set `outbox.tablename` to the FINAL schema name in EVERY
+  configuration source that feeds the service — YAML, env (`OUTBOX_TABLENAME`), a hand-built
+  `config.OutboxConfig`, a dynamic source: the module hands `cfg.TableName` to the store on
+  every construction (`outbox/module.go:319`), so a repaired database alone does not help while
+  the configured name is still the over-long one — `NewPostgresStore` refuses it exactly as
+  before. WHEN the refusal fires depends on the deployment, because store construction is lazy:
+  a static-source, single-tenant-or-shared-ledger service constructs the store during `Init`
+  and so fails at STARTUP, while a dynamic config source or a per-tenant multi-tenant
+  deployment constructs on first use and fails at the first publish or the first relay poll —
+  earlier than before, since the refusal now lands before any statement is built, but not at
+  boot.
 - verify: `go build ./... && go test ./...`  # then boot the service against a PostgreSQL
   outbox and confirm startup is green with the renamed schema — and on a dynamic-source or
   per-tenant deployment, where construction is lazy, publish one event and confirm it lands;
