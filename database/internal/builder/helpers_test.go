@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -911,5 +912,82 @@ func TestQuotedColumnsInNameOrderReportsTheFirstInvalidKey(t *testing.T) {
 		require.Contains(t, err.Error(), "aaa;drop")
 		require.Nil(t, keys)
 		require.Nil(t, quoted)
+	}
+}
+
+// TestSettlePointerSettlesOnlyPointerLevels pins the walk's first contract step:
+// a nil pointer settles the whole walk, a non-pointer level settles nothing and
+// is never asked whether it is nil, and a non-nil pointer is recorded so the
+// second visit to it reports a cycle rather than dereferencing forever.
+func TestSettlePointerSettlesOnlyPointerLevels(t *testing.T) {
+	target := 7
+	pointer := &target
+	var nilPointer *int
+
+	tests := []struct {
+		name       string
+		operand    any
+		wantIsNil  bool
+		wantFollow bool
+	}{
+		{name: "non_pointer_settles_nothing", operand: 7},
+		{name: "slice_settles_nothing", operand: []int{1}},
+		{name: "nil_pointer_settles_as_null", operand: nilPointer, wantIsNil: true},
+		{name: "non_nil_pointer_is_recorded", operand: pointer, wantFollow: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			walk := operandWalk{}
+			r := reflect.ValueOf(tt.operand)
+
+			isNil, err := walk.settlePointer(r)
+
+			require.NoError(t, err)
+			require.Equal(t, tt.wantIsNil, isNil)
+			require.Equal(t, tt.wantFollow, len(walk.followed) == 1,
+				"only a non-nil pointer level is recorded")
+
+			second, secondErr := walk.settlePointer(r)
+			if tt.wantFollow {
+				require.ErrorIs(t, secondErr, errCyclicOperand,
+					"revisiting a recorded pointer reports the cycle")
+				return
+			}
+			require.NoError(t, secondErr)
+			require.Equal(t, tt.wantIsNil, second)
+		})
+	}
+}
+
+// TestClassifyOperandFollowsSquirrelIsListType pins the tail of resolveOperand
+// on its own: which shapes read as null, which as a scalar, and which as a list.
+// A []byte is the pair that matters — slice-kinded, but a driver.Value and so
+// ONE operand.
+func TestClassifyOperandFollowsSquirrelIsListType(t *testing.T) {
+	tests := []struct {
+		name         string
+		operand      any
+		wantResolved any
+		wantNull     bool
+	}{
+		{name: "untyped_nil_is_null", operand: nil, wantResolved: nil, wantNull: true},
+		{name: "bytes_are_one_scalar", operand: []byte("ab"), wantResolved: []byte("ab")},
+		{name: "string_is_a_scalar", operand: "ab", wantResolved: "ab"},
+		{name: "int64_is_a_scalar", operand: int64(3), wantResolved: int64(3)},
+		{name: "int_is_a_scalar", operand: 3, wantResolved: 3},
+		{name: "struct_is_a_scalar", operand: struct{ A int }{1}, wantResolved: struct{ A int }{1}},
+		{name: "slice_is_a_list", operand: []int{1, 2}, wantResolved: []int{1, 2}, wantNull: true},
+		{name: "empty_slice_is_a_list", operand: []int{}, wantResolved: []int{}, wantNull: true},
+		{name: "array_is_a_list", operand: [2]int{1, 2}, wantResolved: [2]int{1, 2}, wantNull: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolved, nullOrList := classifyOperand(tt.operand, reflect.ValueOf(tt.operand))
+
+			require.Equal(t, tt.wantResolved, resolved)
+			require.Equal(t, tt.wantNull, nullOrList)
+		})
 	}
 }
