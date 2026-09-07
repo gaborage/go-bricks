@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -205,6 +206,24 @@ func TestAMQPShipperReportsABrokerDropWhenItsClientCannotBeResolved(t *testing.T
 
 	assert.Equal(t, shipBrokerDown, v.Kind)
 	assert.ErrorIs(t, v.Err, resolverErr)
+}
+
+// TestAMQPShipperReportsWaitedWhenClientResolutionStalls pins that a resolver failure still
+// counts toward stall_wait_ms: the production resolver (messaging.Manager.Publisher via
+// m.getMsg) can block until the bounded publish context expires before returning an error, so
+// Ship must time the resolver call rather than reporting zero wait for a stall that happened.
+func TestAMQPShipperReportsWaitedWhenClientResolutionStalls(t *testing.T) {
+	resolverErr := errors.New("tenant broker gone")
+	const minWait = 5 * time.Millisecond
+	s := &amqpShipper{client: func(context.Context) (messaging.AMQPClient, error) {
+		time.Sleep(minWait)
+		return nil, resolverErr
+	}}
+
+	v := s.Ship(context.Background(), &shipment{Record: &Record{ID: "evt-1"}, Headers: map[string]any{}})
+
+	assert.Equal(t, shipBrokerDown, v.Kind)
+	assert.GreaterOrEqual(t, v.Waited, minWait)
 }
 
 // compile-time proof the production adapters satisfy the port the relay holds.

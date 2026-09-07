@@ -172,6 +172,12 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 	r.markOutage(ctx, log, db, lead, outaged, &res)
 	if len(runnable) == 0 {
 		r.logCycle(log, tenantID, &res, len(records))
+		// Leadership loss first, same priority the mixed-lane return below gives it: it is
+		// a database-side failure and wrapping it as the lane's outage would send an
+		// operator to the wrong system.
+		if res.leadershipErr != nil {
+			return res.leadershipErr
+		}
 		return laneErr
 	}
 
@@ -503,9 +509,13 @@ func (r *Relay) markOutage(ctx context.Context, log logger.Logger, db dbtypes.In
 		if ctx.Err() != nil {
 			return
 		}
-		// A mark is a write, so it needs the same leadership guarantee as a ship.
+		// A mark is a write, so it needs the same leadership guarantee as a ship. Recorded
+		// on res.leadershipErr, the same field runRelayLoop sets, so relayTenant's
+		// leadership-first check catches this path too instead of letting the lane-down
+		// error it was marking under hide a database-side leadership loss.
 		if err := lead.Probe(ctx); err != nil {
 			log.Warn().Err(err).Msg("Outbox relay lost leadership while marking an outage; stopping")
+			res.leadershipErr = fmt.Errorf("%w: lost the leader row while marking an outage, database unreachable or the transaction was ended: %w", ErrNotLeader, err)
 			return
 		}
 		r.markRecordFailed(ctx, log, db, records[i].ID, "messaging unavailable")

@@ -669,6 +669,33 @@ func TestRelayOutagePathMarksUnderLeadership(t *testing.T) {
 	assert.Equal(t, 1, store.ReleaseCalls)
 }
 
+// TestRelayAllOutageLeadershipLossOutranksTheLaneError pins that a leadership probe failure
+// inside markOutage propagates as the leadershipErr, not the lane-down error markOutage was
+// marking under: the mixed-lane path already prioritizes a database-side leadership loss over
+// a broker outage (relayTenant checks res.leadershipErr before laneErr), and the all-outage
+// path — where every fetched row lands on a down lane and runnable is empty — must read the
+// same way instead of hiding the leadership failure behind "messaging not ready".
+func TestRelayAllOutageLeadershipLossOutranksTheLaneError(t *testing.T) {
+	probeErr := errors.New("leader row gone")
+	store := &fakeStore{
+		ProbeErrAfter: 1,
+		ProbeErr:      probeErr,
+		FetchPendingResult: []Record{
+			{ID: "evt-1", Exchange: "ex", RoutingKey: "a"},
+		},
+	}
+	r, amqpLane, _ := newRelayWithLanes(store)
+	amqpLane.ReadyErr = errors.New("messaging not ready")
+
+	err := r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrNotLeader, "leadership loss must outrank the lane-down error")
+	require.ErrorIs(t, err, probeErr, "the scripted probe failure is the cause reported")
+	assert.NotContains(t, err.Error(), "messaging not ready",
+		"the database-side cause must not be reported as a broker outage")
+	assert.Zero(t, store.MarkFailedCalls, "the probe failure stops markOutage before it marks anything")
+}
+
 // --- lane pre-flight ----------------------------------------------------------
 
 // TestRelayAdvancesRetryCountWhenALaneIsNotReady is the direct regression test for the

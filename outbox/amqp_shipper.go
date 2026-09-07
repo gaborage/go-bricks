@@ -68,8 +68,11 @@ func (s *amqpShipper) Ship(ctx context.Context, sh *shipment) verdict {
 	client, err := s.client(ctx)
 	if err != nil {
 		// The client resolved at pre-flight and is gone now: an outage mid-batch, not a
-		// fault of this row, so the remainder must not each pay for discovering it.
-		return verdict{Kind: shipBrokerDown, Err: err}
+		// fault of this row, so the remainder must not each pay for discovering it. The
+		// resolver itself can block (messaging.Manager.Publisher via m.getMsg waits out the
+		// bounded publish context before failing), so the elapsed time counts toward
+		// stall_wait_ms the same as any other broker-down verdict.
+		return verdict{Kind: shipBrokerDown, Err: err, Waited: time.Since(start)}
 	}
 	if client == nil {
 		// Ready already treats a resolver returning (nil, nil) as the lane being
