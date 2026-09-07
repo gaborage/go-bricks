@@ -266,6 +266,7 @@ func TestLoadRSAPrivateKey(t *testing.T) {
 	t.Run("neither_set_errors", func(t *testing.T) {
 		got, err := LoadRSAPrivateKey("", "")
 		require.Error(t, err)
+		// Reported by TYPE, never by value (ADR-102).
 		if got != nil {
 			assert.Fail(t, "unexpected key returned", "expected no key, got a %T", got)
 		}
@@ -317,6 +318,7 @@ func TestLoadRSAPublicKey(t *testing.T) {
 	t.Run("neither_set_errors", func(t *testing.T) {
 		got, err := LoadRSAPublicKey("", "")
 		require.Error(t, err)
+		// Reported by TYPE, never by value (ADR-102).
 		if got != nil {
 			assert.Fail(t, "unexpected key returned", "expected no key, got a %T", got)
 		}
