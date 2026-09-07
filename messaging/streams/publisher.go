@@ -209,6 +209,15 @@ func (p *Publisher) status() int {
 	return ha.StatusClosed
 }
 
+// Ready reports whether this publisher's producer is connected to the broker, as
+// the client's HA layer reports it: only ha.StatusOpen is ready, so a producer
+// that is reconnecting, closed, or not bound yet is not. A true answer is a
+// snapshot, not a delivery guarantee — a broker failure can invalidate it before
+// the next Publish.
+func (p *Publisher) Ready() bool {
+	return p.status() == ha.StatusOpen
+}
+
 // binding resolves the producer to send through, naming the right reason when
 // there is none.
 //

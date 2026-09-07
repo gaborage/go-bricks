@@ -215,8 +215,11 @@ func TestLoadPEM(t *testing.T) {
 
 	t.Run("neither_set_nil_nil", func(t *testing.T) {
 		got, err := LoadPEM("test: prefix:", "", "", "cert")
+		// Reported by LENGTH, never by value (ADR-102).
+		if got != nil {
+			assert.Fail(t, "unexpected PEM bytes returned", "expected no bytes, got %d", len(got))
+		}
 		require.NoError(t, err)
-		assert.Nil(t, got)
 	})
 }
 
