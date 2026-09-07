@@ -219,13 +219,7 @@ func (r *Relay) preflight(ctx context.Context) (down map[string]struct{}, laneEr
 		// than a zero-deadline ctx that would fail every check instantly: validatePublishTimeout
 		// guarantees a positive value in production, so this only matters for a test or a
 		// misconfigured build that skipped that check.
-		rctx, cancel := ctx, context.CancelFunc(func() {})
-		if r.readyTimeout > 0 {
-			rctx, cancel = context.WithTimeout(ctx, r.readyTimeout)
-		}
-		err := r.shippers[lane].Ready(rctx)
-		cancel()
-		if err != nil {
+		if err := r.readyWithin(ctx, r.shippers[lane]); err != nil {
 			if down == nil {
 				down = make(map[string]struct{}, len(r.shippers))
 			}
@@ -234,6 +228,17 @@ func (r *Relay) preflight(ctx context.Context) (down map[string]struct{}, laneEr
 		}
 	}
 	return down, errors.Join(errs...)
+}
+
+// readyWithin runs one lane's pre-flight under readyTimeout, or unbounded when the timeout
+// is not positive (see preflight).
+func (r *Relay) readyWithin(ctx context.Context, sh shipper) error {
+	if r.readyTimeout <= 0 {
+		return sh.Ready(ctx)
+	}
+	rctx, cancel := context.WithTimeout(ctx, r.readyTimeout)
+	defer cancel()
+	return sh.Ready(rctx)
 }
 
 // splitOnDownLanes separates the rows a down lane owns from the rest, keeping each
