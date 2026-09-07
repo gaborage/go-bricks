@@ -1044,3 +1044,28 @@ func TestRelayLogsPerLaneCounts(t *testing.T) {
 		numbers["published"]+numbers["unrecorded"]+numbers["failed"]+numbers["deadlettered"]+numbers["parked"],
 		"every fetched row is accounted for exactly once")
 }
+
+// TestRelayAllOutageCycleStillLogsItsCounts pins that an all-outage cycle — every fetched
+// record lands on a down lane, so runnable is empty — still emits the cycle summary. The
+// mixed-lane path already logs before returning; a cycle where nothing is runnable must not
+// skip that log line, or an operator loses the failed_<lane> counts for the exact cycles
+// where they matter most.
+func TestRelayAllOutageCycleStillLogsItsCounts(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "evt-1", Exchange: "ex", RoutingKey: "a"},
+		{ID: "evt-2", Exchange: "ex", RoutingKey: "b"},
+	}}
+	r, amqpLane, _ := newRelayWithLanes(store)
+	amqpLane.ReadyErr = errors.New("messaging not ready")
+	log := newRecordingLogger()
+	ctx := newFakeJobCtx(dbtesting.NewTestDB("postgresql"))
+	ctx.log = log
+
+	err := r.Execute(ctx)
+	require.Error(t, err, "the lane error still surfaces at the job level")
+	assert.Contains(t, err.Error(), "messaging not ready")
+
+	numbers := log.numbers()
+	assert.Equal(t, int64(2), numbers["failed_amqp"], "both outaged rows are charged to the AMQP lane")
+	assert.Equal(t, int64(2), numbers["total"], "the cycle summary still reports every fetched row")
+}

@@ -173,6 +173,7 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 		runnable, outaged = splitOnDownLanes(records, downLanes)
 		r.markOutage(ctx, log, db, lead, outaged, &res)
 		if len(runnable) == 0 {
+			r.logCycle(log, tenantID, &res, len(records))
 			return laneErr
 		}
 	}
