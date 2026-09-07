@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/racedetect"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -407,7 +408,7 @@ const (
 // server built via New (SetupMiddlewares) and asserts allocs/op stays at or below the locked
 // baseline, enforcing that the default path remains echo-native and baton-free.
 func TestDefaultMiddlewareChainAllocsStable(t *testing.T) {
-	if raceDetectorEnabled {
+	if racedetect.Enabled {
 		t.Skip("testing.AllocsPerRun is unreliable under -race; alloc baseline enforced in the non-race matrix")
 	}
 	log := &guardLogger{}

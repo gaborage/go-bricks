@@ -5,6 +5,10 @@
 - **Supersedes in part**: [ADR-003](adr_003_database_by_intent.md)
 - **Issue**: [#872](https://github.com/gaborage/go-bricks/issues/872)
 
+> **Amended (2026-09-06, [ADR-066](adr_066_readiness_one_module.md) as amended):** the
+> `databaseProbe` constructor named below now lives in the database slot's `describe()`
+> (`app/slot.go`).
+
 ## Context
 
 A service with no database configured at all returned HTTP 503 from `/ready`,

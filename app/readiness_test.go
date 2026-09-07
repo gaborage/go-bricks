@@ -21,6 +21,47 @@ import (
 	testmocks "github.com/gaborage/go-bricks/testing/mocks"
 )
 
+// The four per-kind description helpers below stand where the four probe constructors
+// stood: each kind's description is now built by its own slot (ADR-067 locality), so the
+// tests ask the slot for it with exactly the inputs the constructor used to take.
+
+func describingApp(perTenant bool) *App {
+	return &App{cfg: &config.Config{Multitenant: config.MultitenantConfig{Enabled: perTenant}}}
+}
+
+func databaseDescription(t *testing.T, m *database.DbManager, perTenant bool) probeDescription {
+	t.Helper()
+	a := describingApp(perTenant)
+	a.dbManager = m
+	a.installSlots(slotInputs{})
+	return slotDescription(t, a, componentDatabase)
+}
+
+func messagingDescription(t *testing.T, m *messaging.Manager, perTenant bool) probeDescription {
+	t.Helper()
+	a := describingApp(perTenant)
+	a.messagingManager = m
+	a.installSlots(slotInputs{})
+	return slotDescription(t, a, componentMessaging)
+}
+
+func cacheDescription(t *testing.T, m *cache.CacheManager, critical, absent, perTenant bool) probeDescription {
+	t.Helper()
+	a := describingApp(perTenant)
+	a.cfg.Cache.Critical = critical
+	a.cacheManager = m
+	a.installSlots(slotInputs{cacheAbsent: absent})
+	return slotDescription(t, a, componentCache)
+}
+
+func streamsDescription(t *testing.T, m streamHandle) probeDescription {
+	t.Helper()
+	a := describingApp(false)
+	a.streamsManager = m
+	a.installSlots(slotInputs{})
+	return slotDescription(t, a, componentStreams)
+}
+
 // stubKind drives a probeDescription through every branch of the judge without a manager.
 type stubKind struct {
 	acquireErr  error
@@ -151,7 +192,7 @@ func TestDatabaseProbeLeasesThenChecksHealth(t *testing.T) {
 	db.On("Close").Return(nil).Maybe()
 	m := createTestDbManagerWithMock(t, db)
 
-	got := databaseProbe(m, false).Run(context.Background())
+	got := databaseDescription(t, m, false).Run(context.Background())
 
 	assert.Equal(t, componentDatabase, got.Name)
 	assert.True(t, got.Critical, "the database is always critical")
@@ -167,7 +208,7 @@ func TestDatabaseProbeUnhealthyWhenHealthFails(t *testing.T) {
 	db.On("Close").Return(nil).Maybe()
 	m := createTestDbManagerWithMock(t, db)
 
-	got := databaseProbe(m, false).Run(context.Background())
+	got := databaseDescription(t, m, false).Run(context.Background())
 
 	assert.Equal(t, unhealthyStatus, got.Status)
 	assert.EqualError(t, got.Err, "pg down")
@@ -179,7 +220,7 @@ func TestDatabaseProbeUnhealthyWhenHealthFails(t *testing.T) {
 // (`user=… database=…` plus the resolved host:port). The description declares no
 // publicErr — that it is safe anyway is the whole point of the inverted default.
 func TestDatabaseProbeRendersFixedPublicError(t *testing.T) {
-	st := databaseProbe(newRealConnectorDBManager(&config.Config{}), false).Run(context.Background())
+	st := databaseDescription(t, newRealConnectorDBManager(&config.Config{}), false).Run(context.Background())
 	require.True(t, st.Critical, "a non-critical probe would never reach the 503 render path")
 
 	st.Err = errors.New(pgconnIdentityError)
@@ -207,7 +248,7 @@ func TestDatabaseProbePublicErrorHidesConnectionIdentity(t *testing.T) {
 }
 
 func TestDatabaseProbeReportsNotConfigured(t *testing.T) {
-	result := databaseProbe(newRealConnectorDBManager(&config.Config{}), false).Run(context.Background())
+	result := databaseDescription(t, newRealConnectorDBManager(&config.Config{}), false).Run(context.Background())
 
 	assert.Equal(t, notConfiguredStatus, result.Status)
 	assert.Equal(t, notConfiguredStatus, result.Details[statusKey])
@@ -222,7 +263,7 @@ func TestDatabaseProbeStaysUnhealthyForUnsupportedType(t *testing.T) {
 	cfg.Database.Type = "mysql"
 	cfg.Database.Host = "db.internal"
 
-	result := databaseProbe(newRealConnectorDBManager(cfg), false).Run(context.Background())
+	result := databaseDescription(t, newRealConnectorDBManager(cfg), false).Run(context.Background())
 
 	assert.Equal(t, unhealthyStatus, result.Status)
 	require.Error(t, result.Err)
@@ -235,7 +276,7 @@ func TestDatabaseProbeReportsPerTenantWhenDefaultKeyIsUnconfigured(t *testing.T)
 	cfg := &config.Config{}
 	cfg.Multitenant.Enabled = true // no root database block: tenants carry their own
 
-	result := databaseProbe(newRealConnectorDBManager(cfg), true).Run(context.Background())
+	result := databaseDescription(t, newRealConnectorDBManager(cfg), true).Run(context.Background())
 
 	// not_configured would claim the service has no database — false when it has N
 	// tenant databases that this fixed-key probe simply never covered.
@@ -255,7 +296,7 @@ func TestDatabaseProbeStillProbesPerTenantControlPlaneDatabase(t *testing.T) {
 	cfg.Database.Type = "mysql" // resolves, then fails to connect
 	cfg.Database.Host = "control-plane.internal"
 
-	result := databaseProbe(newRealConnectorDBManager(cfg), true).Run(context.Background())
+	result := databaseDescription(t, newRealConnectorDBManager(cfg), true).Run(context.Background())
 
 	assert.Equal(t, unhealthyStatus, result.Status, "a resolvable control-plane database must be probed, not relabeled")
 	require.Error(t, result.Err)
@@ -265,7 +306,7 @@ func TestDatabaseProbeStillProbesPerTenantControlPlaneDatabase(t *testing.T) {
 func TestMessagingProbeNotReadyIsUnhealthyWithError(t *testing.T) {
 	m := createTestMessagingManagerWithNotReadyClient(t)
 
-	got := messagingProbe(m, false).Run(context.Background())
+	got := messagingDescription(t, m, false).Run(context.Background())
 
 	assert.Equal(t, unhealthyStatus, got.Status)
 	assert.False(t, got.Critical, "messaging is never critical")
@@ -275,7 +316,7 @@ func TestMessagingProbeNotReadyIsUnhealthyWithError(t *testing.T) {
 func TestMessagingProbeCountsItsOwnPublisher(t *testing.T) {
 	m := createTestMessagingManager(t)
 
-	got := messagingProbe(m, false).Run(context.Background())
+	got := messagingDescription(t, m, false).Run(context.Background())
 
 	assert.Equal(t, healthyStatus, got.Status)
 	assert.Equal(t, 1, got.Details["active_publishers"], "stats are read while the probe's own lease is held")
@@ -288,7 +329,7 @@ func TestMessagingProbeReportsPerTenantWhenDefaultKeyIsUnconfigured(t *testing.T
 	m := newMessagingManagerWithSourceError(t,
 		config.NewNotConfiguredError("messaging", "MESSAGING_BROKER_URL", "messaging.broker.url"))
 
-	got := messagingProbe(m, true).Run(context.Background())
+	got := messagingDescription(t, m, true).Run(context.Background())
 
 	assert.Equal(t, perTenantStatus, got.Status)
 	assert.Equal(t, perTenantStatus, got.Details[statusKey])
@@ -302,7 +343,7 @@ func TestCacheProbeBoundsTheWarmPathPing(t *testing.T) {
 	m := createWarmCacheManagerWithHungPing(t)
 
 	start := time.Now()
-	got := cacheProbe(m, true, false, false).Run(context.Background())
+	got := cacheDescription(t, m, true, false, false).Run(context.Background())
 
 	assert.Equal(t, unhealthyStatus, got.Status)
 	assert.Less(t, time.Since(start), cacheProbePingTimeout+200*time.Millisecond)
@@ -312,7 +353,7 @@ func TestCacheProbeBoundsTheWarmPathPing(t *testing.T) {
 func TestCacheProbeAbsentNeverLeases(t *testing.T) {
 	m := createTestCacheManagerWithGetError(t, errors.New("must not be called"))
 
-	got := cacheProbe(m, true, true, false).Run(context.Background())
+	got := cacheDescription(t, m, true, true, false).Run(context.Background())
 
 	assert.Equal(t, notConfiguredStatus, got.Status)
 	assert.Contains(t, got.Details, "active_caches", "manager counters still render")
@@ -325,7 +366,7 @@ func TestCacheProbeReportsPerTenantWhenDefaultKeyIsUnconfigured(t *testing.T) {
 	m := createTestCacheManagerWithGetError(t,
 		config.NewNotConfiguredError("cache", "CACHE_REDIS_HOST", "cache.redis.host"))
 
-	got := cacheProbe(m, false, false, true).Run(context.Background())
+	got := cacheDescription(t, m, false, false, true).Run(context.Background())
 
 	assert.Equal(t, perTenantStatus, got.Status)
 	assert.Equal(t, perTenantStatus, got.Details[statusKey])
@@ -336,7 +377,7 @@ func TestCacheProbeReportsPerTenantWhenDefaultKeyIsUnconfigured(t *testing.T) {
 // a probe rooted at context.Background() would ignore an already-spent request budget.
 func TestCacheProbePingHonorsCallerContext(t *testing.T) {
 	mc := cachetesting.NewMockCache().WithDelay(10 * time.Millisecond)
-	probe := cacheProbe(cacheManagerServing(t, mc), false, false, false)
+	probe := cacheDescription(t, cacheManagerServing(t, mc), false, false, false)
 
 	// Warm the pool so the canceled context reaches Health rather than the create path.
 	require.Equal(t, healthyStatus, probe.Run(context.Background()).Status)
@@ -353,7 +394,7 @@ func TestCacheProbePingHonorsCallerContext(t *testing.T) {
 func TestStreamsProbeNotOpenIsUnhealthy(t *testing.T) {
 	m := streams.NewManager(streams.ManagerOptions{URI: unreachableStreamURI, Logger: logger.New("error", false)})
 
-	got := streamsProbe(m).Run(context.Background())
+	got := streamsDescription(t, m).Run(context.Background())
 
 	assert.Equal(t, componentStreams, got.Name)
 	assert.Equal(t, unhealthyStatus, got.Status)
@@ -474,22 +515,22 @@ func TestProbeConstructorsWireTheirPublicStatsAllowlist(t *testing.T) {
 	}{
 		{
 			name:        "database",
-			description: databaseProbe(createTestDbManager(t), false),
+			description: databaseDescription(t, createTestDbManager(t), false),
 			allow:       databasePublicStats,
 		},
 		{
 			name:        "messaging",
-			description: messagingProbe(createTestMessagingManager(t), false),
+			description: messagingDescription(t, createTestMessagingManager(t), false),
 			allow:       messagingPublicStats,
 		},
 		{
 			name:        "cache",
-			description: cacheProbe(createTestCacheManager(t), true, false, false),
+			description: cacheDescription(t, createTestCacheManager(t), true, false, false),
 			allow:       cachePublicStats,
 		},
 		{
 			name:        "streams",
-			description: streamsProbe(streamsManager),
+			description: streamsDescription(t, streamsManager),
 			allow:       streamsPublicStats,
 		},
 	}

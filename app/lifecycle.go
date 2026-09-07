@@ -30,6 +30,10 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 		return err
 	}
 
+	if err := a.requireJudge(); err != nil {
+		return err
+	}
+
 	if err := a.buildMessagingDeclarations(); err != nil {
 		return err
 	}
@@ -41,10 +45,6 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 	if err := a.startSlots(ctx); err != nil {
 		return err
 	}
-
-	// Re-collected here because the streams slot only builds its manager in start; see
-	// streamsSlot.probe in slot.go.
-	a.healthProbes = a.collectProbes()
 
 	// Register debug endpoints if enabled
 	if err := a.registerDebugHandlers(); err != nil {
@@ -115,6 +115,10 @@ func (a *App) startSlots(ctx context.Context) error {
 			stopEach(ctx, started)
 			return fatal
 		}
+		// Seal the kind's description here, and only here: after its start returned without a
+		// fatal error, before serve(), and never again — including during shutdown, so a
+		// /ready overlapping stopSlots reads a stable value (ADR-066 as amended).
+		slot.seal(slot.describe())
 		started = append(started, slot)
 		if advisory != nil {
 			advisories = append(advisories, advisory)
@@ -126,6 +130,10 @@ func (a *App) startSlots(ctx context.Context) error {
 			Err(fmt.Errorf("pre-warming issues (non-fatal): %w", errors.Join(advisories...))).
 			Msg("Pre-warming completed with warnings")
 	}
+	// Every kind has sealed; the judge may now answer from the report rather than failing
+	// closed. This is the only write, and it happens before serve() starts the listener
+	// goroutine — that start orders it before every request's read.
+	a.judge.started = true
 	return nil
 }
 
@@ -537,7 +545,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 // it and no more.
 func (a *App) readyCheck(c server.HandlerContext) error {
 	ctx := c.RequestContext()
-	report, blocking, found := runUntilBlocking(ctx, a.healthProbes)
+	report, blocking, found := a.judge.gate(ctx)
 
 	if found {
 		// /ready is unauthenticated and the limiters do not exempt it, but they key probes

@@ -8,8 +8,6 @@ import (
 
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/database"
-	"github.com/gaborage/go-bricks/messaging"
 )
 
 // Readiness is one module: every kind is judged by the same machine from a probe
@@ -66,6 +64,10 @@ type probeDescription struct {
 func disabledProbe(name string) probeDescription {
 	return probeDescription{name: name, disabled: true}
 }
+
+// probeDescription is the framework's one Prober implementation; nothing foreign reaches
+// the judge (ADR-066 as amended).
+var _ Prober = probeDescription{}
 
 // Run implements Prober: judge the kind, then carry its statistics under Details with
 // details.status mirroring the verdict.
@@ -211,103 +213,6 @@ var (
 		statsOffsetStoreCountKey, statsOffsetFlushIntervalKey,
 	}
 )
-
-// databaseProbe describes the database kind: critical, leased through the "" key, live when
-// the leased connection's Health passes. perTenant only relabels a not-configured verdict —
-// the lease is always attempted (see probeDescription.perTenant).
-func databaseProbe(m *database.DbManager, perTenant bool) probeDescription {
-	if m == nil {
-		return disabledProbe(componentDatabase)
-	}
-	return probeDescription{
-		name:        componentDatabase,
-		critical:    true,
-		perTenant:   perTenant,
-		publicStats: databasePublicStats,
-		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
-			conn, release, err := m.Get(ctx, "")
-			if err != nil {
-				return nil, nil, err
-			}
-			return conn.Health, release, nil
-		},
-		stats: m.Stats,
-	}
-}
-
-// messagingProbe describes the messaging kind: never critical, leased through the ""
-// key, live when the leased client reports ready.
-func messagingProbe(m *messaging.Manager, perTenant bool) probeDescription {
-	if m == nil {
-		return disabledProbe(componentMessaging)
-	}
-	return probeDescription{
-		name:        componentMessaging,
-		perTenant:   perTenant,
-		publicStats: messagingPublicStats,
-		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
-			client, release, err := m.Publisher(ctx, "")
-			if err != nil {
-				return nil, nil, err
-			}
-			return func(context.Context) error {
-				if !client.IsReady() {
-					return errPublisherNotReady
-				}
-				return nil
-			}, release, nil
-		},
-		stats: m.Stats,
-	}
-}
-
-// cacheProbe describes the cache kind: critical per config (ADR-094), absent when the ""
-// key can never resolve (rootCacheAbsent), live when a bounded PING of the leased instance
-// passes — a pooled instance is returned without a round trip, so it is pinged explicitly.
-func cacheProbe(m *cache.CacheManager, critical, absent, perTenant bool) probeDescription {
-	if m == nil {
-		return disabledProbe(componentCache)
-	}
-	return probeDescription{
-		name:        componentCache,
-		critical:    critical,
-		absent:      absent,
-		perTenant:   perTenant,
-		publicStats: cachePublicStats,
-		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
-			instance, release, err := m.Get(ctx, "")
-			if err != nil {
-				return nil, nil, err
-			}
-			return func(ctx context.Context) error {
-				pingCtx, cancel := context.WithTimeout(ctx, cacheProbePingTimeout)
-				defer cancel()
-				return instance.Health(pingCtx)
-			}, release, nil
-		},
-		stats: func() map[string]any { return convertCacheStatsToMap(m.Stats()) },
-	}
-}
-
-// streamsProbe describes the native stream-protocol kind: NON-critical (the reliable
-// consumers reconnect on their own, so a broker flap must not take the service out of the
-// load balancer), lease-less, live when every consumer and publisher is open.
-func streamsProbe(m streamHandle) probeDescription {
-	if m == nil {
-		return disabledProbe(componentStreams)
-	}
-	return probeDescription{
-		name:        componentStreams,
-		publicStats: streamsPublicStats,
-		live: func(context.Context) error {
-			if !m.Ready() {
-				return errStreamsNotOpen
-			}
-			return nil
-		},
-		stats: m.Stats,
-	}
-}
 
 // convertCacheStatsToMap renders cache.ManagerStats as the counters map every kind reports.
 func convertCacheStatsToMap(stats cache.ManagerStats) map[string]any {

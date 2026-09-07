@@ -811,6 +811,18 @@ func TestAppBuilderCreateHealthProbesErrors(t *testing.T) {
 	})
 }
 
+func TestAppBuilderCreateHealthProbesInstallsTheJudgeOverEverySlot(t *testing.T) {
+	app := &App{cfg: defaultTestConfig(), cacheManager: createTestCacheManager(t)}
+	app.installSlots(slotInputs{})
+	builder := &Builder{logger: logger.New("error", false), app: app}
+
+	result := builder.CreateHealthProbes()
+
+	require.NoError(t, result.err)
+	assert.Equal(t, result.app.slots, result.app.judge.slots,
+		"the judge asks the one slot list every other phase walks")
+}
+
 func TestAppBuilderCreateHealthProbesAppliesCacheCritical(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -836,8 +848,7 @@ func TestAppBuilderCreateHealthProbesAppliesCacheCritical(t *testing.T) {
 			result := builder.CreateHealthProbes()
 
 			require.NoError(t, result.err)
-			require.Len(t, result.app.healthProbes, 3)
-			status := result.app.healthProbes[2].Run(context.Background())
+			status := slotDescription(t, result.app, componentCache).Run(context.Background())
 			assert.Equal(t, componentCache, status.Name)
 			assert.Equal(t, tc.expectedCritical, status.Critical)
 		})
@@ -853,8 +864,7 @@ func TestAppBuilderExplicitFalseCacheCriticalIsSilent(t *testing.T) {
 	customConnector := &Options{CacheConnector: func(context.Context, string) (cache.Cache, error) {
 		return nil, assert.AnError
 	}}
-	// CreateHealthProbes wires the manager into the probe set without leasing from it, so
-	// one instance serves both cases.
+	// CreateHealthProbes never leases from the manager, so one instance serves both cases.
 	cacheManager := createTestCacheManager(t)
 
 	tests := []struct {
@@ -1285,9 +1295,9 @@ func TestPerformPreInitializationStopsAtTheFirstFatalKind(t *testing.T) {
 		app:    &App{cfg: defaultTestConfig(), logger: logger.New("error", false)},
 	}
 	builder.app.slots = []resourceSlot{
-		&recordingSlot{kind: componentDatabase, order: &order, fatalPreInit: true, preInitErr: assert.AnError},
-		&recordingSlot{kind: componentMessaging, order: &order},
-		&recordingSlot{kind: componentCache, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentDatabase}, order: &order, fatalPreInit: true, preInitErr: assert.AnError},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentMessaging}, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentCache}, order: &order},
 	}
 
 	builder.performPreInitialization()
@@ -1309,8 +1319,8 @@ func TestPerformPreInitializationContinuesPastABestEffortKind(t *testing.T) {
 		app:    &App{cfg: defaultTestConfig(), logger: rec},
 	}
 	builder.app.slots = []resourceSlot{
-		&recordingSlot{kind: componentCache, order: &order, preInitErr: assert.AnError},
-		&recordingSlot{kind: componentStreams, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentCache}, order: &order, preInitErr: assert.AnError},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentStreams}, order: &order},
 	}
 
 	builder.performPreInitialization()
@@ -1333,7 +1343,7 @@ func TestPerformPreInitializationSkipsWhenAppCarriesNoConfig(t *testing.T) {
 		app:    &App{logger: logger.New("error", false)},
 	}
 	builder.app.slots = []resourceSlot{
-		&recordingSlot{kind: componentDatabase, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentDatabase}, order: &order},
 	}
 
 	builder.performPreInitialization()
@@ -1343,8 +1353,8 @@ func TestPerformPreInitializationSkipsWhenAppCarriesNoConfig(t *testing.T) {
 }
 
 // TestAppBuilderStepsRequireInstalledSlots pins that the two steps walking App.slots fail
-// fast when CreateApp never installed them: an empty walk would register no probe at all and
-// leave /ready answering an unconditional 200.
+// fast when CreateApp never installed them: an empty walk would leave the judge with no
+// kind to judge and no closer registered at all.
 func TestAppBuilderStepsRequireInstalledSlots(t *testing.T) {
 	cases := []struct {
 		step    func(*Builder) *Builder
@@ -1379,7 +1389,7 @@ func TestAppBuilderStepsRequireInstalledSlots(t *testing.T) {
 
 			require.Error(t, result.err)
 			assert.Contains(t, result.err.Error(), tc.wantMsg)
-			assert.Empty(t, result.app.healthProbes, "a refused step must register nothing")
+			assert.Empty(t, result.app.judge.slots, "a refused step must install nothing")
 			assert.Empty(t, result.app.closers)
 		})
 	}

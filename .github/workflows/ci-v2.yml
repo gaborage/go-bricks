@@ -188,10 +188,11 @@ jobs:
         run: |
           set -euo pipefail
           # The race detector inflates testing.AllocsPerRun counts, so these guards skip
-          # under -race (server/alloc_guard_*_test.go). Run them without -race so the
-          # ADR-026 zero-overhead invariant (typed-path allocs/op ceiling + echo-native
-          # default chain) is actually enforced on PRs, not silently skipped. Delegates to
-          # the `make test-alloc` target so the command lives in exactly one place.
+          # under -race (internal/racedetect). Run them without -race so the
+          # ADR-026 zero-overhead invariant (the typed-path allocs/op ceiling, the
+          # echo-native default chain, and every other AllocsStable guard in the tree) is
+          # actually enforced on PRs, not silently skipped. Delegates to the
+          # `make test-alloc` target so the command lives in exactly one place.
           make test-alloc
 
       - name: Run tests (Windows)

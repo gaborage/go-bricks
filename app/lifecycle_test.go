@@ -130,8 +130,8 @@ func TestShutdownStopsSlotsBeforeModules(t *testing.T) {
 		closers:  []namedCloser{},
 	}
 	a.slots = []resourceSlot{
-		&recordingSlot{kind: componentMessaging, order: &order},
-		&recordingSlot{kind: componentStreams, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentMessaging}, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentStreams}, order: &order},
 	}
 	require.NoError(t, a.registry.Register(&recordingModule{onShutdown: func() {
 		order = append(order, "modules")
@@ -160,11 +160,10 @@ func TestShutdownTiming(t *testing.T) {
 	}
 
 	app := &App{
-		cfg:          cfg,
-		logger:       testLogger,
-		registry:     NewModuleRegistry(deps),
-		closers:      []namedCloser{},
-		healthProbes: []Prober{},
+		cfg:      cfg,
+		logger:   testLogger,
+		registry: NewModuleRegistry(deps),
+		closers:  []namedCloser{},
 	}
 
 	// Test that shutdown completes in reasonable time
@@ -230,6 +229,7 @@ func TestPrepareRuntimeWithScheduler(t *testing.T) {
 		closers:  []namedCloser{},
 	}
 	app.installSlots(slotInputs{})
+	app.judge = readinessJudge{slots: app.slots} // Builder.CreateHealthProbes' step
 
 	// Call prepareRuntime
 	err = app.prepareRuntime(context.Background())
@@ -280,6 +280,8 @@ func newLifecycleCheckAppWithLogger(t *testing.T, cfg *config.Config, log logger
 		closers:  []namedCloser{},
 	}
 	a.installSlots(slotInputs{})
+	// Mirrors Builder.CreateHealthProbes, which prepareRuntime now demands ran.
+	a.judge = readinessJudge{slots: a.slots}
 	return a
 }
 
@@ -345,10 +347,10 @@ func TestStartSlotsStopsAlreadyStartedKindsOnFatal(t *testing.T) {
 	order := []string{}
 	a := &App{logger: logger.New("error", false)}
 	a.slots = []resourceSlot{
-		&recordingSlot{kind: componentDatabase, order: &order},
-		&recordingSlot{kind: componentMessaging, order: &order},
-		&recordingSlot{kind: componentCache, order: &order},
-		&recordingSlot{kind: componentStreams, order: &order, startFatal: assert.AnError},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentDatabase}, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentMessaging}, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentCache}, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentStreams}, order: &order, startFatal: assert.AnError},
 	}
 
 	err := a.startSlots(context.Background())
@@ -382,30 +384,33 @@ func TestPrepareRuntimeAbortsWhenDeclaredConsumersCannotStart(t *testing.T) {
 	require.ErrorIs(t, err, errBrokerLookupFailed)
 }
 
-// TestPrepareRuntimeReCollectsProbesAfterTheStartPhase pins the re-collect that replaced
-// prepareStreamConsumers' probe append. It starts from an emptied probe list so a deleted
-// re-collect cannot pass on the set the Builder already snapshotted: only the re-collect
-// can put the classic kinds back.
-func TestPrepareRuntimeReCollectsProbesAfterTheStartPhase(t *testing.T) {
+// TestPrepareRuntimeSealsEachKindsReadinessAfterTheStartPhase pins the seal: /ready reports
+// nothing before prepareRuntime — an application that never started may not take traffic —
+// and one entry per kind that renders once every slot's start has returned.
+func TestPrepareRuntimeSealsEachKindsReadinessAfterTheStartPhase(t *testing.T) {
 	cfg := &config.Config{
 		App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
 		Multitenant: config.MultitenantConfig{Enabled: false},
 	}
 	a := newLifecycleCheckApp(t, cfg)
-	a.healthProbes = nil
+	a.judge = readinessJudge{slots: a.slots}
+
+	before, beforeCode := runReadyCheck(t, a, cfg)
+	require.Equal(t, http.StatusServiceUnavailable, beforeCode, "no kind has sealed a description yet")
+	assert.Equal(t, notReadyStatus, before[statusKey])
 
 	require.NoError(t, a.prepareRuntime(context.Background()))
 
-	assert.Equal(t,
-		[]string{componentDatabase, componentMessaging, componentCache},
-		probeNames(t, a.healthProbes),
-		"the start phase must be followed by a fresh probe collection")
+	after, afterCode := runReadyCheck(t, a, cfg)
+	assert.Equal(t, http.StatusOK, afterCode)
+	for _, kind := range []string{componentDatabase, componentMessaging, componentCache} {
+		assert.Equal(t, disabledStatus, after[kind], "the start phase must be followed by a seal")
+	}
 }
 
 // TestPrepareRuntimeRequiresInstalledSlots pins the fail-fast half of the walk's
 // precondition, mirroring Builder.requireSlots. Without it a slot-less App would start no
-// kind at all and then overwrite its probe list with an empty one — a service booting green
-// with no database, no consumers and a /ready body that reports nothing.
+// kind at all — a service booting green with no database and no consumers.
 func TestPrepareRuntimeRequiresInstalledSlots(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
 	log := logger.New("error", false)
@@ -877,8 +882,7 @@ func TestReadyCheckDowngradesCallerCancellationLog(t *testing.T) {
 			rec := &recLogger{}
 			app := &App{cfg: cfg, logger: rec, cacheManager: createTestCacheManagerWithGetError(t, tc.probeErr)}
 			app.installSlots(slotInputs{})
-			app.healthProbes = app.collectProbes()
-			require.Len(t, app.healthProbes, 3)
+			sealAndJudge(app)
 
 			reqCtx := context.Background()
 			if tc.cancelCaller {
@@ -908,11 +912,11 @@ func TestReadyCheckWithholdsDatabaseIdentityFromBody(t *testing.T) {
 		cfg := &config.Config{App: config.AppConfig{Name: testApp}}
 		rec := &recLogger{}
 		app := &App{cfg: cfg, logger: rec}
-		app.healthProbes = []Prober{probeDescription{
+		installSealedSlots(app, probeDescription{
 			name:     componentDatabase,
 			critical: true,
 			live:     func(context.Context) error { return errors.New(pgconnIdentityError) },
-		}}
+		})
 
 		body, code := runReadyCheck(t, app, cfg)
 
@@ -928,16 +932,15 @@ func TestReadyCheckWithholdsDatabaseIdentityFromBody(t *testing.T) {
 	})
 
 	t.Run("probe_built_by_the_real_constructor_is_sanitized", func(t *testing.T) {
-		// Same path, but the probe comes from databaseProbe rather than a hand-built
-		// one, so it covers the constructor's own wiring reaching readyCheck.
+		// Same path, but the description comes from the database slot's own describe()
+		// rather than a hand-built one, so it covers that wiring reaching readyCheck.
 		cfg := &config.Config{App: config.AppConfig{Name: testApp}}
 		cfg.Database.Type = "mysql" // resolves as intended, then fails to connect
 		cfg.Database.Host = "control-plane.internal"
 		rec := &recLogger{}
 		app := &App{cfg: cfg, logger: rec, dbManager: newRealConnectorDBManager(cfg)}
 		app.installSlots(slotInputs{})
-		app.healthProbes = app.collectProbes()
-		require.Len(t, app.healthProbes, 3)
+		sealAndJudge(app)
 
 		body, code := runReadyCheck(t, app, cfg)
 
@@ -959,11 +962,11 @@ func TestReadyCheckSanitizesCriticalProbeWithoutPublicError(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: testApp}}
 	rec := &recLogger{}
 	app := &App{cfg: cfg, logger: rec}
-	app.healthProbes = []Prober{probeDescription{
+	installSealedSlots(app, probeDescription{
 		name:     "vault",
 		critical: true,
 		live:     func(context.Context) error { return errors.New(pgconnIdentityError) },
-	}}
+	})
 
 	body, code := runReadyCheck(t, app, cfg)
 
@@ -989,15 +992,15 @@ func runReadyCheck(t *testing.T, app *App, cfg *config.Config) (body map[string]
 	return body, w.Code
 }
 
-// TestReadyCheckOmitsStreamsWhenNoneDeclared pins that a streams-free probe set renders
-// neither streams key: the kind reaches the body only via the probe re-collect that
-// prepareRuntime runs after the start phase. The probe set is the real one, so the classic
-// kinds render and the two assertions below are not passing on an empty body.
+// TestReadyCheckOmitsStreamsWhenNoneDeclared pins that a streams-free deployment renders
+// neither streams key: the streams slot seals no description while its manager does not
+// exist. The slots are the real ones, so the classic kinds render and the two assertions
+// below are not passing on an empty body.
 func TestReadyCheckOmitsStreamsWhenNoneDeclared(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
 	app := &App{cfg: cfg, logger: logger.New("error", false)}
 	app.installSlots(slotInputs{})
-	app.healthProbes = app.collectProbes()
+	sealAndJudge(app)
 
 	body, code := runReadyCheck(t, app, cfg)
 
@@ -1013,7 +1016,7 @@ func TestReadyCheckOmitsStreamsWhenNoneDeclared(t *testing.T) {
 func TestReadyCheckWithoutConfigRendersAnEmptyAppBlock(t *testing.T) {
 	app := &App{logger: logger.New("error", false)}
 	app.installSlots(slotInputs{})
-	app.healthProbes = app.collectProbes()
+	sealAndJudge(app)
 
 	body, code := runReadyCheck(t, app, &config.Config{})
 
@@ -1026,23 +1029,22 @@ func TestReadyCheckWithoutConfigRendersAnEmptyAppBlock(t *testing.T) {
 	assert.Equal(t, map[string]any{"name": testApp, "environment": "test", "version": "1.0.0"}, body["app"])
 }
 
-// TestReadyCheckReportsStreamsWhenProbed is the other half: once the runtime probe is
-// registered the component and its stats reach the body.
-func TestReadyCheckReportsStreamsWhenProbed(t *testing.T) {
+// TestReadyReportsStreamsOnceItsManagerExists is the other half: once the streams slot has
+// sealed a description, the component and its stats reach the body.
+func TestReadyReportsStreamsOnceItsManagerExists(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
-	app := &App{cfg: cfg, logger: logger.New("error", false), healthProbes: []Prober{
-		probeDescription{
-			name:        componentStreams,
-			publicStats: streamsPublicStats,
-			live:        func(context.Context) error { return nil },
-			stats: func() map[string]any {
-				return map[string]any{
-					"consumers":      2,
-					"stored_offsets": map[string]any{"orders/consumer-a": int64(42)},
-				}
-			},
+	app := &App{cfg: cfg, logger: logger.New("error", false)}
+	installSealedSlots(app, probeDescription{
+		name:        componentStreams,
+		publicStats: streamsPublicStats,
+		live:        func(context.Context) error { return nil },
+		stats: func() map[string]any {
+			return map[string]any{
+				"consumers":      2,
+				"stored_offsets": map[string]any{"orders/consumer-a": int64(42)},
+			}
 		},
-	}}
+	})
 
 	body, code := runReadyCheck(t, app, cfg)
 
@@ -1205,4 +1207,65 @@ func captureStdout(t *testing.T, fn func()) string {
 	_, err = io.Copy(&buf, r)
 	require.NoError(t, err)
 	return buf.String()
+}
+
+// startGatedSlot describes its kind only once its own start has run — the shape the streams
+// slot really has, whose manager does not exist until start builds it. A seal performed
+// above start would store nothing at all for such a kind.
+type startGatedSlot struct {
+	sealedReadiness
+	started bool
+}
+
+func (s *startGatedSlot) describe() (probeDescription, bool) {
+	if !s.started {
+		return probeDescription{}, false
+	}
+	return probeDescription{live: func(context.Context) error { return nil }}, true
+}
+
+func (s *startGatedSlot) preInit(context.Context) error { return nil }
+func (s *startGatedSlot) preInitFatal() bool            { return false }
+
+func (s *startGatedSlot) start(context.Context) (advisory, fatal error) {
+	s.started = true
+	return nil, nil
+}
+
+func (s *startGatedSlot) stop(context.Context)        {}
+func (s *startGatedSlot) closer() (namedCloser, bool) { return namedCloser{}, false }
+
+var _ resourceSlot = (*startGatedSlot)(nil)
+
+// TestStartSlotsSealsBelowEachKindsStart pins the ORDER of the two lines inside the
+// startSlots walk, which nothing else asserts: the seal must run after the kind's own
+// start, never before it. A kind that can only describe itself once started — the streams
+// slot, whose manager start builds — would otherwise seal nothing and vanish from /ready
+// forever, and every other kind's description would still look correct.
+func TestStartSlotsSealsBelowEachKindsStart(t *testing.T) {
+	slot := &startGatedSlot{sealedReadiness: sealedReadiness{kind: componentStreams}}
+	a := &App{logger: logger.New("error", false), slots: []resourceSlot{slot}}
+
+	require.NoError(t, a.startSlots(context.Background()))
+
+	sealed := slot.readiness()
+	require.NotNil(t, sealed, "the seal must run below the kind's start, or a kind described only once started seals nothing")
+	assert.Equal(t, componentStreams, sealed.name, "the seal stamps the slot's own kind onto what it sealed")
+}
+
+// TestPrepareRuntimeRequiresTheReadinessJudge pins the second half of the walk's
+// precondition, beside TestPrepareRuntimeRequiresInstalledSlots: the readiness judge was
+// installed. startSlots ends by marking the judge started, so a builder chain that ran
+// CreateApp but skipped CreateHealthProbes would leave a judge over an EMPTY slot list
+// marked started — /ready would answer 200 with nothing gated on at all, and the service
+// would boot green with no database and no consumers behind it.
+func TestPrepareRuntimeRequiresTheReadinessJudge(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
+	a := newLifecycleCheckApp(t, cfg)
+	a.judge = readinessJudge{} // CreateHealthProbes deliberately skipped
+
+	err := a.prepareRuntime(context.Background())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CreateHealthProbes")
 }

@@ -4,6 +4,10 @@
 - **Date**: 2026-08-07
 - **Related**: [ADR-011](adr_011_redis_cache.md), [ADR-046](adr_046_cache_readiness_strict_default.md), [ADR-047](adr_047_database_absence_vs_misconfiguration.md), [ADR-049](adr_049_debug_endpoints_fail_closed.md)
 
+> **Amended (2026-09-06, [ADR-066](adr_066_readiness_one_module.md) as amended):** the
+> `cacheProbe` constructor named below now lives in the cache slot's `describe()`
+> (`app/slot.go`).
+
 ## Context
 
 `ResourceManagerFactory.CreateCacheManager` swallowed its only failure:

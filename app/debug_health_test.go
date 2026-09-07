@@ -41,17 +41,9 @@ func TestDebugHealthHandlers(t *testing.T) {
 					},
 				}
 
-				app := &App{
-					cfg:    cfg,
-					logger: logger.New("info", false),
-					healthProbes: []Prober{
-						&testHealthProbe{
-							name:   "database",
-							status: "healthy",
-							err:    nil,
-						},
-					},
-				}
+				app := &App{cfg: cfg, logger: logger.New("info", false)}
+				installSealedSlots(app, describe(componentDatabase, false, nil,
+					map[string]any{"connection_count": 5}, databasePublicStats))
 				return app
 			},
 			expectedStatus: http.StatusOK,
@@ -73,18 +65,9 @@ func TestDebugHealthHandlers(t *testing.T) {
 					},
 				}
 
-				app := &App{
-					cfg:    cfg,
-					logger: logger.New("info", false),
-					healthProbes: []Prober{
-						&testHealthProbe{
-							name:     "database",
-							status:   "unhealthy",
-							err:      assert.AnError,
-							critical: true,
-						},
-					},
-				}
+				app := &App{cfg: cfg, logger: logger.New("info", false)}
+				installSealedSlots(app, describe(componentDatabase, true, assert.AnError,
+					map[string]any{"connection_count": 5}, databasePublicStats))
 				return app
 			},
 			expectedStatus: http.StatusOK,
@@ -98,11 +81,8 @@ func TestDebugHealthHandlers(t *testing.T) {
 		{
 			name: "health debug with nil config",
 			setupApp: func() *App {
-				app := &App{
-					cfg:          nil,
-					logger:       logger.New("info", false),
-					healthProbes: []Prober{},
-				}
+				app := &App{cfg: nil, logger: logger.New("info", false)}
+				installSealedSlots(app)
 				return app
 			},
 			expectedStatus: http.StatusOK,
@@ -201,30 +181,6 @@ func TestGetAppInfo(t *testing.T) {
 	}
 }
 
-// Test utilities
-
-type testHealthProbe struct {
-	name     string
-	status   string
-	err      error
-	critical bool
-}
-
-func (p *testHealthProbe) Run(_ context.Context) HealthStatus {
-	details := make(map[string]any)
-	if p.name == "database" {
-		details["connection_count"] = 5
-	}
-
-	return HealthStatus{
-		Name:     p.name,
-		Status:   p.status,
-		Err:      p.err,
-		Critical: p.critical,
-		Details:  details,
-	}
-}
-
 // TestHealthDebugKeepsFullCacheErrorWhileReadySanitizes pins both halves of the cache
 // error-routing contract from a single probe set: /ready (no allowlist, no auth) discloses
 // nothing about the backend, while the application log and the IP-allowlisted /health-debug
@@ -243,8 +199,7 @@ func TestHealthDebugKeepsFullCacheErrorWhileReadySanitizes(t *testing.T) {
 	log := &recLogger{}
 	app := &App{cfg: cfg, logger: log, cacheManager: cacheManager}
 	app.installSlots(slotInputs{})
-	app.healthProbes = app.collectProbes()
-	require.Len(t, app.healthProbes, 3)
+	sealAndJudge(app)
 
 	readyReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, readyEndpoint, http.NoBody)
 	readyRec := httptest.NewRecorder()
@@ -312,8 +267,7 @@ func TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: appName, Env: testName, Version: appVersion}}
 	app := &App{cfg: cfg, logger: log, dbManager: dbManager}
 	app.installSlots(slotInputs{})
-	app.healthProbes = app.collectProbes()
-	require.Len(t, app.healthProbes, 3)
+	sealAndJudge(app)
 
 	readyReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, readyEndpoint, http.NoBody)
 	readyRec := httptest.NewRecorder()
@@ -362,28 +316,28 @@ func TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem(t *testing.T) {
 func TestHealthDebugRendersOneEntryPerKind(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: appName, Env: testName, Version: appVersion}}
 	app := &App{
-		cfg:    cfg,
-		logger: logger.New("error", false),
-		healthProbes: []Prober{
-			probeDescription{
-				name:        componentDatabase,
-				critical:    true,
-				publicStats: databasePublicStats,
-				live:        func(context.Context) error { return nil },
-				stats:       func() map[string]any { return map[string]any{"active_connections": 1} },
-			},
-			probeDescription{
-				name:        componentStreams,
-				publicStats: streamsPublicStats,
-				live:        func(context.Context) error { return errStreamsNotOpen },
-				stats: func() map[string]any {
-					return map[string]any{"stored_offsets": map[string]int64{"orders/projector": 7}}
-				},
-			},
-		},
+		cfg:              cfg,
+		logger:           logger.New("error", false),
 		dbManager:        &database.DbManager{},
 		messagingManager: &messaging.Manager{},
 	}
+	installSealedSlots(app,
+		probeDescription{
+			name:        componentDatabase,
+			critical:    true,
+			publicStats: databasePublicStats,
+			live:        func(context.Context) error { return nil },
+			stats:       func() map[string]any { return map[string]any{"active_connections": 1} },
+		},
+		probeDescription{
+			name:        componentStreams,
+			publicStats: streamsPublicStats,
+			live:        func(context.Context) error { return errStreamsNotOpen },
+			stats: func() map[string]any {
+				return map[string]any{"stored_offsets": map[string]int64{"orders/projector": 7}}
+			},
+		},
+	)
 
 	handlers := NewDebugHandlers(app, &config.DebugConfig{Enabled: true, PathPrefix: "/_debug"}, app.logger)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health-debug", http.NoBody)
@@ -423,14 +377,11 @@ func TestHealthDebugRendersOneEntryPerKind(t *testing.T) {
 // Rendering the debug view from /ready's truncated report would drop them.
 func TestHealthDebugRunsEveryProbeBehindAFailingCriticalKind(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: appName, Env: testName, Version: appVersion}}
-	app := &App{
-		cfg:    cfg,
-		logger: logger.New("error", false),
-		healthProbes: []Prober{
-			describe(componentDatabase, true, errors.New("connection refused"), nil, databasePublicStats),
-			describe(componentCache, true, nil, nil, cachePublicStats),
-		},
-	}
+	app := &App{cfg: cfg, logger: logger.New("error", false)}
+	installSealedSlots(app,
+		describe(componentDatabase, true, errors.New("connection refused"), nil, databasePublicStats),
+		describe(componentCache, true, nil, nil, cachePublicStats),
+	)
 
 	handlers := NewDebugHandlers(app, &config.DebugConfig{Enabled: true, PathPrefix: "/_debug"}, app.logger)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health-debug", http.NoBody)
