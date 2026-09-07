@@ -275,7 +275,11 @@ Each lane is served by its own **shipper** — the relay's per-lane adapter that
 without touching a client, makes one attempt, and classifies its own failure
 ([ADR-088](adr_088_outbox_ordered_leader_relay.md)). Only the AMQP lane has a lane-wide
 pre-flight: its `Ready()` asks the client's `IsReady()` once per cycle, so a down broker holds
-back the whole lane before any row in the batch is attempted. The stream lane's `Ready()`
+back the whole lane before any row in the batch is attempted. The relay bounds each lane's
+`Ready()` call with `messaging.reconnect.readytimeout` (#1538), because the job context it is
+called with otherwise carries no deadline of its own and a hung resolver — the AMQP lane
+resolves the tenant client through `messaging.Manager.Publisher`, which can wait — would
+stall the whole cycle. The stream lane's `Ready()`
 always returns nil — its handles are per super stream, so there is no lane-wide outage check to
 run — and readiness is judged per TARGET instead, inside `Ship`: a closed producer aborts the
 row (the shutdown window, not a failure), and a producer whose `(*streams.Publisher).Ready()`

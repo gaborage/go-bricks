@@ -43,12 +43,15 @@ func TestDecodeHeadersInvalidJSON(t *testing.T) {
 // newRelayWithShippers wires a single-tenant Relay with the supplied fake store and per-lane
 // adapters. tenants is [""], so multitenant.SetTenant is a no-op; getDB reads the db from a
 // context value (dbFromCtx) stashed by newFakeJobCtx, which survives the per-tenant lease
-// scope's context wrapping (ADR-032).
+// scope's context wrapping (ADR-032). readyTimeout defaults to a real-world value; a test that
+// cares about the bound (e.g. TestRelayBoundsEachPreflightReadinessCheck) overrides
+// r.readyTimeout directly after construction.
 func newRelayWithShippers(store Store, shippers map[string]shipper) *Relay {
 	return newRelay(
 		store,
 		&config.OutboxConfig{BatchSize: 10, MaxRetries: 3, PublishTimeout: 5 * time.Second},
 		func(ctx context.Context) (dbtypes.Interface, error) { return dbFromCtx(ctx), nil },
+		5*time.Second,
 		[]string{""},
 		shippers,
 	)
@@ -738,6 +741,40 @@ func TestRelayOneLaneOutageDoesNotStallTheOther(t *testing.T) {
 	assert.Equal(t, 1, store.MarkPublishedCalls, "and was marked published")
 	assert.Equal(t, 1, store.MarkFailedCalls, "only the AMQP row took the outage path")
 	assert.Empty(t, amqpLane.Ships)
+}
+
+// TestRelayBoundsEachPreflightReadinessCheck is the regression test for #1538: preflight
+// used to call Ready with the bare job context, which carries no deadline (the scheduler
+// builds it from a tenant-less, undeadlined context). A shipper whose Ready hangs — the
+// AMQP lane's Ready resolves the tenant client through messaging.Manager.Publisher, which
+// can wait — must not stall the whole cycle. The relay must bound the check itself with
+// messaging.reconnect.readytimeout, so the shipper observes a context with its own deadline
+// and the cycle still returns promptly, reporting the lane down.
+func TestRelayBoundsEachPreflightReadinessCheck(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "evt-1", Exchange: "ex", RoutingKey: "rk"},
+	}}
+	r, amqpLane, _ := newRelayWithLanes(store)
+	r.readyTimeout = 20 * time.Millisecond
+
+	var hasDeadline bool
+	amqpLane.ReadyFn = func(ctx context.Context) error {
+		_, hasDeadline = ctx.Deadline()
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	start := time.Now()
+	// The job ctx itself carries no deadline (as scheduler.JobContext builds it) — only the
+	// relay's own bound can make the hung Ready check return.
+	err := r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "a preflight check that never returns on its own must still surface as a lane failure")
+	assert.Contains(t, err.Error(), context.DeadlineExceeded.Error())
+	assert.Less(t, elapsed, time.Second, "the ready check must be bounded by the relay, not the bare job ctx")
+	assert.True(t, hasDeadline, "preflight must hand Ready a context with its own deadline")
+	assert.Equal(t, 1, store.MarkFailedCalls, "the outaged row still advances retry_count while the lane is down")
 }
 
 // --- lane resolution ----------------------------------------------------------

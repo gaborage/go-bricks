@@ -27,7 +27,9 @@
 > relay are tracked by #1523: the cycle-start pre-flight asks EVERY registered lane, not only
 > the lanes the fetched batch actually names, and a row whose headers will not decode parks
 > the destination key while its stamped successors key by tenant, so a corrupt row holds a
-> narrower key than the rows behind it.
+> narrower key than the rows behind it. And (#1538) each lane's `Ready()` call is now bounded
+> by `messaging.reconnect.readytimeout`, since the bare job context it previously ran under
+> carries no deadline of its own and a hung resolver would otherwise stall the whole cycle.
 
 ## Context
 

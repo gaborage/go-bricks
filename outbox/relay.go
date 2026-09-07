@@ -34,6 +34,13 @@ type Relay struct {
 	config config.OutboxConfig
 	getDB  func(context.Context) (dbtypes.Interface, error)
 
+	// readyTimeout bounds each lane's preflight Ready check (#1538), owned by the relay
+	// like the publish bound: the bare job context the scheduler builds carries no deadline
+	// of its own, so a hung resolver (e.g. the AMQP lane's tenant client lookup) would
+	// otherwise stall the whole cycle. Set from messaging.reconnect.readytimeout, which
+	// validatePublishTimeout already requires publishtimeout to be >= .
+	readyTimeout time.Duration
+
 	// shippers holds one adapter per lane, keyed by the lane a row names. Looking a
 	// record's lane up here is the ONLY place the empty legacy lane resolves, and a lane
 	// with no entry is poison. The module writes this map once at registration.
@@ -61,7 +68,7 @@ type laneFields struct {
 
 // newRelay builds a relay over its lanes, precomputing everything a cycle would otherwise
 // derive from the shipper map on every tick.
-func newRelay(store Store, cfg *config.OutboxConfig, getDB func(context.Context) (dbtypes.Interface, error), tenants []string, shippers map[string]shipper) *Relay {
+func newRelay(store Store, cfg *config.OutboxConfig, getDB func(context.Context) (dbtypes.Interface, error), readyTimeout time.Duration, tenants []string, shippers map[string]shipper) *Relay {
 	lanes := make([]string, 0, len(shippers))
 	for lane := range shippers {
 		lanes = append(lanes, lane)
@@ -82,6 +89,7 @@ func newRelay(store Store, cfg *config.OutboxConfig, getDB func(context.Context)
 		store:         store,
 		config:        *cfg,
 		getDB:         getDB,
+		readyTimeout:  readyTimeout,
 		shippers:      shippers,
 		laneOrder:     lanes,
 		laneLogFields: fields,
@@ -199,11 +207,25 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 }
 
 // preflight asks each lane whether it is usable this cycle, returning the lanes that are
-// not and the error the cycle reports for them.
+// not and the error the cycle reports for them. Each check is bounded by readyTimeout
+// (#1538): the job ctx here carries no deadline of its own (the scheduler builds it
+// tenant-less and undeadlined), so a hung resolver — the AMQP lane's Ready resolves the
+// tenant client through messaging.Manager.Publisher, which can wait — would otherwise
+// stall the whole cycle rather than just its own lane.
 func (r *Relay) preflight(ctx context.Context) (down map[string]struct{}, laneErr error) {
 	var errs []error
 	for _, lane := range r.laneOrder {
-		if err := r.shippers[lane].Ready(ctx); err != nil {
+		// A zero/negative readyTimeout is "no extra bound" (call with ctx as today) rather
+		// than a zero-deadline ctx that would fail every check instantly: validatePublishTimeout
+		// guarantees a positive value in production, so this only matters for a test or a
+		// misconfigured build that skipped that check.
+		rctx, cancel := ctx, context.CancelFunc(func() {})
+		if r.readyTimeout > 0 {
+			rctx, cancel = context.WithTimeout(ctx, r.readyTimeout)
+		}
+		err := r.shippers[lane].Ready(rctx)
+		cancel()
+		if err != nil {
 			if down == nil {
 				down = make(map[string]struct{}, len(r.shippers))
 			}

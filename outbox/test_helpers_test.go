@@ -422,6 +422,10 @@ func (e *recordingEvent) Enabled() bool                             { return tru
 // is handed rows, and an exhausted list delivers.
 type fakeShipper struct {
 	ReadyErr error
+	// ReadyFn, when set, replaces ReadyErr and is called with the context the relay's
+	// preflight actually hands Ready — lets a test observe whether that context carries a
+	// deadline (#1538) rather than only what error it returns.
+	ReadyFn  func(ctx context.Context) error
 	Plans    func(rec *Record, headers map[string]any) shipment
 	Verdicts []verdict
 
@@ -430,8 +434,11 @@ type fakeShipper struct {
 	Ctxs       []context.Context
 }
 
-func (f *fakeShipper) Ready(context.Context) error {
+func (f *fakeShipper) Ready(ctx context.Context) error {
 	f.ReadyCalls++
+	if f.ReadyFn != nil {
+		return f.ReadyFn(ctx)
+	}
 	return f.ReadyErr
 }
 
