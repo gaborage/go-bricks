@@ -222,8 +222,7 @@ func TestMergeShardsAcceptsRealCaptureShapedShard(t *testing.T) {
 	}
 }
 
-func shardPaths(t *testing.T, dir string, names ...string) []string {
-	t.Helper()
+func shardPaths(dir string, names ...string) []string {
 	paths := make([]string, 0, len(names))
 	for _, n := range names {
 		paths = append(paths, filepath.Join(dir, n))
@@ -261,17 +260,24 @@ func runAccumulateCase(t *testing.T, tt *accumulateCase) {
 	}
 
 	merged := mergedReport{Files: []json.RawMessage{}}
-	readable, skipped, overflow := accumulateShards(&merged, shardPaths(t, dir, tt.order...), absOut, io.Discard)
+	readable, skipped, err := accumulateShards(&merged, shardPaths(dir, tt.order...), absOut, io.Discard)
 
 	if readable != tt.wantReadable || skipped != tt.wantSkipped {
 		t.Errorf("readable/skipped = %d/%d, want %d/%d", readable, skipped, tt.wantReadable, tt.wantSkipped)
 	}
-	wantOverflow := ""
-	if tt.wantOverflow != "" {
-		wantOverflow = filepath.Join(dir, tt.wantOverflow)
-	}
-	if overflow != wantOverflow {
-		t.Errorf("overflow = %q, want %q", overflow, wantOverflow)
+	switch {
+	case tt.wantOverflow == "":
+		if err != nil {
+			t.Errorf("accumulateShards err = %v, want nil", err)
+		}
+	case err == nil:
+		t.Errorf("accumulateShards err = nil, want an overflow naming %s", tt.wantOverflow)
+	default:
+		want := "aggregate counters would overflow at " + filepath.Join(dir, tt.wantOverflow) +
+			" — refusing to write a corrupt report"
+		if err.Error() != want {
+			t.Errorf("accumulateShards err = %q, want %q", err, want)
+		}
 	}
 	if merged.MutantsKilled != tt.wantKilled || merged.MutantsLived != tt.wantLived || merged.MutantsNotCovered != tt.wantNotCov {
 		t.Errorf("counters = %d/%d/%d, want %d/%d/%d",

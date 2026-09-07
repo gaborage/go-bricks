@@ -71,9 +71,9 @@ func readShard(p string, out io.Writer) (shardReport, bool) {
 }
 
 // accumulateShards folds every shard except absOut into merged, in the order
-// given. overflow names the first shard whose counters would wrap the
+// given. The error names the first shard whose counters would wrap the
 // aggregate; merged is then left partially folded and must not be written.
-func accumulateShards(merged *mergedReport, paths []string, absOut string, out io.Writer) (readable, skipped int, overflow string) {
+func accumulateShards(merged *mergedReport, paths []string, absOut string, out io.Writer) (readable, skipped int, err error) {
 	for _, p := range paths {
 		if abs, absErr := filepath.Abs(p); absErr == nil && abs == absOut {
 			continue // never slurp our own output on a re-run
@@ -86,7 +86,8 @@ func accumulateShards(merged *mergedReport, paths []string, absOut string, out i
 		if merged.MutantsKilled > math.MaxInt-s.MutantsKilled ||
 			merged.MutantsLived > math.MaxInt-s.MutantsLived ||
 			merged.MutantsNotCovered > math.MaxInt-s.MutantsNotCovered {
-			return readable, skipped, p
+			return readable, skipped, fmt.Errorf(
+				"aggregate counters would overflow at %s — refusing to write a corrupt report", p)
 		}
 		readable++
 		merged.MutantsKilled += s.MutantsKilled
@@ -94,7 +95,7 @@ func accumulateShards(merged *mergedReport, paths []string, absOut string, out i
 		merged.MutantsNotCovered += s.MutantsNotCovered
 		merged.Files = append(merged.Files, s.Files...)
 	}
-	return readable, skipped, ""
+	return readable, skipped, nil
 }
 
 // setRates derives the two percentages from the folded counters. Efficacy is
@@ -125,9 +126,9 @@ func mergeShards(dir, outPath string, out io.Writer) int {
 
 	var merged mergedReport
 	merged.Files = []json.RawMessage{}
-	readable, skipped, overflow := accumulateShards(&merged, paths, absOut, out)
-	if overflow != "" {
-		return fail("aggregate counters would overflow at %s — refusing to write a corrupt report", overflow)
+	readable, skipped, err := accumulateShards(&merged, paths, absOut, out)
+	if err != nil {
+		return fail("%v", err)
 	}
 	if readable == 0 {
 		return fail("no readable shards in %s — refusing to write an empty report", dir)
