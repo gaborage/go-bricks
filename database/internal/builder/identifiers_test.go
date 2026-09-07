@@ -462,8 +462,7 @@ func BenchmarkNormalizeAgainstBareName(b *testing.B) {
 		b.Run(bc.name, func(b *testing.B) {
 			qb := identifierQB()
 			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
+			for b.Loop() {
 				if _, err := qb.validateIdentifier("column", bc.identifier); err != nil {
 					b.Fatalf("unexpected error: %v", err)
 				}
