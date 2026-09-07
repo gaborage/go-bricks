@@ -777,6 +777,34 @@ func TestRelayBoundsEachPreflightReadinessCheck(t *testing.T) {
 	assert.Equal(t, 1, store.MarkFailedCalls, "the outaged row still advances retry_count while the lane is down")
 }
 
+// TestRelayZeroReadyTimeoutLeavesPreflightUnbounded pins the zero arm of the readyTimeout
+// bound at outbox/relay.go:223 (`r.readyTimeout > 0`): a zero timeout means "no extra
+// bound" — Ready receives the caller's ctx unchanged — never a zero-deadline ctx that would
+// be expired the instant it is created. A `>=` mutant on that comparison turns a zero
+// timeout into context.WithTimeout(ctx, 0), an already-expired context.
+func TestRelayZeroReadyTimeoutLeavesPreflightUnbounded(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "evt-1", Exchange: "ex", RoutingKey: "rk"},
+	}}
+	r, amqpLane, _ := newRelayWithLanes(store)
+	r.readyTimeout = 0
+
+	var hasDeadline bool
+	var readyCtxErr error
+	amqpLane.ReadyFn = func(ctx context.Context) error {
+		_, hasDeadline = ctx.Deadline()
+		readyCtxErr = ctx.Err()
+		return nil
+	}
+
+	// The job ctx itself carries no deadline (as scheduler.JobContext builds it).
+	err := r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
+
+	require.NoError(t, err)
+	assert.False(t, hasDeadline, "a zero readyTimeout must not add a deadline to the ready check's ctx")
+	assert.NoError(t, readyCtxErr, "ctx must not already be expired when Ready runs")
+}
+
 // --- lane resolution ----------------------------------------------------------
 
 // TestRelayResolvesTheEmptyLegacyLaneToTheAMQPShipper pins the one place the empty lane a
