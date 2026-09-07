@@ -120,8 +120,8 @@ func TestValidateTableNameLengthBound(t *testing.T) {
 // TestStoreSchemaSegmentBound pins the schema segment against the STORE vendor's raw
 // identifier cap at construction. No derived name decorates a schema — IndexBaseName
 // strips it and LeaderTableName appends to the table segment — so the whole cap is
-// spendable there. The decisive row is the 64-byte schema Oracle accepts and PostgreSQL
-// refuses: it is what proves the bound follows the store's vendor rather than one shared
+// spendable there. The decisive row is oracle_schema_over_the_postgresql_cap — the 64-byte
+// schema Oracle accepts and PostgreSQL refuses: it is what proves the bound follows the store's vendor rather than one shared
 // number. The 128/129 pair is the Oracle boundary, and its refusal is owned by the shared
 // sqlid grammar, not by this door — the assertion names sqlid's message to say so.
 func TestStoreSchemaSegmentBound(t *testing.T) {
@@ -138,7 +138,7 @@ func TestStoreSchemaSegmentBound(t *testing.T) {
 			want: fmt.Sprintf("is %d bytes; the maximum for %s is %d",
 				dbident.MaxPostgreSQLBytes+1, dbtypes.PostgreSQL, dbident.MaxPostgreSQLBytes),
 		},
-		{name: "schema_over_the_postgresql_cap_is_fine_on_oracle", newStore: NewOracleStore, schema: strings.Repeat("s", dbident.MaxPostgreSQLBytes+1)},
+		{name: "oracle_schema_over_the_postgresql_cap", newStore: NewOracleStore, schema: strings.Repeat("s", dbident.MaxPostgreSQLBytes+1)},
 		{name: "oracle_schema_at_the_cap", newStore: NewOracleStore, schema: strings.Repeat("s", dbident.MaxOracleBytes)},
 		{
 			name: "oracle_schema_one_byte_over_the_cap", newStore: NewOracleStore,

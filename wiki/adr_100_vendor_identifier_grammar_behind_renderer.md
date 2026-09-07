@@ -41,8 +41,13 @@ Oracle's 128 for every vendor, because its config-time callers judge
 configuration before a connection exists and have no vendor in scope; the store
 constructors, which know their vendor, are the vendor-aware gate. The
 constructor signatures do not move — only their refusal set widens. The outbox's
-new validator deliberately duplicates the inbox's twin rather than sharing one: #1503
-owns the shared name-budget helper and folds both into it.
+new validator deliberately duplicates the inbox's rather than sharing one: #1503
+owns the shared name-budget helper and folds both into it. The two are not
+identical, and the difference is left standing for that helper to settle: the
+outbox's default arm hands an unknown vendor PostgreSQL's cap, as this ADR's
+builder rule does, while the inbox's `maxTableNameLenFor` defaults to Oracle's
+looser one. Both are vacuous today — each is reached only from its own two
+vendor-literal constructors.
 
 ## Amendment (2026-09-06): the doors judge the byte cap per segment
 

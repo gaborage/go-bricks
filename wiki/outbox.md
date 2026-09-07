@@ -354,7 +354,11 @@ MERGE INTO gobricks_outbox_leader t USING (SELECT 1 AS id FROM dual) s ON (t.id 
 
 Substitute your configured `outbox.tablename` throughout, and grant the relay's role
 `SELECT … FOR UPDATE` on the leader table. The table's own segment is bounded at 49 bytes so
-every identifier derived from it stays distinct under PostgreSQL's 63-byte truncation.
+every identifier derived from it stays distinct under PostgreSQL's 63-byte truncation. A
+schema prefix spends its own budget, not the table's: nothing the store derives decorates
+it, so it is bounded by the raw identifier cap of the store's vendor — 63 bytes on
+PostgreSQL, 128 on Oracle — and an over-long one is refused when the store is constructed
+([ADR-100](adr_100_vendor_identifier_grammar_behind_renderer.md)).
 
 **The persisted tenant stamp is rehydrated onto the publish context**, never forwarded as a
 stored header: `Publish` persists it in the row, the relay strips it from the headers and

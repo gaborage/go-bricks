@@ -52,7 +52,9 @@ func validateTableName(name string) error {
 // Oracle arm restates a floor sqlid already enforces on every part, so the tightening
 // this adds is PostgreSQL's alone; it is spelled out because the vendor split, not the
 // one live number, is what #1503's shared helper folds — and because an unknown vendor
-// inherits PostgreSQL's cap here the way it does at the builder doors (ADR-100).
+// inherits PostgreSQL's cap here the way it does at the builder doors (ADR-100). The
+// inbox's maxTableNameLenFor defaults the OTHER way, to Oracle's looser cap; #1503
+// reconciles the two rather than this change flipping one of them in passing.
 func maxSchemaSegmentLenFor(vendor dbtypes.Vendor) int {
 	if vendor == dbtypes.Oracle {
 		return dbident.MaxOracleBytes
