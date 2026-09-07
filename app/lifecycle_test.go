@@ -130,8 +130,8 @@ func TestShutdownStopsSlotsBeforeModules(t *testing.T) {
 		closers:  []namedCloser{},
 	}
 	a.slots = []resourceSlot{
-		&recordingSlot{kind: componentMessaging, order: &order},
-		&recordingSlot{kind: componentStreams, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentMessaging}, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentStreams}, order: &order},
 	}
 	require.NoError(t, a.registry.Register(&recordingModule{onShutdown: func() {
 		order = append(order, "modules")
@@ -347,10 +347,10 @@ func TestStartSlotsStopsAlreadyStartedKindsOnFatal(t *testing.T) {
 	order := []string{}
 	a := &App{logger: logger.New("error", false)}
 	a.slots = []resourceSlot{
-		&recordingSlot{kind: componentDatabase, order: &order},
-		&recordingSlot{kind: componentMessaging, order: &order},
-		&recordingSlot{kind: componentCache, order: &order},
-		&recordingSlot{kind: componentStreams, order: &order, startFatal: assert.AnError},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentDatabase}, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentMessaging}, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentCache}, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentStreams}, order: &order, startFatal: assert.AnError},
 	}
 
 	err := a.startSlots(context.Background())

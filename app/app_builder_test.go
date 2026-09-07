@@ -1295,9 +1295,9 @@ func TestPerformPreInitializationStopsAtTheFirstFatalKind(t *testing.T) {
 		app:    &App{cfg: defaultTestConfig(), logger: logger.New("error", false)},
 	}
 	builder.app.slots = []resourceSlot{
-		&recordingSlot{kind: componentDatabase, order: &order, fatalPreInit: true, preInitErr: assert.AnError},
-		&recordingSlot{kind: componentMessaging, order: &order},
-		&recordingSlot{kind: componentCache, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentDatabase}, order: &order, fatalPreInit: true, preInitErr: assert.AnError},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentMessaging}, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentCache}, order: &order},
 	}
 
 	builder.performPreInitialization()
@@ -1319,8 +1319,8 @@ func TestPerformPreInitializationContinuesPastABestEffortKind(t *testing.T) {
 		app:    &App{cfg: defaultTestConfig(), logger: rec},
 	}
 	builder.app.slots = []resourceSlot{
-		&recordingSlot{kind: componentCache, order: &order, preInitErr: assert.AnError},
-		&recordingSlot{kind: componentStreams, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentCache}, order: &order, preInitErr: assert.AnError},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentStreams}, order: &order},
 	}
 
 	builder.performPreInitialization()
@@ -1343,7 +1343,7 @@ func TestPerformPreInitializationSkipsWhenAppCarriesNoConfig(t *testing.T) {
 		app:    &App{logger: logger.New("error", false)},
 	}
 	builder.app.slots = []resourceSlot{
-		&recordingSlot{kind: componentDatabase, order: &order},
+		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentDatabase}, order: &order},
 	}
 
 	builder.performPreInitialization()
