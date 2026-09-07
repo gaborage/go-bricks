@@ -17,7 +17,6 @@ import (
 	"github.com/gaborage/go-bricks/database"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
-	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/testing/containers"
 )
 
@@ -203,8 +202,8 @@ func TestOutboxStoreManagedAlterIntegration(t *testing.T) {
 //
 // It deliberately does NOT assert per-key publish ORDER: the AMQP fake records routing keys,
 // and every row of one key carries the same routing key, so the recording cannot distinguish
-// orderings. Sequence order within a key is pinned by the unit tests over relayKey and the
-// parking loop, and by TestOutboxStoreCreateTableAndOrderIntegration for the fetch side.
+// orderings. Sequence order within a key is pinned by the unit tests over the AMQP shipper's
+// Plan and the relay's parking loop, and by TestOutboxStoreCreateTableAndOrderIntegration for the fetch side.
 func TestOutboxRelayTwoInstancesOneLedgerIntegration(t *testing.T) {
 	ctx := context.Background()
 	conn, store, _ := newPostgresIT(ctx, t)
@@ -224,13 +223,12 @@ func TestOutboxRelayTwoInstancesOneLedgerIntegration(t *testing.T) {
 
 	newRelay := func() (*Relay, *fakeAMQP) {
 		amqp := newFakeAMQP()
-		return &Relay{
-			store:        store,
-			config:       config.OutboxConfig{BatchSize: 50, MaxRetries: 3, PublishTimeout: 5 * time.Second},
-			getDB:        func(context.Context) (dbtypes.Interface, error) { return conn, nil },
-			getMessaging: func(context.Context) (messaging.AMQPClient, error) { return amqp, nil },
-			tenants:      []string{""},
-		}, amqp
+		// The unit helper, so this drains through the same construction production uses —
+		// a hand-built Relay would silently carry no lane order and pre-flight nothing.
+		r := newRelayWithShippers(store, map[string]shipper{LaneAMQP: newAMQPShipperWithFake(amqp)})
+		r.config.BatchSize = 50
+		r.getDB = func(context.Context) (dbtypes.Interface, error) { return conn, nil }
+		return r, amqp
 	}
 	relayA, amqpA := newRelay()
 	relayB, amqpB := newRelay()
@@ -243,7 +241,7 @@ func TestOutboxRelayTwoInstancesOneLedgerIntegration(t *testing.T) {
 			for range 10 {
 				// A cycle that finds another instance leading returns nil having done
 				// nothing; that is the mechanism working, not a failure.
-				assert.NoError(t, rel.Execute(newFakeJobCtx(conn, amqpA)))
+				assert.NoError(t, rel.Execute(newFakeJobCtx(conn)))
 			}
 		}(r)
 	}

@@ -29,7 +29,7 @@ func newCleanupWithFakes(store *fakeStore, retention time.Duration) *Cleanup {
 
 func TestCleanupExecuteReturnsErrorWhenDBUnavailable(t *testing.T) {
 	c := newCleanupWithFakes(&fakeStore{}, 24*time.Hour)
-	ctx := newFakeJobCtx(nil, nil)
+	ctx := newFakeJobCtx(nil)
 
 	err := c.Execute(ctx)
 	require.Error(t, err)
@@ -40,7 +40,7 @@ func TestCleanupExecuteWrapsDeleteError(t *testing.T) {
 	store := &fakeStore{DeletePublishedErr: errors.New("constraint conflict")}
 	c := newCleanupWithFakes(store, 24*time.Hour)
 	db := dbtesting.NewTestDB("postgresql")
-	ctx := newFakeJobCtx(db, nil)
+	ctx := newFakeJobCtx(db)
 
 	err := c.Execute(ctx)
 	require.Error(t, err)
@@ -54,7 +54,7 @@ func TestCleanupExecuteUsesRetentionCutoff(t *testing.T) {
 	retention := 7 * 24 * time.Hour
 	c := newCleanupWithFakes(store, retention)
 	db := dbtesting.NewTestDB("postgresql")
-	ctx := newFakeJobCtx(db, nil)
+	ctx := newFakeJobCtx(db)
 
 	before := time.Now().Add(-retention)
 	require.NoError(t, c.Execute(ctx))
@@ -74,7 +74,7 @@ func TestCleanupExecuteSucceedsWhenNothingDeleted(t *testing.T) {
 	store := &fakeStore{DeletePublishedN: 0}
 	c := newCleanupWithFakes(store, 24*time.Hour)
 	db := dbtesting.NewTestDB("postgresql")
-	ctx := newFakeJobCtx(db, nil)
+	ctx := newFakeJobCtx(db)
 
 	require.NoError(t, c.Execute(ctx))
 	assert.Equal(t, 1, store.DeletePublishedCalls)
@@ -84,7 +84,7 @@ func TestCleanupExecuteSucceedsWhenRowsDeleted(t *testing.T) {
 	store := &fakeStore{DeletePublishedN: 42}
 	c := newCleanupWithFakes(store, 24*time.Hour)
 	db := dbtesting.NewTestDB("postgresql")
-	ctx := newFakeJobCtx(db, nil)
+	ctx := newFakeJobCtx(db)
 
 	require.NoError(t, c.Execute(ctx))
 	assert.Equal(t, 1, store.DeletePublishedCalls)

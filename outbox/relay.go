@@ -5,48 +5,88 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"time"
 
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/leasescope"
 	"github.com/gaborage/go-bricks/internal/ledgererr"
-	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/logger"
-	"github.com/gaborage/go-bricks/messaging"
-	"github.com/gaborage/go-bricks/messaging/streams"
 	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/scheduler"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // Relay is a scheduler.Executor that polls for pending outbox events
-// and publishes them to the message broker via existing AMQP infrastructure.
+// and hands them to the shipper for their lane.
 //
 // The relay runs as a scheduled job (registered via scheduler.FixedRate),
 // getting overlapping prevention, panic recovery, and OTel metrics for free.
 //
-// Resources are resolved through the tenant-aware getDB/getMessaging resolvers
-// (the module's deps.DB/deps.Messaging) rather than the scheduler JobContext,
-// because the scheduler builds the JobContext from a tenant-less context — so
-// in multi-tenant mode the relay must inject each tenant into the context
-// itself before resolving that tenant's database and broker.
+// Resources are resolved through the tenant-aware getDB resolver and each
+// shipper's own (the module's deps.DB/deps.Messaging) rather than the scheduler
+// JobContext, because the scheduler builds the JobContext from a tenant-less
+// context — so in multi-tenant mode the relay must inject each tenant into the
+// context itself before resolving that tenant's database and broker.
 type Relay struct {
-	store        Store
-	config       config.OutboxConfig
-	getDB        func(context.Context) (dbtypes.Interface, error)
-	getMessaging func(context.Context) (messaging.AMQPClient, error)
+	store  Store
+	config config.OutboxConfig
+	getDB  func(context.Context) (dbtypes.Interface, error)
 
-	// streamPublisher resolves a super stream's publisher. The module writes its map once in
-	// DeclareStreams — which startSlots runs before RegisterJobs, so before any cycle — and
-	// only reads it after, so this needs no lock. A relay with no configured targets still
-	// gets a closure; it simply finds nothing.
-	streamPublisher func(name string) (streamPublisher, bool)
+	// shippers holds one adapter per lane, keyed by the lane a row names. Looking a
+	// record's lane up here is the ONLY place the empty legacy lane resolves, and a lane
+	// with no entry is poison. The module writes this map once at registration.
+	shippers map[string]shipper
+
+	// laneOrder is the registered lanes sorted once at construction, so a cycle probes and
+	// logs them the same way every time without sorting per cycle. laneLogFields holds each
+	// of those lanes' four cycle-log field names, built once for the same reason: logCycle
+	// runs every cycle and would otherwise concatenate four strings per lane per cycle.
+	laneOrder     []string
+	laneLogFields []laneFields
+
 	// tenants lists the tenant keys to relay each cycle. Always non-empty: a single
 	// "" entry for single-tenant mode (multitenant.SetTenant with "" is a no-op) and
 	// for shared (control-plane) tenancy, or the configured static multitenant tenant
 	// IDs. In per-tenant tenancy, dynamic multi-tenant sources are rejected at module
 	// Init (their tenant set is not enumerable at registration time).
 	tenants []string
+}
+
+// laneFields is one lane's precomputed cycle-log field names.
+type laneFields struct {
+	published, failed, deadlettered, parked string
+}
+
+// newRelay builds a relay over its lanes, precomputing everything a cycle would otherwise
+// derive from the shipper map on every tick.
+func newRelay(store Store, cfg *config.OutboxConfig, getDB func(context.Context) (dbtypes.Interface, error), tenants []string, shippers map[string]shipper) *Relay {
+	lanes := make([]string, 0, len(shippers))
+	for lane := range shippers {
+		lanes = append(lanes, lane)
+	}
+	sort.Strings(lanes)
+
+	fields := make([]laneFields, len(lanes))
+	for i, lane := range lanes {
+		fields[i] = laneFields{
+			published:    "published_" + lane,
+			failed:       "failed_" + lane,
+			deadlettered: "deadlettered_" + lane,
+			parked:       "parked_" + lane,
+		}
+	}
+
+	return &Relay{
+		store:         store,
+		config:        *cfg,
+		getDB:         getDB,
+		shippers:      shippers,
+		laneOrder:     lanes,
+		laneLogFields: fields,
+		tenants:       tenants,
+	}
 }
 
 // Execute runs one relay cycle per configured tenant. In single-tenant mode this is a
@@ -74,33 +114,6 @@ const (
 	outcomePublishedUnrecorded                       // delivered, but MarkPublished failed (no retry_count bump)
 	outcomeFailed                                    // failed; retry_count advanced, record stays pending
 	outcomeDeadLettered                              // poison exhausted MaxRetries; parked as status=failed
-	outcomeAborted                                   // interrupted by shutdown/cancel; do NOT count, stop the batch
-	// outcomeBrokerDown signals that THIS record's publish failed with a connectivity
-	// error (messaging.ErrNotConnected) AND the client is still not ready right now —
-	// i.e. the broker dropped mid-batch rather than being down at cycle start. This
-	// record keeps normal failed accounting (markRecordFailed already ran); the
-	// caller stops the loop and routes the UNATTEMPTED remainder through the same
-	// outage semantics markOutage applies at cycle start, instead of letting every
-	// remaining record pay its own serial readiness pre-flight wait.
-	outcomeBrokerDown
-	// outcomeStreamDown is the stream lane's counterpart: this record's publish failed in a
-	// way that says the PRODUCER is not carrying messages — unbound, or bound but not
-	// confirming within the per-record deadline. The row itself is marked failed; what the
-	// outcome adds is that paying the same deadline for every remaining stream row would
-	// hold the leader transaction for batchsize × publishtimeout, so the rest of the stream
-	// rows are left for the next cycle. AMQP rows in the same batch are unaffected: the two
-	// lanes are separate connections and one being down says nothing about the other.
-	//
-	// Residual, deliberately: the FIRST stalled row of a cycle still pays one PublishTimeout,
-	// because a stall is only observable by waiting for it. That is bounded at one timeout
-	// per cycle rather than one per row. streams.Publisher.Ready() is the probe that narrows
-	// that residual, and it belongs in front of this same outcome; wiring it in is a follow-up.
-	// It only narrows it: Ready() reports the HA layer's connection status, so it catches a
-	// producer that is reconnecting, closed, or not yet bound, but an OPEN producer that has
-	// stopped confirming still looks ready — that case keeps paying one publish timeout on the
-	// first stalled row of a cycle. #1512 wires it by widening the outbox's unexported
-	// streamPublisher interface with Ready() bool.
-	outcomeStreamDown
 )
 
 // relayTenant runs a single relay cycle for the given (tenant-scoped) context.
@@ -121,13 +134,6 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 		return errors.New("database not available")
 	}
 
-	// Resolve the broker, but TOLERATE an unresolved/not-ready broker rather than
-	// skipping the batch. The old early-return froze retry_count while the broker was
-	// down (the reported bug); now we still fetch and advance every pending record, so
-	// operators see retry_count climb during an outage.
-	msgClient, msgErr := r.getMessaging(ctx)
-	brokerUsable := msgErr == nil && msgClient != nil && msgClient.IsReady()
-
 	// One relay instance per ledger drains at a time: the leader row is held FOR UPDATE
 	// NOWAIT in a transaction that lives for this cycle. Taken BEFORE the fetch so a
 	// non-leader does no work at all, and covering the outage path too, whose marks are
@@ -147,43 +153,40 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 		return fmt.Errorf("fetch failed: %w", err)
 	}
 	if len(records) == 0 {
-		// No undelivered work — an idle relay is not a failure even if the broker is down.
+		// No undelivered work — an idle relay is not a failure even if a lane is down.
 		return nil
 	}
 
-	// Outage path: the broker is unreachable/not-ready but there ARE pending events.
-	// Advance every record's retry_count (the operator's "still retrying" signal) without
-	// a publish call, then return a job error so the failure stays visible at the scheduler
-	// level (and, in multi-tenant mode, names the affected tenant) instead of silently
-	// reporting success forever under a permanent misconfiguration.
-	if !brokerUsable {
-		// The AMQP client being down says nothing about the stream lane: it is a separate
-		// protocol on a separate connection. Only the rows that would have gone over AMQP
-		// take the outage path; stream rows still drain, so an AMQP outage no longer stalls
-		// a super stream or inflates its rows' retry_count.
-		brokerFree, amqpRows := partitionByLane(records)
-		marked := r.markOutage(ctx, log, db, lead, amqpRows)
-		if len(brokerFree) == 0 {
-			return brokerUnavailableErr(msgErr)
-		}
+	// Pre-flight each lane ONCE. A lane that reports itself unusable takes only its own
+	// rows: the lanes are separate connections and one being down says nothing about the
+	// other, and a row on a lane this build does not know needs no broker at all.
+	downLanes, laneErr := r.preflight(ctx)
 
-		res := r.runRelayLoop(ctx, log, db, msgClient, lead, brokerFree)
-		res.failed += marked
-		r.logCycle(log, tenantID, res, len(records))
-		if res.leadershipErr != nil {
-			return res.leadershipErr
+	var res relayBatchResult
+	runnable := records
+	if len(downLanes) > 0 {
+		// Outage path: a lane is unreachable/not-ready but there ARE pending events on it.
+		// Advance every such record's retry_count (the operator's "still retrying" signal)
+		// without a publish call, so an outage no longer freezes the count, and report the
+		// failure at the job level rather than silently succeeding forever.
+		var outaged []Record
+		runnable, outaged = splitOnDownLanes(records, downLanes)
+		r.markOutage(ctx, log, db, lead, outaged, &res)
+		if len(runnable) == 0 {
+			return laneErr
 		}
-		// The AMQP half still failed, so the cycle still reports the outage.
-		return brokerUnavailableErr(msgErr)
 	}
 
-	res := r.runRelayLoop(ctx, log, db, msgClient, lead, records)
+	r.runRelayLoop(ctx, log, db, lead, runnable, &res)
 
-	r.logCycle(log, tenantID, res, len(records))
+	r.logCycle(log, tenantID, &res, len(records))
 	// Leadership loss first: it is a database-side failure, and wrapping it as a broker
 	// outage would send an operator to the wrong system. The next tick re-leads.
 	if res.leadershipErr != nil {
 		return res.leadershipErr
+	}
+	if laneErr != nil {
+		return laneErr
 	}
 	if res.outageErr != nil {
 		return brokerUnavailableErr(res.outageErr)
@@ -191,179 +194,351 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 	return nil
 }
 
-// partitionByLane splits a batch into the rows whose delivery depends on the AMQP client and
-// the rest, keeping each group's sequence order. Only an explicit amqp lane — and the empty
-// lane, which is what a row written before the column existed carries — waits on that client.
-// A row naming a lane this build does not know goes with the others: it needs no broker at
-// all, since publishRecord dead-letters it as poison, and routing it through the outage path
-// would instead bump its retry_count every cycle until the broker returned.
-func partitionByLane(records []Record) (other, amqp []Record) {
-	// Indexed rather than ranged by value: a Record is large enough that copying one per
-	// iteration is worth avoiding, and the append copies it anyway.
-	for i := range records {
-		if records[i].Lane == LaneAMQP || records[i].Lane == "" {
-			amqp = append(amqp, records[i])
-		} else {
-			other = append(other, records[i])
+// preflight asks each lane whether it is usable this cycle, returning the lanes that are
+// not and the error the cycle reports for them.
+func (r *Relay) preflight(ctx context.Context) (down map[string]struct{}, laneErr error) {
+	var errs []error
+	for _, lane := range r.laneOrder {
+		if err := r.shippers[lane].Ready(ctx); err != nil {
+			if down == nil {
+				down = make(map[string]struct{}, len(r.shippers))
+			}
+			down[lane] = struct{}{}
+			errs = append(errs, err)
 		}
 	}
-	return other, amqp
+	return down, errors.Join(errs...)
 }
 
-// relayBatchResult holds the per-record bookkeeping counts from one relay cycle's
-// publish loop, plus (if the batch stopped early on a mid-batch broker drop) the
-// outage error the caller surfaces at the job level.
+// splitOnDownLanes separates the rows a down lane owns from the rest, keeping each
+// group's sequence order. A row naming a lane this build does not know is never in a down
+// group: it needs no broker, since the loop dead-letters it as poison, and routing it
+// through the outage path would instead bump its retry_count every cycle until the lane
+// returned.
+func splitOnDownLanes(records []Record, down map[string]struct{}) (runnable, outaged []Record) {
+	for i := range records {
+		if _, isDown := down[laneOrDefault(records[i].Lane)]; isDown {
+			outaged = append(outaged, records[i])
+		} else {
+			runnable = append(runnable, records[i])
+		}
+	}
+	return runnable, outaged
+}
+
+// laneCounts is one lane's share of a cycle, so a summary says WHICH lane the work
+// happened on: an aggregate failure count cannot distinguish a stalled super stream from
+// a broker outage, which are different pages for whoever is holding it. The cycle's own
+// totals are the same four numbers summed across lanes (relayBatchResult.totals).
+type laneCounts struct {
+	published, failed, deadlettered, parked int
+}
+
+// relayBatchResult holds the per-record bookkeeping counts from one relay cycle, plus
+// (if the batch stopped early on a mid-batch broker drop) the outage error the caller
+// surfaces at the job level.
+// The four lane-keyed counters are the ONLY counters: a cycle total is their sum, so the
+// two can never disagree about what happened. unrecorded is the one outcome with no lane
+// share (see apply), so it stays a plain field.
 type relayBatchResult struct {
-	published, unrecorded, failed, deadlettered, parked int
-	outageErr                                           error
+	byLane     map[string]laneCounts
+	unrecorded int
+	// stallWait is the longest a single shipment waited before reporting its lane or its
+	// scope down — the cost the cycle actually paid to discover the stall.
+	stallWait time.Duration
+	outageErr error
 	// leadershipErr is set when the claim on the leader row was lost mid-cycle. It is kept
 	// apart from outageErr because its cause is the DATABASE, not the broker: reporting it
 	// as a broker outage would point an operator at the wrong system.
 	leadershipErr error
 }
 
-// runRelayLoop publishes each pending record in order, stopping early on
-// shutdown/cancel, a shutdown-aborted publish, or a mid-batch broker drop
-// (outcomeBrokerDown — see publishRecord). Split out of relayTenant to keep
-// that function's cyclomatic complexity within budget (gocyclo).
-func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.Interface, msgClient messaging.AMQPClient, lead Leadership, records []Record) relayBatchResult {
-	var res relayBatchResult
-	// Keys whose head failed this cycle. A later row of a parked key is left untouched —
-	// not even its retry_count moves — so the key keeps its order across cycles.
-	parked := make(map[string]struct{})
-	// Streams whose producer proved unready this cycle. Held per stream, not batch-wide: one
-	// stalled super stream says nothing about the others, which are separate producers.
-	streamsDown := make(map[string]struct{})
+// totals sums every lane's share, including the lanes this build has no shipper for, whose
+// rows are still counted (as poison) and must still show up in the cycle's own numbers.
+func (res *relayBatchResult) totals() laneCounts {
+	var t laneCounts
+	for _, counts := range res.byLane {
+		t.published += counts.published
+		t.failed += counts.failed
+		t.deadlettered += counts.deadlettered
+		t.parked += counts.parked
+	}
+	return t
+}
+
+// count folds one increment into a lane's share. The counts are values, so a lane is read,
+// bumped and written back rather than handed out for mutation.
+func (res *relayBatchResult) count(lane string, bump func(*laneCounts)) {
+	if res.byLane == nil {
+		res.byLane = make(map[string]laneCounts, 2)
+	}
+	counts := res.byLane[lane]
+	bump(&counts)
+	res.byLane[lane] = counts
+}
+
+// apply folds one record's outcome into its lane's share.
+func (res *relayBatchResult) apply(lane string, outcome publishOutcome) {
+	switch outcome {
+	case outcomePublished:
+		res.count(lane, func(c *laneCounts) { c.published++ })
+	case outcomePublishedUnrecorded:
+		// Delivered but not recorded: it re-delivers next cycle, so it is neither a
+		// success nor a failure of this lane's share.
+		res.unrecorded++
+	case outcomeFailed:
+		res.count(lane, func(c *laneCounts) { c.failed++ })
+	case outcomeDeadLettered:
+		res.count(lane, func(c *laneCounts) { c.deadlettered++ })
+	}
+}
+
+func (res *relayBatchResult) markParked(lane string) {
+	res.count(lane, func(c *laneCounts) { c.parked++ })
+}
+
+// relayCycle is one tenant's pass over one batch: the handles every step needs, the
+// bookkeeping it folds into, and the two hold-back sets it accumulates as it goes.
+type relayCycle struct {
+	relay *Relay
+	log   logger.Logger
+	db    dbtypes.Interface
+	lead  Leadership
+	res   *relayBatchResult
+	// cur is the record currently being planned and shipped. It is a FIELD, not a local,
+	// so &c.cur points into the cycle's one heap allocation: the lane takes the shipment
+	// by pointer (80 bytes) and no per-record allocation is made for it.
+	cur shipment
+	// parked holds keys whose head failed this cycle. A later row of a parked key is left
+	// untouched — not even its retry_count moves — so the key keeps its order across cycles.
+	parked map[string]struct{}
+	// down holds scopes whose target proved unready this cycle. Held per scope, not
+	// batch-wide: one stalled super stream says nothing about the others, which are
+	// separate producers.
+	down map[string]struct{}
+}
+
+// runRelayLoop ships each pending record in order, stopping early on shutdown/cancel, an
+// aborted ship, or a mid-batch lane drop.
+func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.Interface, lead Leadership, records []Record, res *relayBatchResult) {
+	cycle := &relayCycle{
+		relay: r, log: log, db: db, lead: lead, res: res,
+		parked: make(map[string]struct{}),
+		down:   make(map[string]struct{}),
+	}
 	for i := range records {
 		// Stop cleanly on shutdown/cancel: leave the rest pending for the next startup
 		// rather than bumping their retry_count on the way down.
 		if ctx.Err() != nil {
-			break
+			return
 		}
 		// A deposed leader must not publish another row: another instance may already be
 		// draining the same ledger.
 		if err := lead.Probe(ctx); err != nil {
 			log.Warn().Err(err).Msg("Outbox relay lost its leader row mid-cycle; stopping")
 			res.leadershipErr = fmt.Errorf("%w: lost the leader row mid-cycle, database unreachable or the transaction was ended: %w", ErrNotLeader, err)
-			return res
+			return
 		}
-		// Decode once per record: the key derivation and the publish need the same blob.
-		// A decode failure yields nil headers, so the key falls back to the routing key
-		// while publishRecord dead-letters the row as poison.
-		headers, decodeErr := decodeHeaders(records[i].Headers)
-		if _, down := streamsDown[records[i].Stream]; down && records[i].Lane == LaneStream {
-			// That stream's producer is not carrying messages; its remaining rows wait for the
-			// next cycle untouched rather than each paying the publish deadline. Rows aimed at
-			// a healthy stream are unaffected.
-			res.parked++
-			continue
-		}
-		key := relayKey(&records[i], headers)
-		if _, isParked := parked[key]; isParked {
-			res.parked++
-			continue
-		}
-		outcome, pubErr := r.publishRecord(ctx, log, db, msgClient, &records[i], headers, decodeErr)
-		switch outcome {
-		case outcomePublished:
-			res.published++
-		case outcomePublishedUnrecorded:
-			res.unrecorded++
-		case outcomeFailed:
-			res.failed++
-			// Only a failure parks: a dead-lettered row is terminal and an unrecorded one
-			// was delivered, so neither blocks its key.
-			parked[key] = struct{}{}
-		case outcomeDeadLettered:
-			res.deadlettered++
-		case outcomeBrokerDown:
-			// The broker dropped mid-batch: this record's own failed accounting
-			// already ran inside publishRecord. Route the UNATTEMPTED remainder
-			// through the same outage path markOutage applies at cycle start —
-			// advance retry_count without paying each record's own serial
-			// readiness pre-flight wait — and stop the loop. The remainder counts
-			// as failed too (markOutage marked it in the DB), so logCycle's counts
-			// still sum to the batch total.
-			res.failed++
-			res.outageErr = pubErr
-			res.failed += r.markOutage(ctx, log, db, lead, records[i+1:])
-			return res
-		case outcomeStreamDown:
-			res.failed++
-			parked[key] = struct{}{}
-			streamsDown[records[i].Stream] = struct{}{}
-		case outcomeAborted:
-			// Shutting down mid-publish — stop without counting this record.
-			return res
-		}
-	}
-	return res
-}
 
-// relayKey is the key a row is ordered under within a cycle. Every key is namespaced by the
-// scope it orders within, because parking is head-of-line blocking: two rows that share a key
-// but not a destination block each other for nothing.
-//
-// Stream lane: the stream AND the partition key, so rows aimed at different super streams do
-// not park each other merely for carrying the same tenant's key. AMQP lane: the tenant stamp
-// when the row carries one — deliberately spanning that tenant's exchanges, which is the
-// ordering an event stream for one tenant needs — and otherwise the destination the row is
-// actually published to, exchange and routing key together.
-//
-// The lane prefix keeps the two spaces apart, so a stream row partitioned by "acme" and an
-// AMQP row stamped "acme" are not treated as one key. A row whose headers will not decode
-// arrives with nil headers and is keyed by its destination; it is poison and publishRecord
-// dead-letters it, so it holds its siblings only until it does.
-func relayKey(record *Record, headers map[string]any) string {
-	switch record.Lane {
-	case LaneStream:
-		return LaneStream + ":" + record.Stream + ":" + record.PartitionKey
-	case LaneAMQP, "":
-		if stamp, ok := headers[messaging.TenantStampHeader].(string); ok && stamp != "" {
-			return LaneAMQP + ":tenant:" + stamp
+		record := &records[i]
+		lane := laneOrDefault(record.Lane)
+		laneShipper := cycle.plan(record, lane)
+		ship := &cycle.cur
+		if _, isDown := cycle.down[ship.Scope]; isDown {
+			// That scope's target is not carrying messages; its remaining rows wait for
+			// the next cycle untouched rather than each paying the publish bound. Rows
+			// aimed at a healthy scope are unaffected.
+			res.markParked(lane)
+			continue
 		}
-		return LaneAMQP + ":" + record.Exchange + ":" + record.RoutingKey
-	default:
-		// A lane this build does not know is poison, and poison is never parkable: it must
-		// reach publishRecord to be dead-lettered. Sharing the AMQP namespace would let a
-		// failing AMQP row on the same destination park it first, so it would wait behind a
-		// row it has nothing to do with instead of being classified. Its own id shares with
-		// nothing, so it is always attempted and parks nothing else.
-		return "unknown:" + record.ID
+		if _, isParked := cycle.parked[ship.Key]; isParked {
+			res.markParked(lane)
+			continue
+		}
+		if ship.Poison != "" {
+			// Judged only once the row is known NOT to be held back: dead-lettering is a
+			// ledger write, and a held-back row's retry_count must not move (ADR-088).
+			// Planning above wrote nothing, so a poison row behind a still-pending head of
+			// its key waits for that head exactly as a shippable row does.
+			cycle.deadLetter(ctx, record, lane, ship.Key, ship.Poison)
+			continue
+		}
+
+		if cycle.ship(ctx, laneShipper, lane, records[i+1:]) {
+			return
+		}
 	}
 }
 
-// markOutage advances retry_count for every pending record without attempting a publish,
-// used when the broker is unreachable/not-ready. Stops early on shutdown/cancel so a
-// shutdown does not inflate retry_count for records it never got to. Returns how many
-// records it actually marked (fewer than len(records) on early stop) so callers can
-// fold the outage remainder into their cycle accounting.
-func (r *Relay) markOutage(ctx context.Context, log logger.Logger, db dbtypes.Interface, lead Leadership, records []Record) int {
+// plan decodes the row's headers, injects the outbox metadata every consumer dedups on,
+// and asks the lane to plan it. It is PURE — nothing is written to the ledger here — and
+// leaves the shipment in c.cur, whose Poison names why no lane can carry the row when it is
+// set: undecodable headers, a lane this build does not know, or config drift the lane itself
+// can see without a client. The shipper it returns is nil exactly when the lane is unknown.
+func (c *relayCycle) plan(record *Record, lane string) shipper {
+	headers, decodeErr := decodeHeaders(record.Headers)
+	laneShipper, known := c.relay.shippers[lane]
+	if !known {
+		// A lane this build does not know is message-intrinsic: it will read the same way
+		// every cycle, so it parks rather than retrying forever. It is also the one row no
+		// lane can key, so it keys under its own id, which shares with nothing and so parks
+		// nothing — including when its headers are corrupt too.
+		reason := fmt.Sprintf("unknown lane %q", record.Lane)
+		if decodeErr != nil {
+			reason = decodeErr.Error()
+		}
+		c.cur = shipment{Record: record, Key: "unknown:" + record.ID, Poison: reason}
+		return nil
+	}
+	// Corrupt headers are deterministic, broker-independent corruption (poison), so they
+	// dead-letter at MaxRetries rather than retrying forever. The lane is still asked to
+	// plan the row — with nil headers, since nothing could be read from them — because a
+	// row that stays PENDING must hold its key's order like any other.
+	if decodeErr != nil {
+		c.cur = laneShipper.Plan(record, nil)
+		c.cur.Poison = decodeErr.Error()
+		return laneShipper
+	}
+
+	// Inject outbox metadata headers for consumer idempotency.
+	if headers == nil {
+		headers = make(map[string]any)
+	}
+	headers[HeaderEventID] = record.ID
+	headers[HeaderEventType] = record.EventType
+
+	c.cur = laneShipper.Plan(record, headers)
+	return laneShipper
+}
+
+// deadLetter dead-letters a record and, below the ceiling, holds its key. A row that only
+// advanced its retry_count is still PENDING, so the later rows of its key must wait for it
+// or they ship ahead of it and the key loses the order ADR-088 promises.
+func (c *relayCycle) deadLetter(ctx context.Context, record *Record, lane, key, reason string) {
+	outcome := c.relay.deadLetterPoison(ctx, c.log, c.db, record, reason)
+	c.res.apply(lane, outcome)
+	if outcome != outcomeFailed {
+		// Dead-lettered is terminal: nothing waits behind it.
+		return
+	}
+	c.parked[key] = struct{}{}
+}
+
+// fail advances a record's retry_count and holds its key. Connectivity never dead-letters
+// the row itself (at-least-once, however high the count climbs), but the row stays PENDING,
+// so its key keeps its order exactly as a below-the-ceiling poison row's does.
+func (c *relayCycle) fail(ctx context.Context, record *Record, lane, key string, err error) {
+	c.relay.markRecordFailed(ctx, c.log, c.db, record.ID, err.Error())
+	c.res.apply(lane, outcomeFailed)
+	c.parked[key] = struct{}{}
+}
+
+// ship makes one bounded delivery attempt and folds its verdict into the cycle's
+// bookkeeping. It reports true when the cycle must stop: a shutdown-aborted ship, or a
+// lane that dropped mid-batch, whose unattempted remainder takes the outage path.
+func (c *relayCycle) ship(ctx context.Context, laneShipper shipper, lane string, remainder []Record) bool {
+	ship := &c.cur
+	// Rehydrate the originating trace context (persisted by Publish) into the publish
+	// context. The relay job runs detached with no ambient trace, so without this the
+	// downstream preparePublishing would stamp a freshly generated CorrelationId — which
+	// the consumer's failure-path logger and consume span surface — breaking trace
+	// continuity on the error path.
+	pubCtx := gobrickstrace.ExtractFromHeaders(ctx, &mapHeaderAccessor{headers: ship.Headers})
+	// Move the row's tenant onto the publish context. The framework is the stamp's ONLY
+	// writer (ADR-087), and a stamp replayed out of storage is caller-supplied from a
+	// publisher's point of view — so it must travel by context, never as a header.
+	if ship.Stamp != "" {
+		pubCtx = multitenant.SetTenant(pubCtx, ship.Stamp)
+	}
+
+	// Bound this single ship so one stuck record cannot block the whole cycle and starve
+	// the rest of the batch. cancel() is called immediately; every Mark* below uses the
+	// parent ctx, never the (possibly expired) recCtx.
+	recCtx, cancel := context.WithTimeout(pubCtx, c.relay.config.PublishTimeout)
+	v := laneShipper.Ship(recCtx, ship)
+	cancel()
+
+	record := ship.Record
+	switch v.Kind {
+	case shipDelivered:
+		c.res.apply(lane, c.relay.recordPublished(ctx, c.log, c.db, record))
+	case shipRetry:
+		// Connectivity: the broker either could not be reached or could not take
+		// responsibility for the message. We advance retry_count and retry
+		// (at-least-once); only poison ever dead-letters.
+		c.fail(ctx, record, lane, ship.Key, v.Err)
+	case shipPoison:
+		// Below the ceiling the row stays pending, so its key keeps its order — the same
+		// rule the poison the relay decided before the ship follows.
+		c.deadLetter(ctx, record, lane, ship.Key, v.Err.Error())
+	case shipAborted:
+		// Shutting down mid-ship — stop without counting this record.
+		return true
+	case shipBrokerDown:
+		// The lane dropped mid-batch. Route the UNATTEMPTED remainder through the same
+		// outage path the cycle-start pre-flight applies — advance retry_count without
+		// paying each record's own serial readiness wait — and stop the cycle. The
+		// remainder counts as failed too (markOutage marked it in the DB), so the cycle's
+		// counts still sum to the batch total. The key it holds is moot: the cycle ends
+		// here and the hold-back set does not outlive it.
+		c.fail(ctx, record, lane, ship.Key, v.Err)
+		c.res.outageErr = v.Err
+		c.res.stallWait = max(c.res.stallWait, v.Waited)
+		c.relay.markOutage(ctx, c.log, c.db, c.lead, remainder, c.res)
+		return true
+	case shipScopeDown:
+		// Evidence that THIS shipment's scope is not carrying messages, not that this row
+		// is special: paying the bound for every remaining row of that scope would hold
+		// the leader transaction for batchsize x publishtimeout.
+		c.fail(ctx, record, lane, ship.Key, v.Err)
+		c.down[ship.Scope] = struct{}{}
+		c.res.stallWait = max(c.res.stallWait, v.Waited)
+	}
+	return false
+}
+
+// markOutage advances retry_count for every pending record without attempting a ship,
+// used when its lane is unreachable/not-ready. Stops early on shutdown/cancel so a
+// shutdown does not inflate retry_count for records it never got to.
+func (r *Relay) markOutage(ctx context.Context, log logger.Logger, db dbtypes.Interface, lead Leadership, records []Record, res *relayBatchResult) {
 	for i := range records {
 		if ctx.Err() != nil {
-			return i
+			return
 		}
-		// A mark is a write, so it needs the same leadership guarantee as a publish.
+		// A mark is a write, so it needs the same leadership guarantee as a ship.
 		if err := lead.Probe(ctx); err != nil {
 			log.Warn().Err(err).Msg("Outbox relay lost leadership while marking an outage; stopping")
-			return i
+			return
 		}
 		r.markRecordFailed(ctx, log, db, records[i].ID, "messaging unavailable")
+		res.apply(laneOrDefault(records[i].Lane), outcomeFailed)
 	}
-	return len(records)
 }
 
 // logCycle emits the per-cycle delivery summary. "unrecorded" counts events delivered to the
 // broker whose MarkPublished failed (they re-deliver next cycle) — kept distinct from
 // "published" so the success count is not inflated by stuck-but-delivered records.
-func (r *Relay) logCycle(log logger.Logger, tenantID string, res relayBatchResult, total int) {
+// stall_wait_ms is what the cycle paid to discover a down lane or scope, zero when none did.
+func (r *Relay) logCycle(log logger.Logger, tenantID string, res *relayBatchResult, total int) {
+	totals := res.totals()
 	event := log.Info().
-		Int("published", res.published).
+		Int("published", totals.published).
 		Int("unrecorded", res.unrecorded).
-		Int("failed", res.failed).
-		Int("deadlettered", res.deadlettered).
-		Int("parked", res.parked).
-		Int("total", total)
+		Int("failed", totals.failed).
+		Int("deadlettered", totals.deadlettered).
+		Int("parked", totals.parked).
+		Int("total", total).
+		Int64("stall_wait_ms", res.stallWait.Milliseconds())
+	for i, lane := range r.laneOrder {
+		// A lane with no rows this cycle reads back as the zero value, which is what it
+		// did: no entry is allocated for an idle lane.
+		counts, fields := res.byLane[lane], &r.laneLogFields[i]
+		event = event.
+			Int(fields.published, counts.published).
+			Int(fields.failed, counts.failed).
+			Int(fields.deadlettered, counts.deadlettered).
+			Int(fields.parked, counts.parked)
+	}
 	if tenantID != "" {
 		event = event.Str("tenant", tenantID)
 	}
@@ -373,9 +548,11 @@ func (r *Relay) logCycle(log logger.Logger, tenantID string, res relayBatchResul
 	event.Msg("Outbox relay cycle completed")
 }
 
-// brokerUnavailableErr builds the job-level error returned when a relay cycle had pending
-// work but the broker was unreachable or not ready, so the delivery failure stays visible at
-// the scheduler level rather than silently succeeding.
+// brokerUnavailableErr spells the AMQP lane's outage text ONCE, for both the paths that
+// report one: the lane's own pre-flight (amqpShipper.Ready, which reports an unready client
+// with a nil error here) and the mid-batch drop the cycle surfaces at the job level. An
+// operator reading "messaging not available" must not have to know which of the two produced
+// it.
 func brokerUnavailableErr(msgErr error) error {
 	if msgErr != nil {
 		return fmt.Errorf("messaging not available: %w", msgErr)
@@ -383,123 +560,8 @@ func brokerUnavailableErr(msgErr error) error {
 	return errors.New("messaging not ready")
 }
 
-// publishRecord attempts to publish a single outbox record and returns the bookkeeping
-// outcome. All Mark* calls run on the parent ctx; the per-record publish deadline applies
-// only to the publish itself, so an expired deadline never fails the bookkeeping UPDATE.
-// The second return is non-nil only for outcomeBrokerDown, carrying the connectivity
-// error the caller surfaces as the job-level outage error (see relayTenant).
-func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes.Interface, msgClient messaging.AMQPClient, record *Record, headers map[string]any, decodeErr error) (publishOutcome, error) {
-	// Corrupt headers are deterministic, broker-independent corruption (poison), so they
-	// dead-letter at MaxRetries rather than retrying forever. They are one of the poison
-	// classes enumerated at deadLetterPoison; every remaining broker-side publish failure is
-	// connectivity. The decode itself happens once per record in the caller, which also needs
-	// it to derive the ordering key.
-	if decodeErr != nil {
-		return r.deadLetterPoison(ctx, log, db, record, decodeErr.Error()), nil
-	}
-
-	// Inject outbox metadata headers for consumer idempotency
-	if headers == nil {
-		headers = make(map[string]any)
-	}
-	headers[HeaderEventID] = record.ID
-	headers[HeaderEventType] = record.EventType
-
-	// Rehydrate the originating trace context (persisted by Publish) into the
-	// publish context. The relay job runs detached with no ambient trace, so
-	// without this the downstream preparePublishing would stamp a freshly
-	// generated CorrelationId — which the consumer's failure-path logger and
-	// consume span surface — breaking trace continuity on the error path.
-	pubCtx := gobrickstrace.ExtractFromHeaders(ctx, &mapHeaderAccessor{headers: headers})
-
-	// Move the row's tenant onto the publish context. The framework is the stamp's ONLY
-	// writer (ADR-087), and a stamp replayed out of storage is caller-supplied from a
-	// publisher's point of view — so any header spelling it must go, and the value must
-	// travel by context instead.
-	//
-	// Where the row keeps its tenant differs by lane, because the writers differ: a
-	// stream-lane row records it as the PARTITION KEY (Publish refuses one without a
-	// tenant) and never in its headers, while an AMQP row carries whatever stamp was
-	// persisted with it. Reading only the header would leave a stream row unstamped under
-	// outbox.tenancy=shared, where the cycle's own context carries no tenant either.
-	stamp := ""
-	if record.Lane == LaneStream {
-		stamp = record.PartitionKey
-	} else if persisted, ok := headers[messaging.TenantStampHeader].(string); ok {
-		stamp = persisted
-	}
-	// Delete on PRESENCE, not on a non-empty value: the conflict check keys on the header
-	// existing at all, so an empty-valued one left behind fails every publish.
-	delete(headers, messaging.TenantStampHeader)
-	if stamp != "" {
-		pubCtx = multitenant.SetTenant(pubCtx, stamp)
-	}
-
-	switch record.Lane {
-	case LaneAMQP, "":
-		// today's path, below
-	case LaneStream:
-		return r.publishStreamRecord(ctx, pubCtx, log, db, headers, record)
-	default:
-		// A lane this build does not know is message-intrinsic: it will read the same way
-		// every cycle, so it parks rather than retrying forever.
-		return r.deadLetterPoison(ctx, log, db, record, fmt.Sprintf("unknown lane %q", record.Lane)), nil
-	}
-
-	opts := publishdoor.Options{
-		Exchange:   record.Exchange,
-		RoutingKey: record.RoutingKey,
-		Headers:    headers,
-	}
-
-	// Bound this single publish so one stuck record cannot block the whole cycle and
-	// starve the rest of the batch. cancel() is called immediately; Mark* below uses
-	// the parent ctx, never the (possibly expired) recCtx.
-	recCtx, cancel := context.WithTimeout(pubCtx, r.config.PublishTimeout)
-	// The relay is a framework internal and keeps moving bytes: it reaches the
-	// client's unexported byte door through internal/publishdoor (ADR-096).
-	err := publishdoor.Publish(recCtx, msgClient, opts, record.Payload)
-	cancel()
-	if err != nil {
-		// Shutdown/cancel is not a delivery failure — do not advance retry_count.
-		if errors.Is(err, context.Canceled) || errors.Is(err, messaging.ErrShutdown) {
-			return outcomeAborted, nil
-		}
-		// A destination the frame can never carry (over-long exchange, routing key or
-		// header key) is refused before any channel work and is refused identically
-		// every cycle: message-intrinsic, so it is poison on the same path as an
-		// undecodable header rather than connectivity.
-		if errors.Is(err, messaging.ErrInvalidPublishDestination) ||
-			errors.Is(err, messaging.ErrTenantStampConflict) {
-			// A stamp conflict is deterministic in the row, not the broker: it will read
-			// the same way every cycle, so it parks rather than retrying forever.
-			return r.deadLetterPoison(ctx, log, db, record, err.Error()), nil
-		}
-		// Every other broker-side publish failure — NOT-connected, confirmation timeout, deadline,
-		// and even a broker NACK — is CONNECTIVITY: the broker either could not be reached or
-		// could not take responsibility for the message. A RabbitMQ NACK is a transient broker
-		// condition (disk alarm, mirror resync, failover), and a missing exchange surfaces as a
-		// synthesized NACK too — neither means the message is bad, so neither parks. We advance
-		// retry_count and retry (at-least-once); only the poison classes enumerated at
-		// deadLetterPoison ever park.
-		r.markRecordFailed(ctx, log, db, record.ID, err.Error())
-		// A not-connected error AND a still-not-ready client (checked fresh, not
-		// inferred from the error alone) means the broker dropped mid-batch — the
-		// caller stops attempting the rest rather than letting each remaining
-		// record pay its own serial readiness pre-flight wait. If IsReady() has
-		// already flipped back to true (a brief flap), fall through to the normal
-		// per-record failed outcome and keep the batch going.
-		if errors.Is(err, messaging.ErrNotConnected) && !msgClient.IsReady() {
-			return outcomeBrokerDown, err
-		}
-		return outcomeFailed, nil
-	}
-
-	return r.recordPublished(ctx, log, db, record), nil
-}
-
-// recordPublished marks a delivered record published. Shared by both lanes: the delivery
-// happened either way, so a failed mark must not bump retry_count on either.
+// recordPublished marks a delivered record published. Shared by every lane: the delivery
+// happened either way, so a failed mark must not bump retry_count on any of them.
 func (r *Relay) recordPublished(ctx context.Context, log logger.Logger, db dbtypes.Interface, record *Record) publishOutcome {
 	if err := r.store.MarkPublished(ctx, db, record.ID); err != nil {
 		log.Error().
@@ -513,60 +575,6 @@ func (r *Relay) recordPublished(ctx context.Context, log logger.Logger, db dbtyp
 	return outcomePublished
 }
 
-// publishStreamRecord publishes a stream-lane row through its super stream's publisher.
-// The partition key is the row's tenant stamp, which the streams publisher hashes to pick a
-// partition; the stamp itself is NOT put in Properties — publishRecord moved it onto pubCtx
-// and the publisher stamps it from there, so the relay never supplies a caller-set one.
-//
-// Two contexts, both leading: ctx is the cycle's, and bookkeeping runs on it so an expired
-// publish deadline never fails a Mark; pubCtx carries the trace and the tenant and is what the
-// publish itself is bounded against.
-func (r *Relay) publishStreamRecord(ctx, pubCtx context.Context, log logger.Logger, db dbtypes.Interface, headers map[string]any, record *Record) (publishOutcome, error) {
-	// Both of these are config drift on a persisted row — a target removed from
-	// outbox.superstreams between deploys, or a row written without a key — and read the
-	// same way every cycle, so they park rather than retry.
-	if r.streamPublisher == nil {
-		return r.deadLetterPoison(ctx, log, db, record, fmt.Sprintf("stream %q is not an outbox target", record.Stream)), nil
-	}
-	pub, ok := r.streamPublisher(record.Stream)
-	if !ok {
-		return r.deadLetterPoison(ctx, log, db, record, fmt.Sprintf("stream %q is not an outbox target", record.Stream)), nil
-	}
-	if record.PartitionKey == "" {
-		return r.deadLetterPoison(ctx, log, db, record, "stream row has no partition key"), nil
-	}
-
-	recCtx, cancel := context.WithTimeout(pubCtx, r.config.PublishTimeout)
-	err := pub.Publish(recCtx, &streams.PublishMessage{
-		Data:       record.Payload,
-		Properties: headers,
-		RoutingKey: record.PartitionKey,
-	})
-	cancel()
-	if err != nil {
-		// Shutdown is not a delivery failure — do not advance retry_count.
-		if errors.Is(err, context.Canceled) || errors.Is(err, streams.ErrPublisherClosed) {
-			return outcomeAborted, nil
-		}
-		if errors.Is(err, messaging.ErrTenantStampConflict) {
-			// Message-intrinsic, as on the AMQP lane: the row will conflict identically
-			// every cycle, so it parks instead of retrying forever.
-			return r.deadLetterPoison(ctx, log, db, record, err.Error()), nil
-		}
-		// Everything else is connectivity: a publisher not yet started, the per-record
-		// deadline, or a broker that would not confirm. None means the message is bad.
-		r.markRecordFailed(ctx, log, db, record.ID, err.Error())
-		if errors.Is(err, streams.ErrPublisherNotStarted) || errors.Is(err, context.DeadlineExceeded) {
-			// Evidence THIS stream's producer is not carrying messages right now, not that
-			// this row is special. Stop spending the deadline on that stream's other rows.
-			return outcomeStreamDown, nil
-		}
-		return outcomeFailed, nil
-	}
-
-	return r.recordPublished(ctx, log, db, record), nil
-}
-
 // deadLetterPoison handles a poison record: it advances retry_count and, once the record has
 // reached MaxRetries, parks it to status=failed (the only auto-parking path). Below the ceiling
 // it only advances retry_count and leaves the record pending.
@@ -574,19 +582,18 @@ func (r *Relay) publishStreamRecord(ctx, pubCtx context.Context, log logger.Logg
 // Poison is message-intrinsic — the row reads the same way every cycle, so no broker state can
 // make it publishable. Six classes park here, each from a call site above:
 //   - undecodable headers: the stored JSON does not parse, so no frame can be built.
-//   - unknown lane: the row names a lane this build does not know.
+//   - unknown lane: the row names a lane this build has no shipper for.
 //   - unpublishable destination: an exchange, routing key or header key past the AMQP shortstr
 //     ceiling, refused before any channel work (messaging.ErrInvalidPublishDestination).
 //   - tenant-stamp conflict: the row's own stamp contradicts the publish context
-//     (messaging.ErrTenantStampConflict). ONE class, reachable on BOTH the AMQP and the
-//     stream lane.
+//     (messaging.ErrTenantStampConflict). ONE class, reachable on BOTH lanes.
 //   - stream not an outbox target: the streams lane is not wired at all, or the row's stream
-//     left outbox.superstreams between deploys (publishStreamRecord).
-//   - stream row with no partition key: nothing to hash a partition from (publishStreamRecord).
+//     left outbox.superstreams between deploys.
+//   - stream row with no partition key: nothing to hash a partition from.
 //
 // Connectivity never reaches here: a broker NACK, a missing exchange, a not-connected client or
 // a confirmation timeout on the AMQP lane, a publisher not yet started on the stream lane, and
-// the per-record deadline on either, all call markRecordFailed directly and never park, however
+// the publish bound on either, all call markRecordFailed directly and never park, however
 // high retry_count climbs.
 func (r *Relay) deadLetterPoison(ctx context.Context, log logger.Logger, db dbtypes.Interface, record *Record, errMsg string) publishOutcome {
 	if record.RetryCount+1 >= r.config.MaxRetries {

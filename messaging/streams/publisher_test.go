@@ -806,3 +806,48 @@ func TestPublisherReadyTracksProducerStatus(t *testing.T) {
 		})
 	}
 }
+
+// TestPublisherClosedTracksTheCloseLifecycle pins the probe a drain loop reads during
+// shutdown: the manager closes its publishers before the job contexts that feed them are
+// canceled, so a caller must be able to tell "this process is going down" from "this
+// delivery failed" WITHOUT publishing to find out. Each started case goes through a real
+// Start, so the answer is asserted on a binding Start actually installed.
+func TestPublisherClosedTracksTheCloseLifecycle(t *testing.T) {
+	tests := []struct {
+		name  string
+		start bool
+		stop  bool
+		want  bool
+	}{
+		{name: "before_start", want: false},
+		{name: "open_after_start", start: true, want: false},
+		{name: "closed_after_stop", start: true, stop: true, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decls := NewDeclarations()
+			decls.DeclareStream(testStream, nil)
+			publisher := decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
+
+			if tt.start {
+				fake := newFakeEnvironment()
+				fake.useProducer(&fakeProducer{status: ha.StatusOpen})
+				m := testManager(t)
+				startOnFake(t, m, fake, decls)
+
+				if tt.stop {
+					require.False(t, publisher.Closed(), "a bound publisher has not been closed")
+					m.StopConsumers()
+				}
+			}
+
+			assert.Equal(t, tt.want, publisher.Closed())
+			if tt.want {
+				assert.False(t, publisher.Ready(), "a closed publisher is never ready")
+				assert.ErrorIs(t, publisher.Publish(t.Context(), &PublishMessage{Data: []byte("x")}), ErrPublisherClosed,
+					"every publish through a closed publisher reports the close")
+			}
+		})
+	}
+}

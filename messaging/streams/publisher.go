@@ -218,6 +218,15 @@ func (p *Publisher) Ready() bool {
 	return p.status() == ha.StatusOpen
 }
 
+// Closed reports whether this publisher's Close has run. A closed publisher is
+// never ready and every Publish through it returns ErrPublisherClosed, so a caller
+// draining a queue can tell a shutdown apart from a delivery failure without
+// publishing to find out. Unlike Ready, this is not a broker-connectivity answer:
+// a Close-then-Start cycle clears it (see bind).
+func (p *Publisher) Closed() bool {
+	return p.closed.Load()
+}
+
 // binding resolves the producer to send through, naming the right reason when
 // there is none.
 //
