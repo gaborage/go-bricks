@@ -7162,8 +7162,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   SIX properties, each with its own scope: `DeliveryMode` on every publish; `ContentType`
   by what the payload actually is; `AppId`, `Timestamp` and `Type` where they had no value
   at all, with `Timestamp` read once per logical publish, above the retry loop, so every
-  attempt of that publish carries the instant the publish began; `MessageId` the outbox row id on a RELAYED publish only, a generated UUID
-  everywhere else. In detail: `DeliveryMode` becomes `amqp.Persistent` on EVERY publish — typed, outbox-relayed,
+  attempt of that publish carries the instant the publish began; `MessageId` a generated UUID, becoming the outbox row id on a
+  RELAYED publish when the relay link (#1562) lands. In detail: `DeliveryMode` becomes `amqp.Persistent` on EVERY publish — typed, outbox-relayed,
   and the raw byte door — where it was left at the zero value, so every business message was
   transient. `ContentType` was hard-coded `application/octet-stream` for all traffic and is now
   claimed only where the framework knows it: `application/json` from the typed handle,
@@ -7210,9 +7210,12 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   that must not retain needs a TTL or a max-length policy set on the BROKER. (c) treat the
   value as the outbox row id: it is stable across the relay's retries of the same row, so a
   tool that counted distinct `message_id`s as distinct delivery ATTEMPTS now counts rows.
-  Dedupe on `x-outbox-event-id` as before — the property mirrors it, it does not replace it,
-  and `inbox.ProcessOnce` never reads the property. For an `app_id` a custom messaging factory
-  must set it itself with `messaging.WithAppName`, or move to the default factory.
+  Dedupe on `x-outbox-event-id` as before — the property mirrors it, it does not replace it.
+  `Meta.DedupKey()` prefers that stamp wherever it is present and falls back to a validated
+  `message_id` only for a delivery carrying no stamp at all ([C64.11]), so a relayed row,
+  which always carries one, is keyed by the stamp either way. For an `app_id`, a custom
+  messaging factory must set it itself with `messaging.WithAppName`, as must a resolver a
+  caller constructed; only the framework's own bootstrap sets the name.
 - verify: `go build ./... && go test ./...`  # then publish one event of each shape and read
   the properties off the wire (RabbitMQ management UI "Get message", or `d.DeliveryMode` /
   `d.ContentType` / `d.MessageId` / `d.AppId` / `d.Type` in a raw consumer): a typed publish
@@ -7247,7 +7250,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   length and the limit (`app config: ...`), where any length used to be admitted. The check runs
   in `check`/`checkApp` unconditionally — it does not consult whether messaging is configured — so
   it fails at STARTUP, before any client is built. 255 is the AMQP shortstr ceiling, and `app.name`
-  is stamped as the `app_id` property of every publish ([C64.10], ADR-105): a longer value cannot
+  is stamped as the `app_id` property of every publish from a client the framework's own
+  bootstrap built, or from one whose factory passes the name itself ([C64.10], ADR-105) — a
+  consumer's own `Options.MessagingClientFactory`, and the default factory of a
+  caller-constructed resolver, publish an empty `app_id` until they call
+  `messaging.WithAppName`. A longer value cannot
   be written into the content-header frame, and amqp091 answers a frame-write failure by shutting
   down the whole Connection every publisher in the process shares (ADR-070), so a name that used
   to boot green would have torn that connection down on every publish, retryably and forever. The

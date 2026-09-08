@@ -60,10 +60,11 @@ encoding stamp — are set.
   production-unused state, so the test that pins the property brackets the call and
   asserts with `assert.WithinDuration` instead. The consumer surface gains no time
   knob either — this is not a `ClientOption`.
-- **`Type` is the event type** — the typed handle's declared `EventType`, and on a
-  relayed publish the outbox row's `EventType`, which is the same value as the
-  `x-outbox-event-type` header. That header STAYS; the property mirrors it. The raw bytes
-  path declares no event type and so carries none.
+- **`Type` is the event type** — the typed handle's declared `EventType`, and, with the
+  relay link (#1562), on a relayed publish the outbox row's `EventType`, which is the same
+  value as the `x-outbox-event-type` header. That header STAYS; the property mirrors it. The
+  raw bytes path declares no event type and so carries none, and until that link a relayed
+  publish carries none either.
 - **`MessageId` on a relayed publish is the outbox row id**, the same value as
   `x-outbox-event-id`, which also stays: it remains the ledger key consumers dedupe
   on (ADR-097), and nothing reads the property in preference to it. The HEADER is the
@@ -74,10 +75,12 @@ encoding stamp — are set.
   FIRST link
   (#1564) the relay supplies no properties either, so a relayed publish is in that same
   population until the relay link (#1562) lands; from then on its id comes from the row and is
-  stable across the row's retries. `Timestamp` is recomputed the same way and for the same
-  reason — `preparePublishing` reads `time.Now()` on each attempt — so it marks the ATTEMPT
-  that reached the broker, not the moment the publish was called. Dedupe on
-  `x-outbox-event-id`, never on the property.
+  stable across the row's retries. `Timestamp` is produced at that same seam and behaves the
+  same way: `preparePublishing` reads `time.Now()` once per logical publish, above the retry
+  loop since #1556, so it marks the moment the publish was called and every attempt re-sends
+  that instant rather than stamping its own. Dedupe on `x-outbox-event-id`: `Meta.DedupKey()`
+  reads the property only for a delivery carrying no stamp at all ([C64.11]), which a relayed
+  row never is.
 - **`ContentType` is claimed only where it is known.** The three doors carry it on the
   ONE field both option structs gained — `publishdoor.Options.Props` → the unexported
   `publishOptions.props`, a `*publishdoor.MessageProps` holding `ContentType`,
