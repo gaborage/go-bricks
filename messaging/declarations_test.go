@@ -1662,9 +1662,12 @@ func TestValidateQuorumQueueShapeAggregatesEveryViolation(t *testing.T) {
 		Exclusive:  true,
 		AutoDelete: true,
 		Args: map[string]any{
-			argQueueType:   QueueTypeQuorum,
-			argMaxPriority: 10,
-			argQueueMode:   "lazy",
+			argQueueType: QueueTypeQuorum,
+			// Both values are distinctive on purpose: the key-only rule is asserted by
+			// their ABSENCE, and a short value like 10 would match unrelated digits in
+			// any other part of the message.
+			argMaxPriority: 7331,
+			argQueueMode:   "lazy-7332",
 		},
 	})
 
@@ -1675,7 +1678,14 @@ func TestValidateQuorumQueueShapeAggregatesEveryViolation(t *testing.T) {
 	assert.Contains(t, err.Error(), `quorum queue "orders.quorum.queue" must not be auto-delete`)
 	assert.Contains(t, err.Error(), `quorum queue "orders.quorum.queue" must not set x-max-priority`)
 	assert.Contains(t, err.Error(), `quorum queue "orders.quorum.queue" must not set x-queue-mode`)
-	assert.NotContains(t, err.Error(), "lazy", "the error names the offending key, never the Args value")
+	// Queue Args are broker topology and reach a startup error the logger's key-based
+	// filter cannot mask, so the message names the KEY and stops there.
+	assert.NotContains(t, err.Error(), "7331", "the error names the offending key, never the Args value")
+	assert.NotContains(t, err.Error(), "lazy-7332", "the error names the offending key, never the Args value")
+	for _, key := range []string{argMaxPriority, argQueueMode} {
+		assert.NotContains(t, err.Error(), key+"=", "the key must not be rendered with its value")
+		assert.NotContains(t, err.Error(), key+":", "the key must not be rendered with its value")
+	}
 }
 
 // TestReplayToRegistryCarriesDLQQueueType pins that the queue type is part of
