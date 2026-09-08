@@ -35,13 +35,19 @@
 > producer to make `message_id` unique per message, so a producer reusing one across distinct
 > events has them skipped as duplicates, and a queue with such a producer wants the stamp or
 > the consumer's own key. And the additive `Metadata.MessageID()` accessor must never be handed
-> to `inbox.ProcessOnce`: under a sealed delivery's context `ValidateDedupKey` admits a
-> `<SignFamily>:<jti>`-shaped key, and that accessor is the one door that can hand a sealed
-> handler a caller-written string of that shape. `DedupKey` is the only supported way to a
-> ledger key, and no framework path passes the property anywhere else
-> (`[C64.11]`, breaking — a consumer whose absent-stamp error arm did anything but re-raise,
-> whether it REJECTED the unstamped delivery or processed it WITHOUT dedup, must now make that
-> judgement itself).
+> to `inbox.ProcessOnce`: under a sealed delivery's context `ValidateDedupKey` admits any
+> `<SignFamily>:<jti>`-shaped key, so a caller-written string of that shape suppresses a
+> victim's sealed message. That exposure is NOT new and not this accessor's alone — `Headers()`
+> has always returned publisher-controlled values a sealed handler could spell the same way —
+> which is why the control is the rule rather than the surface: only `DedupKey`'s own answer
+> belongs at the ledger door, and no framework path passes either wire value anywhere else.
+> Binding the sealed context to the composed key — rather than to a bool — and comparing it in
+> `ValidateDedupKey` would close the class structurally, so that no caller-written string of
+> any shape passes; that changes the sealed ADMISSION rule and is out of scope for this
+> amendment, which records it rather than deciding it — tracked as #1558.
+> This amendment's own change is `[C64.11]`, breaking: a consumer whose absent-stamp error arm
+> did anything but re-raise — whether it REJECTED the unstamped delivery or processed it
+> WITHOUT dedup — must now make that judgement itself.
 >
 > **Amended (2026-09-04, #1408):** a second door, `jose/sealed.SealDocument` with
 > `NewDocumentSpec`, seals an already-serialized document for tooling (`cmd/seal-event`) and

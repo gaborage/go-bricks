@@ -155,10 +155,9 @@ func (m Metadata) Sealed() (SealedEnvelope, bool) {
 // reusing one across distinct events makes the ledger skip them as duplicates.
 // A queue whose producer does that wants the stamp, or the consumer's own key.
 //
-// Return the error from the handler: the delivery is
-// nacked without requeue, like any other poison message. AMQP header values
-// arrive as string or []byte depending on the broker and client, so both are
-// accepted.
+// Return the error from the handler: the delivery is nacked without requeue,
+// like any other poison message. AMQP header values arrive as string or []byte
+// depending on the broker and client, so both are accepted.
 func (m Metadata) DedupKey() (string, error) {
 	if m.sealed != nil {
 		return m.sealed.SignFamily + ":" + m.sealed.JTI, nil

@@ -7269,9 +7269,11 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   key for the consumer's business key, and #1542's proposed three-level precedence is
   superseded on that point. Additive: `Metadata.MessageID()` exposes the property — for a
   consumer's own judgement about an unstamped delivery, never as a ledger key, since under a
-  sealed delivery's context `ValidateDedupKey` admits a `<SignFamily>:<jti>`-shaped key and
-  that accessor is the one door that could hand a sealed handler a caller-written string of
-  that shape. Two properties the framework does NOT give you: `message_id` UNIQUENESS, which
+  sealed delivery's context `ValidateDedupKey` admits any `<SignFamily>:<jti>`-shaped key, so a
+  caller-written string of that shape would suppress a victim's sealed message — an exposure
+  `Headers()` already carried and this accessor joins rather than creates; closing it
+  structurally, by binding the sealed context to the composed key, is tracked as #1558.
+  Two properties the framework does NOT give you: `message_id` UNIQUENESS, which
   AMQP obliges no producer to provide and which only the shape grammar is checked against — a
   producer reusing one across distinct events has them skipped as duplicates — and a bounded
   ledger, since a queue that wrote zero inbox rows now writes one per delivery, which is
