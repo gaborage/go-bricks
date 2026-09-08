@@ -269,6 +269,41 @@ Exchange: "...", ParkingQueue: "...", RoutingKey: "..."}` as the second
 argument. Inspect a parked message's `x-death` header (queue, exchange,
 reason, count) for triage.
 
+**Queue type — quorum by default, on both queues (ADR-106).** `DeadLetterSpec`
+carries `QueueType`, applied as the `x-queue-type` argument to BOTH queues the
+helper creates: the primary queue and the derived parking queue. An empty value —
+which is what a `nil` spec and a `&messaging.DeadLetterSpec{}` both mean — resolves
+to `messaging.QueueTypeQuorum`; `messaging.QueueTypeClassic` is honoured on both
+queues. One field covers both sides deliberately: the primary decides whether a
+failed message survives long enough to be dead-lettered, the parking queue whether it
+survives after parking, and a route with one classic half is bounded by that half.
+Neither half makes the HOP reliable: quorum replicates a queue's contents, but the
+dead-letter republish keeps RabbitMQ's default `at-most-once` strategy, so a message can
+still be lost between the two queues (at-least-once dead-lettering is #1568).
+
+```go
+queue := decls.DeclareQueueWithDLQ("orders.queue", &messaging.DeadLetterSpec{
+    QueueType: messaging.QueueTypeClassic, // both queues classic; empty means quorum
+})
+```
+
+An `x-queue-type` already on the queue wins — the helper sets the argument only on a
+queue that does not carry one, so the raw-`Args` route below (including
+`decls.Queues["orders.queue.dlq"].Args["x-queue-type"]`) is never overwritten and is
+how you give the two halves of one route different types: pre-setting the argument on
+one queue leaves the other at the spec's resolved value, so a quorum primary with a
+classic `.dlq` is reached by registering `NewQueue("orders.queue.dlq")` with
+`x-queue-type: classic` before the helper runs. A `QueueType` that is
+neither constant is a declaration-time validation error, not an argument forwarded
+for the broker to reject. Quorum queues do not support every queue shape, though: a
+queue that resolves to quorum and is non-durable, auto-delete or exclusive, or carries
+`x-max-priority` or `x-queue-mode` (lazy), still reaches the broker and fails with
+`PRECONDITION_FAILED` mid-startup, so keep such a queue on
+`messaging.QueueTypeClassic`. The check runs where declarations are validated once, so
+per-tenant replay is unchanged. Upgrading a deployment whose queues are already classic: see
+[migrations.md](migrations.md) `[C64.12]` — the broker will not convert a queue's
+type in place.
+
 **Custom topology — the raw `Args` escape hatch:**
 
 For DLX topology `DeclareQueueWithDLQ` doesn't fit (shared DLX across queues,

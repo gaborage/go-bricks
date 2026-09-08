@@ -44,7 +44,15 @@ type Declarations struct {
 	consumerIndex  map[consumerKey]*ConsumerDeclaration // Deduplication + O(1) lookup
 	consumerOrder  []consumerKey                        // Deterministic iteration order
 	queueConflicts []queueConflict                      // Incompatible queue re-declarations, reported by Validate
+	queueTypeErrs  []error                              // Queue types a declaration helper refused, reported by Validate
 	sealErr        error                                // First seal-tagged declaration that cannot seal, reported by Validate
+}
+
+// recordQueueTypeError keeps a helper's rejected queue type for Validate to
+// report: the declaration helpers return a declaration, not an error, and the
+// once-path is where a topology mistake must stop startup.
+func (d *Declarations) recordQueueTypeError(err error) {
+	d.queueTypeErrs = append(d.queueTypeErrs, err)
 }
 
 // recordSealError keeps the first sealing startup failure for Validate to report; startup
@@ -329,6 +337,31 @@ func (d *Declarations) Validate() error {
 		return err
 	}
 
+	if err := d.validateReferences(); err != nil {
+		return err
+	}
+
+	if err := d.validateStreamDeclarations(); err != nil {
+		return err
+	}
+
+	if err := d.validateQueueTypeDeclarations(); err != nil {
+		return err
+	}
+
+	for _, publisher := range d.Publishers {
+		if err := d.validatePublisherDestination(publisher); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateReferences checks that every binding and consumer names a
+// declaration that exists: a dangling reference is a relationship between
+// modules, invisible at either call site.
+func (d *Declarations) validateReferences() error {
 	for _, binding := range d.Bindings {
 		if _, exists := d.Queues[binding.Queue]; !exists {
 			return fmt.Errorf("binding references non-existent queue: %s", binding.Queue)
@@ -343,17 +376,6 @@ func (d *Declarations) Validate() error {
 			return fmt.Errorf("consumer references non-existent queue: %s", consumer.Queue)
 		}
 	}
-
-	if err := d.validateStreamDeclarations(); err != nil {
-		return err
-	}
-
-	for _, publisher := range d.Publishers {
-		if err := d.validatePublisherDestination(publisher); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
@@ -458,6 +480,12 @@ func (d *Declarations) validateStreamConsumerRules() []error {
 	}
 
 	return errs
+}
+
+// validateQueueTypeDeclarations reports the queue types a declaration helper
+// refused. Aggregated so one boot reports every problem.
+func (d *Declarations) validateQueueTypeDeclarations() error {
+	return errors.Join(d.queueTypeErrs...)
 }
 
 // isStreamQueue reports whether a queue declaration asks the broker for a
@@ -598,6 +626,7 @@ func (d *Declarations) Clone() *Declarations {
 
 	// A clone that passed a validation its source failed would be a trap.
 	clone.queueConflicts = slices.Clone(d.queueConflicts)
+	clone.queueTypeErrs = slices.Clone(d.queueTypeErrs)
 	clone.sealErr = d.sealErr
 
 	// Clone bindings

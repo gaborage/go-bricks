@@ -1061,3 +1061,150 @@ func TestDeclareStreamQueue(t *testing.T) {
 		})
 	}
 }
+
+// --- DeadLetterSpec.QueueType ---
+
+const (
+	dlqPrimaryQueue = "orders.queue"
+	dlqParkingQueue = "orders.queue.dlq"
+)
+
+// TestDeclareQueueWithDLQQueueType pins the resolved x-queue-type on BOTH the
+// primary and the derived parking queue. An unset QueueType resolves to quorum:
+// a parking queue that loses messages on a broker restart defeats the point of
+// parking them.
+func TestDeclareQueueWithDLQQueueType(t *testing.T) {
+	tests := []struct {
+		name     string
+		spec     *DeadLetterSpec
+		wantType string
+	}{
+		{
+			name:     "nil_spec_resolves_to_quorum",
+			spec:     nil,
+			wantType: QueueTypeQuorum,
+		},
+		{
+			name:     "empty_queue_type_resolves_to_quorum",
+			spec:     &DeadLetterSpec{},
+			wantType: QueueTypeQuorum,
+		},
+		{
+			name:     "explicit_quorum",
+			spec:     &DeadLetterSpec{QueueType: QueueTypeQuorum},
+			wantType: QueueTypeQuorum,
+		},
+		{
+			name:     "explicit_classic",
+			spec:     &DeadLetterSpec{QueueType: QueueTypeClassic},
+			wantType: QueueTypeClassic,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decls := NewDeclarations()
+
+			decls.DeclareQueueWithDLQ(dlqPrimaryQueue, tt.spec)
+
+			require.NoError(t, decls.Validate())
+			assert.Equal(t, tt.wantType, decls.Queues[dlqPrimaryQueue].Args[argQueueType],
+				"the primary queue must carry the resolved type")
+			assert.Equal(t, tt.wantType, decls.Queues[dlqParkingQueue].Args[argQueueType],
+				"the parking queue must carry the same resolved type as its primary")
+		})
+	}
+}
+
+// TestDeclareQueueWithDLQQueueTypePrecedence pins the rule that a caller who
+// already chose a type keeps it: the helper fills x-queue-type only where none
+// is set, both for a queue registered BEFORE it runs (where RegisterQueue's
+// merge would otherwise report a conflict) and through the documented
+// d.Queues[name].Args door afterwards.
+func TestDeclareQueueWithDLQQueueTypePrecedence(t *testing.T) {
+	preRegister := func(d *Declarations, name, queueType string) {
+		q := NewQueue(name)
+		q.Args[argQueueType] = queueType
+		d.RegisterQueue(q)
+	}
+
+	tests := []struct {
+		name        string
+		declare     func(d *Declarations)
+		wantPrimary string
+		wantParking string
+	}{
+		{
+			name: "parking_type_registered_before_the_helper_survives",
+			declare: func(d *Declarations) {
+				preRegister(d, dlqParkingQueue, QueueTypeClassic)
+				d.DeclareQueueWithDLQ(dlqPrimaryQueue, nil)
+			},
+			wantPrimary: QueueTypeQuorum,
+			wantParking: QueueTypeClassic,
+		},
+		{
+			name: "primary_type_registered_before_the_helper_survives",
+			declare: func(d *Declarations) {
+				preRegister(d, dlqPrimaryQueue, QueueTypeClassic)
+				d.DeclareQueueWithDLQ(dlqPrimaryQueue, nil)
+			},
+			wantPrimary: QueueTypeClassic,
+			wantParking: QueueTypeQuorum,
+		},
+		{
+			name: "parking_args_door_after_the_helper",
+			declare: func(d *Declarations) {
+				d.DeclareQueueWithDLQ(dlqPrimaryQueue, nil)
+				d.Queues[dlqParkingQueue].Args[argQueueType] = QueueTypeClassic
+			},
+			wantPrimary: QueueTypeQuorum,
+			wantParking: QueueTypeClassic,
+		},
+		{
+			name: "primary_args_door_after_the_helper",
+			declare: func(d *Declarations) {
+				d.DeclareQueueWithDLQ(dlqPrimaryQueue, nil)
+				d.Queues[dlqPrimaryQueue].Args[argQueueType] = QueueTypeClassic
+			},
+			wantPrimary: QueueTypeClassic,
+			wantParking: QueueTypeQuorum,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decls := NewDeclarations()
+
+			tt.declare(decls)
+
+			require.NoError(t, decls.Validate(), "a caller-chosen type must not conflict with the helper's")
+			assert.Equal(t, tt.wantPrimary, decls.Queues[dlqPrimaryQueue].Args[argQueueType])
+			assert.Equal(t, tt.wantParking, decls.Queues[dlqParkingQueue].Args[argQueueType])
+			assert.Equal(t, dlqPrimaryQueue+".dlx", decls.Queues[dlqPrimaryQueue].Args[argDeadLetterExchange],
+				"dead-lettering must still be wired whichever type the caller chose")
+		})
+	}
+}
+
+// TestDeclareQueueWithDLQUnknownQueueTypeFailsValidate pins that an
+// unrecognized QueueType is a startup failure naming the value, not a
+// passthrough the broker rejects later — "stream" included: a stream is not a
+// parking queue.
+func TestDeclareQueueWithDLQUnknownQueueTypeFailsValidate(t *testing.T) {
+	for _, queueType := range []string{"bogus", queueTypeStream} {
+		t.Run(queueType, func(t *testing.T) {
+			decls := NewDeclarations()
+
+			decls.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{QueueType: queueType})
+
+			err := decls.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), queueType, "the error must name the rejected value")
+			assert.Contains(t, err.Error(), dlqPrimaryQueue, "the error must name the queue")
+
+			_, applied := decls.Queues[dlqPrimaryQueue].Args[argQueueType]
+			assert.False(t, applied, "an unrecognized type must never reach the declaration")
+		})
+	}
+}
