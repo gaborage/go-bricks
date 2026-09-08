@@ -71,7 +71,9 @@ type. Then a `content_type` the handle actually knows — `application/json`, `a
 event, or `application/octet-stream` for an outbox row whose `Payload` the caller handed over
 as `[]byte`, which persists untyped. An outbox-relayed publish is the one exception to the
 minted id: it carries the ledger row's own id instead. The streams lane
-is untouched: it sets no message properties of its own.
+is untouched in the sense that matters here: it sets no AMQP message properties of its own,
+its relay planning strips the framework's stamps like the AMQP lane's does, and it enforces
+no shortstr byte limit, because nothing it publishes rides a shortstr.
 
 `app_id` is unauthenticated provenance metadata — read it for tracing, dashboards and triage,
 never as an authorization, routing-trust or identity input: any publisher on the bus can stamp

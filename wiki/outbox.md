@@ -75,7 +75,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
         EventType:   "order.created",
         AggregateID: fmt.Sprintf("order-%d", req.ID),
         Payload:     OrderCreatedEvent{OrderID: req.ID},
-        Exchange:    "order.events",
+        Exchange:    "orders.events",
     })
     if err != nil { return fmt.Errorf("outbox publish: %w", err) }
 
@@ -554,7 +554,7 @@ inbox:
        }
        _, err := deps.Outbox.Publish(ctx, tx, &app.OutboxEvent{
            EventType: "order.created", AggregateID: "order-123",
-           Payload: payload, Exchange: "order.events",
+           Payload: payload, Exchange: "orders.events",
        })
        return err
    })

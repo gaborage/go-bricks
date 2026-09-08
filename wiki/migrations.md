@@ -7332,9 +7332,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   business write rolls back with it, which is the intended outcome for an event that could never
   be delivered. (b) rename the header out of the framework's namespace — any prefix but
   `x-gobricks-` — and read the framework's own encoding stamp off the delivery's `content_type`
-  property rather than off a header.
-- verify: `go build ./... && go test ./...`  # then enqueue one event with a 256-byte `EventType`
-  and confirm `Publish` returns an error and inserts nothing, enqueue one with an
+  property rather than off a header, remembering that property exists on the AMQP lane only:
+  a stream delivery carries no content type at all.
+- verify: `go build ./... && go test ./...`  # then enqueue one AMQP-destined event with a
+  256-byte `EventType` and confirm `Publish` returns an error and inserts nothing — a STREAM
+  row is not bounded, so the same event type inserts there, enqueue one with an
   `x-gobricks-anything` header and confirm `errors.Is(err, outbox.ErrReservedHeaderPrefix)`, and
   re-run the ledger query above to confirm no existing row is over the byte bound
 - ref: gaborage/go-bricks#1545 ·
