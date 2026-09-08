@@ -437,7 +437,7 @@ is still a write and will fail against a read-only replica) — and fails `Init`
 - `table %q cannot be queried: the query was refused before it reached the database` — the query
   builder rejected the configured table name (a character the configured vendor's grammar refuses,
   e.g. one PostgreSQL does not accept), so neither migrations nor auto-creation applies; fix
-  `outbox.tablename`/`inbox.tablename`.
+  `outbox.tablename`/`inbox.tablename`, or `inbox.hold.tablename` when the hold's probe raised it.
 - `database resolver returned a nil database` — a resolver contract violation (`(nil, nil)`).
 
 **Exempt modes** (the `""` key is not statically resolvable at `Init` time, so the check is skipped —
