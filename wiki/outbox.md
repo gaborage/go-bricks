@@ -86,7 +86,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
 
 **How It Works:**
 
-1. `Publish()` writes an `OutboxRecord` to the outbox table within the caller's transaction, refusing — on an AMQP row, since a stream row's event type rides no shortstr — an exchange, routing key, `EventType` (which an empty routing key falls back TO, so an over-long one fails as the routing key as well as on its own account) or header key past the AMQP shortstr limit (255 bytes) before the INSERT — a destination the broker can never accept is rejected at its source
+1. `Publish()` writes an `OutboxRecord` to the outbox table within the caller's transaction, refusing — on an AMQP row, since a stream row's event type rides no shortstr — an exchange, routing key, `EventType` (the fallback for an empty routing key, so an over-long one fails as the routing key as well as on its own account) or header key past the AMQP shortstr limit (255 bytes) before the INSERT — a destination the broker can never accept is rejected at its source
 2. The **relay job** (`outbox-relay` via scheduler) polls for pending events every `pollinterval`
 3. Each pending event is published to its target destination — the AMQP exchange on the AMQP lane, the super stream on the stream lane — with the `x-outbox-event-id` header, which the relay stamps on both lanes
 4. Successfully published events are marked as `published`
