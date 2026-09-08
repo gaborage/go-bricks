@@ -1538,6 +1538,30 @@ empty-scalar hook deliberately do not, because "is there a resolvable value" mus
 defaults. `preloadDeniedPrefixes` is retired; `derivationDeniedPrefixes` stays. Non-breaking:
 no exported identifier or error string moves.
 
+### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
+
+**Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
+
+`Declarations.DeclareQueueWithDLQ` invents a parking queue whose whole purpose is retaining a
+message nobody could handle, but it set no `x-queue-type` on either queue it touches, so both
+took whatever the broker defaults to for the vhost — while ADR-040 already names
+`Args["x-queue-type"] = "quorum"` as the sanctioned passthrough and quorum as RabbitMQ's
+recommended production queue type, reachable only on a hand-built declaration or a
+post-registration `Args` mutation. `DeadLetterSpec` now carries `QueueType`, applied as
+`x-queue-type` to the primary queue and the parking queue alike, with an empty value —
+`nil` spec and `&DeadLetterSpec{}` included — resolving to `QueueTypeQuorum`; explicit
+`QueueTypeClassic` is honoured on both. A queue that already carries an `x-queue-type` keeps
+it, so the ADR-040 passthrough is never overwritten and stays the only way to give the two
+halves of one route different types. An unknown value is a declaration-time validation error
+rather than a passthrough; refusing a quorum-resolved queue whose shape the broker rejects
+(non-durable, auto-delete or exclusive, `x-max-priority`, `x-queue-mode`) by name at
+declaration time lands in the follow-up link. The check lives in the
+validate-once path, so per-tenant replay is unchanged. Every NovoPayment broker is
+quorum-capable (maintainer, triage 2026-09-08); CI declares against
+`rabbitmq:4.3.5-management-alpine`. Compiler-invisible: an existing classic primary or `.dlq`
+cannot be redeclared as quorum, so set `QueueType: messaging.QueueTypeClassic` to keep today's
+topology or delete/migrate the queue. See [migrations.md](migrations.md) `[C64.12]`.
+
 ---
 
 ### [ADR-102: A Key-Absence Helper Checks the Returned Key, Not Only the Error](adr_102_key_not_found_helper_checks_the_value.md)
@@ -2249,7 +2273,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-104) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-106) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

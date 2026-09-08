@@ -333,6 +333,39 @@ func TestDeclarativeDLQParksFailedDelivery(t *testing.T) {
 	failingHandler.AssertExpectations(t)
 }
 
+// TestDeclarativeDLQDeclaresQuorumQueues pins DeadLetterSpec's default queue
+// type against a real broker: both the primary and the parking queue must be
+// declared as quorum queues. The proof is RabbitMQ's own declare-equivalence
+// check — redeclaring each name with x-queue-type quorum succeeds only if the
+// queue the helper's topology created already is one.
+func TestDeclarativeDLQDeclaresQuorumQueues(t *testing.T) {
+	brokerURL := setupTestBroker(t)
+	log := logger.New("disabled", true)
+
+	client := NewAMQPClient(brokerURL, log)
+	defer client.Close()
+
+	require.Eventually(t, client.IsReady, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
+
+	workQueueName := uniqueName(t, "quorumdlq-queue")
+	decls := NewDeclarations()
+	decls.DeclareQueueWithDLQ(workQueueName, nil)
+	require.NoError(t, decls.Validate())
+
+	reg := NewRegistry(client, log)
+	require.NoError(t, decls.ReplayToRegistry(reg))
+	require.NoError(t, reg.DeclareInfrastructure(t.Context()))
+
+	for _, name := range []string{workQueueName, workQueueName + ".dlq"} {
+		assert.Equal(t, QueueTypeQuorum, decls.Queues[name].Args[argQueueType])
+		require.NoError(t, client.DeclareQueue(t.Context(), &QueueDeclaration{
+			Name:    name,
+			Durable: true,
+			Args:    map[string]any{argQueueType: QueueTypeQuorum},
+		}), "%s must already be a quorum queue on the broker", name)
+	}
+}
+
 // TestAMQPClientDeclareQueueArgsQuorum pins the "cannot attach to
 // ops-provisioned queues" half of the finding: args participate in RabbitMQ's
 // declare-equivalence check, so declaring a quorum queue and then redeclaring

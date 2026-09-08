@@ -51,6 +51,12 @@ const (
 
 	queueTypeStream = "stream"
 
+	// QueueTypeQuorum and QueueTypeClassic are the x-queue-type values a
+	// DeadLetterSpec.QueueType may name; an empty QueueType resolves to
+	// QueueTypeQuorum. Any other value fails Validate.
+	QueueTypeQuorum  = "quorum"
+	QueueTypeClassic = "classic"
+
 	// Named x-stream-offset start positions ("next" is the broker default).
 	streamOffsetFirst = "first"
 	streamOffsetLast  = "last"

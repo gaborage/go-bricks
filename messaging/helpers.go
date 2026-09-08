@@ -197,6 +197,12 @@ type DeadLetterSpec struct {
 	// dead-lettered messages are re-published with it instead of their
 	// original routing key. Rarely needed with the fanout DLX default.
 	RoutingKey string
+
+	// QueueType is the x-queue-type both the primary and the parking queue are
+	// declared with: QueueTypeQuorum (the default an empty value resolves to)
+	// or QueueTypeClassic. Any other value fails Validate. A type already set
+	// on either queue's Args wins — the helper never overwrites one.
+	QueueType string
 }
 
 // DeclareQueueWithDLQ declares a queue whose failed deliveries are parked
@@ -206,6 +212,9 @@ type DeadLetterSpec struct {
 // Lowers to ordinary exchange/queue/binding declarations plus queue Args, so
 // per-tenant replay, validation, and topology hashing behave as if declared
 // by hand.
+//
+// Both queues are declared with the spec's QueueType — quorum unless the spec
+// or an existing declaration of either name says otherwise.
 //
 // Returns the primary queue declaration. As with DeclareQueue, RegisterQueue
 // copies Args into a new declaration, so Args set on the returned pointer
@@ -231,7 +240,10 @@ func (d *Declarations) DeclareQueueWithDLQ(name string, dl *DeadLetterSpec) *Que
 		Durable: true,
 		Args:    make(map[string]any),
 	})
-	d.RegisterQueue(NewQueue(parking))
+	queueType := d.resolveDeadLetterQueueType(name, dl.QueueType)
+	parkingQueue := NewQueue(parking)
+	d.applyQueueType(parkingQueue, queueType)
+	d.RegisterQueue(parkingQueue)
 	// Register the parking binding once per DLX. Exchange/queue registration is
 	// map-backed (idempotent by name), but Bindings is a slice: several primary
 	// queues sharing one DLX (via DeadLetterSpec.Exchange/ParkingQueue) would
@@ -246,8 +258,48 @@ func (d *Declarations) DeclareQueueWithDLQ(name string, dl *DeadLetterSpec) *Que
 	if dl.RoutingKey != "" {
 		queue.Args[argDeadLetterRoutingKey] = dl.RoutingKey
 	}
+	d.applyQueueType(queue, queueType)
 	d.RegisterQueue(queue)
 	return queue
+}
+
+// resolveDeadLetterQueueType maps a DeadLetterSpec.QueueType to the
+// x-queue-type both queues get. An unrecognized value is recorded for Validate
+// to report and resolves to "", which applyQueueType then declines to apply:
+// startup fails naming the spec rather than the broker refusing the declare.
+func (d *Declarations) resolveDeadLetterQueueType(queue, queueType string) string {
+	switch queueType {
+	case "":
+		return QueueTypeQuorum
+	case QueueTypeQuorum, QueueTypeClassic:
+		return queueType
+	default:
+		d.recordQueueTypeError(fmt.Errorf(
+			"dead-letter spec for queue %q has unknown QueueType %q: use %s, %s or leave it empty for %s",
+			queue, queueType, QueueTypeQuorum, QueueTypeClassic, QueueTypeQuorum))
+		return ""
+	}
+}
+
+// applyQueueType sets x-queue-type on q only when no type is chosen already —
+// on q itself, or on an earlier registration of the same name. A caller who
+// pre-declared the queue as classic (the ops-provisioned-topology workaround,
+// ADR-040) keeps that choice: overwriting it would either silently retype their
+// queue or, once RegisterQueue merged the two, report a startup conflict.
+func (d *Declarations) applyQueueType(q *QueueDeclaration, queueType string) {
+	if queueType == "" {
+		return
+	}
+	if _, chosen := q.Args[argQueueType]; chosen {
+		return
+	}
+	if incumbent, exists := d.Queues[q.Name]; exists {
+		if _, chosen := incumbent.Args[argQueueType]; chosen {
+			return
+		}
+	}
+
+	q.Args[argQueueType] = queueType
 }
 
 // hasParkingBinding reports whether a parking->dlx binding (routing key "") is

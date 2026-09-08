@@ -1575,3 +1575,46 @@ func TestRegisterConsumerWithoutArgsGetsEmptyMap(t *testing.T) {
 	require.NotNil(t, cloned.Args)
 	assert.Empty(t, cloned.Args)
 }
+
+// TestReplayToRegistryCarriesDLQQueueType pins that the queue type is part of
+// the validated declaration set rather than something applied at replay time:
+// every per-tenant replay of one validated set declares both queues with it.
+func TestReplayToRegistryCarriesDLQQueueType(t *testing.T) {
+	decls := NewDeclarations()
+	decls.DeclareQueueWithDLQ(mergeQueue, nil)
+	require.NoError(t, decls.Validate())
+
+	want := map[string]any{
+		mergeQueue:          QueueTypeQuorum,
+		mergeQueue + ".dlq": QueueTypeQuorum,
+	}
+
+	for _, tenant := range []string{tenant1ID, tenant2ID} {
+		t.Run(tenant, func(t *testing.T) {
+			registry := &mockRegistry{}
+			registry.On("RegisterExchange", mock.Anything).Return()
+			registry.On("RegisterQueue", mock.Anything).Return()
+			registry.On("RegisterBinding", mock.Anything).Return()
+
+			require.NoError(t, decls.Clone().ReplayToRegistry(registry))
+
+			got := make(map[string]any, len(registry.queues))
+			for _, q := range registry.queues {
+				got[q.Name] = q.Args[argQueueType]
+			}
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
+// TestCloneCopiesQueueTypeError guards the same trap as TestCloneCopiesQueueConflicts:
+// a clone that passed a validation its source failed would hide the bad spec.
+func TestCloneCopiesQueueTypeError(t *testing.T) {
+	d := NewDeclarations()
+	d.DeclareQueueWithDLQ(mergeQueue, &DeadLetterSpec{QueueType: "bogus"})
+	require.Error(t, d.Validate())
+
+	err := d.Clone().Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bogus")
+}
