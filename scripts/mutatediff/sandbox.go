@@ -112,9 +112,9 @@ func setupSandboxAt(ctx context.Context, cacheBase, sysTmp string, now time.Time
 // cold-rebuild cost inside measureSuite's baseline passes, which rewarm
 // dependencies and stdlib before the per-mutant ceiling is measured from them;
 // a wipe at cleanup instead left the next run's first mutants paying it
-// against a ceiling measured warm, and they timed out. Wiping assumes gate
-// runs on one machine do not overlap — they are serialized locally by
-// convention, and the shared cache is not safe to wipe under a concurrent run.
+// against a ceiling measured warm, and they timed out. A failed wipe aborts
+// the run: see wiki/testing.md#mutation-gate for the one-run-per-machine
+// assumption the wipe rests on.
 func pruneGocache(gocache string, capBytes int64, out io.Writer) error {
 	size := dirSize(gocache)
 	capLabel := "cap disabled"

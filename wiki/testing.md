@@ -486,9 +486,12 @@ and, when it exceeds `MUTATE_GOCACHE_CAP`, wipes it there — so the baseline
 suite passes rewarm dependencies and stdlib before the per-mutant ceiling is
 measured, instead of the next run's first mutants paying the cold rebuild and
 timing out. The start banner reports the size, the cap, and `pruned` or
-`kept`. Cleanup is deferred in `run`, so it fires on failures the same as on
-passes: it removes the per-run root and leaves the persistent cache alone. A
-run killed with `SIGKILL` skips its defers;
+`kept`, and a prune that cannot remove the cache aborts the run before any
+mutant builds. The wipe assumes gate runs on one machine do not overlap — they
+are serialized locally by convention, and a shared cache is not safe to wipe
+under a concurrent run. Cleanup is deferred in `run`, so it fires on failures
+the same as on passes: it removes the per-run root and leaves the persistent
+cache alone. A run killed with `SIGKILL` skips its defers;
 the next run's startup sweep removes orphaned `mutatediff-run-*` roots older
 than 24h. The dedicated cache must stay **outside the repo**: gremlins copies
 the whole module root per worker with an unfiltered `filepath.Walk`, so an

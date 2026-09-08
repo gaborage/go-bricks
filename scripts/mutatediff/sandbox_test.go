@@ -101,8 +101,9 @@ func seedGocache(t *testing.T, cacheBase string, size int64) (gocache, obj strin
 	return gocache, obj
 }
 
-// requireReadOnlyParent skips where a read-only parent does not block removal.
-func requireReadOnlyParent(t *testing.T, dir string) {
+// makeParentReadOnlyOrSkip makes dir unwritable for the test's duration, and
+// skips where a read-only parent does not block removal.
+func makeParentReadOnlyOrSkip(t *testing.T, dir string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("read-only parent does not block removal on Windows")
@@ -110,8 +111,13 @@ func requireReadOnlyParent(t *testing.T, dir string) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores the read-only parent this test relies on")
 	}
+	info, err := os.Stat(dir)
+	require.NoError(t, err)
+	mode := info.Mode().Perm()
 	require.NoError(t, os.Chmod(dir, 0o555))
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o750) })
+	// Restore the mode the dir actually had, not a guess: t.TempDir hands out
+	// 0o700, and widening it would leave scratch group-readable.
+	t.Cleanup(func() { _ = os.Chmod(dir, mode) })
 }
 
 func TestSandboxCleanupRemovesOnlyTheTempRoot(t *testing.T) {
@@ -168,7 +174,7 @@ func TestSetupSandboxAtReportsPruneFailure(t *testing.T) {
 	pinSandboxEnv(t, "1")
 	cacheBase := t.TempDir()
 	seedGocache(t, cacheBase, 2*mib)
-	requireReadOnlyParent(t, cacheBase)
+	makeParentReadOnlyOrSkip(t, cacheBase)
 	sysTmp := t.TempDir()
 
 	var out strings.Builder
@@ -234,7 +240,7 @@ func TestSandboxCleanupReportsRemovalFailure(t *testing.T) {
 	runTmp := filepath.Join(parent, "run")
 	require.NoError(t, os.Mkdir(runTmp, 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(runTmp, "scratch"), []byte("x"), 0o600))
-	requireReadOnlyParent(t, parent)
+	makeParentReadOnlyOrSkip(t, parent)
 
 	s := &sandbox{runTmp: runTmp}
 	err := s.cleanup()
