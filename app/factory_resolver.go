@@ -91,8 +91,9 @@ func (f *FactoryResolver) MessagingClientFactory(connectionTimeout time.Duration
 // Options.MessagingClientFactory is set it owns construction and receives only
 // (url, log) — NO field of opts applies to it, so all messaging.reconnect.*
 // config (timeouts, attempts, and the four reconnect delays) is bypassed and
-// custom-built clients keep the hardcoded client defaults — the app identity
-// included, so a custom-built client publishes with no app_id.
+// custom-built clients keep the hardcoded client defaults. The app identity is
+// bypassed with them: a custom factory never reaches WithAppName, so a
+// custom-built client publishes with no app_id at all.
 func (f *FactoryResolver) MessagingClientFactoryWithOptions(opts MessagingClientFactoryOptions) messaging.ClientFactory {
 	if f.opts != nil && f.opts.MessagingClientFactory != nil {
 		return func(url string, log logger.Logger) messaging.AMQPClient {

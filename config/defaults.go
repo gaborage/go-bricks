@@ -185,6 +185,7 @@ const (
 	fieldDebug              = "debug"
 	fieldServerPort         = "server.port"
 	fieldLogLevel           = "log.level"
+	fieldAppName            = "app.name"
 	fieldAppEnv             = "app.env"
 	fieldAppRateLimit       = "app.rate.limit"
 	fieldCacheRedisDB       = "cache.redis.database"

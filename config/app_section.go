@@ -23,12 +23,12 @@ func normalizeApp(cfg *AppConfig) error {
 // (see its docs for the policy), and negative rate limits.
 func checkApp(cfg *AppConfig) error {
 	if cfg.Name == "" {
-		return NewMissingFieldError("app.name", "APP_NAME", "app.name")
+		return NewMissingFieldError(fieldAppName, "APP_NAME", fieldAppName)
 	}
 
 	if len(cfg.Name) > maxAppNameBytes {
 		return NewInvalidFieldError(
-			"app.name",
+			fieldAppName,
 			fmt.Sprintf("is %d bytes, limit is %d", len(cfg.Name), maxAppNameBytes),
 			nil,
 		)

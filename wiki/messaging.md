@@ -61,7 +61,10 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 `delivery_mode: 2` (persistent, no opt-out), `app_id` from `app.name`, a `timestamp`, `type`
 from the declared `EventType`, and a `content_type` the handle actually knows —
 `application/json`, or `application/jose` when the handle seals the event. The streams lane
-is untouched: it sets no message properties of its own.
+is untouched: it sets no message properties of its own, and an outbox-relayed publish keeps
+the properties it had until the relay link lands — it is the second half of this change
+(see `[C64.10]`'s scope), so until then a relayed row still ships octet-stream, no `type`,
+and a generated `message_id`.
 
 `app_id` is unauthenticated provenance metadata — read it for tracing, dashboards and triage,
 never as an authorization, routing-trust or identity input: any publisher on the bus can stamp
