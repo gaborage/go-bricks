@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"maps"
+	"strings"
 	"testing"
 	"time"
 
@@ -673,6 +674,56 @@ func TestPublisherRefusesADestinationTheFrameCannotCarry(t *testing.T) {
 	}
 }
 
+// TestPublisherRefusesAnEventTypeTheFrameCannotCarry: the event type reaches the wire as
+// the `type` property of the same frame the destination rides (ADR-105), and the ledger's
+// column bounds 255 CHARACTERS — so a multibyte type inserts cleanly and only the byte
+// rule sees it. Refused at the INSERT rather than parked by the relay after MaxRetries,
+// which on the AMQP lane holds the whole tenant's key while it happens. Each case sets a
+// routing key, so the fallback cannot claim the failure.
+func TestPublisherRefusesAnEventTypeTheFrameCannotCarry(t *testing.T) {
+	tests := []struct {
+		name      string
+		eventType string
+		refused   bool
+	}{
+		{name: "at_the_limit_is_persisted", eventType: maxLengthShortStr},
+		{name: "one_byte_past_the_limit", eventType: oversizedShortStr, refused: true},
+		{
+			name:      "multibyte_under_255_characters_but_over_255_bytes",
+			eventType: strings.Repeat("\u00f1", 128),
+			refused:   true,
+		},
+		{name: "normal_event_type_is_persisted", eventType: eventTypeOrderCreated},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeStore{}
+			pub := newPublisher(store, "default.exchange", nil)
+
+			eventID, err := pub.Publish(context.Background(), &mockTx{}, &app.OutboxEvent{
+				EventType:   tt.eventType,
+				AggregateID: aggregateTest,
+				RoutingKey:  "rk",
+			})
+
+			if !tt.refused {
+				require.NoError(t, err)
+				assert.NotEmpty(t, eventID)
+				assert.Equal(t, 1, store.InsertCalls)
+				return
+			}
+			require.ErrorIs(t, err, messaging.ErrInvalidPublishDestination)
+			assert.Empty(t, eventID)
+			assert.Equal(t, 0, store.InsertCalls, "an unpublishable event type never reaches the ledger")
+			assert.Contains(t, err.Error(), "outbox:")
+			assert.Contains(t, err.Error(), "event type", "the error names the field")
+			assert.Contains(t, err.Error(), "256 bytes", "the error names the size")
+			assert.NotContains(t, err.Error(), tt.eventType, "the error never carries the value")
+		})
+	}
+}
+
 // --- stream lane ------------------------------------------------------------
 
 func TestPublisherStreamTarget(t *testing.T) {
@@ -956,4 +1007,68 @@ func decodeRecordHeaders(t *testing.T, record *Record) map[string]any {
 	require.NoError(t, err)
 	require.NotNil(t, headers, "a stamped row persists headers")
 	return headers
+}
+
+// TestPublisherRefusesAReservedHeaderPrefix pins the x-gobricks- namespace against the
+// caller: the framework is its only writer, so a caller header claiming it fails the
+// publish before a row is written rather than being silently dropped. The mixed-case arm
+// is the one an exact-key check would let through to the ledger.
+func TestPublisherRefusesAReservedHeaderPrefix(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "the_content_type_stamp_itself", key: headerContentTypeStamp},
+		{name: "another_key_under_the_prefix", key: "x-gobricks-future-stamp"},
+		{name: "mixed_case_spelling", key: "X-GoBricks-Content-Type"},
+		{name: "the_bare_prefix", key: reservedHeaderPrefix},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeStore{}
+			pub := newPublisher(store, "default.exchange", nil)
+
+			_, err := pub.Publish(context.Background(), &mockTx{}, &app.OutboxEvent{
+				EventType:   eventTypeTest,
+				AggregateID: aggregateTest,
+				Headers:     map[string]any{tt.key: "application/secret", "keep": "me"},
+			})
+
+			require.ErrorIs(t, err, ErrReservedHeaderPrefix)
+			assert.Contains(t, err.Error(), tt.key, "the refusal names the key the caller chose")
+			assert.NotContains(t, err.Error(), "application/secret", "it never repeats a header value")
+			assert.Zero(t, store.InsertCalls, "a refused publish never reaches the ledger")
+		})
+	}
+}
+
+// TestPublisherAcceptsHeadersOutsideTheReservedPrefix is the other half of the refusal: a
+// key that merely resembles the namespace is an ordinary caller header, persisted as one.
+func TestPublisherAcceptsHeadersOutsideTheReservedPrefix(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "an_ordinary_caller_header", key: "x-correlation-id"},
+		{name: "a_shorter_prefix_of_the_namespace", key: "x-gobricks"},
+		{name: "the_namespace_without_its_leading_x", key: "gobricks-content-type"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &mockStore{}
+			pub := newPublisher(store, "default.exchange", nil)
+
+			_, err := pub.Publish(context.Background(), &mockTx{}, &app.OutboxEvent{
+				EventType:   eventTypeTest,
+				AggregateID: aggregateTest,
+				Headers:     map[string]any{tt.key: "abc"},
+			})
+
+			require.NoError(t, err)
+			require.Len(t, store.insertedRecords, 1)
+			assert.Equal(t, "abc", decodeRecordHeaders(t, store.insertedRecords[0])[tt.key])
+		})
+	}
 }

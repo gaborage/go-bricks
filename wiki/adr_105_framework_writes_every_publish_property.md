@@ -209,6 +209,13 @@ a fleet — not what makes them trustworthy (see Consequences).
   connection is never touched. Without the guard amqp091 would answer the unwritable frame by
   shutting down the whole Connection every publisher in the process shares, the precedent
   ADR-070 established for `CorrelationId`.
+- **Outbox enqueue refuses what the frame cannot carry and what would mint a framework stamp.**
+  On an AMQP row an `EventType` past the 255-byte shortstr ceiling is refused at `Publish`,
+  before the INSERT, because that row could only ever tear down the shared connection or park
+  the tenant's outbox behind it; a stream row's event type rides no shortstr and is not bounded.
+  The reserved-prefix rule is lane-INDEPENDENT — a caller header claiming `x-gobricks-` is
+  refused whichever lane the row is bound for, because that namespace is where enqueue records
+  the encoding the relay puts on the wire (`[C64.14]`).
 - **An outbox `[]byte` payload travels UNTYPED, which the AMQP lane ships as
   octet-stream and the stream lane as no content type at all.** That covers the
   persisted-sealed path and any hand-marshaled body: the row is honest about not
