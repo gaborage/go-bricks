@@ -356,12 +356,19 @@ func TestDeclarativeDLQDeclaresQuorumQueues(t *testing.T) {
 	require.NoError(t, decls.ReplayToRegistry(reg))
 	require.NoError(t, reg.DeclareInfrastructure(t.Context()))
 
+	// Redeclare each name with the args the framework actually registered, not a
+	// hand-written subset: every arg participates in RabbitMQ's declare-equivalence
+	// check, so omitting the primary's x-dead-letter-exchange would 406 on the arg
+	// this test is not about. Equivalence holding proves the broker really made the
+	// queue quorum — a classic queue of that name would refuse the redeclare.
 	for _, name := range []string{workQueueName, workQueueName + ".dlq"} {
-		assert.Equal(t, QueueTypeQuorum, decls.Queues[name].Args[argQueueType])
+		declared := decls.Queues[name]
+		require.NotNil(t, declared, "%s must be registered", name)
+		assert.Equal(t, QueueTypeQuorum, declared.Args[argQueueType])
 		require.NoError(t, client.DeclareQueue(t.Context(), &QueueDeclaration{
 			Name:    name,
-			Durable: true,
-			Args:    map[string]any{argQueueType: QueueTypeQuorum},
+			Durable: declared.Durable,
+			Args:    declared.Args,
 		}), "%s must already be a quorum queue on the broker", name)
 	}
 }

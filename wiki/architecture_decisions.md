@@ -1558,9 +1558,10 @@ rather than a passthrough; refusing a quorum-resolved queue whose shape the brok
 declaration time lands in the follow-up link. The check lives in the
 validate-once path, so per-tenant replay is unchanged. Every NovoPayment broker is
 quorum-capable (maintainer, triage 2026-09-08); CI declares against
-`rabbitmq:4.3.5-management-alpine`. Compiler-invisible: an existing classic primary or `.dlq`
-cannot be redeclared as quorum, so set `QueueType: messaging.QueueTypeClassic` to keep today's
-topology or delete/migrate the queue. See [migrations.md](migrations.md) `[C64.12]`.
+`rabbitmq:4.3.5-management-alpine`. Compiler-invisible: an existing classic primary, or classic
+parking queue (`ParkingQueue` when the spec sets it, else `<queue>.dlq`), cannot be redeclared as
+quorum, so set `QueueType: messaging.QueueTypeClassic` to keep today's topology or delete/migrate
+the queue. See [migrations.md](migrations.md) `[C64.12]`.
 
 ---
 

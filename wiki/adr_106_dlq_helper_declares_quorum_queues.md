@@ -122,7 +122,8 @@ by the weaker half while reading as the stronger one.
 ## Consequences
 
 - **An existing deployment's queues must be reconciled before the bump.** An existing
-  classic `<queue>.dlq` — and an existing classic PRIMARY queue — cannot be redeclared
+  classic parking queue — `DeadLetterSpec.ParkingQueue` when set, else `<queue>.dlq` — and an
+  existing classic PRIMARY queue cannot be redeclared
   as quorum: the broker refuses with `PRECONDITION_FAILED` and startup fails. The
   population is every deployment that already has a `.dlq` declared by this helper. The
   remedy is either `QueueType: messaging.QueueTypeClassic`, which keeps today's topology
