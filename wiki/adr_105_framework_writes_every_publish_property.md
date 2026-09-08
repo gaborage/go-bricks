@@ -71,16 +71,14 @@ encoding stamp — are set.
   stable identity; the PROPERTY is only as stable as what supplies it. Every other
   publish keeps a framework-minted UUID, and `preparePublishing` runs inside
   `publishBytes` ABOVE the retry loop (#1556 hoisted it there for #1546), so a publish
-  that supplies no id mints one UUID and every attempt of that publish re-sends it. At the
-  FIRST link
-  (#1564) the relay supplies no properties either, so a relayed publish is in that same
-  population until the relay link (#1562) lands; from then on its id comes from the row and is
-  stable across the row's retries. `Timestamp` is produced at that same seam and behaves the
-  same way: `preparePublishing` reads `time.Now()` once per logical publish, above the retry
-  loop since #1556, so it marks the moment the publish was called and every attempt re-sends
-  that instant rather than stamping its own. Dedupe on `x-outbox-event-id`: `Meta.DedupKey()`
-  reads the property only for a delivery carrying no stamp at all ([C64.11]), which a relayed
-  row never is.
+  that supplies no id mints one UUID and every attempt of that publish re-sends it. A relayed
+  publish takes its id from the ledger row instead, stable across that row's relay retries as
+  well. `Timestamp` is produced at that same seam and behaves the same way:
+  `preparePublishing` reads `time.Now()` once per logical publish, above the retry loop since
+  #1556, so it marks the moment the publish was called and every attempt re-sends that instant
+  rather than stamping its own. Dedupe on `x-outbox-event-id`: `Meta.DedupKey()` reads the
+  property only for a delivery carrying no stamp at all ([C64.11]), which a relayed row never
+  is.
 - **`ContentType` is claimed only where it is known.** The three doors carry it on the
   ONE field both option structs gained — `publishdoor.Options.Props` → the unexported
   `publishOptions.props`, a `*publishdoor.MessageProps` holding `ContentType`,

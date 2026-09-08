@@ -7173,14 +7173,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   payload was a caller-supplied `[]byte` — which covers the persisted-sealed compact JWS,
   because `marshalPayload` passes such bytes through unexamined and nothing in the row records
   which arm ran. `AppId` carries `app.name`, `Timestamp` the publish instant, and `Type` the
-  event type: the typed handle's declared one here, and — once the relay link of the stack
-  lands — the outbox row's, the same value as the `x-outbox-event-type` header, which stays.
-  `MessageId` on an outbox-relayed publish becomes the outbox row id with that same link — the
-  same value as `x-outbox-event-id`, which also STAYS and remains the ledger key consumers
-  dedupe on (ADR-097); every other publish keeps the framework-minted UUID it already had.
-  Until the relay link lands this link changes nothing on the relay path: a relayed publish
-  carries an empty `type`, a minted `message_id` and `application/octet-stream`, and
-  `x-outbox-event-id` is the dedup key throughout. There is no caller knob for any of it: `publishOptions` is unexported
+  event type: the typed handle's declared one, or the outbox row's on a relayed publish, the
+  same value as the `x-outbox-event-type` header, which stays. `MessageId` on an
+  outbox-relayed publish becomes the outbox row id — the same value as `x-outbox-event-id`,
+  which also STAYS and remains the ledger key consumers dedupe on (ADR-097); every other
+  publish keeps the framework-minted UUID it already had. There is no caller knob for any of it: `publishOptions` is unexported
   (ADR-096) and the ONE new field on it and on `internal/publishdoor.Options` — a
   `*publishdoor.MessageProps` carrying the content type, event type and message id together —
   is written by the framework's own doors. `messaging.WithAppName` is additive; a client a consumer's own
@@ -7193,8 +7190,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   on transient delivery — messages evaporating with the broker — which a DURABLE queue now
   retains (a transient queue is discarded on restart whatever the delivery mode), and
   pays the broker's disk on every publish; (c) a consumer or tool reading `message_id` on an
-  outbox-relayed delivery, which receives the row id in place of a per-publish UUID once the
-  relay link lands, and a minted one until then.
+  outbox-relayed delivery, which now receives the row id in place of a per-publish UUID.
 - apply: (a) handle all three content types, and do NOT substitute the new `type` property or
   the `x-outbox-event-type` header for `content_type` — those identify the EVENT, not its
   encoding, and one event type arrives as JSON, JOSE or octet-stream depending on whether it
@@ -7220,10 +7216,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   the properties off the wire (RabbitMQ management UI "Get message", or `d.DeliveryMode` /
   `d.ContentType` / `d.MessageId` / `d.AppId` / `d.Type` in a raw consumer): a typed publish
   reads `application/json` (`application/jose` sealed) and carries a framework-minted
-  `message_id`; then, once the relay link of the stack has landed, an outbox row with a struct
-  payload reads `application/json` with `message_id` equal to its `x-outbox-event-id`, and an
-  outbox row with a `[]byte` payload `application/octet-stream` — before that link a relayed
-  row still reads octet-stream with a minted id; all of them carry `delivery_mode: 2` and an
+  `message_id`; an outbox row with a struct payload reads `application/json` with
+  `message_id` equal to its `x-outbox-event-id`, and an outbox row with a `[]byte` payload
+  reads `application/octet-stream`; all of them carry `delivery_mode: 2` and an
   `app_id` equal to `app.name` on a client the framework's own bootstrap built — a resolver a
   caller constructed itself sets no app name, so even its default factory publishes none. Then restart the broker and confirm
   a DURABLE queue that used to empty now retains; a transient queue still vanishes, since
