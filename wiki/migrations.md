@@ -7173,11 +7173,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   payload was a caller-supplied `[]byte` — which covers the persisted-sealed compact JWS,
   because `marshalPayload` passes such bytes through unexamined and nothing in the row records
   which arm ran. `AppId` carries `app.name`, `Timestamp` the publish instant, and `Type` the
-  event type (the typed handle's declared one, or the outbox row's — the same value as the
-  `x-outbox-event-type` header, which stays). `MessageId` on an outbox-relayed publish becomes
-  the outbox row id — the same value as `x-outbox-event-id`, which also STAYS and remains the
-  ledger key consumers dedupe on (ADR-097); every other publish keeps the framework-minted
-  UUID it already had. There is no caller knob for any of it: `publishOptions` is unexported
+  event type: the typed handle's declared one here, and — once the relay link of the stack
+  lands — the outbox row's, the same value as the `x-outbox-event-type` header, which stays.
+  `MessageId` on an outbox-relayed publish becomes the outbox row id with that same link — the
+  same value as `x-outbox-event-id`, which also STAYS and remains the ledger key consumers
+  dedupe on (ADR-097); every other publish keeps the framework-minted UUID it already had.
+  Until the relay link lands this link changes nothing on the relay path: a relayed publish
+  carries an empty `type`, a minted `message_id` and `application/octet-stream`, and
+  `x-outbox-event-id` is the dedup key throughout. There is no caller knob for any of it: `publishOptions` is unexported
   (ADR-096) and the ONE new field on it and on `internal/publishdoor.Options` — a
   `*publishdoor.MessageProps` carrying the content type, event type and message id together —
   is written by the framework's own doors. `messaging.WithAppName` is additive; a client a consumer's own
@@ -7190,7 +7193,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   on transient delivery — messages evaporating with the broker — which a DURABLE queue now
   retains (a transient queue is discarded on restart whatever the delivery mode), and
   pays the broker's disk on every publish; (c) a consumer or tool reading `message_id` on an
-  outbox-relayed delivery, which now receives the row id in place of a per-publish UUID.
+  outbox-relayed delivery, which receives the row id in place of a per-publish UUID once the
+  relay link lands, and a minted one until then.
 - apply: (a) handle all three content types, and do NOT substitute the new `type` property or
   the `x-outbox-event-type` header for `content_type` — those identify the EVENT, not its
   encoding, and one event type arrives as JSON, JOSE or octet-stream depending on whether it
@@ -7257,11 +7261,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `messaging.WithAppName` value that long, whose publishes are now refused rather than attempted.
   no-match — the name fits 255 bytes, which every real service name does by orders of magnitude.
 - apply: shorten the name. `app.name` is an identifier — it names the service in logs, spans and
-  now the `app_id` of every publish — so a value near this bound is a mis-set `APP_NAME` rather
+  now the `app_id` of every publish from a client the framework's own bootstrap built — so a
+  value near this bound is a mis-set `APP_NAME` rather
   than a name anyone chose; fix it in EVERY configuration source that feeds the service (YAML,
   `APP_NAME`, a hand-built `config.AppConfig`, a dynamic source) before the bump, since the
   refusal takes the deployment down at boot rather than failing one operation. Pass the same
-  shortened value to `messaging.WithAppName` if you call it yourself.
+  shortened value to `messaging.WithAppName` if you call it yourself — a resolver or factory a
+  caller constructed sets no app name, so its publishes carry no `app_id` unless it does.
 - verify: `go build ./... && go test ./...`  # then boot the service and confirm startup is green,
   and read `app_id` off one published message (RabbitMQ management UI "Get message", or `d.AppId`
   in a raw consumer) to confirm it is the name you configured
