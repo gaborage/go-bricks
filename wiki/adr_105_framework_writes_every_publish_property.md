@@ -35,18 +35,31 @@ none of §6.5's values was ever in play there.
 **Every property is written by the framework, at the seam that knows the answer, with
 no caller knob anywhere.**
 
+The work ships as a two-link stack, and this section describes the end state of the
+pair. The first link (`fix(messaging)!`) is the messaging and `app` half: the
+properties `preparePublishing` writes, the carrier they travel on, and the app
+identity. The relay half (`feat(outbox)`) is the second link, and is where the
+outbox-side values below — the relayed `MessageId` and `Type`, and the enqueue-time
+encoding stamp — are set.
+
 - **`DeliveryMode: amqp.Persistent` unconditionally**, in `preparePublishing`. There
   is no transient mode and no option to request one.
-- **`AppId` is `app.name`.** It travels `ManagerOptions.AppName` →
-  `MessagingClientFactoryOptions.AppName` → the new exported
-  `messaging.WithAppName` `ClientOption`, sourced in `app/bootstrap.go` from
-  `cfg.App.Name`. `WithAppName` is exported because the factory that calls it lives
+- **`AppId` is `app.name`.** `app/bootstrap.go` reads `cfg.App.Name` into two seams,
+  both ending at the new exported `messaging.WithAppName` `ClientOption`:
+  `newFactoryResolverForConfig` sets the unexported `FactoryResolver.appName` that
+  the default factory returned by `MessagingClientFactoryWithOptions` passes on, and
+  `ManagerConfigBuilder.appName` travels `messaging.ManagerOptions.AppName` into the
+  fallback client factory `NewMessagingManager` builds when it is handed none.
+  `MessagingClientFactoryOptions` gained NO field: it is passed by value, so the
+  identity rides the resolver rather than growing that struct against gocritic's
+  `hugeParam` bound. `WithAppName` is exported because the factory that calls it lives
   in `app`; it is the only new consumer-visible identifier. An empty name stamps no
   `app_id` rather than a placeholder.
-- **`Timestamp` reads an unexported client clock** (`now func() time.Time`, nil
-  meaning the system clock, read through `nowOrSystem`). Deliberately NOT a
-  `ClientOption`: a test that pins the property sets the field, and the consumer
-  surface gains no time knob.
+- **`Timestamp` is `time.Now()`, read inline in `preparePublishing`.** Deliberately
+  not an injectable clock: an unexported `now func() time.Time` field would be
+  production-unused state, so the test that pins the property brackets the call and
+  asserts with `assert.WithinDuration` instead. The consumer surface gains no time
+  knob either — this is not a `ClientOption`.
 - **`Type` is the event type** — the typed handle's declared `EventType`, and on a
   relayed publish the outbox row's `EventType`, which is the same value as the
   `x-outbox-event-type` header. That header STAYS; the property mirrors it.
@@ -54,9 +67,11 @@ no caller knob anywhere.**
   `x-outbox-event-id`, which also stays: it remains the ledger key consumers dedupe
   on (ADR-097), and nothing reads the property in preference to it. Every other
   publish keeps the framework-minted UUID `preparePublishing` already generated.
-- **`ContentType` is claimed only where it is known.** The three doors carry it as
-  `publishdoor.Options.ContentType` → `publishOptions.ContentType`; an empty value
-  falls back to `application/octet-stream` in `preparePublishing`. The typed handle
+- **`ContentType` is claimed only where it is known.** The three doors carry it on the
+  ONE field both option structs gained — `publishdoor.Options.Props` → the unexported
+  `publishOptions.props`, a `*publishdoor.MessageProps` holding `ContentType`,
+  `EventType` and `MessageID` together; a nil carrier or an empty value falls back to
+  `application/octet-stream` in `preparePublishing`. The typed handle
   answers from `Publisher[T].contentType()` — `application/jose` when the handle
   holds a sealer (ADR-097), `application/json` otherwise. The raw bytes path carries
   nothing and so keeps octet-stream.
@@ -112,8 +127,8 @@ move.
 content type, app id, timestamp or delivery mode. Rejected: the standard's §6.5
 values are deployment identity, not message content, and ADR-096 has just finished
 removing the raw options door from the module-facing surface. A knob here would
-re-open it, and a caller-set `app_id` or `timestamp` is exactly the kind of value an
-operator must be able to trust.
+re-open it, and the framework writing these values is what makes them consistent across
+a fleet — not what makes them trustworthy (see Consequences).
 
 ## Consequences
 
@@ -139,11 +154,34 @@ operator must be able to trust.
   transient messages will retain a backlog it used to shed.
 - **A client from a consumer's own `MessagingClientFactory` publishes no `app_id`.**
   `FactoryResolver.MessagingClientFactoryWithOptions` hands a custom factory only
-  `(url, log)` — no field of the options struct reaches it, `AppName` included — so
-  such a client stamps an empty `app_id`, in keeping with every other
-  `messaging.reconnect.*` knob that path already bypasses. A deployment that needs
+  `(url, log)` — no field of the options struct reaches it, and neither does the
+  resolver's own app name — so such a client stamps an empty `app_id`, in keeping with
+  every other `messaging.reconnect.*` knob that path already bypasses. A deployment that needs
   the property must either use the default factory or call
   `messaging.WithAppName` itself.
+- **A resolver a caller builds itself carries no app name.** `NewFactoryResolver` is
+  exported and sets `appName` on nothing; only the unexported
+  `newFactoryResolverForConfig` that `app/bootstrap.go` calls does. So a caller pairing
+  `NewFactoryResolver` with `MessagingClientFactoryWithOptions` outside the framework's
+  bootstrap gets default-factory clients that publish with no `app_id`, and nothing
+  reports it: there is no options field to leave unset and no seam that checks the value.
+- **`app_id` is unauthenticated provenance metadata, not an identity.** It is free text the
+  publisher asserts, useful for tracing, dashboards and triage — never an authorization,
+  routing-trust or identity input. Any publisher on the bus can stamp any string, including
+  this service's name; RabbitMQ validates only `user_id` against the connection's
+  authenticated user, and the framework sets no `UserId` at all. A consumer that needs a
+  broker-validated producer identity has to use `user_id`, which is bound to the broker
+  credential rather than to `app.name`.
+- **Two guards keep an over-long value off the frame, at startup and per publish.** Startup
+  bounds `app.name` at the 255-byte AMQP shortstr ceiling (`config`'s `maxAppNameBytes`,
+  `[C64.13]`) and bounds a declared publisher's `EventType`, which leaves as the `type`
+  property. The per-publish pre-flight then judges the message properties AND the client's own
+  app id, because `WithAppName` is exported: a client a consumer built itself carries a value
+  the config bound never saw. It returns `ErrInvalidPublishDestination`, already the outbox
+  shipper's poison classification, so a bad row parks instead of retrying — and the shared
+  connection is never touched. Without the guard amqp091 would answer the unwritable frame by
+  shutting down the whole Connection every publisher in the process shares, the precedent
+  ADR-070 established for `CorrelationId`.
 - **An outbox `[]byte` payload stays octet-stream.** That covers the
   persisted-sealed path and any hand-marshaled body: the row is honest about not
   knowing, not wrong about knowing. A producer that wants `application/json` on the
@@ -177,7 +215,10 @@ operator must be able to trust.
   enqueue-record-then-strip mechanism the content-type stamp copies
 - [ADR-088](adr_088_outbox_ordered_leader_relay.md) — the ledger schema the
   content-type column would have had to migrate
-- `messaging/amqp_client.go` (`preparePublishing`, `nowOrSystem`, `WithAppName`),
+- [ADR-070](adr_070_inbound_trace_identifier_validation.md) — the `CorrelationId` precedent
+  for guarding a shortstr before it reaches the frame, and why the failure is
+  connection-wide
+- `messaging/amqp_client.go` (`preparePublishing`, `WithAppName`),
   `messaging/typed_publisher.go` (`contentType`), `messaging/messaging.go`
   (`publishOptions`), `internal/publishdoor/publishdoor.go` (`Options`),
   `outbox/publisher.go` (`marshalPayload`, `marshalHeaders`), `outbox/headers.go`

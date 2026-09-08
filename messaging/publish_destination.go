@@ -7,6 +7,8 @@ import (
 	"slices"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+
+	"github.com/gaborage/go-bricks/internal/publishdoor"
 )
 
 // maxShortStrBytes is the AMQP shortstr ceiling. amqp091's writeShortstr refuses
@@ -185,8 +187,59 @@ func validateDeclaredShortStrs(d *Declarations) error {
 	for _, publisher := range d.Publishers {
 		errs = append(errs,
 			checkShortStr("publisher routing key", publisher.RoutingKey),
+			// EventType leaves as the `type` property of the content-header
+			// frame (ADR-105), so it is a shortstr on exactly the frame this
+			// guard exists for — not merely a local identifier.
+			checkShortStr("publisher event type", publisher.EventType),
 			checkTableKeys("publisher header key", publisher.Headers))
 	}
 
 	return errors.Join(errs...)
+}
+
+// validatePublishProps judges the three framework-written properties that ride
+// the CONTENT-HEADER frame beside the header table: content type, type and
+// message id (ADR-105). Each is a shortstr, so each fails the frame — and with
+// it the shared Connection — exactly as an over-long routing key would, and the
+// CorrelationId guard in preparePublishing already names that hazard.
+//
+// It returns ErrInvalidPublishDestination, the same sentinel the destination
+// fields use, because the classification is the same: the frame is unwritable
+// whatever the broker's state, so the outbox shipper parks the row instead of
+// retrying it into another connection teardown.
+//
+// Nil props is valid: it means the door knows nothing, and preparePublishing
+// then supplies an octet-stream content type, no type and a minted id.
+func validatePublishProps(props *publishdoor.MessageProps) error {
+	if props == nil {
+		return nil
+	}
+	if err := checkShortStr("content type", props.ContentType); err != nil {
+		return err
+	}
+	if err := checkShortStr("event type", props.EventType); err != nil {
+		return err
+	}
+	return checkShortStr("message id", props.MessageID)
+}
+
+// validatePublishOptions is the whole per-publish pre-flight: the exported
+// destination rule plus the properties beside it. publishPrologue calls this
+// rather than ValidatePublishDestination directly, so a new wire field is
+// guarded by adding it here once.
+//
+// The exported door keeps its destination-only signature: the outbox records a
+// destination long before it knows the properties of the row it will ship, and
+// props is an internal type no caller can name.
+func validatePublishOptions(appID string, options publishOptions) error {
+	if err := ValidatePublishDestination(options.Exchange, options.RoutingKey, options.Headers); err != nil {
+		return err
+	}
+	// The app id is judged here as well as at startup: config bounds app.name,
+	// but WithAppName is exported, so a client a consumer built itself can carry
+	// a value the config check never saw.
+	if err := checkShortStr("app id", appID); err != nil {
+		return err
+	}
+	return validatePublishProps(options.props)
 }

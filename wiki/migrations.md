@@ -7150,7 +7150,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   content-type and message-id population. For the durability half query the BROKER, not the
   code: a queue whose depth used to fall to zero on every restart is the population, and
   `rabbitmqctl list_queues name durable messages` names the queues that will now retain.
-- scope: three properties gain values, one changes value, and one is set for the first time on
+- scope: the change ships as a two-link stack — the messaging and `app` half first
+  (`fix(messaging)!`), the outbox relay half second (`feat(outbox)`) — and this atom describes
+  the end state of the pair, so the relay-side values below arrive with that second link.
+  Three properties gain values, one changes value, and one is set for the first time on
   a subset. `DeliveryMode` becomes `amqp.Persistent` on EVERY publish — typed, outbox-relayed,
   and the raw byte door — where it was left at the zero value, so every business message was
   transient. `ContentType` was hard-coded `application/octet-stream` for all traffic and is now
@@ -7166,9 +7169,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   the outbox row id — the same value as `x-outbox-event-id`, which also STAYS and remains the
   ledger key consumers dedupe on (ADR-097); every other publish keeps the framework-minted
   UUID it already had. There is no caller knob for any of it: `publishOptions` is unexported
-  (ADR-096) and the three new fields on it and on `internal/publishdoor.Options` are written by
-  the framework's own doors. `messaging.WithAppName` is additive; a client a consumer's own
-  `app.Options.MessagingClientFactory` builds receives NO factory option, `AppName` included,
+  (ADR-096) and the ONE new field on it and on `internal/publishdoor.Options` — a
+  `*publishdoor.MessageProps` carrying the content type, event type and message id together —
+  is written by the framework's own doors. `messaging.WithAppName` is additive; a client a consumer's own
+  `app.Options.MessagingClientFactory` builds receives NO factory option and no app identity,
   and so publishes with an empty `app_id`.
 - gate: always — every publish changes. Three populations feel it: (a) a consumer that branches
   on `content_type`, which saw one constant value, now sees three, and during the drain of a
@@ -7206,6 +7210,49 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   (`contentType`), `internal/publishdoor/publishdoor.go`, `outbox/publisher.go`
   (`marshalPayload`, `marshalHeaders`), `outbox/headers.go`, `outbox/amqp_shipper.go`,
   `app/factory_resolver.go`
+
+### [C64.13] `app.name` is bounded at 255 bytes, the AMQP `app_id` shortstr it becomes · breaking · when: match
+
+- detect: nothing in your build flags this — the population is a CONFIG value, so search the
+  DEPLOYMENT and not the Go source. `grep -rniE '^[[:space:]]*name[[:space:]]*:' --include='*.yaml'
+  --include='*.yml' .` over the whole tree, confirming each hit sits under `app:` and not another
+  section; then `grep -rniE 'APP_NAME' .` for the env form and `git grep -nE 'config\.AppConfig' --
+  '*.go'` for a hand-built config. Measure the value in BYTES, not characters — `printf '%s'
+  "$APP_NAME" | wc -c` — since a multibyte name reaches 255 bytes well before it reaches 255
+  characters. **The greps are a shortlist, not the population:** where the name arrives from a
+  config server, a secret manager or string concatenation, no grep reaches it and every such
+  source has to be inventoried by hand.
+- scope: `config.Validate` refuses an `app.name` longer than 255 bytes, naming the field, its byte
+  length and the limit (`app config: ...`), where any length used to be admitted. The check runs
+  in `check`/`checkApp` unconditionally — it does not consult whether messaging is configured — so
+  it fails at STARTUP, before any client is built. 255 is the AMQP shortstr ceiling, and `app.name`
+  is stamped as the `app_id` property of every publish ([C64.10], ADR-105): a longer value cannot
+  be written into the content-header frame, and amqp091 answers a frame-write failure by shutting
+  down the whole Connection every publisher in the process shares (ADR-070), so a name that used
+  to boot green would have torn that connection down on every publish, retryably and forever. The
+  same 255 is applied per-publish to the client's own app id, because `messaging.WithAppName` is
+  exported and a client a consumer built itself carries a value the config check never saw; that
+  arm returns `messaging.ErrInvalidPublishDestination`, which the outbox shipper already classifies
+  as poison, so the row parks instead of retrying. `AppConfig` gains no field and no signature
+  moves.
+- gate: match — the configured `app.name` is 256 bytes or more, which now fails startup where it
+  used to boot; or a client built outside the framework's factory is handed a
+  `messaging.WithAppName` value that long, whose publishes are now refused rather than attempted.
+  no-match — the name fits 255 bytes, which every real service name does by orders of magnitude.
+- apply: shorten the name. `app.name` is an identifier — it names the service in logs, spans and
+  now the `app_id` of every publish — so a value near this bound is a mis-set `APP_NAME` rather
+  than a name anyone chose; fix it in EVERY configuration source that feeds the service (YAML,
+  `APP_NAME`, a hand-built `config.AppConfig`, a dynamic source) before the bump, since the
+  refusal takes the deployment down at boot rather than failing one operation. Pass the same
+  shortened value to `messaging.WithAppName` if you call it yourself.
+- verify: `go build ./... && go test ./...`  # then boot the service and confirm startup is green,
+  and read `app_id` off one published message (RabbitMQ management UI "Get message", or `d.AppId`
+  in a raw consumer) to confirm it is the name you configured
+- ref: gaborage/go-bricks#1545 ·
+  [ADR-105](adr_105_framework_writes_every_publish_property.md) · `config/app_section.go`
+  (`maxAppNameBytes`, `checkApp`), `messaging/publish_destination.go`
+  (`validatePublishOptions`) · builds on [C64.10], which made `app.name` a wire property in the
+  first place
 
 ---
 

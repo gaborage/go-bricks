@@ -2,16 +2,36 @@ package config
 
 import "fmt"
 
+// maxAppNameBytes bounds app.name because the messaging layer stamps it as the
+// AMQP app_id property of every publish, and app_id is a wire shortstr: a value
+// over 255 bytes cannot be written into the content-header frame, and amqp091
+// answers a frame-write failure by tearing down the Connection every publisher
+// in the process shares. The 255 is messaging's constant (maxShortStrBytes in
+// messaging/publish_destination.go), restated here rather than imported so
+// config keeps no dependency on messaging. Restating it is safe in practice: a
+// service name is a handful of bytes, so the bound is a backstop against a
+// mis-set APP_NAME, not a limit any real deployment approaches.
+const maxAppNameBytes = 255
+
 // normalizeApp fills the startup timeout defaults.
 func normalizeApp(cfg *AppConfig) error {
 	return applyStartupDefaults(&cfg.Startup)
 }
 
-// checkApp rejects a missing Name or Version, an Env outside envFormat (see
-// its docs for the policy), and negative rate limits.
+// checkApp rejects a missing Name or Version, a Name too long for the AMQP
+// app_id shortstr it becomes (see maxAppNameBytes), an Env outside envFormat
+// (see its docs for the policy), and negative rate limits.
 func checkApp(cfg *AppConfig) error {
 	if cfg.Name == "" {
 		return NewMissingFieldError("app.name", "APP_NAME", "app.name")
+	}
+
+	if len(cfg.Name) > maxAppNameBytes {
+		return NewInvalidFieldError(
+			"app.name",
+			fmt.Sprintf("is %d bytes, limit is %d", len(cfg.Name), maxAppNameBytes),
+			nil,
+		)
 	}
 
 	if cfg.Version == "" {
