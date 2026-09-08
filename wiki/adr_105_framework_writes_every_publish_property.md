@@ -156,13 +156,15 @@ a fleet — not what makes them trustworthy (see Consequences).
   discarded on restart whatever the delivery mode, so persistence changes nothing
   there. A queue that was durable but fed only transient messages will retain a
   backlog it used to shed.
-- **A client from a consumer's own `MessagingClientFactory` publishes no `app_id`.**
+- **A client from a consumer's own `MessagingClientFactory` publishes no `app_id` unless
+  that factory sets one.**
   `FactoryResolver.MessagingClientFactoryWithOptions` hands a custom factory only
   `(url, log)` — no field of the options struct reaches it, and neither does the
   resolver's own app name — so such a client stamps an empty `app_id`, in keeping with
-  every other `messaging.reconnect.*` knob that path already bypasses. A deployment that needs
-  the property must either use the default factory or call
-  `messaging.WithAppName` itself.
+  every other `messaging.reconnect.*` knob that path already bypasses — unless the factory
+  itself calls `messaging.WithAppName`, which is exported precisely so that path has an
+  escape hatch. A deployment that needs the property either uses the default factory or
+  calls that option from its own factory.
 - **A resolver a caller builds itself carries no app name.** `NewFactoryResolver` is
   exported and sets `appName` on nothing; only the unexported
   `newFactoryResolverForConfig` that `app/bootstrap.go` calls does. So a caller pairing

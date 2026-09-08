@@ -7181,7 +7181,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `*publishdoor.MessageProps` carrying the content type, event type and message id together —
   is written by the framework's own doors. `messaging.WithAppName` is additive; a client a consumer's own
   `app.Options.MessagingClientFactory` builds receives NO factory option and no app identity,
-  and so publishes with an empty `app_id`.
+  and so publishes with an empty `app_id` — unless that factory calls `messaging.WithAppName`
+  itself, which is the escape hatch for the path and why the option is exported.
 - gate: always — every publish changes. Three populations feel it: (a) a consumer that branches
   on `content_type`, which saw one constant value, now sees three, and during the drain of a
   pre-upgrade outbox backlog sees two of them on the same event type; (b) a deployment relying
@@ -7208,9 +7209,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - verify: `go build ./... && go test ./...`  # then publish one event of each shape and read
   the properties off the wire (RabbitMQ management UI "Get message", or `d.DeliveryMode` /
   `d.ContentType` / `d.MessageId` / `d.AppId` / `d.Type` in a raw consumer): a typed publish
-  reads `application/json` (`application/jose` sealed), an outbox row with a struct payload
-  `application/json` with `message_id` equal to its `x-outbox-event-id`, and an outbox row with
-  a `[]byte` payload `application/octet-stream`; all five carry `delivery_mode: 2` and an
+  reads `application/json` (`application/jose` sealed) and carries a framework-minted
+  `message_id`; then, once the relay link of the stack has landed, an outbox row with a struct
+  payload reads `application/json` with `message_id` equal to its `x-outbox-event-id`, and an
+  outbox row with a `[]byte` payload `application/octet-stream` — before that link a relayed
+  row still reads octet-stream with a minted id; all five carry `delivery_mode: 2` and an
   `app_id` equal to `app.name` on a default-factory client. Then restart the broker and confirm
   a DURABLE queue that used to empty now retains; a transient queue still vanishes, since
   the delivery mode cannot outlive the queue.
