@@ -578,6 +578,15 @@ func (c *AMQPClientImpl) publishBytes(ctx context.Context, options publishOption
 	}
 	defer span.End()
 
+	// One logical publish carries one identity: the message and correlation ids
+	// are minted here, ABOVE the retry loop, and every attempt re-sends the same
+	// prepared frame. Preparing per attempt handed the broker a different
+	// message_id on each retry, so a retried publish was unrecognizable as the
+	// same one on the wire and in the delivery-identity log fallback (#1546).
+	// Every attempt therefore also shares one Headers map; amqp091 only
+	// serializes it, and nothing below this line writes to it.
+	publishing := preparePublishing(ctx, options, data)
+
 	retryCount := 0
 	// lastCause records why the most recent attempt failed (the raw publish error,
 	// ErrPublishNacked, or ErrPublishConfirmTimeout). It is wrapped into the terminal error on
@@ -589,7 +598,7 @@ func (c *AMQPClientImpl) publishBytes(ctx context.Context, options publishOption
 			return err
 		}
 
-		arm, termErr := c.publishAttempt(ctx, options, data, publishStart, span, lastCause)
+		arm, termErr := c.publishAttempt(ctx, options, &publishing, publishStart, span, lastCause)
 		if termErr != nil {
 			return termErr
 		}
@@ -636,17 +645,16 @@ func (c *AMQPClientImpl) armPublishFailure(err error) *retryArm {
 	}
 }
 
-// publishAttempt arms and sends one publish, then waits for its confirmation.
-// It returns (nil, nil) once the broker ACKs, the failed attempt's retryArm when
+// publishAttempt sends one already-prepared publish, then waits for its
+// confirmation. It returns (nil, nil) once the broker ACKs, the failed attempt's retryArm when
 // the loop should retry, or a terminal error the caller must return.
 func (c *AMQPClientImpl) publishAttempt(
-	ctx context.Context, options publishOptions, data []byte, publishStart time.Time, span trace.Span, lastCause error,
+	ctx context.Context, options publishOptions, publishing *amqp.Publishing, publishStart time.Time, span trace.Span, lastCause error,
 ) (*retryArm, error) {
-	publishing := preparePublishing(ctx, options, data)
 	messageID := publishing.MessageId
 	correlationID := publishing.CorrelationId
 
-	confirmCh, key, err, termErr := c.publishSlotted(ctx, options, &publishing, publishStart, span, lastCause)
+	confirmCh, key, err, termErr := c.publishSlotted(ctx, options, publishing, publishStart, span, lastCause)
 	if termErr != nil {
 		return nil, termErr
 	}

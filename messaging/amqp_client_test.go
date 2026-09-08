@@ -62,7 +62,11 @@ type fakeChannel struct {
 	closeErr        error
 	notifyCloseCh   chan *amqp.Error
 	notifyConfirmCh chan amqp.Confirmation
-	lastPublishing  amqp.Publishing
+	// publishings records every amqp.Publishing the client handed over, in
+	// attempt order, so a retry test can compare one attempt against the next
+	// instead of only seeing the last one. Read through publishedMessages or
+	// lastPublishedMessage, never directly.
+	publishings     []amqp.Publishing
 	lastPublishArgs struct {
 		exchange, key        string
 		mandatory, immediate bool
@@ -112,7 +116,7 @@ func (f *fakeChannel) Qos(_, _ int, _ bool) error { return f.qosErr }
 func (f *fakeChannel) PublishWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg amqp.Publishing) error {
 	f.mu.Lock()
 	f.publishCtxDeadline, f.publishCtxHasDeadline = ctx.Deadline()
-	f.lastPublishing = msg
+	f.publishings = append(f.publishings, msg)
 	f.lastPublishArgs = struct {
 		exchange, key        string
 		mandatory, immediate bool
@@ -149,6 +153,26 @@ func (f *fakeChannel) PublishWithContext(ctx context.Context, exchange, key stri
 	}
 	f.mu.Unlock()
 	return err
+}
+
+// publishedMessages returns every publishing the client sent, in attempt order.
+// The slice is the caller's; the Headers map inside each entry is not, and the
+// hoist in #1546 means every entry of one publish shares that one map.
+func (f *fakeChannel) publishedMessages() []amqp.Publishing {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return slices.Clone(f.publishings)
+}
+
+// lastPublishedMessage returns the most recent publishing, and whether the
+// client published at all.
+func (f *fakeChannel) lastPublishedMessage() (msg amqp.Publishing, ok bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if len(f.publishings) == 0 {
+		return amqp.Publishing{}, false
+	}
+	return f.publishings[len(f.publishings)-1], true
 }
 
 // lastPublishCtxDeadline reports the deadline the client's derived context carried
@@ -1484,16 +1508,21 @@ func TestPublishBytesCustomHeaders(t *testing.T) {
 		t.Fatalf("expected success with custom headers, got: %v", err)
 	}
 
+	sent, published := ch.lastPublishedMessage()
+	if !published {
+		t.Fatalf("expected the client to have published")
+	}
+
 	// Verify headers were applied
-	if ch.lastPublishing.Headers["custom-header"] != "test-value" {
+	if sent.Headers["custom-header"] != "test-value" {
 		t.Fatalf("expected custom header to be preserved")
 	}
-	if ch.lastPublishing.Headers["priority"] != 5 {
+	if sent.Headers["priority"] != 5 {
 		t.Fatalf("expected priority header to be preserved")
 	}
 
 	// Verify trace headers were injected
-	if _, ok := ch.lastPublishing.Headers["traceparent"]; !ok {
+	if _, ok := sent.Headers["traceparent"]; !ok {
 		t.Fatalf("expected traceparent header to be injected")
 	}
 
@@ -2779,8 +2808,9 @@ func TestPublishAttemptClassifiesTheOutcome(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
+			publishing := preparePublishing(ctx, publishRetryTestOptions, []byte("msg"))
 			arm, termErr := c.publishAttempt(
-				ctx, publishRetryTestOptions, []byte("msg"), time.Now(), trace.SpanFromContext(ctx), nil,
+				ctx, publishRetryTestOptions, &publishing, time.Now(), trace.SpanFromContext(ctx), nil,
 			)
 			require.NoError(t, termErr)
 			tt.assertArm(t, arm)
@@ -2812,4 +2842,35 @@ func (tc *publishAttemptCase) assertArm(t *testing.T, arm *retryArm) {
 	assert.Equal(t, tc.wantMetric, arm.metricReason)
 	assert.Equal(t, tc.wantSpan, arm.spanReason)
 	assert.Equal(t, tc.wantBackoff, arm.backoff)
+}
+
+// TestPublishBytesKeepsMessageIDStableAcrossRetries guards #1546: the message
+// id identifies one logical publish, so every retry attempt of that publish
+// must carry the id the first attempt used. Minting it per attempt made a
+// retried message unrecognizable as the same publish on the wire and in the
+// delivery-identity log fallback.
+func TestPublishBytesKeepsMessageIDStableAcrossRetries(t *testing.T) {
+	ch := &fakeChannel{publishFailuresRemaining: 1}
+	c := newClientWithFakeChannel(t, ch)
+	c.resendDelay = time.Millisecond
+	c.connectionTimeout = 5 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ackNextSuccessfulPublish(ctx, t, c, ch)
+
+	require.NoError(t, c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte(testMessageBody)))
+
+	sent := ch.publishedMessages()
+	require.Len(t, sent, 2, "one failed attempt plus the retry")
+	assert.NotEmpty(t, sent[0].MessageId, "the first attempt must carry a minted id")
+	assert.Equal(t, sent[0].MessageId, sent[1].MessageId, "the retry must reuse the first attempt's message id")
+	assert.NotEmpty(t, sent[0].CorrelationId, "the first attempt must carry a correlation id")
+	assert.Equal(t, sent[0].CorrelationId, sent[1].CorrelationId, "the retry must reuse the first attempt's correlation id")
+	// The headers travel with the hoisted frame, so equality holds by construction
+	// today. Pin it anyway: it is the contract, and re-inlining the prepare would
+	// regenerate the traceparent and X-Request-ID per attempt without touching
+	// either id assertion above.
+	assert.NotEmpty(t, sent[0].Headers, "the first attempt must carry the injected trace headers")
+	assert.Equal(t, sent[0].Headers, sent[1].Headers, "the retry must reuse the first attempt's headers")
 }
