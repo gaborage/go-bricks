@@ -7217,7 +7217,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   payload reads `application/json` with `message_id` equal to its `x-outbox-event-id`, and an
   outbox row with a `[]byte` payload `application/octet-stream` — before that link a relayed
   row still reads octet-stream with a minted id; all of them carry `delivery_mode: 2` and an
-  `app_id` equal to `app.name` on a default-factory client. Then restart the broker and confirm
+  `app_id` equal to `app.name` on a client the framework's own bootstrap built — a resolver a
+  caller constructed itself sets no app name, so even its default factory publishes none. Then restart the broker and confirm
   a DURABLE queue that used to empty now retains; a transient queue still vanishes, since
   the delivery mode cannot outlive the queue.
 - ref: gaborage/go-bricks#1545 ·

@@ -1575,7 +1575,10 @@ on a broker restart, which NKH1 §6.2 does not allow, while §6.5's identifying 
 (`app_id`, `timestamp`, `type`) were never set and the one property that was set was wrong for
 the JSON and compact-JWS bodies the typed door produces. Each property is now written by the
 framework at the seam that knows the answer, with no caller knob: `amqp.Persistent`
-unconditionally; `app_id` from `app.name` through the new exported `messaging.WithAppName`;
+unconditionally; `app_id` from `app.name` on a client the framework's own bootstrap built, through the new
+exported `messaging.WithAppName` — only `newFactoryResolverForConfig` sets that name, so a
+`NewFactoryResolver` a caller constructs publishes no `app_id` unless its factory calls the
+option itself;
 `timestamp` from `time.Now()` read at the publish, deliberately neither an injectable clock
 nor a `ClientOption`; `type` from the typed handle's `EventType` or the outbox row's;
 `message_id` from the outbox row id on a relayed publish once the relay link lands,

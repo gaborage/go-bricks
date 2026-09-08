@@ -63,9 +63,10 @@ framework's own factory built — a consumer-supplied `MessagingClientFactory` r
 neither that name nor any other option, so its clients publish an empty `app_id` unless the
 factory calls `messaging.WithAppName` itself, and so does the DEFAULT factory from a
 `NewFactoryResolver` a caller built itself, since that exported constructor sets no app
-name — a `timestamp`, `type`
-from the declared `EventType`, a framework-minted `message_id` and a `timestamp` (both
-produced once per logical publish and re-sent unchanged by every retry attempt of it), and a
+name. It also carries a framework-minted `message_id` and a `timestamp`, both produced once
+per logical publish and re-sent unchanged by every retry attempt of it, and a `type` — from
+the declared `EventType` on a typed publish, from the ledger row's event type on a relayed
+one, and absent on the raw bytes door, which declares no event type. Then a
 `content_type` the
 handle actually knows — `application/json`, `application/jose` when the handle seals the
 event, or `application/octet-stream` for an outbox row whose `Payload` the caller handed over
