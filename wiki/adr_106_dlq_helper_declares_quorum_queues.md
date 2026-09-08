@@ -64,6 +64,10 @@ queues the helper touches, and an empty value resolves to quorum.**
   the broker to reject. The field exists precisely because callers should not have to
   spell broker argument values, so a typo in it is a framework-level mistake, and the
   general-purpose door for a value the framework does not know is still `Args`.
+- **Pre-setting the argument on one queue leaves the other at the spec's value.** The
+  precedence rule is per queue, not per route, so a deployment that wants a quorum
+  primary with a classic parking queue registers the `.dlq` with `x-queue-type: classic`
+  and lets the spec resolve the primary — the two halves need not agree.
 - **Quorum-incompatible shapes will fail at declaration time.** A queue that resolves to
   quorum and is non-durable, auto-delete or exclusive, or carries `x-max-priority` or
   `x-queue-mode` (lazy), is a shape quorum queues do not support, so today the deployment

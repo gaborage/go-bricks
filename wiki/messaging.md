@@ -287,7 +287,10 @@ queue := decls.DeclareQueueWithDLQ("orders.queue", &messaging.DeadLetterSpec{
 An `x-queue-type` already on the queue wins — the helper sets the argument only on a
 queue that does not carry one, so the raw-`Args` route below (including
 `decls.Queues["orders.queue.dlq"].Args["x-queue-type"]`) is never overwritten and is
-how you give the two halves of one route different types. A `QueueType` that is
+how you give the two halves of one route different types: pre-setting the argument on
+one queue leaves the other at the spec's resolved value, so a quorum primary with a
+classic `.dlq` is reached by registering `NewQueue("orders.queue.dlq")` with
+`x-queue-type: classic` before the helper runs. A `QueueType` that is
 neither constant is a declaration-time validation error, not an argument forwarded
 for the broker to reject. Quorum queues do not support every queue shape, though: a
 queue that resolves to quorum and is non-durable, auto-delete or exclusive, or carries
