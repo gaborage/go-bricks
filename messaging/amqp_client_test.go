@@ -2867,4 +2867,10 @@ func TestPublishBytesKeepsMessageIDStableAcrossRetries(t *testing.T) {
 	assert.Equal(t, sent[0].MessageId, sent[1].MessageId, "the retry must reuse the first attempt's message id")
 	assert.NotEmpty(t, sent[0].CorrelationId, "the first attempt must carry a correlation id")
 	assert.Equal(t, sent[0].CorrelationId, sent[1].CorrelationId, "the retry must reuse the first attempt's correlation id")
+	// The headers travel with the hoisted frame, so equality holds by construction
+	// today. Pin it anyway: it is the contract, and re-inlining the prepare would
+	// regenerate the traceparent and X-Request-ID per attempt without touching
+	// either id assertion above.
+	assert.NotEmpty(t, sent[0].Headers, "the first attempt must carry the injected trace headers")
+	assert.Equal(t, sent[0].Headers, sent[1].Headers, "the retry must reuse the first attempt's headers")
 }
