@@ -481,9 +481,14 @@ session's warm state. Instead the gate pins `GOCACHE` to a dedicated persistent
 cache under the user cache dir (`~/Library/Caches/mutatediff/gocache` on macOS)
 and the temp variables (`TMPDIR`/`TMP`/`TEMP`) to a per-run root, so gremlins'
 working copies, the report dir, and coverage scratch files all land inside one
-tree. Cleanup is deferred in `run`, so it fires on failures the same as on
-passes: the per-run root is removed, and the dedicated cache is wiped only when
-it exceeds `MUTATE_GOCACHE_CAP`. A run killed with `SIGKILL` skips its defers;
+tree. The cap is enforced at run **start**: setup measures the dedicated cache
+and, when it exceeds `MUTATE_GOCACHE_CAP`, wipes it there — so the baseline
+suite passes rewarm dependencies and stdlib before the per-mutant ceiling is
+measured, instead of the next run's first mutants paying the cold rebuild and
+timing out. The start banner reports the size, the cap, and `pruned` or
+`kept`. Cleanup is deferred in `run`, so it fires on failures the same as on
+passes: it removes the per-run root and leaves the persistent cache alone. A
+run killed with `SIGKILL` skips its defers;
 the next run's startup sweep removes orphaned `mutatediff-run-*` roots older
 than 24h. The dedicated cache must stay **outside the repo**: gremlins copies
 the whole module root per worker with an unfiltered `filepath.Walk`, so an

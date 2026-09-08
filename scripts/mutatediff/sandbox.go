@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -18,8 +17,8 @@ import (
 // through the machine-shared GOCACHE fills the disk with objects no other
 // build will ever read, and the only shared-cache remedy (`go clean -cache`)
 // destroys every other session's warm build state. The sandbox scopes both
-// to paths this run owns: a dedicated persistent build cache, wiped only when
-// it outgrows its cap, and a per-run temp root that swallows the engine's
+// to paths this run owns: a dedicated persistent build cache, pruned at run
+// start when it outgrows its cap, and a per-run temp root that swallows the engine's
 // working copies (gremlins-*), the report dir, and coverage scratch files.
 //
 // The dedicated cache lives under os.UserCacheDir, never inside the repo:
@@ -53,12 +52,10 @@ const (
 // TEMP on Windows. Pinning all three is harmless where a name is unused.
 var tempEnvVars = []string{"TMPDIR", "TMP", "TEMP"}
 
-// sandbox is the pair of roots one run owns, plus the cap that decides the
-// build cache's fate at cleanup.
+// sandbox is the pair of roots one run owns.
 type sandbox struct {
-	gocache  string
-	runTmp   string
-	capBytes int64
+	gocache string
+	runTmp  string
 }
 
 // setupSandbox resolves the machine-specific roots and delegates. Split from
@@ -100,34 +97,51 @@ func setupSandboxAt(ctx context.Context, cacheBase, sysTmp string, now time.Time
 		}
 	}
 	fmt.Fprintf(out, "mutatediff: sandboxed build cache %s, temp root %s\n", gocache, runTmp)
-	return &sandbox{gocache: gocache, runTmp: runTmp, capBytes: gocacheCap()}, nil
+	if err := pruneGocache(gocache, gocacheCap(), out); err != nil {
+		return nil, err
+	}
+	return &sandbox{gocache: gocache, runTmp: runTmp}, nil
+}
+
+// pruneGocache enforces the cap before any build runs and reports the cache
+// state on the start banner. Pruning here — not at cleanup — puts the
+// cold-rebuild cost inside measureSuite's baseline passes, which rewarm
+// dependencies and stdlib before the per-mutant ceiling is measured; a wipe at
+// cleanup instead left the next run's first mutants paying it against a
+// ceiling measured warm, and they timed out. Wiping assumes gate runs on one
+// machine do not overlap — they are serialized locally by convention, and the
+// shared cache is not safe to wipe under a concurrent run.
+func pruneGocache(gocache string, capBytes int64, out io.Writer) error {
+	size := dirSize(gocache)
+	if capBytes <= 0 {
+		fmt.Fprintf(out, "mutatediff: build cache %s (cap disabled) — kept\n", formatMiB(size))
+		return nil
+	}
+	if size <= capBytes {
+		fmt.Fprintf(out, "mutatediff: build cache %s (cap %s) — kept\n", formatMiB(size), formatMiB(capBytes))
+		return nil
+	}
+	fmt.Fprintf(out, "mutatediff: build cache %s (cap %s) — pruned\n", formatMiB(size), formatMiB(capBytes))
+	if err := os.RemoveAll(gocache); err != nil {
+		return fmt.Errorf("wipe build cache: %w", err)
+	}
+	if err := os.MkdirAll(gocache, 0o750); err != nil {
+		return fmt.Errorf("recreate dedicated build cache after prune: %w", err)
+	}
+	return nil
 }
 
 // cleanup releases what the run created and reports what it could not: a
 // gate whose cleanup failed must not exit clean, or the debris this sandbox
 // exists to prevent comes back silently. Deferred in run, so it fires on
 // failures the same as on passes; only SIGKILL skips it, and the startup
-// sweep covers that. The cap wipe assumes gate runs on one machine do not
-// overlap — they are serialized locally by convention, and the shared cache
-// is not safe to wipe under a concurrent run.
-func (s *sandbox) cleanup(out io.Writer) error {
-	var errs []error
+// sweep covers that. The dedicated build cache survives cleanup — it is
+// persistent by design and pruned at the next run's start.
+func (s *sandbox) cleanup() error {
 	if err := os.RemoveAll(s.runTmp); err != nil {
-		errs = append(errs, fmt.Errorf("remove temp root: %w", err))
+		return fmt.Errorf("remove temp root: %w", err)
 	}
-	if s.capBytes <= 0 {
-		return errors.Join(errs...)
-	}
-	size := dirSize(s.gocache)
-	if size <= s.capBytes {
-		fmt.Fprintf(out, "mutatediff: build cache %s within its %s cap\n", formatMiB(size), formatMiB(s.capBytes))
-		return errors.Join(errs...)
-	}
-	fmt.Fprintf(out, "mutatediff: build cache %s exceeds its %s cap — wiping %s\n", formatMiB(size), formatMiB(s.capBytes), s.gocache)
-	if err := os.RemoveAll(s.gocache); err != nil {
-		errs = append(errs, fmt.Errorf("wipe build cache: %w", err))
-	}
-	return errors.Join(errs...)
+	return nil
 }
 
 // gocacheCap reads the cap in MiB and returns bytes. Unset or unparsable

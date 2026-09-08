@@ -78,44 +78,89 @@ func TestSweepStaleRunDirsRemovesOnlyOldMatchingDirs(t *testing.T) {
 	assert.Contains(t, out.String(), "removed stale run root")
 }
 
-func TestSandboxCleanup(t *testing.T) {
+func TestSandboxCleanupRemovesOnlyTheTempRoot(t *testing.T) {
+	// A cap the seeded cache exceeds: cleanup must keep it anyway — pruning
+	// belongs to the next run's setup.
+	t.Setenv(gocacheCapEnv, "1")
+	gocache := t.TempDir()
+	runTmp := t.TempDir()
+	obj := filepath.Join(gocache, "obj")
+	require.NoError(t, os.WriteFile(obj, make([]byte, 2*mib), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(runTmp, "scratch"), []byte("x"), 0o600))
+
+	s := &sandbox{gocache: gocache, runTmp: runTmp}
+	require.NoError(t, s.cleanup())
+
+	assert.NoDirExists(t, runTmp)
+	assert.DirExists(t, gocache)
+	assert.FileExists(t, obj)
+}
+
+func TestSetupSandboxAtEnforcesCacheCapAtStart(t *testing.T) {
 	tests := []struct {
-		name           string
-		cacheBytes     int
-		capBytes       int64
-		wantCacheWiped bool
-		// Empty means the output must not mention the cap at all.
-		wantMsg string
+		name       string
+		capMiB     string
+		cacheBytes int
+		wantPruned bool
+		wantMsg    string
 	}{
-		// Cap exactly at the size: at the cap is within it, not over it.
-		{name: "at_cap_keeps_cache", cacheBytes: 4, capBytes: 4, wantCacheWiped: false, wantMsg: "within its"},
-		{name: "over_cap_wipes_cache", cacheBytes: 5, capBytes: 4, wantCacheWiped: true, wantMsg: "exceeds its 0MiB cap — wiping"},
-		{name: "zero_cap_never_wipes", cacheBytes: 5, capBytes: 0, wantCacheWiped: false, wantMsg: ""},
+		{name: "over_cap_prunes", capMiB: "1", cacheBytes: 2 * mib, wantPruned: true, wantMsg: "build cache 2MiB (cap 1MiB) — pruned"},
+		// At the cap is within it, not over it.
+		{name: "at_cap_keeps", capMiB: "1", cacheBytes: mib, wantPruned: false, wantMsg: "build cache 1MiB (cap 1MiB) — kept"},
+		{name: "zero_cap_keeps", capMiB: "0", cacheBytes: 2 * mib, wantPruned: false, wantMsg: "build cache 2MiB (cap disabled) — kept"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gocache := t.TempDir()
-			runTmp := t.TempDir()
-			require.NoError(t, os.WriteFile(filepath.Join(gocache, "obj"), make([]byte, tt.cacheBytes), 0o600))
-			require.NoError(t, os.WriteFile(filepath.Join(runTmp, "scratch"), []byte("x"), 0o600))
+			for _, key := range append([]string{"GOCACHE"}, tempEnvVars...) {
+				t.Setenv(key, "")
+			}
+			t.Setenv(gocacheCapEnv, tt.capMiB)
+			cacheBase := t.TempDir()
+			gocache := filepath.Join(cacheBase, "gocache")
+			require.NoError(t, os.MkdirAll(gocache, 0o750))
+			obj := filepath.Join(gocache, "obj")
+			require.NoError(t, os.WriteFile(obj, make([]byte, tt.cacheBytes), 0o600))
 
 			var out strings.Builder
-			s := &sandbox{gocache: gocache, runTmp: runTmp, capBytes: tt.capBytes}
-			require.NoError(t, s.cleanup(&out))
+			s, err := setupSandboxAt(context.Background(), cacheBase, t.TempDir(), time.Now(), &out)
+			require.NoError(t, err)
 
-			assert.NoDirExists(t, runTmp)
-			if tt.wantCacheWiped {
-				assert.NoDirExists(t, gocache)
+			assert.Equal(t, gocache, s.gocache)
+			assert.DirExists(t, gocache)
+			if tt.wantPruned {
+				assert.NoFileExists(t, obj)
 			} else {
-				assert.DirExists(t, gocache)
+				assert.FileExists(t, obj)
 			}
-			if tt.wantMsg == "" {
-				assert.NotContains(t, out.String(), "cap")
-			} else {
-				assert.Contains(t, out.String(), tt.wantMsg)
-			}
+			assert.Contains(t, out.String(), tt.wantMsg)
 		})
 	}
+}
+
+func TestSetupSandboxAtReportsPruneFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("read-only parent does not block removal on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the read-only parent this test relies on")
+	}
+	for _, key := range append([]string{"GOCACHE"}, tempEnvVars...) {
+		t.Setenv(key, "")
+	}
+	t.Setenv(gocacheCapEnv, "1")
+	cacheBase := t.TempDir()
+	gocache := filepath.Join(cacheBase, "gocache")
+	require.NoError(t, os.MkdirAll(gocache, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(gocache, "obj"), make([]byte, 2*mib), 0o600))
+	require.NoError(t, os.Chmod(cacheBase, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(cacheBase, 0o750) })
+
+	var out strings.Builder
+	s, err := setupSandboxAt(context.Background(), cacheBase, t.TempDir(), time.Now(), &out)
+
+	require.Error(t, err)
+	assert.Nil(t, s)
+	assert.Contains(t, err.Error(), "wipe build cache")
 }
 
 func TestSetupSandboxAtPinsEnvAndCreatesRoots(t *testing.T) {
@@ -144,9 +189,12 @@ func TestSetupSandboxAtPinsEnvAndCreatesRoots(t *testing.T) {
 	for _, key := range tempEnvVars {
 		assert.Equal(t, s.runTmp, os.Getenv(key), key)
 	}
-	assert.Equal(t, gocacheCap(), s.capBytes)
 	assert.NoDirExists(t, stale)
-	assert.Contains(t, out.String(), "sandboxed build cache")
+	// The cache-state line belongs to the start banner: it follows the path
+	// line and both precede every baseline-measurement line.
+	require.Contains(t, out.String(), "sandboxed build cache")
+	require.Contains(t, out.String(), "build cache 0MiB")
+	assert.Less(t, strings.Index(out.String(), "sandboxed build cache"), strings.Index(out.String(), "build cache 0MiB"))
 }
 
 func TestSetupSandboxAtCanceledContextCreatesNothing(t *testing.T) {
@@ -176,9 +224,8 @@ func TestSandboxCleanupReportsRemovalFailure(t *testing.T) {
 	require.NoError(t, os.Chmod(parent, 0o555))
 	t.Cleanup(func() { _ = os.Chmod(parent, 0o750) })
 
-	var out strings.Builder
-	s := &sandbox{gocache: t.TempDir(), runTmp: runTmp, capBytes: 0}
-	err := s.cleanup(&out)
+	s := &sandbox{gocache: t.TempDir(), runTmp: runTmp}
+	err := s.cleanup()
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "remove temp root")
