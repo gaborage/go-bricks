@@ -78,7 +78,7 @@ func (s *oracleStore) MarkProcessed(ctx context.Context, tx dbtypes.Tx, rec Reco
 		Values(tenantID, rec.EventID, rec.ProcessedAt).
 		ToSQL()
 	if err != nil {
-		return false, fmt.Errorf("inbox oracle: build mark processed failed: %w", err)
+		return false, &database.ExecError{Op: "inbox oracle: build mark processed failed", Stage: database.StageBuild, Err: err}
 	}
 	_, err = tx.Exec(ctx, query, args...)
 	if err != nil {

@@ -479,41 +479,50 @@ func TestRegisterJobsWithoutAHoldAddsNoDrain(t *testing.T) {
 	assert.NotContains(t, reg.fixedRateJobs, holdDrainJobID)
 }
 
-// TestModuleInitBuildStageProbeFailureIsAConfigurationFault pins #1521 for the
-// inbox ledger probe: a builder refusal is a configuration fault, not a missing
-// table.
+// TestModuleInitBuildStageProbeFailureIsAConfigurationFault pins #1521 for both
+// inbox probes: a table name the builder refuses never reached the database, so
+// the failure must not tell the operator to run migrations or enable
+// auto-create, and must not also claim the table is unusable.
 func TestModuleInitBuildStageProbeFailureIsAConfigurationFault(t *testing.T) {
-	m := NewModule()
-	deps := testDeps()
-	deps.Config = &config.Config{Inbox: config.InboxConfig{Enabled: true, TableName: "ev#ents"}}
-
-	err := m.Init(deps)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `inbox: table "ev#ents" cannot be queried as configured`)
-	assert.NotContains(t, err.Error(), "run migrations")
-	assert.NotContains(t, err.Error(), "inbox.autocreatetable")
-	assert.ErrorIs(t, err, identifier.ErrIdentifierCharset)
-}
-
-// TestModuleInitBuildStageHoldProbeFailureIsAConfigurationFault covers the third
-// probe: the hold's own table name, refused by the builder.
-func TestModuleInitBuildStageHoldProbeFailureIsAConfigurationFault(t *testing.T) {
-	m := NewModule()
-	m.SetSharedResolvers(func(context.Context) (dbtypes.Interface, error) { return probeReadyDB(), nil }, nil)
-	deps := testDeps()
-	deps.Config = &config.Config{
-		Inbox: config.InboxConfig{
-			Enabled: true, RetentionPeriod: time.Hour, Tenancy: config.TenancyShared,
-			Hold: config.InboxHoldConfig{Enabled: true, TableName: "ev#ents"},
+	tests := []struct {
+		name  string
+		setup func(m *Module, deps *app.ModuleDeps)
+	}{
+		{
+			name: "ledger_table",
+			setup: func(_ *Module, deps *app.ModuleDeps) {
+				deps.Config = &config.Config{Inbox: config.InboxConfig{Enabled: true, TableName: "ev#ents"}}
+			},
+		},
+		{
+			name: "hold_table",
+			setup: func(m *Module, deps *app.ModuleDeps) {
+				m.SetSharedResolvers(func(context.Context) (dbtypes.Interface, error) { return probeReadyDB(), nil }, nil)
+				deps.Config = &config.Config{
+					Inbox: config.InboxConfig{
+						Enabled: true, RetentionPeriod: time.Hour, Tenancy: config.TenancyShared,
+						Hold: config.InboxHoldConfig{Enabled: true, TableName: "ev#ents"},
+					},
+				}
+			},
 		},
 	}
 
-	err := m.Init(deps)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModule()
+			deps := testDeps()
+			tt.setup(m, deps)
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `inbox: table "ev#ents" cannot be queried as configured`)
-	assert.NotContains(t, err.Error(), "run migrations")
-	assert.NotContains(t, err.Error(), "inbox.autocreatetable")
-	assert.ErrorIs(t, err, identifier.ErrIdentifierCharset)
+			err := m.Init(deps)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(),
+				`inbox: table "ev#ents" cannot be queried: the query was refused before it reached the database`)
+			assert.NotContains(t, err.Error(), "run migrations")
+			assert.NotContains(t, err.Error(), "inbox.autocreatetable")
+			assert.NotContains(t, err.Error(), "is not usable")
+			assert.ErrorIs(t, err, identifier.ErrIdentifierCharset)
+		})
+	}
 }

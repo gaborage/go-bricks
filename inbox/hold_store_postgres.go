@@ -123,7 +123,7 @@ func (s *postgresHoldStore) Park(ctx context.Context, tx dbtypes.Tx, row *HoldRo
 		nil,
 	)
 	if err != nil {
-		return false, fmt.Errorf("inbox postgres: build park row failed: %w", err)
+		return false, s.wrapBuild("build park row failed", err)
 	}
 	res, err := tx.Exec(ctx, insert, insertArgs...)
 	if err != nil {
@@ -151,7 +151,7 @@ func (s *postgresHoldStore) Defer(ctx context.Context, db dbtypes.Interface, con
 func (s *postgresHoldStore) Stats(ctx context.Context, db dbtypes.Interface, consumer string) (HoldStats, error) {
 	query, args, err := s.stats(consumer).ToSQL()
 	if err != nil {
-		return HoldStats{}, fmt.Errorf("inbox hold: build stats failed: %w", err)
+		return HoldStats{}, &database.ExecError{Op: "inbox hold: build stats failed", Stage: database.StageBuild, Err: err}
 	}
 	return scanHoldStats(ctx, db, query, args...)
 }

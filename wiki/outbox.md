@@ -301,7 +301,7 @@ on PostgreSQL; on Oracle an existing table raises ORA-00955) and never `ALTER`s,
 table `seq`, `lane`, `stream` and `partition_key` never appear — the existing table and its indexes
 are left exactly as they are.
 Where the startup check applies (see [Startup Verification](#startup-verification)) that
-surfaces as a `TableUnusableError` naming `outbox.autocreatetable`, which is not the fix (#1426);
+surfaces as a table-unusable error naming `outbox.autocreatetable`, which is not the fix (#1426);
 per-tenant fan-out and dynamic sources are exempt from that check, so there the first relay poll
 fails instead. Either way EVERY deployment with an existing table runs the statements below
 BEFORE deploying the new relay (or, on a drained ledger only, drops and recreates the table —
@@ -434,9 +434,9 @@ is still a write and will fail against a read-only replica) — and fails `Init`
   inbox: `DELETE`). Missing table → run migrations, or set
   `outbox.autocreatetable`/`inbox.autocreatetable` where the role also holds DDL rights. Privilege
   failure → grant that privilege; auto-creation does not help.
-- `table %q cannot be queried as configured` — the probe never reached the database: the query
-  builder refused the configured table name (a character outside the vendor's grammar, an over-long
-  identifier, an unsupported vendor), so neither migrations nor auto-creation applies; fix
+- `table %q cannot be queried: the query was refused before it reached the database` — the query
+  builder rejected the configured table name (a character the configured vendor's grammar refuses,
+  e.g. one PostgreSQL does not accept), so neither migrations nor auto-creation applies; fix
   `outbox.tablename`/`inbox.tablename`.
 - `database resolver returned a nil database` — a resolver contract violation (`(nil, nil)`).
 

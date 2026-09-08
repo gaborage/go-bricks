@@ -1268,8 +1268,10 @@ func TestModuleInitBuildStageProbeFailureIsAConfigurationFault(t *testing.T) {
 	err := m.Init(deps)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `outbox: table "ev#ents" cannot be queried as configured`)
+	assert.Contains(t, err.Error(),
+		`outbox: table "ev#ents" cannot be queried: the query was refused before it reached the database`)
 	assert.NotContains(t, err.Error(), "run migrations")
 	assert.NotContains(t, err.Error(), "outbox.autocreatetable")
+	assert.NotContains(t, err.Error(), "is not usable")
 	assert.ErrorIs(t, err, identifier.ErrIdentifierCharset)
 }

@@ -111,7 +111,7 @@ func (s *oracleHoldStore) Park(ctx context.Context, tx dbtypes.Tx, row *HoldRow)
 		Values(row.Consumer, row.Stream, row.Offset, row.TenantID, row.Data, row.Properties, s.qb.MustExpr(oracleNow)).
 		ToSQL()
 	if err != nil {
-		return false, fmt.Errorf("inbox oracle: build park row failed: %w", err)
+		return false, s.wrapBuild("build park row failed", err)
 	}
 	inserted := true
 	if _, err := tx.Exec(ctx, insert, insertArgs...); err != nil {
@@ -133,7 +133,7 @@ func (s *oracleHoldStore) holdTenantMarker(ctx context.Context, tx dbtypes.Tx, r
 		ForUpdate().
 		ToSQL()
 	if err != nil {
-		return fmt.Errorf("inbox oracle: build tenant marker lock failed: %w", err)
+		return s.wrapBuild("build tenant marker lock failed", err)
 	}
 	// SECURITY: Manual SQL review completed - oracleNow is a package constant holding the
 	// vendor clock; the consumer and tenant are bound, attempts starts at a literal 0
@@ -142,7 +142,7 @@ func (s *oracleHoldStore) holdTenantMarker(ctx context.Context, tx dbtypes.Tx, r
 		Values(row.Consumer, row.TenantID, s.qb.MustExpr(oracleNow), 0, s.qb.MustExpr(oracleNow)).
 		ToSQL()
 	if err != nil {
-		return fmt.Errorf("inbox oracle: build tenant marker insert failed: %w", err)
+		return s.wrapBuild("build tenant marker insert failed", err)
 	}
 
 	// Two passes at most: the marker is there and we lock it, or it is not and we
@@ -187,7 +187,7 @@ func (s *oracleHoldStore) Defer(ctx context.Context, db dbtypes.Interface, consu
 func (s *oracleHoldStore) Stats(ctx context.Context, db dbtypes.Interface, consumer string) (HoldStats, error) {
 	query, args, err := s.stats(consumer).ToSQL()
 	if err != nil {
-		return HoldStats{}, fmt.Errorf("inbox hold: build stats failed: %w", err)
+		return HoldStats{}, &database.ExecError{Op: "inbox hold: build stats failed", Stage: database.StageBuild, Err: err}
 	}
 	return scanHoldStats(ctx, db, query, args...)
 }

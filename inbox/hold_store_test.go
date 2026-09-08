@@ -170,7 +170,7 @@ func TestHoldStoreBuildRefusalIsABuildStageExecError(t *testing.T) {
 	store, err := NewPostgresHoldStore("ev#ents")
 	require.NoError(t, err, "the name validator accepts this name; only the builder refuses it")
 	ctx := context.Background()
-	db, _ := permissiveDB(dbtypes.PostgreSQL)
+	db, tx := permissiveDB(dbtypes.PostgreSQL)
 
 	calls := []struct {
 		name string
@@ -178,32 +178,45 @@ func TestHoldStoreBuildRefusalIsABuildStageExecError(t *testing.T) {
 		call func() error
 	}{
 		{
-			name: "held_tenants", op: "inbox postgres: held tenants query",
+			name: "held_tenants", op: "inbox postgres: build held tenants query failed",
 			call: func() error { _, err := store.HeldTenants(ctx, db, "orders"); return err },
 		},
 		{
-			name: "list_tenants", op: "inbox postgres: list tenants query",
+			name: "list_tenants", op: "inbox postgres: build list tenants query failed",
 			call: func() error { _, err := store.ListTenants(ctx, db, "orders"); return err },
 		},
 		{
-			name: "due_tenants", op: "inbox postgres: due tenants query",
+			name: "due_tenants", op: "inbox postgres: build due tenants query failed",
 			call: func() error { _, err := store.DueTenants(ctx, db, "orders", 10); return err },
 		},
 		{
-			name: "next_rows", op: "inbox postgres: next rows query",
+			name: "next_rows", op: "inbox postgres: build next rows query failed",
 			call: func() error { _, err := store.NextRows(ctx, db, "orders", "acme", 5); return err },
 		},
-		{name: "delete_row", op: "inbox postgres: delete held row query", call: func() error {
+		{name: "delete_row", op: "inbox postgres: build delete held row query failed", call: func() error {
 			_, err := store.DeleteRow(ctx, db, "orders", "orders-s", 7, "acme", "owner-1")
 			return err
 		}},
 		{
-			name: "release", op: "inbox postgres: release tenant query",
+			name: "release", op: "inbox postgres: build release tenant query failed",
 			call: func() error { _, err := store.Release(ctx, db, "orders", "acme", "owner-1"); return err },
 		},
 		{
-			name: "release_lease", op: "inbox postgres: release lease query",
+			name: "release_lease", op: "inbox postgres: build release lease query failed",
 			call: func() error { return store.ReleaseLease(ctx, db, "orders", "acme", "owner-1") },
+		},
+		{
+			name: "park", op: "inbox postgres: build park row failed",
+			call: func() error {
+				_, err := store.Park(ctx, tx, &HoldRow{
+					Consumer: "orders", Stream: "orders-s", Offset: 7, TenantID: "acme", HeldAt: fixedAt,
+				})
+				return err
+			},
+		},
+		{
+			name: "stats", op: "inbox hold: build stats failed",
+			call: func() error { _, err := store.Stats(ctx, db, "orders"); return err },
 		},
 	}
 

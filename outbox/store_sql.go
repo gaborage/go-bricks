@@ -3,7 +3,6 @@ package outbox
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"time"
 
 	"github.com/gaborage/go-bricks/database"
@@ -135,11 +134,11 @@ func (s *sqlStore) Lead(ctx context.Context, db dbtypes.Interface) (Leadership, 
 	f := s.qb.Filter()
 	lockSQL, lockArgs, err := s.qb.Select("id").From(s.leaderTable).Where(f.Eq("id", 1)).ForUpdateNoWait().ToSQL()
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", s.op("build leader lock"), err)
+		return nil, &database.ExecError{Op: s.op("build leader lock"), Stage: database.StageBuild, Err: err}
 	}
 	probeSQL, _, err := s.qb.Select(s.qb.MustExpr("1")).ToSQL()
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", s.op("build leader probe"), err)
+		return nil, &database.ExecError{Op: s.op("build leader probe"), Stage: database.StageBuild, Err: err}
 	}
 	return leadRow(ctx, db, s.vendor, s.leaderTable, lockSQL, lockArgs, probeSQL)
 }
