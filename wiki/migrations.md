@@ -7143,6 +7143,76 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - ref: gaborage/go-bricks#1457 · [ADR-102](adr_102_key_not_found_helper_checks_the_value.md) ·
   `keystore/testing/assertions.go`, `app/module.go`
 
+### [C64.10] every AMQP publish is persistent and names its own encoding, application, instant, type and id · breaking · when: always
+
+- detect: **nothing in your build flags this** — no exported signature moves, the only new
+  identifier is additive (`messaging.WithAppName`), and every value that changes is written by
+  the framework onto the wire. Search the CONSUMER side and your operations, not your
+  publishers: `git grep -nE 'ContentType|content_type|DeliveryMode|MessageId|message_id|AppId|app_id' -- '*.go'`
+  over the services that CONSUME these messages, plus any non-Go consumer (a Java or Node
+  listener, a Shovel/Federation policy, an alert or dashboard keyed on a delivery property).
+  A raw-`amqp091` consumer reads `d.ContentType` / `d.MessageId` off `amqp.Delivery`; a
+  framework typed consumer never sees either, so a GoBricks-only fleet is out of the
+  content-type and message-id population. For the durability half query the BROKER, not the
+  code: a queue whose depth used to fall to zero on every restart is the population, and
+  `rabbitmqctl list_queues name durable messages` names the queues that will now retain.
+- scope: three properties gain values, one changes value, and one is set for the first time on
+  a subset. `DeliveryMode` becomes `amqp.Persistent` on EVERY publish — typed, outbox-relayed,
+  and the raw byte door — where it was left at the zero value, so every business message was
+  transient. `ContentType` was hard-coded `application/octet-stream` for all traffic and is now
+  claimed only where the framework knows it: `application/json` from the typed handle,
+  `application/jose` when that handle seals the event (ADR-097), `application/json` for an
+  outbox row the publisher marshaled itself (including the nil payload, stored as JSON `null`),
+  and still `application/octet-stream` for the raw bytes path and for an outbox row whose
+  payload was a caller-supplied `[]byte` — which covers the persisted-sealed compact JWS,
+  because `marshalPayload` passes such bytes through unexamined and nothing in the row records
+  which arm ran. `AppId` carries `app.name`, `Timestamp` the publish instant, and `Type` the
+  event type (the typed handle's declared one, or the outbox row's — the same value as the
+  `x-outbox-event-type` header, which stays). `MessageId` on an outbox-relayed publish becomes
+  the outbox row id — the same value as `x-outbox-event-id`, which also STAYS and remains the
+  ledger key consumers dedupe on (ADR-097); every other publish keeps the framework-minted
+  UUID it already had. There is no caller knob for any of it: `publishOptions` is unexported
+  (ADR-096) and the three new fields on it and on `internal/publishdoor.Options` are written by
+  the framework's own doors. `messaging.WithAppName` is additive; a client a consumer's own
+  `app.Options.MessagingClientFactory` builds receives NO factory option, `AppName` included,
+  and so publishes with an empty `app_id`.
+- gate: always — every publish changes. Three populations feel it: (a) a consumer that branches
+  on `content_type`, which saw one constant value, now sees three, and during the drain of a
+  pre-upgrade outbox backlog sees two of them on the same event type; (b) a deployment relying
+  on transient delivery — messages evaporating with the broker — which now retains them, and
+  pays the broker's disk on every publish; (c) a consumer or tool reading `message_id` on an
+  outbox-relayed delivery, which now receives the row id in place of a per-publish UUID.
+- apply: (a) handle all three content types, or stop branching on the property and read the
+  `x-outbox-event-type` header or the new `type` property instead — and do NOT read
+  `application/octet-stream` as "not JSON": a persisted-sealed or hand-marshaled outbox payload
+  ships under it. Hand `outbox.Publish` the struct and let the outbox marshal it if you want
+  `application/json` on the wire. Expect a mixed window while a pre-upgrade backlog drains:
+  rows enqueued before the upgrade carry no encoding stamp and relay as
+  `application/octet-stream` while rows enqueued after it ship `application/json`, so the
+  same event type arrives under both labels until the backlog clears. (b) size the broker's disk and re-measure publish throughput
+  and confirm latency before the upgrade reaches production, and check every queue that was
+  fed only transient messages for a backlog it used to shed — there is no opt-out, so a queue
+  that must not retain needs a TTL or a max-length policy set on the BROKER. (c) treat the
+  value as the outbox row id: it is stable across the relay's retries of the same row, so a
+  tool that counted distinct `message_id`s as distinct delivery ATTEMPTS now counts rows.
+  Dedupe on `x-outbox-event-id` as before — the property mirrors it, it does not replace it,
+  and `inbox.ProcessOnce` never reads the property. For an `app_id` a custom messaging factory
+  must set it itself with `messaging.WithAppName`, or move to the default factory.
+- verify: `go build ./... && go test ./...`  # then publish one event of each shape and read
+  the properties off the wire (RabbitMQ management UI "Get message", or `d.DeliveryMode` /
+  `d.ContentType` / `d.MessageId` / `d.AppId` / `d.Type` in a raw consumer): a typed publish
+  reads `application/json` (`application/jose` sealed), an outbox row with a struct payload
+  `application/json` with `message_id` equal to its `x-outbox-event-id`, and an outbox row with
+  a `[]byte` payload `application/octet-stream`; all five carry `delivery_mode: 2` and an
+  `app_id` equal to `app.name` on a default-factory client. Then restart the broker and confirm
+  a queue that used to empty now retains.
+- ref: gaborage/go-bricks#1545 ·
+  [ADR-105](adr_105_framework_writes_every_publish_property.md) ·
+  `messaging/amqp_client.go` (`preparePublishing`), `messaging/typed_publisher.go`
+  (`contentType`), `internal/publishdoor/publishdoor.go`, `outbox/publisher.go`
+  (`marshalPayload`, `marshalHeaders`), `outbox/headers.go`, `outbox/amqp_shipper.go`,
+  `app/factory_resolver.go`
+
 ---
 
 *The sections below are reference material: the two config-key rename lookup tables (linked from atoms C401.1 and C41.7), followed by pre-v0.39 changes retained for consumers upgrading from older releases.*

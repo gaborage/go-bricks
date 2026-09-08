@@ -6,6 +6,8 @@ import (
 	"context"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+
+	"github.com/gaborage/go-bricks/internal/publishdoor"
 )
 
 // Client defines the interface for messaging operations.
@@ -37,6 +39,11 @@ type publishOptions struct {
 	Headers    map[string]any // Message headers
 	Mandatory  bool           // AMQP mandatory flag
 	Immediate  bool           // AMQP immediate flag
+	// props is written by the framework's own doors, never by a caller: the
+	// typed handle and the outbox relay know what they encoded and what they
+	// are shipping, and no exported option reaches them (ADR-105). Nil means
+	// nothing is known: octet-stream, no type, a framework-minted id.
+	props *publishdoor.MessageProps
 }
 
 // ConsumeOptions contains options for consuming messages with AMQP-specific features.

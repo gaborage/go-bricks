@@ -180,6 +180,16 @@ func (h *Publisher[T]) encode(ctx context.Context, client AMQPClient, evt T) ([]
 	return data, nil
 }
 
+// contentType is what this handle actually encoded: a compact JWS when T is
+// seal-tagged (ADR-097), JSON otherwise. The handle is the only place that
+// knows, which is why the property is set here and not in the client.
+func (h *Publisher[T]) contentType() string {
+	if h.sealer != nil {
+		return publishdoor.ContentTypeJOSE
+	}
+	return publishdoor.ContentTypeJSON
+}
+
 // tenantForSeal returns ctx carrying the tenant the stamping wrapper will write for a
 // publish through client, or ctx unchanged when no tenant is in play.
 func tenantForSeal(ctx context.Context, client AMQPClient) (context.Context, error) {
@@ -215,5 +225,9 @@ func (h *Publisher[T]) publishBytes(ctx context.Context, client AMQPClient, data
 		Headers:    headers,
 		Mandatory:  h.mandatory,
 		Immediate:  h.immediate,
+		Props: &publishdoor.MessageProps{
+			ContentType: h.contentType(),
+			EventType:   h.eventType,
+		},
 	}, data)
 }

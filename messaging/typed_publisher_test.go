@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/internal/publishdoor"
 )
 
 const (
@@ -224,4 +226,21 @@ func TestPublisherPublishConcurrent(t *testing.T) {
 		assert.Equal(t, typedPubExchange, frame.options.Exchange)
 		assert.Equal(t, typedPubRoutingKey, frame.options.RoutingKey)
 	}
+}
+
+// TestPublisherPublishClaimsTheEncodingItProduced pins the honest content type:
+// the handle is the only place that knows whether it marshaled JSON or sealed
+// the event, and it also names the event type on the wire property (ADR-105).
+func TestPublisherPublishClaimsTheEncodingItProduced(t *testing.T) {
+	pub := declaredOrderPublisher(t)
+	client := &capturingPublishClient{}
+
+	require.NoError(t, pub.Publish(t.Context(), client, orderCreated{OrderID: 7}))
+
+	frames := client.captured()
+	require.Len(t, frames, 1)
+	require.NotNil(t, frames[0].options.props)
+	assert.Equal(t, publishdoor.ContentTypeJSON, frames[0].options.props.ContentType)
+	assert.Equal(t, "OrderCreated", frames[0].options.props.EventType)
+	assert.Empty(t, frames[0].options.props.MessageID, "only the relay supplies a message id")
 }

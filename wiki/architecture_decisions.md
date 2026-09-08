@@ -1565,6 +1565,31 @@ the queue. See [migrations.md](migrations.md) `[C64.12]`.
 
 ---
 
+### [ADR-105: The Framework Writes Every Publish Property, or None](adr_105_framework_writes_every_publish_property.md)
+
+**Date:** 2026-09-07 | **Status:** Accepted | **Breaking:** every publish becomes persistent, and `content_type` stops always reading `application/octet-stream`
+
+`preparePublishing` set a hard-coded `application/octet-stream`, a body and a headers table,
+and left `DeliveryMode` at its zero value — so every framework publish was transient and lost
+on a broker restart, which NKH1 §6.2 does not allow, while §6.5's identifying properties
+(`app_id`, `timestamp`, `type`) were never set and the one property that was set was wrong for
+the JSON and compact-JWS bodies the typed door produces. Each property is now written by the
+framework at the seam that knows the answer, with no caller knob: `amqp.Persistent`
+unconditionally; `app_id` from `app.name` through the new exported `messaging.WithAppName`;
+`timestamp` from an unexported client clock, deliberately not an option; `type` from the typed
+handle's `EventType` or the outbox row's; `message_id` from the outbox row id on a relayed
+publish, MIRRORING `x-outbox-event-id` rather than replacing it as the ledger key (ADR-097);
+and `content_type` claimed only where it is known — `application/json` or `application/jose`
+from the typed handle, octet-stream on the raw bytes path. The relay cannot recover the
+encoding, because `marshalPayload` passes a caller `[]byte` through unexamined and a
+persisted-sealed compact JWS arrives as exactly one, so the encoding is recorded AT ENQUEUE as
+the unexported `x-gobricks-content-type` header stamp — nothing for the `[]byte` arm, which
+therefore ships as octet-stream rather than mislabelled — and both lanes strip it in `Plan`
+like the tenant stamp. Payload sniffing was rejected; a real ledger content-type column is a
+schema migration and out of scope. See [migrations.md](migrations.md) `[C64.10]`.
+
+---
+
 ### [ADR-102: A Key-Absence Helper Checks the Returned Key, Not Only the Error](adr_102_key_not_found_helper_checks_the_value.md)
 
 **Date:** 2026-09-06 | **Status:** Accepted | **Breaking:** `keystore/testing.AssertKeyNotFound` fails when a lookup hands back a key alongside its error, instead of reading error-ness alone

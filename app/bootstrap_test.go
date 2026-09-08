@@ -855,6 +855,17 @@ func TestNewManagerConfigBuilderFromConfig(t *testing.T) {
 	assert.Zero(t, newManagerConfigBuilderFromConfig(cfg).staticTenantCount)
 }
 
+// TestNewManagerConfigBuilderFromConfigCarriesAppName pins the first hop of ADR-105's
+// app_id wiring: app.name -> builder -> messaging.ManagerOptions.AppName.
+func TestNewManagerConfigBuilderFromConfigCarriesAppName(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Name: "orders-api"}}
+
+	b := newManagerConfigBuilderFromConfig(cfg)
+
+	assert.Equal(t, "orders-api", b.appName)
+	assert.Equal(t, "orders-api", b.BuildMessagingOptions().AppName)
+}
+
 // dynamicResourceSource is a TenantStore whose IsDynamic verdict is settable; every
 // other resource-source fake in this package hardcodes false.
 type dynamicResourceSource struct {

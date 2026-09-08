@@ -19,6 +19,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/logger"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
@@ -737,7 +738,7 @@ func TestPreparePublishingAlignsCorrelationIDWithRequestIDHeader(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pub := preparePublishing(tt.ctx, publishOptions{}, []byte(testMessageBody))
+			pub := (&AMQPClientImpl{}).preparePublishing(tt.ctx, publishOptions{}, []byte(testMessageBody))
 
 			header, ok := pub.Headers[gobrickstrace.HeaderXRequestID].(string)
 			require.True(t, ok, "injection writes the request id as a string")
@@ -798,7 +799,7 @@ func TestPreparePublishingRefusesAnUnvalidatedCorrelationID(t *testing.T) {
 			ctx := gobrickstrace.WithTraceID(context.Background(), tt.ctxTraceID)
 			ctx = gobrickstrace.WithTraceParent(ctx, tt.traceparent)
 
-			pub := preparePublishing(ctx, publishOptions{}, []byte(testMessageBody))
+			pub := (&AMQPClientImpl{}).preparePublishing(ctx, publishOptions{}, []byte(testMessageBody))
 
 			assert.Empty(t, pub.CorrelationId, "an id the seam refuses never reaches the shortstr")
 			assert.Equal(t, tt.wantHeader, pub.Headers[gobrickstrace.HeaderXRequestID])
@@ -813,7 +814,7 @@ func TestPreparePublishingRefusesAnUnvalidatedCorrelationID(t *testing.T) {
 // the publish ships a well-formed traceparent and an aligned, non-empty
 // CorrelationId instead of the empty one the poisoned id used to produce.
 func TestPreparePublishingRegeneratesAMalformedHeaderTraceParent(t *testing.T) {
-	pub := preparePublishing(context.Background(), publishOptions{
+	pub := (&AMQPClientImpl{}).preparePublishing(context.Background(), publishOptions{
 		Headers: map[string]any{
 			gobrickstrace.HeaderTraceParent: "00-" + strings.Repeat("!", 32) + "-1234567890123456-01",
 			gobrickstrace.HeaderTraceState:  "vendor=stale",
@@ -2808,7 +2809,7 @@ func TestPublishAttemptClassifiesTheOutcome(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			publishing := preparePublishing(ctx, publishRetryTestOptions, []byte("msg"))
+			publishing := (&AMQPClientImpl{}).preparePublishing(ctx, publishRetryTestOptions, []byte("msg"))
 			arm, termErr := c.publishAttempt(
 				ctx, publishRetryTestOptions, &publishing, time.Now(), trace.SpanFromContext(ctx), nil,
 			)
@@ -2873,4 +2874,44 @@ func TestPublishBytesKeepsMessageIDStableAcrossRetries(t *testing.T) {
 	// either id assertion above.
 	assert.NotEmpty(t, sent[0].Headers, "the first attempt must carry the injected trace headers")
 	assert.Equal(t, sent[0].Headers, sent[1].Headers, "the retry must reuse the first attempt's headers")
+}
+
+// TestPreparePublishingCarriesTheStandardProperties pins the NKH1 §6.2/§6.5
+// property set: the framework populates every one of these, no caller can.
+func TestPreparePublishingCarriesTheStandardProperties(t *testing.T) {
+	c := &AMQPClientImpl{appID: "orders-service"}
+
+	before := time.Now()
+	pub := c.preparePublishing(context.Background(), publishOptions{props: &publishdoor.MessageProps{
+		ContentType: publishdoor.ContentTypeJSON,
+		EventType:   "orders.created",
+		MessageID:   "row-1",
+	}}, []byte(testMessageBody))
+	after := time.Now()
+
+	assert.Equal(t, amqp.Persistent, pub.DeliveryMode)
+	assert.Equal(t, "orders-service", pub.AppId)
+	assert.WithinDuration(t, before, pub.Timestamp, after.Sub(before),
+		"the timestamp is stamped during the call")
+	assert.Equal(t, "orders.created", pub.Type)
+	assert.Equal(t, publishdoor.ContentTypeJSON, pub.ContentType)
+	assert.Equal(t, "row-1", pub.MessageId)
+}
+
+// TestPreparePublishingDefaultsTheFrameworkSources covers the arms the property
+// test above pins from the other side: nil props behave exactly as three empty
+// strings — octet-stream, no type, a minted message id — and a client built by
+// a struct literal — every test double in this package — still stamps a
+// timestamp rather than the zero time.
+func TestPreparePublishingDefaultsTheFrameworkSources(t *testing.T) {
+	c := &AMQPClientImpl{}
+	before := time.Now()
+
+	pub := c.preparePublishing(context.Background(), publishOptions{}, []byte(testMessageBody))
+
+	assert.Equal(t, contentTypeOctetStream, pub.ContentType)
+	assert.Empty(t, pub.Type)
+	assert.Empty(t, pub.AppId)
+	assert.NotEmpty(t, pub.MessageId, "a publish with no relay id keeps a framework-minted one")
+	assert.False(t, pub.Timestamp.Before(before), "a struct-literal client still stamps a timestamp")
 }

@@ -141,7 +141,7 @@ func TestAMQPHeaderHardeningVariousTypes(t *testing.T) {
 	// Every AMQP field type a caller can put in a header table goes through the
 	// real publish preparation rather than a copy of it: the injection must
 	// neither panic on them nor drop the caller's own entries.
-	pub := preparePublishing(
+	pub := (&AMQPClientImpl{}).preparePublishing(
 		gobrickstrace.WithTraceID(context.Background(), "context-trace-id"),
 		publishOptions{Headers: map[string]any{
 			gobrickstrace.HeaderXRequestID:  []byte("byte-array-trace-id"),

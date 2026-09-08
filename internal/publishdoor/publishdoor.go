@@ -14,6 +14,26 @@ import (
 	"sync/atomic"
 )
 
+// ContentTypeJSON and ContentTypeJOSE are the encodings the framework's own
+// doors claim when they know one — a marshaled payload, or an event sealed
+// into a compact JWS (ADR-097). They live here because messaging and the outbox
+// must agree on the literal and both already import this package.
+const (
+	ContentTypeJSON = "application/json"
+	ContentTypeJOSE = "application/jose"
+)
+
+// MessageProps are the properties of the MESSAGE — as opposed to Options' fields,
+// which name its destination — known only to the door that encoded or read it,
+// for the AMQP properties of the same names (ADR-105). A nil *MessageProps means
+// nothing is known here: messaging falls back to octet-stream, leaves type
+// unset, and mints its own message id.
+type MessageProps struct {
+	ContentType string
+	EventType   string
+	MessageID   string
+}
+
 // Options is the destination of one byte publish: the fields messaging's own
 // publish options carry, restated here because this package cannot import
 // messaging (messaging imports it).
@@ -23,6 +43,7 @@ type Options struct {
 	Headers    map[string]any
 	Mandatory  bool
 	Immediate  bool
+	Props      *MessageProps
 }
 
 // Func publishes data to opts through client, which must be a messaging

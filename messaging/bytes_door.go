@@ -51,6 +51,7 @@ func init() {
 			Headers:    opts.Headers,
 			Mandatory:  opts.Mandatory,
 			Immediate:  opts.Immediate,
+			props:      opts.Props,
 		}, data)
 	})
 }
