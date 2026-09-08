@@ -66,9 +66,8 @@ factory calls `messaging.WithAppName` itself, and so does the DEFAULT factory fr
 name. It also carries a framework-minted `message_id` and a `timestamp`, both produced once
 per logical publish and re-sent unchanged by every retry attempt of it, and a `type` — from
 the declared `EventType` on a typed publish, from the ledger row's event type on a relayed
-one, and absent on the raw bytes door, which declares no event type. Then a
-`content_type` the
-handle actually knows — `application/json`, `application/jose` when the handle seals the
+one once the relay link lands, and absent on the raw bytes door, which declares no event
+type. Then a `content_type` the handle actually knows — `application/json`, `application/jose` when the handle seals the
 event, or `application/octet-stream` for an outbox row whose `Payload` the caller handed over
 as `[]byte`, which persists untyped. An outbox-relayed publish is the one exception to the
 minted id: it carries the
