@@ -110,7 +110,8 @@ func TestMetadataSealedIsFalseForPlainConsumers(t *testing.T) {
 
 func TestMetadataSealedAndDedupKeyForASealedDelivery(t *testing.T) {
 	env := SealedEnvelope{JTI: "jti-1", SignKid: "svc-sign-v2", SignFamily: "svc-sign", EncKid: "aud-enc-v1", EventType: "evt", TenantID: "acme"}
-	meta := Metadata{delivery: &amqp.Delivery{Headers: amqp.Table{HeaderEventID: "header-id"}}, sealed: &env}
+	// The delivery carries BOTH unsealed sources; neither may steer a sealed key.
+	meta := Metadata{delivery: &amqp.Delivery{Headers: amqp.Table{HeaderEventID: "header-id"}, MessageId: "prop-1"}, sealed: &env}
 
 	got, ok := meta.Sealed()
 	assert.True(t, ok)
@@ -121,4 +122,70 @@ func TestMetadataSealedAndDedupKeyForASealedDelivery(t *testing.T) {
 	assert.Equal(t, "svc-sign:jti-1", key, "the sealed key wins over any header the publisher wrote")
 	assert.True(t, IsSealedDedupKey(key))
 	assert.ErrorIs(t, ValidateEventID(key), ErrInvalidEventID, "a sealed key is outside the header grammar by construction")
+}
+
+// sealedTestKey is what DedupKey composes from the envelope the sealed rows of
+// TestMetadataDedupKeyStampAndMessageIDPrecedence carry.
+const sealedTestKey = "svc-sign:jti-1"
+
+// TestMetadataDedupKeyStampAndMessageIDPrecedence pins #1547 on both dimensions
+// at once: the stamp wins whenever its KEY is present — a stamp that is present
+// but malformed errors rather than falling through, because the stamp is
+// framework-written and the property caller-written — and the message_id
+// property answers only for a delivery carrying no stamp key at all, under the
+// same grammar, so a `:` in it can never mint a sealed key. The grammar itself
+// is pinned by TestValidateEventIDVariesTheGrammar; what is new here is which
+// source is routed through it.
+func TestMetadataDedupKeyStampAndMessageIDPrecedence(t *testing.T) {
+	cases := []struct {
+		name      string
+		headers   amqp.Table
+		messageID string
+		sealed    bool
+		want      string
+		wantErr   bool
+	}{
+		{name: "stamp_beats_property", headers: amqp.Table{HeaderEventID: "evt-1"}, messageID: "prop-1", want: "evt-1"},
+		{name: "stamp_beats_malformed_property", headers: amqp.Table{HeaderEventID: "evt-1"}, messageID: "a b", want: "evt-1"},
+		{name: "malformed_stamp_does_not_fall_through", headers: amqp.Table{HeaderEventID: "a b"}, messageID: "prop-1", wantErr: true},
+		{name: "empty_stamp_does_not_fall_through", headers: amqp.Table{HeaderEventID: ""}, messageID: "prop-1", wantErr: true},
+		{name: "wrong_type_stamp_does_not_fall_through", headers: amqp.Table{HeaderEventID: int32(7)}, messageID: "prop-1", wantErr: true},
+		{name: "property_when_unstamped", headers: amqp.Table{}, messageID: "9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f", want: "9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f"},
+		{name: "property_when_no_table_at_all", messageID: "prop-1", want: "prop-1"},
+		{name: "other_headers_do_not_stamp", headers: amqp.Table{"x-idempotency-key": "business-key"}, messageID: "prop-1", want: "prop-1"},
+		{name: "malformed_property", headers: amqp.Table{}, messageID: "prop 1", wantErr: true},
+		{name: "property_spelling_a_sealed_key", headers: amqp.Table{}, messageID: "svc-payments-sign:9f0c2b1e", wantErr: true},
+		// The sealed rows cover the quadrant this change introduced: an UNSTAMPED
+		// sealed delivery, where the fallback would fire if the sealed branch did
+		// not return first. The envelope answers whatever the property spells,
+		// malformed or sealed-shaped included.
+		{name: "sealed_ignores_a_valid_property", messageID: "prop-1", sealed: true, want: sealedTestKey},
+		{name: "sealed_ignores_a_malformed_property", messageID: "a b", sealed: true, want: sealedTestKey},
+		{name: "sealed_ignores_an_absent_property", headers: amqp.Table{}, sealed: true, want: sealedTestKey},
+		{name: "sealed_ignores_a_property_spelling_another_sealed_key", messageID: "other-family:other-jti", sealed: true, want: sealedTestKey},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			meta := Metadata{delivery: &amqp.Delivery{Headers: tc.headers, MessageId: tc.messageID}}
+			if tc.sealed {
+				meta.sealed = &SealedEnvelope{JTI: "jti-1", SignFamily: "svc-sign"}
+			}
+			got, err := meta.DedupKey()
+			if tc.wantErr {
+				require.ErrorIs(t, err, ErrInvalidEventID)
+				assert.Empty(t, got)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestMetadataMessageID pins the accessor the fallback reads through, including
+// the inert zero value.
+func TestMetadataMessageID(t *testing.T) {
+	assert.Equal(t, "prop-1", Metadata{delivery: &amqp.Delivery{MessageId: "prop-1"}}.MessageID())
+	assert.Empty(t, Metadata{delivery: &amqp.Delivery{}}.MessageID())
+	assert.Empty(t, Metadata{}.MessageID())
 }

@@ -54,6 +54,20 @@ func (m Metadata) EventType() string {
 	return m.delivery.Type
 }
 
+// MessageID returns the AMQP message_id property the publisher set, or empty
+// when the delivery carries none. It is exposed for a consumer making its OWN
+// judgement about an unstamped delivery, never as a ledger key: only DedupKey's
+// answer belongs at inbox.ProcessOnce. On a sealed consumer that is a security
+// rule, not a style one — the sealed context admits any `<SignFamily>:<jti>`
+// shape, so a caller-written string from here or from Headers would suppress a
+// victim's sealed message (ADR-097 §4).
+func (m Metadata) MessageID() string {
+	if m.delivery == nil {
+		return ""
+	}
+	return m.delivery.MessageId
+}
+
 // Redelivered reports the broker's redelivery flag.
 func (m Metadata) Redelivered() bool {
 	if m.delivery == nil {
@@ -186,8 +200,9 @@ func checkTypedConsumerArgs(decls *Declarations, opts *ConsumerOptions, entry st
 
 // NewTypedHandlerWithMeta is NewTypedHandler for consumers that also need
 // delivery metadata — the outbox-dedup shape: take meta.DedupKey() (the
-// grammar-validated x-outbox-event-id, or an error to return) and wrap the
-// business logic in inbox.ProcessOnce. Failure and concurrency semantics are identical
+// grammar-validated x-outbox-event-id, the message_id property when no such
+// header is present, or an error to return) and wrap the business logic in
+// inbox.ProcessOnce. Failure and concurrency semantics are identical
 // to NewTypedHandler; fn must be safe for concurrent use.
 func NewTypedHandlerWithMeta[T any](eventType string, fn func(context.Context, T, Metadata) error) MessageHandler {
 	if fn == nil {

@@ -19,9 +19,10 @@ const HeaderEventID = "x-outbox-event-id"
 // byte-for-byte the request-id grammar trace.ValidateRequestID enforces, reused
 // rather than respelled. A UUID, a ULID, a KSUID and every base64url string fit;
 // a sealed dedup key (`<SignFamily>:<jti>`) does not, because `:` is outside it —
-// which is the point. An unsealed publisher writing x-outbox-event-id can
-// therefore never pre-insert a sealed message's key and make the legitimate
-// delivery skip+ACK.
+// which is the point. An unsealed publisher can therefore never pre-insert a
+// sealed message's key and make the legitimate delivery skip+ACK, whichever
+// unsealed source it writes: the x-outbox-event-id header and the message_id
+// property answer to this one grammar.
 const maxEventIDBytes = 128
 
 // ErrInvalidEventID is returned when an event id headed for the inbox ledger is
@@ -34,8 +35,9 @@ const maxEventIDBytes = 128
 var ErrInvalidEventID = errors.New("messaging: event id is outside the ledger grammar [A-Za-z0-9_-]{1,128}")
 
 // ValidateEventID checks id against the ledger grammar. Every framework path
-// that turns a header into a ledger id runs it — Metadata.DedupKey here and
-// inbox.ProcessOnce at the ledger door — so consumer code never has to.
+// that turns a wire value into a ledger id runs it — Metadata.DedupKey here,
+// on the header and on the message_id property alike, and inbox.ProcessOnce at
+// the ledger door — so consumer code never has to.
 func ValidateEventID(id string) error {
 	if id == "" {
 		return fmt.Errorf("%w: absent or empty", ErrInvalidEventID)
@@ -135,26 +137,50 @@ func (m Metadata) Sealed() (SealedEnvelope, bool) {
 // DedupKey returns the id the inbox ledger should be keyed on for this
 // delivery. For a sealed consumer it is `<SignFamily>:<jti>` — the Logical sign
 // family, never the concrete Generation, so a rotation does not re-open the
-// replay window — composed from the verified envelope and never an error. For
-// a plain typed consumer it is the grammar-validated x-outbox-event-id header;
-// the error wraps ErrInvalidEventID when the header is absent, empty, over 128
-// bytes, or carries a byte outside [A-Za-z0-9_-]. Return it from the handler:
-// the delivery is nacked without requeue, like any other poison message. AMQP
-// header values arrive as string or []byte depending on the broker and client,
-// so both are accepted.
+// replay window — composed from the verified envelope and never an error.
+//
+// For a plain typed consumer it is the grammar-validated x-outbox-event-id
+// header, or — when the delivery carries no such header at all — the AMQP
+// message_id property, so a producer that follows the standard without being
+// go-bricks is still processable through inbox.ProcessOnce. The stamp is tried
+// first and a stamp that is present but malformed errors rather than falling
+// through: on a go-bricks producer the stamp is framework-written while the
+// property is caller-written, so a caller must not be able to shadow it by
+// spoiling it. The error wraps ErrInvalidEventID when both are absent, or the
+// chosen one is empty, over 128 bytes, or carries a byte outside
+// [A-Za-z0-9_-].
+//
+// The framework validates the SHAPE of either source, never its uniqueness:
+// AMQP obliges no producer to make message_id unique per message, so a producer
+// reusing one across distinct events makes the ledger skip them as duplicates.
+// A queue whose producer does that wants the stamp, or the consumer's own key.
+//
+// Return the error from the handler: the delivery is nacked without requeue,
+// like any other poison message. AMQP header values arrive as string or []byte
+// depending on the broker and client, so both are accepted.
 func (m Metadata) DedupKey() (string, error) {
 	if m.sealed != nil {
 		return m.sealed.SignFamily + ":" + m.sealed.JTI, nil
 	}
-	var id string
-	switch v := m.Headers()[HeaderEventID].(type) {
-	case string:
-		id = v
-	case []byte:
-		id = string(v)
+	id := m.MessageID()
+	if stamp, stamped := m.Headers()[HeaderEventID]; stamped {
+		id = headerString(stamp)
 	}
 	if err := ValidateEventID(id); err != nil {
 		return "", err
 	}
 	return id, nil
+}
+
+// headerString renders an AMQP header value that should carry text. Values
+// arrive as string or []byte depending on the broker and client; anything else
+// is not a spelling of an id.
+func headerString(v any) string {
+	switch s := v.(type) {
+	case string:
+		return s
+	case []byte:
+		return string(s)
+	}
+	return ""
 }

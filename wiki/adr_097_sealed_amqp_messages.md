@@ -15,6 +15,43 @@
   branches `research/amqp-envelope-standards`, `research/amqp-seal-seams`; prototype
   `prototype/amqp-seal-open`. Deep dive: [sealing.md](sealing.md).
 
+> **Amended (2026-09-08, #1547):** the UNSEALED dedup key gains a second source. When a
+> delivery carries no `x-outbox-event-id` header at all, `Meta.DedupKey()` reads the AMQP
+> `message_id` property and validates it with the SAME `^[A-Za-z0-9_-]{1,128}$` grammar §4
+> already applies to the header. This supersedes two statements in the body below, each of
+> which now carries a pointer here: §2's handler surface ("for a plain typed `T` it returns the
+> grammar-validated `x-outbox-event-id` or an error when absent or malformed") and §4's
+> "header-SOURCED ids only", which reads "wire-sourced" from this hop on. §4's closure is therefore unchanged and not weakened: `:` is
+> outside that grammar on both sources, so neither can mint a sealed `<SignFamily>:<jti>` key,
+> and the shared-ledger suppression attack stays closed. The stamp is tried FIRST and a stamp
+> that is present but malformed is an error rather than a fall-through — on a go-bricks
+> producer the stamp is framework-written while the property is caller-written, so a caller
+> must not be able to shadow the stamp by spoiling it. The reason for the fallback is reach:
+> a producer that follows the standard without being go-bricks sets `message_id` and no stamp,
+> and such a delivery previously could not be processed through `inbox.ProcessOnce` at all.
+> `x-idempotency-key` is NOT a framework dedup source and does not become one here — the
+> glossary defines the idempotency key as the CONSUMER's business key, and #1542's proposed
+> three-level precedence is superseded on that point. The sealed branch is untouched: a sealed
+> consumer's key is composed from the verified envelope whatever the wire carries. Two
+> boundaries the closure depends on, stated so they are not rediscovered: the framework
+> validates the SHAPE of either unsealed source and never its UNIQUENESS — AMQP obliges no
+> producer to make `message_id` unique per message, so a producer reusing one across distinct
+> events has them skipped as duplicates, and a queue with such a producer wants the stamp or
+> the consumer's own key. And the additive `Metadata.MessageID()` accessor must never be handed
+> to `inbox.ProcessOnce`: under a sealed delivery's context `ValidateDedupKey` admits any
+> `<SignFamily>:<jti>`-shaped key, so a caller-written string of that shape suppresses a
+> victim's sealed message. That exposure is NOT new and not this accessor's alone — `Headers()`
+> has always returned publisher-controlled values a sealed handler could spell the same way —
+> which is why the control is the rule rather than the surface: only `DedupKey`'s own answer
+> belongs at the ledger door, and no framework path passes either wire value anywhere else.
+> Binding the sealed context to the composed key — rather than to a bool — and comparing it in
+> `ValidateDedupKey` would close the class structurally, so that no caller-written string of
+> any shape passes; that changes the sealed ADMISSION rule and is out of scope for this
+> amendment, which records it rather than deciding it — tracked as #1558.
+> This amendment's own change is `[C64.11]`, breaking: a consumer whose absent-stamp error arm
+> did anything but re-raise — whether it REJECTED the unstamped delivery or processed it
+> WITHOUT dedup — must now make that judgement itself.
+>
 > **Amended (2026-09-04, #1408):** a second door, `jose/sealed.SealDocument` with
 > `NewDocumentSpec`, seals an already-serialized document for tooling (`cmd/seal-event`) and
 > JSON-fixture tests — same envelope, same invariants, the caller's bytes signed verbatim
@@ -98,7 +135,9 @@ Handler surface (S2): `Meta.Sealed() (SealedEnvelope, bool)` is true for every m
 seal-tagged `T` receives and false for every message a plain typed consumer receives —
 per type, never per message. `Meta.DedupKey() (string, error)` returns
 `<SignFamily>:<jti>` for a seal-tagged `T` and never errors; for a plain typed `T` it
-returns the grammar-validated `x-outbox-event-id` or an error when absent or malformed.
+returns the grammar-validated `x-outbox-event-id` or an error when absent or malformed
+(superseded for the unsealed branch by the 2026-09-08 amendment: an ABSENT header now falls
+back to the `message_id` property under the same grammar).
 `SealedEnvelope` carries `SignFamily` explicitly. A seal-tagged `T` requires the
 `WithMeta` consume door at startup so the Dedup key is reachable (S4). Two envelope types,
 one mapping: `messaging.SealedEnvelope` is a plain data struct in `messaging` (strings and
@@ -183,7 +222,10 @@ family, never the concrete Generation, so a rotation does not re-open the replay
 Every header-sourced id (`x-outbox-event-id`) is validated against
 `^[A-Za-z0-9_-]{1,128}$` before the ledger, for unsealed consumers too — `:` is outside
 that grammar, so a header can never mint a sealed key (closes the shared-ledger
-suppression attack). The grammar governs header-SOURCED ids only: the sealed key is
+suppression attack). The 2026-09-08 amendment adds the `message_id` property as the second
+unsealed source and puts it under this same grammar, so "header-sourced" below reads
+"wire-sourced" from that hop on and the closure covers both. The grammar governs
+WIRE-SOURCED ids only: the sealed key is
 framework-minted, carries its `:` on purpose, and `inbox.ProcessOnce` admits it under the
 delivery context the sealed door marks (`messaging.IsSealedDelivery`), so the two key
 spaces never collide and neither path can spell the other's key. The ledger's `!inserted` short-circuit gains a dedup-hit counter and

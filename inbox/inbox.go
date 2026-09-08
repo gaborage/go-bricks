@@ -3,8 +3,9 @@
 // complement to the transactional outbox.
 //
 // Consumers take the event id from the delivery (messaging.Metadata.DedupKey,
-// which validates the x-outbox-event-id header against the ledger grammar) and
-// wrap their handler in deps.Inbox.ProcessOnce, which re-checks the grammar,
+// which validates the x-outbox-event-id header — or, when the delivery carries
+// no such header, the AMQP message_id property — against the ledger grammar)
+// and wrap their handler in deps.Inbox.ProcessOnce, which re-checks the grammar,
 // records the id and runs the handler atomically, exactly once per id.
 package inbox
 

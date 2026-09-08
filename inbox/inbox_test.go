@@ -232,6 +232,43 @@ func TestProcessOnceViaTypedConsumerRedelivery(t *testing.T) {
 	assert.Equal(t, 1, calls, "the business callback runs exactly once across a redelivery")
 }
 
+// TestProcessOnceViaTypedConsumerMessageIDOnly proves #1547's acceptance
+// criterion end-to-end: a delivery from a producer that follows the standard
+// without being go-bricks carries the message_id property and NO
+// x-outbox-event-id stamp, and the same delivery handled twice still runs the
+// business callback exactly once. The consumer reads the key through
+// messaging.Metadata.DedupKey, which falls back to the property.
+func TestProcessOnceViaTypedConsumerMessageIDOnly(t *testing.T) {
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectTransaction().
+		ExpectExec(`INSERT INTO gobricks_inbox`).WillReturnRowsAffected(1) // 1st delivery: inserted
+	db.ExpectTransaction().
+		ExpectExec(`INSERT INTO gobricks_inbox`).WillReturnRowsAffected(0) // redelivery: ON CONFLICT DO NOTHING
+	in := newTestInbox(db)
+
+	calls := 0
+	var seen string
+	handler := messaging.NewTypedHandlerWithMeta("evt", func(ctx context.Context, _ testEvent, meta messaging.Metadata) error {
+		key, err := meta.DedupKey()
+		require.NoError(t, err, "the message_id property must answer when no stamp is present")
+		seen = key
+		return in.ProcessOnce(ctx, key, func(context.Context, dbtypes.Tx) error {
+			calls++
+			return nil
+		})
+	})
+
+	delivery := &amqp.Delivery{
+		Body:      []byte(`{"reference":"abc"}`),
+		MessageId: "9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f",
+	}
+
+	require.NoError(t, handler.Handle(t.Context(), delivery))
+	require.NoError(t, handler.Handle(t.Context(), delivery))
+	assert.Equal(t, "9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f", seen, "the ledger is keyed on the property")
+	assert.Equal(t, 1, calls, "the business callback runs exactly once across a redelivery")
+}
+
 // The ledger's second door — a sealed dedup key — is admitted only under a delivery
 // the sealed typed door opened. These helpers reach that context the way a
 // consumer does: through DeclareTypedConsumerWithMeta on a seal-tagged type, with a
