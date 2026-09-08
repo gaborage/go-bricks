@@ -63,6 +63,10 @@ type fakeChannel struct {
 	notifyCloseCh   chan *amqp.Error
 	notifyConfirmCh chan amqp.Confirmation
 	lastPublishing  amqp.Publishing
+	// publishings records every amqp.Publishing the client handed over, in
+	// attempt order, so a retry test can compare one attempt against the next
+	// instead of only seeing the last one. Read through publishedMessages.
+	publishings     []amqp.Publishing
 	lastPublishArgs struct {
 		exchange, key        string
 		mandatory, immediate bool
@@ -113,6 +117,7 @@ func (f *fakeChannel) PublishWithContext(ctx context.Context, exchange, key stri
 	f.mu.Lock()
 	f.publishCtxDeadline, f.publishCtxHasDeadline = ctx.Deadline()
 	f.lastPublishing = msg
+	f.publishings = append(f.publishings, msg)
 	f.lastPublishArgs = struct {
 		exchange, key        string
 		mandatory, immediate bool
@@ -149,6 +154,14 @@ func (f *fakeChannel) PublishWithContext(ctx context.Context, exchange, key stri
 	}
 	f.mu.Unlock()
 	return err
+}
+
+// publishedMessages returns a copy of every publishing the client sent, in
+// attempt order.
+func (f *fakeChannel) publishedMessages() []amqp.Publishing {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return slices.Clone(f.publishings)
 }
 
 // lastPublishCtxDeadline reports the deadline the client's derived context carried
@@ -2779,8 +2792,9 @@ func TestPublishAttemptClassifiesTheOutcome(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
+			publishing := preparePublishing(ctx, publishRetryTestOptions, []byte("msg"))
 			arm, termErr := c.publishAttempt(
-				ctx, publishRetryTestOptions, []byte("msg"), time.Now(), trace.SpanFromContext(ctx), nil,
+				ctx, publishRetryTestOptions, &publishing, time.Now(), trace.SpanFromContext(ctx), nil,
 			)
 			require.NoError(t, termErr)
 			tt.assertArm(t, arm)
@@ -2812,4 +2826,29 @@ func (tc *publishAttemptCase) assertArm(t *testing.T, arm *retryArm) {
 	assert.Equal(t, tc.wantMetric, arm.metricReason)
 	assert.Equal(t, tc.wantSpan, arm.spanReason)
 	assert.Equal(t, tc.wantBackoff, arm.backoff)
+}
+
+// TestPublishBytesKeepsMessageIDStableAcrossRetries guards #1546: the message
+// id identifies one logical publish, so every retry attempt of that publish
+// must carry the id the first attempt used. Minting it per attempt made a
+// retried message unrecognizable as the same publish on the wire and in the
+// delivery-identity log fallback.
+func TestPublishBytesKeepsMessageIDStableAcrossRetries(t *testing.T) {
+	ch := &fakeChannel{publishFailuresRemaining: 1}
+	c := newClientWithFakeChannel(t, ch)
+	c.resendDelay = time.Millisecond
+	c.connectionTimeout = 5 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ackNextSuccessfulPublish(ctx, t, c, ch)
+
+	require.NoError(t, c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte(testMessageBody)))
+
+	sent := ch.publishedMessages()
+	require.Len(t, sent, 2, "one failed attempt plus the retry")
+	assert.NotEmpty(t, sent[0].MessageId, "the first attempt must carry a minted id")
+	assert.Equal(t, sent[0].MessageId, sent[1].MessageId, "the retry must reuse the first attempt's message id")
+	assert.NotEmpty(t, sent[0].CorrelationId, "the first attempt must carry a correlation id")
+	assert.Equal(t, sent[0].CorrelationId, sent[1].CorrelationId, "the retry must reuse the first attempt's correlation id")
 }
