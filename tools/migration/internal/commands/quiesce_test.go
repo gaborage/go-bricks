@@ -3,18 +3,23 @@ package commands
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/pem"
 	"errors"
-	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/migration"
+	gbtesting "github.com/gaborage/go-bricks/testing"
 )
 
 func TestRunQuiesceSetActivatesAndRenders(t *testing.T) {
@@ -116,24 +121,95 @@ func TestControlPlaneDSN(t *testing.T) {
 	assert.Contains(t, controlPlaneDSN(&withTLS), "sslmode=require")
 
 	// Full TLS material (CA + client cert/key) must be wired so the control-plane
-	// connection is authenticated/mTLS — not just sslmode (ADR-027). url.Values encodes
-	// the paths, so parse and assert decoded values.
+	// connection is authenticated/mTLS — not just sslmode (ADR-027). Assert the encoded
+	// literals: a form-decoding oracle reads "+" back as a space and hides the pgx
+	// v5.11 bug (see TestControlPlaneDSNRoundTripsThroughPgx).
 	fullTLS := *base
 	fullTLS.TLS.Mode = "verify-full"
 	fullTLS.TLS.CAFile = "/etc/ssl/ca.pem"
 	fullTLS.TLS.CertFile = "/etc/ssl/client.crt"
 	fullTLS.TLS.KeyFile = "/etc/ssl/client.key"
-	u, err := url.Parse(controlPlaneDSN(&fullTLS))
-	require.NoError(t, err)
-	q := u.Query()
-	assert.Equal(t, "verify-full", q.Get("sslmode"))
-	assert.Equal(t, "/etc/ssl/ca.pem", q.Get("sslrootcert"))
-	assert.Equal(t, "/etc/ssl/client.crt", q.Get("sslcert"))
-	assert.Equal(t, "/etc/ssl/client.key", q.Get("sslkey"))
+	fullDSN := controlPlaneDSN(&fullTLS)
+	assert.Contains(t, fullDSN, "sslmode=verify-full")
+	assert.Contains(t, fullDSN, "sslrootcert=%2Fetc%2Fssl%2Fca.pem")
+	assert.Contains(t, fullDSN, "sslcert=%2Fetc%2Fssl%2Fclient.crt")
+	assert.Contains(t, fullDSN, "sslkey=%2Fetc%2Fssl%2Fclient.key")
 
 	// An explicit ConnectionString wins verbatim.
 	assert.Equal(t, "postgres://verbatim/x",
 		controlPlaneDSN(&config.DatabaseConfig{ConnectionString: "postgres://verbatim/x"}))
+}
+
+// testCAPEM issues one self-signed certificate for the whole test: pgx only
+// PEM-decodes the CA file and parses it, so the key algorithm and the x509
+// extensions are irrelevant, and an ECDSA key keeps the cost negligible.
+func testCAPEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	cert := gbtesting.SelfSignedCert(t, key)
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+}
+
+// writeTestCA writes caPEM as ca.pem inside dir, creating dir if needed, and
+// returns the certificate path.
+func writeTestCA(t *testing.T, dir string, caPEM []byte) string {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	path := filepath.Join(dir, "ca.pem")
+	require.NoError(t, os.WriteFile(path, caPEM, 0o600))
+	return path
+}
+
+// TestControlPlaneDSNRoundTripsThroughPgx uses pgx's own URI parser as the oracle:
+// pgx >= v5.11.0 follows libpq's rules, where "+" is a literal character and only
+// %XX escapes decode, so a TLS file path containing a space must be encoded as %20
+// or ParseConfig opens the wrong file ("unable to read CA file").
+func TestControlPlaneDSNRoundTripsThroughPgx(t *testing.T) {
+	tests := []struct {
+		name  string
+		caDir string // relative to t.TempDir(); empty means no TLS material
+	}{
+		{name: "plain"},
+		{name: "ca_path_with_space", caDir: "my certs"},
+		{name: "ca_path_with_ampersand_equals", caDir: "a&b=c"},
+		{name: "literal_plus_in_path", caDir: "a+b"},
+	}
+	caPEM := testCAPEM(t)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.DatabaseConfig{
+				Host: "db.internal", Port: 5432, Database: "ctl",
+				Username: "migrator", Password: "p@ss:w/rd?",
+			}
+			if tt.caDir != "" {
+				cfg.TLS.Mode = "verify-ca"
+				cfg.TLS.CAFile = writeTestCA(t, filepath.Join(t.TempDir(), tt.caDir), caPEM)
+			}
+
+			connCfg, err := pgx.ParseConfig(controlPlaneDSN(cfg))
+			require.NoError(t, err)
+			assert.Equal(t, "db.internal", connCfg.Host)
+			assert.Equal(t, uint16(5432), connCfg.Port)
+			assert.Equal(t, "migrator", connCfg.User)
+			assert.Equal(t, "p@ss:w/rd?", connCfg.Password)
+			assert.Equal(t, "ctl", connCfg.Database)
+			require.NotNil(t, connCfg.TLSConfig, "pgx always builds a TLSConfig; libpq's default sslmode is prefer")
+			if tt.caDir == "" {
+				// No TLS material configured: pgx falls back to libpq's "prefer", which
+				// encrypts opportunistically without verifying the server certificate.
+				assert.True(t, connCfg.TLSConfig.InsecureSkipVerify, "prefer must not verify")
+				assert.Nil(t, connCfg.TLSConfig.RootCAs, "no CA file must leave the root pool empty")
+				return
+			}
+			// verify-ca checks the chain but not the hostname, so pgx skips the stdlib
+			// verification and installs its own callback; the CA pool is the proof the
+			// file at the encoded path was actually read.
+			assert.NotNil(t, connCfg.TLSConfig.RootCAs, "the configured CA file must reach the root pool")
+			assert.NotNil(t, connCfg.TLSConfig.VerifyPeerCertificate, "verify-ca must install a chain check")
+		})
+	}
 }
 
 func TestOpenControlPlaneDBRequiresTenant(t *testing.T) {
