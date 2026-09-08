@@ -583,6 +583,8 @@ func (c *AMQPClientImpl) publishBytes(ctx context.Context, options publishOption
 	// prepared frame. Preparing per attempt handed the broker a different
 	// message_id on each retry, so a retried publish was unrecognizable as the
 	// same one on the wire and in the delivery-identity log fallback (#1546).
+	// Every attempt therefore also shares one Headers map; amqp091 only
+	// serializes it, and nothing below this line writes to it.
 	publishing := preparePublishing(ctx, options, data)
 
 	retryCount := 0
@@ -644,9 +646,7 @@ func (c *AMQPClientImpl) armPublishFailure(err error) *retryArm {
 }
 
 // publishAttempt sends one already-prepared publish, then waits for its
-// confirmation. The publishing is built once per logical publish and reused, so
-// every attempt carries the same message and correlation id (#1546).
-// It returns (nil, nil) once the broker ACKs, the failed attempt's retryArm when
+// confirmation. It returns (nil, nil) once the broker ACKs, the failed attempt's retryArm when
 // the loop should retry, or a terminal error the caller must return.
 func (c *AMQPClientImpl) publishAttempt(
 	ctx context.Context, options publishOptions, publishing *amqp.Publishing, publishStart time.Time, span trace.Span, lastCause error,

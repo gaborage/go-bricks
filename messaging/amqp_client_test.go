@@ -62,10 +62,10 @@ type fakeChannel struct {
 	closeErr        error
 	notifyCloseCh   chan *amqp.Error
 	notifyConfirmCh chan amqp.Confirmation
-	lastPublishing  amqp.Publishing
 	// publishings records every amqp.Publishing the client handed over, in
 	// attempt order, so a retry test can compare one attempt against the next
-	// instead of only seeing the last one. Read through publishedMessages.
+	// instead of only seeing the last one. Read through publishedMessages or
+	// lastPublishedMessage, never directly.
 	publishings     []amqp.Publishing
 	lastPublishArgs struct {
 		exchange, key        string
@@ -116,7 +116,6 @@ func (f *fakeChannel) Qos(_, _ int, _ bool) error { return f.qosErr }
 func (f *fakeChannel) PublishWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg amqp.Publishing) error {
 	f.mu.Lock()
 	f.publishCtxDeadline, f.publishCtxHasDeadline = ctx.Deadline()
-	f.lastPublishing = msg
 	f.publishings = append(f.publishings, msg)
 	f.lastPublishArgs = struct {
 		exchange, key        string
@@ -156,12 +155,24 @@ func (f *fakeChannel) PublishWithContext(ctx context.Context, exchange, key stri
 	return err
 }
 
-// publishedMessages returns a copy of every publishing the client sent, in
-// attempt order.
+// publishedMessages returns every publishing the client sent, in attempt order.
+// The slice is the caller's; the Headers map inside each entry is not, and the
+// hoist in #1546 means every entry of one publish shares that one map.
 func (f *fakeChannel) publishedMessages() []amqp.Publishing {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	return slices.Clone(f.publishings)
+}
+
+// lastPublishedMessage returns the most recent publishing, and whether the
+// client published at all.
+func (f *fakeChannel) lastPublishedMessage() (msg amqp.Publishing, ok bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if len(f.publishings) == 0 {
+		return amqp.Publishing{}, false
+	}
+	return f.publishings[len(f.publishings)-1], true
 }
 
 // lastPublishCtxDeadline reports the deadline the client's derived context carried
@@ -1497,16 +1508,21 @@ func TestPublishBytesCustomHeaders(t *testing.T) {
 		t.Fatalf("expected success with custom headers, got: %v", err)
 	}
 
+	sent, published := ch.lastPublishedMessage()
+	if !published {
+		t.Fatalf("expected the client to have published")
+	}
+
 	// Verify headers were applied
-	if ch.lastPublishing.Headers["custom-header"] != "test-value" {
+	if sent.Headers["custom-header"] != "test-value" {
 		t.Fatalf("expected custom header to be preserved")
 	}
-	if ch.lastPublishing.Headers["priority"] != 5 {
+	if sent.Headers["priority"] != 5 {
 		t.Fatalf("expected priority header to be preserved")
 	}
 
 	// Verify trace headers were injected
-	if _, ok := ch.lastPublishing.Headers["traceparent"]; !ok {
+	if _, ok := sent.Headers["traceparent"]; !ok {
 		t.Fatalf("expected traceparent header to be injected")
 	}
 
