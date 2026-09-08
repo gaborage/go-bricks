@@ -1,7 +1,6 @@
 package messaging
 
 import (
-	"context"
 	"testing"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -29,30 +28,21 @@ func TestPublishThroughDoorRefusesAClientWithoutOne(t *testing.T) {
 }
 
 // TestPublishThroughDoorCarriesNoPropsWhenTheCallerKnowsNothing pins the
-// carrier's nil arm end to end: the relay dispatcher forwards a zero-value
-// publishdoor.Options untouched, and a nil Props publishes rather than
-// panicking (ADR-105 — the properties travel as one pointer, so every read of
-// it is nil-guarded).
+// carrier's nil arm end to end: the door forwards a zero-value option struct
+// untouched, and a nil Props publishes rather than panicking (ADR-105 — the
+// properties travel as one pointer, so every read of it is nil-guarded).
 func TestPublishThroughDoorCarriesNoPropsWhenTheCallerKnowsNothing(t *testing.T) {
-	var got publishOptions
-	client := &recordingBytePublisher{seen: &got}
+	client := &capturingPublishClient{}
 
 	require.NoError(t, publishThroughDoor(t.Context(), client, publishOptions{RoutingKey: "q"}, []byte("x")))
-	assert.Nil(t, got.props, "no door claimed anything about the message")
 
-	pub := (&AMQPClientImpl{}).preparePublishing(t.Context(), got, []byte("x"))
+	frames := client.captured()
+	require.Len(t, frames, 1)
+	assert.Nil(t, frames[0].options.props, "no door claimed anything about the message")
+
+	pub := (&AMQPClientImpl{}).preparePublishing(t.Context(), frames[0].options, []byte("x"))
 	assert.Equal(t, contentTypeOctetStream, pub.ContentType)
 	assert.Empty(t, pub.Type)
 	assert.NotEmpty(t, pub.MessageId)
 	assert.Equal(t, amqp.Persistent, pub.DeliveryMode)
-}
-
-type recordingBytePublisher struct {
-	AMQPClient
-	seen *publishOptions
-}
-
-func (r *recordingBytePublisher) publishBytes(_ context.Context, options publishOptions, _ []byte) error {
-	*r.seen = options
-	return nil
 }

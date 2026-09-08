@@ -10,6 +10,8 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/internal/publishdoor"
 )
 
 // oversizedShortStr is one byte past what an AMQP shortstr can carry. amqp091's
@@ -179,6 +181,13 @@ func TestDeclarationsValidateRefusesAnOversizedName(t *testing.T) {
 			},
 			field: "publisher routing key",
 		},
+		{
+			name: "publisher_event_type",
+			build: func(d *Declarations) {
+				d.Publishers = append(d.Publishers, &PublisherDeclaration{Exchange: "ex", EventType: oversizedShortStr})
+			},
+			field: "publisher event type",
+		},
 	}
 
 	for _, tt := range tests {
@@ -205,6 +214,11 @@ func TestDeclarationsValidateAcceptsNamesAtTheLimit(t *testing.T) {
 	d.Exchanges[limit] = &ExchangeDeclaration{Name: limit, Type: "topic"}
 	d.Queues["q"] = &QueueDeclaration{Name: "q"}
 	d.Bindings = append(d.Bindings, &BindingDeclaration{Queue: "q", Exchange: limit, RoutingKey: strings.Repeat("r", 255)})
+	d.Publishers = append(d.Publishers, &PublisherDeclaration{
+		Exchange:   limit,
+		RoutingKey: strings.Repeat("r", 255),
+		EventType:  strings.Repeat("t", 255),
+	})
 
 	assert.NoError(t, d.Validate())
 }
@@ -339,4 +353,101 @@ func TestValidatePublishDestination(t *testing.T) {
 			require.ErrorIs(t, err, ErrInvalidPublishDestination)
 		})
 	}
+}
+
+// TestPublishBytesRefusesEveryOversizedMessageProp covers the three properties
+// the framework writes onto the content-header frame (ADR-105). Each is a
+// shortstr on the same frame as the header keys beside it, so each would tear
+// down the shared connection — the publish must be refused before the channel
+// is touched, and the error must name the field and its size without carrying
+// the value into logs, spans and the outbox row.
+func TestPublishBytesRefusesEveryOversizedMessageProp(t *testing.T) {
+	tests := []struct {
+		name  string
+		props publishdoor.MessageProps
+		field string
+	}{
+		{name: "oversized_content_type", props: publishdoor.MessageProps{ContentType: oversizedShortStr}, field: "content type"},
+		{name: "oversized_event_type", props: publishdoor.MessageProps{EventType: oversizedShortStr}, field: "event type"},
+		{name: "oversized_message_id", props: publishdoor.MessageProps{MessageID: oversizedShortStr}, field: "message id"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch := &fakeChannel{}
+			c := boundedClient(t, ch)
+			props := tt.props
+
+			err := c.publishBytes(context.Background(), publishOptions{
+				Exchange:   "ex",
+				RoutingKey: "rk",
+				props:      &props,
+			}, []byte(testMessageBody))
+
+			require.NotErrorIs(t, err, ErrPublishRetriesExhausted, "this is not a retry outcome")
+			require.ErrorIs(t, err, ErrInvalidPublishDestination)
+			assert.Zero(t, atomic.LoadUint64(&ch.publishAttempts), "the channel is never touched")
+			assert.Contains(t, err.Error(), tt.field, "the error names the field")
+			assert.Contains(t, err.Error(), "256 bytes", "the error names the size")
+			assert.NotContains(t, err.Error(), oversizedShortStr, "the error never carries the value")
+		})
+	}
+}
+
+// TestPublishBytesAcceptsMessagePropsAtTheBoundary keeps both sides honest: 255
+// bytes is legal on every property, and nil props — the framework doors that
+// know nothing about the payload — must stay valid.
+func TestPublishBytesAcceptsMessagePropsAtTheBoundary(t *testing.T) {
+	limit := strings.Repeat("p", maxShortStrBytes)
+
+	tests := []struct {
+		name  string
+		props *publishdoor.MessageProps
+	}{
+		{name: "nil_props"},
+		{
+			name: "every_prop_at_the_limit",
+			props: &publishdoor.MessageProps{
+				ContentType: limit,
+				EventType:   limit,
+				MessageID:   limit,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch := &fakeChannel{}
+			c := newClientWithFakeChannel(t, ch)
+			sendConfirmsAfterEachAttempt(t, c, ch, amqp.Confirmation{Ack: true, DeliveryTag: 1})
+
+			err := c.publishBytes(context.Background(), publishOptions{
+				Exchange:   "ex",
+				RoutingKey: "rk",
+				props:      tt.props,
+			}, []byte(testMessageBody))
+
+			require.NoError(t, err)
+			assert.Equal(t, uint64(1), atomic.LoadUint64(&ch.publishAttempts), "the publish reached the channel")
+		})
+	}
+}
+
+// TestPublishBytesRefusesAnOversizedAppID pins the half config cannot reach:
+// app.name is bounded at startup, but WithAppName is exported, so a client a
+// consumer built itself can carry a value no config check ever saw. It must
+// fail the pre-flight rather than the frame write, which would tear down the
+// connection every publisher in the process shares (ADR-070).
+func TestPublishBytesRefusesAnOversizedAppID(t *testing.T) {
+	ch := &fakeChannel{}
+	c := boundedClient(t, ch)
+	c.appID = oversizedShortStr
+
+	err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte(testMessageBody))
+
+	require.NotErrorIs(t, err, ErrPublishRetriesExhausted, "this is not a retry outcome")
+	require.ErrorIs(t, err, ErrInvalidPublishDestination)
+	assert.Zero(t, atomic.LoadUint64(&ch.publishAttempts), "the channel is never touched")
+	assert.Contains(t, err.Error(), "app id is 256 bytes")
+	assert.NotContains(t, err.Error(), oversizedShortStr, "the error never carries the value")
 }

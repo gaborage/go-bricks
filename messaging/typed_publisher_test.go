@@ -242,5 +242,5 @@ func TestPublisherPublishClaimsTheEncodingItProduced(t *testing.T) {
 	require.NotNil(t, frames[0].options.props)
 	assert.Equal(t, publishdoor.ContentTypeJSON, frames[0].options.props.ContentType)
 	assert.Equal(t, "OrderCreated", frames[0].options.props.EventType)
-	assert.Empty(t, frames[0].options.props.MessageID, "only the relay supplies a message id")
+	assert.Empty(t, frames[0].options.props.MessageID, "the typed door names no message id; the client mints one")
 }

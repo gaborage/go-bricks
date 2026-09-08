@@ -465,7 +465,9 @@ func (c *AMQPClientImpl) preparePublishing(ctx context.Context, options publishO
 // a cold client. It returns the span for the caller to end and the instant the
 // broker attempt actually begins.
 //
-// The destination check comes before ANYTHING else. A field the frame cannot
+// The destination check comes before ANYTHING else, and covers the properties
+// on the content-header frame as well as the destination itself
+// (validatePublishOptions). A field the frame cannot
 // carry is unwritable whatever the broker's state, so retrying it only re-tears
 // the connection every publisher shares, and the value must not reach the span
 // attribute or the publish metrics on its way out (#1123).
@@ -487,7 +489,7 @@ func (c *AMQPClientImpl) preparePublishing(ctx context.Context, options publishO
 func (c *AMQPClientImpl) publishPrologue(
 	ctx context.Context, options publishOptions, dataLen int,
 ) (spanCtx context.Context, span trace.Span, publishStart time.Time, err error) {
-	if err := ValidatePublishDestination(options.Exchange, options.RoutingKey, options.Headers); err != nil {
+	if err := validatePublishOptions(c.appID, options); err != nil {
 		return ctx, nil, time.Time{}, err
 	}
 

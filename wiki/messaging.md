@@ -63,6 +63,15 @@ from the declared `EventType`, and a `content_type` the handle actually knows �
 `application/json`, or `application/jose` when the handle seals the event. The streams lane
 is untouched: it sets no message properties of its own.
 
+`app_id` is unauthenticated provenance metadata — read it for tracing, dashboards and triage,
+never as an authorization, routing-trust or identity input: any publisher on the bus can stamp
+any string, and `user_id`, which the framework does not set, is the only field RabbitMQ
+validates against the connection's authenticated user. Because it travels as an AMQP shortstr,
+`app.name` is bounded at 255 bytes and a longer value fails config validation at startup; a
+client you build yourself with `messaging.WithAppName` is judged per publish instead, and an
+over-long value is refused with `messaging.ErrInvalidPublishDestination` rather than reaching
+the frame.
+
 RabbitMQ 4.3.0 denies `transient_nonexcl_queues` by default: a queue declared with both `Durable: false` and `Exclusive: false` gets the connection closed with a 541 instead of the queue created. The helpers above are unaffected — `NewQueue` defaults to `Durable: true` — but a hand-built `QueueDeclaration` using that transient shape needs the broker configured with `deprecated_features.permit.transient_nonexcl_queues = true`, which is what GoBricks' own RabbitMQ test container sets.
 
 **Key Helpers:** `DeclareTopicExchange()`, `DeclareQueue()`, `DeclareBinding()`, `DeclareTypedPublisher[T]()`, `DeclareConsumer()`
