@@ -89,7 +89,9 @@ Currently this is a documented developer convenience: TestMain always spins up a
 
 # config_missing: database.host on a DBConfigProvider result
 # → The connect seam refuses an empty PostgreSQL host since pgx v5.11 would dial a
-#   unix socket with TLS dropped; set Host (ADR-050 amendment, [C64.8])
+#   unix socket with TLS dropped; set Host (ADR-050 amendment, [C64.8]). Host is
+#   trimmed first, so a whitespace-only value — a secret mount that delivered a
+#   newline — reports as missing rather than failing later at DNS resolution
 ```
 
 ## Connection Pool Issues (ORA-01013, connection reset)

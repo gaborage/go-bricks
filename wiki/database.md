@@ -453,9 +453,13 @@ That strictness is the point: an empty section carries no intent, so a dropped s
 mount looks identical to a deliberately database-free service. Making the predicate strict
 means only a *literally empty* section is absence.
 
-The framework always sends `password=''` when no password is configured, so `PGPASSWORD`
-and `~/.pgpass` are never consulted: credentials come from the section or a secret manager,
-never from the ambient environment.
+When the framework BUILDS the DSN it always sends `password=''` even with no password
+configured, so `PGPASSWORD` and `~/.pgpass` are never consulted: credentials come from the
+section or a secret manager, never from the ambient environment. That guarantee does not
+extend to a raw `connectionstring`, which `postgresql.NewConnection` hands to
+`pgx.ParseConfig` verbatim — there an absent password DOES fall back to `PGPASSWORD` and then
+to the password file, and for a unix-socket host pgx looks up `localhost` in it. Put the
+password in the DSN, or use the typed fields.
 
 | Config | Startup | `/ready` |
 | --- | --- | --- |

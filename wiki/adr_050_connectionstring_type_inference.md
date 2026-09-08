@@ -6,7 +6,9 @@
 > **Amended (2026-09-07):** The connect seam's "identity is the dial's job"
 > posture (stated in the 2026-08-14 amendment below and in Consequences, "the
 > seam stays asymmetric by design") now has one exception: a PostgreSQL section
-> with no `connectionstring` and an empty `host` is refused by
+> with no `connectionstring` and a `host` that is empty after trimming (the seam
+> canonicalizes it with `strings.TrimSpace`, so a whitespace-only value counts as
+> missing) is refused by
 > `validateVendorSpecificFields` with the same `MissingFieldError` the startup
 > path emits. pgx v5.11.0 stopped dialing `tcp :5432` for an empty host and
 > substitutes libpq's default, a unix socket in the server's socket directory,
