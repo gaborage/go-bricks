@@ -12,10 +12,24 @@
 > substitutes libpq's default, a unix socket in the server's socket directory,
 > which discards any configured `database.tls` material. That is the "fails
 > silently open" class this ADR already refuses for dropped TLS material, so
-> empty host joins it. Oracle is unchanged: an empty host still fails loudly at
-> dial. Static sections are unaffected, they already rejected an empty host at
-> startup; the change reaches `DBConfigProvider` results at first use and the
-> `tools/migration` CLI at its next pin bump. See
+> empty host joins it. Oracle is unchanged, and the durable reason is not that it
+> dials loudly — go-ora resolves `oracle://u:p@:1521/svc` to `":1521"` and dials
+> the local machine, exactly as pgx v5.10.0 did — but that
+> `validateOracleFields` refuses the whole `database.tls` block, so Oracle has no
+> TLS material an implicit host could discard. Revisit the exemption if Oracle
+> TLS is ever implemented. Static sections are unaffected, they already rejected
+> an empty host at startup; the change reaches `DBConfigProvider` results at
+> first use and the `tools/migration` CLI at its next pin bump.
+>
+> The exception is deliberately NOT extended to a raw `connectionstring`. The
+> same fail-open exists there — `postgres:///db?sslmode=verify-full` resolves its
+> empty host element to `defaultHost()` and appends a `nil` TLS config for a unix
+> network, dropping `sslmode` exactly as the typed shape did — but closing it
+> would require this seam to parse DSNs, which it does not do and which would
+> invert the config/connector dependency. The short-circuit therefore runs first
+> and a host-less DSN is still accepted; `[C64.8]`'s scope says so, and
+> `postgres_connectionstring_omitting_host_still_accepted` pins it so widening
+> the guard stays a visible decision. #1551 tracks closing the DSN half. See
 > [migrations.md](migrations.md) `[C64.8]`, #1544.
 >
 > **Amended (2026-08-14):** Decision item 1 names

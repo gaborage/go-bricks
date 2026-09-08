@@ -7257,8 +7257,12 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   that dialed `tcp :5432`, which resolves to the local system; under v5.11.0 an empty host is
   replaced by libpq's default, the server's unix-socket directory, and TLS is skipped for unix
   sockets — so the configured `database.tls` material was silently discarded. Oracle is
-  unchanged (it builds `oracle://u:p@:1521/svc` and fails loudly at dial), static sections are
-  unchanged (they already rejected an empty host at startup), and no signature moves.
+  unchanged (`validateOracleFields` refuses the whole `database.tls` block, so Oracle has no
+  TLS material an implicit host could discard), static sections are unchanged (they already
+  rejected an empty host at startup), and no signature moves. A raw `connectionstring` is
+  NOT covered: the short-circuit runs first, so `postgres:///db` is still accepted and still
+  reaches libpq's default socket — closing that would require the config seam to parse DSNs
+  (tracked as gaborage/go-bricks#1551). If you pass a DSN, put an explicit host in it.
 - gate: match = such a provider branch exists.
 - apply: set `Host` explicitly on every config your provider returns — `localhost` if you were
   relying on the old TCP dial. The refusal lands at the first `deps.DB(ctx)` for that tenant,

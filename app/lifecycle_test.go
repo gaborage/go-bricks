@@ -441,7 +441,7 @@ func (p *ctxRecordingDBConfigProvider) DBConfig(ctx context.Context, _ string) (
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.seen = ctx.Value(preWarmCtxSentinelKey{})
-	return &config.DatabaseConfig{Type: dbTypePostgres, Host: "localhost"}, nil
+	return &config.DatabaseConfig{Type: dbTypePostgres, Host: localHost}, nil
 }
 
 // TestPrepareRuntimePropagatesContextToPreWarm pins that prepareRuntime hands its
@@ -491,7 +491,7 @@ func (p staticDBConfigProvider) DBConfig(context.Context, string) (*config.Datab
 	if p.err != nil {
 		return nil, p.err
 	}
-	return &config.DatabaseConfig{Type: dbTypePostgres, Host: "localhost"}, nil
+	return &config.DatabaseConfig{Type: dbTypePostgres, Host: localHost}, nil
 }
 
 // newFailingLifecycleDBManager builds a *database.DbManager whose DBConfig resolution

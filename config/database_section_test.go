@@ -3028,10 +3028,19 @@ func TestApplyDatabasePoolDefaultsRefusesEmptyPostgresHost(t *testing.T) {
 			wantField: "database.host",
 		},
 		{
-			// A DSN carries its own host (or deliberately omits it); the seam hands it
-			// to pgx verbatim and the short-circuit runs before the new guard.
-			name: "postgres_connectionstring_empty_host_accepted",
+			// testBarePostgresConnString names a host; this pins only that the
+			// connectionstring short-circuit runs BEFORE the host guard.
+			name: "postgres_connectionstring_short_circuits_before_host_guard",
 			cfg:  DatabaseConfig{ConnectionString: testBarePostgresConnString},
+		},
+		{
+			// A DSN whose authority is empty is NOT guarded, deliberately: this seam
+			// does not parse DSNs, so a raw connectionstring reaches pgx verbatim and
+			// hits the same unix-socket TLS drop the typed shape is now refused for.
+			// Pinned as the accepted gap so widening the guard is a visible decision
+			// rather than a silent one (ADR-050 amendment, [C64.8] scope note; #1551).
+			name: "postgres_connectionstring_omitting_host_still_accepted",
+			cfg:  DatabaseConfig{ConnectionString: "postgres:///db"},
 		},
 		{
 			name: "postgres_host_set_accepted",
@@ -3048,16 +3057,17 @@ func TestApplyDatabasePoolDefaultsRefusesEmptyPostgresHost(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := tt.cfg
-			original := cfg
 
 			err := ApplyDatabasePoolDefaults(&cfg)
 
 			if tt.wantField == "" {
 				require.NoError(t, err)
-				assert.Equal(t, int32(25), cfg.Pool.Max.Connections, "an accepted config still gets its pool defaults")
+				assert.Equal(t, defaultPoolMaxConnections, cfg.Pool.Max.Connections,
+					"an accepted config still gets its pool defaults")
 				return
 			}
 
+			original := tt.cfg
 			var cfgErr *ConfigError
 			require.ErrorAs(t, err, &cfgErr)
 			assert.Equal(t, tt.wantField, cfgErr.Field)

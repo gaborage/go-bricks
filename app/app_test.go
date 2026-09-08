@@ -742,7 +742,7 @@ type stubTenantResource struct {
 
 func (s *stubTenantResource) DBConfig(context.Context, string) (*config.DatabaseConfig, error) {
 	s.dbCalls++
-	return &config.DatabaseConfig{Type: dbTypePostgres, Host: "localhost"}, nil
+	return &config.DatabaseConfig{Type: dbTypePostgres, Host: localHost}, nil
 }
 
 func (s *stubTenantResource) BrokerURL(context.Context, string) (string, error) {

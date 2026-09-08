@@ -177,6 +177,7 @@ const (
 	fieldMultitenantTenants = "multitenant.tenants"
 	fieldKeystoreKeys       = "keystore.keys"
 	fieldKeystoreMinLength  = "keystore.secretminlength"
+	fieldDatabaseHost       = "database.host"
 	fieldDatabasePort       = "database.port"
 	fieldDatabasePassword   = "database.password"
 	fieldMessaging          = "messaging"
