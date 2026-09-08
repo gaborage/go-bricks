@@ -85,14 +85,10 @@ encoding stamp — are set.
   `application/octet-stream` in `preparePublishing`. The typed handle
   answers from `Publisher[T].contentType()` — `application/jose` when the handle
   holds a sealer (ADR-097), `application/json` otherwise. The raw bytes path carries
-  nothing and so keeps octet-stream, and so does a relayed publish until the relay link
-  (#1562) lands: the shipper passes no `publishdoor.MessageProps` at all before it, so a
-  row IS `application/octet-stream` on the wire even where its enqueue-time stamp records
-  an encoding.
+  nothing and so keeps octet-stream, as does a relayed row whose payload the caller handed
+  over as `[]byte`, which records no encoding to claim.
 
 **The outbox records the encoding at enqueue, because the relay cannot recover it.**
-This mechanism is the relay link's (#1562); the first link (#1564) ships none of it, so
-`marshalPayload` there returns bytes alone and no row carries a stamp.
 `outbox/publisher.go`'s `marshalPayload` has three arms: a nil payload becomes the
 JSON literal `null`, a struct is `json.Marshal`ed, and a caller-supplied `[]byte` is
 returned **unexamined**. The persisted-sealed path (`Publisher[T].Seal` →
@@ -105,8 +101,7 @@ records which arm ran. So `marshalPayload` now also returns the encoding it prod
 that stamp in `Plan` (`outbox/amqp_shipper.go`, `outbox/stream_shipper.go`), exactly
 as they strip the tenant stamp, so it never reaches the wire; the AMQP lane reads it
 into `shipment.ContentType` and hands it to the publish door. A row carrying no stamp
-ships as octet-stream — as does every row before that link, since the shipper passes no
-properties at all then. A persisted-sealed or hand-marshaled event is therefore
+ships as octet-stream. A persisted-sealed or hand-marshaled event is therefore
 **under**-labelled rather than mislabelled, which is the direction that cannot break
 a consumer switching on the property.
 
@@ -165,9 +160,8 @@ a fleet — not what makes them trustworthy (see Consequences).
 - **A consumer switching on `content_type` sees new values.** Where every delivery
   used to read `application/octet-stream`, a typed publish now reads
   `application/json` (or `application/jose` when sealed); an outbox row reads
-  `application/json` or octet-stream depending on the arm that encoded it once the relay
-  link (#1562) lands, and octet-stream before it. A consumer that branches on the
-  property must handle all three.
+  `application/json` or octet-stream depending on the arm that encoded it. A consumer
+  that branches on the property must handle all three.
 - **A consumer relying on transient delivery loses that behaviour.** A deployment
   using non-persistence as an implicit TTL — messages evaporating with the broker —
   now keeps them across a restart of a DURABLE queue; a transient queue is itself
