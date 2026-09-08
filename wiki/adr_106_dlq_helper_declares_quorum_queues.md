@@ -20,6 +20,15 @@ the framework's whole reason for creating it (ADR-040: failed deliveries are nac
 without requeue, so an unparked message is gone) is retention across the failure that
 parked it — including the loss of the node the queue happens to live on.
 
+That is a claim about the queue, not about the hop into it. A quorum queue is
+replicated across nodes, so a message already IN it survives the loss of a node; the
+dead-letter hop from the primary to the DLX keeps RabbitMQ's default
+`dead-letter-strategy=at-most-once`, which re-publishes without internal confirms, so a
+message can still be lost in transit between the two queues on a target or node failure.
+Loss-resistant dead-lettering additionally needs `x-dead-letter-strategy=at-least-once`
+with `x-overflow=reject-publish` and the broker's `stream_queue` feature flag — a
+separate opt-in, tracked in #1568, that this decision does not make.
+
 ADR-040 already named the escape hatch and already named the target:
 `Args["x-queue-type"] = "quorum"` reaches the broker, and that ADR calls quorum
 "RabbitMQ's recommended production queue type". But the hatch is reachable only on a
@@ -49,8 +58,9 @@ queues the helper touches, and an empty value resolves to quorum.**
   parking queue — `DeadLetterSpec.ParkingQueue` when configured, the derived `<queue>.dlq`
   otherwise. A dead-letter route whose two halves have different
   durability guarantees is not a posture anyone asked for: the primary decides whether
-  the message survives to be parked, the parking queue decides whether it survives after
-  parking, and a single knob cannot express half a route. A caller who genuinely wants
+  the message survives long enough to be dead-lettered, the parking queue decides whether
+  it survives after parking, and a single knob cannot express half a route. Neither half
+  makes the HOP between them reliable — that is the at-most-once strategy above, #1568. A caller who genuinely wants
   the two sides to differ writes the odd side by hand through the passthrough below.
 - **An existing `x-queue-type` wins.** The helper sets `x-queue-type` only on a queue
   that does not already carry one. So the ADR-040 passthrough — a `NewQueue` registered

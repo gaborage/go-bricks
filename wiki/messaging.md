@@ -275,8 +275,11 @@ helper creates: the primary queue and the derived parking queue. An empty value 
 which is what a `nil` spec and a `&messaging.DeadLetterSpec{}` both mean — resolves
 to `messaging.QueueTypeQuorum`; `messaging.QueueTypeClassic` is honoured on both
 queues. One field covers both sides deliberately: the primary decides whether a
-failed message survives to be parked, the parking queue whether it survives after
-parking, and a route with one classic half is bounded by that half.
+failed message survives long enough to be dead-lettered, the parking queue whether it
+survives after parking, and a route with one classic half is bounded by that half.
+Neither half makes the HOP reliable: quorum replicates a queue's contents, but the
+dead-letter republish keeps RabbitMQ's default `at-most-once` strategy, so a message can
+still be lost between the two queues (at-least-once dead-lettering is #1568).
 
 ```go
 queue := decls.DeclareQueueWithDLQ("orders.queue", &messaging.DeadLetterSpec{
