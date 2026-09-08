@@ -105,7 +105,7 @@ func run(ctx context.Context, engine, baseRef string, th throttle, useCache bool
 	// A failed cleanup flips a clean verdict to failure — the gate's contract
 	// includes leaving the machine tidy — but never masks a real failure code.
 	defer func() {
-		if cleanErr := sb.cleanup(out); cleanErr != nil && code == 0 {
+		if cleanErr := sb.cleanup(); cleanErr != nil && code == 0 {
 			code = fail("sandbox cleanup: %v", cleanErr)
 		}
 	}()
