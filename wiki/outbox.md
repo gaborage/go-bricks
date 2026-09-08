@@ -24,7 +24,7 @@ it — a caller-supplied `[]byte`, the persisted-sealed shape included, ships as
 `application/octet-stream` because nothing in the row records its encoding (ADR-105). The
 label travels on the row as a reserved `x-gobricks-content-type` header the relay strips
 before the wire; nothing validates caller header keys, so a caller header spelled exactly
-that way is silently overwritten at enqueue and never delivered. Rows enqueued before the
+that way is silently dropped at enqueue and never delivered. Rows enqueued before the
 upgrade carry no such header, so a draining pre-upgrade backlog delivers the same event type
 under both labels.
 

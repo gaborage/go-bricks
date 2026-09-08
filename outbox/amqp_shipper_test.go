@@ -383,3 +383,29 @@ func TestOutboxShipperCarriesThePayloadContentType(t *testing.T) {
 		})
 	}
 }
+
+// TestOutboxShipperRefusesACallerMintedContentTypeStamp pins the reserved key against
+// the caller: the stamp is the framework's to set, and the opaque arm sets none, so a
+// caller header spelled the same way must be dropped at enqueue rather than persisted
+// and put on the wire as the content type it never earned.
+func TestOutboxShipperRefusesACallerMintedContentTypeStamp(t *testing.T) {
+	rows := publishedRows(context.Background(), t, &app.OutboxEvent{
+		EventType:   "order.created",
+		AggregateID: "A1",
+		Exchange:    "orders",
+		RoutingKey:  "created",
+		Payload:     []byte(`{"id":1}`),
+		Headers:     map[string]any{headerContentTypeStamp: "application/json", "keep": "me"},
+	})
+
+	stored, err := decodeHeaders(rows[0].Headers)
+	require.NoError(t, err)
+	assert.NotContains(t, stored, headerContentTypeStamp, "the caller's stamp is dropped at enqueue")
+	assert.Equal(t, "me", stored["keep"], "its other headers are untouched")
+
+	f := relayShipped(t, rows...)
+
+	require.NotNil(t, f.LastPublishOpts.Props)
+	assert.Empty(t, f.LastPublishOpts.Props.ContentType, "opaque bytes name no encoding")
+	assert.NotContains(t, f.LastPublishHdrs, headerContentTypeStamp)
+}

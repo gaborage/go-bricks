@@ -24,8 +24,9 @@ const (
 // persisted headers so the relay can set the AMQP content_type property
 // (ADR-105) without a schema change. The x-gobricks- namespace makes a caller
 // collision implausible, not impossible: nothing validates caller header keys,
-// so a caller header spelled exactly this way is overwritten at enqueue and
-// then stripped, and its value never reaches a consumer.
+// so a caller header spelled exactly this way is dropped at enqueue — before
+// the framework writes its own value, and whether or not there is one to write
+// — and its value never reaches a consumer.
 const headerContentTypeStamp = "x-gobricks-content-type"
 
 // takeFrameworkStamps removes the framework's own bookkeeping headers and
