@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -102,6 +103,50 @@ func TestValidateAppSuccess(t *testing.T) {
 			assert.NoError(t, err)
 		})
 	}
+}
+
+// TestCheckAppBoundsTheNameAtTheShortStrLimit pins the startup half of the
+// app_id hazard: app.name becomes the AMQP app_id shortstr on every publish, so
+// a name the content-header frame cannot carry must fail the boot instead of
+// tearing down the shared connection on the first publish.
+func TestCheckAppBoundsTheNameAtTheShortStrLimit(t *testing.T) {
+	atLimit := strings.Repeat("n", maxAppNameBytes)
+	overLimit := strings.Repeat("n", maxAppNameBytes+1)
+
+	base := func(name string) AppConfig {
+		return AppConfig{Name: name, Version: testAppVersion, Env: EnvDevelopment, Rate: RateConfig{Limit: 100}}
+	}
+
+	t.Run("name_at_the_limit_is_accepted", func(t *testing.T) {
+		cfg := base(atLimit)
+
+		assert.NoError(t, checkApp(&cfg))
+	})
+
+	// The bound counts BYTES, not characters: a name well under any character
+	// count can still be a frame the broker refuses.
+	t.Run("multibyte_name_under_255_characters_but_over_255_bytes_is_rejected", func(t *testing.T) {
+		multibyte := strings.Repeat("ñ", maxAppNameBytes/2+1)
+		cfg := base(multibyte)
+
+		err := checkApp(&cfg)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "app.name")
+		assert.Less(t, len([]rune(multibyte)), maxAppNameBytes, "the name is short in characters")
+		assert.NotContains(t, err.Error(), multibyte, "the error reports the size, never the value")
+	})
+
+	t.Run("name_one_byte_over_the_limit_is_rejected", func(t *testing.T) {
+		cfg := base(overLimit)
+
+		err := checkApp(&cfg)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "app.name")
+		assert.Contains(t, err.Error(), "256 bytes")
+		assert.NotContains(t, err.Error(), overLimit, "the error reports the size, never the value")
+	})
 }
 
 func TestValidateAppFailures(t *testing.T) {

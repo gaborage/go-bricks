@@ -17,6 +17,11 @@ import (
 // from Options, providing default implementations when not specified.
 type FactoryResolver struct {
 	opts *Options
+	// appName is the app.name config value clients built by the default messaging
+	// factory stamp as the AMQP app_id property on every publish (ADR-105). It rides
+	// the resolver rather than MessagingClientFactoryOptions so that struct stays
+	// small enough to pass by value.
+	appName string
 }
 
 // NewFactoryResolver creates a new factory resolver with the given options.
@@ -24,6 +29,14 @@ func NewFactoryResolver(opts *Options) *FactoryResolver {
 	return &FactoryResolver{
 		opts: opts,
 	}
+}
+
+// newFactoryResolverForConfig builds the resolver bootstrap uses: the exported
+// constructor plus the config-sourced fields that never belonged on Options.
+func newFactoryResolverForConfig(opts *Options, cfg *config.Config) *FactoryResolver {
+	r := NewFactoryResolver(opts)
+	r.appName = cfg.App.Name
+	return r
 }
 
 // DatabaseConnector returns the appropriate database connector function.
@@ -76,9 +89,12 @@ func (f *FactoryResolver) MessagingClientFactory(connectionTimeout time.Duration
 //
 // Same custom-factory precedence as MessagingClientFactory: if
 // Options.MessagingClientFactory is set it owns construction and receives only
-// (url, log) — NO field of opts applies to it, so all messaging.reconnect.*
-// config (timeouts, attempts, and the four reconnect delays) is bypassed and
-// custom-built clients keep the hardcoded client defaults.
+// (url, log) — NO field of opts applies to it, so none of the messaging.reconnect.*
+// config (timeouts, attempts, and the four reconnect delays) reaches it. Such a
+// factory owns construction outright: whatever timeouts, retry bound, reconnect
+// delays and app id its client ends up with are the factory's own, not the
+// framework's. In particular it never reaches WithAppName, so its clients publish
+// no app_id unless the factory sets one itself.
 func (f *FactoryResolver) MessagingClientFactoryWithOptions(opts MessagingClientFactoryOptions) messaging.ClientFactory {
 	if f.opts != nil && f.opts.MessagingClientFactory != nil {
 		return func(url string, log logger.Logger) messaging.AMQPClient {
@@ -96,6 +112,7 @@ func (f *FactoryResolver) MessagingClientFactoryWithOptions(opts MessagingClient
 			messaging.WithReconnectMaxDelay(opts.ReconnectMaxDelay),
 			messaging.WithReinitDelay(opts.ReinitDelay),
 			messaging.WithResendDelay(opts.ResendDelay),
+			messaging.WithAppName(f.appName),
 		)
 	}
 }

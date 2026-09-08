@@ -56,6 +56,7 @@ func newManagerConfigBuilderFromConfig(cfg *config.Config) *ManagerConfigBuilder
 	configBuilder.reconnectMaxDelay = cfg.Messaging.Reconnect.MaxDelay
 	configBuilder.reInitDelay = cfg.Messaging.Reconnect.ReinitDelay
 	configBuilder.resendDelay = cfg.Messaging.Reconnect.ResendDelay
+	configBuilder.appName = cfg.App.Name
 	configBuilder.tenantStamps = cfg.Multitenant.Enabled && cfg.Messaging.Tenancy == config.TenancyShared
 	configBuilder.publisherConfig = cfg.Messaging.Publisher
 	configBuilder.cacheConfig = cfg.Cache.Manager
@@ -97,7 +98,7 @@ func closeManagersOnDependencyError(dbManager *database.DbManager, messagingMana
 // whichever of the two already exist before aborting startup — no bundle exists yet, so
 // Builder.closeBundleManagers cannot reach them (see closeManagersOnDependencyError).
 func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBundle, error) {
-	resolver := NewFactoryResolver(b.opts)
+	resolver := newFactoryResolverForConfig(b.opts, b.cfg)
 	configBuilder := newManagerConfigBuilderFromConfig(b.cfg)
 	factory := NewResourceManagerFactory(resolver, configBuilder, b.log)
 

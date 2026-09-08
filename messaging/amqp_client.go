@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	rawbackoff "github.com/gaborage/go-bricks/internal/backoff"
+	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 	"github.com/gaborage/go-bricks/observability"
@@ -103,6 +104,11 @@ type AMQPClientImpl struct {
 	// deadline. Zero or negative means unbounded — the Go zero value, so
 	// struct-literal test clients that don't set it keep the historical behavior.
 	publishTimeout time.Duration
+	// appID is the app.name config value, stamped as AMQP app_id on every
+	// publish (ADR-105). It reaches the client through WithAppName; a client a
+	// consumer's own MessagingClientFactory built never receives it, and an
+	// empty appID stamps no app_id rather than a placeholder.
+	appID string
 }
 
 // publishSlot is a one-place semaphore serializing the publish handshake. It
@@ -311,6 +317,15 @@ func WithResendDelay(d time.Duration) ClientOption {
 	}
 }
 
+// WithAppName sets the application identity the client stamps as the AMQP
+// app_id property on every publish (ADR-105). The framework passes app.name
+// here; a client built without it publishes with no app_id.
+func WithAppName(name string) ClientOption {
+	return func(c *AMQPClientImpl) {
+		c.appID = name
+	}
+}
+
 // NewAMQPClient creates a new AMQP client instance.
 // It automatically attempts to connect to the broker and handles reconnections.
 // Optional Option values (e.g. WithConnectionTimeout) override the defaults.
@@ -384,12 +399,29 @@ func createPublishSpan(ctx context.Context, options publishOptions, dataLen int,
 	return ctx, span
 }
 
-// preparePublishing creates an AMQP publishing message with headers, trace context, and message IDs.
-func preparePublishing(ctx context.Context, options publishOptions, data []byte) amqp.Publishing {
+// preparePublishing creates an AMQP publishing message: the properties the framework
+// writes on every publish (ADR-105), the headers, the trace context, and the message ids.
+func (c *AMQPClientImpl) preparePublishing(ctx context.Context, options publishOptions, data []byte) amqp.Publishing {
+	var props publishdoor.MessageProps
+	if options.props != nil {
+		props = *options.props
+	}
+	contentType := props.ContentType
+	if contentType == "" {
+		contentType = contentTypeOctetStream
+	}
 	publishing := amqp.Publishing{
-		ContentType: contentTypeOctetStream,
-		Body:        data,
-		Headers:     amqp.Table{},
+		// Persistent on every publish: a transient business message is lost on
+		// a broker restart, which the standard (NKH1 §6.2) does not allow and
+		// no caller could previously ask for (ADR-105).
+		DeliveryMode: amqp.Persistent,
+		ContentType:  contentType,
+		AppId:        c.appID,
+		Timestamp:    time.Now(),
+		Type:         props.EventType,
+		MessageId:    props.MessageID,
+		Body:         data,
+		Headers:      amqp.Table{},
 	}
 
 	if options.Headers != nil {
@@ -434,7 +466,9 @@ func preparePublishing(ctx context.Context, options publishOptions, data []byte)
 // a cold client. It returns the span for the caller to end and the instant the
 // broker attempt actually begins.
 //
-// The destination check comes before ANYTHING else. A field the frame cannot
+// The destination check comes before ANYTHING else, and covers the properties
+// on the content-header frame as well as the destination itself
+// (validatePublishOptions). A field the frame cannot
 // carry is unwritable whatever the broker's state, so retrying it only re-tears
 // the connection every publisher shares, and the value must not reach the span
 // attribute or the publish metrics on its way out (#1123).
@@ -456,7 +490,7 @@ func preparePublishing(ctx context.Context, options publishOptions, data []byte)
 func (c *AMQPClientImpl) publishPrologue(
 	ctx context.Context, options publishOptions, dataLen int,
 ) (spanCtx context.Context, span trace.Span, publishStart time.Time, err error) {
-	if err := ValidatePublishDestination(options.Exchange, options.RoutingKey, options.Headers); err != nil {
+	if err := validatePublishOptions(c.appID, options); err != nil {
 		return ctx, nil, time.Time{}, err
 	}
 
@@ -585,7 +619,7 @@ func (c *AMQPClientImpl) publishBytes(ctx context.Context, options publishOption
 	// same one on the wire and in the delivery-identity log fallback (#1546).
 	// Every attempt therefore also shares one Headers map; amqp091 only
 	// serializes it, and nothing below this line writes to it.
-	publishing := preparePublishing(ctx, options, data)
+	publishing := c.preparePublishing(ctx, options, data)
 
 	retryCount := 0
 	// lastCause records why the most recent attempt failed (the raw publish error,

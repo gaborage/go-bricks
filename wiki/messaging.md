@@ -57,6 +57,35 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 - Publishers: `Mandatory: false`, `Immediate: false`
 - Consumers: `AutoAck: false`, `Exclusive: false`, `NoLocal: false`
 
+**Wire properties are the framework's, not the caller's** (ADR-105): every AMQP 0-9-1 publish carries
+`delivery_mode: 2` (persistent, no opt-out), `app_id` from `app.name` on a client the
+framework's own factory built — a consumer-supplied `MessagingClientFactory` receives
+neither that name nor any other option, so its clients publish an empty `app_id` unless the
+factory calls `messaging.WithAppName` itself, and so does the DEFAULT factory from a
+`NewFactoryResolver` a caller built itself, since that exported constructor sets no app
+name. It also carries a framework-minted `message_id` and a `timestamp`, both produced once
+per logical publish and re-sent unchanged by every retry attempt of it, and a `type` — from
+the declared `EventType` on a typed publish, from the ledger row's event type on a relayed
+one once the relay link lands, and absent on the raw bytes door, which declares no event
+type. Then a `content_type` the handle actually knows — `application/json`, `application/jose` when the handle seals the
+event, or `application/octet-stream` for an outbox row whose `Payload` the caller handed over
+as `[]byte`, which persists untyped. An outbox-relayed publish is the one exception to the
+minted id: it carries the
+ledger row's own id instead, once the relay link lands. The streams lane
+is untouched: it sets no message properties of its own, and an outbox-relayed publish keeps
+the properties it had until the relay link lands — it is the second half of this change
+(see `[C64.10]`'s scope), so until then a relayed row still ships octet-stream, no `type`,
+and a generated `message_id`.
+
+`app_id` is unauthenticated provenance metadata — read it for tracing, dashboards and triage,
+never as an authorization, routing-trust or identity input: any publisher on the bus can stamp
+any string, and `user_id`, which the framework does not set, is the only field RabbitMQ
+validates against the connection's authenticated user. Because it travels as an AMQP shortstr,
+`app.name` is bounded at 255 bytes and a longer value fails config validation at startup; a
+client you build yourself with `messaging.WithAppName` is judged per publish instead, and an
+over-long value is refused with `messaging.ErrInvalidPublishDestination` rather than reaching
+the frame.
+
 RabbitMQ 4.3.0 denies `transient_nonexcl_queues` by default: a queue declared with both `Durable: false` and `Exclusive: false` gets the connection closed with a 541 instead of the queue created. The helpers above are unaffected — `NewQueue` defaults to `Durable: true` — but a hand-built `QueueDeclaration` using that transient shape needs the broker configured with `deprecated_features.permit.transient_nonexcl_queues = true`, which is what GoBricks' own RabbitMQ test container sets.
 
 **Key Helpers:** `DeclareTopicExchange()`, `DeclareQueue()`, `DeclareBinding()`, `DeclareTypedPublisher[T]()`, `DeclareConsumer()`

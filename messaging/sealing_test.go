@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/messaging/internal/sealruntime"
 	"github.com/gaborage/go-bricks/messaging/internal/tenantstamp"
 	"github.com/gaborage/go-bricks/multitenant"
@@ -509,4 +510,26 @@ func (c *capturingClient) publishBytes(_ context.Context, options publishOptions
 	c.opts = append(c.opts, options)
 	c.data = append(c.data, data)
 	return nil
+}
+
+// TestSealedPublishClaimsJOSEContentType pins that a seal-tagged event's wire
+// content type names what it is — a compact JWS — and never application/json
+// (ADR-105). The plain arm lives in typed_publisher_test.go.
+func TestSealedPublishClaimsJOSEContentType(t *testing.T) {
+	sealruntime.Reset()
+	t.Cleanup(sealruntime.Reset)
+	sealruntime.Register(&fakeCodec{sealer: &fakeSealer{out: []byte("eyJ.sealed.bytes")}})
+	sealruntime.Configure(&sealruntime.Runtime{KeyStore: stubKeyStore{}})
+
+	decls := newSealingDecls()
+	h := DeclareTypedPublisher[sealedEvent](decls, sealedOpts())
+	require.NoError(t, decls.Validate())
+
+	client := &capturingClient{}
+	require.NoError(t, h.Publish(context.Background(), client, sealedEvent{}))
+
+	require.Len(t, client.opts, 1)
+	require.NotNil(t, client.opts[0].props)
+	assert.Equal(t, publishdoor.ContentTypeJOSE, client.opts[0].props.ContentType)
+	assert.Equal(t, "payment.authorized", client.opts[0].props.EventType)
 }
