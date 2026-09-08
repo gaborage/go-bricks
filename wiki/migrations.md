@@ -7315,7 +7315,8 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
 
 - detect: `git grep -n 'DeclareQueueWithDLQ(' -- '*.go'` over your own modules. EVERY call
   site is in the population unless it already sets the queue type: the helper registers the
-  primary queue plus a derived `<queue>.dlq` parking queue, and both now resolve to a QUORUM
+  primary queue plus its parking queue (`DeadLetterSpec.ParkingQueue` when configured, the
+  derived `<queue>.dlq` otherwise), and both now resolve to a QUORUM
   queue where they used to take whatever queue type the broker defaults to for the vhost. A
   `nil` spec and a `&messaging.DeadLetterSpec{}` are both empty and both resolve to quorum. A
   call site is OUT of the population only where an `x-queue-type` is already set on that
@@ -7328,8 +7329,9 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   route with a custom parking name is missed by a `.dlq` grep and fails just the same. A queue the
   broker reports as `classic` is the population.
 - scope: `messaging.DeadLetterSpec` gains `QueueType string`, applied as the `x-queue-type`
-  argument to BOTH queues `DeclareQueueWithDLQ` creates — the primary queue and the derived
-  `<queue>.dlq` parking queue. An empty value resolves to `messaging.QueueTypeQuorum`; an
+  argument to BOTH queues `DeclareQueueWithDLQ` creates — the primary queue and its parking
+  queue, `ParkingQueue` when configured and the derived `<queue>.dlq` otherwise. An empty value
+  resolves to `messaging.QueueTypeQuorum`; an
   explicit `messaging.QueueTypeClassic` is honoured on both queues; an unknown value is a
   declaration-time validation error rather than a passthrough to the broker. The helper sets
   `x-queue-type` only on a queue that does not already carry one, so a value set through
@@ -7351,14 +7353,19 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   messaging.QueueTypeClassic})` — which declares both queues classic as before and is the
   no-downtime path. To adopt quorum, drain and DELETE both queues (or migrate their contents to
   new names and repoint the publishers) before starting the new version, since neither can be
-  converted in place: a parked message left in the deleted `.dlq` is GONE, so triage the parking
-  queue first. Set the type on every call site you own — the field is per call, and a spec that
+  converted in place: a parked message left in the deleted parking queue is GONE, so triage it
+  first. A parking queue can be SHARED — nothing stops several specs naming the same
+  `ParkingQueue`, and the helper registers ONE parking->DLX binding for the set — so before
+  deleting one, inventory every route resolving to that same name and treat them as one
+  topology: deleting it for a single route discards the others' parked messages and leaves
+  their declarations pointing at a queue that no longer exists. Set the type on every call site you own — the field is per call, and a spec that
   overrides only `Exchange`/`ParkingQueue`/`RoutingKey` still leaves `QueueType` empty and so
   still resolves to quorum.
 - verify: `go build ./... && go test ./...`  # then boot the service and confirm startup is
   green rather than failing with `PRECONDITION_FAILED`, and confirm each queue's type is the
   one you chose: `rabbitmqctl list_queues name type` reports `quorum` for both the primary and
-  its `<queue>.dlq` on the adopting path, `classic` for both where you set
+  its effective parking queue — `DeadLetterSpec.ParkingQueue` when the call site configures one,
+  `<queue>.dlq` otherwise — on the adopting path, `classic` for both where you set
   `messaging.QueueTypeClassic`
 - ref: gaborage/go-bricks#1548 · [ADR-106](adr_106_dlq_helper_declares_quorum_queues.md) ·
   [ADR-040](adr_040_declaration_args_passthrough.md) (the `Args["x-queue-type"]` passthrough

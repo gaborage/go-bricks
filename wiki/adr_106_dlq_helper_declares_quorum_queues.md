@@ -46,7 +46,8 @@ queues the helper touches, and an empty value resolves to quorum.**
   This is the breaking part of the change: it moves the queue type of the primary queue
   AND of the parking queue for every existing caller of `DeclareQueueWithDLQ`.
 - **One field, both queues.** The value applies to the primary queue and to the derived
-  `<queue>.dlq` parking queue. A dead-letter route whose two halves have different
+  parking queue — `DeadLetterSpec.ParkingQueue` when configured, the derived `<queue>.dlq`
+  otherwise. A dead-letter route whose two halves have different
   durability guarantees is not a posture anyone asked for: the primary decides whether
   the message survives to be parked, the parking queue decides whether it survives after
   parking, and a single knob cannot express half a route. A caller who genuinely wants
@@ -125,7 +126,8 @@ by the weaker half while reading as the stronger one.
   classic parking queue — `DeadLetterSpec.ParkingQueue` when set, else `<queue>.dlq` — and an
   existing classic PRIMARY queue cannot be redeclared
   as quorum: the broker refuses with `PRECONDITION_FAILED` and startup fails. The
-  population is every deployment that already has a `.dlq` declared by this helper. The
+  population is every deployment that already has a parking queue declared by this helper,
+  whatever its name. The
   remedy is either `QueueType: messaging.QueueTypeClassic`, which keeps today's topology
   exactly, or deleting/migrating the queues. Tracked as migrations atom **[C64.12]**.
 - **Nothing in a consumer's build flags this.** `DeadLetterSpec` gains a field; every
