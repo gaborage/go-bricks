@@ -18,6 +18,19 @@ GoBricks provides a built-in **Transactional Outbox** for reliable event publish
 
 **Delivery Guarantee:** At-least-once. Consumers MUST be idempotent. Use the `x-outbox-event-id` header for deduplication.
 
+On the AMQP lane a relayed publish also mirrors that header onto the `message_id` property and
+the row's event type onto `type` — the stream lane sets no message properties at all — and labels the body `application/json` only when the outbox marshaled
+it — a caller-supplied `[]byte`, the persisted-sealed shape included, persists UNTYPED,
+because bytes handed over already carry no encoding stamp (ADR-105). On the AMQP lane an
+untyped row ships as `application/octet-stream`; on the stream lane it carries no
+content-type property at all, since that lane sets none. So hand `Payload` the event VALUE
+and let the outbox marshal it. The label travels on the row as a reserved `x-gobricks-content-type` header the relay strips
+before the wire; the whole `x-gobricks-` prefix is the framework's, so a caller header claiming
+it is refused at enqueue with `outbox.ErrReservedHeaderPrefix` — case-insensitively, and naming
+the offending key — rather than dropped. Rows enqueued before the
+upgrade carry no such header, so a draining pre-upgrade backlog delivers the same event type
+under both labels.
+
 **Module Setup:**
 
 ```go
@@ -56,12 +69,13 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
     if err != nil { return fmt.Errorf("insert order: %w", err) }
 
     // 2. Write event to outbox (SAME transaction — atomic!)
-    payload, _ := json.Marshal(OrderCreatedEvent{OrderID: req.ID})
+    // Hand over the VALUE, not pre-marshaled bytes: the outbox marshals it and
+    // records application/json for the relay to put on the wire (ADR-105).
     _, err = s.outbox.Publish(ctx, tx, &app.OutboxEvent{
         EventType:   "order.created",
         AggregateID: fmt.Sprintf("order-%d", req.ID),
-        Payload:     payload,
-        Exchange:    "order.events",
+        Payload:     OrderCreatedEvent{OrderID: req.ID},
+        Exchange:    "orders.events",
     })
     if err != nil { return fmt.Errorf("outbox publish: %w", err) }
 
@@ -72,9 +86,9 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
 
 **How It Works:**
 
-1. `Publish()` writes an `OutboxRecord` to the outbox table within the caller's transaction, refusing an exchange, routing key (or the `EventType` an empty one falls back to) or header key past the AMQP shortstr limit (255 bytes) before the INSERT — a destination the broker can never accept is rejected at its source
+1. `Publish()` writes an `OutboxRecord` to the outbox table within the caller's transaction, refusing — on an AMQP row, since a stream row's event type rides no shortstr — an exchange, routing key, `EventType` (the fallback for an empty routing key, so an over-long one fails as the routing key as well as on its own account) or header key past the AMQP shortstr limit (255 bytes) before the INSERT — a destination the broker can never accept is rejected at its source
 2. The **relay job** (`outbox-relay` via scheduler) polls for pending events every `pollinterval`
-3. Each pending event is published to the target AMQP exchange with `x-outbox-event-id` header
+3. Each pending event is published to its target destination — the AMQP exchange on the AMQP lane, the super stream on the stream lane — with the `x-outbox-event-id` header, which the relay stamps on both lanes
 4. Successfully published events are marked as `published`
 5. Failed events have their `retry_count` advanced and stay `pending` for the next cycle — on **every** failed attempt, including while the broker is unavailable; only a **poison** event — one of the classes listed under [Retry & Dead-Lettering](#retry--dead-lettering) below — is parked once `retry_count` reaches `maxretries`
 6. The **cleanup job** (`outbox-cleanup`) removes published events older than `retentionperiod`
@@ -253,9 +267,14 @@ _, err := s.outbox.Publish(ctx, tx, &app.OutboxEvent{
 })
 ```
 
-Three refusals happen at `Publish`, where the developer sees them rather than as poison rows
-cycles later: naming a stream beside an exchange or routing key, naming a stream absent from
-`outbox.superstreams`, and publishing a stream target with no tenant in context.
+These refusals happen at `Publish`, where the developer sees them rather than as poison rows
+cycles later: an empty `EventType` or `AggregateID`, a caller header claiming the reserved
+`x-gobricks-` prefix, naming a stream beside an exchange or routing key, naming a stream
+absent from `outbox.superstreams`, publishing a stream target with no tenant in context, and
+an AMQP destination, header KEY or event type past the 255-byte shortstr limit. A nil
+transaction or event is refused first, and a payload or header that will not marshal after
+that. The list is the ones worth designing around rather than a closed set — read
+`validateEvent` and `resolveAMQPDestination` for the current whole.
 
 **Ordering.** Rows drain in `seq` order — a per-ledger sequence the database assigns at insert
 — and one relay instance per ledger drains at a time, holding the ledger's `<table>_leader`
@@ -538,7 +557,7 @@ inbox:
        }
        _, err := deps.Outbox.Publish(ctx, tx, &app.OutboxEvent{
            EventType: "order.created", AggregateID: "order-123",
-           Payload: payload, Exchange: "order.events",
+           Payload: payload, Exchange: "orders.events",
        })
        return err
    })

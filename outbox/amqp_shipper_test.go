@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/app"
+	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/multitenant"
@@ -122,7 +123,10 @@ func TestAMQPShipperShipsTheRecordToItsDestination(t *testing.T) {
 	assert.Equal(t, shipDelivered, v.Kind)
 	require.NoError(t, v.Err)
 	require.Equal(t, 1, f.PublishCalls)
-	assert.Equal(t, publishdoor.Options{Exchange: "orders", RoutingKey: "created", Headers: ship.Headers}, f.LastPublishOpts)
+	assert.Equal(t, publishdoor.Options{
+		Exchange: "orders", RoutingKey: "created", Headers: ship.Headers,
+		Props: &publishdoor.MessageProps{MessageID: "evt-1"},
+	}, f.LastPublishOpts)
 	assert.Equal(t, []byte(`{"id":1}`), f.LastPublishData)
 }
 
@@ -300,4 +304,153 @@ func TestLaneKeysNeverCollideAcrossLanes(t *testing.T) {
 	assert.Equal(t, amqpStamped,
 		plan(amqpLane, Record{Exchange: "other", RoutingKey: "shipped"}, stamped()),
 		"same scope still collapses to one key, which is what parking depends on")
+}
+
+// relayShipped drains one relay cycle over rows the ledger holds through the production
+// AMQP adapter, and returns what reached the door. The whole path is exercised — the
+// relay's own header injection included — because the properties must MIRROR those
+// headers, which a hand-built shipment could not show.
+func relayShipped(t *testing.T, rows ...Record) *fakeAMQP {
+	t.Helper()
+	f := newFakeAMQP()
+	store := &fakeStore{FetchPendingResult: rows}
+	r := newRelayWithShippers(store, map[string]shipper{LaneAMQP: newAMQPShipperWithFake(f)})
+
+	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+	require.Equal(t, len(rows), f.PublishCalls)
+	return f
+}
+
+// TestOutboxShipperCarriesTheEventProperties pins ADR-105 on the AMQP lane: the row's id
+// and event type reach the door as message properties AND stay in the headers, since the
+// id header is the ledger key consumers dedupe on (ADR-097).
+func TestOutboxShipperCarriesTheEventProperties(t *testing.T) {
+	rows := publishedRows(context.Background(), t, &app.OutboxEvent{
+		EventType:   "order.created",
+		AggregateID: "A1",
+		Exchange:    "orders",
+		RoutingKey:  "created",
+		Payload:     map[string]any{"id": 1},
+	})
+
+	f := relayShipped(t, rows...)
+
+	require.NotNil(t, f.LastPublishOpts.Props)
+	assert.Equal(t, rows[0].ID, f.LastPublishOpts.Props.MessageID)
+	assert.Equal(t, "order.created", f.LastPublishOpts.Props.EventType)
+	assert.Equal(t, rows[0].ID, f.LastPublishHdrs[HeaderEventID],
+		"the properties mirror the headers, they do not replace them")
+	assert.Equal(t, "order.created", f.LastPublishHdrs[HeaderEventType])
+}
+
+// TestOutboxShipperCarriesThePayloadContentType pins that the encoding resolved at enqueue
+// travels in the persisted headers and leaves them again as a property: caller bytes are
+// opaque and are never sniffed, so they name no encoding at all.
+func TestOutboxShipperCarriesThePayloadContentType(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload any
+		want    string
+	}{
+		{name: "marshaled_struct_is_json", payload: map[string]any{"id": 1}, want: "application/json"},
+		{name: "nil_payload_is_the_json_literal_null", payload: nil, want: "application/json"},
+		{name: "caller_supplied_bytes_are_opaque", payload: []byte(`{"id":1}`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows := publishedRows(context.Background(), t, &app.OutboxEvent{
+				EventType:   "order.created",
+				AggregateID: "A1",
+				Exchange:    "orders",
+				RoutingKey:  "created",
+				Payload:     tt.payload,
+			})
+			stored, err := decodeHeaders(rows[0].Headers)
+			require.NoError(t, err)
+			if tt.want == "" {
+				assert.Nil(t, rows[0].Headers, "opaque bytes leave nothing to persist")
+			} else {
+				assert.Equal(t, tt.want, stored[headerContentTypeStamp], "the enqueue side records it")
+			}
+
+			f := relayShipped(t, rows...)
+
+			require.NotNil(t, f.LastPublishOpts.Props)
+			assert.Equal(t, tt.want, f.LastPublishOpts.Props.ContentType)
+			assert.NotContains(t, f.LastPublishHdrs, headerContentTypeStamp,
+				"the stamp is the framework's bookkeeping and must not reach the wire")
+		})
+	}
+}
+
+// TestOutboxShipperStripsAPreUpgradeCallerStamp covers the rows the enqueue refusal
+// cannot reach: one persisted before Publish began refusing the reserved prefix still
+// carries a caller-spelled stamp, and the relay's strip is all that keeps it off the wire.
+// The casing arms matter because the refusal is case-folded while the ledger is not: a row
+// written before it could spell the prefix any way at all.
+func TestOutboxShipperStripsAPreUpgradeCallerStamp(t *testing.T) {
+	tests := map[string]struct {
+		headers string
+		stamped string
+	}{
+		"canonical_spelling":  {headers: `{"x-gobricks-content-type":"application/json","keep":"me"}`, stamped: headerContentTypeStamp},
+		"mixed_case_spelling": {headers: `{"X-GoBricks-Content-Type":"application/json","keep":"me"}`, stamped: "X-GoBricks-Content-Type"},
+		"upper_case_prefix":   {headers: `{"X-GOBRICKS-ANYTHING":"whatever","keep":"me"}`, stamped: "X-GOBRICKS-ANYTHING"},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			row := Record{
+				ID:          "11111111-2222-4333-8444-555555555555",
+				EventType:   "order.created",
+				AggregateID: "A1",
+				Payload:     []byte(`{"id":1}`),
+				Headers:     []byte(tt.headers),
+				Exchange:    "orders",
+				RoutingKey:  "created",
+				Lane:        LaneAMQP,
+				Status:      StatusPending,
+			}
+
+			f := relayShipped(t, row)
+
+			assert.NotContains(t, f.LastPublishHdrs, tt.stamped,
+				"a header in the framework's namespace must not reach the wire whatever its casing")
+			assert.NotContains(t, f.LastPublishHdrs, headerContentTypeStamp)
+			assert.Equal(t, "me", f.LastPublishHdrs["keep"], "its other headers still travel")
+		})
+	}
+}
+
+// TestOutboxShipperReadsOnlyTheCanonicalContentTypeStamp pins the determinism the
+// case-insensitive strip could otherwise lose: a pre-upgrade row can carry BOTH the
+// framework's canonical stamp and a caller's other casing, and only the canonical one may
+// be read — matching case-insensitively would make the shipped content type depend on map
+// iteration order, and would let a caller's value in through the back door.
+func TestOutboxShipperReadsOnlyTheCanonicalContentTypeStamp(t *testing.T) {
+	row := Record{
+		ID:          "11111111-2222-4333-8444-555555555555",
+		EventType:   "order.created",
+		AggregateID: "A1",
+		Payload:     []byte(`{"id":1}`),
+		Headers:     []byte(`{"x-gobricks-content-type":"application/json","X-GoBricks-Content-Type":"application/xml","keep":"me"}`),
+		Exchange:    "orders",
+		RoutingKey:  "created",
+		Lane:        LaneAMQP,
+		Status:      StatusPending,
+	}
+
+	// Repeated because the defect it guards was order-dependent: one pass could pick the
+	// canonical value by luck.
+	for range 20 {
+		f := relayShipped(t, row)
+
+		require.NotNil(t, f.LastPublishOpts.Props)
+		assert.Equal(t, "application/json", f.LastPublishOpts.Props.ContentType,
+			"the canonical stamp wins over any caller casing, every time")
+		assert.NotContains(t, f.LastPublishHdrs, headerContentTypeStamp)
+		assert.NotContains(t, f.LastPublishHdrs, "X-GoBricks-Content-Type")
+		assert.Equal(t, "me", f.LastPublishHdrs["keep"])
+	}
 }

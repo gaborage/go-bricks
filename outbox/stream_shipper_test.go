@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams"
 )
@@ -68,6 +69,21 @@ func TestStreamShipperPlansTheStreamAsItsDownScope(t *testing.T) {
 	assert.Equal(t, "customers", ship.Scope, "one stalled super stream holds back only its own rows")
 	assert.Equal(t, "acme", ship.Stamp, "a stream row keeps its tenant in the partition key, never in its headers")
 	assert.NotContains(t, ship.Headers, messaging.TenantStampHeader)
+}
+
+// TestStreamShipperStripsTheContentTypeStamp pins that the framework's own bookkeeping
+// (ADR-105) leaves the headers on this lane too, or a stream row would carry it as a
+// message property.
+func TestStreamShipperStripsTheContentTypeStamp(t *testing.T) {
+	pub := &fakeStreamPublisher{}
+	rec := streamRow()
+	headers := map[string]any{headerContentTypeStamp: publishdoor.ContentTypeJSON, "x-correlation-id": "abc"}
+
+	ship := streamShipperWith(pub).Plan(&rec, headers)
+
+	require.Empty(t, ship.Poison)
+	assert.NotContains(t, ship.Headers, headerContentTypeStamp)
+	assert.Equal(t, "abc", ship.Headers["x-correlation-id"], "a caller header is untouched")
 }
 
 // TestStreamShipperPlansWithNilHeaders pins the nil-safety the relay leans on when a row's

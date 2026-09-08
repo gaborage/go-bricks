@@ -66,16 +66,13 @@ factory calls `messaging.WithAppName` itself, and so does the DEFAULT factory fr
 name. It also carries a framework-minted `message_id` and a `timestamp`, both produced once
 per logical publish and re-sent unchanged by every retry attempt of it, and a `type` — from
 the declared `EventType` on a typed publish, from the ledger row's event type on a relayed
-one once the relay link lands, and absent on the raw bytes door, which declares no event
-type. Then a `content_type` the handle actually knows — `application/json`, `application/jose` when the handle seals the
+one, and absent on the raw bytes door, which declares no event type. Then a `content_type` the handle actually knows — `application/json`, `application/jose` when the handle seals the
 event, or `application/octet-stream` for an outbox row whose `Payload` the caller handed over
 as `[]byte`, which persists untyped. An outbox-relayed publish is the one exception to the
-minted id: it carries the
-ledger row's own id instead, once the relay link lands. The streams lane
-is untouched: it sets no message properties of its own, and an outbox-relayed publish keeps
-the properties it had until the relay link lands — it is the second half of this change
-(see `[C64.10]`'s scope), so until then a relayed row still ships octet-stream, no `type`,
-and a generated `message_id`.
+minted id: it carries the ledger row's own id instead. The streams lane
+is untouched in the sense that matters here: it sets no AMQP message properties of its own,
+its relay planning strips the framework's stamps like the AMQP lane's does, and it enforces
+no shortstr byte limit, because nothing it publishes rides a shortstr.
 
 `app_id` is unauthenticated provenance metadata — read it for tracing, dashboards and triage,
 never as an authorization, routing-trust or identity input: any publisher on the bus can stamp
@@ -227,7 +224,7 @@ messaging.DeclareTypedConsumerWithMeta(decls, &messaging.ConsumerOptions{
 
 **Mixed-queue variant.** A queue that also carries directly-published messages may have deliveries you want processed without dedup. A delivery with no stamp still has a ledger key whenever it carries a `message_id`, so an absent header does not imply an absent key — this path is for the deliveries you have decided to process undeduped, not for every unstamped one. Let a demonstrably ABSENT header through — `if _, present := meta.Headers()[messaging.HeaderEventID]; !present { return process(ctx, evt) }` placed BEFORE the `DedupKey` call — processed without dedup, so that handler must be idempotent on its own. Keep the `err != nil` branch as is, for the reason given above. An outbox-only queue keeps the fail-closed default above.
 
-**Headers are publisher-controlled.** AMQP headers come from whoever published the message, so on a queue fed by an exchange outside this service `meta.Headers()` is caller-supplied input — reading it is identification, not authorization. In the dedup shape above the publisher therefore picks the ledger key: replaying a known `x-outbox-event-id` makes `ProcessOnce` skip the handler and ACK (a silent drop), and novel ids each cost a ledger row until retention sweeps them. Dropping the stamp is not a third lever, because it is not an opt-out. Three outcomes, not two: no stamp plus a grammar-conforming `message_id` DEDUPS on that property; a malformed chosen source — a present-but-spoiled stamp, or a property outside the grammar — returns `ErrInvalidEventID`; neither present returns the same error. That error is a rejection, which is why the example returns it rather than processing, and why the mixed-queue variant is the deliberate opt-in. A publisher that sets `message_id` picks the ledger key as surely as one that sets the header, and AMQP obliges nobody to make it unique, so a producer reusing one across distinct events has those events skipped as duplicates. Broker-side publish authorization is what bounds all three.
+**Headers are publisher-controlled.** AMQP headers come from whoever published the message, so on a queue fed by an exchange outside this service `meta.Headers()` is caller-supplied input — reading it is identification, not authorization. In the dedup shape above the publisher therefore picks the ledger key: replaying a known `x-outbox-event-id` makes `ProcessOnce` skip the handler and ACK (a silent drop), and novel ids each cost a ledger row until retention sweeps them. Dropping the stamp is not a third lever, because it is not an opt-out. Three outcomes, not two: no stamp plus a grammar-conforming `message_id` DEDUPS on that property; a malformed chosen source — a present-but-spoiled stamp, or a property outside the grammar — returns `ErrInvalidEventID`; neither present returns the same error. That error is a rejection, which is why the example returns it rather than processing, and why the mixed-queue variant is the deliberate opt-in. A publisher that sets `message_id` picks the ledger key as surely as one that sets the header, and AMQP obliges nobody to make it unique, so a producer reusing one across distinct events has those events skipped as duplicates — on the deliveries where the property is the SELECTED key, since a present stamp wins and a collision behind one changes nothing. Broker-side publish authorization is what bounds all three.
 
 **Concurrency.** One adapter instance serves every worker of the consumer and every tenant replaying the declarations. It holds no mutable state and allocates a fresh payload per delivery, so the concurrency rules below apply unchanged: the default is `NumCPU * 4` workers, and `Workers: 1` still buys sequential processing when ordering matters. Your `fn` must be safe for concurrent use.
 

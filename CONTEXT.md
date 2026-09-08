@@ -154,8 +154,7 @@ timeout
 The AMQP wire property (`message_id`) the framework stamps on every AMQP
 publish; a stream publish carries none. It is a framework-minted UUID, minted
 once per logical publish and reused by every retry attempt of it, except on an
-outbox-relayed publish once the relay stamps
-it, where it MIRRORS the event id — the row's own id, the same value as the
+outbox-relayed publish, where it MIRRORS the event id — the row's own id, the same value as the
 `x-outbox-event-id` header, and therefore stable across that row's retries. It is a wire
 property and only ever a FALLBACK ledger input: an inbox reads the `x-outbox-event-id` stamp
 wherever one is present, and composes a sealed message's identity into a **Dedup key**, which

@@ -60,27 +60,24 @@ encoding stamp — are set.
   production-unused state, so the test that pins the property brackets the call and
   asserts with `assert.WithinDuration` instead. The consumer surface gains no time
   knob either — this is not a `ClientOption`.
-- **`Type` is the event type** — the typed handle's declared `EventType`, and, with the
-  relay link (#1562), on a relayed publish the outbox row's `EventType`, which is the same
-  value as the `x-outbox-event-type` header. That header STAYS; the property mirrors it. The
-  raw bytes path declares no event type and so carries none, and until that link a relayed
-  publish carries none either.
+- **`Type` is the event type** — the typed handle's declared `EventType`, and on a relayed
+  publish the outbox row's `EventType`, which is the same value as the
+  `x-outbox-event-type` header. That header STAYS; the property mirrors it. The raw bytes
+  path declares no event type and so carries none.
 - **`MessageId` on a relayed publish is the outbox row id**, the same value as
   `x-outbox-event-id`, which also stays: it remains the ledger key consumers dedupe
   on (ADR-097), and nothing reads the property in preference to it. The HEADER is the
   stable identity; the PROPERTY is only as stable as what supplies it. Every other
   publish keeps a framework-minted UUID, and `preparePublishing` runs inside
   `publishBytes` ABOVE the retry loop (#1556 hoisted it there for #1546), so a publish
-  that supplies no id mints one UUID and every attempt of that publish re-sends it. At the
-  FIRST link
-  (#1564) the relay supplies no properties either, so a relayed publish is in that same
-  population until the relay link (#1562) lands; from then on its id comes from the row and is
-  stable across the row's retries. `Timestamp` is produced at that same seam and behaves the
-  same way: `preparePublishing` reads `time.Now()` once per logical publish, above the retry
-  loop since #1556, so it marks the moment the publish was called and every attempt re-sends
-  that instant rather than stamping its own. Dedupe on `x-outbox-event-id`: `Meta.DedupKey()`
-  reads the property only for a delivery carrying no stamp at all ([C64.11]), which a relayed
-  row never is.
+  that supplies no id mints one UUID and every attempt of that publish re-sends it. A relayed
+  publish takes its id from the ledger row instead, stable across that row's relay retries as
+  well. `Timestamp` is produced at that same seam and behaves the same way:
+  `preparePublishing` reads `time.Now()` once per logical publish, above the retry loop since
+  #1556, so it marks the moment the publish was called and every attempt re-sends that instant
+  rather than stamping its own. Dedupe on `x-outbox-event-id`: `Meta.DedupKey()` reads the
+  property only for a delivery carrying no stamp at all ([C64.11]), which a relayed row never
+  is.
 - **`ContentType` is claimed only where it is known.** The three doors carry it on the
   ONE field both option structs gained — `publishdoor.Options.Props` → the unexported
   `publishOptions.props`, a `*publishdoor.MessageProps` holding `ContentType`,
@@ -88,14 +85,10 @@ encoding stamp — are set.
   `application/octet-stream` in `preparePublishing`. The typed handle
   answers from `Publisher[T].contentType()` — `application/jose` when the handle
   holds a sealer (ADR-097), `application/json` otherwise. The raw bytes path carries
-  nothing and so keeps octet-stream, and so does a relayed publish until the relay link
-  (#1562) lands: the shipper passes no `publishdoor.MessageProps` at all before it, so a
-  row IS `application/octet-stream` on the wire even where its enqueue-time stamp records
-  an encoding.
+  nothing and so keeps octet-stream, as does a relayed row whose payload the caller handed
+  over as `[]byte`, which records no encoding to claim.
 
 **The outbox records the encoding at enqueue, because the relay cannot recover it.**
-This mechanism is the relay link's (#1562); the first link (#1564) ships none of it, so
-`marshalPayload` there returns bytes alone and no row carries a stamp.
 `outbox/publisher.go`'s `marshalPayload` has three arms: a nil payload becomes the
 JSON literal `null`, a struct is `json.Marshal`ed, and a caller-supplied `[]byte` is
 returned **unexamined**. The persisted-sealed path (`Publisher[T].Seal` →
@@ -108,8 +101,7 @@ records which arm ran. So `marshalPayload` now also returns the encoding it prod
 that stamp in `Plan` (`outbox/amqp_shipper.go`, `outbox/stream_shipper.go`), exactly
 as they strip the tenant stamp, so it never reaches the wire; the AMQP lane reads it
 into `shipment.ContentType` and hands it to the publish door. A row carrying no stamp
-ships as octet-stream — as does every row before that link, since the shipper passes no
-properties at all then. A persisted-sealed or hand-marshaled event is therefore
+ships as octet-stream. A persisted-sealed or hand-marshaled event is therefore
 **under**-labelled rather than mislabelled, which is the direction that cannot break
 a consumer switching on the property.
 
@@ -168,9 +160,8 @@ a fleet — not what makes them trustworthy (see Consequences).
 - **A consumer switching on `content_type` sees new values.** Where every delivery
   used to read `application/octet-stream`, a typed publish now reads
   `application/json` (or `application/jose` when sealed); an outbox row reads
-  `application/json` or octet-stream depending on the arm that encoded it once the relay
-  link (#1562) lands, and octet-stream before it. A consumer that branches on the
-  property must handle all three.
+  `application/json` or octet-stream depending on the arm that encoded it. A consumer
+  that branches on the property must handle all three.
 - **A consumer relying on transient delivery loses that behaviour.** A deployment
   using non-persistence as an implicit TTL — messages evaporating with the broker —
   now keeps them across a restart of a DURABLE queue; a transient queue is itself
@@ -209,6 +200,13 @@ a fleet — not what makes them trustworthy (see Consequences).
   connection is never touched. Without the guard amqp091 would answer the unwritable frame by
   shutting down the whole Connection every publisher in the process shares, the precedent
   ADR-070 established for `CorrelationId`.
+- **Outbox enqueue refuses what the frame cannot carry and what would mint a framework stamp.**
+  On an AMQP row an `EventType` past the 255-byte shortstr ceiling is refused at `Publish`,
+  before the INSERT, because that row could only ever tear down the shared connection or park
+  the tenant's outbox behind it; a stream row's event type rides no shortstr and is not bounded.
+  The reserved-prefix rule is lane-INDEPENDENT — a caller header claiming `x-gobricks-` is
+  refused whichever lane the row is bound for, because that namespace is where enqueue records
+  the encoding the relay puts on the wire (`[C64.14]`).
 - **An outbox `[]byte` payload travels UNTYPED, which the AMQP lane ships as
   octet-stream and the stream lane as no content type at all.** That covers the
   persisted-sealed path and any hand-marshaled body: the row is honest about not

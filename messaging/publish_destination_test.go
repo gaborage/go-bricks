@@ -355,6 +355,47 @@ func TestValidatePublishDestination(t *testing.T) {
 	}
 }
 
+// TestValidatePublishEventType covers the second exported door: the same ceiling on
+// the `type` property, offered to a caller that records an event type now and ships it
+// later. The multibyte case is the one a character-counting ledger column lets through —
+// PostgreSQL `VARCHAR(255)`, or Oracle under CHAR semantics — where 128 two-byte runes fit
+// the column while overrunning the frame.
+func TestValidatePublishEventType(t *testing.T) {
+	tests := []struct {
+		name      string
+		eventType string
+		wantBytes string
+	}{
+		{name: "empty_is_legal"},
+		{name: "at_the_limit", eventType: strings.Repeat("k", maxShortStrBytes)},
+		{name: "one_byte_past_the_limit", eventType: oversizedShortStr, wantBytes: "256 bytes"},
+		{
+			name:      "multibyte_under_255_characters_but_over_255_bytes",
+			eventType: strings.Repeat("\u00f1", 128),
+			wantBytes: "256 bytes",
+		},
+		{
+			name:      "multibyte_at_the_limit_in_bytes",
+			eventType: strings.Repeat("\u00f1", 127) + "k",
+			wantBytes: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidatePublishEventType(tt.eventType)
+			if tt.wantBytes == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, ErrInvalidPublishDestination)
+			assert.Contains(t, err.Error(), "event type")
+			assert.Contains(t, err.Error(), tt.wantBytes)
+			assert.NotContains(t, err.Error(), tt.eventType, "the error reports the size, never the value")
+		})
+	}
+}
+
 // TestPublishBytesRefusesEveryOversizedMessageProp covers the three properties
 // the framework writes onto the content-header frame (ADR-105). Each is a
 // shortstr on the same frame as the header keys beside it, so each would tear

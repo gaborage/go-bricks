@@ -64,6 +64,26 @@ func ValidatePublishDestination(exchange, routingKey string, headers map[string]
 	return checkTableKeys("header key", headers)
 }
 
+// ValidatePublishEventType checks one caller-supplied event type against the same
+// ceiling, for callers that record an event type now and publish it later. It leaves
+// as the `type` property of the CONTENT-HEADER frame (ADR-105), so it is a shortstr on
+// the same frame as the header keys ValidatePublishDestination judges — and it fails
+// that frame, and with it the shared Connection, the same way.
+//
+// It exists as a door of its own because the property travels beside a destination the
+// recorder already validated: the outbox writes exchange, routing key and event type to
+// one ledger row, and its EventType column bounds 255 of whatever the vendor counts —
+// PostgreSQL `VARCHAR(255)` counts characters, Oracle `VARCHAR2(255)` counts bytes by
+// default and characters under CHAR semantics — so on PostgreSQL, and on a CHAR-semantics
+// Oracle, a multibyte type the column accepts can still exceed 255 BYTES. Same reasoning
+// as the destination door — a row the frame can never carry is better refused at the
+// INSERT than parked by the relay after MaxRetries.
+//
+// Length only, and the error names the field and its byte size, never the value.
+func ValidatePublishEventType(eventType string) error {
+	return checkShortStr("event type", eventType)
+}
+
 // checkTableKeys walks a table, judging its KEYS, and descends through every
 // structure amqp091 encodes recursively: a nested table, and a FIELD-ARRAY,
 // whose elements go back through writeField and can therefore be tables of
