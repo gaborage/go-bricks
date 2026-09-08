@@ -675,9 +675,10 @@ func TestPublisherRefusesADestinationTheFrameCannotCarry(t *testing.T) {
 }
 
 // TestPublisherRefusesAnEventTypeTheFrameCannotCarry: the event type reaches the wire as
-// the `type` property of the same frame the destination rides (ADR-105), and the ledger's
-// column bounds 255 CHARACTERS — so a multibyte type inserts cleanly and only the byte
-// rule sees it. Refused at the INSERT rather than parked by the relay after MaxRetries,
+// the `type` property of the same frame the destination rides (ADR-105), while the ledger's
+// column bounds 255 of whatever its vendor counts — characters on PostgreSQL, bytes on
+// Oracle unless the schema uses CHAR semantics — so where it counts characters a multibyte
+// type inserts cleanly and only the byte rule sees it. Refused at the INSERT rather than parked by the relay after MaxRetries,
 // which on the AMQP lane holds the whole tenant's key while it happens. Each case sets a
 // routing key, so the fallback cannot claim the failure.
 func TestPublisherRefusesAnEventTypeTheFrameCannotCarry(t *testing.T) {

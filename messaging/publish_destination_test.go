@@ -357,8 +357,9 @@ func TestValidatePublishDestination(t *testing.T) {
 
 // TestValidatePublishEventType covers the second exported door: the same ceiling on
 // the `type` property, offered to a caller that records an event type now and ships it
-// later. The multibyte case is the one the outbox ledger lets through — its column
-// bounds 255 CHARACTERS, and 128 two-byte runes fit that while overrunning the frame.
+// later. The multibyte case is the one a character-counting ledger column lets through —
+// PostgreSQL `VARCHAR(255)`, or Oracle under CHAR semantics — where 128 two-byte runes fit
+// the column while overrunning the frame.
 func TestValidatePublishEventType(t *testing.T) {
 	tests := []struct {
 		name      string

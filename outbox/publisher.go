@@ -155,8 +155,11 @@ func (p *outboxPublisher) resolveAMQPDestination(event *app.OutboxEvent) (exchan
 		return "", "", fmt.Errorf("outbox: %w", err)
 	}
 	// The event type rides the same content-header frame as the header keys above, as the
-	// `type` property (ADR-105), and the ledger's column bounds 255 CHARACTERS — so a
-	// multibyte type it accepts can still be unwritable. Judged after the destination, so
+	// `type` property (ADR-105), while the ledger's column bounds 255 of whatever the vendor
+	// counts: PostgreSQL `VARCHAR(255)` counts characters, Oracle `VARCHAR2(255)` counts
+	// bytes by default and characters under CHAR semantics — so on PostgreSQL, and on a
+	// CHAR-semantics Oracle, a multibyte type the column accepts can still exceed the
+	// frame's byte ceiling and be unwritable. Judged after the destination, so
 	// the routing-key fallback still names the field it filled.
 	if err = messaging.ValidatePublishEventType(event.EventType); err != nil {
 		return "", "", fmt.Errorf("outbox: %w", err)

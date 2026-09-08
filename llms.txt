@@ -3581,7 +3581,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
         Payload: OrderCreatedEvent{
             OrderID: req.ID, CustomerID: req.CustomerID, Total: req.Total,
         },
-        Exchange:   "order.events",
+        Exchange:   "orders.events",
         RoutingKey: "order.created",
     })
     if err != nil { return fmt.Errorf("outbox publish: %w", err) }
@@ -3633,7 +3633,7 @@ if _, err := tx.Exec(ctx, "UPDATE inventory SET stock = stock - $1 WHERE product
 // Multiple events — all atomic with the business writes
 if _, err := s.outbox.Publish(ctx, tx, &app.OutboxEvent{
     EventType: "order.created", AggregateID: orderID, Payload: orderPayload,
-    Exchange: "order.events",
+    Exchange: "orders.events",
 }); err != nil { return err }
 if _, err := s.outbox.Publish(ctx, tx, &app.OutboxEvent{
     EventType: "inventory.reserved", AggregateID: productID, Payload: inventoryPayload,

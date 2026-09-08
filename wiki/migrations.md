@@ -7291,8 +7291,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   the value is usually data rather than a literal, so the honest detector is a query over the
   ledger you already have — `SELECT count(*) FROM <outbox.table> WHERE octet_length(event_type) > 255`
   on PostgreSQL, `LENGTHB(event_type) > 255` on Oracle, per outbox table and per tenant ledger.
-  Measure BYTES, not characters: the column bounds 255 CHARACTERS, so a multibyte type it accepts
-  can already be over the byte ceiling. For the header prefix, match by header NAME:
+  Measure BYTES, not characters: the column bounds 255 of whatever the vendor counts —
+  PostgreSQL `VARCHAR(255)` counts characters, Oracle `VARCHAR2(255)` counts bytes by default
+  and characters only under CHAR semantics — so on PostgreSQL, and on a CHAR-semantics Oracle,
+  a multibyte type the column accepts can already exceed the frame's byte ceiling. For the
+  header prefix, match by header NAME:
   `git grep -ni 'x-gobricks' -- '*.go'` — case-INSENSITIVE, because the refusal is, so a
   header spelled `X-GoBricks-…` is in the population too — plus wherever the deployment
   builds an event's header map

@@ -72,10 +72,12 @@ func ValidatePublishDestination(exchange, routingKey string, headers map[string]
 //
 // It exists as a door of its own because the property travels beside a destination the
 // recorder already validated: the outbox writes exchange, routing key and event type to
-// one ledger row, and its EventType column bounds 255 CHARACTERS, so a multibyte type
-// the column accepts can still exceed 255 BYTES. Same reasoning as the destination
-// door — a row the frame can never carry is better refused at the INSERT than parked
-// by the relay after MaxRetries.
+// one ledger row, and its EventType column bounds 255 of whatever the vendor counts —
+// PostgreSQL `VARCHAR(255)` counts characters, Oracle `VARCHAR2(255)` counts bytes by
+// default and characters under CHAR semantics — so on PostgreSQL, and on a CHAR-semantics
+// Oracle, a multibyte type the column accepts can still exceed 255 BYTES. Same reasoning
+// as the destination door — a row the frame can never carry is better refused at the
+// INSERT than parked by the relay after MaxRetries.
 //
 // Length only, and the error names the field and its byte size, never the value.
 func ValidatePublishEventType(eventType string) error {

@@ -70,12 +70,8 @@ one once the relay link lands, and absent on the raw bytes door, which declares 
 type. Then a `content_type` the handle actually knows — `application/json`, `application/jose` when the handle seals the
 event, or `application/octet-stream` for an outbox row whose `Payload` the caller handed over
 as `[]byte`, which persists untyped. An outbox-relayed publish is the one exception to the
-minted id: it carries the
-ledger row's own id instead, once the relay link lands. The streams lane
-is untouched: it sets no message properties of its own, and an outbox-relayed publish keeps
-the properties it had until the relay link lands — it is the second half of this change
-(see `[C64.10]`'s scope), so until then a relayed row still ships octet-stream, no `type`,
-and a generated `message_id`.
+minted id: it carries the ledger row's own id instead. The streams lane
+is untouched: it sets no message properties of its own.
 
 `app_id` is unauthenticated provenance metadata — read it for tracing, dashboards and triage,
 never as an authorization, routing-trust or identity input: any publisher on the bus can stamp

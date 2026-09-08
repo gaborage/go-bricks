@@ -18,8 +18,8 @@ GoBricks provides a built-in **Transactional Outbox** for reliable event publish
 
 **Delivery Guarantee:** At-least-once. Consumers MUST be idempotent. Use the `x-outbox-event-id` header for deduplication.
 
-A relayed publish also mirrors that header onto the AMQP `message_id` property and the row's
-event type onto `type`, and labels the body `application/json` only when the outbox marshaled
+On the AMQP lane a relayed publish also mirrors that header onto the `message_id` property and
+the row's event type onto `type` — the stream lane sets no message properties at all — and labels the body `application/json` only when the outbox marshaled
 it — a caller-supplied `[]byte`, the persisted-sealed shape included, persists UNTYPED,
 because bytes handed over already carry no encoding stamp (ADR-105). On the AMQP lane an
 untyped row ships as `application/octet-stream`; on the stream lane it carries no
@@ -86,9 +86,9 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
 
 **How It Works:**
 
-1. `Publish()` writes an `OutboxRecord` to the outbox table within the caller's transaction, refusing an exchange, routing key (or the `EventType` an empty one falls back to) or header key past the AMQP shortstr limit (255 bytes) before the INSERT — a destination the broker can never accept is rejected at its source
+1. `Publish()` writes an `OutboxRecord` to the outbox table within the caller's transaction, refusing — on an AMQP row, since a stream row's event type rides no shortstr — an exchange, routing key, `EventType` (whether named or fallen back to from an empty routing key) or header key past the AMQP shortstr limit (255 bytes) before the INSERT — a destination the broker can never accept is rejected at its source
 2. The **relay job** (`outbox-relay` via scheduler) polls for pending events every `pollinterval`
-3. Each pending event is published to the target AMQP exchange with `x-outbox-event-id` header
+3. Each pending event is published to its target destination — the AMQP exchange on the AMQP lane, the super stream on the stream lane — with the `x-outbox-event-id` header, which the relay stamps on both lanes
 4. Successfully published events are marked as `published`
 5. Failed events have their `retry_count` advanced and stay `pending` for the next cycle — on **every** failed attempt, including while the broker is unavailable; only a **poison** event — one of the classes listed under [Retry & Dead-Lettering](#retry--dead-lettering) below — is parked once `retry_count` reaches `maxretries`
 6. The **cleanup job** (`outbox-cleanup`) removes published events older than `retentionperiod`

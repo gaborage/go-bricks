@@ -1581,20 +1581,19 @@ exported `messaging.WithAppName` — only `newFactoryResolverForConfig` sets tha
 option itself;
 `timestamp` from `time.Now()` read at the publish, deliberately neither an injectable clock
 nor a `ClientOption`; `type` from the typed handle's `EventType` or the outbox row's;
-`message_id` from the outbox row id on a relayed publish once the relay link lands,
+`message_id` from the outbox row id on a relayed publish,
 MIRRORING `x-outbox-event-id` rather than replacing it as the ledger key (ADR-097), and a
-framework-minted UUID until then and on every other publish — minted once per logical
-publish above the retry loop (#1556), so every attempt of it carries the same id; and
-`content_type` claimed only where
+framework-minted UUID on every other publish — minted once per logical publish above
+the retry loop (#1556), so every attempt of it carries the same id; and `content_type`
+claimed only where
 it is known — `application/json` or `application/jose` from the typed handle, octet-stream on
 the raw bytes path. The relay cannot recover the encoding, because `marshalPayload` passes a
 caller `[]byte` through unexamined and a persisted-sealed compact JWS arrives as exactly one,
 so the encoding is recorded AT ENQUEUE as the unexported `x-gobricks-content-type` header
 stamp — nothing for the `[]byte` arm, which therefore ships as octet-stream rather than
-mislabelled — and both lanes strip it in `Plan` like the tenant stamp. Every outbox-side
-value here — the row's `type`, the relayed `message_id` and the enqueue stamp — arrives with
-the second link of the stack (#1562); until it lands a relayed publish still ships
-octet-stream, no `type` and a minted id. Payload sniffing was
+mislabelled — and both lanes strip it in `Plan` like the tenant stamp. On the outbox side a
+relayed publish carries the ledger row's id as its `message_id`, the record's event type as
+its `type`, and the content type the enqueue side recorded in that stamp. Payload sniffing was
 rejected; a real ledger content-type column is a schema migration and out of scope.
 See [migrations.md](migrations.md) `[C64.10]`.
 
