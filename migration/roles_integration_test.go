@@ -222,19 +222,18 @@ func TestPGRolesSearchPathSetOnBothRoles(t *testing.T) {
 	admin := env.adminDB(t)
 	require.NoError(t, ProvisionPGRoles(ctx, admin, spec))
 
-	rolconfigs := func() map[string]string {
-		// array_to_string avoids scanning rolconfig (a PG text[]) directly —
-		// lib/pq isn't a dependency and pgx v5 stdlib doesn't scan text[]
-		// into []string natively.
+	rolconfigs := func() map[string][]string {
+		// rolconfig is a text[]; pgx v5.11+ on Go 1.27 scans it straight into []string.
 		rows, err := admin.QueryContext(ctx,
-			`SELECT rolname, array_to_string(rolconfig, ',') FROM pg_roles WHERE rolname IN ($1, $2) ORDER BY rolname`,
+			`SELECT rolname, rolconfig FROM pg_roles WHERE rolname IN ($1, $2) ORDER BY rolname`,
 			spec.MigratorRole, spec.RuntimeRole)
 		require.NoError(t, err)
 		defer func() { _ = rows.Close() }()
 
-		out := make(map[string]string)
+		out := make(map[string][]string)
 		for rows.Next() {
-			var rolname, cfg string
+			var rolname string
+			var cfg []string
 			require.NoError(t, rows.Scan(&rolname, &cfg))
 			out[rolname] = cfg
 		}

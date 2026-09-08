@@ -251,6 +251,55 @@ func TestBuildPostgresDSNOmitsUnsetTLSMaterialAndQuotesMode(t *testing.T) {
 	assert.NotContains(t, dsn, "sslkey")
 }
 
+// TestBuildPostgresDSNRoundTripsThroughPgx proves the promise in buildPostgresDSN's doc
+// comment: a value carrying backslashes, quotes, whitespace or keyword/value syntax cannot
+// corrupt the DSN or inject extra connection parameters. The oracle is pgx's own parser,
+// never a hand-written unescaper — pgx.ParseConfig must hand every value back verbatim.
+func TestBuildPostgresDSNRoundTripsThroughPgx(t *testing.T) {
+	// The endpoint is asserted against these literals rather than against cfg, so an
+	// injection-shaped value is proven to have stayed inside its own field even if a
+	// later edit derived Host/Port from value.
+	const (
+		roundTripHost = "db.example.com"
+		roundTripPort = uint16(5432)
+	)
+
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "windows_backslash_path", value: `C:\certs\ca.pem`},
+		{name: "space", value: "my user"},
+		{name: "trailing_backslash", value: `pw\`},
+		{name: "quote_in_value", value: "it's"},
+		{name: "backslash_and_quote", value: `a\'b`},
+		{name: "kv_injection_shaped", value: "x host=evil port=1"},
+		{name: "newline", value: "a\nb"},
+		{name: "plus_hash_percent", value: "a+b#c%20d"},
+		{name: "lone_backslash", value: `\`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.DatabaseConfig{
+				Host:     roundTripHost,
+				Port:     int(roundTripPort),
+				Username: tt.value,
+				Password: tt.value,
+				Database: tt.value,
+			}
+
+			pc, err := pgx.ParseConfig(buildPostgresDSN(cfg))
+			require.NoError(t, err)
+			assert.Equal(t, roundTripHost, pc.Host)
+			assert.Equal(t, roundTripPort, pc.Port)
+			assert.Equal(t, cfg.Username, pc.User)
+			assert.Equal(t, cfg.Password, pc.Password)
+			assert.Equal(t, cfg.Database, pc.Database)
+		})
+	}
+}
+
 func TestConnectionNewConnectionSuccess(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
