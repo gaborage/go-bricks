@@ -1553,10 +1553,10 @@ post-registration `Args` mutation. `DeadLetterSpec` now carries `QueueType`, app
 `QueueTypeClassic` is honoured on both. A queue that already carries an `x-queue-type` keeps
 it, so the ADR-040 passthrough is never overwritten and stays the only way to give the two
 halves of one route different types. An unknown value is a declaration-time validation error
-rather than a passthrough; refusing a quorum-resolved queue whose shape the broker rejects
-(non-durable, auto-delete or exclusive, `x-max-priority`, `x-queue-mode`) by name at
-declaration time lands in the follow-up link. The check lives in the
-validate-once path, so per-tenant replay is unchanged. Every NovoPayment broker is
+rather than a passthrough, and a quorum-resolved queue whose shape the broker rejects
+(non-durable, auto-delete or exclusive, `x-max-priority`, `x-queue-mode`) is refused by name
+at declaration time instead of by the broker's `PRECONDITION_FAILED` mid-startup. Both checks
+live in the validate-once path, so per-tenant replay is unchanged. Every NovoPayment broker is
 quorum-capable (maintainer, triage 2026-09-08); CI declares against
 `rabbitmq:4.3.5-management-alpine`. Compiler-invisible: an existing classic primary, or classic
 parking queue (`ParkingQueue` when the spec sets it, else `<queue>.dlq`), cannot be redeclared as

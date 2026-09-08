@@ -483,9 +483,52 @@ func (d *Declarations) validateStreamConsumerRules() []error {
 }
 
 // validateQueueTypeDeclarations reports the queue types a declaration helper
-// refused. Aggregated so one boot reports every problem.
+// refused, plus the shape RabbitMQ quorum queues must have. Aggregated so one
+// boot reports every problem.
 func (d *Declarations) validateQueueTypeDeclarations() error {
-	return errors.Join(d.queueTypeErrs...)
+	errs := slices.Clone(d.queueTypeErrs)
+	errs = append(errs, d.validateQuorumQueueShape()...)
+	return errors.Join(errs...)
+}
+
+// validateQuorumQueueShape reports every quorum queue carrying a flag or arg the
+// broker refuses with PRECONDITION_FAILED: quorum queues are always durable and
+// always replicated, so they cannot be transient, auto-delete or exclusive, and
+// they support neither priorities nor lazy mode. Queues are visited in sorted
+// order so the aggregate error is identical across runs. Only the offending KEY
+// is named, never its value: Args are broker topology, but this error reaches a
+// startup log the key-based filter cannot mask.
+func (d *Declarations) validateQuorumQueueShape() []error {
+	var errs []error
+
+	for _, name := range slices.Sorted(maps.Keys(d.Queues)) {
+		q := d.Queues[name]
+		if !isQuorumQueue(q) {
+			continue
+		}
+		if !q.Durable {
+			errs = append(errs, fmt.Errorf("quorum queue %q must be durable", name))
+		}
+		if q.Exclusive {
+			errs = append(errs, fmt.Errorf("quorum queue %q must not be exclusive", name))
+		}
+		if q.AutoDelete {
+			errs = append(errs, fmt.Errorf("quorum queue %q must not be auto-delete", name))
+		}
+		for _, arg := range []string{argMaxPriority, argQueueMode} {
+			if _, set := q.Args[arg]; set {
+				errs = append(errs, fmt.Errorf("quorum queue %q must not set %s", name, arg))
+			}
+		}
+	}
+
+	return errs
+}
+
+// isQuorumQueue reports whether a queue declaration asks the broker for a
+// quorum queue.
+func isQuorumQueue(q *QueueDeclaration) bool {
+	return q != nil && q.Args[argQueueType] == QueueTypeQuorum
 }
 
 // isStreamQueue reports whether a queue declaration asks the broker for a

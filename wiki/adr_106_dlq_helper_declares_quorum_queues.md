@@ -79,19 +79,17 @@ queues the helper touches, and an empty value resolves to quorum.**
   precedence rule is per queue, not per route, so a deployment that wants a quorum
   primary with a classic parking queue registers the `.dlq` with `x-queue-type: classic`
   and lets the spec resolve the primary — the two halves need not agree.
-- **Quorum-incompatible shapes will fail at declaration time.** A queue that resolves to
+- **Quorum-incompatible shapes fail at declaration time.** A queue that resolves to
   quorum and is non-durable, auto-delete or exclusive, or carries `x-max-priority` or
-  `x-queue-mode` (lazy), is a shape quorum queues do not support, so today the deployment
+  `x-queue-mode` (lazy), is refused with a validation error naming what conflicts.
+  Quorum queues do not support those shapes, so without this check the deployment
   learns of the conflict from the broker as `PRECONDITION_FAILED` mid-startup, against
   a message that names an AMQP argument rather than the call site that produced it.
-  Refusing those shapes with a validation error naming what conflicts is the fail-fast
-  half of this decision, and **declaration-time shape validation lands in the follow-up
-  link of this stack**; this change ships the queue-type resolution alone.
+  Fail fast, with the conflict named.
 - **The checks live in the validate-once path.** Declarations are validated once and
-  replayed per tenant, so the queue-type resolution and the unknown-value refusal are
-  decided on the single validated declaration set and cost nothing per tenant — as the
-  shape refusal will be. Per-tenant replay is unchanged: it replays the same resolved
-  `Args` it always did.
+  replayed per tenant, so the queue-type resolution and both refusals are decided on the
+  single validated declaration set and cost nothing per tenant. Per-tenant replay is
+  unchanged: it replays the same resolved `Args` it always did.
 
 **The fleet is quorum-capable.** Every NovoPayment broker supports quorum queues —
 confirmed by the maintainer at triage on 2026-09-08 — so the default flip does not
@@ -144,11 +142,10 @@ by the weaker half while reading as the stronger one.
   existing call site — `nil`, `&messaging.DeadLetterSpec{}`, or a spec setting only the
   name overrides — still compiles and still means what it said. The change is visible
   only at declaration time, so it is a topology change, not a compile break.
-- **A quorum-incompatible queue fails, for now at the broker.** A caller who declared
+- **A quorum-incompatible queue that used to start now does not.** A caller who declared
   a non-durable, auto-delete or exclusive queue through this helper, or set
-  `x-max-priority` or `x-queue-mode` on it, gets `PRECONDITION_FAILED` mid-startup until
-  the follow-up link names the conflict at declaration time. Both remedies are available
-  already: drop the incompatible shape, or set
+  `x-max-priority` or `x-queue-mode` on it, gets a validation error at startup naming the
+  conflict. Both remedies are available: drop the incompatible shape, or set
   `QueueType: messaging.QueueTypeClassic` and keep it.
 - **The ADR-040 passthrough is now load-bearing in a second way.** It remains the door
   for every other broker argument, and it is additionally the only way to give the two

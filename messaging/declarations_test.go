@@ -1398,7 +1398,7 @@ func TestValidateStreamQueueShape(t *testing.T) {
 		},
 		{
 			name:  "other_queue_type_unaffected",
-			queue: &QueueDeclaration{Name: testStreamQueue, Exclusive: true, Args: map[string]any{argQueueType: "quorum"}},
+			queue: &QueueDeclaration{Name: testStreamQueue, Exclusive: true, Args: map[string]any{argQueueType: QueueTypeClassic}},
 		},
 	}
 
@@ -1574,6 +1574,108 @@ func TestRegisterConsumerWithoutArgsGetsEmptyMap(t *testing.T) {
 	cloned := decls.Clone().Consumers()[0]
 	require.NotNil(t, cloned.Args)
 	assert.Empty(t, cloned.Args)
+}
+
+// --- Quorum queue shape ---
+
+const testQuorumQueue = "orders.quorum.queue"
+
+func TestValidateQuorumQueueShape(t *testing.T) {
+	quorumArgs := func(extra ...string) map[string]any {
+		args := map[string]any{argQueueType: QueueTypeQuorum}
+		for _, key := range extra {
+			args[key] = 10
+		}
+		return args
+	}
+
+	tests := []struct {
+		name    string
+		queue   *QueueDeclaration
+		wantErr string
+	}{
+		{
+			name:  "durable_non_exclusive_non_autodelete_passes",
+			queue: &QueueDeclaration{Name: testQuorumQueue, Durable: true, Args: quorumArgs()},
+		},
+		{
+			name:    "non_durable_rejected",
+			queue:   &QueueDeclaration{Name: testQuorumQueue, Args: quorumArgs()},
+			wantErr: `quorum queue "orders.quorum.queue" must be durable`,
+		},
+		{
+			name:    "exclusive_rejected",
+			queue:   &QueueDeclaration{Name: testQuorumQueue, Durable: true, Exclusive: true, Args: quorumArgs()},
+			wantErr: `quorum queue "orders.quorum.queue" must not be exclusive`,
+		},
+		{
+			name:    "auto_delete_rejected",
+			queue:   &QueueDeclaration{Name: testQuorumQueue, Durable: true, AutoDelete: true, Args: quorumArgs()},
+			wantErr: `quorum queue "orders.quorum.queue" must not be auto-delete`,
+		},
+		{
+			name:    "max_priority_rejected",
+			queue:   &QueueDeclaration{Name: testQuorumQueue, Durable: true, Args: quorumArgs(argMaxPriority)},
+			wantErr: `quorum queue "orders.quorum.queue" must not set x-max-priority`,
+		},
+		{
+			name:    "queue_mode_rejected",
+			queue:   &QueueDeclaration{Name: testQuorumQueue, Durable: true, Args: quorumArgs(argQueueMode)},
+			wantErr: `quorum queue "orders.quorum.queue" must not set x-queue-mode`,
+		},
+		{
+			// Quorum-ness gates the whole rule set: a classic queue keeps its
+			// freedom to be non-durable, exclusive, auto-delete and prioritized.
+			name: "classic_queue_unaffected",
+			queue: &QueueDeclaration{
+				Name:      testQuorumQueue,
+				Exclusive: true,
+				Args:      map[string]any{argQueueType: QueueTypeClassic, argMaxPriority: 10},
+			},
+		},
+		{
+			name:  "untyped_queue_unaffected",
+			queue: &QueueDeclaration{Name: testQuorumQueue, Exclusive: true, AutoDelete: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decls := NewDeclarations()
+			decls.RegisterQueue(tt.queue)
+
+			err := decls.Validate()
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestValidateQuorumQueueShapeAggregatesEveryViolation(t *testing.T) {
+	decls := NewDeclarations()
+	decls.RegisterQueue(&QueueDeclaration{
+		Name:       testQuorumQueue,
+		Exclusive:  true,
+		AutoDelete: true,
+		Args: map[string]any{
+			argQueueType:   QueueTypeQuorum,
+			argMaxPriority: 10,
+			argQueueMode:   "lazy",
+		},
+	})
+
+	err := decls.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `quorum queue "orders.quorum.queue" must be durable`)
+	assert.Contains(t, err.Error(), `quorum queue "orders.quorum.queue" must not be exclusive`)
+	assert.Contains(t, err.Error(), `quorum queue "orders.quorum.queue" must not be auto-delete`)
+	assert.Contains(t, err.Error(), `quorum queue "orders.quorum.queue" must not set x-max-priority`)
+	assert.Contains(t, err.Error(), `quorum queue "orders.quorum.queue" must not set x-queue-mode`)
+	assert.NotContains(t, err.Error(), "lazy", "the error names the offending key, never the Args value")
 }
 
 // TestReplayToRegistryCarriesDLQQueueType pins that the queue type is part of

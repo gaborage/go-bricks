@@ -7337,8 +7337,8 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   `x-queue-type` only on a queue that does not already carry one, so a value set through
   `Args` (ADR-040) wins and is never silently overwritten. A queue that resolves to quorum and
   is non-durable, auto-delete or exclusive, or carries `x-max-priority` or `x-queue-mode`
-  (lazy), still reaches the broker and fails with `PRECONDITION_FAILED`; refusing that shape
-  at declaration time is a separate change. The queue-type resolution runs in the
+  (lazy), is refused at declaration time naming the conflict, instead of reaching the broker
+  and failing with `PRECONDITION_FAILED`. Both checks run in the
   validate-once path, so per-tenant replay is unchanged. Nothing else about the helper moves: the derived `<queue>.dlx`
   fanout exchange, the binding, `x-dead-letter-exchange` on the primary, and the
   `Exchange`/`ParkingQueue`/`RoutingKey` overrides are as before.
