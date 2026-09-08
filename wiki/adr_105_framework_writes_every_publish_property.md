@@ -93,12 +93,14 @@ ships as octet-stream. A persisted-sealed or hand-marshaled event is therefore
 **under**-labelled rather than mislabelled, which is the direction that cannot break
 a consumer switching on the property.
 
-`x-gobricks-content-type` is a **reserved** key, not an enforced one: nothing validates
-caller header keys, and `marshalHeaders` writes the stamp into its copy of the caller's
-own map *after* the copy, so a caller header of that exact spelling is silently
-overwritten at enqueue and then deleted before the wire — the caller's value never
-reaches a consumer and nothing reports the loss. The `x-gobricks-` namespace is chosen
-to make that implausible, not impossible.
+`x-gobricks-content-type` sits in a **reserved namespace, and the reservation is
+enforced**: `Publish` refuses any caller header under the `x-gobricks-` prefix,
+case-insensitively, with `outbox.ErrReservedHeaderPrefix`, naming the offending key. An
+earlier revision of this change dropped such a header silently; that hid both a caller's
+mistake and a caller's attempt, so the refusal follows the `x-tenant-id` precedent
+(`ErrTenantStampConflict`, ADR-087) instead. The relay-side strip remains, because it is
+what carries the framework's own stamp off the row — and because it is all that keeps a
+caller stamp on a row enqueued BEFORE the refusal off the wire.
 
 The stamp records the **JSON** arm rather than the opaque one — which costs a map
 allocation and a non-NULL `headers` blob on the common enqueue, where the reverse
@@ -150,8 +152,10 @@ a fleet — not what makes them trustworthy (see Consequences).
   consumer that branches on the property must handle all three.
 - **A consumer relying on transient delivery loses that behaviour.** A deployment
   using non-persistence as an implicit TTL — messages evaporating with the broker —
-  now keeps them across a restart, and a queue that was durable but fed only
-  transient messages will retain a backlog it used to shed.
+  now keeps them across a restart of a DURABLE queue; a transient queue is itself
+  discarded on restart whatever the delivery mode, so persistence changes nothing
+  there. A queue that was durable but fed only transient messages will retain a
+  backlog it used to shed.
 - **A client from a consumer's own `MessagingClientFactory` publishes no `app_id`.**
   `FactoryResolver.MessagingClientFactoryWithOptions` hands a custom factory only
   `(url, log)` — no field of the options struct reaches it, and neither does the
