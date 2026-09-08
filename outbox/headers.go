@@ -68,8 +68,19 @@ func firstReservedHeader(headers map[string]any) (key string, found bool) {
 func takeFrameworkStamps(headers map[string]any) (stamp, contentType string) {
 	stamp, _ = headers[messaging.TenantStampHeader].(string)
 	delete(headers, messaging.TenantStampHeader)
-	contentType, _ = headers[headerContentTypeStamp].(string)
-	delete(headers, headerContentTypeStamp)
+	// Every case variant of the reserved prefix, matched the way the refusal
+	// matches it: a row enqueued BEFORE Publish began refusing the prefix can
+	// carry any casing, and an exact-key check would publish it as a header the
+	// framework claims to own. Deleting during the range is defined behavior.
+	for key, value := range headers {
+		if !isReservedHeaderKey(key) {
+			continue
+		}
+		if strings.EqualFold(key, headerContentTypeStamp) {
+			contentType, _ = value.(string)
+		}
+		delete(headers, key)
+	}
 	return stamp, contentType
 }
 

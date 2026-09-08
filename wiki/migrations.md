@@ -7293,7 +7293,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   on PostgreSQL, `LENGTHB(event_type) > 255` on Oracle, per outbox table and per tenant ledger.
   Measure BYTES, not characters: the column bounds 255 CHARACTERS, so a multibyte type it accepts
   can already be over the byte ceiling. For the header prefix, match by header NAME:
-  `git grep -n 'x-gobricks' -- '*.go'`, plus wherever the deployment builds an event's header map
+  `git grep -ni 'x-gobricks' -- '*.go'` — case-INSENSITIVE, because the refusal is, so a
+  header spelled `X-GoBricks-…` is in the population too — plus wherever the deployment
+  builds an event's header map
   from configuration or request data, since a name assembled at runtime reaches no grep.
 - scope: `outboxPublisher.Publish` refuses two inputs it used to accept, both before the INSERT.
   (a) An `EventType` longer than 255 bytes, via `messaging.ValidatePublishEventType`, returning

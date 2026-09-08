@@ -387,22 +387,38 @@ func TestOutboxShipperCarriesThePayloadContentType(t *testing.T) {
 // TestOutboxShipperStripsAPreUpgradeCallerStamp covers the rows the enqueue refusal
 // cannot reach: one persisted before Publish began refusing the reserved prefix still
 // carries a caller-spelled stamp, and the relay's strip is all that keeps it off the wire.
+// The casing arms matter because the refusal is case-folded while the ledger is not: a row
+// written before it could spell the prefix any way at all.
 func TestOutboxShipperStripsAPreUpgradeCallerStamp(t *testing.T) {
-	row := Record{
-		ID:          "11111111-2222-4333-8444-555555555555",
-		EventType:   "order.created",
-		AggregateID: "A1",
-		Payload:     []byte(`{"id":1}`),
-		Headers:     []byte(`{"x-gobricks-content-type":"application/json","keep":"me"}`),
-		Exchange:    "orders",
-		RoutingKey:  "created",
-		Lane:        LaneAMQP,
-		Status:      StatusPending,
+	tests := map[string]struct {
+		headers string
+		stamped string
+	}{
+		"canonical_spelling":  {headers: `{"x-gobricks-content-type":"application/json","keep":"me"}`, stamped: headerContentTypeStamp},
+		"mixed_case_spelling": {headers: `{"X-GoBricks-Content-Type":"application/json","keep":"me"}`, stamped: "X-GoBricks-Content-Type"},
+		"upper_case_prefix":   {headers: `{"X-GOBRICKS-ANYTHING":"whatever","keep":"me"}`, stamped: "X-GOBRICKS-ANYTHING"},
 	}
 
-	f := relayShipped(t, row)
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			row := Record{
+				ID:          "11111111-2222-4333-8444-555555555555",
+				EventType:   "order.created",
+				AggregateID: "A1",
+				Payload:     []byte(`{"id":1}`),
+				Headers:     []byte(tt.headers),
+				Exchange:    "orders",
+				RoutingKey:  "created",
+				Lane:        LaneAMQP,
+				Status:      StatusPending,
+			}
 
-	assert.NotContains(t, f.LastPublishHdrs, headerContentTypeStamp,
-		"the stamp is the framework's bookkeeping and must not reach the wire")
-	assert.Equal(t, "me", f.LastPublishHdrs["keep"], "its other headers still travel")
+			f := relayShipped(t, row)
+
+			assert.NotContains(t, f.LastPublishHdrs, tt.stamped,
+				"a header in the framework's namespace must not reach the wire whatever its casing")
+			assert.NotContains(t, f.LastPublishHdrs, headerContentTypeStamp)
+			assert.Equal(t, "me", f.LastPublishHdrs["keep"], "its other headers still travel")
+		})
+	}
 }
