@@ -2876,6 +2876,33 @@ func TestPublishBytesKeepsMessageIDStableAcrossRetries(t *testing.T) {
 	assert.Equal(t, sent[0].Headers, sent[1].Headers, "the retry must reuse the first attempt's headers")
 }
 
+// TestPublishBytesKeepsASuppliedMessageIDAcrossRetries pins the seam where #1546's
+// hoist meets ADR-105's relay id: the mint runs once above the retry loop, and a
+// SUPPLIED id must survive it untouched, so every attempt of a relayed publish carries
+// the ledger row id rather than a UUID minted in its place.
+func TestPublishBytesKeepsASuppliedMessageIDAcrossRetries(t *testing.T) {
+	const rowID = "11111111-2222-4333-8444-555555555555"
+	ch := &fakeChannel{publishFailuresRemaining: 1}
+	c := newClientWithFakeChannel(t, ch)
+	c.resendDelay = time.Millisecond
+	c.connectionTimeout = 5 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ackNextSuccessfulPublish(ctx, t, c, ch)
+
+	require.NoError(t, c.publishBytes(ctx, publishOptions{
+		Exchange:   "ex",
+		RoutingKey: "rk",
+		props:      &publishdoor.MessageProps{MessageID: rowID},
+	}, []byte(testMessageBody)))
+
+	sent := ch.publishedMessages()
+	require.Len(t, sent, 2, "one failed attempt plus the retry")
+	assert.Equal(t, rowID, sent[0].MessageId, "the supplied id is not replaced by a minted one")
+	assert.Equal(t, rowID, sent[1].MessageId, "the retry re-sends the supplied id")
+}
+
 // TestPreparePublishingCarriesTheStandardProperties pins the NKH1 §6.2/§6.5
 // property set: the framework populates every one of these, no caller can.
 func TestPreparePublishingCarriesTheStandardProperties(t *testing.T) {

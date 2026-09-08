@@ -69,8 +69,9 @@ encoding stamp — are set.
   on (ADR-097), and nothing reads the property in preference to it. The HEADER is the
   stable identity; the PROPERTY is only as stable as what supplies it. Every other
   publish keeps a framework-minted UUID, and `preparePublishing` runs inside
-  `publishAttempt`, so a publish that supplies no id gets a NEW UUID on every retry
-  attempt until #1556 hoists the mint above the retry loop (#1546). At the FIRST link
+  `publishBytes` ABOVE the retry loop (#1556 hoisted it there for #1546), so a publish
+  that supplies no id mints one UUID and every attempt of that publish re-sends it. At the
+  FIRST link
   (#1564) the relay supplies no properties either, so a relayed publish is in that same
   population until the relay link (#1562) lands; from then on its id comes from the row and is
   stable across the row's retries. `Timestamp` is recomputed the same way and for the same

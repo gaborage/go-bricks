@@ -65,7 +65,7 @@ factory calls `messaging.WithAppName` itself, and so does the DEFAULT factory fr
 `NewFactoryResolver` a caller built itself, since that exported constructor sets no app
 name — a `timestamp`, `type`
 from the declared `EventType`, a framework-minted `message_id` and a `timestamp` (both
-produced inside `publishAttempt`, so each retry attempt gets a fresh one), and a
+produced once per logical publish and re-sent unchanged by every retry attempt of it), and a
 `content_type` the
 handle actually knows — `application/json`, `application/jose` when the handle seals the
 event, or `application/octet-stream` for an outbox row whose `Payload` the caller handed over

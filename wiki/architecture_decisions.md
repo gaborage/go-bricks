@@ -1580,8 +1580,9 @@ unconditionally; `app_id` from `app.name` through the new exported `messaging.Wi
 nor a `ClientOption`; `type` from the typed handle's `EventType` or the outbox row's;
 `message_id` from the outbox row id on a relayed publish once the relay link lands,
 MIRRORING `x-outbox-event-id` rather than replacing it as the ledger key (ADR-097), and a
-framework-minted UUID until then and on every other publish — minted inside
-`publishAttempt`, so it changes per retry attempt until #1556; and `content_type` claimed only where
+framework-minted UUID until then and on every other publish — minted once per logical
+publish above the retry loop (#1556), so every attempt of it carries the same id; and
+`content_type` claimed only where
 it is known — `application/json` or `application/jose` from the typed handle, octet-stream on
 the raw bytes path. The relay cannot recover the encoding, because `marshalPayload` passes a
 caller `[]byte` through unexamined and a persisted-sealed compact JWS arrives as exactly one,
