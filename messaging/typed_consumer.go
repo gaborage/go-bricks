@@ -55,10 +55,15 @@ func (m Metadata) EventType() string {
 }
 
 // MessageID returns the AMQP message_id property the publisher set, or empty
-// when the delivery carries none. Like every wire field it is
-// publisher-controlled: DedupKey reads it through the ledger grammar rather
-// than raw, and a consumer using it for anything else must treat it as
-// untrusted input.
+// when the delivery carries none. It is publisher-controlled, and it is exposed
+// for a consumer that wants to make its OWN judgement about an unstamped
+// delivery — never as a ledger key: hand inbox.ProcessOnce the result of
+// DedupKey, which routes both unsealed sources through the ledger grammar. On a
+// SEALED consumer that distinction is load-bearing, because the sealed
+// delivery's context admits a `<SignFamily>:<jti>`-shaped key and this is the
+// one accessor that can hand such a handler a caller-written string of that
+// shape — passing it to ProcessOnce would let a publisher suppress a victim's
+// sealed message (ADR-097 §4).
 func (m Metadata) MessageID() string {
 	if m.delivery == nil {
 		return ""

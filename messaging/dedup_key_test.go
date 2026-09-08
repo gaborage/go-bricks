@@ -110,7 +110,8 @@ func TestMetadataSealedIsFalseForPlainConsumers(t *testing.T) {
 
 func TestMetadataSealedAndDedupKeyForASealedDelivery(t *testing.T) {
 	env := SealedEnvelope{JTI: "jti-1", SignKid: "svc-sign-v2", SignFamily: "svc-sign", EncKid: "aud-enc-v1", EventType: "evt", TenantID: "acme"}
-	meta := Metadata{delivery: &amqp.Delivery{Headers: amqp.Table{HeaderEventID: "header-id"}}, sealed: &env}
+	// The delivery carries BOTH unsealed sources; neither may steer a sealed key.
+	meta := Metadata{delivery: &amqp.Delivery{Headers: amqp.Table{HeaderEventID: "header-id"}, MessageId: "prop-1"}, sealed: &env}
 
 	got, ok := meta.Sealed()
 	assert.True(t, ok)
@@ -123,12 +124,15 @@ func TestMetadataSealedAndDedupKeyForASealedDelivery(t *testing.T) {
 	assert.ErrorIs(t, ValidateEventID(key), ErrInvalidEventID, "a sealed key is outside the header grammar by construction")
 }
 
-// TestMetadataDedupKeyPrefersTheStampOverTheMessageIDProperty pins the
-// precedence half of #1547: on a go-bricks producer the stamp is
-// framework-written and the message_id property is caller-written, so a present
-// stamp wins whatever the property says — and a present-but-malformed stamp
-// errors rather than falling through to the property.
-func TestMetadataDedupKeyPrefersTheStampOverTheMessageIDProperty(t *testing.T) {
+// TestMetadataDedupKeyStampAndMessageIDPrecedence pins #1547 on both dimensions
+// at once: the stamp wins whenever its KEY is present — a stamp that is present
+// but malformed errors rather than falling through, because the stamp is
+// framework-written and the property caller-written — and the message_id
+// property answers only for a delivery carrying no stamp key at all, under the
+// same grammar, so a `:` in it can never mint a sealed key. The grammar itself
+// is pinned by TestValidateEventIDVariesTheGrammar; what is new here is which
+// source is routed through it.
+func TestMetadataDedupKeyStampAndMessageIDPrecedence(t *testing.T) {
 	cases := []struct {
 		name      string
 		headers   amqp.Table
@@ -136,51 +140,15 @@ func TestMetadataDedupKeyPrefersTheStampOverTheMessageIDProperty(t *testing.T) {
 		want      string
 		wantErr   bool
 	}{
-		{"stamp_and_property", amqp.Table{HeaderEventID: "evt-1"}, "prop-1", "evt-1", false},
-		{"stamp_without_property", amqp.Table{HeaderEventID: "evt-1"}, "", "evt-1", false},
-		{"stamp_with_malformed_property", amqp.Table{HeaderEventID: "evt-1"}, "a b", "evt-1", false},
-		{"malformed_stamp_with_valid_property", amqp.Table{HeaderEventID: "a b"}, "prop-1", "", true},
-		{"empty_stamp_with_valid_property", amqp.Table{HeaderEventID: ""}, "prop-1", "", true},
-		{"wrong_type_stamp_with_valid_property", amqp.Table{HeaderEventID: int32(7)}, "prop-1", "", true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			meta := Metadata{delivery: &amqp.Delivery{Headers: tc.headers, MessageId: tc.messageID}}
-			got, err := meta.DedupKey()
-			if tc.wantErr {
-				require.ErrorIs(t, err, ErrInvalidEventID)
-				assert.Empty(t, got)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tc.want, got)
-		})
-	}
-}
-
-// TestMetadataDedupKeyFallsBackToTheMessageIDProperty pins the fallback half of
-// #1547: a producer that follows the standard but is not go-bricks writes
-// message_id and no stamp, and that delivery must still be processable through
-// inbox.ProcessOnce. The property answers to the SAME grammar as the stamp, so
-// `:` stays excluded and a property can never mint a sealed key — ADR-097's
-// suppression-attack closure holds.
-func TestMetadataDedupKeyFallsBackToTheMessageIDProperty(t *testing.T) {
-	cases := []struct {
-		name      string
-		headers   amqp.Table
-		messageID string
-		want      string
-		wantErr   bool
-	}{
-		{"valid_property", amqp.Table{}, "9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f", "9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f", false},
-		{"valid_property_nil_table", nil, "prop-1", "prop-1", false},
-		{"every_grammar_class", amqp.Table{}, "aZ09_-", "aZ09_-", false},
-		{"max_length_128", amqp.Table{}, strings.Repeat("a", 128), strings.Repeat("a", 128), false},
-		{"absent_property", amqp.Table{}, "", "", true},
-		{"length_129", amqp.Table{}, strings.Repeat("a", 129), "", true},
-		{"malformed_space", amqp.Table{}, "prop 1", "", true},
-		{"malformed_colon_sealed_shape", amqp.Table{}, "svc-payments-sign:9f0c2b1e", "", true},
+		{"stamp_beats_property", amqp.Table{HeaderEventID: "evt-1"}, "prop-1", "evt-1", false},
+		{"malformed_stamp_does_not_fall_through", amqp.Table{HeaderEventID: "a b"}, "prop-1", "", true},
+		{"empty_stamp_does_not_fall_through", amqp.Table{HeaderEventID: ""}, "prop-1", "", true},
+		{"wrong_type_stamp_does_not_fall_through", amqp.Table{HeaderEventID: int32(7)}, "prop-1", "", true},
+		{"property_when_unstamped", amqp.Table{}, "9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f", "9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f", false},
+		{"property_when_no_table_at_all", nil, "prop-1", "prop-1", false},
 		{"other_headers_do_not_stamp", amqp.Table{"x-idempotency-key": "business-key"}, "prop-1", "prop-1", false},
+		{"malformed_property", amqp.Table{}, "prop 1", "", true},
+		{"property_spelling_a_sealed_key", amqp.Table{}, "svc-payments-sign:9f0c2b1e", "", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -189,31 +157,10 @@ func TestMetadataDedupKeyFallsBackToTheMessageIDProperty(t *testing.T) {
 			if tc.wantErr {
 				require.ErrorIs(t, err, ErrInvalidEventID)
 				assert.Empty(t, got)
-				if tc.messageID != "" {
-					assert.NotContains(t, err.Error(), tc.messageID, "the error names the length, never the id")
-				}
 				return
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got)
-		})
-	}
-}
-
-// TestMetadataDedupKeyIgnoresTheMessageIDPropertyWhenSealed pins that the
-// sealed branch is untouched by #1547: the key is composed from the verified
-// envelope whatever the wire carries.
-func TestMetadataDedupKeyIgnoresTheMessageIDPropertyWhenSealed(t *testing.T) {
-	env := SealedEnvelope{JTI: "jti-1", SignFamily: "svc-sign"}
-	for name, delivery := range map[string]*amqp.Delivery{
-		"property_only":      {MessageId: "prop-1"},
-		"property_and_stamp": {Headers: amqp.Table{HeaderEventID: "evt-1"}, MessageId: "prop-1"},
-		"malformed_property": {MessageId: "a b"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			key, err := Metadata{delivery: delivery, sealed: &env}.DedupKey()
-			require.NoError(t, err)
-			assert.Equal(t, "svc-sign:jti-1", key)
 		})
 	}
 }

@@ -269,23 +269,6 @@ func TestProcessOnceViaTypedConsumerMessageIDOnly(t *testing.T) {
 	assert.Equal(t, 1, calls, "the business callback runs exactly once across a redelivery")
 }
 
-// TestProcessOnceRefusesAMessageIDSpellingASealedKey pins that the fallback
-// cannot be used to suppress a sealed message: the property answers to the
-// header grammar, which excludes `:`, so a sealed-shaped spelling is refused at
-// DedupKey and never reaches the ledger.
-func TestProcessOnceRefusesAMessageIDSpellingASealedKey(t *testing.T) {
-	handler := messaging.NewTypedHandlerWithMeta("evt", func(_ context.Context, _ testEvent, meta messaging.Metadata) error {
-		_, err := meta.DedupKey()
-		require.ErrorIs(t, err, messaging.ErrInvalidEventID)
-		return nil
-	})
-
-	require.NoError(t, handler.Handle(t.Context(), &amqp.Delivery{
-		Body:      []byte(`{"reference":"abc"}`),
-		MessageId: "svc-payments-sign:9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f",
-	}))
-}
-
 // The ledger's second door — a sealed dedup key — is admitted only under a delivery
 // the sealed typed door opened. These helpers reach that context the way a
 // consumer does: through DeclareTypedConsumerWithMeta on a seal-tagged type, with a

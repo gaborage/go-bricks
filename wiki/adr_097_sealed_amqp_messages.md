@@ -29,9 +29,19 @@
 > `x-idempotency-key` is NOT a framework dedup source and does not become one here — the
 > glossary defines the idempotency key as the CONSUMER's business key, and #1542's proposed
 > three-level precedence is superseded on that point. The sealed branch is untouched: a sealed
-> consumer's key is composed from the verified envelope whatever the wire carries
-> (`[C64.11]`, breaking — a consumer that relied on the absent-stamp error to REJECT
-> unstamped messages must now make that check itself).
+> consumer's key is composed from the verified envelope whatever the wire carries. Two
+> boundaries the closure depends on, stated so they are not rediscovered: the framework
+> validates the SHAPE of either unsealed source and never its UNIQUENESS — AMQP obliges no
+> producer to make `message_id` unique per message, so a producer reusing one across distinct
+> events has them skipped as duplicates, and a queue with such a producer wants the stamp or
+> the consumer's own key. And the additive `Metadata.MessageID()` accessor must never be handed
+> to `inbox.ProcessOnce`: under a sealed delivery's context `ValidateDedupKey` admits a
+> `<SignFamily>:<jti>`-shaped key, and that accessor is the one door that can hand a sealed
+> handler a caller-written string of that shape. `DedupKey` is the only supported way to a
+> ledger key, and no framework path passes the property anywhere else
+> (`[C64.11]`, breaking — a consumer whose absent-stamp error arm did anything but re-raise,
+> whether it REJECTED the unstamped delivery or processed it WITHOUT dedup, must now make that
+> judgement itself).
 >
 > **Amended (2026-09-04, #1408):** a second door, `jose/sealed.SealDocument` with
 > `NewDocumentSpec`, seals an already-serialized document for tooling (`cmd/seal-event`) and
