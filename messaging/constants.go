@@ -48,6 +48,8 @@ const (
 	argMaxSegmentSizeBytes  = "x-stream-max-segment-size-bytes"
 	argDeadLetterExchange   = "x-dead-letter-exchange"
 	argDeadLetterRoutingKey = "x-dead-letter-routing-key"
+	argMaxPriority          = "x-max-priority"
+	argQueueMode            = "x-queue-mode"
 
 	queueTypeStream = "stream"
 

@@ -295,12 +295,12 @@ one queue leaves the other at the spec's resolved value, so a quorum primary wit
 classic `.dlq` is reached by registering `NewQueue("orders.queue.dlq")` with
 `x-queue-type: classic` before the helper runs. A `QueueType` that is
 neither constant is a declaration-time validation error, not an argument forwarded
-for the broker to reject. Quorum queues do not support every queue shape, though: a
-queue that resolves to quorum and is non-durable, auto-delete or exclusive, or carries
-`x-max-priority` or `x-queue-mode` (lazy), still reaches the broker and fails with
-`PRECONDITION_FAILED` mid-startup, so keep such a queue on
-`messaging.QueueTypeClassic`. The check runs where declarations are validated once, so
-per-tenant replay is unchanged. Upgrading a deployment whose queues are already classic: see
+for the broker to reject. And because quorum queues do not support them, a queue
+that resolves to quorum and is non-durable, auto-delete or exclusive, or carries
+`x-max-priority` or `x-queue-mode` (lazy), is refused at declaration time naming the
+conflict rather than reaching the broker and failing with `PRECONDITION_FAILED`
+mid-startup. Both checks run where declarations are validated once, so per-tenant
+replay is unchanged. Upgrading a deployment whose queues are already classic: see
 [migrations.md](migrations.md) `[C64.12]` — the broker will not convert a queue's
 type in place.
 
