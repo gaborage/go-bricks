@@ -21,7 +21,8 @@ GoBricks provides a built-in **Transactional Outbox** for reliable event publish
 A relayed publish also mirrors that header onto the AMQP `message_id` property and the row's
 event type onto `type`, and labels the body `application/json` only when the outbox marshaled
 it — a caller-supplied `[]byte`, the persisted-sealed shape included, ships as
-`application/octet-stream` because nothing in the row records its encoding (ADR-105). The
+`application/octet-stream` because caller-supplied bytes carry no encoding stamp
+(ADR-105) — so hand `Payload` the event VALUE and let the outbox marshal it. The
 label travels on the row as a reserved `x-gobricks-content-type` header the relay strips
 before the wire; the whole `x-gobricks-` prefix is the framework's, so a caller header claiming
 it is refused at enqueue with `outbox.ErrReservedHeaderPrefix` — case-insensitively, and naming
@@ -67,11 +68,12 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
     if err != nil { return fmt.Errorf("insert order: %w", err) }
 
     // 2. Write event to outbox (SAME transaction — atomic!)
-    payload, _ := json.Marshal(OrderCreatedEvent{OrderID: req.ID})
+    // Hand over the VALUE, not pre-marshaled bytes: the outbox marshals it and
+    // records application/json for the relay to put on the wire (ADR-105).
     _, err = s.outbox.Publish(ctx, tx, &app.OutboxEvent{
         EventType:   "order.created",
         AggregateID: fmt.Sprintf("order-%d", req.ID),
-        Payload:     payload,
+        Payload:     OrderCreatedEvent{OrderID: req.ID},
         Exchange:    "order.events",
     })
     if err != nil { return fmt.Errorf("outbox publish: %w", err) }

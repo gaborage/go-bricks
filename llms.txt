@@ -3571,16 +3571,17 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
         req.ID, req.CustomerID, req.Total)
     if err != nil { return fmt.Errorf("insert order: %w", err) }
 
-    // Outbox event (same transaction)
-    payload, _ := json.Marshal(OrderCreatedEvent{
-        OrderID: req.ID, CustomerID: req.CustomerID, Total: req.Total,
-    })
+    // Outbox event (same transaction). Pass the VALUE, not pre-marshaled bytes:
+    // the outbox marshals it and records application/json for the relay to put
+    // on the wire, where caller-supplied []byte ships as octet-stream (ADR-105).
     _, err = s.outbox.Publish(ctx, tx, &app.OutboxEvent{
         EventType:   "order.created",
         AggregateID: fmt.Sprintf("order-%d", req.ID),
-        Payload:     payload,
-        Exchange:    "order.events",
-        RoutingKey:  "order.created",
+        Payload: OrderCreatedEvent{
+            OrderID: req.ID, CustomerID: req.CustomerID, Total: req.Total,
+        },
+        Exchange:   "order.events",
+        RoutingKey: "order.created",
     })
     if err != nil { return fmt.Errorf("outbox publish: %w", err) }
 
