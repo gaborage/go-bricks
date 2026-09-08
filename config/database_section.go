@@ -11,7 +11,8 @@ import (
 // state. Startup fails fast on identity gaps and on an explicit type that
 // contradicts the connectionstring scheme; connect infers what it can, enforces
 // the vendor rules that would otherwise fail silently open, fills defaults, and
-// leaves identity to the dial (ADR-050, "the seam stays asymmetric by design").
+// leaves identity to the dial (ADR-050, "the seam stays asymmetric by design")
+// except for the one vendor-scoped identity rule in validatePostgreSQLFields.
 type dbStrictness int
 
 const (
@@ -85,7 +86,8 @@ func normalizeDatabaseValues(db *DatabaseConfig, sec section, strictness dbStric
 
 // normalizeForConnect infers a missing Type from a recognized scheme without
 // erroring on a contradiction, rejects vendor field shapes that would fail
-// silently open, and fills pool/session defaults. Identity is the dial's job.
+// silently open, and fills pool/session defaults. Identity is the dial's job,
+// except where validatePostgreSQLFields refuses it.
 func normalizeForConnect(db *DatabaseConfig) error {
 	if db.Type == "" {
 		db.Type = inferDatabaseTypeFromConnectionString(db.ConnectionString)
@@ -339,9 +341,17 @@ func validateDatabaseType(dbType string) error {
 	return nil
 }
 
+// errMissingDatabaseHost is the one spelling of "this section has no host", shared by the
+// startup door's identity check and the PostgreSQL vendor arm's empty-host refusal. Both
+// doors promise a consumer routing on ConfigError.Field cannot tell them apart, so the
+// equality is structural here rather than restated at two call sites.
+func errMissingDatabaseHost() error {
+	return NewMissingFieldError(fieldDatabaseHost, "DATABASE_HOST", fieldDatabaseHost)
+}
+
 func validateDatabaseCoreFields(cfg *DatabaseConfig) error {
 	if cfg.Host == "" {
-		return NewMissingFieldError("database.host", "DATABASE_HOST", "database.host")
+		return errMissingDatabaseHost()
 	}
 
 	if err := validateRequiredDatabasePort(cfg.Port); err != nil {
@@ -427,9 +437,11 @@ func applyConnectionCountDefaults(cfg *DatabaseConfig) error {
 // instead of failing on the factory's empty-type dispatch. Unlike config.Validate,
 // this seam never errors on an explicit Type that contradicts the scheme — it is on
 // the per-tenant connection path, where the vendor dial error is the right failure.
-// It does reject Oracle TLS material and an unpaired PostgreSQL sslcert/sslkey,
-// because that failure mode is silent and open rather than loud at dial. The
-// asymmetry is deliberate.
+// It does reject Oracle TLS material, an unpaired PostgreSQL sslcert/sslkey, and a
+// PostgreSQL section with no connectionstring and an empty host, because those failure
+// modes are silent and open rather than loud at dial — the empty host reaches libpq's
+// default unix socket, where TLS is skipped (ADR-050 amendment). The asymmetry is
+// deliberate.
 //
 // It is the connect-strictness door of the database-section normalization
 // module (database_section.go); a rejected config returns untouched.
@@ -579,6 +591,10 @@ func checkNamedDatabases(databases map[string]DatabaseConfig, mt *MultitenantCon
 // tightens go-bricks-migrate at its next pin bump, with no separate copy to update.
 func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 	// Trim once here so both vendors and the downstream DSN builder see canonical values.
+	// Host is included because an externally-sourced identity carries whitespace until proven
+	// otherwise — a mounted secret or a config server delivering " " would otherwise slip past
+	// the emptiness checks at both doors and fail later at DNS resolution instead.
+	cfg.Host = strings.TrimSpace(cfg.Host)
 	cfg.TLS.Mode = strings.TrimSpace(cfg.TLS.Mode)
 	cfg.TLS.CertFile = strings.TrimSpace(cfg.TLS.CertFile)
 	cfg.TLS.KeyFile = strings.TrimSpace(cfg.TLS.KeyFile)
@@ -595,10 +611,11 @@ func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 	}
 }
 
-// validatePostgreSQLFields fails closed on database.tls shapes that pgx would silently
-// discard or downgrade (ADR-062). Check order is
-// load-bearing: connectionstring short-circuits, then the mode allowlist, then the
-// material/mode coherence rule, then the cert/key pairing.
+// validatePostgreSQLFields fails closed on the PostgreSQL shapes pgx would silently discard
+// or downgrade: the database.tls blocks of ADR-062, and an empty host, which is where the
+// ADR-050 amendment's one identity exception lives. Check order is load-bearing:
+// connectionstring short-circuits, then the empty-host refusal, then the mode allowlist,
+// then the material/mode coherence rule, then the cert/key pairing.
 func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 	if cfg.ConnectionString != "" {
 		if cfg.TLS.Mode != "" || cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" || cfg.TLS.CAFile != "" {
@@ -610,6 +627,13 @@ func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 			}
 		}
 		return nil
+	}
+
+	// An empty host is not a dial target: libpq semantics substitute the local socket
+	// directory and skip TLS there, so the refusal is version-independent even though
+	// pgx v5.11.0 is what made it reachable (v5.10.0 dialed `tcp :5432`).
+	if cfg.Host == "" {
+		return errMissingDatabaseHost()
 	}
 
 	if cfg.TLS.Mode != "" && !slices.Contains(pgSSLModes, cfg.TLS.Mode) {

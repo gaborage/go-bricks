@@ -59,7 +59,7 @@ func (p *panickingResourceSource) DBConfig(context.Context, string) (*config.Dat
 	if p.calls.Add(1) == 1 {
 		panic(p.panicVal)
 	}
-	return &config.DatabaseConfig{Type: "postgresql", Database: "after-panic"}, nil
+	return &config.DatabaseConfig{Type: "postgresql", Host: "localhost", Database: "after-panic"}, nil
 }
 
 type stubStatement struct{}
@@ -120,7 +120,7 @@ func TestDbManagerReturnsSameInstanceForSameKey(t *testing.T) {
 
 	connectorCalls := 0
 	manager := NewDbManager(&stubResourceSource{configs: map[string]*config.DatabaseConfig{
-		tenantA: {Type: "postgresql"},
+		tenantA: {Type: "postgresql", Host: "localhost"},
 	}}, log, DbManagerOptions{MaxSize: 5, IdleTTL: time.Minute}, func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
 		connectorCalls++
 		return &stubDB{key: cfg.Database}, nil
@@ -150,8 +150,8 @@ func TestDbManagerCloseClosesAllConnections(t *testing.T) {
 	}
 
 	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
-		"tenant-x": {Type: "postgresql", Database: "x"},
-		"tenant-y": {Type: "postgresql", Database: "y"},
+		"tenant-x": {Type: "postgresql", Host: "localhost", Database: "x"},
+		"tenant-y": {Type: "postgresql", Host: "localhost", Database: "y"},
 	}}
 
 	manager := NewDbManager(resource, log, DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
@@ -188,7 +188,7 @@ func TestCreateConnectionReturnsErrorWhenConfigFails(t *testing.T) {
 func TestCreateConnectionPropagatesConnectorError(t *testing.T) {
 	ctx := context.Background()
 	authErr := errors.New("connector failure")
-	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{"tenant": {Type: "postgresql"}}}
+	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{"tenant": {Type: "postgresql", Host: "localhost"}}}
 	connector := func(*config.DatabaseConfig, logger.Logger) (Interface, error) {
 		return nil, authErr
 	}
@@ -255,8 +255,8 @@ func TestDbManagerCloseAggregatesErrors(t *testing.T) {
 		return &stubDB{key: fmt.Sprintf("k%d", id), closeErr: fmt.Errorf("close failure %d", id)}, nil
 	}
 	src := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
-		"a": {Type: "postgresql"},
-		"b": {Type: "postgresql"},
+		"a": {Type: "postgresql", Host: "localhost"},
+		"b": {Type: "postgresql", Host: "localhost"},
 	}}
 	m := NewDbManager(src, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Minute}, connector)
 
@@ -372,7 +372,7 @@ func TestDbManagerStatsPopulatedManager(t *testing.T) {
 func TestDbManagerStatsSurfacesPoolErrors(t *testing.T) {
 	stub := &stubDB{key: "a", closeErr: errors.New("deferred close failure")}
 	connector := func(*config.DatabaseConfig, logger.Logger) (Interface, error) { return stub, nil }
-	src := &stubResourceSource{configs: map[string]*config.DatabaseConfig{"a": {Type: "postgresql"}}}
+	src := &stubResourceSource{configs: map[string]*config.DatabaseConfig{"a": {Type: "postgresql", Host: "localhost"}}}
 	m := NewDbManager(src, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
 
 	ctx := context.Background()
@@ -393,7 +393,7 @@ func TestDbManagerStatsSurfacesPoolErrors(t *testing.T) {
 // in this test — a swept connection is the proof that the constructor started the loop.
 func TestNewDbManagerStartsIdleCleanup(t *testing.T) {
 	src := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
-		tenantA: {Type: "postgresql", Database: tenantA},
+		tenantA: {Type: "postgresql", Host: "localhost", Database: tenantA},
 	}}
 	m := NewDbManager(src, newErrorTestLogger(), DbManagerOptions{
 		MaxSize:         5,
@@ -520,8 +520,8 @@ func newClosableDB(mu *sync.Mutex, closed map[string]bool) Connector {
 
 func twoTenantSource() *stubResourceSource {
 	return &stubResourceSource{configs: map[string]*config.DatabaseConfig{
-		"a": {Type: "postgresql", Database: "a"},
-		"b": {Type: "postgresql", Database: "b"},
+		"a": {Type: "postgresql", Host: "localhost", Database: "a"},
+		"b": {Type: "postgresql", Host: "localhost", Database: "b"},
 	}}
 }
 

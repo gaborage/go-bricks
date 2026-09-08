@@ -2506,13 +2506,14 @@ func TestValidatePostgreSQLFieldsRejectsPartialClientCert(t *testing.T) {
 }
 
 func TestValidatePostgreSQLFieldsAllowsMaterialUnderMandatoryMode(t *testing.T) {
-	both := &DatabaseConfig{Type: PostgreSQL}
+	// Host is set on both so the empty-host refusal cannot mask the TLS rules under test.
+	both := &DatabaseConfig{Type: PostgreSQL, Host: "h"}
 	both.TLS.Mode = sslModeRequire
 	both.TLS.CertFile = testTLSCertFile
 	both.TLS.KeyFile = testTLSKeyFile
 	require.NoError(t, validatePostgreSQLFields(both))
 
-	caOnly := &DatabaseConfig{Type: PostgreSQL}
+	caOnly := &DatabaseConfig{Type: PostgreSQL, Host: "h"}
 	// CA alone is valid under a mandatory mode (server auth, no client cert).
 	caOnly.TLS.Mode = sslModeVerifyCA
 	caOnly.TLS.CAFile = testTLSCAFile
@@ -2995,6 +2996,106 @@ func TestApplyDatabasePoolDefaultsRunsVendorValidation(t *testing.T) {
 		assertValidationError(t, err, "database.pool.idle.time must be non-negative")
 		assert.Equal(t, original, cfg, "a config rejected after inference must not keep the inferred Type or partial defaults")
 		assert.Empty(t, cfg.Type, "Type is committed only after every step succeeds")
+	})
+}
+
+// TestApplyDatabasePoolDefaultsRefusesEmptyPostgresHost pins the one exception to
+// the connect seam's "identity is the dial's job" posture (ADR-050 amendment):
+// pgx v5.11.0 replaces an empty host with libpq's default, the server's
+// unix-socket directory, and skips TLS for unix sockets — so a provider that
+// forgot the host would connect to whatever listens locally with the configured
+// database.tls material silently discarded. v5.10.0 dialed tcp :5432 instead.
+func TestApplyDatabasePoolDefaultsRefusesEmptyPostgresHost(t *testing.T) {
+	tests := []struct {
+		name      string
+		cfg       DatabaseConfig
+		wantField string
+	}{
+		{
+			name:      "postgres_empty_host_rejected",
+			cfg:       DatabaseConfig{Type: PostgreSQL, Host: "", Database: "d", Username: "u"},
+			wantField: "database.host",
+		},
+		{
+			// Externally-sourced identity carries whitespace until proven otherwise: a
+			// whitespace-only host is canonicalized to empty at the trim seam, so it is
+			// refused here as a config error rather than reaching pgx and failing at DNS.
+			name:      "postgres_whitespace_host_refused",
+			cfg:       DatabaseConfig{Type: PostgreSQL, Host: "  ", Database: "d", Username: "u"},
+			wantField: "database.host",
+		},
+		{
+			// The refusal is not TLS-gated: a fully specified verify-full block does
+			// not make an implicit host acceptable, because the unix socket is where
+			// that very material gets dropped.
+			name: "postgres_empty_host_with_tls_rejected",
+			cfg: DatabaseConfig{
+				Type: PostgreSQL, Host: "", Database: "d", Username: "u",
+				TLS: TLSConfig{Mode: sslModeVerifyFull, CAFile: "/etc/certs/ca.pem"},
+			},
+			wantField: "database.host",
+		},
+		{
+			// testBarePostgresConnString names a host; this pins only that the
+			// connectionstring short-circuit runs BEFORE the host guard.
+			name: "postgres_connectionstring_short_circuits_before_host_guard",
+			cfg:  DatabaseConfig{ConnectionString: testBarePostgresConnString},
+		},
+		{
+			// A DSN whose authority is empty is NOT guarded, deliberately: this seam
+			// does not parse DSNs, so a raw connectionstring reaches pgx verbatim and
+			// hits the same unix-socket TLS drop the typed shape is now refused for.
+			// Pinned as the accepted gap so widening the guard is a visible decision
+			// rather than a silent one (ADR-050 amendment, [C64.8] scope note; #1551).
+			name: "postgres_connectionstring_omitting_host_still_accepted",
+			cfg:  DatabaseConfig{ConnectionString: "postgres:///db"},
+		},
+		{
+			name: "postgres_host_set_accepted",
+			cfg:  DatabaseConfig{Type: PostgreSQL, Host: "h", Database: "d", Username: "u"},
+		},
+		{
+			// Oracle builds oracle://u:p@:1521/svc and fails loudly at dial, so this
+			// seam has nothing to fail closed on.
+			name: "oracle_empty_host_passes_through",
+			cfg:  DatabaseConfig{Type: Oracle, Host: "", Database: "XEPDB1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.cfg
+
+			err := ApplyDatabasePoolDefaults(&cfg)
+
+			if tt.wantField == "" {
+				require.NoError(t, err)
+				assert.Equal(t, defaultPoolMaxConnections, cfg.Pool.Max.Connections,
+					"an accepted config still gets its pool defaults")
+				return
+			}
+
+			original := tt.cfg
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+			assert.Equal(t, errCategoryMissing, cfgErr.Category)
+			assert.Equal(t, original, cfg, "a rejected config must go back to its caller completely untouched")
+		})
+	}
+
+	// The runtime door addresses the new refusal the way it addresses every other
+	// one, so a consumer routing on ConfigError.Field cannot tell a dynamically
+	// resolved tenant apart from a statically declared one.
+	t.Run("forkey_tenant_field_is_section_qualified", func(t *testing.T) {
+		cfg := DatabaseConfig{Type: PostgreSQL, Host: "", Database: "d", Username: "u"}
+
+		err := ApplyDatabasePoolDefaultsForKey(&cfg, "acme")
+
+		var cfgErr *ConfigError
+		require.ErrorAs(t, err, &cfgErr)
+		assert.Equal(t, "multitenant.tenants.acme.database.host", cfgErr.Field)
+		assert.Equal(t, errCategoryMissing, cfgErr.Category)
 	})
 }
 

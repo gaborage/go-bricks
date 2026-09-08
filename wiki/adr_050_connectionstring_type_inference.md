@@ -3,6 +3,40 @@
 **Status:** Accepted
 **Date:** 2026-08-05
 
+> **Amended (2026-09-07):** The connect seam's "identity is the dial's job"
+> posture (stated in the 2026-08-14 amendment below and in Consequences, "the
+> seam stays asymmetric by design") now has one exception: a PostgreSQL section
+> with no `connectionstring` and a `host` that is empty after trimming (the seam
+> canonicalizes it with `strings.TrimSpace`, so a whitespace-only value counts as
+> missing) is refused by
+> `validateVendorSpecificFields` with the same `MissingFieldError` the startup
+> path emits. pgx v5.11.0 stopped dialing `tcp :5432` for an empty host and
+> substitutes libpq's default, a unix socket in the server's socket directory,
+> which discards any configured `database.tls` material. That is the "fails
+> silently open" class this ADR already refuses for dropped TLS material, so
+> empty host joins it. Oracle is unchanged, and the durable reason is not that it
+> dials loudly — go-ora resolves `oracle://u:p@:1521/svc` to `":1521"` and dials
+> the local machine, exactly as pgx v5.10.0 did — but that
+> `validateOracleFields` refuses the whole `database.tls` block, so Oracle has no
+> TLS material an implicit host could discard. Revisit the exemption if Oracle
+> TLS is ever implemented. Static sections are unaffected, they already rejected
+> an empty host at startup; the change reaches `DBConfigProvider` results at
+> first use and the `tools/migration` CLI at its next pin bump.
+>
+> The exception is deliberately NOT extended to a raw `connectionstring`. The
+> same fail-open exists there — `postgres:///db?sslmode=verify-full` resolves its
+> empty host element to `defaultHost()` and appends a `nil` TLS config for a unix
+> network, dropping `sslmode` exactly as the typed shape did — but closing it
+> would require this seam to parse DSNs, which it does not do and which would
+> invert the config/connector dependency. The short-circuit therefore runs first
+> and a host-less DSN is still accepted; `[C64.8]`'s scope says so, and
+> `postgres_connectionstring_omitting_host_still_accepted` pins it so widening
+> the guard stays a visible decision. Two fail-open shapes therefore survive this
+> amendment and are tracked rather than closed: a host-less raw DSN (#1551) and an
+> explicit unix-socket host, which discards TLS material on BOTH doors because
+> pgx skips TLS for a unix network (#1555, an ADR-062 rule rather than one of
+> this ADR's). See [migrations.md](migrations.md) `[C64.8]`, #1544.
+>
 > **Amended (2026-08-14):** Decision item 1 names
 > `config.validateDatabaseWithConnectionString` as the inference site; it is no
 > longer the only one. `config.ApplyDatabasePoolDefaults` — the seam

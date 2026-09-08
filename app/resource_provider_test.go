@@ -24,7 +24,7 @@ import (
 type keyedDBConfigSource struct{}
 
 func (keyedDBConfigSource) DBConfig(_ context.Context, key string) (*config.DatabaseConfig, error) {
-	return &config.DatabaseConfig{Type: "postgresql", Database: key}, nil
+	return &config.DatabaseConfig{Type: "postgresql", Host: localHost, Database: key}, nil
 }
 
 // TestResourceProviderDBLeaseSurvivesConcurrentEviction is the end-to-end proof of issue
