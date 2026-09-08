@@ -187,7 +187,7 @@ func (s *oracleHoldStore) Defer(ctx context.Context, db dbtypes.Interface, consu
 func (s *oracleHoldStore) Stats(ctx context.Context, db dbtypes.Interface, consumer string) (HoldStats, error) {
 	query, args, err := s.stats(consumer).ToSQL()
 	if err != nil {
-		return HoldStats{}, &database.ExecError{Op: "inbox hold: build stats failed", Stage: database.StageBuild, Err: err}
+		return HoldStats{}, buildError("inbox hold: build stats failed", err)
 	}
 	return scanHoldStats(ctx, db, query, args...)
 }

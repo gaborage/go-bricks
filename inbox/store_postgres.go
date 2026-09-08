@@ -48,7 +48,7 @@ func (s *postgresStore) MarkProcessed(ctx context.Context, tx dbtypes.Tx, rec Re
 		map[string]any{"tenant_id": rec.TenantID, "event_id": rec.EventID, "processed_at": rec.ProcessedAt},
 		nil)
 	if err != nil {
-		return false, &database.ExecError{Op: "inbox postgres: build mark processed failed", Stage: database.StageBuild, Err: err}
+		return false, buildError("inbox postgres: build mark processed failed", err)
 	}
 	res, err := tx.Exec(ctx, query, args...)
 	if err != nil {

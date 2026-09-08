@@ -125,36 +125,20 @@ func TestStoreSQLGolden(t *testing.T) {
 }
 
 // TestStoreLeadBuildRefusalIsABuildStageExecError pins #1521's premise for the
-// leader statements: a table name the name validator accepts but the builder
-// refuses surfaces as a build-stage ExecError with the identifier sentinel
-// reachable through the wrap, so the startup probe can classify it.
+// leader lock: a table name the name validator accepts but the builder refuses
+// surfaces as a build-stage ExecError with the identifier sentinel reachable
+// through the wrap, so the startup probe can classify it.
 func TestStoreLeadBuildRefusalIsABuildStageExecError(t *testing.T) {
 	store, err := NewPostgresStore("ev#ents")
 	require.NoError(t, err, "the name validator accepts this name; only the builder refuses it")
 	ctx := context.Background()
 	db, _, _ := permissiveDB(dbtypes.PostgreSQL)
 
-	cases := []struct {
-		name string
-		op   string
-		call func() error
-	}{
-		{
-			name: "lead_leader_lock", op: "outbox postgres: build leader lock failed",
-			call: func() error { _, err := store.Lead(ctx, db); return err },
-		},
-	}
+	_, err = store.Lead(ctx, db)
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := tc.call()
-
-			require.Error(t, err)
-			var execErr *database.ExecError
-			require.ErrorAs(t, err, &execErr)
-			assert.Equal(t, database.StageBuild, execErr.Stage)
-			assert.Equal(t, tc.op, execErr.Op)
-			assert.ErrorIs(t, err, dbident.ErrIdentifierCharset)
-		})
-	}
+	var execErr *database.ExecError
+	require.ErrorAs(t, err, &execErr)
+	assert.Equal(t, database.StageBuild, execErr.Stage)
+	assert.Equal(t, "outbox postgres: build leader lock failed", execErr.Op)
+	assert.ErrorIs(t, err, dbident.ErrIdentifierCharset)
 }

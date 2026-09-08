@@ -327,7 +327,7 @@ func (q *holdQueries) ListTenants(ctx context.Context, db dbtypes.Interface, con
 	// builder's projection accepts identifiers alone.
 	noError, err := q.qb.Expr(q.noError)
 	if err != nil {
-		return nil, q.wrapBuild("build list tenants projection failed", err)
+		return nil, q.wrapBuild("build list tenants query failed", err)
 	}
 
 	f := q.qb.Filter()
@@ -346,7 +346,7 @@ func (q *holdQueries) DueTenants(ctx context.Context, db dbtypes.Interface, cons
 	// column, as in ListTenants; no interpolation and no caller value.
 	noError, err := q.qb.Expr(q.noError)
 	if err != nil {
-		return nil, q.wrapBuild("build due tenants projection failed", err)
+		return nil, q.wrapBuild("build due tenants query failed", err)
 	}
 
 	f := q.qb.Filter()
@@ -400,7 +400,7 @@ func (q *holdQueries) DeleteRow(ctx context.Context, db dbtypes.Interface,
 	f := q.qb.Filter()
 	lease, err := q.leaseHeldBy(f, consumer, tenant, owner)
 	if err != nil {
-		return false, q.wrapBuild("build delete held row lease fence failed", err)
+		return false, q.wrapBuild("build delete held row query failed", err)
 	}
 
 	query, args, err := q.qb.Delete(q.table).
@@ -424,7 +424,7 @@ func (q *holdQueries) Release(ctx context.Context, db dbtypes.Interface, consume
 	f := q.qb.Filter()
 	one, err := q.constantOne()
 	if err != nil {
-		return false, q.wrapBuild("build release tenant row probe failed", err)
+		return false, q.wrapBuild("build release tenant query failed", err)
 	}
 
 	rowsRemain := q.qb.Select(one).From(q.table).
@@ -499,17 +499,20 @@ func (q *holdQueries) wrap(what string, err error) error {
 	return fmt.Errorf("%s: %w", q.label(what), err)
 }
 
-// label is the prefix both wraps share, matching what the hand-written stores
-// emit — "inbox postgres: held tenants query failed".
+// label is the prefix both wraps share: "inbox <vendor>: <what>".
 func (q *holdQueries) label(what string) string {
 	return "inbox " + q.vendor + ": " + what
 }
 
-// wrapBuild reports a build refusal the way every Execute* helper does: a
-// build-stage ExecError, whose stage a caller that classifies a failure — the
-// startup probes via tenantstore.ProbeFailureError — reads.
+// wrapBuild reports a build refusal under this vendor's label.
 func (q *holdQueries) wrapBuild(what string, err error) error {
-	return &database.ExecError{Op: q.label(what), Stage: database.StageBuild, Err: err}
+	return buildError(q.label(what), err)
+}
+
+// buildError is the package's one build-stage ExecError, whose stage the startup
+// probes read through tenantstore.ProbeFailureError. op arrives fully formed.
+func buildError(op string, err error) error {
+	return &database.ExecError{Op: op, Stage: database.StageBuild, Err: err}
 }
 
 // stats is the one-round-trip snapshot: three scalar subqueries in one
