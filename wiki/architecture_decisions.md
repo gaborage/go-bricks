@@ -1576,17 +1576,18 @@ on a broker restart, which NKH1 §6.2 does not allow, while §6.5's identifying 
 the JSON and compact-JWS bodies the typed door produces. Each property is now written by the
 framework at the seam that knows the answer, with no caller knob: `amqp.Persistent`
 unconditionally; `app_id` from `app.name` through the new exported `messaging.WithAppName`;
-`timestamp` from an unexported client clock, deliberately not an option; `type` from the typed
-handle's `EventType` or the outbox row's; `message_id` from the outbox row id on a relayed
-publish, MIRRORING `x-outbox-event-id` rather than replacing it as the ledger key (ADR-097);
-and `content_type` claimed only where it is known — `application/json` or `application/jose`
-from the typed handle, octet-stream on the raw bytes path. The relay cannot recover the
-encoding, because `marshalPayload` passes a caller `[]byte` through unexamined and a
-persisted-sealed compact JWS arrives as exactly one, so the encoding is recorded AT ENQUEUE as
-the unexported `x-gobricks-content-type` header stamp — nothing for the `[]byte` arm, which
-therefore ships as octet-stream rather than mislabelled — and both lanes strip it in `Plan`
-like the tenant stamp. Payload sniffing was rejected; a real ledger content-type column is a
-schema migration and out of scope. See [migrations.md](migrations.md) `[C64.10]`.
+`timestamp` from `time.Now()` read at the publish, deliberately neither an injectable clock
+nor a `ClientOption`; `type` from the typed handle's `EventType` or the outbox row's;
+`message_id` from the outbox row id on a relayed publish, MIRRORING `x-outbox-event-id`
+rather than replacing it as the ledger key (ADR-097); and `content_type` claimed only where
+it is known — `application/json` or `application/jose` from the typed handle, octet-stream on
+the raw bytes path. The relay cannot recover the encoding, because `marshalPayload` passes a
+caller `[]byte` through unexamined and a persisted-sealed compact JWS arrives as exactly one,
+so the encoding is recorded AT ENQUEUE as the unexported `x-gobricks-content-type` header
+stamp — nothing for the `[]byte` arm, which therefore ships as octet-stream rather than
+mislabelled — and both lanes strip it in `Plan` like the tenant stamp. Payload sniffing was
+rejected; a real ledger content-type column is a schema migration and out of scope.
+See [migrations.md](migrations.md) `[C64.10]`.
 
 ---
 
