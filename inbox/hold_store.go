@@ -327,7 +327,7 @@ func (q *holdQueries) ListTenants(ctx context.Context, db dbtypes.Interface, con
 	// builder's projection accepts identifiers alone.
 	noError, err := q.qb.Expr(q.noError)
 	if err != nil {
-		return nil, q.wrapBuild("build list tenants query failed", err)
+		return nil, q.wrap("build list tenants query failed", err)
 	}
 
 	f := q.qb.Filter()
@@ -346,7 +346,7 @@ func (q *holdQueries) DueTenants(ctx context.Context, db dbtypes.Interface, cons
 	// column, as in ListTenants; no interpolation and no caller value.
 	noError, err := q.qb.Expr(q.noError)
 	if err != nil {
-		return nil, q.wrapBuild("build due tenants query failed", err)
+		return nil, q.wrap("build due tenants query failed", err)
 	}
 
 	f := q.qb.Filter()
@@ -400,7 +400,7 @@ func (q *holdQueries) DeleteRow(ctx context.Context, db dbtypes.Interface,
 	f := q.qb.Filter()
 	lease, err := q.leaseHeldBy(f, consumer, tenant, owner)
 	if err != nil {
-		return false, q.wrapBuild("build delete held row query failed", err)
+		return false, q.wrap("build delete held row query failed", err)
 	}
 
 	query, args, err := q.qb.Delete(q.table).
@@ -424,7 +424,7 @@ func (q *holdQueries) Release(ctx context.Context, db dbtypes.Interface, consume
 	f := q.qb.Filter()
 	one, err := q.constantOne()
 	if err != nil {
-		return false, q.wrapBuild("build release tenant query failed", err)
+		return false, q.wrap("build release tenant query failed", err)
 	}
 
 	rowsRemain := q.qb.Select(one).From(q.table).

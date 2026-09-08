@@ -123,7 +123,7 @@ func (s *postgresHoldStore) Park(ctx context.Context, tx dbtypes.Tx, row *HoldRo
 		nil,
 	)
 	if err != nil {
-		return false, s.wrapBuild("build park row failed", err)
+		return false, fmt.Errorf("inbox postgres: build park row failed: %w", err)
 	}
 	res, err := tx.Exec(ctx, insert, insertArgs...)
 	if err != nil {

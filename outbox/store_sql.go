@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/gaborage/go-bricks/database"
@@ -48,12 +49,6 @@ func newSQLStore(vendor dbtypes.Vendor, label, tableName, errorColumn string, sc
 // and the helper's stage is the one addition.
 func (s *sqlStore) op(name string) string {
 	return "outbox " + s.vendor + ": " + name + " failed"
-}
-
-// buildError is the package's one build-stage ExecError, whose stage the startup
-// probes read through tenantstore.ProbeFailureError. op arrives fully formed.
-func buildError(op string, err error) error {
-	return &database.ExecError{Op: op, Stage: database.StageBuild, Err: err}
 }
 
 func (s *sqlStore) Insert(ctx context.Context, tx dbtypes.Tx, record *Record) error {
@@ -140,11 +135,12 @@ func (s *sqlStore) Lead(ctx context.Context, db dbtypes.Interface) (Leadership, 
 	f := s.qb.Filter()
 	lockSQL, lockArgs, err := s.qb.Select("id").From(s.leaderTable).Where(f.Eq("id", 1)).ForUpdateNoWait().ToSQL()
 	if err != nil {
-		return nil, buildError(s.op("build leader lock"), err)
+		// StageBuild is what the startup probes read through tenantstore.ProbeFailureError.
+		return nil, &database.ExecError{Op: s.op("build leader lock"), Stage: database.StageBuild, Err: err}
 	}
 	probeSQL, _, err := s.qb.Select(s.qb.MustExpr("1")).ToSQL()
 	if err != nil {
-		return nil, buildError(s.op("build leader probe"), err)
+		return nil, fmt.Errorf("%s: %w", s.op("build leader probe"), err)
 	}
 	return leadRow(ctx, db, s.vendor, s.leaderTable, lockSQL, lockArgs, probeSQL)
 }

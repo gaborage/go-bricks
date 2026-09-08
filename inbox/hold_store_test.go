@@ -2,6 +2,7 @@ package inbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/gaborage/go-bricks/database"
 	dbident "github.com/gaborage/go-bricks/database/identifier"
+	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
@@ -170,7 +172,7 @@ func TestHoldStoreBuildRefusalIsABuildStageExecError(t *testing.T) {
 	store, err := NewPostgresHoldStore("ev#ents")
 	require.NoError(t, err, "the name validator accepts this name; only the builder refuses it")
 	ctx := context.Background()
-	db, tx := permissiveDB(dbtypes.PostgreSQL)
+	db, _ := permissiveDB(dbtypes.PostgreSQL)
 
 	calls := []struct {
 		name string
@@ -206,15 +208,6 @@ func TestHoldStoreBuildRefusalIsABuildStageExecError(t *testing.T) {
 			call: func() error { return store.ReleaseLease(ctx, db, "orders", "acme", "owner-1") },
 		},
 		{
-			name: "park", op: "inbox postgres: build park row failed",
-			call: func() error {
-				_, err := store.Park(ctx, tx, &HoldRow{
-					Consumer: "orders", Stream: "orders-s", Offset: 7, TenantID: "acme", HeldAt: fixedAt,
-				})
-				return err
-			},
-		},
-		{
 			name: "stats", op: "inbox hold: build stats failed",
 			call: func() error { _, err := store.Stats(ctx, db, "orders"); return err },
 		},
@@ -232,4 +225,27 @@ func TestHoldStoreBuildRefusalIsABuildStageExecError(t *testing.T) {
 			assert.ErrorIs(t, err, dbident.ErrIdentifierCharset)
 		})
 	}
+}
+
+// TestHoldStoreParkFailsAtTheTenantMarkerBeforeBuilding pins the ordering that
+// keeps Park out of the build-refusal table: the raw tenant-marker INSERT runs
+// BEFORE BuildUpsert, so a table name the builder would refuse fails at the
+// marker's exec in production, not at the build stage.
+func TestHoldStoreParkFailsAtTheTenantMarkerBeforeBuilding(t *testing.T) {
+	store, err := NewPostgresHoldStore("ev#ents")
+	require.NoError(t, err)
+	markerErr := errors.New(`pq: syntax error at or near "#"`)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	tx := db.ExpectTransaction()
+	tx.ExpectExec("INSERT INTO ev#ents_tenant").WillReturnError(markerErr)
+
+	_, err = store.Park(t.Context(), tx, &HoldRow{
+		Consumer: "orders", Stream: "orders-s", Offset: 7, TenantID: "acme", HeldAt: fixedAt,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inbox postgres: mark tenant held failed")
+	var execErr *database.ExecError
+	assert.NotErrorAs(t, err, &execErr, "the marker exec fails first, so Park never reaches the build stage")
+	require.ErrorIs(t, err, markerErr)
 }
