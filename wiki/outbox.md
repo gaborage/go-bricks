@@ -20,10 +20,11 @@ GoBricks provides a built-in **Transactional Outbox** for reliable event publish
 
 A relayed publish also mirrors that header onto the AMQP `message_id` property and the row's
 event type onto `type`, and labels the body `application/json` only when the outbox marshaled
-it — a caller-supplied `[]byte`, the persisted-sealed shape included, ships as
-`application/octet-stream` because caller-supplied bytes carry no encoding stamp
-(ADR-105) — so hand `Payload` the event VALUE and let the outbox marshal it. The
-label travels on the row as a reserved `x-gobricks-content-type` header the relay strips
+it — a caller-supplied `[]byte`, the persisted-sealed shape included, persists UNTYPED,
+because bytes handed over already carry no encoding stamp (ADR-105). On the AMQP lane an
+untyped row ships as `application/octet-stream`; on the stream lane it carries no
+content-type property at all, since that lane sets none. So hand `Payload` the event VALUE
+and let the outbox marshal it. The label travels on the row as a reserved `x-gobricks-content-type` header the relay strips
 before the wire; the whole `x-gobricks-` prefix is the framework's, so a caller header claiming
 it is refused at enqueue with `outbox.ErrReservedHeaderPrefix` — case-insensitively, and naming
 the offending key — rather than dropped. Rows enqueued before the

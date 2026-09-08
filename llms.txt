@@ -3573,7 +3573,8 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
 
     // Outbox event (same transaction). Pass the VALUE, not pre-marshaled bytes:
     // the outbox marshals it and records application/json for the relay to put
-    // on the wire, where caller-supplied []byte ships as octet-stream (ADR-105).
+    // on the wire. Caller-supplied []byte persists untyped: the AMQP lane then
+    // ships it as octet-stream, the stream lane with no content type (ADR-105).
     _, err = s.outbox.Publish(ctx, tx, &app.OutboxEvent{
         EventType:   "order.created",
         AggregateID: fmt.Sprintf("order-%d", req.ID),
