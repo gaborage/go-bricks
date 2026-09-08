@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1581,10 +1582,14 @@ func TestRegisterConsumerWithoutArgsGetsEmptyMap(t *testing.T) {
 const testQuorumQueue = "orders.quorum.queue"
 
 func TestValidateQuorumQueueShape(t *testing.T) {
+	// Distinctive on purpose: the key-only contract is asserted by this value's
+	// ABSENCE from the error, and a short value like 10 matches unrelated digits.
+	const argFixtureValue = 7333
+
 	quorumArgs := func(extra ...string) map[string]any {
 		args := map[string]any{argQueueType: QueueTypeQuorum}
 		for _, key := range extra {
-			args[key] = 10
+			args[key] = argFixtureValue
 		}
 		return args
 	}
@@ -1651,6 +1656,10 @@ func TestValidateQuorumQueueShape(t *testing.T) {
 			}
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
+			// The error names the offending key and stops: queue Args are broker
+			// topology and reach a startup error the logger's key filter cannot mask.
+			assert.NotContains(t, err.Error(), strconv.Itoa(argFixtureValue),
+				"the error must name the argument key, never its value")
 		})
 	}
 }
