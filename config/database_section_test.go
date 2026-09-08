@@ -3017,6 +3017,14 @@ func TestApplyDatabasePoolDefaultsRefusesEmptyPostgresHost(t *testing.T) {
 			wantField: "database.host",
 		},
 		{
+			// Externally-sourced identity carries whitespace until proven otherwise: a
+			// whitespace-only host is canonicalized to empty at the trim seam, so it is
+			// refused here as a config error rather than reaching pgx and failing at DNS.
+			name:      "postgres_whitespace_host_refused",
+			cfg:       DatabaseConfig{Type: PostgreSQL, Host: "  ", Database: "d", Username: "u"},
+			wantField: "database.host",
+		},
+		{
 			// The refusal is not TLS-gated: a fully specified verify-full block does
 			// not make an implicit host acceptable, because the unix socket is where
 			// that very material gets dropped.

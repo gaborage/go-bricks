@@ -29,8 +29,11 @@
 > invert the config/connector dependency. The short-circuit therefore runs first
 > and a host-less DSN is still accepted; `[C64.8]`'s scope says so, and
 > `postgres_connectionstring_omitting_host_still_accepted` pins it so widening
-> the guard stays a visible decision. #1551 tracks closing the DSN half. See
-> [migrations.md](migrations.md) `[C64.8]`, #1544.
+> the guard stays a visible decision. Two fail-open shapes therefore survive this
+> amendment and are tracked rather than closed: a host-less raw DSN (#1551) and an
+> explicit unix-socket host, which discards TLS material on BOTH doors because
+> pgx skips TLS for a unix network (#1555, an ADR-062 rule rather than one of
+> this ADR's). See [migrations.md](migrations.md) `[C64.8]`, #1544.
 >
 > **Amended (2026-08-14):** Decision item 1 names
 > `config.validateDatabaseWithConnectionString` as the inference site; it is no

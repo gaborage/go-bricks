@@ -591,6 +591,10 @@ func checkNamedDatabases(databases map[string]DatabaseConfig, mt *MultitenantCon
 // tightens go-bricks-migrate at its next pin bump, with no separate copy to update.
 func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 	// Trim once here so both vendors and the downstream DSN builder see canonical values.
+	// Host is included because an externally-sourced identity carries whitespace until proven
+	// otherwise — a mounted secret or a config server delivering " " would otherwise slip past
+	// the emptiness checks at both doors and fail later at DNS resolution instead.
+	cfg.Host = strings.TrimSpace(cfg.Host)
 	cfg.TLS.Mode = strings.TrimSpace(cfg.TLS.Mode)
 	cfg.TLS.CertFile = strings.TrimSpace(cfg.TLS.CertFile)
 	cfg.TLS.KeyFile = strings.TrimSpace(cfg.TLS.KeyFile)
