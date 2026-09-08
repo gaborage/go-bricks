@@ -7161,7 +7161,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   the end state of the pair, so the relay-side values below arrive with that second link.
   SIX properties, each with its own scope: `DeliveryMode` on every publish; `ContentType`
   by what the payload actually is; `AppId`, `Timestamp` and `Type` where they had no value
-  at all; `MessageId` the outbox row id on a RELAYED publish only, a generated UUID
+  at all, with `Timestamp` read per publish ATTEMPT so it marks the attempt that reached the
+  broker; `MessageId` the outbox row id on a RELAYED publish only, a generated UUID
   everywhere else. In detail: `DeliveryMode` becomes `amqp.Persistent` on EVERY publish — typed, outbox-relayed,
   and the raw byte door — where it was left at the zero value, so every business message was
   transient. `ContentType` was hard-coded `application/octet-stream` for all traffic and is now

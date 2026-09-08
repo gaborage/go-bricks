@@ -64,8 +64,9 @@ neither that name nor any other option, so its clients publish an empty `app_id`
 factory calls `messaging.WithAppName` itself, and so does the DEFAULT factory from a
 `NewFactoryResolver` a caller built itself, since that exported constructor sets no app
 name — a `timestamp`, `type`
-from the declared `EventType`, a framework-minted `message_id` (minted inside
-`publishAttempt`, so it changes on every retry attempt), and a `content_type` the
+from the declared `EventType`, a framework-minted `message_id` and a `timestamp` (both
+produced inside `publishAttempt`, so each retry attempt gets a fresh one), and a
+`content_type` the
 handle actually knows — `application/json`, `application/jose` when the handle seals the
 event, or `application/octet-stream` for an outbox row whose `Payload` the caller handed over
 as `[]byte`, which persists untyped. An outbox-relayed publish is the one exception to the

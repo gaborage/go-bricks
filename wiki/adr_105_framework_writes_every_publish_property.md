@@ -73,7 +73,10 @@ encoding stamp — are set.
   attempt until #1556 hoists the mint above the retry loop (#1546). At the FIRST link
   (#1564) the relay supplies no properties either, so a relayed publish is in that same
   population until the relay link (#1562) lands; from then on its id comes from the row and is
-  stable across the row's retries. Dedupe on `x-outbox-event-id`, never on the property.
+  stable across the row's retries. `Timestamp` is recomputed the same way and for the same
+  reason — `preparePublishing` reads `time.Now()` on each attempt — so it marks the ATTEMPT
+  that reached the broker, not the moment the publish was called. Dedupe on
+  `x-outbox-event-id`, never on the property.
 - **`ContentType` is claimed only where it is known.** The three doors carry it on the
   ONE field both option structs gained — `publishdoor.Options.Props` → the unexported
   `publishOptions.props`, a `*publishdoor.MessageProps` holding `ContentType`,
