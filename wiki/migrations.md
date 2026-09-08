@@ -7190,8 +7190,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   retains (a transient queue is discarded on restart whatever the delivery mode), and
   pays the broker's disk on every publish; (c) a consumer or tool reading `message_id` on an
   outbox-relayed delivery, which now receives the row id in place of a per-publish UUID.
-- apply: (a) handle all three content types, or stop branching on the property and read the
-  `x-outbox-event-type` header or the new `type` property instead — and do NOT read
+- apply: (a) handle all three content types, and do NOT substitute the new `type` property or
+  the `x-outbox-event-type` header for `content_type` — those identify the EVENT, not its
+  encoding, and one event type arrives as JSON, JOSE or octet-stream depending on whether it
+  was sealed, hand-marshaled, or enqueued before the upgrade — and do NOT read
   `application/octet-stream` as "not JSON": a persisted-sealed or hand-marshaled outbox payload
   ships under it. Hand `outbox.Publish` the struct and let the outbox marshal it if you want
   `application/json` on the wire. Expect a mixed window while a pre-upgrade backlog drains:
@@ -7213,7 +7215,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `message_id`; then, once the relay link of the stack has landed, an outbox row with a struct
   payload reads `application/json` with `message_id` equal to its `x-outbox-event-id`, and an
   outbox row with a `[]byte` payload `application/octet-stream` — before that link a relayed
-  row still reads octet-stream with a minted id; all five carry `delivery_mode: 2` and an
+  row still reads octet-stream with a minted id; all of them carry `delivery_mode: 2` and an
   `app_id` equal to `app.name` on a default-factory client. Then restart the broker and confirm
   a DURABLE queue that used to empty now retains; a transient queue still vanishes, since
   the delivery mode cannot outlive the queue.

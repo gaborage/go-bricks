@@ -1565,7 +1565,7 @@ the queue. See [migrations.md](migrations.md) `[C64.12]`.
 
 ---
 
-### [ADR-105: The Framework Writes Every Publish Property, or None](adr_105_framework_writes_every_publish_property.md)
+### [ADR-105: The Framework Writes Every AMQP 0-9-1 Publish Property, or None](adr_105_framework_writes_every_publish_property.md)
 
 **Date:** 2026-09-07 | **Status:** Accepted | **Breaking:** every publish becomes persistent, and `content_type` stops always reading `application/octet-stream`
 
@@ -1587,7 +1587,10 @@ the raw bytes path. The relay cannot recover the encoding, because `marshalPaylo
 caller `[]byte` through unexamined and a persisted-sealed compact JWS arrives as exactly one,
 so the encoding is recorded AT ENQUEUE as the unexported `x-gobricks-content-type` header
 stamp — nothing for the `[]byte` arm, which therefore ships as octet-stream rather than
-mislabelled — and both lanes strip it in `Plan` like the tenant stamp. Payload sniffing was
+mislabelled — and both lanes strip it in `Plan` like the tenant stamp. Every outbox-side
+value here — the row's `type`, the relayed `message_id` and the enqueue stamp — arrives with
+the second link of the stack (#1562); until it lands a relayed publish still ships
+octet-stream, no `type` and a minted id. Payload sniffing was
 rejected; a real ledger content-type column is a schema migration and out of scope.
 See [migrations.md](migrations.md) `[C64.10]`.
 

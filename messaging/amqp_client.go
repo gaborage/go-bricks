@@ -399,7 +399,8 @@ func createPublishSpan(ctx context.Context, options publishOptions, dataLen int,
 	return ctx, span
 }
 
-// preparePublishing creates an AMQP publishing message with headers, trace context, and message IDs.
+// preparePublishing creates an AMQP publishing message: the properties the framework
+// writes on every publish (ADR-105), the headers, the trace context, and the message ids.
 func (c *AMQPClientImpl) preparePublishing(ctx context.Context, options publishOptions, data []byte) amqp.Publishing {
 	var props publishdoor.MessageProps
 	if options.props != nil {

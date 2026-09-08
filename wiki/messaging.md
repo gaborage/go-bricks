@@ -61,10 +61,15 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 `delivery_mode: 2` (persistent, no opt-out), `app_id` from `app.name` on a client the
 framework's own factory built — a consumer-supplied `MessagingClientFactory` receives
 neither that name nor any other option, so its clients publish an empty `app_id` unless the
-factory calls `messaging.WithAppName` itself — a `timestamp`, `type`
-from the declared `EventType`, a framework-minted `message_id`, and a `content_type` the
-handle actually knows — `application/json`, or `application/jose` when the handle seals the
-event. An outbox-relayed publish is the one exception to the minted id: it carries the
+factory calls `messaging.WithAppName` itself, and so does the DEFAULT factory from a
+`NewFactoryResolver` a caller built itself, since that exported constructor sets no app
+name — a `timestamp`, `type`
+from the declared `EventType`, a framework-minted `message_id` (minted inside
+`publishAttempt`, so it changes on every retry attempt), and a `content_type` the
+handle actually knows — `application/json`, `application/jose` when the handle seals the
+event, or `application/octet-stream` for an outbox row whose `Payload` the caller handed over
+as `[]byte`, which persists untyped. An outbox-relayed publish is the one exception to the
+minted id: it carries the
 ledger row's own id instead, once the relay link lands. The streams lane
 is untouched: it sets no message properties of its own, and an outbox-relayed publish keeps
 the properties it had until the relay link lands — it is the second half of this change

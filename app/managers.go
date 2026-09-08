@@ -44,7 +44,9 @@ type ManagerConfigBuilder struct {
 	reInitDelay       time.Duration
 	resendDelay       time.Duration
 	// appName is the application identity (app.name) stamped as the AMQP app_id
-	// property on every publish, set by bootstrap.
+	// property on every publish by a client the framework's own factory builds —
+	// the AMQP 0-9-1 lane only, since the stream lane sets no message properties.
+	// Set by bootstrap.
 	appName string
 	// publisherConfig carries operator-configurable messaging publisher pool
 	// settings (messaging.publisher.*), sourced from validated config by bootstrap.

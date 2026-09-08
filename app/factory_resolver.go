@@ -89,11 +89,12 @@ func (f *FactoryResolver) MessagingClientFactory(connectionTimeout time.Duration
 //
 // Same custom-factory precedence as MessagingClientFactory: if
 // Options.MessagingClientFactory is set it owns construction and receives only
-// (url, log) — NO field of opts applies to it, so all messaging.reconnect.*
-// config (timeouts, attempts, and the four reconnect delays) is bypassed and
-// custom-built clients keep the hardcoded client defaults. The app identity is
-// bypassed with them: a custom factory never reaches WithAppName, so a
-// custom-built client publishes with no app_id at all.
+// (url, log) — NO field of opts applies to it, so none of the messaging.reconnect.*
+// config (timeouts, attempts, and the four reconnect delays) reaches it. Such a
+// factory owns construction outright: whatever timeouts, retry bound, reconnect
+// delays and app id its client ends up with are the factory's own, not the
+// framework's. In particular it never reaches WithAppName, so its clients publish
+// no app_id unless the factory sets one itself.
 func (f *FactoryResolver) MessagingClientFactoryWithOptions(opts MessagingClientFactoryOptions) messaging.ClientFactory {
 	if f.opts != nil && f.opts.MessagingClientFactory != nil {
 		return func(url string, log logger.Logger) messaging.AMQPClient {

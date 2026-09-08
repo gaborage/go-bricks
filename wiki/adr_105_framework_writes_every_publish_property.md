@@ -1,4 +1,4 @@
-# ADR-105: The Framework Writes Every Publish Property, or None
+# ADR-105: The Framework Writes Every AMQP 0-9-1 Publish Property, or None
 
 **Status:** Accepted
 **Date:** 2026-09-07
@@ -32,8 +32,8 @@ none of §6.5's values was ever in play there.
 
 ## Decision
 
-**Every property is written by the framework, at the seam that knows the answer, with
-no caller knob anywhere.**
+**On an AMQP 0-9-1 publish, every property is written by the framework, at the seam that
+knows the answer, with no caller knob anywhere.**
 
 The work ships as a two-link stack, and this section describes the end state of the
 pair. The first link (`fix(messaging)!`) is the messaging and `app` half: the
@@ -44,7 +44,7 @@ encoding stamp — are set.
 
 - **`DeliveryMode: amqp.Persistent` unconditionally**, in `preparePublishing`. There
   is no transient mode and no option to request one.
-- **`AppId` is `app.name`.** `app/bootstrap.go` reads `cfg.App.Name` into two seams,
+- **`AppId` is `app.name` on a framework-built client.** `app/bootstrap.go` reads `cfg.App.Name` into two seams,
   both ending at the new exported `messaging.WithAppName` `ClientOption`:
   `newFactoryResolverForConfig` sets the unexported `FactoryResolver.appName` that
   the default factory returned by `MessagingClientFactoryWithOptions` passes on, and
@@ -62,16 +62,17 @@ encoding stamp — are set.
   knob either — this is not a `ClientOption`.
 - **`Type` is the event type** — the typed handle's declared `EventType`, and on a
   relayed publish the outbox row's `EventType`, which is the same value as the
-  `x-outbox-event-type` header. That header STAYS; the property mirrors it.
+  `x-outbox-event-type` header. That header STAYS; the property mirrors it. The raw bytes
+  path declares no event type and so carries none.
 - **`MessageId` on a relayed publish is the outbox row id**, the same value as
   `x-outbox-event-id`, which also stays: it remains the ledger key consumers dedupe
   on (ADR-097), and nothing reads the property in preference to it. The HEADER is the
   stable identity; the PROPERTY is only as stable as what supplies it. Every other
   publish keeps a framework-minted UUID, and `preparePublishing` runs inside
   `publishAttempt`, so a publish that supplies no id gets a NEW UUID on every retry
-  attempt until #1556 hoists the mint above the retry loop (#1546). At this link the
-  relay supplies no properties either, so a relayed publish is in that same population
-  until the relay link (#1562) lands; from then on its id comes from the row and is
+  attempt until #1556 hoists the mint above the retry loop (#1546). At the FIRST link
+  (#1564) the relay supplies no properties either, so a relayed publish is in that same
+  population until the relay link (#1562) lands; from then on its id comes from the row and is
   stable across the row's retries. Dedupe on `x-outbox-event-id`, never on the property.
 - **`ContentType` is claimed only where it is known.** The three doors carry it on the
   ONE field both option structs gained — `publishdoor.Options.Props` → the unexported
@@ -209,7 +210,7 @@ a fleet — not what makes them trustworthy (see Consequences).
   enqueued after it ship `application/json`. For the length of the drain a consumer sees
   both labels for the same event type, so it must not read the absence of
   `application/json` as a different message shape.
-- **A row the publisher marshaled itself now always persists headers.**
+- **A row whose payload the OUTBOX marshaled now always persists headers.**
   `marshalHeaders` returned SQL NULL for an untraced, tenant-less publish with no
   caller headers; such a row now carries at least the content-type stamp, so the
   `headers` column is non-NULL on more rows than before. Nothing reads that column
