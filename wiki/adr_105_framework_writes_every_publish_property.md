@@ -65,8 +65,14 @@ encoding stamp — are set.
   `x-outbox-event-type` header. That header STAYS; the property mirrors it.
 - **`MessageId` on a relayed publish is the outbox row id**, the same value as
   `x-outbox-event-id`, which also stays: it remains the ledger key consumers dedupe
-  on (ADR-097), and nothing reads the property in preference to it. Every other
-  publish keeps the framework-minted UUID `preparePublishing` already generated.
+  on (ADR-097), and nothing reads the property in preference to it. The HEADER is the
+  stable identity; the PROPERTY is only as stable as what supplies it. Every other
+  publish keeps a framework-minted UUID, and `preparePublishing` runs inside
+  `publishAttempt`, so a publish that supplies no id gets a NEW UUID on every retry
+  attempt until #1556 hoists the mint above the retry loop (#1546). At this link the
+  relay supplies no properties either, so a relayed publish is in that same population
+  until the relay link (#1562) lands; from then on its id comes from the row and is
+  stable across the row's retries. Dedupe on `x-outbox-event-id`, never on the property.
 - **`ContentType` is claimed only where it is known.** The three doors carry it on the
   ONE field both option structs gained — `publishdoor.Options.Props` → the unexported
   `publishOptions.props`, a `*publishdoor.MessageProps` holding `ContentType`,

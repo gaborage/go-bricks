@@ -58,7 +58,10 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 - Consumers: `AutoAck: false`, `Exclusive: false`, `NoLocal: false`
 
 **Wire properties are the framework's, not the caller's** (ADR-105): every AMQP 0-9-1 publish carries
-`delivery_mode: 2` (persistent, no opt-out), `app_id` from `app.name`, a `timestamp`, `type`
+`delivery_mode: 2` (persistent, no opt-out), `app_id` from `app.name` on a client the
+framework's own factory built — a consumer-supplied `MessagingClientFactory` receives
+neither that name nor any other option, so its clients publish an empty `app_id` unless the
+factory calls `messaging.WithAppName` itself — a `timestamp`, `type`
 from the declared `EventType`, a framework-minted `message_id`, and a `content_type` the
 handle actually knows — `application/json`, or `application/jose` when the handle seals the
 event. An outbox-relayed publish is the one exception to the minted id: it carries the
