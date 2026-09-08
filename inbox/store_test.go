@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/database"
 	dbident "github.com/gaborage/go-bricks/database/identifier"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -155,4 +157,23 @@ func TestValidateTableNameConfigBoundUnchanged(t *testing.T) {
 	err := validateTableName(strings.Repeat("a", maxTableNameLen+1))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), fmt.Sprintf("derived Oracle identifiers must fit %d chars", dbident.MaxOracleBytes))
+}
+
+// TestStoreMarkProcessedBuildRefusalIsABuildStageExecError pins #1521's premise
+// for the ledger's one build site: a table name the validator accepts but the
+// builder refuses reports the build stage, sentinel still reachable.
+func TestStoreMarkProcessedBuildRefusalIsABuildStageExecError(t *testing.T) {
+	store, err := NewPostgresStore("ev#ents")
+	require.NoError(t, err, "the name validator accepts this name; only the builder refuses it")
+	ctx := context.Background()
+	_, tx := permissiveDB(dbtypes.PostgreSQL)
+
+	_, err = store.MarkProcessed(ctx, tx, Record{TenantID: "acme", EventID: "e-1", ProcessedAt: fixedAt})
+
+	require.Error(t, err)
+	var execErr *database.ExecError
+	require.ErrorAs(t, err, &execErr)
+	assert.Equal(t, database.StageBuild, execErr.Stage)
+	assert.Equal(t, "inbox postgres: build mark processed failed", execErr.Op)
+	assert.ErrorIs(t, err, dbident.ErrIdentifierCharset)
 }

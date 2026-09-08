@@ -4,11 +4,13 @@ package tenantstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
@@ -212,12 +214,26 @@ func StartupDatabase(
 	return ctx, cancel, db, nil
 }
 
-// TableUnusableError formats the startup-probe's table-unusable error: the
+// ProbeFailureError words a startup-probe failure after classifying its cause.
+// A cause that failed at the query-build stage never reached the database, so
+// migrations and the auto-create key cannot fix it — it is worded without
+// either hint. Every other cause is a database-state failure and keeps
+// tableUnusableError's wording.
+func ProbeFailureError(module, tableName, autocreateKey string, cause error) error {
+	var execErr *database.ExecError
+	if errors.As(cause, &execErr) && execErr.Stage == database.StageBuild {
+		return fmt.Errorf("%s: table %q cannot be queried: the query was refused before it reached the database: %w",
+			module, tableName, cause)
+	}
+	return tableUnusableError(module, tableName, autocreateKey, cause)
+}
+
+// tableUnusableError formats the startup-probe's table-unusable error: the
 // database is reachable, but the module's table is missing, or the
 // credentials can't use it. autocreateKey is the config key that would have
-// created it, e.g. "outbox.autocreatetable". Shared so the message cannot
-// drift between outbox and inbox.
-func TableUnusableError(module, tableName, autocreateKey string, cause error) error {
+// created it, e.g. "outbox.autocreatetable". Reached only through
+// ProbeFailureError, so every probe failure is classified first.
+func tableUnusableError(module, tableName, autocreateKey string, cause error) error {
 	return fmt.Errorf("%s: table %q is not usable (missing table or insufficient privileges); "+
 		"run migrations or set %s=true: %w", module, tableName, autocreateKey, cause)
 }

@@ -6286,7 +6286,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - apply: `outbox.autocreatetable: true` covers a FRESH database only. `CreateTable` just CREATEs
   (`CREATE TABLE IF NOT EXISTS` on PostgreSQL; ORA-00955 on an existing Oracle table) and never
   `ALTER`s, so a table retained from before this hop needs the migration whatever the setting says
-  — and skipping it breaks the relay either way: as a startup `TableUnusableError` naming
+  — and skipping it breaks the relay either way: as a startup table-unusable error naming
   `outbox.autocreatetable` (which is not the fix — #1426) where the startup check applies, or as
   a failing first poll under per-tenant fan-out and dynamic sources, which that check exempts.
   With an EXISTING table, run the statements for your vendor from

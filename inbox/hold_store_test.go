@@ -2,6 +2,7 @@ package inbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -11,6 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/database"
+	dbident "github.com/gaborage/go-bricks/database/identifier"
+	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
@@ -158,4 +162,90 @@ func TestHoldStoreSQLGolden(t *testing.T) {
 			compareGolden(t, "hold_"+tc.vendor, out.String()+golden.Render(db, tx))
 		})
 	}
+}
+
+// TestHoldStoreBuildRefusalIsABuildStageExecError pins #1521's premise for the
+// hold: a table name the builder refuses must surface as a build-stage
+// ExecError, with the identifier sentinel reachable through the wrap, so the
+// startup probe can tell a configuration fault from a missing table.
+func TestHoldStoreBuildRefusalIsABuildStageExecError(t *testing.T) {
+	store, err := NewPostgresHoldStore("ev#ents")
+	require.NoError(t, err, "the name validator accepts this name; only the builder refuses it")
+	ctx := context.Background()
+	db, _ := permissiveDB(dbtypes.PostgreSQL)
+
+	calls := []struct {
+		name string
+		op   string
+		call func() error
+	}{
+		{
+			name: "held_tenants", op: "inbox postgres: build held tenants query failed",
+			call: func() error { _, err := store.HeldTenants(ctx, db, "orders"); return err },
+		},
+		{
+			name: "list_tenants", op: "inbox postgres: build list tenants query failed",
+			call: func() error { _, err := store.ListTenants(ctx, db, "orders"); return err },
+		},
+		{
+			name: "due_tenants", op: "inbox postgres: build due tenants query failed",
+			call: func() error { _, err := store.DueTenants(ctx, db, "orders", 10); return err },
+		},
+		{
+			name: "next_rows", op: "inbox postgres: build next rows query failed",
+			call: func() error { _, err := store.NextRows(ctx, db, "orders", "acme", 5); return err },
+		},
+		{name: "delete_row", op: "inbox postgres: build delete held row query failed", call: func() error {
+			_, err := store.DeleteRow(ctx, db, "orders", "orders-s", 7, "acme", "owner-1")
+			return err
+		}},
+		{
+			name: "release", op: "inbox postgres: build release tenant query failed",
+			call: func() error { _, err := store.Release(ctx, db, "orders", "acme", "owner-1"); return err },
+		},
+		{
+			name: "release_lease", op: "inbox postgres: build release lease query failed",
+			call: func() error { return store.ReleaseLease(ctx, db, "orders", "acme", "owner-1") },
+		},
+		{
+			name: "stats", op: "inbox hold: build stats failed",
+			call: func() error { _, err := store.Stats(ctx, db, "orders"); return err },
+		},
+	}
+
+	for _, tc := range calls {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.call()
+
+			require.Error(t, err)
+			var execErr *database.ExecError
+			require.ErrorAs(t, err, &execErr)
+			assert.Equal(t, database.StageBuild, execErr.Stage)
+			assert.Equal(t, tc.op, execErr.Op)
+			assert.ErrorIs(t, err, dbident.ErrIdentifierCharset)
+		})
+	}
+}
+
+// TestHoldStoreParkFailsAtTheTenantMarkerBeforeBuilding pins the ordering that
+// keeps Park out of the build-refusal table: the raw tenant-marker INSERT runs
+// BEFORE BuildUpsert, so a table name the builder would refuse fails at the
+// marker's exec in production, not at the build stage.
+func TestHoldStoreParkFailsAtTheTenantMarkerBeforeBuilding(t *testing.T) {
+	store, err := NewPostgresHoldStore("ev#ents")
+	require.NoError(t, err)
+	markerErr := errors.New(`pq: syntax error at or near "#"`)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	tx := db.ExpectTransaction()
+	tx.ExpectExec("INSERT INTO ev#ents_tenant").WillReturnError(markerErr)
+
+	_, err = store.Park(t.Context(), tx, &HoldRow{
+		Consumer: "orders", Stream: "orders-s", Offset: 7, TenantID: "acme", HeldAt: fixedAt,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inbox postgres: mark tenant held failed")
+	var execErr *database.ExecError
+	assert.NotErrorAs(t, err, &execErr, "the marker exec fails first, so Park never reaches the build stage")
+	require.ErrorIs(t, err, markerErr)
 }

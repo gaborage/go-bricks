@@ -9,8 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/database"
+	dbident "github.com/gaborage/go-bricks/database/identifier"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -119,4 +122,23 @@ func TestStoreSQLGolden(t *testing.T) {
 			dbtesting.AssertGolden(t, filepath.Join("testdata", "sql", "outbox_"+tc.vendor+".golden"), got, *updateGoldens)
 		})
 	}
+}
+
+// TestStoreLeadBuildRefusalIsABuildStageExecError pins #1521's premise for the
+// leader lock: a table name the name validator accepts but the builder refuses
+// surfaces as a build-stage ExecError with the identifier sentinel reachable
+// through the wrap, so the startup probe can classify it.
+func TestStoreLeadBuildRefusalIsABuildStageExecError(t *testing.T) {
+	store, err := NewPostgresStore("ev#ents")
+	require.NoError(t, err, "the name validator accepts this name; only the builder refuses it")
+	ctx := context.Background()
+	db, _, _ := permissiveDB(dbtypes.PostgreSQL)
+
+	_, err = store.Lead(ctx, db)
+
+	var execErr *database.ExecError
+	require.ErrorAs(t, err, &execErr)
+	assert.Equal(t, database.StageBuild, execErr.Stage)
+	assert.Equal(t, "outbox postgres: build leader lock failed", execErr.Op)
+	assert.ErrorIs(t, err, dbident.ErrIdentifierCharset)
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database/identifier"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
@@ -1251,4 +1252,26 @@ func TestModuleInitAllowsConfiguredSuperStreamsWhenDisabled(t *testing.T) {
 
 	require.NoError(t, NewModule().Init(deps),
 		"a disabled outbox must boot whatever its stream configuration says")
+}
+
+// TestModuleInitBuildStageProbeFailureIsAConfigurationFault pins #1521: a probe
+// the builder refused never reached the database, so the failure must not tell
+// the operator to run migrations or enable auto-create.
+func TestModuleInitBuildStageProbeFailureIsAConfigurationFault(t *testing.T) {
+	m := NewModule()
+	cfg := outboxTestConfig()
+	cfg.Outbox.TableName = "ev#ents"
+	deps := initDeps(cfg, func(_ context.Context) (dbtypes.Interface, error) {
+		return dbtesting.NewTestDB("postgresql"), nil
+	})
+
+	err := m.Init(deps)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		`outbox: table "ev#ents" cannot be queried: the query was refused before it reached the database`)
+	assert.NotContains(t, err.Error(), "run migrations")
+	assert.NotContains(t, err.Error(), "outbox.autocreatetable")
+	assert.NotContains(t, err.Error(), "is not usable")
+	assert.ErrorIs(t, err, identifier.ErrIdentifierCharset)
 }
