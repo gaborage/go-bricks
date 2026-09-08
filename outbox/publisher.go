@@ -196,6 +196,12 @@ func marshalHeaders(ctx context.Context, eventHeaders map[string]any, stamp, con
 	if stamp != "" {
 		headers[messaging.TenantStampHeader] = stamp
 	}
+	// Unconditionally, before the write: the stamp is the framework's to set, so
+	// a caller header spelled the same way must not survive persistence. Only
+	// setting it when there IS an encoding would leave the caller's value on an
+	// opaque payload's row, and the relay would put it on the wire as the
+	// content type — the mislabelling this stamp exists to prevent.
+	delete(headers, headerContentTypeStamp)
 	if contentType != "" {
 		headers[headerContentTypeStamp] = contentType
 	}

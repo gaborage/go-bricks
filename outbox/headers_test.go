@@ -5,6 +5,9 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/gaborage/go-bricks/internal/publishdoor"
+	"github.com/gaborage/go-bricks/messaging"
 )
 
 func TestEventIDFromHeaders(t *testing.T) {
@@ -39,4 +42,29 @@ func TestHeaderConstants(t *testing.T) {
 	// Namespaced so no caller header can collide with the framework's own stamp, and
 	// spelled here because the writer (Publish) and the stripper (Plan) must agree.
 	assert.Equal(t, "x-gobricks-content-type", headerContentTypeStamp)
+}
+
+func TestTakeFrameworkStampsRemovesBothAndReportsThem(t *testing.T) {
+	tests := map[string]struct {
+		headers         map[string]any
+		wantStamp       string
+		wantContentType string
+	}{
+		"both_stamps":      {headers: map[string]any{messaging.TenantStampHeader: "acme", headerContentTypeStamp: publishdoor.ContentTypeJSON, "keep": 1}, wantStamp: "acme", wantContentType: publishdoor.ContentTypeJSON},
+		"tenant_only":      {headers: map[string]any{messaging.TenantStampHeader: "acme"}, wantStamp: "acme"},
+		"content_only":     {headers: map[string]any{headerContentTypeStamp: publishdoor.ContentTypeJSON}, wantContentType: publishdoor.ContentTypeJSON},
+		"neither":          {headers: map[string]any{"keep": 1}},
+		"nil_map":          {headers: nil},
+		"non_string_stamp": {headers: map[string]any{messaging.TenantStampHeader: 7, headerContentTypeStamp: []byte("x")}},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			stamp, contentType := takeFrameworkStamps(tt.headers)
+
+			assert.Equal(t, tt.wantStamp, stamp)
+			assert.Equal(t, tt.wantContentType, contentType)
+			assert.NotContains(t, tt.headers, messaging.TenantStampHeader, "a stamp left behind reaches the wire")
+			assert.NotContains(t, tt.headers, headerContentTypeStamp)
+		})
+	}
 }
