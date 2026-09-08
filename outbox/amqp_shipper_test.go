@@ -422,3 +422,35 @@ func TestOutboxShipperStripsAPreUpgradeCallerStamp(t *testing.T) {
 		})
 	}
 }
+
+// TestOutboxShipperReadsOnlyTheCanonicalContentTypeStamp pins the determinism the
+// case-insensitive strip could otherwise lose: a pre-upgrade row can carry BOTH the
+// framework's canonical stamp and a caller's other casing, and only the canonical one may
+// be read — matching case-insensitively would make the shipped content type depend on map
+// iteration order, and would let a caller's value in through the back door.
+func TestOutboxShipperReadsOnlyTheCanonicalContentTypeStamp(t *testing.T) {
+	row := Record{
+		ID:          "11111111-2222-4333-8444-555555555555",
+		EventType:   "order.created",
+		AggregateID: "A1",
+		Payload:     []byte(`{"id":1}`),
+		Headers:     []byte(`{"x-gobricks-content-type":"application/json","X-GoBricks-Content-Type":"application/xml","keep":"me"}`),
+		Exchange:    "orders",
+		RoutingKey:  "created",
+		Lane:        LaneAMQP,
+		Status:      StatusPending,
+	}
+
+	// Repeated because the defect it guards was order-dependent: one pass could pick the
+	// canonical value by luck.
+	for range 20 {
+		f := relayShipped(t, row)
+
+		require.NotNil(t, f.LastPublishOpts.Props)
+		assert.Equal(t, "application/json", f.LastPublishOpts.Props.ContentType,
+			"the canonical stamp wins over any caller casing, every time")
+		assert.NotContains(t, f.LastPublishHdrs, headerContentTypeStamp)
+		assert.NotContains(t, f.LastPublishHdrs, "X-GoBricks-Content-Type")
+		assert.Equal(t, "me", f.LastPublishHdrs["keep"])
+	}
+}

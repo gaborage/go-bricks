@@ -68,18 +68,21 @@ func firstReservedHeader(headers map[string]any) (key string, found bool) {
 func takeFrameworkStamps(headers map[string]any) (stamp, contentType string) {
 	stamp, _ = headers[messaging.TenantStampHeader].(string)
 	delete(headers, messaging.TenantStampHeader)
-	// Every case variant of the reserved prefix, matched the way the refusal
-	// matches it: a row enqueued BEFORE Publish began refusing the prefix can
-	// carry any casing, and an exact-key check would publish it as a header the
-	// framework claims to own. Deleting during the range is defined behavior.
-	for key, value := range headers {
-		if !isReservedHeaderKey(key) {
-			continue
+	// Read the encoding from the CANONICAL key only. marshalHeaders is the sole
+	// writer of this namespace and always spells it canonically, so any other
+	// casing came from a caller — exactly the value the enqueue refusal exists
+	// to reject, and reading it would reinstate the mislabelling by the back
+	// door. Matching case-insensitively here would also make the result depend
+	// on map iteration order for a row carrying two spellings.
+	contentType, _ = headers[headerContentTypeStamp].(string)
+	// Deleted case-insensitively all the same: a row enqueued BEFORE Publish
+	// began refusing the prefix can carry any casing, and a header left behind
+	// reaches the wire as one the framework claims to own. Deleting during the
+	// range is defined behavior.
+	for key := range headers {
+		if isReservedHeaderKey(key) {
+			delete(headers, key)
 		}
-		if strings.EqualFold(key, headerContentTypeStamp) {
-			contentType, _ = value.(string)
-		}
-		delete(headers, key)
 	}
 	return stamp, contentType
 }
