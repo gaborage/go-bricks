@@ -7151,9 +7151,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   publishers: `git grep -nE 'ContentType|content_type|DeliveryMode|MessageId|message_id|AppId|app_id' -- '*.go'`
   over the services that CONSUME these messages, plus any non-Go consumer (a Java or Node
   listener, a Shovel/Federation policy, an alert or dashboard keyed on a delivery property).
-  A raw-`amqp091` consumer reads `d.ContentType` / `d.MessageId` off `amqp.Delivery`; a
-  framework typed consumer never sees either, so a GoBricks-only fleet is out of the
-  content-type and message-id population. For the durability half query the BROKER, not the
+  A raw-`amqp091` consumer reads `d.ContentType` / `d.MessageId` off `amqp.Delivery`. A
+  framework typed consumer sees neither and is out of the CONTENT-TYPE population, but it is
+  not out of the message-id one on either of two paths: a metadata-carrying consumer
+  (`DeclareTypedConsumerWithMeta` / `NewTypedHandlerWithMeta[T]`) reads the property through
+  `Metadata.MessageID()`, and ANY consumer calling `Meta.DedupKey()` reaches it as the
+  fallback ledger key for a delivery carrying no `x-outbox-event-id` at all ([C64.11]) — so
+  audit `git grep -nE 'MessageID\(|DedupKey\(' -- '*.go'` across your consumers too, and a
+  GoBricks-only fleet is out of neither population until that grep is empty. For the durability half query the BROKER, not the
   code: a queue whose depth used to fall to zero on every restart is the population, and
   `rabbitmqctl list_queues name durable messages` names the queues that will now retain.
 - scope: the change ships as a two-link stack — the messaging and `app` half first
@@ -7527,7 +7532,9 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   structurally, by binding the sealed context to the composed key, is tracked as #1558.
   Two properties the framework does NOT give you: `message_id` UNIQUENESS, which
   AMQP obliges no producer to provide and which only the shape grammar is checked against — a
-  producer reusing one across distinct events has them skipped as duplicates — and a bounded
+  producer reusing one across distinct events has them skipped as duplicates, on the
+  deliveries where the property is the SELECTED key rather than behind a present stamp — and
+  a bounded
   ledger, since a queue that wrote zero inbox rows now writes one per delivery, which is
   table sizing and retention-sweep load rather than a correctness change.
 - gate: match — a typed consumer reads `Meta.DedupKey()` on a queue whose producer sets

@@ -267,11 +267,14 @@ _, err := s.outbox.Publish(ctx, tx, &app.OutboxEvent{
 })
 ```
 
-Five refusals happen at `Publish`, where the developer sees them rather than as poison rows
-cycles later: naming a stream beside an exchange or routing key, naming a stream absent from
-`outbox.superstreams`, publishing a stream target with no tenant in context, an AMQP
-destination or event type past the 255-byte shortstr limit, and a caller header claiming the
-reserved `x-gobricks-` prefix.
+These refusals happen at `Publish`, where the developer sees them rather than as poison rows
+cycles later: an empty `EventType` or `AggregateID`, a caller header claiming the reserved
+`x-gobricks-` prefix, naming a stream beside an exchange or routing key, naming a stream
+absent from `outbox.superstreams`, publishing a stream target with no tenant in context, and
+an AMQP destination, header KEY or event type past the 255-byte shortstr limit. A nil
+transaction or event is refused first, and a payload or header that will not marshal after
+that. The list is the ones worth designing around rather than a closed set — read
+`validateEvent` and `resolveAMQPDestination` for the current whole.
 
 **Ordering.** Rows drain in `seq` order — a per-ledger sequence the database assigns at insert
 — and one relay instance per ledger drains at a time, holding the ledger's `<table>_leader`
