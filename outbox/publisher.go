@@ -13,6 +13,7 @@ import (
 
 	"github.com/gaborage/go-bricks/app"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/messaging"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
@@ -69,7 +70,7 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 		}
 	}
 
-	payload, err := marshalPayload(event.Payload)
+	payload, contentType, err := marshalPayload(event.Payload)
 	if err != nil {
 		return "", fmt.Errorf("outbox: failed to marshal payload: %w", err)
 	}
@@ -85,7 +86,7 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 	// direct AMQP fast-path performs, keeping outbox + direct publishes
 	// trace-equivalent. Untraced publishes (no trace in context) are left as-is
 	// so background events don't accrue synthetic trace headers.
-	headers, err := marshalHeaders(ctx, event.Headers, stamp)
+	headers, err := marshalHeaders(ctx, event.Headers, stamp, contentType)
 	if err != nil {
 		return "", fmt.Errorf("outbox: failed to marshal headers: %w", err)
 	}
@@ -163,19 +164,23 @@ func (p *outboxPublisher) applyStreamTarget(stamp string, event *app.OutboxEvent
 
 // marshalHeaders JSON-encodes the AMQP headers, first capturing the trace
 // context from ctx so it survives to the relay and consumer, then the tenant
-// stamp the caller resolved. The caller's map is never mutated — the framework's
-// keys are written to a fresh copy. Returns nil (a SQL NULL) when there are
-// neither caller headers, nor a trace context, nor a stamp to persist.
+// stamp the caller resolved, then the payload's content type. The caller's map is
+// never mutated — the framework's keys are written to a fresh copy. Returns nil
+// (a SQL NULL) when there are neither caller headers, nor a trace context, nor a
+// stamp, nor a content type to persist — so a row whose payload the publisher
+// marshaled itself now always persists at least the content-type stamp.
 //
 // An empty stamp writes NOTHING, not an empty-valued header: the relay strips the
 // stamp on presence and the conflict check keys on presence, so an empty value
-// persisted here would be a present, malformed stamp.
-func marshalHeaders(ctx context.Context, eventHeaders map[string]any, stamp string) ([]byte, error) {
+// persisted here would be a present, malformed stamp. An empty content type is the
+// same: caller-supplied bytes are opaque, and a present empty value would name an
+// encoding nobody established.
+func marshalHeaders(ctx context.Context, eventHeaders map[string]any, stamp, contentType string) ([]byte, error) {
 	traced := hasTraceContext(ctx)
 
-	// Common path: an untraced, tenant-less publish with no caller headers (every
-	// background/non-HTTP event). Store SQL NULL without allocating a map.
-	if len(eventHeaders) == 0 && !traced && stamp == "" {
+	// Common path: an untraced, tenant-less publish of opaque bytes with no caller
+	// headers. Store SQL NULL without allocating a map.
+	if len(eventHeaders) == 0 && !traced && stamp == "" && contentType == "" {
 		return nil, nil
 	}
 
@@ -190,6 +195,9 @@ func marshalHeaders(ctx context.Context, eventHeaders map[string]any, stamp stri
 	}
 	if stamp != "" {
 		headers[messaging.TenantStampHeader] = stamp
+	}
+	if contentType != "" {
+		headers[headerContentTypeStamp] = contentType
 	}
 	return json.Marshal(headers)
 }
@@ -224,17 +232,27 @@ func (m *mapHeaderAccessor) Set(key string, value any) {
 	m.headers[key] = value
 }
 
-func marshalPayload(payload any) ([]byte, error) {
+// marshalPayload encodes the event's payload and names the encoding, which is the
+// only point that knows it: the relay reads the name back from the persisted
+// headers to set the AMQP content_type property (ADR-105). Caller-supplied bytes
+// are returned unexamined and named NOTHING — a persisted-sealed compact JWS
+// arrives that way and is indistinguishable from a hand-marshaled body, and the
+// bytes are never sniffed.
+func marshalPayload(payload any) (data []byte, contentType string, err error) {
 	if payload == nil {
-		return []byte("null"), nil
+		return []byte("null"), publishdoor.ContentTypeJSON, nil
 	}
 
 	if b, ok := payload.([]byte); ok {
-		return b, nil
+		return b, "", nil
 	}
-	if err := rejectSealedPayload(payload); err != nil {
-		return nil, err
+	if sealErr := rejectSealedPayload(payload); sealErr != nil {
+		return nil, "", sealErr
 	}
 
-	return json.Marshal(payload)
+	data, err = json.Marshal(payload)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, publishdoor.ContentTypeJSON, nil
 }

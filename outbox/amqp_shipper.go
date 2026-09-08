@@ -43,21 +43,22 @@ func (s *amqpShipper) Ready(ctx context.Context) error {
 	return nil
 }
 
-// Plan keys the row by its tenant stamp when it carries one — deliberately spanning that
+// Plan reads the framework's own stamps out of the headers and off the wire — the
+// tenant, and the content type Publish recorded (ADR-105) — then keys the row. It keys
+// it by its tenant stamp when it carries one — deliberately spanning that
 // tenant's exchanges, which is the ordering an event stream for one tenant needs — and
 // otherwise by the destination it is actually published to. The stamp is moved out of the
 // headers on PRESENCE, not on a non-empty value: the conflict check keys on the header
 // existing at all, so an empty-valued one left behind fails every publish. Nothing here can
 // refuse a row, so the shipment is never poison.
 func (s *amqpShipper) Plan(rec *Record, headers map[string]any) shipment {
-	stamp, _ := headers[messaging.TenantStampHeader].(string)
-	delete(headers, messaging.TenantStampHeader)
+	stamp, contentType := takeFrameworkStamps(headers)
 
 	key := LaneAMQP + ":" + rec.Exchange + ":" + rec.RoutingKey
 	if stamp != "" {
 		key = LaneAMQP + ":tenant:" + stamp
 	}
-	return shipment{Record: rec, Headers: headers, Key: key, Stamp: stamp}
+	return shipment{Record: rec, Headers: headers, ContentType: contentType, Key: key, Stamp: stamp}
 }
 
 // Ship publishes the row's bytes once and reads the failure. Every broker-side failure
@@ -82,10 +83,19 @@ func (s *amqpShipper) Ship(ctx context.Context, sh *shipment) verdict {
 		return verdict{Kind: shipBrokerDown, Err: brokerUnavailableErr(nil), Waited: time.Since(start)}
 	}
 
+	// The properties MIRROR the x-outbox-event-id / x-outbox-event-type headers, they do
+	// not replace them: the id header stays the ledger key consumers dedupe on (ADR-097).
+	// An empty content type is a row of opaque bytes — messaging falls back to
+	// octet-stream rather than naming an encoding nobody established.
 	opts := publishdoor.Options{
 		Exchange:   sh.Record.Exchange,
 		RoutingKey: sh.Record.RoutingKey,
 		Headers:    sh.Headers,
+		Props: &publishdoor.MessageProps{
+			ContentType: sh.ContentType,
+			EventType:   sh.Record.EventType,
+			MessageID:   sh.Record.ID,
+		},
 	}
 	// A zero-value shipper carries no publish func: fall back to the registered door, so
 	// an &amqpShipper{} built without the constructor reaches the real ADR-096 dispatcher

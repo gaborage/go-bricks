@@ -36,4 +36,7 @@ func TestHeaderConstants(t *testing.T) {
 	// The relay is the single source of truth; these literals must not drift.
 	assert.Equal(t, "x-outbox-event-id", HeaderEventID)
 	assert.Equal(t, "x-outbox-event-type", HeaderEventType)
+	// Namespaced so no caller header can collide with the framework's own stamp, and
+	// spelled here because the writer (Publish) and the stripper (Plan) must agree.
+	assert.Equal(t, "x-gobricks-content-type", headerContentTypeStamp)
 }

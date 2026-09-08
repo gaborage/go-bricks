@@ -18,6 +18,16 @@ GoBricks provides a built-in **Transactional Outbox** for reliable event publish
 
 **Delivery Guarantee:** At-least-once. Consumers MUST be idempotent. Use the `x-outbox-event-id` header for deduplication.
 
+A relayed publish also mirrors that header onto the AMQP `message_id` property and the row's
+event type onto `type`, and labels the body `application/json` only when the outbox marshaled
+it — a caller-supplied `[]byte`, the persisted-sealed shape included, ships as
+`application/octet-stream` because nothing in the row records its encoding (ADR-105). The
+label travels on the row as a reserved `x-gobricks-content-type` header the relay strips
+before the wire; nothing validates caller header keys, so a caller header spelled exactly
+that way is silently overwritten at enqueue and never delivered. Rows enqueued before the
+upgrade carry no such header, so a draining pre-upgrade backlog delivers the same event type
+under both labels.
+
 **Module Setup:**
 
 ```go
