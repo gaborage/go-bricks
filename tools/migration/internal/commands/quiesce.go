@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx stdlib driver for the control-plane *sql.DB
@@ -311,6 +312,8 @@ func resolveControlPlaneConfig(ctx context.Context, provider database.DBConfigPr
 // the operator configured it — never a forced plaintext downgrade. Wiring the CA
 // and client cert/key (not just sslmode) is required so the control-plane connection
 // is actually authenticated/mTLS, matching the framework connector (ADR-027).
+// Query values carry a space as %20, never "+", since pgx >= v5.11 parses the URI
+// with libpq's rules, where "+" is a literal character.
 func controlPlaneDSN(c *config.DatabaseConfig) string {
 	if c.ConnectionString != "" {
 		return c.ConnectionString
@@ -334,8 +337,8 @@ func controlPlaneDSN(c *config.DatabaseConfig) string {
 	if c.TLS.KeyFile != "" {
 		q.Set("sslkey", c.TLS.KeyFile)
 	}
-	if len(q) > 0 {
-		u.RawQuery = q.Encode()
-	}
+	// Encode is HTML form encoding, which writes a space as "+"; only a space does,
+	// since a literal "+" becomes %2B. Empty values encode to "".
+	u.RawQuery = strings.ReplaceAll(q.Encode(), "+", "%20")
 	return u.String()
 }
