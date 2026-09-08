@@ -60,11 +60,10 @@ encoding stamp — are set.
   production-unused state, so the test that pins the property brackets the call and
   asserts with `assert.WithinDuration` instead. The consumer surface gains no time
   knob either — this is not a `ClientOption`.
-- **`Type` is the event type** — the typed handle's declared `EventType`, and, with the
-  relay link (#1562), on a relayed publish the outbox row's `EventType`, which is the same
-  value as the `x-outbox-event-type` header. That header STAYS; the property mirrors it. The
-  raw bytes path declares no event type and so carries none, and until that link a relayed
-  publish carries none either.
+- **`Type` is the event type** — the typed handle's declared `EventType`, and on a relayed
+  publish the outbox row's `EventType`, which is the same value as the
+  `x-outbox-event-type` header. That header STAYS; the property mirrors it. The raw bytes
+  path declares no event type and so carries none.
 - **`MessageId` on a relayed publish is the outbox row id**, the same value as
   `x-outbox-event-id`, which also stays: it remains the ledger key consumers dedupe
   on (ADR-097), and nothing reads the property in preference to it. The HEADER is the
