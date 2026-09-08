@@ -518,13 +518,80 @@ func TestMarshalPayloadStruct(t *testing.T) {
 		Age  int    `json:"age"`
 	}
 
-	data, err := marshalPayload(TestPayload{Name: "Alice", Age: 30})
+	data, contentType, err := marshalPayload(TestPayload{Name: "Alice", Age: 30})
 
 	require.NoError(t, err)
+	assert.Equal(t, "application/json", contentType)
 	var result TestPayload
 	require.NoError(t, json.Unmarshal(data, &result))
 	assert.Equal(t, "Alice", result.Name)
 	assert.Equal(t, 30, result.Age)
+}
+
+// TestMarshalPayloadNamesTheEncodingItProduced pins the one point that knows the payload's
+// encoding (ADR-105). Caller-supplied bytes are passed through unexamined, so they are named
+// nothing: a persisted-sealed compact JWS arrives that way and is indistinguishable from a
+// hand-marshaled body.
+func TestMarshalPayloadNamesTheEncodingItProduced(t *testing.T) {
+	tests := []struct {
+		name        string
+		payload     any
+		wantData    []byte
+		wantContent string
+	}{
+		{
+			name:     "nil_becomes_the_json_literal_null",
+			wantData: []byte("null"), wantContent: "application/json",
+		},
+		{
+			name:    "caller_bytes_pass_through_unnamed",
+			payload: []byte("not json at all"), wantData: []byte("not json at all"),
+		},
+		{
+			name:     "marshaled_value_is_json",
+			payload:  map[string]int{"n": 1},
+			wantData: []byte(`{"n":1}`), wantContent: "application/json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, contentType, err := marshalPayload(tt.payload)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantData, data)
+			assert.Equal(t, tt.wantContent, contentType)
+		})
+	}
+}
+
+// TestMarshalHeadersPersistsTheContentTypeStamp pins that the encoding reaches the ledger
+// through the headers map — no new column, no new wire header — and that it alone is enough
+// to persist a map: an untraced, tenant-less JSON publish no longer stores SQL NULL.
+func TestMarshalHeadersPersistsTheContentTypeStamp(t *testing.T) {
+	tests := []struct {
+		name        string
+		contentType string
+		wantStamp   string
+	}{
+		{name: "a_named_encoding_is_persisted", contentType: "application/json", wantStamp: "application/json"},
+		{name: "opaque_bytes_persist_nothing"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, err := marshalHeaders(context.Background(), nil, "", tt.contentType)
+
+			require.NoError(t, err)
+			if tt.wantStamp == "" {
+				assert.Nil(t, raw, "nothing to persist is still SQL NULL")
+				return
+			}
+			var stored map[string]any
+			require.NoError(t, json.Unmarshal(raw, &stored))
+			assert.Equal(t, map[string]any{headerContentTypeStamp: tt.wantStamp}, stored)
+		})
+	}
 }
 
 // TestPublisherRefusesADestinationTheFrameCannotCarry: the exchange, routing key and
@@ -791,6 +858,9 @@ func TestPublisherPublishPersistsTheTenantStamp(t *testing.T) {
 // and the publisher's conflict check keys on presence, so an empty value would be a present,
 // malformed stamp that fails every publish of the row.
 func TestPublisherPublishWithoutATenantWritesNoStamp(t *testing.T) {
+	// The payload is caller-supplied bytes, which name no encoding: a payload the publisher
+	// marshals itself now persists the ADR-105 content-type stamp, so opaque bytes are the
+	// case where there is genuinely nothing left to persist.
 	t.Run("no_caller_headers_stores_null", func(t *testing.T) {
 		store := &mockStore{}
 		pub := newPublisher(store, "", nil)
@@ -798,6 +868,7 @@ func TestPublisherPublishWithoutATenantWritesNoStamp(t *testing.T) {
 		_, err := pub.Publish(context.Background(), &mockTx{}, &app.OutboxEvent{
 			EventType:   eventTypeTest,
 			AggregateID: aggregateTest,
+			Payload:     []byte("{}"),
 		})
 
 		require.NoError(t, err)

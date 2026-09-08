@@ -47,10 +47,10 @@ func (s *streamShipper) Ready(context.Context) error { return nil }
 // row written without a key — and read the same way every cycle, so they are poison. The
 // key is set either way, so a refused row still holds its stream's order.
 func (s *streamShipper) Plan(rec *Record, headers map[string]any) shipment {
-	// A stream row records its tenant as the partition key and never in its headers, but
-	// a header spelling it would still fail the publish, so it goes the same way it does
-	// on the other lane.
-	delete(headers, messaging.TenantStampHeader)
+	// A stream row records its tenant as the partition key and never in its headers, and
+	// the content type is bookkeeping rather than a property this lane sets — but either
+	// header left behind reaches the wire, so both go the same way as on the AMQP lane.
+	takeFrameworkStamps(headers)
 
 	sh := shipment{
 		Record:  rec,

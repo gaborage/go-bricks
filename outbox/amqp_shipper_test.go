@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/app"
+	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/multitenant"
@@ -122,7 +123,10 @@ func TestAMQPShipperShipsTheRecordToItsDestination(t *testing.T) {
 	assert.Equal(t, shipDelivered, v.Kind)
 	require.NoError(t, v.Err)
 	require.Equal(t, 1, f.PublishCalls)
-	assert.Equal(t, publishdoor.Options{Exchange: "orders", RoutingKey: "created", Headers: ship.Headers}, f.LastPublishOpts)
+	assert.Equal(t, publishdoor.Options{
+		Exchange: "orders", RoutingKey: "created", Headers: ship.Headers,
+		Props: &publishdoor.MessageProps{MessageID: "evt-1"},
+	}, f.LastPublishOpts)
 	assert.Equal(t, []byte(`{"id":1}`), f.LastPublishData)
 }
 
@@ -300,4 +304,82 @@ func TestLaneKeysNeverCollideAcrossLanes(t *testing.T) {
 	assert.Equal(t, amqpStamped,
 		plan(amqpLane, Record{Exchange: "other", RoutingKey: "shipped"}, stamped()),
 		"same scope still collapses to one key, which is what parking depends on")
+}
+
+// relayShipped drains one relay cycle over rows the ledger holds through the production
+// AMQP adapter, and returns what reached the door. The whole path is exercised — the
+// relay's own header injection included — because the properties must MIRROR those
+// headers, which a hand-built shipment could not show.
+func relayShipped(t *testing.T, rows ...Record) *fakeAMQP {
+	t.Helper()
+	f := newFakeAMQP()
+	store := &fakeStore{FetchPendingResult: rows}
+	r := newRelayWithShippers(store, map[string]shipper{LaneAMQP: newAMQPShipperWithFake(f)})
+
+	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+	require.Equal(t, len(rows), f.PublishCalls)
+	return f
+}
+
+// TestOutboxShipperCarriesTheEventProperties pins ADR-105 on the AMQP lane: the row's id
+// and event type reach the door as message properties AND stay in the headers, since the
+// id header is the ledger key consumers dedupe on (ADR-097).
+func TestOutboxShipperCarriesTheEventProperties(t *testing.T) {
+	rows := publishedRows(context.Background(), t, &app.OutboxEvent{
+		EventType:   "order.created",
+		AggregateID: "A1",
+		Exchange:    "orders",
+		RoutingKey:  "created",
+		Payload:     map[string]any{"id": 1},
+	})
+
+	f := relayShipped(t, rows...)
+
+	require.NotNil(t, f.LastPublishOpts.Props)
+	assert.Equal(t, rows[0].ID, f.LastPublishOpts.Props.MessageID)
+	assert.Equal(t, "order.created", f.LastPublishOpts.Props.EventType)
+	assert.Equal(t, rows[0].ID, f.LastPublishHdrs[HeaderEventID],
+		"the properties mirror the headers, they do not replace them")
+	assert.Equal(t, "order.created", f.LastPublishHdrs[HeaderEventType])
+}
+
+// TestOutboxShipperCarriesThePayloadContentType pins that the encoding resolved at enqueue
+// travels in the persisted headers and leaves them again as a property: caller bytes are
+// opaque and are never sniffed, so they name no encoding at all.
+func TestOutboxShipperCarriesThePayloadContentType(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload any
+		want    string
+	}{
+		{name: "marshaled_struct_is_json", payload: map[string]any{"id": 1}, want: "application/json"},
+		{name: "nil_payload_is_the_json_literal_null", payload: nil, want: "application/json"},
+		{name: "caller_supplied_bytes_are_opaque", payload: []byte(`{"id":1}`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows := publishedRows(context.Background(), t, &app.OutboxEvent{
+				EventType:   "order.created",
+				AggregateID: "A1",
+				Exchange:    "orders",
+				RoutingKey:  "created",
+				Payload:     tt.payload,
+			})
+			stored, err := decodeHeaders(rows[0].Headers)
+			require.NoError(t, err)
+			if tt.want == "" {
+				assert.Nil(t, rows[0].Headers, "opaque bytes leave nothing to persist")
+			} else {
+				assert.Equal(t, tt.want, stored[headerContentTypeStamp], "the enqueue side records it")
+			}
+
+			f := relayShipped(t, rows...)
+
+			require.NotNil(t, f.LastPublishOpts.Props)
+			assert.Equal(t, tt.want, f.LastPublishOpts.Props.ContentType)
+			assert.NotContains(t, f.LastPublishHdrs, headerContentTypeStamp,
+				"the stamp is the framework's bookkeeping and must not reach the wire")
+		})
+	}
 }

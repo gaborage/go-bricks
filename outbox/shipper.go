@@ -26,7 +26,9 @@ type shipper interface {
 	Ship(ctx context.Context, s *shipment) verdict
 }
 
-// shipment is one planned delivery. Key is the ordering key the row parks under, namespaced
+// shipment is one planned delivery. ContentType names the payload's encoding, read
+// out of the row's headers by the lane that planned it and empty when the row carries
+// no such stamp; Key is the ordering key the row parks under, namespaced
 // by its lane and always set, so even an unshippable row holds its key's order; Poison is
 // empty for a shippable row and otherwise carries the reason the lane refused it without
 // reaching a broker; Scope names the sub-scope a stall holds back, and is set on every
@@ -34,12 +36,13 @@ type shipper interface {
 // lane); Stamp is the row's tenant, which the relay moves onto the publish context because
 // the framework is the stamp's only header writer (ADR-087).
 type shipment struct {
-	Record  *Record
-	Headers map[string]any
-	Key     string
-	Poison  string
-	Scope   string
-	Stamp   string
+	Record      *Record
+	Headers     map[string]any
+	ContentType string
+	Key         string
+	Poison      string
+	Scope       string
+	Stamp       string
 }
 
 // verdictKind is one lane's reading of one delivery attempt.
