@@ -453,6 +453,10 @@ That strictness is the point: an empty section carries no intent, so a dropped s
 mount looks identical to a deliberately database-free service. Making the predicate strict
 means only a *literally empty* section is absence.
 
+The framework always sends `password=''` when no password is configured, so `PGPASSWORD`
+and `~/.pgpass` are never consulted: credentials come from the section or a secret manager,
+never from the ambient environment.
+
 | Config | Startup | `/ready` |
 | --- | --- | --- |
 | No `database:` block | starts (one advisory WARN) | 200 · `not_configured` |
@@ -492,7 +496,10 @@ a dynamic `DBConfigProvider` returns, which never reaches `Validate` — covers 
 path. Both delegate to the same scheme list, so extending it is one edit. An explicit
 `type` that conflicts with the inferred scheme is a validation error on the `Validate`
 path only: the seam runs per connection, where the vendor's own dial error is the better
-failure.
+failure. Identity is otherwise the dial's job on that seam, with one exception: a
+PostgreSQL section with no `connectionstring` and an empty `host` is refused there with the
+same `MissingFieldError` startup emits, because pgx would substitute libpq's default unix
+socket and drop the configured TLS material (ADR-050 amendment 2026-09-07).
 
 Any other scheme leaves `type` empty — the *effect* of an unrecognized scheme depends on
 the connector: the built-in one (`database.NewConnection`) fails startup with a
@@ -541,6 +548,12 @@ configs too" below).
   DSN instead (`sslmode`, `sslrootcert`, `sslcert`, `sslkey`) — that is also the escape hatch
   for pgx-native semantics these rules refuse, such as `prefer` with a client certificate.
 - **Oracle rejects the whole block**, `mode` included (see above).
+
+A raw `connectionstring` is parsed with libpq's exact rules since pgx v5.11.0: double every
+backslash in a keyword/value DSN (quoting does not protect it), use `%20` not `+` for a
+space in a URI query, and expect the first `@` to end userinfo. A parse failure logs the
+constant `failed to parse PostgreSQL config`; unwrap with `errors.As` to
+`*pgconn.ParseConfigError` when you need pgx's redacted detail.
 
 Two pgx quirks worth knowing when choosing a mode: `require` plus `ca` behaves as
 `verify-ca` (a documented libpq inheritance), and the sentinel `ca: system` means the OS

@@ -11,7 +11,9 @@ import (
 // state. Startup fails fast on identity gaps and on an explicit type that
 // contradicts the connectionstring scheme; connect infers what it can, enforces
 // the vendor rules that would otherwise fail silently open, fills defaults, and
-// leaves identity to the dial (ADR-050, "the seam stays asymmetric by design").
+// leaves identity to the dial (ADR-050, "the seam stays asymmetric by design"),
+// with one exception: an empty PostgreSQL host is refused, because pgx would
+// substitute libpq's default unix socket and drop the configured TLS material.
 type dbStrictness int
 
 const (
@@ -85,7 +87,8 @@ func normalizeDatabaseValues(db *DatabaseConfig, sec section, strictness dbStric
 
 // normalizeForConnect infers a missing Type from a recognized scheme without
 // erroring on a contradiction, rejects vendor field shapes that would fail
-// silently open, and fills pool/session defaults. Identity is the dial's job.
+// silently open, and fills pool/session defaults. Identity is the dial's job,
+// except for an empty PostgreSQL host, which the vendor check refuses.
 func normalizeForConnect(db *DatabaseConfig) error {
 	if db.Type == "" {
 		db.Type = inferDatabaseTypeFromConnectionString(db.ConnectionString)
@@ -596,9 +599,10 @@ func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 }
 
 // validatePostgreSQLFields fails closed on database.tls shapes that pgx would silently
-// discard or downgrade (ADR-062). Check order is
-// load-bearing: connectionstring short-circuits, then the mode allowlist, then the
-// material/mode coherence rule, then the cert/key pairing.
+// discard or downgrade (ADR-062), and on an empty host, which pgx replaces with libpq's
+// default unix socket — discarding any TLS material (ADR-050 amendment). Check order is
+// load-bearing: connectionstring short-circuits, then the empty-host refusal, then the
+// mode allowlist, then the material/mode coherence rule, then the cert/key pairing.
 func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 	if cfg.ConnectionString != "" {
 		if cfg.TLS.Mode != "" || cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" || cfg.TLS.CAFile != "" {
@@ -610,6 +614,12 @@ func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 			}
 		}
 		return nil
+	}
+
+	// Regardless of TLS: pgx v5.11 hands an empty host to libpq's default, the server's
+	// unix-socket directory, where TLS is skipped entirely. Same error as the startup path.
+	if cfg.Host == "" {
+		return NewMissingFieldError("database.host", "DATABASE_HOST", "database.host")
 	}
 
 	if cfg.TLS.Mode != "" && !slices.Contains(pgSSLModes, cfg.TLS.Mode) {

@@ -81,6 +81,15 @@ Currently this is a documented developer convenience: TestMain always spins up a
 #   password/connectionstring/oracle.service.name/oracle.service.sid marks the
 #   section as intended, and an intended section must be complete (type + host +
 #   port + username + a target). Complete it, or remove the block entirely
+
+# "failed to parse PostgreSQL config" (constant, no detail)
+# → The DSN is redacted on purpose. errors.As the error to *pgconn.ParseConfigError
+#   for pgx's message; since pgx v5.11 a raw connectionstring follows libpq rules
+#   exactly (double backslashes, %20 not +, first @ ends userinfo) — see database.md
+
+# config_missing: database.host on a DBConfigProvider result
+# → The connect seam refuses an empty PostgreSQL host since pgx v5.11 would dial a
+#   unix socket with TLS dropped; set Host (ADR-050 amendment, [C64.8])
 ```
 
 ## Connection Pool Issues (ORA-01013, connection reset)
