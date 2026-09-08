@@ -214,7 +214,7 @@ func (m *Module) verifyStartupDatabase() error {
 		return err // already "inbox: …"-prefixed by the tenantstore cache
 	}
 	if _, err := store.DeleteProcessed(ctx, db, time.Unix(0, 0).UTC()); err != nil {
-		return tenantstore.TableUnusableError("inbox", m.cfg.TableName, "inbox.autocreatetable", err)
+		return tenantstore.ProbeFailureError("inbox", m.cfg.TableName, "inbox.autocreatetable", err)
 	}
 
 	if m.holdEnabled() {

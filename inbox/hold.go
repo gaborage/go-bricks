@@ -123,7 +123,7 @@ func (m *Module) verifyHoldDatabase(ctx context.Context, db dbtypes.Interface) e
 		return err
 	}
 	if _, err := store.HeldTenants(ctx, db, ""); err != nil {
-		return tenantstore.TableUnusableError(moduleName, m.cfg.Hold.TableName, "inbox.autocreatetable", err)
+		return tenantstore.ProbeFailureError(moduleName, m.cfg.Hold.TableName, "inbox.autocreatetable", err)
 	}
 	return nil
 }

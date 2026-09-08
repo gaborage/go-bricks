@@ -11,6 +11,7 @@ import (
 
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database/identifier"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
@@ -476,4 +477,43 @@ func TestRegisterJobsWithoutAHoldAddsNoDrain(t *testing.T) {
 	require.NoError(t, m.RegisterJobs(reg))
 
 	assert.NotContains(t, reg.fixedRateJobs, holdDrainJobID)
+}
+
+// TestModuleInitBuildStageProbeFailureIsAConfigurationFault pins #1521 for the
+// inbox ledger probe: a builder refusal is a configuration fault, not a missing
+// table.
+func TestModuleInitBuildStageProbeFailureIsAConfigurationFault(t *testing.T) {
+	m := NewModule()
+	deps := testDeps()
+	deps.Config = &config.Config{Inbox: config.InboxConfig{Enabled: true, TableName: "ev#ents"}}
+
+	err := m.Init(deps)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `inbox: table "ev#ents" cannot be queried as configured`)
+	assert.NotContains(t, err.Error(), "run migrations")
+	assert.NotContains(t, err.Error(), "inbox.autocreatetable")
+	assert.ErrorIs(t, err, identifier.ErrIdentifierCharset)
+}
+
+// TestModuleInitBuildStageHoldProbeFailureIsAConfigurationFault covers the third
+// probe: the hold's own table name, refused by the builder.
+func TestModuleInitBuildStageHoldProbeFailureIsAConfigurationFault(t *testing.T) {
+	m := NewModule()
+	m.SetSharedResolvers(func(context.Context) (dbtypes.Interface, error) { return probeReadyDB(), nil }, nil)
+	deps := testDeps()
+	deps.Config = &config.Config{
+		Inbox: config.InboxConfig{
+			Enabled: true, RetentionPeriod: time.Hour, Tenancy: config.TenancyShared,
+			Hold: config.InboxHoldConfig{Enabled: true, TableName: "ev#ents"},
+		},
+	}
+
+	err := m.Init(deps)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `inbox: table "ev#ents" cannot be queried as configured`)
+	assert.NotContains(t, err.Error(), "run migrations")
+	assert.NotContains(t, err.Error(), "inbox.autocreatetable")
+	assert.ErrorIs(t, err, identifier.ErrIdentifierCharset)
 }

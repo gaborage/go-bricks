@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/database"
+	dbident "github.com/gaborage/go-bricks/database/identifier"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
@@ -156,6 +158,65 @@ func TestHoldStoreSQLGolden(t *testing.T) {
 			step("Release", func() error { _, err := store.Release(ctx, db, "orders", "acme", "owner-1"); return err })
 			step("Stats", func() error { _, err := store.Stats(ctx, db, "orders"); return err })
 			compareGolden(t, "hold_"+tc.vendor, out.String()+golden.Render(db, tx))
+		})
+	}
+}
+
+// TestHoldStoreBuildRefusalIsABuildStageExecError pins #1521's premise for the
+// hold: a table name the builder refuses must surface as a build-stage
+// ExecError, with the identifier sentinel reachable through the wrap, so the
+// startup probe can tell a configuration fault from a missing table.
+func TestHoldStoreBuildRefusalIsABuildStageExecError(t *testing.T) {
+	store, err := NewPostgresHoldStore("ev#ents")
+	require.NoError(t, err, "the name validator accepts this name; only the builder refuses it")
+	ctx := context.Background()
+	db, _ := permissiveDB(dbtypes.PostgreSQL)
+
+	calls := []struct {
+		name string
+		op   string
+		call func() error
+	}{
+		{
+			name: "held_tenants", op: "inbox postgres: held tenants query",
+			call: func() error { _, err := store.HeldTenants(ctx, db, "orders"); return err },
+		},
+		{
+			name: "list_tenants", op: "inbox postgres: list tenants query",
+			call: func() error { _, err := store.ListTenants(ctx, db, "orders"); return err },
+		},
+		{
+			name: "due_tenants", op: "inbox postgres: due tenants query",
+			call: func() error { _, err := store.DueTenants(ctx, db, "orders", 10); return err },
+		},
+		{
+			name: "next_rows", op: "inbox postgres: next rows query",
+			call: func() error { _, err := store.NextRows(ctx, db, "orders", "acme", 5); return err },
+		},
+		{name: "delete_row", op: "inbox postgres: delete held row query", call: func() error {
+			_, err := store.DeleteRow(ctx, db, "orders", "orders-s", 7, "acme", "owner-1")
+			return err
+		}},
+		{
+			name: "release", op: "inbox postgres: release tenant query",
+			call: func() error { _, err := store.Release(ctx, db, "orders", "acme", "owner-1"); return err },
+		},
+		{
+			name: "release_lease", op: "inbox postgres: release lease query",
+			call: func() error { return store.ReleaseLease(ctx, db, "orders", "acme", "owner-1") },
+		},
+	}
+
+	for _, tc := range calls {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.call()
+
+			require.Error(t, err)
+			var execErr *database.ExecError
+			require.ErrorAs(t, err, &execErr)
+			assert.Equal(t, database.StageBuild, execErr.Stage)
+			assert.Equal(t, tc.op, execErr.Op)
+			assert.ErrorIs(t, err, dbident.ErrIdentifierCharset)
 		})
 	}
 }

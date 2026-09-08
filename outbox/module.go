@@ -248,7 +248,7 @@ func (m *Module) verifyStartupDatabase() error {
 		return err // already "outbox: …"-prefixed by the tenantstore cache
 	}
 	if _, err := store.FetchPending(ctx, db, 1); err != nil {
-		return tenantstore.TableUnusableError("outbox", m.cfg.TableName, "outbox.autocreatetable", err)
+		return tenantstore.ProbeFailureError("outbox", m.cfg.TableName, "outbox.autocreatetable", err)
 	}
 	return nil
 }

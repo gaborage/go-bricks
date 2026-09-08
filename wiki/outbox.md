@@ -434,6 +434,10 @@ is still a write and will fail against a read-only replica) — and fails `Init`
   inbox: `DELETE`). Missing table → run migrations, or set
   `outbox.autocreatetable`/`inbox.autocreatetable` where the role also holds DDL rights. Privilege
   failure → grant that privilege; auto-creation does not help.
+- `table %q cannot be queried as configured` — the probe never reached the database: the query
+  builder refused the configured table name (a character outside the vendor's grammar, an over-long
+  identifier, an unsupported vendor), so neither migrations nor auto-creation applies; fix
+  `outbox.tablename`/`inbox.tablename`.
 - `database resolver returned a nil database` — a resolver contract violation (`(nil, nil)`).
 
 **Exempt modes** (the `""` key is not statically resolvable at `Init` time, so the check is skipped —

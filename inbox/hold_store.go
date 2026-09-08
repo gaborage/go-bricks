@@ -327,7 +327,7 @@ func (q *holdQueries) ListTenants(ctx context.Context, db dbtypes.Interface, con
 	// builder's projection accepts identifiers alone.
 	noError, err := q.qb.Expr(q.noError)
 	if err != nil {
-		return nil, q.wrap("build list tenants query failed", err)
+		return nil, q.wrapBuild("list tenants query", err)
 	}
 
 	f := q.qb.Filter()
@@ -336,7 +336,7 @@ func (q *holdQueries) ListTenants(ctx context.Context, db dbtypes.Interface, con
 		OrderBy(colHeldSince).
 		ToSQL()
 	if err != nil {
-		return nil, q.wrap("build list tenants query failed", err)
+		return nil, q.wrapBuild("list tenants query", err)
 	}
 	return scanHoldTenants(ctx, db, "list tenants", query, args...)
 }
@@ -346,7 +346,7 @@ func (q *holdQueries) DueTenants(ctx context.Context, db dbtypes.Interface, cons
 	// column, as in ListTenants; no interpolation and no caller value.
 	noError, err := q.qb.Expr(q.noError)
 	if err != nil {
-		return nil, q.wrap("build due tenants query failed", err)
+		return nil, q.wrapBuild("due tenants query", err)
 	}
 
 	f := q.qb.Filter()
@@ -362,7 +362,7 @@ func (q *holdQueries) DueTenants(ctx context.Context, db dbtypes.Interface, cons
 		Limit(boundedLimit(limit)).
 		ToSQL()
 	if err != nil {
-		return nil, q.wrap("build due tenants query failed", err)
+		return nil, q.wrapBuild("due tenants query", err)
 	}
 	return scanHoldTenants(ctx, db, "list due tenants", query, args...)
 }
@@ -373,7 +373,7 @@ func (q *holdQueries) HeldTenants(ctx context.Context, db dbtypes.Interface, con
 		Where(f.Eq(colConsumer, consumer)).
 		ToSQL()
 	if err != nil {
-		return nil, q.wrap("build held tenants query failed", err)
+		return nil, q.wrapBuild("held tenants query", err)
 	}
 	return scanTenantIDs(ctx, db, query, args...)
 }
@@ -386,7 +386,7 @@ func (q *holdQueries) NextRows(ctx context.Context, db dbtypes.Interface, consum
 		Limit(boundedLimit(limit)).
 		ToSQL()
 	if err != nil {
-		return nil, q.wrap("build next rows query failed", err)
+		return nil, q.wrapBuild("next rows query", err)
 	}
 	return scanHoldRows(ctx, db, query, args...)
 }
@@ -400,7 +400,7 @@ func (q *holdQueries) DeleteRow(ctx context.Context, db dbtypes.Interface,
 	f := q.qb.Filter()
 	lease, err := q.leaseHeldBy(f, consumer, tenant, owner)
 	if err != nil {
-		return false, q.wrap("build delete held row query failed", err)
+		return false, q.wrapBuild("delete held row query", err)
 	}
 
 	query, args, err := q.qb.Delete(q.table).
@@ -412,7 +412,7 @@ func (q *holdQueries) DeleteRow(ctx context.Context, db dbtypes.Interface,
 		)).
 		ToSQL()
 	if err != nil {
-		return false, q.wrap("build delete held row query failed", err)
+		return false, q.wrapBuild("delete held row query", err)
 	}
 	return affectedOne(ctx, db, "delete held row", query, args...)
 }
@@ -424,7 +424,7 @@ func (q *holdQueries) Release(ctx context.Context, db dbtypes.Interface, consume
 	f := q.qb.Filter()
 	one, err := q.constantOne()
 	if err != nil {
-		return false, q.wrap("build release tenant query failed", err)
+		return false, q.wrapBuild("release tenant query", err)
 	}
 
 	rowsRemain := q.qb.Select(one).From(q.table).
@@ -446,7 +446,7 @@ func (q *holdQueries) Release(ctx context.Context, db dbtypes.Interface, consume
 		)).
 		ToSQL()
 	if err != nil {
-		return false, q.wrap("build release tenant query failed", err)
+		return false, q.wrapBuild("release tenant query", err)
 	}
 	return affectedOne(ctx, db, "release tenant", query, args...)
 }
@@ -459,7 +459,7 @@ func (q *holdQueries) ReleaseLease(ctx context.Context, db dbtypes.Interface, co
 		Where(f.And(f.Eq(colConsumer, consumer), f.Eq(colTenantID, tenant), f.Eq(colLeaseOwner, owner))).
 		ToSQL()
 	if err != nil {
-		return q.wrap("build release lease query failed", err)
+		return q.wrapBuild("release lease query", err)
 	}
 	if _, err := db.Exec(ctx, query, args...); err != nil {
 		return q.wrap("release lease failed", err)
@@ -497,6 +497,18 @@ func (q *holdQueries) constantOne() (dbtypes.RawExpression, error) {
 // wrap names the vendor in an error the way each store's own messages do.
 func (q *holdQueries) wrap(what string, err error) error {
 	return fmt.Errorf("inbox %s: %s: %w", q.vendor, what, err)
+}
+
+// wrapBuild reports a ToSQL refusal the way every Execute* helper does: a
+// build-stage ExecError, which renders the stage itself. Callers that classify
+// a failure — the startup probes via tenantstore.ProbeFailureError — read that
+// stage, so a builder refusal here must not arrive as a bare wrap.
+func (q *holdQueries) wrapBuild(what string, err error) error {
+	return &database.ExecError{
+		Op:    fmt.Sprintf("inbox %s: %s", q.vendor, what),
+		Stage: database.StageBuild,
+		Err:   err,
+	}
 }
 
 // stats is the one-round-trip snapshot: three scalar subqueries in one

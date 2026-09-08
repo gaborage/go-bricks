@@ -3,6 +3,7 @@ package tenantstore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"strings"
 	"testing"
@@ -12,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database"
+	"github.com/gaborage/go-bricks/database/identifier"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
@@ -445,5 +448,48 @@ func waitForGoroutineBlockedOnTenantLock() {
 			}
 		}
 		runtime.Gosched()
+	}
+}
+
+func TestProbeFailureErrorBuildStage(t *testing.T) {
+	cause := &database.ExecError{
+		Op:    "outbox postgres: fetch pending",
+		Stage: database.StageBuild,
+		Err:   fmt.Errorf("From: invalid identifier %q for postgresql: %w", "ev#ents", identifier.ErrIdentifierCharset),
+	}
+
+	err := ProbeFailureError("outbox", "ev#ents", "outbox.autocreatetable", cause)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `outbox: table "ev#ents" cannot be queried as configured`)
+	assert.NotContains(t, err.Error(), "run migrations")
+	assert.NotContains(t, err.Error(), "outbox.autocreatetable")
+	assert.NotContains(t, err.Error(), "is not usable")
+	assert.ErrorIs(t, err, identifier.ErrIdentifierCharset)
+}
+
+func TestProbeFailureErrorNonBuildCauses(t *testing.T) {
+	tests := []struct {
+		name  string
+		cause error
+	}{
+		{name: "plain_error", cause: errors.New("relation does not exist")},
+		{name: "exec_stage_exec_error", cause: &database.ExecError{
+			Op: "outbox postgres: fetch pending", Stage: database.StageExec, Err: errors.New("relation does not exist"),
+		}},
+		{name: "scan_stage_exec_error", cause: &database.ExecError{
+			Op: "outbox postgres: fetch pending", Stage: database.StageScan, Err: errors.New("relation does not exist"),
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ProbeFailureError("outbox", "gobricks_outbox", "outbox.autocreatetable", tt.cause)
+
+			require.Error(t, err)
+			assert.Equal(t, TableUnusableError("outbox", "gobricks_outbox", "outbox.autocreatetable", tt.cause).Error(),
+				err.Error(), "a non-build cause must keep the database-state wording byte-for-byte")
+			assert.ErrorIs(t, err, tt.cause)
+		})
 	}
 }
