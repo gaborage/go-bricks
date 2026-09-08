@@ -43,12 +43,8 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 		return "", errors.New("outbox: event must not be nil")
 	}
 
-	if event.EventType == "" {
-		return "", errors.New("outbox: event type must not be empty")
-	}
-
-	if event.AggregateID == "" {
-		return "", errors.New("outbox: aggregate ID must not be empty")
+	if err := validateEvent(event); err != nil {
+		return "", err
 	}
 
 	// The tenant is resolved once, for both lanes, before anything else is judged: the
@@ -118,8 +114,26 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 	return record.ID, nil
 }
 
+// validateEvent judges what the caller supplied, before anything is resolved and
+// before any row is written: the fields a row cannot do without, then the reserved
+// header namespace.
+func validateEvent(event *app.OutboxEvent) error {
+	if event.EventType == "" {
+		return errors.New("outbox: event type must not be empty")
+	}
+	if event.AggregateID == "" {
+		return errors.New("outbox: aggregate ID must not be empty")
+	}
+	// The x-gobricks- prefix is the framework's own, and a caller header claiming it
+	// is a bug or an attempt, either of which a silent drop would hide.
+	if key, found := firstReservedHeader(event.Headers); found {
+		return fmt.Errorf("%w: %q", ErrReservedHeaderPrefix, key)
+	}
+	return nil
+}
+
 // resolveAMQPDestination applies the exchange and routing-key fallbacks and judges the
-// result, for the AMQP lane only. A stream-lane row carries no exchange or routing key, so
+// result — plus the event type that travels beside it — for the AMQP lane only. A stream-lane row carries no exchange or routing key, so
 // applying the fallbacks to it would invent a destination it will never be published to —
 // and then refuse the event when that invented destination happens to be too long for a
 // frame it never enters.
@@ -138,6 +152,13 @@ func (p *outboxPublisher) resolveAMQPDestination(event *app.OutboxEvent) (exchan
 		routingKey = event.EventType
 	}
 	if err = messaging.ValidatePublishDestination(exchange, routingKey, event.Headers); err != nil {
+		return "", "", fmt.Errorf("outbox: %w", err)
+	}
+	// The event type rides the same content-header frame as the header keys above, as the
+	// `type` property (ADR-105), and the ledger's column bounds 255 CHARACTERS — so a
+	// multibyte type it accepts can still be unwritable. Judged after the destination, so
+	// the routing-key fallback still names the field it filled.
+	if err = messaging.ValidatePublishEventType(event.EventType); err != nil {
 		return "", "", fmt.Errorf("outbox: %w", err)
 	}
 	return exchange, routingKey, nil
@@ -164,8 +185,11 @@ func (p *outboxPublisher) applyStreamTarget(stamp string, event *app.OutboxEvent
 
 // marshalHeaders JSON-encodes the AMQP headers, first capturing the trace
 // context from ctx so it survives to the relay and consumer, then the tenant
-// stamp the caller resolved, then the payload's content type. The caller's map is
-// never mutated — the framework's keys are written to a fresh copy. Returns nil
+// stamp the caller resolved, then the payload's content type. Nothing needs to
+// be unset first: Publish has already refused every caller header under the
+// reserved prefix, so the stamp's key is the framework's alone by the time this
+// runs. The caller's map is never mutated — the framework's keys are written to
+// a fresh copy. Returns nil
 // (a SQL NULL) when there are neither caller headers, nor a trace context, nor a
 // stamp, nor a content type to persist — so a row whose payload the publisher
 // marshaled itself now always persists at least the content-type stamp.
@@ -196,12 +220,6 @@ func marshalHeaders(ctx context.Context, eventHeaders map[string]any, stamp, con
 	if stamp != "" {
 		headers[messaging.TenantStampHeader] = stamp
 	}
-	// Unconditionally, before the write: the stamp is the framework's to set, so
-	// a caller header spelled the same way must not survive persistence. Only
-	// setting it when there IS an encoding would leave the caller's value on an
-	// opaque payload's row, and the relay would put it on the wire as the
-	// content type — the mislabelling this stamp exists to prevent.
-	delete(headers, headerContentTypeStamp)
 	if contentType != "" {
 		headers[headerContentTypeStamp] = contentType
 	}

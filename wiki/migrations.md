@@ -7256,6 +7256,62 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   (`validatePublishOptions`) · builds on [C64.10], which made `app.name` a wire property in the
   first place
 
+### [C64.14] outbox enqueue refuses an over-long event type and a caller header in the framework's namespace · breaking · when: match
+
+- detect: nothing in your build flags either half — no signature moves and both refusals are new
+  runtime errors from `outbox.Publish`. For the event type, **grepping Go source is not enough**:
+  the value is usually data rather than a literal, so the honest detector is a query over the
+  ledger you already have — `SELECT count(*) FROM <outbox.table> WHERE octet_length(event_type) > 255`
+  on PostgreSQL, `LENGTHB(event_type) > 255` on Oracle, per outbox table and per tenant ledger.
+  Measure BYTES, not characters: the column bounds 255 CHARACTERS, so a multibyte type it accepts
+  can already be over the byte ceiling. For the header prefix, match by header NAME:
+  `git grep -n 'x-gobricks' -- '*.go'`, plus wherever the deployment builds an event's header map
+  from configuration or request data, since a name assembled at runtime reaches no grep.
+- scope: `outboxPublisher.Publish` refuses two inputs it used to accept, both before the INSERT.
+  (a) An `EventType` longer than 255 bytes, via `messaging.ValidatePublishEventType`, returning
+  `messaging.ErrInvalidPublishDestination` wrapped as `outbox: ...` and naming the field and its
+  byte length, never the value. The event type became the AMQP `type` property this round
+  ([C64.10], ADR-105), a shortstr on the content-header frame, and amqp091 answers an over-long
+  one by shutting down the whole Connection every publisher in the process shares (ADR-070) — so
+  the guard is what keeps such a row off the frame at all. Such rows used to insert and then read
+  as poison every cycle until they exhausted `MaxRetries`, and until they did, each cycle held
+  back every later row sharing their key — the tenant stamp on a stamped AMQP row — so one row
+  stalled that tenant's outbox. The STREAM lane is deliberately unbounded: the check runs in
+  `resolveAMQPDestination`, the AMQP lane only, because a stream row carries its event type as an
+  application-property VALUE, which has no 255-byte ceiling. (b) Any caller header whose name
+  claims the reserved `x-gobricks-` prefix, case-insensitively, returning the new
+  `outbox.ErrReservedHeaderPrefix` and naming the offending key. That namespace is the
+  framework's own: it is where enqueue records the payload's encoding on the row for the relay to
+  read back as the `content_type` property ([C64.10]), so a caller writing into it could mint the
+  encoding a consumer reads. It was briefly dropped silently; refusing it follows the `x-tenant-id`
+  precedent (`messaging.ErrTenantStampConflict`, ADR-087) — explicit over implicit, no silent
+  failures. The refusal cannot reach a row enqueued before the upgrade, so the relay still strips
+  the framework's stamps off every row it plans.
+- gate: match — an outbox publisher whose event type can exceed 255 bytes (usually one derived
+  from data rather than declared as a constant), whose `Publish` now returns an error inside the
+  business transaction where the row used to insert; or a caller passing an event header under
+  `x-gobricks-`, whose value used to be dropped on the way to the row and now fails the publish.
+  no-match — event types are short constants and no caller header touches the prefix, which is
+  every ordinary producer.
+- apply: (a) shorten the event type, or hash the unbounded part of it and carry the full value as
+  a payload field or an ordinary header — the type is a routing and dispatch label, not a place
+  for data. Handle the error where you call `Publish`: it arrives inside your transaction, so the
+  business write rolls back with it, which is the intended outcome for an event that could never
+  be delivered. (b) rename the header out of the framework's namespace — any prefix but
+  `x-gobricks-` — and read the framework's own encoding stamp off the delivery's `content_type`
+  property rather than off a header.
+- verify: `go build ./... && go test ./...`  # then enqueue one event with a 256-byte `EventType`
+  and confirm `Publish` returns an error and inserts nothing, enqueue one with an
+  `x-gobricks-anything` header and confirm `errors.Is(err, outbox.ErrReservedHeaderPrefix)`, and
+  re-run the ledger query above to confirm no existing row is over the byte bound
+- ref: gaborage/go-bricks#1545 ·
+  [ADR-105](adr_105_framework_writes_every_publish_property.md) · `outbox/publisher.go`
+  (`Publish`, `resolveAMQPDestination`), `outbox/headers.go` (`reservedHeaderPrefix`,
+  `firstReservedHeader`), `outbox/errors.go` (`ErrReservedHeaderPrefix`),
+  `messaging/publish_destination.go` (`ValidatePublishEventType`) · builds on [C64.10], which
+  made the event type a wire property and the payload's encoding a stamp on the row in the first
+  place
+
 ---
 
 *The sections below are reference material: the two config-key rename lookup tables (linked from atoms C401.1 and C41.7), followed by pre-v0.39 changes retained for consumers upgrading from older releases.*

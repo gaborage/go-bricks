@@ -384,28 +384,25 @@ func TestOutboxShipperCarriesThePayloadContentType(t *testing.T) {
 	}
 }
 
-// TestOutboxShipperRefusesACallerMintedContentTypeStamp pins the reserved key against
-// the caller: the stamp is the framework's to set, and the opaque arm sets none, so a
-// caller header spelled the same way must be dropped at enqueue rather than persisted
-// and put on the wire as the content type it never earned.
-func TestOutboxShipperRefusesACallerMintedContentTypeStamp(t *testing.T) {
-	rows := publishedRows(context.Background(), t, &app.OutboxEvent{
+// TestOutboxShipperStripsAPreUpgradeCallerStamp covers the rows the enqueue refusal
+// cannot reach: one persisted before Publish began refusing the reserved prefix still
+// carries a caller-spelled stamp, and the relay's strip is all that keeps it off the wire.
+func TestOutboxShipperStripsAPreUpgradeCallerStamp(t *testing.T) {
+	row := Record{
+		ID:          "11111111-2222-4333-8444-555555555555",
 		EventType:   "order.created",
 		AggregateID: "A1",
+		Payload:     []byte(`{"id":1}`),
+		Headers:     []byte(`{"x-gobricks-content-type":"application/json","keep":"me"}`),
 		Exchange:    "orders",
 		RoutingKey:  "created",
-		Payload:     []byte(`{"id":1}`),
-		Headers:     map[string]any{headerContentTypeStamp: "application/json", "keep": "me"},
-	})
+		Lane:        LaneAMQP,
+		Status:      StatusPending,
+	}
 
-	stored, err := decodeHeaders(rows[0].Headers)
-	require.NoError(t, err)
-	assert.NotContains(t, stored, headerContentTypeStamp, "the caller's stamp is dropped at enqueue")
-	assert.Equal(t, "me", stored["keep"], "its other headers are untouched")
+	f := relayShipped(t, row)
 
-	f := relayShipped(t, rows...)
-
-	require.NotNil(t, f.LastPublishOpts.Props)
-	assert.Empty(t, f.LastPublishOpts.Props.ContentType, "opaque bytes name no encoding")
-	assert.NotContains(t, f.LastPublishHdrs, headerContentTypeStamp)
+	assert.NotContains(t, f.LastPublishHdrs, headerContentTypeStamp,
+		"the stamp is the framework's bookkeeping and must not reach the wire")
+	assert.Equal(t, "me", f.LastPublishHdrs["keep"], "its other headers still travel")
 }

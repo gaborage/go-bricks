@@ -23,8 +23,9 @@ event type onto `type`, and labels the body `application/json` only when the out
 it — a caller-supplied `[]byte`, the persisted-sealed shape included, ships as
 `application/octet-stream` because nothing in the row records its encoding (ADR-105). The
 label travels on the row as a reserved `x-gobricks-content-type` header the relay strips
-before the wire; nothing validates caller header keys, so a caller header spelled exactly
-that way is silently dropped at enqueue and never delivered. Rows enqueued before the
+before the wire; the whole `x-gobricks-` prefix is the framework's, so a caller header claiming
+it is refused at enqueue with `outbox.ErrReservedHeaderPrefix` — case-insensitively, and naming
+the offending key — rather than dropped. Rows enqueued before the
 upgrade carry no such header, so a draining pre-upgrade backlog delivers the same event type
 under both labels.
 
@@ -263,9 +264,11 @@ _, err := s.outbox.Publish(ctx, tx, &app.OutboxEvent{
 })
 ```
 
-Three refusals happen at `Publish`, where the developer sees them rather than as poison rows
+Five refusals happen at `Publish`, where the developer sees them rather than as poison rows
 cycles later: naming a stream beside an exchange or routing key, naming a stream absent from
-`outbox.superstreams`, and publishing a stream target with no tenant in context.
+`outbox.superstreams`, publishing a stream target with no tenant in context, an AMQP
+destination or event type past the 255-byte shortstr limit, and a caller header claiming the
+reserved `x-gobricks-` prefix.
 
 **Ordering.** Rows drain in `seq` order — a per-ledger sequence the database assigns at insert
 — and one relay instance per ledger drains at a time, holding the ledger's `<table>_leader`

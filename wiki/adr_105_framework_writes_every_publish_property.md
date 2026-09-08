@@ -186,6 +186,12 @@ a fleet — not what makes them trustworthy (see Consequences).
   connection is never touched. Without the guard amqp091 would answer the unwritable frame by
   shutting down the whole Connection every publisher in the process shares, the precedent
   ADR-070 established for `CorrelationId`.
+- **Outbox enqueue refuses what the frame cannot carry and what would mint a framework stamp.**
+  An `EventType` past the 255-byte shortstr ceiling and any caller header claiming the reserved
+  `x-gobricks-` prefix are both refused at `Publish`, before the INSERT — the first because the
+  row could only ever tear down the shared connection or park the tenant's outbox behind it, the
+  second because that namespace is where enqueue records the encoding the relay puts on the wire
+  (`[C64.14]`).
 - **An outbox `[]byte` payload stays octet-stream.** That covers the
   persisted-sealed path and any hand-marshaled body: the row is honest about not
   knowing, not wrong about knowing. A producer that wants `application/json` on the
