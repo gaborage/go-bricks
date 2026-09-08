@@ -57,6 +57,12 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 - Publishers: `Mandatory: false`, `Immediate: false`
 - Consumers: `AutoAck: false`, `Exclusive: false`, `NoLocal: false`
 
+**Wire properties are the framework's, not the caller's** (ADR-105): every AMQP 0-9-1 publish carries
+`delivery_mode: 2` (persistent, no opt-out), `app_id` from `app.name`, a `timestamp`, `type`
+from the declared `EventType`, and a `content_type` the handle actually knows —
+`application/json`, or `application/jose` when the handle seals the event. The streams lane
+is untouched: it sets no message properties of its own.
+
 RabbitMQ 4.3.0 denies `transient_nonexcl_queues` by default: a queue declared with both `Durable: false` and `Exclusive: false` gets the connection closed with a 541 instead of the queue created. The helpers above are unaffected — `NewQueue` defaults to `Durable: true` — but a hand-built `QueueDeclaration` using that transient shape needs the broker configured with `deprecated_features.permit.transient_nonexcl_queues = true`, which is what GoBricks' own RabbitMQ test container sets.
 
 **Key Helpers:** `DeclareTopicExchange()`, `DeclareQueue()`, `DeclareBinding()`, `DeclareTypedPublisher[T]()`, `DeclareConsumer()`

@@ -1078,6 +1078,36 @@ func TestNewMessagingManagerDefaultFactoryForwardsPublishTimeout(t *testing.T) {
 	assert.Equal(t, time.Duration(0), unboundedClient.publishTimeout)
 }
 
+// TestNewMessagingManagerDefaultFactoryForwardsAppName pins the last hop of ADR-105's
+// app_id wiring: ManagerOptions.AppName -> default client factory -> AMQPClientImpl.appID.
+func TestNewMessagingManagerDefaultFactoryForwardsAppName(t *testing.T) {
+	oldDial := getAmqpDialFunc()
+	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
+	t.Cleanup(func() { setAmqpDialFunc(oldDial) })
+
+	log := logger.New("error", false)
+	manager := NewMessagingManager(&stubMessagingSource{}, log, ManagerOptions{
+		MaxPublishers: 1,
+		IdleTTL:       time.Minute,
+		AppName:       "orders-api",
+	}, nil)
+
+	client := manager.clientFactory(amqpHost, log).(*AMQPClientImpl)
+	t.Cleanup(func() { closeAndWaitForReconnect(client) })
+
+	assert.Equal(t, "orders-api", client.appID)
+
+	// Unset stays empty: a deployment that configured no app.name stamps no app_id
+	// rather than a placeholder.
+	unnamed := NewMessagingManager(&stubMessagingSource{}, log, ManagerOptions{
+		MaxPublishers: 1,
+		IdleTTL:       time.Minute,
+	}, nil)
+	unnamedClient := unnamed.clientFactory(amqpHost, log).(*AMQPClientImpl)
+	t.Cleanup(func() { closeAndWaitForReconnect(unnamedClient) })
+	assert.Empty(t, unnamedClient.appID)
+}
+
 // newSetupDeclarations builds the exchange/queue/binding/consumer set the consumer-setup tests
 // share, so a fixture change lands in one place instead of three.
 func newSetupDeclarations() *Declarations {

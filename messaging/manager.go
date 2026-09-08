@@ -114,6 +114,9 @@ type ManagerOptions struct {
 	ReconnectMaxDelay time.Duration
 	ReinitDelay       time.Duration
 	ResendDelay       time.Duration
+	// AppName is the app.name config value stamped as the AMQP app_id property on every
+	// publish by clients created by the default factory (ADR-105). Empty stamps no app_id.
+	AppName string
 	// TenantStamps makes consumers read the tenant stamp off each delivery and seed
 	// the handler context with it. True only under multitenant.enabled together with
 	// messaging.tenancy: shared — under per-tenant tenancy the replay key is already
@@ -153,6 +156,7 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 				WithReconnectMaxDelay(opts.ReconnectMaxDelay),
 				WithReinitDelay(opts.ReinitDelay),
 				WithResendDelay(opts.ResendDelay),
+				WithAppName(opts.AppName),
 			)
 		}
 	}

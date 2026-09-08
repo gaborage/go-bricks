@@ -43,6 +43,9 @@ type ManagerConfigBuilder struct {
 	reconnectMaxDelay time.Duration
 	reInitDelay       time.Duration
 	resendDelay       time.Duration
+	// appName is the application identity (app.name) stamped as the AMQP app_id
+	// property on every publish, set by bootstrap.
+	appName string
 	// publisherConfig carries operator-configurable messaging publisher pool
 	// settings (messaging.publisher.*), sourced from validated config by bootstrap.
 	publisherConfig config.PublisherPoolConfig
@@ -94,6 +97,7 @@ func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions 
 		ReconnectMaxDelay:  b.reconnectMaxDelay,
 		ReinitDelay:        b.reInitDelay,
 		ResendDelay:        b.resendDelay,
+		AppName:            b.appName,
 		TenantStamps:       b.tenantStamps,
 	}
 }
@@ -226,20 +230,28 @@ func (f *ResourceManagerFactory) CreateMessagingManager(
 	}
 
 	msgOptions := f.configBuilder.BuildMessagingOptions()
-	clientFactory := f.factoryResolver.MessagingClientFactoryWithOptions(MessagingClientFactoryOptions{
-		ConnectionTimeout:  msgOptions.ConnectionTimeout,
-		MaxPublishAttempts: msgOptions.MaxPublishAttempts,
-		ReadyTimeout:       msgOptions.ReadyTimeout,
-		PublishTimeout:     msgOptions.PublishTimeout,
-		ReconnectDelay:     msgOptions.ReconnectDelay,
-		ReconnectMaxDelay:  msgOptions.ReconnectMaxDelay,
-		ReinitDelay:        msgOptions.ReinitDelay,
-		ResendDelay:        msgOptions.ResendDelay,
-	})
+	clientFactory := f.factoryResolver.MessagingClientFactoryWithOptions(messagingClientFactoryOptions(&msgOptions))
 
 	f.warnIfPoolBelowTenantCount("messaging", msgOptions.MaxPublishers)
 
 	return messaging.NewMessagingManager(resourceSource, f.logger, msgOptions, clientFactory)
+}
+
+// messagingClientFactoryOptions projects the manager options onto the client-factory
+// knobs. It is a named function rather than a literal at the one call site so the
+// eight hand-copied fields are pinnable in-package: a cross-wired pair reads the same
+// as a correct one from outside, and the factory double sees only (url, log).
+func messagingClientFactoryOptions(o *messaging.ManagerOptions) MessagingClientFactoryOptions {
+	return MessagingClientFactoryOptions{
+		ConnectionTimeout:  o.ConnectionTimeout,
+		MaxPublishAttempts: o.MaxPublishAttempts,
+		ReadyTimeout:       o.ReadyTimeout,
+		PublishTimeout:     o.PublishTimeout,
+		ReconnectDelay:     o.ReconnectDelay,
+		ReconnectMaxDelay:  o.ReconnectMaxDelay,
+		ReinitDelay:        o.ReinitDelay,
+		ResendDelay:        o.ResendDelay,
+	}
 }
 
 // CreateCacheManager creates a cache manager using the resolved factory

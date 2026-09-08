@@ -150,6 +150,16 @@ can hold one publish past the bound until that write returns.
 _Avoid_: publish timeout (the key, not the concept), write deadline, socket
 timeout
 
+**Message id**:
+The AMQP wire property (`message_id`) the framework stamps on every publish. On
+an outbox-relayed publish it MIRRORS the event id — the row's own id, the same
+value as the `x-outbox-event-id` header — and on every other publish it is a
+framework-minted UUID. It is a wire property and never a ledger input: an inbox
+reads the `x-outbox-event-id` stamp, and composes a sealed message's identity
+into a **Dedup key**, neither of which this property can stand in for.
+_Avoid_: event id (the outbox row's word), correlation id (the trace field),
+dedup key (the composed ledger identity)
+
 **Shipper**:
 The relay's per-lane adapter. It reports whether its lane is usable where it has
 a lane-wide answer (the stream lane's handles are per target, so it answers per

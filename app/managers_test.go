@@ -699,6 +699,46 @@ func TestResourceManagerFactoryCreateMessagingManager(t *testing.T) {
 	})
 }
 
+// TestMessagingClientFactoryOptionsProjection pins the hop CreateMessagingManager takes
+// from the manager options to the client-factory knobs. Every value is distinct so a
+// cross-wired field cannot pass by coincidence.
+func TestMessagingClientFactoryOptionsProjection(t *testing.T) {
+	opts := messaging.ManagerOptions{
+		ConnectionTimeout:  31 * time.Second,
+		MaxPublishAttempts: 6,
+		ReadyTimeout:       7 * time.Second,
+		PublishTimeout:     41 * time.Second,
+		ReconnectDelay:     8 * time.Second,
+		ReconnectMaxDelay:  91 * time.Second,
+		ReinitDelay:        3 * time.Second,
+		ResendDelay:        11 * time.Second,
+	}
+
+	got := messagingClientFactoryOptions(&opts)
+
+	assert.Equal(t, MessagingClientFactoryOptions{
+		ConnectionTimeout:  31 * time.Second,
+		MaxPublishAttempts: 6,
+		ReadyTimeout:       7 * time.Second,
+		PublishTimeout:     41 * time.Second,
+		ReconnectDelay:     8 * time.Second,
+		ReconnectMaxDelay:  91 * time.Second,
+		ReinitDelay:        3 * time.Second,
+		ResendDelay:        11 * time.Second,
+	}, got)
+}
+
+// TestFactoryResolverForConfigCarriesAppName pins the app-name seam ADR-105's app_id
+// wiring hangs off: the resolver, not the by-value options struct, carries the identity
+// its default client factory hands to messaging.WithAppName.
+func TestFactoryResolverForConfigCarriesAppName(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Name: "orders-api"}}
+
+	assert.Equal(t, "orders-api", newFactoryResolverForConfig(nil, cfg).appName)
+	assert.Empty(t, newFactoryResolverForConfig(nil, &config.Config{}).appName,
+		"a deployment that configured no app.name stamps no app_id")
+}
+
 func TestResourceManagerFactoryCreateCacheManager(t *testing.T) {
 	t.Run("single-tenant creates cache manager", func(t *testing.T) {
 		configBuilder := NewManagerConfigBuilder(false, 50)
