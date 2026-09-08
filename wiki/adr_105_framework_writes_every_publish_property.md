@@ -198,7 +198,8 @@ a fleet — not what makes them trustworthy (see Consequences).
   connection is never touched. Without the guard amqp091 would answer the unwritable frame by
   shutting down the whole Connection every publisher in the process shares, the precedent
   ADR-070 established for `CorrelationId`.
-- **An outbox `[]byte` payload stays octet-stream.** That covers the
+- **An outbox `[]byte` payload travels UNTYPED, which the AMQP lane ships as
+  octet-stream and the stream lane as no content type at all.** That covers the
   persisted-sealed path and any hand-marshaled body: the row is honest about not
   knowing, not wrong about knowing. A producer that wants `application/json` on the
   wire hands `Publish` the struct and lets the outbox marshal it.
