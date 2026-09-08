@@ -344,7 +344,7 @@ func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 		tenants = []string{""} // single control-plane pass; no fan-out
 	}
 
-	relay := newRelay(&lazyStore{module: m}, &m.cfg, m.getDB, tenants, map[string]shipper{
+	relay := newRelay(&lazyStore{module: m}, &m.cfg, m.getDB, m.config.Messaging.Reconnect.ReadyTimeout, tenants, map[string]shipper{
 		LaneAMQP: newAMQPShipper(m.getMsg),
 		LaneStream: newStreamShipper(func(name string) (streamPublisher, bool) {
 			p, ok := m.streamPublishers[name]
