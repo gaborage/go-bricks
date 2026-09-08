@@ -26,16 +26,17 @@ import (
 // filepath.Walk (workdir.go), so an in-repo cache would be hauled into every
 // working copy.
 const (
-	// gocacheCapEnv bounds, in MiB, what the dedicated build cache may leave
-	// on disk after a run. An explicit 0 disables the cap; unset or
-	// unparsable falls back to the default (MUTATE_CEILING_FLOOR precedent).
+	// gocacheCapEnv bounds, in MiB, what the dedicated build cache may hold
+	// at run start. An explicit 0 disables the cap; unset or unparsable
+	// falls back to the default (MUTATE_CEILING_FLOOR precedent).
 	gocacheCapEnv = "MUTATE_GOCACHE_CAP"
-	// defaultGocacheCapMiB bounds what a session leaves behind while holding
-	// one heavy run's build state (measured: one database-package run writes
-	// ~3.0 GiB, a repeat run grows it to ~5.7 GiB — repeat mutant builds miss
-	// the cache because gremlins' per-run workdir paths enter the action IDs).
-	// At this cap the wipe fires roughly every second heavy run, and the
-	// measured cold-vs-warm penalty it re-imposes is ~42s on a ~7 min run.
+	// defaultGocacheCapMiB bounds what a run may start on top of while
+	// holding one heavy run's build state (measured: one database-package run
+	// writes ~3.0 GiB, a repeat run grows it to ~5.7 GiB — repeat mutant
+	// builds miss the cache because gremlins' per-run workdir paths enter the
+	// action IDs), so at rest the machine holds the cap plus one run's growth.
+	// At this cap the wipe fires roughly every second heavy run; the ~42s
+	// cold-vs-warm penalty it re-imposes lands inside the measured baseline.
 	defaultGocacheCapMiB = 4096
 	// runTmpPrefix names the per-run temp root. The stale sweep keys on it:
 	// a run killed with SIGKILL never reaches its defers, so the next run
@@ -52,10 +53,11 @@ const (
 // TEMP on Windows. Pinning all three is harmless where a name is unused.
 var tempEnvVars = []string{"TMPDIR", "TMP", "TEMP"}
 
-// sandbox is the pair of roots one run owns.
+// sandbox is the per-run temp root one run owns and must remove. The
+// dedicated build cache needs no field: it is persistent, reached by every
+// child through the pinned GOCACHE, and pruned at setup.
 type sandbox struct {
-	gocache string
-	runTmp  string
+	runTmp string
 }
 
 // setupSandbox resolves the machine-specific roots and delegates. Split from
@@ -80,6 +82,11 @@ func setupSandboxAt(ctx context.Context, cacheBase, sysTmp string, now time.Time
 		return nil, err
 	}
 	gocache := filepath.Join(cacheBase, "gocache")
+	// Before anything else this run owns: a prune failure then aborts without
+	// a temp root to leak, and the MkdirAll below is the only creation site.
+	if err := pruneGocache(gocache, gocacheCap(), out); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(gocache, 0o750); err != nil {
 		return nil, fmt.Errorf("create dedicated build cache: %w", err)
 	}
@@ -97,37 +104,33 @@ func setupSandboxAt(ctx context.Context, cacheBase, sysTmp string, now time.Time
 		}
 	}
 	fmt.Fprintf(out, "mutatediff: sandboxed build cache %s, temp root %s\n", gocache, runTmp)
-	if err := pruneGocache(gocache, gocacheCap(), out); err != nil {
-		return nil, err
-	}
-	return &sandbox{gocache: gocache, runTmp: runTmp}, nil
+	return &sandbox{runTmp: runTmp}, nil
 }
 
 // pruneGocache enforces the cap before any build runs and reports the cache
-// state on the start banner. Pruning here — not at cleanup — puts the
+// state on the start banner. Pruning here, not at cleanup, puts the
 // cold-rebuild cost inside measureSuite's baseline passes, which rewarm
-// dependencies and stdlib before the per-mutant ceiling is measured; a wipe at
-// cleanup instead left the next run's first mutants paying it against a
-// ceiling measured warm, and they timed out. Wiping assumes gate runs on one
-// machine do not overlap — they are serialized locally by convention, and the
-// shared cache is not safe to wipe under a concurrent run.
+// dependencies and stdlib before the per-mutant ceiling is measured from them;
+// a wipe at cleanup instead left the next run's first mutants paying it
+// against a ceiling measured warm, and they timed out. Wiping assumes gate
+// runs on one machine do not overlap — they are serialized locally by
+// convention, and the shared cache is not safe to wipe under a concurrent run.
 func pruneGocache(gocache string, capBytes int64, out io.Writer) error {
 	size := dirSize(gocache)
-	if capBytes <= 0 {
-		fmt.Fprintf(out, "mutatediff: build cache %s (cap disabled) — kept\n", formatMiB(size))
+	capLabel := "cap disabled"
+	if capBytes > 0 {
+		capLabel = "cap " + formatMiB(capBytes)
+	}
+	if capBytes <= 0 || size <= capBytes {
+		fmt.Fprintf(out, "mutatediff: build cache %s (%s) — kept\n", formatMiB(size), capLabel)
 		return nil
 	}
-	if size <= capBytes {
-		fmt.Fprintf(out, "mutatediff: build cache %s (cap %s) — kept\n", formatMiB(size), formatMiB(capBytes))
-		return nil
-	}
-	fmt.Fprintf(out, "mutatediff: build cache %s (cap %s) — pruned\n", formatMiB(size), formatMiB(capBytes))
+	// Reported after the removal lands: a banner claiming "pruned" above the
+	// error that aborted the prune would assert something that did not happen.
 	if err := os.RemoveAll(gocache); err != nil {
 		return fmt.Errorf("wipe build cache: %w", err)
 	}
-	if err := os.MkdirAll(gocache, 0o750); err != nil {
-		return fmt.Errorf("recreate dedicated build cache after prune: %w", err)
-	}
+	fmt.Fprintf(out, "mutatediff: build cache %s (%s) — pruned\n", formatMiB(size), capLabel)
 	return nil
 }
 

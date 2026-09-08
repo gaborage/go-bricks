@@ -78,17 +78,51 @@ func TestSweepStaleRunDirsRemovesOnlyOldMatchingDirs(t *testing.T) {
 	assert.Contains(t, out.String(), "removed stale run root")
 }
 
+// pinSandboxEnv clears every variable setupSandboxAt overwrites, registering
+// t.Setenv's restoration, and pins the cap this case wants.
+func pinSandboxEnv(t *testing.T, capMiB string) {
+	t.Helper()
+	for _, key := range append([]string{"GOCACHE"}, tempEnvVars...) {
+		t.Setenv(key, "")
+	}
+	t.Setenv(gocacheCapEnv, capMiB)
+}
+
+// seedGocache creates the cache dir setupSandboxAt would find and puts one
+// object of the given apparent size in it. The object is sparse: dirSize reads
+// info.Size() only, so no data blocks are needed to measure as size bytes.
+func seedGocache(t *testing.T, cacheBase string, size int64) (gocache, obj string) {
+	t.Helper()
+	gocache = filepath.Join(cacheBase, "gocache")
+	require.NoError(t, os.MkdirAll(gocache, 0o750))
+	obj = filepath.Join(gocache, "obj")
+	require.NoError(t, os.WriteFile(obj, nil, 0o600))
+	require.NoError(t, os.Truncate(obj, size))
+	return gocache, obj
+}
+
+// requireReadOnlyParent skips where a read-only parent does not block removal.
+func requireReadOnlyParent(t *testing.T, dir string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("read-only parent does not block removal on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the read-only parent this test relies on")
+	}
+	require.NoError(t, os.Chmod(dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o750) })
+}
+
 func TestSandboxCleanupRemovesOnlyTheTempRoot(t *testing.T) {
-	// A cap the seeded cache exceeds: cleanup must keep it anyway — pruning
-	// belongs to the next run's setup.
-	t.Setenv(gocacheCapEnv, "1")
-	gocache := t.TempDir()
+	// A cap the seeded cache exceeds: cleanup must ignore the cap entirely —
+	// pruning belongs to the next run's setup.
+	pinSandboxEnv(t, "1")
+	gocache, obj := seedGocache(t, t.TempDir(), 2*mib)
 	runTmp := t.TempDir()
-	obj := filepath.Join(gocache, "obj")
-	require.NoError(t, os.WriteFile(obj, make([]byte, 2*mib), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(runTmp, "scratch"), []byte("x"), 0o600))
 
-	s := &sandbox{gocache: gocache, runTmp: runTmp}
+	s := &sandbox{runTmp: runTmp}
 	require.NoError(t, s.cleanup())
 
 	assert.NoDirExists(t, runTmp)
@@ -100,7 +134,7 @@ func TestSetupSandboxAtEnforcesCacheCapAtStart(t *testing.T) {
 	tests := []struct {
 		name       string
 		capMiB     string
-		cacheBytes int
+		cacheBytes int64
 		wantPruned bool
 		wantMsg    string
 	}{
@@ -111,21 +145,14 @@ func TestSetupSandboxAtEnforcesCacheCapAtStart(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			for _, key := range append([]string{"GOCACHE"}, tempEnvVars...) {
-				t.Setenv(key, "")
-			}
-			t.Setenv(gocacheCapEnv, tt.capMiB)
+			pinSandboxEnv(t, tt.capMiB)
 			cacheBase := t.TempDir()
-			gocache := filepath.Join(cacheBase, "gocache")
-			require.NoError(t, os.MkdirAll(gocache, 0o750))
-			obj := filepath.Join(gocache, "obj")
-			require.NoError(t, os.WriteFile(obj, make([]byte, tt.cacheBytes), 0o600))
+			gocache, obj := seedGocache(t, cacheBase, tt.cacheBytes)
 
 			var out strings.Builder
-			s, err := setupSandboxAt(context.Background(), cacheBase, t.TempDir(), time.Now(), &out)
+			_, err := setupSandboxAt(context.Background(), cacheBase, t.TempDir(), time.Now(), &out)
 			require.NoError(t, err)
 
-			assert.Equal(t, gocache, s.gocache)
 			assert.DirExists(t, gocache)
 			if tt.wantPruned {
 				assert.NoFileExists(t, obj)
@@ -138,36 +165,28 @@ func TestSetupSandboxAtEnforcesCacheCapAtStart(t *testing.T) {
 }
 
 func TestSetupSandboxAtReportsPruneFailure(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("read-only parent does not block removal on Windows")
-	}
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores the read-only parent this test relies on")
-	}
-	for _, key := range append([]string{"GOCACHE"}, tempEnvVars...) {
-		t.Setenv(key, "")
-	}
-	t.Setenv(gocacheCapEnv, "1")
+	pinSandboxEnv(t, "1")
 	cacheBase := t.TempDir()
-	gocache := filepath.Join(cacheBase, "gocache")
-	require.NoError(t, os.MkdirAll(gocache, 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(gocache, "obj"), make([]byte, 2*mib), 0o600))
-	require.NoError(t, os.Chmod(cacheBase, 0o555))
-	t.Cleanup(func() { _ = os.Chmod(cacheBase, 0o750) })
+	seedGocache(t, cacheBase, 2*mib)
+	requireReadOnlyParent(t, cacheBase)
+	sysTmp := t.TempDir()
 
 	var out strings.Builder
-	s, err := setupSandboxAt(context.Background(), cacheBase, t.TempDir(), time.Now(), &out)
+	s, err := setupSandboxAt(context.Background(), cacheBase, sysTmp, time.Now(), &out)
 
 	require.Error(t, err)
-	assert.Nil(t, s)
 	assert.Contains(t, err.Error(), "wipe build cache")
+	assert.Nil(t, s)
+	// The banner never claims a prune that failed, and nothing this run owns
+	// is left behind: the abort precedes the per-run temp root.
+	assert.NotContains(t, out.String(), "pruned")
+	entries, readErr := os.ReadDir(sysTmp)
+	require.NoError(t, readErr)
+	assert.Empty(t, entries)
 }
 
 func TestSetupSandboxAtPinsEnvAndCreatesRoots(t *testing.T) {
-	// t.Setenv registers restoration for the vars setupSandboxAt overwrites.
-	for _, key := range append([]string{"GOCACHE"}, tempEnvVars...) {
-		t.Setenv(key, "")
-	}
+	pinSandboxEnv(t, "")
 	cacheBase := t.TempDir()
 	sysTmp := t.TempDir()
 	now := time.Now()
@@ -181,7 +200,6 @@ func TestSetupSandboxAtPinsEnvAndCreatesRoots(t *testing.T) {
 	require.NoError(t, err)
 
 	wantCache := filepath.Join(cacheBase, "gocache")
-	assert.Equal(t, wantCache, s.gocache)
 	assert.Equal(t, wantCache, os.Getenv("GOCACHE"))
 	assert.DirExists(t, wantCache)
 	assert.DirExists(t, s.runTmp)
@@ -190,11 +208,12 @@ func TestSetupSandboxAtPinsEnvAndCreatesRoots(t *testing.T) {
 		assert.Equal(t, s.runTmp, os.Getenv(key), key)
 	}
 	assert.NoDirExists(t, stale)
-	// The cache-state line belongs to the start banner: it follows the path
-	// line and both precede every baseline-measurement line.
+	// Both lines belong to the start banner, so both precede every
+	// baseline-measurement line; the cache state is settled before the paths
+	// are announced.
 	require.Contains(t, out.String(), "sandboxed build cache")
-	require.Contains(t, out.String(), "build cache 0MiB")
-	assert.Less(t, strings.Index(out.String(), "sandboxed build cache"), strings.Index(out.String(), "build cache 0MiB"))
+	require.Contains(t, out.String(), "build cache 0MiB (cap 4096MiB) — kept")
+	assert.Less(t, strings.Index(out.String(), "build cache 0MiB"), strings.Index(out.String(), "sandboxed build cache"))
 }
 
 func TestSetupSandboxAtCanceledContextCreatesNothing(t *testing.T) {
@@ -211,20 +230,13 @@ func TestSetupSandboxAtCanceledContextCreatesNothing(t *testing.T) {
 }
 
 func TestSandboxCleanupReportsRemovalFailure(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("read-only parent does not block removal on Windows")
-	}
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores the read-only parent this test relies on")
-	}
 	parent := t.TempDir()
 	runTmp := filepath.Join(parent, "run")
 	require.NoError(t, os.Mkdir(runTmp, 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(runTmp, "scratch"), []byte("x"), 0o600))
-	require.NoError(t, os.Chmod(parent, 0o555))
-	t.Cleanup(func() { _ = os.Chmod(parent, 0o750) })
+	requireReadOnlyParent(t, parent)
 
-	s := &sandbox{gocache: t.TempDir(), runTmp: runTmp}
+	s := &sandbox{runTmp: runTmp}
 	err := s.cleanup()
 
 	require.Error(t, err)
