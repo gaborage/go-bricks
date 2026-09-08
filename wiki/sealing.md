@@ -253,7 +253,10 @@ rejection**; its one replay-related job is to make the message's identity un-for
 - `Meta.DedupKey() (string, error)` — `<SignFamily>:<jti>` for a seal-tagged `T` (never
   errors; the Logical family, not the Generation, so a rotation does not re-open the
   window); for a plain `T` the `x-outbox-event-id` header once it passes
-  `^[A-Za-z0-9_-]{1,128}$`, or an error wrapping `messaging.ErrInvalidEventID`.
+  `^[A-Za-z0-9_-]{1,128}$` — or, when the delivery carries no such header, the AMQP
+  `message_id` property under that same grammar — or an error wrapping
+  `messaging.ErrInvalidEventID`. Both unsealed sources answer to a grammar that excludes
+  `:`, so neither can mint a sealed key.
 - `Meta.DedupKey()` on a sealed consumer is `<SignFamily>:<jti>`; `inbox.ProcessOnce` admits it
   only under the delivery context the sealed door handed the handler
   (`messaging.IsSealedDelivery`). Call `ProcessOnce` with a context derived from the

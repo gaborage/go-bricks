@@ -291,6 +291,15 @@ _Avoid_: event id (the outbox row's word), message id (the wire field), jti
 (the slot, not the composed key), idempotency key (the consumer's business
 key)
 
+**Message id**:
+The AMQP `message_id` property — a wire field the publisher sets, carried by
+producers that follow the standard without being go-bricks. It is the SECOND
+source of an unsealed Dedup key, read only when the `x-outbox-event-id` stamp
+is absent and validated by the same grammar. Never preferred over the stamp,
+and never a source for a sealed Dedup key.
+_Avoid_: dedup key (what it can become, not what it is), event id (the outbox
+row's word), correlation id (the trace field)
+
 ### Observability
 
 **Sink**:

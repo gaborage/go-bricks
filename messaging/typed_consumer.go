@@ -54,6 +54,18 @@ func (m Metadata) EventType() string {
 	return m.delivery.Type
 }
 
+// MessageID returns the AMQP message_id property the publisher set, or empty
+// when the delivery carries none. Like every wire field it is
+// publisher-controlled: DedupKey reads it through the ledger grammar rather
+// than raw, and a consumer using it for anything else must treat it as
+// untrusted input.
+func (m Metadata) MessageID() string {
+	if m.delivery == nil {
+		return ""
+	}
+	return m.delivery.MessageId
+}
+
 // Redelivered reports the broker's redelivery flag.
 func (m Metadata) Redelivered() bool {
 	if m.delivery == nil {
@@ -186,8 +198,9 @@ func checkTypedConsumerArgs(decls *Declarations, opts *ConsumerOptions, entry st
 
 // NewTypedHandlerWithMeta is NewTypedHandler for consumers that also need
 // delivery metadata — the outbox-dedup shape: take meta.DedupKey() (the
-// grammar-validated x-outbox-event-id, or an error to return) and wrap the
-// business logic in inbox.ProcessOnce. Failure and concurrency semantics are identical
+// grammar-validated x-outbox-event-id, the message_id property when no such
+// header is present, or an error to return) and wrap the business logic in
+// inbox.ProcessOnce. Failure and concurrency semantics are identical
 // to NewTypedHandler; fn must be safe for concurrent use.
 func NewTypedHandlerWithMeta[T any](eventType string, fn func(context.Context, T, Metadata) error) MessageHandler {
 	if fn == nil {

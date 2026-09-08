@@ -15,6 +15,24 @@
   branches `research/amqp-envelope-standards`, `research/amqp-seal-seams`; prototype
   `prototype/amqp-seal-open`. Deep dive: [sealing.md](sealing.md).
 
+> **Amended (2026-09-08, #1547):** the UNSEALED dedup key gains a second source. When a
+> delivery carries no `x-outbox-event-id` header at all, `Meta.DedupKey()` reads the AMQP
+> `message_id` property and validates it with the SAME `^[A-Za-z0-9_-]{1,128}$` grammar §4
+> already applies to the header. §4's closure is therefore unchanged and not weakened: `:` is
+> outside that grammar on both sources, so neither can mint a sealed `<SignFamily>:<jti>` key,
+> and the shared-ledger suppression attack stays closed. The stamp is tried FIRST and a stamp
+> that is present but malformed is an error rather than a fall-through — on a go-bricks
+> producer the stamp is framework-written while the property is caller-written, so a caller
+> must not be able to shadow the stamp by spoiling it. The reason for the fallback is reach:
+> a producer that follows the standard without being go-bricks sets `message_id` and no stamp,
+> and such a delivery previously could not be processed through `inbox.ProcessOnce` at all.
+> `x-idempotency-key` is NOT a framework dedup source and does not become one here — the
+> glossary defines the idempotency key as the CONSUMER's business key, and #1542's proposed
+> three-level precedence is superseded on that point. The sealed branch is untouched: a sealed
+> consumer's key is composed from the verified envelope whatever the wire carries
+> (`[C64.11]`, breaking — a consumer that relied on the absent-stamp error to REJECT
+> unstamped messages must now make that check itself).
+>
 > **Amended (2026-09-04, #1408):** a second door, `jose/sealed.SealDocument` with
 > `NewDocumentSpec`, seals an already-serialized document for tooling (`cmd/seal-event`) and
 > JSON-fixture tests — same envelope, same invariants, the caller's bytes signed verbatim

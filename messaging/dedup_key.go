@@ -135,26 +135,46 @@ func (m Metadata) Sealed() (SealedEnvelope, bool) {
 // DedupKey returns the id the inbox ledger should be keyed on for this
 // delivery. For a sealed consumer it is `<SignFamily>:<jti>` — the Logical sign
 // family, never the concrete Generation, so a rotation does not re-open the
-// replay window — composed from the verified envelope and never an error. For
-// a plain typed consumer it is the grammar-validated x-outbox-event-id header;
-// the error wraps ErrInvalidEventID when the header is absent, empty, over 128
-// bytes, or carries a byte outside [A-Za-z0-9_-]. Return it from the handler:
-// the delivery is nacked without requeue, like any other poison message. AMQP
-// header values arrive as string or []byte depending on the broker and client,
-// so both are accepted.
+// replay window — composed from the verified envelope and never an error.
+//
+// For a plain typed consumer it is the grammar-validated x-outbox-event-id
+// header, or — when the delivery carries no such header at all — the AMQP
+// message_id property, so a producer that follows the standard without being
+// go-bricks is still processable through inbox.ProcessOnce. The stamp is tried
+// first and a stamp that is present but malformed errors rather than falling
+// through: on a go-bricks producer the stamp is framework-written while the
+// property is caller-written, so a caller must not be able to shadow it by
+// spoiling it. Both sources answer to the SAME grammar, which excludes `:`, so
+// neither can mint a sealed key (ADR-097). The error wraps ErrInvalidEventID
+// when both are absent, or the chosen one is empty, over 128 bytes, or carries
+// a byte outside [A-Za-z0-9_-]. Return it from the handler: the delivery is
+// nacked without requeue, like any other poison message. AMQP header values
+// arrive as string or []byte depending on the broker and client, so both are
+// accepted.
 func (m Metadata) DedupKey() (string, error) {
 	if m.sealed != nil {
 		return m.sealed.SignFamily + ":" + m.sealed.JTI, nil
 	}
-	var id string
-	switch v := m.Headers()[HeaderEventID].(type) {
-	case string:
-		id = v
-	case []byte:
-		id = string(v)
+	id := m.MessageID()
+	if stamp, stamped := m.Headers()[HeaderEventID]; stamped {
+		id = headerString(stamp)
 	}
 	if err := ValidateEventID(id); err != nil {
 		return "", err
 	}
 	return id, nil
+}
+
+// headerString renders an AMQP header value that should carry text. Values
+// arrive as string or []byte depending on the broker and client; anything else
+// is not a spelling of an id, and the empty string it yields is refused by the
+// grammar rather than treated as an absent header.
+func headerString(v any) string {
+	switch s := v.(type) {
+	case string:
+		return s
+	case []byte:
+		return string(s)
+	}
+	return ""
 }
