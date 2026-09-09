@@ -199,10 +199,13 @@ reports and the caller decides. A freshness knob here would also be the first th
   nested deployments see no change — the nested allowlists hold one key algorithm and one
   content encryption, so pinning them is a no-op. A bare deployment must declare the `Enc`
   its peer actually sends: a policy pinned to `A128GCM` refuses an `A256GCM` token with
-  `JOSE_MALFORMED`, where before it opened. `httpclient`'s policy normalization fills an
-  unset `Enc` with `jose.DefaultEnc` (`A256GCM`) before validating, so an inbound bare
-  policy handed to `httpclient.WithJOSE` must set `Enc` explicitly to accept Visa's
-  `A128GCM` — explicit over implicit, and a silently-wrong default was the alternative.
+  `JOSE_MALFORMED`, where before it opened. Bare mode is reachable only through
+  `jose.Seal`/`jose.Open` on this change — `httpclient.WithJOSE` cannot carry a bare policy,
+  because its normalization defaults `SigAlg` before validating and a bare policy must not
+  set one. When the follow-on stacked PR drops that default, an inbound bare policy handed
+  to `httpclient.WithJOSE` will still have to set `Enc` explicitly to accept Visa's
+  `A128GCM`, since normalization fills an unset `Enc` with `jose.DefaultEnc` (`A256GCM`) —
+  explicit over implicit, and a silently-wrong default was the alternative.
 - **`Open` validates its policy like `Seal`, and pinning only ever narrows.** A hand-built
   inbound policy is refused before any parsing (`JOSE_ALGORITHM_DISALLOWED` for an unset or
   off-list algorithm), and `inboundAllowlists` yields an EMPTY list for a dimension whose
