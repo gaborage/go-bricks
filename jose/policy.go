@@ -147,3 +147,28 @@ func (p *Policy) validateOutbound() error {
 	}
 	return nil
 }
+
+// SealMode selects the wire shape a Policy produces and accepts.
+type SealMode int
+
+const (
+	// SealModeJWEofJWS is the default: sign-then-encrypt outbound, decrypt-then-verify
+	// inbound. The zero value, so a Policy that never mentions Mode keeps this posture.
+	SealModeJWEofJWS SealMode = iota
+	// SealModeBareJWE encrypts the payload directly, with no inner JWS — the shape Visa
+	// Message Level Encryption specifies. There is no signature, so the peer's identity
+	// must be established out of band (X-Pay-Token, mTLS); jose authenticates nothing
+	// about the sender in this mode.
+	SealModeBareJWE
+)
+
+func (m SealMode) String() string {
+	switch m {
+	case SealModeJWEofJWS:
+		return "jwe-of-jws"
+	case SealModeBareJWE:
+		return "bare-jwe"
+	default:
+		return "unknown"
+	}
+}

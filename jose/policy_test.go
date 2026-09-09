@@ -107,3 +107,9 @@ func TestParseUnixSecsAllArms(t *testing.T) {
 		})
 	}
 }
+
+func TestSealModeString(t *testing.T) {
+	assert.Equal(t, "jwe-of-jws", SealModeJWEofJWS.String())
+	assert.Equal(t, "bare-jwe", SealModeBareJWE.String())
+	assert.Equal(t, "unknown", SealMode(99).String())
+}

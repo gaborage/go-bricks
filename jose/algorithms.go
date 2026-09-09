@@ -29,9 +29,54 @@ var allowedKeyAlgs = []jose.KeyAlgorithm{
 	jose.RSA_OAEP_256,
 }
 
-// allowedContentEncs are the JWE content-encryption algorithms. AEAD only.
+// allowedContentEncs are the JWE content-encryption algorithms accepted on the nested
+// JWE-of-JWS path. AEAD only.
 var allowedContentEncs = []jose.ContentEncryption{
 	jose.A256GCM,
+}
+
+// allowedContentEncsBare are the JWE content-encryption algorithms accepted in
+// SealModeBareJWE. A128GCM is admitted here and nowhere else: Visa Message Level
+// Encryption specifies it, and a bare JWE carries no inner signature whose strength the
+// content encryption would have to match. Still AEAD only.
+var allowedContentEncsBare = []jose.ContentEncryption{
+	jose.A128GCM,
+	jose.A256GCM,
+}
+
+// contentEncsForMode returns the allowlist backing a SealMode; nil for an unknown mode,
+// so an unrecognized mode fails closed at every seam that consults it.
+func contentEncsForMode(mode SealMode) []jose.ContentEncryption {
+	switch mode {
+	case SealModeJWEofJWS:
+		return allowedContentEncs
+	case SealModeBareJWE:
+		return allowedContentEncsBare
+	default:
+		return nil
+	}
+}
+
+// IsAllowedEncFor reports whether enc is permitted in the given seal mode. Use it instead
+// of IsAllowedEnc wherever a Policy's Mode is known; IsAllowedEnc keeps the JWE-of-JWS
+// meaning.
+func IsAllowedEncFor(mode SealMode, enc jose.ContentEncryption) bool {
+	for _, e := range contentEncsForMode(mode) {
+		if e == enc {
+			return true
+		}
+	}
+	return false
+}
+
+// AllowedContentEncsFor returns a copy of the content-encryption allowlist for the given
+// seal mode, for callers threading it into go-jose primitives (e.g. jose.ParseEncrypted).
+// An unknown mode yields an empty list, which rejects every token.
+func AllowedContentEncsFor(mode SealMode) []jose.ContentEncryption {
+	src := contentEncsForMode(mode)
+	out := make([]jose.ContentEncryption, len(src))
+	copy(out, src)
+	return out
 }
 
 func IsAllowedSigAlg(alg jose.SignatureAlgorithm) bool {
