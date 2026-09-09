@@ -79,18 +79,24 @@ func AllowedContentEncsFor(mode SealMode) []jose.ContentEncryption {
 // hands the parser for p, in both seal modes. A policy that declares an algorithm pins
 // the allowlist to exactly that one: the declared value is what the deployment agreed
 // with the peer, so a token using any other member of the mode's list is not the token
-// this policy was written for. Validate already refuses a declared value that is off the
-// mode's allowlist, so pinning only ever narrows — it can never admit an algorithm the
-// mode forbids. An unset value keeps the whole mode-wide allowlist; Open does not run
-// Validate, so that branch belongs to a hand-built policy.
+// this policy was written for. Pinning only ever narrows, unconditionally: a declared
+// value that is off the mode's allowlist yields an empty list for that dimension, so
+// nothing parses at all — the off-list value is never handed to the parser, whatever
+// Validate did or did not see. An unset value keeps the whole mode-wide allowlist.
 func inboundAllowlists(p *Policy) (keyAlgs []jose.KeyAlgorithm, encs []jose.ContentEncryption) {
 	keyAlgs = AllowedKeyAlgs()
 	if p.KeyAlg != "" {
-		keyAlgs = []jose.KeyAlgorithm{p.KeyAlg}
+		keyAlgs = nil
+		if IsAllowedKeyAlg(p.KeyAlg) {
+			keyAlgs = []jose.KeyAlgorithm{p.KeyAlg}
+		}
 	}
 	encs = AllowedContentEncsFor(p.Mode)
 	if p.Enc != "" {
-		encs = []jose.ContentEncryption{p.Enc}
+		encs = nil
+		if IsAllowedEncFor(p.Mode, p.Enc) {
+			encs = []jose.ContentEncryption{p.Enc}
+		}
 	}
 	return keyAlgs, encs
 }

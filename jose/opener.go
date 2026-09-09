@@ -35,6 +35,14 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 		}
 	}
 
+	// Defense in depth, mirroring Seal: every framework caller (the tag scanner,
+	// httpclient's Build) validates before it ever gets here, so this only binds a
+	// consumer that hand-builds a policy and calls Open directly. Policy errors surface
+	// as the same *Error codes Validate always returned.
+	if policyErr := p.Validate(); policyErr != nil {
+		return nil, nil, OpenHeader{}, policyErr
+	}
+
 	if p.Mode == SealModeBareJWE {
 		return openBare(compact, p, r)
 	}

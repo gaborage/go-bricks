@@ -534,13 +534,13 @@ func TestOpenBareJWEHonoursDeclaredEnc(t *testing.T) {
 	}
 }
 
-// TestOpenBareJWEWithoutDeclaredAlgorithmsAcceptsTheModeAllowlist pins the other half of
-// the narrowing rule: an inbound policy that declares neither KeyAlg nor Enc keeps the
-// whole bare-mode allowlist for both. Open does not run Validate (which would refuse
-// either as unset), so this is the defensive branch a hand-built policy reaches. Clearing
-// KeyAlg as well as Enc is what makes the key-algorithm guard observable: with it set,
-// pinning and the mode-wide list are the same one-element list.
-func TestOpenBareJWEWithoutDeclaredAlgorithmsAcceptsTheModeAllowlist(t *testing.T) {
+// TestOpenBareJWERefusesAPolicyWithoutDeclaredAlgorithms pins the other half of the
+// narrowing rule at the Open seam. Open now runs Validate like Seal, and Validate refuses
+// an unset KeyAlg or Enc, so a hand-built policy that declares neither never reaches the
+// parser at all. That the unset branch of inboundAllowlists still yields the mode-wide
+// allowlist is pinned directly, at its own seam, by
+// TestInboundAllowlistsFailClosedOnAnOffListDeclaration's unset case.
+func TestOpenBareJWERefusesAPolicyWithoutDeclaredAlgorithms(t *testing.T) {
 	for _, enc := range []jose.ContentEncryption{jose.A128GCM, jose.A256GCM} {
 		t.Run("seals_"+string(enc), func(t *testing.T) {
 			f := newBareFixture(t)
@@ -551,8 +551,8 @@ func TestOpenBareJWEWithoutDeclaredAlgorithmsAcceptsTheModeAllowlist(t *testing.
 
 			f.inbound.KeyAlg, f.inbound.Enc = "", ""
 			plaintext, _, _, err := Open(compact, f.inbound, f.resolver)
-			require.NoError(t, err)
-			assert.Equal(t, payload, plaintext)
+			require.ErrorIs(t, err, ErrAlgorithmDisallowed)
+			assert.Nil(t, plaintext)
 		})
 	}
 }
@@ -572,4 +572,78 @@ func TestOpenBareJWEHonoursDeclaredKeyAlg(t *testing.T) {
 	plaintext, _, _, err := Open(compact, f.inbound, f.resolver)
 	require.NoError(t, err)
 	assert.Equal(t, payload, plaintext)
+}
+
+// TestOpenRefusesADisallowedDeclaredAlgorithm pins the fail-closed rule for a hand-built
+// inbound policy that declares an algorithm the mode forbids. Neither the tag scanner nor
+// httpclient's Build can reach this — both run Validate first — so the only route is a
+// consumer calling Open directly. Each token here is well formed and matches its policy's
+// declaration exactly, which is precisely why the declaration must not be trusted.
+func TestOpenRefusesADisallowedDeclaredAlgorithm(t *testing.T) {
+	payload := []byte(`{"amount":1250}`)
+	tests := []struct {
+		name  string
+		build func(t *testing.T) (compact string, p *Policy, r KeyResolver)
+	}{
+		{
+			name: "bare_declares_rsa1_5",
+			build: func(t *testing.T) (string, *Policy, KeyResolver) {
+				f := newBareFixture(t)
+				_, ourPub := bareKeys()
+				compact, err := cryptoadapter.Encrypt(payload, ourPub, &cryptoadapter.EncryptOptions{
+					Kid:    "our-key",
+					KeyAlg: jose.RSA1_5,
+					Enc:    jose.A128GCM,
+				})
+				require.NoError(t, err)
+				f.inbound.KeyAlg = jose.RSA1_5
+				return compact, f.inbound, f.resolver
+			},
+		},
+		{
+			name: "bare_declares_a128cbc_hs256",
+			build: func(t *testing.T) (string, *Policy, KeyResolver) {
+				f := newBareFixture(t)
+				_, ourPub := bareKeys()
+				compact, err := cryptoadapter.Encrypt(payload, ourPub, &cryptoadapter.EncryptOptions{
+					Kid:    "our-key",
+					KeyAlg: DefaultKeyAlg,
+					Enc:    jose.A128CBC_HS256,
+				})
+				require.NoError(t, err)
+				f.inbound.Enc = jose.A128CBC_HS256
+				return compact, f.inbound, f.resolver
+			},
+		},
+		{
+			name: "nested_declares_a128gcm",
+			build: func(t *testing.T) (string, *Policy, KeyResolver) {
+				f := newTestFixture(t)
+				jwsCompact, err := cryptoadapter.Sign(payload, f.resolver.priv["peer-key"], &cryptoadapter.SignOptions{
+					Kid:    "peer-key",
+					SigAlg: DefaultSigAlg,
+					Cty:    DefaultCty,
+				})
+				require.NoError(t, err)
+				compact, err := cryptoadapter.Encrypt([]byte(jwsCompact), f.resolver.pub["our-key"], &cryptoadapter.EncryptOptions{
+					Kid:    "our-key",
+					KeyAlg: DefaultKeyAlg,
+					Enc:    jose.A128GCM,
+					Cty:    "JWS",
+				})
+				require.NoError(t, err)
+				f.inbound.Enc = jose.A128GCM
+				return compact, f.inbound, f.resolver
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compact, p, r := tt.build(t)
+			plaintext, claims, _, err := Open(compact, p, r)
+			require.Error(t, err)
+			assert.Nil(t, plaintext)
+			assert.Nil(t, claims)
+		})
+	}
 }

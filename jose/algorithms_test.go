@@ -95,3 +95,62 @@ func TestIsAllowedEncKeepsNestedMeaning(t *testing.T) {
 	assert.False(t, IsAllowedEnc(jose.A128GCM))
 	assert.Equal(t, AllowedContentEncsFor(SealModeJWEofJWS), AllowedContentEncs())
 }
+
+// TestInboundAllowlistsFailClosedOnAnOffListDeclaration pins the narrowing rule at its own
+// seam, independent of whether Open runs Validate: a declared value that is off the mode's
+// allowlist yields an empty list for that dimension, so nothing parses. Pinning only ever
+// narrows.
+func TestInboundAllowlistsFailClosedOnAnOffListDeclaration(t *testing.T) {
+	tests := []struct {
+		name        string
+		policy      *Policy
+		wantKeyAlgs []jose.KeyAlgorithm
+		wantEncs    []jose.ContentEncryption
+	}{
+		{
+			name:        "bare_off_list_keyalg_empties_key_algs",
+			policy:      &Policy{Mode: SealModeBareJWE, KeyAlg: jose.RSA1_5, Enc: jose.A128GCM},
+			wantKeyAlgs: nil,
+			wantEncs:    []jose.ContentEncryption{jose.A128GCM},
+		},
+		{
+			name:        "bare_off_list_enc_empties_encs",
+			policy:      &Policy{Mode: SealModeBareJWE, KeyAlg: DefaultKeyAlg, Enc: jose.A128CBC_HS256},
+			wantKeyAlgs: []jose.KeyAlgorithm{DefaultKeyAlg},
+			wantEncs:    nil,
+		},
+		{
+			name:        "nested_off_list_enc_empties_encs",
+			policy:      &Policy{Mode: SealModeJWEofJWS, KeyAlg: DefaultKeyAlg, Enc: jose.A128GCM},
+			wantKeyAlgs: []jose.KeyAlgorithm{DefaultKeyAlg},
+			wantEncs:    nil,
+		},
+		{
+			name:        "on_list_declaration_narrows_to_one",
+			policy:      &Policy{Mode: SealModeBareJWE, KeyAlg: DefaultKeyAlg, Enc: jose.A128GCM},
+			wantKeyAlgs: []jose.KeyAlgorithm{DefaultKeyAlg},
+			wantEncs:    []jose.ContentEncryption{jose.A128GCM},
+		},
+		{
+			name:        "unset_keeps_the_mode_lists",
+			policy:      &Policy{Mode: SealModeBareJWE},
+			wantKeyAlgs: AllowedKeyAlgs(),
+			wantEncs:    AllowedContentEncsFor(SealModeBareJWE),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyAlgs, encs := inboundAllowlists(tt.policy)
+			if tt.wantKeyAlgs == nil {
+				assert.Empty(t, keyAlgs)
+			} else {
+				assert.Equal(t, tt.wantKeyAlgs, keyAlgs)
+			}
+			if tt.wantEncs == nil {
+				assert.Empty(t, encs)
+			} else {
+				assert.ElementsMatch(t, tt.wantEncs, encs)
+			}
+		})
+	}
+}

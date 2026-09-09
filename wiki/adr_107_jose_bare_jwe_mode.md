@@ -203,6 +203,11 @@ reports and the caller decides. A freshness knob here would also be the first th
   unset `Enc` with `jose.DefaultEnc` (`A256GCM`) before validating, so an inbound bare
   policy handed to `httpclient.WithJOSE` must set `Enc` explicitly to accept Visa's
   `A128GCM` — explicit over implicit, and a silently-wrong default was the alternative.
+- **`Open` validates its policy like `Seal`, and pinning only ever narrows.** A hand-built
+  inbound policy is refused before any parsing (`JOSE_ALGORITHM_DISALLOWED` for an unset or
+  off-list algorithm), and `inboundAllowlists` yields an EMPTY list for a dimension whose
+  declared value is off the mode's allowlist, so an off-list algorithm can never reach the
+  parser.
 - **`Header` grew two fields and stayed comparable.** `Typ` is populated on the nested path
   too — it is read off whichever protected header the layer has — so a nested deployment
   that logs `OpenHeader` starts seeing a `typ` value where a peer sets one.
