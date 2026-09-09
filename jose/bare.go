@@ -46,7 +46,7 @@ func (p *Policy) bareExtraHeaders() map[string]any {
 	if !p.IATMillis {
 		return p.ProtectedHeaders
 	}
-	extra := make(map[string]any, len(p.ProtectedHeaders)+1)
+	extra := make(map[string]any)
 	maps.Copy(extra, p.ProtectedHeaders)
 	extra["iat"] = nowMillis()
 	return extra
