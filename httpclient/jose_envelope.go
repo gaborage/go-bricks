@@ -23,6 +23,15 @@ func visaMLEWrap(compact string) (body []byte, contentType string, err error) {
 	return encoded, "application/json", nil
 }
 
-func visaMLEUnwrap(_ string, _ []byte) (compact string, ok bool) {
-	return "", false
+func visaMLEUnwrap(_ string, body []byte) (compact string, ok bool) {
+	var envelope struct {
+		EncData *string `json:"encData"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return "", false
+	}
+	if envelope.EncData == nil || *envelope.EncData == "" {
+		return "", false
+	}
+	return *envelope.EncData, true
 }
