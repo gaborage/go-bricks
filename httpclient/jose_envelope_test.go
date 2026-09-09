@@ -149,17 +149,15 @@ func fakeVisaEndpoint(t *testing.T, f *visaFixture, calls chan<- visaCall, respo
 	}))
 }
 
-// visaClient builds a client wired for MLE: bare-JWE policies plus the envelope hooks.
+// visaClient builds a client wired for MLE: bare-JWE policies plus the body envelope.
 func visaClient(t *testing.T, f *visaFixture, opts ...func(*httpclient.Builder) *httpclient.Builder) httpclient.Client {
 	t.Helper()
-	wrap, unwrap := httpclient.VisaMLEEnvelope()
 	b := httpclient.NewBuilder(logger.New("info", false)).
 		WithJOSE(httpclient.JOSEConfig{
-			Outbound:   f.outbound,
-			Inbound:    f.inbound,
-			Resolver:   f.resolver,
-			WrapBody:   wrap,
-			UnwrapBody: unwrap,
+			Outbound: f.outbound,
+			Inbound:  f.inbound,
+			Resolver: f.resolver,
+			Envelope: httpclient.VisaMLEEnvelope(),
 		})
 	for _, opt := range opts {
 		b = opt(b)
@@ -169,7 +167,7 @@ func visaClient(t *testing.T, f *visaFixture, opts ...func(*httpclient.Builder) 
 	return client
 }
 
-func TestJOSETransportWrapBodySendsTheVisaEnvelope(t *testing.T) {
+func TestJOSETransportEnvelopeWrapSendsTheVisaEnvelope(t *testing.T) {
 	f := newVisaFixture(t)
 	calls := make(chan visaCall, 1)
 	server := fakeVisaEndpoint(t, f, calls, func(w http.ResponseWriter) {
@@ -218,7 +216,7 @@ func respondVisaEnvelope(t *testing.T, f *visaFixture, payload string) func(http
 	}
 }
 
-func TestJOSETransportUnwrapBodyDecryptsTheVisaEnvelope(t *testing.T) {
+func TestJOSETransportEnvelopeUnwrapDecryptsTheVisaEnvelope(t *testing.T) {
 	f := newVisaFixture(t)
 	calls := make(chan visaCall, 1)
 	server := fakeVisaEndpoint(t, f, calls, respondVisaEnvelope(t, f, `{"token":"tok-42"}`))
@@ -235,7 +233,7 @@ func TestJOSETransportUnwrapBodyDecryptsTheVisaEnvelope(t *testing.T) {
 	assert.JSONEq(t, `{"token":"tok-42"}`, string(resp.Body))
 }
 
-func TestJOSETransportUnwrapBodyPassesThroughNonEnvelope(t *testing.T) {
+func TestJOSETransportEnvelopeUnwrapPassesThroughNonEnvelope(t *testing.T) {
 	const errorEnvelope = `{"errorCode":"9001","message":"denied","details":[{"field":"pan"}]}`
 	f := newVisaFixture(t)
 	calls := make(chan visaCall, 1)
@@ -301,9 +299,9 @@ type visaCall struct {
 }
 
 func TestVisaMLEEnvelopeWrapProducesEncDataObject(t *testing.T) {
-	wrap, _ := httpclient.VisaMLEEnvelope()
+	envelope := httpclient.VisaMLEEnvelope()
 
-	body, contentType, err := wrap("eyJhbGciOiJSU0EtT0FFUC0yNTYifQ.aaa.bbb.ccc.ddd")
+	body, contentType, err := envelope.Wrap("eyJhbGciOiJSU0EtT0FFUC0yNTYifQ.aaa.bbb.ccc.ddd")
 
 	require.NoError(t, err)
 	assert.Equal(t, "application/json", contentType)
@@ -314,7 +312,7 @@ func TestVisaMLEEnvelopeWrapProducesEncDataObject(t *testing.T) {
 }
 
 func TestVisaMLEEnvelopeUnwrapRecognizesEncDataByShape(t *testing.T) {
-	_, unwrap := httpclient.VisaMLEEnvelope()
+	envelope := httpclient.VisaMLEEnvelope()
 
 	tests := []struct {
 		name        string
@@ -334,7 +332,7 @@ func TestVisaMLEEnvelopeUnwrapRecognizesEncDataByShape(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			compact, ok := unwrap("application/json", []byte(tt.body))
+			compact, ok := envelope.Unwrap("application/json", []byte(tt.body))
 
 			assert.Equal(t, tt.wantOK, ok)
 			assert.Equal(t, tt.wantCompact, compact)

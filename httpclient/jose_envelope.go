@@ -2,32 +2,36 @@ package httpclient
 
 import "encoding/json"
 
-// visaMLEEnvelope is the Visa Message Level Encryption wire object: a single encData
-// member carrying the compact JWE. Both directions marshal/unmarshal through it, so the
-// member name is spelled once.
-type visaMLEEnvelope struct {
+// visaMLEBody is the Visa Message Level Encryption wire object: a single encData member
+// carrying the compact JWE. Both directions marshal/unmarshal through it, so the member
+// name is spelled once.
+type visaMLEBody struct {
 	EncData string `json:"encData"`
 }
 
-// VisaMLEEnvelope returns the WrapBody/UnwrapBody pair implementing Visa Message Level
-// Encryption's JSON envelope: outbound bodies are {"encData":"<compact JWE>"} sent as
-// application/json, and inbound bodies are recognized by shape rather than Content-Type —
-// any JSON object carrying a non-empty string encData member is unwrapped, and everything
-// else passes through untouched. Unknown sibling members are ignored.
-func VisaMLEEnvelope() (WrapBodyFunc, UnwrapBodyFunc) {
-	return visaMLEWrap, visaMLEUnwrap
+// visaMLEEnvelope implements BodyEnvelope for Visa Message Level Encryption. It holds no
+// state, so the zero value is usable and every JOSETransport carrying it stays comparable.
+type visaMLEEnvelope struct{}
+
+// VisaMLEEnvelope returns the BodyEnvelope implementing Visa Message Level Encryption's
+// JSON envelope: outbound bodies are {"encData":"<compact JWE>"} sent as application/json,
+// and inbound bodies are recognized by shape rather than Content-Type — any JSON object
+// carrying a non-empty string encData member is unwrapped, and everything else passes
+// through untouched. Unknown sibling members are ignored.
+func VisaMLEEnvelope() BodyEnvelope {
+	return visaMLEEnvelope{}
 }
 
-func visaMLEWrap(compact string) (body []byte, contentType string, err error) {
-	encoded, err := json.Marshal(visaMLEEnvelope{EncData: compact})
+func (visaMLEEnvelope) Wrap(compact string) (body []byte, contentType string, err error) {
+	encoded, err := json.Marshal(visaMLEBody{EncData: compact})
 	if err != nil {
 		return nil, "", err
 	}
 	return encoded, mimeApplicationJSON, nil
 }
 
-func visaMLEUnwrap(_ string, body []byte) (compact string, ok bool) {
-	var envelope visaMLEEnvelope
+func (visaMLEEnvelope) Unwrap(_ string, body []byte) (compact string, ok bool) {
+	var envelope visaMLEBody
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return "", false
 	}
