@@ -8,40 +8,40 @@
       "enc": "A128GCM",
       "typ": "JOSE",
       "iatMillis": 1800000000123,
-      "plaintext": "{\"pan\":\"4111111111111111\",\"sub\":\"cardholder-9\"}",
-      "token": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMTI4R0NNIiwiaWF0IjoxODAwMDAwMDAwMTIzLCJpc3MiOiJhY21lLXBheW1lbnRzIiwia2lkIjoibWxlLWVuYy12MSIsInR5cCI6IkpPU0UifQ.Ru1c8-UtfC6tobWJi7Lt06aYGGwo2qTgqy5ZQ3IBTBvgbPzIhhahfpz7CpjZQ2L8zEB8WXgpLKduGAQuN6frw_zGPrxUEOUG1b3mKbSesn_40572n6T0lAYxd2pHd5nB4KnGXkU6HHddQOh1pFJcwoVlWR1_GJdqS_FPuT7uHVieEWiWcwXeclsOuzwxP_Bizb5dlG3BbkbfzrbzDWJqLq_m67Iyv8Sf4a3C9q7BsvmF3t1snclzdmsPHjTnAzKYtDN6th1Rr5AkBZliOYuYzG6btdRBJK60oKSiusuIlloQKvXGZ09JAWde6zcekR_dEYQtc9rJzXm2KKzCHNpHZw.kxBgV0UHxZwKCvfR.gDEOrRjycfoTxfDSYNfxL5ESQwowch9wtj4wMY_47l2Res-3kowqjPPKWKwU8KU.TGGl9UqsPoUKAgPgtfkr9Q"
+      "plaintext": "{\"pan\":\"card-fixture-0000\",\"sub\":\"cardholder-9\"}",
+      "compact": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMTI4R0NNIiwiaWF0IjoxODAwMDAwMDAwMTIzLCJpc3MiOiJhY21lLXBheW1lbnRzIiwia2lkIjoibWxlLWVuYy12MSIsInR5cCI6IkpPU0UifQ.0eSlTNT7A5adh4jxbmYquKynMymTaDHu9U-2JkhPfGFScAg7a7Mt4xIM_3Z43XyMIJGO9zZ-Zt_xgU00_xA4UQXxYl_CWhpBYupNRNAsfrFWYcAL5pzwlzaBJGZ1Zl2WwLfOOnKsGEh2IAhdOTU0iyCjPMVDCdPKFPbbvA32aAS9oZsbRUYYXysKyyaE4HKbNen6fmA4Hdgr7zHR6Ibg_qnT1eFKV3LdsmDQEEny63yLDc11zd2zGEqM08G7nB7oJklnUbJsl-OlpsdIoRwa1Ya-j7eUQiYwembJ0M77IercpkZmHddngzcDDrR-MMeS99ot0GsngvfUEzieKYKp-g.CUvhJrknjyBNFGyg.Mx1TtnVOco6yPgA_kK5-sGkWnFb3jqnptNYJSVbfyqr5gthP2iCOkeVh3U5t2JQ3.5BFbM7mm0FOOkxqb3MQlvw"
     },
     {
       "name": "bare_a256gcm",
       "policy": "bare",
       "code": "",
       "enc": "A256GCM",
-      "plaintext": "{\"pan\":\"4111111111111111\",\"sub\":\"cardholder-9\"}",
-      "token": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoibWxlLWVuYy12MSJ9.A69OLAny9iJ3f_iBic21y7cM7idyD780LvJqqq6uDBuAkwJ_pCusmhYDXeNa7Y4k-KEa2mHfSY7sEuB_Oh_jGepIEr8k3oaPlIobNK2aODthu8-IsFOCB4-ScPyLFtUEZcaF8_SvpbMVY9jT15PnqWBjIyCGa8KxLQ2WPpPNY83dbZ584NcCFUWUXDpvHL3pV0DdQhFTf0DN8XJlXFS3HXMtyxd8Mq3kJcByJSPLXJis_w-U01jFmmwYKqmqXi8N6LJBwXHPr0BjnCedm1m5Bg0Jfoo29kT5c92OKNW8CnfnMvIeQQq03AbJThZVYo-tucAhNy1tayT3q2oDNKHzpw.auorBxKZtEEEddhD.Vd6MwZzc6klUMu5uRr8L9HWbvQ7x1C7Dank_cTwoVE7czpScUDVGHgEm7xmRfGo.V0S_-sHu5Ue5Z5T4kSwAZA"
+      "plaintext": "{\"pan\":\"card-fixture-0000\",\"sub\":\"cardholder-9\"}",
+      "compact": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoibWxlLWVuYy12MSJ9.k2OZ1TxwIcO13XD88C49qgehX4-FJUjb7gI6mEIWsWbe9Bi4EdbwFYT52t6gd_R_MnADpLACyVs2prK8Yt5uPxqFiWGcu1ktMihNgoPCv-pvORPCsocsy7Hs2yFRmWOIklhWfN9DMFNxgw9zBnL6Ndh8mcn1gXZ274Gauy1xrB9UZF_ToD1jcL5YXisM0rjc_qJLoN5DlyAzWMlCQtyC8BLK8OqEzLV5BEMenD3OIBauTzJFg9yqHlNdWKMtIS6NLz8Vw9sg0zjWkGntkN2vA4x-1BcI49DWdF6ASGtXeJ4ULOPiTZ3W7TNJl7oe0AuHYXmKtGlVgeboEjQf5vl3Jw.itoaLnDTjOQcgqrM.2M-d2CAZoRS6FhyXmi5DGKg7O16nhscofUMH6FFDRnH88KhMslNuKSGWAG6Vmh_Z.rsjkCuqAFRj2xvzvOiOr3w"
     },
     {
       "name": "wrong_kid",
       "policy": "bare",
       "code": "JOSE_KID_UNKNOWN",
       "enc": "A128GCM",
-      "plaintext": "{\"pan\":\"4111111111111111\",\"sub\":\"cardholder-9\"}",
-      "token": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMTI4R0NNIiwia2lkIjoicm9ndWUifQ.c-kpUIwOVBxZWMTX0Fydgmzh8FOz5fGI-NjKbk2zRo5DXJWLXrV5ixGZs0GHPQ82us269Va2zBu7icP0hpWE_YL9f3Q4LshMaGg_pd0hXLYYeg0npNB7XfRpqTVcKcUSbgOc7_YbFkRlwp8pyR2Q9O87dJwqpcT-dV-76AC85WGWzRAy8lJjjrjNR3XF3Vj1p0w8UdIjIBViGU8qgn-BbH6UndoqnjRBgtfYKA9sGhkzkv0oRCur-repN2iFo8J_6bIUiW4AGFLKYZKx1VqX_kCqYz_p4D-jgIObA3iEovkqiPoDNYTcZJ8hpiNz768FfV3N-IuElgXtLGk4Tai-ng.X98zpgrWCzVTa_4b.p3ZEljDQW_AdU4PYhAmV81WQauLaJDlXmkCjMKDxXLGuCC2pitvMTQFEmKE0OwI.AWl77a-t_JTpTx6SLFN_zA"
+      "plaintext": "{\"pan\":\"card-fixture-0000\",\"sub\":\"cardholder-9\"}",
+      "compact": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMTI4R0NNIiwia2lkIjoicm9ndWUifQ.qaO_DTjFRHvNg85NPIMsum1_wcqBoirX46XnFMP4FOUvShnvS5Ae5Qv0Ha0Xkl5nVHVV_u5hkIp0ooNYWRBenRD9iEJH4rVxZvWu1J3J-lmU6a1GOKxeovDg3AS3V_GwIHsCHuX3h3r0U0jLQk0LSieF_hfVyyA0vV3YOVCmQvR9UVQMTdbShR2j-a-bVNRo2BrPmUyN8ooZTYILvg5Vvde6J9ojuifTl9RaQAcFbU78UPNppZ8KqBQo3OVU7n5P6iCrJOEdWWQSnPGIqk0HvH1YZGaPy7wacaq2ydkgYPScAFIV9X-L6KvBFejTlP06Fh7eqi6jai335zyJU8FgQA.EkqAqgKzwoX_zAfO.UhUtRVIQRXYab63W5JoyRq7UYQ_23zO_gDS4XkVIp75x7dgaFqPN1pPt6MqhExpu.42ctvwlQFVOlx_6XOvgFag"
     },
     {
       "name": "disallowed_enc_a128cbc_hs256",
       "policy": "bare",
       "code": "JOSE_MALFORMED",
       "enc": "A128CBC-HS256",
-      "plaintext": "{\"pan\":\"4111111111111111\",\"sub\":\"cardholder-9\"}",
-      "token": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2Iiwia2lkIjoibWxlLWVuYy12MSJ9.ekh-wQD_jhpGHIXLu4iQGO7Zzt__JTXOuKS-2o2tYp9aGpgbiwi77mQX4nXfEk9w-xRrgI4lqp_2JNoE-J0BOTN1B3JfoCvYttnXh6mcBNGMsQZhjgemE3s55elcW6fs3zxYuRmQm8QLj2EcIY5_MI5DMKoHKNBK8h8B3I1dzDEo-Fos88Mg8XVlOoIzn_LPSsiUnnocsiuBSYmvFN0h4qW_aZKMbQG8Og3ATfJSmsctzBEnZSXFH9JWkxCknutNYpe0j0PYDAHr6SvM5lrNvsBbity4geuGvrVJneT5nMhZ7Vbz8XmGuipK9DwhAA-QVkquHmoXI4WRE64CqVlOWQ.oRGbSF4hzZX8PA3MoQaAmw.Lqtoh8K2CwVmXyyaas0QfUoLeD0GP9tXaPFhza5lkIURhMxKt9H08MJpUSIQ2T_2.8tWlbcrpcO9Oxnx8CDaUZw"
+      "plaintext": "{\"pan\":\"card-fixture-0000\",\"sub\":\"cardholder-9\"}",
+      "compact": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2Iiwia2lkIjoibWxlLWVuYy12MSJ9.pPFyDkv9Kf736V8pmMDu0JoPqYNLSh6j3th2WVizR7yBiev-GEVrpzke55K-15nGeVU6bo8jubZ_RSlOVvPGWqnh6rxZJhVpcA4uhWNc2JPxy64_FpMM_dAtZNNJc3Wb9x_f1xG7iC1Vp_mFXB1uHKcoIV-uAwLnT0msi4fyUYmGBFNgZipJVc6lMGfm8HGi9FtBkShflOVbJ0pd84XepS5yyf5UWnmAGqt_wsS-7NylUVt0jem3vN18S3TDy_bShSk4-YTLpWqv35EHKUycYPd5-c23GxWySlmJS2lqLvFoS7_1NE9pz6jUvQl3UDObGd2swYav_bdp-7OcqwC3Kg.Qdrbn-BFY0Pd7eglOVk9PA.6wdOTJbIJfzIvmWBX-S5azQXzaWbqxDKwFvZMvG634wLonwtGvxU_u1rhezFhOKc4ndugEdFtv51OVss3-fJkQ.gvzgyGemSiyjh4xH7M8scQ"
     },
     {
       "name": "bare_token_on_nested_policy",
       "policy": "nested",
       "code": "JOSE_MALFORMED",
       "enc": "A128GCM",
-      "plaintext": "{\"pan\":\"4111111111111111\",\"sub\":\"cardholder-9\"}",
-      "token": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMTI4R0NNIiwia2lkIjoibWxlLWVuYy12MSJ9.eMoC_4nggWocUEAhuHIF7WQPbYxAjgbj3RK4NSZIgS1sqr_aGWgUbZ6bbY87Cluhg5y-5gTndTjTlKfezzNzuJAh0aEMRWIUQfAEfghKqAs74h8wftLvwLlITErwPuS4ubQWV2NYT7hKHbOmLrMtuYZh1JqCLOXuUTehQdTkR-CbwyJV_EJIe9A9YQY4xiwLrHR-B3RIa9oGNaqccRKx5fhVe1r0GYFIz6TBSwOWLCER51G7gyaaF058KA_GDhsaR1JArM0JJ9hvqsJxvYHqqlwgVr_97NDcz50jstee6RJxhKgjZUW8sbr-7BpVQRlId4DnIPGy5BzzBzCTL8a__Q.E4r_Wvn8NNDhR1_i.-lkYAM8PHJcbVBrO8Sbi3wvyoorqKaC14XHG-eWzn8WPro7f_FAfcSsApn0KT3I.YTcTvka0yhn_5uJcqZpSKg"
+      "plaintext": "{\"pan\":\"card-fixture-0000\",\"sub\":\"cardholder-9\"}",
+      "compact": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMTI4R0NNIiwia2lkIjoibWxlLWVuYy12MSJ9.fdM3576lCSMV0tZcvr2t3m4c0w2vzKuLG8APzJH9G-4SzAA8lF5KZvh2FkrAd9WdJezoOZ-1vrSKD16PKzcYgr9ADAnE_oiHhXkWWW5ZG7ihGCKO8vjbZfupQoEth1I8tJRbVJ2sZlsiwjDueOxq-EHslf-kI6xQitd7YHlB6gC-XVWuVA3jjARPaJfPk-ic5DuEOwaGUfXTs3NbKEveqAWACGEE8kw68YjPYLqgpyrh-ick7azH5hFcv2oo4pbHc7hT0FVHlRCPrpSPGHXGSPRuvMhg1qwCxXHh8uL1UnXQ1rNDJQRJAfR1iErrLkU4UzKw_52cmmBIvqSnoqocbA.tpcBqs6JnWv1mxpb.u26qLOAfhJrMTg2lghKdoj9aDxJXxMMbMK1fjA2E2QTAlh950ag7jxkepGar62Xh.cYP2FRR5DERsULjFZhuaGA"
     }
   ]
 }

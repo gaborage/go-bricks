@@ -91,7 +91,7 @@ func TestSealBareJWEWritesProtectedHeaders(t *testing.T) {
 	f.outbound.Typ = "JOSE"
 	f.outbound.ProtectedHeaders = map[string]any{"iss": "acme-payments"}
 	f.outbound.IATMillis = true
-	payload := []byte(`{"pan":"4111111111111111"}`)
+	payload := []byte(`{"pan":"card-fixture-0000"}`)
 
 	compact, err := Seal(payload, f.outbound, f.resolver)
 	require.NoError(t, err)
@@ -148,7 +148,7 @@ func TestOpenBareJWERoundTrip(t *testing.T) {
 	f := newBareFixture(t)
 	f.outbound.Typ = "JOSE"
 	f.outbound.IATMillis = true
-	payload := []byte(`{"pan":"4111111111111111","sub":"cardholder-9"}`)
+	payload := []byte(`{"pan":"card-fixture-0000","sub":"cardholder-9"}`)
 
 	compact, err := Seal(payload, f.outbound, f.resolver)
 	require.NoError(t, err)
@@ -278,7 +278,7 @@ const (
 	vecRogueKid = "rogue"
 	vecIATMs    = int64(1_800_000_000_123)
 	vecIssuer   = "acme-payments"
-	vecPlain    = `{"pan":"4111111111111111","sub":"cardholder-9"}`
+	vecPlain    = `{"pan":"card-fixture-0000","sub":"cardholder-9"}`
 	vecKeysFile = "testdata/keys.json"
 	vecFile     = "testdata/bare_vectors.json"
 )
@@ -306,7 +306,7 @@ type bareVector struct {
 	Typ       string `json:"typ,omitempty"`
 	IATMillis int64  `json:"iatMillis,omitempty"`
 	Plaintext string `json:"plaintext,omitempty"`
-	Token     string `json:"token"`
+	Compact   string `json:"compact"`
 }
 
 func loadVectorKeys(t *testing.T) map[string]*rsa.PrivateKey {
@@ -381,7 +381,7 @@ func regenerateVectors(t *testing.T, keys map[string]*rsa.PrivateKey) []bareVect
 		if vectors[i].Name == "wrong_kid" {
 			kid = vecRogueKid
 		}
-		vectors[i].Token = buildVectorToken(t, &vectors[i], &keys[kid].PublicKey, kid)
+		vectors[i].Compact = buildVectorToken(t, &vectors[i], &keys[kid].PublicKey, kid)
 	}
 	raw, err := json.MarshalIndent(bareVectorFile{Note: vectorNote, Vectors: vectors}, "", "  ")
 	require.NoError(t, err)
@@ -422,7 +422,7 @@ func TestOpenBareJWEVectors(t *testing.T) {
 			if v.Policy == "nested" {
 				p = nested
 			}
-			plaintext, claims, hdr, err := Open(v.Token, p, resolver)
+			plaintext, claims, hdr, err := Open(v.Compact, p, resolver)
 			if v.Code != "" {
 				require.Error(t, err)
 				requireJOSEErrorCode(t, err, v.Code)
@@ -447,7 +447,7 @@ func TestOpenBareJWEVectors(t *testing.T) {
 // it were the plaintext.
 func TestOpenBareJWERejectsNestedTokenUnderDeclaredCty(t *testing.T) {
 	nestedFixture := newTestFixture(t)
-	compact, err := Seal([]byte(`{"pan":"4111111111111111"}`), nestedFixture.outbound, nestedFixture.resolver)
+	compact, err := Seal([]byte(`{"pan":"card-fixture-0000"}`), nestedFixture.outbound, nestedFixture.resolver)
 	require.NoError(t, err)
 
 	bare := &Policy{
@@ -466,7 +466,7 @@ func TestOpenBareJWERejectsNestedTokenUnderDeclaredCty(t *testing.T) {
 // its own, so the inner compact JWS can never surface as unverified plaintext.
 func TestOpenBareJWERejectsNestedTokenWithoutDeclaredCty(t *testing.T) {
 	nestedFixture := newTestFixture(t)
-	compact, err := Seal([]byte(`{"pan":"4111111111111111"}`), nestedFixture.outbound, nestedFixture.resolver)
+	compact, err := Seal([]byte(`{"pan":"card-fixture-0000"}`), nestedFixture.outbound, nestedFixture.resolver)
 	require.NoError(t, err)
 
 	bare := &Policy{
