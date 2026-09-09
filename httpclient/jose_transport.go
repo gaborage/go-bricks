@@ -81,6 +81,17 @@ type JOSETransport struct {
 	// use DefaultMaxJOSEBodyBytes. A negative value disables the cap entirely (NOT
 	// recommended for untrusted counterparties).
 	MaxResponseBytes int64
+
+	// WrapBody optionally turns the sealed compact into the body actually sent. Nil keeps
+	// the default: the compact itself, advertised as application/jose.
+	WrapBody WrapBodyFunc
+
+	// UnwrapBody optionally recognizes and extracts a compact from a response body,
+	// replacing the default application/jose Content-Type rule. With it set EVERY
+	// eligible response body is buffered — bounded by MaxResponseBytes, with the same
+	// default and over-cap error — before the hook decides; without it a non-JOSE body
+	// is never read at all.
+	UnwrapBody UnwrapBodyFunc
 }
 
 // RoundTrip wraps the request body with JOSE (when Outbound is set), forwards to the

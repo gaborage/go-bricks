@@ -560,3 +560,36 @@ func TestBuilderWithJOSEWiresTransport(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.JSONEq(t, `{"echo":{"hello":"world"}}`, string(resp.Body))
 }
+
+func TestBuilderWithJOSEFailsClosedOnAHookWithoutItsPolicy(t *testing.T) {
+	f := jositest.NewBidirectionalFixture(t)
+	wrap, unwrap := httpclient.VisaMLEEnvelope()
+	log := logger.New("info", false)
+
+	tests := []struct {
+		name    string
+		cfg     httpclient.JOSEConfig
+		wantErr string
+	}{
+		{
+			name:    "wrap_body_without_outbound",
+			cfg:     httpclient.JOSEConfig{Inbound: f.ClientInbound, Resolver: f.Resolver, WrapBody: wrap},
+			wantErr: "WrapBody requires an Outbound policy",
+		},
+		{
+			name:    "unwrap_body_without_inbound",
+			cfg:     httpclient.JOSEConfig{Outbound: f.ClientOutbound, Resolver: f.Resolver, UnwrapBody: unwrap},
+			wantErr: "UnwrapBody requires an Inbound policy",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, err := httpclient.NewBuilder(log).WithJOSE(tt.cfg).Build()
+
+			require.Error(t, err)
+			assert.Nil(t, client)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
