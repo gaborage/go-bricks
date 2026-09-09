@@ -161,7 +161,8 @@ reports and the caller decides. A freshness knob here would also be the first th
   one of those has removed sender authentication from that route.
 - **There is no accept-unsealed or mixed-mode arm, and the mismatch is not symmetric.** A
   policy has one mode and nothing negotiates. A bare token offered to a nested policy fails
-  at the inner layer, where its plaintext is not a compact JWS
+  at parse time when it uses `A128GCM` (`JOSE_MALFORMED`, the nested allowlist) and at the
+  inner layer when it uses `A256GCM`, where its plaintext is not a compact JWS
   (`JOSE_INNER_NOT_JWS`). A NESTED token offered to a bare policy DECRYPTS — the outer JWE
   is the same object in both shapes — so `openBare` fails closed on the marker the nested
   seal writes: a JWE whose protected `cty` is `JWS` is rejected with `JOSE_CTY_REJECTED`

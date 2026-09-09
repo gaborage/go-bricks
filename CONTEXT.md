@@ -215,9 +215,10 @@ queue, parking lot
 **Seal**:
 Turning one outbound payload into its protected wire form, exactly once, before
 it goes out — applying whatever the policy's seal mode says that form is. The
-default is both operations, encrypt then sign: the sealed-event shape (encrypt
-the subject, sign the whole result) and the JWE-of-JWS body shape. The bare-JWE
-shape is encryption alone, for a peer already authenticated out of band.
+default is both operations: the sealed-event shape encrypts the subject and
+signs the whole result; the JWE-of-JWS body shape signs the payload as a compact
+JWS and encrypts that. The bare-JWE shape is encryption alone, for a peer
+already authenticated out of band.
 Opening reverses whichever shape was sealed; a sealed-shaped body that fails any
 open step is poison, never plaintext.
 _Avoid_: protect, wrap; and "encrypt" as a synonym for sealing — encryption is
