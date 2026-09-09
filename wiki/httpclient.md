@@ -94,18 +94,116 @@ if err != nil {
 `Build()` also validates the `WithJOSE` policies, which the server's tag scanner has
 always done at route registration. Each non-nil policy gets its unset algorithms
 filled from the `jose` package defaults (`RS256`, `RSA-OAEP-256`, `A256GCM`,
-`application/json`) and is then run through `jose.Policy.Validate`, so a disallowed
+`application/json`) — except that a `Mode: jose.SealModeBareJWE` policy is never
+given a `SigAlg`, because bare mode signs nothing and `Validate` rejects a bare
+policy that names one; that omission is what lets `WithJOSE` carry a bare policy
+pair. The filled copy is then run through `jose.Policy.Validate`, so a disallowed
 algorithm, a kid missing for the policy's direction, or a `Resolver` left nil while
 a policy is set now fails construction instead of failing every request. Validation
 runs on **copies** — a `jose.Policy` you reuse across builders is never mutated. The
 error is its own path, not `ErrUnsafeTransportComposition` (whose meaning stays
-transport-slot composition): every one of these — the nil `Resolver` included, which
-reports `JOSE_KEYSTORE_UNAVAILABLE` — wraps a `*jose.Error`, so match it with
-`errors.As`, or its sentinel with `errors.Is`.
+transport-slot composition): every one of these policy failures — the nil `Resolver`
+included, which reports `JOSE_KEYSTORE_UNAVAILABLE` — wraps a `*jose.Error`, so match
+it with `errors.As`, or its sentinel with `errors.Is`. (The two body-hook wiring
+failures below are the exception: they are plain errors carrying the same
+`httpclient: invalid JOSE policy:` prefix, not `*jose.Error`.)
 
 Kids are **not** resolved at `Build()`. A `KeyResolver` may be backed by key material
 loaded lazily, and resolving eagerly would force that load at construction — so an
 unknown kid still surfaces per request as `JOSE_KID_UNKNOWN`.
+
+#### JOSE body envelopes (Visa Message Level Encryption)
+
+Some counterparties do not put the compact JOSE serialization on the wire on its own.
+Visa **Message Level Encryption** carries it inside a JSON object — `{"encData": "<compact>"}` sent as `application/json` — and answers in the same shape. Two optional
+hooks move the compact into and out of such a format. They exist both on `JOSEConfig`
+(for `WithJOSE`) and on a hand-built `JOSETransport`:
+
+- `WrapBodyFunc func(compact string) (body []byte, contentType string, err error)` —
+  builds the outbound request body from the compact `jose.Seal` produced, and names the
+  Content-Type to advertise. An error aborts the round trip: no request is sent.
+- `UnwrapBodyFunc func(contentType string, body []byte) (compact string, ok bool)` —
+  recognizes and extracts a compact from a buffered response body. Returning `ok=false`
+  passes the body through untouched.
+
+**Both nil is the old behaviour, byte for byte**: the compact itself is the request body,
+advertised as `application/jose`, and a response is unwrapped only when its Content-Type
+says `application/jose`.
+
+**`UnwrapBody` changes the inbound read discipline.** It replaces the Content-Type gate
+with the hook's verdict, and the hook needs the bytes — so *every* eligible response body
+is read into memory before the hook runs, bounded by `MaxResponseBytes` (`DefaultMaxJOSEBodyBytes`, 10 MiB, when zero) with the same over-cap `ValidationError`.
+Without a hook, a non-JOSE body is never read at all. When the hook returns `ok=false`
+the buffered bytes are handed back as the response body with headers untouched. The
+responses that skip unwrapping entirely are unchanged: no `Inbound` policy, no body, or a
+shape net/http guarantees is empty (`1xx`, `204`, `304`, any reply to `HEAD`).
+
+**`Build()` fails closed on a half-wired hook.** A `WrapBody` without an `Outbound` policy
+and an `UnwrapBody` without an `Inbound` one are both construction errors, because a hook
+whose policy is missing is a silent no-op at request time — the body would go out unsealed,
+or a wrapped response would reach the caller as ciphertext.
+
+`httpclient.VisaMLEEnvelope()` returns the ready-made pair. Outbound, it produces
+`{"encData":"<compact>"}` as `application/json`. Inbound, it recognizes the reply **by
+shape rather than Content-Type**: any JSON object carrying a non-empty string `encData`
+member is unwrapped (unknown sibling members are ignored) and everything else — a
+plaintext error envelope, say — passes through. After a successful unwrap the caller reads
+the plaintext with `Content-Type: application/json`.
+
+Wire it with the bare-JWE policy pair from
+[jose.md](jose.md#bare-jwe-mode-visa-message-level-encryption) — `A128GCM` has no
+go-bricks alias, so the go-jose constant is imported under its own name:
+
+```go
+import (
+    "github.com/gaborage/go-bricks/httpclient"
+    "github.com/gaborage/go-bricks/jose"
+    josev4 "github.com/go-jose/go-jose/v4"
+)
+
+outbound := &jose.Policy{
+    Direction:  jose.DirectionOutbound,
+    Mode:       jose.SealModeBareJWE,
+    EncryptKid: "visa-mle-encrypt",       // peer public key; the ONLY kid a bare outbound policy may set
+    KeyAlg:     jose.DefaultKeyAlg,       // RSA-OAEP-256
+    Enc:        josev4.A128GCM,
+    Cty:        jose.DefaultCty,          // application/json
+    Typ:        "JOSE",                   // JWE protected `typ`
+    IATMillis:  true,                     // stamp `iat` in epoch MILLISECONDS at seal time
+    ProtectedHeaders: map[string]any{     // copied verbatim into the protected header
+        "iss": "acme-payments",
+    },
+}
+
+inbound := &jose.Policy{
+    Direction:  jose.DirectionInbound,
+    Mode:       jose.SealModeBareJWE,
+    DecryptKid: "our-mle-decrypt",        // our private key; the ONLY kid a bare inbound policy may set
+    KeyAlg:     jose.DefaultKeyAlg,
+    Enc:        josev4.A128GCM,
+    Cty:        jose.DefaultCty,
+}
+
+wrapBody, unwrapBody := httpclient.VisaMLEEnvelope()
+
+client, err := httpclient.NewBuilder(logger).
+    WithTransport(mTLSTransport).                 // MLE is unsigned: the peer is authenticated here
+    WithJOSE(httpclient.JOSEConfig{
+        Outbound:   outbound,
+        Inbound:    inbound,
+        Resolver:   resolver,
+        WrapBody:   wrapBody,
+        UnwrapBody: unwrapBody,
+    }).
+    Build()
+if err != nil {
+    return err
+}
+```
+
+**Per-attempt freshness.** `JOSETransport` sits below the retry loop, so every retry
+attempt re-runs `jose.Seal` and produces a freshly-sealed body — a new `iat` per attempt,
+which is exactly what MLE's millisecond `iat` (and a nested policy's `jti`) needs.
 
 ### Mutual TLS (client certificates)
 
