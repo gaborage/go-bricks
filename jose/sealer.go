@@ -4,6 +4,11 @@ import (
 	"github.com/gaborage/go-bricks/jose/internal/cryptoadapter"
 )
 
+// ctyNestedJWS is the JWE protected-header cty the nested mode writes over its inner
+// compact JWS, and the marker openBare refuses so a nested token can never be returned
+// as unverified plaintext. Compared case-sensitively, exactly as written here.
+const ctyNestedJWS = "JWS"
+
 // Seal performs the outbound transformation: sign payload as a compact JWS with our
 // private key, then encrypt that JWS as a compact JWE to the peer's public key. Returns
 // the compact JWE string.
@@ -74,7 +79,7 @@ func Seal(payload []byte, p *Policy, r KeyResolver) (string, error) {
 		Kid:    p.EncryptKid,
 		KeyAlg: p.KeyAlg,
 		Enc:    p.Enc,
-		Cty:    "JWS",
+		Cty:    ctyNestedJWS,
 	})
 	if err != nil {
 		return "", encryptFailed(p, err)

@@ -460,3 +460,24 @@ func TestOpenBareJWERejectsNestedTokenUnderDeclaredCty(t *testing.T) {
 	require.ErrorIs(t, err, ErrCtyRejected)
 	assert.Equal(t, "JWS", hdr.JWE.Cty)
 }
+
+// TestOpenBareJWERejectsNestedTokenWithoutDeclaredCty pins the fail-closed rule: a bare
+// inbound policy refuses a JWE carrying cty=JWS even when the policy declares no Cty of
+// its own, so the inner compact JWS can never surface as unverified plaintext.
+func TestOpenBareJWERejectsNestedTokenWithoutDeclaredCty(t *testing.T) {
+	nestedFixture := newTestFixture(t)
+	compact, err := Seal([]byte(`{"pan":"4111111111111111"}`), nestedFixture.outbound, nestedFixture.resolver)
+	require.NoError(t, err)
+
+	bare := &Policy{
+		Direction: DirectionInbound, Mode: SealModeBareJWE,
+		DecryptKid: "our-key", KeyAlg: DefaultKeyAlg, Enc: DefaultEnc,
+	}
+	require.NoError(t, bare.Validate())
+
+	plaintext, _, hdr, err := Open(compact, bare, nestedFixture.resolver)
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrCtyRejected)
+	assert.Nil(t, plaintext)
+	assert.Equal(t, "JWS", hdr.JWE.Cty)
+}

@@ -3952,8 +3952,8 @@ mleOutbound := &jose.Policy{
     ProtectedHeaders: map[string]any{"iss": "acme-payments"},
 }
 
-// Inbound: DecryptKid alone. Set Cty — it is what rejects a peer still sending
-// the nested cty=JWS shape, which would otherwise decrypt into a compact JWS.
+// Inbound: DecryptKid alone. Open refuses a JWE with cty=JWS unconditionally, so a
+// peer still sending the nested shape is rejected even when Cty is left empty.
 mleInbound := &jose.Policy{
     Direction:  jose.DirectionInbound,
     Mode:       jose.SealModeBareJWE,

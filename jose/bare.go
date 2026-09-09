@@ -53,7 +53,9 @@ func (p *Policy) bareExtraHeaders() map[string]any {
 }
 
 // openBare decrypts a bare JWE: no inner JWS, so nothing is verified and hdr.JWS stays
-// zero. The peer is authenticated out of band by the deployment, not here.
+// zero. The peer is authenticated out of band by the deployment, not here. A JWE that
+// declares cty=JWS is refused unconditionally, whatever Policy.Cty says, so a nested
+// token can never surface here as unverified plaintext.
 func openBare(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *Claims, hdr OpenHeader, err error) {
 	decKey, err := r.PrivateKey(p.DecryptKid)
 	if err != nil {
@@ -68,6 +70,20 @@ func openBare(compact string, p *Policy, r KeyResolver) (plaintext []byte, claim
 	hdr.JWE = cryptoHeaderToOpen(&jweHdr)
 	if err != nil {
 		return nil, nil, hdr, mapDecryptError(err, p, &jweHdr)
+	}
+
+	// Fail closed on a nested token: bare mode never carries an inner JWS, so cty=JWS
+	// means the "plaintext" is a compact JWS nothing here verifies. Refuse it whatever
+	// the policy declares. Visa MLE uses typ=JOSE, so this costs no interop.
+	if jweHdr.Cty == ctyNestedJWS {
+		return nil, nil, hdr, &Error{
+			Sentinel: ErrCtyRejected,
+			Code:     codeCtyRejected,
+			Status:   400,
+			Message:  "Bare policy refuses a nested cty",
+			Kid:      jweHdr.Kid,
+			Alg:      jweHdr.Alg,
+		}
 	}
 
 	// Same permissive cty rule as the nested path, applied to the only header there is.

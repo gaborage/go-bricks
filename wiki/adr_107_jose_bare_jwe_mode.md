@@ -163,11 +163,12 @@ reports and the caller decides. A freshness knob here would also be the first th
   policy has one mode and nothing negotiates. A bare token offered to a nested policy fails
   at the inner layer, where its plaintext is not a compact JWS
   (`JOSE_INNER_NOT_JWS`). A NESTED token offered to a bare policy DECRYPTS — the outer JWE
-  is the same object in both shapes — and what stops the inner JWS reaching the caller as
-  if it were the payload is the `cty` rule: the nested seal writes `cty: JWS`, so a bare
-  policy that declares a `Cty` of its own rejects it with `JOSE_CTY_REJECTED`. A bare
-  policy that leaves `Cty` empty has no such guard and hands the compact JWS back as
-  plaintext, unverified. Set `Cty` on a bare inbound policy.
+  is the same object in both shapes — so `openBare` fails closed on the marker the nested
+  seal writes: a JWE whose protected `cty` is `JWS` is rejected with `JOSE_CTY_REJECTED`
+  regardless of `Policy.Cty`, and the inner compact JWS never reaches the caller as
+  unverified plaintext. Bare mode never carries an inner JWS and Visa MLE uses
+  `typ: JOSE`, so the unconditional rule costs no interop; `Policy.Cty` remains the
+  consumer's own content-type pin.
 - **Three new error codes reach registration and startup, not the wire.**
   `JOSE_POLICY_MODE_UNKNOWN`, `JOSE_POLICY_MODE_MISMATCH` and
   `JOSE_POLICY_HEADER_COLLISION` all come out of `Policy.Validate` (and now out of `Seal`'s
