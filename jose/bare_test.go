@@ -425,3 +425,23 @@ func TestOpenBareJWEVectors(t *testing.T) {
 		})
 	}
 }
+
+// TestOpenBareJWERejectsNestedTokenUnderDeclaredCty covers the misconfiguration where a
+// bare policy is pointed at a peer that still sends the nested shape: the JWE decrypts,
+// but its cty=JWS disagrees with the policy's, so the JWS never reaches the caller as if
+// it were the plaintext.
+func TestOpenBareJWERejectsNestedTokenUnderDeclaredCty(t *testing.T) {
+	nestedFixture := newTestFixture(t)
+	compact, err := Seal([]byte(`{"pan":"4111111111111111"}`), nestedFixture.outbound, nestedFixture.resolver)
+	require.NoError(t, err)
+
+	bare := &Policy{
+		Direction: DirectionInbound, Mode: SealModeBareJWE,
+		DecryptKid: "our-key", KeyAlg: DefaultKeyAlg, Enc: DefaultEnc, Cty: DefaultCty,
+	}
+	require.NoError(t, bare.Validate())
+
+	_, _, hdr, err := Open(compact, bare, nestedFixture.resolver)
+	require.ErrorIs(t, err, ErrCtyRejected)
+	assert.Equal(t, "JWS", hdr.JWE.Cty)
+}
