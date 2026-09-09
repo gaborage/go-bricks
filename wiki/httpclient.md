@@ -135,8 +135,10 @@ and returning `ok=false` passes that body through untouched. `Wrap` is consulted
 `Outbound` is set and `Unwrap` only when `Inbound` is set.
 
 One interface rather than two function fields, so `JOSETransport` and `JOSEConfig` stay
-**comparable** values — a func-typed field is not comparable, and both structs are
-exported surface.
+**comparable types** — a func-typed field is not comparable at all, and both structs are
+exported surface. The type-level guarantee is not a value-level one: `==` on two of these
+structs still panics at run time if the `Envelope` interface holds a non-comparable dynamic
+value, such as a map-backed envelope implementation.
 
 **A nil `Envelope` is the old behaviour, byte for byte**: the compact itself is the request
 body, advertised as `application/jose`, and a response is unwrapped only when its
@@ -221,8 +223,11 @@ if err != nil {
 ```
 
 **Per-attempt freshness.** `JOSETransport` sits below the retry loop, so every retry
-attempt re-runs `jose.Seal` and produces a freshly-sealed body — a new `iat` per attempt,
-which is exactly what MLE's millisecond `iat` (and a nested policy's `jti`) needs.
+attempt re-runs `jose.Seal` and produces a freshly-sealed body, with the bare-mode `iat`
+recomputed at seal time — which is what MLE's millisecond `iat` wants. It is a re-seal, not
+a uniqueness guarantee: two attempts landing inside the same millisecond share an `iat`, and
+`jose.Seal` mints no `jti` at all — a nested policy's `jti` comes from the signed payload the
+caller hands it.
 
 ### Mutual TLS (client certificates)
 
