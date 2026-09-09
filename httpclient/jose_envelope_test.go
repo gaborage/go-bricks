@@ -242,6 +242,27 @@ func TestJOSETransportUnwrapBodyDecryptsTheVisaEnvelope(t *testing.T) {
 	assert.JSONEq(t, `{"token":"tok-42"}`, string(resp.Body))
 }
 
+func TestJOSETransportUnwrapBodyPassesThroughNonEnvelope(t *testing.T) {
+	const errorEnvelope = `{"errorCode":"9001","message":"denied","details":[{"field":"pan"}]}`
+	f := newVisaFixture(t)
+	calls := make(chan visaCall, 1)
+	server := fakeVisaEndpoint(t, f, calls, func(w http.ResponseWriter, _ visaCall) {
+		w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+		_, _ = w.Write([]byte(errorEnvelope))
+	})
+	defer server.Close()
+
+	resp, err := visaClient(t, f).Post(context.Background(), &httpclient.Request{
+		URL:  server.URL,
+		Body: []byte(`{"pan":"4111111111111111"}`),
+	})
+	require.NoError(t, err)
+
+	<-calls
+	assert.Equal(t, errorEnvelope, string(resp.Body))
+	assert.Equal(t, "application/json;charset=UTF-8", resp.Headers.Get("Content-Type"))
+}
+
 // visaCall is one request as the fake Visa endpoint saw it.
 type visaCall struct {
 	contentType string
