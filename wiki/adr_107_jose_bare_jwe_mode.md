@@ -123,7 +123,7 @@ they read `Policy.Mode` to decide what to produce and accept.**
 **Bare mode is a `Policy`-level door.** There is no `mode` key in the `jose:` struct-tag
 grammar (`jose/tag.go`), so no route can opt in through a tag. `jose.Seal` and `jose.Open`
 (and `jose/testing`'s `SealForTest`/`OpenForTest`, which call them) are the door, and
-`httpclient.WithJOSE` reaches it too: `normalizedJOSEPolicy` skips its `SigAlg` default for
+`httpclient.Builder.WithJOSE` reaches it too: `normalizedJOSEPolicy` skips its `SigAlg` default for
 a bare policy, which must not carry one.
 
 ## Alternatives
@@ -199,7 +199,7 @@ reports and the caller decides. A freshness knob here would also be the first th
   content encryption, so pinning them is a no-op. A bare deployment must declare the `Enc`
   its peer actually sends: a policy pinned to `A128GCM` refuses an `A256GCM` token with
   `JOSE_MALFORMED`, where before it opened. An inbound bare policy handed to
-  `httpclient.WithJOSE` must set `Enc` explicitly to accept Visa's `A128GCM`, since
+  `httpclient.Builder.WithJOSE` must set `Enc` explicitly to accept Visa's `A128GCM`, since
   normalization fills an unset `Enc` with `jose.DefaultEnc` (`A256GCM`) — explicit over
   implicit, and a silently-wrong default was the alternative.
 - **`Open` validates its policy like `Seal`, and pinning only ever narrows.** A hand-built

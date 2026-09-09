@@ -308,8 +308,9 @@ func (b *Builder) WithTransport(transport nethttp.RoundTripper) *Builder {
 // override, replay-cache hook, per-call policy resolver — can be added without
 // changing the WithJOSE signature.
 type JOSEConfig struct {
-	// Outbound is required: the policy used to seal every outbound request body
-	// (sign+encrypt, or encrypt-only under SealModeBareJWE).
+	// Outbound is optional: when set, it is the policy used to seal every outbound
+	// request body (sign+encrypt, or encrypt-only under SealModeBareJWE). Nil disables
+	// outbound sealing, so request bodies go out untouched.
 	Outbound *jose.Policy
 	// Inbound is optional: when set, application/jose response bodies are opened
 	// (decrypt+verify, or decrypt-only under SealModeBareJWE).
@@ -322,7 +323,8 @@ type JOSEConfig struct {
 	// MLE's {"encData":...} object, for example, from httpclient.VisaMLEEnvelope(). Nil
 	// sends the compact itself as application/jose and unwraps only application/jose
 	// responses. Wrap is consulted only when Outbound is set and Unwrap only when Inbound
-	// is set, so an Envelope with neither policy fails Build.
+	// is set, so an Envelope with neither policy fails Build
+	// (JOSE_POLICY_ENVELOPE_UNPAIRED); either policy alone is a supported shape.
 	Envelope BodyEnvelope
 	// MaxResponseBytes bounds the inbound response body read, exactly as the field of the
 	// same name on JOSETransport: zero means DefaultMaxJOSEBodyBytes and a negative value
@@ -332,11 +334,13 @@ type JOSEConfig struct {
 	MaxResponseBytes int64
 }
 
-// WithJOSE configures a JOSETransport that seals every outbound request body and opens
+// WithJOSE configures a JOSETransport that seals outbound request bodies and opens
 // application/jose response bodies — sign+encrypt and decrypt+verify under the nested
 // JWE-of-JWS default, encrypt-only and decrypt-only under a SealModeBareJWE policy.
-// Pass cfg.Inbound = nil when
-// the counterparty does not return JOSE-wrapped responses.
+// Both directions are optional and one-directional protection is a supported shape:
+// pass cfg.Inbound = nil when the counterparty does not return JOSE-wrapped responses,
+// and cfg.Outbound = nil to leave request bodies untouched. An Envelope needs at least
+// one of the two, or Build fails with JOSE_POLICY_ENVELOPE_UNPAIRED.
 //
 // Composition: transport layers are applied at Build time in a fixed order —
 // the base transport from WithTransport or WithTLSConfig is innermost, request

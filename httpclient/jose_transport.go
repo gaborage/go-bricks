@@ -88,8 +88,8 @@ type JOSETransport struct {
 	// hand-constructed, since httpclient.Builder-produced clients always seed a non-nil Inner.
 	Inner nethttp.RoundTripper
 
-	// Outbound is required: the policy used to seal every outbound request body
-	// (sign+encrypt, or encrypt-only under SealModeBareJWE).
+	// Outbound is optional: when set, it is the policy used to seal every outbound
+	// request body (sign+encrypt, or encrypt-only under SealModeBareJWE).
 	// A nil Outbound disables outbound wrapping entirely (the transport delegates to Inner).
 	Outbound *jose.Policy
 
