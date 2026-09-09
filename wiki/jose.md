@@ -152,8 +152,14 @@ inbound := &jose.Policy{
     Cty:        jose.DefaultCty,
 }
 
-compact, err := jose.Seal(payload, outbound, resolver)   // -> one compact JWE, five segments
+compact, err := jose.Seal(payload, outbound, resolver) // -> one compact JWE, five segments
+if err != nil {
+    return err
+}
 plaintext, claims, hdr, err := jose.Open(compact, inbound, resolver)
+if err != nil {
+    return err
+}
 ```
 
 **Validation rules** (all enforced by `Policy.Validate()`, and by `Seal` itself before it touches the keystore):

@@ -197,7 +197,7 @@ reports and the caller decides. A freshness knob here would also be the first th
 - [wiki/migrations.md](migrations.md) atom `[C64.15]` — the detect/gate/apply runbook for
   the comparability break
 - `jose/policy.go` (`SealMode`, `validateMode`, `validateBareHeaders`,
-  `validateBareInbound`, `validateBareOutbound`), `jose/bare.go` (`sealBare`, `openBare`,
+  `validateBareDirection`, `validateBareKids`), `jose/bare.go` (`sealBare`, `openBare`,
   `bareExtraHeaders`), `jose/algorithms.go` (`IsAllowedEncFor`, `AllowedContentEncsFor`),
   `jose/opener.go` (`Header`), `jose/sealer.go`,
   `jose/internal/cryptoadapter/extra.go` (`CheckExtra`)
