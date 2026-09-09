@@ -4270,7 +4270,8 @@ client, err := httpclient.NewBuilder(log).
         // httpclient.VisaMLEEnvelope() returns the one for Visa Message Level Encryption
         // ({"encData":"<compact>"} as application/json, recognised inbound by shape).
         // Wrap runs only for Outbound and Unwrap only for Inbound, so an Envelope with
-        // neither policy fails Build — as does a negative MaxResponseBytes beside Inbound.
+        // neither policy fails Build — as does a negative MaxResponseBytes when an
+        // Envelope and Inbound are both set (without an Envelope, negative stays unbounded).
         Envelope: httpclient.VisaMLEEnvelope(), // httpclient.BodyEnvelope
     }).
     Build()
