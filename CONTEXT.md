@@ -213,11 +213,22 @@ queue, parking lot
 ### Payload sealing
 
 **Seal**:
-Turning one outbound event into its protected wire form — encrypt the subject,
-sign the whole result — exactly once, before publish. Opening reverses it:
-verify first, decrypt second; a sealed-shaped body that fails any open step is
-poison, never plaintext.
-_Avoid_: encrypt (alone — sealing is both operations), protect, wrap
+Turning one outbound payload into its protected wire form, exactly once, before
+it goes out — applying whatever the policy's seal mode says that form is. The
+default is both operations, encrypt then sign: the sealed-event shape (encrypt
+the subject, sign the whole result) and the JWE-of-JWS body shape. The bare-JWE
+shape is encryption alone, for a peer already authenticated out of band.
+Opening reverses whichever shape was sealed; a sealed-shaped body that fails any
+open step is poison, never plaintext.
+_Avoid_: protect, wrap; and "encrypt" as a synonym for sealing — encryption is
+one operation the mode may select, not the name of the act
+
+**Seal mode**:
+Which protected shape a policy seals and opens — the signed default, or the
+bare one whose sender is authenticated by the transport instead. It is a field
+on the policy, not a second door: the same seal and open calls read it.
+_Avoid_: bare encryption, raw JWE, MLE (Visa's name for their instance of the
+bare shape, not a framework term)
 
 **Subject**:
 The one field of an event declared sensitive: its value travels encrypted

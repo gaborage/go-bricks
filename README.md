@@ -93,7 +93,7 @@ runs that step on its own.
 - **Consumer-side inbox** for exactly-once *transactional* event processing (dedup ledger written atomically with the handler's DB writes via `InboxProcessor.ProcessOnce`)
 - **Job scheduler** with gocron, overlapping prevention, panic recovery, and system APIs
 - **Named RSA key pair and symmetric secret management** from DER/raw files or base64 environment variables
-- **JOSE middleware** for nested JWE-of-JWS protection on HTTP request/response bodies (Visa-style integrations)
+- **JOSE middleware** for nested JWE-of-JWS protection on HTTP request/response bodies, or the encrypt-only bare-JWE shape Visa Message Level Encryption specifies (Visa-style integrations)
 - **Multi-tenant architecture** with complete resource isolation and context propagation
 - **Flyway migration integration** for schema evolution
 - **Observability** with W3C trace propagation, custom metrics, dual-mode logs, and health endpoints
@@ -803,10 +803,12 @@ type CreateTokenResponse struct {
 **Key properties:**
 
 - **Bidirectional symmetry enforced** — request and response must both carry tags, or neither (registration-time check).
-- **Strict algorithm allowlist** — `RS256`/`PS256` for signing; `RSA-OAEP-256` + `A256GCM` for encryption. `alg=none`, `HS*`, and `RSA1_5` are rejected at parse time.
+- **Strict algorithm allowlist** — `RS256`/`PS256` for signing; `RSA-OAEP-256` + `A256GCM` for encryption. `alg=none`, `HS*`, and `RSA1_5` are rejected at parse time. `A128GCM` is admitted only in bare-JWE mode (below).
 - **Hybrid error envelope** — pre-trust failures (decrypt failed, signature invalid) emit a plaintext minimal `{code,message}` envelope so nothing leaks to unauthenticated peers; post-trust handler errors emit the standard `APIResponse` envelope, encrypted with the route's outbound policy.
 - **Fail-fast at startup** — every `kid` is resolved against the keystore at `RegisterHandler` time. Missing keys, asymmetric tags, and `WithRawResponse()` conflicts panic at startup, never at runtime.
 - **Observability** — spans (`jose.decode_request`, `jose.encode_response`), failure counter (`jose.failures.total` by code/direction), duration histogram (`jose.operation.duration`).
+
+**Bare-JWE mode (Visa Message Level Encryption).** A `jose.Policy` can also select the encrypt-only shape Visa MLE specifies — a single compact JWE with no inner JWS, `A128GCM`, a `typ` header and an `iat` in epoch milliseconds — via `Mode: jose.SealModeBareJWE`. Nothing is signed there, so the peer must be authenticated out of band (`X-Pay-Token`, mTLS). See [wiki/jose.md](wiki/jose.md#bare-jwe-mode-visa-message-level-encryption) (ADR-107).
 
 Wire it by registering `keystore.NewModule()` **before** any module that declares JOSE-tagged routes — `app/module_registry.go` then auto-injects `KeyStore`, logger, tracer, and meter into the middleware. See [CLAUDE.md](CLAUDE.md#jose-middleware) for the complete failure-mode → `IAPIError` table and [llms.txt](llms.txt) for end-to-end examples.
 
