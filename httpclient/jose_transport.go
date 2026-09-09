@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	nethttp "net/http"
-	"strings"
 
 	"github.com/gaborage/go-bricks/jose"
 )
@@ -158,16 +157,24 @@ func (t *JOSETransport) wrapRequest(req *nethttp.Request) (*nethttp.Request, err
 		return nil, err
 	}
 
+	body, contentType := []byte(compact), jose.ContentType
+	if t.WrapBody != nil {
+		body, contentType, err = t.WrapBody(compact)
+		if err != nil {
+			return nil, fmt.Errorf("httpclient: wrap JOSE request body: %w", err)
+		}
+	}
+
 	clone := req.Clone(req.Context())
-	clone.Body = io.NopCloser(strings.NewReader(compact))
-	clone.ContentLength = int64(len(compact))
+	clone.Body = io.NopCloser(bytes.NewReader(body))
+	clone.ContentLength = int64(len(body))
 	// GetBody enables stdlib-driven request replay: it's invoked on redirect-following,
 	// connection retry, and HTTP/2 retry-on-RST_STREAM. Without it those paths see an
 	// already-drained body and silently send an empty payload.
 	clone.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(strings.NewReader(compact)), nil
+		return io.NopCloser(bytes.NewReader(body)), nil
 	}
-	clone.Header.Set(headerContentType, jose.ContentType)
+	clone.Header.Set(headerContentType, contentType)
 	return clone, nil
 }
 

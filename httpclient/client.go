@@ -421,7 +421,10 @@ func normalizedJOSEPolicy(p *jose.Policy) (*jose.Policy, error) {
 		return nil, nil
 	}
 	cp := *p
-	if cp.SigAlg == "" {
+	// Bare-JWE mode signs nothing and Validate rejects a policy that names a signature
+	// algorithm, so the default must not be filled in there: doing so would turn every
+	// valid bare policy into a Build failure.
+	if cp.SigAlg == "" && cp.Mode != jose.SealModeBareJWE {
 		cp.SigAlg = jose.DefaultSigAlg
 	}
 	if cp.KeyAlg == "" {
