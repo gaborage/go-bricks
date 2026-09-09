@@ -1,6 +1,7 @@
 package jose
 
 import (
+	"maps"
 	"time"
 
 	"github.com/gaborage/go-bricks/jose/internal/cryptoadapter"
@@ -31,33 +32,23 @@ func sealBare(payload []byte, p *Policy, r KeyResolver) (string, error) {
 		Extra:  p.bareExtraHeaders(),
 	})
 	if err != nil {
-		return "", &Error{
-			Sentinel: ErrOutboundFailed,
-			Code:     codeOutboundFailed,
-			Status:   500,
-			Message:  "Failed to encrypt outbound payload",
-			Kid:      p.EncryptKid,
-			Alg:      string(p.KeyAlg),
-			Enc:      string(p.Enc),
-			Cause:    err,
-		}
+		return "", encryptFailed(p, err)
 	}
 	return jweCompact, nil
 }
 
-// bareExtraHeaders merges the policy's protected headers with the stamped iat, without
-// mutating the policy's map. Returns nil when there is nothing to write.
+// bareExtraHeaders returns the protected headers Seal writes: the policy's own map when
+// there is no iat to stamp, otherwise a copy carrying both. The policy's map is never
+// mutated.
 func (p *Policy) bareExtraHeaders() map[string]any {
-	if len(p.ProtectedHeaders) == 0 && !p.IATMillis {
-		return nil
+	// Nothing to stamp: cryptoadapter.Encrypt only ranges over Extra, never retaining or
+	// mutating it, so handing it the policy's own map is safe.
+	if !p.IATMillis {
+		return p.ProtectedHeaders
 	}
 	extra := make(map[string]any, len(p.ProtectedHeaders)+1)
-	for k, v := range p.ProtectedHeaders {
-		extra[k] = v
-	}
-	if p.IATMillis {
-		extra["iat"] = nowMillis()
-	}
+	maps.Copy(extra, p.ProtectedHeaders)
+	extra["iat"] = nowMillis()
 	return extra
 }
 
@@ -72,24 +63,16 @@ func openBare(compact string, p *Policy, r KeyResolver) (plaintext []byte, claim
 	payload, jweHdr, err := cryptoadapter.Decrypt(compact, decKey, &cryptoadapter.DecryptOptions{
 		ExpectedKid:       p.DecryptKid,
 		AllowedKeyAlgs:    AllowedKeyAlgs(),
-		AllowedContentEnc: AllowedContentEncsFor(p.Mode),
+		AllowedContentEnc: AllowedContentEncsFor(SealModeBareJWE),
 	})
 	hdr.JWE = cryptoHeaderToOpen(&jweHdr)
 	if err != nil {
 		return nil, nil, hdr, mapDecryptError(err, p, &jweHdr)
 	}
 
-	// Same permissive cty rule as the nested path, applied to the only header there is:
-	// a peer that declares a cty must agree with the policy, one that omits it is fine.
-	if p.Cty != "" && jweHdr.Cty != "" && jweHdr.Cty != p.Cty {
-		return nil, nil, hdr, &Error{
-			Sentinel: ErrCtyRejected,
-			Code:     codeCtyRejected,
-			Status:   400,
-			Message:  "Disallowed cty header",
-			Kid:      jweHdr.Kid,
-			Alg:      jweHdr.Alg,
-		}
+	// Same permissive cty rule as the nested path, applied to the only header there is.
+	if ctyErr := ctyMismatch(p.Cty, &jweHdr); ctyErr != nil {
+		return nil, nil, hdr, ctyErr
 	}
 
 	return payload, parseClaims(payload), hdr, nil

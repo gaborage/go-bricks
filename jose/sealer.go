@@ -36,13 +36,7 @@ func Seal(payload []byte, p *Policy, r KeyResolver) (string, error) {
 	// algorithms and protected headers are handed to the crypto adapter verbatim. Both
 	// live callers (the tag scanner, httpclient's Build) normalize and validate first, so
 	// a policy reaching here unvalidated is one that skipped that path and must fail closed.
-	if err := p.validateMode(); err != nil {
-		return "", err
-	}
-	if err := p.validateAlgorithms(); err != nil {
-		return "", err
-	}
-	if err := p.validateDirection(); err != nil {
+	if err := p.Validate(); err != nil {
 		return "", err
 	}
 
@@ -83,17 +77,22 @@ func Seal(payload []byte, p *Policy, r KeyResolver) (string, error) {
 		Cty:    "JWS",
 	})
 	if err != nil {
-		return "", &Error{
-			Sentinel: ErrOutboundFailed,
-			Code:     codeOutboundFailed,
-			Status:   500,
-			Message:  "Failed to encrypt outbound payload",
-			Kid:      p.EncryptKid,
-			Alg:      string(p.KeyAlg),
-			Enc:      string(p.Enc),
-			Cause:    err,
-		}
+		return "", encryptFailed(p, err)
 	}
 
 	return jweCompact, nil
+}
+
+// encryptFailed wraps a crypto-adapter encrypt failure, shared by both seal modes.
+func encryptFailed(p *Policy, err error) *Error {
+	return &Error{
+		Sentinel: ErrOutboundFailed,
+		Code:     codeOutboundFailed,
+		Status:   500,
+		Message:  "Failed to encrypt outbound payload",
+		Kid:      p.EncryptKid,
+		Alg:      string(p.KeyAlg),
+		Enc:      string(p.Enc),
+		Cause:    err,
+	}
 }

@@ -1,6 +1,8 @@
 package jose
 
 import (
+	"slices"
+
 	jose "github.com/go-jose/go-jose/v4"
 
 	"github.com/gaborage/go-bricks/jose/internal/cryptoadapter"
@@ -68,6 +70,12 @@ type Policy struct {
 	IATMillis bool
 }
 
+// hasSealHeaderFields reports whether the policy carries any of the header fields only a
+// bare-mode outbound Seal writes.
+func (p *Policy) hasSealHeaderFields() bool {
+	return p.Typ != "" || p.ProtectedHeaders != nil || p.IATMillis
+}
+
 // Validate checks the Policy for internal consistency (correct kids set for the direction,
 // algorithms in the allowlist). It does NOT resolve kids against a KeyResolver — that
 // happens separately at registration time.
@@ -95,7 +103,7 @@ func (p *Policy) Validate() error {
 func (p *Policy) validateMode() error {
 	switch p.Mode {
 	case SealModeJWEofJWS:
-		if p.Typ != "" || p.ProtectedHeaders != nil || p.IATMillis {
+		if p.hasSealHeaderFields() {
 			return &Error{
 				Sentinel: ErrPolicyMismatch,
 				Code:     codePolicyModeMismatch,
@@ -109,7 +117,7 @@ func (p *Policy) validateMode() error {
 		return &Error{
 			Sentinel: ErrPolicyMismatch,
 			Code:     codePolicyModeUnknown,
-			Message:  "unknown seal mode",
+			Message:  "unknown seal mode " + p.Mode.String(),
 		}
 	}
 }
@@ -146,23 +154,24 @@ func (p *Policy) validateAlgorithms() error {
 
 // validateDirection dispatches to the per-direction kid checks.
 func (p *Policy) validateDirection() error {
+	if p.Mode == SealModeBareJWE {
+		return p.validateBareDirection()
+	}
 	switch p.Direction {
 	case DirectionInbound:
-		if p.Mode == SealModeBareJWE {
-			return p.validateBareInbound()
-		}
 		return p.validateInbound()
 	case DirectionOutbound:
-		if p.Mode == SealModeBareJWE {
-			return p.validateBareOutbound()
-		}
 		return p.validateOutbound()
 	default:
-		return &Error{
-			Sentinel: ErrPolicyMismatch,
-			Code:     "JOSE_POLICY_DIRECTION_UNKNOWN",
-			Message:  "unknown direction",
-		}
+		return errUnknownDirection()
+	}
+}
+
+func errUnknownDirection() *Error {
+	return &Error{
+		Sentinel: ErrPolicyMismatch,
+		Code:     "JOSE_POLICY_DIRECTION_UNKNOWN",
+		Message:  "unknown direction",
 	}
 }
 
@@ -251,50 +260,53 @@ func (p *Policy) validateBareHeaders() error {
 	return nil
 }
 
-// validateBareInbound requires only the decrypt kid: there is no inner JWS to verify, so
-// a verify kid or a signature algorithm signals a policy written for the wrong mode.
-func (p *Policy) validateBareInbound() error {
-	if p.DecryptKid == "" {
-		return &Error{
-			Sentinel: ErrPolicyMismatch,
-			Code:     codePolicyIncomplete,
-			Message:  "inbound bare-JWE policy requires a decrypt kid",
+// validateBareDirection requires exactly the one kid its direction uses: there is no inner
+// JWS, so any other kid or a signature algorithm signals a policy written for the wrong mode.
+func (p *Policy) validateBareDirection() error {
+	switch p.Direction {
+	case DirectionInbound:
+		if err := p.validateBareKids(p.DecryptKid,
+			"inbound bare-JWE policy requires a decrypt kid",
+			"inbound bare-JWE policy must declare only a decrypt kid",
+			p.VerifyKid, p.SignKid, p.EncryptKid); err != nil {
+			return err
 		}
-	}
-	if p.VerifyKid != "" || p.SignKid != "" || p.EncryptKid != "" || p.SigAlg != "" {
-		return &Error{
-			Sentinel: ErrPolicyMismatch,
-			Code:     codePolicyDirectionMismatch,
-			Message:  "inbound bare-JWE policy must declare only a decrypt kid",
+		// Typ/ProtectedHeaders/IATMillis describe headers Seal writes; on an inbound policy
+		// nothing would ever read them, and silently ignoring them would let a consumer
+		// believe a header was enforced on the way in.
+		if p.hasSealHeaderFields() {
+			return &Error{
+				Sentinel: ErrPolicyMismatch,
+				Code:     codePolicyDirectionMismatch,
+				Message:  "typ, protected headers and iat stamping are outbound-only",
+			}
 		}
+		return nil
+	case DirectionOutbound:
+		return p.validateBareKids(p.EncryptKid,
+			"outbound bare-JWE policy requires an encrypt kid",
+			"outbound bare-JWE policy must declare only an encrypt kid",
+			p.SignKid, p.VerifyKid, p.DecryptKid)
+	default:
+		return errUnknownDirection()
 	}
-	// Typ/ProtectedHeaders/IATMillis describe headers Seal writes; on an inbound policy
-	// nothing would ever read them, and silently ignoring them would let a consumer
-	// believe a header was enforced on the way in.
-	if p.Typ != "" || p.ProtectedHeaders != nil || p.IATMillis {
-		return &Error{
-			Sentinel: ErrPolicyMismatch,
-			Code:     codePolicyDirectionMismatch,
-			Message:  "typ, protected headers and iat stamping are outbound-only",
-		}
-	}
-	return nil
 }
 
-// validateBareOutbound requires only the encrypt kid; the mirror of validateBareInbound.
-func (p *Policy) validateBareOutbound() error {
-	if p.EncryptKid == "" {
+// validateBareKids checks that required is set and that neither a forbidden kid nor a
+// signature algorithm is declared.
+func (p *Policy) validateBareKids(required, missingMsg, forbiddenMsg string, forbidden ...string) error {
+	if required == "" {
 		return &Error{
 			Sentinel: ErrPolicyMismatch,
 			Code:     codePolicyIncomplete,
-			Message:  "outbound bare-JWE policy requires an encrypt kid",
+			Message:  missingMsg,
 		}
 	}
-	if p.SignKid != "" || p.VerifyKid != "" || p.DecryptKid != "" || p.SigAlg != "" {
+	if p.SigAlg != "" || slices.ContainsFunc(forbidden, func(kid string) bool { return kid != "" }) {
 		return &Error{
 			Sentinel: ErrPolicyMismatch,
 			Code:     codePolicyDirectionMismatch,
-			Message:  "outbound bare-JWE policy must declare only an encrypt kid",
+			Message:  forbiddenMsg,
 		}
 	}
 	return nil

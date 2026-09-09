@@ -1,6 +1,7 @@
 package jose
 
 import (
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
@@ -8,12 +9,14 @@ import (
 	"errors"
 	"flag"
 	"os"
-	"strings"
+	"sync"
 	"testing"
 
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/jose/internal/cryptoadapter"
 )
 
 // bareFixture holds one key pair plus the matching bare-mode policies. The kid namespace
@@ -25,42 +28,39 @@ type bareFixture struct {
 	inbound  *Policy
 }
 
+// bareKeys is the one key pair every test in this file shares. Keys are read-only here, so
+// generating a fresh 2048-bit pair per test would only cost wall-clock time.
+var bareKeys = sync.OnceValues(func() (*rsa.PrivateKey, *rsa.PublicKey) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic(err)
+	}
+	return priv, &priv.PublicKey
+})
+
 func newBareFixture(t *testing.T) *bareFixture {
 	t.Helper()
-	ourPriv, ourPub := generateKeyPair(t)
+	ourPriv, ourPub := bareKeys()
+	outbound, inbound := bareOutbound(), bareInbound()
+	outbound.EncryptKid = "our-key"
+	inbound.DecryptKid = "our-key"
 	return &bareFixture{
 		ourPriv: ourPriv,
 		resolver: &fixtureResolver{
 			priv: map[string]*rsa.PrivateKey{"our-key": ourPriv},
 			pub:  map[string]*rsa.PublicKey{"our-key": ourPub},
 		},
-		outbound: &Policy{
-			Direction:  DirectionOutbound,
-			Mode:       SealModeBareJWE,
-			EncryptKid: "our-key",
-			KeyAlg:     DefaultKeyAlg,
-			Enc:        jose.A128GCM,
-		},
-		inbound: &Policy{
-			Direction:  DirectionInbound,
-			Mode:       SealModeBareJWE,
-			DecryptKid: "our-key",
-			KeyAlg:     DefaultKeyAlg,
-			Enc:        jose.A128GCM,
-		},
+		outbound: outbound,
+		inbound:  inbound,
 	}
 }
 
-// protectedHeaderOf decodes segment 0 of a compact serialization directly, so the
-// assertions read the wire bytes rather than anything the package computed.
-func protectedHeaderOf(t *testing.T, compact string) map[string]any {
+// peekHeader reads the protected header straight off the wire, so the assertions see what
+// was serialized rather than anything the package kept.
+func peekHeader(t *testing.T, compact string) cryptoadapter.Header {
 	t.Helper()
-	seg, _, ok := strings.Cut(compact, ".")
-	require.True(t, ok)
-	raw, err := base64.RawURLEncoding.DecodeString(seg)
+	hdr, err := cryptoadapter.PeekProtectedHeader(compact)
 	require.NoError(t, err)
-	var hdr map[string]any
-	require.NoError(t, json.Unmarshal(raw, &hdr))
 	return hdr
 }
 
@@ -77,12 +77,13 @@ func decryptWithGoJose(t *testing.T, compact string, key *rsa.PrivateKey, enc jo
 	return plaintext
 }
 
-// headerIAT reads the wire iat as an integer; JSON decodes it as float64.
+// headerIAT reads the wire iat as an integer.
 func headerIAT(t *testing.T, compact string) int64 {
 	t.Helper()
-	iat, ok := protectedHeaderOf(t, compact)["iat"].(float64)
-	require.True(t, ok, "iat must be a JSON number")
-	return int64(iat)
+	hdr := peekHeader(t, compact)
+	iat, err := hdr.ExtraInt64("iat")
+	require.NoError(t, err)
+	return iat
 }
 
 func TestSealBareJWEWritesProtectedHeaders(t *testing.T) {
@@ -95,13 +96,15 @@ func TestSealBareJWEWritesProtectedHeaders(t *testing.T) {
 	compact, err := Seal(payload, f.outbound, f.resolver)
 	require.NoError(t, err)
 
-	hdr := protectedHeaderOf(t, compact)
-	assert.Equal(t, "RSA-OAEP-256", hdr["alg"])
-	assert.Equal(t, "A128GCM", hdr["enc"])
-	assert.Equal(t, "our-key", hdr["kid"])
-	assert.Equal(t, "JOSE", hdr["typ"])
-	assert.Equal(t, "acme-payments", hdr["iss"])
-	assert.NotContains(t, hdr, "cty", "an unset policy Cty must leave cty off the wire")
+	hdr := peekHeader(t, compact)
+	assert.Equal(t, "RSA-OAEP-256", hdr.Alg)
+	assert.Equal(t, "A128GCM", hdr.Enc)
+	assert.Equal(t, "our-key", hdr.Kid)
+	assert.Equal(t, "JOSE", hdr.Typ)
+	iss, ok := hdr.ExtraString("iss")
+	assert.True(t, ok)
+	assert.Equal(t, "acme-payments", iss)
+	assert.Empty(t, hdr.Cty, "an unset policy Cty must leave cty off the wire")
 
 	// Milliseconds, not seconds: 2001-09-09 in seconds is 1e9, in milliseconds 1e12.
 	iat := headerIAT(t, compact)
@@ -118,7 +121,7 @@ func TestSealBareJWEWritesCtyWhenPolicySetsIt(t *testing.T) {
 
 	compact, err := Seal([]byte(`{}`), f.outbound, f.resolver)
 	require.NoError(t, err)
-	assert.Equal(t, DefaultCty, protectedHeaderOf(t, compact)["cty"])
+	assert.Equal(t, DefaultCty, peekHeader(t, compact).Cty)
 }
 
 func TestSealBareJWEOmitsIATWhenNotStamping(t *testing.T) {
@@ -126,9 +129,10 @@ func TestSealBareJWEOmitsIATWhenNotStamping(t *testing.T) {
 
 	compact, err := Seal([]byte(`{}`), f.outbound, f.resolver)
 	require.NoError(t, err)
-	hdr := protectedHeaderOf(t, compact)
-	assert.NotContains(t, hdr, "iat")
-	assert.NotContains(t, hdr, "typ")
+	hdr := peekHeader(t, compact)
+	assert.Empty(t, hdr.Typ)
+	_, err = hdr.ExtraInt64("iat")
+	assert.ErrorIs(t, err, cryptoadapter.ErrExtraAbsent)
 }
 
 func TestSealBareJWERejectsInvalidPolicy(t *testing.T) {
@@ -186,7 +190,7 @@ func TestOpenBareJWERoundTripA256GCM(t *testing.T) {
 
 	compact, err := Seal(payload, f.outbound, f.resolver)
 	require.NoError(t, err)
-	assert.Equal(t, "A256GCM", protectedHeaderOf(t, compact)["enc"])
+	assert.Equal(t, "A256GCM", peekHeader(t, compact).Enc)
 
 	plaintext, _, _, err := Open(compact, f.inbound, f.resolver)
 	require.NoError(t, err)
@@ -242,9 +246,9 @@ func TestOpenBareJWECtyRule(t *testing.T) {
 		{"policy_omits_cty", "text/csv", "", ""},
 		{"disagreeing_cty", "text/csv", DefaultCty, "JOSE_CTY_REJECTED"},
 	}
+	f := newBareFixture(t)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := newBareFixture(t)
 			f.outbound.Cty = tt.sealCty
 			compact, err := Seal([]byte(`{}`), f.outbound, f.resolver)
 			require.NoError(t, err)

@@ -1,6 +1,10 @@
 package jose
 
-import jose "github.com/go-jose/go-jose/v4"
+import (
+	"slices"
+
+	jose "github.com/go-jose/go-jose/v4"
+)
 
 const (
 	DefaultSigAlg = jose.RS256
@@ -61,68 +65,41 @@ func contentEncsForMode(mode SealMode) []jose.ContentEncryption {
 // of IsAllowedEnc wherever a Policy's Mode is known; IsAllowedEnc keeps the JWE-of-JWS
 // meaning.
 func IsAllowedEncFor(mode SealMode, enc jose.ContentEncryption) bool {
-	for _, e := range contentEncsForMode(mode) {
-		if e == enc {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(contentEncsForMode(mode), enc)
 }
 
 // AllowedContentEncsFor returns a copy of the content-encryption allowlist for the given
 // seal mode, for callers threading it into go-jose primitives (e.g. jose.ParseEncrypted).
 // An unknown mode yields an empty list, which rejects every token.
 func AllowedContentEncsFor(mode SealMode) []jose.ContentEncryption {
-	src := contentEncsForMode(mode)
-	out := make([]jose.ContentEncryption, len(src))
-	copy(out, src)
-	return out
+	return slices.Clone(contentEncsForMode(mode))
 }
 
 func IsAllowedSigAlg(alg jose.SignatureAlgorithm) bool {
-	for _, a := range allowedSigAlgs {
-		if a == alg {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowedSigAlgs, alg)
 }
 
 func IsAllowedKeyAlg(alg jose.KeyAlgorithm) bool {
-	for _, a := range allowedKeyAlgs {
-		if a == alg {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowedKeyAlgs, alg)
 }
 
+// IsAllowedEnc reports whether enc is permitted on the JWE-of-JWS path.
 func IsAllowedEnc(enc jose.ContentEncryption) bool {
-	for _, e := range allowedContentEncs {
-		if e == enc {
-			return true
-		}
-	}
-	return false
+	return IsAllowedEncFor(SealModeJWEofJWS, enc)
 }
 
 // AllowedSigAlgs returns a copy of the signature-algorithm allowlist for callers that
 // need to pass it to go-jose primitives (e.g., jose.ParseSigned). Returning a copy
 // prevents external mutation.
 func AllowedSigAlgs() []jose.SignatureAlgorithm {
-	out := make([]jose.SignatureAlgorithm, len(allowedSigAlgs))
-	copy(out, allowedSigAlgs)
-	return out
+	return slices.Clone(allowedSigAlgs)
 }
 
 func AllowedKeyAlgs() []jose.KeyAlgorithm {
-	out := make([]jose.KeyAlgorithm, len(allowedKeyAlgs))
-	copy(out, allowedKeyAlgs)
-	return out
+	return slices.Clone(allowedKeyAlgs)
 }
 
+// AllowedContentEncs returns a copy of the JWE-of-JWS content-encryption allowlist.
 func AllowedContentEncs() []jose.ContentEncryption {
-	out := make([]jose.ContentEncryption, len(allowedContentEncs))
-	copy(out, allowedContentEncs)
-	return out
+	return AllowedContentEncsFor(SealModeJWEofJWS)
 }

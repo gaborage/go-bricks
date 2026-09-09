@@ -73,19 +73,29 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 	// optional header per RFC 7515 §4.1.10. This catches content-type confusion
 	// (peer signs cty=text/csv while we parse the bytes as JSON) without breaking
 	// peers that don't bother to set cty.
-	if p.Cty != "" && jwsHdr.Cty != "" && jwsHdr.Cty != p.Cty {
-		return nil, nil, hdr, &Error{
-			Sentinel: ErrCtyRejected,
-			Code:     codeCtyRejected,
-			Status:   400,
-			Message:  "Disallowed cty header",
-			Kid:      jwsHdr.Kid,
-			Alg:      jwsHdr.Alg,
-		}
+	if ctyErr := ctyMismatch(p.Cty, &jwsHdr); ctyErr != nil {
+		return nil, nil, hdr, ctyErr
 	}
 
 	claims = parseClaims(innerPayload)
 	return innerPayload, claims, hdr, nil
+}
+
+// ctyMismatch reports the cty rule both modes apply, returning nil when the header is
+// acceptable. Permissive: only a peer that explicitly declares a cty disagreeing with the
+// policy is rejected; cty is optional per RFC 7515 §4.1.10.
+func ctyMismatch(policyCty string, h *cryptoadapter.Header) *Error {
+	if policyCty == "" || h.Cty == "" || h.Cty == policyCty {
+		return nil
+	}
+	return &Error{
+		Sentinel: ErrCtyRejected,
+		Code:     codeCtyRejected,
+		Status:   400,
+		Message:  "Disallowed cty header",
+		Kid:      h.Kid,
+		Alg:      h.Alg,
+	}
 }
 
 // OpenHeader holds the diagnostic headers from both JOSE layers, surfaced to the caller
