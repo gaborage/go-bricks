@@ -175,7 +175,7 @@ jobs:
           echo "::warning::$msg"
           echo "$msg" >> "$GITHUB_STEP_SUMMARY"
           title="chore(migrate): cut the tools/migration CLI tag (stale since ${latest_cli:-<none>})"
-          existing="$(gh issue list --state open --search 'chore(migrate): cut the tools/migration CLI tag in:title' --json number --jq '.[0].number' || true)"
+          existing="$(gh issue list --state open --search '"chore(migrate): cut the tools/migration CLI tag" in:title author:app/github-actions' --json number --jq '.[0].number' || true)"
           if [ -n "$existing" ] && [ "$existing" != "null" ]; then
             gh issue comment "$existing" --body "$msg" || echo "issue comment failed (non-fatal)"
           else

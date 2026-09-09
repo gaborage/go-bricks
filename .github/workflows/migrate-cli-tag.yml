@@ -39,7 +39,7 @@ jobs:
             echo "CLI $cli_ver still trails framework $latest_fw — leaving any drift issue open"; exit 0
           fi
           echo "CLI $cli_ver is fresh vs framework $latest_fw — closing any open drift issue"
-          nums="$(gh issue list --state open --search 'chore(migrate): cut the tools/migration CLI tag in:title' --json number --jq '.[].number')"
+          nums="$(gh issue list --state open --search '"chore(migrate): cut the tools/migration CLI tag" in:title author:app/github-actions' --json number --jq '.[].number')"
           if [ -z "$nums" ]; then
             echo "no open drift issue (ok)"; exit 0
           fi
