@@ -287,3 +287,24 @@ func TestPolicyValidateBareModeStillRequiresApprovedKeyAlg(t *testing.T) {
 	require.ErrorIs(t, err, ErrAlgorithmDisallowed)
 	requireJOSEErrorCode(t, err, codeAlgorithmDisallowed)
 }
+
+func TestPolicyValidateBareInboundRejectsOutboundOnlyFields(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(p *Policy)
+	}{
+		{"typ", func(p *Policy) { p.Typ = "JOSE" }},
+		{"protected_headers", func(p *Policy) { p.ProtectedHeaders = map[string]any{"iss": "acme"} }},
+		{"empty_protected_headers_map", func(p *Policy) { p.ProtectedHeaders = map[string]any{} }},
+		{"iat_millis", func(p *Policy) { p.IATMillis = true }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := bareInbound()
+			tt.mutate(p)
+			err := p.Validate()
+			require.ErrorIs(t, err, ErrPolicyMismatch)
+			requireJOSEErrorCode(t, err, codePolicyDirectionMismatch)
+		})
+	}
+}

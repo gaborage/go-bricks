@@ -52,18 +52,18 @@ type Policy struct {
 	Enc    jose.ContentEncryption
 	Cty    string
 
-	// Typ is the JWE protected `typ` header. SealModeBareJWE only; Visa Message Level
-	// Encryption expects "JOSE".
+	// Typ is the JWE protected `typ` header written by Seal. SealModeBareJWE OUTBOUND
+	// only; Visa Message Level Encryption expects "JOSE".
 	Typ string
 
-	// ProtectedHeaders are copied verbatim into the JWE protected header. SealModeBareJWE
-	// only. Naming a param the framework owns (alg, enc, kid, cty, typ) or one JOSE
+	// ProtectedHeaders are copied verbatim into the JWE protected header by Seal.
+	// SealModeBareJWE OUTBOUND only. Naming a param the framework owns (alg, enc, kid, cty, typ) or one JOSE
 	// reserves is a validation error, never an overwrite.
 	ProtectedHeaders map[string]any
 
 	// IATMillis makes Seal stamp an `iat` protected header holding Unix epoch
 	// MILLISECONDS at seal time — the Visa MLE convention, not the seconds-based JWT
-	// claim of the same name. SealModeBareJWE only. jose never judges its freshness on
+	// claim of the same name. SealModeBareJWE OUTBOUND only. jose never judges its freshness on
 	// the way in; that is the caller's policy.
 	IATMillis bool
 }
@@ -266,6 +266,16 @@ func (p *Policy) validateBareInbound() error {
 			Sentinel: ErrPolicyMismatch,
 			Code:     codePolicyDirectionMismatch,
 			Message:  "inbound bare-JWE policy must declare only a decrypt kid",
+		}
+	}
+	// Typ/ProtectedHeaders/IATMillis describe headers Seal writes; on an inbound policy
+	// nothing would ever read them, and silently ignoring them would let a consumer
+	// believe a header was enforced on the way in.
+	if p.Typ != "" || p.ProtectedHeaders != nil || p.IATMillis {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyDirectionMismatch,
+			Message:  "typ, protected headers and iat stamping are outbound-only",
 		}
 	}
 	return nil
