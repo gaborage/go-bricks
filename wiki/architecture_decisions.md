@@ -1538,6 +1538,37 @@ empty-scalar hook deliberately do not, because "is there a resolvable value" mus
 defaults. `preloadDeniedPrefixes` is retired; `derivationDeniedPrefixes` stays. Non-breaking:
 no exported identifier or error string moves.
 
+### [ADR-107: Bare-JWE Mode Is a Field on the Policy, Not a Second Door](adr_107_jose_bare_jwe_mode.md)
+
+**Date:** 2026-09-09 | **Status:** Accepted | **Breaking:** `jose.Policy` gains a `map[string]any` field and stops being comparable — `==` and map-key use on it no longer compile
+
+`jose` shipped one wire shape, nested JWE-of-JWS, and Visa Message Level Encryption does not
+have it: a single compact JWE with no inner JWS, `A128GCM` content encryption, `typ: "JOSE"`,
+an `iat` protected header in epoch MILLISECONDS, and a sender authenticated out of band
+(`X-Pay-Token`, mTLS) rather than by a signature. `Policy` now carries `Mode SealMode`, whose
+zero value `SealModeJWEofJWS` keeps today's posture byte-for-byte, plus `Typ`,
+`ProtectedHeaders map[string]any` and `IATMillis` — the last three bare-mode OUTBOUND only,
+refused on a nested policy with `JOSE_POLICY_MODE_MISMATCH` and on a bare inbound one with
+`JOSE_POLICY_DIRECTION_MISMATCH`. `Seal` and `Open` stay the only doors and
+read the mode; there is no second policy type and no second entry point. `A128GCM` is admitted
+by MODE through the new `IsAllowedEncFor`/`AllowedContentEncsFor`, so the nested path's floor
+stays `A256GCM` (`IsAllowedEnc` keeps that meaning) and `jose/sealed` (ADR-097) is untouched;
+`RSA1_5`, `alg=none` and ECDSA stay rejected in both modes, and an unknown mode resolves to an
+empty allowlist that rejects every token. `typ` is its own field because
+`cryptoadapter.CheckExtra` — now exported and run at policy-validation time, yielding
+`JOSE_POLICY_HEADER_COLLISION` — owns it, and a static map plus a bool was chosen over a
+per-request callback so a colliding header is caught wherever `Validate` runs, at startup;
+`Seal` re-validates, so a policy that skipped a registration seam fails per request instead. `Open` in
+bare mode decrypts and reports `OpenHeader.JWE.IATMillis` without judging freshness, the stance
+ADR-097 set for replay; `Header` gained scalar fields rather than a map so it stays comparable.
+`Seal` now runs mode, algorithm and direction validation before touching the keystore in both
+modes. Compiler-caught on the consumer side: comparing two `jose.Policy` values or keying a map
+on one stops building — compare the fields you care about, or key on the kids. Bare mode is
+reachable only through `jose.Seal`/`jose.Open` this round; the `httpclient` envelope hooks land
+in the next stacked PR. See [migrations.md](migrations.md) `[C64.15]`.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2308,7 +2339,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-106) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-107) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

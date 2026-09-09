@@ -35,6 +35,18 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 		}
 	}
 
+	// Defense in depth, mirroring Seal: every framework caller (the tag scanner,
+	// httpclient's Build) validates before it ever gets here, so this only binds a
+	// consumer that hand-builds a policy and calls Open directly. Policy errors surface
+	// as the same *Error codes Validate always returned.
+	if policyErr := p.Validate(); policyErr != nil {
+		return nil, nil, OpenHeader{}, policyErr
+	}
+
+	if p.Mode == SealModeBareJWE {
+		return openBare(compact, p, r)
+	}
+
 	decKey, err := r.PrivateKey(p.DecryptKid)
 	if err != nil {
 		return nil, nil, OpenHeader{}, err
@@ -44,10 +56,11 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 		return nil, nil, OpenHeader{}, err
 	}
 
+	keyAlgs, encs := inboundAllowlists(p)
 	jwsCompact, jweHdr, err := cryptoadapter.Decrypt(compact, decKey, &cryptoadapter.DecryptOptions{
 		ExpectedKid:       p.DecryptKid,
-		AllowedKeyAlgs:    AllowedKeyAlgs(),
-		AllowedContentEnc: AllowedContentEncs(),
+		AllowedKeyAlgs:    keyAlgs,
+		AllowedContentEnc: encs,
 	})
 	hdr.JWE = cryptoHeaderToOpen(&jweHdr)
 	if err != nil {
@@ -69,19 +82,29 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 	// optional header per RFC 7515 §4.1.10. This catches content-type confusion
 	// (peer signs cty=text/csv while we parse the bytes as JSON) without breaking
 	// peers that don't bother to set cty.
-	if p.Cty != "" && jwsHdr.Cty != "" && jwsHdr.Cty != p.Cty {
-		return nil, nil, hdr, &Error{
-			Sentinel: ErrCtyRejected,
-			Code:     "JOSE_CTY_REJECTED",
-			Status:   400,
-			Message:  "Disallowed cty header",
-			Kid:      jwsHdr.Kid,
-			Alg:      jwsHdr.Alg,
-		}
+	if ctyErr := ctyMismatch(p.Cty, &jwsHdr); ctyErr != nil {
+		return nil, nil, hdr, ctyErr
 	}
 
 	claims = parseClaims(innerPayload)
 	return innerPayload, claims, hdr, nil
+}
+
+// ctyMismatch reports the cty rule both modes apply, returning nil when the header is
+// acceptable. Permissive: only a peer that explicitly declares a cty disagreeing with the
+// policy is rejected; cty is optional per RFC 7515 §4.1.10.
+func ctyMismatch(policyCty string, h *cryptoadapter.Header) *Error {
+	if policyCty == "" || h.Cty == "" || h.Cty == policyCty {
+		return nil
+	}
+	return &Error{
+		Sentinel: ErrCtyRejected,
+		Code:     codeCtyRejected,
+		Status:   400,
+		Message:  "Disallowed cty header",
+		Kid:      h.Kid,
+		Alg:      h.Alg,
+	}
 }
 
 // OpenHeader holds the diagnostic headers from both JOSE layers, surfaced to the caller
@@ -93,15 +116,26 @@ type OpenHeader struct {
 
 // Header (jose-package level) is the diagnostic header shape exposed to callers,
 // distinct from the internal cryptoadapter.Header to insulate consumers from library churn.
+// The struct stays comparable (no map or slice fields) so callers can compare two
+// headers directly.
 type Header struct {
 	Kid string
 	Alg string
 	Enc string
 	Cty string
+	Typ string
+	// IATMillis is the `iat` protected header in Unix epoch MILLISECONDS (bare mode's
+	// Visa MLE convention, not the seconds-based JWT claim), 0 when absent or malformed.
+	// Reported, never judged: freshness is the caller's policy.
+	IATMillis int64
 }
 
 func cryptoHeaderToOpen(h *cryptoadapter.Header) Header {
-	return Header{Kid: h.Kid, Alg: h.Alg, Enc: h.Enc, Cty: h.Cty}
+	out := Header{Kid: h.Kid, Alg: h.Alg, Enc: h.Enc, Cty: h.Cty, Typ: h.Typ}
+	if iat, err := h.ExtraInt64("iat"); err == nil {
+		out.IATMillis = iat
+	}
+	return out
 }
 
 func mapDecryptError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {

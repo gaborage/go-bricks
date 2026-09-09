@@ -1,0 +1,47 @@
+{
+  "note": "Generated test material for the jose bare-JWE vectors (go test ./jose -update): disposable RSA keys and the tokens encrypted under them. Never provisioned anywhere; nothing to rotate.",
+  "vectors": [
+    {
+      "name": "bare_a128gcm_with_typ_and_iat",
+      "policy": "bare",
+      "code": "",
+      "enc": "A128GCM",
+      "typ": "JOSE",
+      "iatMillis": 1800000000123,
+      "plaintext": "{\"pan\":\"card-fixture-0000\",\"sub\":\"cardholder-9\"}",
+      "compact": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMTI4R0NNIiwiaWF0IjoxODAwMDAwMDAwMTIzLCJpc3MiOiJhY21lLXBheW1lbnRzIiwia2lkIjoibWxlLWVuYy12MSIsInR5cCI6IkpPU0UifQ.0eSlTNT7A5adh4jxbmYquKynMymTaDHu9U-2JkhPfGFScAg7a7Mt4xIM_3Z43XyMIJGO9zZ-Zt_xgU00_xA4UQXxYl_CWhpBYupNRNAsfrFWYcAL5pzwlzaBJGZ1Zl2WwLfOOnKsGEh2IAhdOTU0iyCjPMVDCdPKFPbbvA32aAS9oZsbRUYYXysKyyaE4HKbNen6fmA4Hdgr7zHR6Ibg_qnT1eFKV3LdsmDQEEny63yLDc11zd2zGEqM08G7nB7oJklnUbJsl-OlpsdIoRwa1Ya-j7eUQiYwembJ0M77IercpkZmHddngzcDDrR-MMeS99ot0GsngvfUEzieKYKp-g.CUvhJrknjyBNFGyg.Mx1TtnVOco6yPgA_kK5-sGkWnFb3jqnptNYJSVbfyqr5gthP2iCOkeVh3U5t2JQ3.5BFbM7mm0FOOkxqb3MQlvw"
+    },
+    {
+      "name": "bare_a256gcm",
+      "policy": "bare",
+      "code": "",
+      "enc": "A256GCM",
+      "plaintext": "{\"pan\":\"card-fixture-0000\",\"sub\":\"cardholder-9\"}",
+      "compact": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoibWxlLWVuYy12MSJ9.k2OZ1TxwIcO13XD88C49qgehX4-FJUjb7gI6mEIWsWbe9Bi4EdbwFYT52t6gd_R_MnADpLACyVs2prK8Yt5uPxqFiWGcu1ktMihNgoPCv-pvORPCsocsy7Hs2yFRmWOIklhWfN9DMFNxgw9zBnL6Ndh8mcn1gXZ274Gauy1xrB9UZF_ToD1jcL5YXisM0rjc_qJLoN5DlyAzWMlCQtyC8BLK8OqEzLV5BEMenD3OIBauTzJFg9yqHlNdWKMtIS6NLz8Vw9sg0zjWkGntkN2vA4x-1BcI49DWdF6ASGtXeJ4ULOPiTZ3W7TNJl7oe0AuHYXmKtGlVgeboEjQf5vl3Jw.itoaLnDTjOQcgqrM.2M-d2CAZoRS6FhyXmi5DGKg7O16nhscofUMH6FFDRnH88KhMslNuKSGWAG6Vmh_Z.rsjkCuqAFRj2xvzvOiOr3w"
+    },
+    {
+      "name": "wrong_kid",
+      "policy": "bare",
+      "code": "JOSE_KID_UNKNOWN",
+      "enc": "A128GCM",
+      "plaintext": "{\"pan\":\"card-fixture-0000\",\"sub\":\"cardholder-9\"}",
+      "compact": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMTI4R0NNIiwia2lkIjoicm9ndWUifQ.qaO_DTjFRHvNg85NPIMsum1_wcqBoirX46XnFMP4FOUvShnvS5Ae5Qv0Ha0Xkl5nVHVV_u5hkIp0ooNYWRBenRD9iEJH4rVxZvWu1J3J-lmU6a1GOKxeovDg3AS3V_GwIHsCHuX3h3r0U0jLQk0LSieF_hfVyyA0vV3YOVCmQvR9UVQMTdbShR2j-a-bVNRo2BrPmUyN8ooZTYILvg5Vvde6J9ojuifTl9RaQAcFbU78UPNppZ8KqBQo3OVU7n5P6iCrJOEdWWQSnPGIqk0HvH1YZGaPy7wacaq2ydkgYPScAFIV9X-L6KvBFejTlP06Fh7eqi6jai335zyJU8FgQA.EkqAqgKzwoX_zAfO.UhUtRVIQRXYab63W5JoyRq7UYQ_23zO_gDS4XkVIp75x7dgaFqPN1pPt6MqhExpu.42ctvwlQFVOlx_6XOvgFag"
+    },
+    {
+      "name": "disallowed_enc_a128cbc_hs256",
+      "policy": "bare",
+      "code": "JOSE_MALFORMED",
+      "enc": "A128CBC-HS256",
+      "plaintext": "{\"pan\":\"card-fixture-0000\",\"sub\":\"cardholder-9\"}",
+      "compact": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2Iiwia2lkIjoibWxlLWVuYy12MSJ9.pPFyDkv9Kf736V8pmMDu0JoPqYNLSh6j3th2WVizR7yBiev-GEVrpzke55K-15nGeVU6bo8jubZ_RSlOVvPGWqnh6rxZJhVpcA4uhWNc2JPxy64_FpMM_dAtZNNJc3Wb9x_f1xG7iC1Vp_mFXB1uHKcoIV-uAwLnT0msi4fyUYmGBFNgZipJVc6lMGfm8HGi9FtBkShflOVbJ0pd84XepS5yyf5UWnmAGqt_wsS-7NylUVt0jem3vN18S3TDy_bShSk4-YTLpWqv35EHKUycYPd5-c23GxWySlmJS2lqLvFoS7_1NE9pz6jUvQl3UDObGd2swYav_bdp-7OcqwC3Kg.Qdrbn-BFY0Pd7eglOVk9PA.6wdOTJbIJfzIvmWBX-S5azQXzaWbqxDKwFvZMvG634wLonwtGvxU_u1rhezFhOKc4ndugEdFtv51OVss3-fJkQ.gvzgyGemSiyjh4xH7M8scQ"
+    },
+    {
+      "name": "bare_token_on_nested_policy",
+      "policy": "nested",
+      "code": "JOSE_MALFORMED",
+      "enc": "A128GCM",
+      "plaintext": "{\"pan\":\"card-fixture-0000\",\"sub\":\"cardholder-9\"}",
+      "compact": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMTI4R0NNIiwia2lkIjoibWxlLWVuYy12MSJ9.fdM3576lCSMV0tZcvr2t3m4c0w2vzKuLG8APzJH9G-4SzAA8lF5KZvh2FkrAd9WdJezoOZ-1vrSKD16PKzcYgr9ADAnE_oiHhXkWWW5ZG7ihGCKO8vjbZfupQoEth1I8tJRbVJ2sZlsiwjDueOxq-EHslf-kI6xQitd7YHlB6gC-XVWuVA3jjARPaJfPk-ic5DuEOwaGUfXTs3NbKEveqAWACGEE8kw68YjPYLqgpyrh-ick7azH5hFcv2oo4pbHc7hT0FVHlRCPrpSPGHXGSPRuvMhg1qwCxXHh8uL1UnXQ1rNDJQRJAfR1iErrLkU4UzKw_52cmmBIvqSnoqocbA.tpcBqs6JnWv1mxpb.u26qLOAfhJrMTg2lghKdoj9aDxJXxMMbMK1fjA2E2QTAlh950ag7jxkepGar62Xh.cYP2FRR5DERsULjFZhuaGA"
+    }
+  ]
+}

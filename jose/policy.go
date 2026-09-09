@@ -1,7 +1,11 @@
 package jose
 
 import (
+	"slices"
+
 	jose "github.com/go-jose/go-jose/v4"
+
+	"github.com/gaborage/go-bricks/jose/internal/cryptoadapter"
 )
 
 // Direction indicates which side of the request/response pipeline a Policy applies to.
@@ -40,11 +44,43 @@ type Policy struct {
 	SignKid    string // our private key kid (jose: sign=...)
 	EncryptKid string // peer public key kid (jose: encrypt=...)
 
+	// Mode selects the wire shape. The zero value is SealModeJWEofJWS.
+	Mode SealMode
+
 	// Algorithms — defaults applied by the parser if tag omits them.
+	// SigAlg is unused, and must stay unset, in SealModeBareJWE.
+	//
+	// KeyAlg and Enc are read on BOTH sides in both modes: outbound they are what Seal
+	// writes; inbound they are what Open accepts, narrowing the mode's allowlist to
+	// exactly the declared value. Validate refuses a value off the mode's allowlist, so
+	// declaring one can only narrow. Leaving one unset keeps the mode-wide allowlist on
+	// the way in — relevant only to a hand-built policy, since the tag parser and
+	// Validate both insist on a value.
 	SigAlg jose.SignatureAlgorithm
 	KeyAlg jose.KeyAlgorithm
 	Enc    jose.ContentEncryption
 	Cty    string
+
+	// Typ is the JWE protected `typ` header written by Seal. SealModeBareJWE OUTBOUND
+	// only; Visa Message Level Encryption expects "JOSE".
+	Typ string
+
+	// ProtectedHeaders are copied verbatim into the JWE protected header by Seal.
+	// SealModeBareJWE OUTBOUND only. Naming a param the framework owns (alg, enc, kid, cty, typ) or one JOSE
+	// reserves is a validation error, never an overwrite.
+	ProtectedHeaders map[string]any
+
+	// IATMillis makes Seal stamp an `iat` protected header holding Unix epoch
+	// MILLISECONDS at seal time — the Visa MLE convention, not the seconds-based JWT
+	// claim of the same name. SealModeBareJWE OUTBOUND only. jose never judges its freshness on
+	// the way in; that is the caller's policy.
+	IATMillis bool
+}
+
+// hasSealHeaderFields reports whether the policy carries any of the header fields only a
+// bare-mode outbound Seal writes.
+func (p *Policy) hasSealHeaderFields() bool {
+	return p.Typ != "" || p.ProtectedHeaders != nil || p.IATMillis
 }
 
 // Validate checks the Policy for internal consistency (correct kids set for the direction,
@@ -59,15 +95,44 @@ func (p *Policy) Validate() error {
 		}
 	}
 
+	if err := p.validateMode(); err != nil {
+		return err
+	}
 	if err := p.validateAlgorithms(); err != nil {
 		return err
 	}
 	return p.validateDirection()
 }
 
+// validateMode rejects an unrecognized Mode before any mode-dependent check runs, and
+// keeps the bare-only fields out of a JWE-of-JWS policy so the default posture stays
+// byte-identical to what it produced before bare mode existed.
+func (p *Policy) validateMode() error {
+	switch p.Mode {
+	case SealModeJWEofJWS:
+		if p.hasSealHeaderFields() {
+			return &Error{
+				Sentinel: ErrPolicyMismatch,
+				Code:     codePolicyModeMismatch,
+				Message:  "typ, protected headers and iat stamping require bare-JWE mode",
+			}
+		}
+		return nil
+	case SealModeBareJWE:
+		return p.validateBareHeaders()
+	default:
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyModeUnknown,
+			Message:  "unknown seal mode " + p.Mode.String(),
+		}
+	}
+}
+
 // validateAlgorithms checks SigAlg/KeyAlg/Enc against the allowlists, in that order.
 func (p *Policy) validateAlgorithms() error {
-	if !IsAllowedSigAlg(p.SigAlg) {
+	// Bare mode signs nothing: SigAlg must stay unset, which validateDirection enforces.
+	if p.Mode != SealModeBareJWE && !IsAllowedSigAlg(p.SigAlg) {
 		return &Error{
 			Sentinel: ErrAlgorithmDisallowed,
 			Code:     codeAlgorithmDisallowed,
@@ -83,7 +148,7 @@ func (p *Policy) validateAlgorithms() error {
 			Alg:      string(p.KeyAlg),
 		}
 	}
-	if !IsAllowedEnc(p.Enc) {
+	if !IsAllowedEncFor(p.Mode, p.Enc) {
 		return &Error{
 			Sentinel: ErrAlgorithmDisallowed,
 			Code:     codeAlgorithmDisallowed,
@@ -96,17 +161,24 @@ func (p *Policy) validateAlgorithms() error {
 
 // validateDirection dispatches to the per-direction kid checks.
 func (p *Policy) validateDirection() error {
+	if p.Mode == SealModeBareJWE {
+		return p.validateBareDirection()
+	}
 	switch p.Direction {
 	case DirectionInbound:
 		return p.validateInbound()
 	case DirectionOutbound:
 		return p.validateOutbound()
 	default:
-		return &Error{
-			Sentinel: ErrPolicyMismatch,
-			Code:     "JOSE_POLICY_DIRECTION_UNKNOWN",
-			Message:  "unknown direction",
-		}
+		return errUnknownDirection()
+	}
+}
+
+func errUnknownDirection() *Error {
+	return &Error{
+		Sentinel: ErrPolicyMismatch,
+		Code:     "JOSE_POLICY_DIRECTION_UNKNOWN",
+		Message:  "unknown direction",
 	}
 }
 
@@ -143,6 +215,105 @@ func (p *Policy) validateOutbound() error {
 			Sentinel: ErrPolicyMismatch,
 			Code:     codePolicyDirectionMismatch,
 			Message:  "outbound policy must not declare decrypt/verify kids",
+		}
+	}
+	return nil
+}
+
+// SealMode selects the wire shape a Policy produces and accepts.
+type SealMode int
+
+const (
+	// SealModeJWEofJWS is the default: sign-then-encrypt outbound, decrypt-then-verify
+	// inbound. The zero value, so a Policy that never mentions Mode keeps this posture.
+	SealModeJWEofJWS SealMode = iota
+	// SealModeBareJWE encrypts the payload directly, with no inner JWS — the shape Visa
+	// Message Level Encryption specifies. There is no signature, so the peer's identity
+	// must be established out of band (X-Pay-Token, mTLS); jose authenticates nothing
+	// about the sender in this mode.
+	SealModeBareJWE
+)
+
+func (m SealMode) String() string {
+	switch m {
+	case SealModeJWEofJWS:
+		return "jwe-of-jws"
+	case SealModeBareJWE:
+		return "bare-jwe"
+	default:
+		return "unknown"
+	}
+}
+
+// validateBareHeaders checks the protected-header map a bare-mode Seal would write:
+// no param the framework or JOSE itself owns, and no hand-written iat while Seal is
+// stamping one.
+func (p *Policy) validateBareHeaders() error {
+	if err := cryptoadapter.CheckExtra(p.ProtectedHeaders); err != nil {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyHeaderCollision,
+			Message:  "protected header collides with a reserved param",
+			Cause:    err,
+		}
+	}
+	if _, ok := p.ProtectedHeaders["iat"]; ok && p.IATMillis {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyHeaderCollision,
+			Message:  "protected header iat collides with iat stamping",
+		}
+	}
+	return nil
+}
+
+// validateBareDirection requires exactly the one kid its direction uses: there is no inner
+// JWS, so any other kid or a signature algorithm signals a policy written for the wrong mode.
+func (p *Policy) validateBareDirection() error {
+	switch p.Direction {
+	case DirectionInbound:
+		if err := p.validateBareKids(p.DecryptKid,
+			"inbound bare-JWE policy requires a decrypt kid",
+			"inbound bare-JWE policy must declare only a decrypt kid",
+			p.VerifyKid, p.SignKid, p.EncryptKid); err != nil {
+			return err
+		}
+		// Typ/ProtectedHeaders/IATMillis describe headers Seal writes; on an inbound policy
+		// nothing would ever read them, and silently ignoring them would let a consumer
+		// believe a header was enforced on the way in.
+		if p.hasSealHeaderFields() {
+			return &Error{
+				Sentinel: ErrPolicyMismatch,
+				Code:     codePolicyDirectionMismatch,
+				Message:  "typ, protected headers and iat stamping are outbound-only",
+			}
+		}
+		return nil
+	case DirectionOutbound:
+		return p.validateBareKids(p.EncryptKid,
+			"outbound bare-JWE policy requires an encrypt kid",
+			"outbound bare-JWE policy must declare only an encrypt kid",
+			p.SignKid, p.VerifyKid, p.DecryptKid)
+	default:
+		return errUnknownDirection()
+	}
+}
+
+// validateBareKids checks that required is set and that neither a forbidden kid nor a
+// signature algorithm is declared.
+func (p *Policy) validateBareKids(required, missingMsg, forbiddenMsg string, forbidden ...string) error {
+	if required == "" {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyIncomplete,
+			Message:  missingMsg,
+		}
+	}
+	if p.SigAlg != "" || slices.ContainsFunc(forbidden, func(kid string) bool { return kid != "" }) {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyDirectionMismatch,
+			Message:  forbiddenMsg,
 		}
 	}
 	return nil

@@ -4,6 +4,7 @@ import (
 	"crypto/rsa"
 	"testing"
 
+	jose "github.com/go-jose/go-jose/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -106,4 +107,197 @@ func TestParseUnixSecsAllArms(t *testing.T) {
 			assert.Equal(t, tt.zero, got.IsZero())
 		})
 	}
+}
+
+func TestSealModeString(t *testing.T) {
+	assert.Equal(t, "jwe-of-jws", SealModeJWEofJWS.String())
+	assert.Equal(t, "bare-jwe", SealModeBareJWE.String())
+	assert.Equal(t, "unknown", SealMode(99).String())
+}
+
+// bareOutbound / bareInbound are minimally valid bare-mode policies the mode tests mutate.
+func bareOutbound() *Policy {
+	return &Policy{
+		Direction:  DirectionOutbound,
+		Mode:       SealModeBareJWE,
+		EncryptKid: "peer-key",
+		KeyAlg:     DefaultKeyAlg,
+		Enc:        jose.A128GCM,
+	}
+}
+
+func bareInbound() *Policy {
+	return &Policy{
+		Direction:  DirectionInbound,
+		Mode:       SealModeBareJWE,
+		DecryptKid: "our-key",
+		KeyAlg:     DefaultKeyAlg,
+		Enc:        jose.A128GCM,
+	}
+}
+
+func TestPolicyValidateUnknownMode(t *testing.T) {
+	p := bareOutbound()
+	p.Mode = SealMode(99)
+	requireJOSEErrorCode(t, p.Validate(), "JOSE_POLICY_MODE_UNKNOWN")
+}
+
+func TestPolicyValidateBareModeDirectionRules(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(p *Policy)
+		base    func() *Policy
+		wantErr string
+	}{
+		{"outbound_minimal_is_valid", func(*Policy) {}, bareOutbound, ""},
+		{"outbound_without_encrypt_kid", func(p *Policy) { p.EncryptKid = "" }, bareOutbound, codePolicyIncomplete},
+		{"outbound_with_sign_kid", func(p *Policy) { p.SignKid = "our-key" }, bareOutbound, codePolicyDirectionMismatch},
+		{"outbound_with_verify_kid", func(p *Policy) { p.VerifyKid = "peer-key" }, bareOutbound, codePolicyDirectionMismatch},
+		{"outbound_with_decrypt_kid", func(p *Policy) { p.DecryptKid = "our-key" }, bareOutbound, codePolicyDirectionMismatch},
+		{"outbound_with_sig_alg", func(p *Policy) { p.SigAlg = DefaultSigAlg }, bareOutbound, codePolicyDirectionMismatch},
+		{"inbound_minimal_is_valid", func(*Policy) {}, bareInbound, ""},
+		{"inbound_without_decrypt_kid", func(p *Policy) { p.DecryptKid = "" }, bareInbound, codePolicyIncomplete},
+		{"inbound_with_verify_kid", func(p *Policy) { p.VerifyKid = "peer-key" }, bareInbound, codePolicyDirectionMismatch},
+		{"inbound_with_sign_kid", func(p *Policy) { p.SignKid = "our-key" }, bareInbound, codePolicyDirectionMismatch},
+		{"inbound_with_encrypt_kid", func(p *Policy) { p.EncryptKid = "peer-key" }, bareInbound, codePolicyDirectionMismatch},
+		{"inbound_with_sig_alg", func(p *Policy) { p.SigAlg = DefaultSigAlg }, bareInbound, codePolicyDirectionMismatch},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := tt.base()
+			tt.mutate(p)
+			err := p.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, ErrPolicyMismatch)
+			requireJOSEErrorCode(t, err, tt.wantErr)
+		})
+	}
+}
+
+// nestedOutbound is a minimally valid JWE-of-JWS policy, the default posture.
+func nestedOutbound() *Policy {
+	return &Policy{
+		Direction: DirectionOutbound,
+		SignKid:   "our-key", EncryptKid: "peer-key",
+		SigAlg: DefaultSigAlg, KeyAlg: DefaultKeyAlg, Enc: DefaultEnc,
+	}
+}
+
+func TestPolicyValidateRejectsSealHeaderFieldsWhereTheyAreNeverWritten(t *testing.T) {
+	tests := []struct {
+		name     string
+		base     func() *Policy
+		mutate   func(p *Policy)
+		wantCode string
+	}{
+		{"nested_typ", nestedOutbound, func(p *Policy) { p.Typ = "JOSE" }, codePolicyModeMismatch},
+		{"nested_protected_headers", nestedOutbound, func(p *Policy) {
+			p.ProtectedHeaders = map[string]any{"custom": "v"}
+		}, codePolicyModeMismatch},
+		{"nested_empty_protected_headers_map", nestedOutbound, func(p *Policy) {
+			p.ProtectedHeaders = map[string]any{}
+		}, codePolicyModeMismatch},
+		{"nested_iat_millis", nestedOutbound, func(p *Policy) { p.IATMillis = true }, codePolicyModeMismatch},
+		{"bare_inbound_typ", bareInbound, func(p *Policy) { p.Typ = "JOSE" }, codePolicyDirectionMismatch},
+		{"bare_inbound_protected_headers", bareInbound, func(p *Policy) {
+			p.ProtectedHeaders = map[string]any{"iss": "acme"}
+		}, codePolicyDirectionMismatch},
+		{"bare_inbound_empty_protected_headers_map", bareInbound, func(p *Policy) {
+			p.ProtectedHeaders = map[string]any{}
+		}, codePolicyDirectionMismatch},
+		{"bare_inbound_iat_millis", bareInbound, func(p *Policy) { p.IATMillis = true }, codePolicyDirectionMismatch},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := tt.base()
+			tt.mutate(p)
+			err := p.Validate()
+			require.ErrorIs(t, err, ErrPolicyMismatch)
+			requireJOSEErrorCode(t, err, tt.wantCode)
+		})
+	}
+}
+
+func TestPolicyValidateNestedModeStaysValidWithoutBareFields(t *testing.T) {
+	require.NoError(t, nestedOutbound().Validate())
+}
+
+func TestPolicyValidateBareModeProtectedHeaderCollisions(t *testing.T) {
+	tests := []struct {
+		name      string
+		headers   map[string]any
+		iatMillis bool
+		wantCode  string
+	}{
+		{"custom_header_allowed", map[string]any{"iss": "acme"}, false, ""},
+		{"iat_allowed_when_not_stamping", map[string]any{"iat": 1}, false, ""},
+		{"iat_conflicts_with_stamping", map[string]any{"iat": 1}, true, "JOSE_POLICY_HEADER_COLLISION"},
+		{"owned_alg", map[string]any{"alg": "RSA-OAEP-256"}, false, "JOSE_POLICY_HEADER_COLLISION"},
+		{"owned_enc", map[string]any{"enc": "A128GCM"}, false, "JOSE_POLICY_HEADER_COLLISION"},
+		{"owned_kid", map[string]any{"kid": "peer-key"}, false, "JOSE_POLICY_HEADER_COLLISION"},
+		{"owned_cty", map[string]any{"cty": "application/json"}, false, "JOSE_POLICY_HEADER_COLLISION"},
+		{"owned_typ", map[string]any{"typ": "JOSE"}, false, "JOSE_POLICY_HEADER_COLLISION"},
+		{"reserved_crit", map[string]any{"crit": []string{"exp"}}, false, "JOSE_POLICY_HEADER_COLLISION"},
+		{"reserved_zip", map[string]any{"zip": "DEF"}, false, "JOSE_POLICY_HEADER_COLLISION"},
+		{"reserved_jwk", map[string]any{"jwk": "x"}, false, "JOSE_POLICY_HEADER_COLLISION"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := bareOutbound()
+			p.ProtectedHeaders = tt.headers
+			p.IATMillis = tt.iatMillis
+			err := p.Validate()
+			if tt.wantCode == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, ErrPolicyMismatch)
+			requireJOSEErrorCode(t, err, tt.wantCode)
+		})
+	}
+}
+
+func TestPolicyValidateContentEncPerMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		bare     bool
+		enc      jose.ContentEncryption
+		wantCode string
+	}{
+		{"bare_a128gcm", true, jose.A128GCM, ""},
+		{"bare_a256gcm", true, jose.A256GCM, ""},
+		{"bare_a128cbc_hs256", true, jose.A128CBC_HS256, codeAlgorithmDisallowed},
+		{"bare_unset", true, "", codeAlgorithmDisallowed},
+		{"nested_a256gcm", false, jose.A256GCM, ""},
+		{"nested_a128gcm", false, jose.A128GCM, codeAlgorithmDisallowed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := nestedOutbound()
+			if tt.bare {
+				p = bareOutbound()
+			}
+			p.Enc = tt.enc
+			err := p.Validate()
+			if tt.wantCode == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, ErrAlgorithmDisallowed)
+			requireJOSEErrorCode(t, err, tt.wantCode)
+		})
+	}
+}
+
+// TestPolicyValidateBareModeStillRequiresApprovedKeyAlg pins the one algorithm rule bare
+// mode does NOT relax.
+func TestPolicyValidateBareModeStillRequiresApprovedKeyAlg(t *testing.T) {
+	p := bareOutbound()
+	p.KeyAlg = jose.RSA1_5
+	err := p.Validate()
+	require.ErrorIs(t, err, ErrAlgorithmDisallowed)
+	requireJOSEErrorCode(t, err, codeAlgorithmDisallowed)
 }

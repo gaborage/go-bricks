@@ -322,3 +322,29 @@ func TestSealRejectsDisallowedKeyAlgorithm(t *testing.T) {
 		})
 	}
 }
+
+// TestOpenNestedHonoursDeclaredAlgorithms pins that narrowing the inbound allowlist to a
+// policy's declared algorithms did not close the nested door: a nested inbound policy
+// that declares KeyAlg and Enc still opens the token its outbound twin sealed.
+//
+// The mismatch half is not expressible on this path. The nested allowlists hold exactly
+// one key algorithm (RSA-OAEP-256) and one content encryption (A256GCM), so there is no
+// second value a nested policy could pin against, and any other algorithm on the wire is
+// already refused by the mode-wide allowlist. The bare-mode pair in bare_test.go carries
+// the mismatch coverage.
+func TestOpenNestedHonoursDeclaredAlgorithms(t *testing.T) {
+	f := newTestFixture(t)
+	f.inbound.KeyAlg = DefaultKeyAlg
+	f.inbound.Enc = DefaultEnc
+	require.NoError(t, f.inbound.Validate())
+
+	payload := []byte(`{"sub":"cardholder-9"}`)
+	compact, err := Seal(payload, f.outbound, f.resolver)
+	require.NoError(t, err)
+
+	plaintext, _, hdr, err := Open(compact, f.inbound, f.resolver)
+	require.NoError(t, err)
+	assert.Equal(t, payload, plaintext)
+	assert.Equal(t, string(DefaultEnc), hdr.JWE.Enc)
+	assert.Equal(t, string(DefaultKeyAlg), hdr.JWE.Alg)
+}

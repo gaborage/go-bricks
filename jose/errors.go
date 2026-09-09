@@ -37,6 +37,11 @@ const (
 	codeKeystoreUnavailable     = "JOSE_KEYSTORE_UNAVAILABLE"
 	codeMalformed               = "JOSE_MALFORMED"
 	codeKidMissing              = "JOSE_KID_MISSING"
+	codePolicyModeUnknown       = "JOSE_POLICY_MODE_UNKNOWN"
+	codePolicyModeMismatch      = "JOSE_POLICY_MODE_MISMATCH"
+	codePolicyHeaderCollision   = "JOSE_POLICY_HEADER_COLLISION"
+	codeOutboundFailed          = "JOSE_OUTBOUND_FAILED"
+	codeCtyRejected             = "JOSE_CTY_REJECTED"
 	codeTagDuplicateKey         = "JOSE_TAG_DUPLICATE_KEY"
 	codeTagKidInvalid           = "JOSE_TAG_KID_INVALID"
 )

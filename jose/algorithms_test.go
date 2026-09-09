@@ -55,3 +55,102 @@ func TestAllowedSigAlgsReturnsCopy(t *testing.T) {
 	// External mutation must not affect the package-level allowlist.
 	assert.True(t, IsAllowedSigAlg(jose.RS256))
 }
+
+func TestIsAllowedEncFor(t *testing.T) {
+	tests := []struct {
+		name string
+		mode SealMode
+		enc  jose.ContentEncryption
+		want bool
+	}{
+		{"nested_a256gcm", SealModeJWEofJWS, jose.A256GCM, true},
+		{"nested_a128gcm", SealModeJWEofJWS, jose.A128GCM, false},
+		{"nested_a128cbc", SealModeJWEofJWS, jose.A128CBC_HS256, false},
+		{"bare_a256gcm", SealModeBareJWE, jose.A256GCM, true},
+		{"bare_a128gcm", SealModeBareJWE, jose.A128GCM, true},
+		{"bare_a128cbc", SealModeBareJWE, jose.A128CBC_HS256, false},
+		{"unknown_mode_a256gcm", SealMode(99), jose.A256GCM, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsAllowedEncFor(tt.mode, tt.enc))
+		})
+	}
+}
+
+func TestAllowedContentEncsForReturnsCopy(t *testing.T) {
+	assert.Equal(t, []jose.ContentEncryption{jose.A256GCM}, AllowedContentEncsFor(SealModeJWEofJWS))
+	assert.ElementsMatch(t, []jose.ContentEncryption{jose.A128GCM, jose.A256GCM}, AllowedContentEncsFor(SealModeBareJWE))
+	assert.Empty(t, AllowedContentEncsFor(SealMode(99)))
+
+	bare := AllowedContentEncsFor(SealModeBareJWE)
+	bare[0] = jose.ContentEncryption("A128CBC-HS256")
+	assert.True(t, IsAllowedEncFor(SealModeBareJWE, jose.A128GCM))
+	assert.False(t, IsAllowedEncFor(SealModeBareJWE, jose.A128CBC_HS256))
+}
+
+// TestIsAllowedEncKeepsNestedMeaning pins the un-suffixed predicate to JWE-of-JWS:
+// widening it would silently admit A128GCM on the nested path.
+func TestIsAllowedEncKeepsNestedMeaning(t *testing.T) {
+	assert.False(t, IsAllowedEnc(jose.A128GCM))
+	assert.Equal(t, AllowedContentEncsFor(SealModeJWEofJWS), AllowedContentEncs())
+}
+
+// TestInboundAllowlistsFailClosedOnAnOffListDeclaration pins the narrowing rule at its own
+// seam, independent of whether Open runs Validate: a declared value that is off the mode's
+// allowlist yields an empty list for that dimension, so nothing parses. Pinning only ever
+// narrows.
+func TestInboundAllowlistsFailClosedOnAnOffListDeclaration(t *testing.T) {
+	tests := []struct {
+		name        string
+		policy      *Policy
+		wantKeyAlgs []jose.KeyAlgorithm
+		wantEncs    []jose.ContentEncryption
+	}{
+		{
+			name:        "bare_off_list_keyalg_empties_key_algs",
+			policy:      &Policy{Mode: SealModeBareJWE, KeyAlg: jose.RSA1_5, Enc: jose.A128GCM},
+			wantKeyAlgs: nil,
+			wantEncs:    []jose.ContentEncryption{jose.A128GCM},
+		},
+		{
+			name:        "bare_off_list_enc_empties_encs",
+			policy:      &Policy{Mode: SealModeBareJWE, KeyAlg: DefaultKeyAlg, Enc: jose.A128CBC_HS256},
+			wantKeyAlgs: []jose.KeyAlgorithm{DefaultKeyAlg},
+			wantEncs:    nil,
+		},
+		{
+			name:        "nested_off_list_enc_empties_encs",
+			policy:      &Policy{Mode: SealModeJWEofJWS, KeyAlg: DefaultKeyAlg, Enc: jose.A128GCM},
+			wantKeyAlgs: []jose.KeyAlgorithm{DefaultKeyAlg},
+			wantEncs:    nil,
+		},
+		{
+			name:        "on_list_declaration_narrows_to_one",
+			policy:      &Policy{Mode: SealModeBareJWE, KeyAlg: DefaultKeyAlg, Enc: jose.A128GCM},
+			wantKeyAlgs: []jose.KeyAlgorithm{DefaultKeyAlg},
+			wantEncs:    []jose.ContentEncryption{jose.A128GCM},
+		},
+		{
+			name:        "unset_keeps_the_mode_lists",
+			policy:      &Policy{Mode: SealModeBareJWE},
+			wantKeyAlgs: AllowedKeyAlgs(),
+			wantEncs:    AllowedContentEncsFor(SealModeBareJWE),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyAlgs, encs := inboundAllowlists(tt.policy)
+			if tt.wantKeyAlgs == nil {
+				assert.Empty(t, keyAlgs)
+			} else {
+				assert.Equal(t, tt.wantKeyAlgs, keyAlgs)
+			}
+			if tt.wantEncs == nil {
+				assert.Empty(t, encs)
+			} else {
+				assert.ElementsMatch(t, tt.wantEncs, encs)
+			}
+		})
+	}
+}
