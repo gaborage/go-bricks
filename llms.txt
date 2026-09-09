@@ -4256,8 +4256,8 @@ carries a body and has an `Outbound` policy. In `jose.SealModeBareJWE` the seal 
 `jti`, so two attempts inside the same millisecond share an `iat`. Protocols that need
 a unique per-attempt `jti` must use the nested JWE-of-JWS shape, where `jti` comes from
 the signed payload). With no `Envelope`, non-`application/jose`
-responses pass through untouched; an `Envelope` replaces that Content-Type rule with
-its `Unwrap` verdict and buffers every eligible response body (capped by
+responses pass through untouched; when `Envelope` and `Inbound` are both set, the envelope
+replaces that Content-Type rule with its `Unwrap` verdict and buffers every eligible response body (capped by
 `MaxResponseBytes`) before it runs. Only bodies are sealed: a request with no body goes out unsealed
 whatever the method, so give a payload-free `POST` an explicit `{}` body if the
 partner requires `application/jose` on every request.
