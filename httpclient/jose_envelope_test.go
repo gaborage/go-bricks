@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/stretchr/testify/assert"
@@ -156,6 +157,35 @@ func TestBuilderWithJOSEKeepsABarePolicyAlgorithms(t *testing.T) {
 	// The fake endpoint only parses A128GCM, so reaching here proves the explicit
 	// content encryption survived Build; a defaulted SigAlg would have failed Build.
 	assert.Equal(t, string(jose.A128GCM), call.header.ExtraHeaders[jose.HeaderKey("enc")])
+}
+
+func TestJOSETransportWrapBodySendsTheVisaEnvelope(t *testing.T) {
+	f := newVisaFixture(t)
+	calls := make(chan visaCall, 1)
+	server := fakeVisaEndpoint(t, f, calls, func(w http.ResponseWriter, _ visaCall) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	defer server.Close()
+
+	before := time.Now().UnixMilli()
+	_, err := visaClient(t, f).Post(context.Background(), &httpclient.Request{
+		URL:  server.URL,
+		Body: []byte(`{"pan":"4111111111111111"}`),
+	})
+	require.NoError(t, err)
+	after := time.Now().UnixMilli()
+
+	call := <-calls
+	assert.Equal(t, "application/json", call.contentType)
+	assert.JSONEq(t, `{"pan":"4111111111111111"}`, string(call.plaintext))
+	assert.Equal(t, visaKid, call.header.KeyID)
+	assert.Equal(t, "JOSE", call.header.ExtraHeaders[jose.HeaderKey("typ")])
+
+	iat, isFloat := call.header.ExtraHeaders[jose.HeaderKey("iat")].(float64)
+	require.True(t, isFloat, "iat header missing or not a JSON number")
+	assert.GreaterOrEqual(t, int64(iat), before)
+	assert.LessOrEqual(t, int64(iat), after)
 }
 
 // visaCall is one request as the fake Visa endpoint saw it.
