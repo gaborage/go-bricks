@@ -4,6 +4,7 @@ import (
 	"crypto/rsa"
 	"testing"
 
+	joselib "github.com/go-jose/go-jose/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -112,4 +113,66 @@ func TestSealModeString(t *testing.T) {
 	assert.Equal(t, "jwe-of-jws", SealModeJWEofJWS.String())
 	assert.Equal(t, "bare-jwe", SealModeBareJWE.String())
 	assert.Equal(t, "unknown", SealMode(99).String())
+}
+
+// bareOutbound / bareInbound are minimally valid bare-mode policies the mode tests mutate.
+func bareOutbound() *Policy {
+	return &Policy{
+		Direction:  DirectionOutbound,
+		Mode:       SealModeBareJWE,
+		EncryptKid: "peer-key",
+		KeyAlg:     DefaultKeyAlg,
+		Enc:        joselib.A128GCM,
+	}
+}
+
+func bareInbound() *Policy {
+	return &Policy{
+		Direction:  DirectionInbound,
+		Mode:       SealModeBareJWE,
+		DecryptKid: "our-key",
+		KeyAlg:     DefaultKeyAlg,
+		Enc:        joselib.A128GCM,
+	}
+}
+
+func TestPolicyValidateUnknownMode(t *testing.T) {
+	p := bareOutbound()
+	p.Mode = SealMode(99)
+	requireJOSEErrorCode(t, p.Validate(), "JOSE_POLICY_MODE_UNKNOWN")
+}
+
+func TestPolicyValidateBareModeDirectionRules(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(p *Policy)
+		base    func() *Policy
+		wantErr string
+	}{
+		{"outbound_minimal_is_valid", func(*Policy) {}, bareOutbound, ""},
+		{"outbound_without_encrypt_kid", func(p *Policy) { p.EncryptKid = "" }, bareOutbound, codePolicyIncomplete},
+		{"outbound_with_sign_kid", func(p *Policy) { p.SignKid = "our-key" }, bareOutbound, codePolicyDirectionMismatch},
+		{"outbound_with_verify_kid", func(p *Policy) { p.VerifyKid = "peer-key" }, bareOutbound, codePolicyDirectionMismatch},
+		{"outbound_with_decrypt_kid", func(p *Policy) { p.DecryptKid = "our-key" }, bareOutbound, codePolicyDirectionMismatch},
+		{"outbound_with_sig_alg", func(p *Policy) { p.SigAlg = DefaultSigAlg }, bareOutbound, codePolicyDirectionMismatch},
+		{"inbound_minimal_is_valid", func(*Policy) {}, bareInbound, ""},
+		{"inbound_without_decrypt_kid", func(p *Policy) { p.DecryptKid = "" }, bareInbound, codePolicyIncomplete},
+		{"inbound_with_verify_kid", func(p *Policy) { p.VerifyKid = "peer-key" }, bareInbound, codePolicyDirectionMismatch},
+		{"inbound_with_sign_kid", func(p *Policy) { p.SignKid = "our-key" }, bareInbound, codePolicyDirectionMismatch},
+		{"inbound_with_encrypt_kid", func(p *Policy) { p.EncryptKid = "peer-key" }, bareInbound, codePolicyDirectionMismatch},
+		{"inbound_with_sig_alg", func(p *Policy) { p.SigAlg = DefaultSigAlg }, bareInbound, codePolicyDirectionMismatch},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := tt.base()
+			tt.mutate(p)
+			err := p.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, ErrPolicyMismatch)
+			requireJOSEErrorCode(t, err, tt.wantErr)
+		})
+	}
 }

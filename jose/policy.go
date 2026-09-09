@@ -40,7 +40,11 @@ type Policy struct {
 	SignKid    string // our private key kid (jose: sign=...)
 	EncryptKid string // peer public key kid (jose: encrypt=...)
 
+	// Mode selects the wire shape. The zero value is SealModeJWEofJWS.
+	Mode SealMode
+
 	// Algorithms — defaults applied by the parser if tag omits them.
+	// SigAlg is unused, and must stay unset, in SealModeBareJWE.
 	SigAlg jose.SignatureAlgorithm
 	KeyAlg jose.KeyAlgorithm
 	Enc    jose.ContentEncryption
@@ -59,15 +63,33 @@ func (p *Policy) Validate() error {
 		}
 	}
 
+	if err := p.validateMode(); err != nil {
+		return err
+	}
 	if err := p.validateAlgorithms(); err != nil {
 		return err
 	}
 	return p.validateDirection()
 }
 
+// validateMode rejects an unrecognized Mode before any mode-dependent check runs.
+func (p *Policy) validateMode() error {
+	switch p.Mode {
+	case SealModeJWEofJWS, SealModeBareJWE:
+		return nil
+	default:
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyModeUnknown,
+			Message:  "unknown seal mode",
+		}
+	}
+}
+
 // validateAlgorithms checks SigAlg/KeyAlg/Enc against the allowlists, in that order.
 func (p *Policy) validateAlgorithms() error {
-	if !IsAllowedSigAlg(p.SigAlg) {
+	// Bare mode signs nothing: SigAlg must stay unset, which validateDirection enforces.
+	if p.Mode != SealModeBareJWE && !IsAllowedSigAlg(p.SigAlg) {
 		return &Error{
 			Sentinel: ErrAlgorithmDisallowed,
 			Code:     codeAlgorithmDisallowed,
@@ -83,7 +105,7 @@ func (p *Policy) validateAlgorithms() error {
 			Alg:      string(p.KeyAlg),
 		}
 	}
-	if !IsAllowedEnc(p.Enc) {
+	if !IsAllowedEncFor(p.Mode, p.Enc) {
 		return &Error{
 			Sentinel: ErrAlgorithmDisallowed,
 			Code:     codeAlgorithmDisallowed,
@@ -98,8 +120,14 @@ func (p *Policy) validateAlgorithms() error {
 func (p *Policy) validateDirection() error {
 	switch p.Direction {
 	case DirectionInbound:
+		if p.Mode == SealModeBareJWE {
+			return p.validateBareInbound()
+		}
 		return p.validateInbound()
 	case DirectionOutbound:
+		if p.Mode == SealModeBareJWE {
+			return p.validateBareOutbound()
+		}
 		return p.validateOutbound()
 	default:
 		return &Error{
@@ -171,4 +199,43 @@ func (m SealMode) String() string {
 	default:
 		return "unknown"
 	}
+}
+
+// validateBareInbound requires only the decrypt kid: there is no inner JWS to verify, so
+// a verify kid or a signature algorithm signals a policy written for the wrong mode.
+func (p *Policy) validateBareInbound() error {
+	if p.DecryptKid == "" {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyIncomplete,
+			Message:  "inbound bare-JWE policy requires a decrypt kid",
+		}
+	}
+	if p.VerifyKid != "" || p.SignKid != "" || p.EncryptKid != "" || p.SigAlg != "" {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyDirectionMismatch,
+			Message:  "inbound bare-JWE policy must declare only a decrypt kid",
+		}
+	}
+	return nil
+}
+
+// validateBareOutbound requires only the encrypt kid; the mirror of validateBareInbound.
+func (p *Policy) validateBareOutbound() error {
+	if p.EncryptKid == "" {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyIncomplete,
+			Message:  "outbound bare-JWE policy requires an encrypt kid",
+		}
+	}
+	if p.SignKid != "" || p.VerifyKid != "" || p.DecryptKid != "" || p.SigAlg != "" {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyDirectionMismatch,
+			Message:  "outbound bare-JWE policy must declare only an encrypt kid",
+		}
+	}
+	return nil
 }

@@ -37,6 +37,7 @@ const (
 	codeKeystoreUnavailable     = "JOSE_KEYSTORE_UNAVAILABLE"
 	codeMalformed               = "JOSE_MALFORMED"
 	codeKidMissing              = "JOSE_KID_MISSING"
+	codePolicyModeUnknown       = "JOSE_POLICY_MODE_UNKNOWN"
 	codeTagDuplicateKey         = "JOSE_TAG_DUPLICATE_KEY"
 	codeTagKidInvalid           = "JOSE_TAG_KID_INVALID"
 )
