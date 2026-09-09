@@ -316,6 +316,15 @@ type JOSEConfig struct {
 	Inbound *jose.Policy
 	// Resolver supplies keys for both Outbound and Inbound directions.
 	Resolver jose.KeyResolver
+	// WrapBody optionally rewrites the sealed compact into the body actually sent
+	// (Visa MLE's {"encData":...} envelope, for example). Nil sends the compact itself
+	// as application/jose. Requires Outbound; Build fails otherwise.
+	WrapBody WrapBodyFunc
+	// UnwrapBody optionally recognizes and extracts a compact from a response body,
+	// replacing the default application/jose Content-Type rule. Setting it makes the
+	// transport buffer every eligible response body (capped by the transport's
+	// MaxResponseBytes) before the hook runs. Requires Inbound; Build fails otherwise.
+	UnwrapBody UnwrapBodyFunc
 }
 
 // WithJOSE configures a JOSETransport that signs+encrypts every outbound request body
@@ -354,10 +363,12 @@ func (b *Builder) WithJOSE(cfg JOSEConfig) *Builder {
 	if needsLayer {
 		b.addTransportWrapper(layerBodyTransform, func(inner nethttp.RoundTripper) nethttp.RoundTripper {
 			return &JOSETransport{
-				Inner:    inner,
-				Outbound: b.joseConfig.Outbound,
-				Inbound:  b.joseConfig.Inbound,
-				Resolver: b.joseConfig.Resolver,
+				Inner:      inner,
+				Outbound:   b.joseConfig.Outbound,
+				Inbound:    b.joseConfig.Inbound,
+				Resolver:   b.joseConfig.Resolver,
+				WrapBody:   b.joseConfig.WrapBody,
+				UnwrapBody: b.joseConfig.UnwrapBody,
 			}
 		})
 	}
@@ -381,6 +392,14 @@ func (b *Builder) normalizeJOSE() error {
 			Status:   500,
 			Message:  "a Resolver is required when Outbound or Inbound is set",
 		}
+	}
+	// A hook without its policy is a silent no-op at request time: the body would go out
+	// unsealed, or a wrapped response would be handed back as ciphertext. Fail construction.
+	if b.joseConfig.WrapBody != nil && b.joseConfig.Outbound == nil {
+		return errors.New("WrapBody requires an Outbound policy")
+	}
+	if b.joseConfig.UnwrapBody != nil && b.joseConfig.Inbound == nil {
+		return errors.New("UnwrapBody requires an Inbound policy")
 	}
 	outbound, err := normalizedJOSEPolicy(b.joseConfig.Outbound)
 	if err != nil {
