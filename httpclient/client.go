@@ -325,6 +325,11 @@ type JOSEConfig struct {
 	// transport buffer every eligible response body (capped by the transport's
 	// MaxResponseBytes) before the hook runs. Requires Inbound; Build fails otherwise.
 	UnwrapBody UnwrapBodyFunc
+	// MaxResponseBytes bounds the inbound response body read, exactly as the field of the
+	// same name on JOSETransport: zero means DefaultMaxJOSEBodyBytes and a negative value
+	// disables the cap. A negative value combined with UnwrapBody fails Build, because that
+	// pair buffers every response body without limit.
+	MaxResponseBytes int64
 }
 
 // WithJOSE configures a JOSETransport that signs+encrypts every outbound request body
@@ -373,6 +378,8 @@ func (b *Builder) WithJOSE(cfg JOSEConfig) *Builder {
 				Resolver:   b.joseConfig.Resolver,
 				WrapBody:   b.joseConfig.WrapBody,
 				UnwrapBody: b.joseConfig.UnwrapBody,
+
+				MaxResponseBytes: b.joseConfig.MaxResponseBytes,
 			}
 		})
 	}
@@ -413,6 +420,17 @@ func (b *Builder) normalizeJOSE() error {
 			Code:     "JOSE_POLICY_HOOK_UNPAIRED",
 			Status:   500,
 			Message:  "UnwrapBody requires an Inbound policy",
+		}
+	}
+	// UnwrapBody makes the transport buffer EVERY eligible response body; a negative cap
+	// means "no limit", so the pair lets a counterparty exhaust memory one response at a
+	// time. Neither half is wrong alone — refuse only the combination.
+	if b.joseConfig.UnwrapBody != nil && b.joseConfig.MaxResponseBytes < 0 {
+		return &jose.Error{
+			Sentinel: jose.ErrPolicyMismatch,
+			Code:     "JOSE_POLICY_HOOK_UNBOUNDED",
+			Status:   500,
+			Message:  "UnwrapBody cannot be combined with an unbounded MaxResponseBytes",
 		}
 	}
 	outbound, err := normalizedJOSEPolicy(b.joseConfig.Outbound)
