@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	joselib "github.com/go-jose/go-jose/v4"
+	jose "github.com/go-jose/go-jose/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,14 +39,14 @@ func newBareFixture(t *testing.T) *bareFixture {
 			Mode:       SealModeBareJWE,
 			EncryptKid: "our-key",
 			KeyAlg:     DefaultKeyAlg,
-			Enc:        joselib.A128GCM,
+			Enc:        jose.A128GCM,
 		},
 		inbound: &Policy{
 			Direction:  DirectionInbound,
 			Mode:       SealModeBareJWE,
 			DecryptKid: "our-key",
 			KeyAlg:     DefaultKeyAlg,
-			Enc:        joselib.A128GCM,
+			Enc:        jose.A128GCM,
 		},
 	}
 }
@@ -66,15 +66,23 @@ func protectedHeaderOf(t *testing.T, compact string) map[string]any {
 
 // decryptWithGoJose decrypts a compact JWE with go-jose directly — an oracle independent
 // of the package's own Open path.
-func decryptWithGoJose(t *testing.T, compact string, key *rsa.PrivateKey, enc joselib.ContentEncryption) []byte {
+func decryptWithGoJose(t *testing.T, compact string, key *rsa.PrivateKey, enc jose.ContentEncryption) []byte {
 	t.Helper()
-	obj, err := joselib.ParseEncrypted(compact,
-		[]joselib.KeyAlgorithm{joselib.RSA_OAEP_256},
-		[]joselib.ContentEncryption{enc})
+	obj, err := jose.ParseEncrypted(compact,
+		[]jose.KeyAlgorithm{jose.RSA_OAEP_256},
+		[]jose.ContentEncryption{enc})
 	require.NoError(t, err)
 	plaintext, err := obj.Decrypt(key)
 	require.NoError(t, err)
 	return plaintext
+}
+
+// headerIAT reads the wire iat as an integer; JSON decodes it as float64.
+func headerIAT(t *testing.T, compact string) int64 {
+	t.Helper()
+	iat, ok := protectedHeaderOf(t, compact)["iat"].(float64)
+	require.True(t, ok, "iat must be a JSON number")
+	return int64(iat)
 }
 
 func TestSealBareJWEWritesProtectedHeaders(t *testing.T) {
@@ -95,14 +103,13 @@ func TestSealBareJWEWritesProtectedHeaders(t *testing.T) {
 	assert.Equal(t, "acme-payments", hdr["iss"])
 	assert.NotContains(t, hdr, "cty", "an unset policy Cty must leave cty off the wire")
 
-	iat, ok := hdr["iat"].(float64)
-	require.True(t, ok, "iat must be a JSON number, got %T", hdr["iat"])
 	// Milliseconds, not seconds: 2001-09-09 in seconds is 1e9, in milliseconds 1e12.
-	assert.Greater(t, int64(iat), int64(1_600_000_000_000))
-	assert.Less(t, int64(iat), int64(100_000_000_000_000))
+	iat := headerIAT(t, compact)
+	assert.Greater(t, iat, int64(1_600_000_000_000))
+	assert.Less(t, iat, int64(100_000_000_000_000))
 
 	// No inner JWS: the ciphertext holds the caller's bytes verbatim.
-	assert.Equal(t, payload, decryptWithGoJose(t, compact, f.ourPriv, joselib.A128GCM))
+	assert.Equal(t, payload, decryptWithGoJose(t, compact, f.ourPriv, jose.A128GCM))
 }
 
 func TestSealBareJWEWritesCtyWhenPolicySetsIt(t *testing.T) {
@@ -154,9 +161,7 @@ func TestOpenBareJWERoundTrip(t *testing.T) {
 	assert.Equal(t, "JOSE", hdr.JWE.Typ)
 	assert.Empty(t, hdr.JWE.Cty)
 	// iat is reported as written, in milliseconds; jose never judges its freshness.
-	wireIAT, ok := protectedHeaderOf(t, compact)["iat"].(float64)
-	require.True(t, ok)
-	assert.Equal(t, int64(wireIAT), hdr.JWE.IATMillis)
+	assert.Equal(t, headerIAT(t, compact), hdr.JWE.IATMillis)
 
 	// No inner JWS layer exists, so its header stays zero.
 	assert.Equal(t, Header{}, hdr.JWS)
@@ -175,8 +180,8 @@ func TestOpenBareJWEWithoutIATReportsZero(t *testing.T) {
 
 func TestOpenBareJWERoundTripA256GCM(t *testing.T) {
 	f := newBareFixture(t)
-	f.outbound.Enc = joselib.A256GCM
-	f.inbound.Enc = joselib.A256GCM
+	f.outbound.Enc = jose.A256GCM
+	f.inbound.Enc = jose.A256GCM
 	payload := []byte(`{"amount":1250}`)
 
 	compact, err := Seal(payload, f.outbound, f.resolver)
@@ -207,8 +212,8 @@ func TestSealBareJWEStampsTheClockSeamAtEachCall(t *testing.T) {
 	second, err := Seal([]byte(`{}`), f.outbound, f.resolver)
 	require.NoError(t, err)
 
-	assert.Equal(t, float64(stamps[0]), protectedHeaderOf(t, first)["iat"])
-	assert.Equal(t, float64(stamps[1]), protectedHeaderOf(t, second)["iat"])
+	assert.Equal(t, stamps[0], headerIAT(t, first))
+	assert.Equal(t, stamps[1], headerIAT(t, second))
 
 	_, _, hdr, err := Open(second, f.inbound, f.resolver)
 	require.NoError(t, err)
@@ -330,17 +335,17 @@ func loadVectorKeys(t *testing.T) map[string]*rsa.PrivateKey {
 // (a rogue kid, a CBC content encryption) can be produced.
 func buildVectorToken(t *testing.T, v *bareVector, pub *rsa.PublicKey, kid string) string {
 	t.Helper()
-	extra := map[joselib.HeaderKey]any{}
+	extra := map[jose.HeaderKey]any{}
 	if v.IATMillis != 0 {
-		extra[joselib.HeaderKey("iat")] = v.IATMillis
-		extra[joselib.HeaderKey("iss")] = vecIssuer
+		extra[jose.HeaderKey("iat")] = v.IATMillis
+		extra[jose.HeaderKey("iss")] = vecIssuer
 	}
-	opts := &joselib.EncrypterOptions{ExtraHeaders: extra}
+	opts := &jose.EncrypterOptions{ExtraHeaders: extra}
 	if v.Typ != "" {
-		opts = opts.WithType(joselib.ContentType(v.Typ))
+		opts = opts.WithType(jose.ContentType(v.Typ))
 	}
-	encrypter, err := joselib.NewEncrypter(joselib.ContentEncryption(v.Enc),
-		joselib.Recipient{Algorithm: joselib.RSA_OAEP_256, Key: pub, KeyID: kid}, opts)
+	encrypter, err := jose.NewEncrypter(jose.ContentEncryption(v.Enc),
+		jose.Recipient{Algorithm: jose.RSA_OAEP_256, Key: pub, KeyID: kid}, opts)
 	require.NoError(t, err)
 	obj, err := encrypter.Encrypt([]byte(v.Plaintext))
 	require.NoError(t, err)
@@ -352,14 +357,20 @@ func buildVectorToken(t *testing.T, v *bareVector, pub *rsa.PublicKey, kid strin
 func regenerateVectors(t *testing.T, keys map[string]*rsa.PrivateKey) []bareVector {
 	t.Helper()
 	vectors := []bareVector{
-		{Name: "bare_a128gcm_with_typ_and_iat", Policy: "bare", Enc: "A128GCM",
-			Typ: "JOSE", IATMillis: vecIATMs, Plaintext: vecPlain},
+		{
+			Name: "bare_a128gcm_with_typ_and_iat", Policy: "bare", Enc: "A128GCM",
+			Typ: "JOSE", IATMillis: vecIATMs, Plaintext: vecPlain,
+		},
 		{Name: "bare_a256gcm", Policy: "bare", Enc: "A256GCM", Plaintext: vecPlain},
 		{Name: "wrong_kid", Policy: "bare", Enc: "A128GCM", Code: codeKidUnknown, Plaintext: vecPlain},
-		{Name: "disallowed_enc_a128cbc_hs256", Policy: "bare", Enc: "A128CBC-HS256",
-			Code: codeMalformed, Plaintext: vecPlain},
-		{Name: "bare_token_on_nested_policy", Policy: "nested", Enc: "A128GCM",
-			Code: codeMalformed, Plaintext: vecPlain},
+		{
+			Name: "disallowed_enc_a128cbc_hs256", Policy: "bare", Enc: "A128CBC-HS256",
+			Code: codeMalformed, Plaintext: vecPlain,
+		},
+		{
+			Name: "bare_token_on_nested_policy", Policy: "nested", Enc: "A128GCM",
+			Code: codeMalformed, Plaintext: vecPlain,
+		},
 	}
 	for i := range vectors {
 		kid := vecEncKid
@@ -392,7 +403,7 @@ func TestOpenBareJWEVectors(t *testing.T) {
 	}
 	bare := &Policy{
 		Direction: DirectionInbound, Mode: SealModeBareJWE,
-		DecryptKid: vecEncKid, KeyAlg: DefaultKeyAlg, Enc: joselib.A128GCM,
+		DecryptKid: vecEncKid, KeyAlg: DefaultKeyAlg, Enc: jose.A128GCM,
 	}
 	nested := &Policy{
 		Direction: DirectionInbound, DecryptKid: vecEncKid, VerifyKid: vecRogueKid,

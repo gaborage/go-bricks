@@ -4,7 +4,7 @@ import (
 	"crypto/rsa"
 	"testing"
 
-	joselib "github.com/go-jose/go-jose/v4"
+	jose "github.com/go-jose/go-jose/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -122,7 +122,7 @@ func bareOutbound() *Policy {
 		Mode:       SealModeBareJWE,
 		EncryptKid: "peer-key",
 		KeyAlg:     DefaultKeyAlg,
-		Enc:        joselib.A128GCM,
+		Enc:        jose.A128GCM,
 	}
 }
 
@@ -132,7 +132,7 @@ func bareInbound() *Policy {
 		Mode:       SealModeBareJWE,
 		DecryptKid: "our-key",
 		KeyAlg:     DefaultKeyAlg,
-		Enc:        joselib.A128GCM,
+		Enc:        jose.A128GCM,
 	}
 }
 
@@ -250,15 +250,15 @@ func TestPolicyValidateContentEncPerMode(t *testing.T) {
 	tests := []struct {
 		name     string
 		bare     bool
-		enc      joselib.ContentEncryption
+		enc      jose.ContentEncryption
 		wantCode string
 	}{
-		{"bare_a128gcm", true, joselib.A128GCM, ""},
-		{"bare_a256gcm", true, joselib.A256GCM, ""},
-		{"bare_a128cbc_hs256", true, joselib.A128CBC_HS256, codeAlgorithmDisallowed},
+		{"bare_a128gcm", true, jose.A128GCM, ""},
+		{"bare_a256gcm", true, jose.A256GCM, ""},
+		{"bare_a128cbc_hs256", true, jose.A128CBC_HS256, codeAlgorithmDisallowed},
 		{"bare_unset", true, "", codeAlgorithmDisallowed},
-		{"nested_a256gcm", false, joselib.A256GCM, ""},
-		{"nested_a128gcm", false, joselib.A128GCM, codeAlgorithmDisallowed},
+		{"nested_a256gcm", false, jose.A256GCM, ""},
+		{"nested_a128gcm", false, jose.A128GCM, codeAlgorithmDisallowed},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -282,7 +282,7 @@ func TestPolicyValidateContentEncPerMode(t *testing.T) {
 // mode does NOT relax.
 func TestPolicyValidateBareModeStillRequiresApprovedKeyAlg(t *testing.T) {
 	p := bareOutbound()
-	p.KeyAlg = joselib.RSA1_5
+	p.KeyAlg = jose.RSA1_5
 	err := p.Validate()
 	require.ErrorIs(t, err, ErrAlgorithmDisallowed)
 	requireJOSEErrorCode(t, err, codeAlgorithmDisallowed)
