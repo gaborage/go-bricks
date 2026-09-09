@@ -135,8 +135,11 @@ says `application/jose`.
 with the hook's verdict, and the hook needs the bytes — so *every* eligible response body
 is read into memory before the hook runs, bounded by `MaxResponseBytes` (`DefaultMaxJOSEBodyBytes`, 10 MiB, when zero) with the same over-cap `ValidationError`.
 A *negative* `MaxResponseBytes` means unbounded, so `Build()` refuses it alongside an
-`UnwrapBody` hook (`JOSE_POLICY_HOOK_UNBOUNDED`); a hand-built `JOSETransport` carrying that
-pair is not checked and buffers every response body with no limit at all.
+`UnwrapBody` hook (`JOSE_POLICY_HOOK_UNBOUNDED`); a hand-built `JOSETransport` carrying
+that pair cannot be refused at construction, so `unwrapResponse` falls back to
+`DefaultMaxJOSEBodyBytes` for it rather than reading an untrusted body without a limit.
+Without a hook, a negative cap still means unbounded — there the Content-Type gate has
+already vouched for the body.
 Without a hook, a non-JOSE body is never read at all. When the hook returns `ok=false`
 the buffered bytes are handed back as the response body with headers untouched. The
 responses that skip unwrapping entirely are unchanged: no `Inbound` policy, no body, or a

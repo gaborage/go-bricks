@@ -38,9 +38,11 @@ type WrapBodyFunc func(compact string) (body []byte, contentType string, err err
 // Content-Type gate that would otherwise leave a non-JOSE body unread no longer applies.
 type UnwrapBodyFunc func(contentType string, body []byte) (compact string, ok bool)
 
-// JOSETransport is an http.RoundTripper that signs+encrypts outbound request bodies
-// (jose.Seal) and decrypts+verifies inbound response bodies (jose.Open) using a fixed
-// pair of policies and a single KeyResolver.
+// JOSETransport is an http.RoundTripper that seals outbound request bodies (jose.Seal)
+// and opens inbound response bodies (jose.Open) using a fixed pair of policies and a
+// single KeyResolver. What sealing and opening MEAN is the policy's Mode: sign+encrypt
+// and decrypt+verify on the nested JWE-of-JWS default, encrypt-only and decrypt-only on
+// a SealModeBareJWE policy, which carries no signature to verify.
 //
 // Only bodies are protected: a request with no body is forwarded unsealed regardless of
 // method, and a response net/http guarantees is empty (1xx, 204, 304, any reply to HEAD) is
@@ -68,11 +70,13 @@ type JOSETransport struct {
 	// hand-constructed, since httpclient.Builder-produced clients always seed a non-nil Inner.
 	Inner nethttp.RoundTripper
 
-	// Outbound is required: the policy used to sign+encrypt every outbound request body.
+	// Outbound is required: the policy used to seal every outbound request body
+	// (sign+encrypt, or encrypt-only under SealModeBareJWE).
 	// A nil Outbound disables outbound wrapping entirely (the transport delegates to Inner).
 	Outbound *jose.Policy
 
-	// Inbound is optional: when set, application/jose responses are decrypted+verified.
+	// Inbound is optional: when set, application/jose responses are opened
+	// (decrypt+verify, or decrypt-only under SealModeBareJWE).
 	// Other response Content-Types pass through unmodified so plaintext error envelopes
 	// from JOSE-aware counterparties (e.g., GoBricks pre-trust failures) remain readable.
 	Inbound *jose.Policy
@@ -86,9 +90,10 @@ type JOSETransport struct {
 	// recommended for untrusted counterparties).
 	//
 	// Builder.WithJOSE refuses a negative cap paired with UnwrapBody at Build time. A
-	// JOSETransport built by hand is not checked: that pair buffers every eligible
-	// response body without any limit, so a counterparty can exhaust memory one
-	// response at a time.
+	// JOSETransport built by hand cannot be refused at construction, so unwrapResponse
+	// falls back to DefaultMaxJOSEBodyBytes for that pair rather than performing an
+	// unbounded read of an untrusted body. Without a hook a negative cap still means
+	// unbounded: the Content-Type gate has already vouched for the body.
 	MaxResponseBytes int64
 
 	// WrapBody optionally turns the sealed compact into the body actually sent. Nil keeps
@@ -101,7 +106,7 @@ type JOSETransport struct {
 	// default and over-cap error — before the hook decides; without it a non-JOSE body
 	// is never read at all. Builder.WithJOSE therefore refuses this hook alongside a
 	// negative (unbounded) MaxResponseBytes; a hand-built JOSETransport carrying that
-	// pair buffers every response body with no limit at all.
+	// pair falls back to DefaultMaxJOSEBodyBytes instead of reading without a limit.
 	UnwrapBody UnwrapBodyFunc
 }
 
@@ -186,11 +191,20 @@ func (t *JOSETransport) wrapRequest(req *nethttp.Request) (*nethttp.Request, err
 	clone.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(body)), nil
 	}
-	clone.Header.Set(headerContentType, contentType)
+	// An empty contentType means the hook wants no media type at all. Setting it would put
+	// a bare "Content-Type:" on the wire, which jose.IsContentType rejects and a JOSE-aware
+	// peer can refuse; defaulting it back to application/jose would mislabel a body the hook
+	// deliberately wrapped in some other format. Deleting is the only honest reading.
+	if contentType == "" {
+		clone.Header.Del(headerContentType)
+	} else {
+		clone.Header.Set(headerContentType, contentType)
+	}
 	return clone, nil
 }
 
-// unwrapResponse decrypts+verifies resp.Body when Inbound is set AND the response's
+// unwrapResponse opens resp.Body — decrypt+verify, or decrypt-only under
+// SealModeBareJWE — when Inbound is set AND the response's
 // Content-Type indicates JOSE. Plaintext responses (e.g., pre-trust error envelopes
 // from a JOSE-aware peer) and responses that definitionally carry no body pass through
 // unmodified.
@@ -202,11 +216,7 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 		return errors.New("httpclient: JOSETransport requires a KeyResolver when Inbound is set")
 	}
 
-	maxBytes := t.MaxResponseBytes
-	if maxBytes == 0 {
-		maxBytes = DefaultMaxJOSEBodyBytes
-	}
-	raw, err := readAndCloseBody(resp.Body, maxBytes)
+	raw, err := readAndCloseBody(resp.Body, effectiveMaxResponseBytes(t.MaxResponseBytes, t.UnwrapBody != nil))
 	if err != nil {
 		return fmt.Errorf("httpclient: read response body: %w", err)
 	}
@@ -231,6 +241,23 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 
 	replaceBody(resp, plaintext, mimeApplicationJSON)
 	return nil
+}
+
+// effectiveMaxResponseBytes resolves the cap unwrapResponse actually reads under, from the
+// configured MaxResponseBytes and whether an UnwrapBody hook is wired.
+//
+// Zero means "unset", so it takes the default. A negative value means unbounded, which is
+// only defensible while the Content-Type gate has already vouched for the body — with a
+// hook that gate is gone and EVERY response body is buffered, so the pair is an unbounded
+// read of untrusted bytes. Builder.WithJOSE refuses it outright at Build time
+// (JOSE_POLICY_HOOK_UNBOUNDED); a JOSETransport built by hand cannot be refused at
+// construction, so the default is restored here rather than letting a peer exhaust memory
+// one response at a time. Without a hook, negative still means unbounded as documented.
+func effectiveMaxResponseBytes(configured int64, hasUnwrapHook bool) int64 {
+	if configured == 0 || (configured < 0 && hasUnwrapHook) {
+		return DefaultMaxJOSEBodyBytes
+	}
+	return configured
 }
 
 // replaceBody installs payload as resp's body and keeps ContentLength in step with it.
