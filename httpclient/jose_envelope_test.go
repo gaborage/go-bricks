@@ -181,14 +181,14 @@ func TestJOSETransportWrapBodySendsTheVisaEnvelope(t *testing.T) {
 	before := time.Now().UnixMilli()
 	_, err := visaClient(t, f).Post(context.Background(), &httpclient.Request{
 		URL:  server.URL,
-		Body: []byte(`{"pan":"4111111111111111"}`),
+		Body: []byte(`{"pan":"card-fixture-0000"}`),
 	})
 	require.NoError(t, err)
 	after := time.Now().UnixMilli()
 
 	call := <-calls
 	assert.Equal(t, "application/json", call.contentType)
-	assert.JSONEq(t, `{"pan":"4111111111111111"}`, string(call.plaintext))
+	assert.JSONEq(t, `{"pan":"card-fixture-0000"}`, string(call.plaintext))
 	assert.Equal(t, visaKid, call.header.KeyID)
 	assert.Equal(t, "JOSE", call.header.ExtraHeaders[jose.HeaderKey("typ")])
 	// The explicit A128GCM survived Build's default-filling (which would otherwise have
@@ -226,7 +226,7 @@ func TestJOSETransportUnwrapBodyDecryptsTheVisaEnvelope(t *testing.T) {
 
 	resp, err := visaClient(t, f).Post(context.Background(), &httpclient.Request{
 		URL:  server.URL,
-		Body: []byte(`{"pan":"4111111111111111"}`),
+		Body: []byte(`{"pan":"card-fixture-0000"}`),
 	})
 	require.NoError(t, err)
 
@@ -247,7 +247,7 @@ func TestJOSETransportUnwrapBodyPassesThroughNonEnvelope(t *testing.T) {
 
 	resp, err := visaClient(t, f).Post(context.Background(), &httpclient.Request{
 		URL:  server.URL,
-		Body: []byte(`{"pan":"4111111111111111"}`),
+		Body: []byte(`{"pan":"card-fixture-0000"}`),
 	})
 	require.NoError(t, err)
 
@@ -277,7 +277,7 @@ func TestJOSETransportSealsEveryRetryAttemptFreshly(t *testing.T) {
 
 	resp, err := client.Post(context.Background(), &httpclient.Request{
 		URL:  server.URL,
-		Body: []byte(`{"pan":"4111111111111111"}`),
+		Body: []byte(`{"pan":"card-fixture-0000"}`),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)

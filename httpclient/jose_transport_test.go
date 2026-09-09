@@ -102,7 +102,7 @@ func TestJOSETransportRoundtripEncryptsAndDecrypts(t *testing.T) {
 
 	transport := newJOSETransport(f)
 
-	plaintextReq := `{"pan":"4111111111111111"}`
+	plaintextReq := `{"pan":"card-fixture-0000"}`
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewReader([]byte(plaintextReq)))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
@@ -116,7 +116,7 @@ func TestJOSETransportRoundtripEncryptsAndDecrypts(t *testing.T) {
 
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"echo":{"pan":"4111111111111111"}}`, string(body))
+	assert.JSONEq(t, `{"echo":{"pan":"card-fixture-0000"}}`, string(body))
 }
 
 func TestJOSETransportPreTrustErrorPassesThrough(t *testing.T) {
@@ -344,7 +344,7 @@ func TestJOSETransportSealsOnlyWhenTheRequestCarriesABody(t *testing.T) {
 	// exactly like a bodyless GET, and http.NoBody counts as bodyless despite being non-nil.
 	// An unset body field stays a nil io.Reader, so http.NewRequestWithContext leaves
 	// req.Body nil — the shape a real GET carries.
-	const pan = "4111111111111111"
+	const pan = "card-fixture-0000"
 	f := jositest.NewBidirectionalFixture(t)
 
 	tests := []struct {
