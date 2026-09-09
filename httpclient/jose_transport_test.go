@@ -593,3 +593,58 @@ func TestBuilderWithJOSEFailsClosedOnAHookWithoutItsPolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestJOSETransportUnwrapBodyRespectsMaxResponseBytes(t *testing.T) {
+	// With a hook set the Content-Type gate no longer keeps a non-JOSE body unread, so
+	// the cap is the only thing standing between the caller and an unbounded buffer.
+	f := jositest.NewBidirectionalFixture(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(bytes.Repeat([]byte("A"), 1024))
+	}))
+	defer server.Close()
+
+	transport := newJOSETransport(f)
+	transport.MaxResponseBytes = 256
+	transport.UnwrapBody = func(_ string, body []byte) (compact string, ok bool) {
+		t.Errorf("UnwrapBody must not run on a body that exceeded the cap (%d bytes)", len(body))
+		return "", false
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
+	require.NoError(t, err)
+
+	resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is nil on this error path; the transport closed the underlying body
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	assert.Contains(t, err.Error(), "exceeds")
+	assert.True(t, httpclient.IsErrorType(err, httpclient.ValidationError),
+		"oversize response must be a typed ValidationError, got %T: %v", err, err)
+}
+
+func TestJOSETransportWrapBodyErrorAbortsBeforeSending(t *testing.T) {
+	f := jositest.NewBidirectionalFixture(t)
+	var reached bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached = true
+		t.Error("request must not reach the server when WrapBody fails")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sentinel := errors.New("envelope unavailable")
+	transport := newJOSETransport(f)
+	transport.WrapBody = func(string) (body []byte, contentType string, err error) {
+		return nil, "", sentinel
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
+	require.NoError(t, err)
+
+	resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is nil: RoundTrip failed before any HTTP exchange
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	assert.ErrorIs(t, err, sentinel)
+	assert.False(t, reached)
+}
