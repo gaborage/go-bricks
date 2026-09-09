@@ -49,6 +49,21 @@ type Policy struct {
 	KeyAlg jose.KeyAlgorithm
 	Enc    jose.ContentEncryption
 	Cty    string
+
+	// Typ is the JWE protected `typ` header. SealModeBareJWE only; Visa Message Level
+	// Encryption expects "JOSE".
+	Typ string
+
+	// ProtectedHeaders are copied verbatim into the JWE protected header. SealModeBareJWE
+	// only. Naming a param the framework owns (alg, enc, kid, cty, typ) or one JOSE
+	// reserves is a validation error, never an overwrite.
+	ProtectedHeaders map[string]any
+
+	// IATMillis makes Seal stamp an `iat` protected header holding Unix epoch
+	// MILLISECONDS at seal time — the Visa MLE convention, not the seconds-based JWT
+	// claim of the same name. SealModeBareJWE only. jose never judges its freshness on
+	// the way in; that is the caller's policy.
+	IATMillis bool
 }
 
 // Validate checks the Policy for internal consistency (correct kids set for the direction,
@@ -72,10 +87,21 @@ func (p *Policy) Validate() error {
 	return p.validateDirection()
 }
 
-// validateMode rejects an unrecognized Mode before any mode-dependent check runs.
+// validateMode rejects an unrecognized Mode before any mode-dependent check runs, and
+// keeps the bare-only fields out of a JWE-of-JWS policy so the default posture stays
+// byte-identical to what it produced before bare mode existed.
 func (p *Policy) validateMode() error {
 	switch p.Mode {
-	case SealModeJWEofJWS, SealModeBareJWE:
+	case SealModeJWEofJWS:
+		if p.Typ != "" || p.ProtectedHeaders != nil || p.IATMillis {
+			return &Error{
+				Sentinel: ErrPolicyMismatch,
+				Code:     codePolicyModeMismatch,
+				Message:  "typ, protected headers and iat stamping require bare-JWE mode",
+			}
+		}
+		return nil
+	case SealModeBareJWE:
 		return nil
 	default:
 		return &Error{
