@@ -618,6 +618,29 @@ func TestBuilderWithJOSEFailsClosedOnAHookWithoutItsPolicy(t *testing.T) {
 	}
 }
 
+func TestBuilderWithJOSERefusesAnUnboundedCapWithAnUnwrapHook(t *testing.T) {
+	f := jositest.NewBidirectionalFixture(t)
+	_, unwrap := httpclient.VisaMLEEnvelope()
+	log := logger.New("info", false)
+
+	client, err := httpclient.NewBuilder(log).WithJOSE(httpclient.JOSEConfig{
+		Inbound:          f.ClientInbound,
+		Resolver:         f.Resolver,
+		UnwrapBody:       unwrap,
+		MaxResponseBytes: -1, // "unbounded" — every response body buffered without limit
+	}).Build()
+
+	require.Error(t, err)
+	assert.Nil(t, client)
+	assert.Contains(t, err.Error(), "UnwrapBody cannot be combined with an unbounded MaxResponseBytes")
+	assert.True(t, jose.IsError(err), "unbounded-cap failure must be a *jose.Error, got %T", err)
+	require.ErrorIs(t, err, jose.ErrPolicyMismatch)
+
+	var joseErr *jose.Error
+	require.ErrorAs(t, err, &joseErr)
+	assert.Equal(t, "JOSE_POLICY_HOOK_UNBOUNDED", joseErr.Code)
+}
+
 func TestJOSETransportWrapBodyErrorAbortsBeforeSending(t *testing.T) {
 	f := jositest.NewBidirectionalFixture(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

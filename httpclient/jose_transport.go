@@ -84,6 +84,11 @@ type JOSETransport struct {
 	// MaxResponseBytes bounds the response body read when Inbound is set. Zero means
 	// use DefaultMaxJOSEBodyBytes. A negative value disables the cap entirely (NOT
 	// recommended for untrusted counterparties).
+	//
+	// Builder.WithJOSE refuses a negative cap paired with UnwrapBody at Build time. A
+	// JOSETransport built by hand is not checked: that pair buffers every eligible
+	// response body without any limit, so a counterparty can exhaust memory one
+	// response at a time.
 	MaxResponseBytes int64
 
 	// WrapBody optionally turns the sealed compact into the body actually sent. Nil keeps
@@ -94,7 +99,9 @@ type JOSETransport struct {
 	// replacing the default application/jose Content-Type rule. With it set EVERY
 	// eligible response body is buffered — bounded by MaxResponseBytes, with the same
 	// default and over-cap error — before the hook decides; without it a non-JOSE body
-	// is never read at all.
+	// is never read at all. Builder.WithJOSE therefore refuses this hook alongside a
+	// negative (unbounded) MaxResponseBytes; a hand-built JOSETransport carrying that
+	// pair buffers every response body with no limit at all.
 	UnwrapBody UnwrapBodyFunc
 }
 
