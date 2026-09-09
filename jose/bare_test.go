@@ -183,3 +183,71 @@ func TestOpenBareJWERoundTripA256GCM(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, payload, plaintext)
 }
+
+func TestSealBareJWEStampsTheClockSeamAtEachCall(t *testing.T) {
+	f := newBareFixture(t)
+	f.outbound.IATMillis = true
+
+	original := nowMillis
+	t.Cleanup(func() { nowMillis = original })
+	stamps := []int64{1_700_000_000_123, 1_700_000_042_456}
+	call := 0
+	nowMillis = func() int64 {
+		v := stamps[call]
+		call++
+		return v
+	}
+
+	first, err := Seal([]byte(`{}`), f.outbound, f.resolver)
+	require.NoError(t, err)
+	second, err := Seal([]byte(`{}`), f.outbound, f.resolver)
+	require.NoError(t, err)
+
+	assert.Equal(t, float64(stamps[0]), protectedHeaderOf(t, first)["iat"])
+	assert.Equal(t, float64(stamps[1]), protectedHeaderOf(t, second)["iat"])
+
+	_, _, hdr, err := Open(second, f.inbound, f.resolver)
+	require.NoError(t, err)
+	assert.Equal(t, stamps[1], hdr.JWE.IATMillis)
+}
+
+func TestSealBareJWEDoesNotMutatePolicyHeaders(t *testing.T) {
+	f := newBareFixture(t)
+	f.outbound.IATMillis = true
+	f.outbound.ProtectedHeaders = map[string]any{"iss": "acme"}
+
+	_, err := Seal([]byte(`{}`), f.outbound, f.resolver)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"iss": "acme"}, f.outbound.ProtectedHeaders)
+}
+
+func TestOpenBareJWECtyRule(t *testing.T) {
+	tests := []struct {
+		name      string
+		sealCty   string
+		policyCty string
+		wantCode  string
+	}{
+		{"agreeing_cty", DefaultCty, DefaultCty, ""},
+		{"peer_omits_cty", "", DefaultCty, ""},
+		{"policy_omits_cty", "text/csv", "", ""},
+		{"disagreeing_cty", "text/csv", DefaultCty, "JOSE_CTY_REJECTED"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newBareFixture(t)
+			f.outbound.Cty = tt.sealCty
+			compact, err := Seal([]byte(`{}`), f.outbound, f.resolver)
+			require.NoError(t, err)
+
+			f.inbound.Cty = tt.policyCty
+			_, _, _, err = Open(compact, f.inbound, f.resolver)
+			if tt.wantCode == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, ErrCtyRejected)
+			requireJOSEErrorCode(t, err, tt.wantCode)
+		})
+	}
+}
