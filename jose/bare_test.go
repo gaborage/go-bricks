@@ -128,3 +128,58 @@ func TestSealBareJWERejectsInvalidPolicy(t *testing.T) {
 	require.ErrorIs(t, err, ErrPolicyMismatch)
 	requireJOSEErrorCode(t, err, codePolicyDirectionMismatch)
 }
+
+func TestOpenBareJWERoundTrip(t *testing.T) {
+	f := newBareFixture(t)
+	f.outbound.Typ = "JOSE"
+	f.outbound.IATMillis = true
+	payload := []byte(`{"pan":"4111111111111111","sub":"cardholder-9"}`)
+
+	compact, err := Seal(payload, f.outbound, f.resolver)
+	require.NoError(t, err)
+
+	plaintext, claims, hdr, err := Open(compact, f.inbound, f.resolver)
+	require.NoError(t, err)
+	assert.Equal(t, payload, plaintext)
+	require.NotNil(t, claims)
+	assert.Equal(t, "cardholder-9", claims.Subject)
+
+	assert.Equal(t, "our-key", hdr.JWE.Kid)
+	assert.Equal(t, "RSA-OAEP-256", hdr.JWE.Alg)
+	assert.Equal(t, "A128GCM", hdr.JWE.Enc)
+	assert.Equal(t, "JOSE", hdr.JWE.Typ)
+	assert.Empty(t, hdr.JWE.Cty)
+	// iat is reported as written, in milliseconds; jose never judges its freshness.
+	wireIAT, ok := protectedHeaderOf(t, compact)["iat"].(float64)
+	require.True(t, ok)
+	assert.Equal(t, int64(wireIAT), hdr.JWE.IATMillis)
+
+	// No inner JWS layer exists, so its header stays zero.
+	assert.Equal(t, Header{}, hdr.JWS)
+}
+
+func TestOpenBareJWEWithoutIATReportsZero(t *testing.T) {
+	f := newBareFixture(t)
+
+	compact, err := Seal([]byte(`{}`), f.outbound, f.resolver)
+	require.NoError(t, err)
+	_, _, hdr, err := Open(compact, f.inbound, f.resolver)
+	require.NoError(t, err)
+	assert.Zero(t, hdr.JWE.IATMillis)
+	assert.Empty(t, hdr.JWE.Typ)
+}
+
+func TestOpenBareJWERoundTripA256GCM(t *testing.T) {
+	f := newBareFixture(t)
+	f.outbound.Enc = joselib.A256GCM
+	f.inbound.Enc = joselib.A256GCM
+	payload := []byte(`{"amount":1250}`)
+
+	compact, err := Seal(payload, f.outbound, f.resolver)
+	require.NoError(t, err)
+	assert.Equal(t, "A256GCM", protectedHeaderOf(t, compact)["enc"])
+
+	plaintext, _, _, err := Open(compact, f.inbound, f.resolver)
+	require.NoError(t, err)
+	assert.Equal(t, payload, plaintext)
+}

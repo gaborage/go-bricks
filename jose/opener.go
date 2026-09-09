@@ -35,6 +35,10 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 		}
 	}
 
+	if p.Mode == SealModeBareJWE {
+		return openBare(compact, p, r)
+	}
+
 	decKey, err := r.PrivateKey(p.DecryptKid)
 	if err != nil {
 		return nil, nil, OpenHeader{}, err
@@ -47,7 +51,7 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 	jwsCompact, jweHdr, err := cryptoadapter.Decrypt(compact, decKey, &cryptoadapter.DecryptOptions{
 		ExpectedKid:       p.DecryptKid,
 		AllowedKeyAlgs:    AllowedKeyAlgs(),
-		AllowedContentEnc: AllowedContentEncs(),
+		AllowedContentEnc: AllowedContentEncsFor(SealModeJWEofJWS),
 	})
 	hdr.JWE = cryptoHeaderToOpen(&jweHdr)
 	if err != nil {
@@ -72,7 +76,7 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 	if p.Cty != "" && jwsHdr.Cty != "" && jwsHdr.Cty != p.Cty {
 		return nil, nil, hdr, &Error{
 			Sentinel: ErrCtyRejected,
-			Code:     "JOSE_CTY_REJECTED",
+			Code:     codeCtyRejected,
 			Status:   400,
 			Message:  "Disallowed cty header",
 			Kid:      jwsHdr.Kid,
@@ -84,6 +88,40 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 	return innerPayload, claims, hdr, nil
 }
 
+// openBare decrypts a bare JWE: no inner JWS, so nothing is verified and hdr.JWS stays
+// zero. The peer is authenticated out of band by the deployment, not here.
+func openBare(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *Claims, hdr OpenHeader, err error) {
+	decKey, err := r.PrivateKey(p.DecryptKid)
+	if err != nil {
+		return nil, nil, OpenHeader{}, err
+	}
+
+	payload, jweHdr, err := cryptoadapter.Decrypt(compact, decKey, &cryptoadapter.DecryptOptions{
+		ExpectedKid:       p.DecryptKid,
+		AllowedKeyAlgs:    AllowedKeyAlgs(),
+		AllowedContentEnc: AllowedContentEncsFor(p.Mode),
+	})
+	hdr.JWE = cryptoHeaderToOpen(&jweHdr)
+	if err != nil {
+		return nil, nil, hdr, mapDecryptError(err, p, &jweHdr)
+	}
+
+	// Same permissive cty rule as the nested path, applied to the only header there is:
+	// a peer that declares a cty must agree with the policy, one that omits it is fine.
+	if p.Cty != "" && jweHdr.Cty != "" && jweHdr.Cty != p.Cty {
+		return nil, nil, hdr, &Error{
+			Sentinel: ErrCtyRejected,
+			Code:     codeCtyRejected,
+			Status:   400,
+			Message:  "Disallowed cty header",
+			Kid:      jweHdr.Kid,
+			Alg:      jweHdr.Alg,
+		}
+	}
+
+	return payload, parseClaims(payload), hdr, nil
+}
+
 // OpenHeader holds the diagnostic headers from both JOSE layers, surfaced to the caller
 // so the middleware can log them. Never includes plaintext.
 type OpenHeader struct {
@@ -93,15 +131,26 @@ type OpenHeader struct {
 
 // Header (jose-package level) is the diagnostic header shape exposed to callers,
 // distinct from the internal cryptoadapter.Header to insulate consumers from library churn.
+// The struct stays comparable (no map or slice fields) so callers can compare two
+// headers directly.
 type Header struct {
 	Kid string
 	Alg string
 	Enc string
 	Cty string
+	Typ string
+	// IATMillis is the `iat` protected header in Unix epoch MILLISECONDS (bare mode's
+	// Visa MLE convention, not the seconds-based JWT claim), 0 when absent or malformed.
+	// Reported, never judged: freshness is the caller's policy.
+	IATMillis int64
 }
 
 func cryptoHeaderToOpen(h *cryptoadapter.Header) Header {
-	return Header{Kid: h.Kid, Alg: h.Alg, Enc: h.Enc, Cty: h.Cty}
+	out := Header{Kid: h.Kid, Alg: h.Alg, Enc: h.Enc, Cty: h.Cty, Typ: h.Typ}
+	if iat, err := h.ExtraInt64("iat"); err == nil {
+		out.IATMillis = iat
+	}
+	return out
 }
 
 func mapDecryptError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {
