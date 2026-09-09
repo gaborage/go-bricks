@@ -52,6 +52,17 @@ they read `Policy.Mode` to decide what to produce and accept.**
   any of them is refused too: they describe headers `Seal` writes, nothing would read them
   on the way in, and silently ignoring them would let a consumer believe a header was
   being enforced.
+- **`KeyAlg` and `Enc` bind the INBOUND path too, narrowing the mode's allowlist.**
+  `Open` hands the parser exactly the algorithms the policy declares rather than the whole
+  mode-wide list, in both modes, through the single `inboundAllowlists` helper both `Open`
+  paths call. Bare mode admits two content encryptions, so without this a policy written
+  for Visa's `A128GCM` would also open an `A256GCM` token — a shape that deployment never
+  agreed with the peer, accepted because the mode allows it in general. `Validate` already
+  refuses a declared value that is off the mode's allowlist, so pinning can only narrow,
+  never widen; an unset value keeps the mode-wide list, which only a hand-built policy
+  reaches since the tag parser and `Validate` both insist on a value. The refusal is
+  go-jose's compact-parse failure, `JOSE_MALFORMED`, raised before any key material is
+  touched. The nested path is unchanged in effect: its allowlists hold one value each.
 - **A static map plus a bool, not a `func(...) map[string]any`.** The headers a partner
   prescribes are deployment constants; a callback would make the protected header a
   per-request decision, unvalidatable at startup, and would put caller code inside the
@@ -181,6 +192,14 @@ reports and the caller decides. A freshness knob here would also be the first th
   the wrong kids for its direction used to resolve a key first and fail afterwards; it now
   fails before the resolver is called. A caller whose test double counted resolver calls
   on a rejected policy sees one fewer.
+- **An inbound policy's declared `KeyAlg`/`Enc` now gate what `Open` accepts.** Existing
+  nested deployments see no change — the nested allowlists hold one key algorithm and one
+  content encryption, so pinning them is a no-op. A bare deployment must declare the `Enc`
+  its peer actually sends: a policy pinned to `A128GCM` refuses an `A256GCM` token with
+  `JOSE_MALFORMED`, where before it opened. `httpclient`'s policy normalization fills an
+  unset `Enc` with `jose.DefaultEnc` (`A256GCM`) before validating, so an inbound bare
+  policy handed to `httpclient.WithJOSE` must set `Enc` explicitly to accept Visa's
+  `A128GCM` — explicit over implicit, and a silently-wrong default was the alternative.
 - **`Header` grew two fields and stayed comparable.** `Typ` is populated on the nested path
   too — it is read off whichever protected header the layer has — so a nested deployment
   that logs `OpenHeader` starts seeing a `typ` value where a peer sets one.
@@ -201,6 +220,6 @@ reports and the caller decides. A freshness knob here would also be the first th
   the comparability break
 - `jose/policy.go` (`SealMode`, `validateMode`, `validateBareHeaders`,
   `validateBareDirection`, `validateBareKids`), `jose/bare.go` (`sealBare`, `openBare`,
-  `bareExtraHeaders`), `jose/algorithms.go` (`IsAllowedEncFor`, `AllowedContentEncsFor`),
+  `bareExtraHeaders`), `jose/algorithms.go` (`IsAllowedEncFor`, `AllowedContentEncsFor`, `inboundAllowlists`),
   `jose/opener.go` (`Header`), `jose/sealer.go`,
   `jose/internal/cryptoadapter/extra.go` (`CheckExtra`)

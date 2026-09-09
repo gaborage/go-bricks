@@ -49,6 +49,13 @@ type Policy struct {
 
 	// Algorithms — defaults applied by the parser if tag omits them.
 	// SigAlg is unused, and must stay unset, in SealModeBareJWE.
+	//
+	// KeyAlg and Enc are read on BOTH sides in both modes: outbound they are what Seal
+	// writes; inbound they are what Open accepts, narrowing the mode's allowlist to
+	// exactly the declared value. Validate refuses a value off the mode's allowlist, so
+	// declaring one can only narrow. Leaving one unset keeps the mode-wide allowlist on
+	// the way in — relevant only to a hand-built policy, since the tag parser and
+	// Validate both insist on a value.
 	SigAlg jose.SignatureAlgorithm
 	KeyAlg jose.KeyAlgorithm
 	Enc    jose.ContentEncryption

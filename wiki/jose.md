@@ -119,6 +119,8 @@ Visa **Message Level Encryption** does not use the nested shape above: an MLE pa
 
 `RSA-OAEP-256` is the only key-wrapping algorithm in either mode; `alg=none`, `HS*`, `RSA1_5` and ECDSA stay rejected in both. `IsAllowedEncFor(mode, enc)` and `AllowedContentEncsFor(mode)` are the mode-aware predicates — `IsAllowedEnc`/`AllowedContentEncs` keep the JWE-of-JWS meaning, so the nested floor stays `A256GCM`, and an unknown mode yields an empty allowlist that rejects every token. Field-level sealing of AMQP events (`jose/sealed`, ADR-097) is a different door and is unaffected: it stays `A256GCM`.
 
+**`KeyAlg` and `Enc` are read on the way in, not only on the way out.** On an outbound policy they are what `Seal` writes; on an **inbound** policy they are what `Open` accepts — it narrows the parser's allowlist to exactly the declared values, in both modes. A bare inbound policy declaring `Enc: josev4.A128GCM` therefore refuses an `A256GCM` token even though bare mode admits both: that token is not the shape the deployment agreed with the peer. The refusal is `JOSE_MALFORMED`, raised by go-jose's compact parse before any key material is touched. `Validate` already rejects a value that is off the mode's allowlist, so declaring one can only ever narrow, never widen. Leaving `Enc` or `KeyAlg` unset on an inbound policy keeps the whole mode-wide allowlist — reachable only with a hand-built policy, since both the tag parser and `Validate` insist on a value.
+
 **Use it only when the peer is authenticated out of band.** Nothing in bare mode verifies a signature, so a successful `Open` proves only that the payload was encrypted to your public key — which any holder of that public key can do. Without mTLS or a partner token such as `X-Pay-Token`, turning bare mode on removes sender authentication from that route.
 
 **Policy pair** (outbound to the peer, inbound from the peer). `A128GCM` has no go-bricks alias, so the go-jose constant is imported under its own name:
@@ -147,8 +149,8 @@ inbound := &jose.Policy{
     Direction:  jose.DirectionInbound,
     Mode:       jose.SealModeBareJWE,
     DecryptKid: "our-mle-decrypt",        // our private key; the ONLY kid a bare inbound policy may set
-    KeyAlg:     jose.DefaultKeyAlg,
-    Enc:        josev4.A128GCM,
+    KeyAlg:     jose.DefaultKeyAlg,       // inbound: the only key-wrapping alg Open accepts
+    Enc:        josev4.A128GCM,           // inbound: the only content encryption Open accepts
     Cty:        jose.DefaultCty,
 }
 

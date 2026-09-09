@@ -48,10 +48,11 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 		return nil, nil, OpenHeader{}, err
 	}
 
+	keyAlgs, encs := inboundAllowlists(p)
 	jwsCompact, jweHdr, err := cryptoadapter.Decrypt(compact, decKey, &cryptoadapter.DecryptOptions{
 		ExpectedKid:       p.DecryptKid,
-		AllowedKeyAlgs:    AllowedKeyAlgs(),
-		AllowedContentEnc: AllowedContentEncsFor(SealModeJWEofJWS),
+		AllowedKeyAlgs:    keyAlgs,
+		AllowedContentEnc: encs,
 	})
 	hdr.JWE = cryptoHeaderToOpen(&jweHdr)
 	if err != nil {

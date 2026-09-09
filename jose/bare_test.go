@@ -405,22 +405,33 @@ func TestOpenBareJWEVectors(t *testing.T) {
 		priv: map[string]*rsa.PrivateKey{vecEncKid: keys[vecEncKid]},
 		pub:  map[string]*rsa.PublicKey{vecRogueKid: &keys[vecRogueKid].PublicKey},
 	}
-	bare := &Policy{
+	// One bare policy per accepted content encryption: an inbound policy narrows the
+	// mode's allowlist to the Enc it declares, so a single policy cannot open both
+	// vectors. The A128CBC-HS256 vector stays on bare128, where it is off the allowlist.
+	bare128 := &Policy{
 		Direction: DirectionInbound, Mode: SealModeBareJWE,
 		DecryptKid: vecEncKid, KeyAlg: DefaultKeyAlg, Enc: jose.A128GCM,
+	}
+	bare256 := &Policy{
+		Direction: DirectionInbound, Mode: SealModeBareJWE,
+		DecryptKid: vecEncKid, KeyAlg: DefaultKeyAlg, Enc: jose.A256GCM,
 	}
 	nested := &Policy{
 		Direction: DirectionInbound, DecryptKid: vecEncKid, VerifyKid: vecRogueKid,
 		SigAlg: DefaultSigAlg, KeyAlg: DefaultKeyAlg, Enc: DefaultEnc,
 	}
-	require.NoError(t, bare.Validate())
+	require.NoError(t, bare128.Validate())
+	require.NoError(t, bare256.Validate())
 	require.NoError(t, nested.Validate())
 
 	for _, v := range file.Vectors {
 		t.Run(v.Name, func(t *testing.T) {
-			p := bare
-			if v.Policy == "nested" {
+			p := bare128
+			switch {
+			case v.Policy == "nested":
 				p = nested
+			case v.Enc == string(jose.A256GCM):
+				p = bare256
 			}
 			plaintext, claims, hdr, err := Open(v.Compact, p, resolver)
 			if v.Code != "" {
@@ -480,4 +491,83 @@ func TestOpenBareJWERejectsNestedTokenWithoutDeclaredCty(t *testing.T) {
 	require.ErrorIs(t, err, ErrCtyRejected)
 	assert.Nil(t, plaintext)
 	assert.Equal(t, "JWS", hdr.JWE.Cty)
+}
+
+// TestOpenBareJWEHonoursDeclaredEnc pins the inbound narrowing: a bare policy that
+// declares an Enc accepts only that content encryption, never the rest of the mode's
+// allowlist. Both orderings of the A128GCM/A256GCM pair are covered, so keeping the
+// mode-wide list on either side of the pair fails here.
+func TestOpenBareJWEHonoursDeclaredEnc(t *testing.T) {
+	tests := []struct {
+		name      string
+		sealEnc   jose.ContentEncryption
+		policyEnc jose.ContentEncryption
+		wantOpen  bool
+	}{
+		{"declared_a256gcm_refuses_an_a128gcm_token", jose.A128GCM, jose.A256GCM, false},
+		{"declared_a128gcm_refuses_an_a256gcm_token", jose.A256GCM, jose.A128GCM, false},
+		{"declared_a128gcm_opens_an_a128gcm_token", jose.A128GCM, jose.A128GCM, true},
+		{"declared_a256gcm_opens_an_a256gcm_token", jose.A256GCM, jose.A256GCM, true},
+	}
+	payload := []byte(`{"amount":1250}`)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newBareFixture(t)
+			f.outbound.Enc = tt.sealEnc
+			compact, err := Seal(payload, f.outbound, f.resolver)
+			require.NoError(t, err)
+			require.Equal(t, string(tt.sealEnc), peekHeader(t, compact).Enc)
+
+			f.inbound.Enc = tt.policyEnc
+			require.NoError(t, f.inbound.Validate())
+			plaintext, _, _, err := Open(compact, f.inbound, f.resolver)
+			if tt.wantOpen {
+				require.NoError(t, err)
+				assert.Equal(t, payload, plaintext)
+				return
+			}
+			// The allowlist is enforced by go-jose's compact parse, before any key
+			// material is touched, so the verdict is the malformed-payload error.
+			require.ErrorIs(t, err, ErrMalformed)
+			requireJOSEErrorCode(t, err, codeMalformed)
+		})
+	}
+}
+
+// TestOpenBareJWEWithoutDeclaredEncAcceptsTheModeAllowlist pins the other half of the
+// narrowing rule: an inbound policy that declares no Enc keeps the whole bare-mode
+// allowlist. Open does not run Validate (which would refuse an unset Enc), so this is the
+// defensive branch a hand-built policy reaches.
+func TestOpenBareJWEWithoutDeclaredEncAcceptsTheModeAllowlist(t *testing.T) {
+	for _, enc := range []jose.ContentEncryption{jose.A128GCM, jose.A256GCM} {
+		t.Run("seals_"+string(enc), func(t *testing.T) {
+			f := newBareFixture(t)
+			f.outbound.Enc = enc
+			payload := []byte(`{"amount":1250}`)
+			compact, err := Seal(payload, f.outbound, f.resolver)
+			require.NoError(t, err)
+
+			f.inbound.Enc = ""
+			plaintext, _, _, err := Open(compact, f.inbound, f.resolver)
+			require.NoError(t, err)
+			assert.Equal(t, payload, plaintext)
+		})
+	}
+}
+
+// TestOpenBareJWEHonoursDeclaredKeyAlg pins the key-management half of the narrowing.
+// Only the matching case is expressible: allowedKeyAlgs holds exactly RSA-OAEP-256, so a
+// bare policy has no second algorithm to pin against and no mismatching token exists.
+func TestOpenBareJWEHonoursDeclaredKeyAlg(t *testing.T) {
+	f := newBareFixture(t)
+	f.inbound.KeyAlg = jose.RSA_OAEP_256
+	require.NoError(t, f.inbound.Validate())
+
+	payload := []byte(`{"amount":1250}`)
+	compact, err := Seal(payload, f.outbound, f.resolver)
+	require.NoError(t, err)
+
+	plaintext, _, _, err := Open(compact, f.inbound, f.resolver)
+	require.NoError(t, err)
+	assert.Equal(t, payload, plaintext)
 }
