@@ -222,12 +222,13 @@ if err != nil {
 }
 ```
 
-**Per-attempt freshness.** `JOSETransport` sits below the retry loop, so every retry
-attempt re-runs `jose.Seal` and produces a freshly-sealed body, with the bare-mode `iat`
-recomputed at seal time — which is what MLE's millisecond `iat` wants. It is a re-seal, not
-a uniqueness guarantee: two attempts landing inside the same millisecond share an `iat`, and
-`jose.Seal` mints no `jti` at all — a nested policy's `jti` comes from the signed payload the
-caller hands it.
+**Per-attempt freshness.** `JOSETransport` sits below the retry loop, so for a request that
+carries a body and has an `Outbound` policy set, every retry attempt re-runs `jose.Seal` and
+produces a freshly-sealed body; in bare mode, a fresh `iat` is recomputed at seal time only
+when `Policy.IATMillis` is `true` — which is what MLE's millisecond `iat` wants. It is a
+re-seal, not a uniqueness guarantee: two attempts landing inside the same millisecond share
+an `iat`, and `jose.Seal` mints no `jti` at all — a nested policy's `jti` comes from the
+signed payload the caller hands it.
 
 ### Mutual TLS (client certificates)
 
