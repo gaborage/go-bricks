@@ -348,6 +348,13 @@ its shape, never of naming fields.
 _Avoid_: pre-encoded payload (one cause, not the class), raw payload (collides
 with `RawMessage` and the raw-SQL doors), blob
 
+**Credential literal**:
+A secret embedded in SQL statement text because the DDL grammar takes no bind
+parameter for it — PostgreSQL `PASSWORD '<literal>'`, Oracle `IDENTIFIED BY
+<token>`. It never reaches `args`, so it is scrubbed by shape in
+`database/sqlredact`, never by field name.
+_Avoid_: inline password, hardcoded secret (a different defect), query literal
+
 **Installed provider**:
 The tracer or meter provider a test or the application hands the OTel global
 setter, replacing whatever was there. Tests install one to capture spans or

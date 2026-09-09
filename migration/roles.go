@@ -5,25 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/gaborage/go-bricks/database/identifier"
+	"github.com/gaborage/go-bricks/database/sqlredact"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
-
-// pgPasswordLiteralPattern matches the `PASSWORD 'literal'` clause emitted by
-// buildPGRoleStatements. Used by summarizeStmt to redact the literal before
-// the SQL fragment is wrapped into any error message — keeps the resolved
-// secret out of error logs and stack traces when ExecContext fails on a
-// password-bearing statement.
-//
-// Matches a single-quoted PostgreSQL string literal: an opening single quote,
-// any number of non-quote characters or escaped doubled-quote pairs, then a
-// closing single quote. Case-insensitive on the PASSWORD keyword for safety.
-// The keyword + whitespace prefix is captured in group 1 so the substitution
-// preserves the original casing and spacing.
-var pgPasswordLiteralPattern = regexp.MustCompile(`(?i)(PASSWORD\s+)'(?:[^']|'')*'`)
 
 // PGRoleSpec describes a PostgreSQL role-pair plus per-tenant schema for the
 // migrator-vs-runtime role-separation model defined in issue #378.
@@ -284,13 +271,16 @@ func quotePGStringLiteral(s string) string {
 // chars, for use in provisioning error messages. Keeps the wrapping error
 // short while still naming the failing statement.
 //
-// Redacts any `PASSWORD '<literal>'` clause before the first-line split and
-// truncation so a failure on ALTER ROLE ... PASSWORD doesn't leak the resolved
-// secret into the returned error string (which downstream callers may log).
-// Order matters: a password containing a newline would otherwise leave the
-// first-line fragment ending mid-literal, which the pattern cannot match.
+// Delegates to sqlredact.Statement, the same helper the database tracking
+// wrapper uses, so a failure on ALTER ROLE ... PASSWORD doesn't leak the
+// resolved secret into the returned error string (which downstream callers may
+// log) and the two redaction sites cannot drift. The scrub runs before the
+// first-line split as well as before the truncation, for the reason given on
+// sqlredact.Statement: a password containing a newline would otherwise leave
+// the fragment ending mid-literal, which reads as an unterminated constant
+// rather than a credential.
 func summarizeStmt(stmt string) string {
-	first := pgPasswordLiteralPattern.ReplaceAllString(stmt, "${1}'[REDACTED]'")
+	first := sqlredact.Statement(stmt)
 	if idx := strings.IndexByte(first, '\n'); idx > 0 {
 		first = first[:idx]
 	}

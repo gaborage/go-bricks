@@ -1007,3 +1007,70 @@ func TestEqualFoldASCII(t *testing.T) {
 		})
 	}
 }
+
+// credentialDDL is a password-bearing statement whose literal must never reach a
+// log field or a span attribute.
+const (
+	credentialDDL      = `ALTER ROLE "svc" PASSWORD 'hunter2'`
+	credentialLiteral  = "hunter2"
+	credentialRedacted = `PASSWORD '[REDACTED]'`
+	// credentialDDLRedacted is credentialDDL's scrubbed form, short enough to
+	// survive a MaxQueryLength that the unscrubbed statement overruns.
+	credentialDDLRedacted = `ALTER ROLE "svc" PASSWORD '[REDACTED]'`
+)
+
+// TestTrackDBOperationRedactsCredentialLiteral pins that a password-bearing DDL
+// reaches the query log field scrubbed, at every level. The SensitiveDataFilter
+// masks by field name and cannot see into statement text, so the scrub is the
+// only defense on this path.
+func TestTrackDBOperationRedactsCredentialLiteral(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		wantLevel string
+	}{
+		{name: "driver_error_logs_at_error", err: errors.New("permission denied"), wantLevel: levelError},
+		{name: "success_logs_at_debug", err: nil, wantLevel: levelDebug},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := logger.WithDBCounter(context.Background())
+			recLogger := newRecordingLogger()
+			settings := Settings{slowQueryThreshold: time.Second, maxQueryLength: DefaultMaxQueryLength}
+
+			start := time.Now().Add(-10 * time.Millisecond)
+			TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings},
+				credentialDDL, nil, start, 0, tt.err)
+
+			events := recLogger.events()
+			require.Lenf(t, events, 1, singleEventExpected, len(events))
+			assert.Equal(t, tt.wantLevel, events[0].Level)
+			query, ok := events[0].Fields[logFieldQuery].(string)
+			require.Truef(t, ok, "expected a string query field, got %v", events[0].Fields[logFieldQuery])
+			assert.Contains(t, query, credentialRedacted)
+			assert.NotContains(t, query, credentialLiteral)
+		})
+	}
+}
+
+// TestTrackDBOperationRedactsBeforeTruncation pins the scrub-before-truncate
+// ordering. The statement carries a long literal that overruns MaxQueryLength:
+// truncating first cuts inside the literal and emits its opening bytes, while
+// scrubbing first shrinks the statement below the limit so it survives whole.
+func TestTrackDBOperationRedactsBeforeTruncation(t *testing.T) {
+	ctx := logger.WithDBCounter(context.Background())
+	recLogger := newRecordingLogger()
+	settings := Settings{slowQueryThreshold: time.Second, maxQueryLength: 40}
+
+	stmt := `ALTER ROLE "svc" PASSWORD '` + credentialLiteral + strings.Repeat("x", 100) + `'`
+	start := time.Now().Add(-10 * time.Millisecond)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings},
+		stmt, nil, start, 0, errors.New("permission denied"))
+
+	events := recLogger.events()
+	require.Lenf(t, events, 1, singleEventExpected, len(events))
+	query, ok := events[0].Fields[logFieldQuery].(string)
+	require.Truef(t, ok, "expected a string query field, got %v", events[0].Fields[logFieldQuery])
+	assert.Equal(t, credentialDDLRedacted, query)
+	assert.NotContains(t, query, credentialLiteral)
+}

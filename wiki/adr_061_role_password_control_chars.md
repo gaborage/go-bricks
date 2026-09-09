@@ -4,6 +4,15 @@
 - **Date**: 2026-08-14
 - **Related**: [migrations.md](migrations.md) `[C59.5]` · `migration/roles.go`
 
+## Amendment (2026-09-09, #1578)
+
+`pgPasswordLiteralPattern` no longer lives in `migration/roles.go`. `summarizeStmt` now delegates to
+`database/sqlredact`, shared with the database tracking wrapper, so the two redaction sites cannot
+drift. That package replaced the pattern with a quote/dollar/comment-aware scanner: a regex cannot
+tell a keyword inside a string literal from a real clause, and it cannot match a dollar-quoted
+`$tag$…$tag$` password at all. The redact-first ordering this ADR decided is unchanged and is now
+pinned on all three call sites.
+
 ## Context
 
 `summarizeStmt` exists for one reason: to keep a resolved role password out of the error strings
