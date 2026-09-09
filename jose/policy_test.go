@@ -245,3 +245,45 @@ func TestPolicyValidateBareModeProtectedHeaderCollisions(t *testing.T) {
 		})
 	}
 }
+
+func TestPolicyValidateContentEncPerMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		bare     bool
+		enc      joselib.ContentEncryption
+		wantCode string
+	}{
+		{"bare_a128gcm", true, joselib.A128GCM, ""},
+		{"bare_a256gcm", true, joselib.A256GCM, ""},
+		{"bare_a128cbc_hs256", true, joselib.A128CBC_HS256, codeAlgorithmDisallowed},
+		{"bare_unset", true, "", codeAlgorithmDisallowed},
+		{"nested_a256gcm", false, joselib.A256GCM, ""},
+		{"nested_a128gcm", false, joselib.A128GCM, codeAlgorithmDisallowed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := nestedOutbound()
+			if tt.bare {
+				p = bareOutbound()
+			}
+			p.Enc = tt.enc
+			err := p.Validate()
+			if tt.wantCode == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, ErrAlgorithmDisallowed)
+			requireJOSEErrorCode(t, err, tt.wantCode)
+		})
+	}
+}
+
+// TestPolicyValidateBareModeStillRequiresApprovedKeyAlg pins the one algorithm rule bare
+// mode does NOT relax.
+func TestPolicyValidateBareModeStillRequiresApprovedKeyAlg(t *testing.T) {
+	p := bareOutbound()
+	p.KeyAlg = joselib.RSA1_5
+	err := p.Validate()
+	require.ErrorIs(t, err, ErrAlgorithmDisallowed)
+	requireJOSEErrorCode(t, err, codeAlgorithmDisallowed)
+}
