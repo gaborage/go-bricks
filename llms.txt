@@ -4260,6 +4260,12 @@ client, err := httpclient.NewBuilder(log).
         Outbound: outboundPolicy, // *jose.Policy — required (sign+encrypt requests)
         Inbound:  inboundPolicy,  // *jose.Policy — optional (decrypt+verify responses); nil = plaintext responses
         Resolver: resolver,       // jose.KeyResolver — supplies keys for both directions
+        // Optional body hooks: nil sends/expects the bare compact as application/jose.
+        // httpclient.VisaMLEEnvelope() returns the pair for Visa Message Level Encryption
+        // ({"encData":"<compact>"} as application/json, recognised inbound by shape).
+        // WrapBody needs Outbound and UnwrapBody needs Inbound, or Build fails.
+        WrapBody:   wrapBody,   // httpclient.WrapBodyFunc
+        UnwrapBody: unwrapBody, // httpclient.UnwrapBodyFunc — buffers every response body, capped
     }).
     Build()
 if err != nil {

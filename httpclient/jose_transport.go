@@ -57,6 +57,11 @@ type UnwrapBodyFunc func(contentType string, body []byte) (compact string, ok bo
 // error envelope — pre-trust failures from the counterparty come back as plaintext
 // minimal JSON because the peer was never authenticated, and the transport must not
 // attempt to decrypt those.
+//
+// WrapBody and UnwrapBody move that boundary for counterparties whose protected payload
+// travels inside another format — Visa Message Level Encryption's {"encData":"<compact>"}
+// JSON envelope, for example. UnwrapBody replaces the Content-Type rule with the hook's
+// verdict, which costs a buffered read of every eligible response body.
 type JOSETransport struct {
 	// Inner is the underlying RoundTripper that performs the actual HTTP exchange.
 	// Nil defaults to nethttp.DefaultTransport — relevant only when JOSETransport is
@@ -95,7 +100,7 @@ type JOSETransport struct {
 
 // RoundTrip wraps the request body with JOSE (when Outbound is set), forwards to the
 // inner transport, and unwraps the response body (when Inbound is set AND the response
-// Content-Type matches application/jose).
+// is recognized as protected — by Content-Type, or by UnwrapBody when one is set).
 func (t *JOSETransport) RoundTrip(req *nethttp.Request) (*nethttp.Response, error) {
 	inner := t.Inner
 	if inner == nil {

@@ -341,6 +341,10 @@ type JOSEConfig struct {
 // an error). Always fill the base slot — with WithTransport, or with
 // WithTLSConfig when the base is a TLS config.
 //
+// Body envelopes: cfg.WrapBody and cfg.UnwrapBody move the compact into and out of a
+// counterparty's own body format — httpclient.VisaMLEEnvelope() returns the pair for
+// Visa Message Level Encryption. A hook without the policy it serves fails Build.
+//
 // Per-attempt freshness: because httpclient retries by re-running the request build
 // loop, each retry produces a freshly-sealed payload — useful for protocols that
 // require unique iat/jti claims per attempt.
