@@ -84,8 +84,8 @@ func fakeVisaEndpoint(t *testing.T, f *visaFixture, calls chan<- visaCall, respo
 		var envelope struct {
 			EncData string `json:"encData"`
 		}
-		if err := json.Unmarshal(body, &envelope); err != nil {
-			t.Errorf("visa endpoint: request body is not an MLE envelope: %v (body %q)", err, string(body))
+		if unmarshalErr := json.Unmarshal(body, &envelope); unmarshalErr != nil {
+			t.Errorf("visa endpoint: request body is not an MLE envelope: %v (body %q)", unmarshalErr, string(body))
 			http.Error(w, `{"errorCode":"envelope"}`, http.StatusBadRequest)
 			return
 		}
@@ -190,7 +190,7 @@ func TestJOSETransportWrapBodySendsTheVisaEnvelope(t *testing.T) {
 }
 
 // respondVisaEnvelope seals payload to the client's key as a bare JWE with raw go-jose
-// and writes it back inside an MLE envelope labelled application/json — the shape Visa
+// and writes it back inside an MLE envelope labeled application/json — the shape Visa
 // returns, which carries no application/jose Content-Type to key off.
 func respondVisaEnvelope(t *testing.T, f *visaFixture, payload string) func(http.ResponseWriter, visaCall) {
 	t.Helper()
@@ -260,6 +260,7 @@ func TestJOSETransportUnwrapBodyPassesThroughNonEnvelope(t *testing.T) {
 	require.NoError(t, err)
 
 	<-calls
+	//nolint:testifylint // byte-identity is the property under test; JSONEq would pass on a re-encoded body
 	assert.Equal(t, errorEnvelope, string(resp.Body))
 	assert.Equal(t, "application/json;charset=UTF-8", resp.Headers.Get("Content-Type"))
 }
@@ -306,7 +307,6 @@ type visaCall struct {
 	plaintext   []byte
 	header      jose.Header
 }
-
 
 func TestVisaMLEEnvelopeWrapProducesEncDataObject(t *testing.T) {
 	wrap, _ := httpclient.VisaMLEEnvelope()

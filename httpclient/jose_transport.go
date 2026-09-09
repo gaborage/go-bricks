@@ -188,33 +188,7 @@ func (t *JOSETransport) wrapRequest(req *nethttp.Request) (*nethttp.Request, err
 // from a JOSE-aware peer) and responses that definitionally carry no body pass through
 // unmodified.
 func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Response) error {
-	if t.Inbound == nil || resp == nil || resp.Body == nil {
-		return nil
-	}
-	// Exactly the shapes net/http GUARANTEES arrive empty: bodyAllowedForStatus rejects 1xx,
-	// 204 and 304, and noResponseBodyExpected rejects every reply to HEAD, so fixLength pins
-	// their length at zero. Such a response advertises application/jose anyway (HEAD headers
-	// mirror the GET they describe) and jose.Open on the empty string fails as JOSE_MALFORMED.
-	//
-	// The guarantee is what makes skipping safe, so the set deliberately stops there. 205 and
-	// a 2xx answer to CONNECT are bodyless per RFC 9110 but NOT per net/http, which reads a
-	// body on both — skipping them would hand a peer's unverified bytes to the caller under a
-	// status code it chose. For the same reason the key is the response shape and not "the
-	// read came back empty": an empty read, and equally a nethttp.NoBody body, also describes
-	// a 200 whose ciphertext was stripped in transit, which must keep failing closed.
-	//
-	// 101 is the one 1xx a RoundTripper returns, and its Body wraps the live hijacked
-	// connection — reading that would hang, not error. The method comes from the request, not
-	// resp.Request: *http.Transport back-fills that field but the RoundTripper contract does
-	// not require an Inner to, so it can be nil.
-	if resp.StatusCode < nethttp.StatusOK || resp.StatusCode == nethttp.StatusNoContent ||
-		resp.StatusCode == nethttp.StatusNotModified || req.Method == nethttp.MethodHead {
-		return nil
-	}
-	// Without a hook the Content-Type alone decides, and a non-JOSE body is never read:
-	// it reaches the caller as the peer sent it, unbuffered and uncapped. A hook replaces
-	// that rule with one that needs the bytes, so from here every eligible body is read.
-	if t.UnwrapBody == nil && !jose.IsContentType(resp.Header.Get(headerContentType)) {
+	if t.skipsUnwrap(req, resp) {
 		return nil
 	}
 	if t.Resolver == nil {
@@ -251,6 +225,40 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 	resp.ContentLength = int64(len(plaintext))
 	resp.Header.Set(headerContentType, "application/json")
 	return nil
+}
+
+// skipsUnwrap reports whether resp must be handed back exactly as it arrived, without
+// its body being read at all: no inbound policy, no body, a response shape net/http
+// guarantees is empty, or — when no UnwrapBody hook overrides the rule — a Content-Type
+// that is not application/jose.
+func (t *JOSETransport) skipsUnwrap(req *nethttp.Request, resp *nethttp.Response) bool {
+	if t.Inbound == nil || resp == nil || resp.Body == nil {
+		return true
+	}
+	// Exactly the shapes net/http GUARANTEES arrive empty: bodyAllowedForStatus rejects 1xx,
+	// 204 and 304, and noResponseBodyExpected rejects every reply to HEAD, so fixLength pins
+	// their length at zero. Such a response advertises application/jose anyway (HEAD headers
+	// mirror the GET they describe) and jose.Open on the empty string fails as JOSE_MALFORMED.
+	//
+	// The guarantee is what makes skipping safe, so the set deliberately stops there. 205 and
+	// a 2xx answer to CONNECT are bodyless per RFC 9110 but NOT per net/http, which reads a
+	// body on both — skipping them would hand a peer's unverified bytes to the caller under a
+	// status code it chose. For the same reason the key is the response shape and not "the
+	// read came back empty": an empty read, and equally a nethttp.NoBody body, also describes
+	// a 200 whose ciphertext was stripped in transit, which must keep failing closed.
+	//
+	// 101 is the one 1xx a RoundTripper returns, and its Body wraps the live hijacked
+	// connection — reading that would hang, not error. The method comes from the request, not
+	// resp.Request: *http.Transport back-fills that field but the RoundTripper contract does
+	// not require an Inner to, so it can be nil.
+	if resp.StatusCode < nethttp.StatusOK || resp.StatusCode == nethttp.StatusNoContent ||
+		resp.StatusCode == nethttp.StatusNotModified || req.Method == nethttp.MethodHead {
+		return true
+	}
+	// Without a hook the Content-Type alone decides, and a non-JOSE body is never read:
+	// it reaches the caller as the peer sent it, unbuffered and uncapped. A hook replaces
+	// that rule with one that needs the bytes, so from here every eligible body is read.
+	return t.UnwrapBody == nil && !jose.IsContentType(resp.Header.Get(headerContentType))
 }
 
 // readAndCloseBody drains body up to maxBytes (negative = unbounded) and closes it.

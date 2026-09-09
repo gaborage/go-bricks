@@ -645,6 +645,6 @@ func TestJOSETransportWrapBodyErrorAbortsBeforeSending(t *testing.T) {
 	resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is nil: RoundTrip failed before any HTTP exchange
 	require.Error(t, err)
 	assert.Nil(t, resp)
-	assert.ErrorIs(t, err, sentinel)
+	require.ErrorIs(t, err, sentinel)
 	assert.False(t, reached)
 }
