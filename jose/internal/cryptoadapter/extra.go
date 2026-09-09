@@ -185,8 +185,10 @@ func filterOwned(params map[string]any) map[string]any {
 	return out
 }
 
-// checkExtra rejects Extra entries that name an adapter-owned or JOSE-reserved param.
-func checkExtra(extra map[string]any) error {
+// CheckExtra rejects Extra entries that name an adapter-owned or JOSE-reserved param.
+// Sign and Encrypt run it themselves; the parent jose package also runs it at policy
+// validation time so a bad protected-header map fails at startup rather than per request.
+func CheckExtra(extra map[string]any) error {
 	for k := range extra {
 		_, owned := ownedParams[k]
 		_, reserved := reservedParams[k]

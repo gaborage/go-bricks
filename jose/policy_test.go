@@ -210,3 +210,38 @@ func TestPolicyValidateNestedModeRejectsBareOnlyFields(t *testing.T) {
 func TestPolicyValidateNestedModeStaysValidWithoutBareFields(t *testing.T) {
 	require.NoError(t, nestedOutbound().Validate())
 }
+
+func TestPolicyValidateBareModeProtectedHeaderCollisions(t *testing.T) {
+	tests := []struct {
+		name      string
+		headers   map[string]any
+		iatMillis bool
+		wantCode  string
+	}{
+		{"custom_header_allowed", map[string]any{"iss": "acme"}, false, ""},
+		{"iat_allowed_when_not_stamping", map[string]any{"iat": 1}, false, ""},
+		{"iat_conflicts_with_stamping", map[string]any{"iat": 1}, true, "JOSE_POLICY_HEADER_COLLISION"},
+		{"owned_alg", map[string]any{"alg": "RSA-OAEP-256"}, false, "JOSE_POLICY_HEADER_COLLISION"},
+		{"owned_enc", map[string]any{"enc": "A128GCM"}, false, "JOSE_POLICY_HEADER_COLLISION"},
+		{"owned_kid", map[string]any{"kid": "peer-key"}, false, "JOSE_POLICY_HEADER_COLLISION"},
+		{"owned_cty", map[string]any{"cty": "application/json"}, false, "JOSE_POLICY_HEADER_COLLISION"},
+		{"owned_typ", map[string]any{"typ": "JOSE"}, false, "JOSE_POLICY_HEADER_COLLISION"},
+		{"reserved_crit", map[string]any{"crit": []string{"exp"}}, false, "JOSE_POLICY_HEADER_COLLISION"},
+		{"reserved_zip", map[string]any{"zip": "DEF"}, false, "JOSE_POLICY_HEADER_COLLISION"},
+		{"reserved_jwk", map[string]any{"jwk": "x"}, false, "JOSE_POLICY_HEADER_COLLISION"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := bareOutbound()
+			p.ProtectedHeaders = tt.headers
+			p.IATMillis = tt.iatMillis
+			err := p.Validate()
+			if tt.wantCode == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, ErrPolicyMismatch)
+			requireJOSEErrorCode(t, err, tt.wantCode)
+		})
+	}
+}

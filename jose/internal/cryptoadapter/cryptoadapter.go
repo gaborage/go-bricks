@@ -128,7 +128,7 @@ type SignOptions struct {
 
 // Sign produces a compact JWS over payload using the private key.
 func Sign(payload []byte, key *rsa.PrivateKey, opts *SignOptions) (string, error) {
-	if err := checkExtra(opts.Extra); err != nil {
+	if err := CheckExtra(opts.Extra); err != nil {
 		return "", err
 	}
 	signerOpts := (&jose.SignerOptions{}).
@@ -173,7 +173,7 @@ type EncryptOptions struct {
 
 // Encrypt produces a compact JWE over payload using the public key.
 func Encrypt(payload []byte, key *rsa.PublicKey, opts *EncryptOptions) (string, error) {
-	if err := checkExtra(opts.Extra); err != nil {
+	if err := CheckExtra(opts.Extra); err != nil {
 		return "", err
 	}
 	encrypterOpts := (&jose.EncrypterOptions{}).

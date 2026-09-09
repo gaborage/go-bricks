@@ -39,6 +39,7 @@ const (
 	codeKidMissing              = "JOSE_KID_MISSING"
 	codePolicyModeUnknown       = "JOSE_POLICY_MODE_UNKNOWN"
 	codePolicyModeMismatch      = "JOSE_POLICY_MODE_MISMATCH"
+	codePolicyHeaderCollision   = "JOSE_POLICY_HEADER_COLLISION"
 	codeTagDuplicateKey         = "JOSE_TAG_DUPLICATE_KEY"
 	codeTagKidInvalid           = "JOSE_TAG_KID_INVALID"
 )

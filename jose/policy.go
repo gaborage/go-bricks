@@ -2,6 +2,8 @@ package jose
 
 import (
 	jose "github.com/go-jose/go-jose/v4"
+
+	"github.com/gaborage/go-bricks/jose/internal/cryptoadapter"
 )
 
 // Direction indicates which side of the request/response pipeline a Policy applies to.
@@ -102,7 +104,7 @@ func (p *Policy) validateMode() error {
 		}
 		return nil
 	case SealModeBareJWE:
-		return nil
+		return p.validateBareHeaders()
 	default:
 		return &Error{
 			Sentinel: ErrPolicyMismatch,
@@ -225,6 +227,28 @@ func (m SealMode) String() string {
 	default:
 		return "unknown"
 	}
+}
+
+// validateBareHeaders checks the protected-header map a bare-mode Seal would write:
+// no param the framework or JOSE itself owns, and no hand-written iat while Seal is
+// stamping one.
+func (p *Policy) validateBareHeaders() error {
+	if err := cryptoadapter.CheckExtra(p.ProtectedHeaders); err != nil {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyHeaderCollision,
+			Message:  "protected header collides with a reserved param",
+			Cause:    err,
+		}
+	}
+	if _, ok := p.ProtectedHeaders["iat"]; ok && p.IATMillis {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyHeaderCollision,
+			Message:  "protected header iat collides with iat stamping",
+		}
+	}
+	return nil
 }
 
 // validateBareInbound requires only the decrypt kid: there is no inner JWS to verify, so
