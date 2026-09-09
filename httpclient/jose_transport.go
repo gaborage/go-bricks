@@ -206,7 +206,10 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 		resp.StatusCode == nethttp.StatusNotModified || req.Method == nethttp.MethodHead {
 		return nil
 	}
-	if !jose.IsContentType(resp.Header.Get(headerContentType)) {
+	// Without a hook the Content-Type alone decides, and a non-JOSE body is never read:
+	// it reaches the caller as the peer sent it, unbuffered and uncapped. A hook replaces
+	// that rule with one that needs the bytes, so from here every eligible body is read.
+	if t.UnwrapBody == nil && !jose.IsContentType(resp.Header.Get(headerContentType)) {
 		return nil
 	}
 	if t.Resolver == nil {
@@ -217,12 +220,24 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 	if maxBytes == 0 {
 		maxBytes = DefaultMaxJOSEBodyBytes
 	}
-	compact, err := readAndCloseBody(resp.Body, maxBytes)
+	raw, err := readAndCloseBody(resp.Body, maxBytes)
 	if err != nil {
 		return fmt.Errorf("httpclient: read response body: %w", err)
 	}
 
-	plaintext, _, _, err := jose.Open(string(compact), t.Inbound, t.Resolver)
+	compact := string(raw)
+	if t.UnwrapBody != nil {
+		extracted, ok := t.UnwrapBody(resp.Header.Get(headerContentType), raw)
+		if !ok {
+			// Not a protected body: hand back exactly what was read, headers untouched.
+			resp.Body = io.NopCloser(bytes.NewReader(raw))
+			resp.ContentLength = int64(len(raw))
+			return nil
+		}
+		compact = extracted
+	}
+
+	plaintext, _, _, err := jose.Open(compact, t.Inbound, t.Resolver)
 	if err != nil {
 		return err
 	}

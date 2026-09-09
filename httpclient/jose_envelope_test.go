@@ -188,6 +188,60 @@ func TestJOSETransportWrapBodySendsTheVisaEnvelope(t *testing.T) {
 	assert.LessOrEqual(t, int64(iat), after)
 }
 
+// respondVisaEnvelope seals payload to the client's key as a bare JWE with raw go-jose
+// and writes it back inside an MLE envelope labelled application/json — the shape Visa
+// returns, which carries no application/jose Content-Type to key off.
+func respondVisaEnvelope(t *testing.T, f *visaFixture, payload string) func(http.ResponseWriter, visaCall) {
+	t.Helper()
+	return func(w http.ResponseWriter, _ visaCall) {
+		encrypter, err := jose.NewEncrypter(jose.A128GCM,
+			jose.Recipient{Algorithm: jose.RSA_OAEP_256, Key: &f.clientPrivate.PublicKey, KeyID: visaClientKid},
+			(&jose.EncrypterOptions{}).WithContentType("application/json"))
+		if err != nil {
+			t.Errorf("visa endpoint: build encrypter: %v", err)
+			http.Error(w, `{"errorCode":"encrypter"}`, http.StatusInternalServerError)
+			return
+		}
+		obj, err := encrypter.Encrypt([]byte(payload))
+		if err != nil {
+			t.Errorf("visa endpoint: encrypt response: %v", err)
+			http.Error(w, `{"errorCode":"encrypt"}`, http.StatusInternalServerError)
+			return
+		}
+		compact, err := obj.CompactSerialize()
+		if err != nil {
+			t.Errorf("visa endpoint: serialize response: %v", err)
+			http.Error(w, `{"errorCode":"serialize"}`, http.StatusInternalServerError)
+			return
+		}
+		body, err := json.Marshal(map[string]string{"encData": compact})
+		if err != nil {
+			t.Errorf("visa endpoint: marshal response envelope: %v", err)
+			http.Error(w, `{"errorCode":"marshal"}`, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}
+}
+
+func TestJOSETransportUnwrapBodyDecryptsTheVisaEnvelope(t *testing.T) {
+	f := newVisaFixture(t)
+	calls := make(chan visaCall, 1)
+	server := fakeVisaEndpoint(t, f, calls, respondVisaEnvelope(t, f, `{"token":"tok-42"}`))
+	defer server.Close()
+
+	resp, err := visaClient(t, f).Post(context.Background(), &httpclient.Request{
+		URL:  server.URL,
+		Body: []byte(`{"pan":"4111111111111111"}`),
+	})
+	require.NoError(t, err)
+
+	<-calls
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.JSONEq(t, `{"token":"tok-42"}`, string(resp.Body))
+}
+
 // visaCall is one request as the fake Visa endpoint saw it.
 type visaCall struct {
 	contentType string
