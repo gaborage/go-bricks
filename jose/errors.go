@@ -40,6 +40,7 @@ const (
 	codePolicyModeUnknown       = "JOSE_POLICY_MODE_UNKNOWN"
 	codePolicyModeMismatch      = "JOSE_POLICY_MODE_MISMATCH"
 	codePolicyHeaderCollision   = "JOSE_POLICY_HEADER_COLLISION"
+	codeOutboundFailed          = "JOSE_OUTBOUND_FAILED"
 	codeTagDuplicateKey         = "JOSE_TAG_DUPLICATE_KEY"
 	codeTagKidInvalid           = "JOSE_TAG_KID_INVALID"
 )
