@@ -2,9 +2,12 @@ package httpclient
 
 import "encoding/json"
 
-// visaMLEEncDataField is the single member of the Visa Message Level Encryption
-// envelope that carries the compact JWE.
-const visaMLEEncDataField = "encData"
+// visaMLEEnvelope is the Visa Message Level Encryption wire object: a single encData
+// member carrying the compact JWE. Both directions marshal/unmarshal through it, so the
+// member name is spelled once.
+type visaMLEEnvelope struct {
+	EncData string `json:"encData"`
+}
 
 // VisaMLEEnvelope returns the WrapBody/UnwrapBody pair implementing Visa Message Level
 // Encryption's JSON envelope: outbound bodies are {"encData":"<compact JWE>"} sent as
@@ -16,22 +19,22 @@ func VisaMLEEnvelope() (WrapBodyFunc, UnwrapBodyFunc) {
 }
 
 func visaMLEWrap(compact string) (body []byte, contentType string, err error) {
-	encoded, err := json.Marshal(map[string]string{visaMLEEncDataField: compact})
+	encoded, err := json.Marshal(visaMLEEnvelope{EncData: compact})
 	if err != nil {
 		return nil, "", err
 	}
-	return encoded, "application/json", nil
+	return encoded, mimeApplicationJSON, nil
 }
 
 func visaMLEUnwrap(_ string, body []byte) (compact string, ok bool) {
-	var envelope struct {
-		EncData *string `json:"encData"`
-	}
+	var envelope visaMLEEnvelope
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return "", false
 	}
-	if envelope.EncData == nil || *envelope.EncData == "" {
+	// A missing member, a JSON null and an empty string all land on "" and are all
+	// rejected; a non-string encData never gets this far, Unmarshal fails on it.
+	if envelope.EncData == "" {
 		return "", false
 	}
-	return *envelope.EncData, true
+	return envelope.EncData, true
 }
