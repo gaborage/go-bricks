@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -261,6 +262,41 @@ func TestJOSETransportUnwrapBodyPassesThroughNonEnvelope(t *testing.T) {
 	<-calls
 	assert.Equal(t, errorEnvelope, string(resp.Body))
 	assert.Equal(t, "application/json;charset=UTF-8", resp.Headers.Get("Content-Type"))
+}
+
+func TestJOSETransportSealsEveryRetryAttemptFreshly(t *testing.T) {
+	f := newVisaFixture(t)
+	calls := make(chan visaCall, 2)
+	var attempts atomic.Int32
+	server := fakeVisaEndpoint(t, f, calls, func(w http.ResponseWriter, _ visaCall) {
+		if attempts.Add(1) == 1 {
+			http.Error(w, `{"errorCode":"busy"}`, http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	defer server.Close()
+
+	client := visaClient(t, f, func(b *httpclient.Builder) *httpclient.Builder {
+		return b.WithRetries(1, time.Millisecond)
+	})
+
+	resp, err := client.Post(context.Background(), &httpclient.Request{
+		URL:  server.URL,
+		Body: []byte(`{"pan":"4111111111111111"}`),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	first, second := <-calls, <-calls
+	assert.NotEqual(t, first.encData, second.encData, "each attempt must carry a freshly sealed JWE")
+	// Same-millisecond attempts are legal, so the claim is monotonicity, not strict growth.
+	firstIAT, ok := first.header.ExtraHeaders[jose.HeaderKey("iat")].(float64)
+	require.True(t, ok, "first attempt has no numeric iat header")
+	secondIAT, ok := second.header.ExtraHeaders[jose.HeaderKey("iat")].(float64)
+	require.True(t, ok, "second attempt has no numeric iat header")
+	assert.GreaterOrEqual(t, int64(secondIAT), int64(firstIAT))
 }
 
 // visaCall is one request as the fake Visa endpoint saw it.
