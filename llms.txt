@@ -4250,8 +4250,12 @@ The httpclient seals outbound request bodies and opens `application/jose`
 responses via `Builder.WithJOSE` — sign+encrypt and decrypt+verify under the
 nested JWE-of-JWS default, encrypt-only and decrypt-only under a
 `SealModeBareJWE` policy such as the Visa MLE pair below (an `http.RoundTripper` that
-sits below the retry loop, so each retry re-seals — useful when a partner requires
-unique `iat`/`jti` per attempt). With no `Envelope`, non-`application/jose`
+sits below the retry loop: each retry attempt re-runs `jose.Seal` for a request that
+carries a body and has an `Outbound` policy. In `jose.SealModeBareJWE` the seal copies
+`ProtectedHeaders` and adds only `iat` (when `Policy.IATMillis` is true) — it mints no
+`jti`, so two attempts inside the same millisecond share an `iat`. Protocols that need
+a unique per-attempt `jti` must use the nested JWE-of-JWS shape, where `jti` comes from
+the signed payload). With no `Envelope`, non-`application/jose`
 responses pass through untouched; an `Envelope` replaces that Content-Type rule with
 its `Unwrap` verdict and buffers every eligible response body (capped by
 `MaxResponseBytes`) before it runs. Only bodies are sealed: a request with no body goes out unsealed
