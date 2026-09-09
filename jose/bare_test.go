@@ -534,11 +534,13 @@ func TestOpenBareJWEHonoursDeclaredEnc(t *testing.T) {
 	}
 }
 
-// TestOpenBareJWEWithoutDeclaredEncAcceptsTheModeAllowlist pins the other half of the
-// narrowing rule: an inbound policy that declares no Enc keeps the whole bare-mode
-// allowlist. Open does not run Validate (which would refuse an unset Enc), so this is the
-// defensive branch a hand-built policy reaches.
-func TestOpenBareJWEWithoutDeclaredEncAcceptsTheModeAllowlist(t *testing.T) {
+// TestOpenBareJWEWithoutDeclaredAlgorithmsAcceptsTheModeAllowlist pins the other half of
+// the narrowing rule: an inbound policy that declares neither KeyAlg nor Enc keeps the
+// whole bare-mode allowlist for both. Open does not run Validate (which would refuse
+// either as unset), so this is the defensive branch a hand-built policy reaches. Clearing
+// KeyAlg as well as Enc is what makes the key-algorithm guard observable: with it set,
+// pinning and the mode-wide list are the same one-element list.
+func TestOpenBareJWEWithoutDeclaredAlgorithmsAcceptsTheModeAllowlist(t *testing.T) {
 	for _, enc := range []jose.ContentEncryption{jose.A128GCM, jose.A256GCM} {
 		t.Run("seals_"+string(enc), func(t *testing.T) {
 			f := newBareFixture(t)
@@ -547,7 +549,7 @@ func TestOpenBareJWEWithoutDeclaredEncAcceptsTheModeAllowlist(t *testing.T) {
 			compact, err := Seal(payload, f.outbound, f.resolver)
 			require.NoError(t, err)
 
-			f.inbound.Enc = ""
+			f.inbound.KeyAlg, f.inbound.Enc = "", ""
 			plaintext, _, _, err := Open(compact, f.inbound, f.resolver)
 			require.NoError(t, err)
 			assert.Equal(t, payload, plaintext)
