@@ -20,6 +20,8 @@
 // are dropped by design — a truncated log line beats a leaked password.
 package sqlredact
 
+import "strings"
+
 // redactedMarker replaces the credential value. It matches the convention the
 // migration role provisioner has used in its own error summaries.
 const redactedMarker = "[REDACTED]"
@@ -41,7 +43,8 @@ const (
 // Statement returns sql truncated at its first credential clause, with the value
 // replaced by a fixed marker.
 //
-// PASSWORD qualifies when the next non-whitespace byte begins a value: a quote,
+// PASSWORD qualifies when the next byte past any whitespace or comment begins a
+// value: a quote,
 // a dollar sign, or a letter introducing an E'…' / U&'…' constant. It does not
 // qualify before `=`, `,`, `)`, `;`, end of input, or a bare word such as NULL
 // or FROM, so DML naming a password column is untouched. IDENTIFIED qualifies
@@ -54,7 +57,7 @@ const (
 func Statement(sql string) string {
 	for i := 0; i < len(sql); i++ {
 		if end, ok := wordAt(sql, i, kwPassword); ok {
-			if startsValue(sql, skipSpace(sql, end)) {
+			if startsValue(sql, skipGap(sql, end)) {
 				return sql[:end] + pgPasswordTail
 			}
 			i = end - 1
@@ -63,7 +66,7 @@ func Statement(sql string) string {
 		if end, ok := wordAt(sql, i, kwIdentified); ok {
 			// The prefix runs through BY as the input spells it, so the
 			// statement's own casing and spacing survive.
-			if byEnd, isBy := wordAt(sql, skipSpace(sql, end), kwBy); isBy {
+			if byEnd, isBy := wordAt(sql, skipGap(sql, end), kwBy); isBy {
 				return sql[:byEnd] + oracleByTail
 			}
 			i = end - 1
@@ -113,11 +116,56 @@ func startsValue(sql string, i int) bool {
 	return i+2 < len(sql) && sql[i+1] == '&' && sql[i+2] == '\''
 }
 
-func skipSpace(sql string, i int) int {
-	for i < len(sql) && isSpace(sql[i]) {
-		i++
+// skipGap advances past the separators a vendor's lexer allows between two
+// tokens: whitespace and comments. Only the run BEFORE the value is examined, so
+// this keeps the "never look at the credential" property intact. An unterminated
+// comment runs to the end of input and nothing qualifies — no vendor parses that
+// statement as credential DDL either.
+func skipGap(sql string, i int) int {
+	for i < len(sql) {
+		if isSpace(sql[i]) {
+			i++
+			continue
+		}
+		next, ok := skipComment(sql, i)
+		if !ok {
+			return i
+		}
+		i = next
 	}
 	return i
+}
+
+// skipComment advances past a -- line comment or a /* block comment */ at i.
+// A line comment ends at CR as well as LF, and block comments nest, both
+// matching PostgreSQL; over-consuming here only over-redacts.
+func skipComment(sql string, i int) (next int, ok bool) {
+	switch {
+	case strings.HasPrefix(sql[i:], "--"):
+		if end := strings.IndexAny(sql[i:], "\n\r"); end >= 0 {
+			return i + end, true
+		}
+		return len(sql), true
+	case strings.HasPrefix(sql[i:], "/*"):
+		depth, j := 1, i+2
+		for j+1 < len(sql) {
+			switch {
+			case sql[j] == '/' && sql[j+1] == '*':
+				depth++
+				j += 2
+			case sql[j] == '*' && sql[j+1] == '/':
+				depth--
+				j += 2
+				if depth == 0 {
+					return j, true
+				}
+			default:
+				j++
+			}
+		}
+		return len(sql), true
+	}
+	return i, false
 }
 
 func isWordByte(c byte) bool { return c == '_' || isLetter(c) || ('0' <= c && c <= '9') }

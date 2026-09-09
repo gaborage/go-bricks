@@ -183,6 +183,42 @@ func TestStatementDropsTheTailThatCarriesTheSecret(t *testing.T) {
 			secret: "S3 cret",
 		},
 		{
+			name:   "block_comment_between_keyword_and_value",
+			in:     `ALTER ROLE r1 PASSWORD /* rotate */ 'Sup3rS3cr3t'`,
+			want:   `ALTER ROLE r1 PASSWORD '[REDACTED]'`,
+			secret: "Sup3rS3cr3t",
+		},
+		{
+			name:   "line_comment_between_keyword_and_value",
+			in:     "ALTER ROLE r2 PASSWORD --rotate\n'Sup3rS3cr3t'",
+			want:   `ALTER ROLE r2 PASSWORD '[REDACTED]'`,
+			secret: "Sup3rS3cr3t",
+		},
+		{
+			name:   "comment_glued_to_keyword_and_value",
+			in:     `ALTER ROLE r3 ENCRYPTED PASSWORD/*x*/'Sup3rS3cr3t'`,
+			want:   `ALTER ROLE r3 ENCRYPTED PASSWORD '[REDACTED]'`,
+			secret: "Sup3rS3cr3t",
+		},
+		{
+			name:   "nested_block_comment",
+			in:     `ALTER ROLE r4 PASSWORD /* a /* b */ c */ 'Sup3rS3cr3t'`,
+			want:   `ALTER ROLE r4 PASSWORD '[REDACTED]'`,
+			secret: "Sup3rS3cr3t",
+		},
+		{
+			name:   "comment_between_identified_and_by",
+			in:     `CREATE USER u1 IDENTIFIED /* rotate */ BY Sup3rS3cr3t`,
+			want:   `CREATE USER u1 IDENTIFIED /* rotate */ BY [REDACTED]`,
+			secret: "Sup3rS3cr3t",
+		},
+		{
+			name:   "line_comment_between_identified_and_by",
+			in:     "CREATE USER u2 IDENTIFIED --rotate\nBY Sup3rS3cr3t",
+			want:   "CREATE USER u2 IDENTIFIED --rotate\nBY [REDACTED]",
+			secret: "Sup3rS3cr3t",
+		},
+		{
 			name:   "unterminated_literal",
 			in:     `ALTER ROLE r PASSWORD 'unterminated`,
 			want:   `ALTER ROLE r PASSWORD '[REDACTED]'`,
