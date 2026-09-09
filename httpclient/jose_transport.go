@@ -23,6 +23,22 @@ const headerContentType = "Content-Type"
 // response. Defense-in-depth against memory exhaustion.
 const DefaultMaxJOSEBodyBytes int64 = 10 << 20 // 10 MiB
 
+// WrapBodyFunc builds the outbound request body from the compact JOSE serialization
+// jose.Seal produced, returning the bytes to send and the Content-Type to advertise.
+// A nil WrapBodyFunc is the identity: the compact string is the body and the
+// Content-Type is application/jose. An error aborts the round trip; no request is sent.
+type WrapBodyFunc func(compact string) (body []byte, contentType string, err error)
+
+// UnwrapBodyFunc recognizes and extracts a compact JOSE serialization from an inbound
+// response body, given the response Content-Type and the buffered body bytes. Returning
+// ok=false passes the body through untouched. A nil UnwrapBodyFunc keeps the transport's
+// default rule: a Content-Type of application/jose means the whole body is the compact.
+//
+// Setting a hook changes the read discipline: the transport buffers EVERY eligible
+// response body (bounded by MaxResponseBytes) before the hook runs, because the
+// Content-Type gate that would otherwise leave a non-JOSE body unread no longer applies.
+type UnwrapBodyFunc func(contentType string, body []byte) (compact string, ok bool)
+
 // JOSETransport is an http.RoundTripper that signs+encrypts outbound request bodies
 // (jose.Seal) and decrypts+verifies inbound response bodies (jose.Open) using a fixed
 // pair of policies and a single KeyResolver.
