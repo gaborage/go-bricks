@@ -49,9 +49,10 @@ they read `Policy.Mode` to decide what to produce and accept.**
   copied verbatim into the protected header. `IATMillis` makes `Seal` stamp `iat` with
   `time.Now().UnixMilli()` at seal time. A `SealModeJWEofJWS` policy that sets any of the
   three is refused with `JOSE_POLICY_MODE_MISMATCH`, and a bare INBOUND policy that sets
-  any of them is refused too: they describe headers `Seal` writes, nothing would read them
-  on the way in, and silently ignoring them would let a consumer believe a header was
-  being enforced.
+  any of them is refused with `JOSE_POLICY_DIRECTION_MISMATCH` — a different code, because
+  it is the direction that is wrong, not the mode: they describe headers `Seal` writes,
+  nothing would read them on the way in, and silently ignoring them would let a consumer
+  believe a header was being enforced.
 - **`KeyAlg` and `Enc` bind the INBOUND path too, narrowing the mode's allowlist.**
   `Open` hands the parser exactly the algorithms the policy declares rather than the whole
   mode-wide list, in both modes, through the single `inboundAllowlists` helper both `Open`
@@ -74,9 +75,11 @@ they read `Policy.Mode` to decide what to produce and accept.**
   JOSE-reserved param, `typ` included, so `ProtectedHeaders{"typ": "JOSE"}` could only ever
   be an error. A named field is the honest spelling of a header the adapter already writes
   through `WithType`. The guard is now exported and additionally runs at policy-validation
-  time, so a colliding map fails at startup rather than once per request, with
-  `JOSE_POLICY_HEADER_COLLISION` — which also covers a hand-written `iat` beside
-  `IATMillis: true`.
+  time, so a colliding map is caught wherever `Validate` runs — at registration or `Build`,
+  i.e. startup — rather than only inside the seal path. `Seal` re-validates, so a policy
+  that reached it without passing a registration seam still fails, once per request; either
+  way the code is `JOSE_POLICY_HEADER_COLLISION`, which also covers a hand-written `iat`
+  beside `IATMillis: true`.
 - **`A128GCM` is admitted by MODE, never globally.** `IsAllowedEncFor(mode, enc)` and
   `AllowedContentEncsFor(mode)` are the mode-aware predicates; `IsAllowedEnc` and
   `AllowedContentEncs` keep their JWE-of-JWS meaning, so the nested path's floor stays

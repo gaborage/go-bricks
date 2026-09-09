@@ -93,7 +93,7 @@ runs that step on its own.
 - **Consumer-side inbox** for exactly-once *transactional* event processing (dedup ledger written atomically with the handler's DB writes via `InboxProcessor.ProcessOnce`)
 - **Job scheduler** with gocron, overlapping prevention, panic recovery, and system APIs
 - **Named RSA key pair and symmetric secret management** from DER/raw files or base64 environment variables
-- **JOSE middleware** for nested JWE-of-JWS protection on HTTP request/response bodies, or the encrypt-only bare-JWE shape Visa Message Level Encryption specifies (Visa-style integrations)
+- **JOSE middleware** for nested JWE-of-JWS protection on HTTP request/response bodies via `jose:` struct tags, plus the encrypt-only bare-JWE shape Visa Message Level Encryption specifies — bare mode is reached through the `jose.Seal` / `jose.Open` API only, not the struct tags (Visa-style integrations)
 - **Multi-tenant architecture** with complete resource isolation and context propagation
 - **Flyway migration integration** for schema evolution
 - **Observability** with W3C trace propagation, custom metrics, dual-mode logs, and health endpoints

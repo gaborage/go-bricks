@@ -1548,7 +1548,8 @@ an `iat` protected header in epoch MILLISECONDS, and a sender authenticated out 
 (`X-Pay-Token`, mTLS) rather than by a signature. `Policy` now carries `Mode SealMode`, whose
 zero value `SealModeJWEofJWS` keeps today's posture byte-for-byte, plus `Typ`,
 `ProtectedHeaders map[string]any` and `IATMillis` — the last three bare-mode OUTBOUND only,
-refused elsewhere with `JOSE_POLICY_MODE_MISMATCH`. `Seal` and `Open` stay the only doors and
+refused on a nested policy with `JOSE_POLICY_MODE_MISMATCH` and on a bare inbound one with
+`JOSE_POLICY_DIRECTION_MISMATCH`. `Seal` and `Open` stay the only doors and
 read the mode; there is no second policy type and no second entry point. `A128GCM` is admitted
 by MODE through the new `IsAllowedEncFor`/`AllowedContentEncsFor`, so the nested path's floor
 stays `A256GCM` (`IsAllowedEnc` keeps that meaning) and `jose/sealed` (ADR-097) is untouched;
@@ -1556,7 +1557,8 @@ stays `A256GCM` (`IsAllowedEnc` keeps that meaning) and `jose/sealed` (ADR-097) 
 empty allowlist that rejects every token. `typ` is its own field because
 `cryptoadapter.CheckExtra` — now exported and run at policy-validation time, yielding
 `JOSE_POLICY_HEADER_COLLISION` — owns it, and a static map plus a bool was chosen over a
-per-request callback so a colliding header fails at startup rather than per request. `Open` in
+per-request callback so a colliding header is caught wherever `Validate` runs, at startup;
+`Seal` re-validates, so a policy that skipped a registration seam fails per request instead. `Open` in
 bare mode decrypts and reports `OpenHeader.JWE.IATMillis` without judging freshness, the stance
 ADR-097 set for replay; `Header` gained scalar fields rather than a map so it stays comparable.
 `Seal` now runs mode, algorithm and direction validation before touching the keystore in both
