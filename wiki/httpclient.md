@@ -94,18 +94,141 @@ if err != nil {
 `Build()` also validates the `WithJOSE` policies, which the server's tag scanner has
 always done at route registration. Each non-nil policy gets its unset algorithms
 filled from the `jose` package defaults (`RS256`, `RSA-OAEP-256`, `A256GCM`,
-`application/json`) and is then run through `jose.Policy.Validate`, so a disallowed
+`application/json`) — except that a `Mode: jose.SealModeBareJWE` policy is never
+given a `SigAlg`, because bare mode signs nothing and `Validate` rejects a bare
+policy that names one; that omission is what lets `WithJOSE` carry a bare policy
+pair. The filled copy is then run through `jose.Policy.Validate`, so a disallowed
 algorithm, a kid missing for the policy's direction, or a `Resolver` left nil while
 a policy is set now fails construction instead of failing every request. Validation
 runs on **copies** — a `jose.Policy` you reuse across builders is never mutated. The
 error is its own path, not `ErrUnsafeTransportComposition` (whose meaning stays
-transport-slot composition): every one of these — the nil `Resolver` included, which
-reports `JOSE_KEYSTORE_UNAVAILABLE` — wraps a `*jose.Error`, so match it with
-`errors.As`, or its sentinel with `errors.Is`.
+transport-slot composition): every one of these policy failures — the nil `Resolver`
+included, which reports `JOSE_KEYSTORE_UNAVAILABLE` — wraps a `*jose.Error`, so match
+it with `errors.As`, or its sentinel with `errors.Is`. The two body-envelope wiring
+failures below are no exception: they report `JOSE_POLICY_ENVELOPE_UNPAIRED` and
+`JOSE_POLICY_ENVELOPE_UNBOUNDED` with the `jose.ErrPolicyMismatch` sentinel, under the
+same `httpclient: invalid JOSE policy:` prefix.
 
 Kids are **not** resolved at `Build()`. A `KeyResolver` may be backed by key material
 loaded lazily, and resolving eagerly would force that load at construction — so an
 unknown kid still surfaces per request as `JOSE_KID_UNKNOWN`.
+
+#### JOSE body envelopes (Visa Message Level Encryption)
+
+Some counterparties do not put the compact JOSE serialization on the wire on its own.
+Visa **Message Level Encryption** carries it inside a JSON object — `{"encData": "<compact>"}` sent as `application/json` — and answers in the same shape. One optional
+interface moves the compact into and out of such a format. It is a single field,
+`Envelope`, on both `JOSEConfig` (for `WithJOSE`) and a hand-built `JOSETransport`:
+
+```go
+type BodyEnvelope interface {
+    Wrap(compact string) (body []byte, contentType string, err error)
+    Unwrap(contentType string, body []byte) (compact string, ok bool)
+}
+```
+
+`Wrap` builds the outbound request body from the compact `jose.Seal` produced and names
+the Content-Type to advertise; an **empty** content type sends no `Content-Type` header at
+all, rather than a bare one no peer would accept. An error aborts the round trip: no
+request is sent. `Unwrap` recognizes and extracts a compact from a buffered response body,
+and returning `ok=false` passes that body through untouched. `Wrap` is consulted only when
+`Outbound` is set and `Unwrap` only when `Inbound` is set.
+
+One interface rather than two function fields, so `JOSETransport` and `JOSEConfig` stay
+**comparable types** — a func-typed field is not comparable at all, and both structs are
+exported surface. The type-level guarantee is not a value-level one: `==` on two of these
+structs still panics at run time if the `Envelope` interface holds a non-comparable dynamic
+value, such as a map-backed envelope implementation.
+
+**A nil `Envelope` is the old behaviour, byte for byte**: the compact itself is the request
+body, advertised as `application/jose`, and a response is unwrapped only when its
+Content-Type says `application/jose`.
+
+**An `Envelope` changes the inbound read discipline.** `Unwrap` replaces the Content-Type
+gate, and it needs the bytes — so *every* eligible response body is read into memory before
+it runs, bounded by `MaxResponseBytes` (`DefaultMaxJOSEBodyBytes`, 10 MiB, when zero) with
+the same over-cap `ValidationError`.
+Without an `Envelope`, a non-JOSE body is never read at all. When `Unwrap` returns
+`ok=false` the buffered bytes are handed back as the response body with headers untouched.
+The responses that skip unwrapping entirely are unchanged: no `Inbound` policy, no body, or
+a shape net/http guarantees is empty (`1xx`, `204`, `304`, any reply to `HEAD`).
+
+**`Build()` fails closed on an `Envelope` that cannot run.** An `Envelope` with neither an
+`Outbound` nor an `Inbound` policy is a construction error
+(`JOSE_POLICY_ENVELOPE_UNPAIRED`), because neither half would ever be consulted — the body
+would go out unsealed, or a wrapped response would reach the caller as ciphertext. Either
+policy alone is fine: one-directional protection is a supported shape.
+
+**A negative `MaxResponseBytes` is refused beside an `Envelope` and an `Inbound` policy**,
+not quietly defaulted. Negative means unbounded, and with `Unwrap` deciding, every response
+body would be buffered without limit — so `Build()` rejects the trio and `RoundTrip`
+rejects it before the request is sent, both as `JOSE_POLICY_ENVELOPE_UNBOUNDED`. A silent
+fallback to the default would honour neither value the caller wrote down. Without an
+`Envelope` a negative cap still means unbounded: there the Content-Type gate has already
+vouched for the body.
+
+`httpclient.VisaMLEEnvelope()` returns the ready-made `BodyEnvelope`. Outbound, it produces
+`{"encData":"<compact>"}` as `application/json`. Inbound, it recognizes the reply **by
+shape rather than Content-Type**: any JSON object carrying a non-empty string `encData`
+member is unwrapped (unknown sibling members are ignored) and everything else — a
+plaintext error envelope, say — passes through. After a successful unwrap the caller reads
+the plaintext with `Content-Type: application/json`.
+
+Wire it with the bare-JWE policy pair from
+[jose.md](jose.md#bare-jwe-mode-visa-message-level-encryption) — `A128GCM` has no
+go-bricks alias, so the go-jose constant is imported under its own name:
+
+```go
+import (
+    "github.com/gaborage/go-bricks/httpclient"
+    "github.com/gaborage/go-bricks/jose"
+    josev4 "github.com/go-jose/go-jose/v4"
+)
+
+outbound := &jose.Policy{
+    Direction:  jose.DirectionOutbound,
+    Mode:       jose.SealModeBareJWE,
+    EncryptKid: "visa-mle-encrypt",       // peer public key; the ONLY kid a bare outbound policy may set
+    KeyAlg:     jose.DefaultKeyAlg,       // RSA-OAEP-256
+    Enc:        josev4.A128GCM,
+    Cty:        jose.DefaultCty,          // application/json
+    Typ:        "JOSE",                   // JWE protected `typ`
+    IATMillis:  true,                     // stamp `iat` in epoch MILLISECONDS at seal time
+    ProtectedHeaders: map[string]any{     // copied verbatim into the protected header
+        "iss": "acme-payments",
+    },
+}
+
+inbound := &jose.Policy{
+    Direction:  jose.DirectionInbound,
+    Mode:       jose.SealModeBareJWE,
+    DecryptKid: "our-mle-decrypt",        // our private key; the ONLY kid a bare inbound policy may set
+    KeyAlg:     jose.DefaultKeyAlg,
+    Enc:        josev4.A128GCM,
+    Cty:        jose.DefaultCty,
+}
+
+client, err := httpclient.NewBuilder(logger).
+    WithTransport(mTLSTransport).                 // MLE is unsigned: the peer is authenticated here
+    WithJOSE(httpclient.JOSEConfig{
+        Outbound: outbound,
+        Inbound:  inbound,
+        Resolver: resolver,
+        Envelope: httpclient.VisaMLEEnvelope(),
+    }).
+    Build()
+if err != nil {
+    return err
+}
+```
+
+**Per-attempt freshness.** `JOSETransport` sits below the retry loop, so for a request that
+carries a body and has an `Outbound` policy set, every retry attempt re-runs `jose.Seal` and
+produces a freshly-sealed body; in bare mode, a fresh `iat` is recomputed at seal time only
+when `Policy.IATMillis` is `true` — which is what MLE's millisecond `iat` wants. It is a
+re-seal, not a uniqueness guarantee: two attempts landing inside the same millisecond share
+an `iat`, and `jose.Seal` mints no `jti` at all — a nested policy's `jti` comes from the
+signed payload the caller hands it.
 
 ### Mutual TLS (client certificates)
 

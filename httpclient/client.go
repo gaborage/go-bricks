@@ -308,19 +308,39 @@ func (b *Builder) WithTransport(transport nethttp.RoundTripper) *Builder {
 // override, replay-cache hook, per-call policy resolver — can be added without
 // changing the WithJOSE signature.
 type JOSEConfig struct {
-	// Outbound is required: the policy used to sign+encrypt every outbound request body.
+	// Outbound is optional: when set, it is the policy used to seal every outbound
+	// request body (sign+encrypt, or encrypt-only under SealModeBareJWE). Nil disables
+	// outbound sealing, so request bodies go out untouched.
 	Outbound *jose.Policy
-	// Inbound is optional: when set, application/jose response bodies are decrypted+verified.
+	// Inbound is optional: when set, application/jose response bodies are opened
+	// (decrypt+verify, or decrypt-only under SealModeBareJWE).
 	// Plaintext responses (e.g., pre-trust error envelopes from the counterparty) pass
 	// through unmodified.
 	Inbound *jose.Policy
 	// Resolver supplies keys for both Outbound and Inbound directions.
 	Resolver jose.KeyResolver
+	// Envelope optionally shapes the sealed body on the wire in both directions -- Visa
+	// MLE's {"encData":...} object, for example, from httpclient.VisaMLEEnvelope(). Nil
+	// sends the compact itself as application/jose and unwraps only application/jose
+	// responses. Wrap is consulted only when Outbound is set and Unwrap only when Inbound
+	// is set, so an Envelope with neither policy fails Build
+	// (JOSE_POLICY_ENVELOPE_UNPAIRED); either policy alone is a supported shape.
+	Envelope BodyEnvelope
+	// MaxResponseBytes bounds the inbound response body read, exactly as the field of the
+	// same name on JOSETransport: zero means DefaultMaxJOSEBodyBytes and a negative value
+	// disables the cap. Negative beside an Envelope and an Inbound policy fails Build,
+	// because Unwrap replaces the Content-Type gate and every response body would then be
+	// buffered without limit.
+	MaxResponseBytes int64
 }
 
-// WithJOSE configures a JOSETransport that signs+encrypts every outbound request body
-// and decrypts+verifies application/jose response bodies. Pass cfg.Inbound = nil when
-// the counterparty does not return JOSE-wrapped responses.
+// WithJOSE configures a JOSETransport that seals outbound request bodies and opens
+// application/jose response bodies — sign+encrypt and decrypt+verify under the nested
+// JWE-of-JWS default, encrypt-only and decrypt-only under a SealModeBareJWE policy.
+// Both directions are optional and one-directional protection is a supported shape:
+// pass cfg.Inbound = nil when the counterparty does not return JOSE-wrapped responses,
+// and cfg.Outbound = nil to leave request bodies untouched. An Envelope needs at least
+// one of the two, or Build fails with JOSE_POLICY_ENVELOPE_UNPAIRED.
 //
 // Composition: transport layers are applied at Build time in a fixed order —
 // the base transport from WithTransport or WithTLSConfig is innermost, request
@@ -331,6 +351,10 @@ type JOSEConfig struct {
 // losing client certificates, pinned roots and proxy settings (Build returns
 // an error). Always fill the base slot — with WithTransport, or with
 // WithTLSConfig when the base is a TLS config.
+//
+// Body envelopes: cfg.Envelope moves the compact into and out of a
+// counterparty's own body format — httpclient.VisaMLEEnvelope() returns the one for
+// Visa Message Level Encryption. A hook without the policy it serves fails Build.
 //
 // Per-attempt freshness: because httpclient retries by re-running the request build
 // loop, each retry produces a freshly-sealed payload — useful for protocols that
@@ -358,6 +382,9 @@ func (b *Builder) WithJOSE(cfg JOSEConfig) *Builder {
 				Outbound: b.joseConfig.Outbound,
 				Inbound:  b.joseConfig.Inbound,
 				Resolver: b.joseConfig.Resolver,
+				Envelope: b.joseConfig.Envelope,
+
+				MaxResponseBytes: b.joseConfig.MaxResponseBytes,
 			}
 		})
 	}
@@ -382,6 +409,22 @@ func (b *Builder) normalizeJOSE() error {
 			Message:  "a Resolver is required when Outbound or Inbound is set",
 		}
 	}
+	// Wrap runs only for an Outbound policy and Unwrap only for an Inbound one, so an
+	// Envelope with neither is a silent no-op at request time. Fail construction instead.
+	if b.joseConfig.Envelope != nil && b.joseConfig.Outbound == nil && b.joseConfig.Inbound == nil {
+		return &jose.Error{
+			Sentinel: jose.ErrPolicyMismatch,
+			Code:     "JOSE_POLICY_ENVELOPE_UNPAIRED",
+			Status:   500,
+			Message:  "Envelope requires an Outbound or Inbound policy",
+		}
+	}
+	// Unwrap makes the transport buffer EVERY eligible response body; a negative cap means
+	// "no limit", so the trio lets a counterparty exhaust memory one response at a time.
+	// No half is wrong alone — refuse only the combination, with the code RoundTrip uses.
+	if b.joseConfig.Envelope != nil && b.joseConfig.Inbound != nil && b.joseConfig.MaxResponseBytes < 0 {
+		return errEnvelopeUnbounded("Envelope cannot be combined with an unbounded MaxResponseBytes")
+	}
 	outbound, err := normalizedJOSEPolicy(b.joseConfig.Outbound)
 	if err != nil {
 		return err
@@ -402,7 +445,10 @@ func normalizedJOSEPolicy(p *jose.Policy) (*jose.Policy, error) {
 		return nil, nil
 	}
 	cp := *p
-	if cp.SigAlg == "" {
+	// Mirrors jose/policy.go's bare-mode validation, which rejects a bare policy that
+	// names a SigAlg (validateBareDirection owns that rule): bare mode signs nothing, so
+	// filling the default in here would turn every valid bare policy into a Build failure.
+	if cp.SigAlg == "" && cp.Mode != jose.SealModeBareJWE {
 		cp.SigAlg = jose.DefaultSigAlg
 	}
 	if cp.KeyAlg == "" {

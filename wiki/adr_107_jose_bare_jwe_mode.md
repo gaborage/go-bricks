@@ -120,12 +120,11 @@ they read `Policy.Mode` to decide what to produce and accept.**
   default, the bare-JWE shape is the out-of-band-authenticated one. **Seal mode** is the
   new term for which one a policy selects.
 
-**Bare mode is a `Policy`-level door only, this round.** There is no `mode` key in the
-`jose:` struct-tag grammar (`jose/tag.go`), so no route can opt in through a tag, and
-`httpclient`'s `normalizedJOSEPolicy` defaults `SigAlg` to `RS256` before validating —
-which a bare policy must not carry — so `WithJOSE` cannot carry one either. `jose.Seal`
-and `jose.Open` (and `jose/testing`'s `SealForTest`/`OpenForTest`, which call them) are the
-whole surface until the `httpclient` envelope hooks land in the next stacked PR.
+**Bare mode is a `Policy`-level door.** There is no `mode` key in the `jose:` struct-tag
+grammar (`jose/tag.go`), so no route can opt in through a tag. `jose.Seal` and `jose.Open`
+(and `jose/testing`'s `SealForTest`/`OpenForTest`, which call them) are the door, and
+`httpclient.Builder.WithJOSE` reaches it too: `normalizedJOSEPolicy` skips its `SigAlg` default for
+a bare policy, which must not carry one.
 
 ## Alternatives
 
@@ -199,13 +198,10 @@ reports and the caller decides. A freshness knob here would also be the first th
   nested deployments see no change — the nested allowlists hold one key algorithm and one
   content encryption, so pinning them is a no-op. A bare deployment must declare the `Enc`
   its peer actually sends: a policy pinned to `A128GCM` refuses an `A256GCM` token with
-  `JOSE_MALFORMED`, where before it opened. Bare mode is reachable only through
-  `jose.Seal`/`jose.Open` on this change — `httpclient.WithJOSE` cannot carry a bare policy,
-  because its normalization defaults `SigAlg` before validating and a bare policy must not
-  set one. When the follow-on stacked PR drops that default, an inbound bare policy handed
-  to `httpclient.WithJOSE` will still have to set `Enc` explicitly to accept Visa's
-  `A128GCM`, since normalization fills an unset `Enc` with `jose.DefaultEnc` (`A256GCM`) —
-  explicit over implicit, and a silently-wrong default was the alternative.
+  `JOSE_MALFORMED`, where before it opened. An inbound bare policy handed to
+  `httpclient.Builder.WithJOSE` must set `Enc` explicitly to accept Visa's `A128GCM`, since
+  normalization fills an unset `Enc` with `jose.DefaultEnc` (`A256GCM`) — explicit over
+  implicit, and a silently-wrong default was the alternative.
 - **`Open` validates its policy like `Seal`, and pinning only ever narrows.** A hand-built
   inbound policy is refused before any parsing (`JOSE_ALGORITHM_DISALLOWED` for an unset or
   off-list algorithm), and `inboundAllowlists` yields an EMPTY list for a dimension whose
