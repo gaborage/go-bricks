@@ -88,40 +88,6 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 	return innerPayload, claims, hdr, nil
 }
 
-// openBare decrypts a bare JWE: no inner JWS, so nothing is verified and hdr.JWS stays
-// zero. The peer is authenticated out of band by the deployment, not here.
-func openBare(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *Claims, hdr OpenHeader, err error) {
-	decKey, err := r.PrivateKey(p.DecryptKid)
-	if err != nil {
-		return nil, nil, OpenHeader{}, err
-	}
-
-	payload, jweHdr, err := cryptoadapter.Decrypt(compact, decKey, &cryptoadapter.DecryptOptions{
-		ExpectedKid:       p.DecryptKid,
-		AllowedKeyAlgs:    AllowedKeyAlgs(),
-		AllowedContentEnc: AllowedContentEncsFor(p.Mode),
-	})
-	hdr.JWE = cryptoHeaderToOpen(&jweHdr)
-	if err != nil {
-		return nil, nil, hdr, mapDecryptError(err, p, &jweHdr)
-	}
-
-	// Same permissive cty rule as the nested path, applied to the only header there is:
-	// a peer that declares a cty must agree with the policy, one that omits it is fine.
-	if p.Cty != "" && jweHdr.Cty != "" && jweHdr.Cty != p.Cty {
-		return nil, nil, hdr, &Error{
-			Sentinel: ErrCtyRejected,
-			Code:     codeCtyRejected,
-			Status:   400,
-			Message:  "Disallowed cty header",
-			Kid:      jweHdr.Kid,
-			Alg:      jweHdr.Alg,
-		}
-	}
-
-	return payload, parseClaims(payload), hdr, nil
-}
-
 // OpenHeader holds the diagnostic headers from both JOSE layers, surfaced to the caller
 // so the middleware can log them. Never includes plaintext.
 type OpenHeader struct {

@@ -1,14 +1,8 @@
 package jose
 
 import (
-	"time"
-
 	"github.com/gaborage/go-bricks/jose/internal/cryptoadapter"
 )
-
-// nowMillis is the seal-time clock for the bare-mode iat header, swapped by in-package
-// tests. Unix epoch MILLISECONDS, per the Visa MLE convention.
-var nowMillis = func() int64 { return time.Now().UnixMilli() }
 
 // Seal performs the outbound transformation: sign payload as a compact JWS with our
 // private key, then encrypt that JWS as a compact JWE to the peer's public key. Returns
@@ -102,51 +96,4 @@ func Seal(payload []byte, p *Policy, r KeyResolver) (string, error) {
 	}
 
 	return jweCompact, nil
-}
-
-// sealBare encrypts payload directly to the peer's public key, with no inner JWS. The
-// peer's identity is established out of band, so nothing here signs anything.
-func sealBare(payload []byte, p *Policy, r KeyResolver) (string, error) {
-	encKey, err := r.PublicKey(p.EncryptKid)
-	if err != nil {
-		return "", err
-	}
-
-	jweCompact, err := cryptoadapter.Encrypt(payload, encKey, &cryptoadapter.EncryptOptions{
-		Kid:    p.EncryptKid,
-		KeyAlg: p.KeyAlg,
-		Enc:    p.Enc,
-		Cty:    p.Cty,
-		Typ:    p.Typ,
-		Extra:  p.bareExtraHeaders(),
-	})
-	if err != nil {
-		return "", &Error{
-			Sentinel: ErrOutboundFailed,
-			Code:     codeOutboundFailed,
-			Status:   500,
-			Message:  "Failed to encrypt outbound payload",
-			Kid:      p.EncryptKid,
-			Alg:      string(p.KeyAlg),
-			Enc:      string(p.Enc),
-			Cause:    err,
-		}
-	}
-	return jweCompact, nil
-}
-
-// bareExtraHeaders merges the policy's protected headers with the stamped iat, without
-// mutating the policy's map. Returns nil when there is nothing to write.
-func (p *Policy) bareExtraHeaders() map[string]any {
-	if len(p.ProtectedHeaders) == 0 && !p.IATMillis {
-		return nil
-	}
-	extra := make(map[string]any, len(p.ProtectedHeaders)+1)
-	for k, v := range p.ProtectedHeaders {
-		extra[k] = v
-	}
-	if p.IATMillis {
-		extra["iat"] = nowMillis()
-	}
-	return extra
 }
