@@ -308,9 +308,11 @@ func (b *Builder) WithTransport(transport nethttp.RoundTripper) *Builder {
 // override, replay-cache hook, per-call policy resolver — can be added without
 // changing the WithJOSE signature.
 type JOSEConfig struct {
-	// Outbound is required: the policy used to sign+encrypt every outbound request body.
+	// Outbound is required: the policy used to seal every outbound request body
+	// (sign+encrypt, or encrypt-only under SealModeBareJWE).
 	Outbound *jose.Policy
-	// Inbound is optional: when set, application/jose response bodies are decrypted+verified.
+	// Inbound is optional: when set, application/jose response bodies are opened
+	// (decrypt+verify, or decrypt-only under SealModeBareJWE).
 	// Plaintext responses (e.g., pre-trust error envelopes from the counterparty) pass
 	// through unmodified.
 	Inbound *jose.Policy
@@ -332,8 +334,10 @@ type JOSEConfig struct {
 	MaxResponseBytes int64
 }
 
-// WithJOSE configures a JOSETransport that signs+encrypts every outbound request body
-// and decrypts+verifies application/jose response bodies. Pass cfg.Inbound = nil when
+// WithJOSE configures a JOSETransport that seals every outbound request body and opens
+// application/jose response bodies — sign+encrypt and decrypt+verify under the nested
+// JWE-of-JWS default, encrypt-only and decrypt-only under a SealModeBareJWE policy.
+// Pass cfg.Inbound = nil when
 // the counterparty does not return JOSE-wrapped responses.
 //
 // Composition: transport layers are applied at Build time in a fixed order —

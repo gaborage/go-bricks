@@ -663,3 +663,52 @@ func TestJOSETransportWrapBodyErrorAbortsBeforeSending(t *testing.T) {
 	assert.Nil(t, resp)
 	require.ErrorIs(t, err, sentinel)
 }
+
+// TestJOSETransportWrapBodyContentTypeHeader pins what an empty contentType from WrapBody
+// means on the wire. Setting it would put a bare "Content-Type:" on the request, which
+// jose.IsContentType rejects and a JOSE-aware peer can refuse; defaulting it back to
+// application/jose would mislabel a body the hook deliberately wrapped in another format.
+// Deleting the header is the only reading that matches "the hook wants no media type".
+func TestJOSETransportWrapBodyContentTypeHeader(t *testing.T) {
+	tests := []struct {
+		name            string
+		hookContentType string
+		wantPresent     bool
+		wantValue       string
+	}{
+		{name: "named_media_type_is_advertised", hookContentType: "application/json", wantPresent: true, wantValue: "application/json"},
+		{name: "empty_media_type_deletes_the_header", hookContentType: "", wantPresent: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotPresent bool
+			var gotValue string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, gotPresent = r.Header[http.CanonicalHeaderKey("Content-Type")]
+				gotValue = r.Header.Get("Content-Type")
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer server.Close()
+
+			f := jositest.NewBidirectionalFixture(t)
+			transport := newJOSETransport(f)
+			transport.Inbound = nil // responses are out of scope here
+			transport.WrapBody = func(compact string) (body []byte, contentType string, err error) {
+				return []byte(compact), tt.hookContentType, nil
+			}
+
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
+			require.NoError(t, err)
+			// A caller-set Content-Type must not survive an empty hook verdict either.
+			req.Header.Set("Content-Type", "application/json")
+
+			resp, err := transport.RoundTrip(req)
+			require.NoError(t, err)
+			require.NoError(t, resp.Body.Close())
+
+			assert.Equal(t, tt.wantPresent, gotPresent, "Content-Type header presence on the wire")
+			assert.Equal(t, tt.wantValue, gotValue)
+		})
+	}
+}
