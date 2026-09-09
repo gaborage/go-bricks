@@ -1,0 +1,47 @@
+{
+  "note": "Generated test material for the jose bare-JWE vectors (go test ./jose -update): disposable RSA keys and the tokens encrypted under them. Never provisioned anywhere; nothing to rotate.",
+  "vectors": [
+    {
+      "name": "bare_a128gcm_with_typ_and_iat",
+      "policy": "bare",
+      "code": "",
+      "enc": "A128GCM",
+      "typ": "JOSE",
+      "iatMillis": 1800000000123,
+      "plaintext": "{\"pan\":\"4111111111111111\",\"sub\":\"cardholder-9\"}",
+      "token": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMTI4R0NNIiwiaWF0IjoxODAwMDAwMDAwMTIzLCJpc3MiOiJhY21lLXBheW1lbnRzIiwia2lkIjoibWxlLWVuYy12MSIsInR5cCI6IkpPU0UifQ.Ru1c8-UtfC6tobWJi7Lt06aYGGwo2qTgqy5ZQ3IBTBvgbPzIhhahfpz7CpjZQ2L8zEB8WXgpLKduGAQuN6frw_zGPrxUEOUG1b3mKbSesn_40572n6T0lAYxd2pHd5nB4KnGXkU6HHddQOh1pFJcwoVlWR1_GJdqS_FPuT7uHVieEWiWcwXeclsOuzwxP_Bizb5dlG3BbkbfzrbzDWJqLq_m67Iyv8Sf4a3C9q7BsvmF3t1snclzdmsPHjTnAzKYtDN6th1Rr5AkBZliOYuYzG6btdRBJK60oKSiusuIlloQKvXGZ09JAWde6zcekR_dEYQtc9rJzXm2KKzCHNpHZw.kxBgV0UHxZwKCvfR.gDEOrRjycfoTxfDSYNfxL5ESQwowch9wtj4wMY_47l2Res-3kowqjPPKWKwU8KU.TGGl9UqsPoUKAgPgtfkr9Q"
+    },
+    {
+      "name": "bare_a256gcm",
+      "policy": "bare",
+      "code": "",
+      "enc": "A256GCM",
+      "plaintext": "{\"pan\":\"4111111111111111\",\"sub\":\"cardholder-9\"}",
+      "token": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoibWxlLWVuYy12MSJ9.A69OLAny9iJ3f_iBic21y7cM7idyD780LvJqqq6uDBuAkwJ_pCusmhYDXeNa7Y4k-KEa2mHfSY7sEuB_Oh_jGepIEr8k3oaPlIobNK2aODthu8-IsFOCB4-ScPyLFtUEZcaF8_SvpbMVY9jT15PnqWBjIyCGa8KxLQ2WPpPNY83dbZ584NcCFUWUXDpvHL3pV0DdQhFTf0DN8XJlXFS3HXMtyxd8Mq3kJcByJSPLXJis_w-U01jFmmwYKqmqXi8N6LJBwXHPr0BjnCedm1m5Bg0Jfoo29kT5c92OKNW8CnfnMvIeQQq03AbJThZVYo-tucAhNy1tayT3q2oDNKHzpw.auorBxKZtEEEddhD.Vd6MwZzc6klUMu5uRr8L9HWbvQ7x1C7Dank_cTwoVE7czpScUDVGHgEm7xmRfGo.V0S_-sHu5Ue5Z5T4kSwAZA"
+    },
+    {
+      "name": "wrong_kid",
+      "policy": "bare",
+      "code": "JOSE_KID_UNKNOWN",
+      "enc": "A128GCM",
+      "plaintext": "{\"pan\":\"4111111111111111\",\"sub\":\"cardholder-9\"}",
+      "token": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMTI4R0NNIiwia2lkIjoicm9ndWUifQ.c-kpUIwOVBxZWMTX0Fydgmzh8FOz5fGI-NjKbk2zRo5DXJWLXrV5ixGZs0GHPQ82us269Va2zBu7icP0hpWE_YL9f3Q4LshMaGg_pd0hXLYYeg0npNB7XfRpqTVcKcUSbgOc7_YbFkRlwp8pyR2Q9O87dJwqpcT-dV-76AC85WGWzRAy8lJjjrjNR3XF3Vj1p0w8UdIjIBViGU8qgn-BbH6UndoqnjRBgtfYKA9sGhkzkv0oRCur-repN2iFo8J_6bIUiW4AGFLKYZKx1VqX_kCqYz_p4D-jgIObA3iEovkqiPoDNYTcZJ8hpiNz768FfV3N-IuElgXtLGk4Tai-ng.X98zpgrWCzVTa_4b.p3ZEljDQW_AdU4PYhAmV81WQauLaJDlXmkCjMKDxXLGuCC2pitvMTQFEmKE0OwI.AWl77a-t_JTpTx6SLFN_zA"
+    },
+    {
+      "name": "disallowed_enc_a128cbc_hs256",
+      "policy": "bare",
+      "code": "JOSE_MALFORMED",
+      "enc": "A128CBC-HS256",
+      "plaintext": "{\"pan\":\"4111111111111111\",\"sub\":\"cardholder-9\"}",
+      "token": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2Iiwia2lkIjoibWxlLWVuYy12MSJ9.ekh-wQD_jhpGHIXLu4iQGO7Zzt__JTXOuKS-2o2tYp9aGpgbiwi77mQX4nXfEk9w-xRrgI4lqp_2JNoE-J0BOTN1B3JfoCvYttnXh6mcBNGMsQZhjgemE3s55elcW6fs3zxYuRmQm8QLj2EcIY5_MI5DMKoHKNBK8h8B3I1dzDEo-Fos88Mg8XVlOoIzn_LPSsiUnnocsiuBSYmvFN0h4qW_aZKMbQG8Og3ATfJSmsctzBEnZSXFH9JWkxCknutNYpe0j0PYDAHr6SvM5lrNvsBbity4geuGvrVJneT5nMhZ7Vbz8XmGuipK9DwhAA-QVkquHmoXI4WRE64CqVlOWQ.oRGbSF4hzZX8PA3MoQaAmw.Lqtoh8K2CwVmXyyaas0QfUoLeD0GP9tXaPFhza5lkIURhMxKt9H08MJpUSIQ2T_2.8tWlbcrpcO9Oxnx8CDaUZw"
+    },
+    {
+      "name": "bare_token_on_nested_policy",
+      "policy": "nested",
+      "code": "JOSE_MALFORMED",
+      "enc": "A128GCM",
+      "plaintext": "{\"pan\":\"4111111111111111\",\"sub\":\"cardholder-9\"}",
+      "token": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMTI4R0NNIiwia2lkIjoibWxlLWVuYy12MSJ9.eMoC_4nggWocUEAhuHIF7WQPbYxAjgbj3RK4NSZIgS1sqr_aGWgUbZ6bbY87Cluhg5y-5gTndTjTlKfezzNzuJAh0aEMRWIUQfAEfghKqAs74h8wftLvwLlITErwPuS4ubQWV2NYT7hKHbOmLrMtuYZh1JqCLOXuUTehQdTkR-CbwyJV_EJIe9A9YQY4xiwLrHR-B3RIa9oGNaqccRKx5fhVe1r0GYFIz6TBSwOWLCER51G7gyaaF058KA_GDhsaR1JArM0JJ9hvqsJxvYHqqlwgVr_97NDcz50jstee6RJxhKgjZUW8sbr-7BpVQRlId4DnIPGy5BzzBzCTL8a__Q.E4r_Wvn8NNDhR1_i.-lkYAM8PHJcbVBrO8Sbi3wvyoorqKaC14XHG-eWzn8WPro7f_FAfcSsApn0KT3I.YTcTvka0yhn_5uJcqZpSKg"
+    }
+  ]
+}

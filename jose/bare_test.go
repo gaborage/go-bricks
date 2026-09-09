@@ -2,8 +2,12 @@ package jose
 
 import (
 	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"flag"
+	"os"
 	"strings"
 	"testing"
 
@@ -248,6 +252,176 @@ func TestOpenBareJWECtyRule(t *testing.T) {
 			}
 			require.ErrorIs(t, err, ErrCtyRejected)
 			requireJOSEErrorCode(t, err, tt.wantCode)
+		})
+	}
+}
+
+// ---- published bare-JWE vectors ----
+//
+// The tokens in testdata/bare_vectors.json are produced by go-jose DIRECTLY (see
+// buildVectorToken), never by Seal, so they are an oracle independent of the code under
+// test. Regenerate with: go test ./jose -update
+
+var updateVectors = flag.Bool("update", false, "regenerate the published bare-JWE vectors")
+
+const (
+	vecEncKid   = "mle-enc-v1"
+	vecRogueKid = "rogue"
+	vecIATMs    = int64(1_800_000_000_123)
+	vecIssuer   = "acme-payments"
+	vecPlain    = `{"pan":"4111111111111111","sub":"cardholder-9"}`
+	vecKeysFile = "testdata/keys.json"
+	vecFile     = "testdata/bare_vectors.json"
+)
+
+// vectorNote travels inside both fixture files so their provenance is readable in place.
+const vectorNote = "Generated test material for the jose bare-JWE vectors (go test ./jose -update): " +
+	"disposable RSA keys and the tokens encrypted under them. Never provisioned anywhere; nothing to rotate."
+
+type bareKeysFile struct {
+	Note string            `json:"note"`
+	Keys map[string]string `json:"keys"` // kid -> base64 PKCS#1 DER
+}
+
+type bareVectorFile struct {
+	Note    string       `json:"note"`
+	Vectors []bareVector `json:"vectors"`
+}
+
+// bareVector is one published token plus the verdict the opener must reach.
+type bareVector struct {
+	Name      string `json:"name"`
+	Policy    string `json:"policy"` // "bare" or "nested"
+	Code      string `json:"code"`   // "" for a vector that must open
+	Enc       string `json:"enc"`
+	Typ       string `json:"typ,omitempty"`
+	IATMillis int64  `json:"iatMillis,omitempty"`
+	Plaintext string `json:"plaintext,omitempty"`
+	Token     string `json:"token"`
+}
+
+func loadVectorKeys(t *testing.T) map[string]*rsa.PrivateKey {
+	t.Helper()
+	file := bareKeysFile{Note: vectorNote, Keys: map[string]string{}}
+	raw, err := os.ReadFile(vecKeysFile)
+	if errors.Is(err, os.ErrNotExist) && *updateVectors {
+		for _, kid := range []string{vecEncKid, vecRogueKid} {
+			priv, _ := generateKeyPair(t)
+			file.Keys[kid] = base64.StdEncoding.EncodeToString(x509.MarshalPKCS1PrivateKey(priv))
+		}
+		raw, err = json.MarshalIndent(file, "", "  ")
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(vecKeysFile, append(raw, '\n'), 0o600))
+	}
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &file))
+
+	keys := map[string]*rsa.PrivateKey{}
+	for kid, b64 := range file.Keys {
+		der, err := base64.StdEncoding.DecodeString(b64)
+		require.NoError(t, err)
+		keys[kid], err = x509.ParsePKCS1PrivateKey(der)
+		require.NoError(t, err)
+	}
+	return keys
+}
+
+// buildVectorToken encrypts with go-jose directly, so headers Seal would never write
+// (a rogue kid, a CBC content encryption) can be produced.
+func buildVectorToken(t *testing.T, v *bareVector, pub *rsa.PublicKey, kid string) string {
+	t.Helper()
+	extra := map[joselib.HeaderKey]any{}
+	if v.IATMillis != 0 {
+		extra[joselib.HeaderKey("iat")] = v.IATMillis
+		extra[joselib.HeaderKey("iss")] = vecIssuer
+	}
+	opts := &joselib.EncrypterOptions{ExtraHeaders: extra}
+	if v.Typ != "" {
+		opts = opts.WithType(joselib.ContentType(v.Typ))
+	}
+	encrypter, err := joselib.NewEncrypter(joselib.ContentEncryption(v.Enc),
+		joselib.Recipient{Algorithm: joselib.RSA_OAEP_256, Key: pub, KeyID: kid}, opts)
+	require.NoError(t, err)
+	obj, err := encrypter.Encrypt([]byte(v.Plaintext))
+	require.NoError(t, err)
+	compact, err := obj.CompactSerialize()
+	require.NoError(t, err)
+	return compact
+}
+
+func regenerateVectors(t *testing.T, keys map[string]*rsa.PrivateKey) []bareVector {
+	t.Helper()
+	vectors := []bareVector{
+		{Name: "bare_a128gcm_with_typ_and_iat", Policy: "bare", Enc: "A128GCM",
+			Typ: "JOSE", IATMillis: vecIATMs, Plaintext: vecPlain},
+		{Name: "bare_a256gcm", Policy: "bare", Enc: "A256GCM", Plaintext: vecPlain},
+		{Name: "wrong_kid", Policy: "bare", Enc: "A128GCM", Code: codeKidUnknown, Plaintext: vecPlain},
+		{Name: "disallowed_enc_a128cbc_hs256", Policy: "bare", Enc: "A128CBC-HS256",
+			Code: codeMalformed, Plaintext: vecPlain},
+		{Name: "bare_token_on_nested_policy", Policy: "nested", Enc: "A128GCM",
+			Code: codeMalformed, Plaintext: vecPlain},
+	}
+	for i := range vectors {
+		kid := vecEncKid
+		if vectors[i].Name == "wrong_kid" {
+			kid = vecRogueKid
+		}
+		vectors[i].Token = buildVectorToken(t, &vectors[i], &keys[kid].PublicKey, kid)
+	}
+	raw, err := json.MarshalIndent(bareVectorFile{Note: vectorNote, Vectors: vectors}, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(vecFile, append(raw, '\n'), 0o600))
+	return vectors
+}
+
+func TestOpenBareJWEVectors(t *testing.T) {
+	keys := loadVectorKeys(t)
+	var file bareVectorFile
+	if *updateVectors {
+		file.Vectors = regenerateVectors(t, keys)
+	} else {
+		raw, err := os.ReadFile(vecFile)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(raw, &file))
+	}
+	require.NotEmpty(t, file.Vectors)
+
+	resolver := &fixtureResolver{
+		priv: map[string]*rsa.PrivateKey{vecEncKid: keys[vecEncKid]},
+		pub:  map[string]*rsa.PublicKey{vecRogueKid: &keys[vecRogueKid].PublicKey},
+	}
+	bare := &Policy{
+		Direction: DirectionInbound, Mode: SealModeBareJWE,
+		DecryptKid: vecEncKid, KeyAlg: DefaultKeyAlg, Enc: joselib.A128GCM,
+	}
+	nested := &Policy{
+		Direction: DirectionInbound, DecryptKid: vecEncKid, VerifyKid: vecRogueKid,
+		SigAlg: DefaultSigAlg, KeyAlg: DefaultKeyAlg, Enc: DefaultEnc,
+	}
+	require.NoError(t, bare.Validate())
+	require.NoError(t, nested.Validate())
+
+	for _, v := range file.Vectors {
+		t.Run(v.Name, func(t *testing.T) {
+			p := bare
+			if v.Policy == "nested" {
+				p = nested
+			}
+			plaintext, claims, hdr, err := Open(v.Token, p, resolver)
+			if v.Code != "" {
+				require.Error(t, err)
+				requireJOSEErrorCode(t, err, v.Code)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, v.Plaintext, string(plaintext))
+			require.NotNil(t, claims)
+			assert.Equal(t, "cardholder-9", claims.Subject)
+			assert.Equal(t, v.Enc, hdr.JWE.Enc)
+			assert.Equal(t, vecEncKid, hdr.JWE.Kid)
+			assert.Equal(t, v.Typ, hdr.JWE.Typ)
+			assert.Equal(t, v.IATMillis, hdr.JWE.IATMillis)
+			assert.Equal(t, Header{}, hdr.JWS)
 		})
 	}
 }
