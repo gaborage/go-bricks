@@ -296,3 +296,127 @@ func TestStatementOverRedactsQuoteShapedNeighbours(t *testing.T) {
 		})
 	}
 }
+
+// TestStatementHandlesTruncatedTails covers inputs that end mid-clause. Each one
+// walks a bounds check to its last legal index, where an off-by-one reads past
+// the end of the string.
+func TestStatementHandlesTruncatedTails(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "identified_by_with_no_value",
+			in:   `ALTER USER u IDENTIFIED BY`,
+			want: `ALTER USER u IDENTIFIED BY [REDACTED]`,
+		},
+		{
+			name: "escape_prefix_at_end_of_input",
+			in:   `ALTER ROLE r PASSWORD E`,
+			want: `ALTER ROLE r PASSWORD E`,
+		},
+		{
+			name: "unicode_prefix_at_end_of_input",
+			in:   `ALTER ROLE r PASSWORD U&`,
+			want: `ALTER ROLE r PASSWORD U&`,
+		},
+		{
+			name: "keyword_at_end_of_input",
+			in:   `ALTER ROLE r PASSWORD`,
+			want: `ALTER ROLE r PASSWORD`,
+		},
+		{
+			name: "unterminated_block_comment_after_keyword",
+			in:   `ALTER ROLE r PASSWORD /* unclosed`,
+			want: `ALTER ROLE r PASSWORD /* unclosed`,
+		},
+		{
+			// The trailing star is load-bearing: it forces the comment scanner to
+			// read the byte after the last one, where an off-by-one bound reads
+			// past the end of the string.
+			name: "unterminated_block_comment_ending_in_a_star",
+			in:   `ALTER ROLE r PASSWORD /* unclosed *`,
+			want: `ALTER ROLE r PASSWORD /* unclosed *`,
+		},
+		{
+			name: "unterminated_block_comment_ending_in_a_slash",
+			in:   `ALTER ROLE r PASSWORD /* unclosed /`,
+			want: `ALTER ROLE r PASSWORD /* unclosed /`,
+		},
+		{
+			name: "unterminated_line_comment_after_keyword",
+			in:   `ALTER ROLE r PASSWORD --unclosed`,
+			want: `ALTER ROLE r PASSWORD --unclosed`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, Statement(tt.in))
+		})
+	}
+}
+
+// TestWordAt covers the whole-word match directly, because its boundary classes
+// are what keep a `password` column from reading as the keyword and what let a
+// keyword ending at the last byte still match.
+func TestWordAt(t *testing.T) {
+	tests := []struct {
+		name    string
+		sql     string
+		i       int
+		keyword string
+		wantEnd int
+		wantOK  bool
+	}{
+		{name: "exact_whole_string", sql: "password", i: 0, keyword: kwPassword, wantEnd: 8, wantOK: true},
+		{name: "uppercase_folds", sql: "PASSWORD x", i: 0, keyword: kwPassword, wantEnd: 8, wantOK: true},
+		{name: "ends_at_last_byte", sql: "a password", i: 2, keyword: kwPassword, wantEnd: 10, wantOK: true},
+		{name: "runs_past_end", sql: "passwor", i: 0, keyword: kwPassword, wantOK: false},
+		{name: "followed_by_underscore", sql: "password_hash", i: 0, keyword: kwPassword, wantOK: false},
+		{name: "followed_by_digit", sql: "password9", i: 0, keyword: kwPassword, wantOK: false},
+		{name: "followed_by_letter", sql: "passwords", i: 0, keyword: kwPassword, wantOK: false},
+		{name: "preceded_by_letter", sql: "xpassword", i: 1, keyword: kwPassword, wantOK: false},
+		{name: "preceded_by_digit", sql: "0password", i: 1, keyword: kwPassword, wantOK: false},
+		{name: "preceded_by_underscore", sql: "_password", i: 1, keyword: kwPassword, wantOK: false},
+		{name: "preceded_by_punctuation", sql: `"password`, i: 1, keyword: kwPassword, wantEnd: 9, wantOK: true},
+		{name: "different_word", sql: "passwerd", i: 0, keyword: kwPassword, wantOK: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			end, ok := wordAt(tt.sql, tt.i, tt.keyword)
+			assert.Equal(t, tt.wantOK, ok)
+			if tt.wantOK {
+				assert.Equal(t, tt.wantEnd, end)
+			}
+		})
+	}
+}
+
+// TestByteClasses pins the character classes the word-boundary test is built
+// from. Each case sits on a class edge, where widening or narrowing the range by
+// one changes whether a keyword is recognized at all.
+func TestByteClasses(t *testing.T) {
+	wordBytes := []byte{'a', 'z', 'A', 'Z', '0', '9', '_', '5', 'm'}
+	for _, c := range wordBytes {
+		assert.Truef(t, isWordByte(c), "%q should be an identifier byte", string(c))
+	}
+	nonWordBytes := []byte{'/', ':', '@', '[', '`', '{', ' ', '\'', '"', '$', '-', '&', ';'}
+	for _, c := range nonWordBytes {
+		assert.Falsef(t, isWordByte(c), "%q should not be an identifier byte", string(c))
+	}
+
+	for _, c := range []byte{'a', 'z', 'A', 'Z', 'q'} {
+		assert.Truef(t, isLetter(c), "%q should be a letter", string(c))
+	}
+	for _, c := range []byte{'`', '{', '@', '[', '0', '9', '_', ' '} {
+		assert.Falsef(t, isLetter(c), "%q should not be a letter", string(c))
+	}
+
+	assert.Equal(t, byte('a'), lowerASCII('A'))
+	assert.Equal(t, byte('z'), lowerASCII('Z'))
+	assert.Equal(t, byte('q'), lowerASCII('q'))
+	assert.Equal(t, byte('@'), lowerASCII('@'), "the byte below 'A' is left alone")
+	assert.Equal(t, byte('['), lowerASCII('['), "the byte above 'Z' is left alone")
+	assert.Equal(t, byte('5'), lowerASCII('5'))
+}

@@ -55,12 +55,13 @@ const (
 // Callers must scrub BEFORE truncating for length: a length cut can remove the
 // very keyword this rule depends on.
 func Statement(sql string) string {
-	for i := 0; i < len(sql); i++ {
+	// A non-qualifying keyword is not skipped past: every offset inside it fails
+	// wordAt's boundary check anyway, so plain advance is both correct and cheap.
+	for i := range len(sql) {
 		if end, ok := wordAt(sql, i, kwPassword); ok {
 			if startsValue(sql, skipGap(sql, end)) {
 				return sql[:end] + pgPasswordTail
 			}
-			i = end - 1
 			continue
 		}
 		if end, ok := wordAt(sql, i, kwIdentified); ok {
@@ -69,7 +70,6 @@ func Statement(sql string) string {
 			if byEnd, isBy := wordAt(sql, skipGap(sql, end), kwBy); isBy {
 				return sql[:byEnd] + oracleByTail
 			}
-			i = end - 1
 		}
 	}
 	return sql
