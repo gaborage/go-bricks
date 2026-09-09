@@ -6,69 +6,70 @@
 // secret, so it never travels in args and the logger's SensitiveDataFilter,
 // which masks by field NAME, cannot see it. Vendor scope is those two.
 //
-// The rule is deliberately blunt: find the first credential keyword followed by
-// a value, keep everything up to and including that keyword, and DROP THE WHOLE
-// REMAINDER. The credential always follows its keyword, so the dropped tail is
-// where every hard case lives — dollar quoting, E'…' and U&'…' prefixes, doubled
-// quotes, spaces inside the literal, Oracle's REPLACE <old> and BY VALUES
-// <hash>, unterminated literals, and a decoy literal ending in the keyword. None
-// can leak, because none is examined. Under-redaction would need the keyword to
-// be absent, and then no vendor reads the statement as credential DDL either.
+// The rule never examines the credential: find the first credential keyword
+// followed by a value, keep everything up to and including that keyword, and
+// drop the whole remainder. Since the value always follows its keyword, every
+// shape a matcher would have to understand — dollar quoting, prefixed constants,
+// doubled quotes, Oracle's trailing REPLACE and BY VALUES, unterminated literals
+// — is in the discarded tail. Over-redaction is the accepted cost: a keyword in
+// front of something quote-shaped costs the statement its tail, and a delimiter
+// opened before the keyword, such as the `(` of an OPTIONS list, is left
+// unbalanced by design.
 //
-// The accepted cost is over-redaction: a keyword sitting in front of something
-// quote-shaped costs the statement its tail. Trailing clauses after a credential
-// are dropped by design — a truncated log line beats a leaked password.
+// What is NOT scrubbed: a password inside a connection-string literal, as in
+// CREATE SUBSCRIPTION ... CONNECTION 'host=h password=x' or a dblink argument.
+// Qualifying on `=` would truncate ordinary DML such as
+// UPDATE users SET password = crypt($1, gen_salt('bf')).
 package sqlredact
 
 import "strings"
 
-// redactedMarker replaces the credential value. It matches the convention the
-// migration role provisioner has used in its own error summaries.
 const redactedMarker = "[REDACTED]"
 
-// Keywords are matched whole-word and ASCII case-insensitively.
 const (
 	kwPassword   = "password"
 	kwIdentified = "identified"
 	kwBy         = "by"
 )
 
-// Replacement tails appended after the preserved prefix, which ends at the
-// keyword (at BY, for the Oracle form) exactly as the input spells it.
+// Tails appended after the preserved prefix, which ends at the keyword — at BY,
+// for a complete Oracle clause — exactly as the input spells it.
 const (
 	pgPasswordTail = " '" + redactedMarker + "'"
-	oracleByTail   = " " + redactedMarker
+	redactedTail   = " " + redactedMarker
 )
 
 // Statement returns sql truncated at its first credential clause, with the value
 // replaced by a fixed marker.
 //
 // PASSWORD qualifies when the next byte past any whitespace or comment begins a
-// value: a quote,
-// a dollar sign, or a letter introducing an E'…' / U&'…' constant. It does not
-// qualify before `=`, `,`, `)`, `;`, end of input, or a bare word such as NULL
-// or FROM, so DML naming a password column is untouched. IDENTIFIED qualifies
-// when the next word is BY, which is what separates it from IDENTIFIED
-// EXTERNALLY and IDENTIFIED GLOBALLY.
+// value: a single quote, a dollar sign, or a letter introducing an E'…' / U&'…'
+// constant. It does not qualify before `=`, `,`, `)`, `;`, end of input, or a
+// bare word such as NULL or FROM, so DML naming a password column is untouched.
+// IDENTIFIED qualifies when the next word is BY. Either keyword also qualifies
+// when the gap behind it runs into an unterminated comment, since the value can
+// no longer be located: this text reaches the log on the driver-error path,
+// where malformed statements are exactly what arrives.
 //
 // When nothing qualifies the input string itself is returned, unallocated.
 // Callers must scrub BEFORE truncating for length: a length cut can remove the
 // very keyword this rule depends on.
 func Statement(sql string) string {
-	// A non-qualifying keyword is not skipped past: every offset inside it fails
-	// wordAt's boundary check anyway, so plain advance is both correct and cheap.
 	for i := range len(sql) {
 		if end, ok := wordAt(sql, i, kwPassword); ok {
-			if startsValue(sql, skipGap(sql, end)) {
+			gap, truncated := skipGap(sql, end)
+			if truncated || startsValue(sql, gap) {
 				return sql[:end] + pgPasswordTail
 			}
 			continue
 		}
 		if end, ok := wordAt(sql, i, kwIdentified); ok {
-			// The prefix runs through BY as the input spells it, so the
-			// statement's own casing and spacing survive.
-			if byEnd, isBy := wordAt(sql, skipGap(sql, end), kwBy); isBy {
-				return sql[:byEnd] + oracleByTail
+			gap, truncated := skipGap(sql, end)
+			if truncated {
+				return sql[:end] + redactedTail
+			}
+			if byEnd, isBy := wordAt(sql, gap, kwBy); isBy {
+				return sql[:byEnd] + redactedTail
 			}
 		}
 	}
@@ -97,14 +98,15 @@ func wordAt(sql string, i int, keyword string) (end int, ok bool) {
 	return end, true
 }
 
-// startsValue reports whether a credential value begins at i: a quoted or
-// dollar-quoted constant, or a letter introducing a prefixed one (E'…', U&'…').
+// startsValue reports whether a PASSWORD value begins at i. PostgreSQL takes a
+// single-quoted string constant, plain or dollar-quoted or prefixed; a
+// double-quoted token is an identifier, never a password.
 func startsValue(sql string, i int) bool {
 	if i >= len(sql) {
 		return false
 	}
 	switch sql[i] {
-	case '\'', '"', '$':
+	case '\'', '$':
 		return true
 	}
 	if !isLetter(sql[i]) {
@@ -116,38 +118,40 @@ func startsValue(sql string, i int) bool {
 	return i+2 < len(sql) && sql[i+1] == '&' && sql[i+2] == '\''
 }
 
-// skipGap advances past the separators a vendor's lexer allows between two
-// tokens: whitespace and comments. Only the run BEFORE the value is examined, so
-// this keeps the "never look at the credential" property intact. An unterminated
-// comment runs to the end of input and nothing qualifies — no vendor parses that
-// statement as credential DDL either.
-func skipGap(sql string, i int) int {
+// skipGap advances past the whitespace and comments a lexer allows between two
+// tokens. truncated reports that the gap ran to the end of input inside an
+// unterminated block comment, leaving the value unlocatable.
+func skipGap(sql string, i int) (next int, truncated bool) {
 	for i < len(sql) {
 		if isSpace(sql[i]) {
 			i++
 			continue
 		}
-		next, ok := skipComment(sql, i)
+		end, closed, ok := skipComment(sql, i)
 		if !ok {
-			return i
+			return i, false
 		}
-		i = next
+		if !closed {
+			return end, true
+		}
+		i = end
 	}
-	return i
+	return i, false
 }
 
 // skipComment advances past a -- line comment or a /* block comment */ at i.
 // A line comment ends at CR as well as LF, and block comments nest, both
-// matching PostgreSQL; over-consuming here only over-redacts.
-func skipComment(sql string, i int) (next int, ok bool) {
+// matching PostgreSQL. A line comment running to end of input is closed; an
+// unterminated block comment is not.
+func skipComment(sql string, i int) (next int, closed, ok bool) {
 	switch {
 	case strings.HasPrefix(sql[i:], "--"):
 		// Search past the leading "--" so an empty comment (a bare "--\n") reports
 		// the newline at offset 0 rather than looking unterminated.
 		if end := strings.IndexAny(sql[i+2:], "\n\r"); end >= 0 {
-			return i + 2 + end, true
+			return i + 2 + end, true, true
 		}
-		return len(sql), true
+		return len(sql), true, true
 	case strings.HasPrefix(sql[i:], "/*"):
 		depth, j := 1, i+2
 		for j+1 < len(sql) {
@@ -159,15 +163,15 @@ func skipComment(sql string, i int) (next int, ok bool) {
 				depth--
 				j += 2
 				if depth == 0 {
-					return j, true
+					return j, true, true
 				}
 			default:
 				j++
 			}
 		}
-		return len(sql), true
+		return len(sql), false, true
 	}
-	return i, false
+	return i, false, false
 }
 
 func isWordByte(c byte) bool { return c == '_' || isLetter(c) || ('0' <= c && c <= '9') }

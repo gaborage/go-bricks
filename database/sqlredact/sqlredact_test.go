@@ -105,6 +105,9 @@ func TestStatementLeavesNonCredentialSQLUnchanged(t *testing.T) {
 		{name: "select_password_hash_column", in: `SELECT id, password_hash FROM t`},
 		{name: "select_password_column", in: `SELECT id, password FROM users WHERE email = $1`},
 		{name: "keyword_in_comment", in: `/* password */ SELECT 1`},
+		{name: "keyword_as_quoted_identifier", in: `SELECT "password" FROM users`},
+		{name: "password_inside_a_connection_string", in: `CREATE SUBSCRIPTION s CONNECTION 'host=h password=x' PUBLICATION p`},
+		{name: "password_assigned_by_expression", in: `UPDATE users SET password = crypt($1, gen_salt('bf'))`},
 		{name: "keyword_at_end_of_statement", in: `SELECT id FROM audit WHERE field = 'x' ORDER BY password`},
 		{name: "empty", in: ""},
 	}
@@ -257,6 +260,13 @@ func TestStatementDropsTheTailThatCarriesTheSecret(t *testing.T) {
 			secret: "S3cret",
 		},
 		{
+			// The OPTIONS list's opening paren is left unbalanced by design.
+			name:   "user_mapping_options_list",
+			in:     `CREATE USER MAPPING FOR u SERVER s OPTIONS (user 'u', password 'S3cret')`,
+			want:   `CREATE USER MAPPING FOR u SERVER s OPTIONS (user 'u', password '[REDACTED]'`,
+			secret: "S3cret",
+		},
+		{
 			name:   "multiple_clauses_first_wins_and_drops_the_rest",
 			in:     `CREATE USER a IDENTIFIED BY pw1; ALTER ROLE b PASSWORD 'pw2'`,
 			want:   `CREATE USER a IDENTIFIED BY [REDACTED]`,
@@ -286,11 +296,6 @@ func TestStatementOverRedactsQuoteShapedNeighbours(t *testing.T) {
 			name: "keyword_inside_string_literal",
 			in:   `SELECT * FROM notes WHERE body = 'user IDENTIFIED BY bob'`,
 			want: `SELECT * FROM notes WHERE body = 'user IDENTIFIED BY [REDACTED]`,
-		},
-		{
-			name: "keyword_as_quoted_identifier",
-			in:   `SELECT "password" FROM users`,
-			want: `SELECT "password '[REDACTED]'`,
 		},
 		{
 			name: "insert_of_literal_mentioning_keyword",
@@ -333,24 +338,6 @@ func TestStatementHandlesTruncatedTails(t *testing.T) {
 			name: "keyword_at_end_of_input",
 			in:   `ALTER ROLE r PASSWORD`,
 			want: `ALTER ROLE r PASSWORD`,
-		},
-		{
-			name: "unterminated_block_comment_after_keyword",
-			in:   `ALTER ROLE r PASSWORD /* unclosed`,
-			want: `ALTER ROLE r PASSWORD /* unclosed`,
-		},
-		{
-			// The trailing star is load-bearing: it forces the comment scanner to
-			// read the byte after the last one, where an off-by-one bound reads
-			// past the end of the string.
-			name: "unterminated_block_comment_ending_in_a_star",
-			in:   `ALTER ROLE r PASSWORD /* unclosed *`,
-			want: `ALTER ROLE r PASSWORD /* unclosed *`,
-		},
-		{
-			name: "unterminated_block_comment_ending_in_a_slash",
-			in:   `ALTER ROLE r PASSWORD /* unclosed /`,
-			want: `ALTER ROLE r PASSWORD /* unclosed /`,
 		},
 		{
 			name: "unterminated_line_comment_after_keyword",
@@ -427,4 +414,51 @@ func TestByteClasses(t *testing.T) {
 	assert.Equal(t, byte('@'), lowerASCII('@'), "the byte below 'A' is left alone")
 	assert.Equal(t, byte('['), lowerASCII('['), "the byte above 'Z' is left alone")
 	assert.Equal(t, byte('5'), lowerASCII('5'))
+}
+
+// TestStatementFailsClosedOnUnterminatedComment pins the one gap the rule cannot
+// read past. An unterminated block comment hides where the value starts, and
+// this text reaches the log on the driver-error path, where malformed statements
+// are exactly what arrives — so the keyword redacts rather than passing through.
+func TestStatementFailsClosedOnUnterminatedComment(t *testing.T) {
+	tests := []struct {
+		name   string
+		in     string
+		want   string
+		secret string
+	}{
+		{
+			name:   "password_value_hidden_behind_it",
+			in:     `ALTER ROLE r PASSWORD /* c 'sekret'`,
+			want:   `ALTER ROLE r PASSWORD '[REDACTED]'`,
+			secret: "sekret",
+		},
+		{
+			name:   "identified_by_hidden_behind_it",
+			in:     `ALTER USER u IDENTIFIED /* x BY sekret`,
+			want:   `ALTER USER u IDENTIFIED [REDACTED]`,
+			secret: "sekret",
+		},
+		{
+			// The trailing star forces the comment scanner to read the byte after
+			// the last one, where an off-by-one bound reads past the string.
+			name:   "ending_in_a_star",
+			in:     `ALTER ROLE r PASSWORD /* c *'sekret'`,
+			want:   `ALTER ROLE r PASSWORD '[REDACTED]'`,
+			secret: "sekret",
+		},
+		{
+			name:   "ending_in_a_slash",
+			in:     `ALTER ROLE r PASSWORD /* c /'sekret'`,
+			want:   `ALTER ROLE r PASSWORD '[REDACTED]'`,
+			secret: "sekret",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Statement(tt.in)
+			assert.Equal(t, tt.want, got)
+			assert.NotContains(t, got, tt.secret)
+		})
+	}
 }
