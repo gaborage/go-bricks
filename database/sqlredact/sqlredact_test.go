@@ -195,6 +195,14 @@ func TestStatementDropsTheTailThatCarriesTheSecret(t *testing.T) {
 			secret: "Sup3rS3cr3t",
 		},
 		{
+			// An empty line comment puts the newline at offset zero of the search,
+			// which a bound that rejects zero would read as never terminating.
+			name:   "empty_line_comment_before_value",
+			in:     "ALTER ROLE r PASSWORD --\n'Sup3rS3cr3t'",
+			want:   `ALTER ROLE r PASSWORD '[REDACTED]'`,
+			secret: "Sup3rS3cr3t",
+		},
+		{
 			name:   "comment_glued_to_keyword_and_value",
 			in:     `ALTER ROLE r3 ENCRYPTED PASSWORD/*x*/'Sup3rS3cr3t'`,
 			want:   `ALTER ROLE r3 ENCRYPTED PASSWORD '[REDACTED]'`,

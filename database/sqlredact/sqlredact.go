@@ -142,8 +142,10 @@ func skipGap(sql string, i int) int {
 func skipComment(sql string, i int) (next int, ok bool) {
 	switch {
 	case strings.HasPrefix(sql[i:], "--"):
-		if end := strings.IndexAny(sql[i:], "\n\r"); end >= 0 {
-			return i + end, true
+		// Search past the leading "--" so an empty comment (a bare "--\n") reports
+		// the newline at offset 0 rather than looking unterminated.
+		if end := strings.IndexAny(sql[i+2:], "\n\r"); end >= 0 {
+			return i + 2 + end, true
 		}
 		return len(sql), true
 	case strings.HasPrefix(sql[i:], "/*"):

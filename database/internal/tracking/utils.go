@@ -118,17 +118,18 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 	// when no provider is registered, so without this explicit gate the framework
 	// would build and discard span/metric attributes on every query with
 	// observability off (the in-function nil guards never fire).
-	// Scrub credential literals ONCE, here, and feed both sinks from it: the span
-	// attribute below and the log field further down. The scrub must run before
+	// Scrub credential literals ONCE, here, and rebind query to the result so no
+	// sink below can reach the raw statement: the span attribute, the log field
+	// and the metric labels all read the scrubbed text. The scrub must run before
 	// either sink truncates for length — a length cut can remove the keyword
 	// sqlredact.Statement anchors on — so this is the only point that dominates
 	// both. It sits above the Enabled() short-circuit, which costs a scan on the
 	// fully-disabled path; sqlredact.Statement allocates nothing when it finds no
 	// credential clause, so that path keeps its allocation win.
-	scrubbedQuery := sqlredact.Statement(query)
+	query = sqlredact.Statement(query)
 
 	if ctx != nil && observabilityEnabled.Load() {
-		createDBSpan(ctx, tc, scrubbedQuery, start, err)
+		createDBSpan(ctx, tc, query, start, err)
 		recordDBMetrics(ctx, tc, query, elapsed, rowsAffected, err)
 	}
 
@@ -179,10 +180,10 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 		return
 	}
 
-	// Truncate the scrubbed query to safe max length to avoid unbounded payloads
-	loggedQuery := scrubbedQuery
-	if tc.Settings.MaxQueryLength() > 0 && len(loggedQuery) > tc.Settings.MaxQueryLength() {
-		loggedQuery = TruncateString(loggedQuery, tc.Settings.MaxQueryLength())
+	// Truncate query string to safe max length to avoid unbounded payloads
+	truncatedQuery := query
+	if tc.Settings.MaxQueryLength() > 0 && len(query) > tc.Settings.MaxQueryLength() {
+		truncatedQuery = TruncateString(query, tc.Settings.MaxQueryLength())
 	}
 
 	// Typed setters avoid the map alloc; Str routes through SensitiveDataFilter.FilterString and
@@ -210,7 +211,7 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 		Str("vendor", tc.Vendor).
 		Int64("duration_ms", elapsed.Milliseconds()).
 		Int64("duration_ns", elapsed.Nanoseconds()).
-		Str(logFieldQuery, loggedQuery)
+		Str(logFieldQuery, truncatedQuery)
 
 	if tc.Settings.LogQueryParameters() && len(args) > 0 {
 		event = event.Interface("args", SanitizeArgs(args, tc.Settings.MaxQueryLength()))
@@ -302,9 +303,9 @@ func createDBSpan(ctx context.Context, tc *Context, query string, start time.Tim
 	)
 
 	// Add database semantic attributes per OTel v1.32.0 spec.
-	// Truncate for safety (span attributes should be reasonable size). query is
-	// already scrubbed by the caller; truncating an unscrubbed statement here could
-	// cut away the keyword the scrub anchors on and strand the credential.
+	// Truncate query for safety (span attributes should be reasonable size). query
+	// arrives already scrubbed; truncating an unscrubbed statement here could cut
+	// away the keyword the scrub anchors on and strand the credential.
 	truncatedQuery := query
 	if len(query) > maxDBQueryAttrLen {
 		truncatedQuery = TruncateString(query, maxDBQueryAttrLen)
