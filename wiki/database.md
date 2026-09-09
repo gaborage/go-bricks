@@ -643,7 +643,7 @@ These keys are set under the primary `database:` section only, but they govern t
 
 ## Statement Text in Logs and Spans
 
-Every tracked operation attaches its statement, truncated, to the `query` log field and the `db.query.text` span attribute. Values passed as bind parameters stay out of both (they travel in `args`, gated behind `database.logqueryparameters`), but a literal embedded in the statement itself is logged verbatim — the sensitive-data filter masks by field name and cannot read SQL. Credential-bearing DDL is the one shape scrubbed for you: `database/sqlredact` replaces PostgreSQL `PASSWORD '<literal>'` and Oracle `IDENTIFIED BY <token>` with `[REDACTED]` before truncation on both paths.
+Every tracked operation attaches its statement, truncated, to the `query` log field and the `db.query.text` span attribute. Values passed as bind parameters stay out of both (they travel in `args`, gated behind `database.logqueryparameters`), but a literal embedded in the statement itself is logged verbatim — the sensitive-data filter masks by field name and cannot read SQL. Credential-bearing DDL is the one shape scrubbed for you: `database/sqlredact` truncates the statement at a PostgreSQL `PASSWORD` or Oracle `IDENTIFIED BY` keyword that is followed by a value, substitutes `[REDACTED]`, and drops everything after it — so the log line names the failing statement without ever carrying the credential or the clauses that trail it.
 
 ## Repository Method Attribution
 

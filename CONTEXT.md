@@ -351,8 +351,8 @@ with `RawMessage` and the raw-SQL doors), blob
 **Credential literal**:
 A secret embedded in SQL statement text because the DDL grammar takes no bind
 parameter for it — PostgreSQL `PASSWORD '<literal>'`, Oracle `IDENTIFIED BY
-<token>`. It never reaches `args`, so it is scrubbed by shape in
-`database/sqlredact`, never by field name.
+<token>`. It never reaches `args`, so `database/sqlredact` cuts the statement
+at the keyword and drops the rest — never masked by field name.
 _Avoid_: inline password, hardcoded secret (a different defect), query literal
 
 **Installed provider**:

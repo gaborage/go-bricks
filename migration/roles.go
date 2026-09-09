@@ -275,10 +275,9 @@ func quotePGStringLiteral(s string) string {
 // wrapper uses, so a failure on ALTER ROLE ... PASSWORD doesn't leak the
 // resolved secret into the returned error string (which downstream callers may
 // log) and the two redaction sites cannot drift. The scrub runs before the
-// first-line split as well as before the truncation, for the reason given on
-// sqlredact.Statement: a password containing a newline would otherwise leave
-// the fragment ending mid-literal, which reads as an unterminated constant
-// rather than a credential.
+// first-line split as well as before the 80-char truncation: either cut could
+// remove the keyword sqlredact.Statement anchors on, and a password containing
+// a newline would then put the leading line of the secret in the summary.
 func summarizeStmt(stmt string) string {
 	first := sqlredact.Statement(stmt)
 	if idx := strings.IndexByte(first, '\n'); idx > 0 {

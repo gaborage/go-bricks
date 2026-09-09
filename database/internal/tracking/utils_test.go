@@ -1055,8 +1055,8 @@ func TestTrackDBOperationRedactsCredentialLiteral(t *testing.T) {
 
 // TestTrackDBOperationRedactsBeforeTruncation pins the scrub-before-truncate
 // ordering. The statement carries a long literal that overruns MaxQueryLength:
-// truncating first cuts inside the literal and emits its opening bytes, while
-// scrubbing first shrinks the statement below the limit so it survives whole.
+// truncating first emits the literal's opening bytes, while scrubbing first
+// drops it and brings the statement back under the limit.
 func TestTrackDBOperationRedactsBeforeTruncation(t *testing.T) {
 	ctx := logger.WithDBCounter(context.Background())
 	recLogger := newRecordingLogger()

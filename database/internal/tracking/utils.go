@@ -120,11 +120,11 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 	// observability off (the in-function nil guards never fire).
 	// Scrub credential literals ONCE, here, and feed both sinks from it: the span
 	// attribute below and the log field further down. The scrub must run before
-	// either sink truncates — a cut inside the literal leaves an unterminated
-	// quote the pattern can no longer match — so this is the only point that
-	// dominates both. It sits above the Enabled() short-circuit, which costs a
-	// pass on the fully-disabled path; sqlredact.Statement allocates nothing when
-	// it finds no credential clause, so that path keeps its allocation win.
+	// either sink truncates for length — a length cut can remove the keyword
+	// sqlredact.Statement anchors on — so this is the only point that dominates
+	// both. It sits above the Enabled() short-circuit, which costs a scan on the
+	// fully-disabled path; sqlredact.Statement allocates nothing when it finds no
+	// credential clause, so that path keeps its allocation win.
 	scrubbedQuery := sqlredact.Statement(query)
 
 	if ctx != nil && observabilityEnabled.Load() {
@@ -284,7 +284,7 @@ func SanitizeArgs(args []any, maxLen int) []any {
 // createDBSpan starts an OpenTelemetry span for a database operation using the provided start time.
 //
 // query MUST already have passed through sqlredact.Statement: it lands verbatim on the
-// db.query.text attribute, and the scrub has to precede the truncation below.
+// db.query.text attribute, and the scrub has to precede the length truncation below.
 // It sets standard DB and network attributes (including `db.system.name`, `db.query.text`, `db.operation.name`,
 // `db.collection.name`, `db.namespace`, `server.address`, and `server.port`) when available, records errors
 // (excluding `sql.ErrNoRows` and `sql.ErrTxDone`) on the span, and ends the span.
@@ -303,8 +303,8 @@ func createDBSpan(ctx context.Context, tc *Context, query string, start time.Tim
 
 	// Add database semantic attributes per OTel v1.32.0 spec.
 	// Truncate for safety (span attributes should be reasonable size). query is
-	// already scrubbed by the caller; truncating an unscrubbed statement here would
-	// cut inside a credential literal and strand its opening bytes on the span.
+	// already scrubbed by the caller; truncating an unscrubbed statement here could
+	// cut away the keyword the scrub anchors on and strand the credential.
 	truncatedQuery := query
 	if len(query) > maxDBQueryAttrLen {
 		truncatedQuery = TruncateString(query, maxDBQueryAttrLen)

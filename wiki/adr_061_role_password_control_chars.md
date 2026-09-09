@@ -8,10 +8,11 @@
 
 `pgPasswordLiteralPattern` no longer lives in `migration/roles.go`. `summarizeStmt` now delegates to
 `database/sqlredact`, shared with the database tracking wrapper, so the two redaction sites cannot
-drift. That package replaced the pattern with a quote/dollar/comment-aware scanner: a regex cannot
-tell a keyword inside a string literal from a real clause, and it cannot match a dollar-quoted
-`$tag$…$tag$` password at all. The redact-first ordering this ADR decided is unchanged and is now
-pinned on all three call sites.
+drift. That package does not match the literal at all: it truncates the statement at the first
+credential keyword that is followed by a value and drops the remainder, so every shape a pattern
+mis-anchors on — a keyword inside an earlier literal, a dollar-quoted password, an unterminated
+constant — is in the discarded tail. The redact-first ordering this ADR decided is unchanged and is
+now pinned on all three call sites.
 
 ## Context
 
