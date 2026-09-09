@@ -26,6 +26,28 @@ type closeTrackingBody struct {
 	closed bool
 }
 
+// stubEnvelope adapts two functions to httpclient.BodyEnvelope so a test can vary one
+// direction and leave the other at the identity. A nil wrap sends the compact as
+// application/jose; a nil unwrap recognizes nothing.
+type stubEnvelope struct {
+	wrap   func(compact string) (body []byte, contentType string, err error)
+	unwrap func(contentType string, body []byte) (compact string, ok bool)
+}
+
+func (e stubEnvelope) Wrap(compact string) (body []byte, contentType string, err error) {
+	if e.wrap == nil {
+		return []byte(compact), "application/jose", nil
+	}
+	return e.wrap(compact)
+}
+
+func (e stubEnvelope) Unwrap(contentType string, body []byte) (compact string, ok bool) {
+	if e.unwrap == nil {
+		return "", false
+	}
+	return e.unwrap(contentType, body)
+}
+
 func newCloseTrackingBody(s string) *closeTrackingBody {
 	return &closeTrackingBody{r: bytes.NewReader([]byte(s))}
 }
@@ -232,15 +254,15 @@ func TestJOSETransportPassthroughWhenOutboundNil(t *testing.T) {
 func TestJOSETransportRespectsMaxResponseBytes(t *testing.T) {
 	// Defense-in-depth: an oversize body must produce an error before it is buffered
 	// into memory in full. Both gates are covered — the default Content-Type rule, and
-	// an UnwrapBody hook, where the Content-Type gate no longer keeps a non-JOSE body
-	// unread and the cap is the only thing standing between caller and unbounded buffer.
+	// an Envelope, where the Content-Type gate no longer keeps a non-JOSE body unread
+	// and the cap is the only thing standing between caller and unbounded buffer.
 	tests := []struct {
 		name        string
 		contentType string
-		unwrapHook  bool
+		envelope    bool
 	}{
-		{name: "jose_content_type_without_hook", contentType: "application/jose"},
-		{name: "json_content_type_with_unwrap_hook", contentType: "application/json", unwrapHook: true},
+		{name: "jose_content_type_without_envelope", contentType: "application/jose"},
+		{name: "json_content_type_with_envelope", contentType: "application/json", envelope: true},
 	}
 
 	for _, tt := range tests {
@@ -257,11 +279,11 @@ func TestJOSETransportRespectsMaxResponseBytes(t *testing.T) {
 
 			transport := newJOSETransport(f)
 			transport.MaxResponseBytes = 256 // well under the 1024-byte payload
-			if tt.unwrapHook {
-				transport.UnwrapBody = func(_ string, body []byte) (compact string, ok bool) {
-					t.Errorf("UnwrapBody must not run on a body that exceeded the cap (%d bytes)", len(body))
+			if tt.envelope {
+				transport.Envelope = stubEnvelope{unwrap: func(_ string, body []byte) (compact string, ok bool) {
+					t.Errorf("Envelope.Unwrap must not run on a body that exceeded the cap (%d bytes)", len(body))
 					return "", false
-				}
+				}}
 			}
 
 			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
@@ -581,25 +603,49 @@ func TestBuilderWithJOSEWiresTransport(t *testing.T) {
 	assert.JSONEq(t, `{"echo":{"hello":"world"}}`, string(resp.Body))
 }
 
-func TestBuilderWithJOSEFailsClosedOnAHookWithoutItsPolicy(t *testing.T) {
+// TestBuilderWithJOSEFailsClosedOnAnEnvelopeWithoutAPolicy pins the pairing rule. Wrap is
+// consulted only for an Outbound policy and Unwrap only for an Inbound one, so an Envelope
+// with neither would be a silent no-op at request time. Either policy alone is legitimate:
+// one-directional protection is a supported shape, and only the empty pair is refused.
+func TestBuilderWithJOSEFailsClosedOnAnEnvelopeWithoutAPolicy(t *testing.T) {
 	f := jositest.NewBidirectionalFixture(t)
-	wrap, unwrap := httpclient.VisaMLEEnvelope()
+	log := logger.New("info", false)
+
+	client, err := httpclient.NewBuilder(log).WithJOSE(httpclient.JOSEConfig{
+		Resolver: f.Resolver,
+		Envelope: httpclient.VisaMLEEnvelope(),
+	}).Build()
+
+	require.Error(t, err)
+	assert.Nil(t, client)
+	assert.Contains(t, err.Error(), "Envelope requires an Outbound or Inbound policy")
+	// Same contract as every other Build JOSE failure: a *jose.Error carrying a
+	// matchable sentinel, not a bare errors.New.
+	assert.True(t, jose.IsError(err), "envelope wiring failure must be a *jose.Error, got %T", err)
+	require.ErrorIs(t, err, jose.ErrPolicyMismatch)
+
+	var joseErr *jose.Error
+	require.ErrorAs(t, err, &joseErr)
+	assert.Equal(t, "JOSE_POLICY_ENVELOPE_UNPAIRED", joseErr.Code)
+}
+
+// TestBuilderWithJOSEAcceptsAnEnvelopeWithOneDirection is the other side of that rule:
+// an Envelope beside a single policy is a supported configuration, not a half-wiring.
+func TestBuilderWithJOSEAcceptsAnEnvelopeWithOneDirection(t *testing.T) {
+	f := jositest.NewBidirectionalFixture(t)
 	log := logger.New("info", false)
 
 	tests := []struct {
-		name    string
-		cfg     httpclient.JOSEConfig
-		wantErr string
+		name string
+		cfg  httpclient.JOSEConfig
 	}{
 		{
-			name:    "wrap_body_without_outbound",
-			cfg:     httpclient.JOSEConfig{Inbound: f.ClientInbound, Resolver: f.Resolver, WrapBody: wrap},
-			wantErr: "WrapBody requires an Outbound policy",
+			name: "outbound_only",
+			cfg:  httpclient.JOSEConfig{Outbound: f.ClientOutbound, Resolver: f.Resolver, Envelope: httpclient.VisaMLEEnvelope()},
 		},
 		{
-			name:    "unwrap_body_without_inbound",
-			cfg:     httpclient.JOSEConfig{Outbound: f.ClientOutbound, Resolver: f.Resolver, UnwrapBody: unwrap},
-			wantErr: "UnwrapBody requires an Inbound policy",
+			name: "inbound_only",
+			cfg:  httpclient.JOSEConfig{Inbound: f.ClientInbound, Resolver: f.Resolver, Envelope: httpclient.VisaMLEEnvelope()},
 		},
 	}
 
@@ -607,53 +653,47 @@ func TestBuilderWithJOSEFailsClosedOnAHookWithoutItsPolicy(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			client, err := httpclient.NewBuilder(log).WithJOSE(tt.cfg).Build()
 
-			require.Error(t, err)
-			assert.Nil(t, client)
-			assert.Contains(t, err.Error(), tt.wantErr)
-			// Same contract as every other Build JOSE failure: a *jose.Error carrying
-			// a matchable sentinel, not a bare errors.New.
-			assert.True(t, jose.IsError(err), "hook wiring failure must be a *jose.Error, got %T", err)
-			require.ErrorIs(t, err, jose.ErrPolicyMismatch)
+			require.NoError(t, err)
+			assert.NotNil(t, client)
 		})
 	}
 }
 
-func TestBuilderWithJOSERefusesAnUnboundedCapWithAnUnwrapHook(t *testing.T) {
+func TestBuilderWithJOSERefusesAnUnboundedCapWithAnEnvelope(t *testing.T) {
 	f := jositest.NewBidirectionalFixture(t)
-	_, unwrap := httpclient.VisaMLEEnvelope()
 	log := logger.New("info", false)
 
 	client, err := httpclient.NewBuilder(log).WithJOSE(httpclient.JOSEConfig{
 		Inbound:          f.ClientInbound,
 		Resolver:         f.Resolver,
-		UnwrapBody:       unwrap,
+		Envelope:         httpclient.VisaMLEEnvelope(),
 		MaxResponseBytes: -1, // "unbounded" — every response body buffered without limit
 	}).Build()
 
 	require.Error(t, err)
 	assert.Nil(t, client)
-	assert.Contains(t, err.Error(), "UnwrapBody cannot be combined with an unbounded MaxResponseBytes")
+	assert.Contains(t, err.Error(), "Envelope cannot be combined with an unbounded MaxResponseBytes")
 	assert.True(t, jose.IsError(err), "unbounded-cap failure must be a *jose.Error, got %T", err)
 	require.ErrorIs(t, err, jose.ErrPolicyMismatch)
 
 	var joseErr *jose.Error
 	require.ErrorAs(t, err, &joseErr)
-	assert.Equal(t, "JOSE_POLICY_HOOK_UNBOUNDED", joseErr.Code)
+	assert.Equal(t, "JOSE_POLICY_ENVELOPE_UNBOUNDED", joseErr.Code)
 }
 
-func TestJOSETransportWrapBodyErrorAbortsBeforeSending(t *testing.T) {
+func TestJOSETransportEnvelopeWrapErrorAbortsBeforeSending(t *testing.T) {
 	f := jositest.NewBidirectionalFixture(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("request must not reach the server when WrapBody fails")
+		t.Error("request must not reach the server when Envelope.Wrap fails")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
 	sentinel := errors.New("envelope unavailable")
 	transport := newJOSETransport(f)
-	transport.WrapBody = func(string) (body []byte, contentType string, err error) {
+	transport.Envelope = stubEnvelope{wrap: func(string) (body []byte, contentType string, err error) {
 		return nil, "", sentinel
-	}
+	}}
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
 	require.NoError(t, err)
@@ -664,20 +704,20 @@ func TestJOSETransportWrapBodyErrorAbortsBeforeSending(t *testing.T) {
 	require.ErrorIs(t, err, sentinel)
 }
 
-// TestJOSETransportWrapBodyContentTypeHeader pins what an empty contentType from WrapBody
-// means on the wire. Setting it would put a bare "Content-Type:" on the request, which
+// TestJOSETransportEnvelopeWrapContentTypeHeader pins what an empty contentType from
+// Envelope.Wrap means on the wire. Setting it would put a bare "Content-Type:", which
 // jose.IsContentType rejects and a JOSE-aware peer can refuse; defaulting it back to
 // application/jose would mislabel a body the hook deliberately wrapped in another format.
 // Deleting the header is the only reading that matches "the hook wants no media type".
-func TestJOSETransportWrapBodyContentTypeHeader(t *testing.T) {
+func TestJOSETransportEnvelopeWrapContentTypeHeader(t *testing.T) {
 	tests := []struct {
-		name            string
-		hookContentType string
-		wantPresent     bool
-		wantValue       string
+		name                string
+		envelopeContentType string
+		wantPresent         bool
+		wantValue           string
 	}{
-		{name: "named_media_type_is_advertised", hookContentType: "application/json", wantPresent: true, wantValue: "application/json"},
-		{name: "empty_media_type_deletes_the_header", hookContentType: "", wantPresent: false},
+		{name: "named_media_type_is_advertised", envelopeContentType: "application/json", wantPresent: true, wantValue: "application/json"},
+		{name: "empty_media_type_deletes_the_header", envelopeContentType: "", wantPresent: false},
 	}
 
 	for _, tt := range tests {
@@ -694,9 +734,9 @@ func TestJOSETransportWrapBodyContentTypeHeader(t *testing.T) {
 			f := jositest.NewBidirectionalFixture(t)
 			transport := newJOSETransport(f)
 			transport.Inbound = nil // responses are out of scope here
-			transport.WrapBody = func(compact string) (body []byte, contentType string, err error) {
-				return []byte(compact), tt.hookContentType, nil
-			}
+			transport.Envelope = stubEnvelope{wrap: func(compact string) (body []byte, contentType string, err error) {
+				return []byte(compact), tt.envelopeContentType, nil
+			}}
 
 			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
 			require.NoError(t, err)
@@ -709,6 +749,78 @@ func TestJOSETransportWrapBodyContentTypeHeader(t *testing.T) {
 
 			assert.Equal(t, tt.wantPresent, gotPresent, "Content-Type header presence on the wire")
 			assert.Equal(t, tt.wantValue, gotValue)
+		})
+	}
+}
+
+// TestJOSETransportUnboundedCapRule pins the fail-closed rule on the one path Build
+// cannot guard: JOSETransport is exported, so a hand-built one can carry any combination.
+// An Envelope replaces the application/jose Content-Type gate with Unwrap's verdict, and
+// Unwrap needs the bytes, so Envelope + Inbound + a negative cap is an unbounded read of
+// a peer's body. RoundTrip refuses exactly that trio before any network call, rather than
+// quietly substituting a default, which would hide the misconfiguration. Every other
+// combination keeps working, including the documented negative-cap escape hatch.
+func TestJOSETransportUnboundedCapRule(t *testing.T) {
+	tests := []struct {
+		name         string
+		withEnvelope bool
+		withInbound  bool
+		maxBytes     int64
+		wantRefused  bool
+	}{
+		{name: "envelope_and_inbound_and_negative_cap_is_refused", withEnvelope: true, withInbound: true, maxBytes: -1, wantRefused: true},
+		// Without an envelope the Content-Type gate still decides which bodies are read,
+		// so a negative cap stays the caller's documented choice.
+		{name: "negative_cap_without_an_envelope_is_allowed", withInbound: true, maxBytes: -1},
+		// Outbound-only reads nothing at all, so the cap cannot matter.
+		{name: "envelope_and_negative_cap_without_inbound_is_allowed", withEnvelope: true, maxBytes: -1},
+		// Zero is "unset", not "unbounded" — it takes DefaultMaxJOSEBodyBytes.
+		{name: "envelope_and_inbound_with_a_default_cap_is_allowed", withEnvelope: true, withInbound: true, maxBytes: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := jositest.NewBidirectionalFixture(t)
+			var reached bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				reached = true
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"plaintext":true}`))
+			}))
+			defer server.Close()
+
+			transport := newJOSETransport(f)
+			transport.MaxResponseBytes = tt.maxBytes
+			if !tt.withInbound {
+				transport.Inbound = nil
+			}
+			if tt.withEnvelope {
+				// Recognizes nothing, so an allowed case passes the body through and the
+				// verdict under test stays the cap rule rather than a decrypt failure.
+				transport.Envelope = stubEnvelope{}
+			}
+
+			body := newCloseTrackingBody(`{"x":1}`)
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, body)
+			require.NoError(t, err)
+
+			resp, err := transport.RoundTrip(req)
+			if !tt.wantRefused {
+				require.NoError(t, err)
+				require.NoError(t, resp.Body.Close())
+				assert.True(t, reached, "an allowed configuration must still send the request")
+				return
+			}
+
+			require.Error(t, err)
+			assert.Nil(t, resp)
+			assert.False(t, reached, "the request must not be sent when the cap is unbounded")
+			assert.True(t, body.closed, "the request body must be closed when the round trip is refused")
+
+			var joseErr *jose.Error
+			require.ErrorAs(t, err, &joseErr)
+			assert.Equal(t, "JOSE_POLICY_ENVELOPE_UNBOUNDED", joseErr.Code)
 		})
 	}
 }

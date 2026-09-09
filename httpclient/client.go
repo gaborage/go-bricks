@@ -318,19 +318,17 @@ type JOSEConfig struct {
 	Inbound *jose.Policy
 	// Resolver supplies keys for both Outbound and Inbound directions.
 	Resolver jose.KeyResolver
-	// WrapBody optionally rewrites the sealed compact into the body actually sent
-	// (Visa MLE's {"encData":...} envelope, for example). Nil sends the compact itself
-	// as application/jose. Requires Outbound; Build fails otherwise.
-	WrapBody WrapBodyFunc
-	// UnwrapBody optionally recognizes and extracts a compact from a response body,
-	// replacing the default application/jose Content-Type rule. Setting it makes the
-	// transport buffer every eligible response body (capped by the transport's
-	// MaxResponseBytes) before the hook runs. Requires Inbound; Build fails otherwise.
-	UnwrapBody UnwrapBodyFunc
+	// Envelope optionally shapes the sealed body on the wire in both directions -- Visa
+	// MLE's {"encData":...} object, for example, from httpclient.VisaMLEEnvelope(). Nil
+	// sends the compact itself as application/jose and unwraps only application/jose
+	// responses. Wrap is consulted only when Outbound is set and Unwrap only when Inbound
+	// is set, so an Envelope with neither policy fails Build.
+	Envelope BodyEnvelope
 	// MaxResponseBytes bounds the inbound response body read, exactly as the field of the
 	// same name on JOSETransport: zero means DefaultMaxJOSEBodyBytes and a negative value
-	// disables the cap. A negative value combined with UnwrapBody fails Build, because that
-	// pair buffers every response body without limit.
+	// disables the cap. Negative beside an Envelope and an Inbound policy fails Build,
+	// because Unwrap replaces the Content-Type gate and every response body would then be
+	// buffered without limit.
 	MaxResponseBytes int64
 }
 
@@ -350,8 +348,8 @@ type JOSEConfig struct {
 // an error). Always fill the base slot — with WithTransport, or with
 // WithTLSConfig when the base is a TLS config.
 //
-// Body envelopes: cfg.WrapBody and cfg.UnwrapBody move the compact into and out of a
-// counterparty's own body format — httpclient.VisaMLEEnvelope() returns the pair for
+// Body envelopes: cfg.Envelope moves the compact into and out of a
+// counterparty's own body format — httpclient.VisaMLEEnvelope() returns the one for
 // Visa Message Level Encryption. A hook without the policy it serves fails Build.
 //
 // Per-attempt freshness: because httpclient retries by re-running the request build
@@ -376,12 +374,11 @@ func (b *Builder) WithJOSE(cfg JOSEConfig) *Builder {
 	if needsLayer {
 		b.addTransportWrapper(layerBodyTransform, func(inner nethttp.RoundTripper) nethttp.RoundTripper {
 			return &JOSETransport{
-				Inner:      inner,
-				Outbound:   b.joseConfig.Outbound,
-				Inbound:    b.joseConfig.Inbound,
-				Resolver:   b.joseConfig.Resolver,
-				WrapBody:   b.joseConfig.WrapBody,
-				UnwrapBody: b.joseConfig.UnwrapBody,
+				Inner:    inner,
+				Outbound: b.joseConfig.Outbound,
+				Inbound:  b.joseConfig.Inbound,
+				Resolver: b.joseConfig.Resolver,
+				Envelope: b.joseConfig.Envelope,
 
 				MaxResponseBytes: b.joseConfig.MaxResponseBytes,
 			}
@@ -408,34 +405,21 @@ func (b *Builder) normalizeJOSE() error {
 			Message:  "a Resolver is required when Outbound or Inbound is set",
 		}
 	}
-	// A hook without its policy is a silent no-op at request time: the body would go out
-	// unsealed, or a wrapped response would be handed back as ciphertext. Fail construction.
-	if b.joseConfig.WrapBody != nil && b.joseConfig.Outbound == nil {
+	// Wrap runs only for an Outbound policy and Unwrap only for an Inbound one, so an
+	// Envelope with neither is a silent no-op at request time. Fail construction instead.
+	if b.joseConfig.Envelope != nil && b.joseConfig.Outbound == nil && b.joseConfig.Inbound == nil {
 		return &jose.Error{
 			Sentinel: jose.ErrPolicyMismatch,
-			Code:     "JOSE_POLICY_HOOK_UNPAIRED",
+			Code:     "JOSE_POLICY_ENVELOPE_UNPAIRED",
 			Status:   500,
-			Message:  "WrapBody requires an Outbound policy",
+			Message:  "Envelope requires an Outbound or Inbound policy",
 		}
 	}
-	if b.joseConfig.UnwrapBody != nil && b.joseConfig.Inbound == nil {
-		return &jose.Error{
-			Sentinel: jose.ErrPolicyMismatch,
-			Code:     "JOSE_POLICY_HOOK_UNPAIRED",
-			Status:   500,
-			Message:  "UnwrapBody requires an Inbound policy",
-		}
-	}
-	// UnwrapBody makes the transport buffer EVERY eligible response body; a negative cap
-	// means "no limit", so the pair lets a counterparty exhaust memory one response at a
-	// time. Neither half is wrong alone — refuse only the combination.
-	if b.joseConfig.UnwrapBody != nil && b.joseConfig.MaxResponseBytes < 0 {
-		return &jose.Error{
-			Sentinel: jose.ErrPolicyMismatch,
-			Code:     "JOSE_POLICY_HOOK_UNBOUNDED",
-			Status:   500,
-			Message:  "UnwrapBody cannot be combined with an unbounded MaxResponseBytes",
-		}
+	// Unwrap makes the transport buffer EVERY eligible response body; a negative cap means
+	// "no limit", so the trio lets a counterparty exhaust memory one response at a time.
+	// No half is wrong alone — refuse only the combination, with the code RoundTrip uses.
+	if b.joseConfig.Envelope != nil && b.joseConfig.Inbound != nil && b.joseConfig.MaxResponseBytes < 0 {
+		return errEnvelopeUnbounded("Envelope cannot be combined with an unbounded MaxResponseBytes")
 	}
 	outbound, err := normalizedJOSEPolicy(b.joseConfig.Outbound)
 	if err != nil {

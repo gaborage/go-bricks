@@ -22,21 +22,39 @@ const headerContentType = "Content-Type"
 // response. Defense-in-depth against memory exhaustion.
 const DefaultMaxJOSEBodyBytes int64 = 10 << 20 // 10 MiB
 
-// WrapBodyFunc builds the outbound request body from the compact JOSE serialization
-// jose.Seal produced, returning the bytes to send and the Content-Type to advertise.
-// A nil WrapBodyFunc is the identity: the compact string is the body and the
-// Content-Type is application/jose. An error aborts the round trip; no request is sent.
-type WrapBodyFunc func(compact string) (body []byte, contentType string, err error)
+// errEnvelopeUnbounded names the envelope-plus-unbounded-cap refusal. Build and RoundTrip
+// raise the same code from the same constructor so a caller matches one thing either way.
+func errEnvelopeUnbounded(message string) error {
+	return &jose.Error{
+		Sentinel: jose.ErrPolicyMismatch,
+		Code:     "JOSE_POLICY_ENVELOPE_UNBOUNDED",
+		Status:   500,
+		Message:  message,
+	}
+}
 
-// UnwrapBodyFunc recognizes and extracts a compact JOSE serialization from an inbound
-// response body, given the response Content-Type and the buffered body bytes. Returning
-// ok=false passes the body through untouched. A nil UnwrapBodyFunc keeps the transport's
-// default rule: a Content-Type of application/jose means the whole body is the compact.
+// BodyEnvelope shapes the sealed body on the wire for counterparties that do not carry
+// the compact JOSE serialization on its own -- Visa Message Level Encryption's
+// {"encData":"<compact>"} JSON object, for example.
 //
-// Setting a hook changes the read discipline: the transport buffers EVERY eligible
-// response body (bounded by MaxResponseBytes) before the hook runs, because the
-// Content-Type gate that would otherwise leave a non-JOSE body unread no longer applies.
-type UnwrapBodyFunc func(contentType string, body []byte) (compact string, ok bool)
+// A nil BodyEnvelope is the identity: the compact JWE is the request body with a
+// Content-Type of application/jose, and only application/jose responses are unwrapped.
+//
+// One interface rather than two function fields, so JOSETransport and JOSEConfig stay
+// comparable values -- a func field is not comparable, and both structs are part of the
+// package's exported surface.
+type BodyEnvelope interface {
+	// Wrap builds the outbound request body from the compact jose.Seal produced and names
+	// the Content-Type to advertise; an empty content type sends no Content-Type header at
+	// all. An error aborts the round trip: no request is sent. Consulted only when Outbound
+	// is set.
+	Wrap(compact string) (body []byte, contentType string, err error)
+	// Unwrap recognizes and extracts a compact from a buffered response body, given the
+	// response Content-Type. Returning ok=false passes the body through untouched.
+	// Consulted only when Inbound is set, and it replaces the application/jose
+	// Content-Type rule, so EVERY eligible response body is buffered before it runs.
+	Unwrap(contentType string, body []byte) (compact string, ok bool)
+}
 
 // JOSETransport is an http.RoundTripper that seals outbound request bodies (jose.Seal)
 // and opens inbound response bodies (jose.Open) using a fixed pair of policies and a
@@ -60,10 +78,10 @@ type UnwrapBodyFunc func(contentType string, body []byte) (compact string, ok bo
 // minimal JSON because the peer was never authenticated, and the transport must not
 // attempt to decrypt those.
 //
-// WrapBody and UnwrapBody move that boundary for counterparties whose protected payload
-// travels inside another format — Visa Message Level Encryption's {"encData":"<compact>"}
-// JSON envelope, for example. UnwrapBody replaces the Content-Type rule with the hook's
-// verdict, which costs a buffered read of every eligible response body.
+// An Envelope moves that boundary for counterparties whose protected payload travels
+// inside another format — Visa Message Level Encryption's {"encData":"<compact>"} JSON
+// envelope, for example. Its Unwrap replaces the Content-Type rule, which costs a
+// buffered read of every eligible response body.
 type JOSETransport struct {
 	// Inner is the underlying RoundTripper that performs the actual HTTP exchange.
 	// Nil defaults to nethttp.DefaultTransport — relevant only when JOSETransport is
@@ -86,34 +104,38 @@ type JOSETransport struct {
 	Resolver jose.KeyResolver
 
 	// MaxResponseBytes bounds the response body read when Inbound is set. Zero means
-	// use DefaultMaxJOSEBodyBytes. A negative value disables the cap entirely (NOT
-	// recommended for untrusted counterparties).
+	// use DefaultMaxJOSEBodyBytes. A negative value disables the cap entirely, which is
+	// only defensible while the application/jose Content-Type gate has already vouched
+	// for the body — that is, while Envelope is nil.
 	//
-	// Builder.WithJOSE refuses a negative cap paired with UnwrapBody at Build time. A
-	// JOSETransport built by hand cannot be refused at construction, so unwrapResponse
-	// falls back to DefaultMaxJOSEBodyBytes for that pair rather than performing an
-	// unbounded read of an untrusted body. Without a hook a negative cap still means
-	// unbounded: the Content-Type gate has already vouched for the body.
+	// Negative beside an Envelope and an Inbound policy is refused, not quietly
+	// defaulted: Builder.WithJOSE rejects it at Build time and RoundTrip rejects it
+	// before the request is sent, both as JOSE_POLICY_ENVELOPE_UNBOUNDED. A silent
+	// fallback would hide the misconfiguration instead of naming it.
 	MaxResponseBytes int64
 
-	// WrapBody optionally turns the sealed compact into the body actually sent. Nil keeps
-	// the default: the compact itself, advertised as application/jose.
-	WrapBody WrapBodyFunc
-
-	// UnwrapBody optionally recognizes and extracts a compact from a response body,
-	// replacing the default application/jose Content-Type rule. With it set EVERY
-	// eligible response body is buffered — bounded by MaxResponseBytes, with the same
-	// default and over-cap error — before the hook decides; without it a non-JOSE body
-	// is never read at all. Builder.WithJOSE therefore refuses this hook alongside a
-	// negative (unbounded) MaxResponseBytes; a hand-built JOSETransport carrying that
-	// pair falls back to DefaultMaxJOSEBodyBytes instead of reading without a limit.
-	UnwrapBody UnwrapBodyFunc
+	// Envelope optionally shapes the sealed body on the wire in both directions. Nil is
+	// the identity: the compact itself outbound, the application/jose Content-Type rule
+	// inbound. Wrap runs only when Outbound is set, Unwrap only when Inbound is set.
+	//
+	// With an Envelope set and Inbound non-nil, EVERY eligible response body is buffered
+	// before Unwrap decides — bounded by MaxResponseBytes, with the same default and
+	// over-cap error — because the Content-Type gate that would otherwise leave a
+	// non-JOSE body unread no longer applies.
+	Envelope BodyEnvelope
 }
 
 // RoundTrip wraps the request body with JOSE (when Outbound is set), forwards to the
 // inner transport, and unwraps the response body (when Inbound is set AND the response
-// is recognized as protected — by Content-Type, or by UnwrapBody when one is set).
+// is recognized as protected — by Content-Type, or by Envelope.Unwrap when one is set).
 func (t *JOSETransport) RoundTrip(req *nethttp.Request) (*nethttp.Response, error) {
+	if t.refusesUnboundedEnvelopeRead() {
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
+		return nil, errEnvelopeUnbounded("MaxResponseBytes cannot be negative when an Envelope is set beside an Inbound policy")
+	}
+
 	inner := t.Inner
 	if inner == nil {
 		inner = nethttp.DefaultTransport
@@ -175,8 +197,8 @@ func (t *JOSETransport) wrapRequest(req *nethttp.Request) (*nethttp.Request, err
 	}
 
 	body, contentType := []byte(compact), jose.ContentType
-	if t.WrapBody != nil {
-		body, contentType, err = t.WrapBody(compact)
+	if t.Envelope != nil {
+		body, contentType, err = t.Envelope.Wrap(compact)
 		if err != nil {
 			return nil, fmt.Errorf("httpclient: wrap JOSE request body: %w", err)
 		}
@@ -216,14 +238,18 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 		return errors.New("httpclient: JOSETransport requires a KeyResolver when Inbound is set")
 	}
 
-	raw, err := readAndCloseBody(resp.Body, t.effectiveMaxResponseBytes())
+	maxBytes := t.MaxResponseBytes
+	if maxBytes == 0 {
+		maxBytes = DefaultMaxJOSEBodyBytes
+	}
+	raw, err := readAndCloseBody(resp.Body, maxBytes)
 	if err != nil {
 		return fmt.Errorf("httpclient: read response body: %w", err)
 	}
 
 	var compact string
-	if t.UnwrapBody != nil {
-		extracted, ok := t.UnwrapBody(resp.Header.Get(headerContentType), raw)
+	if t.Envelope != nil {
+		extracted, ok := t.Envelope.Unwrap(resp.Header.Get(headerContentType), raw)
 		if !ok {
 			// Not a protected body: hand back exactly what was read, headers untouched.
 			replaceBody(resp, raw, "")
@@ -243,27 +269,19 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 	return nil
 }
 
-// effectiveMaxResponseBytes resolves the cap unwrapResponse actually reads under, from
-// MaxResponseBytes and whether an UnwrapBody hook is wired.
+// refusesUnboundedEnvelopeRead reports the one configuration RoundTrip must refuse
+// outright. An Envelope replaces the application/jose Content-Type gate with Unwrap's
+// verdict, and Unwrap needs the bytes, so every eligible response body is buffered; a
+// negative MaxResponseBytes then means buffering a peer's body without any limit, one
+// response at a time. Builder.WithJOSE rejects the trio at Build time, but JOSETransport
+// is exported and a hand-built one reaches here unchecked.
 //
-// Zero means "unset", so it takes the default. A negative value means unbounded, which is
-// only defensible while the Content-Type gate has already vouched for the body — with a
-// hook that gate is gone and EVERY response body is buffered, so the pair is an unbounded
-// read of untrusted bytes. Builder.WithJOSE refuses it outright at Build time
-// (JOSE_POLICY_HOOK_UNBOUNDED); a JOSETransport built by hand cannot be refused at
-// construction, so the default is restored here rather than letting a peer exhaust memory
-// one response at a time. Without a hook, negative still means unbounded as documented.
-func (t *JOSETransport) effectiveMaxResponseBytes() int64 {
-	if t.MaxResponseBytes > 0 {
-		return t.MaxResponseBytes
-	}
-	// Negative is the documented unbounded escape hatch, and it survives only while the
-	// Content-Type gate is still deciding which bodies get read — i.e. while UnwrapBody
-	// is nil. Everything else, zero included, takes the default.
-	if t.MaxResponseBytes < 0 && t.UnwrapBody == nil {
-		return t.MaxResponseBytes
-	}
-	return DefaultMaxJOSEBodyBytes
+// Refused rather than quietly capped: substituting DefaultMaxJOSEBodyBytes would honor
+// neither of the two things the caller wrote down, and would hide the mistake.
+// Outbound-only is untouched (nothing is read), and so is a negative cap without an
+// Envelope, where the Content-Type gate has already vouched for the body.
+func (t *JOSETransport) refusesUnboundedEnvelopeRead() bool {
+	return t.Envelope != nil && t.Inbound != nil && t.MaxResponseBytes < 0
 }
 
 // replaceBody installs payload as resp's body and keeps ContentLength in step with it.
@@ -279,7 +297,7 @@ func replaceBody(resp *nethttp.Response, payload []byte, contentType string) {
 
 // skipsUnwrap reports whether resp must be handed back exactly as it arrived, without
 // its body being read at all: no inbound policy, no body, a response shape net/http
-// guarantees is empty, or — when no UnwrapBody hook overrides the rule — a Content-Type
+// guarantees is empty, or — when no Envelope overrides the rule — a Content-Type
 // that is not application/jose.
 func (t *JOSETransport) skipsUnwrap(req *nethttp.Request, resp *nethttp.Response) bool {
 	if t.Inbound == nil || resp == nil || resp.Body == nil {
@@ -308,7 +326,7 @@ func (t *JOSETransport) skipsUnwrap(req *nethttp.Request, resp *nethttp.Response
 	// Without a hook the Content-Type alone decides, and a non-JOSE body is never read:
 	// it reaches the caller as the peer sent it, unbuffered and uncapped. A hook replaces
 	// that rule with one that needs the bytes, so from here every eligible body is read.
-	return t.UnwrapBody == nil && !jose.IsContentType(resp.Header.Get(headerContentType))
+	return t.Envelope == nil && !jose.IsContentType(resp.Header.Get(headerContentType))
 }
 
 // readAndCloseBody drains body up to maxBytes (negative = unbounded) and closes it.
