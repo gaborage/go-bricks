@@ -104,10 +104,10 @@ runs on **copies** — a `jose.Policy` you reuse across builders is never mutate
 error is its own path, not `ErrUnsafeTransportComposition` (whose meaning stays
 transport-slot composition): every one of these policy failures — the nil `Resolver`
 included, which reports `JOSE_KEYSTORE_UNAVAILABLE` — wraps a `*jose.Error`, so match
-it with `errors.As`, or its sentinel with `errors.Is`. The two body-hook wiring
-failures below are no exception: they report `JOSE_POLICY_HOOK_UNPAIRED` with the
-`jose.ErrPolicyMismatch` sentinel, under the same `httpclient: invalid JOSE policy:`
-prefix.
+it with `errors.As`, or its sentinel with `errors.Is`. The two body-envelope wiring
+failures below are no exception: they report `JOSE_POLICY_ENVELOPE_UNPAIRED` and
+`JOSE_POLICY_ENVELOPE_UNBOUNDED` with the `jose.ErrPolicyMismatch` sentinel, under the
+same `httpclient: invalid JOSE policy:` prefix.
 
 Kids are **not** resolved at `Build()`. A `KeyResolver` may be backed by key material
 loaded lazily, and resolving eagerly would force that load at construction — so an
@@ -116,41 +116,56 @@ unknown kid still surfaces per request as `JOSE_KID_UNKNOWN`.
 #### JOSE body envelopes (Visa Message Level Encryption)
 
 Some counterparties do not put the compact JOSE serialization on the wire on its own.
-Visa **Message Level Encryption** carries it inside a JSON object — `{"encData": "<compact>"}` sent as `application/json` — and answers in the same shape. Two optional
-hooks move the compact into and out of such a format. They exist both on `JOSEConfig`
-(for `WithJOSE`) and on a hand-built `JOSETransport`:
+Visa **Message Level Encryption** carries it inside a JSON object — `{"encData": "<compact>"}` sent as `application/json` — and answers in the same shape. One optional
+interface moves the compact into and out of such a format. It is a single field,
+`Envelope`, on both `JOSEConfig` (for `WithJOSE`) and a hand-built `JOSETransport`:
 
-- `WrapBodyFunc func(compact string) (body []byte, contentType string, err error)` —
-  builds the outbound request body from the compact `jose.Seal` produced, and names the
-  Content-Type to advertise. An error aborts the round trip: no request is sent.
-- `UnwrapBodyFunc func(contentType string, body []byte) (compact string, ok bool)` —
-  recognizes and extracts a compact from a buffered response body. Returning `ok=false`
-  passes the body through untouched.
+```go
+type BodyEnvelope interface {
+    Wrap(compact string) (body []byte, contentType string, err error)
+    Unwrap(contentType string, body []byte) (compact string, ok bool)
+}
+```
 
-**Both nil is the old behaviour, byte for byte**: the compact itself is the request body,
-advertised as `application/jose`, and a response is unwrapped only when its Content-Type
-says `application/jose`.
+`Wrap` builds the outbound request body from the compact `jose.Seal` produced and names
+the Content-Type to advertise; an **empty** content type sends no `Content-Type` header at
+all, rather than a bare one no peer would accept. An error aborts the round trip: no
+request is sent. `Unwrap` recognizes and extracts a compact from a buffered response body,
+and returning `ok=false` passes that body through untouched. `Wrap` is consulted only when
+`Outbound` is set and `Unwrap` only when `Inbound` is set.
 
-**`UnwrapBody` changes the inbound read discipline.** It replaces the Content-Type gate
-with the hook's verdict, and the hook needs the bytes — so *every* eligible response body
-is read into memory before the hook runs, bounded by `MaxResponseBytes` (`DefaultMaxJOSEBodyBytes`, 10 MiB, when zero) with the same over-cap `ValidationError`.
-A *negative* `MaxResponseBytes` means unbounded, so `Build()` refuses it alongside an
-`UnwrapBody` hook (`JOSE_POLICY_HOOK_UNBOUNDED`); a hand-built `JOSETransport` carrying
-that pair cannot be refused at construction, so `unwrapResponse` falls back to
-`DefaultMaxJOSEBodyBytes` for it rather than reading an untrusted body without a limit.
-Without a hook, a negative cap still means unbounded — there the Content-Type gate has
-already vouched for the body.
-Without a hook, a non-JOSE body is never read at all. When the hook returns `ok=false`
-the buffered bytes are handed back as the response body with headers untouched. The
-responses that skip unwrapping entirely are unchanged: no `Inbound` policy, no body, or a
-shape net/http guarantees is empty (`1xx`, `204`, `304`, any reply to `HEAD`).
+One interface rather than two function fields, so `JOSETransport` and `JOSEConfig` stay
+**comparable** values — a func-typed field is not comparable, and both structs are
+exported surface.
 
-**`Build()` fails closed on a half-wired hook.** A `WrapBody` without an `Outbound` policy
-and an `UnwrapBody` without an `Inbound` one are both construction errors, because a hook
-whose policy is missing is a silent no-op at request time — the body would go out unsealed,
-or a wrapped response would reach the caller as ciphertext.
+**A nil `Envelope` is the old behaviour, byte for byte**: the compact itself is the request
+body, advertised as `application/jose`, and a response is unwrapped only when its
+Content-Type says `application/jose`.
 
-`httpclient.VisaMLEEnvelope()` returns the ready-made pair. Outbound, it produces
+**An `Envelope` changes the inbound read discipline.** `Unwrap` replaces the Content-Type
+gate, and it needs the bytes — so *every* eligible response body is read into memory before
+it runs, bounded by `MaxResponseBytes` (`DefaultMaxJOSEBodyBytes`, 10 MiB, when zero) with
+the same over-cap `ValidationError`.
+Without an `Envelope`, a non-JOSE body is never read at all. When `Unwrap` returns
+`ok=false` the buffered bytes are handed back as the response body with headers untouched.
+The responses that skip unwrapping entirely are unchanged: no `Inbound` policy, no body, or
+a shape net/http guarantees is empty (`1xx`, `204`, `304`, any reply to `HEAD`).
+
+**`Build()` fails closed on an `Envelope` that cannot run.** An `Envelope` with neither an
+`Outbound` nor an `Inbound` policy is a construction error
+(`JOSE_POLICY_ENVELOPE_UNPAIRED`), because neither half would ever be consulted — the body
+would go out unsealed, or a wrapped response would reach the caller as ciphertext. Either
+policy alone is fine: one-directional protection is a supported shape.
+
+**A negative `MaxResponseBytes` is refused beside an `Envelope` and an `Inbound` policy**,
+not quietly defaulted. Negative means unbounded, and with `Unwrap` deciding, every response
+body would be buffered without limit — so `Build()` rejects the trio and `RoundTrip`
+rejects it before the request is sent, both as `JOSE_POLICY_ENVELOPE_UNBOUNDED`. A silent
+fallback to the default would honour neither value the caller wrote down. Without an
+`Envelope` a negative cap still means unbounded: there the Content-Type gate has already
+vouched for the body.
+
+`httpclient.VisaMLEEnvelope()` returns the ready-made `BodyEnvelope`. Outbound, it produces
 `{"encData":"<compact>"}` as `application/json`. Inbound, it recognizes the reply **by
 shape rather than Content-Type**: any JSON object carrying a non-empty string `encData`
 member is unwrapped (unknown sibling members are ignored) and everything else — a
@@ -191,16 +206,13 @@ inbound := &jose.Policy{
     Cty:        jose.DefaultCty,
 }
 
-wrapBody, unwrapBody := httpclient.VisaMLEEnvelope()
-
 client, err := httpclient.NewBuilder(logger).
     WithTransport(mTLSTransport).                 // MLE is unsigned: the peer is authenticated here
     WithJOSE(httpclient.JOSEConfig{
-        Outbound:   outbound,
-        Inbound:    inbound,
-        Resolver:   resolver,
-        WrapBody:   wrapBody,
-        UnwrapBody: unwrapBody,
+        Outbound: outbound,
+        Inbound:  inbound,
+        Resolver: resolver,
+        Envelope: httpclient.VisaMLEEnvelope(),
     }).
     Build()
 if err != nil {

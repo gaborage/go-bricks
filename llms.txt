@@ -4251,28 +4251,27 @@ responses via `Builder.WithJOSE` — sign+encrypt and decrypt+verify under the
 nested JWE-of-JWS default, encrypt-only and decrypt-only under a
 `SealModeBareJWE` policy such as the Visa MLE pair below (an `http.RoundTripper` that
 sits below the retry loop, so each retry re-seals — useful when a partner requires
-unique `iat`/`jti` per attempt). With no `UnwrapBody` hook, non-`application/jose`
-responses pass through untouched; a hook replaces that Content-Type rule and buffers
-every eligible response body (capped by `MaxResponseBytes`) before it runs. Only bodies are sealed: a request with no body goes out unsealed
+unique `iat`/`jti` per attempt). With no `Envelope`, non-`application/jose`
+responses pass through untouched; an `Envelope` replaces that Content-Type rule with
+its `Unwrap` verdict and buffers every eligible response body (capped by
+`MaxResponseBytes`) before it runs. Only bodies are sealed: a request with no body goes out unsealed
 whatever the method, so give a payload-free `POST` an explicit `{}` body if the
 partner requires `application/jose` on every request.
 
 ```go
 // Visa MLE: pass the bare mleOutbound/mleInbound pair from the section above as the
-// policies, and the envelope hooks that move the compact into {"encData": ...}.
-wrapBody, unwrapBody := httpclient.VisaMLEEnvelope()
-
+// policies, and the BodyEnvelope that moves the compact into {"encData": ...}.
 client, err := httpclient.NewBuilder(log).
     WithJOSE(httpclient.JOSEConfig{
         Outbound: outboundPolicy, // *jose.Policy — required (seals requests; bare mode encrypts only)
         Inbound:  inboundPolicy,  // *jose.Policy — optional (opens responses; bare mode decrypts only); nil = plaintext responses
         Resolver: resolver,       // jose.KeyResolver — supplies keys for both directions
-        // Optional body hooks: nil sends/expects the bare compact as application/jose.
-        // httpclient.VisaMLEEnvelope() returns the pair for Visa Message Level Encryption
+        // Optional body envelope: nil sends/expects the bare compact as application/jose.
+        // httpclient.VisaMLEEnvelope() returns the one for Visa Message Level Encryption
         // ({"encData":"<compact>"} as application/json, recognised inbound by shape).
-        // WrapBody needs Outbound and UnwrapBody needs Inbound, or Build fails.
-        WrapBody:   wrapBody,   // httpclient.WrapBodyFunc
-        UnwrapBody: unwrapBody, // httpclient.UnwrapBodyFunc — buffers every response body, capped
+        // Wrap runs only for Outbound and Unwrap only for Inbound, so an Envelope with
+        // neither policy fails Build — as does a negative MaxResponseBytes beside Inbound.
+        Envelope: httpclient.VisaMLEEnvelope(), // httpclient.BodyEnvelope
     }).
     Build()
 if err != nil {
