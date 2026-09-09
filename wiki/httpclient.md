@@ -104,9 +104,10 @@ runs on **copies** — a `jose.Policy` you reuse across builders is never mutate
 error is its own path, not `ErrUnsafeTransportComposition` (whose meaning stays
 transport-slot composition): every one of these policy failures — the nil `Resolver`
 included, which reports `JOSE_KEYSTORE_UNAVAILABLE` — wraps a `*jose.Error`, so match
-it with `errors.As`, or its sentinel with `errors.Is`. (The two body-hook wiring
-failures below are the exception: they are plain errors carrying the same
-`httpclient: invalid JOSE policy:` prefix, not `*jose.Error`.)
+it with `errors.As`, or its sentinel with `errors.Is`. The two body-hook wiring
+failures below are no exception: they report `JOSE_POLICY_HOOK_UNPAIRED` with the
+`jose.ErrPolicyMismatch` sentinel, under the same `httpclient: invalid JOSE policy:`
+prefix.
 
 Kids are **not** resolved at `Build()`. A `KeyResolver` may be backed by key material
 loaded lazily, and resolving eagerly would force that load at construction — so an

@@ -400,10 +400,20 @@ func (b *Builder) normalizeJOSE() error {
 	// A hook without its policy is a silent no-op at request time: the body would go out
 	// unsealed, or a wrapped response would be handed back as ciphertext. Fail construction.
 	if b.joseConfig.WrapBody != nil && b.joseConfig.Outbound == nil {
-		return errors.New("WrapBody requires an Outbound policy")
+		return &jose.Error{
+			Sentinel: jose.ErrPolicyMismatch,
+			Code:     "JOSE_POLICY_HOOK_UNPAIRED",
+			Status:   500,
+			Message:  "WrapBody requires an Outbound policy",
+		}
 	}
 	if b.joseConfig.UnwrapBody != nil && b.joseConfig.Inbound == nil {
-		return errors.New("UnwrapBody requires an Inbound policy")
+		return &jose.Error{
+			Sentinel: jose.ErrPolicyMismatch,
+			Code:     "JOSE_POLICY_HOOK_UNPAIRED",
+			Status:   500,
+			Message:  "UnwrapBody requires an Inbound policy",
+		}
 	}
 	outbound, err := normalizedJOSEPolicy(b.joseConfig.Outbound)
 	if err != nil {
@@ -425,9 +435,9 @@ func normalizedJOSEPolicy(p *jose.Policy) (*jose.Policy, error) {
 		return nil, nil
 	}
 	cp := *p
-	// Bare-JWE mode signs nothing and Validate rejects a policy that names a signature
-	// algorithm, so the default must not be filled in there: doing so would turn every
-	// valid bare policy into a Build failure.
+	// Mirrors jose/policy.go's bare-mode validation, which rejects a bare policy that
+	// names a SigAlg (validateBareDirection owns that rule): bare mode signs nothing, so
+	// filling the default in here would turn every valid bare policy into a Build failure.
 	if cp.SigAlg == "" && cp.Mode != jose.SealModeBareJWE {
 		cp.SigAlg = jose.DefaultSigAlg
 	}

@@ -204,16 +204,17 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 		return fmt.Errorf("httpclient: read response body: %w", err)
 	}
 
-	compact := string(raw)
+	var compact string
 	if t.UnwrapBody != nil {
 		extracted, ok := t.UnwrapBody(resp.Header.Get(headerContentType), raw)
 		if !ok {
 			// Not a protected body: hand back exactly what was read, headers untouched.
-			resp.Body = io.NopCloser(bytes.NewReader(raw))
-			resp.ContentLength = int64(len(raw))
+			replaceBody(resp, raw, "")
 			return nil
 		}
 		compact = extracted
+	} else {
+		compact = string(raw)
 	}
 
 	plaintext, _, _, err := jose.Open(compact, t.Inbound, t.Resolver)
@@ -221,10 +222,19 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 		return err
 	}
 
-	resp.Body = io.NopCloser(bytes.NewReader(plaintext))
-	resp.ContentLength = int64(len(plaintext))
-	resp.Header.Set(headerContentType, "application/json")
+	replaceBody(resp, plaintext, mimeApplicationJSON)
 	return nil
+}
+
+// replaceBody installs payload as resp's body and keeps ContentLength in step with it.
+// An empty contentType leaves the response headers exactly as the peer sent them, which
+// is what a pass-through restore needs; a non-empty one relabels the body.
+func replaceBody(resp *nethttp.Response, payload []byte, contentType string) {
+	resp.Body = io.NopCloser(bytes.NewReader(payload))
+	resp.ContentLength = int64(len(payload))
+	if contentType != "" {
+		resp.Header.Set(headerContentType, contentType)
+	}
 }
 
 // skipsUnwrap reports whether resp must be handed back exactly as it arrived, without

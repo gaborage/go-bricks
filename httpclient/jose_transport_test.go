@@ -230,33 +230,53 @@ func TestJOSETransportPassthroughWhenOutboundNil(t *testing.T) {
 }
 
 func TestJOSETransportRespectsMaxResponseBytes(t *testing.T) {
-	// Defense-in-depth: a JOSE-aware peer (or attacker) returning a Content-Type:
-	// application/jose body larger than MaxResponseBytes must produce an error before
-	// the body is buffered into memory in full.
-	f := jositest.NewBidirectionalFixture(t)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/jose")
-		w.WriteHeader(http.StatusOK)
-		// Write a body larger than the cap. The transport should reject it without
-		// attempting to decrypt — io.LimitReader caps the read at maxBytes+1.
-		_, _ = w.Write(bytes.Repeat([]byte("A"), 1024))
-	}))
-	defer server.Close()
+	// Defense-in-depth: an oversize body must produce an error before it is buffered
+	// into memory in full. Both gates are covered — the default Content-Type rule, and
+	// an UnwrapBody hook, where the Content-Type gate no longer keeps a non-JOSE body
+	// unread and the cap is the only thing standing between caller and unbounded buffer.
+	tests := []struct {
+		name        string
+		contentType string
+		unwrapHook  bool
+	}{
+		{name: "jose_content_type_without_hook", contentType: "application/jose"},
+		{name: "json_content_type_with_unwrap_hook", contentType: "application/json", unwrapHook: true},
+	}
 
-	transport := newJOSETransport(f)
-	transport.MaxResponseBytes = 256 // well under the 1024-byte payload
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := jositest.NewBidirectionalFixture(t)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", tt.contentType)
+				w.WriteHeader(http.StatusOK)
+				// Write a body larger than the cap. The transport should reject it without
+				// attempting to decrypt — MaxBytesReader errors mid-stream.
+				_, _ = w.Write(bytes.Repeat([]byte("A"), 1024))
+			}))
+			defer server.Close()
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
-	require.NoError(t, err)
+			transport := newJOSETransport(f)
+			transport.MaxResponseBytes = 256 // well under the 1024-byte payload
+			if tt.unwrapHook {
+				transport.UnwrapBody = func(_ string, body []byte) (compact string, ok bool) {
+					t.Errorf("UnwrapBody must not run on a body that exceeded the cap (%d bytes)", len(body))
+					return "", false
+				}
+			}
 
-	resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is intentionally nil on this error path; transport closes the underlying body before returning
-	require.Error(t, err)
-	assert.Nil(t, resp, "response exceeding MaxResponseBytes must not be returned to the caller")
-	assert.Contains(t, err.Error(), "exceeds")
-	// The overflow surfaces as a typed ClientError of category ValidationError so
-	// callers can distinguish policy failures from I/O errors via IsErrorType.
-	assert.True(t, httpclient.IsErrorType(err, httpclient.ValidationError),
-		"oversize response must be a typed ValidationError, got %T: %v", err, err)
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
+			require.NoError(t, err)
+
+			resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is intentionally nil on this error path; transport closes the underlying body before returning
+			require.Error(t, err)
+			assert.Nil(t, resp, "response exceeding MaxResponseBytes must not be returned to the caller")
+			assert.Contains(t, err.Error(), "exceeds")
+			// The overflow surfaces as a typed ClientError of category ValidationError so
+			// callers can distinguish policy failures from I/O errors via IsErrorType.
+			assert.True(t, httpclient.IsErrorType(err, httpclient.ValidationError),
+				"oversize response must be a typed ValidationError, got %T: %v", err, err)
+		})
+	}
 }
 
 func TestJOSETransportOutboundRequiresResolver(t *testing.T) {
@@ -590,44 +610,17 @@ func TestBuilderWithJOSEFailsClosedOnAHookWithoutItsPolicy(t *testing.T) {
 			require.Error(t, err)
 			assert.Nil(t, client)
 			assert.Contains(t, err.Error(), tt.wantErr)
+			// Same contract as every other Build JOSE failure: a *jose.Error carrying
+			// a matchable sentinel, not a bare errors.New.
+			assert.True(t, jose.IsError(err), "hook wiring failure must be a *jose.Error, got %T", err)
+			require.ErrorIs(t, err, jose.ErrPolicyMismatch)
 		})
 	}
 }
 
-func TestJOSETransportUnwrapBodyRespectsMaxResponseBytes(t *testing.T) {
-	// With a hook set the Content-Type gate no longer keeps a non-JOSE body unread, so
-	// the cap is the only thing standing between the caller and an unbounded buffer.
-	f := jositest.NewBidirectionalFixture(t)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(bytes.Repeat([]byte("A"), 1024))
-	}))
-	defer server.Close()
-
-	transport := newJOSETransport(f)
-	transport.MaxResponseBytes = 256
-	transport.UnwrapBody = func(_ string, body []byte) (compact string, ok bool) {
-		t.Errorf("UnwrapBody must not run on a body that exceeded the cap (%d bytes)", len(body))
-		return "", false
-	}
-
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
-	require.NoError(t, err)
-
-	resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is nil on this error path; the transport closed the underlying body
-	require.Error(t, err)
-	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "exceeds")
-	assert.True(t, httpclient.IsErrorType(err, httpclient.ValidationError),
-		"oversize response must be a typed ValidationError, got %T: %v", err, err)
-}
-
 func TestJOSETransportWrapBodyErrorAbortsBeforeSending(t *testing.T) {
 	f := jositest.NewBidirectionalFixture(t)
-	var reached bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		reached = true
 		t.Error("request must not reach the server when WrapBody fails")
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -646,5 +639,4 @@ func TestJOSETransportWrapBodyErrorAbortsBeforeSending(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, resp)
 	require.ErrorIs(t, err, sentinel)
-	assert.False(t, reached)
 }
