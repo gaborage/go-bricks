@@ -25,7 +25,7 @@ The `iat` is the awkward one. It is spelled like the JWT claim `jose.Claims` alr
 carries, and it is not that claim: it lives in the JWE protected header rather than in the
 payload, and it counts milliseconds rather than seconds. A consumer reading it as the
 familiar claim is off by a factor of a thousand, in the direction that makes every token
-look impossibly old.
+look impossibly far in the future.
 
 ADR-097 settled the neighbouring question for AMQP events: the seal layer never judges
 replay — `Meta.DedupKey()` plus `inbox.ProcessOnce` do. Nothing had yet decided whether
@@ -79,8 +79,10 @@ they read `Policy.Mode` to decide what to produce and accept.**
   same permissive `cty` rule as the nested path, and returns. It reports the header as
   `OpenHeader.JWE.IATMillis` and judges nothing about it — the same stance ADR-097 takes
   on replay. Freshness windows are partner-specific (the page has said so about the JWT
-  claims since the package shipped), and in bare mode the value is unsigned, so refusing
-  on it would be enforcing a peer-controlled number.
+  claims since the package shipped), and in bare mode the value is integrity-protected by
+  the JWE authentication tag but not sender-authenticated — nobody in the middle can edit
+  it, and nothing proves who wrote it — so refusing on it would be enforcing a
+  peer-controlled number.
 - **`Header` gains scalar fields, not a map.** `Typ string` and `IATMillis int64` join
   `Kid`/`Alg`/`Enc`/`Cty`. An `Extra map[string]any` would have surfaced every protected
   header at once and cost `Header` its comparability — the mistake this change is

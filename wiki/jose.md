@@ -110,7 +110,7 @@ Vanilla `Result[R]` continues to seal raw `data` so VTS-style vendor-prescribed 
 
 ## Bare-JWE mode (Visa Message Level Encryption)
 
-Visa **Message Level Encryption** does not use the nested shape above: an MLE payload is a *single* compact JWE with **no inner JWS**, `enc` is `A128GCM`, the protected header carries `typ: "JOSE"` and an `iat` in Unix epoch **milliseconds**, and the sender is authenticated **out of band** — Visa's `X-Pay-Token` header and mTLS do that job, not a signature over the body. `Policy.Mode` selects that shape (ADR-107):
+Visa **Message Level Encryption** does not use the nested shape above: an MLE payload is a *single* compact JWE with **no inner JWS**, `enc` is `A128GCM`, the protected header carries `typ: "JOSE"` and an `iat` in Unix epoch **milliseconds**, and the sender is authenticated **out of band** — Visa's `X-Pay-Token` header and mTLS do that job, not a signature over the body. `Policy.Mode` selects that shape (ADR-107). Those specifics are Visa's *profile*, not bare mode's floor: the framework emits `typ` only when `Policy.Typ` is set and `iat` only when `Policy.IATMillis` is `true`, a bare `Open` accepts a token carrying neither, and `Policy.Enc` may be `A128GCM` or `A256GCM`:
 
 | `Policy.Mode` | Wire shape | Content encryption allowed |
 | --- | --- | --- |
@@ -164,14 +164,14 @@ if err != nil {
 
 **Validation rules** (all enforced by `Policy.Validate()`, and by `Seal` itself before it touches the keystore):
 
-- A bare **outbound** policy declares `EncryptKid` and nothing else — a `SignKid`, `VerifyKid`, `DecryptKid` or any `SigAlg` is `JOSE_POLICY_DIRECTION_MISMATCH`, because bare mode signs nothing. A bare **inbound** policy declares `DecryptKid` alone, on the same terms.
+- A bare **outbound** policy declares `EncryptKid` as its **only key identity** — a `SignKid`, `VerifyKid`, `DecryptKid` or any `SigAlg` is `JOSE_POLICY_DIRECTION_MISMATCH`, because bare mode signs nothing. Everything else the policy configures (`KeyAlg`, `Enc`, `Cty`, `Typ`, `IATMillis`, `ProtectedHeaders`) is allowed, as the example above sets. A bare **inbound** policy declares `DecryptKid` as its only key identity, on the same terms — a `SignKid`, `VerifyKid`, `EncryptKid` or any `SigAlg` is the same code.
 - `Typ`, `ProtectedHeaders` and `IATMillis` are **bare-mode outbound only**. On a `SealModeJWEofJWS` policy they are `JOSE_POLICY_MODE_MISMATCH`; on a bare *inbound* policy they are `JOSE_POLICY_DIRECTION_MISMATCH` — nothing would read them on the way in, and accepting them would suggest a header was being enforced.
 - **Collision guard**: a `ProtectedHeaders` key naming a param the framework writes (`alg`, `enc`, `kid`, `cty`, `typ`) or one JOSE reserves is `JOSE_POLICY_HEADER_COLLISION`, never a silent overwrite — as is a hand-written `iat` beside `IATMillis: true`. That is why `typ` is its own field.
 - An unrecognized `Mode` is `JOSE_POLICY_MODE_UNKNOWN`. All four codes are configuration failures raised at validation time, like `JOSE_ALGORITHM_DISALLOWED`; they never reach an HTTP caller.
 
 **What `Open` returns.** The plaintext is the caller's bytes verbatim (there is no JWS to unwrap), `claims` are parsed out of that payload if it carries JWT claims, and the header comes back as `OpenHeader.JWE` — with `.Typ` and `.IATMillis` (epoch milliseconds, `0` when absent or malformed) beside the existing `.Kid`/`.Alg`/`.Enc`/`.Cty`. `OpenHeader.JWS` is the **zero** `jose.Header`: no inner layer exists. A peer that declares a `cty` must agree with the policy's (`JOSE_CTY_REJECTED`), one that omits it is accepted — the same permissive rule the nested path applies. **A bare `Open` refuses `cty: JWS` unconditionally**, whatever `Policy.Cty` says (`JOSE_CTY_REJECTED`): bare mode never carries an inner JWS, so that header means a peer is still sending the nested shape, and the compact JWS must never reach the caller as if it were the payload. `Cty` is therefore the consumer's own content-type pin, not the nested-token guard.
 
-**`jose` does not judge the inbound `iat`.** It reports it and nothing more — the same stance ADR-097 takes on replay for sealed events. The value is an unsigned, peer-written header and the tolerance is partner-specific, so the freshness check is the caller's, as `iat`/`exp`/`jti` on the nested path already are.
+**`jose` does not judge the inbound `iat`.** It reports it and nothing more — the same stance ADR-097 takes on replay for sealed events. The value is a peer-written header — integrity-protected by the JWE authentication tag, but not sender-authenticated — and the tolerance is partner-specific, so the freshness check is the caller's, as `iat`/`exp`/`jti` on the nested path already are.
 
 **Reach**: bare mode is a `Policy`-level door — `jose.Seal` / `jose.Open` (and `jose/testing`'s `SealForTest` / `OpenForTest`, which call them). There is no `mode` key in the `jose:` struct-tag grammar, and `httpclient.WithJOSE` cannot carry a bare policy yet: it defaults `SigAlg` before validating, which a bare policy must not set. The `httpclient` envelope hooks (`WrapBody`/`UnwrapBody`, `VisaMLEEnvelope()`) arrive in the next stacked PR.
 

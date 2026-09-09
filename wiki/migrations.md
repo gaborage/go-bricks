@@ -7425,7 +7425,10 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   ```go
   if got.Direction == jose.DirectionOutbound && got.SignKid == "our-signing" { /* ... */ }
 
-  // Key on the identity the policy actually has: its direction and its kids.
+  // A key over direction + kids, and NOTHING else. It is the right key only when the
+  // rest of the policy is deliberately not part of your identity: it merges two policies
+  // that share those five fields but differ in Mode, KeyAlg, Enc, Cty, SigAlg, Typ,
+  // IATMillis or ProtectedHeaders — e.g. bare A128GCM and nested A256GCM under one entry.
   type policyKey struct {
       dir                                          jose.Direction
       signKid, verifyKid, encryptKid, decryptKid   string
@@ -7434,6 +7437,12 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   seen := map[policyKey]bool{}
   seen[policyKey{p.Direction, p.SignKid, p.VerifyKid, p.EncryptKid, p.DecryptKid}] = true
   ```
+
+  If your identity IS the whole policy, widen the key to carry every field, and give
+  `ProtectedHeaders` a canonical serialization of its own — sorted keys rendered into a
+  string, since a map has no stable order and cannot be a map key. Simpler still, key on
+  an identifier you already own (the route, the partner, the policy's registration name)
+  rather than on the struct's contents.
 
   Compare the fields you actually care about, or key on the kids. If you genuinely need
   whole-struct equality — most often in a test assertion — `reflect.DeepEqual` (or
