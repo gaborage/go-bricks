@@ -216,7 +216,7 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 		return errors.New("httpclient: JOSETransport requires a KeyResolver when Inbound is set")
 	}
 
-	raw, err := readAndCloseBody(resp.Body, effectiveMaxResponseBytes(t.MaxResponseBytes, t.UnwrapBody != nil))
+	raw, err := readAndCloseBody(resp.Body, t.effectiveMaxResponseBytes())
 	if err != nil {
 		return fmt.Errorf("httpclient: read response body: %w", err)
 	}
@@ -243,8 +243,8 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 	return nil
 }
 
-// effectiveMaxResponseBytes resolves the cap unwrapResponse actually reads under, from the
-// configured MaxResponseBytes and whether an UnwrapBody hook is wired.
+// effectiveMaxResponseBytes resolves the cap unwrapResponse actually reads under, from
+// MaxResponseBytes and whether an UnwrapBody hook is wired.
 //
 // Zero means "unset", so it takes the default. A negative value means unbounded, which is
 // only defensible while the Content-Type gate has already vouched for the body — with a
@@ -253,11 +253,17 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 // (JOSE_POLICY_HOOK_UNBOUNDED); a JOSETransport built by hand cannot be refused at
 // construction, so the default is restored here rather than letting a peer exhaust memory
 // one response at a time. Without a hook, negative still means unbounded as documented.
-func effectiveMaxResponseBytes(configured int64, hasUnwrapHook bool) int64 {
-	if configured == 0 || (configured < 0 && hasUnwrapHook) {
-		return DefaultMaxJOSEBodyBytes
+func (t *JOSETransport) effectiveMaxResponseBytes() int64 {
+	if t.MaxResponseBytes > 0 {
+		return t.MaxResponseBytes
 	}
-	return configured
+	// Negative is the documented unbounded escape hatch, and it survives only while the
+	// Content-Type gate is still deciding which bodies get read — i.e. while UnwrapBody
+	// is nil. Everything else, zero included, takes the default.
+	if t.MaxResponseBytes < 0 && t.UnwrapBody == nil {
+		return t.MaxResponseBytes
+	}
+	return DefaultMaxJOSEBodyBytes
 }
 
 // replaceBody installs payload as resp's body and keeps ContentLength in step with it.
