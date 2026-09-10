@@ -522,11 +522,11 @@ func TestStatementFailsClosedOnOversizedGap(t *testing.T) {
 	assert.NotContains(t, got, "Sup3rS3cr3t")
 }
 
-// FuzzStatement asserts the structural guarantee the rule rests on: the output
-// is either the input untouched, or a prefix of the input ending at a credential
-// keyword followed by a marker and NOTHING else. The leak property falls out of
-// that shape — no byte of the input past the keyword can appear in the output,
-// because the output is exactly prefix plus marker.
+// FuzzStatement asserts where the cut lands. The output is either the input
+// untouched, or a marker-terminated prefix of it — and that prefix must END on a
+// credential keyword. That anchor is the property worth fuzzing: a cut one byte
+// late keeps the opening byte of the value, and a cut anywhere inside the value
+// keeps more of it, while both still satisfy "is a prefix of the input".
 func FuzzStatement(f *testing.F) {
 	f.Add(`ALTER ROLE "svc" PASSWORD 'hunter2'`)
 	f.Add(`ALTER USER u IDENTIFIED /* x BY sekret`)
@@ -558,10 +558,14 @@ func FuzzStatement(f *testing.F) {
 			t.Fatalf("Statement(%q) = %q, whose retained text %q is not a prefix of the input", in, got, prefix)
 		}
 
-		// The leak property. Everything from the keyword onward was dropped, so the
-		// output must be the prefix and the marker with nothing between or after.
-		if rest := got[len(prefix):]; rest != pgPasswordTail && rest != redactedTail {
-			t.Fatalf("Statement(%q) = %q, carrying %q past the retained prefix", in, got, rest)
+		// The anchor. PASSWORD and BY end a complete clause; IDENTIFIED ends one cut
+		// short because the gap behind it was unreadable. Anything else means the
+		// cut landed inside the value.
+		anchor := strings.TrimRight(strings.ToLower(prefix), " \t\r\n\v\f")
+		if !strings.HasSuffix(anchor, kwPassword) &&
+			!strings.HasSuffix(anchor, kwBy) &&
+			!strings.HasSuffix(anchor, kwIdentified) {
+			t.Fatalf("Statement(%q) = %q, whose retained text %q does not end on a credential keyword", in, got, prefix)
 		}
 	})
 }
