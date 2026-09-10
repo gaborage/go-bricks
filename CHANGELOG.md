@@ -1,5 +1,89 @@
 # Changelog
 
+## [0.64.0](https://github.com/gaborage/go-bricks/compare/v0.63.0...v0.64.0) (2026-09-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* **jose:** add a bare-JWE seal mode for out-of-band-authenticated peers ([#1584](https://github.com/gaborage/go-bricks/issues/1584))
+* **outbox:** give relayed publishes their standard properties ([#1562](https://github.com/gaborage/go-bricks/issues/1562))
+* **messaging:** write every publish property in the framework ([#1564](https://github.com/gaborage/go-bricks/issues/1564))
+* **config:** refuse an empty PostgreSQL host on the connect seam ([#1557](https://github.com/gaborage/go-bricks/issues/1557))
+* **messaging:** declare both dead-letter queues as quorum queues ([#1559](https://github.com/gaborage/go-bricks/issues/1559))
+* **messaging:** fall back to message_id for the unsealed dedup key ([#1560](https://github.com/gaborage/go-bricks/issues/1560))
+* **outbox:** bound the schema segment by the store vendor's cap ([#1516](https://github.com/gaborage/go-bricks/issues/1516))
+* **database:** enforce per-vendor identifier byte caps at every door ([#1507](https://github.com/gaborage/go-bricks/issues/1507))
+* **database:** judge db-tag columns at the INSERT struct doors ([#1490](https://github.com/gaborage/go-bricks/issues/1490))
+* **testing:** AssertKeyNotFound refuses a key returned with an error ([#1502](https://github.com/gaborage/go-bricks/issues/1502))
+* **testing:** AssertKeyNotFound aborts on an unexpected public key
+* **database:** refuse # in PostgreSQL identifiers at every builder door
+* **server:** route JOSE error details through the single dev gate
+* **database:** order Oracle SET pairs by name; jf.NotEq renders <>
+
+### Added
+
+* **app:** attribute messaging declarations per module ([#1478](https://github.com/gaborage/go-bricks/issues/1478)) ([88001b6](https://github.com/gaborage/go-bricks/commit/88001b67263faa0cf710ba268ab38f04156db006))
+* **httpclient:** add JOSE body envelope hooks for Visa MLE ([#1585](https://github.com/gaborage/go-bricks/issues/1585)) ([ed855a6](https://github.com/gaborage/go-bricks/commit/ed855a6ce20b0b40707bc4cf069da2a5589a7215))
+* **messaging:** add messaging.publishtimeout aggregate publish bound ([11e098c](https://github.com/gaborage/go-bricks/commit/11e098c384e034fabb2b551f7d669d4705affcb8)), closes [#1250](https://github.com/gaborage/go-bricks/issues/1250)
+* **messaging:** refuse a quorum queue whose shape quorum rejects ([#1563](https://github.com/gaborage/go-bricks/issues/1563)) ([f83e240](https://github.com/gaborage/go-bricks/commit/f83e240b5c62231f54bd707d58137156d99b0afd))
+* **observability:** install-and-restore helpers for test providers ([#1501](https://github.com/gaborage/go-bricks/issues/1501)) ([bcf8fa0](https://github.com/gaborage/go-bricks/commit/bcf8fa08b8fbf9c9edc539ea83feb382c53d3433))
+* **outbox:** give relayed publishes their standard properties ([#1562](https://github.com/gaborage/go-bricks/issues/1562)) ([54d53ab](https://github.com/gaborage/go-bricks/commit/54d53ab7e476b8df427eab1733add78a752c3b29)), closes [#1545](https://github.com/gaborage/go-bricks/issues/1545)
+* **streams:** attribute declared streams per module ([b57fcad](https://github.com/gaborage/go-bricks/commit/b57fcad6cce41d8a9f1f6615e501ea5d7451bca0)), closes [#1414](https://github.com/gaborage/go-bricks/issues/1414)
+* **streams:** export Publisher.Ready as the stream lane's readiness probe ([#1522](https://github.com/gaborage/go-bricks/issues/1522)) ([2d910d1](https://github.com/gaborage/go-bricks/commit/2d910d1733997296ff5477e1a016242089c531ec))
+
+
+### Fixed
+
+* **config:** refuse an empty PostgreSQL host on the connect seam ([#1557](https://github.com/gaborage/go-bricks/issues/1557)) ([8ee4e3b](https://github.com/gaborage/go-bricks/commit/8ee4e3b23b1d6a0ecb1dfda28b42b6ba56307b16)), closes [#1544](https://github.com/gaborage/go-bricks/issues/1544) [#1551](https://github.com/gaborage/go-bricks/issues/1551) [#1555](https://github.com/gaborage/go-bricks/issues/1555)
+* **config:** warn when a lenient getter swallows a value ([c51efc1](https://github.com/gaborage/go-bricks/commit/c51efc120d621a35f91f19fb2b701a035ee5e84a)), closes [#1111](https://github.com/gaborage/go-bricks/issues/1111)
+* **database:** enforce per-vendor identifier byte caps at every door ([#1507](https://github.com/gaborage/go-bricks/issues/1507)) ([dd7ec6e](https://github.com/gaborage/go-bricks/commit/dd7ec6ece560cb3a9aa6f9bd5ed43578bf4ec25a))
+* **database:** judge db-tag columns at the INSERT struct doors ([#1490](https://github.com/gaborage/go-bricks/issues/1490)) ([405ae84](https://github.com/gaborage/go-bricks/commit/405ae8465f12cde6aa05355c1ec9e2f0bdf36b71))
+* **database:** order Oracle SET pairs by name; jf.NotEq renders &lt;&gt; ([dcc3eb4](https://github.com/gaborage/go-bricks/commit/dcc3eb4e1d89ccf05d7b1de0e05d7439916d4f81)), closes [#1185](https://github.com/gaborage/go-bricks/issues/1185) [#1200](https://github.com/gaborage/go-bricks/issues/1200)
+* **database:** redact credential literals from tracked query text ([#1588](https://github.com/gaborage/go-bricks/issues/1588)) ([f0b87b9](https://github.com/gaborage/go-bricks/commit/f0b87b9b1452145a1cf4dc4ada221966650c2ac7))
+* **database:** refuse # in PostgreSQL identifiers at every builder door ([84b60aa](https://github.com/gaborage/go-bricks/commit/84b60aa29a1c794b4e5893faad14eb5aa3aa9d99)), closes [#1202](https://github.com/gaborage/go-bricks/issues/1202)
+* **deps:** update module golang.org/x/sync to v0.23.0 ([#1567](https://github.com/gaborage/go-bricks/issues/1567)) ([a81f99e](https://github.com/gaborage/go-bricks/commit/a81f99eb28421ed834d026542fa44f3c81b4c51c))
+* **deps:** update module golang.org/x/term to v0.46.0 ([#1569](https://github.com/gaborage/go-bricks/issues/1569)) ([665fe7f](https://github.com/gaborage/go-bricks/commit/665fe7f2e8deeca5108863134b2d2abd2af7873b))
+* **jose:** add a bare-JWE seal mode for out-of-band-authenticated peers ([#1584](https://github.com/gaborage/go-bricks/issues/1584)) ([5c2b39d](https://github.com/gaborage/go-bricks/commit/5c2b39d10c1cfa72ac791441e465025ecffbd46d))
+* **messaging:** bound the publish-slot wait by the caller deadline ([#1505](https://github.com/gaborage/go-bricks/issues/1505)) ([ba4e6e1](https://github.com/gaborage/go-bricks/commit/ba4e6e1da45abf73b54d0979803efed915d49b01))
+* **messaging:** declare both dead-letter queues as quorum queues ([#1559](https://github.com/gaborage/go-bricks/issues/1559)) ([793f8b1](https://github.com/gaborage/go-bricks/commit/793f8b147bcadcd17c27c064e7523502887aa2b2))
+* **messaging:** fall back to message_id for the unsealed dedup key ([#1560](https://github.com/gaborage/go-bricks/issues/1560)) ([79d5896](https://github.com/gaborage/go-bricks/commit/79d58962325399e940c3c3ce211ea66054bbd9c8))
+* **messaging:** mint the publish id once per logical publish ([#1556](https://github.com/gaborage/go-bricks/issues/1556)) ([96e7331](https://github.com/gaborage/go-bricks/commit/96e73316d20956aeb762dc7dfec9c988c1511dab))
+* **messaging:** SetupTelemetry restores providers without Shutdown ([#1488](https://github.com/gaborage/go-bricks/issues/1488)) ([210d402](https://github.com/gaborage/go-bricks/commit/210d402f1fa4b426a9e32eb0643c043eee85a17c))
+* **messaging:** write every publish property in the framework ([#1564](https://github.com/gaborage/go-bricks/issues/1564)) ([6498663](https://github.com/gaborage/go-bricks/commit/6498663ce612d0d580abdbbf5339e1055027bb5c)), closes [#1545](https://github.com/gaborage/go-bricks/issues/1545)
+* **migrate:** encode spaces as %20 in the control-plane URI ([#1554](https://github.com/gaborage/go-bricks/issues/1554)) ([8906d45](https://github.com/gaborage/go-bricks/commit/8906d45857bbe69876026228da7e291ddfd0a4c8))
+* **mutatediff:** prune the sandbox build cache at run start ([#1550](https://github.com/gaborage/go-bricks/issues/1550)) ([bc2ce2b](https://github.com/gaborage/go-bricks/commit/bc2ce2b4a50a5a9f61d1ed6bf3e1190876d39c29))
+* **outbox:** bound each relay pre-flight readiness check ([#1539](https://github.com/gaborage/go-bricks/issues/1539)) ([269fc2b](https://github.com/gaborage/go-bricks/commit/269fc2b1678eaf232b4155774700f5766df69591))
+* **outbox:** bound the schema segment by the store vendor's cap ([#1516](https://github.com/gaborage/go-bricks/issues/1516)) ([8c51f75](https://github.com/gaborage/go-bricks/commit/8c51f7591fd50c155ee017c35060f147503b68fe))
+* **server:** route JOSE error details through the single dev gate ([421f58b](https://github.com/gaborage/go-bricks/commit/421f58b60e1d8b84af4888b8ad9d75659c6459f0)), closes [#1163](https://github.com/gaborage/go-bricks/issues/1163)
+* **tenantstore:** classify probe failures before wording them ([#1552](https://github.com/gaborage/go-bricks/issues/1552)) ([00e6669](https://github.com/gaborage/go-bricks/commit/00e6669b7ba8a3b468a58d9e928da0bb1857d23b))
+* **testing:** AssertKeyNotFound aborts on an unexpected public key ([cde7691](https://github.com/gaborage/go-bricks/commit/cde76910e171d91ffdfd9e37b8f059be3c16c7ee))
+* **testing:** AssertKeyNotFound refuses a key returned with an error ([#1502](https://github.com/gaborage/go-bricks/issues/1502)) ([b228822](https://github.com/gaborage/go-bricks/commit/b228822efc130f0abd29d32eb7965e7a4308eb04))
+* **testing:** bind StartupTimeout to every container wait strategy ([#1477](https://github.com/gaborage/go-bricks/issues/1477)) ([c7b8d87](https://github.com/gaborage/go-bricks/commit/c7b8d877bd5a9752811ac2c2c62abe54ea721817))
+* **testing:** restore OTel globals without shutting down the delegate ([6331fa1](https://github.com/gaborage/go-bricks/commit/6331fa1b47ceee1ac207824ce3f75b5b7b0ea5aa)), closes [#1093](https://github.com/gaborage/go-bricks/issues/1093)
+
+
+### Changed
+
+* **app:** make the resourcepool error counter lock-free ([9877974](https://github.com/gaborage/go-bricks/commit/9877974a573b9fe1b29bdf5672ab79e20bb1c776)), closes [#1236](https://github.com/gaborage/go-bricks/issues/1236)
+* **app:** render the startup declaration counts in struct order ([#1487](https://github.com/gaborage/go-bricks/issues/1487)) ([21ab565](https://github.com/gaborage/go-bricks/commit/21ab56529f6308eca2937ae12e8a743dceeb3cb1))
+* **app:** seal each slot's readiness once and judge from the slot list ([#1525](https://github.com/gaborage/go-bricks/issues/1525)) ([61f60d3](https://github.com/gaborage/go-bricks/commit/61f60d3304dc0f8aedd123605337f8959b934bf4))
+* **app:** single-source the DeclarationStats log fields ([#1482](https://github.com/gaborage/go-bricks/issues/1482)) ([578f966](https://github.com/gaborage/go-bricks/commit/578f96608aa9cd5d8ed0ff4d99dac3ba66b8de49))
+* **config:** derive server.bodylimit in derivedDefaultKeys ([#1480](https://github.com/gaborage/go-bricks/issues/1480)) ([a3024eb](https://github.com/gaborage/go-bricks/commit/a3024ebc6d54a74c0dea80b9e299ef813b54b9f3))
+* **config:** lift the static tenant map out of checkMultitenant ([#1528](https://github.com/gaborage/go-bricks/issues/1528)) ([3b5853f](https://github.com/gaborage/go-bricks/commit/3b5853fb36f340088f64bc164b518596d910ed72))
+* **config:** normalization owns the server.bodylimit default ([0546c69](https://github.com/gaborage/go-bricks/commit/0546c69e36f61e1fbe347d4d110f6a321108a2bf)), closes [#1031](https://github.com/gaborage/go-bricks/issues/1031)
+* **config:** record key presence once at the merge seam ([#1510](https://github.com/gaborage/go-bricks/issues/1510)) ([bb1bc22](https://github.com/gaborage/go-bricks/commit/bb1bc22dd472b37dd113cba0c3e4e3b490ab99e2))
+* **database:** give the deferred builder error a single owner ([0df2815](https://github.com/gaborage/go-bricks/commit/0df2815c24b57e1349d4c6b37d02ad9ec33f1f92)), closes [#1197](https://github.com/gaborage/go-bricks/issues/1197)
+* **database:** make sqlid compose on the shared identifier grammar ([f79a7bb](https://github.com/gaborage/go-bricks/commit/f79a7bbb44ae6faa7363ab9c1c754502fb3cf723)), closes [#1201](https://github.com/gaborage/go-bricks/issues/1201)
+* **database:** make the identifier parser's escape skip index-free ([45f2d38](https://github.com/gaborage/go-bricks/commit/45f2d38a3924c14d33d72f232064133098ff0059)), closes [#1193](https://github.com/gaborage/go-bricks/issues/1193)
+* **database:** skip the parser for bare identifier segments ([#1515](https://github.com/gaborage/go-bricks/issues/1515)) ([8393e76](https://github.com/gaborage/go-bricks/commit/8393e760c1da58ffa029332d6b6632611ceb28f7))
+* **database:** split resolveOperand into walk and classify ([#1527](https://github.com/gaborage/go-bricks/issues/1527)) ([e4262df](https://github.com/gaborage/go-bricks/commit/e4262df503a36a27409588ad89cbe0b9625ea0b4))
+* **database:** thread the renderer through identifier validators ([e1c513c](https://github.com/gaborage/go-bricks/commit/e1c513caa4be3380a6f87bba51c3c3f94a2bdefe))
+* **jose:** name the steps inside ScanType and walkToSubject ([#1530](https://github.com/gaborage/go-bricks/issues/1530)) ([1881009](https://github.com/gaborage/go-bricks/commit/18810092d71ba3303a36dbd73469dc3511cdeac2))
+* **messaging:** one retry epilogue for every failed publish ([#1532](https://github.com/gaborage/go-bricks/issues/1532)) ([000a161](https://github.com/gaborage/go-bricks/commit/000a161b2e65dd89cea88a588baa7bfb4dfd8764))
+* **migration:** split urlArgs into its two decisions ([#1529](https://github.com/gaborage/go-bricks/issues/1529)) ([3416679](https://github.com/gaborage/go-bricks/commit/3416679811f5e7671bde7c78713fbf8df278b6f7))
+* **mutatediff:** name the hunk and shard steps ([#1533](https://github.com/gaborage/go-bricks/issues/1533)) ([a5e1ca3](https://github.com/gaborage/go-bricks/commit/a5e1ca3f51c112011354ea630811da5ce3b49868))
+* **outbox:** give the relay one Shipper per lane ([#1536](https://github.com/gaborage/go-bricks/issues/1536)) ([c88f2d9](https://github.com/gaborage/go-bricks/commit/c88f2d9cfc4e732fe0a39ff66bfec5eebcfe72e8))
+
 ## [0.63.0](https://github.com/gaborage/go-bricks/compare/v0.62.0...v0.63.0) (2026-09-05)
 
 
