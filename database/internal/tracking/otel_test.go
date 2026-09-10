@@ -608,3 +608,52 @@ func TestTrackDBOperationMultipleOperations(t *testing.T) {
 	obtest.AssertMetricExists(t, rm, metricDBDuration)
 	obtest.AssertMetricExists(t, rm, metricDBDuration)
 }
+
+// spanQueryText drives a full TrackDBOperation with observability on and returns
+// the db.query.text attribute of the span it emitted. It goes through the
+// production entry point rather than calling createDBSpan directly, because the
+// scrub lives at that choke point and createDBSpan requires an already-scrubbed
+// statement.
+func spanQueryText(t *testing.T, query string) string {
+	t.Helper()
+	traceExporter, _, cleanup := setupTestObservabilityProviders(t)
+	defer cleanup()
+
+	tc := &Context{Logger: newDisabledTestLogger(), Vendor: "postgresql", Settings: NewSettings(nil)}
+	TrackDBOperation(context.Background(), tc, query, nil, time.Now().Add(-10*time.Millisecond), 0, nil)
+
+	spans := traceExporter.GetSpans()
+	require.Len(t, spans, 1)
+	for _, attr := range spans[0].Attributes {
+		if string(attr.Key) == "db.query.text" {
+			return attr.Value.AsString()
+		}
+	}
+	t.Fatal("span carries no db.query.text attribute")
+	return ""
+}
+
+// TestTrackDBOperationRedactsCredentialLiteralOnSpan pins the second sink: the
+// span attribute is scrubbed too, not only the log field.
+func TestTrackDBOperationRedactsCredentialLiteralOnSpan(t *testing.T) {
+	got := spanQueryText(t, credentialDDL)
+	assert.Equal(t, credentialDDLRedacted, got)
+	assert.NotContains(t, got, credentialLiteral)
+}
+
+// TestTrackDBOperationRedactsSpanBeforeTruncation pins scrub-before-truncate on
+// the span path, whose cap (maxDBQueryAttrLen) is independent of the log field's.
+// The literal straddles that cap: truncating first would strand its opening bytes
+// on the attribute, whereas scrubbing first brings the statement back under it.
+func TestTrackDBOperationRedactsSpanBeforeTruncation(t *testing.T) {
+	const prefixHead = "-- "
+	const head = `ALTER ROLE "svc" PASSWORD '`
+	// Land the opening quote 20 runes short of the cut, so a truncate-first
+	// implementation keeps the first bytes of the literal.
+	padLen := maxDBQueryAttrLen - 20 - len(head) - len(prefixHead) - len("\n")
+	stmt := prefixHead + strings.Repeat("p", padLen) + "\n" + head + credentialLiteral + strings.Repeat("x", 100) + `'`
+
+	got := spanQueryText(t, stmt)
+	assert.Contains(t, got, credentialRedacted)
+	assert.NotContains(t, got, credentialLiteral)
+}

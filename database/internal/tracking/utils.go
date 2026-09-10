@@ -14,6 +14,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/gaborage/go-bricks/database/sqlredact"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/observability"
 )
@@ -117,6 +118,16 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 	// when no provider is registered, so without this explicit gate the framework
 	// would build and discard span/metric attributes on every query with
 	// observability off (the in-function nil guards never fire).
+	// Scrub credential literals ONCE, here, and rebind query to the result so no
+	// sink below can reach the raw statement: the span attribute, the log field
+	// and the metric labels all read the scrubbed text. The scrub must run before
+	// either sink truncates for length — a length cut can remove the keyword
+	// sqlredact.Statement anchors on — so this is the only point that dominates
+	// both. It sits above the Enabled() short-circuit, which costs a scan on the
+	// fully-disabled path; sqlredact.Statement allocates nothing when it finds no
+	// credential clause, so that path keeps its allocation win.
+	query = sqlredact.Statement(query)
+
 	if ctx != nil && observabilityEnabled.Load() {
 		createDBSpan(ctx, tc, query, start, err)
 		recordDBMetrics(ctx, tc, query, elapsed, rowsAffected, err)
@@ -180,14 +191,20 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 	// for the framework-default config (none of vendor/duration_ms/duration_ns/query/args are
 	// sensitive by default, so both paths emit the raw value).
 	//
-	// Privacy note for vendor/query: these are framework-controlled, non-secret fields (vendor is
-	// "postgresql"/"oracle.db"; query is already-truncated SQL) and are intentionally kept OFF the
-	// sensitive surface. If an operator marks them sensitive via log.sensitivefields, the typed Str
-	// path masks via FilterString -> maskString, which is URL-aware and reveals strictly more for a
-	// URL-shaped value (scheme/user/host/path, password masked) than the old WithFields -> FilterValue
-	// path did (full "***"). That divergence is by design for the typed-setter path and unreachable
-	// for these two keys under the default config; do not add vendor/query to the sensitive list to
-	// avoid relying on full masking here.
+	// Privacy note for vendor/query: vendor is framework-controlled and non-secret
+	// ("postgresql"/"oracle.db"). query is NOT unconditionally non-secret. The guarantee
+	// holds for PARAMETERISED statements, whose values travel in args — gated behind
+	// LogQueryParameters() and sanitized. A value embedded in the statement itself reaches
+	// this log field AND the db.query.text span attribute verbatim; of those, only
+	// credential-bearing DDL is scrubbed, by database/sqlredact above.
+	//
+	// Both keys are intentionally kept OFF the sensitive surface. If an operator marks them
+	// sensitive via log.sensitivefields, the typed Str path masks via FilterString ->
+	// maskString, which is URL-aware and reveals strictly more for a URL-shaped value
+	// (scheme/user/host/path, password masked) than the old WithFields -> FilterValue path
+	// did (full "***"). That divergence is by design for the typed-setter path and
+	// unreachable for these two keys under the default config; do not add vendor/query to
+	// the sensitive list to avoid relying on full masking here.
 	event = appendDBErrorType(event, driverErr)
 
 	event = event.
@@ -266,6 +283,9 @@ func SanitizeArgs(args []any, maxLen int) []any {
 }
 
 // createDBSpan starts an OpenTelemetry span for a database operation using the provided start time.
+//
+// query MUST already have passed through sqlredact.Statement: it lands verbatim on the
+// db.query.text attribute, and the scrub has to precede the length truncation below.
 // It sets standard DB and network attributes (including `db.system.name`, `db.query.text`, `db.operation.name`,
 // `db.collection.name`, `db.namespace`, `server.address`, and `server.port`) when available, records errors
 // (excluding `sql.ErrNoRows` and `sql.ErrTxDone`) on the span, and ends the span.
@@ -282,8 +302,10 @@ func createDBSpan(ctx context.Context, tc *Context, query string, start time.Tim
 		trace.WithSpanKind(trace.SpanKindClient),
 	)
 
-	// Add database semantic attributes per OTel v1.32.0 spec
-	// Truncate query for safety (span attributes should be reasonable size)
+	// Add database semantic attributes per OTel v1.32.0 spec.
+	// Truncate query for safety (span attributes should be reasonable size). query
+	// arrives already scrubbed; truncating an unscrubbed statement here could cut
+	// away the keyword the scrub anchors on and strand the credential.
 	truncatedQuery := query
 	if len(query) > maxDBQueryAttrLen {
 		truncatedQuery = TruncateString(query, maxDBQueryAttrLen)

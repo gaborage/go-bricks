@@ -641,6 +641,10 @@ Each key also binds from the environment (`DATABASE_MANAGER_MAXSIZE`, `DATABASE_
 
 These keys are set under the primary `database:` section only, but they govern the **single process-wide manager**, which caches the primary handle, every named `databases.<name>` handle (keyed `named:<name>` via `deps.DBByName`), and per-tenant handles. **Count named databases when sizing `maxsize`**: a single-tenant app with the primary plus 12 named databases needs `maxsize >= 13` to avoid LRU eviction churn. A `manager` sub-block under `databases.<name>` or `multitenant.tenants.<id>.database` is rejected at startup — it would otherwise be silently ignored.
 
+## Statement Text in Logs and Spans
+
+Every tracked operation attaches its statement, truncated, to the `query` log field and the `db.query.text` span attribute. Values passed as bind parameters stay out of both (they travel in `args`, gated behind `database.logqueryparameters`), but a literal embedded in the statement itself is logged verbatim — the sensitive-data filter masks by field name and cannot read SQL. Two clause shapes are scrubbed for you: a PostgreSQL `PASSWORD '<literal>'` (in any of that grammar's quotings) and an Oracle `IDENTIFIED BY <password>`. `database/sqlredact` truncates the statement at that keyword, substitutes `[REDACTED]`, and drops everything after it, so the log line names the failing statement without carrying the credential or the clauses that trail it. Nothing else is: a password inside a connection-string literal — `CREATE SUBSCRIPTION … CONNECTION 'host=h password=x'`, a `dblink` argument — is not recognized, because qualifying on `password=` would truncate ordinary DML.
+
 ## Repository Method Attribution
 
 The `db.client.operation.duration` metric carries `db.operation.name` (the SQL verb:
