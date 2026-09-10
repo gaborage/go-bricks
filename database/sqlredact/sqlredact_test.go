@@ -435,16 +435,29 @@ func TestStatementFailsClosedOnUnterminatedComment(t *testing.T) {
 			secret: "sekret",
 		},
 		{
-			// The trailing star forces the comment scanner to read the byte after
-			// the last one, where an off-by-one bound reads past the string.
-			name:   "ending_in_a_star",
+			name:   "half_open_close_before_the_value",
 			in:     `ALTER ROLE r PASSWORD /* c *'sekret'`,
 			want:   `ALTER ROLE r PASSWORD '[REDACTED]'`,
 			secret: "sekret",
 		},
 		{
-			name:   "ending_in_a_slash",
+			name:   "half_open_nest_before_the_value",
 			in:     `ALTER ROLE r PASSWORD /* c /'sekret'`,
+			want:   `ALTER ROLE r PASSWORD '[REDACTED]'`,
+			secret: "sekret",
+		},
+		{
+			// A statement ending on the first byte of a two-byte delimiter forces
+			// the comment scanner to read the byte after the last one, where an
+			// off-by-one bound reads past the end of the string.
+			name:   "input_ends_on_a_star",
+			in:     `ALTER ROLE r PASSWORD /* sekret *`,
+			want:   `ALTER ROLE r PASSWORD '[REDACTED]'`,
+			secret: "sekret",
+		},
+		{
+			name:   "input_ends_on_a_slash",
+			in:     `ALTER ROLE r PASSWORD /* sekret /`,
 			want:   `ALTER ROLE r PASSWORD '[REDACTED]'`,
 			secret: "sekret",
 		},
