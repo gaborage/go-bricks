@@ -118,16 +118,27 @@ func startsValue(sql string, i int) bool {
 	return i+2 < len(sql) && sql[i+1] == '&' && sql[i+2] == '\''
 }
 
+// maxGapBytes bounds how much separator text is scanned between a keyword and
+// its value. A real gap is a few bytes; the cap only fires on adversarial shapes.
+const maxGapBytes = 4096
+
 // skipGap advances past the whitespace and comments a lexer allows between two
-// tokens. truncated reports that the gap ran to the end of input inside an
-// unterminated block comment, leaving the value unlocatable.
+// tokens. truncated reports that the value could not be located — the gap died
+// in an unterminated or ambiguously nested block comment, or overran the cap.
 func skipGap(sql string, i int) (next int, truncated bool) {
-	for i < len(sql) {
-		if isSpace(sql[i]) {
+	// Bound the scan to a window. Statement retries at every offset, so an
+	// unbounded separator run makes a statement of repeated comment openers
+	// quadratic — on a path that runs for every tracked operation, above the
+	// log-level short-circuit. Comments are searched inside the window too, so one
+	// enormous comment costs no more than one small one.
+	limit := min(len(sql), i+maxGapBytes)
+	window := sql[:limit]
+	for i < limit {
+		if isSpace(window[i]) {
 			i++
 			continue
 		}
-		end, closed, ok := skipComment(sql, i)
+		end, closed, ok := skipComment(window, i)
 		if !ok {
 			return i, false
 		}
@@ -136,7 +147,9 @@ func skipGap(sql string, i int) (next int, truncated bool) {
 		}
 		i = end
 	}
-	return i, false
+	// Reaching the window edge is only fail-closed when the edge is the budget:
+	// running out of actual input means there was no value to find.
+	return i, limit < len(sql)
 }
 
 // skipComment advances past a -- line comment or a /* block comment */ at i.
@@ -153,20 +166,17 @@ func skipComment(sql string, i int) (next int, closed, ok bool) {
 		}
 		return len(sql), true, true
 	case strings.HasPrefix(sql[i:], "/*"):
-		depth, j := 1, i+2
-		for j+1 < len(sql) {
-			switch {
-			case sql[j] == '/' && sql[j+1] == '*':
-				depth++
-				j += 2
-			case sql[j] == '*' && sql[j+1] == '/':
-				depth--
-				j += 2
-				if depth == 0 {
-					return j, true, true
-				}
-			default:
-				j++
+		for j := i + 2; j+1 < len(sql); j++ {
+			// The vendors disagree on nesting — PostgreSQL nests, Oracle closes at
+			// the first */ — so a second /* makes the value's position ambiguous.
+			// Report it unterminated and let the caller fail closed rather than
+			// pick a reading: Oracle's real value would otherwise sit past the gap
+			// (a */ inside the password closes the comment for it, not for us).
+			if sql[j] == '/' && sql[j+1] == '*' {
+				return len(sql), false, true
+			}
+			if sql[j] == '*' && sql[j+1] == '/' {
+				return j + 2, true, true
 			}
 		}
 		return len(sql), false, true

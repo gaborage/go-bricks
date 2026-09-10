@@ -1,6 +1,7 @@
 package sqlredact
 
 import (
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -209,12 +210,6 @@ func TestStatementDropsTheTailThatCarriesTheSecret(t *testing.T) {
 			name:   "comment_glued_to_keyword_and_value",
 			in:     `ALTER ROLE r3 ENCRYPTED PASSWORD/*x*/'Sup3rS3cr3t'`,
 			want:   `ALTER ROLE r3 ENCRYPTED PASSWORD '[REDACTED]'`,
-			secret: "Sup3rS3cr3t",
-		},
-		{
-			name:   "nested_block_comment",
-			in:     `ALTER ROLE r4 PASSWORD /* a /* b */ c */ 'Sup3rS3cr3t'`,
-			want:   `ALTER ROLE r4 PASSWORD '[REDACTED]'`,
 			secret: "Sup3rS3cr3t",
 		},
 		{
@@ -461,4 +456,55 @@ func TestStatementFailsClosedOnUnterminatedComment(t *testing.T) {
 			assert.NotContains(t, got, tt.secret)
 		})
 	}
+}
+
+// TestStatementFailsClosedOnAmbiguousComment covers the one place the two
+// vendors read the same bytes differently: PostgreSQL nests block comments,
+// Oracle closes at the first `*/`. A `*/` inside an Oracle password therefore
+// ends the comment for the server but not for a nesting scanner, which would
+// walk the gap past BY and find nothing to redact. A second `/*` is treated as
+// unlocatable instead, so both readings stay safe.
+func TestStatementFailsClosedOnAmbiguousComment(t *testing.T) {
+	tests := []struct {
+		name   string
+		in     string
+		want   string
+		secret string
+	}{
+		{
+			name:   "oracle_non_nesting_close_inside_the_password",
+			in:     `ALTER USER probeuser IDENTIFIED /*/**/ BY "a*/b"`,
+			want:   `ALTER USER probeuser IDENTIFIED [REDACTED]`,
+			secret: "a*/b",
+		},
+		{
+			name:   "spaced_nested_opener_before_by",
+			in:     `ALTER USER u IDENTIFIED /* /* */ BY "p*/x"`,
+			want:   `ALTER USER u IDENTIFIED [REDACTED]`,
+			secret: "p*/x",
+		},
+		{
+			name:   "postgres_nested_comment_before_the_value",
+			in:     `ALTER ROLE r PASSWORD /* a /* b */ c */ 'Sup3rS3cr3t'`,
+			want:   `ALTER ROLE r PASSWORD '[REDACTED]'`,
+			secret: "Sup3rS3cr3t",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Statement(tt.in)
+			assert.Equal(t, tt.want, got)
+			assert.NotContains(t, got, tt.secret)
+		})
+	}
+}
+
+// TestStatementFailsClosedOnOversizedGap pins the gap budget. Statement retries
+// at every offset, so an unbounded separator run makes a statement of repeated
+// comment openers quadratic on a path that runs for every tracked operation.
+func TestStatementFailsClosedOnOversizedGap(t *testing.T) {
+	in := "ALTER ROLE r PASSWORD --" + strings.Repeat("c", maxGapBytes+1) + "\n'Sup3rS3cr3t'"
+	got := Statement(in)
+	assert.Equal(t, `ALTER ROLE r PASSWORD '[REDACTED]'`, got)
+	assert.NotContains(t, got, "Sup3rS3cr3t")
 }
