@@ -521,3 +521,47 @@ func TestStatementFailsClosedOnOversizedGap(t *testing.T) {
 	assert.Equal(t, `ALTER ROLE r PASSWORD '[REDACTED]'`, got)
 	assert.NotContains(t, got, "Sup3rS3cr3t")
 }
+
+// FuzzStatement asserts the structural guarantee the rule rests on: the output
+// is either the input untouched, or a prefix of the input ending at a credential
+// keyword followed by a marker and NOTHING else. The leak property falls out of
+// that shape — no byte of the input past the keyword can appear in the output,
+// because the output is exactly prefix plus marker.
+func FuzzStatement(f *testing.F) {
+	f.Add(`ALTER ROLE "svc" PASSWORD 'hunter2'`)
+	f.Add(`ALTER USER u IDENTIFIED /* x BY sekret`)
+	f.Add(`SELECT id, password FROM t`)
+	f.Add(`ALTER ROLE r PASSWORD /* unterminated`)
+	f.Add("ALTER ROLE r PASSWORD --" + strings.Repeat("c", maxGapBytes+1) + "\n'hunter2'")
+
+	f.Fuzz(func(t *testing.T, in string) {
+		got := Statement(in)
+		if got == in {
+			return
+		}
+
+		if len(got) > len(in)+len(pgPasswordTail) {
+			t.Fatalf("Statement(%q) = %q, longer than the input plus a marker tail", in, got)
+		}
+
+		var prefix string
+		switch {
+		case strings.HasSuffix(got, pgPasswordTail):
+			prefix = strings.TrimSuffix(got, pgPasswordTail)
+		case strings.HasSuffix(got, redactedTail):
+			prefix = strings.TrimSuffix(got, redactedTail)
+		default:
+			t.Fatalf("Statement(%q) = %q, which is neither the input nor marker-terminated", in, got)
+		}
+
+		if !strings.HasPrefix(in, prefix) {
+			t.Fatalf("Statement(%q) = %q, whose retained text %q is not a prefix of the input", in, got, prefix)
+		}
+
+		// The leak property. Everything from the keyword onward was dropped, so the
+		// output must be the prefix and the marker with nothing between or after.
+		if rest := got[len(prefix):]; rest != pgPasswordTail && rest != redactedTail {
+			t.Fatalf("Statement(%q) = %q, carrying %q past the retained prefix", in, got, rest)
+		}
+	})
+}
