@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"testing"
 	"time"
 
@@ -32,4 +33,18 @@ func TestSelfSignedCertPairsWithTheKeyItWasIssuedFor(t *testing.T) {
 			assert.True(t, time.Now().Before(cert.NotAfter))
 		})
 	}
+}
+
+// TestSelfSignedCertKeyPEMParsesAsAKeyPair pins the fixture's contract: the two
+// PEM blocks it returns load together as one tls.Certificate, and successive
+// calls mint distinct certificates.
+func TestSelfSignedCertKeyPEMParsesAsAKeyPair(t *testing.T) {
+	certPEM, keyPEM := testconsts.SelfSignedCertKeyPEM(t)
+
+	pair, err := tls.X509KeyPair(certPEM, keyPEM)
+	require.NoError(t, err)
+	require.Len(t, pair.Certificate, 1)
+
+	otherCertPEM, _ := testconsts.SelfSignedCertKeyPEM(t)
+	assert.NotEqual(t, certPEM, otherCertPEM)
 }

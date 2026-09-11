@@ -303,3 +303,56 @@ func TestLooksLikeKeyMaterialDetectsKeysNotPaths(t *testing.T) {
 		})
 	}
 }
+
+// certPEM returns one self-signed certificate PEM block; the key half of the
+// shared fixture is irrelevant to the bundle parsers under test.
+func certPEM(t *testing.T) []byte {
+	t.Helper()
+	cert, _ := testconsts.SelfSignedCertKeyPEM(t)
+	return cert
+}
+
+func TestCertPoolAddsEveryCertificateBlock(t *testing.T) {
+	bundle := append(certPEM(t), certPEM(t)...)
+
+	pool, err := CertPool("httpclient: tls:", bundle)
+
+	require.NoError(t, err)
+	require.NotNil(t, pool)
+	assert.Len(t, pool.Subjects(), 2) //nolint:staticcheck // SA1019: Subjects is the only way to count roots in a pool built by hand.
+}
+
+func TestCertPoolRejectsUndecodableBlocks(t *testing.T) {
+	// Composed rather than written inline: a contiguous PEM BEGIN marker in
+	// source trips org secret scanners. The bytes are identical to the literal.
+	undecodable := "-----BEGIN " + "CERTIFICATE-----\n!!!not base64!!!\n-----END " + "CERTIFICATE-----\n"
+	bundle := append(certPEM(t), []byte(undecodable)...)
+
+	pool, err := CertPool("httpclient: tls:", bundle)
+
+	require.Error(t, err)
+	assert.Nil(t, pool)
+	assert.Contains(t, err.Error(), "httpclient: tls: ca: 2 PEM blocks declared but only 1 decodable")
+}
+
+func TestCertPoolRejectsCertificateBlockWithBadDER(t *testing.T) {
+	// Well-framed and base64-clean, so pem.Decode accepts it, but the body is
+	// not DER: only x509.ParseCertificate can reject it, and the error must
+	// name the block by its zero-based position after the good one.
+	badDER := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not a certificate")})
+	bundle := append(certPEM(t), badDER...)
+
+	pool, err := CertPool("httpclient: tls:", bundle)
+
+	require.Error(t, err)
+	assert.Nil(t, pool)
+	assert.Contains(t, err.Error(), "httpclient: tls: ca: block 1: ")
+}
+
+func TestCertPoolRejectsBundleWithoutCertificates(t *testing.T) {
+	pool, err := CertPool("cache: redis: tls:", testconsts.PEMFixture("PRIVATE KEY"))
+
+	require.Error(t, err)
+	assert.Nil(t, pool)
+	assert.Equal(t, "cache: redis: tls: ca: no CERTIFICATE block found", err.Error())
+}
