@@ -2,6 +2,8 @@ package redis
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -14,6 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/cache"
+	"github.com/gaborage/go-bricks/internal/clienttls"
+	gbtesting "github.com/gaborage/go-bricks/testing"
 )
 
 const (
@@ -578,6 +582,78 @@ func TestConfigValidate(t *testing.T) {
 	})
 }
 
+// TestConfigValidateTLS tests structural TLS rules, mirroring
+// config.validateRedisTLS: a hand-built Config never passes through the
+// config layer, so the same fail-closed checks run here.
+func TestConfigValidateTLS(t *testing.T) {
+	tests := []struct {
+		name      string
+		tls       TLSConfig
+		wantField string
+	}{
+		{
+			name: "enabled_without_material_is_valid",
+			tls:  TLSConfig{Enabled: true},
+		},
+		{
+			name:      "staged_material_while_disabled",
+			tls:       TLSConfig{CAFile: "/etc/ca.pem"},
+			wantField: "redis.tls.enabled",
+		},
+		{
+			name:      "ca_file_and_value_together",
+			tls:       TLSConfig{Enabled: true, CAFile: "/etc/ca.pem", CAValue: "Zm9v"},
+			wantField: "redis.tls.cafile",
+		},
+		{
+			name:      "cert_file_and_value_together",
+			tls:       TLSConfig{Enabled: true, CertFile: "/etc/c.pem", CertValue: "Zm9v", KeyFile: "/etc/k.pem"},
+			wantField: "redis.tls.certfile",
+		},
+		{
+			name:      "key_file_and_value_together",
+			tls:       TLSConfig{Enabled: true, CertFile: "/etc/c.pem", KeyFile: "/etc/k.pem", KeyValue: "Zm9v"},
+			wantField: "redis.tls.keyfile",
+		},
+		{
+			name:      "cert_without_key",
+			tls:       TLSConfig{Enabled: true, CertFile: "/etc/c.pem"},
+			wantField: "redis.tls.keyfile",
+		},
+		{
+			name:      "key_without_cert",
+			tls:       TLSConfig{Enabled: true, KeyValue: "Zm9v"},
+			wantField: "redis.tls.certfile",
+		},
+		{
+			name:      "unsupported_minversion",
+			tls:       TLSConfig{Enabled: true, MinVersion: "1.1"},
+			wantField: "redis.tls.minversion",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Host:     "localhost",
+				Port:     6379,
+				PoolSize: 10,
+				TLS:      tt.tls,
+			}
+
+			err := cfg.Validate()
+			if tt.wantField == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			var configErr *cache.ConfigError
+			require.ErrorAs(t, err, &configErr)
+			assert.Equal(t, tt.wantField, configErr.Field)
+		})
+	}
+}
+
 // TestConfigAddress tests the Address method of the Config struct.
 func TestConfigAddress(t *testing.T) {
 	cfg := &Config{
@@ -925,4 +1001,148 @@ func TestClientCompareAndDeleteAfterCloseFailsClosed(t *testing.T) {
 	deleted, err := client.CompareAndDelete(ctx, testKey1, []byte(testWorker))
 	assert.False(t, deleted)
 	assert.ErrorIs(t, err, cache.ErrClosed)
+}
+
+// TestBuildRedisOptionsWithoutTLS pins the option fields NewClient has always
+// built, and proves a zero TLS block leaves the dialer plaintext.
+func TestBuildRedisOptionsWithoutTLS(t *testing.T) {
+	password := gbtesting.FakePassword("redis")
+	cfg := &Config{
+		Host:            "cache.example",
+		Port:            6380,
+		Password:        password,
+		Database:        3,
+		PoolSize:        7,
+		DialTimeout:     11 * time.Second,
+		ReadTimeout:     12 * time.Second,
+		WriteTimeout:    13 * time.Second,
+		MaxRetries:      4,
+		MinRetryBackoff: 9 * time.Millisecond,
+		MaxRetryBackoff: 513 * time.Millisecond,
+	}
+
+	material := cfg.TLS.material()
+	opts, err := buildRedisOptions(cfg, &material)
+
+	require.NoError(t, err)
+	require.NotNil(t, opts)
+	assert.Equal(t, "cache.example:6380", opts.Addr)
+	assert.Equal(t, password, opts.Password)
+	assert.Equal(t, 3, opts.DB)
+	assert.Equal(t, 7, opts.PoolSize)
+	assert.Equal(t, 11*time.Second, opts.DialTimeout)
+	assert.Equal(t, 12*time.Second, opts.ReadTimeout)
+	assert.Equal(t, 13*time.Second, opts.WriteTimeout)
+	assert.Equal(t, 4, opts.MaxRetries)
+	assert.Equal(t, 9*time.Millisecond, opts.MinRetryBackoff)
+	assert.Equal(t, 513*time.Millisecond, opts.MaxRetryBackoff)
+	assert.Nil(t, opts.TLSConfig)
+}
+
+// TestBuildRedisOptionsTLSEnabledWithoutMaterial proves an enabled block with no
+// material verifies against the system roots, defaulting SNI to the Redis host.
+func TestBuildRedisOptionsTLSEnabledWithoutMaterial(t *testing.T) {
+	cfg := &Config{
+		Host:     "cache.example",
+		Port:     6379,
+		Database: 0,
+		PoolSize: 10,
+		TLS:      TLSConfig{Enabled: true},
+	}
+
+	material := cfg.TLS.material()
+	opts, err := buildRedisOptions(cfg, &material)
+
+	require.NoError(t, err)
+	require.NotNil(t, opts.TLSConfig)
+	assert.Equal(t, "cache.example", opts.TLSConfig.ServerName)
+	assert.Equal(t, uint16(tls.VersionTLS12), opts.TLSConfig.MinVersion)
+	assert.Nil(t, opts.TLSConfig.RootCAs)
+	assert.False(t, opts.TLSConfig.InsecureSkipVerify)
+}
+
+// TestBuildRedisOptionsTLSServerNameOverride proves an explicit SNI name is not
+// overwritten by the Redis host.
+func TestBuildRedisOptionsTLSServerNameOverride(t *testing.T) {
+	cfg := &Config{
+		Host:     "cache.example",
+		Port:     6379,
+		PoolSize: 10,
+		TLS:      TLSConfig{Enabled: true, ServerName: "other.example"},
+	}
+
+	material := cfg.TLS.material()
+	opts, err := buildRedisOptions(cfg, &material)
+
+	require.NoError(t, err)
+	require.NotNil(t, opts.TLSConfig)
+	assert.Equal(t, "other.example", opts.TLSConfig.ServerName)
+}
+
+// TestBuildRedisOptionsUsesSuppliedMaterial pins the contract that makes one
+// projection per NewClient possible: the dial options come from the Material
+// handed in, not from a fresh projection of cfg.TLS.
+func TestBuildRedisOptionsUsesSuppliedMaterial(t *testing.T) {
+	cfg := &Config{
+		Host:     "cache.example",
+		Port:     6379,
+		PoolSize: 10,
+		TLS:      TLSConfig{Enabled: true, ServerName: "from.config.example"},
+	}
+
+	material := clienttls.Material{ServerName: "from.material.example", MinVersion: "1.3"}
+	opts, err := buildRedisOptions(cfg, &material)
+
+	require.NoError(t, err)
+	require.NotNil(t, opts.TLSConfig)
+	assert.Equal(t, "from.material.example", opts.TLSConfig.ServerName)
+	assert.Equal(t, uint16(tls.VersionTLS13), opts.TLSConfig.MinVersion)
+}
+
+// testCAValue mints a self-signed certificate and returns it base64-encoded PEM,
+// the shape cache.redis.tls.cavalue carries.
+func testCAValue(t *testing.T) string {
+	t.Helper()
+	certPEM, _ := gbtesting.SelfSignedCertKeyPEM(t)
+	return base64.StdEncoding.EncodeToString(certPEM)
+}
+
+// TestBuildRedisOptionsTLSCAValuePinsRoots proves a configured CA bundle reaches
+// the dialer's root pool instead of falling back to the system roots.
+func TestBuildRedisOptionsTLSCAValuePinsRoots(t *testing.T) {
+	cfg := &Config{
+		Host:     "cache.example",
+		Port:     6379,
+		PoolSize: 10,
+		TLS:      TLSConfig{Enabled: true, CAValue: testCAValue(t)},
+	}
+
+	material := cfg.TLS.material()
+	opts, err := buildRedisOptions(cfg, &material)
+
+	require.NoError(t, err)
+	require.NotNil(t, opts.TLSConfig)
+	assert.NotNil(t, opts.TLSConfig.RootCAs)
+}
+
+// TestBuildRedisOptionsTLSMaterialErrorIsConfigError proves a broken bundle
+// surfaces as a cache config error addressed to redis.tls, wrapping the loader's
+// own namespaced message.
+func TestBuildRedisOptionsTLSMaterialErrorIsConfigError(t *testing.T) {
+	cfg := &Config{
+		Host:     "cache.example",
+		Port:     6379,
+		PoolSize: 10,
+		TLS:      TLSConfig{Enabled: true, CAValue: "not-base64"},
+	}
+
+	material := cfg.TLS.material()
+	opts, err := buildRedisOptions(cfg, &material)
+
+	require.Error(t, err)
+	assert.Nil(t, opts)
+	var configErr *cache.ConfigError
+	require.ErrorAs(t, err, &configErr)
+	assert.Equal(t, "redis.tls", configErr.Field)
+	assert.Contains(t, err.Error(), "cache: redis: tls:")
 }

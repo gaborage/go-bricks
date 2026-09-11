@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -13,8 +14,12 @@ import (
 
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/cache/internal/tracking"
+	"github.com/gaborage/go-bricks/internal/clienttls"
 	"github.com/gaborage/go-bricks/multitenant"
 )
+
+// tlsErrPrefix names this package's error namespace for the shared TLS loader.
+const tlsErrPrefix = "cache: redis: tls:"
 
 // Lua script for atomic Compare-And-Set operation.
 // Returns 1 if successful, 0 if comparison failed.
@@ -126,13 +131,15 @@ func (c *Client) namespace(ctx context.Context) string {
 	return ""
 }
 
-// NewClient creates a new Redis cache client.
-// Validates configuration and establishes connection.
-func NewClient(cfg *Config) (*Client, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-
+// buildRedisOptions turns a validated Config into go-redis dial options. TLS is
+// off unless cfg.TLS.Enabled, in which case the material is loaded here so a
+// broken bundle fails the dial rather than the first command.
+//
+// material is the projection validation already built from cfg.TLS; it is
+// passed in rather than rebuilt so one NewClient call projects it exactly once.
+// It is taken by pointer and mutated (the SNI fallback below), so the caller
+// must own the copy it hands over.
+func buildRedisOptions(cfg *Config, material *clienttls.Material) (*redis.Options, error) {
 	opts := &redis.Options{
 		Addr:            cfg.Address(),
 		Password:        cfg.Password,
@@ -144,6 +151,36 @@ func NewClient(cfg *Config) (*Client, error) {
 		MaxRetries:      cfg.MaxRetries,
 		MinRetryBackoff: cfg.MinRetryBackoff,
 		MaxRetryBackoff: cfg.MaxRetryBackoff,
+	}
+
+	if !cfg.TLS.Enabled {
+		return opts, nil
+	}
+
+	// Falling back to the host keeps verification named when no SNI override is
+	// configured.
+	material.ServerName = cmp.Or(material.ServerName, cfg.Host)
+
+	tlsCfg, err := clienttls.Build(tlsErrPrefix, material)
+	if err != nil {
+		return nil, cache.NewConfigError("redis.tls", "invalid TLS material", err)
+	}
+
+	opts.TLSConfig = tlsCfg
+	return opts, nil
+}
+
+// NewClient creates a new Redis cache client.
+// Validates configuration and establishes connection.
+func NewClient(cfg *Config) (*Client, error) {
+	material, err := cfg.validate()
+	if err != nil {
+		return nil, err
+	}
+
+	opts, err := buildRedisOptions(cfg, &material)
+	if err != nil {
+		return nil, err
 	}
 
 	client := redis.NewClient(opts)
