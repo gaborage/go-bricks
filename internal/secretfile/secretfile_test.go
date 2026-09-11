@@ -335,6 +335,20 @@ func TestCertPoolRejectsUndecodableBlocks(t *testing.T) {
 	assert.Contains(t, err.Error(), "httpclient: tls: ca: 2 PEM blocks declared but only 1 decodable")
 }
 
+func TestCertPoolRejectsCertificateBlockWithBadDER(t *testing.T) {
+	// Well-framed and base64-clean, so pem.Decode accepts it, but the body is
+	// not DER: only x509.ParseCertificate can reject it, and the error must
+	// name the block by its zero-based position after the good one.
+	badDER := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not a certificate")})
+	bundle := append(certPEM(t), badDER...)
+
+	pool, err := CertPool("httpclient: tls:", bundle)
+
+	require.Error(t, err)
+	assert.Nil(t, pool)
+	assert.Contains(t, err.Error(), "httpclient: tls: ca: block 1: ")
+}
+
 func TestCertPoolRejectsBundleWithoutCertificates(t *testing.T) {
 	pool, err := CertPool("cache: redis: tls:", testconsts.PEMFixture("PRIVATE KEY"))
 

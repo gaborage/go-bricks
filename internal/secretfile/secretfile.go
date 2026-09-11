@@ -196,7 +196,7 @@ func CertPool(prefix string, caPEM []byte) (*x509.CertPool, error) {
 	declared := bytes.Count(caPEM, []byte(pemHeaderPrefix))
 	pool := x509.NewCertPool()
 	rest := caPEM
-	decoded, certs := 0, 0
+	decoded, sawCert := 0, false
 	for {
 		var block *pem.Block
 		block, rest = pem.Decode(rest)
@@ -214,12 +214,12 @@ func CertPool(prefix string, caPEM []byte) (*x509.CertPool, error) {
 			return nil, fmt.Errorf("%s ca: block %d: %w", prefix, decoded-1, err)
 		}
 		pool.AddCert(crt)
-		certs++
+		sawCert = true
 	}
 	if declared != decoded {
 		return nil, fmt.Errorf("%s ca: %d PEM blocks declared but only %d decodable — the bundle is corrupt and would pin fewer roots than intended", prefix, declared, decoded)
 	}
-	if certs == 0 {
+	if !sawCert {
 		return nil, fmt.Errorf("%s ca: no %s block found", prefix, pemTypeCertificate)
 	}
 	return pool, nil
