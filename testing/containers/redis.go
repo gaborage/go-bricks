@@ -122,6 +122,14 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 		return nil, fmt.Errorf("failed to start Redis container: %w", err)
 	}
 
+	return newRedisContainer(ctx, redisContainer)
+}
+
+// newRedisContainer resolves the host-side address of a started container and
+// wraps it. On any lookup failure it terminates the container it was handed —
+// the caller never receives a half-built wrapper it would have to clean up.
+// Shared by the plaintext and TLS starters, which differ only in customizers.
+func newRedisContainer(ctx context.Context, redisContainer *redis.RedisContainer) (*RedisContainer, error) {
 	host, err := redisContainer.Host(ctx)
 	if err != nil {
 		_ = redisContainer.Terminate(ctx)
@@ -134,12 +142,10 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 		return nil, fmt.Errorf("failed to get Redis port: %w", err)
 	}
 
-	port := int(mappedPort.Num())
-
 	return &RedisContainer{
 		container: redisContainer,
 		host:      host,
-		port:      port,
+		port:      int(mappedPort.Num()),
 	}, nil
 }
 
