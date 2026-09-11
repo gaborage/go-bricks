@@ -7,6 +7,15 @@ import (
 	"github.com/gaborage/go-bricks/cache"
 )
 
+// Config error fields for the TLS block, matching the config keys.
+const (
+	fieldTLSEnabled    = "redis.tls.enabled"
+	fieldTLSCAFile     = "redis.tls.cafile"
+	fieldTLSCertFile   = "redis.tls.certfile"
+	fieldTLSKeyFile    = "redis.tls.keyfile"
+	fieldTLSMinVersion = "redis.tls.minversion"
+)
+
 // Config holds Redis-specific configuration options.
 type Config struct {
 	// Host is the Redis server hostname or IP address.
@@ -52,6 +61,39 @@ type Config struct {
 
 	// MaxRetryBackoff is the maximum backoff between retries (default: 512ms).
 	MaxRetryBackoff time.Duration `config:"max_retry_backoff" default:"512ms"`
+
+	// TLS configures the client-side TLS of the connection. Zero value =
+	// plaintext.
+	TLS TLSConfig `config:"tls"`
+}
+
+// TLSConfig enables TLS on the Redis connection. Each PEM piece comes from a
+// file path (*File) or a base64-encoded PEM string (*Value) — at most one
+// source per piece. An enabled block with no material at all verifies against
+// the system roots; staged material under a disabled block is an error, not a
+// warning, because a silently plaintext cache connection is the failure mode
+// this config exists to prevent.
+type TLSConfig struct {
+	// Enabled turns TLS on. False with any other field set is refused.
+	Enabled bool `config:"enabled"`
+
+	// CAFile and CAValue name the root bundle that verifies the server.
+	CAFile  string `config:"cafile"`
+	CAValue string `config:"cavalue"`
+
+	// CertFile and CertValue name the client certificate; a cert requires a key.
+	CertFile  string `config:"certfile"`
+	CertValue string `config:"certvalue"`
+
+	// KeyFile and KeyValue name the client key; a key requires a cert.
+	KeyFile  string `config:"keyfile"`
+	KeyValue string `config:"keyvalue"`
+
+	// ServerName overrides the SNI/verification hostname; empty defaults to Host.
+	ServerName string `config:"servername"`
+
+	// MinVersion: "" or "1.2" (default floor) | "1.3".
+	MinVersion string `config:"minversion"`
 }
 
 // Validate performs fail-fast validation of Redis configuration.
@@ -94,7 +136,60 @@ func (c *Config) Validate() error {
 		return cache.NewConfigError("redis.load_timeout", "load timeout cannot be negative", nil)
 	}
 
-	return nil
+	return c.TLS.validate()
+}
+
+// validate checks the structural TLS rules without touching the filesystem:
+// material staged under a disabled block, a piece configured from two sources,
+// a half client-certificate pair, and the min-version enum. Reading and parsing
+// the PEM happens when the client dials.
+func (t *TLSConfig) validate() error {
+	if !t.Enabled {
+		if t.hasMaterial() {
+			return cache.NewConfigError(fieldTLSEnabled,
+				"must be true when any redis.tls.* material is configured", nil)
+		}
+		return nil
+	}
+
+	sources := []struct{ fileField, valueField, file, value string }{
+		{fieldTLSCAFile, "redis.tls.cavalue", t.CAFile, t.CAValue},
+		{fieldTLSCertFile, "redis.tls.certvalue", t.CertFile, t.CertValue},
+		{fieldTLSKeyFile, "redis.tls.keyvalue", t.KeyFile, t.KeyValue},
+	}
+	for _, s := range sources {
+		if s.file != "" && s.value != "" {
+			return cache.NewConfigError(s.fileField,
+				s.fileField+" and "+s.valueField+" are mutually exclusive (exactly one)", nil)
+		}
+	}
+
+	hasCert := t.CertFile != "" || t.CertValue != ""
+	hasKey := t.KeyFile != "" || t.KeyValue != ""
+	switch {
+	case hasCert && !hasKey:
+		return cache.NewConfigError(fieldTLSKeyFile,
+			"a client certificate requires "+fieldTLSKeyFile+" or redis.tls.keyvalue", nil)
+	case hasKey && !hasCert:
+		return cache.NewConfigError(fieldTLSCertFile,
+			"a client key requires "+fieldTLSCertFile+" or redis.tls.certvalue", nil)
+	}
+
+	switch t.MinVersion {
+	case "", "1.2", "1.3":
+		return nil
+	default:
+		return cache.NewConfigError(fieldTLSMinVersion,
+			fmt.Sprintf("invalid value: %q (accepted values are \"1.2\" and \"1.3\")", t.MinVersion), nil)
+	}
+}
+
+// hasMaterial reports whether any field other than Enabled is set.
+func (t *TLSConfig) hasMaterial() bool {
+	return t.CAFile != "" || t.CAValue != "" ||
+		t.CertFile != "" || t.CertValue != "" ||
+		t.KeyFile != "" || t.KeyValue != "" ||
+		t.ServerName != "" || t.MinVersion != ""
 }
 
 // Address returns the Redis server address in "host:port" format.

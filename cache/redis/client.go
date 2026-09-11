@@ -13,8 +13,12 @@ import (
 
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/cache/internal/tracking"
+	"github.com/gaborage/go-bricks/internal/clienttls"
 	"github.com/gaborage/go-bricks/multitenant"
 )
+
+// tlsErrPrefix names this package's error namespace for the shared TLS loader.
+const tlsErrPrefix = "cache: redis: tls:"
 
 // Lua script for atomic Compare-And-Set operation.
 // Returns 1 if successful, 0 if comparison failed.
@@ -126,13 +130,10 @@ func (c *Client) namespace(ctx context.Context) string {
 	return ""
 }
 
-// NewClient creates a new Redis cache client.
-// Validates configuration and establishes connection.
-func NewClient(cfg *Config) (*Client, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-
+// buildRedisOptions turns a validated Config into go-redis dial options. TLS is
+// off unless cfg.TLS.Enabled, in which case the material is loaded here so a
+// broken bundle fails the dial rather than the first command.
+func buildRedisOptions(cfg *Config) (*redis.Options, error) {
 	opts := &redis.Options{
 		Addr:            cfg.Address(),
 		Password:        cfg.Password,
@@ -144,6 +145,49 @@ func NewClient(cfg *Config) (*Client, error) {
 		MaxRetries:      cfg.MaxRetries,
 		MinRetryBackoff: cfg.MinRetryBackoff,
 		MaxRetryBackoff: cfg.MaxRetryBackoff,
+	}
+
+	if !cfg.TLS.Enabled {
+		return opts, nil
+	}
+
+	tlsCfg, err := clienttls.Build(tlsErrPrefix, &clienttls.Material{
+		CertFile:   cfg.TLS.CertFile,
+		CertValue:  cfg.TLS.CertValue,
+		KeyFile:    cfg.TLS.KeyFile,
+		KeyValue:   cfg.TLS.KeyValue,
+		CAFile:     cfg.TLS.CAFile,
+		CAValue:    cfg.TLS.CAValue,
+		ServerName: serverNameOr(cfg.TLS.ServerName, cfg.Host),
+		MinVersion: cfg.TLS.MinVersion,
+	})
+	if err != nil {
+		return nil, cache.NewConfigError("redis.tls", "invalid TLS material", err)
+	}
+
+	opts.TLSConfig = tlsCfg
+	return opts, nil
+}
+
+// serverNameOr falls back to the Redis host so verification has a name even
+// when no SNI override is configured.
+func serverNameOr(override, host string) string {
+	if override != "" {
+		return override
+	}
+	return host
+}
+
+// NewClient creates a new Redis cache client.
+// Validates configuration and establishes connection.
+func NewClient(cfg *Config) (*Client, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
+	opts, err := buildRedisOptions(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	client := redis.NewClient(opts)
