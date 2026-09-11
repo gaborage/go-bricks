@@ -232,7 +232,7 @@ func validateRedisCacheConfig(cacheCfg *config.CacheConfig, key string, log logg
 // validateRedisCacheConfig, whose whole return the door qualifies. This function returns
 // connection-dial errors only, which are deliberately not addressed to a config path.
 // redisClientConfig maps the resolved cache config onto the Redis client's own
-// config. It is pure: no filesystem, no dial.
+// config.
 func redisClientConfig(cacheCfg *config.CacheConfig) *redis.Config {
 	return &redis.Config{
 		Host:            cacheCfg.Redis.Host,
@@ -247,17 +247,10 @@ func redisClientConfig(cacheCfg *config.CacheConfig) *redis.Config {
 		MinRetryBackoff: cacheCfg.Redis.MinRetryBackoff,
 		MaxRetryBackoff: cacheCfg.Redis.MaxRetryBackoff,
 		LoadTimeout:     cacheCfg.LoadTimeout,
-		TLS: redis.TLSConfig{
-			Enabled:    cacheCfg.Redis.TLS.Enabled,
-			CAFile:     cacheCfg.Redis.TLS.CAFile,
-			CAValue:    cacheCfg.Redis.TLS.CAValue,
-			CertFile:   cacheCfg.Redis.TLS.CertFile,
-			CertValue:  cacheCfg.Redis.TLS.CertValue,
-			KeyFile:    cacheCfg.Redis.TLS.KeyFile,
-			KeyValue:   cacheCfg.Redis.TLS.KeyValue,
-			ServerName: cacheCfg.Redis.TLS.ServerName,
-			MinVersion: cacheCfg.Redis.TLS.MinVersion,
-		},
+		// A struct conversion, not a field-by-field copy: the two blocks carry the
+		// same fields in the same order, so adding one to either side without the
+		// other is a compile error rather than a silently dropped setting.
+		TLS: redis.TLSConfig(cacheCfg.Redis.TLS),
 	}
 }
 

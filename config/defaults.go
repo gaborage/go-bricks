@@ -205,15 +205,6 @@ const (
 	tlsVersion12             = "1.2"
 	tlsVersion13             = "1.3"
 
-	fieldCacheRedisTLSEnabled    = "cache.redis.tls.enabled"
-	fieldCacheRedisTLSCAFile     = "cache.redis.tls.cafile"
-	fieldCacheRedisTLSCAValue    = "cache.redis.tls.cavalue"
-	fieldCacheRedisTLSCertFile   = "cache.redis.tls.certfile"
-	fieldCacheRedisTLSCertValue  = "cache.redis.tls.certvalue"
-	fieldCacheRedisTLSKeyFile    = "cache.redis.tls.keyfile"
-	fieldCacheRedisTLSKeyValue   = "cache.redis.tls.keyvalue"
-	fieldCacheRedisTLSMinVersion = "cache.redis.tls.minversion"
-
 	fieldServerForwardedClientCertRequire = "server.forwardedclientcert.require"
 
 	fieldServerTrustedProxies = "server.trustedproxies"

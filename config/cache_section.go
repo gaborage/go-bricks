@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"slices"
+
+	"github.com/gaborage/go-bricks/internal/clienttls"
 )
 
 // normalizeCache fills Redis defaults unconditionally, even when the cache is
@@ -107,74 +109,31 @@ func validateRedisCache(cfg *RedisConfig) error {
 	return validateRedisTLS(&cfg.TLS)
 }
 
+// fieldCacheRedisTLSPrefix namespaces a clienttls.Violation's relative key
+// (e.g. "cafile") into this layer's config key. The tenant spelling
+// (multitenant.tenants.<id>.cache.redis.tls.*) is derived from it downstream,
+// so the "cache." head must stay.
+const fieldCacheRedisTLSPrefix = "cache.redis.tls."
+
 // validateRedisTLS checks structural TLS material configuration (staged
 // material under a disabled block, mutual exclusivity of file/value sources,
-// cert/key pairing, min-version enum). It does NOT touch the filesystem —
-// reading and parsing PEM material happens when the client dials.
+// cert/key pairing, min-version enum). The rules live in clienttls, beside the
+// loader that consumes the same material; this only maps a violation onto the
+// cache.redis.tls.* keys. It does NOT touch the filesystem — reading and
+// parsing PEM material happens when the client dials.
 func validateRedisTLS(cfg *RedisTLSConfig) error {
-	if !cfg.Enabled {
-		if redisTLSHasMaterial(cfg) {
-			return NewValidationError(fieldCacheRedisTLSEnabled,
-				"must be true when any cache.redis.tls.* material is configured")
-		}
-		return nil
+	m := clienttls.Material{
+		CertFile:   cfg.CertFile,
+		CertValue:  cfg.CertValue,
+		KeyFile:    cfg.KeyFile,
+		KeyValue:   cfg.KeyValue,
+		CAFile:     cfg.CAFile,
+		CAValue:    cfg.CAValue,
+		ServerName: cfg.ServerName,
+		MinVersion: cfg.MinVersion,
 	}
-
-	if err := validateRedisTLSSources(fieldCacheRedisTLSCAFile, fieldCacheRedisTLSCAValue, cfg.CAFile, cfg.CAValue); err != nil {
-		return err
-	}
-
-	if err := validateRedisTLSSources(fieldCacheRedisTLSCertFile, fieldCacheRedisTLSCertValue, cfg.CertFile, cfg.CertValue); err != nil {
-		return err
-	}
-
-	if err := validateRedisTLSSources(fieldCacheRedisTLSKeyFile, fieldCacheRedisTLSKeyValue, cfg.KeyFile, cfg.KeyValue); err != nil {
-		return err
-	}
-
-	if err := validateRedisTLSPair(cfg); err != nil {
-		return err
-	}
-
-	switch cfg.MinVersion {
-	case "", tlsVersion12, tlsVersion13:
-		return nil
-	default:
-		return NewInvalidFieldError(fieldCacheRedisTLSMinVersion, fmt.Sprintf(errInvalidField, cfg.MinVersion), []string{tlsVersion12, tlsVersion13})
-	}
-}
-
-// validateRedisTLSPair rejects a half-configured client certificate: a cert
-// without its key, or a key without its cert.
-func validateRedisTLSPair(cfg *RedisTLSConfig) error {
-	hasCert := cfg.CertFile != "" || cfg.CertValue != ""
-	hasKey := cfg.KeyFile != "" || cfg.KeyValue != ""
-
-	switch {
-	case hasCert && !hasKey:
-		return NewValidationError(fieldCacheRedisTLSKeyFile,
-			"a client certificate requires "+fieldCacheRedisTLSKeyFile+" or "+fieldCacheRedisTLSKeyValue)
-	case hasKey && !hasCert:
-		return NewValidationError(fieldCacheRedisTLSCertFile,
-			"a client key requires "+fieldCacheRedisTLSCertFile+" or "+fieldCacheRedisTLSCertValue)
-	default:
-		return nil
-	}
-}
-
-// validateRedisTLSSources enforces at most one of a file/value pair for a
-// single PEM piece; neither set is legal — the piece is simply absent.
-func validateRedisTLSSources(fileField, valueField, file, value string) error {
-	if file != "" && value != "" {
-		return NewValidationError(fileField, fileField+" and "+valueField+" are mutually exclusive (exactly one)")
+	if v := clienttls.ValidateMaterial(&m, cfg.Enabled); v != nil {
+		return NewValidationError(fieldCacheRedisTLSPrefix+v.Field, v.Message)
 	}
 	return nil
-}
-
-// redisTLSHasMaterial reports whether any field other than Enabled is set.
-func redisTLSHasMaterial(cfg *RedisTLSConfig) bool {
-	return cfg.CAFile != "" || cfg.CAValue != "" ||
-		cfg.CertFile != "" || cfg.CertValue != "" ||
-		cfg.KeyFile != "" || cfg.KeyValue != "" ||
-		cfg.ServerName != "" || cfg.MinVersion != ""
 }
