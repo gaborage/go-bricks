@@ -3,8 +3,10 @@
 package containers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,12 +19,39 @@ import (
 // addresses.
 const redisPort = "6379/tcp"
 
+// Container-side paths the TLS material is copied to. They match the layout the
+// upstream redis module uses, so a reader comparing the two sees one scheme.
+const (
+	redisTLSCAPath   = "/tls/ca.crt"
+	redisTLSCertPath = "/tls/server.crt"
+	redisTLSKeyPath  = "/tls/server.key"
+)
+
+// redisTLSFileMode makes the copied PEM world-readable: redis-server drops to
+// an unprivileged user before opening them, so 0o600 owned by root would make
+// the server fail to start rather than fail to verify.
+const redisTLSFileMode = 0o644
+
+// RedisTLSMaterial is the PEM material a TLS-only Redis container serves: the
+// certificate and key it presents, and the CA it is signed by (which is also
+// what a client must trust).
+type RedisTLSMaterial struct {
+	CA   []byte
+	Cert []byte
+	Key  []byte
+}
+
 // RedisContainerConfig holds configuration for Redis test container
 type RedisContainerConfig struct {
 	// ImageTag specifies the Redis version (default: the pin in DefaultRedisConfig)
 	ImageTag string
 	// StartupTimeout for container initialization (default: 60 seconds)
 	StartupTimeout time.Duration
+	// TLS, when non-nil, makes the server TLS-only: the plaintext listener is
+	// disabled and TLS is bound to 6379 instead, so Host() and Port() address
+	// the TLS listener exactly as they address the plaintext one — a caller only
+	// has to turn TLS on client-side. Nil (the default) serves plaintext.
+	TLS *RedisTLSMaterial
 }
 
 // DefaultRedisConfig returns a RedisContainerConfig populated with sensible defaults.
@@ -97,13 +126,53 @@ func StartRedisContainerForTestMain(ctx context.Context, cfg *RedisContainerConf
 // Composite wait strategy: log message (fast early signal) + port listening (network
 // verification) prevents a race where the log appears but Redis is not ready to accept
 // connections.
+//
+// With cfg.TLS set, the PEM material is copied in and bound by command flags.
+// WithCmdArgs (not WithCmd) is what the upstream module uses for its own TLS
+// mode: the image's entrypoint prepends `redis-server` to any argument list
+// starting with a dash, so passing bare flags replaces the default command
+// without naming the binary twice. `--port 0` disables the plaintext listener
+// while TLS binds the same 6379, so the listening-port wait still holds.
+// Client certificates are not required (`--tls-auth-clients no`): the fixture
+// exercises server verification, and demanding a client cert would make every
+// negative test fail for the wrong reason.
 func redisOptions(cfg *RedisContainerConfig) []testcontainers.ContainerCustomizer {
-	return []testcontainers.ContainerCustomizer{
-		waitOptionWithin(cfg.StartupTimeout,
-			wait.ForLog("Ready to accept connections"),
-			wait.ForListeningPort(redisPort),
-		),
+	opts := make([]testcontainers.ContainerCustomizer, 0, 3)
+	opts = append(opts, waitOptionWithin(cfg.StartupTimeout,
+		wait.ForLog("Ready to accept connections"),
+		wait.ForListeningPort(redisPort),
+	))
+	if cfg.TLS == nil {
+		return opts
 	}
+
+	files := make([]testcontainers.ContainerFile, 0, 3)
+	for _, f := range []struct {
+		path string
+		pem  []byte
+	}{
+		{redisTLSCAPath, cfg.TLS.CA},
+		{redisTLSCertPath, cfg.TLS.Cert},
+		{redisTLSKeyPath, cfg.TLS.Key},
+	} {
+		files = append(files, testcontainers.ContainerFile{
+			Reader:            bytes.NewReader(f.pem),
+			ContainerFilePath: f.path,
+			FileMode:          redisTLSFileMode,
+		})
+	}
+
+	return append(opts,
+		testcontainers.WithFiles(files...),
+		testcontainers.WithCmdArgs(
+			"--tls-port", strings.TrimSuffix(redisPort, "/tcp"),
+			"--port", "0",
+			"--tls-cert-file", redisTLSCertPath,
+			"--tls-key-file", redisTLSKeyPath,
+			"--tls-ca-cert-file", redisTLSCAPath,
+			"--tls-auth-clients", "no",
+		),
+	)
 }
 
 // startRedisContainerInternal does the actual testcontainer setup without
@@ -114,11 +183,17 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 		cfg = DefaultRedisConfig()
 	}
 
+	// redis.Run can hand back a started container together with an error (a
+	// wait-strategy timeout, say), so terminate it before returning — the same
+	// contract newRedisContainer honors for its own later failures.
 	redisContainer, err := redis.Run(ctx,
 		fmt.Sprintf("redis:%s", cfg.ImageTag),
 		redisOptions(cfg)...,
 	)
 	if err != nil {
+		if redisContainer != nil {
+			_ = redisContainer.Terminate(ctx)
+		}
 		return nil, fmt.Errorf("failed to start Redis container: %w", err)
 	}
 
@@ -128,7 +203,6 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 // newRedisContainer resolves the host-side address of a started container and
 // wraps it. On any lookup failure it terminates the container it was handed —
 // the caller never receives a half-built wrapper it would have to clean up.
-// Shared by the plaintext and TLS starters, which differ only in customizers.
 func newRedisContainer(ctx context.Context, redisContainer *redis.RedisContainer) (*RedisContainer, error) {
 	host, err := redisContainer.Host(ctx)
 	if err != nil {

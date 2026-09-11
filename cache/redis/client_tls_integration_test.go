@@ -3,9 +3,9 @@
 package redis
 
 import (
-	"context"
 	"crypto/x509"
 	"encoding/base64"
+	"os"
 	"slices"
 	"testing"
 	"time"
@@ -15,36 +15,35 @@ import (
 
 	"github.com/gaborage/go-bricks/cache"
 	gbtesting "github.com/gaborage/go-bricks/testing"
-	"github.com/gaborage/go-bricks/testing/containers"
 )
 
-// tlsCertHosts are the SANs the fixture mints for the server certificate. The
-// container's Host() is only known after start, so the certificate has to cover
-// the addresses Docker can hand back in advance; setupTLSRedis asserts the one
-// it actually got is among them rather than letting a handshake fail obscurely.
-var tlsCertHosts = []string{"localhost", "127.0.0.1", "::1"}
-
-// setupTLSRedis boots a TLS-only Redis container private to the calling test
-// (the package's shared pkgRedis is plaintext) and returns its address plus the
-// CA the client must trust, base64-encoded the way TLSConfig.CAValue wants it.
+// setupTLSRedis leases the package's shared TLS-only Redis container (the
+// plaintext pkgRedis cannot exercise a handshake) and returns its address plus
+// the CA the client must trust, base64-encoded the way TLSConfig.CAValue wants
+// it.
+//
+// The container's Host() is only known after start, so the certificate covers
+// the addresses Docker can hand back in advance (gbtesting.DefaultCertHosts);
+// a host outside that set is skipped rather than left to fail as an obscure
+// handshake error.
 func setupTLSRedis(t *testing.T) (host string, port int, caValue string) {
 	t.Helper()
 
-	caPEM, certPEM, keyPEM := gbtesting.CAAndServerCertPEM(t, tlsCertHosts...)
+	c := pkgRedisTLS.Get(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-
-	container, err := containers.StartRedisTLSContainer(ctx, t, nil, caPEM, certPEM, keyPEM)
-	require.NoError(t, err, "failed to start TLS Redis container")
-	container.WithCleanup(t)
-
-	if !slices.Contains(tlsCertHosts, container.Host()) {
+	hosts := gbtesting.DefaultCertHosts()
+	if !slices.Contains(hosts, c.Host()) {
+		// Locally this is an environment quirk worth skipping over; in CI it
+		// would silently delete the TLS proof, so make it fatal there.
+		if os.Getenv("CI") != "" {
+			t.Fatalf("container host %q is outside the fixture SANs %v; extend gbtesting.DefaultCertHosts",
+				c.Host(), hosts)
+		}
 		t.Skipf("Docker host %q is not covered by the fixture SANs %v; TLS verification cannot be exercised here",
-			container.Host(), tlsCertHosts)
+			c.Host(), hosts)
 	}
 
-	return container.Host(), container.Port(), base64.StdEncoding.EncodeToString(caPEM)
+	return c.Host(), c.Port(), base64.StdEncoding.EncodeToString(c.caPEM)
 }
 
 // TestNewClientTLSWithCAConnects is the handshake tracer bullet: a real TLS
@@ -71,60 +70,60 @@ func TestNewClientTLSWithCAConnects(t *testing.T) {
 	assert.Equal(t, value, got)
 }
 
-// TestNewClientPlaintextAgainstTLSOnlyFails pins the negative half: the server
-// speaks only TLS, so a plaintext client must fail rather than silently
-// downgrade.
-func TestNewClientPlaintextAgainstTLSOnlyFails(t *testing.T) {
-	host, port, _ := setupTLSRedis(t)
-
-	client, err := NewClient(&Config{Host: host, Port: port, PoolSize: 10})
-	if client != nil {
-		defer client.Close()
-	}
-	require.Error(t, err, "a plaintext client must not connect to a TLS-only server")
-
-	var connErr *cache.ConnectionError
-	assert.ErrorAs(t, err, &connErr, "the PING failure should surface as a cache.ConnectionError")
-}
-
-// TestNewClientTLSWithoutCAFailsVerification proves the client actually
-// verifies the server chain: with TLS on but no CA it falls back to the system
-// roots, which do not contain the fixture's throwaway CA.
-func TestNewClientTLSWithoutCAFailsVerification(t *testing.T) {
-	host, port, _ := setupTLSRedis(t)
-
-	client, err := NewClient(&Config{
-		Host:     host,
-		Port:     port,
-		PoolSize: 10,
-		TLS:      TLSConfig{Enabled: true},
-	})
-	if client != nil {
-		defer client.Close()
-	}
-	require.Error(t, err, "an untrusted server certificate must not be accepted")
-
-	var unknownAuthority x509.UnknownAuthorityError
-	assert.ErrorAs(t, err, &unknownAuthority, "the chain should fail with an unknown-authority error: %v", err)
-}
-
-// TestNewClientTLSWrongServerNameFailsVerification pins the hostname half of
-// verification: the CA is trusted, but the SNI override names a host the
-// certificate does not cover.
-func TestNewClientTLSWrongServerNameFailsVerification(t *testing.T) {
+// TestNewClientTLSVerificationFailures pins the negative half of the handshake:
+// every way a client can fail to reach the TLS-only server, each failing for a
+// distinct x509-level reason rather than a generic dial error.
+func TestNewClientTLSVerificationFailures(t *testing.T) {
 	host, port, caValue := setupTLSRedis(t)
 
-	client, err := NewClient(&Config{
-		Host:     host,
-		Port:     port,
-		PoolSize: 10,
-		TLS:      TLSConfig{Enabled: true, CAValue: caValue, ServerName: "wrong.example"},
-	})
-	if client != nil {
-		defer client.Close()
+	tests := []struct {
+		name      string
+		tls       TLSConfig
+		assertErr func(t *testing.T, err error)
+	}{
+		{
+			// The server speaks only TLS, so a plaintext client must fail
+			// rather than silently downgrade.
+			name: "plaintext_against_tls_only",
+			tls:  TLSConfig{},
+			assertErr: func(t *testing.T, err error) {
+				var connErr *cache.ConnectionError
+				assert.ErrorAs(t, err, &connErr, "the PING failure should surface as a cache.ConnectionError")
+			},
+		},
+		{
+			// TLS on but no CA falls back to the system roots, which do not
+			// contain the fixture's throwaway CA.
+			name: "tls_without_ca",
+			tls:  TLSConfig{Enabled: true},
+			assertErr: func(t *testing.T, err error) {
+				var unknownAuthority x509.UnknownAuthorityError
+				assert.ErrorAs(t, err, &unknownAuthority, "the chain should fail with an unknown-authority error: %v", err)
+			},
+		},
+		{
+			// The CA is trusted, but the SNI override names a host the
+			// certificate does not cover.
+			name: "tls_wrong_server_name",
+			tls:  TLSConfig{Enabled: true, CAValue: caValue, ServerName: "wrong.example"},
+			assertErr: func(t *testing.T, err error) {
+				var hostnameErr x509.HostnameError
+				assert.ErrorAs(t, err, &hostnameErr, "expected a hostname mismatch, got: %v", err)
+			},
+		},
 	}
-	require.Error(t, err, "a certificate that does not cover the server name must be rejected")
 
-	var hostnameErr x509.HostnameError
-	assert.ErrorAs(t, err, &hostnameErr, "expected a hostname mismatch, got: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, err := NewClient(&Config{
+				Host:     host,
+				Port:     port,
+				PoolSize: 10,
+				TLS:      tt.tls,
+			})
+			require.Error(t, err, "the client must not connect")
+			assert.Nil(t, client, "NewClient returns no client alongside an error")
+			tt.assertErr(t, err)
+		})
+	}
 }

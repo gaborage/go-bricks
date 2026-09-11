@@ -65,7 +65,7 @@ func TestCAAndServerCertPEMLeafVerifiesAgainstItsCA(t *testing.T) {
 	leaf, err := x509.ParseCertificate(block.Bytes)
 	require.NoError(t, err)
 
-	for _, host := range []string{"localhost", "127.0.0.1", "::1"} {
+	for _, host := range testconsts.DefaultCertHosts() {
 		t.Run(host, func(t *testing.T) {
 			_, verifyErr := leaf.Verify(x509.VerifyOptions{
 				Roots:     pool,
@@ -75,6 +75,33 @@ func TestCAAndServerCertPEMLeafVerifiesAgainstItsCA(t *testing.T) {
 			require.NoError(t, verifyErr)
 		})
 	}
+
+	pair, err := tls.X509KeyPair(certPEM, keyPEM)
+	require.NoError(t, err)
+	assert.Len(t, pair.Certificate, 1)
+}
+
+// TestNewCAAndServerCertPEMMintsWithoutATestingTB pins the error door the
+// TestMain-style starters use: no testing.TB, no error, and material that
+// verifies for the default hosts just like the t-bound wrapper's.
+func TestNewCAAndServerCertPEMMintsWithoutATestingTB(t *testing.T) {
+	caPEM, certPEM, keyPEM, err := testconsts.NewCAAndServerCertPEM()
+	require.NoError(t, err)
+
+	pool := x509.NewCertPool()
+	require.True(t, pool.AppendCertsFromPEM(caPEM))
+
+	block, _ := pem.Decode(certPEM)
+	require.NotNil(t, block)
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	require.NoError(t, err)
+
+	_, err = leaf.Verify(x509.VerifyOptions{
+		Roots:     pool,
+		DNSName:   "localhost",
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	})
+	require.NoError(t, err)
 
 	pair, err := tls.X509KeyPair(certPEM, keyPEM)
 	require.NoError(t, err)
