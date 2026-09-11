@@ -19,6 +19,10 @@ import (
 // addresses.
 const redisPort = "6379/tcp"
 
+// redisTerminateTimeout bounds the teardown of a container whose startup
+// failed, independent of the caller's (likely expired) startup deadline.
+const redisTerminateTimeout = 30 * time.Second
+
 // Container-side paths the TLS material is copied to. They match the layout the
 // upstream redis module uses, so a reader comparing the two sees one scheme.
 const (
@@ -192,12 +196,23 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 	)
 	if err != nil {
 		if redisContainer != nil {
-			_ = redisContainer.Terminate(ctx)
+			terminateOnFailure(ctx, redisContainer)
 		}
 		return nil, fmt.Errorf("failed to start Redis container: %w", err)
 	}
 
 	return newRedisContainer(ctx, redisContainer)
+}
+
+// terminateOnFailure tears down a container whose startup failed. The
+// caller's ctx is usually the reason it failed (a startup deadline), so the
+// teardown runs on a context that keeps its values but not its cancellation,
+// bounded on its own. The result is ignored: the startup error is the one to
+// report.
+func terminateOnFailure(ctx context.Context, c *redis.RedisContainer) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), redisTerminateTimeout)
+	defer cancel()
+	_ = c.Terminate(cleanupCtx)
 }
 
 // newRedisContainer resolves the host-side address of a started container and
@@ -206,13 +221,13 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 func newRedisContainer(ctx context.Context, redisContainer *redis.RedisContainer) (*RedisContainer, error) {
 	host, err := redisContainer.Host(ctx)
 	if err != nil {
-		_ = redisContainer.Terminate(ctx)
+		terminateOnFailure(ctx, redisContainer)
 		return nil, fmt.Errorf("failed to get Redis host: %w", err)
 	}
 
 	mappedPort, err := redisContainer.MappedPort(ctx, redisPort)
 	if err != nil {
-		_ = redisContainer.Terminate(ctx)
+		terminateOnFailure(ctx, redisContainer)
 		return nil, fmt.Errorf("failed to get Redis port: %w", err)
 	}
 
