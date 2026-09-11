@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,7 +9,32 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	gbtesting "github.com/gaborage/go-bricks/testing"
 )
+
+// writeTestCAFile mints a self-signed certificate and writes it as a PEM file,
+// the shape cache.redis.tls.cafile carries.
+func writeTestCAFile(t *testing.T) string {
+	t.Helper()
+	certPEM, _ := gbtesting.SelfSignedCertKeyPEM(t)
+	path := filepath.Join(t.TempDir(), "ca.pem")
+	require.NoError(t, os.WriteFile(path, certPEM, 0o600))
+	return path
+}
+
+// writeTestClientPair mints a certificate/key pair and writes both as PEM files,
+// the shape cache.redis.tls.certfile/keyfile carry.
+func writeTestClientPair(t *testing.T) (certPath, keyPath string) {
+	t.Helper()
+	certPEM, keyPEM := gbtesting.SelfSignedCertKeyPEM(t)
+	dir := t.TempDir()
+	certPath = filepath.Join(dir, "client.pem")
+	keyPath = filepath.Join(dir, "client.key")
+	require.NoError(t, os.WriteFile(certPath, certPEM, 0o600))
+	require.NoError(t, os.WriteFile(keyPath, keyPEM, 0o600))
+	return certPath, keyPath
+}
 
 func TestValidateCacheDisabled(t *testing.T) {
 	cfg := CacheConfig{Enabled: false}
@@ -257,6 +283,11 @@ func TestValidateRedisCacheFailures(t *testing.T) {
 }
 
 func TestValidateRedisCacheEdgeCases(t *testing.T) {
+	// Validation now loads the material, so the full-material case needs a real
+	// bundle and a real pair rather than placeholder paths.
+	caPEM, _ := gbtesting.SelfSignedCertKeyPEM(t)
+	clientCert, clientKey := writeTestClientPair(t)
+
 	tests := []struct {
 		name  string
 		redis RedisConfig
@@ -342,9 +373,9 @@ func TestValidateRedisCacheEdgeCases(t *testing.T) {
 				PoolSize: 10,
 				TLS: RedisTLSConfig{
 					Enabled:    true,
-					CAValue:    "cGVt",
-					CertFile:   "/etc/ssl/client.pem",
-					KeyFile:    "/etc/ssl/client.key",
+					CAValue:    base64.StdEncoding.EncodeToString(caPEM),
+					CertFile:   clientCert,
+					KeyFile:    clientKey,
 					ServerName: "redis.internal",
 					MinVersion: "1.3",
 				},
@@ -418,13 +449,16 @@ func TestLoadRedisTLSFromYAML(t *testing.T) {
 	defer clearEnvironmentVariables()
 
 	dir := t.TempDir()
+	// The cafile must resolve: validation loads the material, so a placeholder
+	// path would fail the Load this test is about.
+	caFile := writeTestCAFile(t)
 	yamlBody := "cache:\n" +
 		"  enabled: true\n" +
 		"  redis:\n" +
 		"    host: localhost\n" +
 		"    tls:\n" +
 		"      enabled: true\n" +
-		"      cafile: /etc/ssl/ca.pem\n" +
+		"      cafile: " + caFile + "\n" +
 		"      servername: redis.internal\n" +
 		"      minversion: \"1.3\"\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, testConfigFileYAML), []byte(yamlBody), 0o600))
@@ -433,7 +467,50 @@ func TestLoadRedisTLSFromYAML(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	assert.True(t, cfg.Cache.Redis.TLS.Enabled)
-	assert.Equal(t, "/etc/ssl/ca.pem", cfg.Cache.Redis.TLS.CAFile)
+	assert.Equal(t, caFile, cfg.Cache.Redis.TLS.CAFile)
 	assert.Equal(t, "redis.internal", cfg.Cache.Redis.TLS.ServerName)
 	assert.Equal(t, "1.3", cfg.Cache.Redis.TLS.MinVersion)
+}
+
+// TestValidateRedisTLSLoadsMaterial pins that the structural pass is not the
+// whole check: an enabled block naming a file that is not there fails config
+// validation, addressed to cache.redis.tls, rather than booting green and
+// failing on a tenant's first request.
+func TestValidateRedisTLSLoadsMaterial(t *testing.T) {
+	cfg := CacheConfig{
+		Enabled: true,
+		Type:    CacheTypeRedis,
+		Redis: RedisConfig{
+			Host:     "localhost",
+			Port:     6379,
+			PoolSize: 10,
+			TLS:      RedisTLSConfig{Enabled: true, CAFile: filepath.Join(t.TempDir(), "absent-ca.pem")},
+		},
+	}
+
+	err := checkCache(&cfg)
+
+	require.Error(t, err)
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "cache.redis.tls", cfgErr.Field)
+	assert.Contains(t, err.Error(), "absent-ca.pem")
+}
+
+// TestValidateRedisTLSAcceptsLoadableMaterial is the other half: a cafile that
+// really is a PEM bundle passes, so the load is a check and not a blanket
+// rejection of file-sourced material.
+func TestValidateRedisTLSAcceptsLoadableMaterial(t *testing.T) {
+	cfg := CacheConfig{
+		Enabled: true,
+		Type:    CacheTypeRedis,
+		Redis: RedisConfig{
+			Host:     "localhost",
+			Port:     6379,
+			PoolSize: 10,
+			TLS:      RedisTLSConfig{Enabled: true, CAFile: writeTestCAFile(t), MinVersion: "1.3"},
+		},
+	}
+
+	assert.NoError(t, checkCache(&cfg))
 }

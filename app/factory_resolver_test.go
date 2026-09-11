@@ -2,6 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +14,7 @@ import (
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/cache/redis"
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/clienttls"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -538,6 +542,104 @@ func (m *mockTenantStoreInvalidPort) IsDynamic() bool {
 	return false
 }
 
+// mockTenantStoreBadTLSMaterial passes every app-level check and the Redis
+// structural check, and fails only where the TLS material is loaded: cavalue
+// is not base64.
+type mockTenantStoreBadTLSMaterial struct{}
+
+func (m *mockTenantStoreBadTLSMaterial) CacheConfig(_ context.Context, _ string) (*config.CacheConfig, error) {
+	return &config.CacheConfig{
+		Enabled: true,
+		Type:    "redis",
+		Redis: config.RedisConfig{
+			Host:     "localhost",
+			Port:     6379,
+			Database: 0,
+			PoolSize: 10,
+			TLS:      config.RedisTLSConfig{Enabled: true, CAValue: "not-base64"},
+		},
+	}, nil
+}
+
+func (m *mockTenantStoreBadTLSMaterial) DBConfig(_ context.Context, _ string) (*config.DatabaseConfig, error) {
+	return nil, nil
+}
+
+func (m *mockTenantStoreBadTLSMaterial) BrokerURL(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+
+func (m *mockTenantStoreBadTLSMaterial) IsDynamic() bool {
+	return false
+}
+
+// TestCacheConnectorAddressesTLSMaterialErrorToTheKey pins that a config-class
+// error raised inside redis.NewClient — the TLS material load, which is root-
+// spelled "redis.tls" by the cache package — reaches the caller addressed to
+// the tenant whose config produced it, not as an anonymous root-spelled error.
+func TestCacheConnectorAddressesTLSMaterialErrorToTheKey(t *testing.T) {
+	resolver := NewFactoryResolver(nil)
+	connector := resolver.CacheConnector(&mockTenantStoreBadTLSMaterial{}, logger.New("debug", true))
+
+	c, err := connector(context.Background(), testCacheKey)
+
+	assert.Nil(t, c)
+	var configErr *config.ConfigError
+	require.ErrorAs(t, err, &configErr)
+	assert.True(t,
+		strings.HasPrefix(configErr.Field, "multitenant.tenants."+testCacheKey+".cache.redis.tls"),
+		"field %q must name the tenant's TLS subtree", configErr.Field)
+	assert.Contains(t, err.Error(), "cache: redis: tls:")
+}
+
+// TestCacheConnectorLeavesDialErrorsUnqualified pins the other half of the same
+// contract: a dial failure is not a config-shape error, so it keeps the cache
+// package's own spelling instead of being addressed to a config key.
+func TestCacheConnectorLeavesDialErrorsUnqualified(t *testing.T) {
+	resolver := NewFactoryResolver(nil)
+	connector := resolver.CacheConnector(&mockTenantStoreUnreachable{}, logger.New("debug", true))
+
+	c, err := connector(context.Background(), testCacheKey)
+
+	assert.Nil(t, c)
+	require.Error(t, err)
+	var connErr *cache.ConnectionError
+	require.ErrorAs(t, err, &connErr)
+	var configErr *config.ConfigError
+	assert.False(t, errors.As(err, &configErr), "a dial failure must not be addressed to a config key")
+}
+
+// mockTenantStoreUnreachable points at a port nothing listens on, so the client
+// fails at PING rather than at any config check.
+type mockTenantStoreUnreachable struct{}
+
+func (m *mockTenantStoreUnreachable) CacheConfig(_ context.Context, _ string) (*config.CacheConfig, error) {
+	return &config.CacheConfig{
+		Enabled: true,
+		Type:    "redis",
+		Redis: config.RedisConfig{
+			Host:        "127.0.0.1",
+			Port:        1,
+			Database:    0,
+			PoolSize:    10,
+			DialTimeout: 100 * time.Millisecond,
+			MaxRetries:  -1,
+		},
+	}, nil
+}
+
+func (m *mockTenantStoreUnreachable) DBConfig(_ context.Context, _ string) (*config.DatabaseConfig, error) {
+	return nil, nil
+}
+
+func (m *mockTenantStoreUnreachable) BrokerURL(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+
+func (m *mockTenantStoreUnreachable) IsDynamic() bool {
+	return false
+}
+
 // TestFactoryResolverDottedTenantIDSuppressesEnvHint drives the reachable producer of the
 // flattening trap end to end: TenantStore.AddTenant takes a FREE-FORM tenant id — the resolver
 // grammar constrains the static config, not the dynamic store — so "acme.corp" reaches the
@@ -567,39 +669,52 @@ func TestFactoryResolverDottedTenantIDSuppressesEnvHint(t *testing.T) {
 	assert.NotContains(t, err.Error(), "MULTITENANT_TENANTS_ACME_CORP")
 }
 
-// TestRedisClientConfigCarriesTLS proves every cache.redis.tls.* field reaches
-// the redis client config; distinct literals make a swapped or dropped field
-// fail rather than pass by coincidence.
-func TestRedisClientConfigCarriesTLS(t *testing.T) {
+// TestRedisTLSConfigFieldParity proves the three TLS structs stay in lockstep by
+// shape rather than by a list of literals a later field can quietly escape:
+// every clienttls.Material field exists, by name AND type, in both config-layer
+// blocks, and the two config blocks carry identical field sets. That is what
+// makes the struct conversion in redisClientConfig safe, and it fails when
+// someone adds a field to one side only.
+func TestRedisTLSConfigFieldParity(t *testing.T) {
+	fieldsOf := func(typ reflect.Type) map[string]reflect.Type {
+		out := make(map[string]reflect.Type, typ.NumField())
+		for i := range typ.NumField() {
+			f := typ.Field(i)
+			out[f.Name] = f.Type
+		}
+		return out
+	}
+
+	material := fieldsOf(reflect.TypeOf(clienttls.Material{}))
+	appSide := fieldsOf(reflect.TypeOf(config.RedisTLSConfig{}))
+	clientSide := fieldsOf(reflect.TypeOf(redis.TLSConfig{}))
+
+	require.NotEmpty(t, material)
+	for name, typ := range material {
+		assert.Equal(t, typ, appSide[name], "config.RedisTLSConfig is missing loader field %s", name)
+		assert.Equal(t, typ, clientSide[name], "redis.TLSConfig is missing loader field %s", name)
+	}
+	assert.Equal(t, appSide, clientSide, "the two config blocks must carry identical field sets")
+}
+
+// TestRedisClientConfigCarriesTLSBlock keeps one round-trip assertion beside the
+// parity check above: the struct conversion actually moves a non-zero block, so
+// a parity-clean pair cannot pass while the copy itself is dropped.
+func TestRedisClientConfigCarriesTLSBlock(t *testing.T) {
+	tlsBlock := config.RedisTLSConfig{
+		Enabled:    true,
+		CAFile:     "/etc/ca-file.pem",
+		CertFile:   "/etc/cert-file.pem",
+		KeyFile:    "/etc/key-file.pem",
+		ServerName: "sni.example",
+		MinVersion: "1.3",
+	}
 	cacheCfg := &config.CacheConfig{
-		Redis: config.RedisConfig{
-			Host: "cache.example",
-			Port: 6380,
-			TLS: config.RedisTLSConfig{
-				Enabled:    true,
-				CAFile:     "/etc/ca-file.pem",
-				CAValue:    "ca-value",
-				CertFile:   "/etc/cert-file.pem",
-				CertValue:  "cert-value",
-				KeyFile:    "/etc/key-file.pem",
-				KeyValue:   "key-value",
-				ServerName: "sni.example",
-				MinVersion: "1.3",
-			},
-		},
+		Redis: config.RedisConfig{Host: "cache.example", Port: 6380, TLS: tlsBlock},
 	}
 
 	got := redisClientConfig(cacheCfg)
 
-	assert.Equal(t, redis.TLSConfig{
-		Enabled:    true,
-		CAFile:     "/etc/ca-file.pem",
-		CAValue:    "ca-value",
-		CertFile:   "/etc/cert-file.pem",
-		CertValue:  "cert-value",
-		KeyFile:    "/etc/key-file.pem",
-		KeyValue:   "key-value",
-		ServerName: "sni.example",
-		MinVersion: "1.3",
-	}, got.TLS)
+	assert.Equal(t, redis.TLSConfig(tlsBlock), got.TLS)
+	assert.NotZero(t, got.TLS)
 }

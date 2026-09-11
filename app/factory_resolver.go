@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -223,16 +224,7 @@ func validateRedisCacheConfig(cacheCfg *config.CacheConfig, key string, log logg
 	return nil
 }
 
-// connectRedisCache builds and dials the Redis client for an already-validated cache config.
-// Its error is a connection failure, not a config-shape one, so it is returned as-is rather
-// than addressed to key — the same as it was before this door's four validation checks were
-// concentrated into validateRedisCacheConfig above.
-//
-// Do not add a config-validation return here: a config-shape check belongs in
-// validateRedisCacheConfig, whose whole return the door qualifies. This function returns
-// connection-dial errors only, which are deliberately not addressed to a config path.
-// redisClientConfig maps the resolved cache config onto the Redis client's own
-// config.
+// redisClientConfig maps the resolved cache config onto the Redis client's own config.
 func redisClientConfig(cacheCfg *config.CacheConfig) *redis.Config {
 	return &redis.Config{
 		Host:            cacheCfg.Redis.Host,
@@ -254,6 +246,16 @@ func redisClientConfig(cacheCfg *config.CacheConfig) *redis.Config {
 	}
 }
 
+// connectRedisCache builds and dials the Redis client for an already-validated cache config.
+// redis.NewClient returns two error classes through one return, and they are spelled
+// differently on the way out: a dial failure is not a config-shape error, so it is returned
+// exactly as the cache package raised it, while a config-class error — cache.ConfigError,
+// raised by the client's own shape check and by the TLS material load — is addressed to key,
+// the same as validateRedisCacheConfig's whole return is above.
+//
+// Do not add a config-validation check here: one belongs in validateRedisCacheConfig, whose
+// whole return the door qualifies. What this function qualifies is the config-class error the
+// cache package raises from inside NewClient, which no check of this door's can pre-empt.
 func connectRedisCache(cacheCfg *config.CacheConfig, key string, log logger.Logger) (cache.Cache, error) {
 	redisCfg := redisClientConfig(cacheCfg)
 
@@ -277,7 +279,7 @@ func connectRedisCache(cacheCfg *config.CacheConfig, key string, log logger.Logg
 			Int("port", cacheCfg.Redis.Port).
 			Int("database", cacheCfg.Redis.Database).
 			Msg("Failed to create Redis cache client")
-		return nil, err
+		return nil, qualifyRedisClientError(err, key)
 	}
 
 	log.Debug().
@@ -287,4 +289,26 @@ func connectRedisCache(cacheCfg *config.CacheConfig, key string, log logger.Logg
 		Msg("Redis cache client created successfully")
 
 	return client, nil
+}
+
+// qualifyRedisClientError addresses a config-class error from redis.NewClient to the resource
+// key that produced it, and leaves every other class — a dial failure above all — untouched.
+//
+// The cache package spells its config errors in its own root namespace ("redis.tls",
+// "redis.port"), so a tenant's error named no tenant and not even the "cache." head this
+// layer's keys carry. The error is therefore restated as this layer's ConfigError at the root
+// spelling and handed to the same addressing engine validateRedisCacheConfig's return goes
+// through, which rewrites the root head to the tenant's cache subtree. The cache package's own
+// message, loader prefix and all, is carried across verbatim so nothing is lost in the move.
+func qualifyRedisClientError(err error, key string) error {
+	var cfgErr *cache.ConfigError
+	if !errors.As(err, &cfgErr) {
+		return err
+	}
+	message := cfgErr.Message
+	if cfgErr.Err != nil {
+		message += ": " + cfgErr.Err.Error()
+	}
+	rootSpelled := config.NewValidationError("cache."+cfgErr.Field, message)
+	return config.QualifyCacheConfigErrorForKey(rootSpelled, key)
 }

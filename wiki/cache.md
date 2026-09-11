@@ -528,7 +528,7 @@ base64-encoded PEM string (`*value`), never both:
 Four rules fail closed at startup, in `config.Validate` (the root `cache:` block and every
 per-tenant cache alike) and again in `(*redis.Config).Validate()`:
 
-- **Staged material while disabled is an ERROR.** Any of the other eight fields set while
+- **Any `tls.*` field while disabled is an ERROR.** Any of the other eight fields set while
   `enabled` is false is a startup error naming `cache.redis.tls.enabled`. This diverges
   deliberately from the server listener, which WARNs on the same shape
   ([ADR-042](adr_042_server_tls.md)): a cache client has no provision-then-flip rollout, and a
@@ -542,6 +542,13 @@ per-tenant cache alike) and again in `(*redis.Config).Validate()`:
   naming `cache.redis.tls.minversion`.
 
 `enabled: true` with no material at all is valid: system roots, server authentication only.
+
+Beyond those four shape rules, `config.Validate` also LOADS the material it was given: a
+`cafile` naming a file that is not there, or a `cavalue` that is not a decodable PEM bundle,
+fails at startup with an error naming `cache.redis.tls`. This is worth the filesystem read at
+validation time because a per-tenant Redis client is built lazily on first use — without it a
+broken bundle boots green and surfaces hours later as a failed request. The dial loads the
+material again; the two loads are a startup gate and a use-time one.
 
 **There is no `insecureskipverify` key and no raw `*tls.Config` escape hatch**, by design.
 Verification-disabling knobs survive from a staging config into production because nothing

@@ -22,6 +22,35 @@ against the ones that actually parsed, and refusing a bundle holding zero `CERTI
 so a truncated or wrong-typed bundle fails rather than silently trusting nothing. A third
 hand-rolled copy of that logic is the outcome this decision exists to avoid.
 
+## Options Considered
+
+**A — an `insecureskipverify` knob, dev-gated or WARN-ed.** Unblocks a local or staging Redis
+serving a self-signed certificate with one line, and every other TLS stack has one. Rejected:
+what it exposes is a session store, and a verification-disabling flag survives a copy from
+staging into production precisely because nothing fails when it does — a dev gate or a WARN
+only makes the survival quieter. `cafile`/`cavalue` covers the same endpoint by pinning.
+
+**B — a raw `*tls.Config` constructor option on `redis.Config`.** Maximum flexibility, no
+config surface to design, and httpclient already offers `WithTLSConfig`. Rejected: the Redis
+client is built by the framework from resolved configuration on a lazy per-tenant path, so
+there is no consumer call site to pass a hand-built config through; and it would reintroduce
+the `InsecureSkipVerify` door option A closes, just spelled in Go instead of YAML.
+
+**C — a `rediss://` URL scheme instead of a block.** Familiar, compact, and how most Redis
+clients spell TLS. Rejected: the cache config is a field block (`host`, `port`, `password`, …),
+not a URL, so a scheme would need a second parallel input; and a scheme carries the on/off bit
+only — CA, client pair, SNI and version floor still need keys, which is the block anyway.
+
+**D — a cache-local copy of httpclient's loader.** No new shared package, and `cache/redis`
+keeps its dependencies to itself. Rejected: `certPoolFromPEM`'s declared-vs-decoded block
+accounting is the careful part, and a third copy of it is a third place for that accounting to
+drift. `internal/clienttls` is internal, so the shared package costs no public surface.
+
+**E — WARN on staged fields, as `server.tls` does.** Consistent with ADR-042 and tolerant of a
+provision-then-flip rollout. Rejected: a cache client has no such rollout, and the failure mode
+is worse — a mis-flagged `enabled` dials plaintext at a TLS-only endpoint, where the server
+drops the connection and the operator sees a network fault rather than a configuration one.
+
 ## Decision
 
 - **`cache.redis.tls` is an additive, nested, comparable config block.** `config.RedisTLSConfig`
@@ -40,7 +69,7 @@ hand-rolled copy of that logic is the outcome this decision exists to avoid.
   its own `RequireClientCert` and "no material provided" rules as checks around `Build`, and its
   error strings stay byte-identical. `server/tls.go` is not touched: it is a listener, with
   client-verification concerns a dialer does not share.
-- **Staged material while disabled is an ERROR, where the server WARNs.** Any of the other
+- **Any `tls.*` field set while disabled is an ERROR, where the server WARNs.** Any of the other
   eight fields set while `cache.redis.tls.enabled` is false is a startup error naming
   `cache.redis.tls.enabled`. ADR-042 chose a WARN for `server.tls` because provisioning
   certificates and then flipping the flag is a legitimate listener rollout. A cache client has
@@ -51,9 +80,9 @@ hand-rolled copy of that logic is the outcome this decision exists to avoid.
   both a `*file` and a `*value` on one piece is an error naming the piece, a certificate
   without its key (or the reverse) is an error, and `minversion` outside `{"", "1.2", "1.3"}`
   is an error. `enabled: true` with zero material stays valid — system roots, server
-  authentication only. All four run in `config/cache_section.go` (structural, no filesystem, so
-  the per-tenant path inherits them through `validateRedisCache`) and again in
-  `(*redis.Config).Validate()`, which is the door a hand-built config reaches.
+  authentication only. All four run in `config/cache_section.go` (structural, so the per-tenant
+  path inherits them through `validateRedisCache`) and again in `(*redis.Config).Validate()`,
+  which is the door a hand-built config reaches.
 - **No insecure knob, no raw `*tls.Config` option, no `rediss://`.** `clienttls.Build` never
   sets `InsecureSkipVerify` and nothing exposes a way to. A verification-disabling flag is the
   kind of setting that survives a copy from staging into production precisely because nothing
@@ -72,7 +101,13 @@ hand-rolled copy of that logic is the outcome this decision exists to avoid.
 - **A private-CA deployment loses public-CA verification on that client.** `cafile`/`cavalue`
   REPLACE the system roots rather than extending them — the same semantics httpclient documents
   — so a bundle must carry every root that client needs.
-- **A deployment that staged TLS material behind a false flag now fails to boot.** Nothing
+- **The material is loaded at config validation, and again at dial.** `config/cache_section.go`
+  calls `clienttls.Build` once the shape passes, so a missing or corrupt bundle fails at boot
+  with an error naming `cache.redis.tls` — the only door that can, since a per-tenant Redis
+  client is created lazily on first use and would otherwise boot green and fail a request hours
+  later. This makes config validation read the filesystem, unlike `server.tls`, whose material
+  is read at `Start()` one hop later.
+- **A deployment that set any `tls.*` field behind a false flag now fails to boot.** Nothing
   shipped with this shape (the keys did not exist), so no upgrade can hit it; a future one is
   told which key to flip instead of debugging a dropped connection.
 - **`certPoolFromPEM`'s behaviour is now pinned by two callers.** A change to the declared-vs-
