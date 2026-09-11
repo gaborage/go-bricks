@@ -81,3 +81,75 @@ func HasAnyMaterial(m *Material) bool {
 		m.KeyFile != "" || m.KeyValue != "" ||
 		m.CAFile != "" || m.CAValue != ""
 }
+
+// Relative config keys for the Material fields. A consumer prefixes them with
+// its own namespace ("cache.redis.tls." + v.Field) when reporting a Violation.
+const (
+	fieldEnabled    = "enabled"
+	fieldCAFile     = "cafile"
+	fieldCAValue    = "cavalue"
+	fieldCertFile   = "certfile"
+	fieldCertValue  = "certvalue"
+	fieldKeyFile    = "keyfile"
+	fieldKeyValue   = "keyvalue"
+	fieldMinVersion = "minversion"
+)
+
+// Violation names the Material field (relative key such as "cafile") that
+// breaks a structural rule, with the message to report. Field is relative on
+// purpose: each consumer owns its own key namespace and prefixes it.
+type Violation struct {
+	Field   string
+	Message string
+}
+
+// ValidateMaterial applies the structural rules that need no filesystem:
+// material staged under a disabled block, a piece configured from two sources,
+// a half client-certificate pair, and the min-version enum. It returns nil when
+// the shape is valid — enabled with no material at all is valid, and yields a
+// config verifying against the system roots.
+//
+// Reading and parsing the PEM happens later, in Build.
+func ValidateMaterial(m *Material, enabled bool) *Violation {
+	if !enabled {
+		if *m != (Material{}) {
+			return &Violation{fieldEnabled, "must be true when any tls.* material is configured"}
+		}
+		return nil
+	}
+
+	sources := []struct{ fileField, valueField, file, value string }{
+		{fieldCAFile, fieldCAValue, m.CAFile, m.CAValue},
+		{fieldCertFile, fieldCertValue, m.CertFile, m.CertValue},
+		{fieldKeyFile, fieldKeyValue, m.KeyFile, m.KeyValue},
+	}
+	for _, s := range sources {
+		if s.file != "" && s.value != "" {
+			return &Violation{s.fileField, s.fileField + " and " + s.valueField + " are mutually exclusive (exactly one)"}
+		}
+	}
+
+	hasCert := m.CertFile != "" || m.CertValue != ""
+	hasKey := m.KeyFile != "" || m.KeyValue != ""
+	switch {
+	case hasCert && !hasKey:
+		return &Violation{fieldKeyFile, "a client certificate requires " + fieldKeyFile + " or " + fieldKeyValue}
+	case hasKey && !hasCert:
+		return &Violation{fieldCertFile, "a client key requires " + fieldCertFile + " or " + fieldCertValue}
+	}
+
+	// Delegated so the accepted set lives in exactly one place; the parsed
+	// version is Build's business, not the shape check's.
+	if _, err := secretfile.ParseTLSMinVersion("", m.MinVersion); err != nil {
+		return &Violation{fieldMinVersion,
+			"invalid value: " + secretfile.SafeRef(m.MinVersion) + ` (accepted values are "1.2" and "1.3")`}
+	}
+	return nil
+}
+
+// HasClientCert reports whether any cert or key field is set. A CA-only
+// Material is server authentication alone: it presents no client certificate.
+func HasClientCert(m *Material) bool {
+	return m.CertFile != "" || m.CertValue != "" ||
+		m.KeyFile != "" || m.KeyValue != ""
+}

@@ -33,10 +33,6 @@ import (
 
 const testServerName = "partner.example.com"
 
-// pemTypeCertificate labels the PEM blocks these fixtures emit; the production
-// constant now lives in internal/secretfile alongside CertPool.
-const pemTypeCertificate = "CERTIFICATE"
-
 // newTestCA returns a self-signed CA and a function minting leaf certs signed by it.
 func newTestCA(t *testing.T, cn string) (caCertPEM []byte, caCert *x509.Certificate, issue func(leafCN string, isServer bool) (certPEM, keyPEM []byte)) {
 	t.Helper()
@@ -57,7 +53,7 @@ func newTestCA(t *testing.T, cn string) (caCertPEM []byte, caCert *x509.Certific
 	require.NoError(t, err)
 	caCert, err = x509.ParseCertificate(der)
 	require.NoError(t, err)
-	caCertPEM = pem.EncodeToMemory(&pem.Block{Type: pemTypeCertificate, Bytes: der})
+	caCertPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 
 	serial := int64(1)
 	issue = func(leafCN string, isServer bool) (certPEM, keyPEM []byte) {
@@ -85,7 +81,7 @@ func newTestCA(t *testing.T, cn string) (caCertPEM []byte, caCert *x509.Certific
 		keyDER, err := x509.MarshalPKCS8PrivateKey(key)
 		require.NoError(t, err)
 
-		return pem.EncodeToMemory(&pem.Block{Type: pemTypeCertificate, Bytes: leafDER}),
+		return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER}),
 			pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	}
 
@@ -150,7 +146,7 @@ func TestNewClientTLSConfigValidation(t *testing.T) {
 	certPEM, keyPEM := issue("client", false)
 	_, otherKeyPEM := issue("other-client", false)
 
-	corruptCA := pem.EncodeToMemory(&pem.Block{Type: pemTypeCertificate, Bytes: []byte("not-a-certificate")})
+	corruptCA := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not-a-certificate")})
 
 	tests := []struct {
 		name    string

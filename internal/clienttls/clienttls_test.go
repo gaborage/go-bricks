@@ -1,15 +1,11 @@
 package clienttls
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/base64"
-	"encoding/pem"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,19 +13,6 @@ import (
 
 	gbtesting "github.com/gaborage/go-bricks/testing"
 )
-
-// certKeyPEM issues a self-signed certificate and returns it with its key, both
-// PEM-encoded.
-func certKeyPEM(t *testing.T) (certPEM, keyPEM []byte) {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	cert := gbtesting.SelfSignedCert(t, key)
-	der, err := x509.MarshalPKCS8PrivateKey(key)
-	require.NoError(t, err)
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}),
-		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
-}
 
 // writeTemp writes data to a file in t.TempDir and returns its path.
 func writeTemp(t *testing.T, name string, data []byte) string {
@@ -62,7 +45,7 @@ func TestBuildCarriesServerNameAndMinVersion(t *testing.T) {
 }
 
 func TestBuildLoadsCAFromValue(t *testing.T) {
-	caPEM, _ := certKeyPEM(t)
+	caPEM, _ := gbtesting.SelfSignedCertKeyPEM(t)
 
 	out, err := Build(testPrefix, &Material{CAValue: base64.StdEncoding.EncodeToString(caPEM)})
 
@@ -71,7 +54,7 @@ func TestBuildLoadsCAFromValue(t *testing.T) {
 }
 
 func TestBuildLoadsCAFromFile(t *testing.T) {
-	caPEM, _ := certKeyPEM(t)
+	caPEM, _ := gbtesting.SelfSignedCertKeyPEM(t)
 
 	out, err := Build(testPrefix, &Material{CAFile: writeTemp(t, "ca.pem", caPEM)})
 
@@ -80,7 +63,7 @@ func TestBuildLoadsCAFromFile(t *testing.T) {
 }
 
 func TestBuildLoadsClientCertificate(t *testing.T) {
-	certPEM, keyPEM := certKeyPEM(t)
+	certPEM, keyPEM := gbtesting.SelfSignedCertKeyPEM(t)
 
 	out, err := Build(testPrefix, &Material{
 		CertFile: writeTemp(t, "cert.pem", certPEM),
@@ -92,7 +75,7 @@ func TestBuildLoadsClientCertificate(t *testing.T) {
 }
 
 func TestBuildRejectsUnpairedCertAndKey(t *testing.T) {
-	certPEM, keyPEM := certKeyPEM(t)
+	certPEM, keyPEM := gbtesting.SelfSignedCertKeyPEM(t)
 	tests := []struct {
 		name     string
 		material Material
@@ -121,7 +104,7 @@ func TestBuildRejectsUnpairedCertAndKey(t *testing.T) {
 }
 
 func TestBuildRejectsBothCASources(t *testing.T) {
-	caPEM, _ := certKeyPEM(t)
+	caPEM, _ := gbtesting.SelfSignedCertKeyPEM(t)
 
 	out, err := Build(testPrefix, &Material{
 		CAFile:  writeTemp(t, "ca.pem", caPEM),
@@ -157,4 +140,130 @@ func TestHasAnyMaterial(t *testing.T) {
 			assert.Equal(t, tt.want, HasAnyMaterial(&tt.material))
 		})
 	}
+}
+
+func TestValidateMaterial(t *testing.T) {
+	tests := []struct {
+		name        string
+		material    Material
+		enabled     bool
+		wantField   string
+		wantMessage string
+	}{
+		{
+			name:     "disabled_and_empty_is_valid",
+			material: Material{},
+		},
+		{
+			name:     "enabled_without_material_is_valid",
+			material: Material{},
+			enabled:  true,
+		},
+		{
+			name:      "disabled_with_ca_file",
+			material:  Material{CAFile: "/etc/ssl/ca.pem"},
+			wantField: "enabled",
+		},
+		{
+			name:      "disabled_with_server_name",
+			material:  Material{ServerName: "cache.internal"},
+			wantField: "enabled",
+		},
+		{
+			name:      "disabled_with_min_version",
+			material:  Material{MinVersion: "1.3"},
+			wantField: "enabled",
+		},
+		{
+			name:        "ca_file_and_value_together",
+			material:    Material{CAFile: "/etc/ssl/ca.pem", CAValue: "cGVt"},
+			enabled:     true,
+			wantField:   "cafile",
+			wantMessage: "cafile and cavalue are mutually exclusive (exactly one)",
+		},
+		{
+			name:        "cert_file_and_value_together",
+			material:    Material{CertFile: "/etc/ssl/c.pem", CertValue: "cGVt", KeyFile: "/etc/ssl/k.pem"},
+			enabled:     true,
+			wantField:   "certfile",
+			wantMessage: "certfile and certvalue are mutually exclusive (exactly one)",
+		},
+		{
+			name:        "key_file_and_value_together",
+			material:    Material{CertFile: "/etc/ssl/c.pem", KeyFile: "/etc/ssl/k.pem", KeyValue: "cGVt"},
+			enabled:     true,
+			wantField:   "keyfile",
+			wantMessage: "keyfile and keyvalue are mutually exclusive (exactly one)",
+		},
+		{
+			name:      "cert_without_key",
+			material:  Material{CertFile: "/etc/ssl/c.pem"},
+			enabled:   true,
+			wantField: "keyfile",
+		},
+		{
+			name:      "key_without_cert",
+			material:  Material{KeyValue: "cGVt"},
+			enabled:   true,
+			wantField: "certfile",
+		},
+		{
+			name:      "cert_and_key_pair_is_valid",
+			material:  Material{CertValue: "cGVt", KeyFile: "/etc/ssl/k.pem"},
+			enabled:   true,
+			wantField: "",
+		},
+		{
+			name:      "min_version_below_floor",
+			material:  Material{MinVersion: "1.1"},
+			enabled:   true,
+			wantField: "minversion",
+		},
+		{
+			name:     "min_version_12_is_valid",
+			material: Material{MinVersion: "1.2"},
+			enabled:  true,
+		},
+		{
+			name:     "min_version_13_is_valid",
+			material: Material{MinVersion: "1.3"},
+			enabled:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := ValidateMaterial(&tt.material, tt.enabled)
+
+			if tt.wantField == "" {
+				assert.Nil(t, v)
+				return
+			}
+			require.NotNil(t, v)
+			assert.Equal(t, tt.wantField, v.Field)
+			assert.NotEmpty(t, v.Message)
+			if tt.wantMessage != "" {
+				assert.Equal(t, tt.wantMessage, v.Message)
+			}
+		})
+	}
+}
+
+// TestValidateMaterialMinVersionMessageElidesOverlongValue pins that an
+// operator-supplied enum value is bounded before it reaches a startup log.
+func TestValidateMaterialMinVersionMessageElidesOverlongValue(t *testing.T) {
+	v := ValidateMaterial(&Material{MinVersion: strings.Repeat("x", 400)}, true)
+
+	require.NotNil(t, v)
+	assert.Equal(t, "minversion", v.Field)
+	assert.NotContains(t, v.Message, strings.Repeat("x", 400))
+}
+
+func TestHasClientCert(t *testing.T) {
+	assert.False(t, HasClientCert(&Material{}))
+	assert.False(t, HasClientCert(&Material{CAFile: "/etc/ssl/ca.pem", ServerName: "x", MinVersion: "1.3"}))
+	assert.True(t, HasClientCert(&Material{CertFile: "/etc/ssl/c.pem"}))
+	assert.True(t, HasClientCert(&Material{CertValue: "cGVt"}))
+	assert.True(t, HasClientCert(&Material{KeyFile: "/etc/ssl/k.pem"}))
+	assert.True(t, HasClientCert(&Material{KeyValue: "cGVt"}))
 }

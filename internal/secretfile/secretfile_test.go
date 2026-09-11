@@ -304,17 +304,16 @@ func TestLooksLikeKeyMaterialDetectsKeysNotPaths(t *testing.T) {
 	}
 }
 
-// selfSignedCertPEM issues a self-signed certificate and returns its PEM block.
-func selfSignedCertPEM(t *testing.T) []byte {
+// certPEM returns one self-signed certificate PEM block; the key half of the
+// shared fixture is irrelevant to the bundle parsers under test.
+func certPEM(t *testing.T) []byte {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	cert := testconsts.SelfSignedCert(t, key)
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+	cert, _ := testconsts.SelfSignedCertKeyPEM(t)
+	return cert
 }
 
 func TestCertPoolAddsEveryCertificateBlock(t *testing.T) {
-	bundle := append(selfSignedCertPEM(t), selfSignedCertPEM(t)...)
+	bundle := append(certPEM(t), certPEM(t)...)
 
 	pool, err := CertPool("httpclient: tls:", bundle)
 
@@ -324,7 +323,7 @@ func TestCertPoolAddsEveryCertificateBlock(t *testing.T) {
 }
 
 func TestCertPoolRejectsUndecodableBlocks(t *testing.T) {
-	bundle := append(selfSignedCertPEM(t), []byte("-----BEGIN CERTIFICATE-----\n!!!not base64!!!\n-----END CERTIFICATE-----\n")...)
+	bundle := append(certPEM(t), []byte("-----BEGIN CERTIFICATE-----\n!!!not base64!!!\n-----END CERTIFICATE-----\n")...)
 
 	pool, err := CertPool("httpclient: tls:", bundle)
 

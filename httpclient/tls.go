@@ -63,7 +63,7 @@ func NewClientTLSConfig(cfg *ClientTLSConfig) (*tls.Config, error) {
 	// shared loader accepts material-free input (system roots) and knows nothing
 	// about mutual-TLS intent. Keeping them here preserves the order in which a
 	// misconfiguration is reported.
-	if cfg.RequireClientCert && cfg.CertFile == "" && cfg.CertValue == "" && cfg.KeyFile == "" && cfg.KeyValue == "" {
+	if cfg.RequireClientCert && !clienttls.HasClientCert(&material) {
 		return nil, errors.New("httpclient: tls: require client cert: cert and key are empty")
 	}
 	if !clienttls.HasAnyMaterial(&material) {
