@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/internal/secretfile"
 	gbtesting "github.com/gaborage/go-bricks/testing"
 )
 
@@ -118,6 +119,20 @@ func TestBuildRejectsBothCASources(t *testing.T) {
 
 func TestBuildRejectsUnknownMinVersion(t *testing.T) {
 	out, err := Build(testPrefix, &Material{MinVersion: "1.1"})
+
+	require.Error(t, err)
+	assert.Nil(t, out)
+	assert.Equal(t, `cache: redis: tls: minversion "1.1": accepted values are "1.2" and "1.3"`, err.Error())
+}
+
+// TestBuildRejectsUnknownMinVersionBeforeReadingFiles pins that the enum check
+// runs before any PEM read: a Material with both a bad floor and an unreadable
+// CA file reports the floor, so a typo never pays for file I/O.
+func TestBuildRejectsUnknownMinVersionBeforeReadingFiles(t *testing.T) {
+	out, err := Build(testPrefix, &Material{
+		CAFile:     filepath.Join(t.TempDir(), "absent-ca.pem"),
+		MinVersion: "1.1",
+	})
 
 	require.Error(t, err)
 	assert.Nil(t, out)
@@ -247,6 +262,21 @@ func TestValidateMaterial(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestValidateMaterialMinVersionMessageComesFromTheParser pins that the shape
+// check does not re-spell the accepted set: its message is the parser's own
+// text, minus the field head the consumer already renders.
+func TestValidateMaterialMinVersionMessageComesFromTheParser(t *testing.T) {
+	_, parseErr := secretfile.ParseTLSMinVersion("", "1.1")
+	require.Error(t, parseErr)
+
+	v := ValidateMaterial(&Material{MinVersion: "1.1"}, true)
+
+	require.NotNil(t, v)
+	assert.Equal(t, "minversion", v.Field)
+	assert.Equal(t, `"1.1": accepted values are "1.2" and "1.3"`, v.Message)
+	assert.Contains(t, parseErr.Error(), v.Message)
 }
 
 // TestValidateMaterialMinVersionMessageElidesOverlongValue pins that an

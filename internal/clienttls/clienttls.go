@@ -8,6 +8,7 @@ package clienttls
 import (
 	"crypto/tls"
 	"fmt"
+	"strings"
 
 	"github.com/gaborage/go-bricks/internal/secretfile"
 )
@@ -30,6 +31,12 @@ type Material struct {
 // namespace, as in secretfile.LoadPEM. Material-free input is legal and yields
 // a verifying config over the system roots.
 func Build(prefix string, m *Material) (*tls.Config, error) {
+	// The enum check is first on purpose: it needs no filesystem, so a bad
+	// floor is refused before any PEM read is paid for.
+	minVersion, err := secretfile.ParseTLSMinVersion(prefix, m.MinVersion)
+	if err != nil {
+		return nil, err
+	}
 	certPEM, err := secretfile.LoadPEM(prefix, m.CertFile, m.CertValue, "cert")
 	if err != nil {
 		return nil, err
@@ -45,10 +52,6 @@ func Build(prefix string, m *Material) (*tls.Config, error) {
 		return nil, fmt.Errorf("%s key: set without a matching cert", prefix)
 	}
 	caPEM, err := secretfile.LoadPEM(prefix, m.CAFile, m.CAValue, "ca")
-	if err != nil {
-		return nil, err
-	}
-	minVersion, err := secretfile.ParseTLSMinVersion(prefix, m.MinVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -138,13 +141,14 @@ func ValidateMaterial(m *Material, enabled bool) *Violation {
 		return &Violation{fieldCertFile, "a client key requires " + fieldCertFile + " or " + fieldCertValue}
 	}
 
-	// Delegated so the accepted set lives in exactly one place; the parsed
-	// version is Build's business, not the shape check's.
+	// Delegated so both the accepted set and its wording live in exactly one
+	// place; the parsed version is Build's business, not the shape check's.
+	// The empty prefix leaves the parser's own " minversion " head on the
+	// message, which is trimmed here because the Violation's Field already
+	// names the key the consumer renders in front of it.
 	if _, err := secretfile.ParseTLSMinVersion("", m.MinVersion); err != nil {
-		return &Violation{
-			fieldMinVersion,
-			"invalid value: " + secretfile.SafeRef(m.MinVersion) + ` (accepted values are "1.2" and "1.3")`,
-		}
+		msg := strings.TrimPrefix(strings.TrimSpace(err.Error()), fieldMinVersion+" ")
+		return &Violation{fieldMinVersion, msg}
 	}
 	return nil
 }
