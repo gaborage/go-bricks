@@ -141,8 +141,10 @@ func ValidateMaterial(m *Material, enabled bool) *Violation {
 	// Delegated so the accepted set lives in exactly one place; the parsed
 	// version is Build's business, not the shape check's.
 	if _, err := secretfile.ParseTLSMinVersion("", m.MinVersion); err != nil {
-		return &Violation{fieldMinVersion,
-			"invalid value: " + secretfile.SafeRef(m.MinVersion) + ` (accepted values are "1.2" and "1.3")`}
+		return &Violation{
+			fieldMinVersion,
+			"invalid value: " + secretfile.SafeRef(m.MinVersion) + ` (accepted values are "1.2" and "1.3")`,
+		}
 	}
 	return nil
 }
