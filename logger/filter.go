@@ -88,6 +88,11 @@ func DefaultFilterConfig() *FilterConfig {
 			"private_key", "privatekey", "private-key",
 			"signing_key", "signingkey", "signing-key",
 			"encryption_key", "encryptionkey", "encryption-key",
+			// The inline half of a TLS client-certificate block:
+			// server.tls.keyvalue, cache.redis.tls.keyvalue and httpclient's
+			// KeyValue all carry a base64 PEM private key. Only this one — the
+			// certvalue and cavalue siblings carry public material.
+			"keyvalue",
 			sensitiveFieldToken, "access_token", "refresh_token",
 			"auth", "authorization",
 			"credential", "credentials",

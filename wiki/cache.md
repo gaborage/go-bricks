@@ -517,7 +517,10 @@ base64-encoded PEM string (`*value`), never both:
 
 - **Private CA** — `cafile` / `cavalue`. When set it REPLACES the system roots for server
   verification, so a client pinning a private CA can no longer verify public-CA endpoints.
-- **Mutual TLS** — `certfile`/`certvalue` plus `keyfile`/`keyvalue`, set together.
+- **Mutual TLS** — `certfile`/`certvalue` plus `keyfile`/`keyvalue`, set together. A log field
+  named `keyvalue` is masked by the default log filter, since it carries the private key;
+  `certvalue` and `cavalue` are not, being public material
+  ([observability.md](observability.md#sensitive-data-filtering)).
 - **`servername`** overrides SNI and hostname verification; unset it defaults to
   `cache.redis.host`, which is what a managed endpoint needs.
 - **`minversion`** is `"1.2"` (the floor when empty) or `"1.3"`.
