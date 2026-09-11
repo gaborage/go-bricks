@@ -1005,10 +1005,11 @@ func TestClientCompareAndDeleteAfterCloseFailsClosed(t *testing.T) {
 // TestBuildRedisOptionsWithoutTLS pins the option fields NewClient has always
 // built, and proves a zero TLS block leaves the dialer plaintext.
 func TestBuildRedisOptionsWithoutTLS(t *testing.T) {
+	password := gbtesting.FakePassword("redis")
 	cfg := &Config{
 		Host:            "cache.example",
 		Port:            6380,
-		Password:        "s3cret",
+		Password:        password,
 		Database:        3,
 		PoolSize:        7,
 		DialTimeout:     11 * time.Second,
@@ -1024,7 +1025,7 @@ func TestBuildRedisOptionsWithoutTLS(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, opts)
 	assert.Equal(t, "cache.example:6380", opts.Addr)
-	assert.Equal(t, "s3cret", opts.Password)
+	assert.Equal(t, password, opts.Password)
 	assert.Equal(t, 3, opts.DB)
 	assert.Equal(t, 7, opts.PoolSize)
 	assert.Equal(t, 11*time.Second, opts.DialTimeout)
