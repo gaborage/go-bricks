@@ -1,25 +1,14 @@
 package httpclient
 
 import (
-	"bytes"
 	"crypto/tls"
-	"crypto/x509"
-	"encoding/pem"
 	"errors"
-	"fmt"
 	"net"
 	nethttp "net/http"
 	"time"
 
-	"github.com/gaborage/go-bricks/internal/secretfile"
+	"github.com/gaborage/go-bricks/internal/clienttls"
 )
-
-const pemTypeCertificate = "CERTIFICATE"
-
-// pemHeaderPrefix opens every PEM block, so counting it gives the number of
-// blocks a CA bundle declares — what certPoolFromPEM checks against the number
-// that actually parsed.
-const pemHeaderPrefix = "-----BEGIN"
 
 // ClientTLSConfig describes client-side TLS material declaratively. Each piece
 // comes from a PEM file path (File) or a base64-encoded PEM string (Value) —
@@ -60,41 +49,27 @@ func NewClientTLSConfig(cfg *ClientTLSConfig) (*tls.Config, error) {
 		return nil, errors.New("httpclient: tls: config is nil")
 	}
 
-	certPEM, keyPEM, err := loadClientKeyPair(cfg)
-	if err != nil {
-		return nil, err
+	material := clienttls.Material{
+		CertFile:   cfg.CertFile,
+		CertValue:  cfg.CertValue,
+		KeyFile:    cfg.KeyFile,
+		KeyValue:   cfg.KeyValue,
+		CAFile:     cfg.CAFile,
+		CAValue:    cfg.CAValue,
+		ServerName: cfg.ServerName,
+		MinVersion: cfg.MinVersion,
 	}
-	caPEM, err := loadPEM(cfg.CAFile, cfg.CAValue, "ca")
-	if err != nil {
-		return nil, err
+	// Both guards run before Build because they are httpclient's own rules: the
+	// shared loader accepts material-free input (system roots) and knows nothing
+	// about mutual-TLS intent. Keeping them here preserves the order in which a
+	// misconfiguration is reported.
+	if cfg.RequireClientCert && cfg.CertFile == "" && cfg.CertValue == "" && cfg.KeyFile == "" && cfg.KeyValue == "" {
+		return nil, errors.New("httpclient: tls: require client cert: cert and key are empty")
 	}
-	if certPEM == nil && caPEM == nil {
+	if !clienttls.HasAnyMaterial(&material) {
 		return nil, errors.New("httpclient: tls: no material provided: set cert and key, ca, or both")
 	}
-	minVersion, err := secretfile.ParseTLSMinVersion("httpclient: tls:", cfg.MinVersion)
-	if err != nil {
-		return nil, err
-	}
-
-	out := &tls.Config{
-		MinVersion: minVersion,
-		ServerName: cfg.ServerName,
-	}
-	if certPEM != nil {
-		pair, err := tls.X509KeyPair(certPEM, keyPEM)
-		if err != nil {
-			return nil, fmt.Errorf("httpclient: tls: cert/key: %w", err)
-		}
-		out.Certificates = []tls.Certificate{pair}
-	}
-	if caPEM != nil {
-		pool, err := certPoolFromPEM(caPEM)
-		if err != nil {
-			return nil, err
-		}
-		out.RootCAs = pool
-	}
-	return out, nil
+	return clienttls.Build("httpclient: tls:", &material)
 }
 
 // WithTLSConfig fills the base-transport slot: it clones an incumbent
@@ -199,76 +174,4 @@ func fallbackDialer() *net.Dialer {
 		Timeout:   30 * time.Second,
 		KeepAlive: 30 * time.Second,
 	}
-}
-
-// loadClientKeyPair resolves the client certificate material and enforces the
-// cert/key pairing rules.
-func loadClientKeyPair(cfg *ClientTLSConfig) (certPEM, keyPEM []byte, err error) {
-	certPEM, err = loadPEM(cfg.CertFile, cfg.CertValue, "cert")
-	if err != nil {
-		return nil, nil, err
-	}
-	keyPEM, err = loadPEM(cfg.KeyFile, cfg.KeyValue, "key")
-	if err != nil {
-		return nil, nil, err
-	}
-	switch {
-	case certPEM != nil && keyPEM == nil:
-		return nil, nil, errors.New("httpclient: tls: cert: set without a matching key")
-	case certPEM == nil && keyPEM != nil:
-		return nil, nil, errors.New("httpclient: tls: key: set without a matching cert")
-	case certPEM == nil && cfg.RequireClientCert:
-		return nil, nil, errors.New("httpclient: tls: require client cert: cert and key are empty")
-	}
-	return certPEM, keyPEM, nil
-}
-
-// loadPEM reads one piece of PEM material from a file path or a base64-encoded
-// value, returning (nil, nil) when neither source is set. Delegates to
-// secretfile.LoadPEM, which httpclient shares with the server TLS listener
-// (server/tls.go) — the two loaders were maintained as parallel copies until
-// this extraction.
-func loadPEM(file, value, what string) ([]byte, error) {
-	return secretfile.LoadPEM("httpclient: tls:", file, value, what)
-}
-
-// certPoolFromPEM refuses to pin fewer roots than the bundle asks for, which
-// AppendCertsFromPEM's boolean cannot express: it returns true whenever ANY
-// block parsed. Corruption hides at two layers and both are checked — a mangled
-// base64 body makes pem.Decode skip the block silently (a YAML block scalar that
-// indents the PEM does exactly this), while a well-framed block with bad DER
-// fails x509.ParseCertificate. A staged CA rotation that quietly pins only the
-// outgoing root is the failure this prevents: startup is clean and every call
-// dies the moment the partner cuts over.
-func certPoolFromPEM(caPEM []byte) (*x509.CertPool, error) {
-	declared := bytes.Count(caPEM, []byte(pemHeaderPrefix))
-	pool := x509.NewCertPool()
-	rest := caPEM
-	decoded, certs := 0, 0
-	for {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			break
-		}
-		decoded++
-		// Non-certificate blocks are legitimate: a bundle may carry a key
-		// alongside its chain. Only undecodable ones are an error.
-		if block.Type != pemTypeCertificate {
-			continue
-		}
-		crt, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			return nil, fmt.Errorf("httpclient: tls: ca: block %d: %w", decoded-1, err)
-		}
-		pool.AddCert(crt)
-		certs++
-	}
-	if declared != decoded {
-		return nil, fmt.Errorf("httpclient: tls: ca: %d PEM blocks declared but only %d decodable — the bundle is corrupt and would pin fewer roots than intended", declared, decoded)
-	}
-	if certs == 0 {
-		return nil, fmt.Errorf("httpclient: tls: ca: no %s block found", pemTypeCertificate)
-	}
-	return pool, nil
 }

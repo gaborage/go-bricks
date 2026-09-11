@@ -19,8 +19,11 @@
 package secretfile
 
 import (
+	"bytes"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
@@ -28,8 +31,13 @@ import (
 )
 
 // pemHeaderPrefix opens every PEM block, so a *File value containing it is PEM
-// content pasted into the wrong field rather than a path.
+// content pasted into the wrong field rather than a path, and counting it in a
+// bundle gives the number of blocks that bundle declares — what CertPool checks
+// against the number that actually parsed.
 const pemHeaderPrefix = "-----BEGIN"
+
+// pemTypeCertificate is the block type CertPool pins into the root pool.
+const pemTypeCertificate = "CERTIFICATE"
 
 // MaxPathEcho bounds what a read error quotes back. A *File value longer than
 // this is elided: over-long values are the shape mis-filed material takes, and
@@ -173,4 +181,46 @@ func Errno(err error) error {
 		return pathErr.Err
 	}
 	return err
+}
+
+// CertPool refuses to pin fewer roots than the bundle asks for, which
+// AppendCertsFromPEM's boolean cannot express: it returns true whenever ANY
+// block parsed. Corruption hides at two layers and both are checked — a mangled
+// base64 body makes pem.Decode skip the block silently (a YAML block scalar that
+// indents the PEM does exactly this), while a well-framed block with bad DER
+// fails x509.ParseCertificate. A staged CA rotation that quietly pins only the
+// outgoing root is the failure this prevents: startup is clean and every call
+// dies the moment the partner cuts over. prefix names the consumer's error
+// namespace, as in LoadPEM.
+func CertPool(prefix string, caPEM []byte) (*x509.CertPool, error) {
+	declared := bytes.Count(caPEM, []byte(pemHeaderPrefix))
+	pool := x509.NewCertPool()
+	rest := caPEM
+	decoded, certs := 0, 0
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		decoded++
+		// Non-certificate blocks are legitimate: a bundle may carry a key
+		// alongside its chain. Only undecodable ones are an error.
+		if block.Type != pemTypeCertificate {
+			continue
+		}
+		crt, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("%s ca: block %d: %w", prefix, decoded-1, err)
+		}
+		pool.AddCert(crt)
+		certs++
+	}
+	if declared != decoded {
+		return nil, fmt.Errorf("%s ca: %d PEM blocks declared but only %d decodable — the bundle is corrupt and would pin fewer roots than intended", prefix, declared, decoded)
+	}
+	if certs == 0 {
+		return nil, fmt.Errorf("%s ca: no %s block found", prefix, pemTypeCertificate)
+	}
+	return pool, nil
 }

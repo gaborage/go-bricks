@@ -33,6 +33,10 @@ import (
 
 const testServerName = "partner.example.com"
 
+// pemTypeCertificate labels the PEM blocks these fixtures emit; the production
+// constant now lives in internal/secretfile alongside CertPool.
+const pemTypeCertificate = "CERTIFICATE"
+
 // newTestCA returns a self-signed CA and a function minting leaf certs signed by it.
 func newTestCA(t *testing.T, cn string) (caCertPEM []byte, caCert *x509.Certificate, issue func(leafCN string, isServer bool) (certPEM, keyPEM []byte)) {
 	t.Helper()

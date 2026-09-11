@@ -303,3 +303,40 @@ func TestLooksLikeKeyMaterialDetectsKeysNotPaths(t *testing.T) {
 		})
 	}
 }
+
+// selfSignedCertPEM issues a self-signed certificate and returns its PEM block.
+func selfSignedCertPEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	cert := testconsts.SelfSignedCert(t, key)
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+}
+
+func TestCertPoolAddsEveryCertificateBlock(t *testing.T) {
+	bundle := append(selfSignedCertPEM(t), selfSignedCertPEM(t)...)
+
+	pool, err := CertPool("httpclient: tls:", bundle)
+
+	require.NoError(t, err)
+	require.NotNil(t, pool)
+	assert.Len(t, pool.Subjects(), 2) //nolint:staticcheck // SA1019: Subjects is the only way to count roots in a pool built by hand.
+}
+
+func TestCertPoolRejectsUndecodableBlocks(t *testing.T) {
+	bundle := append(selfSignedCertPEM(t), []byte("-----BEGIN CERTIFICATE-----\n!!!not base64!!!\n-----END CERTIFICATE-----\n")...)
+
+	pool, err := CertPool("httpclient: tls:", bundle)
+
+	require.Error(t, err)
+	assert.Nil(t, pool)
+	assert.Contains(t, err.Error(), "httpclient: tls: ca: 2 PEM blocks declared but only 1 decodable")
+}
+
+func TestCertPoolRejectsBundleWithoutCertificates(t *testing.T) {
+	pool, err := CertPool("cache: redis: tls:", testconsts.PEMFixture("PRIVATE KEY"))
+
+	require.Error(t, err)
+	assert.Nil(t, pool)
+	assert.Equal(t, "cache: redis: tls: ca: no CERTIFICATE block found", err.Error())
+}
