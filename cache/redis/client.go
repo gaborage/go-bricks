@@ -134,7 +134,12 @@ func (c *Client) namespace(ctx context.Context) string {
 // buildRedisOptions turns a validated Config into go-redis dial options. TLS is
 // off unless cfg.TLS.Enabled, in which case the material is loaded here so a
 // broken bundle fails the dial rather than the first command.
-func buildRedisOptions(cfg *Config) (*redis.Options, error) {
+//
+// material is the projection validation already built from cfg.TLS; it is
+// passed in rather than rebuilt so one NewClient call projects it exactly once.
+// It is taken by pointer and mutated (the SNI fallback below), so the caller
+// must own the copy it hands over.
+func buildRedisOptions(cfg *Config, material *clienttls.Material) (*redis.Options, error) {
 	opts := &redis.Options{
 		Addr:            cfg.Address(),
 		Password:        cfg.Password,
@@ -152,12 +157,11 @@ func buildRedisOptions(cfg *Config) (*redis.Options, error) {
 		return opts, nil
 	}
 
-	material := cfg.TLS.material()
 	// Falling back to the host keeps verification named when no SNI override is
 	// configured.
 	material.ServerName = cmp.Or(material.ServerName, cfg.Host)
 
-	tlsCfg, err := clienttls.Build(tlsErrPrefix, &material)
+	tlsCfg, err := clienttls.Build(tlsErrPrefix, material)
 	if err != nil {
 		return nil, cache.NewConfigError("redis.tls", "invalid TLS material", err)
 	}
@@ -169,11 +173,12 @@ func buildRedisOptions(cfg *Config) (*redis.Options, error) {
 // NewClient creates a new Redis cache client.
 // Validates configuration and establishes connection.
 func NewClient(cfg *Config) (*Client, error) {
-	if err := cfg.Validate(); err != nil {
+	material, err := cfg.validate()
+	if err != nil {
 		return nil, err
 	}
 
-	opts, err := buildRedisOptions(cfg)
+	opts, err := buildRedisOptions(cfg, &material)
 	if err != nil {
 		return nil, err
 	}

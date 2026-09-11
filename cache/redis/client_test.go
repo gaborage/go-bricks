@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/cache"
+	"github.com/gaborage/go-bricks/internal/clienttls"
 	gbtesting "github.com/gaborage/go-bricks/testing"
 )
 
@@ -1020,7 +1021,8 @@ func TestBuildRedisOptionsWithoutTLS(t *testing.T) {
 		MaxRetryBackoff: 513 * time.Millisecond,
 	}
 
-	opts, err := buildRedisOptions(cfg)
+	material := cfg.TLS.material()
+	opts, err := buildRedisOptions(cfg, &material)
 
 	require.NoError(t, err)
 	require.NotNil(t, opts)
@@ -1048,7 +1050,8 @@ func TestBuildRedisOptionsTLSEnabledWithoutMaterial(t *testing.T) {
 		TLS:      TLSConfig{Enabled: true},
 	}
 
-	opts, err := buildRedisOptions(cfg)
+	material := cfg.TLS.material()
+	opts, err := buildRedisOptions(cfg, &material)
 
 	require.NoError(t, err)
 	require.NotNil(t, opts.TLSConfig)
@@ -1068,11 +1071,32 @@ func TestBuildRedisOptionsTLSServerNameOverride(t *testing.T) {
 		TLS:      TLSConfig{Enabled: true, ServerName: "other.example"},
 	}
 
-	opts, err := buildRedisOptions(cfg)
+	material := cfg.TLS.material()
+	opts, err := buildRedisOptions(cfg, &material)
 
 	require.NoError(t, err)
 	require.NotNil(t, opts.TLSConfig)
 	assert.Equal(t, "other.example", opts.TLSConfig.ServerName)
+}
+
+// TestBuildRedisOptionsUsesSuppliedMaterial pins the contract that makes one
+// projection per NewClient possible: the dial options come from the Material
+// handed in, not from a fresh projection of cfg.TLS.
+func TestBuildRedisOptionsUsesSuppliedMaterial(t *testing.T) {
+	cfg := &Config{
+		Host:     "cache.example",
+		Port:     6379,
+		PoolSize: 10,
+		TLS:      TLSConfig{Enabled: true, ServerName: "from.config.example"},
+	}
+
+	material := clienttls.Material{ServerName: "from.material.example", MinVersion: "1.3"}
+	opts, err := buildRedisOptions(cfg, &material)
+
+	require.NoError(t, err)
+	require.NotNil(t, opts.TLSConfig)
+	assert.Equal(t, "from.material.example", opts.TLSConfig.ServerName)
+	assert.Equal(t, uint16(tls.VersionTLS13), opts.TLSConfig.MinVersion)
 }
 
 // testCAValue mints a self-signed certificate and returns it base64-encoded PEM,
@@ -1093,7 +1117,8 @@ func TestBuildRedisOptionsTLSCAValuePinsRoots(t *testing.T) {
 		TLS:      TLSConfig{Enabled: true, CAValue: testCAValue(t)},
 	}
 
-	opts, err := buildRedisOptions(cfg)
+	material := cfg.TLS.material()
+	opts, err := buildRedisOptions(cfg, &material)
 
 	require.NoError(t, err)
 	require.NotNil(t, opts.TLSConfig)
@@ -1111,7 +1136,8 @@ func TestBuildRedisOptionsTLSMaterialErrorIsConfigError(t *testing.T) {
 		TLS:      TLSConfig{Enabled: true, CAValue: "not-base64"},
 	}
 
-	opts, err := buildRedisOptions(cfg)
+	material := cfg.TLS.material()
+	opts, err := buildRedisOptions(cfg, &material)
 
 	require.Error(t, err)
 	assert.Nil(t, opts)

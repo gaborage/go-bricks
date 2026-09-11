@@ -95,32 +95,39 @@ type TLSConfig struct {
 // Validate performs fail-fast validation of Redis configuration.
 // Returns error if configuration is invalid.
 func (c *Config) Validate() error {
+	_, err := c.validate()
+	return err
+}
+
+// validate is Validate plus the TLS material projection it built on the way,
+// so a caller that needs both — NewClient — pays for the projection once.
+func (c *Config) validate() (clienttls.Material, error) {
 	if c.Host == "" {
-		return cache.NewConfigError("redis.host", "host is required", nil)
+		return clienttls.Material{}, cache.NewConfigError("redis.host", "host is required", nil)
 	}
 
 	if c.Port <= 0 || c.Port > 65535 {
-		return cache.NewConfigError("redis.port", fmt.Sprintf("invalid port: %d", c.Port), nil)
+		return clienttls.Material{}, cache.NewConfigError("redis.port", fmt.Sprintf("invalid port: %d", c.Port), nil)
 	}
 
 	if c.Database < 0 || c.Database > 15 {
-		return cache.NewConfigError("redis.database", fmt.Sprintf("invalid database number: %d (must be 0-15)", c.Database), nil)
+		return clienttls.Material{}, cache.NewConfigError("redis.database", fmt.Sprintf("invalid database number: %d (must be 0-15)", c.Database), nil)
 	}
 
 	if c.PoolSize <= 0 {
-		return cache.NewConfigError("redis.pool_size", fmt.Sprintf("invalid pool size: %d (must be > 0)", c.PoolSize), nil)
+		return clienttls.Material{}, cache.NewConfigError("redis.pool_size", fmt.Sprintf("invalid pool size: %d (must be > 0)", c.PoolSize), nil)
 	}
 
 	if c.DialTimeout < 0 {
-		return cache.NewConfigError("redis.dial_timeout", "dial timeout cannot be negative", nil)
+		return clienttls.Material{}, cache.NewConfigError("redis.dial_timeout", "dial timeout cannot be negative", nil)
 	}
 
 	if c.ReadTimeout < -1 {
-		return cache.NewConfigError("redis.read_timeout", "read timeout cannot be less than -1", nil)
+		return clienttls.Material{}, cache.NewConfigError("redis.read_timeout", "read timeout cannot be less than -1", nil)
 	}
 
 	if c.WriteTimeout < -1 {
-		return cache.NewConfigError("redis.write_timeout", "write timeout cannot be less than -1", nil)
+		return clienttls.Material{}, cache.NewConfigError("redis.write_timeout", "write timeout cannot be less than -1", nil)
 	}
 
 	// Zero stays valid: it means "unset", and LoadThrough then uses its own fallback. A
@@ -129,7 +136,7 @@ func (c *Config) Validate() error {
 	// as "not configured" — so without this the operator's value would be silently ignored
 	// rather than corrected or refused.
 	if c.LoadTimeout < 0 {
-		return cache.NewConfigError("redis.load_timeout", "load timeout cannot be negative", nil)
+		return clienttls.Material{}, cache.NewConfigError("redis.load_timeout", "load timeout cannot be negative", nil)
 	}
 
 	return c.TLS.validate()
@@ -140,12 +147,15 @@ func (c *Config) Validate() error {
 // a half client-certificate pair, and the min-version enum. The rules
 // themselves live in clienttls, beside the loader that consumes the same
 // material; reading and parsing the PEM happens when the client dials.
-func (t *TLSConfig) validate() error {
+//
+// It returns the projection it validated so the dial path can reuse it instead
+// of building a second, identical one.
+func (t *TLSConfig) validate() (clienttls.Material, error) {
 	m := t.material()
 	if v := clienttls.ValidateMaterial(&m, t.Enabled); v != nil {
-		return cache.NewConfigError(tlsFieldPrefix+v.Field, v.Message, nil)
+		return clienttls.Material{}, cache.NewConfigError(tlsFieldPrefix+v.Field, v.Message, nil)
 	}
-	return nil
+	return m, nil
 }
 
 // material projects the block onto the shared clienttls.Material. ServerName is
