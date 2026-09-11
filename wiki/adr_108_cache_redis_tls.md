@@ -10,7 +10,7 @@ Every other outbound connection GoBricks makes can be encrypted from configurati
 database has `database.tls.*` (ADR-027, hardened by ADR-062), the HTTP client has
 `httpclient.ClientTLSConfig`, the server has a `server.tls.*` listener (ADR-042). The Redis
 client had nothing: `cache/redis` built `*redis.Options` with no `TLSConfig`, so a deployment
-whose cache endpoint requires TLS — every managed Redis offering does — had no configuration
+whose cache endpoint requires TLS — as many managed Redis offerings do — had no configuration
 path to it at all, and the traffic that would have carried session material, cached tokens and
 cached PII went out in clear or not at all.
 

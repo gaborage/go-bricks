@@ -1575,7 +1575,7 @@ in the next stacked PR. See [migrations.md](migrations.md) `[C64.15]`.
 
 The database (ADR-027/ADR-062), the HTTP client and the server listener (ADR-042) could all be
 encrypted from configuration; `cache/redis` built `*redis.Options` with no `TLSConfig`, so a
-deployment whose cache endpoint requires TLS — as every managed Redis offering does — sent its
+deployment whose cache endpoint requires TLS — as many managed Redis offerings do — sent its
 session material, cached tokens and cached PII in clear or could not connect at all.
 `cache.redis.tls` is now an additive nested block mirroring `ServerTLSConfig`'s shape (`enabled`,
 the file-or-value pairs `cafile`/`cavalue`, `certfile`/`certvalue`, `keyfile`/`keyvalue`, plus
