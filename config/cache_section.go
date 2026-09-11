@@ -3,6 +3,9 @@ package config
 import (
 	"fmt"
 	"slices"
+	"strings"
+
+	"github.com/gaborage/go-bricks/internal/clienttls"
 )
 
 // normalizeCache fills Redis defaults unconditionally, even when the cache is
@@ -104,5 +107,50 @@ func validateRedisCache(cfg *RedisConfig) error {
 		return NewValidationError("cache.redis.writetimeout", "must be >= -1")
 	}
 
+	return validateRedisTLS(&cfg.TLS)
+}
+
+// fieldCacheRedisTLSPrefix namespaces a clienttls.Violation's relative key
+// (e.g. "cafile") into this layer's config key. The tenant spelling
+// (multitenant.tenants.<id>.cache.redis.tls.*) is derived from it downstream,
+// so the "cache." head must stay.
+const fieldCacheRedisTLSPrefix = "cache.redis.tls."
+
+// cacheRedisTLSErrPrefix names the cache's error namespace for the shared TLS
+// loader, matching the spelling cache/redis uses for the same material.
+const cacheRedisTLSErrPrefix = "cache: redis: tls:"
+
+// validateRedisTLS checks TLS material configuration in two passes. The first is
+// structural (staged material under a disabled block, mutual exclusivity of
+// file/value sources, cert/key pairing, min-version enum); its rules live in
+// clienttls, beside the loader that consumes the same material, and this only
+// maps a violation onto the cache.redis.tls.* keys.
+//
+// The second pass actually loads the material, which means this validation reads
+// files — unusual here, and deliberate. Unlike server.tls, whose material is read
+// at Start() one hop later, a Redis client is created lazily per tenant on first
+// use, so config validation is the only door at which a missing or corrupt bundle
+// can fail the boot rather than a request hours later. The dial loads it again;
+// the two loads are a startup gate and a use-time one, not a cache.
+func validateRedisTLS(cfg *RedisTLSConfig) error {
+	m := clienttls.Material{
+		CertFile:   cfg.CertFile,
+		CertValue:  cfg.CertValue,
+		KeyFile:    cfg.KeyFile,
+		KeyValue:   cfg.KeyValue,
+		CAFile:     cfg.CAFile,
+		CAValue:    cfg.CAValue,
+		ServerName: cfg.ServerName,
+		MinVersion: cfg.MinVersion,
+	}
+	if v := clienttls.ValidateMaterial(&m, cfg.Enabled); v != nil {
+		return NewValidationError(fieldCacheRedisTLSPrefix+v.Field, v.Message)
+	}
+	if !cfg.Enabled {
+		return nil
+	}
+	if _, err := clienttls.Build(cacheRedisTLSErrPrefix, &m); err != nil {
+		return NewValidationError(strings.TrimSuffix(fieldCacheRedisTLSPrefix, "."), err.Error())
+	}
 	return nil
 }

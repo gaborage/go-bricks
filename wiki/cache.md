@@ -496,6 +496,67 @@ column, the `Unhealthy` kubelet event, `kube_pod_status_ready`. Size
 `initialDelaySeconds`/`failureThreshold` against the pre-listen boot window too — see
 [startup_defaults.md](startup_defaults.md#messaging-pre-warm-readiness-wait).
 
+## TLS (`cache.redis.tls`)
+
+The Redis client dials plaintext unless `cache.redis.tls.enabled` is true
+([ADR-108](adr_108_cache_redis_tls.md)). For a managed endpoint serving a publicly-rooted
+certificate the whole configuration is one line — the system trust store verifies the server
+and `servername` defaults to `cache.redis.host`:
+
+```yaml
+cache:
+  redis:
+    host: my-cache.example.com
+    port: 6379
+    tls:
+      enabled: true
+```
+
+Every other field is optional material, each piece supplied as a PEM file path (`*file`) or a
+base64-encoded PEM string (`*value`), never both:
+
+- **Private CA** — `cafile` / `cavalue`. When set it REPLACES the system roots for server
+  verification, so a client pinning a private CA can no longer verify public-CA endpoints.
+- **Mutual TLS** — `certfile`/`certvalue` plus `keyfile`/`keyvalue`, set together. A log field
+  named `keyvalue` is masked by the default log filter, since it carries the private key;
+  `certvalue` and `cavalue` are not, being public material
+  ([observability.md](observability.md#sensitive-data-filtering)).
+- **`servername`** overrides SNI and hostname verification; unset it defaults to
+  `cache.redis.host`, which is what a managed endpoint needs.
+- **`minversion`** is `"1.2"` (the floor when empty) or `"1.3"`.
+
+Four rules fail closed at startup, in `config.Validate` (the root `cache:` block and every
+per-tenant cache alike) and again in `(*redis.Config).Validate()`:
+
+- **Any `tls.*` field while disabled is an ERROR.** Any of the other eight fields set while
+  `enabled` is false is a startup error naming `cache.redis.tls.enabled`. This diverges
+  deliberately from the server listener, which WARNs on the same shape
+  ([ADR-042](adr_042_server_tls.md)): a cache client has no provision-then-flip rollout, and a
+  mis-flagged `enabled` otherwise dials plaintext at a TLS-only endpoint and reports a network
+  fault.
+- **One source per piece.** Setting both `certfile` and `certvalue` (or both `keyfile` and
+  `keyvalue`, or both `cafile` and `cavalue`) is an error naming that piece.
+- **Cert and key travel together.** A certificate without its key, or a key without its
+  certificate, is an error.
+- **`minversion` is an allowlist.** Anything outside `""`, `"1.2"` and `"1.3"` is an error
+  naming `cache.redis.tls.minversion`.
+
+`enabled: true` with no material at all is valid: system roots, server authentication only.
+
+Beyond those four shape rules, `config.Validate` also LOADS the material it was given: a
+`cafile` naming a file that is not there, or a `cavalue` that is not a decodable PEM bundle,
+fails at startup with an error naming `cache.redis.tls`. This is worth the filesystem read at
+validation time because a per-tenant Redis client is built lazily on first use — without it a
+broken bundle boots green and surfaces hours later as a failed request. The dial loads the
+material again; the two loads are a startup gate and a use-time one.
+
+**There is no `insecureskipverify` key and no raw `*tls.Config` escape hatch**, by design.
+Verification-disabling knobs survive from a staging config into production because nothing
+fails when they do, and a cache connection carries session and token material that a
+man-in-the-middle would read in clear. Pinning a private CA through `cafile`/`cavalue` is the
+supported path for a self-signed or internally-issued endpoint; a local Redis that cannot
+serve a certificate should run with `tls.enabled` false rather than with verification off.
+
 ## Cache Manager Defaults
 
 GoBricks applies production-safe cache manager defaults when cache is configured:

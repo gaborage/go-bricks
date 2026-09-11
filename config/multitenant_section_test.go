@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -94,6 +95,70 @@ func TestValidateMultitenantTenantsCacheMisconfigFailsFast(t *testing.T) {
 	err := Validate(cfg)
 	require.Error(t, err, "enabled tenant cache without a host must fail at startup")
 	assert.Contains(t, err.Error(), "cache.redis.host")
+}
+
+// TestValidateMultitenantTenantsCacheTLSMisconfigIsTenantAddressed proves the
+// TLS fail-closed rules inherit the tenant addressing: the field names the
+// tenant, so a consumer matching on ConfigError.Field learns whose cache failed.
+func TestValidateMultitenantTenantsCacheTLSMisconfigIsTenantAddressed(t *testing.T) {
+	tests := []struct {
+		name      string
+		tls       RedisTLSConfig
+		wantField string
+	}{
+		{
+			// Material staged under a disabled TLS block: the structural pass.
+			name:      "staged_material_under_disabled_block",
+			tls:       RedisTLSConfig{CAFile: "/etc/ssl/ca.pem"},
+			wantField: "multitenant.tenants.acme.cache.redis.tls.enabled",
+		},
+		{
+			// An enabled block naming a file that is not there: the material pass,
+			// which only exists because the tenant's client is built lazily.
+			name:      "unloadable_material",
+			tls:       RedisTLSConfig{Enabled: true, CAFile: filepath.Join(t.TempDir(), "absent-ca.pem")},
+			wantField: "multitenant.tenants.acme.cache.redis.tls",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				App:    createValidAppConfig(),
+				Server: createValidServerConfig(),
+				Log:    createValidLogConfig(),
+				Multitenant: MultitenantConfig{
+					Enabled: true,
+					Resolver: ResolverConfig{
+						Type:   "header",
+						Header: testTenantHeader,
+					},
+					Tenants: map[string]TenantEntry{
+						"acme": {
+							Database: DatabaseConfig{
+								Type:     PostgreSQL,
+								Host:     "acme.db",
+								Port:     5432,
+								Database: "acme",
+								Username: "acme_user",
+							},
+							Cache: CacheConfig{
+								Enabled: true,
+								Redis:   RedisConfig{Host: "acme.redis", TLS: tt.tls},
+							},
+						},
+					},
+				},
+				Source: SourceConfig{Type: SourceTypeStatic},
+			}
+
+			err := Validate(cfg)
+			require.Error(t, err, "a TLS misconfiguration must fail at startup")
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+		})
+	}
 }
 
 // normalizeTenantsAndCheckMultitenant runs the tenant half of normalize before

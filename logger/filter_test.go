@@ -1121,6 +1121,16 @@ func TestDefaultFilterMasksSecretKeyShapesButNotIdentifiers(t *testing.T) {
 		{name: "encryptionkey_concatenated", fieldName: "encryptionkey", wantMasked: true},
 		{name: "uppercase_variant", fieldName: "PRIVATE_KEY", wantMasked: true},
 
+		// The TLS config keys: keyvalue carries a base64 PEM private key
+		// (server.tls.keyvalue, cache.redis.tls.keyvalue, httpclient's
+		// KeyValue), so it is a needle. certvalue and cavalue carry public
+		// material and stay in clear.
+		{name: "keyvalue", fieldName: "keyvalue", wantMasked: true},
+		{name: "keyvalue_camel", fieldName: "KeyValue", wantMasked: true},
+		{name: "tls_keyvalue", fieldName: "tls_keyvalue", wantMasked: true},
+		{name: "certvalue_is_public", fieldName: "certvalue", wantMasked: false},
+		{name: "cavalue_is_public", fieldName: "cavalue", wantMasked: false},
+
 		// Hyphenated spellings, which no underscore needle matches. httpclient
 		// logs whole http.Header maps through this filter under LogPayloads, and
 		// a header is spelled this way.

@@ -119,6 +119,20 @@ cache:
     maxretries: 3                    # Maximum number of retries before giving up
     minretrybackoff: 8ms             # Minimum backoff between retries
     maxretrybackoff: 512ms           # Maximum backoff between retries
+    # cache.redis.tls.* enables TLS on the Redis client connection (ADR-108); see wiki/cache.md
+    # Fail-closed: any tls.* field set while enabled is false fails startup, so the block below
+    # shows enabled: true. Omit the whole block for a plaintext connection.
+    # A named cafile/certfile/keyfile is READ at startup: a missing or corrupt file fails the boot.
+    # tls:
+    #   enabled: true         # true with no material below verifies against the system roots
+    #   cafile: /etc/tls/redis-ca.crt   # Server CA: file path OR cavalue (at most one)
+    #   cavalue: ""
+    #   certfile: /etc/tls/redis-client.crt   # Client certificate (mTLS): file path OR certvalue; requires a key
+    #   certvalue: ""
+    #   keyfile: /etc/tls/redis-client.key    # Client private key: file path OR keyvalue; requires a certificate
+    #   keyvalue: ""
+    #   servername: ""        # SNI / verification hostname; empty defaults to cache.redis.host
+    #   minversion: "1.2"     # "" or "1.2" (floor, default); "1.3" opts up
 
 # KeyStore (OPTIONAL - named RSA key pairs for encryption/signing)
 # Load DER-encoded keys from files (local dev) or base64 env vars (EKS)
