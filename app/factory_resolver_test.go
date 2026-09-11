@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -606,7 +605,7 @@ func TestCacheConnectorLeavesDialErrorsUnqualified(t *testing.T) {
 	var connErr *cache.ConnectionError
 	require.ErrorAs(t, err, &connErr)
 	var configErr *config.ConfigError
-	assert.False(t, errors.As(err, &configErr), "a dial failure must not be addressed to a config key")
+	assert.NotErrorAs(t, err, &configErr, "a dial failure must not be addressed to a config key")
 }
 
 // mockTenantStoreUnreachable points at a port nothing listens on, so the client
