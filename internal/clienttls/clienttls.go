@@ -113,7 +113,7 @@ type Violation struct {
 func ValidateMaterial(m *Material, enabled bool) *Violation {
 	if !enabled {
 		if *m != (Material{}) {
-			return &Violation{fieldEnabled, "must be true when any tls.* material is configured"}
+			return &Violation{fieldEnabled, "must be true when any tls.* field is set"}
 		}
 		return nil
 	}

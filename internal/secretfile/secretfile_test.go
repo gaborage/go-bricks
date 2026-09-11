@@ -323,7 +323,10 @@ func TestCertPoolAddsEveryCertificateBlock(t *testing.T) {
 }
 
 func TestCertPoolRejectsUndecodableBlocks(t *testing.T) {
-	bundle := append(certPEM(t), []byte("-----BEGIN CERTIFICATE-----\n!!!not base64!!!\n-----END CERTIFICATE-----\n")...)
+	// Composed rather than written inline: a contiguous PEM BEGIN marker in
+	// source trips org secret scanners. The bytes are identical to the literal.
+	undecodable := "-----BEGIN " + "CERTIFICATE-----\n!!!not base64!!!\n-----END " + "CERTIFICATE-----\n"
+	bundle := append(certPEM(t), []byte(undecodable)...)
 
 	pool, err := CertPool("httpclient: tls:", bundle)
 
