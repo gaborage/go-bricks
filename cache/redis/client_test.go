@@ -2,12 +2,8 @@ package redis
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
-	"encoding/pem"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -1082,10 +1078,7 @@ func TestBuildRedisOptionsTLSServerNameOverride(t *testing.T) {
 // the shape cache.redis.tls.cavalue carries.
 func testCAValue(t *testing.T) string {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	cert := gbtesting.SelfSignedCert(t, key)
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+	certPEM, _ := gbtesting.SelfSignedCertKeyPEM(t)
 	return base64.StdEncoding.EncodeToString(certPEM)
 }
 

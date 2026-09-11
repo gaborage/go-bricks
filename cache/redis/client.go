@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -151,31 +152,18 @@ func buildRedisOptions(cfg *Config) (*redis.Options, error) {
 		return opts, nil
 	}
 
-	tlsCfg, err := clienttls.Build(tlsErrPrefix, &clienttls.Material{
-		CertFile:   cfg.TLS.CertFile,
-		CertValue:  cfg.TLS.CertValue,
-		KeyFile:    cfg.TLS.KeyFile,
-		KeyValue:   cfg.TLS.KeyValue,
-		CAFile:     cfg.TLS.CAFile,
-		CAValue:    cfg.TLS.CAValue,
-		ServerName: serverNameOr(cfg.TLS.ServerName, cfg.Host),
-		MinVersion: cfg.TLS.MinVersion,
-	})
+	material := cfg.TLS.material()
+	// Falling back to the host keeps verification named when no SNI override is
+	// configured.
+	material.ServerName = cmp.Or(material.ServerName, cfg.Host)
+
+	tlsCfg, err := clienttls.Build(tlsErrPrefix, &material)
 	if err != nil {
 		return nil, cache.NewConfigError("redis.tls", "invalid TLS material", err)
 	}
 
 	opts.TLSConfig = tlsCfg
 	return opts, nil
-}
-
-// serverNameOr falls back to the Redis host so verification has a name even
-// when no SNI override is configured.
-func serverNameOr(override, host string) string {
-	if override != "" {
-		return override
-	}
-	return host
 }
 
 // NewClient creates a new Redis cache client.

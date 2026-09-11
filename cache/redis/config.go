@@ -5,16 +5,12 @@ import (
 	"time"
 
 	"github.com/gaborage/go-bricks/cache"
+	"github.com/gaborage/go-bricks/internal/clienttls"
 )
 
-// Config error fields for the TLS block, matching the config keys.
-const (
-	fieldTLSEnabled    = "redis.tls.enabled"
-	fieldTLSCAFile     = "redis.tls.cafile"
-	fieldTLSCertFile   = "redis.tls.certfile"
-	fieldTLSKeyFile    = "redis.tls.keyfile"
-	fieldTLSMinVersion = "redis.tls.minversion"
-)
+// tlsFieldPrefix namespaces a clienttls.Violation's relative key (e.g.
+// "cafile") into this package's config-error field.
+const tlsFieldPrefix = "redis.tls."
 
 // Config holds Redis-specific configuration options.
 type Config struct {
@@ -141,55 +137,32 @@ func (c *Config) Validate() error {
 
 // validate checks the structural TLS rules without touching the filesystem:
 // material staged under a disabled block, a piece configured from two sources,
-// a half client-certificate pair, and the min-version enum. Reading and parsing
-// the PEM happens when the client dials.
+// a half client-certificate pair, and the min-version enum. The rules
+// themselves live in clienttls, beside the loader that consumes the same
+// material; reading and parsing the PEM happens when the client dials.
 func (t *TLSConfig) validate() error {
-	if !t.Enabled {
-		if t.hasMaterial() {
-			return cache.NewConfigError(fieldTLSEnabled,
-				"must be true when any redis.tls.* material is configured", nil)
-		}
-		return nil
+	m := t.material()
+	if v := clienttls.ValidateMaterial(&m, t.Enabled); v != nil {
+		return cache.NewConfigError(tlsFieldPrefix+v.Field, v.Message, nil)
 	}
-
-	sources := []struct{ fileField, valueField, file, value string }{
-		{fieldTLSCAFile, "redis.tls.cavalue", t.CAFile, t.CAValue},
-		{fieldTLSCertFile, "redis.tls.certvalue", t.CertFile, t.CertValue},
-		{fieldTLSKeyFile, "redis.tls.keyvalue", t.KeyFile, t.KeyValue},
-	}
-	for _, s := range sources {
-		if s.file != "" && s.value != "" {
-			return cache.NewConfigError(s.fileField,
-				s.fileField+" and "+s.valueField+" are mutually exclusive (exactly one)", nil)
-		}
-	}
-
-	hasCert := t.CertFile != "" || t.CertValue != ""
-	hasKey := t.KeyFile != "" || t.KeyValue != ""
-	switch {
-	case hasCert && !hasKey:
-		return cache.NewConfigError(fieldTLSKeyFile,
-			"a client certificate requires "+fieldTLSKeyFile+" or redis.tls.keyvalue", nil)
-	case hasKey && !hasCert:
-		return cache.NewConfigError(fieldTLSCertFile,
-			"a client key requires "+fieldTLSCertFile+" or redis.tls.certvalue", nil)
-	}
-
-	switch t.MinVersion {
-	case "", "1.2", "1.3":
-		return nil
-	default:
-		return cache.NewConfigError(fieldTLSMinVersion,
-			fmt.Sprintf("invalid value: %q (accepted values are \"1.2\" and \"1.3\")", t.MinVersion), nil)
-	}
+	return nil
 }
 
-// hasMaterial reports whether any field other than Enabled is set.
-func (t *TLSConfig) hasMaterial() bool {
-	return t.CAFile != "" || t.CAValue != "" ||
-		t.CertFile != "" || t.CertValue != "" ||
-		t.KeyFile != "" || t.KeyValue != "" ||
-		t.ServerName != "" || t.MinVersion != ""
+// material projects the block onto the shared clienttls.Material. ServerName is
+// carried exactly as configured: falling back to the Redis host is the dial's
+// business, not the shape check's — substituting it here would make an empty
+// disabled block look like staged material.
+func (t *TLSConfig) material() clienttls.Material {
+	return clienttls.Material{
+		CertFile:   t.CertFile,
+		CertValue:  t.CertValue,
+		KeyFile:    t.KeyFile,
+		KeyValue:   t.KeyValue,
+		CAFile:     t.CAFile,
+		CAValue:    t.CAValue,
+		ServerName: t.ServerName,
+		MinVersion: t.MinVersion,
+	}
 }
 
 // Address returns the Redis server address in "host:port" format.
