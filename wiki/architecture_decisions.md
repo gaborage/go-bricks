@@ -1569,6 +1569,40 @@ in the next stacked PR. See [migrations.md](migrations.md) `[C64.15]`.
 
 ---
 
+### [ADR-108: Redis TLS Is a Nested Config Block Over a Shared Client-TLS Loader](adr_108_cache_redis_tls.md)
+
+**Date:** 2026-09-11 | **Status:** Accepted
+
+The database (ADR-027/ADR-062), the HTTP client and the server listener (ADR-042) could all be
+encrypted from configuration; the Redis client could not — `cache/redis` built `*redis.Options`
+with no `TLSConfig`, so a deployment whose cache endpoint requires TLS, as every managed Redis
+offering does, had no path to it and its session material, cached tokens and cached PII went out
+in clear or not at all. `cache.redis.tls` is now an additive nested block mirroring
+`ServerTLSConfig`'s shape — `enabled`, the file-or-value pairs `cafile`/`cavalue`,
+`certfile`/`certvalue`, `keyfile`/`keyvalue`, plus `servername` (defaulted to `cache.redis.host`)
+and `minversion` — every field a comparable scalar, so the struct stays comparable and apidiff
+stays quiet. The material is loaded by one shared `internal/clienttls` rather than a third
+hand-rolled copy: httpclient's private `certPoolFromPEM`, which counts declared `-----BEGIN`
+blocks against the ones that parsed and refuses a bundle holding zero certificates, moves
+verbatim to `secretfile.CertPool` and httpclient calls the export, keeping its signature and
+error strings byte-identical; `server/tls.go` is untouched. Four rules fail closed in both
+`config/cache_section.go` (so the per-tenant path inherits them) and
+`(*redis.Config).Validate()`: staged material while `enabled` is false, both a `*file` and a
+`*value` on one piece, a certificate without its key, and a `minversion` outside
+`{"", "1.2", "1.3"}`. The first of those is an ERROR where ADR-042 chose a WARN, deliberately — a
+cache client has no provision-then-flip rollout, and a mis-flagged `enabled` dials plaintext at a
+TLS-only endpoint, surfacing to the operator as a network fault rather than a misconfiguration.
+There is no `insecureskipverify` key, no raw `*tls.Config` option and no `rediss://`: CA pinning
+is the supported path for a self-signed endpoint. Additive and non-breaking — with `enabled`
+false the built options are byte-identical to before, so there is no migrations atom.
+
+**Key Benefits:** encrypted and mutually-authenticated Redis connections from YAML; one
+client-TLS loader shared by `httpclient` and `cache/redis` instead of a third copy; four
+fail-closed startup rules in the ADR-027/ADR-062 lineage, including a staged-material ERROR that
+cannot silently downgrade a TLS-only endpoint to plaintext.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2339,7 +2373,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-107) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-108) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/cache"
+	"github.com/gaborage/go-bricks/cache/redis"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -564,4 +565,41 @@ func TestFactoryResolverDottedTenantIDSuppressesEnvHint(t *testing.T) {
 	assert.Equal(t, "add multitenant.tenants.acme.corp.cache.redis.host to config.yaml", configErr.Action)
 	assert.NotContains(t, configErr.Action, "env var")
 	assert.NotContains(t, err.Error(), "MULTITENANT_TENANTS_ACME_CORP")
+}
+
+// TestRedisClientConfigCarriesTLS proves every cache.redis.tls.* field reaches
+// the redis client config; distinct literals make a swapped or dropped field
+// fail rather than pass by coincidence.
+func TestRedisClientConfigCarriesTLS(t *testing.T) {
+	cacheCfg := &config.CacheConfig{
+		Redis: config.RedisConfig{
+			Host: "cache.example",
+			Port: 6380,
+			TLS: config.RedisTLSConfig{
+				Enabled:    true,
+				CAFile:     "/etc/ca-file.pem",
+				CAValue:    "ca-value",
+				CertFile:   "/etc/cert-file.pem",
+				CertValue:  "cert-value",
+				KeyFile:    "/etc/key-file.pem",
+				KeyValue:   "key-value",
+				ServerName: "sni.example",
+				MinVersion: "1.3",
+			},
+		},
+	}
+
+	got := redisClientConfig(cacheCfg)
+
+	assert.Equal(t, redis.TLSConfig{
+		Enabled:    true,
+		CAFile:     "/etc/ca-file.pem",
+		CAValue:    "ca-value",
+		CertFile:   "/etc/cert-file.pem",
+		CertValue:  "cert-value",
+		KeyFile:    "/etc/key-file.pem",
+		KeyValue:   "key-value",
+		ServerName: "sni.example",
+		MinVersion: "1.3",
+	}, got.TLS)
 }

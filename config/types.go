@@ -414,6 +414,33 @@ type RedisConfig struct {
 	MaxRetries      int           `koanf:"maxretries" json:"maxretries" yaml:"maxretries" toml:"maxretries" mapstructure:"maxretries"`
 	MinRetryBackoff time.Duration `koanf:"minretrybackoff" json:"minretrybackoff" yaml:"minretrybackoff" toml:"minretrybackoff" mapstructure:"minretrybackoff"`
 	MaxRetryBackoff time.Duration `koanf:"maxretrybackoff" json:"maxretrybackoff" yaml:"maxretrybackoff" toml:"maxretrybackoff" mapstructure:"maxretrybackoff"`
+
+	TLS RedisTLSConfig `koanf:"tls" json:"tls" yaml:"tls" toml:"tls" mapstructure:"tls"`
+}
+
+// RedisTLSConfig enables TLS on the Redis client connection. Each PEM piece
+// comes from a file path (*File) or a base64-encoded PEM string (*Value) — at
+// most one source per piece. Zero value = plaintext, today's behavior; an
+// enabled block with no material at all verifies against the system roots.
+// Unlike the server listener, staged material under enabled:false is an error,
+// not a warning: a silently plaintext cache connection is the failure mode this
+// config exists to prevent.
+type RedisTLSConfig struct {
+	Enabled bool `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
+
+	CAFile    string `koanf:"cafile" json:"cafile" yaml:"cafile" toml:"cafile" mapstructure:"cafile"`
+	CAValue   string `koanf:"cavalue" json:"cavalue" yaml:"cavalue" toml:"cavalue" mapstructure:"cavalue"`
+	CertFile  string `koanf:"certfile" json:"certfile" yaml:"certfile" toml:"certfile" mapstructure:"certfile"`
+	CertValue string `koanf:"certvalue" json:"certvalue" yaml:"certvalue" toml:"certvalue" mapstructure:"certvalue"`
+	KeyFile   string `koanf:"keyfile" json:"keyfile" yaml:"keyfile" toml:"keyfile" mapstructure:"keyfile"`
+	KeyValue  string `koanf:"keyvalue" json:"keyvalue" yaml:"keyvalue" toml:"keyvalue" mapstructure:"keyvalue"`
+
+	// ServerName overrides the SNI/verification hostname; empty defaults to the
+	// Redis host.
+	ServerName string `koanf:"servername" json:"servername" yaml:"servername" toml:"servername" mapstructure:"servername"`
+
+	// MinVersion: "" or "1.2" (default floor) | "1.3".
+	MinVersion string `koanf:"minversion" json:"minversion" yaml:"minversion" toml:"minversion" mapstructure:"minversion"`
 }
 
 // LogConfig holds logging settings. See OutputConfig.Format for the

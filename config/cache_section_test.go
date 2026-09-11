@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -188,6 +190,56 @@ func TestValidateRedisCacheFailures(t *testing.T) {
 			},
 			expectedError: "cache.redis.writetimeout",
 		},
+		{
+			name: "tls_material_staged_while_disabled",
+			redis: RedisConfig{
+				Host:     "localhost",
+				Port:     6379,
+				PoolSize: 10,
+				TLS:      RedisTLSConfig{Enabled: false, CAFile: "/etc/ssl/ca.pem"},
+			},
+			expectedError: "cache.redis.tls.enabled",
+		},
+		{
+			name: "tls_ca_from_both_sources",
+			redis: RedisConfig{
+				Host:     "localhost",
+				Port:     6379,
+				PoolSize: 10,
+				TLS:      RedisTLSConfig{Enabled: true, CAFile: "/etc/ssl/ca.pem", CAValue: "cGVt"},
+			},
+			expectedError: "cache.redis.tls.cafile",
+		},
+		{
+			name: "tls_cert_without_key",
+			redis: RedisConfig{
+				Host:     "localhost",
+				Port:     6379,
+				PoolSize: 10,
+				TLS:      RedisTLSConfig{Enabled: true, CertFile: "/etc/ssl/client.pem"},
+			},
+			expectedError: "cache.redis.tls.keyfile",
+		},
+		{
+			name: "tls_key_without_cert",
+			redis: RedisConfig{
+				Host:     "localhost",
+				Port:     6379,
+				PoolSize: 10,
+				TLS:      RedisTLSConfig{Enabled: true, KeyValue: "cGVt"},
+			},
+			expectedError: "cache.redis.tls.certfile",
+		},
+		{
+			name: "tls_minversion_below_floor",
+			redis: RedisConfig{
+				Host:     "localhost",
+				Port:     6379,
+				PoolSize: 10,
+				TLS:      RedisTLSConfig{Enabled: true, MinVersion: "1.1"},
+			},
+			expectedError: "cache.redis.tls.minversion",
+		},
 	}
 
 	for _, tt := range tests {
@@ -260,6 +312,55 @@ func TestValidateRedisCacheEdgeCases(t *testing.T) {
 			},
 			valid: true,
 		},
+		{
+			// An enabled block with no material at all verifies against the
+			// system roots — the common managed-Redis shape.
+			name: "tls_enabled_without_material",
+			redis: RedisConfig{
+				Host:     "localhost",
+				Port:     6379,
+				PoolSize: 10,
+				TLS:      RedisTLSConfig{Enabled: true},
+			},
+			valid: true,
+		},
+		{
+			name: "tls_minversion_12",
+			redis: RedisConfig{
+				Host:     "localhost",
+				Port:     6379,
+				PoolSize: 10,
+				TLS:      RedisTLSConfig{Enabled: true, MinVersion: "1.2"},
+			},
+			valid: true,
+		},
+		{
+			name: "tls_minversion_13_with_full_material",
+			redis: RedisConfig{
+				Host:     "localhost",
+				Port:     6379,
+				PoolSize: 10,
+				TLS: RedisTLSConfig{
+					Enabled:    true,
+					CAValue:    "cGVt",
+					CertFile:   "/etc/ssl/client.pem",
+					KeyFile:    "/etc/ssl/client.key",
+					ServerName: "redis.internal",
+					MinVersion: "1.3",
+				},
+			},
+			valid: true,
+		},
+		{
+			name: "tls_disabled_and_empty",
+			redis: RedisConfig{
+				Host:     "localhost",
+				Port:     6379,
+				PoolSize: 10,
+				TLS:      RedisTLSConfig{},
+			},
+			valid: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -308,4 +409,31 @@ func TestNormalizeCacheLoadTimeout(t *testing.T) {
 			assert.Equal(t, tt.want, cfg.LoadTimeout)
 		})
 	}
+}
+
+// TestLoadRedisTLSFromYAML pins the koanf key path for the new block: the
+// struct tags must spell cache.redis.tls.* or an operator's YAML lands nowhere.
+func TestLoadRedisTLSFromYAML(t *testing.T) {
+	clearEnvironmentVariables()
+	defer clearEnvironmentVariables()
+
+	dir := t.TempDir()
+	yamlBody := "cache:\n" +
+		"  enabled: true\n" +
+		"  redis:\n" +
+		"    host: localhost\n" +
+		"    tls:\n" +
+		"      enabled: true\n" +
+		"      cafile: /etc/ssl/ca.pem\n" +
+		"      servername: redis.internal\n" +
+		"      minversion: \"1.3\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, testConfigFileYAML), []byte(yamlBody), 0o600))
+	t.Chdir(dir)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.True(t, cfg.Cache.Redis.TLS.Enabled)
+	assert.Equal(t, "/etc/ssl/ca.pem", cfg.Cache.Redis.TLS.CAFile)
+	assert.Equal(t, "redis.internal", cfg.Cache.Redis.TLS.ServerName)
+	assert.Equal(t, "1.3", cfg.Cache.Redis.TLS.MinVersion)
 }

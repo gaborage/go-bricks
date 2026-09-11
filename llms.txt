@@ -1841,6 +1841,8 @@ cache:
     password: ${CACHE_REDIS_PASSWORD} # from env
     database: 0
     poolsize: 10
+    tls:
+      enabled: true # TLS to the Redis endpoint; system roots + servername=host. CA pinning / mTLS via cafile|cavalue, certfile+keyfile (ADR-108)
 ```
 
 **CacheManager Lifecycle (Multi-Tenant Applications):**

@@ -96,6 +96,48 @@ func TestValidateMultitenantTenantsCacheMisconfigFailsFast(t *testing.T) {
 	assert.Contains(t, err.Error(), "cache.redis.host")
 }
 
+// TestValidateMultitenantTenantsCacheTLSMisconfigIsTenantAddressed proves the
+// TLS fail-closed rules inherit the tenant addressing: the field names the
+// tenant, so a consumer matching on ConfigError.Field learns whose cache failed.
+func TestValidateMultitenantTenantsCacheTLSMisconfigIsTenantAddressed(t *testing.T) {
+	cfg := &Config{
+		App:    createValidAppConfig(),
+		Server: createValidServerConfig(),
+		Log:    createValidLogConfig(),
+		Multitenant: MultitenantConfig{
+			Enabled: true,
+			Resolver: ResolverConfig{
+				Type:   "header",
+				Header: testTenantHeader,
+			},
+			Tenants: map[string]TenantEntry{
+				"acme": {
+					Database: DatabaseConfig{
+						Type:     PostgreSQL,
+						Host:     "acme.db",
+						Port:     5432,
+						Database: "acme",
+						Username: "acme_user",
+					},
+					Cache: CacheConfig{
+						Enabled: true,
+						Redis: RedisConfig{
+							Host: "acme.redis",
+							// Material staged under a disabled TLS block.
+							TLS: RedisTLSConfig{CAFile: "/etc/ssl/ca.pem"},
+						},
+					},
+				},
+			},
+		},
+		Source: SourceConfig{Type: SourceTypeStatic},
+	}
+
+	err := Validate(cfg)
+	require.Error(t, err, "staged TLS material under a disabled block must fail at startup")
+	assert.Contains(t, err.Error(), "multitenant.tenants.acme.cache.redis.tls.enabled")
+}
+
 // normalizeTenantsAndCheckMultitenant runs the tenant half of normalize before
 // checkMultitenant: check assumes normalize already ran (per-tenant cache
 // defaults included), and these fixtures are hand-built. Only the tenant loop

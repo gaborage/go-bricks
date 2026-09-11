@@ -231,8 +231,10 @@ func validateRedisCacheConfig(cacheCfg *config.CacheConfig, key string, log logg
 // Do not add a config-validation return here: a config-shape check belongs in
 // validateRedisCacheConfig, whose whole return the door qualifies. This function returns
 // connection-dial errors only, which are deliberately not addressed to a config path.
-func connectRedisCache(cacheCfg *config.CacheConfig, key string, log logger.Logger) (cache.Cache, error) {
-	redisCfg := &redis.Config{
+// redisClientConfig maps the resolved cache config onto the Redis client's own
+// config. It is pure: no filesystem, no dial.
+func redisClientConfig(cacheCfg *config.CacheConfig) *redis.Config {
+	return &redis.Config{
 		Host:            cacheCfg.Redis.Host,
 		Port:            cacheCfg.Redis.Port,
 		Password:        cacheCfg.Redis.Password,
@@ -245,7 +247,22 @@ func connectRedisCache(cacheCfg *config.CacheConfig, key string, log logger.Logg
 		MinRetryBackoff: cacheCfg.Redis.MinRetryBackoff,
 		MaxRetryBackoff: cacheCfg.Redis.MaxRetryBackoff,
 		LoadTimeout:     cacheCfg.LoadTimeout,
+		TLS: redis.TLSConfig{
+			Enabled:    cacheCfg.Redis.TLS.Enabled,
+			CAFile:     cacheCfg.Redis.TLS.CAFile,
+			CAValue:    cacheCfg.Redis.TLS.CAValue,
+			CertFile:   cacheCfg.Redis.TLS.CertFile,
+			CertValue:  cacheCfg.Redis.TLS.CertValue,
+			KeyFile:    cacheCfg.Redis.TLS.KeyFile,
+			KeyValue:   cacheCfg.Redis.TLS.KeyValue,
+			ServerName: cacheCfg.Redis.TLS.ServerName,
+			MinVersion: cacheCfg.Redis.TLS.MinVersion,
+		},
 	}
+}
+
+func connectRedisCache(cacheCfg *config.CacheConfig, key string, log logger.Logger) (cache.Cache, error) {
+	redisCfg := redisClientConfig(cacheCfg)
 
 	log.Info().
 		Str("key", key).
@@ -253,6 +270,7 @@ func connectRedisCache(cacheCfg *config.CacheConfig, key string, log logger.Logg
 		Int("port", cacheCfg.Redis.Port).
 		Int("database", cacheCfg.Redis.Database).
 		Int("pool_size", cacheCfg.Redis.PoolSize).
+		Bool("tls", cacheCfg.Redis.TLS.Enabled).
 		Msg("Creating Redis cache instance")
 
 	// Note: redis.NewClient() does not accept context parameter. It creates its own
