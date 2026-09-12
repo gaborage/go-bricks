@@ -276,8 +276,8 @@ jobs:
       # distribution server (Maven Central stopped publishing the self-contained
       # platform CLI tarballs mid-11.x; see the Install step).
       # renovate: datasource=github-releases depName=flyway/flyway
-      FLYWAY_VERSION: 13.5.0
-      FLYWAY_SHA256: 53eb61daae221b3d5aa0068f1b821a58c58202f22f9d9f9e2190172fd2e6b492
+      FLYWAY_VERSION: 13.6.0
+      FLYWAY_SHA256: d00272acdebdba621ea6ffa9846ee242ddf51470437a7cf8bd4802531f85dd10
       TESTCONTAINERS_SESSION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       # Every test binary shares the reaper above, and Ryuk exits 10s after its
       # last client disconnects. `go test ./...` starts packages in list order, up
