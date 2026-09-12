@@ -74,6 +74,12 @@ type Verifier struct {
 // a verifier constructible in a test without wiring a logger. Verification
 // behavior is identical either way.
 //
+// cfg is taken by value, which copies only the HEADERS of its slice fields, so
+// the stored configuration clones Audience, Algorithms and Typ. Without that, a
+// caller writing to the slice it passed in would change what a live verifier
+// accepts — and race a concurrent Verify — contradicting the type's immutability
+// contract.
+//
 //nolint:gocritic // hugeParam: Config is the injected value type; a pointer here would invite post-construction mutation.
 func NewVerifierWithKeySource(cfg Config, log logger.Logger, src KeySource) (*Verifier, error) {
 	if err := cfg.Validate(); err != nil {
@@ -82,6 +88,9 @@ func NewVerifierWithKeySource(cfg Config, log logger.Logger, src KeySource) (*Ve
 	if src == nil {
 		return nil, NewConfigError(fieldPrefix+"keysource", "key source is required", nil)
 	}
+	cfg.Audience = slices.Clone(cfg.Audience)
+	cfg.Algorithms = slices.Clone(cfg.Algorithms)
+	cfg.Typ = slices.Clone(cfg.Typ)
 	return &Verifier{
 		cfg:     cfg,
 		log:     log,

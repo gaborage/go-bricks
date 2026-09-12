@@ -186,7 +186,14 @@ func (i *Issuer) WithClock(now func() time.Time) *Issuer {
 // Rotate adds a fresh RSA key pair under kid and makes it the active signing key.
 // Previously issued credentials stay verifiable because the old public key remains
 // in PublicKeys.
+//
+// An already-registered kid panics: overwriting a key would silently break every
+// credential minted under it, which is the opposite of what this helper promises
+// and would make a rotation test assert the wrong thing.
 func (i *Issuer) Rotate(kid string) *Issuer {
+	if _, exists := i.keys[kid]; exists {
+		panic(fmt.Sprintf("auth/testing: kid %q is already registered; Rotate must not overwrite a key credentials were minted under", kid))
+	}
 	i.keys[kid] = generateRSAKey()
 	i.activeKID = kid
 	return i

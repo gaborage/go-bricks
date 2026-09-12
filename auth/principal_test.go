@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -94,9 +95,9 @@ func TestPrincipalClaimsAreSharedNotCopied(t *testing.T) {
 }
 
 // TestPrincipalStringElidesTheSubjectAndClaims pins the elision seam: a
-// Principal reaching fmt or a structured logger must never render the subject or
-// a claim value. Only the verbs that consult fmt.Stringer are covered; %#v
-// bypasses Stringer by design and is documented as such.
+// Principal reaching fmt or an encoder must never render the subject or a claim
+// value. Every fmt verb is covered — %#v included, since Format takes precedence
+// over Stringer — for both Principal and *Principal, plus json.Marshal.
 func TestPrincipalStringElidesTheSubjectAndClaims(t *testing.T) {
 	p := Principal{
 		Subject:   "super-secret-subject",
@@ -116,14 +117,25 @@ func TestPrincipalStringElidesTheSubjectAndClaims(t *testing.T) {
 	// gocritic's redundantSprint, which is the very substitution this test must
 	// not make.
 	render := func(format string, value any) string { return fmt.Sprintf(format, value) }
+	marshaled, err := json.Marshal(p)
+	require.NoError(t, err)
+	marshaledPointer, err := json.Marshal(&p)
+	require.NoError(t, err)
 	renderings := map[string]string{
-		"%v":        render("%v", p),
-		"%s":        render("%s", p),
-		"%q":        render("%q", p),
-		"%+v":       render("%+v", p),
-		"String":    p.String(),
-		"pointer%v": render("%v", &p),
-		"pointer%s": render("%s", &p),
+		"%v":          render("%v", p),
+		"%s":          render("%s", p),
+		"%q":          render("%q", p),
+		"%+v":         render("%+v", p),
+		"%#v":         render("%#v", p),
+		"%d":          render("%d", p),
+		"String":      p.String(),
+		"pointer%v":   render("%v", &p),
+		"pointer%s":   render("%s", &p),
+		"pointer%q":   render("%q", &p),
+		"pointer%+v":  render("%+v", &p),
+		"pointer%#v":  render("%#v", &p),
+		"json":        string(marshaled),
+		"jsonPointer": string(marshaledPointer),
 	}
 
 	for verb, rendered := range renderings {
@@ -157,4 +169,39 @@ func TestPrincipalStringRendersTheNonSensitiveFields(t *testing.T) {
 func TestPrincipalStringOnTheZeroValue(t *testing.T) {
 	assert.NotPanics(t, func() { _ = Principal{}.String() })
 	assert.Contains(t, Principal{}.String(), "claims: <elided:0>")
+}
+
+// TestPrincipalMarshalJSONEmitsTheRedactedShape pins the serialized form field
+// by field, so a future edit cannot quietly re-admit a field String elides.
+func TestPrincipalMarshalJSONEmitsTheRedactedShape(t *testing.T) {
+	p := testPrincipal()
+
+	raw, err := json.Marshal(p)
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(raw, &got))
+	assert.Equal(t, map[string]any{
+		"issuer":    "https://issuer.example.com",
+		"audience":  []any{"api://orders"},
+		"expiresAt": "2030-01-01T00:00:00Z",
+		"subject":   "<elided>",
+		"claims":    "<elided:2>",
+	}, got)
+}
+
+// TestPrincipalFormatRendersTheSameTextAsString pins that adding fmt.Formatter
+// did not change what the Stringer verbs produce: Formatter wins for every verb,
+// so %v, %s and %#v must all still be String's output.
+func TestPrincipalFormatRendersTheSameTextAsString(t *testing.T) {
+	p := testPrincipal()
+	render := func(format string, value any) string { return fmt.Sprintf(format, value) }
+	want := p.String()
+
+	for _, verb := range []string{"%v", "%s", "%+v", "%#v"} {
+		assert.Equal(t, want, render(verb, p), verb)
+		assert.Equal(t, want, render(verb, &p), verb)
+	}
+	assert.Equal(t, fmt.Sprintf("%q", want), render("%q", p))
+	assert.Equal(t, "%!d(auth.Principal="+want+")", render("%d", p))
 }

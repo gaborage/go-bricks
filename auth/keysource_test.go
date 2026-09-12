@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"math/big"
 	"sync"
 	"testing"
 
@@ -31,7 +32,40 @@ func TestStaticKeySourceReturnsARegisteredKey(t *testing.T) {
 	got, err := src.PublicKey(context.Background(), "k1")
 
 	require.NoError(t, err)
-	assert.Same(t, want, got)
+	// Value equality, not identity: the source clones the caller's key material.
+	assert.Equal(t, want, got)
+	assert.NotSame(t, want, got)
+}
+
+// TestStaticKeySourceClonesTheCallersKeys pins the ownership half of the
+// construction contract: writing to the key a caller passed in, modulus
+// included, must not reach what the source verifies against.
+func TestStaticKeySourceClonesTheCallersKeys(t *testing.T) {
+	original := &rsa.PublicKey{N: big.NewInt(0xC0FFEE), E: 65537}
+	src := NewStaticKeySource(map[string]*rsa.PublicKey{"k1": original})
+
+	original.N.SetInt64(1)
+	original.E = 3
+
+	got, err := src.PublicKey(context.Background(), "k1")
+
+	require.NoError(t, err)
+	assert.Zero(t, got.N.Cmp(big.NewInt(0xC0FFEE)))
+	assert.Equal(t, 65537, got.E)
+}
+
+// TestStaticKeySourceKeepsAKeyWithNoModulus pins that the clone never panics on
+// a key whose N is nil: such a key stays registered and fails downstream in the
+// verifier, exactly as it did before the clone existed.
+func TestStaticKeySourceKeepsAKeyWithNoModulus(t *testing.T) {
+	src := NewStaticKeySource(map[string]*rsa.PublicKey{"k1": {E: 65537}})
+
+	got, err := src.PublicKey(context.Background(), "k1")
+
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Nil(t, got.N)
+	assert.Equal(t, 65537, got.E)
 }
 
 func TestStaticKeySourceRejectsAnUnknownKid(t *testing.T) {

@@ -390,6 +390,29 @@ func TestIssuerRotateSwitchesActiveKeyAndKeepsOld(t *testing.T) {
 	verify(t, iss, after)
 }
 
+// TestIssuerRotateRejectsADuplicateKeyID pins the helper's promise: overwriting
+// a registered kid would invalidate every credential already minted under it.
+func TestIssuerRotateRejectsADuplicateKeyID(t *testing.T) {
+	iss := NewIssuer()
+
+	assert.PanicsWithValue(t,
+		`auth/testing: kid "test-key-1" is already registered; Rotate must not overwrite a key credentials were minted under`,
+		func() { iss.Rotate(DefaultKeyID) })
+	assert.Equal(t, DefaultKeyID, iss.ActiveKeyID())
+}
+
+// TestIssuerRotateKeepsCredentialsMintedUnderTheOldKeyVerifiable is the positive
+// half: a legitimate rotation leaves the previous kid's credentials valid.
+func TestIssuerRotateKeepsCredentialsMintedUnderTheOldKeyVerifiable(t *testing.T) {
+	iss := NewIssuer()
+	before := iss.Mint(Claims{})
+
+	iss.Rotate("test-key-2")
+
+	assert.Equal(t, DefaultKeyID, decodeHeader(t, before)["kid"])
+	verify(t, iss, before)
+}
+
 func TestIssuerPublicKeysIsACopy(t *testing.T) {
 	iss := NewIssuer()
 

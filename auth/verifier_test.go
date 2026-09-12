@@ -108,6 +108,49 @@ func TestNewVerifierWithKeySourceAcceptsANilLogger(t *testing.T) {
 	assertRejectedWithClass(t, err, ClassExpired)
 }
 
+// TestNewVerifierWithKeySourceClonesTheConfiguredAudience pins the immutability
+// contract: cfg travels by value, so only the slice header is copied, and a
+// caller writing to the audience it passed in must not steer a live verifier.
+func TestNewVerifierWithKeySourceClonesTheConfiguredAudience(t *testing.T) {
+	iss := newTestIssuer()
+	cfg := verifierConfig(iss)
+	audience := []string{iss.Audience()}
+	cfg.Audience = audience
+
+	v, err := NewVerifierWithKeySource(cfg, nil, NewStaticKeySource(iss.PublicKeys()))
+	require.NoError(t, err)
+	v.now = fixedClock
+
+	audience[0] = authtesting.WrongAudience
+
+	_, err = v.Verify(context.Background(), iss.Mint(authtesting.Claims{}))
+	require.NoError(t, err)
+
+	_, err = v.Verify(context.Background(), iss.MintWrongAudience())
+	assertRejectedWithClass(t, err, ClassAudience)
+}
+
+// TestNewVerifierWithKeySourceClonesTheConfiguredTyp is the same contract on the
+// typ allowlist, which the protected-header check reads on every verification.
+func TestNewVerifierWithKeySourceClonesTheConfiguredTyp(t *testing.T) {
+	iss := newTestIssuer()
+	cfg := verifierConfig(iss)
+	typ := []string{"JWT"}
+	cfg.Typ = typ
+
+	v, err := NewVerifierWithKeySource(cfg, nil, NewStaticKeySource(iss.PublicKeys()))
+	require.NoError(t, err)
+	v.now = fixedClock
+
+	typ[0] = "at+jwt"
+
+	_, err = v.Verify(context.Background(), iss.Mint(authtesting.Claims{}))
+	require.NoError(t, err)
+
+	_, err = v.Verify(context.Background(), iss.MintWithType("at+jwt"))
+	assertRejectedWithClass(t, err, ClassType)
+}
+
 func TestVerifierCloseIsIdempotent(t *testing.T) {
 	v := newTestVerifier(t, newTestIssuer(), nil)
 

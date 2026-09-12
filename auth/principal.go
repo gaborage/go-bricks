@@ -2,7 +2,9 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -45,6 +47,30 @@ type Principal struct {
 	Claims map[string]any
 }
 
+// redactedPrincipal is the single shape a Principal is rendered or serialized
+// in. String, Format and MarshalJSON all derive from it, so the text form and
+// the JSON form cannot drift into disagreeing about what is elided.
+type redactedPrincipal struct {
+	Issuer    string   `json:"issuer"`
+	Audience  []string `json:"audience"`
+	ExpiresAt string   `json:"expiresAt"`
+	Subject   string   `json:"subject"`
+	Claims    string   `json:"claims"`
+}
+
+// redact builds the elided view of p.
+//
+//nolint:gocritic // hugeParam: Principal is a value type by contract — it travels on context.Value.
+func (p Principal) redact() redactedPrincipal {
+	return redactedPrincipal{
+		Issuer:    p.Issuer,
+		Audience:  p.Audience,
+		ExpiresAt: p.ExpiresAt.Format(time.RFC3339),
+		Subject:   "<elided>",
+		Claims:    fmt.Sprintf("<elided:%d>", len(p.Claims)),
+	}
+}
+
 // String renders the Principal without its subject or any claim value.
 //
 // SECURITY: this is the elision seam. A Principal travels on the request
@@ -53,16 +79,49 @@ type Principal struct {
 // field NAMES and cannot help, because "Subject" is not a sensitive name and a
 // claim key is attacker-chosen. Rendering therefore drops Subject and Claims and
 // keeps only the already-public issuer, audience and expiry.
-//
-// It covers every verb that consults fmt.Stringer — %v, %s, %q, %+v — for both
-// Principal and *Principal, since the receiver is a value. It does NOT cover
-// %#v, which prints the Go-syntax representation by design and bypasses
-// Stringer, nor a struct-walking encoder such as json.Marshal or the logger's
-// reflective filter. Those render the fields directly and must not be pointed at
-// a Principal.
 func (p Principal) String() string {
-	return fmt.Sprintf("auth.Principal{issuer: %q, audience: %q, expiresAt: %s, subject: <elided>, claims: <elided:%d>}",
-		p.Issuer, p.Audience, p.ExpiresAt.Format(time.RFC3339), len(p.Claims))
+	r := p.redact()
+	return fmt.Sprintf("auth.Principal{issuer: %q, audience: %q, expiresAt: %s, subject: %s, claims: %s}",
+		r.Issuer, r.Audience, r.ExpiresAt, r.Subject, r.Claims)
+}
+
+// Format routes every fmt verb through the elided rendering, for both Principal
+// and *Principal.
+//
+// SECURITY: it exists for %#v, which prints the Go-syntax representation and
+// bypasses fmt.Stringer — the one fmt path that would otherwise dump Subject and
+// Claims. Implementing fmt.Formatter takes precedence over fmt.Stringer for
+// EVERY verb, so %v, %s and %q are answered here too and render exactly what
+// String does; an unsupported verb reports the bad verb with the same elided
+// body rather than falling back to a field dump.
+//
+//nolint:gocritic // hugeParam: Principal is a value type by contract — it travels on context.Value.
+func (p Principal) Format(f fmt.State, verb rune) {
+	rendered := p.String()
+	switch verb {
+	case 'v', 's':
+		io.WriteString(f, rendered) //nolint:errcheck // fmt.State swallows write errors by design.
+	case 'q':
+		fmt.Fprintf(f, "%q", rendered)
+	default:
+		fmt.Fprintf(f, "%%!%c(auth.Principal=%s)", verb, rendered)
+	}
+}
+
+// MarshalJSON emits the elided rendering rather than the struct's fields.
+//
+// SECURITY: json.Marshal walks exported fields, so without this a Principal
+// reaching an encoder — an error payload, an audit record, a response body —
+// would serialize Subject and every claim. The emitted object mirrors String.
+//
+// It does NOT cover the framework logger's reflective filter path
+// (logger.Logger.Interface → SensitiveDataFilter), which rebuilds a struct into
+// a map by reflection before any marshaler runs; no method on Principal can
+// influence that. Do not hand a Principal to it.
+//
+//nolint:gocritic // hugeParam: Principal is a value type by contract — it travels on context.Value.
+func (p Principal) MarshalJSON() ([]byte, error) {
+	return json.Marshal(p.redact())
 }
 
 // Claim returns the raw claim stored under name, and whether it was present.
