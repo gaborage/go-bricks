@@ -85,7 +85,7 @@ func NewVerificationError(class Class, cause error) *VerificationError {
 }
 
 // Error renders the failure class only.
-func (e *VerificationError) Error() string {
+func (e VerificationError) Error() string {
 	return fmt.Sprintf("auth: credential rejected (class: %s)", e.Class)
 }
 
@@ -99,7 +99,12 @@ func (e *VerificationError) Error() string {
 // returns; an unsupported verb reports the bad verb with the same safe body
 // rather than falling back to a field dump. It changes no errors.Is/As
 // behavior: fmt rendering and the unwrap chain are separate seams.
-func (e *VerificationError) Format(f fmt.State, verb rune) {
+//
+// The receiver is a VALUE, as it is on Error and Unwrap: a pointer receiver
+// would leave a VerificationError value dumping Cause under %#v, which is the
+// hole this method exists to close. A pointer's method set includes value
+// methods, so *VerificationError is covered by the same guarantee.
+func (e VerificationError) Format(f fmt.State, verb rune) {
 	rendered := e.Error()
 	switch verb {
 	case 'v', 's':
@@ -113,7 +118,7 @@ func (e *VerificationError) Format(f fmt.State, verb rune) {
 
 // Unwrap returns ErrInvalidCredential so errors.Is(err, ErrInvalidCredential) holds
 // for every verification failure, whatever its class.
-func (e *VerificationError) Unwrap() error {
+func (e VerificationError) Unwrap() error {
 	return ErrInvalidCredential
 }
 

@@ -54,18 +54,32 @@ func TestStaticKeyResolverClonesTheCallersKeys(t *testing.T) {
 	assert.Equal(t, 65537, got.E)
 }
 
-// TestStaticKeyResolverKeepsAKeyWithNoModulus pins that the clone never panics on
-// a key whose N is nil: such a key stays registered and fails downstream in the
-// verifier, exactly as it did before the clone existed.
-func TestStaticKeyResolverKeepsAKeyWithNoModulus(t *testing.T) {
-	src := NewStaticKeyResolver(map[string]*rsa.PublicKey{"k1": {E: 65537}})
+// TestStaticKeyResolverDropsAKeyWithNoModulus pins that a modulus-less key is
+// never registered: it cannot verify a signature, so the lookup must answer as
+// for any unusable entry rather than hand the verifier a key it will reject.
+func TestStaticKeyResolverDropsAKeyWithNoModulus(t *testing.T) {
+	t.Run("alongside_a_usable_key", func(t *testing.T) {
+		src := NewStaticKeyResolver(map[string]*rsa.PublicKey{
+			"k1": {E: 65537},
+			"k2": testRSAPublicKey(t),
+		})
 
-	got, err := src.PublicKey(context.Background(), "k1")
+		got, err := src.PublicKey(context.Background(), "k1")
 
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.Nil(t, got.N)
-	assert.Equal(t, 65537, got.E)
+		require.ErrorIs(t, err, ErrKidUnknown)
+		assert.Nil(t, got)
+	})
+
+	// Dropping the only key empties the set, so the resolver falls to its
+	// documented empty-key-set behavior rather than reporting an unknown kid.
+	t.Run("as_the_only_key", func(t *testing.T) {
+		src := NewStaticKeyResolver(map[string]*rsa.PublicKey{"k1": {E: 65537}})
+
+		got, err := src.PublicKey(context.Background(), "k1")
+
+		require.ErrorIs(t, err, ErrKeySetUnavailable)
+		assert.Nil(t, got)
+	})
 }
 
 func TestStaticKeyResolverRejectsAnUnknownKid(t *testing.T) {

@@ -39,9 +39,10 @@ type StaticKeyResolver struct {
 }
 
 // NewStaticKeyResolver returns a PublicKeyResolver over a defensive copy of
-// keys. Entries with a nil key are dropped, so an unusable entry reads as an
-// unknown kid rather than as a nil key handed to a verifier. A resolver that
-// ends up with no keys at all reports ErrKeySetUnavailable on every lookup.
+// keys. Entries with a nil key, or with a nil modulus, are dropped: a key
+// without a modulus cannot verify anything, so it reads as an unknown kid
+// rather than reaching the verifier as an unusable key. A resolver that ends up
+// with no keys at all reports ErrKeySetUnavailable on every lookup.
 //
 // Each key is cloned, modulus included, so the resolver owns its key material: a
 // caller that later writes to the keys it passed in cannot retroactively change
@@ -49,7 +50,7 @@ type StaticKeyResolver struct {
 func NewStaticKeyResolver(keys map[string]*rsa.PublicKey) *StaticKeyResolver {
 	copied := make(map[string]*rsa.PublicKey, len(keys))
 	for kid, key := range keys {
-		if key == nil {
+		if key == nil || key.N == nil {
 			continue
 		}
 		copied[kid] = clonePublicKey(key)
@@ -57,15 +58,10 @@ func NewStaticKeyResolver(keys map[string]*rsa.PublicKey) *StaticKeyResolver {
 	return &StaticKeyResolver{keys: copied}
 }
 
-// clonePublicKey deep-copies an RSA public key. A nil modulus is carried across
-// as nil rather than copied, because big.Int.Set panics on one and a key that
-// arrived unusable must stay a lookup failure downstream, not a panic here.
+// clonePublicKey deep-copies an RSA public key. The caller drops keys with a nil
+// modulus before calling, so the copy below is unconditional.
 func clonePublicKey(key *rsa.PublicKey) *rsa.PublicKey {
-	cloned := &rsa.PublicKey{E: key.E}
-	if key.N != nil {
-		cloned.N = new(big.Int).Set(key.N)
-	}
-	return cloned
+	return &rsa.PublicKey{N: new(big.Int).Set(key.N), E: key.E}
 }
 
 // PublicKey implements PublicKeyResolver.
