@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/embedded"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	authtesting "github.com/gaborage/go-bricks/auth/testing"
@@ -250,4 +252,83 @@ func TestLogMetricErrorReportsOnlyAFailedInitialization(t *testing.T) {
 			assert.Contains(t, out, "instrument unavailable")
 		})
 	}
+}
+
+// failingRegistration is a metric.Registration whose Unregister always fails,
+// which is the arm a real SDK registration never takes.
+type failingRegistration struct {
+	embedded.Registration
+	err error
+}
+
+func (r failingRegistration) Unregister() error { return r.err }
+
+// callbackFailingMeter embeds a real meter so every instrument constructor
+// behaves normally, and overrides RegisterCallback alone: it returns registerErr
+// when that is set, otherwise a registration whose Unregister returns
+// unregisterErr.
+type callbackFailingMeter struct {
+	metric.Meter
+	registerErr   error
+	unregisterErr error
+}
+
+func (m callbackFailingMeter) RegisterCallback(
+	_ metric.Callback,
+	_ ...metric.Observable,
+) (metric.Registration, error) {
+	if m.registerErr != nil {
+		return nil, m.registerErr
+	}
+	return failingRegistration{err: m.unregisterErr}, nil
+}
+
+// callbackFailingProvider hands out callbackFailingMeter, so newAuthMetrics
+// picks it up through the MeterProvider it already takes.
+type callbackFailingProvider struct {
+	embedded.MeterProvider
+	real          metric.MeterProvider
+	registerErr   error
+	unregisterErr error
+}
+
+func (p callbackFailingProvider) Meter(name string, opts ...metric.MeterOption) metric.Meter {
+	return callbackFailingMeter{
+		Meter:         p.real.Meter(name, opts...),
+		registerErr:   p.registerErr,
+		unregisterErr: p.unregisterErr,
+	}
+}
+
+func TestRegisterKeySetGaugesReportsAFailedCallbackRegistration(t *testing.T) {
+	mp := obstesting.NewTestMeterProvider()
+	m := newAuthMetrics(callbackFailingProvider{real: mp.MeterProvider, registerErr: errors.New("callback rejected")})
+
+	var unregister func()
+	out := captureStderr(t, func() {
+		unregister = m.registerKeySetGauges(&jwksResolver{now: time.Now})
+	})
+
+	require.NotNil(t, unregister)
+	assert.Contains(t, out, "auth_keyset_callback")
+	assert.Contains(t, out, "callback rejected")
+	assert.NotPanics(t, unregister)
+	assert.Empty(t, captureStderr(t, unregister), "a degraded cleanup must stay silent")
+}
+
+func TestRegisterKeySetGaugesReportsAFailedUnregister(t *testing.T) {
+	mp := obstesting.NewTestMeterProvider()
+	m := newAuthMetrics(callbackFailingProvider{real: mp.MeterProvider, unregisterErr: errors.New("already gone")})
+
+	var unregister func()
+	registerOut := captureStderr(t, func() {
+		unregister = m.registerKeySetGauges(&jwksResolver{now: time.Now})
+	})
+	require.NotNil(t, unregister)
+	assert.Empty(t, registerOut, "a successful registration must report nothing")
+
+	out := captureStderr(t, func() { assert.NotPanics(t, unregister) })
+
+	assert.Contains(t, out, "auth_keyset_unregister")
+	assert.Contains(t, out, "already gone")
 }
