@@ -205,3 +205,25 @@ func TestPrincipalFormatRendersTheSameTextAsString(t *testing.T) {
 	assert.Equal(t, fmt.Sprintf("%q", want), render("%q", p))
 	assert.Equal(t, "%!d(auth.Principal="+want+")", render("%d", p))
 }
+
+// TestContextWithPrincipalClonesTheAudience pins that no reader shares an
+// Audience backing array with the caller or with another reader. A Principal is
+// read concurrently by every handler on a request, so a slice header copy would
+// let one of them change what the others see the credential was issued for.
+func TestContextWithPrincipalClonesTheAudience(t *testing.T) {
+	caller := []string{"api://orders", "api://billing"}
+	ctx := ContextWithPrincipal(context.Background(), Principal{Subject: "u-1", Audience: caller})
+
+	caller[0] = "api://attacker"
+
+	got, ok := PrincipalFromContext(ctx)
+	require.True(t, ok)
+	assert.Equal(t, []string{"api://orders", "api://billing"}, got.Audience,
+		"mutating the caller's slice must not change the attached audience")
+
+	got.Audience[1] = "api://mutated-by-reader"
+	second, ok := PrincipalFromContext(ctx)
+	require.True(t, ok)
+	assert.Equal(t, []string{"api://orders", "api://billing"}, second.Audience,
+		"one reader must not change what another reader sees")
+}

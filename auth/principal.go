@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"time"
 )
 
@@ -151,8 +152,17 @@ const keyPrincipal ctxKey = iota
 // that a credential verified against the configured issuer; whether that
 // identity may perform the operation remains the handler's decision.
 //
+// Audience is cloned on the way in and on the way out, so no reader shares a
+// backing array with the caller or with another reader: a Principal is read
+// concurrently by every handler on the request, and a slice header copy would
+// let one of them change what the others see the credential was issued for.
+// Claims stays shared under the read-only contract documented on the field —
+// copying it would allocate per request and still not protect the nested values
+// that JSON decoding produces.
+//
 //nolint:gocritic // hugeParam: the context stores the Principal by value; a pointer would only add an alias.
 func ContextWithPrincipal(ctx context.Context, p Principal) context.Context {
+	p.Audience = slices.Clone(p.Audience)
 	return context.WithValue(ctx, keyPrincipal, p)
 }
 
@@ -161,5 +171,8 @@ func ContextWithPrincipal(ctx context.Context, p Principal) context.Context {
 // skipped the middleware or carried no credential.
 func PrincipalFromContext(ctx context.Context) (p Principal, ok bool) {
 	p, ok = ctx.Value(keyPrincipal).(Principal)
+	if ok {
+		p.Audience = slices.Clone(p.Audience)
+	}
 	return p, ok
 }
