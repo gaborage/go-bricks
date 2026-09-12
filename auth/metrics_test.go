@@ -310,7 +310,8 @@ func TestRegisterKeySetGaugesReportsAFailedCallbackRegistration(t *testing.T) {
 	})
 
 	require.NotNil(t, unregister)
-	assert.Contains(t, out, "auth_keyset_callback")
+	assert.Contains(t, out, opKeySetGaugeRegister)
+	assert.NotContains(t, out, "initialize metric", "a registration failure must not read as a failed instrument initialization")
 	assert.Contains(t, out, "callback rejected")
 	assert.NotPanics(t, unregister)
 	assert.Empty(t, captureStderr(t, unregister), "a degraded cleanup must stay silent")
@@ -329,6 +330,7 @@ func TestRegisterKeySetGaugesReportsAFailedUnregister(t *testing.T) {
 
 	out := captureStderr(t, func() { assert.NotPanics(t, unregister) })
 
-	assert.Contains(t, out, "auth_keyset_unregister")
+	assert.Contains(t, out, opKeySetGaugeUnregister)
+	assert.NotContains(t, out, "initialize metric", "an unregister failure must not read as a failed instrument initialization")
 	assert.Contains(t, out, "already gone")
 }

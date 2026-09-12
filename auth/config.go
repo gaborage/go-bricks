@@ -25,6 +25,12 @@ const (
 // package's, so the load-time check and this one cannot drift apart.
 const maxLeeway = config.MaxAuthLeeway
 
+// maxJWKSBodyBytes caps auth.jwt.jwks.maxbodybytes. An unbounded cap is not a
+// cap: arithmetic over a value near math.MaxInt64 overflows, and a key set
+// document has no legitimate reason to approach it. The bound is the config
+// package's, so the load-time check and this one cannot drift apart.
+const maxJWKSBodyBytes = config.MaxAuthJWKSBodyBytes
+
 // Config-error field prefixes, kept section-qualified so a startup failure names
 // the YAML key the operator must fix.
 const (
@@ -154,8 +160,18 @@ func (c *Config) validateJWKSSource() *ConfigError {
 	if c.JWKS.MinRefreshInterval <= 0 {
 		return NewConfigError(jwksFieldPrefix+"minrefreshinterval", "min refresh interval must be positive", nil)
 	}
+	// The background tick is floored at the refresh interval, so a floor above
+	// the stale ceiling leaves the key set unusable for the whole gap between
+	// them and every request in that window fails. It is checked after the
+	// per-key bounds so a negative duration is named as such.
+	if c.JWKS.MinRefreshInterval > c.JWKS.StaleCeiling {
+		return NewConfigError(jwksFieldPrefix+"minrefreshinterval", "min refresh interval must not exceed the stale ceiling", nil)
+	}
 	if c.JWKS.MaxBodyBytes <= 0 {
 		return NewConfigError(jwksFieldPrefix+"maxbodybytes", "max body bytes must be positive", nil)
+	}
+	if c.JWKS.MaxBodyBytes > maxJWKSBodyBytes {
+		return NewConfigError(jwksFieldPrefix+"maxbodybytes", fmt.Sprintf("max body bytes must not exceed %d", maxJWKSBodyBytes), nil)
 	}
 	return nil
 }

@@ -71,15 +71,6 @@ func checkAuthAlgorithms(algorithms []string) error {
 	return nil
 }
 
-// checkAuthJWKS rejects a key-set stanza that cannot be honored. The URI is
-// optional (pinned-key deployments set none) but, when set, must be an https
-// endpoint: the key set is the verifier's trust anchor, so plaintext transport
-// hands signature verification to the network.
-// A configured endpoint additionally makes the refresh floor and the body cap
-// live: zero would mean "refresh without limit" and "read a body without limit",
-// which no key-set fetch can honor. Both are therefore required to be positive
-// exactly when a URI is set — a pinned-key deployment fetches nothing, and the
-// framework defaults fill both in for everyone else.
 // checkAuthJWKSURI rejects a key-set endpoint that is not a parsable https URL
 // with a hostname: "https:///jwks.json" carries the right scheme and no host to
 // fetch from, so the scheme check alone would let it through.
@@ -97,8 +88,20 @@ func checkAuthJWKSURI(uri string) error {
 	return nil
 }
 
+// checkAuthJWKS rejects a key-set stanza that cannot be honored. The URI is
+// optional (pinned-key deployments set none) but, when set, must be an https
+// endpoint: the key set is the verifier's trust anchor, so plaintext transport
+// hands signature verification to the network.
+//
+// A configured endpoint additionally makes four rules live, because only a
+// fetching resolver reads them: the refresh floor and the body cap must be
+// positive (zero would mean "refresh without limit" and "read a body without
+// limit"), the body cap must stay at or under MaxAuthJWKSBodyBytes, and the
+// refresh floor must not exceed the stale ceiling. A pinned-key deployment
+// fetches nothing, and the framework defaults satisfy all four for everyone else.
 func checkAuthJWKS(cfg *AuthJWKSConfig, uri string) error {
-	if strings.TrimSpace(uri) != "" {
+	hasURI := strings.TrimSpace(uri) != ""
+	if hasURI {
 		if err := checkAuthJWKSURI(uri); err != nil {
 			return err
 		}
@@ -107,6 +110,9 @@ func checkAuthJWKS(cfg *AuthJWKSConfig, uri string) error {
 		}
 		if cfg.MaxBodyBytes <= 0 {
 			return NewValidationError(fieldAuthJWKSMaxBodyBytes, errMustBePositive)
+		}
+		if cfg.MaxBodyBytes > MaxAuthJWKSBodyBytes {
+			return NewValidationError(fieldAuthJWKSMaxBodyBytes, fmt.Sprintf("must not exceed %d", MaxAuthJWKSBodyBytes))
 		}
 	}
 
@@ -131,6 +137,21 @@ func checkAuthJWKS(cfg *AuthJWKSConfig, uri string) error {
 			Field:    fieldAuthJWKSStaleCeiling,
 			Message:  fmt.Sprintf("must be greater than or equal to %s (%v)", fieldAuthJWKSTTL, cfg.TTL),
 			Action:   fmt.Sprintf("raise %s or lower %s", fieldAuthJWKSStaleCeiling, fieldAuthJWKSTTL),
+		}
+	}
+
+	// A refresh floor above the stale ceiling is a self-inflicted outage: the
+	// background tick is floored at the refresh interval, so the cached key set
+	// spends every gap between the ceiling and the next tick unusable and every
+	// request in that window fails. It is checked only with a URI set, alongside
+	// the other rules a fetching resolver makes live, and last, so a negative
+	// duration is reported as such rather than as an ordering fault.
+	if hasURI && cfg.MinRefreshInterval > cfg.StaleCeiling {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    fieldAuthJWKSMinRefresh,
+			Message:  fmt.Sprintf("must not exceed %s (%v)", fieldAuthJWKSStaleCeiling, cfg.StaleCeiling),
+			Action:   fmt.Sprintf("lower %s or raise %s", fieldAuthJWKSMinRefresh, fieldAuthJWKSStaleCeiling),
 		}
 	}
 

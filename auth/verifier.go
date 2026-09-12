@@ -13,7 +13,9 @@ import (
 	"time"
 
 	jose "github.com/go-jose/go-jose/v4"
+	"go.opentelemetry.io/otel/metric"
 
+	"github.com/gaborage/go-bricks/httpclient"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -68,6 +70,52 @@ type Verifier struct {
 	// Close stops. A resolver handed in through NewVerifierWithResolver stays
 	// the caller's and leaves this nil.
 	owned *jwksResolver
+}
+
+// NewVerifier builds a verifier over the issuer's JWKS endpoint. It is the
+// consumer-facing door: the pinned-key NewVerifierWithResolver is for
+// deployments that carry issuer keys out of band.
+//
+// The key set is fetched before this returns and a failed fetch is an error, so
+// a module Init aborts startup rather than booting a verifier that can verify
+// nothing. cfg is validated in full first — the auth.jwt.* rules Config.Validate
+// owns plus the auth.jwt.jwks.* group, which only a fetching resolver makes
+// live.
+//
+// mp may be nil, in which case the global MeterProvider is used. client may be
+// nil, in which case a default httpclient is built with a peer name derived from
+// the key set endpoint's host; building that default needs a logger, so a nil
+// log and a nil client together are a configuration error.
+//
+// Ownership: the returned verifier CONSTRUCTED its resolver, so its Close stops
+// the background refresh. Call it from the module's Shutdown.
+//
+//nolint:gocritic // hugeParam: Config is the injected value type, matching NewVerifierWithResolver.
+func NewVerifier(cfg Config, log logger.Logger, mp metric.MeterProvider, client httpclient.Client) (*Verifier, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if cfgErr := cfg.validateJWKSSource(); cfgErr != nil {
+		return nil, cfgErr
+	}
+	if isNilInterface(log) {
+		log = nil
+	}
+
+	m := newAuthMetrics(mp)
+	resolver, err := newJWKSResolver(&cfg, log, m, client)
+	if err != nil {
+		return nil, err
+	}
+
+	verifier, err := NewVerifierWithResolver(cfg, log, resolver)
+	if err != nil {
+		resolver.close()
+		return nil, err
+	}
+	verifier.metrics = m
+	verifier.owned = resolver
+	return verifier, nil
 }
 
 // NewVerifierWithResolver builds a verifier over an explicitly supplied

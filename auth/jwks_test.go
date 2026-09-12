@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"crypto/rsa"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +12,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -530,10 +530,33 @@ func TestCapResponseBodyEnforcesTheConfiguredCap(t *testing.T) {
 			}
 
 			if tc.wantErr {
-				require.ErrorIs(t, err, errBodyTooLarge)
+				require.Error(t, err)
+				// The declared-length refusal is errBodyTooLarge; the mid-stream
+				// one is net/http's own *MaxBytesError. Both are the same fault.
+				assert.True(t, isOversizedBody(err), "an over-cap body must classify as oversized")
 				return
 			}
 			require.NoError(t, err)
+		})
+	}
+}
+
+func TestIsOversizedBodyRecognizesBothCapFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "the_declared_length_sentinel", err: errBodyTooLarge, want: true},
+		{name: "a_wrapped_declared_length_sentinel", err: fmt.Errorf("read: %w", errBodyTooLarge), want: true},
+		{name: "net_http_max_bytes_error", err: &nethttp.MaxBytesError{Limit: 16}, want: true},
+		{name: "a_wrapped_max_bytes_error", err: fmt.Errorf("read: %w", &nethttp.MaxBytesError{Limit: 16}), want: true},
+		{name: "an_unrelated_transport_error", err: errors.New("connection refused")},
+		{name: "no_error", err: nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isOversizedBody(tc.err))
 		})
 	}
 }
@@ -543,76 +566,6 @@ func TestCapResponseBodyToleratesAResponseWithoutABody(t *testing.T) {
 
 	require.NoError(t, interceptor(context.Background(), nil, nil))
 	require.NoError(t, interceptor(context.Background(), nil, &nethttp.Response{}))
-}
-
-// jwk renders one JWKS entry for the parser tests.
-func jwk(members map[string]string) string {
-	parts := make([]string, 0, len(members))
-	for _, key := range []string{"kty", "kid", "use", "n", "e", "crv"} {
-		if value, ok := members[key]; ok {
-			parts = append(parts, fmt.Sprintf("%q:%q", key, value))
-		}
-	}
-	return "{" + strings.Join(parts, ",") + "}"
-}
-
-// validModulus is a 2048-bit modulus in the base64url encoding RFC 7518 mandates.
-func validModulus() string {
-	return base64.RawURLEncoding.EncodeToString(append([]byte{0xC0}, make([]byte, 255)...))
-}
-
-func TestParseJWKSDropsUnusableEntries(t *testing.T) {
-	tests := []struct {
-		name    string
-		members map[string]string
-	}{
-		{name: "non_rsa_kty", members: map[string]string{"kty": "EC", "kid": "k", "crv": "P-256"}},
-		{name: "missing_kid", members: map[string]string{"kty": "RSA", "n": validModulus(), "e": "AQAB"}},
-		{name: "encryption_use", members: map[string]string{"kty": "RSA", "kid": "k", "use": "enc", "n": validModulus(), "e": "AQAB"}},
-		{name: "missing_modulus", members: map[string]string{"kty": "RSA", "kid": "k", "e": "AQAB"}},
-		{name: "padded_modulus", members: map[string]string{"kty": "RSA", "kid": "k", "n": "AAAA=", "e": "AQAB"}},
-		{name: "modulus_below_the_floor", members: map[string]string{"kty": "RSA", "kid": "k", "n": "AQAB", "e": "AQAB"}},
-		{name: "missing_exponent", members: map[string]string{"kty": "RSA", "kid": "k", "n": validModulus()}},
-		{name: "even_exponent", members: map[string]string{"kty": "RSA", "kid": "k", "n": validModulus(), "e": "BAAA"}},
-		{name: "unit_exponent", members: map[string]string{"kty": "RSA", "kid": "k", "n": validModulus(), "e": "AQ"}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			keys, dropped, err := parseJWKS([]byte(`{"keys":[` + jwk(tc.members) + `]}`))
-
-			require.NoError(t, err)
-			assert.Empty(t, keys)
-			assert.Len(t, dropped, 1)
-		})
-	}
-}
-
-func TestParseJWKSKeepsTheFirstOfADuplicateKid(t *testing.T) {
-	first := jwk(map[string]string{"kty": "RSA", "kid": "dup", "n": validModulus(), "e": "AQAB"})
-	second := jwk(map[string]string{"kty": "RSA", "kid": "dup", "n": base64.RawURLEncoding.EncodeToString(append([]byte{0xFF}, make([]byte, 255)...)), "e": "AQAB"})
-
-	keys, dropped, err := parseJWKS([]byte(`{"keys":[` + first + "," + second + `]}`))
-
-	require.NoError(t, err)
-	require.Len(t, keys, 1)
-	assert.Equal(t, []string{"dup"}, dropped)
-	assert.Equal(t, byte(0xC0), keys["dup"].N.Bytes()[0], "the first entry must win")
-}
-
-func TestParseJWKSNamesAnEntryWithoutAKid(t *testing.T) {
-	body := []byte(`{"keys":[` + jwk(map[string]string{"kty": "EC", "crv": "P-256"}) + `]}`)
-
-	_, dropped, err := parseJWKS(body)
-
-	require.NoError(t, err)
-	assert.Equal(t, []string{noKidPlaceholder}, dropped)
-}
-
-func TestParseJWKSRejectsANonDocument(t *testing.T) {
-	_, _, err := parseJWKS([]byte("not json"))
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not valid json")
 }
 
 func TestJWKSResolverReportsAnUnavailableKeySetWhenTheSetIsEmpty(t *testing.T) {
@@ -742,26 +695,6 @@ func TestJWKSResolverRejectsAnOversizedBodyThroughTheInterceptor(t *testing.T) {
 	require.ErrorIs(t, outcome.err, errBodyTooLarge)
 }
 
-// countingCloser reports whether the reader it wraps was closed.
-type countingCloser struct {
-	io.Reader
-	closed bool
-}
-
-func (c *countingCloser) Close() error {
-	c.closed = true
-	return nil
-}
-
-func TestCappedBodyClosesTheUnderlyingBody(t *testing.T) {
-	inner := &countingCloser{Reader: strings.NewReader("{}")}
-	body := &cappedBody{inner: inner, allowance: 8}
-
-	require.NoError(t, body.Close())
-
-	assert.True(t, inner.closed)
-}
-
 func TestJWKSResolverRefreshesInTheBackground(t *testing.T) {
 	srv := newJWKSFixture(t)
 	cfg := jwksConfig(srv)
@@ -777,16 +710,6 @@ func TestJWKSResolverRefreshesInTheBackground(t *testing.T) {
 	// it — by polling the request log, never by sleeping a fixed span.
 	require.Eventually(t, func() bool { return srv.RequestCount() > 0 }, 5*time.Second, 2*time.Millisecond,
 		"the background loop must refresh ahead of the ttl")
-}
-
-func TestCappedBodyKeepsFailingAfterTheCapIsPassed(t *testing.T) {
-	body := &cappedBody{inner: io.NopCloser(strings.NewReader("0123456789")), allowance: 3}
-
-	_, first := body.Read(make([]byte, 8))
-	_, second := body.Read(make([]byte, 8))
-
-	require.ErrorIs(t, first, errBodyTooLarge)
-	require.ErrorIs(t, second, errBodyTooLarge, "a body past the cap must not become readable again")
 }
 
 // statusOnlyClient reports a non-2xx response without an error, the shape a
@@ -805,30 +728,6 @@ func TestJWKSResolverFetchFailsOnANonOKStatusWithoutAnError(t *testing.T) {
 	assert.Equal(t, refreshErrorStatus, outcome.errType)
 	require.Error(t, outcome.err)
 	assert.Contains(t, outcome.err.Error(), "500")
-}
-
-// countingReader records how many times it was read, so a test can assert the
-// capped body stops touching the issuer's stream once it is past the cap.
-type countingReader struct {
-	inner io.Reader
-	reads int
-}
-
-func (c *countingReader) Read(p []byte) (int, error) {
-	c.reads++
-	return c.inner.Read(p)
-}
-
-func TestCappedBodyStopsReadingOnceTheCapIsPassed(t *testing.T) {
-	inner := &countingReader{inner: strings.NewReader("0123456789")}
-	body := &cappedBody{inner: io.NopCloser(inner), allowance: 3}
-
-	_, first := body.Read(make([]byte, 8))
-	_, second := body.Read(make([]byte, 8))
-
-	require.ErrorIs(t, first, errBodyTooLarge)
-	require.ErrorIs(t, second, errBodyTooLarge)
-	assert.Equal(t, 1, inner.reads, "an exhausted allowance must fail without touching the stream again")
 }
 
 // newStaleFixture builds a resolver holding one key fetched at the clock's
@@ -851,6 +750,12 @@ func TestJWKSResolverTreatsTheStaleCeilingAsInclusive(t *testing.T) {
 		{name: "one_nanosecond_inside_the_ceiling", age: testStaleCeiling - time.Nanosecond, want: true},
 		{name: "exactly_at_the_ceiling", age: testStaleCeiling, want: true},
 		{name: "one_nanosecond_past_the_ceiling", age: testStaleCeiling + time.Nanosecond, want: false},
+		{name: "exactly_at_the_fetch_instant", age: 0, want: true},
+		// A clock that stepped BACKWARDS makes the age negative. Treating that as
+		// fresh would keep an arbitrarily old key set usable forever, so it fails
+		// closed instead.
+		{name: "one_nanosecond_before_the_fetch_instant", age: -time.Nanosecond, want: false},
+		{name: "a_clock_that_stepped_far_backwards", age: -2 * testStaleCeiling, want: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -933,55 +838,6 @@ func TestJWKSResolverFetchAcceptsABodyOfExactlyTheCap(t *testing.T) {
 	}
 }
 
-func TestParseJWKSKeepsTheSmallestUsableExponent(t *testing.T) {
-	// "Aw" is the minimal base64url encoding of 3, the smallest exponent RFC
-	// 8017 allows; the entry must survive rather than be dropped as too small.
-	body := []byte(`{"keys":[` + jwk(map[string]string{"kty": "RSA", "kid": "e3", "n": validModulus(), "e": "Aw"}) + `]}`)
-
-	keys, dropped, err := parseJWKS(body)
-
-	require.NoError(t, err)
-	assert.Empty(t, dropped)
-	require.Len(t, keys, 1)
-	assert.Equal(t, 3, keys["e3"].E)
-}
-
-// bigEndianOfBitLen renders the minimal big-endian byte string whose big.Int bit
-// length is exactly bits.
-func bigEndianOfBitLen(bits int) []byte {
-	return new(big.Int).Lsh(big.NewInt(1), uint(bits-1)).Bytes()
-}
-
-func TestDecodeUintBoundsTheBitLengthInclusively(t *testing.T) {
-	tests := []struct {
-		name string
-		bits int
-		want bool
-	}{
-		{name: "one_bit_below_the_floor", bits: minRSAModulusBits - 1},
-		{name: "exactly_at_the_floor", bits: minRSAModulusBits, want: true},
-		{name: "one_bit_above_the_floor", bits: minRSAModulusBits + 1, want: true},
-		{name: "one_bit_below_the_ceiling", bits: maxRSAModulusBits - 1, want: true},
-		{name: "exactly_at_the_ceiling", bits: maxRSAModulusBits, want: true},
-		{name: "one_bit_above_the_ceiling", bits: maxRSAModulusBits + 1},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			encoded := base64.RawURLEncoding.EncodeToString(bigEndianOfBitLen(tc.bits))
-
-			value, ok := decodeUint(encoded, minRSAModulusBits, maxRSAModulusBits)
-
-			assert.Equal(t, tc.want, ok)
-			if !tc.want {
-				assert.Nil(t, value)
-				return
-			}
-			require.NotNil(t, value)
-			assert.Equal(t, tc.bits, value.BitLen())
-		})
-	}
-}
-
 func TestJWKSResolverCloseUnregistersTheGaugesOnce(t *testing.T) {
 	unregistered := 0
 	r := &jwksResolver{stop: make(chan struct{}), done: make(chan struct{}), unregisterGauges: func() { unregistered++ }}
@@ -998,4 +854,257 @@ func TestJWKSResolverCloseWithoutRegisteredGauges(t *testing.T) {
 	close(r.done)
 
 	assert.NotPanics(t, r.close, "a resolver that never registered gauges still closes")
+}
+
+func TestJWKSResolverStopsFetchingOnceClosed(t *testing.T) {
+	srv := newJWKSFixture(t)
+	v := newJWKSVerifier(t, srv)
+	clock := newFakeClock()
+	r := installResolverClock(t, v, clock)
+	// Well past the rate floor, so the only thing that can hold the fetch back
+	// is the closed flag itself.
+	clock.Advance(2 * testMinRefresh)
+
+	require.NoError(t, v.Close())
+	srv.ResetRequests()
+
+	_, err := r.PublicKey(context.Background(), "unknown-kid-after-close")
+
+	require.ErrorIs(t, err, ErrKidUnknown)
+	assert.Zero(t, srv.RequestCount(), "a closed resolver must issue no further requests to the issuer")
+}
+
+// TestJWKSResolverKeepsServingTheCachedKeySetAfterClose pins the other half of
+// the close contract: shutdown stops FETCHING, it does not invalidate the key
+// set already held, which stays usable until its stale ceiling.
+func TestJWKSResolverKeepsServingTheCachedKeySetAfterClose(t *testing.T) {
+	srv := newJWKSFixture(t)
+	v := newJWKSVerifier(t, srv)
+	clock := newFakeClock()
+	installResolverClock(t, v, clock)
+	credential := srv.Issuer().Mint(authtesting.Claims{})
+
+	require.NoError(t, v.Close())
+	srv.ResetRequests()
+
+	clock.Advance(testStaleCeiling)
+	principal, err := v.Verify(context.Background(), credential)
+	require.NoError(t, err)
+	assert.Equal(t, srv.Issuer().IssuerURL(), principal.Issuer)
+	assert.Zero(t, srv.RequestCount())
+
+	// Past the ceiling the set is gone, and the closed resolver cannot refetch
+	// it: the answer is the server fault, never an accepted credential.
+	clock.Advance(time.Nanosecond)
+	_, err = v.Verify(context.Background(), credential)
+	require.ErrorIs(t, err, ErrKeySetUnavailable)
+	assert.Zero(t, srv.RequestCount())
+}
+
+// closeGatedClient parks every fetch until its context ends and reports the
+// context error it observed, so a test can prove close ABORTS an in-flight fetch
+// rather than waiting out jwksFetchTimeout.
+type closeGatedClient struct {
+	httpclient.Client
+	entered chan struct{}
+	ctxErr  chan error
+}
+
+func (c *closeGatedClient) Get(ctx context.Context, _ *httpclient.Request) (*httpclient.Response, error) {
+	close(c.entered)
+	<-ctx.Done()
+	c.ctxErr <- ctx.Err()
+	return nil, ctx.Err()
+}
+
+func TestJWKSResolverCloseAbortsAnInFlightFetch(t *testing.T) {
+	srv := newJWKSFixture(t)
+	v := newJWKSVerifier(t, srv)
+	clock := newFakeClock()
+	r := installResolverClock(t, v, clock)
+	clock.Advance(2 * testMinRefresh)
+
+	gated := &closeGatedClient{Client: r.client, entered: make(chan struct{}), ctxErr: make(chan error, 1)}
+	r.client = gated
+	go func() { _ = r.refresh(context.Background()) }()
+	<-gated.entered
+
+	require.NoError(t, v.Close())
+
+	require.ErrorIs(t, <-gated.ctxErr, context.Canceled,
+		"close must cancel the fetch, not leave it to time out")
+}
+
+func TestJWKSResolverFetchBaseIsDetachedFromEveryCaller(t *testing.T) {
+	srv := newJWKSFixture(t)
+	v := newJWKSVerifier(t, srv)
+	r := v.owned
+
+	require.NoError(t, r.fetchBase().Err(), "a live resolver's fetch context is not canceled")
+	// The base carries no caller values, so no single tenant's trace id or
+	// request id can be injected into the shared key set fetch.
+	assert.Nil(t, r.fetchBase().Value(fetchBaseProbeKey{}))
+
+	require.NoError(t, v.Close())
+	require.ErrorIs(t, r.fetchBase().Err(), context.Canceled)
+}
+
+// fetchBaseProbeKey is a context key a test plants on a caller's context, to
+// show it does not travel into the fetch context.
+type fetchBaseProbeKey struct{}
+
+func TestJWKSResolverFetchBaseFallsBackForALiteralResolver(t *testing.T) {
+	r := &jwksResolver{}
+
+	base := r.fetchBase()
+
+	require.NotNil(t, base)
+	assert.NoError(t, base.Err())
+}
+
+func TestSummarizeDroppedBoundsTheNamedKids(t *testing.T) {
+	kids := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("kid-%d", i)
+		}
+		return out
+	}
+	tests := []struct {
+		name        string
+		dropped     []string
+		wantNamed   int
+		wantSuffix  string
+		wantAbsent  string
+		wantPresent string
+	}{
+		{name: "one_below_the_naming_cap", dropped: kids(maxDroppedKidsNamed - 1), wantNamed: maxDroppedKidsNamed - 1},
+		{name: "exactly_at_the_naming_cap", dropped: kids(maxDroppedKidsNamed), wantNamed: maxDroppedKidsNamed},
+		{
+			name:       "one_above_the_naming_cap",
+			dropped:    kids(maxDroppedKidsNamed + 1),
+			wantNamed:  maxDroppedKidsNamed,
+			wantSuffix: ", …+1 more",
+			wantAbsent: fmt.Sprintf("kid-%d", maxDroppedKidsNamed),
+		},
+		{
+			name:       "far_above_the_naming_cap",
+			dropped:    kids(5000),
+			wantNamed:  maxDroppedKidsNamed,
+			wantSuffix: ", …+4990 more",
+			wantAbsent: "kid-4999",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			summary := summarizeDropped(tc.dropped)
+
+			assert.Equal(t, tc.wantNamed, strings.Count(summary, "kid-"))
+			if tc.wantSuffix == "" {
+				assert.NotContains(t, summary, " more")
+				return
+			}
+			assert.True(t, strings.HasSuffix(summary, tc.wantSuffix), "summary %q must end in %q", summary, tc.wantSuffix)
+			assert.NotContains(t, summary, tc.wantAbsent)
+		})
+	}
+}
+
+func TestTruncateKidBoundsOneKidsLength(t *testing.T) {
+	tests := []struct {
+		name      string
+		kid       string
+		want      string
+		wantRunes int
+	}{
+		{name: "one_rune_below_the_cap", kid: strings.Repeat("a", maxDroppedKidRunes-1), wantRunes: maxDroppedKidRunes - 1},
+		{name: "exactly_at_the_cap", kid: strings.Repeat("a", maxDroppedKidRunes), wantRunes: maxDroppedKidRunes},
+		{name: "one_rune_above_the_cap", kid: strings.Repeat("a", maxDroppedKidRunes+1), wantRunes: maxDroppedKidRunes + 1},
+		// Cutting on a BYTE boundary would split the last rune and put invalid
+		// UTF-8 into the log line.
+		{name: "multi_byte_runes_above_the_cap", kid: strings.Repeat("é", maxDroppedKidRunes+10), wantRunes: maxDroppedKidRunes + 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := truncateKid(tc.kid)
+
+			assert.Len(t, []rune(got), tc.wantRunes)
+			assert.True(t, utf8.ValidString(got), "a truncated kid must stay valid UTF-8")
+			if len([]rune(tc.kid)) <= maxDroppedKidRunes {
+				assert.Equal(t, tc.kid, got)
+				return
+			}
+			assert.True(t, strings.HasSuffix(got, droppedKidEllipsis))
+		})
+	}
+}
+
+// TestWarnDroppedKeepsTheCountExactWhileBoundingTheNaming pins the WARN a
+// hostile issuer sees: the count is whole, the payload is not.
+func TestWarnDroppedKeepsTheCountExactWhileBoundingTheNaming(t *testing.T) {
+	const dropped = 40
+	entries := make([]string, dropped)
+	for i := range entries {
+		entries[i] = strings.Repeat("z", maxDroppedKidRunes*4)
+	}
+	// The logger must be built INSIDE the capture: it binds os.Stdout once, at
+	// construction.
+	out := captureStdout(t, func() {
+		r := &jwksResolver{log: logger.New("warn", false)}
+		r.warnDropped(entries)
+	})
+
+	assert.Contains(t, out, `"dropped":40`)
+	assert.Contains(t, out, fmt.Sprintf("+%d more", dropped-maxDroppedKidsNamed))
+	assert.NotContains(t, out, strings.Repeat("z", maxDroppedKidRunes+1), "no kid may be rendered past its cap")
+}
+
+// TestJWKSResolverClaimAttemptRefusesOnceClosed isolates the closed flag from
+// the canceled base context: both stop a fetch end to end, so the flag needs a
+// test that reaches it with no transport in the way.
+func TestJWKSResolverClaimAttemptRefusesOnceClosed(t *testing.T) {
+	clock := newFakeClock()
+	r := &jwksResolver{now: clock.Now, minRefresh: testMinRefresh, stop: make(chan struct{}), done: make(chan struct{})}
+	close(r.done)
+
+	require.True(t, r.claimAttempt(false), "an open resolver that has never fetched may fetch")
+	clock.Advance(2 * testMinRefresh)
+	require.True(t, r.claimAttempt(false), "an open resolver outside the floor may fetch")
+
+	r.close()
+	clock.Advance(2 * testMinRefresh)
+
+	assert.False(t, r.claimAttempt(false), "a closed resolver must refuse a fetch outside the floor")
+	assert.False(t, r.claimAttempt(true), "closed outranks force")
+}
+
+// valueCarryingClient records the probe value visible on the context the fetch
+// actually ran under.
+type valueCarryingClient struct {
+	httpclient.Client
+	seen chan any
+}
+
+func (c *valueCarryingClient) Get(ctx context.Context, req *httpclient.Request) (*httpclient.Response, error) {
+	c.seen <- ctx.Value(fetchBaseProbeKey{})
+	return c.Client.Get(ctx, req)
+}
+
+// TestJWKSResolverFetchCarriesNoCallerValues pins the attribution rule: one
+// fetch is shared by every coalesced waiter, so it must not inherit the values —
+// trace id, request id — of whichever caller happened to trigger it.
+func TestJWKSResolverFetchCarriesNoCallerValues(t *testing.T) {
+	srv := newJWKSFixture(t)
+	v := newJWKSVerifier(t, srv)
+	clock := newFakeClock()
+	r := installResolverClock(t, v, clock)
+	clock.Advance(2 * testMinRefresh)
+
+	probing := &valueCarryingClient{Client: r.client, seen: make(chan any, 1)}
+	r.client = probing
+	ctx := context.WithValue(context.Background(), fetchBaseProbeKey{}, "caller-trace-id")
+
+	require.NoError(t, r.refresh(ctx))
+
+	assert.Nil(t, <-probing.seen, "the fetch must not inherit the triggering caller's context values")
 }

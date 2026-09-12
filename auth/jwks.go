@@ -3,19 +3,14 @@ package auth
 import (
 	"context"
 	"crypto/rsa"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"math/big"
 	nethttp "net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
 
-	"go.opentelemetry.io/otel/metric"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/gaborage/go-bricks/httpclient"
@@ -34,23 +29,15 @@ const (
 	// resolver, so every refresh coalesces onto one constant.
 	jwksRefreshKey = "jwks"
 
-	// ktyRSA is the only "kty" this package can use; useSignature the only "use"
-	// it accepts when the member is present.
-	ktyRSA       = "RSA"
-	useSignature = "sig"
+	// maxDroppedKidsNamed and maxDroppedKidRunes bound the dropped-keys WARN. A
+	// hostile issuer can publish thousands of unusable entries carrying kids of
+	// any length, and the line would otherwise grow to the whole body cap on
+	// every refresh. The COUNT is always exact; only the naming is bounded.
+	maxDroppedKidsNamed = 10
+	maxDroppedKidRunes  = 64
 
-	// RSA modulus bounds. Below the floor the key is not worth verifying
-	// against; above the ceiling a single signature check becomes a denial of
-	// service the issuer can hand us. A key outside the range is dropped like
-	// any other unusable entry, named in the WARN.
-	minRSAModulusBits = 2048
-	maxRSAModulusBits = 16384
-
-	// maxRSAExponentBits bounds "e" so the int conversion below cannot overflow.
-	maxRSAExponentBits = 31
-
-	// noKidPlaceholder labels an entry with no "kid" in the dropped-keys WARN.
-	noKidPlaceholder = "<no kid>"
+	// droppedKidEllipsis marks a kid the WARN truncated.
+	droppedKidEllipsis = "…"
 )
 
 var _ PublicKeyResolver = (*jwksResolver)(nil)
@@ -73,6 +60,12 @@ type jwksResolver struct {
 
 	group singleflight.Group
 
+	// base is the resolver-lifetime context every fetch derives from, and
+	// baseCancel ends it in close. It is deliberately rooted at
+	// context.Background rather than at a caller's context: see fetchBase.
+	base       context.Context
+	baseCancel context.CancelFunc
+
 	mu sync.RWMutex
 	// keys is the last successfully fetched key set. It is replaced wholesale,
 	// never written in place, so a map handed to a reader under RLock stays
@@ -83,6 +76,9 @@ type jwksResolver struct {
 	// issuer cannot be hammered any harder than a healthy one.
 	fetchedAt   time.Time
 	lastAttempt time.Time
+	// closed is set by close. It gates every attempt, so a stopped resolver
+	// issues no further requests even when an unknown kid keeps arriving.
+	closed bool
 
 	// now is the clock behind the TTL, stale-ceiling and rate-floor comparisons.
 	// Tests in this package replace it directly, exactly as Verifier does; there
@@ -93,52 +89,6 @@ type jwksResolver struct {
 	done             chan struct{}
 	stopOnce         sync.Once
 	unregisterGauges func()
-}
-
-// NewVerifier builds a verifier over the issuer's JWKS endpoint. It is the
-// consumer-facing door: the pinned-key NewVerifierWithResolver is for
-// deployments that carry issuer keys out of band.
-//
-// The key set is fetched before this returns and a failed fetch is an error, so
-// a module Init aborts startup rather than booting a verifier that can verify
-// nothing. cfg is validated in full first — the auth.jwt.* rules Config.Validate
-// owns plus the auth.jwt.jwks.* group, which only a fetching resolver makes
-// live.
-//
-// mp may be nil, in which case the global MeterProvider is used. client may be
-// nil, in which case a default httpclient is built with a peer name derived from
-// the key set endpoint's host; building that default needs a logger, so a nil
-// log and a nil client together are a configuration error.
-//
-// Ownership: the returned verifier CONSTRUCTED its resolver, so its Close stops
-// the background refresh. Call it from the module's Shutdown.
-//
-//nolint:gocritic // hugeParam: Config is the injected value type, matching NewVerifierWithResolver.
-func NewVerifier(cfg Config, log logger.Logger, mp metric.MeterProvider, client httpclient.Client) (*Verifier, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	if cfgErr := cfg.validateJWKSSource(); cfgErr != nil {
-		return nil, cfgErr
-	}
-	if isNilInterface(log) {
-		log = nil
-	}
-
-	m := newAuthMetrics(mp)
-	resolver, err := newJWKSResolver(&cfg, log, m, client)
-	if err != nil {
-		return nil, err
-	}
-
-	verifier, err := NewVerifierWithResolver(cfg, log, resolver)
-	if err != nil {
-		resolver.close()
-		return nil, err
-	}
-	verifier.metrics = m
-	verifier.owned = resolver
-	return verifier, nil
 }
 
 // newJWKSResolver builds the resolver, performs the fail-fast initial fetch and
@@ -152,6 +102,7 @@ func newJWKSResolver(cfg *Config, log logger.Logger, m *authMetrics, client http
 		client = built
 	}
 
+	base, baseCancel := context.WithCancel(context.Background())
 	r := &jwksResolver{
 		uri:          cfg.JWKSURI,
 		client:       client,
@@ -161,14 +112,17 @@ func newJWKSResolver(cfg *Config, log logger.Logger, m *authMetrics, client http
 		staleCeiling: cfg.JWKS.StaleCeiling,
 		minRefresh:   cfg.JWKS.MinRefreshInterval,
 		maxBodyBytes: cfg.JWKS.MaxBodyBytes,
+		base:         base,
+		baseCancel:   baseCancel,
 		now:          time.Now,
 		stop:         make(chan struct{}),
 		done:         make(chan struct{}),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), jwksFetchTimeout)
+	ctx, cancel := context.WithTimeout(base, jwksFetchTimeout)
 	defer cancel()
 	if err := r.fetchAndStore(ctx, true); err != nil {
+		baseCancel()
 		return nil, fmt.Errorf("auth: initial issuer key set fetch failed: %w", err)
 	}
 
@@ -209,6 +163,12 @@ var errBodyTooLarge = errors.New("auth: jwks response body exceeds the configure
 // before the client reads the body, so replacing the body here caps what is ever
 // buffered. An over-cap body surfaces as a read error, which the client turns
 // into a failed request — never a panic.
+//
+// http.MaxBytesReader is the repo's standard cap (httpclient's JOSE transport,
+// server/jose, migration's http source): it errors mid-stream rather than
+// truncating, and admits a body of EXACTLY the cap. Its failure is a typed
+// *http.MaxBytesError rather than errBodyTooLarge, which isOversizedBody folds
+// back into one classification.
 func capResponseBody(maxBytes int64) httpclient.ResponseInterceptor {
 	return func(_ context.Context, _ *nethttp.Request, resp *nethttp.Response) error {
 		if resp == nil || resp.Body == nil {
@@ -219,37 +179,20 @@ func capResponseBody(maxBytes int64) httpclient.ResponseInterceptor {
 		if resp.ContentLength > maxBytes {
 			return errBodyTooLarge
 		}
-		resp.Body = &cappedBody{inner: resp.Body, allowance: maxBytes + 1}
+		resp.Body = nethttp.MaxBytesReader(nil, resp.Body, maxBytes)
 		return nil
 	}
 }
 
-// cappedBody fails the read once the body produces more than the cap. It
-// deliberately errors rather than truncating: a truncated JWKS would parse as
-// malformed at best and as a SHORTER key set at worst.
-//
-// allowance is the cap PLUS ONE byte: a body of exactly the cap must succeed,
-// so the overflow is detected by reading one byte past it rather than by the
-// allowance reaching zero on a body that was still within bounds.
-type cappedBody struct {
-	inner     io.ReadCloser
-	allowance int64
-}
-
-func (c *cappedBody) Read(p []byte) (int, error) {
-	if c.allowance <= 0 {
-		return 0, errBodyTooLarge
+// isOversizedBody reports whether err is an over-cap key set body, from either
+// the declared-length refusal or net/http's mid-stream MaxBytesReader failure.
+func isOversizedBody(err error) bool {
+	if errors.Is(err, errBodyTooLarge) {
+		return true
 	}
-	p = p[:min(int64(len(p)), c.allowance)]
-	n, err := c.inner.Read(p)
-	c.allowance -= int64(n)
-	if c.allowance <= 0 {
-		return n, errBodyTooLarge
-	}
-	return n, err
+	var maxErr *nethttp.MaxBytesError
+	return errors.As(err, &maxErr)
 }
-
-func (c *cappedBody) Close() error { return c.inner.Close() }
 
 // PublicKey implements PublicKeyResolver.
 //
@@ -258,6 +201,9 @@ func (c *cappedBody) Close() error { return c.inner.Close() }
 // the lookup is retried against the result. A key set past its stale ceiling is
 // no key set at all: every lookup then reports ErrKeySetUnavailable, and there
 // is deliberately no path that accepts a credential it cannot verify.
+//
+// A CLOSED resolver still answers from the key set it last held, until that set
+// passes its stale ceiling; it simply never fetches again.
 //
 // The returned key is the resolver's own and MUST NOT be mutated. See the
 // PublicKeyResolver aliasing contract.
@@ -301,11 +247,16 @@ func (r *jwksResolver) usable() bool {
 }
 
 // usableLocked is usable's body; the caller holds at least the read lock.
+//
+// A NEGATIVE age — the clock moved backwards behind us — is treated as stale
+// rather than as fresh: a backwards step would otherwise make an arbitrarily old
+// key set pass the ceiling forever, which fails open.
 func (r *jwksResolver) usableLocked() bool {
 	if r.fetchedAt.IsZero() || len(r.keys) == 0 {
 		return false
 	}
-	return r.now().Sub(r.fetchedAt) <= r.staleCeiling
+	age := r.now().Sub(r.fetchedAt)
+	return age >= 0 && age <= r.staleCeiling
 }
 
 // keySetObservation implements keySetState for the key-count and age gauges.
@@ -318,21 +269,41 @@ func (r *jwksResolver) keySetObservation() (keys int64, ageSeconds float64, ok b
 	return int64(len(r.keys)), r.now().Sub(r.fetchedAt).Seconds(), true
 }
 
+// fetchBase is the context every key-set fetch derives from.
+//
+// It is rooted at context.Background, NOT at the caller whose unknown kid
+// triggered the refresh. singleflight shares one fetch across every waiter, so
+// inheriting the first caller's values would attribute the issuer request to one
+// arbitrary tenant's trace and request id and make the outbound GET carry that
+// request's traceparent for all of them. A key set is resolver-wide state, so it
+// is fetched as resolver-wide work, under a span of its own.
+//
+// It is canceled by close, which is the ONLY cancellation a fetch honors: a
+// caller that gives up stops waiting, while the fetch every other waiter depends
+// on runs on.
+//
+// The nil fallback serves resolvers built as struct literals in tests.
+func (r *jwksResolver) fetchBase() context.Context {
+	if r.base == nil {
+		return context.Background()
+	}
+	return r.base
+}
+
 // refresh runs at most one fetch across all concurrent callers and waits for it
 // on the CALLER's context.
 //
-// The fetch itself runs on a context detached from the caller's: singleflight
-// shares one call across every waiter, so a request that cancels near its
-// deadline would otherwise abort a fetch that other in-flight requests — and the
-// cached key set — depend on. context.WithoutCancel keeps the caller's values
-// (trace id, tenant) for the outbound request while severing cancellation, and
-// jwksFetchTimeout supplies the deadline the caller's would have provided.
+// The rate floor is deliberately NOT pre-checked before the singleflight call.
+// Entering DoChan unconditionally is what makes a caller arriving DURING an
+// in-flight fetch join it and see its result; a cheap pre-check would send that
+// caller home with the pre-refresh key set, because the fetch it should have
+// waited for has already recorded the attempt that floors it.
 //
-// A caller whose own context ends first stops WAITING; the detached fetch
-// completes and still updates the cached key set.
+// A caller whose own context ends first stops WAITING; the fetch completes and
+// still updates the cached key set.
 func (r *jwksResolver) refresh(ctx context.Context) error {
 	results := r.group.DoChan(jwksRefreshKey, func() (any, error) {
-		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jwksFetchTimeout)
+		fetchCtx, cancel := context.WithTimeout(r.fetchBase(), jwksFetchTimeout)
 		defer cancel()
 		return nil, r.fetchAndStore(fetchCtx, false)
 	})
@@ -345,8 +316,9 @@ func (r *jwksResolver) refresh(ctx context.Context) error {
 }
 
 // fetchAndStore performs one refresh attempt and replaces the cached key set on
-// success. force bypasses the rate floor; only the construction-time fetch uses
-// it, because there is no cached key set to protect yet.
+// success. force bypasses the rate floor — but never the closed flag; only the
+// construction-time fetch forces, because there is no cached key set to protect
+// yet.
 //
 // A skipped attempt is not a failure and is not counted: the floor exists so an
 // unknown kid cannot be used to hammer the issuer, and counting every skip would
@@ -370,16 +342,28 @@ func (r *jwksResolver) fetchAndStore(ctx context.Context, force bool) error {
 	return nil
 }
 
-// claimAttempt applies the rate floor and records the attempt. It reports
-// whether the caller may proceed.
+// attemptAllowedLocked reports whether a fetch may start: never once closed,
+// always when forced, otherwise only outside the rate floor. The caller holds
+// the write lock.
+func (r *jwksResolver) attemptAllowedLocked(force bool) bool {
+	if r.closed {
+		return false
+	}
+	if force || r.lastAttempt.IsZero() {
+		return true
+	}
+	return r.now().Sub(r.lastAttempt) >= r.minRefresh
+}
+
+// claimAttempt applies the closed flag and the rate floor and records the
+// attempt. It reports whether the caller may proceed.
 func (r *jwksResolver) claimAttempt(force bool) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	now := r.now()
-	if !force && !r.lastAttempt.IsZero() && now.Sub(r.lastAttempt) < r.minRefresh {
+	if !r.attemptAllowedLocked(force) {
 		return false
 	}
-	r.lastAttempt = now
+	r.lastAttempt = r.now()
 	return true
 }
 
@@ -402,7 +386,7 @@ func (r *jwksResolver) fetch(ctx context.Context) fetchOutcome {
 		if resp != nil && resp.StatusCode != nethttp.StatusOK {
 			return fetchOutcome{errType: refreshErrorStatus, err: fmt.Errorf("auth: jwks endpoint returned status %d", resp.StatusCode)}
 		}
-		if errors.Is(err, errBodyTooLarge) {
+		if isOversizedBody(err) {
 			return fetchOutcome{errType: refreshErrorOversized, err: errBodyTooLarge}
 		}
 		return fetchOutcome{errType: refreshErrorTransport, err: fmt.Errorf("auth: jwks request failed: %w", err)}
@@ -431,111 +415,45 @@ func (r *jwksResolver) fetch(ctx context.Context) fetchOutcome {
 	return fetchOutcome{keys: keys, dropped: dropped}
 }
 
-// warnDropped emits ONE warning naming every dropped kid, not one line per key:
+// warnDropped emits ONE warning naming the dropped kids, not one line per key:
 // an issuer publishing a large non-RSA key set would otherwise flood the log on
-// every refresh.
+// every refresh. The naming is bounded by summarizeDropped; the "dropped" count
+// stays exact.
 func (r *jwksResolver) warnDropped(dropped []string) {
 	if r.log == nil || len(dropped) == 0 {
 		return
 	}
 	r.log.Warn().
 		Int("dropped", len(dropped)).
-		Str("kids", strings.Join(dropped, ", ")).
+		Str("kids", summarizeDropped(dropped)).
 		Msg("auth: ignored unusable jwks entries")
 }
 
-// jwksDocument is the subset of RFC 7517 this package reads.
-type jwksDocument struct {
-	Keys []jwksKey `json:"keys"`
+// summarizeDropped renders at most maxDroppedKidsNamed kids, each truncated to
+// maxDroppedKidRunes, and reports the remainder as a count. The issuer chooses
+// both how many entries it publishes and how long each kid is, so an unbounded
+// join hands it a log-volume lever bounded only by the body cap.
+func summarizeDropped(dropped []string) string {
+	named := dropped[:min(len(dropped), maxDroppedKidsNamed)]
+	parts := make([]string, len(named))
+	for i, kid := range named {
+		parts[i] = truncateKid(kid)
+	}
+	summary := strings.Join(parts, ", ")
+	if remaining := len(dropped) - len(named); remaining > 0 {
+		summary += fmt.Sprintf(", %s+%d more", droppedKidEllipsis, remaining)
+	}
+	return summary
 }
 
-type jwksKey struct {
-	Kty string `json:"kty"`
-	Kid string `json:"kid"`
-	Use string `json:"use"`
-	N   string `json:"n"`
-	E   string `json:"e"`
-}
-
-// parseJWKS decodes the document and keeps the RSA signing keys. Anything else —
-// a non-RSA kty, an encryption-only key, a key with no kid, an undecodable or
-// out-of-range modulus or exponent, a duplicate kid — is DROPPED and named in
-// dropped, never promoted into an error: one unusable entry must not cost the
-// deployment every other key the issuer published.
-//
-// A document that yields no usable key at all is the caller's failure to report,
-// not this function's.
-func parseJWKS(body []byte) (keys map[string]*rsa.PublicKey, dropped []string, err error) {
-	var doc jwksDocument
-	if err := json.Unmarshal(body, &doc); err != nil {
-		return nil, nil, errors.New("auth: jwks document is not valid json")
+// truncateKid bounds one kid's rendered length. It cuts on a RUNE boundary, so a
+// multi-byte kid cannot be truncated into invalid UTF-8 inside the log line.
+func truncateKid(kid string) string {
+	runes := []rune(kid)
+	if len(runes) <= maxDroppedKidRunes {
+		return kid
 	}
-
-	keys = make(map[string]*rsa.PublicKey, len(doc.Keys))
-	for i := range doc.Keys {
-		entry := &doc.Keys[i]
-		key, ok := parseRSAKey(entry)
-		if !ok || keys[entry.Kid] != nil {
-			dropped = append(dropped, kidLabel(entry.Kid))
-			continue
-		}
-		keys[entry.Kid] = key
-	}
-	return keys, dropped, nil
-}
-
-// kidLabel renders a kid for the dropped-keys warning, standing in for an entry
-// that carried none.
-func kidLabel(kid string) string {
-	if kid == "" {
-		return noKidPlaceholder
-	}
-	return kid
-}
-
-// parseRSAKey converts one JWK into an RSA public key, reporting ok=false for
-// every entry this package cannot verify with.
-func parseRSAKey(entry *jwksKey) (key *rsa.PublicKey, ok bool) {
-	if entry.Kty != ktyRSA || entry.Kid == "" {
-		return nil, false
-	}
-	if entry.Use != "" && entry.Use != useSignature {
-		return nil, false
-	}
-	modulus, ok := decodeUint(entry.N, minRSAModulusBits, maxRSAModulusBits)
-	if !ok {
-		return nil, false
-	}
-	exponent, ok := decodeUint(entry.E, 1, maxRSAExponentBits)
-	if !ok || !exponent.IsInt64() {
-		return nil, false
-	}
-	value := exponent.Int64()
-	// An even or unit exponent is not a usable RSA public exponent; rsa.Verify
-	// would reject it later, so drop it here where it is named in the WARN.
-	if value < 3 || value%2 == 0 {
-		return nil, false
-	}
-	return &rsa.PublicKey{N: modulus, E: int(value)}, true
-}
-
-// decodeUint decodes a base64url big-endian unsigned integer and bounds its bit
-// length. RFC 7518 mandates the unpadded encoding, so a padded value is
-// rejected rather than silently accepted.
-func decodeUint(encoded string, minBits, maxBits int) (value *big.Int, ok bool) {
-	if encoded == "" {
-		return nil, false
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil {
-		return nil, false
-	}
-	value = new(big.Int).SetBytes(raw)
-	bits := value.BitLen()
-	if bits < minBits || bits > maxBits {
-		return nil, false
-	}
-	return value, true
+	return string(runes[:maxDroppedKidRunes]) + droppedKidEllipsis
 }
 
 // refreshLoop refreshes the key set ahead of its TTL.
@@ -544,6 +462,9 @@ func decodeUint(encoded string, minBits, maxBits int) (value *big.Int, ok bool) 
 // so the cached set is replaced before it expires without the loop ever
 // out-running the rate floor. A zero TTL — "treat every entry as due" — falls
 // back to the floor, which is required to be positive.
+//
+// It WAITS on the resolver-lifetime context, so close aborts an in-flight
+// background fetch instead of holding shutdown for jwksFetchTimeout.
 func (r *jwksResolver) refreshLoop() {
 	defer close(r.done)
 	ticker := time.NewTicker(r.tickInterval())
@@ -553,12 +474,10 @@ func (r *jwksResolver) refreshLoop() {
 		case <-r.stop:
 			return
 		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), jwksFetchTimeout)
 			// The background refresh takes the same singleflight path as an
 			// on-demand one, so a tick landing on an in-flight fetch joins it
 			// instead of opening a second connection to the issuer.
-			_ = r.refresh(ctx)
-			cancel()
+			_ = r.refresh(r.fetchBase())
 		}
 	}
 }
@@ -571,9 +490,16 @@ func (r *jwksResolver) tickInterval() time.Duration {
 
 // close stops the background refresh and unregisters the gauges. It is
 // idempotent and blocks until the refresh goroutine has exited, so a stopped
-// resolver issues no further requests.
+// resolver issues no further requests: the closed flag refuses every new
+// attempt and the canceled base context aborts any fetch already in flight.
 func (r *jwksResolver) close() {
 	r.stopOnce.Do(func() {
+		r.mu.Lock()
+		r.closed = true
+		r.mu.Unlock()
+		if r.baseCancel != nil {
+			r.baseCancel()
+		}
 		close(r.stop)
 		<-r.done
 		if r.unregisterGauges != nil {

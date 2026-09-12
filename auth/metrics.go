@@ -25,6 +25,14 @@ const (
 	metricKeySetKeyCount     = "auth.keyset.key.count"
 )
 
+// Metrics-wiring operation names for logMetricWiringError. They name an action
+// on the key-set gauges, never an instrument, so the report cannot be read as an
+// initialization failure.
+const (
+	opKeySetGaugeRegister   = "key set gauge callback registration"
+	opKeySetGaugeUnregister = "key set gauge callback unregistration"
+)
+
 // Attribute keys. error.type is the OTel-conventional spelling; auth.result
 // mirrors the scheduler's job.status — one low-cardinality outcome dimension.
 const (
@@ -103,6 +111,16 @@ func newAuthMetrics(mp metric.MeterProvider) *authMetrics {
 func logMetricError(name string, err error) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "WARNING: Failed to initialize metric %s: %v\n", name, err)
+	}
+}
+
+// logMetricWiringError reports a metrics-wiring failure that is NOT an
+// instrument initialization — registering the gauge callback, and unregistering
+// it again — so a shutdown-time failure does not read as a startup failure of a
+// metric that does not exist. Same best-effort channel, same never-crash rule.
+func logMetricWiringError(operation string, err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: auth metrics operation %s failed: %v\n", operation, err)
 	}
 }
 
@@ -187,10 +205,6 @@ func (m *authMetrics) registerKeySetGauges(state keySetState) func() {
 	)
 	logMetricError(metricKeySetAge, err)
 
-	if keyCount == nil || age == nil {
-		return func() {}
-	}
-
 	registration, err := m.meter.RegisterCallback(
 		func(_ context.Context, observer metric.Observer) error {
 			keys, ageSeconds, ok := state.keySetObservation()
@@ -204,12 +218,12 @@ func (m *authMetrics) registerKeySetGauges(state keySetState) func() {
 		keyCount, age,
 	)
 	if err != nil {
-		logMetricError("auth_keyset_callback", err)
+		logMetricWiringError(opKeySetGaugeRegister, err)
 		return func() {}
 	}
 	return func() {
 		if err := registration.Unregister(); err != nil {
-			logMetricError("auth_keyset_unregister", err)
+			logMetricWiringError(opKeySetGaugeUnregister, err)
 		}
 	}
 }

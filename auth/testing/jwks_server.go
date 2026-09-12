@@ -191,8 +191,20 @@ func (s *JWKSServer) ResetRequests() {
 func (s *JWKSServer) handle(w nethttp.ResponseWriter, r *nethttp.Request) {
 	s.mu.Lock()
 	s.requests = append(s.requests, JWKSRequest{At: time.Now(), Method: r.Method, Path: r.URL.Path})
-	mode, oversized := s.mode, s.oversizedBytes
-	body := s.documentLocked(mode)
+	mode := s.mode
+	// The document is rendered only in the arms that serve it: the failure modes
+	// discard it, and marshaling the whole key set per request to throw it away
+	// is work a test pays on every refresh assertion.
+	var body []byte
+	switch mode {
+	case JWKSServerError:
+	case JWKSMalformed:
+		body = []byte("this is not a jwks document")
+	case JWKSOversized:
+		body = padDocument(s.documentLocked(mode), s.oversizedBytes)
+	default:
+		body = s.documentLocked(mode)
+	}
 	s.mu.Unlock()
 
 	if mode == JWKSServerError {
@@ -200,14 +212,7 @@ func (s *JWKSServer) handle(w nethttp.ResponseWriter, r *nethttp.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	switch mode {
-	case JWKSMalformed:
-		writeAll(w, []byte("this is not a jwks document"))
-	case JWKSOversized:
-		writeAll(w, padDocument(body, oversized))
-	default:
-		writeAll(w, body)
-	}
+	writeAll(w, body)
 }
 
 // documentLocked renders the JWKS document. The caller holds the lock.
