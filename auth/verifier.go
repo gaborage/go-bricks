@@ -242,8 +242,9 @@ func (v *Verifier) checkType(header *jose.Header) error {
 // fault (401), an unusable key set is a server fault (503).
 //
 // SECURITY: the returned unavailable error wraps the sentinel only. Wrapping the
-// resolver's own error would let a resolver reclassify a 503 into a 401; the cause is
-// logged at DEBUG instead.
+// resolver's own error would let a resolver reclassify a 503 into a 401. The cause is
+// dropped rather than logged: a PublicKeyResolver is consumer-supplied and may return
+// anything, so only the class reaches the log.
 func (v *Verifier) resolveKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 	key, err := v.resolver.PublicKey(ctx, kid)
 	if err != nil && errors.Is(err, ErrKidUnknown) {
