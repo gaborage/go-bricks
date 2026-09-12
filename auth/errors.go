@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"io"
 )
 
 // Sentinel errors returned by credential verification. ErrKeySetUnavailable is
@@ -64,7 +65,8 @@ const ClassKeySetUnavailable Class = "key_set_unavailable"
 // SECURITY: neither Error() nor any field may carry the credential string, the
 // raw token, signature bytes or the "sub" claim. Error() renders the class and
 // nothing else — in particular it never renders Cause, because a library cause
-// routinely embeds the token it failed on. Cause is kept for DEBUG-level
+// routinely embeds the token it failed on, and Format extends that guarantee to
+// every fmt verb, %#v included. Cause is kept for DEBUG-level
 // inspection by the framework only; callers constructing a VerificationError
 // must not pass a cause that embeds the credential.
 type VerificationError struct {
@@ -85,6 +87,28 @@ func NewVerificationError(class Class, cause error) *VerificationError {
 // Error renders the failure class only.
 func (e *VerificationError) Error() string {
 	return fmt.Sprintf("auth: credential rejected (class: %s)", e.Class)
+}
+
+// Format routes every fmt verb through the class-only rendering of Error.
+//
+// SECURITY: it exists for %#v, which prints the Go-syntax representation and
+// bypasses the error interface — the one fmt path that would otherwise dump the
+// exported Cause field and whatever exported fields the cause's own type
+// carries. Implementing fmt.Formatter takes precedence over Error for EVERY
+// verb, so %v and %s are answered here too and render exactly what Error
+// returns; an unsupported verb reports the bad verb with the same safe body
+// rather than falling back to a field dump. It changes no errors.Is/As
+// behavior: fmt rendering and the unwrap chain are separate seams.
+func (e *VerificationError) Format(f fmt.State, verb rune) {
+	rendered := e.Error()
+	switch verb {
+	case 'v', 's':
+		io.WriteString(f, rendered) //nolint:errcheck // fmt.State swallows write errors by design.
+	case 'q':
+		fmt.Fprintf(f, "%q", rendered)
+	default:
+		fmt.Fprintf(f, "%%!%c(auth.VerificationError=%s)", verb, rendered)
+	}
 }
 
 // Unwrap returns ErrInvalidCredential so errors.Is(err, ErrInvalidCredential) holds

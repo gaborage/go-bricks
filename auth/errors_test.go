@@ -68,6 +68,45 @@ func TestVerificationErrorNeverRendersTheCredential(t *testing.T) {
 	assert.NotContains(t, fmt.Sprintf("%+v", err), credential)
 }
 
+// leakyCauseError is a cause whose EXPORTED field carries credential-shaped
+// material, so %#v on a VerificationError holding it would print that material
+// without VerificationError.Format. It is a value type on purpose: fmt expands a
+// nested struct value inline under %#v but prints a nested pointer as an
+// address, and a cause built with fmt.Errorf keeps its text in an unexported
+// field — either shape would make the assertions below pass unfixed.
+type leakyCauseError struct {
+	Credential string
+}
+
+func (leakyCauseError) Error() string { return "auth: upstream cause" }
+
+// TestVerificationErrorFormatNeverRendersTheCause pins the %#v seam: fmt's
+// Go-syntax verb bypasses Error, so without fmt.Formatter it dumps the struct
+// and the exported fields of whatever Cause holds.
+func TestVerificationErrorFormatNeverRendersTheCause(t *testing.T) {
+	credential := testCredential()
+	err := NewVerificationError(ClassSignature, leakyCauseError{Credential: credential})
+	// render goes through a variable format so the verb under test survives
+	// gocritic's redundantSprint rewrite to err.Error().
+	render := func(format string, value any) string { return fmt.Sprintf(format, value) }
+
+	want := "auth: credential rejected (class: signature)"
+	for _, verb := range []string{"%v", "%s", "%+v", "%#v"} {
+		assert.Equal(t, want, render(verb, err), verb)
+	}
+	assert.Equal(t, fmt.Sprintf("%q", want), render("%q", err))
+	assert.Equal(t, "%!d(auth.VerificationError="+want+")", render("%d", err))
+
+	for _, verb := range []string{"%v", "%s", "%q", "%+v", "%#v", "%d"} {
+		rendered := render(verb, err)
+		assert.NotContains(t, rendered, credential, verb)
+		assert.NotContains(t, rendered, testCredentialSignature, verb)
+	}
+
+	require.ErrorIs(t, err, ErrInvalidCredential)
+	require.NotErrorIs(t, err, leakyCauseError{Credential: credential})
+}
+
 func TestConfigErrorRendersFieldAndMessage(t *testing.T) {
 	err := NewConfigError("auth.jwt.issuer", "issuer is required", nil)
 

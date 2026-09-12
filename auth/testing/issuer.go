@@ -380,13 +380,16 @@ func (i *Issuer) MintPS256() string {
 	return i.MintWith(MintOptions{Algorithm: AlgPS256})
 }
 
-// MintExpired returns a credential whose `exp` is an hour in the past.
+// MintExpired returns a credential that expired half an hour ago, with an `iat`
+// two hours in the past — MintExpiredWithin(time.Hour). The verifier caps leeway
+// at five minutes, so half an hour is always past it.
 func (i *Issuer) MintExpired() string {
 	return i.MintExpiredWithin(time.Hour)
 }
 
 // MintExpiredWithin returns a credential that expired half of leeway ago, so a
 // verifier configured with that leeway still accepts it and one without rejects it.
+// Its `iat` is two leeways in the past, so the issued-in-future rule cannot fire first.
 func (i *Issuer) MintExpiredWithin(leeway time.Duration) string {
 	now := i.now()
 	return i.MintWith(MintOptions{Claims: Claims{
@@ -421,7 +424,10 @@ func (i *Issuer) MintMissingExpiry() string {
 	return i.MintWith(MintOptions{Claims: Claims{OmitExpiry: true}})
 }
 
-// MintFutureNotBefore returns a credential that is not valid for another hour.
+// MintFutureNotBefore returns a credential whose `nbf` is an hour in the future.
+// Its `exp` takes the default one DefaultLifetime ahead, so the window never
+// opens — the helper exists to exercise the not-yet-valid rule, not to become
+// valid later.
 func (i *Issuer) MintFutureNotBefore() string {
 	return i.MintWith(MintOptions{Claims: Claims{NotBefore: i.now().Add(time.Hour)}})
 }
