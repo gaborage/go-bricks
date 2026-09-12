@@ -1593,7 +1593,8 @@ ECDSA, a claim/authorization hook, a `ModuleDeps` slot, and cookie or query-stri
 
 **Key Benefits:** framework bearer verification in three lines instead of a 450-line hand-roll; a
 401/503 split the caller can act on, with an RFC 6750 challenge and a `Retry-After` derived from the
-refresh floor; rejection reported by a closed `Class` vocabulary that never carries the credential,
+refresh floor of a JWKS resolver the verifier owns (one second over pinned keys, where nothing
+refetches); rejection reported by a closed `Class` vocabulary that never carries the credential,
 the cause or the subject.
 
 ---

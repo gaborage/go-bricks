@@ -31,7 +31,7 @@ Every key lives under `auth.jwt`. The environment variable is the key upper-snak
 | `auth.jwt.typ` | *(unset)* | Optional JOSE `typ` allowlist (e.g. `at+jwt`), compared case-insensitively per RFC 7515. Unset means no `typ` check. |
 | `auth.jwt.jwks.ttl` | `15m` | How long a fetched key set is served before a refresh is due. `0` means "treat every entry as due"; negative fails startup. |
 | `auth.jwt.jwks.staleceiling` | `1h` | How long a key set may still be served when the issuer is unreachable. Must be ≥ `ttl`, and ≥ `minrefreshinterval` whenever `jwksuri` is set — so `0` is no longer a valid ceiling for a fetching verifier, since it sits below every positive refresh floor. Past the ceiling, every lookup is a 503. A key set whose age reads *negative* (the clock stepped backwards) is stale too, never fresh. |
-| `auth.jwt.jwks.minrefreshinterval` | `30s` | Floor between key set fetches, so an attacker-chosen unknown `kid` cannot drive traffic at the issuer. Must be **positive, and no greater than `staleceiling`, when `jwksuri` is set**; merely non-negative otherwise — a pinned-key deployment fetches nothing and may leave it zero. A floor above the ceiling is a self-inflicted outage. Also the source of the 503's `Retry-After`. |
+| `auth.jwt.jwks.minrefreshinterval` | `30s` | Floor between key set fetches, so an attacker-chosen unknown `kid` cannot drive traffic at the issuer. Must be **positive, and no greater than `staleceiling`, when `jwksuri` is set**; merely non-negative otherwise — a pinned-key deployment fetches nothing and may leave it zero. A floor above the ceiling is a self-inflicted outage. It is also the source of the 503's `Retry-After`, but only for a verifier built by `NewVerifier` — over a pinned resolver nothing refetches, so that response advertises one second instead. |
 | `auth.jwt.jwks.maxbodybytes` | `1048576` | Cap on the fetched key set body (1 MiB). Same conditional rule: positive when `jwksuri` is set, non-negative otherwise — and, on that same condition, never above `config.MaxAuthJWKSBodyBytes` (16 MiB; exactly 16 MiB is accepted). The ceiling keeps the cap arithmetic-safe downstream and stops a stray digit turning the body cap into no cap. |
 | `auth.jwt.telemetry.enduserid` | `false` | Opt in to the `enduser.id` span attribute. **It records the credential's subject** — see [Security](#security). |
 
@@ -181,7 +181,7 @@ header is `WWW-Authenticate: Bearer error="invalid_token"`.
 | Protected header carries no `kid` | `kid_missing` | 401 | `UNAUTHORIZED` | *(default)* |
 | Protected `typ` not in `auth.jwt.typ` (only when that key is set) | `type` | 401 | `UNAUTHORIZED` | *(default)* |
 | `kid` absent from an otherwise usable key set, after one rate-floored refresh | `kid_unknown` | 401 | `UNAUTHORIZED` | *(default)* |
-| Key set never fetched or past `staleceiling`, or a resolver fault | `key_set_unavailable` | **503** | `SERVICE_UNAVAILABLE` | `Retry-After: <minrefreshinterval, floored at 1s>` |
+| Key set never fetched or past `staleceiling`, or a resolver fault | `key_set_unavailable` | **503** | `SERVICE_UNAVAILABLE` | `Retry-After: <minrefreshinterval>` under `NewVerifier`; `1` over a pinned resolver |
 | Signature does not verify | `signature` | 401 | `UNAUTHORIZED` | *(default)* |
 | Payload is not a JSON object | `malformed` | 401 | `UNAUTHORIZED` | *(default)* |
 | `iss` missing, not a string, or not exactly `auth.jwt.issuer` | `issuer` | 401 | `UNAUTHORIZED` | *(default)* |
