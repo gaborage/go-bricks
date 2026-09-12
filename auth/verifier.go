@@ -250,14 +250,15 @@ func (v *Verifier) checkType(header *jose.Header) error {
 // the two distinct outcomes a caller must tell apart: an unknown kid is a caller
 // fault (401), an unusable key set is a server fault (503).
 //
-// SECURITY: the returned unavailable error wraps the sentinel only. Wrapping the
-// resolver's own error would let a resolver reclassify a 503 into a 401. The cause is
-// dropped rather than logged: a PublicKeyResolver is consumer-supplied and may return
-// anything, so only the class reaches the log.
+// SECURITY: neither returned error carries the resolver's own error. A
+// PublicKeyResolver is consumer-supplied and may wrap arbitrary text, which would
+// otherwise reach a caller through the exported VerificationError.Cause or, on the
+// unavailable path, let a resolver reclassify a 503 into a 401. Both answers carry
+// the sentinel alone, and only the class reaches the log.
 func (v *Verifier) resolveKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 	key, err := v.resolver.PublicKey(ctx, kid)
 	if err != nil && errors.Is(err, ErrKidUnknown) {
-		return nil, v.reject(ClassKidUnknown, err)
+		return nil, v.reject(ClassKidUnknown, ErrKidUnknown)
 	}
 	// A nil key with a nil error violates the PublicKeyResolver contract; treating it as
 	// an unusable key set keeps the failure closed instead of reaching Verify.

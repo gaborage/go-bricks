@@ -866,3 +866,35 @@ func TestVerifierRejectsAnExpiredCredentialAtTheMaximumLeeway(t *testing.T) {
 
 	assertRejectedWithClass(t, err, ClassExpired)
 }
+
+// leakyKidResolver returns an ErrKidUnknown wrapped in text a hostile or careless
+// resolver could put there, to prove the verifier does not forward it.
+type leakyKidResolver struct{ secret string }
+
+func (r *leakyKidResolver) PublicKey(_ context.Context, _ string) (*rsa.PublicKey, error) {
+	return nil, fmt.Errorf("lookup failed for %s: %w", r.secret, ErrKidUnknown)
+}
+
+// TestVerifierDoesNotForwardTheResolverErrorText pins that a resolver's own error
+// text never reaches the caller through the exported VerificationError.Cause. The
+// resolver is consumer-supplied, so its wrapping is not ours to vouch for.
+func TestVerifierDoesNotForwardTheResolverErrorText(t *testing.T) {
+	const secret = "super-secret-resolver-detail"
+	iss := authtesting.NewIssuer()
+	v, err := NewVerifierWithResolver(verifierConfig(iss), nil, &leakyKidResolver{secret: secret})
+	require.NoError(t, err)
+
+	_, err = v.Verify(context.Background(), iss.Mint(authtesting.Claims{}))
+	require.Error(t, err)
+
+	var verr *VerificationError
+	require.ErrorAs(t, err, &verr)
+	assert.Equal(t, ClassKidUnknown, verr.Class)
+	require.ErrorIs(t, err, ErrInvalidCredential)
+	require.ErrorIs(t, verr.Cause, ErrKidUnknown)
+	// Cause is the exported field a caller reaches through errors.As. The fmt
+	// verbs are already redacted by Format, so asserting on them would pass with
+	// or without the fix.
+	assert.NotContains(t, verr.Cause.Error(), secret)
+	assert.Equal(t, ErrKidUnknown, verr.Cause)
+}
