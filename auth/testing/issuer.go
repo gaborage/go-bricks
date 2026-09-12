@@ -4,7 +4,7 @@
 // The primary type is Issuer, which holds one or more RSA key pairs and mints
 // compact JWS credentials — valid ones plus every rejection shape a verifier must
 // refuse (expired, wrong audience, wrong issuer, unknown kid, alg=none, ES256, …).
-// Feed Issuer.PublicKeys() to a static key source and the verifier will accept
+// Feed Issuer.PublicKeys() to a static key resolver and the verifier will accept
 // exactly what this issuer signs.
 //
 // Minting never returns an error: a fake that forces error plumbing at every call
@@ -209,7 +209,7 @@ func (i *Issuer) Audience() string { return i.audience }
 func (i *Issuer) ActiveKeyID() string { return i.activeKID }
 
 // PublicKeys returns a copy of every public key the issuer will sign with, keyed by
-// kid — ready to hand to a static key source.
+// kid — ready to hand to a static key resolver.
 func (i *Issuer) PublicKeys() map[string]*rsa.PublicKey {
 	out := make(map[string]*rsa.PublicKey, len(i.keys))
 	for kid, key := range i.keys {

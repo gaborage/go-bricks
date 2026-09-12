@@ -22,7 +22,7 @@ var (
 	ErrKeySetUnavailable = errors.New("auth: issuer key set unavailable")
 
 	// ErrKidUnknown reports that the credential's kid is absent from the key set.
-	// A KeySource returns it; the verifier folds it into the invalid-credential class.
+	// A PublicKeyResolver returns it; the verifier folds it into the invalid-credential class.
 	ErrKidUnknown = errors.New("auth: kid not present in key set")
 )
 

@@ -47,8 +47,8 @@ type Config config.AuthJWTConfig
 
 // Validate performs fail-fast validation of the verifier's configuration:
 // issuer, audience, algorithms, leeway and typ. It deliberately leaves the
-// auth.jwt.jwks.* group alone — a verifier built over a pinned KeySource
-// fetches nothing — so the JWKS-backed key source validates that group itself.
+// auth.jwt.jwks.* group alone — a verifier built over a pinned PublicKeyResolver
+// fetches nothing — so the JWKS-backed resolver validates that group itself.
 // Every failure is a *ConfigError naming the offending auth.jwt.* key.
 func (c *Config) Validate() error {
 	checks := []func() *ConfigError{
@@ -127,7 +127,7 @@ func (c *Config) validateTyp() *ConfigError {
 
 // validateJWKSSource validates the auth.jwt.jwks.* group plus the endpoint it
 // fetches from. It is separate from Validate because it is the JWKS-backed key
-// source's precondition, not the verifier's: a pinned KeySource makes no
+// resolver's precondition, not the verifier's: a pinned PublicKeyResolver makes no
 // network call, so requiring an https endpoint of it would layer one
 // component's configuration onto another's.
 func (c *Config) validateJWKSSource() *ConfigError {

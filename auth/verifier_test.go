@@ -47,23 +47,23 @@ func newTestVerifier(t *testing.T, iss *authtesting.Issuer, mutate func(*Config)
 	if mutate != nil {
 		mutate(&cfg)
 	}
-	v, err := NewVerifierWithKeySource(cfg, nil, NewStaticKeySource(iss.PublicKeys()))
+	v, err := NewVerifierWithResolver(cfg, nil, NewStaticKeyResolver(iss.PublicKeys()))
 	require.NoError(t, err)
 	v.now = fixedClock
 	return v
 }
 
-// failingKeySource returns a fixed error from every lookup.
-type failingKeySource struct{ err error }
+// failingPublicKeyResolver returns a fixed error from every lookup.
+type failingPublicKeyResolver struct{ err error }
 
-func (s failingKeySource) PublicKey(_ context.Context, _ string) (*rsa.PublicKey, error) {
+func (s failingPublicKeyResolver) PublicKey(_ context.Context, _ string) (*rsa.PublicKey, error) {
 	return nil, s.err
 }
 
-// nilKeySource reports success while handing back no key at all.
-type nilKeySource struct{}
+// nilPublicKeyResolver reports success while handing back no key at all.
+type nilPublicKeyResolver struct{}
 
-func (nilKeySource) PublicKey(_ context.Context, _ string) (*rsa.PublicKey, error) {
+func (nilPublicKeyResolver) PublicKey(_ context.Context, _ string) (*rsa.PublicKey, error) {
 	return nil, nil
 }
 
@@ -77,12 +77,12 @@ func assertRejectedWithClass(t *testing.T, err error, wantClass Class) {
 	require.NotErrorIs(t, err, ErrKeySetUnavailable)
 }
 
-func TestNewVerifierWithKeySourceRejectsAnInvalidConfig(t *testing.T) {
+func TestNewVerifierWithResolverRejectsAnInvalidConfig(t *testing.T) {
 	iss := newTestIssuer()
 	cfg := verifierConfig(iss)
 	cfg.Issuer = ""
 
-	v, err := NewVerifierWithKeySource(cfg, nil, NewStaticKeySource(iss.PublicKeys()))
+	v, err := NewVerifierWithResolver(cfg, nil, NewStaticKeyResolver(iss.PublicKeys()))
 
 	assert.Nil(t, v)
 	var cerr *ConfigError
@@ -90,16 +90,16 @@ func TestNewVerifierWithKeySourceRejectsAnInvalidConfig(t *testing.T) {
 	assert.Equal(t, "auth.jwt.issuer", cerr.Field)
 }
 
-func TestNewVerifierWithKeySourceRejectsANilKeySource(t *testing.T) {
-	v, err := NewVerifierWithKeySource(verifierConfig(newTestIssuer()), nil, nil)
+func TestNewVerifierWithResolverRejectsANilPublicKeyResolver(t *testing.T) {
+	v, err := NewVerifierWithResolver(verifierConfig(newTestIssuer()), nil, nil)
 
 	assert.Nil(t, v)
 	var cerr *ConfigError
 	require.ErrorAs(t, err, &cerr)
-	assert.Equal(t, "auth.jwt.keysource", cerr.Field)
+	assert.Equal(t, "auth.jwt.resolver", cerr.Field)
 }
 
-func TestNewVerifierWithKeySourceAcceptsANilLogger(t *testing.T) {
+func TestNewVerifierWithResolverAcceptsANilLogger(t *testing.T) {
 	iss := newTestIssuer()
 	v := newTestVerifier(t, iss, nil)
 
@@ -108,16 +108,16 @@ func TestNewVerifierWithKeySourceAcceptsANilLogger(t *testing.T) {
 	assertRejectedWithClass(t, err, ClassExpired)
 }
 
-// TestNewVerifierWithKeySourceClonesTheConfiguredAudience pins the immutability
+// TestNewVerifierWithResolverClonesTheConfiguredAudience pins the immutability
 // contract: cfg travels by value, so only the slice header is copied, and a
 // caller writing to the audience it passed in must not steer a live verifier.
-func TestNewVerifierWithKeySourceClonesTheConfiguredAudience(t *testing.T) {
+func TestNewVerifierWithResolverClonesTheConfiguredAudience(t *testing.T) {
 	iss := newTestIssuer()
 	cfg := verifierConfig(iss)
 	audience := []string{iss.Audience()}
 	cfg.Audience = audience
 
-	v, err := NewVerifierWithKeySource(cfg, nil, NewStaticKeySource(iss.PublicKeys()))
+	v, err := NewVerifierWithResolver(cfg, nil, NewStaticKeyResolver(iss.PublicKeys()))
 	require.NoError(t, err)
 	v.now = fixedClock
 
@@ -130,15 +130,15 @@ func TestNewVerifierWithKeySourceClonesTheConfiguredAudience(t *testing.T) {
 	assertRejectedWithClass(t, err, ClassAudience)
 }
 
-// TestNewVerifierWithKeySourceClonesTheConfiguredTyp is the same contract on the
+// TestNewVerifierWithResolverClonesTheConfiguredTyp is the same contract on the
 // typ allowlist, which the protected-header check reads on every verification.
-func TestNewVerifierWithKeySourceClonesTheConfiguredTyp(t *testing.T) {
+func TestNewVerifierWithResolverClonesTheConfiguredTyp(t *testing.T) {
 	iss := newTestIssuer()
 	cfg := verifierConfig(iss)
 	typ := []string{"JWT"}
 	cfg.Typ = typ
 
-	v, err := NewVerifierWithKeySource(cfg, nil, NewStaticKeySource(iss.PublicKeys()))
+	v, err := NewVerifierWithResolver(cfg, nil, NewStaticKeyResolver(iss.PublicKeys()))
 	require.NoError(t, err)
 	v.now = fixedClock
 
@@ -473,16 +473,16 @@ func TestVerifierTreatsANullNumericDateAsAbsent(t *testing.T) {
 func TestVerifierReportsAnUnavailableKeySetSeparatelyFromAnInvalidCredential(t *testing.T) {
 	iss := newTestIssuer()
 	cfg := verifierConfig(iss)
-	sources := map[string]KeySource{
-		"empty_static_source":  NewStaticKeySource(nil),
-		"failing_source":       failingKeySource{err: errors.New("dial tcp: connection refused")},
-		"nil_key_from_source":  nilKeySource{},
-		"explicit_unavailable": failingKeySource{err: ErrKeySetUnavailable},
+	resolvers := map[string]PublicKeyResolver{
+		"empty_static_resolver": NewStaticKeyResolver(nil),
+		"failing_resolver":      failingPublicKeyResolver{err: errors.New("dial tcp: connection refused")},
+		"nil_key_from_resolver": nilPublicKeyResolver{},
+		"explicit_unavailable":  failingPublicKeyResolver{err: ErrKeySetUnavailable},
 	}
 
-	for name, src := range sources {
+	for name, resolver := range resolvers {
 		t.Run(name, func(t *testing.T) {
-			v, err := NewVerifierWithKeySource(cfg, nil, src)
+			v, err := NewVerifierWithResolver(cfg, nil, resolver)
 			require.NoError(t, err)
 			v.now = fixedClock
 
@@ -550,7 +550,7 @@ func TestVerifierLogsTheRejectionClassOnly(t *testing.T) {
 	// the capture for the rejection line to land in the buffer.
 	var verifyErr error
 	out := captureStdout(t, func() {
-		v, err := NewVerifierWithKeySource(verifierConfig(iss), logger.New("debug", false), NewStaticKeySource(iss.PublicKeys()))
+		v, err := NewVerifierWithResolver(verifierConfig(iss), logger.New("debug", false), NewStaticKeyResolver(iss.PublicKeys()))
 		require.NoError(t, err)
 		v.now = fixedClock
 		_, verifyErr = v.Verify(context.Background(), credential)
@@ -754,14 +754,14 @@ func TestVerifierAcceptsANumericDateAtTheBound(t *testing.T) {
 	assert.Equal(t, int64(maxNumericDate), principal.ExpiresAt.Unix())
 }
 
-// TestNewVerifierWithKeySourceRejectsAnUnboundedLeeway pins that the leeway cap
+// TestNewVerifierWithResolverRejectsAnUnboundedLeeway pins that the leeway cap
 // binds at the constructor: an unbounded leeway would make MintExpired verify.
-func TestNewVerifierWithKeySourceRejectsAnUnboundedLeeway(t *testing.T) {
+func TestNewVerifierWithResolverRejectsAnUnboundedLeeway(t *testing.T) {
 	iss := newTestIssuer()
 	cfg := verifierConfig(iss)
 	cfg.Leeway = 876000 * time.Hour
 
-	v, err := NewVerifierWithKeySource(cfg, nil, NewStaticKeySource(iss.PublicKeys()))
+	v, err := NewVerifierWithResolver(cfg, nil, NewStaticKeyResolver(iss.PublicKeys()))
 
 	assert.Nil(t, v)
 	var cerr *ConfigError

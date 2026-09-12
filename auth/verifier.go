@@ -39,36 +39,37 @@ const (
 	claimIssuedAt  = "iat"
 )
 
-// Verifier verifies compact JWS bearer credentials against a KeySource and the
-// configured issuer, audience, algorithm allowlist and clock leeway.
+// Verifier verifies compact JWS bearer credentials against a PublicKeyResolver
+// and the configured issuer, audience, algorithm allowlist and clock leeway.
 //
 // A Verifier is safe for concurrent use: it is immutable after construction and
-// delegates key lookup to the KeySource, which carries its own concurrency
-// contract.
+// delegates key lookup to the PublicKeyResolver, which carries its own
+// concurrency contract.
 //
 // SECURITY: no method logs, renders or records the credential string, the
 // signature bytes or the "sub" claim. A rejection is reported by class only.
 type Verifier struct {
-	cfg     Config
-	log     logger.Logger
-	src     KeySource
-	allowed []jose.SignatureAlgorithm
+	cfg      Config
+	log      logger.Logger
+	resolver PublicKeyResolver
+	allowed  []jose.SignatureAlgorithm
 
 	// now is the clock used for the exp/nbf/iat comparisons. Tests in this
 	// package replace it directly; there is deliberately no exported option.
 	now func() time.Time
 }
 
-// NewVerifierWithKeySource builds a verifier over an explicitly supplied key
-// source, for consumers that pin issuer keys out of band rather than fetching
-// JWKS.
+// NewVerifierWithResolver builds a verifier over an explicitly supplied
+// PublicKeyResolver, for consumers that pin issuer keys out of band rather than
+// fetching JWKS.
 //
 // cfg is validated up front and its *ConfigError is returned unchanged, so a
 // misconfigured service fails startup instead of booting with a widened
-// allowlist. A nil src is rejected for the same reason.
+// allowlist. A nil resolver is rejected for the same reason.
 //
-// Ownership: src stays the CALLER's. The returned verifier never closes it, so
-// a source with resources of its own must be shut down by whoever built it.
+// Ownership: resolver stays the CALLER's. The returned verifier never closes
+// it, so a resolver with resources of its own must be shut down by whoever
+// built it.
 //
 // A nil log is tolerated: the DEBUG rejection logging simply no-ops, which keeps
 // a verifier constructible in a test without wiring a logger. Verification
@@ -81,22 +82,22 @@ type Verifier struct {
 // contract.
 //
 //nolint:gocritic // hugeParam: Config is the injected value type; a pointer here would invite post-construction mutation.
-func NewVerifierWithKeySource(cfg Config, log logger.Logger, src KeySource) (*Verifier, error) {
+func NewVerifierWithResolver(cfg Config, log logger.Logger, resolver PublicKeyResolver) (*Verifier, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	if src == nil {
-		return nil, NewConfigError(fieldPrefix+"keysource", "key source is required", nil)
+	if resolver == nil {
+		return nil, NewConfigError(fieldPrefix+"resolver", "public key resolver is required", nil)
 	}
 	cfg.Audience = slices.Clone(cfg.Audience)
 	cfg.Algorithms = slices.Clone(cfg.Algorithms)
 	cfg.Typ = slices.Clone(cfg.Typ)
 	return &Verifier{
-		cfg:     cfg,
-		log:     log,
-		src:     src,
-		allowed: allowedAlgorithms(cfg.Algorithms),
-		now:     time.Now,
+		cfg:      cfg,
+		log:      log,
+		resolver: resolver,
+		allowed:  allowedAlgorithms(cfg.Algorithms),
+		now:      time.Now,
 	}, nil
 }
 
@@ -128,10 +129,11 @@ func allowedAlgorithms(names []string) []jose.SignatureAlgorithm {
 }
 
 // Close releases the resources the verifier itself CONSTRUCTED, and only those.
-// A KeySource handed in through NewVerifierWithKeySource belongs to the caller
-// and is never closed here; a verifier that builds its own refreshing JWKS
-// source owns it and must stop it. This key-source-backed verifier constructed
-// nothing, so Close is a no-op returning nil, safe to call any number of times.
+// A PublicKeyResolver handed in through NewVerifierWithResolver belongs to the
+// caller and is never closed here; a verifier that builds its own refreshing
+// JWKS resolver owns it and must stop it. This resolver-backed verifier
+// constructed nothing, so Close is a no-op returning nil, safe to call any
+// number of times.
 // It exists so consumers can call it unconditionally from a module Shutdown.
 func (v *Verifier) Close() error {
 	return nil
@@ -215,19 +217,19 @@ func (v *Verifier) checkType(header *jose.Header) error {
 	return v.reject(ClassType, errors.New("protected header typ is not accepted"))
 }
 
-// resolveKey looks the signing key up and maps the source's failure modes onto
+// resolveKey looks the signing key up and maps the resolver's failure modes onto
 // the two distinct outcomes a caller must tell apart: an unknown kid is a caller
 // fault (401), an unusable key set is a server fault (503).
 //
 // SECURITY: the returned unavailable error wraps the sentinel only. Wrapping the
-// source's own error would let a source reclassify a 503 into a 401; the cause is
+// resolver's own error would let a resolver reclassify a 503 into a 401; the cause is
 // logged at DEBUG instead.
 func (v *Verifier) resolveKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {
-	key, err := v.src.PublicKey(ctx, kid)
+	key, err := v.resolver.PublicKey(ctx, kid)
 	if err != nil && errors.Is(err, ErrKidUnknown) {
 		return nil, v.reject(ClassKidUnknown, err)
 	}
-	// A nil key with a nil error violates the KeySource contract; treating it as
+	// A nil key with a nil error violates the PublicKeyResolver contract; treating it as
 	// an unusable key set keeps the failure closed instead of reaching Verify.
 	if err != nil || key == nil {
 		v.debug(ClassKeySetUnavailable)

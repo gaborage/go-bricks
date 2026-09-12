@@ -9,7 +9,7 @@ import (
 // checkAuth rejects an auth section that is wrong for EVERY deployment. It
 // deliberately does not require auth.jwt.issuer, auth.jwt.audience or
 // auth.jwt.jwksuri: a service that builds no verifier configures none of them,
-// and a verifier built over a statically pinned key source (auth.KeySource)
+// and a verifier built over a statically pinned resolver (auth.PublicKeyResolver)
 // never fetches a key set. Those conditional rules live with the consumer, in
 // auth.Config.Validate and auth's JWKS-source check.
 //

@@ -58,7 +58,7 @@ func TestConfigValidateAcceptsTheLeewayCeiling(t *testing.T) {
 }
 
 // TestConfigValidateIgnoresTheJWKSGroup pins the split: a verifier built over a
-// pinned key source makes no network call, so neither the endpoint nor the
+// pinned resolver makes no network call, so neither the endpoint nor the
 // fetch tuning is its precondition.
 func TestConfigValidateIgnoresTheJWKSGroup(t *testing.T) {
 	cfg := validConfig()

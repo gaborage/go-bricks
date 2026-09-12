@@ -25,24 +25,24 @@ func testRSAPublicKey(t *testing.T) *rsa.PublicKey {
 	return &testKeyOnce().PublicKey
 }
 
-func TestStaticKeySourceReturnsARegisteredKey(t *testing.T) {
+func TestStaticKeyResolverReturnsARegisteredKey(t *testing.T) {
 	want := testRSAPublicKey(t)
-	src := NewStaticKeySource(map[string]*rsa.PublicKey{"k1": want})
+	src := NewStaticKeyResolver(map[string]*rsa.PublicKey{"k1": want})
 
 	got, err := src.PublicKey(context.Background(), "k1")
 
 	require.NoError(t, err)
-	// Value equality, not identity: the source clones the caller's key material.
+	// Value equality, not identity: the resolver clones the caller's key material.
 	assert.Equal(t, want, got)
 	assert.NotSame(t, want, got)
 }
 
-// TestStaticKeySourceClonesTheCallersKeys pins the ownership half of the
+// TestStaticKeyResolverClonesTheCallersKeys pins the ownership half of the
 // construction contract: writing to the key a caller passed in, modulus
-// included, must not reach what the source verifies against.
-func TestStaticKeySourceClonesTheCallersKeys(t *testing.T) {
+// included, must not reach what the resolver verifies against.
+func TestStaticKeyResolverClonesTheCallersKeys(t *testing.T) {
 	original := &rsa.PublicKey{N: big.NewInt(0xC0FFEE), E: 65537}
-	src := NewStaticKeySource(map[string]*rsa.PublicKey{"k1": original})
+	src := NewStaticKeyResolver(map[string]*rsa.PublicKey{"k1": original})
 
 	original.N.SetInt64(1)
 	original.E = 3
@@ -54,11 +54,11 @@ func TestStaticKeySourceClonesTheCallersKeys(t *testing.T) {
 	assert.Equal(t, 65537, got.E)
 }
 
-// TestStaticKeySourceKeepsAKeyWithNoModulus pins that the clone never panics on
+// TestStaticKeyResolverKeepsAKeyWithNoModulus pins that the clone never panics on
 // a key whose N is nil: such a key stays registered and fails downstream in the
 // verifier, exactly as it did before the clone existed.
-func TestStaticKeySourceKeepsAKeyWithNoModulus(t *testing.T) {
-	src := NewStaticKeySource(map[string]*rsa.PublicKey{"k1": {E: 65537}})
+func TestStaticKeyResolverKeepsAKeyWithNoModulus(t *testing.T) {
+	src := NewStaticKeyResolver(map[string]*rsa.PublicKey{"k1": {E: 65537}})
 
 	got, err := src.PublicKey(context.Background(), "k1")
 
@@ -68,8 +68,8 @@ func TestStaticKeySourceKeepsAKeyWithNoModulus(t *testing.T) {
 	assert.Equal(t, 65537, got.E)
 }
 
-func TestStaticKeySourceRejectsAnUnknownKid(t *testing.T) {
-	src := NewStaticKeySource(map[string]*rsa.PublicKey{"k1": testRSAPublicKey(t)})
+func TestStaticKeyResolverRejectsAnUnknownKid(t *testing.T) {
+	src := NewStaticKeyResolver(map[string]*rsa.PublicKey{"k1": testRSAPublicKey(t)})
 
 	got, err := src.PublicKey(context.Background(), "k2")
 
@@ -78,11 +78,11 @@ func TestStaticKeySourceRejectsAnUnknownKid(t *testing.T) {
 	assert.NotErrorIs(t, err, ErrKeySetUnavailable)
 }
 
-func TestStaticKeySourceWithNoKeysIsUnavailable(t *testing.T) {
-	for name, src := range map[string]*StaticKeySource{
-		"nil_map":   NewStaticKeySource(nil),
-		"empty_map": NewStaticKeySource(map[string]*rsa.PublicKey{}),
-		"nil_entry": NewStaticKeySource(map[string]*rsa.PublicKey{"k1": nil}),
+func TestStaticKeyResolverWithNoKeysIsUnavailable(t *testing.T) {
+	for name, src := range map[string]*StaticKeyResolver{
+		"nil_map":   NewStaticKeyResolver(nil),
+		"empty_map": NewStaticKeyResolver(map[string]*rsa.PublicKey{}),
+		"nil_entry": NewStaticKeyResolver(map[string]*rsa.PublicKey{"k1": nil}),
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := src.PublicKey(context.Background(), "k1")
@@ -94,8 +94,8 @@ func TestStaticKeySourceWithNoKeysIsUnavailable(t *testing.T) {
 	}
 }
 
-func TestStaticKeySourceDropsNilEntriesButKeepsTheRest(t *testing.T) {
-	src := NewStaticKeySource(map[string]*rsa.PublicKey{"k1": testRSAPublicKey(t), "k2": nil})
+func TestStaticKeyResolverDropsNilEntriesButKeepsTheRest(t *testing.T) {
+	src := NewStaticKeyResolver(map[string]*rsa.PublicKey{"k1": testRSAPublicKey(t), "k2": nil})
 
 	got, err := src.PublicKey(context.Background(), "k1")
 	require.NoError(t, err)
@@ -105,9 +105,9 @@ func TestStaticKeySourceDropsNilEntriesButKeepsTheRest(t *testing.T) {
 	require.ErrorIs(t, err, ErrKidUnknown)
 }
 
-func TestStaticKeySourceCopiesTheKeyMap(t *testing.T) {
+func TestStaticKeyResolverCopiesTheKeyMap(t *testing.T) {
 	keys := map[string]*rsa.PublicKey{"k1": testRSAPublicKey(t)}
-	src := NewStaticKeySource(keys)
+	src := NewStaticKeyResolver(keys)
 
 	delete(keys, "k1")
 	keys["k2"] = testRSAPublicKey(t)
@@ -120,8 +120,8 @@ func TestStaticKeySourceCopiesTheKeyMap(t *testing.T) {
 	assert.ErrorIs(t, err, ErrKidUnknown)
 }
 
-func TestStaticKeySourceIsSafeForConcurrentReads(t *testing.T) {
-	src := NewStaticKeySource(map[string]*rsa.PublicKey{"k1": testRSAPublicKey(t)})
+func TestStaticKeyResolverIsSafeForConcurrentReads(t *testing.T) {
+	src := NewStaticKeyResolver(map[string]*rsa.PublicKey{"k1": testRSAPublicKey(t)})
 
 	var wg sync.WaitGroup
 	for range 16 {
