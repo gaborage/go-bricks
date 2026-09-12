@@ -227,3 +227,33 @@ func TestPadDocumentAlwaysGrowsTheDocumentPastTheRequestedSize(t *testing.T) {
 	require.NoError(t, json.Unmarshal(padded, &doc))
 	assert.Equal(t, "pppp", doc["padding"])
 }
+
+// TestJWKSServerRedirectsOnlyOnceALocationIsSet pins both arms of the redirect
+// endpoint: it serves the key set like any other path until SetRedirectLocation
+// is called, and answers 302 to that location afterwards.
+func TestJWKSServerRedirectsOnlyOnceALocationIsSet(t *testing.T) {
+	srv := NewJWKSServer(NewIssuer())
+	t.Cleanup(srv.Close)
+	client := srv.HTTPClient()
+	client.CheckRedirect = func(_ *nethttp.Request, _ []*nethttp.Request) error {
+		return nethttp.ErrUseLastResponse
+	}
+	get := func() (status int, location string) {
+		req, err := nethttp.NewRequestWithContext(context.Background(), nethttp.MethodGet, srv.RedirectURL(), nethttp.NoBody)
+		require.NoError(t, err)
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		return resp.StatusCode, resp.Header.Get("Location")
+	}
+
+	status, _ := get()
+	assert.Equal(t, nethttp.StatusOK, status, "the path serves the key set until a location is set")
+
+	srv.SetRedirectLocation(srv.URL())
+	status, location := get()
+
+	assert.Equal(t, nethttp.StatusFound, status)
+	assert.Equal(t, srv.URL(), location)
+	assert.Equal(t, 2, srv.RequestCount(), "both hops are recorded")
+}

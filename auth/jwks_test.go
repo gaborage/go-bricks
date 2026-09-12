@@ -8,8 +8,10 @@ import (
 	"io"
 	"math/big"
 	nethttp "net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -1107,4 +1109,148 @@ func TestJWKSResolverFetchCarriesNoCallerValues(t *testing.T) {
 	require.NoError(t, r.refresh(ctx))
 
 	assert.Nil(t, <-probing.seen, "the fetch must not inherit the triggering caller's context values")
+}
+
+// jwksRedirectClient builds an httpclient over the PRODUCTION redirect policy,
+// dialing through the fake endpoint's certificate: newJWKSHTTPClient supplies
+// the policy exactly as defaultJWKSClient gets it, and only the transport is
+// swapped so the fake issuer is reachable.
+func jwksRedirectClient(t *testing.T, srv *authtesting.JWKSServer) httpclient.Client {
+	t.Helper()
+	httpClient := newJWKSHTTPClient()
+	require.NotNil(t, httpClient.CheckRedirect, "the default jwks client must pin a redirect policy")
+	httpClient.Transport = srv.HTTPClient().Transport
+	client, err := httpclient.NewBuilder(logger.New("error", false)).
+		WithHTTPClient(httpClient).
+		Build()
+	require.NoError(t, err)
+	return client
+}
+
+// mustRedirectRequest builds the *http.Request net/http would hand
+// jwksCheckRedirect for a hop to rawURL.
+func mustRedirectRequest(t *testing.T, rawURL string) *nethttp.Request {
+	t.Helper()
+	req, err := nethttp.NewRequestWithContext(context.Background(), nethttp.MethodGet, rawURL, nethttp.NoBody)
+	require.NoError(t, err)
+	return req
+}
+
+func TestJWKSCheckRedirectPinsTheOrigin(t *testing.T) {
+	const origin = "https://issuer.example.com/.well-known/jwks.json"
+	tests := []struct {
+		name    string
+		target  string
+		allowed bool
+	}{
+		{name: "same_origin_other_path", target: "https://issuer.example.com/keys", allowed: true},
+		{name: "same_origin_host_case_differs", target: "https://ISSUER.example.com/keys", allowed: true},
+		{name: "scheme_downgraded_to_http", target: "http://issuer.example.com/.well-known/jwks.json"},
+		{name: "cross_host", target: "https://attacker.example.net/.well-known/jwks.json"},
+		{name: "same_host_other_port", target: "https://issuer.example.com:8443/.well-known/jwks.json"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			via := []*nethttp.Request{mustRedirectRequest(t, origin)}
+
+			err := jwksCheckRedirect(mustRedirectRequest(t, tc.target), via)
+
+			if tc.allowed {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, errJWKSRedirectRefused)
+			assert.NotContains(t, err.Error(), tc.target, "the refusal must not echo the issuer-chosen target")
+		})
+	}
+}
+
+// TestJWKSCheckRedirectBoundsTheHopChain sits exactly on the cap: installing
+// CheckRedirect replaces net/http's own ten-hop default, so a same-origin loop
+// is bounded only by this guard.
+func TestJWKSCheckRedirectBoundsTheHopChain(t *testing.T) {
+	const origin = "https://issuer.example.com/.well-known/jwks.json"
+	tests := []struct {
+		name    string
+		hops    int
+		allowed bool
+	}{
+		{name: "one_hop_below_the_cap", hops: maxJWKSRedirects - 1, allowed: true},
+		{name: "exactly_at_the_cap", hops: maxJWKSRedirects, allowed: true},
+		{name: "one_hop_past_the_cap", hops: maxJWKSRedirects + 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			via := make([]*nethttp.Request, tc.hops)
+			for i := range via {
+				via[i] = mustRedirectRequest(t, origin)
+			}
+
+			err := jwksCheckRedirect(mustRedirectRequest(t, origin), via)
+
+			if tc.allowed {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, errJWKSRedirectRefused)
+		})
+	}
+}
+
+// TestJWKSFetchFollowsASameOriginRedirect is the compatibility half of the
+// policy: an issuer that serves its key set from a same-host https redirect
+// still works, and the hop is visible in the request log.
+func TestJWKSFetchFollowsASameOriginRedirect(t *testing.T) {
+	srv := newJWKSFixture(t)
+	srv.SetRedirectLocation(srv.URL())
+	cfg := jwksConfig(srv)
+	cfg.JWKSURI = srv.RedirectURL()
+
+	v, err := NewVerifier(cfg, nil, nil, jwksRedirectClient(t, srv))
+
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, v.Close()) })
+	assert.Equal(t, 2, srv.RequestCount(), "the redirect hop plus the key set fetch")
+}
+
+// TestJWKSFetchRefusesAnOffOriginRedirect proves the trust anchor cannot be
+// moved to another origin — here a second fake issuer on its own port, with its
+// own certificate. The destination must never be contacted at all, which is what
+// separates a refused hop from one that was followed and then failed.
+func TestJWKSFetchRefusesAnOffOriginRedirect(t *testing.T) {
+	srv := newJWKSFixture(t)
+	elsewhere := newJWKSFixture(t)
+	srv.SetRedirectLocation(elsewhere.URL())
+	cfg := jwksConfig(srv)
+	cfg.JWKSURI = srv.RedirectURL()
+
+	v, err := NewVerifier(cfg, nil, nil, jwksRedirectClient(t, srv))
+
+	assert.Nil(t, v)
+	require.Error(t, err)
+	assert.Equal(t, 1, srv.RequestCount(), "only the redirect hop itself")
+	assert.Equal(t, 0, elsewhere.RequestCount(), "the off-origin destination must never be fetched")
+}
+
+// TestJWKSFetchRefusesAnHTTPSDowngrade is the same proof for the scheme: the
+// plaintext destination records no request.
+func TestJWKSFetchRefusesAnHTTPSDowngrade(t *testing.T) {
+	var plaintextHits atomic.Int64
+	plaintext := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		plaintextHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"keys":[]}`))
+	}))
+	t.Cleanup(plaintext.Close)
+
+	srv := newJWKSFixture(t)
+	srv.SetRedirectLocation(plaintext.URL + authtesting.JWKSPath)
+	cfg := jwksConfig(srv)
+	cfg.JWKSURI = srv.RedirectURL()
+
+	v, err := NewVerifier(cfg, nil, nil, jwksRedirectClient(t, srv))
+
+	assert.Nil(t, v)
+	require.Error(t, err)
+	assert.Equal(t, int64(0), plaintextHits.Load(), "the plaintext destination must never be fetched")
 }

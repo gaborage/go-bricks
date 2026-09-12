@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"slices"
 )
 
 const (
@@ -13,6 +14,10 @@ const (
 	// it accepts when the member is present.
 	ktyRSA       = "RSA"
 	useSignature = "sig"
+
+	// keyOpVerify is the RFC 7517 section 4.3 operation a signature-verification
+	// key must declare when it declares "key_ops" at all.
+	keyOpVerify = "verify"
 
 	// RSA modulus bounds. Below the floor the key is not worth verifying
 	// against; above the ceiling a single signature check becomes a denial of
@@ -34,15 +39,17 @@ type jwksDocument struct {
 }
 
 type jwksKey struct {
-	Kty string `json:"kty"`
-	Kid string `json:"kid"`
-	Use string `json:"use"`
-	N   string `json:"n"`
-	E   string `json:"e"`
+	Kty    string   `json:"kty"`
+	Kid    string   `json:"kid"`
+	Use    string   `json:"use"`
+	KeyOps []string `json:"key_ops"`
+	N      string   `json:"n"`
+	E      string   `json:"e"`
 }
 
 // parseJWKS decodes the document and keeps the RSA signing keys. Anything else —
-// a non-RSA kty, an encryption-only key, a key with no kid, an undecodable or
+// a non-RSA kty, an encryption-only key, a key whose "key_ops" withholds
+// "verify", a key with no kid, an undecodable or
 // out-of-range modulus or exponent, a duplicate kid — is DROPPED and named in
 // dropped, never promoted into an error: one unusable entry must not cost the
 // deployment every other key the issuer published.
@@ -86,6 +93,9 @@ func parseRSAKey(entry *jwksKey) (key *rsa.PublicKey, ok bool) {
 	if entry.Use != "" && entry.Use != useSignature {
 		return nil, false
 	}
+	if !keyOpsAllowVerify(entry.KeyOps) {
+		return nil, false
+	}
 	modulus, ok := decodeUint(entry.N, minRSAModulusBits, maxRSAModulusBits)
 	if !ok {
 		return nil, false
@@ -107,6 +117,21 @@ func parseRSAKey(entry *jwksKey) (key *rsa.PublicKey, ok bool) {
 		return nil, false
 	}
 	return &rsa.PublicKey{N: modulus, E: int(value)}, true
+}
+
+// keyOpsAllowVerify reports whether "key_ops" permits signature verification.
+//
+// An ABSENT or empty member is permitted: RFC 7517 makes key_ops optional and
+// most issuers omit it, so requiring it would reject their key sets outright.
+// When it IS present it is authoritative — a key whose declared operations do
+// not include "verify" is not a verification key, whatever "use" claims. That
+// also settles the disagreement RFC 7517 section 4.3 says SHOULD NOT happen:
+// "use":"sig" beside key_ops without "verify" is dropped.
+func keyOpsAllowVerify(ops []string) bool {
+	if len(ops) == 0 {
+		return true
+	}
+	return slices.Contains(ops, keyOpVerify)
 }
 
 // decodeUint decodes a base64url big-endian unsigned integer and bounds its bit

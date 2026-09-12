@@ -38,6 +38,14 @@ const (
 
 	// droppedKidEllipsis marks a kid the WARN truncated.
 	droppedKidEllipsis = "…"
+
+	// maxJWKSRedirects bounds the redirect chain. Setting CheckRedirect replaces
+	// net/http's own ten-hop default outright, so without a cap of our own a
+	// same-origin redirect loop would spin until the fetch deadline.
+	maxJWKSRedirects = 5
+
+	// schemeHTTPS is the only scheme a key set hop may use.
+	schemeHTTPS = "https"
 )
 
 var _ PublicKeyResolver = (*jwksResolver)(nil)
@@ -133,7 +141,13 @@ func newJWKSResolver(cfg *Config, log logger.Logger, m *authMetrics, client http
 
 // defaultJWKSClient builds the httpclient used when the caller supplies none.
 // The body cap is enforced by a response interceptor, so an oversized key set is
-// rejected while it streams instead of after it has been buffered whole.
+// rejected while it streams instead of after it has been buffered whole, and the
+// redirect policy is pinned to the configured origin — see jwksCheckRedirect.
+//
+// Both protections live on THIS client only. A caller-supplied
+// httpclient.Client arrives already built, so neither can be installed on it;
+// fetch re-checks the body size as a second line of defense, but a redirect is
+// followed by net/http before any framework code runs and has no such backstop.
 func defaultJWKSClient(cfg *Config, log logger.Logger) (httpclient.Client, error) {
 	if isNilInterface(log) {
 		return nil, NewConfigError(jwksFieldPrefix+"client", "a logger is required to build the default jwks http client", nil)
@@ -141,8 +155,53 @@ func defaultJWKSClient(cfg *Config, log logger.Logger) (httpclient.Client, error
 	return httpclient.NewBuilder(log).
 		WithPeerName(jwksPeerName(cfg.JWKSURI)).
 		WithTimeout(jwksFetchTimeout).
+		WithHTTPClient(newJWKSHTTPClient()).
 		WithResponseInterceptor(capResponseBody(cfg.JWKS.MaxBodyBytes)).
 		Build()
+}
+
+// newJWKSHTTPClient is the net/http client the default carries, and exists only
+// to install jwksCheckRedirect: Builder has no redirect-policy option, and the
+// *http.Client it shallow-copies is the single seam that survives Build. Its
+// Transport is deliberately left nil — Build preserves it, so the client dials
+// through net/http's default transport exactly as before — and its Timeout is
+// filled from WithTimeout.
+func newJWKSHTTPClient() *nethttp.Client {
+	return &nethttp.Client{CheckRedirect: jwksCheckRedirect}
+}
+
+// errJWKSRedirectRefused reports a redirect the key set fetch will not follow.
+var errJWKSRedirectRefused = errors.New("auth: jwks redirect refused")
+
+// jwksCheckRedirect is the default client's redirect policy: a hop is followed
+// only when it preserves BOTH the original host and the https scheme.
+//
+// auth.jwt.jwksuri is required to be an https URL with a hostname precisely so
+// the key set — the verifier's whole trust anchor — arrives from a known origin
+// over TLS. net/http follows redirects before the response is ever parsed, so
+// an unrestricted client would hand that guarantee to whoever can answer the
+// configured URL with a 302: a cross-host hop moves the trust anchor to an
+// origin nothing vouched for, and an https→http hop serves it in the clear to
+// any on-path attacker (CWE-346). Both are refused here.
+//
+// Same-origin hops are ALLOWED rather than refused outright because real
+// issuers do serve their key set from one — a path rewrite, a trailing-slash
+// normalization, a regional edge. Refusing every redirect would break those
+// deployments while adding nothing: a same-host https hop is answered by the
+// same TLS identity the direct fetch would have reached. Host is compared
+// WITH its port, so an origin-changing port hop is refused too.
+func jwksCheckRedirect(req *nethttp.Request, via []*nethttp.Request) error {
+	if len(via) > maxJWKSRedirects {
+		return fmt.Errorf("%w: more than %d hops", errJWKSRedirectRefused, maxJWKSRedirects)
+	}
+	origin := via[0].URL
+	if req.URL.Scheme != schemeHTTPS {
+		return fmt.Errorf("%w: scheme is not %s", errJWKSRedirectRefused, schemeHTTPS)
+	}
+	if !strings.EqualFold(req.URL.Host, origin.Host) {
+		return fmt.Errorf("%w: host does not match the configured endpoint", errJWKSRedirectRefused)
+	}
+	return nil
 }
 
 // jwksPeerName derives the low-cardinality peer.service label from the key set

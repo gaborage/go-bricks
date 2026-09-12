@@ -22,6 +22,21 @@ func jwk(members map[string]string) string {
 	return "{" + strings.Join(parts, ",") + "}"
 }
 
+// jwkWithKeyOps renders one JWKS entry carrying a "key_ops" array, which the
+// string-valued jwk helper cannot express. A nil ops omits the member entirely;
+// an empty non-nil ops renders it as an empty array.
+func jwkWithKeyOps(members map[string]string, ops []string) string {
+	if ops == nil {
+		return jwk(members)
+	}
+	quoted := make([]string, len(ops))
+	for i, op := range ops {
+		quoted[i] = fmt.Sprintf("%q", op)
+	}
+	entry := jwk(members)
+	return entry[:len(entry)-1] + `,"key_ops":[` + strings.Join(quoted, ",") + `]}`
+}
+
 // modulusBytes renders a 2048-bit modulus whose first and last bytes are lead
 // and last, in the base64url encoding RFC 7518 mandates.
 func modulusBytes(lead, last byte) string {
@@ -65,6 +80,44 @@ func TestParseJWKSDropsUnusableEntries(t *testing.T) {
 			require.NoError(t, err)
 			assert.Empty(t, keys)
 			assert.Len(t, dropped, 1)
+		})
+	}
+}
+
+// TestParseJWKSEnforcesKeyOps pins RFC 7517 section 4.3: a present, non-empty
+// "key_ops" must carry "verify", an absent or empty one stays acceptable
+// because most issuers omit it, and a "use"/"key_ops" disagreement is resolved
+// against the entry.
+func TestParseJWKSEnforcesKeyOps(t *testing.T) {
+	bare := map[string]string{"kty": "RSA", "kid": "k", "n": validModulus(), "e": "AQAB"}
+	signing := map[string]string{"kty": "RSA", "kid": "k", "use": "sig", "n": validModulus(), "e": "AQAB"}
+	tests := []struct {
+		name    string
+		members map[string]string
+		ops     []string
+		usable  bool
+	}{
+		{name: "absent_key_ops", members: bare, ops: nil, usable: true},
+		{name: "empty_key_ops", members: bare, ops: []string{}, usable: true},
+		{name: "verify_alone", members: bare, ops: []string{"verify"}, usable: true},
+		{name: "verify_beside_other_operations", members: bare, ops: []string{"encrypt", "verify"}, usable: true},
+		{name: "sign_only", members: bare, ops: []string{"sign"}},
+		{name: "encrypt_only", members: bare, ops: []string{"encrypt", "wrapKey"}},
+		{name: "use_sig_agreeing_with_key_ops", members: signing, ops: []string{"verify"}, usable: true},
+		{name: "use_sig_disagreeing_with_key_ops", members: signing, ops: []string{"sign"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			keys, dropped, err := parseJWKS([]byte(`{"keys":[` + jwkWithKeyOps(tc.members, tc.ops) + `]}`))
+
+			require.NoError(t, err)
+			if !tc.usable {
+				assert.Empty(t, keys)
+				assert.Equal(t, []string{"k"}, dropped)
+				return
+			}
+			assert.Empty(t, dropped)
+			assert.Len(t, keys, 1)
 		})
 	}
 }

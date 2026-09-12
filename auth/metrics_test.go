@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/embedded"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	authtesting "github.com/gaborage/go-bricks/auth/testing"
@@ -194,6 +195,22 @@ func TestNewAuthMetricsFallsBackToTheGlobalMeterProvider(t *testing.T) {
 	require.NotNil(t, m)
 	assert.NotNil(t, m.meter)
 	assert.NotPanics(t, func() { m.recordVerification(context.Background(), nil) })
+}
+
+// TestNewAuthMetricsFallsBackForATypedNilMeterProvider pins the typed-nil arm:
+// a (*sdkmetric.MeterProvider)(nil) a caller left unassigned is not == nil, and
+// its Meter dereferences the receiver, so construction would panic without the
+// isNilInterface guard.
+func TestNewAuthMetricsFallsBackForATypedNilMeterProvider(t *testing.T) {
+	var mp *sdkmetric.MeterProvider
+
+	var m *authMetrics
+	require.NotPanics(t, func() { m = newAuthMetrics(mp) })
+
+	require.NotNil(t, m)
+	assert.NotNil(t, m.meter)
+	assert.NotNil(t, m.verifications)
+	assert.NotNil(t, m.refreshes)
 }
 
 func TestRegisterKeySetGaugesDegradesWithoutAMeter(t *testing.T) {

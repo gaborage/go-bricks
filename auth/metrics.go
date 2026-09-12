@@ -81,7 +81,10 @@ type authMetrics struct {
 // to stderr and leave the instrument nil: telemetry must never fail a
 // verification, and a nil instrument is simply not recorded.
 func newAuthMetrics(mp metric.MeterProvider) *authMetrics {
-	if mp == nil {
+	// isNilInterface, not mp == nil: a typed-nil provider — a (*sdkmetric.
+	// MeterProvider)(nil) a caller left unassigned — is a non-nil interface whose
+	// Meter dereferences the receiver and panics construction.
+	if isNilInterface(mp) {
 		mp = otel.GetMeterProvider()
 	}
 	meter := mp.Meter(meterName)

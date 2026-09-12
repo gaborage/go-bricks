@@ -43,6 +43,12 @@ const DefaultOversizedBytes = 64 * 1024
 // is answered identically, so a consumer's URL only has to point at the server.
 const JWKSPath = "/.well-known/jwks.json"
 
+// JWKSRedirectPath is the path that answers with a redirect once
+// SetRedirectLocation has set one, so a test can point a consumer at RedirectURL
+// and drive its redirect policy. Until then it serves the key set like any other
+// path.
+const JWKSRedirectPath = "/redirect/jwks.json"
+
 // JWKSRequest is one recorded request to the key set endpoint.
 type JWKSRequest struct {
 	// At is when the handler received the request, on the real clock. It orders
@@ -69,11 +75,12 @@ type JWKSServer struct {
 	issuer *Issuer
 	server *httptest.Server
 
-	mu             sync.RWMutex
-	mode           JWKSMode
-	extra          []json.RawMessage
-	requests       []JWKSRequest
-	oversizedBytes int
+	mu               sync.RWMutex
+	mode             JWKSMode
+	extra            []json.RawMessage
+	requests         []JWKSRequest
+	oversizedBytes   int
+	redirectLocation string
 }
 
 // NewJWKSServer starts a TLS server publishing issuer's public keys. The caller
@@ -99,6 +106,20 @@ func (s *JWKSServer) URL() string { return s.server.URL + JWKSPath }
 // HTTPClient returns an http.Client that trusts this server's certificate. Pass
 // it to httpclient's WithHTTPClient to reach the endpoint.
 func (s *JWKSServer) HTTPClient() *nethttp.Client { return s.server.Client() }
+
+// RedirectURL is the endpoint that answers with the location SetRedirectLocation
+// set, as an https URL suitable for auth.jwt.jwksuri.
+func (s *JWKSServer) RedirectURL() string { return s.server.URL + JWKSRedirectPath }
+
+// SetRedirectLocation makes JWKSRedirectPath answer 302 to location, from the
+// next request on. An empty location restores the key set response, so a test
+// can end a chain on a document. The redirect hop is recorded in the request log
+// like any other request.
+func (s *JWKSServer) SetRedirectLocation(location string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.redirectLocation = location
+}
 
 // Issuer returns the issuer whose keys this server publishes.
 func (s *JWKSServer) Issuer() *Issuer { return s.issuer }
@@ -185,12 +206,18 @@ func (s *JWKSServer) ResetRequests() {
 	s.requests = nil
 }
 
-// handle records the request and serves the current mode. It holds the lock
+// handle records the request and serves the configured redirect, if the path
+// carries one, or else the current mode. It holds the lock
 // across the whole response so a concurrent Rotate cannot publish half a
 // document.
 func (s *JWKSServer) handle(w nethttp.ResponseWriter, r *nethttp.Request) {
 	s.mu.Lock()
 	s.requests = append(s.requests, JWKSRequest{At: time.Now(), Method: r.Method, Path: r.URL.Path})
+	if location := s.redirectLocation; location != "" && r.URL.Path == JWKSRedirectPath {
+		s.mu.Unlock()
+		nethttp.Redirect(w, r, location, nethttp.StatusFound)
+		return
+	}
 	mode := s.mode
 	// The document is rendered only in the arms that serve it: the failure modes
 	// discard it, and marshaling the whole key set per request to throw it away
