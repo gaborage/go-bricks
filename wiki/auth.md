@@ -254,9 +254,21 @@ bare quote would close the parameter.
   classify as `error.type=oversized`, so a consumer matching the sentinel across a custom
   client should match `*http.MaxBytesError` too. A caller-supplied `httpclient.Client` has
   already buffered the body, so a second length check after the fetch covers it.
+- **Redirects stay on the configured origin.** The framework-built client refuses any hop that
+  leaves it — a cross-host redirect or an `https`→`http` downgrade — and caps a same-origin
+  chain at five, since setting `CheckRedirect` replaces net/http's own ten-hop limit rather
+  than adding to it. Same-host `https` hops are allowed, because issuers do serve a key set
+  through a path rewrite or a regional edge and such a hop is answered by the same TLS
+  identity the direct fetch would have reached. **A caller-supplied `httpclient.Client` cannot
+  be given this policy**: the `*http.Client` inside it is unexported, and net/http follows a
+  redirect before any framework code sees a response — so unlike the body cap, there is no
+  second line of defense. Prefer the framework-built client unless you need your own
+  interceptors.
 - **Unusable entries are dropped, not fatal.** A non-RSA `kty`, an `use` other than `sig`, a
-  missing `kid`, a duplicate `kid`, an undecodable or padded base64 value, a modulus outside
-  2048–16384 bits, or an even/unit exponent — each is dropped and reported in **one** WARN per
+  present-but-non-empty `key_ops` that does not contain `verify` (an absent `key_ops` is fine —
+  most issuers omit it), a missing `kid`, a duplicate `kid`, an undecodable or padded base64
+  value, a modulus outside 2048–16384 bits, an **even** modulus (an RSA modulus is a product of
+  two odd primes, so an even one is not a key), or an even/unit exponent — each is dropped and reported in **one** WARN per
   refresh (`auth: ignored unusable jwks entries`). Only a document yielding no usable key at
   all fails the refresh. The WARN's naming is **bounded**: at most 10 kids are named, each
   truncated to 64 runes, with a `…+N more` tail — the issuer chooses both how many entries it
