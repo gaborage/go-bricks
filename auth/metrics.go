@@ -187,10 +187,10 @@ func (m *authMetrics) recordRefresh(ctx context.Context, errType string) {
 	m.refreshes.Add(ctx, 1, metric.WithAttributes(attrs...))
 }
 
-// keySetState is what the observable gauges read: the current key count and the
-// age of the key set, in seconds. ok is false before the first successful fetch,
-// which suppresses both observations rather than reporting a zero age.
-type keySetState interface {
+// keySetObserver is what the observable gauges read: the current key count and
+// the age of the key set, in seconds. ok is false before the first successful
+// fetch, which suppresses both observations rather than reporting a zero age.
+type keySetObserver interface {
 	keySetObservation() (keys int64, ageSeconds float64, ok bool)
 }
 
@@ -206,16 +206,20 @@ func gaugeIssuer(issuer string) string {
 	return trimmed
 }
 
-// registerKeySetGauges wires the key-count and key-set-age gauges to state and
-// returns the cleanup that unregisters them. Registration failures degrade to a
-// no-op cleanup, matching the database tracker's graceful-degradation contract.
+// registerKeySetGauges wires the key-count and key-set-age gauges to observer
+// and returns the cleanup that unregisters them. Registration failures degrade
+// to a no-op cleanup, matching the database tracker's graceful-degradation
+// contract.
 //
 // issuer identifies the observing verifier: two verifiers sharing one
 // MeterProvider register two callbacks against the SAME instruments, and the
 // OTel callback contract requires their observations to be distinct.
-func (m *authMetrics) registerKeySetGauges(state keySetState, issuer string) func() {
+func (m *authMetrics) registerKeySetGauges(observer keySetObserver, issuer string) func() {
 	if m == nil || m.meter == nil {
-		return func() {}
+		return func() {
+			// Nothing to undo: without a metrics value or a meter, no gauge and no
+			// callback were ever constructed.
+		}
 	}
 
 	keyCount, keyCountErr := m.meter.Int64ObservableGauge(
@@ -237,18 +241,21 @@ func (m *authMetrics) registerKeySetGauges(state keySetState, issuer string) fun
 	// half-built pair would leave a live callback observing an instrument whose
 	// construction failed; neither gauge is registered unless both succeeded.
 	if keyCountErr != nil || ageErr != nil {
-		return func() {}
+		return func() {
+			// Nothing to undo: a gauge constructor failed, so callback registration
+			// was deliberately skipped above.
+		}
 	}
 
 	observed := metric.WithAttributes(attribute.String(attrAuthIssuer, gaugeIssuer(issuer)))
 	registration, err := m.meter.RegisterCallback(
-		func(_ context.Context, observer metric.Observer) error {
-			keys, ageSeconds, ok := state.keySetObservation()
+		func(_ context.Context, obs metric.Observer) error {
+			keys, ageSeconds, ok := observer.keySetObservation()
 			if !ok {
 				return nil
 			}
-			observer.ObserveInt64(keyCount, keys, observed)
-			observer.ObserveFloat64(age, ageSeconds, observed)
+			obs.ObserveInt64(keyCount, keys, observed)
+			obs.ObserveFloat64(age, ageSeconds, observed)
 			return nil
 		},
 		keyCount, age,
@@ -264,7 +271,10 @@ func (m *authMetrics) registerKeySetGauges(state keySetState, issuer string) fun
 				logMetricWiringError(opKeySetGaugeUnregister, unregisterErr)
 			}
 		}
-		return func() {}
+		return func() {
+			// Nothing to undo: registration failed, and whatever live registration it
+			// handed back alongside the error was already unregistered just above.
+		}
 	}
 	return func() {
 		if err := registration.Unregister(); err != nil {

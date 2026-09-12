@@ -71,7 +71,7 @@ type jwksResolver struct {
 	// base is the resolver-lifetime context every fetch derives from, and
 	// baseCancel ends it in close. It is deliberately rooted at
 	// context.Background rather than at a caller's context: see fetchBase.
-	base       context.Context
+	base       context.Context // NOSONAR S8242: resolver-lifetime cancellation, not a request context - close must abort an in-flight fetch that no caller is waiting on
 	baseCancel context.CancelFunc
 
 	mu sync.RWMutex
@@ -318,7 +318,7 @@ func (r *jwksResolver) usableLocked() bool {
 	return age >= 0 && age <= r.staleCeiling
 }
 
-// keySetObservation implements keySetState for the key-count and age gauges.
+// keySetObservation implements keySetObserver for the key-count and age gauges.
 func (r *jwksResolver) keySetObservation() (keys int64, ageSeconds float64, ok bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
