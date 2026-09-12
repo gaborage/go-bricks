@@ -208,7 +208,9 @@ func TestMiddlewareAnswers503WhenTheKeySetIsUnavailable(t *testing.T) {
 	run := runWithCredential(t, v, iss.Mint(authtesting.Claims{IssuedAt: verifierNow, ExpiresAt: verifierNow.Add(time.Hour)}))
 
 	assertAPIError(t, run.err, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE")
-	assert.Equal(t, "30", run.rec.Header().Get(headerRetryAfter))
+	// This verifier owns no JWKS resolver, so the configured refresh floor is not
+	// a retry hint: nothing is going to refetch. It advertises the minimum.
+	assert.Equal(t, "1", run.rec.Header().Get(headerRetryAfter))
 	assert.Empty(t, run.rec.Header().Get(headerWWWAuthenticate), "a server fault must not challenge the caller")
 	assertRejected(t, run)
 }
@@ -237,9 +239,12 @@ func TestMiddlewareRetryAfterFollowsTheRefreshFloor(t *testing.T) {
 	}
 }
 
-// TestMiddlewareRetryAfterIsBuiltFromTheConfiguredFloor proves the header value
-// actually comes from configuration rather than a constant.
-func TestMiddlewareRetryAfterIsBuiltFromTheConfiguredFloor(t *testing.T) {
+// TestMiddlewareRetryAfterIgnoresTheFloorWithoutAnOwnedResolver pins that the
+// configured refresh floor reaches the header only when a JWKS resolver is
+// actually going to act on it. Over a pinned resolver nothing refetches, so
+// advertising the floor would park the caller waiting for a fetch that cannot
+// happen.
+func TestMiddlewareRetryAfterIgnoresTheFloorWithoutAnOwnedResolver(t *testing.T) {
 	iss := newTestIssuer()
 	cfg := verifierConfig(iss)
 	cfg.JWKS.MinRefreshInterval = 5 * time.Second
@@ -249,6 +254,31 @@ func TestMiddlewareRetryAfterIsBuiltFromTheConfiguredFloor(t *testing.T) {
 
 	run := runWithCredential(t, v, iss.Mint(authtesting.Claims{IssuedAt: verifierNow, ExpiresAt: verifierNow.Add(time.Hour)}))
 
+	assert.Equal(t, "1", run.rec.Header().Get(headerRetryAfter))
+}
+
+// TestMiddlewareRetryAfterUsesTheFloorOfAnOwnedResolver is the other half: a
+// verifier that built its own JWKS resolver does advertise the configured floor,
+// because that resolver really will not refetch before it elapses.
+func TestMiddlewareRetryAfterUsesTheFloorOfAnOwnedResolver(t *testing.T) {
+	srv := newJWKSFixture(t)
+	cfg := jwksConfig(srv)
+	cfg.JWKS.MinRefreshInterval = 5 * time.Second
+
+	v, err := NewVerifier(cfg, nil, nil, jwksClient(t, srv))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = v.Close() })
+	require.NotNil(t, v.owned, "NewVerifier must own the resolver it built")
+
+	credential := srv.Issuer().Mint(authtesting.Claims{})
+	clock := newFakeClock()
+	installResolverClock(t, v, clock)
+	srv.SetMode(authtesting.JWKSServerError)
+	clock.Advance(testStaleCeiling + time.Second)
+
+	run := runWithCredential(t, v, credential)
+
+	assertAPIError(t, run.err, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE")
 	assert.Equal(t, "5", run.rec.Header().Get(headerRetryAfter))
 }
 

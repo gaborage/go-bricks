@@ -111,9 +111,17 @@ func Middleware(v *Verifier) server.MiddlewareFunc {
 		panic("auth: Middleware requires a non-nil Verifier")
 	}
 
+	// The JWKS refresh floor is only a meaningful retry hint for a verifier that
+	// owns a JWKS resolver. Over a pinned PublicKeyResolver nothing refreshes, so
+	// advertising that floor would make a caller wait for a fetch that cannot
+	// happen; such a verifier gets the bare minimum instead.
+	refreshFloor := time.Duration(0)
+	if v.owned != nil {
+		refreshFloor = v.cfg.JWKS.MinRefreshInterval
+	}
 	ch := &challenge{
 		missing:    schemeBearer + ` realm="` + sanitizeRealm(v.cfg.Issuer) + `"`,
-		retryAfter: retryAfterSeconds(v.cfg.JWKS.MinRefreshInterval),
+		retryAfter: retryAfterSeconds(refreshFloor),
 	}
 
 	return func(c server.HandlerContext, next func() error) error {
@@ -122,7 +130,8 @@ func Middleware(v *Verifier) server.MiddlewareFunc {
 		// Verify answers with ErrMissingCredential. Routing that case through
 		// Verify rather than short-circuiting keeps auth.verification.total's
 		// missing_credential observation on the HTTP path too, and still records
-		// exactly one observation per request.
+		// exactly one observation per request — on a verifier that has metrics at
+		// all, which NewVerifierWithResolver does not construct.
 		principal, err := v.Verify(ctx, bearerCredential(c.RequestHeader(headerAuthorization)))
 		if err != nil {
 			return ch.deny(c, err)
@@ -183,12 +192,13 @@ func bearerCredential(header string) string {
 
 // retryAfterSeconds renders the Retry-After value for a key-set 503.
 //
-// The source is the resolver's refresh floor (auth.jwt.jwks.minrefreshinterval,
-// 30s by default): the JWKS resolver will not issue another fetch to the issuer
-// before it elapses, so a retry sooner than that cannot reach a fresher key set
-// and only costs the caller a round trip. No new configuration key is
-// introduced. The value is floored at one second — a verifier built over a
-// pinned PublicKeyResolver leaves the JWKS group zero — and rounded up, because
+// The source is the refresh floor of a JWKS resolver the verifier OWNS
+// (auth.jwt.jwks.minrefreshinterval, 30s by default): that resolver will not
+// issue another fetch to the issuer before it elapses, so a retry sooner than
+// that cannot reach a fresher key set and only costs the caller a round trip.
+// Middleware passes zero for a verifier over a pinned PublicKeyResolver, where
+// no refresh is pending and the floor below applies. No new configuration key is
+// introduced. The value is floored at one second and rounded up, because
 // Retry-After is expressed in whole seconds.
 func retryAfterSeconds(minRefreshInterval time.Duration) string {
 	seconds := math.Ceil(max(minRefreshInterval, minRetryAfter).Seconds())

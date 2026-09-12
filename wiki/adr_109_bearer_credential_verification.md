@@ -101,6 +101,11 @@ this package promises not to make them.
    lookup reports `ErrKeySetUnavailable` → 503. There is no path on which an unverifiable
    credential is accepted.
 
+   All of this describes `NewVerifier`. `NewVerifierWithResolver` takes a caller-supplied
+   `PublicKeyResolver` and owns nothing: it performs no fetch, runs no ticker, has no stale
+   ceiling of its own, leaves `auth.jwt.jwksuri` and the `jwks.*` group unused, and its
+   `Close` releases nothing. Whatever lifecycle those keys have is the caller's.
+
 8. **Configuration through a registered `config/types.go` section.** `auth.jwt.*` is a real
    config section with framework defaults and load-time validation, not an
    `InjectInto` escape hatch: the escape hatch carries no defaults, no cross-field checks
@@ -141,8 +146,10 @@ restated here.
   header-injection seam.
 - **The rejection reason never reaches the caller.** A *classified* failure — one where a
   credential was presented and judged — is reported by `Class`, a closed, low-cardinality
-  vocabulary, to one DEBUG breadcrumb (emitted where the rule fires, in the verifier) and to
-  the `auth.result` metric attribute. A request carrying no credential is not classified: it
+  vocabulary, to one DEBUG breadcrumb (emitted where the rule fires, in the verifier) and, on a
+  verifier built by `NewVerifier`, to the `auth.result` metric attribute —
+  `NewVerifierWithResolver` constructs no metrics, so a resolver-backed verifier records
+  nothing. A request carrying no credential is not classified: it
   returns before any rule runs, so it has no `Class` and emits no breadcrumb, and the counter
   alone records it as `missing_credential`. It is never rendered
   into a response, and `VerificationError` never renders its `Cause` under any `fmt` verb,
