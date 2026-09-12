@@ -401,6 +401,19 @@ func TestIssuerRotateRejectsADuplicateKeyID(t *testing.T) {
 	assert.Equal(t, DefaultKeyID, iss.ActiveKeyID())
 }
 
+// TestIssuerRotateRejectsAnEmptyKeyID pins that the fake refuses to start
+// minting credentials a verifier must reject: an empty kid registers a key under
+// "" and writes an empty kid header on every later Mint.
+func TestIssuerRotateRejectsAnEmptyKeyID(t *testing.T) {
+	iss := NewIssuer()
+
+	assert.PanicsWithValue(t,
+		"auth/testing: Rotate requires a non-empty kid; use MintMissingKeyID to omit the kid header",
+		func() { iss.Rotate("") })
+	assert.Equal(t, DefaultKeyID, iss.ActiveKeyID())
+	assert.Nil(t, iss.PublicKey(""))
+}
+
 // TestIssuerRotateKeepsCredentialsMintedUnderTheOldKeyVerifiable is the positive
 // half: a legitimate rotation leaves the previous kid's credentials valid.
 func TestIssuerRotateKeepsCredentialsMintedUnderTheOldKeyVerifiable(t *testing.T) {

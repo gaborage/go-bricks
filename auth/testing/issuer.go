@@ -187,10 +187,16 @@ func (i *Issuer) WithClock(now func() time.Time) *Issuer {
 // Previously issued credentials stay verifiable because the old public key remains
 // in PublicKeys.
 //
-// An already-registered kid panics: overwriting a key would silently break every
-// credential minted under it, which is the opposite of what this helper promises
-// and would make a rotation test assert the wrong thing.
+// An empty kid panics: it would make every subsequent Mint emit an empty kid
+// header, which a verifier refuses as a missing key ID — use MintMissingKeyID to
+// omit the header deliberately. An already-registered kid panics too:
+// overwriting a key would silently break every credential minted under it, which
+// is the opposite of what this helper promises and would make a rotation test
+// assert the wrong thing.
 func (i *Issuer) Rotate(kid string) *Issuer {
+	if kid == "" {
+		panic("auth/testing: Rotate requires a non-empty kid; use MintMissingKeyID to omit the kid header")
+	}
 	if _, exists := i.keys[kid]; exists {
 		panic(fmt.Sprintf("auth/testing: kid %q is already registered; Rotate must not overwrite a key credentials were minted under", kid))
 	}

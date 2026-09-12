@@ -142,6 +142,26 @@ func TestNewVerifierWithResolverAcceptsANilLogger(t *testing.T) {
 	assertRejectedWithClass(t, err, ClassExpired)
 }
 
+// TestNewVerifierWithResolverToleratesATypedNilLogger pins the logger's second
+// nil shape. A non-nil logger.Logger holding a nil *ZeroLogger is not == nil, so
+// without normalization v.debug calls Debug on a nil receiver and a rejected
+// credential panics on the request path. A nil logger is documented as
+// supported, so the shape is normalized to absent, never rejected.
+func TestNewVerifierWithResolverToleratesATypedNilLogger(t *testing.T) {
+	iss := newTestIssuer()
+
+	v, err := NewVerifierWithResolver(verifierConfig(iss), (*logger.ZeroLogger)(nil), NewStaticKeyResolver(iss.PublicKeys()))
+
+	require.NoError(t, err)
+	require.NotNil(t, v)
+	assert.Nil(t, v.log)
+	v.now = fixedClock
+
+	_, err = v.Verify(context.Background(), iss.MintExpired())
+
+	assertRejectedWithClass(t, err, ClassExpired)
+}
+
 // TestNewVerifierWithResolverClonesTheConfiguredAudience pins the immutability
 // contract: cfg travels by value, so only the slice header is copied, and a
 // caller writing to the audience it passed in must not steer a live verifier.
@@ -255,6 +275,39 @@ func TestVerifierAcceptsACredentialExpiredWithinLeeway(t *testing.T) {
 	_, err := v.Verify(context.Background(), iss.MintExpiredWithin(30*time.Second))
 
 	require.NoError(t, err)
+}
+
+// TestVerifierTreatsTheLeewayWidenedExpiryAsExclusive pins the exp boundary in
+// both directions: RFC 7519 section 4.1.4 requires the current time to be
+// strictly before exp, so an exp exactly at now-Leeway is expired while the very
+// next second is still accepted.
+func TestVerifierTreatsTheLeewayWidenedExpiryAsExclusive(t *testing.T) {
+	const leeway = 30 * time.Second
+	tests := []struct {
+		name       string
+		exp        int64
+		wantExpiry bool
+	}{
+		{name: "exactly_at_the_leeway_edge", exp: verifierNow.Add(-leeway).Unix(), wantExpiry: true},
+		{name: "one_second_inside_the_leeway_edge", exp: verifierNow.Add(-leeway + time.Second).Unix()},
+		{name: "one_second_past_the_leeway_edge", exp: verifierNow.Add(-leeway - time.Second).Unix(), wantExpiry: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := newTestVerifier(t, newTestIssuer(), func(c *Config) { c.Leeway = leeway })
+			payload := fmt.Sprintf(`{"iss":"https://issuer.test/","aud":"go-bricks-test","exp":%d}`, tt.exp)
+
+			principal, err := v.principalFromPayload([]byte(payload))
+
+			if tt.wantExpiry {
+				assertRejectedWithClass(t, err, ClassExpired)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.exp, principal.ExpiresAt.Unix())
+		})
+	}
 }
 
 func TestVerifierIgnoresTypWhenUnconfigured(t *testing.T) {

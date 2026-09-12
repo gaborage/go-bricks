@@ -75,7 +75,9 @@ type Verifier struct {
 //
 // A nil log is tolerated: the DEBUG rejection logging simply no-ops, which keeps
 // a verifier constructible in a test without wiring a logger. Verification
-// behavior is identical either way.
+// behavior is identical either way. A non-nil interface holding a nil pointer is
+// normalized to the same no-op rather than rejected, because it means the same
+// thing and would otherwise panic on the first rejection.
 //
 // cfg is taken by value, which copies only the HEADERS of its slice fields, so
 // the stored configuration clones Audience, Algorithms and Typ. Without that, a
@@ -88,8 +90,14 @@ func NewVerifierWithResolver(cfg Config, log logger.Logger, resolver PublicKeyRe
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	if isNilResolver(resolver) {
+	if isNilInterface(resolver) {
 		return nil, NewConfigError(fieldPrefix+"resolver", "public key resolver is required", nil)
+	}
+	// A typed-nil logger is normalized to absent rather than rejected: a nil
+	// logger is documented as supported, and v.debug's == nil guard does not
+	// fire on a non-nil interface holding a nil pointer.
+	if isNilInterface(log) {
+		log = nil
 	}
 	cfg.Audience = slices.Clone(cfg.Audience)
 	cfg.Algorithms = slices.Clone(cfg.Algorithms)
@@ -103,16 +111,17 @@ func NewVerifierWithResolver(cfg Config, log logger.Logger, resolver PublicKeyRe
 	}, nil
 }
 
-// isNilResolver reports whether resolver is unusable: a nil interface, or a
-// non-nil interface holding a nil pointer (or other nil-able kind). A caller
-// that stores a *StaticKeyResolver in a struct field and forgets to assign it
-// produces the second case, which would otherwise panic inside PublicKey on the
-// request path instead of at construction.
-func isNilResolver(resolver PublicKeyResolver) bool {
-	if resolver == nil {
+// isNilInterface reports whether an interface value is unusable: a nil
+// interface, or a non-nil interface holding a nil pointer (or other nil-able
+// kind). A caller that stores a *StaticKeyResolver or a *logger.ZeroLogger in a
+// struct field and forgets to assign it produces the second case, which is not
+// == nil and would otherwise panic on the request path — inside PublicKey, or
+// inside Debug on a rejection — instead of being caught at construction.
+func isNilInterface(value any) bool {
+	if value == nil {
 		return true
 	}
-	v := reflect.ValueOf(resolver)
+	v := reflect.ValueOf(value)
 	switch v.Kind() {
 	case reflect.Pointer, reflect.Map, reflect.Chan, reflect.Func, reflect.Slice, reflect.UnsafePointer:
 		return v.IsNil()
@@ -312,8 +321,11 @@ func (v *Verifier) validateTimeClaims(claims map[string]any) (expiresAt, issuedA
 		return time.Time{}, time.Time{}, v.reject(ClassMissingExpiry, errors.New("exp is absent"))
 	}
 
+	// RFC 7519 section 4.1.4 requires the current time to be STRICTLY before
+	// exp, so the leeway-widened deadline is exclusive: exp exactly at
+	// now-Leeway is expired, not the last valid instant.
 	now := v.now()
-	if expiresAt.Before(now.Add(-v.cfg.Leeway)) {
+	if expiresAt.Compare(now.Add(-v.cfg.Leeway)) <= 0 {
 		return time.Time{}, time.Time{}, v.reject(ClassExpired, errors.New("exp is in the past"))
 	}
 
@@ -321,6 +333,8 @@ func (v *Verifier) validateTimeClaims(claims map[string]any) (expiresAt, issuedA
 	if err != nil {
 		return time.Time{}, time.Time{}, v.reject(ClassMalformed, err)
 	}
+	// nbf is the mirror image and deliberately inclusive: RFC 7519 section
+	// 4.1.5 requires the current time to be at or AFTER nbf, so equality passes.
 	if present && notBefore.After(now.Add(v.cfg.Leeway)) {
 		return time.Time{}, time.Time{}, v.reject(ClassNotYetValid, errors.New("nbf is in the future"))
 	}
