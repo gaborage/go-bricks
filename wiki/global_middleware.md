@@ -44,7 +44,7 @@ attached **per route group** — `r.Group("/orders", auth.Middleware(v))` — ne
 | --- | --- | --- |
 | Scope | Every route, no opt-out | The groups it is attached to |
 | Exempting a route | A path list inside the gate body | Register the route outside the guarded group |
-| Failure mode of a new route | Guarded by default; a public route that is not in the list gets 401 | Unguarded unless it is registered in a guarded group |
+| Failure mode of a new route | Guarded by default; a public route that is not in the list gets the gate’s rejection status | Unguarded unless it is registered in a guarded group |
 
 The trade is where the exemption is visible. A global gate defaults to guarded, which is the
 safer failure mode, but its exemption list lives in the middleware body — far from the route
@@ -109,8 +109,8 @@ Consequences:
 - Runs **after rate-limiting** — an unauthenticated request still consumes rate-limit budget
   before being rejected (intended: cheap flood rejection). This is an auth-gate hook, not a
   general "run early" hook.
-- Fires **before** the 404/405 response, so unauthenticated requests to unknown paths get 401
-  (does not leak route existence).
+- Fires **before** the 404/405 response, so requests to unknown paths get the gate’s rejection
+  status rather than a 404 (does not leak route existence).
 - `/_sys` (scheduler) and `/debug` endpoints are **gated** (their own CIDR/bearer checks still
   apply underneath); only health/ready are exempt.
 

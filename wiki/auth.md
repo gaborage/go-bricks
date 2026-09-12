@@ -288,8 +288,15 @@ Telemetry never fails a verification.
 | --- | --- | --- | --- |
 | `auth.verification.total` | Int64 counter | `{verification}` | `auth.result`: `success`, `missing_credential`, `key_set_unavailable`, or the rejection `Class` (`malformed`, `algorithm`, `kid_missing`, `kid_unknown`, `type`, `signature`, `issuer`, `audience`, `expired`, `not_yet_valid`, `issued_in_future`, `missing_expiry`) |
 | `auth.keyset.refresh.total` | Int64 counter | `{refresh}` | `auth.result`: `success` or `failure`; on failure also `error.type`: `transport`, `status`, `oversized`, `parse`, `empty_key_set` |
-| `auth.keyset.age` | Float64 observable gauge | `s` | none — age of the cached set since its last successful fetch |
-| `auth.keyset.key.count` | Int64 observable gauge | `{key}` | none — usable RSA keys in the cached set |
+| `auth.keyset.age` | Float64 observable gauge | `s` | `auth.issuer` — age of the cached set since its last successful fetch |
+| `auth.keyset.key.count` | Int64 observable gauge | `{key}` | `auth.issuer` — usable RSA keys in the cached set |
+
+`auth.issuer` is the configured `auth.jwt.issuer` (the literal `unset` when unconfigured). It is
+on the gauges because two verifiers sharing one `MeterProvider` register two callbacks against the
+same instruments, and the OpenTelemetry callback contract requires observations to be unique —
+without an identity the two series collide and the SDK's behavior is undefined. Issuer is safe as
+an attribute because it is per-process configuration: it is never caller-, request- or
+credential-derived, so no amount of traffic can inflate its cardinality.
 
 Exactly one `auth.verification.total` observation is recorded per `Verify` call, including the
 `missing_credential` one for a request with no usable `Authorization` header. The gauges are
