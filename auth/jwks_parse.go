@@ -90,6 +90,12 @@ func parseRSAKey(entry *jwksKey) (key *rsa.PublicKey, ok bool) {
 	if !ok {
 		return nil, false
 	}
+	// An RSA modulus is a product of two odd primes and so is always odd; an even
+	// one is not a usable key. rsa.Verify would reject it later, so drop it here
+	// where it is named in the WARN.
+	if modulus.Bit(0) == 0 {
+		return nil, false
+	}
 	exponent, ok := decodeUint(entry.E, 1, maxRSAExponentBits)
 	if !ok || !exponent.IsInt64() {
 		return nil, false

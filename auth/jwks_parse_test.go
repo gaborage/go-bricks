@@ -22,9 +22,24 @@ func jwk(members map[string]string) string {
 	return "{" + strings.Join(parts, ",") + "}"
 }
 
-// validModulus is a 2048-bit modulus in the base64url encoding RFC 7518 mandates.
+// modulusBytes renders a 2048-bit modulus whose first and last bytes are lead
+// and last, in the base64url encoding RFC 7518 mandates.
+func modulusBytes(lead, last byte) string {
+	raw := make([]byte, 256)
+	raw[0] = lead
+	raw[255] = last
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// validModulus is a 2048-bit odd modulus, the shape parseRSAKey accepts.
 func validModulus() string {
-	return base64.RawURLEncoding.EncodeToString(append([]byte{0xC0}, make([]byte, 255)...))
+	return modulusBytes(0xC0, 0x01)
+}
+
+// evenModulus is a 2048-bit modulus that is even, which no product of two odd
+// primes can be.
+func evenModulus() string {
+	return modulusBytes(0xC0, 0x00)
 }
 
 func TestParseJWKSDropsUnusableEntries(t *testing.T) {
@@ -38,6 +53,7 @@ func TestParseJWKSDropsUnusableEntries(t *testing.T) {
 		{name: "missing_modulus", members: map[string]string{"kty": "RSA", "kid": "k", "e": "AQAB"}},
 		{name: "padded_modulus", members: map[string]string{"kty": "RSA", "kid": "k", "n": "AAAA=", "e": "AQAB"}},
 		{name: "modulus_below_the_floor", members: map[string]string{"kty": "RSA", "kid": "k", "n": "AQAB", "e": "AQAB"}},
+		{name: "even_modulus", members: map[string]string{"kty": "RSA", "kid": "k", "n": evenModulus(), "e": "AQAB"}},
 		{name: "missing_exponent", members: map[string]string{"kty": "RSA", "kid": "k", "n": validModulus()}},
 		{name: "even_exponent", members: map[string]string{"kty": "RSA", "kid": "k", "n": validModulus(), "e": "BAAA"}},
 		{name: "unit_exponent", members: map[string]string{"kty": "RSA", "kid": "k", "n": validModulus(), "e": "AQ"}},
@@ -55,7 +71,7 @@ func TestParseJWKSDropsUnusableEntries(t *testing.T) {
 
 func TestParseJWKSKeepsTheFirstOfADuplicateKid(t *testing.T) {
 	first := jwk(map[string]string{"kty": "RSA", "kid": "dup", "n": validModulus(), "e": "AQAB"})
-	second := jwk(map[string]string{"kty": "RSA", "kid": "dup", "n": base64.RawURLEncoding.EncodeToString(append([]byte{0xFF}, make([]byte, 255)...)), "e": "AQAB"})
+	second := jwk(map[string]string{"kty": "RSA", "kid": "dup", "n": modulusBytes(0xFF, 0x01), "e": "AQAB"})
 
 	keys, dropped, err := parseJWKS([]byte(`{"keys":[` + first + "," + second + `]}`))
 
@@ -63,6 +79,22 @@ func TestParseJWKSKeepsTheFirstOfADuplicateKid(t *testing.T) {
 	require.Len(t, keys, 1)
 	assert.Equal(t, []string{"dup"}, dropped)
 	assert.Equal(t, byte(0xC0), keys["dup"].N.Bytes()[0], "the first entry must win")
+}
+
+// TestParseJWKSKeepsAUsableEntryAfterAnUnusableDuplicate pins that first-writer-wins
+// guards only entries that were actually inserted: an unusable first entry never
+// reaches the map, so a later usable entry sharing its kid still lands.
+func TestParseJWKSKeepsAUsableEntryAfterAnUnusableDuplicate(t *testing.T) {
+	unusable := jwk(map[string]string{"kty": "RSA", "kid": "dup", "n": evenModulus(), "e": "AQAB"})
+	usable := jwk(map[string]string{"kty": "RSA", "kid": "dup", "n": modulusBytes(0xFF, 0x01), "e": "AQAB"})
+
+	keys, dropped, err := parseJWKS([]byte(`{"keys":[` + unusable + "," + usable + `]}`))
+
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+	require.NotNil(t, keys["dup"])
+	assert.Equal(t, []string{"dup"}, dropped)
+	assert.Equal(t, byte(0xFF), keys["dup"].N.Bytes()[0], "the later usable entry must land")
 }
 
 func TestParseJWKSNamesAnEntryWithoutAKid(t *testing.T) {
