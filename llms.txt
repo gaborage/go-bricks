@@ -1193,8 +1193,9 @@ Behavior and limits (see [wiki/auth.md](wiki/auth.md) / ADR-109):
   id, so a JWKS fetch is its own root span and does not correlate to a request. `Close` cancels
   that context: it aborts an in-flight fetch, and afterwards nothing reaches the issuer again,
   though the verifier keeps answering from the set it holds until `staleceiling`.
-- **Nothing leaks**: the credential, its cause and the `sub` claim never reach a log, a metric or
-  a response; a rejection is reported by class only. `Principal` elides its subject and claims
+- **Nothing leaks**: the credential and its cause never reach a log, a metric or a response, and
+  a rejection is reported by class only. The `sub` claim has exactly one sink, off by default:
+  `auth.jwt.telemetry.enduserid: true` records it as the `enduser.id` span attribute. `Principal` elides its subject and claims
   under `%v`/`%s`/`%q`/`%#v` and `json.Marshal` — but NOT under `logger.Interface`/`WithFields`,
   whose reflective filter reads exported fields directly (#1602). Don't hand it one.
 - **Pinned keys**: `auth.NewVerifierWithResolver(cfg, log, auth.NewStaticKeyResolver(keys))`

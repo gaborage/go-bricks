@@ -659,7 +659,11 @@ func okHandler(c server.HandlerContext) error {
 // returns its base URL, shutting the server down when the test ends.
 func serveTestServer(t *testing.T, srv *server.Server, cfg *config.Config) string {
 	t.Helper()
-	go func() { _ = srv.Start() }()
+	// Start reports why the bind failed. The loopback port was reserved and then
+	// released, so another process can take it in the gap; without this the
+	// readiness poll below just times out and hides the real cause.
+	startErr := make(chan error, 1)
+	go func() { startErr <- srv.Start() }()
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -668,6 +672,11 @@ func serveTestServer(t *testing.T, srv *server.Server, cfg *config.Config) strin
 
 	base := "http://" + net.JoinHostPort(cfg.Server.Host, strconv.Itoa(cfg.Server.Port))
 	require.Eventually(t, func() bool {
+		select {
+		case err := <-startErr:
+			require.NoError(t, err, "test server failed to start")
+		default:
+		}
 		resp, err := http.Get(base + healthPath) //nolint:noctx // readiness probe against the loopback test server
 		if err != nil {
 			return false

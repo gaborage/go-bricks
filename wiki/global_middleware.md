@@ -106,9 +106,9 @@ Consequences:
   panic guard instead, which answers a panic from one of those middlewares with the standard 500
   envelope and one ERROR line naming the panic's TYPE (ADR-081); before it, such a panic reached
   net/http, which printed the VALUE and dropped the connection.
-- Runs **after rate-limiting** — an unauthenticated request still consumes rate-limit budget
-  before being rejected (intended: cheap flood rejection). This is an auth-gate hook, not a
-  general "run early" hook.
+- Runs **after rate-limiting** — a request the gate will reject still consumes rate-limit budget
+  before being rejected (intended: cheap flood rejection). This slot is for a gate that must run
+  for every route, not a general "run early" hook.
 - Fires **before** the 404/405 response, so requests to unknown paths get the gate’s rejection
   status rather than a 404 (does not leak route existence).
 - `/_sys` (scheduler) and `/debug` endpoints are **gated** (their own CIDR/bearer checks still

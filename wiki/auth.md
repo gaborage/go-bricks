@@ -174,7 +174,7 @@ header is `WWW-Authenticate: Bearer error="invalid_token"`.
 
 | Failure | `Class` | Status | Code | Response header |
 | --- | --- | --- | --- | --- |
-| No `Authorization` header, a non-`Bearer` scheme, no space after the scheme, or an empty/whitespace token | `missing_credential` | 401 | `UNAUTHORIZED` | `WWW-Authenticate: Bearer realm="<issuer>"` |
+| No `Authorization` header, a non-`Bearer` scheme, no space after the scheme, or an empty/whitespace token | *n/a — `auth.result` label `missing_credential`, not a `Class`* | 401 | `UNAUTHORIZED` | `WWW-Authenticate: Bearer realm="<issuer>"` |
 | Credential longer than 64 KiB | `malformed` | 401 | `UNAUTHORIZED` | *(default)* |
 | `alg` outside the configured allowlist — `none`, `HS*`, `ES*` included | `algorithm` | 401 | `UNAUTHORIZED` | *(default)* |
 | Not a parsable compact JWS, or more than one signature | `malformed` | 401 | `UNAUTHORIZED` | *(default)* |
