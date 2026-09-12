@@ -38,11 +38,30 @@ type StaticKeyResolver struct {
 	keys map[string]*rsa.PublicKey
 }
 
+// Structural bounds a pinned RSA public key must satisfy to be registered.
+// They match the bounds the JWKS parser applies, so a key pinned in code and the
+// same key fetched from a JWKS are accepted or rejected identically.
+const (
+	minModulusBits    = 2048
+	maxModulusBits    = 16384
+	minPublicExponent = 3
+	maxPublicExponent = 1<<31 - 1
+)
+
 // NewStaticKeyResolver returns a PublicKeyResolver over a defensive copy of
-// keys. Entries with a nil key, or with a nil modulus, are dropped: a key
-// without a modulus cannot verify anything, so it reads as an unknown kid
-// rather than reaching the verifier as an unusable key. A resolver that ends up
-// with no keys at all reports ErrKeySetUnavailable on every lookup.
+// keys. Entries whose key is nil, or whose key is not structurally usable, are
+// dropped: such a key cannot verify anything, so it reads as an unknown kid
+// rather than reaching the verifier, where its failure would be reported as a
+// bad signature on the caller's credential instead of an unusable key set. A
+// resolver that ends up with no keys at all reports ErrKeySetUnavailable on
+// every lookup.
+//
+// A key is structurally usable when its modulus is non-nil, positive, odd (an
+// RSA modulus is a product of two odd primes) and between 2048 and 16384 bits
+// inclusive, and its public exponent is odd and between 3 and 1<<31-1
+// inclusive. The 2048-bit floor holds on this path too: a pinned key that a
+// JWKS-backed resolver would refuse must not verify tokens merely because it was
+// configured in code.
 //
 // Each key is cloned, modulus included, so the resolver owns its key material: a
 // caller that later writes to the keys it passed in cannot retroactively change
@@ -50,7 +69,7 @@ type StaticKeyResolver struct {
 func NewStaticKeyResolver(keys map[string]*rsa.PublicKey) *StaticKeyResolver {
 	copied := make(map[string]*rsa.PublicKey, len(keys))
 	for kid, key := range keys {
-		if key == nil || key.N == nil {
+		if !usablePublicKey(key) {
 			continue
 		}
 		copied[kid] = clonePublicKey(key)
@@ -58,8 +77,27 @@ func NewStaticKeyResolver(keys map[string]*rsa.PublicKey) *StaticKeyResolver {
 	return &StaticKeyResolver{keys: copied}
 }
 
-// clonePublicKey deep-copies an RSA public key. The caller drops keys with a nil
-// modulus before calling, so the copy below is unconditional.
+// usablePublicKey reports whether key is structurally sound enough to verify a
+// signature. It is a shape check, not a proof that the modulus is a genuine RSA
+// product: it rejects the malformed keys that would otherwise surface as a
+// signature failure, and fails closed on anything it cannot vouch for.
+func usablePublicKey(key *rsa.PublicKey) bool {
+	if key == nil || key.N == nil {
+		return false
+	}
+	// Sign() != 1 covers both a zero and a negative modulus; Bit(0) != 1 covers an
+	// even one. Equality keeps the guards free of a boundary the tests cannot pin.
+	if key.N.Sign() != 1 || key.N.Bit(0) != 1 {
+		return false
+	}
+	if bits := key.N.BitLen(); bits < minModulusBits || bits > maxModulusBits {
+		return false
+	}
+	return key.E >= minPublicExponent && key.E <= maxPublicExponent && key.E%2 == 1
+}
+
+// clonePublicKey deep-copies an RSA public key. The caller drops keys that are
+// not structurally usable before calling, so the copy below is unconditional.
 func clonePublicKey(key *rsa.PublicKey) *rsa.PublicKey {
 	return &rsa.PublicKey{N: new(big.Int).Set(key.N), E: key.E}
 }

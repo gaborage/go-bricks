@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"math"
 	"math/big"
 	"sync"
 	"testing"
@@ -41,7 +42,8 @@ func TestStaticKeyResolverReturnsARegisteredKey(t *testing.T) {
 // construction contract: writing to the key a caller passed in, modulus
 // included, must not reach what the resolver verifies against.
 func TestStaticKeyResolverClonesTheCallersKeys(t *testing.T) {
-	original := &rsa.PublicKey{N: big.NewInt(0xC0FFEE), E: 65537}
+	want := new(big.Int).Set(testRSAPublicKey(t).N)
+	original := &rsa.PublicKey{N: new(big.Int).Set(want), E: 65537}
 	src := NewStaticKeyResolver(map[string]*rsa.PublicKey{"k1": original})
 
 	original.N.SetInt64(1)
@@ -50,7 +52,7 @@ func TestStaticKeyResolverClonesTheCallersKeys(t *testing.T) {
 	got, err := src.PublicKey(context.Background(), "k1")
 
 	require.NoError(t, err)
-	assert.Zero(t, got.N.Cmp(big.NewInt(0xC0FFEE)))
+	assert.Zero(t, got.N.Cmp(want))
 	assert.Equal(t, 65537, got.E)
 }
 
@@ -80,6 +82,113 @@ func TestStaticKeyResolverDropsAKeyWithNoModulus(t *testing.T) {
 		require.ErrorIs(t, err, ErrKeySetUnavailable)
 		assert.Nil(t, got)
 	})
+}
+
+// oddModulus returns a positive odd integer whose bit length is exactly bits, so
+// a fixture exercises one structural rule at a time. Hand-built moduli are even
+// by accident far too easily, hence the explicit low bit.
+func oddModulus(bits int) *big.Int {
+	n := new(big.Int).Lsh(big.NewInt(1), uint(bits-1))
+	return n.SetBit(n, 0, 1)
+}
+
+// TestStaticKeyResolverDropsAStructurallyInvalidKey pins the fail-closed half of
+// construction: a key that cannot be a working RSA public key never reaches the
+// verifier, where its failure would be reported as a bad signature on the
+// caller's credential rather than as an unusable key set.
+func TestStaticKeyResolverDropsAStructurallyInvalidKey(t *testing.T) {
+	evenModulus := oddModulus(minModulusBits)
+	evenModulus.SetBit(evenModulus, 0, 0)
+
+	cases := map[string]*rsa.PublicKey{
+		"nil_modulus":           {E: 65537},
+		"zero_modulus":          {N: big.NewInt(0), E: 65537},
+		"negative_modulus":      {N: new(big.Int).Neg(oddModulus(minModulusBits)), E: 65537},
+		"even_modulus":          {N: evenModulus, E: 65537},
+		"modulus_below_floor":   {N: oddModulus(minModulusBits - 1), E: 65537},
+		"modulus_above_ceiling": {N: oddModulus(maxModulusBits + 1), E: 65537},
+		"zero_exponent":         {N: oddModulus(minModulusBits), E: 0},
+		"exponent_one":          {N: oddModulus(minModulusBits), E: 1},
+		"exponent_two":          {N: oddModulus(minModulusBits), E: 2},
+		"negative_exponent":     {N: oddModulus(minModulusBits), E: -3},
+		"even_exponent":         {N: oddModulus(minModulusBits), E: 65536},
+	}
+
+	for name, bad := range cases {
+		t.Run(name, func(t *testing.T) {
+			src := NewStaticKeyResolver(map[string]*rsa.PublicKey{"bad": bad, "good": testRSAPublicKey(t)})
+
+			got, err := src.PublicKey(context.Background(), "bad")
+			require.ErrorIs(t, err, ErrKidUnknown)
+			require.NotErrorIs(t, err, ErrKeySetUnavailable)
+			assert.Nil(t, got)
+
+			// The second entry proves only the offending one was dropped.
+			usable, err := src.PublicKey(context.Background(), "good")
+			require.NoError(t, err)
+			assert.NotNil(t, usable)
+		})
+	}
+}
+
+// TestStaticKeyResolverDropsAnExponentAboveTheRepresentableCeiling covers the
+// upper exponent bound, which only exists on platforms whose int is wider than
+// the ceiling itself.
+func TestStaticKeyResolverDropsAnExponentAboveTheRepresentableCeiling(t *testing.T) {
+	if math.MaxInt == math.MaxInt32 {
+		t.Skip("int cannot hold an exponent above the ceiling on this platform")
+	}
+	// MaxInt32 is odd, so +2 stays odd and fails on size alone.
+	oversized := int(int64(math.MaxInt32) + 2)
+
+	src := NewStaticKeyResolver(map[string]*rsa.PublicKey{
+		"bad":  {N: oddModulus(minModulusBits), E: oversized},
+		"good": testRSAPublicKey(t),
+	})
+
+	got, err := src.PublicKey(context.Background(), "bad")
+
+	require.ErrorIs(t, err, ErrKidUnknown)
+	assert.Nil(t, got)
+}
+
+// TestStaticKeyResolverAcceptsKeysAtTheStructuralBounds sits exactly on every
+// inclusive bound, so tightening any of them by one is visible.
+func TestStaticKeyResolverAcceptsKeysAtTheStructuralBounds(t *testing.T) {
+	cases := map[string]*rsa.PublicKey{
+		"smallest_modulus":  {N: oddModulus(minModulusBits), E: 65537},
+		"largest_modulus":   {N: oddModulus(maxModulusBits), E: 65537},
+		"smallest_exponent": {N: oddModulus(minModulusBits), E: minPublicExponent},
+		"largest_exponent":  {N: oddModulus(minModulusBits), E: maxPublicExponent},
+	}
+
+	for name, key := range cases {
+		t.Run(name, func(t *testing.T) {
+			src := NewStaticKeyResolver(map[string]*rsa.PublicKey{"k1": key})
+
+			got, err := src.PublicKey(context.Background(), "k1")
+
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Zero(t, got.N.Cmp(key.N))
+			assert.Equal(t, key.E, got.E)
+		})
+	}
+}
+
+// TestStaticKeyResolverWithOnlyInvalidKeysIsUnavailable pins that dropping every
+// entry leaves the documented empty-key-set behavior, not an unknown kid.
+func TestStaticKeyResolverWithOnlyInvalidKeysIsUnavailable(t *testing.T) {
+	src := NewStaticKeyResolver(map[string]*rsa.PublicKey{
+		"k1": {N: oddModulus(minModulusBits - 1), E: 65537},
+		"k2": {N: oddModulus(minModulusBits), E: 65536},
+	})
+
+	got, err := src.PublicKey(context.Background(), "k1")
+
+	require.ErrorIs(t, err, ErrKeySetUnavailable)
+	require.NotErrorIs(t, err, ErrKidUnknown)
+	assert.Nil(t, got)
 }
 
 func TestStaticKeyResolverRejectsAnUnknownKid(t *testing.T) {
