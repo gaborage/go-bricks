@@ -115,9 +115,10 @@ func (p Principal) Format(f fmt.State, verb rune) {
 // would serialize Subject and every claim. The emitted object mirrors String.
 //
 // It does NOT cover the framework logger's reflective filter path
-// (logger.Logger.Interface → SensitiveDataFilter), which rebuilds a struct into
-// a map by reflection before any marshaler runs; no method on Principal can
-// influence that. Do not hand a Principal to it.
+// (logger.LogEventAdapter.Interface and Logger.WithFields →
+// SensitiveDataFilter), which rebuilds a struct into a map[string]any by
+// reflection before any marshaler runs; no method on Principal can influence
+// that. Do not hand a Principal to it.
 //
 //nolint:gocritic // hugeParam: Principal is a value type by contract — it travels on context.Value.
 func (p Principal) MarshalJSON() ([]byte, error) {
@@ -138,10 +139,20 @@ type ctxKey int
 
 const keyPrincipal ctxKey = iota
 
-// withPrincipal attaches the verified identity to ctx.
+// ContextWithPrincipal returns a copy of ctx carrying p, symmetric with
+// PrincipalFromContext.
+//
+// Verify deliberately does not call this: it is transport-neutral and returns
+// the Principal instead, so the caller — this package's HTTP middleware, or a
+// gRPC interceptor living outside it — decides where on the context chain the
+// identity is published.
+//
+// Attaching a Principal asserts identification, not authorization. It states
+// that a credential verified against the configured issuer; whether that
+// identity may perform the operation remains the handler's decision.
 //
 //nolint:gocritic // hugeParam: the context stores the Principal by value; a pointer would only add an alias.
-func withPrincipal(ctx context.Context, p Principal) context.Context {
+func ContextWithPrincipal(ctx context.Context, p Principal) context.Context {
 	return context.WithValue(ctx, keyPrincipal, p)
 }
 

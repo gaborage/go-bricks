@@ -130,9 +130,23 @@ func (c *Config) validateTyp() *ConfigError {
 // resolver's precondition, not the verifier's: a pinned PublicKeyResolver makes no
 // network call, so requiring an https endpoint of it would layer one
 // component's configuration onto another's.
+//
+// TTL and the stale ceiling are rejected only when negative; zero is accepted.
+// A zero TTL means "treat every cached entry as due for refresh", which is a
+// meaningful — if expensive — operating point, while a negative duration names
+// no point in time at all. The cross-field ordering check below cannot stand in
+// for these: it passes for a pair that is negative on both sides (TTL=-2s,
+// StaleCeiling=-1s). The bound matches config.checkAuthJWKS, so a caller that
+// builds a resolver without going through config.Load is held to the same rule.
 func (c *Config) validateJWKSSource() *ConfigError {
 	if err := c.validateJWKSURI(); err != nil {
 		return err
+	}
+	if c.JWKS.TTL < 0 {
+		return NewConfigError(jwksFieldPrefix+"ttl", "ttl must not be negative", nil)
+	}
+	if c.JWKS.StaleCeiling < 0 {
+		return NewConfigError(jwksFieldPrefix+"staleceiling", "stale ceiling must not be negative", nil)
 	}
 	if c.JWKS.StaleCeiling < c.JWKS.TTL {
 		return NewConfigError(jwksFieldPrefix+"staleceiling", "stale ceiling must be greater than or equal to ttl", nil)

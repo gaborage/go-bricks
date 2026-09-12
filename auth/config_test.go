@@ -183,6 +183,17 @@ func TestConfigValidateJWKSSourceAcceptsAnEqualStaleCeiling(t *testing.T) {
 	assert.Nil(t, cfg.validateJWKSSource())
 }
 
+// TestConfigValidateJWKSSourceAcceptsZeroCacheDurations pins the deliberate
+// zero-vs-negative line: a zero TTL ("always due for refresh") is a meaningful
+// operating point, so only a negative duration is refused.
+func TestConfigValidateJWKSSourceAcceptsZeroCacheDurations(t *testing.T) {
+	cfg := validConfig()
+	cfg.JWKS.TTL = 0
+	cfg.JWKS.StaleCeiling = 0
+
+	assert.Nil(t, cfg.validateJWKSSource())
+}
+
 func TestConfigValidateJWKSSourceRejectsInvalidGroups(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -231,6 +242,29 @@ func TestConfigValidateJWKSSourceRejectsInvalidGroups(t *testing.T) {
 			mutate:  func(c *Config) { c.JWKS.StaleCeiling = c.JWKS.TTL - time.Second },
 			field:   "auth.jwt.jwks.staleceiling",
 			message: "stale ceiling must be greater than or equal to ttl",
+		},
+		{
+			name:    "negative_ttl",
+			mutate:  func(c *Config) { c.JWKS.TTL = -time.Second },
+			field:   "auth.jwt.jwks.ttl",
+			message: "ttl must not be negative",
+		},
+		{
+			name:    "negative_stale_ceiling",
+			mutate:  func(c *Config) { c.JWKS.StaleCeiling = -time.Second },
+			field:   "auth.jwt.jwks.staleceiling",
+			message: "stale ceiling must not be negative",
+		},
+		{
+			// The pair the cross-field ordering check alone accepts: the ceiling is
+			// above the TTL, yet both name a negative duration.
+			name: "negative_ttl_below_a_negative_stale_ceiling",
+			mutate: func(c *Config) {
+				c.JWKS.TTL = -2 * time.Second
+				c.JWKS.StaleCeiling = -time.Second
+			},
+			field:   "auth.jwt.jwks.ttl",
+			message: "ttl must not be negative",
 		},
 		{
 			name:    "zero_min_refresh_interval",

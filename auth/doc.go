@@ -23,8 +23,19 @@
 // Callers must not render a Cause into a response body: log the Class instead,
 // which is the only failure detail the package guarantees is safe to expose.
 //
-// A Principal must likewise not be rendered field by field. Its String method
-// elides the subject and every claim value, and covers the fmt verbs that
-// consult fmt.Stringer (%v, %s, %q, %+v); %#v and struct-walking encoders such
-// as json.Marshal bypass it and would print the subject.
+// A Principal must likewise not be rendered field by field, and it closes that
+// hole itself: String, Format and MarshalJSON all derive from one redacted
+// shape that keeps the issuer, audience and expiry and replaces the subject and
+// every claim value with an elision marker. Implementing fmt.Formatter takes
+// precedence over fmt.Stringer for every verb, so %v, %s, %q, %+v and %#v are
+// all elided — for both Principal and *Principal — and MarshalJSON covers
+// json.Marshal and the encoders built on it.
+//
+// One path bypasses all of that: the framework logger's reflective filter
+// (logger.LogEventAdapter.Interface → SensitiveDataFilter.FilterValue →
+// filterStructWithProtection) rebuilds a struct into a map[string]any by
+// reflection, reading exported fields directly before any marshaler or
+// formatter runs. No method on Principal can influence it, and the filter
+// matches field NAMES, so neither "Subject" nor an issuer-chosen claim key is
+// masked. Do not hand a Principal to logger.Interface or to WithFields.
 package auth

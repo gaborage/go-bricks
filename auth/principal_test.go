@@ -25,7 +25,7 @@ func testPrincipal() Principal {
 func TestPrincipalRoundTripsThroughContext(t *testing.T) {
 	want := testPrincipal()
 
-	got, ok := PrincipalFromContext(withPrincipal(context.Background(), want))
+	got, ok := PrincipalFromContext(ContextWithPrincipal(context.Background(), want))
 
 	require.True(t, ok)
 	assert.Equal(t, want, got)
@@ -81,7 +81,7 @@ func TestPrincipalClaimsAreSharedNotCopied(t *testing.T) {
 	// Documented contract: Claims is read-only and aliased by every reader, so this
 	// pins the sharing that the doc comment forbids callers from exploiting.
 	want := testPrincipal()
-	ctx := withPrincipal(context.Background(), want)
+	ctx := ContextWithPrincipal(context.Background(), want)
 
 	first, ok := PrincipalFromContext(ctx)
 	require.True(t, ok)
