@@ -73,7 +73,15 @@ func clonePublicKey(key *rsa.PublicKey) *rsa.PublicKey {
 // The returned key is the resolver's own and MUST NOT be mutated: it is shared
 // by every concurrent lookup of the same kid. See the PublicKeyResolver
 // aliasing contract.
+//
+// The method is exported, so it can be reached without passing through
+// NewVerifierWithResolver. A nil receiver holds no key set at all, which is
+// exactly the ErrKeySetUnavailable condition — a server-side misconfiguration,
+// never the 401 that ErrKidUnknown would read as.
 func (s *StaticKeyResolver) PublicKey(_ context.Context, kid string) (*rsa.PublicKey, error) {
+	if s == nil {
+		return nil, ErrKeySetUnavailable
+	}
 	if len(s.keys) == 0 {
 		return nil, ErrKeySetUnavailable
 	}

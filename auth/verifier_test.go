@@ -99,6 +99,40 @@ func TestNewVerifierWithResolverRejectsANilPublicKeyResolver(t *testing.T) {
 	assert.Equal(t, "auth.jwt.resolver", cerr.Field)
 }
 
+// nilReceiverResolver is a second PublicKeyResolver implementation whose method
+// set tolerates a nil receiver, so the typed-nil case below exercises the
+// constructor's reflect path rather than *StaticKeyResolver specifically.
+type nilReceiverResolver struct{}
+
+func (*nilReceiverResolver) PublicKey(_ context.Context, _ string) (*rsa.PublicKey, error) {
+	return nil, ErrKeySetUnavailable
+}
+
+// TestNewVerifierWithResolverRejectsATypedNilPublicKeyResolver pins the second
+// nil shape: a non-nil interface holding a nil pointer is not == nil, so without
+// the reflect guard the verifier constructs and Verify panics inside the
+// resolver on the request path.
+func TestNewVerifierWithResolverRejectsATypedNilPublicKeyResolver(t *testing.T) {
+	tests := []struct {
+		name     string
+		resolver PublicKeyResolver
+	}{
+		{name: "typed_nil_static_key_resolver", resolver: (*StaticKeyResolver)(nil)},
+		{name: "typed_nil_other_implementation", resolver: (*nilReceiverResolver)(nil)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v, err := NewVerifierWithResolver(verifierConfig(newTestIssuer()), nil, tt.resolver)
+
+			assert.Nil(t, v)
+			var cerr *ConfigError
+			require.ErrorAs(t, err, &cerr)
+			assert.Equal(t, "auth.jwt.resolver", cerr.Field)
+		})
+	}
+}
+
 func TestNewVerifierWithResolverAcceptsANilLogger(t *testing.T) {
 	iss := newTestIssuer()
 	v := newTestVerifier(t, iss, nil)

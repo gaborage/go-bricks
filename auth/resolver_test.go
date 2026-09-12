@@ -135,3 +135,22 @@ func TestStaticKeyResolverIsSafeForConcurrentReads(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestStaticKeyResolverPublicKeyOnANilReceiverFailsClosed pins the exported
+// entry point: reached without going through NewVerifierWithResolver, a nil
+// resolver reports an unusable key set instead of dereferencing the receiver.
+func TestStaticKeyResolverPublicKeyOnANilReceiverFailsClosed(t *testing.T) {
+	var src *StaticKeyResolver
+
+	var (
+		key *rsa.PublicKey
+		err error
+	)
+	require.NotPanics(t, func() {
+		key, err = src.PublicKey(context.Background(), "k1")
+	})
+
+	assert.Nil(t, key)
+	require.ErrorIs(t, err, ErrKeySetUnavailable)
+	require.NotErrorIs(t, err, ErrKidUnknown)
+}

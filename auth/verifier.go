@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -65,7 +66,8 @@ type Verifier struct {
 //
 // cfg is validated up front and its *ConfigError is returned unchanged, so a
 // misconfigured service fails startup instead of booting with a widened
-// allowlist. A nil resolver is rejected for the same reason.
+// allowlist. A nil resolver is rejected for the same reason, and so is a non-nil
+// interface holding a nil pointer.
 //
 // Ownership: resolver stays the CALLER's. The returned verifier never closes
 // it, so a resolver with resources of its own must be shut down by whoever
@@ -86,7 +88,7 @@ func NewVerifierWithResolver(cfg Config, log logger.Logger, resolver PublicKeyRe
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	if resolver == nil {
+	if isNilResolver(resolver) {
 		return nil, NewConfigError(fieldPrefix+"resolver", "public key resolver is required", nil)
 	}
 	cfg.Audience = slices.Clone(cfg.Audience)
@@ -99,6 +101,24 @@ func NewVerifierWithResolver(cfg Config, log logger.Logger, resolver PublicKeyRe
 		allowed:  allowedAlgorithms(cfg.Algorithms),
 		now:      time.Now,
 	}, nil
+}
+
+// isNilResolver reports whether resolver is unusable: a nil interface, or a
+// non-nil interface holding a nil pointer (or other nil-able kind). A caller
+// that stores a *StaticKeyResolver in a struct field and forgets to assign it
+// produces the second case, which would otherwise panic inside PublicKey on the
+// request path instead of at construction.
+func isNilResolver(resolver PublicKeyResolver) bool {
+	if resolver == nil {
+		return true
+	}
+	v := reflect.ValueOf(resolver)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Chan, reflect.Func, reflect.Slice, reflect.UnsafePointer:
+		return v.IsNil()
+	default:
+		return false
+	}
 }
 
 // signatureAlgorithms is the single owner of the closed algorithm allowlist: it
