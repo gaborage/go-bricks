@@ -460,3 +460,33 @@ func TestIssuerMintWithUnmarshalableClaimPanics(t *testing.T) {
 		iss.Mint(Claims{Extra: map[string]any{"bad": make(chan int)}})
 	})
 }
+
+// TestIssuerPublicKeyAccessorsDeepCopy pins that a caller cannot reach the
+// issuer's signing material through a key it was handed: both accessors return a
+// distinct pointer with a distinct modulus, and writing to either leaves later
+// minting intact.
+func TestIssuerPublicKeyAccessorsDeepCopy(t *testing.T) {
+	iss := NewIssuer()
+	kid := iss.ActiveKeyID()
+
+	single := iss.PublicKey(kid)
+	fromMap := iss.PublicKeys()[kid]
+	require.NotNil(t, single)
+	require.NotNil(t, fromMap)
+	assert.NotSame(t, single, fromMap)
+	assert.NotSame(t, single.N, fromMap.N)
+	assert.Equal(t, single.N, fromMap.N)
+
+	single.N.SetInt64(1)
+	single.E = 3
+
+	after := iss.PublicKey(kid)
+	assert.Equal(t, fromMap.N, after.N, "mutating a returned key must not reach the issuer")
+	assert.Equal(t, fromMap.E, after.E)
+
+	credential := iss.Mint(Claims{})
+	parsed, err := jose.ParseSignedCompact(credential, []jose.SignatureAlgorithm{jose.RS256})
+	require.NoError(t, err)
+	_, err = parsed.Verify(after)
+	require.NoError(t, err, "signing must still work after a caller mutated a handed-out key")
+}

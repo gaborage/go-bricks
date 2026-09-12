@@ -27,6 +27,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"strings"
 	"sync"
 	"time"
@@ -216,21 +217,31 @@ func (i *Issuer) ActiveKeyID() string { return i.activeKID }
 
 // PublicKeys returns a copy of every public key the issuer will sign with, keyed by
 // kid — ready to hand to a static key resolver.
+//
+// Each key is deep-copied: the stored value is the public half of the private key
+// MintWith signs with, so handing out that pointer would let a caller corrupt
+// later signing by writing to the modulus.
 func (i *Issuer) PublicKeys() map[string]*rsa.PublicKey {
 	out := make(map[string]*rsa.PublicKey, len(i.keys))
 	for kid, key := range i.keys {
-		out[kid] = &key.PublicKey
+		out[kid] = clonePublicKey(&key.PublicKey)
 	}
 	return out
 }
 
-// PublicKey returns the public key registered under kid, or nil.
+// PublicKey returns a deep copy of the public key registered under kid, or nil.
 func (i *Issuer) PublicKey(kid string) *rsa.PublicKey {
 	key, ok := i.keys[kid]
 	if !ok {
 		return nil
 	}
-	return &key.PublicKey
+	return clonePublicKey(&key.PublicKey)
+}
+
+// clonePublicKey copies an RSA public key, modulus included, so a caller cannot
+// reach the issuer's signing material through the value it is handed.
+func clonePublicKey(key *rsa.PublicKey) *rsa.PublicKey {
+	return &rsa.PublicKey{N: new(big.Int).Set(key.N), E: key.E}
 }
 
 // Mint returns a compact JWS over claims, signed RS256 with the active key.
