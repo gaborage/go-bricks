@@ -28,10 +28,19 @@ type Principal struct {
 
 	// Claims is the raw decoded payload.
 	//
-	// Aliasing contract: Claims is READ-ONLY. It is shared by every reader of the
-	// context — the map is never copied on the way in or out — so mutating it
-	// corrupts every other reader's view of the same request identity. Copy the
-	// value out before modifying it.
+	// Aliasing contract: Claims is READ-ONLY. The map is never copied on the way
+	// in or out, so every reader of this request's context holds the same map: a
+	// delete(p.Claims, …) or a write in one handler, middleware or helper
+	// corrupts what every other reader sees. When one of those readers is a
+	// background goroutine on a context.WithoutCancel(ctx) — the framework's own
+	// pattern for work that outlives the request — the breach is a data RACE, not
+	// merely a logic bug. Copy any value out before modifying it.
+	//
+	// No defensive copy is made on purpose. json.Unmarshal yields nested []any
+	// and map[string]any for precisely the claims most likely to be mutated
+	// ("scope", "realm_access.roles"), so a shallow copy would cost an allocation
+	// on every request while advertising a safety it does not provide for those
+	// nested values.
 	Claims map[string]any
 }
 

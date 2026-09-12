@@ -124,6 +124,10 @@ func check(cfg *Config) error {
 		return fmt.Errorf("keystore config: %w", err)
 	}
 
+	if err := checkAuth(&cfg.Auth); err != nil {
+		return fmt.Errorf("auth config: %w", err)
+	}
+
 	if err := checkDebug(&cfg.Debug); err != nil {
 		return fmt.Errorf("debug config: %w", err)
 	}

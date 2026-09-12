@@ -26,23 +26,38 @@ var (
 	ErrKidUnknown = errors.New("auth: kid not present in key set")
 )
 
-// Verification failure classes. The class is the only failure detail that may be
-// logged or rendered: it names the rule that rejected the credential without
-// carrying any part of the credential itself.
+// Class names the rule that rejected a credential. It is the only failure detail
+// that may be logged or rendered: it identifies the rule without carrying any
+// part of the credential itself.
+//
+// Class is a telemetry dimension — a log field today, a metric attribute
+// tomorrow — and never a control-flow discriminator. The 401/503 split is
+// carried entirely by the ErrInvalidCredential / ErrKeySetUnavailable sentinel
+// chain, so callers branch with errors.Is and read a Class only to report.
+type Class string
+
+// Verification failure classes, each naming one rule inside Verify.
 const (
-	ClassMalformed      = "malformed"
-	ClassAlgorithm      = "algorithm"
-	ClassKidMissing     = "kid_missing"
-	ClassKidUnknown     = "kid_unknown"
-	ClassSignature      = "signature"
-	ClassIssuer         = "issuer"
-	ClassAudience       = "audience"
-	ClassExpired        = "expired"
-	ClassNotYetValid    = "not_yet_valid"
-	ClassIssuedInFuture = "issued_in_future"
-	ClassMissingExpiry  = "missing_expiry"
-	ClassType           = "type"
+	ClassMalformed      Class = "malformed"
+	ClassAlgorithm      Class = "algorithm"
+	ClassKidMissing     Class = "kid_missing"
+	ClassKidUnknown     Class = "kid_unknown"
+	ClassSignature      Class = "signature"
+	ClassIssuer         Class = "issuer"
+	ClassAudience       Class = "audience"
+	ClassExpired        Class = "expired"
+	ClassNotYetValid    Class = "not_yet_valid"
+	ClassIssuedInFuture Class = "issued_in_future"
+	ClassMissingExpiry  Class = "missing_expiry"
+	ClassType           Class = "type"
 )
+
+// ClassKeySetUnavailable labels the key-set failure in logs and metrics. It is
+// deliberately NOT a VerificationError class: an unusable key set is a server
+// fault (503) reported through ErrKeySetUnavailable, not an invalid credential,
+// so it never reaches VerificationError.Class. It lives in the Class vocabulary
+// only so a log consumer filtering on these constants can find it.
+const ClassKeySetUnavailable Class = "key_set_unavailable"
 
 // VerificationError reports which verification rule rejected a credential.
 //
@@ -54,7 +69,7 @@ const (
 // must not pass a cause that embeds the credential.
 type VerificationError struct {
 	// Class is one of the Class* constants.
-	Class string
+	Class Class
 
 	// Cause is the underlying failure, for framework DEBUG logging only. It is
 	// deliberately absent from the errors.Is chain so no cause can reclassify
@@ -63,7 +78,7 @@ type VerificationError struct {
 }
 
 // NewVerificationError builds a VerificationError for the given class. Cause may be nil.
-func NewVerificationError(class string, cause error) *VerificationError {
+func NewVerificationError(class Class, cause error) *VerificationError {
 	return &VerificationError{Class: class, Cause: cause}
 }
 

@@ -24,19 +24,14 @@ func newTestIssuer() *authtesting.Issuer {
 	return authtesting.NewIssuer().WithClock(fixedClock)
 }
 
-// verifierConfig returns a config aligned with the fake issuer's defaults.
+// verifierConfig returns the config_test baseline retargeted at the fake
+// issuer, so a field added to validConfig cannot silently give the verifier
+// tests a different baseline than the config tests.
 func verifierConfig(iss *authtesting.Issuer) Config {
-	return Config{
-		Issuer:                 iss.IssuerURL(),
-		Audience:               []string{iss.Audience()},
-		JWKSURI:                testJWKSURI,
-		Algorithms:             []string{AlgRS256, AlgPS256},
-		Leeway:                 30 * time.Second,
-		JWKSTTL:                15 * time.Minute,
-		JWKSStaleCeiling:       time.Hour,
-		JWKSMinRefreshInterval: 30 * time.Second,
-		JWKSMaxBodyBytes:       1 << 20,
-	}
+	cfg := validConfig()
+	cfg.Issuer = iss.IssuerURL()
+	cfg.Audience = []string{iss.Audience()}
+	return cfg
 }
 
 // newTestVerifier builds a verifier over the issuer's public keys, with the
@@ -67,7 +62,7 @@ func (nilKeySource) PublicKey(_ context.Context, _ string) (*rsa.PublicKey, erro
 	return nil, nil
 }
 
-func assertRejectedWithClass(t *testing.T, err error, wantClass string) {
+func assertRejectedWithClass(t *testing.T, err error, wantClass Class) {
 	t.Helper()
 	require.Error(t, err)
 	var verr *VerificationError
@@ -213,7 +208,7 @@ func TestVerifierRejectsCredentialsByClass(t *testing.T) {
 		name       string
 		mutate     func(*Config)
 		credential func(*authtesting.Issuer) string
-		wantClass  string
+		wantClass  Class
 	}{
 		{
 			name:       "alg_not_allowed",
@@ -308,20 +303,13 @@ func TestVerifierRejectsCredentialsByClass(t *testing.T) {
 			wantClass: ClassType,
 		},
 		{
+			// One end-to-end malformed-claim row: the payload-level table covers
+			// the individual rules, this proves the route survives full Verify.
 			name: "non_numeric_expiry",
 			credential: func(i *authtesting.Issuer) string {
 				return i.MintWith(authtesting.MintOptions{Claims: authtesting.Claims{
 					OmitExpiry: true,
 					Extra:      map[string]any{"exp": "soon"},
-				}})
-			},
-			wantClass: ClassMalformed,
-		},
-		{
-			name: "non_numeric_not_before",
-			credential: func(i *authtesting.Issuer) string {
-				return i.MintWith(authtesting.MintOptions{Claims: authtesting.Claims{
-					Extra: map[string]any{"nbf": "later"},
 				}})
 			},
 			wantClass: ClassMalformed,
@@ -347,7 +335,7 @@ func TestVerifierRejectsMalformedClaimShapes(t *testing.T) {
 	tests := []struct {
 		name      string
 		payload   string
-		wantClass string
+		wantClass Class
 	}{
 		{
 			name:      "payload_is_not_json",

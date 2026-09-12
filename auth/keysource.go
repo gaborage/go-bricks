@@ -18,6 +18,8 @@ type KeySource interface {
 	PublicKey(ctx context.Context, kid string) (*rsa.PublicKey, error)
 }
 
+var _ KeySource = (*StaticKeySource)(nil)
+
 // StaticKeySource is an in-memory KeySource over a fixed set of keys. It suits
 // tests and consumers that pin issuer keys out of band instead of fetching JWKS.
 //

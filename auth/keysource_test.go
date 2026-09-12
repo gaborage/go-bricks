@@ -101,11 +101,3 @@ func TestStaticKeySourceIsSafeForConcurrentReads(t *testing.T) {
 	}
 	wg.Wait()
 }
-
-func TestStaticKeySourceSatisfiesKeySource(t *testing.T) {
-	var src KeySource = NewStaticKeySource(map[string]*rsa.PublicKey{"k1": testRSAPublicKey(t)})
-
-	_, err := src.PublicKey(context.Background(), "k1")
-
-	assert.NoError(t, err)
-}

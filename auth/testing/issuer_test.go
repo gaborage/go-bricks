@@ -170,15 +170,6 @@ func TestIssuerMintExplicitTimes(t *testing.T) {
 	assert.Equal(t, base.Add(time.Hour).Unix(), numericClaim(t, payload, "exp"))
 }
 
-func TestIssuerMintPS256(t *testing.T) {
-	iss := NewIssuer()
-
-	compact := iss.MintPS256()
-
-	assert.Equal(t, "PS256", decodeHeader(t, compact)["alg"])
-	verify(t, iss, compact)
-}
-
 func TestIssuerMintExpired(t *testing.T) {
 	iss := NewIssuer()
 	frozen := time.Unix(1700000000, 0)
@@ -203,24 +194,6 @@ func TestIssuerMintExpiredWithinLeeway(t *testing.T) {
 	assert.Less(t, numericClaim(t, payload, "iat"), exp)
 }
 
-func TestIssuerMintWrongAudience(t *testing.T) {
-	iss := NewIssuer()
-
-	payload := decodePayload(t, iss.MintWrongAudience())
-
-	assert.Equal(t, WrongAudience, payload["aud"])
-	assert.NotEqual(t, iss.Audience(), payload["aud"])
-}
-
-func TestIssuerMintWrongIssuer(t *testing.T) {
-	iss := NewIssuer()
-
-	payload := decodePayload(t, iss.MintWrongIssuer())
-
-	assert.Equal(t, WrongIssuer, payload["iss"])
-	assert.NotEqual(t, iss.IssuerURL(), payload["iss"])
-}
-
 func TestIssuerMintUnknownKeyID(t *testing.T) {
 	iss := NewIssuer()
 
@@ -230,45 +203,89 @@ func TestIssuerMintUnknownKeyID(t *testing.T) {
 	assert.NotContains(t, iss.PublicKeys(), UnknownKeyID)
 }
 
-func TestIssuerMintMissingKeyID(t *testing.T) {
-	iss := NewIssuer()
-
-	compact := iss.MintMissingKeyID()
-
-	assert.NotContains(t, decodeHeader(t, compact), "kid")
-	obj, err := jose.ParseSigned(compact, []jose.SignatureAlgorithm{jose.RS256})
-	require.NoError(t, err)
-	_, err = obj.Verify(iss.PublicKey(DefaultKeyID))
-	assert.NoError(t, err, "signature stays valid; only the kid header is absent")
-}
-
-func TestIssuerMintMissingExpiry(t *testing.T) {
-	iss := NewIssuer()
-
-	payload := decodePayload(t, iss.MintMissingExpiry())
-
-	assert.NotContains(t, payload, "exp")
-	assert.Contains(t, payload, "iat")
-}
-
-func TestIssuerMintFutureNotBefore(t *testing.T) {
-	iss := NewIssuer()
+// TestIssuerSingleShapeMintersProduceTheirShape covers the helpers that are a lone
+// MintWith call. Each case asserts the wire bytes it exists to produce; the loop
+// additionally proves every one stays signed by the active key.
+func TestIssuerSingleShapeMintersProduceTheirShape(t *testing.T) {
 	frozen := time.Unix(1700000000, 0)
-	iss.WithClock(func() time.Time { return frozen })
+	iss := NewIssuer().WithClock(func() time.Time { return frozen })
 
-	payload := decodePayload(t, iss.MintFutureNotBefore())
+	tests := []struct {
+		name   string
+		mint   func(*Issuer) string
+		assert func(t *testing.T, header, payload map[string]any)
+	}{
+		{
+			name: "ps256_switches_the_alg_header",
+			mint: (*Issuer).MintPS256,
+			assert: func(t *testing.T, header, _ map[string]any) {
+				assert.Equal(t, "PS256", header["alg"])
+				assert.Equal(t, DefaultKeyID, header["kid"])
+			},
+		},
+		{
+			name: "wrong_audience_addresses_another_api",
+			mint: (*Issuer).MintWrongAudience,
+			assert: func(t *testing.T, _, payload map[string]any) {
+				assert.Equal(t, WrongAudience, payload["aud"])
+				assert.NotEqual(t, DefaultAudience, payload["aud"])
+			},
+		},
+		{
+			name: "wrong_issuer_names_another_idp",
+			mint: (*Issuer).MintWrongIssuer,
+			assert: func(t *testing.T, _, payload map[string]any) {
+				assert.Equal(t, WrongIssuer, payload["iss"])
+				assert.NotEqual(t, DefaultIssuerURL, payload["iss"])
+			},
+		},
+		{
+			name: "missing_key_id_drops_the_kid_header",
+			mint: (*Issuer).MintMissingKeyID,
+			assert: func(t *testing.T, header, _ map[string]any) {
+				assert.NotContains(t, header, "kid")
+				assert.Equal(t, "RS256", header["alg"])
+			},
+		},
+		{
+			name: "missing_expiry_drops_exp_but_keeps_iat",
+			mint: (*Issuer).MintMissingExpiry,
+			assert: func(t *testing.T, _, payload map[string]any) {
+				assert.NotContains(t, payload, "exp")
+				assert.Contains(t, payload, "iat")
+			},
+		},
+		{
+			name: "future_not_before_is_not_yet_valid",
+			mint: (*Issuer).MintFutureNotBefore,
+			assert: func(t *testing.T, _, payload map[string]any) {
+				assert.Greater(t, numericClaim(t, payload, "nbf"), frozen.Unix())
+			},
+		},
+		{
+			name: "future_issued_at_is_dated_ahead",
+			mint: (*Issuer).MintFutureIssuedAt,
+			assert: func(t *testing.T, _, payload map[string]any) {
+				assert.Greater(t, numericClaim(t, payload, "iat"), frozen.Unix())
+			},
+		},
+	}
 
-	assert.Greater(t, numericClaim(t, payload, "nbf"), frozen.Unix())
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compact := tt.mint(iss)
 
-func TestIssuerMintFutureIssuedAt(t *testing.T) {
-	iss := NewIssuer()
-	frozen := time.Unix(1700000000, 0)
-	iss.WithClock(func() time.Time { return frozen })
+			header, payload := decode(t, compact)
+			assert.Equal(t, "JWT", header["typ"])
+			assert.Equal(t, DefaultSubject, payload["sub"])
+			tt.assert(t, header, payload)
 
-	payload := decodePayload(t, iss.MintFutureIssuedAt())
-
-	assert.Greater(t, numericClaim(t, payload, "iat"), frozen.Unix())
+			obj, err := jose.ParseSigned(compact, []jose.SignatureAlgorithm{jose.RS256, jose.PS256})
+			require.NoError(t, err, "wire shape stays a parseable compact JWS")
+			_, err = obj.Verify(iss.PublicKey(DefaultKeyID))
+			assert.NoError(t, err, "signed by the active key")
+		})
+	}
 }
 
 func TestIssuerMintAlgNone(t *testing.T) {
@@ -295,7 +312,7 @@ func TestIssuerMintES256(t *testing.T) {
 
 	obj, err := jose.ParseSigned(compact, []jose.SignatureAlgorithm{jose.ES256})
 	require.NoError(t, err)
-	_, err = obj.Verify(&iss.ecKey.PublicKey)
+	_, err = obj.Verify(&iss.ecdsaKey().PublicKey)
 	require.NoError(t, err)
 
 	_, err = jose.ParseSigned(compact, []jose.SignatureAlgorithm{jose.RS256, jose.PS256})

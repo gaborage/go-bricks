@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -52,6 +53,9 @@ type Verifier struct {
 // misconfigured service fails startup instead of booting with a widened
 // allowlist. A nil src is rejected for the same reason.
 //
+// Ownership: src stays the CALLER's. The returned verifier never closes it, so
+// a source with resources of its own must be shut down by whoever built it.
+//
 // A nil log is tolerated: the DEBUG rejection logging simply no-ops, which keeps
 // a verifier constructible in a test without wiring a logger. Verification
 // behavior is identical either way.
@@ -64,41 +68,48 @@ func NewVerifierWithKeySource(cfg Config, log logger.Logger, src KeySource) (*Ve
 	if src == nil {
 		return nil, NewConfigError(fieldPrefix+"keysource", "key source is required", nil)
 	}
-	allowed, err := allowedAlgorithms(cfg.Algorithms)
-	if err != nil {
-		return nil, err
-	}
 	return &Verifier{
 		cfg:     cfg,
 		log:     log,
 		src:     src,
-		allowed: allowed,
+		allowed: allowedAlgorithms(cfg.Algorithms),
 		now:     time.Now,
 	}, nil
+}
+
+// signatureAlgorithms is the single owner of the closed algorithm allowlist: it
+// maps each accepted configuration spelling onto its go-jose value. Config
+// validation and the parser allowlist both read it, so a third algorithm is one
+// entry here rather than two edits that must agree.
+var signatureAlgorithms = map[string]jose.SignatureAlgorithm{
+	AlgRS256: jose.RS256,
+	AlgPS256: jose.PS256,
 }
 
 // allowedAlgorithms maps the configured algorithm names onto go-jose values. The
 // allowlist is handed to the parser, so an unlisted "alg" dies before any key is
 // ever looked up.
-func allowedAlgorithms(names []string) ([]jose.SignatureAlgorithm, error) {
+//
+// It cannot fail: every caller runs Config.Validate first, and validateAlgorithms
+// rejects any name signatureAlgorithms does not own. Skipping an unknown name
+// rather than erroring keeps the residual failure closed — the allowlist can
+// only ever narrow, never widen.
+func allowedAlgorithms(names []string) []jose.SignatureAlgorithm {
 	allowed := make([]jose.SignatureAlgorithm, 0, len(names))
 	for _, name := range names {
-		switch name {
-		case AlgRS256:
-			allowed = append(allowed, jose.RS256)
-		case AlgPS256:
-			allowed = append(allowed, jose.PS256)
-		default:
-			return nil, NewConfigError(fieldPrefix+"algorithms", fmt.Sprintf("unsupported algorithm %q", name), nil)
+		if alg, ok := signatureAlgorithms[name]; ok {
+			allowed = append(allowed, alg)
 		}
 	}
-	return allowed, nil
+	return allowed
 }
 
-// Close releases the verifier's resources. This key-source-backed verifier owns
-// none, so it is a no-op returning nil and is safe to call any number of times.
-// It exists so consumers can call it unconditionally from a module Shutdown,
-// alongside the JWKS-backed verifier whose refresher does need stopping.
+// Close releases the resources the verifier itself CONSTRUCTED, and only those.
+// A KeySource handed in through NewVerifierWithKeySource belongs to the caller
+// and is never closed here; a verifier that builds its own refreshing JWKS
+// source owns it and must stop it. This key-source-backed verifier constructed
+// nothing, so Close is a no-op returning nil, safe to call any number of times.
+// It exists so consumers can call it unconditionally from a module Shutdown.
 func (v *Verifier) Close() error {
 	return nil
 }
@@ -151,7 +162,7 @@ func (v *Verifier) Verify(ctx context.Context, credential string) (Principal, er
 
 // classifyParseError separates "this is not a JWS the parser accepts" from "the
 // alg is not on the allowlist"; go-jose reports the latter as a typed error.
-func classifyParseError(err error) string {
+func classifyParseError(err error) Class {
 	var algErr *jose.ErrUnexpectedSignatureAlgorithm
 	if errors.As(err, &algErr) {
 		return ClassAlgorithm
@@ -166,10 +177,8 @@ func (v *Verifier) checkType(header *jose.Header) error {
 		return nil
 	}
 	typ, _ := header.ExtraHeaders[jose.HeaderType].(string)
-	for _, want := range v.cfg.Typ {
-		if strings.EqualFold(typ, want) {
-			return nil
-		}
+	if slices.ContainsFunc(v.cfg.Typ, func(want string) bool { return strings.EqualFold(typ, want) }) {
+		return nil
 	}
 	return v.reject(ClassType, errors.New("protected header typ is not accepted"))
 }
@@ -183,15 +192,13 @@ func (v *Verifier) checkType(header *jose.Header) error {
 // logged at DEBUG instead.
 func (v *Verifier) resolveKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 	key, err := v.src.PublicKey(ctx, kid)
-	if err != nil {
-		if errors.Is(err, ErrKidUnknown) {
-			return nil, v.reject(ClassKidUnknown, err)
-		}
-		v.debug("key_set_unavailable")
-		return nil, fmt.Errorf("auth: issuer key lookup failed: %w", ErrKeySetUnavailable)
+	if err != nil && errors.Is(err, ErrKidUnknown) {
+		return nil, v.reject(ClassKidUnknown, err)
 	}
-	if key == nil {
-		v.debug("key_set_unavailable")
+	// A nil key with a nil error violates the KeySource contract; treating it as
+	// an unusable key set keeps the failure closed instead of reaching Verify.
+	if err != nil || key == nil {
+		v.debug(ClassKeySetUnavailable)
 		return nil, fmt.Errorf("auth: issuer key lookup failed: %w", ErrKeySetUnavailable)
 	}
 	return key, nil
@@ -223,8 +230,8 @@ func (v *Verifier) principalFromPayload(payload []byte) (Principal, error) {
 		return Principal{}, err
 	}
 
-	subject, ok := stringClaim(claims, claimSubject)
-	if !ok {
+	subject, wellTyped := optionalStringClaim(claims, claimSubject)
+	if !wellTyped {
 		return Principal{}, v.reject(ClassMalformed, errors.New("sub is present but not a string"))
 	}
 
@@ -270,21 +277,20 @@ func (v *Verifier) validateTimeClaims(claims map[string]any) (expiresAt, issuedA
 	if present && issuedAt.After(now.Add(v.cfg.Leeway)) {
 		return time.Time{}, time.Time{}, v.reject(ClassIssuedInFuture, errors.New("iat is in the future"))
 	}
-	if !present {
-		issuedAt = time.Time{}
-	}
 	return expiresAt, issuedAt, nil
 }
 
-// stringClaim returns an optional string claim. An absent claim yields ("", true);
-// a present non-string yields ("", false).
-func stringClaim(claims map[string]any, name string) (value string, ok bool) {
+// optionalStringClaim reads a claim that may be absent but, when present, must be
+// a string. wellTyped is false only for a present value of the wrong type; an
+// absent claim yields ("", true). The bool reports TYPE, not presence — unlike
+// Principal.Claim, whose bool reports presence.
+func optionalStringClaim(claims map[string]any, name string) (value string, wellTyped bool) {
 	raw, present := claims[name]
 	if !present {
 		return "", true
 	}
-	value, ok = raw.(string)
-	return value, ok
+	value, wellTyped = raw.(string)
+	return value, wellTyped
 }
 
 // normalizeAudience accepts the two shapes RFC 7519 allows for "aud": a single
@@ -312,14 +318,9 @@ func normalizeAudience(raw any) ([]string, error) {
 
 // intersects reports whether presented and configured share at least one value.
 func intersects(presented, configured []string) bool {
-	for _, candidate := range presented {
-		for _, want := range configured {
-			if candidate == want {
-				return true
-			}
-		}
-	}
-	return false
+	return slices.ContainsFunc(presented, func(candidate string) bool {
+		return slices.Contains(configured, candidate)
+	})
 }
 
 // numericDate decodes an optional NumericDate claim. JSON numbers decode to
@@ -342,16 +343,16 @@ func numericDate(claims map[string]any, name string) (value time.Time, present b
 //
 // SECURITY: only the class reaches the log. cause is carried on the error for
 // framework inspection and is never rendered by VerificationError.Error().
-func (v *Verifier) reject(class string, cause error) error {
+func (v *Verifier) reject(class Class, cause error) error {
 	v.debug(class)
 	return NewVerificationError(class, cause)
 }
 
 // debug emits the class-only rejection breadcrumb, no-oping when no logger was
 // supplied.
-func (v *Verifier) debug(class string) {
+func (v *Verifier) debug(class Class) {
 	if v.log == nil {
 		return
 	}
-	v.log.Debug().Str("class", class).Msg("auth: credential rejected")
+	v.log.Debug().Str("class", string(class)).Msg("auth: credential rejected")
 }

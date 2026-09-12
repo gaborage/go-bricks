@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	jose "github.com/go-jose/go-jose/v4"
@@ -112,28 +113,47 @@ type Issuer struct {
 	keys      map[string]*rsa.PrivateKey
 	activeKID string
 	// foreign is a key pair that is never exposed through PublicKeys, so anything
-	// signed with it is a valid-looking credential the verifier must reject.
-	foreign *rsa.PrivateKey
-	ecKey   *ecdsa.PrivateKey
-	now     func() time.Time
+	// signed with it is a valid-looking credential the verifier must reject. Only a
+	// handful of helpers need it, so it is generated on first use — an RSA-2048
+	// keygen costs tens of milliseconds and most issuers never mint these shapes.
+	foreign     *rsa.PrivateKey
+	foreignOnce sync.Once
+	// ecKey backs the ES256 rejection shape and is likewise generated on first use.
+	ecKey     *ecdsa.PrivateKey
+	ecKeyOnce sync.Once
+	now       func() time.Time
 }
 
 // NewIssuer returns an issuer with one RSA-2048 key pair under DefaultKeyID.
-// It panics if key generation fails.
+// The unexposed key pair behind MintUnknownKeyID/MintBadSignature and the ECDSA
+// key behind MintES256 are generated lazily on first use. It panics if key
+// generation fails.
 func NewIssuer() *Issuer {
-	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		panic(fmt.Sprintf("auth/testing: generate ECDSA key: %v", err))
-	}
 	return &Issuer{
 		issuerURL: DefaultIssuerURL,
 		audience:  DefaultAudience,
 		keys:      map[string]*rsa.PrivateKey{DefaultKeyID: generateRSAKey()},
 		activeKID: DefaultKeyID,
-		foreign:   generateRSAKey(),
-		ecKey:     ecKey,
 		now:       time.Now,
 	}
+}
+
+// foreignKey returns the key pair PublicKeys never exposes, generating it once.
+func (i *Issuer) foreignKey() *rsa.PrivateKey {
+	i.foreignOnce.Do(func() { i.foreign = generateRSAKey() })
+	return i.foreign
+}
+
+// ecdsaKey returns the P-256 key used for ES256 credentials, generating it once.
+func (i *Issuer) ecdsaKey() *ecdsa.PrivateKey {
+	i.ecKeyOnce.Do(func() {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			panic(fmt.Sprintf("auth/testing: generate ECDSA key: %v", err))
+		}
+		i.ecKey = key
+	})
+	return i.ecKey
 }
 
 func generateRSAKey() *rsa.PrivateKey {
@@ -245,7 +265,7 @@ func (i *Issuer) signingKey(opts *MintOptions) any {
 		return opts.SignKey
 	}
 	if opts.Algorithm == AlgES256 {
-		return i.ecKey
+		return i.ecdsaKey()
 	}
 	kid := opts.KeyID
 	if kid == "" {
@@ -381,7 +401,7 @@ func (i *Issuer) MintWrongIssuer() string {
 // MintUnknownKeyID returns a credential whose kid header (UnknownKeyID) names a key
 // the verifier will not have; it is signed with an unexposed key pair.
 func (i *Issuer) MintUnknownKeyID() string {
-	return i.MintWith(MintOptions{KeyID: UnknownKeyID, SignKey: i.foreign})
+	return i.MintWith(MintOptions{KeyID: UnknownKeyID, SignKey: i.foreignKey()})
 }
 
 // MintMissingKeyID returns a credential with no kid header.
@@ -424,7 +444,7 @@ func (i *Issuer) MintWithType(typ string) string {
 // MintBadSignature returns a credential carrying the active kid but signed with a
 // key pair the verifier does not hold.
 func (i *Issuer) MintBadSignature() string {
-	return i.MintWith(MintOptions{SignKey: i.foreign})
+	return i.MintWith(MintOptions{SignKey: i.foreignKey()})
 }
 
 // MintCorruptSignature returns a valid credential with one character of the

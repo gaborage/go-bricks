@@ -94,6 +94,20 @@ const (
 	streamsURITLSScheme = "rabbitmq-stream+tls"
 )
 
+// Bearer-credential verification (auth.jwt.*) defaults and the closed set of
+// signature algorithms the verifier accepts. The algorithm spellings are
+// exported because the auth package derives its own AlgRS256/AlgPS256 from
+// them, so the allowlist config load enforces and the one the verifier enforces
+// cannot drift apart.
+const (
+	// AlgorithmRS256 is RSASSA-PKCS1-v1_5 with SHA-256.
+	AlgorithmRS256 = "RS256"
+	// AlgorithmPS256 is RSASSA-PSS with SHA-256.
+	AlgorithmPS256 = "PS256"
+
+	defaultAuthJWKSMaxBodyBytes = int64(1 << 20) // 1 MiB cap on a fetched key set body
+)
+
 // Cache manager defaults
 const (
 	defaultCacheMaxSize     = 100                    // Maximum tenant cache instances
@@ -224,6 +238,17 @@ const (
 )
 
 const (
+	fieldAuth                 = "auth"
+	fieldAuthAudience         = "auth.jwt.audience"
+	fieldAuthJWKSURI          = "auth.jwt.jwksuri"
+	fieldAuthAlgorithms       = "auth.jwt.algorithms"
+	fieldAuthLeeway           = "auth.jwt.leeway"
+	fieldAuthTyp              = "auth.jwt.typ"
+	fieldAuthJWKSTTL          = "auth.jwt.jwks.ttl"
+	fieldAuthJWKSStaleCeiling = "auth.jwt.jwks.staleceiling"
+	fieldAuthJWKSMinRefresh   = "auth.jwt.jwks.minrefreshinterval"
+	fieldAuthJWKSMaxBodyBytes = "auth.jwt.jwks.maxbodybytes"
+
 	fieldMessagingStreamsURI     = "messaging.streams.uri"
 	fieldMessagingSealActive     = "messaging.seal.active"
 	fieldMessagingPublishTimeout = "messaging.publishtimeout"
