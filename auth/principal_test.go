@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -90,4 +91,70 @@ func TestPrincipalClaimsAreSharedNotCopied(t *testing.T) {
 	value, ok := second.Claim("scope")
 	require.True(t, ok)
 	assert.Equal(t, "mutated", value)
+}
+
+// TestPrincipalStringElidesTheSubjectAndClaims pins the elision seam: a
+// Principal reaching fmt or a structured logger must never render the subject or
+// a claim value. Only the verbs that consult fmt.Stringer are covered; %#v
+// bypasses Stringer by design and is documented as such.
+func TestPrincipalStringElidesTheSubjectAndClaims(t *testing.T) {
+	p := Principal{
+		Subject:   "super-secret-subject",
+		Issuer:    "https://issuer.example.com",
+		Audience:  []string{"api://orders"},
+		ExpiresAt: time.Unix(1767268800, 0).UTC(),
+		IssuedAt:  time.Unix(1767265200, 0).UTC(),
+		Claims: map[string]any{
+			"sub":   "super-secret-subject",
+			"email": "person@example.com",
+			"scope": "orders:read",
+		},
+	}
+
+	// render goes through a variable format so the verb under test survives:
+	// spelling fmt.Sprintf("%v", p) inline is rewritten to p.String() by
+	// gocritic's redundantSprint, which is the very substitution this test must
+	// not make.
+	render := func(format string, value any) string { return fmt.Sprintf(format, value) }
+	renderings := map[string]string{
+		"%v":        render("%v", p),
+		"%s":        render("%s", p),
+		"%q":        render("%q", p),
+		"%+v":       render("%+v", p),
+		"String":    p.String(),
+		"pointer%v": render("%v", &p),
+		"pointer%s": render("%s", &p),
+	}
+
+	for verb, rendered := range renderings {
+		assert.NotContains(t, rendered, "super-secret-subject", verb)
+		assert.NotContains(t, rendered, "person@example.com", verb)
+		assert.NotContains(t, rendered, "orders:read", verb)
+		assert.Contains(t, rendered, "https://issuer.example.com", verb)
+		assert.Contains(t, rendered, "elided", verb)
+	}
+}
+
+func TestPrincipalStringRendersTheNonSensitiveFields(t *testing.T) {
+	p := Principal{
+		Issuer:    "https://issuer.example.com",
+		Audience:  []string{"api://orders", "api://billing"},
+		ExpiresAt: time.Unix(1767268800, 0).UTC(),
+		Claims:    map[string]any{"a": 1, "b": 2},
+	}
+
+	rendered := p.String()
+
+	assert.Contains(t, rendered, "api://orders")
+	assert.Contains(t, rendered, "api://billing")
+	assert.Contains(t, rendered, "2026-01-01T12:00:00Z")
+	assert.Contains(t, rendered, "claims: <elided:2>")
+	assert.Contains(t, rendered, "subject: <elided>")
+}
+
+// TestPrincipalStringOnTheZeroValue pins that the elision seam never panics on
+// an empty Principal, which is what a rejected verification returns.
+func TestPrincipalStringOnTheZeroValue(t *testing.T) {
+	assert.NotPanics(t, func() { _ = Principal{}.String() })
+	assert.Contains(t, Principal{}.String(), "claims: <elided:0>")
 }

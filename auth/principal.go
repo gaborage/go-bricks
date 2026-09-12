@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -42,6 +43,26 @@ type Principal struct {
 	// on every request while advertising a safety it does not provide for those
 	// nested values.
 	Claims map[string]any
+}
+
+// String renders the Principal without its subject or any claim value.
+//
+// SECURITY: this is the elision seam. A Principal travels on the request
+// context, so it lands in a downstream log.Info().Interface("principal", p) or
+// fmt.Errorf("%v", p) by accident; the logger's SensitiveDataFilter matches
+// field NAMES and cannot help, because "Subject" is not a sensitive name and a
+// claim key is attacker-chosen. Rendering therefore drops Subject and Claims and
+// keeps only the already-public issuer, audience and expiry.
+//
+// It covers every verb that consults fmt.Stringer — %v, %s, %q, %+v — for both
+// Principal and *Principal, since the receiver is a value. It does NOT cover
+// %#v, which prints the Go-syntax representation by design and bypasses
+// Stringer, nor a struct-walking encoder such as json.Marshal or the logger's
+// reflective filter. Those render the fields directly and must not be pointed at
+// a Principal.
+func (p Principal) String() string {
+	return fmt.Sprintf("auth.Principal{issuer: %q, audience: %q, expiresAt: %s, subject: <elided>, claims: <elided:%d>}",
+		p.Issuer, p.Audience, p.ExpiresAt.Format(time.RFC3339), len(p.Claims))
 }
 
 // Claim returns the raw claim stored under name, and whether it was present.

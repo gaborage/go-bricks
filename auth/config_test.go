@@ -47,6 +47,16 @@ func TestConfigValidateAcceptsAZeroLeeway(t *testing.T) {
 	assert.NoError(t, cfg.Validate())
 }
 
+// TestConfigValidateAcceptsTheLeewayCeiling pins the boundary: the cap itself is
+// honored, only a value above it is rejected.
+func TestConfigValidateAcceptsTheLeewayCeiling(t *testing.T) {
+	cfg := validConfig()
+	cfg.Leeway = maxLeeway
+
+	assert.Equal(t, 5*time.Minute, maxLeeway)
+	assert.NoError(t, cfg.Validate())
+}
+
 // TestConfigValidateIgnoresTheJWKSGroup pins the split: a verifier built over a
 // pinned key source makes no network call, so neither the endpoint nor the
 // fetch tuning is its precondition.
@@ -121,6 +131,20 @@ func TestConfigValidateRejectsInvalidConfigs(t *testing.T) {
 			mutate:  func(c *Config) { c.Leeway = -time.Second },
 			field:   "auth.jwt.leeway",
 			message: "leeway must not be negative",
+		},
+		{
+			// An unbounded leeway makes every expired credential verify
+			// indefinitely: 876000h once accepted a credential expired a century ago.
+			name:    "leeway_past_the_ceiling",
+			mutate:  func(c *Config) { c.Leeway = maxLeeway + time.Second },
+			field:   "auth.jwt.leeway",
+			message: "leeway must not exceed",
+		},
+		{
+			name:    "absurd_leeway",
+			mutate:  func(c *Config) { c.Leeway = 876000 * time.Hour },
+			field:   "auth.jwt.leeway",
+			message: "leeway must not exceed",
 		},
 		{
 			name:    "blank_typ_entry",

@@ -3,13 +3,25 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-const testCredential = "eyJhbGciOiJSUzI1NiIsImtpZCI6ImsxIn0.eyJzdWIiOiJ1c2VyLTQyIn0.c2lnbmF0dXJl"
+// testCredentialSignature is the segment a leak would most obviously expose; it
+// is asserted separately from the whole credential.
+const testCredentialSignature = "not-a-real-signature"
+
+// testCredential stands in for a bearer credential in the leak assertions. It is
+// assembled at runtime and deliberately NOT JWT-shaped: a committed
+// base64url JWT literal trips gosec G101 and the review mirror's secret
+// scanner, and nothing here needs the value to parse — these tests assert only
+// that an error never renders it.
+func testCredential() string {
+	return strings.Join([]string{"header", "payload", testCredentialSignature}, ".")
+}
 
 func TestKeySetUnavailableIsNotAnInvalidCredential(t *testing.T) {
 	require.NotErrorIs(t, ErrKeySetUnavailable, ErrInvalidCredential)
@@ -45,14 +57,15 @@ func TestVerificationErrorUnwrapReturnsTheSentinel(t *testing.T) {
 
 func TestVerificationErrorNeverRendersTheCredential(t *testing.T) {
 	subject := "user-42"
-	err := NewVerificationError(ClassSignature, fmt.Errorf("token %s rejected for sub %s", testCredential, subject))
+	credential := testCredential()
+	err := NewVerificationError(ClassSignature, fmt.Errorf("token %s rejected for sub %s", credential, subject))
 
 	rendered := err.Error()
-	assert.NotContains(t, rendered, testCredential)
+	assert.NotContains(t, rendered, credential)
 	assert.NotContains(t, rendered, subject)
-	assert.NotContains(t, rendered, "c2lnbmF0dXJl")
-	assert.NotContains(t, fmt.Sprintf("%v", err), testCredential)
-	assert.NotContains(t, fmt.Sprintf("%+v", err), testCredential)
+	assert.NotContains(t, rendered, testCredentialSignature)
+	assert.NotContains(t, fmt.Sprintf("%v", err), credential)
+	assert.NotContains(t, fmt.Sprintf("%+v", err), credential)
 }
 
 func TestConfigErrorRendersFieldAndMessage(t *testing.T) {

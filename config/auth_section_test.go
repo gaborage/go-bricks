@@ -89,6 +89,38 @@ func TestCheckAuthRejectsInvalidSections(t *testing.T) {
 			message: errMustBeNonNegative,
 		},
 		{
+			// Leeway absorbs clock skew only. Unbounded, it makes every expired
+			// credential verify indefinitely.
+			name:    "leeway_past_the_ceiling",
+			mutate:  func(c *AuthConfig) { c.JWT.Leeway = MaxAuthLeeway + time.Second },
+			field:   fieldAuthLeeway,
+			message: "must not exceed",
+		},
+		{
+			name:    "absurd_leeway",
+			mutate:  func(c *AuthConfig) { c.JWT.Leeway = 876000 * time.Hour },
+			field:   fieldAuthLeeway,
+			message: "must not exceed",
+		},
+		{
+			name: "zero_min_refresh_interval_with_a_jwks_uri",
+			mutate: func(c *AuthConfig) {
+				c.JWT.JWKSURI = testAuthJWKSURI
+				c.JWT.JWKS.MinRefreshInterval = 0
+			},
+			field:   fieldAuthJWKSMinRefresh,
+			message: errMustBePositive,
+		},
+		{
+			name: "zero_max_body_bytes_with_a_jwks_uri",
+			mutate: func(c *AuthConfig) {
+				c.JWT.JWKSURI = testAuthJWKSURI
+				c.JWT.JWKS.MaxBodyBytes = 0
+			},
+			field:   fieldAuthJWKSMaxBodyBytes,
+			message: errMustBePositive,
+		},
+		{
 			name:    "blank_typ_entry",
 			mutate:  func(c *AuthConfig) { c.JWT.Typ = []string{""} },
 			field:   fieldAuthTyp,
@@ -185,4 +217,26 @@ func TestValidateRunsCheckAuth(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "auth config")
 	assert.Contains(t, err.Error(), fieldAuthAlgorithms)
+}
+
+// TestCheckAuthAcceptsTheLeewayCeiling pins the boundary: the cap itself loads,
+// only a value above it is rejected.
+func TestCheckAuthAcceptsTheLeewayCeiling(t *testing.T) {
+	cfg := defaultedAuth()
+	cfg.JWT.Leeway = MaxAuthLeeway
+
+	assert.Equal(t, 5*time.Minute, MaxAuthLeeway)
+	assert.NoError(t, checkAuth(cfg))
+}
+
+// TestCheckAuthLeavesTheFetchTuningToAPinnedKeyDeployment pins the scope of the
+// positivity rule: the refresh floor and the body cap are only live once an
+// endpoint is configured, so a pinned-key deployment that never fetches is not
+// forced to carry them.
+func TestCheckAuthLeavesTheFetchTuningToAPinnedKeyDeployment(t *testing.T) {
+	cfg := defaultedAuth()
+	cfg.JWT.JWKS.MinRefreshInterval = 0
+	cfg.JWT.JWKS.MaxBodyBytes = 0
+
+	assert.NoError(t, checkAuth(cfg))
 }

@@ -32,6 +32,9 @@ func checkAuth(cfg *AuthConfig) error {
 	if jwt.Leeway < 0 {
 		return NewValidationError(fieldAuthLeeway, errMustBeNonNegative)
 	}
+	if jwt.Leeway > MaxAuthLeeway {
+		return NewValidationError(fieldAuthLeeway, fmt.Sprintf("must not exceed %v", MaxAuthLeeway))
+	}
 
 	if err := checkNonBlankEntries(fieldAuthTyp, jwt.Typ); err != nil {
 		return err
@@ -72,6 +75,11 @@ func checkAuthAlgorithms(algorithms []string) error {
 // optional (pinned-key deployments set none) but, when set, must be an https
 // endpoint: the key set is the verifier's trust anchor, so plaintext transport
 // hands signature verification to the network.
+// A configured endpoint additionally makes the refresh floor and the body cap
+// live: zero would mean "refresh without limit" and "read a body without limit",
+// which no key-set fetch can honor. Both are therefore required to be positive
+// exactly when a URI is set — a pinned-key deployment fetches nothing, and the
+// framework defaults fill both in for everyone else.
 func checkAuthJWKS(cfg *AuthJWKSConfig, uri string) error {
 	if strings.TrimSpace(uri) != "" {
 		parsed, err := url.Parse(uri)
@@ -80,6 +88,12 @@ func checkAuthJWKS(cfg *AuthJWKSConfig, uri string) error {
 		}
 		if parsed.Scheme != "https" {
 			return NewValidationError(fieldAuthJWKSURI, "must use the https scheme")
+		}
+		if cfg.MinRefreshInterval <= 0 {
+			return NewValidationError(fieldAuthJWKSMinRefresh, errMustBePositive)
+		}
+		if cfg.MaxBodyBytes <= 0 {
+			return NewValidationError(fieldAuthJWKSMaxBodyBytes, errMustBePositive)
 		}
 	}
 

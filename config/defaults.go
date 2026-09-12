@@ -106,6 +106,12 @@ const (
 	AlgorithmPS256 = "PS256"
 
 	defaultAuthJWKSMaxBodyBytes = int64(1 << 20) // 1 MiB cap on a fetched key set body
+
+	// MaxAuthLeeway caps auth.jwt.leeway. Leeway exists to absorb clock skew
+	// between the issuer and this service, so the conventional OIDC allowance of
+	// five minutes is its ceiling: a larger value widens the exp/nbf/iat windows
+	// into an indefinite acceptance of expired credentials.
+	MaxAuthLeeway = 5 * time.Minute
 )
 
 // Cache manager defaults

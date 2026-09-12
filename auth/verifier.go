@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -14,6 +15,19 @@ import (
 
 	"github.com/gaborage/go-bricks/logger"
 )
+
+// maxCredentialBytes bounds the credential handed to the parser. It is a DoS
+// bound, not a spec limit: base64 decoding and JSON parsing a megabyte-sized
+// input before rejecting it is work an attacker gets for free. 64 KiB is far
+// above any realistic bearer credential.
+const maxCredentialBytes = 65536
+
+// maxNumericDate bounds a NumericDate claim, in seconds. int64(float64) is
+// implementation-defined once the value leaves int64 range — it saturates on
+// arm64 and wraps on amd64 — so an out-of-range "nbf" or "iat" would be
+// platform-dependent rather than rejected. 1e15 seconds is ~31 million years,
+// past any date a credential can mean and inside float64's exact-integer range.
+const maxNumericDate = 1e15
 
 // Registered claim names read during verification.
 const (
@@ -130,11 +144,20 @@ func (v *Verifier) Verify(ctx context.Context, credential string) (Principal, er
 	if strings.TrimSpace(credential) == "" {
 		return Principal{}, ErrMissingCredential
 	}
+	if len(credential) > maxCredentialBytes {
+		return Principal{}, v.reject(ClassMalformed, errors.New("credential exceeds the maximum accepted length"))
+	}
 
-	parsed, err := jose.ParseSigned(credential, v.allowed)
+	// ParseSignedCompact, never ParseSigned: the latter dispatches to the JSON
+	// serialization for an input starting with "{", which would admit an
+	// attacker-controlled unprotected header and an unbounded signatures array
+	// into the crypto layer. This package accepts the compact form only, so
+	// "alg" can come from nowhere but the protected header.
+	parsed, err := jose.ParseSignedCompact(credential, v.allowed)
 	if err != nil {
 		return Principal{}, v.reject(classifyParseError(err), err)
 	}
+	// Belt and braces behind the compact parser, which yields exactly one signature.
 	if len(parsed.Signatures) != 1 {
 		return Principal{}, v.reject(ClassMalformed, fmt.Errorf("expected exactly one signature, got %d", len(parsed.Signatures)))
 	}
@@ -325,7 +348,9 @@ func intersects(presented, configured []string) bool {
 
 // numericDate decodes an optional NumericDate claim. JSON numbers decode to
 // float64, so a fractional value keeps its sub-second part. A present
-// non-numeric value is an error, never a panic.
+// non-numeric value is an error, never a panic, and so is one outside
+// maxNumericDate: the int64 conversion below is implementation-defined past
+// that range, which would make the exp/nbf/iat comparisons platform-dependent.
 func numericDate(claims map[string]any, name string) (value time.Time, present bool, err error) {
 	raw, ok := claims[name]
 	if !ok || raw == nil {
@@ -334,6 +359,9 @@ func numericDate(claims map[string]any, name string) (value time.Time, present b
 	seconds, ok := raw.(float64)
 	if !ok {
 		return time.Time{}, true, fmt.Errorf("%s is not a numeric date", name)
+	}
+	if math.IsNaN(seconds) || math.Abs(seconds) > maxNumericDate {
+		return time.Time{}, true, fmt.Errorf("%s is out of the accepted numeric date range", name)
 	}
 	whole, frac := int64(seconds), seconds-float64(int64(seconds))
 	return time.Unix(whole, int64(frac*float64(time.Second))), true, nil

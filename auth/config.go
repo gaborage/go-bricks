@@ -19,6 +19,12 @@ const (
 	AlgPS256 = config.AlgorithmPS256
 )
 
+// maxLeeway caps auth.jwt.leeway. Leeway absorbs clock skew between the issuer
+// and this service and nothing else, so it is bounded: an unbounded leeway makes
+// every expired credential verify indefinitely. The bound is the config
+// package's, so the load-time check and this one cannot drift apart.
+const maxLeeway = config.MaxAuthLeeway
+
 // Config-error field prefixes, kept section-qualified so a startup failure names
 // the YAML key the operator must fix.
 const (
@@ -103,6 +109,9 @@ func supportedAlgorithms() []string {
 func (c *Config) validateLeeway() *ConfigError {
 	if c.Leeway < 0 {
 		return NewConfigError(fieldPrefix+"leeway", "leeway must not be negative", nil)
+	}
+	if c.Leeway > maxLeeway {
+		return NewConfigError(fieldPrefix+"leeway", fmt.Sprintf("leeway must not exceed %v", maxLeeway), nil)
 	}
 	return nil
 }

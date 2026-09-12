@@ -1104,7 +1104,9 @@ type AuthJWTConfig struct {
 	// Default: RS256,PS256.
 	Algorithms []string `koanf:"algorithms" json:"algorithms" yaml:"algorithms" toml:"algorithms" mapstructure:"algorithms"`
 
-	// Leeway absorbs clock skew on the exp/nbf/iat comparisons. Default: 30s.
+	// Leeway absorbs clock skew on the exp/nbf/iat comparisons, and nothing
+	// else: it is capped at MaxAuthLeeway, because an unbounded leeway accepts
+	// expired credentials indefinitely. Default: 30s.
 	Leeway time.Duration `koanf:"leeway" json:"leeway" yaml:"leeway" toml:"leeway" mapstructure:"leeway"`
 
 	// Typ, when set, constrains the JOSE header "typ": it must match one entry,

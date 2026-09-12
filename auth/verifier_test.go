@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rsa"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -512,4 +514,151 @@ func TestVerifierAcceptsACredentialSignedByARotatedKey(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, authtesting.DefaultSubject, principal.Subject)
+}
+
+// jsonSerialization rewrites a compact JWS into one of the JWS JSON
+// Serialization shapes, which the package must refuse: the JSON form carries an
+// attacker-controlled unprotected header and an unbounded signatures array, and
+// go-jose's ParseSigned dispatches to it for any input starting with "{".
+func jsonSerialization(t *testing.T, compact, shape string) string {
+	t.Helper()
+	parts := strings.Split(compact, ".")
+	require.Len(t, parts, 3)
+	header, payload, signature := parts[0], parts[1], parts[2]
+
+	switch shape {
+	case "general":
+		return fmt.Sprintf(`{"payload":%q,"signatures":[{"protected":%q,"signature":%q}]}`, payload, header, signature)
+	case "flattened":
+		return fmt.Sprintf(`{"payload":%q,"protected":%q,"signature":%q}`, payload, header, signature)
+	case "leading_whitespace":
+		return " \n\t" + jsonSerialization(t, compact, "general")
+	default:
+		t.Fatalf("unknown shape %q", shape)
+		return ""
+	}
+}
+
+// TestVerifierRejectsTheJWSJSONSerialization pins the compact-only rule. The
+// credential rewritten here verifies in its compact form, so a revert to
+// jose.ParseSigned turns every row green — which is exactly the hole.
+func TestVerifierRejectsTheJWSJSONSerialization(t *testing.T) {
+	for _, shape := range []string{"general", "flattened", "leading_whitespace"} {
+		t.Run(shape, func(t *testing.T) {
+			iss := newTestIssuer()
+			v := newTestVerifier(t, iss, nil)
+			compact := iss.Mint(authtesting.Claims{})
+			_, err := v.Verify(context.Background(), compact)
+			require.NoError(t, err, "the compact form must verify, or the rejection below proves nothing")
+
+			_, err = v.Verify(context.Background(), jsonSerialization(t, compact, shape))
+
+			assertRejectedWithClass(t, err, ClassMalformed)
+		})
+	}
+}
+
+// TestVerifierRejectsAnOversizedCredential pins the DoS bound: the input is
+// refused on length, before any base64 decoding or JSON parsing.
+func TestVerifierRejectsAnOversizedCredential(t *testing.T) {
+	v := newTestVerifier(t, newTestIssuer(), nil)
+
+	_, err := v.Verify(context.Background(), strings.Repeat("a", maxCredentialBytes+1))
+
+	assertRejectedWithClass(t, err, ClassMalformed)
+}
+
+func TestVerifierAcceptsACredentialAtTheLengthBound(t *testing.T) {
+	iss := newTestIssuer()
+	v := newTestVerifier(t, iss, nil)
+	credential := iss.Mint(authtesting.Claims{})
+	require.LessOrEqual(t, len(credential), maxCredentialBytes)
+
+	_, err := v.Verify(context.Background(), credential)
+
+	require.NoError(t, err)
+}
+
+// TestVerifierRejectsOutOfRangeNumericDates pins that an out-of-range exp, nbf
+// or iat is malformed rather than platform-dependent: int64(float64) saturates
+// on arm64 and wraps on amd64, so without the bound "nbf": 1e300 silently passes
+// its check on one of the two.
+func TestVerifierRejectsOutOfRangeNumericDates(t *testing.T) {
+	const validExp = 1767268800
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{
+			name:    "exp_far_future",
+			payload: `{"iss":"https://issuer.test/","aud":"go-bricks-test","exp":1e300}`,
+		},
+		{
+			name:    "exp_far_past",
+			payload: `{"iss":"https://issuer.test/","aud":"go-bricks-test","exp":-1e300}`,
+		},
+		{
+			name:    "nbf_far_future",
+			payload: fmt.Sprintf(`{"iss":"https://issuer.test/","aud":"go-bricks-test","exp":%d,"nbf":1e300}`, validExp),
+		},
+		{
+			name:    "nbf_far_past",
+			payload: fmt.Sprintf(`{"iss":"https://issuer.test/","aud":"go-bricks-test","exp":%d,"nbf":-1e300}`, validExp),
+		},
+		{
+			name:    "iat_far_future",
+			payload: fmt.Sprintf(`{"iss":"https://issuer.test/","aud":"go-bricks-test","exp":%d,"iat":1e300}`, validExp),
+		},
+		{
+			name:    "iat_far_past",
+			payload: fmt.Sprintf(`{"iss":"https://issuer.test/","aud":"go-bricks-test","exp":%d,"iat":-1e300}`, validExp),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := newTestVerifier(t, newTestIssuer(), nil)
+			v.now = func() time.Time { return time.Unix(validExp-3600, 0) }
+
+			_, err := v.principalFromPayload([]byte(tt.payload))
+
+			assertRejectedWithClass(t, err, ClassMalformed)
+		})
+	}
+}
+
+func TestVerifierAcceptsANumericDateAtTheBound(t *testing.T) {
+	v := newTestVerifier(t, newTestIssuer(), nil)
+	payload := fmt.Sprintf(`{"iss":"https://issuer.test/","aud":"go-bricks-test","exp":%d,"iat":%d}`, int64(maxNumericDate), 0)
+
+	principal, err := v.principalFromPayload([]byte(payload))
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(maxNumericDate), principal.ExpiresAt.Unix())
+}
+
+// TestNewVerifierWithKeySourceRejectsAnUnboundedLeeway pins that the leeway cap
+// binds at the constructor: an unbounded leeway would make MintExpired verify.
+func TestNewVerifierWithKeySourceRejectsAnUnboundedLeeway(t *testing.T) {
+	iss := newTestIssuer()
+	cfg := verifierConfig(iss)
+	cfg.Leeway = 876000 * time.Hour
+
+	v, err := NewVerifierWithKeySource(cfg, nil, NewStaticKeySource(iss.PublicKeys()))
+
+	assert.Nil(t, v)
+	var cerr *ConfigError
+	require.ErrorAs(t, err, &cerr)
+	assert.Equal(t, "auth.jwt.leeway", cerr.Field)
+}
+
+// TestVerifierRejectsAnExpiredCredentialAtTheMaximumLeeway pins the consequence
+// of the cap: even the widest configurable window still expires a credential.
+func TestVerifierRejectsAnExpiredCredentialAtTheMaximumLeeway(t *testing.T) {
+	iss := newTestIssuer()
+	v := newTestVerifier(t, iss, func(c *Config) { c.Leeway = maxLeeway })
+
+	_, err := v.Verify(context.Background(), iss.MintExpired())
+
+	assertRejectedWithClass(t, err, ClassExpired)
 }

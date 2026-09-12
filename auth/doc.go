@@ -16,4 +16,15 @@
 // the "sub" claim. Verification failures are reported by class (see
 // VerificationError), which is safe to log at DEBUG; the credential string,
 // signature bytes and subject never appear in an error message.
+//
+// VerificationError.Cause is diagnostic detail for framework DEBUG logging. Its
+// contents come from whichever library rejected the credential, so they are not
+// part of this package's compatibility promise and may change without notice.
+// Callers must not render a Cause into a response body: log the Class instead,
+// which is the only failure detail the package guarantees is safe to expose.
+//
+// A Principal must likewise not be rendered field by field. Its String method
+// elides the subject and every claim value, and covers the fmt verbs that
+// consult fmt.Stringer (%v, %s, %q, %+v); %#v and struct-walking encoders such
+// as json.Marshal bypass it and would print the subject.
 package auth
