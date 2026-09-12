@@ -139,6 +139,12 @@ func TestCheckAuthRejectsInvalidSections(t *testing.T) {
 			message: "must use the https scheme",
 		},
 		{
+			name:    "host_less_jwks_uri",
+			mutate:  func(c *AuthConfig) { c.JWT.JWKSURI = "https:///jwks.json" },
+			field:   fieldAuthJWKSURI,
+			message: "must include a hostname",
+		},
+		{
 			name:    "unparsable_jwks_uri",
 			mutate:  func(c *AuthConfig) { c.JWT.JWKSURI = "https://issuer.example.com/%zz" },
 			field:   fieldAuthJWKSURI,

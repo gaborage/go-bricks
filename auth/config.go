@@ -158,5 +158,8 @@ func (c *Config) validateJWKSURI() *ConfigError {
 	if parsed.Scheme != "https" {
 		return NewConfigError(field, "jwks uri must use the https scheme", nil)
 	}
+	if parsed.Hostname() == "" {
+		return NewConfigError(field, "jwks uri must include a hostname", nil)
+	}
 	return nil
 }

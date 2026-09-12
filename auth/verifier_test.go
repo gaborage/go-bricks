@@ -1,10 +1,13 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/rsa"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -465,15 +468,58 @@ func TestVerifierNeverRendersTheCredentialOrSubject(t *testing.T) {
 	assert.NotContains(t, err.Error(), "super-secret-subject")
 }
 
-func TestVerifierLogsTheRejectionClassOnly(t *testing.T) {
-	iss := newTestIssuer()
-	v, err := NewVerifierWithKeySource(verifierConfig(iss), logger.New("debug", false), NewStaticKeySource(iss.PublicKeys()))
+// captureStdout redirects os.Stdout for the duration of fn and returns what was
+// written to it. logger.New writes there, so this is how the package reads back
+// what a rejection actually logged.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	original := os.Stdout
+	r, w, err := os.Pipe()
 	require.NoError(t, err)
-	v.now = fixedClock
+	defer func() { os.Stdout = original }()
+	defer r.Close()
+	os.Stdout = w
 
-	_, err = v.Verify(context.Background(), iss.MintExpired())
+	var buf bytes.Buffer
+	copied := make(chan error, 1)
+	go func() {
+		_, copyErr := io.Copy(&buf, r)
+		copied <- copyErr
+	}()
 
-	assertRejectedWithClass(t, err, ClassExpired)
+	fn()
+
+	require.NoError(t, w.Close())
+	require.NoError(t, <-copied)
+	return buf.String()
+}
+
+func TestVerifierLogsTheRejectionClassOnly(t *testing.T) {
+	const subject = "log-secret-subject"
+	iss := newTestIssuer()
+	credential := iss.MintWith(authtesting.MintOptions{Claims: authtesting.Claims{
+		Subject:   subject,
+		IssuedAt:  verifierNow.Add(-2 * time.Hour),
+		ExpiresAt: verifierNow.Add(-time.Hour),
+	}})
+
+	// The logger binds os.Stdout at construction, so it has to be built inside
+	// the capture for the rejection line to land in the buffer.
+	var verifyErr error
+	out := captureStdout(t, func() {
+		v, err := NewVerifierWithKeySource(verifierConfig(iss), logger.New("debug", false), NewStaticKeySource(iss.PublicKeys()))
+		require.NoError(t, err)
+		v.now = fixedClock
+		_, verifyErr = v.Verify(context.Background(), credential)
+	})
+
+	assertRejectedWithClass(t, verifyErr, ClassExpired)
+	assert.Contains(t, out, string(ClassExpired))
+	assert.NotContains(t, out, subject)
+	assert.NotContains(t, out, credential)
+	for i, segment := range strings.Split(credential, ".") {
+		assert.NotContainsf(t, out, segment, "log output leaked credential segment %d", i)
+	}
 }
 
 func TestVerifierRejectsAFractionalExpiryInThePast(t *testing.T) {

@@ -80,14 +80,27 @@ func checkAuthAlgorithms(algorithms []string) error {
 // which no key-set fetch can honor. Both are therefore required to be positive
 // exactly when a URI is set — a pinned-key deployment fetches nothing, and the
 // framework defaults fill both in for everyone else.
+// checkAuthJWKSURI rejects a key-set endpoint that is not a parsable https URL
+// with a hostname: "https:///jwks.json" carries the right scheme and no host to
+// fetch from, so the scheme check alone would let it through.
+func checkAuthJWKSURI(uri string) error {
+	parsed, err := url.Parse(uri)
+	if err != nil {
+		return NewValidationError(fieldAuthJWKSURI, "is not a valid url")
+	}
+	if parsed.Scheme != "https" {
+		return NewValidationError(fieldAuthJWKSURI, "must use the https scheme")
+	}
+	if parsed.Hostname() == "" {
+		return NewValidationError(fieldAuthJWKSURI, "must include a hostname")
+	}
+	return nil
+}
+
 func checkAuthJWKS(cfg *AuthJWKSConfig, uri string) error {
 	if strings.TrimSpace(uri) != "" {
-		parsed, err := url.Parse(uri)
-		if err != nil {
-			return NewValidationError(fieldAuthJWKSURI, "is not a valid url")
-		}
-		if parsed.Scheme != "https" {
-			return NewValidationError(fieldAuthJWKSURI, "must use the https scheme")
+		if err := checkAuthJWKSURI(uri); err != nil {
+			return err
 		}
 		if cfg.MinRefreshInterval <= 0 {
 			return NewValidationError(fieldAuthJWKSMinRefresh, errMustBePositive)

@@ -215,6 +215,12 @@ func TestConfigValidateJWKSSourceRejectsInvalidGroups(t *testing.T) {
 			message: "jwks uri must use the https scheme",
 		},
 		{
+			name:    "host_less_jwks_uri",
+			mutate:  func(c *Config) { c.JWKSURI = "https:///jwks.json" },
+			field:   "auth.jwt.jwksuri",
+			message: "jwks uri must include a hostname",
+		},
+		{
 			name:    "unparsable_jwks_uri",
 			mutate:  func(c *Config) { c.JWKSURI = "https://issuer.example.com/%zz" },
 			field:   "auth.jwt.jwksuri",
