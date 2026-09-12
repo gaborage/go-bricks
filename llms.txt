@@ -1116,62 +1116,140 @@ func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Res
 | `r.Group("/path", middleware)` | Apply to route subtree | Auth for /admin/* |
 | Skipper function | Conditionally skip | Skip rate limit for /health |
 | Context propagation | Pass data downstream | User ID, tenant ID |
-| `GlobalMiddleware()` (module interface) | App-wide, once; no route opt-out (probes exempt) | Auth gate on every route |
+| `GlobalMiddleware()` (module interface) | App-wide, once; no route opt-out (probes exempt) | Maintenance/drain gate, global audit |
+
+### Bearer Credential Verification (`auth`)
+
+The `auth` package verifies an `Authorization: Bearer` JWT against a configured issuer and
+attaches the identity it asserts — an `auth.Principal` — to the request context. It is
+**identification, not authorization**: a `Principal` means the credential verified, and the
+handler still decides what that identity may do. It is attached **per route group**, never
+globally — see the section below for why the global seam is the wrong home for it.
+
+```go
+// Config comes from the framework's auth.jwt.* section (issuer, audience, jwksuri,
+// algorithms, leeway, typ, jwks.*, telemetry.enduserid) — no InjectInto needed.
+type OrdersModule struct {
+	verifier *auth.Verifier
+}
+
+func (m *OrdersModule) Name() string { return "orders" }
+
+func (m *OrdersModule) Init(deps *app.ModuleDeps) error {
+	// NewVerifier FETCHES the issuer key set before returning: a bad endpoint aborts
+	// startup instead of failing every request later. nil client = default httpclient
+	// (peer name from the JWKS host, body cap applied while the body still streams).
+	v, err := auth.NewVerifier(
+		auth.Config(deps.Config.Auth.JWT), deps.Logger, deps.MeterProvider, nil,
+	)
+	if err != nil {
+		return err
+	}
+	m.verifier = v
+	return nil
+}
+
+func (m *OrdersModule) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	// PER GROUP. A route that must stay open (probe, signature-checked webhook) is
+	// exempted by NOT being in this group — visible here, not in a skip list.
+	guarded := r.Group("/orders", auth.Middleware(m.verifier))
+	server.GET(hr, guarded, "/mine", m.listMine)
+	server.GET(hr, r, "/health", m.health) // unguarded
+}
+
+func (m *OrdersModule) listMine(_ ListReq, ctx server.HandlerContext) (server.Result[[]Order], server.IAPIError) {
+	// ok == false only if the request skipped the middleware: a rejection never calls next().
+	p, ok := auth.PrincipalFromContext(ctx.RequestContext())
+	if !ok {
+		return server.Result[[]Order]{}, server.NewUnauthorizedError("Authentication required")
+	}
+	scope, _ := p.Claim("scope") // authorize HERE — the middleware does not
+	_ = scope
+	return server.Result[[]Order]{Data: m.forSubject(ctx.RequestContext(), p.Subject)}, nil
+}
+
+// Close stops the background key-set refresh. Idempotent; always returns nil.
+func (m *OrdersModule) Shutdown() error {
+	if m.verifier == nil {
+		return nil
+	}
+	return m.verifier.Close()
+}
+```
+
+Behavior and limits (see [wiki/auth.md](wiki/auth.md) / ADR-109):
+- **RSA-only**: `RS256`/`PS256`, with the allowlist threaded into the parser, so `alg=none`,
+  `HS*` and `ES*` are rejected before any key is looked up.
+- **401 vs 503**: a bad credential is 401 with `WWW-Authenticate: Bearer error="invalid_token"`
+  (no header presented → `Bearer realm="<issuer>"`); an unusable issuer key set is **503** with
+  `Retry-After`, because answering 401 tells a caller holding a valid credential to stop
+  retrying. Match on `auth.ErrInvalidCredential` / `ErrMissingCredential` / `ErrKeySetUnavailable`,
+  never on a class.
+- **Key set**: fetched fail-fast at construction, refreshed on a ticker and on an unknown `kid`
+  (singleflight, rate-floored by `auth.jwt.jwks.minrefreshinterval`, detached from the caller's
+  cancellation), served past its TTL only until `auth.jwt.jwks.staleceiling` — then 503, never a
+  silent accept.
+- **Nothing leaks**: the credential, its cause and the `sub` claim never reach a log, a metric or
+  a response; a rejection is reported by class only. `Principal` elides its subject and claims
+  under `%v`/`%s`/`%q`/`%#v` and `json.Marshal` — but NOT under `logger.Interface`/`WithFields`,
+  whose reflective filter reads exported fields directly (#1602). Don't hand it one.
+- **Pinned keys**: `auth.NewVerifierWithResolver(cfg, log, auth.NewStaticKeyResolver(keys))`
+  fetches nothing and owns nothing — its `Close` is a no-op.
+- **No claim hook, no ECDSA, no cookie/query credentials, no OIDC discovery** — name the JWKS
+  endpoint explicitly.
 
 ### App-Wide Global Middleware (`GlobalMiddlewareRegisterer`, v0.48.0+)
 
 `r.Use` / `r.Group` above are **group-scoped** — they wrap only routes registered on that
-registrar. For middleware that must run on **every** request across the whole app (auth
-gates, API-key checks, global audit) — once per request, **after tenant resolution**, before
-handlers, with **no per-route opt-out** — a module implements `GlobalMiddlewareRegisterer`.
-The framework collects it after `Init()` and registers it once on the root chain, skipping
-only the health/ready probes.
+registrar. For middleware that must run on **every** request across the whole app — once per
+request, **after tenant resolution**, before handlers, with **no per-route opt-out** — a module
+implements `GlobalMiddlewareRegisterer`. The framework collects it after `Init()` and registers
+it once on the root chain, skipping only the health/ready probes. Bearer verification is
+deliberately NOT this: `auth.Middleware` goes on the groups that need it, so an open route is
+exempted by where it is registered rather than by a path list inside a gate body.
 
 ```go
 // Unlike r.Use / r.Group (group-scoped), GlobalMiddlewareRegisterer contributes middleware
 // that runs once per request on EVERY route. Built after Init(), so it can capture
-// dependencies the module wired up there (e.g. a keystore-backed verifier).
-type AuthModule struct {
-	verifier *TokenVerifier
+// dependencies the module wired up there.
+type MaintenanceModule struct {
+	draining func() bool // state captured at Init, read by the closure below
 }
 
-func (m *AuthModule) Name() string { return "auth" }
+func (m *MaintenanceModule) Name() string { return "maintenance" }
 
-func (m *AuthModule) Init(deps *app.ModuleDeps) error {
-	m.verifier = NewTokenVerifier(deps.KeyStore) // captured by the closure below
+func (m *MaintenanceModule) Init(deps *app.ModuleDeps) error {
+	m.draining = drainFlagFrom(deps.Config) // your own flag source
 	return nil
 }
 
-func (m *AuthModule) Shutdown() error { return nil }
+func (m *MaintenanceModule) Shutdown() error { return nil }
 
 // GlobalMiddleware satisfies app.GlobalMiddlewareRegisterer.
-func (m *AuthModule) GlobalMiddleware() []server.MiddlewareFunc {
+func (m *MaintenanceModule) GlobalMiddleware() []server.MiddlewareFunc {
 	return []server.MiddlewareFunc{
 		func(c server.HandlerContext, next func() error) error {
-			// No route can opt out, so public-path exemptions live HERE, in the gate body.
-			if isPublicPath(c.Request().URL.Path) {
+			// No route can opt out, so exemptions live HERE, in the gate body.
+			if !m.draining() || c.RouteTemplate() == "/admin/resume" {
 				return next()
 			}
-			if !m.verifier.Valid(c.RequestHeader("Authorization")) {
-				return server.NewUnauthorizedError("invalid token") // → 401, standard envelope
-			}
-			// Tenant is already resolved: multitenant.GetTenant(c.RequestContext()).
-			return next()
+			// → 503, standard {error, meta} envelope. Return the error, never write too.
+			return server.NewServiceUnavailableError("Service is draining")
 		},
 	}
 }
 
 // Register like any module; no r.Use needed.
-//   fw.RegisterModule(keystore.NewModule()); fw.RegisterModule(&AuthModule{})
+//   fw.RegisterModule(&MaintenanceModule{})
 ```
 
 Behavior and limits (see [wiki/global_middleware.md](wiki/global_middleware.md) / ADR-036):
 - **Innermost slot**: runs after the built-in chain (tenant resolution, `Recover`,
-  rate-limiting), before the handler. An unauthenticated request still consumes rate-limit
-  budget — this is an auth-gate hook, not a general "run early" hook.
-- **Before JOSE decryption**: authenticates on headers/token/tenant, never a decrypted body
+  rate-limiting), before the handler. A rejected request still consumes rate-limit
+  budget — this is a gate hook, not a general "run early" hook.
+- **Before JOSE decryption**: sees headers/token/tenant, never a decrypted body
   (JOSE runs in the typed-handler leaf, after middleware).
-- **Fires before 404/405**: an unauthenticated request to an unknown path gets 401, not 404.
+- **Fires before 404/405**: a rejected request to an unknown path gets the gate's status, not 404.
 - **Gated**: `/_sys` and `/debug` are subject to the gate (their own CIDR/bearer checks still
   apply); only `/health` and `/ready` are exempt.
 - **Fail-closed**: if the configured server cannot install it (a custom `ServerRunner`),

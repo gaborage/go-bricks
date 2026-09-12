@@ -154,25 +154,28 @@ keystore:
 # Bearer credential verification (OPTIONAL - JWT access tokens)
 # Unset entirely when the service verifies no credentials; the keys below carry
 # framework defaults, and issuer/audience are required only by the verifier.
+# The middleware is attached PER ROUTE GROUP (r.Group(prefix, auth.Middleware(v))),
+# never globally - see wiki/auth.md and ADR-109.
 auth:
   jwt:
     issuer: "https://issuer.example.com"            # Matched exactly against the token "iss"
     audience:                                       # Accepted "aud" values (one must match)
       - "api://orders"
-    # Read by a JWKS-backed PublicKeyResolver, which the APPLICATION supplies and
-    # passes to auth.NewVerifierWithResolver. Setting it does not by itself make
-    # the framework fetch anything. Omit it when pinning keys in process.
+    # The issuer's key set endpoint, fetched by auth.NewVerifier BEFORE it returns:
+    # an unreachable endpoint aborts startup instead of failing every request. No
+    # OIDC discovery - name the endpoint. Omit it only when pinning keys in process
+    # through auth.NewVerifierWithResolver, which fetches nothing.
     jwksuri: "https://issuer.example.com/.well-known/jwks.json"  # https only, hostname required
     algorithms:                                     # Allowlist, subset of RS256/PS256 (default: both)
       - RS256
       - PS256
-    leeway: 30s                                     # Clock skew absorbed on exp/nbf/iat
+    leeway: 30s                                     # Clock skew absorbed on exp/nbf/iat; non-negative, max 5m
     # typ:                                          # Optional JOSE "typ" allowlist (unset = no check)
     #   - at+jwt
-    jwks:                                           # Consumed by that same application-supplied resolver
+    jwks:                                           # Live only for a jwksuri-backed verifier; inert for pinned keys
       ttl: 15m                                      # Key set lifetime before a refresh is due
-      staleceiling: 1h                              # Max age a stale key set may still be served (>= ttl)
-      minrefreshinterval: 30s                       # Floor between key set fetches
+      staleceiling: 1h                              # Max age a stale key set may still be served (>= ttl); past it every lookup is 503
+      minrefreshinterval: 30s                       # Floor between key set fetches; also the 503's Retry-After
       maxbodybytes: 1048576                         # Cap on the fetched key set body (1 MiB)
     telemetry:
       enduserid: false                              # Record enduser.id on spans (off: it is the token subject)
