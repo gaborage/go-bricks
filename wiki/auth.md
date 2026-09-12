@@ -287,8 +287,11 @@ dimension stays low-cardinality.
 
 ## Security
 
-**What never leaves the package.** Nothing logs, records or renders the credential string, the
-signature bytes or the `sub` claim. A rejection is reported by `Class` only —
+**What never leaves the package.** Nothing logs, records or renders the credential string or the
+signature bytes, ever. The `sub` claim has exactly one sanctioned sink, off by default: with
+`auth.jwt.telemetry.enduserid: true` the middleware records `Principal.Subject` as `enduser.id` on
+the request span, described further down this section. Nothing else — no log line, no metric
+attribute, no error string — carries it in either setting. A rejection is reported by `Class` only —
 `VerificationError.Error` renders the class and never `Cause`, and it implements `fmt.Formatter`
 so `%v`, `%s`, `%q` **and `%#v`** all render the same safe body rather than dumping the exported
 `Cause` field. `Cause` exists for framework DEBUG inspection, is not part of the compatibility

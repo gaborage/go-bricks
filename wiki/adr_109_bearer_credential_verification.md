@@ -139,9 +139,12 @@ restated here.
   challenge distinguishing "none presented" from "presented and rejected". The realm is
   escaped as an HTTP quoted-string: the issuer is operator-supplied, so it is a
   header-injection seam.
-- **The rejection reason never reaches the caller.** A failure is reported by `Class` — a
-  closed, low-cardinality vocabulary — to one DEBUG breadcrumb (emitted where the rule
-  fires, in the verifier) and to the `auth.result` metric attribute. It is never rendered
+- **The rejection reason never reaches the caller.** A *classified* failure — one where a
+  credential was presented and judged — is reported by `Class`, a closed, low-cardinality
+  vocabulary, to one DEBUG breadcrumb (emitted where the rule fires, in the verifier) and to
+  the `auth.result` metric attribute. A request carrying no credential is not classified: it
+  returns before any rule runs, so it has no `Class` and emits no breadcrumb, and the counter
+  alone records it as `missing_credential`. It is never rendered
   into a response, and `VerificationError` never renders its `Cause` under any `fmt` verb,
   because a library cause routinely embeds the credential it failed on.
 - **`Principal` redacts itself under `String`, `Format` and `MarshalJSON` — and the
