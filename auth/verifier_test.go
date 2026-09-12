@@ -605,13 +605,41 @@ func TestVerifierRejectsTheJWSJSONSerialization(t *testing.T) {
 }
 
 // TestVerifierRejectsAnOversizedCredential pins the DoS bound: the input is
-// refused on length, before any base64 decoding or JSON parsing.
+// refused on length, before any base64 decoding or JSON parsing. Junk of either
+// length is ClassMalformed whichever gate catches it, so the cause is what
+// separates the length gate from the parser — assert on that, or > and >= look
+// alike.
 func TestVerifierRejectsAnOversizedCredential(t *testing.T) {
 	v := newTestVerifier(t, newTestIssuer(), nil)
 
 	_, err := v.Verify(context.Background(), strings.Repeat("a", maxCredentialBytes+1))
 
 	assertRejectedWithClass(t, err, ClassMalformed)
+	assert.Contains(t, causeMessage(t, err), lengthGateMessage, "one byte over the bound is refused by the length gate")
+}
+
+// TestVerifierAdmitsACredentialOfExactlyTheMaximumLength pins the bound as
+// inclusive: a credential of exactly maxCredentialBytes reaches the parser, so
+// its rejection carries a parse cause and not the length gate's.
+func TestVerifierAdmitsACredentialOfExactlyTheMaximumLength(t *testing.T) {
+	v := newTestVerifier(t, newTestIssuer(), nil)
+
+	_, err := v.Verify(context.Background(), strings.Repeat("a", maxCredentialBytes))
+
+	assertRejectedWithClass(t, err, ClassMalformed)
+	assert.NotContains(t, causeMessage(t, err), lengthGateMessage, "exactly the bound is not refused on length")
+}
+
+// lengthGateMessage is the cause the maxCredentialBytes guard attaches.
+const lengthGateMessage = "credential exceeds the maximum accepted length"
+
+// causeMessage returns the message of the VerificationError's cause.
+func causeMessage(t *testing.T, err error) string {
+	t.Helper()
+	var verr *VerificationError
+	require.ErrorAs(t, err, &verr)
+	require.Error(t, verr.Cause)
+	return verr.Cause.Error()
 }
 
 func TestVerifierAcceptsACredentialAtTheLengthBound(t *testing.T) {

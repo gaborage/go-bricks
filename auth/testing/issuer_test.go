@@ -342,14 +342,30 @@ func TestIssuerMintBadSignature(t *testing.T) {
 }
 
 func TestIssuerMintCorruptSignature(t *testing.T) {
-	iss := NewIssuer()
+	fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	iss := NewIssuer().WithClock(func() time.Time { return fixed })
 
 	compact := iss.MintCorruptSignature()
 
 	obj, err := jose.ParseSigned(compact, []jose.SignatureAlgorithm{jose.RS256})
 	require.NoError(t, err)
 	_, err = obj.Verify(iss.PublicKey(DefaultKeyID))
-	assert.Error(t, err)
+	require.Error(t, err)
+
+	valid := iss.Mint(Claims{})
+	validHead, validSig := splitSignature(t, valid)
+	corruptHead, corruptSig := splitSignature(t, compact)
+	require.Equal(t, validHead, corruptHead, "the clock is pinned, so the pair differs only in the signature")
+	assert.NotEqual(t, validSig, corruptSig, "the signature segment is always corrupted")
+	assert.Equal(t, 2, strings.Count(compact, "."), "the wire shape keeps three segments")
+}
+
+// splitSignature splits a compact JWS into its signed prefix and its signature segment.
+func splitSignature(t *testing.T, compact string) (prefix, signature string) {
+	t.Helper()
+	idx := strings.LastIndex(compact, ".")
+	require.Positive(t, idx)
+	return compact[:idx], compact[idx+1:]
 }
 
 func TestIssuerRotateSwitchesActiveKeyAndKeepsOld(t *testing.T) {

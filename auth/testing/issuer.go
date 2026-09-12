@@ -279,7 +279,7 @@ func (i *Issuer) signingKey(opts *MintOptions) any {
 }
 
 func (i *Issuer) marshalPayload(claims *Claims) []byte {
-	payload := make(map[string]any, len(claims.Extra)+6)
+	payload := make(map[string]any)
 	for k, v := range claims.Extra {
 		payload[k] = v
 	}
@@ -447,19 +447,18 @@ func (i *Issuer) MintBadSignature() string {
 	return i.MintWith(MintOptions{SignKey: i.foreignKey()})
 }
 
-// MintCorruptSignature returns a valid credential with one character of the
-// signature segment flipped, so the wire shape stays well-formed but the signature
-// does not verify. The flip lands mid-segment: the final base64url character of an
-// RSA signature carries padding bits a flip there would not change.
+// MintCorruptSignature returns a valid credential whose signature bytes have one
+// bit flipped, so the wire shape stays well-formed but the signature does not
+// verify. The segment is decoded, the low bit of a middle byte inverted and the
+// result re-encoded: unconditional, so the corruption is guaranteed rather than
+// dependent on what the signature happened to contain.
 func (i *Issuer) MintCorruptSignature() string {
 	compact := i.Mint(Claims{})
 	idx := strings.LastIndex(compact, ".")
-	sig := []byte(compact[idx+1:])
-	mid := len(sig) / 2
-	if sig[mid] == 'A' {
-		sig[mid] = 'B'
-	} else {
-		sig[mid] = 'A'
+	raw, err := base64.RawURLEncoding.DecodeString(compact[idx+1:])
+	if err != nil {
+		panic(fmt.Sprintf("auth/testing: minted signature is not base64url: %v", err))
 	}
-	return compact[:idx+1] + string(sig)
+	raw[len(raw)/2] ^= 0x01
+	return compact[:idx+1] + base64.RawURLEncoding.EncodeToString(raw)
 }
