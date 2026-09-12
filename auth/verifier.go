@@ -58,6 +58,16 @@ type Verifier struct {
 	// now is the clock used for the exp/nbf/iat comparisons. Tests in this
 	// package replace it directly; there is deliberately no exported option.
 	now func() time.Time
+
+	// metrics is nil for a verifier built through NewVerifierWithResolver: the
+	// OTel instruments arrive with the MeterProvider NewVerifier takes, and
+	// every recording method no-ops on a nil receiver.
+	metrics *authMetrics
+
+	// owned is the JWKS resolver this verifier CONSTRUCTED, and the only thing
+	// Close stops. A resolver handed in through NewVerifierWithResolver stays
+	// the caller's and leaves this nil.
+	owned *jwksResolver
 }
 
 // NewVerifierWithResolver builds a verifier over an explicitly supplied
@@ -159,12 +169,19 @@ func allowedAlgorithms(names []string) []jose.SignatureAlgorithm {
 
 // Close releases the resources the verifier itself CONSTRUCTED, and only those.
 // A PublicKeyResolver handed in through NewVerifierWithResolver belongs to the
-// caller and is never closed here; a verifier that builds its own refreshing
-// JWKS resolver owns it and must stop it. This resolver-backed verifier
-// constructed nothing, so Close is a no-op returning nil, safe to call any
-// number of times.
-// It exists so consumers can call it unconditionally from a module Shutdown.
+// caller and is never closed here, so Close on such a verifier is a no-op; a
+// verifier built by NewVerifier owns the JWKS resolver it constructed and stops
+// its background refresh here.
+//
+// It is idempotent and always returns nil, so consumers can call it
+// unconditionally from a module Shutdown. It blocks until the refresh goroutine
+// has exited, after which the verifier issues no further requests to the issuer
+// — it keeps verifying against the key set it last held until that set passes
+// its stale ceiling.
 func (v *Verifier) Close() error {
+	if v.owned != nil {
+		v.owned.close()
+	}
 	return nil
 }
 
@@ -180,7 +197,18 @@ func (v *Verifier) Close() error {
 // The returned Principal's Subject is empty when the credential carries no "sub"
 // claim: the claim is not required by RFC 7519, and a credential may assert an
 // audience-scoped identity without one.
+//
+// Exactly one auth.verification.total observation is recorded per call, labeled
+// with the outcome. The counter is the only thing this wrapper adds: every
+// verification rule lives in verify below, so the recording point cannot drift
+// away from the decision it reports.
 func (v *Verifier) Verify(ctx context.Context, credential string) (Principal, error) {
+	principal, err := v.verify(ctx, credential)
+	v.metrics.recordVerification(ctx, err)
+	return principal, err
+}
+
+func (v *Verifier) verify(ctx context.Context, credential string) (Principal, error) {
 	if strings.TrimSpace(credential) == "" {
 		return Principal{}, ErrMissingCredential
 	}

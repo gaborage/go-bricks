@@ -12,6 +12,14 @@
 // Symmetric algorithms are deliberately unsupported, so a key-confusion
 // downgrade to HS256 has no code path to reach.
 //
+// There are two doors onto a Verifier. NewVerifier fetches the issuer's key set
+// from its JWKS endpoint, refreshes it in the background and on an unknown kid,
+// and owns what it built — its Close stops that refresh. NewVerifierWithResolver
+// takes a PublicKeyResolver the caller pins out of band and closes nothing. A
+// key set that cannot be refreshed is served until it passes its configured
+// stale ceiling and then reports ErrKeySetUnavailable: there is no path on which
+// an unverifiable credential is accepted.
+//
 // Nothing in this package logs, records, or renders the credential itself or
 // the "sub" claim. Verification failures are reported by class (see
 // VerificationError), which is safe to log at DEBUG; the credential string,
