@@ -134,7 +134,7 @@ func newJWKSResolver(cfg *Config, log logger.Logger, m *authMetrics, client http
 		return nil, fmt.Errorf("auth: initial issuer key set fetch failed: %w", err)
 	}
 
-	r.unregisterGauges = m.registerKeySetGauges(r)
+	r.unregisterGauges = m.registerKeySetGauges(r, cfg.Issuer)
 	go r.refreshLoop()
 	return r, nil
 }

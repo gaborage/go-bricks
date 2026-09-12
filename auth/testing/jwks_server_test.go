@@ -257,3 +257,23 @@ func TestJWKSServerRedirectsOnlyOnceALocationIsSet(t *testing.T) {
 	assert.Equal(t, srv.URL(), location)
 	assert.Equal(t, 2, srv.RequestCount(), "both hops are recorded")
 }
+
+// TestJWKSServerRejectsANegativeOversizedSize pins that the fake fails the test
+// that misconfigured it instead of deadlocking: a negative count reaches
+// strings.Repeat inside the handler, which panics while the server's lock is
+// held and blocks every later request and mutator forever.
+func TestJWKSServerRejectsANegativeOversizedSize(t *testing.T) {
+	srv := newTestJWKSServer(t)
+
+	assert.PanicsWithValue(t,
+		"auth/testing: SetOversizedBytes requires a non-negative byte count, got -1",
+		func() { srv.SetOversizedBytes(-1) })
+
+	// Zero is a legitimate setting — the document is served unpadded — and the
+	// server stays usable after the rejected call.
+	assert.NotPanics(t, func() { srv.SetOversizedBytes(0) })
+	srv.SetMode(JWKSOversized)
+	status, body := fetchJWKS(t, srv)
+	assert.Equal(t, nethttp.StatusOK, status)
+	assert.Contains(t, string(body), `"padding":""`)
+}

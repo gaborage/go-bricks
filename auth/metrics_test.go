@@ -21,6 +21,10 @@ import (
 	obstesting "github.com/gaborage/go-bricks/observability/testing"
 )
 
+// metricsTestIssuer is the configured issuer the key-set gauges carry as their
+// identity attribute in this file's direct registerKeySetGauges calls.
+const metricsTestIssuer = "https://metrics.example/"
+
 // newMeteredVerifier builds a JWKS-backed verifier over a manual-reader meter
 // provider, so every instrument this package declares is collected in-process.
 func newMeteredVerifier(t *testing.T, srv *authtesting.JWKSServer) (*Verifier, *obstesting.TestMeterProvider) {
@@ -123,7 +127,7 @@ func TestVerifierObservesTheKeySetGauges(t *testing.T) {
 func TestVerifierGaugesReportNothingBeforeTheFirstFetch(t *testing.T) {
 	mp := obstesting.NewTestMeterProvider()
 	m := newAuthMetrics(mp.MeterProvider)
-	unregister := m.registerKeySetGauges(&jwksResolver{now: time.Now})
+	unregister := m.registerKeySetGauges(&jwksResolver{now: time.Now}, metricsTestIssuer)
 	t.Cleanup(unregister)
 
 	rm := mp.Collect(t)
@@ -138,7 +142,7 @@ func TestAuthMetricsToleratesANilReceiver(t *testing.T) {
 	assert.NotPanics(t, func() {
 		m.recordVerification(context.Background(), nil)
 		m.recordRefresh(context.Background(), refreshErrorParse)
-		m.registerKeySetGauges(&jwksResolver{now: time.Now})()
+		m.registerKeySetGauges(&jwksResolver{now: time.Now}, metricsTestIssuer)()
 	})
 }
 
@@ -216,7 +220,7 @@ func TestNewAuthMetricsFallsBackForATypedNilMeterProvider(t *testing.T) {
 func TestRegisterKeySetGaugesDegradesWithoutAMeter(t *testing.T) {
 	m := &authMetrics{}
 
-	unregister := m.registerKeySetGauges(&jwksResolver{now: time.Now})
+	unregister := m.registerKeySetGauges(&jwksResolver{now: time.Now}, metricsTestIssuer)
 
 	require.NotNil(t, unregister)
 	assert.NotPanics(t, unregister)
@@ -271,59 +275,103 @@ func TestLogMetricErrorReportsOnlyAFailedInitialization(t *testing.T) {
 	}
 }
 
-// failingRegistration is a metric.Registration whose Unregister always fails,
-// which is the arm a real SDK registration never takes.
-type failingRegistration struct {
-	embedded.Registration
-	err error
+// meterFailures is the behavior injected into callbackFailingMeter, held by
+// pointer so the stub stays small and so what the meter was asked to do is
+// readable back from the test.
+type meterFailures struct {
+	int64GaugeErr   error
+	float64GaugeErr error
+	registerErr     error
+	unregisterErr   error
+	// keepRegistration returns a live registration TOGETHER with registerErr:
+	// the leak shape, where a dropped registration keeps firing after Close.
+	keepRegistration bool
+	registered       bool
+	unregistered     bool
 }
 
-func (r failingRegistration) Unregister() error { return r.err }
+// failingRegistration is a metric.Registration whose Unregister reports the
+// injected error, the arm a real SDK registration never takes, and records that
+// it ran, so a test can tell a dropped registration from a released one.
+type failingRegistration struct {
+	embedded.Registration
+	failures *meterFailures
+}
+
+func (r failingRegistration) Unregister() error {
+	r.failures.unregistered = true
+	return r.failures.unregisterErr
+}
 
 // callbackFailingMeter embeds a real meter so every instrument constructor
-// behaves normally, and overrides RegisterCallback alone: it returns registerErr
-// when that is set, otherwise a registration whose Unregister returns
-// unregisterErr.
+// behaves normally, and overrides the three methods registerKeySetGauges calls.
+// Each override returns the REAL handle alongside its injected error, which is
+// the shape the OTel SDK is allowed to take and the one a caller must not read
+// as a nil instrument.
 type callbackFailingMeter struct {
 	metric.Meter
-	registerErr   error
-	unregisterErr error
+	failures *meterFailures
+}
+
+func (m callbackFailingMeter) Int64ObservableGauge(
+	name string,
+	opts ...metric.Int64ObservableGaugeOption,
+) (metric.Int64ObservableGauge, error) {
+	gauge, err := m.Meter.Int64ObservableGauge(name, opts...)
+	if m.failures.int64GaugeErr != nil {
+		return gauge, m.failures.int64GaugeErr
+	}
+	return gauge, err
+}
+
+func (m callbackFailingMeter) Float64ObservableGauge(
+	name string,
+	opts ...metric.Float64ObservableGaugeOption,
+) (metric.Float64ObservableGauge, error) {
+	gauge, err := m.Meter.Float64ObservableGauge(name, opts...)
+	if m.failures.float64GaugeErr != nil {
+		return gauge, m.failures.float64GaugeErr
+	}
+	return gauge, err
 }
 
 func (m callbackFailingMeter) RegisterCallback(
 	_ metric.Callback,
 	_ ...metric.Observable,
 ) (metric.Registration, error) {
-	if m.registerErr != nil {
-		return nil, m.registerErr
+	m.failures.registered = true
+	registration := failingRegistration{failures: m.failures}
+	if m.failures.registerErr != nil {
+		if m.failures.keepRegistration {
+			return registration, m.failures.registerErr
+		}
+		return nil, m.failures.registerErr
 	}
-	return failingRegistration{err: m.unregisterErr}, nil
+	return registration, nil
 }
 
-// callbackFailingProvider hands out callbackFailingMeter, so newAuthMetrics
-// picks it up through the MeterProvider it already takes.
+// callbackFailingProvider hands out callbackFailingMeter over the real meter, so
+// newAuthMetrics picks it up through the MeterProvider it already takes.
 type callbackFailingProvider struct {
 	embedded.MeterProvider
-	real          metric.MeterProvider
-	registerErr   error
-	unregisterErr error
+	real     metric.MeterProvider
+	failures *meterFailures
 }
 
 func (p callbackFailingProvider) Meter(name string, opts ...metric.MeterOption) metric.Meter {
-	return callbackFailingMeter{
-		Meter:         p.real.Meter(name, opts...),
-		registerErr:   p.registerErr,
-		unregisterErr: p.unregisterErr,
-	}
+	return callbackFailingMeter{Meter: p.real.Meter(name, opts...), failures: p.failures}
 }
 
 func TestRegisterKeySetGaugesReportsAFailedCallbackRegistration(t *testing.T) {
 	mp := obstesting.NewTestMeterProvider()
-	m := newAuthMetrics(callbackFailingProvider{real: mp.MeterProvider, registerErr: errors.New("callback rejected")})
+	m := newAuthMetrics(callbackFailingProvider{
+		real:     mp.MeterProvider,
+		failures: &meterFailures{registerErr: errors.New("callback rejected")},
+	})
 
 	var unregister func()
 	out := captureStderr(t, func() {
-		unregister = m.registerKeySetGauges(&jwksResolver{now: time.Now})
+		unregister = m.registerKeySetGauges(&jwksResolver{now: time.Now}, metricsTestIssuer)
 	})
 
 	require.NotNil(t, unregister)
@@ -336,11 +384,14 @@ func TestRegisterKeySetGaugesReportsAFailedCallbackRegistration(t *testing.T) {
 
 func TestRegisterKeySetGaugesReportsAFailedUnregister(t *testing.T) {
 	mp := obstesting.NewTestMeterProvider()
-	m := newAuthMetrics(callbackFailingProvider{real: mp.MeterProvider, unregisterErr: errors.New("already gone")})
+	m := newAuthMetrics(callbackFailingProvider{
+		real:     mp.MeterProvider,
+		failures: &meterFailures{unregisterErr: errors.New("already gone")},
+	})
 
 	var unregister func()
 	registerOut := captureStderr(t, func() {
-		unregister = m.registerKeySetGauges(&jwksResolver{now: time.Now})
+		unregister = m.registerKeySetGauges(&jwksResolver{now: time.Now}, metricsTestIssuer)
 	})
 	require.NotNil(t, unregister)
 	assert.Empty(t, registerOut, "a successful registration must report nothing")
@@ -350,4 +401,152 @@ func TestRegisterKeySetGaugesReportsAFailedUnregister(t *testing.T) {
 	assert.Contains(t, out, opKeySetGaugeUnregister)
 	assert.NotContains(t, out, "initialize metric", "an unregister failure must not read as a failed instrument initialization")
 	assert.Contains(t, out, "already gone")
+}
+
+// TestRegisterKeySetGaugesSkipsRegistrationWhenAGaugeFails pins the leak the
+// OTel contract allows: a constructor may return a usable handle TOGETHER with
+// an error, so a callback registered over a half-built pair would fire with no
+// unregister path. Neither gauge is registered unless both succeeded.
+func TestRegisterKeySetGaugesSkipsRegistrationWhenAGaugeFails(t *testing.T) {
+	tests := []struct {
+		name     string
+		failures *meterFailures
+		wantName string
+	}{
+		{
+			name:     "int64_gauge_fails",
+			failures: &meterFailures{int64GaugeErr: errors.New("key count unavailable")},
+			wantName: metricKeySetKeyCount,
+		},
+		{
+			name:     "float64_gauge_fails",
+			failures: &meterFailures{float64GaugeErr: errors.New("age unavailable")},
+			wantName: metricKeySetAge,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := obstesting.NewTestMeterProvider()
+			m := newAuthMetrics(callbackFailingProvider{real: mp.MeterProvider, failures: tc.failures})
+
+			var unregister func()
+			out := captureStderr(t, func() {
+				unregister = m.registerKeySetGauges(&jwksResolver{now: time.Now}, metricsTestIssuer)
+			})
+
+			assert.False(t, tc.failures.registered, "a failed gauge constructor must not register a callback")
+			assert.Contains(t, out, tc.wantName)
+			require.NotNil(t, unregister)
+			assert.NotPanics(t, unregister)
+			assert.Empty(t, captureStderr(t, unregister), "a degraded cleanup must stay silent")
+		})
+	}
+}
+
+// TestRegisterKeySetGaugesReleasesARegistrationReturnedWithAnError pins the
+// other half of the same contract: RegisterCallback may hand back a live
+// registration alongside its error, and dropping it would leave a callback
+// firing after Close.
+func TestRegisterKeySetGaugesReleasesARegistrationReturnedWithAnError(t *testing.T) {
+	mp := obstesting.NewTestMeterProvider()
+	failures := &meterFailures{
+		registerErr:      errors.New("callback rejected"),
+		keepRegistration: true,
+	}
+	m := newAuthMetrics(callbackFailingProvider{real: mp.MeterProvider, failures: failures})
+
+	var unregister func()
+	out := captureStderr(t, func() {
+		unregister = m.registerKeySetGauges(&jwksResolver{now: time.Now}, metricsTestIssuer)
+	})
+
+	assert.True(t, failures.unregistered, "a registration returned with an error must be released immediately")
+	assert.Contains(t, out, opKeySetGaugeRegister)
+	require.NotNil(t, unregister)
+	assert.Empty(t, captureStderr(t, unregister), "the cleanup must not unregister a second time")
+}
+
+// TestRegisterKeySetGaugesReportsAFailedReleaseOfARejectedRegistration pins that
+// the immediate release is reported like any other wiring failure rather than
+// swallowed.
+func TestRegisterKeySetGaugesReportsAFailedReleaseOfARejectedRegistration(t *testing.T) {
+	mp := obstesting.NewTestMeterProvider()
+	m := newAuthMetrics(callbackFailingProvider{
+		real: mp.MeterProvider,
+		failures: &meterFailures{
+			registerErr:      errors.New("callback rejected"),
+			keepRegistration: true,
+			unregisterErr:    errors.New("already gone"),
+		},
+	})
+
+	out := captureStderr(t, func() {
+		m.registerKeySetGauges(&jwksResolver{now: time.Now}, metricsTestIssuer)
+	})
+
+	assert.Contains(t, out, opKeySetGaugeRegister)
+	assert.Contains(t, out, opKeySetGaugeUnregister)
+	assert.Contains(t, out, "already gone")
+}
+
+func TestGaugeIssuerBoundsTheIdentityAttribute(t *testing.T) {
+	tests := []struct {
+		name   string
+		issuer string
+		want   string
+	}{
+		{name: "configured_issuer", issuer: metricsTestIssuer, want: metricsTestIssuer},
+		{name: "surrounding_whitespace", issuer: "  " + metricsTestIssuer + "\t", want: metricsTestIssuer},
+		{name: "empty_issuer", issuer: "", want: issuerUnset},
+		{name: "whitespace_only_issuer", issuer: "   ", want: issuerUnset},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, gaugeIssuer(tc.issuer))
+		})
+	}
+}
+
+// gaugeIssuers collects the auth.issuer attribute of every data point of a
+// gauge, so a test can assert the series two verifiers produce are distinct.
+func gaugeIssuers[N int64 | float64](t *testing.T, rm metricdata.ResourceMetrics, name string) []string {
+	t.Helper()
+	found := obstesting.FindMetric(rm, name)
+	require.NotNil(t, found, "metric %s was not recorded", name)
+	gauge, ok := found.Data.(metricdata.Gauge[N])
+	require.True(t, ok, "metric %s is not a gauge of the expected numeric type", name)
+	issuers := make([]string, 0, len(gauge.DataPoints))
+	for _, point := range gauge.DataPoints {
+		value, present := point.Attributes.Value(attrAuthIssuer)
+		require.True(t, present, "metric %s carries a data point without %s", name, attrAuthIssuer)
+		issuers = append(issuers, value.AsString())
+	}
+	return issuers
+}
+
+// TestTwoVerifiersObserveDistinctKeySetSeries pins the OTel callback contract:
+// two verifiers sharing one MeterProvider register two callbacks against the
+// same instruments, so their observations must differ in at least one
+// attribute or the SDK sees a duplicate series.
+func TestTwoVerifiersObserveDistinctKeySetSeries(t *testing.T) {
+	const (
+		issuerA = "https://issuer-a.example/"
+		issuerB = "https://issuer-b.example/"
+	)
+	srv := newJWKSFixture(t)
+	mp := obstesting.NewTestMeterProvider()
+	newVerifier := func(issuer string) {
+		cfg := jwksConfig(srv)
+		cfg.Issuer = issuer
+		v, err := NewVerifier(cfg, nil, mp.MeterProvider, jwksClient(t, srv))
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, v.Close()) })
+	}
+	newVerifier(issuerA)
+	newVerifier(issuerB)
+
+	rm := mp.Collect(t)
+
+	assert.ElementsMatch(t, []string{issuerA, issuerB}, gaugeIssuers[int64](t, rm, metricKeySetKeyCount))
+	assert.ElementsMatch(t, []string{issuerA, issuerB}, gaugeIssuers[float64](t, rm, metricKeySetAge))
 }

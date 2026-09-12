@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -38,7 +39,14 @@ const (
 const (
 	attrAuthResult = "auth.result"
 	attrErrorType  = "error.type"
+	attrAuthIssuer = "auth.issuer"
 )
+
+// issuerUnset is the auth.issuer value for a verifier whose issuer is not
+// configured. Config.Validate rejects an empty issuer, so only an internal
+// construction reaches it, but an empty attribute would merge two verifiers'
+// key-set series back into one.
+const issuerUnset = "unset"
 
 // auth.result values that are not a Class. Every other value is a Class
 // constant rendered as a string, so the verification counter's dimension is the
@@ -186,42 +194,76 @@ type keySetState interface {
 	keySetObservation() (keys int64, ageSeconds float64, ok bool)
 }
 
+// gaugeIssuer bounds the key-set gauges' identity attribute.
+//
+// SECURITY: the issuer is per-process configuration, never caller- or
+// credential-derived, so the dimension cannot be inflated by traffic.
+func gaugeIssuer(issuer string) string {
+	trimmed := strings.TrimSpace(issuer)
+	if trimmed == "" {
+		return issuerUnset
+	}
+	return trimmed
+}
+
 // registerKeySetGauges wires the key-count and key-set-age gauges to state and
 // returns the cleanup that unregisters them. Registration failures degrade to a
 // no-op cleanup, matching the database tracker's graceful-degradation contract.
-func (m *authMetrics) registerKeySetGauges(state keySetState) func() {
+//
+// issuer identifies the observing verifier: two verifiers sharing one
+// MeterProvider register two callbacks against the SAME instruments, and the
+// OTel callback contract requires their observations to be distinct.
+func (m *authMetrics) registerKeySetGauges(state keySetState, issuer string) func() {
 	if m == nil || m.meter == nil {
 		return func() {}
 	}
 
-	keyCount, err := m.meter.Int64ObservableGauge(
+	keyCount, keyCountErr := m.meter.Int64ObservableGauge(
 		metricKeySetKeyCount,
 		metric.WithDescription("Number of usable RSA keys in the cached issuer key set"),
 		metric.WithUnit("{key}"),
 	)
-	logMetricError(metricKeySetKeyCount, err)
+	logMetricError(metricKeySetKeyCount, keyCountErr)
 
-	age, err := m.meter.Float64ObservableGauge(
+	age, ageErr := m.meter.Float64ObservableGauge(
 		metricKeySetAge,
 		metric.WithDescription("Age of the cached issuer key set since its last successful fetch"),
 		metric.WithUnit("s"),
 	)
-	logMetricError(metricKeySetAge, err)
+	logMetricError(metricKeySetAge, ageErr)
 
+	// The SDK may hand back a usable instrument TOGETHER with an error, so a
+	// failed constructor is not a nil gauge. Registering a callback over a
+	// half-built pair would leave a live callback observing an instrument whose
+	// construction failed; neither gauge is registered unless both succeeded.
+	if keyCountErr != nil || ageErr != nil {
+		return func() {}
+	}
+
+	observed := metric.WithAttributes(attribute.String(attrAuthIssuer, gaugeIssuer(issuer)))
 	registration, err := m.meter.RegisterCallback(
 		func(_ context.Context, observer metric.Observer) error {
 			keys, ageSeconds, ok := state.keySetObservation()
 			if !ok {
 				return nil
 			}
-			observer.ObserveInt64(keyCount, keys)
-			observer.ObserveFloat64(age, ageSeconds)
+			observer.ObserveInt64(keyCount, keys, observed)
+			observer.ObserveFloat64(age, ageSeconds, observed)
 			return nil
 		},
 		keyCount, age,
 	)
 	if err != nil {
 		logMetricWiringError(opKeySetGaugeRegister, err)
+		// RegisterCallback can return a LIVE registration alongside its error.
+		// It is unregistered here rather than handed back as a cleanup: a failed
+		// registration must leave nothing firing, so a caller that drops the
+		// returned no-op cannot leak a callback that outlives Close.
+		if !isNilInterface(registration) {
+			if unregisterErr := registration.Unregister(); unregisterErr != nil {
+				logMetricWiringError(opKeySetGaugeUnregister, unregisterErr)
+			}
+		}
 		return func() {}
 	}
 	return func() {

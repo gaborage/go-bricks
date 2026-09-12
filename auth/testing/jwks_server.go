@@ -132,8 +132,16 @@ func (s *JWKSServer) SetMode(mode JWKSMode) {
 }
 
 // SetOversizedBytes sets the filler JWKSOversized adds, in bytes; the served
-// document is that much larger than the real one. n must not be negative.
+// document is that much larger than the real one.
+//
+// It panics on a negative n, before taking the lock: the value is only used
+// inside the handler, where strings.Repeat would panic while the lock is held
+// and leave every later request and mutator blocked forever. Rejecting it here
+// fails the test that set it, in the shape the rest of this package panics.
 func (s *JWKSServer) SetOversizedBytes(n int) {
+	if n < 0 {
+		panic(fmt.Sprintf("auth/testing: SetOversizedBytes requires a non-negative byte count, got %d", n))
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.oversizedBytes = n
