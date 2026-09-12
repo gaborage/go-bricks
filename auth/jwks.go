@@ -240,9 +240,7 @@ func (c *cappedBody) Read(p []byte) (int, error) {
 	if c.allowance <= 0 {
 		return 0, errBodyTooLarge
 	}
-	if int64(len(p)) > c.allowance {
-		p = p[:c.allowance]
-	}
+	p = p[:min(int64(len(p)), c.allowance)]
 	n, err := c.inner.Read(p)
 	c.allowance -= int64(n)
 	if c.allowance <= 0 {
@@ -568,11 +566,7 @@ func (r *jwksResolver) refreshLoop() {
 // tickInterval is the background refresh period. It is always positive:
 // minRefresh is validated positive before a resolver is built.
 func (r *jwksResolver) tickInterval() time.Duration {
-	half := r.ttl / 2
-	if half < r.minRefresh {
-		return r.minRefresh
-	}
-	return half
+	return max(r.ttl/2, r.minRefresh)
 }
 
 // close stops the background refresh and unregisters the gauges. It is

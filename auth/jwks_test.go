@@ -2,10 +2,12 @@ package auth
 
 import (
 	"context"
+	"crypto/rsa"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	nethttp "net/http"
 	"strings"
 	"sync"
@@ -631,6 +633,7 @@ func TestJWKSTickIntervalStaysPositive(t *testing.T) {
 	}{
 		{name: "half_the_ttl_when_it_clears_the_floor", ttl: 10 * time.Minute, minRefresh: time.Minute, want: 5 * time.Minute},
 		{name: "the_floor_when_half_the_ttl_is_shorter", ttl: time.Minute, minRefresh: time.Minute, want: time.Minute},
+		{name: "half_the_ttl_exactly_at_the_floor", ttl: 2 * time.Minute, minRefresh: time.Minute, want: time.Minute},
 		{name: "the_floor_for_a_zero_ttl", ttl: 0, minRefresh: 30 * time.Second, want: 30 * time.Second},
 	}
 	for _, tc := range tests {
@@ -802,4 +805,197 @@ func TestJWKSResolverFetchFailsOnANonOKStatusWithoutAnError(t *testing.T) {
 	assert.Equal(t, refreshErrorStatus, outcome.errType)
 	require.Error(t, outcome.err)
 	assert.Contains(t, outcome.err.Error(), "500")
+}
+
+// countingReader records how many times it was read, so a test can assert the
+// capped body stops touching the issuer's stream once it is past the cap.
+type countingReader struct {
+	inner io.Reader
+	reads int
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	c.reads++
+	return c.inner.Read(p)
+}
+
+func TestCappedBodyStopsReadingOnceTheCapIsPassed(t *testing.T) {
+	inner := &countingReader{inner: strings.NewReader("0123456789")}
+	body := &cappedBody{inner: io.NopCloser(inner), allowance: 3}
+
+	_, first := body.Read(make([]byte, 8))
+	_, second := body.Read(make([]byte, 8))
+
+	require.ErrorIs(t, first, errBodyTooLarge)
+	require.ErrorIs(t, second, errBodyTooLarge)
+	assert.Equal(t, 1, inner.reads, "an exhausted allowance must fail without touching the stream again")
+}
+
+// newStaleFixture builds a resolver holding one key fetched at the clock's
+// current instant, for the stale-ceiling boundary.
+func newStaleFixture(clock *fakeClock) *jwksResolver {
+	return &jwksResolver{
+		now:          clock.Now,
+		staleCeiling: testStaleCeiling,
+		keys:         map[string]*rsa.PublicKey{"k": {N: big.NewInt(1), E: 65537}},
+		fetchedAt:    clock.Now(),
+	}
+}
+
+func TestJWKSResolverTreatsTheStaleCeilingAsInclusive(t *testing.T) {
+	tests := []struct {
+		name string
+		age  time.Duration
+		want bool
+	}{
+		{name: "one_nanosecond_inside_the_ceiling", age: testStaleCeiling - time.Nanosecond, want: true},
+		{name: "exactly_at_the_ceiling", age: testStaleCeiling, want: true},
+		{name: "one_nanosecond_past_the_ceiling", age: testStaleCeiling + time.Nanosecond, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := newFakeClock()
+			r := newStaleFixture(clock)
+			clock.Advance(tc.age)
+
+			assert.Equal(t, tc.want, r.usable())
+		})
+	}
+}
+
+func TestJWKSResolverClaimAttemptAllowsAGapEqualToTheFloor(t *testing.T) {
+	tests := []struct {
+		name  string
+		gap   time.Duration
+		force bool
+		want  bool
+	}{
+		{name: "one_nanosecond_inside_the_floor", gap: testMinRefresh - time.Nanosecond, want: false},
+		{name: "exactly_at_the_floor", gap: testMinRefresh, want: true},
+		{name: "one_nanosecond_past_the_floor", gap: testMinRefresh + time.Nanosecond, want: true},
+		{name: "forced_inside_the_floor", gap: 0, force: true, want: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := newFakeClock()
+			r := &jwksResolver{now: clock.Now, minRefresh: testMinRefresh, lastAttempt: clock.Now()}
+			clock.Advance(tc.gap)
+
+			assert.Equal(t, tc.want, r.claimAttempt(tc.force))
+		})
+	}
+}
+
+func TestJWKSResolverClaimAttemptAllowsTheFirstAttempt(t *testing.T) {
+	clock := newFakeClock()
+	r := &jwksResolver{now: clock.Now, minRefresh: testMinRefresh}
+
+	assert.True(t, r.claimAttempt(false), "a resolver that has never fetched is not rate floored")
+	assert.False(t, r.claimAttempt(false), "the attempt it just recorded starts the floor")
+}
+
+// bodyClient answers every request with one fixed 200 response, so a test can
+// hand the resolver a body of an exact length.
+type bodyClient struct {
+	httpclient.Client
+	body []byte
+}
+
+func (b bodyClient) Get(_ context.Context, _ *httpclient.Request) (*httpclient.Response, error) {
+	return &httpclient.Response{StatusCode: nethttp.StatusOK, Body: b.body}, nil
+}
+
+func TestJWKSResolverFetchAcceptsABodyOfExactlyTheCap(t *testing.T) {
+	body := []byte(`{"keys":[` + jwk(map[string]string{"kty": "RSA", "kid": "k", "n": validModulus(), "e": "AQAB"}) + `]}`)
+	tests := []struct {
+		name    string
+		maxBody int64
+		wantErr bool
+	}{
+		{name: "one_byte_below_the_cap", maxBody: int64(len(body)) - 1, wantErr: true},
+		{name: "exactly_at_the_cap", maxBody: int64(len(body))},
+		{name: "one_byte_above_the_cap", maxBody: int64(len(body)) + 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &jwksResolver{uri: "https://idp.test/jwks.json", client: bodyClient{body: body}, maxBodyBytes: tc.maxBody, now: time.Now}
+
+			outcome := r.fetch(context.Background())
+
+			if tc.wantErr {
+				assert.Equal(t, refreshErrorOversized, outcome.errType)
+				require.ErrorIs(t, outcome.err, errBodyTooLarge)
+				return
+			}
+			require.NoError(t, outcome.err)
+			assert.Len(t, outcome.keys, 1)
+		})
+	}
+}
+
+func TestParseJWKSKeepsTheSmallestUsableExponent(t *testing.T) {
+	// "Aw" is the minimal base64url encoding of 3, the smallest exponent RFC
+	// 8017 allows; the entry must survive rather than be dropped as too small.
+	body := []byte(`{"keys":[` + jwk(map[string]string{"kty": "RSA", "kid": "e3", "n": validModulus(), "e": "Aw"}) + `]}`)
+
+	keys, dropped, err := parseJWKS(body)
+
+	require.NoError(t, err)
+	assert.Empty(t, dropped)
+	require.Len(t, keys, 1)
+	assert.Equal(t, 3, keys["e3"].E)
+}
+
+// bigEndianOfBitLen renders the minimal big-endian byte string whose big.Int bit
+// length is exactly bits.
+func bigEndianOfBitLen(bits int) []byte {
+	return new(big.Int).Lsh(big.NewInt(1), uint(bits-1)).Bytes()
+}
+
+func TestDecodeUintBoundsTheBitLengthInclusively(t *testing.T) {
+	tests := []struct {
+		name string
+		bits int
+		want bool
+	}{
+		{name: "one_bit_below_the_floor", bits: minRSAModulusBits - 1},
+		{name: "exactly_at_the_floor", bits: minRSAModulusBits, want: true},
+		{name: "one_bit_above_the_floor", bits: minRSAModulusBits + 1, want: true},
+		{name: "one_bit_below_the_ceiling", bits: maxRSAModulusBits - 1, want: true},
+		{name: "exactly_at_the_ceiling", bits: maxRSAModulusBits, want: true},
+		{name: "one_bit_above_the_ceiling", bits: maxRSAModulusBits + 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded := base64.RawURLEncoding.EncodeToString(bigEndianOfBitLen(tc.bits))
+
+			value, ok := decodeUint(encoded, minRSAModulusBits, maxRSAModulusBits)
+
+			assert.Equal(t, tc.want, ok)
+			if !tc.want {
+				assert.Nil(t, value)
+				return
+			}
+			require.NotNil(t, value)
+			assert.Equal(t, tc.bits, value.BitLen())
+		})
+	}
+}
+
+func TestJWKSResolverCloseUnregistersTheGaugesOnce(t *testing.T) {
+	unregistered := 0
+	r := &jwksResolver{stop: make(chan struct{}), done: make(chan struct{}), unregisterGauges: func() { unregistered++ }}
+	close(r.done)
+
+	r.close()
+	r.close()
+
+	assert.Equal(t, 1, unregistered, "close must unregister the gauges exactly once")
+}
+
+func TestJWKSResolverCloseWithoutRegisteredGauges(t *testing.T) {
+	r := &jwksResolver{stop: make(chan struct{}), done: make(chan struct{})}
+	close(r.done)
+
+	assert.NotPanics(t, r.close, "a resolver that never registered gauges still closes")
 }

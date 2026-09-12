@@ -217,8 +217,13 @@ func TestEncodeExponentTrimsLeadingZeroBytes(t *testing.T) {
 	assert.Equal(t, "Aw", encodeExponent(3))
 }
 
-func TestPadDocumentLeavesALargeDocumentAlone(t *testing.T) {
+func TestPadDocumentAlwaysGrowsTheDocumentPastTheRequestedSize(t *testing.T) {
 	document := []byte(`{"keys":[]}`)
 
-	assert.Equal(t, document, padDocument(document, 4))
+	padded := padDocument(document, 4)
+
+	assert.Greater(t, len(padded), 4, "a document already past the size still gets its filler")
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(padded, &doc))
+	assert.Equal(t, "pppp", doc["padding"])
 }

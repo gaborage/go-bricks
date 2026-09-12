@@ -25,7 +25,7 @@ const (
 	// JWKSMalformed answers 200 with a body that is not a JWKS document.
 	JWKSMalformed
 	// JWKSOversized answers 200 with a well-formed document padded past
-	// OversizedBytes, to exercise the consumer's body cap.
+	// DefaultOversizedBytes, to exercise the consumer's body cap.
 	JWKSOversized
 	// JWKSNonRSAOnly answers 200 with a well-formed document carrying only the
 	// entries added through AddECKey/AddRawKey — no RSA key at all. It is the
@@ -34,7 +34,7 @@ const (
 	JWKSNonRSAOnly
 )
 
-// DefaultOversizedBytes is the padded size JWKSOversized serves. A test caps the
+// DefaultOversizedBytes is the filler JWKSOversized adds. A test caps the
 // consumer below it — the framework's auth.jwt.jwks.maxbodybytes — rather than
 // raising this.
 const DefaultOversizedBytes = 64 * 1024
@@ -110,7 +110,8 @@ func (s *JWKSServer) SetMode(mode JWKSMode) {
 	s.mode = mode
 }
 
-// SetOversizedBytes sets the padded document size JWKSOversized serves.
+// SetOversizedBytes sets the filler JWKSOversized adds, in bytes; the served
+// document is that much larger than the real one. n must not be negative.
 func (s *JWKSServer) SetOversizedBytes(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -211,7 +212,7 @@ func (s *JWKSServer) handle(w nethttp.ResponseWriter, r *nethttp.Request) {
 
 // documentLocked renders the JWKS document. The caller holds the lock.
 func (s *JWKSServer) documentLocked(mode JWKSMode) []byte {
-	entries := make([]json.RawMessage, 0, len(s.issuer.keys)+len(s.extra))
+	entries := make([]json.RawMessage, 0, len(s.issuer.keys))
 	if mode != JWKSNonRSAOnly {
 		for kid, key := range s.issuer.keys {
 			entry := map[string]string{
@@ -229,14 +230,12 @@ func (s *JWKSServer) documentLocked(mode JWKSMode) []byte {
 	return mustMarshal(map[string]any{"keys": entries})
 }
 
-// padDocument grows a valid document past size with a filler member, so an
-// oversized body is otherwise well-formed: the consumer must reject it on SIZE,
-// not on a parse failure it would have hit anyway.
+// padDocument grows a valid document by size bytes of filler, so an oversized
+// body is otherwise well-formed: the consumer must reject it on SIZE, not on a
+// parse failure it would have hit anyway. The filler is unconditional and
+// exact, so the result always exceeds size whatever the document weighed.
 func padDocument(document []byte, size int) []byte {
-	if len(document) >= size {
-		return document
-	}
-	padding := strings.Repeat("p", size-len(document))
+	padding := strings.Repeat("p", size)
 	// The document always ends in "}", so the filler member is spliced in ahead
 	// of it rather than re-marshaled — which would allocate the padding twice.
 	return append(document[:len(document)-1], []byte(`,"padding":"`+padding+`"}`)...)

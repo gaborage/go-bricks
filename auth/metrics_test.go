@@ -1,8 +1,11 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"os"
 	"testing"
 	"time"
 
@@ -200,9 +203,51 @@ func TestRegisterKeySetGaugesDegradesWithoutAMeter(t *testing.T) {
 	assert.NotPanics(t, unregister)
 }
 
-func TestLogMetricErrorIgnoresASuccessfulInitialization(t *testing.T) {
-	assert.NotPanics(t, func() {
-		logMetricError(metricVerificationTotal, nil)
-		logMetricError(metricVerificationTotal, errors.New("instrument unavailable"))
-	})
+// captureStderr redirects os.Stderr for the duration of fn and returns what was
+// written to it. Instrument initialization failures go there, so this is how the
+// package reads back what degraded telemetry actually reported.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	original := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	defer func() { os.Stderr = original }()
+	defer r.Close()
+	os.Stderr = w
+
+	var buf bytes.Buffer
+	copied := make(chan error, 1)
+	go func() {
+		_, copyErr := io.Copy(&buf, r)
+		copied <- copyErr
+	}()
+
+	fn()
+
+	require.NoError(t, w.Close())
+	require.NoError(t, <-copied)
+	return buf.String()
+}
+
+func TestLogMetricErrorReportsOnlyAFailedInitialization(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantReport bool
+	}{
+		{name: "successful_initialization", err: nil},
+		{name: "failed_initialization", err: errors.New("instrument unavailable"), wantReport: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out := captureStderr(t, func() { logMetricError(metricVerificationTotal, tc.err) })
+
+			if !tc.wantReport {
+				assert.Empty(t, out, "a successful initialization must report nothing")
+				return
+			}
+			assert.Contains(t, out, metricVerificationTotal)
+			assert.Contains(t, out, "instrument unavailable")
+		})
+	}
 }
