@@ -89,10 +89,17 @@ this package promises not to make them.
    it returns and reports a failed fetch as an error, so module `Init` aborts startup
    rather than booting a verifier that can verify nothing. Afterwards the set is refreshed
    on a ticker (half the TTL, floored at `minrefreshinterval`) and on an unknown `kid`
-   (rate-floored and coalesced through singleflight, on a context detached from the
-   caller's). A set the issuer stops serving is still served until it passes
-   `staleceiling`, and then every lookup reports `ErrKeySetUnavailable` → 503. There is no
-   path on which an unverifiable credential is accepted.
+   (rate-floored and coalesced through singleflight). The fetch runs on a resolver-lifetime
+   context rooted at `context.Background`, never on the triggering caller's: one shared call
+   must not die with whichever waiter gives up first, and a resolver-wide key set must not be
+   attributed to one arbitrary tenant's trace. The cost is that the JWKS request carries no
+   caller context values and cannot be correlated to the request that triggered it. `Close`
+   cancels that context, which is the one cancellation a fetch honors, so shutdown aborts an
+   in-flight fetch instead of waiting out its timeout and a closed resolver reaches the issuer
+   never again. A set the issuer stops serving is still served until it passes `staleceiling`
+   — a closed resolver included, since it keeps answering from what it holds — and then every
+   lookup reports `ErrKeySetUnavailable` → 503. There is no path on which an unverifiable
+   credential is accepted.
 
 8. **Configuration through a registered `config/types.go` section.** `auth.jwt.*` is a real
    config section with framework defaults and load-time validation, not an
@@ -119,36 +126,42 @@ this package promises not to make them.
 
 ## Consequences
 
+The mechanism these follow from — the config reference, the full failure matrix, the
+key-set lifecycle and the metric inventory — lives in [wiki/auth.md](auth.md) and is not
+restated here.
+
 - **A service gets bearer verification in three lines and loses the 450-line hand-roll.**
   Build a verifier in `Init`, attach `auth.Middleware` to the groups that need it, read
   `auth.PrincipalFromContext` in the handler.
 - **A 503 is now distinguishable from a 401 on the wire.** An unusable key set answers 503
-  with `Retry-After` derived from `minrefreshinterval` (floored at 1s, no new config key);
-  every credential fault answers 401 with a `WWW-Authenticate` challenge that distinguishes
-  "none presented" (`realm="<issuer>"`) from "presented and rejected"
-  (`error="invalid_token"`). The realm is quoted-string-escaped, because the issuer is
-  operator-supplied and a bare quote or CR would inject a header.
+  with `Retry-After` derived from `minrefreshinterval`, so decision 7's stale ceiling costs
+  no new configuration key; every credential fault answers 401 with a `WWW-Authenticate`
+  challenge distinguishing "none presented" from "presented and rejected". The realm is
+  escaped as an HTTP quoted-string: the issuer is operator-supplied, so it is a
+  header-injection seam.
 - **The rejection reason never reaches the caller.** A failure is reported by `Class` — a
-  closed, low-cardinality vocabulary — to a DEBUG log and to the `auth.result` metric
-  attribute only; `VerificationError.Error` and `Format` render the class and never the
-  cause, because a library cause routinely embeds the credential it failed on.
-- **`Principal` redacts itself under `String`, `Format` and `MarshalJSON`, but not under
-  the logger's reflective filter.** `logger.LogEventAdapter.Interface` and
-  `Logger.WithFields` rebuild a struct into a `map[string]any` by reflection before any
-  marshaler runs, and the filter matches field NAMES, so `Subject` and issuer-chosen claim
-  keys are not masked. No method on `Principal` can influence that path; the documented
-  rule is not to hand a `Principal` to it (gaborage/go-bricks#1602).
+  closed, low-cardinality vocabulary — to one DEBUG breadcrumb (emitted where the rule
+  fires, in the verifier) and to the `auth.result` metric attribute. It is never rendered
+  into a response, and `VerificationError` never renders its `Cause` under any `fmt` verb,
+  because a library cause routinely embeds the credential it failed on.
+- **`Principal` redacts itself under `String`, `Format` and `MarshalJSON` — and the
+  framework logger's reflective filter bypasses every one of them.** The filter rebuilds a
+  struct by reflection before any marshaler runs and matches field NAMES, so `Subject` is
+  not masked and no method on `Principal` can intervene. The rule is therefore documented,
+  not enforced: do not hand a `Principal` to `logger.Interface` or `WithFields`
+  (gaborage/go-bricks#1602).
 - **`auth.jwt.telemetry.enduserid` is the one opt-in that records a subject.** Off by
   default: turning it on stamps `enduser.id` on the request span for every verified
   credential, which is a deliberate operator choice, not a default.
-- **An issuer publishing a mixed key set degrades rather than fails.** Non-RSA entries,
-  encryption-only keys, keys without a `kid`, duplicate `kid`s and moduli outside
-  2048–16384 bits are dropped and named in one WARN per refresh; only a document that
-  yields no usable key at all fails the refresh.
-- **The JWKS body is capped twice.** A response interceptor on the default client refuses
-  an over-`Content-Length` body unread and fails the read one byte past the cap otherwise;
-  a second check after buffering covers a caller-supplied `httpclient.Client`, which has
-  already read the body by the time the resolver sees it.
+- **An issuer publishing a mixed key set degrades rather than fails.** Unusable entries are
+  dropped and named in one WARN per refresh; only a document yielding no usable key at all
+  fails the refresh. The alternative — failing the whole refresh on one bad entry — would
+  let an issuer's unrelated key rotation take a service down.
+- **The JWKS body is capped while it is still a stream**, which is the failure mode the
+  Context names: a length check on bytes `httpclient` has already buffered limits nothing.
+  The cap is `net/http.MaxBytesReader`, the same one `httpclient`'s JOSE transport and
+  `server/jose` use, so an over-cap body fails mid-read as a `*http.MaxBytesError` rather
+  than being truncated into a shorter — and still parsable — key set.
 
 ## References
 
@@ -162,6 +175,7 @@ this package promises not to make them.
   `VerificationError` and `Principal` follow for a different secret
 - [wiki/auth.md](auth.md) — the consumer-facing documentation
 - `.out-of-scope/ecdsa-jose-keys.md` — why ES256 is off both allowlists
-- `auth/doc.go`, `auth/verifier.go`, `auth/jwks.go`, `auth/middleware.go`,
-  `auth/principal.go`, `auth/resolver.go`, `auth/metrics.go`, `config/auth_section.go`,
-  `config/types.go` (`AuthConfig`)
+- `auth/doc.go`, `auth/verifier.go` (both constructors), `auth/config.go`, `auth/jwks.go`
+  (the fetching resolver), `auth/jwks_parse.go` (RFC 7517/7518 decoding),
+  `auth/middleware.go`, `auth/principal.go`, `auth/resolver.go`, `auth/errors.go`,
+  `auth/metrics.go`, `config/auth_section.go`, `config/types.go` (`AuthConfig`)

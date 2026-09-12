@@ -174,9 +174,9 @@ auth:
     #   - at+jwt
     jwks:                                           # Live only for a jwksuri-backed verifier; inert for pinned keys
       ttl: 15m                                      # Key set lifetime before a refresh is due
-      staleceiling: 1h                              # Max age a stale key set may still be served (>= ttl); past it every lookup is 503
+      staleceiling: 1h                              # Max age a stale key set may still be served; must be >= ttl AND >= minrefreshinterval, so 0 is invalid here; past it every lookup is 503
       minrefreshinterval: 30s                       # Floor between key set fetches; also the 503's Retry-After
-      maxbodybytes: 1048576                         # Cap on the fetched key set body (1 MiB)
+      maxbodybytes: 1048576                         # Cap on the fetched key set body (1 MiB); must be positive and at most 16777216 (16 MiB)
     telemetry:
       enduserid: false                              # Record enduser.id on spans (off: it is the token subject)
 

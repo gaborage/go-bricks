@@ -44,19 +44,24 @@ const (
 	msgKeySetUnavailable = "Authentication temporarily unavailable"
 )
 
-// challenge holds the response header values the middleware can emit. They
-// depend only on configuration, so they are built once per Middleware call
-// rather than per request.
+// challengeInvalid is the WWW-Authenticate value for a credential that was
+// presented and rejected (RFC 6750 error="invalid_token"). It takes nothing from
+// configuration, so it is a constant rather than per-Middleware state. It carries
+// no realm and no error_description: a description would be the rejection class,
+// which is framework DEBUG detail, not something to hand an unauthenticated
+// caller.
+const challengeInvalid = schemeBearer + ` error="invalid_token"`
+
+// challenge holds the CONFIGURATION-DERIVED response header values the
+// middleware can emit, built once per Middleware call rather than per request,
+// and owns the rejection response they belong to. Response construction lives
+// here rather than on Verifier so the verifier keeps no HTTP surface at all:
+// Verify is transport-neutral (ADR-109 decision 1), and a gRPC interceptor
+// reusing it must not inherit an HTTP-shaped method set.
 type challenge struct {
 	// missing is the WWW-Authenticate value for a request that presented no
 	// bearer credential: the realm alone, naming the issuer to authenticate with.
 	missing string
-
-	// invalid is the WWW-Authenticate value for a credential that was presented
-	// and rejected (RFC 6750 error="invalid_token"). It carries no realm and no
-	// error_description: a description would be the rejection class, which is
-	// framework DEBUG detail, not something to hand an unauthenticated caller.
-	invalid string
 
 	// retryAfter is the Retry-After value for a 503, in whole seconds.
 	retryAfter string
@@ -108,7 +113,6 @@ func Middleware(v *Verifier) server.MiddlewareFunc {
 
 	ch := &challenge{
 		missing:    schemeBearer + ` realm="` + sanitizeRealm(v.cfg.Issuer) + `"`,
-		invalid:    schemeBearer + ` error="invalid_token"`,
 		retryAfter: retryAfterSeconds(v.cfg.JWKS.MinRefreshInterval),
 	}
 
@@ -121,7 +125,7 @@ func Middleware(v *Verifier) server.MiddlewareFunc {
 		// exactly one observation per request.
 		principal, err := v.Verify(ctx, bearerCredential(c.RequestHeader(headerAuthorization)))
 		if err != nil {
-			return v.deny(c, err, ch)
+			return ch.deny(c, err)
 		}
 
 		c.SetRequestContext(ContextWithPrincipal(ctx, principal))
@@ -135,8 +139,16 @@ func Middleware(v *Verifier) server.MiddlewareFunc {
 // deny sets the response headers for a rejection and returns the server error
 // the framework's HTTPErrorHandler renders into the standard envelope. Headers
 // are written before returning because server.IAPIError carries no header hook.
-func (v *Verifier) deny(c server.HandlerContext, err error, ch *challenge) error {
-	v.debugRequestRejected(verificationResult(err))
+//
+// It deliberately logs nothing: Verifier.reject already emits one class-only
+// DEBUG breadcrumb per rejection, and a second line here carried the same class
+// twice and re-walked the error chain (verificationResult) on a path an
+// unauthenticated caller drives.
+//
+// The default arm is the fail-closed one: any error that is neither sentinel —
+// including a *VerificationError of a class added later — answers 401 with the
+// invalid_token challenge rather than falling through.
+func (ch *challenge) deny(c server.HandlerContext, err error) error {
 	header := c.ResponseWriter().Header()
 
 	switch {
@@ -147,21 +159,9 @@ func (v *Verifier) deny(c server.HandlerContext, err error, ch *challenge) error
 		header.Set(headerRetryAfter, ch.retryAfter)
 		return server.NewServiceUnavailableError(msgKeySetUnavailable)
 	default:
-		header.Set(headerWWWAuthenticate, ch.invalid)
+		header.Set(headerWWWAuthenticate, challengeInvalid)
 		return server.NewUnauthorizedError(msgBearerRejected)
 	}
-}
-
-// debugRequestRejected logs one rejected request at DEBUG, by class only.
-//
-// SECURITY: class is the verificationResult label — the same closed vocabulary
-// the auth.result metric attribute carries — so no part of the credential, and
-// no claim value, can reach the log through it.
-func (v *Verifier) debugRequestRejected(class string) {
-	if v.log == nil {
-		return
-	}
-	v.log.Debug().Str("class", class).Msg("auth: request rejected")
 }
 
 // bearerCredential extracts the credential from an Authorization header value,

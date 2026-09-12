@@ -3,10 +3,16 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -319,6 +325,41 @@ func TestMiddlewareRealmCannotBreakOutOfTheHeaderValue(t *testing.T) {
 	assert.Empty(t, run.rec.Header().Get("X-Injected"), "the issuer must not be able to inject a header")
 }
 
+// TestMiddlewareEmitsExactlyOneRejectionBreadcrumb pins the single-breadcrumb
+// rule: the verifier's class-only DEBUG line is the whole log record of a
+// rejection, and the middleware adds none of its own.
+func TestMiddlewareEmitsExactlyOneRejectionBreadcrumb(t *testing.T) {
+	iss := newTestIssuer()
+	expired := iss.MintExpired()
+
+	tests := []struct {
+		name          string
+		authorization string
+		setHeader     bool
+		wantLines     int
+	}{
+		{name: "rejected_credential", authorization: schemeBearer + " " + expired, setHeader: true, wantLines: 1},
+		// Nothing was presented to classify, so Verify answers the sentinel
+		// without going through reject: the outcome lives on the
+		// auth.verification.total counter, not in the log.
+		{name: "missing_credential", setHeader: false, wantLines: 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out := captureStdout(t, func() {
+				v, err := NewVerifierWithResolver(verifierConfig(iss), logger.New("debug", false), NewStaticKeyResolver(iss.PublicKeys()))
+				require.NoError(t, err)
+				v.now = fixedClock
+				runMiddleware(t, v, newAuthRequest(context.Background(), tc.authorization, tc.setHeader))
+			})
+
+			assert.Equal(t, tc.wantLines, strings.Count(out, "auth: credential rejected"))
+			assert.NotContains(t, out, "auth: request rejected", "the middleware must add no breadcrumb of its own")
+		})
+	}
+}
+
 // TestMiddlewareLogsTheRejectionClassOnly proves the DEBUG rejection line
 // carries the class and nothing from the credential.
 func TestMiddlewareLogsTheRejectionClassOnly(t *testing.T) {
@@ -339,26 +380,11 @@ func TestMiddlewareLogsTheRejectionClassOnly(t *testing.T) {
 
 	assertAPIError(t, run.err, http.StatusUnauthorized, "UNAUTHORIZED")
 	assert.Contains(t, out, string(ClassExpired))
-	assert.Contains(t, out, "auth: request rejected")
+	assert.Contains(t, out, "auth: credential rejected")
 	assert.NotContains(t, out, middlewareSubject)
 	for i, segment := range strings.Split(credential, ".") {
 		assert.NotContainsf(t, out, segment, "log output leaked credential segment %d", i)
 	}
-}
-
-// TestMiddlewareLogsTheMissingCredentialClass pins the other rejection label:
-// no credential is reported as missing_credential, not as a rule failure.
-func TestMiddlewareLogsTheMissingCredentialClass(t *testing.T) {
-	iss := newTestIssuer()
-
-	out := captureStdout(t, func() {
-		v, err := NewVerifierWithResolver(verifierConfig(iss), logger.New("debug", false), NewStaticKeyResolver(iss.PublicKeys()))
-		require.NoError(t, err)
-		v.now = fixedClock
-		runMiddleware(t, v, newAuthRequest(context.Background(), "", false))
-	})
-
-	assert.Contains(t, out, resultMissingCredential)
 }
 
 // TestMiddlewareRejectionSurvivesANilLogger guards the no-op logging arm: a
@@ -450,6 +476,178 @@ func TestMiddlewareOmitsEndUserIDByDefault(t *testing.T) {
 	for i, segment := range strings.Split(credential, ".") {
 		assert.NotContainsf(t, out, segment, "log output leaked credential segment %d", i)
 	}
+}
+
+// denyRow is one row of the failure matrix wiki/auth.md publishes: the rejection
+// a Verify outcome carries, and the HTTP answer the middleware must produce for
+// it. constName is the Go identifier of the Class constant, so the completeness
+// check below can name a class nobody added a row for.
+type denyRow struct {
+	name       string
+	constName  string
+	err        error
+	wantStatus int
+	wantCode   string
+	wantAuth   string
+	wantRetry  string
+}
+
+// denyMatrix enumerates every rejection the middleware can answer, one row per
+// exported Class constant plus the two sentinels outside the Class vocabulary.
+//
+// It is written out BY HAND on purpose: deriving it from the Class constants
+// would make it agree with the code by construction and assert nothing. Adding a
+// Class without adding a row here fails
+// TestDenyCoversEveryDeclaredClassConstant, so the wiki's failure matrix is a
+// transcription of this table rather than prose nobody enforces.
+func denyMatrix() []denyRow {
+	const (
+		unauthorized = "UNAUTHORIZED"
+		unavailable  = "SERVICE_UNAVAILABLE"
+	)
+	invalid := func(name, constName string, class Class) denyRow {
+		return denyRow{
+			name:       name,
+			constName:  constName,
+			err:        NewVerificationError(class, nil),
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   unauthorized,
+			wantAuth:   `Bearer error="invalid_token"`,
+		}
+	}
+	return []denyRow{
+		{
+			name:       "missing_credential",
+			err:        ErrMissingCredential,
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   unauthorized,
+			wantAuth:   `Bearer realm="` + testRealmIssuer + `"`,
+		},
+		{
+			name:       "key_set_unavailable",
+			constName:  "ClassKeySetUnavailable",
+			err:        fmt.Errorf("auth: issuer key lookup failed: %w", ErrKeySetUnavailable),
+			wantStatus: http.StatusServiceUnavailable,
+			wantCode:   unavailable,
+			wantRetry:  testRetryAfter,
+		},
+		invalid("malformed", "ClassMalformed", ClassMalformed),
+		invalid("algorithm", "ClassAlgorithm", ClassAlgorithm),
+		invalid("kid_missing", "ClassKidMissing", ClassKidMissing),
+		invalid("kid_unknown", "ClassKidUnknown", ClassKidUnknown),
+		invalid("signature", "ClassSignature", ClassSignature),
+		invalid("issuer", "ClassIssuer", ClassIssuer),
+		invalid("audience", "ClassAudience", ClassAudience),
+		invalid("expired", "ClassExpired", ClassExpired),
+		invalid("not_yet_valid", "ClassNotYetValid", ClassNotYetValid),
+		invalid("issued_in_future", "ClassIssuedInFuture", ClassIssuedInFuture),
+		invalid("missing_expiry", "ClassMissingExpiry", ClassMissingExpiry),
+		invalid("type", "ClassType", ClassType),
+		// The fail-closed default arm: a class this table does not name still
+		// answers 401 with the invalid_token challenge, never a fall-through.
+		invalid("an_unlisted_class", "", Class("a_class_added_later")),
+	}
+}
+
+// testRealmIssuer and testRetryAfter are the two configuration-derived values
+// the matrix's challenge is built from.
+const (
+	testRealmIssuer = "https://issuer.example.com"
+	testRetryAfter  = "30"
+)
+
+// TestDenyAnswersTheDocumentedFailureMatrix pins status, envelope code and
+// response header for every rejection the middleware can produce.
+func TestDenyAnswersTheDocumentedFailureMatrix(t *testing.T) {
+	ch := &challenge{
+		missing:    schemeBearer + ` realm="` + testRealmIssuer + `"`,
+		retryAfter: testRetryAfter,
+	}
+
+	for _, tc := range denyMatrix() {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testPath, http.NoBody)
+			c := server.NewHandlerContextForTest(rec, req, &config.Config{})
+
+			err := ch.deny(c, tc.err)
+
+			assertAPIError(t, err, tc.wantStatus, tc.wantCode)
+			assert.Equal(t, tc.wantAuth, rec.Header().Get(headerWWWAuthenticate))
+			assert.Equal(t, tc.wantRetry, rec.Header().Get(headerRetryAfter))
+		})
+	}
+}
+
+// TestDenyCoversEveryDeclaredClassConstant makes the matrix above fail loudly
+// when a Class constant is added without a row.
+//
+// The declared set is read from the package SOURCE rather than from any Go
+// value, so the check cannot be satisfied by the same list the table already
+// enumerates: a new `Class = "..."` constant anywhere in the package is seen the
+// moment it is declared.
+func TestDenyCoversEveryDeclaredClassConstant(t *testing.T) {
+	declared := declaredClassConstants(t)
+	require.NotEmpty(t, declared, "the source scan found no Class constants — the scan itself is broken")
+
+	covered := make([]string, 0, len(declared))
+	for _, row := range denyMatrix() {
+		if row.constName != "" {
+			covered = append(covered, row.constName)
+		}
+	}
+
+	slices.Sort(declared)
+	slices.Sort(covered)
+	assert.Equal(t, declared, covered,
+		"every Class constant needs a row in denyMatrix and a row in wiki/auth.md's failure matrix")
+}
+
+// declaredClassConstants reports the names of every `X Class = "..."` constant
+// declared in the package's non-test sources.
+func declaredClassConstants(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir(".")
+	require.NoError(t, err)
+
+	fset := token.NewFileSet()
+	var names []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, parseErr := parser.ParseFile(fset, name, nil, 0)
+		require.NoError(t, parseErr, "parsing %s", name)
+		for _, decl := range file.Decls {
+			names = append(names, classConstantNames(decl)...)
+		}
+	}
+	return names
+}
+
+// classConstantNames returns the Class-typed constant names one declaration
+// introduces.
+func classConstantNames(decl ast.Decl) []string {
+	gen, ok := decl.(*ast.GenDecl)
+	if !ok || gen.Tok != token.CONST {
+		return nil
+	}
+	var names []string
+	for _, spec := range gen.Specs {
+		value, ok := spec.(*ast.ValueSpec)
+		if !ok {
+			continue
+		}
+		ident, ok := value.Type.(*ast.Ident)
+		if !ok || ident.Name != "Class" {
+			continue
+		}
+		for _, name := range value.Names {
+			names = append(names, name.Name)
+		}
+	}
+	return names
 }
 
 // okHandler is the trivial route body used by the end-to-end group test.
