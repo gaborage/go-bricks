@@ -1412,6 +1412,23 @@ func TestHTTPClientMetricsBuildResponseFailureRecorded(t *testing.T) {
 	assert.Equal(t, int64(0), netTotal, "net active requests must be 0 after the call completes")
 }
 
+// TestShouldRetryOnErrorPlaintextJOSEResponseIsTerminal pins the retry exemption at the
+// predicate itself: the peer answered 2xx and already honored the request, so a retry would
+// only duplicate a non-idempotent side effect. The negative control is the same error under
+// the same attempt budget, which does retry.
+func TestShouldRetryOnErrorPlaintextJOSEResponseIsTerminal(t *testing.T) {
+	c := &client{config: &Config{RetryDelay: 0}}
+	refused := fmt.Errorf("round trip failed: %w", ErrJOSEPlaintextResponse)
+
+	retry, err := c.shouldRetryOnError(context.Background(), refused, 0, 3)
+	assert.False(t, retry, "a refused plaintext 2xx must not be re-sent")
+	require.ErrorIs(t, err, ErrJOSEPlaintextResponse)
+
+	retry, err = c.shouldRetryOnError(context.Background(), errors.New("connection reset"), 0, 3)
+	assert.True(t, retry, "an ordinary transport error under budget still retries")
+	require.NoError(t, err)
+}
+
 // TestBackoffDelayFallbacks covers the three defensive fallback branches in
 // backoffDelay that the existing retry-path tests don't reach: zero RetryDelay
 // (uses defaultBackoffBase), attempt exceeding maxBackoffAttempt (clamped),

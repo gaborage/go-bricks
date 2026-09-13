@@ -258,8 +258,8 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 	// hook replaces that rule with one that needs the bytes, so from here every eligible body
 	// is read and Unwrap's verdict stands in for the Content-Type's.
 	if t.Envelope == nil && !jose.IsContentType(resp.Header.Get(headerContentType)) {
-		if t.refusesPlaintext(resp) {
-			return errPlaintextSuccess(resp)
+		if t.refusesPlaintext(resp.StatusCode) {
+			return errPlaintextSuccess(resp.StatusCode)
 		}
 		return nil
 	}
@@ -284,9 +284,9 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 	if t.Envelope != nil {
 		extracted, ok := t.Envelope.Unwrap(resp.Header.Get(headerContentType), raw)
 		if !ok {
-			if t.refusesPlaintext(resp) {
+			if t.refusesPlaintext(resp.StatusCode) {
 				replaceBody(resp, nil, "")
-				return errPlaintextSuccess(resp)
+				return errPlaintextSuccess(resp.StatusCode)
 			}
 			replaceBody(resp, raw, "")
 			return nil
@@ -356,23 +356,15 @@ func (t *JOSETransport) skipsUnwrap(req *nethttp.Request, resp *nethttp.Response
 		resp.StatusCode == nethttp.StatusNotModified || req.Method == nethttp.MethodHead
 }
 
-// refusesPlaintext reports whether a plaintext body at this status must be refused rather
-// than passed through. Both modes consult it, so the rule has one definition: a 2xx is the
-// peer asserting the request was honored, and under an Inbound policy the reply carrying
-// that verdict must have been decrypted or the caller is trusting bytes nothing
-// authenticated. Failure statuses pass through — a pre-trust envelope is plaintext by
-// design, because the peer was never authenticated in the first place.
-//
-// Under a bare-JWE policy the rule proves only that the body was encrypted to us, not who
-// sent it, so authenticating the sender remains an out-of-band job.
-func (t *JOSETransport) refusesPlaintext(resp *nethttp.Response) bool {
-	return !t.AllowPlaintextSuccess && IsSuccessStatus(resp.StatusCode)
+// refusesPlaintext reports whether an unopened body at this status must be refused; see
+// ADR-107's amendment.
+func (t *JOSETransport) refusesPlaintext(status int) bool {
+	return !t.AllowPlaintextSuccess && IsSuccessStatus(status)
 }
 
-// errPlaintextSuccess names the refusal by status alone: the body is exactly what must not
-// be reported, being unauthenticated content the peer chose.
-func errPlaintextSuccess(resp *nethttp.Response) error {
-	return fmt.Errorf("%w (status: %d)", ErrJOSEPlaintextResponse, resp.StatusCode)
+// errPlaintextSuccess names the refusal by status alone; the body must not be reported.
+func errPlaintextSuccess(status int) error {
+	return fmt.Errorf("%w (status: %d)", ErrJOSEPlaintextResponse, status)
 }
 
 // readAndCloseBody drains body up to maxBytes (negative = unbounded) and closes it.

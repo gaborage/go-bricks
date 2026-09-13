@@ -7394,8 +7394,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   the request and a retry would only duplicate a non-idempotent side effect. **Unchanged**: every
   non-2xx status, which still passes through with its body and
   headers exactly as the peer sent them; 204, 304 and every reply to HEAD, which net/http
-  guarantees carry no body and which were never read; 205 and a 2xx answer to CONNECT, which keep
-  reaching `jose.Open` and failing closed; a successful unwrap, which still relabels the body
+  guarantees carry no body and which were never read; a JOSE-typed 205 or 2xx answer to CONNECT,
+  which still reaches `jose.Open` and fails closed, while a plaintext one is now refused like every
+  other unopened 2xx; a successful unwrap, which still relabels the body
   `application/json`; an outbound-only transport, which reads nothing; and `MaxResponseBytes`,
   whose over-cap `ValidationError` still wins, being raised during the read
 - gate: match = a client you build with `WithJOSE` (or a hand-built `JOSETransport`) sets `Inbound`,

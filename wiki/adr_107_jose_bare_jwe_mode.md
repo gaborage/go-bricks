@@ -23,8 +23,9 @@ inner JWS, so sender authentication stays out of band exactly as the Context bel
 Two decisions inside that rule. **Empty successes are not violations**: 204, 304 and every
 reply to HEAD stay in the skip set the ADR-107 transport already had — net/http guarantees
 they carry no body, so there is no plaintext to mistake for a payload, and refusing them
-would break every DELETE and conditional GET against a JOSE peer. 205 and a 2xx answer to
-CONNECT keep reaching `jose.Open` and failing closed, exactly as before. **Interceptors
+would break every DELETE and conditional GET against a JOSE peer. A JOSE-typed 205 or 2xx
+answer to CONNECT keeps reaching `jose.Open` and failing closed exactly as before, while a
+plaintext one is refused like every other unopened 2xx. **Interceptors
 never see it**: a `RoundTrip` error short-circuits before `buildResponse`, so a response
 interceptor that would log, cache or re-parse the payload is never handed unauthenticated
 bytes. The error carries the status and nothing from the body — those bytes are precisely
@@ -35,7 +36,10 @@ transport just declared untrustworthy to save a connection is the wrong side of 
 bargain (envelope mode has already drained the body for `Unwrap`, so its connection is
 unaffected). **A refusal is also terminal**: `errors.Is(err, ErrJOSEPlaintextResponse)` is
 exempt from the client's retry loop, because the peer answered 2xx and already honored the
-request, so a retry would only duplicate a non-idempotent side effect.
+request, so a retry would only duplicate a non-idempotent side effect. That terminal path wraps
+the refusal in `NewNetworkError`, so the taxonomy and the metrics built from it read
+`network_error` for what is a policy violation — the `errors.Is` contract is unaffected, and
+[#1629](https://github.com/gaborage/go-bricks/issues/1629) tracks the label.
 
 `AllowPlaintextSuccess`, on `JOSETransport` and on `JOSEConfig`, restores the old
 pass-through for a whole transport. It is the Strangler-migration knob and nothing else: set

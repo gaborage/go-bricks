@@ -711,6 +711,37 @@ func TestJOSETransportRFCBodylessButNotNetHTTPBodylessStillUnwraps(t *testing.T)
 	}
 }
 
+// TestJOSETransportRFCBodylessButNotNetHTTPBodylessPlaintextIsRefused is the plaintext half
+// of the row above, and the exact wording the C65.1 atom now carries: a 205 or a 2xx answer
+// to CONNECT is outside the skip set either way, so a JOSE-typed one fails closed in
+// jose.Open while a plaintext one is refused like every other unopened 2xx.
+func TestJOSETransportRFCBodylessButNotNetHTTPBodylessPlaintextIsRefused(t *testing.T) {
+	f := jositest.NewBidirectionalFixture(t)
+
+	tests := []struct {
+		name   string
+		method string
+		status int
+	}{
+		{name: "plaintext_reset_content_205", method: http.MethodGet, status: http.StatusResetContent},
+		{name: "plaintext_connect_tunnel_200", method: http.MethodConnect, status: http.StatusOK},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := newJOSETransport(f)
+			transport.Inner = bodylessResponder{status: tc.status, contentType: "application/json"}
+
+			req, err := http.NewRequestWithContext(context.Background(), tc.method, "http://example.invalid", http.NoBody)
+			require.NoError(t, err)
+
+			resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is nil on this error path; RoundTrip closed the peer's body
+			require.ErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
+			assert.Nil(t, resp)
+		})
+	}
+}
+
 func TestJOSETransportEmptyJOSEBodyOnBodyBearingStatusFailsClosed(t *testing.T) {
 	// Negative control for the bodyless guard. A 200 advertising application/jose with no
 	// body is a ciphertext stripped in transit, not a legitimate empty response, and must
@@ -822,6 +853,31 @@ func TestBuilderWithJOSEPlaintextSuccessIsNotRetried(t *testing.T) {
 	require.ErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
 	assert.Nil(t, resp)
 	assert.Equal(t, int64(1), hits.Load(), "a refused plaintext 2xx must not be re-sent")
+}
+
+// TestBuilderWithJOSEPlaintextSuccessSkipsResponseInterceptors pins the half of the rule a
+// caller can observe from outside the transport: the RoundTrip error short-circuits before
+// buildResponse, so an interceptor that would log, cache or re-parse the payload is never
+// handed unauthenticated bytes.
+func TestBuilderWithJOSEPlaintextSuccessSkipsResponseInterceptors(t *testing.T) {
+	f := jositest.NewBidirectionalFixture(t)
+	server := plainJSONServer(t, http.StatusOK, func(*http.Request) {})
+	defer server.Close()
+
+	var intercepted atomic.Int64
+	client, err := httpclient.NewBuilder(logger.New("info", false)).
+		WithJOSE(httpclient.JOSEConfig{Outbound: f.ClientOutbound, Inbound: f.ClientInbound, Resolver: f.Resolver}).
+		WithResponseInterceptor(func(context.Context, *http.Request, *http.Response) error {
+			intercepted.Add(1)
+			return nil
+		}).
+		Build()
+	require.NoError(t, err)
+
+	resp, err := client.Post(context.Background(), &httpclient.Request{URL: server.URL, Body: []byte(`{"x":1}`)})
+	require.ErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
+	assert.Nil(t, resp)
+	assert.Equal(t, int64(0), intercepted.Load(), "a refused plaintext 2xx must not reach a response interceptor")
 }
 
 // TestBuilderWithJOSEFailsClosedOnAnEnvelopeWithoutAPolicy pins the pairing rule. Wrap is

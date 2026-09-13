@@ -229,6 +229,7 @@ func TestJOSETransportEnvelopeUnwrapDecryptsTheVisaEnvelope(t *testing.T) {
 
 	<-calls
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "application/json", resp.Headers.Get("Content-Type"))
 	assert.JSONEq(t, `{"token":"tok-42"}`, string(resp.Body))
 }
 
