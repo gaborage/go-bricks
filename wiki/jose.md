@@ -219,6 +219,15 @@ inbound := &jose.Policy{
 }
 
 compact, err := jose.Seal(payload, outbound, resolver) // -> a 3-segment JWS over a 5-segment JWE
+if err != nil {
+    return err
+}
+
+// Verify-then-decrypt. hdr.JWS is the outer layer, hdr.JWE the inner one.
+plaintext, claims, hdr, err := jose.Open(compact, inbound, resolver)
+if err != nil {
+    return err
+}
 ```
 
 **Validation rules**: an outbound policy requires `SignKid` **and** `EncryptKid`; an inbound one requires `VerifyKid` **and** `DecryptKid`; a cross-direction kid is `JOSE_POLICY_DIRECTION_MISMATCH`. `SigAlg` must be on the signature allowlist — this mode signs, so leaving it unset is `JOSE_ALGORITHM_DISALLOWED`. `Enc` is `A256GCM` only. The `ProtectedHeaders` collision guard applies to the inner JWE exactly as in bare mode.

@@ -60,7 +60,8 @@ type BodyEnvelope interface {
 // and opens inbound response bodies (jose.Open) using a fixed pair of policies and a
 // single KeyResolver. What sealing and opening MEAN is the policy's Mode: sign+encrypt
 // and decrypt+verify on the nested JWE-of-JWS default, encrypt-only and decrypt-only on
-// a SealModeBareJWE policy, which carries no signature to verify.
+// a SealModeBareJWE policy, which carries no signature to verify, and encrypt-then-sign
+// and verify-then-decrypt on a SealModeJWSofJWE policy.
 //
 // Only bodies are protected: a request with no body is forwarded unsealed regardless of
 // method, and a response net/http guarantees is empty (1xx, 204, 304, any reply to HEAD) is
@@ -89,12 +90,14 @@ type JOSETransport struct {
 	Inner nethttp.RoundTripper
 
 	// Outbound is optional: when set, it is the policy used to seal every outbound
-	// request body (sign+encrypt, or encrypt-only under SealModeBareJWE).
+	// request body (sign+encrypt, encrypt-only under SealModeBareJWE, or encrypt-then-sign
+	// under SealModeJWSofJWE).
 	// A nil Outbound disables outbound wrapping entirely (the transport delegates to Inner).
 	Outbound *jose.Policy
 
 	// Inbound is optional: when set, application/jose responses are opened
-	// (decrypt+verify, or decrypt-only under SealModeBareJWE).
+	// (decrypt+verify, decrypt-only under SealModeBareJWE, or verify-then-decrypt under
+	// SealModeJWSofJWE).
 	// Other response Content-Types pass through unmodified so plaintext error envelopes
 	// from JOSE-aware counterparties (e.g., GoBricks pre-trust failures) remain readable.
 	Inbound *jose.Policy
@@ -225,8 +228,8 @@ func (t *JOSETransport) wrapRequest(req *nethttp.Request) (*nethttp.Request, err
 	return clone, nil
 }
 
-// unwrapResponse opens resp.Body — decrypt+verify, or decrypt-only under
-// SealModeBareJWE — when Inbound is set AND the response's
+// unwrapResponse opens resp.Body — decrypt+verify, decrypt-only under SealModeBareJWE, or
+// verify-then-decrypt under SealModeJWSofJWE — when Inbound is set AND the response's
 // Content-Type indicates JOSE. Plaintext responses (e.g., pre-trust error envelopes
 // from a JOSE-aware peer) and responses that definitionally carry no body pass through
 // unmodified.
