@@ -722,7 +722,7 @@ func TestQueryBuilderBuildUpsertPreconditionSentinels(t *testing.T) {
 		insertColumns   map[string]any
 		updateColumns   map[string]any
 		wantErr         error
-		wantColumns     []string
+		wantColumn      string
 	}{
 		{
 			name:          "conflict_columns_required",
@@ -734,15 +734,15 @@ func TestQueryBuilderBuildUpsertPreconditionSentinels(t *testing.T) {
 			conflictColumns: []string{"tenant_id"},
 			insertColumns:   map[string]any{"id": 1},
 			wantErr:         types.ErrUpsertConflictColumnNotInserted,
-			wantColumns:     []string{`"tenant_id"`},
+			wantColumn:      `"tenant_id"`,
 		},
 		{
-			name:            "conflict_column_updated",
+			name:            "conflict_column_in_update_set",
 			conflictColumns: []string{"id"},
 			insertColumns:   map[string]any{"id": 1, "name": "a"},
 			updateColumns:   map[string]any{"id": 2, "name": "b"},
 			wantErr:         types.ErrUpsertConflictColumnInUpdateSet,
-			wantColumns:     []string{`"id"`},
+			wantColumn:      `"id"`,
 		},
 	}
 
@@ -754,8 +754,11 @@ func TestQueryBuilderBuildUpsertPreconditionSentinels(t *testing.T) {
 				sql, args, err := qb.BuildUpsert("users", tt.conflictColumns, tt.insertColumns, tt.updateColumns)
 
 				require.ErrorIs(t, err, tt.wantErr)
-				for _, column := range tt.wantColumns {
-					assert.Contains(t, err.Error(), column)
+				require.ErrorContains(t, err, tt.wantColumn)
+				for _, other := range tests {
+					if other.name != tt.name {
+						require.NotErrorIs(t, err, other.wantErr)
+					}
 				}
 				assert.Empty(t, sql)
 				assert.Empty(t, args)
