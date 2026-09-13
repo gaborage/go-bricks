@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -339,4 +340,160 @@ func TestSealPayloadRejections(t *testing.T) {
 		require.Equal(t, 2, code)
 		assert.Contains(t, stderr, "at most one payload-file")
 	})
+
+	t.Run("unknown_mode", func(t *testing.T) {
+		fx := newCLIFixture(t)
+		_, stderr, code := runCLI([]string{"-mode", "flat", "-encrypt-key-file", fx.encPath, "-encrypt-kid", testEncKid}, []byte(`{}`))
+		require.Equal(t, 1, code)
+		assert.Contains(t, stderr, `-mode "flat"`)
+	})
+}
+
+// bareArgs are the minimal bare-mode flags: an encryption key and kid, nothing signed.
+func bareArgs(fx *cliFixture, extra ...string) []string {
+	return append([]string{
+		"-mode", "bare",
+		"-encrypt-key-file", fx.encPath,
+		"-encrypt-kid", testEncKid,
+	}, extra...)
+}
+
+// nestedArgs are the minimal default-mode flags: both key sources and both kids.
+func nestedArgs(fx *cliFixture, extra ...string) []string {
+	return append([]string{
+		"-sign-key-file", fx.signPath,
+		"-encrypt-key-file", fx.encPath,
+		"-sign-kid", testSignKid,
+		"-encrypt-kid", testEncKid,
+	}, extra...)
+}
+
+// openBare opens a CLI-sealed bare JWE through jose.Open with the inverse
+// material: the encryption PRIVATE half under the kid the CLI encrypted to.
+func openBare(t *testing.T, compact string, encPriv *rsa.PrivateKey, enc gojose.ContentEncryption) ([]byte, jose.OpenHeader) {
+	t.Helper()
+	mirror := &jose.Policy{
+		Mode:       jose.SealModeBareJWE,
+		Direction:  jose.DirectionInbound,
+		DecryptKid: testEncKid,
+		KeyAlg:     jose.DefaultKeyAlg,
+		Enc:        enc,
+		Cty:        jose.DefaultCty,
+	}
+	resolver := jositest.NewTestResolver(map[string]any{testEncKid: encPriv})
+	plaintext, _, hdr, err := jose.Open(compact, mirror, resolver)
+	require.NoError(t, err)
+	return plaintext, hdr
+}
+
+// protectedHeader decodes the first compact segment into its JSON members.
+func protectedHeader(t *testing.T, compact string) map[string]any {
+	t.Helper()
+	seg, _, _ := strings.Cut(compact, ".")
+	raw, err := base64.RawURLEncoding.DecodeString(seg)
+	require.NoError(t, err)
+	var hdr map[string]any
+	require.NoError(t, json.Unmarshal(raw, &hdr))
+	return hdr
+}
+
+// TestSealPayloadBareMode pins that -mode bare emits a single five-segment JWE
+// whose plaintext IS the payload: opening it as a bare JWE succeeds, which a
+// nested token (cty=JWS) never does.
+func TestSealPayloadBareMode(t *testing.T) {
+	fx := newCLIFixture(t)
+	payload := []byte(`{"bare":true}`)
+
+	stdout, stderr, code := runCLI(bareArgs(fx), payload)
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+
+	compact := strings.TrimSuffix(stdout, "\n")
+	assert.Len(t, strings.Split(compact, "."), 5)
+	plaintext, hdr := openBare(t, compact, fx.encPriv, jose.DefaultEnc)
+	assert.Equal(t, payload, plaintext)
+	assert.Equal(t, testEncKid, hdr.JWE.Kid)
+	assert.Equal(t, jose.Header{}, hdr.JWS, "bare mode has no inner JWS")
+}
+
+// TestSealPayloadBareRefusesSigningMaterial pins that every signing input is a
+// hard, named error under -mode bare. Each case is otherwise sealable, so
+// deleting its check flips the exit code or loses the flag name from stderr.
+func TestSealPayloadBareRefusesSigningMaterial(t *testing.T) {
+	fx := newCLIFixture(t)
+	signVal := base64.StdEncoding.EncodeToString(derPKCS8Private(t, fx.signPriv))
+
+	cases := []struct {
+		name  string
+		extra []string
+		flag  string
+	}{
+		{"sign_key_file", []string{"-sign-key-file", fx.signPath}, "-sign-key-file"},
+		{"sign_key_value", []string{"-sign-key-value", signVal}, "-sign-key-value"},
+		{"sign_kid", []string{"-sign-kid", testSignKid}, "-sign-kid"},
+		{"sig_alg", []string{"-sig-alg", "PS256"}, "-sig-alg"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			stdout, stderr, code := runCLI(bareArgs(fx, tt.extra...), []byte(`{}`))
+			require.Equal(t, 1, code, "stdout: %s", stdout)
+			assert.Empty(t, stdout)
+			assert.Contains(t, stderr, tt.flag+" is not accepted with -mode bare")
+		})
+	}
+}
+
+// TestSealPayloadEnc pins -enc against each mode's allowlist: A128GCM seals
+// under bare, and nested refuses it naming the nested allowed set.
+func TestSealPayloadEnc(t *testing.T) {
+	fx := newCLIFixture(t)
+
+	t.Run("a128gcm_under_bare", func(t *testing.T) {
+		payload := []byte(`{"enc":"a128"}`)
+
+		stdout, stderr, code := runCLI(bareArgs(fx, "-enc", "A128GCM"), payload)
+		require.Equal(t, 0, code, "stderr: %s", stderr)
+
+		compact := strings.TrimSuffix(stdout, "\n")
+		assert.Equal(t, "A128GCM", protectedHeader(t, compact)["enc"])
+		plaintext, _ := openBare(t, compact, fx.encPriv, gojose.A128GCM)
+		assert.Equal(t, payload, plaintext)
+	})
+
+	t.Run("a128gcm_under_nested", func(t *testing.T) {
+		stdout, stderr, code := runCLI(nestedArgs(fx, "-enc", "A128GCM"), []byte(`{}`))
+		require.Equal(t, 1, code)
+		assert.Empty(t, stdout)
+		assert.Contains(t, stderr, `-enc "A128GCM" is not allowed with -mode nested (allowed: [A256GCM])`)
+	})
+}
+
+// TestSealPayloadDefaultModeShape guards the default invocation: with no
+// -mode it still emits the nested token, whose outer protected header holds
+// exactly alg, enc, kid and cty=JWS and nothing bare mode adds.
+func TestSealPayloadDefaultModeShape(t *testing.T) {
+	fx := newCLIFixture(t)
+	stdout, stderr, code := runCLI(nestedArgs(fx), []byte(`{}`))
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	require.True(t, strings.HasSuffix(stdout, "\n"))
+
+	assert.Equal(t, map[string]any{
+		"alg": "RSA-OAEP-256",
+		"enc": "A256GCM",
+		"kid": testEncKid,
+		"cty": "JWS",
+	}, protectedHeader(t, strings.TrimSuffix(stdout, "\n")))
+}
+
+// TestSealPayloadHelp pins that -h documents every mode and bare-outbound flag.
+func TestSealPayloadHelp(t *testing.T) {
+	_, stderr, code := runCLI([]string{"-h"}, nil)
+	require.Equal(t, 0, code)
+	for _, flagName := range []string{"-mode", "-enc"} {
+		assert.Regexp(t, `(?m)^  `+flagName+`( |$)`, stderr, "help omits %s", flagName)
+	}
+	assert.Contains(t, stderr, "nested allows [A256GCM], bare allows [A128GCM A256GCM]")
+	assert.Contains(t, stderr, "nested default RS256")
+	assert.Regexp(t, `(?m)^  -sign-kid string\n\s+.*required with -mode nested; refused with -mode bare`, stderr)
+	assert.Regexp(t, `(?m)^  -sign-key-file string\n\s+.*used to sign the outbound JWS \(nested mode only\)`, stderr)
+	assert.NotRegexp(t, `(?m)^  -sign-kid string\n\s+.*\(required\)$`, stderr)
 }
