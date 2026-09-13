@@ -10,13 +10,9 @@ import (
 	"github.com/gaborage/go-bricks/database/types"
 )
 
-// Session wraps a *sql.Conn pinned to a single physical database connection.
-// Unlike Connection (which delegates to *sql.DB and may run each statement on
-// a different pooled connection), every Session statement runs on the same
-// backend — required for session-scoped state such as PostgreSQL advisory
-// locks, SET, and temp tables, which silently evaporate if the pool hands the
-// next statement to a different physical connection. The vendor field is
-// vendor-neutral bookkeeping only, reported back via DatabaseType().
+// Session wraps a *sql.Conn pinned to a single physical database connection, so
+// every statement runs on the same backend. See types.Session for the error and
+// concurrency contract.
 type Session struct {
 	conn   *sql.Conn
 	vendor string
@@ -27,9 +23,11 @@ var _ types.Session = (*Session)(nil)
 
 // OpenSession acquires a dedicated physical connection from the pool via
 // (*sql.DB).Conn, pinned for the caller until Close.
-func (c *Connection) OpenSession(ctx context.Context, vendor string) (*Session, error) {
+func (c *Connection) OpenSession(ctx context.Context, vendor string) (types.Session, error) {
 	conn, err := c.DB.Conn(ctx)
 	if err != nil {
+		// Interface return type, so this is a genuinely nil types.Session
+		// rather than one wrapping a nil *Session.
 		return nil, err
 	}
 	return &Session{conn: conn, vendor: vendor}, nil
@@ -92,27 +90,15 @@ func (s *Session) DatabaseType() string {
 // sessionRow adds the sql.ErrConnDone translation to a types.Row: a
 // driver.ErrBadConn failure on a pinned connection is deferred until Scan/Err
 // (QueryRowContext never returns an error directly), so it needs the same
-// wrapConnErr treatment as Query/Exec/BeginTx. Scanning itself is delegated to
-// types.NewRowFromSQL rather than reimplemented, which is also where the
-// nil-row guard below comes from.
+// wrapConnErr treatment as Query/Exec/BeginTx.
 type sessionRow struct {
 	row types.Row
 }
 
 func (r *sessionRow) Scan(dest ...any) error {
-	if r == nil || r.row == nil {
-		return errNilSessionRow
-	}
 	return wrapConnErr(r.row.Scan(dest...))
 }
 
 func (r *sessionRow) Err() error {
-	if r == nil || r.row == nil {
-		return errNilSessionRow
-	}
 	return wrapConnErr(r.row.Err())
 }
-
-// errNilSessionRow mirrors the guard types.sqlRowAdapter applies: report a nil
-// underlying row instead of dereferencing it.
-var errNilSessionRow = errors.New("wrapper: session row has no underlying sql.Row")

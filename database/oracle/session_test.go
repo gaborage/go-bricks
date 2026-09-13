@@ -8,14 +8,8 @@ import (
 )
 
 // TestSessionReturnsNilInterfaceOnAcquisitionFailure pins the interface VALUE,
-// not just its reflected nil-ness: Session returns (types.Session, error) while
-// the underlying OpenSession returns (*wrapper.Session, error), so a bare
-// `return c.OpenSession(...)` hands the caller a NON-nil types.Session
-// interface wrapping a nil *wrapper.Session. The usual `if sess != nil { defer
-// sess.Close() }` then panics.
-//
-// The comparison below is a PLAIN `!=` on the interface — assert.Nil/require.Nil
-// are reflection-based and pass on a typed nil, so they cannot catch this.
+// not just its reflected nil-ness: the plain `!=` below catches a typed nil,
+// which reflection-based assert.Nil/require.Nil would pass.
 func TestSessionReturnsNilInterfaceOnAcquisitionFailure(t *testing.T) {
 	db, mock, c := setupMockConnection(t)
 	mock.ExpectClose()
@@ -29,8 +23,8 @@ func TestSessionReturnsNilInterfaceOnAcquisitionFailure(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestSessionOpensOnHealthyPool covers the success arm of the same method, so
-// the nil-interface fix above cannot be satisfied by always returning nil.
+// TestSessionOpensOnHealthyPool covers the success arm, so the assertion above
+// cannot be satisfied by always returning nil.
 func TestSessionOpensOnHealthyPool(t *testing.T) {
 	db, mock, c := setupMockConnection(t)
 	defer func() {

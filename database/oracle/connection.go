@@ -451,20 +451,11 @@ func (c *Connection) DatabaseType() string {
 	return types.Oracle
 }
 
-// Session opens a dedicated session pinned to a single physical connection,
-// for session-scoped state that a shared pool connection could silently lose
-// if the next statement lands on a different physical backend. The caller
-// must Close the returned Session to release the connection back to the pool.
-// On failure it returns an explicitly nil types.Session: OpenSession returns a
-// concrete *wrapper.Session, so `return c.OpenSession(...)` would hand back a
-// non-nil interface wrapping a nil pointer and make the caller's usual
-// `if sess != nil { defer sess.Close() }` panic.
+// Session opens a dedicated session pinned to a single physical connection, for
+// session-scoped state; the caller must Close it to release the connection back
+// to the pool. See types.Session for the error and concurrency contract.
 func (c *Connection) Session(ctx context.Context) (types.Session, error) {
-	sess, err := c.OpenSession(ctx, types.Oracle)
-	if err != nil {
-		return nil, err
-	}
-	return sess, nil
+	return c.OpenSession(ctx, types.Oracle)
 }
 
 // MigrationTable returns the migration table name for Oracle
