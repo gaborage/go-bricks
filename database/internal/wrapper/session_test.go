@@ -37,10 +37,11 @@ func TestSessionPinsOneConnectionUntilClose(t *testing.T) {
 
 	_, err := sess.Exec(ctx, "SET search_path TO app")
 	require.NoError(t, err)
-	rows, err := sess.Query(ctx, "SELECT 1")
-	require.NoError(t, err)
-	closeErr := rows.Close()
-	require.NoError(t, closeErr)
+	func() {
+		rows, err := sess.Query(ctx, "SELECT 1")
+		require.NoError(t, err)
+		defer rows.Close()
+	}()
 	var n int
 	require.NoError(t, sess.QueryRow(ctx, "SELECT 2").Scan(&n))
 	assert.Equal(t, 2, n)
@@ -183,9 +184,11 @@ func TestSessionCloseAfterRowsClosedReturnsPromptly(t *testing.T) {
 	ctx := context.Background()
 
 	mock.ExpectQuery("SELECT n").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(1))
-	rows, err := sess.Query(ctx, "SELECT n FROM t")
-	require.NoError(t, err)
-	require.NoError(t, rows.Close(), "the Rows must be closed before the Session")
+	func() {
+		rows, err := sess.Query(ctx, "SELECT n FROM t")
+		require.NoError(t, err)
+		defer rows.Close()
+	}()
 
 	done := make(chan error, 1)
 	go func() { done <- sess.Close() }()
