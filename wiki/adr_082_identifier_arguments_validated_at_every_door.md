@@ -5,6 +5,17 @@
 **Supersedes:** the Filter exclusion in [ADR-031](adr_031_query_builder_identifier_validation.md)
 **Related:** [ADR-071](adr_071_upsert_column_sets_name_each_column_once.md) · issues #1104, #1143, #1149, #1150, #1151, #1153, #1154, #1187, #1196
 
+## Amendment (2026-09-12): `RawExpression` bodies carry the annotation too (#1192)
+
+The #1147 note in the body records the `// SECURITY: Manual SQL review completed`
+rule moving to four doors while exempting the `qb.Expr()` form. That exemption is
+withdrawn: every call site constructing a `RawExpression` with a SQL body —
+`qb.Expr`, `qb.MustExpr` or a struct literal — carries the annotation like the
+string doors, so one rule covers every raw-SQL body. `Validate()` still does not
+inspect the body; the annotation is the forcing function and the name-based grep
+stays as defense in depth. Documentation and comments only — no behavior change.
+`[C61.8]` carries the matching amendment.
+
 ## Amendment (2026-08-28): the upsert's own acceptance system is ONE rule, and it normalizes
 
 The body below names `BuildUpsert`'s column maps as a shape that sits outside the
