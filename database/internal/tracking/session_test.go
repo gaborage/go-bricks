@@ -62,8 +62,9 @@ func TestSessionQueryTracksLikePoolStatement(t *testing.T) {
 		Settings: NewSettings(&config.DatabaseConfig{}),
 	})
 
-	_, err := sess.Query(context.Background(), TestQuerySelectUsersParams)
+	rows, err := sess.Query(context.Background(), TestQuerySelectUsersParams)
 	require.NoError(t, err)
+	closeSilently(rows)
 	require.Len(t, underlying.queryCalls, 1, "the query must reach the wrapped session")
 	assert.Equal(t, TestQuerySelectUsersParams, underlying.queryCalls[0].query)
 
@@ -99,8 +100,9 @@ func TestSessionStatementCarriesServerAttributes(t *testing.T) {
 	sess, err := conn.Session(ctx)
 	require.NoError(t, err)
 
-	_, err = sess.Query(ctx, TestQuerySelectUsersParams)
+	rows, err := sess.Query(ctx, TestQuerySelectUsersParams)
 	require.NoError(t, err)
+	closeSilently(rows)
 
 	spans := obtest.NewSpanCollector(t, traceExporter)
 	for _, name := range []string{dbSessionSpanName, dbSelectMetric} {
