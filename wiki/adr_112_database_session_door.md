@@ -89,7 +89,7 @@ test doubles.
 - **The contract is a runtime contract, and the interface cannot enforce it.** The `types.Session`
   godoc is the single authority for the full contract — blocking, concurrency, idempotency and the
   raw row-iteration exception all live there, not here. The one sentence that motivated this break,
-  from `database/types/session.go:24`: *"the call that OBSERVES the death may return the driver's
+  from `database/types/session.go:24-29`: *"the call that OBSERVES the death may return the driver's
   own error rather than a translated one … Every SUBSEQUENT call returns an error satisfying
   `errors.Is(err, sql.ErrConnDone)`."* So a caller that wants one classification for a dead
   backend must read both the first error and the next one.
