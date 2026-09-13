@@ -3612,7 +3612,7 @@ func TestApplyDatabasePoolDefaultsKeepsExplicitType(t *testing.T) {
 }
 
 // TestIsPostgresKeywordNameShape pins libpq's keyword shape [A-Za-z_][A-Za-z0-9_]*
-// character by character: each range's own endpoints and the neighbours just
+// character by character: each range's own endpoints and the neighbors just
 // outside it, plus the index rule that lets a digit continue a key but never
 // start one.
 func TestIsPostgresKeywordNameShape(t *testing.T) {
@@ -3656,6 +3656,6 @@ func TestIsPostgresKeywordNameShape(t *testing.T) {
 // end to end: a digit-led key leaves the DSN untyped, the same digit inside a key
 // still infers postgresql.
 func TestInferDatabaseTypeFromConnectionStringKeywordKeyShape(t *testing.T) {
-	assert.Equal(t, "", inferDatabaseTypeFromConnectionString("9host=x user=u"))
+	assert.Empty(t, inferDatabaseTypeFromConnectionString("9host=x user=u"))
 	assert.Equal(t, PostgreSQL, inferDatabaseTypeFromConnectionString("h9=1 host=h"))
 }
