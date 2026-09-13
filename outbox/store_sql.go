@@ -101,6 +101,7 @@ func (s *sqlStore) MarkPublished(ctx context.Context, db dbtypes.Interface, even
 
 func (s *sqlStore) MarkFailed(ctx context.Context, db dbtypes.Interface, eventID, errMsg string) error {
 	f := s.qb.Filter()
+	// SECURITY: Manual SQL review completed - constant `retry_count + 1` on a fixed column, no caller input
 	_, err := database.ExecuteUpdate(ctx, db, s.qb.Update(s.tableName).
 		Set("retry_count", s.qb.MustExpr("retry_count + 1")).
 		Set(s.errorColumn, errMsg).
@@ -111,6 +112,7 @@ func (s *sqlStore) MarkFailed(ctx context.Context, db dbtypes.Interface, eventID
 
 func (s *sqlStore) MarkDeadLettered(ctx context.Context, db dbtypes.Interface, eventID, errMsg string) error {
 	f := s.qb.Filter()
+	// SECURITY: Manual SQL review completed - constant `retry_count + 1` on a fixed column, no caller input
 	_, err := database.ExecuteUpdate(ctx, db, s.qb.Update(s.tableName).
 		Set("retry_count", s.qb.MustExpr("retry_count + 1")).
 		Set("status", StatusFailed).
@@ -138,6 +140,7 @@ func (s *sqlStore) Lead(ctx context.Context, db dbtypes.Interface) (Leadership, 
 		// StageBuild is what the startup probes read through tenantstore.ProbeFailureError.
 		return nil, &database.ExecError{Op: s.op("build leader lock"), Stage: database.StageBuild, Err: err}
 	}
+	// SECURITY: Manual SQL review completed - literal `1`, no identifier or input
 	probeSQL, _, err := s.qb.Select(s.qb.MustExpr("1")).ToSQL()
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", s.op("build leader probe"), err)

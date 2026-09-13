@@ -5,7 +5,7 @@ Run a comprehensive security audit of the GoBricks codebase.
 ## Workflow
 
 1. **Static analysis**: Run `golangci-lint run --enable gosec ./...` to find security issues.
-2. **Raw-SQL escape hatch audit**: Search for all `f.Raw(`, `jf.Raw(`, `database.Raw(`, UPDATE `SetExpr(` and string-predicate `Having(` call sites (the FilterFactory / JoinFilterFactory escape hatches, the Execute Helpers' hand-written-SQL adapter, the argument-carrying SET expression, and the string HAVING form) with `git grep -E 'f\.Raw\(|jf\.Raw\(|database\.Raw\(|SetExpr\(|Having\('` and verify each has an inline security annotation matching the prefix `// SECURITY: Manual SQL review completed - ` (the rationale after the prefix is per-site). Flag any call site missing the prefix. `database.Raw` deserves at least as much scrutiny as the other two: `f.Raw`/`jf.Raw` produce a WHERE/JOIN fragment inside a builder that still validates its other identifiers, whereas `database.Raw` replaces the **whole statement**, bypassing the builder's identifier validation entirely. The annotation may live directly above the call, or above an enclosing dispatch (e.g. a table-driven loop or a multi-call JoinOn chain) when the safety property is uniform across the calls. See CLAUDE.md "Detailed Security Guidelines" and the godoc on `FilterFactory.Raw` for the policy.
+2. **Raw-SQL escape hatch audit**: Run `git grep -nE 'f\.Raw\(|jf\.Raw\(|database\.Raw\(|SetExpr\(|Having\(|MustExpr\(|[.]Expr\(|RawExpression\{'` and flag every call site (a SQL-body construction, for the `Expr` forms) without an annotation matching the prefix `// SECURITY: Manual SQL review completed - ` directly above it or above an enclosing dispatch. Squirrel's own `Expr` inside `database/internal/builder`, and the `Expr`/`MustExpr` doors themselves (`database/types`, the builder, `testing/mocks`), are plumbing — skip those hits. `database.Raw` deserves at least as much scrutiny as `f.Raw`/`jf.Raw`: it replaces the whole statement, bypassing the builder's identifier validation. The rule itself lives in root CLAUDE.md Security Guidelines.
 3. **Secrets scan**: Search for patterns that suggest hardcoded secrets (API keys, passwords, tokens, connection strings) in Go files and config files. Exclude `.example` files and test fixtures.
 4. **Input validation**: Check all HTTP handler request structs for `validate` tags. Flag handlers that accept user input without validation.
 5. **Vulnerability check**: Run `govulncheck ./...` to find known vulnerabilities in dependencies.
@@ -32,6 +32,6 @@ Generated: {date}
 ## Severity Classification
 
 - **Critical**: Hardcoded secrets, SQL injection without sanitization, known CVEs with exploits
-- **High**: Missing input validation on public endpoints, raw-SQL escape hatch (`f.Raw` / `jf.Raw` / `database.Raw`) without `// SECURITY:` annotation
+- **High**: Missing input validation on public endpoints, raw-SQL escape hatch (`f.Raw` / `jf.Raw` / `database.Raw` / `SetExpr` / string `Having` / `RawExpression` body via `qb.Expr` / `qb.MustExpr`) without `// SECURITY:` annotation
 - **Medium**: Missing validation tags, outdated dependencies with vulnerabilities
 - **Low**: Informational findings, minor gosec warnings

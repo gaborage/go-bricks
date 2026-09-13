@@ -10,11 +10,12 @@
 # keeps every call site grep-discoverable. A pre-edit block is strictly
 # better than relying on a human remembering to grep later.
 #
-# Scope note: detection mirrors the canonical discovery grep in CLAUDE.md
-# (git grep -E 'f\.Raw\(|jf\.Raw\(|database\.Raw\(') on purpose — it is tied
-# to the documented convention, not a general static analyzer. Receivers not
-# named f/jf, and packages not named database, are out of scope by design
-# (the same as the CLAUDE.md grep).
+# Scope note: this enforces the Raw-door subset of the root CLAUDE.md rule
+# (f\.Raw\(|jf\.Raw\(|database\.Raw\() on purpose — it is tied to the
+# documented convention, not a general static analyzer. The rule also covers
+# UPDATE SetExpr, a string Having predicate and every RawExpression SQL body;
+# those are left to /security-audit and review. Receivers not named f/jf, and
+# packages not named database, are out of scope by design.
 #
 # Fails CLOSED: a missing dependency or unparseable input blocks rather than
 # silently allowing an unguarded edit.
@@ -91,8 +92,9 @@ fi
 cat >&2 <<'EOF'
 BLOCKED — raw-SQL escape hatch added without its mandatory SECURITY annotation.
 
-CLAUDE.md requires, at EVERY f.Raw()/jf.Raw()/database.Raw() call site, an
-adjacent comment:
+This hook enforces the f.Raw()/jf.Raw()/database.Raw() subset of the root
+CLAUDE.md rule (which also covers SetExpr, string Having and RawExpression
+bodies): every such call site needs an adjacent comment:
 
     // SECURITY: Manual SQL review completed - <what was verified>
 

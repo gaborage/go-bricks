@@ -143,20 +143,17 @@ type JoinFilterFactory interface {
 // developer-controlled, not user input. All are validated against a safe
 // identifier grammar on ALL vendors BEFORE interpolation; a value outside that
 // grammar surfaces as a ToSQL() error. Route dynamic or computed expressions
-// through qb.Expr()/MustExpr(). The annotation rule is narrower than that and
-// names four doors: f.Raw(), jf.Raw(), database.Raw() and a STRING predicate
-// passed to Having() each require an inline
+// through qb.Expr()/MustExpr(). Every raw-SQL body the builder never inspects —
+// f.Raw, jf.Raw, database.Raw, a STRING predicate passed to Having, and every
+// RawExpression SQL body (see RawExpression) — requires an inline
 // "// SECURITY: Manual SQL review completed - <rationale>" comment at every call
-// site, because each admits arbitrary SQL rather than an expression the builder
-// still places. qb.Expr() does not carry that requirement — a consistency rule,
-// not a safety claim: Validate() never inspects the SQL body, so an Expr body is
-// raw SQL too, greppable by its own name rather than by an annotation.
+// site.
 //
-// Having is in that list for its STRING form only. It takes a predicate rather
-// than an identifier, so no identifier grammar can judge it and a string argument
-// is interpolated as written; Having(qb.MustExpr(...)) is the sanctioned
-// expression form and is not annotated. Prefix, Suffix and Options on the INSERT
-// builder are the same shape, minus the qb.Expr() alternative.
+// Having takes a predicate rather than an identifier, so no identifier grammar
+// can judge it: a string argument is interpolated as written, and
+// Having(qb.MustExpr(...)) is the preferred form, annotated the same way.
+// Prefix, Suffix and Options on the INSERT builder are the same shape, minus the
+// qb.Expr() alternative.
 //
 // The Filter API parameterizes its VALUES; that is a separate property from
 // validating its COLUMNS, and reading the first as the second is what left the
@@ -179,16 +176,10 @@ type SelectQueryBuilder interface {
 
 	// Having adds a HAVING predicate. Prefer a RawExpression from qb.Expr() —
 	// Having(qb.MustExpr("SUM(amount) > ?"), 100), or qb.Expr when you handle its
-	// (RawExpression, error) return — which is the sanctioned path for
+	// (RawExpression, error) return — which is the expression form for
 	// the aggregate comparisons HAVING exists for; an alias on that expression is
-	// an error (ErrAliasInHaving), since a predicate projects nothing. A string
-	// predicate is a raw-SQL door on par with f.Raw/jf.Raw/database.Raw and needs
-	// the same inline `// SECURITY: Manual SQL review completed - <what was
-	// verified>` annotation at every call site. The RawExpression form is exempt
-	// for consistency with Select/GroupBy/OrderBy, not because it is safer — its
-	// SQL body is never validated and carries identical injection risk. Neither
-	// form is checked against the identifier grammar: HAVING takes a predicate,
-	// not an identifier (ADR-082).
+	// an error (ErrAliasInHaving), since a predicate projects nothing. Both forms are
+	// raw SQL needing the SECURITY annotation at every call site; see dbtypes.RawExpression.
 	Having(pred any, rest ...any) SelectQueryBuilder
 	OrderBy(orderBys ...any) SelectQueryBuilder
 	Limit(limit uint64) SelectQueryBuilder
@@ -519,10 +510,12 @@ type QueryBuilderInterface interface {
 
 	// Expression builder (v2.1+)
 	// Returns error if SQL is empty, too many aliases provided, or alias contains dangerous characters.
+	// Call sites carry the SECURITY annotation; see RawExpression.
 	Expr(sql string, alias ...string) (RawExpression, error)
 
 	// MustExpr is like Expr but panics on error.
 	// Use this only in static initialization or tests where errors indicate programming bugs.
+	// Call sites carry the SECURITY annotation; see RawExpression.
 	MustExpr(sql string, alias ...string) RawExpression
 
 	// Column metadata extraction (v2.4+)

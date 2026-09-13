@@ -5120,26 +5120,26 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   NOT validated against the identifier grammar in either form — it is a predicate, not an
   identifier (ADR-082).
 - gate: match = your code calls `Having` at all. no-match = it does not.
-- apply: prefer the expression spelling, which needs no annotation — exempt for
-  consistency with `Select`/`GroupBy`/`OrderBy`, NOT because it is safer.
-  `RawExpression.Validate()` never inspects the SQL body, so an expression body is
-  raw SQL exactly as a string predicate is; review it the same way, and grep it by
-  its own name (`git grep -nE 'MustExpr\(|[.]Expr\(|RawExpression\{'`) rather than by an
-  annotation. Whether `qb.Expr` bodies should carry the annotation repo-wide is a
-  policy question above this change; it is filed separately. —
+- apply: prefer the expression spelling for consistency with `Select`, `GroupBy` and
+  `OrderBy`, NOT because it is safer. `RawExpression.Validate()` never inspects the
+  SQL body, so an expression body is raw SQL exactly as a string predicate is; review
+  it the same way and annotate it the same way (see the #1192 amendment below). —
 
   ```go
   // before — the only spelling that worked
   qb.Select("dept").From("emp").GroupBy("dept").Having("SUM(amount) > ?", 100)
 
   // after — sanctioned; qb.Expr returns (RawExpression, error), qb.MustExpr panics instead
+  // SECURITY: Manual SQL review completed - constant predicate, no caller input, value parameterized
   qb.Select("dept").From("emp").GroupBy("dept").Having(qb.MustExpr("SUM(amount) > ?"), 100)
   ```
 
   Keep a string predicate where the expression form does not fit, and annotate it at the call
   site naming what you checked — value-side parameterization, no user input concatenated.
-- verify: `git grep -nE 'Having\(' -- '*.go'` and confirm every string-predicate hit has an
-  annotation above it; then run one query each way and read the SQL — the expression form must
+- verify: `git grep -nE 'SetExpr\(|Having\(|MustExpr\(|[.]Expr\(|RawExpression\{' -- '*.go'` and confirm
+  every string-predicate and expression hit has an annotation above it (squirrel's own `Expr`
+  inside `database/internal/builder`, and the `Expr`/`MustExpr` doors themselves
+  (`database/types`, the builder, `testing/mocks`), are plumbing — skip those hits); then run one query each way and read the SQL — the expression form must
   render `HAVING SUM(amount) > $2` (`:2` on Oracle) with the arg numbered AFTER any `Where`
   arg, and `Having(qb.MustExpr("x > ?", "alias"), 1)` must fail `ToSQL()` with
   `errors.Is(err, dbtypes.ErrAliasInHaving)`. Use a DANGEROUS alias as a second case —
@@ -5148,6 +5148,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   A benign alias alone cannot tell the two orderings apart.
 - ref: #1147 · #1146 · `database/internal/builder/query_builder.go` (`Having`) ·
   `database/types/errors.go` (`ErrAliasInHaving`) · [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md)
+- amendment (2026-09-12, #1192, additive): the `qb.Expr()` exemption this atom first recorded is
+  withdrawn — the annotation duty covers a struct literal and every door, not only `Having`.
+  Nothing renders or validates differently.
 
 ---
 
