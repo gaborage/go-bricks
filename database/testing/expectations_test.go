@@ -176,10 +176,8 @@ func TestExpectationSetLogsEveryResolvedCall(t *testing.T) {
 		ExpectQuery("SELECT name").WillReturnRows(NewRowSet("name").AddRow("Alice")).
 		ExpectExec("UPDATE users").WillReturnRowsAffected(1)
 
-	rows, err := sess.Query(context.Background(), "SELECT name FROM users", 7)
-	require.NoError(t, err)
-	require.NoError(t, rows.Close())
-	_, err = sess.Exec(context.Background(), "UPDATE users SET name = $1", "a")
+	querySession(t, sess, "SELECT name FROM users", 7)
+	_, err := sess.Exec(context.Background(), "UPDATE users SET name = $1", "a")
 	require.NoError(t, err)
 	// An unmatched statement is logged too: the log is the call record, not the
 	// match record.
