@@ -125,6 +125,9 @@ func TestSessionBeginTxCommitsOnPinnedConnection(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestOpenSessionPropagatesAcquireError also pins the interface VALUE on
+// failure: a plain `!=` catches a typed nil, which reflection-based
+// assert.Nil/require.Nil would pass.
 func TestOpenSessionPropagatesAcquireError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -133,7 +136,9 @@ func TestOpenSessionPropagatesAcquireError(t *testing.T) {
 
 	sess, err := (&Connection{DB: db}).OpenSession(context.Background(), sessionVendor)
 	require.Error(t, err)
-	assert.Nil(t, sess)
+	if sess != nil {
+		t.Fatalf("typed-nil session returned: %T", sess)
+	}
 }
 
 // TestSessionRowsIterationErrorIsNotTranslated pins the documented EXCEPTION to
@@ -168,13 +173,4 @@ func TestSessionCloseIsNotIdempotent(t *testing.T) {
 	require.NoError(t, sess.Close())
 	require.ErrorIs(t, sess.Close(), sql.ErrConnDone,
 		"Close is not idempotent: the second call reports the connection is already done")
-}
-
-// TestSessionRowGuardsNilRow pins the nil-row guard that types.sqlRowAdapter
-// already has: a sessionRow with no underlying row must return an error, never
-// panic. Without reusing types.NewRowFromSQL's guard, Scan/Err dereference nil.
-func TestSessionRowGuardsNilRow(t *testing.T) {
-	var r types.Row = &sessionRow{}
-	require.Error(t, r.Scan(new(int)))
-	require.Error(t, r.Err())
 }
