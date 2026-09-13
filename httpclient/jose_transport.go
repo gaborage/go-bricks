@@ -22,15 +22,9 @@ const headerContentType = "Content-Type"
 // response. Defense-in-depth against memory exhaustion.
 const DefaultMaxJOSEBodyBytes int64 = 10 << 20 // 10 MiB
 
-// ErrJOSEPlaintextResponse names a successful response that was never unwrapped: the peer
-// answered 2xx with a body the Inbound policy did not open, so nothing about it was
-// authenticated. The transport refuses it rather than handing the caller plaintext under a
-// status code the peer chose. Match it with errors.Is; it survives the client's own error
-// wrapping and the *url.Error net/http adds.
-//
-// Non-2xx plaintext still passes through — a pre-trust error envelope from a JOSE-aware
-// counterparty is readable by design — and JOSETransport.AllowPlaintextSuccess opts a
-// whole transport out.
+// ErrJOSEPlaintextResponse names a 2xx response the Inbound policy never opened, which the
+// transport refuses rather than handing the caller a body nothing authenticated. Match it
+// with errors.Is; it survives the client's own wrapping and the *url.Error net/http adds.
 var ErrJOSEPlaintextResponse = errors.New("httpclient: successful response was not JOSE-protected")
 
 // errEnvelopeUnbounded names the envelope-plus-unbounded-cap refusal. Build and RoundTrip
@@ -84,7 +78,8 @@ type BodyEnvelope interface {
 // require unique iat/jti claims per attempt (Visa Token Services and similar).
 //
 // Response Content-Type discrimination: only application/jose responses are unwrapped;
-// other Content-Types pass through untouched. This mirrors the GoBricks server's hybrid
+// other Content-Types pass through untouched on a failure status and are refused on a
+// successful one (ErrJOSEPlaintextResponse). This mirrors the GoBricks server's hybrid
 // error envelope — pre-trust failures from the counterparty come back as plaintext
 // minimal JSON because the peer was never authenticated, and the transport must not
 // attempt to decrypt those.
@@ -106,8 +101,9 @@ type JOSETransport struct {
 
 	// Inbound is optional: when set, application/jose responses are opened
 	// (decrypt+verify, or decrypt-only under SealModeBareJWE).
-	// Other response Content-Types pass through unmodified so plaintext error envelopes
-	// from JOSE-aware counterparties (e.g., GoBricks pre-trust failures) remain readable.
+	// Other response Content-Types pass through unmodified on a failure status, so plaintext
+	// error envelopes from JOSE-aware counterparties (e.g., GoBricks pre-trust failures)
+	// remain readable; on a 2xx they are refused as ErrJOSEPlaintextResponse.
 	Inbound *jose.Policy
 
 	// Resolver supplies keys for both Outbound (sign/encrypt) and Inbound (decrypt/verify).
@@ -137,12 +133,13 @@ type JOSETransport struct {
 
 	// AllowPlaintextSuccess disables the fail-closed rule on successful responses: with it
 	// set, a 2xx body the Inbound policy never opened reaches the caller as the peer sent
-	// it, the way every response did before ADR-107's amendment.
+	// it instead of raising ErrJOSEPlaintextResponse.
 	//
 	// The Strangler-migration knob, and nothing else: set it only while a peer legitimately
 	// answers some 2xx routes in plaintext, and clear it once every route is protected.
 	// Leaving it set means a stripped ciphertext, or a route quietly switched to plaintext,
-	// is indistinguishable from a genuine unprotected reply.
+	// is indistinguishable from a genuine unprotected reply. Transport-wide by design; see
+	// ADR-107's amendment for why there is no per-response predicate.
 	AllowPlaintextSuccess bool
 }
 
@@ -246,22 +243,30 @@ func (t *JOSETransport) wrapRequest(req *nethttp.Request) (*nethttp.Request, err
 	return clone, nil
 }
 
-// unwrapResponse opens resp.Body — decrypt+verify, or decrypt-only under
-// SealModeBareJWE — when Inbound is set AND the response's
-// Content-Type indicates JOSE. Plaintext responses (e.g., pre-trust error envelopes
-// from a JOSE-aware peer) and responses that definitionally carry no body pass through
-// unmodified.
+// unwrapResponse opens resp.Body — decrypt+verify, or decrypt-only under SealModeBareJWE —
+// when Inbound is set AND the response is recognized as protected. A body that is not
+// passes through unmodified on a failure status (e.g. a pre-trust error envelope from a
+// JOSE-aware peer) and is refused on a successful one; responses that definitionally carry
+// no body pass through untouched either way.
 func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Response) error {
-	switch t.unwrapVerdict(req, resp) {
-	case unwrapIneligible:
+	if t.skipsUnwrap(req, resp) {
 		return nil
-	case unwrapPlaintext:
-		return t.refusePlaintextSuccess(resp)
 	}
+
+	// Without a hook the Content-Type alone decides, and a non-JOSE body is never read: on a
+	// failure status it reaches the caller as the peer sent it, unbuffered and uncapped. A
+	// hook replaces that rule with one that needs the bytes, so from here every eligible body
+	// is read and Unwrap's verdict stands in for the Content-Type's.
+	if t.Envelope == nil && !jose.IsContentType(resp.Header.Get(headerContentType)) {
+		if t.refusesPlaintext(resp) {
+			return errPlaintextSuccess(resp)
+		}
+		return nil
+	}
+
 	if t.Resolver == nil {
 		return errors.New("httpclient: JOSETransport requires a KeyResolver when Inbound is set")
 	}
-
 	maxBytes := t.MaxResponseBytes
 	if maxBytes == 0 {
 		maxBytes = DefaultMaxJOSEBodyBytes
@@ -271,22 +276,20 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 		return fmt.Errorf("httpclient: read response body: %w", err)
 	}
 
-	var compact string
+	compact := string(raw)
 	if t.Envelope != nil {
 		extracted, ok := t.Envelope.Unwrap(resp.Header.Get(headerContentType), raw)
 		if !ok {
-			// Not a protected body. On a successful status that is the same violation the
-			// Content-Type gate catches in nested mode; otherwise hand back exactly what
-			// was read, headers untouched.
-			if err := t.refusePlaintextSuccess(resp); err != nil {
-				return err
+			if t.refusesPlaintext(resp) {
+				// readAndCloseBody already closed the peer's body; leave RoundTrip an inert
+				// one so its cleanup is not a second Close on a hand-rolled Inner's body.
+				replaceBody(resp, nil, "")
+				return errPlaintextSuccess(resp)
 			}
 			replaceBody(resp, raw, "")
 			return nil
 		}
 		compact = extracted
-	} else {
-		compact = string(raw)
 	}
 
 	plaintext, _, _, err := jose.Open(compact, t.Inbound, t.Resolver)
@@ -324,30 +327,11 @@ func replaceBody(resp *nethttp.Response, payload []byte, contentType string) {
 	}
 }
 
-// unwrapDisposition is what unwrapVerdict decides about a response body.
-type unwrapDisposition int
-
-const (
-	// unwrapOpen: read the body and hand it to jose.Open (or to Envelope.Unwrap first).
-	unwrapOpen unwrapDisposition = iota
-	// unwrapIneligible: the body is not a candidate at all — no inbound policy, no body,
-	// or a shape net/http guarantees is empty. Nothing is read and nothing is judged.
-	unwrapIneligible
-	// unwrapPlaintext: the body IS a candidate but the peer did not label it as protected.
-	// Harmless on a failure status, a policy violation on a successful one.
-	unwrapPlaintext
-)
-
-// unwrapVerdict classifies resp: whether its body is opened, handed back exactly as it
-// arrived without being read at all, or refused as an unprotected success.
-//
-// The three-way split exists because "not application/jose" means two different things.
-// On a status the peer chose to fail, it is the pre-trust error envelope the transport
-// must not decrypt; on a 2xx it is a body that was never authenticated, which
-// refusePlaintextSuccess turns into ErrJOSEPlaintextResponse.
-func (t *JOSETransport) unwrapVerdict(req *nethttp.Request, resp *nethttp.Response) unwrapDisposition {
+// skipsUnwrap reports the responses that are not candidates at all: no inbound policy, no
+// body, or a shape net/http guarantees is empty. Nothing is read and nothing is judged.
+func (t *JOSETransport) skipsUnwrap(req *nethttp.Request, resp *nethttp.Response) bool {
 	if t.Inbound == nil || resp == nil || resp.Body == nil {
-		return unwrapIneligible
+		return true
 	}
 	// Exactly the shapes net/http GUARANTEES arrive empty: bodyAllowedForStatus rejects 1xx,
 	// 204 and 304, and noResponseBodyExpected rejects every reply to HEAD, so fixLength pins
@@ -365,34 +349,23 @@ func (t *JOSETransport) unwrapVerdict(req *nethttp.Request, resp *nethttp.Respon
 	// connection — reading that would hang, not error. The method comes from the request, not
 	// resp.Request: *http.Transport back-fills that field but the RoundTripper contract does
 	// not require an Inner to, so it can be nil.
-	if resp.StatusCode < nethttp.StatusOK || resp.StatusCode == nethttp.StatusNoContent ||
-		resp.StatusCode == nethttp.StatusNotModified || req.Method == nethttp.MethodHead {
-		return unwrapIneligible
-	}
-	// Without a hook the Content-Type alone decides, and a non-JOSE body is never read:
-	// on a failure status it reaches the caller as the peer sent it, unbuffered and
-	// uncapped. A hook replaces that rule with one that needs the bytes, so from here
-	// every eligible body is read and Unwrap's verdict raises the same disposition.
-	if t.Envelope == nil && !jose.IsContentType(resp.Header.Get(headerContentType)) {
-		return unwrapPlaintext
-	}
-	return unwrapOpen
+	return resp.StatusCode < nethttp.StatusOK || resp.StatusCode == nethttp.StatusNoContent ||
+		resp.StatusCode == nethttp.StatusNotModified || req.Method == nethttp.MethodHead
 }
 
-// refusePlaintextSuccess turns an unprotected body into ErrJOSEPlaintextResponse when the
-// peer called the exchange a success, and returns nil otherwise.
-//
-// A 2xx is the peer asserting the request was honored; under an Inbound policy the reply
-// carrying that verdict must have been decrypted, or the caller is trusting bytes nothing
-// authenticated — a stripped ciphertext and a genuine plaintext reply look identical.
-// Failure statuses keep passing through: a pre-trust envelope is plaintext by design,
-// because the peer was never authenticated in the first place.
-func (t *JOSETransport) refusePlaintextSuccess(resp *nethttp.Response) error {
-	if t.AllowPlaintextSuccess || resp.StatusCode < nethttp.StatusOK || resp.StatusCode >= nethttp.StatusMultipleChoices {
-		return nil
-	}
-	// The status only: the body is exactly what must not be reported, since it is
-	// unauthenticated content the peer chose.
+// refusesPlaintext reports whether a plaintext body at this status must be refused rather
+// than passed through. Both modes consult it, so the rule has one definition: a 2xx is the
+// peer asserting the request was honored, and under an Inbound policy the reply carrying
+// that verdict must have been decrypted or the caller is trusting bytes nothing
+// authenticated. Failure statuses pass through — a pre-trust envelope is plaintext by
+// design, because the peer was never authenticated in the first place.
+func (t *JOSETransport) refusesPlaintext(resp *nethttp.Response) bool {
+	return !t.AllowPlaintextSuccess && IsSuccessStatus(resp.StatusCode)
+}
+
+// errPlaintextSuccess names the refusal by status alone: the body is exactly what must not
+// be reported, being unauthenticated content the peer chose.
+func errPlaintextSuccess(resp *nethttp.Response) error {
 	return fmt.Errorf("%w (status: %d)", ErrJOSEPlaintextResponse, resp.StatusCode)
 }
 

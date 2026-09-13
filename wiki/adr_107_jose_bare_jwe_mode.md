@@ -26,12 +26,18 @@ CONNECT keep reaching `jose.Open` and failing closed, exactly as before. **Inter
 never see it**: a `RoundTrip` error short-circuits before `buildResponse`, so a response
 interceptor that would log, cache or re-parse the payload is never handed unauthenticated
 bytes. The error carries the status and nothing from the body — those bytes are precisely
-what must not be reported, being unauthenticated content the peer chose.
+what must not be reported, being unauthenticated content the peer chose. A refused response
+is closed undrained, so its keep-alive connection is discarded rather than reused: a
+deliberate trade, since draining bytes the transport just declared untrustworthy to save a
+connection is the wrong side of that bargain.
 
 `AllowPlaintextSuccess`, on `JOSETransport` and on `JOSEConfig`, restores the old
 pass-through for a whole transport. It is the Strangler-migration knob and nothing else: set
 it while a peer legitimately answers some 2xx routes in plaintext, and clear it once every
-route is protected. See [migrations.md](migrations.md) `[C65.1]`.
+route is protected. The opt-out is transport-wide and a per-response predicate is
+deliberately out of scope: the field stays a `bool` because `JOSETransport` is exported and
+comparable, and a func-typed field would be an apidiff INCOMPATIBLE — an interface-typed
+field is the door if one is ever wanted. See [migrations.md](migrations.md) `[C65.1]`.
 
 ## Context
 
