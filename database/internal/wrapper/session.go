@@ -56,7 +56,7 @@ func (s *Session) Query(ctx context.Context, query string, args ...any) (*sql.Ro
 
 // QueryRow executes a query expected to return at most one row on the pinned connection.
 func (s *Session) QueryRow(ctx context.Context, query string, args ...any) types.Row {
-	return &sessionRow{row: s.conn.QueryRowContext(ctx, query, args...)}
+	return &sessionRow{row: types.NewRowFromSQL(s.conn.QueryRowContext(ctx, query, args...))}
 }
 
 // Exec executes a statement on the pinned connection.
@@ -89,18 +89,30 @@ func (s *Session) DatabaseType() string {
 	return s.vendor
 }
 
-// sessionRow wraps the *sql.Row from a pinned session connection so a
-// driver.ErrBadConn failure deferred until Scan/Err (QueryRowContext never
-// returns an error directly) gets the same sql.ErrConnDone translation as
-// Query/Exec/BeginTx.
+// sessionRow adds the sql.ErrConnDone translation to a types.Row: a
+// driver.ErrBadConn failure on a pinned connection is deferred until Scan/Err
+// (QueryRowContext never returns an error directly), so it needs the same
+// wrapConnErr treatment as Query/Exec/BeginTx. Scanning itself is delegated to
+// types.NewRowFromSQL rather than reimplemented, which is also where the
+// nil-row guard below comes from.
 type sessionRow struct {
-	row *sql.Row
+	row types.Row
 }
 
 func (r *sessionRow) Scan(dest ...any) error {
+	if r == nil || r.row == nil {
+		return errNilSessionRow
+	}
 	return wrapConnErr(r.row.Scan(dest...))
 }
 
 func (r *sessionRow) Err() error {
+	if r == nil || r.row == nil {
+		return errNilSessionRow
+	}
 	return wrapConnErr(r.row.Err())
 }
+
+// errNilSessionRow mirrors the guard types.sqlRowAdapter applies: report a nil
+// underlying row instead of dereferencing it.
+var errNilSessionRow = errors.New("wrapper: session row has no underlying sql.Row")

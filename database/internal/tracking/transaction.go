@@ -2,10 +2,8 @@ package tracking
 
 import (
 	"context"
-	"database/sql"
 	"time"
 
-	"github.com/gaborage/go-bricks/database/internal/rowtracker"
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -13,12 +11,13 @@ import (
 // Transaction wraps types.Tx to provide performance tracking for database transactions.
 // It intercepts all transaction operations and logs performance metrics,
 // slow queries, and errors using structured logging.
+// Query/QueryRow/Exec come from the embedded stmtTracker, shared with Session.
 type Transaction struct {
+	stmtTracker
 	tx       types.Tx
 	logger   logger.Logger
 	vendor   string
 	settings Settings
-	tc       *Context // cached context for tracking
 }
 
 // NewTransaction creates a Transaction wrapper around the provided tx that records execution
@@ -26,53 +25,24 @@ type Transaction struct {
 // capturing timing and error information, stores the provided logger, vendor, and settings,
 // and initializes an internal Context used for tracking.
 func NewTransaction(tx types.Tx, log logger.Logger, vendor string, settings Settings) types.Tx {
-	t := &Transaction{
+	return &Transaction{
+		stmtTracker: stmtTracker{
+			q: tx,
+			tc: &Context{
+				Logger:   log,
+				Vendor:   vendor,
+				Settings: settings,
+			},
+		},
 		tx:       tx,
 		logger:   log,
 		vendor:   vendor,
 		settings: settings,
 	}
-	t.tc = &Context{
-		Logger:   t.logger,
-		Vendor:   t.vendor,
-		Settings: t.settings,
-	}
-	return t
 }
 
 // Compile-time check
 var _ types.Tx = (*Transaction)(nil)
-
-// Query executes a query within a transaction with performance tracking
-func (tx *Transaction) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	start := time.Now()
-	rows, err := tx.tx.Query(ctx, query, args...)
-
-	tx.trackTx(ctx, query, args, start, 0, err) // Read operations don't have rows affected
-
-	return rows, err
-}
-
-// QueryRow executes a single row query within a transaction with performance tracking
-
-func (tx *Transaction) QueryRow(ctx context.Context, query string, args ...any) types.Row {
-	start := time.Now()
-	row := tx.tx.QueryRow(ctx, query, args...)
-
-	return rowtracker.Wrap(row, func(err error) {
-		tx.trackTx(ctx, query, args, start, 0, err) // Read operations don't have rows affected
-	})
-}
-
-// Exec executes a query within a transaction without returning rows with performance tracking
-func (tx *Transaction) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	start := time.Now()
-	result, err := tx.tx.Exec(ctx, query, args...)
-
-	tx.trackTx(ctx, query, args, start, extractRowsAffected(result, err), err)
-
-	return result, err
-}
 
 // Prepare prepares a statement within a transaction with performance tracking
 func (tx *Transaction) Prepare(ctx context.Context, query string) (types.Statement, error) {
