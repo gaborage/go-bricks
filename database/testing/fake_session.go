@@ -29,7 +29,7 @@ import (
 //	AssertSessionClosed(t, sess)
 type TestSession struct {
 	expectationSet
-	txs    []*TestTx
+	txs    []*TxExpectation
 	closed bool
 }
 
@@ -94,9 +94,10 @@ func (s *TestSession) WillReturnError(err error) *TestSession {
 // session. Returns a TestTx that can be configured with query/exec expectations.
 func (s *TestSession) ExpectTransaction() *TestTx {
 	tx := newTestTx(s.parent)
+	txExp := &TxExpectation{parent: s.parent, tx: tx}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.txs = append(s.txs, tx)
+	s.txs = append(s.txs, txExp)
 	return tx
 }
 
@@ -153,9 +154,14 @@ func (s *TestSession) Begin(_ context.Context) (dbtypes.Tx, error) {
 		return nil, errors.New("unexpected Begin() call on session (use ExpectTransaction)")
 	}
 
-	tx := s.txs[0]
+	txExp := s.txs[0]
 	s.txs = s.txs[1:]
-	return tx, nil
+	s.parent.registerStartedTransaction(txExp)
+
+	if txExp.shouldErr != nil {
+		return nil, txExp.shouldErr
+	}
+	return txExp.tx, nil
 }
 
 // BeginTx implements dbtypes.Transactor.BeginTx.

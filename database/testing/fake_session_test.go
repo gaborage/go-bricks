@@ -136,6 +136,27 @@ func TestTestSessionTransactionsPopInOrder(t *testing.T) {
 	require.Error(t, err, "a session without a queued transaction is strict too")
 }
 
+func TestTestSessionTransactionsRegisterWithTheParentBookkeeping(t *testing.T) {
+	db := NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectSession().ExpectTransaction()
+
+	sess, err := db.Session(t.Context())
+	require.NoError(t, err)
+
+	tx, err := sess.Begin(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(t.Context()))
+
+	// A transaction started from a session is a started transaction: the
+	// TestDB-level assertions must see it, and AssertNoTransaction must not
+	// claim none was started.
+	AssertTransactionCommitted(t, db)
+
+	recorder := &testing.T{}
+	AssertNoTransaction(recorder, db)
+	assert.True(t, recorder.Failed(), "a session's transaction counts as started")
+}
+
 func TestTestSessionBeginTxUsesSameQueue(t *testing.T) {
 	db := NewTestDB(dbtypes.PostgreSQL)
 	tx := db.ExpectSession().ExpectTransaction()

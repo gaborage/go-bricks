@@ -396,6 +396,16 @@ func (db *TestDB) Begin(_ context.Context) (dbtypes.Tx, error) {
 	return txExp.tx, nil
 }
 
+// registerStartedTransaction records txExp among the started transactions, so a
+// transaction begun on a pinned TestSession reaches the same bookkeeping the
+// TestDB-level assertions (AssertTransactionCommitted, AssertNoTransaction)
+// read. Callers must not already hold db.mu.
+func (db *TestDB) registerStartedTransaction(txExp *TxExpectation) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.startedTransactions = append(db.startedTransactions, txExp)
+}
+
 // BeginTx implements dbtypes.Transactor.BeginTx.
 func (db *TestDB) BeginTx(ctx context.Context, _ *sql.TxOptions) (dbtypes.Tx, error) {
 	// For test purposes, delegate to Begin (ignore opts)
