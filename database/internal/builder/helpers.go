@@ -222,7 +222,7 @@ func (qb *QueryBuilder) rejectConflictColumnUpdates(conflictColumns, updateColum
 
 	for _, col := range conflictColumns {
 		if updateCol, ok := byIdentity[qb.upsertColumnName(col.normalized)]; ok {
-			return fmt.Errorf("%w: update column %q, conflict column %q", dbtypes.ErrUpsertConflictColumnUpdated, updateCol, col.key)
+			return fmt.Errorf("%w: update column %q, conflict column %q", dbtypes.ErrUpsertConflictColumnInUpdateSet, updateCol, col.key)
 		}
 	}
 	return nil

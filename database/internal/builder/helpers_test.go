@@ -4,7 +4,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -15,30 +14,36 @@ import (
 // deliberate padded map key from a typo.
 const paddedNameKey = " name "
 
-// TestBuildUpsertReportsMissingPreconditionsIdenticallyPerVendor pins both
-// upsert preconditions to one sentinel and one message per precondition, so a
-// caller never has to know which vendor it reached. Asserting the two vendors
-// against each other means the pairing cannot rot in only one direction.
-func TestBuildUpsertReportsMissingPreconditionsIdenticallyPerVendor(t *testing.T) {
-	insertColumns := map[string]any{"id": 1}
+// paddedIDKey is the padded spelling of the `id` column.
+const paddedIDKey = " id "
 
-	pg := NewQueryBuilder(dbtypes.PostgreSQL)
-	oracle := NewQueryBuilder(dbtypes.Oracle)
+// TestBuildUpsertReportsPreconditionsIdenticallyPerVendor pins each of the three
+// upsert preconditions to one sentinel and to a message naming the offending
+// columns on every vendor, so a caller matches with errors.Is and never has to
+// know which vendor it reached.
+func TestBuildUpsertReportsPreconditionsIdenticallyPerVendor(t *testing.T) {
+	insertColumns := map[string]any{"id": 1, "name": "a"}
 
-	_, _, pgEmptyErr := pg.BuildUpsert("users", nil, insertColumns, nil)
-	_, _, oracleEmptyErr := oracle.BuildUpsert("users", nil, insertColumns, nil)
-	require.ErrorIs(t, pgEmptyErr, dbtypes.ErrUpsertConflictColumnsRequired)
-	require.ErrorIs(t, oracleEmptyErr, dbtypes.ErrUpsertConflictColumnsRequired)
-	require.EqualError(t, oracleEmptyErr, pgEmptyErr.Error(),
-		"both vendors must report an empty conflict column set the same way")
+	for _, vendor := range []string{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		t.Run(vendor, func(t *testing.T) {
+			qb := NewQueryBuilder(vendor)
 
-	_, _, pgMissingErr := pg.BuildUpsert("users", []string{"tenant_id"}, insertColumns, nil)
-	_, _, oracleMissingErr := oracle.BuildUpsert("users", []string{"tenant_id"}, insertColumns, nil)
-	require.ErrorIs(t, pgMissingErr, dbtypes.ErrUpsertConflictColumnNotInserted)
-	require.ErrorIs(t, oracleMissingErr, dbtypes.ErrUpsertConflictColumnNotInserted)
-	require.ErrorContains(t, pgMissingErr, `"tenant_id"`)
-	require.EqualError(t, oracleMissingErr, pgMissingErr.Error(),
-		"both vendors must report a conflict column absent from the insert set the same way")
+			_, _, emptyErr := qb.BuildUpsert("users", nil, insertColumns, nil)
+			require.ErrorIs(t, emptyErr, dbtypes.ErrUpsertConflictColumnsRequired)
+
+			_, _, missingErr := qb.BuildUpsert("users", []string{"tenant_id"}, insertColumns, nil)
+			require.ErrorIs(t, missingErr, dbtypes.ErrUpsertConflictColumnNotInserted)
+			require.ErrorContains(t, missingErr, `"tenant_id"`)
+
+			// The padded conflict key names the update column on both vendors, and
+			// the two spellings differ, so the message must carry each one.
+			_, _, overlapErr := qb.BuildUpsert("users", []string{paddedIDKey}, insertColumns,
+				map[string]any{"id": 2})
+			require.ErrorIs(t, overlapErr, dbtypes.ErrUpsertConflictColumnInUpdateSet)
+			require.ErrorContains(t, overlapErr, `update column "id"`)
+			require.ErrorContains(t, overlapErr, `conflict column " id "`)
+		})
+	}
 }
 
 // TestBuildUpsertMatchesConflictColumnsToInsertSetByVendorIdentity pins the
@@ -213,14 +218,14 @@ func TestBuildUpsertEnforcesPreconditionsForEveryVendor(t *testing.T) {
 			qb := NewQueryBuilder(vendor)
 
 			_, _, emptyErr := qb.BuildUpsert("users", nil, map[string]any{"id": 1}, nil)
-			assert.ErrorIs(t, emptyErr, dbtypes.ErrUpsertConflictColumnsRequired) //nolint:testifylint // first precondition; the independent missing/overlap preconditions follow
+			require.ErrorIs(t, emptyErr, dbtypes.ErrUpsertConflictColumnsRequired)
 
 			_, _, missingErr := qb.BuildUpsert("users", []string{"tenant_id"}, map[string]any{"id": 1}, nil)
-			assert.ErrorIs(t, missingErr, dbtypes.ErrUpsertConflictColumnNotInserted) //nolint:testifylint // second precondition; the independent overlap precondition follows
+			require.ErrorIs(t, missingErr, dbtypes.ErrUpsertConflictColumnNotInserted)
 
 			_, _, overlapErr := qb.BuildUpsert("users",
 				[]string{"id"}, map[string]any{"id": 1, "name": "a"}, map[string]any{"id": 2})
-			require.ErrorIs(t, overlapErr, dbtypes.ErrUpsertConflictColumnUpdated)
+			require.ErrorIs(t, overlapErr, dbtypes.ErrUpsertConflictColumnInUpdateSet)
 		})
 	}
 
@@ -372,7 +377,7 @@ func TestBuildUpsertMatchesConflictColumnsByTheColumnTheyName(t *testing.T) {
 		_, _, err := qb.BuildUpsert("users", []string{`"ID"`},
 			map[string]any{`"ID"`: 1, "name": 2}, map[string]any{"id": 3})
 
-		require.ErrorIs(t, err, dbtypes.ErrUpsertConflictColumnUpdated)
+		require.ErrorIs(t, err, dbtypes.ErrUpsertConflictColumnInUpdateSet)
 		require.ErrorContains(t, err, `update column "id", conflict column "\"ID\""`)
 	})
 
@@ -384,7 +389,7 @@ func TestBuildUpsertMatchesConflictColumnsByTheColumnTheyName(t *testing.T) {
 		_, _, err := qb.BuildUpsert("users", []string{"id"},
 			map[string]any{"id": 1, "name": 2}, map[string]any{`"ID"`: 3})
 
-		require.ErrorIs(t, err, dbtypes.ErrUpsertConflictColumnUpdated)
+		require.ErrorIs(t, err, dbtypes.ErrUpsertConflictColumnInUpdateSet)
 		require.ErrorContains(t, err, `update column "\"ID\"", conflict column "id"`)
 	})
 
