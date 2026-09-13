@@ -135,3 +135,46 @@ func TestOpenSessionPropagatesAcquireError(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, sess)
 }
+
+// TestSessionRowsIterationErrorIsNotTranslated pins the documented EXCEPTION to
+// the sql.ErrConnDone promise: Query hands back a raw *sql.Rows, so a failure
+// that only shows up mid-stream surfaces through rows.Next/rows.Err exactly as
+// the driver reported it — wrapConnErr never sees it. types.Session's doc states
+// this exception; this test is what makes the doc falsifiable.
+func TestSessionRowsIterationErrorIsNotTranslated(t *testing.T) {
+	_, mock, sess := openMockSession(t)
+	ctx := context.Background()
+
+	mock.ExpectQuery("SELECT n").WillReturnRows(
+		sqlmock.NewRows([]string{"n"}).AddRow(1).RowError(0, driver.ErrBadConn))
+
+	rows, err := sess.Query(ctx, "SELECT n FROM t")
+	require.NoError(t, err, "the failure is deferred to iteration, so Query itself succeeds")
+	defer func() { _ = rows.Close() }()
+
+	assert.False(t, rows.Next())
+	iterErr := rows.Err()
+	require.Error(t, iterErr)
+	assert.ErrorIs(t, iterErr, driver.ErrBadConn, "the driver error reaches the caller raw")
+	assert.NotErrorIs(t, iterErr, sql.ErrConnDone,
+		"documented exception: rows-iteration errors are NOT translated to sql.ErrConnDone")
+}
+
+// TestSessionCloseIsNotIdempotent pins the documented Close behaviour: a second
+// Close returns sql.ErrConnDone rather than succeeding silently.
+func TestSessionCloseIsNotIdempotent(t *testing.T) {
+	_, _, sess := openMockSession(t)
+
+	require.NoError(t, sess.Close())
+	require.ErrorIs(t, sess.Close(), sql.ErrConnDone,
+		"Close is not idempotent: the second call reports the connection is already done")
+}
+
+// TestSessionRowGuardsNilRow pins the nil-row guard that types.sqlRowAdapter
+// already has: a sessionRow with no underlying row must return an error, never
+// panic. Without reusing types.NewRowFromSQL's guard, Scan/Err dereference nil.
+func TestSessionRowGuardsNilRow(t *testing.T) {
+	var r types.Row = &sessionRow{}
+	require.Error(t, r.Scan(new(int)))
+	require.Error(t, r.Err())
+}
