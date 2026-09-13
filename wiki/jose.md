@@ -231,7 +231,7 @@ if err != nil {
 }
 ```
 
-**Validation rules**: an outbound policy requires `SignKid` **and** `EncryptKid`; an inbound one requires `VerifyKid` **and** `DecryptKid`; a cross-direction kid is `JOSE_POLICY_DIRECTION_MISMATCH`. `SigAlg` must be on the signature allowlist — this mode signs, so leaving it unset is `JOSE_ALGORITHM_DISALLOWED`. `Enc` is `A256GCM` only. The `ProtectedHeaders` collision guard applies to the inner JWE exactly as in bare mode.
+**Validation rules**: an outbound policy requires `SignKid` **and** `EncryptKid`; an inbound one requires `VerifyKid` **and** `DecryptKid`; a cross-direction kid is `JOSE_POLICY_DIRECTION_MISMATCH`. `SigAlg` must be on the signature allowlist — this mode signs, so leaving it unset is `JOSE_ALGORITHM_DISALLOWED`. **Which door you come through decides whether unset is even reachable**: `httpclient.Builder.Build()` fills an unset `SigAlg` with `jose.DefaultSigAlg` (`RS256`) before it validates, so an omitted one silently becomes RS256 and Visa rejects the signature at runtime; a hand-built policy handed straight to `jose.Seal` / `jose.Open` is refused at once, because nothing defaults it there. Set `SigAlg: josev4.PS256` explicitly either way. `Enc` is `A256GCM` only. The `ProtectedHeaders` collision guard applies to the inner JWE exactly as in bare mode.
 
 **Reach**: `jose.Seal` / `jose.Open` (and `jose/testing`'s `SealForTest` / `OpenForTest`), and `httpclient.Builder.WithJOSE` in both directions — `Build()` applies the `SigAlg` default here, because this mode signs. There is no `mode` key in the `jose:` struct-tag grammar, so inbound server routes cannot select it.
 
