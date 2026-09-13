@@ -579,7 +579,9 @@ func TestSealPayloadHeaderFlagsNeedBareMode(t *testing.T) {
 		flag  string
 	}{
 		{"typ", []string{"-typ", "JOSE"}, "-typ"},
+		{"typ_explicit_empty", []string{"-typ="}, "-typ"},
 		{"iat_ms", []string{"-iat-ms"}, "-iat-ms"},
+		{"iat_ms_explicit_false", []string{"-iat-ms=false"}, "-iat-ms"},
 		{"protected", []string{"-protected", "k=v"}, "-protected"},
 	}
 	for _, tt := range cases {

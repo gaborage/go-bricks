@@ -230,4 +230,10 @@ curl -X POST https://sandbox.api.visa.com/v1/example \
   -H "Content-Type: application/json" --data-binary @body.json
 ```
 
-The response comes back sealed too — decrypting it is out of the CLI's scope (v1 only produces outbound tokens); standalone Go programs unwrap it with `jose.Open`; `jose/testing.OpenForTest` is for Go test code only (it requires a `testing.TB`). For the Go-test-side equivalent of sealing a payload, see `jose/testing.SealForTest` above.
+The response comes back sealed too — decrypting it is out of the CLI's scope (v1 only produces outbound tokens); standalone Go programs unwrap it with `jose.Open`, first pulling the compact token out of `encData` when the peer answers with the same `{"encData":"…"}` envelope (`jose.Open` parses a compact token, not the JSON wrapper — `httpclient` does this extraction itself when the builder is given `httpclient.VisaMLEEnvelope()`); `jose/testing.OpenForTest` is for Go test code only (it requires a `testing.TB`). For the Go-test-side equivalent of sealing a payload, see `jose/testing.SealForTest` above.
+
+```go
+var body struct{ EncData string `json:"encData"` }
+json.NewDecoder(resp.Body).Decode(&body)
+plaintext, claims, hdr, err := jose.Open(body.EncData, inbound, resolver)
+```
