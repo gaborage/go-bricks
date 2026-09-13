@@ -76,17 +76,23 @@ func (db *DB) PrepareContext(ctx context.Context, query string) (types.Statement
 	}
 	base := &BasicStatement{Stmt: stmt}
 
-	return NewStatement(base, db.logger, db.vendor, query, db.settings), nil
+	return NewStatement(base, db.trackingContext(), query), nil
 }
 
-// trackQuery tracks database query performance and logs the results
-func (db *DB) trackQuery(ctx context.Context, query string, args []any, start time.Time, rowsAffected int64, err error) {
-	tc := &Context{
+// trackingContext builds the tracking Context every operation on this pool
+// wrapper shares. A *sql.DB wrapper carries no server metadata, so the
+// server.address / server.port / db.namespace attributes stay unset here.
+func (db *DB) trackingContext() *Context {
+	return &Context{
 		Logger:   db.logger,
 		Vendor:   db.vendor,
 		Settings: db.settings,
 	}
-	TrackDBOperation(ctx, tc, query, args, start, rowsAffected, err)
+}
+
+// trackQuery tracks database query performance and logs the results
+func (db *DB) trackQuery(ctx context.Context, query string, args []any, start time.Time, rowsAffected int64, err error) {
+	TrackDBOperation(ctx, db.trackingContext(), query, args, start, rowsAffected, err)
 }
 
 // Connection wraps database.Interface to provide comprehensive performance tracking.
@@ -157,7 +163,7 @@ func (tc *Connection) Prepare(ctx context.Context, query string) (types.Statemen
 		return nil, err
 	}
 
-	return NewStatement(stmt, tc.logger, tc.vendor, query, tc.settings), nil
+	return NewStatement(stmt, tc.trackingContext(), query), nil
 }
 
 // Begin starts a transaction with performance tracking

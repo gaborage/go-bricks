@@ -45,7 +45,7 @@ func (tx *Transaction) Prepare(ctx context.Context, query string) (types.Stateme
 		return nil, err
 	}
 
-	return NewStatement(stmt, tx.tc.Logger, tx.tc.Vendor, query, tx.tc.Settings), nil
+	return NewStatement(stmt, tx.tc, query), nil
 }
 
 // Commit commits the transaction

@@ -7,8 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
+	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
 type stubStatement struct {
@@ -66,12 +70,77 @@ func (r *stubRow) Scan(_ ...any) error { return r.scanErr }
 
 func (r *stubRow) Err() error { return r.err }
 
+const (
+	stmtServerAddress = "db.stmt.internal"
+	stmtServerPort    = 5434
+	stmtNamespace     = "stmtdb.public"
+	stmtParityQuery   = "SELECT 1"
+)
+
+// TestPreparedStatementCarriesServerAttributes pins tracking parity between the
+// PREPARE span and the prepared statement's own execution spans: a Statement
+// obtained from either a pool Prepare or a transaction Prepare must carry
+// server.address, server.port and db.namespace, the same way pool, session and
+// transaction statements do. A Statement built from only logger/vendor/settings
+// silently drops all three.
+func TestPreparedStatementCarriesServerAttributes(t *testing.T) {
+	tests := []struct {
+		name    string
+		prepare func(t *testing.T, ctx context.Context, conn *Connection) types.Statement
+	}{
+		{
+			name: "from_connection_prepare",
+			prepare: func(t *testing.T, ctx context.Context, conn *Connection) types.Statement {
+				stmt, err := conn.Prepare(ctx, stmtParityQuery)
+				require.NoError(t, err)
+				return stmt
+			},
+		},
+		{
+			name: "from_transaction_prepare",
+			prepare: func(t *testing.T, ctx context.Context, conn *Connection) types.Statement {
+				tx, err := conn.Begin(ctx)
+				require.NoError(t, err)
+				stmt, err := tx.Prepare(ctx, stmtParityQuery)
+				require.NoError(t, err)
+				return stmt
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			traceExporter, _, cleanup := setupTestObservabilityProviders(t)
+			defer cleanup()
+
+			underlying := &stubConnection{databaseTypeValue: "postgresql"}
+			conn, ok := NewConnection(underlying, newRecordingLogger(), &config.DatabaseConfig{}).(*Connection)
+			require.True(t, ok, "NewConnection must return a tracking *Connection")
+			conn.SetServerInfo(stmtServerAddress, stmtServerPort, stmtNamespace)
+
+			ctx := context.Background()
+			stmt := tt.prepare(t, ctx, conn)
+
+			_, err := stmt.Exec(ctx)
+			require.NoError(t, err)
+
+			// The statement's own span is the one whose query text carries the
+			// STMT_EXEC label; the PREPARE / TX_PREPARE span is a separate one.
+			span := obtest.NewSpanCollector(t, traceExporter).
+				WithAttribute("db.query.text", "STMT_EXEC: "+stmtParityQuery).
+				AssertCount(1).First()
+			obtest.AssertSpanAttribute(t, &span, "server.address", stmtServerAddress)
+			obtest.AssertSpanAttribute(t, &span, "server.port", stmtServerPort)
+			obtest.AssertSpanAttribute(t, &span, "db.namespace", stmtNamespace)
+		})
+	}
+}
+
 func TestNewStatementWrapsUnderlying(t *testing.T) {
 	underlying := &stubStatement{}
 	settings := Settings{slowQueryThreshold: time.Second}
 	recLogger := newRecordingLogger()
 
-	statement := NewStatement(underlying, recLogger, "postgresql", "SELECT 1", settings)
+	statement := NewStatement(underlying, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, "SELECT 1")
 
 	wrapped, ok := statement.(*Statement)
 	if !ok {
@@ -87,7 +156,7 @@ func TestStatementQueryDelegatesAndLogs(t *testing.T) {
 	underlying := &stubStatement{}
 	settings := Settings{slowQueryThreshold: time.Second, logQueryParameters: true, maxQueryLength: 50}
 	recLogger := newRecordingLogger()
-	statement := NewStatement(underlying, recLogger, "postgresql", "SELECT 1", settings)
+	statement := NewStatement(underlying, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, "SELECT 1")
 
 	// stubStatement returns a bare new(sql.Rows) with a nil driver connection;
 	// calling Close() on it panics. These are not real DB rows, so there is
@@ -126,7 +195,7 @@ func TestStatementExecPropagatesErrors(t *testing.T) {
 	underlying := &stubStatement{execErr: errors.New("boom")}
 	settings := Settings{slowQueryThreshold: time.Second}
 	recLogger := newRecordingLogger()
-	statement := NewStatement(underlying, recLogger, "postgresql", "UPDATE", settings)
+	statement := NewStatement(underlying, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, "UPDATE")
 
 	_, err := statement.Exec(ctx, 1)
 	if err == nil {
@@ -150,7 +219,7 @@ func TestStatementQueryRowLogsWithoutError(t *testing.T) {
 	underlying := &stubStatement{}
 	settings := Settings{slowQueryThreshold: time.Second}
 	recLogger := newRecordingLogger()
-	statement := NewStatement(underlying, recLogger, "postgresql", "SELECT ROW", settings)
+	statement := NewStatement(underlying, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, "SELECT ROW")
 
 	row := statement.QueryRow(ctx, 42)
 	if row == nil {
@@ -175,7 +244,7 @@ func TestStatementQueryRowLogsWithoutError(t *testing.T) {
 
 func TestStatementCloseDelegates(t *testing.T) {
 	underlying := &stubStatement{}
-	statement := NewStatement(underlying, newRecordingLogger(), "postgresql", "SELECT", Settings{})
+	statement := NewStatement(underlying, &Context{Logger: newRecordingLogger(), Vendor: "postgresql"}, "SELECT")
 
 	if statement.Close() != nil {
 		t.Fatalf("expected close to succeed")

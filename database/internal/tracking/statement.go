@@ -7,7 +7,6 @@ import (
 
 	"github.com/gaborage/go-bricks/database/internal/rowtracker"
 	"github.com/gaborage/go-bricks/database/types"
-	"github.com/gaborage/go-bricks/logger"
 )
 
 // BasicStatement wraps sql.Stmt to implement types.Statement interface.
@@ -40,26 +39,26 @@ func (s *BasicStatement) Close() error {
 // Statement wraps types.Statement to provide performance tracking for prepared statements.
 // It intercepts all statement operations and logs performance metrics,
 // slow queries, and errors using structured logging.
+// The tracking Context (tc) is the single source of logger, vendor, settings and
+// server metadata — trackStmt reads them through it rather than from copies.
 type Statement struct {
-	stmt     types.Statement
-	logger   logger.Logger
-	vendor   string
-	query    string
-	settings Settings
+	stmt  types.Statement
+	tc    *Context
+	query string
 }
 
 // NewStatement wraps the provided statement with a tracking implementation that records execution
 // metrics for Query, QueryRow, and Exec.
 //
-// The returned types.Statement uses the supplied logger, vendor identifier, optional query string,
-// and settings to control tracking behavior.
-func NewStatement(stmt types.Statement, log logger.Logger, vendor, query string, settings Settings) types.Statement {
+// tc is the preparing caller's tracking Context — pass the PREPARING connection's,
+// session's or transaction's context (see Connection.trackingContext) so statement
+// executions carry the same server.address / server.port / db.namespace attributes
+// as the PREPARE span. query is the optional statement text used to label operations.
+func NewStatement(stmt types.Statement, tc *Context, query string) types.Statement {
 	return &Statement{
-		stmt:     stmt,
-		logger:   log,
-		vendor:   vendor,
-		query:    query,
-		settings: settings,
+		stmt:  stmt,
+		tc:    tc,
+		query: query,
 	}
 }
 
@@ -103,10 +102,5 @@ func (s *Statement) trackStmt(ctx context.Context, operation string, args []any,
 	if s.query != "" {
 		op = operation + ": " + s.query
 	}
-	tc := &Context{
-		Logger:   s.logger,
-		Vendor:   s.vendor,
-		Settings: s.settings,
-	}
-	TrackDBOperation(ctx, tc, op, args, start, rowsAffected, err)
+	TrackDBOperation(ctx, s.tc, op, args, start, rowsAffected, err)
 }
