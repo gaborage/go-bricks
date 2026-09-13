@@ -15,6 +15,7 @@ import (
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/multitenant"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
@@ -66,11 +67,7 @@ func TestProcessOnceDedupHitIsCountedAndLogged(t *testing.T) {
 			in.module.dedupHits.Add(t.Context(), 1)
 			before := sumOfDedupHits(t, mp)
 
-			key := replayed
-			if tc.sealed {
-				key = "svc-payments-sign:" + replayed
-			}
-			process := func(ctx context.Context) error {
+			process := func(ctx context.Context, key messaging.DedupKey) error {
 				return in.ProcessOnce(ctx, key, func(context.Context, dbtypes.Tx) error {
 					t.Error("fn must not run on a dedup hit")
 					return nil
@@ -82,23 +79,29 @@ func TestProcessOnceDedupHitIsCountedAndLogged(t *testing.T) {
 				// inside the capture, after the swap.
 				in.module.logger = logger.New("info", false)
 				if tc.sealed {
-					err = runSealed(t, func(ctx context.Context) error {
+					err = runSealed(t, func(ctx context.Context, key messaging.DedupKey) error {
 						if tenant, ok := multitenant.GetTenant(tc.ctx); ok {
 							ctx = multitenant.SetTenant(ctx, tenant)
 						}
-						return process(ctx)
+						return process(ctx, key)
 					})
 				} else {
-					err = process(tc.ctx)
+					err = process(tc.ctx, wireKey(t, replayed))
 				}
 			})
 			require.NoError(t, err)
+
+			keyLength := len(replayed)
+			if tc.sealed {
+				keyLength = len(sealedKeySpelling)
+			}
 
 			assert.Equal(t, before+1, sumOfDedupHits(t, mp), "exactly one hit is counted")
 			assertDedupHitAttributes(t, mp, tc.tenantPresent, tc.sealed)
 
 			assert.Contains(t, line, "Inbox dedup hit")
-			assert.Contains(t, line, `"eventIdLength":`+strconv.Itoa(len(key)))
+			assert.Contains(t, line, `"eventIdLength":`+strconv.Itoa(keyLength))
+			assert.NotContains(t, line, "9f0c2b1e", "the sealed key's jti never reaches the log")
 			assert.Contains(t, line, `"tenantPresent":`+strconv.FormatBool(tc.tenantPresent))
 			assert.Contains(t, line, `"sealed":`+strconv.FormatBool(tc.sealed))
 			assert.NotContains(t, line, replayed, "the id value never reaches the log")
