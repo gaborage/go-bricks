@@ -195,9 +195,10 @@ same in envelope mode. A 2xx that was not unwrapped is a transport error: `Round
 returns `nil` and an error matching `errors.Is(err, httpclient.ErrJOSEPlaintextResponse)`,
 wrapped with the status and the peer name from `WithPeerName`. The response body is closed
 and discarded — it reaches neither the caller nor a response interceptor — and one WARN
-records that same status and peer plus the `request_id` the client's own request and response
-lines carry, never the body bytes, those being exactly what must not
-be trusted. The refusal is **terminal**: it is exempt from the retry
+records that same status and peer plus the `request_id`, read from the trace header on the
+outbound request and falling back to the context value — omitted when a custom
+`TraceIDHeader` carries an id the transport cannot see. Never the body bytes, those being
+exactly what must not be trusted. The refusal is **terminal**: it is exempt from the retry
 loop, because the peer answered 2xx and has already honored the request, so retrying would
 only duplicate a non-idempotent side effect.
 

@@ -8953,7 +8953,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   rather than skipped as if it were an empty shape. The response
   body is closed and discarded, `RoundTrip` returns `nil` plus an error matching
   `errors.Is(err, httpclient.ErrJOSEPlaintextResponse)`, which names the status and the peer name
-  from `WithPeerName`; one WARN carries the same pair plus the `request_id`, and neither sink carries anything from
+  from `WithPeerName`; one WARN carries the same pair plus the `request_id` when the transport can read one, and neither sink carries anything from
   the body. The refusal is terminal — exempt from `WithRetries`, since the peer already honored
   the request and a retry would only duplicate a non-idempotent side effect. **Unchanged**: every
   non-2xx status, which still passes through with its body and
