@@ -60,8 +60,8 @@ type PGRoleSpec struct {
 
 // PGIdentifierChecker is a caller-supplied check layered on top of the
 // identifier floor (database/identifier.Validate for PostgreSQL). Validate
-// consults it once per identifier, after the floor and (for Schema) the
-// reserved-name rule have accepted that identifier, so a policy can only refuse
+// consults it once per identifier, after the floor and the reserved-name rule
+// have accepted that identifier, so a policy can only refuse
 // more — never admit a name either of those rejects. A returned error is
 // wrapped with ErrInvalidPGIdentifier and the failing field name, so the policy
 // itself does not need to identify the identifier it judged.

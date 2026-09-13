@@ -9477,8 +9477,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   is nothing to move and nothing this atom has to decide about `public`. The `MigratorRole` case
   has no schema to substitute AND nothing to revoke: the Go helper aborts on its very FIRST
   statement and leaves nothing at all, and on the `PGRoleProvisioningSQL` path run without
-  `ON_ERROR_STOP` the name `public` appears only as an `AUTHORIZATION` clause and a `FOR ROLE`,
-  both of which the server refuses — so no privilege ever reached the PUBLIC pseudo-role and
+  `ON_ERROR_STOP` the name `public` appears only as the TARGET of statements the server refuses
+  (`CREATE ROLE`, the lockdown `ALTER ROLE`, its `PASSWORD`, and `SET search_path`) plus an
+  `AUTHORIZATION` clause and a `FOR ROLE` — never as a grantee, so no privilege ever reached
+  the PUBLIC pseudo-role and
   `CREATE SCHEMA IF NOT EXISTS "<schema>" AUTHORIZATION "public"` never created the schema the
   spec named. What that path does leave is residue rather than exposure — a created, locked-down
   runtime role whose `search_path` points at a schema that was never created. Run only
@@ -9541,7 +9543,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
      provisioning will do. PostgreSQL refuses the statement outright otherwise, so a plain
      `CREATEROLE` provisioner clears no `default_acl` row at all; under psql without
      `ON_ERROR_STOP` the script prints the error and carries on, and the only sign left is the
-     survivor verify's arm 3a reports.
+     survivor verify's arm 3a reports. The `REVOKE` lines need ownership too: run them as the
+     owner of each object (or a member of the owning role). A `REVOKE` issued by a non-owner
+     removes nothing and only WARNS, so it leaves the same silent survivor.
 
      Those five revoke nothing the FOURTH query reported, because those rows went to a real role
      rather than to PUBLIC — so in the `Schema` case run this second script too, once for every
@@ -9680,7 +9684,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
     `pg_catalog`, `pg_toast` and `information_schema` answer it on every instance and are not
     findings; `public` still being there is this procedure's design, not a leftover.
   - **Arm 2, PUBLIC grants across three catalogs — verdict**, and untouched by anything here: it
-    keys on `grantee = 0` and on no schema name. Must return no row for `public` and no row for
+    keys on `grantee = 0` and on no schema name of YOURS — the query names only the two catalog
+    schemas, to exclude them. Must return no row for `public` and no row for
     `tenant_a` that you did not grant on purpose. `tenant_a` was created by `CREATE SCHEMA …
     AUTHORIZATION`, so its `nspacl` starts NULL and it has NO baseline of its own: a
     `schema | tenant_a | | USAGE` row there IS a finding. On `public` the instance's own baseline
