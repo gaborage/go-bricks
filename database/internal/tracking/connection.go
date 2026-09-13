@@ -162,26 +162,14 @@ func (tc *Connection) Prepare(ctx context.Context, query string) (types.Statemen
 
 // Begin starts a transaction with performance tracking
 func (tc *Connection) Begin(ctx context.Context) (types.Tx, error) {
-	start := time.Now()
-	tx, err := tc.conn.Begin(ctx)
-	tc.trackOperation(ctx, "BEGIN", nil, start, 0, err) // BEGIN doesn't affect rows
-	if err != nil {
-		return nil, err
-	}
-
-	return NewTransaction(tx, tc.logger, tc.vendor, tc.settings), nil
+	return trackBegin(ctx, tc.trackingContext(), "BEGIN", tc.conn.Begin)
 }
 
 // BeginTx starts a transaction with options and performance tracking
 func (tc *Connection) BeginTx(ctx context.Context, opts *sql.TxOptions) (types.Tx, error) {
-	start := time.Now()
-	tx, err := tc.conn.BeginTx(ctx, opts)
-	tc.trackOperation(ctx, "BEGIN_TX", nil, start, 0, err) // BEGIN_TX doesn't affect rows
-	if err != nil {
-		return nil, err
-	}
-
-	return NewTransaction(tx, tc.logger, tc.vendor, tc.settings), nil
+	return trackBegin(ctx, tc.trackingContext(), "BEGIN_TX", func(ctx context.Context) (types.Tx, error) {
+		return tc.conn.BeginTx(ctx, opts)
+	})
 }
 
 // Health checks database connection health (no tracking needed)
@@ -218,9 +206,14 @@ func (tc *Connection) CreateMigrationTable(ctx context.Context) error {
 	return err
 }
 
-// trackOperation tracks database operation performance
-func (tc *Connection) trackOperation(ctx context.Context, query string, args []any, start time.Time, rowsAffected int64, err error) {
-	trackingCtx := &Context{
+// trackingContext builds the tracking Context every operation on this
+// connection shares, including the server metadata that becomes the
+// server.address / server.port / db.namespace OTel attributes. Anything that
+// instruments work derived from this connection — its own statements, and the
+// sessions it hands out — must use it, or the derived spans silently lose
+// those attributes.
+func (tc *Connection) trackingContext() *Context {
+	return &Context{
 		Logger:        tc.logger,
 		Vendor:        tc.vendor,
 		Settings:      tc.settings,
@@ -228,7 +221,11 @@ func (tc *Connection) trackOperation(ctx context.Context, query string, args []a
 		ServerPort:    tc.serverPort,
 		Namespace:     tc.namespace,
 	}
-	TrackDBOperation(ctx, trackingCtx, query, args, start, rowsAffected, err)
+}
+
+// trackOperation tracks database operation performance
+func (tc *Connection) trackOperation(ctx context.Context, query string, args []any, start time.Time, rowsAffected int64, err error) {
+	TrackDBOperation(ctx, tc.trackingContext(), query, args, start, rowsAffected, err)
 }
 
 // SetServerInfo sets the server connection metadata for OTel attributes.
