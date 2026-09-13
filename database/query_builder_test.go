@@ -9,6 +9,8 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/database/types"
 )
 
 // Test SQL constants to avoid duplication
@@ -708,6 +710,58 @@ func TestQueryBuilderBuildUpsertUnknown(t *testing.T) {
 	assert.Contains(t, err.Error(), "upsert not supported for database vendor")
 	assert.Empty(t, sql)
 	assert.Empty(t, args)
+}
+
+// TestQueryBuilderBuildUpsertPreconditionSentinels pins that each upsert
+// precondition is matchable with errors.Is from outside the framework, while the
+// message still names the offending columns.
+func TestQueryBuilderBuildUpsertPreconditionSentinels(t *testing.T) {
+	tests := []struct {
+		name            string
+		conflictColumns []string
+		insertColumns   map[string]any
+		updateColumns   map[string]any
+		wantErr         error
+		wantColumns     []string
+	}{
+		{
+			name:          "conflict_columns_required",
+			insertColumns: map[string]any{"id": 1},
+			wantErr:       types.ErrUpsertConflictColumnsRequired,
+		},
+		{
+			name:            "conflict_column_not_inserted",
+			conflictColumns: []string{"tenant_id"},
+			insertColumns:   map[string]any{"id": 1},
+			wantErr:         types.ErrUpsertConflictColumnNotInserted,
+			wantColumns:     []string{`"tenant_id"`},
+		},
+		{
+			name:            "conflict_column_updated",
+			conflictColumns: []string{"id"},
+			insertColumns:   map[string]any{"id": 1, "name": "a"},
+			updateColumns:   map[string]any{"id": 2, "name": "b"},
+			wantErr:         types.ErrUpsertConflictColumnUpdated,
+			wantColumns:     []string{`"id"`},
+		},
+	}
+
+	for _, vendor := range []string{PostgreSQL, Oracle} {
+		for _, tt := range tests {
+			t.Run(vendor+"/"+tt.name, func(t *testing.T) {
+				qb := NewQueryBuilder(vendor)
+
+				sql, args, err := qb.BuildUpsert("users", tt.conflictColumns, tt.insertColumns, tt.updateColumns)
+
+				require.ErrorIs(t, err, tt.wantErr)
+				for _, column := range tt.wantColumns {
+					assert.Contains(t, err.Error(), column)
+				}
+				assert.Empty(t, sql)
+				assert.Empty(t, args)
+			})
+		}
+	}
 }
 
 func TestQueryBuilderPlaceholderFormat(t *testing.T) {
