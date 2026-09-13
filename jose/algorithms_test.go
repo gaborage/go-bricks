@@ -69,6 +69,9 @@ func TestIsAllowedEncFor(t *testing.T) {
 		{"bare_a256gcm", SealModeBareJWE, jose.A256GCM, true},
 		{"bare_a128gcm", SealModeBareJWE, jose.A128GCM, true},
 		{"bare_a128cbc", SealModeBareJWE, jose.A128CBC_HS256, false},
+		{"jws_of_jwe_a256gcm", SealModeJWSofJWE, jose.A256GCM, true},
+		{"jws_of_jwe_a128gcm", SealModeJWSofJWE, jose.A128GCM, false},
+		{"jws_of_jwe_a128cbc", SealModeJWSofJWE, jose.A128CBC_HS256, false},
 		{"unknown_mode_a256gcm", SealMode(99), jose.A256GCM, false},
 	}
 	for _, tt := range tests {
@@ -81,6 +84,7 @@ func TestIsAllowedEncFor(t *testing.T) {
 func TestAllowedContentEncsForReturnsCopy(t *testing.T) {
 	assert.Equal(t, []jose.ContentEncryption{jose.A256GCM}, AllowedContentEncsFor(SealModeJWEofJWS))
 	assert.ElementsMatch(t, []jose.ContentEncryption{jose.A128GCM, jose.A256GCM}, AllowedContentEncsFor(SealModeBareJWE))
+	assert.Equal(t, []jose.ContentEncryption{jose.A256GCM}, AllowedContentEncsFor(SealModeJWSofJWE))
 	assert.Empty(t, AllowedContentEncsFor(SealMode(99)))
 
 	bare := AllowedContentEncsFor(SealModeBareJWE)

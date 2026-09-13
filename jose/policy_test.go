@@ -112,6 +112,7 @@ func TestParseUnixSecsAllArms(t *testing.T) {
 func TestSealModeString(t *testing.T) {
 	assert.Equal(t, "jwe-of-jws", SealModeJWEofJWS.String())
 	assert.Equal(t, "bare-jwe", SealModeBareJWE.String())
+	assert.Equal(t, "jws-of-jwe", SealModeJWSofJWE.String())
 	assert.Equal(t, "unknown", SealMode(99).String())
 }
 
@@ -287,6 +288,76 @@ func TestPolicyValidateContentEncPerMode(t *testing.T) {
 				return
 			}
 			require.ErrorIs(t, err, ErrAlgorithmDisallowed)
+			requireJOSEErrorCode(t, err, tt.wantCode)
+		})
+	}
+}
+
+// jwsOfJWEOutbound / jwsOfJWEInbound are minimally valid JWS-of-JWE policies the mode tests mutate.
+func jwsOfJWEOutbound() *Policy {
+	return &Policy{
+		Direction: DirectionOutbound,
+		Mode:      SealModeJWSofJWE,
+		SignKid:   "our-key", EncryptKid: "peer-key",
+		SigAlg: jose.PS256, KeyAlg: DefaultKeyAlg, Enc: jose.A256GCM,
+	}
+}
+
+func jwsOfJWEInbound() *Policy {
+	return &Policy{
+		Direction:  DirectionInbound,
+		Mode:       SealModeJWSofJWE,
+		DecryptKid: "our-key", VerifyKid: "peer-key",
+		SigAlg: jose.PS256, KeyAlg: DefaultKeyAlg, Enc: jose.A256GCM,
+	}
+}
+
+func TestPolicyValidateJWSofJWEModeRules(t *testing.T) {
+	tests := []struct {
+		name     string
+		base     func() *Policy
+		mutate   func(p *Policy)
+		wantCode string
+	}{
+		{"outbound_minimal_is_valid", jwsOfJWEOutbound, func(*Policy) {}, ""},
+		{"outbound_without_sign_kid", jwsOfJWEOutbound, func(p *Policy) { p.SignKid = "" }, codePolicyIncomplete},
+		{"outbound_without_encrypt_kid", jwsOfJWEOutbound, func(p *Policy) { p.EncryptKid = "" }, codePolicyIncomplete},
+		{"outbound_with_decrypt_kid", jwsOfJWEOutbound, func(p *Policy) { p.DecryptKid = "our-key" }, codePolicyDirectionMismatch},
+		{"outbound_with_verify_kid", jwsOfJWEOutbound, func(p *Policy) { p.VerifyKid = "peer-key" }, codePolicyDirectionMismatch},
+		{"outbound_without_sig_alg", jwsOfJWEOutbound, func(p *Policy) { p.SigAlg = "" }, codeAlgorithmDisallowed},
+		{"outbound_a128gcm", jwsOfJWEOutbound, func(p *Policy) { p.Enc = jose.A128GCM }, codeAlgorithmDisallowed},
+		{"outbound_typ", jwsOfJWEOutbound, func(p *Policy) { p.Typ = "JOSE" }, ""},
+		{"outbound_protected_headers", jwsOfJWEOutbound, func(p *Policy) {
+			p.ProtectedHeaders = map[string]any{"iss": "acme"}
+		}, ""},
+		{"outbound_iat_millis", jwsOfJWEOutbound, func(p *Policy) { p.IATMillis = true }, ""},
+		{"outbound_owned_header", jwsOfJWEOutbound, func(p *Policy) {
+			p.ProtectedHeaders = map[string]any{"kid": "peer-key"}
+		}, codePolicyHeaderCollision},
+		{"outbound_iat_header_while_stamping", jwsOfJWEOutbound, func(p *Policy) {
+			p.ProtectedHeaders = map[string]any{"iat": 1}
+			p.IATMillis = true
+		}, codePolicyHeaderCollision},
+		{"inbound_minimal_is_valid", jwsOfJWEInbound, func(*Policy) {}, ""},
+		{"inbound_without_decrypt_kid", jwsOfJWEInbound, func(p *Policy) { p.DecryptKid = "" }, codePolicyIncomplete},
+		{"inbound_without_verify_kid", jwsOfJWEInbound, func(p *Policy) { p.VerifyKid = "" }, codePolicyIncomplete},
+		{"inbound_with_sign_kid", jwsOfJWEInbound, func(p *Policy) { p.SignKid = "our-key" }, codePolicyDirectionMismatch},
+		{"inbound_with_encrypt_kid", jwsOfJWEInbound, func(p *Policy) { p.EncryptKid = "peer-key" }, codePolicyDirectionMismatch},
+		{"inbound_typ", jwsOfJWEInbound, func(p *Policy) { p.Typ = "JOSE" }, codePolicyDirectionMismatch},
+		{"inbound_protected_headers", jwsOfJWEInbound, func(p *Policy) {
+			p.ProtectedHeaders = map[string]any{}
+		}, codePolicyDirectionMismatch},
+		{"inbound_iat_millis", jwsOfJWEInbound, func(p *Policy) { p.IATMillis = true }, codePolicyDirectionMismatch},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := tt.base()
+			tt.mutate(p)
+			err := p.Validate()
+			if tt.wantCode == "" {
+				require.NoError(t, err)
+				return
+			}
 			requireJOSEErrorCode(t, err, tt.wantCode)
 		})
 	}
