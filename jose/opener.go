@@ -7,9 +7,10 @@ import (
 	"github.com/gaborage/go-bricks/jose/internal/cryptoadapter"
 )
 
-// Open performs the inbound transformation: decrypt the compact JWE with our private key,
-// verify the inner JWS with the peer's public key, and parse standard JWT claims out of
-// the verified payload.
+// Open performs the inbound transformation p.Mode selects. The default decrypts the compact
+// JWE with our private key and verifies the inner JWS with the peer's public key;
+// SealModeBareJWE only decrypts; SealModeJWSofJWE verifies the outer JWS first, then
+// decrypts its JWE payload. Standard JWT claims are parsed out of the resulting payload.
 //
 // Returns the verified plaintext payload, the extracted Claims, and the JWE+JWS Headers
 // for diagnostic logging by the caller. On any failure, returns an *Error with the
@@ -96,7 +97,8 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 	return innerPayload, claims, hdr, nil
 }
 
-// ctyMismatch reports the cty rule both modes apply, returning nil when the header is
+// ctyMismatch reports the cty rule every mode applies to its payload-bearing layer (a
+// JWS-of-JWE outer JWS additionally requires exactly cty JWE), returning nil when the header is
 // acceptable. Permissive: only a peer that explicitly declares a cty disagreeing with the
 // policy is rejected; cty is optional per RFC 7515 §4.1.10.
 func ctyMismatch(policyCty string, h *cryptoadapter.Header) *Error {
@@ -130,8 +132,9 @@ type Header struct {
 	Enc string
 	Cty string
 	Typ string
-	// IATMillis is the `iat` protected header in Unix epoch MILLISECONDS (bare mode's
-	// Visa MLE convention, not the seconds-based JWT claim), 0 when absent or malformed.
+	// IATMillis is the `iat` protected header in Unix epoch MILLISECONDS (the Visa MLE
+	// convention on a bare or JWS-of-JWE inner JWE, not the seconds-based JWT claim), 0 when
+	// absent or malformed. Always 0 on a JWS-of-JWE outer JWS, whose iat is seconds.
 	// Reported, never judged: freshness is the caller's policy.
 	IATMillis int64
 }
