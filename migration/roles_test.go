@@ -420,7 +420,7 @@ func rejectUppercase(value string) error {
 func TestPGRoleSpecValidatePolicyErrorReachesCaller(t *testing.T) {
 	spec := &PGRoleSpec{
 		Schema:           "tenant_a",
-		MigratorRole:     "Migrator",
+		MigratorRole:     "MigratorX",
 		RuntimeRole:      "r",
 		IdentifierPolicy: PGIdentifierPolicyFunc(rejectUppercase),
 	}
@@ -428,7 +428,7 @@ func TestPGRoleSpecValidatePolicyErrorReachesCaller(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidPGIdentifier)
 	require.ErrorIs(t, err, errTestPolicyRejected)
 	assert.Contains(t, err.Error(), pgRoleFieldMigratorRole)
-	assert.Contains(t, err.Error(), "Migrator")
+	assert.Contains(t, err.Error(), "MigratorX")
 }
 
 // An admit-everything policy must not re-admit what the floor refused — one
@@ -436,23 +436,32 @@ func TestPGRoleSpecValidatePolicyErrorReachesCaller(t *testing.T) {
 func TestPGRoleSpecValidatePolicyCannotWidenFloor(t *testing.T) {
 	admitEverything := PGIdentifierPolicyFunc(func(string) error { return nil })
 	tests := []struct {
-		name   string
-		schema string
+		name  string
+		spec  *PGRoleSpec
+		field string
 	}{
-		{name: "hyphen", schema: "tenant-a"},
-		{name: "over_63_bytes", schema: strings.Repeat("a", 64)},
+		{
+			name:  "hyphen_schema",
+			spec:  &PGRoleSpec{Schema: "tenant-a", MigratorRole: "m", RuntimeRole: "r"},
+			field: pgRoleFieldSchema,
+		},
+		{
+			name:  "over_63_bytes_schema",
+			spec:  &PGRoleSpec{Schema: strings.Repeat("a", 64), MigratorRole: "m", RuntimeRole: "r"},
+			field: pgRoleFieldSchema,
+		},
+		{
+			name:  "hyphen_migrator_role",
+			spec:  &PGRoleSpec{Schema: "tenant_a", MigratorRole: "mig-rator", RuntimeRole: "r"},
+			field: pgRoleFieldMigratorRole,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spec := &PGRoleSpec{
-				Schema:           tt.schema,
-				MigratorRole:     "m",
-				RuntimeRole:      "r",
-				IdentifierPolicy: admitEverything,
-			}
-			err := spec.Validate()
+			tt.spec.IdentifierPolicy = admitEverything
+			err := tt.spec.Validate()
 			require.ErrorIs(t, err, ErrInvalidPGIdentifier)
-			assert.Contains(t, err.Error(), pgRoleFieldSchema)
+			assert.Contains(t, err.Error(), tt.field)
 		})
 	}
 }
@@ -483,20 +492,20 @@ func TestPGRoleSpecValidatePolicyRejectsEachIdentifierField(t *testing.T) {
 	}{
 		{
 			name:   "schema",
-			spec:   &PGRoleSpec{Schema: "Tenant", MigratorRole: "m", RuntimeRole: "r"},
-			target: "Tenant",
+			spec:   &PGRoleSpec{Schema: "TenantX", MigratorRole: "m", RuntimeRole: "r"},
+			target: "TenantX",
 			field:  pgRoleFieldSchema,
 		},
 		{
 			name:   "migrator_role",
-			spec:   &PGRoleSpec{Schema: "s", MigratorRole: "Migrator", RuntimeRole: "r"},
-			target: "Migrator",
+			spec:   &PGRoleSpec{Schema: "s", MigratorRole: "MigratorX", RuntimeRole: "r"},
+			target: "MigratorX",
 			field:  pgRoleFieldMigratorRole,
 		},
 		{
 			name:   "runtime_role",
-			spec:   &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "Runtime"},
-			target: "Runtime",
+			spec:   &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "RuntimeX"},
+			target: "RuntimeX",
 			field:  pgRoleFieldRuntimeRole,
 		},
 	}

@@ -72,16 +72,18 @@ type PGIdentifierPolicyFunc func(value string) error
 // CheckPGIdentifier calls f.
 func (f PGIdentifierPolicyFunc) CheckPGIdentifier(value string) error { return f(value) }
 
-// checkIdentifier applies the identifier floor to value and, when a policy is
-// configured, the policy on top of it.
-func (s *PGRoleSpec) checkIdentifier(value string) error {
-	if err := identifier.Validate(dbtypes.PostgreSQL, value); err != nil {
-		return err
+// checkIdentifier applies the identifier floor to the field's value and, when a
+// policy is configured, the policy on top of it. A refusal from either is
+// wrapped with ErrInvalidPGIdentifier plus the field name and value.
+func (s *PGRoleSpec) checkIdentifier(field, value string) error {
+	err := identifier.Validate(dbtypes.PostgreSQL, value)
+	if err == nil && s.IdentifierPolicy != nil {
+		err = s.IdentifierPolicy.CheckPGIdentifier(value)
 	}
-	if s.IdentifierPolicy == nil {
-		return nil
+	if err != nil {
+		return fmt.Errorf("%w: %s=%q: %w", ErrInvalidPGIdentifier, field, value, err)
 	}
-	return s.IdentifierPolicy.CheckPGIdentifier(value)
+	return nil
 }
 
 // ErrInvalidPGIdentifier is returned by Validate when a role or schema name
@@ -115,6 +117,9 @@ const (
 // CR, LF, or NUL. Tenant IDs sourced from outside should be normalized to that
 // grammar upstream; rejecting at the migration boundary gives a single forcing
 // function rather than scattering input filters.
+// A non-nil IdentifierPolicy is consulted once per identifier after the floor
+// has accepted it, in Schema → MigratorRole → RuntimeRole order, stopping at
+// the first refusal.
 // Returns ErrInvalidPGIdentifier wrapped with the offending field name, value
 // and the identifier sentinel for an identifier failure, or
 // ErrPGRolePasswordHasControlChar wrapped with the offending field name —
@@ -125,8 +130,8 @@ func (s *PGRoleSpec) Validate() error {
 		{pgRoleFieldMigratorRole, s.MigratorRole},
 		{pgRoleFieldRuntimeRole, s.RuntimeRole},
 	} {
-		if err := s.checkIdentifier(f.value); err != nil {
-			return fmt.Errorf("%w: %s=%q: %w", ErrInvalidPGIdentifier, f.name, f.value, err)
+		if err := s.checkIdentifier(f.name, f.value); err != nil {
+			return err
 		}
 	}
 	if s.MigratorRole == s.RuntimeRole {

@@ -147,6 +147,15 @@ maximum). Identifiers that fail this check (hyphens, dots, Unicode, embedded
 quotes, NUL bytes, leading digits, names longer than 63 bytes) are rejected
 with `ErrInvalidPGIdentifier` before any DDL is built.
 
+A deployment that needs a stricter rule can set `PGRoleSpec.IdentifierPolicy`
+to a `PGIdentifierPolicy` (or wrap a plain `func(value string) error` in
+`PGIdentifierPolicyFunc`). The floor above always runs first, so a policy can
+only tighten it — never re-admit a name the floor rejected — and it is consulted
+once per identifier, in `Schema` → `MigratorRole` → `RuntimeRole` order, stopping
+at the first refusal. A nil policy means the floor alone. The policy's error is
+wrapped with `ErrInvalidPGIdentifier` and the failing field name, so the policy
+need not identify the identifier it judged.
+
 If your tenant IDs include hyphens or other characters outside this subset,
 normalize them upstream (e.g., `tenant-a` → `tenant_a`) before constructing
 the spec. The migration boundary deliberately enforces a single forcing
