@@ -549,7 +549,7 @@ configs too" below).
   below). `cert` and `key` must still be set together.
 - **PostgreSQL — a valid mode alone is fine on a TCP host.** `mode: disable` with no material
   stays valid; opportunistic TLS with nothing to discard is a legitimate choice.
-- **PostgreSQL — a unix-socket host takes no TLS.** A `host` that is an absolute path
+- **PostgreSQL — a unix-socket host takes no TLS.** A `host` (per comma-separated entry) that is an absolute path
   (`/var/run/postgresql`, or a drive path such as `C:\pg`) is dialed over a unix socket, where
   pgx skips TLS, so `cert`, `key`, `ca` or any `mode` other than `disable` is refused naming
   `database.tls`: remove the `database.tls` block, or use a TCP host.

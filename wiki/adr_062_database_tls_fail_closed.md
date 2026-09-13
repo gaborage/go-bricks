@@ -18,7 +18,10 @@ and any of `cert`/`key`/`ca` set or `mode` set to anything but `disable` → rej
 `database.tls` block, or use a TCP host. The mode is judged as the operator wrote it —
 nothing on this seam defaults an unset mode; pgx's `prefer` applies only at parse time — so
 a socket host with no block, or `mode: disable` and no material, is accepted unchanged.
-Socket hosts are not refused by themselves.
+Socket hosts are not refused by themselves. R6 applies per comma-separated `host` entry,
+matching pgx's own untrimmed split, so `db.internal,/var/run/postgresql` is refused the same
+way; an empty entry (`db.internal,`) is refused as `[C64.8]`, TLS or not, because pgx swaps
+it for the socket directory.
 
 R6 runs after R1, so a typo'd mode on a socket host is still reported as a mode problem, and
 before R2 and R3, so material on a socket host gets the transport message rather than a
