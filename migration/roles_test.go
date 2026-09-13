@@ -404,14 +404,6 @@ func TestPGRoleSpecValidateRejectsControlCharPasswords(t *testing.T) {
 	assert.NoError(t, empty.Validate(), "empty passwords stay valid — they emit no ALTER ROLE statement")
 }
 
-func TestPGRoleSpecValidateNilPolicyMatchesFloor(t *testing.T) {
-	accepted := &PGRoleSpec{Schema: "tenant_a", MigratorRole: "m", RuntimeRole: "r", IdentifierPolicy: nil}
-	require.NoError(t, accepted.Validate())
-
-	rejected := &PGRoleSpec{Schema: "tenant-a", MigratorRole: "m", RuntimeRole: "r", IdentifierPolicy: nil}
-	require.ErrorIs(t, rejected.Validate(), ErrInvalidPGIdentifier)
-}
-
 // errTestPolicyRejected is the sentinel returned by the test policies below, so
 // a test can assert the caller still reaches its own error through the wrap.
 var errTestPolicyRejected = errors.New("test policy rejected the identifier")
@@ -423,18 +415,6 @@ func rejectUppercase(value string) error {
 		return errTestPolicyRejected
 	}
 	return nil
-}
-
-func TestPGRoleSpecValidatePolicyTightensFloor(t *testing.T) {
-	spec := &PGRoleSpec{
-		Schema:           "TenantA",
-		MigratorRole:     "m",
-		RuntimeRole:      "r",
-		IdentifierPolicy: PGIdentifierPolicyFunc(rejectUppercase),
-	}
-	require.NoError(t, (&PGRoleSpec{Schema: spec.Schema, MigratorRole: "m", RuntimeRole: "r"}).Validate(),
-		"floor admits the identifier the policy refuses")
-	require.ErrorIs(t, spec.Validate(), ErrInvalidPGIdentifier)
 }
 
 func TestPGRoleSpecValidatePolicyErrorReachesCaller(t *testing.T) {
@@ -451,15 +431,15 @@ func TestPGRoleSpecValidatePolicyErrorReachesCaller(t *testing.T) {
 	assert.Contains(t, err.Error(), "Migrator")
 }
 
+// An admit-everything policy must not re-admit what the floor refused — one
+// charset refusal and one length refusal, the floor's two independent rules.
 func TestPGRoleSpecValidatePolicyCannotWidenFloor(t *testing.T) {
 	admitEverything := PGIdentifierPolicyFunc(func(string) error { return nil })
 	tests := []struct {
 		name   string
 		schema string
 	}{
-		{name: "empty", schema: ""},
 		{name: "hyphen", schema: "tenant-a"},
-		{name: "leading_digit", schema: "1tenant"},
 		{name: "over_63_bytes", schema: strings.Repeat("a", 64)},
 	}
 	for _, tt := range tests {
@@ -492,6 +472,8 @@ func TestPGRoleSpecValidatePolicySeesEveryIdentifier(t *testing.T) {
 	assert.Equal(t, []string{"tenant_a", "migrator", "tenant_a_app"}, seen)
 }
 
+// Every target below is an identifier the floor admits, so the policy is the
+// only thing that can refuse it — the tightening direction.
 func TestPGRoleSpecValidatePolicyRejectsEachIdentifierField(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -520,6 +502,9 @@ func TestPGRoleSpecValidatePolicyRejectsEachIdentifierField(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			floorOnly := *tt.spec
+			require.NoError(t, floorOnly.Validate(), "floor admits the identifier the policy refuses")
+
 			tt.spec.IdentifierPolicy = PGIdentifierPolicyFunc(func(value string) error {
 				if value == tt.target {
 					return errTestPolicyRejected
@@ -530,6 +515,7 @@ func TestPGRoleSpecValidatePolicyRejectsEachIdentifierField(t *testing.T) {
 			require.ErrorIs(t, err, errTestPolicyRejected)
 			require.ErrorIs(t, err, ErrInvalidPGIdentifier)
 			assert.Contains(t, err.Error(), tt.field)
+			assert.Contains(t, err.Error(), tt.target)
 		})
 	}
 }

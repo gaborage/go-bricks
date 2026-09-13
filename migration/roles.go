@@ -51,9 +51,7 @@ type PGRoleSpec struct {
 	RuntimePassword string
 
 	// IdentifierPolicy optionally tightens the identifier rule Validate
-	// applies to Schema, MigratorRole and RuntimeRole. Nil means the floor
-	// alone. It can only narrow what is accepted: the floor runs first and an
-	// identifier it refuses never reaches the policy.
+	// applies to Schema, MigratorRole and RuntimeRole; nil means the floor alone.
 	IdentifierPolicy PGIdentifierPolicy
 }
 
@@ -73,6 +71,18 @@ type PGIdentifierPolicyFunc func(value string) error
 
 // CheckPGIdentifier calls f.
 func (f PGIdentifierPolicyFunc) CheckPGIdentifier(value string) error { return f(value) }
+
+// checkIdentifier applies the identifier floor to value and, when a policy is
+// configured, the policy on top of it.
+func (s *PGRoleSpec) checkIdentifier(value string) error {
+	if err := identifier.Validate(dbtypes.PostgreSQL, value); err != nil {
+		return err
+	}
+	if s.IdentifierPolicy == nil {
+		return nil
+	}
+	return s.IdentifierPolicy.CheckPGIdentifier(value)
+}
 
 // ErrInvalidPGIdentifier is returned by Validate when a role or schema name
 // fails the safe-identifier check enforced by ProvisionPGRoles.
@@ -115,13 +125,7 @@ func (s *PGRoleSpec) Validate() error {
 		{pgRoleFieldMigratorRole, s.MigratorRole},
 		{pgRoleFieldRuntimeRole, s.RuntimeRole},
 	} {
-		if err := identifier.Validate(dbtypes.PostgreSQL, f.value); err != nil {
-			return fmt.Errorf("%w: %s=%q: %w", ErrInvalidPGIdentifier, f.name, f.value, err)
-		}
-		if s.IdentifierPolicy == nil {
-			continue
-		}
-		if err := s.IdentifierPolicy.CheckPGIdentifier(f.value); err != nil {
+		if err := s.checkIdentifier(f.value); err != nil {
 			return fmt.Errorf("%w: %s=%q: %w", ErrInvalidPGIdentifier, f.name, f.value, err)
 		}
 	}
