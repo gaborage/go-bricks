@@ -498,6 +498,128 @@ func publicGrantRows(ctx context.Context, t *testing.T, db *sql.DB, schema strin
 	return out
 }
 
+// pgReservedRoleDetectSQL is the SECOND detect step of the [C65.4] atom in
+// wiki/migrations.md, kept here verbatim for the same reason as the query
+// above: so the atom's copy has a live oracle and the two cannot drift apart
+// silently.
+//
+// PostgreSQL's own reserved-name check is exact-case, so it refuses CREATE ROLE
+// "public" and CREATE ROLE "pg_x" but accepts "Public" and "PG_x" as ordinary
+// roles with ordinary grants. Those roles are real, grantee 0 never matches
+// them, and pgPublicGrantDetectSQL therefore reports nothing at all for them —
+// yet C65.4 matches case-insensitively, so those deployments do hit the gate.
+// This query is how an operator finds them.
+//
+// LIKE 'pg\_%' is correct as written under the default
+// standard_conforming_strings = on: the literal keeps the backslash, backslash
+// is LIKE's default escape character, so \_ matches a LITERAL underscore and no
+// ESCAPE clause is needed. With the escape broken, _ would degrade to a
+// single-character wildcard and pgx_probe would match too — which is exactly
+// what the near-miss role in the test below falsifies.
+//
+// Unlike the PUBLIC-grant query, a row here is not by itself a finding: the
+// pg_-prefixed predefined roles ship with every instance and are baseline
+// noise. A row is a match only when the name is one your own spec provisions.
+const pgReservedRoleDetectSQL = `SELECT rolname FROM pg_roles
+WHERE lower(rolname) = 'public' OR lower(rolname) LIKE 'pg\_%'`
+
+// pgPredefinedRoleBaseline lists PostgreSQL's own pg_-prefixed predefined roles
+// that pgReservedRoleDetectSQL necessarily returns on every instance. It is
+// asserted as a SUBSET rather than an exact set — the same shape as the
+// public-schema USAGE row the grant oracle pins — so a PostgreSQL release that
+// REMOVES or renames one of these is noticed here instead of being silently
+// absorbed, while one that adds a new predefined role does not red the suite.
+// Every name below has existed since PostgreSQL 14; the container runs the
+// renovate-pinned tag in testing/containers/postgresql.go.
+var pgPredefinedRoleBaseline = []string{
+	"pg_database_owner",
+	"pg_execute_server_program",
+	"pg_monitor",
+	"pg_read_all_data",
+	"pg_read_all_settings",
+	"pg_read_all_stats",
+	"pg_read_server_files",
+	"pg_signal_backend",
+	"pg_stat_scan_tables",
+	"pg_write_all_data",
+	"pg_write_server_files",
+}
+
+// TestPGReservedRoleDetectSQLFindsCaseVariantRoles is the falsifiability check
+// on the atom's second detect query. A case variant of a reserved name is a
+// role PostgreSQL genuinely created, so the assertions are scoped: the probe
+// role must APPEAR once it exists and disappear once it is dropped, the
+// predefined baseline must be present throughout, and the near-miss role
+// pgx_probe must never appear — if it does, the LIKE escape is broken and the
+// query over-reports exactly as the atom's caveat sentence warns.
+func TestPGReservedRoleDetectSQLFindsCaseVariantRoles(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx, cancel := testCtx(t)
+	defer cancel()
+
+	admin := env.adminDB(t)
+
+	before := reservedRoleNames(ctx, t, admin)
+	require.Subset(t, before, pgPredefinedRoleBaseline,
+		"the pg_-prefixed predefined roles are expected baseline noise, not a finding")
+	require.NotContains(t, before, "Public",
+		"the probe role must not already exist on the container")
+	require.NotContains(t, before, "pgx_probe",
+		"the near-miss role must not already exist on the container")
+
+	t.Run("case_variant_role_is_found", func(t *testing.T) {
+		// PostgreSQL accepts both of these: its reserved check is exact-case,
+		// so "Public" is a real role, and "pgx_probe" is not reserved-shaped
+		// at all — it only LOOKS like one if the LIKE escape is broken.
+		_, err := admin.ExecContext(ctx, `CREATE ROLE "Public"`)
+		require.NoError(t, err)
+		_, err = admin.ExecContext(ctx, `CREATE ROLE pgx_probe`)
+		require.NoError(t, err)
+
+		// Dropped on the way out whatever happens, so a failure here cannot
+		// poison a later run sharing the same container.
+		defer func() {
+			_, dropErr := admin.ExecContext(ctx, `DROP ROLE IF EXISTS "Public"`)
+			assert.NoError(t, dropErr)
+			_, dropErr = admin.ExecContext(ctx, `DROP ROLE IF EXISTS pgx_probe`)
+			assert.NoError(t, dropErr)
+		}()
+
+		got := reservedRoleNames(ctx, t, admin)
+		require.Contains(t, got, "Public",
+			"a case variant the server accepted must be found by the detect query")
+		require.Subset(t, got, pgPredefinedRoleBaseline,
+			"the predefined roles stay in the result set alongside the finding")
+		require.NotContains(t, got, "pgx_probe",
+			`LIKE 'pg\_%' must match a LITERAL underscore; a pgx_probe hit means the escape is broken`)
+	})
+
+	after := reservedRoleNames(ctx, t, admin)
+	require.NotContains(t, after, "Public",
+		"the atom's apply step (rename or drop) must make the query go quiet again")
+	require.Subset(t, after, pgPredefinedRoleBaseline,
+		"the baseline is unaffected by the probe role's lifecycle")
+}
+
+// reservedRoleNames runs pgReservedRoleDetectSQL verbatim and returns the
+// rolname column. No filtering happens in the SQL, so the const under test
+// stays byte-identical to the query the atom publishes.
+func reservedRoleNames(ctx context.Context, t *testing.T, db *sql.DB) []string {
+	t.Helper()
+	rows, err := db.QueryContext(ctx, pgReservedRoleDetectSQL)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var rolname string
+		require.NoError(t, rows.Scan(&rolname))
+		out = append(out, rolname)
+	}
+	require.NoError(t, rows.Err())
+	return out
+}
+
 // sourceColumn projects the source field out of publicGrantRows' flattened rows,
 // preserving order, so a test can assert the query's ORDER BY without depending
 // on the server's collation for the schema and object columns.
