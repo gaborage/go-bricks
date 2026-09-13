@@ -9,6 +9,7 @@ package cryptoadapter
 import (
 	"crypto/rsa"
 	"errors"
+	"fmt"
 
 	jose "github.com/go-jose/go-jose/v4"
 )
@@ -53,6 +54,15 @@ type DecryptOptions struct {
 // Decrypt parses a compact JWE, validates its protected header against the allowlists,
 // and decrypts using the supplied private key.
 func Decrypt(compact string, key *rsa.PrivateKey, opts *DecryptOptions) ([]byte, Header, error) {
+	// The bound runs before go-jose, which imposes none of its own. The class rides in the
+	// error chain, matchable with errors.Is by a caller that inspects it; the framework's own
+	// server maps code and message only, so it reaches no framework log today. The wire sees
+	// the generic parse failure either way. Parsing continues on the trimmed body, so the
+	// header this returns is the one that was measured.
+	compact, _, boundErr := boundedSegments(compact)
+	if boundErr != nil {
+		return nil, Header{}, fmt.Errorf("%w: %w", ErrParseEncrypted, boundErr)
+	}
 	jwe, err := jose.ParseEncrypted(compact, opts.AllowedKeyAlgs, opts.AllowedContentEnc)
 	if err != nil {
 		return nil, Header{}, ErrParseEncrypted
@@ -87,6 +97,10 @@ type VerifyOptions struct {
 // using the supplied public key. Reads the Protected header (signed) rather than the
 // merged Header (which mixes unsigned values).
 func Verify(compact string, key *rsa.PublicKey, opts *VerifyOptions) ([]byte, Header, error) {
+	compact, _, boundErr := boundedSegments(compact)
+	if boundErr != nil {
+		return nil, Header{}, fmt.Errorf("%w: %w", ErrParseSigned, boundErr)
+	}
 	jws, err := jose.ParseSigned(compact, opts.AllowedSigAlgs)
 	if err != nil {
 		return nil, Header{}, ErrParseSigned

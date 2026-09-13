@@ -337,3 +337,32 @@ func TestNilExtraLeavesProtectedHeaderKeysUnchanged(t *testing.T) {
 	assert.Equal(t, []string{"alg", "cty", "kid"}, keysOf(jws))
 	assert.Equal(t, []string{"alg", "cty", "enc", "kid"}, keysOf(jwe))
 }
+
+// The boundary itself, pinned at the gate all three doors share: a segment 0 exactly at the
+// cap passes, one byte over is refused. Sign cannot land a header on the cap (base64 grows in
+// 4-character steps), so the at-limit case is built by hand, as the peek test does.
+func TestBoundedSegmentsBoundaryAtTheCap(t *testing.T) {
+	rawLen := maxPeekHeaderBytes / 4 * 3
+	pad := strings.Repeat("a", rawLen-len(`{"x":""}`))
+	atLimit := base64.RawURLEncoding.EncodeToString([]byte(`{"x":"` + pad + `"}`))
+	require.Len(t, atLimit, maxPeekHeaderBytes)
+
+	body := atLimit + ".payload.signature"
+	trimmed, segments, err := boundedSegments(" " + body + "\n")
+	require.NoError(t, err, "a segment 0 exactly at the cap must pass")
+	assert.Equal(t, body, trimmed, "the doors must parse the body this measured, not the caller's")
+	assert.Len(t, segments, 3)
+
+	_, _, err = boundedSegments(atLimit + "A.payload.signature")
+	assert.ErrorIs(t, err, ErrHeaderTooLarge, "one byte over must be refused")
+}
+
+// The charset gate must accept every base64url character and refuse padding: dropping - and _
+// from the allowlist would refuse real tokens, and admitting = would reopen the JSON bypass.
+func TestBoundedSegmentsCharset(t *testing.T) {
+	_, _, err := boundedSegments("ab-_09azAZ.payload.signature")
+	require.NoError(t, err, "- and _ are base64url characters")
+
+	_, _, err = boundedSegments("YWJj=.payload.signature")
+	assert.ErrorIs(t, err, ErrNotCompact, "base64 padding is not part of a compact serialization")
+}
