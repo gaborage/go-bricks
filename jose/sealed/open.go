@@ -103,9 +103,15 @@ type Envelope struct {
 	EncKid     string
 }
 
-// DedupKey is the ledger key: the Logical sign family (never the concrete Generation, so a
-// rotation does not re-open the replay window) joined to the signed jti by a separator
-// that headerIDPattern excludes, so no header-sourced id can spell it.
+// DedupKey is this raw door's identity string for a CONSUMER-MANAGED ledger: the Logical
+// sign family (never the concrete Generation, so a rotation does not re-open the replay
+// window) joined to the signed jti by a separator that headerIDPattern excludes, so no
+// header-sourced id can spell it.
+//
+// It is NOT an inbox.ProcessOnce key and cannot be turned into one: that door takes a
+// messaging.DedupKey, whose only sealed constructor is messaging.Metadata.DedupKey's sealed
+// branch, and messaging.WireDedupKey rejects this string's ':'. A consumer on the framework
+// path takes its key from Metadata.DedupKey instead.
 func (e *Envelope) DedupKey() string {
 	return e.SignFamily + dedupKeySeparator + e.JTI
 }

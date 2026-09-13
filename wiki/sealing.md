@@ -250,22 +250,31 @@ rejection**; its one replay-related job is to make the message's identity un-for
 - `Meta.Sealed() (SealedEnvelope, bool)` — true for every delivery a seal-tagged `T`
   receives, false for every delivery a plain typed consumer receives: a property of the
   consumer TYPE, so a handler branching on it cannot be steered by a header.
-- `Meta.DedupKey() (string, error)` — `<SignFamily>:<jti>` for a seal-tagged `T` (never
-  errors; the Logical family, not the Generation, so a rotation does not re-open the
-  window); for a plain `T` the `x-outbox-event-id` header once it passes
+- `Meta.DedupKey() (messaging.DedupKey, error)` — a value carrying which door produced it.
+  For a seal-tagged `T` it is a SEALED key spelling `<SignFamily>:<jti>` (never errors; the
+  Logical family, not the Generation, so a rotation does not re-open the window); for a
+  plain `T` it is a WIRE key holding the `x-outbox-event-id` header once it passes
   `^[A-Za-z0-9_-]{1,128}$` — or, when the delivery carries no such header, the AMQP
   `message_id` property under that same grammar — or an error wrapping
-  `messaging.ErrInvalidEventID`. Both unsealed sources answer to a grammar that excludes
-  `:`, so neither can mint a sealed key.
-- `Meta.DedupKey()` on a sealed consumer is `<SignFamily>:<jti>`; `inbox.ProcessOnce` admits it
-  only under the delivery context the sealed door handed the handler
-  (`messaging.IsSealedDelivery`). Call `ProcessOnce` with a context derived from the
-  handler's — `context.WithoutCancel(ctx)` for background work, never `context.Background()`
-  — or the marker is lost and the call fails closed with `ErrInvalidEventID`.
-- `:` is outside the header-id grammar, so no header can spell a sealed key: a publish-ACL
-  holder on an unsealed sibling queue cannot pre-insert a sealed message's key and have the
-  real one skip+ACK (the shared-ledger suppression attack). That grammar applies to
-  unsealed consumers too — [migrations.md](migrations.md) `[C63.2]`.
+  `messaging.ErrInvalidEventID`. `key.Sealed()` reports the provenance and `key.String()`
+  the persisted spelling; the zero value is invalid.
+- **Only the sealed branch of `Metadata.DedupKey` can mint a sealed key.** No exported door
+  does: `messaging.WireDedupKey`, the one constructor for a wire-sourced or
+  consumer-composed id, returns an unsealed key whatever the id spells. So admission at the
+  ledger is by TYPE and provenance, not by spelling.
+- `inbox.ProcessOnce` (through `messaging.ValidateDedupKey`) refuses the zero key, and
+  refuses a SEALED key under a context the sealed door did not mark
+  (`messaging.IsSealedDelivery`). A handler therefore holds only its own delivery's sealed
+  key, and using it from somewhere that is not that delivery — a detached goroutine, a
+  `context.Background()` where `context.WithoutCancel(ctx)` was meant — loses the marker
+  and fails closed with `ErrInvalidEventID` instead of writing the ledger row silently.
+  Derive the context from the handler's.
+- The header-id grammar excludes `:`, so no header-sourced or consumer-composed id can even
+  spell a sealed key: a publish-ACL holder on an unsealed sibling queue cannot pre-insert a
+  sealed message's key and have the real one skip+ACK (the shared-ledger suppression
+  attack). That grammar applies to unsealed consumers too — [migrations.md](migrations.md)
+  `[C63.2]`. The typed key makes that a belt-and-braces second line rather than the
+  boundary itself.
 - `inbox.retentionperiod` **is** the replay window: a capture-then-wait replay older than
   retention re-executes if its Generation is still accepted. Retention must exceed the
   broker's redelivery window AND cover the DLQ drains and outbox re-drives you intend to
