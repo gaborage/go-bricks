@@ -142,22 +142,46 @@ for _, s := range stmts {
 ## Identifier safety
 
 `PGRoleSpec.Schema`, `MigratorRole`, and `RuntimeRole` are validated against
-a conservative ASCII subset: `[A-Za-z_][A-Za-z0-9_]{0,62}` (NAMEDATALEN-1
-maximum). Identifiers that fail this check (hyphens, dots, Unicode, embedded
-quotes, NUL bytes, leading digits, names longer than 63 bytes) are rejected
-with `ErrInvalidPGIdentifier` before any DDL is built.
+the shared PostgreSQL bare-identifier grammar, `^[A-Za-z_][A-Za-z0-9_$]*$`
+capped at 63 bytes (NAMEDATALEN-1). Identifiers that fail this check (hyphens,
+dots, Unicode, embedded quotes, NUL bytes, leading digits, names longer than
+63 bytes) are rejected with `ErrInvalidPGIdentifier` before any DDL is built.
+
+### Reserved schema names
+
+`Schema` must additionally not name a schema PostgreSQL reserves: `public`,
+`information_schema`, or anything under the `pg_` prefix (`pg_catalog`,
+`pg_toast`, every `pg_temp*`). Such a name is refused with
+`ErrReservedPGSchema`, wrapped — like every other identifier refusal — with
+`ErrInvalidPGIdentifier`, so an existing `errors.Is(err, ErrInvalidPGIdentifier)`
+matcher keeps matching. Provisioning a tenant into `public` passes every charset
+check and quietly lands that tenant's tables in the schema every role on the
+instance can reach, which is the failure this rule exists to stop.
+
+Matching is **case-insensitive**. The provisioning path quotes every identifier,
+so `"Public"` really is a schema distinct from `"public"` — but any operator,
+`psql` session or migration script that writes the name unquoted folds it to the
+shared one, so a case twin is a trap rather than a second schema.
+
+The rule is **schema-only**: a role named `public` or `pg_temp` is accepted here
+(PostgreSQL refuses to create such roles itself). And it is the framework's own,
+not a default a caller can replace: it runs after the floor and *before* any
+`IdentifierPolicy`, so no policy can waive it or mask its sentinel.
+
+### Tightening the rule
 
 A deployment that needs a stricter rule can set `PGRoleSpec.IdentifierPolicy`
 to a `PGIdentifierChecker` (or wrap a plain `func(value string) error` in
-`PGIdentifierCheckerFunc`). The floor above always runs first, so a policy can
-only tighten it — never re-admit a name the floor rejected — and it is consulted
-once per identifier, in `Schema` → `MigratorRole` → `RuntimeRole` order, stopping
-at the first refusal. A nil policy means the floor alone; note that a *typed*
-nil `PGIdentifierCheckerFunc` stored in the field is a non-nil interface and is
-therefore still consulted — it refuses every identifier rather than panicking,
-so leave the field unset rather than assigning one. The policy's error is
-wrapped with `ErrInvalidPGIdentifier` and the failing field name, so the policy
-need not identify the identifier it judged.
+`PGIdentifierCheckerFunc`). The floor and the reserved-name rule always run
+first, so a policy can only tighten — never re-admit a name either rejected —
+and it is consulted once per identifier, in `Schema` → `MigratorRole` →
+`RuntimeRole` order, stopping at the first refusal. A nil policy means the
+framework's own rules alone; note that a *typed* nil `PGIdentifierCheckerFunc`
+stored in the field is a non-nil interface and is therefore still consulted —
+it refuses every identifier rather than panicking, so leave the field unset
+rather than assigning one. The policy's error is wrapped with
+`ErrInvalidPGIdentifier` and the failing field name, so the policy need not
+identify the identifier it judged.
 
 If your tenant IDs include hyphens or other characters outside this subset,
 normalize them upstream (e.g., `tenant-a` → `tenant_a`) before constructing

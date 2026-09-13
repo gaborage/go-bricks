@@ -1250,6 +1250,17 @@ Normalization was rejected because trimming silently changes a credential, and n
 comparing against the secret's bytes. The fix stops future leaks, not past ones — rotate any
 credential whose provisioning failure was logged. See [migrations.md](migrations.md) `[C59.5]`.
 
+**Amended (2026-09-13, #1061):** the same `Validate` now refuses a `Schema` naming a schema
+PostgreSQL reserves — `public`, `information_schema`, or anything under the `pg_` prefix, matched
+case-insensitively even though this path quotes identifiers, because anything spelling the name
+unquoted folds it to the shared schema. The sentinel is the new `ErrReservedPGSchema`, wrapped
+inside `ErrInvalidPGIdentifier` with the field and value, so existing matchers keep matching.
+Provisioning a tenant into `public` passed every charset check and landed that tenant's tables in
+the schema every role on the instance can reach. The rule binds `Schema` alone — the two role
+fields may carry these spellings — and runs before any caller `IdentifierPolicy`, which therefore
+cannot waive it. Also **breaking**: rename such a schema before upgrading. See
+[migrations.md](migrations.md) `[C65.4]`.
+
 ### [ADR-062: Fail Closed on `database.tls` Misconfiguration (Mode Allowlist + Material/Mode Coherence)](adr_062_database_tls_fail_closed.md)
 
 **Date:** 2026-08-14 | **Status:** Accepted

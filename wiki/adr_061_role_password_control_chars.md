@@ -2,7 +2,42 @@
 
 - **Status**: Accepted
 - **Date**: 2026-08-14
-- **Related**: [migrations.md](migrations.md) `[C59.5]` · `migration/roles.go`
+- **Related**: [migrations.md](migrations.md) `[C59.5]`, `[C65.4]` · `migration/roles.go`
+
+## Amendment (2026-09-13, #1061): `PGRoleSpec.Schema` refuses PostgreSQL's reserved schema names
+
+`Validate` now refuses a `Schema` naming `public`, `information_schema`, or anything under the `pg_`
+prefix, with a new exported sentinel `ErrReservedPGSchema` wrapped — like every other identifier
+refusal on this boundary — inside `ErrInvalidPGIdentifier` and the `field=value` pair, so an existing
+`errors.Is(err, ErrInvalidPGIdentifier)` matcher keeps matching and the message still names which
+field failed.
+
+**Why.** `public` passes every charset and length check the floor applies, and provisioning a tenant
+into it lands that tenant's tables in the schema every role on the instance can reach — the
+`search_path` hazard the rest of this model spends `ALTER ROLE ... SET search_path` and
+`ALTER DEFAULT PRIVILEGES` statements avoiding, reintroduced by a name. The `pg_` prefix and
+`information_schema` are refused for the adjacent reason: they are PostgreSQL's own namespaces, and a
+tenant provisioned into one either collides with the catalog or is shadowed by it.
+
+**Case-insensitive.** This path quotes every identifier, so `"Public"` is genuinely a distinct schema
+from `"public"` and a purely mechanical reading would admit it. It is refused anyway: an operator, a
+`psql` session or a hand-written migration that spells the name unquoted folds it to the shared
+schema, so a case twin is precisely the confusion the rule exists to prevent, not a legitimate second
+schema. The floor runs first, so the value is ASCII by the time it is folded and `strings.ToLower`
+cannot reach a Unicode fold the grammar would have rejected anyway. The refusal is cheap to work
+around — pick another name, exactly as the model already asks for tenant IDs carrying hyphens.
+
+**Schema-only, and not waivable.** The rule binds `Schema` alone; `MigratorRole` and `RuntimeRole`
+may carry these spellings, because a role named `public` lands no tenant table anywhere, and
+PostgreSQL refuses to create such roles on its own account. And the rule is the framework's, not a
+default: `checkIdentifier` applies it after the floor and *before* a caller's `IdentifierPolicy`, so
+an admit-everything policy cannot hand the shared schema back and a refusing policy cannot mask the
+sentinel. A policy can only tighten, which was already ADR-061's contract for the hook.
+
+**Breaking.** A deployment already provisioning a tenant into `public` (or a `pg_`-prefixed schema)
+fails at `Validate` where it used to emit DDL. `[C65.4]` in [migrations.md](migrations.md) carries
+the detection query and the rename step; the schema is not renamed for the caller, because moving a
+populated schema is a data operation this helper has no business performing silently.
 
 ## Amendment (2026-09-09, #1578)
 
@@ -120,7 +155,8 @@ and the rotation guidance.
 
 ## References
 
-- `migration/roles.go` — `summarizeStmt`, `PGRoleSpec.Validate`, `ErrPGRolePasswordHasControlChar`
+- `migration/roles.go` — `summarizeStmt`, `PGRoleSpec.Validate`, `ErrPGRolePasswordHasControlChar`,
+  `checkReservedPGSchema`, `ErrReservedPGSchema`
 - `migration/flyway.go` — `validateEnvFields` / `ErrEnvFieldHasControlChar`, the precedent this mirrors
 - [migration_roles.md](migration_roles.md) — the migrator-vs-runtime role-separation model
 - [migrations.md](migrations.md) `[C59.5]`
