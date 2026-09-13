@@ -520,6 +520,9 @@ func buildError(op string, err error) error {
 // on Oracle).
 func (q *holdQueries) stats(consumer string) dbtypes.SelectQueryBuilder {
 	f := q.qb.Filter()
+	// SECURITY: Manual SQL review completed - COUNT(*) and MIN(held_since) are constant
+	// aggregate text over the package-constant colHeldSince; no caller input is
+	// concatenated and the consumer is bound through f.Eq
 	tenants := q.qb.Select(q.qb.MustExpr("COUNT(*)")).From(q.tenantTable).Where(f.Eq(colConsumer, consumer))
 	rows := q.qb.Select(q.qb.MustExpr("COUNT(*)")).From(q.table).Where(f.Eq(colConsumer, consumer))
 	oldest := q.qb.Select(q.qb.MustExpr("MIN(" + colHeldSince + ")")).From(q.tenantTable).Where(f.Eq(colConsumer, consumer))
