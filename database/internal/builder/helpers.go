@@ -15,11 +15,6 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
-// errConflictColumnsRequired is defined once so both upsert builders report the
-// same precondition the same way; the vendor is already implied by the builder
-// the caller reached.
-var errConflictColumnsRequired = errors.New("conflict columns required for upsert")
-
 // errCyclicOperand marks an operand whose pointer chain returns to a pointer the
 // walk already followed, which no amount of dereferencing will resolve.
 var errCyclicOperand = errors.New("operand pointer chain is cyclic")
@@ -200,7 +195,7 @@ func (qb *QueryBuilder) requireConflictColumnsInInsertSet(conflictColumns, inser
 
 	for _, col := range conflictColumns {
 		if _, ok := insertIdentities[qb.upsertColumnName(col.normalized)]; !ok {
-			return fmt.Errorf("conflict column %q must be present in insert columns for upsert", col.key)
+			return fmt.Errorf("%w: column %q", dbtypes.ErrUpsertConflictColumnNotInserted, col.key)
 		}
 	}
 	return nil
@@ -227,7 +222,7 @@ func (qb *QueryBuilder) rejectConflictColumnUpdates(conflictColumns, updateColum
 
 	for _, col := range conflictColumns {
 		if updateCol, ok := byIdentity[qb.upsertColumnName(col.normalized)]; ok {
-			return fmt.Errorf("update column %q collides with conflict column %q (Oracle MERGE forbids updating ON-clause columns, ORA-38104; rejected on all vendors for parity)", updateCol, col.key)
+			return fmt.Errorf("%w: update column %q, conflict column %q", dbtypes.ErrUpsertConflictColumnUpdated, updateCol, col.key)
 		}
 	}
 	return nil

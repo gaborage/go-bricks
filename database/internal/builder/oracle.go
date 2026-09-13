@@ -170,7 +170,7 @@ func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, inse
 	}
 
 	if len(conflictColumns) == 0 {
-		return "", nil, errConflictColumnsRequired
+		return "", nil, dbtypes.ErrUpsertConflictColumnsRequired
 	}
 
 	// Acceptance and normalization are settled first, for every column the
