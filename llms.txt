@@ -3437,7 +3437,7 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 
 Decode/validation failures return a `*messaging.PayloadError` before the function runs — match with `errors.Is(err, messaging.ErrPayloadUndecodable)` / `messaging.ErrPayloadInvalid`. The function's own error passes through unwrapped. `Error()` and `Fields()` carry no payload bytes (map-key namespaces are redacted to `Limits[*]`) and are safe to log; `Unwrap()` returns the raw decoder/validator error and is not. The adapter is stateless, so `Workers` tuning below applies unchanged.
 
-**Need the delivery headers (outbox dedup)?** `DeclareTypedConsumerWithMeta` / `NewTypedHandlerWithMeta[T]` are the same adapter with `fn` as `func(ctx, T, messaging.Metadata) error` — `meta.DedupKey()` returns the `x-outbox-event-id` header once it passes the ledger grammar `^[A-Za-z0-9_-]{1,128}$`, falling back to the AMQP `message_id` property under that same grammar when the delivery carries no such header at all (or an error wrapping `messaging.ErrInvalidEventID` — both absent, or the chosen one malformed; a header that is PRESENT but malformed errors rather than falling through), so an outbox-fed consumer wraps the body in `deps.Inbox.ProcessOnce`; `ProcessOnce` re-checks the grammar at the ledger door, so an id obtained any other way is refused there:
+**Need the delivery headers (outbox dedup)?** `DeclareTypedConsumerWithMeta` / `NewTypedHandlerWithMeta[T]` are the same adapter with `fn` as `func(ctx, T, messaging.Metadata) error` — `meta.DedupKey()` returns a `messaging.DedupKey`, a value that carries which door produced it. For a plain typed consumer it is a *wire* key holding the `x-outbox-event-id` header once it passes the ledger grammar `^[A-Za-z0-9_-]{1,128}$`, falling back to the AMQP `message_id` property under that same grammar when the delivery carries no such header at all (or an error wrapping `messaging.ErrInvalidEventID` — both absent, or the chosen one malformed; a header that is PRESENT but malformed errors rather than falling through), so an outbox-fed consumer wraps the body in `deps.Inbox.ProcessOnce`. `ProcessOnce` takes the `messaging.DedupKey` itself, not a string, and admits it by provenance at the ledger door: the zero `DedupKey` is refused, and a *sealed* key is refused outside its own delivery's context. The grammar already ran when the key was constructed:
 
 ```go
 // Same DeclareMessaging body as above, with this call REPLACING the
@@ -3447,14 +3447,14 @@ Decode/validation failures return a `*messaging.PayloadError` before the functio
 messaging.DeclareTypedConsumerWithMeta(decls, &messaging.ConsumerOptions{
 	Queue: queue.Name, Consumer: "order-processor", EventType: "OrderCreated",
 }, func(ctx context.Context, evt OrderCreatedEvent, meta messaging.Metadata) error {
-	id, err := meta.DedupKey()
+	key, err := meta.DedupKey()
 	if err != nil {
 		// No conforming id, no dedup key — processing here would repeat the
 		// business write on every redelivery, so fail closed: nacked without
 		// requeue, the message parks on the DLQ.
 		return err
 	}
-	return m.inbox.ProcessOnce(ctx, id, func(ctx context.Context, tx dbtypes.Tx) error {
+	return m.inbox.ProcessOnce(ctx, key, func(ctx context.Context, tx dbtypes.Tx) error {
 		// Use tx: the business write must commit with the dedup row, or a crash
 		// between the two commits loses exactly-once.
 		return m.svc.ProcessOrderTx(ctx, tx, evt.OrderID)
@@ -3462,7 +3462,17 @@ messaging.DeclareTypedConsumerWithMeta(decls, &messaging.ConsumerOptions{
 })
 ```
 
-**Mixed-queue variant:** a queue that also carries directly-published messages may have deliveries you want processed without dedup. A delivery with no stamp still has a ledger key whenever it carries a `message_id`, so an absent header does not imply an absent key. For the deliveries you have decided to process undeduped, let a demonstrably ABSENT header through — `if _, present := meta.Headers()[messaging.HeaderEventID]; !present { return m.svc.ProcessOrder(ctx, evt.OrderID) }` placed BEFORE the `DedupKey` call — processed without dedup, so that path must be idempotent on its own. Keep the `err != nil` branch as is: a header that is present but malformed stays on the failure path, or a publisher could skip the ledger by misspelling the id.
+**Mixed-queue variant:** a queue that also carries directly-published messages may have deliveries you want processed without dedup. A delivery with no stamp still has a ledger key whenever it carries a `message_id`, so an absent header does not imply an absent key. For the deliveries you have decided to process undeduped, let a demonstrably ABSENT header through — `if _, present := meta.Headers()[messaging.HeaderEventID]; !present { return m.svc.ProcessOrder(ctx, evt.OrderID) }` placed BEFORE the `DedupKey` call — processed without dedup, so that path must be idempotent on its own. Keep the `err != nil` branch as is: a header that is present but malformed stays on the failure path, or a publisher could skip the ledger by misspelling the id. A handler that composes its own ledger id instead of taking `DedupKey()`'s answer builds it with `messaging.WireDedupKey(id)` and returns that error the same way — it applies the grammar at construction and never yields a sealed key, whatever the id spells:
+
+```go
+key, err := messaging.WireDedupKey(m.svc.LedgerID(evt)) // consumer-composed id
+if err != nil {
+	return err
+}
+return m.inbox.ProcessOnce(ctx, key, func(ctx context.Context, tx dbtypes.Tx) error {
+	return m.svc.ProcessOrderTx(ctx, tx, evt.OrderID)
+})
+```
 
 Headers are written by the publisher, so on a queue fed from outside this service they are untrusted input: whoever can publish picks the ledger key. Dropping the stamp is not an opt-out. There are three outcomes, not two: a delivery with no stamp and a grammar-conforming `message_id` DEDUPS on that property; one whose chosen source is malformed — a present-but-spoiled stamp, or a property outside the grammar — returns `ErrInvalidEventID`; and one carrying neither returns the same error. The error path is a rejection, not an opt-out: the example returns it rather than processing, and the variant above is the deliberate opt-in for a queue whose traffic you know. AMQP obliges nobody to make `message_id` unique, so a producer reusing one across distinct events has those events skipped as duplicates — but only on the deliveries where that property is the SELECTED key, meaning no `x-outbox-event-id` was present; a valid stamp takes precedence and a collision behind one changes nothing. Authorize publishers at the broker.
 
@@ -3552,12 +3562,12 @@ func (m *Module) AuthorizePayment(ctx context.Context, client messaging.AMQPClie
 }
 
 func (m *Module) onPaymentAuthorized(ctx context.Context, evt PaymentAuthorized, meta messaging.Metadata) error {
-    key, err := meta.DedupKey() // "<sign family>:<jti>" for a sealed T; never errors here
+    key, err := meta.DedupKey() // a sealed key spelling "<sign family>:<jti>"; never errors here
     if err != nil {
         return err
     }
     // ctx must derive from the handler's: the sealed door marks it (messaging.IsSealedDelivery)
-    // and ProcessOnce admits a "<family>:<jti>" key only under that marker — never context.Background().
+    // and ProcessOnce admits a SEALED key only under that marker — never context.Background().
     return m.inbox.ProcessOnce(ctx, key, func(ctx context.Context, tx dbtypes.Tx) error {
         return m.svc.RecordAuthorizationTx(ctx, tx, evt.OrderID, evt.Card) // evt.Card is plaintext here only
     })

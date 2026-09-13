@@ -328,10 +328,13 @@ the ledger — never by the sealing layer.
 _Avoid_: replay, redelivery (the causes), repeat
 
 **Dedup key**:
-The identity a consumer's ledger records for a sealed message: composed by the
-framework from the verified signing identity and the message's signed unique
-id, in a shape nothing outside the sealing layer can produce. Provisioning
-decides who can mint one; a header never can.
+The identity a consumer's ledger records for a message. It is a VALUE, not a
+string: it carries which door produced it, and the ledger admits it on that
+provenance. The sealed form — composed by the framework from the verified
+signing identity and the message's signed unique id — only the framework can
+produce, and only for the delivery it hands the handler; every other id becomes
+a wire key through the one exported door. Provisioning decides who can mint a
+sealed one; a header never can.
 _Avoid_: event id (the outbox row's word), message id (the wire field), jti
 (the slot, not the composed key), idempotency key (the consumer's business
 key)
