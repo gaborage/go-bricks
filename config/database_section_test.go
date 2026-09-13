@@ -3610,3 +3610,52 @@ func TestApplyDatabasePoolDefaultsKeepsExplicitType(t *testing.T) {
 	require.NoError(t, ApplyDatabasePoolDefaults(&conflicting))
 	assert.Equal(t, Oracle, conflicting.Type)
 }
+
+// TestIsPostgresKeywordNameShape pins libpq's keyword shape [A-Za-z_][A-Za-z0-9_]*
+// character by character: each range's own endpoints and the neighbours just
+// outside it, plus the index rule that lets a digit continue a key but never
+// start one.
+func TestIsPostgresKeywordNameShape(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		valid bool
+	}{
+		{"underscore_alone", "_", true},
+		{"lower_a", "a", true},
+		{"lower_z", "z", true},
+		{"upper_A", "A", true},
+		{"upper_Z", "Z", true},
+		{"backtick_below_lower_a", "`", false},
+		{"brace_above_lower_z", "{", false},
+		{"at_below_upper_A", "@", false},
+		{"bracket_above_upper_Z", "[", false},
+		{"digit_zero_at_index_zero", "0", false},
+		{"digit_nine_at_index_zero", "9", false},
+		{"digit_zero_after_letter", "a0", true},
+		{"digit_nine_after_letter", "a9", true},
+		{"slash_below_digit_zero_after_letter", "a/", false},
+		{"colon_above_digit_nine_after_letter", "a:", false},
+		{"backtick_after_letter", "a`", false},
+		{"brace_after_letter", "a{", false},
+		{"at_after_letter", "a@", false},
+		{"bracket_after_letter", "a[", false},
+		{"underscore_after_letter", "a_", true},
+		{"digit_then_letter", "9a", false},
+		{"empty_key", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.valid, isPostgresKeywordName(tt.key))
+		})
+	}
+}
+
+// TestInferDatabaseTypeFromConnectionStringKeywordKeyShape carries the index rule
+// end to end: a digit-led key leaves the DSN untyped, the same digit inside a key
+// still infers postgresql.
+func TestInferDatabaseTypeFromConnectionStringKeywordKeyShape(t *testing.T) {
+	assert.Equal(t, "", inferDatabaseTypeFromConnectionString("9host=x user=u"))
+	assert.Equal(t, PostgreSQL, inferDatabaseTypeFromConnectionString("h9=1 host=h"))
+}

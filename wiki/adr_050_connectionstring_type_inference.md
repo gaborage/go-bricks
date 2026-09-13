@@ -94,9 +94,11 @@
 > `postgres_connectionstring_omitting_host_still_accepted` pins it so widening
 > the guard stays a visible decision. One fail-open shape therefore survives this
 > amendment and is tracked rather than closed: a host-less raw DSN (#1551). An
-> explicit unix-socket host, which discarded TLS material on both doors because pgx
-> skips TLS for a unix network, is refused by ADR-062's host-transport rule instead
-> ([ADR-062](adr_062_database_tls_fail_closed.md) amendment 2026-09-13, #1555). See
+> explicit unix-socket host in the STRUCTURED `host` field, which discarded TLS material
+> because pgx skips TLS for a unix network, is refused by ADR-062's host-transport rule
+> ([ADR-062](adr_062_database_tls_fail_closed.md) amendment 2026-09-13, #1555), while the
+> same shape inside a raw `connectionstring` never reaches that rule and is judged instead
+> by clause `[C65.2]` of this ADR's 2026-09-13 amendment. See
 > [migrations.md](migrations.md) `[C64.8]`, #1544.
 >
 > **Amended (2026-08-14):** Decision item 1 names
