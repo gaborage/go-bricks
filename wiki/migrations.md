@@ -5136,7 +5136,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
   Keep a string predicate where the expression form does not fit, and annotate it at the call
   site naming what you checked — value-side parameterization, no user input concatenated.
-- verify: `git grep -nE 'Having\(|MustExpr\(|[.]Expr\(|RawExpression\{' -- '*.go'` and confirm
+- verify: `git grep -nE 'SetExpr\(|Having\(|MustExpr\(|[.]Expr\(|RawExpression\{' -- '*.go'` and confirm
   every string-predicate and expression hit has an annotation above it (squirrel's own `Expr`
   inside `database/internal/builder`, and the `Expr`/`MustExpr` doors themselves
   (`database/types`, the builder, `testing/mocks`), are plumbing — skip those hits); then run one query each way and read the SQL — the expression form must

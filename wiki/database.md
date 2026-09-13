@@ -416,11 +416,12 @@ the builder. The grammar will not accept a computed one.
   `VALUES` cell projects nothing, so it could only be dropped silently.
   `BuildUpsert`'s column maps are NOT value doors: a `RawExpression` there is
   bound as a parameter and fails at the driver.
-- **`f.Raw()`, `jf.Raw()`, `database.Raw()`, a STRING predicate passed to
-  `Having()`, and every `RawExpression` SQL body** do. Each admits arbitrary SQL —
-  the first two a WHERE/JOIN fragment, `database.Raw` the whole statement,
-  `Having` the group predicate, an expression whatever door consumes it — and
-  each requires an inline `// SECURITY: Manual SQL review completed - <rationale>`
+- **`f.Raw()`, `jf.Raw()`, `database.Raw()`, an UPDATE `SetExpr()`, a STRING
+  predicate passed to `Having()`, and every `RawExpression` SQL body** do. Each
+  admits arbitrary SQL — the first two a WHERE/JOIN fragment, `database.Raw` the
+  whole statement, `SetExpr` a SET-clause value, `Having` the group predicate, an
+  expression whatever door consumes it — and each requires an inline
+  `// SECURITY: Manual SQL review completed - <rationale>`
   comment at every call site, a `qb.Expr()`, `qb.MustExpr()` or struct-literal
   construction included: `RawExpression.Validate()` checks only that the SQL is
   non-empty and the alias is clean, never the body. An alias on a `Having`
