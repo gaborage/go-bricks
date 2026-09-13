@@ -112,6 +112,30 @@ func TestSealOpenRoundtrip(t *testing.T) {
 	assert.Equal(t, time.Unix(1700000000, 0).UTC(), claims.IssuedAt)
 }
 
+// The nested path resolves both keys and signs before it encrypts; signFailed is shared
+// with JWS-of-JWE, so its nested caller is pinned here too.
+func TestSealNestedPropagatesResolverAndSignFailures(t *testing.T) {
+	f := newTestFixture(t)
+
+	tests := []struct {
+		name     string
+		resolver KeyResolver
+		wantCode string
+	}{
+		{"sign_kid_unresolvable", &fixtureResolver{pub: f.resolver.pub}, codeKidUnknown},
+		{"encrypt_kid_unresolvable", &fixtureResolver{priv: f.resolver.priv}, codeKidUnknown},
+		{"signing_key_missing_without_error", &nilSigningKeyResolver{f.resolver}, codeOutboundFailed},
+		{"encryption_key_missing_without_error", &nilEncryptKeyResolver{f.resolver}, codeOutboundFailed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compact, err := Seal([]byte(`{"a":1}`), f.outbound, tt.resolver)
+			assert.Empty(t, compact)
+			requireJOSEErrorCode(t, err, tt.wantCode)
+		})
+	}
+}
+
 func TestOpenTamperedCiphertextFails(t *testing.T) {
 	f := newTestFixture(t)
 	payload := []byte(`{"pan":"4111111111111111"}`)

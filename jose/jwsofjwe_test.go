@@ -132,6 +132,52 @@ func TestOpenJWSofJWERoundTripReportsBothLayers(t *testing.T) {
 	}, hdr.JWE)
 }
 
+// nilSigningKeyResolver hands back no signing key and no error — the shape of a buggy
+// KeyResolver, and the only way to drive Seal past key resolution into a sign failure.
+type nilSigningKeyResolver struct{ *fixtureResolver }
+
+func (*nilSigningKeyResolver) PrivateKey(string) (*rsa.PrivateKey, error) { return nil, nil }
+
+// nilEncryptKeyResolver is its encrypt-side twin, reaching the encrypt-failure arm.
+type nilEncryptKeyResolver struct{ *fixtureResolver }
+
+func (*nilEncryptKeyResolver) PublicKey(string) (*rsa.PublicKey, error) { return nil, nil }
+
+// Seal resolves the signing key, encrypts, then signs; each step's failure must surface
+// with the step's own code rather than a generic one.
+func TestSealJWSofJWEPropagatesResolverAndSignFailures(t *testing.T) {
+	f := newJWSofJWEFixture(t)
+
+	tests := []struct {
+		name     string
+		resolver KeyResolver
+		wantCode string
+	}{
+		{"sign_kid_unresolvable", &fixtureResolver{pub: f.resolver.pub}, codeKidUnknown},
+		{"encrypt_kid_unresolvable", &fixtureResolver{priv: f.resolver.priv}, codeKidUnknown},
+		{"signing_key_missing_without_error", &nilSigningKeyResolver{f.resolver}, codeOutboundFailed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compact, sealErr := Seal([]byte(`{"a":1}`), f.outbound, tt.resolver)
+			assert.Empty(t, compact)
+			requireJOSEErrorCode(t, sealErr, tt.wantCode)
+		})
+	}
+}
+
+// Open resolves the verify key before it parses anything, so an unknown VerifyKid is the
+// resolver's error, not a signature failure.
+func TestOpenJWSofJWEPropagatesVerifyKidFailure(t *testing.T) {
+	f := newJWSofJWEFixture(t)
+	sealed, err := Seal([]byte(`{"a":1}`), f.outbound, f.resolver)
+	require.NoError(t, err)
+
+	plaintext, _, _, err := Open(sealed, f.inbound, &fixtureResolver{priv: f.resolver.priv})
+	assert.Nil(t, plaintext)
+	requireJOSEErrorCode(t, err, codeKidUnknown)
+}
+
 func TestOpenJWSofJWERefusals(t *testing.T) {
 	f := newJWSofJWEFixture(t)
 	sealed, err := Seal([]byte(`{"a":1}`), f.outbound, f.resolver)
