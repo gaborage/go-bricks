@@ -1,6 +1,9 @@
 package migration
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"go/ast"
 	"go/parser"
@@ -11,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -854,4 +858,122 @@ func c654AtomSQLFences(t *testing.T) []string {
 		fences = append(fences, strings.Join(lines, "\n"))
 	}
 	return fences
+}
+
+// recordingRoleExecutor is a database.Executor that captures every statement it
+// is handed and can fail at a chosen index, so a test can pin the statement
+// list, its order, and the error wrap without a database.
+type recordingRoleExecutor struct {
+	stmts   []string
+	failAt  int
+	failErr error
+}
+
+func newRecordingRoleExecutor() *recordingRoleExecutor {
+	return &recordingRoleExecutor{failAt: -1}
+}
+
+// Query completes the database.Executor surface; provisioning never queries.
+func (r *recordingRoleExecutor) Query(_ context.Context, _ string, _ ...any) (*sql.Rows, error) {
+	return nil, errors.New("Query is unused by the provisioning path")
+}
+
+func (r *recordingRoleExecutor) Exec(_ context.Context, query string, _ ...any) (sql.Result, error) {
+	r.stmts = append(r.stmts, query)
+	if len(r.stmts)-1 == r.failAt {
+		return nil, r.failErr
+	}
+	return driver.RowsAffected(0), nil
+}
+
+// txDoorSpec is the spec the ProvisionPGRolesTx tests provision. Both passwords
+// are set so the optional ALTER ROLE ... PASSWORD statements are in the list.
+func txDoorSpec() *PGRoleSpec {
+	return &PGRoleSpec{
+		Schema:           "tenant_tx",
+		MigratorRole:     "mig_tx",
+		MigratorPassword: "mig-tx-pw",
+		RuntimeRole:      "rt_tx",
+		RuntimePassword:  "rt-tx-pw",
+	}
+}
+
+// Both doors must reach the identical statement list, in the identical order.
+// The *sql.DB door is driven through sqlmock so what it actually executed is
+// observed, not assumed.
+func TestProvisionPGRolesTxRunsTheSameStatementsAsTheSQLDBDoor(t *testing.T) {
+	spec := txDoorSpec()
+	want, err := PGRoleProvisioningSQL(spec)
+	require.NoError(t, err)
+	require.NotEmpty(t, want)
+
+	exec := newRecordingRoleExecutor()
+	require.NoError(t, ProvisionPGRolesTx(context.Background(), exec, spec))
+	require.Equal(t, want, exec.stmts, "the tx door must execute the published list verbatim, in order")
+
+	var viaSQLDB []string
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(
+		sqlmock.QueryMatcherFunc(func(_, actualSQL string) error {
+			viaSQLDB = append(viaSQLDB, actualSQL)
+			return nil
+		})))
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	mock.MatchExpectationsInOrder(true)
+	for range want {
+		mock.ExpectExec("").WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+
+	require.NoError(t, ProvisionPGRoles(context.Background(), db, spec))
+	require.NoError(t, mock.ExpectationsWereMet())
+	require.Equal(t, want, viaSQLDB, "the *sql.DB door must execute the same list, in the same order")
+}
+
+// The tx door runs Validate, so a refusing IdentifierPolicy must stop it before
+// the executor is touched at all.
+func TestProvisionPGRolesTxStopsBeforeExecWhenPolicyRefuses(t *testing.T) {
+	spec := txDoorSpec()
+	spec.IdentifierPolicy = PGIdentifierCheckerFunc(func(string) error { return errTestPolicyRejected })
+
+	exec := newRecordingRoleExecutor()
+	err := ProvisionPGRolesTx(context.Background(), exec, spec)
+	require.ErrorIs(t, err, errTestPolicyRejected)
+	require.ErrorIs(t, err, ErrInvalidPGIdentifier)
+	assert.Empty(t, exec.stmts, "a refused spec must reach no statement at all")
+}
+
+func TestProvisionPGRolesTxRejectsNilSpec(t *testing.T) {
+	exec := newRecordingRoleExecutor()
+	err := ProvisionPGRolesTx(context.Background(), exec, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-nil *PGRoleSpec")
+	assert.Empty(t, exec.stmts)
+}
+
+func TestProvisionPGRolesTxRejectsNilExecutor(t *testing.T) {
+	err := ProvisionPGRolesTx(context.Background(), nil, txDoorSpec())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-nil database.Executor")
+}
+
+// The tx door's wrap must name the step index and the redacted statement,
+// exactly as the *sql.DB door's does. Step 2 is the migrator's
+// ALTER ROLE ... PASSWORD, so the same failure pins index and redaction at once.
+func TestProvisionPGRolesTxWrapNamesStepAndRedactedStatement(t *testing.T) {
+	spec := txDoorSpec()
+	want, err := PGRoleProvisioningSQL(spec)
+	require.NoError(t, err)
+	require.Contains(t, want[2], "PASSWORD", "step 2 is the migrator password statement")
+
+	boom := errors.New("exec blew up")
+	exec := newRecordingRoleExecutor()
+	exec.failAt = 2
+	exec.failErr = boom
+
+	err = ProvisionPGRolesTx(context.Background(), exec, spec)
+	require.ErrorIs(t, err, boom)
+	assert.Contains(t, err.Error(), "provisioning step 2 (")
+	assert.Contains(t, err.Error(), "[REDACTED]")
+	assert.NotContains(t, err.Error(), spec.MigratorPassword)
+	assert.Len(t, exec.stmts, 3, "the loop must stop at the failing statement")
 }

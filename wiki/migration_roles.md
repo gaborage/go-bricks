@@ -126,6 +126,37 @@ All operations are idempotent — rerunning with the same spec is a no-op
 except that `MigratorPassword` / `RuntimePassword` (when non-empty) are
 reapplied on every call, which makes secret rotation a no-op rerun.
 
+### Running inside your own transaction
+
+`ProvisionPGRoles` takes a bare `*sql.DB` and executes one statement per
+call, so a failure halfway leaves the earlier steps in place and the fix is
+to rerun. When the caller already owns a transaction — provisioning the
+tenant's schema, tables, ledger row and outbox event as one unit —
+`ProvisionPGRolesTx` runs the identical statement list, with identical
+validation and error wrapping, against a `database.Executor`:
+
+```go
+err := database.WithTx(ctx, conn, func(ctx context.Context, tx database.Tx) error {
+    if err := migration.ProvisionPGRolesTx(ctx, tx, spec); err != nil {
+        return err
+    }
+    return applyTenantDDL(ctx, tx, spec.Schema)
+})
+```
+
+`database.Executor` has two methods,
+`Query(ctx, query string, args ...any) (*sql.Rows, error)` and
+`Exec(ctx, query string, args ...any) (sql.Result, error)`, which both
+`database.Tx` and `database.Interface` already satisfy — no adapter. Every
+statement the template emits is ordinary transactional DDL, `CREATE ROLE`
+included; the full argument, with the list of statements PostgreSQL really
+does refuse inside a transaction block, is in
+[migration_provisioning.md](migration_provisioning.md#single-transaction-provisioning-on-postgresql-consumer-side-pattern).
+So a rollback leaves nothing behind and the rerun-to-converge guidance does
+not apply. Hand it a plain `database.Interface` instead of a transaction and
+each statement lands independently, exactly as on the `*sql.DB` path — the
+guidance applies again.
+
 ### Operator escape hatch
 
 When you want to inspect or apply the provisioning via `psql` instead, use
