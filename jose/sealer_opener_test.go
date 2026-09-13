@@ -112,25 +112,6 @@ func TestSealOpenRoundtrip(t *testing.T) {
 	assert.Equal(t, time.Unix(1700000000, 0).UTC(), claims.IssuedAt)
 }
 
-func TestSealRefusesJWSofJWEModeUntilImplemented(t *testing.T) {
-	p := jwsOfJWEOutbound()
-	require.NoError(t, p.Validate())
-
-	compact, err := Seal([]byte(`{"a":1}`), p, &fixtureResolver{})
-	assert.Empty(t, compact)
-	requireJOSEErrorCode(t, err, codePolicyModeUnknown)
-}
-
-func TestOpenRefusesJWSofJWEModeUntilImplemented(t *testing.T) {
-	p := jwsOfJWEInbound()
-	require.NoError(t, p.Validate())
-
-	plaintext, _, hdr, err := Open("a.b.c", p, &fixtureResolver{})
-	assert.Nil(t, plaintext)
-	assert.Equal(t, OpenHeader{}, hdr)
-	requireJOSEErrorCode(t, err, codePolicyModeUnknown)
-}
-
 func TestOpenTamperedCiphertextFails(t *testing.T) {
 	f := newTestFixture(t)
 	payload := []byte(`{"pan":"4111111111111111"}`)

@@ -60,7 +60,8 @@ type Policy struct {
 	SigAlg jose.SignatureAlgorithm
 	KeyAlg jose.KeyAlgorithm
 	Enc    jose.ContentEncryption
-	Cty    string
+	// Cty is not written by Seal in SealModeJWSofJWE: that shape's inner JWE carries no cty.
+	Cty string
 
 	// Typ is the JWE protected `typ` header written by Seal. SealModeBareJWE and
 	// SealModeJWSofJWE (inner JWE) OUTBOUND only; Visa Message Level Encryption expects "JOSE".

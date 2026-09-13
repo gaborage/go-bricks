@@ -49,6 +49,8 @@ func Seal(payload []byte, p *Policy, r KeyResolver) (string, error) {
 	case SealModeJWEofJWS:
 	case SealModeBareJWE:
 		return sealBare(payload, p, r)
+	case SealModeJWSofJWE:
+		return sealJWSofJWE(payload, p, r)
 	default:
 		return "", errUnknownMode(p.Mode)
 	}
@@ -68,15 +70,7 @@ func Seal(payload []byte, p *Policy, r KeyResolver) (string, error) {
 		Cty:    p.Cty,
 	})
 	if err != nil {
-		return "", &Error{
-			Sentinel: ErrOutboundFailed,
-			Code:     codeOutboundFailed,
-			Status:   500,
-			Message:  "Failed to sign outbound payload",
-			Kid:      p.SignKid,
-			Alg:      string(p.SigAlg),
-			Cause:    err,
-		}
+		return "", signFailed(p, err)
 	}
 
 	jweCompact, err := cryptoadapter.Encrypt([]byte(jwsCompact), encKey, &cryptoadapter.EncryptOptions{
@@ -92,7 +86,20 @@ func Seal(payload []byte, p *Policy, r KeyResolver) (string, error) {
 	return jweCompact, nil
 }
 
-// encryptFailed wraps a crypto-adapter encrypt failure, shared by both seal modes.
+// signFailed wraps a crypto-adapter sign failure, shared by every signing seal mode.
+func signFailed(p *Policy, err error) *Error {
+	return &Error{
+		Sentinel: ErrOutboundFailed,
+		Code:     codeOutboundFailed,
+		Status:   500,
+		Message:  "Failed to sign outbound payload",
+		Kid:      p.SignKid,
+		Alg:      string(p.SigAlg),
+		Cause:    err,
+	}
+}
+
+// encryptFailed wraps a crypto-adapter encrypt failure, shared by every seal mode.
 func encryptFailed(p *Policy, err error) *Error {
 	return &Error{
 		Sentinel: ErrOutboundFailed,

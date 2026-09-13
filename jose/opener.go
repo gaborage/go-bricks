@@ -47,6 +47,8 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 	case SealModeJWEofJWS:
 	case SealModeBareJWE:
 		return openBare(compact, p, r)
+	case SealModeJWSofJWE:
+		return openJWSofJWE(compact, p, r)
 	default:
 		return nil, nil, OpenHeader{}, errUnknownMode(p.Mode)
 	}
