@@ -207,11 +207,10 @@ func (tc *Connection) CreateMigrationTable(ctx context.Context) error {
 }
 
 // trackingContext builds the tracking Context every operation on this
-// connection shares, including the server metadata that becomes the
-// server.address / server.port / db.namespace OTel attributes. Anything that
-// instruments work derived from this connection — its own statements, and the
-// sessions it hands out — must use it, or the derived spans silently lose
-// those attributes.
+// connection shares — including the server metadata behind the server.address /
+// server.port / db.namespace attributes, which SetServerInfo fills in at
+// construction. Rebuilding it per call is incidental; holding one stmtTracker on
+// Connection instead is a follow-up.
 func (tc *Connection) trackingContext() *Context {
 	return &Context{
 		Logger:        tc.logger,
