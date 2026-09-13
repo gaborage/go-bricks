@@ -11,6 +11,7 @@ import (
 	"github.com/gaborage/go-bricks/app"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	inboxtest "github.com/gaborage/go-bricks/inbox/testing"
+	"github.com/gaborage/go-bricks/messaging"
 )
 
 // Compile-time guard: MockInbox satisfies the production interface.
@@ -18,14 +19,21 @@ var _ app.InboxProcessor = (*inboxtest.MockInbox)(nil)
 
 func noopFn(context.Context, dbtypes.Tx) error { return nil }
 
+func evt1(t *testing.T) messaging.DedupKey {
+	t.Helper()
+	key, err := messaging.WireDedupKey("evt-1")
+	require.NoError(t, err)
+	return key
+}
+
 func TestMockInboxRunsFnOncePerID(t *testing.T) {
 	m := inboxtest.NewMockInbox()
 
 	ran := 0
 	fn := func(context.Context, dbtypes.Tx) error { ran++; return nil }
 
-	require.NoError(t, m.ProcessOnce(context.Background(), "evt-1", fn))
-	require.NoError(t, m.ProcessOnce(context.Background(), "evt-1", fn)) // duplicate
+	require.NoError(t, m.ProcessOnce(context.Background(), evt1(t), fn))
+	require.NoError(t, m.ProcessOnce(context.Background(), evt1(t), fn)) // duplicate
 
 	assert.Equal(t, 1, ran, "fn runs once across duplicate event ids")
 	inboxtest.AssertProcessCount(t, m, 2)
@@ -38,7 +46,7 @@ func TestMockInboxWithError(t *testing.T) {
 	wantErr := errors.New("inbox down")
 	m := inboxtest.NewMockInbox().WithError(wantErr)
 
-	err := m.ProcessOnce(context.Background(), "evt-1", noopFn)
+	err := m.ProcessOnce(context.Background(), evt1(t), noopFn)
 	inboxtest.AssertProcessCount(t, m, 0) // errored calls are not recorded as processed
 	require.ErrorIs(t, err, wantErr)
 }
@@ -47,7 +55,7 @@ func TestMockInboxPropagatesHandlerError(t *testing.T) {
 	m := inboxtest.NewMockInbox()
 	wantErr := errors.New("handler boom")
 
-	err := m.ProcessOnce(context.Background(), "evt-1", func(context.Context, dbtypes.Tx) error {
+	err := m.ProcessOnce(context.Background(), evt1(t), func(context.Context, dbtypes.Tx) error {
 		return wantErr
 	})
 	inboxtest.AssertProcessed(t, m, "evt-1") // the call is recorded
@@ -59,7 +67,7 @@ func TestMockInboxMarkAlreadyProcessed(t *testing.T) {
 	m := inboxtest.NewMockInbox().MarkAlreadyProcessed("evt-1")
 
 	ran := false
-	require.NoError(t, m.ProcessOnce(context.Background(), "evt-1", func(context.Context, dbtypes.Tx) error {
+	require.NoError(t, m.ProcessOnce(context.Background(), evt1(t), func(context.Context, dbtypes.Tx) error {
 		ran = true
 		return nil
 	}))
@@ -68,7 +76,7 @@ func TestMockInboxMarkAlreadyProcessed(t *testing.T) {
 
 func TestMockInboxReset(t *testing.T) {
 	m := inboxtest.NewMockInbox()
-	require.NoError(t, m.ProcessOnce(context.Background(), "evt-1", noopFn))
+	require.NoError(t, m.ProcessOnce(context.Background(), evt1(t), noopFn))
 	m.Reset()
 	inboxtest.AssertProcessCount(t, m, 0)
 }

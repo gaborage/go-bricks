@@ -2,11 +2,11 @@
 // processed event ids so redeliveries are skipped. It is the consumer-side
 // complement to the transactional outbox.
 //
-// Consumers take the event id from the delivery (messaging.Metadata.DedupKey,
+// Consumers take the ledger key from the delivery (messaging.Metadata.DedupKey,
 // which validates the x-outbox-event-id header — or, when the delivery carries
 // no such header, the AMQP message_id property — against the ledger grammar)
-// and wrap their handler in deps.Inbox.ProcessOnce, which re-checks the grammar,
-// records the id and runs the handler atomically, exactly once per id.
+// and wrap their handler in deps.Inbox.ProcessOnce, which checks the key's
+// provenance, records it and runs the handler atomically, exactly once per key.
 package inbox
 
 import (
@@ -26,24 +26,23 @@ type Inbox struct {
 	module *Module
 }
 
-// ProcessOnce records eventID in the ledger and runs fn exactly once per id,
+// ProcessOnce records key in the ledger and runs fn exactly once per key,
 // atomically within a single transaction. A redelivery of an already-processed
-// id short-circuits (fn is not run), counts one dedup hit and returns nil. The
+// key short-circuits (fn is not run), counts one dedup hit and returns nil. The
 // tenant is resolved from ctx; in single-tenant mode the tenant id is empty.
 //
-// eventID must match ^[A-Za-z0-9_-]{1,128}$ (messaging.ValidateEventID), or —
-// only under a delivery the sealed typed door opened (messaging.IsSealedDelivery)
-// — the sealed dedup key `<SignFamily>:<jti>` that Metadata.DedupKey composes;
-// any other id is refused BEFORE the ledger with an error wrapping
-// messaging.ErrInvalidEventID and no row is written. The check is here, at the
-// ledger door, rather than only where a header is read, so it holds however the
-// consumer obtained the id — and so a header-sourced id can never spell a sealed
-// dedup key: its `:` is outside the header grammar, and the sealed spelling is
-// admitted only from the framework's own sealed context.
-func (i *Inbox) ProcessOnce(ctx context.Context, eventID string, fn func(ctx context.Context, tx dbtypes.Tx) error) error {
-	if err := messaging.ValidateDedupKey(ctx, eventID); err != nil {
+// key comes from messaging.Metadata.DedupKey or messaging.WireDedupKey; the
+// ledger row carries key.String(). messaging.ValidateDedupKey runs BEFORE the
+// ledger: the zero DedupKey, and a Sealed key under a context the sealed typed
+// door did not mark (messaging.IsSealedDelivery), are refused with an error
+// wrapping messaging.ErrInvalidEventID and no row is written. Only the sealed
+// door mints a Sealed key, so no string a publisher or consumer writes can
+// occupy a sealed message's ledger row.
+func (i *Inbox) ProcessOnce(ctx context.Context, key messaging.DedupKey, fn func(ctx context.Context, tx dbtypes.Tx) error) error {
+	if err := messaging.ValidateDedupKey(ctx, key); err != nil {
 		return fmt.Errorf("inbox: %w", err)
 	}
+	eventID := key.String()
 	store, err := i.module.ensureStoreInitialized(ctx)
 	if err != nil {
 		return err
@@ -62,7 +61,7 @@ func (i *Inbox) ProcessOnce(ctx context.Context, eventID string, fn func(ctx con
 			return err
 		}
 		if !inserted {
-			i.module.recordDedupHit(ctx, tenantID, eventID, messaging.IsSealedDedupKey(eventID))
+			i.module.recordDedupHit(ctx, tenantID, eventID, key.Sealed())
 			return nil // already processed: skip fn, commit the no-op
 		}
 		return fn(ctx, tx)

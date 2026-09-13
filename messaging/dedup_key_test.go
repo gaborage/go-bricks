@@ -2,9 +2,14 @@ package messaging
 
 import (
 	"go/ast"
+	"go/build"
+	"go/importer"
 	"go/parser"
 	"go/token"
-	"path/filepath"
+	"go/types"
+	"io"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -88,32 +93,132 @@ func TestWireDedupKeyAppliesTheGrammar(t *testing.T) {
 	}
 }
 
-// TestOnlyAllowlistedFunctionsMintASealedDedupKey pins every production site
-// that can set DedupKey.sealed.
+// TestOnlyAllowlistedFunctionsMintASealedDedupKey type-checks this package's
+// production files and pins every site that can set DedupKey.sealed — a
+// literal of any spelling (alias, elided type), a conversion, a field write or
+// address — and every function referencing the sealed constructor, called or
+// not. Unexported fields already make an outside literal a compile error; the
+// risk is an in-package door.
 func TestOnlyAllowlistedFunctionsMintASealedDedupKey(t *testing.T) {
-	files, err := filepath.Glob("*.go")
-	require.NoError(t, err)
-	sites := dedupKeySites{sealing: map[string]bool{}, literals: map[string]bool{}}
-	fset := token.NewFileSet()
-	for _, name := range files {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(fset, name, nil, 0)
-		require.NoError(t, err)
-		sites.scanFile(file)
-	}
-	allowlist := []string{}
-	assert.ElementsMatch(t, allowlist, siteNames(sites.sealing))
+	sites := scanDedupKeySites(t)
+	assert.ElementsMatch(t, []string{"sealedDedupKey"}, siteNames(sites.sealing))
+	assert.ElementsMatch(t, []string{"Metadata.DedupKey"}, siteNames(sites.constructorRefs))
 	assert.Contains(t, sites.literals, "WireDedupKey", "the walk must see DedupKey literals")
 }
 
-type dedupKeySites struct {
-	sealing  map[string]bool
-	literals map[string]bool
+// dedupKeyWalkFixture carries one site per minting shape and one constructor
+// caller, with no imports so it type-checks without an importer.
+const dedupKeyWalkFixture = `package fixture
+
+type DedupKey struct {
+	key    string
+	sealed bool
 }
 
-func (s dedupKeySites) scanFile(file *ast.File) {
+func sealedDedupKey() DedupKey { return DedupKey{key: "k", sealed: true} }
+
+func unkeyed() DedupKey { return DedupKey{"k", true} }
+
+func assigned(k *DedupKey) { k.sealed = true }
+
+func caller() DedupKey { return sealedDedupKey() }
+`
+
+// TestDedupKeySiteWalkRecordsEveryMintingShape runs the walk over the fixture,
+// so the production pin cannot pass vacuously on a regressed walker.
+func TestDedupKeySiteWalkRecordsEveryMintingShape(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "fixture.go", dedupKeyWalkFixture, 0)
+	require.NoError(t, err)
+	sites := checkDedupKeySites(t, fset, []*ast.File{file}, "fixture", nil)
+	assert.ElementsMatch(t, []string{"sealedDedupKey", "unkeyed", "assigned"}, siteNames(sites.sealing))
+	assert.ElementsMatch(t, []string{"caller"}, siteNames(sites.constructorRefs))
+}
+
+type dedupKeySites struct {
+	info            *types.Info
+	dedupKey        types.Type
+	sealedField     types.Object
+	constructor     types.Object
+	sealing         map[string]bool
+	literals        map[string]bool
+	constructorRefs map[string]bool
+}
+
+func scanDedupKeySites(t *testing.T) *dedupKeySites {
+	t.Helper()
+	dir, err := build.ImportDir(".", 0)
+	require.NoError(t, err)
+	fset := token.NewFileSet()
+	files := make([]*ast.File, 0, len(dir.GoFiles))
+	for _, name := range dir.GoFiles {
+		file, parseErr := parser.ParseFile(fset, name, nil, 0)
+		require.NoError(t, parseErr)
+		files = append(files, file)
+	}
+	return checkDedupKeySites(t, fset, files, "github.com/gaborage/go-bricks/messaging", importer.ForCompiler(fset, "gc", exportDataLookup(t)))
+}
+
+// checkDedupKeySites type-checks files as one package and walks them for
+// DedupKey sites.
+func checkDedupKeySites(t *testing.T, fset *token.FileSet, files []*ast.File, path string, imp types.Importer) *dedupKeySites {
+	t.Helper()
+	info := &types.Info{
+		Types:      map[ast.Expr]types.TypeAndValue{},
+		Uses:       map[*ast.Ident]types.Object{},
+		Selections: map[*ast.SelectorExpr]*types.Selection{},
+	}
+	conf := types.Config{Importer: imp}
+	pkg, err := conf.Check(path, fset, files, info)
+	require.NoError(t, err)
+
+	dedupKey := pkg.Scope().Lookup("DedupKey").Type()
+	sites := &dedupKeySites{
+		info:            info,
+		dedupKey:        dedupKey,
+		sealedField:     structField(t, dedupKey, "sealed"),
+		constructor:     pkg.Scope().Lookup("sealedDedupKey"),
+		sealing:         map[string]bool{},
+		literals:        map[string]bool{},
+		constructorRefs: map[string]bool{},
+	}
+	require.NotNil(t, sites.constructor)
+	for _, file := range files {
+		sites.scanFile(file)
+	}
+	return sites
+}
+
+// exportDataLookup resolves imports from the build cache's export data; the
+// source importer re-type-checks every dependency and costs ~30s.
+func exportDataLookup(t *testing.T) importer.Lookup {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "go", "list", "-export", "-deps", "-f", "{{.ImportPath}}={{.Export}}", ".").Output()
+	require.NoError(t, err)
+	exports := map[string]string{}
+	for line := range strings.Lines(string(out)) {
+		path, export, _ := strings.Cut(strings.TrimSpace(line), "=")
+		exports[path] = export
+	}
+	return func(path string) (io.ReadCloser, error) {
+		return os.Open(exports[path])
+	}
+}
+
+func structField(t *testing.T, typ types.Type, name string) types.Object {
+	t.Helper()
+	fields, isStruct := typ.Underlying().(*types.Struct)
+	require.True(t, isStruct)
+	for field := range fields.Fields() {
+		if field.Name() == name {
+			return field
+		}
+	}
+	require.Failf(t, "field not found", "%s", name)
+	return nil
+}
+
+func (s *dedupKeySites) scanFile(file *ast.File) {
 	for _, decl := range file.Decls {
 		scope := "<package scope>"
 		if fn, isFunc := decl.(*ast.FuncDecl); isFunc {
@@ -126,36 +231,56 @@ func (s dedupKeySites) scanFile(file *ast.File) {
 	}
 }
 
-func (s dedupKeySites) record(scope string, n ast.Node) {
+func (s *dedupKeySites) record(scope string, n ast.Node) {
 	switch node := n.(type) {
-	case *ast.CompositeLit:
-		if !isIdentNamed(node.Type, "DedupKey") {
-			return
+	case *ast.Ident:
+		if s.info.Uses[node] == s.constructor {
+			s.constructorRefs[scope] = true
 		}
-		s.literals[scope] = true
-		if literalSetsSealed(node) {
+	case *ast.CompositeLit:
+		s.recordLiteral(scope, node)
+	case *ast.CallExpr:
+		if tv, known := s.info.Types[node.Fun]; known && tv.IsType() && types.Identical(tv.Type, s.dedupKey) {
 			s.sealing[scope] = true
 		}
 	case *ast.AssignStmt:
 		for _, lhs := range node.Lhs {
-			if sel, isSel := lhs.(*ast.SelectorExpr); isSel && sel.Sel.Name == "sealed" {
-				s.sealing[scope] = true
-			}
+			s.recordFieldAccess(scope, lhs)
+		}
+	case *ast.UnaryExpr:
+		if node.Op == token.AND {
+			s.recordFieldAccess(scope, node.X)
 		}
 	}
 }
 
-func literalSetsSealed(lit *ast.CompositeLit) bool {
+func (s *dedupKeySites) recordLiteral(scope string, lit *ast.CompositeLit) {
+	if !types.Identical(s.info.TypeOf(lit), s.dedupKey) {
+		return
+	}
+	s.literals[scope] = true
 	for _, elt := range lit.Elts {
 		kv, keyed := elt.(*ast.KeyValueExpr)
 		if !keyed {
-			return len(lit.Elts) >= 2
+			if len(lit.Elts) >= 2 {
+				s.sealing[scope] = true
+			}
+			return
 		}
-		if isIdentNamed(kv.Key, "sealed") {
-			return true
+		if key, isIdent := kv.Key.(*ast.Ident); isIdent && s.info.Uses[key] == s.sealedField {
+			s.sealing[scope] = true
 		}
 	}
-	return false
+}
+
+func (s *dedupKeySites) recordFieldAccess(scope string, expr ast.Expr) {
+	sel, isSel := ast.Unparen(expr).(*ast.SelectorExpr)
+	if !isSel {
+		return
+	}
+	if selection, known := s.info.Selections[sel]; known && selection.Obj() == s.sealedField {
+		s.sealing[scope] = true
+	}
 }
 
 func funcSiteName(fn *ast.FuncDecl) string {
@@ -170,11 +295,6 @@ func funcSiteName(fn *ast.FuncDecl) string {
 		return ident.Name + "." + fn.Name.Name
 	}
 	return "?." + fn.Name.Name
-}
-
-func isIdentNamed(expr ast.Expr, name string) bool {
-	ident, isIdent := expr.(*ast.Ident)
-	return isIdent && ident.Name == name
 }
 
 func siteNames(set map[string]bool) []string {
@@ -207,11 +327,12 @@ func TestMetadataDedupKey(t *testing.T) {
 			got, err := meta.DedupKey()
 			if tc.wantErr {
 				require.ErrorIs(t, err, ErrInvalidEventID)
-				assert.Empty(t, got)
+				assert.Equal(t, DedupKey{}, got)
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.want, got.String())
+			assert.False(t, got.Sealed())
 		})
 	}
 }
@@ -251,9 +372,32 @@ func TestMetadataSealedAndDedupKeyForASealedDelivery(t *testing.T) {
 
 	key, err := meta.DedupKey()
 	require.NoError(t, err)
-	assert.Equal(t, "svc-sign:jti-1", key, "the sealed key wins over any header the publisher wrote")
-	assert.True(t, IsSealedDedupKey(key))
-	assert.ErrorIs(t, ValidateEventID(key), ErrInvalidEventID, "a sealed key is outside the header grammar by construction")
+	assert.Equal(t, "svc-sign:jti-1", key.String(), "the sealed key wins over any header the publisher wrote")
+	assert.True(t, key.Sealed())
+	assert.ErrorIs(t, ValidateEventID(key.String()), ErrInvalidEventID, "a sealed key is outside the header grammar by construction")
+}
+
+// TestDedupKeyPersistedSpellingGolden pins String() on both branches to the
+// spelling the ledger, DLQ tooling and metrics already hold: changing either is
+// a ledger migration, not a refactor.
+func TestDedupKeyPersistedSpellingGolden(t *testing.T) {
+	sealed := Metadata{delivery: &amqp.Delivery{}, sealed: &SealedEnvelope{SignFamily: "svc-payments-sign", JTI: "9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f"}}
+	sealedKey, err := sealed.DedupKey()
+	require.NoError(t, err)
+	assert.Equal(t, "svc-payments-sign:9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f", sealedKey.String())
+	assert.True(t, sealedKey.Sealed())
+
+	stamped := Metadata{delivery: &amqp.Delivery{Headers: amqp.Table{HeaderEventID: "01J9ZQ7K3M"}, MessageId: "prop-9"}}
+	stampKey, err := stamped.DedupKey()
+	require.NoError(t, err)
+	assert.Equal(t, "01J9ZQ7K3M", stampKey.String())
+	assert.False(t, stampKey.Sealed())
+
+	unstamped := Metadata{delivery: &amqp.Delivery{MessageId: "prop-9"}}
+	propKey, err := unstamped.DedupKey()
+	require.NoError(t, err)
+	assert.Equal(t, "prop-9", propKey.String())
+	assert.False(t, propKey.Sealed())
 }
 
 // sealedTestKey is what DedupKey composes from the envelope the sealed rows of
@@ -305,11 +449,12 @@ func TestMetadataDedupKeyStampAndMessageIDPrecedence(t *testing.T) {
 			got, err := meta.DedupKey()
 			if tc.wantErr {
 				require.ErrorIs(t, err, ErrInvalidEventID)
-				assert.Empty(t, got)
+				assert.Equal(t, DedupKey{}, got)
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.want, got.String())
+			assert.Equal(t, tc.sealed, got.Sealed())
 		})
 	}
 }

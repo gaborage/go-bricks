@@ -32,53 +32,52 @@ func newTestInbox(db dbtypes.Interface) *Inbox {
 	return &Inbox{module: m}
 }
 
-// TestProcessOnceValidatesTheIDBeforeTheLedger VARIES the id across the grammar
-// ^[A-Za-z0-9_-]{1,128}$. Conforming ids — a 128-byte one included — reach the
-// INSERT; every other shape is refused with messaging.ErrInvalidEventID before
-// a transaction is opened, so nothing is written. The TestDB carries no
-// expectations on the rejecting cases: a Begin would fail the test on its own.
-func TestProcessOnceValidatesTheIDBeforeTheLedger(t *testing.T) {
-	cases := []struct {
-		name string
-		id   string
-		ok   bool
-	}{
-		{"uuid", "9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f", true},
-		{"max_length_128", strings.Repeat("k", 128), true},
-		{"colon", "order:1", false},
-		{"newline", "evt-1\n", false},
-		{"empty", "", false},
-		{"length_129", strings.Repeat("k", 129), false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
-			if tc.ok {
-				db.ExpectTransaction().ExpectExec(`INSERT INTO gobricks_inbox`).WillReturnRowsAffected(1)
-			}
-			in := newTestInbox(db)
+func wireKey(t *testing.T, id string) messaging.DedupKey {
+	t.Helper()
+	key, err := messaging.WireDedupKey(id)
+	require.NoError(t, err)
+	return key
+}
 
-			ran := false
-			err := in.ProcessOnce(t.Context(), tc.id, func(context.Context, dbtypes.Tx) error {
-				ran = true
-				return nil
-			})
-			if tc.ok {
-				require.NoError(t, err)
-				assert.True(t, ran)
-				return
-			}
-			require.ErrorIs(t, err, messaging.ErrInvalidEventID)
-			assert.False(t, ran, "fn never runs for a refused id")
-			assert.Empty(t, db.ExecLog(), "no INSERT reaches the ledger for a refused id")
+// TestProcessOnceAdmitsWireKeysAtBothLengthBoundaries pins that a wire key the
+// grammar admitted — a 128-byte one included — reaches the INSERT.
+func TestProcessOnceAdmitsWireKeysAtBothLengthBoundaries(t *testing.T) {
+	for _, id := range []string{"k", "9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f", strings.Repeat("k", 128)} {
+		db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectTransaction().ExpectExec(`INSERT INTO gobricks_inbox`).WillReturnRowsAffected(1)
+		in := newTestInbox(db)
+
+		ran := false
+		err := in.ProcessOnce(t.Context(), wireKey(t, id), func(context.Context, dbtypes.Tx) error {
+			ran = true
+			return nil
 		})
+		require.NoError(t, err)
+		assert.True(t, ran)
 	}
+}
+
+// TestProcessOnceRefusesTheZeroKeyBeforeTheLedger pins the first refusal: the
+// zero DedupKey came from no door. The TestDB carries no expectations, so a
+// Begin would fail the test on its own.
+func TestProcessOnceRefusesTheZeroKeyBeforeTheLedger(t *testing.T) {
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	in := newTestInbox(db)
+
+	ran := false
+	err := in.ProcessOnce(t.Context(), messaging.DedupKey{}, func(context.Context, dbtypes.Tx) error {
+		ran = true
+		return nil
+	})
+	require.ErrorIs(t, err, messaging.ErrInvalidEventID)
+	assert.False(t, ran, "fn never runs for a refused key")
+	assert.Empty(t, db.ExecLog(), "no INSERT reaches the ledger for a refused key")
 }
 
 // TestProcessOnceRefusesTheSealedKeyShapeFromAHeader is the negative vector the
 // grammar exists for: a publisher writes a literal `family:jti` — the sealed
-// dedup key spelling — into x-outbox-event-id on an unsealed consumer. It must
-// not enter the ledger, or the legitimate sealed delivery would skip+ACK.
+// dedup key spelling — into x-outbox-event-id on an unsealed consumer. It cannot
+// become a DedupKey at all, so it never reaches the ledger.
 func TestProcessOnceRefusesTheSealedKeyShapeFromAHeader(t *testing.T) {
 	db := dbtesting.NewTestDB(dbtypes.PostgreSQL) // no expectations: any Begin fails
 	in := newTestInbox(db)
@@ -86,8 +85,12 @@ func TestProcessOnceRefusesTheSealedKeyShapeFromAHeader(t *testing.T) {
 	calls := 0
 	handler := messaging.NewTypedHandlerWithMeta("evt", func(ctx context.Context, _ testEvent, meta messaging.Metadata) error {
 		id, ok := outbox.EventIDFromHeaders(meta.Headers())
-		require.True(t, ok, "extraction is permissive; the ledger door is the gate")
-		return in.ProcessOnce(ctx, id, func(context.Context, dbtypes.Tx) error {
+		require.True(t, ok, "extraction is permissive; key construction is the gate")
+		key, err := messaging.WireDedupKey(id)
+		if err != nil {
+			return err
+		}
+		return in.ProcessOnce(ctx, key, func(context.Context, dbtypes.Tx) error {
 			calls++
 			return nil
 		})
@@ -103,19 +106,18 @@ func TestProcessOnceRefusesTheSealedKeyShapeFromAHeader(t *testing.T) {
 	assert.NotContains(t, err.Error(), "9f0c2b1e", "the error carries the length, never the id")
 }
 
-// TestProcessOnceAdmitsTheSealedKeyOnlyFromTheSealedDoor pins the second door:
-// a sealed dedup key passes only under a delivery the sealed typed door opened
-// (messaging.IsSealedDelivery); the same spelling from any other context — a
-// header, a hand-built key — is refused before the ledger.
+// TestProcessOnceAdmitsTheSealedKeyOnlyFromTheSealedDoor pins the provenance
+// cross-check: the sealed door's own key passes inside its handler, the same
+// key carried out of that context is refused before the ledger, and a wire key
+// is admitted under the sealed context (ADR-097 §4: the grammar governs wire
+// keys, which never collide with the sealed key space).
 func TestProcessOnceAdmitsTheSealedKeyOnlyFromTheSealedDoor(t *testing.T) {
-	const key = "svc-payments-sign:9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f"
-
 	t.Run("sealed_delivery", func(t *testing.T) {
 		db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 		db.ExpectTransaction().ExpectExec(`INSERT INTO gobricks_inbox`).WillReturnRowsAffected(1)
 		in := newTestInbox(db)
 		ran := false
-		err := runSealed(t, func(ctx context.Context) error {
+		err := runSealed(t, func(ctx context.Context, key messaging.DedupKey) error {
 			return in.ProcessOnce(ctx, key, func(context.Context, dbtypes.Tx) error {
 				ran = true
 				return nil
@@ -125,12 +127,39 @@ func TestProcessOnceAdmitsTheSealedKeyOnlyFromTheSealedDoor(t *testing.T) {
 		assert.True(t, ran)
 	})
 
-	t.Run("plain_context", func(t *testing.T) {
+	t.Run("sealed_key_outside_the_sealed_delivery", func(t *testing.T) {
+		var escaped messaging.DedupKey
+		require.NoError(t, runSealed(t, func(_ context.Context, key messaging.DedupKey) error {
+			escaped = key
+			return nil
+		}))
+		require.True(t, escaped.Sealed())
+
 		db := dbtesting.NewTestDB(dbtypes.PostgreSQL) // no expectations: any Begin fails
 		in := newTestInbox(db)
-		err := in.ProcessOnce(t.Context(), key, func(context.Context, dbtypes.Tx) error { return nil })
+		ran := false
+		err := in.ProcessOnce(t.Context(), escaped, func(context.Context, dbtypes.Tx) error {
+			ran = true
+			return nil
+		})
 		require.ErrorIs(t, err, messaging.ErrInvalidEventID)
+		assert.False(t, ran)
 		assert.Empty(t, db.ExecLog())
+	})
+
+	t.Run("wire_key_under_the_sealed_delivery", func(t *testing.T) {
+		db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectTransaction().ExpectExec(`INSERT INTO gobricks_inbox`).WillReturnRowsAffected(1)
+		in := newTestInbox(db)
+		ran := false
+		err := runSealed(t, func(ctx context.Context, _ messaging.DedupKey) error {
+			return in.ProcessOnce(ctx, wireKey(t, "business-key-7"), func(context.Context, dbtypes.Tx) error {
+				ran = true
+				return nil
+			})
+		})
+		require.NoError(t, err)
+		assert.True(t, ran)
 	})
 }
 
@@ -142,7 +171,7 @@ func TestProcessOnceRunsFnOnFirstEvent(t *testing.T) {
 	in := newTestInbox(db)
 
 	ran := false
-	err := in.ProcessOnce(t.Context(), "evt-1", func(context.Context, dbtypes.Tx) error {
+	err := in.ProcessOnce(t.Context(), wireKey(t, "evt-1"), func(context.Context, dbtypes.Tx) error {
 		ran = true
 		return nil
 	})
@@ -159,7 +188,7 @@ func TestProcessOnceSkipsFnOnDuplicate(t *testing.T) {
 	in := newTestInbox(db)
 
 	ran := false
-	err := in.ProcessOnce(t.Context(), "evt-1", func(context.Context, dbtypes.Tx) error {
+	err := in.ProcessOnce(t.Context(), wireKey(t, "evt-1"), func(context.Context, dbtypes.Tx) error {
 		ran = true
 		return nil
 	})
@@ -175,7 +204,7 @@ func TestProcessOncePropagatesFnError(t *testing.T) {
 	in := newTestInbox(db)
 
 	sentinel := errors.New("handler failed")
-	err := in.ProcessOnce(t.Context(), "evt-1", func(context.Context, dbtypes.Tx) error {
+	err := in.ProcessOnce(t.Context(), wireKey(t, "evt-1"), func(context.Context, dbtypes.Tx) error {
 		return sentinel
 	})
 	assert.ErrorIs(t, err, sentinel, "a handler error rolls back and propagates")
@@ -188,7 +217,7 @@ func TestProcessOnceReturnsDBError(t *testing.T) {
 	}
 	in := &Inbox{module: m}
 
-	err := in.ProcessOnce(t.Context(), "evt-1", func(context.Context, dbtypes.Tx) error { return nil })
+	err := in.ProcessOnce(t.Context(), wireKey(t, "evt-1"), func(context.Context, dbtypes.Tx) error { return nil })
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "database unavailable")
 }
@@ -200,9 +229,9 @@ type testEvent struct {
 }
 
 // TestProcessOnceViaTypedConsumerRedelivery proves the issue's acceptance
-// criterion end-to-end: a typed consumer reads x-outbox-event-id from
-// messaging.Metadata and wraps its business logic in ProcessOnce, so the SAME
-// delivery handled twice (an outbox at-least-once redelivery) runs the
+// criterion end-to-end: a typed consumer takes its key from
+// messaging.Metadata.DedupKey and wraps its business logic in ProcessOnce, so
+// the SAME delivery handled twice (an outbox at-least-once redelivery) runs the
 // business callback exactly once.
 func TestProcessOnceViaTypedConsumerRedelivery(t *testing.T) {
 	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
@@ -214,9 +243,9 @@ func TestProcessOnceViaTypedConsumerRedelivery(t *testing.T) {
 
 	calls := 0
 	handler := messaging.NewTypedHandlerWithMeta("evt", func(ctx context.Context, _ testEvent, meta messaging.Metadata) error {
-		id, ok := outbox.EventIDFromHeaders(meta.Headers())
-		require.True(t, ok, "the outbox event id header must be present")
-		return in.ProcessOnce(ctx, id, func(context.Context, dbtypes.Tx) error {
+		key, err := meta.DedupKey()
+		require.NoError(t, err, "the outbox event id header must be present")
+		return in.ProcessOnce(ctx, key, func(context.Context, dbtypes.Tx) error {
 			calls++
 			return nil
 		})
@@ -251,7 +280,7 @@ func TestProcessOnceViaTypedConsumerMessageIDOnly(t *testing.T) {
 	handler := messaging.NewTypedHandlerWithMeta("evt", func(ctx context.Context, _ testEvent, meta messaging.Metadata) error {
 		key, err := meta.DedupKey()
 		require.NoError(t, err, "the message_id property must answer when no stamp is present")
-		seen = key
+		seen = key.String()
 		return in.ProcessOnce(ctx, key, func(context.Context, dbtypes.Tx) error {
 			calls++
 			return nil
@@ -269,10 +298,10 @@ func TestProcessOnceViaTypedConsumerMessageIDOnly(t *testing.T) {
 	assert.Equal(t, 1, calls, "the business callback runs exactly once across a redelivery")
 }
 
-// The ledger's second door — a sealed dedup key — is admitted only under a delivery
-// the sealed typed door opened. These helpers reach that context the way a
-// consumer does: through DeclareTypedConsumerWithMeta on a seal-tagged type, with a
-// stub codec standing in for messaging/sealed (which this package must not link).
+// A sealed DedupKey is minted only by the sealed typed door. These helpers reach
+// that door the way a consumer does: through DeclareTypedConsumerWithMeta on a
+// seal-tagged type, with a stub codec standing in for messaging/sealed (which
+// this package must not link).
 
 type sealedEvent struct {
 	_   struct{} `seal:"sign=svc-payments-sign,encrypt=acme-core-enc"`
@@ -310,9 +339,10 @@ func (stubCodec) NewOpener(messaging.SealSpec, string, *messaging.SealRuntime) (
 
 var registerStubCodec sync.Once
 
-// runSealed runs body inside a handler the sealed typed door installed, so its
-// context carries the framework's sealed-delivery marker.
-func runSealed(t *testing.T, body func(ctx context.Context) error) error {
+// runSealed runs body inside a handler the sealed typed door installed, handing
+// it the handler's context (which carries the sealed-delivery marker) and the
+// Sealed DedupKey the door composed.
+func runSealed(t *testing.T, body func(ctx context.Context, key messaging.DedupKey) error) error {
 	t.Helper()
 	registerStubCodec.Do(func() { messaging.RegisterSealCodec(stubCodec{}) })
 	messaging.ConfigureSealing(&messaging.SealRuntime{KeyStore: kstest.NewMockKeyStore()})
@@ -324,8 +354,8 @@ func runSealed(t *testing.T, body func(ctx context.Context) error) error {
 	messaging.DeclareTypedConsumerWithMeta(decls, opts, func(ctx context.Context, _ sealedEvent, meta messaging.Metadata) error {
 		key, err := meta.DedupKey()
 		require.NoError(t, err)
-		require.True(t, messaging.IsSealedDedupKey(key))
-		result = body(ctx)
+		require.True(t, key.Sealed())
+		result = body(ctx, key)
 		return result
 	})
 	require.NoError(t, decls.Validate())
