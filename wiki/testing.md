@@ -458,9 +458,9 @@ Knobs (all `?=`, so the environment overrides):
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `MUTATE_CPU` | 2 | Whole-run core budget for `make mutate`. A per-worker share and an effective worker count are derived from it together, so `workers x share` never exceeds it — a budget below `MUTATE_WORKERS` shrinks the worker count rather than handing each worker a core. The share is pinned as `GOMAXPROCS`/`GOFLAGS -p` on every child. Negative values are rejected; `0` opts out. |
+| `MUTATE_CPU` | 6 | Whole-run core budget for `make mutate`. A per-worker share and an effective worker count are derived from it together, so `workers x share` never exceeds it — a budget below `MUTATE_WORKERS` shrinks the worker count rather than handing each worker a core. The share is pinned as `GOMAXPROCS`/`GOFLAGS -p` on every child. Negative values are rejected; `0` opts out. |
 | `MUTATE_WORKERS` | 2 | Concurrent gremlins workers for `make mutate`. **Not** a core count — each worker is a full `go test`, whose own parallelism `MUTATE_CPU` is what bounds. |
-| `MUTATE_COOLDOWN` | 30s | Pause after each mutated package so the machine sheds heat. Any `time.ParseDuration` string; `0` disables. Skipped after a skipped package and after the last one. |
+| `MUTATE_COOLDOWN` | 10s | Pause after each mutated package so the machine sheds heat. Any `time.ParseDuration` string; `0` disables. Skipped after a skipped package and after the last one. |
 | `MUTATE_BASELINE_WORKERS` | 2 | Same as `MUTATE_WORKERS`, for the nightly baseline; also bounds peak memory. Unbudgeted — CI runs at full speed. |
 | `MUTATE_CEILING_FLOOR` | 30s | Minimum per-mutant ceiling (any `time.ParseDuration` string). |
 | `MUTATE_FALLBACK_COEFFICIENT` | 600 | Used only when a package's coefficient cannot be computed. |
