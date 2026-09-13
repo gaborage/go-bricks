@@ -644,10 +644,12 @@ func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 	return validatePostgreSQLTLSCoherence(cfg)
 }
 
-// validatePostgreSQLTLSCoherence refuses a database.tls block whose claim pgx would not honor.
+// validatePostgreSQLTLSCoherence refuses a database.tls block pgx would not honor: TLS claimed
+// on a unix-socket host entry, material under a non-TLS mode, or a lone cert/key.
 func validatePostgreSQLTLSCoherence(cfg *DatabaseConfig) error {
 	hasMaterial := cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" || cfg.TLS.CAFile != ""
-	if slices.ContainsFunc(pgHostEntries(cfg.Host), isUnixSocketHost) && (hasMaterial || (cfg.TLS.Mode != "" && cfg.TLS.Mode != sslModeDisable)) {
+	claimsTLS := hasMaterial || (cfg.TLS.Mode != "" && cfg.TLS.Mode != sslModeDisable)
+	if claimsTLS && slices.ContainsFunc(pgHostEntries(cfg.Host), isUnixSocketHost) {
 		return &ConfigError{
 			Category: errCategoryInvalid,
 			Field:    fieldDatabaseTLS,

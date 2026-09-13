@@ -20,8 +20,10 @@ nothing on this seam defaults an unset mode; pgx's `prefer` applies only at pars
 a socket host with no block, or `mode: disable` and no material, is accepted unchanged.
 Socket hosts are not refused by themselves. R6 applies per comma-separated `host` entry,
 matching pgx's own untrimmed split, so `db.internal,/var/run/postgresql` is refused the same
-way; an empty entry (`db.internal,`) is refused as `[C64.8]`, TLS or not, because pgx swaps
-it for the socket directory.
+way. The same amendment extends `[C64.8]`'s empty-host rule to each entry: an empty entry
+(`db.internal,`, `,db.internal`, `db1,,db2`) is newly refused with `[C64.8]`'s
+`MissingFieldError` on `database.host`, TLS or not, because pgx swaps it for the socket
+directory — where `[C64.8]` refused only a wholly empty host and these used to boot.
 
 R6 runs after R1, so a typo'd mode on a socket host is still reported as a mode problem, and
 before R2 and R3, so material on a socket host gets the transport message rather than a
@@ -29,7 +31,9 @@ mode or pairing complaint that would steer the operator toward a mode the socket
 cannot carry. The predicate is `config.isUnixSocketHost`, a mirror of pgx: a divergence
 reopens the hole. It covers every door `validatePostgreSQLFields` covers — static YAML
 through `config.Validate`, `DBConfigProvider` results through `ApplyDatabasePoolDefaults` /
-`ApplyDatabasePoolDefaultsForKey`, and `go-bricks-migrate` at its next pin bump. A raw
+`ApplyDatabasePoolDefaultsForKey`, and `go-bricks-migrate` at its next pin bump, whose
+`tlsValidatingProvider` calls `config.ApplyDatabasePoolDefaults`, so
+`TestApplyDatabasePoolDefaultsRefusesTLSOnUnixSocketHost` covers that path. A raw
 `connectionstring` is unchanged (#1551). See `[C65.1]`.
 
 ## Amendment — 2026-08-24: the Flyway leg is no longer conf-owned (ADR-085, #1047)
