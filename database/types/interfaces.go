@@ -176,7 +176,7 @@ type SelectQueryBuilder interface {
 
 	// Having adds a HAVING predicate. Prefer a RawExpression from qb.Expr() —
 	// Having(qb.MustExpr("SUM(amount) > ?"), 100), or qb.Expr when you handle its
-	// (RawExpression, error) return — which is the sanctioned path for
+	// (RawExpression, error) return — which is the expression form for
 	// the aggregate comparisons HAVING exists for; an alias on that expression is
 	// an error (ErrAliasInHaving), since a predicate projects nothing. Both forms are
 	// raw SQL needing the SECURITY annotation at every call site; see dbtypes.RawExpression.
@@ -515,6 +515,7 @@ type QueryBuilderInterface interface {
 
 	// MustExpr is like Expr but panics on error.
 	// Use this only in static initialization or tests where errors indicate programming bugs.
+	// Call sites carry the SECURITY annotation; see RawExpression.
 	MustExpr(sql string, alias ...string) RawExpression
 
 	// Column metadata extraction (v2.4+)
