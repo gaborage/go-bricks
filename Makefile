@@ -38,11 +38,10 @@ MUTATE_FALLBACK_COEFFICIENT ?= 600
 # build phases are a best-effort target, not a hard bound. mutatediff divides it
 # by MUTATE_WORKERS and pins
 # GOMAXPROCS plus GOFLAGS -p on every child process, which bounds test execution
-# exactly and build fan-out approximately (compile processes nest one level, and
-# at the defaults the overshoot can reach roughly 2x the budget during build
-# phases, growing with MUTATE_CPU).
+# exactly and build fan-out approximately (compile processes nest one level, so
+# build phases can overshoot the budget, by more as MUTATE_CPU grows).
 # Set MUTATE_CPU=0 to opt out and run at full speed.
-MUTATE_CPU ?= 2
+MUTATE_CPU ?= 6
 MUTATE_WORKERS ?= 2
 # Pause after each mutated package so the chassis sheds heat before the next one.
 # Any time.ParseDuration string; 0 disables. It does nothing inside a single long
