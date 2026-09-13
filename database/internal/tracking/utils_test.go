@@ -270,13 +270,14 @@ func TestTrackDBOperationRecordsSuccess(t *testing.T) {
 // Why this cannot flake on a coarse-tick platform: TrackDBOperation takes `start`
 // as a parameter and `time.Since(start)` is its only clock read, so the elapsed
 // value the selector sees is `chosen offset + however long the call itself takes`.
-// The monotonic clock never runs backwards, so the offset is a hard LOWER bound —
-// the slow case (offset 400ms against a 200ms threshold) is above the threshold on
-// every OS by construction. The fast case needs an UPPER bound instead, and the
-// only thing that can inflate it is real time spent inside the call, including the
-// granularity of the platform's clock: Windows ticks at ~15.6ms, so its worst-case
-// inflation is one tick. A 10ms offset against a 200ms threshold leaves 190ms of
-// headroom — an order of magnitude past that tick.
+// The monotonic clock never runs backwards, so a PAST start is a hard LOWER bound —
+// the slow case (start 400ms in the past against a 200ms threshold) is above the
+// threshold on every OS by construction. The fast case needs an UPPER bound instead,
+// and any real time spent inside the call inflates it: a scheduler pause, a GC stop,
+// a suspended VM or a coarse platform tick can each add far more than a few
+// milliseconds. So the fast case takes a start in the FUTURE (an hour ahead), which
+// makes elapsed NEGATIVE: no amount of real time spent in the call can push it past
+// a positive threshold, on any platform, without a clock jump of an hour.
 //
 // This is exactly what the stub-driven tracker.Query test in querier_test.go could
 // not do: there the elapsed time was whatever the machine measured for a stub call,
@@ -286,21 +287,24 @@ func TestTrackDBOperationSlowQueryBoundary(t *testing.T) {
 	const threshold = 200 * time.Millisecond
 
 	tests := []struct {
-		name      string
-		elapsed   time.Duration
-		wantLevel string
-		wantMsg   string
+		name string
+		// startOffset is added to time.Now() to build the start passed to
+		// TrackDBOperation: negative puts the start in the past (positive
+		// elapsed), positive puts it in the future (negative elapsed).
+		startOffset time.Duration
+		wantLevel   string
+		wantMsg     string
 	}{
 		{
-			name:      "well_under_threshold_logs_debug",
-			elapsed:   10 * time.Millisecond,
-			wantLevel: levelDebug,
-			wantMsg:   msgDBOperationExecuted,
+			name:        "negative_elapsed_logs_debug",
+			startOffset: time.Hour,
+			wantLevel:   levelDebug,
+			wantMsg:     msgDBOperationExecuted,
 		},
 		{
-			name:      "well_over_threshold_logs_warn",
-			elapsed:   400 * time.Millisecond,
-			wantLevel: levelWarn,
+			name:        "well_over_threshold_logs_warn",
+			startOffset: -400 * time.Millisecond,
+			wantLevel:   levelWarn,
 		},
 	}
 
@@ -311,7 +315,7 @@ func TestTrackDBOperationSlowQueryBoundary(t *testing.T) {
 			settings := Settings{slowQueryThreshold: threshold, maxQueryLength: 50}
 			tc := &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}
 
-			start := time.Now().Add(-tt.elapsed)
+			start := time.Now().Add(tt.startOffset)
 			TrackDBOperation(ctx, tc, selectOne, nil, start, 0, nil)
 
 			events := recLogger.events()
