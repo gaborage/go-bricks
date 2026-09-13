@@ -154,6 +154,44 @@ func TestIsCompactJOSEAcceptsEveryBase64URLByteAndDots(t *testing.T) {
 	assert.False(t, isCompactJOSE("AB:C"))
 }
 
+// TestRemoveMemberDeletesTheMemberAndOneSeparator covers the three separator shapes: a
+// leading comma to swallow (middle or last member), a trailing comma to swallow (first
+// member, more follow), and no comma at all (the only member) — every result must stay
+// valid JSON with every other byte untouched. The whitespace cases are the regression net
+// for the first-member fixup: the decoder's peek skips whitespace, so any padding between
+// the opening brace and the subject key must not defeat it and emit `{ ,…`. A middle member
+// keeps the padding before its swallowed leading comma, which stays valid either way.
+func TestRemoveMemberDeletesTheMemberAndOneSeparator(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  string
+		want string
+	}{
+		{name: "only_member", doc: `{"card":{"pan":"4111"}}`, want: `{}`},
+		{name: "first_of_two", doc: `{"card":{"pan":"4111"},"z":true}`, want: `{"z":true}`},
+		{name: "first_of_three_with_whitespace", doc: `{"card":1  ,  "a":2,"z":3}`, want: `{"a":2,"z":3}`},
+		{name: "leading_whitespace_first_member", doc: `{ "card":1,"z":2}`, want: `{ "z":2}`},
+		{name: "leading_newline_first_member", doc: "{\n  \"card\": 1,\n  \"z\": 2\n}", want: "{\n  \"z\": 2\n}"},
+		{name: "leading_crlf_first_member", doc: "{\r\n\"card\":1,\r\n\"z\":2}", want: "{\r\n\"z\":2}"},
+		{name: "leading_whitespace_only_member", doc: "{\n  \"card\": 1\n}", want: "{\n  \n}"},
+		{name: "middle", doc: `{"a":1,"card":{"pan":"4111"},"z":true}`, want: `{"a":1,"z":true}`},
+		{name: "middle_whitespace_before_the_comma", doc: `{"a":1 , "card":2, "z":3}`, want: `{"a":1 , "z":3}`},
+		{name: "middle_whitespace_on_both_sides", doc: `{"a":1 , "card":2 , "z":3}`, want: `{"a":1  , "z":3}`},
+		{name: "last", doc: `{"a":1,"z":true,"card":{"pan":"4111"}}`, want: `{"a":1,"z":true}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := []byte(tc.doc)
+			span, err := locateSubject(doc, "card")
+			require.NoError(t, err)
+			out := removeMember(doc, span)
+			assert.Equal(t, []byte(tc.want), out)
+			assert.True(t, json.Valid(out))
+			assert.Equal(t, tc.doc, string(doc), "input must not be mutated")
+		})
+	}
+}
+
 func TestNextMemberReadsOneMember(t *testing.T) {
 	cases := []struct {
 		name    string

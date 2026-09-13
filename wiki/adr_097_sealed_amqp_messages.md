@@ -15,6 +15,26 @@
   branches `research/amqp-envelope-standards`, `research/amqp-seal-seams`; prototype
   `prototype/amqp-seal-open`. Deep dive: [sealing.md](sealing.md).
 
+> **Amended (2026-09-12, #1409):** a byte-level opener, `jose/sealed.OpenDocument`, is the
+> type-free twin of `Open`: it shares `Open`'s rule chain (`openCore`, rules 1–10) but is
+> never handed a `spec.Type` and never decodes into one — a CLI has no Go type to decode
+> into, only bytes. It returns an `*OpenedDocument`: the document with the Subject member
+> ABSENT — never a redaction placeholder — the Subject plaintext separately, the byte offset
+> the member sat at (`SubjectAt`, so a renderer splices in place instead of appending or
+> re-walking), and the same `Envelope` `Open` returns for the same body; splicing something
+> back in its place, if anything, is the caller's decision, never the library's. The amended criterion: **every rule 1–10 refusal is
+> code-identical** — the same `*OpenError` (`Err.Code`, `Rule`, `Details`) `Open` produces for
+> the same input — and **rule 11 (decode into `spec.Type`) is out of a type-free door's reach,
+> with a shape-free floor: a Subject plaintext that is not a valid JSON value is still refused
+> `SEAL_PAYLOAD_UNDECODABLE`**. The floor judges the plaintext rather than the document because
+> rule 10 already proved the document is a complete JSON object, so the plaintext — spliced
+> back over the Subject's byte span — is the one thing `Open` never validated shape-free.
+> So the no-accept-unsealed invariant (§6) holds identically:
+> what opens here and not through `Open` is only a document whose Subject decrypts to JSON of
+> the wrong shape for the typed door; a Subject decrypting to non-JSON is refused by both.
+> Nothing about the wire's authentication, encryption or slot checks (rules 1–10) is weakened.
+> Additive: no new wire format, no CLI, no keymaterial handling (later links of #1409).
+>
 > **Amended (2026-09-08, #1547):** the UNSEALED dedup key gains a second source. When a
 > delivery carries no `x-outbox-event-id` header at all, `Meta.DedupKey()` reads the AMQP
 > `message_id` property and validates it with the SAME `^[A-Za-z0-9_-]{1,128}$` grammar §4

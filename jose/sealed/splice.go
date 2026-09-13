@@ -16,6 +16,10 @@ import (
 type subjectSpan struct {
 	value      json.RawMessage
 	start, end int
+	// memberStart is the first byte of the WHOLE member — its leading comma when it has one,
+	// otherwise its key quote — for removeMember. walkToSubject computes it on every walk,
+	// sealer and opener alike, since it falls out of the same tokenizer pass at no extra cost.
+	memberStart int
 }
 
 var (
@@ -62,21 +66,23 @@ func walkToSubject(doc []byte, path string, refuseCaseFoldTwin bool) (subjectSpa
 	}
 	var found *subjectSpan
 	for dec.More() {
+		// dec.More()'s peek skips whitespace, so this offset is the member's first byte: its
+		// leading comma, or its key quote when it is the first member.
+		leadStart := int(dec.InputOffset())
 		key, raw, err := nextMember(dec)
 		if err != nil {
 			return subjectSpan{}, err
 		}
-		if key != path {
-			if refuseCaseFoldTwin && strings.EqualFold(key, path) {
-				return subjectSpan{}, errSubjectCaseFoldTwin
-			}
-			continue
-		}
-		if found != nil {
-			return subjectSpan{}, errSubjectDuplicate
-		}
 		end := int(dec.InputOffset())
-		found = &subjectSpan{value: raw, start: end - len(raw), end: end}
+		switch {
+		case key == path:
+			if found != nil {
+				return subjectSpan{}, errSubjectDuplicate
+			}
+			found = &subjectSpan{value: raw, start: end - len(raw), end: end, memberStart: leadStart}
+		case refuseCaseFoldTwin && strings.EqualFold(key, path):
+			return subjectSpan{}, errSubjectCaseFoldTwin
+		}
 	}
 	return finishWalk(dec, found)
 }
@@ -148,6 +154,21 @@ func spliceRaw(doc []byte, span subjectSpan, replacement []byte) []byte {
 	out := append([]byte(nil), doc[:span.start]...)
 	out = append(out, replacement...)
 	return append(out, doc[span.end:]...)
+}
+
+// removeMember returns doc with the member that span identifies deleted along with exactly
+// one adjacent separator, so the result stays a valid object; doc is not mutated.
+func removeMember(doc []byte, span subjectSpan) []byte {
+	end := span.end
+	if doc[span.memberStart] != ',' {
+		// A first member has no leading comma, so swallow the one that follows it instead —
+		// under JSON grammar only whitespace and that comma sit before the next key's quote.
+		if q := bytes.IndexByte(doc[end:], '"'); q != -1 {
+			end += q
+		}
+	}
+	out := append([]byte(nil), doc[:span.memberStart]...)
+	return append(out, doc[end:]...)
 }
 
 // isCompactJOSE reports whether s consists only of base64url characters and dots.

@@ -174,10 +174,94 @@ func (e *OpenError) Unwrap() error {
 // Rules 1–4 run on the peeked, still unauthenticated protected header, before any
 // signature parsing; nothing in rules 1–9 touches the inner JWE. Keys resolve per message
 // through opts.Keys. No clock is read: iat is surfaced, never judged.
+//
+// Rules 1–10 live in openCore, shared with OpenDocument (#1409), the type-free door that
+// returns the plaintext and the document apart instead of decoding into out.
 func Open(body []byte, spec *Spec, opts *OpenOptions, out any) (*Envelope, error) {
 	if err := checkOpenArgs(spec, opts, out); err != nil {
 		return nil, err
 	}
+	core, err := openCore(body, spec, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Rule 11 — the plaintext goes back over the JWE's byte span and the document decodes as
+	// T into a fresh value: out is written only once every rule has passed, so a refused
+	// message leaves the caller's value untouched.
+	opened := reflect.New(spec.Type)
+	if err := json.Unmarshal(spliceRaw(core.payload, core.span, core.plaintext), opened.Interface()); err != nil {
+		return nil, openCause(11, CodePayloadUndecodable, "opened document does not decode into the event type", fmt.Errorf("%T", err))
+	}
+	reflect.ValueOf(out).Elem().Set(opened.Elem())
+	return core.env, nil
+}
+
+// OpenDocument is the byte-level twin of Open (#1409): it runs the identical rule chain but
+// is type-free, so a caller with no Go type can open what Seal or SealDocument produced.
+// spec may come from NewDocumentSpec or from ScanType; OpenDocument never looks at
+// spec.Type, unlike Open, which requires it.
+//
+// It returns an *OpenedDocument: the document with the Subject member ABSENT rather than
+// substituting a redaction placeholder — the library never decides what a caller should
+// splice in its place — the decrypted subject plaintext separately, the offset the member
+// sat at, and the same Envelope Open would return for the same body.
+//
+// Every rule 1–10 refusal is code-identical to Open's: the same *OpenError Err.Code, Rule
+// and Details for the same input. Rule 11 (decode into spec.Type) is out of a type-free
+// door's reach; in its place stands the shape-free floor ADR-097 states — a Subject
+// plaintext that is not a valid JSON value is refused SEAL_PAYLOAD_UNDECODABLE at rule 11.
+func OpenDocument(body []byte, spec *Spec, opts *OpenOptions) (*OpenedDocument, error) {
+	if argErr := checkOpenOptionsArgs(spec, opts, "OpenDocument"); argErr != nil {
+		return nil, argErr
+	}
+	core, err := openCore(body, spec, opts)
+	if err != nil {
+		return nil, err
+	}
+	// Rule 10 proved payload is a complete JSON object and spliceRaw only substitutes the
+	// Subject value, so the spliced document is an object iff the plaintext is valid JSON.
+	if !json.Valid(core.plaintext) {
+		return nil, openError(11, ErrOpenFailed, CodePayloadUndecodable, "subject plaintext is not a valid JSON value", nil)
+	}
+	return &OpenedDocument{
+		Document:  removeMember(core.payload, core.span),
+		Subject:   core.plaintext,
+		SubjectAt: core.span.memberStart,
+		Envelope:  core.env,
+	}, nil
+}
+
+// OpenedDocument is what OpenDocument proved and recovered: the verified document with the
+// Subject member removed, that member's plaintext apart from it, and where it sat.
+type OpenedDocument struct {
+	// Document is the signed payload document with the Subject member absent — the member and
+	// exactly one adjacent separator are gone, so it is still a valid JSON object.
+	Document []byte
+	// Subject is the decrypted Subject plaintext: PAN-class data by construction. Never log,
+	// echo or otherwise emit it — rendering it is the caller's deliberate decision.
+	Subject []byte
+	// SubjectAt is the byte offset IN Document where the removed member sat: everything a
+	// caller splices in there (the member spelled with Subject as its value, or a redaction
+	// placeholder such as "<redacted>") lands back in the Subject's original position, so a
+	// renderer never has to append the member or re-walk the document to find its place.
+	SubjectAt int
+	// Envelope is what the message proved about itself — the same one Open returns.
+	Envelope *Envelope
+}
+
+// openedCore is what rules 1–10 and rule 12 hand to rule 11: the verified payload document,
+// the Subject's byte span within it, the decrypted Subject plaintext and the rule-12 Envelope.
+type openedCore struct {
+	payload   []byte
+	span      subjectSpan
+	plaintext []byte
+	env       *Envelope
+}
+
+// openCore runs rules 1–10 and rule 12. It is shared so Open and OpenDocument refuse
+// identically and differ only in what they do with the plaintext at rule 11.
+func openCore(body []byte, spec *Spec, opts *OpenOptions) (*openedCore, error) {
 	compact := string(body)
 
 	// Rules 1–4 on the unauthenticated peek; rule 5 authenticates the header.
@@ -213,17 +297,8 @@ func Open(body []byte, spec *Spec, opts *OpenOptions, out any) (*Envelope, error
 		return nil, err
 	}
 
-	// Rule 11 — the plaintext goes back over the JWE's byte span and the document decodes as
-	// T into a fresh value: out is written only once every rule has passed, so a refused
-	// message leaves the caller's value untouched.
-	opened := reflect.New(spec.Type)
-	if err := json.Unmarshal(spliceRaw(payload, span, plaintext), opened.Interface()); err != nil {
-		return nil, openCause(11, CodePayloadUndecodable, "opened document does not decode into the event type", fmt.Errorf("%T", err))
-	}
-	reflect.ValueOf(out).Elem().Set(opened.Elem())
-
 	// Rule 12 — the envelope. Every slot was validated by rule 6.
-	return &Envelope{
+	return &openedCore{payload: payload, span: span, plaintext: plaintext, env: &Envelope{
 		JTI:        slots.jti,
 		IssuedAt:   time.Unix(slots.issuedAt, 0).UTC(),
 		EventType:  slots.eventType,
@@ -231,7 +306,7 @@ func Open(body []byte, spec *Spec, opts *OpenOptions, out any) (*Envelope, error
 		SignKid:    hdr.Kid,
 		SignFamily: signFamily,
 		EncKid:     encKid,
-	}, nil
+	}}, nil
 }
 
 // peekOuter runs rules 1–4 on the peeked, still unauthenticated protected header: the
@@ -285,17 +360,15 @@ func checkPins(slots *authenticatedSlots, spec *Spec, opts *OpenOptions) error {
 
 // checkOpenArgs is the key-free pre-flight: wiring mistakes, reported with the sealer's
 // SEAL_OPTIONS_INVALID / SEAL_TYPE_MISMATCH codes (same sentinel, same class of error) as
-// an *OpenError with Rule 0, so every Open failure is one error type.
+// an *OpenError with Rule 0, so every Open failure is one error type. Open additionally
+// requires spec.Type, unlike OpenDocument's checkOpenOptionsArgs below: out must decode into
+// a concrete Go type, and a document Spec (nil Type) has none.
 func checkOpenArgs(spec *Spec, opts *OpenOptions, out any) error {
-	switch {
-	case spec == nil || spec.Type == nil:
+	if spec == nil || spec.Type == nil {
 		return preflightError(CodeOptionsInvalid, "Open requires a Spec from ScanType (a document Spec cannot open)")
-	case opts == nil:
-		return preflightError(CodeOptionsInvalid, "Open requires OpenOptions")
-	case opts.Keys == nil:
-		return preflightError(CodeOptionsInvalid, "Open requires a KeyResolver")
-	case opts.EventType == "":
-		return preflightError(CodeOptionsInvalid, "Open requires a non-empty EventType")
+	}
+	if err := checkOpenOptionsArgs(spec, opts, "Open"); err != nil {
+		return err
 	}
 	t := reflect.TypeOf(out)
 	if t == nil || t.Kind() != reflect.Pointer || t.Elem() != spec.Type {
@@ -303,6 +376,25 @@ func checkOpenArgs(spec *Spec, opts *OpenOptions, out any) error {
 	}
 	if reflect.ValueOf(out).IsNil() {
 		return preflightError(CodeTypeMismatch, fmt.Sprintf("out must be a non-nil *%v", spec.Type))
+	}
+	return nil
+}
+
+// checkOpenOptionsArgs is the part of the pre-flight Open and OpenDocument share: a Spec and
+// OpenOptions with a resolver and a declared EventType. It says nothing about spec.Type,
+// which only the typed door (Open) requires — OpenDocument is type-free and accepts a
+// document Spec (NewDocumentSpec) as readily as a scanned one. door names the caller's door
+// in the message, so a wiring mistake is never attributed to the other one.
+func checkOpenOptionsArgs(spec *Spec, opts *OpenOptions, door string) error {
+	switch {
+	case spec == nil:
+		return preflightError(CodeOptionsInvalid, door+" requires a Spec")
+	case opts == nil:
+		return preflightError(CodeOptionsInvalid, door+" requires OpenOptions")
+	case opts.Keys == nil:
+		return preflightError(CodeOptionsInvalid, door+" requires a KeyResolver")
+	case opts.EventType == "":
+		return preflightError(CodeOptionsInvalid, door+" requires a non-empty EventType")
 	}
 	return nil
 }
