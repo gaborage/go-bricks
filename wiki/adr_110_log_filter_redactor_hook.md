@@ -42,18 +42,22 @@ type author, the one party who knows which fields are secret, had no way to tell
    the opaque door and reflection all applied — but the hook is NOT consulted on the returned value
    itself, only on its children. A hook returning its own type therefore terminates after one pass
    instead of recursing to depth exhaustion and masking whole, while a `Redactor` nested inside the
-   returned shape is still honored.
+   returned shape is still honored. The rule is by position, not by type: a hook that returns a
+   DIFFERENT `Redactor` directly has that value walked by reflection, so it must call the inner
+   method itself (`return inner.RedactedForLog()`) or nest the value in its result.
 4. **Scope.** The `Err` door is untouched: `FilterConfig.ErrorRedactor` stays the error-text seam,
    and an error that also implements `Redactor` renders `Error()` at `Err` as before. The package
    ships no test double; the hook is a single method, so a test-local type is the fixture.
 
 ## Consequences
 
-A type author can make a value safe to log wherever it ends up, instead of every call site
-remembering not to log it. The returned shape is still filtered, so a hook that forgets a field the
-needle list names is backstopped rather than trusted. A hook is consumer code on the logging path;
-it runs inside the log call like `ErrorRedactor` does. Types that do not implement the interface
-render byte-identically, so this is not a breaking change and has no migrations atom.
+A type author can control the value's shape wherever a filtered logger's `Interface` or `WithFields`
+logs it, instead of every call site remembering not to log it. It is not consulted without a filter,
+at `Err`, or through `Msgf` formatting. The returned shape is still filtered, so a hook that forgets
+a field the needle list names is backstopped rather than trusted. A hook is consumer code on the
+logging path with no recover around it: a panicking hook propagates out of the log call. Types that
+do not implement the interface render byte-identically, so this is not a breaking change and has no
+migrations atom.
 
 ## References
 

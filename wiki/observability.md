@@ -227,7 +227,7 @@ of the value — through `Interface` and `WithFields`, at any depth inside a str
 
 ```go
 func (c Card) RedactedForLog() any {
-    return map[string]any{"holder": c.Holder, "last4": c.PAN[len(c.PAN)-4:]}
+    return map[string]any{"holder": c.Holder, "last4": c.PAN[max(len(c.PAN)-4, 0):]}
 }
 ```
 
@@ -236,6 +236,9 @@ func (c Card) RedactedForLog() any {
 - **The result is still filtered.** Needles, the opaque-payload door and depth limits apply to it,
   so a forgotten `password` key is still masked. The hook runs once per value: it is not called
   again on its own result (a method returning its own type terminates), only on values nested in it.
+  That includes a different `Redactor` returned directly — call its method yourself instead.
+- **Filtered logger, `Interface`/`WithFields` only.** Without a filter, at `Err`, and through `Msgf`
+  the method is not consulted. It runs inside the log call with no recover, so a panic propagates.
 - **A sensitive key still wins.** A value logged under a key the filter names is masked whole
   without calling the method. `Err` is unaffected — `ErrorRedactor` remains the error-text seam.
 - **Opt-in.** `json.Marshaler` and `fmt.Stringer` are not consulted; a type without the method
