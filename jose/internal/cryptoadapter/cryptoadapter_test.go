@@ -176,8 +176,8 @@ func TestDecryptAndVerifyRejectOversizedProtectedHeader(t *testing.T) {
 		ExpectedKid: "test-key", AllowedSigAlgs: []jose.SignatureAlgorithm{jose.RS256},
 	})
 	assert.Nil(t, payload, "a refusal must return no payload")
-	assert.ErrorIs(t, err, ErrParseSigned)
-	assert.ErrorIs(t, err, ErrHeaderTooLarge, "the size refusal stays distinguishable on the verify door too")
+	require.ErrorIs(t, err, ErrParseSigned)
+	require.ErrorIs(t, err, ErrHeaderTooLarge, "the size refusal stays distinguishable on the verify door too")
 
 	encrypted, err := Encrypt([]byte(`{"a":1}`), &key.PublicKey, &EncryptOptions{
 		Kid: "test-key", KeyAlg: jose.RSA_OAEP_256, Enc: jose.A256GCM, Extra: bigExtra(maxPeekHeaderBytes),
@@ -191,13 +191,13 @@ func TestDecryptAndVerifyRejectOversizedProtectedHeader(t *testing.T) {
 		AllowedContentEnc: []jose.ContentEncryption{jose.A256GCM},
 	})
 	assert.Nil(t, plaintext, "a refusal must return no plaintext")
-	assert.ErrorIs(t, err, ErrParseEncrypted)
-	assert.ErrorIs(t, err, ErrHeaderTooLarge, "the size refusal stays distinguishable inside the chain")
+	require.ErrorIs(t, err, ErrParseEncrypted)
+	require.ErrorIs(t, err, ErrHeaderTooLarge, "the size refusal stays distinguishable inside the chain")
 
 	// A generic parse failure must NOT carry the size class, or the distinction is useless.
 	_, _, err = Verify("not.a.jws", &key.PublicKey, &VerifyOptions{AllowedSigAlgs: []jose.SignatureAlgorithm{jose.RS256}})
-	assert.ErrorIs(t, err, ErrParseSigned)
-	assert.NotErrorIs(t, err, ErrHeaderTooLarge)
+	require.ErrorIs(t, err, ErrParseSigned)
+	require.NotErrorIs(t, err, ErrHeaderTooLarge)
 }
 
 // Both doors must carry that refusal, not only the shared gate.
@@ -208,15 +208,15 @@ func TestDecryptAndVerifyRefuseOneByteOverTheCap(t *testing.T) {
 	_, _, err := Verify(over+".payload.signature", &key.PublicKey, &VerifyOptions{
 		AllowedSigAlgs: []jose.SignatureAlgorithm{jose.RS256},
 	})
-	assert.ErrorIs(t, err, ErrParseSigned)
-	assert.ErrorIs(t, err, ErrHeaderTooLarge)
+	require.ErrorIs(t, err, ErrParseSigned)
+	require.ErrorIs(t, err, ErrHeaderTooLarge)
 
 	_, _, err = Decrypt(over+".key.iv.ciphertext.tag", key, &DecryptOptions{
 		AllowedKeyAlgs:    []jose.KeyAlgorithm{jose.RSA_OAEP_256},
 		AllowedContentEnc: []jose.ContentEncryption{jose.A256GCM},
 	})
-	assert.ErrorIs(t, err, ErrParseEncrypted)
-	assert.ErrorIs(t, err, ErrHeaderTooLarge)
+	require.ErrorIs(t, err, ErrParseEncrypted)
+	require.ErrorIs(t, err, ErrHeaderTooLarge)
 }
 
 // go-jose strips surrounding whitespace before parsing, so a token read from a file with a
@@ -233,6 +233,23 @@ func TestVerifyToleratesSurroundingWhitespace(t *testing.T) {
 	assert.JSONEq(t, `{"a":1}`, string(payload))
 }
 
+// RFC 7515 s7.1 and RFC 7516 s7.1 spell the compact serialization as BASE64URL parts joined
+// by dots, with no whitespace anywhere; go-jose strips interior whitespace before parsing,
+// which is leniency beyond the grammar. A line-wrapped compact is refused here.
+func TestVerifyRefusesInteriorWhitespace(t *testing.T) {
+	key := newKey(t)
+	signed, err := Sign([]byte(`{"a":1}`), key, &SignOptions{Kid: "k", SigAlg: jose.RS256})
+	require.NoError(t, err)
+	wrapped := signed[:20] + "\n" + signed[20:]
+
+	payload, _, err := Verify(wrapped, &key.PublicKey, &VerifyOptions{
+		ExpectedKid: "k", AllowedSigAlgs: []jose.SignatureAlgorithm{jose.RS256},
+	})
+	assert.Nil(t, payload)
+	require.ErrorIs(t, err, ErrParseSigned, "the wire sees the door's generic parse failure")
+	require.ErrorIs(t, err, ErrNotCompact)
+}
+
 // go-jose accepts JSON serialization as well as compact, and a JSON body's dot-delimited
 // runs say nothing about its "protected" member: a decoy holding two dots would carry an
 // unbounded header past a length check on the first run alone. Both doors take compact only.
@@ -244,16 +261,16 @@ func TestDecryptAndVerifyRejectJSONSerialization(t *testing.T) {
 	_, _, err := Verify(jsonJWS, &key.PublicKey, &VerifyOptions{
 		AllowedSigAlgs: []jose.SignatureAlgorithm{jose.RS256},
 	})
-	assert.ErrorIs(t, err, ErrParseSigned)
-	assert.ErrorIs(t, err, ErrNotCompact, "the refusal must come from the shape guard, not from go-jose downstream")
+	require.ErrorIs(t, err, ErrParseSigned)
+	require.ErrorIs(t, err, ErrNotCompact, "the refusal must come from the shape guard, not from go-jose downstream")
 
 	jsonJWE := `{"dec":"a.b.c","protected":"` + huge + `","ciphertext":"x","tag":"y","iv":"z"}`
 	_, _, err = Decrypt(jsonJWE, key, &DecryptOptions{
 		AllowedKeyAlgs:    []jose.KeyAlgorithm{jose.RSA_OAEP_256},
 		AllowedContentEnc: []jose.ContentEncryption{jose.A256GCM},
 	})
-	assert.ErrorIs(t, err, ErrParseEncrypted)
-	assert.ErrorIs(t, err, ErrNotCompact)
+	require.ErrorIs(t, err, ErrParseEncrypted)
+	require.ErrorIs(t, err, ErrNotCompact)
 }
 
 // The bound must not be so tight that a fat but legitimate header is refused.

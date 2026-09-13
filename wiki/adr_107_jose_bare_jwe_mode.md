@@ -12,8 +12,11 @@
 > too: a JSON-serialized body did open through Decrypt and Verify. Refusing it aligns the
 > implementation with the documented contract rather than changing it, and the refusal is
 > named `ErrNotCompact` inside the door's existing generic parse error. One behaviour does
-> narrow: go-jose strips INTERIOR whitespace before parsing, so a line-wrapped compact used to
-> open; it is now refused. Surrounding whitespace is still trimmed, so a token read from a file
+> narrow: RFC 7515 §7.1 and RFC 7516 §7.1 define the compact serialization as BASE64URL parts
+> joined by dots, with no whitespace anywhere, but go-jose strips interior whitespace before
+> parsing, so a line-wrapped compact used to open; it is now refused. That is a narrowing to
+> the grammar the RFCs already state, not a change of contract — go-jose's tolerance was
+> leniency the framework never documented. Surrounding whitespace is still trimmed, so a token read from a file
 > with a trailing newline is unaffected.
 
 ## Amendment (2026-09-13, #1579): a 2xx response that was not unwrapped is a transport error
