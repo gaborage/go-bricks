@@ -34,8 +34,9 @@ If that yields nothing, fall back to `git diff HEAD` and `git diff --staged`.
    `git grep -nE 'f\.Raw\(|jf\.Raw\(|database\.Raw\(|SetExpr\(|Having\(|MustExpr\(|[.]Expr\(|RawExpression\{'`,
    cross-check against the diff, and flag any added or modified hit without an
    adjacent `// SECURITY: Manual SQL review completed - <rationale>` naming a
-   specific property. Squirrel's own `Expr` inside `database/internal/builder`
-   is plumbing — skip those hits. `database.Raw` deserves at least as much
+   specific property. Squirrel's own `Expr` inside `database/internal/builder`,
+   and the `Expr`/`MustExpr` doors themselves (`database/types`, the builder,
+   `testing/mocks`), are plumbing — skip those hits. `database.Raw` deserves at least as much
    scrutiny as `f.Raw`/`jf.Raw`: it replaces the whole statement. The rule
    itself lives in root CLAUDE.md Security Guidelines.
 

@@ -5138,7 +5138,8 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   site naming what you checked — value-side parameterization, no user input concatenated.
 - verify: `git grep -nE 'Having\(|MustExpr\(|[.]Expr\(|RawExpression\{' -- '*.go'` and confirm
   every string-predicate and expression hit has an annotation above it (squirrel's own `Expr`
-  inside `database/internal/builder` is plumbing — skip those hits); then run one query each way and read the SQL — the expression form must
+  inside `database/internal/builder`, and the `Expr`/`MustExpr` doors themselves
+  (`database/types`, the builder, `testing/mocks`), are plumbing — skip those hits); then run one query each way and read the SQL — the expression form must
   render `HAVING SUM(amount) > $2` (`:2` on Oracle) with the arg numbered AFTER any `Where`
   arg, and `Having(qb.MustExpr("x > ?", "alias"), 1)` must fail `ToSQL()` with
   `errors.Is(err, dbtypes.ErrAliasInHaving)`. Use a DANGEROUS alias as a second case —
