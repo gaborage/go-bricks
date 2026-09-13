@@ -427,7 +427,8 @@ the builder. The grammar will not accept a computed one.
   expression is an error, since a predicate projects nothing. One grep finds every
   door (canonical list: root CLAUDE.md Security Guidelines), `git grep -nE
   'f\.Raw\(|jf\.Raw\(|database\.Raw\(|SetExpr\(|Having\(|MustExpr\(|[.]Expr\(|RawExpression\{'`
-  — squirrel's own `Expr` inside `database/internal/builder` is plumbing; skip those hits.
+  — squirrel's own `Expr` inside `database/internal/builder`, and the `Expr`/`MustExpr`
+  doors themselves (`database/types`, the builder, `testing/mocks`), are plumbing; skip those hits.
 - **`BuildUpsert`'s column maps** answer to the upsert's own preconditions rather
   than to this grammar — a stricter question ("is this one column the vendor's
   upsert syntax can name"). Since `[C61.15]` that question has **one answer on
