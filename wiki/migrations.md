@@ -7709,33 +7709,6 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   this field fronts, and the declare-equivalence check that makes the flip a topology change) ·
   `messaging/helpers.go`
 
----
-
-## E65 · v0.64.0 → v0.65.0 — `BuildUpsert` preconditions become matchable sentinels
-
-- gist: `database/types` exports `ErrUpsertConflictColumnsRequired`,
-  `ErrUpsertConflictColumnNotInserted` and `ErrUpsertConflictColumnUpdated`, which
-  `BuildUpsert` returns for its three preconditions (C65.1, #998).
-
----
-
-### [C65.1] `BuildUpsert` precondition errors wrap exported sentinels · silent-behavior · when: match
-
-- detect: `git grep -n -e 'must be present in insert columns' -e 'collides with conflict column' -- '*.go'`
-  over your own modules — any hit outside go-bricks is code or a test matching the message text.
-- scope: `ErrUpsertConflictColumnsRequired` is returned bare, text unchanged; the other two are
-  wrapped with the offending columns, so their wording changes.
-- gate: match = a hit that compares or searches the error text of either wrapped precondition.
-  no-match = no hit, or every hit already uses `errors.Is`.
-- before: `conflict column "c" must be present in insert columns for upsert` and
-  `update column "u" collides with conflict column "c" (…)`, matched by text.
-- after: `<sentinel>: column "c"` and `<sentinel>: update column "u", conflict column "c"`;
-  match with `errors.Is(err, types.ErrUpsertConflictColumnNotInserted)` /
-  `errors.Is(err, types.ErrUpsertConflictColumnUpdated)` instead of the text.
-- verify: `go build ./... && go test ./...`
-- ref: gaborage/go-bricks#998 · `[C59.7]` · `[C59.8]` · `database/types/errors.go` ·
-  `database/internal/builder/helpers.go`
-
 ### [C60.17] the HTTP trace headers and the AMQP delivery identity are validated before every FRAMEWORK sink · silent-behavior · when: always
 
 - detect: your Go code cannot tell you this either — every offending value comes from a
@@ -8623,6 +8596,38 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
 - ref: [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) (its 2026-08-23
   addendum) · [ADR-081](adr_081_recovered_panic_values_reported_by_type.md) (why the panic
   value is a typed error) · issue #1150
+
+---
+
+## E65 · v0.64.0 → v0.65.0 — `BuildUpsert` preconditions become matchable sentinels
+
+- gist: `database/types` exports `ErrUpsertConflictColumnsRequired`,
+  `ErrUpsertConflictColumnNotInserted` and `ErrUpsertConflictColumnInUpdateSet`, which
+  `BuildUpsert` returns for its three preconditions (C65.1, #998).
+
+---
+
+### [C65.1] `BuildUpsert` precondition errors wrap exported sentinels · silent-behavior · when: match
+
+- detect: `git grep -n -e 'must be present in insert columns' -e 'collides with conflict column' -- '*.go'`
+  over your own modules — any hit outside go-bricks is code or a test matching the message text.
+- scope: `ErrUpsertConflictColumnsRequired` is returned bare, text unchanged; the other two are
+  wrapped with the offending columns, so their wording changes. Both phrases above survive in
+  the new messages.
+- gate: match = a hit that compares either wrapped precondition's FULL message (`EqualError`,
+  `err.Error() ==`) or uses a pattern spanning the quoted column's old place
+  (`conflict column "c" must be present`, `update column "u" collides`). no-match = no hit,
+  every hit already uses `errors.Is`, or a hit that only substring-matches
+  `must be present in insert columns` / `collides with conflict column` — that still passes.
+- before: `conflict column "c" must be present in insert columns for upsert` and
+  `update column "u" collides with conflict column "c" (…)`.
+- after: `<sentinel text>: column "c"` and `<sentinel text>: update column "u", conflict column "c"`.
+- apply: replace the text match with `errors.Is(err, types.ErrUpsertConflictColumnNotInserted)` /
+  `errors.Is(err, types.ErrUpsertConflictColumnInUpdateSet)`; substring-match the quoted
+  column if you still need it.
+- verify: `go build ./... && go test ./...`
+- ref: gaborage/go-bricks#998 · [C59.7] · [C59.8] · `database/types/errors.go` ·
+  `database/internal/builder/helpers.go`
 
 ## Observability Config Keys — Flat-Smushed Rename (#554)
 
