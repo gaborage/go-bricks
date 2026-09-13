@@ -9459,7 +9459,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   then grants the tenant's runtime role DML over all of them — reopening at the end exactly the
   exposure the revokes had just closed, and reopening it invisibly, because every arm that hunts
   `nspname = 'public'` has stopped matching any namespace. Moving the tenant's own objects out by
-  an explicit list touches nothing else, leaves every arm able to answer, and removes the
+  an explicit list MOVES nothing else — though another application may still resolve to a moved
+  object, which is step 5's precondition — leaves every arm able to answer, and removes the
   ownership problem by construction: the tenant's schema is created fresh and owned by the
   migrator, so this procedure has no ownership-transfer step at all.
 
@@ -9468,18 +9469,25 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   | reserved field | schema the residue is in | steps |
   | -------------- | ------------------------ | ----- |
   | `RuntimeRole` spelled `public`, `Schema` fine | your ordinary tenant schema | 1–4, then 6 — no object move |
-  | `MigratorRole` spelled `public`, `Schema` fine | your ordinary tenant schema | 1–4, then 6 — no object move |
+  | `MigratorRole` spelled `public`, `Schema` fine | no schema at all — `CREATE SCHEMA … AUTHORIZATION "public"` is refused on both paths, so the schema named in `Schema` was never created | 1–4, then 6 — role-scope lines only in step 2, no object move |
   | `Schema` spelled `public` | `public` itself | all six |
 
-  In the two role cases, substitute your ordinary tenant-schema name for `public` throughout
+  In the `RuntimeRole` case, substitute your ordinary tenant-schema name for `public` throughout
   steps 1–3 and skip step 5 — the tenant's objects already live in a schema of its own, so there
   is nothing to move and nothing this atom has to decide about `public`. The `MigratorRole` case
-  usually has nothing to revoke either: the Go helper aborts on its very FIRST statement and
-  leaves nothing at all, and on the `PGRoleProvisioningSQL` path run without `ON_ERROR_STOP`
-  the name `public` appears only as an `AUTHORIZATION` clause and a `FOR ROLE`, both of which
-  the server refuses, so no privilege ever reached the PUBLIC pseudo-role. What that path does
-  leave is residue rather than exposure — a created, locked-down runtime role whose `search_path`
-  points at a schema that was never created — and step 4 is the whole repair.
+  has no schema to substitute AND nothing to revoke: the Go helper aborts on its very FIRST
+  statement and leaves nothing at all, and on the `PGRoleProvisioningSQL` path run without
+  `ON_ERROR_STOP` the name `public` appears only as an `AUTHORIZATION` clause and a `FOR ROLE`,
+  both of which the server refuses — so no privilege ever reached the PUBLIC pseudo-role and
+  `CREATE SCHEMA IF NOT EXISTS "<schema>" AUTHORIZATION "public"` never created the schema the
+  spec named. What that path does leave is residue rather than exposure — a created, locked-down
+  runtime role whose `search_path` points at a schema that was never created. Run only
+  role-scope lines in step 2 there, which this template emits none of: every line of both of its
+  scripts carries an `IN SCHEMA`/`ON SCHEMA` clause naming a schema that does not exist, and
+  running one errors `schema "…" does not exist`. Skip them all; step 4 is the whole repair.
+  Neither role case changes a SCHEMA name, so neither repoints a connection string for one — but
+  if your corrected spec gives a role a new NAME, repoint the credentials that used the old one
+  once step 4 has run.
 
   A case variant the server ACCEPTED as a real role (`"Public"`, `"PG_x"`) is a fourth case and
   stands outside this procedure: it renames a ROLE and is described above.
@@ -9496,7 +9504,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
      (sequences are `pg_class` rows too), the third the `schema` row, and the last two the
      `default_acl` rows, which no `REVOKE … ON ALL …` touches because they govern objects that do
      not exist yet. `"your_schema"` is `"public"` in the `Schema` case and your ordinary
-     tenant-schema name in the two role cases:
+     tenant-schema name in the `RuntimeRole` case. In the `MigratorRole` case there is no such
+     schema — `CREATE SCHEMA … AUTHORIZATION "public"` is refused on both paths, so the schema
+     the spec named was never created: run role-scope lines only, which means skipping every
+     `IN SCHEMA`/`ON SCHEMA` line, which is every line of both scripts below. Step 2 is empty in
+     that case; step 4 is its whole repair.
 
      ```sql
      REVOKE ALL ON ALL TABLES IN SCHEMA "your_schema" FROM PUBLIC;
@@ -9523,6 +9535,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
      replace them with one `REVOKE … ON public.<object> FROM PUBLIC` per `relation` row the grant
      query reported. The `FOR ROLE` must name the same `MigratorRole` that granted them, or the
      revoke silently targets a different default-ACL row and the `default_acl` finding survives.
+
+     **Run the two `ALTER DEFAULT PRIVILEGES FOR ROLE "your_migrator"` lines as a role that is a
+     MEMBER of that migrator** (or as superuser) — the same privileged role that runs
+     provisioning will do. PostgreSQL refuses the statement outright otherwise, so a plain
+     `CREATEROLE` provisioner clears no `default_acl` row at all; under psql without
+     `ON_ERROR_STOP` the script prints the error and carries on, and the only sign left is the
+     survivor verify's arm 3a reports.
 
      Those five revoke nothing the FOURTH query reported, because those rows went to a real role
      rather than to PUBLIC — so in the `Schema` case run this second script too, once for every
@@ -9574,18 +9593,30 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
        session default (`"$user", public`), which for the migrator is exactly the wrong-schema
        failure `search_path` exists to prevent.
 
-     Then repoint every application connection string, credential and `flyway.conf` that named
-     the old schema. One consequence to expect: if you re-provision under DIFFERENT role names,
+     **Do NOT repoint any connection string or `flyway.conf` yet** — that is the LAST action of
+     step 5, and moving it earlier destroys data: `tenant_a` exists but is EMPTY until step 5
+     moves the objects, so one Flyway run against it re-applies every migration from V1 and
+     writes a fresh `flyway_schema_history`, after which step 5's
+     `ALTER TABLE public.<t> SET SCHEMA "tenant_a"` fails `relation already exists` on every
+     object and you hold two divergent copies with nothing to reconcile them.
+     One consequence to expect: if you re-provision under DIFFERENT role names,
      the old roles keep their `search_path=public` rows, so the schema-residue query still
      reports them until you `ALTER ROLE … RESET search_path` or drop them by hand.
   5. **Move the tenant's OWN objects out of `public`, from an explicit list YOU write** — the
      `Schema` case only. One `ALTER TABLE public.<t> SET SCHEMA "tenant_a"` per table, plus the
      migration history table (`flyway_schema_history` unless you renamed it), plus any standalone
-     sequence. Only the objects you name move; nothing else in `public` is touched, which is the
-     whole reason this replaced a rename. Build the list from the catalog and READ it before you
-     run it — `SELECT relname, relkind FROM pg_class c JOIN pg_namespace n ON n.oid =
+     sequence. Only the objects you name move. Build the list from the catalog and READ it before
+     you run it — `SELECT relname, relkind FROM pg_class c JOIN pg_namespace n ON n.oid =
      c.relnamespace WHERE n.nspname = 'public'` — and strike out anything that is not this
      tenant's.
+
+     **PRECONDITION: move only objects this tenant OWNS and that no other application resolves
+     through `search_path = public`.** `ALTER TABLE … SET SCHEMA` rewrites the dependent views
+     and constraints PostgreSQL knows about; it does NOT rewrite another application's
+     unqualified SQL, which resolved the name through `search_path = public` and will simply
+     stop finding it — silently, at that application's next query, with no error here. If
+     anything outside this tenant depends on an object, repoint that application first; doing so
+     is out of scope for this atom, and the object does not move until it is done.
 
      - `ALTER TABLE … SET SCHEMA` requires OWNERSHIP of the object (or superuser). Run it as the
        same privileged role that runs provisioning, or as a member of the owning role.
@@ -9602,23 +9633,45 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
        `TestPGRolesProvisioningIsIdempotent` pins that a second run changes nothing it should
        not — and the second run is what re-grants them. The default privileges issued in step 4
        do not cover this: they apply to objects the migrator CREATES later, never to moved ones.
+     - **LAST, and only now: repoint every application connection string, credential and
+       `flyway.conf` that named the old schema.** It waits until here because `tenant_a` is empty
+       until the move above and ungranted until the second provisioning run: repointing any
+       earlier lets a Flyway run re-apply every migration from V1 into the empty schema, after
+       which the move fails `relation already exists` on every object and the tenant's data sits
+       in two divergent copies. Nothing between step 4 and here needs the new connection string;
+       every statement in steps 4 and 5 runs as your privileged provisioning role.
   6. **Verify** as described below.
 
   A schema genuinely shared by design is not a tenant schema — provision it outside this
   helper. (b) Nothing to do.
 - verify: rerun your provisioning call and check it returns nil; the refusal is
-  `errors.Is(err, migration.ErrReservedPGIdentifier)` if it does not. Then confirm the objects
-  moved — `SELECT schemaname, count(*) FROM pg_tables GROUP BY 1` must count them under
-  `tenant_a` and no longer under `public` — and confirm the NEW schema is owned by the migrator:
+  `errors.Is(err, migration.ErrReservedPGIdentifier)` if it does not.
+
+  The next two checks are case-split, and where a check has nothing to assert it is **N/A, not a
+  pass** — an assertion whose silence is meaningless has to say so out loud.
+
+  - **Objects moved — the `Schema` case only; N/A in both role cases.**
+    `SELECT schemaname, count(*) FROM pg_tables GROUP BY 1` must count the tenant's tables under
+    `tenant_a` and no longer under `public`. Both role cases run steps 1–4 then 6 with no object
+    move, so the tenant's tables never left the schema they were always in and this check
+    asserts nothing about them.
+  - **The new schema is owned by the migrator — a verdict wherever step 4 CREATED the schema;
+    N/A where it did not.** Step 4 created it in the `Schema` case, in the `MigratorRole` case
+    (where `CREATE SCHEMA … AUTHORIZATION "public"` had been refused, so no schema existed), and
+    in the `RuntimeRole` case on the Go-helper path (which aborted before any `CREATE SCHEMA`).
+    It is N/A only in the `RuntimeRole` case on the `PGRoleProvisioningSQL` script path, where
+    the original run already created the schema correctly and step 4's `IF NOT EXISTS` was a
+    no-op over an already-migrator-owned schema. Substitute the schema your spec names:
 
   ```sql
   SELECT nspowner::regrole FROM pg_namespace WHERE nspname = 'tenant_a'
   ```
 
-  It must name your migrator. Anything else means `tenant_a` already existed when step 4 ran, so
-  its `CREATE SCHEMA IF NOT EXISTS … AUTHORIZATION` was the whole-statement no-op described
-  above and the schema kept the owner it had; the migrator then cannot run DDL in it and the
-  next migration fails on its first `CREATE`, whatever the ACL queries say.
+  Where it is a verdict it must name your migrator. Anything else means `tenant_a` already
+  existed when step 4 ran, so its `CREATE SCHEMA IF NOT EXISTS … AUTHORIZATION` was the
+  whole-statement no-op described above and the schema kept the owner it had; the migrator then
+  cannot run DDL in it and the next migration fails on its first `CREATE`, whatever the ACL
+  queries say.
 
   Then rerun the detect arms. Four readings are verdicts and two are not — read those two as no
   evidence, never as a pass:
@@ -9639,7 +9692,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   - **Arm 3a, the schema-residue query's `default_acl` arm — verdict.** It is keyed on
     `nspname = 'public'`, a namespace this procedure never renames, so it still means what it
     says. Must return no row naming a migrator of yours: those are the rows step 2's second
-    script revoked, and a survivor says the `FOR ROLE` or the grantee was wrong.
+    script revoked. Read a survivor in this order: FIRST, the role that ran the revoke was not a
+    member of the migrator named in `FOR ROLE`, so PostgreSQL refused the statement outright and
+    psql without `ON_ERROR_STOP` carried on past it — the common miss for a plain `CREATEROLE`
+    provisioner, and the one to rule out before any other; only then, that the `FOR ROLE` or the
+    grantee named the wrong role and the revoke silently cleared a different default-ACL row.
   - **Arm 3b, the same query's `search_path` arm — no evidence.** Step 4 OVERWROTE the value it
     matches: `ALTER ROLE … SET search_path = "tenant_a"` replaces the stored setting in place.
     That overwrite IS the fix, not a gap — the roles no longer default to `public` because they
