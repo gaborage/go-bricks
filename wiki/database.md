@@ -202,6 +202,7 @@ query := qb.Select("*").
     )).
     JoinOn(dbtypes.MustTable("products").MustAs("p"), jf.And(
         jf.EqColumn("p.id", "o.product_id"),
+        // SECURITY: Manual SQL review completed - fixed conversion of a joined column, no user input
         jf.Eq("p.price", qb.MustExpr("TO_NUMBER(o.max_price)")),
     )).
     Where(f.Eq("o.status", "pending"))
@@ -226,8 +227,10 @@ productCols := qb.Columns(&Product{})
 
 p := productCols.As("p")
 
+// SECURITY: Manual SQL review completed - constant literal, no user input
 subquery := qb.Select(qb.MustExpr("1")).From("reviews").
     Where(f.And(
+        // SECURITY: Manual SQL review completed - correlated column identifier from struct tags, no user input
         f.Eq("reviews."+reviewCols.Col("ProductID"), qb.MustExpr(p.Col("ID"))),
         f.Eq(reviewCols.Col("Rating"), 5),
     ))
@@ -242,6 +245,7 @@ query := qb.Select(p.Col("Name")).
 ## SELECT Expressions (v2.1+)
 
 ```go
+// SECURITY: Manual SQL review completed - fixed aggregates over a declared column, no caller input
 query := qb.Select(
     cols.Col("Category"),
     qb.MustExpr("COUNT(*)", "product_count"),
@@ -249,11 +253,15 @@ query := qb.Select(
 ).From("products").GroupBy(cols.Col("Category"))
 ```
 
-**SECURITY WARNING:** Raw SQL expressions are NOT escaped. Never interpolate user input:
+**SECURITY WARNING:** Raw SQL expressions are NOT escaped, and every call site carries the `// SECURITY: Manual SQL review completed - <rationale>` annotation (see [What is not an identifier door](#what-is-not-an-identifier-door)). Never interpolate user input:
 
 ```go
-qb.MustExpr("COUNT(*)", "total")                  // SAFE
-qb.MustExpr(fmt.Sprintf("UPPER(%s)", userInput))  // SQL INJECTION
+// SAFE
+// SECURITY: Manual SQL review completed - constant aggregate, no caller input
+qb.MustExpr("COUNT(*)", "total")
+
+// SQL INJECTION — no annotation can make this safe
+qb.MustExpr(fmt.Sprintf("UPPER(%s)", userInput))
 ```
 
 Use WHERE with placeholders for dynamic **values**: `qb.Select("*").From("users").Where(f.Eq(cols.Col("Status"), userValue))`. Note the column is a struct-tag lookup, not a variable: the value is parameterized, the column is interpolated, and only the value may come from the caller.
@@ -302,6 +310,7 @@ ordinary identifier character on Oracle and an operator on PostgreSQL.
 
 ```go
 qb.Select("a#b")                     // Oracle: renders. PostgreSQL: ToSQL() error
+// SECURITY: Manual SQL review completed - constant literal and alias, no user input
 qb.MustExpr("1", "a#b")              // same — the alias is an identifier position
 qb.Select(`"a#b"`)                   // SAFE on both: a quoted identifier escapes the alphabet
 qb.Insert("t").SetMap(map[string]any{"a#b": 1})   // PostgreSQL: ToSQL() error
@@ -385,14 +394,13 @@ the builder. The grammar will not accept a computed one.
 ### What is not an identifier door
 
 - **`Having`** takes a *predicate*, not an identifier, so no identifier grammar
-  can judge it and its argument is interpolated as written. Treat a STRING
-  predicate as raw SQL — it is annotated like `f.Raw` (see the door list below);
-  `Having(qb.MustExpr(...))` is the sanctioned expression form and is not.
-  `InsertQueryBuilder.Prefix`, `.Suffix` and `.Options` are the same shape, and
+  can judge it and its argument is interpolated as written: both a STRING
+  predicate and the preferred `Having(qb.MustExpr(...))` are raw-SQL doors (list
+  below). `InsertQueryBuilder.Prefix`, `.Suffix` and `.Options` are the same shape, and
   unlike `Having` they have no `qb.Expr()` alternative.
 - **`qb.Expr()` / `MustExpr()`** are the declared expression hatches: they exist
   to carry SQL the grammar refuses, and the builder still places what they
-  produce. They carry no annotation requirement. The builder judges neither the
+  produce. The builder judges neither the
   syntax nor the semantics of the SQL they carry — it does reject an empty or
   whitespace-only body — and the rest of a `RawExpression` is validated too: a
   struct literal built without the constructor is checked where it is consumed,
@@ -408,19 +416,20 @@ the builder. The grammar will not accept a computed one.
   `VALUES` cell projects nothing, so it could only be dropped silently.
   `BuildUpsert`'s column maps are NOT value doors: a `RawExpression` there is
   bound as a parameter and fails at the driver.
-- **`f.Raw()`, `jf.Raw()`, `database.Raw()` and a STRING predicate passed to
-  `Having()`** do. Each admits arbitrary SQL — the first two a WHERE/JOIN fragment,
-  `database.Raw` the whole statement, `Having` the group predicate — and each
-  requires an inline `// SECURITY: Manual SQL review completed - <rationale>`
-  comment at every call site, which is what makes them grep-discoverable.
-  `Having` also takes a `qb.Expr()` `RawExpression`, which is the preferred
-  spelling and carries no annotation duty; an alias on it is an error, since a
-  predicate projects nothing. That exemption is for CONSISTENCY with
-  `Select`/`GroupBy`/`OrderBy`, **not** a safety claim: `RawExpression.Validate()`
-  checks only that the SQL is non-empty and the alias is clean — it never inspects
-  the SQL body, which carries the same injection risk as the string form and is
-  reviewed as raw SQL. Its audit hook is its own name, `git grep -nE
-  'MustExpr\(|[.]Expr\(|RawExpression\{'`, rather than an annotation.
+- **`f.Raw()`, `jf.Raw()`, `database.Raw()`, an UPDATE `SetExpr()`, a STRING
+  predicate passed to `Having()`, and every `RawExpression` SQL body** do. Each
+  admits arbitrary SQL — the first two a WHERE/JOIN fragment, `database.Raw` the
+  whole statement, `SetExpr` a SET-clause value, `Having` the group predicate, an
+  expression whatever door consumes it — and each requires an inline
+  `// SECURITY: Manual SQL review completed - <rationale>`
+  comment at every call site, a `qb.Expr()`, `qb.MustExpr()` or struct-literal
+  construction included: `RawExpression.Validate()` checks only that the SQL is
+  non-empty and the alias is clean, never the body. An alias on a `Having`
+  expression is an error, since a predicate projects nothing. One grep finds every
+  door (canonical list: root CLAUDE.md Security Guidelines), `git grep -nE
+  'f\.Raw\(|jf\.Raw\(|database\.Raw\(|SetExpr\(|Having\(|MustExpr\(|[.]Expr\(|RawExpression\{'`
+  — squirrel's own `Expr` inside `database/internal/builder`, and the `Expr`/`MustExpr`
+  doors themselves (`database/types`, the builder, `testing/mocks`), are plumbing; skip those hits.
 - **`BuildUpsert`'s column maps** answer to the upsert's own preconditions rather
   than to this grammar — a stricter question ("is this one column the vendor's
   upsert syntax can name"). Since `[C61.15]` that question has **one answer on
@@ -728,6 +737,7 @@ if database.IsLockNotAvailable(err) {
 **Scalar subqueries in the projection.** `SubqueryColumn(sub, alias)` appends `(sub) AS alias`, so a stats snapshot is one round trip:
 
 ```go
+// SECURITY: Manual SQL review completed - fixed aggregates over a declared column, no caller input
 tenants := qb.Select(qb.MustExpr("COUNT(*)")).From(held).Where(f.Eq("consumer", c))
 oldest := qb.Select(qb.MustExpr("MIN(held_since)")).From(held).Where(f.Eq("consumer", c))
 stats := qb.Select().SubqueryColumn(tenants, "tenants").SubqueryColumn(oldest, "oldest")

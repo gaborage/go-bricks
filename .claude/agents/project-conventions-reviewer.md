@@ -30,17 +30,15 @@ If that yields nothing, fall back to `git diff HEAD` and `git diff --staged`.
 
 ## Checklist (report every violation; cite file:line)
 
-1. **Raw-SQL annotation (Security First).** Every `f.Raw(` / `jf.Raw(` /
-   `database.Raw(` call site added or modified in the diff MUST have an
-   adjacent `// SECURITY: Manual SQL review completed - <rationale>` comment,
-   and the rationale must name a specific property (identifier quoting,
-   value-side parameterization, no user-input concatenation). `database.Raw`
-   deserves at least as much scrutiny as the other two: `f.Raw`/`jf.Raw` are
-   fragments inside a builder that still validates its other identifiers,
-   whereas `database.Raw` replaces the whole statement, bypassing the
-   builder's identifier validation entirely. Find them with:
-   `git grep -nE 'f\.Raw\(|jf\.Raw\(|database\.Raw\('` and cross-check against
-   the diff.
+1. **Raw-SQL annotation (Security First).** Run
+   `git grep -nE 'f\.Raw\(|jf\.Raw\(|database\.Raw\(|SetExpr\(|Having\(|MustExpr\(|[.]Expr\(|RawExpression\{'`,
+   cross-check against the diff, and flag any added or modified hit without an
+   adjacent `// SECURITY: Manual SQL review completed - <rationale>` naming a
+   specific property. Squirrel's own `Expr` inside `database/internal/builder`,
+   and the `Expr`/`MustExpr` doors themselves (`database/types`, the builder,
+   `testing/mocks`), are plumbing — skip those hits. `database.Raw` deserves at least as much
+   scrutiny as `f.Raw`/`jf.Raw`: it replaces the whole statement. The rule
+   itself lives in root CLAUDE.md Security Guidelines.
 
 2. **S8179 getter naming.** New exported getters must be `X()` not `GetX()`.
    The migration table in CLAUDE.md intentionally keeps old `Get*` names — do
