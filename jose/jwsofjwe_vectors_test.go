@@ -31,12 +31,21 @@ const (
 const jwsVectorNote = "Generated test material for the jose JWS-of-JWE vectors (go test ./jose -update): " +
 	"tokens signed and encrypted under the disposable keys in keys.json. Never provisioned anywhere; nothing to rotate."
 
-// jwsOfJWEVector is one published token plus the verdict the opener must reach.
+// jwsOfJWEVector is one published token plus the verdict the opener must reach. The build
+// knobs are `json:"-"`: they describe how -update produces the token, so they live in the Go
+// table only and never reach the fixture file.
 type jwsOfJWEVector struct {
 	Name      string `json:"name"`
 	Code      string `json:"code"` // "" for a vector that must open
 	Plaintext string `json:"plaintext,omitempty"`
 	Compact   string `json:"compact"`
+
+	SignKid     string                  `json:"-"`
+	SigAlg      jose.SignatureAlgorithm `json:"-"`
+	OuterCty    string                  `json:"-"` // "" writes no cty header
+	OmitKid     bool                    `json:"-"`
+	TamperInner bool                    `json:"-"`
+	InnerOnly   bool                    `json:"-"` // publish the bare inner JWE, unsigned
 }
 
 type jwsOfJWEVectorFile struct {
@@ -46,7 +55,7 @@ type jwsOfJWEVectorFile struct {
 
 // buildJWSofJWEVector encrypts then signs with go-jose directly, so headers Seal would
 // never write (a missing cty, RS256, a rogue signer) can be produced.
-func buildJWSofJWEVector(t *testing.T, name string, keys map[string]*rsa.PrivateKey) string {
+func buildJWSofJWEVector(t *testing.T, v *jwsOfJWEVector, keys map[string]*rsa.PrivateKey) string {
 	t.Helper()
 	encOpts := (&jose.EncrypterOptions{
 		ExtraHeaders: map[jose.HeaderKey]any{jose.HeaderKey("iat"): vecIATMs},
@@ -59,35 +68,23 @@ func buildJWSofJWEVector(t *testing.T, name string, keys map[string]*rsa.Private
 	inner, err := obj.CompactSerialize()
 	require.NoError(t, err)
 
-	if name == "jwe_outer_body" {
+	if v.InnerOnly {
 		return inner
 	}
-	if name == "tampered_inner_ciphertext" {
+	if v.TamperInner {
 		inner = tamperSegment(t, inner, 3)
-	}
-
-	signKid, sigAlg := vecEncKid, jose.PS256
-	switch name {
-	case "rogue_signing_kid":
-		signKid = vecRogueKid
-	case "outer_rs256":
-		sigAlg = jose.RS256
 	}
 
 	signOpts := (&jose.SignerOptions{
 		ExtraHeaders: map[jose.HeaderKey]any{jose.HeaderKey("iat"): vecIATSecs},
 	}).WithType("JOSE")
-	if name != "outer_kid_missing" {
-		signOpts = signOpts.WithHeader(jose.HeaderKey("kid"), signKid)
+	if !v.OmitKid {
+		signOpts = signOpts.WithHeader(jose.HeaderKey("kid"), v.SignKid)
 	}
-	switch name {
-	case "outer_cty_missing":
-	case "outer_cty_jws":
-		signOpts = signOpts.WithContentType("JWS")
-	default:
-		signOpts = signOpts.WithContentType("JWE")
+	if v.OuterCty != "" {
+		signOpts = signOpts.WithContentType(jose.ContentType(v.OuterCty))
 	}
-	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: sigAlg, Key: keys[signKid]}, signOpts)
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: v.SigAlg, Key: keys[v.SignKid]}, signOpts)
 	require.NoError(t, err)
 	signed, err := signer.Sign([]byte(inner))
 	require.NoError(t, err)
@@ -113,18 +110,25 @@ func tamperSegment(t *testing.T, compact string, segment int) string {
 
 func regenerateJWSofJWEVectors(t *testing.T, keys map[string]*rsa.PrivateKey) []jwsOfJWEVector {
 	t.Helper()
+	valid := jwsOfJWEVector{SignKid: vecEncKid, SigAlg: jose.PS256, OuterCty: ctyJWE}
+	vector := func(name, code string, mutate func(v *jwsOfJWEVector)) jwsOfJWEVector {
+		v := valid
+		v.Name, v.Code = name, code
+		mutate(&v)
+		return v
+	}
 	vectors := []jwsOfJWEVector{
-		{Name: "jwsofjwe_ps256", Plaintext: vecPlain},
-		{Name: "outer_cty_missing", Code: codeCtyRejected},
-		{Name: "outer_cty_jws", Code: codeCtyRejected},
-		{Name: "outer_kid_missing", Code: codeKidMissing},
-		{Name: "outer_rs256", Code: codeAlgorithmDisallowed},
-		{Name: "rogue_signing_kid", Code: codeKidUnknown},
-		{Name: "tampered_inner_ciphertext", Code: codeDecryptFailed},
-		{Name: "jwe_outer_body", Code: codeOuterNotJWS},
+		vector("jwsofjwe_ps256", "", func(v *jwsOfJWEVector) { v.Plaintext = vecPlain }),
+		vector("outer_cty_missing", codeCtyRejected, func(v *jwsOfJWEVector) { v.OuterCty = "" }),
+		vector("outer_cty_jws", codeCtyRejected, func(v *jwsOfJWEVector) { v.OuterCty = ctyNestedJWS }),
+		vector("outer_kid_missing", codeKidMissing, func(v *jwsOfJWEVector) { v.OmitKid = true }),
+		vector("outer_rs256", codeAlgorithmDisallowed, func(v *jwsOfJWEVector) { v.SigAlg = jose.RS256 }),
+		vector("rogue_signing_kid", codeKidUnknown, func(v *jwsOfJWEVector) { v.SignKid = vecRogueKid }),
+		vector("tampered_inner_ciphertext", codeDecryptFailed, func(v *jwsOfJWEVector) { v.TamperInner = true }),
+		vector("jwe_outer_body", codeOuterNotJWS, func(v *jwsOfJWEVector) { v.InnerOnly = true }),
 	}
 	for i := range vectors {
-		vectors[i].Compact = buildJWSofJWEVector(t, vectors[i].Name, keys)
+		vectors[i].Compact = buildJWSofJWEVector(t, &vectors[i], keys)
 	}
 	raw, err := json.MarshalIndent(jwsOfJWEVectorFile{Note: jwsVectorNote, Vectors: vectors}, "", "  ")
 	require.NoError(t, err)
