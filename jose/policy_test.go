@@ -210,6 +210,11 @@ func TestPolicyValidateRejectsSealHeaderFieldsWhereTheyAreNeverWritten(t *testin
 			p.ProtectedHeaders = map[string]any{}
 		}, codePolicyDirectionMismatch},
 		{"bare_inbound_iat_millis", bareInbound, func(p *Policy) { p.IATMillis = true }, codePolicyDirectionMismatch},
+		{"jws_of_jwe_inbound_typ", jwsOfJWEInbound, func(p *Policy) { p.Typ = "JOSE" }, codePolicyDirectionMismatch},
+		{"jws_of_jwe_inbound_protected_headers", jwsOfJWEInbound, func(p *Policy) {
+			p.ProtectedHeaders = map[string]any{}
+		}, codePolicyDirectionMismatch},
+		{"jws_of_jwe_inbound_iat_millis", jwsOfJWEInbound, func(p *Policy) { p.IATMillis = true }, codePolicyDirectionMismatch},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -295,12 +300,9 @@ func TestPolicyValidateContentEncPerMode(t *testing.T) {
 
 // jwsOfJWEOutbound / jwsOfJWEInbound are minimally valid JWS-of-JWE policies the mode tests mutate.
 func jwsOfJWEOutbound() *Policy {
-	return &Policy{
-		Direction: DirectionOutbound,
-		Mode:      SealModeJWSofJWE,
-		SignKid:   "our-key", EncryptKid: "peer-key",
-		SigAlg: jose.PS256, KeyAlg: DefaultKeyAlg, Enc: jose.A256GCM,
-	}
+	p := nestedOutbound()
+	p.Mode = SealModeJWSofJWE
+	return p
 }
 
 func jwsOfJWEInbound() *Policy {
@@ -308,7 +310,7 @@ func jwsOfJWEInbound() *Policy {
 		Direction:  DirectionInbound,
 		Mode:       SealModeJWSofJWE,
 		DecryptKid: "our-key", VerifyKid: "peer-key",
-		SigAlg: jose.PS256, KeyAlg: DefaultKeyAlg, Enc: jose.A256GCM,
+		SigAlg: DefaultSigAlg, KeyAlg: DefaultKeyAlg, Enc: DefaultEnc,
 	}
 }
 
@@ -343,11 +345,6 @@ func TestPolicyValidateJWSofJWEModeRules(t *testing.T) {
 		{"inbound_without_verify_kid", jwsOfJWEInbound, func(p *Policy) { p.VerifyKid = "" }, codePolicyIncomplete},
 		{"inbound_with_sign_kid", jwsOfJWEInbound, func(p *Policy) { p.SignKid = "our-key" }, codePolicyDirectionMismatch},
 		{"inbound_with_encrypt_kid", jwsOfJWEInbound, func(p *Policy) { p.EncryptKid = "peer-key" }, codePolicyDirectionMismatch},
-		{"inbound_typ", jwsOfJWEInbound, func(p *Policy) { p.Typ = "JOSE" }, codePolicyDirectionMismatch},
-		{"inbound_protected_headers", jwsOfJWEInbound, func(p *Policy) {
-			p.ProtectedHeaders = map[string]any{}
-		}, codePolicyDirectionMismatch},
-		{"inbound_iat_millis", jwsOfJWEInbound, func(p *Policy) { p.IATMillis = true }, codePolicyDirectionMismatch},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
