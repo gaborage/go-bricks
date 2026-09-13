@@ -520,9 +520,11 @@ func buildError(op string, err error) error {
 // on Oracle).
 func (q *holdQueries) stats(consumer string) dbtypes.SelectQueryBuilder {
 	f := q.qb.Filter()
-	// SECURITY: Manual SQL review completed - constant aggregates over the package-constant colHeldSince, no caller input
+	// SECURITY: Manual SQL review completed - COUNT(*), literal-only, no caller input
 	tenants := q.qb.Select(q.qb.MustExpr("COUNT(*)")).From(q.tenantTable).Where(f.Eq(colConsumer, consumer))
+	// SECURITY: Manual SQL review completed - COUNT(*), literal-only, no caller input
 	rows := q.qb.Select(q.qb.MustExpr("COUNT(*)")).From(q.table).Where(f.Eq(colConsumer, consumer))
+	// SECURITY: Manual SQL review completed - MIN(colHeldSince), package-constant column, no caller input
 	oldest := q.qb.Select(q.qb.MustExpr("MIN(" + colHeldSince + ")")).From(q.tenantTable).Where(f.Eq(colConsumer, consumer))
 	return q.qb.Select().
 		SubqueryColumn(tenants, "tenants").
