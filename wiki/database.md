@@ -840,7 +840,7 @@ func RelayLedger(ctx context.Context, db database.Interface) (err error) {
     // returns the connection to the pool without ending the backend, so a
     // session lock that was not released rides along on a recycled connection.
     // The unlock runs on a cleanup context that ignores caller cancellation but
-    // is still bounded, so it fires even when ctx is already cancelled.
+    // is still bounded, so it fires even when ctx is already canceled.
     defer func() {
         unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
         defer cancel()
