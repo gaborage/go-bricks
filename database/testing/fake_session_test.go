@@ -51,8 +51,8 @@ func TestTestSessionQueryExecAndDatabaseType(t *testing.T) {
 	require.NoError(t, err)
 
 	func() {
-		rows, err := sess.Query(t.Context(), sessionSelectSQL, 42)
-		require.NoError(t, err)
+		rows, queryErr := sess.Query(t.Context(), sessionSelectSQL, 42)
+		require.NoError(t, queryErr)
 		defer rows.Close()
 	}()
 
@@ -184,8 +184,8 @@ func TestTestSessionLogsRecordStatements(t *testing.T) {
 	require.NoError(t, err)
 
 	func() {
-		rows, err := sess.Query(t.Context(), sessionSelectSQL, 42)
-		require.NoError(t, err)
+		rows, queryErr := sess.Query(t.Context(), sessionSelectSQL, 42)
+		require.NoError(t, queryErr)
 		defer rows.Close()
 	}()
 	_, err = sess.Exec(t.Context(), sessionExecSQL)
