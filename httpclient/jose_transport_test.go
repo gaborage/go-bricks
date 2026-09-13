@@ -625,7 +625,7 @@ func TestJOSETransportJOSETypedHeadResponseIsNotUnwrapped(t *testing.T) {
 }
 
 func TestJOSETransportBodylessResponsesAreNotUnwrapped(t *testing.T) {
-	// 1xx, 204, 304 and every reply to HEAD carry no body by definition. Driven through a
+	// 204, 304, every reply to HEAD and any status below 200 are outside the unwrap set. Driven through a
 	// stub Inner rather than an httptest server because net/http's server strips
 	// Content-Type from a 304 (RFC 7232 §4.1), so a real Go peer cannot produce the
 	// JOSE-typed 304 shape under test.
@@ -780,6 +780,105 @@ func (b bodylessResponder) RoundTrip(_ *http.Request) (*http.Response, error) {
 		Header:     http.Header{"Content-Type": []string{contentType}},
 		Body:       http.NoBody,
 	}, nil
+}
+
+// bodiedResponder replies at a fixed status with a caller-supplied body: the hand-rolled
+// Inner net/http does not police, putting bytes on a shape the skip set exempts.
+type bodiedResponder struct {
+	status int
+	body   io.ReadCloser
+}
+
+func (b bodiedResponder) RoundTrip(_ *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode:    b.status,
+		Header:        http.Header{"Content-Type": []string{jose.ContentType}},
+		Body:          b.body,
+		ContentLength: -1,
+	}, nil
+}
+
+func TestJOSETransportBodylessSkipArmsNormalizeTheBody(t *testing.T) {
+	// WithTransport takes any RoundTripper and net/http strips nothing from what one returns,
+	// so an Inner that supplies a body on a status the skip set exempts would otherwise hand
+	// the caller bytes no Inbound policy opened.
+	f := jositest.NewBidirectionalFixture(t)
+
+	tests := []struct {
+		name   string
+		method string
+		status int
+	}{
+		{name: "no_content_204", method: http.MethodDelete, status: http.StatusNoContent},
+		{name: "not_modified_304", method: http.MethodGet, status: http.StatusNotModified},
+		{name: "head_reply_200", method: http.MethodHead, status: http.StatusOK},
+		{name: "early_hints_103", method: http.MethodGet, status: http.StatusEarlyHints},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			peerBody := newCloseTrackingBody(`{"smuggled":true}`)
+			transport := newJOSETransport(f)
+			transport.Inner = bodiedResponder{status: tc.status, body: peerBody}
+
+			//nolint:gocritic // literal nil, not http.NoBody, reproduces a real GET/DELETE/HEAD's nil req.Body
+			req, err := http.NewRequestWithContext(context.Background(), tc.method, "http://example.invalid", nil)
+			require.NoError(t, err)
+
+			resp, err := transport.RoundTrip(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			read, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			assert.Empty(t, read, "the peer's bytes must not reach the caller")
+			assert.Equal(t, 1, peerBody.closes, "the peer's body must be closed exactly once")
+			assert.Zero(t, resp.ContentLength)
+		})
+	}
+}
+
+func TestJOSETransportSwitchingProtocolsKeepsItsBody(t *testing.T) {
+	// 101 is below 200, so skipsUnwrap skips it on the status alone — but it is the one
+	// sub-200 status a RoundTripper returns as a terminal response, and its Body is the live
+	// upgraded connection. Closing it or swapping in NoBody would break the caller's stream.
+	f := jositest.NewBidirectionalFixture(t)
+	peerBody := newCloseTrackingBody("upgraded stream")
+	transport := newJOSETransport(f)
+	transport.Inner = bodiedResponder{status: http.StatusSwitchingProtocols, body: peerBody}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.invalid", http.NoBody)
+	require.NoError(t, err)
+
+	resp, err := transport.RoundTrip(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	read, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, "upgraded stream", string(read))
+	assert.Zero(t, peerBody.closes, "the upgraded connection must stay open")
+}
+
+func TestJOSETransportPassthroughModeLeavesTheBodyAlone(t *testing.T) {
+	// With no Inbound policy the transport does nothing to responses, so even a 204's body
+	// reaches the caller as Inner built it.
+	peerBody := newCloseTrackingBody(`{"ok":true}`)
+	transport := &httpclient.JOSETransport{
+		Inner: bodiedResponder{status: http.StatusNoContent, body: peerBody},
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, "http://example.invalid", http.NoBody)
+	require.NoError(t, err)
+
+	resp, err := transport.RoundTrip(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	read, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"ok":true}`, string(read))
+	assert.Zero(t, peerBody.closes)
 }
 
 func TestIsJOSEErrorDistinguishesTransportFromCrypto(t *testing.T) {

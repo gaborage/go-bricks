@@ -69,10 +69,12 @@ type BodyEnvelope interface {
 // and verify-then-decrypt on a SealModeJWSofJWE policy.
 //
 // Only bodies are protected: a request with no body is forwarded unsealed regardless of
-// method, and a response net/http guarantees is empty (1xx, 204, 304, any reply to HEAD) is
-// returned as-is even when it advertises application/jose. Every other response carrying that
-// content type is decrypted and verified, including shapes that are bodyless by RFC but not
-// by net/http — see unwrapResponse for why the guarantee, not the RFC, sets the boundary.
+// method, and a response net/http guarantees is empty (204, 304, any reply to HEAD, and the
+// 1xx a RoundTripper never returns) is returned with an empty body even when it advertises
+// application/jose. 101 is skipped too but keeps its body, which is the upgraded connection.
+// Every other response carrying that content type is decrypted and verified, including shapes
+// that are bodyless by RFC but not by net/http — see unwrapResponse for why the guarantee,
+// not the RFC, sets the boundary.
 //
 // Architectural placement: JOSETransport sits below the httpclient retry loop, so each
 // retry attempt produces a freshly-sealed request — important for protocols that
@@ -253,6 +255,7 @@ func (t *JOSETransport) wrapRequest(req *nethttp.Request) (*nethttp.Request, err
 // one; responses that definitionally carry no body pass through untouched either way.
 func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Response) error {
 	if t.skipsUnwrap(req, resp) {
+		t.emptyBodyIfGuaranteed(req, resp)
 		return nil
 	}
 
@@ -283,18 +286,9 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 		return fmt.Errorf("httpclient: read response body: %w", err)
 	}
 
-	compact := string(raw)
-	if t.Envelope != nil {
-		extracted, ok := t.Envelope.Unwrap(resp.Header.Get(headerContentType), raw)
-		if !ok {
-			if t.refusesPlaintext(resp.StatusCode) {
-				replaceBody(resp, nil, "")
-				return errPlaintextSuccess(resp.StatusCode)
-			}
-			replaceBody(resp, raw, "")
-			return nil
-		}
-		compact = extracted
+	compact, done, err := t.compactFrom(resp, raw)
+	if done || err != nil {
+		return err
 	}
 
 	plaintext, _, _, err := jose.Open(compact, t.Inbound, t.Resolver)
@@ -355,8 +349,59 @@ func (t *JOSETransport) skipsUnwrap(req *nethttp.Request, resp *nethttp.Response
 	// connection — reading that would hang, not error. The method comes from the request, not
 	// resp.Request: *http.Transport back-fills that field but the RoundTripper contract does
 	// not require an Inner to, so it can be nil.
+	return bodylessByGuarantee(req, resp)
+}
+
+// bodylessByGuarantee names the response shapes net/http pins at zero length.
+func bodylessByGuarantee(req *nethttp.Request, resp *nethttp.Response) bool {
 	return resp.StatusCode < nethttp.StatusOK || resp.StatusCode == nethttp.StatusNoContent ||
 		resp.StatusCode == nethttp.StatusNotModified || req.Method == nethttp.MethodHead
+}
+
+// normalizesEmptyBody reports the skip arms whose body must be discarded rather than passed
+// on. Inner is a caller-supplied RoundTripper and net/http strips nothing from what one
+// returns, so a malformed or hostile implementation can put bytes on exactly the shapes the
+// rule exempts — bytes no Inbound policy ever opened, handed back under a status the peer
+// chose. Closing and substituting NoBody costs nothing where the guarantee holds.
+//
+// Deliberately narrower than skipsUnwrap. A nil Inbound is the documented "transport does
+// nothing" mode, where the response must arrive exactly as Inner built it, and 101 is a
+// terminal response whose Body wraps the live upgraded connection: closing that would break
+// the caller's stream, and it is skipped on the status alone.
+func (t *JOSETransport) normalizesEmptyBody(req *nethttp.Request, resp *nethttp.Response) bool {
+	if t.Inbound == nil || resp == nil || resp.Body == nil {
+		return false
+	}
+	return resp.StatusCode != nethttp.StatusSwitchingProtocols && bodylessByGuarantee(req, resp)
+}
+
+// emptyBodyIfGuaranteed drops a body net/http promises is absent, so a hand-rolled Inner
+// cannot smuggle unverified bytes through a shape the rule exempts.
+func (t *JOSETransport) emptyBodyIfGuaranteed(req *nethttp.Request, resp *nethttp.Response) {
+	if !t.normalizesEmptyBody(req, resp) {
+		return
+	}
+	_ = resp.Body.Close()
+	resp.Body = nethttp.NoBody
+	resp.ContentLength = 0
+}
+
+// compactFrom yields the compact to open. done reports that the response was settled here:
+// an Envelope that declines a body either refuses the round trip or hands the bytes back.
+func (t *JOSETransport) compactFrom(resp *nethttp.Response, raw []byte) (compact string, done bool, err error) {
+	if t.Envelope == nil {
+		return string(raw), false, nil
+	}
+	extracted, ok := t.Envelope.Unwrap(resp.Header.Get(headerContentType), raw)
+	if ok {
+		return extracted, false, nil
+	}
+	if t.refusesPlaintext(resp.StatusCode) {
+		replaceBody(resp, nil, "")
+		return "", true, errPlaintextSuccess(resp.StatusCode)
+	}
+	replaceBody(resp, raw, "")
+	return "", true, nil
 }
 
 // refusesPlaintext reports whether an unopened body at this status must be refused; see

@@ -4424,9 +4424,14 @@ replaces that Content-Type rule with its `Unwrap` verdict and buffers every elig
 `MaxResponseBytes`) before it runs. **A 2xx must have been unwrapped** in either mode: a successful
 response the `Inbound` policy never opened is refused with `httpclient.ErrJOSEPlaintextResponse`
 (match with `errors.Is`) — body closed and never handed to the caller or a response interceptor, and
-wrapped with the status. 204/304/HEAD are skipped as before and are not violations.
+wrapped with the status. The refusal is terminal: it never enters the retry loop, because the peer
+already honored the request and a retry would only duplicate a non-idempotent side effect.
+204/304/HEAD are skipped as before and are not violations.
 Set `AllowPlaintextSuccess: true` only while a peer legitimately answers some 2xx routes in plaintext
-(Strangler migration). Only bodies are sealed: a request with no body goes out unsealed
+(Strangler migration). It is transport-wide: with `Inbound` set it allows EVERY eligible plaintext 2xx,
+not selected routes — split the integration into a strict client and an opted-out one if only some
+routes are unprotected. With `Inbound` nil the flag is moot: the transport skips response processing
+entirely, so nothing is unwrapped, judged or refused. Only bodies are sealed: a request with no body goes out unsealed
 whatever the method, so give a payload-free `POST` an explicit `{}` body if the
 partner requires `application/jose` on every request.
 
@@ -4436,7 +4441,7 @@ partner requires `application/jose` on every request.
 client, err := httpclient.NewBuilder(log).
     WithJOSE(httpclient.JOSEConfig{
         Outbound: mleOutbound, // *jose.Policy — optional (seals requests; bare mode encrypts only); nil = requests go out unsealed
-        Inbound:  mleInbound,  // *jose.Policy — optional (opens responses; bare mode decrypts only); nil = plaintext responses
+        Inbound:  mleInbound,  // *jose.Policy — optional (opens responses; bare mode decrypts only); nil = responses pass through unprocessed
         Resolver: resolver,       // jose.KeyResolver — supplies keys for both directions
         // Optional body envelope: nil sends/expects the bare compact as application/jose.
         // httpclient.VisaMLEEnvelope() returns the one for Visa Message Level Encryption
@@ -4445,7 +4450,7 @@ client, err := httpclient.NewBuilder(log).
         // neither policy fails Build — as does a negative MaxResponseBytes when an
         // Envelope and Inbound are both set (without an Envelope, negative stays unbounded).
         Envelope: httpclient.VisaMLEEnvelope(), // httpclient.BodyEnvelope
-        // AllowPlaintextSuccess: true, // opt out of the 2xx-must-be-unwrapped rule (Strangler only)
+        // AllowPlaintextSuccess: true, // opt the WHOLE transport out of the 2xx-must-be-unwrapped rule (Strangler only)
     }).
     Build()
 if err != nil {
