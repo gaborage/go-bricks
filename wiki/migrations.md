@@ -7713,33 +7713,25 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
 
 ## E65 · v0.64.0 → v0.65.0 — `BuildUpsert` preconditions become matchable sentinels
 
-- gist: `BuildUpsert`'s three preconditions had no matchable identity, so `[C59.7]` and
-  `[C59.8]` could only hand consumers replacement strings. `database/types` now exports
-  `ErrUpsertConflictColumnsRequired`, `ErrUpsertConflictColumnNotInserted` and
-  `ErrUpsertConflictColumnUpdated`; the builder returns or wraps them with `%w`, keeping the
-  offending columns in the message (C65.1, #998).
+- gist: `database/types` exports `ErrUpsertConflictColumnsRequired`,
+  `ErrUpsertConflictColumnNotInserted` and `ErrUpsertConflictColumnUpdated`, which
+  `BuildUpsert` returns for its three preconditions (C65.1, #998).
 
 ---
 
 ### [C65.1] `BuildUpsert` precondition errors wrap exported sentinels · silent-behavior · when: match
 
-- detect: `git grep -n -e 'must be present in insert columns' -e 'collides with conflict column' -e 'conflict columns required' -- '*.go'`
+- detect: `git grep -n -e 'must be present in insert columns' -e 'collides with conflict column' -- '*.go'`
   over your own modules — any hit outside go-bricks is code or a test matching the message text.
-- scope: `database/internal/builder` (`helpers.go`, `oracle.go`) returns the new
-  `database/types` sentinels. Which preconditions exist and when they fire is unchanged.
-  `ErrUpsertConflictColumnsRequired` is returned bare and its text is unchanged; the other two
-  are wrapped, so their wording changes.
+- scope: `ErrUpsertConflictColumnsRequired` is returned bare, text unchanged; the other two are
+  wrapped with the offending columns, so their wording changes.
 - gate: match = a hit that compares or searches the error text of either wrapped precondition.
   no-match = no hit, or every hit already uses `errors.Is`.
 - before: `conflict column "c" must be present in insert columns for upsert` and
-  `update column "u" collides with conflict column "c" (Oracle MERGE forbids updating ON-clause columns, ORA-38104; rejected on all vendors for parity)`
-  — neither `errors.Is`-able.
-- after: `conflict column must be present in insert columns for upsert: column "c"` and
-  `update column collides with conflict column (…ORA-38104…): update column "u", conflict column "c"`.
-  Replace text matching with `errors.Is(err, types.ErrUpsertConflictColumnNotInserted)` /
-  `errors.Is(err, types.ErrUpsertConflictColumnUpdated)` (and
-  `types.ErrUpsertConflictColumnsRequired` for the empty case) rather than re-pinning the new
-  strings; keep only a column-name `Contains` if you assert which column was named.
+  `update column "u" collides with conflict column "c" (…)`, matched by text.
+- after: `<sentinel>: column "c"` and `<sentinel>: update column "u", conflict column "c"`;
+  match with `errors.Is(err, types.ErrUpsertConflictColumnNotInserted)` /
+  `errors.Is(err, types.ErrUpsertConflictColumnUpdated)` instead of the text.
 - verify: `go build ./... && go test ./...`
 - ref: gaborage/go-bricks#998 · `[C59.7]` · `[C59.8]` · `database/types/errors.go` ·
   `database/internal/builder/helpers.go`
