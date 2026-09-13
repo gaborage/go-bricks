@@ -52,6 +52,8 @@ type PGRoleSpec struct {
 
 	// IdentifierPolicy optionally tightens the identifier rule Validate
 	// applies to Schema, MigratorRole and RuntimeRole; nil means the floor alone.
+	// Leave the field unset for that — storing a typed nil
+	// PGIdentifierPolicyFunc is a non-nil interface, and is refused.
 	IdentifierPolicy PGIdentifierPolicy
 }
 
@@ -67,10 +69,26 @@ type PGIdentifierPolicy interface {
 }
 
 // PGIdentifierPolicyFunc adapts a plain function to PGIdentifierPolicy.
+//
+// A typed nil of this type stored in PGRoleSpec.IdentifierPolicy is NOT the
+// same as no policy: the interface value is non-nil, so Validate does consult
+// it. Rather than panic on the nil call, the adapter refuses every identifier,
+// so such a spec fails Validate instead of taking the process down. Leave the
+// field unset for "no policy".
 type PGIdentifierPolicyFunc func(value string) error
 
-// CheckPGIdentifier calls f.
-func (f PGIdentifierPolicyFunc) CheckPGIdentifier(value string) error { return f(value) }
+// errNilPGIdentifierPolicyFunc is what a nil PGIdentifierPolicyFunc refuses
+// with; checkIdentifier wraps it with ErrInvalidPGIdentifier like any other
+// policy refusal.
+var errNilPGIdentifierPolicyFunc = errors.New("migration: IdentifierPolicy holds a nil PGIdentifierPolicyFunc")
+
+// CheckPGIdentifier calls f, or refuses when f is nil.
+func (f PGIdentifierPolicyFunc) CheckPGIdentifier(value string) error {
+	if f == nil {
+		return errNilPGIdentifierPolicyFunc
+	}
+	return f(value)
+}
 
 // checkIdentifier applies the identifier floor to the field's value and, when a
 // policy is configured, the policy on top of it. A refusal from either is

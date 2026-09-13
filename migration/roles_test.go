@@ -543,3 +543,17 @@ func TestPGRoleSpecValidateFloorRunsBeforePolicy(t *testing.T) {
 	require.ErrorIs(t, spec.Validate(), ErrInvalidPGIdentifier)
 	assert.Zero(t, consulted, "policy must not see an identifier the floor already refused")
 }
+
+// A typed nil in the interface field is non-nil as an interface, so the adapter
+// is called. It must refuse rather than panic on the nil call.
+func TestPGRoleSpecValidateRefusesNilPolicyFunc(t *testing.T) {
+	spec := &PGRoleSpec{
+		Schema:           "tenant_a",
+		MigratorRole:     "m",
+		RuntimeRole:      "r",
+		IdentifierPolicy: PGIdentifierPolicyFunc(nil),
+	}
+	require.NotPanics(t, func() {
+		require.ErrorIs(t, spec.Validate(), ErrInvalidPGIdentifier)
+	})
+}

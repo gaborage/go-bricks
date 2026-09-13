@@ -152,7 +152,10 @@ to a `PGIdentifierPolicy` (or wrap a plain `func(value string) error` in
 `PGIdentifierPolicyFunc`). The floor above always runs first, so a policy can
 only tighten it — never re-admit a name the floor rejected — and it is consulted
 once per identifier, in `Schema` → `MigratorRole` → `RuntimeRole` order, stopping
-at the first refusal. A nil policy means the floor alone. The policy's error is
+at the first refusal. A nil policy means the floor alone; note that a *typed*
+nil `PGIdentifierPolicyFunc` stored in the field is a non-nil interface and is
+therefore still consulted — it refuses every identifier rather than panicking,
+so leave the field unset rather than assigning one. The policy's error is
 wrapped with `ErrInvalidPGIdentifier` and the failing field name, so the policy
 need not identify the identifier it judged.
 
