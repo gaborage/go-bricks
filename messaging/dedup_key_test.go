@@ -155,11 +155,17 @@ type dedupKeySites struct {
 // scanDedupKeySites type-checks this package rather than walking names: type
 // resolution is what closes the alias, conversion and elided-literal holes a
 // name walk misses. The cost is a toolchain dependency — it resolves imports
-// from `go list -export -deps`, so `go` must be on PATH.
+// from `go list -export -deps`, so `go` must be on PATH. GoFiles omits files
+// behind build constraints, so a constrained production file fails the scan
+// rather than hiding a mint from it.
 func scanDedupKeySites(t *testing.T) *dedupKeySites {
 	t.Helper()
 	dir, err := build.ImportDir(".", 0)
 	require.NoError(t, err)
+	for _, name := range dir.IgnoredGoFiles {
+		require.Truef(t, strings.HasSuffix(name, "_test.go"),
+			"%s is a production file behind a build constraint, so GoFiles never reaches it: extend this walk before adding one", name)
+	}
 	fset := token.NewFileSet()
 	files := make([]*ast.File, 0, len(dir.GoFiles))
 	for _, name := range dir.GoFiles {
@@ -356,14 +362,18 @@ func TestMetadataDedupKeyZeroValue(t *testing.T) {
 // TestMetadataSealedIsFalseForPlainConsumers pins that the answer is per type:
 // a publisher-written header cannot flip it.
 func TestMetadataSealedIsFalseForPlainConsumers(t *testing.T) {
-	for name, meta := range map[string]Metadata{
-		"zero":            {},
-		"plain_delivery":  {delivery: &amqp.Delivery{Headers: amqp.Table{HeaderEventID: "evt-1"}}},
-		"sealed_looking":  {delivery: &amqp.Delivery{Headers: amqp.Table{"x-sealed": true, "jti": "abc"}}},
-		"encrypted_ctype": {delivery: &amqp.Delivery{ContentType: "application/jose"}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			env, ok := meta.Sealed()
+	cases := []struct {
+		name string
+		meta Metadata
+	}{
+		{"zero", Metadata{}},
+		{"plain_delivery", Metadata{delivery: &amqp.Delivery{Headers: amqp.Table{HeaderEventID: "evt-1"}}}},
+		{"sealed_looking", Metadata{delivery: &amqp.Delivery{Headers: amqp.Table{"x-sealed": true, "jti": "abc"}}}},
+		{"encrypted_ctype", Metadata{delivery: &amqp.Delivery{ContentType: "application/jose"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env, ok := tc.meta.Sealed()
 			assert.False(t, ok)
 			assert.Equal(t, SealedEnvelope{}, env)
 		})

@@ -172,7 +172,8 @@ type OutboxProvider interface {
 // InboxProcessor runs a handler exactly once per event id, recording the id in a
 // durable, tenant-aware ledger atomically with the handler's writes. It is the
 // consumer-side complement to the transactional outbox. Defined here to avoid an
-// app<->inbox import cycle; the inbox package implements it.
+// app<->inbox import cycle; the inbox package implements it, and the key's type
+// makes app import messaging.
 type InboxProcessor interface {
 	// ProcessOnce runs fn inside a transaction exactly once per key. A
 	// redelivery of an already-processed key short-circuits (fn is not run) and

@@ -42,17 +42,21 @@ func wireKey(t *testing.T, id string) messaging.DedupKey {
 // TestProcessOnceAdmitsWireKeysAtBothLengthBoundaries pins that a wire key the
 // grammar admitted — a 128-byte one included — reaches the INSERT.
 func TestProcessOnceAdmitsWireKeysAtBothLengthBoundaries(t *testing.T) {
-	for name, id := range map[string]string{
-		"single_byte":    "k",
-		"max_length_128": strings.Repeat("k", 128),
-	} {
-		t.Run(name, func(t *testing.T) {
+	cases := []struct {
+		name string
+		id   string
+	}{
+		{"single_byte", "k"},
+		{"max_length_128", strings.Repeat("k", 128)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 			db.ExpectTransaction().ExpectExec(`INSERT INTO gobricks_inbox`).WillReturnRowsAffected(1)
 			in := newTestInbox(db)
 
 			ran := false
-			err := in.ProcessOnce(t.Context(), wireKey(t, id), func(context.Context, dbtypes.Tx) error {
+			err := in.ProcessOnce(t.Context(), wireKey(t, tc.id), func(context.Context, dbtypes.Tx) error {
 				ran = true
 				return nil
 			})

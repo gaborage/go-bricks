@@ -24,10 +24,14 @@
 > a context `IsSealedDelivery` does not mark. That second refusal is not an attacker gate — only
 > the sealed branch mints a sealed key, so a caller can only hold its own delivery's — it fails
 > closed when that correct key is used outside the sealed delivery (a detached goroutine), turning
-> a plumbing mistake into a refusal rather than a silent ledger write. The §4 `^[A-Za-z0-9_-]{1,128}$` grammar no longer
-> runs at the ledger door; it is kept as defense in depth at construction, inside `WireDedupKey`.
-> A wire key under a sealed context is still admitted, as §4 already states: the grammar governs
-> wire-sourced ids and `:` keeps the two key spaces apart. This closes the class the 2026-09-08
+> a plumbing mistake into a refusal rather than a silent ledger write. The §4 `^[A-Za-z0-9_-]{1,128}$`
+> grammar no longer runs at the ledger door: a wire key is grammar-checked exactly once, at
+> construction inside `WireDedupKey`. A sealed key is well formed because the seal layer validates
+> both halves before `Metadata.DedupKey()` composes them — the signed `jti` must match that same
+> header-id grammar (`jose/sealed/open.go`, `checkSlots`) and the family must equal the consumer's
+> declared `SignLogical` (`open.go`, `peekOuter`) — so the ledger door checks provenance,
+> not spelling. A wire key under a sealed context is still admitted, as §4 already states: the
+> grammar governs wire-sourced ids and `:` keeps the two key spaces apart. This closes the class the 2026-09-08
 > amendment recorded without deciding: a sealed handler handing `ProcessOnce` a caller-written
 > `<family>:<jti>` string from `MessageID()`, `Headers()`, `outbox.EventIDFromHeaders` or the
 > body could occupy a victim's sealed ledger row; such a string can now become at most a wire key.

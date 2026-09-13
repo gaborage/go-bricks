@@ -13,6 +13,7 @@ package testing
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -57,13 +58,14 @@ func (m *MockInbox) MarkAlreadyProcessed(eventID string) *MockInbox {
 }
 
 // ProcessOnce implements app.InboxProcessor. It runs messaging.ValidateDedupKey
-// first, like the real inbox — the zero DedupKey, and a sealed key outside a
-// sealed delivery, are refused before anything is recorded — then records
-// key.String() and runs fn (with a nil tx) exactly once per key, unless an error
-// is configured or the key was already processed.
+// first and wraps its error as `inbox: %w`, exactly like Inbox.ProcessOnce — the
+// zero DedupKey, and a sealed key outside a sealed delivery, are refused before
+// anything is recorded — then records key.String() and runs fn (with a nil tx)
+// exactly once per key, unless an error is configured or the key was already
+// processed.
 func (m *MockInbox) ProcessOnce(ctx context.Context, key messaging.DedupKey, fn func(ctx context.Context, tx dbtypes.Tx) error) error {
 	if err := messaging.ValidateDedupKey(ctx, key); err != nil {
-		return err
+		return fmt.Errorf("inbox: %w", err)
 	}
 	eventID := key.String()
 	m.mu.Lock()
