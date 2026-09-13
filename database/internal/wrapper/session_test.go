@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"testing"
+	"time"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
@@ -170,6 +171,33 @@ func TestSessionRowsIterationErrorIsNotTranslated(t *testing.T) {
 	require.ErrorIs(t, iterErr, driver.ErrBadConn, "the driver error reaches the caller raw")
 	assert.NotErrorIs(t, iterErr, sql.ErrConnDone,
 		"documented exception: rows-iteration errors are NOT translated to sql.ErrConnDone")
+}
+
+// TestSessionCloseAfterRowsClosedReturnsPromptly pins the documented ordering
+// contract on types.Session: with the Rows closed first, Session.Close completes
+// instead of blocking on database/sql's closing mutex. The reverse order
+// deadlocks, which is exactly why it is not tested here — a negative case would
+// hang the suite rather than fail it.
+func TestSessionCloseAfterRowsClosedReturnsPromptly(t *testing.T) {
+	_, mock, sess := openMockSession(t)
+	ctx := context.Background()
+
+	mock.ExpectQuery("SELECT n").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(1))
+	rows, err := sess.Query(ctx, "SELECT n FROM t")
+	require.NoError(t, err)
+	require.NoError(t, rows.Close(), "the Rows must be closed before the Session")
+
+	done := make(chan error, 1)
+	go func() { done <- sess.Close() }()
+
+	select {
+	case closeErr := <-done:
+		require.NoError(t, closeErr)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Session.Close did not return within 2s after the Rows was closed: " +
+			"it is blocked on database/sql's closing mutex")
+	}
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 // TestSessionCloseIsNotIdempotent pins the documented Close behavior: a second
