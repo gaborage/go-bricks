@@ -29,7 +29,10 @@ R6 runs after R1, so a typo'd mode on a socket host is still reported as a mode 
 before R2 and R3, so material on a socket host gets the transport message rather than a
 mode or pairing complaint that would steer the operator toward a mode the socket still
 cannot carry. The predicate is `config.isUnixSocketHost`, a mirror of pgx: a divergence
-reopens the hole. It covers every door `validatePostgreSQLFields` covers — static YAML
+reopens the hole; the predicate and `pgSSLModes` were re-diffed against `pgconn/config.go` at
+the pin this amendment ships with, `github.com/jackc/pgx/v5@v5.11.0`, so the Consequences entry
+below naming v5.10.0 records when that allowlist was last changed, not a stale pin. It covers
+every door `validatePostgreSQLFields` covers — static YAML
 through `config.Validate`, `DBConfigProvider` results through `ApplyDatabasePoolDefaults` /
 `ApplyDatabasePoolDefaultsForKey`, and `go-bricks-migrate` at its next pin bump, whose
 `tlsValidatingProvider` calls `config.ApplyDatabasePoolDefaults`, so

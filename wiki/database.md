@@ -560,8 +560,11 @@ configs too" below).
   inverted instead: pgx force-upgrades that sentinel to `verify-full` — see the quirks
   below). `cert` and `key` must still be set together.
 - **PostgreSQL — a valid mode alone is fine on a TCP host.** `mode: disable` with no material
-  stays valid; opportunistic TLS with nothing to discard is a legitimate choice.
-- **PostgreSQL — a unix-socket host takes no TLS.** A `host` (per comma-separated entry) that is an absolute path
+  stays valid, and so do the opportunistic modes `allow` and `prefer`, which may fall back to
+  plaintext: a mode with nothing to discard is a legitimate choice.
+- **PostgreSQL — a unix-socket host takes no TLS.** Both host rules below judge the structured
+  `host` field only; a section carrying a raw `connectionstring` short-circuits before them and
+  keeps pgx's own semantics. A `host` (per comma-separated entry) that is an absolute path
   (`/var/run/postgresql`, or a drive path such as `C:\pg`) is dialed over a unix socket, where
   pgx skips TLS, so `cert`, `key`, `ca` or any `mode` other than `disable` is refused naming
   `database.tls`: remove the `database.tls` block, or use a TCP host.
