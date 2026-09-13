@@ -1,8 +1,10 @@
 # Global Middleware
 
 Module-contributed HTTP middleware that runs once per request across every route — the
-framework-level seam for cross-cutting concerns like authentication, API-key or
-request-signature verification, global audit logging, and maintenance-mode gates.
+framework-level seam for cross-cutting concerns like API-key or request-signature
+verification, global audit logging, and maintenance-mode gates. Bearer/JWT verification is
+**not** one of them — it lives in [`auth`](auth.md) and attaches per route group; see
+[Bearer authentication is not this seam](#bearer-authentication-is-not-this-seam).
 
 See [ADR-036](adr_036_global_middleware.md) for the design rationale.
 
@@ -32,34 +34,57 @@ keystore-backed token verifier, a DB/cache handle, resolved config.
 | Skips health/ready | The framework wraps each with the health/ready probe skipper. |
 | Deterministic ordering | Across modules, middleware composes in module-registration order. |
 
-## Writing an auth gate
+## Bearer authentication is not this seam
+
+Bearer/JWT verification ships in the [`auth`](auth.md) package, and `auth.Middleware` is
+attached **per route group** — `r.Group("/orders", auth.Middleware(v))` — never through
+`GlobalMiddlewareRegisterer`. That is a deliberate difference, not an oversight (ADR-109):
+
+| | Global middleware | `auth.Middleware` |
+| --- | --- | --- |
+| Scope | Every route, no opt-out | The groups it is attached to |
+| Exempting a route | A path list inside the gate body | Register the route outside the guarded group |
+| Failure mode of a new route | Guarded by default; a public route that is not in the list gets the gate’s rejection status | Unguarded unless it is registered in a guarded group |
+
+The trade is where the exemption is visible. A global gate defaults to guarded, which is the
+safer failure mode, but its exemption list lives in the middleware body — far from the route
+it exempts, and unable to say anything about a path that no longer exists. Per-group
+attachment puts the decision at the registration site, where a reviewer reads the route and
+its guard in one place. `auth` chose the second; a service that wants the first can still wrap
+`auth.Middleware` in its own global gate, but then it owns the exemption list.
+
+Use this seam for gates that genuinely have no route-shaped exemptions: a drain/maintenance
+gate, a global audit record, a shared API-key check in front of an internal service.
+
+## Writing a gate
 
 ```go
-func (m *AuthModule) Init(deps *app.ModuleDeps) error {
-    m.verifier = jwt.NewVerifier(deps.Config, m.keystore) // built here, captured below
+type MaintenanceModule struct {
+    draining func() bool // state captured at Init, read by the closure below
+}
+
+func (m *MaintenanceModule) Init(deps *app.ModuleDeps) error {
+    m.draining = drainFlagFrom(deps.Config) // built here, captured below
     return nil
 }
 
-func (m *AuthModule) GlobalMiddleware() []server.MiddlewareFunc {
+func (m *MaintenanceModule) GlobalMiddleware() []server.MiddlewareFunc {
     return []server.MiddlewareFunc{
         func(c server.HandlerContext, next func() error) error {
-            if isPublicPath(c.Request().URL.Path) { // your own exemptions (see below)
+            if !m.draining() || c.RouteTemplate() == "/admin/resume" { // your own exemptions (see below)
                 return next()
             }
-            if !m.verifier.Valid(c.Request().Header.Get("Authorization")) {
-                return server.NewUnauthorizedError("invalid token")
-            }
-            return next()
+            return server.NewServiceUnavailableError("Service is draining")
         },
     }
 }
 ```
 
 Short-circuit by returning an `IAPIError` (`server.NewUnauthorizedError` /
-`NewForbiddenError`) **without** calling `next()`. The framework renders the standard
-`{error:{code,message}, meta:{timestamp,traceId}}` envelope at the mapped status. Never
-return a plain `fmt.Errorf` — it maps to HTTP 500. Return the error *or* write a response,
-never both.
+`NewForbiddenError` / `NewServiceUnavailableError`) **without** calling `next()`. The framework
+renders the standard `{error:{code,message}, meta:{timestamp,traceId}}` envelope at the mapped
+status. Never return a plain `fmt.Errorf` — it maps to HTTP 500. Return the error *or* write a
+response, never both.
 
 ### Public-route exemptions
 
@@ -81,11 +106,11 @@ Consequences:
   panic guard instead, which answers a panic from one of those middlewares with the standard 500
   envelope and one ERROR line naming the panic's TYPE (ADR-081); before it, such a panic reached
   net/http, which printed the VALUE and dropped the connection.
-- Runs **after rate-limiting** — an unauthenticated request still consumes rate-limit budget
-  before being rejected (intended: cheap flood rejection). This is an auth-gate hook, not a
-  general "run early" hook.
-- Fires **before** the 404/405 response, so unauthenticated requests to unknown paths get 401
-  (does not leak route existence).
+- Runs **after rate-limiting** — a request the gate will reject still consumes rate-limit budget
+  before being rejected (intended: cheap flood rejection). This slot is for a gate that must run
+  for every route, not a general "run early" hook.
+- Fires **before** the 404/405 response, so requests to unknown paths get the gate’s rejection
+  status rather than a 404 (does not leak route existence).
 - `/_sys` (scheduler) and `/debug` endpoints are **gated** (their own CIDR/bearer checks still
   apply underneath); only health/ready are exempt.
 

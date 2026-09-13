@@ -1,0 +1,232 @@
+package auth
+
+import (
+	"errors"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/gaborage/go-bricks/server"
+)
+
+// Request and response header names this middleware reads and writes.
+const (
+	headerAuthorization   = "Authorization"
+	headerWWWAuthenticate = "WWW-Authenticate"
+	headerRetryAfter      = "Retry-After"
+)
+
+// schemeBearer is the only credential scheme read. Cookies and query parameters
+// are deliberately not consulted: a credential the browser attaches on its own
+// is a CSRF surface, and a credential in a URL lands in access logs.
+const schemeBearer = "Bearer"
+
+// attrEndUserID is the OTel semantic-convention attribute for the authenticated
+// end user. It is spelled out rather than taken from a semconv package because
+// nothing else in this repository imports one, and the attribute is stable.
+const attrEndUserID = "enduser.id"
+
+// minRetryAfter floors the Retry-After value. A "0" would invite an immediate
+// retry that cannot possibly find a fresher key set.
+const minRetryAfter = time.Second
+
+// Response messages. They name the failure, never the credential, the subject or
+// the rule that rejected it — the class goes to the DEBUG log, not to the caller.
+// The WWW-Authenticate challenge already distinguishes "none presented" from
+// "presented and rejected", so the bodies stay deliberately terse.
+const (
+	msgBearerRequired    = "Authentication required"
+	msgBearerRejected    = "Authentication failed"
+	msgKeySetUnavailable = "Authentication temporarily unavailable"
+)
+
+// challengeInvalid is the WWW-Authenticate value for a credential that was
+// presented and rejected (RFC 6750 error="invalid_token"). It takes nothing from
+// configuration, so it is a constant rather than per-Middleware state. It carries
+// no realm and no error_description: a description would be the rejection class,
+// which is framework DEBUG detail, not something to hand an unauthenticated
+// caller.
+const challengeInvalid = schemeBearer + ` error="invalid_token"`
+
+// challenge holds the CONFIGURATION-DERIVED response header values the
+// middleware can emit, built once per Middleware call rather than per request,
+// and owns the rejection response they belong to. Response construction lives
+// here rather than on Verifier so the verifier keeps no HTTP surface at all:
+// Verify is transport-neutral (ADR-109 decision 1), and a gRPC interceptor
+// reusing it must not inherit an HTTP-shaped method set.
+type challenge struct {
+	// missing is the WWW-Authenticate value for a request that presented no
+	// bearer credential: the realm alone, naming the issuer to authenticate with.
+	missing string
+
+	// retryAfter is the Retry-After value for a 503, in whole seconds.
+	retryAfter string
+}
+
+// Middleware returns the HTTP middleware that verifies the request's bearer
+// credential and attaches the resulting Principal to the request context, where
+// PrincipalFromContext reads it back.
+//
+// It is attached PER ROUTE GROUP — RouteRegistrar.Group(prefix, auth.Middleware(v))
+// or Use — never globally. There is deliberately no path allowlist and no
+// GlobalMiddlewareRegisterer path: a route that must stay open (a probe, a
+// webhook with its own signature check) is exempted by not attaching the
+// middleware to its group, which keeps the exemption visible at the registration
+// site instead of buried in a skip list.
+//
+// It performs identification, not authorization. A request that reaches the
+// handler carries a Principal whose credential verified against the configured
+// issuer; whether that identity may perform the operation stays the handler's
+// decision. Nothing here inspects claims or cross-checks the tenant.
+//
+// Outcomes:
+//
+//   - No Authorization header, a non-Bearer scheme, or an empty token — 401 with
+//     WWW-Authenticate: Bearer realm="<issuer>".
+//   - A credential that failed any verification rule — 401 with
+//     WWW-Authenticate: Bearer error="invalid_token".
+//   - An unusable issuer key set — 503 with Retry-After. It is a server-side
+//     fault, deliberately distinct from the 401s: the caller's credential was
+//     never judged.
+//
+// Every rejection returns a server.IAPIError, so the framework's error handler
+// renders the standard envelope, and no rejection calls next: a verification
+// failure cannot fall through to the handler.
+//
+// SECURITY: nothing here logs, renders or records the credential or the "sub"
+// claim. A rejection is logged at DEBUG by class only, and the response body
+// carries a fixed message. The single exception is the enduser.id span
+// attribute, which records Principal.Subject and is off unless
+// auth.jwt.telemetry.enduserid is true.
+//
+// It panics on a nil Verifier: the middleware is built during module Init, so a
+// missing verifier is a wiring error that must abort startup rather than fail
+// every request at runtime.
+func Middleware(v *Verifier) server.MiddlewareFunc {
+	if v == nil {
+		panic("auth: Middleware requires a non-nil Verifier")
+	}
+
+	// The JWKS refresh floor is only a meaningful retry hint for a verifier that
+	// owns a JWKS resolver. Over a pinned PublicKeyResolver nothing refreshes, so
+	// advertising that floor would make a caller wait for a fetch that cannot
+	// happen; such a verifier gets the bare minimum instead.
+	refreshFloor := time.Duration(0)
+	if v.owned != nil {
+		refreshFloor = v.cfg.JWKS.MinRefreshInterval
+	}
+	ch := &challenge{
+		missing:    schemeBearer + ` realm="` + sanitizeRealm(v.cfg.Issuer) + `"`,
+		retryAfter: retryAfterSeconds(refreshFloor),
+	}
+
+	return func(c server.HandlerContext, next func() error) error {
+		ctx := c.RequestContext()
+		// The credential is empty for every malformed Authorization shape, which
+		// Verify answers with ErrMissingCredential. Routing that case through
+		// Verify rather than short-circuiting keeps auth.verification.total's
+		// missing_credential observation on the HTTP path too, and still records
+		// exactly one observation per request — on a verifier that has metrics at
+		// all, which NewVerifierWithResolver does not construct.
+		principal, err := v.Verify(ctx, bearerCredential(c.RequestHeader(headerAuthorization)))
+		if err != nil {
+			return ch.deny(c, err)
+		}
+
+		c.SetRequestContext(ContextWithPrincipal(ctx, principal))
+		if v.cfg.Telemetry.EndUserID {
+			trace.SpanFromContext(ctx).SetAttributes(attribute.String(attrEndUserID, principal.Subject))
+		}
+		return next()
+	}
+}
+
+// deny sets the response headers for a rejection and returns the server error
+// the framework's HTTPErrorHandler renders into the standard envelope. Headers
+// are written before returning because server.IAPIError carries no header hook.
+//
+// It deliberately logs nothing: Verifier.reject already emits one class-only
+// DEBUG breadcrumb per rejection, and a second line here carried the same class
+// twice and re-walked the error chain (verificationResult) on a path an
+// unauthenticated caller drives.
+//
+// The default arm is the fail-closed one: any error that is neither sentinel —
+// including a *VerificationError of a class added later — answers 401 with the
+// invalid_token challenge rather than falling through.
+func (ch *challenge) deny(c server.HandlerContext, err error) error {
+	header := c.ResponseWriter().Header()
+
+	switch {
+	case errors.Is(err, ErrMissingCredential):
+		header.Set(headerWWWAuthenticate, ch.missing)
+		return server.NewUnauthorizedError(msgBearerRequired)
+	case errors.Is(err, ErrKeySetUnavailable):
+		header.Set(headerRetryAfter, ch.retryAfter)
+		return server.NewServiceUnavailableError(msgKeySetUnavailable)
+	default:
+		header.Set(headerWWWAuthenticate, challengeInvalid)
+		return server.NewUnauthorizedError(msgBearerRejected)
+	}
+}
+
+// bearerCredential extracts the credential from an Authorization header value,
+// returning "" for every shape that presents no bearer credential: an absent
+// header, a scheme that is not Bearer, a value with no space after the scheme,
+// and an empty or whitespace-only token.
+//
+// All of those are the MISSING-credential answer rather than a verification
+// failure, because nothing was presented to verify; the caller passes the empty
+// string to Verify, which reports ErrMissingCredential. The scheme is matched
+// case-insensitively per RFC 7235.
+func bearerCredential(header string) string {
+	scheme, token, found := strings.Cut(header, " ")
+	if !found || !strings.EqualFold(scheme, schemeBearer) {
+		return ""
+	}
+	return strings.TrimSpace(token)
+}
+
+// retryAfterSeconds renders the Retry-After value for a key-set 503.
+//
+// The source is the refresh floor of a JWKS resolver the verifier OWNS
+// (auth.jwt.jwks.minrefreshinterval, 30s by default): that resolver will not
+// issue another fetch to the issuer before it elapses, so a retry sooner than
+// that cannot reach a fresher key set and only costs the caller a round trip.
+// Middleware passes zero for a verifier over a pinned PublicKeyResolver, where
+// no refresh is pending and the floor below applies. No new configuration key is
+// introduced. The value is floored at one second and rounded up, because
+// Retry-After is expressed in whole seconds.
+func retryAfterSeconds(minRefreshInterval time.Duration) string {
+	seconds := math.Ceil(max(minRefreshInterval, minRetryAfter).Seconds())
+	return strconv.FormatInt(int64(seconds), 10)
+}
+
+// sanitizeRealm renders issuer as the body of an HTTP quoted-string.
+//
+// SECURITY: this is a header-injection seam. The issuer is operator-supplied and
+// is only checked for non-emptiness at startup, so a value carrying a quote
+// would close the realm parameter and let the rest of the string be read as
+// further challenge parameters, while a CR or LF would split the response
+// header. Control characters (CR and LF among them) are dropped, and a quote or
+// backslash is backslash-escaped per the quoted-pair rule; every other byte,
+// space and non-ASCII included, is kept verbatim so a legitimate issuer URL
+// renders unchanged.
+func sanitizeRealm(issuer string) string {
+	var b strings.Builder
+	for _, ch := range []byte(issuer) {
+		switch {
+		case ch < 0x20, ch == 0x7f:
+			// Control character: dropped, never emitted in any form.
+		case ch == '"', ch == '\\':
+			b.WriteByte('\\')
+			b.WriteByte(ch)
+		default:
+			b.WriteByte(ch)
+		}
+	}
+	return b.String()
+}

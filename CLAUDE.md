@@ -54,7 +54,7 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 
 **Wiki (deep dives — read on demand):**
 
-- Architecture: [database.md](wiki/database.md) · [cache.md](wiki/cache.md) · [messaging.md](wiki/messaging.md) · [outbox.md](wiki/outbox.md) · [scheduler.md](wiki/scheduler.md) · [httpclient.md](wiki/httpclient.md) · [jose.md](wiki/jose.md) · [sealing.md](wiki/sealing.md) · [keystore.md](wiki/keystore.md) · [observability.md](wiki/observability.md) · [multi_tenant_resolvers.md](wiki/multi_tenant_resolvers.md)
+- Architecture: [auth.md](wiki/auth.md) · [database.md](wiki/database.md) · [cache.md](wiki/cache.md) · [messaging.md](wiki/messaging.md) · [outbox.md](wiki/outbox.md) · [scheduler.md](wiki/scheduler.md) · [httpclient.md](wiki/httpclient.md) · [jose.md](wiki/jose.md) · [sealing.md](wiki/sealing.md) · [keystore.md](wiki/keystore.md) · [observability.md](wiki/observability.md) · [multi_tenant_resolvers.md](wiki/multi_tenant_resolvers.md)
 - Patterns: [handler_patterns.md](wiki/handler_patterns.md) · [context_deadlines.md](wiki/context_deadlines.md) · [global_middleware.md](wiki/global_middleware.md) · [testing.md](wiki/testing.md)
 - Reference: [troubleshooting.md](wiki/troubleshooting.md) · [migrations.md](wiki/migrations.md) (breaking changes) · [startup_defaults.md](wiki/startup_defaults.md) · [linting.md](wiki/linting.md) (consumer lint config)
 - ADRs: [wiki/architecture_decisions.md](wiki/architecture_decisions.md), files `wiki/adr_NNN_*.md`
@@ -114,6 +114,7 @@ The eight packages whose rules had their own section here — `database/`, `cach
 ### Core Components
 
 - **app/** — Application framework and module system
+- **auth/** — Bearer-credential (JWT) verification: `auth.Middleware(v)` verifies `Authorization: Bearer` and attaches an `auth.Principal` read back with `PrincipalFromContext`. Verification is identification, not authorization — a `Principal` says the credential verified against the configured issuer, and the handler still decides what that identity may do. RSA-only (`RS256`/`PS256`, allowlist threaded into the parser, so `alg=none`/`HS*`/`ES*` die before key lookup); two constructors: `NewVerifier` fetches `auth.jwt.jwksuri` (https, no OIDC discovery) fail-fast at construction, refreshes on a ticker and on an unknown `kid` (singleflight, rate-floored), and serves past TTL only until `staleceiling` — then 503, never a silent accept; `NewVerifierWithResolver` takes pinned keys, fetches nothing, and leaves `jwksuri`/`jwks.*` unused. Attached PER ROUTE GROUP (`r.Group(prefix, auth.Middleware(v))`), never globally and with no path allowlist; no `ModuleDeps` slot — build the verifier in `Init`, `Close` it in `Shutdown`. Never hand a `Principal` to `logger.Interface`/`WithFields`: the reflective filter bypasses its redaction (#1602). See [auth.md](wiki/auth.md), [ADR-109](wiki/adr_109_bearer_credential_verification.md).
 - **config/** — Configuration management (Koanf: YAML + env vars)
 - **database/** — Multi-database interface with query builder
 - **cache/** — Redis caching with type-safe CBOR serialization

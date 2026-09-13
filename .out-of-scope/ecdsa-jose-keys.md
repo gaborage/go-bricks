@@ -1,15 +1,16 @@
 # ECDSA Key Support for JOSE
 
 The keystore does not surface ECDSA keys, and `ES256`/`ES384`/`ES512` stay off
-the JOSE signature-algorithm allowlist.
+**both** RSA-only signature-algorithm allowlists: `jose`'s (body sealing) and
+`auth`'s (bearer-credential verification, `RS256`/`PS256` only — ADR-109).
 
 ## Why this is out of scope
 
 The keystore returns concrete `*rsa.PrivateKey`/`*rsa.PublicKey` types, and the
 JOSE allowlist (`RS256`/`PS256` signing, `RSA-OAEP-256` + `A256GCM` encryption)
 matches what the store can actually serve — `ES256` was removed from the
-allowlist precisely because selecting it passed registration and then failed
-on every outbound request: go-jose's RSA signer rejects the pairing with
+allowlist precisely because a route that selected it passed registration and
+then failed on every outbound request: go-jose's RSA signer rejects the pairing with
 `ErrUnsupportedAlgorithm`, which `cryptoadapter.Sign` and `jose.Seal` propagate
 as an error (`JOSE_OUTBOUND_FAILED`), not a crash (see PR #334).
 
@@ -31,13 +32,31 @@ an inbound `ES256` header is rejected before verification.
 `TestAllowlistRejectsES256` is regression coverage for the exported allowlist
 only; it stays.
 
+## Where ES256 would land
+
+Two places now, not one:
+
+- `jose` — body sealing, whose keys come from the keystore. This is the
+  generalization described above: `crypto.Signer`/`crypto.PublicKey` in the
+  store, algorithm-class dispatch in the crypto adapter.
+- `auth` — bearer-credential verification (ADR-109). Its allowlist is
+  `signatureAlgorithms` in `auth/verifier.go`, a map from the config spelling
+  to the go-jose value that `Config.validateAlgorithms` and the parser
+  allowlist both read, so a third algorithm is one entry rather than two edits
+  that must agree. The keystore is not involved: keys arrive as JWKS entries,
+  and `auth/jwks.go` parses only `kty: RSA` (`n`/`e`), so ES256 there means
+  teaching the JWKS parser `kty: EC` (`crv`/`x`/`y`) and widening
+  `PublicKeyResolver` past `*rsa.PublicKey` — a change to an exported
+  interface, and therefore an ADR and a migrations atom of its own.
+
 ## Reopen trigger
 
-A concrete partner integration that requires an ECDSA-family JOSE algorithm.
-That requirement supplies exactly the design inputs the generalization needs
-(key distribution format, rotation cadence, algorithm set), at which point the
-implementation outline preserved in the prior request below is the starting
-point.
+A concrete partner integration that requires an ECDSA-family JOSE algorithm,
+or an issuer that signs bearer credentials with one and cannot be configured
+to use `RS256`/`PS256`. Either requirement supplies exactly the design inputs
+the generalization needs (key distribution format, rotation cadence, algorithm
+set), at which point the implementation outline preserved in the prior request
+below is the starting point.
 
 ## Prior requests
 

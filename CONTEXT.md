@@ -210,6 +210,26 @@ tenants that share its partition.
 _Avoid_: DLQ (where a classic-lane message goes instead), quarantine, retry
 queue, parking lot
 
+### Identity
+
+**Principal**:
+The verified identity a bearer credential asserts, carried on the request
+context and read back with `PrincipalFromContext`. It is identification, not
+authorization: its presence states that a credential verified against the
+configured issuer, never what that identity may do.
+_Avoid_: user, caller, auth context
+
+**Bearer credential**:
+The compact JWS the caller presents in `Authorization: Bearer`. It is what is
+verified; the Principal is what verification yields.
+_Avoid_: token (on its own)
+
+**Issuer key set**:
+The issuer-published JWKS the verifier holds and refreshes — on a ticker, and
+on an unknown `kid`. Serving it past its stale ceiling is refused, not
+degraded.
+_Avoid_: remote keys, JWKS cache
+
 ### Payload sealing
 
 **Seal**:

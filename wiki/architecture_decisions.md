@@ -1569,6 +1569,36 @@ in the next stacked PR. See [migrations.md](migrations.md) `[C64.15]`.
 
 ---
 
+### [ADR-109: Bearer Credential Verification Is a Top-Level RSA-Only `auth` Package](adr_109_bearer_credential_verification.md)
+
+**Date:** 2026-09-12 | **Status:** Accepted
+
+GoBricks had good seams for an auth gate (`GlobalMiddlewareRegisterer`, `RouteRegistrar.Use`/`Group`)
+and nothing to put in them, so every service hand-rolled bearer verification — ~450 lines whose hard
+parts (bounding the JWKS body while it still streams, rate-flooring the attacker-chosen unknown-`kid`
+refresh, keeping an unreachable issuer's 503 distinct from a bad credential's 401, failing a
+credential with no `exp`) are general, and silently wrong rather than loudly broken. `auth` is a
+top-level package because verification is transport-neutral: `Verify` takes a credential string and
+returns a `Principal`, and `ContextWithPrincipal` is exported so a non-HTTP interceptor can publish
+one. It is RSA-only (RS256/PS256) with the closed allowlist threaded into `jose.ParseSignedCompact`,
+so `alg=none`, `HS*` and `ES*` die inside the parser before any key lookup; its `PublicKeyResolver`
+deliberately is not `jose.KeyResolver`, whose `PrivateKey` method a remote key source must never be
+able to satisfy; and `auth.jwt.jwksuri` is explicit, with no OIDC discovery in v1 and therefore no
+second attacker-influenced document to origin-check. `auth.Middleware` attaches per route group, never
+globally and with no path allowlist, so an open route is exempted by not attaching it. The key set is
+fetched fail-fast at construction, refreshed on a ticker and on an unknown `kid` (singleflight,
+rate-floored, detached from the caller's cancellation), and served past its TTL only until
+`staleceiling`, after which every lookup answers `ErrKeySetUnavailable` → 503. Deliberately absent:
+ECDSA, a claim/authorization hook, a `ModuleDeps` slot, and cookie or query-string credentials.
+
+**Key Benefits:** framework bearer verification in three lines instead of a 450-line hand-roll; a
+401/503 split the caller can act on, with an RFC 6750 challenge and a `Retry-After` derived from the
+refresh floor of a JWKS resolver the verifier owns (one second over pinned keys, where nothing
+refetches); rejection reported by a closed `Class` vocabulary that never carries the credential,
+the cause or the subject.
+
+---
+
 ### [ADR-108: Redis TLS Is a Nested Config Block Over a Shared Client-TLS Loader](adr_108_cache_redis_tls.md)
 
 **Date:** 2026-09-11 | **Status:** Accepted
@@ -2366,7 +2396,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-108) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-109) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
