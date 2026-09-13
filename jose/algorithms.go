@@ -52,7 +52,7 @@ var allowedContentEncsBare = []jose.ContentEncryption{
 // so an unrecognized mode fails closed at every seam that consults it.
 func contentEncsForMode(mode SealMode) []jose.ContentEncryption {
 	switch mode {
-	case SealModeJWEofJWS:
+	case SealModeJWEofJWS, SealModeJWSofJWE:
 		return allowedContentEncs
 	case SealModeBareJWE:
 		return allowedContentEncsBare

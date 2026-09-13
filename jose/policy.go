@@ -48,9 +48,10 @@ type Policy struct {
 	Mode SealMode
 
 	// Algorithms — defaults applied by the parser if tag omits them.
-	// SigAlg is unused, and must stay unset, in SealModeBareJWE.
+	// SigAlg is unused, and must stay unset, in SealModeBareJWE; every other mode signs and
+	// requires it.
 	//
-	// KeyAlg and Enc are read on BOTH sides in both modes: outbound they are what Seal
+	// KeyAlg and Enc are read on BOTH sides in every mode: outbound they are what Seal
 	// writes; inbound they are what Open accepts, narrowing the mode's allowlist to
 	// exactly the declared value. Validate refuses a value off the mode's allowlist, so
 	// declaring one can only narrow. Leaving one unset keeps the mode-wide allowlist on
@@ -61,25 +62,26 @@ type Policy struct {
 	Enc    jose.ContentEncryption
 	Cty    string
 
-	// Typ is the JWE protected `typ` header written by Seal. SealModeBareJWE OUTBOUND
-	// only; Visa Message Level Encryption expects "JOSE".
+	// Typ is the JWE protected `typ` header written by Seal. SealModeBareJWE and
+	// SealModeJWSofJWE (inner JWE) OUTBOUND only; Visa Message Level Encryption expects "JOSE".
 	Typ string
 
 	// ProtectedHeaders are copied verbatim into the JWE protected header by Seal.
-	// SealModeBareJWE OUTBOUND only. Naming a param the framework owns (alg, enc, kid, cty, typ) or one JOSE
-	// reserves is a validation error, never an overwrite.
+	// SealModeBareJWE and SealModeJWSofJWE (inner JWE) OUTBOUND only. Naming a param the
+	// framework owns (alg, enc, kid, cty, typ) or one JOSE reserves is a validation error,
+	// never an overwrite.
 	ProtectedHeaders map[string]any
 
 	// IATMillis makes Seal stamp an `iat` protected header holding Unix epoch
 	// MILLISECONDS at seal time — the Visa MLE convention, not the seconds-based JWT
-	// claim of the same name. SealModeBareJWE OUTBOUND only. jose never judges its freshness on
-	// the way in; that is the caller's policy.
+	// claim of the same name. SealModeBareJWE and SealModeJWSofJWE (inner JWE) OUTBOUND
+	// only. jose never judges its freshness on the way in; that is the caller's policy.
 	IATMillis bool
 }
 
-// hasSealHeaderFields reports whether the policy carries any of the header fields only a
-// bare-mode outbound Seal writes.
-func (p *Policy) hasSealHeaderFields() bool {
+// hasInnerJWEHeaderFields reports whether the policy carries any of the inner-JWE header fields
+// an outbound Seal writes in bare-JWE and JWS-of-JWE modes.
+func (p *Policy) hasInnerJWEHeaderFields() bool {
 	return p.Typ != "" || p.ProtectedHeaders != nil || p.IATMillis
 }
 
@@ -105,27 +107,31 @@ func (p *Policy) Validate() error {
 }
 
 // validateMode rejects an unrecognized Mode before any mode-dependent check runs, and
-// keeps the bare-only fields out of a JWE-of-JWS policy so the default posture stays
+// keeps the inner-JWE header fields out of a JWE-of-JWS policy so the default posture stays
 // byte-identical to what it produced before bare mode existed.
 func (p *Policy) validateMode() error {
 	switch p.Mode {
 	case SealModeJWEofJWS:
-		if p.hasSealHeaderFields() {
+		if p.hasInnerJWEHeaderFields() {
 			return &Error{
 				Sentinel: ErrPolicyMismatch,
 				Code:     codePolicyModeMismatch,
-				Message:  "typ, protected headers and iat stamping require bare-JWE mode",
+				Message:  "typ, protected headers and iat stamping require bare-JWE or JWS-of-JWE mode",
 			}
 		}
 		return nil
-	case SealModeBareJWE:
-		return p.validateBareHeaders()
+	case SealModeBareJWE, SealModeJWSofJWE:
+		return p.validateInnerJWEHeaders()
 	default:
-		return &Error{
-			Sentinel: ErrPolicyMismatch,
-			Code:     codePolicyModeUnknown,
-			Message:  "unknown seal mode " + p.Mode.String(),
-		}
+		return errUnknownMode(p.Mode)
+	}
+}
+
+func errUnknownMode(m SealMode) *Error {
+	return &Error{
+		Sentinel: ErrPolicyMismatch,
+		Code:     codePolicyModeUnknown,
+		Message:  "unknown seal mode " + m.String(),
 	}
 }
 
@@ -159,8 +165,25 @@ func (p *Policy) validateAlgorithms() error {
 	return nil
 }
 
-// validateDirection dispatches to the per-direction kid checks.
+// validateDirection runs the kid checks, then keeps the seal header fields off an inbound
+// policy: nothing would ever read them, and silently ignoring them would let a consumer
+// believe a header was enforced on the way in.
 func (p *Policy) validateDirection() error {
+	if err := p.validateKids(); err != nil {
+		return err
+	}
+	if p.Direction == DirectionInbound && p.hasInnerJWEHeaderFields() {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyDirectionMismatch,
+			Message:  "typ, protected headers and iat stamping are outbound-only",
+		}
+	}
+	return nil
+}
+
+// validateKids dispatches to the per-mode, per-direction kid checks.
+func (p *Policy) validateKids() error {
 	if p.Mode == SealModeBareJWE {
 		return p.validateBareDirection()
 	}
@@ -232,6 +255,10 @@ const (
 	// must be established out of band (X-Pay-Token, mTLS); jose authenticates nothing
 	// about the sender in this mode.
 	SealModeBareJWE
+	// SealModeJWSofJWE encrypts first and signs the resulting compact JWE: a JWS outer
+	// (cty: JWE) over the same inner JWE bare mode builds — the Visa Token Service
+	// Issuer shape.
+	SealModeJWSofJWE
 )
 
 func (m SealMode) String() string {
@@ -240,15 +267,17 @@ func (m SealMode) String() string {
 		return "jwe-of-jws"
 	case SealModeBareJWE:
 		return "bare-jwe"
+	case SealModeJWSofJWE:
+		return "jws-of-jwe"
 	default:
 		return "unknown"
 	}
 }
 
-// validateBareHeaders checks the protected-header map a bare-mode Seal would write:
-// no param the framework or JOSE itself owns, and no hand-written iat while Seal is
+// validateInnerJWEHeaders checks the protected-header map Seal would write on the inner
+// JWE: no param the framework or JOSE itself owns, and no hand-written iat while Seal is
 // stamping one.
-func (p *Policy) validateBareHeaders() error {
+func (p *Policy) validateInnerJWEHeaders() error {
 	if err := cryptoadapter.CheckExtra(p.ProtectedHeaders); err != nil {
 		return &Error{
 			Sentinel: ErrPolicyMismatch,
@@ -272,23 +301,10 @@ func (p *Policy) validateBareHeaders() error {
 func (p *Policy) validateBareDirection() error {
 	switch p.Direction {
 	case DirectionInbound:
-		if err := p.validateBareKids(p.DecryptKid,
+		return p.validateBareKids(p.DecryptKid,
 			"inbound bare-JWE policy requires a decrypt kid",
 			"inbound bare-JWE policy must declare only a decrypt kid",
-			p.VerifyKid, p.SignKid, p.EncryptKid); err != nil {
-			return err
-		}
-		// Typ/ProtectedHeaders/IATMillis describe headers Seal writes; on an inbound policy
-		// nothing would ever read them, and silently ignoring them would let a consumer
-		// believe a header was enforced on the way in.
-		if p.hasSealHeaderFields() {
-			return &Error{
-				Sentinel: ErrPolicyMismatch,
-				Code:     codePolicyDirectionMismatch,
-				Message:  "typ, protected headers and iat stamping are outbound-only",
-			}
-		}
-		return nil
+			p.VerifyKid, p.SignKid, p.EncryptKid)
 	case DirectionOutbound:
 		return p.validateBareKids(p.EncryptKid,
 			"outbound bare-JWE policy requires an encrypt kid",
