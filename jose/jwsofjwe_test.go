@@ -141,12 +141,13 @@ func TestOpenJWSofJWERefusals(t *testing.T) {
 		mutate(o)
 		return resignOuter(t, f.priv, sealed, o)
 	}
-	sig := strings.LastIndexByte(sealed, '.') + 10
+	// A byte inside the signature segment, clear of its final character's padding bits.
+	sigByte := strings.LastIndexByte(sealed, '.') + 10
 	flip := byte('A')
-	if sealed[sig] == 'A' {
+	if sealed[sigByte] == 'A' {
 		flip = 'B'
 	}
-	tampered := sealed[:sig] + string(flip) + sealed[sig+1:]
+	tampered := sealed[:sigByte] + string(flip) + sealed[sigByte+1:]
 
 	tests := []struct {
 		name     string
@@ -155,6 +156,8 @@ func TestOpenJWSofJWERefusals(t *testing.T) {
 	}{
 		{"tampered_signature", tampered, codeSignatureInvalid},
 		{"wrong_signing_kid", outer(func(o *cryptoadapter.SignOptions) { o.Kid = "rogue-key" }), codeKidUnknown},
+		{"missing_signing_kid", outer(func(o *cryptoadapter.SignOptions) { o.Kid = "" }), codeKidMissing},
+		{"unparseable_three_segment_body", "a.b.c", codeOuterNotJWS},
 		{"disallowed_signature_algorithm", outer(func(o *cryptoadapter.SignOptions) { o.SigAlg = jose.RS256 }), codeAlgorithmDisallowed},
 		{"outer_without_cty", outer(func(o *cryptoadapter.SignOptions) { o.Cty = "" }), codeCtyRejected},
 		{"outer_with_other_cty", outer(func(o *cryptoadapter.SignOptions) { o.Cty = "JWS" }), codeCtyRejected},

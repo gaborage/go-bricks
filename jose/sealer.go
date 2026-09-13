@@ -9,9 +9,10 @@ import (
 // as unverified plaintext. Compared case-sensitively, exactly as written here.
 const ctyNestedJWS = "JWS"
 
-// Seal performs the outbound transformation: sign payload as a compact JWS with our
-// private key, then encrypt that JWS as a compact JWE to the peer's public key. Returns
-// the compact JWE string.
+// Seal performs the outbound transformation p.Mode selects. The default signs payload as a
+// compact JWS with our private key, then encrypts that JWS as a compact JWE to the peer's
+// public key; SealModeBareJWE only encrypts; SealModeJWSofJWE encrypts, then signs the
+// compact JWE. Returns the outermost compact serialization.
 //
 // On failure, returns an *Error. Pre-flight guard failures (Status 500) use Code
 // JOSE_POLICY_DIRECTION_MISMATCH (nil or wrong-direction policy) or JOSE_KEYSTORE_UNAVAILABLE
