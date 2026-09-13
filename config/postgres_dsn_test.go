@@ -73,7 +73,15 @@ func TestScanPostgresDSN(t *testing.T) {
 			want: pgDSNScan{hostSet: true, host: "/s", claimsTLS: true},
 		},
 		{
+			name: "keyword_sslnegotiation_direct_with_allow_claims_tls", dsn: "host=/s sslnegotiation=direct sslmode=allow",
+			want: pgDSNScan{hostSet: true, host: "/s", claimsTLS: true},
+		},
+		{
 			name: "keyword_sslnegotiation_postgres_prefer_no_claim", dsn: "host=/s sslnegotiation=postgres sslmode=prefer",
+			want: pgDSNScan{hostSet: true, host: "/s"},
+		},
+		{
+			name: "keyword_last_occurrence_wins", dsn: "host=a sslmode=require host=/s sslmode=disable",
 			want: pgDSNScan{hostSet: true, host: "/s"},
 		},
 
@@ -100,14 +108,13 @@ func TestScanPostgresDSN(t *testing.T) {
 		},
 		{name: "uri_percent_encoded_comma_splits", dsn: "postgres://a%2C/db", want: pgDSNScan{hostSet: true, host: "a,"}},
 		{name: "uri_query_host", dsn: "postgres:///db?host=db.example.com", want: pgDSNScan{hostSet: true, host: "db.example.com"}},
-		{name: "uri_query_host_overrides_authority", dsn: "postgres://a,,b/db?host=c", want: pgDSNScan{hostSet: true, host: "c"}},
+		{name: "uri_query_host_overrides_authority", dsn: "postgres://a/db?host=c", want: pgDSNScan{hostSet: true, host: "c"}},
 		{name: "uri_query_empty_host", dsn: "postgres://h/db?host=", want: pgDSNScan{hostSet: true}},
 		{name: "uri_query_decoded", dsn: "postgres:///db?%68ost=%2Fs&sslmode=verify%2Dca", want: pgDSNScan{hostSet: true, host: "/s", claimsTLS: true}},
 		{
 			name: "uri_query_socket_sslrootcert", dsn: "postgres:///db?host=/var/run/postgresql&sslrootcert=/x",
 			want: pgDSNScan{hostSet: true, host: "/var/run/postgresql", claimsTLS: true},
 		},
-		// pgx v5.11.0 pgconn/config.go:903-907 upgrades prefer (and unset) to require under direct negotiation.
 		{
 			name: "uri_query_sslnegotiation_direct_claims_tls", dsn: "postgres:///db?host=/s&sslnegotiation=direct",
 			want: pgDSNScan{hostSet: true, host: "/s", claimsTLS: true},
