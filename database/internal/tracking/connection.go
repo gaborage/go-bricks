@@ -208,8 +208,10 @@ func (tc *Connection) CreateMigrationTable(ctx context.Context) error {
 
 // trackingContext builds the tracking Context every operation on this
 // connection shares — including the server metadata behind the server.address /
-// server.port / db.namespace attributes, which SetServerInfo fills in at
-// construction, so rebuilding it per call always yields the same values.
+// server.port / db.namespace attributes, which the factory (database.NewConnection)
+// sets once via SetServerInfo immediately after construction; SetServerInfo itself
+// is exported and unguarded, so nothing in this type stops a later call from
+// changing those values.
 func (tc *Connection) trackingContext() *Context {
 	return &Context{
 		Logger:        tc.logger,

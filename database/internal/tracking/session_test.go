@@ -219,7 +219,9 @@ func TestSessionBeginWrapsTransaction(t *testing.T) {
 	ops := make([]string, 0, len(recLogger.events()))
 	for _, event := range recLogger.events() {
 		assert.Equal(t, levelDebug, event.Level)
-		ops = append(ops, event.Fields[logFieldQuery].(string))
+		op, ok := event.Fields[logFieldQuery].(string)
+		require.True(t, ok, "expected logFieldQuery to be a string, got %T", event.Fields[logFieldQuery])
+		ops = append(ops, op)
 	}
 	assert.Equal(t, []string{"SESSION", "BEGIN", "BEGIN_TX", "BEGIN"}, ops,
 		"a session Begin/BeginTx is logged under the same op names as the pool's")

@@ -12,10 +12,13 @@ package types
 // meaningful on a single pinned connection.
 //
 // Obtain a Session from a database.Interface implementation exposing
-// Session(ctx context.Context) (Session, error) — e.g. *postgresql.Connection
-// or *oracle.Connection; Interface does not declare Session, so today that
-// means type-asserting the concrete connection to reach the method. Always
-// Close it to return the physical connection to the pool.
+// Session(ctx context.Context) (Session, error); Interface itself does not
+// declare Session, so reaching it means type-asserting to the anonymous
+// interface { Session(ctx context.Context) (Session, error) } — satisfied by
+// both the vendor connections (postgresql.Connection, oracle.Connection) and
+// the tracking wrapper the framework actually hands back from
+// database.NewConnection / deps.DB(ctx). Always Close it to return the
+// physical connection to the pool.
 //
 // A Session holds no tenant lease of its own, so it must not outlive the
 // request or job scope in which it was acquired — the tenant's underlying
@@ -35,9 +38,9 @@ package types
 // statements on a single pinned connection, so concurrent calls on one Session
 // race with each other.
 //
-// Every *sql.Rows obtained from a Session must be closed BEFORE Session.Close:
-// database/sql holds the pinned connection's closing mutex while a Rows is still
-// open, so closing the Session first deadlocks.
+// Any *sql.Rows obtained from a Session that is still open makes Session.Close
+// block until that Rows is closed, since database/sql holds the pinned
+// connection's closing mutex for as long as the Rows stays open.
 //
 // Close is not idempotent: a second Close returns sql.ErrConnDone.
 type Session interface {
