@@ -86,8 +86,10 @@ milliseconds, and the outer `iat` is seconds. No exported field was added for it
 ## Consequences
 
 - **A third mode arm exists at every seam that switches on `SealMode`** — `validateMode`,
+  `validateAlgorithms` (which skips `SigAlg` for bare mode and applies it to the other two),
   `validateKids`, `contentEncsForMode`, `Seal` and `Open`. Each arm is explicit and the
-  `default` still fails closed with `JOSE_POLICY_MODE_UNKNOWN`.
+  `default` still fails closed with `JOSE_POLICY_MODE_UNKNOWN`. `validateInnerJWEHeaders` is
+  not on the list: `validateMode` selects it, so it carries no mode branch of its own.
 - **`Policy.Cty` is silently unused on this outbound path.** It is documented on the field
   and here; nothing else in the package ignores a set field, so this is the exception a
   reader must know about.
