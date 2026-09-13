@@ -135,7 +135,7 @@ func TestSealJWSofJWEOuterTypIgnoresPolicyTyp(t *testing.T) {
 	compact, err := Seal([]byte(`{}`), f.outbound, f.resolver)
 	require.NoError(t, err)
 	assert.Equal(t, "JOSE", peekHeader(t, compact).Typ)
-	assert.Equal(t, "vnd.x", peekHeader(t, innerJWE(t, compact, f.priv)).Typ)
+	assert.Equal(t, "vnd.x", peekHeader(t, innerJWE(t, compact, f.signPriv)).Typ)
 }
 
 func TestOpenJWSofJWERoundTripReportsBothLayers(t *testing.T) {
