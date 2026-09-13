@@ -150,9 +150,10 @@ type ProducerKeys struct {
 	EncPub     *rsa.PublicKey
 }
 
-// PrivateKey returns the sign key for SignKid; every other kid is unknown.
+// PrivateKey returns the sign key for SignKid; every other kid, and any kid when
+// no sign key is held, is unknown.
 func (k *ProducerKeys) PrivateKey(kid string) (*rsa.PrivateKey, error) {
-	if kid == k.SignKid {
+	if kid == k.SignKid && k.SignPriv != nil {
 		return k.SignPriv, nil
 	}
 	return nil, fmt.Errorf("no private key registered for kid %q", kid)

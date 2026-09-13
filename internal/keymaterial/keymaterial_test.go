@@ -394,3 +394,21 @@ func TestProducerKeys(t *testing.T) {
 		assert.Equal(t, `no public key registered for kid "sign-v1"`, err.Error())
 	})
 }
+
+// TestProducerKeysNilSignKeyFailsClosed pins that a producer holding no sign
+// key (an unsigned, bare-JWE caller) never hands back a nil key with a nil
+// error — including for the empty kid its zero SignKid matches.
+func TestProducerKeysNilSignKeyFailsClosed(t *testing.T) {
+	encPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	keys := &ProducerKeys{EncryptKid: "enc-v1", EncPub: &encPriv.PublicKey}
+
+	for _, kid := range []string{"", "enc-v1"} {
+		got, err := keys.PrivateKey(kid)
+		if got != nil {
+			assert.Fail(t, "unexpected key returned", "kid %q returned a %T", kid, got)
+		}
+		require.Error(t, err)
+		assert.Equal(t, `no private key registered for kid "`+kid+`"`, err.Error())
+	}
+}
