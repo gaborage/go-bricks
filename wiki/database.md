@@ -604,8 +604,9 @@ authority, a `?host=` query parameter, a keyword `host=`, or `PGHOST` — names 
 all, or carries an empty comma-separated entry, is refused naming `database.connectionstring`,
 the same defect `[C64.8]` refuses for the typed `host` field; name a host through one of
 those four sources (a service file is not one of them). A `connectionstring` whose resolved
-host is a unix-socket entry while the DSN itself claims TLS (`sslmode`, `sslnegotiation=direct`,
-or non-empty `sslrootcert`/`sslcert`/`sslkey`) is refused the same way `[C65.1]` refuses it
+host is a unix-socket entry while the DSN itself claims TLS (`sslmode` of `require`,
+`verify-ca` or `verify-full`, `sslnegotiation=direct`, or non-empty
+`sslrootcert`/`sslcert`/`sslkey`) is refused the same way `[C65.1]` refuses it
 for the typed fields; drop the TLS claim or point the DSN at a TCP host. A DSN the
 scanner cannot tokenize passes through unjudged, same as it always has.
 
