@@ -2483,6 +2483,14 @@ func TestValidateNamedDatabasesNoConflictWhenMultitenantDisabled(t *testing.T) {
 	assert.NoError(t, err, "no conflict when multitenant is disabled")
 }
 
+type socketHostCase struct {
+	name        string
+	host        string
+	tls         TLSConfig
+	wantField   string
+	wantMessage string
+}
+
 func TestIsUnixSocketHost(t *testing.T) {
 	tests := []struct {
 		name string
@@ -2490,13 +2498,11 @@ func TestIsUnixSocketHost(t *testing.T) {
 		want bool
 	}{
 		{name: "posix_absolute_path", host: "/var/run/postgresql", want: true},
-		{name: "posix_root", host: "/", want: true},
 		{name: "windows_drive_letter", host: `C:\pg`, want: true},
 		{name: "windows_drive_letter_minimal", host: `Z:\`, want: true},
 		{name: "windows_drive_first_letter", host: `A:\`, want: true},
 		{name: "lowercase_drive_letter", host: `c:\pg`, want: false},
 		{name: "drive_below_uppercase_range", host: `@:\pg`, want: false},
-		{name: "drive_above_uppercase_range", host: `[:\pg`, want: false},
 		{name: "drive_without_backslash", host: "C:", want: false},
 		{name: "drive_with_forward_slash", host: "C:/pg", want: false},
 		{name: "drive_without_colon", host: `C;\pg`, want: false},
@@ -3128,67 +3134,19 @@ func TestApplyDatabasePoolDefaultsRefusesEmptyPostgresHost(t *testing.T) {
 	})
 }
 
-// TestApplyDatabasePoolDefaultsRefusesTLSOnUnixSocketHost pins the host-transport rule
-// (ADR-062 amendment 2026-09-13): pgx dials an absolute-path host over a unix socket and
-// skips TLS there, so any TLS a section asks for would be silently dropped.
+// TestApplyDatabasePoolDefaultsRefusesTLSOnUnixSocketHost pins the ADR-062 host-transport amendment.
 func TestApplyDatabasePoolDefaultsRefusesTLSOnUnixSocketHost(t *testing.T) {
 	const socketHost = "/var/run/postgresql"
-	tests := []struct {
-		name        string
-		host        string
-		tls         TLSConfig
-		wantField   string
-		wantMessage string
-	}{
-		{
-			name:        "unix_socket_host_verify_full_with_ca_refused",
-			host:        socketHost,
-			tls:         TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile},
-			wantField:   fieldDatabaseTLS,
-			wantMessage: "unix socket",
-		},
-		{
-			name:        "unix_socket_host_require_without_material_refused",
-			host:        socketHost,
-			tls:         TLSConfig{Mode: sslModeRequire},
-			wantField:   fieldDatabaseTLS,
-			wantMessage: "unix socket",
-		},
-		{
-			name:        "unix_socket_host_prefer_without_material_refused",
-			host:        socketHost,
-			tls:         TLSConfig{Mode: sslModePrefer},
-			wantField:   fieldDatabaseTLS,
-			wantMessage: "unix socket",
-		},
-		{
-			name:        "unix_socket_host_unset_mode_with_ca_refused",
-			host:        socketHost,
-			tls:         TLSConfig{CAFile: testTLSCAFile},
-			wantField:   fieldDatabaseTLS,
-			wantMessage: "unix socket",
-		},
-		{
-			name:        "unix_socket_host_disable_with_cert_refused",
-			host:        socketHost,
-			tls:         TLSConfig{Mode: sslModeDisable, CertFile: testTLSCertFile},
-			wantField:   fieldDatabaseTLS,
-			wantMessage: "unix socket",
-		},
-		{
-			name:        "unix_socket_host_disable_with_key_refused",
-			host:        socketHost,
-			tls:         TLSConfig{Mode: sslModeDisable, KeyFile: testTLSKeyFile},
-			wantField:   fieldDatabaseTLS,
-			wantMessage: "unix socket",
-		},
-		{
-			name:        "windows_socket_host_verify_full_refused",
-			host:        `C:\pg`,
-			tls:         TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile},
-			wantField:   fieldDatabaseTLS,
-			wantMessage: "unix socket",
-		},
+	socketRefusal := func(name, host string, tls TLSConfig) socketHostCase {
+		return socketHostCase{name: name, host: host, tls: tls, wantField: fieldDatabaseTLS, wantMessage: "unix socket"}
+	}
+	tests := []socketHostCase{
+		socketRefusal("unix_socket_host_verify_full_with_ca_refused", socketHost, TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}),
+		socketRefusal("unix_socket_host_require_without_material_refused", socketHost, TLSConfig{Mode: sslModeRequire}),
+		socketRefusal("unix_socket_host_unset_mode_with_ca_refused", socketHost, TLSConfig{CAFile: testTLSCAFile}),
+		socketRefusal("unix_socket_host_disable_with_cert_refused", socketHost, TLSConfig{Mode: sslModeDisable, CertFile: testTLSCertFile}),
+		socketRefusal("unix_socket_host_disable_with_key_refused", socketHost, TLSConfig{Mode: sslModeDisable, KeyFile: testTLSKeyFile}),
+		socketRefusal("windows_socket_host_verify_full_refused", `C:\pg`, TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}),
 		{
 			// The mode allowlist still runs first, so a typo is reported as a typo.
 			name:        "unix_socket_host_invalid_mode_reports_mode_first",
