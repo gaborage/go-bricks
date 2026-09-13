@@ -431,7 +431,10 @@ the builder. The grammar will not accept a computed one.
   both vendors — so a key written with surrounding spaces matches its unpadded
   insert key, a map holding both spellings is rejected as one column written
   twice, and on PostgreSQL `ID` and `"ID"` are one column (they render alike)
-  while `id` and `ID` stay two.
+  while `id` and `ID` stay two. Match the conflict-column preconditions with
+  `errors.Is` on `types.ErrUpsertConflictColumnsRequired`,
+  `types.ErrUpsertConflictColumnNotInserted` and
+  `types.ErrUpsertConflictColumnInUpdateSet`, not by message text (`[C65.1]`).
 
 Valid identifiers on PostgreSQL are left **unquoted**: PostgreSQL folds unquoted
 identifiers to lowercase, so quoting a valid one would change which physical

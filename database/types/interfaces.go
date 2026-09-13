@@ -625,6 +625,8 @@ type QueryBuilderInterface interface {
 	// you (SELECT ... FOR UPDATE or equivalent). Splitting one atomic upsert into
 	// two statements lets a concurrent writer interleave, and under READ COMMITTED
 	// a shared transaction alone does not stop it.
+	//
+	// Precondition failures match the ErrUpsert* sentinels in this package via errors.Is.
 	BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error)
 
 	// Database function builders
