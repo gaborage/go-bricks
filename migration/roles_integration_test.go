@@ -521,8 +521,11 @@ func publicGrantRows(ctx context.Context, t *testing.T, db *sql.DB, schema strin
 //     is an ALTER DATABASE … SET row, which this template never emits and the
 //     join drops).
 //
-// Both spellings of the setting are matched because the helper quotes the
-// identifier while a hand-edited script usually does not.
+// One spelling of the setting is enough: PostgreSQL normalises the stored value
+// through flatten_set_variable_args -> quote_identifier, which drops quotes an
+// identifier does not need, so the helper's ALTER ROLE … SET search_path =
+// "public" and a hand-written bare one BOTH land in pg_db_role_setting as
+// search_path=public.
 const pgPublicSchemaResidueDetectSQL = `SELECT 'default_acl'::text AS source, r.rolname AS role_name,
        CASE d.defaclobjtype WHEN 'r' THEN 'TABLES'
                             WHEN 'S' THEN 'SEQUENCES'
@@ -538,7 +541,7 @@ SELECT 'search_path', r.rolname, c.setting
 FROM pg_db_role_setting s
 JOIN pg_roles r ON r.oid = s.setrole,
      unnest(s.setconfig) AS c(setting)
-WHERE c.setting IN ('search_path=public', 'search_path="public"')
+WHERE c.setting = 'search_path=public'
 ORDER BY 1, 2, 3`
 
 // Probe role names for the schema-residue oracle. Every assertion is scoped to
@@ -608,15 +611,20 @@ func TestPGPublicSchemaResidueDetectSQLFindsSchemaHalfResidue(t *testing.T) {
 		}, publicSchemaResidueRows(ctx, t, admin, schemaResidueProbeRole),
 			"both residues must be found, each tagged with the catalog it came from")
 
-		// The helper QUOTES the schema, so the quoted spelling is the one a real
-		// provisioning run leaves; it must be matched too, whichever way the
-		// server chooses to store it.
-		quoted := publicSchemaResidueRows(ctx, t, admin, schemaResidueQuotedProbeRole)
-		require.Len(t, quoted, 1,
-			`search_path = "public" is the spelling the helper emits and must match`)
-		require.True(t,
-			strings.HasPrefix(quoted[0], "search_path|"+schemaResidueQuotedProbeRole+"|search_path="),
-			"the quoted spelling must land in the search_path arm, not the default_acl one")
+		// The helper QUOTES the schema, so `search_path = "public"` is the
+		// spelling a real provisioning run emits — and this is the arm that
+		// pins what the SERVER does with it. flatten_set_variable_args renders
+		// the value through quote_identifier, which drops quotes an identifier
+		// does not need, so the quoted statement is stored BARE, exactly as the
+		// hand-written one above is, and the single-spelling predicate in the
+		// query detects it. Pinned exactly, not by prefix: a prefix assertion
+		// passes under either spelling and so cannot tell the two apart, which
+		// is how a dead second IN-list entry and a doc sentence claiming the
+		// quoted spelling is stored both survived earlier review rounds.
+		require.Equal(t, []string{
+			"search_path|" + schemaResidueQuotedProbeRole + "|search_path=public",
+		}, publicSchemaResidueRows(ctx, t, admin, schemaResidueQuotedProbeRole),
+			`SET search_path = "public" must be stored — and detected — as the bare search_path=public`)
 	})
 
 	// The atom's apply step for this half.
@@ -654,6 +662,168 @@ func publicSchemaResidueRows(ctx context.Context, t *testing.T, db *sql.DB, role
 			continue
 		}
 		out = append(out, strings.Join([]string{source, roleName, detail}, "|"))
+	}
+	require.NoError(t, rows.Err())
+	return out
+}
+
+// pgPublicNamedRoleGrantDetectSQL is the FOURTH detect step of the [C65.4]
+// atom in wiki/migrations.md, kept here verbatim for the same reason as the
+// other three: so the atom's copy has a live oracle and the two cannot drift
+// apart silently.
+//
+// It closes a LIVE EXPOSURE the other three miss entirely. For a Schema spelled
+// "public", buildPGRoleStatements (migration/roles.go) emits
+// GRANT USAGE ON SCHEMA "public" TO <runtime>,
+// GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "public" TO <runtime>
+// and GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA "public" TO <runtime>.
+// Those go to a REAL role, so grantee 0 never matches them: pgPublicGrantDetectSQL
+// is blind to them, pgPublicSchemaResidueDetectSQL reads pg_default_acl and
+// pg_db_role_setting only, pgReservedRoleDetectSQL is about role NAMES, and the
+// atom's apply step revokes only FROM PUBLIC. An operator could therefore finish
+// the remediation, verify, read clean — and the tenant's runtime role would still
+// hold DML on every pre-existing table in the shared schema.
+//
+// The query is parameter-free so the const stays a verbatim oracle, which means
+// the candidate roles have to be DERIVED rather than passed in. The derivation is
+// the search_path residue arm 3 already relies on: the template emits
+// ALTER ROLE <role> SET search_path = "public" for BOTH roles, so any role whose
+// pg_db_role_setting entry points at public is a candidate. One spelling is
+// matched for the same reason arm 3 matches one: the server normalises the
+// quoted value to the bare search_path=public before storing it.
+//
+// Privileges are then read for those roles' oids (a.grantee = the role oid, where
+// the PUBLIC query uses 0) out of pg_namespace.nspacl for the public schema itself
+// and pg_class.relacl for its objects — no relkind filter, because a sequence IS a
+// pg_class row, exactly as in pgPublicGrantDetectSQL.
+//
+// A row is not proof on its own: an object's OWNER carries an implicit ACL entry
+// once any grant is made, so a candidate role that also owns objects in public
+// reports its own ownership privileges here. Corroborate against the spec.
+const pgPublicNamedRoleGrantDetectSQL = `WITH public_search_path_roles AS (
+  SELECT DISTINCT r.oid AS roleoid, r.rolname
+  FROM pg_db_role_setting s
+  JOIN pg_roles r ON r.oid = s.setrole,
+       unnest(s.setconfig) AS c(setting)
+  WHERE c.setting = 'search_path=public'
+)
+SELECT 'schema'::text AS source, p.rolname AS role_name,
+       n.nspname AS object_name, a.privilege_type
+FROM public_search_path_roles p, pg_namespace n, aclexplode(n.nspacl) a
+WHERE n.nspname = 'public'
+  AND a.grantee = p.roleoid
+UNION ALL
+SELECT 'relation', p.rolname, c.relname, a.privilege_type
+FROM public_search_path_roles p, pg_class c, pg_namespace n, aclexplode(c.relacl) a
+WHERE n.oid = c.relnamespace
+  AND n.nspname = 'public'
+  AND a.grantee = p.roleoid
+ORDER BY 1, 2, 3, 4`
+
+// Probe identifiers for the named-role grant oracle. Every assertion is scoped to
+// the role, so a container shared with another test (or another run) cannot make
+// this test flaky; the table lives in the shared public schema and is therefore
+// dropped on the way out whatever happens.
+const (
+	namedGrantProbeRole  = "c654_named_grant_probe"
+	namedGrantProbeTable = "c654_named_grant_probe_tbl"
+)
+
+// TestPGPublicNamedRoleGrantDetectSQLFindsNamedRoleGrants is the falsifiability
+// check on the atom's fourth detect query. The pre-fix state cannot be
+// provisioned any more — Validate refuses Schema: "public" outright — so the
+// oracle reproduces the exposure by hand with the same statement shapes
+// buildPGRoleStatements would have emitted against a real role.
+//
+// The middle assertion is the one that pins the CTE: the probe holds both grants
+// BEFORE its search_path is set, and the query must stay quiet, because a role
+// with no search_path residue is not a candidate at all.
+func TestPGPublicNamedRoleGrantDetectSQLFindsNamedRoleGrants(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx, cancel := testCtx(t)
+	defer cancel()
+
+	admin := env.adminDB(t)
+
+	_, err := admin.ExecContext(ctx, `CREATE ROLE `+namedGrantProbeRole)
+	require.NoError(t, err)
+	_, err = admin.ExecContext(ctx, `CREATE TABLE public.`+namedGrantProbeTable+` (id INT PRIMARY KEY)`)
+	require.NoError(t, err)
+
+	// Cleaned up whatever happens, and in this order: a role still holding a
+	// privilege on an object cannot be dropped, and the table lives in the
+	// shared public schema where a leftover would poison every later run.
+	defer func() {
+		for _, stmt := range []string{
+			`REVOKE ALL ON public.` + namedGrantProbeTable + ` FROM ` + namedGrantProbeRole,
+			`REVOKE ALL ON SCHEMA public FROM ` + namedGrantProbeRole,
+			`ALTER ROLE ` + namedGrantProbeRole + ` RESET search_path`,
+			`DROP TABLE IF EXISTS public.` + namedGrantProbeTable,
+			`DROP ROLE IF EXISTS ` + namedGrantProbeRole,
+		} {
+			_, cleanupErr := admin.ExecContext(ctx, stmt)
+			assert.NoError(t, cleanupErr, stmt)
+		}
+	}()
+
+	require.Empty(t, publicNamedRoleGrantRows(ctx, t, admin, namedGrantProbeRole),
+		"a freshly created role holds nothing on public")
+
+	t.Run("named_role_grants_are_found", func(t *testing.T) {
+		// The statement shapes a Schema spelled "public" leaves on a real role
+		// (migration/roles.go), against the probe role instead.
+		for _, stmt := range []string{
+			`GRANT USAGE ON SCHEMA public TO ` + namedGrantProbeRole,
+			`GRANT SELECT ON public.` + namedGrantProbeTable + ` TO ` + namedGrantProbeRole,
+		} {
+			_, execErr := admin.ExecContext(ctx, stmt)
+			require.NoError(t, execErr, stmt)
+		}
+
+		require.Empty(t, publicNamedRoleGrantRows(ctx, t, admin, namedGrantProbeRole),
+			"a role with no search_path residue is not a candidate, however much it holds")
+
+		_, execErr := admin.ExecContext(ctx,
+			`ALTER ROLE `+namedGrantProbeRole+` SET search_path = public`)
+		require.NoError(t, execErr)
+
+		require.Equal(t, []string{
+			"relation|" + namedGrantProbeRole + "|" + namedGrantProbeTable + "|SELECT",
+			"schema|" + namedGrantProbeRole + "|public|USAGE",
+		}, publicNamedRoleGrantRows(ctx, t, admin, namedGrantProbeRole),
+			"both grants must be found, each tagged with the catalog it came from, in ORDER BY order")
+
+		for _, stmt := range []string{
+			`REVOKE ALL ON public.` + namedGrantProbeTable + ` FROM ` + namedGrantProbeRole,
+			`REVOKE ALL ON SCHEMA public FROM ` + namedGrantProbeRole,
+		} {
+			_, revokeErr := admin.ExecContext(ctx, stmt)
+			require.NoError(t, revokeErr, stmt)
+		}
+
+		require.Empty(t, publicNamedRoleGrantRows(ctx, t, admin, namedGrantProbeRole),
+			"the apply step's named-role revokes must make the query go quiet again")
+	})
+}
+
+// publicNamedRoleGrantRows runs pgPublicNamedRoleGrantDetectSQL verbatim and
+// flattens the rows for one role to "source|role|object|privilege". The filter is
+// applied in Go, never in the SQL, so the const under test stays byte-identical
+// to the query the atom publishes.
+func publicNamedRoleGrantRows(ctx context.Context, t *testing.T, db *sql.DB, role string) []string {
+	t.Helper()
+	rows, err := db.QueryContext(ctx, pgPublicNamedRoleGrantDetectSQL)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var source, roleName, object, privilege string
+		require.NoError(t, rows.Scan(&source, &roleName, &object, &privilege))
+		if roleName != role {
+			continue
+		}
+		out = append(out, strings.Join([]string{source, roleName, object, privilege}, "|"))
 	}
 	require.NoError(t, rows.Err())
 	return out
