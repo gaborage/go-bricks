@@ -4101,6 +4101,11 @@ issuerInbound := &jose.Policy{
     Enc:        josev4.A256GCM,
 }
 
+compact, err := jose.Seal(payload, issuerOutbound, resolver)
+if err != nil {
+    return err
+}
+
 // Verify-then-decrypt. hdr.JWS is the outer layer (Cty "JWE"), hdr.JWE the inner one;
 // hdr.JWS.IATMillis is always 0 here, because the outer iat is seconds.
 plaintext, claims, hdr, err := jose.Open(compact, issuerInbound, resolver)
