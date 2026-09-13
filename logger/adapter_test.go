@@ -907,6 +907,27 @@ func TestLogEventAdapterErrNilRedactorIsUnchanged(t *testing.T) {
 	assert.Equal(t, golden.String(), buf.String())
 }
 
+// redactingError implements both error and the log Redactor hook.
+type redactingError struct{}
+
+func (redactingError) Error() string       { return "card 4111111111111111 declined" }
+func (redactingError) RedactedForLog() any { return "hooked" }
+
+func TestLogEventAdapterErrIgnoresRedactorHook(t *testing.T) {
+	// The Redactor hook belongs to the value walk; Err keeps writing Error().
+	testErr := redactingError{}
+
+	var golden bytes.Buffer
+	goldenLogger := zerolog.New(&golden)
+	goldenLogger.Error().Err(testErr).Msg("error occurred")
+
+	filtered, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+	filtered.Error().Err(testErr).Msg("error occurred")
+
+	assert.Equal(t, golden.String(), buf.String())
+	assert.NotContains(t, buf.String(), "hooked")
+}
+
 func TestLogEventAdapterErrRedactorReplacesMessage(t *testing.T) {
 	config := DefaultFilterConfig()
 	config.ErrorRedactor = func(error) string { return "[redacted]" }

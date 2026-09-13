@@ -227,7 +227,47 @@ func (f *SensitiveDataFilter) filterValueWithProtection(key string, value any, v
 		return f.config.MaskValue
 	}
 
+	if redactor, ok := asRedactor(value); ok {
+		return f.filterRedactedShape(key, redactor.RedactedForLog(), visited, maxDepth-1)
+	}
+
 	return f.filterByTypeWithProtection(key, value, visited, maxDepth)
+}
+
+// Redactor is implemented by a value that knows its own log-safe shape. The
+// filter logs RedactedForLog's result in place of the value, at every depth and
+// through both Interface and WithFields, and still applies the needle list to
+// that result. A value under a sensitive key is masked whole without calling it.
+//
+// Implement it with a VALUE receiver: a pointer-receiver method leaves a bare
+// value of the type unrecognized, so it would be walked field by field instead.
+type Redactor interface {
+	RedactedForLog() any
+}
+
+// asRedactor skips a nil pointer, whose value-receiver method would panic.
+func asRedactor(value any) (Redactor, bool) {
+	redactor, ok := value.(Redactor)
+	if !ok {
+		return nil, false
+	}
+	if rv := reflect.ValueOf(value); rv.Kind() == reflect.Pointer && rv.IsNil() {
+		return nil, false
+	}
+	return redactor, true
+}
+
+// filterRedactedShape filters a Redactor's result without consulting the hook
+// on the result itself (only on its children), so a hook returning its own type
+// terminates.
+func (f *SensitiveDataFilter) filterRedactedShape(key string, shape any, visited map[uintptr]struct{}, maxDepth int) any {
+	if shape == nil {
+		return nil
+	}
+	if maxDepth <= 0 {
+		return f.config.MaskValue
+	}
+	return f.filterByTypeWithProtection(key, shape, visited, maxDepth)
 }
 
 // filterIfOpaquePayload answers the two shapes the reflect walk cannot see into,

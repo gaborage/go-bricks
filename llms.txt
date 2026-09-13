@@ -5441,6 +5441,7 @@ fw, _, err = app.NewWithOptions(&app.Options{LoggerFilterConfig: base})
 **Matching semantics:**
 - Substring, case-insensitive. `pan` masks `pan`, `PAN`, `card_pan`, `primary_account_number`.
 - Applies to direct `Str/Int/Interface(...)` fields, nested maps, structs (uses `json` tags when present), and slice/array elements.
+- A type implementing `logger.Redactor` (`RedactedForLog() any`, value receiver) is logged as its returned shape, which is still filtered; a sensitive key still masks it whole (ADR-110).
 - URL values whose key is masked get the password stripped but path/host preserved: `https://user:pwd@host/path?token=x` → `https://user:***@host/path?token=x`.
 
 **What this does *not* do:**
