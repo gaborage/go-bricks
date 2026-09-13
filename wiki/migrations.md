@@ -9144,7 +9144,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   ```sql
   SELECT nspname FROM pg_namespace
   WHERE lower(nspname) IN ('public', 'information_schema')
-     OR lower(nspname) LIKE 'pg\_%'
+     OR lower(nspname) LIKE 'pg^_%' ESCAPE '^'
   ```
 
   That query cannot settle the `public` case on its own, because `public` exists on every
@@ -9336,15 +9336,12 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
   ```sql
   SELECT rolname FROM pg_roles
-  WHERE lower(rolname) = 'public' OR lower(rolname) LIKE 'pg\_%'
+  WHERE lower(rolname) = 'public' OR lower(rolname) LIKE 'pg^_%' ESCAPE '^'
   ```
 
-  `LIKE 'pg\_%'` is correct as written under the default `standard_conforming_strings = on`
-  (on by default since PostgreSQL 9.1): the literal keeps the backslash, and backslash is
-  `LIKE`'s default escape character, so `\_` matches a literal underscore and no `ESCAPE '\'`
-  clause is needed. Under `standard_conforming_strings = off` the string parser would consume
-  the backslash and `_` would degrade to a single-character wildcard, matching `pgx…` too — so
-  run `SHOW standard_conforming_strings` first if your session inherits a non-default setting.
+  `LIKE 'pg^_%' ESCAPE '^'` names its own escape character, so `_` matches a literal
+  underscore on any server and under any session settings — paste it as it stands. The
+  schema detect at the top spells the same predicate the same way for the same reason.
   The schema half needs no companion query: the schema detect at the top already lowercases
   `nspname`, so it catches schema-side case variants as it stands.
 

@@ -920,20 +920,21 @@ func publicNamedRoleGrantRows(ctx context.Context, t *testing.T, db *sql.DB, rol
 // yet C65.4 matches case-insensitively, so those deployments do hit the gate.
 // This query is how an operator finds them.
 //
-// LIKE 'pg\_%' is correct as written under the default
-// standard_conforming_strings = on: the literal keeps the backslash, backslash
-// is LIKE's default escape character, so \_ matches a LITERAL underscore and no
-// ESCAPE clause is needed. With the escape broken, _ would degrade to a
-// single-character wildcard and pgx_probe would match too — which is exactly
-// what the near-miss role in the test below falsifies. The lower() governs BOTH
-// arms on purpose: the server accepts "PG_x" as an ordinary role, so the LIKE
-// arm has to fold case as well to see it.
+// LIKE 'pg^_%' ESCAPE '^' names its own escape character, so the underscore is
+// a LITERAL underscore regardless of session settings. The backslash form the
+// query used to carry (LIKE 'pg\_%', escape implied) is correct only while
+// standard_conforming_strings = on, because with it off the string parser eats
+// the backslash and _ degrades to a single-character wildcard — matching pgx…
+// too. The explicit ESCAPE removes that dependency; the near-miss role in the
+// test below is what falsifies it either way. The lower() governs BOTH arms on
+// purpose: the server accepts "PG_x" as an ordinary role, so the LIKE arm has
+// to fold case as well to see it.
 //
 // Unlike the PUBLIC-grant query, a row here is not by itself a finding: the
 // pg_-prefixed predefined roles ship with every instance and are baseline
 // noise. A row is a match only when the name is one your own spec provisions.
 const pgReservedRoleDetectSQL = `SELECT rolname FROM pg_roles
-WHERE lower(rolname) = 'public' OR lower(rolname) LIKE 'pg\_%'`
+WHERE lower(rolname) = 'public' OR lower(rolname) LIKE 'pg^_%' ESCAPE '^'`
 
 // pgPredefinedRoleBaseline lists PostgreSQL's own pg_-prefixed predefined roles
 // that pgReservedRoleDetectSQL necessarily returns on every instance. It is
@@ -968,8 +969,9 @@ var pgPredefinedRoleBaseline = []string{
 // There are two probe roles because the query has two arms and each needs its
 // own witness: "Public" pins lower(rolname) = 'public', and "PG_Probe" pins the
 // lower() on the LIKE arm — drop that one call and the arm becomes
-// rolname LIKE 'pg\_%', which still finds every lowercase predefined role and
-// still finds "Public", so nothing but "PG_Probe" would notice.
+// rolname LIKE 'pg^_%' ESCAPE '^', which still finds every lowercase
+// predefined role and still finds "Public", so nothing but "PG_Probe" would
+// notice.
 func TestPGReservedRoleDetectSQLFindsCaseVariantRoles(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx, cancel := testCtx(t)
@@ -1014,11 +1016,11 @@ func TestPGReservedRoleDetectSQLFindsCaseVariantRoles(t *testing.T) {
 		require.Contains(t, got, "Public",
 			"a case variant the server accepted must be found by the detect query")
 		require.Contains(t, got, "PG_Probe",
-			`the LIKE arm must fold case too; without lower(), 'pg\_%' misses PG_Probe entirely`)
+			`the LIKE arm must fold case too; without lower(), 'pg^_%' misses PG_Probe entirely`)
 		require.Subset(t, got, pgPredefinedRoleBaseline,
 			"the predefined roles stay in the result set alongside the finding")
 		require.NotContains(t, got, "pgx_probe",
-			`LIKE 'pg\_%' must match a LITERAL underscore; a pgx_probe hit means the escape is broken`)
+			`LIKE 'pg^_%' ESCAPE '^' must match a LITERAL underscore; a pgx_probe hit means the escape is broken`)
 	})
 
 	after := reservedRoleNames(ctx, t, admin)
@@ -1044,6 +1046,123 @@ func reservedRoleNames(ctx context.Context, t *testing.T, db *sql.DB) []string {
 		var rolname string
 		require.NoError(t, rows.Scan(&rolname))
 		out = append(out, rolname)
+	}
+	require.NoError(t, rows.Err())
+	return out
+}
+
+// Probe identifiers for the PUBLIC-pseudo-role premise oracle below. The schema
+// is probe-specific and every assertion filters on it, so a container shared
+// with another test (or another run) cannot make the grantee-0 read flaky.
+const (
+	publicPremiseProbeSchema = "c654_public_premise_probe"
+	publicPremiseProbeRole   = "Public"
+)
+
+// TestPGQuotedPublicIsPseudoRoleAndMixedCaseIsCreatable pins the three server
+// facts the C65.4 role half rests on. Every query in this file, the reserved
+// role detect and the whole "a reserved role name never became a role, so look
+// for the grants it produced instead" branch of the atom are downstream of
+// them, and a code review has already asserted the opposite of the first two —
+// so they are executed here rather than reasoned about:
+//
+//  1. CREATE ROLE "public" is REFUSED. The quoting does not help: PostgreSQL's
+//     reserved-name check runs on the already-parsed identifier, so the server
+//     answers SQLSTATE 42939 (reserved_name), "role name \"public\" is reserved".
+//     That is why no real role by that name can exist to hold grants, and why
+//     the PUBLIC-grant detect hunts grantee 0 instead of a rolname.
+//  2. CREATE ROLE "Public" SUCCEEDS. The same check is exact-case, so a mixed-
+//     case variant is an ordinary role with an ordinary oid — invisible to the
+//     grantee-0 query, which is the entire reason pgReservedRoleDetectSQL
+//     exists as a separate detect step.
+//  3. GRANT … TO "public" lands on grantee oid 0 — the PUBLIC pseudo-role —
+//     even while a real role named "Public" exists on the same instance. The
+//     quoted spelling is resolved by RoleSpec, not by identifier lookup, so
+//     PGRoleSpec.Validate refusing the name is the only thing between a
+//     RuntimeRole: "public" and a grant to every role on the instance.
+//
+// The SQLSTATE is read through an anonymous interface{ SQLState() string }
+// assertion rather than by importing pgconn: pgx's *pgconn.PgError satisfies
+// it, and the test keeps the driver out of its import graph. The message text
+// is asserted alongside it so a driver that ever stops exposing SQLState
+// fails loudly instead of silently weakening the pin.
+func TestPGQuotedPublicIsPseudoRoleAndMixedCaseIsCreatable(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx, cancel := testCtx(t)
+	defer cancel()
+
+	admin := env.adminDB(t)
+
+	t.Run("exact_public_is_reserved_and_cannot_become_a_role", func(t *testing.T) {
+		_, err := admin.ExecContext(ctx, `CREATE ROLE "public"`)
+		require.Error(t, err,
+			`CREATE ROLE "public" must be refused; if it ever succeeds, a real role can hold the grants the atom looks for at grantee 0`)
+
+		var coded interface{ SQLState() string }
+		require.ErrorAs(t, err, &coded,
+			"the pgx driver must expose the server's SQLSTATE on this error")
+		require.Equal(t, "42939", coded.SQLState(),
+			"reserved_name is the class the atom's provisioning abort path keys on")
+		require.Contains(t, err.Error(), "is reserved",
+			`the server's own wording, pinned alongside the SQLSTATE`)
+	})
+
+	t.Run("mixed_case_public_is_an_ordinary_role", func(t *testing.T) {
+		_, err := admin.ExecContext(ctx, `CREATE ROLE "`+publicPremiseProbeRole+`"`)
+		require.NoError(t, err,
+			`the reserved check is exact-case, so "Public" must be created as an ordinary role`)
+		defer func() {
+			_, dropErr := admin.ExecContext(ctx, `DROP ROLE IF EXISTS "`+publicPremiseProbeRole+`"`)
+			assert.NoError(t, dropErr)
+		}()
+
+		var oid int64
+		require.NoError(t, admin.QueryRowContext(ctx,
+			`SELECT oid::bigint FROM pg_roles WHERE rolname = $1`, publicPremiseProbeRole).Scan(&oid),
+			`"Public" must exist in pg_roles under that exact spelling`)
+		require.NotZero(t, oid,
+			"a real role carries a real oid; 0 is the PUBLIC pseudo-role and never a catalog row")
+
+		t.Run("quoted_public_grant_lands_on_grantee_zero", func(t *testing.T) {
+			// Deliberately run while the real "Public" role exists: the point
+			// is that the quoted spelling still resolves to the pseudo-role.
+			_, schemaErr := admin.ExecContext(ctx, `CREATE SCHEMA `+publicPremiseProbeSchema)
+			require.NoError(t, schemaErr)
+			defer func() {
+				_, dropErr := admin.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+publicPremiseProbeSchema+` CASCADE`)
+				assert.NoError(t, dropErr)
+			}()
+
+			_, grantErr := admin.ExecContext(ctx,
+				`GRANT USAGE ON SCHEMA `+publicPremiseProbeSchema+` TO "public"`)
+			require.NoError(t, grantErr)
+
+			require.Contains(t, probeSchemaGrantees(ctx, t, admin), "0|USAGE",
+				`GRANT … TO "public" must land on grantee 0, the PUBLIC pseudo-role`)
+			require.NotContains(t, probeSchemaGrantees(ctx, t, admin), fmt.Sprintf("%d|USAGE", oid),
+				`the grant must NOT have gone to the real "Public" role`)
+		})
+	})
+}
+
+// probeSchemaGrantees reads publicPremiseProbeSchema's ACL as "grantee|privilege"
+// strings. Scoped to the probe schema by name, so nothing another test does to
+// the shared container can move these rows.
+func probeSchemaGrantees(ctx context.Context, t *testing.T, db *sql.DB) []string {
+	t.Helper()
+	rows, err := db.QueryContext(ctx,
+		`SELECT a.grantee::bigint, a.privilege_type
+FROM pg_namespace n, aclexplode(n.nspacl) a
+WHERE n.nspname = $1`, publicPremiseProbeSchema)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var grantee int64
+		var privilege string
+		require.NoError(t, rows.Scan(&grantee, &privilege))
+		out = append(out, fmt.Sprintf("%d|%s", grantee, privilege))
 	}
 	require.NoError(t, rows.Err())
 	return out
