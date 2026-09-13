@@ -13,14 +13,14 @@ reply indistinguishable at the caller: the caller read bytes nothing had authent
 under a status code the peer chose. The rule is now directional. Under an `Inbound` policy a
 **2xx must have been unwrapped** — `application/jose` plus a successful `jose.Open` in
 nested mode, `Unwrap` ok plus a successful `jose.Open` in envelope mode — or `RoundTrip`
-returns `httpclient.ErrJOSEPlaintextResponse`, wrapped with the status, with the body
-closed and never handed back. **Non-2xx is unchanged**: a pre-trust error
+returns `httpclient.ErrJOSEPlaintextResponse`, wrapped with the status and the peer name,
+with the body closed and never handed back. **Non-2xx is unchanged**: a pre-trust error
 envelope is plaintext by design, because the peer was never authenticated in the first
 place, and it still reaches the caller with its headers untouched. Under a bare-JWE policy
 "unwrapped" proves only that the body was encrypted to us, not who sent it — there is no
 inner JWS, so sender authentication stays out of band exactly as the Context below says.
 
-Two decisions inside that rule. **Empty successes are not violations**: 204, 304 and every
+Four decisions inside that rule. **Empty successes are not violations**: 204, 304 and every
 reply to HEAD stay in the skip set the ADR-107 transport already had — net/http guarantees
 they carry no body, so there is no plaintext to mistake for a payload, and refusing them
 would break every DELETE and conditional GET against a JOSE peer. A JOSE-typed 205 or 2xx
@@ -28,8 +28,16 @@ answer to CONNECT keeps reaching `jose.Open` and failing closed exactly as befor
 plaintext one is refused like every other unopened 2xx. **Interceptors
 never see it**: a `RoundTrip` error short-circuits before `buildResponse`, so a response
 interceptor that would log, cache or re-parse the payload is never handed unauthenticated
-bytes. The error carries the status and nothing from the body — those bytes are precisely
-what must not be reported, being unauthenticated content the peer chose. In **nested mode**
+bytes. **One WARN, status, peer and request id only**: the error and the log line name which peer
+answered and with what status — the line also carrying the `request_id` httpclient's other
+request and response lines use, so an operator can join the refusal to its request — and
+nothing from the body — those bytes are precisely what
+must not be reported or logged, being unauthenticated content the peer chose. Naming the
+peer is what makes a fleet calling several JOSE integrations able to tell which one
+regressed, so `JOSETransport` gained a `PeerName` and a `Logger`, both seeded by the builder
+(`PeerName` read at Build time, so `WithPeerName` wins wherever it sits in the chain); an unusable
+`Logger` on a hand-built transport — nil, or a non-nil interface holding a typed-nil pointer —
+drops the line and leaves the error intact. In **nested mode**
 a refused response is closed undrained — the body was never read — so its keep-alive
 connection is discarded rather than reused: a deliberate trade, since draining bytes the
 transport just declared untrustworthy to save a connection is the wrong side of that

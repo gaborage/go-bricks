@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -49,6 +50,52 @@ func (e stubEnvelope) Unwrap(contentType string, body []byte) (compact string, o
 	}
 	return e.unwrap(contentType, body)
 }
+
+// recordedEvent is one published log line: its level, its structured fields and its
+// message. recordingLogger is the smallest logger.Logger that lets a test read those
+// back; only Msg publishes, so an event that is built and dropped records nothing.
+type recordedEvent struct {
+	level   string
+	fields  map[string]any
+	message string
+}
+
+// The embedded interfaces supply the methods the refusal path never calls; a nil
+// embedded value panics rather than passing silently, so an unexpected call is loud.
+type recordingLogger struct {
+	logger.Logger
+	events []recordedEvent
+}
+
+func (l *recordingLogger) event(level string) logger.LogEvent {
+	return &recordingEvent{logger: l, level: level, fields: map[string]any{}}
+}
+
+func (l *recordingLogger) Info() logger.LogEvent  { return l.event("info") }
+func (l *recordingLogger) Error() logger.LogEvent { return l.event("error") }
+func (l *recordingLogger) Debug() logger.LogEvent { return l.event("debug") }
+func (l *recordingLogger) Warn() logger.LogEvent  { return l.event("warn") }
+
+type recordingEvent struct {
+	logger.LogEvent
+	logger *recordingLogger
+	level  string
+	fields map[string]any
+}
+
+func (e *recordingEvent) set(key string, value any) logger.LogEvent {
+	e.fields[key] = value
+	return e
+}
+
+func (e *recordingEvent) Msg(msg string) {
+	e.logger.events = append(e.logger.events, recordedEvent{level: e.level, fields: e.fields, message: msg})
+}
+
+func (e *recordingEvent) Str(key, value string) logger.LogEvent           { return e.set(key, value) }
+func (e *recordingEvent) Int(key string, v int) logger.LogEvent           { return e.set(key, v) }
+func (e *recordingEvent) Int64(key string, v int64) logger.LogEvent       { return e.set(key, v) }
+func (e *recordingEvent) Dur(key string, d time.Duration) logger.LogEvent { return e.set(key, d) }
 
 func newCloseTrackingBody(s string) *closeTrackingBody {
 	return &closeTrackingBody{r: bytes.NewReader([]byte(s))}
@@ -193,6 +240,7 @@ func TestJOSETransportPlaintextSuccessFailsClosed(t *testing.T) {
 			defer server.Close()
 
 			transport := newJOSETransport(f)
+			transport.PeerName = "visa-vts"
 			if tt.envelope {
 				// Recognizes nothing, so the refusal comes from the unwrap verdict rather
 				// than a decrypt failure.
@@ -206,6 +254,11 @@ func TestJOSETransportPlaintextSuccessFailsClosed(t *testing.T) {
 			require.Error(t, err)
 			assert.Nil(t, resp, "a plaintext success must not reach the caller")
 			require.ErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
+			// A fleet calling several JOSE peers learns from the error alone which
+			// integration regressed — and never anything the peer's body carried.
+			assert.Contains(t, err.Error(), "visa-vts")
+			assert.Contains(t, err.Error(), strconv.Itoa(tt.status))
+			assert.NotContains(t, err.Error(), `"ok"`, "the refused body must not reach the error")
 		})
 	}
 }
@@ -255,6 +308,122 @@ func TestJOSETransportPlaintextPassesThrough(t *testing.T) {
 			assert.JSONEq(t, `{"ok":true}`, string(body))
 		})
 	}
+}
+
+// TestJOSETransportPlaintextSuccessWarnsOnce pins the log-side half: exactly one WARN per
+// refusal, and no line at all when the transport is opted out and the body legitimately
+// passes through. The field map is asserted WHOLE rather than key by key, so a mutant that
+// renames direction, rewrites the message or drops request_id fails here — and so does one
+// that adds a field, which is how the "never body bytes" guarantee stays checked.
+func TestJOSETransportPlaintextSuccessWarnsOnce(t *testing.T) {
+	tests := []struct {
+		name           string
+		envelope       bool
+		allowPlaintext bool
+		requestID      string
+		wantEvents     int
+		wantFields     map[string]any
+	}{
+		{
+			name:       "nested_mode_refusal",
+			requestID:  "req-42",
+			wantEvents: 1,
+			wantFields: map[string]any{
+				"direction":  "inbound",
+				"peer":       "visa-vts",
+				"status":     http.StatusOK,
+				"request_id": "req-42",
+			},
+		},
+		{
+			name:       "envelope_mode_refusal",
+			envelope:   true,
+			requestID:  "req-43",
+			wantEvents: 1,
+			wantFields: map[string]any{
+				"direction":  "inbound",
+				"peer":       "visa-vts",
+				"status":     http.StatusOK,
+				"request_id": "req-43",
+			},
+		},
+		{
+			// No trace id anywhere: the field is omitted rather than logged blank.
+			name:       "refusal_without_a_request_id",
+			wantEvents: 1,
+			wantFields: map[string]any{
+				"direction": "inbound",
+				"peer":      "visa-vts",
+				"status":    http.StatusOK,
+			},
+		},
+		{name: "opted_out_pass_through", allowPlaintext: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := jositest.NewBidirectionalFixture(t)
+			server := plainJSONServer(t, http.StatusOK, func(*http.Request) {})
+			defer server.Close()
+
+			log := &recordingLogger{}
+			transport := newJOSETransport(f)
+			transport.Logger = log
+			transport.PeerName = "visa-vts"
+			transport.AllowPlaintextSuccess = tt.allowPlaintext
+			if tt.envelope {
+				transport.Envelope = stubEnvelope{}
+			}
+
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
+			require.NoError(t, err)
+			if tt.requestID != "" {
+				req.Header.Set(httpclient.HeaderXRequestID, tt.requestID)
+			}
+
+			resp, err := transport.RoundTrip(req)
+			if tt.wantEvents == 0 {
+				require.NoError(t, err)
+				defer resp.Body.Close()
+				assert.Empty(t, log.events, "a pass-through is not a violation")
+				return
+			}
+			assert.Nil(t, resp)
+			require.ErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
+
+			require.Len(t, log.events, tt.wantEvents)
+			event := log.events[0]
+			assert.Equal(t, "warn", event.level)
+			assert.Equal(t, tt.wantFields, event.fields)
+			assert.Equal(t, "REST client refused an unprotected successful response", event.message)
+		})
+	}
+}
+
+// nilZeroLogger is the D1009 shape: a non-nil logger.Logger interface holding a typed-nil
+// *logger.ZeroLogger, whose Warn() dereferences a nil zlog. A `!= nil` guard admits it and
+// panics on the refusal path; isNilLogger rejects it.
+func TestJOSETransportTypedNilLoggerStillRefuses(t *testing.T) {
+	f := jositest.NewBidirectionalFixture(t)
+	server := plainJSONServer(t, http.StatusOK, func(*http.Request) {})
+	defer server.Close()
+
+	var nilZeroLogger logger.Logger = (*logger.ZeroLogger)(nil)
+	if nilZeroLogger == nil {
+		t.Fatal("fixture must be a non-nil interface holding a typed-nil pointer")
+	}
+
+	transport := newJOSETransport(f)
+	transport.PeerName = "visa-vts"
+	transport.Logger = nilZeroLogger
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
+	require.NoError(t, err)
+
+	resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is nil on this error path; RoundTrip closed the peer's body
+	assert.Nil(t, resp)
+	require.ErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
+	assert.Contains(t, err.Error(), "visa-vts")
 }
 
 // TestJOSETransportEnvelopeRefusalClosesTheBodyOnce pins the cleanup on every error path
@@ -985,6 +1154,57 @@ func TestBuilderWithJOSEForwardsAllowPlaintextSuccess(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.JSONEq(t, `{"ok":true}`, string(resp.Body))
+}
+
+// TestBuilderWithJOSEThreadsThePeerNameIntoTheRefusal pins that a built client's refusal
+// names the peer WithPeerName gave it. The transport wrapper reads the name when Build
+// runs, not when WithJOSE does, so either chain order reaches the same error.
+func TestBuilderWithJOSEThreadsThePeerNameIntoTheRefusal(t *testing.T) {
+	const peerName = "visa-vts"
+	tests := []struct {
+		name      string
+		peerFirst bool
+	}{
+		{name: "peer_name_before_with_jose", peerFirst: true},
+		{name: "peer_name_after_with_jose"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := jositest.NewBidirectionalFixture(t)
+			server := plainJSONServer(t, http.StatusOK, func(*http.Request) {})
+			defer server.Close()
+
+			log := &recordingLogger{}
+			b := httpclient.NewBuilder(log)
+			withJOSE := func() {
+				b = b.WithJOSE(httpclient.JOSEConfig{Outbound: f.ClientOutbound, Inbound: f.ClientInbound, Resolver: f.Resolver})
+			}
+			withPeer := func() { b = b.WithPeerName(peerName) }
+			if tt.peerFirst {
+				withPeer()
+				withJOSE()
+			} else {
+				withJOSE()
+				withPeer()
+			}
+			client, err := b.Build()
+			require.NoError(t, err)
+
+			_, err = client.Post(context.Background(), &httpclient.Request{URL: server.URL, Body: []byte(`{"x":1}`)})
+			require.ErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
+			assert.Contains(t, err.Error(), peerName, "the builder must thread WithPeerName into the transport")
+
+			var warns []recordedEvent
+			for _, event := range log.events {
+				if event.level == "warn" {
+					warns = append(warns, event)
+				}
+			}
+			require.Len(t, warns, 1, "the builder must thread its own logger into the transport")
+			assert.Equal(t, peerName, warns[0].fields["peer"])
+		})
+	}
 }
 
 // TestBuilderWithJOSEPlaintextSuccessIsNotRetried pins the refusal as terminal. The peer

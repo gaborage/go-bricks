@@ -8,6 +8,7 @@ import (
 	nethttp "net/http"
 
 	"github.com/gaborage/go-bricks/jose"
+	"github.com/gaborage/go-bricks/logger"
 )
 
 // headerContentType is the canonical HTTP Content-Type header name. Extracted to a
@@ -146,6 +147,19 @@ type JOSETransport struct {
 	// is indistinguishable from a genuine unprotected reply. Transport-wide by design; see
 	// ADR-107's amendment for why there is no per-response predicate.
 	AllowPlaintextSuccess bool
+
+	// PeerName is the low-cardinality logical service name Builder.WithPeerName already
+	// attaches to this client's metrics and spans. It names the counterparty in the
+	// ErrJOSEPlaintextResponse message and in the WARN, so an operator calling several JOSE
+	// peers can tell which integration regressed. Empty is fine: it is a diagnostic, never a
+	// routing or trust input.
+	PeerName string
+
+	// Logger receives the single WARN a refused successful response emits. An unusable one —
+	// nil, or a non-nil interface holding a typed-nil pointer — silences that line and nothing
+	// else: the error still names the violation, so a hand-built transport loses only the log.
+	// Builder-produced clients always seed the client's own logger.
+	Logger logger.Logger
 }
 
 // RoundTrip wraps the request body with JOSE (when Outbound is set), forwards to the
@@ -266,7 +280,7 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 	// is read and Unwrap's verdict stands in for the Content-Type's.
 	if t.Envelope == nil && !jose.IsContentType(resp.Header.Get(headerContentType)) {
 		if t.refusesPlaintext(resp.StatusCode) {
-			return errPlaintextSuccess(resp.StatusCode)
+			return t.refusePlaintextSuccess(req, resp.StatusCode)
 		}
 		return nil
 	}
@@ -287,7 +301,7 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 		return fmt.Errorf("httpclient: read response body: %w", err)
 	}
 
-	compact, done, err := t.compactFrom(resp, raw)
+	compact, done, err := t.compactFrom(req, resp, raw)
 	if done || err != nil {
 		return err
 	}
@@ -404,7 +418,7 @@ func (t *JOSETransport) emptyBodyIfGuaranteed(req *nethttp.Request, resp *nethtt
 
 // compactFrom yields the compact to open. done reports that the response was settled here:
 // an Envelope that declines a body either refuses the round trip or hands the bytes back.
-func (t *JOSETransport) compactFrom(resp *nethttp.Response, raw []byte) (compact string, done bool, err error) {
+func (t *JOSETransport) compactFrom(req *nethttp.Request, resp *nethttp.Response, raw []byte) (compact string, done bool, err error) {
 	if t.Envelope == nil {
 		return string(raw), false, nil
 	}
@@ -414,7 +428,7 @@ func (t *JOSETransport) compactFrom(resp *nethttp.Response, raw []byte) (compact
 	}
 	if t.refusesPlaintext(resp.StatusCode) {
 		replaceBody(resp, nil, "")
-		return "", true, errPlaintextSuccess(resp.StatusCode)
+		return "", true, t.refusePlaintextSuccess(req, resp.StatusCode)
 	}
 	replaceBody(resp, raw, "")
 	return "", true, nil
@@ -426,9 +440,36 @@ func (t *JOSETransport) refusesPlaintext(status int) bool {
 	return !t.AllowPlaintextSuccess && IsSuccessStatus(status)
 }
 
-// errPlaintextSuccess names the refusal by status alone; the body must not be reported.
-func errPlaintextSuccess(status int) error {
-	return fmt.Errorf("%w (status: %d)", ErrJOSEPlaintextResponse, status)
+// refusePlaintextSuccess emits the one WARN the refusal is worth and returns the error
+// naming it. Status, peer and request id only, in both sinks: the body is exactly what must
+// not be reported or logged, being unauthenticated content the peer chose. An unusable
+// Logger drops the line and leaves the error unchanged — isNilLogger rather than a `!= nil`
+// test, because a non-nil interface holding a typed-nil *logger.ZeroLogger would otherwise
+// panic here, on the refusal path.
+func (t *JOSETransport) refusePlaintextSuccess(req *nethttp.Request, status int) error {
+	if !isNilLogger(t.Logger) {
+		event := t.Logger.Warn().
+			Str("direction", "inbound").
+			Str("peer", t.PeerName).
+			Int("status", status)
+		if id := refusalRequestID(req); id != "" {
+			event = event.Str("request_id", id)
+		}
+		event.Msg("REST client refused an unprotected successful response")
+	}
+	return fmt.Errorf("%w (peer: %q, status: %d)", ErrJOSEPlaintextResponse, t.PeerName, status)
+}
+
+// refusalRequestID names the refused round trip the way logRequest and logResponse name
+// theirs: the trace id the client stamped on the outbound request. A hand-built transport,
+// or a client with a custom TraceIDHeader, falls back to the context value; an empty result
+// means the field is omitted rather than logged blank.
+func refusalRequestID(req *nethttp.Request) string {
+	if id := req.Header.Get(HeaderXRequestID); id != "" {
+		return id
+	}
+	id, _ := TraceIDFromContext(req.Context())
+	return id
 }
 
 // readAndCloseBody drains body up to maxBytes (negative = unbounded) and closes it.
