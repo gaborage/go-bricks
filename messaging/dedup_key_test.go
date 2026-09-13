@@ -4,7 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -78,6 +78,8 @@ func TestWireDedupKeyAppliesTheGrammar(t *testing.T) {
 			if !tc.ok {
 				require.ErrorIs(t, err, ErrInvalidEventID)
 				assert.Equal(t, DedupKey{}, key, "a refused id yields the invalid zero key")
+				assert.False(t, key.Sealed())
+				assert.Empty(t, key.String())
 				return
 			}
 			require.NoError(t, err)
@@ -87,81 +89,101 @@ func TestWireDedupKeyAppliesTheGrammar(t *testing.T) {
 	}
 }
 
-// TestDedupKeyZeroValueIsNotSealed pins the inert zero value.
-func TestDedupKeyZeroValueIsNotSealed(t *testing.T) {
-	assert.False(t, DedupKey{}.Sealed())
-	assert.Empty(t, DedupKey{}.String())
-}
-
-// TestNoExportedDoorMintsASealedDedupKey walks this package's production source
-// for every exported function or method whose RESULTS carry a DedupKey or a
-// Metadata — the only two types a sealed key can travel in, both with
-// unexported fields so no other package can spell one as a literal. The set is
-// exact: a new exported producer fails here and must argue its way in. It is
-// not vacuous — WireDedupKey, whose results are never Sealed, must be found.
-func TestNoExportedDoorMintsASealedDedupKey(t *testing.T) {
-	entries, err := os.ReadDir(".")
+// TestOnlyAllowlistedFunctionsMintASealedDedupKey pins every production site that can set DedupKey.sealed.
+func TestOnlyAllowlistedFunctionsMintASealedDedupKey(t *testing.T) {
+	files, err := filepath.Glob("*.go")
 	require.NoError(t, err)
+	sites := dedupKeySites{sealing: map[string]bool{}, literals: map[string]bool{}}
 	fset := token.NewFileSet()
-
-	var producers []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
 			continue
 		}
 		file, err := parser.ParseFile(fset, name, nil, 0)
 		require.NoError(t, err)
-		producers = append(producers, exportedProducers(file)...)
+		sites.scanFile(file)
 	}
-	sort.Strings(producers)
-	assert.Equal(t, []string{"WireDedupKey"}, producers)
+	allowlist := []string{}
+	assert.ElementsMatch(t, allowlist, sortedSiteNames(sites.sealing))
+	assert.Contains(t, sites.literals, "WireDedupKey", "the walk must see DedupKey literals")
 }
 
-func exportedProducers(file *ast.File) []string {
-	var producers []string
+type dedupKeySites struct {
+	sealing  map[string]bool
+	literals map[string]bool
+}
+
+func (s dedupKeySites) scanFile(file *ast.File) {
 	for _, decl := range file.Decls {
-		fn, isFunc := decl.(*ast.FuncDecl)
-		if !isFunc || !fn.Name.IsExported() || fn.Type.Results == nil {
-			continue
+		scope := "<package scope>"
+		if fn, isFunc := decl.(*ast.FuncDecl); isFunc {
+			scope = funcSiteName(fn)
 		}
-		if !resultsName(fn.Type.Results, "DedupKey", "Metadata") {
-			continue
-		}
-		producer := fn.Name.Name
-		if fn.Recv != nil {
-			producer = receiverTypeName(fn.Recv.List[0].Type) + "." + producer
-		}
-		producers = append(producers, producer)
-	}
-	return producers
-}
-
-func resultsName(results *ast.FieldList, names ...string) bool {
-	found := false
-	for _, field := range results.List {
-		ast.Inspect(field.Type, func(n ast.Node) bool {
-			if ident, isIdent := n.(*ast.Ident); isIdent {
-				for _, want := range names {
-					if ident.Name == want {
-						found = true
-					}
-				}
-			}
+		ast.Inspect(decl, func(n ast.Node) bool {
+			s.record(scope, n)
 			return true
 		})
 	}
-	return found
 }
 
-func receiverTypeName(expr ast.Expr) string {
-	if star, isStar := expr.(*ast.StarExpr); isStar {
-		expr = star.X
+func (s dedupKeySites) record(scope string, n ast.Node) {
+	switch node := n.(type) {
+	case *ast.CompositeLit:
+		if !isIdentNamed(node.Type, "DedupKey") {
+			return
+		}
+		s.literals[scope] = true
+		if literalSetsSealed(node) {
+			s.sealing[scope] = true
+		}
+	case *ast.AssignStmt:
+		for _, lhs := range node.Lhs {
+			if sel, isSel := lhs.(*ast.SelectorExpr); isSel && sel.Sel.Name == "sealed" {
+				s.sealing[scope] = true
+			}
+		}
 	}
-	if ident, isIdent := expr.(*ast.Ident); isIdent {
-		return ident.Name
+}
+
+func literalSetsSealed(lit *ast.CompositeLit) bool {
+	for _, elt := range lit.Elts {
+		kv, keyed := elt.(*ast.KeyValueExpr)
+		if !keyed {
+			return len(lit.Elts) >= 2
+		}
+		if isIdentNamed(kv.Key, "sealed") {
+			return true
+		}
 	}
-	return ""
+	return false
+}
+
+func funcSiteName(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return fn.Name.Name
+	}
+	recv := fn.Recv.List[0].Type
+	if star, isStar := recv.(*ast.StarExpr); isStar {
+		recv = star.X
+	}
+	if ident, isIdent := recv.(*ast.Ident); isIdent {
+		return ident.Name + "." + fn.Name.Name
+	}
+	return "?." + fn.Name.Name
+}
+
+func isIdentNamed(expr ast.Expr, name string) bool {
+	ident, isIdent := expr.(*ast.Ident)
+	return isIdent && ident.Name == name
+}
+
+func sortedSiteNames(set map[string]bool) []string {
+	names := make([]string, 0, len(set))
+	for name := range set {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func TestMetadataDedupKey(t *testing.T) {
