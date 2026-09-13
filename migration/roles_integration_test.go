@@ -327,57 +327,159 @@ func isPermissionDenied(err error) bool {
 }
 
 // pgPublicGrantDetectSQL is the RuntimeRole half of the [C65.4] detect step in
-// wiki/migrations.md, kept here verbatim so the atom's query has a live oracle
-// and the two cannot drift apart silently. It reads the ACL out of pg_class
-// rather than information_schema.role_table_grants, whose documented difference
-// from table_privileges is that it OMITS what a grant to PUBLIC made reachable —
-// exactly the row we are hunting. aclexplode breaks relacl into one row per
-// privilege and represents the PUBLIC pseudo-role as grantee 0; the catalog
-// schemas are excluded because PostgreSQL grants PUBLIC SELECT on its own
-// catalogs by design.
-const pgPublicGrantDetectSQL = `SELECT n.nspname, c.relname, a.privilege_type
+// wiki/migrations.md — and, since the query answers both, its verify step too.
+// It is kept here verbatim so the atom's query has a live oracle and the two
+// cannot drift apart silently.
+//
+// A RuntimeRole spelled "public" leaves FOUR residues, because PGRoleProvisioningSQL
+// emits four kinds of grant against the PUBLIC pseudo-role (migration/roles.go):
+// GRANT USAGE ON SCHEMA lands in pg_namespace.nspacl; GRANT … ON ALL TABLES and
+// GRANT … ON ALL SEQUENCES both land in pg_class.relacl (a sequence IS a pg_class
+// row, which is why no relkind filter belongs here); and the two ALTER DEFAULT
+// PRIVILEGES statements land in pg_default_acl.defaclacl. Reading pg_class alone
+// therefore reports "clean" for a tenant provisioned into a still-empty schema —
+// there are no relations yet, but the schema USAGE grant and both default-privilege
+// rows are already there. Hence the UNION ALL over all three catalogs, with a
+// `source` column so the operator sees WHICH residue they hit.
+//
+// aclexplode breaks an ACL into one row per privilege and represents the PUBLIC
+// pseudo-role as grantee 0. It is strict, so a NULL acl column contributes no rows.
+// The catalog schemas are excluded on every arm because PostgreSQL grants PUBLIC
+// SELECT on its own catalogs by design. Database-wide default ACLs
+// (pg_default_acl.defaclnamespace = 0) are deliberately out of scope: the inner
+// join to pg_namespace drops them, they can never be produced by this template —
+// which always emits `ALTER DEFAULT PRIVILEGES … IN SCHEMA <schema>` — and they
+// have no tenant schema to attribute or to revoke against.
+//
+// The query is NOT information_schema.role_table_grants, whose documented
+// difference from table_privileges is that it OMITS what a grant to PUBLIC made
+// reachable — exactly the rows we are hunting.
+const pgPublicGrantDetectSQL = `SELECT 'schema'::text AS source, n.nspname AS schema_name,
+       ''::text AS object_name, a.privilege_type
+FROM pg_namespace n, aclexplode(n.nspacl) a
+WHERE a.grantee = 0
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+UNION ALL
+SELECT 'relation', n.nspname, c.relname, a.privilege_type
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace,
      aclexplode(c.relacl) a
 WHERE a.grantee = 0
   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
-ORDER BY 1, 2, 3`
+UNION ALL
+SELECT 'default_acl', n.nspname,
+       CASE d.defaclobjtype WHEN 'r' THEN 'TABLES'
+                            WHEN 'S' THEN 'SEQUENCES'
+                            WHEN 'f' THEN 'FUNCTIONS'
+                            WHEN 'T' THEN 'TYPES'
+                            WHEN 'n' THEN 'SCHEMAS'
+                            ELSE d.defaclobjtype::text END,
+       a.privilege_type
+FROM pg_default_acl d
+JOIN pg_namespace n ON n.oid = d.defaclnamespace,
+     aclexplode(d.defaclacl) a
+WHERE a.grantee = 0
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+ORDER BY 1, 2, 3, 4`
 
-// TestPGPublicGrantDetectSQLFindsThePublicGrant is the falsifiability check on
-// the atom's detect query: against a real server it must return nothing for a
-// table nobody granted to PUBLIC, exactly the one row for the grant that a
-// RuntimeRole spelled "public" produces, and nothing again once it is revoked.
-// The empty first leg is also the fact the atom asserts to operators — that
-// PostgreSQL grants nothing to PUBLIC on a table you created, so any row the
-// query returns is worth investigating.
-func TestPGPublicGrantDetectSQLFindsThePublicGrant(t *testing.T) {
+// TestPGPublicGrantDetectSQLFindsEveryPublicResidue is the falsifiability check
+// on the atom's detect/verify query. Each of the four residues a RuntimeRole
+// spelled "public" leaves behind must be found, with the right source value, and
+// each must disappear once the atom's apply step revokes it.
+func TestPGPublicGrantDetectSQLFindsEveryPublicResidue(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx, cancel := testCtx(t)
 	defer cancel()
 
 	admin := env.adminDB(t)
-	_, err := admin.ExecContext(ctx, `CREATE SCHEMA acl_probe`)
-	require.NoError(t, err)
-	_, err = admin.ExecContext(ctx, `CREATE TABLE acl_probe.widgets (id INT PRIMARY KEY)`)
-	require.NoError(t, err)
 
-	require.Empty(t, publicGrantRows(ctx, t, admin),
-		"PostgreSQL grants nothing to PUBLIC on a freshly created table")
+	// The built-in `public` schema carries a PUBLIC USAGE grant on every
+	// PostgreSQL instance by design (PG15+ dropped CREATE, never USAGE), so the
+	// query always reports it. It cannot be excluded — `public` is exactly the
+	// schema a reserved-name spec provisions into — which is why the atom calls
+	// it out as expected baseline noise and why every assertion below is scoped
+	// to the probe schema it created.
+	require.Contains(t, publicGrantRows(ctx, t, admin, "public"),
+		"schema|public||USAGE",
+		"the built-in public schema is expected baseline noise, not a finding")
 
-	_, err = admin.ExecContext(ctx, `GRANT SELECT ON acl_probe.widgets TO PUBLIC`)
-	require.NoError(t, err)
-	require.Equal(t, []string{"acl_probe|widgets|SELECT"}, publicGrantRows(ctx, t, admin),
-		"the detect query must surface the PUBLIC grant, and only it")
+	t.Run("all_four_residues", func(t *testing.T) {
+		_, err := admin.ExecContext(ctx, `CREATE SCHEMA acl_probe`)
+		require.NoError(t, err)
+		_, err = admin.ExecContext(ctx, `CREATE TABLE acl_probe.widgets (id INT PRIMARY KEY)`)
+		require.NoError(t, err)
+		_, err = admin.ExecContext(ctx, `CREATE SEQUENCE acl_probe.widget_ids`)
+		require.NoError(t, err)
 
-	_, err = admin.ExecContext(ctx, `REVOKE SELECT ON acl_probe.widgets FROM PUBLIC`)
-	require.NoError(t, err)
-	require.Empty(t, publicGrantRows(ctx, t, admin),
-		"the remediation step must make the detect query go quiet again")
+		require.Empty(t, publicGrantRows(ctx, t, admin, "acl_probe"),
+			"PostgreSQL grants nothing to PUBLIC on a schema, table or sequence you create")
+
+		// The four statements PGRoleProvisioningSQL emits against PUBLIC when
+		// RuntimeRole is spelled "public" (migration/roles.go), one per catalog.
+		for _, stmt := range []string{
+			`GRANT USAGE ON SCHEMA acl_probe TO PUBLIC`,
+			`GRANT SELECT ON acl_probe.widgets TO PUBLIC`,
+			`GRANT USAGE ON SEQUENCE acl_probe.widget_ids TO PUBLIC`,
+			`ALTER DEFAULT PRIVILEGES IN SCHEMA acl_probe GRANT SELECT ON TABLES TO PUBLIC`,
+		} {
+			_, err = admin.ExecContext(ctx, stmt)
+			require.NoError(t, err, stmt)
+		}
+
+		got := publicGrantRows(ctx, t, admin, "acl_probe")
+		require.ElementsMatch(t, []string{
+			"schema|acl_probe||USAGE",
+			"relation|acl_probe|widgets|SELECT",
+			"relation|acl_probe|widget_ids|USAGE",
+			"default_acl|acl_probe|TABLES|SELECT",
+		}, got, "every residue must be found, tagged with the catalog it came from")
+		require.Equal(t, []string{"default_acl", "relation", "relation", "schema"},
+			sourceColumn(got), "the query must order its arms deterministically")
+
+		for _, stmt := range []string{
+			`REVOKE ALL ON SCHEMA acl_probe FROM PUBLIC`,
+			`REVOKE ALL ON ALL TABLES IN SCHEMA acl_probe FROM PUBLIC`,
+			`REVOKE ALL ON ALL SEQUENCES IN SCHEMA acl_probe FROM PUBLIC`,
+			`ALTER DEFAULT PRIVILEGES IN SCHEMA acl_probe REVOKE SELECT ON TABLES FROM PUBLIC`,
+		} {
+			_, err = admin.ExecContext(ctx, stmt)
+			require.NoError(t, err, stmt)
+		}
+
+		require.Empty(t, publicGrantRows(ctx, t, admin, "acl_probe"),
+			"the apply step's revokes must make the query go quiet again")
+	})
+
+	// Regression test for the defect this query fixes: a tenant provisioned into
+	// a schema that has no relations yet produces ZERO pg_class rows, so a
+	// pg_class-only query reads clean on a genuinely affected instance.
+	t.Run("empty_schema_still_reports", func(t *testing.T) {
+		_, err := admin.ExecContext(ctx, `CREATE SCHEMA acl_empty`)
+		require.NoError(t, err)
+		_, err = admin.ExecContext(ctx, `GRANT USAGE ON SCHEMA acl_empty TO PUBLIC`)
+		require.NoError(t, err)
+
+		var relations int
+		require.NoError(t, admin.QueryRowContext(ctx,
+			`SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+			 WHERE n.nspname = 'acl_empty'`).Scan(&relations))
+		require.Zero(t, relations, "the regression case needs a genuinely empty schema")
+
+		require.Equal(t, []string{"schema|acl_empty||USAGE"},
+			publicGrantRows(ctx, t, admin, "acl_empty"),
+			"a schema-only PUBLIC grant must be found even with no relations at all")
+
+		_, err = admin.ExecContext(ctx, `REVOKE ALL ON SCHEMA acl_empty FROM PUBLIC`)
+		require.NoError(t, err)
+		require.Empty(t, publicGrantRows(ctx, t, admin, "acl_empty"))
+	})
 }
 
-// publicGrantRows runs pgPublicGrantDetectSQL verbatim and flattens each row to
-// "schema|relation|privilege" so a test can assert the exact row set.
-func publicGrantRows(ctx context.Context, t *testing.T, db *sql.DB) []string {
+// publicGrantRows runs pgPublicGrantDetectSQL verbatim and flattens the rows for
+// one schema to "source|schema|object|privilege" so a test can assert the exact
+// row set. The filter is applied in Go, never in the SQL, so the const under test
+// stays byte-identical to the query the atom publishes.
+func publicGrantRows(ctx context.Context, t *testing.T, db *sql.DB, schema string) []string {
 	t.Helper()
 	rows, err := db.QueryContext(ctx, pgPublicGrantDetectSQL)
 	require.NoError(t, err)
@@ -385,10 +487,24 @@ func publicGrantRows(ctx context.Context, t *testing.T, db *sql.DB) []string {
 
 	var out []string
 	for rows.Next() {
-		var schema, relation, privilege string
-		require.NoError(t, rows.Scan(&schema, &relation, &privilege))
-		out = append(out, schema+"|"+relation+"|"+privilege)
+		var source, nspname, object, privilege string
+		require.NoError(t, rows.Scan(&source, &nspname, &object, &privilege))
+		if nspname != schema {
+			continue
+		}
+		out = append(out, strings.Join([]string{source, nspname, object, privilege}, "|"))
 	}
 	require.NoError(t, rows.Err())
+	return out
+}
+
+// sourceColumn projects the source field out of publicGrantRows' flattened rows,
+// preserving order, so a test can assert the query's ORDER BY without depending
+// on the server's collation for the schema and object columns.
+func sourceColumn(rows []string) []string {
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, strings.SplitN(r, "|", 2)[0])
+	}
 	return out
 }
