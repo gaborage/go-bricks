@@ -191,7 +191,10 @@ go-bricks passes that DSN through untouched.
   string whose scheme is unrecognized — legal for deployments supplying
   `Options.DatabaseConnector` (ADR-050) — plus a `tls:` block still boots with
   the block inert. Closing that needs a rule that does not depend on a resolved
-  vendor; tracked as a follow-up.
+  vendor; tracked as a follow-up. Narrowed 2026-09-13: a keyword/value DSN now
+  infers `postgresql` and so does reach R1–R6 and R4's co-presence refusal
+  (ADR-050 amendment, `[C65.3]`); only a DSN that infers no vendor at all is
+  still uncovered.
 - **The `tools/migration` CLI was not covered at the time of this ADR; closed by
   #1006.** `loadTenantStoreFromFile` koanf-unmarshals its source config without
   ever calling `config.Validate`, and `controlPlaneDSN` emits

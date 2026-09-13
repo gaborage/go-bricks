@@ -500,7 +500,17 @@ Two consequences worth knowing:
 A `connectionstring` alone used to pass validation and then never connect —
 `database.NewConnection` dispatches on `type`, so an untyped DSN failed only at first
 query. `type` is now inferred from a recognized scheme when it is omitted:
-`postgres://`/`postgresql://` → `postgresql`, `oracle://` → `oracle`. Surrounding
+`postgres://`/`postgresql://` → `postgresql`, `oracle://` → `oracle`. A string matching no
+scheme is then tried against pgx's keyword/value tokenizer and infers `postgresql` too — but
+only when it tokenizes *and* every key it yields has libpq's keyword shape
+(`[A-Za-z_][A-Za-z0-9_]*`). pgx is the only keyword-form consumer here, and that positive
+shape test is what keeps everyone else out without the seam knowing a single foreign scheme:
+a single-line Oracle TNS descriptor (`(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=h)…))`)
+tokenizes as one pair whose key is `(DESCRIPTION`, and another vendor's URI or JDBC spelling
+fails the same way. An unknown but well-shaped key still infers `postgresql`, because pgx
+accepts one and passes it through as a runtime parameter. godror's easy-connect spelling
+(`user/pass@host:1521/svc`) has no `=` at all, so it infers nothing (ADR-050 amendment
+2026-09-13, `[C65.3]`). Surrounding
 whitespace does not defeat the match (a DSN read from a mounted secret often carries a
 trailing newline), and the stored connection string is never rewritten — only the
 classification tolerates it.
@@ -509,24 +519,27 @@ Inference runs at **two** sites, not one. `config.Validate` covers every statica
 configured path (`database`, `databases.<name>`, `multitenant.tenants.<id>.database`);
 `config.ApplyDatabasePoolDefaults` — the seam `database.DbManager` applies to every config
 a dynamic `DBConfigProvider` returns, which never reaches `Validate` — covers the dynamic
-path. Both delegate to the same scheme list, so extending it is one edit. An explicit
-`type` that conflicts with the inferred scheme is a validation error on the `Validate`
+path. Both delegate to the same classifier, so extending it is one edit. An explicit
+`type` that conflicts with the inferred vendor is a validation error on the `Validate`
 path only: the seam runs per connection, where the vendor's own dial error is the better
 failure. Identity is otherwise the dial's job on that seam, with one exception: a
 PostgreSQL section with no `connectionstring` and an empty `host` is refused there with the
 same `MissingFieldError` startup emits, because pgx would substitute libpq's default unix
 socket and drop the configured TLS material (ADR-050 amendment 2026-09-07). A raw
-`connectionstring` is not covered — the seam does not parse DSNs — so give a DSN an
-explicit host of its own.
+`connectionstring` is covered too, on its own resolved host — see "PostgreSQL connection
+strings are host-checked too" under TLS below (ADR-050 amendment 2026-09-13, `[C65.2]`).
 
-Any other scheme leaves `type` empty — the *effect* of an unrecognized scheme depends on
+Any other shape leaves `type` empty — the *effect* of an unrecognized one depends on
 the connector: the built-in one (`database.NewConnection`) fails startup with a
 `connectionstring has no resolved database type` error naming every affected static path;
 a caller-supplied `Options.DatabaseConnector` parses the DSN itself and is exempt **from
 that startup guard**. It is not exempt from inference: the config layer is
 connector-blind, so a custom connector receives `type` already resolved for a recognized
-scheme, and one that branches on an empty `cfg.Type` to decide whether to parse the DSN
-must be reviewed.
+shape, and one that branches on an empty `cfg.Type` to decide whether to parse the DSN
+must be reviewed. A keyword-form DSN that used to stay untyped no longer reaches either
+of those paths: it is typed `postgresql`, so it leaves `config.UntypedDatabaseSections` and
+gains the PostgreSQL vendor rules, and an explicit `type: oracle` beside one is a conflict
+error (`[C65.3]`).
 
 **An Oracle DSN needs no separate identifier.** `oracle://user:pw@host:1521/XE` alone is a
 complete config: `buildOracleDSN` returns the connection string verbatim, so
@@ -583,6 +596,18 @@ backslash in a keyword/value DSN (quoting does not protect it), use `%20` not `+
 space in a URI query, and expect the first `@` to end userinfo. A parse failure logs the
 constant `failed to parse PostgreSQL config`; unwrap with `errors.As` to
 `*pgconn.ParseConfigError` when you need pgx's redacted detail.
+
+**PostgreSQL connection strings are host-checked too (ADR-050 amendment 2026-09-13,
+`[C65.2]`).** A
+`connectionstring` whose own resolved host — read the way pgx reads it, from the URI
+authority, a `?host=` query parameter, a keyword `host=`, or `PGHOST` — names nothing at
+all, or carries an empty comma-separated entry, is refused naming `database.connectionstring`,
+the same defect `[C64.8]` refuses for the typed `host` field; name a host through one of
+those four sources (a service file is not one of them). A `connectionstring` whose resolved
+host is a unix-socket entry while the DSN itself claims TLS (`sslmode`, `sslnegotiation=direct`,
+or non-empty `sslrootcert`/`sslcert`/`sslkey`) is refused the same way `[C65.1]` refuses it
+for the typed fields; drop the TLS claim or point the DSN at a TCP host. A DSN the
+scanner cannot tokenize passes through unjudged, same as it always has.
 
 Two pgx quirks worth knowing when choosing a mode: `require` plus `ca` behaves as
 `verify-ca` (a documented libpq inheritance), and the sentinel `ca: system` means the OS

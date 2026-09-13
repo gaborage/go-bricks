@@ -912,6 +912,11 @@ The `count > 1` ambiguity error and the Oracle TLS rejection are not waived.
 booting into a dead database — including `oracle://…` with no separate identifier field; an
 unrecognized scheme on the built-in connector fails fast
 at startup instead of at first query; a `type`/scheme conflict is caught at validation.
+Amended 2026-09-13: inference is no longer scheme-only — a string matching none of the three
+URI prefixes now infers `postgresql` when it is pgx's keyword/value form by a positive
+key-shape test, so "unrecognized scheme" above means "recognized by neither test" (`[C65.3]`),
+and a raw PostgreSQL `connectionstring` is additionally judged by its own resolved host and
+TLS claim (`[C65.2]`).
 `config.ApplyDatabasePoolDefaults` applies the same inference on the dynamic
 multi-tenant resolution path, which bypasses `Validate` entirely. Inference is
 unconditional on both paths — the `Options.DatabaseConnector` exemption covers the

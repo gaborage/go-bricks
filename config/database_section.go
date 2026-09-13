@@ -3,13 +3,14 @@ package config
 import (
 	"fmt"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 )
 
 // dbStrictness is how normalization treats what a loaded configuration must
 // state. Startup fails fast on identity gaps and on an explicit type that
-// contradicts the connectionstring scheme; connect infers what it can, enforces
+// contradicts the connectionstring; connect infers what it can, enforces
 // the vendor rules that would otherwise fail silently open, fills defaults, and
 // leaves identity to the dial (ADR-050, "the seam stays asymmetric by design")
 // except for the one vendor-scoped identity rule in validatePostgreSQLFields.
@@ -84,7 +85,7 @@ func normalizeDatabaseValues(db *DatabaseConfig, sec section, strictness dbStric
 	return nil
 }
 
-// normalizeForConnect infers a missing Type from a recognized scheme without
+// normalizeForConnect infers a missing Type from a recognized connectionstring without
 // erroring on a contradiction, rejects vendor field shapes that would fail
 // silently open, and fills pool/session defaults. Identity is the dial's job,
 // except where validatePostgreSQLFields refuses it.
@@ -99,14 +100,14 @@ func normalizeForConnect(db *DatabaseConfig) error {
 }
 
 // normalizeWithConnectionString is the startup path for a DSN-carrying section:
-// an explicit Type that contradicts the scheme is an error, not an override.
+// an explicit Type that contradicts the connectionstring is an error, not an override.
 func normalizeWithConnectionString(db *DatabaseConfig) error {
 	if inferred := inferDatabaseTypeFromConnectionString(db.ConnectionString); inferred != "" {
 		if db.Type == "" {
 			db.Type = inferred
 		} else if db.Type != inferred {
 			return NewInvalidFieldError("database.type",
-				fmt.Sprintf("conflicts with the connectionstring scheme (which implies %s)", inferred),
+				fmt.Sprintf("conflicts with the connectionstring (which implies %s)", inferred),
 				[]string{inferred})
 		}
 	}
@@ -204,7 +205,7 @@ func forEachDatabaseSection(cfg *Config, visit func(sec section, db *DatabaseCon
 
 // UntypedDatabaseSections returns the path of every database section that
 // carries a connectionstring whose vendor is still unresolved after
-// normalization — a scheme inference does not recognize (ADR-050). Whether that
+// normalization — a shape inference does not recognize (ADR-050). Whether that
 // is fatal depends on who connects, so this only reports; app.Builder decides.
 // Paths come back in walk order, which is lexicographic. Nil when none.
 func UntypedDatabaseSections(cfg *Config) []string {
@@ -311,23 +312,65 @@ func IsDatabaseConfigured(cfg *DatabaseConfig) bool {
 		cfg.Oracle.Service.SID != ""
 }
 
-// inferDatabaseTypeFromConnectionString maps a recognized DSN scheme to its vendor.
+// inferDatabaseTypeFromConnectionString maps a recognized DSN shape to its vendor.
 // Surrounding whitespace is tolerated for classification only — a DSN read from a
 // file, a mounted secret, or a command substitution routinely carries a trailing
-// newline, and losing the scheme match there would silently leave the config
+// newline, and losing the match there would silently leave the config
 // untyped. The caller's stored DSN is never rewritten; whether the untrimmed value
-// then fails at dial is the driver's business. An unrecognized scheme returns "" and
+// then fails at dial is the driver's business. An unrecognized shape returns "" and
 // is deliberately not an error here: whether an untyped DSN is fatal depends on who
 // connects (ADR-050).
+//
+// The URI schemes are tested first, so an oracle:// DSN carrying a query pair stays
+// Oracle. pgx's keyword/value form is the fallback: it is the only keyword-form DSN
+// this repo consumes.
 func inferDatabaseTypeFromConnectionString(cs string) string {
-	lower := strings.ToLower(strings.TrimSpace(cs))
+	trimmed := strings.TrimSpace(cs)
+	lower := strings.ToLower(trimmed)
 	switch {
 	case strings.HasPrefix(lower, "postgres://"), strings.HasPrefix(lower, "postgresql://"):
 		return PostgreSQL
 	case strings.HasPrefix(lower, "oracle://"):
 		return Oracle
+	case isPostgresKeywordDSN(trimmed):
+		return PostgreSQL
 	}
 	return ""
+}
+
+// isPostgresKeywordDSN reports whether cs is pgx's keyword/value form: it tokenizes through
+// pgKeywordSettings into at least one pair AND every key it yields has libpq's keyword shape.
+// The key shape is the whole test — a foreign DSN can carry an '=' but not a bare libpq
+// keyword, so an Oracle TNS descriptor (one pair, key "(DESCRIPTION") and any other vendor's
+// URI are rejected without this seam knowing a foreign scheme. An unknown but well-shaped key
+// still counts: pgx accepts one as a runtime parameter, so this identifies the FORM.
+func isPostgresKeywordDSN(cs string) bool {
+	if !strings.Contains(cs, "=") {
+		return false
+	}
+	settings, ok := pgKeywordSettings(cs)
+	if !ok || len(settings) == 0 {
+		return false
+	}
+	for key := range settings {
+		if !isPostgresKeywordName(key) {
+			return false
+		}
+	}
+	return true
+}
+
+// isPostgresKeywordName reports whether key matches libpq's keyword shape,
+// [A-Za-z_][A-Za-z0-9_]*.
+func isPostgresKeywordName(key string) bool {
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		alpha := c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+		if !alpha && (i == 0 || c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // validateDatabaseType validates that dbType is one of the supported database type
@@ -426,7 +469,7 @@ func applyConnectionCountDefaults(cfg *DatabaseConfig) error {
 }
 
 // ApplyDatabasePoolDefaults normalizes a DatabaseConfig for connection: it infers
-// a missing Type from a recognized connectionstring scheme, rejects vendor field
+// a missing Type from a recognized connectionstring shape, rejects vendor field
 // combinations the driver would silently drop, and fills zero-value Pool,
 // Timezone, and Query (log/slow-threshold) settings with the documented defaults
 // (25 max connections, idle tracks max, keepalive rules, UTC timezone).
@@ -435,7 +478,7 @@ func applyConnectionCountDefaults(cfg *DatabaseConfig) error {
 // DBConfigProviders resolved in DbManager — get the same normalization as static
 // config; the inference (ADR-050) is what lets a provider's DSN-only config dial
 // instead of failing on the factory's empty-type dispatch. Unlike config.Validate,
-// this seam never errors on an explicit Type that contradicts the scheme — it is on
+// this seam never errors on an explicit Type that contradicts the connectionstring — it is on
 // the per-tenant connection path, where the vendor dial error is the right failure.
 // It does reject Oracle TLS material, an unpaired PostgreSQL sslcert/sslkey, and a
 // PostgreSQL section with no connectionstring and an empty host, because those failure
@@ -614,9 +657,9 @@ func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 // validatePostgreSQLFields fails closed on the PostgreSQL shapes pgx would silently discard
 // or downgrade: the database.tls blocks of ADR-062, and an empty host, which is where the
 // ADR-050 amendment's one identity exception lives. Check order is load-bearing:
-// connectionstring short-circuits, then the empty-host refusal, then the mode allowlist,
-// then the unix-socket-host refusal, then the material/mode coherence rule, then the
-// cert/key pairing.
+// connectionstring short-circuits (into its own two DSN-host rules, [C65.2]), then the
+// empty-host refusal, then the mode allowlist, then the unix-socket-host refusal, then the
+// material/mode coherence rule, then the cert/key pairing.
 func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 	if cfg.ConnectionString != "" {
 		if cfg.TLS.Mode != "" || cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" || cfg.TLS.CAFile != "" {
@@ -627,7 +670,7 @@ func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 				Action:   "move TLS settings into the connection string (sslmode/sslrootcert/sslcert/sslkey) and remove the database.tls block",
 			}
 		}
-		return nil
+		return validatePostgreSQLConnectionString(cfg.ConnectionString)
 	}
 
 	// An empty host is not a dial target: libpq semantics substitute the local socket
@@ -642,6 +685,47 @@ func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 		return NewInvalidFieldError("database.tls.mode", fmt.Sprintf(errInvalidField, cfg.TLS.Mode), pgSSLModes)
 	}
 	return validatePostgreSQLTLSCoherence(cfg)
+}
+
+// validatePostgreSQLConnectionString refuses a DSN on the two axes the typed fields above are
+// refused on ([C65.2]): a resolved host that names nothing, and a unix-socket host under a TLS
+// claim. An untokenizable DSN passes through — this seam must never refuse what pgx accepts.
+// PGHOST is consulted only when the DSN names no host key at all; an empty host= key still
+// shadows it, mirroring pgx's own precedence.
+func validatePostgreSQLConnectionString(cs string) error {
+	scan, ok := scanPostgresDSN(cs)
+	if !ok {
+		return nil
+	}
+	effective := scan.host
+	if !scan.hostSet {
+		effective = os.Getenv("PGHOST")
+	}
+	entries := pgHostEntries(effective)
+
+	// Rule 1 is unconditional — never gated on claimsTLS, since a claim can coexist with a
+	// plaintext dial (sslnegotiation=direct with sslmode=disable) and gating would reopen
+	// exactly the hole rule 2 closes.
+	if slices.Contains(entries, "") {
+		return &ConfigError{
+			Category: errCategoryMissing,
+			Field:    fieldDatabaseConnectionString,
+			Message: "connection string names no host: pgx resolves an implicit unix socket " +
+				"there and skips TLS",
+			Action: "name a host in the URI authority, a ?host= query parameter, a keyword " +
+				"host=, or the PGHOST environment variable; a PGSERVICE service file is not consulted",
+		}
+	}
+
+	if scan.claimsTLS && slices.ContainsFunc(entries, isUnixSocketHost) {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    fieldDatabaseConnectionString,
+			Message:  "connection string names TLS on a unix-socket host, where pgx skips TLS",
+			Action:   "drop the TLS claim from the connection string, or use a TCP host",
+		}
+	}
+	return nil
 }
 
 // validatePostgreSQLTLSCoherence refuses a database.tls block pgx would not honor: TLS claimed
