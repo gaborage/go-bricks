@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -167,15 +166,22 @@ func TestStmtTrackerExecTracksBothArms(t *testing.T) {
 
 // TestStmtTrackerUsesTrackingContextFields pins that every field of the tracking
 // Context reaches a sink: Logger (the event), Vendor (the vendor log field and the
-// normalized db.system.name attribute), all three Settings knobs (slow-query
-// threshold -> WARN, max query length -> truncation, log parameters -> args), and
+// normalized db.system.name attribute), the Settings knobs this seam can observe
+// deterministically (max query length -> truncation, log parameters -> args), and
 // the server metadata attributes.
+//
+// The slow-query threshold is deliberately NOT exercised here: selecting the WARN
+// arm through a real (stubbed) call would require the measured elapsed time to
+// exceed the threshold, which no test can guarantee on a platform with a coarse
+// monotonic clock (Windows ticks at ~15.6ms, so a stub call can measure elapsed
+// == 0). That boundary is pinned deterministically at the TrackDBOperation seam
+// by TestTrackDBOperationSlowQueryBoundary in utils_test.go, which passes a
+// synthetic start instead of racing the clock.
 func TestStmtTrackerUsesTrackingContextFields(t *testing.T) {
 	traceExporter, _, cleanup := setupTestObservabilityProviders(t)
 	defer cleanup()
 
 	cfg := &config.DatabaseConfig{}
-	cfg.Query.Slow.Threshold = time.Nanosecond
 	cfg.Query.Log.MaxLength = 10
 	cfg.Query.Log.Parameters = true
 
@@ -199,7 +205,7 @@ func TestStmtTrackerUsesTrackingContextFields(t *testing.T) {
 
 	events := recLogger.events()
 	require.Len(t, events, 1)
-	assert.Equal(t, levelWarn, events[0].Level, "Settings.SlowQueryThreshold must select the slow-query event")
+	assert.Equal(t, levelDebug, events[0].Level, "a fast query under the default threshold logs at debug")
 	assert.Equal(t, "oracle", events[0].Fields["vendor"], "Context.Vendor must reach the log field")
 	assert.Len(t, events[0].Fields[logFieldQuery], 10, "Settings.MaxQueryLength must truncate the logged query")
 	assert.NotEmpty(t, events[0].Fields["args"], "Settings.LogQueryParameters must emit the args field")

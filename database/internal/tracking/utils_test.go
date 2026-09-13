@@ -263,6 +263,69 @@ func TestTrackDBOperationRecordsSuccess(t *testing.T) {
 	}
 }
 
+// TestTrackDBOperationSlowQueryBoundary pins both arms of the slow-query selector
+// (utils.go: `case elapsed > tc.Settings.SlowQueryThreshold()`) — a fast operation
+// logs at DEBUG, a slow one at WARN — without letting the host clock decide.
+//
+// Why this cannot flake on a coarse-tick platform: TrackDBOperation takes `start`
+// as a parameter and `time.Since(start)` is its only clock read, so the elapsed
+// value the selector sees is `chosen offset + however long the call itself takes`.
+// The monotonic clock never runs backwards, so the offset is a hard LOWER bound —
+// the slow case (offset 400ms against a 200ms threshold) is above the threshold on
+// every OS by construction. The fast case needs an UPPER bound instead, and the
+// only thing that can inflate it is real time spent inside the call, including the
+// granularity of the platform's clock: Windows ticks at ~15.6ms, so its worst-case
+// inflation is one tick. A 10ms offset against a 200ms threshold leaves 190ms of
+// headroom — an order of magnitude past that tick.
+//
+// This is exactly what the stub-driven tracker.Query test in querier_test.go could
+// not do: there the elapsed time was whatever the machine measured for a stub call,
+// which on Windows is 0, so a 1ns threshold selected DEBUG and the WARN assertion
+// failed.
+func TestTrackDBOperationSlowQueryBoundary(t *testing.T) {
+	const threshold = 200 * time.Millisecond
+
+	tests := []struct {
+		name      string
+		elapsed   time.Duration
+		wantLevel string
+		wantMsg   string
+	}{
+		{
+			name:      "well_under_threshold_logs_debug",
+			elapsed:   10 * time.Millisecond,
+			wantLevel: levelDebug,
+			wantMsg:   msgDBOperationExecuted,
+		},
+		{
+			name:      "well_over_threshold_logs_warn",
+			elapsed:   400 * time.Millisecond,
+			wantLevel: levelWarn,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := logger.WithDBCounter(context.Background())
+			recLogger := newRecordingLogger()
+			settings := Settings{slowQueryThreshold: threshold, maxQueryLength: 50}
+			tc := &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}
+
+			start := time.Now().Add(-tt.elapsed)
+			TrackDBOperation(ctx, tc, selectOne, nil, start, 0, nil)
+
+			events := recLogger.events()
+			require.Lenf(t, events, 1, singleEventExpected, len(events))
+			assert.Equal(t, tt.wantLevel, events[0].Level)
+			if tt.wantMsg != "" {
+				assert.Equal(t, tt.wantMsg, events[0].Msg)
+			} else {
+				assert.Contains(t, events[0].Msg, "Slow database operation detected")
+			}
+		})
+	}
+}
+
 // TestTrackDBOperationSkipsFieldBuildWhenDebugDisabled verifies the success fast path:
 // when the debug level is disabled (e.g. LOG_LEVEL=info on a healthy query), no log
 // fields are built, yet the DB counter/elapsed metrics still fire — proving the level
