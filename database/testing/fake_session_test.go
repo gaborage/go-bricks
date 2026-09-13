@@ -50,9 +50,11 @@ func TestTestSessionQueryExecAndDatabaseType(t *testing.T) {
 	sess, err := db.Session(t.Context())
 	require.NoError(t, err)
 
-	rows, err := sess.Query(t.Context(), sessionSelectSQL, 42)
-	require.NoError(t, err)
-	require.NoError(t, rows.Close())
+	func() {
+		rows, err := sess.Query(t.Context(), sessionSelectSQL, 42)
+		require.NoError(t, err)
+		defer rows.Close()
+	}()
 
 	result, err := sess.Exec(t.Context(), sessionExecSQL)
 	require.NoError(t, err)
@@ -83,7 +85,10 @@ func TestTestSessionUnexpectedStatementsError(t *testing.T) {
 	sess, err := db.Session(t.Context())
 	require.NoError(t, err)
 
-	_, err = sess.Query(t.Context(), sessionSelectSQL)
+	rows, err := sess.Query(t.Context(), sessionSelectSQL)
+	if rows != nil {
+		defer rows.Close()
+	}
 	require.Error(t, err)
 	require.Error(t, sess.QueryRow(t.Context(), sessionSelectSQL).Err())
 	_, err = sess.Exec(t.Context(), sessionExecSQL)
@@ -101,7 +106,10 @@ func TestTestSessionWillReturnErrorTargetsMostRecent(t *testing.T) {
 	sess, err := db.Session(t.Context())
 	require.NoError(t, err)
 
-	_, err = sess.Query(t.Context(), sessionSelectSQL)
+	rows, err := sess.Query(t.Context(), sessionSelectSQL)
+	if rows != nil {
+		defer rows.Close()
+	}
 	require.ErrorIs(t, err, wantQueryErr)
 	_, err = sess.Exec(t.Context(), sessionExecSQL)
 	require.ErrorIs(t, err, wantExecErr)
@@ -151,7 +159,10 @@ func TestTestSessionClosedSessionRejectsEveryCall(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, sess.Close())
 
-	_, err = sess.Query(t.Context(), sessionSelectSQL)
+	rows, err := sess.Query(t.Context(), sessionSelectSQL)
+	if rows != nil {
+		defer rows.Close()
+	}
 	require.ErrorIs(t, err, sql.ErrConnDone)
 	require.ErrorIs(t, sess.QueryRow(t.Context(), sessionSelectSQL).Err(), sql.ErrConnDone)
 	_, err = sess.Exec(t.Context(), sessionExecSQL)
@@ -172,9 +183,11 @@ func TestTestSessionLogsRecordStatements(t *testing.T) {
 	sess, err := db.Session(t.Context())
 	require.NoError(t, err)
 
-	rows, err := sess.Query(t.Context(), sessionSelectSQL, 42)
-	require.NoError(t, err)
-	require.NoError(t, rows.Close())
+	func() {
+		rows, err := sess.Query(t.Context(), sessionSelectSQL, 42)
+		require.NoError(t, err)
+		defer rows.Close()
+	}()
 	_, err = sess.Exec(t.Context(), sessionExecSQL)
 	require.NoError(t, err)
 

@@ -83,7 +83,7 @@ func TestSqlRowAdapterErrDelegatesToUnderlyingSQLRow(t *testing.T) {
 // without a type assertion.
 // ---------------------------------------------------------------------------
 
-// interfaceStub implements Interface; only Session carries behaviour, the rest
+// interfaceStub implements Interface; only Session carries behavior, the rest
 // satisfies the surface.
 type interfaceStub struct {
 	session    Session
@@ -93,15 +93,19 @@ type interfaceStub struct {
 func (s *interfaceStub) Query(context.Context, string, ...any) (*sql.Rows, error) { return nil, nil }
 func (s *interfaceStub) QueryRow(context.Context, string, ...any) Row             { return nil }
 func (s *interfaceStub) Exec(context.Context, string, ...any) (sql.Result, error) { return nil, nil }
-func (s *interfaceStub) DatabaseType() string                                     { return PostgreSQL }
-func (s *interfaceStub) Begin(context.Context) (Tx, error)                        { return nil, nil }
-func (s *interfaceStub) BeginTx(context.Context, *sql.TxOptions) (Tx, error)      { return nil, nil }
-func (s *interfaceStub) Prepare(context.Context, string) (Statement, error)       { return nil, nil }
-func (s *interfaceStub) Health(context.Context) error                             { return nil }
-func (s *interfaceStub) Stats() (map[string]any, error)                           { return nil, nil }
-func (s *interfaceStub) Close() error                                             { return nil }
-func (s *interfaceStub) MigrationTable() string                                   { return "flyway_schema_history" }
-func (s *interfaceStub) CreateMigrationTable(context.Context) error               { return nil }
+
+func (s *interfaceStub) DatabaseType() string { return PostgreSQL }
+
+func (s *interfaceStub) Begin(context.Context) (Tx, error) { return nil, nil }
+
+func (s *interfaceStub) BeginTx(context.Context, *sql.TxOptions) (Tx, error) { return nil, nil }
+
+func (s *interfaceStub) Prepare(context.Context, string) (Statement, error) { return nil, nil }
+func (s *interfaceStub) Health(context.Context) error                       { return nil }
+func (s *interfaceStub) Stats() (map[string]any, error)                     { return nil, nil }
+func (s *interfaceStub) Close() error                                       { return nil }
+func (s *interfaceStub) MigrationTable() string                             { return "flyway_schema_history" }
+func (s *interfaceStub) CreateMigrationTable(context.Context) error         { return nil }
 
 func (s *interfaceStub) Session(context.Context) (Session, error) {
 	if s.sessionErr != nil {

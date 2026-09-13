@@ -296,7 +296,7 @@ func (c *simpleConnection) BeginTx(ctx context.Context, opts *sql.TxOptions) (da
 }
 
 // Session is never exercised: these tests drive the tracking factory over
-// sqlmock, which has no pinned-connection behaviour to observe.
+// sqlmock, which has no pinned-connection behavior to observe.
 func (c *simpleConnection) Session(_ context.Context) (types.Session, error) {
 	return nil, errors.New("simpleConnection opens no sessions")
 }
