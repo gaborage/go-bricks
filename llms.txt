@@ -1305,7 +1305,9 @@ func PromoteID(c server.HandlerContext, next func() error) error {
 
 ## Database Sessions
 
-`db.Session(ctx)` returns a `database.Session` pinned to ONE physical connection — the handle for state a shared pool connection can silently lose when the next statement lands on a different backend: PostgreSQL advisory locks, `SET`/`ALTER SESSION`, and temporary tables (ADR-112). It composes the same `Query`/`QueryRow`/`Exec`/`Begin` surface as `database.Interface`, minus `Prepare`/`Health`/`Stats`, plus `Close`. `Close` is mandatory and NOT idempotent (a second one returns `sql.ErrConnDone`, as does every call after Close or after the connection's death is observed); a `Session` must not be used concurrently, must have every `*sql.Rows` closed before `Close`, and must not outlive the request or job scope it was acquired in — it holds no tenant lease of its own (ADR-032). The `types.Session` godoc is the authoritative contract; see wiki/database.md's "Dedicated Sessions" section.
+`db.Session(ctx)` returns a `database.Session` pinned to ONE physical connection — the handle for state a shared pool connection can silently lose when the next statement lands on a different backend: PostgreSQL advisory locks, `SET`/`ALTER SESSION`, and temporary tables (ADR-112). Its surface is `Query`/`QueryRow`/`Exec`/`DatabaseType` + `Begin`/`BeginTx` + `Close`; it has no `Prepare`, `Health`, `Stats`, or migration-table methods. `Close` is mandatory — an open `Session` holds one of the pool's connections (25 by default) for its whole lifetime — and acquisition is tracked as the `SESSION` operation. The `types.Session` godoc (database/types/session.go) is the authoritative contract for Close semantics, `sql.ErrConnDone`, concurrency, open `Rows`, and tenant-lease scope; see also wiki/database.md's "Dedicated Sessions" section.
+
+The example below is PostgreSQL-specific (`pg_advisory_lock`, `$1` placeholders); an Oracle consumer gets no `DBMS_LOCK` without a grant, so its session-scoped uses are `ALTER SESSION` state and global temporary tables.
 
 ```go
 import (
@@ -1319,17 +1321,23 @@ const ledgerLockID = 424242
 
 // RelayLedger holds a PostgreSQL advisory lock across a transaction: the lock
 // and the work it guards run on the same pinned physical connection.
-func RelayLedger(ctx context.Context, db database.Interface) error {
+func RelayLedger(ctx context.Context, db database.Interface) (err error) {
     sess, err := db.Session(ctx)
     if err != nil {
         return fmt.Errorf("open session: %w", err)
     }
     defer func() { _ = sess.Close() }() // returns the connection to the pool
 
-    if _, err := sess.Exec(ctx, "SELECT pg_advisory_lock($1)", ledgerLockID); err != nil {
+    if _, err = sess.Exec(ctx, "SELECT pg_advisory_lock($1)", ledgerLockID); err != nil {
         return fmt.Errorf("acquire ledger lock: %w", err)
     }
-    defer func() { _, _ = sess.Exec(ctx, "SELECT pg_advisory_unlock($1)", ledgerLockID) }()
+    // Report a failed unlock: Close returns the connection to the pool without
+    // ending the backend, so a lock left held travels on a recycled connection.
+    defer func() {
+        if _, unlockErr := sess.Exec(ctx, "SELECT pg_advisory_unlock($1)", ledgerLockID); unlockErr != nil && err == nil {
+            err = fmt.Errorf("release ledger lock: %w", unlockErr)
+        }
+    }()
 
     tx, err := sess.Begin(ctx)
     if err != nil {
@@ -1337,7 +1345,7 @@ func RelayLedger(ctx context.Context, db database.Interface) error {
     }
     defer tx.Rollback(ctx)
 
-    if _, err := tx.Exec(ctx, "UPDATE ledger SET relayed = true WHERE relayed = false"); err != nil {
+    if _, err = tx.Exec(ctx, "UPDATE ledger SET relayed = true WHERE relayed = false"); err != nil {
         return fmt.Errorf("relay: %w", err)
     }
     return tx.Commit(ctx)

@@ -806,13 +806,11 @@ case err != nil:
 
 ## Dedicated Sessions ([ADR-112](adr_112_database_session_door.md))
 
-`db.Session(ctx)` returns a `database.Session` pinned to ONE physical connection, for state a shared pool connection can silently lose when the next statement lands on a different backend: PostgreSQL advisory locks, `SET`/`ALTER SESSION`, and temporary tables. The `types.Session` godoc is the single authority for the full contract — the rules below are the short form.
+`db.Session(ctx)` returns a `database.Session` pinned to ONE physical connection, for state a shared pool connection can silently lose when the next statement lands on a different backend: PostgreSQL advisory locks, `SET`/`ALTER SESSION`, and temporary tables. `Close` is mandatory — an open `Session` holds one of the pool's connections (25 by default) for its whole lifetime. Acquisition is tracked as the `SESSION` operation, the way `Begin` is tracked as `BEGIN` ([ADR-112](adr_112_database_session_door.md)).
 
-- **`Close` is mandatory and not idempotent**: it returns the physical connection to the pool, and a second `Close` returns `sql.ErrConnDone`.
-- **`sql.ErrConnDone` after Close or death**: every call after `Close` reports it, as does every call after the one that first OBSERVES the connection dying (that first call may surface the driver's own error instead).
-- **No concurrent use**: `database/sql` does not serialize statements on a pinned connection, so two goroutines on one `Session` race.
-- **Close every `Rows` first**: an open `*sql.Rows` from the session makes `Close` block until it is closed.
-- **Never outlive the request or job scope** it was acquired in: a `Session` holds no tenant lease of its own, so the tenant's pool may be closed under it once that lease is released ([ADR-032](adr_032_lease_refcount_tenant_handles.md)).
+The [`types.Session` godoc](../database/types/session.go) is the single authority for the contract: `Close` semantics, `sql.ErrConnDone`, concurrency, open `Rows`, and the tenant-lease scope rule. Read it before using the door.
+
+The example below is PostgreSQL-specific (`pg_advisory_lock`, `$1` placeholders). An Oracle consumer gets no `DBMS_LOCK` without a grant, so its session-scoped uses are `ALTER SESSION` state and global temporary tables.
 
 ```go
 import (
@@ -824,17 +822,23 @@ import (
 
 const ledgerLockID = 424242
 
-func RelayLedger(ctx context.Context, db database.Interface) error {
+func RelayLedger(ctx context.Context, db database.Interface) (err error) {
     sess, err := db.Session(ctx)
     if err != nil {
         return fmt.Errorf("open session: %w", err)
     }
     defer func() { _ = sess.Close() }()
 
-    if _, err := sess.Exec(ctx, "SELECT pg_advisory_lock($1)", ledgerLockID); err != nil {
+    if _, err = sess.Exec(ctx, "SELECT pg_advisory_lock($1)", ledgerLockID); err != nil {
         return fmt.Errorf("acquire ledger lock: %w", err)
     }
-    defer func() { _, _ = sess.Exec(ctx, "SELECT pg_advisory_unlock($1)", ledgerLockID) }()
+    // Report a failed unlock: Close returns the connection to the pool without
+    // ending the backend, so a lock left held travels on a recycled connection.
+    defer func() {
+        if _, unlockErr := sess.Exec(ctx, "SELECT pg_advisory_unlock($1)", ledgerLockID); unlockErr != nil && err == nil {
+            err = fmt.Errorf("release ledger lock: %w", unlockErr)
+        }
+    }()
 
     // The lock and the work it guards run on the same physical connection.
     tx, err := sess.Begin(ctx)
@@ -843,7 +847,7 @@ func RelayLedger(ctx context.Context, db database.Interface) error {
     }
     defer tx.Rollback(ctx)
 
-    if _, err := tx.Exec(ctx, "UPDATE ledger SET relayed = true WHERE relayed = false"); err != nil {
+    if _, err = tx.Exec(ctx, "UPDATE ledger SET relayed = true WHERE relayed = false"); err != nil {
         return fmt.Errorf("relay: %w", err)
     }
     return tx.Commit(ctx)
