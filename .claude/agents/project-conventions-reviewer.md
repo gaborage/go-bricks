@@ -31,7 +31,9 @@ If that yields nothing, fall back to `git diff HEAD` and `git diff --staged`.
 ## Checklist (report every violation; cite file:line)
 
 1. **Raw-SQL annotation (Security First).** Every `f.Raw(` / `jf.Raw(` /
-   `database.Raw(` call site added or modified in the diff MUST have an
+   `database.Raw(` / UPDATE `SetExpr(` / string `Having(` call site, and every
+   `qb.Expr(` / `qb.MustExpr(` / `RawExpression{` SQL-body construction, added
+   or modified in the diff MUST have an
    adjacent `// SECURITY: Manual SQL review completed - <rationale>` comment,
    and the rationale must name a specific property (identifier quoting,
    value-side parameterization, no user-input concatenation). `database.Raw`
@@ -39,7 +41,7 @@ If that yields nothing, fall back to `git diff HEAD` and `git diff --staged`.
    fragments inside a builder that still validates its other identifiers,
    whereas `database.Raw` replaces the whole statement, bypassing the
    builder's identifier validation entirely. Find them with:
-   `git grep -nE 'f\.Raw\(|jf\.Raw\(|database\.Raw\('` and cross-check against
+   `git grep -nE 'f\.Raw\(|jf\.Raw\(|database\.Raw\(|SetExpr\(|Having\(|MustExpr\(|[.]Expr\(|RawExpression\{'` and cross-check against
    the diff.
 
 2. **S8179 getter naming.** New exported getters must be `X()` not `GetX()`.

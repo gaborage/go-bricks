@@ -169,14 +169,15 @@ func (qb *QueryBuilder) JoinFilter() dbtypes.JoinFilterFactory {
 }
 
 // Expr creates a raw SQL expression for use in SELECT, GROUP BY, and ORDER BY clauses.
-// See dbtypes.Expr() for full documentation and security warnings.
+// See dbtypes.Expr() for full documentation and security warnings; every call site
+// carries the `// SECURITY: Manual SQL review completed - <what was verified>` annotation.
 //
 // Returns an error if the SQL is empty, too many aliases are provided, or alias contains dangerous characters.
 func (qb *QueryBuilder) Expr(sql string, alias ...string) (dbtypes.RawExpression, error) {
 	return dbtypes.Expr(sql, alias...)
 }
 
-// MustExpr is like Expr but panics on error.
+// MustExpr is like Expr but panics on error, with the same call-site annotation.
 // Use this only in static initialization or tests where errors indicate programming bugs.
 func (qb *QueryBuilder) MustExpr(sql string, alias ...string) dbtypes.RawExpression {
 	return dbtypes.MustExpr(sql, alias...)
@@ -1267,12 +1268,11 @@ func (sqb *SelectQueryBuilder) appendClauseValue(processed *[]string, value any,
 // (ADR-082): a string predicate is a raw-SQL door on par with f.Raw/jf.Raw/
 // database.Raw and requires the same inline
 // `// SECURITY: Manual SQL review completed - <what was verified>` annotation at
-// every call site. The RawExpression form is exempt for consistency with Select,
-// GroupBy and OrderBy — NOT because it is safer. RawExpression.Validate() checks
-// only that SQL is non-empty and that the Alias is free of dangerous characters;
-// it never inspects the SQL body, so that body carries the same injection risk as
-// the string form and must be reviewed as raw SQL. Its audit hook is its own
-// name: `git grep -nE 'MustExpr\(|[.]Expr\('`.
+// every call site, and so does the RawExpression form: preferring it is NOT a
+// safety claim. RawExpression.Validate() checks only that SQL is non-empty and
+// that the Alias is an unquoted identifier; it never inspects the SQL body, so
+// that body carries the same injection risk as the string form and is reviewed as
+// raw SQL.
 func (sqb *SelectQueryBuilder) Having(pred any, rest ...any) dbtypes.SelectQueryBuilder {
 	if expr, ok := pred.(dbtypes.RawExpression); ok {
 		// The alias is judged BEFORE Validate(): for HAVING no alias is ever legal,

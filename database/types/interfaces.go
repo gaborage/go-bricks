@@ -184,9 +184,8 @@ type SelectQueryBuilder interface {
 	// an error (ErrAliasInHaving), since a predicate projects nothing. A string
 	// predicate is a raw-SQL door on par with f.Raw/jf.Raw/database.Raw and needs
 	// the same inline `// SECURITY: Manual SQL review completed - <what was
-	// verified>` annotation at every call site. The RawExpression form is exempt
-	// for consistency with Select/GroupBy/OrderBy, not because it is safer — its
-	// SQL body is never validated and carries identical injection risk. Neither
+	// verified>` annotation at every call site, and so does the RawExpression form —
+	// its SQL body is never validated and carries identical injection risk. Neither
 	// form is checked against the identifier grammar: HAVING takes a predicate,
 	// not an identifier (ADR-082).
 	Having(pred any, rest ...any) SelectQueryBuilder
@@ -519,9 +518,11 @@ type QueryBuilderInterface interface {
 
 	// Expression builder (v2.1+)
 	// Returns error if SQL is empty, too many aliases provided, or alias contains dangerous characters.
+	// The SQL body is never validated: every call site carries the
+	// `// SECURITY: Manual SQL review completed - <what was verified>` annotation.
 	Expr(sql string, alias ...string) (RawExpression, error)
 
-	// MustExpr is like Expr but panics on error.
+	// MustExpr is like Expr but panics on error, with the same call-site annotation.
 	// Use this only in static initialization or tests where errors indicate programming bugs.
 	MustExpr(sql string, alias ...string) RawExpression
 
