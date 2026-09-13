@@ -1767,7 +1767,7 @@ rather than fork into optional side interfaces, per the C61.23 precedent. See
 
 ### [ADR-097: Sealed AMQP Messages — Field-Level JOSE Payload Protection](adr_097_sealed_amqp_messages.md)
 
-**Date:** 2026-09-03 | **Status:** Accepted | **Breaking:** none in this record — sealing is additive and import-gated; the header-id grammar it relies on is `[C63.2]`, the typed-door removal ADR-096's `[C63.1]`
+**Date:** 2026-09-03 | **Status:** Accepted | **Breaking:** none in this record — sealing is additive and import-gated; the header-id grammar it relies on is `[C63.2]`, the typed-door removal ADR-096's `[C63.1]`; amended 2026-09-08 (#1547): the unsealed dedup key falls back to the `message_id` property, `[C64.11]`; amended 2026-09-12 (#1558): the ledger key is a typed `messaging.DedupKey` carrying its provenance, `[C65.1]`
 
 Payment events cross a broker that ops, tooling and other tenants' consumers can read, and an
 AMQP publish ACL says who may write to an exchange, not who wrote a given message. A sealed

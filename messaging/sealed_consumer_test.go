@@ -251,7 +251,8 @@ func TestSealedHandlerOpensThenValidatesThenRunsFn(t *testing.T) {
 	assert.Equal(t, SealedEnvelope(env), sealed)
 	key, err := meta.DedupKey()
 	require.NoError(t, err)
-	assert.Equal(t, "svc-sign:jti-1", key)
+	assert.Equal(t, "svc-sign:jti-1", key.String())
+	assert.True(t, key.Sealed())
 	assert.True(t, sealedCtx, "fn runs under the sealed-delivery marker")
 	assert.False(t, IsSealedDelivery(t.Context()), "the marker never leaks outside the handler")
 	assert.Equal(t, "payment.authorized", handler.EventType())
@@ -357,46 +358,38 @@ func TestSealedHandlerTenantRuleMatrix(t *testing.T) {
 	}
 }
 
-func TestValidateDedupKeyAdmitsSealedKeysOnlyFromSealedDeliveries(t *testing.T) {
+// TestValidateDedupKeyJudgesProvenanceNotSpelling varies the key's provenance
+// against the delivery context. The zero key is refused everywhere; a sealed key
+// is refused outside a sealed delivery; a wire key passes under either context.
+func TestValidateDedupKeyJudgesProvenanceNotSpelling(t *testing.T) {
 	plain := t.Context()
-	sealed := context.WithValue(plain, sealedDeliveryKey{}, true)
+	sealedCtx := context.WithValue(plain, sealedDeliveryKey{}, true)
+	sealedKey := sealedDedupKey("svc-sign", "jti-1")
+	wireKey, err := WireDedupKey("evt-1")
+	require.NoError(t, err)
 
-	require.NoError(t, ValidateDedupKey(sealed, "svc-sign:jti-1"))
-	require.ErrorIs(t, ValidateDedupKey(plain, "svc-sign:jti-1"), ErrInvalidEventID, "the same spelling from a header is refused")
-	assert.NoError(t, ValidateDedupKey(plain, "jti-1"))
-	assert.NoError(t, ValidateDedupKey(sealed, "jti-1"))
-	require.ErrorIs(t, ValidateDedupKey(sealed, "a:b:c"), ErrInvalidEventID)
-	assert.ErrorIs(t, ValidateDedupKey(sealed, ""), ErrInvalidEventID)
-}
-
-func TestIsSealedDedupKeyVariesTheGrammar(t *testing.T) {
-	long := func(n int) string { return repeat("k", n) }
-	cases := map[string]bool{
-		"svc-sign:jti-1":         true,
-		"svc-sign:" + long(128):  true,
-		long(64) + ":jti":        true,
-		"svc-sign:" + long(129):  false,
-		long(65) + ":jti":        false,
-		"svc-sign:":              false,
-		":jti":                   false,
-		"svc-sign:jti:extra":     false,
-		"svc-sign:has space":     false,
-		"jti-only":               false,
-		"":                       false,
-		"svc-sign:jti\n":         false,
-		"svc.sign:jti":           false,
-		"svc-sign:jti-1-v2":      true,
-		"svc-payments-sign-v2:x": true,
+	cases := []struct {
+		name string
+		ctx  context.Context
+		key  DedupKey
+		ok   bool
+	}{
+		{"zero_key_plain_context", plain, DedupKey{}, false},
+		{"zero_key_sealed_context", sealedCtx, DedupKey{}, false},
+		{"sealed_key_sealed_context", sealedCtx, sealedKey, true},
+		{"sealed_key_plain_context", plain, sealedKey, false},
+		{"wire_key_plain_context", plain, wireKey, true},
+		{"wire_key_sealed_context", sealedCtx, wireKey, true},
 	}
-	for key, want := range cases {
-		assert.Equal(t, want, IsSealedDedupKey(key), "%q", key)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateDedupKey(tc.ctx, tc.key)
+			if tc.ok {
+				assert.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, ErrInvalidEventID)
+			assert.NotContains(t, err.Error(), "jti-1", "the error never carries the key")
+		})
 	}
-}
-
-func repeat(s string, n int) string {
-	out := make([]byte, 0, n*len(s))
-	for range n {
-		out = append(out, s...)
-	}
-	return string(out)
 }
