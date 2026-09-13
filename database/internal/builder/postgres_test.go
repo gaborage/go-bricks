@@ -149,7 +149,7 @@ func TestBuildPostgreSQLUpsertRejectsConflictColumnInUpdateSet(t *testing.T) {
 			sql, _, err := qb.BuildUpsert("users", tt.conflictColumns, tt.insertColumns, tt.updateColumns)
 
 			if tt.wantErrColumn != "" {
-				require.ErrorIs(t, err, dbtypes.ErrUpsertConflictColumnUpdated)
+				require.ErrorIs(t, err, dbtypes.ErrUpsertConflictColumnInUpdateSet)
 				require.Contains(t, err.Error(), tt.wantErrColumn,
 					"error must name the overlapping column, not merely the first conflict column")
 				return

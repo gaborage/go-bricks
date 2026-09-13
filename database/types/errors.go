@@ -71,8 +71,8 @@ var (
 	// ErrUpsertConflictColumnNotInserted is returned when a BuildUpsert conflict column is not an insert column.
 	ErrUpsertConflictColumnNotInserted = errors.New("conflict column must be present in insert columns for upsert")
 
-	// ErrUpsertConflictColumnUpdated is returned when a BuildUpsert conflict column is also an update column.
-	ErrUpsertConflictColumnUpdated = errors.New("update column collides with conflict column (Oracle MERGE forbids updating ON-clause columns, ORA-38104; rejected on all vendors for parity)")
+	// ErrUpsertConflictColumnInUpdateSet is returned when a BuildUpsert conflict column is also an update column.
+	ErrUpsertConflictColumnInUpdateSet = errors.New("update column collides with conflict column (Oracle MERGE forbids updating ON-clause columns, ORA-38104; rejected on all vendors for parity)")
 
 	// ErrNilSubquery is returned when ValidateSubquery() is called with nil subquery.
 	ErrNilSubquery = errors.New("subquery cannot be nil")

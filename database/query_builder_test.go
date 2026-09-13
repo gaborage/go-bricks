@@ -741,7 +741,7 @@ func TestQueryBuilderBuildUpsertPreconditionSentinels(t *testing.T) {
 			conflictColumns: []string{"id"},
 			insertColumns:   map[string]any{"id": 1, "name": "a"},
 			updateColumns:   map[string]any{"id": 2, "name": "b"},
-			wantErr:         types.ErrUpsertConflictColumnUpdated,
+			wantErr:         types.ErrUpsertConflictColumnInUpdateSet,
 			wantColumns:     []string{`"id"`},
 		},
 	}
