@@ -115,6 +115,7 @@ func (e RawExpression) Validate() error {
 
 // MustExpr is like Expr but panics on error.
 // Use this only in static initialization or tests where errors indicate programming bugs.
+// Call sites carry the SECURITY annotation; see RawExpression.
 func MustExpr(sql string, alias ...string) RawExpression {
 	expr, err := Expr(sql, alias...)
 	if err != nil {

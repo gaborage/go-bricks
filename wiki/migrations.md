@@ -5120,10 +5120,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   NOT validated against the identifier grammar in either form — it is a predicate, not an
   identifier (ADR-082).
 - gate: match = your code calls `Having` at all. no-match = it does not.
-- apply: prefer the expression spelling, NOT because it is safer.
-  `RawExpression.Validate()` never inspects the SQL body, so an expression body is
-  raw SQL exactly as a string predicate is; review it the same way and annotate it
-  the same way (see the #1192 amendment below). —
+- apply: prefer the expression spelling for consistency with `Select`, `GroupBy` and
+  `OrderBy`, NOT because it is safer. `RawExpression.Validate()` never inspects the
+  SQL body, so an expression body is raw SQL exactly as a string predicate is; review
+  it the same way and annotate it the same way (see the #1192 amendment below). —
 
   ```go
   // before — the only spelling that worked
