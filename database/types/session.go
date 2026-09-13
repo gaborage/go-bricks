@@ -14,9 +14,23 @@ package types
 // Obtain a Session from a database.Interface implementation exposing
 // Session(ctx context.Context) (Session, error) — e.g. *postgresql.Connection
 // or *oracle.Connection. Always Close it to return the physical connection
-// to the pool. Once Close has been called, or once the underlying driver
-// reports the physical connection dead, every Session method returns an
-// error satisfying errors.Is(err, sql.ErrConnDone).
+// to the pool.
+//
+// Error semantics once the physical connection is gone: the call that OBSERVES
+// the death may return the driver's own error rather than a translated one — a
+// PostgreSQL backend killed after the statement went out reports a raw FATAL
+// error (SQLSTATE 57P01) that database/sql does not classify as a dead
+// connection. Every SUBSEQUENT call returns an error satisfying
+// errors.Is(err, sql.ErrConnDone). After Close, every call does so
+// immediately. One exception: a failure that only surfaces while iterating the
+// *sql.Rows returned by Query reaches the caller RAW through rows.Next and
+// rows.Err, and is never translated.
+//
+// A Session must not be used concurrently: database/sql does not serialize
+// statements on a single pinned connection, so concurrent calls on one Session
+// race with each other.
+//
+// Close is not idempotent: a second Close returns sql.ErrConnDone.
 type Session interface {
 	Querier
 	Transactor
