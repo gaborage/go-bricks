@@ -134,15 +134,16 @@ pool and session defaults carry the trim too).
 | R3 | PG, no connectionstring: `cert` set XOR `key` set | reject (the pre-existing check, now running after R1/R2) |
 | R4 | PG with connectionstring: any of `mode`/`cert`/`key`/`ca` set | reject — the block never reaches the DSN |
 | R5 | Oracle: any of `mode`/`cert`/`key`/`ca` set | reject (extends the previous cert/key/ca check to `mode`) |
+| R6 | PG, no connectionstring (2026-09-13 amendment): any `host` entry an absolute path while any of `cert`/`key`/`ca` is set or `mode` is set and not `disable` | reject — pgx skips TLS on a unix socket; runs after R1, before R2/R3 |
 
 Check order is load-bearing: R4 short-circuits so a connection-string config
 gets the "move it into the DSN" message rather than a mode complaint; R1 precedes
 R2 so a typo'd mode is reported as a mode problem; R3 runs last so a partial pair
 under a mandatory mode gets the pairing message.
 
-**Still allowed**: every valid mode **without** material — `disable`, `allow`
+**Still allowed**: on a TCP host, every valid mode **without** material — `disable`, `allow`
 and `prefer` included, since opportunistic TLS with nothing to discard is a
-legitimate operator choice; `require`/`verify-ca`/`verify-full` with any paired
+legitimate operator choice (on a unix-socket host only an unset mode or `disable`, per R6); `require`/`verify-ca`/`verify-full` with any paired
 material; CA-only, and cert+key+CA, under a mandatory mode.
 
 **Escape hatch**: an operator who genuinely wants pgx-native semantics these
