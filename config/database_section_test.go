@@ -3071,6 +3071,34 @@ func TestApplyDatabasePoolDefaultsRefusesEmptyPostgresHost(t *testing.T) {
 			wantField: "database.host",
 		},
 		{
+			// pgx splits the host on ',' and swaps each empty entry for the socket directory.
+			name: "multi_host_with_trailing_empty_entry_refused",
+			cfg: DatabaseConfig{
+				Type: PostgreSQL, Host: "db.internal,", Database: "d", Username: "u",
+				TLS: TLSConfig{Mode: sslModeVerifyFull, CAFile: "/etc/certs/ca.pem"},
+			},
+			wantField: "database.host",
+		},
+		{
+			name:      "multi_host_with_leading_empty_entry_refused",
+			cfg:       DatabaseConfig{Type: PostgreSQL, Host: ",db.internal", Database: "d", Username: "u"},
+			wantField: "database.host",
+		},
+		{
+			name:      "multi_host_with_trailing_empty_entry_without_tls_refused",
+			cfg:       DatabaseConfig{Type: PostgreSQL, Host: "db.internal,", Database: "d", Username: "u"},
+			wantField: "database.host",
+		},
+		{
+			name:      "multi_host_with_middle_empty_entry_refused",
+			cfg:       DatabaseConfig{Type: PostgreSQL, Host: "db1.internal,,db2.internal", Database: "d", Username: "u"},
+			wantField: "database.host",
+		},
+		{
+			name: "multi_host_all_named_accepted",
+			cfg:  DatabaseConfig{Type: PostgreSQL, Host: "db1.internal,db2.internal", Database: "d", Username: "u"},
+		},
+		{
 			// testBarePostgresConnString names a host; this pins only that the
 			// connectionstring short-circuit runs BEFORE the host guard.
 			name: "postgres_connectionstring_short_circuits_before_host_guard",
@@ -3147,6 +3175,8 @@ func TestApplyDatabasePoolDefaultsRefusesTLSOnUnixSocketHost(t *testing.T) {
 		socketRefusal("unix_socket_host_disable_with_cert_refused", socketHost, TLSConfig{Mode: sslModeDisable, CertFile: testTLSCertFile}),
 		socketRefusal("unix_socket_host_disable_with_key_refused", socketHost, TLSConfig{Mode: sslModeDisable, KeyFile: testTLSKeyFile}),
 		socketRefusal("windows_socket_host_verify_full_refused", `C:\pg`, TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}),
+		socketRefusal("multi_host_with_socket_entry_and_tls_refused", "db.internal,"+socketHost, TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}),
+		socketRefusal("multi_host_with_middle_socket_entry_and_tls_refused", "db1.internal,"+socketHost+",db2.internal", TLSConfig{Mode: sslModeRequire}),
 		{
 			// The mode allowlist still runs first, so a typo is reported as a typo.
 			name:        "unix_socket_host_invalid_mode_reports_mode_first",
@@ -3159,6 +3189,8 @@ func TestApplyDatabasePoolDefaultsRefusesTLSOnUnixSocketHost(t *testing.T) {
 		{name: "unix_socket_host_disable_without_material_accepted", host: socketHost, tls: TLSConfig{Mode: sslModeDisable}},
 		{name: "localhost_verify_full_with_ca_accepted", host: "localhost", tls: TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}},
 		{name: "dns_host_verify_full_with_ca_accepted", host: "db.internal", tls: TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}},
+		{name: "multi_host_all_tcp_verify_full_with_ca_accepted", host: "db1.internal,db2.internal", tls: TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}},
+		{name: "multi_host_with_socket_entry_without_tls_accepted", host: "db.internal," + socketHost},
 	}
 
 	for _, tt := range tests {

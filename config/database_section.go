@@ -632,8 +632,9 @@ func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 
 	// An empty host is not a dial target: libpq semantics substitute the local socket
 	// directory and skip TLS there, so the refusal is version-independent even though
-	// pgx v5.11.0 is what made it reachable (v5.10.0 dialed `tcp :5432`).
-	if cfg.Host == "" {
+	// pgx v5.11.0 is what made it reachable (v5.10.0 dialed `tcp :5432`). Judged per
+	// comma-separated entry, since pgx substitutes each empty entry independently.
+	if slices.Contains(pgHostEntries(cfg.Host), "") {
 		return errMissingDatabaseHost()
 	}
 
@@ -646,7 +647,7 @@ func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 // validatePostgreSQLTLSCoherence refuses a database.tls block whose claim pgx would not honor.
 func validatePostgreSQLTLSCoherence(cfg *DatabaseConfig) error {
 	hasMaterial := cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" || cfg.TLS.CAFile != ""
-	if isUnixSocketHost(cfg.Host) && (hasMaterial || (cfg.TLS.Mode != "" && cfg.TLS.Mode != sslModeDisable)) {
+	if slices.ContainsFunc(pgHostEntries(cfg.Host), isUnixSocketHost) && (hasMaterial || (cfg.TLS.Mode != "" && cfg.TLS.Mode != sslModeDisable)) {
 		return &ConfigError{
 			Category: errCategoryInvalid,
 			Field:    fieldDatabaseTLS,
@@ -677,6 +678,11 @@ func validatePostgreSQLTLSCoherence(cfg *DatabaseConfig) error {
 		}
 	}
 	return nil
+}
+
+// pgHostEntries mirrors pgx v5 ParseConfig's untrimmed strings.Split of the host list.
+func pgHostEntries(host string) []string {
+	return strings.Split(host, ",")
 }
 
 // isUnixSocketHost mirrors pgx v5 pgconn isAbsolutePath, which routes a host to a unix
