@@ -243,6 +243,15 @@ func (c *Connection) DatabaseType() string {
 	return types.PostgreSQL
 }
 
+// Session opens a dedicated session pinned to a single physical connection,
+// for PostgreSQL session-scoped state (advisory locks, SET, temp tables) that
+// a shared pool connection could silently lose if the next statement lands on
+// a different physical backend. The caller must Close the returned Session to
+// release the connection back to the pool.
+func (c *Connection) Session(ctx context.Context) (types.Session, error) {
+	return c.OpenSession(ctx, types.PostgreSQL)
+}
+
 // MigrationTable returns the migration table name for PostgreSQL
 func (c *Connection) MigrationTable() string {
 	return "flyway_schema_history"
