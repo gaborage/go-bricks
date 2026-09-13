@@ -194,7 +194,7 @@ func (db *TestDB) ExpectExec(sqlPattern string) *ExecExpectation {
 //	    ExpectExec("INSERT INTO orders").WillReturnRowsAffected(1).
 //	    ExpectExec("INSERT INTO items").WillReturnRowsAffected(3)
 func (db *TestDB) ExpectTransaction() *TestTx {
-	tx := &TestTx{parent: db}
+	tx := newTestTx(db)
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	txExp := &TxExpectation{
@@ -219,7 +219,7 @@ func (db *TestDB) ExpectTransaction() *TestTx {
 //	sess := db.ExpectSession().
 //	    ExpectExec("SELECT pg_advisory_lock").WillReturnRowsAffected(1)
 func (db *TestDB) ExpectSession() *TestSession {
-	sess := &TestSession{parent: db}
+	sess := newTestSession(db)
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	db.sessionExpectations = append(db.sessionExpectations, sess)
@@ -298,8 +298,6 @@ func (db *TestDB) findExecExpectation(actualSQL string) *ExecExpectation {
 //	for rows.Next() {
 //	    // ... scan rows
 //	}
-//
-//nolint:dupl // Intentional duplication with TestTx.Query - different contexts require separate implementations
 func (db *TestDB) Query(_ context.Context, query string, args ...any) (*sql.Rows, error) {
 	db.mu.Lock()
 	db.queryLog = append(db.queryLog, QueryCall{SQL: query, Args: args})

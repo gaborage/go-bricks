@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
-	"sync"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -30,65 +28,57 @@ import (
 //
 //	AssertSessionClosed(t, sess)
 type TestSession struct {
-	parent      *TestDB
-	queries     []*QueryExpectation
-	execs       []*ExecExpectation
-	lastQuery   *QueryExpectation
-	lastExec    *ExecExpectation
-	lastWasExec bool
-	queryLog    []QueryCall
-	execLog     []ExecCall
-	txs         []*TestTx
-	closed      bool
-	mu          sync.RWMutex
+	expectationSet
+	txs    []*TestTx
+	closed bool
 }
 
 // Compile-time interface check.
 var _ dbtypes.Session = (*TestSession)(nil)
 
+// newTestSession builds a session fake whose expectations belong to parent. A
+// closed session refuses every statement, so the expectation machinery consults
+// closedLocked before it resolves one.
+func newTestSession(parent *TestDB) *TestSession {
+	sess := &TestSession{expectationSet: expectationSet{parent: parent, scope: "session"}}
+	sess.guard = sess.closedLocked
+	return sess
+}
+
+// closedLocked reports sql.ErrConnDone once the session is closed. It runs with
+// the session's mutex already held.
+func (s *TestSession) closedLocked() error {
+	if s.closed {
+		return sql.ErrConnDone
+	}
+	return nil
+}
+
 // ExpectQuery sets up an expectation for Query or QueryRow calls on the session.
 // Returns the TestSession for method chaining.
 func (s *TestSession) ExpectQuery(sqlPattern string) *TestSession {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	exp := &QueryExpectation{sql: sqlPattern}
-	s.queries = append(s.queries, exp)
-	s.lastQuery = exp
-	s.lastWasExec = false
+	s.addQuery(sqlPattern)
 	return s
 }
 
 // ExpectExec sets up an expectation for Exec calls on the session.
 // Returns the TestSession for method chaining.
 func (s *TestSession) ExpectExec(sqlPattern string) *TestSession {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	exp := &ExecExpectation{sql: sqlPattern}
-	s.execs = append(s.execs, exp)
-	s.lastExec = exp
-	s.lastWasExec = true
+	s.addExec(sqlPattern)
 	return s
 }
 
 // WillReturnRows configures the last ExpectQuery to return the specified rows.
 // Returns the TestSession for method chaining.
 func (s *TestSession) WillReturnRows(rows *RowSet) *TestSession {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.lastQuery != nil {
-		s.lastQuery.rows = rows
-	}
+	s.setRows(rows)
 	return s
 }
 
 // WillReturnRowsAffected configures the last ExpectExec to return the specified
 // rows affected count. Returns the TestSession for method chaining.
 func (s *TestSession) WillReturnRowsAffected(n int64) *TestSession {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.lastExec != nil {
-		s.lastExec.rowsAffected = n
-	}
+	s.setRowsAffected(n)
 	return s
 }
 
@@ -96,22 +86,14 @@ func (s *TestSession) WillReturnRowsAffected(n int64) *TestSession {
 // to return the specified error, the way TestTx.WillReturnError does.
 // Returns the TestSession for method chaining.
 func (s *TestSession) WillReturnError(err error) *TestSession {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.lastWasExec {
-		if s.lastExec != nil {
-			s.lastExec.err = err
-		}
-	} else if s.lastQuery != nil {
-		s.lastQuery.err = err
-	}
+	s.setError(err)
 	return s
 }
 
 // ExpectTransaction sets up an expectation for Begin()/BeginTx() calls on the
 // session. Returns a TestTx that can be configured with query/exec expectations.
 func (s *TestSession) ExpectTransaction() *TestTx {
-	tx := &TestTx{parent: s.parent}
+	tx := newTestTx(s.parent)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.txs = append(s.txs, tx)
@@ -127,43 +109,12 @@ func (s *TestSession) IsClosed() bool {
 
 // QueryLog returns all Query/QueryRow calls made on this session.
 func (s *TestSession) QueryLog() []QueryCall {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return append([]QueryCall{}, s.queryLog...)
+	return s.queryCalls()
 }
 
 // ExecLog returns all Exec calls made on this session.
 func (s *TestSession) ExecLog() []ExecCall {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return append([]ExecCall{}, s.execLog...)
-}
-
-// resolveQuery records the call and returns the matching query expectation, or
-// the error a closed session, an unmatched statement or an unconfigured
-// expectation produces.
-func (s *TestSession) resolveQuery(query string, args []any) (*QueryExpectation, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.closed {
-		return nil, sql.ErrConnDone
-	}
-	s.queryLog = append(s.queryLog, QueryCall{SQL: query, Args: args})
-
-	for _, exp := range s.queries {
-		if !s.parent.matchSQL(exp.sql, query) {
-			continue
-		}
-		if exp.err != nil {
-			return nil, exp.err
-		}
-		if exp.rows == nil {
-			return nil, fmt.Errorf("session query expectation for %q has no rows configured", query)
-		}
-		return exp, nil
-	}
-	return nil, fmt.Errorf("unexpected query in session: %s (no matching expectation)", query)
+	return s.execCalls()
 }
 
 // Query implements dbtypes.Querier.Query.
@@ -171,49 +122,17 @@ func (s *TestSession) resolveQuery(query string, args []any) (*QueryExpectation,
 // IMPORTANT: Callers MUST call defer rows.Close() immediately after Query() to
 // prevent resource leaks, exactly as with TestDB.Query.
 func (s *TestSession) Query(_ context.Context, query string, args ...any) (*sql.Rows, error) {
-	exp, err := s.resolveQuery(query, args)
-	if err != nil {
-		return nil, err
-	}
-	return exp.rows.toSQLRows()
+	return s.runQuery(query, args)
 }
 
 // QueryRow implements dbtypes.Querier.QueryRow.
 func (s *TestSession) QueryRow(_ context.Context, query string, args ...any) dbtypes.Row {
-	exp, err := s.resolveQuery(query, args)
-	if err != nil {
-		return &testRow{err: err}
-	}
-	if len(exp.rows.rows) == 0 {
-		return &testRow{err: sql.ErrNoRows}
-	}
-	normalized, normErr := exp.rows.normalizeRow(0)
-	if normErr != nil {
-		return &testRow{err: fmt.Errorf("failed to normalize row: %w", normErr)}
-	}
-	return &testRow{values: normalized}
+	return s.runQueryRow(query, args)
 }
 
 // Exec implements dbtypes.Querier.Exec.
 func (s *TestSession) Exec(_ context.Context, query string, args ...any) (sql.Result, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.closed {
-		return nil, sql.ErrConnDone
-	}
-	s.execLog = append(s.execLog, ExecCall{SQL: query, Args: args})
-
-	for _, exp := range s.execs {
-		if !s.parent.matchSQL(exp.sql, query) {
-			continue
-		}
-		if exp.err != nil {
-			return nil, exp.err
-		}
-		return &testResult{rowsAffected: exp.rowsAffected}, nil
-	}
-	return nil, fmt.Errorf("unexpected exec in session: %s (no matching expectation)", query)
+	return s.runExec(query, args)
 }
 
 // DatabaseType implements dbtypes.Querier.DatabaseType.
