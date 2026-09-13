@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -409,7 +410,9 @@ func TestJOSETransportTypedNilLoggerStillRefuses(t *testing.T) {
 	defer server.Close()
 
 	var nilZeroLogger logger.Logger = (*logger.ZeroLogger)(nil)
-	if nilZeroLogger == nil {
+	// reflect, not == nil: the compiler knows this interface holds a concrete type, and
+	// testify reads a typed-nil pointer as nil, so both spell the fixture away.
+	if reflect.TypeOf(nilZeroLogger) == nil || !reflect.ValueOf(nilZeroLogger).IsNil() {
 		t.Fatal("fixture must be a non-nil interface holding a typed-nil pointer")
 	}
 
