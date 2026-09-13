@@ -123,11 +123,13 @@ func TestStmtTrackerQueryRowRecordsScanError(t *testing.T) {
 	assert.Equal(t, msgDBOperationError, events[0].Msg)
 }
 
-// TestStmtTrackerExecTracksAndExtractsRowsAffected covers both Exec arms. The
-// extracted rows-affected count currently reaches recordDBMetrics only as an
-// unused parameter, so the observable contract is that extraction never panics
-// on the error arm (nil sql.Result) and the caller still gets the real result.
-func TestStmtTrackerExecTracksAndExtractsRowsAffected(t *testing.T) {
+// TestStmtTrackerExecTracksBothArms covers both Exec arms: the delegate call
+// receives the right args either way, a delegate error is wrapped and
+// returned with a nil sql.Result, and a successful call returns the
+// delegate's real result unchanged. extractRowsAffected's own behavior (nil
+// result, the RowsAffected() error arm, the happy path) is pinned directly by
+// TestExtractRowsAffected in utils_test.go, not by this test.
+func TestStmtTrackerExecTracksBothArms(t *testing.T) {
 	tests := []struct {
 		name      string
 		execErr   error
