@@ -553,7 +553,10 @@ func TestPGRoleSpecValidateRejectsReservedSchemas(t *testing.T) {
 	for _, schema := range []string{
 		"public", "Public", "PUBLIC",
 		"pg_temp", "pg_toast", "PG_CATALOG", "Pg_Anything",
-		"information_schema", "Information_Schema", "INFORMATION_SCHEMA",
+		// The mixed-case spelling is "Information_SCHEMA", not "Information_Schema":
+		// the assertion below looks for the field name "Schema" in the message, and
+		// a value containing that exact casing would satisfy it on its own.
+		"information_schema", "Information_SCHEMA", "INFORMATION_SCHEMA",
 	} {
 		t.Run(schema, func(t *testing.T) {
 			spec := &PGRoleSpec{Schema: schema, MigratorRole: "m", RuntimeRole: "r"}

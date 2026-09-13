@@ -3,6 +3,8 @@
 package migration
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"testing"
@@ -322,4 +324,71 @@ func isPermissionDenied(err error) bool {
 	return strings.Contains(msg, "SQLSTATE 42501") ||
 		strings.Contains(msg, "permission denied") ||
 		strings.Contains(msg, "must be owner")
+}
+
+// pgPublicGrantDetectSQL is the RuntimeRole half of the [C65.4] detect step in
+// wiki/migrations.md, kept here verbatim so the atom's query has a live oracle
+// and the two cannot drift apart silently. It reads the ACL out of pg_class
+// rather than information_schema.role_table_grants, whose documented difference
+// from table_privileges is that it OMITS what a grant to PUBLIC made reachable —
+// exactly the row we are hunting. aclexplode breaks relacl into one row per
+// privilege and represents the PUBLIC pseudo-role as grantee 0; the catalog
+// schemas are excluded because PostgreSQL grants PUBLIC SELECT on its own
+// catalogs by design.
+const pgPublicGrantDetectSQL = `SELECT n.nspname, c.relname, a.privilege_type
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace,
+     aclexplode(c.relacl) a
+WHERE a.grantee = 0
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+ORDER BY 1, 2, 3`
+
+// TestPGPublicGrantDetectSQLFindsThePublicGrant is the falsifiability check on
+// the atom's detect query: against a real server it must return nothing for a
+// table nobody granted to PUBLIC, exactly the one row for the grant that a
+// RuntimeRole spelled "public" produces, and nothing again once it is revoked.
+// The empty first leg is also the fact the atom asserts to operators — that
+// PostgreSQL grants nothing to PUBLIC on a table you created, so any row the
+// query returns is worth investigating.
+func TestPGPublicGrantDetectSQLFindsThePublicGrant(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx, cancel := testCtx(t)
+	defer cancel()
+
+	admin := env.adminDB(t)
+	_, err := admin.ExecContext(ctx, `CREATE SCHEMA acl_probe`)
+	require.NoError(t, err)
+	_, err = admin.ExecContext(ctx, `CREATE TABLE acl_probe.widgets (id INT PRIMARY KEY)`)
+	require.NoError(t, err)
+
+	require.Empty(t, publicGrantRows(ctx, t, admin),
+		"PostgreSQL grants nothing to PUBLIC on a freshly created table")
+
+	_, err = admin.ExecContext(ctx, `GRANT SELECT ON acl_probe.widgets TO PUBLIC`)
+	require.NoError(t, err)
+	require.Equal(t, []string{"acl_probe|widgets|SELECT"}, publicGrantRows(ctx, t, admin),
+		"the detect query must surface the PUBLIC grant, and only it")
+
+	_, err = admin.ExecContext(ctx, `REVOKE SELECT ON acl_probe.widgets FROM PUBLIC`)
+	require.NoError(t, err)
+	require.Empty(t, publicGrantRows(ctx, t, admin),
+		"the remediation step must make the detect query go quiet again")
+}
+
+// publicGrantRows runs pgPublicGrantDetectSQL verbatim and flattens each row to
+// "schema|relation|privilege" so a test can assert the exact row set.
+func publicGrantRows(ctx context.Context, t *testing.T, db *sql.DB) []string {
+	t.Helper()
+	rows, err := db.QueryContext(ctx, pgPublicGrantDetectSQL)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var schema, relation, privilege string
+		require.NoError(t, rows.Scan(&schema, &relation, &privilege))
+		out = append(out, schema+"|"+relation+"|"+privilege)
+	}
+	require.NoError(t, rows.Err())
+	return out
 }
