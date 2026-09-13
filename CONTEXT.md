@@ -16,8 +16,9 @@ _Avoid_: database config, DB block, DSN block
 The raw DSN a database section's `connectionstring` key carries, passed to the driver
 unparsed apart from type inference (ADR-050) and, for PostgreSQL, a scan of its resolved
 host and its own TLS claim (`[C65.2]`: a host that names nothing is refused, and so is a
-unix-socket host under a `sslmode`/`sslnegotiation`/`sslrootcert`/`sslcert`/`sslkey`
-claim) — the seam never otherwise parses it.
+unix-socket host under a TLS claim — `sslmode` of `require`/`verify-ca`/`verify-full`,
+`sslnegotiation=direct`, or non-empty `sslrootcert`/`sslcert`/`sslkey`) — the seam never
+otherwise parses it.
 _Avoid_: conn string, database URL
 
 **Host source**:
@@ -30,7 +31,7 @@ _Avoid_: host (unqualified, for this concept), PGHOST (as a stand-in for the con
 **Implicit socket**:
 What the driver substitutes when no host source names a host: a unix socket in the
 server's own socket directory, where TLS is never negotiated. What `[C64.8]` refuses
-for a typed database section — widened by `[C65.1]` to an empty comma-separated `host`
+for a typed database section — widened by `[C65.6]` to an empty comma-separated `host`
 entry — and `[C65.2]` refuses for a connection string.
 _Avoid_: default host, empty host (the input shape, not this outcome)
 

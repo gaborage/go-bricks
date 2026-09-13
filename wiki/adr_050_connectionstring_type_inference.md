@@ -59,8 +59,11 @@
 > accepted by `TestApplyDatabasePoolDefaultsAcceptsPGSSLEnvTLSClaimOnSocketDSN`, so a change of
 > posture flips a test. The other shape still unjudged is a `connectionstring` matching no URI
 > prefix that the keyword-form test does not claim — it does not tokenize, or its keys are not
-> libpq keyword names, as an Oracle TNS descriptor's are not — which stays untyped and is
-> refused as untyped rather than dialed. The 2026-09-07 amendment's tracked fail-open (a
+> libpq keyword names, as an Oracle TNS descriptor's are not — which stays untyped. It is then
+> refused as untyped rather than dialed only where nothing else supplies the vendor: an explicit
+> `type:` still types the section (`normalizeWithConnectionString` keeps an `oracle` type on such
+> a DSN, and only a contradicting inference errors), and a consumer supplying its own
+> `Options.DatabaseConnector` bypasses the builder's untyped refusal entirely. The 2026-09-07 amendment's tracked fail-open (a
 > host-less raw DSN, #1551) is closed by these two clauses. See
 > [migrations.md](migrations.md) `[C65.3]` and `[C65.2]`, gaborage/go-bricks#1551.
 >
