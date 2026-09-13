@@ -42,6 +42,7 @@ const (
 	codePolicyHeaderCollision   = "JOSE_POLICY_HEADER_COLLISION"
 	codeOutboundFailed          = "JOSE_OUTBOUND_FAILED"
 	codeCtyRejected             = "JOSE_CTY_REJECTED"
+	codeOuterNotJWS             = "JOSE_OUTER_NOT_JWS"
 	codeTagDuplicateKey         = "JOSE_TAG_DUPLICATE_KEY"
 	codeTagKidInvalid           = "JOSE_TAG_KID_INVALID"
 )

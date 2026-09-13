@@ -11,7 +11,8 @@ import (
 // as Visa Message Level Encryption specifies. The peer is authenticated out of band
 // (X-Pay-Token, mTLS); nothing here signs or verifies anything.
 
-// nowMillis is the seal-time clock for the bare-mode iat header, swapped by in-package
+// nowMillis is the seal-time clock for the bare-built JWE's iat header (bare mode and the
+// JWS-of-JWE inner JWE), swapped by in-package
 // tests. Unix epoch MILLISECONDS, per the Visa MLE convention.
 var nowMillis = func() int64 { return time.Now().UnixMilli() }
 

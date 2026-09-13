@@ -9,9 +9,10 @@ import (
 // as unverified plaintext. Compared case-sensitively, exactly as written here.
 const ctyNestedJWS = "JWS"
 
-// Seal performs the outbound transformation: sign payload as a compact JWS with our
-// private key, then encrypt that JWS as a compact JWE to the peer's public key. Returns
-// the compact JWE string.
+// Seal performs the outbound transformation p.Mode selects. The default signs payload as a
+// compact JWS with our private key, then encrypts that JWS as a compact JWE to the peer's
+// public key; SealModeBareJWE only encrypts; SealModeJWSofJWE encrypts, then signs the
+// compact JWE. Returns the outermost compact serialization.
 //
 // On failure, returns an *Error. Pre-flight guard failures (Status 500) use Code
 // JOSE_POLICY_DIRECTION_MISMATCH (nil or wrong-direction policy) or JOSE_KEYSTORE_UNAVAILABLE
@@ -49,6 +50,8 @@ func Seal(payload []byte, p *Policy, r KeyResolver) (string, error) {
 	case SealModeJWEofJWS:
 	case SealModeBareJWE:
 		return sealBare(payload, p, r)
+	case SealModeJWSofJWE:
+		return sealJWSofJWE(payload, p, r)
 	default:
 		return "", errUnknownMode(p.Mode)
 	}
@@ -68,15 +71,7 @@ func Seal(payload []byte, p *Policy, r KeyResolver) (string, error) {
 		Cty:    p.Cty,
 	})
 	if err != nil {
-		return "", &Error{
-			Sentinel: ErrOutboundFailed,
-			Code:     codeOutboundFailed,
-			Status:   500,
-			Message:  "Failed to sign outbound payload",
-			Kid:      p.SignKid,
-			Alg:      string(p.SigAlg),
-			Cause:    err,
-		}
+		return "", signFailed(p, err)
 	}
 
 	jweCompact, err := cryptoadapter.Encrypt([]byte(jwsCompact), encKey, &cryptoadapter.EncryptOptions{
@@ -92,7 +87,20 @@ func Seal(payload []byte, p *Policy, r KeyResolver) (string, error) {
 	return jweCompact, nil
 }
 
-// encryptFailed wraps a crypto-adapter encrypt failure, shared by both seal modes.
+// signFailed wraps a crypto-adapter sign failure, shared by every signing seal mode.
+func signFailed(p *Policy, err error) *Error {
+	return &Error{
+		Sentinel: ErrOutboundFailed,
+		Code:     codeOutboundFailed,
+		Status:   500,
+		Message:  "Failed to sign outbound payload",
+		Kid:      p.SignKid,
+		Alg:      string(p.SigAlg),
+		Cause:    err,
+	}
+}
+
+// encryptFailed wraps a crypto-adapter encrypt failure, shared by every seal mode.
 func encryptFailed(p *Policy, err error) *Error {
 	return &Error{
 		Sentinel: ErrOutboundFailed,
