@@ -105,10 +105,13 @@ func IsSealedDelivery(ctx context.Context) bool {
 
 // ValidateDedupKey checks a key at the ledger door. Admission is by the key's
 // provenance, not its spelling: the zero DedupKey is refused, and a Sealed key
-// is refused under a context IsSealedDelivery does not mark (defense in depth —
-// only the sealed door mints one, and only inside its own handler). A wire key
-// passes under either context; its grammar ran when WireDedupKey built it. Both
-// refusals wrap ErrInvalidEventID and never carry the key.
+// is refused under a context IsSealedDelivery does not mark. Only the sealed
+// branch of Metadata.DedupKey mints a Sealed key, so a caller can only hold its
+// own delivery's; the context check fails closed when that correct key is used
+// from somewhere that is not the sealed delivery (a detached goroutine, say),
+// turning a plumbing mistake into a refusal rather than a silent ledger write.
+// A wire key passes under either context; its grammar ran when WireDedupKey
+// built it. Both refusals wrap ErrInvalidEventID and never carry the key.
 func ValidateDedupKey(ctx context.Context, key DedupKey) error {
 	if key.String() == "" {
 		return fmt.Errorf("%w: zero DedupKey", ErrInvalidEventID)
@@ -166,13 +169,10 @@ func (m Metadata) Sealed() (SealedEnvelope, bool) {
 // x-outbox-event-id header, or — when the delivery carries no such header at
 // all — the AMQP message_id property, so a producer that follows the standard
 // without being go-bricks is still processable through inbox.ProcessOnce. The
-// stamp is tried
-// first and a stamp that is present but malformed errors rather than falling
-// through: on a go-bricks producer the stamp is framework-written while the
-// property is caller-written, so a caller must not be able to shadow it by
-// spoiling it. The error wraps ErrInvalidEventID when both are absent, or the
-// chosen one is empty, over 128 bytes, or carries a byte outside
-// [A-Za-z0-9_-].
+// stamp is tried first and a stamp that is present but malformed errors rather
+// than falling through: on a go-bricks producer the stamp is framework-written
+// while the property is caller-written, so a caller must not be able to shadow
+// it by spoiling it.
 //
 // The framework validates the SHAPE of either source, never its uniqueness:
 // AMQP obliges no producer to make message_id unique per message, so a producer

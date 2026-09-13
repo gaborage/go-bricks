@@ -67,9 +67,7 @@ func TestProcessOnceDedupHitIsCountedAndLogged(t *testing.T) {
 			in.module.dedupHits.Add(t.Context(), 1)
 			before := sumOfDedupHits(t, mp)
 
-			var keyLength int
 			process := func(ctx context.Context, key messaging.DedupKey) error {
-				keyLength = len(key.String())
 				return in.ProcessOnce(ctx, key, func(context.Context, dbtypes.Tx) error {
 					t.Error("fn must not run on a dedup hit")
 					return nil
@@ -92,6 +90,11 @@ func TestProcessOnceDedupHitIsCountedAndLogged(t *testing.T) {
 				}
 			})
 			require.NoError(t, err)
+
+			keyLength := len(replayed)
+			if tc.sealed {
+				keyLength = len(sealedKeySpelling)
+			}
 
 			assert.Equal(t, before+1, sumOfDedupHits(t, mp), "exactly one hit is counted")
 			assertDedupHitAttributes(t, mp, tc.tenantPresent, tc.sealed)

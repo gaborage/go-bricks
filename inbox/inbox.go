@@ -61,7 +61,7 @@ func (i *Inbox) ProcessOnce(ctx context.Context, key messaging.DedupKey, fn func
 			return err
 		}
 		if !inserted {
-			i.module.recordDedupHit(ctx, tenantID, eventID, key.Sealed())
+			i.module.recordDedupHit(ctx, tenantID, key)
 			return nil // already processed: skip fn, commit the no-op
 		}
 		return fn(ctx, tx)

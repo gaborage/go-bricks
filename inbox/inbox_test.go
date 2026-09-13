@@ -42,18 +42,23 @@ func wireKey(t *testing.T, id string) messaging.DedupKey {
 // TestProcessOnceAdmitsWireKeysAtBothLengthBoundaries pins that a wire key the
 // grammar admitted — a 128-byte one included — reaches the INSERT.
 func TestProcessOnceAdmitsWireKeysAtBothLengthBoundaries(t *testing.T) {
-	for _, id := range []string{"k", "9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f", strings.Repeat("k", 128)} {
-		db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
-		db.ExpectTransaction().ExpectExec(`INSERT INTO gobricks_inbox`).WillReturnRowsAffected(1)
-		in := newTestInbox(db)
+	for name, id := range map[string]string{
+		"single_byte":    "k",
+		"max_length_128": strings.Repeat("k", 128),
+	} {
+		t.Run(name, func(t *testing.T) {
+			db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+			db.ExpectTransaction().ExpectExec(`INSERT INTO gobricks_inbox`).WillReturnRowsAffected(1)
+			in := newTestInbox(db)
 
-		ran := false
-		err := in.ProcessOnce(t.Context(), wireKey(t, id), func(context.Context, dbtypes.Tx) error {
-			ran = true
-			return nil
+			ran := false
+			err := in.ProcessOnce(t.Context(), wireKey(t, id), func(context.Context, dbtypes.Tx) error {
+				ran = true
+				return nil
+			})
+			require.NoError(t, err)
+			assert.True(t, ran)
 		})
-		require.NoError(t, err)
-		assert.True(t, ran)
 	}
 }
 
@@ -313,11 +318,18 @@ type stubSpec struct{}
 func (stubSpec) SignLogical() string    { return "svc-payments-sign" }
 func (stubSpec) EncryptLogical() string { return "acme-core-enc" }
 
+const (
+	sealedTestFamily = "svc-payments-sign"
+	sealedTestJTI    = "9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f"
+	// sealedKeySpelling is what Metadata.DedupKey composes from stubOpener's envelope.
+	sealedKeySpelling = sealedTestFamily + ":" + sealedTestJTI
+)
+
 type stubOpener struct{}
 
 func (stubOpener) Open(_ context.Context, _ []byte, _ messaging.SealTenantRule, out any) (messaging.SealEnvelope, error) {
 	*out.(*sealedEvent) = sealedEvent{Ref: "abc"}
-	return messaging.SealEnvelope{JTI: "9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f", SignFamily: "svc-payments-sign"}, nil
+	return messaging.SealEnvelope{JTI: sealedTestJTI, SignFamily: sealedTestFamily}, nil
 }
 
 type stubCodec struct{}
