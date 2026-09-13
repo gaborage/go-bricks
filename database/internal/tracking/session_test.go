@@ -166,21 +166,63 @@ func TestSessionQueryRowPropagatesScanError(t *testing.T) {
 	require.ErrorIs(t, row.Err(), wantErr)
 }
 
+// TestSessionBeginWrapsTransaction pins that a session's Begin and BeginTx record
+// the transaction start exactly the way the pool path does: the same db.begin span
+// (both ops map to it — see extractDBOperation), the same BEGIN / BEGIN_TX op name
+// in the log, and the same server.address / server.port / db.namespace attributes,
+// which the session inherits from the ACQUIRING connection's tracking Context.
 func TestSessionBeginWrapsTransaction(t *testing.T) {
-	recLogger := newRecordingLogger()
-	sess := newTrackedStubSession(recLogger, &stubSession{databaseTypeValue: "postgresql"})
+	traceExporter, _, cleanup := setupTestObservabilityProviders(t)
+	defer cleanup()
 
-	tx, err := sess.Begin(context.Background())
+	recLogger := newRecordingLogger()
+	underlying := &stubSessionCapableConnection{
+		stubConnection: &stubConnection{databaseTypeValue: "postgresql"},
+		sessionResult:  &stubSession{databaseTypeValue: "postgresql"},
+	}
+	conn := NewConnection(underlying, recLogger, &config.DatabaseConfig{}).(*Connection)
+	conn.SetServerInfo("db.example.internal", 5432, "appdb.public")
+
+	ctx := context.Background()
+	sess, err := conn.Session(ctx)
+	require.NoError(t, err)
+
+	tx, err := sess.Begin(ctx)
 	require.NoError(t, err)
 	if _, ok := tx.(*Transaction); !ok {
 		t.Fatalf("expected tracked transaction, got %T", tx)
 	}
 
-	txWithOpts, err := sess.BeginTx(context.Background(), &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	txWithOpts, err := sess.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	require.NoError(t, err)
 	if _, ok := txWithOpts.(*Transaction); !ok {
 		t.Fatalf("expected tracked transaction, got %T", txWithOpts)
 	}
+
+	// The pool path, for comparison: its BEGIN must be indistinguishable from the
+	// session's apart from which handle issued it.
+	poolTx, err := conn.Begin(ctx)
+	require.NoError(t, err)
+	if _, ok := poolTx.(*Transaction); !ok {
+		t.Fatalf("expected tracked transaction, got %T", poolTx)
+	}
+
+	spans := obtest.NewSpanCollector(t, traceExporter)
+	beginSpans := spans.WithName(dbBeginSpanName).AssertCount(3)
+	for i := 0; i < beginSpans.Len(); i++ {
+		span := beginSpans.Get(i)
+		obtest.AssertSpanAttribute(t, &span, "server.address", "db.example.internal")
+		obtest.AssertSpanAttribute(t, &span, "server.port", 5432)
+		obtest.AssertSpanAttribute(t, &span, "db.namespace", "appdb.public")
+	}
+
+	ops := make([]string, 0, len(recLogger.events()))
+	for _, event := range recLogger.events() {
+		assert.Equal(t, levelDebug, event.Level)
+		ops = append(ops, event.Fields[logFieldQuery].(string))
+	}
+	assert.Equal(t, []string{"SESSION", "BEGIN", "BEGIN_TX", "BEGIN"}, ops,
+		"a session Begin/BeginTx is logged under the same op names as the pool's")
 }
 
 // TestSessionBeginErrorsReturnNilTx drives the `if err != nil` arms of both
