@@ -4424,7 +4424,8 @@ replaces that Content-Type rule with its `Unwrap` verdict and buffers every elig
 `MaxResponseBytes`) before it runs. **A 2xx must have been unwrapped** in either mode: a successful
 response the `Inbound` policy never opened is refused with `httpclient.ErrJOSEPlaintextResponse`
 (match with `errors.Is`) — body closed and never handed to the caller or a response interceptor,
-wrapped with the status and the peer name, and one WARN naming the same two plus the request id,
+wrapped with the status and the peer name, and — when the transport has a usable `Logger` — one WARN
+naming the direction and the same two, plus the request id when the transport can read a valid one,
 never body bytes. The
 refusal is terminal: it never enters the retry loop, because the peer already honored the request
 and a retry would only duplicate a non-idempotent side effect.

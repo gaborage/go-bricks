@@ -322,6 +322,7 @@ func TestJOSETransportPlaintextSuccessWarnsOnce(t *testing.T) {
 		envelope       bool
 		allowPlaintext bool
 		requestID      string
+		ctxRequestID   string
 		wantEvents     int
 		wantFields     map[string]any
 	}{
@@ -358,6 +359,39 @@ func TestJOSETransportPlaintextSuccessWarnsOnce(t *testing.T) {
 				"status":    http.StatusOK,
 			},
 		},
+		{
+			// A caller-supplied header outside the ingest bound is discarded, not logged.
+			name:       "invalid_header_request_id_omitted",
+			requestID:  "req 42",
+			wantEvents: 1,
+			wantFields: map[string]any{
+				"direction": "inbound",
+				"peer":      "visa-vts",
+				"status":    http.StatusOK,
+			},
+		},
+		{
+			name:         "invalid_header_falls_back_to_the_context_id",
+			requestID:    "req 42",
+			ctxRequestID: "ctx-99",
+			wantEvents:   1,
+			wantFields: map[string]any{
+				"direction":  "inbound",
+				"peer":       "visa-vts",
+				"status":     http.StatusOK,
+				"request_id": "ctx-99",
+			},
+		},
+		{
+			name:         "invalid_context_request_id_omitted",
+			ctxRequestID: "ctx 99",
+			wantEvents:   1,
+			wantFields: map[string]any{
+				"direction": "inbound",
+				"peer":      "visa-vts",
+				"status":    http.StatusOK,
+			},
+		},
 		{name: "opted_out_pass_through", allowPlaintext: true},
 	}
 
@@ -376,7 +410,11 @@ func TestJOSETransportPlaintextSuccessWarnsOnce(t *testing.T) {
 				transport.Envelope = stubEnvelope{}
 			}
 
-			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
+			ctx := context.Background()
+			if tt.ctxRequestID != "" {
+				ctx = httpclient.WithTraceID(ctx, tt.ctxRequestID)
+			}
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
 			require.NoError(t, err)
 			if tt.requestID != "" {
 				req.Header.Set(httpclient.HeaderXRequestID, tt.requestID)

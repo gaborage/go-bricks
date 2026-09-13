@@ -9,6 +9,7 @@ import (
 
 	"github.com/gaborage/go-bricks/jose"
 	"github.com/gaborage/go-bricks/logger"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // headerContentType is the canonical HTTP Content-Type header name. Extracted to a
@@ -463,13 +464,15 @@ func (t *JOSETransport) refusePlaintextSuccess(req *nethttp.Request, status int)
 // refusalRequestID names the refused round trip the way logRequest and logResponse name
 // theirs: the trace id the client stamped on the outbound request. A hand-built transport,
 // or a client with a custom TraceIDHeader, falls back to the context value; an empty result
-// means the field is omitted rather than logged blank.
+// means the field is omitted rather than logged blank. Both sources are caller-supplied, so
+// both go through the one ingest bound every other door applies (ADR-070) — request_id is
+// not a default sensitive field, and the log filter validates nothing.
 func refusalRequestID(req *nethttp.Request) string {
-	if id := req.Header.Get(HeaderXRequestID); id != "" {
+	if id := gobrickstrace.ValidateRequestID(req.Header.Get(HeaderXRequestID)); id != "" {
 		return id
 	}
 	id, _ := TraceIDFromContext(req.Context())
-	return id
+	return gobrickstrace.ValidateRequestID(id)
 }
 
 // readAndCloseBody drains body up to maxBytes (negative = unbounded) and closes it.

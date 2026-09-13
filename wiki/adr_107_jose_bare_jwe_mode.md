@@ -28,10 +28,11 @@ answer to CONNECT keeps reaching `jose.Open` and failing closed exactly as befor
 plaintext one is refused like every other unopened 2xx. **Interceptors
 never see it**: a `RoundTrip` error short-circuits before `buildResponse`, so a response
 interceptor that would log, cache or re-parse the payload is never handed unauthenticated
-bytes. **One WARN, status, peer and request id only**: the error and the log line name which peer
+bytes. **One WARN, direction, status, peer and request id only**: the error and the log line name which peer
 answered and with what status — the line also carrying the `request_id` the transport can
 read off the outbound request or its context, so an operator can join the refusal to its
-request, omitted under a custom `TraceIDHeader` the transport never sees — and
+request, omitted under a custom `TraceIDHeader` the transport never sees and whenever neither
+source passes `trace.ValidateRequestID` — and
 nothing from the body — those bytes are precisely what
 must not be reported or logged, being unauthenticated content the peer chose. Naming the
 peer is what makes a fleet calling several JOSE integrations able to tell which one

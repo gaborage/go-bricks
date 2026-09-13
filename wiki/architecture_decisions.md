@@ -1595,7 +1595,8 @@ through. Under an `Inbound` policy a successful response must have been unwrappe
 mode `application/jose` plus a successful `jose.Open`, in envelope mode `Unwrap` ok plus the
 same — or `RoundTrip` returns `httpclient.ErrJOSEPlaintextResponse` wrapped with the status
 and the peer name, with the body closed and never handed to the caller or to a response
-interceptor, and one WARN carrying the same status and peer plus the request id, never body bytes.
+interceptor, and — when the transport has a usable `Logger` — one WARN carrying the direction and the
+same status and peer, plus the request id when a valid one is readable, never body bytes.
 Non-2xx pass-through is unchanged; 204/304/HEAD stay skipped; every crypto failure keeps
 failing closed as before. `AllowPlaintextSuccess` on `JOSETransport`/`JOSEConfig` is the Strangler-migration opt-out.
 See [migrations.md](migrations.md) `[C64.15]` and `[C65.8]`.
