@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.65.0](https://github.com/gaborage/go-bricks/compare/v0.64.0...v0.65.0) (2026-09-13)
+
+
+### Added
+
+* **auth:** add bearer credential verifier core ([#1601](https://github.com/gaborage/go-bricks/issues/1601)) ([a382762](https://github.com/gaborage/go-bricks/commit/a382762ed4ac6be6f333b4545f83de9351d691b8))
+* **auth:** add the bearer verification middleware and docs ([#1604](https://github.com/gaborage/go-bricks/issues/1604)) ([0da0453](https://github.com/gaborage/go-bricks/commit/0da04530db8556ae608fb940c7353993cf37d491))
+* **auth:** fetch issuer keys from a JWKS endpoint ([#1603](https://github.com/gaborage/go-bricks/issues/1603)) ([f63254b](https://github.com/gaborage/go-bricks/commit/f63254bed12e3325afd6e3804ce94cb6e055e2d3))
+* **cache:** dial Redis over TLS from redis.Config.TLS ([#1593](https://github.com/gaborage/go-bricks/issues/1593)) ([27596ed](https://github.com/gaborage/go-bricks/commit/27596ed83e675d71060d2bffdc0da508a3d85083))
+* **config:** add cache.redis.tls and wire it to the Redis client ([#1594](https://github.com/gaborage/go-bricks/issues/1594)) ([fa2a4a0](https://github.com/gaborage/go-bricks/commit/fa2a4a07704d4a7b7ff8208f3992a8f39819a11b))
+
+
+### Fixed
+
+* **deps:** update aws-sdk-go-v2 monorepo ([#1587](https://github.com/gaborage/go-bricks/issues/1587)) ([b76dc57](https://github.com/gaborage/go-bricks/commit/b76dc57a5b18d333dbef3a7911cc7026a13b3d70))
+
+
+### Changed
+
+* **httpclient:** extract client TLS loader into internal/clienttls ([#1592](https://github.com/gaborage/go-bricks/issues/1592)) ([cd54577](https://github.com/gaborage/go-bricks/commit/cd545774a51e2f73630e9fa46af4d62cad229efe))
+
 ## [0.64.0](https://github.com/gaborage/go-bricks/compare/v0.63.0...v0.64.0) (2026-09-10)
 
 
