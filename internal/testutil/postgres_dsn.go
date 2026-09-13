@@ -55,4 +55,7 @@ var PostgresDSNHostCases = []PostgresDSNHostCase{
 	{Name: "uri_percent_encoded_socket_host", DSN: "postgres://u@%2Fvar%2Frun%2Fpostgresql/db?sslmode=require", Host: socketHost, HostSet: true},
 	{Name: "uri_ipv6_host", DSN: "postgres://u@[::1]/db", Host: "::1", HostSet: true},
 	{Name: "uri_query_host_overrides_authority", DSN: "postgres://u@a/db?host=c", Host: "c", HostSet: true},
+	// pgx files an unknown but well-shaped key under RuntimeParams rather than rejecting it,
+	// which is why keyword-form inference tests the key's shape and not libpq's vocabulary.
+	{Name: "keyword_unknown_key_is_a_runtime_param", DSN: "foo=1 host=h user=u", Host: "h", HostSet: true},
 }

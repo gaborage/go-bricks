@@ -3642,6 +3642,8 @@ func TestIsPostgresKeywordNameShape(t *testing.T) {
 		{"bracket_after_letter", "a[", false},
 		{"underscore_after_letter", "a_", true},
 		{"digit_then_letter", "9a", false},
+		// Unreachable through the caller: pgKeywordSettings rejects an empty key
+		// (config/postgres_dsn.go:154) before the shape test sees it.
 		{"empty_key", "", true},
 	}
 
