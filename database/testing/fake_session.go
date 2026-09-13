@@ -143,9 +143,6 @@ func (s *TestSession) Begin(_ context.Context) (dbtypes.Tx, error) {
 	s.txs = s.txs[1:]
 	s.parent.registerStartedTransaction(txExp)
 
-	if txExp.shouldErr != nil {
-		return nil, txExp.shouldErr
-	}
 	return txExp.tx, nil
 }
 
