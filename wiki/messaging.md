@@ -209,20 +209,20 @@ messaging.DeclareTypedConsumerWithMeta(decls, &messaging.ConsumerOptions{
     Consumer:  "order-processor",
     EventType: "OrderCreated",
 }, func(ctx context.Context, evt OrderCreated, meta messaging.Metadata) error {
-    id, err := meta.DedupKey()
+    key, err := meta.DedupKey()
     if err != nil {
         // No conforming id, no dedup key — processing here would repeat the
         // business write on every redelivery, so fail closed: the error is
         // nacked without requeue and the message parks on the DLQ.
         return err
     }
-    return m.inbox.ProcessOnce(ctx, id, func(ctx context.Context, tx dbtypes.Tx) error {
+    return m.inbox.ProcessOnce(ctx, key, func(ctx context.Context, tx dbtypes.Tx) error {
         return processTx(ctx, tx, evt) // business write joins the dedup transaction
     })
 })
 ```
 
-**Mixed-queue variant.** A queue that also carries directly-published messages may have deliveries you want processed without dedup. A delivery with no stamp still has a ledger key whenever it carries a `message_id`, so an absent header does not imply an absent key — this path is for the deliveries you have decided to process undeduped, not for every unstamped one. Let a demonstrably ABSENT header through — `if _, present := meta.Headers()[messaging.HeaderEventID]; !present { return process(ctx, evt) }` placed BEFORE the `DedupKey` call — processed without dedup, so that handler must be idempotent on its own. Keep the `err != nil` branch as is, for the reason given above. A handler that instead composes its own ledger id for those deliveries builds the key with `key, err := messaging.WireDedupKey(id)` and returns that error the same way — `ProcessOnce` takes no string. An outbox-only queue keeps the fail-closed default above.
+**Mixed-queue variant.** A queue that also carries directly-published messages may have deliveries you want processed without dedup. A delivery with no stamp still has a ledger key whenever it carries a `message_id`, so an absent header does not imply an absent key — this path is for the deliveries you have decided to process undeduped, not for every unstamped one. Let a demonstrably ABSENT header through — `if _, present := meta.Headers()[messaging.HeaderEventID]; !present { return process(ctx, evt) }` placed BEFORE the `DedupKey` call — processed without dedup, so that handler must be idempotent on its own. Keep the `err != nil` branch as is, for the reason given above. A handler that instead composes its own ledger id for those deliveries builds the key with `key, err := messaging.WireDedupKey(svc.LedgerID(evt))` and returns that error the same way — `ProcessOnce` takes no string. An outbox-only queue keeps the fail-closed default above.
 
 **Headers are publisher-controlled.** AMQP headers come from whoever published the message, so on a queue fed by an exchange outside this service `meta.Headers()` is caller-supplied input — reading it is identification, not authorization. In the dedup shape above the publisher therefore picks the ledger key: replaying a known `x-outbox-event-id` makes `ProcessOnce` skip the handler and ACK (a silent drop), and novel ids each cost a ledger row until retention sweeps them. Dropping the stamp is not a third lever, because it is not an opt-out. Three outcomes, not two: no stamp plus a grammar-conforming `message_id` DEDUPS on that property; a malformed chosen source — a present-but-spoiled stamp, or a property outside the grammar — returns `ErrInvalidEventID`; neither present returns the same error. That error is a rejection, which is why the example returns it rather than processing, and why the mixed-queue variant is the deliberate opt-in. A publisher that sets `message_id` picks the ledger key as surely as one that sets the header, and AMQP obliges nobody to make it unique, so a producer reusing one across distinct events has those events skipped as duplicates — on the deliveries where the property is the SELECTED key, since a present stamp wins and a collision behind one changes nothing. Broker-side publish authorization is what bounds all three.
 

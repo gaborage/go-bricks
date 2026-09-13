@@ -3447,14 +3447,14 @@ Decode/validation failures return a `*messaging.PayloadError` before the functio
 messaging.DeclareTypedConsumerWithMeta(decls, &messaging.ConsumerOptions{
 	Queue: queue.Name, Consumer: "order-processor", EventType: "OrderCreated",
 }, func(ctx context.Context, evt OrderCreatedEvent, meta messaging.Metadata) error {
-	id, err := meta.DedupKey()
+	key, err := meta.DedupKey()
 	if err != nil {
 		// No conforming id, no dedup key — processing here would repeat the
 		// business write on every redelivery, so fail closed: nacked without
 		// requeue, the message parks on the DLQ.
 		return err
 	}
-	return m.inbox.ProcessOnce(ctx, id, func(ctx context.Context, tx dbtypes.Tx) error {
+	return m.inbox.ProcessOnce(ctx, key, func(ctx context.Context, tx dbtypes.Tx) error {
 		// Use tx: the business write must commit with the dedup row, or a crash
 		// between the two commits loses exactly-once.
 		return m.svc.ProcessOrderTx(ctx, tx, evt.OrderID)
