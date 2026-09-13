@@ -6,6 +6,7 @@
 package sealcli
 
 import (
+	"crypto/rsa"
 	"errors"
 	"flag"
 	"fmt"
@@ -33,9 +34,12 @@ func PositionalPath(fs *flag.FlagSet, args []string) (string, error) {
 	return fs.Arg(0), nil
 }
 
-// KeySources holds the four key-source flags a seal CLI takes.
+// KeySources holds the four key-source flags a seal CLI takes. SignOptional,
+// set by a caller that can seal without signing, lets both sign sources be
+// absent; the zero value keeps the sign pair required.
 type KeySources struct {
 	SignFile, SignValue, EncryptFile, EncryptValue string
+	SignOptional                                   bool
 }
 
 // KeyFlags registers -sign-key-file, -sign-key-value, -encrypt-key-file and
@@ -61,7 +65,7 @@ func KeyFlags(fs *flag.FlagSet, signUse, encryptUse string) *KeySources {
 // by the caller; each CLI runs this first in its own flag validation, which is
 // what keeps the refusals ahead of the required-flag messages in stderr.
 func (k *KeySources) Validate() error {
-	if !exactlyOne(k.SignFile, k.SignValue) {
+	if !exactlyOne(k.SignFile, k.SignValue) && !k.signAbsentAndOptional() {
 		return errors.New("exactly one of -sign-key-file or -sign-key-value is required")
 	}
 	if !exactlyOne(k.EncryptFile, k.EncryptValue) {
@@ -71,17 +75,22 @@ func (k *KeySources) Validate() error {
 }
 
 // Load re-runs Validate — so the type is safe to use without the CLI-side call
-// — then loads and parses both keys and returns the producer-role resolver
-// under the given kids. The refusals precede any I/O, so a mistyped invocation
+// — then loads and parses the keys and returns the producer-role resolver
+// under the given kids. A SignOptional caller with no sign source gets a nil
+// sign key. The refusals precede any I/O, so a mistyped invocation
 // costs no file read.
 func (k *KeySources) Load(signKid, encryptKid string) (*keymaterial.ProducerKeys, error) {
 	if err := k.Validate(); err != nil {
 		return nil, err
 	}
 
-	signPriv, err := keymaterial.LoadRSAPrivateKey(k.SignFile, k.SignValue)
-	if err != nil {
-		return nil, fmt.Errorf("sign key: %w", err)
+	var signPriv *rsa.PrivateKey
+	if !k.signAbsentAndOptional() {
+		var err error
+		signPriv, err = keymaterial.LoadRSAPrivateKey(k.SignFile, k.SignValue)
+		if err != nil {
+			return nil, fmt.Errorf("sign key: %w", err)
+		}
 	}
 
 	encPub, err := keymaterial.LoadRSAPublicKey(k.EncryptFile, k.EncryptValue)
@@ -95,6 +104,12 @@ func (k *KeySources) Load(signKid, encryptKid string) (*keymaterial.ProducerKeys
 		EncryptKid: encryptKid,
 		EncPub:     encPub,
 	}, nil
+}
+
+// signAbsentAndOptional reports whether the caller may seal unsigned and no
+// sign source was given.
+func (k *KeySources) signAbsentAndOptional() bool {
+	return k.SignOptional && k.SignFile == "" && k.SignValue == ""
 }
 
 // exactlyOne reports whether precisely one of a, b is a non-empty string.
