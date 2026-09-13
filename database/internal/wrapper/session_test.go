@@ -38,7 +38,8 @@ func TestSessionPinsOneConnectionUntilClose(t *testing.T) {
 	require.NoError(t, err)
 	rows, err := sess.Query(ctx, "SELECT 1")
 	require.NoError(t, err)
-	require.NoError(t, rows.Close())
+	closeErr := rows.Close()
+	require.NoError(t, closeErr)
 	var n int
 	require.NoError(t, sess.QueryRow(ctx, "SELECT 2").Scan(&n))
 	assert.Equal(t, 2, n)
@@ -57,7 +58,10 @@ func TestSessionUseAfterCloseReturnsErrConnDone(t *testing.T) {
 
 	_, err := sess.Exec(ctx, "SELECT 1")
 	require.ErrorIs(t, err, sql.ErrConnDone)
-	_, err = sess.Query(ctx, "SELECT 1")
+	rows, err := sess.Query(ctx, "SELECT 1")
+	if rows != nil {
+		defer rows.Close()
+	}
 	require.ErrorIs(t, err, sql.ErrConnDone)
 	require.ErrorIs(t, sess.QueryRow(ctx, "SELECT 1").Scan(new(int)), sql.ErrConnDone)
 	_, err = sess.Begin(ctx)
@@ -76,7 +80,10 @@ func TestSessionBadConnSurfacesErrConnDone(t *testing.T) {
 		}},
 		{name: "query", call: func(ctx context.Context, s types.Session, m sqlmock.Sqlmock) error {
 			m.ExpectQuery("SELECT 1").WillReturnError(driver.ErrBadConn)
-			_, err := s.Query(ctx, "SELECT 1")
+			rows, err := s.Query(ctx, "SELECT 1")
+			if rows != nil {
+				defer rows.Close()
+			}
 			return err
 		}},
 		{name: "query_row", call: func(ctx context.Context, s types.Session, m sqlmock.Sqlmock) error {
@@ -160,12 +167,12 @@ func TestSessionRowsIterationErrorIsNotTranslated(t *testing.T) {
 	assert.False(t, rows.Next())
 	iterErr := rows.Err()
 	require.Error(t, iterErr)
-	assert.ErrorIs(t, iterErr, driver.ErrBadConn, "the driver error reaches the caller raw")
+	require.ErrorIs(t, iterErr, driver.ErrBadConn, "the driver error reaches the caller raw")
 	assert.NotErrorIs(t, iterErr, sql.ErrConnDone,
 		"documented exception: rows-iteration errors are NOT translated to sql.ErrConnDone")
 }
 
-// TestSessionCloseIsNotIdempotent pins the documented Close behaviour: a second
+// TestSessionCloseIsNotIdempotent pins the documented Close behavior: a second
 // Close returns sql.ErrConnDone rather than succeeding silently.
 func TestSessionCloseIsNotIdempotent(t *testing.T) {
 	_, _, sess := openMockSession(t)
