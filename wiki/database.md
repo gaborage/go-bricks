@@ -256,9 +256,12 @@ query := qb.Select(
 **SECURITY WARNING:** Raw SQL expressions are NOT escaped, and every call site carries the `// SECURITY: Manual SQL review completed - <rationale>` annotation (see [What is not an identifier door](#what-is-not-an-identifier-door)). Never interpolate user input:
 
 ```go
+// SAFE
 // SECURITY: Manual SQL review completed - constant aggregate, no caller input
-qb.MustExpr("COUNT(*)", "total")                  // SAFE
-qb.MustExpr(fmt.Sprintf("UPPER(%s)", userInput))  // SQL INJECTION
+qb.MustExpr("COUNT(*)", "total")
+
+// SQL INJECTION — no annotation can make this safe
+qb.MustExpr(fmt.Sprintf("UPPER(%s)", userInput))
 ```
 
 Use WHERE with placeholders for dynamic **values**: `qb.Select("*").From("users").Where(f.Eq(cols.Col("Status"), userValue))`. Note the column is a struct-tag lookup, not a variable: the value is parameterized, the column is interpolated, and only the value may come from the caller.
@@ -391,15 +394,13 @@ the builder. The grammar will not accept a computed one.
 ### What is not an identifier door
 
 - **`Having`** takes a *predicate*, not an identifier, so no identifier grammar
-  can judge it and its argument is interpolated as written. Treat a STRING
-  predicate as raw SQL — it is annotated like `f.Raw` (see the door list below);
-  `Having(qb.MustExpr(...))` is the sanctioned expression form and is annotated
-  the same way.
-  `InsertQueryBuilder.Prefix`, `.Suffix` and `.Options` are the same shape, and
+  can judge it and its argument is interpolated as written: both a STRING
+  predicate and the preferred `Having(qb.MustExpr(...))` are raw-SQL doors (list
+  below). `InsertQueryBuilder.Prefix`, `.Suffix` and `.Options` are the same shape, and
   unlike `Having` they have no `qb.Expr()` alternative.
 - **`qb.Expr()` / `MustExpr()`** are the declared expression hatches: they exist
   to carry SQL the grammar refuses, and the builder still places what they
-  produce. Their SQL body is raw SQL and carries the annotation (next bullet). The builder judges neither the
+  produce. The builder judges neither the
   syntax nor the semantics of the SQL they carry — it does reject an empty or
   whitespace-only body — and the rest of a `RawExpression` is validated too: a
   struct literal built without the constructor is checked where it is consumed,
@@ -421,13 +422,12 @@ the builder. The grammar will not accept a computed one.
   `Having` the group predicate, an expression whatever door consumes it — and
   each requires an inline `// SECURITY: Manual SQL review completed - <rationale>`
   comment at every call site, a `qb.Expr()`, `qb.MustExpr()` or struct-literal
-  construction included. `Having` also takes a `qb.Expr()` `RawExpression`, the
-  preferred spelling; an alias on it is an error, since a predicate projects
-  nothing. Preferring it is **not** a safety claim: `RawExpression.Validate()`
-  checks only that the SQL is non-empty and the alias is clean — it never inspects
-  the SQL body, which carries the same injection risk as the string form. One grep
-  finds every door, `git grep -nE
-  'f\.Raw\(|jf\.Raw\(|database\.Raw\(|SetExpr\(|Having\(|MustExpr\(|[.]Expr\(|RawExpression\{'`.
+  construction included: `RawExpression.Validate()` checks only that the SQL is
+  non-empty and the alias is clean, never the body. An alias on a `Having`
+  expression is an error, since a predicate projects nothing. One grep finds every
+  door (canonical list: root CLAUDE.md Security Guidelines), `git grep -nE
+  'f\.Raw\(|jf\.Raw\(|database\.Raw\(|SetExpr\(|Having\(|MustExpr\(|[.]Expr\(|RawExpression\{'`
+  — squirrel's own `Expr` inside `database/internal/builder` is plumbing; skip those hits.
 - **`BuildUpsert`'s column maps** answer to the upsert's own preconditions rather
   than to this grammar — a stricter question ("is this one column the vendor's
   upsert syntax can name"). Since `[C61.15]` that question has **one answer on
