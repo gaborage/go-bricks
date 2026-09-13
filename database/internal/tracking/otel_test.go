@@ -220,6 +220,7 @@ func TestExtractDBOperation(t *testing.T) {
 		{"BEGIN_TX", "begin"},
 		{"COMMIT", "commit"},
 		{"ROLLBACK", "rollback"},
+		{"SESSION", "session"},
 		{"PREPARE: SELECT * FROM users WHERE id = $1", "prepare"},
 		{"CREATE_MIGRATION_TABLE", "create_table"},
 		{"  select  * from users", "select"}, // Leading whitespace
@@ -233,6 +234,7 @@ func TestExtractDBOperation(t *testing.T) {
 		{"begin_tx", "begin"},
 		{"commit", "commit"},
 		{"rollback", sqlOpLowerRollback},
+		{"session", sqlOpLowerSession},
 		{"create_migration_table", "create_table"},
 		{"prepare: select 1", sqlOpLowerPrepare},
 		{"BEGIN TRANSACTION", "query"}, // multi-word BEGIN variant: exact-match special-case misses, falls to default
