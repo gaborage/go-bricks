@@ -57,8 +57,7 @@ func (s *Session) DatabaseType() string {
 // sessionOpener is implemented by vendor connections (postgresql.Connection,
 // oracle.Connection) that support opening a dedicated Session. Declared as an
 // unexported capability check here because types.Interface itself does not
-// declare Session — link 1 of #1009 keeps the door additive-only; wiring
-// Session into types.Interface is link 2.
+// declare Session.
 type sessionOpener interface {
 	Session(ctx context.Context) (types.Session, error)
 }
