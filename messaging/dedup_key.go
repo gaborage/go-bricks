@@ -51,6 +51,46 @@ func ValidateEventID(id string) error {
 	return nil
 }
 
+// dedupKeyProvenance records which door produced a DedupKey. The zero value is
+// no door at all, which is what makes the zero DedupKey invalid.
+type dedupKeyProvenance uint8
+
+const (
+	provenanceWire dedupKeyProvenance = iota + 1
+	provenanceSealed
+)
+
+// DedupKey is an inbox ledger key carrying which door produced it. A wire key
+// comes from WireDedupKey and has passed ValidateEventID's grammar; a sealed key
+// is composed by the sealed typed door alone — no exported function mints one.
+// The zero value is invalid. Not yet consumed: Metadata.DedupKey and
+// inbox.ProcessOnce still speak string.
+type DedupKey struct {
+	key        string
+	provenance dedupKeyProvenance
+}
+
+// String returns the key's persisted spelling.
+func (k DedupKey) String() string {
+	return k.key
+}
+
+// Sealed reports whether the sealed typed door produced this key.
+func (k DedupKey) Sealed() bool {
+	return k.provenance == provenanceSealed
+}
+
+// WireDedupKey builds a ledger key from a wire-sourced or consumer-composed id,
+// applying ValidateEventID's grammar at construction. A refused id returns the
+// invalid zero DedupKey and an error wrapping ErrInvalidEventID. Its result is
+// never Sealed, whatever the id spells.
+func WireDedupKey(id string) (DedupKey, error) {
+	if err := ValidateEventID(id); err != nil {
+		return DedupKey{}, err
+	}
+	return DedupKey{key: id, provenance: provenanceWire}, nil
+}
+
 // sealedDedupKeyPattern is the sealed dedup key grammar `<SignFamily>:<jti>`:
 // a Logical kid (the jose kid alphabet, at most 64 characters) and a signed
 // jti in the header-id grammar, joined by the one byte neither side may
