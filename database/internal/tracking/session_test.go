@@ -8,7 +8,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	tracetest "go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/types"
@@ -17,73 +16,12 @@ import (
 
 const dbSessionSpanName = "db.session"
 
-// stubSession implements types.Session for exercising tracking.Session.
-type stubSession struct {
-	queryCalls []struct {
-		query string
-		args  []any
-	}
-	execCalls []struct {
-		query string
-		args  []any
-	}
-	queryRowCalls int
-	queryRowErr   error
-	execErr       error
-	beginTxErr    error
-	beginTxResult types.Tx
-	closeErr      error
-	closeCalled   bool
-	databaseType  string
-}
+// stubSession is stubConnection (connection_test.go) seen through the smaller
+// types.Session surface: it already records every call and carries every error
+// knob tracking.Session needs, so re-implementing it here only duplicated it.
+type stubSession = stubConnection
 
-func (s *stubSession) Query(_ context.Context, query string, args ...any) (*sql.Rows, error) {
-	s.queryCalls = append(s.queryCalls, struct {
-		query string
-		args  []any
-	}{query: query, args: append([]any(nil), args...)})
-	return new(sql.Rows), nil
-}
-
-func (s *stubSession) QueryRow(_ context.Context, _ string, _ ...any) types.Row {
-	s.queryRowCalls++
-	// stubRow (statement_test.go) is Scan-safe; a zero *sql.Row panics on Scan.
-	return &stubRow{scanErr: s.queryRowErr, err: s.queryRowErr}
-}
-
-func (s *stubSession) Exec(_ context.Context, query string, args ...any) (sql.Result, error) {
-	s.execCalls = append(s.execCalls, struct {
-		query string
-		args  []any
-	}{query: query, args: append([]any(nil), args...)})
-	if s.execErr != nil {
-		return nil, s.execErr
-	}
-	return stubResult(1), nil
-}
-
-func (s *stubSession) Begin(ctx context.Context) (types.Tx, error) {
-	return s.BeginTx(ctx, nil)
-}
-
-func (s *stubSession) BeginTx(_ context.Context, _ *sql.TxOptions) (types.Tx, error) {
-	if s.beginTxErr != nil {
-		return nil, s.beginTxErr
-	}
-	if s.beginTxResult == nil {
-		s.beginTxResult = &stubTx{}
-	}
-	return s.beginTxResult, nil
-}
-
-func (s *stubSession) Close() error {
-	s.closeCalled = true
-	return s.closeErr
-}
-
-func (s *stubSession) DatabaseType() string {
-	return s.databaseType
-}
+var _ types.Session = (*stubSession)(nil)
 
 // stubSessionCapableConnection embeds stubConnection (connection_test.go) and
 // additionally implements sessionOpener, so tracking.Connection.Session can be
@@ -112,34 +50,12 @@ func newTrackedStubSession(log *recordingLogger, sess types.Session) types.Sessi
 	})
 }
 
-// sessionSpanAttrs returns the attributes of the span with the given name,
-// failing the test when no such span was exported (presence before indexing).
-func sessionSpanAttrs(t *testing.T, spans tracetest.SpanStubs, name string) map[string]any {
-	t.Helper()
-	for i := range spans {
-		if spans[i].Name != name {
-			continue
-		}
-		attrs := make(map[string]any, len(spans[i].Attributes))
-		for _, attr := range spans[i].Attributes {
-			attrs[string(attr.Key)] = attr.Value.AsInterface()
-		}
-		return attrs
-	}
-	names := make([]string, 0, len(spans))
-	for i := range spans {
-		names = append(names, spans[i].Name)
-	}
-	t.Fatalf("no span named %q was exported; got %v", name, names)
-	return nil
-}
-
 func TestSessionQueryTracksLikePoolStatement(t *testing.T) {
 	traceExporter, meterProvider, cleanup := setupTestObservabilityProviders(t)
 	defer cleanup()
 
 	recLogger := newRecordingLogger()
-	underlying := &stubSession{databaseType: "postgresql"}
+	underlying := &stubSession{databaseTypeValue: "postgresql"}
 	sess := NewSession(underlying, &Context{
 		Logger:   recLogger,
 		Vendor:   "postgresql",
@@ -174,7 +90,7 @@ func TestSessionStatementCarriesServerAttributes(t *testing.T) {
 
 	underlying := &stubSessionCapableConnection{
 		stubConnection: &stubConnection{databaseTypeValue: "postgresql"},
-		sessionResult:  &stubSession{databaseType: "postgresql"},
+		sessionResult:  &stubSession{databaseTypeValue: "postgresql"},
 	}
 	conn := NewConnection(underlying, newRecordingLogger(), &config.DatabaseConfig{}).(*Connection)
 	conn.SetServerInfo("db.example.internal", 5432, "appdb.public")
@@ -186,18 +102,18 @@ func TestSessionStatementCarriesServerAttributes(t *testing.T) {
 	_, err = sess.Query(ctx, TestQuerySelectUsersParams)
 	require.NoError(t, err)
 
-	spans := traceExporter.GetSpans()
+	spans := obtest.NewSpanCollector(t, traceExporter)
 	for _, name := range []string{dbSessionSpanName, dbSelectMetric} {
-		attrs := sessionSpanAttrs(t, spans, name)
-		assert.Equal(t, "db.example.internal", attrs["server.address"], "%s must carry server.address", name)
-		assert.Equal(t, int64(5432), attrs["server.port"], "%s must carry server.port", name)
-		assert.Equal(t, "appdb.public", attrs["db.namespace"], "%s must carry db.namespace", name)
+		span := spans.WithName(name).AssertCount(1).First()
+		obtest.AssertSpanAttribute(t, &span, "server.address", "db.example.internal")
+		obtest.AssertSpanAttribute(t, &span, "server.port", 5432)
+		obtest.AssertSpanAttribute(t, &span, "db.namespace", "appdb.public")
 	}
 }
 
 func TestSessionExecTracksRowsAffected(t *testing.T) {
 	recLogger := newRecordingLogger()
-	underlying := &stubSession{databaseType: "postgresql"}
+	underlying := &stubSession{databaseTypeValue: "postgresql"}
 	sess := newTrackedStubSession(recLogger, underlying)
 
 	result, err := sess.Exec(context.Background(), "INSERT INTO t VALUES (1)")
@@ -210,7 +126,7 @@ func TestSessionExecTracksRowsAffected(t *testing.T) {
 
 func TestSessionExecPropagatesError(t *testing.T) {
 	wantErr := errors.New("exec failed")
-	underlying := &stubSession{databaseType: "postgresql", execErr: wantErr}
+	underlying := &stubSession{databaseTypeValue: "postgresql", execErr: wantErr}
 	sess := newTrackedStubSession(newRecordingLogger(), underlying)
 
 	result, err := sess.Exec(context.Background(), "INSERT INTO t VALUES (1)")
@@ -226,11 +142,11 @@ func TestSessionQueryRowTracksAndDelegates(t *testing.T) {
 	defer cleanup()
 
 	recLogger := newRecordingLogger()
-	underlying := &stubSession{databaseType: "postgresql"}
+	underlying := &stubSession{databaseTypeValue: "postgresql"}
 	sess := newTrackedStubSession(recLogger, underlying)
 
 	row := sess.QueryRow(context.Background(), TestQuerySelectUsersParams)
-	require.Equal(t, 1, underlying.queryRowCalls, "QueryRow must reach the wrapped session")
+	require.Len(t, underlying.queryRowCalls, 1, "QueryRow must reach the wrapped session")
 	require.NoError(t, row.Scan(new(int)))
 
 	spans := traceExporter.GetSpans()
@@ -240,7 +156,7 @@ func TestSessionQueryRowTracksAndDelegates(t *testing.T) {
 
 func TestSessionQueryRowPropagatesScanError(t *testing.T) {
 	wantErr := errors.New("scan failed")
-	underlying := &stubSession{databaseType: "postgresql", queryRowErr: wantErr}
+	underlying := &stubSession{databaseTypeValue: "postgresql", queryRowErr: wantErr}
 	sess := newTrackedStubSession(newRecordingLogger(), underlying)
 
 	row := sess.QueryRow(context.Background(), TestQuerySelectUsersParams)
@@ -250,7 +166,7 @@ func TestSessionQueryRowPropagatesScanError(t *testing.T) {
 
 func TestSessionBeginWrapsTransaction(t *testing.T) {
 	recLogger := newRecordingLogger()
-	sess := newTrackedStubSession(recLogger, &stubSession{databaseType: "postgresql"})
+	sess := newTrackedStubSession(recLogger, &stubSession{databaseTypeValue: "postgresql"})
 
 	tx, err := sess.Begin(context.Background())
 	require.NoError(t, err)
@@ -266,12 +182,11 @@ func TestSessionBeginWrapsTransaction(t *testing.T) {
 }
 
 // TestSessionBeginErrorsReturnNilTx drives the `if err != nil` arms of both
-// Begin and BeginTx, which stayed untested while stubSession.beginTxErr was
-// never set.
+// Begin and BeginTx; the stub fails each through its own knob.
 func TestSessionBeginErrorsReturnNilTx(t *testing.T) {
 	wantErr := errors.New("begin failed")
 	sess := newTrackedStubSession(newRecordingLogger(),
-		&stubSession{databaseType: "postgresql", beginTxErr: wantErr})
+		&stubSession{databaseTypeValue: "postgresql", beginErr: wantErr, beginTxErr: wantErr})
 
 	tx, err := sess.Begin(context.Background())
 	require.ErrorIs(t, err, wantErr)
@@ -287,7 +202,7 @@ func TestSessionBeginErrorsReturnNilTx(t *testing.T) {
 }
 
 func TestSessionCloseAndDatabaseTypeDelegate(t *testing.T) {
-	underlying := &stubSession{databaseType: "oracle"}
+	underlying := &stubSession{databaseTypeValue: "oracle"}
 	sess := NewSession(underlying, &Context{
 		Logger:   newRecordingLogger(),
 		Vendor:   "oracle",
@@ -301,7 +216,7 @@ func TestSessionCloseAndDatabaseTypeDelegate(t *testing.T) {
 
 func TestSessionClosePropagatesError(t *testing.T) {
 	wantErr := errors.New("close failed")
-	underlying := &stubSession{databaseType: "oracle", closeErr: wantErr}
+	underlying := &stubSession{databaseTypeValue: "oracle", closeErr: wantErr}
 	sess := newTrackedStubSession(newRecordingLogger(), underlying)
 
 	require.ErrorIs(t, sess.Close(), wantErr)
@@ -315,7 +230,7 @@ func TestConnectionSessionTracksAcquisitionAsSessionOp(t *testing.T) {
 	recLogger := newRecordingLogger()
 	underlying := &stubSessionCapableConnection{
 		stubConnection: &stubConnection{databaseTypeValue: "postgresql"},
-		sessionResult:  &stubSession{databaseType: "postgresql"},
+		sessionResult:  &stubSession{databaseTypeValue: "postgresql"},
 	}
 	conn := NewConnection(underlying, recLogger, &config.DatabaseConfig{}).(*Connection)
 

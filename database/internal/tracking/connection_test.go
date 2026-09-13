@@ -37,7 +37,8 @@ type stubConnection struct {
 		query string
 		args  []any
 	}
-	execCalls []struct {
+	queryRowErr error
+	execCalls   []struct {
 		query string
 		args  []any
 	}
@@ -84,7 +85,8 @@ func (s *stubConnection) QueryRow(_ context.Context, query string, args ...any) 
 		query string
 		args  []any
 	}{query: query, args: append([]any(nil), args...)})
-	return types.NewRowFromSQL(new(sql.Row))
+	// stubRow (statement_test.go) is Scan-safe; a zero *sql.Row panics on Scan.
+	return &stubRow{scanErr: s.queryRowErr, err: s.queryRowErr}
 }
 
 func (s *stubConnection) Exec(_ context.Context, query string, args ...any) (sql.Result, error) {
