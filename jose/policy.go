@@ -48,9 +48,10 @@ type Policy struct {
 	Mode SealMode
 
 	// Algorithms — defaults applied by the parser if tag omits them.
-	// SigAlg is unused, and must stay unset, in SealModeBareJWE.
+	// SigAlg is unused, and must stay unset, in SealModeBareJWE; every other mode signs and
+	// requires it.
 	//
-	// KeyAlg and Enc are read on BOTH sides in both modes: outbound they are what Seal
+	// KeyAlg and Enc are read on BOTH sides in every mode: outbound they are what Seal
 	// writes; inbound they are what Open accepts, narrowing the mode's allowlist to
 	// exactly the declared value. Validate refuses a value off the mode's allowlist, so
 	// declaring one can only narrow. Leaving one unset keeps the mode-wide allowlist on
@@ -78,9 +79,9 @@ type Policy struct {
 	IATMillis bool
 }
 
-// hasSealHeaderFields reports whether the policy carries any of the inner-JWE header fields
+// hasInnerJWEHeaderFields reports whether the policy carries any of the inner-JWE header fields
 // an outbound Seal writes in bare-JWE and JWS-of-JWE modes.
-func (p *Policy) hasSealHeaderFields() bool {
+func (p *Policy) hasInnerJWEHeaderFields() bool {
 	return p.Typ != "" || p.ProtectedHeaders != nil || p.IATMillis
 }
 
@@ -111,7 +112,7 @@ func (p *Policy) Validate() error {
 func (p *Policy) validateMode() error {
 	switch p.Mode {
 	case SealModeJWEofJWS:
-		if p.hasSealHeaderFields() {
+		if p.hasInnerJWEHeaderFields() {
 			return &Error{
 				Sentinel: ErrPolicyMismatch,
 				Code:     codePolicyModeMismatch,
@@ -171,7 +172,7 @@ func (p *Policy) validateDirection() error {
 	if err := p.validateKids(); err != nil {
 		return err
 	}
-	if p.Direction == DirectionInbound && p.hasSealHeaderFields() {
+	if p.Direction == DirectionInbound && p.hasInnerJWEHeaderFields() {
 		return &Error{
 			Sentinel: ErrPolicyMismatch,
 			Code:     codePolicyDirectionMismatch,
