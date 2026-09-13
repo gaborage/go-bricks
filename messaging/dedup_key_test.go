@@ -1,6 +1,11 @@
 package messaging
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"sort"
 	"strings"
 	"testing"
 
@@ -51,6 +56,112 @@ func TestValidateEventIDErrorCarriesLengthOnly(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidEventID)
 	assert.Contains(t, err.Error(), "129 bytes")
 	assert.NotContains(t, err.Error(), "sss")
+}
+
+// TestWireDedupKeyAppliesTheGrammar pins construction-time admission for a wire
+// key: both length boundaries, the sealed shape, and the round trip.
+func TestWireDedupKeyAppliesTheGrammar(t *testing.T) {
+	cases := []struct {
+		name string
+		id   string
+		ok   bool
+	}{
+		{"uuid", "9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f", true},
+		{"max_length_128", strings.Repeat("w", 128), true},
+		{"length_129", strings.Repeat("w", 129), false},
+		{"empty", "", false},
+		{"sealed_shape", "RS256:abc", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			key, err := WireDedupKey(tc.id)
+			if !tc.ok {
+				require.ErrorIs(t, err, ErrInvalidEventID)
+				assert.Equal(t, DedupKey{}, key, "a refused id yields the invalid zero key")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.id, key.String())
+			assert.False(t, key.Sealed())
+		})
+	}
+}
+
+// TestDedupKeyZeroValueIsNotSealed pins the inert zero value.
+func TestDedupKeyZeroValueIsNotSealed(t *testing.T) {
+	assert.False(t, DedupKey{}.Sealed())
+	assert.Empty(t, DedupKey{}.String())
+}
+
+// TestNoExportedDoorMintsASealedDedupKey walks this package's production source
+// for every exported function or method whose RESULTS carry a DedupKey or a
+// Metadata — the only two types a sealed key can travel in, both with
+// unexported fields so no other package can spell one as a literal. The set is
+// exact: a new exported producer fails here and must argue its way in. It is
+// not vacuous — WireDedupKey, whose results are never Sealed, must be found.
+func TestNoExportedDoorMintsASealedDedupKey(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	require.NoError(t, err)
+	fset := token.NewFileSet()
+
+	var producers []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		require.NoError(t, err)
+		producers = append(producers, exportedProducers(file)...)
+	}
+	sort.Strings(producers)
+	assert.Equal(t, []string{"WireDedupKey"}, producers)
+}
+
+func exportedProducers(file *ast.File) []string {
+	var producers []string
+	for _, decl := range file.Decls {
+		fn, isFunc := decl.(*ast.FuncDecl)
+		if !isFunc || !fn.Name.IsExported() || fn.Type.Results == nil {
+			continue
+		}
+		if !resultsName(fn.Type.Results, "DedupKey", "Metadata") {
+			continue
+		}
+		producer := fn.Name.Name
+		if fn.Recv != nil {
+			producer = receiverTypeName(fn.Recv.List[0].Type) + "." + producer
+		}
+		producers = append(producers, producer)
+	}
+	return producers
+}
+
+func resultsName(results *ast.FieldList, names ...string) bool {
+	found := false
+	for _, field := range results.List {
+		ast.Inspect(field.Type, func(n ast.Node) bool {
+			if ident, isIdent := n.(*ast.Ident); isIdent {
+				for _, want := range names {
+					if ident.Name == want {
+						found = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	return found
+}
+
+func receiverTypeName(expr ast.Expr) string {
+	if star, isStar := expr.(*ast.StarExpr); isStar {
+		expr = star.X
+	}
+	if ident, isIdent := expr.(*ast.Ident); isIdent {
+		return ident.Name
+	}
+	return ""
 }
 
 func TestMetadataDedupKey(t *testing.T) {
