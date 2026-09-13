@@ -169,15 +169,14 @@ func (qb *QueryBuilder) JoinFilter() dbtypes.JoinFilterFactory {
 }
 
 // Expr creates a raw SQL expression for use in SELECT, GROUP BY, and ORDER BY clauses.
-// See dbtypes.Expr() for full documentation and security warnings; every call site
-// carries the `// SECURITY: Manual SQL review completed - <what was verified>` annotation.
+// See dbtypes.Expr() for full documentation and security warnings.
 //
 // Returns an error if the SQL is empty, too many aliases are provided, or alias contains dangerous characters.
 func (qb *QueryBuilder) Expr(sql string, alias ...string) (dbtypes.RawExpression, error) {
 	return dbtypes.Expr(sql, alias...)
 }
 
-// MustExpr is like Expr but panics on error, with the same call-site annotation.
+// MustExpr is like Expr but panics on error.
 // Use this only in static initialization or tests where errors indicate programming bugs.
 func (qb *QueryBuilder) MustExpr(sql string, alias ...string) dbtypes.RawExpression {
 	return dbtypes.MustExpr(sql, alias...)
@@ -1260,19 +1259,10 @@ func (sqb *SelectQueryBuilder) appendClauseValue(processed *[]string, value any,
 
 // Having adds a HAVING clause to the query.
 //
-// Prefer a qb.Expr() RawExpression — `Having(qb.MustExpr("SUM(amount) > ?"), 100)`,
-// or qb.Expr when you handle its error —
-// which is the sanctioned path for the aggregate comparisons HAVING exists for
-// and the same spelling Select, GroupBy and OrderBy take. HAVING is a predicate,
-// not an identifier, so neither form is validated against the identifier grammar
-// (ADR-082): a string predicate is a raw-SQL door on par with f.Raw/jf.Raw/
-// database.Raw and requires the same inline
-// `// SECURITY: Manual SQL review completed - <what was verified>` annotation at
-// every call site, and so does the RawExpression form: preferring it is NOT a
-// safety claim. RawExpression.Validate() checks only that SQL is non-empty and
-// that the Alias is an unquoted identifier; it never inspects the SQL body, so
-// that body carries the same injection risk as the string form and is reviewed as
-// raw SQL.
+// Prefer `Having(qb.MustExpr("SUM(amount) > ?"), 100)` to a string predicate;
+// HAVING is a predicate, not an identifier, so neither form is validated against
+// the identifier grammar (ADR-082) and both are raw SQL needing the SECURITY
+// annotation at every call site — see dbtypes.RawExpression.
 func (sqb *SelectQueryBuilder) Having(pred any, rest ...any) dbtypes.SelectQueryBuilder {
 	if expr, ok := pred.(dbtypes.RawExpression); ok {
 		// The alias is judged BEFORE Validate(): for HAVING no alias is ever legal,

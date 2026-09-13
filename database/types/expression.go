@@ -18,7 +18,8 @@ import (
 // Every call site that constructs one with a SQL body — through Expr, MustExpr or
 // a struct literal — carries the inline
 // `// SECURITY: Manual SQL review completed - <what was verified>` annotation, the
-// same rule as f.Raw/jf.Raw/database.Raw. Validate never inspects the body.
+// same rule as f.Raw/jf.Raw/database.Raw, at Having and every other door that
+// consumes one. Validate never inspects the body.
 //
 // Safe usage:
 //
@@ -69,9 +70,8 @@ type RawExpression struct {
 //	expr, err := qb.Expr("price * quantity", "line_total")
 //
 // SECURITY WARNING: Never interpolate user input directly into the sql parameter.
-// This function does NOT sanitize SQL - you are responsible for ensuring safety,
-// and every call site carries the `// SECURITY: Manual SQL review completed -
-// <what was verified>` annotation (see RawExpression).
+// This function does NOT sanitize SQL - you are responsible for ensuring safety.
+// Call sites carry the SECURITY annotation; see RawExpression.
 func Expr(sql string, alias ...string) (RawExpression, error) {
 	if len(alias) > 1 {
 		return RawExpression{}, fmt.Errorf("%w: got %d", ErrTooManyAliases, len(alias))
@@ -115,7 +115,6 @@ func (e RawExpression) Validate() error {
 
 // MustExpr is like Expr but panics on error.
 // Use this only in static initialization or tests where errors indicate programming bugs.
-// Its call sites carry the same SECURITY annotation as Expr's.
 func MustExpr(sql string, alias ...string) RawExpression {
 	expr, err := Expr(sql, alias...)
 	if err != nil {

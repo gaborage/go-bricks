@@ -5137,7 +5137,8 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   Keep a string predicate where the expression form does not fit, and annotate it at the call
   site naming what you checked — value-side parameterization, no user input concatenated.
 - verify: `git grep -nE 'Having\(|MustExpr\(|[.]Expr\(|RawExpression\{' -- '*.go'` and confirm
-  every string-predicate and expression hit has an annotation above it; then run one query each way and read the SQL — the expression form must
+  every string-predicate and expression hit has an annotation above it (squirrel's own `Expr`
+  inside `database/internal/builder` is plumbing — skip those hits); then run one query each way and read the SQL — the expression form must
   render `HAVING SUM(amount) > $2` (`:2` on Oracle) with the arg numbered AFTER any `Where`
   arg, and `Having(qb.MustExpr("x > ?", "alias"), 1)` must fail `ToSQL()` with
   `errors.Is(err, dbtypes.ErrAliasInHaving)`. Use a DANGEROUS alias as a second case —
@@ -5147,12 +5148,8 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - ref: #1147 · #1146 · `database/internal/builder/query_builder.go` (`Having`) ·
   `database/types/errors.go` (`ErrAliasInHaving`) · [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md)
 - amendment (2026-09-12, #1192, additive): the `qb.Expr()` exemption this atom first recorded is
-  withdrawn. Every call site constructing a `RawExpression` with a SQL body — `qb.Expr`,
-  `qb.MustExpr` or a struct literal, at `Having` or any other door — carries the same
-  `// SECURITY: Manual SQL review completed - <what was verified>` annotation, and one grep
-  covers every raw-SQL door:
-  `git grep -nE 'f\.Raw\(|jf\.Raw\(|database\.Raw\(|SetExpr\(|Having\(|MustExpr\(|[.]Expr\(|RawExpression\{'`.
-  Nothing renders or validates differently; the body is still never inspected.
+  withdrawn — the annotation duty covers a struct literal and every door, not only `Having`.
+  Nothing renders or validates differently.
 
 ---
 
