@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/database/identifier"
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
 func TestPGRoleSpecValidateAccepts(t *testing.T) {
@@ -544,6 +545,117 @@ func TestPGRoleSpecValidateFloorRunsBeforePolicy(t *testing.T) {
 	assert.Zero(t, consulted, "policy must not see an identifier the floor already refused")
 }
 
+// Every name below is one the floor admits, so the reserved-name rule is the
+// only thing that can refuse it. Case is folded deliberately: this code QUOTES
+// identifiers, so "Public" is a distinct schema from "public", but an operator
+// or script that writes the name unquoted resolves to the shared one.
+func TestPGRoleSpecValidateRejectsReservedSchemas(t *testing.T) {
+	for _, schema := range []string{
+		"public", "Public", "PUBLIC",
+		"pg_temp", "pg_toast", "PG_CATALOG", "Pg_Anything",
+		"information_schema", "Information_Schema", "INFORMATION_SCHEMA",
+	} {
+		t.Run(schema, func(t *testing.T) {
+			spec := &PGRoleSpec{Schema: schema, MigratorRole: "m", RuntimeRole: "r"}
+			require.NoError(t, identifier.Validate(dbtypes.PostgreSQL, schema),
+				"the floor admits this name, so only the reserved rule can refuse it")
+
+			err := spec.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), pgRoleFieldSchema)
+			assert.Contains(t, err.Error(), schema)
+			require.ErrorIs(t, err, ErrReservedPGSchema)
+			require.ErrorIs(t, err, ErrInvalidPGIdentifier,
+				"a reserved-schema refusal stays an identifier refusal for existing matchers")
+		})
+	}
+}
+
+// The near misses: every one differs from a reserved name by at least one byte
+// and must still provision.
+func TestPGRoleSpecValidateAcceptsReservedNameNearMisses(t *testing.T) {
+	for _, schema := range []string{"publicity", "pg", "pgx", "information_schemas", "mypublic", "public_tenant"} {
+		t.Run(schema, func(t *testing.T) {
+			spec := &PGRoleSpec{Schema: schema, MigratorRole: "m", RuntimeRole: "r"}
+			assert.NoError(t, spec.Validate())
+		})
+	}
+}
+
+// The rule is schema-only: PostgreSQL reserves these names for the schema
+// namespace, and a role sharing the spelling lands no tenant table anywhere.
+func TestPGRoleSpecValidateAcceptsReservedNamesAsRoles(t *testing.T) {
+	tests := []struct {
+		name string
+		spec *PGRoleSpec
+	}{
+		{
+			name: "migrator_role_public",
+			spec: &PGRoleSpec{Schema: "tenant_a", MigratorRole: "public", RuntimeRole: "r"},
+		},
+		{
+			name: "runtime_role_public",
+			spec: &PGRoleSpec{Schema: "tenant_a", MigratorRole: "m", RuntimeRole: "public"},
+		},
+		{
+			name: "runtime_role_pg_prefixed",
+			spec: &PGRoleSpec{Schema: "tenant_a", MigratorRole: "m", RuntimeRole: "pg_temp"},
+		},
+		{
+			name: "migrator_role_information_schema",
+			spec: &PGRoleSpec{Schema: "tenant_a", MigratorRole: "information_schema", RuntimeRole: "r"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.NoError(t, tt.spec.Validate())
+		})
+	}
+}
+
+// A caller policy layers on top of the framework's rule and can only tighten
+// it, so an admit-everything policy cannot hand the shared schema back.
+func TestPGRoleSpecValidateReservedSchemaSurvivesAdmitEverythingPolicy(t *testing.T) {
+	spec := &PGRoleSpec{
+		Schema:           "public",
+		MigratorRole:     "m",
+		RuntimeRole:      "r",
+		IdentifierPolicy: PGIdentifierCheckerFunc(func(string) error { return nil }),
+	}
+	err := spec.Validate()
+	require.ErrorIs(t, err, ErrReservedPGSchema)
+	require.ErrorIs(t, err, ErrInvalidPGIdentifier)
+}
+
+// Ordering, stated as observation rather than as a second copy of the rule: the
+// policy never sees a reserved schema, so it can neither admit it nor mask the
+// sentinel with a refusal of its own.
+func TestPGRoleSpecValidateReservedRuleRunsBeforePolicy(t *testing.T) {
+	var seen []string
+	spec := &PGRoleSpec{
+		Schema:       "public",
+		MigratorRole: "m",
+		RuntimeRole:  "r",
+		IdentifierPolicy: PGIdentifierCheckerFunc(func(value string) error {
+			seen = append(seen, value)
+			return errTestPolicyRejected
+		}),
+	}
+	err := spec.Validate()
+	require.ErrorIs(t, err, ErrReservedPGSchema)
+	require.NotErrorIs(t, err, errTestPolicyRejected)
+	assert.Empty(t, seen, "the policy must not be consulted for a reserved schema")
+}
+
+// The floor still runs first: a name that is reserved-shaped AND outside the
+// grammar comes back as a floor refusal, not as a reserved-name one.
+func TestPGRoleSpecValidateFloorRunsBeforeReservedRule(t *testing.T) {
+	spec := &PGRoleSpec{Schema: "pg_temp-1", MigratorRole: "m", RuntimeRole: "r"}
+	err := spec.Validate()
+	require.ErrorIs(t, err, ErrInvalidPGIdentifier)
+	assert.NotErrorIs(t, err, ErrReservedPGSchema)
+}
+
 // A typed nil in the interface field is non-nil as an interface, so the adapter
 // is called. It must refuse rather than panic on the nil call.
 func TestPGRoleSpecValidateRefusesNilPolicyFunc(t *testing.T) {
@@ -608,4 +720,21 @@ func TestPGRoleSpecComparabilityFollowsItsPolicy(t *testing.T) {
 			t.Fatal("a spec holding a comparable policy must compare equal to its copy")
 		}
 	})
+}
+
+// The exported entrypoint runs Validate, so a refusing policy must stop it
+// before any statement is composed.
+func TestPGRoleProvisioningSQLHonoursIdentifierPolicy(t *testing.T) {
+	spec := &PGRoleSpec{
+		Schema:       "tenant_a",
+		MigratorRole: "m",
+		RuntimeRole:  "r",
+		IdentifierPolicy: PGIdentifierCheckerFunc(func(string) error {
+			return errTestPolicyRejected
+		}),
+	}
+	stmts, err := PGRoleProvisioningSQL(spec)
+	require.ErrorIs(t, err, errTestPolicyRejected)
+	require.ErrorIs(t, err, ErrInvalidPGIdentifier)
+	assert.Empty(t, stmts)
 }
