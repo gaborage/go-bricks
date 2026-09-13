@@ -10,6 +10,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/database/identifier"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -886,6 +888,20 @@ func (r *recordingRoleExecutor) Exec(_ context.Context, query string, _ ...any) 
 	return driver.RowsAffected(0), nil
 }
 
+// valueRoleExecutor is a non-pointer database.Executor, so isNilExecutor's
+// non-nil-able default arm decides it.
+type valueRoleExecutor struct{ stmts *[]string }
+
+// Query completes the database.Executor surface; provisioning never queries.
+func (valueRoleExecutor) Query(_ context.Context, _ string, _ ...any) (*sql.Rows, error) {
+	return nil, errors.New("Query is unused by the provisioning path")
+}
+
+func (v valueRoleExecutor) Exec(_ context.Context, query string, _ ...any) (sql.Result, error) {
+	*v.stmts = append(*v.stmts, query)
+	return driver.RowsAffected(0), nil
+}
+
 // txDoorSpec is the spec the ProvisionPGRolesTx tests provision. Both passwords
 // are set so the optional ALTER ROLE ... PASSWORD statements are in the list.
 func txDoorSpec() *PGRoleSpec {
@@ -952,6 +968,54 @@ func TestProvisionPGRolesTxRejectsNilSpec(t *testing.T) {
 
 func TestProvisionPGRolesTxRejectsNilExecutor(t *testing.T) {
 	err := ProvisionPGRolesTx(context.Background(), nil, txDoorSpec())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-nil database.Executor")
+}
+
+// A non-nil-able executor lands on isNilExecutor's default arm, which must not
+// over-refuse it: provisioning has to run the full statement list through it.
+func TestProvisionPGRolesTxAcceptsAValueExecutor(t *testing.T) {
+	spec := txDoorSpec()
+	want, err := PGRoleProvisioningSQL(spec)
+	require.NoError(t, err)
+	require.NotEmpty(t, want)
+
+	var stmts []string
+	exec := valueRoleExecutor{stmts: &stmts}
+	require.NotEqual(t, reflect.Pointer, reflect.ValueOf(database.Executor(exec)).Kind(),
+		"premise: the boxed value must not be nil-able")
+
+	require.NoError(t, ProvisionPGRolesTx(context.Background(), exec, spec))
+	require.Equal(t, want, stmts, "a value executor must run the published list verbatim, in order")
+}
+
+// typedNilExecutor returns a nil *recordingRoleExecutor already boxed in the
+// interface. The boxing has to happen behind an interface-typed return or
+// staticcheck reads the concrete assignment and calls the premise check below
+// dead (SA4023) — the very property the check exists to assert.
+func typedNilExecutor() database.Executor {
+	return (*recordingRoleExecutor)(nil)
+}
+
+// A typed-nil executor is a non-nil interface, so a plain `exec == nil` guard
+// misses it and the call panics on the nil receiver inside the loop.
+func TestProvisionPGRolesTxRejectsTypedNilExecutor(t *testing.T) {
+	exec := typedNilExecutor()
+	// Pin the premise: the interface is non-nil while the value inside it is nil.
+	// Not a testify assertion: require.NotNil unwraps the pointer and would fail
+	// on the very value this test needs, and testifylint rewrites any comparison
+	// form into it.
+	if exec == nil {
+		t.Fatal("premise: a typed nil must box into a non-nil interface")
+	}
+	v := reflect.ValueOf(exec)
+	require.Equal(t, reflect.Pointer, v.Kind(), "premise: the boxed value must be a pointer")
+	require.True(t, v.IsNil(), "premise: the interface holds a nil pointer")
+
+	spec := txDoorSpec()
+	require.NoError(t, spec.Validate(), "the spec must be valid, so only the executor guard can refuse")
+
+	err := ProvisionPGRolesTx(context.Background(), exec, spec)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "non-nil database.Executor")
 }

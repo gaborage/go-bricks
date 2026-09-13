@@ -277,8 +277,12 @@ module). `database.WithTx` (`database/transaction.go`) commits on a nil
 return and rolls back on error or panic, so a crash or error anywhere in
 the callback rolls back schema, roles, tables, ledger, registry row, and
 outbox row together — there is no window where the tenant half-exists. A
-re-run converges: the provisioning statements are idempotent, and the
-ledger below skips scripts it has already applied. Reach for
+re-run converges as far as the provisioning statements (idempotent) and
+the ledger below (it skips scripts it has already applied) — but not the
+outbox publish, which mints a fresh event ID per call, so re-running after
+a transaction that already committed inserts a second
+`tenant.provisioned` row. The registry row at step 4 is consumer-owned, so
+make it an upsert if you want the rerun to converge. Reach for
 `PGRoleProvisioningSQL` instead of `ProvisionPGRolesTx` only when you need
 the statements themselves (to inspect, log-redact, or hand to another
 runner) — its doc carries a `SECURITY` note that they can include a
@@ -318,7 +322,9 @@ and execute it yourself.
 Either way PostgreSQL rolls `CREATE ROLE` back together with everything
 else on that transaction, so the whole batch commits or rolls back as one
 unit — and the rerun-to-converge guidance stops applying, because a
-rollback leaves nothing to converge from.
+rollback leaves nothing to converge from. It leaves the tenant
+unprovisioned instead, so after fixing the failure the caller reruns the
+whole transaction and must get a successful commit.
 
 ### The ledger table
 

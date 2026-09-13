@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/gaborage/go-bricks/database"
@@ -253,12 +254,11 @@ func ProvisionPGRoles(ctx context.Context, db *sql.DB, spec *PGRoleSpec) error {
 // is not among the statements PostgreSQL refuses inside a transaction block;
 // the full list and the argument are in wiki/migration_provisioning.md.
 //
-// exec MUST be authenticated as described on ProvisionPGRoles, and must not be
-// a typed-nil executor: the nil-interface guard below cannot see one, and the
-// call panics inside the closure. A plain database.Interface connection also
-// satisfies database.Executor; passed one, each statement lands independently
-// exactly as on the ProvisionPGRoles path, with the same rerun-to-converge
-// guidance. On a real transaction that guidance does not apply at all: a failed
+// exec MUST be authenticated as described on ProvisionPGRoles; a typed-nil
+// executor is refused before any statement runs, like a nil interface. A plain
+// database.Interface connection also satisfies database.Executor; passed one,
+// each statement lands independently exactly as on the ProvisionPGRoles path,
+// with the same rerun-to-converge guidance. On a real transaction that guidance does not apply at all: a failed
 // statement puts the transaction in a failed block, every later command is
 // rejected with 25P02 until the block is ended (or rolled back to a savepoint
 // taken before the failure — the one way partial state can survive), and
@@ -267,13 +267,30 @@ func ProvisionPGRolesTx(ctx context.Context, exec database.Executor, spec *PGRol
 	if spec == nil {
 		return errors.New("migration: ProvisionPGRolesTx requires a non-nil *PGRoleSpec")
 	}
-	if exec == nil {
+	if isNilExecutor(exec) {
 		return errors.New("migration: ProvisionPGRolesTx requires a non-nil database.Executor")
 	}
 	return provisionPGRoles(ctx, spec, func(ctx context.Context, stmt string) error {
 		_, err := exec.Exec(ctx, stmt)
 		return err
 	})
+}
+
+// isNilExecutor reports whether exec is unusable: a nil interface, or a non-nil
+// interface holding a nil pointer (or other nil-able kind). The second case
+// would otherwise panic inside the statement loop instead of being refused at
+// the door. Mirrors httpclient.isNilLogger.
+func isNilExecutor(exec database.Executor) bool {
+	if exec == nil {
+		return true
+	}
+	v := reflect.ValueOf(exec)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Chan, reflect.Func, reflect.Slice, reflect.UnsafePointer:
+		return v.IsNil()
+	default:
+		return false
+	}
 }
 
 // provisionPGRoles validates spec and runs the composed statement list through

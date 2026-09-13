@@ -153,7 +153,9 @@ included; the full argument, with the list of statements PostgreSQL really
 does refuse inside a transaction block, is in
 [migration_provisioning.md](migration_provisioning.md#single-transaction-provisioning-on-postgresql-consumer-side-pattern).
 So a rollback leaves nothing behind and the rerun-to-converge guidance does
-not apply. Hand it a plain `database.Interface` instead of a transaction and
+not apply; the roles and schema are not created, so after fixing the failure
+the caller reruns the whole transaction and must get a successful commit.
+Hand it a plain `database.Interface` instead of a transaction and
 each statement lands independently, exactly as on the `*sql.DB` path — the
 guidance applies again.
 
