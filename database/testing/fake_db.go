@@ -81,8 +81,12 @@ type TestDB struct {
 	strictMatch         bool
 	txExpectations      []*TxExpectation
 	startedTransactions []*TxExpectation
+	sessionExpectations []*TestSession
 	mu                  sync.RWMutex
 }
+
+// Compile-time interface check.
+var _ dbtypes.Interface = (*TestDB)(nil)
 
 // QueryCall represents a single Query or QueryRow invocation.
 type QueryCall struct {
@@ -199,6 +203,27 @@ func (db *TestDB) ExpectTransaction() *TestTx {
 	}
 	db.txExpectations = append(db.txExpectations, txExp)
 	return tx
+}
+
+// ExpectSession sets up an expectation for Session() calls.
+// Returns a TestSession that can be configured with its own query, exec and
+// transaction expectations — a session runs on its own pinned connection, so it
+// matches none of the TestDB's pool expectations.
+//
+// Session() pops the queued sessions in declaration order and errors once the
+// queue is empty, so a call with no ExpectSession() behind it fails the test
+// rather than handing back a permissive fake.
+//
+// Example:
+//
+//	sess := db.ExpectSession().
+//	    ExpectExec("SELECT pg_advisory_lock").WillReturnRowsAffected(1)
+func (db *TestDB) ExpectSession() *TestSession {
+	sess := &TestSession{parent: db}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.sessionExpectations = append(db.sessionExpectations, sess)
+	return sess
 }
 
 // QueryLog returns all Query/QueryRow calls made to this TestDB.
@@ -377,6 +402,22 @@ func (db *TestDB) Begin(_ context.Context) (dbtypes.Tx, error) {
 func (db *TestDB) BeginTx(ctx context.Context, _ *sql.TxOptions) (dbtypes.Tx, error) {
 	// For test purposes, delegate to Begin (ignore opts)
 	return db.Begin(ctx)
+}
+
+// Session implements database.Interface.Session, popping the sessions queued by
+// ExpectSession in declaration order.
+func (db *TestDB) Session(_ context.Context) (dbtypes.Session, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if len(db.sessionExpectations) == 0 {
+		return nil, errors.New("unexpected Session() call (use ExpectSession)")
+	}
+
+	sess := db.sessionExpectations[0]
+	db.sessionExpectations = db.sessionExpectations[1:]
+
+	return sess, nil
 }
 
 // Prepare implements database.Interface.Prepare (rarely used in tests).

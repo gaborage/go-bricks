@@ -97,7 +97,14 @@ func (s *stubDB) Prepare(_ context.Context, _ string) (Statement, error) {
 func (s *stubDB) Begin(_ context.Context) (Tx, error)                     { return &stubTx{}, nil }
 func (s *stubDB) BeginTx(_ context.Context, _ *sql.TxOptions) (Tx, error) { return &stubTx{}, nil }
 func (s *stubDB) Health(_ context.Context) error                          { return nil }
-func (s *stubDB) Stats() (map[string]any, error)                          { return map[string]any{"key": s.key}, nil }
+
+// Session is never exercised: the manager tests pool connections, not pinned
+// handles.
+func (s *stubDB) Session(_ context.Context) (Session, error) {
+	return nil, errors.New("stubDB opens no sessions")
+}
+
+func (s *stubDB) Stats() (map[string]any, error) { return map[string]any{"key": s.key}, nil }
 
 func (s *stubDB) Close() error {
 	s.closedMu.Lock()
@@ -110,6 +117,9 @@ func (s *stubDB) Close() error {
 	}
 	return s.closeErr
 }
+
+var _ Interface = (*stubDB)(nil)
+
 func (s *stubDB) DatabaseType() string                       { return "stub" }
 func (s *stubDB) MigrationTable() string                     { return "schema_migrations" }
 func (s *stubDB) CreateMigrationTable(context.Context) error { return nil }

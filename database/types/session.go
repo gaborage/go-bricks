@@ -11,17 +11,11 @@ package types
 // Prepare, Health, Stats, or migration-table methods, none of which are
 // meaningful on a single pinned connection.
 //
-// Obtain a Session from a database.Interface implementation exposing
-// Session(ctx context.Context) (Session, error); Interface itself does not
-// declare Session, so reaching it means type-asserting to the anonymous
-// interface { Session(ctx context.Context) (Session, error) } — satisfied by
-// both the vendor connections (postgresql.Connection, oracle.Connection) and
-// the tracking wrapper the framework actually hands back from
-// database.NewConnection / deps.DB(ctx). The assertion succeeds whenever the
-// handle exposes the method — including the tracking wrapper, which always
-// does — so an unsupported underlying connection reports that as an error
-// from the call, not from the assertion. Always Close it to return the
-// physical connection to the pool.
+// Interface declares Session(ctx context.Context) (Session, error), so any
+// database.Interface handle reaches the door directly — the vendor connections
+// (postgresql.Connection, oracle.Connection) and the tracking wrapper the
+// framework hands back from database.NewConnection / deps.DB(ctx) alike.
+// Always Close it to return the physical connection to the pool.
 //
 // A Session holds no tenant lease of its own, so it must not outlive the
 // request or job scope in which it was acquired — the tenant's underlying

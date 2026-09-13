@@ -57,7 +57,11 @@ type stubConnection struct {
 	migrationTable     string
 	databaseTypeValue  string
 	createMigrationErr error
+	sessionResult      types.Session
+	sessionErr         error
 }
+
+var _ types.Interface = (*stubConnection)(nil)
 
 func closeSilently(rows *sql.Rows) {
 	if rows == nil {
@@ -153,6 +157,13 @@ func (s *stubConnection) MigrationTable() string {
 		return "schema_migrations"
 	}
 	return s.migrationTable
+}
+
+func (s *stubConnection) Session(context.Context) (types.Session, error) {
+	if s.sessionErr != nil {
+		return nil, s.sessionErr
+	}
+	return s.sessionResult, nil
 }
 
 func (s *stubConnection) CreateMigrationTable(context.Context) error {
@@ -395,6 +406,8 @@ func TestConnectionQueryRowTracksOperations(t *testing.T) {
 }
 
 // mockConnectionFromDB wraps a *DB to implement types.Interface for testing Connection.QueryRow
+var _ types.Interface = (*mockConnectionFromDB)(nil)
+
 type mockConnectionFromDB struct {
 	trackedDB *DB
 }
@@ -441,6 +454,10 @@ func (m *mockConnectionFromDB) DatabaseType() string {
 
 func (m *mockConnectionFromDB) MigrationTable() string {
 	return "flyway_schema_history"
+}
+
+func (m *mockConnectionFromDB) Session(context.Context) (types.Session, error) {
+	return nil, errors.New("mockConnectionFromDB does not open sessions")
 }
 
 func (m *mockConnectionFromDB) CreateMigrationTable(context.Context) error {

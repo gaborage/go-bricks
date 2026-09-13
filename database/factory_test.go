@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -252,6 +253,8 @@ func TestFactoryIntegrationWithTracking(t *testing.T) {
 }
 
 // Simple connection implementation for testing with sqlmock
+var _ types.Interface = (*simpleConnection)(nil)
+
 type simpleConnection struct {
 	db *sql.DB
 }
@@ -290,6 +293,12 @@ func (c *simpleConnection) BeginTx(ctx context.Context, opts *sql.TxOptions) (da
 		return nil, err
 	}
 	return &simpleTransaction{tx: tx}, nil
+}
+
+// Session is never exercised: these tests drive the tracking factory over
+// sqlmock, which has no pinned-connection behaviour to observe.
+func (c *simpleConnection) Session(_ context.Context) (types.Session, error) {
+	return nil, errors.New("simpleConnection opens no sessions")
 }
 
 func (c *simpleConnection) Health(ctx context.Context) error {

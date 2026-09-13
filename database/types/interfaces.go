@@ -385,6 +385,11 @@ type Interface interface {
 	Health(ctx context.Context) error
 	Stats() (map[string]any, error)
 
+	// Session acquires a handle pinned to a single physical connection, for
+	// session-scoped state a pooled statement can silently lose. See Session
+	// for the error, concurrency and lifetime contract.
+	Session(ctx context.Context) (Session, error)
+
 	// Connection management
 	Close() error
 
