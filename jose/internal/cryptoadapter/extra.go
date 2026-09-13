@@ -23,9 +23,10 @@ var (
 	// ErrPeekMalformed is returned by PeekProtectedHeader when the input is not a compact
 	// serialization whose first segment is a base64url-encoded JSON object.
 	ErrPeekMalformed = errors.New("cryptoadapter: protected header peek failed")
-	// ErrHeaderTooLarge names the size refusal inside the chain, so a caller that inspects the
-	// error with errors.Is can tell an over-bound header from any other parse failure. The
-	// wire sees only the generic code, and the framework's server logs neither.
+	// ErrHeaderTooLarge names the size refusal inside the chain, so a framework-internal caller
+	// matching with errors.Is can tell an over-bound header from any other parse failure. This
+	// package is internal/, so no consumer sees it; the wire sees only the generic code, and
+	// the class is deliberately not logged.
 	ErrHeaderTooLarge = errors.New("cryptoadapter: protected header exceeds bound")
 	// ErrNotCompact names the refusal of a body that is not a compact serialization — a JSON
 	// serialization, most importantly, which go-jose accepts and whose dot-delimited runs say

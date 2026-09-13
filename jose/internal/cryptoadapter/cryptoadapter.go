@@ -55,10 +55,9 @@ type DecryptOptions struct {
 // and decrypts using the supplied private key.
 func Decrypt(compact string, key *rsa.PrivateKey, opts *DecryptOptions) ([]byte, Header, error) {
 	// The bound runs before go-jose, which imposes none of its own. The class rides in the
-	// error chain, matchable with errors.Is by a caller that inspects it; the framework's own
-	// server maps code and message only, so it reaches no framework log today. The wire sees
-	// the generic parse failure either way. Parsing continues on the trimmed body, so the
-	// header this returns is the one that was measured.
+	// error chain, matchable with errors.Is by a framework-internal caller; the wire sees the
+	// generic parse failure, and the class is deliberately not logged. Parsing continues on
+	// the trimmed body, so the header this returns is the one that was measured.
 	compact, _, boundErr := boundedSegments(compact)
 	if boundErr != nil {
 		return nil, Header{}, fmt.Errorf("%w: %w", ErrParseEncrypted, boundErr)

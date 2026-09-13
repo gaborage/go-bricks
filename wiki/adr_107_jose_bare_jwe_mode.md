@@ -11,7 +11,9 @@
 > base64url segments), though go-jose accepts it and so, until now, the implementation did
 > too: a JSON-serialized body did open through Decrypt and Verify. Refusing it aligns the
 > implementation with the documented contract rather than changing it, and the refusal is
-> named `ErrNotCompact` inside the door's existing generic parse error. One behaviour does
+> named `ErrNotCompact` inside the door's existing generic parse error. The refusal class is
+> API-visible via `errors.Is` on the error chain to framework-internal callers, and is
+> deliberately not logged. One behaviour does
 > narrow: RFC 7515 §7.1 and RFC 7516 §7.1 define the compact serialization as BASE64URL parts
 > joined by dots, with no whitespace anywhere, but go-jose strips interior whitespace before
 > parsing, so a line-wrapped compact used to open; it is now refused. That is a narrowing to
