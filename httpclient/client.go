@@ -315,7 +315,8 @@ type JOSEConfig struct {
 	// Inbound is optional: when set, application/jose response bodies are opened
 	// (decrypt+verify, or decrypt-only under SealModeBareJWE).
 	// Plaintext responses (e.g., pre-trust error envelopes from the counterparty) pass
-	// through unmodified.
+	// through unmodified on a failure status; on a 2xx they are refused as
+	// ErrJOSEPlaintextResponse unless AllowPlaintextSuccess is set.
 	Inbound *jose.Policy
 	// Resolver supplies keys for both Outbound and Inbound directions.
 	Resolver jose.KeyResolver
@@ -332,10 +333,7 @@ type JOSEConfig struct {
 	// because Unwrap replaces the Content-Type gate and every response body would then be
 	// buffered without limit.
 	MaxResponseBytes int64
-	// AllowPlaintextSuccess disables the fail-closed rule on successful responses, exactly
-	// as the JOSETransport field of the same name: a 2xx body the Inbound policy never
-	// opened reaches the caller instead of raising ErrJOSEPlaintextResponse. The
-	// Strangler-migration knob for a peer that still answers some 2xx routes in plaintext.
+	// AllowPlaintextSuccess is the JOSETransport field of the same name; see its doc.
 	AllowPlaintextSuccess bool
 }
 
