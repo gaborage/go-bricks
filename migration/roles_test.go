@@ -1,6 +1,7 @@
 package migration
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -401,4 +402,149 @@ func TestPGRoleSpecValidateRejectsControlCharPasswords(t *testing.T) {
 
 	empty := &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r"}
 	assert.NoError(t, empty.Validate(), "empty passwords stay valid — they emit no ALTER ROLE statement")
+}
+
+func TestPGRoleSpecValidateNilPolicyMatchesFloor(t *testing.T) {
+	accepted := &PGRoleSpec{Schema: "tenant_a", MigratorRole: "m", RuntimeRole: "r", IdentifierPolicy: nil}
+	require.NoError(t, accepted.Validate())
+
+	rejected := &PGRoleSpec{Schema: "tenant-a", MigratorRole: "m", RuntimeRole: "r", IdentifierPolicy: nil}
+	require.ErrorIs(t, rejected.Validate(), ErrInvalidPGIdentifier)
+}
+
+// errTestPolicyRejected is the sentinel returned by the test policies below, so
+// a test can assert the caller still reaches its own error through the wrap.
+var errTestPolicyRejected = errors.New("test policy rejected the identifier")
+
+// rejectUppercase refuses any identifier carrying an uppercase byte — a rule
+// the floor admits, so it exercises the tightening direction.
+func rejectUppercase(value string) error {
+	if strings.ToLower(value) != value {
+		return errTestPolicyRejected
+	}
+	return nil
+}
+
+func TestPGRoleSpecValidatePolicyTightensFloor(t *testing.T) {
+	spec := &PGRoleSpec{
+		Schema:           "TenantA",
+		MigratorRole:     "m",
+		RuntimeRole:      "r",
+		IdentifierPolicy: PGIdentifierPolicyFunc(rejectUppercase),
+	}
+	require.NoError(t, (&PGRoleSpec{Schema: spec.Schema, MigratorRole: "m", RuntimeRole: "r"}).Validate(),
+		"floor admits the identifier the policy refuses")
+	require.ErrorIs(t, spec.Validate(), ErrInvalidPGIdentifier)
+}
+
+func TestPGRoleSpecValidatePolicyErrorReachesCaller(t *testing.T) {
+	spec := &PGRoleSpec{
+		Schema:           "tenant_a",
+		MigratorRole:     "Migrator",
+		RuntimeRole:      "r",
+		IdentifierPolicy: PGIdentifierPolicyFunc(rejectUppercase),
+	}
+	err := spec.Validate()
+	require.ErrorIs(t, err, ErrInvalidPGIdentifier)
+	require.ErrorIs(t, err, errTestPolicyRejected)
+	assert.Contains(t, err.Error(), pgRoleFieldMigratorRole)
+	assert.Contains(t, err.Error(), "Migrator")
+}
+
+func TestPGRoleSpecValidatePolicyCannotWidenFloor(t *testing.T) {
+	admitEverything := PGIdentifierPolicyFunc(func(string) error { return nil })
+	tests := []struct {
+		name   string
+		schema string
+	}{
+		{name: "empty", schema: ""},
+		{name: "hyphen", schema: "tenant-a"},
+		{name: "leading_digit", schema: "1tenant"},
+		{name: "over_63_bytes", schema: strings.Repeat("a", 64)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec := &PGRoleSpec{
+				Schema:           tt.schema,
+				MigratorRole:     "m",
+				RuntimeRole:      "r",
+				IdentifierPolicy: admitEverything,
+			}
+			err := spec.Validate()
+			require.ErrorIs(t, err, ErrInvalidPGIdentifier)
+			assert.Contains(t, err.Error(), pgRoleFieldSchema)
+		})
+	}
+}
+
+func TestPGRoleSpecValidatePolicySeesEveryIdentifier(t *testing.T) {
+	var seen []string
+	spec := &PGRoleSpec{
+		Schema:       "tenant_a",
+		MigratorRole: "migrator",
+		RuntimeRole:  "tenant_a_app",
+		IdentifierPolicy: PGIdentifierPolicyFunc(func(value string) error {
+			seen = append(seen, value)
+			return nil
+		}),
+	}
+	require.NoError(t, spec.Validate())
+	assert.Equal(t, []string{"tenant_a", "migrator", "tenant_a_app"}, seen)
+}
+
+func TestPGRoleSpecValidatePolicyRejectsEachIdentifierField(t *testing.T) {
+	tests := []struct {
+		name   string
+		spec   *PGRoleSpec
+		target string
+		field  string
+	}{
+		{
+			name:   "schema",
+			spec:   &PGRoleSpec{Schema: "Tenant", MigratorRole: "m", RuntimeRole: "r"},
+			target: "Tenant",
+			field:  pgRoleFieldSchema,
+		},
+		{
+			name:   "migrator_role",
+			spec:   &PGRoleSpec{Schema: "s", MigratorRole: "Migrator", RuntimeRole: "r"},
+			target: "Migrator",
+			field:  pgRoleFieldMigratorRole,
+		},
+		{
+			name:   "runtime_role",
+			spec:   &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "Runtime"},
+			target: "Runtime",
+			field:  pgRoleFieldRuntimeRole,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.spec.IdentifierPolicy = PGIdentifierPolicyFunc(func(value string) error {
+				if value == tt.target {
+					return errTestPolicyRejected
+				}
+				return nil
+			})
+			err := tt.spec.Validate()
+			require.ErrorIs(t, err, errTestPolicyRejected)
+			require.ErrorIs(t, err, ErrInvalidPGIdentifier)
+			assert.Contains(t, err.Error(), tt.field)
+		})
+	}
+}
+
+func TestPGRoleSpecValidateFloorRunsBeforePolicy(t *testing.T) {
+	consulted := 0
+	spec := &PGRoleSpec{
+		Schema:       "tenant-a",
+		MigratorRole: "m",
+		RuntimeRole:  "r",
+		IdentifierPolicy: PGIdentifierPolicyFunc(func(string) error {
+			consulted++
+			return nil
+		}),
+	}
+	require.ErrorIs(t, spec.Validate(), ErrInvalidPGIdentifier)
+	assert.Zero(t, consulted, "policy must not see an identifier the floor already refused")
 }
