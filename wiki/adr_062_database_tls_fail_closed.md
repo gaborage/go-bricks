@@ -1,7 +1,40 @@
 # ADR-062: Fail Closed on `database.tls` Misconfiguration (Mode Allowlist + Material/Mode Coherence)
 
-**Status:** Accepted (amended 2026-08-24)
+**Status:** Accepted (amended 2026-08-24, 2026-09-13)
 **Date:** 2026-08-14
+
+## Amendment — 2026-09-13: the fail-closed rules reason about host transport (#1555)
+
+R1–R5 judged `mode` against material and never asked how the connection travels. pgx v5
+classifies a host as a unix socket by shape — `isAbsolutePath` in `pgconn/config.go`: a
+leading `/`, or one ASCII uppercase letter followed by `:\` — and appends a nil TLS config
+for a unix network. So `host: /var/run/postgresql` with `mode: verify-full` and a `ca`
+satisfied R2 and connected with no TLS at all: the material was coherent with the mode, and
+the transport discarded both.
+
+R6 closes it: PG, no connectionstring, `host` an absolute path by exactly that predicate,
+and any of `cert`/`key`/`ca` set or `mode` set to anything but `disable` → reject on
+`database.tls` (section-qualified), naming the unix socket host, with two exits: remove the
+`database.tls` block, or use a TCP host. The mode is judged as the operator wrote it —
+nothing on this seam defaults an unset mode; pgx's `prefer` applies only at parse time — so
+a socket host with no block, or `mode: disable` and no material, is accepted unchanged.
+Socket hosts are not refused by themselves. R6 applies per comma-separated `host` entry,
+matching pgx's own untrimmed split, so `db.internal,/var/run/postgresql` is refused the same
+way. The same amendment extends `[C64.8]`'s empty-host rule to each entry: an empty entry
+(`db.internal,`, `,db.internal`, `db1,,db2`) is newly refused with `[C64.8]`'s
+`MissingFieldError` on `database.host`, TLS or not, because pgx swaps it for the socket
+directory — where `[C64.8]` refused only a wholly empty host and these used to boot.
+
+R6 runs after R1, so a typo'd mode on a socket host is still reported as a mode problem, and
+before R2 and R3, so material on a socket host gets the transport message rather than a
+mode or pairing complaint that would steer the operator toward a mode the socket still
+cannot carry. The predicate is `config.isUnixSocketHost`, a mirror of pgx: a divergence
+reopens the hole. It covers every door `validatePostgreSQLFields` covers — static YAML
+through `config.Validate`, `DBConfigProvider` results through `ApplyDatabasePoolDefaults` /
+`ApplyDatabasePoolDefaultsForKey`, and `go-bricks-migrate` at its next pin bump, whose
+`tlsValidatingProvider` calls `config.ApplyDatabasePoolDefaults`, so
+`TestApplyDatabasePoolDefaultsRefusesTLSOnUnixSocketHost` covers that path. A raw
+`connectionstring` is unchanged (#1551). See `[C65.1]`.
 
 ## Amendment — 2026-08-24: the Flyway leg is no longer conf-owned (ADR-085, #1047)
 
@@ -101,15 +134,16 @@ pool and session defaults carry the trim too).
 | R3 | PG, no connectionstring: `cert` set XOR `key` set | reject (the pre-existing check, now running after R1/R2) |
 | R4 | PG with connectionstring: any of `mode`/`cert`/`key`/`ca` set | reject — the block never reaches the DSN |
 | R5 | Oracle: any of `mode`/`cert`/`key`/`ca` set | reject (extends the previous cert/key/ca check to `mode`) |
+| R6 | PG, no connectionstring (2026-09-13 amendment): any `host` entry an absolute path while any of `cert`/`key`/`ca` is set or `mode` is set and not `disable` | reject — pgx skips TLS on a unix socket; runs after R1, before R2/R3 |
 
 Check order is load-bearing: R4 short-circuits so a connection-string config
 gets the "move it into the DSN" message rather than a mode complaint; R1 precedes
 R2 so a typo'd mode is reported as a mode problem; R3 runs last so a partial pair
 under a mandatory mode gets the pairing message.
 
-**Still allowed**: every valid mode **without** material — `disable`, `allow`
+**Still allowed**: on a TCP host, every valid mode **without** material — `disable`, `allow`
 and `prefer` included, since opportunistic TLS with nothing to discard is a
-legitimate operator choice; `require`/`verify-ca`/`verify-full` with any paired
+legitimate operator choice (on a unix-socket host only an unset mode or `disable`, per R6); `require`/`verify-ca`/`verify-full` with any paired
 material; CA-only, and cert+key+CA, under a mandatory mode.
 
 **Escape hatch**: an operator who genuinely wants pgx-native semantics these

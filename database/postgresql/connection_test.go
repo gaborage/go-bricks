@@ -240,6 +240,17 @@ func TestBuildPostgresDSNWiresTLSMaterial(t *testing.T) {
 	assert.Contains(t, dsn, "sslkey='/etc/ssl/client.key'")
 }
 
+// TestBuildPostgresDSNUnixSocketHostWithoutTLS pins the socket-host shapes the config seam
+// still accepts (ADR-062 amendment 2026-09-13) to their exact rendered DSN.
+func TestBuildPostgresDSNUnixSocketHostWithoutTLS(t *testing.T) {
+	noTLS := &config.DatabaseConfig{Host: "/var/run/postgresql", Port: 5432, Username: "u", Password: "p", Database: "app"}
+	assert.Equal(t, "host='/var/run/postgresql' port=5432 user=u password=p dbname=app", buildPostgresDSN(noTLS))
+
+	disabled := *noTLS
+	disabled.TLS.Mode = "disable"
+	assert.Equal(t, "host='/var/run/postgresql' port=5432 user=u password=p dbname=app sslmode=disable", buildPostgresDSN(&disabled))
+}
+
 func TestBuildPostgresDSNOmitsUnsetTLSMaterialAndQuotesMode(t *testing.T) {
 	cfg := &config.DatabaseConfig{Host: "h", Port: 5432, Username: "u", Password: "p", Database: "app"}
 	cfg.TLS.Mode = "require"
