@@ -144,7 +144,7 @@ fw, _, err = app.NewWithOptions(&app.Options{
 
 ### What this does *not* do
 
-- **No content-pattern scanning.** A PAN embedded in a free-text error message (e.g., `errors.New("card 4111111111111111 failed")` logged via `log.Err(err)`) is *not* caught by field-name masking — the filter cannot see inside a value. One exception, and it is whole-field rather than content-aware: naming `error` in `log.sensitivefields` masks the ENTIRE message at `Err`, message and all, so nothing of it reaches the sink. For anything short of that, wire an error redactor at the `Err(err)` seam (see *Redacting error messages*, below); elsewhere, build a `sensitive.Scrub(...)` helper in your service layer.
+- **No content-pattern scanning.** A PAN embedded in a free-text error message (e.g., `errors.New("card 4111111111111111 failed")` logged via `log.Err(err)`) is *not* caught by field-name masking — the filter cannot see inside a value unless the value's type supplies its own log-safe shape (see *Self-redacting values*, below). One exception, and it is whole-field rather than content-aware: naming `error` in `log.sensitivefields` masks the ENTIRE message at `Err`, message and all, so nothing of it reaches the sink. For anything short of that, wire an error redactor at the `Err(err)` seam (see *Redacting error messages*, below); elsewhere, build a `sensitive.Scrub(...)` helper in your service layer.
 - **No per-tenant policies.** The filter is configured once at bootstrap and applied uniformly to every log line, regardless of tenant context. If different tenants have different masking requirements, you need either separate deployments or a custom logger wrapper at the handler layer.
 - **No metric/trace masking.** The filter only intercepts log records. OTel span attributes and metric labels go through different code paths. Treat span attributes as "would I publish this on a dashboard?" — never put a PAN in a span attribute.
 - **The framework's OWN span sinks never carry an error message, and that is not the filter's doing.** Every framework site that records an error on a span goes through `observability.RecordErrorByType`, which emits one `exception` event carrying `exception.type` (the error's outer `%T`) and NO `exception.message`, and sets `codes.Error` with that same type as the status description ([ADR-083](adr_083_span_sinks_record_errors_by_type.md)). The status DESCRIPTION is framework-authored rather than always the Go type: the HTTP client prefers its own classification (`transport_error`, `interceptor_failed`, …) and a 5xx's `HTTP 503`, and a scheduler job panic reads `panic` with the recovered value's type in the `job.panic_type` attribute. Every one of those is a framework constant; none is consumer text. A span exception event and a span status description leave the platform with the tracing exporter, under the vendor's retention and access model, so an error message the framework did not write — a job's, a handler's, an interceptor's — is not put there at all. The corresponding LOG line still carries the message: that sink is on-platform, and what it writes is the operator's to control — including through `FilterConfig.ErrorRedactor` below.
@@ -218,6 +218,31 @@ a PEM block), XML and form-encoded bodies, and the log MESSAGE text: `Msg` is a 
 the caller wrote, and the field seam is where the filter has names to judge.
 `FilterConfig.ErrorRedactor` ([ADR-083](adr_083_span_sinks_record_errors_by_type.md)) remains
 the seam for error text.
+
+### Self-redacting values
+
+A type that knows which of its fields are secret implements `logger.Redactor`
+([ADR-110](adr_110_log_filter_redactor_hook.md)), and the filter logs the method's result in place
+of the value — through `Interface` and `WithFields`, at any depth inside a struct, map or slice:
+
+```go
+func (c Card) RedactedForLog() any {
+    return map[string]any{"holder": c.Holder, "last4": c.PAN[max(len(c.PAN)-4, 0):]}
+}
+```
+
+- **Value receiver.** Both `Card` and `*Card` are then recognized; a pointer-receiver method leaves
+  a bare `Card` unrecognized, and it is walked field by field as before.
+- **The result is still filtered.** Needles, the opaque-payload door and depth limits apply to it,
+  so a forgotten `password` key is still masked. The hook runs once per value: it is not called
+  again on its own result (a method returning its own type terminates), only on values nested in it.
+  That includes a different `Redactor` returned directly — call its method yourself instead.
+- **Filtered logger, `Interface`/`WithFields` only.** Without a filter, at `Err`, and through `Msgf`
+  the method is not consulted. It runs inside the log call with no recover, so a panic propagates.
+- **A sensitive key still wins.** A value logged under a key the filter names is masked whole
+  without calling the method. `Err` is unaffected — `ErrorRedactor` remains the error-text seam.
+- **Opt-in.** `json.Marshaler` and `fmt.Stringer` are not consulted; a type without the method
+  renders exactly as before.
 
 ### Defense in depth (recommended for PCI workloads)
 
