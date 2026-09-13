@@ -1043,6 +1043,12 @@ func (c *client) handleBuildRespError(ctx context.Context, err error, attempt, m
 // and waits with context if appropriate. Returns (true, nil) to retry, or (false, err)
 // when no retry should occur and an error should be propagated.
 func (c *client) shouldRetryOnError(ctx context.Context, err error, attempt, maxRetries int) (bool, error) {
+	// Terminal: the peer answered 2xx, so it already honored the request. A retry would
+	// re-send it — duplicating any non-idempotent side effect — and the verdict cannot
+	// change, since the response was refused for what it lacked, not for a transport fault.
+	if errors.Is(err, ErrJOSEPlaintextResponse) {
+		return false, NewNetworkError("request execution failed", err)
+	}
 	if c.isTimeout(err) {
 		if attempt < maxRetries {
 			if werr := c.backoffWithContext(ctx, attempt); werr != nil {

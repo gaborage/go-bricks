@@ -273,6 +273,10 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 	}
 	raw, err := readAndCloseBody(resp.Body, maxBytes)
 	if err != nil {
+		// From here readAndCloseBody has closed the peer's body, so every error return leaves
+		// RoundTrip an inert one: its cleanup must not be a second Close on a hand-rolled
+		// Inner's body, which net/http's own bodies tolerate but a caller's need not.
+		replaceBody(resp, nil, "")
 		return fmt.Errorf("httpclient: read response body: %w", err)
 	}
 
@@ -281,8 +285,6 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 		extracted, ok := t.Envelope.Unwrap(resp.Header.Get(headerContentType), raw)
 		if !ok {
 			if t.refusesPlaintext(resp) {
-				// readAndCloseBody already closed the peer's body; leave RoundTrip an inert
-				// one so its cleanup is not a second Close on a hand-rolled Inner's body.
 				replaceBody(resp, nil, "")
 				return errPlaintextSuccess(resp)
 			}
@@ -294,6 +296,7 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 
 	plaintext, _, _, err := jose.Open(compact, t.Inbound, t.Resolver)
 	if err != nil {
+		replaceBody(resp, nil, "")
 		return err
 	}
 
@@ -359,6 +362,9 @@ func (t *JOSETransport) skipsUnwrap(req *nethttp.Request, resp *nethttp.Response
 // that verdict must have been decrypted or the caller is trusting bytes nothing
 // authenticated. Failure statuses pass through — a pre-trust envelope is plaintext by
 // design, because the peer was never authenticated in the first place.
+//
+// Under a bare-JWE policy the rule proves only that the body was encrypted to us, not who
+// sent it, so authenticating the sender remains an out-of-band job.
 func (t *JOSETransport) refusesPlaintext(resp *nethttp.Response) bool {
 	return !t.AllowPlaintextSuccess && IsSuccessStatus(resp.StatusCode)
 }

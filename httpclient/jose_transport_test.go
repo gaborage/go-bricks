@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -255,26 +257,33 @@ func TestJOSETransportPlaintextPassesThrough(t *testing.T) {
 	}
 }
 
-// TestJOSETransportEnvelopeRefusalClosesTheBodyOnce pins the cleanup on the one refusal path
+// TestJOSETransportEnvelopeRefusalClosesTheBodyOnce pins the cleanup on every error path
 // that has already drained the peer's body: readAndCloseBody closed it, so RoundTrip must
 // not close it a second time. net/http's own bodies tolerate that; a hand-rolled Inner's
 // need not.
 func TestJOSETransportEnvelopeRefusalClosesTheBodyOnce(t *testing.T) {
 	tests := []struct {
-		name     string
-		envelope bool
+		name        string
+		contentType string
+		payload     string
+		maxBytes    int64
+		envelope    bool
+		wantErr     error
 	}{
-		{name: "nested_mode_never_reads_the_body"},
-		{name: "envelope_mode_reads_then_refuses", envelope: true},
+		{name: "nested_mode_never_reads_the_body", contentType: "application/json", payload: `{"ok":true}`, wantErr: httpclient.ErrJOSEPlaintextResponse},
+		{name: "envelope_mode_reads_then_refuses", contentType: "application/json", payload: `{"ok":true}`, envelope: true, wantErr: httpclient.ErrJOSEPlaintextResponse},
+		{name: "nested_mode_body_over_the_cap", contentType: jose.ContentType, payload: strings.Repeat("x", 64), maxBytes: 8},
+		{name: "nested_mode_body_is_not_valid_jose", contentType: jose.ContentType, payload: "not-a-compact-jwe"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := jositest.NewBidirectionalFixture(t)
-			body := newCloseTrackingBody(`{"ok":true}`)
+			body := newCloseTrackingBody(tt.payload)
 
 			transport := newJOSETransport(f)
-			transport.Inner = fixedResponder{status: http.StatusOK, contentType: "application/json", body: body}
+			transport.MaxResponseBytes = tt.maxBytes
+			transport.Inner = fixedResponder{status: http.StatusOK, contentType: tt.contentType, body: body}
 			if tt.envelope {
 				transport.Envelope = stubEnvelope{}
 			}
@@ -283,7 +292,10 @@ func TestJOSETransportEnvelopeRefusalClosesTheBodyOnce(t *testing.T) {
 			require.NoError(t, err)
 
 			resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is nil on this error path; the assertion below is that the transport closed the peer's body exactly once
-			require.ErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
+			require.Error(t, err)
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			}
 			require.Nil(t, resp)
 			assert.Equal(t, 1, body.closes, "the peer's body must be closed exactly once")
 		})
@@ -789,6 +801,27 @@ func TestBuilderWithJOSEForwardsAllowPlaintextSuccess(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.JSONEq(t, `{"ok":true}`, string(resp.Body))
+}
+
+// TestBuilderWithJOSEPlaintextSuccessIsNotRetried pins the refusal as terminal. The peer
+// answered 2xx, so it already honored the request; re-sending it would duplicate a
+// non-idempotent side effect without any chance of a different verdict.
+func TestBuilderWithJOSEPlaintextSuccessIsNotRetried(t *testing.T) {
+	f := jositest.NewBidirectionalFixture(t)
+	var hits atomic.Int64
+	server := plainJSONServer(t, http.StatusOK, func(*http.Request) { hits.Add(1) })
+	defer server.Close()
+
+	client, err := httpclient.NewBuilder(logger.New("info", false)).
+		WithJOSE(httpclient.JOSEConfig{Outbound: f.ClientOutbound, Inbound: f.ClientInbound, Resolver: f.Resolver}).
+		WithRetries(3, time.Millisecond).
+		Build()
+	require.NoError(t, err)
+
+	resp, err := client.Post(context.Background(), &httpclient.Request{URL: server.URL, Body: []byte(`{"x":1}`)})
+	require.ErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
+	assert.Nil(t, resp)
+	assert.Equal(t, int64(1), hits.Load(), "a refused plaintext 2xx must not be re-sent")
 }
 
 // TestBuilderWithJOSEFailsClosedOnAnEnvelopeWithoutAPolicy pins the pairing rule. Wrap is

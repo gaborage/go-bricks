@@ -7390,7 +7390,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `application/jose`; envelope mode: a `BodyEnvelope.Unwrap` that returned `ok=false`. The response
   body is closed and discarded, `RoundTrip` returns `nil` plus an error matching
   `errors.Is(err, httpclient.ErrJOSEPlaintextResponse)`, which names the status and nothing from
-  the body. **Unchanged**: every non-2xx status, which still passes through with its body and
+  the body. The refusal is terminal — exempt from `WithRetries`, since the peer already honored
+  the request and a retry would only duplicate a non-idempotent side effect. **Unchanged**: every
+  non-2xx status, which still passes through with its body and
   headers exactly as the peer sent them; 204, 304 and every reply to HEAD, which net/http
   guarantees carry no body and which were never read; 205 and a 2xx answer to CONNECT, which keep
   reaching `jose.Open` and failing closed; a successful unwrap, which still relabels the body
