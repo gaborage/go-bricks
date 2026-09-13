@@ -16,7 +16,9 @@ nested mode, `Unwrap` ok plus a successful `jose.Open` in envelope mode — or `
 returns `httpclient.ErrJOSEPlaintextResponse`, wrapped with the status, with the body
 closed and never handed back. **Non-2xx is unchanged**: a pre-trust error
 envelope is plaintext by design, because the peer was never authenticated in the first
-place, and it still reaches the caller with its headers untouched.
+place, and it still reaches the caller with its headers untouched. Under a bare-JWE policy
+"unwrapped" proves only that the body was encrypted to us, not who sent it — there is no
+inner JWS, so sender authentication stays out of band exactly as the Context below says.
 
 Two decisions inside that rule. **Empty successes are not violations**: 204, 304 and every
 reply to HEAD stay in the skip set the ADR-107 transport already had — net/http guarantees
@@ -26,10 +28,14 @@ CONNECT keep reaching `jose.Open` and failing closed, exactly as before. **Inter
 never see it**: a `RoundTrip` error short-circuits before `buildResponse`, so a response
 interceptor that would log, cache or re-parse the payload is never handed unauthenticated
 bytes. The error carries the status and nothing from the body — those bytes are precisely
-what must not be reported, being unauthenticated content the peer chose. A refused response
-is closed undrained, so its keep-alive connection is discarded rather than reused: a
-deliberate trade, since draining bytes the transport just declared untrustworthy to save a
-connection is the wrong side of that bargain.
+what must not be reported, being unauthenticated content the peer chose. In **nested mode**
+a refused response is closed undrained — the body was never read — so its keep-alive
+connection is discarded rather than reused: a deliberate trade, since draining bytes the
+transport just declared untrustworthy to save a connection is the wrong side of that
+bargain (envelope mode has already drained the body for `Unwrap`, so its connection is
+unaffected). **A refusal is also terminal**: `errors.Is(err, ErrJOSEPlaintextResponse)` is
+exempt from the client's retry loop, because the peer answered 2xx and already honored the
+request, so a retry would only duplicate a non-idempotent side effect.
 
 `AllowPlaintextSuccess`, on `JOSETransport` and on `JOSEConfig`, restores the old
 pass-through for a whole transport. It is the Strangler-migration knob and nothing else: set

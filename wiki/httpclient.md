@@ -186,12 +186,16 @@ same in envelope mode. A 2xx that was not unwrapped is a transport error: `Round
 returns `nil` and an error matching `errors.Is(err, httpclient.ErrJOSEPlaintextResponse)`,
 wrapped with the status. The response body is closed and discarded — it reaches neither the
 caller nor a response interceptor — and nothing from it is reported, those bytes being
-exactly what must not be trusted.
+exactly what must not be trusted. The refusal is **terminal**: it is exempt from the retry
+loop, because the peer answered 2xx and has already honored the request, so retrying would
+only duplicate a non-idempotent side effect.
 
 The reason is what a 2xx asserts. The peer is saying the request was honored; if the reply
 carrying that verdict was not decrypted, nothing authenticated it, and a ciphertext stripped
 in transit looks exactly like a legitimate plaintext reply. A tampered ciphertext already
-failed closed; an **absent** one used to read as a clean success.
+failed closed; an **absent** one used to read as a clean success. Under a `SealModeBareJWE`
+policy the rule proves only that the body was encrypted to us, not who sent it — there is no
+signature, so authenticating the sender remains an out-of-band job (mTLS, a signed header).
 
 Two boundaries. **Failure statuses are unchanged** — a pre-trust error envelope is
 plaintext by design, because the peer was never authenticated, so 4xx and 5xx bodies still
