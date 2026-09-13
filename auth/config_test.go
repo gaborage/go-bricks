@@ -430,3 +430,23 @@ func TestConfigValidateReturnsATypedConfigError(t *testing.T) {
 	require.ErrorAs(t, err, &cerr)
 	assert.Contains(t, err.Error(), "auth.jwt.issuer")
 }
+
+// TestValidateJWKSSourceDoesNotEchoTheUnparsableURI pins that a jwksuri which
+// fails url.Parse does not carry its own text into the error. url.Parse quotes
+// the whole input, so userinfo in the URI would otherwise reach every sink that
+// logs a startup failure.
+func TestValidateJWKSSourceDoesNotEchoTheUnparsableURI(t *testing.T) {
+	const secret = "sup3rsecret"
+	cfg := validConfig()
+	cfg.JWKSURI = "https://user:" + secret + "@ho st/jwks.json"
+
+	err := cfg.validateJWKSSource()
+
+	require.Error(t, err)
+	var cerr *ConfigError
+	require.ErrorAs(t, err, &cerr)
+	assert.Equal(t, "auth.jwt.jwksuri", cerr.Field)
+	assert.NotContains(t, err.Error(), secret, "the parser cause must not reach the error text")
+	assert.NotContains(t, err.Error(), "ho st", "nor the raw uri")
+	assert.NoError(t, cerr.Err, "no cause may be attached to an unparsable uri")
+}

@@ -167,7 +167,11 @@ func (c *Config) validateJWKSURI() *ConfigError {
 	}
 	parsed, err := url.Parse(c.JWKSURI)
 	if err != nil {
-		return NewConfigError(field, "jwks uri is not a valid url", err)
+		// SECURITY: url.Parse's error quotes the whole input, so a jwksuri
+		// carrying userinfo would put those credentials into the ConfigError and
+		// from there into whatever logs the startup failure. The cause is dropped;
+		// the field name already tells an operator which key to look at.
+		return NewConfigError(field, "jwks uri is not a valid url", nil)
 	}
 	if parsed.Scheme != "https" {
 		return NewConfigError(field, "jwks uri must use the https scheme", nil)
