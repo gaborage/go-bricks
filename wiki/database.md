@@ -202,6 +202,7 @@ query := qb.Select("*").
     )).
     JoinOn(dbtypes.MustTable("products").MustAs("p"), jf.And(
         jf.EqColumn("p.id", "o.product_id"),
+        // SECURITY: Manual SQL review completed - fixed conversion of a joined column, no user input
         jf.Eq("p.price", qb.MustExpr("TO_NUMBER(o.max_price)")),
     )).
     Where(f.Eq("o.status", "pending"))
@@ -226,8 +227,10 @@ productCols := qb.Columns(&Product{})
 
 p := productCols.As("p")
 
+// SECURITY: Manual SQL review completed - constant literal, no user input
 subquery := qb.Select(qb.MustExpr("1")).From("reviews").
     Where(f.And(
+        // SECURITY: Manual SQL review completed - correlated column identifier from struct tags, no user input
         f.Eq("reviews."+reviewCols.Col("ProductID"), qb.MustExpr(p.Col("ID"))),
         f.Eq(reviewCols.Col("Rating"), 5),
     ))
@@ -242,6 +245,7 @@ query := qb.Select(p.Col("Name")).
 ## SELECT Expressions (v2.1+)
 
 ```go
+// SECURITY: Manual SQL review completed - fixed aggregates over a declared column, no caller input
 query := qb.Select(
     cols.Col("Category"),
     qb.MustExpr("COUNT(*)", "product_count"),
@@ -303,6 +307,7 @@ ordinary identifier character on Oracle and an operator on PostgreSQL.
 
 ```go
 qb.Select("a#b")                     // Oracle: renders. PostgreSQL: ToSQL() error
+// SECURITY: Manual SQL review completed - constant literal and alias, no user input
 qb.MustExpr("1", "a#b")              // same — the alias is an identifier position
 qb.Select(`"a#b"`)                   // SAFE on both: a quoted identifier escapes the alphabet
 qb.Insert("t").SetMap(map[string]any{"a#b": 1})   // PostgreSQL: ToSQL() error
@@ -730,6 +735,7 @@ if database.IsLockNotAvailable(err) {
 **Scalar subqueries in the projection.** `SubqueryColumn(sub, alias)` appends `(sub) AS alias`, so a stats snapshot is one round trip:
 
 ```go
+// SECURITY: Manual SQL review completed - fixed aggregates over a declared column, no caller input
 tenants := qb.Select(qb.MustExpr("COUNT(*)")).From(held).Where(f.Eq("consumer", c))
 oldest := qb.Select(qb.MustExpr("MIN(held_since)")).From(held).Where(f.Eq("consumer", c))
 stats := qb.Select().SubqueryColumn(tenants, "tenants").SubqueryColumn(oldest, "oldest")
