@@ -113,24 +113,19 @@ func TestSealOpenRoundtrip(t *testing.T) {
 }
 
 func TestSealRefusesJWSofJWEModeUntilImplemented(t *testing.T) {
-	f := newTestFixture(t)
 	p := jwsOfJWEOutbound()
-	p.SignKid, p.EncryptKid = "peer-key", "our-key"
 	require.NoError(t, p.Validate())
 
-	compact, err := Seal([]byte(`{"a":1}`), p, f.resolver)
+	compact, err := Seal([]byte(`{"a":1}`), p, &fixtureResolver{})
 	assert.Empty(t, compact)
 	requireJOSEErrorCode(t, err, codePolicyModeUnknown)
 }
 
 func TestOpenRefusesJWSofJWEModeUntilImplemented(t *testing.T) {
-	f := newTestFixture(t)
-	compact, err := Seal([]byte(`{"a":1}`), f.outbound, f.resolver)
-	require.NoError(t, err)
 	p := jwsOfJWEInbound()
 	require.NoError(t, p.Validate())
 
-	plaintext, _, hdr, err := Open(compact, p, f.resolver)
+	plaintext, _, hdr, err := Open("a.b.c", p, &fixtureResolver{})
 	assert.Nil(t, plaintext)
 	assert.Equal(t, OpenHeader{}, hdr)
 	requireJOSEErrorCode(t, err, codePolicyModeUnknown)
