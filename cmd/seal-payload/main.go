@@ -41,17 +41,19 @@ import (
 
 // cliConfig holds the parsed command-line configuration for one seal invocation.
 type cliConfig struct {
-	keys        *sealcli.KeySources
-	signKid     string
-	encryptKid  string
-	sigAlg      string
-	mode        string
-	enc         string
-	envelope    string
-	typ         string
-	iatMillis   bool
-	protected   protectedFlag
-	payloadPath string // positional arg; "" or "-" means read stdin
+	keys         *sealcli.KeySources
+	signKid      string
+	encryptKid   string
+	sigAlg       string
+	mode         string
+	enc          string
+	envelope     string
+	typ          string
+	typSet       bool // -typ was explicitly supplied, even as -typ="" (nested refusal is presence-based)
+	iatMillis    bool
+	iatMillisSet bool // -iat-ms was explicitly supplied, even as -iat-ms=false (nested refusal is presence-based)
+	protected    protectedFlag
+	payloadPath  string // positional arg; "" or "-" means read stdin
 }
 
 func main() {
@@ -166,6 +168,19 @@ func parseFlags(args []string, stderr io.Writer) (*cliConfig, error) {
 		return nil, err
 	}
 	cfg.payloadPath = path
+
+	// fs.Visit only calls back for flags actually given on the command line, so
+	// this records presence even for an explicit zero value (-typ="",
+	// -iat-ms=false) that Parse would otherwise leave indistinguishable from
+	// "not supplied" — refuseNestedHeaderFlags needs presence, not value.
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "typ":
+			cfg.typSet = true
+		case "iat-ms":
+			cfg.iatMillisSet = true
+		}
+	})
 	return cfg, nil
 }
 
@@ -210,8 +225,8 @@ func refuseNestedHeaderFlags(cfg *cliConfig, mode jose.SealMode) error {
 		flag string
 		set  bool
 	}{
-		{"-typ", cfg.typ != ""},
-		{"-iat-ms", cfg.iatMillis},
+		{"-typ", cfg.typSet},
+		{"-iat-ms", cfg.iatMillisSet},
 		{"-protected", cfg.protected != nil},
 	}
 	for _, h := range headers {
