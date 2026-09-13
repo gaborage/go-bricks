@@ -4,9 +4,7 @@ package postgresql
 
 import (
 	"database/sql"
-	"errors"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -87,10 +85,17 @@ func TestSessionCloseReleasesPoolConnection(t *testing.T) {
 
 // TestSessionTerminatedBackendErrorsWhilePoolSurvives confirms that killing a
 // session's backend from OUTSIDE (pg_terminate_backend, e.g. an operator or
-// PostgreSQL itself under load) surfaces as sql.ErrConnDone on the session
-// while leaving the rest of the pool healthy — the door's core promise: a
-// dead session fails loudly instead of silently handing the next statement to
-// a different, unaware physical connection.
+// PostgreSQL itself under load) fails the session loudly — instead of silently
+// handing the next statement to a different, unaware physical connection —
+// while leaving the rest of the pool healthy.
+//
+// It pins the NARROWED contract documented on types.Session, one call at a
+// time: the call that OBSERVES the death may return the driver's own error
+// (pgx reports a raw pgconn FATAL, which database/sql does not classify as a
+// dead connection), and only the call AFTER it is guaranteed to satisfy
+// errors.Is(err, sql.ErrConnDone). No polling wraps either assertion: the
+// two-argument pg_terminate_backend waits for the backend to actually exit
+// before returning, so the ordering is established by PostgreSQL itself.
 func TestSessionTerminatedBackendErrorsWhilePoolSurvives(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
 
@@ -101,15 +106,27 @@ func TestSessionTerminatedBackendErrorsWhilePoolSurvives(t *testing.T) {
 	var pid int
 	require.NoError(t, sess.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid))
 
+	// The second argument is a timeout in ms: pg_terminate_backend returns true
+	// only once the backend has actually gone away (PostgreSQL 14+), so the
+	// session is provably dead before the first assertion below runs.
 	var terminated bool
-	require.NoError(t, conn.QueryRow(ctx, "SELECT pg_terminate_backend($1)", pid).Scan(&terminated))
-	require.True(t, terminated, "pg_terminate_backend should report success")
+	require.NoError(t, conn.QueryRow(ctx, "SELECT pg_terminate_backend($1, 5000)", pid).Scan(&terminated))
+	require.True(t, terminated, "pg_terminate_backend should confirm the backend exited")
 
-	require.Eventually(t, func() bool {
-		_, execErr := sess.Exec(ctx, "SELECT 1")
-		return errors.Is(execErr, sql.ErrConnDone)
-	}, 5*time.Second, 50*time.Millisecond,
-		"session call after backend termination should surface sql.ErrConnDone")
+	// FIRST post-termination call: it must error, but the contract deliberately
+	// does not promise sql.ErrConnDone here.
+	_, firstErr := sess.Exec(ctx, "SELECT 1")
+	require.Error(t, firstErr, "the first call after the backend dies must fail, not silently succeed")
+	// Diagnostics only — deliberately NOT asserted, so a driver that starts
+	// classifying this error does not fail the test. Observed on pgx v5 /
+	// PostgreSQL 18: "FATAL: terminating connection due to administrator
+	// command (SQLSTATE 57P01)", which is not sql.ErrConnDone.
+	t.Logf("first post-termination error: %v", firstErr)
+
+	// SECOND call: this is the one the contract pins.
+	_, secondErr := sess.Exec(ctx, "SELECT 1")
+	require.ErrorIs(t, secondErr, sql.ErrConnDone,
+		"every call after the death has been observed must satisfy errors.Is(err, sql.ErrConnDone)")
 
 	require.NoError(t, conn.Health(ctx), "the pool itself must remain healthy after a session backend is killed")
 }
