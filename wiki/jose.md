@@ -78,11 +78,12 @@ for _, m := range []app.Module{
 | Decryption failed | 401 | `JOSE_DECRYPT_FAILED` |
 | Inner payload not a JWS | 400 | `JOSE_INNER_NOT_JWS` |
 | Body is not a compact JWS under a `SealModeJWSofJWE` policy (a JWE-outer body included) | 400 | `JOSE_OUTER_NOT_JWS` |
+| Outer `alg` is not the declared `Policy.SigAlg` (`SealModeJWSofJWE` only) | 400 | `JOSE_ALGORITHM_DISALLOWED` |
 | JWS signature invalid | 401 | `JOSE_SIGNATURE_INVALID` |
 | Inner JWS `cty` disagrees with policy | 400 | `JOSE_CTY_REJECTED` |
 | Outbound seal failed (server-side) | 500 | `JOSE_OUTBOUND_FAILED` |
 
-`JOSE_ALGORITHM_DISALLOWED` is raised only at registration time (an invalid `jose:` struct tag or `Policy.Validate()` failure) — it is never returned to an HTTP caller at request time. A disallowed `alg`/`enc` on the wire fails go-jose's compact parse instead, which surfaces as `JOSE_MALFORMED` (or `JOSE_INNER_NOT_JWS` for the inner-JWS layer) above.
+`JOSE_ALGORITHM_DISALLOWED` is raised at registration time (an invalid `jose:` struct tag or `Policy.Validate()` failure) on every mode, and additionally at request time in `SealModeJWSofJWE` alone, where `Open` refuses an outer `alg` other than the declared `Policy.SigAlg` with a 400 before any key is touched. A disallowed `alg`/`enc` on the wire fails go-jose's compact parse instead, which surfaces as `JOSE_MALFORMED` (or `JOSE_INNER_NOT_JWS` for the inner-JWS layer) above.
 
 **Security invariant** (asserted by tests): a response is JOSE-encrypted iff inbound was successfully verified AND the route has an outbound policy. Tampered-byte negative tests must produce *plaintext* error responses; observing `Content-Type: application/jose` on the failure path is a security regression.
 
@@ -169,9 +170,9 @@ if err != nil {
 **Validation rules** (all enforced by `Policy.Validate()`, and by `Seal` itself before it touches the keystore):
 
 - A bare **outbound** policy declares `EncryptKid` as its **only key identity** — a `SignKid`, `VerifyKid`, `DecryptKid` or any `SigAlg` is `JOSE_POLICY_DIRECTION_MISMATCH`, because bare mode signs nothing. Everything else the policy configures (`KeyAlg`, `Enc`, `Cty`, `Typ`, `IATMillis`, `ProtectedHeaders`) is allowed, as the example above sets. A bare **inbound** policy declares `DecryptKid` as its only key identity, on the same terms — a `SignKid`, `VerifyKid`, `EncryptKid` or any `SigAlg` is the same code.
-- `Typ`, `ProtectedHeaders` and `IATMillis` are **outbound only, and address a JWE the framework builds directly** — bare mode's token, or the inner JWE of `SealModeJWSofJWE`. On a `SealModeJWEofJWS` policy they are `JOSE_POLICY_MODE_MISMATCH`; on any *inbound* policy they are `JOSE_POLICY_DIRECTION_MISMATCH` — nothing would read them on the way in, and accepting them would suggest a header was being enforced.
+- `Typ`, `ProtectedHeaders` and `IATMillis` are **outbound only, and address a JWE the framework builds directly** — bare mode's token, or the inner JWE of `SealModeJWSofJWE`. On a `SealModeJWEofJWS` policy they are `JOSE_POLICY_MODE_MISMATCH` whatever the direction, since the mode check runs first; on a bare-JWE or JWS-of-JWE *inbound* policy they are `JOSE_POLICY_DIRECTION_MISMATCH` — nothing would read them on the way in, and accepting them would suggest a header was being enforced.
 - **Collision guard**: a `ProtectedHeaders` key naming a param the framework writes (`alg`, `enc`, `kid`, `cty`, `typ`) or one JOSE reserves is `JOSE_POLICY_HEADER_COLLISION`, never a silent overwrite — as is a hand-written `iat` beside `IATMillis: true`. That is why `typ` is its own field.
-- An unrecognized `Mode` is `JOSE_POLICY_MODE_UNKNOWN`. All of these codes are configuration failures raised at validation time, like `JOSE_ALGORITHM_DISALLOWED`; they never reach an HTTP caller.
+- An unrecognized `Mode` is `JOSE_POLICY_MODE_UNKNOWN`. All of these codes are configuration failures raised at validation time; they never reach an HTTP caller. `JOSE_ALGORITHM_DISALLOWED` is the one code raised at both times — a request-time 400 in `SealModeJWSofJWE`, where `Open` pins the outer `alg` to `Policy.SigAlg`.
 
 **What `Open` returns.** The plaintext is the caller's bytes verbatim (there is no JWS to unwrap), `claims` are parsed out of that payload if it carries JWT claims, and the header comes back as `OpenHeader.JWE` — with `.Typ` and `.IATMillis` (epoch milliseconds, `0` when absent or malformed) beside the existing `.Kid`/`.Alg`/`.Enc`/`.Cty`. `OpenHeader.JWS` is the **zero** `jose.Header`: no inner layer exists. A peer that declares a `cty` must agree with the policy's (`JOSE_CTY_REJECTED`), one that omits it is accepted — the same permissive rule the nested path applies. **A bare `Open` refuses `cty: JWS` unconditionally**, whatever `Policy.Cty` says (`JOSE_CTY_REJECTED`): bare mode never carries an inner JWS, so that header means a peer is still sending the nested shape, and the compact JWS must never reach the caller as if it were the payload. `Cty` is therefore the consumer's own content-type pin, not the nested-token guard.
 

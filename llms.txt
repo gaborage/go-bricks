@@ -4010,7 +4010,7 @@ Generate a compact token like the one above with the `seal-payload` CLI: `go ins
 | JWE content enc (`enc`) | `A256GCM`; `A128GCM` in bare-JWE mode only | non-AEAD encryptions (`A*CBC-HS*`); `A128GCM` on the nested JWE-of-JWS path |
 | Content type (`cty`) | `application/json` (default) | mismatched `cty` → `JOSE_CTY_REJECTED` |
 
-`JOSE_ALGORITHM_DISALLOWED` is raised only at registration time (an invalid `jose:` struct tag or `Policy.Validate()` failure) and panics at startup — it is never returned to an HTTP caller at request time. A disallowed `alg`/`enc` on the wire instead fails go-jose's compact parse, surfacing as `JOSE_MALFORMED` (or `JOSE_INNER_NOT_JWS` for the inner-JWS layer, `JOSE_OUTER_NOT_JWS` for a `SealModeJWSofJWE` body that is not a compact JWS), before any key material is touched.
+`JOSE_ALGORITHM_DISALLOWED` is raised at registration time (an invalid `jose:` struct tag or `Policy.Validate()` failure) and panics at startup; in `SealModeJWSofJWE` it is *also* a request-time 400, where `Open` refuses an outer `alg` other than the declared `Policy.SigAlg`. A disallowed `alg`/`enc` on the wire instead fails go-jose's compact parse, surfacing as `JOSE_MALFORMED` (or `JOSE_INNER_NOT_JWS` for the inner-JWS layer, `JOSE_OUTER_NOT_JWS` for a `SealModeJWSofJWE` body that is not a compact JWS), before any key material is touched.
 
 ### Bare-JWE Mode (Visa Message Level Encryption)
 

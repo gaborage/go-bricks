@@ -45,8 +45,16 @@ type jwsOfJWEVector struct {
 	OuterCty    string                  `json:"-"` // "" writes no cty header
 	OmitKid     bool                    `json:"-"`
 	TamperInner bool                    `json:"-"`
+	TamperOuter bool                    `json:"-"`
 	InnerOnly   bool                    `json:"-"` // publish the bare inner JWE, unsigned
 }
+
+// Compact segment indexes the builder tampers with: the JWE ciphertext, and the JWS
+// signature. Tampering the ciphertext before signing leaves the outer signature valid.
+const (
+	jweCiphertextSegment = 3
+	jwsSignatureSegment  = 2
+)
 
 type jwsOfJWEVectorFile struct {
 	Note    string           `json:"note"`
@@ -72,7 +80,7 @@ func buildJWSofJWEVector(t *testing.T, v *jwsOfJWEVector, keys map[string]*rsa.P
 		return inner
 	}
 	if v.TamperInner {
-		inner = tamperSegment(t, inner, 3)
+		inner = tamperSegment(t, inner, jweCiphertextSegment)
 	}
 
 	signOpts := (&jose.SignerOptions{
@@ -90,6 +98,9 @@ func buildJWSofJWEVector(t *testing.T, v *jwsOfJWEVector, keys map[string]*rsa.P
 	require.NoError(t, err)
 	compact, err := signed.CompactSerialize()
 	require.NoError(t, err)
+	if v.TamperOuter {
+		compact = tamperSegment(t, compact, jwsSignatureSegment)
+	}
 	return compact
 }
 
@@ -125,6 +136,9 @@ func regenerateJWSofJWEVectors(t *testing.T, keys map[string]*rsa.PrivateKey) []
 		vector("outer_rs256", codeAlgorithmDisallowed, func(v *jwsOfJWEVector) { v.SigAlg = jose.RS256 }),
 		vector("rogue_signing_kid", codeKidUnknown, func(v *jwsOfJWEVector) { v.SignKid = vecRogueKid }),
 		vector("tampered_inner_ciphertext", codeDecryptFailed, func(v *jwsOfJWEVector) { v.TamperInner = true }),
+		// The only vector that reaches jws.Verify: every other negative dies at an earlier
+		// guard, so without this one the suite would pass against an Open that verifies nothing.
+		vector("tampered_outer_signature", codeSignatureInvalid, func(v *jwsOfJWEVector) { v.TamperOuter = true }),
 		vector("jwe_outer_body", codeOuterNotJWS, func(v *jwsOfJWEVector) { v.InnerOnly = true }),
 	}
 	for i := range vectors {
@@ -162,6 +176,8 @@ func TestOpenJWSofJWEVectors(t *testing.T) {
 	}
 	require.NotEmpty(t, file.Vectors)
 
+	// The harness reuses the bare vectors' key file, so one kid plays signer and recipient.
+	// Key separation is a deployment rule (wiki/jose.md), not a property these tokens carry.
 	resolver := &fixtureResolver{
 		priv: map[string]*rsa.PrivateKey{vecEncKid: keys[vecEncKid]},
 		pub:  map[string]*rsa.PublicKey{vecEncKid: &keys[vecEncKid].PublicKey},
@@ -173,6 +189,7 @@ func TestOpenJWSofJWEVectors(t *testing.T) {
 	}
 	require.NoError(t, inbound.Validate())
 
+	saltChecks := 0
 	for _, v := range file.Vectors {
 		t.Run(v.Name, func(t *testing.T) {
 			plaintext, claims, hdr, err := Open(v.Compact, inbound, resolver)
@@ -190,6 +207,10 @@ func TestOpenJWSofJWEVectors(t *testing.T) {
 				Kid: vecEncKid, Alg: "RSA-OAEP-256", Enc: "A256GCM", Typ: "JOSE", IATMillis: vecIATMs,
 			}, hdr.JWE)
 			assertPSSSalt32(t, v.Compact, &keys[vecEncKid].PublicKey)
+			saltChecks++
 		})
 	}
+	// Without this, dropping the positive vector would silently retire the only PSS-salt
+	// assertion in the repo.
+	assert.Positive(t, saltChecks, "no vector exercised the PSS salt-length check")
 }
