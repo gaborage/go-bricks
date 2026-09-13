@@ -16,6 +16,10 @@ package types
 // or *oracle.Connection. Always Close it to return the physical connection
 // to the pool.
 //
+// A Session holds no tenant lease of its own, so it must not outlive the
+// request or job scope in which it was acquired — the tenant's underlying
+// pool may be closed out from under it once that lease is released (ADR-032).
+//
 // Error semantics once the physical connection is gone: the call that OBSERVES
 // the death may return the driver's own error rather than a translated one — a
 // PostgreSQL backend killed after the statement went out reports a raw FATAL
