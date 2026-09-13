@@ -158,6 +158,8 @@ func TestOpenJWSofJWERefusals(t *testing.T) {
 		{"wrong_signing_kid", outer(func(o *cryptoadapter.SignOptions) { o.Kid = "rogue-key" }), codeKidUnknown},
 		{"missing_signing_kid", outer(func(o *cryptoadapter.SignOptions) { o.Kid = "" }), codeKidMissing},
 		{"unparseable_three_segment_body", "a.b.c", codeOuterNotJWS},
+		// A valid protected header passes the peek; go-jose still refuses the bad segments.
+		{"unparseable_signed_segments", sealed[:strings.IndexByte(sealed, '.')] + ".!!.!!", codeOuterNotJWS},
 		{"disallowed_signature_algorithm", outer(func(o *cryptoadapter.SignOptions) { o.SigAlg = jose.RS256 }), codeAlgorithmDisallowed},
 		{"outer_without_cty", outer(func(o *cryptoadapter.SignOptions) { o.Cty = "" }), codeCtyRejected},
 		{"outer_with_other_cty", outer(func(o *cryptoadapter.SignOptions) { o.Cty = "JWS" }), codeCtyRejected},
