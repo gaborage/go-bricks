@@ -498,6 +498,167 @@ func publicGrantRows(ctx context.Context, t *testing.T, db *sql.DB, schema strin
 	return out
 }
 
+// pgPublicSchemaResidueDetectSQL is the SCHEMA half of the [C65.4] detect step
+// in wiki/migrations.md, kept here verbatim for the same reason as the other two
+// queries in this file: so the atom's copy has a live oracle and the two cannot
+// drift apart silently.
+//
+// A Schema spelled "public" leaves no ownership trace: buildPGRoleStatements
+// emits CREATE SCHEMA IF NOT EXISTS "public" AUTHORIZATION <migrator>
+// (migration/roles.go), and IF NOT EXISTS makes the WHOLE statement a no-op
+// against the built-in schema — the AUTHORIZATION clause included — so nspowner
+// never moves and \dn+ public reads as it does on an untouched instance. Nor do
+// the other two detect queries see it: the built-in schema's baseline PUBLIC
+// USAGE grant is indistinguishable from the residue, and pg_roles is about role
+// names. What such a run DOES leave are rows a fresh instance has for no role of
+// yours, written by statements further down the same list:
+//
+//   - the two ALTER DEFAULT PRIVILEGES FOR ROLE <migrator> IN SCHEMA "public"
+//     statements, as pg_default_acl rows whose defaclnamespace is the public
+//     schema and whose defaclrole is the migrator;
+//   - the two ALTER ROLE <role> SET search_path = "public" statements, as one
+//     pg_db_role_setting row per role (setrole joins pg_roles.oid; a setrole of 0
+//     is an ALTER DATABASE … SET row, which this template never emits and the
+//     join drops).
+//
+// Both spellings of the setting are matched because the helper quotes the
+// identifier while a hand-edited script usually does not.
+const pgPublicSchemaResidueDetectSQL = `SELECT 'default_acl'::text AS source, r.rolname AS role_name,
+       CASE d.defaclobjtype WHEN 'r' THEN 'TABLES'
+                            WHEN 'S' THEN 'SEQUENCES'
+                            WHEN 'f' THEN 'FUNCTIONS'
+                            WHEN 'T' THEN 'TYPES'
+                            ELSE d.defaclobjtype::text END AS detail
+FROM pg_default_acl d
+JOIN pg_namespace n ON n.oid = d.defaclnamespace
+JOIN pg_roles r ON r.oid = d.defaclrole
+WHERE n.nspname = 'public'
+UNION ALL
+SELECT 'search_path', r.rolname, c.setting
+FROM pg_db_role_setting s
+JOIN pg_roles r ON r.oid = s.setrole,
+     unnest(s.setconfig) AS c(setting)
+WHERE c.setting IN ('search_path=public', 'search_path="public"')
+ORDER BY 1, 2, 3`
+
+// Probe role names for the schema-residue oracle. Every assertion is scoped to
+// them, so a container shared with another test (or another run) cannot make
+// this test flaky.
+const (
+	schemaResidueProbeRole       = "c654_schema_probe"
+	schemaResidueQuotedProbeRole = "c654_quoted_probe"
+)
+
+// TestPGPublicSchemaResidueDetectSQLFindsSchemaHalfResidue is the falsifiability
+// check on the schema half's detect query. The pre-fix state cannot be
+// provisioned any more — Validate refuses Schema: "public" outright — so the
+// oracle reproduces the two residues by hand with the same statements
+// buildPGRoleStatements would have emitted, asserts the query finds each one
+// tagged with its source, and asserts the atom's apply step (revoke the default
+// privileges, reset the search_path) makes the query go quiet again.
+func TestPGPublicSchemaResidueDetectSQLFindsSchemaHalfResidue(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx, cancel := testCtx(t)
+	defer cancel()
+
+	admin := env.adminDB(t)
+
+	_, err := admin.ExecContext(ctx, `CREATE ROLE `+schemaResidueProbeRole)
+	require.NoError(t, err)
+	_, err = admin.ExecContext(ctx, `CREATE ROLE `+schemaResidueQuotedProbeRole)
+	require.NoError(t, err)
+
+	// Cleaned up whatever happens. The revoke and the reset must precede the
+	// drops: a role still owning a pg_default_acl row cannot be dropped.
+	defer func() {
+		for _, stmt := range []string{
+			`ALTER DEFAULT PRIVILEGES FOR ROLE ` + schemaResidueProbeRole +
+				` IN SCHEMA public REVOKE SELECT ON TABLES FROM ` + schemaResidueProbeRole,
+			`ALTER ROLE ` + schemaResidueProbeRole + ` RESET search_path`,
+			`ALTER ROLE ` + schemaResidueQuotedProbeRole + ` RESET search_path`,
+			`DROP ROLE IF EXISTS ` + schemaResidueProbeRole,
+			`DROP ROLE IF EXISTS ` + schemaResidueQuotedProbeRole,
+		} {
+			_, cleanupErr := admin.ExecContext(ctx, stmt)
+			assert.NoError(t, cleanupErr, stmt)
+		}
+	}()
+
+	require.Empty(t, publicSchemaResidueRows(ctx, t, admin, schemaResidueProbeRole),
+		"a freshly created role carries neither residue")
+	require.Empty(t, publicSchemaResidueRows(ctx, t, admin, schemaResidueQuotedProbeRole),
+		"a freshly created role carries neither residue")
+
+	t.Run("both_residues_are_found", func(t *testing.T) {
+		// The two statement shapes a Schema spelled "public" would have left
+		// behind (migration/roles.go), against the probe role instead.
+		for _, stmt := range []string{
+			`ALTER DEFAULT PRIVILEGES FOR ROLE ` + schemaResidueProbeRole +
+				` IN SCHEMA public GRANT SELECT ON TABLES TO ` + schemaResidueProbeRole,
+			`ALTER ROLE ` + schemaResidueProbeRole + ` SET search_path = public`,
+			`ALTER ROLE ` + schemaResidueQuotedProbeRole + ` SET search_path = "public"`,
+		} {
+			_, execErr := admin.ExecContext(ctx, stmt)
+			require.NoError(t, execErr, stmt)
+		}
+
+		require.Equal(t, []string{
+			"default_acl|" + schemaResidueProbeRole + "|TABLES",
+			"search_path|" + schemaResidueProbeRole + "|search_path=public",
+		}, publicSchemaResidueRows(ctx, t, admin, schemaResidueProbeRole),
+			"both residues must be found, each tagged with the catalog it came from")
+
+		// The helper QUOTES the schema, so the quoted spelling is the one a real
+		// provisioning run leaves; it must be matched too, whichever way the
+		// server chooses to store it.
+		quoted := publicSchemaResidueRows(ctx, t, admin, schemaResidueQuotedProbeRole)
+		require.Len(t, quoted, 1,
+			`search_path = "public" is the spelling the helper emits and must match`)
+		require.True(t,
+			strings.HasPrefix(quoted[0], "search_path|"+schemaResidueQuotedProbeRole+"|search_path="),
+			"the quoted spelling must land in the search_path arm, not the default_acl one")
+	})
+
+	// The atom's apply step for this half.
+	for _, stmt := range []string{
+		`ALTER DEFAULT PRIVILEGES FOR ROLE ` + schemaResidueProbeRole +
+			` IN SCHEMA public REVOKE SELECT ON TABLES FROM ` + schemaResidueProbeRole,
+		`ALTER ROLE ` + schemaResidueProbeRole + ` RESET search_path`,
+		`ALTER ROLE ` + schemaResidueQuotedProbeRole + ` RESET search_path`,
+	} {
+		_, err = admin.ExecContext(ctx, stmt)
+		require.NoError(t, err, stmt)
+	}
+
+	require.Empty(t, publicSchemaResidueRows(ctx, t, admin, schemaResidueProbeRole),
+		"the revoke and the search_path reset must make the query go quiet again")
+	require.Empty(t, publicSchemaResidueRows(ctx, t, admin, schemaResidueQuotedProbeRole),
+		"the revoke and the search_path reset must make the query go quiet again")
+}
+
+// publicSchemaResidueRows runs pgPublicSchemaResidueDetectSQL verbatim and
+// flattens the rows for one role to "source|role|detail". The filter is applied
+// in Go, never in the SQL, so the const under test stays byte-identical to the
+// query the atom publishes.
+func publicSchemaResidueRows(ctx context.Context, t *testing.T, db *sql.DB, role string) []string {
+	t.Helper()
+	rows, err := db.QueryContext(ctx, pgPublicSchemaResidueDetectSQL)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var source, roleName, detail string
+		require.NoError(t, rows.Scan(&source, &roleName, &detail))
+		if roleName != role {
+			continue
+		}
+		out = append(out, strings.Join([]string{source, roleName, detail}, "|"))
+	}
+	require.NoError(t, rows.Err())
+	return out
+}
+
 // pgReservedRoleDetectSQL is the SECOND detect step of the [C65.4] atom in
 // wiki/migrations.md, kept here verbatim for the same reason as the query
 // above: so the atom's copy has a live oracle and the two cannot drift apart
@@ -515,7 +676,9 @@ func publicGrantRows(ctx context.Context, t *testing.T, db *sql.DB, schema strin
 // is LIKE's default escape character, so \_ matches a LITERAL underscore and no
 // ESCAPE clause is needed. With the escape broken, _ would degrade to a
 // single-character wildcard and pgx_probe would match too — which is exactly
-// what the near-miss role in the test below falsifies.
+// what the near-miss role in the test below falsifies. The lower() governs BOTH
+// arms on purpose: the server accepts "PG_x" as an ordinary role, so the LIKE
+// arm has to fold case as well to see it.
 //
 // Unlike the PUBLIC-grant query, a row here is not by itself a finding: the
 // pg_-prefixed predefined roles ship with every instance and are baseline
@@ -548,10 +711,16 @@ var pgPredefinedRoleBaseline = []string{
 // TestPGReservedRoleDetectSQLFindsCaseVariantRoles is the falsifiability check
 // on the atom's second detect query. A case variant of a reserved name is a
 // role PostgreSQL genuinely created, so the assertions are scoped: the probe
-// role must APPEAR once it exists and disappear once it is dropped, the
+// roles must APPEAR once they exist and disappear once they are dropped, the
 // predefined baseline must be present throughout, and the near-miss role
 // pgx_probe must never appear — if it does, the LIKE escape is broken and the
 // query over-reports exactly as the atom's caveat sentence warns.
+//
+// There are two probe roles because the query has two arms and each needs its
+// own witness: "Public" pins lower(rolname) = 'public', and "PG_Probe" pins the
+// lower() on the LIKE arm — drop that one call and the arm becomes
+// rolname LIKE 'pg\_%', which still finds every lowercase predefined role and
+// still finds "Public", so nothing but "PG_Probe" would notice.
 func TestPGReservedRoleDetectSQLFindsCaseVariantRoles(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx, cancel := testCtx(t)
@@ -564,14 +733,19 @@ func TestPGReservedRoleDetectSQLFindsCaseVariantRoles(t *testing.T) {
 		"the pg_-prefixed predefined roles are expected baseline noise, not a finding")
 	require.NotContains(t, before, "Public",
 		"the probe role must not already exist on the container")
+	require.NotContains(t, before, "PG_Probe",
+		"the pg_-prefixed probe role must not already exist on the container")
 	require.NotContains(t, before, "pgx_probe",
 		"the near-miss role must not already exist on the container")
 
 	t.Run("case_variant_role_is_found", func(t *testing.T) {
-		// PostgreSQL accepts both of these: its reserved check is exact-case,
-		// so "Public" is a real role, and "pgx_probe" is not reserved-shaped
-		// at all — it only LOOKS like one if the LIKE escape is broken.
+		// PostgreSQL accepts all three: its reserved check is exact-case, so
+		// "Public" and "PG_Probe" are real roles, and "pgx_probe" is not
+		// reserved-shaped at all — it only LOOKS like one if the LIKE escape
+		// is broken.
 		_, err := admin.ExecContext(ctx, `CREATE ROLE "Public"`)
+		require.NoError(t, err)
+		_, err = admin.ExecContext(ctx, `CREATE ROLE "PG_Probe"`)
 		require.NoError(t, err)
 		_, err = admin.ExecContext(ctx, `CREATE ROLE pgx_probe`)
 		require.NoError(t, err)
@@ -581,6 +755,8 @@ func TestPGReservedRoleDetectSQLFindsCaseVariantRoles(t *testing.T) {
 		defer func() {
 			_, dropErr := admin.ExecContext(ctx, `DROP ROLE IF EXISTS "Public"`)
 			assert.NoError(t, dropErr)
+			_, dropErr = admin.ExecContext(ctx, `DROP ROLE IF EXISTS "PG_Probe"`)
+			assert.NoError(t, dropErr)
 			_, dropErr = admin.ExecContext(ctx, `DROP ROLE IF EXISTS pgx_probe`)
 			assert.NoError(t, dropErr)
 		}()
@@ -588,6 +764,8 @@ func TestPGReservedRoleDetectSQLFindsCaseVariantRoles(t *testing.T) {
 		got := reservedRoleNames(ctx, t, admin)
 		require.Contains(t, got, "Public",
 			"a case variant the server accepted must be found by the detect query")
+		require.Contains(t, got, "PG_Probe",
+			`the LIKE arm must fold case too; without lower(), 'pg\_%' misses PG_Probe entirely`)
 		require.Subset(t, got, pgPredefinedRoleBaseline,
 			"the predefined roles stay in the result set alongside the finding")
 		require.NotContains(t, got, "pgx_probe",
@@ -596,6 +774,8 @@ func TestPGReservedRoleDetectSQLFindsCaseVariantRoles(t *testing.T) {
 
 	after := reservedRoleNames(ctx, t, admin)
 	require.NotContains(t, after, "Public",
+		"the atom's apply step (rename or drop) must make the query go quiet again")
+	require.NotContains(t, after, "PG_Probe",
 		"the atom's apply step (rename or drop) must make the query go quiet again")
 	require.Subset(t, after, pgPredefinedRoleBaseline,
 		"the baseline is unaffected by the probe role's lifecycle")
