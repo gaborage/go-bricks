@@ -111,6 +111,17 @@ func TestSealJWSofJWEInnerJWECarriesPolicyHeadersButNoCty(t *testing.T) {
 	assert.Greater(t, headerIAT(t, inner), int64(1_600_000_000_000), "inner iat is epoch milliseconds")
 }
 
+// The outer JWS header is fixed by the mode: Policy.Typ addresses the inner JWE only.
+func TestSealJWSofJWEOuterTypIgnoresPolicyTyp(t *testing.T) {
+	f := newJWSofJWEFixture(t)
+	f.outbound.Typ = "vnd.x"
+
+	compact, err := Seal([]byte(`{}`), f.outbound, f.resolver)
+	require.NoError(t, err)
+	assert.Equal(t, "JOSE", peekHeader(t, compact).Typ)
+	assert.Equal(t, "vnd.x", peekHeader(t, innerJWE(t, compact, f.priv)).Typ)
+}
+
 func TestOpenJWSofJWERoundTripReportsBothLayers(t *testing.T) {
 	f := newJWSofJWEFixture(t)
 	f.outbound.Typ = "JOSE"

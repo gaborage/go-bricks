@@ -93,7 +93,7 @@ runs that step on its own.
 - **Consumer-side inbox** for exactly-once *transactional* event processing (dedup ledger written atomically with the handler's DB writes via `InboxProcessor.ProcessOnce`)
 - **Job scheduler** with gocron, overlapping prevention, panic recovery, and system APIs
 - **Named RSA key pair and symmetric secret management** from DER/raw files or base64 environment variables
-- **JOSE middleware** for nested JWE-of-JWS protection on HTTP request/response bodies via `jose:` struct tags, plus the encrypt-only bare-JWE shape Visa Message Level Encryption specifies — bare mode is reached through the `jose.Seal` / `jose.Open` API only, not the struct tags (Visa-style integrations)
+- **JOSE middleware** for nested JWE-of-JWS protection on HTTP request/response bodies via `jose:` struct tags, plus two Policy-selected shapes: the encrypt-only bare JWE of Visa Message Level Encryption and the encrypt-then-sign JWS-of-JWE of the Visa Token Service Issuer API — both reached through the `jose.Seal` / `jose.Open` API only, not the struct tags (Visa-style integrations)
 - **Multi-tenant architecture** with complete resource isolation and context propagation
 - **Flyway migration integration** for schema evolution
 - **Observability** with W3C trace propagation, custom metrics, dual-mode logs, and health endpoints
@@ -809,6 +809,8 @@ type CreateTokenResponse struct {
 - **Observability** — spans (`jose.decode_request`, `jose.encode_response`), failure counter (`jose.failures.total` by code/direction), duration histogram (`jose.operation.duration`).
 
 **Bare-JWE mode (Visa Message Level Encryption).** A `jose.Policy` can also select the encrypt-only shape Visa MLE specifies — a single compact JWE with no inner JWS, `A128GCM`, a `typ` header and an `iat` in epoch milliseconds — via `Mode: jose.SealModeBareJWE`. Those are Visa's *profile*, not what bare mode requires: the mode allows `A128GCM` **and** `A256GCM`, writes `typ` only when `Policy.Typ` is set, and writes `iat` only when `Policy.IATMillis` is `true` — a bare `Open` accepts a token carrying neither. Nothing is signed there, so the peer must be authenticated out of band (`X-Pay-Token`, mTLS). Calling such a partner is `httpclient.Builder.WithJOSE` plus a body envelope (`httpclient.VisaMLEEnvelope()` supplies MLE's `{"encData": "<compact>"}` shape) — see [wiki/httpclient.md](wiki/httpclient.md#jose-body-envelopes-visa-message-level-encryption). See [wiki/jose.md](wiki/jose.md#bare-jwe-mode-visa-message-level-encryption) (ADR-107).
+
+**JWS-of-JWE mode (Visa Token Service Issuer API).** `Mode: jose.SealModeJWSofJWE` inverts the nesting: the body is a compact JWS whose payload is the compact JWE, so the signature is the outer layer. The outer protected header is fixed by the mode (`typ: "JOSE"`, `cty: "JWE"`, `kid`, `alg`, and `iat` in epoch **seconds**), while `Policy.Typ` / `ProtectedHeaders` / `IATMillis` address the inner JWE. **Visa requires `PS256`, so set `SigAlg` explicitly — the package default is `RS256`.** See [wiki/jose.md](wiki/jose.md#jws-of-jwe-mode-visa-token-service-issuer-api) (ADR-111).
 
 Wire it by registering `keystore.NewModule()` **before** any module that declares JOSE-tagged routes — `app/module_registry.go` then auto-injects `KeyStore`, logger, tracer, and meter into the middleware. See [CLAUDE.md](CLAUDE.md#jose-middleware) for the complete failure-mode → `IAPIError` table and [llms.txt](llms.txt) for end-to-end examples.
 

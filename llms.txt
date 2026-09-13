@@ -4010,7 +4010,7 @@ Generate a compact token like the one above with the `seal-payload` CLI: `go ins
 | JWE content enc (`enc`) | `A256GCM`; `A128GCM` in bare-JWE mode only | non-AEAD encryptions (`A*CBC-HS*`); `A128GCM` on the nested JWE-of-JWS path |
 | Content type (`cty`) | `application/json` (default) | mismatched `cty` → `JOSE_CTY_REJECTED` |
 
-`JOSE_ALGORITHM_DISALLOWED` is raised only at registration time (an invalid `jose:` struct tag or `Policy.Validate()` failure) and panics at startup — it is never returned to an HTTP caller at request time. A disallowed `alg`/`enc` on the wire instead fails go-jose's compact parse, surfacing as `JOSE_MALFORMED` (or `JOSE_INNER_NOT_JWS` for the inner-JWS layer), before any key material is touched.
+`JOSE_ALGORITHM_DISALLOWED` is raised at registration time (an invalid `jose:` struct tag or `Policy.Validate()` failure) and panics at startup; in `SealModeJWSofJWE` it is *also* a request-time 400, where `Open` refuses an outer `alg` other than the declared `Policy.SigAlg`. A disallowed `alg`/`enc` on the wire instead fails go-jose's compact parse, surfacing as `JOSE_MALFORMED` (or `JOSE_INNER_NOT_JWS` for the inner-JWS layer, `JOSE_OUTER_NOT_JWS` for a `SealModeJWSofJWE` body that is not a compact JWS), before any key material is touched.
 
 ### Bare-JWE Mode (Visa Message Level Encryption)
 
@@ -4073,6 +4073,47 @@ log.Info().
 ```
 
 Deep dive: [wiki/jose.md](wiki/jose.md#bare-jwe-mode-visa-message-level-encryption).
+
+### JWS-of-JWE Mode (Visa Token Service Issuer API)
+
+The Visa Token Service **Issuer** API inverts the nesting: a compact JWS whose payload is a compact JWE, so the signature is outermost. `Policy.Mode: jose.SealModeJWSofJWE` selects it (ADR-111). `Seal` builds the same inner JWE bare mode builds — `A256GCM`, `kid`, `Policy.Typ`, millisecond `iat` under `Policy.IATMillis`, and **no `cty`** — then signs that compact string verbatim. The outer protected header is fixed by the mode: `typ: "JOSE"`, `cty: "JWE"`, `kid`, `alg`, and `iat` in epoch **seconds** whatever `Policy.IATMillis` says. **Visa requires `PS256` — set `SigAlg` explicitly, because `jose.DefaultSigAlg` is `RS256` and both are on the allowlist, so an unset `SigAlg` fails at Visa rather than at startup.** Reach: `jose.Seal` / `jose.Open` and `httpclient.Builder.WithJOSE` in both directions (the `SigAlg` default applies here, since this mode signs); there is no `jose:` struct-tag key, so inbound server routes cannot select it.
+
+```go
+issuerOutbound := &jose.Policy{
+    Direction:  jose.DirectionOutbound,
+    Mode:       jose.SealModeJWSofJWE,
+    SignKid:    "our-vts-signing",
+    EncryptKid: "visa-vts-encrypt",
+    SigAlg:     josev4.PS256, // Visa requires PS256; the package default is RS256
+    KeyAlg:     jose.DefaultKeyAlg,
+    Enc:        josev4.A256GCM,
+    Typ:        "JOSE",       // inner JWE typ; the outer JWS typ stays "JOSE" regardless
+    IATMillis:  true,         // inner JWE iat, epoch MILLISECONDS
+}
+
+issuerInbound := &jose.Policy{
+    Direction:  jose.DirectionInbound,
+    Mode:       jose.SealModeJWSofJWE,
+    DecryptKid: "our-vts-decrypt",
+    VerifyKid:  "visa-vts-verify",
+    SigAlg:     josev4.PS256, // Open accepts exactly this alg, nothing else on the allowlist
+    KeyAlg:     jose.DefaultKeyAlg,
+    Enc:        josev4.A256GCM,
+}
+
+compact, err := jose.Seal(payload, issuerOutbound, resolver)
+if err != nil {
+    return err
+}
+
+// Verify-then-decrypt. hdr.JWS is the outer layer (Cty "JWE"), hdr.JWE the inner one;
+// hdr.JWS.IATMillis is always 0 here, because the outer iat is seconds.
+plaintext, claims, hdr, err := jose.Open(compact, issuerInbound, resolver)
+```
+
+A body that is not a 3-segment JWS — a 5-segment JWE-outer body included — is `JOSE_OUTER_NOT_JWS`, never a fallback to another mode. An outer header without `cty: "JWE"` is `JOSE_CTY_REJECTED`, and an `alg` other than the declared `SigAlg` is `JOSE_ALGORITHM_DISALLOWED` — a request-time 400 here, unlike every other mode, where that code is registration-time only. Do not share a `DecryptKid` between this mode and a bare-JWE route: the inner JWE would decrypt there with nothing authenticating the sender.
+
+Deep dive: [wiki/jose.md](wiki/jose.md#jws-of-jwe-mode-visa-token-service-issuer-api).
 
 ### Tag Grammar (full)
 
@@ -4279,7 +4320,7 @@ func (m *Module) exchange(req ExchangeRequest, ctx server.HandlerContext) (Excha
 | Outbound seal failed (server-side bug) | 500 | `JOSE_OUTBOUND_FAILED` | post-trust | `application/json` (cannot encrypt without trust) |
 | Application returns `IAPIError` | per error | (your code) | post-trust | `application/jose` (encrypted standard envelope) |
 
-`JOSE_ALGORITHM_DISALLOWED` is registration-time only (see Algorithm Allowlist above) and never reaches an HTTP caller.
+`JOSE_ALGORITHM_DISALLOWED` is registration-time only (see Algorithm Allowlist above) and never reaches an HTTP caller — except in `SealModeJWSofJWE`, where `Open` refuses an outer `alg` other than the declared `Policy.SigAlg` as a request-time 400.
 
 **Security invariant** — pre-trust failures *must* return plaintext (so peers can't probe the decryption oracle); post-trust failures *must* return JOSE-encrypted envelopes (so application errors don't leak through). Tampering one ciphertext byte and asserting `Content-Type: application/json` on the response is the canonical regression test.
 
