@@ -1,7 +1,33 @@
 # ADR-062: Fail Closed on `database.tls` Misconfiguration (Mode Allowlist + Material/Mode Coherence)
 
-**Status:** Accepted (amended 2026-08-24)
+**Status:** Accepted (amended 2026-08-24, 2026-09-13)
 **Date:** 2026-08-14
+
+## Amendment — 2026-09-13: the fail-closed rules reason about host transport (#1555)
+
+R1–R5 judged `mode` against material and never asked how the connection travels. pgx v5
+classifies a host as a unix socket by shape — `isAbsolutePath` in `pgconn/config.go`: a
+leading `/`, or one ASCII uppercase letter followed by `:\` — and appends a nil TLS config
+for a unix network. So `host: /var/run/postgresql` with `mode: verify-full` and a `ca`
+satisfied R2 and connected with no TLS at all: the material was coherent with the mode, and
+the transport discarded both.
+
+R6 closes it: PG, no connectionstring, `host` an absolute path by exactly that predicate,
+and any of `cert`/`key`/`ca` set or `mode` set to anything but `disable` → reject on
+`database.tls` (section-qualified), naming the unix socket host, with two exits: remove the
+`database.tls` block, or use a TCP host. The mode is judged as the operator wrote it —
+nothing on this seam defaults an unset mode; pgx's `prefer` applies only at parse time — so
+a socket host with no block, or `mode: disable` and no material, is accepted unchanged.
+Socket hosts are not refused by themselves.
+
+R6 runs after R1, so a typo'd mode on a socket host is still reported as a mode problem, and
+before R2 and R3, so material on a socket host gets the transport message rather than a
+mode or pairing complaint that would steer the operator toward a mode the socket still
+cannot carry. The predicate is `config.isUnixSocketHost`, a mirror of pgx: a divergence
+reopens the hole. It covers every door `validatePostgreSQLFields` covers — static YAML
+through `config.Validate`, `DBConfigProvider` results through `ApplyDatabasePoolDefaults` /
+`ApplyDatabasePoolDefaultsForKey`, and `go-bricks-migrate` at its next pin bump. A raw
+`connectionstring` is unchanged (#1551). See `[C65.1]`.
 
 ## Amendment — 2026-08-24: the Flyway leg is no longer conf-owned (ADR-085, #1047)
 

@@ -547,8 +547,12 @@ configs too" below).
   the material was being discarded or the connection silently downgraded (`ca: system`
   inverted instead: pgx force-upgrades that sentinel to `verify-full` — see the quirks
   below). `cert` and `key` must still be set together.
-- **PostgreSQL — a valid mode alone is always fine.** `mode: disable` with no material stays
-  valid; opportunistic TLS with nothing to discard is a legitimate choice.
+- **PostgreSQL — a valid mode alone is fine on a TCP host.** `mode: disable` with no material
+  stays valid; opportunistic TLS with nothing to discard is a legitimate choice.
+- **PostgreSQL — a unix-socket host takes no TLS.** A `host` that is an absolute path
+  (`/var/run/postgresql`, or a drive path such as `C:\pg`) is dialed over a unix socket, where
+  pgx skips TLS, so `cert`, `key`, `ca` or any `mode` other than `disable` is refused naming
+  `database.tls`: remove the `database.tls` block, or use a TCP host.
 - **`database.tls` is incompatible with `connectionstring`.** The DSN is used verbatim and
   the block never reaches it, so setting both is a startup error. Put the parameters in the
   DSN instead (`sslmode`, `sslrootcert`, `sslcert`, `sslkey`) — that is also the escape hatch
