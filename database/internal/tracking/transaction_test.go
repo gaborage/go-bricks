@@ -106,9 +106,9 @@ func TestTransactionStatementCarriesServerAttributes(t *testing.T) {
 			traceExporter, _, cleanup := setupTestObservabilityProviders(t)
 			defer cleanup()
 
-			underlying := &stubSessionCapableConnection{
-				stubConnection: &stubConnection{databaseTypeValue: "postgresql"},
-				sessionResult:  &stubSession{databaseTypeValue: "postgresql"},
+			underlying := &stubConnection{
+				databaseTypeValue: "postgresql",
+				sessionResult:     &stubSession{databaseTypeValue: "postgresql"},
 			}
 			conn, ok := NewConnection(underlying, newRecordingLogger(), &config.DatabaseConfig{}).(*Connection)
 			require.True(t, ok, "NewConnection must return a tracking *Connection")
