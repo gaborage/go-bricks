@@ -1,6 +1,6 @@
 # JOSE Middleware (Deep Dive)
 
-The `jose` package provides nested JWE-of-JWS protection on HTTP request and response bodies — sign-then-encrypt outbound and decrypt-then-verify inbound on every payload. It is designed for **Visa Token Services**-style integrations and any partner API that requires this level of payload protection. That nested shape is the default and everything below describes it; a policy can select the encrypt-only shape Visa Message Level Encryption specifies instead — see [Bare-JWE mode](#bare-jwe-mode-visa-message-level-encryption).
+The `jose` package provides nested JWE-of-JWS protection on HTTP request and response bodies — sign-then-encrypt outbound and decrypt-then-verify inbound on every payload. It is designed for **Visa Token Services**-style integrations and any partner API that requires this level of payload protection. That nested shape is the default and everything below describes it; a policy can select one of two other shapes instead — the encrypt-only [Bare-JWE mode](#bare-jwe-mode-visa-message-level-encryption) Visa Message Level Encryption specifies, or the encrypt-then-sign [JWS-of-JWE mode](#jws-of-jwe-mode-visa-token-service-issuer-api) the Visa Token Service Issuer API expects.
 
 ## JOSE Middleware
 
@@ -77,6 +77,7 @@ for _, m := range []app.Module{
 | Unknown `kid` in header | 401 | `JOSE_KID_UNKNOWN` |
 | Decryption failed | 401 | `JOSE_DECRYPT_FAILED` |
 | Inner payload not a JWS | 400 | `JOSE_INNER_NOT_JWS` |
+| Body is not a compact JWS under a `SealModeJWSofJWE` policy (a JWE-outer body included) | 400 | `JOSE_OUTER_NOT_JWS` |
 | JWS signature invalid | 401 | `JOSE_SIGNATURE_INVALID` |
 | Inner JWS `cty` disagrees with policy | 400 | `JOSE_CTY_REJECTED` |
 | Outbound seal failed (server-side) | 500 | `JOSE_OUTBOUND_FAILED` |
@@ -106,7 +107,7 @@ Vanilla `Result[R]` continues to seal raw `data` so VTS-style vendor-prescribed 
 
 **For complete examples**, see [llms.txt](../llms.txt) JOSE section.
 
-**Outbound httpclient JOSE wrapping** (calls TO Visa): `httpclient.JOSETransport` is an `http.RoundTripper` (`httpclient/jose_transport.go`) that **seals** outbound request bodies via `jose.Seal` and **opens** inbound response bodies via `jose.Open`. What those mean is the policy's `Mode`: sign+encrypt and decrypt+verify on the nested JWE-of-JWS default, encrypt-only and decrypt-only on a `SealModeBareJWE` policy, which carries no signature to verify. It sits below the httpclient retry loop, so for a request that carries a body and has an `Outbound` policy set, each retry attempt produces a freshly-sealed request — with a bare-mode `iat` recomputed at seal time only when `Policy.IATMillis` is `true` (important for protocols requiring unique `iat`/`jti` claims per attempt). Configure via `Inner` (delegate transport), `Outbound`/`Inbound` (`*jose.Policy`), `Resolver` (`jose.KeyResolver`), `MaxResponseBytes` (caps the inbound response read; defaults to `DefaultMaxJOSEBodyBytes`, 10 MiB), and the optional `Envelope` (a `httpclient.BodyEnvelope`, whose `Wrap`/`Unwrap` shape the body on the wire). With `Envelope` nil — the default — the compact itself is the request body and only `application/jose` responses are unwrapped, other Content-Types passing through untouched, mirroring the server's hybrid error envelope; when `Envelope` and `Inbound` are both set, it replaces that Content-Type rule with `Unwrap`'s verdict and buffers every eligible response body (still capped) before it runs. `httpclient.VisaMLEEnvelope()` returns the `BodyEnvelope` implementing Visa MLE's `{"encData":"<compact>"}` JSON envelope, recognized inbound by shape — see [httpclient.md](httpclient.md#jose-body-envelopes-visa-message-level-encryption). Only bodies are protected. A request that carries no body is not sealed and goes out with its headers unchanged, whatever the method — so a payload-free `POST` is *not* signed either. A response that net/http guarantees is empty (`1xx`, `204`, `304`, and any reply to `HEAD`) is returned as-is even when it advertises `application/jose`; without an `Envelope`, every other `application/jose` response is decrypted and verified as before. The boundary is deliberately net/http's guarantee rather than the RFC's bodyless set — `205` and a `2xx` answer to `CONNECT` carry no body per RFC 9110, but net/http reads one anyway, so skipping them would hand a peer's unverified bytes to the caller under a status code it chose. See `httpclient/jose_transport_test.go` for usage examples.
+**Outbound httpclient JOSE wrapping** (calls TO Visa): `httpclient.JOSETransport` is an `http.RoundTripper` (`httpclient/jose_transport.go`) that **seals** outbound request bodies via `jose.Seal` and **opens** inbound response bodies via `jose.Open`. What those mean is the policy's `Mode`: sign+encrypt and decrypt+verify on the nested JWE-of-JWS default, encrypt-only and decrypt-only on a `SealModeBareJWE` policy, which carries no signature to verify, and encrypt-then-sign / verify-then-decrypt on a `SealModeJWSofJWE` policy. It sits below the httpclient retry loop, so for a request that carries a body and has an `Outbound` policy set, each retry attempt produces a freshly-sealed request — with a bare-mode `iat` recomputed at seal time only when `Policy.IATMillis` is `true` (important for protocols requiring unique `iat`/`jti` claims per attempt). Configure via `Inner` (delegate transport), `Outbound`/`Inbound` (`*jose.Policy`), `Resolver` (`jose.KeyResolver`), `MaxResponseBytes` (caps the inbound response read; defaults to `DefaultMaxJOSEBodyBytes`, 10 MiB), and the optional `Envelope` (a `httpclient.BodyEnvelope`, whose `Wrap`/`Unwrap` shape the body on the wire). With `Envelope` nil — the default — the compact itself is the request body and only `application/jose` responses are unwrapped, other Content-Types passing through untouched, mirroring the server's hybrid error envelope; when `Envelope` and `Inbound` are both set, it replaces that Content-Type rule with `Unwrap`'s verdict and buffers every eligible response body (still capped) before it runs. `httpclient.VisaMLEEnvelope()` returns the `BodyEnvelope` implementing Visa MLE's `{"encData":"<compact>"}` JSON envelope, recognized inbound by shape — see [httpclient.md](httpclient.md#jose-body-envelopes-visa-message-level-encryption). Only bodies are protected. A request that carries no body is not sealed and goes out with its headers unchanged, whatever the method — so a payload-free `POST` is *not* signed either. A response that net/http guarantees is empty (`1xx`, `204`, `304`, and any reply to `HEAD`) is returned as-is even when it advertises `application/jose`; without an `Envelope`, every other `application/jose` response is decrypted and verified as before. The boundary is deliberately net/http's guarantee rather than the RFC's bodyless set — `205` and a `2xx` answer to `CONNECT` carry no body per RFC 9110, but net/http reads one anyway, so skipping them would hand a peer's unverified bytes to the caller under a status code it chose. See `httpclient/jose_transport_test.go` for usage examples.
 
 ## Bare-JWE mode (Visa Message Level Encryption)
 
@@ -116,10 +117,11 @@ Visa **Message Level Encryption** does not use the nested shape above: an MLE pa
 | --- | --- | --- |
 | `jose.SealModeJWEofJWS` (zero value) | `JWE(JWS(payload))` — sign-then-encrypt / decrypt-then-verify | `A256GCM` |
 | `jose.SealModeBareJWE` | `JWE(payload)` — encrypt only, no signature | `A128GCM` · bare mode only, `A256GCM` |
+| `jose.SealModeJWSofJWE` | `JWS(JWE(payload))` — encrypt-then-sign / verify-then-decrypt | `A256GCM` |
 
-`RSA-OAEP-256` is the only key-wrapping algorithm in either mode; `alg=none`, `HS*`, `RSA1_5` and ECDSA stay rejected in both. `IsAllowedEncFor(mode, enc)` and `AllowedContentEncsFor(mode)` are the mode-aware predicates — `IsAllowedEnc`/`AllowedContentEncs` keep the JWE-of-JWS meaning, so the nested floor stays `A256GCM`, and an unknown mode yields an empty allowlist that rejects every token. Field-level sealing of AMQP events (`jose/sealed`, ADR-097) is a different door and is unaffected: it stays `A256GCM`.
+`RSA-OAEP-256` is the only key-wrapping algorithm in every mode; `alg=none`, `HS*`, `RSA1_5` and ECDSA stay rejected in all of them. `IsAllowedEncFor(mode, enc)` and `AllowedContentEncsFor(mode)` are the mode-aware predicates — `IsAllowedEnc`/`AllowedContentEncs` keep the JWE-of-JWS meaning, so the nested floor stays `A256GCM`, and an unknown mode yields an empty allowlist that rejects every token. Field-level sealing of AMQP events (`jose/sealed`, ADR-097) is a different door and is unaffected: it stays `A256GCM`.
 
-**`KeyAlg` and `Enc` are read on the way in, not only on the way out.** On an outbound policy they are what `Seal` writes; on an **inbound** policy they are what `Open` accepts — it narrows the parser's allowlist to exactly the declared values, in both modes. A bare inbound policy declaring `Enc: josev4.A128GCM` therefore refuses an `A256GCM` token even though bare mode admits both: that token is not the shape the deployment agreed with the peer. The refusal is `JOSE_MALFORMED`, raised by go-jose's compact parse before any key material is touched. `Validate` already rejects a value that is off the mode's allowlist, so declaring one can only ever narrow, never widen. Leaving `Enc` or `KeyAlg` unset on an inbound policy keeps the whole mode-wide allowlist — reachable only with a hand-built policy, since both the tag parser and `Validate` insist on a value.
+**`KeyAlg` and `Enc` are read on the way in, not only on the way out.** On an outbound policy they are what `Seal` writes; on an **inbound** policy they are what `Open` accepts — it narrows the parser's allowlist to exactly the declared values, in every mode. A bare inbound policy declaring `Enc: josev4.A128GCM` therefore refuses an `A256GCM` token even though bare mode admits both: that token is not the shape the deployment agreed with the peer. The refusal is `JOSE_MALFORMED`, raised by go-jose's compact parse before any key material is touched. `Validate` already rejects a value that is off the mode's allowlist, so declaring one can only ever narrow, never widen. Leaving `Enc` or `KeyAlg` unset on an inbound policy keeps the whole mode-wide allowlist — reachable only with a hand-built policy, since both the tag parser and `Validate` insist on a value.
 
 **Use it only when the peer is authenticated out of band.** Nothing in bare mode verifies a signature, so a successful `Open` proves only that the payload was encrypted to your public key — which any holder of that public key can do. Without mTLS or a partner token such as `X-Pay-Token`, turning bare mode on removes sender authentication from that route.
 
@@ -167,15 +169,63 @@ if err != nil {
 **Validation rules** (all enforced by `Policy.Validate()`, and by `Seal` itself before it touches the keystore):
 
 - A bare **outbound** policy declares `EncryptKid` as its **only key identity** — a `SignKid`, `VerifyKid`, `DecryptKid` or any `SigAlg` is `JOSE_POLICY_DIRECTION_MISMATCH`, because bare mode signs nothing. Everything else the policy configures (`KeyAlg`, `Enc`, `Cty`, `Typ`, `IATMillis`, `ProtectedHeaders`) is allowed, as the example above sets. A bare **inbound** policy declares `DecryptKid` as its only key identity, on the same terms — a `SignKid`, `VerifyKid`, `EncryptKid` or any `SigAlg` is the same code.
-- `Typ`, `ProtectedHeaders` and `IATMillis` are **bare-mode outbound only**. On a `SealModeJWEofJWS` policy they are `JOSE_POLICY_MODE_MISMATCH`; on a bare *inbound* policy they are `JOSE_POLICY_DIRECTION_MISMATCH` — nothing would read them on the way in, and accepting them would suggest a header was being enforced.
+- `Typ`, `ProtectedHeaders` and `IATMillis` are **outbound only, and address a JWE the framework builds directly** — bare mode's token, or the inner JWE of `SealModeJWSofJWE`. On a `SealModeJWEofJWS` policy they are `JOSE_POLICY_MODE_MISMATCH`; on any *inbound* policy they are `JOSE_POLICY_DIRECTION_MISMATCH` — nothing would read them on the way in, and accepting them would suggest a header was being enforced.
 - **Collision guard**: a `ProtectedHeaders` key naming a param the framework writes (`alg`, `enc`, `kid`, `cty`, `typ`) or one JOSE reserves is `JOSE_POLICY_HEADER_COLLISION`, never a silent overwrite — as is a hand-written `iat` beside `IATMillis: true`. That is why `typ` is its own field.
-- An unrecognized `Mode` is `JOSE_POLICY_MODE_UNKNOWN`. All four codes are configuration failures raised at validation time, like `JOSE_ALGORITHM_DISALLOWED`; they never reach an HTTP caller.
+- An unrecognized `Mode` is `JOSE_POLICY_MODE_UNKNOWN`. All of these codes are configuration failures raised at validation time, like `JOSE_ALGORITHM_DISALLOWED`; they never reach an HTTP caller.
 
 **What `Open` returns.** The plaintext is the caller's bytes verbatim (there is no JWS to unwrap), `claims` are parsed out of that payload if it carries JWT claims, and the header comes back as `OpenHeader.JWE` — with `.Typ` and `.IATMillis` (epoch milliseconds, `0` when absent or malformed) beside the existing `.Kid`/`.Alg`/`.Enc`/`.Cty`. `OpenHeader.JWS` is the **zero** `jose.Header`: no inner layer exists. A peer that declares a `cty` must agree with the policy's (`JOSE_CTY_REJECTED`), one that omits it is accepted — the same permissive rule the nested path applies. **A bare `Open` refuses `cty: JWS` unconditionally**, whatever `Policy.Cty` says (`JOSE_CTY_REJECTED`): bare mode never carries an inner JWS, so that header means a peer is still sending the nested shape, and the compact JWS must never reach the caller as if it were the payload. `Cty` is therefore the consumer's own content-type pin, not the nested-token guard.
 
 **`jose` does not judge the inbound `iat`.** It reports it and nothing more — the same stance ADR-097 takes on replay for sealed events. The value is a peer-written header — integrity-protected by the JWE authentication tag, but not sender-authenticated — and the tolerance is partner-specific, so the freshness check is the caller's, as `iat`/`exp`/`jti` on the nested path already are.
 
 **Reach**: bare mode is reachable from `jose.Seal` / `jose.Open` (and `jose/testing`'s `SealForTest` / `OpenForTest`, which call them), and from `httpclient.Builder.WithJOSE` for outbound calls — `Build()` skips the `SigAlg` default on a bare-mode policy, so the pair above passes validation as written. There is still no `mode` key in the `jose:` struct-tag grammar, so inbound server routes cannot select it. Visa MLE's `{"encData":"<compact>"}` body envelope is carried by `httpclient`'s `Envelope` field (a `BodyEnvelope`) and the ready-made `httpclient.VisaMLEEnvelope()` — see [httpclient.md](httpclient.md#jose-body-envelopes-visa-message-level-encryption).
+
+## JWS-of-JWE mode (Visa Token Service Issuer API)
+
+Visa's **Token Service Issuer** API inverts the nesting: the body is a compact **JWS whose payload is a compact JWE**, so the signature is the outer layer. `Policy.Mode: jose.SealModeJWSofJWE` selects that shape (ADR-111). `Seal` builds exactly the JWE bare mode builds — `RSA-OAEP-256` + `A256GCM`, `kid`, `Policy.Typ`, `Policy.ProtectedHeaders`, and a millisecond `iat` when `Policy.IATMillis` is set — and signs that compact string **verbatim** as the JWS payload. `Open` reverses it: verify first, then decrypt.
+
+The outer protected header is **fixed by the mode**, not by the policy: `alg` (from `Policy.SigAlg`), `kid` (from `Policy.SignKid`), `typ: "JOSE"`, `cty: "JWE"`, and `iat` in Unix epoch **seconds** — always, whatever `Policy.IATMillis` says about the inner JWE. Setting `Policy.Typ` therefore changes the inner `typ` only.
+
+> **Visa requires `PS256`. Set `SigAlg` explicitly.** The package default is `RS256` (`jose.DefaultSigAlg`), and both algorithms are on the allowlist, so a policy that omits `SigAlg` builds and seals happily — and is then rejected by Visa, not at startup.
+
+`Policy.Cty` is **not written** in this mode: the wire shape carries no inner `cty`, and `httpclient.Builder.WithJOSE` fills `Cty` with its default for every mode, so `Seal` drops it rather than emitting a header Visa does not expect.
+
+**What `Open` enforces**, each with its own code: the body must be a 3-segment compact JWS (`JOSE_OUTER_NOT_JWS` — a 5-segment JWE-outer body is poison here, never a fallback to another mode); the outer `alg` must be exactly `Policy.SigAlg`, checked before any key is touched (`JOSE_ALGORITHM_DISALLOWED`); the signature must verify against `Policy.VerifyKid` (`JOSE_SIGNATURE_INVALID`, or `JOSE_KID_MISSING` / `JOSE_KID_UNKNOWN`); the verified outer header must declare `cty: "JWE"` (`JOSE_CTY_REJECTED`). Only then is the payload handed to the bare opener with `Policy.DecryptKid`.
+
+**Header reporting.** `OpenHeader.JWS` carries the outer layer and `OpenHeader.JWE` the inner one. `OpenHeader.JWS.IATMillis` is always `0` here: the outer `iat` is seconds, and that field states milliseconds. Neither `iat` is judged, exactly as in the other modes.
+
+**Key separation.** Do not point a `DecryptKid` at a route in this mode *and* a bare-JWE route. The inner JWE lifted out of a signed body decrypts on the bare route, where nothing authenticates the sender. An outer signature also attests who *sent* the body, not who encrypted it.
+
+```go
+outbound := &jose.Policy{
+    Direction:  jose.DirectionOutbound,
+    Mode:       jose.SealModeJWSofJWE,
+    SignKid:    "our-vts-signing",         // our private key
+    EncryptKid: "visa-vts-encrypt",        // peer public key
+    SigAlg:     josev4.PS256,              // Visa requires PS256; the default is RS256
+    KeyAlg:     jose.DefaultKeyAlg,        // RSA-OAEP-256
+    Enc:        josev4.A256GCM,
+    Typ:        "JOSE",                    // inner JWE `typ`
+    IATMillis:  true,                      // inner JWE `iat`, epoch MILLISECONDS
+}
+
+inbound := &jose.Policy{
+    Direction:  jose.DirectionInbound,
+    Mode:       jose.SealModeJWSofJWE,
+    DecryptKid: "our-vts-decrypt",
+    VerifyKid:  "visa-vts-verify",
+    SigAlg:     josev4.PS256,              // Open accepts this algorithm and no other
+    KeyAlg:     jose.DefaultKeyAlg,
+    Enc:        josev4.A256GCM,
+}
+
+compact, err := jose.Seal(payload, outbound, resolver) // -> a 3-segment JWS over a 5-segment JWE
+```
+
+**Validation rules**: an outbound policy requires `SignKid` **and** `EncryptKid`; an inbound one requires `VerifyKid` **and** `DecryptKid`; a cross-direction kid is `JOSE_POLICY_DIRECTION_MISMATCH`. `SigAlg` must be on the signature allowlist — this mode signs, so leaving it unset is `JOSE_ALGORITHM_DISALLOWED`. `Enc` is `A256GCM` only. The `ProtectedHeaders` collision guard applies to the inner JWE exactly as in bare mode.
+
+**Reach**: `jose.Seal` / `jose.Open` (and `jose/testing`'s `SealForTest` / `OpenForTest`), and `httpclient.Builder.WithJOSE` in both directions — `Build()` applies the `SigAlg` default here, because this mode signs. There is no `mode` key in the `jose:` struct-tag grammar, so inbound server routes cannot select it.
+
+Byte-stable vectors for this shape live in `jose/testdata/jwsofjwe_vectors.json`, built with go-jose directly rather than through `Seal`; the positive vector's outer signature is checked for the 32-byte PSS salt nimbus-jose-jwt produces. Regenerate with `go test ./jose -update`.
 
 ## Sealing test payloads with curl (seal-payload CLI)
 

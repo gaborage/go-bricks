@@ -201,7 +201,7 @@ func mapVerifyError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {
 	case errors.Is(err, cryptoadapter.ErrParseSigned):
 		return &Error{
 			Sentinel: ErrInnerNotJWS,
-			Code:     "JOSE_INNER_NOT_JWS",
+			Code:     codeInnerNotJWS,
 			Status:   400,
 			Message:  "Decrypted payload is not a JWS",
 			Cause:    err,

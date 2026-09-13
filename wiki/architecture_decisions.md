@@ -1538,6 +1538,24 @@ empty-scalar hook deliberately do not, because "is there a resolvable value" mus
 defaults. `preloadDeniedPrefixes` is retired; `derivationDeniedPrefixes` stays. Non-breaking:
 no exported identifier or error string moves.
 
+### [ADR-111: JWS-of-JWE Is a Third Seal Mode, Not a Second Door](adr_111_jose_jws_of_jwe_mode.md)
+
+**Date:** 2026-09-13 | **Status:** Accepted
+
+The Visa Token Service **Issuer** API inverts the nesting `jose` already spoke: its bodies are a
+compact JWS whose payload is a compact JWE, so the signature is the outer layer. `Policy.Mode`
+gains `SealModeJWSofJWE` on ADR-107's precedent — a wire shape is a field on the Policy, not a
+second door, so `jose.Seal` / `jose.Open` and `httpclient.Builder.WithJOSE` speak it in both
+directions and no signing primitive is exported. `Seal` reuses the bare-mode JWE builder minus
+`cty` (the shape carries none, and `WithJOSE` fills `Policy.Cty` for every mode) and signs that
+compact string verbatim under a header the mode fixes: `typ: JOSE`, `cty: JWE`, `kid`, `alg`, and
+`iat` in epoch SECONDS whatever `Policy.IATMillis` says about the inner JWE. `Open` verifies
+before it decrypts, pins the outer `alg` to exactly `Policy.SigAlg` — stricter than the nested
+path's allowlist verify — requires `cty: JWE` on the verified header, and refuses any body that is
+not a 3-segment compact JWS with the new `JOSE_OUTER_NOT_JWS`; a 5-segment JWE-outer body is
+poison, never a fallback to another mode. Neither `iat` is judged. Not breaking: an appended enum
+member with no config key and no tag key.
+
 ### [ADR-107: Bare-JWE Mode Is a Field on the Policy, Not a Second Door](adr_107_jose_bare_jwe_mode.md)
 
 **Date:** 2026-09-09 | **Status:** Accepted | **Breaking:** `jose.Policy` gains a `map[string]any` field and stops being comparable — `==` and map-key use on it no longer compile
@@ -2396,7 +2414,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-109) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-111) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
