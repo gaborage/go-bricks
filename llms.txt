@@ -3573,6 +3573,10 @@ DLQ); there is no accept-unsealed mode. Fields you seal likely belong in
 `log.sensitivefields` too.
 Minting a test body from the shell (openssl fixture keys, `cmd/seal-event`, `rabbitmqadmin
 publish`): [wiki/sealing.md#minting-test-events-with-rabbitmqadmin-seal-event-cli](wiki/sealing.md#minting-test-events-with-rabbitmqadmin-seal-event-cli).
+Inspecting one from the shell (`cmd/open-event` — the consumer-role mirror: verifies and
+decrypts through the same rule chain, prints the envelope plus the document with the subject
+rendered `"<redacted>"`, exits 3 with the `SEAL_*` code on a refusal):
+[wiki/sealing.md#inspecting-sealed-events-open-event-cli](wiki/sealing.md#inspecting-sealed-events-open-event-cli).
 
 ### Concurrency Tuning Per Consumer
 

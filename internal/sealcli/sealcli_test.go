@@ -263,3 +263,59 @@ func TestReadPayload(t *testing.T) {
 type iotest struct{}
 
 func (iotest) Read([]byte) (int, error) { return 0, assert.AnError }
+
+// TestReadPayloadSizeCap pins BOTH sides of the ceiling: exactly MaxPayloadBytes is read
+// back whole, and one byte more is refused — on the stdin path and the file path alike.
+func TestReadPayloadSizeCap(t *testing.T) {
+	atLimit := bytes.Repeat([]byte("a"), int(MaxPayloadBytes))
+	overLimit := bytes.Repeat([]byte("a"), int(MaxPayloadBytes)+1)
+
+	sources := []struct {
+		name string
+		read func(t *testing.T, data []byte) ([]byte, error)
+	}{
+		{
+			name: "stdin",
+			read: func(_ *testing.T, data []byte) ([]byte, error) {
+				return ReadPayloadCapped("-", bytes.NewReader(data), MaxPayloadBytes)
+			},
+		},
+		{
+			name: "file",
+			read: func(t *testing.T, data []byte) ([]byte, error) {
+				return ReadPayloadCapped(writeFile(t, "payload.bin", data), bytes.NewBufferString("STDIN"), MaxPayloadBytes)
+			},
+		},
+	}
+
+	for _, src := range sources {
+		t.Run(src.name, func(t *testing.T) {
+			t.Run("exactly_at_the_limit_is_accepted", func(t *testing.T) {
+				got, err := src.read(t, atLimit)
+				require.NoError(t, err)
+				assert.Len(t, got, int(MaxPayloadBytes))
+			})
+
+			t.Run("one_byte_over_is_refused", func(t *testing.T) {
+				got, err := src.read(t, overLimit)
+				require.ErrorIs(t, err, ErrPayloadTooLarge)
+				assert.Empty(t, got, "a refused payload must not reach the caller")
+			})
+		})
+	}
+}
+
+// TestReadPayloadUncappedReadsOversized pins that the door the frozen sealing CLIs call
+// still reads past the capped door's ceiling: the cap is the CALLER's choice, not the
+// package's, so adding it to one binary must not shrink the others.
+func TestReadPayloadUncappedReadsOversized(t *testing.T) {
+	oversized := bytes.Repeat([]byte("a"), int(MaxPayloadBytes)+1)
+
+	fromStdin, err := ReadPayload("-", bytes.NewReader(oversized))
+	require.NoError(t, err)
+	assert.Len(t, fromStdin, int(MaxPayloadBytes)+1)
+
+	fromFile, err := ReadPayload(writeFile(t, "big.bin", oversized), bytes.NewBufferString("STDIN"))
+	require.NoError(t, err)
+	assert.Len(t, fromFile, int(MaxPayloadBytes)+1)
+}

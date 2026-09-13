@@ -349,6 +349,71 @@ is the dedup test and re-running the CLI is not. Go test authors do not need the
 mint from a JSON fixture in-process with `sealed.NewDocumentSpec` plus `sealed.SealDocument`,
 which is the same path this CLI runs.
 
+## Inspecting sealed events (open-event CLI)
+
+`cmd/open-event` is the mirror of `seal-event`: it verifies and decrypts one sealed body
+through the production `sealed.OpenDocument` path and prints what the message proved about
+itself. There is no skip-verification mode — it fails exactly where the consume door fails,
+with the same `SEAL_*` code.
+
+```sh
+go install github.com/gaborage/go-bricks/cmd/open-event@latest
+
+open-event -sign-key-file sign.pub.der -encrypt-key-file enc.der \
+  -sign-kid svc-payments-sign-v1 -encrypt-kid aud-core-encrypt-v1 \
+  -subject card -event-type payment.authorized \
+  -tenancy shared -tenant-id t1 body.txt
+```
+
+```text
+JTI:        3f2a6c18-7b91-4d0e-9c3a-5e8b1d24af77
+IssuedAt:   2026-09-13T09:14:22Z
+EventType:  payment.authorized
+TenantID:   t1
+SignKid:    svc-payments-sign-v1
+SignFamily: svc-payments-sign
+EncKid:     aud-core-encrypt-v1
+
+{"order_id":"o-1","amount":100,"card":"<redacted>"}
+```
+
+It holds the CONSUMER role, so its two key flags are the mirror of `seal-event`'s: the sign
+PUBLIC half (`sign.pub.der`, to verify) and the encrypt PRIVATE half (`enc.der`, to
+decrypt) — the same two files the openssl recipe above produced.
+
+**The subject is never printed by default.** Its member keeps its place in the document so
+the shape stays readable, but its value is the fixed literal `"<redacted>"`: no plaintext,
+and no length hint either. `-print-subject` splices the real plaintext instead and writes
+one warning line to stderr first — fixture data only, never a production queue's payload.
+
+Both wire kids are required flags, never read from the unauthenticated protected header,
+and the Logical family is derived from them the way `seal-event` derives it. A kid that
+disagrees with the body is a genuine refusal (`SEAL_KID_FAMILY_MISMATCH`,
+`SEAL_KID_UNKNOWN_GENERATION`), not a pre-check.
+
+`-tenancy` names the tid rule to apply. `shared` requires a signed `tid` equal to
+`-tenant-id` — the flag stands in for the `x-tenant-id` header the delivery pipeline would
+have read. `optional` and `per-tenant` are the SAME rule (`{Expected: tenantID}`: an absent
+tid is accepted, a present one that differs is poison) and differ from `shared` only in
+whether a tid is required — four mode names, three behaviours; both spellings exist so an
+invocation can say which deployment it reproduces. `disabled` — the default — applies no
+rule and surfaces whatever tid the wire carries, so passing `-tenant-id` with it is a usage
+error (exit 2) rather than a value nobody judges.
+
+Exit codes: `0` opened, `1` tool error (bad or unreadable key, unreadable input), `2` usage,
+`3` refused. A refusal prints its code and presence/length details — never a subject byte.
+`-json` emits `{"envelope":{…},"document":…}` on success and `{"code":…,"details":{…}}` on
+refusal, the latter on stdout so one stream carries the whole result; the rule NUMBER is
+omitted from every output, since its numbering is unstable — key on the code. JSON output
+keeps Go's default HTML escaping, so on the wire the placeholder is spelled
+`"\u003credacted\u003e"` and any JSON decoder reads it back as `<redacted>` — match the
+decoded value, never the raw bytes.
+
+`open-event` reads at most 1 MiB from the body file or stdin and refuses a larger input
+before anything parses it, so a mistyped path (a log, a core dump) fails at the door instead
+of being buffered whole. The cap is this binary's alone — `seal-event` and `seal-payload`
+stay uncapped.
+
 ## Residuals
 
 - ≈1.4 KB wire floor per message; ciphertext length reveals the Subject's size class.
