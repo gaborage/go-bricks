@@ -167,7 +167,7 @@ result, err := svc.Process(ctx)  // Uses acme's TestDB
 
 ```go
 // Pinned by TestExpectSessionDocExample in database/testing/doc_example_test.go.
-db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 sess := db.ExpectSession()
 sess.ExpectExec("pg_advisory_lock").WillReturnRowsAffected(1)
 sess.ExpectExec("pg_advisory_unlock").WillReturnRowsAffected(1)
@@ -177,7 +177,7 @@ sess.ExpectTransaction().ExpectExec("UPDATE ledger").WillReturnRowsAffected(3)
 // transaction begun on that session, commits, unlocks, and closes the session.
 svc.RelayLedger(ctx)
 
-dbtest.AssertSessionClosed(t, sess)
+dbtesting.AssertSessionClosed(t, sess)
 ```
 
 **Key Features:**
@@ -187,7 +187,7 @@ dbtest.AssertSessionClosed(t, sess)
 - Transaction tracking (commit/rollback assertions)
 - Vendor-agnostic RowSet builder
 - Partial SQL matching by default (or strict with StrictSQLMatching())
-- Dedicated-session fakes: `db.ExpectSession()` returns a `TestSession` carrying its OWN expectations (never the pool's), and `dbtest.AssertSessionClosed(t, sess)` pins that the session was released
+- Dedicated-session fakes: `db.ExpectSession()` returns a `TestSession` carrying its OWN expectations (never the pool's), and `dbtesting.AssertSessionClosed(t, sess)` pins that the session was released
 
 See [database/testing](../database/testing/) package and llms.txt's "Database Testing" section for full examples.
 

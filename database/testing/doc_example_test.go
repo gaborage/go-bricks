@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	dbtest "github.com/gaborage/go-bricks/database/testing"
+	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
@@ -23,7 +23,7 @@ const (
 // relayLedger is the flow the ExpectSession examples describe: pin a session,
 // take the advisory lock on it, run the UPDATE inside a transaction begun on
 // that session, commit, unlock, and close the session.
-func relayLedger(ctx context.Context, db *dbtest.TestDB) (rowsAffected int64, err error) {
+func relayLedger(ctx context.Context, db *dbtesting.TestDB) (rowsAffected int64, err error) {
 	sess, err := db.Session(ctx)
 	if err != nil {
 		return 0, err
@@ -50,7 +50,8 @@ func relayLedger(ctx context.Context, db *dbtest.TestDB) (rowsAffected int64, er
 	if err != nil {
 		return 0, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	err = tx.Commit(ctx)
+	if err != nil {
 		return 0, err
 	}
 
@@ -66,7 +67,7 @@ func relayLedger(ctx context.Context, db *dbtest.TestDB) (rowsAffected int64, er
 func TestExpectSessionDocExample(t *testing.T) {
 	ctx := context.Background()
 
-	db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 	sess := db.ExpectSession()
 	sess.ExpectExec("pg_advisory_lock").WillReturnRowsAffected(1)
 	sess.ExpectExec("pg_advisory_unlock").WillReturnRowsAffected(1)
@@ -76,8 +77,8 @@ func TestExpectSessionDocExample(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), rows)
-	dbtest.AssertSessionClosed(t, sess)
-	dbtest.AssertTransactionCommitted(t, db)
+	dbtesting.AssertSessionClosed(t, sess)
+	dbtesting.AssertTransactionCommitted(t, db)
 
 	execs := sess.ExecLog()
 	require.Len(t, execs, 2, "the lock and the unlock run on the session, the UPDATE on its transaction")

@@ -1862,7 +1862,7 @@ func TestOrderServiceCreateWithItems(t *testing.T) {
 ```go
 // Pinned by TestExpectSessionDocExample in database/testing/doc_example_test.go.
 func TestLedgerServiceRelay(t *testing.T) {
-    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
     sess := db.ExpectSession()
     sess.ExpectExec("pg_advisory_lock").WillReturnRowsAffected(1)
     sess.ExpectExec("pg_advisory_unlock").WillReturnRowsAffected(1)
@@ -1881,7 +1881,7 @@ func TestLedgerServiceRelay(t *testing.T) {
     err := svc.RelayLedger(ctx)
 
     assert.NoError(t, err)
-    dbtest.AssertSessionClosed(t, sess)
+    dbtesting.AssertSessionClosed(t, sess)
 }
 ```
 
