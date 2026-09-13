@@ -538,6 +538,16 @@ func TestSealPayloadProtectedHeaders(t *testing.T) {
 			assert.Contains(t, stderr, "-protected")
 		})
 	}
+
+	reserved := []string{"alg", "kid", "enc"}
+	for _, name := range reserved {
+		t.Run("reserved_"+name, func(t *testing.T) {
+			stdout, stderr, code := runCLI(bareArgs(fx, "-protected", name+"=x"), []byte(`{}`))
+			require.Equal(t, 1, code, "stdout: %s", stdout)
+			assert.Empty(t, stdout)
+			assert.Contains(t, stderr, "JOSE_POLICY_HEADER_COLLISION")
+		})
+	}
 }
 
 // TestSealPayloadTypAndIATMillis pins -typ and -iat-ms by opening the token
