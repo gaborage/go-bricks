@@ -205,7 +205,7 @@ func TestDecryptAndVerifyRefuseOneByteOverTheCap(t *testing.T) {
 	key := newKey(t)
 	over := strings.Repeat("A", maxPeekHeaderBytes+1)
 
-	_, _, err := Verify(over+".payload.signature", &key.PublicKey, &VerifyOptions{
+	_, _, err := Verify(over+".payload.sig", &key.PublicKey, &VerifyOptions{
 		AllowedSigAlgs: []jose.SignatureAlgorithm{jose.RS256},
 	})
 	require.ErrorIs(t, err, ErrParseSigned)

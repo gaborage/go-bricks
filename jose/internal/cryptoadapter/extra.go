@@ -165,8 +165,14 @@ func boundedSegments(compact string) (trimmed string, segments []string, err err
 	return trimmed, segments, nil
 }
 
-// isBase64URL reports whether s holds only unpadded base64url characters.
+// isBase64URL reports whether s is a well-formed unpadded base64url segment: only alphabet
+// characters, and a length no unpadded encoding can produce (len%4 == 1 leaves 6 bits, which
+// encodes nothing). Rejecting the length here keeps the refusal ErrNotCompact instead of
+// letting go-jose's own decode fail later behind the door's generic parse error.
 func isBase64URL(s string) bool {
+	if len(s)%4 == 1 {
+		return false
+	}
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch {
