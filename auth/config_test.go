@@ -183,13 +183,42 @@ func TestConfigValidateJWKSSourceAcceptsAnEqualStaleCeiling(t *testing.T) {
 	assert.Nil(t, cfg.validateJWKSSource())
 }
 
-// TestConfigValidateJWKSSourceAcceptsZeroCacheDurations pins the deliberate
+// TestConfigValidateJWKSSourceAcceptsTheBoundaryValues pins the inclusive side
+// of the two bounds added for the outage and overflow cases: a refresh floor
+// EQUAL to the stale ceiling still refreshes inside the window, and a body cap
+// exactly at the ceiling is arithmetic-safe.
+func TestConfigValidateJWKSSourceAcceptsTheBoundaryValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{
+			name:   "min_refresh_interval_equal_to_the_stale_ceiling",
+			mutate: func(c *Config) { c.JWKS.MinRefreshInterval = c.JWKS.StaleCeiling },
+		},
+		{
+			name:   "max_body_bytes_exactly_at_the_ceiling",
+			mutate: func(c *Config) { c.JWKS.MaxBodyBytes = maxJWKSBodyBytes },
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig()
+			tc.mutate(&cfg)
+
+			assert.Nil(t, cfg.validateJWKSSource())
+		})
+	}
+}
+
+// TestConfigValidateJWKSSourceAcceptsAZeroTTL pins the deliberate
 // zero-vs-negative line: a zero TTL ("always due for refresh") is a meaningful
-// operating point, so only a negative duration is refused.
-func TestConfigValidateJWKSSourceAcceptsZeroCacheDurations(t *testing.T) {
+// operating point, so only a negative duration is refused. A zero STALE CEILING
+// is no longer among them — it is below every positive refresh floor, which the
+// floor-versus-ceiling rule now rejects as the outage it is.
+func TestConfigValidateJWKSSourceAcceptsAZeroTTL(t *testing.T) {
 	cfg := validConfig()
 	cfg.JWKS.TTL = 0
-	cfg.JWKS.StaleCeiling = 0
 
 	assert.Nil(t, cfg.validateJWKSSource())
 }
@@ -289,6 +318,33 @@ func TestConfigValidateJWKSSourceRejectsInvalidGroups(t *testing.T) {
 			mutate:  func(c *Config) { c.JWKS.MaxBodyBytes = -1 },
 			field:   "auth.jwt.jwks.maxbodybytes",
 			message: "max body bytes must be positive",
+		},
+		{
+			name:    "max_body_bytes_above_the_ceiling",
+			mutate:  func(c *Config) { c.JWKS.MaxBodyBytes = maxJWKSBodyBytes + 1 },
+			field:   "auth.jwt.jwks.maxbodybytes",
+			message: "max body bytes must not exceed",
+		},
+		{
+			// The refresh floor is the background tick's floor too, so a floor
+			// above the ceiling leaves the key set unusable for the gap between
+			// them and every request in that window fails.
+			name: "min_refresh_interval_above_the_stale_ceiling",
+			mutate: func(c *Config) {
+				c.JWKS.TTL = 5 * time.Minute
+				c.JWKS.StaleCeiling = 10 * time.Minute
+				c.JWKS.MinRefreshInterval = time.Hour
+			},
+			field:   "auth.jwt.jwks.minrefreshinterval",
+			message: "min refresh interval must not exceed the stale ceiling",
+		},
+		{
+			name: "min_refresh_interval_one_nanosecond_above_the_stale_ceiling",
+			mutate: func(c *Config) {
+				c.JWKS.MinRefreshInterval = c.JWKS.StaleCeiling + time.Nanosecond
+			},
+			field:   "auth.jwt.jwks.minrefreshinterval",
+			message: "min refresh interval must not exceed the stale ceiling",
 		},
 	}
 

@@ -107,6 +107,14 @@ const (
 
 	defaultAuthJWKSMaxBodyBytes = int64(1 << 20) // 1 MiB cap on a fetched key set body
 
+	// MaxAuthJWKSBodyBytes caps auth.jwt.jwks.maxbodybytes. A key set document is
+	// a few kilobytes; 16 MiB is already four orders of magnitude past any real
+	// issuer. The bound exists so the cap stays arithmetic-safe downstream — a
+	// value near math.MaxInt64 makes every "is this body over the cap?" check
+	// meaningless or overflowing — and so an operator's stray digit cannot turn
+	// the body cap into no cap at all.
+	MaxAuthJWKSBodyBytes = int64(16 << 20)
+
 	// MaxAuthLeeway caps auth.jwt.leeway. Leeway exists to absorb clock skew
 	// between the issuer and this service, so the conventional OIDC allowance of
 	// five minutes is its ceiling: a larger value widens the exp/nbf/iat windows

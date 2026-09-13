@@ -183,6 +183,37 @@ func TestCheckAuthRejectsInvalidSections(t *testing.T) {
 			field:   fieldAuthJWKSStaleCeiling,
 			message: "must be greater than or equal to auth.jwt.jwks.ttl",
 		},
+		{
+			name: "max_body_bytes_above_the_ceiling_with_a_jwks_uri",
+			mutate: func(c *AuthConfig) {
+				c.JWT.JWKSURI = testAuthJWKSURI
+				c.JWT.JWKS.MaxBodyBytes = MaxAuthJWKSBodyBytes + 1
+			},
+			field:   fieldAuthJWKSMaxBodyBytes,
+			message: "must not exceed",
+		},
+		{
+			// ttl 5m / staleceiling 10m / minrefreshinterval 1h leaves the key
+			// set unusable for 50 minutes of every hour.
+			name: "min_refresh_interval_above_the_stale_ceiling_with_a_jwks_uri",
+			mutate: func(c *AuthConfig) {
+				c.JWT.JWKSURI = testAuthJWKSURI
+				c.JWT.JWKS.TTL = 5 * time.Minute
+				c.JWT.JWKS.StaleCeiling = 10 * time.Minute
+				c.JWT.JWKS.MinRefreshInterval = time.Hour
+			},
+			field:   fieldAuthJWKSMinRefresh,
+			message: "must not exceed auth.jwt.jwks.staleceiling",
+		},
+		{
+			name: "min_refresh_interval_one_nanosecond_above_the_stale_ceiling",
+			mutate: func(c *AuthConfig) {
+				c.JWT.JWKSURI = testAuthJWKSURI
+				c.JWT.JWKS.MinRefreshInterval = c.JWT.JWKS.StaleCeiling + time.Nanosecond
+			},
+			field:   fieldAuthJWKSMinRefresh,
+			message: "must not exceed auth.jwt.jwks.staleceiling",
+		},
 	}
 
 	for _, tt := range tests {
@@ -207,6 +238,31 @@ func TestCheckAuthRejectsInvalidSections(t *testing.T) {
 func TestCheckAuthAcceptsAnEqualStaleCeiling(t *testing.T) {
 	cfg := defaultedAuth()
 	cfg.JWT.JWKS.StaleCeiling = cfg.JWT.JWKS.TTL
+
+	assert.NoError(t, checkAuth(cfg))
+}
+
+// TestCheckAuthBoundsOnlyApplyWithAJWKSURI pins the conditional half of the two
+// rules a fetching resolver makes live: a pinned-key deployment fetches nothing,
+// so neither the body-cap ceiling nor the floor-versus-ceiling rule is its
+// business. Both values below would be rejected with a URI set.
+func TestCheckAuthBoundsOnlyApplyWithAJWKSURI(t *testing.T) {
+	cfg := defaultedAuth()
+	cfg.JWT.JWKSURI = ""
+	cfg.JWT.JWKS.MaxBodyBytes = MaxAuthJWKSBodyBytes + 1
+	cfg.JWT.JWKS.MinRefreshInterval = cfg.JWT.JWKS.StaleCeiling + time.Nanosecond
+
+	assert.NoError(t, checkAuth(cfg))
+}
+
+// TestCheckAuthAcceptsTheInclusiveBounds pins the accepting side of both new
+// rules: a refresh floor EQUAL to the stale ceiling and a body cap exactly at
+// the ceiling.
+func TestCheckAuthAcceptsTheInclusiveBounds(t *testing.T) {
+	cfg := defaultedAuth()
+	cfg.JWT.JWKSURI = testAuthJWKSURI
+	cfg.JWT.JWKS.MaxBodyBytes = MaxAuthJWKSBodyBytes
+	cfg.JWT.JWKS.MinRefreshInterval = cfg.JWT.JWKS.StaleCeiling
 
 	assert.NoError(t, checkAuth(cfg))
 }
