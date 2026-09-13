@@ -61,19 +61,20 @@ type Policy struct {
 	Enc    jose.ContentEncryption
 	Cty    string
 
-	// Typ is the JWE protected `typ` header written by Seal. SealModeBareJWE OUTBOUND
-	// only; Visa Message Level Encryption expects "JOSE".
+	// Typ is the JWE protected `typ` header written by Seal. SealModeBareJWE and
+	// SealModeJWSofJWE (inner JWE) OUTBOUND only; Visa Message Level Encryption expects "JOSE".
 	Typ string
 
 	// ProtectedHeaders are copied verbatim into the JWE protected header by Seal.
-	// SealModeBareJWE OUTBOUND only. Naming a param the framework owns (alg, enc, kid, cty, typ) or one JOSE
-	// reserves is a validation error, never an overwrite.
+	// SealModeBareJWE and SealModeJWSofJWE (inner JWE) OUTBOUND only. Naming a param the
+	// framework owns (alg, enc, kid, cty, typ) or one JOSE reserves is a validation error,
+	// never an overwrite.
 	ProtectedHeaders map[string]any
 
 	// IATMillis makes Seal stamp an `iat` protected header holding Unix epoch
 	// MILLISECONDS at seal time — the Visa MLE convention, not the seconds-based JWT
-	// claim of the same name. SealModeBareJWE OUTBOUND only. jose never judges its freshness on
-	// the way in; that is the caller's policy.
+	// claim of the same name. SealModeBareJWE and SealModeJWSofJWE (inner JWE) OUTBOUND
+	// only. jose never judges its freshness on the way in; that is the caller's policy.
 	IATMillis bool
 }
 
@@ -118,14 +119,18 @@ func (p *Policy) validateMode() error {
 			}
 		}
 		return nil
-	case SealModeBareJWE:
+	case SealModeBareJWE, SealModeJWSofJWE:
 		return p.validateBareHeaders()
 	default:
-		return &Error{
-			Sentinel: ErrPolicyMismatch,
-			Code:     codePolicyModeUnknown,
-			Message:  "unknown seal mode " + p.Mode.String(),
-		}
+		return errUnknownMode(p.Mode)
+	}
+}
+
+func errUnknownMode(m SealMode) *Error {
+	return &Error{
+		Sentinel: ErrPolicyMismatch,
+		Code:     codePolicyModeUnknown,
+		Message:  "unknown seal mode " + m.String(),
 	}
 }
 
@@ -166,11 +171,25 @@ func (p *Policy) validateDirection() error {
 	}
 	switch p.Direction {
 	case DirectionInbound:
-		return p.validateInbound()
+		if err := p.validateInbound(); err != nil {
+			return err
+		}
+		if p.Mode == SealModeJWSofJWE && p.hasSealHeaderFields() {
+			return errSealHeadersOutboundOnly()
+		}
+		return nil
 	case DirectionOutbound:
 		return p.validateOutbound()
 	default:
 		return errUnknownDirection()
+	}
+}
+
+func errSealHeadersOutboundOnly() *Error {
+	return &Error{
+		Sentinel: ErrPolicyMismatch,
+		Code:     codePolicyDirectionMismatch,
+		Message:  "typ, protected headers and iat stamping are outbound-only",
 	}
 }
 
@@ -232,6 +251,10 @@ const (
 	// must be established out of band (X-Pay-Token, mTLS); jose authenticates nothing
 	// about the sender in this mode.
 	SealModeBareJWE
+	// SealModeJWSofJWE encrypts first and signs the resulting compact JWE: a JWS outer
+	// (cty: JWE) over the same inner JWE bare mode builds — the Visa Token Service
+	// Issuer shape.
+	SealModeJWSofJWE
 )
 
 func (m SealMode) String() string {
@@ -240,6 +263,8 @@ func (m SealMode) String() string {
 		return "jwe-of-jws"
 	case SealModeBareJWE:
 		return "bare-jwe"
+	case SealModeJWSofJWE:
+		return "jws-of-jwe"
 	default:
 		return "unknown"
 	}
@@ -282,11 +307,7 @@ func (p *Policy) validateBareDirection() error {
 		// nothing would ever read them, and silently ignoring them would let a consumer
 		// believe a header was enforced on the way in.
 		if p.hasSealHeaderFields() {
-			return &Error{
-				Sentinel: ErrPolicyMismatch,
-				Code:     codePolicyDirectionMismatch,
-				Message:  "typ, protected headers and iat stamping are outbound-only",
-			}
+			return errSealHeadersOutboundOnly()
 		}
 		return nil
 	case DirectionOutbound:

@@ -45,8 +45,12 @@ func Seal(payload []byte, p *Policy, r KeyResolver) (string, error) {
 		return "", err
 	}
 
-	if p.Mode == SealModeBareJWE {
+	switch p.Mode {
+	case SealModeJWEofJWS:
+	case SealModeBareJWE:
 		return sealBare(payload, p, r)
+	default:
+		return "", errUnknownMode(p.Mode)
 	}
 
 	signKey, err := r.PrivateKey(p.SignKid)

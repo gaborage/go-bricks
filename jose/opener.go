@@ -43,8 +43,12 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 		return nil, nil, OpenHeader{}, policyErr
 	}
 
-	if p.Mode == SealModeBareJWE {
+	switch p.Mode {
+	case SealModeJWEofJWS:
+	case SealModeBareJWE:
 		return openBare(compact, p, r)
+	default:
+		return nil, nil, OpenHeader{}, errUnknownMode(p.Mode)
 	}
 
 	decKey, err := r.PrivateKey(p.DecryptKid)
