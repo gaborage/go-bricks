@@ -54,6 +54,18 @@ func TestSessionOracle(t *testing.T) {
 		sess, err := conn.Session(ctx)
 		require.NoError(t, err, "Session should acquire a pinned connection")
 
+		// Close is not idempotent, and a require FailNow below would otherwise
+		// leave the pinned connection checked out for the remaining subtests and
+		// the schema teardown. A bool guard (rather than tolerating
+		// sql.ErrConnDone) keeps the asserted close the only one on the happy
+		// path, so a genuine double-close would still be a test failure.
+		closed := false
+		t.Cleanup(func() {
+			if !closed {
+				_ = sess.Close()
+			}
+		})
+
 		assert.Equal(t, baseline+1, conn.DB.Stats().InUse,
 			"an open session should hold exactly one additional pooled connection")
 
@@ -68,9 +80,10 @@ func TestSessionOracle(t *testing.T) {
 		assert.NotEqual(t, first, poolIdentity,
 			"the pool must serve a different Oracle session while the pinned session is open")
 
-		// No deferred Close: Close is not idempotent, so the asserted one below
-		// is the only one, exactly as the PostgreSQL twin does it.
+		// The asserted Close is the only one on the happy path; the guard above
+		// disarms the cleanup fallback, exactly as the PostgreSQL twin does it.
 		require.NoError(t, sess.Close())
+		closed = true
 		assert.Equal(t, baseline, conn.DB.Stats().InUse,
 			"closing the session should return its connection to the pool")
 
