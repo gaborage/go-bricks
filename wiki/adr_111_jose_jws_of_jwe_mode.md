@@ -47,7 +47,7 @@ exactly as in bare mode.
 | Condition | Code |
 | --- | --- |
 | Body is not a 3-segment compact JWS (a 5-segment JWE-outer body included) | `JOSE_OUTER_NOT_JWS` |
-| Outer `alg` is not exactly `Policy.SigAlg` | `JOSE_ALGORITHM_DISALLOWED` |
+| Outer `alg` is not exactly `Policy.SigAlg` | `JOSE_ALGORITHM_DISALLOWED` (also the configuration-time code `Policy.Validate` returns for an off-allowlist or unset `SigAlg`, so not every occurrence is a peer-token failure) |
 | Outer `kid` missing / not `Policy.VerifyKid` | `JOSE_KID_MISSING` / `JOSE_KID_UNKNOWN` |
 | Signature does not verify | `JOSE_SIGNATURE_INVALID` |
 | Verified outer header lacks `cty: JWE` | `JOSE_CTY_REJECTED` |
@@ -93,9 +93,11 @@ milliseconds, and the outer `iat` is seconds. No exported field was added for it
 - **`Policy.Cty` is silently unused on this outbound path.** It is documented on the field
   and here; nothing else in the package ignores a set field, so this is the exception a
   reader must know about.
-- **The `SigAlg` default is a live footgun for Visa consumers.** `jose.DefaultSigAlg` is
-  `RS256` and `WithJOSE` applies it, so a policy that omits `SigAlg` builds, validates and
-  seals — and is rejected by Visa at runtime. The mode does not force `PS256`, because the
+- **The `SigAlg` default is a live footgun for Visa consumers, on the builder path only.**
+  `jose.DefaultSigAlg` is `RS256` and `httpclient.Builder.Build` fills it into a normalized
+  copy BEFORE validating, so a policy that omits `SigAlg` builds, validates and seals — and
+  is rejected by Visa at runtime. A hand-built policy handed straight to `jose.Seal`,
+  `jose.Open` or `Policy.Validate` is refused there and then, since nothing defaults it. The mode does not force `PS256`, because the
   framework allowlist is not a Visa profile; `wiki/jose.md`, `llms.txt` and the README all
   say to set it explicitly.
 - **Sharing a `DecryptKid` across modes is now a deployment hazard.** The inner JWE lifted
