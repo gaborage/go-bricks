@@ -2483,14 +2483,6 @@ func TestValidateNamedDatabasesNoConflictWhenMultitenantDisabled(t *testing.T) {
 	assert.NoError(t, err, "no conflict when multitenant is disabled")
 }
 
-type socketHostCase struct {
-	name        string
-	host        string
-	tls         TLSConfig
-	wantField   string
-	wantMessage string
-}
-
 func TestIsUnixSocketHost(t *testing.T) {
 	tests := []struct {
 		name string
@@ -3165,6 +3157,13 @@ func TestApplyDatabasePoolDefaultsRefusesEmptyPostgresHost(t *testing.T) {
 // TestApplyDatabasePoolDefaultsRefusesTLSOnUnixSocketHost pins the ADR-062 host-transport amendment.
 func TestApplyDatabasePoolDefaultsRefusesTLSOnUnixSocketHost(t *testing.T) {
 	const socketHost = "/var/run/postgresql"
+	type socketHostCase struct {
+		name        string
+		host        string
+		tls         TLSConfig
+		wantField   string
+		wantMessage string
+	}
 	socketRefusal := func(name, host string, tls TLSConfig) socketHostCase {
 		return socketHostCase{name: name, host: host, tls: tls, wantField: fieldDatabaseTLS, wantMessage: "unix socket"}
 	}
