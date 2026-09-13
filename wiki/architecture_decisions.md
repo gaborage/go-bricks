@@ -1607,7 +1607,8 @@ The filter judged values by field NAME and reflected structs field by field, so 
 fields from its own rendering had them logged anyway through `Interface` and `WithFields`. A
 dedicated `logger.Redactor` (`RedactedForLog() any`, implemented with a value receiver) is now
 consulted in the shared dispatch — after the sensitive-key match, nil and depth handling, before the
-opaque-payload door and any reflection — so every door and depth honors it. `json.Marshaler` was
+opaque-payload door and any reflection — so a filtered `Interface` or `WithFields` call honors it,
+nested values included. `json.Marshaler` was
 rejected: it serves the wire, not logs, and honoring it would silently change existing output. The
 returned value is filtered at depth minus one with the hook consulted only on its children, so a
 hook returning its own type terminates. `Err` and `ErrorRedactor` are untouched; non-implementing
