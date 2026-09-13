@@ -1540,7 +1540,7 @@ no exported identifier or error string moves.
 
 ### [ADR-107: Bare-JWE Mode Is a Field on the Policy, Not a Second Door](adr_107_jose_bare_jwe_mode.md)
 
-**Date:** 2026-09-09 | **Status:** Accepted | **Breaking:** `jose.Policy` gains a `map[string]any` field and stops being comparable — `==` and map-key use on it no longer compile
+**Date:** 2026-09-09 (amended 2026-09-13, #1579) | **Status:** Accepted | **Breaking:** `jose.Policy` gains a `map[string]any` field and stops being comparable — `==` and map-key use on it no longer compile; and, per the amendment, a 2xx response `JOSETransport` did not unwrap is now a transport error
 
 `jose` shipped one wire shape, nested JWE-of-JWS, and Visa Message Level Encryption does not
 have it: a single compact JWE with no inner JWS, `A128GCM` content encryption, `typ: "JOSE"`,
@@ -1563,9 +1563,18 @@ bare mode decrypts and reports `OpenHeader.JWE.IATMillis` without judging freshn
 ADR-097 set for replay; `Header` gained scalar fields rather than a map so it stays comparable.
 `Seal` now runs mode, algorithm and direction validation before touching the keystore in both
 modes. Compiler-caught on the consumer side: comparing two `jose.Policy` values or keying a map
-on one stops building — compare the fields you care about, or key on the kids. Bare mode is
-reachable only through `jose.Seal`/`jose.Open` this round; the `httpclient` envelope hooks land
-in the next stacked PR. See [migrations.md](migrations.md) `[C64.15]`.
+on one stops building — compare the fields you care about, or key on the kids. The `httpclient`
+envelope hooks (`BodyEnvelope`, `VisaMLEEnvelope`, `JOSEConfig.Envelope`) landed alongside, so
+bare mode is reachable through a built client as well as through `jose.Seal`/`jose.Open`.
+
+**Amendment (2026-09-13, #1579):** `JOSETransport` no longer passes an unrecognized 2xx body
+through. Under an `Inbound` policy a successful response must have been unwrapped — in nested
+mode `application/jose` plus a successful `jose.Open`, in envelope mode `Unwrap` ok plus the
+same — or `RoundTrip` returns `httpclient.ErrJOSEPlaintextResponse` wrapped with the status,
+with the body closed and never handed to the caller or to a response interceptor.
+Non-2xx pass-through is unchanged; 204/304/HEAD stay skipped; every crypto failure keeps
+failing closed as before. `AllowPlaintextSuccess` on `JOSETransport`/`JOSEConfig` is the Strangler-migration opt-out.
+See [migrations.md](migrations.md) `[C64.15]` and `[C65.1]`.
 
 ---
 

@@ -315,7 +315,8 @@ type JOSEConfig struct {
 	// Inbound is optional: when set, application/jose response bodies are opened
 	// (decrypt+verify, or decrypt-only under SealModeBareJWE).
 	// Plaintext responses (e.g., pre-trust error envelopes from the counterparty) pass
-	// through unmodified.
+	// through unmodified on a failure status; on a 2xx they are refused as
+	// ErrJOSEPlaintextResponse unless AllowPlaintextSuccess is set.
 	Inbound *jose.Policy
 	// Resolver supplies keys for both Outbound and Inbound directions.
 	Resolver jose.KeyResolver
@@ -332,6 +333,8 @@ type JOSEConfig struct {
 	// because Unwrap replaces the Content-Type gate and every response body would then be
 	// buffered without limit.
 	MaxResponseBytes int64
+	// AllowPlaintextSuccess is the JOSETransport field of the same name; see its doc.
+	AllowPlaintextSuccess bool
 }
 
 // WithJOSE configures a JOSETransport that seals outbound request bodies and opens
@@ -384,7 +387,8 @@ func (b *Builder) WithJOSE(cfg JOSEConfig) *Builder {
 				Resolver: b.joseConfig.Resolver,
 				Envelope: b.joseConfig.Envelope,
 
-				MaxResponseBytes: b.joseConfig.MaxResponseBytes,
+				MaxResponseBytes:      b.joseConfig.MaxResponseBytes,
+				AllowPlaintextSuccess: b.joseConfig.AllowPlaintextSuccess,
 			}
 		})
 	}
@@ -1039,6 +1043,12 @@ func (c *client) handleBuildRespError(ctx context.Context, err error, attempt, m
 // and waits with context if appropriate. Returns (true, nil) to retry, or (false, err)
 // when no retry should occur and an error should be propagated.
 func (c *client) shouldRetryOnError(ctx context.Context, err error, attempt, maxRetries int) (bool, error) {
+	// Terminal: the peer answered 2xx, so it already honored the request. A retry would
+	// re-send it — duplicating any non-idempotent side effect — and the verdict cannot
+	// change, since the response was refused for what it lacked, not for a transport fault.
+	if errors.Is(err, ErrJOSEPlaintextResponse) {
+		return false, NewNetworkError("request execution failed", err)
+	}
 	if c.isTimeout(err) {
 		if attempt < maxRetries {
 			if werr := c.backoffWithContext(ctx, attempt); werr != nil {
