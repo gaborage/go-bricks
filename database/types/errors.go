@@ -65,6 +65,20 @@ var (
 	// statement is refused here rather than rejected by the database at run time.
 	ErrRowLockWithPagination = errors.New("a row lock cannot be combined with Limit/Offset on Oracle (row_limiting_clause restriction)")
 
+	// ErrUpsertConflictColumnsRequired is returned when BuildUpsert is called with
+	// no conflict columns.
+	ErrUpsertConflictColumnsRequired = errors.New("conflict columns required for upsert")
+
+	// ErrUpsertConflictColumnNotInserted is returned when a BuildUpsert conflict
+	// column names no column of insertColumns. It is wrapped with the offending
+	// column.
+	ErrUpsertConflictColumnNotInserted = errors.New("conflict column must be present in insert columns for upsert")
+
+	// ErrUpsertConflictColumnUpdated is returned when a BuildUpsert conflict column
+	// is also an update column, which Oracle's MERGE cannot express (ORA-38104);
+	// it is rejected on every vendor for parity. It is wrapped with both columns.
+	ErrUpsertConflictColumnUpdated = errors.New("update column collides with conflict column (Oracle MERGE forbids updating ON-clause columns, ORA-38104; rejected on all vendors for parity)")
+
 	// ErrNilSubquery is returned when ValidateSubquery() is called with nil subquery.
 	ErrNilSubquery = errors.New("subquery cannot be nil")
 

@@ -625,6 +625,10 @@ type QueryBuilderInterface interface {
 	// you (SELECT ... FOR UPDATE or equivalent). Splitting one atomic upsert into
 	// two statements lets a concurrent writer interleave, and under READ COMMITTED
 	// a shared transaction alone does not stop it.
+	//
+	// Match these three preconditions with errors.Is, never by message text:
+	// ErrUpsertConflictColumnsRequired, ErrUpsertConflictColumnNotInserted and
+	// ErrUpsertConflictColumnUpdated.
 	BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error)
 
 	// Database function builders

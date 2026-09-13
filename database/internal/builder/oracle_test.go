@@ -815,9 +815,7 @@ func TestBuildUpsertOracleRejectsConflictColumnInUpdateSet(t *testing.T) {
 			sql, _, err := qb.BuildUpsert("users", tt.conflictColumns, tt.insertColumns, tt.updateColumns)
 
 			if tt.wantErrColumn != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "collides with conflict column")
-				assert.Contains(t, err.Error(), "ORA-38104")
+				require.ErrorIs(t, err, dbtypes.ErrUpsertConflictColumnUpdated)
 				assert.Contains(t, err.Error(), tt.wantErrColumn,
 					"error must name the overlapping column, not merely the first conflict column")
 				return
