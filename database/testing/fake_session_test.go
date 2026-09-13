@@ -23,7 +23,8 @@ func querySession(t *testing.T, sess dbtypes.Session, query string, args ...any)
 	t.Helper()
 	rows, err := sess.Query(t.Context(), query, args...)
 	require.NoError(t, err)
-	require.NoError(t, rows.Close())
+	defer rows.Close()
+	require.NoError(t, rows.Err())
 }
 
 // querySessionErr runs a query expected to fail and returns its error, closing
@@ -32,7 +33,7 @@ func querySessionErr(t *testing.T, sess dbtypes.Session, query string) error {
 	t.Helper()
 	rows, err := sess.Query(t.Context(), query)
 	if rows != nil {
-		require.NoError(t, rows.Close())
+		defer rows.Close()
 	}
 	return err
 }
