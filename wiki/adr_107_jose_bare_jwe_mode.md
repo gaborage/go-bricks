@@ -31,7 +31,8 @@ interceptor that would log, cache or re-parse the payload is never handed unauth
 bytes. **One WARN, direction, status, peer and request id only**: the error and the log line name which peer
 answered and with what status — the line also carrying the `request_id` the transport can
 read off the outbound request or its context, so an operator can join the refusal to its
-request, omitted under a custom `TraceIDHeader` the transport never sees and whenever neither
+request; a custom `TraceIDHeader` hides the header from the transport, which then reads the
+context instead, and the field is omitted only when neither
 source passes `trace.ValidateRequestID` — and
 nothing from the body — those bytes are precisely what
 must not be reported or logged, being unauthenticated content the peer chose. Naming the
