@@ -201,8 +201,9 @@ Two boundaries. **Failure statuses are unchanged** — a pre-trust error envelop
 plaintext by design, because the peer was never authenticated, so 4xx and 5xx bodies still
 reach the caller with their headers untouched. **Empty successes are not violations**: 204,
 304 and every reply to `HEAD` are shapes net/http guarantees carry no body, so they are
-skipped before the rule applies (205 and a 2xx answer to CONNECT are not such shapes and
-keep reaching `jose.Open`).
+skipped before the rule applies. A 205 and a 2xx answer to CONNECT are not such shapes: a
+JOSE-typed one still reaches `jose.Open` and fails closed there, while a plaintext one is
+refused like every other unopened 2xx.
 
 ```go
 resp, err := client.Post(ctx, &httpclient.Request{URL: peerURL, Body: payload})
