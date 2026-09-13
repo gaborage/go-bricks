@@ -682,10 +682,7 @@ func validatePostgreSQLTLSCoherence(cfg *DatabaseConfig) error {
 // isUnixSocketHost mirrors pgx v5 pgconn isAbsolutePath, which routes a host to a unix
 // socket with TLS skipped; any divergence from pgx reopens the TLS-drop hole.
 func isUnixSocketHost(host string) bool {
-	if strings.HasPrefix(host, "/") {
-		return true
-	}
-	return len(host) >= 3 && host[0] >= 'A' && host[0] <= 'Z' && host[1] == ':' && host[2] == '\\'
+	return strings.HasPrefix(host, "/") || len(host) >= 3 && host[0] >= 'A' && host[0] <= 'Z' && host[1] == ':' && host[2] == '\\'
 }
 
 // validateOracleFields validates Oracle-specific configuration fields.
