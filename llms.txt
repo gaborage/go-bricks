@@ -1532,6 +1532,7 @@ query := qb.Select("*").
     )).
     JoinOn(dbtypes.MustTable("products").MustAs("p"), jf.And(
         jf.EqColumn("p.id", "o.product_id"),
+        // SECURITY: Manual SQL review completed - fixed conversion of a joined column, no user input
         jf.Eq("p.price", qb.MustExpr("TO_NUMBER(o.max_price)")), // Expression support
     )).
     Where(f.Eq("o.status", "pending"))
