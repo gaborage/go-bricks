@@ -1,8 +1,10 @@
 package jose
 
 import (
+	"crypto/rand"
 	"crypto/rsa"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,25 +17,39 @@ import (
 
 // jwsOfJWEFixture mirrors newTestFixture's symmetric kid namespace: Seal signs as
 // "peer-key" and encrypts to "our-key", so Open verifies "peer-key" and decrypts "our-key".
-// One shared key pair backs both kids.
+// The two kids hold DIFFERENT key pairs on purpose: with one pair behind both, a regression
+// that swapped the signing and encryption lookups would still round-trip.
 type jwsOfJWEFixture struct {
-	priv     *rsa.PrivateKey
+	signPriv *rsa.PrivateKey // "peer-key": signs the outer JWS, verifies it
+	encPriv  *rsa.PrivateKey // "our-key": receives the inner JWE, decrypts it
 	resolver *fixtureResolver
 	outbound *Policy
 	inbound  *Policy
 }
 
+// signingKeys is the outer-JWS pair, distinct from bareKeys, which serves the inner JWE.
+// Generated once: the tests only read it.
+var signingKeys = sync.OnceValues(func() (*rsa.PrivateKey, *rsa.PublicKey) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic(err)
+	}
+	return priv, &priv.PublicKey
+})
+
 func newJWSofJWEFixture(t *testing.T) *jwsOfJWEFixture {
 	t.Helper()
-	priv, pub := bareKeys()
+	encPriv, encPub := bareKeys()
+	signPriv, signPub := signingKeys()
 	outbound, inbound := jwsOfJWEOutbound(), jwsOfJWEInbound()
 	outbound.SignKid, outbound.EncryptKid = "peer-key", "our-key"
 	outbound.SigAlg, inbound.SigAlg = jose.PS256, jose.PS256
 	return &jwsOfJWEFixture{
-		priv: priv,
+		signPriv: signPriv,
+		encPriv:  encPriv,
 		resolver: &fixtureResolver{
-			priv: map[string]*rsa.PrivateKey{"our-key": priv, "peer-key": priv},
-			pub:  map[string]*rsa.PublicKey{"our-key": pub, "peer-key": pub},
+			priv: map[string]*rsa.PrivateKey{"our-key": encPriv, "peer-key": signPriv},
+			pub:  map[string]*rsa.PublicKey{"our-key": encPub, "peer-key": signPub},
 		},
 		outbound: outbound,
 		inbound:  inbound,
@@ -42,11 +58,11 @@ func newJWSofJWEFixture(t *testing.T) *jwsOfJWEFixture {
 
 // innerJWE verifies the outer JWS with go-jose directly and returns its payload, the
 // compact inner JWE.
-func innerJWE(t *testing.T, compact string, key *rsa.PrivateKey) string {
+func innerJWE(t *testing.T, compact string, signKey *rsa.PrivateKey) string {
 	t.Helper()
 	jws, err := jose.ParseSigned(compact, []jose.SignatureAlgorithm{jose.PS256})
 	require.NoError(t, err)
-	inner, err := jws.Verify(&key.PublicKey)
+	inner, err := jws.Verify(&signKey.PublicKey)
 	require.NoError(t, err)
 	return string(inner)
 }
@@ -76,9 +92,9 @@ func TestSealJWSofJWESignsTheCompactJWEVerbatim(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, strings.Split(compact, "."), 3)
-	inner := innerJWE(t, compact, f.priv)
+	inner := innerJWE(t, compact, f.signPriv)
 	require.Len(t, strings.Split(inner, "."), 5, "the JWS payload is the compact JWE itself")
-	assert.Equal(t, payload, decryptWithGoJose(t, inner, f.priv, jose.A256GCM))
+	assert.Equal(t, payload, decryptWithGoJose(t, inner, f.encPriv, jose.A256GCM))
 
 	hdr := peekHeader(t, compact)
 	assert.Equal(t, "PS256", hdr.Alg)
@@ -101,7 +117,7 @@ func TestSealJWSofJWEInnerJWECarriesPolicyHeadersButNoCty(t *testing.T) {
 	assert.Less(t, headerIAT(t, compact), int64(100_000_000_000), "outer iat stays seconds under IATMillis")
 	assert.Equal(t, "JWE", peekHeader(t, compact).Cty)
 
-	inner := innerJWE(t, compact, f.priv)
+	inner := innerJWE(t, compact, f.signPriv)
 	hdr := peekHeader(t, inner)
 	assert.Equal(t, "RSA-OAEP-256", hdr.Alg)
 	assert.Equal(t, "A256GCM", hdr.Enc)
@@ -128,7 +144,7 @@ func TestOpenJWSofJWERoundTripReportsBothLayers(t *testing.T) {
 		"the outer iat is seconds, so it is never reported as IATMillis")
 	assert.Equal(t, Header{
 		Kid: "our-key", Alg: "RSA-OAEP-256", Enc: "A256GCM", Typ: "JOSE",
-		IATMillis: headerIAT(t, innerJWE(t, compact, f.priv)),
+		IATMillis: headerIAT(t, innerJWE(t, compact, f.signPriv)),
 	}, hdr.JWE)
 }
 
@@ -178,6 +194,38 @@ func TestOpenJWSofJWEPropagatesVerifyKidFailure(t *testing.T) {
 	requireJOSEErrorCode(t, err, codeKidUnknown)
 }
 
+// The two roles must not be interchangeable. Signing the outer JWS with the ENCRYPTION key,
+// or encrypting the inner JWE to the SIGNING key, has to fail — otherwise a regression that
+// swapped the two lookups would still round-trip through every other test here.
+func TestOpenJWSofJWERefusesSwappedRoleKeys(t *testing.T) {
+	f := newJWSofJWEFixture(t)
+	sealed, err := Seal([]byte(`{"a":1}`), f.outbound, f.resolver)
+	require.NoError(t, err)
+
+	// Outer JWS signed with the encryption key, under the right kid. Built in two steps
+	// because resignOuter verifies with the same key it re-signs with.
+	inner := innerJWE(t, sealed, f.signPriv)
+	wrongSigner, err := cryptoadapter.Sign([]byte(inner), f.encPriv, validOuter())
+	require.NoError(t, err)
+
+	plaintext, _, _, err := Open(wrongSigner, f.inbound, f.resolver)
+	assert.Nil(t, plaintext)
+	requireJOSEErrorCode(t, err, codeSignatureInvalid)
+
+	// Inner JWE encrypted to the signing key, then signed correctly.
+	signPub := &f.signPriv.PublicKey
+	strayInner, err := cryptoadapter.Encrypt([]byte(`{"a":1}`), signPub, &cryptoadapter.EncryptOptions{
+		Kid: "our-key", KeyAlg: DefaultKeyAlg, Enc: jose.A256GCM,
+	})
+	require.NoError(t, err)
+	strayOuter, err := cryptoadapter.Sign([]byte(strayInner), f.signPriv, validOuter())
+	require.NoError(t, err)
+
+	plaintext, _, _, err = Open(strayOuter, f.inbound, f.resolver)
+	assert.Nil(t, plaintext)
+	requireJOSEErrorCode(t, err, codeDecryptFailed)
+}
+
 func TestOpenJWSofJWERefusals(t *testing.T) {
 	f := newJWSofJWEFixture(t)
 	sealed, err := Seal([]byte(`{"a":1}`), f.outbound, f.resolver)
@@ -185,7 +233,7 @@ func TestOpenJWSofJWERefusals(t *testing.T) {
 	outer := func(mutate func(o *cryptoadapter.SignOptions)) string {
 		o := validOuter()
 		mutate(o)
-		return resignOuter(t, f.priv, sealed, o)
+		return resignOuter(t, f.signPriv, sealed, o)
 	}
 	// A byte inside the signature segment, clear of its final character's padding bits.
 	sigByte := strings.LastIndexByte(sealed, '.') + 10
@@ -209,7 +257,7 @@ func TestOpenJWSofJWERefusals(t *testing.T) {
 		{"disallowed_signature_algorithm", outer(func(o *cryptoadapter.SignOptions) { o.SigAlg = jose.RS256 }), codeAlgorithmDisallowed},
 		{"outer_without_cty", outer(func(o *cryptoadapter.SignOptions) { o.Cty = "" }), codeCtyRejected},
 		{"outer_with_other_cty", outer(func(o *cryptoadapter.SignOptions) { o.Cty = "JWS" }), codeCtyRejected},
-		{"jwe_outer_body", innerJWE(t, sealed, f.priv), codeOuterNotJWS},
+		{"jwe_outer_body", innerJWE(t, sealed, f.signPriv), codeOuterNotJWS},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -228,7 +276,7 @@ func TestOpenJWSofJWENeverJudgesIAT(t *testing.T) {
 	stale := validOuter()
 	stale.Extra = map[string]any{"iat": 1}
 
-	plaintext, _, hdr, err := Open(resignOuter(t, f.priv, sealed, stale), f.inbound, f.resolver)
+	plaintext, _, hdr, err := Open(resignOuter(t, f.signPriv, sealed, stale), f.inbound, f.resolver)
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"a":1}`, string(plaintext))
 	assert.Equal(t, int64(1), hdr.JWE.IATMillis)
