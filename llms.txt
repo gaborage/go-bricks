@@ -1860,11 +1860,13 @@ func TestOrderServiceCreateWithItems(t *testing.T) {
 **Dedicated Session Test:**
 
 ```go
+// Pinned by TestExpectSessionDocExample in database/testing/doc_example_test.go.
 func TestLedgerServiceRelay(t *testing.T) {
     db := dbtest.NewTestDB(dbtypes.PostgreSQL)
-    sess := db.ExpectSession().
-        ExpectExec("pg_advisory_lock").WillReturnRowsAffected(1).
-        ExpectExec("UPDATE ledger").WillReturnRowsAffected(3)
+    sess := db.ExpectSession()
+    sess.ExpectExec("pg_advisory_lock").WillReturnRowsAffected(1)
+    sess.ExpectExec("pg_advisory_unlock").WillReturnRowsAffected(1)
+    sess.ExpectTransaction().ExpectExec("UPDATE ledger").WillReturnRowsAffected(3)
 
     deps := &app.ModuleDeps{
         DB: func(ctx context.Context) (database.Interface, error) {
@@ -1872,6 +1874,9 @@ func TestLedgerServiceRelay(t *testing.T) {
         },
     }
 
+    // RelayLedger pins a session with db.Session(ctx), takes the advisory lock
+    // on it, runs the UPDATE inside a transaction begun on that session,
+    // commits, unlocks, and closes the session.
     svc := NewLedgerService(deps)
     err := svc.RelayLedger(ctx)
 

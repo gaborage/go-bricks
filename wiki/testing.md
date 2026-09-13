@@ -166,12 +166,15 @@ result, err := svc.Process(ctx)  // Uses acme's TestDB
 **Dedicated Session Testing:**
 
 ```go
+// Pinned by TestExpectSessionDocExample in database/testing/doc_example_test.go.
 db := dbtest.NewTestDB(dbtypes.PostgreSQL)
-sess := db.ExpectSession().
-    ExpectExec("pg_advisory_lock").WillReturnRowsAffected(1).
-    ExpectExec("UPDATE ledger").WillReturnRowsAffected(3)
+sess := db.ExpectSession()
+sess.ExpectExec("pg_advisory_lock").WillReturnRowsAffected(1)
+sess.ExpectExec("pg_advisory_unlock").WillReturnRowsAffected(1)
+sess.ExpectTransaction().ExpectExec("UPDATE ledger").WillReturnRowsAffected(3)
 
-// Test code that calls db.Session(ctx)
+// RelayLedger pins a session with db.Session(ctx), locks, runs the UPDATE in a
+// transaction begun on that session, commits, unlocks, and closes the session.
 svc.RelayLedger(ctx)
 
 dbtest.AssertSessionClosed(t, sess)
