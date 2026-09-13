@@ -1599,6 +1599,25 @@ the cause or the subject.
 
 ---
 
+### [ADR-110: The Sensitive-Data Filter Consults a `logger.Redactor` Before Reflecting](adr_110_log_filter_redactor_hook.md)
+
+**Date:** 2026-09-12 | **Status:** Accepted
+
+The filter judged values by field NAME and reflected structs field by field, so a type that hid
+fields from its own rendering had them logged anyway through `Interface` and `WithFields`. A
+dedicated `logger.Redactor` (`RedactedForLog() any`, implemented with a value receiver) is now
+consulted in the shared dispatch — after the sensitive-key match, nil and depth handling, before the
+opaque-payload door and any reflection — so every door and depth honors it. `json.Marshaler` was
+rejected: it serves the wire, not logs, and honoring it would silently change existing output. The
+returned value is filtered at depth minus one with the hook consulted only on its children, so a
+hook returning its own type terminates. `Err` and `ErrorRedactor` are untouched; non-implementing
+types render byte-identically.
+
+**Key Benefits:** a type author makes a value log-safe once, everywhere it is logged, with the
+needle list still backstopping the returned shape.
+
+---
+
 ### [ADR-108: Redis TLS Is a Nested Config Block Over a Shared Client-TLS Loader](adr_108_cache_redis_tls.md)
 
 **Date:** 2026-09-11 | **Status:** Accepted
@@ -2396,7 +2415,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-109) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-110) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

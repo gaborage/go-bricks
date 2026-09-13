@@ -2220,3 +2220,221 @@ func TestFilterMasksInsideDefinedStringType(t *testing.T) {
 		assertLoggedFieldJSON(t, buf, "body", want)
 	})
 }
+
+const redactorTestPAN = "4111111111111111"
+
+// redactedCard is a value-receiver self-redacting type.
+type redactedCard struct {
+	Holder string
+	PAN    string
+}
+
+func (c redactedCard) RedactedForLog() any {
+	return map[string]any{"holder": "redacted", "last4": c.PAN[len(c.PAN)-4:]}
+}
+
+const redactedCardJSON = `{"holder":"redacted","last4":"1111"}`
+
+func newRedactedCard() redactedCard {
+	return redactedCard{Holder: "Alice Example", PAN: redactorTestPAN}
+}
+
+func TestFilterRedactorThroughInterface(t *testing.T) {
+	log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+	log.Info().Interface("card", newRedactedCard()).Msg("payment")
+
+	assertLoggedFieldJSON(t, buf, "card", redactedCardJSON)
+	assert.NotContains(t, buf.String(), redactorTestPAN)
+	assert.NotContains(t, buf.String(), "Alice Example")
+}
+
+func TestFilterRedactorThroughWithFields(t *testing.T) {
+	log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+	log.WithFields(map[string]any{"card": newRedactedCard()}).Info().Msg("payment")
+
+	assertLoggedFieldJSON(t, buf, "card", redactedCardJSON)
+	assert.NotContains(t, buf.String(), redactorTestPAN)
+	assert.NotContains(t, buf.String(), "Alice Example")
+}
+
+type cardHolder struct {
+	Card redactedCard `json:"card"`
+}
+
+func TestFilterRedactorNested(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    any
+		wantJSON string
+	}{
+		{name: "struct_field", value: cardHolder{Card: newRedactedCard()}, wantJSON: `{"card":` + redactedCardJSON + `}`},
+		{name: "map_value", value: map[string]any{"card": newRedactedCard()}, wantJSON: `{"card":` + redactedCardJSON + `}`},
+		{name: "slice_element", value: []any{newRedactedCard()}, wantJSON: `[` + redactedCardJSON + `]`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+			log.Info().Interface("body", tt.value).Msg("payment")
+
+			assertLoggedFieldJSON(t, buf, "body", tt.wantJSON)
+			assert.NotContains(t, buf.String(), redactorTestPAN)
+		})
+	}
+}
+
+// selfRedactor returns its own type; the hook must not run on that result.
+type selfRedactor struct {
+	Name string
+	Note string
+}
+
+func (s selfRedactor) RedactedForLog() any {
+	return selfRedactor{Name: s.Name, Note: "redacted"}
+}
+
+func TestFilterRedactorReturningOwnTypeTerminates(t *testing.T) {
+	log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+	log.Info().Interface("body", selfRedactor{Name: "n", Note: "raw"}).Msg("self")
+
+	assertLoggedFieldJSON(t, buf, "body", `{"Name":"n","Note":"redacted"}`)
+}
+
+// outerRedactor returns innerRedactor directly and inside a map. The direct
+// return is walked by reflection (one-shot); the nested child is its own hook.
+type outerRedactor struct{}
+
+func (outerRedactor) RedactedForLog() any { return innerRedactor{Label: "direct"} }
+
+type outerNestingRedactor struct{}
+
+func (outerNestingRedactor) RedactedForLog() any {
+	return map[string]any{"child": innerRedactor{Label: "nested"}}
+}
+
+type innerRedactor struct {
+	Label string
+}
+
+func (innerRedactor) RedactedForLog() any { return "inner-hook" }
+
+func TestFilterRedactorHookRunsOncePerValue(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    any
+		wantJSON string
+	}{
+		{name: "returned_value_is_not_rehooked", value: outerRedactor{}, wantJSON: `{"Label":"direct"}`},
+		{name: "nested_child_is_hooked", value: outerNestingRedactor{}, wantJSON: `{"child":"inner-hook"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+			log.Info().Interface("body", tt.value).Msg("hook")
+
+			assertLoggedFieldJSON(t, buf, "body", tt.wantJSON)
+		})
+	}
+}
+
+type leakyRedactor struct{}
+
+func (leakyRedactor) RedactedForLog() any {
+	return map[string]any{"user": "alice", "password": "still-secret"}
+}
+
+func TestFilterRedactorReturnedShapeIsFiltered(t *testing.T) {
+	log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+	log.Info().Interface("body", leakyRedactor{}).Msg("leaky")
+
+	assertLoggedFieldJSON(t, buf, "body", `{"password":"***","user":"alice"}`)
+	assert.NotContains(t, buf.String(), "still-secret")
+}
+
+func TestFilterRedactorUnderSensitiveKeyMasksWhole(t *testing.T) {
+	log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+	log.Info().Interface("secret", newRedactedCard()).Msg("sensitive")
+
+	assert.Equal(t, "***", loggedField(t, buf, "secret"))
+	assert.NotContains(t, buf.String(), "last4")
+}
+
+// ptrRedactor implements the hook on a POINTER receiver.
+type ptrRedactor struct {
+	Label string
+}
+
+func (*ptrRedactor) RedactedForLog() any { return "ptr-hook" }
+
+func TestFilterRedactorReceiverKinds(t *testing.T) {
+	card := newRedactedCard()
+	tests := []struct {
+		name     string
+		value    any
+		wantJSON string
+	}{
+		// A pointer's method set includes its element's value-receiver methods.
+		{name: "pointer_to_value_receiver", value: &card, wantJSON: redactedCardJSON},
+		{name: "pointer_to_pointer_receiver", value: &ptrRedactor{Label: "raw"}, wantJSON: `"ptr-hook"`},
+		// A bare value's method set excludes pointer-receiver methods, so this is
+		// NOT a Redactor and is walked by reflection — hence the value-receiver advice.
+		{name: "bare_value_of_pointer_receiver", value: ptrRedactor{Label: "raw"}, wantJSON: `{"Label":"raw"}`},
+		{name: "nil_pointer_to_value_receiver", value: (*redactedCard)(nil), wantJSON: `null`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+			require.NotPanics(t, func() {
+				log.Info().Interface("body", tt.value).Msg("receiver")
+			})
+
+			got, err := json.Marshal(loggedField(t, buf, "body"))
+			require.NoError(t, err)
+			assert.JSONEq(t, tt.wantJSON, string(got))
+		})
+	}
+}
+
+// TestFilterRedactorReturnedShapeSpendsOneDepth pins that the returned value is
+// filtered at depth minus one: with one level left it fails closed as a whole.
+func TestFilterRedactorReturnedShapeSpendsOneDepth(t *testing.T) {
+	f := NewSensitiveDataFilter(DefaultFilterConfig())
+
+	got := f.filterValueWithProtection("body", leakyRedactor{}, make(map[uintptr]struct{}), 1)
+
+	assert.Equal(t, "***", got)
+}
+
+type plainAccount struct {
+	Owner    string         `json:"owner"`
+	Password string         `json:"password"`
+	Tags     []string       `json:"tags"`
+	Meta     map[string]any `json:"meta"`
+	Inner    walkerUser     `json:"inner"`
+}
+
+// TestFilterNonRedactorLineIsUnchanged is a golden captured before the Redactor
+// hook existed: a type without the method must render byte-identically.
+func TestFilterNonRedactorLineIsUnchanged(t *testing.T) {
+	account := plainAccount{
+		Owner:    "alice",
+		Password: "pw",
+		Tags:     []string{"a"},
+		Meta:     map[string]any{"token": "t", "n": 1},
+		Inner:    walkerUser{Name: "bob", Password: "x"},
+	}
+	const golden = `{"level":"info","body":{"inner":{"name":"bob","password":"***"},"meta":{"n":1,"token":"***"},"owner":"alice","password":"***","tags":["a"]},"message":"plain"}` + "\n"
+
+	t.Run("interface", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", account).Msg("plain")
+		assert.JSONEq(t, golden, buf.String())
+		assert.Len(t, buf.String(), len(golden))
+	})
+
+	t.Run("with_fields", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.WithFields(map[string]any{"body": account}).Info().Msg("plain")
+		assert.JSONEq(t, golden, buf.String())
+		assert.Len(t, buf.String(), len(golden))
+	})
+}
