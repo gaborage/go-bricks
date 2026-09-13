@@ -1730,14 +1730,14 @@ _, err = conn.Exec(ctx, "BEGIN update_customer(:1); END;", customer)
 **Simple Query Test:**
 
 ```go
-import dbtest "github.com/gaborage/go-bricks/database/testing"
+import dbtesting "github.com/gaborage/go-bricks/database/testing"
 
 func TestProductServiceFindActive(t *testing.T) {
     // Setup (8 lines vs 30+ with sqlmock)
-    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
     db.ExpectQuery("SELECT").
         WillReturnRows(
-            dbtest.NewRowSet("id", "name").
+            dbtesting.NewRowSet("id", "name").
                 AddRow(int64(1), "Widget").
                 AddRow(int64(2), "Gadget"),
         )
@@ -1753,7 +1753,7 @@ func TestProductServiceFindActive(t *testing.T) {
 
     assert.NoError(t, err)
     assert.Len(t, products, 2)
-dbtest.AssertQueryExecuted(t, db, "SELECT")
+dbtesting.AssertQueryExecuted(t, db, "SELECT")
 }
 ```
 
@@ -1761,10 +1761,10 @@ dbtest.AssertQueryExecuted(t, db, "SELECT")
 
 ```go
 func TestProductRepositoryList(t *testing.T) {
-    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
     db.ExpectQuery("SELECT").
         WillReturnRows(
-            dbtest.NewRowSet("id", "name").
+            dbtesting.NewRowSet("id", "name").
                 AddRow(int64(1), "Widget").
                 AddRow(int64(2), "Gadget"),
         )
@@ -1789,7 +1789,7 @@ func TestProductRepositoryList(t *testing.T) {
 
 ```go
 func TestOrderServiceCreateWithItems(t *testing.T) {
-    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
     tx := db.ExpectTransaction().
         ExpectExec("INSERT INTO orders").WillReturnRowsAffected(1).
         ExpectExec("INSERT INTO items").WillReturnRowsAffected(3)
@@ -1804,7 +1804,7 @@ func TestOrderServiceCreateWithItems(t *testing.T) {
     err := svc.CreateWithItems(ctx, order, items)
 
     assert.NoError(t, err)
-    dbtest.AssertCommitted(t, tx)
+    dbtesting.AssertCommitted(t, tx)
 }
 ```
 
@@ -1812,16 +1812,16 @@ func TestOrderServiceCreateWithItems(t *testing.T) {
 
 ```go
 func TestMultiTenantService(t *testing.T) {
-    tenants := dbtest.NewTenantDBMap()
+    tenants := dbtesting.NewTenantDBMap()
 
     // Setup tenant-specific expectations
     tenants.ForTenant("acme").
         ExpectQuery("SELECT").WillReturnRows(
-            dbtest.NewRowSet("id").AddRow(int64(1)),
+            dbtesting.NewRowSet("id").AddRow(int64(1)),
         )
     tenants.ForTenant("globex").
         ExpectQuery("SELECT").WillReturnRows(
-            dbtest.NewRowSet("id").AddRow(int64(2)),
+            dbtesting.NewRowSet("id").AddRow(int64(2)),
         )
 
     deps := &app.ModuleDeps{
@@ -1833,7 +1833,7 @@ func TestMultiTenantService(t *testing.T) {
     result, err := svc.Process(ctx)
 
     assert.NoError(t, err)
-    dbtest.AssertQueryExecuted(t, tenants.TenantDB("acme"), "SELECT")
+    dbtesting.AssertQueryExecuted(t, tenants.TenantDB("acme"), "SELECT")
 }
 ```
 
@@ -1841,17 +1841,17 @@ func TestMultiTenantService(t *testing.T) {
 
 ```go
 func TestCrossDatabaseLegacyMigration(t *testing.T) {
-    namedDBs := dbtest.NewNamedDBMap()
+    namedDBs := dbtesting.NewNamedDBMap()
 
     // Setup default PostgreSQL database
-    defaultDB := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    defaultDB := dbtesting.NewTestDB(dbtypes.PostgreSQL)
     defaultDB.ExpectExec("INSERT INTO users").WillReturnRowsAffected(1)
     namedDBs.SetDefaultDB(defaultDB)
 
     // Setup legacy Oracle database
     namedDBs.ForNameWithVendor("legacy", dbtypes.Oracle).
         ExpectQuery("SELECT").WillReturnRows(
-            dbtest.NewRowSet("id", "name").AddRow(int64(1), "LegacyUser"),
+            dbtesting.NewRowSet("id", "name").AddRow(int64(1), "LegacyUser"),
         )
 
     // Setup analytics PostgreSQL database
@@ -1867,9 +1867,9 @@ func TestCrossDatabaseLegacyMigration(t *testing.T) {
     err := svc.MigrateLegacyUser(context.Background(), 1)
 
     assert.NoError(t, err)
-    dbtest.AssertQueryExecuted(t, namedDBs.NamedDB("legacy"), "SELECT")
-    dbtest.AssertExecExecuted(t, namedDBs.DefaultDB(), "INSERT INTO users")
-    dbtest.AssertExecExecuted(t, namedDBs.NamedDB("analytics"), "INSERT INTO events")
+    dbtesting.AssertQueryExecuted(t, namedDBs.NamedDB("legacy"), "SELECT")
+    dbtesting.AssertExecExecuted(t, namedDBs.DefaultDB(), "INSERT INTO users")
+    dbtesting.AssertExecExecuted(t, namedDBs.NamedDB("analytics"), "INSERT INTO events")
 }
 ```
 
@@ -1882,14 +1882,14 @@ type User struct {
     Name string `db:"name"`
 }
 
-rows := dbtest.NewRowSet("id", "name").
+rows := dbtesting.NewRowSet("id", "name").
     AddRowsFromStructs(
         &User{ID: 1, Name: "Alice"},
         &User{ID: 2, Name: "Bob"},
     )
 
 // With generator function
-rows := dbtest.NewRowSet("id", "name").
+rows := dbtesting.NewRowSet("id", "name").
     AddRows(100, func(i int) []any {
         return []any{int64(i+1), fmt.Sprintf("User%d", i+1)}
     })
@@ -1903,11 +1903,11 @@ rows := dbtest.NewRowSet("id", "name").
 **Assertion Helpers:**
 
 ```go
-dbtest.AssertQueryExecuted(t, db, "SELECT")
-dbtest.AssertQueryCount(t, db, "SELECT", 2)
-dbtest.AssertExecExecuted(t, db, "INSERT")
-dbtest.AssertTransactionCommitted(t, db)
-dbtest.AssertTransactionRolledBack(t, db)
+dbtesting.AssertQueryExecuted(t, db, "SELECT")
+dbtesting.AssertQueryCount(t, db, "SELECT", 2)
+dbtesting.AssertExecExecuted(t, db, "INSERT")
+dbtesting.AssertTransactionCommitted(t, db)
+dbtesting.AssertTransactionRolledBack(t, db)
 ```
 
 See [database/testing](database/testing/) package for full API documentation.
@@ -2872,10 +2872,10 @@ cachetest.AssertStatsContains(t, stats, "entry_count", 5)
 ```go
 func TestCacheAsidePattern(t *testing.T) {
     mockCache := cachetest.NewMockCache()
-    mockDB := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    mockDB := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 
     mockDB.ExpectQuery("SELECT").WillReturnRows(
-        dbtest.NewRowSet("id", "name").AddRow(int64(123), "Alice"),
+        dbtesting.NewRowSet("id", "name").AddRow(int64(123), "Alice"),
     )
 
     deps := &app.ModuleDeps{
@@ -2898,7 +2898,7 @@ func TestCacheAsidePattern(t *testing.T) {
     // Verify cache miss then set
     cachetest.AssertOperationCount(t, mockCache, cachetest.OpGet, 1)
     cachetest.AssertOperationCount(t, mockCache, cachetest.OpSet, 1)
-    dbtest.AssertQueryExecuted(t, mockDB, "SELECT")
+    dbtesting.AssertQueryExecuted(t, mockDB, "SELECT")
 
     // Second call - cache hit, no DB query.
     // Record the query count first; the deps.DB closure captured mockDB, so
@@ -3812,7 +3812,7 @@ outbox:
 import outboxtest "github.com/gaborage/go-bricks/outbox/testing"
 
 func TestOrderServiceCreateOrder(t *testing.T) {
-    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
     tx := db.ExpectTransaction().
         ExpectExec("INSERT INTO orders").WillReturnRowsAffected(1)
 
@@ -3823,7 +3823,7 @@ func TestOrderServiceCreateOrder(t *testing.T) {
     err := svc.CreateOrder(ctx, order)
 
     assert.NoError(t, err)
-    dbtest.AssertCommitted(t, tx)
+    dbtesting.AssertCommitted(t, tx)
     outboxtest.AssertEventPublished(t, mockOutbox, "order.created")
     outboxtest.AssertEventWithAggregate(t, mockOutbox, "order.created", "order-123")
     outboxtest.AssertEventCount(t, mockOutbox, 1)
@@ -3831,7 +3831,7 @@ func TestOrderServiceCreateOrder(t *testing.T) {
 
 // Test outbox failure (transaction should roll back)
 func TestOrderServiceOutboxFailure(t *testing.T) {
-    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
     mockOutbox := outboxtest.NewMockOutbox().WithError(fmt.Errorf("outbox down"))
     dbFunc := func(_ context.Context) (database.Interface, error) { return db, nil }
     svc := NewOrderService(dbFunc, mockOutbox)

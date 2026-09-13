@@ -107,14 +107,14 @@ GoBricks provides `database/testing` package for easy database mocking without s
 **Simple Query Test:**
 
 ```go
-import dbtest "github.com/gaborage/go-bricks/database/testing"
+import dbtesting "github.com/gaborage/go-bricks/database/testing"
 
 func TestProductServiceFindActive(t *testing.T) {
     // Setup (8 lines vs 30+ with sqlmock)
-    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
     db.ExpectQuery("SELECT").
         WillReturnRows(
-            dbtest.NewRowSet("id", "name").
+            dbtesting.NewRowSet("id", "name").
                 AddRow(int64(1), "Widget").
                 AddRow(int64(2), "Gadget"),
         )
@@ -130,14 +130,14 @@ func TestProductServiceFindActive(t *testing.T) {
 
     assert.NoError(t, err)
     assert.Len(t, products, 2)
-    dbtest.AssertQueryExecuted(t, db, "SELECT")
+    dbtesting.AssertQueryExecuted(t, db, "SELECT")
 }
 ```
 
 **Transaction Testing:**
 
 ```go
-db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 tx := db.ExpectTransaction().
     ExpectExec("INSERT INTO orders").WillReturnRowsAffected(1).
     ExpectExec("INSERT INTO items").WillReturnRowsAffected(3)
@@ -145,13 +145,13 @@ tx := db.ExpectTransaction().
 // Test code that uses transactions
 svc.CreateWithItems(ctx, order, items)
 
-dbtest.AssertCommitted(t, tx)
+dbtesting.AssertCommitted(t, tx)
 ```
 
 **Multi-Tenant Testing:**
 
 ```go
-tenants := dbtest.NewTenantDBMap()
+tenants := dbtesting.NewTenantDBMap()
 tenants.ForTenant("acme").ExpectQuery("SELECT").WillReturnRows(...)
 tenants.ForTenant("globex").ExpectQuery("SELECT").WillReturnRows(...)
 
@@ -253,7 +253,7 @@ GoBricks provides `outbox/testing` package for mocking outbox operations in unit
 import outboxtest "github.com/gaborage/go-bricks/outbox/testing"
 
 func TestOrderServiceCreateOrder(t *testing.T) {
-    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
     tx := db.ExpectTransaction().
         ExpectExec("INSERT INTO orders").WillReturnRowsAffected(1)
 
@@ -264,7 +264,7 @@ func TestOrderServiceCreateOrder(t *testing.T) {
     err := svc.CreateOrder(ctx, order)
 
     assert.NoError(t, err)
-    dbtest.AssertCommitted(t, tx)
+    dbtesting.AssertCommitted(t, tx)
     outboxtest.AssertEventPublished(t, mockOutbox, "order.created")
 }
 ```
