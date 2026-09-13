@@ -4,20 +4,34 @@
 - **Date**: 2026-08-14
 - **Related**: [migrations.md](migrations.md) `[C59.5]`, `[C65.4]` · `migration/roles.go`
 
-## Amendment (2026-09-13, #1061): `PGRoleSpec.Schema` refuses PostgreSQL's reserved schema names
+## Amendment (2026-09-13, #1061): `PGRoleSpec` refuses PostgreSQL's reserved schema AND role names
 
-`Validate` now refuses a `Schema` naming `public`, `information_schema`, or anything under the `pg_`
-prefix, with a new exported sentinel `ErrReservedPGSchema` wrapped — like every other identifier
-refusal on this boundary — inside `ErrInvalidPGIdentifier` and the `field=value` pair, so an existing
-`errors.Is(err, ErrInvalidPGIdentifier)` matcher keeps matching and the message still names which
-field failed.
+`Validate` now refuses a reserved name in every identifier field: `public` or anything under the
+`pg_` prefix in `Schema`, `MigratorRole` and `RuntimeRole`, plus `information_schema` in `Schema`
+alone. The sentinel is the new exported `ErrReservedPGIdentifier`, wrapped — like every other
+identifier refusal on this boundary — inside `ErrInvalidPGIdentifier` and the `field=value` pair, so
+an existing `errors.Is(err, ErrInvalidPGIdentifier)` matcher keeps matching and the message still
+names which field failed.
 
-**Why.** `public` passes every charset and length check the floor applies, and provisioning a tenant
-into it lands that tenant's tables in the schema every role on the instance can reach — the
-`search_path` hazard the rest of this model spends `ALTER ROLE ... SET search_path` and
+**Why, schema side.** `public` passes every charset and length check the floor applies, and
+provisioning a tenant into it lands that tenant's tables in the schema every role on the instance can
+reach — the `search_path` hazard the rest of this model spends `ALTER ROLE ... SET search_path` and
 `ALTER DEFAULT PRIVILEGES` statements avoiding, reintroduced by a name. The `pg_` prefix and
 `information_schema` are refused for the adjacent reason: they are PostgreSQL's own namespaces, and a
 tenant provisioned into one either collides with the catalog or is shadowed by it.
+
+**Why, role side.** PostgreSQL's `RoleSpec` grammar maps the name `public` — **quoted included** —
+onto the PUBLIC pseudo-role rather than onto a role of that name. So `RuntimeRole: "public"` makes
+the template emit `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "tenant_a" TO
+"public"`: tenant DML granted to every role on the instance, the same isolation failure this
+amendment exists to stop, entering through the role field instead of the schema field. The live
+`ProvisionPGRoles` path is backstopped by the server — `CREATE ROLE "public"` raises `reserved_name`
+(42939) and the DO block swallows only `duplicate_object`/`unique_violation` — but
+`PGRoleProvisioningSQL` hands the script to an operator and has no backstop at all, so the check must
+live here. `pg_`-prefixed role names are likewise reserved by PostgreSQL, for its predefined roles.
+
+**`information_schema` stays schema-only.** It names a schema concept with no role meaning: a role
+spelled that way collides with nothing and grants nothing, so refusing it would be noise.
 
 **Case-insensitive.** This path quotes every identifier, so `"Public"` is genuinely a distinct schema
 from `"public"` and a purely mechanical reading would admit it. It is refused anyway: an operator, a
@@ -27,17 +41,16 @@ schema. The floor runs first, so the value is ASCII by the time it is folded and
 cannot reach a Unicode fold the grammar would have rejected anyway. The refusal is cheap to work
 around — pick another name, exactly as the model already asks for tenant IDs carrying hyphens.
 
-**Schema-only, and not waivable.** The rule binds `Schema` alone; `MigratorRole` and `RuntimeRole`
-may carry these spellings, because a role named `public` lands no tenant table anywhere, and
-PostgreSQL refuses to create such roles on its own account. And the rule is the framework's, not a
-default: `checkIdentifier` applies it after the floor and *before* a caller's `IdentifierPolicy`, so
-an admit-everything policy cannot hand the shared schema back and a refusing policy cannot mask the
-sentinel. A policy can only tighten, which was already ADR-061's contract for the hook.
+**Not waivable.** The rule is the framework's, not a default: `checkIdentifier` applies it after the
+floor and *before* a caller's `IdentifierPolicy`, so an admit-everything policy cannot hand a
+reserved name back and a refusing policy cannot mask the sentinel. A policy can only tighten, which
+was already ADR-061's contract for the hook.
 
-**Breaking.** A deployment already provisioning a tenant into `public` (or a `pg_`-prefixed schema)
-fails at `Validate` where it used to emit DDL. `[C65.4]` in [migrations.md](migrations.md) carries
-the detection query and the rename step; the schema is not renamed for the caller, because moving a
-populated schema is a data operation this helper has no business performing silently.
+**Breaking.** A deployment already provisioning a tenant into `public` (or a `pg_`-prefixed schema),
+or naming either role that way, fails at `Validate` where it used to emit DDL. `[C65.4]` in
+[migrations.md](migrations.md) carries the detection queries and the rename steps; neither the schema
+nor the role is renamed for the caller, because moving a populated schema or a live role is a data
+operation this helper has no business performing silently.
 
 ## Amendment (2026-09-09, #1578)
 
@@ -156,7 +169,7 @@ and the rotation guidance.
 ## References
 
 - `migration/roles.go` — `summarizeStmt`, `PGRoleSpec.Validate`, `ErrPGRolePasswordHasControlChar`,
-  `checkReservedPGSchema`, `ErrReservedPGSchema`
+  `checkReservedPGIdentifier`, `ErrReservedPGIdentifier`
 - `migration/flyway.go` — `validateEnvFields` / `ErrEnvFieldHasControlChar`, the precedent this mirrors
 - [migration_roles.md](migration_roles.md) — the migrator-vs-runtime role-separation model
 - [migrations.md](migrations.md) `[C59.5]`

@@ -147,26 +147,35 @@ capped at 63 bytes (NAMEDATALEN-1). Identifiers that fail this check (hyphens,
 dots, Unicode, embedded quotes, NUL bytes, leading digits, names longer than
 63 bytes) are rejected with `ErrInvalidPGIdentifier` before any DDL is built.
 
-### Reserved schema names
+### Reserved schema and role names
 
-`Schema` must additionally not name a schema PostgreSQL reserves: `public`,
-`information_schema`, or anything under the `pg_` prefix (`pg_catalog`,
-`pg_toast`, every `pg_temp*`). Such a name is refused with
-`ErrReservedPGSchema`, wrapped — like every other identifier refusal — with
-`ErrInvalidPGIdentifier`, so an existing `errors.Is(err, ErrInvalidPGIdentifier)`
-matcher keeps matching. Provisioning a tenant into `public` passes every charset
-check and quietly lands that tenant's tables in the schema every role on the
-instance can reach, which is the failure this rule exists to stop.
+No identifier field may name something PostgreSQL reserves. `public`, and
+anything under the `pg_` prefix (`pg_catalog`, `pg_toast`, every `pg_temp*`, and
+the predefined `pg_*` roles), are refused in `Schema`, `MigratorRole` and
+`RuntimeRole` alike; `information_schema` is refused in `Schema` only, having no
+role meaning. Such a name is refused with `ErrReservedPGIdentifier`, wrapped —
+like every other identifier refusal — with `ErrInvalidPGIdentifier`, so an
+existing `errors.Is(err, ErrInvalidPGIdentifier)` matcher keeps matching.
+
+Provisioning a tenant into `public` passes every charset check and quietly lands
+that tenant's tables in the schema every role on the instance can reach. The role
+half is the same failure through the other door: PostgreSQL's `RoleSpec` maps the
+name `public` — **quoted included** — onto the PUBLIC pseudo-role, so
+`RuntimeRole: "public"` emits `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES
+IN SCHEMA "tenant_a" TO "public"` and grants the tenant's DML to every role on the
+instance. `ProvisionPGRoles` would at least meet the server's own `reserved_name`
+error (42939) on `CREATE ROLE "public"`, but `PGRoleProvisioningSQL` hands the
+script to an operator with no backstop at all — so the refusal belongs here.
 
 Matching is **case-insensitive**. The provisioning path quotes every identifier,
 so `"Public"` really is a schema distinct from `"public"` — but any operator,
 `psql` session or migration script that writes the name unquoted folds it to the
-shared one, so a case twin is a trap rather than a second schema.
+shared one, so a case twin is a trap rather than a second name.
 
-The rule is **schema-only**: a role named `public` or `pg_temp` is accepted here
-(PostgreSQL refuses to create such roles itself). And it is the framework's own,
-not a default a caller can replace: it runs after the floor and *before* any
-`IdentifierPolicy`, so no policy can waive it or mask its sentinel.
+The rule is the framework's own, not a default a caller can replace: it runs after
+the floor and *before* any `IdentifierPolicy`, so no policy can waive it or mask
+its sentinel. Near misses are unaffected — `publicx`, `mypublic`, `pgx` and a role
+named `information_schema` all provision.
 
 ### Tightening the rule
 
