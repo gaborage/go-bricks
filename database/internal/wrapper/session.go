@@ -70,7 +70,7 @@ func (s *Session) Begin(ctx context.Context) (types.Tx, error) {
 
 // BeginTx starts a transaction on the pinned connection with explicit options.
 func (s *Session) BeginTx(ctx context.Context, opts *sql.TxOptions) (types.Tx, error) {
-	tx, err := s.conn.BeginTx(ctx, opts)
+	tx, err := s.conn.BeginTx(ctx, opts) // NOSONAR S8168: transaction factory - the Tx is returned to the caller, so rollback is the caller's
 	if err != nil {
 		return nil, wrapConnErr(err)
 	}
