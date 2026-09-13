@@ -433,8 +433,8 @@ the builder. The grammar will not accept a computed one.
   twice, and on PostgreSQL `ID` and `"ID"` are one column (they render alike)
   while `id` and `ID` stay two. Match the conflict-column preconditions with
   `errors.Is` on `types.ErrUpsertConflictColumnsRequired`,
-  `ErrUpsertConflictColumnNotInserted` and `ErrUpsertConflictColumnUpdated`, not by
-  message text (`[C65.1]`).
+  `types.ErrUpsertConflictColumnNotInserted` and
+  `types.ErrUpsertConflictColumnInUpdateSet`, not by message text (`[C65.1]`).
 
 Valid identifiers on PostgreSQL are left **unquoted**: PostgreSQL folds unquoted
 identifiers to lowercase, so quoting a valid one would change which physical
