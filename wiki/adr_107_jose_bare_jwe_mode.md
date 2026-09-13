@@ -4,6 +4,35 @@
 **Date:** 2026-09-09
 **Issue:** #1575
 
+## Amendment (2026-09-13, #1579): a 2xx response that was not unwrapped is a transport error
+
+`JOSETransport` passed EVERY body it did not recognize through untouched — a plaintext
+`application/json` 200 in nested mode, and in envelope mode a body `Unwrap` declined. That
+made a stripped ciphertext, a route quietly switched to plaintext, and a genuine protected
+reply indistinguishable at the caller: the caller read bytes nothing had authenticated,
+under a status code the peer chose. The rule is now directional. Under an `Inbound` policy a
+**2xx must have been unwrapped** — `application/jose` plus a successful `jose.Open` in
+nested mode, `Unwrap` ok plus a successful `jose.Open` in envelope mode — or `RoundTrip`
+returns `httpclient.ErrJOSEPlaintextResponse`, wrapped with the status, with the body
+closed and never handed back. **Non-2xx is unchanged**: a pre-trust error
+envelope is plaintext by design, because the peer was never authenticated in the first
+place, and it still reaches the caller with its headers untouched.
+
+Two decisions inside that rule. **Empty successes are not violations**: 204, 304 and every
+reply to HEAD stay in the skip set the ADR-107 transport already had — net/http guarantees
+they carry no body, so there is no plaintext to mistake for a payload, and refusing them
+would break every DELETE and conditional GET against a JOSE peer. 205 and a 2xx answer to
+CONNECT keep reaching `jose.Open` and failing closed, exactly as before. **Interceptors
+never see it**: a `RoundTrip` error short-circuits before `buildResponse`, so a response
+interceptor that would log, cache or re-parse the payload is never handed unauthenticated
+bytes. The error carries the status and nothing from the body — those bytes are precisely
+what must not be reported, being unauthenticated content the peer chose.
+
+`AllowPlaintextSuccess`, on `JOSETransport` and on `JOSEConfig`, restores the old
+pass-through for a whole transport. It is the Strangler-migration knob and nothing else: set
+it while a peer legitimately answers some 2xx routes in plaintext, and clear it once every
+route is protected. See [migrations.md](migrations.md) `[C65.1]`.
+
 ## Context
 
 `jose` ships exactly one wire shape. `Seal` signs the payload as a compact JWS and
