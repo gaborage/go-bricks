@@ -79,16 +79,13 @@ func TestSqlRowAdapterErrDelegatesToUnderlyingSQLRow(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Interface.Session — a consumer holding the interface reaches the session door
-// without a type assertion.
+// Interface.Session — compile-time proof that the session door is on the
+// interface, so reaching it needs no type assertion.
 // ---------------------------------------------------------------------------
 
-// interfaceStub implements Interface; only Session carries behavior, the rest
-// satisfies the surface.
-type interfaceStub struct {
-	session    Session
-	sessionErr error
-}
+// interfaceStub implements Interface: the assertion below it is what turns a
+// method added to the interface into a compile error here.
+type interfaceStub struct{}
 
 func (s *interfaceStub) Query(context.Context, string, ...any) (*sql.Rows, error) { return nil, nil }
 func (s *interfaceStub) QueryRow(context.Context, string, ...any) Row             { return nil }
@@ -107,35 +104,12 @@ func (s *interfaceStub) Close() error                                       { re
 func (s *interfaceStub) MigrationTable() string                             { return "flyway_schema_history" }
 func (s *interfaceStub) CreateMigrationTable(context.Context) error         { return nil }
 
-func (s *interfaceStub) Session(context.Context) (Session, error) {
-	if s.sessionErr != nil {
-		return nil, s.sessionErr
-	}
-	return s.session, nil
-}
+func (s *interfaceStub) Session(context.Context) (Session, error) { return nil, nil }
 
 var _ Interface = (*interfaceStub)(nil)
 
-func TestInterfaceDeclaresSessionDoor(t *testing.T) {
-	want := &sessionStub{}
-	var db Interface = &interfaceStub{session: want}
-
-	got, err := db.Session(t.Context())
-	require.NoError(t, err)
-	assert.Same(t, want, got)
-}
-
-func TestInterfaceSessionPropagatesError(t *testing.T) {
-	wantErr := errors.New("no free connection")
-	var db Interface = &interfaceStub{sessionErr: wantErr}
-
-	got, err := db.Session(t.Context())
-	require.ErrorIs(t, err, wantErr)
-	assert.Nil(t, got)
-}
-
-// sessionStub is the handle interfaceStub hands back; Session's surface is
-// Querier + Transactor + Close.
+// sessionStub is this package's own Session double: types cannot import
+// database/testing, its tester, so the assertion below needs a local stub.
 type sessionStub struct{}
 
 func (s *sessionStub) Query(context.Context, string, ...any) (*sql.Rows, error) { return nil, nil }

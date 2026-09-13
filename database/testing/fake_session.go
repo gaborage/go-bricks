@@ -8,25 +8,10 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
-// TestSession is an in-memory fake pinned session that implements
-// dbtypes.Session. It carries its OWN query, exec and transaction
-// expectations — nothing it runs matches the parent TestDB's pool
-// expectations, the way a real session runs on its own physical connection.
-//
-// TestSession is created via TestDB.ExpectSession(); TestDB.Session() pops the
-// queued sessions in the order they were declared and errors once the queue is
-// empty. After Close every call returns sql.ErrConnDone, including a second
-// Close, matching the dbtypes.Session contract.
-//
-// Usage example:
-//
-//	db := NewTestDB(dbtypes.PostgreSQL)
-//	sess := db.ExpectSession().
-//	    ExpectExec("SELECT pg_advisory_lock").WillReturnRowsAffected(1)
-//
-//	// ... execute test code that opens a session ...
-//
-//	AssertSessionClosed(t, sess)
+// TestSession is an in-memory fake pinned session created by
+// TestDB.ExpectSession(). It carries its OWN query, exec and transaction
+// expectations, matching none of the parent TestDB's pool expectations, and
+// after Close every call returns sql.ErrConnDone, a second Close included.
 type TestSession struct {
 	expectationSet
 	txs    []*TxExpectation

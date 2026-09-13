@@ -254,12 +254,6 @@ func AssertNoTransaction(t *testing.T, db *TestDB) {
 
 // AssertSessionClosed asserts that the session was closed, releasing its pinned
 // connection back to the pool.
-//
-// Example:
-//
-//	sess := db.ExpectSession()
-//	// ... execute test code ...
-//	AssertSessionClosed(t, sess)
 func AssertSessionClosed(t *testing.T, sess *TestSession) {
 	t.Helper()
 	if !sess.IsClosed() {

@@ -205,14 +205,9 @@ func (db *TestDB) ExpectTransaction() *TestTx {
 	return tx
 }
 
-// ExpectSession sets up an expectation for Session() calls.
-// Returns a TestSession that can be configured with its own query, exec and
-// transaction expectations — a session runs on its own pinned connection, so it
-// matches none of the TestDB's pool expectations.
-//
-// Session() pops the queued sessions in declaration order and errors once the
-// queue is empty, so a call with no ExpectSession() behind it fails the test
-// rather than handing back a permissive fake.
+// ExpectSession queues a TestSession carrying its own query, exec and
+// transaction expectations. Session() pops the queued sessions in declaration
+// order and errors once the queue is empty.
 //
 // Example:
 //

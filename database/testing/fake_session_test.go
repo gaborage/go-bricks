@@ -16,6 +16,27 @@ const (
 	sessionExecSQL   = "SET statement_timeout = 0"
 )
 
+// querySession runs a query expected to succeed and closes its rows before
+// returning: a session's *sql.Rows must be closed before the next statement on
+// the same session, or database/sql's closing mutex deadlocks Session.Close.
+func querySession(t *testing.T, sess dbtypes.Session, query string, args ...any) {
+	t.Helper()
+	rows, err := sess.Query(t.Context(), query, args...)
+	require.NoError(t, err)
+	require.NoError(t, rows.Close())
+}
+
+// querySessionErr runs a query expected to fail and returns its error, closing
+// any rows that came back anyway.
+func querySessionErr(t *testing.T, sess dbtypes.Session, query string) error {
+	t.Helper()
+	rows, err := sess.Query(t.Context(), query)
+	if rows != nil {
+		require.NoError(t, rows.Close())
+	}
+	return err
+}
+
 func TestTestDBSessionWithoutExpectationErrors(t *testing.T) {
 	db := NewTestDB(dbtypes.PostgreSQL)
 
@@ -43,18 +64,14 @@ func TestTestDBSessionExpectationOrdering(t *testing.T) {
 
 func TestTestSessionQueryExecAndDatabaseType(t *testing.T) {
 	db := NewTestDB(dbtypes.PostgreSQL)
-	db.ExpectSession().
+	sessExp := db.ExpectSession().
 		ExpectQuery(sessionSelectSQL).WillReturnRows(NewRowSet("locked").AddRow(true)).
 		ExpectExec(sessionExecSQL).WillReturnRowsAffected(0)
 
 	sess, err := db.Session(t.Context())
 	require.NoError(t, err)
 
-	func() {
-		rows, queryErr := sess.Query(t.Context(), sessionSelectSQL, 42)
-		require.NoError(t, queryErr)
-		defer rows.Close()
-	}()
+	querySession(t, sess, sessionSelectSQL, 42)
 
 	result, err := sess.Exec(t.Context(), sessionExecSQL)
 	require.NoError(t, err)
@@ -63,6 +80,16 @@ func TestTestSessionQueryExecAndDatabaseType(t *testing.T) {
 	assert.Equal(t, int64(0), affected)
 
 	assert.Equal(t, dbtypes.PostgreSQL, sess.DatabaseType())
+
+	// Both statements are recorded on the session's own logs, args included.
+	queryLog := sessExp.QueryLog()
+	require.Len(t, queryLog, 1)
+	assert.Equal(t, sessionSelectSQL, queryLog[0].SQL)
+	assert.Equal(t, []any{42}, queryLog[0].Args)
+
+	execLog := sessExp.ExecLog()
+	require.Len(t, execLog, 1)
+	assert.Equal(t, sessionExecSQL, execLog[0].SQL)
 }
 
 func TestTestSessionQueryRowScansExpectedRow(t *testing.T) {
@@ -85,11 +112,7 @@ func TestTestSessionUnexpectedStatementsError(t *testing.T) {
 	sess, err := db.Session(t.Context())
 	require.NoError(t, err)
 
-	rows, err := sess.Query(t.Context(), sessionSelectSQL)
-	if rows != nil {
-		defer rows.Close()
-	}
-	require.Error(t, err)
+	require.Error(t, querySessionErr(t, sess, sessionSelectSQL))
 	require.Error(t, sess.QueryRow(t.Context(), sessionSelectSQL).Err())
 	_, err = sess.Exec(t.Context(), sessionExecSQL)
 	require.Error(t, err)
@@ -106,11 +129,7 @@ func TestTestSessionWillReturnErrorTargetsMostRecent(t *testing.T) {
 	sess, err := db.Session(t.Context())
 	require.NoError(t, err)
 
-	rows, err := sess.Query(t.Context(), sessionSelectSQL)
-	if rows != nil {
-		defer rows.Close()
-	}
-	require.ErrorIs(t, err, wantQueryErr)
+	require.ErrorIs(t, querySessionErr(t, sess, sessionSelectSQL), wantQueryErr)
 	_, err = sess.Exec(t.Context(), sessionExecSQL)
 	require.ErrorIs(t, err, wantExecErr)
 }
@@ -180,11 +199,7 @@ func TestTestSessionClosedSessionRejectsEveryCall(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, sess.Close())
 
-	rows, err := sess.Query(t.Context(), sessionSelectSQL)
-	if rows != nil {
-		defer rows.Close()
-	}
-	require.ErrorIs(t, err, sql.ErrConnDone)
+	require.ErrorIs(t, querySessionErr(t, sess, sessionSelectSQL), sql.ErrConnDone)
 	require.ErrorIs(t, sess.QueryRow(t.Context(), sessionSelectSQL).Err(), sql.ErrConnDone)
 	_, err = sess.Exec(t.Context(), sessionExecSQL)
 	require.ErrorIs(t, err, sql.ErrConnDone)
@@ -193,33 +208,6 @@ func TestTestSessionClosedSessionRejectsEveryCall(t *testing.T) {
 	_, err = sess.BeginTx(t.Context(), nil)
 	require.ErrorIs(t, err, sql.ErrConnDone)
 	require.ErrorIs(t, sess.Close(), sql.ErrConnDone, "Close is not idempotent")
-}
-
-func TestTestSessionLogsRecordStatements(t *testing.T) {
-	db := NewTestDB(dbtypes.PostgreSQL)
-	sessExp := db.ExpectSession().
-		ExpectQuery(sessionSelectSQL).WillReturnRows(NewRowSet("locked").AddRow(true)).
-		ExpectExec(sessionExecSQL).WillReturnRowsAffected(0)
-
-	sess, err := db.Session(t.Context())
-	require.NoError(t, err)
-
-	func() {
-		rows, queryErr := sess.Query(t.Context(), sessionSelectSQL, 42)
-		require.NoError(t, queryErr)
-		defer rows.Close()
-	}()
-	_, err = sess.Exec(t.Context(), sessionExecSQL)
-	require.NoError(t, err)
-
-	queryLog := sessExp.QueryLog()
-	require.Len(t, queryLog, 1)
-	assert.Equal(t, sessionSelectSQL, queryLog[0].SQL)
-	assert.Equal(t, []any{42}, queryLog[0].Args)
-
-	execLog := sessExp.ExecLog()
-	require.Len(t, execLog, 1)
-	assert.Equal(t, sessionExecSQL, execLog[0].SQL)
 }
 
 func TestAssertSessionClosedPassesOnClosedSession(t *testing.T) {
