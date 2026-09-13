@@ -17,6 +17,11 @@ type Statement = types.Statement
 // This type alias maintains backward compatibility.
 type Tx = types.Tx
 
+// Session defines a handle pinned to a single physical database connection,
+// for session-scoped state (advisory locks, SET, temp tables) that a shared
+// pool connection could otherwise silently lose between statements.
+type Session = types.Session
+
 // QueryBuilderInterface defines the interface for vendor-specific SQL query building.
 // This type alias maintains backward compatibility while enabling dependency injection.
 type QueryBuilderInterface = types.QueryBuilderInterface
