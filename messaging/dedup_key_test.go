@@ -5,7 +5,6 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 
@@ -89,7 +88,8 @@ func TestWireDedupKeyAppliesTheGrammar(t *testing.T) {
 	}
 }
 
-// TestOnlyAllowlistedFunctionsMintASealedDedupKey pins every production site that can set DedupKey.sealed.
+// TestOnlyAllowlistedFunctionsMintASealedDedupKey pins every production site
+// that can set DedupKey.sealed.
 func TestOnlyAllowlistedFunctionsMintASealedDedupKey(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	require.NoError(t, err)
@@ -104,7 +104,7 @@ func TestOnlyAllowlistedFunctionsMintASealedDedupKey(t *testing.T) {
 		sites.scanFile(file)
 	}
 	allowlist := []string{}
-	assert.ElementsMatch(t, allowlist, sortedSiteNames(sites.sealing))
+	assert.ElementsMatch(t, allowlist, siteNames(sites.sealing))
 	assert.Contains(t, sites.literals, "WireDedupKey", "the walk must see DedupKey literals")
 }
 
@@ -177,12 +177,11 @@ func isIdentNamed(expr ast.Expr, name string) bool {
 	return isIdent && ident.Name == name
 }
 
-func sortedSiteNames(set map[string]bool) []string {
+func siteNames(set map[string]bool) []string {
 	names := make([]string, 0, len(set))
 	for name := range set {
 		names = append(names, name)
 	}
-	sort.Strings(names)
 	return names
 }
 
