@@ -5,7 +5,9 @@ package testing_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,6 +39,19 @@ func relayLedger(ctx context.Context, db *dbtesting.TestDB) (rowsAffected int64,
 	if _, err = sess.Exec(ctx, docLockSQL); err != nil {
 		return 0, err
 	}
+	// Registered immediately after the lock succeeds, so no later early return
+	// can skip it, and (defers run LIFO) it runs BEFORE the Close above: Close
+	// returns the connection to the pool without ending the backend, so a
+	// session lock that was not released rides along on a recycled connection.
+	// The unlock runs on a cleanup context that ignores caller cancellation but
+	// is still bounded, so it fires even when ctx is already cancelled.
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if _, unlockErr := sess.Exec(unlockCtx, docUnlockSQL); unlockErr != nil && err == nil {
+			err = fmt.Errorf("release ledger lock: %w", unlockErr)
+		}
+	}()
 
 	tx, err := sess.Begin(ctx)
 	if err != nil {
@@ -52,10 +67,6 @@ func relayLedger(ctx context.Context, db *dbtesting.TestDB) (rowsAffected int64,
 	}
 	err = tx.Commit(ctx)
 	if err != nil {
-		return 0, err
-	}
-
-	if _, err = sess.Exec(ctx, docUnlockSQL); err != nil {
 		return 0, err
 	}
 	return rowsAffected, nil

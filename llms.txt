@@ -1309,10 +1309,13 @@ func PromoteID(c server.HandlerContext, next func() error) error {
 
 The example below is PostgreSQL-specific (`pg_advisory_lock`, `$1` placeholders); an Oracle consumer gets no `DBMS_LOCK` without a grant, so its session-scoped uses are `ALTER SESSION` state and global temporary tables.
 
+If the lock only needs to span a single transaction, use `pg_advisory_xact_lock` on an ordinary transaction — no Session needed; the Session door is for state that must outlive a transaction.
+
 ```go
 import (
     "context"
     "fmt"
+    "time"
 
     "github.com/gaborage/go-bricks/database"
 )
@@ -1331,10 +1334,16 @@ func RelayLedger(ctx context.Context, db database.Interface) (err error) {
     if _, err = sess.Exec(ctx, "SELECT pg_advisory_lock($1)", ledgerLockID); err != nil {
         return fmt.Errorf("acquire ledger lock: %w", err)
     }
-    // Report a failed unlock: Close returns the connection to the pool without
-    // ending the backend, so a lock left held travels on a recycled connection.
+    // Registered immediately after the lock succeeds, so no later early return
+    // can skip it, and (defers run LIFO) it runs BEFORE the Close above: Close
+    // returns the connection to the pool without ending the backend, so a
+    // session lock that was not released rides along on a recycled connection.
+    // The unlock runs on a cleanup context that ignores caller cancellation but
+    // is still bounded, so it fires even when ctx is already cancelled.
     defer func() {
-        if _, unlockErr := sess.Exec(ctx, "SELECT pg_advisory_unlock($1)", ledgerLockID); unlockErr != nil && err == nil {
+        unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+        defer cancel()
+        if _, unlockErr := sess.Exec(unlockCtx, "SELECT pg_advisory_unlock($1)", ledgerLockID); unlockErr != nil && err == nil {
             err = fmt.Errorf("release ledger lock: %w", unlockErr)
         }
     }()
