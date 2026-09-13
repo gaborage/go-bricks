@@ -332,6 +332,11 @@ type JOSEConfig struct {
 	// because Unwrap replaces the Content-Type gate and every response body would then be
 	// buffered without limit.
 	MaxResponseBytes int64
+	// AllowPlaintextSuccess disables the fail-closed rule on successful responses, exactly
+	// as the JOSETransport field of the same name: a 2xx body the Inbound policy never
+	// opened reaches the caller instead of raising ErrJOSEPlaintextResponse. The
+	// Strangler-migration knob for a peer that still answers some 2xx routes in plaintext.
+	AllowPlaintextSuccess bool
 }
 
 // WithJOSE configures a JOSETransport that seals outbound request bodies and opens
@@ -384,7 +389,8 @@ func (b *Builder) WithJOSE(cfg JOSEConfig) *Builder {
 				Resolver: b.joseConfig.Resolver,
 				Envelope: b.joseConfig.Envelope,
 
-				MaxResponseBytes: b.joseConfig.MaxResponseBytes,
+				MaxResponseBytes:      b.joseConfig.MaxResponseBytes,
+				AllowPlaintextSuccess: b.joseConfig.AllowPlaintextSuccess,
 			}
 		})
 	}
