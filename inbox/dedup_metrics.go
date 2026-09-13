@@ -7,6 +7,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/messaging"
 )
 
 // The ledger's dedup-hit counter. A redelivery that finds its id already
@@ -62,14 +63,15 @@ func (m *Module) registerDedupCounter(deps *app.ModuleDeps) {
 // and one log line. Both carry the id's PRESENCE and LENGTH, never its value —
 // the id is publisher-written, and a replayed one is exactly the value an
 // attacker chose.
-func (m *Module) recordDedupHit(ctx context.Context, tenantID, eventID string, sealed bool) {
+func (m *Module) recordDedupHit(ctx context.Context, tenantID string, key messaging.DedupKey) {
 	tenantPresent := tenantID != ""
+	sealed := key.Sealed()
 	if m.dedupHits != nil {
 		m.dedupHits.Add(ctx, 1, dedupHitAttrs[boolIndex(tenantPresent)][boolIndex(sealed)])
 	}
 	m.logger.Info().
 		Bool("tenantPresent", tenantPresent).
-		Int("eventIdLength", len(eventID)).
+		Int("eventIdLength", len(key.String())).
 		Bool("sealed", sealed).
 		Msg("Inbox dedup hit: event already processed, handler skipped")
 }

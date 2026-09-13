@@ -21,7 +21,10 @@
 > sealed provenance through one unexported constructor, while `messaging.WireDedupKey(id)` builds
 > every other key. `inbox.ProcessOnce(ctx, key messaging.DedupKey, fn)` replaces the string
 > parameter, and `ValidateDedupKey(ctx, key DedupKey)` refuses the zero key and a sealed key under
-> a context `IsSealedDelivery` does not mark. The §4 `^[A-Za-z0-9_-]{1,128}$` grammar no longer
+> a context `IsSealedDelivery` does not mark. That second refusal is not an attacker gate — only
+> the sealed branch mints a sealed key, so a caller can only hold its own delivery's — it fails
+> closed when that correct key is used outside the sealed delivery (a detached goroutine), turning
+> a plumbing mistake into a refusal rather than a silent ledger write. The §4 `^[A-Za-z0-9_-]{1,128}$` grammar no longer
 > runs at the ledger door; it is kept as defense in depth at construction, inside `WireDedupKey`.
 > A wire key under a sealed context is still admitted, as §4 already states: the grammar governs
 > wire-sourced ids and `:` keeps the two key spaces apart. This closes the class the 2026-09-08

@@ -103,7 +103,6 @@ func TestOnlyAllowlistedFunctionsMintASealedDedupKey(t *testing.T) {
 	sites := scanDedupKeySites(t)
 	assert.ElementsMatch(t, []string{"sealedDedupKey"}, siteNames(sites.sealing))
 	assert.ElementsMatch(t, []string{"Metadata.DedupKey"}, siteNames(sites.constructorRefs))
-	assert.Contains(t, sites.literals, "WireDedupKey", "the walk must see DedupKey literals")
 }
 
 // dedupKeyWalkFixture carries one site per minting shape and one constructor
@@ -115,11 +114,20 @@ type DedupKey struct {
 	sealed bool
 }
 
+type twin struct {
+	key    string
+	sealed bool
+}
+
 func sealedDedupKey() DedupKey { return DedupKey{key: "k", sealed: true} }
 
 func unkeyed() DedupKey { return DedupKey{"k", true} }
 
 func assigned(k *DedupKey) { k.sealed = true }
+
+func converted(t twin) DedupKey { return DedupKey(t) }
+
+func addressed(k *DedupKey) *bool { return &k.sealed }
 
 func caller() DedupKey { return sealedDedupKey() }
 `
@@ -131,7 +139,7 @@ func TestDedupKeySiteWalkRecordsEveryMintingShape(t *testing.T) {
 	file, err := parser.ParseFile(fset, "fixture.go", dedupKeyWalkFixture, 0)
 	require.NoError(t, err)
 	sites := checkDedupKeySites(t, fset, []*ast.File{file}, "fixture", nil)
-	assert.ElementsMatch(t, []string{"sealedDedupKey", "unkeyed", "assigned"}, siteNames(sites.sealing))
+	assert.ElementsMatch(t, []string{"sealedDedupKey", "unkeyed", "assigned", "converted", "addressed"}, siteNames(sites.sealing))
 	assert.ElementsMatch(t, []string{"caller"}, siteNames(sites.constructorRefs))
 }
 
@@ -141,10 +149,13 @@ type dedupKeySites struct {
 	sealedField     types.Object
 	constructor     types.Object
 	sealing         map[string]bool
-	literals        map[string]bool
 	constructorRefs map[string]bool
 }
 
+// scanDedupKeySites type-checks this package rather than walking names: type
+// resolution is what closes the alias, conversion and elided-literal holes a
+// name walk misses. The cost is a toolchain dependency — it resolves imports
+// from `go list -export -deps`, so `go` must be on PATH.
 func scanDedupKeySites(t *testing.T) *dedupKeySites {
 	t.Helper()
 	dir, err := build.ImportDir(".", 0)
@@ -179,7 +190,6 @@ func checkDedupKeySites(t *testing.T, fset *token.FileSet, files []*ast.File, pa
 		sealedField:     structField(t, dedupKey, "sealed"),
 		constructor:     pkg.Scope().Lookup("sealedDedupKey"),
 		sealing:         map[string]bool{},
-		literals:        map[string]bool{},
 		constructorRefs: map[string]bool{},
 	}
 	require.NotNil(t, sites.constructor)
@@ -258,7 +268,6 @@ func (s *dedupKeySites) recordLiteral(scope string, lit *ast.CompositeLit) {
 	if !types.Identical(s.info.TypeOf(lit), s.dedupKey) {
 		return
 	}
-	s.literals[scope] = true
 	for _, elt := range lit.Elts {
 		kv, keyed := elt.(*ast.KeyValueExpr)
 		if !keyed {

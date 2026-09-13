@@ -56,10 +56,15 @@ func (m *MockInbox) MarkAlreadyProcessed(eventID string) *MockInbox {
 	return m
 }
 
-// ProcessOnce implements app.InboxProcessor. It records key.String() and runs fn
-// (with a nil tx) exactly once per key, unless an error is configured or the
-// key was already processed. It does not run messaging.ValidateDedupKey.
+// ProcessOnce implements app.InboxProcessor. It runs messaging.ValidateDedupKey
+// first, like the real inbox — the zero DedupKey, and a sealed key outside a
+// sealed delivery, are refused before anything is recorded — then records
+// key.String() and runs fn (with a nil tx) exactly once per key, unless an error
+// is configured or the key was already processed.
 func (m *MockInbox) ProcessOnce(ctx context.Context, key messaging.DedupKey, fn func(ctx context.Context, tx dbtypes.Tx) error) error {
+	if err := messaging.ValidateDedupKey(ctx, key); err != nil {
+		return err
+	}
 	eventID := key.String()
 	m.mu.Lock()
 	if m.processErr != nil {
