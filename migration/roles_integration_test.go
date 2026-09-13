@@ -526,6 +526,20 @@ func publicGrantRows(ctx context.Context, t *testing.T, db *sql.DB, schema strin
 // identifier does not need, so the helper's ALTER ROLE … SET search_path =
 // "public" and a hand-written bare one BOTH land in pg_db_role_setting as
 // search_path=public.
+//
+// The search_path arm is SELECT DISTINCT because pg_db_role_setting carries one
+// row per (setdatabase, setrole) pair: a role holding BOTH a cluster-wide
+// ALTER ROLE … SET and an ALTER ROLE … IN DATABASE … SET contributes the
+// identical (source, rolname, setting) triple twice, and the projection has no
+// column that tells the two apart, so the duplicate is pure noise. DISTINCT
+// scopes to this UNION ALL branch alone; the default_acl arm cannot duplicate,
+// since pg_default_acl is keyed on (defaclrole, defaclnamespace, defaclobjtype).
+//
+// pg_db_role_setting is a SHARED catalog, so the arm sees the IN DATABASE rows of
+// every database in the cluster while pg_default_acl, pg_namespace and pg_class
+// are per-database. A role pointed at public in some OTHER database therefore
+// reports here (and becomes a candidate in pgPublicNamedRoleGrantDetectSQL) —
+// an over-report, never an under-report.
 const pgPublicSchemaResidueDetectSQL = `SELECT 'default_acl'::text AS source, r.rolname AS role_name,
        CASE d.defaclobjtype WHEN 'r' THEN 'TABLES'
                             WHEN 'S' THEN 'SEQUENCES'
@@ -537,7 +551,7 @@ JOIN pg_namespace n ON n.oid = d.defaclnamespace
 JOIN pg_roles r ON r.oid = d.defaclrole
 WHERE n.nspname = 'public'
 UNION ALL
-SELECT 'search_path', r.rolname, c.setting
+SELECT DISTINCT 'search_path', r.rolname, c.setting
 FROM pg_db_role_setting s
 JOIN pg_roles r ON r.oid = s.setrole,
      unnest(s.setconfig) AS c(setting)
@@ -557,8 +571,11 @@ const (
 // provisioned any more — Validate refuses Schema: "public" outright — so the
 // oracle reproduces the two residues by hand with the same statements
 // buildPGRoleStatements would have emitted, asserts the query finds each one
-// tagged with its source, and asserts the atom's apply step (revoke the default
-// privileges, reset the search_path) makes the query go quiet again.
+// tagged with its source, and asserts that undoing both residues makes the query
+// go quiet again. The undo here RESETs the search_path because the probe roles are
+// then dropped; the atom's own apply step never resets — re-provisioning OVERWRITES
+// the setting with the new schema — and the query cannot tell the two apart, since
+// both stop the row matching 'search_path=public'.
 func TestPGPublicSchemaResidueDetectSQLFindsSchemaHalfResidue(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx, cancel := testCtx(t)
@@ -627,7 +644,9 @@ func TestPGPublicSchemaResidueDetectSQLFindsSchemaHalfResidue(t *testing.T) {
 			`SET search_path = "public" must be stored — and detected — as the bare search_path=public`)
 	})
 
-	// The atom's apply step for this half.
+	// Undo both residues. The default-privilege REVOKE is the atom's apply step
+	// verbatim; the RESET stands in for what apply really does to the search_path,
+	// which is to OVERWRITE it by re-provisioning against the renamed schema.
 	for _, stmt := range []string{
 		`ALTER DEFAULT PRIVILEGES FOR ROLE ` + schemaResidueProbeRole +
 			` IN SCHEMA public REVOKE SELECT ON TABLES FROM ` + schemaResidueProbeRole,
@@ -642,6 +661,66 @@ func TestPGPublicSchemaResidueDetectSQLFindsSchemaHalfResidue(t *testing.T) {
 		"the revoke and the search_path reset must make the query go quiet again")
 	require.Empty(t, publicSchemaResidueRows(ctx, t, admin, schemaResidueQuotedProbeRole),
 		"the revoke and the search_path reset must make the query go quiet again")
+}
+
+// schemaResidueDualScopeProbeRole carries BOTH a cluster-wide and an IN DATABASE
+// search_path setting — the pair that makes pg_db_role_setting hold two rows for
+// one role, and the case the search_path arm's DISTINCT exists for.
+const schemaResidueDualScopeProbeRole = "c654_dual_scope_probe"
+
+// TestPGPublicSchemaResidueDetectSQLDeduplicatesDualScopeSettings pins the
+// DISTINCT on the schema-residue query's search_path arm. pg_db_role_setting keys
+// one row per (setdatabase, setrole) pair, so a role pointed at public both
+// cluster-wide (setdatabase = 0) and IN DATABASE <this one> contributes the same
+// (source, rolname, setting) triple twice; nothing in the projection tells the two
+// apart, so without DISTINCT the operator reads a duplicated finding.
+//
+// This is the A/B the single-setting test above cannot make: that one sets ONE
+// scope, so it passes with or without the DISTINCT.
+func TestPGPublicSchemaResidueDetectSQLDeduplicatesDualScopeSettings(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx, cancel := testCtx(t)
+	defer cancel()
+
+	admin := env.adminDB(t)
+
+	var dbName string
+	require.NoError(t, admin.QueryRowContext(ctx, `SELECT current_database()`).Scan(&dbName))
+	quotedDB := quotePGIdent(dbName)
+
+	_, err := admin.ExecContext(ctx, `CREATE ROLE `+schemaResidueDualScopeProbeRole)
+	require.NoError(t, err)
+
+	defer func() {
+		for _, stmt := range []string{
+			`ALTER ROLE ` + schemaResidueDualScopeProbeRole + ` IN DATABASE ` + quotedDB + ` RESET search_path`,
+			`ALTER ROLE ` + schemaResidueDualScopeProbeRole + ` RESET search_path`,
+			`DROP ROLE IF EXISTS ` + schemaResidueDualScopeProbeRole,
+		} {
+			_, cleanupErr := admin.ExecContext(ctx, stmt)
+			assert.NoError(t, cleanupErr, stmt)
+		}
+	}()
+
+	_, err = admin.ExecContext(ctx,
+		`ALTER ROLE `+schemaResidueDualScopeProbeRole+` SET search_path = public`)
+	require.NoError(t, err)
+	_, err = admin.ExecContext(ctx,
+		`ALTER ROLE `+schemaResidueDualScopeProbeRole+` IN DATABASE `+quotedDB+` SET search_path = public`)
+	require.NoError(t, err)
+
+	// Both scopes really are stored as separate rows — the premise of the dedup.
+	var settingRows int
+	require.NoError(t, admin.QueryRowContext(ctx,
+		`SELECT count(*) FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole
+		 WHERE r.rolname = $1`, schemaResidueDualScopeProbeRole).Scan(&settingRows))
+	require.Equal(t, 2, settingRows,
+		"the cluster-wide and IN DATABASE settings must be two pg_db_role_setting rows")
+
+	require.Equal(t, []string{
+		"search_path|" + schemaResidueDualScopeProbeRole + "|search_path=public",
+	}, publicSchemaResidueRows(ctx, t, admin, schemaResidueDualScopeProbeRole),
+		"two settings rows for one role must report as ONE finding, not two")
 }
 
 // publicSchemaResidueRows runs pgPublicSchemaResidueDetectSQL verbatim and
