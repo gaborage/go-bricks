@@ -2223,7 +2223,6 @@ func TestFilterMasksInsideDefinedStringType(t *testing.T) {
 
 const redactorTestPAN = "4111111111111111"
 
-// redactedCard is a value-receiver self-redacting type.
 type redactedCard struct {
 	Holder string
 	PAN    string
@@ -2296,15 +2295,13 @@ func (s selfRedactor) RedactedForLog() any {
 	return selfRedactor{Name: s.Name, Note: "redacted"}
 }
 
-// outerRedactor returns innerRedactor directly and inside a map. The direct
-// return is walked by reflection (one-shot); the nested child is its own hook.
-type outerRedactor struct{}
+type directInnerRedactor struct{}
 
-func (outerRedactor) RedactedForLog() any { return innerRedactor{Label: "direct"} }
+func (directInnerRedactor) RedactedForLog() any { return innerRedactor{Label: "direct"} }
 
-type outerNestingRedactor struct{}
+type nestedInnerRedactor struct{}
 
-func (outerNestingRedactor) RedactedForLog() any {
+func (nestedInnerRedactor) RedactedForLog() any {
 	return map[string]any{"child": innerRedactor{Label: "nested"}}
 }
 
@@ -2320,8 +2317,8 @@ func TestFilterRedactorHookRunsOncePerValue(t *testing.T) {
 		value    any
 		wantJSON string
 	}{
-		{name: "returned_value_is_not_rehooked", value: outerRedactor{}, wantJSON: `{"Label":"direct"}`},
-		{name: "nested_child_is_hooked", value: outerNestingRedactor{}, wantJSON: `{"child":"inner-hook"}`},
+		{name: "returned_value_is_not_rehooked", value: directInnerRedactor{}, wantJSON: `{"Label":"direct"}`},
+		{name: "nested_child_is_hooked", value: nestedInnerRedactor{}, wantJSON: `{"child":"inner-hook"}`},
 		{name: "returns_own_type_terminates", value: selfRedactor{Name: "n", Note: "raw"}, wantJSON: `{"Name":"n","Note":"redacted"}`},
 	}
 	for _, tt := range tests {
@@ -2356,7 +2353,6 @@ func TestFilterRedactorUnderSensitiveKeyMasksWhole(t *testing.T) {
 	assert.NotContains(t, buf.String(), "last4")
 }
 
-// ptrRedactor implements the hook on a POINTER receiver.
 type ptrRedactor struct {
 	Label string
 }
@@ -2387,14 +2383,31 @@ func TestFilterRedactorReceiverKinds(t *testing.T) {
 	}
 }
 
+type nilRedactor struct{}
+
+func (nilRedactor) RedactedForLog() any { return nil }
+
 // TestFilterRedactorReturnedShapeSpendsOneDepth pins that the returned value is
-// filtered at depth minus one: with one level left it fails closed as a whole.
+// filtered at depth minus one: with one level left it fails closed as a whole,
+// except a nil result, which stays nil.
 func TestFilterRedactorReturnedShapeSpendsOneDepth(t *testing.T) {
-	f := NewSensitiveDataFilter(DefaultFilterConfig())
+	tests := []struct {
+		name  string
+		value any
+		want  any
+	}{
+		{name: "non_nil_shape_is_masked", value: leakyRedactor{}, want: "***"},
+		{name: "nil_shape_stays_nil", value: nilRedactor{}, want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := NewSensitiveDataFilter(DefaultFilterConfig())
 
-	got := f.filterValueWithProtection("body", leakyRedactor{}, make(map[uintptr]struct{}), 1)
+			got := f.filterValueWithProtection("body", tt.value, make(map[uintptr]struct{}), 1)
 
-	assert.Equal(t, "***", got)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 type plainAccount struct {
@@ -2405,8 +2418,8 @@ type plainAccount struct {
 	Inner    walkerUser     `json:"inner"`
 }
 
-// TestFilterNonRedactorLineIsUnchanged is a golden captured before the Redactor
-// hook existed: a type without the method must render byte-identically.
+// TestFilterNonRedactorLineIsUnchanged pins that a type without RedactedForLog
+// renders the same line it did before the Redactor hook.
 func TestFilterNonRedactorLineIsUnchanged(t *testing.T) {
 	account := plainAccount{
 		Owner:    "alice",
