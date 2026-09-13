@@ -577,25 +577,35 @@ func TestOpenRejectsWiringMistakes(t *testing.T) {
 	opts := vectorOptions(k, nil)
 	var evt paymentAuthorized
 
+	// docSpec is a document Spec (nil Type) with every other argument well wired: the
+	// missing Type outranks the OpenOptions checks, so its message is the one that fires.
+	docSpec, err := sealed.NewDocumentSpec("svc-payments-sign", "acme-core-enc", "card")
+	require.NoError(t, err)
+
 	cases := []struct {
 		name string
 		code string
+		msg  string
 		call func() error
 	}{
-		{"nil_spec", sealed.CodeOptionsInvalid, func() error { _, err := sealed.Open(body, nil, opts, &evt); return err }},
-		{"nil_opts", sealed.CodeOptionsInvalid, func() error { _, err := sealed.Open(body, spec, nil, &evt); return err }},
-		{"nil_keys", sealed.CodeOptionsInvalid, func() error {
+		{"nil_spec", sealed.CodeOptionsInvalid, "Open requires a Spec from ScanType (a document Spec cannot open)", func() error { _, err := sealed.Open(body, nil, opts, &evt); return err }},
+		{"document_spec_outranks_nil_opts", sealed.CodeOptionsInvalid, "Open requires a Spec from ScanType (a document Spec cannot open)", func() error {
+			_, err := sealed.Open(body, docSpec, nil, &evt)
+			return err
+		}},
+		{"nil_opts", sealed.CodeOptionsInvalid, "Open requires OpenOptions", func() error { _, err := sealed.Open(body, spec, nil, &evt); return err }},
+		{"nil_keys", sealed.CodeOptionsInvalid, "Open requires a KeyResolver", func() error {
 			_, err := sealed.Open(body, spec, &sealed.OpenOptions{EventType: eventType}, &evt)
 			return err
 		}},
-		{"empty_event_type", sealed.CodeOptionsInvalid, func() error {
+		{"empty_event_type", sealed.CodeOptionsInvalid, "Open requires a non-empty EventType", func() error {
 			_, err := sealed.Open(body, spec, &sealed.OpenOptions{Keys: k.consumer}, &evt)
 			return err
 		}},
-		{"out_not_a_pointer", sealed.CodeTypeMismatch, func() error { _, err := sealed.Open(body, spec, opts, evt); return err }},
-		{"out_wrong_type", sealed.CodeTypeMismatch, func() error { _, err := sealed.Open(body, spec, opts, new(cardData)); return err }},
-		{"out_nil", sealed.CodeTypeMismatch, func() error { _, err := sealed.Open(body, spec, opts, nil); return err }},
-		{"out_typed_nil", sealed.CodeTypeMismatch, func() error {
+		{"out_not_a_pointer", sealed.CodeTypeMismatch, "", func() error { _, err := sealed.Open(body, spec, opts, evt); return err }},
+		{"out_wrong_type", sealed.CodeTypeMismatch, "", func() error { _, err := sealed.Open(body, spec, opts, new(cardData)); return err }},
+		{"out_nil", sealed.CodeTypeMismatch, "", func() error { _, err := sealed.Open(body, spec, opts, nil); return err }},
+		{"out_typed_nil", sealed.CodeTypeMismatch, "", func() error {
 			_, err := sealed.Open(body, spec, opts, (*paymentAuthorized)(nil))
 			return err
 		}},
@@ -609,6 +619,9 @@ func TestOpenRejectsWiringMistakes(t *testing.T) {
 			var je *bricksjose.Error
 			require.ErrorAs(t, err, &je)
 			assert.Equal(t, tc.code, je.Code)
+			if tc.msg != "" {
+				assert.Equal(t, tc.msg, je.Message, "the typed door names itself and its own requirement")
+			}
 			assert.ErrorIs(t, err, sealed.ErrSealFailed)
 		})
 	}
