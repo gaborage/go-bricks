@@ -9,14 +9,9 @@ import (
 	"github.com/gaborage/go-bricks/database/types"
 )
 
-// Session wraps a types.Session to provide the same performance tracking
-// (span/metric/log via TrackDBOperation) that Connection applies to pool
-// statements and Transaction applies to transaction statements. Session has
-// no Prepare/Health/Stats/MigrationTable methods to track, mirroring the
-// smaller types.Session surface.
-//
-// Query/QueryRow/Exec come from the embedded stmtTracker, shared with
-// Transaction.
+// Session wraps a types.Session with the same per-operation tracking Connection
+// applies to pool statements; Query/QueryRow/Exec come from the embedded
+// stmtTracker, shared with Transaction.
 type Session struct {
 	stmtTracker
 	sess types.Session
