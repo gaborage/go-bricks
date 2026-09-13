@@ -804,6 +804,52 @@ case err != nil:
 }
 ```
 
+## Dedicated Sessions ([ADR-112](adr_112_database_session_door.md))
+
+`db.Session(ctx)` returns a `database.Session` pinned to ONE physical connection, for state a shared pool connection can silently lose when the next statement lands on a different backend: PostgreSQL advisory locks, `SET`/`ALTER SESSION`, and temporary tables. The `types.Session` godoc is the single authority for the full contract — the rules below are the short form.
+
+- **`Close` is mandatory and not idempotent**: it returns the physical connection to the pool, and a second `Close` returns `sql.ErrConnDone`.
+- **`sql.ErrConnDone` after Close or death**: every call after `Close` reports it, as does every call after the one that first OBSERVES the connection dying (that first call may surface the driver's own error instead).
+- **No concurrent use**: `database/sql` does not serialize statements on a pinned connection, so two goroutines on one `Session` race.
+- **Close every `Rows` first**: an open `*sql.Rows` from the session makes `Close` block until it is closed.
+- **Never outlive the request or job scope** it was acquired in: a `Session` holds no tenant lease of its own, so the tenant's pool may be closed under it once that lease is released ([ADR-032](adr_032_lease_refcount_tenant_handles.md)).
+
+```go
+import (
+    "context"
+    "fmt"
+
+    "github.com/gaborage/go-bricks/database"
+)
+
+const ledgerLockID = 424242
+
+func RelayLedger(ctx context.Context, db database.Interface) error {
+    sess, err := db.Session(ctx)
+    if err != nil {
+        return fmt.Errorf("open session: %w", err)
+    }
+    defer func() { _ = sess.Close() }()
+
+    if _, err := sess.Exec(ctx, "SELECT pg_advisory_lock($1)", ledgerLockID); err != nil {
+        return fmt.Errorf("acquire ledger lock: %w", err)
+    }
+    defer func() { _, _ = sess.Exec(ctx, "SELECT pg_advisory_unlock($1)", ledgerLockID) }()
+
+    // The lock and the work it guards run on the same physical connection.
+    tx, err := sess.Begin(ctx)
+    if err != nil {
+        return fmt.Errorf("begin: %w", err)
+    }
+    defer tx.Rollback(ctx)
+
+    if _, err := tx.Exec(ctx, "UPDATE ledger SET relayed = true WHERE relayed = false"); err != nil {
+        return fmt.Errorf("relay: %w", err)
+    }
+    return tx.Commit(ctx)
+}
+```
+
 ## Session Timezone (Breaking Change — ADR-016)
 
 | Setting | Default | Purpose |

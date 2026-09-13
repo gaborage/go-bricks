@@ -1303,6 +1303,47 @@ func PromoteID(c server.HandlerContext, next func() error) error {
 }
 ```
 
+## Database Sessions
+
+`db.Session(ctx)` returns a `database.Session` pinned to ONE physical connection — the handle for state a shared pool connection can silently lose when the next statement lands on a different backend: PostgreSQL advisory locks, `SET`/`ALTER SESSION`, and temporary tables (ADR-112). It composes the same `Query`/`QueryRow`/`Exec`/`Begin` surface as `database.Interface`, minus `Prepare`/`Health`/`Stats`, plus `Close`. `Close` is mandatory and NOT idempotent (a second one returns `sql.ErrConnDone`, as does every call after Close or after the connection's death is observed); a `Session` must not be used concurrently, must have every `*sql.Rows` closed before `Close`, and must not outlive the request or job scope it was acquired in — it holds no tenant lease of its own (ADR-032). The `types.Session` godoc is the authoritative contract; see wiki/database.md's "Dedicated Sessions" section.
+
+```go
+import (
+    "context"
+    "fmt"
+
+    "github.com/gaborage/go-bricks/database"
+)
+
+const ledgerLockID = 424242
+
+// RelayLedger holds a PostgreSQL advisory lock across a transaction: the lock
+// and the work it guards run on the same pinned physical connection.
+func RelayLedger(ctx context.Context, db database.Interface) error {
+    sess, err := db.Session(ctx)
+    if err != nil {
+        return fmt.Errorf("open session: %w", err)
+    }
+    defer func() { _ = sess.Close() }() // returns the connection to the pool
+
+    if _, err := sess.Exec(ctx, "SELECT pg_advisory_lock($1)", ledgerLockID); err != nil {
+        return fmt.Errorf("acquire ledger lock: %w", err)
+    }
+    defer func() { _, _ = sess.Exec(ctx, "SELECT pg_advisory_unlock($1)", ledgerLockID) }()
+
+    tx, err := sess.Begin(ctx)
+    if err != nil {
+        return fmt.Errorf("begin: %w", err)
+    }
+    defer tx.Rollback(ctx)
+
+    if _, err := tx.Exec(ctx, "UPDATE ledger SET relayed = true WHERE relayed = false"); err != nil {
+        return fmt.Errorf("relay: %w", err)
+    }
+    return tx.Commit(ctx)
+}
+```
+
 ## Database Builder & Operations
 
 ```go
@@ -1805,6 +1846,29 @@ func TestOrderServiceCreateWithItems(t *testing.T) {
 
     assert.NoError(t, err)
     dbtesting.AssertCommitted(t, tx)
+}
+```
+
+**Dedicated Session Test:**
+
+```go
+func TestLedgerServiceRelay(t *testing.T) {
+    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    sess := db.ExpectSession().
+        ExpectExec("pg_advisory_lock").WillReturnRowsAffected(1).
+        ExpectExec("UPDATE ledger").WillReturnRowsAffected(3)
+
+    deps := &app.ModuleDeps{
+        DB: func(ctx context.Context) (database.Interface, error) {
+            return db, nil
+        },
+    }
+
+    svc := NewLedgerService(deps)
+    err := svc.RelayLedger(ctx)
+
+    assert.NoError(t, err)
+    dbtest.AssertSessionClosed(t, sess)
 }
 ```
 
