@@ -213,8 +213,9 @@ func TestStmtTrackerUsesTrackingContextFields(t *testing.T) {
 
 // TestTrackBeginWrapsTxAndRecordsOp pins trackBegin's success arm for both op
 // names Connection and Session pass it: the op is recorded under the db.begin
-// span and the raw Tx comes back wrapped in a tracked *Transaction that inherits
-// the tracking Context's Logger/Vendor/Settings.
+// span and the raw Tx comes back wrapped in a tracked *Transaction that carries
+// the caller's whole tracking Context (server metadata included — see
+// TestTransactionStatementCarriesServerAttributes).
 func TestTrackBeginWrapsTxAndRecordsOp(t *testing.T) {
 	tests := []struct {
 		name string
@@ -241,9 +242,10 @@ func TestTrackBeginWrapsTxAndRecordsOp(t *testing.T) {
 			tracked, ok := tx.(*Transaction)
 			require.True(t, ok, "trackBegin must wrap the Tx for tracking, got %T", tx)
 			assert.Same(t, raw, tracked.tx, "the wrapper must delegate to the begun Tx")
-			assert.Same(t, recLogger, tracked.logger)
-			assert.Equal(t, "postgresql", tracked.vendor)
-			assert.Equal(t, settings, tracked.settings)
+			assert.Same(t, tc, tracked.tc, "the wrapper must carry the caller's whole tracking Context")
+			assert.Same(t, recLogger, tracked.tc.Logger)
+			assert.Equal(t, "postgresql", tracked.tc.Vendor)
+			assert.Equal(t, settings, tracked.tc.Settings)
 
 			spans := traceExporter.GetSpans()
 			require.Len(t, spans, 1)

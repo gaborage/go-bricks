@@ -7,8 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
+	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
 type stubTx struct {
@@ -58,10 +62,80 @@ func (s *stubTx) Rollback(_ context.Context) error {
 	return nil
 }
 
+// newTxTrackingContext builds the tracking Context a Transaction is wrapped
+// with when no server metadata is in play (the server-attribute parity case,
+// TestTransactionStatementCarriesServerAttributes, must build through
+// tracking.Connection instead).
+func newTxTrackingContext(log *recordingLogger, settings Settings) *Context {
+	return &Context{Logger: log, Vendor: "postgresql", Settings: settings}
+}
+
+const (
+	txServerAddress = "db.tx.internal"
+	txServerPort    = 5433
+	txNamespace     = "txdb.public"
+)
+
+// TestTransactionStatementCarriesServerAttributes pins tracking parity between
+// the BEGIN span and the transaction's own statement spans: a Tx obtained from
+// either a pool Begin or a session Begin must carry server.address,
+// server.port and db.namespace, the same way pool and session statements do.
+// A Transaction built from only logger/vendor/settings silently drops all three.
+func TestTransactionStatementCarriesServerAttributes(t *testing.T) {
+	tests := []struct {
+		name  string
+		begin func(t *testing.T, ctx context.Context, conn *Connection) types.Tx
+	}{
+		{
+			name: "from_connection_begin",
+			begin: func(t *testing.T, ctx context.Context, conn *Connection) types.Tx {
+				tx, err := conn.Begin(ctx)
+				require.NoError(t, err)
+				return tx
+			},
+		},
+		{
+			name: "from_session_begin",
+			begin: func(t *testing.T, ctx context.Context, conn *Connection) types.Tx {
+				sess, err := conn.Session(ctx)
+				require.NoError(t, err)
+				tx, err := sess.Begin(ctx)
+				require.NoError(t, err)
+				return tx
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			traceExporter, _, cleanup := setupTestObservabilityProviders(t)
+			defer cleanup()
+
+			underlying := &stubSessionCapableConnection{
+				stubConnection: &stubConnection{databaseTypeValue: "postgresql"},
+				sessionResult:  &stubSession{databaseTypeValue: "postgresql"},
+			}
+			conn, ok := NewConnection(underlying, newRecordingLogger(), &config.DatabaseConfig{}).(*Connection)
+			require.True(t, ok, "NewConnection must return a tracking *Connection")
+			conn.SetServerInfo(txServerAddress, txServerPort, txNamespace)
+
+			ctx := context.Background()
+			tx := tt.begin(t, ctx, conn)
+
+			_, err := tx.Exec(ctx, "INSERT INTO t VALUES (1)")
+			require.NoError(t, err)
+
+			span := obtest.NewSpanCollector(t, traceExporter).WithName(dbInsertMetric).AssertCount(1).First()
+			obtest.AssertSpanAttribute(t, &span, "server.address", txServerAddress)
+			obtest.AssertSpanAttribute(t, &span, "server.port", txServerPort)
+			obtest.AssertSpanAttribute(t, &span, "db.namespace", txNamespace)
+		})
+	}
+}
+
 func TestNewTransactionWrapsUnderlying(t *testing.T) {
 	t.Parallel()
 	underlying := &stubTx{}
-	tx := NewTransaction(underlying, newRecordingLogger(), "postgresql", Settings{})
+	tx := NewTransaction(underlying, newTxTrackingContext(newRecordingLogger(), Settings{}))
 
 	wrapped, ok := tx.(*Transaction)
 	if !ok {
@@ -79,7 +153,7 @@ func TestTransactionQueryLogs(t *testing.T) {
 	underlying := &stubTx{}
 	recLogger := newRecordingLogger()
 	settings := Settings{slowQueryThreshold: time.Second}
-	tx := NewTransaction(underlying, recLogger, "postgresql", settings)
+	tx := NewTransaction(underlying, newTxTrackingContext(recLogger, settings))
 
 	// stubTx returns a bare new(sql.Rows) with a nil driver connection; calling
 	// Close() on it panics. These are not real DB rows, so there is nothing to
@@ -109,7 +183,7 @@ func TestTransactionExecLogsError(t *testing.T) {
 	ctx := logger.WithDBCounter(context.Background())
 	underlying := &stubTx{execErr: errors.New("fail")}
 	recLogger := newRecordingLogger()
-	tx := NewTransaction(underlying, recLogger, "postgresql", Settings{slowQueryThreshold: time.Second})
+	tx := NewTransaction(underlying, newTxTrackingContext(recLogger, Settings{slowQueryThreshold: time.Second}))
 
 	_, err := tx.Exec(ctx, "UPDATE", 2)
 	if err == nil {
@@ -127,7 +201,7 @@ func TestTransactionPrepareReturnsTrackedStatement(t *testing.T) {
 	underlying := &stubTx{}
 	recLogger := newRecordingLogger()
 	settings := Settings{slowQueryThreshold: time.Second}
-	tx := NewTransaction(underlying, recLogger, "postgresql", settings)
+	tx := NewTransaction(underlying, newTxTrackingContext(recLogger, settings))
 
 	stmt, err := tx.Prepare(ctx, "SELECT 1")
 	if err != nil {
@@ -147,7 +221,7 @@ func TestTransactionPreparePropagatesError(t *testing.T) {
 	ctx := context.Background()
 	underlying := &stubTx{prepareErr: errors.New("prepare fail")}
 	recLogger := newRecordingLogger()
-	tx := NewTransaction(underlying, recLogger, "postgresql", Settings{slowQueryThreshold: time.Second})
+	tx := NewTransaction(underlying, newTxTrackingContext(recLogger, Settings{slowQueryThreshold: time.Second}))
 
 	_, err := tx.Prepare(ctx, "SELECT 1")
 	if err == nil {
@@ -161,7 +235,7 @@ func TestTransactionPreparePropagatesError(t *testing.T) {
 func TestTransactionCommitAndRollbackDelegate(t *testing.T) {
 	t.Parallel()
 	underlying := &stubTx{}
-	tx := NewTransaction(underlying, newRecordingLogger(), "postgresql", Settings{})
+	tx := NewTransaction(underlying, newTxTrackingContext(newRecordingLogger(), Settings{}))
 
 	if tx.Commit(context.Background()) != nil {
 		t.Fatalf("expected commit to succeed")

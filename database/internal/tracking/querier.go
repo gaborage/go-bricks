@@ -70,5 +70,5 @@ func trackBegin(ctx context.Context, tc *Context, op string, begin func(context.
 	if err != nil {
 		return nil, err
 	}
-	return NewTransaction(tx, tc.Logger, tc.Vendor, tc.Settings), nil
+	return NewTransaction(tx, tc), nil
 }

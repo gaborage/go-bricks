@@ -5,39 +5,29 @@ import (
 	"time"
 
 	"github.com/gaborage/go-bricks/database/types"
-	"github.com/gaborage/go-bricks/logger"
 )
 
 // Transaction wraps types.Tx to provide performance tracking for database transactions.
 // It intercepts all transaction operations and logs performance metrics,
 // slow queries, and errors using structured logging.
 // Query/QueryRow/Exec come from the embedded stmtTracker, shared with Session.
+// The tracking Context (stmtTracker.tc) is the single source of logger, vendor
+// and settings — Prepare reads them through it rather than from copies.
 type Transaction struct {
 	stmtTracker
-	tx       types.Tx
-	logger   logger.Logger
-	vendor   string
-	settings Settings
+	tx types.Tx
 }
 
 // NewTransaction creates a Transaction wrapper around the provided tx that records execution
 // metrics for all transaction operations. The wrapper delegates calls to the given tx while
-// capturing timing and error information, stores the provided logger, vendor, and settings,
-// and initializes an internal Context used for tracking.
-func NewTransaction(tx types.Tx, log logger.Logger, vendor string, settings Settings) types.Tx {
+// capturing timing and error information. tc is the caller's tracking Context — pass the
+// BEGINNING connection's or session's context (see Connection.trackingContext) so transaction
+// statements carry the same server.address / server.port / db.namespace attributes as the
+// BEGIN span.
+func NewTransaction(tx types.Tx, tc *Context) types.Tx {
 	return &Transaction{
-		stmtTracker: stmtTracker{
-			q: tx,
-			tc: &Context{
-				Logger:   log,
-				Vendor:   vendor,
-				Settings: settings,
-			},
-		},
-		tx:       tx,
-		logger:   log,
-		vendor:   vendor,
-		settings: settings,
+		stmtTracker: stmtTracker{q: tx, tc: tc},
+		tx:          tx,
 	}
 }
 
@@ -55,7 +45,7 @@ func (tx *Transaction) Prepare(ctx context.Context, query string) (types.Stateme
 		return nil, err
 	}
 
-	return NewStatement(stmt, tx.logger, tx.vendor, query, tx.settings), nil
+	return NewStatement(stmt, tx.tc.Logger, tx.tc.Vendor, query, tx.tc.Settings), nil
 }
 
 // Commit commits the transaction
