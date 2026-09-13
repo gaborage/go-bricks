@@ -264,11 +264,14 @@ rejection**; its one replay-related job is to make the message's identity un-for
   ledger is by TYPE and provenance, not by spelling.
 - `inbox.ProcessOnce` (through `messaging.ValidateDedupKey`) refuses the zero key, and
   refuses a SEALED key under a context the sealed door did not mark
-  (`messaging.IsSealedDelivery`). A handler therefore holds only its own delivery's sealed
-  key, and using it from somewhere that is not that delivery — a detached goroutine, a
-  `context.Background()` where `context.WithoutCancel(ctx)` was meant — loses the marker
-  and fails closed with `ErrInvalidEventID` instead of writing the ledger row silently.
-  Derive the context from the handler's.
+  (`messaging.IsSealedDelivery`). The marker is a context value, so what it catches is a
+  context that never came from the sealed door: `context.Background()` drops it and fails
+  closed with `ErrInvalidEventID` instead of writing the ledger row silently.
+  `context.WithoutCancel(ctx)` keeps every value, the marker included, so detached work
+  derived that way still passes admission — which is the point: give it a fresh bounded
+  timeout rather than reaching for `Background`. What the marker does not distinguish is
+  WHICH sealed delivery marked the context, so a handler that carries one delivery's key
+  into another's is still admitted ([#1634](https://github.com/gaborage/go-bricks/issues/1634)).
 - The header-id grammar excludes `:`, so no header-sourced or consumer-composed id can even
   spell a sealed key: a publish-ACL holder on an unsealed sibling queue cannot pre-insert a
   sealed message's key and have the real one skip+ACK (the shared-ledger suppression
