@@ -19,6 +19,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/internal/dbtestlog"
 	"github.com/gaborage/go-bricks/database/internal/wrapper"
+	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
 const (
@@ -308,6 +309,21 @@ func TestBuildPostgresDSNRoundTripsThroughPgx(t *testing.T) {
 			assert.Equal(t, cfg.Password, pc.Password)
 			assert.Equal(t, cfg.Database, pc.Database)
 		})
+	}
+}
+
+// Config passes these through unjudged, which is safe only because pgx refuses every one (#1551).
+func TestPgxRejectsConnectionStringsTheConfigScannerCannotTokenize(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PGSERVICE", "")
+	t.Setenv("PGSERVICEFILE", home+"/pg_service.conf")
+	t.Setenv("PGPASSFILE", home+"/pgpass")
+
+	for _, dsn := range testutil.UntokenizablePostgresDSNs {
+		_, err := pgconn.ParseConfig(dsn)
+		require.Error(t, err, "%q", dsn)
+		assert.Contains(t, err.Error(), "failed to parse as ", "%q", dsn)
 	}
 }
 
