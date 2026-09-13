@@ -724,7 +724,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
 
 The relay job polls for pending events every `pollinterval` (default 5s), publishes them to AMQP with an `x-outbox-event-id` header for deduplication, and a cleanup job removes published events after `retentionperiod` (default 72h). See [CLAUDE.md](CLAUDE.md) for full configuration options.
 
-**Inbox (consumer side):** the `inbox` package is the outbox's mirror — `deps.Inbox.ProcessOnce(ctx, eventID, fn)` records the event id in a ledger atomically with the handler's writes, giving exactly-once processing of the handler's transactional work on top of the broker's at-least-once delivery. Effects outside that DB transaction (HTTP calls, emails, broker publishes) can still repeat on redelivery — keep them idempotent. Register `inbox.NewModule()`; use the `x-outbox-event-id` header as the dedup key. See [CLAUDE.md](CLAUDE.md) and [wiki/outbox.md](wiki/outbox.md).
+**Inbox (consumer side):** the `inbox` package is the outbox's mirror — `deps.Inbox.ProcessOnce(ctx, key, fn)` takes a `messaging.DedupKey` and records it in a ledger atomically with the handler's writes, giving exactly-once processing of the handler's transactional work on top of the broker's at-least-once delivery. Effects outside that DB transaction (HTTP calls, emails, broker publishes) can still repeat on redelivery — keep them idempotent. Register `inbox.NewModule()`; take the key from `meta.DedupKey()` on a metadata-carrying typed consumer, which reads the `x-outbox-event-id` stamp, or build one yourself with `messaging.WireDedupKey(id)`. See [CLAUDE.md](CLAUDE.md) and [wiki/outbox.md](wiki/outbox.md).
 
 ---
 
