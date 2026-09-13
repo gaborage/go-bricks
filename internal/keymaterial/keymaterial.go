@@ -165,3 +165,36 @@ func (k *ProducerKeys) PublicKey(kid string) (*rsa.PublicKey, error) {
 	}
 	return nil, fmt.Errorf("no public key registered for kid %q", kid)
 }
+
+// ConsumerKeys resolves the two kids a consumer holds: the producer's sign
+// PUBLIC key and its own encrypt PRIVATE key — the exact inverse of
+// ProducerKeys, and the shape the open-event CLI hands to jose. Any other kid
+// is an error naming the kid and nothing else.
+//
+// The method set is the same jose.KeyResolver one ProducerKeys carries, and
+// satisfied the same structural way, without importing jose here.
+type ConsumerKeys struct {
+	SignKid    string
+	SignPub    *rsa.PublicKey
+	EncryptKid string
+	EncPriv    *rsa.PrivateKey
+}
+
+// PublicKey returns the verify key for SignKid; every other kid is unknown. The nil check
+// is the fail-closed half: a zero ConsumerKeys carries an empty kid, which an empty lookup
+// kid would otherwise match into a (nil, nil) hand-back.
+func (k *ConsumerKeys) PublicKey(kid string) (*rsa.PublicKey, error) {
+	if kid == k.SignKid && k.SignPub != nil {
+		return k.SignPub, nil
+	}
+	return nil, fmt.Errorf("no public key registered for kid %q", kid)
+}
+
+// PrivateKey returns the decrypt key for EncryptKid; every other kid is unknown, and an
+// unset key is unknown too — see PublicKey.
+func (k *ConsumerKeys) PrivateKey(kid string) (*rsa.PrivateKey, error) {
+	if kid == k.EncryptKid && k.EncPriv != nil {
+		return k.EncPriv, nil
+	}
+	return nil, fmt.Errorf("no private key registered for kid %q", kid)
+}

@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -344,11 +345,25 @@ func TestLoadRSAPublicKey(t *testing.T) {
 	})
 }
 
+// resolverPair is the two keys the resolver tests need: one per role.
+type resolverPair struct{ sign, enc *rsa.PrivateKey }
+
+// resolverKeys mints them once for the package. Neither resolver test mutates a key, and
+// 2048-bit generation is ~37ms apiece, so four generations bought nothing over two.
+var resolverKeys = sync.OnceValue(func() *resolverPair {
+	sign, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic("keymaterial test: generate sign key: " + err.Error())
+	}
+	enc, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic("keymaterial test: generate encrypt key: " + err.Error())
+	}
+	return &resolverPair{sign: sign, enc: enc}
+})
+
 func TestProducerKeys(t *testing.T) {
-	signPriv, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-	encPriv, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
+	signPriv, encPriv := resolverKeys().sign, resolverKeys().enc
 	require.NotEqual(t, signPriv.N, encPriv.N, "the two roles must hold distinct keys for the cross-role cases to bite")
 
 	keys := &ProducerKeys{
@@ -393,4 +408,89 @@ func TestProducerKeys(t *testing.T) {
 		require.Error(t, err)
 		assert.Equal(t, `no public key registered for kid "sign-v1"`, err.Error())
 	})
+}
+
+// ConsumerKeys carries the same jose resolver method set as ProducerKeys, in the
+// inverse roles; this assertion is where that structural claim is pinned.
+var _ jose.KeyResolver = (*ConsumerKeys)(nil)
+
+// TestConsumerKeys mirrors TestProducerKeys with the roles swapped: the SIGN kid
+// serves the PUBLIC half (verify) and the ENCRYPT kid the PRIVATE half (decrypt).
+func TestConsumerKeys(t *testing.T) {
+	signPriv, encPriv := resolverKeys().sign, resolverKeys().enc
+	require.NotEqual(t, signPriv.N, encPriv.N, "the two roles must hold distinct keys for the cross-role cases to bite")
+
+	keys := &ConsumerKeys{
+		SignKid:    "sign-v1",
+		SignPub:    &signPriv.PublicKey,
+		EncryptKid: "enc-v1",
+		EncPriv:    encPriv,
+	}
+
+	t.Run("sign_kid_returns_public", func(t *testing.T) {
+		got, err := keys.PublicKey("sign-v1")
+		require.NoError(t, err)
+		assert.Equal(t, signPriv.N, got.N)
+	})
+
+	t.Run("encrypt_kid_returns_private", func(t *testing.T) {
+		got, err := keys.PrivateKey("enc-v1")
+		require.NoError(t, err)
+		assert.Equal(t, encPriv.D, got.D)
+	})
+
+	t.Run("unknown_public_kid_errors", func(t *testing.T) {
+		_, err := keys.PublicKey("nope-v9")
+		require.Error(t, err)
+		assert.Equal(t, `no public key registered for kid "nope-v9"`, err.Error())
+	})
+
+	t.Run("unknown_private_kid_errors", func(t *testing.T) {
+		_, err := keys.PrivateKey("nope-v9")
+		require.Error(t, err)
+		assert.Equal(t, `no private key registered for kid "nope-v9"`, err.Error())
+	})
+
+	// The inverse of ProducerKeys' cross-role case: here the ENCRYPT kid is not a
+	// public-key kid and the SIGN kid is not a private-key kid.
+	t.Run("cross_role_kid_errors", func(t *testing.T) {
+		_, err := keys.PublicKey("enc-v1")
+		require.Error(t, err)
+		assert.Equal(t, `no public key registered for kid "enc-v1"`, err.Error())
+
+		_, err = keys.PrivateKey("sign-v1")
+		require.Error(t, err)
+		assert.Equal(t, `no private key registered for kid "sign-v1"`, err.Error())
+	})
+}
+
+// TestConsumerKeysFailClosedOnUnsetKey pins the guard: a zero ConsumerKeys has an empty
+// kid in both slots, so a lookup with the empty kid would otherwise MATCH and hand back a
+// nil key with a nil error. Both doors must refuse instead.
+func TestConsumerKeysFailClosedOnUnsetKey(t *testing.T) {
+	cases := []struct {
+		name string
+		keys *ConsumerKeys
+	}{
+		{"zero_value", &ConsumerKeys{}},
+		{"kids_set_keys_absent", &ConsumerKeys{SignKid: "sign-v1", EncryptKid: "enc-v1"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pub, err := tc.keys.PublicKey(tc.keys.SignKid)
+			// Reported by TYPE, never by value (ADR-102).
+			if pub != nil {
+				assert.Fail(t, "unexpected public key returned", "expected none, got a %T", pub)
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "no public key registered for kid")
+
+			priv, err := tc.keys.PrivateKey(tc.keys.EncryptKid)
+			if priv != nil {
+				assert.Fail(t, "unexpected private key returned", "expected none, got a %T", priv)
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "no private key registered for kid")
+		})
+	}
 }
