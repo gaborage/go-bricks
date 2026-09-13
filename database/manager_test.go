@@ -80,6 +80,8 @@ func (s *stubTx) Prepare(_ context.Context, _ string) (Statement, error) {
 func (s *stubTx) Commit(_ context.Context) error   { return nil }
 func (s *stubTx) Rollback(_ context.Context) error { return nil }
 
+var _ Interface = (*stubDB)(nil)
+
 type stubDB struct {
 	key      string
 	closedMu sync.Mutex
@@ -117,8 +119,6 @@ func (s *stubDB) Close() error {
 	}
 	return s.closeErr
 }
-
-var _ Interface = (*stubDB)(nil)
 
 func (s *stubDB) DatabaseType() string                       { return "stub" }
 func (s *stubDB) MigrationTable() string                     { return "schema_migrations" }

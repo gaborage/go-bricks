@@ -93,9 +93,9 @@ test doubles.
   own error rather than a translated one … Every SUBSEQUENT call returns an error satisfying
   `errors.Is(err, sql.ErrConnDone)`."* So a caller that wants one classification for a dead
   backend must read both the first error and the next one.
-- **A Session holds no tenant lease of its own**, so it must not outlive the request or job scope
-  in which it was acquired: the tenant's underlying pool may be closed out from under it once
-  that lease is released (ADR-032).
+- **A Session inherits the tenant-lease lifetime rule and cannot extend it** (ADR-032). The bound
+  itself — the scope a session must not outlive, and what the tenant's pool does once the lease is
+  released — is stated in the `types.Session` godoc, which this ADR does not restate.
 - **A handler that opens a session is now testable with the framework's fakes**, and the strict
   queue means a test that forgets `ExpectSession()` fails loudly rather than silently exercising
   a pool path.

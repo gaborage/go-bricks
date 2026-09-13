@@ -212,7 +212,8 @@ func (db *TestDB) ExpectTransaction() *TestTx {
 // Example:
 //
 //	sess := db.ExpectSession().
-//	    ExpectExec("SELECT pg_advisory_lock").WillReturnRowsAffected(1)
+//	    ExpectQuery("SELECT pg_advisory_lock").
+//	        WillReturnRows(NewRowSet("pg_advisory_lock").AddRow(true))
 func (db *TestDB) ExpectSession() *TestSession {
 	sess := newTestSession(db)
 	db.mu.Lock()
