@@ -18,7 +18,7 @@ type Statement = types.Statement
 type Tx = types.Tx
 
 // Session defines a handle pinned to a single physical database connection.
-// See types.Session for the error and concurrency contract.
+// See types.Session for the error, concurrency and lifetime contract.
 type Session = types.Session
 
 // QueryBuilderInterface defines the interface for vendor-specific SQL query building.

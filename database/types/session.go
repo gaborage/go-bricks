@@ -17,7 +17,10 @@ package types
 // interface { Session(ctx context.Context) (Session, error) } — satisfied by
 // both the vendor connections (postgresql.Connection, oracle.Connection) and
 // the tracking wrapper the framework actually hands back from
-// database.NewConnection / deps.DB(ctx). Always Close it to return the
+// database.NewConnection / deps.DB(ctx). The assertion succeeds whenever the
+// handle exposes the method — including the tracking wrapper, which always
+// does — so an unsupported underlying connection reports that as an error
+// from the call, not from the assertion. Always Close it to return the
 // physical connection to the pool.
 //
 // A Session holds no tenant lease of its own, so it must not outlive the
