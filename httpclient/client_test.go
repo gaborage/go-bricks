@@ -2838,6 +2838,78 @@ func TestBuildAppliesJOSEDefaultsToZeroValuePolicy(t *testing.T) {
 	assert.Equal(t, jose.DefaultCty, hdr.JWS.Cty, "an unset Cty must land on the package default")
 }
 
+// jwsOfJWE returns a copy of p switched to SealModeJWSofJWE.
+func jwsOfJWE(p *jose.Policy) *jose.Policy {
+	cp := *p
+	cp.Mode = jose.SealModeJWSofJWE
+	return &cp
+}
+
+// A JWS-of-JWE policy naming only its kids builds and seals through the same
+// normalization as the nested default: the SigAlg default applies because the mode signs,
+// and the Cty default never reaches the inner JWE.
+func TestBuildSealsJWSofJWEOutboundWithDefaults(t *testing.T) {
+	log := createTestLogger()
+	f := jositest.NewBidirectionalFixture(t)
+	inner := &capturingRoundTripper{}
+
+	built, err := NewBuilder(log).
+		WithTransport(inner).
+		WithJOSE(JOSEConfig{Outbound: jwsOfJWE(outboundKidsOnly(f)), Resolver: f.Resolver}).
+		Build()
+	require.NoError(t, err)
+
+	_, err = built.Post(context.Background(), &Request{
+		URL:  "http://example.invalid/tokens",
+		Body: []byte(`{"hello":"world"}`),
+	})
+	require.NoError(t, err)
+
+	plaintext, _, hdr, err := jose.Open(inner.body, jwsOfJWE(f.PeerInbound), f.Resolver)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"hello":"world"}`, string(plaintext))
+	assert.Equal(t, string(jose.DefaultSigAlg), hdr.JWS.Alg)
+	assert.Equal(t, "JWE", hdr.JWS.Cty)
+	assert.Empty(t, hdr.JWE.Cty)
+}
+
+// fixedResponseRoundTripper answers every request with one canned body.
+type fixedResponseRoundTripper struct {
+	contentType string
+	body        string
+}
+
+func (f *fixedResponseRoundTripper) RoundTrip(req *nethttp.Request) (*nethttp.Response, error) {
+	return &nethttp.Response{
+		StatusCode: nethttp.StatusOK,
+		Header:     nethttp.Header{testContentTypeHdr: []string{f.contentType}},
+		Body:       io.NopCloser(strings.NewReader(f.body)),
+		Request:    req,
+	}, nil
+}
+
+func TestBuildOpensJWSofJWEInboundWithDefaults(t *testing.T) {
+	log := createTestLogger()
+	f := jositest.NewBidirectionalFixture(t)
+	sealed, err := jose.Seal([]byte(`{"token":"tok-42"}`), jwsOfJWE(f.PeerOutbound), f.Resolver)
+	require.NoError(t, err)
+
+	inbound := jwsOfJWE(&jose.Policy{
+		Direction:  jose.DirectionInbound,
+		DecryptKid: f.ClientInbound.DecryptKid,
+		VerifyKid:  f.ClientInbound.VerifyKid,
+	})
+	built, err := NewBuilder(log).
+		WithTransport(&fixedResponseRoundTripper{contentType: jose.ContentType, body: sealed}).
+		WithJOSE(JOSEConfig{Inbound: inbound, Resolver: f.Resolver}).
+		Build()
+	require.NoError(t, err)
+
+	resp, err := built.Get(context.Background(), &Request{URL: "http://example.invalid/tokens"})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"token":"tok-42"}`, string(resp.Body))
+}
+
 // The mirror of the defaulting above: a Cty the caller set explicitly must survive
 // Build untouched. Cty is the one normalized field Policy.Validate never inspects,
 // so only the emitted header can show which way the default went.
