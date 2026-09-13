@@ -26,6 +26,7 @@ type Config struct {
 	Outbox      OutboxConfig              `koanf:"outbox" json:"outbox" yaml:"outbox" toml:"outbox" mapstructure:"outbox"`
 	Inbox       InboxConfig               `koanf:"inbox" json:"inbox" yaml:"inbox" toml:"inbox" mapstructure:"inbox"`
 	KeyStore    KeyStoreConfig            `koanf:"keystore" json:"keystore" yaml:"keystore" toml:"keystore" mapstructure:"keystore"`
+	Auth        AuthConfig                `koanf:"auth" json:"auth" yaml:"auth" toml:"auth" mapstructure:"auth"`
 
 	// src holds the loaded koanf tree and the presence set recorded alongside it
 	src *configSource `json:"-" yaml:"-" toml:"-" mapstructure:"-"`
@@ -1072,4 +1073,76 @@ type KeySourceConfig struct {
 // shared by config validation and the keystore loader.
 func (s *KeySourceConfig) IsSet() bool {
 	return s.File != "" || s.Value != ""
+}
+
+// AuthConfig holds bearer-credential verification configuration. Only the JWT
+// scheme is supported today; the extra level keeps a future scheme from
+// renaming today's keys.
+type AuthConfig struct {
+	// JWT holds the JWT bearer-credential verification settings.
+	JWT AuthJWTConfig `koanf:"jwt" json:"jwt" yaml:"jwt" toml:"jwt" mapstructure:"jwt"`
+}
+
+// AuthJWTConfig holds the JWT bearer-credential verification settings. The
+// auth package consumes this section as auth.Config and owns the checks that
+// are conditional on a verifier actually being built; config.Validate enforces
+// only what holds for every deployment (see checkAuth).
+type AuthJWTConfig struct {
+	// Issuer is matched exactly against the credential's "iss" claim.
+	// Required by auth.Config.Validate, not at config load: a service that
+	// builds no verifier configures no issuer.
+	Issuer string `koanf:"issuer" json:"issuer" yaml:"issuer" toml:"issuer" mapstructure:"issuer"`
+
+	// Audience lists the accepted "aud" values; a credential must carry one of them.
+	Audience []string `koanf:"audience" json:"audience" yaml:"audience" toml:"audience" mapstructure:"audience"`
+
+	// JWKSURI is the issuer's key set endpoint. HTTPS only. Empty is valid:
+	// a verifier built over a pinned key source never fetches a key set.
+	JWKSURI string `koanf:"jwksuri" json:"jwksuri" yaml:"jwksuri" toml:"jwksuri" mapstructure:"jwksuri"`
+
+	// Algorithms is the accepted "alg" allowlist, a subset of {RS256, PS256}.
+	// Default: RS256,PS256.
+	Algorithms []string `koanf:"algorithms" json:"algorithms" yaml:"algorithms" toml:"algorithms" mapstructure:"algorithms"`
+
+	// Leeway absorbs clock skew on the exp/nbf/iat comparisons, and nothing
+	// else: it is capped at MaxAuthLeeway, because an unbounded leeway accepts
+	// expired credentials indefinitely. Default: 30s.
+	Leeway time.Duration `koanf:"leeway" json:"leeway" yaml:"leeway" toml:"leeway" mapstructure:"leeway"`
+
+	// Typ, when set, constrains the JOSE header "typ": it must match one entry,
+	// compared case-insensitively per RFC 7515. Empty means no typ check.
+	Typ []string `koanf:"typ" json:"typ" yaml:"typ" toml:"typ" mapstructure:"typ"`
+
+	// JWKS holds the key-set fetching settings, read only by the JWKS-backed
+	// key source.
+	JWKS AuthJWKSConfig `koanf:"jwks" json:"jwks" yaml:"jwks" toml:"jwks" mapstructure:"jwks"`
+
+	// Telemetry holds the verifier's observability opt-ins.
+	Telemetry AuthTelemetryConfig `koanf:"telemetry" json:"telemetry" yaml:"telemetry" toml:"telemetry" mapstructure:"telemetry"`
+}
+
+// AuthJWKSConfig holds the issuer key-set fetching settings. These keys are
+// inert for a verifier built over a statically pinned key source.
+type AuthJWKSConfig struct {
+	// TTL is how long a fetched key set is served without refreshing. Default: 15m.
+	TTL time.Duration `koanf:"ttl" json:"ttl" yaml:"ttl" toml:"ttl" mapstructure:"ttl"`
+
+	// StaleCeiling is how long a stale key set may still be served when the
+	// issuer is unreachable. Must be >= TTL. Default: 1h.
+	StaleCeiling time.Duration `koanf:"staleceiling" json:"staleceiling" yaml:"staleceiling" toml:"staleceiling" mapstructure:"staleceiling"`
+
+	// MinRefreshInterval floors the spacing between key set fetches, so an
+	// unknown kid cannot be used to hammer the issuer. Default: 30s.
+	MinRefreshInterval time.Duration `koanf:"minrefreshinterval" json:"minrefreshinterval" yaml:"minrefreshinterval" toml:"minrefreshinterval" mapstructure:"minrefreshinterval"`
+
+	// MaxBodyBytes caps the key set response body read from the issuer.
+	// Default: 1048576 (1 MiB).
+	MaxBodyBytes int64 `koanf:"maxbodybytes" json:"maxbodybytes" yaml:"maxbodybytes" toml:"maxbodybytes" mapstructure:"maxbodybytes"`
+}
+
+// AuthTelemetryConfig holds the verifier's observability opt-ins.
+type AuthTelemetryConfig struct {
+	// EndUserID enables the enduser.id span attribute. Off by default because
+	// it records the subject of every verified credential.
+	EndUserID bool `koanf:"enduserid" json:"enduserid" yaml:"enduserid" toml:"enduserid" mapstructure:"enduserid"`
 }

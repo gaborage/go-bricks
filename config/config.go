@@ -45,6 +45,7 @@ var configSections = map[string]bool{
 	"outbox":        true,
 	"inbox":         true,
 	"keystore":      true,
+	fieldAuth:       true,
 	"observability": true,
 }
 
@@ -643,5 +644,17 @@ func koanfOnlyDefaults() map[string]any {
 		// the keys normalize does not own are written here.
 		"scheduler.security.cidrallowlist":  []string{},
 		"scheduler.security.trustedproxies": []string{},
+
+		// Auth defaults. Hand-written rather than derived: the auth section has no
+		// normalize step, because the keys an unset deployment leaves empty
+		// (auth.jwt.issuer, auth.jwt.audience) are required by the verifier, not by
+		// config load — filling them in normalize would invent an identity.
+		fieldAuthAlgorithms:            []string{AlgorithmRS256, AlgorithmPS256},
+		fieldAuthLeeway:                "30s",
+		fieldAuthJWKSTTL:               "15m",
+		fieldAuthJWKSStaleCeiling:      "1h",
+		fieldAuthJWKSMinRefresh:        "30s",
+		fieldAuthJWKSMaxBodyBytes:      defaultAuthJWKSMaxBodyBytes,
+		"auth.jwt.telemetry.enduserid": false,
 	}
 }

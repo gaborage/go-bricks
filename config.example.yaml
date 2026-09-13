@@ -151,6 +151,32 @@ keystore:
     #   private:
     #     value: "${ENCRYPTION_PRIVATE_KEY_BASE64}"
 
+# Bearer credential verification (OPTIONAL - JWT access tokens)
+# Unset entirely when the service verifies no credentials; the keys below carry
+# framework defaults, and issuer/audience are required only by the verifier.
+auth:
+  jwt:
+    issuer: "https://issuer.example.com"            # Matched exactly against the token "iss"
+    audience:                                       # Accepted "aud" values (one must match)
+      - "api://orders"
+    # Read by a JWKS-backed PublicKeyResolver, which the APPLICATION supplies and
+    # passes to auth.NewVerifierWithResolver. Setting it does not by itself make
+    # the framework fetch anything. Omit it when pinning keys in process.
+    jwksuri: "https://issuer.example.com/.well-known/jwks.json"  # https only, hostname required
+    algorithms:                                     # Allowlist, subset of RS256/PS256 (default: both)
+      - RS256
+      - PS256
+    leeway: 30s                                     # Clock skew absorbed on exp/nbf/iat
+    # typ:                                          # Optional JOSE "typ" allowlist (unset = no check)
+    #   - at+jwt
+    jwks:                                           # Consumed by that same application-supplied resolver
+      ttl: 15m                                      # Key set lifetime before a refresh is due
+      staleceiling: 1h                              # Max age a stale key set may still be served (>= ttl)
+      minrefreshinterval: 30s                       # Floor between key set fetches
+      maxbodybytes: 1048576                         # Cap on the fetched key set body (1 MiB)
+    telemetry:
+      enduserid: false                              # Record enduser.id on spans (off: it is the token subject)
+
 # Transactional Outbox (OPTIONAL - reliable event publishing)
 # Requires: database + messaging + scheduler modules
 outbox:
