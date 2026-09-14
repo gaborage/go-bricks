@@ -86,22 +86,13 @@ test doubles.
   adds `Session`, or embeds a framework connection and inherits it. The population is test
   doubles and adapters; the compiler names each one, and `go vet ./...` catches the ones that
   live in `_test.go` files.
-- **The contract is a runtime contract, and the interface cannot enforce it.** Copied verbatim
-  from the `types.Session` godoc, which remains authoritative: *the call that OBSERVES the death
-  may return the driver's own error rather than a translated one — a PostgreSQL backend killed
-  after the statement went out reports a raw FATAL error (SQLSTATE 57P01) that `database/sql`
-  does not classify as a dead connection. Every SUBSEQUENT call returns an error satisfying
-  `errors.Is(err, sql.ErrConnDone)`. After Close, every call does so immediately. One exception:
-  a failure that only surfaces while iterating the `*sql.Rows` returned by Query reaches the
-  caller RAW through `rows.Next` and `rows.Err`, and is never translated.* So a caller that wants
-  one classification for a dead backend must read both the first error and the next one, and must
-  not expect `sql.ErrConnDone` out of row iteration at all.
-- **Three more rules a pinned handle imposes, unchanged by this link.** Any `*sql.Rows` obtained
-  from a still-open Session makes `Session.Close` block until that Rows is closed, because
-  `database/sql` holds the pinned connection's closing mutex while the Rows lives. A Session must
-  not be used concurrently: `database/sql` does not serialize statements on one pinned
-  connection, so concurrent calls race. And Close is not idempotent — a second Close returns
-  `sql.ErrConnDone`.
+- **The contract is a runtime contract, and the interface cannot enforce it.** The `types.Session`
+  godoc is the single authority for the full contract — blocking, concurrency, idempotency and the
+  raw row-iteration exception all live there, not here. The one sentence that motivated this break,
+  from `database/types/session.go:24`: *"the call that OBSERVES the death may return the driver's
+  own error rather than a translated one … Every SUBSEQUENT call returns an error satisfying
+  `errors.Is(err, sql.ErrConnDone)`."* So a caller that wants one classification for a dead
+  backend must read both the first error and the next one.
 - **A Session holds no tenant lease of its own**, so it must not outlive the request or job scope
   in which it was acquired: the tenant's underlying pool may be closed out from under it once
   that lease is released (ADR-032).
