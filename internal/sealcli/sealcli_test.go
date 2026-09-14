@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"flag"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -343,6 +344,21 @@ func TestReadPayloadSizeCap(t *testing.T) {
 // TestReadPayloadUncappedReadsOversized pins that the door the frozen sealing CLIs call
 // still reads past the capped door's ceiling: the cap is the CALLER's choice, not the
 // package's, so adding it to one binary must not shrink the others.
+// TestReadPayloadCappedMaxInt64IsUncapped pins the overflow edge: limit+1 wraps negative at
+// MaxInt64, which would hand io.LimitReader a negative budget and return an EMPTY payload with
+// no error — a silent truncation rather than a refusal.
+func TestReadPayloadCappedMaxInt64IsUncapped(t *testing.T) {
+	body := bytes.Repeat([]byte("a"), int(MaxPayloadBytes)+1)
+
+	fromStdin, err := ReadPayloadCapped("-", bytes.NewReader(body), math.MaxInt64)
+	require.NoError(t, err)
+	assert.Len(t, fromStdin, len(body), "a MaxInt64 limit reads the body whole")
+
+	fromFile, err := ReadPayloadCapped(writeFile(t, "maxint.bin", body), bytes.NewBufferString("STDIN"), math.MaxInt64)
+	require.NoError(t, err)
+	assert.Len(t, fromFile, len(body))
+}
+
 func TestReadPayloadUncappedReadsOversized(t *testing.T) {
 	oversized := bytes.Repeat([]byte("a"), int(MaxPayloadBytes)+1)
 

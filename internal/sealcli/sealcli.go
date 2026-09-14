@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 
 	"github.com/gaborage/go-bricks/internal/keymaterial"
@@ -205,9 +206,10 @@ func ReadPayloadCapped(path string, stdin io.Reader, limit int64) ([]byte, error
 }
 
 // capReader stops one byte PAST the limit, so a payload exactly at it still reads whole
-// while the first byte over is what makes the overrun observable.
+// while the first byte over is what makes the overrun observable. A limit of MaxInt64 is
+// uncapped rather than a reader that yields nothing: limit+1 would overflow negative.
 func capReader(r io.Reader, limit int64) io.Reader {
-	if limit <= Uncapped {
+	if limit <= Uncapped || limit == math.MaxInt64 {
 		return r
 	}
 	return io.LimitReader(r, limit+1)
