@@ -8870,7 +8870,12 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   returns `(messaging.DedupKey, error)`; `messaging.ValidateDedupKey(ctx, key DedupKey)` refuses
   the zero value and a sealed key under a context `messaging.IsSealedDelivery` does not mark, both
   wrapping `messaging.ErrInvalidEventID`, and no longer runs the grammar (a wire key passed it at
-  construction). `messaging.IsSealedDedupKey` is deleted — read `key.Sealed()`. Additive:
+  construction). That marker is a boolean stamped identically on every sealed handler context, so
+  admission proves the key came from *some* sealed delivery, not from the one being handled: a
+  sealed key retained past the delivery that minted it still passes, and the ledger then treats the next
+  delivery as a duplicate and skips its handler. Binding a key to its originating delivery is open
+  work, tracked as gaborage/go-bricks#1634. `messaging.IsSealedDedupKey` is deleted — read
+  `key.Sealed()`. Additive:
   `messaging.DedupKey` (`String()`, `Sealed()`) and `messaging.WireDedupKey(id string)
   (DedupKey, error)`, which applies the unchanged `^[A-Za-z0-9_-]{1,128}$` grammar.
   `inbox/testing.MockInbox.ProcessOnce` follows the new signature and records `key.String()`, so

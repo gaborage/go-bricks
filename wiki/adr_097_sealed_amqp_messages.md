@@ -22,9 +22,13 @@
 > every other key. `inbox.ProcessOnce(ctx, key messaging.DedupKey, fn)` replaces the string
 > parameter, and `ValidateDedupKey(ctx, key DedupKey)` refuses the zero key and a sealed key under
 > a context `IsSealedDelivery` does not mark. That second refusal is not an attacker gate — only
-> the sealed branch mints a sealed key, so a caller can only hold its own delivery's — it fails
-> closed when that correct key is used outside the sealed delivery (a detached goroutine), turning
-> a plumbing mistake into a refusal rather than a silent ledger write. The §4 `^[A-Za-z0-9_-]{1,128}$`
+> the sealed branch mints a sealed key, so a caller can only hold one minted by *some* sealed
+> delivery, not necessarily the one in hand: the marker is a boolean stamped identically on every
+> sealed handler context, so a key retained from an earlier sealed delivery still passes while a
+> later one is handled. It fails closed when a sealed key is used outside the sealed delivery
+> altogether (a detached goroutine), turning a plumbing mistake into a refusal rather than a silent
+> ledger write. Binding a key to its originating delivery is open work, tracked as
+> gaborage/go-bricks#1634. The §4 `^[A-Za-z0-9_-]{1,128}$`
 > grammar no longer runs at the ledger door: a wire key is grammar-checked exactly once, at
 > construction inside `WireDedupKey`. A sealed key is well formed because the seal layer validates
 > both halves before `Metadata.DedupKey()` composes them — the signed `jti` must match that same
