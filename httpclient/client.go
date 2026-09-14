@@ -41,6 +41,10 @@ const (
 	DefaultRetryDelay = 1 * time.Second
 
 	mimeApplicationJSON = "application/json"
+
+	// errMsgRequestExecutionFailed is the NewNetworkError message every terminal
+	// execution path shares, named once so the three sites cannot drift apart.
+	errMsgRequestExecutionFailed = "request execution failed"
 )
 
 // client implements the Client interface
@@ -931,7 +935,7 @@ func (c *client) handleExecutionError(ctx context.Context, err error, attempt, m
 		}
 		return attemptResult{retry: true, retryReason: reason}
 	}
-	return attemptResult{err: NewNetworkError("request execution failed", err)}
+	return attemptResult{err: NewNetworkError(errMsgRequestExecutionFailed, err)}
 }
 
 func (c *client) processHTTPResponse(
@@ -1047,7 +1051,7 @@ func (c *client) shouldRetryOnError(ctx context.Context, err error, attempt, max
 	// re-send it — duplicating any non-idempotent side effect — and the verdict cannot
 	// change, since the response was refused for what it lacked, not for a transport fault.
 	if errors.Is(err, ErrJOSEPlaintextResponse) {
-		return false, NewNetworkError("request execution failed", err)
+		return false, NewNetworkError(errMsgRequestExecutionFailed, err)
 	}
 	if c.isTimeout(err) {
 		if attempt < maxRetries {
@@ -1064,7 +1068,7 @@ func (c *client) shouldRetryOnError(ctx context.Context, err error, attempt, max
 		}
 		return true, nil
 	}
-	return false, NewNetworkError("request execution failed", err)
+	return false, NewNetworkError(errMsgRequestExecutionFailed, err)
 }
 
 // shouldRetryOnBuildRespError handles errors that occur while building the response
