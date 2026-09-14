@@ -1593,8 +1593,10 @@ bare mode is reachable through a built client as well as through `jose.Seal`/`jo
 **Amendment (2026-09-13, #1579):** `JOSETransport` no longer passes an unrecognized 2xx body
 through. Under an `Inbound` policy a successful response must have been unwrapped — in nested
 mode `application/jose` plus a successful `jose.Open`, in envelope mode `Unwrap` ok plus the
-same — or `RoundTrip` returns `httpclient.ErrJOSEPlaintextResponse` wrapped with the status,
-with the body closed and never handed to the caller or to a response interceptor.
+same — or `RoundTrip` returns `httpclient.ErrJOSEPlaintextResponse` wrapped with the status
+and the peer name, with the body closed and never handed to the caller or to a response
+interceptor, and — when the transport has a usable `Logger` — one WARN carrying the direction and the
+same status and peer, plus the request id when a valid one is readable, never body bytes.
 Non-2xx pass-through is unchanged; 204/304/HEAD stay skipped; every crypto failure keeps
 failing closed as before. `AllowPlaintextSuccess` on `JOSETransport`/`JOSEConfig` is the Strangler-migration opt-out.
 See [migrations.md](migrations.md) `[C64.15]` and `[C65.8]`.

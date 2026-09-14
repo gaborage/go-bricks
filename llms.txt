@@ -4423,9 +4423,12 @@ responses on a non-2xx status pass through untouched; when `Envelope` and `Inbou
 replaces that Content-Type rule with its `Unwrap` verdict and buffers every eligible response body (capped by
 `MaxResponseBytes`) before it runs. **A 2xx must have been unwrapped** in either mode: a successful
 response the `Inbound` policy never opened is refused with `httpclient.ErrJOSEPlaintextResponse`
-(match with `errors.Is`) — body closed and never handed to the caller or a response interceptor, and
-wrapped with the status. The refusal is terminal: it never enters the retry loop, because the peer
-already honored the request and a retry would only duplicate a non-idempotent side effect.
+(match with `errors.Is`) — body closed and never handed to the caller or a response interceptor,
+wrapped with the status and the peer name, and — when the transport has a usable `Logger` — one WARN
+naming the direction and the same two, plus the request id when the transport can read a valid one,
+never body bytes. The
+refusal is terminal: it never enters the retry loop, because the peer already honored the request
+and a retry would only duplicate a non-idempotent side effect.
 204/304/HEAD are skipped as before and are not violations; so is `101`, which is skipped not as an
 empty reply but because its body IS the live upgraded connection, passed through with that stream
 intact. A response an `Inner` returns with a nil body is classified by its status like any other, so

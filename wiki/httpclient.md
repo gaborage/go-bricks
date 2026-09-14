@@ -193,8 +193,14 @@ Under an `Inbound` policy a **2xx response must have been decrypted** — `appli
 plus a successful `jose.Open` in nested mode, an `Unwrap` that returned `ok=true` plus the
 same in envelope mode. A 2xx that was not unwrapped is a transport error: `RoundTrip`
 returns `nil` and an error matching `errors.Is(err, httpclient.ErrJOSEPlaintextResponse)`,
-wrapped with the status. The response body is closed and discarded — it reaches neither the
-caller nor a response interceptor — and nothing from it is reported, those bytes being
+wrapped with the status and the peer name from `WithPeerName`. The response body is closed
+and discarded — it reaches neither the caller nor a response interceptor — and, when the
+transport has a usable `Logger`, one WARN records the direction and that same status and
+peer plus the `request_id`, read from the trace header on the
+outbound request and falling back to the context value — each validated by
+`trace.ValidateRequestID`, and the field omitted when neither passes — a custom
+`TraceIDHeader` hides the header from the transport, but the context still carries the id
+unless the caller set neither. Never the body bytes, those being
 exactly what must not be trusted. The refusal is **terminal**: it is exempt from the retry
 loop, because the peer answered 2xx and has already honored the request, so retrying would
 only duplicate a non-idempotent side effect.

@@ -393,6 +393,11 @@ func (b *Builder) WithJOSE(cfg JOSEConfig) *Builder {
 
 				MaxResponseBytes:      b.joseConfig.MaxResponseBytes,
 				AllowPlaintextSuccess: b.joseConfig.AllowPlaintextSuccess,
+
+				// The wrapper runs at Build time, so a WithPeerName placed after WithJOSE is
+				// read here just the same: chain order does not decide what the refusal names.
+				PeerName: b.config.PeerName,
+				Logger:   b.logger,
 			}
 		})
 	}
