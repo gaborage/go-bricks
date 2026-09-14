@@ -58,8 +58,9 @@ const (
 // for response shaping. Use errors.Is(err, ErrDecryptFailed) for sentinel comparisons.
 //
 // The Cause field MUST NOT be exposed to peers — it can leak information about which key
-// was tried or which library detected the failure. Server middleware logs Cause; only Code
-// and the constant-time generic Message reach the wire.
+// was tried or which library detected the failure. It is available for consumer logging; the
+// framework logs Code and the constant generic Message, which are also all that reach
+// the wire.
 type Error struct {
 	Sentinel error
 	Code     string

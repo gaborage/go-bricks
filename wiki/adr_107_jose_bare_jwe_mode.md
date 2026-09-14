@@ -4,6 +4,24 @@
 **Date:** 2026-09-09
 **Issue:** #1575
 
+> **Amendment — 2026-09-13 (#1580).** The 16 KiB bound on the ENCODED protected-header
+> segment — the base64url text, measured before any decode — now applies to every
+> door the crypto adapter exposes — peek, decrypt and verify — not only the peek `jose/sealed`
+> uses, and each door refuses a body that is not a compact serialization before measuring it.
+> JSON serialization was never part of the contract (bodies are compact-serialized JOSE:
+> three base64url segments for a JWS, five for a JWE), though go-jose accepts it and so, until now, the implementation did
+> too: a JSON-serialized body did open through Decrypt and Verify. Refusing it aligns the
+> implementation with the documented contract rather than changing it, and the refusal is
+> named `ErrNotCompact` inside the door's existing generic parse error. The refusal class is
+> API-visible via `errors.Is` on the error chain to framework-internal callers, and is
+> deliberately not logged. One behaviour does
+> narrow: RFC 7515 §7.1 and RFC 7516 §7.1 define the compact serialization as BASE64URL parts
+> joined by dots, with no whitespace anywhere, but go-jose strips interior whitespace before
+> parsing, so a line-wrapped compact used to open; it is now refused. That is a narrowing to
+> the grammar the RFCs already state, not a change of contract — go-jose's tolerance was
+> leniency the framework never documented. Surrounding whitespace is still trimmed, so a token read from a file
+> with a trailing newline is unaffected.
+
 ## Amendment (2026-09-13, #1579): a 2xx response that was not unwrapped is a transport error
 
 `JOSETransport` passed EVERY body it did not recognize through untouched — a plaintext
