@@ -4,11 +4,12 @@
 **Date:** 2026-09-09
 **Issue:** #1575
 
-> **Amendment — 2026-09-13 (#1580).** The 16 KiB protected-header bound now applies to every
+> **Amendment — 2026-09-13 (#1580).** The 16 KiB bound on the ENCODED protected-header
+> segment — the base64url text, measured before any decode — now applies to every
 > door the crypto adapter exposes — peek, decrypt and verify — not only the peek `jose/sealed`
 > uses, and each door refuses a body that is not a compact serialization before measuring it.
-> JSON serialization was never part of the contract (bodies are compact-serialized JOSE, five
-> base64url segments), though go-jose accepts it and so, until now, the implementation did
+> JSON serialization was never part of the contract (bodies are compact-serialized JOSE:
+> three base64url segments for a JWS, five for a JWE), though go-jose accepts it and so, until now, the implementation did
 > too: a JSON-serialized body did open through Decrypt and Verify. Refusing it aligns the
 > implementation with the documented contract rather than changing it, and the refusal is
 > named `ErrNotCompact` inside the door's existing generic parse error. The refusal class is

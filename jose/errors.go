@@ -59,7 +59,7 @@ const (
 //
 // The Cause field MUST NOT be exposed to peers — it can leak information about which key
 // was tried or which library detected the failure. It is available for consumer logging; the
-// framework logs Code and the constant-time generic Message, which are also all that reach
+// framework logs Code and the constant generic Message, which are also all that reach
 // the wire.
 type Error struct {
 	Sentinel error

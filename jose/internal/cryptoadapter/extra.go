@@ -54,9 +54,11 @@ var reservedParams = map[string]struct{}{
 // maxExactInt is the largest magnitude a float64 represents exactly for every integer.
 const maxExactInt = 1 << 53
 
-// maxPeekHeaderBytes bounds segment 0 on every door that parses a compact — peek, decrypt
-// and verify alike. A protected header is a handful of short params; anything larger on an
-// unauthenticated body is rejected before it costs a base64 or JSON pass.
+// maxPeekHeaderBytes bounds segment 0 AS ENCODED — the base64url text, measured before any
+// decode — on every door that parses a compact: peek, decrypt and verify alike. A protected
+// header is a handful of short params; anything larger on an unauthenticated body is
+// rejected before it costs a base64 or JSON pass. Base64url costs 4 bytes per 3, so the
+// decoded JSON a body may carry is about three quarters of this.
 const maxPeekHeaderBytes = 16 * 1024
 
 // ExtraString returns the named extra header when it is present and a string.
@@ -123,7 +125,7 @@ func (h *Header) lookup(name string) (any, bool) {
 // unauthenticated until Verify succeeds.
 //
 // The input must be a compact serialization — 3 or 5 base64url segments, surrounding
-// whitespace aside — whose protected header is at most maxPeekHeaderBytes; anything else is
+// whitespace aside — whose encoded segment 0 is at most maxPeekHeaderBytes; anything else is
 // ErrPeekMalformed, with ErrNotCompact or ErrHeaderTooLarge naming which rule it broke.
 func PeekProtectedHeader(compact string) (Header, error) {
 	_, segments, err := boundedSegments(compact)
@@ -138,7 +140,7 @@ func PeekProtectedHeader(compact string) (Header, error) {
 }
 
 // boundedSegments prepares a compact for parsing and refuses it on three grounds, in
-// increasing cost: a part count that is not 3 or 5, a protected header past
+// increasing cost: a part count that is not 3 or 5, an encoded segment 0 past
 // maxPeekHeaderBytes, and any segment that is not base64url. Every door that parses a
 // compact — Peek, Decrypt, Verify — runs this first. go-jose rejects a wrong part count
 // itself but imposes no size bound, and it accepts the JSON serialization too, whose
