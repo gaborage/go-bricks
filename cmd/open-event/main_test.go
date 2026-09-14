@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -833,4 +834,135 @@ func TestSealEventToOpenEventRoundTrip(t *testing.T) {
 	require.Equal(t, exitOK, code, "open-event stderr: %s", stderr)
 	assert.Contains(t, stdout, `"card":{"pan":"`+subjectMarker+`","expiry":"12/30"}`)
 	assert.Contains(t, stderr, "-print-subject")
+}
+
+// errWriteFailed is what the injected writers fail with — a plain sentinel, so no assertion
+// depends on an OS error string.
+var errWriteFailed = errors.New("stream write failed")
+
+// failWriter fails every Write, recording what it was offered so a leak on the error path
+// is still observable.
+type failWriter struct{ offered bytes.Buffer }
+
+func (w *failWriter) Write(p []byte) (int, error) {
+	w.offered.Write(p)
+	return 0, errWriteFailed
+}
+
+// shortWriter accepts one byte and claims only that, which is the io.Writer spelling of a
+// truncated stream: fmt turns it into io.ErrShortWrite.
+type shortWriter struct{ offered bytes.Buffer }
+
+func (w *shortWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	w.offered.Write(p[:1])
+	return 1, nil
+}
+
+// runCLIWriters is runCLI with the two streams injected, so a case can hand run() a writer
+// that fails or truncates.
+func runCLIWriters(args []string, stdin []byte, stdout, stderr io.Writer) int {
+	return run(args, bytes.NewReader(stdin), stdout, stderr)
+}
+
+// TestOpenEventEmitReportsWriteFailures pins that a stream that fails or truncates while
+// the opened message is being rendered becomes exit 1 — never exit 0, which an operator
+// piping into a full disk would read as "opened and printed".
+func TestOpenEventEmitReportsWriteFailures(t *testing.T) {
+	cases := []struct {
+		name      string
+		extraArgs []string
+		// failStderr aims the broken writer at stderr instead of stdout.
+		failStderr bool
+		short      bool
+	}{
+		{name: "text_stdout_fails"},
+		{name: "text_stdout_truncates", short: true},
+		{name: "json_stdout_fails", extraArgs: []string{"-json"}},
+		{name: "json_stdout_truncates", extraArgs: []string{"-json"}, short: true},
+		{name: "print_subject_warning_stderr_fails", extraArgs: []string{"-print-subject"}, failStderr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newCLIFixture(t)
+			body := fx.seal(t, fx.defaultSealOptions())
+
+			broken := brokenWriter(tc.short)
+			var intact bytes.Buffer
+			stdout, stderr := broken, io.Writer(&intact)
+			if tc.failStderr {
+				stdout, stderr = &intact, broken
+			}
+
+			code := runCLIWriters(append(fx.baseArgs(), tc.extraArgs...), body, stdout, stderr)
+			require.Equal(t, exitToolError, code, "a failed render must not report success")
+
+			// The default render is redacted, so neither the broken stream nor the intact
+			// one may have been offered the plaintext.
+			if !tc.failStderr {
+				assert.NotContains(t, offeredBytes(broken), subjectMarker)
+				assert.NotContains(t, intact.String(), subjectMarker)
+			}
+		})
+	}
+}
+
+// TestOpenEventRefusalReportsWriteFailures pins the same for the refusal door: exit 3 must
+// not be returned by an invocation that printed no refusal at all.
+func TestOpenEventRefusalReportsWriteFailures(t *testing.T) {
+	cases := []struct {
+		name      string
+		extraArgs []string
+		// The text refusal goes to stderr, the JSON one to stdout.
+		failStderr bool
+		short      bool
+	}{
+		{name: "text_stderr_fails", failStderr: true},
+		{name: "text_stderr_truncates", failStderr: true, short: true},
+		{name: "json_stdout_fails", extraArgs: []string{"-json"}},
+		{name: "json_stdout_truncates", extraArgs: []string{"-json"}, short: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newCLIFixture(t)
+			body := tamper(t, fx.seal(t, fx.defaultSealOptions()))
+
+			broken := brokenWriter(tc.short)
+			var intact bytes.Buffer
+			stdout, stderr := broken, io.Writer(&intact)
+			if tc.failStderr {
+				stdout, stderr = &intact, broken
+			}
+
+			code := runCLIWriters(append(fx.baseArgs(), tc.extraArgs...), body, stdout, stderr)
+			require.Equal(t, exitToolError, code, "a refusal nobody could print must not report exit 3")
+			assert.NotContains(t, offeredBytes(broken), subjectMarker)
+			assert.NotContains(t, intact.String(), subjectMarker)
+		})
+	}
+}
+
+// brokenWriter returns the failing or the truncating writer, both of which record what they
+// were offered.
+func brokenWriter(short bool) io.Writer {
+	if short {
+		return &shortWriter{}
+	}
+	return &failWriter{}
+}
+
+// offeredBytes reports what a broken writer was handed, whichever kind it is.
+func offeredBytes(w io.Writer) string {
+	switch v := w.(type) {
+	case *failWriter:
+		return v.offered.String()
+	case *shortWriter:
+		return v.offered.String()
+	default:
+		return ""
+	}
 }

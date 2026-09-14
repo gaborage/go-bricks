@@ -282,7 +282,10 @@ func reportRefusal(cfg *cliConfig, err error, stdout, stderr io.Writer) int {
 	}
 
 	if !cfg.jsonOut {
-		fmt.Fprintln(stderr, oe.Error())
+		// stderr is the stream that failed, so the exit status is the only report left.
+		if wErr := writeText(stderr, oe.Error()+"\n"); wErr != nil {
+			return exitToolError
+		}
 		return exitRefused
 	}
 
@@ -297,28 +300,40 @@ func reportRefusal(cfg *cliConfig, err error, stdout, stderr io.Writer) int {
 	return exitRefused
 }
 
-// emit renders an opened message. The -print-subject warning goes out first, so an operator
-// watching a terminal sees it above the plaintext it is about.
+// emit renders an opened message and turns any failed or truncated write into exit 1, so
+// incomplete output is never reported as success. The report of that failure is itself
+// best-effort: when stderr is the broken stream, the status is all that is left.
 func emit(cfg *cliConfig, opened *sealed.OpenedDocument, stdout, stderr io.Writer) int {
+	if err := render(cfg, opened, stdout, stderr); err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitToolError
+	}
+	return exitOK
+}
+
+// render writes the opened message. The -print-subject warning goes out first, so an
+// operator watching a terminal sees it above the plaintext it is about. Write errors name
+// the part that failed and wrap the writer's own error — never the bytes being written.
+func render(cfg *cliConfig, opened *sealed.OpenedDocument, stdout, stderr io.Writer) error {
 	value := []byte(redactedValue)
 	if cfg.printSubject {
-		fmt.Fprintln(stderr, subjectWarning)
+		if err := writeText(stderr, subjectWarning+"\n"); err != nil {
+			return fmt.Errorf("write warning: %w", err)
+		}
 		value = opened.Subject
 	}
 	doc := spliceMember(opened.Document, opened.SubjectAt, cfg.subject, value)
 
 	if cfg.jsonOut {
-		if err := writeJSON(stdout, jsonOpened{Envelope: newJSONEnvelope(opened.Envelope), Document: doc}); err != nil {
-			fmt.Fprintln(stderr, err)
-			return exitToolError
-		}
-		return exitOK
+		return writeJSON(stdout, jsonOpened{Envelope: newJSONEnvelope(opened.Envelope), Document: doc})
 	}
-
-	writeEnvelope(stdout, opened.Envelope)
-	fmt.Fprintln(stdout)
-	fmt.Fprintln(stdout, string(doc))
-	return exitOK
+	if err := writeEnvelope(stdout, opened.Envelope); err != nil {
+		return err
+	}
+	if err := writeText(stdout, "\n"+string(doc)+"\n"); err != nil {
+		return fmt.Errorf("write document: %w", err)
+	}
+	return nil
 }
 
 // spliceMember puts the subject member back where OpenDocument removed it, with value as
@@ -388,11 +403,32 @@ func issuedAt(env *sealed.Envelope) string {
 // reads back as <redacted>; turning escaping off would ship a subject carrying <script>
 // verbatim into a browser-backed DLQ viewer.
 func writeJSON(w io.Writer, payload any) error {
-	return json.NewEncoder(w).Encode(payload)
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
+		return fmt.Errorf("encode json: %w", err)
+	}
+	if err := writeText(w, buf.String()); err != nil {
+		return fmt.Errorf("write json: %w", err)
+	}
+	return nil
+}
+
+// writeText writes s whole or reports why not. Neither fmt nor json.Encoder turns a short
+// write that returns no error into one, so the count is checked here, once, for every
+// rendering write.
+func writeText(w io.Writer, s string) error {
+	n, err := io.WriteString(w, s)
+	if err != nil {
+		return err
+	}
+	if n < len(s) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 // writeEnvelope renders the envelope as aligned label lines above the document.
-func writeEnvelope(w io.Writer, env *sealed.Envelope) {
+func writeEnvelope(w io.Writer, env *sealed.Envelope) error {
 	fields := []struct{ label, value string }{
 		{"JTI", env.JTI},
 		{"IssuedAt", issuedAt(env)},
@@ -403,6 +439,9 @@ func writeEnvelope(w io.Writer, env *sealed.Envelope) {
 		{"EncKid", env.EncKid},
 	}
 	for _, f := range fields {
-		fmt.Fprintf(w, "%-11s %s\n", f.label+":", f.value)
+		if err := writeText(w, fmt.Sprintf("%-11s %s\n", f.label+":", f.value)); err != nil {
+			return fmt.Errorf("write envelope: %w", err)
+		}
 	}
+	return nil
 }
