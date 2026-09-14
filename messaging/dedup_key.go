@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"time"
 
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
@@ -34,10 +33,9 @@ const maxEventIDBytes = 128
 // move the producer to the sealed typed door.
 var ErrInvalidEventID = errors.New("messaging: event id is outside the ledger grammar [A-Za-z0-9_-]{1,128}")
 
-// ValidateEventID checks id against the ledger grammar. Every framework path
-// that turns a wire value into a ledger id runs it — Metadata.DedupKey here,
-// on the header and on the message_id property alike, and inbox.ProcessOnce at
-// the ledger door — so consumer code never has to.
+// ValidateEventID checks id against the ledger grammar. WireDedupKey runs it,
+// so every wire key — Metadata.DedupKey's, on the header and on the message_id
+// property alike, or one a consumer builds — passed it at construction.
 func ValidateEventID(id string) error {
 	if id == "" {
 		return fmt.Errorf("%w: absent or empty", ErrInvalidEventID)
@@ -54,13 +52,14 @@ func ValidateEventID(id string) error {
 // DedupKey is an inbox ledger key carrying which door produced it. A wire key
 // comes from WireDedupKey and has passed ValidateEventID's grammar; a sealed key
 // is composed by the sealed typed door alone — no exported function mints one.
-// The zero value is invalid.
+// The zero value is invalid and inbox.ProcessOnce refuses it.
 type DedupKey struct {
 	key    string
 	sealed bool
 }
 
-// String returns the key's persisted spelling.
+// String returns the key's persisted spelling: the wire id verbatim, or
+// `<SignFamily>:<jti>` for a sealed key.
 func (k DedupKey) String() string {
 	return k.key
 }
@@ -81,29 +80,19 @@ func WireDedupKey(id string) (DedupKey, error) {
 	return DedupKey{key: id}, nil
 }
 
-// sealedDedupKeyPattern is the sealed dedup key grammar `<SignFamily>:<jti>`:
-// a Logical kid (the jose kid alphabet, at most 64 characters) and a signed
-// jti in the header-id grammar, joined by the one byte neither side may
-// contain. Spelled here rather than imported: the grammar must be checkable
-// by a build that never links the codec.
-var sealedDedupKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}:[A-Za-z0-9_-]{1,128}$`)
-
-// IsSealedDedupKey reports whether key has the sealed `<SignFamily>:<jti>`
-// shape. A header-sourced id can never satisfy it: `:` is outside the header
-// grammar ValidateEventID enforces.
-func IsSealedDedupKey(key string) bool {
-	return sealedDedupKeyPattern.MatchString(key)
+// sealedDedupKey is the one constructor of a Sealed key; only
+// Metadata.DedupKey's sealed branch calls it.
+func sealedDedupKey(family, jti string) DedupKey {
+	return DedupKey{key: family + ":" + jti, sealed: true}
 }
 
 // sealedDeliveryKey marks a handler context as running under the sealed typed
-// door. Only the sealed handler sets it, so a sealed-shaped key reaching the
-// ledger from any other context is a header forgery, not a sealed message.
+// door. Only the sealed handler sets it.
 type sealedDeliveryKey struct{}
 
 // IsSealedDelivery reports whether ctx belongs to a delivery the sealed typed
 // door opened — the framework's own marker, unreachable from a header or from
-// consumer code, which is what lets the ledger door admit a sealed key from a
-// sealed consumer while still refusing the same spelling from a header.
+// consumer code. The ledger door cross-checks a Sealed DedupKey against it.
 //
 // The marker travels with the handler's context: a handler that calls
 // inbox.ProcessOnce from a goroutine or with a context NOT derived from the one
@@ -114,17 +103,23 @@ func IsSealedDelivery(ctx context.Context) bool {
 	return marked
 }
 
-// ValidateDedupKey checks a key at the ledger door, whichever door produced
-// it: under a sealed delivery (IsSealedDelivery) a sealed `<SignFamily>:<jti>`
-// key passes; everywhere, a header id passes under ValidateEventID's grammar.
-// Anything else wraps ErrInvalidEventID and names the byte length only — so a
-// publisher spelling a sealed key into x-outbox-event-id on an unsealed
-// consumer is refused before the ledger, exactly as before sealing existed.
-func ValidateDedupKey(ctx context.Context, key string) error {
-	if IsSealedDelivery(ctx) && IsSealedDedupKey(key) {
-		return nil
+// ValidateDedupKey checks a key at the ledger door. Admission is by the key's
+// provenance, not its spelling: the zero DedupKey is refused, and a Sealed key
+// is refused under a context IsSealedDelivery does not mark. Only the sealed
+// branch of Metadata.DedupKey mints a Sealed key, so a caller can only hold its
+// own delivery's; the context check fails closed when that correct key is used
+// from somewhere that is not the sealed delivery (a detached goroutine, say),
+// turning a plumbing mistake into a refusal rather than a silent ledger write.
+// A wire key passes under either context; its grammar ran when WireDedupKey
+// built it. Both refusals wrap ErrInvalidEventID and never carry the key.
+func ValidateDedupKey(ctx context.Context, key DedupKey) error {
+	if key.String() == "" {
+		return fmt.Errorf("%w: zero DedupKey", ErrInvalidEventID)
 	}
-	return ValidateEventID(key)
+	if key.Sealed() && !IsSealedDelivery(ctx) {
+		return fmt.Errorf("%w: sealed dedup key outside a sealed delivery", ErrInvalidEventID)
+	}
+	return nil
 }
 
 // SealedEnvelope is what a sealed (JWE-of-JWS) message's protected header
@@ -164,21 +159,20 @@ func (m Metadata) Sealed() (SealedEnvelope, bool) {
 	return *m.sealed, true
 }
 
-// DedupKey returns the id the inbox ledger should be keyed on for this
-// delivery. For a sealed consumer it is `<SignFamily>:<jti>` — the Logical sign
-// family, never the concrete Generation, so a rotation does not re-open the
-// replay window — composed from the verified envelope and never an error.
+// DedupKey returns the key the inbox ledger should be keyed on for this
+// delivery. For a sealed consumer it is a Sealed key spelled
+// `<SignFamily>:<jti>` — the Logical sign family, never the concrete
+// Generation, so a rotation does not re-open the replay window — composed from
+// the verified envelope; that branch always returns a nil error.
 //
-// For a plain typed consumer it is the grammar-validated x-outbox-event-id
-// header, or — when the delivery carries no such header at all — the AMQP
-// message_id property, so a producer that follows the standard without being
-// go-bricks is still processable through inbox.ProcessOnce. The stamp is tried
-// first and a stamp that is present but malformed errors rather than falling
-// through: on a go-bricks producer the stamp is framework-written while the
-// property is caller-written, so a caller must not be able to shadow it by
-// spoiling it. The error wraps ErrInvalidEventID when both are absent, or the
-// chosen one is empty, over 128 bytes, or carries a byte outside
-// [A-Za-z0-9_-].
+// For a plain typed consumer it is a wire key (WireDedupKey) holding the
+// x-outbox-event-id header, or — when the delivery carries no such header at
+// all — the AMQP message_id property, so a producer that follows the standard
+// without being go-bricks is still processable through inbox.ProcessOnce. The
+// stamp is tried first and a stamp that is present but malformed errors rather
+// than falling through: on a go-bricks producer the stamp is framework-written
+// while the property is caller-written, so a caller must not be able to shadow
+// it by spoiling it.
 //
 // The framework validates the SHAPE of either source, never its uniqueness:
 // AMQP obliges no producer to make message_id unique per message, so a producer
@@ -188,18 +182,15 @@ func (m Metadata) Sealed() (SealedEnvelope, bool) {
 // Return the error from the handler: the delivery is nacked without requeue,
 // like any other poison message. AMQP header values arrive as string or []byte
 // depending on the broker and client, so both are accepted.
-func (m Metadata) DedupKey() (string, error) {
+func (m Metadata) DedupKey() (DedupKey, error) {
 	if m.sealed != nil {
-		return m.sealed.SignFamily + ":" + m.sealed.JTI, nil
+		return sealedDedupKey(m.sealed.SignFamily, m.sealed.JTI), nil
 	}
 	id := m.MessageID()
 	if stamp, stamped := m.Headers()[HeaderEventID]; stamped {
 		id = headerString(stamp)
 	}
-	if err := ValidateEventID(id); err != nil {
-		return "", err
-	}
-	return id, nil
+	return WireDedupKey(id)
 }
 
 // headerString renders an AMQP header value that should carry text. Values
