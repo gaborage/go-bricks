@@ -4419,9 +4419,22 @@ carries a body and has an `Outbound` policy. In `jose.SealModeBareJWE` the seal 
 `jti`, so two attempts inside the same millisecond share an `iat`. Protocols that need
 a unique per-attempt `jti` must use the nested JWE-of-JWS shape, where `jti` comes from
 the signed payload). With no `Envelope`, non-`application/jose`
-responses pass through untouched; when `Envelope` and `Inbound` are both set, the envelope
+responses on a non-2xx status pass through untouched; when `Envelope` and `Inbound` are both set, the envelope
 replaces that Content-Type rule with its `Unwrap` verdict and buffers every eligible response body (capped by
-`MaxResponseBytes`) before it runs. Only bodies are sealed: a request with no body goes out unsealed
+`MaxResponseBytes`) before it runs. **A 2xx must have been unwrapped** in either mode: a successful
+response the `Inbound` policy never opened is refused with `httpclient.ErrJOSEPlaintextResponse`
+(match with `errors.Is`) — body closed and never handed to the caller or a response interceptor, and
+wrapped with the status. The refusal is terminal: it never enters the retry loop, because the peer
+already honored the request and a retry would only duplicate a non-idempotent side effect.
+204/304/HEAD are skipped as before and are not violations; so is `101`, which is skipped not as an
+empty reply but because its body IS the live upgraded connection, passed through with that stream
+intact. A response an `Inner` returns with a nil body is classified by its status like any other, so
+a nil-bodied 2xx is refused rather than skipped.
+Set `AllowPlaintextSuccess: true` only while a peer legitimately answers some 2xx routes in plaintext
+(Strangler migration). It is transport-wide: with `Inbound` set it allows EVERY eligible plaintext 2xx,
+not selected routes — split the integration into a strict client and an opted-out one if only some
+routes are unprotected. With `Inbound` nil the flag is moot: the transport skips response processing
+entirely, so nothing is unwrapped, judged or refused. Only bodies are sealed: a request with no body goes out unsealed
 whatever the method, so give a payload-free `POST` an explicit `{}` body if the
 partner requires `application/jose` on every request.
 
@@ -4431,7 +4444,7 @@ partner requires `application/jose` on every request.
 client, err := httpclient.NewBuilder(log).
     WithJOSE(httpclient.JOSEConfig{
         Outbound: mleOutbound, // *jose.Policy — optional (seals requests; bare mode encrypts only); nil = requests go out unsealed
-        Inbound:  mleInbound,  // *jose.Policy — optional (opens responses; bare mode decrypts only); nil = plaintext responses
+        Inbound:  mleInbound,  // *jose.Policy — optional (opens responses; bare mode decrypts only); nil = responses pass through unprocessed
         Resolver: resolver,       // jose.KeyResolver — supplies keys for both directions
         // Optional body envelope: nil sends/expects the bare compact as application/jose.
         // httpclient.VisaMLEEnvelope() returns the one for Visa Message Level Encryption
@@ -4440,6 +4453,7 @@ client, err := httpclient.NewBuilder(log).
         // neither policy fails Build — as does a negative MaxResponseBytes when an
         // Envelope and Inbound are both set (without an Envelope, negative stays unbounded).
         Envelope: httpclient.VisaMLEEnvelope(), // httpclient.BodyEnvelope
+        // AllowPlaintextSuccess: true, // opt the WHOLE transport out of the 2xx-must-be-unwrapped rule (Strangler only)
     }).
     Build()
 if err != nil {
