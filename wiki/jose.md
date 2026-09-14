@@ -178,7 +178,7 @@ if err != nil {
 
 **`jose` does not judge the inbound `iat`.** It reports it and nothing more — the same stance ADR-097 takes on replay for sealed events. The value is a peer-written header — integrity-protected by the JWE authentication tag, but not sender-authenticated — and the tolerance is partner-specific, so the freshness check is the caller's, as `iat`/`exp`/`jti` on the nested path already are.
 
-**Reach**: bare mode is reachable from `jose.Seal` / `jose.Open` (and `jose/testing`'s `SealForTest` / `OpenForTest`, which call them), and from `httpclient.Builder.WithJOSE` for outbound calls — `Build()` skips the `SigAlg` default on a bare-mode policy, so the pair above passes validation as written. There is still no `mode` key in the `jose:` struct-tag grammar, so inbound server routes cannot select it. Visa MLE's `{"encData":"<compact>"}` body envelope is carried by `httpclient`'s `Envelope` field (a `BodyEnvelope`) and the ready-made `httpclient.VisaMLEEnvelope()` — see [httpclient.md](httpclient.md#jose-body-envelopes-visa-message-level-encryption). Inbound, an `Unwrap` that declines a body is a pass-through only on a failure status: on a 2xx it is `httpclient.ErrJOSEPlaintextResponse`, so an MLE peer that answers some successful routes in plaintext needs `AllowPlaintextSuccess` set while that lasts — see [httpclient.md](httpclient.md#successful-responses-must-have-been-unwrapped).
+**Reach**: bare mode is reachable from `jose.Seal` / `jose.Open` (and `jose/testing`'s `SealForTest` / `OpenForTest`, which call them), from `httpclient.Builder.WithJOSE` for outbound calls, and from the `seal-payload` CLI's `-mode bare` (below) — `Build()` skips the `SigAlg` default on a bare-mode policy, so the pair above passes validation as written. There is still no `mode` key in the `jose:` struct-tag grammar, so inbound server routes cannot select it. Visa MLE's `{"encData":"<compact>"}` body envelope is carried by `httpclient`'s `Envelope` field (a `BodyEnvelope`) and the ready-made `httpclient.VisaMLEEnvelope()` — see [httpclient.md](httpclient.md#jose-body-envelopes-visa-message-level-encryption). Inbound, an `Unwrap` that declines a body is a pass-through only on a failure status: on a 2xx it is `httpclient.ErrJOSEPlaintextResponse`, so an MLE peer that answers some successful routes in plaintext needs `AllowPlaintextSuccess` set while that lasts — see [httpclient.md](httpclient.md#successful-responses-must-have-been-unwrapped).
 
 ## JWS-of-JWE mode (Visa Token Service Issuer API)
 
@@ -278,4 +278,22 @@ curl -X POST https://api.example.com/v1/tokens \
 
 **Kid rule**: `-sign-kid` must equal the target endpoint's `verify=` tag name, and `-encrypt-kid` must equal its `decrypt=` tag name — the server binds kid headers to the policy's configured kids, and a mismatch fails with `JOSE_KID_UNKNOWN`.
 
-The response comes back sealed too — decrypting it is out of the CLI's scope (v1 only produces outbound tokens); standalone Go programs unwrap it with `jose.Open`; `jose/testing.OpenForTest` is for Go test code only (it requires a `testing.TB`). For the Go-test-side equivalent of sealing a payload, see `jose/testing.SealForTest` above.
+**Bare mode (Visa MLE)**: `-mode bare` (default `nested`) emits one compact JWE with no inner JWS. It takes only the encryption key and `-encrypt-kid`; `-sign-key-file`, `-sign-key-value`, `-sign-kid` or `-sig-alg` is refused by name. `-enc A128GCM` is accepted under bare only, and `-typ`, `-iat-ms` (millisecond `iat`) and repeatable `-protected key=value` (string values) are bare-only — under nested, the CLI refuses each by name (`-typ requires -mode bare`). `-envelope visa-mle` prints `{"encData":"<compact>"}` instead of the bare token — the envelope is a body wrapper, so it applies in nested mode too, but Visa's own MLE endpoints expect a bare `A128GCM` JWE inside it, which is what `-mode bare` mints:
+
+```sh
+echo '{"pan":"4111111111111111"}' | seal-payload -mode bare \
+  -encrypt-key-file enc.pub.der -encrypt-kid visa-mle-key \
+  -enc A128GCM -typ JOSE -iat-ms -protected channel=mobile \
+  -envelope visa-mle > body.json
+
+curl -X POST https://sandbox.api.visa.com/v1/example \
+  -H "Content-Type: application/json" --data-binary @body.json
+```
+
+The response comes back sealed too — decrypting it is out of the CLI's scope (v1 only produces outbound tokens); standalone Go programs unwrap it with `jose.Open`, first pulling the compact token out of `encData` when the peer answers with the same `{"encData":"…"}` envelope (`jose.Open` parses a compact token, not the JSON wrapper — `httpclient` does this extraction itself when the builder is given `httpclient.VisaMLEEnvelope()`); `jose/testing.OpenForTest` is for Go test code only (it requires a `testing.TB`). For the Go-test-side equivalent of sealing a payload, see `jose/testing.SealForTest` above.
+
+```go
+var body struct{ EncData string `json:"encData"` }
+json.NewDecoder(resp.Body).Decode(&body)
+plaintext, claims, hdr, err := jose.Open(body.EncData, inbound, resolver)
+```
