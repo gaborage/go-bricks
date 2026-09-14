@@ -250,7 +250,11 @@ GoBricks provides `outbox/testing` package for mocking outbox operations in unit
 **Simple Test:**
 
 ```go
-import outboxtest "github.com/gaborage/go-bricks/outbox/testing"
+import (
+    dbtesting "github.com/gaborage/go-bricks/database/testing"
+    dbtypes "github.com/gaborage/go-bricks/database/types"
+    outboxtest "github.com/gaborage/go-bricks/outbox/testing"
+)
 
 func TestOrderServiceCreateOrder(t *testing.T) {
     db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
