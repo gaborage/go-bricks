@@ -9056,7 +9056,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   error it produced, so a wrapped connection that cannot open a session now says so in its own
   words. **Unchanged**: every other method on `Interface`, the `Querier` and `Transactor`
   sub-interfaces (neither grew, so code depending on those is untouched), `types.Session`'s own
-  surface and its error, concurrency, blocking and lifetime contract, and the behaviour of every
+  surface and its error, concurrency, blocking and lifetime contract, and the behavior of every
   framework connection — the two vendor connections and the tracking wrapper already had
   `Session`
 - gate: match = you implement `database.Interface` / `types.Interface` on a type of your own — a
