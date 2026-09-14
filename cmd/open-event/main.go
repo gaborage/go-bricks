@@ -283,7 +283,7 @@ func reportRefusal(cfg *cliConfig, err error, stdout, stderr io.Writer) int {
 
 	if !cfg.jsonOut {
 		// stderr is the stream that failed, so the exit status is the only report left.
-		if wErr := writeText(stderr, oe.Error()+"\n"); wErr != nil {
+		if writeText(stderr, oe.Error()+"\n") != nil {
 			return exitToolError
 		}
 		return exitRefused
