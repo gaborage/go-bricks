@@ -254,6 +254,7 @@ func (t *JOSETransport) wrapRequest(req *nethttp.Request) (*nethttp.Request, err
 // (e.g. a pre-trust error envelope from a JOSE-aware peer) and is refused on a successful
 // one; responses that definitionally carry no body pass through untouched either way.
 func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Response) error {
+	t.normalizeNilBody(resp)
 	if t.skipsUnwrap(req, resp) {
 		t.emptyBodyIfGuaranteed(req, resp)
 		return nil
@@ -327,10 +328,25 @@ func replaceBody(resp *nethttp.Response, payload []byte, contentType string) {
 	}
 }
 
-// skipsUnwrap reports the responses that are not candidates at all: no inbound policy, no
-// body, or a shape net/http guarantees is empty. Nothing is read and nothing is judged.
+// normalizeNilBody installs an empty body when Inner returned none. The RoundTripper contract
+// does not force a non-nil Body and Inner is caller-supplied, so a nil one says nothing about
+// the response's shape: a 200 arriving without a body must still be judged by the Inbound
+// policy, not skipped as if net/http had guaranteed it empty. Normalizing here — rather than
+// refusing here — keeps the status classification in one place and guarantees nothing
+// downstream is ever handed a nil to read or close. A non-nil Body is never touched, so a
+// 101's live upgraded connection cannot be swapped out.
+func (t *JOSETransport) normalizeNilBody(resp *nethttp.Response) {
+	if t.Inbound == nil || resp == nil || resp.Body != nil {
+		return
+	}
+	resp.Body = nethttp.NoBody
+	resp.ContentLength = 0
+}
+
+// skipsUnwrap reports the responses that are not candidates at all: no inbound policy, or a
+// shape net/http guarantees is empty. Nothing is read and nothing is judged.
 func (t *JOSETransport) skipsUnwrap(req *nethttp.Request, resp *nethttp.Response) bool {
-	if t.Inbound == nil || resp == nil || resp.Body == nil {
+	if t.Inbound == nil || resp == nil {
 		return true
 	}
 	// Exactly the shapes net/http GUARANTEES arrive empty: bodyAllowedForStatus rejects 1xx,

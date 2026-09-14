@@ -154,13 +154,16 @@ Without an `Envelope`, a non-JOSE body on a failure status is never read at all.
 `Unwrap` returns `ok=false` on a failure status the buffered bytes are handed back as the
 response body with headers untouched; on a **successful** status, an `Unwrap` that declines
 the body is the same violation the Content-Type gate raises in nested mode. The responses
-that skip unwrapping entirely are unchanged: no `Inbound` policy, no body, or a shape
-net/http guarantees is empty (`204`, `304`, any reply to `HEAD`, and any status below `200`).
+that skip unwrapping entirely are unchanged: no `Inbound` policy, or a shape net/http
+guarantees is empty (`204`, `304`, any reply to `HEAD`, and any status below `200`).
 On those guaranteed-empty arms the body is closed and replaced with `http.NoBody`, so an
 `Inner` that supplied bytes there cannot slip them past the rule. `101 Switching Protocols`
-is the exception inside that last group: net/http consumes the other `1xx` before the final
-response, but a `101` comes back as a terminal response whose `Body` is the upgrade stream, so
-it is skipped on the status alone and passed through untouched. With no `Inbound` policy the
+is the exception inside that last group, and not a bodyless reply at all: net/http consumes
+the other `1xx` before the final response, but a `101` comes back as a terminal response whose
+`Body` is the live upgraded connection, so it is skipped on the status alone and passed
+through with that stream intact. A `nil` `Body` is not a skip arm either: it is replaced with
+`http.NoBody` and then classified by status, so a 2xx an `Inner` returns without a body is
+refused like any other unopened success. With no `Inbound` policy the
 transport processes no response at all, and that pass-through is untouched too.
 
 **`Build()` fails closed on an `Envelope` that cannot run.** An `Envelope` with neither an

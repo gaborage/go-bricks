@@ -838,6 +838,60 @@ func TestJOSETransportBodylessSkipArmsNormalizeTheBody(t *testing.T) {
 	}
 }
 
+// nilBodyResponder replies at a fixed status with a literal nil Body: the RoundTripper
+// contract does not require one, so a hand-rolled Inner can produce this shape.
+type nilBodyResponder struct {
+	status int
+}
+
+func (n nilBodyResponder) RoundTrip(_ *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode:    n.status,
+		Header:        http.Header{"Content-Type": []string{"application/json"}},
+		ContentLength: -1,
+	}, nil
+}
+
+func TestJOSETransportNilBodyIsClassifiedByStatus(t *testing.T) {
+	// A nil Body says nothing about the response's shape, so it must not buy a 2xx a skip the
+	// Inbound policy never granted it.
+	f := jositest.NewBidirectionalFixture(t)
+
+	tests := []struct {
+		name    string
+		status  int
+		wantErr error
+	}{
+		{name: "success_200_is_refused", status: http.StatusOK, wantErr: httpclient.ErrJOSEPlaintextResponse},
+		{name: "no_content_204_is_skipped", status: http.StatusNoContent},
+		{name: "unauthorized_401_passes_through", status: http.StatusUnauthorized},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := newJOSETransport(f)
+			transport.Inner = nilBodyResponder{status: tc.status}
+
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.invalid", http.NoBody)
+			require.NoError(t, err)
+
+			resp, err := transport.RoundTrip(req)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				assert.Nil(t, resp)
+				return
+			}
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			assert.Equal(t, tc.status, resp.StatusCode)
+			read, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			assert.Empty(t, read)
+		})
+	}
+}
+
 func TestJOSETransportSwitchingProtocolsKeepsItsBody(t *testing.T) {
 	// 101 is below 200, so skipsUnwrap skips it on the status alone — but it is the one
 	// sub-200 status a RoundTripper returns as a terminal response, and its Body is the live
