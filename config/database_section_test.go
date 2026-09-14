@@ -2483,6 +2483,33 @@ func TestValidateNamedDatabasesNoConflictWhenMultitenantDisabled(t *testing.T) {
 	assert.NoError(t, err, "no conflict when multitenant is disabled")
 }
 
+func TestIsUnixSocketHost(t *testing.T) {
+	tests := []struct {
+		name string
+		host string
+		want bool
+	}{
+		{name: "posix_absolute_path", host: "/var/run/postgresql", want: true},
+		{name: "windows_drive_letter", host: `C:\pg`, want: true},
+		{name: "windows_drive_letter_minimal", host: `Z:\`, want: true},
+		{name: "windows_drive_first_letter", host: `A:\`, want: true},
+		{name: "lowercase_drive_letter", host: `c:\pg`, want: false},
+		{name: "drive_below_uppercase_range", host: `@:\pg`, want: false},
+		{name: "drive_without_backslash", host: "C:", want: false},
+		{name: "drive_with_forward_slash", host: "C:/pg", want: false},
+		{name: "drive_without_colon", host: `C;\pg`, want: false},
+		{name: "relative_path", host: "./relative", want: false},
+		{name: "dns_name", host: "host.example.com", want: false},
+		{name: "localhost", host: "localhost", want: false},
+		{name: "empty", host: "", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isUnixSocketHost(tt.host))
+		})
+	}
+}
+
 func TestValidatePostgreSQLFieldsRejectsPartialClientCert(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -3036,6 +3063,34 @@ func TestApplyDatabasePoolDefaultsRefusesEmptyPostgresHost(t *testing.T) {
 			wantField: "database.host",
 		},
 		{
+			// pgx splits the host on ',' and swaps each empty entry for the socket directory.
+			name: "multi_host_with_trailing_empty_entry_refused",
+			cfg: DatabaseConfig{
+				Type: PostgreSQL, Host: "db.internal,", Database: "d", Username: "u",
+				TLS: TLSConfig{Mode: sslModeVerifyFull, CAFile: "/etc/certs/ca.pem"},
+			},
+			wantField: "database.host",
+		},
+		{
+			name:      "multi_host_with_leading_empty_entry_refused",
+			cfg:       DatabaseConfig{Type: PostgreSQL, Host: ",db.internal", Database: "d", Username: "u"},
+			wantField: "database.host",
+		},
+		{
+			name:      "multi_host_with_trailing_empty_entry_without_tls_refused",
+			cfg:       DatabaseConfig{Type: PostgreSQL, Host: "db.internal,", Database: "d", Username: "u"},
+			wantField: "database.host",
+		},
+		{
+			name:      "multi_host_with_middle_empty_entry_refused",
+			cfg:       DatabaseConfig{Type: PostgreSQL, Host: "db1.internal,,db2.internal", Database: "d", Username: "u"},
+			wantField: "database.host",
+		},
+		{
+			name: "multi_host_all_named_accepted",
+			cfg:  DatabaseConfig{Type: PostgreSQL, Host: "db1.internal,db2.internal", Database: "d", Username: "u"},
+		},
+		{
 			// testBarePostgresConnString names a host; this pins only that the
 			// connectionstring short-circuit runs BEFORE the host guard.
 			name: "postgres_connectionstring_short_circuits_before_host_guard",
@@ -3096,6 +3151,91 @@ func TestApplyDatabasePoolDefaultsRefusesEmptyPostgresHost(t *testing.T) {
 		require.ErrorAs(t, err, &cfgErr)
 		assert.Equal(t, "multitenant.tenants.acme.database.host", cfgErr.Field)
 		assert.Equal(t, errCategoryMissing, cfgErr.Category)
+	})
+}
+
+// TestApplyDatabasePoolDefaultsRefusesTLSOnUnixSocketHost pins the ADR-062 host-transport amendment.
+func TestApplyDatabasePoolDefaultsRefusesTLSOnUnixSocketHost(t *testing.T) {
+	const socketHost = "/var/run/postgresql"
+	type socketHostCase struct {
+		name        string
+		host        string
+		tls         TLSConfig
+		wantField   string
+		wantMessage string
+	}
+	socketRefusal := func(name, host string, tls TLSConfig) socketHostCase {
+		return socketHostCase{name: name, host: host, tls: tls, wantField: fieldDatabaseTLS, wantMessage: "unix socket"}
+	}
+	tests := []socketHostCase{
+		socketRefusal("unix_socket_host_verify_full_with_ca_refused", socketHost, TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}),
+		socketRefusal("unix_socket_host_require_without_material_refused", socketHost, TLSConfig{Mode: sslModeRequire}),
+		socketRefusal("unix_socket_host_unset_mode_with_ca_refused", socketHost, TLSConfig{CAFile: testTLSCAFile}),
+		socketRefusal("unix_socket_host_disable_with_cert_refused", socketHost, TLSConfig{Mode: sslModeDisable, CertFile: testTLSCertFile}),
+		socketRefusal("unix_socket_host_disable_with_key_refused", socketHost, TLSConfig{Mode: sslModeDisable, KeyFile: testTLSKeyFile}),
+		socketRefusal("windows_socket_host_verify_full_refused", `C:\pg`, TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}),
+		socketRefusal("multi_host_with_socket_entry_and_tls_refused", "db.internal,"+socketHost, TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}),
+		socketRefusal("multi_host_with_middle_socket_entry_and_tls_refused", "db1.internal,"+socketHost+",db2.internal", TLSConfig{Mode: sslModeRequire}),
+		{
+			// The mode allowlist still runs first, so a typo is reported as a typo.
+			name:        "unix_socket_host_invalid_mode_reports_mode_first",
+			host:        socketHost,
+			tls:         TLSConfig{Mode: "verify_full", CAFile: testTLSCAFile},
+			wantField:   "database.tls.mode",
+			wantMessage: "verify_full",
+		},
+		{name: "unix_socket_host_without_tls_accepted", host: socketHost},
+		{name: "unix_socket_host_disable_without_material_accepted", host: socketHost, tls: TLSConfig{Mode: sslModeDisable}},
+		{name: "localhost_verify_full_with_ca_accepted", host: "localhost", tls: TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}},
+		{name: "dns_host_verify_full_with_ca_accepted", host: "db.internal", tls: TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}},
+		{name: "multi_host_all_tcp_verify_full_with_ca_accepted", host: "db1.internal,db2.internal", tls: TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}},
+		{name: "multi_host_with_socket_entry_without_tls_accepted", host: "db.internal," + socketHost},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DatabaseConfig{Type: PostgreSQL, Host: tt.host, Database: "d", Username: "u", TLS: tt.tls}
+			original := cfg
+
+			err := ApplyDatabasePoolDefaults(&cfg)
+
+			if tt.wantField == "" {
+				require.NoError(t, err)
+				assert.Equal(t, tt.host, cfg.Host)
+				assert.Equal(t, tt.tls, cfg.TLS)
+				return
+			}
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+			assert.Contains(t, cfgErr.Message, tt.wantMessage)
+			assert.Equal(t, original, cfg, "a rejected config must go back to its caller untouched")
+		})
+	}
+
+	t.Run("unix_socket_host_refusal_names_both_exits", func(t *testing.T) {
+		cfg := DatabaseConfig{Type: PostgreSQL, Host: socketHost, TLS: TLSConfig{Mode: sslModeRequire}}
+
+		var cfgErr *ConfigError
+		require.ErrorAs(t, ApplyDatabasePoolDefaults(&cfg), &cfgErr)
+		assert.Equal(t, errCategoryInvalid, cfgErr.Category)
+		assert.Contains(t, cfgErr.Action, "remove the database.tls block")
+		assert.Contains(t, cfgErr.Action, "TCP host")
+	})
+
+	t.Run("connectionstring_with_socket_host_untouched", func(t *testing.T) {
+		cfg := DatabaseConfig{ConnectionString: "host=/var/run/postgresql dbname=d sslmode=verify-full"}
+
+		require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
+	})
+
+	t.Run("forkey_named_database_field_is_section_qualified", func(t *testing.T) {
+		cfg := DatabaseConfig{Type: PostgreSQL, Host: socketHost, TLS: TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}}
+
+		var cfgErr *ConfigError
+		require.ErrorAs(t, ApplyDatabasePoolDefaultsForKey(&cfg, NamedDatabasePrefix+"reporting"), &cfgErr)
+		assert.Equal(t, "databases.reporting.tls", cfgErr.Field)
+		assert.Contains(t, cfgErr.Message, "unix socket")
 	})
 }
 

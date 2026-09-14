@@ -615,7 +615,8 @@ func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 // or downgrade: the database.tls blocks of ADR-062, and an empty host, which is where the
 // ADR-050 amendment's one identity exception lives. Check order is load-bearing:
 // connectionstring short-circuits, then the empty-host refusal, then the mode allowlist,
-// then the material/mode coherence rule, then the cert/key pairing.
+// then the unix-socket-host refusal, then the material/mode coherence rule, then the
+// cert/key pairing.
 func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 	if cfg.ConnectionString != "" {
 		if cfg.TLS.Mode != "" || cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" || cfg.TLS.CAFile != "" {
@@ -631,16 +632,32 @@ func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 
 	// An empty host is not a dial target: libpq semantics substitute the local socket
 	// directory and skip TLS there, so the refusal is version-independent even though
-	// pgx v5.11.0 is what made it reachable (v5.10.0 dialed `tcp :5432`).
-	if cfg.Host == "" {
+	// pgx v5.11.0 is what made it reachable (v5.10.0 dialed `tcp :5432`). Judged per
+	// comma-separated entry, since pgx substitutes each empty entry independently.
+	if slices.Contains(pgHostEntries(cfg.Host), "") {
 		return errMissingDatabaseHost()
 	}
 
 	if cfg.TLS.Mode != "" && !slices.Contains(pgSSLModes, cfg.TLS.Mode) {
 		return NewInvalidFieldError("database.tls.mode", fmt.Sprintf(errInvalidField, cfg.TLS.Mode), pgSSLModes)
 	}
+	return validatePostgreSQLTLSCoherence(cfg)
+}
 
+// validatePostgreSQLTLSCoherence refuses a database.tls block pgx would not honor: TLS claimed
+// on a unix-socket host entry, material under a non-TLS mode, or a lone cert/key.
+func validatePostgreSQLTLSCoherence(cfg *DatabaseConfig) error {
 	hasMaterial := cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" || cfg.TLS.CAFile != ""
+	claimsTLS := hasMaterial || (cfg.TLS.Mode != "" && cfg.TLS.Mode != sslModeDisable)
+	if claimsTLS && slices.ContainsFunc(pgHostEntries(cfg.Host), isUnixSocketHost) {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    fieldDatabaseTLS,
+			Message: "database.tls cannot apply to a unix socket host: pgx dials an absolute-path host " +
+				"over a unix socket and skips TLS there, silently dropping the configured mode and material",
+			Action: "remove the database.tls block (or set mode: disable with no material), or use a TCP host",
+		}
+	}
 	if hasMaterial && !slices.Contains(pgTLSMandatorySSLModes, cfg.TLS.Mode) {
 		return &ConfigError{
 			Category: errCategoryInvalid,
@@ -663,6 +680,17 @@ func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 		}
 	}
 	return nil
+}
+
+// pgHostEntries mirrors pgx v5 ParseConfig's untrimmed strings.Split of the host list.
+func pgHostEntries(host string) []string {
+	return strings.Split(host, ",")
+}
+
+// isUnixSocketHost mirrors pgx v5 pgconn isAbsolutePath, which routes a host to a unix
+// socket with TLS skipped; any divergence from pgx reopens the TLS-drop hole.
+func isUnixSocketHost(host string) bool {
+	return strings.HasPrefix(host, "/") || len(host) >= 3 && host[0] >= 'A' && host[0] <= 'Z' && host[1] == ':' && host[2] == '\\'
 }
 
 // validateOracleFields validates Oracle-specific configuration fields.
