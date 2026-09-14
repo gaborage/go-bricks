@@ -267,7 +267,8 @@ const (
 	fieldMessagingSealActive     = "messaging.seal.active"
 	fieldMessagingPublishTimeout = "messaging.publishtimeout"
 
-	fieldDatabaseTLS = "database.tls"
+	fieldDatabaseTLS              = "database.tls"
+	fieldDatabaseConnectionString = "database.connectionstring"
 
 	sslModeDisable    = "disable"
 	sslModeAllow      = "allow"

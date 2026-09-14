@@ -694,6 +694,28 @@ func TestAppBuilderConfigureRuntimeHelpersRejectsUntypedConnectionString(t *test
 	assert.Contains(t, result.err.Error(), "[database]")
 }
 
+// TestAppBuilderConfigureRuntimeHelpersRejectsForeignNonURIDSN pins that keyword-form
+// PostgreSQL inference did not widen far enough to claim a foreign non-URI DSN: godror's
+// easy-connect and TNS-descriptor spellings must still reach this refusal rather than be
+// typed postgresql and booted (gaborage/go-bricks#1551).
+func TestAppBuilderConfigureRuntimeHelpersRejectsForeignNonURIDSN(t *testing.T) {
+	for name, dsn := range map[string]string{
+		"oracle_easy_connect": "user/pass@localhost:1521/svc",
+		"oracle_tns":          "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=host)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=XE)))",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Database.ConnectionString = dsn
+			require.NoError(t, config.ApplyDatabasePoolDefaults(&cfg.Database))
+
+			builder := &Builder{cfg: cfg, logger: logger.New("error", false), app: &App{}}
+
+			require.ErrorContains(t, builder.ConfigureRuntimeHelpers().err,
+				"connectionstring has no resolved database type")
+		})
+	}
+}
+
 // TestAppBuilderConfigureRuntimeHelpersGuardsWhenOptionsLackDatabaseConnector pins the
 // DatabaseConnector-nil half of the guard: a non-nil Options set for an unrelated reason
 // (here, MessagingClientFactory) is the common consumer shape, and the guard must still

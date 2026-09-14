@@ -140,3 +140,17 @@ func TestScanPostgresDSNRejectsUntokenizable(t *testing.T) {
 		assert.False(t, ok, "%q", dsn)
 	}
 }
+
+// TestScanPostgresDSNMatchesSharedHostFixtures shares testutil.PostgresDSNHostCases with
+// database/postgresql's pgconn.ParseConfig oracle test, so the two host mirrors cannot drift
+// apart from each other without a failing test on at least one side.
+func TestScanPostgresDSNMatchesSharedHostFixtures(t *testing.T) {
+	for _, c := range testutil.PostgresDSNHostCases {
+		t.Run(c.Name, func(t *testing.T) {
+			got, ok := scanPostgresDSN(c.DSN)
+			require.True(t, ok)
+			assert.Equal(t, c.HostSet, got.hostSet)
+			assert.Equal(t, c.Host, got.host)
+		})
+	}
+}

@@ -327,6 +327,26 @@ func TestPgxRejectsConnectionStringsTheConfigScannerCannotTokenize(t *testing.T)
 	}
 }
 
+// TestPgxResolvesSameHostAsConfigScanner uses pgx's own parser as the oracle for
+// testutil.PostgresDSNHostCases, the fixture config's scanner unit test shares: a pgx
+// bump that changes host resolution fails here before it can silently desync the mirror
+// the [C65.2] connectionstring rules depend on (gaborage/go-bricks#1551).
+func TestPgxResolvesSameHostAsConfigScanner(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PGSERVICE", "")
+	t.Setenv("PGSERVICEFILE", home+"/pg_service.conf")
+	t.Setenv("PGPASSFILE", home+"/pgpass")
+
+	for _, c := range testutil.PostgresDSNHostCases {
+		t.Run(c.Name, func(t *testing.T) {
+			pc, err := pgconn.ParseConfig(c.DSN)
+			require.NoError(t, err)
+			assert.Equal(t, c.Host, pc.Host)
+		})
+	}
+}
+
 func TestConnectionNewConnectionSuccess(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)

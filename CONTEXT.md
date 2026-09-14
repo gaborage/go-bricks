@@ -12,6 +12,29 @@ One database configuration block, wherever it sits in the tree — the root
 `database`, an entry under `databases`, or a tenant's `database`.
 _Avoid_: database config, DB block, DSN block
 
+**Connection string**:
+The raw DSN a database section's `connectionstring` key carries, passed to the driver
+unparsed apart from type inference (ADR-050) and, for PostgreSQL, a scan of its resolved
+host and its own TLS claim (`[C65.2]`: a host that names nothing is refused, and so is a
+unix-socket host under a TLS claim — `sslmode` of `require`/`verify-ca`/`verify-full`,
+`sslnegotiation=direct`, or non-empty `sslrootcert`/`sslcert`/`sslkey`) — the seam never
+otherwise parses it.
+_Avoid_: conn string, database URL
+
+**Host source**:
+Any of the four places a PostgreSQL connection string's host can be named: the URI
+authority, a `?host=` query parameter, a keyword `host=` pair, or the `PGHOST`
+environment variable — the last consulted only when the connection string carries no
+`host` key of its own at all.
+_Avoid_: host (unqualified, for this concept), PGHOST (as a stand-in for the concept)
+
+**Implicit socket**:
+What the driver substitutes when no host source names a host: a unix socket in the
+server's own socket directory, where TLS is never negotiated. What `[C64.8]` refuses
+for a typed database section — widened by `[C65.6]` to an empty comma-separated `host`
+entry — and `[C65.2]` refuses for a connection string.
+_Avoid_: default host, empty host (the input shape, not this outcome)
+
 **Placement**:
 Where a resource kind's section sits in the tree: `root`, `named`, or `tenant`,
 though not every kind uses every value — a database section may be any of the
