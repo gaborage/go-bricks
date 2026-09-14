@@ -1,6 +1,10 @@
 package messaging
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -51,6 +55,134 @@ func TestValidateEventIDErrorCarriesLengthOnly(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidEventID)
 	assert.Contains(t, err.Error(), "129 bytes")
 	assert.NotContains(t, err.Error(), "sss")
+}
+
+// TestWireDedupKeyAppliesTheGrammar pins construction-time admission for a wire
+// key: both length boundaries, the sealed shape, and the round trip.
+func TestWireDedupKeyAppliesTheGrammar(t *testing.T) {
+	cases := []struct {
+		name string
+		id   string
+		ok   bool
+	}{
+		{"uuid", "9f0c2b1e-3f4a-4c8d-9e1f-0a2b3c4d5e6f", true},
+		{"max_length_128", strings.Repeat("w", 128), true},
+		{"length_129", strings.Repeat("w", 129), false},
+		{"empty", "", false},
+		{"sealed_shape", "RS256:abc", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			key, err := WireDedupKey(tc.id)
+			if !tc.ok {
+				require.ErrorIs(t, err, ErrInvalidEventID)
+				assert.Equal(t, DedupKey{}, key, "a refused id yields the invalid zero key")
+				assert.False(t, key.Sealed())
+				assert.Empty(t, key.String())
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.id, key.String())
+			assert.False(t, key.Sealed())
+		})
+	}
+}
+
+// TestOnlyAllowlistedFunctionsMintASealedDedupKey pins every production site
+// that can set DedupKey.sealed.
+func TestOnlyAllowlistedFunctionsMintASealedDedupKey(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	require.NoError(t, err)
+	sites := dedupKeySites{sealing: map[string]bool{}, literals: map[string]bool{}}
+	fset := token.NewFileSet()
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		require.NoError(t, err)
+		sites.scanFile(file)
+	}
+	allowlist := []string{}
+	assert.ElementsMatch(t, allowlist, siteNames(sites.sealing))
+	assert.Contains(t, sites.literals, "WireDedupKey", "the walk must see DedupKey literals")
+}
+
+type dedupKeySites struct {
+	sealing  map[string]bool
+	literals map[string]bool
+}
+
+func (s dedupKeySites) scanFile(file *ast.File) {
+	for _, decl := range file.Decls {
+		scope := "<package scope>"
+		if fn, isFunc := decl.(*ast.FuncDecl); isFunc {
+			scope = funcSiteName(fn)
+		}
+		ast.Inspect(decl, func(n ast.Node) bool {
+			s.record(scope, n)
+			return true
+		})
+	}
+}
+
+func (s dedupKeySites) record(scope string, n ast.Node) {
+	switch node := n.(type) {
+	case *ast.CompositeLit:
+		if !isIdentNamed(node.Type, "DedupKey") {
+			return
+		}
+		s.literals[scope] = true
+		if literalSetsSealed(node) {
+			s.sealing[scope] = true
+		}
+	case *ast.AssignStmt:
+		for _, lhs := range node.Lhs {
+			if sel, isSel := lhs.(*ast.SelectorExpr); isSel && sel.Sel.Name == "sealed" {
+				s.sealing[scope] = true
+			}
+		}
+	}
+}
+
+func literalSetsSealed(lit *ast.CompositeLit) bool {
+	for _, elt := range lit.Elts {
+		kv, keyed := elt.(*ast.KeyValueExpr)
+		if !keyed {
+			return len(lit.Elts) >= 2
+		}
+		if isIdentNamed(kv.Key, "sealed") {
+			return true
+		}
+	}
+	return false
+}
+
+func funcSiteName(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return fn.Name.Name
+	}
+	recv := fn.Recv.List[0].Type
+	if star, isStar := recv.(*ast.StarExpr); isStar {
+		recv = star.X
+	}
+	if ident, isIdent := recv.(*ast.Ident); isIdent {
+		return ident.Name + "." + fn.Name.Name
+	}
+	return "?." + fn.Name.Name
+}
+
+func isIdentNamed(expr ast.Expr, name string) bool {
+	ident, isIdent := expr.(*ast.Ident)
+	return isIdent && ident.Name == name
+}
+
+func siteNames(set map[string]bool) []string {
+	names := make([]string, 0, len(set))
+	for name := range set {
+		names = append(names, name)
+	}
+	return names
 }
 
 func TestMetadataDedupKey(t *testing.T) {
