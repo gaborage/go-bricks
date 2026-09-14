@@ -285,13 +285,15 @@ func TestOpenDocumentOpensAPrettyPrintedDocument(t *testing.T) {
 	assert.JSONEq(t, cardPlaintext, string(opened.Subject))
 }
 
-// TestOpenDocumentSubjectAtRestoresTheOriginalDocument pins the splice contract SubjectAt
-// exists for: a caller that puts the member back at that offset — its key and separator,
-// which traveled with the value, plus Subject as the value — gets the pre-seal document back
-// byte for byte. A caller splicing a redaction placeholder instead lands in the same place.
-// The offset is checked independently against where the member sits in the original, so an
-// off-by-one cannot pass. The pretty case is the first-member fixup's end-to-end regression.
-func TestOpenDocumentSubjectAtRestoresTheOriginalDocument(t *testing.T) {
+// TestOpenDocumentSubjectAtLocatesTheRemovedMember pins what SubjectAt actually promises: it
+// is the exact offset the removed member sat at, so a REPLACEMENT spliced there lands in the
+// Subject's place. The offset is checked independently against where the member sits in the
+// original, so an off-by-one cannot pass, and a caller that still HOLDS the removed member
+// text can reassemble the original with it — which is how these cases assert the offset. It
+// is NOT a claim that an OpenedDocument alone can reproduce the original bytes: the removed
+// span carried one separator and any whitespace around it (see the whitespace case below and
+// SubjectAt's own godoc). The pretty case is the first-member fixup's end-to-end regression.
+func TestOpenDocumentSubjectAtLocatesTheRemovedMember(t *testing.T) {
 	k := testKeys(t)
 	consumer := jositest.NewTestResolver(map[string]any{signKid: &k.signPriv.PublicKey, encKid: k.encPriv})
 
@@ -334,9 +336,36 @@ func TestOpenDocumentSubjectAtRestoresTheOriginalDocument(t *testing.T) {
 				"SubjectAt is where the member sat, not where it would append")
 
 			restored := slices.Concat(opened.Document[:opened.SubjectAt], []byte(member), opened.Document[opened.SubjectAt:])
-			assert.Equal(t, tc.doc, restored, "splicing the member back at SubjectAt reproduces the original byte for byte")
+			assert.Equal(t, tc.doc, restored,
+				"a caller holding the removed member text reassembles the original at SubjectAt")
 		})
 	}
+}
+
+// TestOpenDocumentSubjectAtSplicesAReplacementThroughOddLayout is the narrowed contract on its
+// hardest input: whitespace on BOTH sides of the delimiter the removed member took with it.
+// The original bytes are gone — that is documented, not a defect — but a redaction spliced at
+// SubjectAt with the caller's own separator must still yield a valid JSON object with the
+// clear members intact, which is the only promise cmd/open-event relies on.
+func TestOpenDocumentSubjectAtSplicesAReplacementThroughOddLayout(t *testing.T) {
+	k := testKeys(t)
+	consumer := jositest.NewTestResolver(map[string]any{signKid: &k.signPriv.PublicKey, encKid: k.encPriv})
+	doc := []byte("{\"" + docSubjectPath + "\":" + cardPlaintext + " \t,\n  \"amount\": 1250}")
+
+	wire, err := sealed.SealDocument(doc, documentSpec(t), testOptions(t))
+	require.NoError(t, err)
+	opened, err := sealed.OpenDocument(wire, documentSpec(t), &sealed.OpenOptions{EventType: eventType, Keys: consumer})
+	require.NoError(t, err)
+
+	replacement := []byte("\"" + docSubjectPath + "\":\"<redacted>\",")
+	rendered := slices.Concat(opened.Document[:opened.SubjectAt], replacement, opened.Document[opened.SubjectAt:])
+
+	assert.True(t, json.Valid(rendered), "a replacement spliced at SubjectAt keeps the document valid: %s", rendered)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(rendered, &got))
+	assert.Equal(t, "<redacted>", got[docSubjectPath], "the placeholder occupies the subject member")
+	assert.InEpsilon(t, float64(1250), got["amount"], 0.0001, "clear members survive the odd layout")
+	assert.NotContains(t, string(rendered), "4111", "no subject byte reaches the rendered document")
 }
 
 // TestOpenDocumentRejectsWiringMistakes mirrors TestOpenRejectsWiringMistakes for the

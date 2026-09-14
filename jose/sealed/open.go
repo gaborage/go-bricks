@@ -211,7 +211,9 @@ func Open(body []byte, spec *Spec, opts *OpenOptions, out any) (*Envelope, error
 // It returns an *OpenedDocument: the document with the Subject member ABSENT rather than
 // substituting a redaction placeholder — the library never decides what a caller should
 // splice in its place — the decrypted subject plaintext separately, the offset the member
-// sat at, and the same Envelope Open would return for the same body.
+// sat at, and the same Envelope Open would return for the same body. SubjectAt positions a
+// REPLACEMENT member; reproducing the original bytes is not part of the contract (see its
+// own comment).
 //
 // Every rule 1–10 refusal is code-identical to Open's: the same *OpenError Err.Code, Rule
 // and Details for the same input. Rule 11 (decode into spec.Type) is out of a type-free
@@ -247,10 +249,13 @@ type OpenedDocument struct {
 	// Subject is the decrypted Subject plaintext: PAN-class data by construction. Never log,
 	// echo or otherwise emit it — rendering it is the caller's deliberate decision.
 	Subject []byte
-	// SubjectAt is the byte offset IN Document where the removed member sat: everything a
-	// caller splices in there (the member spelled with Subject as its value, or a redaction
-	// placeholder such as "<redacted>") lands back in the Subject's original position, so a
-	// renderer never has to append the member or re-walk the document to find its place.
+	// SubjectAt is the byte offset IN Document where the removed member sat, so a renderer
+	// splices a REPLACEMENT member there — `"card":"<redacted>"`, or the member spelled with
+	// Subject as its value — instead of appending it or re-walking the document. The caller
+	// supplies the separator it needs: removing the member took one adjacent separator with
+	// it, and any whitespace that surrounded that separator, so the ORIGINAL bytes are not
+	// recoverable from an OpenedDocument alone. gaborage/go-bricks#1638 tracks moving the
+	// splice into this package, which is where a byte-exact contract would belong.
 	SubjectAt int
 	// Envelope is what the message proved about itself — the same one Open returns.
 	Envelope *Envelope
