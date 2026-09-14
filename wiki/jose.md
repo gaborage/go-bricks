@@ -278,7 +278,7 @@ curl -X POST https://api.example.com/v1/tokens \
 
 **Kid rule**: `-sign-kid` must equal the target endpoint's `verify=` tag name, and `-encrypt-kid` must equal its `decrypt=` tag name — the server binds kid headers to the policy's configured kids, and a mismatch fails with `JOSE_KID_UNKNOWN`.
 
-**Bare mode (Visa MLE)**: `-mode bare` (default `nested`) emits one compact JWE with no inner JWS. It takes only the encryption key and `-encrypt-kid`; `-sign-key-file`, `-sign-key-value`, `-sign-kid` or `-sig-alg` is refused by name. `-enc A128GCM` is accepted under bare only, and `-typ`, `-iat-ms` (millisecond `iat`) and repeatable `-protected key=value` (string values) are bare-only — under nested, the CLI refuses each by name (`-typ requires -mode bare`). `-envelope visa-mle` prints `{"encData":"<compact>"}` instead of the bare token:
+**Bare mode (Visa MLE)**: `-mode bare` (default `nested`) emits one compact JWE with no inner JWS. It takes only the encryption key and `-encrypt-kid`; `-sign-key-file`, `-sign-key-value`, `-sign-kid` or `-sig-alg` is refused by name. `-enc A128GCM` is accepted under bare only, and `-typ`, `-iat-ms` (millisecond `iat`) and repeatable `-protected key=value` (string values) are bare-only — under nested, the CLI refuses each by name (`-typ requires -mode bare`). `-envelope visa-mle` prints `{"encData":"<compact>"}` instead of the bare token — the envelope is a body wrapper, so it applies in nested mode too, but Visa's own MLE endpoints expect a bare `A128GCM` JWE inside it, which is what `-mode bare` mints:
 
 ```sh
 echo '{"pan":"4111111111111111"}' | seal-payload -mode bare \
