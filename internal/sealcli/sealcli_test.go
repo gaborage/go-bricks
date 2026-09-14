@@ -135,7 +135,7 @@ const (
 	encryptRefusal = "exactly one of -encrypt-key-file or -encrypt-key-value is required"
 )
 
-// refusalCases are the four wrong-source shapes. Every path named is one that
+// refusalCases are the wrong-source shapes. Every path named is one that
 // does not exist, so a refusal string proves the check ran before any I/O —
 // reaching a loader would surface a read error instead.
 var refusalCases = []struct {
@@ -144,9 +144,11 @@ var refusalCases = []struct {
 	want string
 }{
 	{"both_sign_sources", KeySources{SignFile: missingPath, SignValue: "AAAA", EncryptFile: missingPath}, signRefusal},
-	{"neither_sign_source", KeySources{EncryptFile: missingPath}, signRefusal},
+	{"sign_pair_required_by_default", KeySources{EncryptFile: missingPath}, signRefusal},
 	{"both_encrypt_sources", KeySources{SignFile: missingPath, EncryptFile: missingPath, EncryptValue: "AAAA"}, encryptRefusal},
 	{"neither_encrypt_source", KeySources{SignFile: missingPath}, encryptRefusal},
+	{"sign_optional_both_sign_sources", KeySources{SignFile: missingPath, SignValue: "AAAA", EncryptFile: missingPath, SignOptional: true}, signRefusal},
+	{"sign_optional_neither_encrypt_source", KeySources{SignOptional: true}, encryptRefusal},
 }
 
 func TestKeySourcesValidate(t *testing.T) {
@@ -162,10 +164,15 @@ func TestKeySourcesValidate(t *testing.T) {
 		k := KeySources{SignFile: missingPath, EncryptValue: "AAAA"}
 		assert.NoError(t, k.Validate(), "Validate must not touch the filesystem")
 	})
+
+	t.Run("sign_optional_without_sign_source", func(t *testing.T) {
+		k := KeySources{EncryptFile: missingPath, SignOptional: true}
+		assert.NoError(t, k.Validate())
+	})
 }
 
 func TestKeySourcesLoad(t *testing.T) {
-	// Load re-runs Validate, so the same four shapes must refuse here too —
+	// Load re-runs Validate, so the same shapes must refuse here too —
 	// with the refusal string, never a read error from the nonexistent paths.
 	for _, tt := range refusalCases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -180,6 +187,34 @@ func TestKeySourcesLoad(t *testing.T) {
 	}
 
 	privDER, pubDER, wantPriv, wantPub := rsaFixtures(t)
+
+	t.Run("sign_optional_loads_encrypt_key_only", func(t *testing.T) {
+		k := KeySources{EncryptValue: base64.StdEncoding.EncodeToString(pubDER), SignOptional: true}
+		keys, err := k.Load("", testEncKid)
+		require.NoError(t, err)
+		require.NotNil(t, keys)
+		// Reported by TYPE, never by value (ADR-102).
+		if keys.SignPriv != nil {
+			assert.Fail(t, "unexpected sign key", "no sign source, yet got a %T", keys.SignPriv)
+		}
+
+		pub, err := keys.PublicKey(testEncKid)
+		require.NoError(t, err)
+		assert.True(t, wantPub.Equal(pub), "encrypt key round-tripped to a different key")
+	})
+
+	t.Run("sign_optional_still_loads_supplied_sign_key", func(t *testing.T) {
+		k := KeySources{
+			SignValue:    base64.StdEncoding.EncodeToString(privDER),
+			EncryptValue: base64.StdEncoding.EncodeToString(pubDER),
+			SignOptional: true,
+		}
+		keys, err := k.Load(testSignKid, testEncKid)
+		require.NoError(t, err)
+		priv, err := keys.PrivateKey(testSignKid)
+		require.NoError(t, err)
+		assert.True(t, wantPriv.Equal(priv), "sign key round-tripped to a different key")
+	})
 
 	t.Run("sign_load_error_prefixed", func(t *testing.T) {
 		k := KeySources{SignFile: missingPath, EncryptValue: base64.StdEncoding.EncodeToString(pubDER)}
