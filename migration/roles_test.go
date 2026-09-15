@@ -422,7 +422,7 @@ func TestPGRoleSpecValidatePolicyErrorReachesCaller(t *testing.T) {
 		Schema:           "tenant_a",
 		MigratorRole:     "MigratorX",
 		RuntimeRole:      "r",
-		IdentifierPolicy: PGIdentifierPolicyFunc(rejectUppercase),
+		IdentifierPolicy: PGIdentifierCheckerFunc(rejectUppercase),
 	}
 	err := spec.Validate()
 	require.ErrorIs(t, err, ErrInvalidPGIdentifier)
@@ -434,7 +434,7 @@ func TestPGRoleSpecValidatePolicyErrorReachesCaller(t *testing.T) {
 // An admit-everything policy must not re-admit what the floor refused — one
 // charset refusal and one length refusal, the floor's two independent rules.
 func TestPGRoleSpecValidatePolicyCannotWidenFloor(t *testing.T) {
-	admitEverything := PGIdentifierPolicyFunc(func(string) error { return nil })
+	admitEverything := PGIdentifierCheckerFunc(func(string) error { return nil })
 	tests := []struct {
 		name  string
 		spec  *PGRoleSpec
@@ -472,7 +472,7 @@ func TestPGRoleSpecValidatePolicySeesEveryIdentifier(t *testing.T) {
 		Schema:       "tenant_a",
 		MigratorRole: "migrator",
 		RuntimeRole:  "tenant_a_app",
-		IdentifierPolicy: PGIdentifierPolicyFunc(func(value string) error {
+		IdentifierPolicy: PGIdentifierCheckerFunc(func(value string) error {
 			seen = append(seen, value)
 			return nil
 		}),
@@ -514,7 +514,7 @@ func TestPGRoleSpecValidatePolicyRejectsEachIdentifierField(t *testing.T) {
 			floorOnly := *tt.spec
 			require.NoError(t, floorOnly.Validate(), "floor admits the identifier the policy refuses")
 
-			tt.spec.IdentifierPolicy = PGIdentifierPolicyFunc(func(value string) error {
+			tt.spec.IdentifierPolicy = PGIdentifierCheckerFunc(func(value string) error {
 				if value == tt.target {
 					return errTestPolicyRejected
 				}
@@ -535,7 +535,7 @@ func TestPGRoleSpecValidateFloorRunsBeforePolicy(t *testing.T) {
 		Schema:       "tenant-a",
 		MigratorRole: "m",
 		RuntimeRole:  "r",
-		IdentifierPolicy: PGIdentifierPolicyFunc(func(string) error {
+		IdentifierPolicy: PGIdentifierCheckerFunc(func(string) error {
 			consulted++
 			return nil
 		}),
@@ -551,7 +551,7 @@ func TestPGRoleSpecValidateRefusesNilPolicyFunc(t *testing.T) {
 		Schema:           "tenant_a",
 		MigratorRole:     "m",
 		RuntimeRole:      "r",
-		IdentifierPolicy: PGIdentifierPolicyFunc(nil),
+		IdentifierPolicy: PGIdentifierCheckerFunc(nil),
 	}
 	require.NotPanics(t, func() {
 		require.ErrorIs(t, spec.Validate(), ErrInvalidPGIdentifier)

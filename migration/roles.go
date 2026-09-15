@@ -53,39 +53,39 @@ type PGRoleSpec struct {
 	// IdentifierPolicy optionally tightens the identifier rule Validate
 	// applies to Schema, MigratorRole and RuntimeRole; nil means the floor alone.
 	// Leave the field unset for that — storing a typed nil
-	// PGIdentifierPolicyFunc is a non-nil interface, and is refused.
-	IdentifierPolicy PGIdentifierPolicy
+	// PGIdentifierCheckerFunc is a non-nil interface, and is refused.
+	IdentifierPolicy PGIdentifierChecker
 }
 
-// PGIdentifierPolicy is a caller-supplied check layered on top of the
+// PGIdentifierChecker is a caller-supplied check layered on top of the
 // identifier floor (database/identifier.Validate for PostgreSQL). Validate
 // consults it once per identifier, after the floor has accepted that
 // identifier, so a policy can only refuse more — never admit a name the floor
 // rejects. A returned error is wrapped with ErrInvalidPGIdentifier and the
 // failing field name, so the policy itself does not need to identify the
 // identifier it judged.
-type PGIdentifierPolicy interface {
+type PGIdentifierChecker interface {
 	CheckPGIdentifier(value string) error
 }
 
-// PGIdentifierPolicyFunc adapts a plain function to PGIdentifierPolicy.
+// PGIdentifierCheckerFunc adapts a plain function to PGIdentifierChecker.
 //
 // A typed nil of this type stored in PGRoleSpec.IdentifierPolicy is NOT the
 // same as no policy: the interface value is non-nil, so Validate does consult
 // it. Rather than panic on the nil call, the adapter refuses every identifier,
 // so such a spec fails Validate instead of taking the process down. Leave the
 // field unset for "no policy".
-type PGIdentifierPolicyFunc func(value string) error
+type PGIdentifierCheckerFunc func(value string) error
 
-// errNilPGIdentifierPolicyFunc is what a nil PGIdentifierPolicyFunc refuses
+// errNilPGIdentifierCheckerFunc is what a nil PGIdentifierCheckerFunc refuses
 // with; checkIdentifier wraps it with ErrInvalidPGIdentifier like any other
 // policy refusal.
-var errNilPGIdentifierPolicyFunc = errors.New("migration: IdentifierPolicy holds a nil PGIdentifierPolicyFunc")
+var errNilPGIdentifierCheckerFunc = errors.New("migration: IdentifierPolicy holds a nil PGIdentifierCheckerFunc")
 
 // CheckPGIdentifier calls f, or refuses when f is nil.
-func (f PGIdentifierPolicyFunc) CheckPGIdentifier(value string) error {
+func (f PGIdentifierCheckerFunc) CheckPGIdentifier(value string) error {
 	if f == nil {
-		return errNilPGIdentifierPolicyFunc
+		return errNilPGIdentifierCheckerFunc
 	}
 	return f(value)
 }
