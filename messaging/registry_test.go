@@ -2424,8 +2424,9 @@ func TestRegistryConsumerResubscribeEscalatesToWarnFromFifthFailure(t *testing.T
 
 // ===== Topology Redeclare After Reconnect Tests =====
 
+var testBindingKey = fakeBindingKey(&BindingDeclaration{Queue: testQueueName, Exchange: testExchangeName, RoutingKey: "orders.#"})
+
 const (
-	testBindingKey      = "binding:" + testQueueName + "|" + testExchangeName + "|orders.#"
 	redeclaredMsg       = "Messaging topology redeclared on new channel"
 	redeclareFailedMsg  = "Messaging topology redeclare failed, the next channel retries"
 	redeclareSkippedMsg = "Messaging declaration rejected with PRECONDITION_FAILED, skipped until restart: fix the server-side definition and restart the process"
@@ -2512,7 +2513,14 @@ func (m *reconnectingMockClient) DeclareQueue(_ context.Context, queue *QueueDec
 }
 
 func (m *reconnectingMockClient) BindQueue(_ context.Context, binding *BindingDeclaration) error {
-	return m.declare(bindingKey(binding), nil)
+	return m.declare(fakeBindingKey(binding), nil)
+}
+
+// fakeBindingKey is the fake broker's declares key of a binding: every field of
+// the broker's binding identity, names quoted, so bindings stay apart in the fake
+// even where the registry's own keys would collide.
+func fakeBindingKey(b *BindingDeclaration) string {
+	return fmt.Sprintf("binding:%q|%q|%q|%v", b.Queue, b.Exchange, b.RoutingKey, b.Args)
 }
 
 func (m *reconnectingMockClient) ConsumeFromQueue(_ context.Context, opts ConsumeOptions) (<-chan amqp.Delivery, error) {
@@ -2556,15 +2564,19 @@ func (m *reconnectingMockClient) subscription(i int) chan amqp.Delivery {
 	return nil
 }
 
-// startRedeclareRegistry declares one exchange, queue and binding plus a
-// consumer on the queue, then starts consuming on the client's first channel.
-func startRedeclareRegistry(ctx context.Context, t *testing.T, client AMQPClient, log gobrickslogger.Logger, handler MessageHandler) *Registry {
+// startRedeclareRegistry declares one exchange, queue and binding, then any
+// extra bindings, plus a consumer on the queue, then starts consuming on the
+// client's first channel.
+func startRedeclareRegistry(ctx context.Context, t *testing.T, client AMQPClient, log gobrickslogger.Logger, handler MessageHandler, bindings ...*BindingDeclaration) *Registry {
 	t.Helper()
 	registry := NewRegistry(client, log)
 	registry.resubscribeDelay = time.Millisecond
 	registry.RegisterExchange(&ExchangeDeclaration{Name: testExchangeName, Type: "topic", Durable: true})
 	registry.RegisterQueue(&QueueDeclaration{Name: testQueueName, Durable: true})
 	registry.RegisterBinding(&BindingDeclaration{Queue: testQueueName, Exchange: testExchangeName, RoutingKey: "orders.#"})
+	for _, binding := range bindings {
+		registry.RegisterBinding(binding)
+	}
 	registry.RegisterConsumer(&ConsumerDeclaration{Queue: testQueueName, EventType: testEventType, Workers: 1, Handler: handler})
 
 	require.NoError(t, registry.DeclareInfrastructure(ctx))
@@ -2721,7 +2733,7 @@ func TestRegistryRedeclaresBindingsToAnUndeclaredExchange(t *testing.T) {
 	close(first)
 
 	awaitSubscription(t, client, 1)
-	assert.Equal(t, []string{"1", "2"}, client.declaresOf("binding:"+testQueueName+"|"+builtin+"|orders.cancelled"))
+	assert.Equal(t, []string{"1", "2"}, client.declaresOf(fakeBindingKey(&BindingDeclaration{Queue: testQueueName, Exchange: builtin, RoutingKey: "orders.cancelled"})))
 }
 
 // TestRegistryRedeclaresAgainWhenTheChannelIsReplacedMidPass verifies a pass cut
@@ -2820,6 +2832,49 @@ func TestRegistryRedeclareSkipsDeclarationRejectedWithPreconditionFailed(t *test
 	assert.Equal(t, []string{"406"}, skipped.Values("amqp_reply_code"))
 	assert.Equal(t, []string{mismatch.Reason}, skipped.Values("amqp_reply_text"))
 	assert.Equal(t, []string{"queue:" + testQueueName}, skipped.Values("declaration"))
+}
+
+// TestRegistryRedeclareSkipsOnlyTheRejectedBinding verifies the 406 skip set
+// keeps apart two bindings of one queue whose names join to the same text or
+// which differ only in Args: the rejected binding is skipped, and its sibling is
+// still declared on the next channel.
+func TestRegistryRedeclareSkipsOnlyTheRejectedBinding(t *testing.T) {
+	tests := []struct {
+		name              string
+		rejected, sibling *BindingDeclaration
+	}{
+		{
+			name:     "delimiter_in_a_name",
+			rejected: &BindingDeclaration{Queue: testQueueName, Exchange: "orders", RoutingKey: "created|eu"},
+			sibling:  &BindingDeclaration{Queue: testQueueName, Exchange: "orders|created", RoutingKey: "eu"},
+		},
+		{
+			name:     "same_names_different_args",
+			rejected: &BindingDeclaration{Queue: testQueueName, Exchange: "amq.headers", Args: map[string]any{"x-match": "all", "region": "eu"}},
+			sibling:  &BindingDeclaration{Queue: testQueueName, Exchange: "amq.headers", Args: map[string]any{"x-match": "any", "region": "eu"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := newReconnectingMockClient()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, &countingTestHandler{}, tt.rejected, tt.sibling)
+			defer registry.StopConsumers()
+			first := awaitSubscription(t, client, 0)
+
+			mismatch := &amqp.Error{Code: amqp.PreconditionFailed, Reason: "PRECONDITION_FAILED - inequivalent binding", Server: true}
+			client.locked(func() {
+				client.generation++
+				client.declareErrs[fakeBindingKey(tt.rejected)] = []error{mismatch, mismatch}
+			})
+			close(first)
+
+			awaitSubscription(t, client, 1)
+			assert.Equal(t, []string{"1", "2"}, client.declaresOf(fakeBindingKey(tt.rejected)))
+			assert.Equal(t, []string{"1", "3"}, client.declaresOf(fakeBindingKey(tt.sibling)))
+		})
+	}
 }
 
 // TestRegistryRedeclareRetriesFailedDeclarationOnNextChannel verifies a

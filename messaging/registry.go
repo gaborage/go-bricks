@@ -703,12 +703,10 @@ type topologyStep struct {
 	declare func(context.Context) error
 }
 
-// bindingKey is the topologyStep key of a binding.
-func bindingKey(b *BindingDeclaration) string {
-	return "binding:" + b.Queue + "|" + b.Exchange + "|" + b.RoutingKey
-}
-
 // topologySteps snapshots the declarations in order: exchanges, queues, bindings.
+// A binding's key carries its index in the append-only registration order, so
+// two bindings whose names join to the same text or which differ only in Args
+// never share a skip-set entry.
 func (r *Registry) topologySteps() []topologyStep {
 	exchanges, queues, bindings := r.Exchanges(), r.Queues(), r.Bindings()
 	steps := make([]topologyStep, 0, len(exchanges)+len(queues)+len(bindings))
@@ -722,9 +720,9 @@ func (r *Registry) topologySteps() []topologyStep {
 			return r.client.DeclareQueue(ctx, queue)
 		}})
 	}
-	for _, binding := range bindings {
+	for i, binding := range bindings {
 		steps = append(steps, topologyStep{
-			key:     bindingKey(binding),
+			key:     fmt.Sprintf("binding[%d]:%s|%s|%s", i, binding.Queue, binding.Exchange, binding.RoutingKey),
 			declare: func(ctx context.Context) error { return r.client.BindQueue(ctx, binding) },
 		})
 	}
