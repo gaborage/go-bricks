@@ -345,7 +345,13 @@ func isPermissionDenied(err error) bool {
 // aclexplode breaks an ACL into one row per privilege and represents the PUBLIC
 // pseudo-role as grantee 0. It is strict, so a NULL acl column contributes no rows.
 // The catalog schemas are excluded on every arm because PostgreSQL grants PUBLIC
-// SELECT on its own catalogs by design. Database-wide default ACLs
+// SELECT on its own catalogs by design. The schema arm skips public as well: every
+// instance ships public with a USAGE-to-PUBLIC entry, that same aclitem is the
+// only schema-level grant the template can add to public's own ACL, so a schema
+// row for public could never tell residue from baseline, and acting on one
+// (REVOKE ALL ON SCHEMA public FROM PUBLIC) strips the baseline from every other
+// role on the database. The relation and default_acl arms still cover public,
+// where PostgreSQL grants PUBLIC nothing by default. Database-wide default ACLs
 // (pg_default_acl.defaclnamespace = 0) are deliberately out of scope: the inner
 // join to pg_namespace drops them, they can never be produced by this template —
 // which always emits `ALTER DEFAULT PRIVILEGES … IN SCHEMA <schema>` — and they
@@ -358,7 +364,7 @@ const pgPublicGrantDetectSQL = `SELECT 'schema'::text AS source, n.nspname AS sc
        ''::text AS object_name, a.privilege_type
 FROM pg_namespace n, aclexplode(n.nspacl) a
 WHERE a.grantee = 0
-  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'public')
 UNION ALL
 SELECT 'relation', n.nspname, c.relname, a.privilege_type
 FROM pg_class c
@@ -526,10 +532,11 @@ func publicGrantRows(ctx context.Context, t *testing.T, db *sql.DB, schema strin
 // (migration/roles.go), and IF NOT EXISTS makes the WHOLE statement a no-op
 // against the built-in schema — the AUTHORIZATION clause included — so nspowner
 // never moves and \dn+ public reads as it does on an untouched instance. Nor do
-// the other two detect queries see it: the built-in schema's baseline PUBLIC
-// USAGE grant is indistinguishable from the residue, and pg_roles is about role
-// names. What such a run DOES leave are rows a fresh instance has for no role of
-// yours, written by statements further down the same list:
+// the grant and role-name queries see it: pgPublicGrantDetectSQL skips public's
+// own ACL, whose baseline PUBLIC USAGE entry is indistinguishable from the
+// residue, and pg_roles is about role names. What such a run DOES leave are rows a
+// fresh instance has for no role of yours, written by statements further down the
+// same list:
 //
 //   - the two ALTER DEFAULT PRIVILEGES FOR ROLE <migrator> IN SCHEMA "public"
 //     statements, as pg_default_acl rows whose defaclnamespace is the public
@@ -556,8 +563,7 @@ func publicGrantRows(ctx context.Context, t *testing.T, db *sql.DB, schema strin
 // pg_db_role_setting is a SHARED catalog, so the arm sees the IN DATABASE rows of
 // every database in the cluster while pg_default_acl, pg_namespace and pg_class
 // are per-database. A role pointed at public in some OTHER database therefore
-// reports here (and becomes a candidate in pgPublicNamedRoleGrantDetectSQL) —
-// an over-report, never an under-report.
+// reports here — an over-report, never an under-report.
 const pgPublicSchemaResidueDetectSQL = `SELECT 'default_acl'::text AS source, r.rolname AS role_name,
        CASE d.defaclobjtype WHEN 'r' THEN 'TABLES'
                             WHEN 'S' THEN 'SEQUENCES'
@@ -781,40 +787,33 @@ func publicSchemaResidueRows(ctx context.Context, t *testing.T, db *sql.DB, role
 // the remediation, verify, read clean — and the tenant's runtime role would still
 // hold DML on every pre-existing table in the shared schema.
 //
-// The query is parameter-free so the const stays a verbatim oracle, which means
-// the candidate roles have to be DERIVED rather than passed in. The derivation is
-// the search_path residue arm 3 already relies on: the template emits
-// ALTER ROLE <role> SET search_path = "public" for BOTH roles, so any role whose
-// pg_db_role_setting entry points at public is a candidate. One spelling is
-// matched for the same reason arm 3 matches one: the server normalises the
-// quoted value to the bare search_path=public before storing it.
+// The query reads every real role's ACL entries straight out of
+// pg_namespace.nspacl for the public schema itself and pg_class.relacl for its
+// objects — no relkind filter, because a sequence IS a pg_class row, exactly as in
+// pgPublicGrantDetectSQL — and the join to pg_roles drops grantee 0 (PUBLIC),
+// which that query already covers. It deliberately does NOT pick its roles by
+// their search_path=public residue: the atom's step 4 re-provisions against the
+// tenant's own schema, which overwrites that setting, and a query keyed on it
+// would then read clean over a grant the revokes missed — at verify, exactly when
+// it has to answer.
 //
-// Privileges are then read for those roles' oids (a.grantee = the role oid, where
-// the PUBLIC query uses 0) out of pg_namespace.nspacl for the public schema itself
-// and pg_class.relacl for its objects — no relkind filter, because a sequence IS a
-// pg_class row, exactly as in pgPublicGrantDetectSQL.
-//
-// A row is not proof on its own: an object's OWNER carries an implicit ACL entry
-// once any grant is made, so a candidate role that also owns objects in public
-// reports its own ownership privileges here. Corroborate against the spec.
-const pgPublicNamedRoleGrantDetectSQL = `WITH public_search_path_roles AS (
-  SELECT DISTINCT r.oid AS roleoid, r.rolname
-  FROM pg_db_role_setting s
-  JOIN pg_roles r ON r.oid = s.setrole,
-       unnest(s.setconfig) AS c(setting)
-  WHERE c.setting = 'search_path=public'
-)
-SELECT 'schema'::text AS source, p.rolname AS role_name,
+// The owner's own implicit ACL entry (grantee = nspowner / relowner) is excluded:
+// that is ownership, not a grant, and it appears on an object once any grant is
+// made. Every other row names a role holding a real grant on public, so rows for
+// another application's roles are expected; corroborate each row against the spec.
+const pgPublicNamedRoleGrantDetectSQL = `SELECT 'schema'::text AS source, r.rolname AS role_name,
        n.nspname AS object_name, a.privilege_type
-FROM public_search_path_roles p, pg_namespace n, aclexplode(n.nspacl) a
+FROM pg_namespace n, aclexplode(n.nspacl) a, pg_roles r
 WHERE n.nspname = 'public'
-  AND a.grantee = p.roleoid
+  AND r.oid = a.grantee
+  AND a.grantee <> n.nspowner
 UNION ALL
-SELECT 'relation', p.rolname, c.relname, a.privilege_type
-FROM public_search_path_roles p, pg_class c, pg_namespace n, aclexplode(c.relacl) a
+SELECT 'relation', r.rolname, c.relname, a.privilege_type
+FROM pg_class c, pg_namespace n, aclexplode(c.relacl) a, pg_roles r
 WHERE n.oid = c.relnamespace
   AND n.nspname = 'public'
-  AND a.grantee = p.roleoid
+  AND r.oid = a.grantee
+  AND a.grantee <> c.relowner
 ORDER BY 1, 2, 3, 4`
 
 // Probe identifiers for the named-role grant oracle. Every assertion is scoped to
@@ -865,8 +864,8 @@ func TestPGPublicNamedRoleGrantDetectSQLFindsNamedRoleGrants(t *testing.T) {
 		}
 	}()
 
-	require.Empty(t, publicNamedRoleGrantRows(ctx, t, admin, namedGrantProbeRole),
-		"a freshly created role holds nothing on public")
+	require.Empty(t, publicNamedRoleGrantRows(ctx, t, admin, ""),
+		"an untouched instance reports nothing: the public schema owner's own ACL entry is ownership, not a grant")
 
 	t.Run("named_role_grants_are_found", func(t *testing.T) {
 		// The statement shapes a Schema spelled "public" leaves on a real role
@@ -913,9 +912,9 @@ func TestPGPublicNamedRoleGrantDetectSQLFindsNamedRoleGrants(t *testing.T) {
 }
 
 // publicNamedRoleGrantRows runs pgPublicNamedRoleGrantDetectSQL verbatim and
-// flattens the rows for one role to "source|role|object|privilege". The filter is
-// applied in Go, never in the SQL, so the const under test stays byte-identical
-// to the query the atom publishes.
+// flattens the rows for one role — every role when role is empty — to
+// "source|role|object|privilege". The filter is applied in Go, never in the SQL,
+// so the const under test stays byte-identical to the query the atom publishes.
 func publicNamedRoleGrantRows(ctx context.Context, t *testing.T, db *sql.DB, role string) []string {
 	t.Helper()
 	rows, err := db.QueryContext(ctx, pgPublicNamedRoleGrantDetectSQL)
@@ -926,7 +925,7 @@ func publicNamedRoleGrantRows(ctx context.Context, t *testing.T, db *sql.DB, rol
 	for rows.Next() {
 		var source, roleName, object, privilege string
 		require.NoError(t, rows.Scan(&source, &roleName, &object, &privilege))
-		if roleName != role {
+		if role != "" && roleName != role {
 			continue
 		}
 		out = append(out, strings.Join([]string{source, roleName, object, privilege}, "|"))
