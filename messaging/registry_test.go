@@ -2836,30 +2836,35 @@ func TestRegistryRedeclareSkipsDeclarationRejectedWithPreconditionFailed(t *test
 
 // TestRegistryRedeclareSkipsOnlyTheRejectedBinding verifies the 406 skip set
 // keeps apart two bindings of one queue whose names join to the same text or
-// which differ only in Args: the rejected binding is skipped, and its sibling is
-// still declared on the next channel.
+// which differ only in Args: the rejected binding is skipped, named in the WARN
+// by its registration index, and its sibling is still declared on the next
+// channel.
 func TestRegistryRedeclareSkipsOnlyTheRejectedBinding(t *testing.T) {
 	tests := []struct {
 		name              string
 		rejected, sibling *BindingDeclaration
+		declaration       string
 	}{
 		{
-			name:     "delimiter_in_a_name",
-			rejected: &BindingDeclaration{Queue: testQueueName, Exchange: "orders", RoutingKey: "created|eu"},
-			sibling:  &BindingDeclaration{Queue: testQueueName, Exchange: "orders|created", RoutingKey: "eu"},
+			name:        "delimiter_in_a_name",
+			rejected:    &BindingDeclaration{Queue: testQueueName, Exchange: "orders", RoutingKey: "created|eu"},
+			sibling:     &BindingDeclaration{Queue: testQueueName, Exchange: "orders|created", RoutingKey: "eu"},
+			declaration: "binding[1]:" + testQueueName + "|orders|created|eu",
 		},
 		{
-			name:     "same_names_different_args",
-			rejected: &BindingDeclaration{Queue: testQueueName, Exchange: "amq.headers", Args: map[string]any{"x-match": "all", "region": "eu"}},
-			sibling:  &BindingDeclaration{Queue: testQueueName, Exchange: "amq.headers", Args: map[string]any{"x-match": "any", "region": "eu"}},
+			name:        "same_names_different_args",
+			rejected:    &BindingDeclaration{Queue: testQueueName, Exchange: "amq.headers", Args: map[string]any{"x-match": "all", "region": "eu"}},
+			sibling:     &BindingDeclaration{Queue: testQueueName, Exchange: "amq.headers", Args: map[string]any{"x-match": "any", "region": "eu"}},
+			declaration: "binding[1]:" + testQueueName + "|amq.headers|",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := newReconnectingMockClient()
+			log := newRecordingLogger()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, &countingTestHandler{}, tt.rejected, tt.sibling)
+			registry := startRedeclareRegistry(ctx, t, client, log, &countingTestHandler{}, tt.rejected, tt.sibling)
 			defer registry.StopConsumers()
 			first := awaitSubscription(t, client, 0)
 
@@ -2873,6 +2878,7 @@ func TestRegistryRedeclareSkipsOnlyTheRejectedBinding(t *testing.T) {
 			awaitSubscription(t, client, 1)
 			assert.Equal(t, []string{"1", "2"}, client.declaresOf(fakeBindingKey(tt.rejected)))
 			assert.Equal(t, []string{"1", "3"}, client.declaresOf(fakeBindingKey(tt.sibling)))
+			assert.Equal(t, []string{tt.declaration}, log.Line(t, redeclareSkippedMsg).Values("declaration"))
 		})
 	}
 }
