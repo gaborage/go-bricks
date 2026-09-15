@@ -2658,6 +2658,36 @@ func TestRegistryRedeclareDoesNotRetryFailedPassOnSameChannel(t *testing.T) {
 	assert.Equal(t, []string{"1"}, client.declaresOf(testBindingKey))
 }
 
+// TestRegistryRedeclaresOncePerGenerationAcrossConsumers verifies consumers
+// re-subscribing onto the same new channel share one pass.
+func TestRegistryRedeclaresOncePerGenerationAcrossConsumers(t *testing.T) {
+	const otherQueue = "test-queue-2"
+	client := newReconnectingMockClient()
+	handler := &countingTestHandler{}
+	registry := NewRegistry(client, &stubLogger{})
+	registry.resubscribeDelay = time.Millisecond
+	for _, queue := range []string{testQueueName, otherQueue} {
+		registry.RegisterQueue(&QueueDeclaration{Name: queue, Durable: true})
+		registry.RegisterConsumer(&ConsumerDeclaration{Queue: queue, EventType: testEventType, Workers: 1, Handler: handler})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		registry.StopConsumers()
+		cancel()
+	})
+	require.NoError(t, registry.DeclareInfrastructure(ctx))
+	require.NoError(t, registry.StartConsumers(ctx))
+	first, second := awaitSubscription(t, client, 0), awaitSubscription(t, client, 1)
+
+	client.locked(func() { client.generation++ })
+	close(first)
+	close(second)
+
+	awaitSubscription(t, client, 3)
+	assert.Equal(t, []string{"1", "2"}, client.declaresOf("queue:"+testQueueName))
+	assert.Equal(t, []string{"1", "2"}, client.declaresOf("queue:"+otherQueue))
+}
+
 // TestRegistryResubscribeOnSameChannelDoesNotRedeclare verifies a delivery
 // channel closed without a new channel (a broker basic.cancel) re-subscribes
 // without a pass, because DeclareInfrastructure recorded its generation.

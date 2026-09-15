@@ -92,8 +92,10 @@ type Registry struct {
 	resubscribeDelay time.Duration
 	// declaredGeneration is the channel generation the topology was last declared on.
 	declaredGeneration atomic.Uint64
-	// redeclareMu serializes redeclare passes. Lock order is redeclareMu before
-	// mu; DeclareInfrastructure holds mu without it, so declaredGeneration is atomic.
+	// redeclareMu serializes redeclare passes, so two consumers never declare the
+	// same generation twice and redeclareSkip is never written concurrently. Lock
+	// order is redeclareMu before mu; DeclareInfrastructure holds mu without it,
+	// so declaredGeneration is atomic.
 	redeclareMu sync.Mutex
 	// redeclareSkip holds declarations refused with PRECONDITION_FAILED. Guarded by redeclareMu.
 	redeclareSkip map[string]struct{}
