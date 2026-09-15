@@ -13,5 +13,6 @@ AMQP-based messaging with **validate-once, replay-many** pattern. Declarations v
 - Each `queue + consumer_tag + event_type` triple must be registered exactly **once** — duplicates panic at startup.
 - Handler errors and panics → message nacked WITHOUT requeue (no infinite retry loops). Make handlers thread-safe and idempotent; use `DeclareQueueWithDLQ` to park failures in a dead-letter queue instead of dropping them (raw `Args["x-dead-letter-exchange"]` remains the custom-topology escape hatch — set Args before registration; see [wiki/messaging.md](../wiki/messaging.md)).
 - Default consumer concurrency is `runtime.NumCPU() * 4` workers (v0.17+ breaking change). Set `Workers: 1` explicitly when message ordering matters.
+- After a reconnect, the registry re-declares its topology once per new channel before a consumer re-subscribes (only on the client `NewAMQPClient` returns); a declaration refused with `PRECONDITION_FAILED` is skipped until the process restarts (ADR-113).
 
 For helper API, error handling deep dive, panic recovery, concurrency tuning, and reconnection defaults, see [wiki/messaging.md](../wiki/messaging.md).

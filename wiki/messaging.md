@@ -452,7 +452,7 @@ messaging:
     url: ${MESSAGING_BROKER_URL}
 ```
 
-- **`per-tenant`** (the default, and the behaviour every existing deployment already has): one
+- **`per-tenant`** (the default, and the behavior every existing deployment already has): one
   client per tenant, resolved from `multitenant.tenants.<id>.messaging` or the resource source and
   replayed lazily. Nothing below applies — the replay key already tells a consumer which tenant it
   is serving.
@@ -811,6 +811,34 @@ both when classifying. Prefer short ctx deadlines on latency-sensitive paths.
 > `messaging` package. A custom `app.Options.MessagingClientFactory` supplying a
 > different `AMQPClient` implementation sidesteps the concept entirely: it receives only
 > `(url, log)`, so `reconnect.readytimeout` never reaches it.
+
+### Consumer re-subscribe and topology redeclare
+
+When the broker closes a consumer's delivery channel, the consumer re-subscribes with the same
+consume options (a stream consumer resumes past its last delivery): at once, then with full-jitter
+backoff on a fixed 5s base and 60s cap, not the `reconnect.*` keys, while the client reconnects.
+Before re-subscribing on each new channel, the registry re-declares every exchange, queue and
+binding it declared at startup — once per channel, not once per attempt — so a broker that lost its
+topology (a restart without durable definitions, a deleted queue) is repaired without a process
+restart. Declares are idempotent for matching arguments, so a healthy reconnect costs one pass.
+
+- A failed redeclare logs one WARN naming the declaration, with `amqp_reply_code` and
+  `amqp_reply_text` when the broker refused it, and ends that pass; the next channel retries. A pass
+  cut short by shutdown logs nothing.
+- A declaration refused with `PRECONDITION_FAILED` (406) — an existing queue or exchange whose
+  arguments differ from the declaration — is logged once at WARN and skipped by every later pass.
+  **The skip lasts until the process restarts**: fix the server-side definition (or the declaration)
+  and restart. The framework never deletes or recreates a queue.
+- A delivery channel closed while the channel itself survives (the broker canceled the consumer)
+  re-subscribes without a pass; if that consume fails on the broker (a deleted queue is a
+  channel-level 404), the channel closes and the next one re-declares.
+- Re-subscribe failures log at Debug for the first four consecutive attempts and at WARN from the
+  fifth, with the broker's reply code and text when the error carries one.
+- Only the framework's own client, the one `messaging.NewAMQPClient` returns, re-declares. Any other
+  `AMQPClient` returned by a custom `app.Options.MessagingClientFactory` re-subscribes without a
+  pass.
+
+See [ADR-113](adr_113_amqp_topology_redeclare_on_reconnect.md).
 
 ### Sizing the publisher pool for multi-tenant deployments
 
