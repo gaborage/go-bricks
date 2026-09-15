@@ -1357,11 +1357,11 @@ return users, nil
 | Pattern matching    | `f.Like` (case-insensitive), `f.Regex`/`f.RegexI`/`f.NotRegex`/`f.NotRegexI` (POSIX regex; PG `~`/`~*`/`!~`/`!~*`, Oracle `REGEXP_LIKE` with `'i'` flag) |
 | JSON containment    | `f.JSONContains(col, value)` — PostgreSQL `@>` on `jsonb`; pass struct/map/slice (auto JSON-marshalled) or pre-encoded `string`/`[]byte`/`json.RawMessage`. Oracle is not yet supported. |
 | Sorting / grouping  | `qb.Select(...).From("...").OrderBy(qb.MustExpr("created_at DESC")).GroupBy("tenant_id")` |
-| Group predicate     | `Having(qb.MustExpr("SUM(amount) > ?"), 100)` — the sanctioned spelling (`qb.Expr` returns `(RawExpression, error)`; use it when you handle the error); an alias on that expression is an error. A STRING predicate is a raw-SQL door and carries the annotation at its call site: `// SECURITY: Manual SQL review completed - constant predicate, no caller input, value parameterized` above `Having("COUNT(*) > ?", 5)` |
+| Group predicate     | `Having(qb.MustExpr("SUM(amount) > ?"), 100)` — the sanctioned spelling (`qb.Expr` returns `(RawExpression, error)`; use it when you handle the error); an alias on that expression is an error. Both spellings are raw-SQL doors and carry the annotation at the call site: `// SECURITY: Manual SQL review completed - constant predicate, no caller input, value parameterized` above `Having(qb.MustExpr("COUNT(*) > ?"), 5)` or the STRING form `Having("COUNT(*) > ?", 5)` |
 | Mutations           | `qb.Insert/Update/Delete` → `database.ExecuteInsert` / `ExecuteUpdate` (raw count, zero legal) / `ExecuteUpdateOne` (zero → `ErrNoRows`). Pass the builder directly — no `.ToSQL()` |
 | Joins               | `qb.JoinOn` with `qb.JoinFilter()`                                     |
 | Subqueries          | Compose another builder clause then `f.Exists(subQuery)`               |
-| Raw escape hatch    | `f.Raw(cond, args...)` / `jf.Raw(cond, args...)` produce a WHERE/JOIN **fragment**; `database.Raw(sql, args...)` replaces the **whole statement** (broader — it bypasses the builder's identifier validation entirely). A STRING predicate passed to `Having(...)` is the fourth such door. All four REQUIRE a `// SECURITY: Manual SQL review completed - <rationale>` comment at every call site (manual identifier quoting + parameterized values; never concatenate user input) |
+| Raw escape hatch    | `f.Raw(cond, args...)` / `jf.Raw(cond, args...)` produce a WHERE/JOIN **fragment**; `database.Raw(sql, args...)` replaces the **whole statement** (broader — it bypasses the builder's identifier validation entirely). A STRING predicate passed to `Having(...)`, an UPDATE `SetExpr(column, expr, args...)`, and every `RawExpression` SQL body (`qb.Expr`, `qb.MustExpr`, a struct literal) are the same kind of door. All of them REQUIRE a `// SECURITY: Manual SQL review completed - <rationale>` comment at every call site (manual identifier quoting + parameterized values; never concatenate user input) |
 | Transactions        | `tx, err := db.Begin(ctx); if err != nil { return err }; defer tx.Rollback(ctx); /* work: database.Execute*(ctx, tx, q, "op") — both Interface and Tx satisfy database.Executor */; if err := tx.Commit(ctx); err != nil { return err }` |
 
 **Mutation Examples (INSERT/UPDATE/DELETE):**
@@ -1532,6 +1532,7 @@ query := qb.Select("*").
     )).
     JoinOn(dbtypes.MustTable("products").MustAs("p"), jf.And(
         jf.EqColumn("p.id", "o.product_id"),
+        // SECURITY: Manual SQL review completed - fixed conversion of a joined column, no user input
         jf.Eq("p.price", qb.MustExpr("TO_NUMBER(o.max_price)")), // Expression support
     )).
     Where(f.Eq("o.status", "pending"))
@@ -1548,6 +1549,7 @@ type Product struct {
 cols := qb.Columns(&Product{})
 
 // Window function with PARTITION BY
+// SECURITY: Manual SQL review completed - constant window expression over fixed columns, no caller input
 query := qb.Select(
     cols.Col("ProductID"),
     cols.Col("Price"),
@@ -1555,6 +1557,7 @@ query := qb.Select(
 ).From("products")
 
 // Aggregations with GROUP BY
+// SECURITY: Manual SQL review completed - constant aggregates over fixed columns; the HAVING value is parameterized
 query := qb.Select(
     cols.Col("Category"),
     qb.MustExpr("COUNT(*)", "product_count"),
@@ -1727,14 +1730,14 @@ _, err = conn.Exec(ctx, "BEGIN update_customer(:1); END;", customer)
 **Simple Query Test:**
 
 ```go
-import dbtest "github.com/gaborage/go-bricks/database/testing"
+import dbtesting "github.com/gaborage/go-bricks/database/testing"
 
 func TestProductServiceFindActive(t *testing.T) {
     // Setup (8 lines vs 30+ with sqlmock)
-    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
     db.ExpectQuery("SELECT").
         WillReturnRows(
-            dbtest.NewRowSet("id", "name").
+            dbtesting.NewRowSet("id", "name").
                 AddRow(int64(1), "Widget").
                 AddRow(int64(2), "Gadget"),
         )
@@ -1750,7 +1753,7 @@ func TestProductServiceFindActive(t *testing.T) {
 
     assert.NoError(t, err)
     assert.Len(t, products, 2)
-dbtest.AssertQueryExecuted(t, db, "SELECT")
+dbtesting.AssertQueryExecuted(t, db, "SELECT")
 }
 ```
 
@@ -1758,10 +1761,10 @@ dbtest.AssertQueryExecuted(t, db, "SELECT")
 
 ```go
 func TestProductRepositoryList(t *testing.T) {
-    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
     db.ExpectQuery("SELECT").
         WillReturnRows(
-            dbtest.NewRowSet("id", "name").
+            dbtesting.NewRowSet("id", "name").
                 AddRow(int64(1), "Widget").
                 AddRow(int64(2), "Gadget"),
         )
@@ -1786,7 +1789,7 @@ func TestProductRepositoryList(t *testing.T) {
 
 ```go
 func TestOrderServiceCreateWithItems(t *testing.T) {
-    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
     tx := db.ExpectTransaction().
         ExpectExec("INSERT INTO orders").WillReturnRowsAffected(1).
         ExpectExec("INSERT INTO items").WillReturnRowsAffected(3)
@@ -1801,7 +1804,7 @@ func TestOrderServiceCreateWithItems(t *testing.T) {
     err := svc.CreateWithItems(ctx, order, items)
 
     assert.NoError(t, err)
-    dbtest.AssertCommitted(t, tx)
+    dbtesting.AssertCommitted(t, tx)
 }
 ```
 
@@ -1809,16 +1812,16 @@ func TestOrderServiceCreateWithItems(t *testing.T) {
 
 ```go
 func TestMultiTenantService(t *testing.T) {
-    tenants := dbtest.NewTenantDBMap()
+    tenants := dbtesting.NewTenantDBMap()
 
     // Setup tenant-specific expectations
     tenants.ForTenant("acme").
         ExpectQuery("SELECT").WillReturnRows(
-            dbtest.NewRowSet("id").AddRow(int64(1)),
+            dbtesting.NewRowSet("id").AddRow(int64(1)),
         )
     tenants.ForTenant("globex").
         ExpectQuery("SELECT").WillReturnRows(
-            dbtest.NewRowSet("id").AddRow(int64(2)),
+            dbtesting.NewRowSet("id").AddRow(int64(2)),
         )
 
     deps := &app.ModuleDeps{
@@ -1830,7 +1833,7 @@ func TestMultiTenantService(t *testing.T) {
     result, err := svc.Process(ctx)
 
     assert.NoError(t, err)
-    dbtest.AssertQueryExecuted(t, tenants.TenantDB("acme"), "SELECT")
+    dbtesting.AssertQueryExecuted(t, tenants.TenantDB("acme"), "SELECT")
 }
 ```
 
@@ -1838,17 +1841,17 @@ func TestMultiTenantService(t *testing.T) {
 
 ```go
 func TestCrossDatabaseLegacyMigration(t *testing.T) {
-    namedDBs := dbtest.NewNamedDBMap()
+    namedDBs := dbtesting.NewNamedDBMap()
 
     // Setup default PostgreSQL database
-    defaultDB := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    defaultDB := dbtesting.NewTestDB(dbtypes.PostgreSQL)
     defaultDB.ExpectExec("INSERT INTO users").WillReturnRowsAffected(1)
     namedDBs.SetDefaultDB(defaultDB)
 
     // Setup legacy Oracle database
     namedDBs.ForNameWithVendor("legacy", dbtypes.Oracle).
         ExpectQuery("SELECT").WillReturnRows(
-            dbtest.NewRowSet("id", "name").AddRow(int64(1), "LegacyUser"),
+            dbtesting.NewRowSet("id", "name").AddRow(int64(1), "LegacyUser"),
         )
 
     // Setup analytics PostgreSQL database
@@ -1864,9 +1867,9 @@ func TestCrossDatabaseLegacyMigration(t *testing.T) {
     err := svc.MigrateLegacyUser(context.Background(), 1)
 
     assert.NoError(t, err)
-    dbtest.AssertQueryExecuted(t, namedDBs.NamedDB("legacy"), "SELECT")
-    dbtest.AssertExecExecuted(t, namedDBs.DefaultDB(), "INSERT INTO users")
-    dbtest.AssertExecExecuted(t, namedDBs.NamedDB("analytics"), "INSERT INTO events")
+    dbtesting.AssertQueryExecuted(t, namedDBs.NamedDB("legacy"), "SELECT")
+    dbtesting.AssertExecExecuted(t, namedDBs.DefaultDB(), "INSERT INTO users")
+    dbtesting.AssertExecExecuted(t, namedDBs.NamedDB("analytics"), "INSERT INTO events")
 }
 ```
 
@@ -1879,14 +1882,14 @@ type User struct {
     Name string `db:"name"`
 }
 
-rows := dbtest.NewRowSet("id", "name").
+rows := dbtesting.NewRowSet("id", "name").
     AddRowsFromStructs(
         &User{ID: 1, Name: "Alice"},
         &User{ID: 2, Name: "Bob"},
     )
 
 // With generator function
-rows := dbtest.NewRowSet("id", "name").
+rows := dbtesting.NewRowSet("id", "name").
     AddRows(100, func(i int) []any {
         return []any{int64(i+1), fmt.Sprintf("User%d", i+1)}
     })
@@ -1900,11 +1903,11 @@ rows := dbtest.NewRowSet("id", "name").
 **Assertion Helpers:**
 
 ```go
-dbtest.AssertQueryExecuted(t, db, "SELECT")
-dbtest.AssertQueryCount(t, db, "SELECT", 2)
-dbtest.AssertExecExecuted(t, db, "INSERT")
-dbtest.AssertTransactionCommitted(t, db)
-dbtest.AssertTransactionRolledBack(t, db)
+dbtesting.AssertQueryExecuted(t, db, "SELECT")
+dbtesting.AssertQueryCount(t, db, "SELECT", 2)
+dbtesting.AssertExecExecuted(t, db, "INSERT")
+dbtesting.AssertTransactionCommitted(t, db)
+dbtesting.AssertTransactionRolledBack(t, db)
 ```
 
 See [database/testing](database/testing/) package for full API documentation.
@@ -2869,10 +2872,10 @@ cachetest.AssertStatsContains(t, stats, "entry_count", 5)
 ```go
 func TestCacheAsidePattern(t *testing.T) {
     mockCache := cachetest.NewMockCache()
-    mockDB := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    mockDB := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 
     mockDB.ExpectQuery("SELECT").WillReturnRows(
-        dbtest.NewRowSet("id", "name").AddRow(int64(123), "Alice"),
+        dbtesting.NewRowSet("id", "name").AddRow(int64(123), "Alice"),
     )
 
     deps := &app.ModuleDeps{
@@ -2895,7 +2898,7 @@ func TestCacheAsidePattern(t *testing.T) {
     // Verify cache miss then set
     cachetest.AssertOperationCount(t, mockCache, cachetest.OpGet, 1)
     cachetest.AssertOperationCount(t, mockCache, cachetest.OpSet, 1)
-    dbtest.AssertQueryExecuted(t, mockDB, "SELECT")
+    dbtesting.AssertQueryExecuted(t, mockDB, "SELECT")
 
     // Second call - cache hit, no DB query.
     // Record the query count first; the deps.DB closure captured mockDB, so
@@ -3004,6 +3007,8 @@ A module implements `MessagingDeclarer` to declare its exchanges, queues, bindin
 package orders
 
 import (
+	"errors"
+
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
@@ -3025,7 +3030,13 @@ func (m *Module) Shutdown() error { return nil }
 func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.logger = deps.Logger
 	m.getMessaging = deps.Messaging                  // function-based: tenant-aware
-	m.inbox = deps.Inbox                             // nil unless the inbox module is registered
+	// deps.Inbox is nil unless inbox.NewModule() is registered (and enabled) FIRST — the
+	// outbox-dedup consumer below dedups through it, so fail at startup rather than
+	// nacking the first delivery on a nil handle.
+	if deps.Inbox == nil {
+		return errors.New("orders: register inbox.NewModule() before this module")
+	}
+	m.inbox = deps.Inbox
 	m.svc = NewOrderService(deps.DB, deps.Messaging) // see Step 3
 	return nil
 }
@@ -3437,7 +3448,7 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 
 Decode/validation failures return a `*messaging.PayloadError` before the function runs — match with `errors.Is(err, messaging.ErrPayloadUndecodable)` / `messaging.ErrPayloadInvalid`. The function's own error passes through unwrapped. `Error()` and `Fields()` carry no payload bytes (map-key namespaces are redacted to `Limits[*]`) and are safe to log; `Unwrap()` returns the raw decoder/validator error and is not. The adapter is stateless, so `Workers` tuning below applies unchanged.
 
-**Need the delivery headers (outbox dedup)?** `DeclareTypedConsumerWithMeta` / `NewTypedHandlerWithMeta[T]` are the same adapter with `fn` as `func(ctx, T, messaging.Metadata) error` — `meta.DedupKey()` returns the `x-outbox-event-id` header once it passes the ledger grammar `^[A-Za-z0-9_-]{1,128}$`, falling back to the AMQP `message_id` property under that same grammar when the delivery carries no such header at all (or an error wrapping `messaging.ErrInvalidEventID` — both absent, or the chosen one malformed; a header that is PRESENT but malformed errors rather than falling through), so an outbox-fed consumer wraps the body in `deps.Inbox.ProcessOnce`; `ProcessOnce` re-checks the grammar at the ledger door, so an id obtained any other way is refused there:
+**Need the delivery headers (outbox dedup)?** `DeclareTypedConsumerWithMeta` / `NewTypedHandlerWithMeta[T]` are the same adapter with `fn` as `func(ctx, T, messaging.Metadata) error` — `meta.DedupKey()` returns a `messaging.DedupKey`, a value that carries which door produced it. For a plain typed consumer it is a *wire* key holding the `x-outbox-event-id` header once it passes the ledger grammar `^[A-Za-z0-9_-]{1,128}$`, falling back to the AMQP `message_id` property under that same grammar when the delivery carries no such header at all (or an error wrapping `messaging.ErrInvalidEventID` — both absent, or the chosen one malformed; a header that is PRESENT but malformed errors rather than falling through), so an outbox-fed consumer wraps the body in `deps.Inbox.ProcessOnce`. `ProcessOnce` takes the `messaging.DedupKey` itself, not a string, and admits it by provenance at the ledger door: the zero `DedupKey` is refused, and a *sealed* key is refused outside **a** sealed-delivery context. The marker is one boolean stamped identically on every sealed handler context, so admission proves only that the key came from *some* sealed delivery, not the one in hand — a key retained from an earlier one still passes and makes the later delivery look like a duplicate. Binding a key to its originating delivery is open work: `gaborage/go-bricks#1634`. The grammar already ran when the key was constructed:
 
 ```go
 // Same DeclareMessaging body as above, with this call REPLACING the
@@ -3447,14 +3458,14 @@ Decode/validation failures return a `*messaging.PayloadError` before the functio
 messaging.DeclareTypedConsumerWithMeta(decls, &messaging.ConsumerOptions{
 	Queue: queue.Name, Consumer: "order-processor", EventType: "OrderCreated",
 }, func(ctx context.Context, evt OrderCreatedEvent, meta messaging.Metadata) error {
-	id, err := meta.DedupKey()
+	key, err := meta.DedupKey()
 	if err != nil {
 		// No conforming id, no dedup key — processing here would repeat the
 		// business write on every redelivery, so fail closed: nacked without
 		// requeue, the message parks on the DLQ.
 		return err
 	}
-	return m.inbox.ProcessOnce(ctx, id, func(ctx context.Context, tx dbtypes.Tx) error {
+	return m.inbox.ProcessOnce(ctx, key, func(ctx context.Context, tx dbtypes.Tx) error {
 		// Use tx: the business write must commit with the dedup row, or a crash
 		// between the two commits loses exactly-once.
 		return m.svc.ProcessOrderTx(ctx, tx, evt.OrderID)
@@ -3462,7 +3473,17 @@ messaging.DeclareTypedConsumerWithMeta(decls, &messaging.ConsumerOptions{
 })
 ```
 
-**Mixed-queue variant:** a queue that also carries directly-published messages may have deliveries you want processed without dedup. A delivery with no stamp still has a ledger key whenever it carries a `message_id`, so an absent header does not imply an absent key. For the deliveries you have decided to process undeduped, let a demonstrably ABSENT header through — `if _, present := meta.Headers()[messaging.HeaderEventID]; !present { return m.svc.ProcessOrder(ctx, evt.OrderID) }` placed BEFORE the `DedupKey` call — processed without dedup, so that path must be idempotent on its own. Keep the `err != nil` branch as is: a header that is present but malformed stays on the failure path, or a publisher could skip the ledger by misspelling the id.
+**Mixed-queue variant:** a queue that also carries directly-published messages may have deliveries you want processed without dedup. A delivery with no stamp still has a ledger key whenever it carries a `message_id`, so an absent header does not imply an absent key. For the deliveries you have decided to process undeduped, let a demonstrably ABSENT header through — `if _, present := meta.Headers()[messaging.HeaderEventID]; !present { return m.svc.ProcessOrder(ctx, evt.OrderID) }` placed BEFORE the `DedupKey` call — processed without dedup, so that path must be idempotent on its own. Keep the `err != nil` branch as is: a header that is present but malformed stays on the failure path, or a publisher could skip the ledger by misspelling the id. A handler that composes its own ledger id instead of taking `DedupKey()`'s answer builds it with `messaging.WireDedupKey(id)` and returns that error the same way — it applies the grammar at construction and never yields a sealed key, whatever the id spells:
+
+```go
+key, err := messaging.WireDedupKey(m.svc.LedgerID(evt)) // consumer-composed id
+if err != nil {
+	return err
+}
+return m.inbox.ProcessOnce(ctx, key, func(ctx context.Context, tx dbtypes.Tx) error {
+	return m.svc.ProcessOrderTx(ctx, tx, evt.OrderID)
+})
+```
 
 Headers are written by the publisher, so on a queue fed from outside this service they are untrusted input: whoever can publish picks the ledger key. Dropping the stamp is not an opt-out. There are three outcomes, not two: a delivery with no stamp and a grammar-conforming `message_id` DEDUPS on that property; one whose chosen source is malformed — a present-but-spoiled stamp, or a property outside the grammar — returns `ErrInvalidEventID`; and one carrying neither returns the same error. The error path is a rejection, not an opt-out: the example returns it rather than processing, and the variant above is the deliberate opt-in for a queue whose traffic you know. AMQP obliges nobody to make `message_id` unique, so a producer reusing one across distinct events has those events skipped as duplicates — but only on the deliveries where that property is the SELECTED key, meaning no `x-outbox-event-id` was present; a valid stamp takes precedence and a collision behind one changes nothing. Authorize publishers at the broker.
 
@@ -3476,6 +3497,11 @@ func main() {
 	fw, _, err := app.NewWithConfig(cfg, nil)
 	if err != nil { log.Fatal(err) }
 
+	// Register the inbox BEFORE orders: deps.Inbox is wired from the registered
+	// provider, so a later registration leaves it nil in orders.Init.
+	if err := fw.RegisterModule(inbox.NewModule()); err != nil {
+		log.Fatal(err)
+	}
 	if err := fw.RegisterModule(&orders.Module{}); err != nil {
 		log.Fatal(err) // module registration errors are fatal
 	}
@@ -3552,12 +3578,12 @@ func (m *Module) AuthorizePayment(ctx context.Context, client messaging.AMQPClie
 }
 
 func (m *Module) onPaymentAuthorized(ctx context.Context, evt PaymentAuthorized, meta messaging.Metadata) error {
-    key, err := meta.DedupKey() // "<sign family>:<jti>" for a sealed T; never errors here
+    key, err := meta.DedupKey() // a sealed key spelling "<sign family>:<jti>"; never errors here
     if err != nil {
         return err
     }
     // ctx must derive from the handler's: the sealed door marks it (messaging.IsSealedDelivery)
-    // and ProcessOnce admits a "<family>:<jti>" key only under that marker — never context.Background().
+    // and ProcessOnce admits a SEALED key only under that marker — never context.Background().
     return m.inbox.ProcessOnce(ctx, key, func(ctx context.Context, tx dbtypes.Tx) error {
         return m.svc.RecordAuthorizationTx(ctx, tx, evt.OrderID, evt.Card) // evt.Card is plaintext here only
     })
@@ -3573,6 +3599,11 @@ DLQ); there is no accept-unsealed mode. Fields you seal likely belong in
 `log.sensitivefields` too.
 Minting a test body from the shell (openssl fixture keys, `cmd/seal-event`, `rabbitmqadmin
 publish`): [wiki/sealing.md#minting-test-events-with-rabbitmqadmin-seal-event-cli](wiki/sealing.md#minting-test-events-with-rabbitmqadmin-seal-event-cli).
+Inspecting one from the shell (`cmd/open-event` — the consumer-role mirror: verifies and
+decrypts through the same rule chain, prints the envelope plus the document with the subject
+rendered `"<redacted>"` by default — `-print-subject` prints the plaintext instead and is
+fixture-only, see the linked section — and exits 3 with the `SEAL_*` code on a refusal):
+[wiki/sealing.md#inspecting-sealed-events-open-event-cli](wiki/sealing.md#inspecting-sealed-events-open-event-cli).
 
 ### Concurrency Tuning Per Consumer
 
@@ -3778,10 +3809,14 @@ outbox:
 ### Testing
 
 ```go
-import outboxtest "github.com/gaborage/go-bricks/outbox/testing"
+import (
+    dbtesting "github.com/gaborage/go-bricks/database/testing"
+    dbtypes "github.com/gaborage/go-bricks/database/types"
+    outboxtest "github.com/gaborage/go-bricks/outbox/testing"
+)
 
 func TestOrderServiceCreateOrder(t *testing.T) {
-    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
     tx := db.ExpectTransaction().
         ExpectExec("INSERT INTO orders").WillReturnRowsAffected(1)
 
@@ -3792,7 +3827,7 @@ func TestOrderServiceCreateOrder(t *testing.T) {
     err := svc.CreateOrder(ctx, order)
 
     assert.NoError(t, err)
-    dbtest.AssertCommitted(t, tx)
+    dbtesting.AssertCommitted(t, tx)
     outboxtest.AssertEventPublished(t, mockOutbox, "order.created")
     outboxtest.AssertEventWithAggregate(t, mockOutbox, "order.created", "order-123")
     outboxtest.AssertEventCount(t, mockOutbox, 1)
@@ -3800,7 +3835,7 @@ func TestOrderServiceCreateOrder(t *testing.T) {
 
 // Test outbox failure (transaction should roll back)
 func TestOrderServiceOutboxFailure(t *testing.T) {
-    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
     mockOutbox := outboxtest.NewMockOutbox().WithError(fmt.Errorf("outbox down"))
     dbFunc := func(_ context.Context) (database.Interface, error) { return db, nil }
     svc := NewOrderService(dbFunc, mockOutbox)
@@ -4010,7 +4045,7 @@ Generate a compact token like the one above with the `seal-payload` CLI: `go ins
 | JWE content enc (`enc`) | `A256GCM`; `A128GCM` in bare-JWE mode only | non-AEAD encryptions (`A*CBC-HS*`); `A128GCM` on the nested JWE-of-JWS path |
 | Content type (`cty`) | `application/json` (default) | mismatched `cty` → `JOSE_CTY_REJECTED` |
 
-`JOSE_ALGORITHM_DISALLOWED` is raised only at registration time (an invalid `jose:` struct tag or `Policy.Validate()` failure) and panics at startup — it is never returned to an HTTP caller at request time. A disallowed `alg`/`enc` on the wire instead fails go-jose's compact parse, surfacing as `JOSE_MALFORMED` (or `JOSE_INNER_NOT_JWS` for the inner-JWS layer), before any key material is touched.
+`JOSE_ALGORITHM_DISALLOWED` has three entry points, and only one of them panics: the tag scanner raises it at registration time and that panics at startup; a hand-built policy handed to `Policy.Validate` (or to `httpclient.Builder.Build`, which validates a normalized copy) gets it returned as an error, not a panic; and in `SealModeJWSofJWE` it is *also* a request-time 400, where `Open` refuses an outer `alg` other than the declared `Policy.SigAlg`. A disallowed `alg`/`enc` on the wire usually fails go-jose's compact parse instead, surfacing as `JOSE_MALFORMED` (or `JOSE_INNER_NOT_JWS` for the inner-JWS layer, `JOSE_OUTER_NOT_JWS` for a `SealModeJWSofJWE` body that is not a compact JWS), before any key material is touched. The one exception is the OUTER JWS of `SealModeJWSofJWE`: `Open` compares that header's `alg` with `Policy.SigAlg` itself, before it resolves a key or hands anything to go-jose, so a mismatch there is `JOSE_ALGORITHM_DISALLOWED` rather than a parse failure.
 
 ### Bare-JWE Mode (Visa Message Level Encryption)
 
@@ -4073,6 +4108,58 @@ log.Info().
 ```
 
 Deep dive: [wiki/jose.md](wiki/jose.md#bare-jwe-mode-visa-message-level-encryption).
+
+### JWS-of-JWE Mode (Visa Token Service Issuer API)
+
+The Visa Token Service **Issuer** API inverts the nesting: a compact JWS whose payload is a compact JWE, so the signature is outermost. `Policy.Mode: jose.SealModeJWSofJWE` selects it (ADR-111). `Seal` builds the same inner JWE bare mode builds — `A256GCM`, `kid`, `Policy.Typ`, millisecond `iat` under `Policy.IATMillis`, and **no `cty`** — then signs that compact string verbatim. The outer protected header is fixed by the mode: `typ: "JOSE"`, `cty: "JWE"`, `kid`, `alg`, and `iat` in epoch **seconds** whatever `Policy.IATMillis` says. **Visa requires `PS256` — set `SigAlg` explicitly, because `jose.DefaultSigAlg` is `RS256` and both are on the allowlist, so an unset `SigAlg` fails at Visa rather than at startup.** Reach: `jose.Seal` / `jose.Open` and `httpclient.Builder.WithJOSE` in both directions (the `SigAlg` default applies here, since this mode signs); there is no `jose:` struct-tag key, so inbound server routes cannot select it.
+
+```go
+issuerOutbound := &jose.Policy{
+    Direction:  jose.DirectionOutbound,
+    Mode:       jose.SealModeJWSofJWE,
+    SignKid:    "our-vts-signing",
+    EncryptKid: "visa-vts-encrypt",
+    SigAlg:     josev4.PS256, // Visa requires PS256; the package default is RS256
+    KeyAlg:     jose.DefaultKeyAlg,
+    Enc:        josev4.A256GCM,
+    Typ:        "JOSE",       // inner JWE typ; the outer JWS typ stays "JOSE" regardless
+    IATMillis:  true,         // inner JWE iat, epoch MILLISECONDS
+}
+
+issuerInbound := &jose.Policy{
+    Direction:  jose.DirectionInbound,
+    Mode:       jose.SealModeJWSofJWE,
+    DecryptKid: "our-vts-decrypt",
+    VerifyKid:  "visa-vts-verify",
+    SigAlg:     josev4.PS256, // Open accepts exactly this alg, nothing else on the allowlist
+    KeyAlg:     jose.DefaultKeyAlg,
+    Enc:        josev4.A256GCM,
+}
+
+compact, err := jose.Seal(payload, issuerOutbound, resolver)
+if err != nil {
+    return err
+}
+
+// Verify-then-decrypt. hdr.JWS is the outer layer (Cty "JWE"), hdr.JWE the inner one;
+// hdr.JWS.IATMillis is always 0 here, because the outer iat is seconds.
+plaintext, claims, hdr, err := jose.Open(compact, issuerInbound, resolver)
+if err != nil {
+    return err
+}
+log.Info().
+    Str("outerCty", hdr.JWS.Cty).
+    Int64("innerIATMillis", hdr.JWE.IATMillis).
+    Int("bytes", len(plaintext)).
+    Msg("opened a Visa Issuer body")
+if claims != nil {
+    log.Info().Str("sub", claims.Subject).Msg("issuer body carried claims")
+}
+```
+
+A body that is not a 3-segment JWS — a 5-segment JWE-outer body included — is `JOSE_OUTER_NOT_JWS`, never a fallback to another mode. An outer header without `cty: "JWE"` is `JOSE_CTY_REJECTED`, and an `alg` other than the declared `SigAlg` is `JOSE_ALGORITHM_DISALLOWED` — a request-time 400 here, unlike every other mode, where that code is registration-time only. Do not share a `DecryptKid` between this mode and a bare-JWE route: the inner JWE would decrypt there with nothing authenticating the sender.
+
+Deep dive: [wiki/jose.md](wiki/jose.md#jws-of-jwe-mode-visa-token-service-issuer-api).
 
 ### Tag Grammar (full)
 
@@ -4279,7 +4366,7 @@ func (m *Module) exchange(req ExchangeRequest, ctx server.HandlerContext) (Excha
 | Outbound seal failed (server-side bug) | 500 | `JOSE_OUTBOUND_FAILED` | post-trust | `application/json` (cannot encrypt without trust) |
 | Application returns `IAPIError` | per error | (your code) | post-trust | `application/jose` (encrypted standard envelope) |
 
-`JOSE_ALGORITHM_DISALLOWED` is registration-time only (see Algorithm Allowlist above) and never reaches an HTTP caller.
+`JOSE_ALGORITHM_DISALLOWED` is registration-time only (see Algorithm Allowlist above) and never reaches an HTTP caller — except in `SealModeJWSofJWE`, where `Open` refuses an outer `alg` other than the declared `Policy.SigAlg` as a request-time 400.
 
 **Security invariant** — pre-trust failures *must* return plaintext (so peers can't probe the decryption oracle); post-trust failures *must* return JOSE-encrypted envelopes (so application errors don't leak through). Tampering one ciphertext byte and asserting `Content-Type: application/json` on the response is the canonical regression test.
 
@@ -4341,9 +4428,25 @@ carries a body and has an `Outbound` policy. In `jose.SealModeBareJWE` the seal 
 `jti`, so two attempts inside the same millisecond share an `iat`. Protocols that need
 a unique per-attempt `jti` must use the nested JWE-of-JWS shape, where `jti` comes from
 the signed payload). With no `Envelope`, non-`application/jose`
-responses pass through untouched; when `Envelope` and `Inbound` are both set, the envelope
+responses on a non-2xx status pass through untouched; when `Envelope` and `Inbound` are both set, the envelope
 replaces that Content-Type rule with its `Unwrap` verdict and buffers every eligible response body (capped by
-`MaxResponseBytes`) before it runs. Only bodies are sealed: a request with no body goes out unsealed
+`MaxResponseBytes`) before it runs. **A 2xx must have been unwrapped** in either mode: a successful
+response the `Inbound` policy never opened is refused with `httpclient.ErrJOSEPlaintextResponse`
+(match with `errors.Is`) — body closed and never handed to the caller or a response interceptor,
+wrapped with the status and the peer name, and — when the transport has a usable `Logger` — one WARN
+naming the direction and the same two, plus the request id when the transport can read a valid one,
+never body bytes. The
+refusal is terminal: it never enters the retry loop, because the peer already honored the request
+and a retry would only duplicate a non-idempotent side effect.
+204/304/HEAD are skipped as before and are not violations; so is `101`, which is skipped not as an
+empty reply but because its body IS the live upgraded connection, passed through with that stream
+intact. A response an `Inner` returns with a nil body is classified by its status like any other, so
+a nil-bodied 2xx is refused rather than skipped.
+Set `AllowPlaintextSuccess: true` only while a peer legitimately answers some 2xx routes in plaintext
+(Strangler migration). It is transport-wide: with `Inbound` set it allows EVERY eligible plaintext 2xx,
+not selected routes — split the integration into a strict client and an opted-out one if only some
+routes are unprotected. With `Inbound` nil the flag is moot: the transport skips response processing
+entirely, so nothing is unwrapped, judged or refused. Only bodies are sealed: a request with no body goes out unsealed
 whatever the method, so give a payload-free `POST` an explicit `{}` body if the
 partner requires `application/jose` on every request.
 
@@ -4353,7 +4456,7 @@ partner requires `application/jose` on every request.
 client, err := httpclient.NewBuilder(log).
     WithJOSE(httpclient.JOSEConfig{
         Outbound: mleOutbound, // *jose.Policy — optional (seals requests; bare mode encrypts only); nil = requests go out unsealed
-        Inbound:  mleInbound,  // *jose.Policy — optional (opens responses; bare mode decrypts only); nil = plaintext responses
+        Inbound:  mleInbound,  // *jose.Policy — optional (opens responses; bare mode decrypts only); nil = responses pass through unprocessed
         Resolver: resolver,       // jose.KeyResolver — supplies keys for both directions
         // Optional body envelope: nil sends/expects the bare compact as application/jose.
         // httpclient.VisaMLEEnvelope() returns the one for Visa Message Level Encryption
@@ -4362,6 +4465,7 @@ client, err := httpclient.NewBuilder(log).
         // neither policy fails Build — as does a negative MaxResponseBytes when an
         // Envelope and Inbound are both set (without an Envelope, negative stays unbounded).
         Envelope: httpclient.VisaMLEEnvelope(), // httpclient.BodyEnvelope
+        // AllowPlaintextSuccess: true, // opt the WHOLE transport out of the 2xx-must-be-unwrapped rule (Strangler only)
     }).
     Build()
 if err != nil {
@@ -5441,6 +5545,7 @@ fw, _, err = app.NewWithOptions(&app.Options{LoggerFilterConfig: base})
 **Matching semantics:**
 - Substring, case-insensitive. `pan` masks `pan`, `PAN`, `card_pan`, `primary_account_number`.
 - Applies to direct `Str/Int/Interface(...)` fields, nested maps, structs (uses `json` tags when present), and slice/array elements.
+- A type implementing `logger.Redactor` (`RedactedForLog() any`, value receiver) is logged as its returned shape, which is still filtered; a sensitive key still masks it whole (ADR-110).
 - URL values whose key is masked get the password stripped but path/host preserved: `https://user:pwd@host/path?token=x` → `https://user:***@host/path?token=x`.
 
 **What this does *not* do:**

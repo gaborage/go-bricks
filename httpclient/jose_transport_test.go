@@ -7,8 +7,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,11 +23,11 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
-// closeTrackingBody is a bytes.Reader-backed io.ReadCloser that records whether
-// Close was called, so tests can observe a RoundTripper's close-on-error obligation.
+// closeTrackingBody is a bytes.Reader-backed io.ReadCloser that counts Close calls, so
+// tests can observe a RoundTripper's close-on-error obligation — and that it closes once.
 type closeTrackingBody struct {
 	r      *bytes.Reader
-	closed bool
+	closes int
 }
 
 // stubEnvelope adapts two functions to httpclient.BodyEnvelope so a test can vary one
@@ -48,12 +52,58 @@ func (e stubEnvelope) Unwrap(contentType string, body []byte) (compact string, o
 	return e.unwrap(contentType, body)
 }
 
+// recordedEvent is one published log line: its level, its structured fields and its
+// message. recordingLogger is the smallest logger.Logger that lets a test read those
+// back; only Msg publishes, so an event that is built and dropped records nothing.
+type recordedEvent struct {
+	level   string
+	fields  map[string]any
+	message string
+}
+
+// The embedded interfaces supply the methods the refusal path never calls; a nil
+// embedded value panics rather than passing silently, so an unexpected call is loud.
+type recordingLogger struct {
+	logger.Logger
+	events []recordedEvent
+}
+
+func (l *recordingLogger) event(level string) logger.LogEvent {
+	return &recordingEvent{logger: l, level: level, fields: map[string]any{}}
+}
+
+func (l *recordingLogger) Info() logger.LogEvent  { return l.event("info") }
+func (l *recordingLogger) Error() logger.LogEvent { return l.event("error") }
+func (l *recordingLogger) Debug() logger.LogEvent { return l.event("debug") }
+func (l *recordingLogger) Warn() logger.LogEvent  { return l.event("warn") }
+
+type recordingEvent struct {
+	logger.LogEvent
+	logger *recordingLogger
+	level  string
+	fields map[string]any
+}
+
+func (e *recordingEvent) set(key string, value any) logger.LogEvent {
+	e.fields[key] = value
+	return e
+}
+
+func (e *recordingEvent) Msg(msg string) {
+	e.logger.events = append(e.logger.events, recordedEvent{level: e.level, fields: e.fields, message: msg})
+}
+
+func (e *recordingEvent) Str(key, value string) logger.LogEvent           { return e.set(key, value) }
+func (e *recordingEvent) Int(key string, v int) logger.LogEvent           { return e.set(key, v) }
+func (e *recordingEvent) Int64(key string, v int64) logger.LogEvent       { return e.set(key, v) }
+func (e *recordingEvent) Dur(key string, d time.Duration) logger.LogEvent { return e.set(key, d) }
+
 func newCloseTrackingBody(s string) *closeTrackingBody {
 	return &closeTrackingBody{r: bytes.NewReader([]byte(s))}
 }
 
 func (b *closeTrackingBody) Read(p []byte) (int, error) { return b.r.Read(p) }
-func (b *closeTrackingBody) Close() error               { b.closed = true; return nil }
+func (b *closeTrackingBody) Close() error               { b.closes++; return nil }
 
 // joseEchoServer simulates a JOSE-aware partner: it decrypts the request, echoes the
 // plaintext back inside an encrypted response.
@@ -103,16 +153,16 @@ func newJOSETransport(f *jositest.BidirectionalFixture) *httpclient.JOSETranspor
 	}
 }
 
-// plainJSONServer answers with a plaintext {"ok":true} after handing the request the
+// plainJSONServer answers status with a plaintext {"ok":true} after handing the request the
 // transport actually put on the wire to assertReq.
 //
 // assertReq runs on httptest's handler goroutine (see joseEchoServer): t.Errorf only.
-func plainJSONServer(t *testing.T, assertReq func(r *http.Request)) *httptest.Server {
+func plainJSONServer(t *testing.T, status int, assertReq func(r *http.Request)) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assertReq(r)
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(status)
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
 }
@@ -166,6 +216,316 @@ func TestJOSETransportPreTrustErrorPassesThrough(t *testing.T) {
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.Contains(t, string(body), `"JOSE_DECRYPT_FAILED"`)
+}
+
+// TestJOSETransportPlaintextSuccessFailsClosed pins the rule ADR-107's amendment added: a
+// 2xx body an Inbound policy never opened is refused, because nothing about it was
+// authenticated. Both gates are covered — the nested-mode Content-Type rule, and an
+// Envelope whose Unwrap declines the body.
+func TestJOSETransportPlaintextSuccessFailsClosed(t *testing.T) {
+	tests := []struct {
+		name     string
+		status   int
+		envelope bool
+	}{
+		{name: "nested_mode_200", status: http.StatusOK},
+		{name: "nested_mode_201", status: http.StatusCreated},
+		{name: "nested_mode_299", status: 299},
+		{name: "envelope_mode_200", status: http.StatusOK, envelope: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := jositest.NewBidirectionalFixture(t)
+			server := plainJSONServer(t, tt.status, func(*http.Request) {})
+			defer server.Close()
+
+			transport := newJOSETransport(f)
+			transport.PeerName = "visa-vts"
+			if tt.envelope {
+				// Recognizes nothing, so the refusal comes from the unwrap verdict rather
+				// than a decrypt failure.
+				transport.Envelope = stubEnvelope{}
+			}
+
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
+			require.NoError(t, err)
+
+			resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is nil on this error path; RoundTrip closed the peer's body
+			require.Error(t, err)
+			assert.Nil(t, resp, "a plaintext success must not reach the caller")
+			require.ErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
+			// A fleet calling several JOSE peers learns from the error alone which
+			// integration regressed — and never anything the peer's body carried.
+			assert.Contains(t, err.Error(), "visa-vts")
+			assert.Contains(t, err.Error(), strconv.Itoa(tt.status))
+			assert.NotContains(t, err.Error(), `"ok"`, "the refused body must not reach the error")
+		})
+	}
+}
+
+// TestJOSETransportPlaintextPassesThrough is the other half of that rule. Only a successful
+// status must have been unwrapped, so a counterparty's pre-trust error envelope — plaintext
+// by design — keeps reaching the caller with its headers untouched; and AllowPlaintextSuccess
+// puts a 2xx back on that same path, which is the whole of the Strangler-migration knob.
+func TestJOSETransportPlaintextPassesThrough(t *testing.T) {
+	tests := []struct {
+		name           string
+		status         int
+		envelope       bool
+		allowPlaintext bool
+	}{
+		{name: "unauthorized_401", status: http.StatusUnauthorized},
+		{name: "forbidden_403", status: http.StatusForbidden},
+		{name: "server_error_500", status: http.StatusInternalServerError},
+		{name: "envelope_mode_500", status: http.StatusInternalServerError, envelope: true},
+		{name: "allowed_200", status: http.StatusOK, allowPlaintext: true},
+		{name: "allowed_envelope_mode_200", status: http.StatusOK, envelope: true, allowPlaintext: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := jositest.NewBidirectionalFixture(t)
+			server := plainJSONServer(t, tt.status, func(*http.Request) {})
+			defer server.Close()
+
+			transport := newJOSETransport(f)
+			transport.AllowPlaintextSuccess = tt.allowPlaintext
+			if tt.envelope {
+				transport.Envelope = stubEnvelope{}
+			}
+
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
+			require.NoError(t, err)
+
+			resp, err := transport.RoundTrip(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			assert.Equal(t, tt.status, resp.StatusCode)
+			assert.Equal(t, "application/json", resp.Header.Get("Content-Type"), "pass-through must leave the header alone")
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			assert.JSONEq(t, `{"ok":true}`, string(body))
+		})
+	}
+}
+
+// TestJOSETransportPlaintextSuccessWarnsOnce pins the log-side half: exactly one WARN per
+// refusal, and no line at all when the transport is opted out and the body legitimately
+// passes through. The field map is asserted WHOLE rather than key by key, so a mutant that
+// renames direction, rewrites the message or drops request_id fails here — and so does one
+// that adds a field, which is how the "never body bytes" guarantee stays checked.
+func TestJOSETransportPlaintextSuccessWarnsOnce(t *testing.T) {
+	tests := []struct {
+		name           string
+		envelope       bool
+		allowPlaintext bool
+		requestID      string
+		ctxRequestID   string
+		wantEvents     int
+		wantFields     map[string]any
+	}{
+		{
+			name:       "nested_mode_refusal",
+			requestID:  "req-42",
+			wantEvents: 1,
+			wantFields: map[string]any{
+				"direction":  "inbound",
+				"peer":       "visa-vts",
+				"status":     http.StatusOK,
+				"request_id": "req-42",
+			},
+		},
+		{
+			name:       "envelope_mode_refusal",
+			envelope:   true,
+			requestID:  "req-43",
+			wantEvents: 1,
+			wantFields: map[string]any{
+				"direction":  "inbound",
+				"peer":       "visa-vts",
+				"status":     http.StatusOK,
+				"request_id": "req-43",
+			},
+		},
+		{
+			// No trace id anywhere: the field is omitted rather than logged blank.
+			name:       "refusal_without_a_request_id",
+			wantEvents: 1,
+			wantFields: map[string]any{
+				"direction": "inbound",
+				"peer":      "visa-vts",
+				"status":    http.StatusOK,
+			},
+		},
+		{
+			// A caller-supplied header outside the ingest bound is discarded, not logged.
+			name:       "invalid_header_request_id_omitted",
+			requestID:  "req 42",
+			wantEvents: 1,
+			wantFields: map[string]any{
+				"direction": "inbound",
+				"peer":      "visa-vts",
+				"status":    http.StatusOK,
+			},
+		},
+		{
+			name:         "invalid_header_falls_back_to_the_context_id",
+			requestID:    "req 42",
+			ctxRequestID: "ctx-99",
+			wantEvents:   1,
+			wantFields: map[string]any{
+				"direction":  "inbound",
+				"peer":       "visa-vts",
+				"status":     http.StatusOK,
+				"request_id": "ctx-99",
+			},
+		},
+		{
+			name:         "invalid_context_request_id_omitted",
+			ctxRequestID: "ctx 99",
+			wantEvents:   1,
+			wantFields: map[string]any{
+				"direction": "inbound",
+				"peer":      "visa-vts",
+				"status":    http.StatusOK,
+			},
+		},
+		{name: "opted_out_pass_through", allowPlaintext: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := jositest.NewBidirectionalFixture(t)
+			server := plainJSONServer(t, http.StatusOK, func(*http.Request) {})
+			defer server.Close()
+
+			log := &recordingLogger{}
+			transport := newJOSETransport(f)
+			transport.Logger = log
+			transport.PeerName = "visa-vts"
+			transport.AllowPlaintextSuccess = tt.allowPlaintext
+			if tt.envelope {
+				transport.Envelope = stubEnvelope{}
+			}
+
+			ctx := context.Background()
+			if tt.ctxRequestID != "" {
+				ctx = httpclient.WithTraceID(ctx, tt.ctxRequestID)
+			}
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
+			require.NoError(t, err)
+			if tt.requestID != "" {
+				req.Header.Set(httpclient.HeaderXRequestID, tt.requestID)
+			}
+
+			resp, err := transport.RoundTrip(req)
+			if tt.wantEvents == 0 {
+				require.NoError(t, err)
+				defer resp.Body.Close()
+				assert.Empty(t, log.events, "a pass-through is not a violation")
+				return
+			}
+			assert.Nil(t, resp)
+			require.ErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
+
+			require.Len(t, log.events, tt.wantEvents)
+			event := log.events[0]
+			assert.Equal(t, "warn", event.level)
+			assert.Equal(t, tt.wantFields, event.fields)
+			assert.Equal(t, "REST client refused an unprotected successful response", event.message)
+		})
+	}
+}
+
+// nilZeroLogger is the D1009 shape: a non-nil logger.Logger interface holding a typed-nil
+// *logger.ZeroLogger, whose Warn() dereferences a nil zlog. A `!= nil` guard admits it and
+// panics on the refusal path; isNilLogger rejects it.
+func TestJOSETransportTypedNilLoggerStillRefuses(t *testing.T) {
+	f := jositest.NewBidirectionalFixture(t)
+	server := plainJSONServer(t, http.StatusOK, func(*http.Request) {})
+	defer server.Close()
+
+	var nilZeroLogger logger.Logger = (*logger.ZeroLogger)(nil)
+	// reflect, not == nil: the compiler knows this interface holds a concrete type, and
+	// testify reads a typed-nil pointer as nil, so both spell the fixture away.
+	if reflect.TypeOf(nilZeroLogger) == nil || !reflect.ValueOf(nilZeroLogger).IsNil() {
+		t.Fatal("fixture must be a non-nil interface holding a typed-nil pointer")
+	}
+
+	transport := newJOSETransport(f)
+	transport.PeerName = "visa-vts"
+	transport.Logger = nilZeroLogger
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
+	require.NoError(t, err)
+
+	resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is nil on this error path; RoundTrip closed the peer's body
+	assert.Nil(t, resp)
+	require.ErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
+	assert.Contains(t, err.Error(), "visa-vts")
+}
+
+// TestJOSETransportEnvelopeRefusalClosesTheBodyOnce pins the cleanup on every error path
+// that has already drained the peer's body: readAndCloseBody closed it, so RoundTrip must
+// not close it a second time. net/http's own bodies tolerate that; a hand-rolled Inner's
+// need not.
+func TestJOSETransportEnvelopeRefusalClosesTheBodyOnce(t *testing.T) {
+	tests := []struct {
+		name        string
+		contentType string
+		payload     string
+		maxBytes    int64
+		envelope    bool
+		wantErr     error
+	}{
+		{name: "nested_mode_never_reads_the_body", contentType: "application/json", payload: `{"ok":true}`, wantErr: httpclient.ErrJOSEPlaintextResponse},
+		{name: "envelope_mode_reads_then_refuses", contentType: "application/json", payload: `{"ok":true}`, envelope: true, wantErr: httpclient.ErrJOSEPlaintextResponse},
+		{name: "nested_mode_body_over_the_cap", contentType: jose.ContentType, payload: strings.Repeat("x", 64), maxBytes: 8},
+		{name: "nested_mode_body_is_not_valid_jose", contentType: jose.ContentType, payload: "not-a-compact-jwe"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := jositest.NewBidirectionalFixture(t)
+			body := newCloseTrackingBody(tt.payload)
+
+			transport := newJOSETransport(f)
+			transport.MaxResponseBytes = tt.maxBytes
+			transport.Inner = fixedResponder{status: http.StatusOK, contentType: tt.contentType, body: body}
+			if tt.envelope {
+				transport.Envelope = stubEnvelope{}
+			}
+
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.invalid", http.NoBody)
+			require.NoError(t, err)
+
+			resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is nil on this error path; the assertion below is that the transport closed the peer's body exactly once
+			require.Error(t, err)
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			}
+			require.Nil(t, resp)
+			assert.Equal(t, 1, body.closes, "the peer's body must be closed exactly once")
+		})
+	}
+}
+
+// fixedResponder hands back one prepared response, so a test can watch what the transport
+// does to a body it controls.
+type fixedResponder struct {
+	status      int
+	contentType string
+	body        io.ReadCloser
+}
+
+func (r fixedResponder) RoundTrip(_ *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: r.status,
+		Header:     http.Header{"Content-Type": []string{r.contentType}},
+		Body:       r.body,
+	}, nil
 }
 
 func TestJOSETransportTamperedResponseFailsClosed(t *testing.T) {
@@ -311,7 +671,7 @@ func TestJOSETransportOutboundRequiresResolver(t *testing.T) {
 	_, err = transport.RoundTrip(req) //nolint:bodyclose // RoundTrip returns the configuration error before any HTTP exchange; no body to close
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "KeyResolver")
-	assert.True(t, body.closed, "RoundTrip must close req.Body even when it fails before reading it")
+	assert.Equal(t, 1, body.closes, "RoundTrip must close req.Body exactly once when it fails before reading it")
 }
 
 func TestJOSETransportOutboundRequiresResolverNilBody(t *testing.T) {
@@ -390,7 +750,7 @@ func TestJOSETransportSealsOnlyWhenTheRequestCarriesABody(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			server := plainJSONServer(t, func(r *http.Request) {
+			server := plainJSONServer(t, http.StatusOK, func(r *http.Request) {
 				ct := r.Header.Get("Content-Type")
 				body, err := io.ReadAll(r.Body)
 				if err != nil {
@@ -408,7 +768,12 @@ func TestJOSETransportSealsOnlyWhenTheRequestCarriesABody(t *testing.T) {
 			req, err := http.NewRequestWithContext(context.Background(), tc.method, server.URL, tc.body)
 			require.NoError(t, err)
 
-			resp, err := newJOSETransport(f).RoundTrip(req)
+			transport := newJOSETransport(f)
+			// The request half is what this table pins; the plaintext 2xx the stub answers
+			// with would otherwise be refused before any of it is asserted.
+			transport.AllowPlaintextSuccess = true
+
+			resp, err := transport.RoundTrip(req)
 			require.NoError(t, err)
 			defer resp.Body.Close()
 
@@ -470,16 +835,22 @@ func TestJOSETransportJOSETypedHeadResponseIsNotUnwrapped(t *testing.T) {
 }
 
 func TestJOSETransportBodylessResponsesAreNotUnwrapped(t *testing.T) {
-	// 1xx, 204, 304 and every reply to HEAD carry no body by definition. Driven through a
+	// 204, 304, every reply to HEAD and any status below 200 are outside the unwrap set. Driven through a
 	// stub Inner rather than an httptest server because net/http's server strips
 	// Content-Type from a 304 (RFC 7232 §4.1), so a real Go peer cannot produce the
 	// JOSE-typed 304 shape under test.
+	//
+	// The plaintext rows are also the boundary of the fail-closed rule: a 204 is successful
+	// and unprotected, but net/http GUARANTEES it carries no body, so there is no plaintext
+	// to mistake for a decrypted payload. Refusing them would break every DELETE and every
+	// conditional GET against a JOSE peer.
 	f := jositest.NewBidirectionalFixture(t)
 
 	tests := []struct {
-		name   string
-		method string
-		status int
+		name        string
+		method      string
+		status      int
+		contentType string
 	}{
 		{name: "switching_protocols_101", method: http.MethodGet, status: http.StatusSwitchingProtocols},
 		{name: "no_content_204", method: http.MethodDelete, status: http.StatusNoContent},
@@ -489,12 +860,15 @@ func TestJOSETransportBodylessResponsesAreNotUnwrapped(t *testing.T) {
 		// pass this suite while silently resuming unwrap of empty HEAD bodies behind a
 		// custom Inner. bodylessResponder leaves resp.Request nil, so this row pins that.
 		{name: "head_reply_200", method: http.MethodHead, status: http.StatusOK},
+		{name: "plaintext_no_content_204", method: http.MethodDelete, status: http.StatusNoContent, contentType: "application/json"},
+		{name: "plaintext_not_modified_304", method: http.MethodGet, status: http.StatusNotModified, contentType: "application/json"},
+		{name: "plaintext_head_reply_200", method: http.MethodHead, status: http.StatusOK, contentType: "application/json"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			transport := newJOSETransport(f)
-			transport.Inner = bodylessResponder{status: tc.status}
+			transport.Inner = bodylessResponder{status: tc.status, contentType: tc.contentType}
 
 			//nolint:gocritic // literal nil, not http.NoBody, reproduces a real GET/DELETE/HEAD's nil req.Body
 			req, err := http.NewRequestWithContext(context.Background(), tc.method, "http://example.invalid", nil)
@@ -504,8 +878,12 @@ func TestJOSETransportBodylessResponsesAreNotUnwrapped(t *testing.T) {
 			require.NoError(t, err)
 			defer resp.Body.Close()
 
+			wantType := tc.contentType
+			if wantType == "" {
+				wantType = jose.ContentType
+			}
 			assert.Equal(t, tc.status, resp.StatusCode)
-			assert.Equal(t, jose.ContentType, resp.Header.Get("Content-Type"), "pass-through must leave the header alone")
+			assert.Equal(t, wantType, resp.Header.Get("Content-Type"), "pass-through must leave the header alone")
 		})
 	}
 }
@@ -543,6 +921,37 @@ func TestJOSETransportRFCBodylessButNotNetHTTPBodylessStillUnwraps(t *testing.T)
 	}
 }
 
+// TestJOSETransportRFCBodylessButNotNetHTTPBodylessPlaintextIsRefused is the plaintext half
+// of the row above, and the exact wording the C65.8 atom now carries: a 205 or a 2xx answer
+// to CONNECT is outside the skip set either way, so a JOSE-typed one fails closed in
+// jose.Open while a plaintext one is refused like every other unopened 2xx.
+func TestJOSETransportRFCBodylessButNotNetHTTPBodylessPlaintextIsRefused(t *testing.T) {
+	f := jositest.NewBidirectionalFixture(t)
+
+	tests := []struct {
+		name   string
+		method string
+		status int
+	}{
+		{name: "plaintext_reset_content_205", method: http.MethodGet, status: http.StatusResetContent},
+		{name: "plaintext_connect_tunnel_200", method: http.MethodConnect, status: http.StatusOK},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := newJOSETransport(f)
+			transport.Inner = bodylessResponder{status: tc.status, contentType: "application/json"}
+
+			req, err := http.NewRequestWithContext(context.Background(), tc.method, "http://example.invalid", http.NoBody)
+			require.NoError(t, err)
+
+			resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is nil on this error path; RoundTrip closed the peer's body
+			require.ErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
+			assert.Nil(t, resp)
+		})
+	}
+}
+
 func TestJOSETransportEmptyJOSEBodyOnBodyBearingStatusFailsClosed(t *testing.T) {
 	// Negative control for the bodyless guard. A 200 advertising application/jose with no
 	// body is a ciphertext stripped in transit, not a legitimate empty response, and must
@@ -561,18 +970,179 @@ func TestJOSETransportEmptyJOSEBodyOnBodyBearingStatusFailsClosed(t *testing.T) 
 	assert.Nil(t, resp)
 }
 
-// bodylessResponder replies with a JOSE-typed, empty-bodied response at a fixed status,
-// mimicking what net/http hands back for a 204/304/HEAD reply. It deliberately leaves
-// Response.Request nil: *http.Transport back-fills that field but the RoundTripper contract
-// does not require an Inner to, so this is the shape a custom Inner can produce.
-type bodylessResponder struct{ status int }
+// bodylessResponder replies with an empty-bodied response at a fixed status, mimicking what
+// net/http hands back for a 204/304/HEAD reply. An empty contentType advertises
+// jose.ContentType. It deliberately leaves Response.Request nil: *http.Transport back-fills
+// that field but the RoundTripper contract does not require an Inner to, so this is the
+// shape a custom Inner can produce.
+type bodylessResponder struct {
+	status      int
+	contentType string
+}
 
 func (b bodylessResponder) RoundTrip(_ *http.Request) (*http.Response, error) {
+	contentType := b.contentType
+	if contentType == "" {
+		contentType = jose.ContentType
+	}
 	return &http.Response{
 		StatusCode: b.status,
-		Header:     http.Header{"Content-Type": []string{jose.ContentType}},
+		Header:     http.Header{"Content-Type": []string{contentType}},
 		Body:       http.NoBody,
 	}, nil
+}
+
+// bodiedResponder replies at a fixed status with a caller-supplied body: the hand-rolled
+// Inner net/http does not police, putting bytes on a shape the skip set exempts.
+type bodiedResponder struct {
+	status int
+	body   io.ReadCloser
+}
+
+func (b bodiedResponder) RoundTrip(_ *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode:    b.status,
+		Header:        http.Header{"Content-Type": []string{jose.ContentType}},
+		Body:          b.body,
+		ContentLength: -1,
+	}, nil
+}
+
+func TestJOSETransportBodylessSkipArmsNormalizeTheBody(t *testing.T) {
+	// WithTransport takes any RoundTripper and net/http strips nothing from what one returns,
+	// so an Inner that supplies a body on a status the skip set exempts would otherwise hand
+	// the caller bytes no Inbound policy opened.
+	f := jositest.NewBidirectionalFixture(t)
+
+	tests := []struct {
+		name   string
+		method string
+		status int
+	}{
+		{name: "no_content_204", method: http.MethodDelete, status: http.StatusNoContent},
+		{name: "not_modified_304", method: http.MethodGet, status: http.StatusNotModified},
+		{name: "head_reply_200", method: http.MethodHead, status: http.StatusOK},
+		{name: "early_hints_103", method: http.MethodGet, status: http.StatusEarlyHints},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			peerBody := newCloseTrackingBody(`{"smuggled":true}`)
+			transport := newJOSETransport(f)
+			transport.Inner = bodiedResponder{status: tc.status, body: peerBody}
+
+			//nolint:gocritic // literal nil, not http.NoBody, reproduces a real GET/DELETE/HEAD's nil req.Body
+			req, err := http.NewRequestWithContext(context.Background(), tc.method, "http://example.invalid", nil)
+			require.NoError(t, err)
+
+			resp, err := transport.RoundTrip(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			read, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			assert.Empty(t, read, "the peer's bytes must not reach the caller")
+			assert.Equal(t, 1, peerBody.closes, "the peer's body must be closed exactly once")
+			assert.Zero(t, resp.ContentLength)
+		})
+	}
+}
+
+// nilBodyResponder replies at a fixed status with a literal nil Body: the RoundTripper
+// contract does not require one, so a hand-rolled Inner can produce this shape.
+type nilBodyResponder struct {
+	status int
+}
+
+func (n nilBodyResponder) RoundTrip(_ *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode:    n.status,
+		Header:        http.Header{"Content-Type": []string{"application/json"}},
+		ContentLength: -1,
+	}, nil
+}
+
+func TestJOSETransportNilBodyIsClassifiedByStatus(t *testing.T) {
+	// A nil Body says nothing about the response's shape, so it must not buy a 2xx a skip the
+	// Inbound policy never granted it.
+	f := jositest.NewBidirectionalFixture(t)
+
+	tests := []struct {
+		name    string
+		status  int
+		wantErr error
+	}{
+		{name: "success_200_is_refused", status: http.StatusOK, wantErr: httpclient.ErrJOSEPlaintextResponse},
+		{name: "no_content_204_is_skipped", status: http.StatusNoContent},
+		{name: "unauthorized_401_passes_through", status: http.StatusUnauthorized},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := newJOSETransport(f)
+			transport.Inner = nilBodyResponder{status: tc.status}
+
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.invalid", http.NoBody)
+			require.NoError(t, err)
+
+			resp, err := transport.RoundTrip(req)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				assert.Nil(t, resp)
+				return
+			}
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			assert.Equal(t, tc.status, resp.StatusCode)
+			read, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			assert.Empty(t, read)
+		})
+	}
+}
+
+func TestJOSETransportSwitchingProtocolsKeepsItsBody(t *testing.T) {
+	// 101 is below 200, so skipsUnwrap skips it on the status alone — but it is the one
+	// sub-200 status a RoundTripper returns as a terminal response, and its Body is the live
+	// upgraded connection. Closing it or swapping in NoBody would break the caller's stream.
+	f := jositest.NewBidirectionalFixture(t)
+	peerBody := newCloseTrackingBody("upgraded stream")
+	transport := newJOSETransport(f)
+	transport.Inner = bodiedResponder{status: http.StatusSwitchingProtocols, body: peerBody}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.invalid", http.NoBody)
+	require.NoError(t, err)
+
+	resp, err := transport.RoundTrip(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	read, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, "upgraded stream", string(read))
+	assert.Zero(t, peerBody.closes, "the upgraded connection must stay open")
+}
+
+func TestJOSETransportPassthroughModeLeavesTheBodyAlone(t *testing.T) {
+	// With no Inbound policy the transport does nothing to responses, so even a 204's body
+	// reaches the caller as Inner built it.
+	peerBody := newCloseTrackingBody(`{"ok":true}`)
+	transport := &httpclient.JOSETransport{
+		Inner: bodiedResponder{status: http.StatusNoContent, body: peerBody},
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, "http://example.invalid", http.NoBody)
+	require.NoError(t, err)
+
+	resp, err := transport.RoundTrip(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	read, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"ok":true}`, string(read))
+	assert.Zero(t, peerBody.closes)
 }
 
 func TestIsJOSEErrorDistinguishesTransportFromCrypto(t *testing.T) {
@@ -601,6 +1171,127 @@ func TestBuilderWithJOSEWiresTransport(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.JSONEq(t, `{"echo":{"hello":"world"}}`, string(resp.Body))
+}
+
+// TestBuilderWithJOSEForwardsAllowPlaintextSuccess pins that the config knob reaches the
+// transport: without the copy in WithJOSE, a client built with it set would still refuse
+// the plaintext 2xx.
+func TestBuilderWithJOSEForwardsAllowPlaintextSuccess(t *testing.T) {
+	f := jositest.NewBidirectionalFixture(t)
+	server := plainJSONServer(t, http.StatusOK, func(*http.Request) {})
+	defer server.Close()
+
+	client, err := httpclient.NewBuilder(logger.New("info", false)).
+		WithJOSE(httpclient.JOSEConfig{
+			Outbound:              f.ClientOutbound,
+			Inbound:               f.ClientInbound,
+			Resolver:              f.Resolver,
+			AllowPlaintextSuccess: true,
+		}).
+		Build()
+	require.NoError(t, err)
+
+	resp, err := client.Post(context.Background(), &httpclient.Request{URL: server.URL, Body: []byte(`{"x":1}`)})
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.JSONEq(t, `{"ok":true}`, string(resp.Body))
+}
+
+// TestBuilderWithJOSEThreadsThePeerNameIntoTheRefusal pins that a built client's refusal
+// names the peer WithPeerName gave it. The transport wrapper reads the name when Build
+// runs, not when WithJOSE does, so either chain order reaches the same error.
+func TestBuilderWithJOSEThreadsThePeerNameIntoTheRefusal(t *testing.T) {
+	const peerName = "visa-vts"
+	tests := []struct {
+		name      string
+		peerFirst bool
+	}{
+		{name: "peer_name_before_with_jose", peerFirst: true},
+		{name: "peer_name_after_with_jose"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := jositest.NewBidirectionalFixture(t)
+			server := plainJSONServer(t, http.StatusOK, func(*http.Request) {})
+			defer server.Close()
+
+			log := &recordingLogger{}
+			b := httpclient.NewBuilder(log)
+			withJOSE := func() {
+				b = b.WithJOSE(httpclient.JOSEConfig{Outbound: f.ClientOutbound, Inbound: f.ClientInbound, Resolver: f.Resolver})
+			}
+			withPeer := func() { b = b.WithPeerName(peerName) }
+			if tt.peerFirst {
+				withPeer()
+				withJOSE()
+			} else {
+				withJOSE()
+				withPeer()
+			}
+			client, err := b.Build()
+			require.NoError(t, err)
+
+			_, err = client.Post(context.Background(), &httpclient.Request{URL: server.URL, Body: []byte(`{"x":1}`)})
+			require.ErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
+			assert.Contains(t, err.Error(), peerName, "the builder must thread WithPeerName into the transport")
+
+			var warns []recordedEvent
+			for _, event := range log.events {
+				if event.level == "warn" {
+					warns = append(warns, event)
+				}
+			}
+			require.Len(t, warns, 1, "the builder must thread its own logger into the transport")
+			assert.Equal(t, peerName, warns[0].fields["peer"])
+		})
+	}
+}
+
+// TestBuilderWithJOSEPlaintextSuccessIsNotRetried pins the refusal as terminal. The peer
+// answered 2xx, so it already honored the request; re-sending it would duplicate a
+// non-idempotent side effect without any chance of a different verdict.
+func TestBuilderWithJOSEPlaintextSuccessIsNotRetried(t *testing.T) {
+	f := jositest.NewBidirectionalFixture(t)
+	var hits atomic.Int64
+	server := plainJSONServer(t, http.StatusOK, func(*http.Request) { hits.Add(1) })
+	defer server.Close()
+
+	client, err := httpclient.NewBuilder(logger.New("info", false)).
+		WithJOSE(httpclient.JOSEConfig{Outbound: f.ClientOutbound, Inbound: f.ClientInbound, Resolver: f.Resolver}).
+		WithRetries(3, time.Millisecond).
+		Build()
+	require.NoError(t, err)
+
+	resp, err := client.Post(context.Background(), &httpclient.Request{URL: server.URL, Body: []byte(`{"x":1}`)})
+	require.ErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
+	assert.Nil(t, resp)
+	assert.Equal(t, int64(1), hits.Load(), "a refused plaintext 2xx must not be re-sent")
+}
+
+// TestBuilderWithJOSEPlaintextSuccessSkipsResponseInterceptors pins the half of the rule a
+// caller can observe from outside the transport: the RoundTrip error short-circuits before
+// buildResponse, so an interceptor that would log, cache or re-parse the payload is never
+// handed unauthenticated bytes.
+func TestBuilderWithJOSEPlaintextSuccessSkipsResponseInterceptors(t *testing.T) {
+	f := jositest.NewBidirectionalFixture(t)
+	server := plainJSONServer(t, http.StatusOK, func(*http.Request) {})
+	defer server.Close()
+
+	var intercepted atomic.Int64
+	client, err := httpclient.NewBuilder(logger.New("info", false)).
+		WithJOSE(httpclient.JOSEConfig{Outbound: f.ClientOutbound, Inbound: f.ClientInbound, Resolver: f.Resolver}).
+		WithResponseInterceptor(func(context.Context, *http.Request, *http.Response) error {
+			intercepted.Add(1)
+			return nil
+		}).
+		Build()
+	require.NoError(t, err)
+
+	resp, err := client.Post(context.Background(), &httpclient.Request{URL: server.URL, Body: []byte(`{"x":1}`)})
+	require.ErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
+	assert.Nil(t, resp)
+	assert.Equal(t, int64(0), intercepted.Load(), "a refused plaintext 2xx must not reach a response interceptor")
 }
 
 // TestBuilderWithJOSEFailsClosedOnAnEnvelopeWithoutAPolicy pins the pairing rule. Wrap is
@@ -792,6 +1483,9 @@ func TestJOSETransportUnboundedCapRule(t *testing.T) {
 
 			transport := newJOSETransport(f)
 			transport.MaxResponseBytes = tt.maxBytes
+			// The cap rule is the verdict under test; the stub's plaintext 2xx must not
+			// stand in for it.
+			transport.AllowPlaintextSuccess = true
 			if !tt.withInbound {
 				transport.Inbound = nil
 			}
@@ -816,7 +1510,7 @@ func TestJOSETransportUnboundedCapRule(t *testing.T) {
 			require.Error(t, err)
 			assert.Nil(t, resp)
 			assert.False(t, reached, "the request must not be sent when the cap is unbounded")
-			assert.True(t, body.closed, "the request body must be closed when the round trip is refused")
+			assert.Equal(t, 1, body.closes, "the request body must be closed exactly once when the round trip is refused")
 
 			var joseErr *jose.Error
 			require.ErrorAs(t, err, &joseErr)

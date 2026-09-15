@@ -19,7 +19,7 @@ A plain `vX.Y.Z` is your current node. `=>` a local path (dev `replace`) means t
 **3 — Select the hop chain** on the Ladder: every edge strictly to the right of CURRENT, up to and including TARGET. Never apply an edge at/left of CURRENT.
 
 ```text
-v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0 ─E55─ v0.55.0 ─E56─ v0.56.0 ─E57─ v0.57.0 ─E58─ v0.58.0 ─E581─ v0.58.1 ─E59─ v0.59.0 ─E60─ v0.60.0 ─E61─ v0.61.0 ─E62─ v0.62.0 ─E63─ v0.63.0 ─E64─ v0.64.0
+v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0 ─E55─ v0.55.0 ─E56─ v0.56.0 ─E57─ v0.57.0 ─E58─ v0.58.0 ─E581─ v0.58.1 ─E59─ v0.59.0 ─E60─ v0.60.0 ─E61─ v0.61.0 ─E62─ v0.62.0 ─E63─ v0.63.0 ─E64─ v0.64.0 ─E65─ v0.65.0
 ```
 
 > v0.46.0–v0.48.0 shipped additive-only changes (route template/path-param accessors, raw-route descriptors, module-contributed global middleware — adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0.
@@ -50,6 +50,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E62 | v0.61.0 → v0.62.0 | breaking (C62.1 — the exact spelling `Local` fails `config.Validate` on `scheduler.timezone`, `database.timezone` and every named or per-tenant database timezone key, and at the runtime door a dynamic `DBConfigProvider` and the `go-bricks-migrate` CLI go through; `"-"` is the only documented opt-out spelling — host-local on the scheduler, the server's default zone on a database session — and `local`/`LOCAL` were already refused) + silent-behavior default flip + compile-break (C62.2 — an absent `cache.critical` now leaves the cache probe NON-critical, so `/ready` stays `200` through a Redis outage that answered `503` on every replica under v0.61.0; the explicit-`false` startup WARN is gone; and `config.CacheConfig.Critical` is a plain `bool`, so Go code that sets `Critical: new(true)` or dereferences the field stops compiling) + breaking (C62.3 — a `keystore.secretminlength` below 32, the former `0` opt-out included, fails startup) | 3 | C62.2 (only partially — the Go field's `*bool` → `bool` is compiler-caught; the default flip is silent, see its gate) | grep every deployment surface — YAML, `.env`, Helm values, Vault and AWS Secrets Manager payloads, the CLI's `tenants.yaml` — for a timezone key set to `Local` and rewrite it to `"-"` where host-local was meant or to the IANA zone where it was not; on a database key note `"-"` means the SERVER's default zone, not the application host's (C62.1); and if any cache-enabled deployment leaves `cache.critical` unset and relies on the v0.61.0 default to take a replica out of rotation during a Redis outage — a rate limiter that must fail closed, a session store, an idempotency ledger — set `cache.critical: true` BEFORE the bump (the key is a no-op on v0.61.0, so it can ship ahead); and grep alerting for the `cache.critical is explicitly false` WARN line, which stops firing, and rewrite any Go `Critical: new(true)` to `Critical: true` (C62.2); and read every environment's `keystore.secretminlength` — YAML, `KEYSTORE_SECRETMINLENGTH`, and any Go literal setting `SecretMinLength` — for `0` or any value below 32: those now fail startup, and a symmetric secret shorter than 32 bytes has no keystore path any more, so a partner key that short must be loaded outside `keystore` before the bump (C62.3) |
 | E63 | v0.62.0 → v0.63.0 | compile-break (C63.1 — `Client.Publish` and `AMQPClient.PublishToExchange` are removed from the module-facing types and `PublishOptions` is unexported; `ValidatePublishDestination` takes `(exchange, routingKey, headers)`; `scheduler.JobContext.Messaging()` returns `messaging.AMQPClient`; `testing/mocks` loses `MockMessagingClient.Publish`, `MockAMQPClient.PublishToExchange`, `PublishedFrame` and the `ExpectPublish*` helpers — publish through `DeclareTypedPublisher[T]`) + breaking (C63.2 — a header-sourced event id outside `^[A-Za-z0-9_-]{1,128}$` is refused before the inbox ledger: `inbox.ProcessOnce` returns an error wrapping `messaging.ErrInvalidEventID`, no row is written, and the handler's return nacks the delivery into the DLQ where v0.62.0 inserted the row; the `!inserted` short-circuit gains the `inbox.dedup.hits` counter and one INFO line) + compile-break (C63.3 — `SelectQueryBuilder` gains `ForUpdate`/`ForUpdateNoWait`/`SubqueryColumn` and `UpdateQueryBuilder` gains `SetExpr`, so a consumer type that implements either interface stops compiling until it grows them; callers are unaffected; a table-less Oracle SELECT now renders `FROM dual`) + breaking (C63.5 — a seal-tagged event type whose custom `MarshalJSON` emits a top-level member case-folding to the sealed Subject member is now refused at publish time with `SEAL_DOCUMENT_INVALID`; the same document sealed in v0.62.0) + additive-optional (C63.4 — the `jose/sealed` raw-document door; C63.6 — the `cmd/seal-event` CLI) | 6 | C63.1 (the compile half — the removed methods, the unexported type and the changed signatures; the runtime `ErrPublishDoorUnavailable` for a factory-built client is not) + C63.3; none for C63.4/C63.5/C63.6 — they are runtime, and the new door and CLI are additive | none for the compile half — `go build ./...` enumerates every call site; if any module keeps a client built by `app.Options.MessagingClientFactory` and publishes through it, expect `messaging.ErrPublishDoorUnavailable` at runtime and move that publish onto a framework-built client BEFORE the bump (C63.1); if any producer of the events you consume mints `x-outbox-event-id` outside that grammar (a `:`, whitespace, empty, over 128 bytes) — a hand-set header, an upstream bridge, a partner producer, or a consumer building its own `ProcessOnce` key such as `order:123` — re-mint before the bump or those messages nack into the DLQ on first delivery; if an alert fires on inbox log volume, expect one new INFO line per redelivery (C63.2); if any of your types implements `types.SelectQueryBuilder` or `types.UpdateQueryBuilder` (a test double, a decorator), add the new methods before the bump — `go build ./...` names each one (C63.3); and check every type carrying `seal:"subject"` whose own `MarshalJSON` builds the JSON: a clear member whose name case-folds to the Subject member (`Card` beside `card`) now fails the publish instead of shipping the plaintext twin beside the ciphertext — no compiler and no config grep finds it (C63.5) |
 | E64 | v0.63.0 → v0.64.0 | breaking (C64.1 — a multi-column Oracle `SetMap` UPDATE orders its SET pairs by the caller's column names instead of by the QUOTED spelling, so a reserved word no longer leads the statement and the bind positions move with the columns; and `jf.NotEq` / `jff.NotEqColumn` render `<>` where they wrote `!=`) + breaking (C64.2 — a JOSE post-trust error envelope renders `error.details` only when `app.debug` is on AND `app.env` is a development alias, the gate the enveloped and raw renderers already applied; a production peer that parsed `error.details` off a decrypted JOSE error body stops receiving the key, while `code`, `message`, `meta` and the status are unchanged) + breaking (C64.3 — a PostgreSQL identifier ARGUMENT containing `#` — a column, table, alias, clause item, insert/SetMap key, upsert column, or a struct `db` tag name at `InsertStruct`/`InsertFields`/`SetStruct` — is refused at `ToSQL()` where it used to reach the server and fail there; Oracle, quoted identifiers and the wildcard are unchanged) + breaking (C64.4 — `keystore/testing.AssertKeyNotFound` aborts the caller's test when the public key is unexpectedly found instead of recording the failure and judging the private key too; the passing path, where the key is genuinely absent, is unchanged) + breaking (C64.5 — every builder door judges the vendor's identifier BYTE CAP per segment before the charset check — PostgreSQL 63, Oracle 128, unknown vendor 63, a quoted segment's interior included — so an over-long name is refused at `ToSQL()` where PostgreSQL used to truncate it silently at 63 bytes; the cap is never on the rendered whole, and separately the inbox store's table-name bound follows the store's vendor, 49 on PostgreSQL and still 114 on Oracle) + breaking (C64.6 — the same `keystore/testing.AssertKeyNotFound` now checks each lookup's returned KEY as well as its error, so a `KeyStore` handing back a cached key ALONGSIDE an error fails the helper where it used to pass; a stray key is reported by dynamic TYPE only, and the passing path, where the store returns `nil`, is unchanged) + breaking (C64.7 — both outbox store constructors judge the table name's SCHEMA segment against the STORE vendor's raw identifier cap, 63 on PostgreSQL and 128 on Oracle, so a PostgreSQL ledger configured with a 64-to-128-byte schema prefix is refused at construction where it used to boot and fail later inside the first `ToSQL()`; the table segment's 49-byte derived-affix budget and every Oracle name are unchanged) + breaking (C64.8 — a PostgreSQL section resolved through the connect seam — a `DBConfigProvider` result, or the migrate CLI — with an empty or whitespace-only `host` and no `connectionstring` is refused with `MissingFieldError` at first use where it used to reach pgx, which now dials libpq's default unix socket with TLS dropped; static sections, `connectionstring` sections and Oracle are unchanged) + breaking (C64.10 — every AMQP 0-9-1 publish becomes persistent, names its application and instant, and names its encoding, type and id wherever the framework knows them, falling back to octet-stream, an empty type and a minted id where it does not: `content_type` stops always reading `application/octet-stream` and now reads `application/json` from the typed handle, `application/jose` when that handle seals the event, or octet-stream on the raw bytes path and for an outbox row whose payload was a caller `[]byte`, while `app_id`, `timestamp` and `type` are set for the first time and `message_id` on an outbox-relayed publish becomes the row id, mirroring `x-outbox-event-id`, which stays the ledger key; a DURABLE queue that used to empty on every broker restart now retains, and all of it is framework-written with no caller knob) + breaking (C64.11 — the UNSEALED `Meta.DedupKey()` reads the AMQP `message_id` property when the delivery carries no `x-outbox-event-id` header at all, validated by the same `^[A-Za-z0-9_-]{1,128}$` grammar, so a delivery from a producer that follows the standard without being go-bricks dedups through `inbox.ProcessOnce` where it used to nack into the DLQ; the stamp still wins whenever it is present and a present-but-malformed stamp still errors rather than falling through, and the sealed branch is untouched) + topology-change (C64.12 — `DeclareQueueWithDLQ` declares BOTH queues it creates, the primary queue and the derived `<queue>.dlq` parking queue, as QUORUM queues by default, where both used to take whatever queue type the broker defaults to for the vhost; an existing classic queue of either kind cannot be redeclared as quorum, so startup fails with `PRECONDITION_FAILED` until you set the new `DeadLetterSpec.QueueType` to `messaging.QueueTypeClassic` or delete/migrate the queue) + breaking (C64.13 — an `app.name` longer than 255 bytes fails `config.Validate` at startup, naming the field, its byte length and the limit, where any length used to boot: the value becomes the `app_id` shortstr of every publish, a longer one cannot be written into the content-header frame, and amqp091 answers a frame-write failure by tearing down the whole Connection every publisher in the process shares — the same 255 applies per-publish to a `messaging.WithAppName` value the config check never saw, returning `messaging.ErrInvalidPublishDestination`) + breaking (C64.14 — outbox enqueue refuses two inputs it used to accept, both before the INSERT: an `EventType` longer than 255 BYTES, via `messaging.ValidatePublishEventType`, because the event type became the AMQP `type` shortstr this round while the ledger column bounds 255 of whatever the vendor counts — PostgreSQL `VARCHAR(255)` counts characters, Oracle `VARCHAR2(255)` counts bytes by default and characters only under CHAR semantics — so on PostgreSQL, and on a CHAR-semantics Oracle,a multibyte type the column accepted could exceed the byte ceiling, insert, and then park that tenant's whole outbox behind it until it exhausted `MaxRetries`; and any caller header claiming the reserved `x-gobricks-` prefix, refused case-insensitively with the new `outbox.ErrReservedHeaderPrefix` naming the key, since that namespace is where enqueue records the payload's encoding for the relay to put on the wire — the STREAM lane is deliberately unbounded, the event type travelling there as a properties value with no shortstr ceiling) + compile-break (C64.15 — `jose.Policy` gains a `map[string]any` protected-header field for the new bare-JWE mode and stops being comparable, so `==`, `!=` and map-key use on it no longer build; every existing policy still seals and opens the same bytes, `SealModeJWEofJWS` being the zero value) | 15 | C64.15 — comparing two `jose.Policy` values or keying a map on one stops compiling, in `_test.go` files as much as in production code, so run `go vet ./...` rather than `go build ./...` for it; none — C64.1's changes are rendering changes, invisible to the compiler and to every vendor that executes the SQL; C64.2 is a wire change on an encrypted body — no Go call site moves, so neither the compiler nor a grep of your own tree finds a peer that reads the field; none for C64.3 either — it is a runtime refusal, and the doors keep their signatures; and C64.4 changes only when your own tests stop; none — runtime refusals for C64.5 as well, a deferred `ToSQL()` error at the doors and one startup check in the inbox store, with no signature moving; none for C64.7 either — a runtime refusal inside `NewPostgresStore`/`NewOracleStore`, whose signatures do not move; none for C64.10 — no exported signature moves, the only new identifier (`messaging.WithAppName`) is additive, and every value that changes is written by the framework onto the WIRE, so the population is on the consumer side and at the broker; and none for C64.11, which is a WIDENING — no signature moves, no existing key changes, and the arm that stops firing is a refusal your own code may depend on none for C64.12 either — `DeadLetterSpec` GAINS a field, so every existing call site, `nil` and `&messaging.DeadLetterSpec{}` included, still compiles and still means what it said; the change is visible only at declaration time; none for C64.8 either — a runtime refusal on the connect seam, no signature moves; C64.9 is a transitive bump; and none for C64.13 — the population is a CONFIG value, refused by `config.Validate` at startup, and `AppConfig` gains no field; and none for C64.14 either — nothing in a consumer's build flags either half, since no signature moves and the population is a runtime call, `outbox.Publish`, that now returns an error | grep your golden-SQL fixtures, query-text matchers and driver-level captures for a rendered Oracle `UPDATE … SET` built from a `SetMap` whose keys include a quoted reserved word, and for the literal `!=` in SQL produced by `jf.NotEq` or `jff.NotEqColumn`: those assertions fail on the bump while the statements they pin keep their exact effect (C64.1); and if any peer, log pipeline or alert rule reads `error.details` off a JOSE route's decrypted error body in production, move it onto `code`/`message` BEFORE the bump — the key goes absent outside debug+development and nothing in your build will say so (C64.2); and grep every identifier ARGUMENT you hand the builder — column, table, alias, ORDER BY/GROUP BY item, insert or SetMap key, upsert column — for a `#`, which PostgreSQL treats as an operator: rename or quote those before the bump, since they now fail at `ToSQL()` rather than at execution (C64.3); and grep your own tests for `AssertKeyNotFound(` — a call site with statements after it that must run even when the public key is unexpectedly found now stops at the helper, so move that work into `t.Cleanup` before the bump (C64.4); and run ``git grep -nE '[`"][A-Za-z_][A-Za-z0-9_$#]{63,}' -- '*.go'`` (raise `{63,}` to `{128,}` on Oracle) for identifier-shaped literals that now exceed the vendor's cap, remembering it reads literals only and cannot see an identifier computed from config or metadata — and measure your `inbox.tablename`, which a PostgreSQL inbox store now bounds at 49 bytes and rejects at STARTUP (C64.5); and if any `app.KeyStore` you implement returns a cached key alongside an error on a refresh failure, that store now fails the same helper — fix the store, or assert the fallback with your own `PublicKey`/`PrivateKey` call rather than around the helper (C64.6); and measure the schema prefix in your `outbox.tablename` — a PostgreSQL outbox store now bounds that segment at 63 bytes and refuses it at construction, which is STARTUP on a static single-tenant or shared-ledger deployment and the first USE — publish or relay poll — where the store is built lazily (C64.7); and inventory the CONSUMERS of the events you publish, plus any non-Go listener, Shovel/Federation policy, alert or dashboard keyed on a delivery property, for a branch on `content_type`: it read one constant value and now reads three, so handle all of them and do NOT read `application/octet-stream` as "not JSON" — a persisted-sealed or hand-marshaled outbox payload ships under it, and a pre-upgrade backlog relays under it while post-upgrade rows ship `application/json`; query the broker with `rabbitmqctl list_queues name durable messages` for a DURABLE queue whose depth used to fall to zero on every restart, size its disk and set a TTL or max-length policy there if it must not retain, since there is no opt-out; and repoint any tool counting distinct `message_id`s as delivery ATTEMPTS: once the relay supplies the id it counts ROWS, while a minted id is generated once per logical publish and reused by its retries — dedupe on `x-outbox-event-id`, never on the property (C64.10); and read every `Meta.DedupKey()` call site for a branch that treats its error as "this delivery is unstamped, drop it" — that arm stops firing for a delivery carrying a `message_id`, so move the check into your own handler before the bump if you meant to reject those — and read the opposite arm too, since a handler that fell through that error to process WITHOUT dedup moves from at-least-once to exactly-once and a redelivery it used to re-run is now a silent skip+ACK; the population is not only foreign producers, because your own `DeclareTypedPublisher` queues carry a framework-minted `message_id` and no stamp, so a typed consumer of one of those now dedups broker redeliveries where `DedupKey` used to error; confirm your foreign producers make `message_id` unique per event, which AMQP does not oblige and the framework does not check, and expect DLQ'd deliveries refused for exactly this reason to process on replay (C64.11) inventory every `DeclareQueueWithDLQ` call site with `git grep -n 'DeclareQueueWithDLQ(' -- '*.go'`, then ask the broker (`rabbitmqctl list_queues name type`) for the type of each of those queues AND of each one's parking queue — `DeadLetterSpec.ParkingQueue` where the call site sets it, `<name>.dlq` only otherwise — a classic one cannot be redeclared as quorum, so decide per route BEFORE the bump whether to set `QueueType: messaging.QueueTypeClassic` (keeps today's topology, no downtime) or to drain, triage and delete both queues so the quorum pair can be declared (C64.12); and grep your DBConfigProvider implementations for a branch returning an empty or whitespace-only Host without a ConnectionString (C64.8); and measure the configured `app.name` in BYTES, not characters — `wc -c` on the value, since a multibyte name reaches 255 bytes well before it reaches 255 characters — in every source that feeds the service (YAML under `app:`, `APP_NAME`, a hand-built `config.AppConfig`, a config server or secret manager no grep reaches) and shorten anything over 255 before the bump, since it now takes the deployment down at boot rather than failing one operation; pass the same shortened value to `messaging.WithAppName` if you call it yourself (C64.13); and measure your event types in BYTES, not characters — a multibyte type reaches 255 bytes well before 255 characters — with the honest detector a query over the ledger you already have rather than a grep of source, since the value is usually data and not a literal: count the rows where `octet_length(event_type) > 255` on PostgreSQL or `LENGTHB(event_type) > 255` on Oracle, per outbox table and per tenant ledger; and grep your own header construction for `x-gobricks`, including wherever a name is assembled at runtime from configuration or request data, reading the framework's encoding stamp off the delivery's `content_type` property instead (C64.14); and `git grep -nE 'jose[.]Policy' -- '*.go'` for a `==`/`!=` between two policies or a map keyed on one — compare the fields you care about, or key on the kids (C64.15) |
+| E65 | v0.64.0 → v0.65.0 | silent-behavior (C65.1 — two `BuildUpsert` precondition messages change wording; the preconditions, and when they fire, do not) + breaking (C65.6 — a PostgreSQL section with no `connectionstring`, an absolute-path `host` entry (`/…`, or a drive path such as `C:\pg`, in any comma-separated position) and a `database.tls` block setting `ca`/`cert`/`key` or a `mode` other than `disable` is refused with a `database.tls` `ConfigError` at startup, at the first `deps.DB(ctx)` for a `DBConfigProvider` result, and in `go-bricks-migrate` at its next pin bump, where it used to connect over the unix socket with TLS silently skipped; and, new beyond C64.8's wholly empty host, a `host` with an empty comma-separated entry (`db.internal,`, `,db.internal`, `db1,,db2`) is refused with `MissingFieldError` on `database.host` on the same doors, TLS or not, where it used to boot; socket hosts without TLS, TCP hosts, raw `connectionstring` sections and Oracle are unchanged) + breaking (C65.2 — a PostgreSQL section's raw `connectionstring` is now judged by the DSN's own resolved host, closing the gap C65.1 left open: a DSN whose host resolves to nothing — none of the URI authority, a `?host=` query parameter, a keyword `host=`, or the `PGHOST` environment variable names one, or a comma-separated resolved entry is empty — is refused with a `database.connectionstring` `ConfigError`, and, on the same axis as C65.1, a DSN whose resolved host is a unix-socket entry while the DSN itself claims TLS is refused too; both run on `config.Validate`, `ApplyDatabasePoolDefaults`/`ApplyDatabasePoolDefaultsForKey`, and `go-bricks-migrate` at its next pin bump — the migrate CLI's `quiesce` command included, since it resolves its control-plane target through the same `tlsValidatingProvider`; `PGSERVICE`/service files and `PGSSL*` environment variables are not consulted, and a DSN the scanner cannot tokenize passes through unjudged) + breaking (C65.3 — `inferDatabaseTypeFromConnectionString` now infers `postgresql` from pgx's keyword/value form, which is what routes such a DSN into C65.2's rules at all: after the `postgres://`/`postgresql://`/`oracle://` prefixes, a string is keyword-form PostgreSQL only when it carries at least one `=`, tokenizes, and EVERY tokenized key matches libpq's keyword shape `[A-Za-z_][A-Za-z0-9_]*` — a positive key-shape test that rejects a single-line Oracle TNS descriptor (`(DESCRIPTION=(ADDRESS=…))`, which tokenizes as one pair keyed `(DESCRIPTION`), a JDBC URL and any foreign vendor URI without this seam knowing a single foreign scheme, while godror easy-connect, which carries no `=`, and an empty string still infer nothing. A section that used to stay untyped forever is now typed: it leaves `config.UntypedDatabaseSections` and no longer trips `app.Builder`'s untyped refusal, it gains the whole PostgreSQL vendor-rule set including ADR-062 R4's `database.tls` co-presence refusal, an explicit `type: oracle` beside such a DSN is now a `database.type` conflict error at startup, and `go-bricks-migrate`'s `quiesce` fail-open on an untyped control-plane DSN closes with it at the CLI's next pin bump) + compile-break (C65.7 — `inbox.ProcessOnce` takes a `messaging.DedupKey` instead of a string, `Metadata.DedupKey()` returns `(messaging.DedupKey, error)`, `messaging.ValidateDedupKey` takes a `DedupKey`, and `messaging.IsSealedDedupKey` is deleted; a key the consumer composes goes through the new `messaging.WireDedupKey`, and only the sealed consume door can produce a sealed key; persisted spellings are unchanged) + compile-break + breaking (C65.8 — under an `httpclient` JOSE `Inbound` policy, a 2xx response the transport did not unwrap is refused as `httpclient.ErrJOSEPlaintextResponse` instead of reaching the caller as plaintext: in nested mode a successful status whose `Content-Type` is not `application/jose`, in envelope mode one whose `Unwrap` declined the body; the body is closed and never handed to the caller or to a response interceptor, the refusal is exempt from the retry loop, the error and one WARN name the status and the peer, and non-2xx pass-through, 204/304/HEAD and every crypto failure are unchanged) | 6 | none for the other four — no signature moves; C65.1’s three sentinels are additive and C65.6 is a runtime refusal on the `database.tls` door; C65.8 (only partially — `JOSEConfig` GAINS an exported bool field and `JOSETransport` gains that bool plus `PeerName` and `Logger`, so an UNKEYED positional composite literal of either struct stops compiling and the compiler names it; a KEYED literal is unaffected, and the refusal itself is a RUNTIME change on a response path no compiler sees); C65.7 — every `ProcessOnce` call site, every implementer of `app.InboxProcessor` and every `IsSealedDedupKey` use stops compiling | grep for code matching `BuildUpsert` precondition text and switch it to `errors.Is` on the new `types.ErrUpsert*` sentinels (C65.1) ; and grep static config and read every `DBConfigProvider` implementation for an absolute-path `host` beside a `database.tls` block, then remove the block or move to a TCP host, and for a `host` with an empty entry, then remove the stray comma or name every entry (C65.6); and read every PostgreSQL `connectionstring` — static config, `DBConfigProvider` branches, and the migrate CLI's control-plane target (`--tenant`) — for a DSN naming no host through the URI authority, a `?host=` query parameter, a keyword `host=`, or `PGHOST`, or naming a unix-socket host beside a TLS claim inside the DSN text, then add a host through one of those four sources or drop the TLS claim (C65.2); and grep the same three populations for a keyword-form `connectionstring` (`git grep -nE "connectionstring:[[:space:]]*[\"']?[^:/[:space:]]+=" -- '*.yaml' '*.yml'`), then either accept the inferred `postgresql` type and the vendor rules that come with it, or set `type:` explicitly — and change any `type: oracle` spelled beside a keyword-form DSN, which is now a conflict error (C65.3); and none for the typed dedup key — no ledger row, DLQ spelling or metric label moves; if a sealed consumer handed `ProcessOnce` a string it read from `MessageID()`, `Headers()`, `outbox.EventIDFromHeaders` or its body, decide before the bump which key it should use, since that string can no longer become a sealed key (C65.7); and add the new value, or convert the literal to keyed fields, wherever you build a `JOSETransport` or `JOSEConfig` positionally — `git grep -n 'JOSETransport{' -- '*.go'` and `git grep -n 'JOSEConfig{' -- '*.go'` shortlist them; then inventory the peers you reach through JOSE with `git grep -n 'WithJOSE(' -- '*.go'` and again with `git grep -n 'JOSETransport{' -- '*.go'` (two runs, because an alternation cannot live in a table cell) and, for each, establish from the partner spec or from a capture whether EVERY 2xx route returns a protected body — a health check, a redirect-shaped 2xx, a 202 acknowledgement or a legacy route half-migrated to MLE is the population that breaks; set `AllowPlaintextSuccess: true` on exactly those integrations BEFORE the bump and clear it once the peer protects every route (C65.8) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 
@@ -962,7 +963,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - detect: `git grep -n 'WithJOSE(' -- '*.go'` to find the clients, then read every request built from one that carries **no payload**, whatever the method — `client.Get(ctx, url)`, `client.Post(ctx, url, nil)`, a `http.NewRequest(m, url, nil)`, or any call passing `http.NoBody`. `git grep -nE '\.(Get|Head|Delete|Post|Put|Patch|Do)\(|http\.NewRequest|http\.NoBody' -- '*.go'` enumerates the send paths — the convenience verbs are not the only way in, so it also catches `Do`, both `NewRequest` constructors, and a directly-passed `http.NoBody`. Treat it as best-effort: a request built by your own wrapper, or handed over as a struct literal, will not match, so trace those by hand. Do not skip `GET`/`HEAD`/`DELETE`: those were the shapes this hop stopped sealing, so a peer that accepted a sealed bodyless `GET` is affected exactly like a mutating one — it was simply also the shape gateways were already dropping, which is why the bug surfaced there first.
 - gate: match = you issue a payload-free request of any method through a `WithJOSE` client to an endpoint that requires `application/jose` on that request. Decide it per bodyless call site, not per client: a peer can accept a bare `GET` on a status endpoint and still demand JOSE on a payload-free `POST`, or demand it only on its protected routes. A payload-free `POST`/`PUT`/`PATCH` is the likeliest match, because a sealed bodyless `GET`/`HEAD`/`DELETE` was already being dropped by most gateways. no-match = the client has no bodyless call site at all, or every bodyless call site targets an endpoint that accepts a bare request. A client whose `POST`s all carry payloads is not automatically clear — one payload-free `GET` is enough to match. Note the rule is **body presence, not method**: a `POST` with a body is sealed exactly as before, and nothing about the sealed shape changed.
 - apply: for a `POST`/`PUT`/`PATCH`, give the request an explicit body so the seal still runs and the `application/jose` Content-Type is still set. Use the smallest payload the peer's schema accepts — `{}` works only where the peer tolerates an empty object, and sending it to an endpoint that validates a schema trades a 415 for a 400. Do **not** do that for a `GET`/`HEAD`/`DELETE`: a body on those is what gateways, CDNs and ALBs drop, so adding one to satisfy the peer reintroduces the defect this hop fixes — that combination is a contradictory contract and needs the peer to accept a bare request. Either way, do not work around it by re-sealing empty payloads at the call site. A partner that genuinely requires sealed bodyless requests needs an opt-in `SealBodyless` flag on `JOSETransport` — file that rather than reverting the guard. **Security note:** giving the request a body restores the Content-Type, not an authentication guarantee. `jose.Seal` signs the payload verbatim and injects no `iat`, `jti`, or request binding, so a JWS over `{}` attests only that someone holding the signing key signed two bytes — it is replayable against any endpoint. If your peer relies on the JWS to authenticate the caller, put `iat` and `jti` in that body and pair them with the peer's replay window.
-- verify: point the client at the peer's action endpoint and confirm the payload-free call is not answered `415`. On the wire (or in an interceptor) a request you intend to be bodyless should carry no `Content-Type: application/jose` and either no `Content-Length` header at all or `Content-Length: 0` — which of the two net/http puts on the wire varies with the method and protocol version, so check the actual request rather than assuming one form — while a request you have given a body should carry the sealed compact JWE. The response direction needs no check: a JOSE-typed reply that carries a body is still decrypted and verified, and a reply that RFC 9110 says carries none (`1xx`, `204`, `304`, any answer to `HEAD`) now passes through instead of failing `JOSE_MALFORMED` — strictly more permissive, so nothing that worked before can break.
+- verify: point the client at the peer's action endpoint and confirm the payload-free call is not answered `415`. On the wire (or in an interceptor) a request you intend to be bodyless should carry no `Content-Type: application/jose` and either no `Content-Length` header at all or `Content-Length: 0` — which of the two net/http puts on the wire varies with the method and protocol version, so check the actual request rather than assuming one form — while a request you have given a body should carry the sealed compact JWE. The response direction needs no check: a JOSE-typed reply that carries a body is still decrypted and verified, and a reply that carries none (`204`, `304`, any answer to `HEAD`, or an informational status below `200` — `101` excepted, which is passed through too but keeps the live upgraded connection that is its body) now passes through instead of failing `JOSE_MALFORMED` — strictly more permissive, so nothing that worked before can break.
 - ref: `httpclient/jose_transport.go` (`wrapRequest`, `unwrapResponse`) · [wiki/jose.md](jose.md)
 
 ### [C56.9] The `cache.Manager` interface is removed · compile-break · when: match
@@ -5119,26 +5120,26 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   NOT validated against the identifier grammar in either form — it is a predicate, not an
   identifier (ADR-082).
 - gate: match = your code calls `Having` at all. no-match = it does not.
-- apply: prefer the expression spelling, which needs no annotation — exempt for
-  consistency with `Select`/`GroupBy`/`OrderBy`, NOT because it is safer.
-  `RawExpression.Validate()` never inspects the SQL body, so an expression body is
-  raw SQL exactly as a string predicate is; review it the same way, and grep it by
-  its own name (`git grep -nE 'MustExpr\(|[.]Expr\(|RawExpression\{'`) rather than by an
-  annotation. Whether `qb.Expr` bodies should carry the annotation repo-wide is a
-  policy question above this change; it is filed separately. —
+- apply: prefer the expression spelling for consistency with `Select`, `GroupBy` and
+  `OrderBy`, NOT because it is safer. `RawExpression.Validate()` never inspects the
+  SQL body, so an expression body is raw SQL exactly as a string predicate is; review
+  it the same way and annotate it the same way (see the #1192 amendment below). —
 
   ```go
   // before — the only spelling that worked
   qb.Select("dept").From("emp").GroupBy("dept").Having("SUM(amount) > ?", 100)
 
   // after — sanctioned; qb.Expr returns (RawExpression, error), qb.MustExpr panics instead
+  // SECURITY: Manual SQL review completed - constant predicate, no caller input, value parameterized
   qb.Select("dept").From("emp").GroupBy("dept").Having(qb.MustExpr("SUM(amount) > ?"), 100)
   ```
 
   Keep a string predicate where the expression form does not fit, and annotate it at the call
   site naming what you checked — value-side parameterization, no user input concatenated.
-- verify: `git grep -nE 'Having\(' -- '*.go'` and confirm every string-predicate hit has an
-  annotation above it; then run one query each way and read the SQL — the expression form must
+- verify: `git grep -nE 'SetExpr\(|Having\(|MustExpr\(|[.]Expr\(|RawExpression\{' -- '*.go'` and confirm
+  every string-predicate and expression hit has an annotation above it (squirrel's own `Expr`
+  inside `database/internal/builder`, and the `Expr`/`MustExpr` doors themselves
+  (`database/types`, the builder, `testing/mocks`), are plumbing — skip those hits); then run one query each way and read the SQL — the expression form must
   render `HAVING SUM(amount) > $2` (`:2` on Oracle) with the arg numbered AFTER any `Where`
   arg, and `Having(qb.MustExpr("x > ?", "alias"), 1)` must fail `ToSQL()` with
   `errors.Is(err, dbtypes.ErrAliasInHaving)`. Use a DANGEROUS alias as a second case —
@@ -5147,6 +5148,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   A benign alias alone cannot tell the two orderings apart.
 - ref: #1147 · #1146 · `database/internal/builder/query_builder.go` (`Having`) ·
   `database/types/errors.go` (`ErrAliasInHaving`) · [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md)
+- amendment (2026-09-12, #1192, additive): the `qb.Expr()` exemption this atom first recorded is
+  withdrawn — the annotation duty covers a struct literal and every door, not only `Having`.
+  Nothing renders or validates differently.
 
 ---
 
@@ -7353,40 +7357,6 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   made the event type a wire property and the payload's encoding a stamp on the row in the first
   place
 
----
-
-*The sections below are reference material: the two config-key rename lookup tables (linked from atoms C401.1 and C41.7), followed by pre-v0.39 changes retained for consumers upgrading from older releases.*
-
-## Config Keys — Flat-Smushed Rename (ADR-024)
-
-Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were renamed to the framework's underscore-free flat-smushed convention so they become settable via environment variables (the env loader maps `_`→`.`, koanf's nesting delimiter, so underscored leaf keys were silently unreachable from env). Update both your YAML and any environment variables. Go field names are unchanged.
-
-| Old key (YAML) | New key (YAML) | Old env var (broken) | New env var |
-| --- | --- | --- | --- |
-| `cache.manager.max_size` | `cache.manager.maxsize` | `CACHE_MANAGER_MAX_SIZE` | `CACHE_MANAGER_MAXSIZE` |
-| `cache.manager.idle_ttl` | `cache.manager.idlettl` | `CACHE_MANAGER_IDLE_TTL` | `CACHE_MANAGER_IDLETTL` |
-| `cache.manager.cleanup_interval` | `cache.manager.cleanupinterval` | `CACHE_MANAGER_CLEANUP_INTERVAL` | `CACHE_MANAGER_CLEANUPINTERVAL` |
-| `log.sensitive_fields` | `log.sensitivefields` | `LOG_SENSITIVE_FIELDS` | `LOG_SENSITIVEFIELDS` |
-| `messaging.reconnect.reinit_delay` | `messaging.reconnect.reinitdelay` | `MESSAGING_RECONNECT_REINIT_DELAY` | `MESSAGING_RECONNECT_REINITDELAY` |
-| `messaging.reconnect.resend_delay` | `messaging.reconnect.resenddelay` | `MESSAGING_RECONNECT_RESEND_DELAY` | `MESSAGING_RECONNECT_RESENDDELAY` |
-| `messaging.reconnect.connection_timeout` | `messaging.reconnect.connectiontimeout` | `MESSAGING_RECONNECT_CONNECTION_TIMEOUT` | `MESSAGING_RECONNECT_CONNECTIONTIMEOUT` |
-| `messaging.reconnect.max_delay` | `messaging.reconnect.maxdelay` | `MESSAGING_RECONNECT_MAX_DELAY` | `MESSAGING_RECONNECT_MAXDELAY` |
-| `messaging.publisher.max_cached` | `messaging.publisher.maxcached` | `MESSAGING_PUBLISHER_MAX_CACHED` | `MESSAGING_PUBLISHER_MAXCACHED` |
-| `messaging.publisher.idle_ttl` | `messaging.publisher.idlettl` | `MESSAGING_PUBLISHER_IDLE_TTL` | `MESSAGING_PUBLISHER_IDLETTL` |
-| `outbox.table_name` | `outbox.tablename` | `OUTBOX_TABLE_NAME` | `OUTBOX_TABLENAME` |
-| `outbox.auto_create_table` | `outbox.autocreatetable` | `OUTBOX_AUTO_CREATE_TABLE` | `OUTBOX_AUTOCREATETABLE` |
-| `outbox.default_exchange` | `outbox.defaultexchange` | `OUTBOX_DEFAULT_EXCHANGE` | `OUTBOX_DEFAULTEXCHANGE` |
-| `outbox.poll_interval` | `outbox.pollinterval` | `OUTBOX_POLL_INTERVAL` | `OUTBOX_POLLINTERVAL` |
-| `outbox.batch_size` | `outbox.batchsize` | `OUTBOX_BATCH_SIZE` | `OUTBOX_BATCHSIZE` |
-| `outbox.max_retries` | `outbox.maxretries` | `OUTBOX_MAX_RETRIES` | `OUTBOX_MAXRETRIES` |
-| `outbox.retention_period` | `outbox.retentionperiod` | `OUTBOX_RETENTION_PERIOD` | `OUTBOX_RETENTIONPERIOD` |
-| `inbox.table_name` | `inbox.tablename` | `INBOX_TABLE_NAME` | `INBOX_TABLENAME` |
-| `inbox.auto_create_table` | `inbox.autocreatetable` | `INBOX_AUTO_CREATE_TABLE` | `INBOX_AUTOCREATETABLE` |
-| `inbox.retention_period` | `inbox.retentionperiod` | `INBOX_RETENTION_PERIOD` | `INBOX_RETENTIONPERIOD` |
-| `keystore.secret_min_length` | `keystore.secretminlength` | `KEYSTORE_SECRET_MIN_LENGTH` | `KEYSTORE_SECRETMINLENGTH` |
-
-> The "old env var" column never worked (that is the bug ADR-024 fixes); it is shown only to help locate occurrences in existing deployment manifests.
-
 ### [C64.15] `jose.Policy` stops being comparable · compile-break · when: match
 
 - detect: `git grep -nE 'jose[.]Policy' -- '*.go'` shortlists every file naming the type; the hits
@@ -8595,6 +8565,496 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
 - ref: [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) (its 2026-08-23
   addendum) · [ADR-081](adr_081_recovered_panic_values_reported_by_type.md) (why the panic
   value is a typed error) · issue #1150
+
+---
+
+## E65 · v0.64.0 → v0.65.0 — `BuildUpsert` preconditions become matchable sentinels + a unix-socket PostgreSQL host refuses the TLS it cannot carry + the inbox ledger key is typed by the door that produced it + a successful JOSE response that was never unwrapped is a transport error
+
+- gist: `database/types` exports `ErrUpsertConflictColumnsRequired`,
+  `ErrUpsertConflictColumnNotInserted` and `ErrUpsertConflictColumnInUpdateSet`, which
+  `BuildUpsert` returns for its three preconditions (C65.1, #998).
+- gist: three atoms. pgx v5 dials a host that is an absolute path over a unix socket and
+  appends no TLS config there, so a typed PostgreSQL section pairing `host: /var/run/postgresql`
+  with a `database.tls` block booted green and connected in plaintext.
+  `validatePostgreSQLFields` now judges the host's transport before the material/mode rule and
+  refuses that pairing with a `database.tls` `ConfigError` on every door it guards, and also
+  refuses an empty comma-separated `host` entry (`db.internal,`), TLS or not, which pgx swaps
+  for the socket directory (C65.6, ADR-062 amendment). A raw `connectionstring` DSN then gets
+  those same two refusals judged against its OWN resolved host — no host source names one, or
+  the resolved host is a socket entry while the DSN itself claims TLS — closing the gap C65.6
+  left open (C65.2, ADR-050 amendment). Finally, type inference widens past the URI scheme to
+  pgx's keyword/value form, judged by a positive key-shape test, so `host=/var/run/postgresql
+  sslmode=verify-full` infers `postgresql` and reaches C65.2's rules at all — which is also what
+  closes the migrate CLI's `quiesce` fail-open on an untyped control-plane DSN. A section that
+  relied on staying untyped is now typed, leaves `UntypedDatabaseSections`, gains the whole
+  PostgreSQL vendor-rule set, and conflicts with an explicit `type: oracle` (C65.3, ADR-050
+  amendment).
+- gist: `inbox.ProcessOnce` keyed the ledger on whatever string it was handed, and under a sealed
+  delivery's context `ValidateDedupKey` admitted any `<SignFamily>:<jti>`-shaped string. A sealed
+  handler that passed a caller-written value — `Metadata.MessageID()`, a header, the result of
+  `outbox.EventIDFromHeaders`, a body field — could therefore occupy a victim's sealed ledger row
+  and make the real delivery skip+ACK. The key is now a value type, `messaging.DedupKey`, that
+  records which door produced it: only the sealed consume door mints a sealed one, every other key
+  is built by `messaging.WireDedupKey` under the ledger grammar, and `ProcessOnce` accepts nothing
+  else (C65.7, ADR-097 amendment).
+
+- gist: `JOSETransport` passed every body it did not recognize straight through. In nested
+  mode that was any response whose `Content-Type` was not `application/jose`; in envelope
+  mode, any body `Unwrap` declined. The rule was written for pre-trust error envelopes —
+  a peer that rejects a request before authenticating it has nothing to encrypt with, so
+  its `{code,message}` reply is plaintext by design — but it was applied to every status
+  code, and that is where it stopped being safe. On a 2xx the peer is asserting the request
+  was honored; under an `Inbound` policy the reply carrying that verdict must have been
+  decrypted, or the caller is reading bytes nothing authenticated. A ciphertext stripped by
+  a middlebox, a route quietly switched back to plaintext, and a genuine protected response
+  were indistinguishable at the caller, and the failure mode was silent success. The rule is
+  now directional: a 2xx must have been unwrapped, or `RoundTrip` returns
+  `httpclient.ErrJOSEPlaintextResponse` — wrapped with the status and the peer name, with the
+  body closed and never handed back, and one WARN naming that same status and peer, never the
+  body itself. Non-2xx pass-through is
+  untouched, as are the bodyless shapes net/http
+  guarantees are empty (204, 304, every reply to HEAD) and every crypto failure, which still
+  fails closed as it did. A `RoundTrip` error short-circuits the response build, so the
+  refused body never reaches a response interceptor. `AllowPlaintextSuccess`, on `JOSETransport` and
+  on `JOSEConfig`, restores the old behaviour for a whole transport — the Strangler-migration
+  knob for a peer that still answers some 2xx routes in plaintext (C65.8, ADR-107 amendment).
+
+---
+
+### [C65.1] `BuildUpsert` precondition errors wrap exported sentinels · silent-behavior · when: match
+
+- detect: `git grep -n -e 'must be present in insert columns' -e 'collides with conflict column' -- '*.go'`
+  over your own modules — any hit outside go-bricks is code or a test matching the message text.
+- scope: `ErrUpsertConflictColumnsRequired` is returned bare, text unchanged; the other two are
+  wrapped with the offending columns, so their wording changes. Both phrases above survive in
+  the new messages.
+- gate: match = a hit that compares either wrapped precondition's FULL message (`EqualError`,
+  `err.Error() ==`) or uses a pattern spanning the quoted column's old place
+  (`conflict column "c" must be present`, `update column "u" collides`). no-match = no hit,
+  every hit already uses `errors.Is`, or a hit that only substring-matches
+  `must be present in insert columns` / `collides with conflict column` — that still passes.
+- before: `conflict column "c" must be present in insert columns for upsert` and
+  `update column "u" collides with conflict column "c" (…)`.
+- after: `<sentinel text>: column "c"` and `<sentinel text>: update column "u", conflict column "c"`.
+- apply: replace the text match with `errors.Is(err, types.ErrUpsertConflictColumnNotInserted)` /
+  `errors.Is(err, types.ErrUpsertConflictColumnInUpdateSet)`; substring-match the quoted
+  column if you still need it.
+- verify: `go build ./... && go test ./...`
+- ref: gaborage/go-bricks#998 · [C59.7] · [C59.8] · `database/types/errors.go` ·
+  `database/internal/builder/helpers.go`
+
+### [C65.6] a unix-socket PostgreSQL host refuses a `database.tls` block that asks for TLS · breaking · when: match
+
+- detect: two populations, both PostgreSQL sections with no `connectionstring`. (i) Any
+  comma-separated `host` entry starts with `/`, or with an uppercase drive letter and `:\`,
+  AND `database.tls` sets `ca`, `cert` or `key`, or a `mode` other than `disable`. (ii) Any
+  comma-separated `host` entry is empty (`db.internal,`, `,db.internal`, `db1,,db2`), with or
+  without a `tls` block — NEW in this hop: `[C64.8]` refused only a wholly empty host, and these
+  used to boot. Static config:
+  `git grep -nE "host:[[:space:]]*[\"']?[[:space:]]*((/|[A-Z]:\\\\)|[^#]*,)" -- '*.yaml' '*.yml'`,
+  then read each hit's host for (ii) and the `tls:` block of its section for (i); check env overrides (`DATABASE_HOST` and the named-database and
+  tenant forms) and every deployment's values the same way, since a grep of the repository does
+  not reach them. Provider implementations: `git grep -nE 'DBConfigProvider' -- '*.go'` to find
+  them, then READ each one for a branch returning a `DatabaseConfig` whose `Host` is a socket
+  path beside a non-zero `TLS`, or a host list that can carry an empty entry — a host that arrives from a config server, a tenant record or a
+  secret is inventoried by hand, because no grep reaches the value. Test fixtures are part of the
+  population: a hand-built `DatabaseConfig` with `Host: "/..."` and a `TLS` field reaches the
+  seam the same way production config does.
+- scope: `validatePostgreSQLFields` gains two refusals. (ii) First, the empty-host refusal
+  widens from the whole `host` to each comma-separated entry: an empty entry — which pgx swaps
+  for the socket directory, where TLS is skipped — is refused with the same `MissingFieldError`
+  on `database.host` as `[C64.8]`, TLS or not, ahead of every TLS check. (i) Then, between the
+  mode allowlist and the material/mode coherence check, when any entry of the trimmed `host`, split on `,` exactly as
+  pgx splits it (no per-entry trim), matches pgx's `isAbsolutePath`
+  exactly — a leading `/`, or one ASCII uppercase letter followed by `:\`; `c:\pg`, `C:/pg` and
+  `./relative` do not — any of `tls.ca`/`tls.cert`/`tls.key`, or a `tls.mode` other than
+  `disable`, is refused as a `ConfigError` on `database.tls`, section-qualified
+  (`databases.<name>.tls`, `multitenant.tenants.<id>.database.tls`), with a message naming the
+  unix socket host. An unset mode counts as unset: nothing on this seam defaults it (pgx's
+  `prefer` applies later, at parse time), so a socket host with no `tls` block, or with
+  `mode: disable` and no material, is accepted and renders the same DSN as before. An invalid
+  `tls.mode` still reports `database.tls.mode` first; material on a socket host now gets this
+  message where it used to get the material/mode or cert/key pairing one. It runs on every door:
+  `config.Validate` at startup, `ApplyDatabasePoolDefaults` / `ApplyDatabasePoolDefaultsForKey`
+  at the first `deps.DB(ctx)` for a provider result, and `go-bricks-migrate` at its next pin
+  bump. Oracle is unchanged (it refuses the whole block already), and a raw `connectionstring`
+  is NOT covered by THIS atom — `host=/var/run/postgresql` inside a DSN is judged by `[C65.2]`
+  in the same hop instead (gaborage/go-bricks#1551). No signature moves. `TestApplyDatabasePoolDefaultsRefusesTLSOnUnixSocketHost`
+  (i) and `TestApplyDatabasePoolDefaultsRefusesEmptyPostgresHost`'s `multi_host_*_empty_entry_*`
+  cases (ii), both in `config/database_section_test.go`, cover `go-bricks-migrate`'s dbtls path
+  too: `tlsValidatingProvider` (`tools/migration/internal/commands/dbtls.go`) calls
+  `config.ApplyDatabasePoolDefaults`, effective at the CLI's next go-bricks pin bump.
+- gate: match = such a section, override or provider branch exists.
+- apply: for (ii), remove the stray comma or name every host entry. For (i), pick one exit
+  per section. (a) Remove the `database.tls` block — the socket is local
+  and TLS was never negotiated on it, so this is the config that matches what already ran;
+  keep `mode: disable` only if you want that spelled out. (b) Use a TCP host (`localhost`, or
+  the server's address) so the block actually applies — confirm the server accepts TLS on that
+  listener first, since the socket connection never exercised it.
+- verify: `go build ./... && go test ./...`  # then boot, or resolve one tenant through your
+  provider, and confirm the connection is acquired
+- ref: gaborage/go-bricks#1555 ·
+  [ADR-062](adr_062_database_tls_fail_closed.md) amendment 2026-09-13 ·
+  `config/database_section.go` (`validatePostgreSQLFields`, `isUnixSocketHost`) · same axis as
+  [C64.8]
+
+---
+
+### [C65.2] a raw PostgreSQL connectionstring is refused on the same two axes as the typed fields · breaking · when: match
+
+- detect: three populations. Static config: `git grep -nE 'connectionstring:' -- '*.yaml' '*.yml'`
+  under a PostgreSQL section (or one whose scheme or keyword form infers PostgreSQL), then read
+  each DSN by
+  pgx's own precedence — the URI authority, a `?host=` query parameter, a keyword `host=`, or
+  `PGHOST` — since a grep cannot resolve a DSN's effective host the way `config.scanPostgresDSN`
+  does; a service (`service=`/`PGSERVICE`) is not one of the four sources this rule reads, so a
+  DSN relying on one for its host is part of the population too. Provider implementations:
+  `git grep -nE 'DBConfigProvider' -- '*.go'`, then READ each one for a branch returning a
+  `ConnectionString` whose resolved host is absent, empty, or a socket path beside a TLS claim
+  inside the DSN text itself. The migrate CLI's `quiesce` command: `resolveControlPlaneConfig`
+  (`tools/migration/internal/commands/quiesce.go`) resolves its `--tenant` target through
+  `provider.DBConfig`, and `buildConfigProvider` (`common.go`) always wraps that provider in
+  `tlsValidatingProvider` (`dbtls.go`) — the same seam the `migrate`/`validate` commands already
+  route through — so a control-plane `connectionstring` failing either rule below refuses there
+  too, at the CLI's next go-bricks pin bump. Test fixtures are part of the population: a
+  hand-built `DatabaseConfig{ConnectionString: "..."}` reaches the seam the same way production
+  config does, with or without an explicit `Type` now that `[C65.3]` infers one for a
+  keyword-form DSN.
+- scope: in `validatePostgreSQLFields`'s `ConnectionString` branch, after the `database.tls`
+  co-presence refusal (`[R4]`, ADR-062), the new `validatePostgreSQLConnectionString` scans the
+  DSN with `config.scanPostgresDSN` and, when it tokenizes, judges the SAME resolved host
+  `[C64.8]`/`[C65.6]` judge on the typed fields — never the raw connection string text. (1)
+  Unconditional, on the same axis as `[C64.8]`: refused when no host source names one at all
+  (`scanPostgresDSN`'s `hostSet` is false and `PGHOST` is empty) or when any comma-separated
+  entry of the resolved host is empty — pgx swaps either shape for the socket directory. `PGHOST`
+  is consulted only when the DSN carries no `host` key at all; an empty `host=` key still shadows
+  it, matching pgx's own merge precedence, so a DSN that merely fails to set `host=` to a
+  non-empty value is refused before `PGHOST` is ever read. (2) On the same axis as `[C65.6]`:
+  refused when the DSN claims TLS — `sslmode` is `require`/`verify-ca`/`verify-full`,
+  `sslnegotiation=direct` (which pgx upgrades `prefer`/unset to `require`, even paired with
+  `sslmode=disable`/`allow`, where pgx itself would connect in plaintext and libpq refuses the
+  combination — a claim only ever ADDS this refusal, never suppresses rule (1)), or any of
+  `sslrootcert`/`sslcert`/`sslkey` is non-empty (empty material, `sslcert=''`, does not claim,
+  following pgx's own `configTLS`) — and the resolved host has a comma-separated entry that is a
+  unix-socket path (`isUnixSocketHost`, unchanged from `[C65.6]`). Both refusals address
+  `database.connectionstring` (root-spelled `fieldDatabaseConnectionString`, section-qualified by
+  the same `section.qualify` seam every other database error uses, so a named section reports
+  `databases.<name>.connectionstring`); rule (1)'s `Category` matches `errMissingDatabaseHost`
+  (`missing` — the same defect class, a host that does not resolve), rule (2)'s matches
+  `[C65.6]`'s typed refusal (`invalid` — a coherent-looking DSN whose claims contradict each
+  other). Neither message nor action ever echoes the connection string or a host entry — a
+  scanned host can carry password text (`host= password=hunter2`, where pgx skips whitespace
+  after `=` and the NEXT pair becomes the host value). `PGSERVICE`/`service=` and service files
+  are never consulted: a DSN whose host would come only from a service file is refused as
+  host-less by rule (1), and — the flip side of the same gap — a service file can supply a
+  socket host this rule never sees, so a DSN combining `service=` with a TLS-claiming `sslmode`
+  is NOT refused by rule (2) even when the service file's own host is a socket. The `PGSSL*`
+  environment variables are likewise never judged, and that one is a RESIDUAL INSTANCE of the
+  defect rule (2) closes rather than a scope boundary: `PGSSLMODE=verify-full` (or
+  `PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY`) beside `connectionstring: "host=/var/run/postgresql
+  user=u"` is accepted and then dialed by pgx with `TLSConfig == nil`, TLS silently dropped —
+  deliberately out of scope because `claimsTLS` reads DSN text only, and asymmetric with
+  `PGHOST`, which this rule does read; tracked as gaborage/go-bricks#1632 and pinned as accepted
+  by `TestApplyDatabasePoolDefaultsAcceptsPGSSLEnvTLSClaimOnSocketDSN`.
+  `scanPostgresDSN`'s `ok=false` (untokenizable)
+  passes through unjudged — this seam must never refuse what pgx itself accepts, and
+  `database/postgresql`'s `TestPgxRejectsConnectionStringsTheConfigScannerCannotTokenize` proves
+  pgx rejects the same strings the scanner cannot tokenize. Runs wherever `validatePostgreSQLFields`
+  already runs: `config.Validate` at startup, `ApplyDatabasePoolDefaults` /
+  `ApplyDatabasePoolDefaultsForKey` at the first `deps.DB(ctx)` for a provider result, and
+  `go-bricks-migrate` at its next pin bump — the `migrate`/`validate` commands via `dbtls.go`,
+  and now explicitly the `quiesce` command, whose `resolveControlPlaneConfig` resolves through
+  the same `tlsValidatingProvider`. Oracle is unchanged (`validateOracleFields` never calls this).
+  This atom fires on a URI-form DSN on its own, while `[C65.3]`, in the same hop, is what routes
+  a keyword-form DSN into these rules at all. No signature moves.
+  `TestApplyDatabasePoolDefaultsRefusesImplicitSocketConnectionString` (1)
+  and `TestApplyDatabasePoolDefaultsRefusesTLSClaimOnSocketConnectionString` (2), both in
+  `config/database_section_test.go`, pin it; `internal/testutil.PostgresDSNHostCases` is shared
+  with `database/postgresql`'s `TestPgxResolvesSameHostAsConfigScanner` so the two host mirrors
+  cannot silently drift apart on a pgx bump.
+- gate: match = such a connection string, override, or provider branch exists — a DSN whose
+  resolved host is absent, empty-entried, or a socket beside a TLS claim.
+- apply: pick one exit per DSN. For (1), name a host through one of the four sources pgx itself
+  consults — the URI authority, a `?host=` query parameter, a keyword `host=`, or `PGHOST` — a
+  service file is not one of them, since this rule never reads it. For (2), drop the TLS claim
+  from the connection string, or point it at a TCP host.
+- verify: `go build ./... && go test ./...`  # then boot, or resolve one tenant through your
+  provider, and confirm the connection is acquired; for the migrate CLI, run `quiesce status
+  --tenant <id>` against the control-plane target and confirm it resolves.
+- ref: gaborage/go-bricks#1551 ·
+  [ADR-050](adr_050_connectionstring_type_inference.md) amendment 2026-09-13 ·
+  `config/postgres_dsn.go` (`scanPostgresDSN`) ·
+  `config/database_section.go` (`validatePostgreSQLConnectionString`) · same axis as
+  [C64.8], [C65.6]
+
+---
+
+### [C65.3] a keyword-form connectionstring now infers `postgresql` · breaking · when: match
+
+- detect: every section whose `connectionstring` is written in pgx's keyword/value form —
+  anything that is not `postgres://`, `postgresql://` or `oracle://`, carries at least one `=`,
+  tokenizes, and yields only keys with libpq's keyword shape (`host=db.internal user=u`,
+  `user=u dbname=d`, `service=svc sslmode=require`) — AND carries no explicit `type:`, or
+  carries `type: oracle`.
+  `git grep -nE "connectionstring:[[:space:]]*[\"']?[^:/[:space:]]+=" -- '*.yaml' '*.yml'` finds
+  the static candidates; read each hit's section for a sibling `type:`, and discard the hits
+  whose keys are not keyword-shaped — an Oracle TNS descriptor, a JDBC URL or a foreign vendor's
+  URI is NOT part of the population (see scope). Provider implementations and
+  the migrate CLI's `--tenant` control-plane target are the same two hand-read populations as
+  `[C65.2]`, asked a different question: does any branch return a keyword-form
+  `ConnectionString` with `Type` left empty (previously permanent) or set to `config.Oracle`?
+  Sections that deliberately relied on staying untyped — a custom `Options.DatabaseConnector`
+  that parses the DSN itself, and so was exempt from `app.Builder`'s untyped refusal — are part
+  of the population even though nothing about them was wrong.
+- scope: `inferDatabaseTypeFromConnectionString` no longer looks only at a URI scheme. The
+  `postgres://`/`postgresql://`/`oracle://` prefixes are still tested first (so
+  `oracle://u:p@h/svc?timezone=UTC` stays Oracle), and a string matching none of them is offered
+  to `isPostgresKeywordDSN`, which infers `postgresql` only when the string passes a POSITIVE
+  key-shape test: (1) it contains at least one `=` (a cheap pre-guard), (2) it tokenizes through
+  `pgKeywordSettings` — the pgx keyword/value tokenizer `config/postgres_dsn.go` already mirrors
+  — into at least one pair, and (3) EVERY tokenized key matches libpq's keyword shape
+  `[A-Za-z_][A-Za-z0-9_]*` (`isPostgresKeywordName`). The key shape is what keeps foreign DSNs
+  out, and it does so with no knowledge of any foreign scheme: a single-line Oracle TNS
+  descriptor —
+  `(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=host)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=XE)))`,
+  a shape go-bricks supports and `database/oracle/connection.go` hands to godror verbatim —
+  tokenizes as ONE pair whose key is `(DESCRIPTION` and is rejected there, as are
+  `mysql://h/db?parseTime=true`,
+  `jdbc:sqlserver://localhost:1433;databaseName=db;encrypt=true` and
+  `sqlserver://user:pass@localhost:1433/db?encrypt=true`. An unknown but well-shaped key still
+  infers `postgresql` — verified against pgx v5.11.0, where
+  `pgconn.ParseConfig("foo=1 host=h user=u")` succeeds and puts `foo` in `RuntimeParams` — so
+  the test judges the FORM, not libpq's vocabulary. Godror's easy-connect spelling
+  (`user/pass@host:1521/svc`) carries no `=` and exits at the pre-guard, as does an empty or
+  whitespace-only string, and both keep inferring nothing. Both inference call sites
+  (`config.Validate` and `ApplyDatabasePoolDefaults`) widen together, since both delegate here.
+  Three consequences for a keyword-form section that carried no explicit `type:`. (a) It is now
+  typed `postgresql`, so it leaves `config.UntypedDatabaseSections` and stops tripping
+  `app.Builder`'s untyped-connectionstring refusal and `database.NewConnection`'s empty-type
+  error — a section that used to abort startup may now boot. (b) It gains the whole PostgreSQL
+  vendor-rule set: `[C65.2]`'s two DSN-host rules, and ADR-062 `[R4]`'s refusal of a
+  `database.tls` block co-present with a `connectionstring` (checked FIRST, so a section with
+  both reports `database.tls`, not `database.connectionstring`). (c) A section spelling
+  `type: oracle` beside a keyword-form DSN is now a startup `ConfigError` on `database.type`
+  ("conflicts with the connectionstring (which implies postgresql)"), where it used to be
+  accepted as Oracle — the conflict error stays `config.Validate`-only, unchanged from
+  ADR-050 item 1. That message text itself changed for EVERY conflict, URI-form ones included:
+  it read "conflicts with the connectionstring scheme (which implies …)" and dropped the word
+  `scheme`, because a keyword-form DSN carries none. This is also what closes the migrate CLI's `quiesce` fail-open: its
+  `resolveControlPlaneConfig` waves through `Type == ""`, so before this atom an untyped
+  keyword-form control-plane DSN skipped `[C65.2]` entirely and was handed to pgx verbatim.
+  No new config key and no exported API. The shared fixtures in
+  `databaseTypeInferenceCases()` (`config/database_section_test.go`) pin both call sites,
+  including the key-shape boundary — `oracle_tns_descriptor_keeps_empty_type`,
+  `oracle_easy_connect_keeps_empty_type`, `jdbc_sqlserver_keeps_empty_type`,
+  `sqlserver_uri_keeps_empty_type`, `mysql_uri_keeps_empty_type` and
+  `keyword_form_unknown_key_infers_postgres`;
+  `TestUntypedDatabaseSectionsIsNilForNormalizedKeywordFormDSN` pins consequence (a) and
+  `TestUntypedDatabaseSectionsReportsForeignNonURIDSN` its other side,
+  `TestNormalizeKeepsExplicitOracleTypeBesideNonURIOracleDSN` pins that a TNS-descriptor DSN
+  still accepts `type: oracle` (the negative of (c)), and
+  `TestAppBuilderConfigureRuntimeHelpersRejectsForeignNonURIDSN`
+  (`app/app_builder_test.go`) pins that such a section still trips the untyped refusal.
+- gate: match = a keyword-form `connectionstring` with no `type:`, or with `type: oracle`,
+  exists in static config, an override, or a provider branch.
+- apply: nothing is required of a keyword-form section that is
+  genuinely PostgreSQL and passes `[C65.2]` — the inferred type is the correct one. To keep
+  the old shape where the section must NOT be treated as PostgreSQL, or must stay exempt from
+  the PostgreSQL vendor rules, set `type:` explicitly (`type: oracle` only if the DSN really is
+  Oracle — beside a keyword-form DSN it is now a conflict error, so change the DSN instead).
+  Otherwise expect the PostgreSQL vendor rules to run: move a co-present `database.tls` block's
+  settings into the DSN (ADR-062 `[R4]`), and fix any `[C65.2]` host defect. Repoint anything
+  matching the conflict error's text — a contract test, a log alert — at the new wording, which
+  no longer says `scheme`.
+- verify: `go build ./... && go test ./...`  # then boot and confirm a previously untyped
+  keyword-form section now reports `postgresql`; for the migrate CLI, run `quiesce status
+  --tenant <id>` against an untyped control-plane target and confirm it is judged rather than
+  waved through.
+- ref: gaborage/go-bricks#1551 ·
+  [ADR-050](adr_050_connectionstring_type_inference.md) amendment 2026-09-13 ·
+  `config/database_section.go` (`inferDatabaseTypeFromConnectionString`,
+  `isPostgresKeywordDSN`, `isPostgresKeywordName`) ·
+  `config/postgres_dsn.go` (`pgKeywordSettings`)
+
+---
+
+### [C65.7] the inbox ledger key is a typed `messaging.DedupKey` that carries its provenance · compile-break · when: match
+
+- detect: `git grep -n 'ProcessOnce(\|DedupKey()\|IsSealedDedupKey(\|ValidateDedupKey(' -- '*.go'`
+  — every hit on a `ProcessOnce` call, a `DedupKey()` read, an `app.InboxProcessor`
+  implementation (a hand-rolled test double included) or `IsSealedDedupKey` stops compiling;
+  `go build ./... && go vet ./...` enumerates the same set, `_test.go` files included.
+- scope: `app.InboxProcessor.ProcessOnce` and `inbox.(*Inbox).ProcessOnce` take
+  `key messaging.DedupKey` where they took `eventID string`; `messaging.Metadata.DedupKey()`
+  returns `(messaging.DedupKey, error)`; `messaging.ValidateDedupKey(ctx, key DedupKey)` refuses
+  the zero value and a sealed key under a context `messaging.IsSealedDelivery` does not mark, both
+  wrapping `messaging.ErrInvalidEventID`, and no longer runs the grammar (a wire key passed it at
+  construction). That marker is a boolean stamped identically on every sealed handler context, so
+  admission proves the key came from *some* sealed delivery, not from the one being handled: a
+  sealed key retained past the delivery that minted it still passes, and the ledger then treats the next
+  delivery as a duplicate and skips its handler. Binding a key to its originating delivery is open
+  work, tracked as gaborage/go-bricks#1634. `messaging.IsSealedDedupKey` is deleted — read
+  `key.Sealed()`. Additive:
+  `messaging.DedupKey` (`String()`, `Sealed()`) and `messaging.WireDedupKey(id string)
+  (DedupKey, error)`, which applies the unchanged `^[A-Za-z0-9_-]{1,128}$` grammar.
+  `inbox/testing.MockInbox.ProcessOnce` follows the new signature and records `key.String()`, so
+  `AssertProcessed(t, m, "evt-1")` and `MarkAlreadyProcessed("evt-1")` keep their string
+  arguments. Unchanged: `String()` renders exactly the previous spelling on both branches (the
+  wire id verbatim, `<SignFamily>:<jti>` for a sealed key), so no ledger row, DLQ tooling or
+  `inbox.sealed` label value moves and no ledger migration is needed; `IsSealedDelivery`,
+  `ValidateEventID`, `outbox.EventIDFromHeaders` and `jose/sealed.Envelope.DedupKey()` keep
+  their string types; a wire key under a sealed context is still admitted.
+- gate: match — `detect` returns a line. no-match — your consumers never call `ProcessOnce`,
+  never read `DedupKey()`, and implement no `app.InboxProcessor`.
+- apply: pass `DedupKey()`'s answer straight through; build a key you compose yourself with
+  `WireDedupKey`; drop `IsSealedDedupKey`:
+
+  ```go
+  // before
+  id, err := meta.DedupKey()                        // string
+  id, _ := outbox.EventIDFromHeaders(meta.Headers())
+  return deps.Inbox.ProcessOnce(ctx, id, fn)
+  if messaging.IsSealedDedupKey(id) { ... }
+  func (d *myInbox) ProcessOnce(ctx context.Context, eventID string, fn func(context.Context, dbtypes.Tx) error) error
+
+  // after
+  key, err := meta.DedupKey()                       // messaging.DedupKey
+  key, err := messaging.WireDedupKey("order-" + ref) // an id you compose; returns ErrInvalidEventID outside the grammar
+  return deps.Inbox.ProcessOnce(ctx, key, fn)
+  if key.Sealed() { ... }
+  func (d *myInbox) ProcessOnce(ctx context.Context, key messaging.DedupKey, fn func(context.Context, dbtypes.Tx) error) error
+  ```
+
+  A sealed consumer that handed `ProcessOnce` a string from `MessageID()`, `Headers()`,
+  `outbox.EventIDFromHeaders` or its body must choose: `meta.DedupKey()` (the sealed key — the
+  intended one) or `WireDedupKey` of that value, which can never occupy a sealed row. A
+  `WireDedupKey` error is a poison delivery — return it. Log or compare `key.String()`, never the
+  struct.
+- verify: `go build ./... && go vet ./... && go test ./...`  # then confirm `git grep -n
+  'IsSealedDedupKey' -- '*.go'` returns nothing
+- ref: gaborage/go-bricks#1558 · [ADR-097](adr_097_sealed_amqp_messages.md) and its 2026-09-12
+  amendment · `messaging/dedup_key.go` (`DedupKey`, `WireDedupKey`, `ValidateDedupKey`,
+  `Metadata.DedupKey`), `inbox/inbox.go`, `app/module.go` (`InboxProcessor`),
+  `inbox/testing/mock_inbox.go` · closes the exposure [C64.11] recorded
+
+### [C65.8] an unwrapped 2xx JOSE response is refused instead of passed through · breaking · when: match
+
+- detect: `git grep -nE 'WithJOSE[(]|JOSETransport[{]' -- '*.go'` shortlists every place a JOSE
+  transport is configured; a hit matters only when an `Inbound` policy is set, since the rule
+  never applies to an outbound-only client. Keep the pattern free of `\b`/`\s`/`\w` — `git grep
+  -E` has no PCRE escapes, so a pattern carrying one silently matches nothing and the gate reports
+  "not affected". No grep of your own tree can finish the job: what decides the outcome is what
+  the PEER returns, so for each hit answer from the partner's specification, or from a capture of
+  real traffic, whether every 2xx route returns a protected body
+- scope: `httpclient.JOSETransport.RoundTrip`, on a response whose status is 2xx while an `Inbound`
+  policy is set and the body was not unwrapped — nested mode: a `Content-Type` that is not
+  `application/jose`; envelope mode: a `BodyEnvelope.Unwrap` that returned `ok=false`; either mode:
+  a `Body` a hand-rolled `Inner` left nil, which is normalized to `http.NoBody` and judged by status
+  rather than skipped as if it were an empty shape. The response
+  body is closed and discarded, `RoundTrip` returns `nil` plus an error matching
+  `errors.Is(err, httpclient.ErrJOSEPlaintextResponse)`, which names the status and the peer name
+  from `WithPeerName`; when the transport has a usable `Logger`, one WARN carries the direction and
+  that same pair, plus the `request_id` when the transport can read one that passes
+  `trace.ValidateRequestID`, and neither sink carries anything from
+  the body. The refusal is terminal — exempt from `WithRetries`, since the peer already honored
+  the request and a retry would only duplicate a non-idempotent side effect. **Unchanged**: every
+  non-2xx status, which still passes through with its body and
+  headers exactly as the peer sent them (a nil `Body` reaching the caller as `http.NoBody`); 204, 304 and every reply to HEAD, which net/http
+  guarantees carry no body and which are never read — under an `Inbound` policy their body is
+  closed and replaced with `http.NoBody`, visible only behind a hand-rolled `Inner` that put bytes
+  on one of them, while a `101` is skipped on the status alone rather than as an empty reply and
+  keeps the live upgraded connection that is its body; a JOSE-typed 205 or 2xx answer to CONNECT,
+  which still reaches `jose.Open` and fails closed, while a plaintext one is now refused like every
+  other unopened 2xx; a successful unwrap, which still relabels the body
+  `application/json`; an outbound-only transport, which reads nothing; and `MaxResponseBytes`,
+  whose over-cap `ValidationError` still wins, being raised during the read. `JOSETransport` and
+  `JOSEConfig` each gain an exported `AllowPlaintextSuccess bool`, and `JOSETransport` also
+  gains `PeerName` and `Logger`, so an UNKEYED positional composite literal of either struct
+  stops compiling; a keyed literal compiles unchanged
+- gate: match = a client you build with `WithJOSE` (or a hand-built `JOSETransport`) sets `Inbound`,
+  AND the peer answers at least one 2xx route with a body that is not JOSE-protected. no-match =
+  outbound-only protection, or a peer that protects every successful response — the intended shape,
+  where nothing changes
+- before:
+
+  ```go
+  // A 200 carrying plaintext JSON reached the caller unverified.
+  resp, err := client.Post(ctx, &httpclient.Request{URL: peerURL, Body: payload})
+  // err == nil; resp.Body is whatever the peer sent
+  ```
+
+- after:
+
+  ```go
+  resp, err := client.Post(ctx, &httpclient.Request{URL: peerURL, Body: payload})
+  if errors.Is(err, httpclient.ErrJOSEPlaintextResponse) {
+      // The peer answered 2xx without protecting the body. Treat it as a failed
+      // exchange: there is no authenticated payload to act on.
+  }
+  ```
+
+  If the peer legitimately returns plaintext on some successful routes — a half-migrated API,
+  a health check, a 202 acknowledgement — opt the transport out while that lasts:
+
+  ```go
+  b.WithJOSE(httpclient.JOSEConfig{
+      Outbound: outbound,
+      Inbound:  inbound,
+      Resolver: resolver,
+      AllowPlaintextSuccess: true, // Strangler migration: clear once every route is protected
+  })
+  ```
+
+  The knob is per transport, not per route. If only some routes are unprotected, prefer two
+  clients — one strict, one opted out — over leaving the whole integration unguarded
+- why: pass-through was the right answer for the population it was written for, a pre-trust
+  failure the peer could not encrypt, and the wrong answer for a success. Fail-closed only works
+  if the closed case includes "the protection was absent", not just "the protection was invalid":
+  a tampered ciphertext already errored, while a ciphertext REMOVED in transit read as a clean
+  200. Refusing rather than warning-and-continuing follows the same reasoning as the tampered
+  case — the caller cannot be handed a body it must not trust and be expected to check a flag —
+  and the opt-out is a bool on the transport rather than a per-route predicate because the
+  distinction being encoded is a property of the integration, not of the call site
+- verify: point the client at a peer that answers 2xx with plaintext and confirm the call fails
+  with `errors.Is(err, httpclient.ErrJOSEPlaintextResponse)`; confirm a 4xx/5xx plaintext reply
+  still reaches the caller with its body intact
+- ref: gaborage/go-bricks#1579 · [ADR-107](adr_107_jose_bare_jwe_mode.md) (amendment) ·
+  `httpclient/jose_transport.go` · [httpclient.md](httpclient.md#successful-responses-must-have-been-unwrapped) ·
+  [jose.md](jose.md)
+
+---
+
+*The sections below are reference material: the two config-key rename lookup tables (linked from atoms C401.1 and C41.7), followed by pre-v0.39 changes retained for consumers upgrading from older releases.*
+
+## Config Keys — Flat-Smushed Rename (ADR-024)
+
+Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were renamed to the framework's underscore-free flat-smushed convention so they become settable via environment variables (the env loader maps `_`→`.`, koanf's nesting delimiter, so underscored leaf keys were silently unreachable from env). Update both your YAML and any environment variables. Go field names are unchanged.
+
+| Old key (YAML) | New key (YAML) | Old env var (broken) | New env var |
+| --- | --- | --- | --- |
+| `cache.manager.max_size` | `cache.manager.maxsize` | `CACHE_MANAGER_MAX_SIZE` | `CACHE_MANAGER_MAXSIZE` |
+| `cache.manager.idle_ttl` | `cache.manager.idlettl` | `CACHE_MANAGER_IDLE_TTL` | `CACHE_MANAGER_IDLETTL` |
+| `cache.manager.cleanup_interval` | `cache.manager.cleanupinterval` | `CACHE_MANAGER_CLEANUP_INTERVAL` | `CACHE_MANAGER_CLEANUPINTERVAL` |
+| `log.sensitive_fields` | `log.sensitivefields` | `LOG_SENSITIVE_FIELDS` | `LOG_SENSITIVEFIELDS` |
+| `messaging.reconnect.reinit_delay` | `messaging.reconnect.reinitdelay` | `MESSAGING_RECONNECT_REINIT_DELAY` | `MESSAGING_RECONNECT_REINITDELAY` |
+| `messaging.reconnect.resend_delay` | `messaging.reconnect.resenddelay` | `MESSAGING_RECONNECT_RESEND_DELAY` | `MESSAGING_RECONNECT_RESENDDELAY` |
+| `messaging.reconnect.connection_timeout` | `messaging.reconnect.connectiontimeout` | `MESSAGING_RECONNECT_CONNECTION_TIMEOUT` | `MESSAGING_RECONNECT_CONNECTIONTIMEOUT` |
+| `messaging.reconnect.max_delay` | `messaging.reconnect.maxdelay` | `MESSAGING_RECONNECT_MAX_DELAY` | `MESSAGING_RECONNECT_MAXDELAY` |
+| `messaging.publisher.max_cached` | `messaging.publisher.maxcached` | `MESSAGING_PUBLISHER_MAX_CACHED` | `MESSAGING_PUBLISHER_MAXCACHED` |
+| `messaging.publisher.idle_ttl` | `messaging.publisher.idlettl` | `MESSAGING_PUBLISHER_IDLE_TTL` | `MESSAGING_PUBLISHER_IDLETTL` |
+| `outbox.table_name` | `outbox.tablename` | `OUTBOX_TABLE_NAME` | `OUTBOX_TABLENAME` |
+| `outbox.auto_create_table` | `outbox.autocreatetable` | `OUTBOX_AUTO_CREATE_TABLE` | `OUTBOX_AUTOCREATETABLE` |
+| `outbox.default_exchange` | `outbox.defaultexchange` | `OUTBOX_DEFAULT_EXCHANGE` | `OUTBOX_DEFAULTEXCHANGE` |
+| `outbox.poll_interval` | `outbox.pollinterval` | `OUTBOX_POLL_INTERVAL` | `OUTBOX_POLLINTERVAL` |
+| `outbox.batch_size` | `outbox.batchsize` | `OUTBOX_BATCH_SIZE` | `OUTBOX_BATCHSIZE` |
+| `outbox.max_retries` | `outbox.maxretries` | `OUTBOX_MAX_RETRIES` | `OUTBOX_MAXRETRIES` |
+| `outbox.retention_period` | `outbox.retentionperiod` | `OUTBOX_RETENTION_PERIOD` | `OUTBOX_RETENTIONPERIOD` |
+| `inbox.table_name` | `inbox.tablename` | `INBOX_TABLE_NAME` | `INBOX_TABLENAME` |
+| `inbox.auto_create_table` | `inbox.autocreatetable` | `INBOX_AUTO_CREATE_TABLE` | `INBOX_AUTOCREATETABLE` |
+| `inbox.retention_period` | `inbox.retentionperiod` | `INBOX_RETENTION_PERIOD` | `INBOX_RETENTIONPERIOD` |
+| `keystore.secret_min_length` | `keystore.secretminlength` | `KEYSTORE_SECRET_MIN_LENGTH` | `KEYSTORE_SECRETMINLENGTH` |
+
+> The "old env var" column never worked (that is the bug ADR-024 fixes); it is shown only to help locate occurrences in existing deployment manifests.
 
 ## Observability Config Keys — Flat-Smushed Rename (#554)
 

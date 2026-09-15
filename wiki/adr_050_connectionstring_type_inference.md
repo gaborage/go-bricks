@@ -3,6 +3,70 @@
 **Status:** Accepted
 **Date:** 2026-08-05
 
+> **Amended (2026-09-13)** — two clauses, `[C65.3]` (inference widening) and `[C65.2]`
+> (connection-string host rules):
+>
+> **Clause `[C65.3]` — inference widening.** `inferDatabaseTypeFromConnectionString` no
+> longer looks only at a URI scheme. A string matching none of `postgres://`,
+> `postgresql://` or `oracle://` is offered to `isPostgresKeywordDSN`, and a keyword/value
+> DSN infers `postgresql`. The URI prefixes are still tested first, so
+> `oracle://u:p@h/svc?timezone=UTC` stays Oracle even though the tokenizer would read its
+> query pair. The justification is that the keyword/value form is pgx's, and pgx is this
+> repo's only keyword-form consumer. What makes the claim safe is a **positive key-shape
+> test**, not a blocklist of foreign schemes: the string must contain an `=`, tokenize
+> through `pgKeywordSettings`, and yield only keys matching libpq's keyword shape
+> `[A-Za-z_][A-Za-z0-9_]*`. That is what protects the single-line Oracle TNS descriptor —
+> `(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=h)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=XE)))`,
+> a shape go-bricks supports and hands to godror verbatim, which tokenizes as one pair whose
+> key is `(DESCRIPTION` and would otherwise have been claimed as PostgreSQL. Another vendor's
+> URI or JDBC spelling fails the same test, so the seam needs no knowledge of any foreign
+> scheme; godror's easy-connect spelling carries no `=` at all and exits earlier still. An
+> unknown but well-shaped key does still infer `postgresql`: pgx accepts one and passes it
+> through as a runtime parameter, so the test is about the *form* a keyword DSN takes, not
+> about libpq's vocabulary. `isPostgresKeywordDSN` therefore lives in
+> `config/database_section.go` rather than `config/postgres_dsn.go`, whose contract is to be
+> a faithful pgx mirror — a classifier is not a mirror — and calls the mirror's
+> `pgKeywordSettings` as its primitive. The widening adds no configuration key and no
+> exported API; it is what routes a keyword-form section into clause `[C65.2]`'s rules, which
+> dispatch on `Type` and so never saw those shapes. It also closes the `tools/migration`
+> CLI's quiesce fail-open — `resolveControlPlaneConfig` waves through `Type == ""` — at that
+> module's next go-bricks pin bump, since its `tlsValidatingProvider` runs
+> `config.ApplyDatabasePoolDefaults` before quiesce reads `Type`.
+>
+> **Clause `[C65.2]` — connection-string host rules.** `[C64.8]`'s host rule now reaches the
+> raw `connectionstring` door too, closing the gap the amendment below tracked as #1551.
+> `config.scanPostgresDSN` resolves the DSN's own host and TLS claim exactly as pgx
+> v5.11.0's `ParseConfig` does, and the new `validatePostgreSQLConnectionString` refuses a
+> host that resolves to nothing and, on the same axis as `[C65.1]`, a resolved host that is a
+> unix-socket entry while the DSN claims TLS. `PGHOST` is honored only when the DSN carries
+> no `host` key at all: an empty `host=` key still shadows it, narrower than "any source
+> names a value" — pgx's own precedence, not this amendment's choice. `PGSERVICE`, `service=`
+> and service files are never consulted, in either direction, and the `PGSSL*` environment
+> variables are likewise never judged; those are documented gaps, not decisions closed here.
+> `sslnegotiation=direct` counts as a TLS claim even paired with `sslmode=disable`/`allow`,
+> where pgx itself would connect in plaintext and libpq refuses the combination — a claim
+> only ever adds a refusal on this seam, never suppresses one — while empty TLS material
+> (`sslcert=''`) does not claim, following pgx's own `configTLS`. A connection string
+> `scanPostgresDSN` cannot tokenize passes through unjudged, because this seam must never
+> refuse what pgx accepts.
+>
+> **What the two clauses leave open.** The unjudged `PGSSL*` variables are not merely out of
+> scope: `PGSSLMODE=verify-full` (or `PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY`) beside
+> `connectionstring: "host=/var/run/postgresql user=u"` is accepted here and then dialed by pgx
+> with `TLSConfig == nil` — a residual instance of the very defect clause `[C65.2]` closes,
+> kept out of scope deliberately because `claimsTLS` reads DSN text only, and asymmetric with
+> `PGHOST`, which this seam does read; it is tracked as gaborage/go-bricks#1632 and pinned as
+> accepted by `TestApplyDatabasePoolDefaultsAcceptsPGSSLEnvTLSClaimOnSocketDSN`, so a change of
+> posture flips a test. The other shape still unjudged is a `connectionstring` matching no URI
+> prefix that the keyword-form test does not claim — it does not tokenize, or its keys are not
+> libpq keyword names, as an Oracle TNS descriptor's are not — which stays untyped. It is then
+> refused as untyped rather than dialed only where nothing else supplies the vendor: an explicit
+> `type:` still types the section (`normalizeWithConnectionString` keeps an `oracle` type on such
+> a DSN, and only a contradicting inference errors), and a consumer supplying its own
+> `Options.DatabaseConnector` bypasses the builder's untyped refusal entirely. The 2026-09-07 amendment's tracked fail-open (a
+> host-less raw DSN, #1551) is closed by these two clauses. See
+> [migrations.md](migrations.md) `[C65.3]` and `[C65.2]`, gaborage/go-bricks#1551.
+>
 > **Amended (2026-09-07):** The connect seam's "identity is the dial's job"
 > posture (stated in the 2026-08-14 amendment below and in Consequences, "the
 > seam stays asymmetric by design") now has one exception: a PostgreSQL section
@@ -31,11 +95,14 @@
 > invert the config/connector dependency. The short-circuit therefore runs first
 > and a host-less DSN is still accepted; `[C64.8]`'s scope says so, and
 > `postgres_connectionstring_omitting_host_still_accepted` pins it so widening
-> the guard stays a visible decision. Two fail-open shapes therefore survive this
-> amendment and are tracked rather than closed: a host-less raw DSN (#1551) and an
-> explicit unix-socket host, which discards TLS material on BOTH doors because
-> pgx skips TLS for a unix network (#1555, an ADR-062 rule rather than one of
-> this ADR's). See [migrations.md](migrations.md) `[C64.8]`, #1544.
+> the guard stays a visible decision. One fail-open shape therefore survives this
+> amendment and is tracked rather than closed: a host-less raw DSN (#1551). An
+> explicit unix-socket host in the STRUCTURED `host` field, which discarded TLS material
+> because pgx skips TLS for a unix network, is refused by ADR-062's host-transport rule
+> ([ADR-062](adr_062_database_tls_fail_closed.md) amendment 2026-09-13, #1555), while the
+> same shape inside a raw `connectionstring` never reaches that rule and is judged instead
+> by clause `[C65.2]` of this ADR's 2026-09-13 amendment. See
+> [migrations.md](migrations.md) `[C64.8]`, #1544.
 >
 > **Amended (2026-08-14):** Decision item 1 names
 > `config.validateDatabaseWithConnectionString` as the inference site; it is no

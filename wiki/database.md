@@ -202,6 +202,7 @@ query := qb.Select("*").
     )).
     JoinOn(dbtypes.MustTable("products").MustAs("p"), jf.And(
         jf.EqColumn("p.id", "o.product_id"),
+        // SECURITY: Manual SQL review completed - fixed conversion of a joined column, no user input
         jf.Eq("p.price", qb.MustExpr("TO_NUMBER(o.max_price)")),
     )).
     Where(f.Eq("o.status", "pending"))
@@ -226,8 +227,10 @@ productCols := qb.Columns(&Product{})
 
 p := productCols.As("p")
 
+// SECURITY: Manual SQL review completed - constant literal, no user input
 subquery := qb.Select(qb.MustExpr("1")).From("reviews").
     Where(f.And(
+        // SECURITY: Manual SQL review completed - correlated column identifier from struct tags, no user input
         f.Eq("reviews."+reviewCols.Col("ProductID"), qb.MustExpr(p.Col("ID"))),
         f.Eq(reviewCols.Col("Rating"), 5),
     ))
@@ -242,6 +245,7 @@ query := qb.Select(p.Col("Name")).
 ## SELECT Expressions (v2.1+)
 
 ```go
+// SECURITY: Manual SQL review completed - fixed aggregates over a declared column, no caller input
 query := qb.Select(
     cols.Col("Category"),
     qb.MustExpr("COUNT(*)", "product_count"),
@@ -249,11 +253,15 @@ query := qb.Select(
 ).From("products").GroupBy(cols.Col("Category"))
 ```
 
-**SECURITY WARNING:** Raw SQL expressions are NOT escaped. Never interpolate user input:
+**SECURITY WARNING:** Raw SQL expressions are NOT escaped, and every call site carries the `// SECURITY: Manual SQL review completed - <rationale>` annotation (see [What is not an identifier door](#what-is-not-an-identifier-door)). Never interpolate user input:
 
 ```go
-qb.MustExpr("COUNT(*)", "total")                  // SAFE
-qb.MustExpr(fmt.Sprintf("UPPER(%s)", userInput))  // SQL INJECTION
+// SAFE
+// SECURITY: Manual SQL review completed - constant aggregate, no caller input
+qb.MustExpr("COUNT(*)", "total")
+
+// SQL INJECTION — no annotation can make this safe
+qb.MustExpr(fmt.Sprintf("UPPER(%s)", userInput))
 ```
 
 Use WHERE with placeholders for dynamic **values**: `qb.Select("*").From("users").Where(f.Eq(cols.Col("Status"), userValue))`. Note the column is a struct-tag lookup, not a variable: the value is parameterized, the column is interpolated, and only the value may come from the caller.
@@ -302,6 +310,7 @@ ordinary identifier character on Oracle and an operator on PostgreSQL.
 
 ```go
 qb.Select("a#b")                     // Oracle: renders. PostgreSQL: ToSQL() error
+// SECURITY: Manual SQL review completed - constant literal and alias, no user input
 qb.MustExpr("1", "a#b")              // same — the alias is an identifier position
 qb.Select(`"a#b"`)                   // SAFE on both: a quoted identifier escapes the alphabet
 qb.Insert("t").SetMap(map[string]any{"a#b": 1})   // PostgreSQL: ToSQL() error
@@ -385,14 +394,13 @@ the builder. The grammar will not accept a computed one.
 ### What is not an identifier door
 
 - **`Having`** takes a *predicate*, not an identifier, so no identifier grammar
-  can judge it and its argument is interpolated as written. Treat a STRING
-  predicate as raw SQL — it is annotated like `f.Raw` (see the door list below);
-  `Having(qb.MustExpr(...))` is the sanctioned expression form and is not.
-  `InsertQueryBuilder.Prefix`, `.Suffix` and `.Options` are the same shape, and
+  can judge it and its argument is interpolated as written: both a STRING
+  predicate and the preferred `Having(qb.MustExpr(...))` are raw-SQL doors (list
+  below). `InsertQueryBuilder.Prefix`, `.Suffix` and `.Options` are the same shape, and
   unlike `Having` they have no `qb.Expr()` alternative.
 - **`qb.Expr()` / `MustExpr()`** are the declared expression hatches: they exist
   to carry SQL the grammar refuses, and the builder still places what they
-  produce. They carry no annotation requirement. The builder judges neither the
+  produce. The builder judges neither the
   syntax nor the semantics of the SQL they carry — it does reject an empty or
   whitespace-only body — and the rest of a `RawExpression` is validated too: a
   struct literal built without the constructor is checked where it is consumed,
@@ -408,19 +416,20 @@ the builder. The grammar will not accept a computed one.
   `VALUES` cell projects nothing, so it could only be dropped silently.
   `BuildUpsert`'s column maps are NOT value doors: a `RawExpression` there is
   bound as a parameter and fails at the driver.
-- **`f.Raw()`, `jf.Raw()`, `database.Raw()` and a STRING predicate passed to
-  `Having()`** do. Each admits arbitrary SQL — the first two a WHERE/JOIN fragment,
-  `database.Raw` the whole statement, `Having` the group predicate — and each
-  requires an inline `// SECURITY: Manual SQL review completed - <rationale>`
-  comment at every call site, which is what makes them grep-discoverable.
-  `Having` also takes a `qb.Expr()` `RawExpression`, which is the preferred
-  spelling and carries no annotation duty; an alias on it is an error, since a
-  predicate projects nothing. That exemption is for CONSISTENCY with
-  `Select`/`GroupBy`/`OrderBy`, **not** a safety claim: `RawExpression.Validate()`
-  checks only that the SQL is non-empty and the alias is clean — it never inspects
-  the SQL body, which carries the same injection risk as the string form and is
-  reviewed as raw SQL. Its audit hook is its own name, `git grep -nE
-  'MustExpr\(|[.]Expr\(|RawExpression\{'`, rather than an annotation.
+- **`f.Raw()`, `jf.Raw()`, `database.Raw()`, an UPDATE `SetExpr()`, a STRING
+  predicate passed to `Having()`, and every `RawExpression` SQL body** do. Each
+  admits arbitrary SQL — the first two a WHERE/JOIN fragment, `database.Raw` the
+  whole statement, `SetExpr` a SET-clause value, `Having` the group predicate, an
+  expression whatever door consumes it — and each requires an inline
+  `// SECURITY: Manual SQL review completed - <rationale>`
+  comment at every call site, a `qb.Expr()`, `qb.MustExpr()` or struct-literal
+  construction included: `RawExpression.Validate()` checks only that the SQL is
+  non-empty and the alias is clean, never the body. An alias on a `Having`
+  expression is an error, since a predicate projects nothing. One grep finds every
+  door (canonical list: root CLAUDE.md Security Guidelines), `git grep -nE
+  'f\.Raw\(|jf\.Raw\(|database\.Raw\(|SetExpr\(|Having\(|MustExpr\(|[.]Expr\(|RawExpression\{'`
+  — squirrel's own `Expr` inside `database/internal/builder`, and the `Expr`/`MustExpr`
+  doors themselves (`database/types`, the builder, `testing/mocks`), are plumbing; skip those hits.
 - **`BuildUpsert`'s column maps** answer to the upsert's own preconditions rather
   than to this grammar — a stricter question ("is this one column the vendor's
   upsert syntax can name"). Since `[C61.15]` that question has **one answer on
@@ -431,7 +440,10 @@ the builder. The grammar will not accept a computed one.
   both vendors — so a key written with surrounding spaces matches its unpadded
   insert key, a map holding both spellings is rejected as one column written
   twice, and on PostgreSQL `ID` and `"ID"` are one column (they render alike)
-  while `id` and `ID` stay two.
+  while `id` and `ID` stay two. Match the conflict-column preconditions with
+  `errors.Is` on `types.ErrUpsertConflictColumnsRequired`,
+  `types.ErrUpsertConflictColumnNotInserted` and
+  `types.ErrUpsertConflictColumnInUpdateSet`, not by message text (`[C65.1]`).
 
 Valid identifiers on PostgreSQL are left **unquoted**: PostgreSQL folds unquoted
 identifiers to lowercase, so quoting a valid one would change which physical
@@ -488,7 +500,17 @@ Two consequences worth knowing:
 A `connectionstring` alone used to pass validation and then never connect —
 `database.NewConnection` dispatches on `type`, so an untyped DSN failed only at first
 query. `type` is now inferred from a recognized scheme when it is omitted:
-`postgres://`/`postgresql://` → `postgresql`, `oracle://` → `oracle`. Surrounding
+`postgres://`/`postgresql://` → `postgresql`, `oracle://` → `oracle`. A string matching no
+scheme is then tried against pgx's keyword/value tokenizer and infers `postgresql` too — but
+only when it tokenizes *and* every key it yields has libpq's keyword shape
+(`[A-Za-z_][A-Za-z0-9_]*`). pgx is the only keyword-form consumer here, and that positive
+shape test is what keeps everyone else out without the seam knowing a single foreign scheme:
+a single-line Oracle TNS descriptor (`(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=h)…))`)
+tokenizes as one pair whose key is `(DESCRIPTION`, and another vendor's URI or JDBC spelling
+fails the same way. An unknown but well-shaped key still infers `postgresql`, because pgx
+accepts one and passes it through as a runtime parameter. godror's easy-connect spelling
+(`user/pass@host:1521/svc`) has no `=` at all, so it infers nothing (ADR-050 amendment
+2026-09-13, `[C65.3]`). Surrounding
 whitespace does not defeat the match (a DSN read from a mounted secret often carries a
 trailing newline), and the stored connection string is never rewritten — only the
 classification tolerates it.
@@ -497,24 +519,27 @@ Inference runs at **two** sites, not one. `config.Validate` covers every statica
 configured path (`database`, `databases.<name>`, `multitenant.tenants.<id>.database`);
 `config.ApplyDatabasePoolDefaults` — the seam `database.DbManager` applies to every config
 a dynamic `DBConfigProvider` returns, which never reaches `Validate` — covers the dynamic
-path. Both delegate to the same scheme list, so extending it is one edit. An explicit
-`type` that conflicts with the inferred scheme is a validation error on the `Validate`
+path. Both delegate to the same classifier, so extending it is one edit. An explicit
+`type` that conflicts with the inferred vendor is a validation error on the `Validate`
 path only: the seam runs per connection, where the vendor's own dial error is the better
 failure. Identity is otherwise the dial's job on that seam, with one exception: a
 PostgreSQL section with no `connectionstring` and an empty `host` is refused there with the
 same `MissingFieldError` startup emits, because pgx would substitute libpq's default unix
 socket and drop the configured TLS material (ADR-050 amendment 2026-09-07). A raw
-`connectionstring` is not covered — the seam does not parse DSNs — so give a DSN an
-explicit host of its own.
+`connectionstring` is covered too, on its own resolved host — see "PostgreSQL connection
+strings are host-checked too" under TLS below (ADR-050 amendment 2026-09-13, `[C65.2]`).
 
-Any other scheme leaves `type` empty — the *effect* of an unrecognized scheme depends on
+Any other shape leaves `type` empty — the *effect* of an unrecognized one depends on
 the connector: the built-in one (`database.NewConnection`) fails startup with a
 `connectionstring has no resolved database type` error naming every affected static path;
 a caller-supplied `Options.DatabaseConnector` parses the DSN itself and is exempt **from
 that startup guard**. It is not exempt from inference: the config layer is
 connector-blind, so a custom connector receives `type` already resolved for a recognized
-scheme, and one that branches on an empty `cfg.Type` to decide whether to parse the DSN
-must be reviewed.
+shape, and one that branches on an empty `cfg.Type` to decide whether to parse the DSN
+must be reviewed. A keyword-form DSN that used to stay untyped no longer reaches either
+of those paths: it is typed `postgresql`, so it leaves `config.UntypedDatabaseSections` and
+gains the PostgreSQL vendor rules, and an explicit `type: oracle` beside one is a conflict
+error (`[C65.3]`).
 
 **An Oracle DSN needs no separate identifier.** `oracle://user:pw@host:1521/XE` alone is a
 complete config: `buildOracleDSN` returns the connection string verbatim, so
@@ -547,8 +572,19 @@ configs too" below).
   the material was being discarded or the connection silently downgraded (`ca: system`
   inverted instead: pgx force-upgrades that sentinel to `verify-full` — see the quirks
   below). `cert` and `key` must still be set together.
-- **PostgreSQL — a valid mode alone is always fine.** `mode: disable` with no material stays
-  valid; opportunistic TLS with nothing to discard is a legitimate choice.
+- **PostgreSQL — a valid mode alone is fine on a TCP host.** `mode: disable` with no material
+  stays valid, and so do the opportunistic modes `allow` and `prefer`, which may fall back to
+  plaintext: a mode with nothing to discard is a legitimate choice.
+- **PostgreSQL — a unix-socket host takes no TLS.** Both host rules below judge the structured
+  `host` field only; a section carrying a raw `connectionstring` short-circuits before them and
+  keeps pgx's own semantics. A `host` (per comma-separated entry) that is an absolute path
+  (`/var/run/postgresql`, or a drive path such as `C:\pg`) is dialed over a unix socket, where
+  pgx skips TLS, so `cert`, `key`, `ca` or any `mode` other than `disable` is refused naming
+  `database.tls`: remove the `database.tls` block, or use a TCP host.
+- **PostgreSQL — no empty host entry.** A `host` with an empty comma-separated entry
+  (`db.internal,`, `,db.internal`, `db1,,db2`) is refused naming `database.host`, with or
+  without `database.tls`, because pgx substitutes a unix socket for it: remove the stray
+  comma and name every host entry.
 - **`database.tls` is incompatible with `connectionstring`.** The DSN is used verbatim and
   the block never reaches it, so setting both is a startup error. Put the parameters in the
   DSN instead (`sslmode`, `sslrootcert`, `sslcert`, `sslkey`) — that is also the escape hatch
@@ -560,6 +596,19 @@ backslash in a keyword/value DSN (quoting does not protect it), use `%20` not `+
 space in a URI query, and expect the first `@` to end userinfo. A parse failure logs the
 constant `failed to parse PostgreSQL config`; unwrap with `errors.As` to
 `*pgconn.ParseConfigError` when you need pgx's redacted detail.
+
+**PostgreSQL connection strings are host-checked too (ADR-050 amendment 2026-09-13,
+`[C65.2]`).** A
+`connectionstring` whose own resolved host — read the way pgx reads it, from the URI
+authority, a `?host=` query parameter, a keyword `host=`, or `PGHOST` — names nothing at
+all, or carries an empty comma-separated entry, is refused naming `database.connectionstring`,
+the same defect `[C64.8]` refuses for the typed `host` field; name a host through one of
+those four sources (a service file is not one of them). A `connectionstring` whose resolved
+host is a unix-socket entry while the DSN itself claims TLS (`sslmode` of `require`,
+`verify-ca` or `verify-full`, `sslnegotiation=direct`, or non-empty
+`sslrootcert`/`sslcert`/`sslkey`) is refused the same way `[C65.1]` refuses it
+for the typed fields; drop the TLS claim or point the DSN at a TCP host. A DSN the
+scanner cannot tokenize passes through unjudged, same as it always has.
 
 Two pgx quirks worth knowing when choosing a mode: `require` plus `ca` behaves as
 `verify-ca` (a documented libpq inheritance), and the sentinel `ca: system` means the OS
@@ -725,6 +774,7 @@ if database.IsLockNotAvailable(err) {
 **Scalar subqueries in the projection.** `SubqueryColumn(sub, alias)` appends `(sub) AS alias`, so a stats snapshot is one round trip:
 
 ```go
+// SECURITY: Manual SQL review completed - fixed aggregates over a declared column, no caller input
 tenants := qb.Select(qb.MustExpr("COUNT(*)")).From(held).Where(f.Eq("consumer", c))
 oldest := qb.Select(qb.MustExpr("MIN(held_since)")).From(held).Where(f.Eq("consumer", c))
 stats := qb.Select().SubqueryColumn(tenants, "tenants").SubqueryColumn(oldest, "oldest")

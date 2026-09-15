@@ -170,10 +170,9 @@ func visaClient(t *testing.T, f *visaFixture, opts ...func(*httpclient.Builder) 
 func TestJOSETransportEnvelopeWrapSendsTheVisaEnvelope(t *testing.T) {
 	f := newVisaFixture(t)
 	calls := make(chan visaCall, 1)
-	server := fakeVisaEndpoint(t, f, calls, func(w http.ResponseWriter) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true}`))
-	})
+	// A sealed reply, because a plaintext 2xx is now refused outright and the request half
+	// under test would never be reached.
+	server := fakeVisaEndpoint(t, f, calls, respondVisaEnvelope(t, f, `{"ok":true}`))
 	defer server.Close()
 
 	before := time.Now().UnixMilli()
@@ -230,6 +229,7 @@ func TestJOSETransportEnvelopeUnwrapDecryptsTheVisaEnvelope(t *testing.T) {
 
 	<-calls
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "application/json", resp.Headers.Get("Content-Type"))
 	assert.JSONEq(t, `{"token":"tok-42"}`, string(resp.Body))
 }
 
@@ -237,8 +237,11 @@ func TestJOSETransportEnvelopeUnwrapPassesThroughNonEnvelope(t *testing.T) {
 	const errorEnvelope = `{"errorCode":"9001","message":"denied","details":[{"field":"pan"}]}`
 	f := newVisaFixture(t)
 	calls := make(chan visaCall, 1)
+	// 400, not 200: Unwrap declining a body is a pass-through only on a failure status —
+	// on a success it is ErrJOSEPlaintextResponse.
 	server := fakeVisaEndpoint(t, f, calls, func(w http.ResponseWriter) {
 		w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(errorEnvelope))
 	})
 	defer server.Close()
@@ -247,7 +250,11 @@ func TestJOSETransportEnvelopeUnwrapPassesThroughNonEnvelope(t *testing.T) {
 		URL:  server.URL,
 		Body: []byte(`{"pan":"card-fixture-0000"}`),
 	})
-	require.NoError(t, err)
+	// The 400 is the peer's own verdict, surfaced as an HTTPError; the declined body still
+	// reaches the caller untouched, which is the property under test.
+	require.Error(t, err)
+	require.NotErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
+	require.NotNil(t, resp)
 
 	<-calls
 	//nolint:testifylint // byte-identity is the property under test; JSONEq would pass on a re-encoded body
@@ -259,13 +266,13 @@ func TestJOSETransportSealsEveryRetryAttemptFreshly(t *testing.T) {
 	f := newVisaFixture(t)
 	calls := make(chan visaCall, 2)
 	var attempts atomic.Int32
+	sealedOK := respondVisaEnvelope(t, f, `{"ok":true}`)
 	server := fakeVisaEndpoint(t, f, calls, func(w http.ResponseWriter) {
 		if attempts.Add(1) == 1 {
 			http.Error(w, `{"errorCode":"busy"}`, http.StatusServiceUnavailable)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true}`))
+		sealedOK(w)
 	})
 	defer server.Close()
 

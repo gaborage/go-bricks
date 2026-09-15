@@ -19,6 +19,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/internal/dbtestlog"
 	"github.com/gaborage/go-bricks/database/internal/wrapper"
+	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
 const (
@@ -240,6 +241,17 @@ func TestBuildPostgresDSNWiresTLSMaterial(t *testing.T) {
 	assert.Contains(t, dsn, "sslkey='/etc/ssl/client.key'")
 }
 
+// TestBuildPostgresDSNUnixSocketHostWithoutTLS pins the socket-host shapes the config seam
+// still accepts (ADR-062 amendment 2026-09-13) to their exact rendered DSN.
+func TestBuildPostgresDSNUnixSocketHostWithoutTLS(t *testing.T) {
+	noTLS := &config.DatabaseConfig{Host: "/var/run/postgresql", Port: 5432, Username: "u", Password: "p", Database: "app"}
+	assert.Equal(t, "host='/var/run/postgresql' port=5432 user=u password=p dbname=app", buildPostgresDSN(noTLS))
+
+	disabled := *noTLS
+	disabled.TLS.Mode = "disable"
+	assert.Equal(t, "host='/var/run/postgresql' port=5432 user=u password=p dbname=app sslmode=disable", buildPostgresDSN(&disabled))
+}
+
 func TestBuildPostgresDSNOmitsUnsetTLSMaterialAndQuotesMode(t *testing.T) {
 	cfg := &config.DatabaseConfig{Host: "h", Port: 5432, Username: "u", Password: "p", Database: "app"}
 	cfg.TLS.Mode = "require"
@@ -296,6 +308,41 @@ func TestBuildPostgresDSNRoundTripsThroughPgx(t *testing.T) {
 			assert.Equal(t, cfg.Username, pc.User)
 			assert.Equal(t, cfg.Password, pc.Password)
 			assert.Equal(t, cfg.Database, pc.Database)
+		})
+	}
+}
+
+// Config passes these through unjudged, which is safe only because pgx refuses every one (#1551).
+func TestPgxRejectsConnectionStringsTheConfigScannerCannotTokenize(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PGSERVICE", "")
+	t.Setenv("PGSERVICEFILE", home+"/pg_service.conf")
+	t.Setenv("PGPASSFILE", home+"/pgpass")
+
+	for _, dsn := range testutil.UntokenizablePostgresDSNs {
+		_, err := pgconn.ParseConfig(dsn)
+		require.Error(t, err, "%q", dsn)
+		assert.Contains(t, err.Error(), "failed to parse as ", "%q", dsn)
+	}
+}
+
+// TestPgxResolvesSameHostAsConfigScanner uses pgx's own parser as the oracle for
+// testutil.PostgresDSNHostCases, the fixture config's scanner unit test shares: a pgx
+// bump that changes host resolution fails here before it can silently desync the mirror
+// the [C65.2] connectionstring rules depend on (gaborage/go-bricks#1551).
+func TestPgxResolvesSameHostAsConfigScanner(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PGSERVICE", "")
+	t.Setenv("PGSERVICEFILE", home+"/pg_service.conf")
+	t.Setenv("PGPASSFILE", home+"/pgpass")
+
+	for _, c := range testutil.PostgresDSNHostCases {
+		t.Run(c.Name, func(t *testing.T) {
+			pc, err := pgconn.ParseConfig(c.DSN)
+			require.NoError(t, err)
+			assert.Equal(t, c.Host, pc.Host)
 		})
 	}
 }

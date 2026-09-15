@@ -912,6 +912,11 @@ The `count > 1` ambiguity error and the Oracle TLS rejection are not waived.
 booting into a dead database — including `oracle://…` with no separate identifier field; an
 unrecognized scheme on the built-in connector fails fast
 at startup instead of at first query; a `type`/scheme conflict is caught at validation.
+Amended 2026-09-13: inference is no longer scheme-only — a string matching none of the three
+URI prefixes now infers `postgresql` when it is pgx's keyword/value form by a positive
+key-shape test, so "unrecognized scheme" above means "recognized by neither test" (`[C65.3]`),
+and a raw PostgreSQL `connectionstring` is additionally judged by its own resolved host and
+TLS claim (`[C65.2]`).
 `config.ApplyDatabasePoolDefaults` applies the same inference on the dynamic
 multi-tenant resolution path, which bypasses `Validate` entirely. Inference is
 unconditional on both paths — the `Options.DatabaseConnector` exemption covers the
@@ -1538,9 +1543,27 @@ empty-scalar hook deliberately do not, because "is there a resolvable value" mus
 defaults. `preloadDeniedPrefixes` is retired; `derivationDeniedPrefixes` stays. Non-breaking:
 no exported identifier or error string moves.
 
+### [ADR-111: JWS-of-JWE Is a Third Seal Mode, Not a Second Door](adr_111_jose_jws_of_jwe_mode.md)
+
+**Date:** 2026-09-13 | **Status:** Accepted
+
+The Visa Token Service **Issuer** API inverts the nesting `jose` already spoke: its bodies are a
+compact JWS whose payload is a compact JWE, so the signature is the outer layer. `Policy.Mode`
+gains `SealModeJWSofJWE` on ADR-107's precedent — a wire shape is a field on the Policy, not a
+second door, so `jose.Seal` / `jose.Open` and `httpclient.Builder.WithJOSE` speak it in both
+directions and no signing primitive is exported. `Seal` reuses the bare-mode JWE builder minus
+`cty` (the shape carries none, and `WithJOSE` fills `Policy.Cty` for every mode) and signs that
+compact string verbatim under a header the mode fixes: `typ: JOSE`, `cty: JWE`, `kid`, `alg`, and
+`iat` in epoch SECONDS whatever `Policy.IATMillis` says about the inner JWE. `Open` verifies
+before it decrypts, pins the outer `alg` to exactly `Policy.SigAlg` — stricter than the nested
+path's allowlist verify — requires `cty: JWE` on the verified header, and refuses any body that is
+not a 3-segment compact JWS with the new `JOSE_OUTER_NOT_JWS`; a 5-segment JWE-outer body is
+poison, never a fallback to another mode. Neither `iat` is judged. Not breaking: an appended enum
+member with no config key and no tag key.
+
 ### [ADR-107: Bare-JWE Mode Is a Field on the Policy, Not a Second Door](adr_107_jose_bare_jwe_mode.md)
 
-**Date:** 2026-09-09 | **Status:** Accepted | **Breaking:** `jose.Policy` gains a `map[string]any` field and stops being comparable — `==` and map-key use on it no longer compile
+**Date:** 2026-09-09 (amended 2026-09-13, #1579) | **Status:** Accepted | **Breaking:** `jose.Policy` gains a `map[string]any` field and stops being comparable — `==` and map-key use on it no longer compile; and, per the amendment, a 2xx response `JOSETransport` did not unwrap is now a transport error
 
 `jose` shipped one wire shape, nested JWE-of-JWS, and Visa Message Level Encryption does not
 have it: a single compact JWE with no inner JWS, `A128GCM` content encryption, `typ: "JOSE"`,
@@ -1563,9 +1586,20 @@ bare mode decrypts and reports `OpenHeader.JWE.IATMillis` without judging freshn
 ADR-097 set for replay; `Header` gained scalar fields rather than a map so it stays comparable.
 `Seal` now runs mode, algorithm and direction validation before touching the keystore in both
 modes. Compiler-caught on the consumer side: comparing two `jose.Policy` values or keying a map
-on one stops building — compare the fields you care about, or key on the kids. Bare mode is
-reachable only through `jose.Seal`/`jose.Open` this round; the `httpclient` envelope hooks land
-in the next stacked PR. See [migrations.md](migrations.md) `[C64.15]`.
+on one stops building — compare the fields you care about, or key on the kids. The `httpclient`
+envelope hooks (`BodyEnvelope`, `VisaMLEEnvelope`, `JOSEConfig.Envelope`) landed alongside, so
+bare mode is reachable through a built client as well as through `jose.Seal`/`jose.Open`.
+
+**Amendment (2026-09-13, #1579):** `JOSETransport` no longer passes an unrecognized 2xx body
+through. Under an `Inbound` policy a successful response must have been unwrapped — in nested
+mode `application/jose` plus a successful `jose.Open`, in envelope mode `Unwrap` ok plus the
+same — or `RoundTrip` returns `httpclient.ErrJOSEPlaintextResponse` wrapped with the status
+and the peer name, with the body closed and never handed to the caller or to a response
+interceptor, and — when the transport has a usable `Logger` — one WARN carrying the direction and the
+same status and peer, plus the request id when a valid one is readable, never body bytes.
+Non-2xx pass-through is unchanged; 204/304/HEAD stay skipped; every crypto failure keeps
+failing closed as before. `AllowPlaintextSuccess` on `JOSETransport`/`JOSEConfig` is the Strangler-migration opt-out.
+See [migrations.md](migrations.md) `[C64.15]` and `[C65.8]`.
 
 ---
 
@@ -1596,6 +1630,26 @@ ECDSA, a claim/authorization hook, a `ModuleDeps` slot, and cookie or query-stri
 refresh floor of a JWKS resolver the verifier owns (one second over pinned keys, where nothing
 refetches); rejection reported by a closed `Class` vocabulary that never carries the credential,
 the cause or the subject.
+
+---
+
+### [ADR-110: The Sensitive-Data Filter Consults a `logger.Redactor` Before Reflecting](adr_110_log_filter_redactor_hook.md)
+
+**Date:** 2026-09-12 | **Status:** Accepted
+
+The filter judged values by field NAME and reflected structs field by field, so a type that hid
+fields from its own rendering had them logged anyway through `Interface` and `WithFields`. A
+dedicated `logger.Redactor` (`RedactedForLog() any`, implemented with a value receiver) is now
+consulted in the shared dispatch — after the sensitive-key match, nil and depth handling, before the
+opaque-payload door and any reflection — so a filtered `Interface` or `WithFields` call honors it,
+nested values included. `json.Marshaler` was
+rejected: it serves the wire, not logs, and honoring it would silently change existing output. The
+returned value is filtered at depth minus one with the hook consulted only on its children, so a
+hook returning its own type terminates. `Err` and `ErrorRedactor` are untouched; non-implementing
+types render byte-identically.
+
+**Key Benefits:** a type author makes a value log-safe once, everywhere it is logged, with the
+needle list still backstopping the returned shape.
 
 ---
 
@@ -1767,7 +1821,7 @@ rather than fork into optional side interfaces, per the C61.23 precedent. See
 
 ### [ADR-097: Sealed AMQP Messages — Field-Level JOSE Payload Protection](adr_097_sealed_amqp_messages.md)
 
-**Date:** 2026-09-03 | **Status:** Accepted | **Breaking:** none in this record — sealing is additive and import-gated; the header-id grammar it relies on is `[C63.2]`, the typed-door removal ADR-096's `[C63.1]`
+**Date:** 2026-09-03 | **Status:** Accepted | **Breaking:** none in this record — sealing is additive and import-gated; the header-id grammar it relies on is `[C63.2]`, the typed-door removal ADR-096's `[C63.1]`; amended 2026-09-08 (#1547): the unsealed dedup key falls back to the `message_id` property, `[C64.11]`; amended 2026-09-12 (#1558): the ledger key is a typed `messaging.DedupKey` carrying its provenance, `[C65.7]`
 
 Payment events cross a broker that ops, tooling and other tenants' consumers can read, and an
 AMQP publish ACL says who may write to an exchange, not who wrote a given message. A sealed
@@ -2396,7 +2450,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-109) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-111) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

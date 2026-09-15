@@ -272,11 +272,11 @@ func TestPeekProtectedHeaderRejectsOversizedSegment0(t *testing.T) {
 	pad := strings.Repeat("a", rawLen-len(`{"x":""}`))
 	inLimit := base64.RawURLEncoding.EncodeToString([]byte(`{"x":"` + pad + `"}`))
 	require.Len(t, inLimit, maxPeekHeaderBytes)
-	_, err := PeekProtectedHeader(inLimit + ".p.s")
+	_, err := PeekProtectedHeader(inLimit + ".pp.ss")
 	require.NoError(t, err)
 
 	over := strings.Repeat("A", maxPeekHeaderBytes+1)
-	_, err = PeekProtectedHeader(over + ".p.s")
+	_, err = PeekProtectedHeader(over + ".pp.ss")
 	assert.ErrorIs(t, err, ErrPeekMalformed) //nolint:testifylint // separate segment-count branch follows
 	// Many dots never allocate more than six segments before rejection.
 	_, err = PeekProtectedHeader(strings.Repeat(".", 1<<16))
@@ -286,7 +286,7 @@ func TestPeekProtectedHeaderRejectsOversizedSegment0(t *testing.T) {
 func TestPeekProtectedHeaderSurfacesReservedParamsInExtra(t *testing.T) {
 	// Reserved names cannot be WRITTEN through Extra, but an opener must still see them.
 	seg := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"PS256","kid":"k","crit":["b64"],"b64":false}`))
-	hdr, err := PeekProtectedHeader(seg + ".p.s")
+	hdr, err := PeekProtectedHeader(seg + ".pp.ss")
 	require.NoError(t, err)
 	crit, err := hdr.ExtraStringSlice("crit")
 	require.NoError(t, err)
@@ -308,7 +308,7 @@ func TestPeekProtectedHeaderIgnoresNonStringOwnedParams(t *testing.T) {
 	// A forged header with the wrong JSON type for an owned param yields the zero string,
 	// not a panic; the value is still not copied into Extra.
 	seg := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":1,"kid":["k"],"typ":null,"x":2}`))
-	hdr, err := PeekProtectedHeader(seg + ".p.s")
+	hdr, err := PeekProtectedHeader(seg + ".pp.ss")
 	require.NoError(t, err)
 	assert.Equal(t, Header{Extra: map[string]any{"x": float64(2)}}, hdr)
 }
@@ -336,4 +336,39 @@ func TestNilExtraLeavesProtectedHeaderKeysUnchanged(t *testing.T) {
 	}
 	assert.Equal(t, []string{"alg", "cty", "kid"}, keysOf(jws))
 	assert.Equal(t, []string{"alg", "cty", "enc", "kid"}, keysOf(jwe))
+}
+
+// The boundary itself, pinned at the gate all three doors share: a segment 0 exactly at the
+// cap passes, one byte over is refused. Sign cannot land a header on the cap (base64 grows in
+// 4-character steps), so the at-limit case is built by hand, as the peek test does.
+func TestBoundedSegmentsBoundaryAtTheCap(t *testing.T) {
+	rawLen := maxPeekHeaderBytes / 4 * 3
+	pad := strings.Repeat("a", rawLen-len(`{"x":""}`))
+	atLimit := base64.RawURLEncoding.EncodeToString([]byte(`{"x":"` + pad + `"}`))
+	require.Len(t, atLimit, maxPeekHeaderBytes)
+
+	body := atLimit + ".payload.sig"
+	trimmed, segments, err := boundedSegments(" " + body + "\n")
+	require.NoError(t, err, "a segment 0 exactly at the cap must pass")
+	assert.Equal(t, body, trimmed, "the doors must parse the body this measured, not the caller's")
+	assert.Len(t, segments, 3)
+
+	_, _, err = boundedSegments(atLimit + "A.payload.sig")
+	assert.ErrorIs(t, err, ErrHeaderTooLarge, "one byte over must be refused")
+}
+
+// The charset gate must accept every base64url character and refuse padding: dropping - and _
+// from the allowlist would refuse real tokens, and admitting = would reopen the JSON bypass.
+func TestBoundedSegmentsCharset(t *testing.T) {
+	_, _, err := boundedSegments("ab-_09azAZ.payload.sig")
+	require.NoError(t, err, "- and _ are base64url characters")
+
+	_, _, err = boundedSegments("YWJj=.payload.sig")
+	require.ErrorIs(t, err, ErrNotCompact, "base64 padding is not part of a compact serialization")
+
+	// len%4 == 1 leaves 6 bits, which no unpadded encoding produces. Without this rule the
+	// segment reaches go-jose, whose own decode failure arrives as the door's generic error
+	// with the ErrNotCompact class lost.
+	_, _, err = boundedSegments("YWJjZ.payload.sig")
+	assert.ErrorIs(t, err, ErrNotCompact, "len%4==1 is not a producible unpadded base64url length")
 }

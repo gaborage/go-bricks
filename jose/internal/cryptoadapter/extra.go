@@ -23,6 +23,15 @@ var (
 	// ErrPeekMalformed is returned by PeekProtectedHeader when the input is not a compact
 	// serialization whose first segment is a base64url-encoded JSON object.
 	ErrPeekMalformed = errors.New("cryptoadapter: protected header peek failed")
+	// ErrHeaderTooLarge names the size refusal inside the chain, so a framework-internal caller
+	// matching with errors.Is can tell an over-bound header from any other parse failure. This
+	// package is internal/, so no consumer sees it; the wire sees only the generic code, and
+	// the class is deliberately not logged.
+	ErrHeaderTooLarge = errors.New("cryptoadapter: protected header exceeds bound")
+	// ErrNotCompact names the refusal of a body that is not a compact serialization — a JSON
+	// serialization, most importantly, which go-jose accepts and whose dot-delimited runs say
+	// nothing about the size of its protected member.
+	ErrNotCompact = errors.New("cryptoadapter: not a compact serialization")
 )
 
 // ownedParams are the protected-header names the adapter writes itself; Extra may not
@@ -45,9 +54,11 @@ var reservedParams = map[string]struct{}{
 // maxExactInt is the largest magnitude a float64 represents exactly for every integer.
 const maxExactInt = 1 << 53
 
-// maxPeekHeaderBytes bounds segment 0 before PeekProtectedHeader decodes it. A protected
+// maxPeekHeaderBytes bounds segment 0 AS ENCODED — the base64url text, measured before any
+// decode — on every door that parses a compact: peek, decrypt and verify alike. A protected
 // header is a handful of short params; anything larger on an unauthenticated body is
-// rejected before it costs a base64 or JSON pass.
+// rejected before it costs a base64 or JSON pass. Base64url costs 4 bytes per 3, so the
+// decoded JSON a body may carry is about three quarters of this.
 const maxPeekHeaderBytes = 16 * 1024
 
 // ExtraString returns the named extra header when it is present and a string.
@@ -112,19 +123,67 @@ func (h *Header) lookup(name string) (any, bool) {
 // or decrypting. No key material is touched; callers use it to run header rules (typ, alg,
 // key resolution) before choosing a key for Verify/Decrypt. The returned header is
 // unauthenticated until Verify succeeds.
+//
+// The input must be a compact serialization — 3 or 5 base64url segments, surrounding
+// whitespace aside — whose encoded segment 0 is at most maxPeekHeaderBytes; anything else is
+// ErrPeekMalformed, with ErrNotCompact or ErrHeaderTooLarge naming which rule it broke.
 func PeekProtectedHeader(compact string) (Header, error) {
-	segments := strings.SplitN(compact, ".", 6)
-	if len(segments) != 3 && len(segments) != 5 {
-		return Header{}, fmt.Errorf("%w: expected 3 or 5 segments, got %d", ErrPeekMalformed, len(segments))
-	}
-	if len(segments[0]) > maxPeekHeaderBytes {
-		return Header{}, fmt.Errorf("%w: segment 0 exceeds %d bytes", ErrPeekMalformed, maxPeekHeaderBytes)
+	_, segments, err := boundedSegments(compact)
+	if err != nil {
+		return Header{}, fmt.Errorf("%w: %w", ErrPeekMalformed, err)
 	}
 	params, err := decodeProtected(segments[0])
 	if err != nil {
 		return Header{}, err
 	}
 	return newHeader(params), nil
+}
+
+// boundedSegments prepares a compact for parsing and refuses it on three grounds, in
+// increasing cost: a part count that is not 3 or 5, an encoded segment 0 past
+// maxPeekHeaderBytes, and any segment that is not base64url. Every door that parses a
+// compact — Peek, Decrypt, Verify — runs this first. go-jose rejects a wrong part count
+// itself but imposes no size bound, and it accepts the JSON serialization too, whose
+// dot-delimited runs say nothing about the size of its protected member — so the charset
+// gate is what keeps the size bound meaningful. Surrounding whitespace is trimmed rather
+// than refused, matching the stripWhitespace go-jose applies before its own parse; interior
+// whitespace is refused, which is stricter. It RETURNS the trimmed body: Decrypt and Verify
+// parse that, not the caller's string, so go-jose and parsedHeader see exactly the bytes this
+// measured. Each caller wraps the error in its own sentinel.
+func boundedSegments(compact string) (trimmed string, segments []string, err error) {
+	trimmed = strings.TrimSpace(compact)
+	segments = strings.SplitN(trimmed, ".", 6)
+	if len(segments) != 3 && len(segments) != 5 {
+		return "", nil, fmt.Errorf("%w: expected 3 or 5 segments, got %d", ErrNotCompact, len(segments))
+	}
+	if len(segments[0]) > maxPeekHeaderBytes {
+		return "", nil, fmt.Errorf("%w: segment 0 exceeds %d bytes", ErrHeaderTooLarge, maxPeekHeaderBytes)
+	}
+	for _, segment := range segments {
+		if !isBase64URL(segment) {
+			return "", nil, fmt.Errorf("%w: segment is not base64url", ErrNotCompact)
+		}
+	}
+	return trimmed, segments, nil
+}
+
+// isBase64URL reports whether s is a well-formed unpadded base64url segment: only alphabet
+// characters, and a length no unpadded encoding can produce (len%4 == 1 leaves 6 bits, which
+// encodes nothing). Rejecting the length here keeps the refusal ErrNotCompact instead of
+// letting go-jose's own decode fail later behind the door's generic parse error.
+func isBase64URL(s string) bool {
+	if len(s)%4 == 1 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // decodeProtected base64url-decodes one protected-header segment into its JSON object.

@@ -15,6 +15,60 @@
   branches `research/amqp-envelope-standards`, `research/amqp-seal-seams`; prototype
   `prototype/amqp-seal-open`. Deep dive: [sealing.md](sealing.md).
 
+> **Amended (2026-09-12, #1409):** a byte-level opener, `jose/sealed.OpenDocument`, is the
+> type-free twin of `Open`: it shares `Open`'s rule chain (`openCore`, rules 1–10) but is
+> never handed a `spec.Type` and never decodes into one — a CLI has no Go type to decode
+> into, only bytes. It returns an `*OpenedDocument`: the document with the Subject member
+> ABSENT — never a redaction placeholder — the Subject plaintext separately, the byte offset
+> the member sat at (`SubjectAt`, so a renderer splices in place instead of appending or
+> re-walking), and the same `Envelope` `Open` returns for the same body; splicing something
+> back in its place, if anything, is the caller's decision, never the library's. The amended criterion: **every rule 1–10 refusal is
+> code-identical** — the same `*OpenError` (`Err.Code`, `Rule`, `Details`) `Open` produces for
+> the same input — and **rule 11 (decode into `spec.Type`) is out of a type-free door's reach,
+> with a shape-free floor: a Subject plaintext that is not a valid JSON value is still refused
+> `SEAL_PAYLOAD_UNDECODABLE`**. The floor judges the plaintext rather than the document because
+> rule 10 already proved the document is a complete JSON object, so the plaintext — spliced
+> back over the Subject's byte span — is the one thing `Open` never validated shape-free.
+> So the no-accept-unsealed invariant (§6) holds identically:
+> what opens here and not through `Open` is only a document whose Subject decrypts to JSON of
+> the wrong shape for the typed door; a Subject decrypting to non-JSON is refused by both.
+> Nothing about the wire's authentication, encryption or slot checks (rules 1–10) is weakened.
+> Additive: no new wire format, no CLI, no keymaterial handling (later links of #1409).
+>
+> **Amended (2026-09-12, #1558):** sealed admission at the ledger door is now by TYPE, not by
+> spelling. `messaging.DedupKey` is a value type carrying the key and whether the sealed door
+> produced it; the zero value is invalid. The sealed branch of `Metadata.DedupKey()` mints the
+> sealed provenance through one unexported constructor, while `messaging.WireDedupKey(id)` builds
+> every other key. `inbox.ProcessOnce(ctx, key messaging.DedupKey, fn)` replaces the string
+> parameter, and `ValidateDedupKey(ctx, key DedupKey)` refuses the zero key and a sealed key under
+> a context `IsSealedDelivery` does not mark. That second refusal is not an attacker gate — only
+> the sealed branch mints a sealed key, so a caller can only hold one minted by *some* sealed
+> delivery, not necessarily the one in hand: the marker is a boolean stamped identically on every
+> sealed handler context, so a key retained from an earlier sealed delivery still passes while a
+> later one is handled. It fails closed when a sealed key is used outside the sealed delivery
+> altogether (a detached goroutine), turning a plumbing mistake into a refusal rather than a silent
+> ledger write. Binding a key to its originating delivery is open work, tracked as
+> gaborage/go-bricks#1634. The §4 `^[A-Za-z0-9_-]{1,128}$`
+> grammar no longer runs at the ledger door: a wire key is grammar-checked exactly once, at
+> construction inside `WireDedupKey`. A sealed key is well formed because the seal layer validates
+> both halves before `Metadata.DedupKey()` composes them — the signed `jti` must match that same
+> header-id grammar (`jose/sealed/open.go`, `checkSlots`) and the family must equal the consumer's
+> declared `SignLogical` (`open.go`, `peekOuter`) — so the ledger door checks provenance,
+> not spelling. A wire key under a sealed context is still admitted, as §4 already states: the
+> grammar governs wire-sourced ids and `:` keeps the two key spaces apart. This closes the class the 2026-09-08
+> amendment recorded without deciding: a sealed handler handing `ProcessOnce` a caller-written
+> `<family>:<jti>` string from `MessageID()`, `Headers()`, `outbox.EventIDFromHeaders` or the
+> body could occupy a victim's sealed ledger row; such a string can now become at most a wire key.
+> The "no exported sealed constructor" guarantee is pinned by an in-package walk that type-checks
+> `messaging`'s production files, allows exactly one creation site (the constructor) and exactly
+> one caller of it (`Metadata.DedupKey`), rather than by a test package outside `messaging`:
+> unexported fields already make an outside literal a compile error, so the remaining risk is a
+> new door inside the package. `IsSealedDedupKey` is deleted and the `inbox.sealed` metric label
+> reads `key.Sealed()`. `String()` renders the pre-amendment spelling on both branches, so no
+> ledger row, DLQ tooling or label value moves. `jose/sealed.Envelope.DedupKey()` stays a string.
+> Supersedes §2's `Meta.DedupKey() (string, error)` signature. This amendment's change is
+> `[C65.7]`, a compile-break.
+>
 > **Amended (2026-09-08, #1547):** the UNSEALED dedup key gains a second source. When a
 > delivery carries no `x-outbox-event-id` header at all, `Meta.DedupKey()` reads the AMQP
 > `message_id` property and validates it with the SAME `^[A-Za-z0-9_-]{1,128}$` grammar §4
@@ -133,7 +187,8 @@ typed door; the raw consume `Handler` stays (sealed bytes reaching it are cipher
 
 Handler surface (S2): `Meta.Sealed() (SealedEnvelope, bool)` is true for every message a
 seal-tagged `T` receives and false for every message a plain typed consumer receives —
-per type, never per message. `Meta.DedupKey() (string, error)` returns
+per type, never per message. `Meta.DedupKey() (string, error)` (typed
+`(messaging.DedupKey, error)` by the 2026-09-12 amendment, same spellings) returns
 `<SignFamily>:<jti>` for a seal-tagged `T` and never errors; for a plain typed `T` it
 returns the grammar-validated `x-outbox-event-id` or an error when absent or malformed
 (superseded for the unsealed branch by the 2026-09-08 amendment: an ABSENT header now falls

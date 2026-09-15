@@ -4,6 +4,80 @@
 **Date:** 2026-09-09
 **Issue:** #1575
 
+> **Amendment — 2026-09-13 (#1580).** The 16 KiB bound on the ENCODED protected-header
+> segment — the base64url text, measured before any decode — now applies to every
+> door the crypto adapter exposes — peek, decrypt and verify — not only the peek `jose/sealed`
+> uses, and each door refuses a body that is not a compact serialization before measuring it.
+> JSON serialization was never part of the contract (bodies are compact-serialized JOSE:
+> three base64url segments for a JWS, five for a JWE), though go-jose accepts it and so, until now, the implementation did
+> too: a JSON-serialized body did open through Decrypt and Verify. Refusing it aligns the
+> implementation with the documented contract rather than changing it, and the refusal is
+> named `ErrNotCompact` inside the door's existing generic parse error. The refusal class is
+> API-visible via `errors.Is` on the error chain to framework-internal callers, and is
+> deliberately not logged. One behaviour does
+> narrow: RFC 7515 §7.1 and RFC 7516 §7.1 define the compact serialization as BASE64URL parts
+> joined by dots, with no whitespace anywhere, but go-jose strips interior whitespace before
+> parsing, so a line-wrapped compact used to open; it is now refused. That is a narrowing to
+> the grammar the RFCs already state, not a change of contract — go-jose's tolerance was
+> leniency the framework never documented. Surrounding whitespace is still trimmed, so a token read from a file
+> with a trailing newline is unaffected.
+
+## Amendment (2026-09-13, #1579): a 2xx response that was not unwrapped is a transport error
+
+`JOSETransport` passed EVERY body it did not recognize through untouched — a plaintext
+`application/json` 200 in nested mode, and in envelope mode a body `Unwrap` declined. That
+made a stripped ciphertext, a route quietly switched to plaintext, and a genuine protected
+reply indistinguishable at the caller: the caller read bytes nothing had authenticated,
+under a status code the peer chose. The rule is now directional. Under an `Inbound` policy a
+**2xx must have been unwrapped** — `application/jose` plus a successful `jose.Open` in
+nested mode, `Unwrap` ok plus a successful `jose.Open` in envelope mode — or `RoundTrip`
+returns `httpclient.ErrJOSEPlaintextResponse`, wrapped with the status and the peer name,
+with the body closed and never handed back. **Non-2xx is unchanged**: a pre-trust error
+envelope is plaintext by design, because the peer was never authenticated in the first
+place, and it still reaches the caller with its headers untouched. Under a bare-JWE policy
+"unwrapped" proves only that the body was encrypted to us, not who sent it — there is no
+inner JWS, so sender authentication stays out of band exactly as the Context below says.
+
+Four decisions inside that rule. **Empty successes are not violations**: 204, 304 and every
+reply to HEAD stay in the skip set the ADR-107 transport already had — net/http guarantees
+they carry no body, so there is no plaintext to mistake for a payload, and refusing them
+would break every DELETE and conditional GET against a JOSE peer. A JOSE-typed 205 or 2xx
+answer to CONNECT keeps reaching `jose.Open` and failing closed exactly as before, while a
+plaintext one is refused like every other unopened 2xx. **Interceptors
+never see it**: a `RoundTrip` error short-circuits before `buildResponse`, so a response
+interceptor that would log, cache or re-parse the payload is never handed unauthenticated
+bytes. **One WARN, direction, status, peer and request id only**: the error and the log line name which peer
+answered and with what status — the line also carrying the `request_id` the transport can
+read off the outbound request or its context, so an operator can join the refusal to its
+request; a custom `TraceIDHeader` hides the header from the transport, which then reads the
+context instead, and the field is omitted only when neither
+source passes `trace.ValidateRequestID` — and
+nothing from the body — those bytes are precisely what
+must not be reported or logged, being unauthenticated content the peer chose. Naming the
+peer is what makes a fleet calling several JOSE integrations able to tell which one
+regressed, so `JOSETransport` gained a `PeerName` and a `Logger`, both seeded by the builder
+(`PeerName` read at Build time, so `WithPeerName` wins wherever it sits in the chain); an unusable
+`Logger` on a hand-built transport — nil, or a non-nil interface holding a typed-nil pointer —
+drops the line and leaves the error intact. In **nested mode**
+a refused response is closed undrained — the body was never read — so its keep-alive
+connection is discarded rather than reused: a deliberate trade, since draining bytes the
+transport just declared untrustworthy to save a connection is the wrong side of that
+bargain (envelope mode has already drained the body for `Unwrap`, so its connection is
+unaffected). **A refusal is also terminal**: `errors.Is(err, ErrJOSEPlaintextResponse)` is
+exempt from the client's retry loop, because the peer answered 2xx and already honored the
+request, so a retry would only duplicate a non-idempotent side effect. That terminal path wraps
+the refusal in `NewNetworkError`, so the taxonomy and the metrics built from it read
+`network_error` for what is a policy violation — the `errors.Is` contract is unaffected, and
+[#1629](https://github.com/gaborage/go-bricks/issues/1629) tracks the label.
+
+`AllowPlaintextSuccess`, on `JOSETransport` and on `JOSEConfig`, restores the old
+pass-through for a whole transport. It is the Strangler-migration knob and nothing else: set
+it while a peer legitimately answers some 2xx routes in plaintext, and clear it once every
+route is protected. The opt-out is transport-wide and a per-response predicate is
+deliberately out of scope: the field stays a `bool` because `JOSETransport` is exported and
+comparable, and a func-typed field would be an apidiff INCOMPATIBLE — an interface-typed
+field is the door if one is ever wanted. See [migrations.md](migrations.md) `[C65.8]`.
+
 ## Context
 
 `jose` ships exactly one wire shape. `Seal` signs the payload as a compact JWS and

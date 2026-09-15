@@ -8,6 +8,8 @@ import (
 	nethttp "net/http"
 
 	"github.com/gaborage/go-bricks/jose"
+	"github.com/gaborage/go-bricks/logger"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // headerContentType is the canonical HTTP Content-Type header name. Extracted to a
@@ -21,6 +23,11 @@ const headerContentType = "Content-Type"
 // enough to bound peak memory if a counterparty (or attacker) sends a malicious
 // response. Defense-in-depth against memory exhaustion.
 const DefaultMaxJOSEBodyBytes int64 = 10 << 20 // 10 MiB
+
+// ErrJOSEPlaintextResponse names a 2xx response the Inbound policy never opened, which the
+// transport refuses rather than handing the caller a body nothing authenticated. Match it
+// with errors.Is; it survives the client's own wrapping and the *url.Error net/http adds.
+var ErrJOSEPlaintextResponse = errors.New("httpclient: successful response was not JOSE-protected")
 
 // errEnvelopeUnbounded names the envelope-plus-unbounded-cap refusal. Build and RoundTrip
 // raise the same code from the same constructor so a caller matches one thing either way.
@@ -60,20 +67,24 @@ type BodyEnvelope interface {
 // and opens inbound response bodies (jose.Open) using a fixed pair of policies and a
 // single KeyResolver. What sealing and opening MEAN is the policy's Mode: sign+encrypt
 // and decrypt+verify on the nested JWE-of-JWS default, encrypt-only and decrypt-only on
-// a SealModeBareJWE policy, which carries no signature to verify.
+// a SealModeBareJWE policy, which carries no signature to verify, and encrypt-then-sign
+// and verify-then-decrypt on a SealModeJWSofJWE policy.
 //
 // Only bodies are protected: a request with no body is forwarded unsealed regardless of
-// method, and a response net/http guarantees is empty (1xx, 204, 304, any reply to HEAD) is
-// returned as-is even when it advertises application/jose. Every other response carrying that
-// content type is decrypted and verified, including shapes that are bodyless by RFC but not
-// by net/http — see unwrapResponse for why the guarantee, not the RFC, sets the boundary.
+// method, and a response net/http guarantees is empty (204, 304, any reply to HEAD, and the
+// 1xx a RoundTripper never returns) is returned with an empty body even when it advertises
+// application/jose. 101 is skipped too but keeps its body, which is the upgraded connection.
+// Every other response carrying that content type is decrypted and verified, including shapes
+// that are bodyless by RFC but not by net/http — see unwrapResponse for why the guarantee,
+// not the RFC, sets the boundary.
 //
 // Architectural placement: JOSETransport sits below the httpclient retry loop, so each
 // retry attempt produces a freshly-sealed request — important for protocols that
 // require unique iat/jti claims per attempt (Visa Token Services and similar).
 //
 // Response Content-Type discrimination: only application/jose responses are unwrapped;
-// other Content-Types pass through untouched. This mirrors the GoBricks server's hybrid
+// other Content-Types pass through untouched on a failure status and are refused on a
+// successful one (ErrJOSEPlaintextResponse). This mirrors the GoBricks server's hybrid
 // error envelope — pre-trust failures from the counterparty come back as plaintext
 // minimal JSON because the peer was never authenticated, and the transport must not
 // attempt to decrypt those.
@@ -89,14 +100,17 @@ type JOSETransport struct {
 	Inner nethttp.RoundTripper
 
 	// Outbound is optional: when set, it is the policy used to seal every outbound
-	// request body (sign+encrypt, or encrypt-only under SealModeBareJWE).
+	// request body (sign+encrypt, encrypt-only under SealModeBareJWE, or encrypt-then-sign
+	// under SealModeJWSofJWE).
 	// A nil Outbound disables outbound wrapping entirely (the transport delegates to Inner).
 	Outbound *jose.Policy
 
 	// Inbound is optional: when set, application/jose responses are opened
-	// (decrypt+verify, or decrypt-only under SealModeBareJWE).
-	// Other response Content-Types pass through unmodified so plaintext error envelopes
-	// from JOSE-aware counterparties (e.g., GoBricks pre-trust failures) remain readable.
+	// (decrypt+verify, decrypt-only under SealModeBareJWE, or verify-then-decrypt under
+	// SealModeJWSofJWE).
+	// Other response Content-Types pass through unmodified on a failure status, so plaintext
+	// error envelopes from JOSE-aware counterparties (e.g., GoBricks pre-trust failures)
+	// remain readable; on a 2xx they are refused as ErrJOSEPlaintextResponse.
 	Inbound *jose.Policy
 
 	// Resolver supplies keys for both Outbound (sign/encrypt) and Inbound (decrypt/verify).
@@ -123,6 +137,30 @@ type JOSETransport struct {
 	// over-cap error — because the Content-Type gate that would otherwise leave a
 	// non-JOSE body unread no longer applies.
 	Envelope BodyEnvelope
+
+	// AllowPlaintextSuccess disables the fail-closed rule on successful responses: with it
+	// set, a 2xx body the Inbound policy never opened reaches the caller as the peer sent
+	// it instead of raising ErrJOSEPlaintextResponse.
+	//
+	// The Strangler-migration knob, and nothing else: set it only while a peer legitimately
+	// answers some 2xx routes in plaintext, and clear it once every route is protected.
+	// Leaving it set means a stripped ciphertext, or a route quietly switched to plaintext,
+	// is indistinguishable from a genuine unprotected reply. Transport-wide by design; see
+	// ADR-107's amendment for why there is no per-response predicate.
+	AllowPlaintextSuccess bool
+
+	// PeerName is the low-cardinality logical service name Builder.WithPeerName already
+	// attaches to this client's metrics and spans. It names the counterparty in the
+	// ErrJOSEPlaintextResponse message and in the WARN, so an operator calling several JOSE
+	// peers can tell which integration regressed. Empty is fine: it is a diagnostic, never a
+	// routing or trust input.
+	PeerName string
+
+	// Logger receives the single WARN a refused successful response emits. An unusable one —
+	// nil, or a non-nil interface holding a typed-nil pointer — silences that line and nothing
+	// else: the error still names the violation, so a hand-built transport loses only the log.
+	// Builder-produced clients always seed the client's own logger.
+	Logger logger.Logger
 }
 
 // RoundTrip wraps the request body with JOSE (when Outbound is set), forwards to the
@@ -225,43 +263,53 @@ func (t *JOSETransport) wrapRequest(req *nethttp.Request) (*nethttp.Request, err
 	return clone, nil
 }
 
-// unwrapResponse opens resp.Body — decrypt+verify, or decrypt-only under
-// SealModeBareJWE — when Inbound is set AND the response's
-// Content-Type indicates JOSE. Plaintext responses (e.g., pre-trust error envelopes
-// from a JOSE-aware peer) and responses that definitionally carry no body pass through
-// unmodified.
+// unwrapResponse opens resp.Body — decrypt+verify, decrypt-only under SealModeBareJWE, or
+// verify-then-decrypt under SealModeJWSofJWE — when Inbound is set AND the response is
+// recognized as protected. A body that is not passes through unmodified on a failure status
+// (e.g. a pre-trust error envelope from a JOSE-aware peer) and is refused on a successful
+// one; responses that definitionally carry no body pass through untouched either way.
 func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Response) error {
+	t.normalizeNilBody(resp)
 	if t.skipsUnwrap(req, resp) {
+		t.emptyBodyIfGuaranteed(req, resp)
 		return nil
 	}
+
+	// Without a hook the Content-Type alone decides, and a non-JOSE body is never read: on a
+	// failure status it reaches the caller as the peer sent it, unbuffered and uncapped. A
+	// hook replaces that rule with one that needs the bytes, so from here every eligible body
+	// is read and Unwrap's verdict stands in for the Content-Type's.
+	if t.Envelope == nil && !jose.IsContentType(resp.Header.Get(headerContentType)) {
+		if t.refusesPlaintext(resp.StatusCode) {
+			return t.refusePlaintextSuccess(req, resp.StatusCode)
+		}
+		return nil
+	}
+
 	if t.Resolver == nil {
 		return errors.New("httpclient: JOSETransport requires a KeyResolver when Inbound is set")
 	}
-
 	maxBytes := t.MaxResponseBytes
 	if maxBytes == 0 {
 		maxBytes = DefaultMaxJOSEBodyBytes
 	}
 	raw, err := readAndCloseBody(resp.Body, maxBytes)
 	if err != nil {
+		// From here readAndCloseBody has closed the peer's body, so every error return leaves
+		// RoundTrip an inert one: its cleanup must not be a second Close on a hand-rolled
+		// Inner's body, which net/http's own bodies tolerate but a caller's need not.
+		replaceBody(resp, nil, "")
 		return fmt.Errorf("httpclient: read response body: %w", err)
 	}
 
-	var compact string
-	if t.Envelope != nil {
-		extracted, ok := t.Envelope.Unwrap(resp.Header.Get(headerContentType), raw)
-		if !ok {
-			// Not a protected body: hand back exactly what was read, headers untouched.
-			replaceBody(resp, raw, "")
-			return nil
-		}
-		compact = extracted
-	} else {
-		compact = string(raw)
+	compact, done, err := t.compactFrom(req, resp, raw)
+	if done || err != nil {
+		return err
 	}
 
 	plaintext, _, _, err := jose.Open(compact, t.Inbound, t.Resolver)
 	if err != nil {
+		replaceBody(resp, nil, "")
 		return err
 	}
 
@@ -295,12 +343,25 @@ func replaceBody(resp *nethttp.Response, payload []byte, contentType string) {
 	}
 }
 
-// skipsUnwrap reports whether resp must be handed back exactly as it arrived, without
-// its body being read at all: no inbound policy, no body, a response shape net/http
-// guarantees is empty, or — when no Envelope overrides the rule — a Content-Type
-// that is not application/jose.
+// normalizeNilBody installs an empty body when Inner returned none. The RoundTripper contract
+// does not force a non-nil Body and Inner is caller-supplied, so a nil one says nothing about
+// the response's shape: a 200 arriving without a body must still be judged by the Inbound
+// policy, not skipped as if net/http had guaranteed it empty. Normalizing here — rather than
+// refusing here — keeps the status classification in one place and guarantees nothing
+// downstream is ever handed a nil to read or close. A non-nil Body is never touched, so a
+// 101's live upgraded connection cannot be swapped out.
+func (t *JOSETransport) normalizeNilBody(resp *nethttp.Response) {
+	if t.Inbound == nil || resp == nil || resp.Body != nil {
+		return
+	}
+	resp.Body = nethttp.NoBody
+	resp.ContentLength = 0
+}
+
+// skipsUnwrap reports the responses that are not candidates at all: no inbound policy, or a
+// shape net/http guarantees is empty. Nothing is read and nothing is judged.
 func (t *JOSETransport) skipsUnwrap(req *nethttp.Request, resp *nethttp.Response) bool {
-	if t.Inbound == nil || resp == nil || resp.Body == nil {
+	if t.Inbound == nil || resp == nil {
 		return true
 	}
 	// Exactly the shapes net/http GUARANTEES arrive empty: bodyAllowedForStatus rejects 1xx,
@@ -319,14 +380,99 @@ func (t *JOSETransport) skipsUnwrap(req *nethttp.Request, resp *nethttp.Response
 	// connection — reading that would hang, not error. The method comes from the request, not
 	// resp.Request: *http.Transport back-fills that field but the RoundTripper contract does
 	// not require an Inner to, so it can be nil.
-	if resp.StatusCode < nethttp.StatusOK || resp.StatusCode == nethttp.StatusNoContent ||
-		resp.StatusCode == nethttp.StatusNotModified || req.Method == nethttp.MethodHead {
-		return true
+	return bodylessByGuarantee(req, resp)
+}
+
+// bodylessByGuarantee names the response shapes net/http pins at zero length.
+func bodylessByGuarantee(req *nethttp.Request, resp *nethttp.Response) bool {
+	return resp.StatusCode < nethttp.StatusOK || resp.StatusCode == nethttp.StatusNoContent ||
+		resp.StatusCode == nethttp.StatusNotModified || req.Method == nethttp.MethodHead
+}
+
+// normalizesEmptyBody reports the skip arms whose body must be discarded rather than passed
+// on. Inner is a caller-supplied RoundTripper and net/http strips nothing from what one
+// returns, so a malformed or hostile implementation can put bytes on exactly the shapes the
+// rule exempts — bytes no Inbound policy ever opened, handed back under a status the peer
+// chose. Closing and substituting NoBody costs nothing where the guarantee holds.
+//
+// Deliberately narrower than skipsUnwrap. A nil Inbound is the documented "transport does
+// nothing" mode, where the response must arrive exactly as Inner built it, and 101 is a
+// terminal response whose Body wraps the live upgraded connection: closing that would break
+// the caller's stream, and it is skipped on the status alone.
+func (t *JOSETransport) normalizesEmptyBody(req *nethttp.Request, resp *nethttp.Response) bool {
+	if t.Inbound == nil || resp == nil || resp.Body == nil {
+		return false
 	}
-	// Without a hook the Content-Type alone decides, and a non-JOSE body is never read:
-	// it reaches the caller as the peer sent it, unbuffered and uncapped. A hook replaces
-	// that rule with one that needs the bytes, so from here every eligible body is read.
-	return t.Envelope == nil && !jose.IsContentType(resp.Header.Get(headerContentType))
+	return resp.StatusCode != nethttp.StatusSwitchingProtocols && bodylessByGuarantee(req, resp)
+}
+
+// emptyBodyIfGuaranteed drops a body net/http promises is absent, so a hand-rolled Inner
+// cannot smuggle unverified bytes through a shape the rule exempts.
+func (t *JOSETransport) emptyBodyIfGuaranteed(req *nethttp.Request, resp *nethttp.Response) {
+	if !t.normalizesEmptyBody(req, resp) {
+		return
+	}
+	_ = resp.Body.Close()
+	resp.Body = nethttp.NoBody
+	resp.ContentLength = 0
+}
+
+// compactFrom yields the compact to open. done reports that the response was settled here:
+// an Envelope that declines a body either refuses the round trip or hands the bytes back.
+func (t *JOSETransport) compactFrom(req *nethttp.Request, resp *nethttp.Response, raw []byte) (compact string, done bool, err error) {
+	if t.Envelope == nil {
+		return string(raw), false, nil
+	}
+	extracted, ok := t.Envelope.Unwrap(resp.Header.Get(headerContentType), raw)
+	if ok {
+		return extracted, false, nil
+	}
+	if t.refusesPlaintext(resp.StatusCode) {
+		replaceBody(resp, nil, "")
+		return "", true, t.refusePlaintextSuccess(req, resp.StatusCode)
+	}
+	replaceBody(resp, raw, "")
+	return "", true, nil
+}
+
+// refusesPlaintext reports whether an unopened body at this status must be refused; see
+// ADR-107's amendment.
+func (t *JOSETransport) refusesPlaintext(status int) bool {
+	return !t.AllowPlaintextSuccess && IsSuccessStatus(status)
+}
+
+// refusePlaintextSuccess emits the one WARN the refusal is worth and returns the error
+// naming it. Status, peer and request id only, in both sinks: the body is exactly what must
+// not be reported or logged, being unauthenticated content the peer chose. An unusable
+// Logger drops the line and leaves the error unchanged — isNilLogger rather than a `!= nil`
+// test, because a non-nil interface holding a typed-nil *logger.ZeroLogger would otherwise
+// panic here, on the refusal path.
+func (t *JOSETransport) refusePlaintextSuccess(req *nethttp.Request, status int) error {
+	if !isNilLogger(t.Logger) {
+		event := t.Logger.Warn().
+			Str("direction", "inbound").
+			Str("peer", t.PeerName).
+			Int("status", status)
+		if id := refusalRequestID(req); id != "" {
+			event = event.Str("request_id", id)
+		}
+		event.Msg("REST client refused an unprotected successful response")
+	}
+	return fmt.Errorf("%w (peer: %q, status: %d)", ErrJOSEPlaintextResponse, t.PeerName, status)
+}
+
+// refusalRequestID names the refused round trip the way logRequest and logResponse name
+// theirs: the trace id the client stamped on the outbound request. A hand-built transport,
+// or a client with a custom TraceIDHeader, falls back to the context value; an empty result
+// means the field is omitted rather than logged blank. Both sources are caller-supplied, so
+// both go through the one ingest bound every other door applies (ADR-070) — request_id is
+// not a default sensitive field, and the log filter validates nothing.
+func refusalRequestID(req *nethttp.Request) string {
+	if id := gobrickstrace.ValidateRequestID(req.Header.Get(HeaderXRequestID)); id != "" {
+		return id
+	}
+	id, _ := TraceIDFromContext(req.Context())
+	return gobrickstrace.ValidateRequestID(id)
 }
 
 // readAndCloseBody drains body up to maxBytes (negative = unbounded) and closes it.

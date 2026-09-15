@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -9,8 +10,57 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/observability"
 )
+
+const (
+	// The two supported non-URI Oracle DSN spellings (database/oracle/connection.go hands
+	// either to godror verbatim). Both must stay unclaimed by PostgreSQL keyword inference.
+	oracleTNSDescriptorDSN = "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=host)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=XE)))"
+	oracleEasyConnectDSN   = "user/pass@localhost:1521/svc"
+)
+
+// hermeticPGEnv clears every libpq environment variable the DSN rules read or could be
+// thought to read, so a developer machine's own PG* settings cannot flip a result.
+func hermeticPGEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{
+		"PGHOST", "PGSERVICE", "PGSERVICEFILE", "PGPASSFILE",
+		"PGSSLMODE", "PGSSLROOTCERT", "PGSSLCERT", "PGSSLKEY", "PGSSLNEGOTIATION",
+	} {
+		t.Setenv(k, "")
+	}
+}
+
+// assertConnStringRefusal runs the connect door on a section carrying only cs and returns the
+// ConfigError it must produce. The no-echo assertion lives here so every refusal case gets it:
+// a scanned DSN can carry password text. The Action assertions live here too — the remedy text
+// is the operator's whole exit, and the category already says which rule fired.
+func assertConnStringRefusal(t *testing.T, cs, wantCategory string) *ConfigError {
+	t.Helper()
+	cfg := DatabaseConfig{ConnectionString: cs}
+
+	var cfgErr *ConfigError
+	require.ErrorAs(t, ApplyDatabasePoolDefaults(&cfg), &cfgErr)
+	assert.Equal(t, fieldDatabaseConnectionString, cfgErr.Field)
+	assert.Equal(t, wantCategory, cfgErr.Category)
+	assert.NotContains(t, cfgErr.Error(), cs, "must never echo the connection string")
+
+	switch wantCategory {
+	case errCategoryMissing:
+		for _, want := range []string{
+			"URI authority", "?host= query parameter", "keyword host=",
+			"PGHOST environment variable", "PGSERVICE service file is not consulted",
+		} {
+			assert.Contains(t, cfgErr.Action, want, "rule 1 must name every host source and the service-file gap")
+		}
+	case errCategoryInvalid:
+		assert.Contains(t, cfgErr.Action, "drop the TLS claim")
+		assert.Contains(t, cfgErr.Action, "use a TCP host")
+	}
+	return cfgErr
+}
 
 func TestDatabaseSectionConstructorsNamePathAndPlacement(t *testing.T) {
 	tests := []struct {
@@ -37,7 +87,7 @@ func TestNormalizeDatabaseValuesStartupRejectsTypeContradictingScheme(t *testing
 
 	err := normalizeDatabaseValues(&cfg, rootDatabaseSection(), dbStrictnessStartup)
 
-	assertValidationError(t, err, "conflicts with the connectionstring scheme")
+	assertValidationError(t, err, "conflicts with the connectionstring")
 	assert.Equal(t, before, cfg, "clone-commit: a rejected config must come back untouched")
 }
 
@@ -413,6 +463,60 @@ func TestUntypedDatabaseSectionsIsNilWhenEveryDSNIsTyped(t *testing.T) {
 	cfg := &Config{}
 	cfg.Database = DatabaseConfig{ConnectionString: "postgres://u:p@h/d", Type: PostgreSQL}
 	assert.Nil(t, UntypedDatabaseSections(cfg))
+}
+
+// A keyword-form DSN used to stay untyped forever and be reported here; inference now types
+// it during normalization, the only writer of Type this function reads.
+func TestUntypedDatabaseSectionsIsNilForNormalizedKeywordFormDSN(t *testing.T) {
+	hermeticPGEnv(t)
+
+	cfg := &Config{}
+	cfg.Database = DatabaseConfig{ConnectionString: "host=db.example.com user=u dbname=d"}
+
+	require.NoError(t, normalizeDatabaseSection(&cfg.Database, rootDatabaseSection()))
+
+	assert.Equal(t, PostgreSQL, cfg.Database.Type)
+	assert.Nil(t, UntypedDatabaseSections(cfg))
+}
+
+// A DSN that is neither URI-prefixed nor keyword-tokenizable must still come back untyped and
+// be REPORTED here, so app.Builder refuses it rather than booting green into a dead database.
+// app/app_builder_test.go pins the refusal itself.
+func TestUntypedDatabaseSectionsReportsForeignNonURIDSN(t *testing.T) {
+	hermeticPGEnv(t)
+
+	for name, cs := range map[string]string{
+		"oracle_easy_connect": oracleEasyConnectDSN,
+		"oracle_tns":          oracleTNSDescriptorDSN,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := &Config{}
+			cfg.Database = DatabaseConfig{ConnectionString: cs}
+
+			require.NoError(t, normalizeDatabaseSection(&cfg.Database, rootDatabaseSection()))
+
+			assert.Empty(t, cfg.Database.Type)
+			assert.Equal(t, []string{"database"}, UntypedDatabaseSections(cfg))
+		})
+	}
+}
+
+// An explicit type: oracle beside either non-URI Oracle DSN must survive startup: inference
+// claiming the string for PostgreSQL would turn it into a database.type conflict.
+func TestNormalizeKeepsExplicitOracleTypeBesideNonURIOracleDSN(t *testing.T) {
+	hermeticPGEnv(t)
+
+	for name, cs := range map[string]string{
+		"oracle_easy_connect": oracleEasyConnectDSN,
+		"oracle_tns":          oracleTNSDescriptorDSN,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := DatabaseConfig{Type: Oracle, ConnectionString: cs}
+
+			require.NoError(t, normalizeDatabaseSection(&cfg, rootDatabaseSection()))
+			assert.Equal(t, Oracle, cfg.Type)
+		})
+	}
 }
 
 // TestQualifiedActionNamesAReachableEnvVar drives the hint through a real Load, because the
@@ -1185,10 +1289,10 @@ func TestValidateDatabaseWithConnectionStringEdgeCases(t *testing.T) {
 	}
 }
 
-// dbTypeInferenceCase is one scheme-classification fixture. Both inference sites
+// dbTypeInferenceCase is one DSN-classification fixture. Both inference sites
 // — config.Validate and the ApplyDatabasePoolDefaults seam — share the slice so
-// they cannot drift apart on which schemes classify; their single deliberate
-// divergence (an explicit Type contradicting the scheme: an error in Validate,
+// they cannot drift apart on which DSNs classify; their single deliberate
+// divergence (an explicit Type contradicting the connectionstring: an error in Validate,
 // left alone on the seam) is pinned by each site's own test instead.
 type dbTypeInferenceCase struct {
 	name         string
@@ -1243,6 +1347,64 @@ func databaseTypeInferenceCases() []dbTypeInferenceCase {
 			expectedType: "",
 		},
 		{
+			name:         "keyword_form_infers_postgres",
+			config:       DatabaseConfig{ConnectionString: "host=db.example.com user=u dbname=d"},
+			expectedType: PostgreSQL,
+		},
+		{
+			name:         "keyword_form_single_pair_infers_postgres",
+			config:       DatabaseConfig{ConnectionString: "host=db.example.com"},
+			expectedType: PostgreSQL,
+		},
+		{
+			// pgx passes an unknown but well-shaped key through as a runtime parameter
+			// (pgconn.ParseConfig("foo=1 host=h user=u") yields RuntimeParams{foo:1}), so the
+			// key-shape test is about tokenization, not libpq's vocabulary.
+			name:         "keyword_form_unknown_key_infers_postgres",
+			config:       DatabaseConfig{ConnectionString: "foo=1 host=h user=u"},
+			expectedType: PostgreSQL,
+		},
+		{
+			// The URI prefixes are tested first, so an Oracle URI carrying a query pair
+			// (which the keyword tokenizer would happily read as one key=value) stays Oracle.
+			name:         "oracle_scheme_with_query_pair_stays_oracle",
+			config:       DatabaseConfig{ConnectionString: "oracle://u:p@localhost:1521/XEPDB1?timezone=UTC"},
+			expectedType: Oracle,
+		},
+		{
+			// A single-line Oracle TNS descriptor (database/oracle/connection.go passes it to
+			// godror verbatim) tokenizes as one pair whose key is "(DESCRIPTION".
+			name:         "oracle_tns_descriptor_keeps_empty_type",
+			config:       DatabaseConfig{ConnectionString: oracleTNSDescriptorDSN},
+			expectedType: "",
+		},
+		{
+			// godror easy-connect carries no '=', so the keyword tokenizer rejects it.
+			name:         "oracle_easy_connect_keeps_empty_type",
+			config:       DatabaseConfig{ConnectionString: oracleEasyConnectDSN},
+			expectedType: "",
+		},
+		{
+			name:         "jdbc_sqlserver_keeps_empty_type",
+			config:       DatabaseConfig{ConnectionString: "jdbc:sqlserver://localhost:1433;databaseName=db;encrypt=true"},
+			expectedType: "",
+		},
+		{
+			name:         "sqlserver_uri_keeps_empty_type",
+			config:       DatabaseConfig{ConnectionString: "sqlserver://user:pass@localhost:1433/db?encrypt=true"},
+			expectedType: "",
+		},
+		{
+			name:         "mysql_uri_keeps_empty_type",
+			config:       DatabaseConfig{ConnectionString: "mysql://h/db?parseTime=true"},
+			expectedType: "",
+		},
+		{
+			name:         "whitespace_only_connection_string_keeps_empty_type",
+			config:       DatabaseConfig{ConnectionString: " \t\n"},
+			expectedType: "",
+		},
+		{
 			name:         "no_connection_string_keeps_empty_type",
 			config:       DatabaseConfig{},
 			expectedType: "",
@@ -1272,13 +1434,22 @@ func TestValidateInfersDatabaseTypeFromConnectionString(t *testing.T) {
 	}
 
 	// The deliberate divergence from the ApplyDatabasePoolDefaults seam: Validate
-	// rejects an explicit Type contradicting the scheme (ADR-050 item 1).
+	// rejects an explicit Type contradicting the connectionstring (ADR-050 item 1).
 	t.Run("explicit_type_conflicting_with_scheme_fails", func(t *testing.T) {
 		cfg := DatabaseConfig{Type: Oracle, ConnectionString: testBarePostgresConnString}
 
 		err := normalizeDatabaseSection(&cfg, rootDatabaseSection())
 
-		assertValidationError(t, err, "conflicts with the connectionstring scheme")
+		assertValidationError(t, err, "conflicts with the connectionstring")
+	})
+
+	// Keyword-form inference widens the same conflict check.
+	t.Run("explicit_oracle_type_conflicting_with_keyword_form_fails", func(t *testing.T) {
+		cfg := DatabaseConfig{Type: Oracle, ConnectionString: "host=db.example.com user=u"}
+
+		err := normalizeDatabaseSection(&cfg, rootDatabaseSection())
+
+		assertValidationError(t, err, "conflicts with the connectionstring (which implies postgresql)")
 	})
 }
 
@@ -2483,6 +2654,33 @@ func TestValidateNamedDatabasesNoConflictWhenMultitenantDisabled(t *testing.T) {
 	assert.NoError(t, err, "no conflict when multitenant is disabled")
 }
 
+func TestIsUnixSocketHost(t *testing.T) {
+	tests := []struct {
+		name string
+		host string
+		want bool
+	}{
+		{name: "posix_absolute_path", host: "/var/run/postgresql", want: true},
+		{name: "windows_drive_letter", host: `C:\pg`, want: true},
+		{name: "windows_drive_letter_minimal", host: `Z:\`, want: true},
+		{name: "windows_drive_first_letter", host: `A:\`, want: true},
+		{name: "lowercase_drive_letter", host: `c:\pg`, want: false},
+		{name: "drive_below_uppercase_range", host: `@:\pg`, want: false},
+		{name: "drive_without_backslash", host: "C:", want: false},
+		{name: "drive_with_forward_slash", host: "C:/pg", want: false},
+		{name: "drive_without_colon", host: `C;\pg`, want: false},
+		{name: "relative_path", host: "./relative", want: false},
+		{name: "dns_name", host: "host.example.com", want: false},
+		{name: "localhost", host: "localhost", want: false},
+		{name: "empty", host: "", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isUnixSocketHost(tt.host))
+		})
+	}
+}
+
 func TestValidatePostgreSQLFieldsRejectsPartialClientCert(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -3006,6 +3204,8 @@ func TestApplyDatabasePoolDefaultsRunsVendorValidation(t *testing.T) {
 // forgot the host would connect to whatever listens locally with the configured
 // database.tls material silently discarded. v5.10.0 dialed tcp :5432 instead.
 func TestApplyDatabasePoolDefaultsRefusesEmptyPostgresHost(t *testing.T) {
+	hermeticPGEnv(t)
+
 	tests := []struct {
 		name      string
 		cfg       DatabaseConfig
@@ -3036,19 +3236,47 @@ func TestApplyDatabasePoolDefaultsRefusesEmptyPostgresHost(t *testing.T) {
 			wantField: "database.host",
 		},
 		{
+			// pgx splits the host on ',' and swaps each empty entry for the socket directory.
+			name: "multi_host_with_trailing_empty_entry_refused",
+			cfg: DatabaseConfig{
+				Type: PostgreSQL, Host: "db.internal,", Database: "d", Username: "u",
+				TLS: TLSConfig{Mode: sslModeVerifyFull, CAFile: "/etc/certs/ca.pem"},
+			},
+			wantField: "database.host",
+		},
+		{
+			name:      "multi_host_with_leading_empty_entry_refused",
+			cfg:       DatabaseConfig{Type: PostgreSQL, Host: ",db.internal", Database: "d", Username: "u"},
+			wantField: "database.host",
+		},
+		{
+			name:      "multi_host_with_trailing_empty_entry_without_tls_refused",
+			cfg:       DatabaseConfig{Type: PostgreSQL, Host: "db.internal,", Database: "d", Username: "u"},
+			wantField: "database.host",
+		},
+		{
+			name:      "multi_host_with_middle_empty_entry_refused",
+			cfg:       DatabaseConfig{Type: PostgreSQL, Host: "db1.internal,,db2.internal", Database: "d", Username: "u"},
+			wantField: "database.host",
+		},
+		{
+			name: "multi_host_all_named_accepted",
+			cfg:  DatabaseConfig{Type: PostgreSQL, Host: "db1.internal,db2.internal", Database: "d", Username: "u"},
+		},
+		{
 			// testBarePostgresConnString names a host; this pins only that the
 			// connectionstring short-circuit runs BEFORE the host guard.
 			name: "postgres_connectionstring_short_circuits_before_host_guard",
 			cfg:  DatabaseConfig{ConnectionString: testBarePostgresConnString},
 		},
 		{
-			// A DSN whose authority is empty is NOT guarded, deliberately: this seam
-			// does not parse DSNs, so a raw connectionstring reaches pgx verbatim and
-			// hits the same unix-socket TLS drop the typed shape is now refused for.
-			// Pinned as the accepted gap so widening the guard is a visible decision
-			// rather than a silent one (ADR-050 amendment, [C64.8] scope note; #1551).
-			name: "postgres_connectionstring_omitting_host_still_accepted",
-			cfg:  DatabaseConfig{ConnectionString: "postgres:///db"},
+			// [C65.2] closes the gap the previous row pinned: the connectionstring door
+			// now scans the DSN's own host the same way the typed door judges Host, so a
+			// DSN naming none resolves to pgx's implicit unix socket and is refused here
+			// instead of reaching pgx.
+			name:      "postgres_connectionstring_omitting_host_refused",
+			cfg:       DatabaseConfig{ConnectionString: "postgres:///db"},
+			wantField: fieldDatabaseConnectionString,
 		},
 		{
 			name: "postgres_host_set_accepted",
@@ -3099,10 +3327,281 @@ func TestApplyDatabasePoolDefaultsRefusesEmptyPostgresHost(t *testing.T) {
 	})
 }
 
+// TestApplyDatabasePoolDefaultsRefusesTLSOnUnixSocketHost pins the ADR-062 host-transport amendment.
+func TestApplyDatabasePoolDefaultsRefusesTLSOnUnixSocketHost(t *testing.T) {
+	const socketHost = "/var/run/postgresql"
+	type socketHostCase struct {
+		name        string
+		host        string
+		tls         TLSConfig
+		wantField   string
+		wantMessage string
+	}
+	socketRefusal := func(name, host string, tls TLSConfig) socketHostCase {
+		return socketHostCase{name: name, host: host, tls: tls, wantField: fieldDatabaseTLS, wantMessage: "unix socket"}
+	}
+	tests := []socketHostCase{
+		socketRefusal("unix_socket_host_verify_full_with_ca_refused", socketHost, TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}),
+		socketRefusal("unix_socket_host_require_without_material_refused", socketHost, TLSConfig{Mode: sslModeRequire}),
+		socketRefusal("unix_socket_host_unset_mode_with_ca_refused", socketHost, TLSConfig{CAFile: testTLSCAFile}),
+		socketRefusal("unix_socket_host_disable_with_cert_refused", socketHost, TLSConfig{Mode: sslModeDisable, CertFile: testTLSCertFile}),
+		socketRefusal("unix_socket_host_disable_with_key_refused", socketHost, TLSConfig{Mode: sslModeDisable, KeyFile: testTLSKeyFile}),
+		socketRefusal("windows_socket_host_verify_full_refused", `C:\pg`, TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}),
+		socketRefusal("multi_host_with_socket_entry_and_tls_refused", "db.internal,"+socketHost, TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}),
+		socketRefusal("multi_host_with_middle_socket_entry_and_tls_refused", "db1.internal,"+socketHost+",db2.internal", TLSConfig{Mode: sslModeRequire}),
+		{
+			// The mode allowlist still runs first, so a typo is reported as a typo.
+			name:        "unix_socket_host_invalid_mode_reports_mode_first",
+			host:        socketHost,
+			tls:         TLSConfig{Mode: "verify_full", CAFile: testTLSCAFile},
+			wantField:   "database.tls.mode",
+			wantMessage: "verify_full",
+		},
+		{name: "unix_socket_host_without_tls_accepted", host: socketHost},
+		{name: "unix_socket_host_disable_without_material_accepted", host: socketHost, tls: TLSConfig{Mode: sslModeDisable}},
+		{name: "localhost_verify_full_with_ca_accepted", host: "localhost", tls: TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}},
+		{name: "dns_host_verify_full_with_ca_accepted", host: "db.internal", tls: TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}},
+		{name: "multi_host_all_tcp_verify_full_with_ca_accepted", host: "db1.internal,db2.internal", tls: TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}},
+		{name: "multi_host_with_socket_entry_without_tls_accepted", host: "db.internal," + socketHost},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DatabaseConfig{Type: PostgreSQL, Host: tt.host, Database: "d", Username: "u", TLS: tt.tls}
+			original := cfg
+
+			err := ApplyDatabasePoolDefaults(&cfg)
+
+			if tt.wantField == "" {
+				require.NoError(t, err)
+				assert.Equal(t, tt.host, cfg.Host)
+				assert.Equal(t, tt.tls, cfg.TLS)
+				return
+			}
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+			assert.Contains(t, cfgErr.Message, tt.wantMessage)
+			assert.Equal(t, original, cfg, "a rejected config must go back to its caller untouched")
+		})
+	}
+
+	t.Run("unix_socket_host_refusal_names_both_exits", func(t *testing.T) {
+		cfg := DatabaseConfig{Type: PostgreSQL, Host: socketHost, TLS: TLSConfig{Mode: sslModeRequire}}
+
+		var cfgErr *ConfigError
+		require.ErrorAs(t, ApplyDatabasePoolDefaults(&cfg), &cfgErr)
+		assert.Equal(t, errCategoryInvalid, cfgErr.Category)
+		assert.Contains(t, cfgErr.Action, "remove the database.tls block")
+		assert.Contains(t, cfgErr.Action, "TCP host")
+	})
+
+	t.Run("forkey_named_database_field_is_section_qualified", func(t *testing.T) {
+		cfg := DatabaseConfig{Type: PostgreSQL, Host: socketHost, TLS: TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}}
+
+		var cfgErr *ConfigError
+		require.ErrorAs(t, ApplyDatabasePoolDefaultsForKey(&cfg, NamedDatabasePrefix+"reporting"), &cfgErr)
+		assert.Equal(t, "databases.reporting.tls", cfgErr.Field)
+		assert.Contains(t, cfgErr.Message, "unix socket")
+	})
+}
+
+// TestApplyDatabasePoolDefaultsRefusesImplicitSocketConnectionString pins [C65.2] rule 1.
+func TestApplyDatabasePoolDefaultsRefusesImplicitSocketConnectionString(t *testing.T) {
+	hermeticPGEnv(t)
+
+	refused := []struct {
+		name string
+		cs   string
+	}{
+		{name: "uri_no_host_verify_full", cs: "postgres:///db?sslmode=verify-full"},
+		{name: "uri_no_host", cs: "postgres:///db"},
+		// Rule 1 fires with no TLS keyword anywhere in the string.
+		{name: "keyword_no_host_no_tls_claim", cs: "user=u dbname=d"},
+		{name: "keyword_empty_host_at_end", cs: "user=u host="},
+		{name: "keyword_empty_entry", cs: "host=a,,b user=u"},
+		{name: "uri_empty_entry", cs: "postgres://a,,b/db"},
+		// service=/PGSERVICE: the scanner never reads a service file, so a DSN whose host
+		// would come from one is refused as host-less, the same class as an absent PGHOST.
+		{name: "service_dsn_without_host", cs: "service=svc sslmode=require"},
+	}
+	for _, tt := range refused {
+		t.Run(tt.name, func(t *testing.T) {
+			assertConnStringRefusal(t, tt.cs, errCategoryMissing)
+		})
+	}
+
+	accepted := []struct {
+		name   string
+		cs     string
+		pghost string
+	}{
+		{name: "uri_no_host_verify_full_via_pghost", cs: "postgres:///db?sslmode=verify-full", pghost: "db.example.com"},
+		{name: "uri_query_host", cs: "postgres:///db?host=db.example.com"},
+		{name: "uri_authority_host", cs: "postgres://db.example.com/db"},
+		{name: "keyword_host", cs: "host=db.example.com user=u"},
+		// Negative pin: pgx skips whitespace after '=', so the next pair becomes the host
+		// value — "user=u", a non-empty TCP host, not an implicit socket.
+		{name: "keyword_empty_host_swallows_next_pair", cs: "host= user=u dbname=d"},
+		// Negative pin: unescaped, pgx drops the backslash, so the host is TCP "C:pg" — not
+		// an absolute path, so not a socket entry either.
+		{name: "keyword_unescaped_windows_path_is_a_tcp_host", cs: `host=C:\pg sslmode=require`},
+	}
+	for _, tt := range accepted {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.pghost != "" {
+				t.Setenv("PGHOST", tt.pghost)
+			}
+			cfg := DatabaseConfig{ConnectionString: tt.cs}
+
+			require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
+		})
+	}
+
+	// An empty host= key shadows PGHOST in pgx (the DSN's own host, even empty, wins over the
+	// environment), so the refusal fires and PGHOST is never consulted. "host=" is last so its
+	// value is genuinely empty, unlike "host= user=u", which swallows the next pair.
+	t.Run("empty_host_key_shadows_pghost_and_is_still_refused", func(t *testing.T) {
+		t.Setenv("PGHOST", "db.example.com")
+
+		assertConnStringRefusal(t, "user=u host=", errCategoryMissing)
+	})
+
+	t.Run("named_section_field_is_qualified", func(t *testing.T) {
+		cfg := DatabaseConfig{ConnectionString: "postgres:///db"}
+
+		var cfgErr *ConfigError
+		require.ErrorAs(t, ApplyDatabasePoolDefaultsForKey(&cfg, NamedDatabasePrefix+"reporting"), &cfgErr)
+		assert.Equal(t, "databases.reporting.connectionstring", cfgErr.Field)
+	})
+
+	t.Run("password_in_dsn_never_reaches_the_error", func(t *testing.T) {
+		cfgErr := assertConnStringRefusal(t, "user=u password=hunter2 host=", errCategoryMissing)
+		assert.NotContains(t, cfgErr.Error(), "hunter2")
+	})
+}
+
+// TestApplyDatabasePoolDefaultsRefusesTLSClaimOnSocketConnectionString pins [C65.2] rule 2.
+func TestApplyDatabasePoolDefaultsRefusesTLSClaimOnSocketConnectionString(t *testing.T) {
+	hermeticPGEnv(t)
+
+	refused := []struct {
+		name   string
+		cs     string
+		pghost string
+	}{
+		{name: "keyword_socket_verify_full", cs: "host=/var/run/postgresql sslmode=verify-full"},
+		{name: "uri_query_socket_sslrootcert", cs: "postgres:///db?host=/var/run/postgresql&sslrootcert=/x"},
+		{name: "uri_percent_encoded_socket", cs: "postgres://%2Fvar%2Frun%2Fpostgresql/db?sslmode=require"},
+		// Go raw string: the DSN text is host=C:\\pg — pgx drops one backslash, leaving the
+		// absolute Windows path C:\pg.
+		{name: "keyword_raw_windows_socket", cs: `host=C:\\pg sslmode=require`},
+		{name: "keyword_quoted_windows_socket", cs: `host='C:\\pg' sslmode=require`},
+		{name: "multi_host_with_socket_entry", cs: "host=db.internal,/var/run/postgresql sslmode=verify-full"},
+		// pgx pgconn/config.go:903-907 upgrades an unset/prefer sslmode to require under
+		// direct negotiation, so the DSN claims TLS even without an explicit sslmode.
+		{name: "sslnegotiation_direct_claims_tls", cs: "host=/s sslnegotiation=direct"},
+		// Fail-closed: pgx would connect in plaintext under direct+disable, which libpq
+		// itself refuses as a combination — a TLS claim only ever ADDS a refusal here, it
+		// never suppresses one, so this still counts as claiming TLS.
+		{name: "sslnegotiation_direct_with_disable", cs: "host=/s sslnegotiation=direct sslmode=disable"},
+		{name: "sslnegotiation_direct_with_allow", cs: "host=/s sslnegotiation=direct sslmode=allow"},
+		{name: "socket_via_pghost", cs: "user=u sslmode=require", pghost: "/var/run/postgresql"},
+	}
+	for _, tt := range refused {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.pghost != "" {
+				t.Setenv("PGHOST", tt.pghost)
+			}
+
+			cfgErr := assertConnStringRefusal(t, tt.cs, errCategoryInvalid)
+			assert.Contains(t, cfgErr.Message, "names TLS")
+		})
+	}
+
+	accepted := []struct {
+		name string
+		cs   string
+	}{
+		{name: "socket_no_claim", cs: "host=/var/run/postgresql"},
+		{name: "socket_disable", cs: "host=/var/run/postgresql sslmode=disable"},
+		{name: "socket_prefer", cs: "host=/var/run/postgresql sslmode=prefer"},
+		// Empty material does not claim, following pgx's own configTLS.
+		{name: "empty_material_no_claim", cs: "host=/s sslcert=''"},
+	}
+	for _, tt := range accepted {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DatabaseConfig{ConnectionString: tt.cs}
+
+			require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
+		})
+	}
+}
+
+// TestApplyDatabasePoolDefaultsAcceptsPGSSLEnvTLSClaimOnSocketDSN pins the residual fail-open
+// [C65.2] deliberately leaves open, not a property worth preserving: claimsTLS reads DSN text
+// only, so a socket DSN whose TLS claim arrives through a PGSSL* variable is accepted here and
+// then dialed by pgx with TLSConfig == nil — the same silent TLS drop rule 2 closes, and
+// asymmetric with PGHOST, which this seam does read. Tracked as gaborage/go-bricks#1632; a
+// change of posture must flip this test rather than pass it silently.
+func TestApplyDatabasePoolDefaultsAcceptsPGSSLEnvTLSClaimOnSocketDSN(t *testing.T) {
+	hermeticPGEnv(t)
+	const socketDSN = "host=/var/run/postgresql user=u"
+
+	for _, env := range []struct{ key, value string }{
+		{key: "PGSSLMODE", value: "verify-full"},
+		{key: "PGSSLROOTCERT", value: "/etc/pg/ca.crt"},
+		{key: "PGSSLCERT", value: "/etc/pg/client.crt"},
+		{key: "PGSSLKEY", value: "/etc/pg/client.key"},
+	} {
+		t.Run(strings.ToLower(env.key)+"_not_judged", func(t *testing.T) {
+			t.Setenv(env.key, env.value)
+			cfg := DatabaseConfig{ConnectionString: socketDSN}
+
+			require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
+		})
+	}
+}
+
+// TestApplyDatabasePoolDefaultsConnectionStringPassesThroughUntokenizableDSNs pins that a DSN
+// the scanner cannot tokenize is never refused: this seam must not refuse what pgx accepts.
+func TestApplyDatabasePoolDefaultsConnectionStringPassesThroughUntokenizableDSNs(t *testing.T) {
+	hermeticPGEnv(t)
+	for i, dsn := range testutil.UntokenizablePostgresDSNs {
+		// Indexed, never the DSN itself: a fixture carrying a password must not reach
+		// test output.
+		t.Run(fmt.Sprintf("untokenizable_%02d", i), func(t *testing.T) {
+			// Explicit Type is the point here: an untokenizable DSN infers no vendor, so
+			// without it the PostgreSQL rules would never run and the pin would be vacuous.
+			cfg := DatabaseConfig{Type: PostgreSQL, ConnectionString: dsn}
+			require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
+		})
+	}
+}
+
+// TestApplyDatabasePoolDefaultsConnectionStringTLSBlockPrecedesHostCheck pins that a co-present
+// database.tls block is still refused first (ADR-062 R4), ahead of [C65.2]'s own rules.
+func TestApplyDatabasePoolDefaultsConnectionStringTLSBlockPrecedesHostCheck(t *testing.T) {
+	hermeticPGEnv(t)
+	cfg := DatabaseConfig{ConnectionString: "postgres:///db", TLS: TLSConfig{Mode: sslModeRequire}}
+
+	var cfgErr *ConfigError
+	require.ErrorAs(t, ApplyDatabasePoolDefaults(&cfg), &cfgErr)
+	assert.Equal(t, fieldDatabaseTLS, cfgErr.Field)
+	assert.Contains(t, cfgErr.Message, "ignored when connectionstring is set")
+}
+
+// TestApplyDatabasePoolDefaultsOracleConnectionStringWithoutHostAccepted pins [C65.2] as
+// PostgreSQL-only.
+func TestApplyDatabasePoolDefaultsOracleConnectionStringWithoutHostAccepted(t *testing.T) {
+	cfg := DatabaseConfig{Type: Oracle, ConnectionString: "oracle://u:p@/xe"}
+	require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
+}
+
 func TestApplyDatabasePoolDefaultsKeepsExplicitType(t *testing.T) {
 	// The conflicting case pins a deliberate divergence from
 	// normalizeWithConnectionString (startup strictness), which rejects a Type
-	// contradicting the scheme: this seam runs per connection (connect
+	// contradicting the connectionstring: this seam runs per connection (connect
 	// strictness), so it leaves the explicit Type alone and lets the vendor dial
 	// error be the failure (ADR-050). Do not "fix" it.
 	// The matching-type case is covered by explicit_matching_type_untouched in
@@ -3110,4 +3609,55 @@ func TestApplyDatabasePoolDefaultsKeepsExplicitType(t *testing.T) {
 	conflicting := DatabaseConfig{Type: Oracle, ConnectionString: testBarePostgresConnString}
 	require.NoError(t, ApplyDatabasePoolDefaults(&conflicting))
 	assert.Equal(t, Oracle, conflicting.Type)
+}
+
+// TestIsPostgresKeywordNameShape pins libpq's keyword shape [A-Za-z_][A-Za-z0-9_]*
+// character by character: each range's own endpoints and the neighbors just
+// outside it, plus the index rule that lets a digit continue a key but never
+// start one.
+func TestIsPostgresKeywordNameShape(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		valid bool
+	}{
+		{"underscore_alone", "_", true},
+		{"lower_a", "a", true},
+		{"lower_z", "z", true},
+		{"upper_A", "A", true},
+		{"upper_Z", "Z", true},
+		{"backtick_below_lower_a", "`", false},
+		{"brace_above_lower_z", "{", false},
+		{"at_below_upper_A", "@", false},
+		{"bracket_above_upper_Z", "[", false},
+		{"digit_zero_at_index_zero", "0", false},
+		{"digit_nine_at_index_zero", "9", false},
+		{"digit_zero_after_letter", "a0", true},
+		{"digit_nine_after_letter", "a9", true},
+		{"slash_below_digit_zero_after_letter", "a/", false},
+		{"colon_above_digit_nine_after_letter", "a:", false},
+		{"backtick_after_letter", "a`", false},
+		{"brace_after_letter", "a{", false},
+		{"at_after_letter", "a@", false},
+		{"bracket_after_letter", "a[", false},
+		{"underscore_after_letter", "a_", true},
+		{"digit_then_letter", "9a", false},
+		// Unreachable through the caller: pgKeywordSettings rejects an empty key
+		// (config/postgres_dsn.go:154) before the shape test sees it.
+		{"empty_key", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.valid, isPostgresKeywordName(tt.key))
+		})
+	}
+}
+
+// TestInferDatabaseTypeFromConnectionStringKeywordKeyShape carries the index rule
+// end to end: a digit-led key leaves the DSN untyped, the same digit inside a key
+// still infers postgresql.
+func TestInferDatabaseTypeFromConnectionStringKeywordKeyShape(t *testing.T) {
+	assert.Empty(t, inferDatabaseTypeFromConnectionString("9host=x user=u"))
+	assert.Equal(t, PostgreSQL, inferDatabaseTypeFromConnectionString("h9=1 host=h"))
 }

@@ -93,7 +93,7 @@ var (
 // stubInboxProcessor is a minimal InboxProcessor for wiring tests.
 type stubInboxProcessor struct{}
 
-func (stubInboxProcessor) ProcessOnce(context.Context, string, func(context.Context, database.Tx) error) error {
+func (stubInboxProcessor) ProcessOnce(context.Context, messaging.DedupKey, func(context.Context, database.Tx) error) error {
 	return nil
 }
 

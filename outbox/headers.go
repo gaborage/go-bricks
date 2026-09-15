@@ -91,8 +91,9 @@ func takeFrameworkStamps(headers map[string]any) (stamp, contentType string) {
 // returning ok=false when the header is absent, empty, or not a string/[]byte.
 // AMQP header values can arrive as either string or []byte depending on the
 // broker and client, so both are normalized. The value is extracted, not
-// validated: inbox.ProcessOnce refuses an id outside the ledger grammar at the
-// ledger door, and messaging.Metadata.DedupKey validates as it extracts.
+// validated: messaging.WireDedupKey applies the ledger grammar when it builds
+// the key inbox.ProcessOnce takes, and messaging.Metadata.DedupKey validates as
+// it extracts.
 func EventIDFromHeaders(h amqp.Table) (string, bool) {
 	raw, present := h[HeaderEventID]
 	if !present {

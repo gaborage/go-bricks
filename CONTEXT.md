@@ -12,6 +12,29 @@ One database configuration block, wherever it sits in the tree — the root
 `database`, an entry under `databases`, or a tenant's `database`.
 _Avoid_: database config, DB block, DSN block
 
+**Connection string**:
+The raw DSN a database section's `connectionstring` key carries, passed to the driver
+unparsed apart from type inference (ADR-050) and, for PostgreSQL, a scan of its resolved
+host and its own TLS claim (`[C65.2]`: a host that names nothing is refused, and so is a
+unix-socket host under a TLS claim — `sslmode` of `require`/`verify-ca`/`verify-full`,
+`sslnegotiation=direct`, or non-empty `sslrootcert`/`sslcert`/`sslkey`) — the seam never
+otherwise parses it.
+_Avoid_: conn string, database URL
+
+**Host source**:
+Any of the four places a PostgreSQL connection string's host can be named: the URI
+authority, a `?host=` query parameter, a keyword `host=` pair, or the `PGHOST`
+environment variable — the last consulted only when the connection string carries no
+`host` key of its own at all.
+_Avoid_: host (unqualified, for this concept), PGHOST (as a stand-in for the concept)
+
+**Implicit socket**:
+What the driver substitutes when no host source names a host: a unix socket in the
+server's own socket directory, where TLS is never negotiated. What `[C64.8]` refuses
+for a typed database section — widened by `[C65.6]` to an empty comma-separated `host`
+entry — and `[C65.2]` refuses for a connection string.
+_Avoid_: default host, empty host (the input shape, not this outcome)
+
 **Placement**:
 Where a resource kind's section sits in the tree: `root`, `named`, or `tenant`,
 though not every kind uses every value — a database section may be any of the
@@ -237,17 +260,20 @@ Turning one outbound payload into its protected wire form, exactly once, before
 it goes out — applying whatever the policy's seal mode says that form is. The
 default is both operations: the sealed-event shape encrypts the subject and
 signs the whole result; the JWE-of-JWS body shape signs the payload as a compact
-JWS and encrypts that. The bare-JWE shape is encryption alone, for a peer
-already authenticated out of band.
+JWS and encrypts that. The JWS-of-JWE shape runs the same two operations in the
+other order, signing the compact JWE so the signature is the outer layer. The
+bare-JWE shape is encryption alone, for a peer already authenticated out of
+band.
 Opening reverses whichever shape was sealed; a sealed-shaped body that fails any
 open step is poison, never plaintext.
 _Avoid_: protect, wrap; and "encrypt" as a synonym for sealing — encryption is
 one operation the mode may select, not the name of the act
 
 **Seal mode**:
-Which protected shape a policy seals and opens — the signed default, or the
-bare one whose sender is authenticated by the transport instead. It is a field
-on the policy, not a second door: the same seal and open calls read it.
+Which protected shape a policy seals and opens: the signed-then-encrypted
+default, the encrypted-then-signed one whose signature is the outer layer, or
+the bare one whose sender is authenticated by the transport instead. It is a
+field on the policy, not a second door: the same seal and open calls read it.
 _Avoid_: bare encryption, raw JWE, MLE (Visa's name for their instance of the
 bare shape, not a framework term)
 
@@ -328,10 +354,13 @@ the ledger — never by the sealing layer.
 _Avoid_: replay, redelivery (the causes), repeat
 
 **Dedup key**:
-The identity a consumer's ledger records for a sealed message: composed by the
-framework from the verified signing identity and the message's signed unique
-id, in a shape nothing outside the sealing layer can produce. Provisioning
-decides who can mint one; a header never can.
+The identity a consumer's ledger records for a message. It is a VALUE, not a
+string: it carries which door produced it, and the ledger admits it on that
+provenance. The sealed form — composed by the framework from the verified
+signing identity and the message's signed unique id — only the framework can
+produce, and only for the delivery it hands the handler; every other id becomes
+a wire key through the one exported door. Provisioning decides who can mint a
+sealed one; a header never can.
 _Avoid_: event id (the outbox row's word), message id (the wire field), jti
 (the slot, not the composed key), idempotency key (the consumer's business
 key)

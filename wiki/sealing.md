@@ -250,22 +250,34 @@ rejection**; its one replay-related job is to make the message's identity un-for
 - `Meta.Sealed() (SealedEnvelope, bool)` — true for every delivery a seal-tagged `T`
   receives, false for every delivery a plain typed consumer receives: a property of the
   consumer TYPE, so a handler branching on it cannot be steered by a header.
-- `Meta.DedupKey() (string, error)` — `<SignFamily>:<jti>` for a seal-tagged `T` (never
-  errors; the Logical family, not the Generation, so a rotation does not re-open the
-  window); for a plain `T` the `x-outbox-event-id` header once it passes
+- `Meta.DedupKey() (messaging.DedupKey, error)` — a value carrying which door produced it.
+  For a seal-tagged `T` it is a SEALED key spelling `<SignFamily>:<jti>` (never errors; the
+  Logical family, not the Generation, so a rotation does not re-open the window); for a
+  plain `T` it is a WIRE key holding the `x-outbox-event-id` header once it passes
   `^[A-Za-z0-9_-]{1,128}$` — or, when the delivery carries no such header, the AMQP
   `message_id` property under that same grammar — or an error wrapping
-  `messaging.ErrInvalidEventID`. Both unsealed sources answer to a grammar that excludes
-  `:`, so neither can mint a sealed key.
-- `Meta.DedupKey()` on a sealed consumer is `<SignFamily>:<jti>`; `inbox.ProcessOnce` admits it
-  only under the delivery context the sealed door handed the handler
-  (`messaging.IsSealedDelivery`). Call `ProcessOnce` with a context derived from the
-  handler's — `context.WithoutCancel(ctx)` for background work, never `context.Background()`
-  — or the marker is lost and the call fails closed with `ErrInvalidEventID`.
-- `:` is outside the header-id grammar, so no header can spell a sealed key: a publish-ACL
-  holder on an unsealed sibling queue cannot pre-insert a sealed message's key and have the
-  real one skip+ACK (the shared-ledger suppression attack). That grammar applies to
-  unsealed consumers too — [migrations.md](migrations.md) `[C63.2]`.
+  `messaging.ErrInvalidEventID`. `key.Sealed()` reports the provenance and `key.String()`
+  the persisted spelling; the zero value is invalid.
+- **Only the sealed branch of `Metadata.DedupKey` can mint a sealed key.** No exported door
+  does: `messaging.WireDedupKey`, the one constructor for a wire-sourced or
+  consumer-composed id, returns an unsealed key whatever the id spells. So admission at the
+  ledger is by TYPE and provenance, not by spelling.
+- `inbox.ProcessOnce` (through `messaging.ValidateDedupKey`) refuses the zero key, and
+  refuses a SEALED key under a context the sealed door did not mark
+  (`messaging.IsSealedDelivery`). The marker is a context value, so what it catches is a
+  context that never came from the sealed door: `context.Background()` drops it and fails
+  closed with `ErrInvalidEventID` instead of writing the ledger row silently.
+  `context.WithoutCancel(ctx)` keeps every value, the marker included, so detached work
+  derived that way still passes admission — which is the point: give it a fresh bounded
+  timeout rather than reaching for `Background`. What the marker does not distinguish is
+  WHICH sealed delivery marked the context, so a handler that carries one delivery's key
+  into another's is still admitted ([#1634](https://github.com/gaborage/go-bricks/issues/1634)).
+- The header-id grammar excludes `:`, so no header-sourced or consumer-composed id can even
+  spell a sealed key: a publish-ACL holder on an unsealed sibling queue cannot pre-insert a
+  sealed message's key and have the real one skip+ACK (the shared-ledger suppression
+  attack). That grammar applies to unsealed consumers too — [migrations.md](migrations.md)
+  `[C63.2]`. The typed key makes that a belt-and-braces second line rather than the
+  boundary itself.
 - `inbox.retentionperiod` **is** the replay window: a capture-then-wait replay older than
   retention re-executes if its Generation is still accepted. Retention must exceed the
   broker's redelivery window AND cover the DLQ drains and outbox re-drives you intend to
@@ -348,6 +360,71 @@ Each invocation is a fresh seal with a fresh `jti`, so publishing the same `body
 is the dedup test and re-running the CLI is not. Go test authors do not need the binary:
 mint from a JSON fixture in-process with `sealed.NewDocumentSpec` plus `sealed.SealDocument`,
 which is the same path this CLI runs.
+
+## Inspecting sealed events (open-event CLI)
+
+`cmd/open-event` is the mirror of `seal-event`: it verifies and decrypts one sealed body
+through the production `sealed.OpenDocument` path and prints what the message proved about
+itself. There is no skip-verification mode — it fails exactly where the consume door fails,
+with the same `SEAL_*` code.
+
+```sh
+go install github.com/gaborage/go-bricks/cmd/open-event@latest
+
+open-event -sign-key-file sign.pub.der -encrypt-key-file enc.der \
+  -sign-kid svc-payments-sign-v1 -encrypt-kid aud-core-encrypt-v1 \
+  -subject card -event-type payment.authorized \
+  -tenancy shared -tenant-id t1 body.txt
+```
+
+```text
+JTI:        3f2a6c18-7b91-4d0e-9c3a-5e8b1d24af77
+IssuedAt:   2026-09-13T09:14:22Z
+EventType:  payment.authorized
+TenantID:   t1
+SignKid:    svc-payments-sign-v1
+SignFamily: svc-payments-sign
+EncKid:     aud-core-encrypt-v1
+
+{"order_id":"o-1","amount":100,"card":"<redacted>"}
+```
+
+It holds the CONSUMER role, so its two key flags are the mirror of `seal-event`'s: the sign
+PUBLIC half (`sign.pub.der`, to verify) and the encrypt PRIVATE half (`enc.der`, to
+decrypt) — the same two files the openssl recipe above produced.
+
+**The subject is never printed by default.** Its member keeps its place in the document so
+the shape stays readable, but its value is the fixed literal `"<redacted>"`: no plaintext,
+and no length hint either. `-print-subject` splices the real plaintext instead and writes
+one warning line to stderr first — fixture data only, never a production queue's payload.
+
+Both wire kids are required flags, never read from the unauthenticated protected header,
+and the Logical family is derived from them the way `seal-event` derives it. A kid that
+disagrees with the body is a genuine refusal (`SEAL_KID_FAMILY_MISMATCH`,
+`SEAL_KID_UNKNOWN_GENERATION`), not a pre-check.
+
+`-tenancy` names the tid rule to apply. `shared` requires a signed `tid` equal to
+`-tenant-id` — the flag stands in for the `x-tenant-id` header the delivery pipeline would
+have read. `optional` and `per-tenant` are the SAME rule (`{Expected: tenantID}`: an absent
+tid is accepted, a present one that differs is poison) and differ from `shared` only in
+whether a tid is required — four mode names, three behaviours; both spellings exist so an
+invocation can say which deployment it reproduces. `disabled` — the default — applies no
+rule and surfaces whatever tid the wire carries, so passing `-tenant-id` with it is a usage
+error (exit 2) rather than a value nobody judges.
+
+Exit codes: `0` opened, `1` tool error (bad or unreadable key, unreadable input), `2` usage,
+`3` refused. A refusal prints its code and presence/length details — never a subject byte.
+`-json` emits `{"envelope":{…},"document":…}` on success and `{"code":…,"details":{…}}` on
+refusal, the latter on stdout so one stream carries the whole result; the rule NUMBER is
+omitted from every output, since its numbering is unstable — key on the code. JSON output
+keeps Go's default HTML escaping, so on the wire the placeholder is spelled
+`"\u003credacted\u003e"` and any JSON decoder reads it back as `<redacted>` — match the
+decoded value, never the raw bytes.
+
+`open-event` reads at most 1 MiB from the body file or stdin and refuses a larger input
+before anything parses it, so a mistyped path (a log, a core dump) fails at the door instead
+of being buffered whole. The cap is this binary's alone — `seal-event` and `seal-payload`
+stay uncapped.
 
 ## Residuals
 

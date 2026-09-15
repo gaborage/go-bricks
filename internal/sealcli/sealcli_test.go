@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"flag"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,7 +136,7 @@ const (
 	encryptRefusal = "exactly one of -encrypt-key-file or -encrypt-key-value is required"
 )
 
-// refusalCases are the four wrong-source shapes. Every path named is one that
+// refusalCases are the wrong-source shapes. Every path named is one that
 // does not exist, so a refusal string proves the check ran before any I/O —
 // reaching a loader would surface a read error instead.
 var refusalCases = []struct {
@@ -144,9 +145,11 @@ var refusalCases = []struct {
 	want string
 }{
 	{"both_sign_sources", KeySources{SignFile: missingPath, SignValue: "AAAA", EncryptFile: missingPath}, signRefusal},
-	{"neither_sign_source", KeySources{EncryptFile: missingPath}, signRefusal},
+	{"sign_pair_required_by_default", KeySources{EncryptFile: missingPath}, signRefusal},
 	{"both_encrypt_sources", KeySources{SignFile: missingPath, EncryptFile: missingPath, EncryptValue: "AAAA"}, encryptRefusal},
 	{"neither_encrypt_source", KeySources{SignFile: missingPath}, encryptRefusal},
+	{"sign_optional_both_sign_sources", KeySources{SignFile: missingPath, SignValue: "AAAA", EncryptFile: missingPath, SignOptional: true}, signRefusal},
+	{"sign_optional_neither_encrypt_source", KeySources{SignOptional: true}, encryptRefusal},
 }
 
 func TestKeySourcesValidate(t *testing.T) {
@@ -162,10 +165,15 @@ func TestKeySourcesValidate(t *testing.T) {
 		k := KeySources{SignFile: missingPath, EncryptValue: "AAAA"}
 		assert.NoError(t, k.Validate(), "Validate must not touch the filesystem")
 	})
+
+	t.Run("sign_optional_without_sign_source", func(t *testing.T) {
+		k := KeySources{EncryptFile: missingPath, SignOptional: true}
+		assert.NoError(t, k.Validate())
+	})
 }
 
 func TestKeySourcesLoad(t *testing.T) {
-	// Load re-runs Validate, so the same four shapes must refuse here too —
+	// Load re-runs Validate, so the same shapes must refuse here too —
 	// with the refusal string, never a read error from the nonexistent paths.
 	for _, tt := range refusalCases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -180,6 +188,34 @@ func TestKeySourcesLoad(t *testing.T) {
 	}
 
 	privDER, pubDER, wantPriv, wantPub := rsaFixtures(t)
+
+	t.Run("sign_optional_loads_encrypt_key_only", func(t *testing.T) {
+		k := KeySources{EncryptValue: base64.StdEncoding.EncodeToString(pubDER), SignOptional: true}
+		keys, err := k.Load("", testEncKid)
+		require.NoError(t, err)
+		require.NotNil(t, keys)
+		// Reported by TYPE, never by value (ADR-102).
+		if keys.SignPriv != nil {
+			assert.Fail(t, "unexpected sign key", "no sign source, yet got a %T", keys.SignPriv)
+		}
+
+		pub, err := keys.PublicKey(testEncKid)
+		require.NoError(t, err)
+		assert.True(t, wantPub.Equal(pub), "encrypt key round-tripped to a different key")
+	})
+
+	t.Run("sign_optional_still_loads_supplied_sign_key", func(t *testing.T) {
+		k := KeySources{
+			SignValue:    base64.StdEncoding.EncodeToString(privDER),
+			EncryptValue: base64.StdEncoding.EncodeToString(pubDER),
+			SignOptional: true,
+		}
+		keys, err := k.Load(testSignKid, testEncKid)
+		require.NoError(t, err)
+		priv, err := keys.PrivateKey(testSignKid)
+		require.NoError(t, err)
+		assert.True(t, wantPriv.Equal(priv), "sign key round-tripped to a different key")
+	})
 
 	t.Run("sign_load_error_prefixed", func(t *testing.T) {
 		k := KeySources{SignFile: missingPath, EncryptValue: base64.StdEncoding.EncodeToString(pubDER)}
@@ -263,3 +299,74 @@ func TestReadPayload(t *testing.T) {
 type iotest struct{}
 
 func (iotest) Read([]byte) (int, error) { return 0, assert.AnError }
+
+// TestReadPayloadSizeCap pins BOTH sides of the ceiling: exactly MaxPayloadBytes is read
+// back whole, and one byte more is refused — on the stdin path and the file path alike.
+func TestReadPayloadSizeCap(t *testing.T) {
+	atLimit := bytes.Repeat([]byte("a"), int(MaxPayloadBytes))
+	overLimit := bytes.Repeat([]byte("a"), int(MaxPayloadBytes)+1)
+
+	sources := []struct {
+		name string
+		read func(t *testing.T, data []byte) ([]byte, error)
+	}{
+		{
+			name: "stdin",
+			read: func(_ *testing.T, data []byte) ([]byte, error) {
+				return ReadPayloadCapped("-", bytes.NewReader(data), MaxPayloadBytes)
+			},
+		},
+		{
+			name: "file",
+			read: func(t *testing.T, data []byte) ([]byte, error) {
+				return ReadPayloadCapped(writeFile(t, "payload.bin", data), bytes.NewBufferString("STDIN"), MaxPayloadBytes)
+			},
+		},
+	}
+
+	for _, src := range sources {
+		t.Run(src.name, func(t *testing.T) {
+			t.Run("exactly_at_the_limit_is_accepted", func(t *testing.T) {
+				got, err := src.read(t, atLimit)
+				require.NoError(t, err)
+				assert.Len(t, got, int(MaxPayloadBytes))
+			})
+
+			t.Run("one_byte_over_is_refused", func(t *testing.T) {
+				got, err := src.read(t, overLimit)
+				require.ErrorIs(t, err, ErrPayloadTooLarge)
+				assert.Empty(t, got, "a refused payload must not reach the caller")
+			})
+		})
+	}
+}
+
+// TestReadPayloadUncappedReadsOversized pins that the door the frozen sealing CLIs call
+// still reads past the capped door's ceiling: the cap is the CALLER's choice, not the
+// package's, so adding it to one binary must not shrink the others.
+// TestReadPayloadCappedMaxInt64IsUncapped pins the overflow edge: limit+1 wraps negative at
+// MaxInt64, which would hand io.LimitReader a negative budget and return an EMPTY payload with
+// no error — a silent truncation rather than a refusal.
+func TestReadPayloadCappedMaxInt64IsUncapped(t *testing.T) {
+	body := bytes.Repeat([]byte("a"), int(MaxPayloadBytes)+1)
+
+	fromStdin, err := ReadPayloadCapped("-", bytes.NewReader(body), math.MaxInt64)
+	require.NoError(t, err)
+	assert.Len(t, fromStdin, len(body), "a MaxInt64 limit reads the body whole")
+
+	fromFile, err := ReadPayloadCapped(writeFile(t, "maxint.bin", body), bytes.NewBufferString("STDIN"), math.MaxInt64)
+	require.NoError(t, err)
+	assert.Len(t, fromFile, len(body))
+}
+
+func TestReadPayloadUncappedReadsOversized(t *testing.T) {
+	oversized := bytes.Repeat([]byte("a"), int(MaxPayloadBytes)+1)
+
+	fromStdin, err := ReadPayload("-", bytes.NewReader(oversized))
+	require.NoError(t, err)
+	assert.Len(t, fromStdin, int(MaxPayloadBytes)+1)
+
+	fromFile, err := ReadPayload(writeFile(t, "big.bin", oversized), bytes.NewBufferString("STDIN"))
+	require.NoError(t, err)
+	assert.Len(t, fromFile, int(MaxPayloadBytes)+1)
+}

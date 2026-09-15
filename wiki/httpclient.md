@@ -140,18 +140,31 @@ exported surface. The type-level guarantee is not a value-level one: `==` on two
 structs still panics at run time if the `Envelope` interface holds a non-comparable dynamic
 value, such as a map-backed envelope implementation.
 
-**A nil `Envelope` is the old behaviour, byte for byte**: the compact itself is the request
-body, advertised as `application/jose`, and a response is unwrapped only when its
-Content-Type says `application/jose`.
+**A nil `Envelope` is the default shape**: the compact itself is the request body,
+advertised as `application/jose`, and a response is unwrapped only when its Content-Type
+says `application/jose`. On a **failure** status a body that is not so labelled passes
+through untouched; on a success it is refused — see *Successful responses must have been
+unwrapped* below.
 
 **An `Envelope` changes the inbound read discipline.** `Unwrap` replaces the Content-Type
 gate, and it needs the bytes — so *every* eligible response body is read into memory before
 it runs, bounded by `MaxResponseBytes` (`DefaultMaxJOSEBodyBytes`, 10 MiB, when zero) with
 the same over-cap `ValidationError`.
-Without an `Envelope`, a non-JOSE body is never read at all. When `Unwrap` returns
-`ok=false` the buffered bytes are handed back as the response body with headers untouched.
-The responses that skip unwrapping entirely are unchanged: no `Inbound` policy, no body, or
-a shape net/http guarantees is empty (`1xx`, `204`, `304`, any reply to `HEAD`).
+Without an `Envelope`, a non-JOSE body on a failure status is never read at all. When
+`Unwrap` returns `ok=false` on a failure status the buffered bytes are handed back as the
+response body with headers untouched; on a **successful** status, an `Unwrap` that declines
+the body is the same violation the Content-Type gate raises in nested mode. The responses
+that skip unwrapping entirely are unchanged: no `Inbound` policy, or a shape net/http
+guarantees is empty (`204`, `304`, any reply to `HEAD`, and any status below `200`).
+On those guaranteed-empty arms the body is closed and replaced with `http.NoBody`, so an
+`Inner` that supplied bytes there cannot slip them past the rule. `101 Switching Protocols`
+is the exception inside that last group, and not a bodyless reply at all: net/http consumes
+the other `1xx` before the final response, but a `101` comes back as a terminal response whose
+`Body` is the live upgraded connection, so it is skipped on the status alone and passed
+through with that stream intact. A `nil` `Body` is not a skip arm either: it is replaced with
+`http.NoBody` and then classified by status, so a 2xx an `Inner` returns without a body is
+refused like any other unopened success. With no `Inbound` policy the
+transport processes no response at all, and that pass-through is untouched too.
 
 **`Build()` fails closed on an `Envelope` that cannot run.** An `Envelope` with neither an
 `Outbound` nor an `Inbound` policy is a construction error
@@ -171,8 +184,55 @@ vouched for the body.
 `{"encData":"<compact>"}` as `application/json`. Inbound, it recognizes the reply **by
 shape rather than Content-Type**: any JSON object carrying a non-empty string `encData`
 member is unwrapped (unknown sibling members are ignored) and everything else — a
-plaintext error envelope, say — passes through. After a successful unwrap the caller reads
-the plaintext with `Content-Type: application/json`.
+plaintext error envelope, say — passes through on a failure status. After a successful
+unwrap the caller reads the plaintext with `Content-Type: application/json`.
+
+#### Successful responses must have been unwrapped
+
+Under an `Inbound` policy a **2xx response must have been decrypted** — `application/jose`
+plus a successful `jose.Open` in nested mode, an `Unwrap` that returned `ok=true` plus the
+same in envelope mode. A 2xx that was not unwrapped is a transport error: `RoundTrip`
+returns `nil` and an error matching `errors.Is(err, httpclient.ErrJOSEPlaintextResponse)`,
+wrapped with the status and the peer name from `WithPeerName`. The response body is closed
+and discarded — it reaches neither the caller nor a response interceptor — and, when the
+transport has a usable `Logger`, one WARN records the direction and that same status and
+peer plus the `request_id`, read from the trace header on the
+outbound request and falling back to the context value — each validated by
+`trace.ValidateRequestID`, and the field omitted when neither passes — a custom
+`TraceIDHeader` hides the header from the transport, but the context still carries the id
+unless the caller set neither. Never the body bytes, those being
+exactly what must not be trusted. The refusal is **terminal**: it is exempt from the retry
+loop, because the peer answered 2xx and has already honored the request, so retrying would
+only duplicate a non-idempotent side effect.
+
+The reason is what a 2xx asserts. The peer is saying the request was honored; if the reply
+carrying that verdict was not decrypted, nothing authenticated it, and a ciphertext stripped
+in transit looks exactly like a legitimate plaintext reply. A tampered ciphertext already
+failed closed; an **absent** one used to read as a clean success. Under a `SealModeBareJWE`
+policy the rule proves only that the body was encrypted to us, not who sent it — there is no
+signature, so authenticating the sender remains an out-of-band job (mTLS, a signed header).
+
+Two boundaries. **Failure statuses are unchanged** — a pre-trust error envelope is
+plaintext by design, because the peer was never authenticated, so 4xx and 5xx bodies still
+reach the caller with their headers untouched. **Empty successes are not violations**: 204,
+304 and every reply to `HEAD` are shapes net/http guarantees carry no body, so they are
+skipped before the rule applies. A 205 and a 2xx answer to CONNECT are not such shapes: a
+JOSE-typed one still reaches `jose.Open` and fails closed there, while a plaintext one is
+refused like every other unopened 2xx.
+
+```go
+resp, err := client.Post(ctx, &httpclient.Request{URL: peerURL, Body: payload})
+if errors.Is(err, httpclient.ErrJOSEPlaintextResponse) {
+    // 2xx without protection: there is no authenticated payload to act on.
+}
+```
+
+`AllowPlaintextSuccess`, a bool on both `JOSEConfig` and `JOSETransport`, restores the old
+pass-through for the whole transport. It is the **Strangler-migration knob**: set it while a
+peer legitimately answers some 2xx routes in plaintext — a half-migrated API, a health
+check, a 202 acknowledgement — and clear it once every route is protected. It is per
+transport, not per route, so when only some routes are unprotected prefer two clients, one
+strict and one opted out, over leaving the whole integration unguarded.
 
 Wire it with the bare-JWE policy pair from
 [jose.md](jose.md#bare-jwe-mode-visa-message-level-encryption) — `A128GCM` has no
