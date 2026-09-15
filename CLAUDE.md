@@ -144,7 +144,7 @@ Registration order is a startup contract: `outbox.NewModule()` needs `scheduler.
 Service-specific configuration with automatic validation: declare a struct with `config:` tags and call `deps.Config.InjectInto(&cfg)` in `Init` (full example in [llms.txt](llms.txt)).
 
 **Struct Tags:** `config:"key.path"` (required), `required:"true"`, `default:"value"`.
-**Supported Types:** string, int, int64, float64, bool, time.Duration, `[]string` (comma-separated via env/`default`, native sequence via YAML).
+**Supported Types:** string, int, int64, float64, bool, time.Duration, `[]string` (comma-separated via env/`default`, native sequence via YAML; `Config.Strings` reads one list key the same way).
 **Configuration Priority:** Environment variables > `config.<env>.yaml` > `config.yaml` > defaults.
 
 ### Enhanced Handler Pattern

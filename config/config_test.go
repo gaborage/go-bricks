@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/go-viper/mapstructure/v2"
-	"github.com/knadh/koanf/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -393,6 +392,81 @@ func TestLoadSingleElementStringSliceEnv(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	assert.Equal(t, []string{"10.0.0.0/8"}, cfg.Scheduler.Security.CIDRAllowlist)
+}
+
+// TestLoadFromMapServesEveryDoor pins that a map-built Config answers the getters,
+// InjectInto and the typed tree the way a loaded one does, framework defaults included.
+func TestLoadFromMapServesEveryDoor(t *testing.T) {
+	cfg, err := LoadFromMap(map[string]any{
+		"custom.name":                      "orders",
+		"custom.allowlist":                 "org/a, org/b",
+		"server.port":                      9090,
+		"scheduler.security.cidrallowlist": "10.0.0.0/8, 192.168.0.0/16",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "orders", cfg.String("custom.name"))
+	assert.True(t, cfg.Exists("custom.allowlist"))
+	assert.Equal(t, []string{"org/a", "org/b"}, cfg.Strings("custom.allowlist"))
+
+	required, err := cfg.RequiredStrings("custom.allowlist")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"org/a", "org/b"}, required)
+
+	var target struct {
+		Name      string   `config:"custom.name"`
+		Allowlist []string `config:"custom.allowlist"`
+	}
+	require.NoError(t, cfg.InjectInto(&target))
+	assert.Equal(t, "orders", target.Name)
+	assert.Equal(t, []string{"org/a", "org/b"}, target.Allowlist)
+
+	assert.Equal(t, 9090, cfg.Server.Port)
+	assert.Equal(t, appName, cfg.App.Name, "framework defaults decode into the typed tree")
+	assert.Equal(t, []string{"10.0.0.0/8", "192.168.0.0/16"}, cfg.Scheduler.Security.CIDRAllowlist,
+		"the typed tree decodes with Load's comma-split slice hook")
+}
+
+// TestLoadFromMapReadsNoOperatorSource pins determinism: a colliding environment variable
+// and a config.yaml in the working directory both reach Load, and neither reaches
+// LoadFromMap.
+func TestLoadFromMapReadsNoOperatorSource(t *testing.T) {
+	loaded, err := loadConfigFixture(t,
+		map[string]string{testConfigFileYAML: "custom:\n  fromfile: yes\n"},
+		map[string]string{"CUSTOM_NAME": "from-env", "CUSTOM_ONLYENV": "from-env"})
+	require.NoError(t, err)
+	require.Equal(t, "from-env", loaded.String("custom.name"), "premise: Load reads the variable")
+	require.True(t, loaded.Exists("custom.fromfile"), "premise: Load reads the file")
+
+	cfg, err := LoadFromMap(map[string]any{"custom.name": "from-map"})
+	require.NoError(t, err)
+
+	assert.Equal(t, "from-map", cfg.String("custom.name"))
+	assert.False(t, cfg.Exists("custom.onlyenv"))
+	assert.False(t, cfg.Exists("custom.fromfile"))
+}
+
+// TestLoadFromMapRecordsPresenceWithoutValidating pins both halves of the constructor's
+// contract: the map goes through the recording merge, so a delivered-empty
+// debug.allowedips is refused as it is from YAML (ADR-078) — but only once Validate is
+// called, because LoadFromMap does not run it.
+func TestLoadFromMapRecordsPresenceWithoutValidating(t *testing.T) {
+	cfg, err := LoadFromMap(map[string]any{"debug.allowedips": ""})
+	require.NoError(t, err, "LoadFromMap does not validate")
+
+	var cfgErr *ConfigError
+	require.ErrorAs(t, Validate(cfg), &cfgErr)
+	assert.Equal(t, "debug.allowedips", cfgErr.Field)
+
+	// Control: the defaults alone validate, so the refusal above is the delivered key's.
+	clean, err := LoadFromMap(nil)
+	require.NoError(t, err)
+	require.NoError(t, Validate(clean))
+}
+
+func TestLoadFromMapReturnsDecodeError(t *testing.T) {
+	_, err := LoadFromMap(map[string]any{"server.port": "not-a-port"})
+	require.ErrorContains(t, err, "failed to unmarshal config")
 }
 
 // TestLoadResponseTimeEnabledEnv verifies the opt-in X-Response-Time header flag
@@ -1553,24 +1627,6 @@ app:
 	})
 }
 
-// loadDefaultConfig loads koanf defaults (no YAML, no env) and unmarshals them the
-// same way Load does, so a test can inspect the resulting typed Config.
-func loadDefaultConfig(t *testing.T) (*Config, error) {
-	t.Helper()
-	src := newConfigSource()
-	if err := loadDefaults(src); err != nil {
-		return nil, err
-	}
-	k := src.k
-	var cfg Config
-	if err := k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{
-		DecoderConfig: buildDecoderConfig(),
-	}); err != nil {
-		return nil, err
-	}
-	return &cfg, nil
-}
-
 // TestDerivedDefaultsRenderTheSameValuesAsTheOldLiteral is the one-shot equivalence pin for
 // the mechanism change: these keys used to be hand-written in loadDefaults and are now
 // rendered by normalize. The expected values are the pre-change literals, so the test fails
@@ -1608,7 +1664,7 @@ func TestDerivedDefaultsRenderTheSameValuesAsTheOldLiteral(t *testing.T) {
 // anything but a unit string would fail here rather than in production. Scoped to defaults +
 // unmarshal rather than a full Load, so a developer's exported CACHE_* cannot flake it.
 func TestDerivedDefaultsDecodeToTypedFields(t *testing.T) {
-	cfg, err := loadDefaultConfig(t)
+	cfg, err := LoadFromMap(nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 10*time.Second, cfg.App.Startup.Timeout)

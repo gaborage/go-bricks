@@ -61,6 +61,20 @@ A test fixture that *looks* like a credential is flagged by org secret scanners,
 - **Race detection:** All tests run with `-race` in CI
 - **Coverage target:** 80% (SonarCloud)
 
+## Config Testing
+
+`config.LoadFromMap(map[string]any)` builds a `*config.Config` from the map alone — the framework defaults plus your dotted keys, no YAML file and no environment variable — so code that reads through the getters (`String`, `Strings`, `RequiredStrings`, …) or `InjectInto` can be unit-tested against a loaded tree:
+
+```go
+cfg, err := config.LoadFromMap(map[string]any{
+    "custom.allowlist": "org/a, org/b", // the env-var spelling; []any{"org/a", "org/b"} is the YAML one
+})
+require.NoError(t, err)
+assert.Equal(t, []string{"org/a", "org/b"}, cfg.Strings("custom.allowlist"))
+```
+
+The keys load through the same presence-recording merge as a YAML layer, so the delivered-empty rules see them. `LoadFromMap` does not run `config.Validate`: a module test supplies only its own keys, and the section checks would refuse that partial tree. Call `config.Validate(cfg)` to exercise them; `config.Load` is the door that validates.
+
 ## OTel Providers in Tests
 
 A test that installs a provider globally (`otel.SetTracerProvider` / `otel.SetMeterProvider`)

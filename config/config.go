@@ -58,11 +58,9 @@ var configSections = map[string]bool{
 // source's recording merge, so presence — which keys the operator actually delivered —
 // is recorded at the merge seam itself; the defaults load silently (ADR-104).
 func Load() (*Config, error) {
-	src := newConfigSource()
-	k := src.k
-
-	if err := loadDefaults(src); err != nil {
-		return nil, fmt.Errorf("failed to load defaults: %w", err)
+	src, err := newDefaultedSource()
+	if err != nil {
+		return nil, err
 	}
 
 	// Load from YAML file (if exists) - try both .yaml and .yml extensions
@@ -74,7 +72,7 @@ func Load() (*Config, error) {
 	// environment so a 12-factor deployment (APP_ENV=production + config.production.yaml)
 	// selects the right overlay — the env provider is loaded only below (after this
 	// selection), so reading koanf alone would always see the default/config.yaml value.
-	env := resolveEnvOverlaySuffix(k)
+	env := resolveEnvOverlaySuffix(src.k)
 	if env != "" {
 		envFile := fmt.Sprintf("config.%s", env)
 		if err := tryLoadYAMLFile(src, envFile); err != nil {
@@ -114,20 +112,55 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to load environment variables: %w", err)
 	}
 
+	cfg, decodeErr := src.decode()
+	if decodeErr != nil {
+		return nil, decodeErr
+	}
+
+	if err := Validate(cfg); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	return cfg, nil
+}
+
+// LoadFromMap builds a Config from data alone — framework defaults plus data's dotted keys,
+// reading no file and no environment variable — for unit tests of code that reads through
+// the getters or InjectInto. data merges as a YAML layer does, so ADR-104 presence and the
+// delivered-empty checks see its keys.
+//
+// It does NOT run Validate: a module test supplies only the keys it reads, and the section
+// checks would refuse that partial tree. Load is the door that validates.
+func LoadFromMap(data map[string]any) (*Config, error) {
+	src, err := newDefaultedSource()
+	if err != nil {
+		return nil, err
+	}
+	if err := src.loadRecording(confmap.Provider(data, koanfDelim), nil, nil); err != nil {
+		return nil, fmt.Errorf("failed to load map: %w", err)
+	}
+	return src.decode()
+}
+
+// newDefaultedSource returns a source holding only the framework defaults.
+func newDefaultedSource() (*configSource, error) {
+	src := newConfigSource()
+	if err := loadDefaults(src); err != nil {
+		return nil, fmt.Errorf("failed to load defaults: %w", err)
+	}
+	return src, nil
+}
+
+// decode unmarshals the tree with Load's decoder and attaches the tree and its presence
+// record to the result — one value, one point.
+func (s *configSource) decode() (*Config, error) {
 	var cfg Config
-	if err := k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{
+	if err := s.k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{
 		DecoderConfig: buildDecoderConfig(),
 	}); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
-
-	// Attach the loaded tree and its presence record — one value, one point.
-	cfg.src = src
-
-	if err := Validate(&cfg); err != nil {
-		return nil, fmt.Errorf("invalid configuration: %w", err)
-	}
-
+	cfg.src = s
 	return &cfg, nil
 }
 

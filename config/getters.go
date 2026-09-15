@@ -16,6 +16,7 @@ const (
 	errMsgRequiredKeyMissing   = "required configuration key '%s' is missing"
 	errMsgConfigNotInitialized = "configuration not initialized"
 	errMsgRequiredKeyInvalid   = "required configuration key '%s' is invalid: %w"
+	errMsgRequiredKeyEmpty     = "required configuration key '%s' is empty"
 )
 
 // Failure classes reported by the lenient getters. A key is either present and
@@ -128,6 +129,18 @@ func (c *Config) Bool(key string, defaultVal ...bool) bool {
 	return getLenient(c, key, "bool", toBool, defaultVal...)
 }
 
+// Strings retrieves a list value with InjectInto's []string conversion: a YAML
+// sequence yields its elements, a scalar string splits on commas, trimmed, empties
+// dropped. See getLenient for the absent / unusable contract; RequiredStrings is the
+// error-returning door.
+//
+// A key delivered empty ("", or only separators) returns []string{}, NOT the
+// defaults: a present-but-empty list is the operator saying "no entries".
+func (c *Config) Strings(key string, defaults ...string) []string {
+	// "strings", not "[]string": the log filter masks an unparseable JSON-looking value whole.
+	return getLenient(c, key, "strings", toStringSlice, defaults)
+}
+
 // RequiredString retrieves a required string value from the configuration.
 func (c *Config) RequiredString(key string) (string, error) {
 	k := c.koanfTree()
@@ -137,9 +150,28 @@ func (c *Config) RequiredString(key string) (string, error) {
 
 	val := strings.TrimSpace(k.String(key))
 	if val == "" {
-		return "", fmt.Errorf("required configuration key '%s' is empty", key)
+		return "", fmt.Errorf(errMsgRequiredKeyEmpty, key)
 	}
 	return val, nil
+}
+
+// RequiredStrings retrieves a required list value with Strings' conversion. A key
+// delivered empty — "", only separators and whitespace, or an empty sequence — is an
+// error here, as a present-but-empty key is for RequiredString.
+func (c *Config) RequiredStrings(key string) ([]string, error) {
+	val, err := c.rawRequiredValue(key)
+	if err != nil {
+		return nil, err
+	}
+
+	list, err := toStringSlice(val)
+	if err != nil {
+		return nil, fmt.Errorf(errMsgRequiredKeyInvalid, key, err)
+	}
+	if len(list) == 0 {
+		return nil, fmt.Errorf(errMsgRequiredKeyEmpty, key)
+	}
+	return list, nil
 }
 
 // RequiredInt retrieves a required int value from the configuration.

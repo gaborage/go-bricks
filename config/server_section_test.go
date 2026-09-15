@@ -462,7 +462,7 @@ func TestNormalizeServerBodyLimit(t *testing.T) {
 	// The other door: an absent key must render the same 10 MB, so the koanf default
 	// and the normalize fill cannot drift apart unnoticed.
 	t.Run("koanf_door_absent_defaults", func(t *testing.T) {
-		cfg, err := loadDefaultConfig(t)
+		cfg, err := LoadFromMap(nil)
 		require.NoError(t, err)
 		assert.Equal(t, DefaultBodyLimitBytes, cfg.Server.BodyLimit)
 	})

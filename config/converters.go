@@ -58,7 +58,7 @@ func toStringSlice(value any) ([]string, error) {
 		}
 		return out, nil
 	case string:
-		return splitAndTrimList(v, ","), nil
+		return splitAndTrimList(v, listSeparator), nil
 	default:
 		return nil, fmt.Errorf(errMsgUnsupportedType, value)
 	}
