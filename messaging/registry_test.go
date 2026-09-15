@@ -2688,6 +2688,35 @@ func TestRegistryRedeclaresOncePerGenerationAcrossConsumers(t *testing.T) {
 	assert.Equal(t, []string{"1", "2"}, client.declaresOf("queue:"+otherQueue))
 }
 
+// TestRegistryRedeclaresBindingsToAnUndeclaredExchange verifies a pass whose
+// bindings outnumber its exchanges and queues — a queue bound twice to a broker
+// built-in exchange the registry never declares.
+func TestRegistryRedeclaresBindingsToAnUndeclaredExchange(t *testing.T) {
+	const builtin = "amq.topic"
+	client := newReconnectingMockClient()
+	registry := NewRegistry(client, &stubLogger{})
+	registry.resubscribeDelay = time.Millisecond
+	registry.RegisterQueue(&QueueDeclaration{Name: testQueueName, Durable: true})
+	for _, routingKey := range []string{"orders.created", "orders.cancelled"} {
+		registry.RegisterBinding(&BindingDeclaration{Queue: testQueueName, Exchange: builtin, RoutingKey: routingKey})
+	}
+	registry.RegisterConsumer(&ConsumerDeclaration{Queue: testQueueName, EventType: testEventType, Workers: 1, Handler: &countingTestHandler{}})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		registry.StopConsumers()
+		cancel()
+	})
+	require.NoError(t, registry.DeclareInfrastructure(ctx))
+	require.NoError(t, registry.StartConsumers(ctx))
+	first := awaitSubscription(t, client, 0)
+
+	client.locked(func() { client.generation++ })
+	close(first)
+
+	awaitSubscription(t, client, 1)
+	assert.Equal(t, []string{"1", "2"}, client.declaresOf("binding:"+testQueueName+"|"+builtin+"|orders.cancelled"))
+}
+
 // TestRegistryResubscribeOnSameChannelDoesNotRedeclare verifies a delivery
 // channel closed without a new channel (a broker basic.cancel) re-subscribes
 // without a pass, because DeclareInfrastructure recorded its generation.
