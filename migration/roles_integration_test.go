@@ -283,6 +283,15 @@ func TestPGRolesProvisioningTxRollsBackWholesale(t *testing.T) {
 		// assert, not require: a require here would Goexit past the sentinel
 		// return and skip the rollback assertions below.
 		assert.Equal(t, 2, visible, "both roles must be visible inside the transaction")
+		// Without this, the post-rollback countSchemas assertion below passes
+		// vacuously for any run that never created the schema at all.
+		var schemaVisible int
+		if scanErr := tx.QueryRow(ctx,
+			`SELECT count(*) FROM pg_namespace WHERE nspname = $1`,
+			spec.Schema).Scan(&schemaVisible); scanErr != nil {
+			return scanErr
+		}
+		assert.Equal(t, 1, schemaVisible, "the schema must be visible inside the transaction")
 		return errRollbackProvisioning
 	})
 	require.ErrorIs(t, err, errRollbackProvisioning)
