@@ -2,6 +2,12 @@ package migration
 
 import (
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -747,4 +753,103 @@ func TestPGRoleProvisioningSQLHonoursIdentifierPolicy(t *testing.T) {
 	require.ErrorIs(t, err, errTestPolicyRejected)
 	require.ErrorIs(t, err, ErrInvalidPGIdentifier)
 	assert.Empty(t, stmts)
+}
+
+// TestPGRoleDetectSQLMatchesMigrationsAtom pins each C65.4 detect query the
+// integration oracles run to the SQL fence wiki/migrations.md publishes. The
+// oracles need a container, so without this a fence could drift from its const —
+// and publish a query nothing tested — in any run that skips them. The consts are
+// read by parsing roles_integration_test.go, so the pin needs no build tag.
+func TestPGRoleDetectSQLMatchesMigrationsAtom(t *testing.T) {
+	consts := detectSQLConsts(t)
+	fences := c654AtomSQLFences(t)
+
+	for _, tt := range []struct {
+		name      string
+		constName string
+	}{
+		{name: "public_grant", constName: "pgPublicGrantDetectSQL"},
+		{name: "public_schema_residue", constName: "pgPublicSchemaResidueDetectSQL"},
+		{name: "public_named_role_grant", constName: "pgPublicNamedRoleGrantDetectSQL"},
+		{name: "reserved_role", constName: "pgReservedRoleDetectSQL"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			query, ok := consts[tt.constName]
+			require.Truef(t, ok, "%s must be declared in roles_integration_test.go", tt.constName)
+			matches := 0
+			for _, fence := range fences {
+				if fence == query {
+					matches++
+				}
+			}
+			assert.Equalf(t, 1, matches, "%s must appear verbatim exactly once as an sql fence in the C65.4 atom", tt.constName)
+		})
+	}
+
+	// Re-provisioning overwrites search_path, so a named-role query keyed on it
+	// reads clean at verify over a grant the revokes missed.
+	t.Run("named_role_query_ignores_search_path", func(t *testing.T) {
+		assert.NotContains(t, consts["pgPublicNamedRoleGrantDetectSQL"], "search_path")
+		assert.NotContains(t, consts["pgPublicNamedRoleGrantDetectSQL"], "pg_db_role_setting")
+	})
+}
+
+// detectSQLConsts parses roles_integration_test.go and returns every string const
+// whose name ends in DetectSQL, unquoted.
+func detectSQLConsts(t *testing.T) map[string]string {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "roles_integration_test.go", nil, 0)
+	require.NoError(t, err)
+
+	consts := map[string]string{}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			valueSpec, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range valueSpec.Names {
+				if !strings.HasSuffix(name.Name, "DetectSQL") || i >= len(valueSpec.Values) {
+					continue
+				}
+				lit, ok := valueSpec.Values[i].(*ast.BasicLit)
+				require.Truef(t, ok, "%s must be a string literal", name.Name)
+				value, err := strconv.Unquote(lit.Value)
+				require.NoError(t, err, name.Name)
+				consts[name.Name] = value
+			}
+		}
+	}
+	return consts
+}
+
+// c654AtomSQLFences returns the body of every sql fence in the C65.4 atom of
+// wiki/migrations.md, with the atom's two-space list indent removed.
+func c654AtomSQLFences(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "wiki", "migrations.md"))
+	require.NoError(t, err)
+	doc := string(raw)
+
+	start := strings.Index(doc, "### [C65.4]")
+	require.NotEqual(t, -1, start, "the C65.4 atom must exist")
+	end := strings.Index(doc[start:], "\n- ref: ")
+	require.NotEqual(t, -1, end, "the C65.4 atom must end in its ref line")
+	atom := doc[start : start+end]
+
+	var fences []string
+	for _, block := range strings.Split(atom, "\n  ```sql\n")[1:] {
+		body, _, found := strings.Cut(block, "\n  ```\n")
+		require.True(t, found, "every sql fence in the C65.4 atom must close")
+		lines := strings.Split(body, "\n")
+		for i, line := range lines {
+			lines[i] = strings.TrimPrefix(line, "  ")
+		}
+		fences = append(fences, strings.Join(lines, "\n"))
+	}
+	return fences
 }
