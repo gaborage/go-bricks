@@ -1019,6 +1019,25 @@ func TestPoolRemoveCountsRemovals(t *testing.T) {
 	assert.Equal(t, 0, st.Evictions, "Remove is not an LRU eviction")
 }
 
+// TestPoolRecordCloseErrorCountsOnlyErrors pins that a caller-run close failure, recorded after
+// Remove handed the value back, adds one to Errors and changes no other counter.
+func TestPoolRecordCloseErrorCountsOnlyErrors(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(5, 0, tr.closer)
+	defer p.Close()
+
+	_, rel, err := p.GetOrCreate(context.Background(), keyOne, keyedCreate(keyOne))
+	require.NoError(t, err)
+	rel()
+	_, shouldClose := p.Remove(keyOne)
+	require.True(t, shouldClose)
+
+	want := p.Stats()
+	want.Errors++
+	p.RecordCloseError()
+	assert.Equal(t, want, p.Stats())
+}
+
 // TestPoolLRUEvictionClosesOldest verifies LRU ordering and eviction of an unleased victim.
 func TestPoolLRUEvictionClosesOldest(t *testing.T) {
 	tr := newCloseTracker()

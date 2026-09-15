@@ -666,6 +666,28 @@ func TestCacheManagerRemoveWithCloseError(t *testing.T) {
 	assert.Equal(t, 2, stats.TotalCreated)
 }
 
+// TestCacheManagerRemoveCountsCloseFailure pins that the close Remove runs itself counts toward
+// Stats().Errors, as a pool-run close does, so the counter does not depend on whether the
+// removed instance was leased.
+func TestCacheManagerRemoveCountsCloseFailure(t *testing.T) {
+	closeErr := errors.New(closeFailedMsg)
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
+		return &failingCloseCache{mockCache: newMockCache(key), closeErr: closeErr}, nil
+	}
+
+	mgr, err := cache.NewCacheManager(cache.DefaultManagerConfig(), connector)
+	require.NoError(t, err)
+	defer mgr.Close()
+
+	_, release, err := mgr.Get(context.Background(), tenantOne)
+	require.NoError(t, err)
+	release()
+
+	before := mgr.Stats().Errors
+	require.ErrorIs(t, mgr.Remove(tenantOne), closeErr)
+	assert.Equal(t, 1, mgr.Stats().Errors-before, "Remove's own close failure must be counted")
+}
+
 // TestCacheManagerStatsSurfacesDeferredCloseErrors pins that a deferred-close failure — a
 // cache instance still borrowed when Close runs, closed only at its final release (ADR-032,
 // C581.3) — is not silently dropped: PoolStats.Errors must reach Stats().Errors so callers

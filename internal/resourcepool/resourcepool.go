@@ -486,6 +486,12 @@ func (p *Pool[V]) Remove(key string) (v V, shouldClose bool) {
 	return e.value, true
 }
 
+// RecordCloseError counts a close failure toward PoolStats.Errors for a value the caller closed
+// itself after Remove handed it back, so that close is counted as a pool-run close would be.
+func (p *Pool[V]) RecordCloseError() {
+	p.incErrors()
+}
+
 // removeEntryLocked removes bookkeeping for an entry (must be called with mu held). Returns
 // the removed entry or nil if not found. The caller is responsible for closing the returned
 // entry's resource. A removed entry is marked detached so a concurrent final lease release

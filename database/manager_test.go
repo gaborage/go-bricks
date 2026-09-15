@@ -615,6 +615,29 @@ func TestDbManagerRemoveWrapsCloseError(t *testing.T) {
 	assert.Equal(t, 0, m.Size(), "a failed close still detaches the handle")
 }
 
+// TestDbManagerRemoveCountsCloseFailure pins that the close Remove runs itself counts toward
+// Stats()["errors"], as a pool-run close does, so the counter does not depend on whether the
+// removed handle was leased.
+func TestDbManagerRemoveCountsCloseFailure(t *testing.T) {
+	closeErr := errors.New("close failure")
+	connector := func(*config.DatabaseConfig, logger.Logger) (Interface, error) {
+		return &stubDB{closeErr: closeErr}, nil
+	}
+	m := NewDbManager(&stubResourceSource{}, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
+	defer func() { _ = m.Close() }()
+
+	_, release, err := m.Get(context.Background(), tenantA)
+	require.NoError(t, err)
+	release()
+
+	before, ok := m.Stats()["errors"].(int)
+	require.True(t, ok)
+	require.ErrorIs(t, m.Remove(tenantA), closeErr)
+	after, ok := m.Stats()["errors"].(int)
+	require.True(t, ok)
+	assert.Equal(t, 1, after-before, "Remove's own close failure must be counted")
+}
+
 // TestDbManagerRemoveWhileLeasedDefersClose pins that Remove of a borrowed handle returns nil and
 // leaves the close to the final release.
 func TestDbManagerRemoveWhileLeasedDefersClose(t *testing.T) {

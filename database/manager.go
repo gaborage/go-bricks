@@ -143,6 +143,7 @@ func (m *DbManager) Remove(key string) error {
 		return nil
 	}
 	if err := conn.Close(); err != nil {
+		m.pool.RecordCloseError()
 		return fmt.Errorf("failed to close database connection %q: %w", key, err)
 	}
 	return nil

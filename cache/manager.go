@@ -210,6 +210,7 @@ func (m *CacheManager) Remove(key string) error {
 	}
 
 	if err := inst.Close(); err != nil {
+		m.pool.RecordCloseError()
 		return fmt.Errorf("failed to close cache %q: %w", key, err)
 	}
 	return nil
