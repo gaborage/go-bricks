@@ -54,18 +54,21 @@ func (rg *routeGroup) Add(method, path string, handler Handler, middleware ...Mi
 	relative := rg.relativePath(path)
 	rg.group.Add(method, relative, adaptHandler(handler, rg.cfg), rg.adaptAll(middleware)...)
 
-	fullPath := rg.fullPathFromRelative(relative)
-	handlerName := extractHandlerName(handler)
 	pkg := getCallerPackage(2) // getCallerPackage → Add → module (best-effort, as typed routes)
+	registerRoute(rg.tracker, method, rg.fullPathFromRelative(relative),
+		RouteRegistrant{HandlerName: extractHandlerName(handler), Package: pkg})
+}
 
-	rg.tracker.record(method, fullPath, RouteRegistrant{HandlerName: handlerName, Package: pkg})
-
+// registerRoute records a route that carries no request/response models in the conflict
+// tracker and in DefaultRouteRegistry: raw routes and the health/ready probes.
+func registerRoute(tracker *routeConflictTracker, method, fullPath string, reg RouteRegistrant) {
+	tracker.record(method, fullPath, reg)
 	DefaultRouteRegistry.Register(&RouteDescriptor{
 		Method:      method,
 		Path:        fullPath,
 		HandlerID:   formatHandlerID(method, fullPath),
-		HandlerName: handlerName,
-		Package:     pkg,
+		HandlerName: reg.HandlerName,
+		Package:     reg.Package,
 	})
 }
 

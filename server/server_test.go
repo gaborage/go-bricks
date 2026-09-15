@@ -236,6 +236,21 @@ func TestServerNewInitializesEchoAndRoutes(t *testing.T) {
 	assertHealthEndpoints(t, srv, healthRoute, testReadyRoute)
 }
 
+func TestServerNewRegistersProbeDescriptors(t *testing.T) {
+	DefaultRouteRegistry.Clear()
+	t.Cleanup(DefaultRouteRegistry.Clear)
+
+	newTestServer(testAPIV1Path, customHealthRoute, statusRoute)
+
+	const pkg = "github.com/gaborage/go-bricks/server"
+	assert.ElementsMatch(t, []RouteDescriptor{
+		{Method: http.MethodGet, Path: "/api/v1/custom-health", HandlerID: "GET:/api/v1/custom-health", HandlerName: "healthCheck", Package: pkg},
+		{Method: http.MethodHead, Path: "/api/v1/custom-health", HandlerID: "HEAD:/api/v1/custom-health", HandlerName: "healthCheck", Package: pkg},
+		{Method: http.MethodGet, Path: "/api/v1/status", HandlerID: "GET:/api/v1/status", HandlerName: "dispatchReady", Package: pkg},
+		{Method: http.MethodHead, Path: "/api/v1/status", HandlerID: "HEAD:/api/v1/status", HandlerName: "dispatchReady", Package: pkg},
+	}, DefaultRouteRegistry.Routes())
+}
+
 func TestServerStartAndShutdown(t *testing.T) {
 	srv := newTestServer("", "", "")
 	require.NotNil(t, srv)

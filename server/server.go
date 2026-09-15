@@ -180,20 +180,22 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 
 	s.RegisterReadyHandler(nil)
 
-	e.GET(healthPath, s.healthCheck)
-	e.HEAD(healthPath, s.healthCheck)
-	e.GET(readyPath, s.dispatchReady)
-	e.HEAD(readyPath, s.dispatchReady)
-
 	// The probes register directly on the engine (not through a routeGroup), so record
 	// them explicitly: a module claiming the health/ready path must fail startup like
-	// any other collision.
-	probe := RouteRegistrant{HandlerName: "healthCheck", Package: serverPackagePath}
-	s.conflicts.record(http.MethodGet, healthPath, probe)
-	s.conflicts.record(http.MethodHead, healthPath, probe)
-	probe.HandlerName = "dispatchReady"
-	s.conflicts.record(http.MethodGet, readyPath, probe)
-	s.conflicts.record(http.MethodHead, readyPath, probe)
+	// any other collision, and the route table must list them like any other route.
+	probes := []struct {
+		path, name string
+		handler    echo.HandlerFunc
+	}{
+		{healthPath, "healthCheck", s.healthCheck},
+		{readyPath, "dispatchReady", s.dispatchReady},
+	}
+	for _, p := range probes {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			e.Add(method, p.path, p.handler)
+			registerRoute(s.conflicts, method, p.path, RouteRegistrant{HandlerName: p.name, Package: serverPackagePath})
+		}
+	}
 
 	log.Debug().
 		Str("base_path", basePath).

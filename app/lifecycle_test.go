@@ -723,6 +723,55 @@ func TestPrepareRuntimeSucceedsWithNoMessagingConfigured(t *testing.T) {
 	require.NoError(t, a.prepareRuntime(context.Background()))
 }
 
+func TestRunPostRegisterRoutesErrorAbortsStartup(t *testing.T) {
+	srv := newMockServer()
+	veto := errors.New("route table vetoed")
+	calls := 0
+	a := newConfiguredApp(t, minimalAppConfig(""), &Options{
+		Server: srv,
+		PostRegisterRoutes: func([]server.RouteDescriptor) error {
+			calls++
+			return veto
+		},
+	})
+
+	err := a.Run()
+
+	require.ErrorIs(t, err, veto)
+	require.ErrorContains(t, err, "PostRegisterRoutes")
+	assert.Equal(t, 1, calls)
+	assert.Zero(t, srv.startCount(), "a vetoed route table must never open the listener")
+}
+
+func TestPrepareRuntimePostRegisterRoutesSeesEveryRouteWithItsModule(t *testing.T) {
+	server.DefaultRouteRegistry.Clear()
+	t.Cleanup(server.DefaultRouteRegistry.Clear)
+	cfg := minimalAppConfig("/api")
+	cfg.Debug = debugCheckConfig([]string{localhostIPV4}, "").Debug
+	var calls [][]server.RouteDescriptor
+	a := newConfiguredApp(t, cfg, &Options{PostRegisterRoutes: func(routes []server.RouteDescriptor) error {
+		calls = append(calls, routes)
+		return nil
+	}})
+	require.NoError(t, a.RegisterModule(&routeTableModule{name: "orders"}))
+	require.NoError(t, a.RegisterModule(&routeTableModule{name: "users"}))
+
+	require.NoError(t, a.prepareRuntime(context.Background()))
+
+	require.Len(t, calls, 1)
+	require.Len(t, calls[0], 9)
+	modules := map[string]string{}
+	for _, d := range calls[0] {
+		modules[d.HandlerID] = d.ModuleName
+	}
+	assert.Equal(t, map[string]string{
+		"GET:/api/health": "", "HEAD:/api/health": "", "GET:/api/ready": "", "HEAD:/api/ready": "",
+		"GET:/_sys/health-debug": "",
+		"GET:/api/orders":        "orders", "POST:/api/orders": "billing",
+		"GET:/api/users": "users", "POST:/api/users": "billing",
+	}, modules)
+}
+
 // globalMWCapturingServer implements ServerRunner (via embedded mockServer) plus the
 // optional RegisterGlobalMiddleware capability, capturing what it receives.
 type globalMWCapturingServer struct {

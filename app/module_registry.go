@@ -21,6 +21,10 @@ type ModuleRegistry struct {
 	// rootDBAbsent records the builder's rootDatabaseAbsent verdict, gating the
 	// DatabaseRequirer check. Zero value (false) leaves that check inert.
 	rootDBAbsent bool
+	// routeSpans are the per-module registration spans of the last RegisterRoutes (no
+	// framework span; a closing span ends the last module), which attribute ModuleName on
+	// the route table handed to Options.PostRegisterRoutes.
+	routeSpans []routeSpan
 }
 
 // NewModuleRegistry creates a new module registry with the given dependencies.
@@ -176,16 +180,11 @@ func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 	logRoutes := r.deps.Config != nil && r.deps.Config.ShouldLogRoutes()
 
 	// Attribution is by registration-order delta against DefaultRouteRegistry, NOT
-	// RouteDescriptor.ModuleName (no call site populates it). Startup registration is
-	// single-threaded and append-only, so recorded start indices resolve consistently
-	// against one post-loop Routes() snapshot. The leading framework span captures debug/_sys
-	// routes registered before this loop (single-app-per-process assumed); health/ready bypass
-	// the registry entirely and are not covered here.
-	var spans []routeSpan
-	if logRoutes {
-		spans = append(spans, routeSpan{module: frameworkRouteAttribution, start: 0})
-	}
-
+	// RouteDescriptor.ModuleName. Startup registration is single-threaded and append-only, so
+	// recorded start indices resolve consistently against one post-loop Routes() snapshot. The
+	// leading framework span covers what registered before this loop — the health/ready
+	// probes and debug/_sys routes (single-app-per-process assumed).
+	spans := []routeSpan{{module: frameworkRouteAttribution, start: 0}}
 	for _, module := range r.modules {
 		rr, ok := module.(RouteRegisterer)
 		if !ok {
@@ -195,11 +194,12 @@ func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 			Str("module", module.Name()).
 			Msg("Registering module routes")
 
-		if logRoutes {
-			spans = append(spans, routeSpan{module: module.Name(), start: server.DefaultRouteRegistry.Count()})
-		}
+		spans = append(spans, routeSpan{module: module.Name(), start: server.DefaultRouteRegistry.Count()})
 		rr.RegisterRoutes(handlerRegistry, registrar)
 	}
+	// A closing span with no module ends the last module's range where this loop ended.
+	spans = append(spans, routeSpan{start: server.DefaultRouteRegistry.Count()})
+	r.routeSpans = spans[1:]
 
 	if logRoutes {
 		for _, e := range collectRouteLogEntries(spans, server.DefaultRouteRegistry.Routes()) {
@@ -213,7 +213,7 @@ func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 }
 
 // frameworkRouteAttribution labels routes registered before the module loop
-// (debug/_sys endpoints via registerDebugHandlers) in the route-registered log.
+// (health/ready probes, debug/_sys endpoints) in the route-registered log.
 const frameworkRouteAttribution = "framework"
 
 // routeSpan marks the half-open registry index range [start, next.start) whose
@@ -230,29 +230,53 @@ type routeLogEntry struct {
 	module, method, path string
 }
 
-// collectRouteLogEntries resolves each span's [start, next.start) range against
-// the routes snapshot. Pure (no logger, no globals) so attribution — raw routes
-// (empty RouteDescriptor.ModuleName), zero-route modules, and the pre-loop
-// framework span — is unit-testable. Attribution is positional because no call
-// site populates RouteDescriptor.ModuleName.
-func collectRouteLogEntries(spans []routeSpan, routes []server.RouteDescriptor) []routeLogEntry {
-	var out []routeLogEntry
+// forEachSpanRoute calls fn with each span's module and every route in the span's
+// [start, next.start) range. A start past the snapshot resolves to no routes, and a bogus
+// successor start is clamped to the snapshot rather than corrupting this span.
+func forEachSpanRoute(spans []routeSpan, routes []server.RouteDescriptor, fn func(module string, route *server.RouteDescriptor)) {
 	for i, span := range spans {
-		if span.start < 0 || span.start > len(routes) {
-			continue // defensive: this span's start is out of range (impossible single-threaded)
+		if span.start < 0 {
+			continue // defensive: a negative start is impossible single-threaded
 		}
 		end := len(routes)
 		if i+1 < len(spans) {
 			end = spans[i+1].start
 		}
-		if end > len(routes) {
-			end = len(routes) // clamp: a bogus successor start must not corrupt this span
-		}
+		end = min(end, len(routes))
 		for j := span.start; j < end; j++ {
-			out = append(out, routeLogEntry{module: span.module, method: routes[j].Method, path: routes[j].Path})
+			fn(span.module, &routes[j])
 		}
 	}
+}
+
+// collectRouteLogEntries resolves each span's [start, next.start) range against
+// the routes snapshot. Pure (no logger, no globals) so attribution — raw routes,
+// zero-route modules, and the pre-loop framework span — is unit-testable.
+// Attribution is positional and ignores RouteDescriptor.ModuleName.
+func collectRouteLogEntries(spans []routeSpan, routes []server.RouteDescriptor) []routeLogEntry {
+	var out []routeLogEntry
+	forEachSpanRoute(spans, routes, func(module string, route *server.RouteDescriptor) {
+		out = append(out, routeLogEntry{module: module, method: route.Method, path: route.Path})
+	})
 	return out
+}
+
+// attributeModuleNames sets ModuleName on every route inside a module's span that did not
+// name its own module with server.WithModule. Routes outside every module span keep theirs empty.
+func attributeModuleNames(spans []routeSpan, routes []server.RouteDescriptor) {
+	forEachSpanRoute(spans, routes, func(module string, route *server.RouteDescriptor) {
+		if route.ModuleName == "" {
+			route.ModuleName = module
+		}
+	})
+}
+
+// routesSince returns the registry's routes from start on, with ModuleName attributed from
+// the spans of the last RegisterRoutes.
+func (r *ModuleRegistry) routesSince(start int) []server.RouteDescriptor {
+	all := server.DefaultRouteRegistry.Routes()
+	attributeModuleNames(r.routeSpans, all)
+	return all[start:]
 }
 
 // CollectGlobalMiddleware gathers middleware from modules that implement

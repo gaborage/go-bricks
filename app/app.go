@@ -80,6 +80,11 @@ type App struct {
 	signalHandler   SignalHandler
 	timeoutProvider TimeoutProvider
 
+	// postRegisterRoutes is Options.PostRegisterRoutes. probeRoutes are the descriptors this
+	// App's server registered at construction, before prepareRuntime's registry watermark.
+	postRegisterRoutes func([]server.RouteDescriptor) error
+	probeRoutes        []server.RouteDescriptor
+
 	// Observability
 	observability observability.Provider
 
