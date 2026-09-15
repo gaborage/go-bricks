@@ -123,12 +123,7 @@ func TestRequiredAccessors(t *testing.T) {
 // present key that splits into nothing is the operator saying "no entries", so it
 // returns a non-nil empty slice rather than the defaults.
 func TestStrings(t *testing.T) {
-	cfg := setupTestConfig(t, map[string]any{
-		"custom.list":       "a, b,,c ",
-		"custom.sequence":   []any{"x", "y"},
-		"custom.empty":      "",
-		"custom.separators": "  , ",
-	})
+	cfg := setupListConfig(t)
 
 	tests := []struct {
 		name     string
@@ -153,8 +148,10 @@ func TestStrings(t *testing.T) {
 	}
 }
 
-func TestRequiredStrings(t *testing.T) {
-	cfg := setupTestConfig(t, map[string]any{
+// setupListConfig holds one list key per spelling the list getters tell apart.
+func setupListConfig(t *testing.T) *Config {
+	t.Helper()
+	return setupTestConfig(t, map[string]any{
 		"custom.list":       "a, b,,c ",
 		"custom.sequence":   []any{"x", "y"},
 		"custom.empty":      "",
@@ -162,6 +159,10 @@ func TestRequiredStrings(t *testing.T) {
 		"custom.cleared":    []any{},
 		"custom.number":     42,
 	})
+}
+
+func TestRequiredStrings(t *testing.T) {
+	cfg := setupListConfig(t)
 
 	tests := []struct {
 		name    string
@@ -196,55 +197,45 @@ func TestRequiredStrings(t *testing.T) {
 // sequence spelling the same list read identically through every door that reads a list
 // key: Strings, RequiredStrings and InjectInto.
 func TestStringsDoorsAgreeAcrossEnvAndYAML(t *testing.T) {
-	type listTarget struct {
-		List []string `config:"custom.list"`
-	}
+	const emptyErr = "required configuration key 'custom.list' is empty"
 
 	tests := []struct {
-		name string
-		env  string
-		yaml string
-		want []string
+		name    string
+		yaml    string
+		env     map[string]string
+		want    []string
+		wantErr string
 	}{
-		{name: "one_entry", env: "a", yaml: "[a]", want: []string{"a"}},
-		{name: "padded_entries", env: " a , b ,, c", yaml: "[a, b, c]", want: []string{"a", "b", "c"}},
-		{name: "no_entries", env: "", yaml: "[]", want: []string{}},
+		{name: "one_entry_env", env: map[string]string{"CUSTOM_LIST": "a"}, want: []string{"a"}},
+		{name: "one_entry_yaml", yaml: "custom:\n  list: [a]\n", want: []string{"a"}},
+		{name: "padded_entries_env", env: map[string]string{"CUSTOM_LIST": " a , b ,, c"}, want: []string{"a", "b", "c"}},
+		{name: "padded_entries_yaml", yaml: "custom:\n  list: [a, b, c]\n", want: []string{"a", "b", "c"}},
+		{name: "no_entries_env", env: map[string]string{"CUSTOM_LIST": ""}, want: []string{}, wantErr: emptyErr},
+		{name: "no_entries_yaml", yaml: "custom:\n  list: []\n", want: []string{}, wantErr: emptyErr},
 	}
 
 	for _, tc := range tests {
-		forms := []struct {
-			name string
-			load func(t *testing.T) (*Config, error)
-		}{
-			{name: "env", load: func(t *testing.T) (*Config, error) {
-				return loadConfigFixture(t, nil, map[string]string{"CUSTOM_LIST": tc.env})
-			}},
-			{name: "yaml", load: func(t *testing.T) (*Config, error) {
-				return loadDeliveredEmptyFixture(t, "custom:\n  list: "+tc.yaml+"\n", nil)
-			}},
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := loadDeliveredEmptyFixture(t, tc.yaml, tc.env)
+			require.NoError(t, err)
+			require.True(t, cfg.Exists("custom.list"), "the fixture must deliver the key")
 
-		for _, form := range forms {
-			t.Run(tc.name+"_"+form.name, func(t *testing.T) {
-				cfg, err := form.load(t)
-				require.NoError(t, err)
-				require.True(t, cfg.Exists("custom.list"), "the fixture must deliver the key")
+			assert.Equal(t, tc.want, cfg.Strings("custom.list", "default"))
 
-				assert.Equal(t, tc.want, cfg.Strings("custom.list", "default"))
+			var target struct {
+				List []string `config:"custom.list"`
+			}
+			require.NoError(t, cfg.InjectInto(&target))
+			assert.Equal(t, tc.want, target.List)
 
-				got, err := cfg.RequiredStrings("custom.list")
-				if len(tc.want) == 0 {
-					require.EqualError(t, err, "required configuration key 'custom.list' is empty")
-				} else {
-					require.NoError(t, err)
-					assert.Equal(t, tc.want, got)
-				}
-
-				var target listTarget
-				require.NoError(t, cfg.InjectInto(&target))
-				assert.Equal(t, tc.want, target.List)
-			})
-		}
+			got, err := cfg.RequiredStrings("custom.list")
+			if tc.wantErr != "" {
+				require.EqualError(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
 	}
 }
 

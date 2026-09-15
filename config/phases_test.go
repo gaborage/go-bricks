@@ -203,7 +203,7 @@ func TestNormalizeKeyStoreDefaultsFloor(t *testing.T) {
 	})
 
 	t.Run("koanf_door_absent_defaults", func(t *testing.T) {
-		cfg, err := loadDefaultConfig(t)
+		cfg, err := LoadFromMap(nil)
 		require.NoError(t, err)
 		require.NotNil(t, cfg.KeyStore.SecretMinLength)
 		assert.Equal(t, DefaultKeyStoreSecretMinLength, *cfg.KeyStore.SecretMinLength)

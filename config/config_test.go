@@ -431,14 +431,9 @@ func TestLoadFromMapServesEveryDoor(t *testing.T) {
 // and a config.yaml in the working directory both reach Load, and neither reaches
 // LoadFromMap.
 func TestLoadFromMapReadsNoOperatorSource(t *testing.T) {
-	clearEnvironmentVariables()
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, testConfigFileYAML), []byte("custom:\n  fromfile: yes\n"), 0o600))
-	t.Chdir(dir)
-	t.Setenv("CUSTOM_NAME", "from-env")
-	t.Setenv("CUSTOM_ONLYENV", "from-env")
-
-	loaded, err := Load()
+	loaded, err := loadConfigFixture(t,
+		map[string]string{testConfigFileYAML: "custom:\n  fromfile: yes\n"},
+		map[string]string{"CUSTOM_NAME": "from-env", "CUSTOM_ONLYENV": "from-env"})
 	require.NoError(t, err)
 	require.Equal(t, "from-env", loaded.String("custom.name"), "premise: Load reads the variable")
 	require.True(t, loaded.Exists("custom.fromfile"), "premise: Load reads the file")
@@ -1632,13 +1627,6 @@ app:
 	})
 }
 
-// loadDefaultConfig loads the framework defaults alone (no YAML, no env) into a typed
-// Config, without validating it.
-func loadDefaultConfig(t *testing.T) (*Config, error) {
-	t.Helper()
-	return LoadFromMap(nil)
-}
-
 // TestDerivedDefaultsRenderTheSameValuesAsTheOldLiteral is the one-shot equivalence pin for
 // the mechanism change: these keys used to be hand-written in loadDefaults and are now
 // rendered by normalize. The expected values are the pre-change literals, so the test fails
@@ -1676,7 +1664,7 @@ func TestDerivedDefaultsRenderTheSameValuesAsTheOldLiteral(t *testing.T) {
 // anything but a unit string would fail here rather than in production. Scoped to defaults +
 // unmarshal rather than a full Load, so a developer's exported CACHE_* cannot flake it.
 func TestDerivedDefaultsDecodeToTypedFields(t *testing.T) {
-	cfg, err := loadDefaultConfig(t)
+	cfg, err := LoadFromMap(nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 10*time.Second, cfg.App.Startup.Timeout)

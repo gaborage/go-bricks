@@ -62,7 +62,6 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	k := src.k
 
 	// Load from YAML file (if exists) - try both .yaml and .yml extensions
 	if err := tryLoadYAMLFile(src, "config"); err != nil {
@@ -73,7 +72,7 @@ func Load() (*Config, error) {
 	// environment so a 12-factor deployment (APP_ENV=production + config.production.yaml)
 	// selects the right overlay — the env provider is loaded only below (after this
 	// selection), so reading koanf alone would always see the default/config.yaml value.
-	env := resolveEnvOverlaySuffix(k)
+	env := resolveEnvOverlaySuffix(src.k)
 	if env != "" {
 		envFile := fmt.Sprintf("config.%s", env)
 		if err := tryLoadYAMLFile(src, envFile); err != nil {
@@ -125,15 +124,13 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// LoadFromMap builds a Config from data alone, for unit tests of code that reads through the
-// getters or InjectInto. It is Load's pipeline minus the operator sources: the framework
-// defaults load silently, data merges through the presence-recording merge as a YAML layer
-// does (dotted keys, so ADR-104 presence and the delivered-empty checks apply), and the tree
-// decodes with Load's decoder. It reads no file and no environment variable.
+// LoadFromMap builds a Config from data alone — framework defaults plus data's dotted keys,
+// reading no file and no environment variable — for unit tests of code that reads through
+// the getters or InjectInto. data merges as a YAML layer does, so ADR-104 presence and the
+// delivered-empty checks see its keys.
 //
-// It does NOT run Validate: a module test supplies only the keys its module reads, and the
-// section checks would refuse that partial tree. Load is the door that validates; call
-// Validate on the result to exercise those rules.
+// It does NOT run Validate: a module test supplies only the keys it reads, and the section
+// checks would refuse that partial tree. Load is the door that validates.
 func LoadFromMap(data map[string]any) (*Config, error) {
 	src, err := newDefaultedSource()
 	if err != nil {

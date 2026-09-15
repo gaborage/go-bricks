@@ -129,17 +129,15 @@ func (c *Config) Bool(key string, defaultVal ...bool) bool {
 	return getLenient(c, key, "bool", toBool, defaultVal...)
 }
 
-// Strings retrieves a list value with the same conversion InjectInto applies to a
-// []string field: a YAML sequence yields its elements, and a scalar string (an
-// environment variable) is split on commas with each entry trimmed and empties
-// dropped. An absent key returns defaults (nil when none are given); an unusable
-// value returns them too and warns once, as getLenient does.
+// Strings retrieves a list value with InjectInto's []string conversion: a YAML
+// sequence yields its elements, a scalar string splits on commas, trimmed, empties
+// dropped. See getLenient for the absent / unusable contract; RequiredStrings is the
+// error-returning door.
 //
-// A key delivered empty — "", or only separators and whitespace — returns a non-nil
-// empty slice, NOT the defaults: a present-but-empty list is the operator saying
-// "no entries". RequiredStrings is the error-returning door.
+// A key delivered empty ("", or only separators) returns []string{}, NOT the
+// defaults: a present-but-empty list is the operator saying "no entries".
 func (c *Config) Strings(key string, defaults ...string) []string {
-	// "strings", not "[]string": the log filter masks a JSON-looking value whole.
+	// "strings", not "[]string": the log filter masks an unparseable JSON-looking value whole.
 	return getLenient(c, key, "strings", toStringSlice, defaults)
 }
 
