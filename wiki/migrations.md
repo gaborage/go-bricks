@@ -9185,8 +9185,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   ORDER BY 1, 2, 3, 4
   ```
 
-  run both on every instance you provision into; `public`, the catalog schemas and the
-  `pg_`-prefixed predefined roles are present on every PostgreSQL database, so the question
+  run both on every instance you provision into; `public`, `information_schema` and the
+  `pg_`-prefixed system schemas (`pg_catalog`, `pg_toast`) are present on every PostgreSQL
+  database, so the question
   the first result answers is whether any of them is a schema YOU provisioned as a tenant's,
   and the second is the fingerprint of a `RuntimeRole` that was spelled `public`: privileges
   on a tenant schema handed to PUBLIC.
