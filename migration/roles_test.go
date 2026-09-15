@@ -794,37 +794,37 @@ func TestPGRoleDetectSQLMatchesMigrationsAtom(t *testing.T) {
 	})
 }
 
-// detectSQLConsts parses roles_integration_test.go and returns every string const
-// whose name ends in DetectSQL, unquoted.
+// detectSQLConsts parses roles_integration_test.go and returns every string
+// declaration whose name ends in DetectSQL, unquoted.
 func detectSQLConsts(t *testing.T) map[string]string {
 	t.Helper()
 	file, err := parser.ParseFile(token.NewFileSet(), "roles_integration_test.go", nil, 0)
 	require.NoError(t, err)
 
 	consts := map[string]string{}
-	for _, decl := range file.Decls {
-		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.CONST {
-			continue
+	ast.Inspect(file, func(n ast.Node) bool {
+		valueSpec, ok := n.(*ast.ValueSpec)
+		if !ok {
+			return true
 		}
-		for _, spec := range gen.Specs {
-			valueSpec, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			for i, name := range valueSpec.Names {
-				if !strings.HasSuffix(name.Name, "DetectSQL") || i >= len(valueSpec.Values) {
-					continue
-				}
-				lit, ok := valueSpec.Values[i].(*ast.BasicLit)
-				require.Truef(t, ok, "%s must be a string literal", name.Name)
-				value, err := strconv.Unquote(lit.Value)
-				require.NoError(t, err, name.Name)
-				consts[name.Name] = value
+		for i, name := range valueSpec.Names {
+			if strings.HasSuffix(name.Name, "DetectSQL") && i < len(valueSpec.Values) {
+				consts[name.Name] = unquoteStringLit(t, name.Name, valueSpec.Values[i])
 			}
 		}
-	}
+		return false
+	})
 	return consts
+}
+
+// unquoteStringLit returns the value of a string literal expression.
+func unquoteStringLit(t *testing.T, name string, expr ast.Expr) string {
+	t.Helper()
+	lit, ok := expr.(*ast.BasicLit)
+	require.Truef(t, ok, "%s must be a string literal", name)
+	value, err := strconv.Unquote(lit.Value)
+	require.NoError(t, err, name)
+	return value
 }
 
 // c654AtomSQLFences returns the body of every sql fence in the C65.4 atom of
@@ -841,8 +841,9 @@ func c654AtomSQLFences(t *testing.T) []string {
 	require.NotEqual(t, -1, end, "the C65.4 atom must end in its ref line")
 	atom := doc[start : start+end]
 
-	var fences []string
-	for _, block := range strings.Split(atom, "\n  ```sql\n")[1:] {
+	blocks := strings.Split(atom, "\n  ```sql\n")[1:]
+	fences := make([]string, 0, len(blocks))
+	for _, block := range blocks {
 		body, _, found := strings.Cut(block, "\n  ```\n")
 		require.True(t, found, "every sql fence in the C65.4 atom must close")
 		lines := strings.Split(body, "\n")
