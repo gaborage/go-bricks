@@ -7,6 +7,7 @@ import (
 	"maps"
 	"math"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -2287,7 +2288,8 @@ func TestRegistryConsumerResubscribeRetriesUntilClientReady(t *testing.T) {
 			{ch: ch2},              // client ready again
 		},
 	}
-	registry := NewRegistry(client, &stubLogger{})
+	log := newRecordingLogger()
+	registry := NewRegistry(client, log)
 	registry.resubscribeDelay = 5 * time.Millisecond
 
 	handler := &countingTestHandler{}
@@ -2329,6 +2331,17 @@ func TestRegistryConsumerResubscribeRetriesUntilClientReady(t *testing.T) {
 	}, time.Second, 2*time.Millisecond, "delivery after re-subscribe was not acked")
 
 	registry.StopConsumers()
+
+	// errNotConnected is not an *amqp.Error, so its failure lines carry no broker reply.
+	var failures int
+	for _, ln := range log.Lines() {
+		if ln.Msg == "Consumer re-subscribe attempt failed, will retry" {
+			failures++
+			assert.Empty(t, ln.Values("amqp_reply_code"))
+			assert.Empty(t, ln.Values("amqp_reply_text"))
+		}
+	}
+	assert.Equal(t, 2, failures)
 }
 
 // TestRegistryConsumerSupervisorStopsOnContextCancel verifies the consumer
@@ -2380,6 +2393,67 @@ func TestRegistryConsumerSupervisorStopsOnContextCancel(t *testing.T) {
 	time.Sleep(20 * registry.resubscribeDelay)
 	assert.Equal(t, settled, client.consumeCallCount(),
 		"supervisor kept re-subscribing after StopConsumers")
+}
+
+// TestRegistryConsumerResubscribeEscalatesToWarnFromFifthFailure verifies a
+// permanently failing re-subscribe becomes visible: the first four consecutive
+// failures stay at Debug, the fifth logs at WARN, and every failure carries the
+// broker's reply code and text.
+func TestRegistryConsumerResubscribeEscalatesToWarnFromFifthFailure(t *testing.T) {
+	const (
+		failedMsg       = "Consumer re-subscribe attempt failed, will retry"
+		resubscribedMsg = "Consumer re-subscribed after delivery channel closed"
+	)
+	ch1 := make(chan amqp.Delivery)
+	notFound := &amqp.Error{Code: amqp.NotFound, Reason: "NOT_FOUND - no queue 'test-queue'", Server: true}
+	client := &resubscribingMockClient{
+		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
+		results: []consumeResult{
+			{ch: ch1},
+			{err: notFound},
+			{err: notFound},
+			{err: notFound},
+			{err: notFound},
+			{err: notFound},
+			{ch: make(chan amqp.Delivery)},
+		},
+	}
+	log := newRecordingLogger()
+	registry := NewRegistry(client, log)
+	registry.resubscribeDelay = time.Millisecond
+
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Workers:   1,
+		Handler:   &countingTestHandler{},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, registry.StartConsumers(ctx))
+
+	close(ch1)
+	require.Eventually(t, func() bool {
+		return slices.ContainsFunc(log.Lines(), func(ln recordedLine) bool { return ln.Msg == resubscribedMsg })
+	}, 5*time.Second, 2*time.Millisecond, "consumer did not re-subscribe after the failure streak")
+	registry.StopConsumers()
+
+	var levels []string
+	for _, ln := range log.Lines() {
+		if ln.Msg != failedMsg {
+			continue
+		}
+		levels = append(levels, ln.Level)
+		assert.Equal(t, []string{strconv.Itoa(notFound.Code)}, ln.Values("amqp_reply_code"))
+		assert.Equal(t, []string{notFound.Reason}, ln.Values("amqp_reply_text"))
+	}
+	debug, warn := gobrickslogger.LevelDebug, gobrickslogger.LevelWarn
+	assert.Equal(t, []string{debug, debug, debug, debug, warn}, levels)
+
+	success := log.Line(t, resubscribedMsg)
+	assert.Equal(t, gobrickslogger.LevelInfo, success.Level)
+	assert.Equal(t, []string{"6"}, success.Values("attempt"))
 }
 
 // ===== Consume metrics + receive span tests (plan 099) =====
@@ -2630,6 +2704,7 @@ func TestRegistryProcessMessagePanicMarksSpanError(t *testing.T) {
 // emission order. Duplicate keys are preserved — zerolog does not de-duplicate —
 // so Values can pin that correlation_id is stamped exactly once.
 type recordedLine struct {
+	Level string
 	Msg   string
 	Pairs [][2]string
 }
@@ -2703,26 +2778,31 @@ func (l *recordingLogger) WithFields(f map[string]any) gobrickslogger.Logger {
 	return &recordingLogger{mu: l.mu, lines: l.lines, fields: merged, debugDisabled: l.debugDisabled}
 }
 
-func (l *recordingLogger) Info() gobrickslogger.LogEvent  { return l.event(false) }
-func (l *recordingLogger) Error() gobrickslogger.LogEvent { return l.event(false) }
-func (l *recordingLogger) Warn() gobrickslogger.LogEvent  { return l.event(false) }
-func (l *recordingLogger) Fatal() gobrickslogger.LogEvent { return l.event(false) }
+func (l *recordingLogger) Info() gobrickslogger.LogEvent { return l.event(gobrickslogger.LevelInfo) }
+
+func (l *recordingLogger) Error() gobrickslogger.LogEvent { return l.event(gobrickslogger.LevelError) }
+
+func (l *recordingLogger) Warn() gobrickslogger.LogEvent { return l.event(gobrickslogger.LevelWarn) }
+
+func (l *recordingLogger) Fatal() gobrickslogger.LogEvent { return l.event(gobrickslogger.LevelFatal) }
 
 // Debug additionally tracks the event it hands out in lastDebug (see field doc).
 func (l *recordingLogger) Debug() gobrickslogger.LogEvent {
-	e := l.event(l.debugDisabled)
+	e := l.event(gobrickslogger.LevelDebug)
 	l.lastDebug = e
 	return e
 }
 
-func (l *recordingLogger) event(disabled bool) *recordingEvent {
+func (l *recordingLogger) event(level string) *recordingEvent {
 	pairs := make([][2]string, len(l.fields), len(l.fields)+8)
 	copy(pairs, l.fields)
-	return &recordingEvent{l: l, pairs: pairs, enabled: !disabled}
+	enabled := level != gobrickslogger.LevelDebug || !l.debugDisabled
+	return &recordingEvent{l: l, level: level, pairs: pairs, enabled: enabled}
 }
 
 type recordingEvent struct {
 	l       *recordingLogger
+	level   string
 	pairs   [][2]string
 	enabled bool
 }
@@ -2760,7 +2840,7 @@ func (e *recordingEvent) Err(err error) gobrickslogger.LogEvent {
 func (e *recordingEvent) Msg(msg string) {
 	e.l.mu.Lock()
 	defer e.l.mu.Unlock()
-	*e.l.lines = append(*e.l.lines, recordedLine{Msg: msg, Pairs: e.pairs})
+	*e.l.lines = append(*e.l.lines, recordedLine{Level: e.level, Msg: msg, Pairs: e.pairs})
 }
 
 func (e *recordingEvent) Msgf(format string, args ...any) { e.Msg(fmt.Sprintf(format, args...)) }

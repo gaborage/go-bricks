@@ -25,6 +25,10 @@ import (
 // fast test iteration.
 const defaultConsumerResubscribeDelay = 5 * time.Second
 
+// consumerResubscribeWarnFromAttempt is the first consecutive failed
+// re-subscribe attempt logged at WARN instead of Debug.
+const consumerResubscribeWarnFromAttempt = 5
+
 // RegistryInterface defines the contract for messaging infrastructure management.
 // This interface allows for easy mocking and testing of messaging infrastructure.
 type RegistryInterface interface {
@@ -636,12 +640,18 @@ func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaratio
 		}
 
 		// errNotConnected is expected while the client is still reconnecting;
-		// log at debug to avoid noise during a flap. Full-jitter backoff (the
-		// client's own computeBackoff) bounds the loop and, on a broker restart
-		// that drops every consumer at once, spreads the herd of re-subscribe
-		// attempts instead of having all consumers retry in lockstep.
+		// early attempts log at debug to avoid noise during a flap. Full-jitter
+		// backoff (the client's own computeBackoff) bounds the loop and, on a
+		// broker restart that drops every consumer at once, spreads the herd of
+		// re-subscribe attempts instead of having all consumers retry in lockstep.
 		backoff := computeBackoff(r.resubscribeDelay, defaultReconnectMaxDelay, attempt)
-		log.Debug().Err(err).Int("attempt", attempt).Dur("backoff", backoff).
+		var event logger.LogEvent
+		if attempt < consumerResubscribeWarnFromAttempt {
+			event = log.Debug()
+		} else {
+			event = log.Warn()
+		}
+		withAMQPReply(event, err).Err(err).Int("attempt", attempt).Dur("backoff", backoff).
 			Msg("Consumer re-subscribe attempt failed, will retry")
 		select {
 		case <-ctx.Done():
@@ -649,6 +659,16 @@ func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaratio
 		case <-time.After(backoff):
 		}
 	}
+}
+
+// withAMQPReply adds the broker's reply code and text to event when err is an
+// *amqp.Error, the only form in which the broker says why it refused.
+func withAMQPReply(event logger.LogEvent, err error) logger.LogEvent {
+	var amqpErr *amqp.Error
+	if errors.As(err, &amqpErr) {
+		return event.Int("amqp_reply_code", amqpErr.Code).Str("amqp_reply_text", amqpErr.Reason)
+	}
+	return event
 }
 
 // handleMessages runs a single consumer session: it spawns a worker pool
