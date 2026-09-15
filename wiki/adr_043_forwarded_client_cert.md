@@ -13,7 +13,9 @@
 > turns a bool key polymorphic, a breaking type change against ADR-077's delivered-empty rule;
 > the middleware runs before routing, so it could only match raw paths; and a host match would
 > key a security decision off the client-written `Host` header. Per-group attachment is the
-> `auth.Middleware` shape (ADR-109). No config key is added.
+> `auth.Middleware` shape (ADR-109). No config key is added. Mounting the guard makes the same
+> posture assertion as `enabled` for that route family, in every environment, whatever `enabled`
+> says.
 
 ## Context
 

@@ -52,7 +52,8 @@ false`), the guard attaches it, so `ForwardedClientCertFromContext` works behind
 every posture. Probes are not exempted: a route stays open by being registered outside the
 guarded group, as with [`auth.Middleware`](auth.md). WARNs go to the logger passed in; `nil`
 falls back to the standard library `log` package. The guard decides presence, never
-provenance — the [trust model](#trust-model) applies unchanged.
+provenance: mounting it makes the [trust model](#trust-model)'s posture assertion for that
+route family, in every environment the binary runs in, whatever `enabled` says.
 
 ## What gets parsed
 
@@ -94,8 +95,9 @@ check that swaps the decoder (`server/forwardedcert_test.go`).
 
 ## Trust model
 
-Enabling `server.forwardedclientcert` is an explicit operator assertion of **three**
-things, together — never a single flag that "just trusts AWS":
+Enabling `server.forwardedclientcert`, or mounting `server.RequireForwardedClientCert` on a
+route group, is an explicit operator assertion of **three** things, together — never a single
+flag that "just trusts AWS":
 
 1. An **mTLS-verify** ALB listener fronts this service (not passthrough, not a plain HTTP/S
    listener).
@@ -136,7 +138,7 @@ headers alone.
 **No in-app IP/proxy trust.** This middleware never derives trust from source IP or
 `X-Forwarded-For` — that is the anti-pattern already present elsewhere in this framework
 (`server/ratelimit.go`'s `ctx.RealIP()` unconditionally trusting XFF, ledgered as F23).
-`enabled` is the only trust signal; there is no source-IP/CIDR check to layer on top, and
+`enabled` and a mounted guard are the only trust signals; there is no source-IP/CIDR check to layer on top, and
 adding one would be v2 scope creep, not a v1 gap.
 
 If AWS ever publishes a sanitization guarantee for `X-Amzn-Mtls-*`, this section and
@@ -177,6 +179,10 @@ func (m *WebhookModule) GlobalMiddleware() []server.MiddlewareFunc {
 	}
 }
 ```
+
+Behind `server.RequireForwardedClientCert`, put the subject check in the same group, after the
+guard: global middleware runs before group middleware, so with `enabled: false` it never sees
+the identity the guard attaches.
 
 Remember the trust-model boundary above: this recipe is only as strong as the ALB's trust
 store scoping a single partner CA. If your trust store is shared across partners, **fail

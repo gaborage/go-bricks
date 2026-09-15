@@ -61,7 +61,8 @@ var errDuplicateForwardedHeader = errors.New("duplicated X-Amzn-Mtls header")
 // deliberately not carried: validity is readable from Leaf.NotBefore/NotAfter
 // when Leaf parses.
 //
-// Trust model: enabling server.forwardedclientcert is an explicit operator
+// Trust model: enabling server.forwardedclientcert, or mounting
+// RequireForwardedClientCert on a route group, is an explicit operator
 // assertion that (a) an mTLS-verify ALB listener fronts this service, (b)
 // direct target access is closed (security groups), and (c) the target group
 // is reachable only through that listener. AWS does not publicly document
@@ -231,9 +232,11 @@ func forwardedClientCertMiddlewareEcho(cfg config.ForwardedClientCertConfig, ski
 }
 
 // RequireForwardedClientCert returns the middleware that refuses (401) a request
-// without an ALB-forwarded client-certificate identity, so one route family can
-// require it while server.forwardedclientcert.require stays off. Attach it per
-// route group; it exempts nothing, probes included.
+// without X-Amzn-Mtls-Clientcert identity headers, so one route family can
+// require them while server.forwardedclientcert.require stays off. Attach it per
+// route group; it exempts nothing, probes included. Mounting it asserts the
+// ForwardedClientCert trust model for that family in every environment,
+// whatever enabled says.
 //
 // It re-parses the headers itself, since with enabled: false an absent identity
 // cannot be told from one never parsed, and refuses on the global require mode's
@@ -264,9 +267,9 @@ func RequireForwardedClientCert(l logger.Logger) MiddlewareFunc {
 }
 
 // logForwardedClientCertRejection emits one WARN per request rejected for a
-// missing forwarded-client-cert identity (401). This middleware runs outer to
-// the access logger (server/middleware.go) and never calls next() on reject,
-// so without this WARN a rejected request leaves zero server-side trail —
+// missing forwarded-client-cert identity (401). The engine-level middleware runs
+// outer to the access logger (server/middleware.go) and never calls next() on
+// reject, so without this WARN a rejected request leaves zero server-side trail —
 // mirrors logTenantRejection's rationale (server/tenant_middleware.go).
 // Header values are never logged, only the fixed reason string.
 func logForwardedClientCertRejection(l logger.Logger, c *echo.Context) {
