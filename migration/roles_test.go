@@ -2,6 +2,12 @@ package migration
 
 import (
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -9,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/database/identifier"
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
 func TestPGRoleSpecValidateAccepts(t *testing.T) {
@@ -544,6 +551,127 @@ func TestPGRoleSpecValidateFloorRunsBeforePolicy(t *testing.T) {
 	assert.Zero(t, consulted, "policy must not see an identifier the floor already refused")
 }
 
+// Every name below is one the floor admits, so the reserved-name rule is the
+// only thing that can refuse it. Case is folded deliberately: this code QUOTES
+// identifiers, so "Public" is a distinct schema from "public", but an operator
+// or script that writes the name unquoted resolves to the shared one.
+func TestPGRoleSpecValidateRejectsReservedSchemas(t *testing.T) {
+	for _, schema := range []string{
+		"public", "Public", "PUBLIC",
+		"pg_temp", "pg_toast", "PG_CATALOG", "Pg_Anything",
+		// The mixed-case spelling is "Information_SCHEMA", not "Information_Schema":
+		// the assertion below looks for the field name "Schema" in the message, and
+		// a value containing that exact casing would satisfy it on its own.
+		"information_schema", "Information_SCHEMA", "INFORMATION_SCHEMA",
+	} {
+		t.Run(schema, func(t *testing.T) {
+			spec := &PGRoleSpec{Schema: schema, MigratorRole: "m", RuntimeRole: "r"}
+			require.NoError(t, identifier.Validate(dbtypes.PostgreSQL, schema),
+				"the floor admits this name, so only the reserved rule can refuse it")
+
+			err := spec.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), pgRoleFieldSchema)
+			assert.Contains(t, err.Error(), schema)
+			require.ErrorIs(t, err, ErrReservedPGIdentifier)
+			require.ErrorIs(t, err, ErrInvalidPGIdentifier,
+				"a reserved-schema refusal stays an identifier refusal for existing matchers")
+		})
+	}
+}
+
+// The near misses: every one differs from a reserved name by at least one byte
+// and must still provision.
+func TestPGRoleSpecValidateAcceptsReservedNameNearMisses(t *testing.T) {
+	for _, schema := range []string{"publicity", "pg", "pgx", "information_schemas", "mypublic", "public_tenant"} {
+		t.Run(schema, func(t *testing.T) {
+			spec := &PGRoleSpec{Schema: schema, MigratorRole: "m", RuntimeRole: "r"}
+			assert.NoError(t, spec.Validate())
+		})
+	}
+}
+
+// PostgreSQL's RoleSpec grammar maps the name "public" — quoted included — onto
+// the PUBLIC pseudo-role, so a runtime role spelled that way would grant the
+// tenant's DML to every role on the instance. "pg_" is PostgreSQL's own reserved
+// role namespace.
+func TestPGRoleSpecValidateRejectsReservedRoles(t *testing.T) {
+	for _, field := range []string{pgRoleFieldMigratorRole, pgRoleFieldRuntimeRole} {
+		for _, name := range []string{"public", "PUBLIC", "Public", "pg_x", "PG_x"} {
+			t.Run(field+"_"+name, func(t *testing.T) {
+				spec := &PGRoleSpec{Schema: "tenant_a", MigratorRole: "m", RuntimeRole: "r"}
+				if field == pgRoleFieldMigratorRole {
+					spec.MigratorRole = name
+				} else {
+					spec.RuntimeRole = name
+				}
+				require.NoError(t, identifier.Validate(dbtypes.PostgreSQL, name),
+					"the floor admits this name, so only the reserved rule can refuse it")
+
+				err := spec.Validate()
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), field)
+				assert.Contains(t, err.Error(), name)
+				require.ErrorIs(t, err, ErrReservedPGIdentifier)
+				require.ErrorIs(t, err, ErrInvalidPGIdentifier,
+					"a reserved-name refusal stays an identifier refusal for existing matchers")
+			})
+		}
+	}
+}
+
+// The role half is narrower than the schema half: "information_schema" is a
+// schema concept with no role meaning, and every near miss below differs from a
+// reserved name by at least one byte.
+func TestPGRoleSpecValidateAcceptsNonReservedRoles(t *testing.T) {
+	for _, name := range []string{"information_schema", "publicx", "mypublic", "pgx", "pg"} {
+		t.Run(name, func(t *testing.T) {
+			assert.NoError(t, (&PGRoleSpec{Schema: "tenant_a", MigratorRole: name, RuntimeRole: "r"}).Validate())
+			assert.NoError(t, (&PGRoleSpec{Schema: "tenant_a", MigratorRole: "m", RuntimeRole: name}).Validate())
+		})
+	}
+}
+
+// The operator-script path has no server backstop: ProvisionPGRoles would at
+// least meet PostgreSQL's own reserved_name error, but a script handed to psql
+// carries the GRANT to PUBLIC as written, so the refusal must happen here.
+func TestPGRoleProvisioningSQLRejectsReservedRole(t *testing.T) {
+	stmts, err := PGRoleProvisioningSQL(&PGRoleSpec{Schema: "tenant_a", MigratorRole: "m", RuntimeRole: "public"})
+	require.ErrorIs(t, err, ErrReservedPGIdentifier)
+	require.ErrorIs(t, err, ErrInvalidPGIdentifier)
+	assert.Contains(t, err.Error(), pgRoleFieldRuntimeRole)
+	assert.Empty(t, stmts)
+}
+
+// Ordering, stated as observation rather than as a second copy of the rule: the
+// policy never sees a reserved schema, so it can neither admit it nor mask the
+// sentinel with a refusal of its own.
+func TestPGRoleSpecValidateReservedRuleRunsBeforePolicy(t *testing.T) {
+	var seen []string
+	spec := &PGRoleSpec{
+		Schema:       "public",
+		MigratorRole: "m",
+		RuntimeRole:  "r",
+		IdentifierPolicy: PGIdentifierCheckerFunc(func(value string) error {
+			seen = append(seen, value)
+			return errTestPolicyRejected
+		}),
+	}
+	err := spec.Validate()
+	require.ErrorIs(t, err, ErrReservedPGIdentifier)
+	require.NotErrorIs(t, err, errTestPolicyRejected)
+	assert.Empty(t, seen, "the policy must not be consulted for a reserved schema")
+}
+
+// The floor still runs first: a name that is reserved-shaped AND outside the
+// grammar comes back as a floor refusal, not as a reserved-name one.
+func TestPGRoleSpecValidateFloorRunsBeforeReservedRule(t *testing.T) {
+	spec := &PGRoleSpec{Schema: "pg_temp-1", MigratorRole: "m", RuntimeRole: "r"}
+	err := spec.Validate()
+	require.ErrorIs(t, err, ErrInvalidPGIdentifier)
+	assert.NotErrorIs(t, err, ErrReservedPGIdentifier)
+}
+
 // A typed nil in the interface field is non-nil as an interface, so the adapter
 // is called. It must refuse rather than panic on the nil call.
 func TestPGRoleSpecValidateRefusesNilPolicyFunc(t *testing.T) {
@@ -608,4 +736,122 @@ func TestPGRoleSpecComparabilityFollowsItsPolicy(t *testing.T) {
 			t.Fatal("a spec holding a comparable policy must compare equal to its copy")
 		}
 	})
+}
+
+// The exported entrypoint runs Validate, so a refusing policy must stop it
+// before any statement is composed.
+func TestPGRoleProvisioningSQLHonoursIdentifierPolicy(t *testing.T) {
+	spec := &PGRoleSpec{
+		Schema:       "tenant_a",
+		MigratorRole: "m",
+		RuntimeRole:  "r",
+		IdentifierPolicy: PGIdentifierCheckerFunc(func(string) error {
+			return errTestPolicyRejected
+		}),
+	}
+	stmts, err := PGRoleProvisioningSQL(spec)
+	require.ErrorIs(t, err, errTestPolicyRejected)
+	require.ErrorIs(t, err, ErrInvalidPGIdentifier)
+	assert.Empty(t, stmts)
+}
+
+// TestPGRoleDetectSQLMatchesMigrationsAtom pins each C65.4 detect query the
+// integration oracles run to the SQL fence wiki/migrations.md publishes. The
+// oracles need a container, so without this a fence could drift from its const —
+// and publish a query nothing tested — in any run that skips them. The consts are
+// read by parsing roles_integration_test.go, so the pin needs no build tag.
+func TestPGRoleDetectSQLMatchesMigrationsAtom(t *testing.T) {
+	consts := detectSQLConsts(t)
+	fences := c654AtomSQLFences(t)
+
+	for _, tt := range []struct {
+		name      string
+		constName string
+	}{
+		{name: "public_grant", constName: "pgPublicGrantDetectSQL"},
+		{name: "public_schema_residue", constName: "pgPublicSchemaResidueDetectSQL"},
+		{name: "public_named_role_grant", constName: "pgPublicNamedRoleGrantDetectSQL"},
+		{name: "reserved_role", constName: "pgReservedRoleDetectSQL"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			query, ok := consts[tt.constName]
+			require.Truef(t, ok, "%s must be declared in roles_integration_test.go", tt.constName)
+			matches := 0
+			for _, fence := range fences {
+				if fence == query {
+					matches++
+				}
+			}
+			assert.Equalf(t, 1, matches, "%s must appear verbatim exactly once as an sql fence in the C65.4 atom", tt.constName)
+		})
+	}
+
+	// Re-provisioning overwrites search_path, so a named-role query keyed on it
+	// reads clean at verify over a grant the revokes missed.
+	t.Run("named_role_query_ignores_search_path", func(t *testing.T) {
+		assert.NotContains(t, consts["pgPublicNamedRoleGrantDetectSQL"], "search_path")
+		assert.NotContains(t, consts["pgPublicNamedRoleGrantDetectSQL"], "pg_db_role_setting")
+	})
+}
+
+// detectSQLConsts parses roles_integration_test.go and returns every string
+// declaration whose name ends in DetectSQL, unquoted.
+func detectSQLConsts(t *testing.T) map[string]string {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "roles_integration_test.go", nil, 0)
+	require.NoError(t, err)
+
+	consts := map[string]string{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		valueSpec, ok := n.(*ast.ValueSpec)
+		if !ok {
+			return true
+		}
+		for i, name := range valueSpec.Names {
+			if strings.HasSuffix(name.Name, "DetectSQL") && i < len(valueSpec.Values) {
+				consts[name.Name] = unquoteStringLit(t, name.Name, valueSpec.Values[i])
+			}
+		}
+		return false
+	})
+	return consts
+}
+
+// unquoteStringLit returns the value of a string literal expression.
+func unquoteStringLit(t *testing.T, name string, expr ast.Expr) string {
+	t.Helper()
+	lit, ok := expr.(*ast.BasicLit)
+	require.Truef(t, ok, "%s must be a string literal", name)
+	value, err := strconv.Unquote(lit.Value)
+	require.NoError(t, err, name)
+	return value
+}
+
+// c654AtomSQLFences returns the body of every sql fence in the C65.4 atom of
+// wiki/migrations.md, with the atom's two-space list indent removed.
+func c654AtomSQLFences(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "wiki", "migrations.md"))
+	require.NoError(t, err)
+	// A Windows checkout may carry CRLF line endings; the fences are matched on LF.
+	doc := strings.ReplaceAll(string(raw), "\r\n", "\n")
+
+	start := strings.Index(doc, "### [C65.4]")
+	require.NotEqual(t, -1, start, "the C65.4 atom must exist")
+	end := strings.Index(doc[start:], "\n- ref: ")
+	require.NotEqual(t, -1, end, "the C65.4 atom must end in its ref line")
+	atom := doc[start : start+end]
+
+	blocks := strings.Split(atom, "\n  ```sql\n")[1:]
+	fences := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		body, _, found := strings.Cut(block, "\n  ```\n")
+		require.True(t, found, "every sql fence in the C65.4 atom must close")
+		lines := strings.Split(body, "\n")
+		for i, line := range lines {
+			lines[i] = strings.TrimPrefix(line, "  ")
+		}
+		fences = append(fences, strings.Join(lines, "\n"))
+	}
+	return fences
 }

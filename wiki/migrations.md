@@ -50,7 +50,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E62 | v0.61.0 → v0.62.0 | breaking (C62.1 — the exact spelling `Local` fails `config.Validate` on `scheduler.timezone`, `database.timezone` and every named or per-tenant database timezone key, and at the runtime door a dynamic `DBConfigProvider` and the `go-bricks-migrate` CLI go through; `"-"` is the only documented opt-out spelling — host-local on the scheduler, the server's default zone on a database session — and `local`/`LOCAL` were already refused) + silent-behavior default flip + compile-break (C62.2 — an absent `cache.critical` now leaves the cache probe NON-critical, so `/ready` stays `200` through a Redis outage that answered `503` on every replica under v0.61.0; the explicit-`false` startup WARN is gone; and `config.CacheConfig.Critical` is a plain `bool`, so Go code that sets `Critical: new(true)` or dereferences the field stops compiling) + breaking (C62.3 — a `keystore.secretminlength` below 32, the former `0` opt-out included, fails startup) | 3 | C62.2 (only partially — the Go field's `*bool` → `bool` is compiler-caught; the default flip is silent, see its gate) | grep every deployment surface — YAML, `.env`, Helm values, Vault and AWS Secrets Manager payloads, the CLI's `tenants.yaml` — for a timezone key set to `Local` and rewrite it to `"-"` where host-local was meant or to the IANA zone where it was not; on a database key note `"-"` means the SERVER's default zone, not the application host's (C62.1); and if any cache-enabled deployment leaves `cache.critical` unset and relies on the v0.61.0 default to take a replica out of rotation during a Redis outage — a rate limiter that must fail closed, a session store, an idempotency ledger — set `cache.critical: true` BEFORE the bump (the key is a no-op on v0.61.0, so it can ship ahead); and grep alerting for the `cache.critical is explicitly false` WARN line, which stops firing, and rewrite any Go `Critical: new(true)` to `Critical: true` (C62.2); and read every environment's `keystore.secretminlength` — YAML, `KEYSTORE_SECRETMINLENGTH`, and any Go literal setting `SecretMinLength` — for `0` or any value below 32: those now fail startup, and a symmetric secret shorter than 32 bytes has no keystore path any more, so a partner key that short must be loaded outside `keystore` before the bump (C62.3) |
 | E63 | v0.62.0 → v0.63.0 | compile-break (C63.1 — `Client.Publish` and `AMQPClient.PublishToExchange` are removed from the module-facing types and `PublishOptions` is unexported; `ValidatePublishDestination` takes `(exchange, routingKey, headers)`; `scheduler.JobContext.Messaging()` returns `messaging.AMQPClient`; `testing/mocks` loses `MockMessagingClient.Publish`, `MockAMQPClient.PublishToExchange`, `PublishedFrame` and the `ExpectPublish*` helpers — publish through `DeclareTypedPublisher[T]`) + breaking (C63.2 — a header-sourced event id outside `^[A-Za-z0-9_-]{1,128}$` is refused before the inbox ledger: `inbox.ProcessOnce` returns an error wrapping `messaging.ErrInvalidEventID`, no row is written, and the handler's return nacks the delivery into the DLQ where v0.62.0 inserted the row; the `!inserted` short-circuit gains the `inbox.dedup.hits` counter and one INFO line) + compile-break (C63.3 — `SelectQueryBuilder` gains `ForUpdate`/`ForUpdateNoWait`/`SubqueryColumn` and `UpdateQueryBuilder` gains `SetExpr`, so a consumer type that implements either interface stops compiling until it grows them; callers are unaffected; a table-less Oracle SELECT now renders `FROM dual`) + breaking (C63.5 — a seal-tagged event type whose custom `MarshalJSON` emits a top-level member case-folding to the sealed Subject member is now refused at publish time with `SEAL_DOCUMENT_INVALID`; the same document sealed in v0.62.0) + additive-optional (C63.4 — the `jose/sealed` raw-document door; C63.6 — the `cmd/seal-event` CLI) | 6 | C63.1 (the compile half — the removed methods, the unexported type and the changed signatures; the runtime `ErrPublishDoorUnavailable` for a factory-built client is not) + C63.3; none for C63.4/C63.5/C63.6 — they are runtime, and the new door and CLI are additive | none for the compile half — `go build ./...` enumerates every call site; if any module keeps a client built by `app.Options.MessagingClientFactory` and publishes through it, expect `messaging.ErrPublishDoorUnavailable` at runtime and move that publish onto a framework-built client BEFORE the bump (C63.1); if any producer of the events you consume mints `x-outbox-event-id` outside that grammar (a `:`, whitespace, empty, over 128 bytes) — a hand-set header, an upstream bridge, a partner producer, or a consumer building its own `ProcessOnce` key such as `order:123` — re-mint before the bump or those messages nack into the DLQ on first delivery; if an alert fires on inbox log volume, expect one new INFO line per redelivery (C63.2); if any of your types implements `types.SelectQueryBuilder` or `types.UpdateQueryBuilder` (a test double, a decorator), add the new methods before the bump — `go build ./...` names each one (C63.3); and check every type carrying `seal:"subject"` whose own `MarshalJSON` builds the JSON: a clear member whose name case-folds to the Subject member (`Card` beside `card`) now fails the publish instead of shipping the plaintext twin beside the ciphertext — no compiler and no config grep finds it (C63.5) |
 | E64 | v0.63.0 → v0.64.0 | breaking (C64.1 — a multi-column Oracle `SetMap` UPDATE orders its SET pairs by the caller's column names instead of by the QUOTED spelling, so a reserved word no longer leads the statement and the bind positions move with the columns; and `jf.NotEq` / `jff.NotEqColumn` render `<>` where they wrote `!=`) + breaking (C64.2 — a JOSE post-trust error envelope renders `error.details` only when `app.debug` is on AND `app.env` is a development alias, the gate the enveloped and raw renderers already applied; a production peer that parsed `error.details` off a decrypted JOSE error body stops receiving the key, while `code`, `message`, `meta` and the status are unchanged) + breaking (C64.3 — a PostgreSQL identifier ARGUMENT containing `#` — a column, table, alias, clause item, insert/SetMap key, upsert column, or a struct `db` tag name at `InsertStruct`/`InsertFields`/`SetStruct` — is refused at `ToSQL()` where it used to reach the server and fail there; Oracle, quoted identifiers and the wildcard are unchanged) + breaking (C64.4 — `keystore/testing.AssertKeyNotFound` aborts the caller's test when the public key is unexpectedly found instead of recording the failure and judging the private key too; the passing path, where the key is genuinely absent, is unchanged) + breaking (C64.5 — every builder door judges the vendor's identifier BYTE CAP per segment before the charset check — PostgreSQL 63, Oracle 128, unknown vendor 63, a quoted segment's interior included — so an over-long name is refused at `ToSQL()` where PostgreSQL used to truncate it silently at 63 bytes; the cap is never on the rendered whole, and separately the inbox store's table-name bound follows the store's vendor, 49 on PostgreSQL and still 114 on Oracle) + breaking (C64.6 — the same `keystore/testing.AssertKeyNotFound` now checks each lookup's returned KEY as well as its error, so a `KeyStore` handing back a cached key ALONGSIDE an error fails the helper where it used to pass; a stray key is reported by dynamic TYPE only, and the passing path, where the store returns `nil`, is unchanged) + breaking (C64.7 — both outbox store constructors judge the table name's SCHEMA segment against the STORE vendor's raw identifier cap, 63 on PostgreSQL and 128 on Oracle, so a PostgreSQL ledger configured with a 64-to-128-byte schema prefix is refused at construction where it used to boot and fail later inside the first `ToSQL()`; the table segment's 49-byte derived-affix budget and every Oracle name are unchanged) + breaking (C64.8 — a PostgreSQL section resolved through the connect seam — a `DBConfigProvider` result, or the migrate CLI — with an empty or whitespace-only `host` and no `connectionstring` is refused with `MissingFieldError` at first use where it used to reach pgx, which now dials libpq's default unix socket with TLS dropped; static sections, `connectionstring` sections and Oracle are unchanged) + breaking (C64.10 — every AMQP 0-9-1 publish becomes persistent, names its application and instant, and names its encoding, type and id wherever the framework knows them, falling back to octet-stream, an empty type and a minted id where it does not: `content_type` stops always reading `application/octet-stream` and now reads `application/json` from the typed handle, `application/jose` when that handle seals the event, or octet-stream on the raw bytes path and for an outbox row whose payload was a caller `[]byte`, while `app_id`, `timestamp` and `type` are set for the first time and `message_id` on an outbox-relayed publish becomes the row id, mirroring `x-outbox-event-id`, which stays the ledger key; a DURABLE queue that used to empty on every broker restart now retains, and all of it is framework-written with no caller knob) + breaking (C64.11 — the UNSEALED `Meta.DedupKey()` reads the AMQP `message_id` property when the delivery carries no `x-outbox-event-id` header at all, validated by the same `^[A-Za-z0-9_-]{1,128}$` grammar, so a delivery from a producer that follows the standard without being go-bricks dedups through `inbox.ProcessOnce` where it used to nack into the DLQ; the stamp still wins whenever it is present and a present-but-malformed stamp still errors rather than falling through, and the sealed branch is untouched) + topology-change (C64.12 — `DeclareQueueWithDLQ` declares BOTH queues it creates, the primary queue and the derived `<queue>.dlq` parking queue, as QUORUM queues by default, where both used to take whatever queue type the broker defaults to for the vhost; an existing classic queue of either kind cannot be redeclared as quorum, so startup fails with `PRECONDITION_FAILED` until you set the new `DeadLetterSpec.QueueType` to `messaging.QueueTypeClassic` or delete/migrate the queue) + breaking (C64.13 — an `app.name` longer than 255 bytes fails `config.Validate` at startup, naming the field, its byte length and the limit, where any length used to boot: the value becomes the `app_id` shortstr of every publish, a longer one cannot be written into the content-header frame, and amqp091 answers a frame-write failure by tearing down the whole Connection every publisher in the process shares — the same 255 applies per-publish to a `messaging.WithAppName` value the config check never saw, returning `messaging.ErrInvalidPublishDestination`) + breaking (C64.14 — outbox enqueue refuses two inputs it used to accept, both before the INSERT: an `EventType` longer than 255 BYTES, via `messaging.ValidatePublishEventType`, because the event type became the AMQP `type` shortstr this round while the ledger column bounds 255 of whatever the vendor counts — PostgreSQL `VARCHAR(255)` counts characters, Oracle `VARCHAR2(255)` counts bytes by default and characters only under CHAR semantics — so on PostgreSQL, and on a CHAR-semantics Oracle,a multibyte type the column accepted could exceed the byte ceiling, insert, and then park that tenant's whole outbox behind it until it exhausted `MaxRetries`; and any caller header claiming the reserved `x-gobricks-` prefix, refused case-insensitively with the new `outbox.ErrReservedHeaderPrefix` naming the key, since that namespace is where enqueue records the payload's encoding for the relay to put on the wire — the STREAM lane is deliberately unbounded, the event type travelling there as a properties value with no shortstr ceiling) + compile-break (C64.15 — `jose.Policy` gains a `map[string]any` protected-header field for the new bare-JWE mode and stops being comparable, so `==`, `!=` and map-key use on it no longer build; every existing policy still seals and opens the same bytes, `SealModeJWEofJWS` being the zero value) | 15 | C64.15 — comparing two `jose.Policy` values or keying a map on one stops compiling, in `_test.go` files as much as in production code, so run `go vet ./...` rather than `go build ./...` for it; none — C64.1's changes are rendering changes, invisible to the compiler and to every vendor that executes the SQL; C64.2 is a wire change on an encrypted body — no Go call site moves, so neither the compiler nor a grep of your own tree finds a peer that reads the field; none for C64.3 either — it is a runtime refusal, and the doors keep their signatures; and C64.4 changes only when your own tests stop; none — runtime refusals for C64.5 as well, a deferred `ToSQL()` error at the doors and one startup check in the inbox store, with no signature moving; none for C64.7 either — a runtime refusal inside `NewPostgresStore`/`NewOracleStore`, whose signatures do not move; none for C64.10 — no exported signature moves, the only new identifier (`messaging.WithAppName`) is additive, and every value that changes is written by the framework onto the WIRE, so the population is on the consumer side and at the broker; and none for C64.11, which is a WIDENING — no signature moves, no existing key changes, and the arm that stops firing is a refusal your own code may depend on none for C64.12 either — `DeadLetterSpec` GAINS a field, so every existing call site, `nil` and `&messaging.DeadLetterSpec{}` included, still compiles and still means what it said; the change is visible only at declaration time; none for C64.8 either — a runtime refusal on the connect seam, no signature moves; C64.9 is a transitive bump; and none for C64.13 — the population is a CONFIG value, refused by `config.Validate` at startup, and `AppConfig` gains no field; and none for C64.14 either — nothing in a consumer's build flags either half, since no signature moves and the population is a runtime call, `outbox.Publish`, that now returns an error | grep your golden-SQL fixtures, query-text matchers and driver-level captures for a rendered Oracle `UPDATE … SET` built from a `SetMap` whose keys include a quoted reserved word, and for the literal `!=` in SQL produced by `jf.NotEq` or `jff.NotEqColumn`: those assertions fail on the bump while the statements they pin keep their exact effect (C64.1); and if any peer, log pipeline or alert rule reads `error.details` off a JOSE route's decrypted error body in production, move it onto `code`/`message` BEFORE the bump — the key goes absent outside debug+development and nothing in your build will say so (C64.2); and grep every identifier ARGUMENT you hand the builder — column, table, alias, ORDER BY/GROUP BY item, insert or SetMap key, upsert column — for a `#`, which PostgreSQL treats as an operator: rename or quote those before the bump, since they now fail at `ToSQL()` rather than at execution (C64.3); and grep your own tests for `AssertKeyNotFound(` — a call site with statements after it that must run even when the public key is unexpectedly found now stops at the helper, so move that work into `t.Cleanup` before the bump (C64.4); and run ``git grep -nE '[`"][A-Za-z_][A-Za-z0-9_$#]{63,}' -- '*.go'`` (raise `{63,}` to `{128,}` on Oracle) for identifier-shaped literals that now exceed the vendor's cap, remembering it reads literals only and cannot see an identifier computed from config or metadata — and measure your `inbox.tablename`, which a PostgreSQL inbox store now bounds at 49 bytes and rejects at STARTUP (C64.5); and if any `app.KeyStore` you implement returns a cached key alongside an error on a refresh failure, that store now fails the same helper — fix the store, or assert the fallback with your own `PublicKey`/`PrivateKey` call rather than around the helper (C64.6); and measure the schema prefix in your `outbox.tablename` — a PostgreSQL outbox store now bounds that segment at 63 bytes and refuses it at construction, which is STARTUP on a static single-tenant or shared-ledger deployment and the first USE — publish or relay poll — where the store is built lazily (C64.7); and inventory the CONSUMERS of the events you publish, plus any non-Go listener, Shovel/Federation policy, alert or dashboard keyed on a delivery property, for a branch on `content_type`: it read one constant value and now reads three, so handle all of them and do NOT read `application/octet-stream` as "not JSON" — a persisted-sealed or hand-marshaled outbox payload ships under it, and a pre-upgrade backlog relays under it while post-upgrade rows ship `application/json`; query the broker with `rabbitmqctl list_queues name durable messages` for a DURABLE queue whose depth used to fall to zero on every restart, size its disk and set a TTL or max-length policy there if it must not retain, since there is no opt-out; and repoint any tool counting distinct `message_id`s as delivery ATTEMPTS: once the relay supplies the id it counts ROWS, while a minted id is generated once per logical publish and reused by its retries — dedupe on `x-outbox-event-id`, never on the property (C64.10); and read every `Meta.DedupKey()` call site for a branch that treats its error as "this delivery is unstamped, drop it" — that arm stops firing for a delivery carrying a `message_id`, so move the check into your own handler before the bump if you meant to reject those — and read the opposite arm too, since a handler that fell through that error to process WITHOUT dedup moves from at-least-once to exactly-once and a redelivery it used to re-run is now a silent skip+ACK; the population is not only foreign producers, because your own `DeclareTypedPublisher` queues carry a framework-minted `message_id` and no stamp, so a typed consumer of one of those now dedups broker redeliveries where `DedupKey` used to error; confirm your foreign producers make `message_id` unique per event, which AMQP does not oblige and the framework does not check, and expect DLQ'd deliveries refused for exactly this reason to process on replay (C64.11) inventory every `DeclareQueueWithDLQ` call site with `git grep -n 'DeclareQueueWithDLQ(' -- '*.go'`, then ask the broker (`rabbitmqctl list_queues name type`) for the type of each of those queues AND of each one's parking queue — `DeadLetterSpec.ParkingQueue` where the call site sets it, `<name>.dlq` only otherwise — a classic one cannot be redeclared as quorum, so decide per route BEFORE the bump whether to set `QueueType: messaging.QueueTypeClassic` (keeps today's topology, no downtime) or to drain, triage and delete both queues so the quorum pair can be declared (C64.12); and grep your DBConfigProvider implementations for a branch returning an empty or whitespace-only Host without a ConnectionString (C64.8); and measure the configured `app.name` in BYTES, not characters — `wc -c` on the value, since a multibyte name reaches 255 bytes well before it reaches 255 characters — in every source that feeds the service (YAML under `app:`, `APP_NAME`, a hand-built `config.AppConfig`, a config server or secret manager no grep reaches) and shorten anything over 255 before the bump, since it now takes the deployment down at boot rather than failing one operation; pass the same shortened value to `messaging.WithAppName` if you call it yourself (C64.13); and measure your event types in BYTES, not characters — a multibyte type reaches 255 bytes well before 255 characters — with the honest detector a query over the ledger you already have rather than a grep of source, since the value is usually data and not a literal: count the rows where `octet_length(event_type) > 255` on PostgreSQL or `LENGTHB(event_type) > 255` on Oracle, per outbox table and per tenant ledger; and grep your own header construction for `x-gobricks`, including wherever a name is assembled at runtime from configuration or request data, reading the framework's encoding stamp off the delivery's `content_type` property instead (C64.14); and `git grep -nE 'jose[.]Policy' -- '*.go'` for a `==`/`!=` between two policies or a map keyed on one — compare the fields you care about, or key on the kids (C64.15) |
-| E65 | v0.64.0 → v0.65.0 | silent-behavior (C65.1 — two `BuildUpsert` precondition messages change wording; the preconditions, and when they fire, do not) + breaking (C65.6 — a PostgreSQL section with no `connectionstring`, an absolute-path `host` entry (`/…`, or a drive path such as `C:\pg`, in any comma-separated position) and a `database.tls` block setting `ca`/`cert`/`key` or a `mode` other than `disable` is refused with a `database.tls` `ConfigError` at startup, at the first `deps.DB(ctx)` for a `DBConfigProvider` result, and in `go-bricks-migrate` at its next pin bump, where it used to connect over the unix socket with TLS silently skipped; and, new beyond C64.8's wholly empty host, a `host` with an empty comma-separated entry (`db.internal,`, `,db.internal`, `db1,,db2`) is refused with `MissingFieldError` on `database.host` on the same doors, TLS or not, where it used to boot; socket hosts without TLS, TCP hosts, raw `connectionstring` sections and Oracle are unchanged) + breaking (C65.2 — a PostgreSQL section's raw `connectionstring` is now judged by the DSN's own resolved host, closing the gap C65.1 left open: a DSN whose host resolves to nothing — none of the URI authority, a `?host=` query parameter, a keyword `host=`, or the `PGHOST` environment variable names one, or a comma-separated resolved entry is empty — is refused with a `database.connectionstring` `ConfigError`, and, on the same axis as C65.1, a DSN whose resolved host is a unix-socket entry while the DSN itself claims TLS is refused too; both run on `config.Validate`, `ApplyDatabasePoolDefaults`/`ApplyDatabasePoolDefaultsForKey`, and `go-bricks-migrate` at its next pin bump — the migrate CLI's `quiesce` command included, since it resolves its control-plane target through the same `tlsValidatingProvider`; `PGSERVICE`/service files and `PGSSL*` environment variables are not consulted, and a DSN the scanner cannot tokenize passes through unjudged) + breaking (C65.3 — `inferDatabaseTypeFromConnectionString` now infers `postgresql` from pgx's keyword/value form, which is what routes such a DSN into C65.2's rules at all: after the `postgres://`/`postgresql://`/`oracle://` prefixes, a string is keyword-form PostgreSQL only when it carries at least one `=`, tokenizes, and EVERY tokenized key matches libpq's keyword shape `[A-Za-z_][A-Za-z0-9_]*` — a positive key-shape test that rejects a single-line Oracle TNS descriptor (`(DESCRIPTION=(ADDRESS=…))`, which tokenizes as one pair keyed `(DESCRIPTION`), a JDBC URL and any foreign vendor URI without this seam knowing a single foreign scheme, while godror easy-connect, which carries no `=`, and an empty string still infer nothing. A section that used to stay untyped forever is now typed: it leaves `config.UntypedDatabaseSections` and no longer trips `app.Builder`'s untyped refusal, it gains the whole PostgreSQL vendor-rule set including ADR-062 R4's `database.tls` co-presence refusal, an explicit `type: oracle` beside such a DSN is now a `database.type` conflict error at startup, and `go-bricks-migrate`'s `quiesce` fail-open on an untyped control-plane DSN closes with it at the CLI's next pin bump) + compile-break (C65.7 — `inbox.ProcessOnce` takes a `messaging.DedupKey` instead of a string, `Metadata.DedupKey()` returns `(messaging.DedupKey, error)`, `messaging.ValidateDedupKey` takes a `DedupKey`, and `messaging.IsSealedDedupKey` is deleted; a key the consumer composes goes through the new `messaging.WireDedupKey`, and only the sealed consume door can produce a sealed key; persisted spellings are unchanged) + compile-break + breaking (C65.8 — under an `httpclient` JOSE `Inbound` policy, a 2xx response the transport did not unwrap is refused as `httpclient.ErrJOSEPlaintextResponse` instead of reaching the caller as plaintext: in nested mode a successful status whose `Content-Type` is not `application/jose`, in envelope mode one whose `Unwrap` declined the body; the body is closed and never handed to the caller or to a response interceptor, the refusal is exempt from the retry loop, the error and one WARN name the status and the peer, and non-2xx pass-through, 204/304/HEAD and every crypto failure are unchanged) + compile-break (C65.5 — `database.Interface` gains `Session(ctx) (Session, error)`, so every implementation outside the framework stops building until it adds the method or embeds a framework connection) | 7 | none for the other four — no signature moves; C65.1’s three sentinels are additive and C65.6 is a runtime refusal on the `database.tls` door; C65.8 (only partially — `JOSEConfig` GAINS an exported bool field and `JOSETransport` gains that bool plus `PeerName` and `Logger`, so an UNKEYED positional composite literal of either struct stops compiling and the compiler names it; a KEYED literal is unaffected, and the refusal itself is a RUNTIME change on a response path no compiler sees); C65.7 — every `ProcessOnce` call site, every implementer of `app.InboxProcessor` and every `IsSealedDedupKey` use stops compiling; C65.5 — every type you implement `database.Interface` on, in `_test.go` files as much as in production code, so run `go vet ./...` rather than `go build ./...` | grep for code matching `BuildUpsert` precondition text and switch it to `errors.Is` on the new `types.ErrUpsert*` sentinels (C65.1) ; and grep static config and read every `DBConfigProvider` implementation for an absolute-path `host` beside a `database.tls` block, then remove the block or move to a TCP host, and for a `host` with an empty entry, then remove the stray comma or name every entry (C65.6); and read every PostgreSQL `connectionstring` — static config, `DBConfigProvider` branches, and the migrate CLI's control-plane target (`--tenant`) — for a DSN naming no host through the URI authority, a `?host=` query parameter, a keyword `host=`, or `PGHOST`, or naming a unix-socket host beside a TLS claim inside the DSN text, then add a host through one of those four sources or drop the TLS claim (C65.2); and grep the same three populations for a keyword-form `connectionstring` (`git grep -nE "connectionstring:[[:space:]]*[\"']?[^:/[:space:]]+=" -- '*.yaml' '*.yml'`), then either accept the inferred `postgresql` type and the vendor rules that come with it, or set `type:` explicitly — and change any `type: oracle` spelled beside a keyword-form DSN, which is now a conflict error (C65.3); and none for the typed dedup key — no ledger row, DLQ spelling or metric label moves; if a sealed consumer handed `ProcessOnce` a string it read from `MessageID()`, `Headers()`, `outbox.EventIDFromHeaders` or its body, decide before the bump which key it should use, since that string can no longer become a sealed key (C65.7); and add the new value, or convert the literal to keyed fields, wherever you build a `JOSETransport` or `JOSEConfig` positionally — `git grep -n 'JOSETransport{' -- '*.go'` and `git grep -n 'JOSEConfig{' -- '*.go'` shortlist them; then inventory the peers you reach through JOSE with `git grep -n 'WithJOSE(' -- '*.go'` and again with `git grep -n 'JOSETransport{' -- '*.go'` (two runs, because an alternation cannot live in a table cell) and, for each, establish from the partner spec or from a capture whether EVERY 2xx route returns a protected body — a health check, a redirect-shaped 2xx, a 202 acknowledgement or a legacy route half-migrated to MLE is the population that breaks; set `AllowPlaintextSuccess: true` on exactly those integrations BEFORE the bump and clear it once the peer protects every route (C65.8) ; and inventory the types you implement `database.Interface` on — `git grep -nE 'MigrationTable\(\) string' -- '*.go'` finds each one by the method only an `Interface` implementation has — and decide per type BEFORE the bump whether it opens a real pinned session or returns an error, since a hand-written double is the whole affected population (C65.5) |
+| E65 | v0.64.0 → v0.65.0 | silent-behavior (C65.1 — two `BuildUpsert` precondition messages change wording; the preconditions, and when they fire, do not) + breaking (C65.6 — a PostgreSQL section with no `connectionstring`, an absolute-path `host` entry (`/…`, or a drive path such as `C:\pg`, in any comma-separated position) and a `database.tls` block setting `ca`/`cert`/`key` or a `mode` other than `disable` is refused with a `database.tls` `ConfigError` at startup, at the first `deps.DB(ctx)` for a `DBConfigProvider` result, and in `go-bricks-migrate` at its next pin bump, where it used to connect over the unix socket with TLS silently skipped; and, new beyond C64.8's wholly empty host, a `host` with an empty comma-separated entry (`db.internal,`, `,db.internal`, `db1,,db2`) is refused with `MissingFieldError` on `database.host` on the same doors, TLS or not, where it used to boot; socket hosts without TLS, TCP hosts, raw `connectionstring` sections and Oracle are unchanged) + breaking (C65.2 — a PostgreSQL section's raw `connectionstring` is now judged by the DSN's own resolved host, closing the gap C65.1 left open: a DSN whose host resolves to nothing — none of the URI authority, a `?host=` query parameter, a keyword `host=`, or the `PGHOST` environment variable names one, or a comma-separated resolved entry is empty — is refused with a `database.connectionstring` `ConfigError`, and, on the same axis as C65.1, a DSN whose resolved host is a unix-socket entry while the DSN itself claims TLS is refused too; both run on `config.Validate`, `ApplyDatabasePoolDefaults`/`ApplyDatabasePoolDefaultsForKey`, and `go-bricks-migrate` at its next pin bump — the migrate CLI's `quiesce` command included, since it resolves its control-plane target through the same `tlsValidatingProvider`; `PGSERVICE`/service files and `PGSSL*` environment variables are not consulted, and a DSN the scanner cannot tokenize passes through unjudged) + breaking (C65.3 — `inferDatabaseTypeFromConnectionString` now infers `postgresql` from pgx's keyword/value form, which is what routes such a DSN into C65.2's rules at all: after the `postgres://`/`postgresql://`/`oracle://` prefixes, a string is keyword-form PostgreSQL only when it carries at least one `=`, tokenizes, and EVERY tokenized key matches libpq's keyword shape `[A-Za-z_][A-Za-z0-9_]*` — a positive key-shape test that rejects a single-line Oracle TNS descriptor (`(DESCRIPTION=(ADDRESS=…))`, which tokenizes as one pair keyed `(DESCRIPTION`), a JDBC URL and any foreign vendor URI without this seam knowing a single foreign scheme, while godror easy-connect, which carries no `=`, and an empty string still infer nothing. A section that used to stay untyped forever is now typed: it leaves `config.UntypedDatabaseSections` and no longer trips `app.Builder`'s untyped refusal, it gains the whole PostgreSQL vendor-rule set including ADR-062 R4's `database.tls` co-presence refusal, an explicit `type: oracle` beside such a DSN is now a `database.type` conflict error at startup, and `go-bricks-migrate`'s `quiesce` fail-open on an untyped control-plane DSN closes with it at the CLI's next pin bump) + compile-break (C65.7 — `inbox.ProcessOnce` takes a `messaging.DedupKey` instead of a string, `Metadata.DedupKey()` returns `(messaging.DedupKey, error)`, `messaging.ValidateDedupKey` takes a `DedupKey`, and `messaging.IsSealedDedupKey` is deleted; a key the consumer composes goes through the new `messaging.WireDedupKey`, and only the sealed consume door can produce a sealed key; persisted spellings are unchanged) + compile-break + breaking (C65.8 — under an `httpclient` JOSE `Inbound` policy, a 2xx response the transport did not unwrap is refused as `httpclient.ErrJOSEPlaintextResponse` instead of reaching the caller as plaintext: in nested mode a successful status whose `Content-Type` is not `application/jose`, in envelope mode one whose `Unwrap` declined the body; the body is closed and never handed to the caller or to a response interceptor, the refusal is exempt from the retry loop, the error and one WARN name the status and the peer, and non-2xx pass-through, 204/304/HEAD and every crypto failure are unchanged) + compile-break (C65.5 — `database.Interface` gains `Session(ctx) (Session, error)`, so every implementation outside the framework stops building until it adds the method or embeds a framework connection) + breaking (C65.4 — `migration.PGRoleSpec.Validate` refuses a reserved PostgreSQL name in any identifier field: `public` or a `pg_`-prefixed name in `Schema`, `MigratorRole` and `RuntimeRole`, plus `information_schema` in `Schema` alone, all matched case-insensitively, so a tenant already provisioned into such a schema — or under such a role — stops provisioning where it used to emit DDL; no `IdentifierPolicy` can waive the rule) | 8 | none for the other four — no signature moves; C65.1’s three sentinels are additive and C65.6 is a runtime refusal on the `database.tls` door; C65.8 (only partially — `JOSEConfig` GAINS an exported bool field and `JOSETransport` gains that bool plus `PeerName` and `Logger`, so an UNKEYED positional composite literal of either struct stops compiling and the compiler names it; a KEYED literal is unaffected, and the refusal itself is a RUNTIME change on a response path no compiler sees); C65.7 — every `ProcessOnce` call site, every implementer of `app.InboxProcessor` and every `IsSealedDedupKey` use stops compiling; C65.5 — every type you implement `database.Interface` on, in `_test.go` files as much as in production code, so run `go vet ./...` rather than `go build ./...`; none for C65.4 — a runtime refusal inside `Validate`, reached through `ProvisionPGRoles` and `PGRoleProvisioningSQL`, whose signatures do not move; the new `ErrReservedPGIdentifier` sentinel is additive | grep for code matching `BuildUpsert` precondition text and switch it to `errors.Is` on the new `types.ErrUpsert*` sentinels (C65.1) ; and grep static config and read every `DBConfigProvider` implementation for an absolute-path `host` beside a `database.tls` block, then remove the block or move to a TCP host, and for a `host` with an empty entry, then remove the stray comma or name every entry (C65.6); and read every PostgreSQL `connectionstring` — static config, `DBConfigProvider` branches, and the migrate CLI's control-plane target (`--tenant`) — for a DSN naming no host through the URI authority, a `?host=` query parameter, a keyword `host=`, or `PGHOST`, or naming a unix-socket host beside a TLS claim inside the DSN text, then add a host through one of those four sources or drop the TLS claim (C65.2); and grep the same three populations for a keyword-form `connectionstring` (`git grep -nE "connectionstring:[[:space:]]*[\"']?[^:/[:space:]]+=" -- '*.yaml' '*.yml'`), then either accept the inferred `postgresql` type and the vendor rules that come with it, or set `type:` explicitly — and change any `type: oracle` spelled beside a keyword-form DSN, which is now a conflict error (C65.3); and none for the typed dedup key — no ledger row, DLQ spelling or metric label moves; if a sealed consumer handed `ProcessOnce` a string it read from `MessageID()`, `Headers()`, `outbox.EventIDFromHeaders` or its body, decide before the bump which key it should use, since that string can no longer become a sealed key (C65.7); and add the new value, or convert the literal to keyed fields, wherever you build a `JOSETransport` or `JOSEConfig` positionally — `git grep -n 'JOSETransport{' -- '*.go'` and `git grep -n 'JOSEConfig{' -- '*.go'` shortlist them; then inventory the peers you reach through JOSE with `git grep -n 'WithJOSE(' -- '*.go'` and again with `git grep -n 'JOSETransport{' -- '*.go'` (two runs, because an alternation cannot live in a table cell) and, for each, establish from the partner spec or from a capture whether EVERY 2xx route returns a protected body — a health check, a redirect-shaped 2xx, a 202 acknowledgement or a legacy route half-migrated to MLE is the population that breaks; set `AllowPlaintextSuccess: true` on exactly those integrations BEFORE the bump and clear it once the peer protects every route (C65.8) ; and inventory the types you implement `database.Interface` on — `git grep -nE 'MigrationTable\(\) string' -- '*.go'` finds each one by the method only an `Interface` implementation has — and decide per type BEFORE the bump whether it opens a real pinned session or returns an error, since a hand-written double is the whole affected population (C65.5); and ask the SERVER, not your source, what you actually provisioned — run the queries in the C65.4 atom: one over `pg_namespace` for the schema names, one over `pg_default_acl` plus `pg_db_role_setting` for the residue a `Schema` spelled `public` leaves (the built-in schema's ownership never moves, so it is no fingerprint at all), one over the three catalogs a grant to the PUBLIC pseudo-role lands in for the `RuntimeRole` half, one over `pg_roles` for the case variants the server accepted as real roles, and one that reads every real role's grants on `public` itself and on its objects straight from their ACLs — grants to a NAMED role, which `grantee = 0` never matches and no `REVOKE … FROM PUBLIC` undoes, the atom's one live exposure rather than a detection trace (a reserved role name spelled exactly never became a role; the grant to PUBLIC is its fingerprint, and only on the `PGRoleProvisioningSQL` script path — the Go helper aborts at the failed `CREATE ROLE` before any grant, leaving nothing at all for a `MigratorRole` and a stranded, locked-down migrator role for a `RuntimeRole`, so the source read is the only route for either) — because both names are usually derived from a tenant id at runtime and no grep of Go source will find them; then follow the numbered procedure under the atom's **apply**, which is the atom's only statement of what runs in which order, of which of the three cases gets which steps, and of which detect arm each step overwrites — all of it BEFORE the bump, since after it the provisioning call fails instead of converging (C65.4) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 
@@ -8568,7 +8568,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 ---
 
-## E65 · v0.64.0 → v0.65.0 — `BuildUpsert` preconditions become matchable sentinels + a unix-socket PostgreSQL host refuses the TLS it cannot carry + the inbox ledger key is typed by the door that produced it + a successful JOSE response that was never unwrapped is a transport error + the session door becomes a method on `database.Interface`
+## E65 · v0.64.0 → v0.65.0 — `BuildUpsert` preconditions become matchable sentinels + a unix-socket PostgreSQL host refuses the TLS it cannot carry + the inbox ledger key is typed by the door that produced it + a successful JOSE response that was never unwrapped is a transport error + the session door becomes a method on `database.Interface` + the migration role helper refuses PostgreSQL's reserved schema and role names
 
 - gist: `database/types` exports `ErrUpsertConflictColumnsRequired`,
   `ErrUpsertConflictColumnNotInserted` and `ErrUpsertConflictColumnInUpdateSet`, which
@@ -8633,6 +8633,22 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   query/exec/transaction expectations and `AssertSessionClosed` to check the release, and
   `testing/mocks.MockDatabase.Session` hands back the `types.Session` the test supplied rather
   than a second mock type.
+- gist: `PGRoleSpec.Validate` judged its identifiers by shape alone — the bare-identifier
+  grammar and the 63-byte cap — and `public` passes both. A deployment deriving those names
+  from a tenant id could therefore provision a tenant into the schema every role on the
+  instance can reach: the helper would happily emit `CREATE SCHEMA IF NOT EXISTS "public"
+  AUTHORIZATION "migrator"`, grant the runtime role DML on it, and point both roles'
+  `search_path` at it, undoing by a name the isolation the rest of the model spends its
+  `ALTER DEFAULT PRIVILEGES` statements building. The role fields carried the same failure:
+  PostgreSQL's `RoleSpec` maps the name `public` — quoted included — onto the PUBLIC
+  pseudo-role, so `RuntimeRole: "public"` emits `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL
+  TABLES IN SCHEMA "tenant_a" TO "public"` and hands the tenant's DML to every role on the
+  instance. Every identifier now additionally passes a reserved-name rule — `public` and the
+  `pg_` prefix in all three fields, `information_schema` in `Schema` alone, matched
+  case-insensitively — refused with the new `ErrReservedPGIdentifier`, wrapped as every other
+  refusal on this boundary is inside `ErrInvalidPGIdentifier` plus the field name and value.
+  It runs after the identifier floor and BEFORE a caller's `IdentifierPolicy`, so no policy
+  can waive it (C65.4, ADR-061 amendment).
 
 ---
 
@@ -9108,6 +9124,598 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `database/types/interfaces.go`, `database/types/session.go`,
   `database/internal/tracking/session.go`, `database/testing/fake_session.go`,
   `testing/mocks/database.go`
+
+---
+
+### [C65.4] `PGRoleSpec` refuses PostgreSQL's reserved schema and role names · breaking · when: match
+
+- detect: ask the SERVER, because both names are normally derived from a tenant id at
+  runtime rather than written as a literal. Every SQL fence in this atom is ONE pasteable
+  query written to a single convention — no trailing semicolon, no comment inside the fence —
+  because four of them are byte-identical to consts that run against a real server as their
+  oracle: `pgPublicGrantDetectSQL`, `pgReservedRoleDetectSQL`,
+  `pgPublicSchemaResidueDetectSQL` and `pgPublicNamedRoleGrantDetectSQL` in
+  `migration/roles_integration_test.go`. The exception is the class of remediation scripts
+  under **apply**: a fence whose statements end in `;` is a SCRIPT to run in order, not one query,
+  and its semicolons are separators. Judge a fence by that mark rather than by a count of
+  scripts or statements. Start with the schema names themselves — is one of these a schema YOU
+  provisioned as a tenant's?
+
+  ```sql
+  SELECT nspname FROM pg_namespace
+  WHERE lower(nspname) IN ('public', 'information_schema')
+     OR lower(nspname) LIKE 'pg^_%' ESCAPE '^'
+  ```
+
+  That query cannot settle the `public` case on its own, because `public` exists on every
+  instance; the schema half gets its own residue query below (**Deciding the schema half**).
+  The `RuntimeRole` half is the query below — a reserved role name never became a role
+  (the server refuses `public` and `pg_%`), so look for the grants it produced instead.
+  It is also this atom's **verify** step, so there is exactly one copy of it here and one
+  in code (`pgPublicGrantDetectSQL` in `migration/roles_integration_test.go`, which runs
+  it against a real server as its oracle):
+
+  ```sql
+  SELECT 'schema'::text AS source, n.nspname AS schema_name,
+         ''::text AS object_name, a.privilege_type
+  FROM pg_namespace n, aclexplode(n.nspacl) a
+  WHERE a.grantee = 0
+    AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'public')
+  UNION ALL
+  SELECT 'relation', n.nspname, c.relname, a.privilege_type
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace,
+       aclexplode(c.relacl) a
+  WHERE a.grantee = 0
+    AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  UNION ALL
+  SELECT 'default_acl', n.nspname,
+         CASE d.defaclobjtype WHEN 'r' THEN 'TABLES'
+                              WHEN 'S' THEN 'SEQUENCES'
+                              WHEN 'f' THEN 'FUNCTIONS'
+                              WHEN 'T' THEN 'TYPES'
+                              WHEN 'n' THEN 'SCHEMAS'
+                              ELSE d.defaclobjtype::text END,
+         a.privilege_type
+  FROM pg_default_acl d
+  JOIN pg_namespace n ON n.oid = d.defaclnamespace,
+       aclexplode(d.defaclacl) a
+  WHERE a.grantee = 0
+    AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  ORDER BY 1, 2, 3, 4
+  ```
+
+  run both on every instance you provision into; `public`, `information_schema` and the
+  `pg_`-prefixed system schemas (`pg_catalog`, `pg_toast`) are present on every PostgreSQL
+  database, so the question
+  the first result answers is whether any of them is a schema YOU provisioned as a tenant's,
+  and the second is the fingerprint of a `RuntimeRole` that was spelled `public`: privileges
+  on a tenant schema handed to PUBLIC.
+
+  The second query unions the **three** catalogs a grant to the PUBLIC pseudo-role can land
+  in, because provisioning emits four kinds of grant and they do not all land in the same
+  place. Its `source` column tells you which residue you hit, and each one has its own line
+  in **apply** below:
+
+  | `source` | catalog column | the statement that left it |
+  | -------- | -------------- | -------------------------- |
+  | `schema` | `pg_namespace.nspacl` | `GRANT USAGE ON SCHEMA … TO "public"` |
+  | `relation` | `pg_class.relacl` | `GRANT … ON ALL TABLES` and `GRANT … ON ALL SEQUENCES` (a sequence IS a `pg_class` row, so there is deliberately no `relkind` filter) |
+  | `default_acl` | `pg_default_acl.defaclacl` | the two `ALTER DEFAULT PRIVILEGES … IN SCHEMA …` statements; the `object` column reports the object type (`TABLES`, `SEQUENCES`, …) so you can paste it straight into the matching `REVOKE` |
+
+  A `pg_class`-only reading is the trap: a tenant provisioned into a still-EMPTY schema has
+  no relations yet, so it returns nothing while the schema USAGE grant and both
+  default-privilege rows are already there — a clean bill of health on a genuinely affected
+  instance. `aclexplode` breaks an ACL into one row per privilege and represents PUBLIC as
+  `grantee = 0`, so a row appears whoever owns the object; it is strict, so a `NULL` ACL
+  column contributes nothing. Do NOT substitute `information_schema.role_table_grants`: its
+  documented difference from `table_privileges` is that it OMITS what a grant to PUBLIC made
+  accessible — exactly the rows being hunted — and it covers only tables, neither of the
+  other two catalogs.
+
+  **Database-wide default ACLs are out of scope on purpose.** A `pg_default_acl` row can
+  carry `defaclnamespace = 0`, meaning an `ALTER DEFAULT PRIVILEGES` with no `IN SCHEMA`;
+  the inner join to `pg_namespace` drops those. This template never emits one — both of its
+  `ALTER DEFAULT PRIVILEGES` statements are schema-scoped — and such a row has no tenant
+  schema to attribute it to or to revoke it against. To audit them anyway, run this separate
+  one-liner — dropping the join from the third arm is not enough, because `n.nspname` stays
+  in its SELECT list and the statement no longer parses:
+
+  ```sql
+  SELECT d.defaclobjtype, a.privilege_type
+  FROM pg_default_acl d, aclexplode(d.defaclacl) a
+  WHERE a.grantee = 0 AND d.defaclnamespace = 0
+  ```
+
+  **Why the `schema` arm skips `public`**: the built-in `public` schema carries a PUBLIC
+  `USAGE` grant on every PostgreSQL instance by design (PG 15 removed `CREATE` from that
+  default, never `USAGE`), and that same ACL entry is the only schema-level grant this template
+  can add to `public`'s own ACL — `GRANT USAGE ON SCHEMA "public" TO "public"` writes an entry
+  that is already there. A `schema | public | | USAGE` row could therefore never tell residue
+  from baseline, and acting on it — `REVOKE ALL ON SCHEMA "public" FROM PUBLIC` — would strip
+  that baseline from every unrelated role on the database, so the arm leaves `public` out and
+  an untouched instance reports nothing for it. The `relation` and `default_acl` arms still
+  cover `public`, where PostgreSQL grants PUBLIC nothing by default. With `Schema` spelled
+  `public` and an ordinary `RuntimeRole` the template hands PUBLIC nothing at all, so this query
+  cannot decide the schema half — that is what **Deciding the schema half** below is for.
+  Likewise the catalog schemas are excluded on every arm because PostgreSQL grants PUBLIC
+  `SELECT` on its own catalogs by design. Beyond those, PostgreSQL grants nothing to PUBLIC on a
+  schema, table or sequence you create, so every remaining row is worth investigating — but a
+  row is not proof on its own, since a deliberate `GRANT SELECT … TO PUBLIC` on a shared
+  reference table looks identical. Corroborate each row against the spec that provisioned that
+  schema.
+
+  **Deciding the schema half.** Ownership is not the fingerprint, and `\dn+` will not tell you
+  anything: `CREATE SCHEMA IF NOT EXISTS "public" AUTHORIZATION "<migrator>"`
+  (`migration/roles.go`) is a whole-statement no-op against the built-in schema — `IF NOT
+  EXISTS` skips the `AUTHORIZATION` clause along with everything else — so `nspowner` never
+  moves and the schema's owner reads exactly as it does on an untouched instance. What a
+  `Schema: "public"` run DOES leave are rows no fresh instance carries, written by statements
+  later in the same list: the two `ALTER DEFAULT PRIVILEGES FOR ROLE "<migrator>" IN SCHEMA
+  "public"` statements land in `pg_default_acl` with `defaclnamespace` pointing at the `public`
+  schema, and the two `ALTER ROLE "<role>" SET search_path = "public"` statements land in
+  `pg_db_role_setting`, one row per role. Note that this half needs no failed statement and no
+  particular path: with only `Schema` spelled `public`, both roles are ordinary, nothing
+  raises, and the Go helper and the emitted script leave the same residue. This third query
+  finds it, and is pinned exactly as the grant query above is (`pgPublicSchemaResidueDetectSQL` in
+  `migration/roles_integration_test.go`, whose oracle reproduces the residue by hand, since the
+  framework can no longer provision it):
+
+  ```sql
+  SELECT 'default_acl'::text AS source, r.rolname AS role_name,
+         CASE d.defaclobjtype WHEN 'r' THEN 'TABLES'
+                              WHEN 'S' THEN 'SEQUENCES'
+                              WHEN 'f' THEN 'FUNCTIONS'
+                              WHEN 'T' THEN 'TYPES'
+                              ELSE d.defaclobjtype::text END AS detail
+  FROM pg_default_acl d
+  JOIN pg_namespace n ON n.oid = d.defaclnamespace
+  JOIN pg_roles r ON r.oid = d.defaclrole
+  WHERE n.nspname = 'public'
+  UNION ALL
+  SELECT DISTINCT 'search_path', r.rolname, c.setting
+  FROM pg_db_role_setting s
+  JOIN pg_roles r ON r.oid = s.setrole,
+       unnest(s.setconfig) AS c(setting)
+  WHERE c.setting = 'search_path=public'
+  ORDER BY 1, 2, 3
+  ```
+
+  The `source` column says which residue fired. A `default_acl` row names in `role_name` the
+  role the default privileges were granted FOR, so it is yours only when that name is one of
+  your migrators; a `search_path` row names the role whose default schema was pointed at
+  `public`, and BOTH of a tenant's roles carrying one is the strong signal. One spelling of the
+  setting is enough: PostgreSQL normalises the value through `flatten_set_variable_args` ->
+  `quote_identifier`, which drops quotes an identifier does not need, so the helper's
+  `SET search_path = "public"` and a hand-written bare one are BOTH stored as
+  `search_path=public`. Rows with `setrole = 0` are database-wide
+  `ALTER DATABASE … SET` settings, which this template never emits and which the join to
+  `pg_roles` drops. The `search_path` arm is `SELECT DISTINCT` because
+  `pg_db_role_setting` keys one row per `(setdatabase, setrole)` pair: a role carrying both a
+  cluster-wide `ALTER ROLE … SET` and an `ALTER ROLE … IN DATABASE … SET` would otherwise
+  report the identical triple twice, and nothing in the projection tells the two apart.
+  **`pg_db_role_setting` is a SHARED catalog**, while `pg_default_acl`, `pg_namespace` and
+  `pg_class` are per-database: a role pointed at `public` in some OTHER database in the
+  cluster still shows up in this arm, whichever database you are connected to. That is an
+  over-report, never an under-report —
+  check `SELECT rolname, setdatabase FROM pg_db_role_setting s JOIN pg_roles r ON
+  r.oid = s.setrole` if a hit looks foreign. As with the grant query, a row is not proof: a deliberate `ALTER DEFAULT
+  PRIVILEGES … IN SCHEMA public` by an unrelated role looks identical, so corroborate each hit
+  against the spec that provisioned the tenant and against whether that tenant's tables
+  actually live in `public`.
+
+  **Which path provisioned matters, and a clean grant detect is NOT a no-match.** Those four
+  residues exist only on the `PGRoleProvisioningSQL` path, where an operator ran the emitted
+  script under psql WITHOUT `ON_ERROR_STOP`: the failed `CREATE ROLE "public"` printed an
+  error and the script carried on into the grants. The Go helper aborts instead — but WHAT it
+  leaves behind depends on which field held the reserved name, and only one of the two cases
+  leaves nothing at all. `buildPGRoleStatements` (`migration/roles.go`) emits the MIGRATOR's
+  create-and-lockdown pair — plus its `ALTER ROLE … PASSWORD`, when a password was supplied —
+  FIRST, then the runtime role's, and only then the first `CREATE SCHEMA` or `GRANT`;
+  `ProvisionPGRoles` executes that list one statement at a time, non-transactionally, returning
+  on the first error. `CREATE ROLE "public"` raises `reserved_name` (42939), and the DO block's
+  `EXCEPTION WHEN duplicate_object OR unique_violation` swallows only those two conditions —
+  not 42939 — so the block re-raises and provisioning aborts. Therefore:
+
+  | reserved field | what the aborted Go run left behind |
+  | -------------- | ----------------------------------- |
+  | `MigratorRole` | nothing at all — the statement that failed is the very first one |
+  | `RuntimeRole` | a fully created, locked-down migrator role, carrying its password if one was supplied; no schema, no grant, no `search_path` |
+
+  Neither case leaves a residue any query here can flag: both read clean under all three
+  catalogs, under the schema query and under the schema-residue query, and the stranded
+  migrator role of the `RuntimeRole` case bears an ordinary name the `pg_roles` detect does not
+  match. For both, the source read is the only route — and in the `RuntimeRole` case expect
+  that orphaned migrator role to still exist, to be reused or dropped when you re-provision.
+  Never read a clean detect as a no-match without first establishing which of the two paths
+  provisioned the tenant.
+
+  **Second detect step — case variants the server ACCEPTED.** PostgreSQL's reserved-name check
+  is exact-case, so `RuntimeRole: "Public"` or `"PG_x"` is not refused by the server at all: it
+  creates a real role with a real oid, its grants are perfectly ordinary, `grantee = 0` never
+  matches them, and the three-catalog query above reports nothing. C65.4 matches
+  case-insensitively, so those deployments DO hit the gate. This second query is how you find
+  them. It is a separate detect step, pinned exactly as the query above is — one copy here
+  and one in code (`pgReservedRoleDetectSQL` in `migration/roles_integration_test.go`, which
+  `TestPGReservedRoleDetectSQLFindsCaseVariantRoles` runs against a real server as its
+  oracle), so the two cannot drift apart silently:
+
+  ```sql
+  SELECT rolname FROM pg_roles
+  WHERE lower(rolname) = 'public' OR lower(rolname) LIKE 'pg^_%' ESCAPE '^'
+  ```
+
+  `LIKE 'pg^_%' ESCAPE '^'` names its own escape character, so `_` matches a literal
+  underscore on any server and under any session settings — paste it as it stands. The
+  schema detect at the top spells the same predicate the same way for the same reason.
+  The schema half needs no companion query: the schema detect at the top already lowercases
+  `nspname`, so it catches schema-side case variants as it stands.
+
+  A hit here means the role EXISTS and is real, so it is nothing like a PUBLIC residue: the
+  predefined `pg_`-prefixed roles ship with every instance and are baseline noise, and a row is
+  a match only when the name is one your own spec provisions. When it is, apply is a rename
+  plus a re-grant — `ALTER ROLE "Public" RENAME TO tenant_a_runtime`, then rerun provisioning
+  with the new name so `search_path` and the default privileges follow, and repoint every
+  connection string and credential — NOT a `REVOKE … FROM PUBLIC`, because no privilege was
+  ever handed to the PUBLIC pseudo-role. This case renames a ROLE, never a schema, and it
+  stands outside the numbered procedure under **apply** and its three-way case split — none of
+  which is about a role the server actually created.
+
+  **Fourth detect step — what a NAMED role still holds on `public`.** The three queries above
+  all hunt the PUBLIC pseudo-role or a role NAME; this one is separate because it catches the
+  opposite thing, and it is the only one of the four that reports a live exposure rather than
+  a detection trace: for a `Schema` spelled `public`, `buildPGRoleStatements`
+  (`migration/roles.go`) also emits `GRANT USAGE ON SCHEMA "public" TO "<runtime>"`,
+  `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "public" TO "<runtime>"` and
+  `GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA "public" TO "<runtime>"` — grants to
+  a real role, so `grantee = 0` never matches them and none of the three queries above sees
+  them, while the `REVOKE … FROM PUBLIC` script under **apply** does not touch them either.
+  Without this step you can finish the remediation, verify, read clean, and leave the tenant's
+  runtime role holding DML on every pre-existing table in the shared schema. It is pinned
+  exactly as the others are (`pgPublicNamedRoleGrantDetectSQL` in
+  `migration/roles_integration_test.go`):
+
+  ```sql
+  SELECT 'schema'::text AS source, r.rolname AS role_name,
+         n.nspname AS object_name, a.privilege_type
+  FROM pg_namespace n, aclexplode(n.nspacl) a, pg_roles r
+  WHERE n.nspname = 'public'
+    AND r.oid = a.grantee
+    AND a.grantee <> n.nspowner
+  UNION ALL
+  SELECT 'relation', r.rolname, c.relname, a.privilege_type
+  FROM pg_class c, pg_namespace n, aclexplode(c.relacl) a, pg_roles r
+  WHERE n.oid = c.relnamespace
+    AND n.nspname = 'public'
+    AND r.oid = a.grantee
+    AND a.grantee <> c.relowner
+  ORDER BY 1, 2, 3, 4
+  ```
+
+  It reads every real role's ACL entries straight out of `pg_namespace.nspacl` for the schema
+  itself and `pg_class.relacl` for its objects — no `relkind` filter, because a sequence is a
+  `pg_class` row here exactly as it is there — and the join to `pg_roles` drops `grantee = 0`,
+  which the PUBLIC query above already covers. Each object owner's own implicit ACL entry is
+  left out (`grantee <> nspowner` / `relowner`): that is ownership, not a grant. It deliberately
+  does NOT pick its roles by their `search_path=public` residue, because re-provisioning
+  OVERWRITES that residue — `ALTER ROLE … SET search_path = "tenant_a"` replaces the value in
+  place — and a query keyed on it would read clean afterwards whatever those roles still hold,
+  at verify, exactly when it has to answer. Every row therefore names a role holding a real
+  grant on `public` or one of its objects, whoever that role belongs to: another application's
+  deliberate grants appear too, and a row is a finding only when the role is one of yours. Its
+  `n.nspname = 'public'` predicate keeps meaning what it says throughout — this procedure never
+  renames or drops `public` — so the query answers the same question before and after the
+  remediation.
+
+  The `MigratorRole` half has no post-hoc detector at all: `public` there emits `CREATE
+  SCHEMA … AUTHORIZATION "public"` and `ALTER DEFAULT PRIVILEGES FOR ROLE "public"`, which
+  the server refuses outright, so it leaves no residue in any of the three catalogs. The
+  source side is the
+  only route for it — cross-check the call sites that build the spec with `git grep -n
+  'PGRoleSpec{' -- '*.go'` and read what each one assigns to `Schema`, `MigratorRole` and
+  `RuntimeRole` — a constant `"public"` is found here, a `fmt.Sprintf` over a tenant id is
+  not.
+- scope: `Validate` refuses any identifier field whose lowercased form is `public` or starts
+  with `pg_`, plus a `Schema` whose lowercased form is `information_schema`, returning the
+  new exported sentinel `ErrReservedPGIdentifier` wrapped inside `ErrInvalidPGIdentifier` and
+  the `<field>="…"` pair, so an existing `errors.Is(err, migration.ErrInvalidPGIdentifier)`
+  matcher keeps matching and the message still names the field and the value. Both entry
+  points that build role statements call `Validate`, so `ProvisionPGRoles` and
+  `PGRoleProvisioningSQL` both refuse — the second matters most, since it hands a script to
+  an operator with no server-side backstop, where `ProvisionPGRoles` would at least meet
+  PostgreSQL's own `reserved_name` (42939) on `CREATE ROLE "public"`. Matching is
+  case-insensitive on purpose: this path QUOTES identifiers, so `"Public"` is a distinct
+  schema, but anything spelling the name unquoted folds it to the shared one.
+  **Unchanged**: `information_schema` as a ROLE name, which names a schema concept with no
+  role meaning; every near miss (`publicx`, `mypublic`, `pgx`); the identifier floor, which
+  still runs first, so a name that is both reserved-shaped and outside the grammar comes back
+  as a floor refusal; and every signature on the path.
+- gate: match = the schema detect shows a tenant schema of yours that is `public`,
+  `information_schema`, or `pg_`-prefixed, in any letter case; OR a spec field assigns a
+  reserved name to either role, in any letter case — corroborated by the schema-residue detect
+  for a `Schema` spelled `public`, by the grant detect for a `RuntimeRole` spelled `public` on
+  the script path, by the `pg_roles` detect for a case variant the server accepted, and by the
+  source read alone for `MigratorRole` and for the Go helper's aborted `RuntimeRole` run,
+  neither of which leaves a trace any of these queries matches. no-match = every tenant
+  schema and role name you provision is one of your own, which is the common case — `public`
+  and the predefined roles existing on the instance are not themselves a match.
+- apply: (a) fix the names BEFORE the bump; the framework will not do it for you, because
+  moving a populated schema is a data operation. **The numbered procedure below is the only
+  statement of ordering in this atom** — every other paragraph points here rather than
+  restating it, so there is one place to get this wrong instead of several.
+
+  **`public` keeps its name; the tenant moves OUT of it.** An earlier draft of this procedure
+  renamed `public` to the tenant's schema name. Do not: `public` is shared, so a rename sweeps
+  every OTHER application's objects into the tenant's schema, and the re-provision that follows
+  then grants the tenant's runtime role DML over all of them — reopening at the end exactly the
+  exposure the revokes had just closed, and reopening it invisibly, because every arm that hunts
+  `nspname = 'public'` has stopped matching any namespace. Moving the tenant's own objects out by
+  an explicit list MOVES nothing else — though another application may still resolve to a moved
+  object, which is step 5's precondition — leaves every arm able to answer, and removes the
+  ownership problem by construction: the tenant's schema is created fresh and owned by the
+  migrator, so this procedure has no ownership-transfer step at all.
+
+  **Which steps you run depends on WHICH field held the reserved name.**
+
+  | reserved field | schema the residue is in | steps |
+  | -------------- | ------------------------ | ----- |
+  | `RuntimeRole` spelled `public`, `Schema` fine | your ordinary tenant schema | 1–4, then 6 — no object move |
+  | `MigratorRole` spelled `public`, `Schema` fine | no schema at all — `CREATE SCHEMA … AUTHORIZATION "public"` is refused on both paths, so the schema named in `Schema` was never created | 1–4, then 6 — role-scope lines only in step 2, no object move |
+  | `Schema` spelled `public` | `public` itself | all six |
+
+  In the `RuntimeRole` case, substitute your ordinary tenant-schema name for `public` throughout
+  steps 1–3 and skip step 5 — the tenant's objects already live in a schema of its own, so there
+  is nothing to move and nothing this atom has to decide about `public`. The `MigratorRole` case
+  has no schema to substitute AND nothing to revoke: the Go helper aborts on its very FIRST
+  statement and leaves nothing at all, and on the `PGRoleProvisioningSQL` path run without
+  `ON_ERROR_STOP` the name `public` appears only as the TARGET of statements the server refuses
+  (`CREATE ROLE`, the lockdown `ALTER ROLE`, its `PASSWORD`, and `SET search_path`) plus an
+  `AUTHORIZATION` clause and a `FOR ROLE` — never as a grantee, so no privilege ever reached
+  the PUBLIC pseudo-role and
+  `CREATE SCHEMA IF NOT EXISTS "<schema>" AUTHORIZATION "public"` never created the schema the
+  spec named. What that path does leave is residue rather than exposure — a created, locked-down
+  runtime role whose `search_path` points at a schema that was never created. Run only
+  role-scope lines in step 2 there, which this template emits none of: every line of both of its
+  scripts carries an `IN SCHEMA`/`ON SCHEMA` clause naming a schema that does not exist, and
+  running one errors `schema "…" does not exist`. Skip them all; step 4 is the whole repair.
+  Neither role case changes a SCHEMA name, so neither repoints a connection string for one — but
+  if your corrected spec gives a role a new NAME, repoint the credentials that used the old one
+  once step 4 has run.
+
+  A case variant the server ACCEPTED as a real role (`"Public"`, `"PG_x"`) is a fourth case and
+  stands outside this procedure: it renames a ROLE and is described above.
+
+  1. **Detect: run every arm now, against `public`, before you change anything.** Write down
+     every row: which `source` values the grant query returned, which roles the schema-residue
+     query named, and every role/object/privilege triple the fourth query reported. Step 4
+     overwrites the `search_path=public` residue the schema-residue query's `search_path` arm
+     reads, and nothing later in this procedure can reconstruct which roles carried it.
+  2. **Revoke, while the schema is still named `public`** — which it always is, because nothing
+     in this procedure renames it. Two scripts. The first clears the grants handed to the PUBLIC
+     pseudo-role: one revoke per `source` the grant query actually reported, and they are not
+     interchangeable — the first clears a `relation` row, the second another `relation` row
+     (sequences are `pg_class` rows too), the third the `schema` row, and the last two the
+     `default_acl` rows, which no `REVOKE … ON ALL …` touches because they govern objects that do
+     not exist yet. `"your_schema"` is `"public"` in the `Schema` case and your ordinary
+     tenant-schema name in the `RuntimeRole` case. In the `MigratorRole` case there is no such
+     schema — `CREATE SCHEMA … AUTHORIZATION "public"` is refused on both paths, so the schema
+     the spec named was never created: run role-scope lines only, which means skipping every
+     `IN SCHEMA`/`ON SCHEMA` line, which is every line of both scripts below. Step 2 is empty in
+     that case; step 4 is its whole repair.
+
+     ```sql
+     REVOKE ALL ON ALL TABLES IN SCHEMA "your_schema" FROM PUBLIC;
+     REVOKE ALL ON ALL SEQUENCES IN SCHEMA "your_schema" FROM PUBLIC;
+     REVOKE ALL ON SCHEMA "your_schema" FROM PUBLIC;
+     ALTER DEFAULT PRIVILEGES FOR ROLE "your_migrator" IN SCHEMA "your_schema"
+       REVOKE ALL ON TABLES FROM PUBLIC;
+     ALTER DEFAULT PRIVILEGES FOR ROLE "your_migrator" IN SCHEMA "your_schema"
+       REVOKE ALL ON SEQUENCES FROM PUBLIC;
+     ```
+
+     **Run only the lines whose `source` the grant query reported for YOUR schema**, and mind
+     what each one reaches when the schema is the shared `public`. The third line never applies
+     to `public`: the grant query's `schema` arm skips it, because `GRANT USAGE ON SCHEMA
+     "public" TO "public"` writes the same ACL entry every PostgreSQL instance already carries,
+     so there is nothing of the tenant's to take back, and running the line would strip that
+     baseline from every unrelated role on the database. Run it only against your ordinary tenant
+     schema in the `RuntimeRole` case. The two `ON ALL …` lines are blanket in a different way:
+     they reach every table and sequence in `public`, another application's deliberate
+     `GRANT … TO PUBLIC` included. When `public` holds objects that are not this tenant's,
+     replace them with one `REVOKE … ON public.<object> FROM PUBLIC` per `relation` row the grant
+     query reported. The `FOR ROLE` must name the same `MigratorRole` that granted them, or the
+     revoke silently targets a different default-ACL row and the `default_acl` finding survives.
+
+     **Run the two `ALTER DEFAULT PRIVILEGES FOR ROLE "your_migrator"` lines as a role that is a
+     MEMBER of that migrator** (or as superuser) — the same privileged role that runs
+     provisioning will do. PostgreSQL refuses the statement outright otherwise, so a plain
+     `CREATEROLE` provisioner clears no `default_acl` row at all; under psql without
+     `ON_ERROR_STOP` the script prints the error and carries on, and the only sign left is the
+     survivor verify's arm 3a reports. The `REVOKE` lines need ownership too: run them as the
+     owner of each object (or a member of the owning role). A `REVOKE` issued by a non-owner
+     removes nothing and only WARNS, so it leaves the same silent survivor.
+
+     Those five revoke nothing the FOURTH query reported, because those rows went to a real role
+     rather than to PUBLIC — so in the `Schema` case run this second script too, once for every
+     runtime role that query named. This is the atom's one live exposure, so it is not optional.
+     It exists only for the `Schema` case: in the two role cases the same grants on the tenant's
+     own schema are the model working as intended, and revoking them breaks the tenant.
+
+     ```sql
+     REVOKE ALL ON ALL TABLES IN SCHEMA "public" FROM "your_runtime";
+     REVOKE ALL ON ALL SEQUENCES IN SCHEMA "public" FROM "your_runtime";
+     REVOKE ALL ON SCHEMA "public" FROM "your_runtime";
+     ALTER DEFAULT PRIVILEGES FOR ROLE "your_migrator" IN SCHEMA "public"
+       REVOKE ALL ON TABLES FROM "your_runtime";
+     ALTER DEFAULT PRIVILEGES FOR ROLE "your_migrator" IN SCHEMA "public"
+       REVOKE ALL ON SEQUENCES FROM "your_runtime";
+     ```
+
+     The last two are what clears the `default_acl` rows the schema-residue query reports: those
+     were granted to the runtime ROLE, not to PUBLIC, so the first script's `FROM PUBLIC` pair
+     never touches them. `REVOKE ALL ON ALL …` reaches only the objects that exist NOW, which is
+     the whole point — the grants being undone were themselves `ON ALL …` over whatever `public`
+     held at provisioning time. Revoke only what the role should not keep: if the tenant
+     genuinely shares a reference table in `public`, re-grant that one afterwards.
+  3. **Re-check the fourth query HERE, before you go on, and require zero.** No row may name a
+     role of yours; the query already leaves out each object owner's own implicit entry. It
+     would still answer after step 4 — it reads the ACLs directly, not the `search_path` step 4
+     overwrites — but a survivor is cheapest to fix now, while the objects it names still sit in
+     `public` and no re-provisioning has run over them.
+  4. **Re-provision with the CORRECTED spec.** Re-provisioning is not corrective — every
+     statement either creates what is missing or overwrites in place — but against a schema name
+     that does not exist yet, that is enough to build the whole target state:
+
+     - `CREATE SCHEMA IF NOT EXISTS "tenant_a" AUTHORIZATION "<migrator>"` creates `tenant_a`
+       FRESH, with the migrator as its owner. The `IF NOT EXISTS` whole-statement no-op that
+       makes `nspowner` useless as a fingerprint on the built-in `public` does not apply here,
+       precisely because the schema is new — which is why there is no `ALTER SCHEMA … OWNER TO`
+       step anywhere in this procedure. Ownership is the migrator's only route to `CREATE`: the
+       template grants the schema nothing to the migrator and only `USAGE` to the runtime role.
+     - `GRANT USAGE ON SCHEMA "tenant_a" TO "<runtime>"`, then
+       `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "tenant_a" TO "<runtime>"`
+       and `GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA "tenant_a" TO "<runtime>"` —
+       every grant to the runtime role, none to the migrator.
+     - both `ALTER DEFAULT PRIVILEGES FOR ROLE "<migrator>" IN SCHEMA "tenant_a" GRANT … TO
+       "<runtime>"` statements, so objects the migrator creates in `tenant_a` LATER auto-grant.
+       A `pg_default_acl` row is scoped to one schema and does not travel with a moved object,
+       which is why re-issuing them here is the only way they reach `tenant_a`.
+     - `ALTER ROLE "<migrator>" SET search_path = "tenant_a"` and the same for the runtime role.
+       `SET` OVERWRITES the role's stored value rather than adding to it. There is no `RESET`
+       anywhere in this procedure and none is wanted — a reset would drop both roles back to the
+       session default (`"$user", public`), which for the migrator is exactly the wrong-schema
+       failure `search_path` exists to prevent.
+
+     **Do NOT repoint any connection string or `flyway.conf` yet** — that is the LAST action of
+     step 5, and moving it earlier destroys data: `tenant_a` exists but is EMPTY until step 5
+     moves the objects, so one Flyway run against it re-applies every migration from V1 and
+     writes a fresh `flyway_schema_history`, after which step 5's
+     `ALTER TABLE public.<t> SET SCHEMA "tenant_a"` fails `relation already exists` on every
+     object and you hold two divergent copies with nothing to reconcile them.
+     One consequence to expect: if you re-provision under DIFFERENT role names,
+     the old roles keep their `search_path=public` rows, so the schema-residue query still
+     reports them until you `ALTER ROLE … RESET search_path` or drop them by hand.
+  5. **Move the tenant's OWN objects out of `public`, from an explicit list YOU write** — the
+     `Schema` case only. One `ALTER TABLE public.<t> SET SCHEMA "tenant_a"` per table, plus the
+     migration history table (`flyway_schema_history` unless you renamed it), plus any standalone
+     sequence. Only the objects you name move. Build the list from the catalog and READ it before
+     you run it — `SELECT relname, relkind FROM pg_class c JOIN pg_namespace n ON n.oid =
+     c.relnamespace WHERE n.nspname = 'public'` — and strike out anything that is not this
+     tenant's.
+
+     **PRECONDITION: move only objects this tenant OWNS and that no other application resolves
+     through `search_path = public`.** `ALTER TABLE … SET SCHEMA` rewrites the dependent views
+     and constraints PostgreSQL knows about; it does NOT rewrite another application's
+     unqualified SQL, which resolved the name through `search_path = public` and will simply
+     stop finding it — silently, at that application's next query, with no error here. If
+     anything outside this tenant depends on an object, repoint that application first; doing so
+     is out of scope for this atom, and the object does not move until it is done.
+
+     - `ALTER TABLE … SET SCHEMA` requires OWNERSHIP of the object (or superuser). Run it as the
+       same privileged role that runs provisioning, or as a member of the owning role.
+     - It carries the object's ACLs with it: a namespace change does not touch `pg_class.relacl`,
+       so whatever the table still grants after step 2 travels with it.
+     - Indexes, and sequences OWNED BY a column (`SERIAL`, `IDENTITY`), move with their table
+       automatically. List only standalone sequences.
+     - A standalone sequence moves with its own statement, one per sequence on your list:
+       `ALTER SEQUENCE public."<sequence>" SET SCHEMA "tenant_a"`.
+     - Other object kinds need their own statement — `ALTER VIEW`, `ALTER FUNCTION`,
+       `ALTER TYPE … SET SCHEMA`.
+     - **Then run provisioning ONCE MORE.** Step 4's `… ON ALL TABLES IN SCHEMA "tenant_a"` and
+       `… ON ALL SEQUENCES …` grants ran while `tenant_a` was still empty, and step 2 stripped
+       the runtime role's grants off these objects while they still sat in `public` — so at this
+       instant the runtime role holds nothing on its own tables. The template is idempotent —
+       `TestPGRolesProvisioningIsIdempotent` pins that a second run changes nothing it should
+       not — and the second run is what re-grants them. The default privileges issued in step 4
+       do not cover this: they apply to objects the migrator CREATES later, never to moved ones.
+     - **LAST, and only now: repoint every application connection string, credential and
+       `flyway.conf` that named the old schema.** It waits until here because `tenant_a` is empty
+       until the move above and ungranted until the second provisioning run: repointing any
+       earlier lets a Flyway run re-apply every migration from V1 into the empty schema, after
+       which the move fails `relation already exists` on every object and the tenant's data sits
+       in two divergent copies. Nothing between step 4 and here needs the new connection string;
+       every statement in steps 4 and 5 runs as your privileged provisioning role.
+  6. **Verify** as described below.
+
+  A schema genuinely shared by design is not a tenant schema — provision it outside this
+  helper. (b) Nothing to do.
+- verify: rerun your provisioning call and check it returns nil; the refusal is
+  `errors.Is(err, migration.ErrReservedPGIdentifier)` if it does not.
+
+  The next three checks are case-split, and where a check has nothing to assert it is **N/A, not a
+  pass** — an assertion whose silence is meaningless has to say so out loud.
+
+  - **Objects moved — the `Schema` case only; N/A in both role cases.**
+    `SELECT schemaname, count(*) FROM pg_tables GROUP BY 1` must count the tenant's tables under
+    `tenant_a` and no longer under `public`. Both role cases run steps 1–4 then 6 with no object
+    move, so the tenant's tables never left the schema they were always in and this check
+    asserts nothing about them.
+  - **Standalone sequences moved — the `Schema` case only; N/A in both role cases.** `pg_tables`
+    lists no sequences, so check them separately: `SELECT n.nspname, c.relname FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = 'S' AND n.nspname IN
+    ('public', 'tenant_a')` must show every standalone sequence on your step-5 list under
+    `tenant_a` and none of them under `public`. The role cases move no objects, so this check
+    asserts nothing there either.
+  - **The new schema is owned by the migrator — a verdict wherever step 4 CREATED the schema;
+    N/A where it did not.** Step 4 created it in the `Schema` case, in the `MigratorRole` case
+    (where `CREATE SCHEMA … AUTHORIZATION "public"` had been refused, so no schema existed), and
+    in the `RuntimeRole` case on the Go-helper path (which aborted before any `CREATE SCHEMA`).
+    It is N/A only in the `RuntimeRole` case on the `PGRoleProvisioningSQL` script path, where
+    the original run already created the schema correctly and step 4's `IF NOT EXISTS` was a
+    no-op over an already-migrator-owned schema. Substitute the schema your spec names:
+
+  ```sql
+  SELECT nspowner::regrole FROM pg_namespace WHERE nspname = 'tenant_a'
+  ```
+
+  Where it is a verdict it must name your migrator. Anything else means `tenant_a` already
+  existed when step 4 ran, so its `CREATE SCHEMA IF NOT EXISTS … AUTHORIZATION` was the
+  whole-statement no-op described above and the schema kept the owner it had; the migrator then
+  cannot run DDL in it and the next migration fails on its first `CREATE`, whatever the ACL
+  queries say.
+
+  Then rerun the detect arms. Five readings are verdicts and one is not — read that one as no
+  evidence, never as a pass:
+
+  - **Arm 1, the schema-name query — verdict.** Must return no schema of YOURS. `public`,
+    `pg_catalog`, `pg_toast` and `information_schema` answer it on every instance and are not
+    findings; `public` still being there is this procedure's design, not a leftover.
+  - **Arm 2, PUBLIC grants across three catalogs — verdict**, and untouched by anything here: it
+    keys on `grantee = 0` and on no schema name of YOURS — the query names only the two catalog
+    schemas, excluded on every arm, and `public`, excluded from the `schema` arm alone. Must
+    return no `relation` or `default_acl` row for `public` and no row for `tenant_a` that you did
+    not grant on purpose. `tenant_a` was created by `CREATE SCHEMA … AUTHORIZATION`, so its
+    `nspacl` starts NULL and it has NO baseline of its own: a `schema | tenant_a | | USAGE` row
+    there IS a finding. `public` never produces a `schema` row, baseline or not. `relation`
+    gone means both `ON ALL …` revokes landed; `default_acl` gone means the `ALTER DEFAULT
+    PRIVILEGES … REVOKE` named the right `FOR ROLE`. A `relation` row for a reference table you
+    share on purpose is expected and stays.
+  - **Arm 3a, the schema-residue query's `default_acl` arm — verdict.** It is keyed on
+    `nspname = 'public'`, a namespace this procedure never renames, so it still means what it
+    says. Must return no row naming a migrator of yours: those are the rows step 2's second
+    script revoked. Read a survivor in this order: FIRST, the role that ran the revoke was not a
+    member of the migrator named in `FOR ROLE`, so PostgreSQL refused the statement outright and
+    psql without `ON_ERROR_STOP` carried on past it — the common miss for a plain `CREATEROLE`
+    provisioner, and the one to rule out before any other; only then, that the `FOR ROLE` or the
+    grantee named the wrong role and the revoke silently cleared a different default-ACL row.
+  - **Arm 3b, the same query's `search_path` arm — no evidence.** Step 4 OVERWROTE the value it
+    matches: `ALTER ROLE … SET search_path = "tenant_a"` replaces the stored setting in place.
+    That overwrite IS the fix, not a gap — the roles no longer default to `public` because they
+    now default to `tenant_a` — but it also means this arm's silence confirms nothing. A row that
+    DOES appear names a role you did not re-provision, the leftover step 4 describes.
+  - **Arm 4, what a NAMED role still holds on `public` — verdict.** It reads the ACLs on `public`
+    and its objects directly rather than through the `search_path` step 4 overwrote, so it answers
+    here exactly as it did at step 3. Must return no row naming a role of yours; rows for another
+    application's roles are that application's deliberate grants and are not findings. A
+    survivor naming your runtime role is a revoke from step 2's second script that did not land —
+    run by a non-owner, which only WARNS, or skipped.
+  - **Arm 5, the `pg_roles` reserved-role query — verdict, and not about this procedure.** Must
+    name no role of yours; in all three cases above the server never created such a role, so it
+    answers with the predefined `pg_`-prefixed roles alone. It carries the verdict for the
+    case-variant case described above, after that case's `ALTER ROLE … RENAME TO …` and the rerun
+    of provisioning.
+- ref: gaborage/go-bricks#1061 · [ADR-061 amendment](adr_061_role_password_control_chars.md)
+  · [migration_roles.md](migration_roles.md) · `migration/roles.go`
 
 ---
 

@@ -60,11 +60,11 @@ type PGRoleSpec struct {
 
 // PGIdentifierChecker is a caller-supplied check layered on top of the
 // identifier floor (database/identifier.Validate for PostgreSQL). Validate
-// consults it once per identifier, after the floor has accepted that
-// identifier, so a policy can only refuse more — never admit a name the floor
-// rejects. A returned error is wrapped with ErrInvalidPGIdentifier and the
-// failing field name, so the policy itself does not need to identify the
-// identifier it judged.
+// consults it once per identifier, after the floor and the reserved-name rule
+// have accepted that identifier, so a policy can only refuse
+// more — never admit a name either of those rejects. A returned error is
+// wrapped with ErrInvalidPGIdentifier and the failing field name, so the policy
+// itself does not need to identify the identifier it judged.
 type PGIdentifierChecker interface {
 	CheckPGIdentifier(value string) error
 }
@@ -99,11 +99,15 @@ func (f PGIdentifierCheckerFunc) CheckPGIdentifier(value string) error {
 	return f(value)
 }
 
-// checkIdentifier applies the identifier floor to the field's value and, when a
-// policy is configured, the policy on top of it. A refusal from either is
-// wrapped with ErrInvalidPGIdentifier plus the field name and value.
+// checkIdentifier applies the identifier floor to the field's value, then the
+// framework's own reserved-name rule, then — when one is configured — the
+// caller's policy. A refusal from any of the three is wrapped with
+// ErrInvalidPGIdentifier plus the field name and value.
 func (s *PGRoleSpec) checkIdentifier(field, value string) error {
 	err := identifier.Validate(dbtypes.PostgreSQL, value)
+	if err == nil {
+		err = checkReservedPGIdentifier(field, value)
+	}
 	if err == nil && s.IdentifierPolicy != nil {
 		err = s.IdentifierPolicy.CheckPGIdentifier(value)
 	}
@@ -113,9 +117,35 @@ func (s *PGRoleSpec) checkIdentifier(field, value string) error {
 	return nil
 }
 
+// checkReservedPGIdentifier refuses the names PostgreSQL owns, per the ADR-061
+// amendment: "public" and the "pg_" prefix in both namespaces,
+// "information_schema" for schemas alone. Folding is safe because the floor has
+// already restricted value to the ASCII grammar.
+func checkReservedPGIdentifier(field, value string) error {
+	folded := strings.ToLower(value)
+	switch {
+	case folded == "public",
+		folded == "information_schema" && field == pgRoleFieldSchema,
+		strings.HasPrefix(folded, "pg_"):
+		return ErrReservedPGIdentifier
+	}
+	return nil
+}
+
 // ErrInvalidPGIdentifier is returned by Validate when a role or schema name
 // fails the safe-identifier check enforced by ProvisionPGRoles.
 var ErrInvalidPGIdentifier = errors.New("migration: PostgreSQL identifier rejected")
+
+// ErrReservedPGIdentifier is returned by Validate when a spec field names
+// something PostgreSQL reserves, matched case-insensitively: "public" or a
+// "pg_"-prefixed name in any of the three fields, plus "information_schema" for
+// Schema alone. It is always wrapped with ErrInvalidPGIdentifier, so a caller
+// matching the identifier sentinel keeps matching, and no IdentifierPolicy can
+// waive it. Such a name passes every charset check while landing the tenant's
+// tables in the schema every role on the instance can read (Schema "public") or
+// granting that tenant's DML to every role on the instance (a role named
+// "public", which PostgreSQL's RoleSpec maps onto the PUBLIC pseudo-role).
+var ErrReservedPGIdentifier = errors.New("migration: identifier is reserved by PostgreSQL")
 
 // ErrPGRolePasswordHasControlChar is returned by Validate when a role password
 // contains CR, LF, or NUL. Such a password cannot be carried log-safely through
@@ -144,9 +174,13 @@ const (
 // CR, LF, or NUL. Tenant IDs sourced from outside should be normalized to that
 // grammar upstream; rejecting at the migration boundary gives a single forcing
 // function rather than scattering input filters.
+// Every identifier additionally passes the reserved-name rule: "public" and any
+// "pg_"-prefixed name are refused case-insensitively with
+// ErrReservedPGIdentifier, and "information_schema" is refused for Schema alone.
 // A non-nil IdentifierPolicy is consulted once per identifier after the floor
-// has accepted it, in Schema → MigratorRole → RuntimeRole order, stopping at
-// the first refusal.
+// and the reserved-name rule have accepted it, in Schema → MigratorRole →
+// RuntimeRole order, stopping at the first refusal — so a policy can never
+// re-admit a reserved name.
 // Returns ErrInvalidPGIdentifier wrapped with the offending field name, value
 // and the identifier sentinel for an identifier failure, or
 // ErrPGRolePasswordHasControlChar wrapped with the offending field name —
