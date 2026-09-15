@@ -252,7 +252,7 @@ func TestDbManagerGetAfterCloseReturnsError(t *testing.T) {
 	assert.Nil(t, conn)
 	assert.Nil(t, release)
 	assert.Equal(t, 0, m.Size(), "no connection may be created on a closed manager")
-	require.ErrorIs(t, err, errManagerClosed, "Get after Close must fail closed, not resurrect a connection (F22)")
+	require.ErrorIs(t, err, ErrManagerClosed, "Get after Close must fail closed, not resurrect a connection (F22)")
 }
 
 // TestDbManagerCloseAggregatesErrors pins the aggregate Close contract: when MULTIPLE cached
@@ -296,6 +296,7 @@ func TestDbManagerZeroValueMethodsAreSafe(t *testing.T) {
 	assert.Equal(t, 0, stats["active_connections"])
 	assert.Equal(t, 0, stats["max_connections"])
 	assert.Equal(t, 0, stats["idle_ttl_seconds"])
+	assert.Equal(t, 0, stats["removals"])
 	assert.Empty(t, stats["connections"])
 
 	assert.Equal(t, 0, m.Size(), "zero-value Size must be 0, not panic")
@@ -308,7 +309,8 @@ func TestDbManagerZeroValueMethodsAreSafe(t *testing.T) {
 		m.StopCleanup()
 	}, "zero-value StartCleanup/StopCleanup must be no-ops, not panic")
 
-	require.ErrorIs(t, err, errManagerClosed, "zero-value Get must fail closed, not panic")
+	require.ErrorIs(t, err, ErrManagerClosed, "zero-value Get must fail closed, not panic")
+	require.ErrorIs(t, m.Remove("any"), ErrManagerClosed, "zero-value Remove must fail closed, not panic")
 
 	assert.NoError(t, m.Close(), "closing a never-initialized manager is a no-op")
 }
@@ -323,6 +325,7 @@ func TestDbManagerStatsEmptyManager(t *testing.T) {
 	assert.Equal(t, 0, stats["active_connections"])
 	assert.Equal(t, 5, stats["max_connections"])
 	assert.Equal(t, 600, stats["idle_ttl_seconds"])
+	assert.Equal(t, 0, stats["removals"])
 	conns, ok := stats["connections"].([]map[string]any)
 	require.True(t, ok, "connections key must be []map[string]any")
 	assert.Empty(t, conns, "empty manager has no connection entries")
@@ -555,6 +558,254 @@ func TestDbManagerGetReturnsNonNilReleaseFunc(t *testing.T) {
 	mu.Unlock()
 	assert.False(t, wasClosed, "releasing a lease on a live cached connection must not close it")
 	assert.Equal(t, 1, m.Size())
+}
+
+// closeCountingConnector builds a fresh stubDB per create and counts every Close across them.
+func closeCountingConnector(closes *atomic.Int32) Connector {
+	return func(*config.DatabaseConfig, logger.Logger) (Interface, error) {
+		return &stubDB{onClosed: func(string) { closes.Add(1) }}, nil
+	}
+}
+
+// TestDbManagerRemoveClosesUnleased pins Remove on an idle handle: Remove closes it once
+// and counts one removal, removing the now-missing key is an uncounted nil no-op, and the next Get
+// rebuilds.
+func TestDbManagerRemoveClosesUnleased(t *testing.T) {
+	var closes atomic.Int32
+	m := NewDbManager(&stubResourceSource{}, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, closeCountingConnector(&closes))
+	defer func() { _ = m.Close() }()
+	ctx := context.Background()
+
+	first, release, err := m.Get(ctx, tenantA)
+	require.NoError(t, err)
+	release()
+
+	require.NoError(t, m.Remove(tenantA))
+	assert.Equal(t, int32(1), closes.Load(), "an unleased handle closes during Remove")
+	assert.Equal(t, 0, m.Size())
+	assert.Equal(t, 1, m.Stats()["removals"])
+
+	require.NoError(t, m.Remove(tenantA), "removing a missing key is a nil no-op")
+	assert.Equal(t, int32(1), closes.Load(), "a missing key closes nothing")
+	assert.Equal(t, 1, m.Stats()["removals"], "a missing key is not counted as a removal")
+
+	second, release, err := m.Get(ctx, tenantA)
+	require.NoError(t, err)
+	release()
+	assert.NotSame(t, first, second, "the next Get rebuilds the handle")
+}
+
+// TestDbManagerRemoveWrapsCloseError pins that a failing close comes back wrapped and naming the
+// key, with the handle detached all the same.
+func TestDbManagerRemoveWrapsCloseError(t *testing.T) {
+	closeErr := errors.New("close failure")
+	connector := func(*config.DatabaseConfig, logger.Logger) (Interface, error) {
+		return &stubDB{closeErr: closeErr}, nil
+	}
+	m := NewDbManager(&stubResourceSource{}, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
+	defer func() { _ = m.Close() }()
+
+	_, release, err := m.Get(context.Background(), tenantA)
+	require.NoError(t, err)
+	release()
+
+	err = m.Remove(tenantA)
+	require.ErrorIs(t, err, closeErr)
+	require.ErrorContains(t, err, tenantA)
+	assert.Equal(t, 0, m.Size(), "a failed close still detaches the handle")
+}
+
+// TestDbManagerRemoveCountsCloseFailure pins that the close Remove runs itself counts toward
+// Stats()["errors"], as a pool-run close does, so the counter does not depend on whether the
+// removed handle was leased.
+func TestDbManagerRemoveCountsCloseFailure(t *testing.T) {
+	closeErr := errors.New("close failure")
+	connector := func(*config.DatabaseConfig, logger.Logger) (Interface, error) {
+		return &stubDB{closeErr: closeErr}, nil
+	}
+	m := NewDbManager(&stubResourceSource{}, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
+	defer func() { _ = m.Close() }()
+
+	_, release, err := m.Get(context.Background(), tenantA)
+	require.NoError(t, err)
+	release()
+
+	before, ok := m.Stats()["errors"].(int)
+	require.True(t, ok)
+	require.ErrorIs(t, m.Remove(tenantA), closeErr)
+	after, ok := m.Stats()["errors"].(int)
+	require.True(t, ok)
+	assert.Equal(t, 1, after-before, "Remove's own close failure must be counted")
+}
+
+// TestDbManagerRemoveWhileLeasedDefersClose pins that Remove of a borrowed handle returns nil and
+// leaves the close to the final release.
+func TestDbManagerRemoveWhileLeasedDefersClose(t *testing.T) {
+	var closes atomic.Int32
+	m := NewDbManager(&stubResourceSource{}, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, closeCountingConnector(&closes))
+	defer func() { _ = m.Close() }()
+
+	_, release, err := m.Get(context.Background(), tenantA)
+	require.NoError(t, err)
+
+	require.NoError(t, m.Remove(tenantA))
+	assert.Equal(t, int32(0), closes.Load(), "Remove must not close a leased handle")
+
+	release()
+	assert.Equal(t, int32(1), closes.Load(), "the final release runs the deferred close")
+}
+
+// TestDbManagerRemoveAfterCloseReturnsErrManagerClosed pins that Remove, like Get, fails closed after Close.
+func TestDbManagerRemoveAfterCloseReturnsErrManagerClosed(t *testing.T) {
+	m := NewDbManager(&stubResourceSource{}, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, nil)
+	require.NoError(t, m.Close())
+
+	require.ErrorIs(t, m.Remove(tenantA), ErrManagerClosed)
+}
+
+// TestDbManagerConcurrentGetAndRemove races Get/release against Remove on one key under -race:
+// every call succeeds, and once Close returns every handle built has closed exactly once.
+func TestDbManagerConcurrentGetAndRemove(t *testing.T) {
+	var created, closes atomic.Int32
+	var doubleClose atomic.Bool
+	connector := func(*config.DatabaseConfig, logger.Logger) (Interface, error) {
+		created.Add(1)
+		var own atomic.Int32
+		return &stubDB{onClosed: func(string) {
+			closes.Add(1)
+			if own.Add(1) > 1 {
+				doubleClose.Store(true)
+			}
+		}}, nil
+	}
+	m := NewDbManager(&stubResourceSource{}, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
+
+	const workers = 16
+	start := make(chan struct{})
+	errs := make(chan error, 2*workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, release, err := m.Get(context.Background(), tenantA)
+			if release != nil {
+				release()
+			}
+			errs <- err
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- m.Remove(tenantA)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, m.Close())
+	assert.False(t, doubleClose.Load(), "no handle may close twice")
+	assert.Equal(t, created.Load(), closes.Load(), "every handle built is closed once Close returns")
+}
+
+// TestDbManagerRemoveDoesNotBlockOtherKeys pins that Remove closes outside the pool lock: while one
+// key's Close is stuck, Get for another key still completes.
+func TestDbManagerRemoveDoesNotBlockOtherKeys(t *testing.T) {
+	closing, unblock := make(chan struct{}), make(chan struct{})
+	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
+		db := &stubDB{key: cfg.Database}
+		if cfg.Database == "a" {
+			db.onClosed = func(string) {
+				close(closing)
+				<-unblock
+			}
+		}
+		return db, nil
+	}
+	m := NewDbManager(twoTenantSource(), newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
+	defer func() { _ = m.Close() }()
+	ctx := context.Background()
+
+	_, release, err := m.Get(ctx, "a")
+	require.NoError(t, err)
+	release()
+
+	removed := make(chan error, 1)
+	go func() { removed <- m.Remove("a") }()
+	select {
+	case <-closing:
+	case <-time.After(5 * time.Second):
+		close(unblock)
+		t.Fatal("Remove never closed the idle handle")
+	}
+
+	got := make(chan error, 1)
+	go func() {
+		_, releaseB, gerr := m.Get(ctx, "b")
+		if releaseB != nil {
+			releaseB()
+		}
+		got <- gerr
+	}()
+	select {
+	case gerr := <-got:
+		require.NoError(t, gerr)
+	case <-time.After(5 * time.Second):
+		close(unblock)
+		t.Fatal("Get for another key blocked behind a Remove's in-flight Close")
+	}
+
+	close(unblock)
+	select {
+	case rerr := <-removed:
+		require.NoError(t, rerr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Remove did not return after its Close unblocked")
+	}
+}
+
+// TestDbManagerRemoveReResolvesRotatedCredentials pins the rotation recipe: once the provider's
+// config for a key changes, Remove closes the old handle exactly once and the next Get connects
+// with the new credentials.
+func TestDbManagerRemoveReResolvesRotatedCredentials(t *testing.T) {
+	src := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
+		tenantA: {Type: "postgresql", Host: "localhost", Username: "app-v1"},
+	}}
+	var users []string
+	var oldCloses atomic.Int32
+	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
+		users = append(users, cfg.Username)
+		db := &stubDB{}
+		if len(users) == 1 {
+			db.onClosed = func(string) { oldCloses.Add(1) }
+		}
+		return db, nil
+	}
+	m := NewDbManager(src, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
+	t.Cleanup(func() { _ = m.Close() })
+	ctx := context.Background()
+
+	old, release, err := m.Get(ctx, tenantA)
+	require.NoError(t, err)
+	release()
+
+	src.configs[tenantA] = &config.DatabaseConfig{Type: "postgresql", Host: "localhost", Username: "app-v2"}
+	require.NoError(t, m.Remove(tenantA))
+	assert.Equal(t, int32(1), oldCloses.Load(), "the rotated-out handle closes on Remove")
+
+	fresh, release, err := m.Get(ctx, tenantA)
+	require.NoError(t, err)
+	release()
+	assert.NotSame(t, old, fresh)
+	assert.Equal(t, []string{"app-v1", "app-v2"}, users, "the rebuild re-resolves the provider's new config")
+
+	require.NoError(t, m.Close())
+	assert.Equal(t, int32(1), oldCloses.Load(), "Close never reaches the handle Remove already closed")
 }
 
 // TestDbManagerDynamicConfigGetsPoolDefaults proves a dynamic DBConfigProvider

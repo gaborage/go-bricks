@@ -37,6 +37,8 @@ type Server struct {
 	readyHandler echo.HandlerFunc
 	conflicts    *routeConflictTracker
 	boundAddr    atomic.Pointer[net.Addr] // set via ListenerAddrFunc once Start's listener is bound; nil until then
+	ready        chan struct{}
+	started      atomic.Bool
 }
 
 // normalizeBasePath cannot use pathutil.NormalizePrefix because that helper
@@ -168,6 +170,7 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 		readyRoute:   readyRoute,
 		readyHandler: nil,
 		conflicts:    newRouteConflictTracker(),
+		ready:        make(chan struct{}),
 	}
 
 	// Compute full paths for probe endpoints before middleware setup
@@ -180,20 +183,22 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 
 	s.RegisterReadyHandler(nil)
 
-	e.GET(healthPath, s.healthCheck)
-	e.HEAD(healthPath, s.healthCheck)
-	e.GET(readyPath, s.dispatchReady)
-	e.HEAD(readyPath, s.dispatchReady)
-
 	// The probes register directly on the engine (not through a routeGroup), so record
 	// them explicitly: a module claiming the health/ready path must fail startup like
-	// any other collision.
-	probe := RouteRegistrant{HandlerName: "healthCheck", Package: serverPackagePath}
-	s.conflicts.record(http.MethodGet, healthPath, probe)
-	s.conflicts.record(http.MethodHead, healthPath, probe)
-	probe.HandlerName = "dispatchReady"
-	s.conflicts.record(http.MethodGet, readyPath, probe)
-	s.conflicts.record(http.MethodHead, readyPath, probe)
+	// any other collision, and the route table must list them like any other route.
+	probes := []struct {
+		path, name string
+		handler    echo.HandlerFunc
+	}{
+		{healthPath, "healthCheck", s.healthCheck},
+		{readyPath, "dispatchReady", s.dispatchReady},
+	}
+	for _, p := range probes {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			e.Add(method, p.path, p.handler)
+			registerRoute(s.conflicts, method, p.path, RouteRegistrant{HandlerName: p.name, Package: serverPackagePath})
+		}
+	}
 
 	log.Debug().
 		Str("base_path", basePath).
@@ -247,9 +252,19 @@ func (s *Server) dispatchReady(c *echo.Context) error {
 	return handler(c)
 }
 
+// ErrServerAlreadyStarted is returned by every Start on a Server after the first,
+// including after Shutdown.
+var ErrServerAlreadyStarted = goerrors.New("server: Start called more than once")
+
 // Start starts the HTTP server and begins accepting requests.
 // It blocks until the server is shut down or encounters an error.
+// A Server is single-use: any later Start, including after Shutdown, returns
+// ErrServerAlreadyStarted without binding, and Shutdown resets neither
+// BoundAddr nor ReadyCh.
 func (s *Server) Start() error {
+	if !s.started.CompareAndSwap(false, true) {
+		return ErrServerAlreadyStarted
+	}
 	addr := fmt.Sprintf("%s:%d", s.cfg.Server.Host, s.cfg.Server.Port)
 
 	var tlsCfg *tls.Config
@@ -279,27 +294,32 @@ func (s *Server) Start() error {
 		Msg("Starting server...")
 
 	sc := echo.StartConfig{
-		Address:    addr,
-		HideBanner: true,
-		HidePort:   true,
-		TLSConfig:  tlsCfg,
-		ListenerAddrFunc: func(addr net.Addr) {
-			a := addr
-			s.boundAddr.Store(&a)
-		},
-		BeforeServeFunc: func(srv *http.Server) error {
-			// Configure timeouts on the http.Server (StartConfig doesn't expose these)
-			srv.ReadTimeout = s.cfg.Server.Timeout.Read
-			srv.WriteTimeout = s.cfg.Server.Timeout.Write
-			srv.IdleTimeout = s.cfg.Server.Timeout.Idle
-			srv.ReadHeaderTimeout = s.cfg.Server.Timeout.Read
-			// Capture the server instance for proper shutdown
-			s.httpServer.Store(srv)
-			return nil
-		},
+		Address:          addr,
+		HideBanner:       true,
+		HidePort:         true,
+		TLSConfig:        tlsCfg,
+		ListenerAddrFunc: s.onListenerBound,
+		BeforeServeFunc:  s.onBeforeServe,
 	}
 
 	return sc.Start(context.Background(), s.echo)
+}
+
+func (s *Server) onListenerBound(addr net.Addr) {
+	s.boundAddr.Store(&addr)
+}
+
+// onBeforeServe applies the timeouts StartConfig lacks and stores srv before
+// closing ready; Shutdown never clears httpServer, so ready closes once.
+func (s *Server) onBeforeServe(srv *http.Server) error {
+	srv.ReadTimeout = s.cfg.Server.Timeout.Read
+	srv.WriteTimeout = s.cfg.Server.Timeout.Write
+	srv.IdleTimeout = s.cfg.Server.Timeout.Idle
+	srv.ReadHeaderTimeout = s.cfg.Server.Timeout.Read
+	if s.httpServer.Swap(srv) == nil {
+		close(s.ready)
+	}
+	return nil
 }
 
 // Shutdown gracefully shuts down the HTTP server with the given context.
@@ -312,6 +332,25 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// BoundAddr returns the address Start's listener bound (the port the OS picked
+// when Server.Port is 0, TLS included), or nil before it first binds. It never
+// blocks.
+func (s *Server) BoundAddr() net.Addr {
+	if addr := s.boundAddr.Load(); addr != nil {
+		return *addr
+	}
+	return nil
+}
+
+// ReadyCh returns a channel closed once Start first serves. It closes after the
+// *http.Server is stored, never when the listener binds: echo reports the bound
+// address first, and a Shutdown issued between the two finds no server and
+// returns without stopping anything. If Start fails before serving it never
+// closes, so select on Start's error as well.
+func (s *Server) ReadyCh() <-chan struct{} {
+	return s.ready
 }
 
 // healthCheck is the default health probe handler.

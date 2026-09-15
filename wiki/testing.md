@@ -404,6 +404,36 @@ func TestRouteTemplateRecorder(t *testing.T) {
 For end-to-end fidelity (real router populating template *and* params), register the route on
 a `server.Server` and drive it with `httptest` / `ServeHTTP` instead.
 
+### Booting a real server on port 0
+
+To exercise a real listener (TLS, server timeouts, a plain `net/http` client), hand
+`server.New` a config whose `Server.Port` is 0, wait on `ReadyCh()`, then dial `BoundAddr()`.
+The OS picks the port, so there is no bind-then-release race. Build that config by hand or with
+`config.LoadFromMap`: `config.Load` and the app constructors validate it and refuse port 0.
+
+```go
+cfg.Server.Port = 0
+srv := server.New(cfg, log)
+errCh := make(chan error, 1)
+go func() { errCh <- srv.Start() }()
+
+select {
+case <-srv.ReadyCh():
+case err := <-errCh:
+    t.Fatalf("server failed to start: %v", err)
+case <-time.After(2 * time.Second):
+    t.Fatal("server not ready")
+}
+base := "http://" + srv.BoundAddr().String()
+// ... drive requests against base ...
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+require.NoError(t, srv.Shutdown(ctx))
+```
+
+Both methods live on `*server.Server`, not on `app.ServerRunner`; code holding a `ServerRunner`
+type-asserts to `interface{ ReadyCh() <-chan struct{}; BoundAddr() net.Addr }`.
+
 ## Integration Testing with Testcontainers
 
 **Prerequisites:** Docker Desktop or Docker Engine running

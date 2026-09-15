@@ -64,9 +64,10 @@ type AMQPClientImpl struct {
 	pendingPublishes sync.Map
 
 	// generation rotates on every changeChannel() to scope pendingPublishes
-	// entries to a single channel incarnation. Read under publishSerial
-	// (which also guards channel reinit) so each publisher captures a
-	// channel+generation pair that is mutually consistent.
+	// entries to a single channel incarnation. Written under publishSerial
+	// (which also guards channel reinit) and c.m, so each publisher captures a
+	// channel+generation pair that is mutually consistent and
+	// channelGeneration can read it under c.m alone.
 	generation uint64
 
 	// publishSerial is the one-place semaphore that serializes the publish
@@ -1071,6 +1072,15 @@ func (c *AMQPClientImpl) readyChannel() (amqpChannel, error) {
 	return c.channel, nil
 }
 
+// channelGeneration reports the current channel incarnation and whether the
+// client is ready to use it, read together under c.m. The registry keys its
+// reconnect redeclare pass on it through a type assertion.
+func (c *AMQPClientImpl) channelGeneration() (generation uint64, ready bool) {
+	c.m.RLock()
+	defer c.m.RUnlock()
+	return c.generation, c.isReady
+}
+
 // DeclareQueue declares a queue from the given declaration.
 // ctx is honored as a pre-flight check: amqp091 declare/bind operations are not
 // context-aware on the wire, so a canceled context fails fast before the call.
@@ -1371,14 +1381,12 @@ func (c *AMQPClientImpl) changeChannel(channel amqpChannel) {
 	oldGen := c.generation
 	c.drainPendingPublishesWithNack(oldGen)
 
-	c.generation++
-	newGen := c.generation
-
-	// Publish the channel pointer under c.m so a concurrent Close (which reads
-	// c.channel under c.m to tear it down) and the c.m-guarded readers in
-	// DeclareQueue/ConsumeFromQueue cannot race this write. Lock order is
+	// Publish the channel pointer and its generation under c.m so a concurrent
+	// Close and the c.m-guarded readers cannot race this write. Lock order is
 	// publishSerial → c.m, matching publishBytes.
 	c.m.Lock()
+	c.generation++
+	newGen := c.generation
 	c.channel = channel
 	c.m.Unlock()
 	c.notifyChanClose = make(chan *amqp.Error, 1)

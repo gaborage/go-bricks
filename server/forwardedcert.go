@@ -41,6 +41,10 @@ const maxForwardedLeafBytes = 64 * 1024
 // failed to decode is NOT this error (see parseForwardedClientCert).
 var errNoForwardedCert = errors.New("forwarded client certificate not present")
 
+// msgForwardedClientCertRequired is the 401 message every forwarded-client-cert
+// refusal carries, global require mode and RequireForwardedClientCert alike.
+const msgForwardedClientCertRequired = "Client certificate identity required"
+
 // errDuplicateForwardedHeader indicates a request carried more than one value
 // for a single X-Amzn-Mtls-Clientcert-* header. In the documented posture
 // (wiki/forwarded_client_cert.md) the ALB sets each header at most once, so a
@@ -57,7 +61,8 @@ var errDuplicateForwardedHeader = errors.New("duplicated X-Amzn-Mtls header")
 // deliberately not carried: validity is readable from Leaf.NotBefore/NotAfter
 // when Leaf parses.
 //
-// Trust model: enabling server.forwardedclientcert is an explicit operator
+// Trust model: enabling server.forwardedclientcert, or mounting
+// RequireForwardedClientCert on a route group, is an explicit operator
 // assertion that (a) an mTLS-verify ALB listener fronts this service, (b)
 // direct target access is closed (security groups), and (c) the target group
 // is reachable only through that listener. AWS does not publicly document
@@ -84,9 +89,10 @@ func withForwardedClientCert(ctx context.Context, cert ForwardedClientCert) cont
 
 // ForwardedClientCertFromContext returns the partner identity the ALB
 // verified and forwarded, and whether one was attached for this request.
-// Absence (ok == false) means either server.forwardedclientcert.enabled is
-// false, the request skipped the middleware (health/ready probes), or the
-// request carried no verify-mode identity headers at all.
+// Absence (ok == false) means either nothing parsed the headers
+// (server.forwardedclientcert.enabled is false and no RequireForwardedClientCert
+// guards the route), the request skipped the middleware (health/ready probes),
+// or the request carried no usable verify-mode identity headers.
 func ForwardedClientCertFromContext(ctx context.Context) (cert ForwardedClientCert, ok bool) {
 	cert, ok = ctx.Value(keyForwardedClientCert).(ForwardedClientCert)
 	return cert, ok
@@ -201,13 +207,13 @@ func forwardedClientCertMiddlewareEcho(cfg config.ForwardedClientCertConfig, ski
 				// client-supplied copy of the header got through.
 				logForwardedClientCertDuplicateWarning(l, c, err)
 				if cfg.Require {
-					return NewUnauthorizedError("Client certificate identity required")
+					return NewUnauthorizedError(msgForwardedClientCertRequired)
 				}
 				// !Require: proceed with no identity attached.
 			case errors.Is(err, errNoForwardedCert):
 				if cfg.Require {
 					logForwardedClientCertRejection(l, c)
-					return NewUnauthorizedError("Client certificate identity required")
+					return NewUnauthorizedError(msgForwardedClientCertRequired)
 				}
 				// !Require: proceed with no identity attached; the accessor returns false.
 			default:
@@ -225,12 +231,49 @@ func forwardedClientCertMiddlewareEcho(cfg config.ForwardedClientCertConfig, ski
 	}
 }
 
+// RequireForwardedClientCert returns the middleware that refuses (401) a request
+// without X-Amzn-Mtls-Clientcert identity headers, so one route family can
+// require them while server.forwardedclientcert.require stays off. Attach it per
+// route group; it exempts nothing, probes included. Mounting it asserts the
+// ForwardedClientCert trust model for that family, whatever enabled says.
+//
+// It re-parses the headers itself, since with enabled: false an absent identity
+// cannot be told from one never parsed, and refuses on the global require mode's
+// two conditions; a -Leaf that fails to decode passes with Leaf nil. It
+// identifies, never authorizes. WARNs go to l, or to the standard library log
+// package when l is nil. See wiki/forwarded_client_cert.md.
+func RequireForwardedClientCert(l logger.Logger) MiddlewareFunc {
+	return func(c HandlerContext, next func() error) error {
+		ec := c.echoContext()
+		req := ec.Request()
+		identity, err := parseForwardedClientCert(req.Header.Values)
+		switch {
+		case errors.Is(err, errDuplicateForwardedHeader):
+			logForwardedClientCertDuplicateWarning(l, ec, err)
+			return NewUnauthorizedError(msgForwardedClientCertRequired)
+		case errors.Is(err, errNoForwardedCert):
+			logForwardedClientCertRejection(l, ec)
+			return NewUnauthorizedError(msgForwardedClientCertRequired)
+		}
+		// Skipped when the engine-level middleware already attached it and WARNed a lost -Leaf.
+		if _, attached := ForwardedClientCertFromContext(req.Context()); !attached {
+			if err != nil {
+				logForwardedClientCertLeafWarning(l, ec, err, firstHeaderValue(req.Header.Values(headerClientCertLeaf)))
+			}
+			c.SetRequestContext(withForwardedClientCert(req.Context(), identity))
+		}
+		return next()
+	}
+}
+
 // logForwardedClientCertRejection emits one WARN per request rejected for a
-// missing forwarded-client-cert identity (401). This middleware runs outer to
-// the access logger (server/middleware.go) and never calls next() on reject,
-// so without this WARN a rejected request leaves zero server-side trail —
+// missing forwarded-client-cert identity (401). The engine-level middleware runs
+// outer to the access logger (server/middleware.go) and never calls next() on
+// reject, so without this WARN a rejected request leaves zero server-side trail —
 // mirrors logTenantRejection's rationale (server/tenant_middleware.go).
-// Header values are never logged, only the fixed reason string.
+// RequireForwardedClientCert runs inside the access logger, whose 401 line
+// lacks the reason this WARN carries. Header values are never logged, only the
+// fixed reason string.
 func logForwardedClientCertRejection(l logger.Logger, c *echo.Context) {
 	req := c.Request()
 	warnWithFallback(l, fmt.Sprintf("[server.forwardedclientcert] request rejected: missing identity method=%s path=%s client=%s status=%d reason=%q",
@@ -242,7 +285,9 @@ func logForwardedClientCertRejection(l logger.Logger, c *echo.Context) {
 // It fires regardless of Require, since a duplicated header is always
 // treated as absent identity (fail closed under Require, fail open without
 // it) — an identical condition must not have flag-dependent observability.
-// dupErr's message names only the offending header, never a header value.
+// Behind RequireForwardedClientCert with the engine-level middleware enabled,
+// each layer WARNs once. dupErr's message names only the offending header,
+// never a header value.
 func logForwardedClientCertDuplicateWarning(l logger.Logger, c *echo.Context, dupErr error) {
 	req := c.Request()
 	warnWithFallback(l, fmt.Sprintf("[server.forwardedclientcert] duplicated header detected method=%s path=%s client=%s reason=%q detail=%q",

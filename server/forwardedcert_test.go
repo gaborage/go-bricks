@@ -471,3 +471,180 @@ func TestForwardedClientCertWarnsEscapeRequestValues(t *testing.T) {
 		})
 	}
 }
+
+// forwardedCertGuardProbe records what a route behind newForwardedCertGuardEcho saw.
+type forwardedCertGuardProbe struct {
+	ran      bool
+	identity ForwardedClientCert
+	ok       bool
+}
+
+// newForwardedCertGuardEcho wires an engine at the posture cfg carries, mounts
+// RequireForwardedClientCert (logging to guardLog) on the /guarded group, and
+// leaves /open unguarded. Both routes record into probe.
+func newForwardedCertGuardEcho(cfg *config.Config, guardLog logger.Logger, probe *forwardedCertGuardProbe) *echo.Echo {
+	e := newTenantTestEcho()
+	SetupMiddlewares(e, &capturingLogger{}, cfg, true, testHealthPath, testReadyPath)
+	record := func(c HandlerContext) error {
+		probe.ran = true
+		probe.identity, probe.ok = ForwardedClientCertFromContext(c.RequestContext())
+		return c.String(http.StatusOK, "ok")
+	}
+	root := newRouteGroup(e.Group(""), "", cfg)
+	root.Group("/guarded", RequireForwardedClientCert(guardLog)).Add(http.MethodGet, "/check", record)
+	root.Add(http.MethodGet, "/open", record)
+	return e
+}
+
+// newForwardedCertGuardRequest builds a guarded-route GET carrying a valid
+// Subject and Serial-Number.
+func newForwardedCertGuardRequest() *http.Request {
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/guarded/check", http.NoBody)
+	req.Header.Set(headerClientCertSubject, testForwardedCertSubject)
+	req.Header.Set(headerClientCertSerialNumber, testForwardedCertSerial)
+	return req
+}
+
+// TestRequireForwardedClientCertRejectsMissingIdentity pins the guard's refusal
+// under every engine posture: whether the global middleware is absent,
+// parse-only, or itself requiring, a guarded request without identity headers
+// never reaches its handler.
+func TestRequireForwardedClientCertRejectsMissingIdentity(t *testing.T) {
+	tests := []struct {
+		name            string
+		enabled         bool
+		requireIdentity bool
+		wantGuardWarns  int
+	}{
+		{name: "engine_disabled", wantGuardWarns: 1},
+		{name: "engine_enabled_without_require", enabled: true, wantGuardWarns: 1},
+		{name: "engine_enabled_with_require", enabled: true, requireIdentity: true, wantGuardWarns: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			guardLog := &capturingLogger{}
+			probe := &forwardedCertGuardProbe{}
+			e := newForwardedCertGuardEcho(newForwardedCertCfg(tt.enabled, tt.requireIdentity), guardLog, probe)
+
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/guarded/check", http.NoBody))
+
+			assert.Equal(t, http.StatusUnauthorized, rec.Code)
+			assert.Contains(t, rec.Body.String(), "Client certificate identity required", "the guard answers with the global require mode's 401")
+			assert.False(t, probe.ran, "a refused request must never reach the handler")
+			require.Len(t, guardLog.warns, tt.wantGuardWarns)
+			for _, w := range guardLog.warns {
+				assert.Contains(t, w, `reason="forwarded_client_cert_missing"`)
+			}
+		})
+	}
+}
+
+// TestRequireForwardedClientCertRejectsDuplicatedHeader pins the duplicate
+// refusal where the engine does not refuse it — absent, or parse-only (which
+// passes a duplicate without identity): a duplicated -Issuer beside a valid
+// identity is refused, never first-value-wins.
+func TestRequireForwardedClientCertRejectsDuplicatedHeader(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+	}{
+		{name: "engine_disabled"},
+		{name: "engine_enabled_without_require", enabled: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			guardLog := &capturingLogger{}
+			probe := &forwardedCertGuardProbe{}
+			e := newForwardedCertGuardEcho(newForwardedCertCfg(tt.enabled, false), guardLog, probe)
+
+			req := newForwardedCertGuardRequest()
+			req.Header.Add(headerClientCertIssuer, "duplicate-value-1")
+			req.Header.Add(headerClientCertIssuer, "duplicate-value-2")
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+
+			assert.Equal(t, http.StatusUnauthorized, rec.Code)
+			assert.Contains(t, rec.Body.String(), "Client certificate identity required")
+			assert.False(t, probe.ran, "a refused request must never reach the handler")
+			require.Len(t, guardLog.warns, 1)
+			assert.Contains(t, guardLog.warns[0], `reason="forwarded_client_cert_duplicate"`)
+			assert.Contains(t, guardLog.warns[0], headerClientCertIssuer, "the WARN must name which header was duplicated")
+		})
+	}
+}
+
+// TestRequireForwardedClientCertServesIdentity pins what the guard lets through:
+// the identity reaches the handler attached in every posture, a -Leaf that fails
+// to decode passes with Leaf nil, and the guard attaches and WARNs only when the
+// engine-level middleware has not already done both.
+func TestRequireForwardedClientCertServesIdentity(t *testing.T) {
+	tests := []struct {
+		name           string
+		enabled        bool
+		leaf           string
+		wantLeaf       bool
+		wantGuardWarns int
+	}{
+		{name: "valid_leaf_engine_disabled", leaf: testForwardedCertLeaf, wantLeaf: true},
+		{name: "corrupt_leaf_engine_disabled", leaf: testForwardedCertLeafCorrupted, wantGuardWarns: 1},
+		{name: "corrupt_leaf_engine_enabled_without_require", enabled: true, leaf: testForwardedCertLeafCorrupted},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			guardLog := &capturingLogger{}
+			probe := &forwardedCertGuardProbe{}
+			e := newForwardedCertGuardEcho(newForwardedCertCfg(tt.enabled, false), guardLog, probe)
+
+			req := newForwardedCertGuardRequest()
+			req.Header.Set(headerClientCertLeaf, tt.leaf)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusOK, rec.Code, "a Leaf-only decode failure is never a refusal")
+			require.True(t, probe.ok)
+			assert.Equal(t, testForwardedCertSubject, probe.identity.Subject)
+			assert.Equal(t, testForwardedCertSerial, probe.identity.SerialNumber)
+			assert.Equal(t, tt.wantLeaf, probe.identity.Leaf != nil)
+			require.Len(t, guardLog.warns, tt.wantGuardWarns)
+			for _, w := range guardLog.warns {
+				assert.Contains(t, w, "leaf certificate not decoded")
+			}
+		})
+	}
+}
+
+// TestRequireForwardedClientCertLeavesUnguardedGroupsOpen pins the scoping: a
+// route outside the guarded group is served without identity headers, and the
+// accessor reports absence because nothing parsed them.
+func TestRequireForwardedClientCertLeavesUnguardedGroupsOpen(t *testing.T) {
+	probe := &forwardedCertGuardProbe{}
+	e := newForwardedCertGuardEcho(newForwardedCertCfg(false, false), &capturingLogger{}, probe)
+
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/open", http.NoBody))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, probe.ran)
+	assert.False(t, probe.ok)
+}
+
+// TestRequireForwardedClientCertExemptsNoProbe pins that the guard refuses on the
+// health path the engine-level require mode skips, and that a nil logger falls
+// back instead of panicking.
+func TestRequireForwardedClientCertExemptsNoProbe(t *testing.T) {
+	cfg := newForwardedCertCfg(true, true)
+	e := newTenantTestEcho()
+	SetupMiddlewares(e, &capturingLogger{}, cfg, true, testHealthPath, testReadyPath)
+	ran := false
+	newRouteGroup(e.Group(""), "", cfg).Group("", RequireForwardedClientCert(nil)).Add(http.MethodGet, testHealthPath, func(c HandlerContext) error {
+		ran = true
+		return c.String(http.StatusOK, "ok")
+	})
+
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, testHealthPath, http.NoBody))
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.False(t, ran, "a probe path behind the guard must never reach the handler")
+}

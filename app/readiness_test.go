@@ -409,6 +409,7 @@ func TestConvertCacheStatsToMap(t *testing.T) {
 			ActiveCaches: 5,
 			TotalCreated: 10,
 			Evictions:    2,
+			Removals:     4,
 			IdleCleanups: 3,
 			Errors:       1,
 			MaxSize:      100,
@@ -420,6 +421,7 @@ func TestConvertCacheStatsToMap(t *testing.T) {
 		assert.Equal(t, 5, result["active_caches"])
 		assert.Equal(t, 10, result["total_created"])
 		assert.Equal(t, 2, result["evictions"])
+		assert.Equal(t, 4, result["removals"])
 		assert.Equal(t, 3, result["idle_cleanups"])
 		assert.Equal(t, 1, result["errors"])
 		assert.Equal(t, 100, result["max_size"])
@@ -433,6 +435,7 @@ func TestConvertCacheStatsToMap(t *testing.T) {
 		assert.Equal(t, 0, result["active_caches"])
 		assert.Equal(t, 0, result["total_created"])
 		assert.Equal(t, 0, result["evictions"])
+		assert.Equal(t, 0, result["removals"])
 		assert.Equal(t, 0, result["idle_cleanups"])
 		assert.Equal(t, 0, result["errors"])
 		assert.Equal(t, 0, result["max_size"])

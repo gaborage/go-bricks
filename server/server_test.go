@@ -236,30 +236,36 @@ func TestServerNewInitializesEchoAndRoutes(t *testing.T) {
 	assertHealthEndpoints(t, srv, healthRoute, testReadyRoute)
 }
 
-func TestServerStartAndShutdown(t *testing.T) {
-	srv := newTestServer("", "", "")
-	require.NotNil(t, srv)
+func TestServerNewRegistersProbeDescriptors(t *testing.T) {
+	DefaultRouteRegistry.Clear()
+	t.Cleanup(DefaultRouteRegistry.Clear)
 
-	errCh := make(chan error, 1)
+	newTestServer(testAPIV1Path, customHealthRoute, statusRoute)
 
-	go func() {
-		errCh <- srv.Start()
-	}()
+	const pkg = "github.com/gaborage/go-bricks/server"
+	assert.ElementsMatch(t, []RouteDescriptor{
+		{Method: http.MethodGet, Path: "/api/v1/custom-health", HandlerID: "GET:/api/v1/custom-health", HandlerName: "healthCheck", Package: pkg},
+		{Method: http.MethodHead, Path: "/api/v1/custom-health", HandlerID: "HEAD:/api/v1/custom-health", HandlerName: "healthCheck", Package: pkg},
+		{Method: http.MethodGet, Path: "/api/v1/status", HandlerID: "GET:/api/v1/status", HandlerName: "dispatchReady", Package: pkg},
+		{Method: http.MethodHead, Path: "/api/v1/status", HandlerID: "HEAD:/api/v1/status", HandlerName: "dispatchReady", Package: pkg},
+	}, DefaultRouteRegistry.Routes())
+}
 
-	// Wait until BeforeServeFunc stores the *http.Server, which fires
-	// immediately before the server starts accepting connections. This
-	// replaces a fragile time.Sleep with a deterministic readiness check.
-	deadline := time.Now().Add(2 * time.Second)
-	for srv.httpServer.Load() == nil {
-		if time.Now().After(deadline) {
-			t.Fatal("server did not become ready within timeout")
-		}
-		time.Sleep(5 * time.Millisecond)
+// waitForServerReady blocks until srv's ReadyCh closes, failing the test after
+// two seconds.
+func waitForServerReady(t *testing.T, srv *Server) {
+	t.Helper()
+	select {
+	case <-srv.ReadyCh():
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not become ready within timeout")
 	}
+}
 
+func shutdownAndDrain(t *testing.T, srv *Server, errCh <-chan error) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	t.Cleanup(cancel)
-
 	require.NoError(t, srv.Shutdown(ctx))
 
 	select {
@@ -270,6 +276,136 @@ func TestServerStartAndShutdown(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("server did not shut down in time")
 	}
+}
+
+func TestServerStartAndShutdown(t *testing.T) {
+	srv := newTestServer("", "", "")
+	require.NotNil(t, srv)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Start()
+	}()
+
+	waitForServerReady(t, srv)
+	addr, ok := srv.BoundAddr().(*net.TCPAddr)
+	require.True(t, ok, "BoundAddr must be the listener's TCP address")
+	assert.NotZero(t, addr.Port)
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, fmt.Sprintf("http://%s/health", addr.String()), http.NoBody)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	shutdownAndDrain(t, srv, errCh)
+}
+
+// requireStartRefused fails unless srv.Start returns ErrServerAlreadyStarted
+// promptly; a Start that binds and serves instead would block.
+func requireStartRefused(t *testing.T, srv *Server) {
+	t.Helper()
+	got := make(chan error, 1)
+	go func() {
+		got <- srv.Start()
+	}()
+	select {
+	case err := <-got:
+		require.ErrorIs(t, err, ErrServerAlreadyStarted)
+	case <-time.After(2 * time.Second):
+		t.Fatal("a repeated Start bound and served instead of being refused")
+	}
+}
+
+// TestServerStartRejectsSecondCall pins single-use: a repeated Start is refused
+// without touching the running server, while serving and after Shutdown alike.
+func TestServerStartRejectsSecondCall(t *testing.T) {
+	srv := newTestServer("", "", "")
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Start()
+	}()
+	waitForServerReady(t, srv)
+	firstAddr := srv.BoundAddr()
+	firstHTTP := srv.httpServer.Load()
+
+	requireStartRefused(t, srv)
+	assert.Equal(t, firstAddr, srv.BoundAddr())
+	assert.Same(t, firstHTTP, srv.httpServer.Load())
+
+	shutdownAndDrain(t, srv, errCh)
+	requireStartRefused(t, srv)
+	assert.Same(t, firstHTTP, srv.httpServer.Load())
+}
+
+// TestServerStartConcurrentCallsHaveOneWinner pins the latch under contention:
+// of two simultaneous Starts exactly one serves and the other is refused.
+func TestServerStartConcurrentCallsHaveOneWinner(t *testing.T) {
+	srv := newTestServer("", "", "")
+	results := make(chan error, 2)
+	begin := make(chan struct{})
+	for range 2 {
+		go func() {
+			<-begin
+			results <- srv.Start()
+		}()
+	}
+	close(begin)
+
+	select {
+	case err := <-results:
+		require.ErrorIs(t, err, ErrServerAlreadyStarted, "the first Start to return must be the refused one")
+	case <-time.After(2 * time.Second):
+		t.Fatal("neither concurrent Start was refused")
+	}
+	waitForServerReady(t, srv)
+	shutdownAndDrain(t, srv, results)
+}
+
+// TestServerReadyChClosesOnlyAfterHTTPServerStored pins ReadyCh to the stored
+// *http.Server rather than the bound address.
+func TestServerReadyChClosesOnlyAfterHTTPServerStored(t *testing.T) {
+	srv := newTestServer("", "", "")
+	assert.Nil(t, srv.BoundAddr())
+	addr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 43210}
+
+	srv.onListenerBound(addr)
+	assert.Equal(t, addr, srv.BoundAddr())
+	select {
+	case <-srv.ReadyCh():
+		t.Fatal("ReadyCh closed when the listener bound, before the http.Server was stored")
+	default:
+	}
+
+	httpSrv := &http.Server{}
+	require.NoError(t, srv.onBeforeServe(httpSrv))
+	assert.Same(t, httpSrv, srv.httpServer.Load())
+	select {
+	case <-srv.ReadyCh():
+	default:
+		t.Fatal("ReadyCh still open after the http.Server was stored")
+	}
+
+	require.NoError(t, srv.Shutdown(context.Background()))
+	assert.NotPanics(t, func() { _ = srv.onBeforeServe(&http.Server{}) }, "a serve after Shutdown must not close ReadyCh again")
+}
+
+// TestServerOnBeforeServeAppliesConfiguredTimeouts pins the timeouts Start
+// applies to the http.Server, which StartConfig does not expose.
+func TestServerOnBeforeServeAppliesConfiguredTimeouts(t *testing.T) {
+	srv := newTestServer("", "", "")
+	srv.cfg.Server.Timeout.Read = 3 * time.Second
+	srv.cfg.Server.Timeout.Write = 5 * time.Second
+	srv.cfg.Server.Timeout.Idle = 7 * time.Second
+
+	httpSrv := &http.Server{}
+	require.NoError(t, srv.onBeforeServe(httpSrv))
+
+	assert.Equal(t, 3*time.Second, httpSrv.ReadTimeout)
+	assert.Equal(t, 5*time.Second, httpSrv.WriteTimeout)
+	assert.Equal(t, 7*time.Second, httpSrv.IdleTimeout)
+	assert.Equal(t, 3*time.Second, httpSrv.ReadHeaderTimeout)
 }
 
 // TestRootGroupRegistersAtURLRoot verifies RootGroup() returns a working registrar

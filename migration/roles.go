@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/database/identifier"
 	"github.com/gaborage/go-bricks/database/sqlredact"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -49,11 +51,103 @@ type PGRoleSpec struct {
 	// as MigratorPassword — passing it on every call makes secret rotation a
 	// no-op rerun.
 	RuntimePassword string
+
+	// IdentifierPolicy optionally tightens the identifier rule Validate
+	// applies to Schema, MigratorRole and RuntimeRole; nil means the floor alone.
+	// Leave the field unset for that — storing a typed nil
+	// PGIdentifierCheckerFunc is a non-nil interface, and is refused. A spec
+	// holding a PGIdentifierCheckerFunc is not comparable; see that type.
+	IdentifierPolicy PGIdentifierChecker
+}
+
+// PGIdentifierChecker is a caller-supplied check layered on top of the
+// identifier floor (database/identifier.Validate for PostgreSQL). Validate
+// consults it once per identifier, after the floor and the reserved-name rule
+// have accepted that identifier, so a policy can only refuse
+// more — never admit a name either of those rejects. A returned error is
+// wrapped with ErrInvalidPGIdentifier and the failing field name, so the policy
+// itself does not need to identify the identifier it judged.
+type PGIdentifierChecker interface {
+	CheckPGIdentifier(value string) error
+}
+
+// PGIdentifierCheckerFunc adapts a plain function to PGIdentifierChecker.
+//
+// A typed nil of this type stored in PGRoleSpec.IdentifierPolicy is NOT the
+// same as no policy: the interface value is non-nil, so Validate does consult
+// it. Rather than panic on the nil call, the adapter refuses every identifier,
+// so such a spec fails Validate instead of taking the process down. Leave the
+// field unset for "no policy".
+//
+// A func value is not comparable, so a PGRoleSpec holding one is not safely
+// comparable either. == compares fields in order and stops at the first
+// difference, so it panics only when every earlier field is equal and the
+// comparison reaches IdentifierPolicy; using such a spec as a map key always
+// panics, because hashing reads every field. Compare such specs field by field
+// or hold them by pointer; a comparable PGIdentifierChecker implementation keeps
+// the spec comparable.
+type PGIdentifierCheckerFunc func(value string) error
+
+// errNilPGIdentifierCheckerFunc is what a nil PGIdentifierCheckerFunc refuses
+// with; checkIdentifier wraps it with ErrInvalidPGIdentifier like any other
+// policy refusal.
+var errNilPGIdentifierCheckerFunc = errors.New("migration: IdentifierPolicy holds a nil PGIdentifierCheckerFunc")
+
+// CheckPGIdentifier calls f, or refuses when f is nil.
+func (f PGIdentifierCheckerFunc) CheckPGIdentifier(value string) error {
+	if f == nil {
+		return errNilPGIdentifierCheckerFunc
+	}
+	return f(value)
+}
+
+// checkIdentifier applies the identifier floor to the field's value, then the
+// framework's own reserved-name rule, then — when one is configured — the
+// caller's policy. A refusal from any of the three is wrapped with
+// ErrInvalidPGIdentifier plus the field name and value.
+func (s *PGRoleSpec) checkIdentifier(field, value string) error {
+	err := identifier.Validate(dbtypes.PostgreSQL, value)
+	if err == nil {
+		err = checkReservedPGIdentifier(field, value)
+	}
+	if err == nil && s.IdentifierPolicy != nil {
+		err = s.IdentifierPolicy.CheckPGIdentifier(value)
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %s=%q: %w", ErrInvalidPGIdentifier, field, value, err)
+	}
+	return nil
+}
+
+// checkReservedPGIdentifier refuses the names PostgreSQL owns, per the ADR-061
+// amendment: "public" and the "pg_" prefix in both namespaces,
+// "information_schema" for schemas alone. Folding is safe because the floor has
+// already restricted value to the ASCII grammar.
+func checkReservedPGIdentifier(field, value string) error {
+	folded := strings.ToLower(value)
+	switch {
+	case folded == "public",
+		folded == "information_schema" && field == pgRoleFieldSchema,
+		strings.HasPrefix(folded, "pg_"):
+		return ErrReservedPGIdentifier
+	}
+	return nil
 }
 
 // ErrInvalidPGIdentifier is returned by Validate when a role or schema name
 // fails the safe-identifier check enforced by ProvisionPGRoles.
 var ErrInvalidPGIdentifier = errors.New("migration: PostgreSQL identifier rejected")
+
+// ErrReservedPGIdentifier is returned by Validate when a spec field names
+// something PostgreSQL reserves, matched case-insensitively: "public" or a
+// "pg_"-prefixed name in any of the three fields, plus "information_schema" for
+// Schema alone. It is always wrapped with ErrInvalidPGIdentifier, so a caller
+// matching the identifier sentinel keeps matching, and no IdentifierPolicy can
+// waive it. Such a name passes every charset check while landing the tenant's
+// tables in the schema every role on the instance can read (Schema "public") or
+// granting that tenant's DML to every role on the instance (a role named
+// "public", which PostgreSQL's RoleSpec maps onto the PUBLIC pseudo-role).
+var ErrReservedPGIdentifier = errors.New("migration: identifier is reserved by PostgreSQL")
 
 // ErrPGRolePasswordHasControlChar is returned by Validate when a role password
 // contains CR, LF, or NUL. Such a password cannot be carried log-safely through
@@ -82,6 +176,13 @@ const (
 // CR, LF, or NUL. Tenant IDs sourced from outside should be normalized to that
 // grammar upstream; rejecting at the migration boundary gives a single forcing
 // function rather than scattering input filters.
+// Every identifier additionally passes the reserved-name rule: "public" and any
+// "pg_"-prefixed name are refused case-insensitively with
+// ErrReservedPGIdentifier, and "information_schema" is refused for Schema alone.
+// A non-nil IdentifierPolicy is consulted once per identifier after the floor
+// and the reserved-name rule have accepted it, in Schema → MigratorRole →
+// RuntimeRole order, stopping at the first refusal — so a policy can never
+// re-admit a reserved name.
 // Returns ErrInvalidPGIdentifier wrapped with the offending field name, value
 // and the identifier sentinel for an identifier failure, or
 // ErrPGRolePasswordHasControlChar wrapped with the offending field name —
@@ -92,8 +193,8 @@ func (s *PGRoleSpec) Validate() error {
 		{pgRoleFieldMigratorRole, s.MigratorRole},
 		{pgRoleFieldRuntimeRole, s.RuntimeRole},
 	} {
-		if err := identifier.Validate(dbtypes.PostgreSQL, f.value); err != nil {
-			return fmt.Errorf("%w: %s=%q: %w", ErrInvalidPGIdentifier, f.name, f.value, err)
+		if err := s.checkIdentifier(f.name, f.value); err != nil {
+			return err
 		}
 	}
 	if s.MigratorRole == s.RuntimeRole {
@@ -123,10 +224,12 @@ func (s *PGRoleSpec) Validate() error {
 // are denied SUPERUSER, CREATEDB, CREATEROLE, BYPASSRLS, and REPLICATION
 // per the deliverables of #378.
 //
-// PostgreSQL is not fully transactional across role + schema boundaries
-// (CREATE ROLE in particular is not transactional), so a partial-progress
-// failure can leak intermediate state. Callers should rerun the same spec
-// to converge; the idempotent template makes that safe.
+// Each statement lands independently here: db is a connection, not a
+// transaction, so a partial-progress failure leaves the steps that already
+// succeeded in place. Callers should rerun the same spec to converge; the
+// idempotent template makes that safe. Nothing in the emitted list forces
+// that mode — use ProvisionPGRolesTx to run the same list inside a
+// transaction the caller owns.
 func ProvisionPGRoles(ctx context.Context, db *sql.DB, spec *PGRoleSpec) error {
 	if spec == nil {
 		return errors.New("migration: ProvisionPGRoles requires a non-nil *PGRoleSpec")
@@ -134,13 +237,74 @@ func ProvisionPGRoles(ctx context.Context, db *sql.DB, spec *PGRoleSpec) error {
 	if db == nil {
 		return errors.New("migration: ProvisionPGRoles requires a non-nil *sql.DB")
 	}
+	return provisionPGRoles(ctx, spec, func(ctx context.Context, stmt string) error {
+		_, err := db.ExecContext(ctx, stmt)
+		return err
+	})
+}
+
+// ProvisionPGRolesTx applies the same role-pair + schema list as
+// ProvisionPGRoles, but against a caller-owned database.Executor, so
+// provisioning can ride the transaction that also creates the tenant's tables,
+// ledger and registry row. database.Tx and database.Interface both satisfy
+// database.Executor as they stand, so the caller hands over the transaction (or
+// the connection) it already holds without an adapter.
+//
+// Every statement emitted here is ordinary transactional DDL, and CREATE ROLE
+// is not among the statements PostgreSQL refuses inside a transaction block;
+// the full list and the argument are in wiki/migration_provisioning.md.
+//
+// exec MUST be authenticated as described on ProvisionPGRoles; a typed-nil
+// executor is refused before any statement runs, like a nil interface. A plain
+// database.Interface connection also satisfies database.Executor; passed one,
+// each statement lands independently exactly as on the ProvisionPGRoles path,
+// with the same rerun-to-converge guidance. On a real transaction that guidance does not apply at all: a failed
+// statement puts the transaction in a failed block, every later command is
+// rejected with 25P02 until the block is ended (or rolled back to a savepoint
+// taken before the failure — the one way partial state can survive), and
+// ending it discards it.
+func ProvisionPGRolesTx(ctx context.Context, exec database.Executor, spec *PGRoleSpec) error {
+	if spec == nil {
+		return errors.New("migration: ProvisionPGRolesTx requires a non-nil *PGRoleSpec")
+	}
+	if isNilExecutor(exec) {
+		return errors.New("migration: ProvisionPGRolesTx requires a non-nil database.Executor")
+	}
+	return provisionPGRoles(ctx, spec, func(ctx context.Context, stmt string) error {
+		_, err := exec.Exec(ctx, stmt)
+		return err
+	})
+}
+
+// isNilExecutor reports whether exec is unusable: a nil interface, or a non-nil
+// interface holding a nil pointer (or other nil-able kind). The second case
+// would otherwise panic inside the statement loop instead of being refused at
+// the door. Mirrors httpclient.isNilLogger.
+func isNilExecutor(exec database.Executor) bool {
+	if exec == nil {
+		return true
+	}
+	v := reflect.ValueOf(exec)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Chan, reflect.Func, reflect.Slice, reflect.UnsafePointer:
+		return v.IsNil()
+	default:
+		return false
+	}
+}
+
+// provisionPGRoles validates spec and runs the composed statement list through
+// run, in order. Both exported doors funnel through here so the statement list,
+// its order, and the error wrap cannot drift between them. spec is assumed
+// non-nil; run is assumed non-nil.
+func provisionPGRoles(ctx context.Context, spec *PGRoleSpec, run func(ctx context.Context, stmt string) error) error {
 	if err := spec.Validate(); err != nil {
 		return err
 	}
 
 	stmts := buildPGRoleStatements(spec)
 	for i, stmt := range stmts {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
+		if err := run(ctx, stmt); err != nil {
 			return fmt.Errorf("migration: provisioning step %d (%s) failed: %w",
 				i, summarizeStmt(stmt), err)
 		}

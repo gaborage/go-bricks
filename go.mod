@@ -22,7 +22,7 @@ require (
 	github.com/knadh/koanf/v2 v2.3.6
 	github.com/labstack/echo-opentelemetry v0.0.3
 	github.com/labstack/echo/v5 v5.3.1
-	github.com/rabbitmq/amqp091-go v1.14.0
+	github.com/rabbitmq/amqp091-go v1.15.0
 	// Version-bump canary: re-verify ConnectPartition still constructs
 	// partition producers with default SubEntrySize. Super-stream pointer-
 	// identity confirmation correlation (ADR-063) depends on that vendor-

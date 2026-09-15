@@ -169,7 +169,7 @@ connection's `search_path` decides where migrations land. Note this koanf key
 (`database.postgresql.schema`) now has two consumers: the observability
 namespace and this migration-targeting path.
 
-Schema names must match `^[A-Za-z_][A-Za-z0-9_]{0,62}$`; an invalid name fails
+Schema names must match `^[A-Za-z_][A-Za-z0-9_$]*$` within 63 bytes; an invalid name fails
 fast with `ErrInvalidPGIdentifier` before Flyway runs (the value is formatted
 into subprocess argv, and `-schemas` is comma-separated, so an unvalidated name
 could smuggle a second schema). Oracle is not applicable — its schema is the

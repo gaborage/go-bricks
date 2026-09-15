@@ -6,6 +6,7 @@ import (
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/server"
 )
 
 // Options contains optional dependencies for creating an App instance
@@ -33,4 +34,13 @@ type Options struct {
 	// To extend the defaults from code, call logger.DefaultFilterConfig()
 	// and append your custom names to SensitiveFields.
 	LoggerFilterConfig *logger.FilterConfig
+
+	// PostRegisterRoutes, when set, is called once per Run with every route this App
+	// registered — module routes, debug endpoints, and the health/ready probes (one
+	// descriptor per method) — after the duplicate-route check and before the listener
+	// opens. A non-nil error aborts startup. ModuleName on each descriptor is the
+	// registering module's Name(), unless the route set its own with server.WithModule,
+	// and is empty for routes the framework registers itself. With an injected Server the
+	// slice carries no probe descriptors. Nil means no hook.
+	PostRegisterRoutes func(routes []server.RouteDescriptor) error
 }

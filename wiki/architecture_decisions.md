@@ -687,6 +687,10 @@ mTLS-verify listener, closed security groups, single ingress path to the target 
 per-subject authorization is safe only where the trust store scopes a single partner CA. No
 in-app IP/proxy trust (F23 precedent). Additive-only; the zero value leaves every
 deployment unchanged.
+Amended 2026-09-14 (#1611): a route family requires the identity with
+`server.RequireForwardedClientCert` mounted on its group — it re-parses the headers under any
+`enabled` setting, refuses on the same two conditions with the same 401, and exempts no probe;
+YAML scoping of `require` was rejected (polymorphic bool, raw-path matching, client-written `Host`).
 
 **Key Benefits:** Replaces per-service hand-rolled header parsing (and its URL-decoding
 trap) with one audited implementation; corrects the ALB-stripping assumption ADR-042's
@@ -1246,6 +1250,19 @@ Normalization was rejected because trimming silently changes a credential, and n
 comparing against the secret's bytes. The fix stops future leaks, not past ones — rotate any
 credential whose provisioning failure was logged. See [migrations.md](migrations.md) `[C59.5]`.
 
+**Amended (2026-09-13, #1061):** the same `Validate` now refuses a reserved PostgreSQL name in any
+identifier field — `public` and the `pg_` prefix in `Schema`, `MigratorRole` and `RuntimeRole`, plus
+`information_schema` in `Schema` alone — matched case-insensitively even though this path quotes
+identifiers, because anything spelling the name unquoted folds it to the shared one. The sentinel is
+the new `ErrReservedPGIdentifier`, wrapped inside `ErrInvalidPGIdentifier` with the field and value,
+so existing matchers keep matching. Provisioning a tenant into `public` passed every charset check
+and landed that tenant's tables in the schema every role on the instance can reach; a role named
+`public` is worse still, because PostgreSQL's `RoleSpec` maps that name — quoted included — onto the
+PUBLIC pseudo-role, so the template's `GRANT … TO "public"` hands tenant DML to every role on the
+instance, and the operator-script path `PGRoleProvisioningSQL` has no server backstop. The rule runs
+before any caller `IdentifierPolicy`, which therefore cannot waive it. Also **breaking**: rename such
+a schema or role before upgrading. See [migrations.md](migrations.md) `[C65.4]`.
+
 ### [ADR-062: Fail Closed on `database.tls` Misconfiguration (Mode Allowlist + Material/Mode Coherence)](adr_062_database_tls_fail_closed.md)
 
 **Date:** 2026-08-14 | **Status:** Accepted
@@ -1706,6 +1723,27 @@ byte-identical to before, so there is no migrations atom.
 **Key Benefits:** encrypted and mutually-authenticated Redis connections from YAML; one
 client-TLS loader shared by `httpclient` and `cache/redis` instead of a third copy; four
 fail-closed startup rules that cannot silently downgrade a TLS-only endpoint to plaintext.
+
+---
+
+### [ADR-113: AMQP Topology Is Re-declared Once per Channel Generation After a Reconnect](adr_113_amqp_topology_redeclare_on_reconnect.md)
+
+**Date:** 2026-09-14 | **Status:** Accepted
+
+The registry declared its topology once, behind a process-lifetime latch, and the consumer supervisor
+re-subscribed after a reconnect without re-declaring, so a broker that lost a queue left the consumer
+retrying a channel-level `404` forever at Debug. Before re-subscribing, the registry now reads the
+client's channel generation through an unexported optional interface (`AMQPClient` is unchanged)
+and, once per new ready generation, records it and re-runs its exchange, queue and binding
+declarations; `DeclareInfrastructure` records its own generation, and a client without the accessor
+keeps the old behavior. The first failure ends the pass with a WARN and the next channel retries —
+except `PRECONDITION_FAILED`, which closes the channel on every attempt: that declaration is skipped
+until the process restarts, logged once, and never deleted or recreated. Re-subscribe failures
+escalate to WARN from the fifth attempt, with the broker's reply code and text when it gave one. No
+configuration key. See [migrations.md](migrations.md) `[C65.10]`.
+
+**Key Benefits:** a broker that lost topology recovers without a restart; a consumer that cannot
+re-attach is visible at WARN with the broker's reason; a healthy reconnect costs one idempotent pass.
 
 ---
 
@@ -2479,7 +2517,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-112) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-113) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
