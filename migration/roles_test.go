@@ -557,3 +557,43 @@ func TestPGRoleSpecValidateRefusesNilPolicyFunc(t *testing.T) {
 		require.ErrorIs(t, spec.Validate(), ErrInvalidPGIdentifier)
 	})
 }
+
+// allowAllChecker is a comparable PGIdentifierChecker: a struct with no fields.
+type allowAllChecker struct{}
+
+func (allowAllChecker) CheckPGIdentifier(string) error { return nil }
+
+// TestPGRoleSpecComparabilityFollowsItsPolicy pins the comparability claim in the
+// PGIdentifierCheckerFunc godoc: a func-backed policy makes the spec panic on ==
+// and as a map key, while a comparable policy leaves the spec comparable.
+func TestPGRoleSpecComparabilityFollowsItsPolicy(t *testing.T) {
+	funcPolicySpec := PGRoleSpec{
+		Schema:           "tenant_a",
+		MigratorRole:     "migrator",
+		RuntimeRole:      "tenant_a_app",
+		IdentifierPolicy: PGIdentifierCheckerFunc(func(string) error { return nil }),
+	}
+
+	t.Run("func_policy_panics_on_equality", func(t *testing.T) {
+		other := funcPolicySpec
+		require.Panics(t, func() { _ = funcPolicySpec == other })
+	})
+
+	t.Run("func_policy_panics_as_map_key", func(t *testing.T) {
+		specs := map[PGRoleSpec]struct{}{}
+		require.Panics(t, func() { specs[funcPolicySpec] = struct{}{} })
+	})
+
+	t.Run("comparable_policy_keeps_spec_comparable", func(t *testing.T) {
+		spec := PGRoleSpec{
+			Schema:           "tenant_a",
+			MigratorRole:     "migrator",
+			RuntimeRole:      "tenant_a_app",
+			IdentifierPolicy: allowAllChecker{},
+		}
+		other := spec
+		if spec != other {
+			t.Fatal("a spec holding a comparable policy must compare equal to its copy")
+		}
+	})
+}
