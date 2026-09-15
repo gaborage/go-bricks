@@ -2552,7 +2552,7 @@ func (m *reconnectingMockClient) subscription(i int) chan amqp.Delivery {
 
 // startRedeclareRegistry declares one exchange, queue and binding plus a
 // consumer on the queue, then starts consuming on the client's first channel.
-func startRedeclareRegistry(t *testing.T, client AMQPClient, log gobrickslogger.Logger, handler MessageHandler) {
+func startRedeclareRegistry(ctx context.Context, t *testing.T, client AMQPClient, log gobrickslogger.Logger, handler MessageHandler) *Registry {
 	t.Helper()
 	registry := NewRegistry(client, log)
 	registry.resubscribeDelay = time.Millisecond
@@ -2561,13 +2561,9 @@ func startRedeclareRegistry(t *testing.T, client AMQPClient, log gobrickslogger.
 	registry.RegisterBinding(&BindingDeclaration{Queue: testQueueName, Exchange: testExchangeName, RoutingKey: "orders.#"})
 	registry.RegisterConsumer(&ConsumerDeclaration{Queue: testQueueName, EventType: testEventType, Workers: 1, Handler: handler})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(func() {
-		registry.StopConsumers()
-		cancel()
-	})
 	require.NoError(t, registry.DeclareInfrastructure(ctx))
 	require.NoError(t, registry.StartConsumers(ctx))
+	return registry
 }
 
 // awaitSubscription waits until the client has handed out its i-th subscription.
@@ -2596,7 +2592,10 @@ func deliverAndAwaitAck(t *testing.T, ch chan amqp.Delivery, handler *countingTe
 func TestRegistryRedeclaresLostTopologyBeforeResubscribing(t *testing.T) {
 	client := newReconnectingMockClient()
 	handler := &countingTestHandler{}
-	startRedeclareRegistry(t, client, &stubLogger{}, handler)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, handler)
+	defer registry.StopConsumers()
 	first := awaitSubscription(t, client, 0)
 
 	client.locked(func() {
@@ -2622,7 +2621,10 @@ func TestRegistryRedeclaresLostTopologyBeforeResubscribing(t *testing.T) {
 func TestRegistryRedeclaresOncePerChannelGeneration(t *testing.T) {
 	client := newReconnectingMockClient()
 	handler := &countingTestHandler{}
-	startRedeclareRegistry(t, client, &stubLogger{}, handler)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, handler)
+	defer registry.StopConsumers()
 	first := awaitSubscription(t, client, 0)
 
 	client.locked(func() {
@@ -2642,7 +2644,10 @@ func TestRegistryRedeclaresOncePerChannelGeneration(t *testing.T) {
 func TestRegistryRedeclareDoesNotRetryFailedPassOnSameChannel(t *testing.T) {
 	client := newReconnectingMockClient()
 	handler := &countingTestHandler{}
-	startRedeclareRegistry(t, client, &stubLogger{}, handler)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, handler)
+	defer registry.StopConsumers()
 	first := awaitSubscription(t, client, 0)
 
 	client.locked(func() {
@@ -2671,10 +2676,8 @@ func TestRegistryRedeclaresOncePerGenerationAcrossConsumers(t *testing.T) {
 		registry.RegisterConsumer(&ConsumerDeclaration{Queue: queue, EventType: testEventType, Workers: 1, Handler: handler})
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(func() {
-		registry.StopConsumers()
-		cancel()
-	})
+	defer cancel()
+	defer registry.StopConsumers()
 	require.NoError(t, registry.DeclareInfrastructure(ctx))
 	require.NoError(t, registry.StartConsumers(ctx))
 	first, second := awaitSubscription(t, client, 0), awaitSubscription(t, client, 1)
@@ -2702,10 +2705,8 @@ func TestRegistryRedeclaresBindingsToAnUndeclaredExchange(t *testing.T) {
 	}
 	registry.RegisterConsumer(&ConsumerDeclaration{Queue: testQueueName, EventType: testEventType, Workers: 1, Handler: &countingTestHandler{}})
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(func() {
-		registry.StopConsumers()
-		cancel()
-	})
+	defer cancel()
+	defer registry.StopConsumers()
 	require.NoError(t, registry.DeclareInfrastructure(ctx))
 	require.NoError(t, registry.StartConsumers(ctx))
 	first := awaitSubscription(t, client, 0)
@@ -2723,7 +2724,10 @@ func TestRegistryRedeclaresBindingsToAnUndeclaredExchange(t *testing.T) {
 func TestRegistryResubscribeOnSameChannelDoesNotRedeclare(t *testing.T) {
 	client := newReconnectingMockClient()
 	handler := &countingTestHandler{}
-	startRedeclareRegistry(t, client, &stubLogger{}, handler)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, handler)
+	defer registry.StopConsumers()
 	close(awaitSubscription(t, client, 0))
 
 	deliverAndAwaitAck(t, awaitSubscription(t, client, 1), handler)
@@ -2741,7 +2745,10 @@ func TestRegistryResubscribeWithoutChannelGenerationDoesNotRedeclare(t *testing.
 	}
 	_, exposesGeneration := AMQPClient(client).(channelGenerationer)
 	require.False(t, exposesGeneration)
-	startRedeclareRegistry(t, client, &stubLogger{}, &countingTestHandler{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, &countingTestHandler{})
+	defer registry.StopConsumers()
 
 	close(ch1)
 	require.Eventually(t, func() bool {
@@ -2760,7 +2767,10 @@ func TestRegistryRedeclareSkipsDeclarationRejectedWithPreconditionFailed(t *test
 	client := newReconnectingMockClient()
 	handler := &countingTestHandler{}
 	log := newRecordingLogger()
-	startRedeclareRegistry(t, client, log, handler)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := startRedeclareRegistry(ctx, t, client, log, handler)
+	defer registry.StopConsumers()
 	first := awaitSubscription(t, client, 0)
 
 	mismatch := &amqp.Error{Code: amqp.PreconditionFailed, Reason: "PRECONDITION_FAILED - inequivalent arg 'x-queue-type'", Server: true}
@@ -2792,7 +2802,10 @@ func TestRegistryRedeclareRetriesFailedDeclarationOnNextChannel(t *testing.T) {
 	client := newReconnectingMockClient()
 	handler := &countingTestHandler{}
 	log := newRecordingLogger()
-	startRedeclareRegistry(t, client, log, handler)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := startRedeclareRegistry(ctx, t, client, log, handler)
+	defer registry.StopConsumers()
 	first := awaitSubscription(t, client, 0)
 
 	client.locked(func() {
