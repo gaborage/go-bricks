@@ -428,10 +428,8 @@ base := "http://" + srv.BoundAddr().String()
 require.NoError(t, srv.Shutdown(ctx))
 ```
 
-`ReadyCh` closes only after the `*http.Server` is stored, so a `Shutdown` issued right after it
-always stops the server. Both methods live on `*server.Server`, not on `app.ServerRunner`: to
-keep the handle inside an app, build the server yourself and pass it as `app.Options.Server`.
-A `Server` is single-use; neither accessor resets after `Shutdown`.
+Both methods live on `*server.Server`, not on `app.ServerRunner`: to keep the handle inside an
+app, build the server yourself and pass it as `app.Options.Server`.
 
 ## Integration Testing with Testcontainers
 

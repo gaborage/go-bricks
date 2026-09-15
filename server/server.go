@@ -37,8 +37,7 @@ type Server struct {
 	readyHandler echo.HandlerFunc
 	conflicts    *routeConflictTracker
 	boundAddr    atomic.Pointer[net.Addr] // set via ListenerAddrFunc once Start's listener is bound; nil until then
-	ready        chan struct{}            // closed by BeforeServeFunc once httpServer is stored; see ReadyCh
-	readyOnce    sync.Once
+	ready        chan struct{}
 }
 
 // normalizeBasePath cannot use pathutil.NormalizePrefix because that helper
@@ -296,22 +295,22 @@ func (s *Server) Start() error {
 	return sc.Start(context.Background(), s.echo)
 }
 
-// onListenerBound is Start's ListenerAddrFunc. Echo calls it before
-// onBeforeServe, while httpServer is still nil, so it must not signal ready.
+// onListenerBound is Start's ListenerAddrFunc.
 func (s *Server) onListenerBound(addr net.Addr) {
 	s.boundAddr.Store(&addr)
 }
 
-// onBeforeServe is Start's BeforeServeFunc: it applies the configured timeouts
-// (StartConfig does not expose them), stores srv for Shutdown, and only then
-// closes ready.
+// onBeforeServe is Start's BeforeServeFunc: it applies the timeouts StartConfig
+// lacks, stores srv for Shutdown, and only then closes ready — once, since a
+// later Start finds a server already stored.
 func (s *Server) onBeforeServe(srv *http.Server) error {
 	srv.ReadTimeout = s.cfg.Server.Timeout.Read
 	srv.WriteTimeout = s.cfg.Server.Timeout.Write
 	srv.IdleTimeout = s.cfg.Server.Timeout.Idle
 	srv.ReadHeaderTimeout = s.cfg.Server.Timeout.Read
-	s.httpServer.Store(srv)
-	s.readyOnce.Do(func() { close(s.ready) })
+	if s.httpServer.Swap(srv) == nil {
+		close(s.ready)
+	}
 	return nil
 }
 
@@ -327,9 +326,8 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// BoundAddr returns the address Start's listener bound, or nil before it binds.
-// It never blocks. With server.port 0 it names the port the OS picked, on the
-// TLS path too. It keeps the last address after Shutdown.
+// BoundAddr returns the address Start's listener bound (the port the OS picked
+// for server.port 0, TLS included), or nil before it binds. It never blocks.
 func (s *Server) BoundAddr() net.Addr {
 	if addr := s.boundAddr.Load(); addr != nil {
 		return *addr
@@ -340,8 +338,8 @@ func (s *Server) BoundAddr() net.Addr {
 // ReadyCh returns a channel closed once Start is serving. It closes after the
 // *http.Server is stored, never when the listener binds: echo reports the bound
 // address first, and a Shutdown issued between the two finds no server and
-// returns without stopping anything. Wait on it before dialing BoundAddr. It
-// stays closed after Shutdown.
+// returns without stopping anything. If Start fails before serving it never
+// closes, so select on Start's error as well.
 func (s *Server) ReadyCh() <-chan struct{} {
 	return s.ready
 }

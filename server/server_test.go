@@ -251,50 +251,12 @@ func TestServerNewRegistersProbeDescriptors(t *testing.T) {
 	}, DefaultRouteRegistry.Routes())
 }
 
+// TestServerStartAndShutdown boots on port 0, waits on ReadyCh, and dials the
+// port BoundAddr reports.
 func TestServerStartAndShutdown(t *testing.T) {
 	srv := newTestServer("", "", "")
 	require.NotNil(t, srv)
 
-	errCh := make(chan error, 1)
-
-	go func() {
-		errCh <- srv.Start()
-	}()
-
-	waitForServerReady(t, srv)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	t.Cleanup(cancel)
-
-	require.NoError(t, srv.Shutdown(ctx))
-
-	select {
-	case err := <-errCh:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-			t.Fatalf("unexpected error from server: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("server did not shut down in time")
-	}
-}
-
-// TestServerBoundAddrAndReadyChBeforeStart pins the pre-Start state: no address
-// and an open ready channel, both read without blocking.
-func TestServerBoundAddrAndReadyChBeforeStart(t *testing.T) {
-	srv := newTestServer("", "", "")
-
-	assert.Nil(t, srv.BoundAddr())
-	select {
-	case <-srv.ReadyCh():
-		t.Fatal("ReadyCh closed before Start")
-	default:
-	}
-}
-
-// TestServerReadyChBoundAddrOnPortZero pins the consumer pattern: with port 0,
-// ReadyCh closes once serving and BoundAddr names a real port that answers.
-func TestServerReadyChBoundAddrOnPortZero(t *testing.T) {
-	srv := newTestServer("", "", "")
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- srv.Start()
@@ -316,10 +278,12 @@ func TestServerReadyChBoundAddrOnPortZero(t *testing.T) {
 }
 
 // TestServerReadyChClosesOnlyAfterHTTPServerStored pins the order echo forces:
-// the bound address arrives first, and ReadyCh stays open until the
-// *http.Server that Shutdown needs is stored. A repeat never re-closes.
+// no address before Start, then the bound address while ReadyCh stays open,
+// and ReadyCh closes only once the *http.Server that Shutdown needs is stored.
+// A repeat never re-closes.
 func TestServerReadyChClosesOnlyAfterHTTPServerStored(t *testing.T) {
 	srv := newTestServer("", "", "")
+	assert.Nil(t, srv.BoundAddr())
 	addr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 43210}
 
 	srv.onListenerBound(addr)
