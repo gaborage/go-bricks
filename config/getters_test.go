@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/knadh/koanf/providers/confmap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -33,11 +32,9 @@ const (
 
 func setupTestConfig(t *testing.T, data map[string]any) *Config {
 	t.Helper()
-
-	src := newConfigSource()
-	require.NoError(t, src.loadRecording(confmap.Provider(data, koanfDelim), nil, nil))
-
-	return &Config{src: src}
+	cfg, err := LoadFromMap(data)
+	require.NoError(t, err)
+	return cfg
 }
 
 // ========================================
@@ -122,6 +119,135 @@ func TestRequiredAccessors(t *testing.T) {
 	assert.True(t, vBool)
 }
 
+// TestStrings pins the list getter's split semantics and its delivered-empty rule: a
+// present key that splits into nothing is the operator saying "no entries", so it
+// returns a non-nil empty slice rather than the defaults.
+func TestStrings(t *testing.T) {
+	cfg := setupTestConfig(t, map[string]any{
+		"custom.list":       "a, b,,c ",
+		"custom.sequence":   []any{"x", "y"},
+		"custom.empty":      "",
+		"custom.separators": "  , ",
+	})
+
+	tests := []struct {
+		name     string
+		key      string
+		defaults []string
+		want     []string
+	}{
+		{name: "scalar_split_and_trimmed", key: "custom.list", want: []string{"a", "b", "c"}},
+		{name: "sequence_elements", key: "custom.sequence", defaults: []string{"d"}, want: []string{"x", "y"}},
+		{name: "delivered_empty_ignores_defaults", key: "custom.empty", defaults: []string{"d"}, want: []string{}},
+		{name: "separators_only_ignores_defaults", key: "custom.separators", defaults: []string{"d"}, want: []string{}},
+		{name: "delivered_empty_without_defaults_is_non_nil", key: "custom.empty", want: []string{}},
+		{name: "absent_returns_defaults", key: missing, defaults: []string{"d1", "d2"}, want: []string{"d1", "d2"}},
+		{name: "absent_without_defaults_is_nil", key: missing, want: nil},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// assert.Equal compares with reflect.DeepEqual, so nil and []string{} differ.
+			assert.Equal(t, tc.want, cfg.Strings(tc.key, tc.defaults...))
+		})
+	}
+}
+
+func TestRequiredStrings(t *testing.T) {
+	cfg := setupTestConfig(t, map[string]any{
+		"custom.list":       "a, b,,c ",
+		"custom.sequence":   []any{"x", "y"},
+		"custom.empty":      "",
+		"custom.separators": "  , ",
+		"custom.cleared":    []any{},
+		"custom.number":     42,
+	})
+
+	tests := []struct {
+		name    string
+		key     string
+		want    []string
+		wantErr string
+	}{
+		{name: "scalar_split_and_trimmed", key: "custom.list", want: []string{"a", "b", "c"}},
+		{name: "sequence_elements", key: "custom.sequence", want: []string{"x", "y"}},
+		{name: "absent_is_missing", key: missing, wantErr: "required configuration key 'custom.missing' is missing"},
+		{name: "unusable_is_invalid", key: "custom.number", wantErr: "required configuration key 'custom.number' is invalid: unsupported type int"},
+		{name: "delivered_empty_is_empty", key: "custom.empty", wantErr: "required configuration key 'custom.empty' is empty"},
+		{name: "separators_only_is_empty", key: "custom.separators", wantErr: "required configuration key 'custom.separators' is empty"},
+		{name: "empty_sequence_is_empty", key: "custom.cleared", wantErr: "required configuration key 'custom.cleared' is empty"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := cfg.RequiredStrings(tc.key)
+			if tc.wantErr != "" {
+				require.EqualError(t, err, tc.wantErr)
+				assert.Nil(t, got)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestStringsDoorsAgreeAcrossEnvAndYAML pins that an environment variable and a YAML
+// sequence spelling the same list read identically through every door that reads a list
+// key: Strings, RequiredStrings and InjectInto.
+func TestStringsDoorsAgreeAcrossEnvAndYAML(t *testing.T) {
+	type listTarget struct {
+		List []string `config:"custom.list"`
+	}
+
+	tests := []struct {
+		name string
+		env  string
+		yaml string
+		want []string
+	}{
+		{name: "one_entry", env: "a", yaml: "[a]", want: []string{"a"}},
+		{name: "padded_entries", env: " a , b ,, c", yaml: "[a, b, c]", want: []string{"a", "b", "c"}},
+		{name: "no_entries", env: "", yaml: "[]", want: []string{}},
+	}
+
+	for _, tc := range tests {
+		forms := []struct {
+			name string
+			load func(t *testing.T) (*Config, error)
+		}{
+			{name: "env", load: func(t *testing.T) (*Config, error) {
+				return loadConfigFixture(t, nil, map[string]string{"CUSTOM_LIST": tc.env})
+			}},
+			{name: "yaml", load: func(t *testing.T) (*Config, error) {
+				return loadDeliveredEmptyFixture(t, "custom:\n  list: "+tc.yaml+"\n", nil)
+			}},
+		}
+
+		for _, form := range forms {
+			t.Run(tc.name+"_"+form.name, func(t *testing.T) {
+				cfg, err := form.load(t)
+				require.NoError(t, err)
+				require.True(t, cfg.Exists("custom.list"), "the fixture must deliver the key")
+
+				assert.Equal(t, tc.want, cfg.Strings("custom.list", "default"))
+
+				got, err := cfg.RequiredStrings("custom.list")
+				if len(tc.want) == 0 {
+					require.EqualError(t, err, "required configuration key 'custom.list' is empty")
+				} else {
+					require.NoError(t, err)
+					assert.Equal(t, tc.want, got)
+				}
+
+				var target listTarget
+				require.NoError(t, cfg.InjectInto(&target))
+				assert.Equal(t, tc.want, target.List)
+			})
+		}
+	}
+}
+
 // ========================================
 // NIL CONFIG AND UTILITY TESTS
 // ========================================
@@ -146,6 +272,10 @@ func TestNilConfigAccessors(t *testing.T) {
 		{name: "bool_returns_false", probe: func(t *testing.T, cfg *Config) {
 			assert.False(t, cfg.Bool("any"))
 		}},
+		{name: "strings_returns_defaults", probe: func(t *testing.T, cfg *Config) {
+			assert.Equal(t, []string{"a", "b"}, cfg.Strings("any", "a", "b"))
+			assert.Nil(t, cfg.Strings("any"))
+		}},
 		{name: "required_int_errors", probe: func(t *testing.T, cfg *Config) {
 			_, err := cfg.RequiredInt("any")
 			require.Error(t, err)
@@ -153,6 +283,11 @@ func TestNilConfigAccessors(t *testing.T) {
 		{name: "required_string_errors", probe: func(t *testing.T, cfg *Config) {
 			_, err := cfg.RequiredString("any")
 			require.Error(t, err)
+		}},
+		{name: "required_strings_errors_not_initialized", probe: func(t *testing.T, cfg *Config) {
+			got, err := cfg.RequiredStrings("any")
+			require.EqualError(t, err, "configuration not initialized")
+			assert.Nil(t, got)
 		}},
 		{name: "unmarshal_errors", probe: func(t *testing.T, cfg *Config) {
 			err := cfg.Unmarshal("custom", &struct{}{})
@@ -408,6 +543,23 @@ func TestLenientGettersWarnOnUnusableValue(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestStringsWarnsOnUnusableValue pins that the list getter reports an unconvertible
+// value through the same once-per-key warning the numeric getters use.
+func TestStringsWarnsOnUnusableValue(t *testing.T) {
+	key := "custom.warn_strings"
+	cfg := setupTestConfig(t, map[string]any{key: 42})
+
+	warns := captureWarns(t, []string{key}, func() {
+		assert.Equal(t, []string{"d"}, cfg.Strings(key, "d"))
+		assert.Nil(t, cfg.Strings(key))
+	})
+
+	require.Len(t, warns, 1, "two reads of one unusable key warn once")
+	assert.Equal(t, key, warns[0]["key"])
+	assert.Equal(t, "strings", warns[0]["type"])
+	assert.Equal(t, classUnparseable, warns[0]["class"])
 }
 
 // TestLenientGetterZeroValueWithoutDefault pins the other default shape: with no

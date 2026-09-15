@@ -95,6 +95,8 @@ log:
 **Duration values must be unit-suffixed** (`5s`, `72h`, `500ms`, `300s` — never a bare `300`): env-var and quoted forms without a unit fail startup with a `missing unit` error, and as of v0.49.0 a bare YAML/JSON/TOML numeric on a duration key fails config decode too (`unit-less numeric duration …`) instead of being silently misread as nanoseconds. An explicit `0` still means "use the default".
 Add observability settings as needed (see Observability & Logging).
 
+Reading a key without a struct: `cfg.String`/`Int`/`Int64`/`Float64`/`Bool`/`Strings(key, defaults...)` return the default for an absent key, and each `Required*` twin (`RequiredStrings` included) returns an error instead. `Strings` converts exactly as `InjectInto` does for a `[]string` field — a YAML sequence yields its elements, an env scalar splits on commas (trimmed, empties dropped) — and a key delivered empty returns `[]string{}`, not the defaults. `cfg.Unmarshal` into a `[]string` does not split: it wraps the scalar as one element.
+
 ## Core Concepts
 - Framework injects dependencies via `*app.ModuleDeps`; avoid constructing raw `*sql.DB`.
 - Declarative messaging defines exchanges, queues, bindings, publishers, and consumers once; the framework replays per tenant.
@@ -1777,6 +1779,18 @@ _, err = conn.Exec(ctx, "BEGIN update_customer(:1); END;", customer)
 - **Type assertion required** → Must cast to `*oracle.Connection` to access UDT methods
 - **Registration timing** → Call during application initialization, before any UDT queries
 - **Tag format** → `udt:` tags must EXACTLY match Oracle field names (case-sensitive, usually uppercase)
+
+## Config Testing
+
+Unit-test code that reads config through the getters or `InjectInto` against a populated `*config.Config` — framework defaults plus the map's dotted keys, no YAML file, no environment variable, and no `config.Validate` (call it yourself, or use `config.Load` for the validated door):
+
+```go
+cfg, err := config.LoadFromMap(map[string]any{
+	"custom.allowlist": "org/a, org/b", // env spelling; []any{"org/a", "org/b"} is the YAML one
+})
+require.NoError(t, err)
+assert.Equal(t, []string{"org/a", "org/b"}, cfg.Strings("custom.allowlist"))
+```
 
 ## Database Testing
 
