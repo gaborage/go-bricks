@@ -39,8 +39,8 @@ require the identity on one route family only, leave `require` off and mount
 
 ```go
 func (m *PartnerModule) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
-	itsp := r.Group("/itsp", server.RequireForwardedClientCert(m.logger)) // m.logger = deps.Logger from Init
-	server.POST(hr, itsp, "/notifications", m.notify)
+	partner := r.Group("/partner", server.RequireForwardedClientCert(m.logger)) // m.logger = deps.Logger from Init
+	server.POST(hr, partner, "/notifications", m.notify)
 }
 ```
 
@@ -52,8 +52,7 @@ false`), the guard attaches it, so `ForwardedClientCertFromContext` works behind
 every posture. Probes are not exempted: a route stays open by being registered outside the
 guarded group, as with [`auth.Middleware`](auth.md). WARNs go to the logger passed in; `nil`
 falls back to the standard library `log` package. The guard decides presence, never
-provenance: mounting it makes the [trust model](#trust-model)'s posture assertion for that
-route family, in every environment the binary runs in, whatever `enabled` says.
+provenance; mounting it is a [trust model](#trust-model) posture assertion.
 
 ## What gets parsed
 
@@ -96,8 +95,8 @@ check that swaps the decoder (`server/forwardedcert_test.go`).
 ## Trust model
 
 Enabling `server.forwardedclientcert`, or mounting `server.RequireForwardedClientCert` on a
-route group, is an explicit operator assertion of **three** things, together — never a single
-flag that "just trusts AWS":
+route group (for that family, in every environment, whatever `enabled` says), is an explicit
+operator assertion of **three** things, together — never a single flag that "just trusts AWS":
 
 1. An **mTLS-verify** ALB listener fronts this service (not passthrough, not a plain HTTP/S
    listener).
@@ -138,8 +137,8 @@ headers alone.
 **No in-app IP/proxy trust.** This middleware never derives trust from source IP or
 `X-Forwarded-For` — that is the anti-pattern already present elsewhere in this framework
 (`server/ratelimit.go`'s `ctx.RealIP()` unconditionally trusting XFF, ledgered as F23).
-`enabled` and a mounted guard are the only trust signals; there is no source-IP/CIDR check to layer on top, and
-adding one would be v2 scope creep, not a v1 gap.
+`enabled` and a mounted guard are the only trust signals; there is no source-IP/CIDR check to
+layer on top, and adding one would be v2 scope creep, not a v1 gap.
 
 If AWS ever publishes a sanitization guarantee for `X-Amzn-Mtls-*`, this section and
 [ADR-043](adr_043_forwarded_client_cert.md)'s Consequences should be updated to cite it and
@@ -157,8 +156,9 @@ got through and the deployment posture above needs attention.
 ## Probe exemption
 
 Health and ready probe paths (the same `healthPath`/`readyPath` passed into
-`server.SetupMiddlewares`) always skip the engine-level middleware. ALB health checks present no client
-certificate, so a non-exempt `Require` would take the target group down on every deploy.
+`server.SetupMiddlewares`) always skip the engine-level middleware. ALB health checks present
+no client certificate, so a non-exempt `Require` would take the target group down on every
+deploy.
 
 ## Authorization recipe (application code)
 

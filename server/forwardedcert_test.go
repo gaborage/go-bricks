@@ -628,3 +628,23 @@ func TestRequireForwardedClientCertLeavesUnguardedGroupsOpen(t *testing.T) {
 	assert.True(t, probe.ran)
 	assert.False(t, probe.ok)
 }
+
+// TestRequireForwardedClientCertExemptsNoProbe pins that the guard refuses on the
+// health path the engine-level require mode skips, and that a nil logger falls
+// back instead of panicking.
+func TestRequireForwardedClientCertExemptsNoProbe(t *testing.T) {
+	cfg := newForwardedCertCfg(true, true)
+	e := newTenantTestEcho()
+	SetupMiddlewares(e, &capturingLogger{}, cfg, true, testHealthPath, testReadyPath)
+	ran := false
+	newRouteGroup(e.Group(""), "", cfg).Group("", RequireForwardedClientCert(nil)).Add(http.MethodGet, testHealthPath, func(c HandlerContext) error {
+		ran = true
+		return c.String(http.StatusOK, "ok")
+	})
+
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, testHealthPath, http.NoBody))
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.False(t, ran, "a probe path behind the guard must never reach the handler")
+}
