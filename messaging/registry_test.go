@@ -2445,6 +2445,7 @@ type reconnectingMockClient struct {
 	notReady      bool
 	channelClosed bool
 	notReadyCalls int
+	restartOn     string // declare key that first restarts the broker: new generation, queues wiped
 	queues        map[string]bool
 	declareErrs   map[string][]error
 	consumeErrs   []error
@@ -2481,6 +2482,11 @@ func (m *reconnectingMockClient) declare(key string, onSuccess func()) error {
 	defer m.callMu.Unlock()
 	if m.notReady {
 		return errNotConnected
+	}
+	if key == m.restartOn {
+		m.restartOn = ""
+		m.generation++
+		m.queues = map[string]bool{}
 	}
 	m.declares[key] = append(m.declares[key], strconv.FormatUint(m.generation, 10))
 	if errs := m.declareErrs[key]; len(errs) > 0 {
@@ -2716,6 +2722,28 @@ func TestRegistryRedeclaresBindingsToAnUndeclaredExchange(t *testing.T) {
 
 	awaitSubscription(t, client, 1)
 	assert.Equal(t, []string{"1", "2"}, client.declaresOf("binding:"+testQueueName+"|"+builtin+"|orders.cancelled"))
+}
+
+// TestRegistryRedeclaresAgainWhenTheChannelIsReplacedMidPass verifies a pass cut
+// across two channels by a broker restart is repeated on the new channel before
+// the consumer subscribes, so topology the restart wiped is declared again.
+func TestRegistryRedeclaresAgainWhenTheChannelIsReplacedMidPass(t *testing.T) {
+	client := newReconnectingMockClient()
+	handler := &countingTestHandler{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, handler)
+	defer registry.StopConsumers()
+	first := awaitSubscription(t, client, 0)
+
+	client.locked(func() {
+		client.generation++
+		client.restartOn = "queue:" + testQueueName
+	})
+	close(first)
+
+	deliverAndAwaitAck(t, awaitSubscription(t, client, 1), handler)
+	assert.Equal(t, []string{"1", "2", "3"}, client.declaresOf("exchange:"+testExchangeName))
 }
 
 // TestRegistryResubscribeOnSameChannelDoesNotRedeclare verifies a delivery

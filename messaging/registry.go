@@ -733,10 +733,12 @@ func (r *Registry) topologySteps() []topologyStep {
 
 // redeclareTopology re-runs the recorded declarations once per client channel
 // generation, before a consumer re-subscribes. It is a no-op for a client without
-// channelGeneration, a client not ready, or a generation already declared. The
-// first failure ends the pass; the next channel retries. A declaration refused
-// with PRECONDITION_FAILED is skipped by every later pass until the process
-// restarts: the operator fixes the server-side definition and restarts.
+// channelGeneration, a client not ready, or a generation already declared. A pass
+// the channel was replaced during is repeated on the new generation, so a restart
+// mid-pass cannot leave the consumer on topology the pass never saw. The first
+// failure ends a pass; the next channel retries. A declaration refused with
+// PRECONDITION_FAILED is skipped by every later pass until the process restarts:
+// the operator fixes the server-side definition and restarts.
 func (r *Registry) redeclareTopology(ctx context.Context) {
 	client, ok := r.client.(channelGenerationer)
 	if !ok {
@@ -745,12 +747,18 @@ func (r *Registry) redeclareTopology(ctx context.Context) {
 	r.redeclareMu.Lock()
 	defer r.redeclareMu.Unlock()
 
-	generation, ready := client.channelGeneration()
-	if !ready || generation == r.declaredGeneration.Load() {
-		return
+	for ctx.Err() == nil {
+		generation, ready := client.channelGeneration()
+		if !ready || generation == r.declaredGeneration.Load() {
+			return
+		}
+		r.declaredGeneration.Store(generation)
+		r.replayTopology(ctx, generation)
 	}
-	r.declaredGeneration.Store(generation)
+}
 
+// replayTopology runs one pass of the recorded declarations on generation.
+func (r *Registry) replayTopology(ctx context.Context, generation uint64) {
 	for _, step := range r.topologySteps() {
 		if _, skipped := r.redeclareSkip[step.key]; skipped {
 			continue
