@@ -81,8 +81,12 @@ type TestDB struct {
 	strictMatch         bool
 	txExpectations      []*TxExpectation
 	startedTransactions []*TxExpectation
+	sessionExpectations []*TestSession
 	mu                  sync.RWMutex
 }
+
+// Compile-time interface check.
+var _ dbtypes.Interface = (*TestDB)(nil)
 
 // QueryCall represents a single Query or QueryRow invocation.
 type QueryCall struct {
@@ -190,7 +194,7 @@ func (db *TestDB) ExpectExec(sqlPattern string) *ExecExpectation {
 //	    ExpectExec("INSERT INTO orders").WillReturnRowsAffected(1).
 //	    ExpectExec("INSERT INTO items").WillReturnRowsAffected(3)
 func (db *TestDB) ExpectTransaction() *TestTx {
-	tx := &TestTx{parent: db}
+	tx := newTestTx(db)
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	txExp := &TxExpectation{
@@ -199,6 +203,23 @@ func (db *TestDB) ExpectTransaction() *TestTx {
 	}
 	db.txExpectations = append(db.txExpectations, txExp)
 	return tx
+}
+
+// ExpectSession queues a TestSession carrying its own query, exec and
+// transaction expectations. Session() pops the queued sessions in declaration
+// order and errors once the queue is empty.
+//
+// Example:
+//
+//	sess := db.ExpectSession().
+//	    ExpectQuery("SELECT pg_advisory_lock").
+//	        WillReturnRows(NewRowSet("pg_advisory_lock").AddRow(true))
+func (db *TestDB) ExpectSession() *TestSession {
+	sess := newTestSession(db)
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.sessionExpectations = append(db.sessionExpectations, sess)
+	return sess
 }
 
 // QueryLog returns all Query/QueryRow calls made to this TestDB.
@@ -273,8 +294,6 @@ func (db *TestDB) findExecExpectation(actualSQL string) *ExecExpectation {
 //	for rows.Next() {
 //	    // ... scan rows
 //	}
-//
-//nolint:dupl // Intentional duplication with TestTx.Query - different contexts require separate implementations
 func (db *TestDB) Query(_ context.Context, query string, args ...any) (*sql.Rows, error) {
 	db.mu.Lock()
 	db.queryLog = append(db.queryLog, QueryCall{SQL: query, Args: args})
@@ -373,10 +392,36 @@ func (db *TestDB) Begin(_ context.Context) (dbtypes.Tx, error) {
 	return txExp.tx, nil
 }
 
+// registerStartedTransaction records txExp among the started transactions, so a
+// transaction begun on a pinned TestSession reaches the same bookkeeping the
+// TestDB-level assertions (AssertTransactionCommitted, AssertNoTransaction)
+// read. Callers must not already hold db.mu.
+func (db *TestDB) registerStartedTransaction(txExp *TxExpectation) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.startedTransactions = append(db.startedTransactions, txExp)
+}
+
 // BeginTx implements dbtypes.Transactor.BeginTx.
 func (db *TestDB) BeginTx(ctx context.Context, _ *sql.TxOptions) (dbtypes.Tx, error) {
 	// For test purposes, delegate to Begin (ignore opts)
 	return db.Begin(ctx)
+}
+
+// Session implements database.Interface.Session, popping the sessions queued by
+// ExpectSession in declaration order.
+func (db *TestDB) Session(_ context.Context) (dbtypes.Session, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if len(db.sessionExpectations) == 0 {
+		return nil, errors.New("unexpected Session() call (use ExpectSession)")
+	}
+
+	sess := db.sessionExpectations[0]
+	db.sessionExpectations = db.sessionExpectations[1:]
+
+	return sess, nil
 }
 
 // Prepare implements database.Interface.Prepare (rarely used in tests).

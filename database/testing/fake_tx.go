@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
-	"sync"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -30,17 +28,14 @@ import (
 //	// Assert transaction was committed
 //	AssertCommitted(t, tx)
 type TestTx struct {
-	parent      *TestDB
-	queries     []*QueryExpectation
-	execs       []*ExecExpectation
-	lastQuery   *QueryExpectation
-	lastExec    *ExecExpectation
-	lastWasExec bool
-	queryLog    []QueryCall
-	execLog     []ExecCall
-	committed   bool
-	rolledBack  bool
-	mu          sync.RWMutex
+	expectationSet
+	committed  bool
+	rolledBack bool
+}
+
+// newTestTx builds a transaction fake whose expectations belong to parent.
+func newTestTx(parent *TestDB) *TestTx {
+	return &TestTx{expectationSet: expectationSet{parent: parent, scope: "transaction"}}
 }
 
 // ExpectQuery sets up an expectation for Query or QueryRow calls within the transaction.
@@ -52,12 +47,7 @@ type TestTx struct {
 //	    ExpectQuery("SELECT * FROM users WHERE id = $1").
 //	        WillReturnRows(NewRowSet("id", "name").AddRow(1, "Alice"))
 func (tx *TestTx) ExpectQuery(sqlPattern string) *TestTx {
-	tx.mu.Lock()
-	defer tx.mu.Unlock()
-	exp := &QueryExpectation{sql: sqlPattern}
-	tx.queries = append(tx.queries, exp)
-	tx.lastQuery = exp
-	tx.lastWasExec = false
+	tx.addQuery(sqlPattern)
 	return tx
 }
 
@@ -69,12 +59,7 @@ func (tx *TestTx) ExpectQuery(sqlPattern string) *TestTx {
 //
 //	tx.ExpectQuery("SELECT").WillReturnRows(NewRowSet("id").AddRow(1))
 func (tx *TestTx) WillReturnRows(rows *RowSet) *TestTx {
-	tx.mu.Lock()
-	defer tx.mu.Unlock()
-	if tx.lastQuery != nil {
-		tx.lastQuery.rows = rows
-	}
-
+	tx.setRows(rows)
 	return tx
 }
 
@@ -86,12 +71,7 @@ func (tx *TestTx) WillReturnRows(rows *RowSet) *TestTx {
 //	tx := db.ExpectTransaction().
 //	    ExpectExec("INSERT INTO users").WillReturnRowsAffected(1)
 func (tx *TestTx) ExpectExec(sqlPattern string) *TestTx {
-	tx.mu.Lock()
-	defer tx.mu.Unlock()
-	exp := &ExecExpectation{sql: sqlPattern}
-	tx.execs = append(tx.execs, exp)
-	tx.lastExec = exp
-	tx.lastWasExec = true
+	tx.addExec(sqlPattern)
 	return tx
 }
 
@@ -103,12 +83,7 @@ func (tx *TestTx) ExpectExec(sqlPattern string) *TestTx {
 //
 //	tx.ExpectExec("INSERT").WillReturnRowsAffected(5)
 func (tx *TestTx) WillReturnRowsAffected(n int64) *TestTx {
-	tx.mu.Lock()
-	defer tx.mu.Unlock()
-	if tx.lastExec != nil {
-		tx.lastExec.rowsAffected = n
-	}
-
+	tx.setRowsAffected(n)
 	return tx
 }
 
@@ -123,16 +98,7 @@ func (tx *TestTx) WillReturnRowsAffected(n int64) *TestTx {
 //	tx.ExpectExec("INSERT INTO orders").WillReturnError(errConstraintViolation)
 //	tx.ExpectQuery("SELECT FOR UPDATE").WillReturnError(errLockTimeout)
 func (tx *TestTx) WillReturnError(err error) *TestTx {
-	tx.mu.Lock()
-	defer tx.mu.Unlock()
-	if tx.lastWasExec {
-		if tx.lastExec != nil {
-			tx.lastExec.err = err
-		}
-	} else if tx.lastQuery != nil {
-		tx.lastQuery.err = err
-	}
-
+	tx.setError(err)
 	return tx
 }
 
@@ -153,78 +119,18 @@ func (tx *TestTx) WillReturnError(err error) *TestTx {
 //	for rows.Next() {
 //	    // ... scan rows
 //	}
-//
-//nolint:dupl // Intentional duplication with TestDB.Query - different contexts require separate implementations
 func (tx *TestTx) Query(_ context.Context, query string, args ...any) (*sql.Rows, error) {
-	tx.mu.Lock()
-	tx.queryLog = append(tx.queryLog, QueryCall{SQL: query, Args: args})
-	tx.mu.Unlock()
-
-	exp := tx.findQueryExpectation(query)
-	if exp == nil {
-		return nil, fmt.Errorf("unexpected query in transaction: %s (no matching expectation)", query)
-	}
-
-	if exp.err != nil {
-		return nil, exp.err
-	}
-
-	if exp.rows == nil {
-		return nil, fmt.Errorf("transaction query expectation for %q has no rows configured", query)
-	}
-
-	return exp.rows.toSQLRows()
+	return tx.runQuery(query, args)
 }
 
 // QueryRow implements dbtypes.Tx.QueryRow.
 func (tx *TestTx) QueryRow(_ context.Context, query string, args ...any) dbtypes.Row {
-	tx.mu.Lock()
-	tx.queryLog = append(tx.queryLog, QueryCall{SQL: query, Args: args})
-	tx.mu.Unlock()
-
-	exp := tx.findQueryExpectation(query)
-	if exp == nil {
-		return &testRow{err: fmt.Errorf("unexpected query in transaction: %s (no matching expectation)", query)}
-	}
-
-	if exp.err != nil {
-		return &testRow{err: exp.err}
-	}
-
-	if exp.rows == nil {
-		return &testRow{err: fmt.Errorf("transaction query expectation for %q has no rows configured", query)}
-	}
-
-	// Return first row for QueryRow
-	if len(exp.rows.rows) == 0 {
-		return &testRow{err: sql.ErrNoRows}
-	}
-
-	// Normalize pointer values before returning
-	normalized, err := exp.rows.normalizeRow(0)
-	if err != nil {
-		return &testRow{err: fmt.Errorf("failed to normalize row: %w", err)}
-	}
-
-	return &testRow{values: normalized}
+	return tx.runQueryRow(query, args)
 }
 
 // Exec implements dbtypes.Tx.Exec.
 func (tx *TestTx) Exec(_ context.Context, query string, args ...any) (sql.Result, error) {
-	tx.mu.Lock()
-	tx.execLog = append(tx.execLog, ExecCall{SQL: query, Args: args})
-	tx.mu.Unlock()
-
-	exp := tx.findExecExpectation(query)
-	if exp == nil {
-		return nil, fmt.Errorf("unexpected exec in transaction: %s (no matching expectation)", query)
-	}
-
-	if exp.err != nil {
-		return nil, exp.err
-	}
-
-	return &testResult{rowsAffected: exp.rowsAffected}, nil
+	return tx.runExec(query, args)
 }
 
 // Prepare implements dbtypes.Tx.Prepare (rarely used in tests).
@@ -278,42 +184,10 @@ func (tx *TestTx) IsRolledBack() bool {
 
 // QueryLog returns all Query/QueryRow calls made within this transaction.
 func (tx *TestTx) QueryLog() []QueryCall {
-	tx.mu.RLock()
-	defer tx.mu.RUnlock()
-	return append([]QueryCall{}, tx.queryLog...)
+	return tx.queryCalls()
 }
 
 // ExecLog returns all Exec calls made within this transaction.
 func (tx *TestTx) ExecLog() []ExecCall {
-	tx.mu.RLock()
-	defer tx.mu.RUnlock()
-	return append([]ExecCall{}, tx.execLog...)
-}
-
-// findQueryExpectation searches for a matching query expectation in the transaction.
-// Uses the parent TestDB's matching strategy (strict or partial).
-func (tx *TestTx) findQueryExpectation(actualSQL string) *QueryExpectation {
-	tx.mu.RLock()
-	defer tx.mu.RUnlock()
-
-	for _, exp := range tx.queries {
-		if tx.parent.matchSQL(exp.sql, actualSQL) {
-			return exp
-		}
-	}
-	return nil
-}
-
-// findExecExpectation searches for a matching exec expectation in the transaction.
-// Uses the parent TestDB's matching strategy (strict or partial).
-func (tx *TestTx) findExecExpectation(actualSQL string) *ExecExpectation {
-	tx.mu.RLock()
-	defer tx.mu.RUnlock()
-
-	for _, exp := range tx.execs {
-		if tx.parent.matchSQL(exp.sql, actualSQL) {
-			return exp
-		}
-	}
-	return nil
+	return tx.execCalls()
 }

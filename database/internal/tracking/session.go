@@ -3,7 +3,6 @@ package tracking
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"time"
 
 	"github.com/gaborage/go-bricks/database/types"
@@ -54,28 +53,15 @@ func (s *Session) DatabaseType() string {
 	return s.sess.DatabaseType()
 }
 
-// sessionOpener is implemented by vendor connections (postgresql.Connection,
-// oracle.Connection) that support opening a dedicated Session. Declared as an
-// unexported capability check here because types.Interface itself does not
-// declare Session.
-type sessionOpener interface {
-	Session(ctx context.Context) (types.Session, error)
-}
-
 // Session acquires a dedicated, pinned session from the underlying connection
 // and wraps it with the same tracking Begin/BeginTx apply. The acquisition
 // itself is tracked as operation "SESSION", the way Begin/BeginTx track
 // "BEGIN"/"BEGIN_TX".
 func (tc *Connection) Session(ctx context.Context) (types.Session, error) {
-	opener, ok := tc.conn.(sessionOpener)
-	if !ok {
-		return nil, fmt.Errorf("database: %T does not support dedicated sessions", tc.conn)
-	}
-
 	trackingCtx := tc.trackingContext()
 
 	start := time.Now()
-	sess, err := opener.Session(ctx)
+	sess, err := tc.conn.Session(ctx)
 	TrackDBOperation(ctx, trackingCtx, "SESSION", nil, start, 0, err)
 	if err != nil {
 		return nil, err

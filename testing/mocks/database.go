@@ -81,6 +81,21 @@ func (m *MockDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (types.
 	return arg[types.Tx](arguments, "BeginTx", 0), arguments.Error(1)
 }
 
+// Session implements types.Interface: it hands back the types.Session the test
+// supplied, with no session double of its own.
+func (m *MockDatabase) Session(ctx context.Context) (types.Session, error) {
+	arguments := m.MethodCalled("Session", ctx)
+	if arguments.Get(0) == nil {
+		return nil, arguments.Error(1)
+	}
+	return arg[types.Session](arguments, "Session", 0), arguments.Error(1)
+}
+
+// ExpectSession sets up a session expectation with the provided session and error
+func (m *MockDatabase) ExpectSession(session types.Session, err error) *mock.Call {
+	return m.On("Session", mock.Anything).Return(session, err)
+}
+
 // Health implements types.Interface
 func (m *MockDatabase) Health(ctx context.Context) error {
 	arguments := m.MethodCalled("Health", ctx)

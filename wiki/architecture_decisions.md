@@ -1603,6 +1603,35 @@ See [migrations.md](migrations.md) `[C64.15]` and `[C65.8]`.
 
 ---
 
+### [ADR-112: The Session Door Is a Method on `database.Interface`, Not a Capability Assertion](adr_112_database_session_door.md)
+
+**Date:** 2026-09-13 | **Status:** Accepted | **Breaking:** `types.Interface` gains `Session(ctx) (Session, error)` — every implementation outside the framework stops compiling until it adds the method or embeds a framework connection
+
+Session-scoped state — `pg_advisory_lock`, `SET`, a temp table, `DBMS_SESSION` — belongs to one
+physical backend, and a pool is free to run the next statement on a different one, so the lock a
+service takes is released on a connection that never held it and both statements succeed. The
+preceding link added the handle (`types.Session` = Querier + Transactor + Close, a `*sql.Conn`
+implementation, tracking parity, vendor `Session(ctx)` doors) but left the door off
+`types.Interface`, so reaching it meant asserting to an anonymous
+`interface{ Session(ctx context.Context) (Session, error) }` — in consumer code and, through a
+private `sessionOpener`, inside the tracking wrapper too. The method is now declared on
+`Interface`: the assertion and the runtime "does not support dedicated sessions" error are
+deleted, and `deps.DB(ctx)` reaches the door directly. The surface stays deliberately small —
+no `Prepare`, `Health`, `Stats` or migration-table methods, none of which mean anything on one
+pinned connection. `database/testing` grows a strict `TestSession` (own query/exec/tx queues,
+`ExpectSession()` popped in declaration order, an unexpected `Session()` is an error) plus
+`AssertSessionClosed`, and `testing/mocks.MockDatabase.Session` hands back the test's own
+`types.Session` rather than a second mock type. The contract itself stays in the `types.Session`
+godoc, quoted verbatim in the ADR: a dead backend's FIRST error may be the driver's raw one, every
+subsequent call satisfies `errors.Is(err, sql.ErrConnDone)`, and a failure surfacing during
+`*sql.Rows` iteration is never translated. See [migrations.md](migrations.md) `[C65.5]`.
+
+**Key Benefits:** a compile-time door instead of a string-matched runtime assertion; one fewer
+duck-type inside the framework; and a handler that opens a session is testable with the
+framework's own fakes.
+
+---
+
 ### [ADR-109: Bearer Credential Verification Is a Top-Level RSA-Only `auth` Package](adr_109_bearer_credential_verification.md)
 
 **Date:** 2026-09-12 | **Status:** Accepted
@@ -2450,7 +2479,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-111) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-112) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

@@ -252,6 +252,16 @@ func AssertNoTransaction(t *testing.T, db *TestDB) {
 	}
 }
 
+// AssertSessionClosed asserts that the session was closed, releasing its pinned
+// connection back to the pool.
+func AssertSessionClosed(t *testing.T, sess *TestSession) {
+	t.Helper()
+	if !sess.IsClosed() {
+		t.Errorf("expected session to be closed, but it was not\nQueries: %d, Execs: %d",
+			len(sess.QueryLog()), len(sess.ExecLog()))
+	}
+}
+
 // formatQueryLog formats the query log for error messages.
 func formatQueryLog(log []QueryCall) string {
 	if len(log) == 0 {

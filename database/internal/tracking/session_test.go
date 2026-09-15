@@ -23,22 +23,6 @@ type stubSession = stubConnection
 
 var _ types.Session = (*stubSession)(nil)
 
-// stubSessionCapableConnection embeds stubConnection (connection_test.go) and
-// additionally implements sessionOpener, so tracking.Connection.Session can be
-// exercised end-to-end against a fake underlying types.Interface.
-type stubSessionCapableConnection struct {
-	*stubConnection
-	sessionResult types.Session
-	sessionErr    error
-}
-
-func (s *stubSessionCapableConnection) Session(context.Context) (types.Session, error) {
-	if s.sessionErr != nil {
-		return nil, s.sessionErr
-	}
-	return s.sessionResult, nil
-}
-
 // newTrackedStubSession wraps a stub session with default tracking settings and
 // no server metadata (TestSessionStatementCarriesServerAttributes covers the
 // server-attribute parity case, which must build through tracking.Connection).
@@ -89,9 +73,9 @@ func TestSessionStatementCarriesServerAttributes(t *testing.T) {
 	traceExporter, _, cleanup := setupTestObservabilityProviders(t)
 	defer cleanup()
 
-	underlying := &stubSessionCapableConnection{
-		stubConnection: &stubConnection{databaseTypeValue: "postgresql"},
-		sessionResult:  &stubSession{databaseTypeValue: "postgresql"},
+	underlying := &stubConnection{
+		databaseTypeValue: "postgresql",
+		sessionResult:     &stubSession{databaseTypeValue: "postgresql"},
 	}
 	conn := NewConnection(underlying, newRecordingLogger(), &config.DatabaseConfig{}).(*Connection)
 	conn.SetServerInfo("db.example.internal", 5432, "appdb.public")
@@ -176,9 +160,9 @@ func TestSessionBeginWrapsTransaction(t *testing.T) {
 	defer cleanup()
 
 	recLogger := newRecordingLogger()
-	underlying := &stubSessionCapableConnection{
-		stubConnection: &stubConnection{databaseTypeValue: "postgresql"},
-		sessionResult:  &stubSession{databaseTypeValue: "postgresql"},
+	underlying := &stubConnection{
+		databaseTypeValue: "postgresql",
+		sessionResult:     &stubSession{databaseTypeValue: "postgresql"},
 	}
 	conn := NewConnection(underlying, recLogger, &config.DatabaseConfig{}).(*Connection)
 	conn.SetServerInfo("db.example.internal", 5432, "appdb.public")
@@ -287,9 +271,9 @@ func TestConnectionSessionTracksAcquisitionAsSessionOp(t *testing.T) {
 	defer cleanup()
 
 	recLogger := newRecordingLogger()
-	underlying := &stubSessionCapableConnection{
-		stubConnection: &stubConnection{databaseTypeValue: "postgresql"},
-		sessionResult:  &stubSession{databaseTypeValue: "postgresql"},
+	underlying := &stubConnection{
+		databaseTypeValue: "postgresql",
+		sessionResult:     &stubSession{databaseTypeValue: "postgresql"},
 	}
 	conn := NewConnection(underlying, recLogger, &config.DatabaseConfig{}).(*Connection)
 
@@ -307,26 +291,14 @@ func TestConnectionSessionTracksAcquisitionAsSessionOp(t *testing.T) {
 func TestConnectionSessionPropagatesUnderlyingError(t *testing.T) {
 	recLogger := newRecordingLogger()
 	wantErr := errors.New("acquire failed")
-	underlying := &stubSessionCapableConnection{
-		stubConnection: &stubConnection{databaseTypeValue: "postgresql"},
-		sessionErr:     wantErr,
+	underlying := &stubConnection{
+		databaseTypeValue: "postgresql",
+		sessionErr:        wantErr,
 	}
 	conn := NewConnection(underlying, recLogger, &config.DatabaseConfig{}).(*Connection)
 
 	sess, err := conn.Session(context.Background())
 	require.ErrorIs(t, err, wantErr)
-	if sess != nil {
-		t.Fatalf("typed-nil session returned: %T", sess)
-	}
-}
-
-func TestConnectionSessionErrorsWhenUnderlyingDoesNotSupportSessions(t *testing.T) {
-	recLogger := newRecordingLogger()
-	underlying := &stubConnection{databaseTypeValue: "postgresql"}
-	conn := NewConnection(underlying, recLogger, &config.DatabaseConfig{}).(*Connection)
-
-	sess, err := conn.Session(context.Background())
-	require.Error(t, err)
 	if sess != nil {
 		t.Fatalf("typed-nil session returned: %T", sess)
 	}
