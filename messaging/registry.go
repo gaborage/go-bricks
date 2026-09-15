@@ -25,9 +25,9 @@ import (
 // fast test iteration.
 const defaultConsumerResubscribeDelay = 5 * time.Second
 
-// consumerResubscribeWarnAfter is the consecutive failed re-subscribe attempt
-// from which failures log at WARN instead of Debug.
-const consumerResubscribeWarnAfter = 5
+// consumerResubscribeWarnFromAttempt is the first consecutive failed
+// re-subscribe attempt logged at WARN instead of Debug.
+const consumerResubscribeWarnFromAttempt = 5
 
 // RegistryInterface defines the contract for messaging infrastructure management.
 // This interface allows for easy mocking and testing of messaging infrastructure.
@@ -646,7 +646,7 @@ func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaratio
 		// re-subscribe attempts instead of having all consumers retry in lockstep.
 		backoff := computeBackoff(r.resubscribeDelay, defaultReconnectMaxDelay, attempt)
 		var event logger.LogEvent
-		if attempt < consumerResubscribeWarnAfter {
+		if attempt < consumerResubscribeWarnFromAttempt {
 			event = log.Debug()
 		} else {
 			event = log.Warn()

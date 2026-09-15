@@ -2383,11 +2383,11 @@ func TestRegistryConsumerSupervisorStopsOnContextCancel(t *testing.T) {
 		"supervisor kept re-subscribing after StopConsumers")
 }
 
-// TestRegistryConsumerResubscribeEscalatesToWarnAfterFiveFailures verifies a
+// TestRegistryConsumerResubscribeEscalatesToWarnFromFifthFailure verifies a
 // permanently failing re-subscribe becomes visible: the first four consecutive
 // failures stay at Debug, the fifth logs at WARN, and every failure carries the
 // broker's reply code and text.
-func TestRegistryConsumerResubscribeEscalatesToWarnAfterFiveFailures(t *testing.T) {
+func TestRegistryConsumerResubscribeEscalatesToWarnFromFifthFailure(t *testing.T) {
 	const (
 		failedMsg       = "Consumer re-subscribe attempt failed, will retry"
 		resubscribedMsg = "Consumer re-subscribed after delivery channel closed"
@@ -2433,13 +2433,14 @@ func TestRegistryConsumerResubscribeEscalatesToWarnAfterFiveFailures(t *testing.
 			continue
 		}
 		levels = append(levels, ln.Level)
-		assert.Equal(t, []string{"404"}, ln.Values("amqp_reply_code"))
+		assert.Equal(t, []string{strconv.Itoa(notFound.Code)}, ln.Values("amqp_reply_code"))
 		assert.Equal(t, []string{notFound.Reason}, ln.Values("amqp_reply_text"))
 	}
-	assert.Equal(t, []string{"debug", "debug", "debug", "debug", "warn"}, levels)
+	debug, warn := gobrickslogger.LevelDebug, gobrickslogger.LevelWarn
+	assert.Equal(t, []string{debug, debug, debug, debug, warn}, levels)
 
 	success := log.Line(t, resubscribedMsg)
-	assert.Equal(t, "info", success.Level)
+	assert.Equal(t, gobrickslogger.LevelInfo, success.Level)
 	assert.Equal(t, []string{"6"}, success.Values("attempt"))
 }
 
@@ -2765,14 +2766,17 @@ func (l *recordingLogger) WithFields(f map[string]any) gobrickslogger.Logger {
 	return &recordingLogger{mu: l.mu, lines: l.lines, fields: merged, debugDisabled: l.debugDisabled}
 }
 
-func (l *recordingLogger) Info() gobrickslogger.LogEvent  { return l.event("info") }
-func (l *recordingLogger) Error() gobrickslogger.LogEvent { return l.event("error") }
-func (l *recordingLogger) Warn() gobrickslogger.LogEvent  { return l.event("warn") }
-func (l *recordingLogger) Fatal() gobrickslogger.LogEvent { return l.event("fatal") }
+func (l *recordingLogger) Info() gobrickslogger.LogEvent { return l.event(gobrickslogger.LevelInfo) }
+
+func (l *recordingLogger) Error() gobrickslogger.LogEvent { return l.event(gobrickslogger.LevelError) }
+
+func (l *recordingLogger) Warn() gobrickslogger.LogEvent { return l.event(gobrickslogger.LevelWarn) }
+
+func (l *recordingLogger) Fatal() gobrickslogger.LogEvent { return l.event(gobrickslogger.LevelFatal) }
 
 // Debug additionally tracks the event it hands out in lastDebug (see field doc).
 func (l *recordingLogger) Debug() gobrickslogger.LogEvent {
-	e := l.event("debug")
+	e := l.event(gobrickslogger.LevelDebug)
 	l.lastDebug = e
 	return e
 }
@@ -2780,7 +2784,8 @@ func (l *recordingLogger) Debug() gobrickslogger.LogEvent {
 func (l *recordingLogger) event(level string) *recordingEvent {
 	pairs := make([][2]string, len(l.fields), len(l.fields)+8)
 	copy(pairs, l.fields)
-	return &recordingEvent{l: l, level: level, pairs: pairs, enabled: level != "debug" || !l.debugDisabled}
+	enabled := level != gobrickslogger.LevelDebug || !l.debugDisabled
+	return &recordingEvent{l: l, level: level, pairs: pairs, enabled: enabled}
 }
 
 type recordingEvent struct {
