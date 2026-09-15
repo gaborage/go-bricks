@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2182,6 +2183,10 @@ type resubscribingMockClient struct {
 	calls        int
 	optsSeen     []ConsumeOptions
 	exhaustedErr error
+	// failing simulates a broker outage the test controls at runtime: while set,
+	// every ConsumeFromQueue fails without consuming the script, so a test can
+	// observe an unrecovered consumer for as long as it needs to.
+	failing atomic.Bool
 }
 
 var _ AMQPClient = (*resubscribingMockClient)(nil)
@@ -2192,6 +2197,9 @@ func (m *resubscribingMockClient) ConsumeFromQueue(_ context.Context, opts Consu
 	idx := m.calls
 	m.calls++
 	m.optsSeen = append(m.optsSeen, opts)
+	if m.failing.Load() {
+		return nil, errNotConnected
+	}
 	if idx < len(m.results) {
 		return m.results[idx].ch, m.results[idx].err
 	}
@@ -2420,6 +2428,213 @@ func TestRegistryConsumerResubscribeEscalatesToWarnFromFifthFailure(t *testing.T
 	success := log.Line(t, resubscribedMsg)
 	assert.Equal(t, gobrickslogger.LevelInfo, success.Level)
 	assert.Equal(t, []string{"6"}, success.Values("attempt"))
+}
+
+// ===== Per-Consumer Subscription State Tests =====
+
+// TestRegistryConsumerStatesTrackSubscriptionAndResubscribe pins the per-consumer
+// snapshot across a flap: zero-valued before startup, subscribed once the first
+// subscription is established, and counted plus timestamped after the supervisor
+// re-subscribes onto a fresh delivery channel.
+func TestRegistryConsumerStatesTrackSubscriptionAndResubscribe(t *testing.T) {
+	ch1 := make(chan amqp.Delivery)
+	ch2 := make(chan amqp.Delivery, 1) // buffered so the post-reconnect send never blocks
+	client := &resubscribingMockClient{
+		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
+		results:              []consumeResult{{ch: ch1}, {ch: ch2}},
+	}
+	registry := NewRegistry(client, &stubLogger{})
+	registry.resubscribeDelay = 5 * time.Millisecond
+
+	handler := &countingTestHandler{}
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Workers:   1,
+		Handler:   handler,
+	})
+
+	before := registry.ConsumerStates()
+	require.Len(t, before, 1)
+	assert.Equal(t, testQueueName, before[0].Queue)
+	assert.False(t, before[0].Subscribed, "a declared consumer is unsubscribed until StartConsumers")
+	assert.Zero(t, before[0].Resubscribes)
+	assert.True(t, before[0].LastResubscribeAt.IsZero())
+	assert.Zero(t, before[0].FailStreak)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, registry.StartConsumers(ctx))
+
+	started := registry.ConsumerStates()
+	require.Len(t, started, 1)
+	assert.True(t, started[0].Subscribed, "the first subscription is established synchronously")
+	assert.Zero(t, started[0].Resubscribes, "the first subscription is not a re-subscribe")
+	assert.True(t, started[0].LastResubscribeAt.IsZero())
+
+	// Simulate an AMQP flap: the broker closes the active delivery channel. The
+	// ack proves the supervisor is live on ch2, so the state write has landed.
+	close(ch1)
+	deliverAndAwaitAck(t, ch2, handler)
+
+	after := registry.ConsumerStates()
+	require.Len(t, after, 1)
+	assert.True(t, after[0].Subscribed)
+	assert.Equal(t, uint64(1), after[0].Resubscribes)
+	assert.False(t, after[0].LastResubscribeAt.IsZero(), "a successful re-subscribe stamps the time")
+	assert.Zero(t, after[0].FailStreak)
+
+	registry.StopConsumers()
+}
+
+// TestConsumerStateGivenUp pins the predicate the readiness probe keys on: a
+// consumer counts as abandoned only while it is unsubscribed AND its consecutive
+// failures have reached the same threshold that escalates the re-subscribe log.
+func TestConsumerStateGivenUp(t *testing.T) {
+	tests := []struct {
+		name  string
+		state ConsumerState
+		want  bool
+	}{
+		{"never_started", ConsumerState{}, false},
+		{"unsubscribed_below_threshold", ConsumerState{FailStreak: consumerResubscribeWarnFromAttempt - 1}, false},
+		{"unsubscribed_at_threshold", ConsumerState{FailStreak: consumerResubscribeWarnFromAttempt}, true},
+		{"unsubscribed_past_threshold", ConsumerState{FailStreak: consumerResubscribeWarnFromAttempt + 1}, true},
+		{"subscribed_with_stale_streak", ConsumerState{Subscribed: true, FailStreak: consumerResubscribeWarnFromAttempt + 1}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.state.GivenUp())
+		})
+	}
+}
+
+// TestRegistryConsumerStatesCountFailedResubscribeAttempts drives a consumer
+// through a broker outage: each failed re-subscribe attempt lengthens the streak
+// until the snapshot reports GivenUp, and a success clears it.
+func TestRegistryConsumerStatesCountFailedResubscribeAttempts(t *testing.T) {
+	ch1 := make(chan amqp.Delivery)
+	client := &resubscribingMockClient{
+		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
+		results:              []consumeResult{{ch: ch1}},
+	}
+	registry := NewRegistry(client, &stubLogger{})
+	registry.resubscribeDelay = time.Millisecond
+
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Workers:   1,
+		Handler:   &countingTestHandler{},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, registry.StartConsumers(ctx))
+
+	client.failing.Store(true) // the outage lasts until the test lifts it
+	close(ch1)                 // flap into an outage the supervisor cannot recover from
+
+	require.Eventually(t, func() bool {
+		state := registry.ConsumerStates()[0]
+		return !state.Subscribed && state.FailStreak >= consumerResubscribeWarnFromAttempt
+	}, 5*time.Second, 2*time.Millisecond, "failure streak did not reach the threshold")
+	assert.True(t, registry.ConsumerStates()[0].GivenUp())
+
+	client.failing.Store(false) // broker back
+
+	require.Eventually(t, func() bool {
+		return registry.ConsumerStates()[0].Subscribed
+	}, 5*time.Second, 2*time.Millisecond, "consumer did not re-subscribe once the outage lifted")
+	recovered := registry.ConsumerStates()[0]
+	assert.Zero(t, recovered.FailStreak, "a successful re-subscribe resets the streak")
+	assert.False(t, recovered.GivenUp())
+	assert.Equal(t, uint64(1), recovered.Resubscribes)
+
+	registry.StopConsumers()
+
+	stopped := registry.ConsumerStates()[0]
+	assert.False(t, stopped.Subscribed)
+	assert.Equal(t, uint64(1), stopped.Resubscribes, "cumulative counters survive a stop")
+	assert.False(t, stopped.LastResubscribeAt.IsZero(), "the last re-subscribe time survives a stop")
+}
+
+// TestRegistryConsumerStatesMaskGivenUpAfterStopConsumers pins that shutdown is
+// not an outage: a stopped registry has no supervisor left to re-subscribe, so
+// its consumers report unsubscribed with no streak rather than abandoned.
+func TestRegistryConsumerStatesMaskGivenUpAfterStopConsumers(t *testing.T) {
+	ch1 := make(chan amqp.Delivery)
+	client := &resubscribingMockClient{
+		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
+		results:              []consumeResult{{ch: ch1}},
+	}
+	registry := NewRegistry(client, &stubLogger{})
+	registry.resubscribeDelay = time.Millisecond
+
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Workers:   1,
+		Handler:   &countingTestHandler{},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, registry.StartConsumers(ctx))
+
+	client.failing.Store(true)
+	close(ch1)
+	require.Eventually(t, func() bool {
+		return registry.ConsumerStates()[0].GivenUp()
+	}, 5*time.Second, 2*time.Millisecond, "failure streak did not reach the threshold")
+
+	registry.StopConsumers()
+
+	stopped := registry.ConsumerStates()[0]
+	assert.False(t, stopped.Subscribed)
+	assert.Zero(t, stopped.FailStreak)
+	assert.False(t, stopped.GivenUp(), "a stopped registry has no consumer that gave up")
+}
+
+// TestRegistryConsumerStatesCoverEveryDeclaredConsumerInOrder pins the snapshot's
+// shape: one entry per declared consumer, in declaration order, including the
+// documentation-only consumer that has no handler and therefore never subscribes.
+func TestRegistryConsumerStatesCoverEveryDeclaredConsumerInOrder(t *testing.T) {
+	client := &resubscribingMockClient{simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true}}
+	registry := NewRegistry(client, &stubLogger{})
+
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Workers:   1,
+		Handler:   &countingTestHandler{},
+	})
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testQueue1Name,
+		EventType: testEventType,
+		Workers:   1,
+	})
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testQueue2Name,
+		EventType: testEventType,
+		Workers:   1,
+		Handler:   &countingTestHandler{},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, registry.StartConsumers(ctx))
+	defer registry.StopConsumers()
+
+	states := registry.ConsumerStates()
+	require.Len(t, states, 3)
+	assert.Equal(t, []string{testQueueName, testQueue1Name, testQueue2Name},
+		[]string{states[0].Queue, states[1].Queue, states[2].Queue})
+	assert.True(t, states[0].Subscribed)
+	assert.False(t, states[1].Subscribed, "a consumer without a handler never subscribes")
+	assert.False(t, states[1].GivenUp(), "a documentation-only consumer never reads as abandoned")
+	assert.True(t, states[2].Subscribed)
 }
 
 // ===== Topology Redeclare After Reconnect Tests =====

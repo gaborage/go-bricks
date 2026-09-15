@@ -530,23 +530,55 @@ func (m *Manager) Close() error {
 	return nil
 }
 
+// ConsumerStates returns the subscription state of every consumer declared on every
+// tenant key that holds a consumer registry. Order is declaration order within a key;
+// across keys it is map order.
+func (m *Manager) ConsumerStates() []ConsumerState {
+	m.consMu.RLock()
+	defer m.consMu.RUnlock()
+
+	var states []ConsumerState
+	for _, entry := range m.consumers {
+		if entry.registry == nil {
+			continue
+		}
+		states = append(states, entry.registry.ConsumerStates()...)
+	}
+	return states
+}
+
 // Stats returns statistics about the messaging manager. Publisher counters come from the
-// pool; active_consumers comes from the directly-managed consumer map.
+// pool; the consumer counters come from the directly-managed consumer map and the
+// per-consumer subscription state its registries keep. consumer_registries counts tenant
+// keys, not consumers: a single-tenant service with forty consumers reports one.
 func (m *Manager) Stats() map[string]any {
 	m.consMu.RLock()
-	consCount := len(m.consumers)
+	registryCount := len(m.consumers)
 	m.consMu.RUnlock()
+
+	states := m.ConsumerStates()
+	subscribed := 0
+	var resubscribes uint64
+	for _, state := range states {
+		if state.Subscribed {
+			subscribed++
+		}
+		resubscribes += state.Resubscribes
+	}
 
 	// A zero-value Manager (not built via NewMessagingManager, e.g. the lightweight stand-in
 	// the debug/health endpoint uses) reports zero publisher stats rather than panicking.
 	stats := map[string]any{
-		"active_publishers": 0,
-		"max_publishers":    0,
-		"active_consumers":  consCount,
-		"idle_ttl_seconds":  0,
-		"evictions":         0,
-		"idle_cleanups":     0,
-		"errors":            0,
+		"active_publishers":     0,
+		"max_publishers":        0,
+		"consumer_registries":   registryCount,
+		"declared_consumers":    len(states),
+		"subscribed_consumers":  subscribed,
+		"consumer_resubscribes": resubscribes,
+		"idle_ttl_seconds":      0,
+		"evictions":             0,
+		"idle_cleanups":         0,
+		"errors":                0,
 	}
 
 	if m.pubPool != nil {

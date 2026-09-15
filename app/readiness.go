@@ -156,9 +156,9 @@ const (
 	statsActiveConnectionsKey = "active_connections"
 	statsMaxConnectionsKey    = "max_connections"
 	// Messaging: statsActivePublishersKey is used once below, like its neighbors
-	// "max_publishers" and "active_consumers" (left inlined — neither appears anywhere else
-	// in the package), but "active_publishers" also recurs across this kind's test fixtures
-	// and assertions, so goconst requires the symbol.
+	// "max_publishers" and the four consumer counters (left inlined — none appears anywhere
+	// else in the package), but "active_publishers" also recurs across this kind's test
+	// fixtures and assertions, so goconst requires the symbol.
 	statsActivePublishersKey = "active_publishers"
 	// Cache.
 	statsActiveCachesKey = "active_caches"
@@ -203,7 +203,8 @@ var (
 		statsRemovalsKey,
 	}
 	messagingPublicStats = []string{
-		statsActivePublishersKey, "max_publishers", "active_consumers", statsIdleTTLSecondsKey,
+		statsActivePublishersKey, "max_publishers", "consumer_registries", "declared_consumers",
+		"subscribed_consumers", "consumer_resubscribes", statsIdleTTLSecondsKey,
 		statsEvictionsKey, statsIdleCleanupsKey, statsErrorsKey,
 	}
 	cachePublicStats = []string{

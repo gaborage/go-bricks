@@ -676,8 +676,8 @@ func TestMessagingManagerCloseClientOnRollback(t *testing.T) {
 }
 
 // TestMessagingManagerStats drives Stats() through the public surface and pins every key,
-// including active_consumers (from the consumer map) and the evictions counter (surfaced from
-// the pool after an LRU eviction). The per-pool counter semantics are exercised directly in
+// including consumer_registries (from the consumer map) and the evictions counter (surfaced
+// from the pool after an LRU eviction). The per-pool counter semantics are exercised directly in
 // internal/resourcepool; this pins the manager's map-key mapping.
 func TestMessagingManagerStats(t *testing.T) {
 	ctx := context.Background()
@@ -696,7 +696,10 @@ func TestMessagingManagerStats(t *testing.T) {
 	stats := manager.Stats()
 	assert.Equal(t, 0, stats["active_publishers"])
 	assert.Equal(t, 1, stats["max_publishers"])
-	assert.Equal(t, 0, stats["active_consumers"])
+	assert.Equal(t, 0, stats["consumer_registries"])
+	assert.Equal(t, 0, stats["declared_consumers"])
+	assert.Equal(t, 0, stats["subscribed_consumers"])
+	assert.Equal(t, uint64(0), stats["consumer_resubscribes"])
 	assert.Equal(t, 90, stats["idle_ttl_seconds"])
 	assert.Equal(t, 0, stats["evictions"])
 	assert.Equal(t, 0, stats["idle_cleanups"])
@@ -883,7 +886,10 @@ func TestMessagingManagerZeroValueMethodsAreSafe(t *testing.T) {
 	stats := m.Stats()
 	assert.Equal(t, 0, stats["active_publishers"])
 	assert.Equal(t, 0, stats["max_publishers"])
-	assert.Equal(t, 0, stats["active_consumers"])
+	assert.Equal(t, 0, stats["consumer_registries"])
+	assert.Equal(t, 0, stats["declared_consumers"])
+	assert.Equal(t, 0, stats["subscribed_consumers"])
+	assert.Equal(t, uint64(0), stats["consumer_resubscribes"])
 	assert.Equal(t, 0, stats["idle_ttl_seconds"])
 	assert.Equal(t, 0, stats["evictions"])
 	assert.Equal(t, 0, stats["idle_cleanups"])
@@ -1537,4 +1543,41 @@ func TestMessagingManagerEnsureConsumersWarmHashLosesToClosedGuard(t *testing.T)
 // in-package client satisfies.
 func rawPublish(ctx context.Context, client AMQPClient, opts publishOptions, data []byte) error {
 	return publishThroughDoor(ctx, client, opts, data)
+}
+
+// TestMessagingManagerStatsCountsConsumersAcrossRegistries pins the consumer-side
+// counters: consumer_registries counts the tenant keys holding a registry,
+// declared_consumers counts the consumers those registries declare, and
+// subscribed_consumers counts the ones with a live subscription.
+func TestMessagingManagerStatsCountsConsumersAcrossRegistries(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New("error", false)
+
+	client := &stubAMQPClient{}
+	factory := func(string, logger.Logger) AMQPClient { return client }
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		log,
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		factory,
+	)
+	defer func() { _ = manager.Close() }() // stop supervisor goroutines
+
+	decls := NewDeclarations()
+	for _, queue := range []string{testQueue, testQueue1Name, testQueue2Name} {
+		decls.RegisterQueue(&QueueDeclaration{Name: queue})
+		decls.RegisterConsumer(&ConsumerDeclaration{
+			Queue:     queue,
+			Consumer:  testConsumer,
+			EventType: testEventType,
+			Handler:   &countingTestHandler{},
+		})
+	}
+	require.NoError(t, manager.EnsureConsumers(ctx, testTenantID, decls))
+
+	stats := manager.Stats()
+	assert.Equal(t, 1, stats["consumer_registries"], "one tenant key holds a consumer registry")
+	assert.Equal(t, 3, stats["declared_consumers"])
+	assert.Equal(t, 3, stats["subscribed_consumers"])
+	assert.Equal(t, uint64(0), stats["consumer_resubscribes"])
 }
