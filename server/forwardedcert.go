@@ -230,42 +230,32 @@ func forwardedClientCertMiddlewareEcho(cfg config.ForwardedClientCertConfig, ski
 	}
 }
 
-// RequireForwardedClientCert returns the middleware that refuses a request
-// carrying no ALB-forwarded client-certificate identity, so one route family can
-// require it while server.forwardedclientcert.require stays off.
+// RequireForwardedClientCert returns the middleware that refuses (401) a request
+// without an ALB-forwarded client-certificate identity, so one route family can
+// require it while server.forwardedclientcert.require stays off. Attach it per
+// route group; it exempts nothing, probes included.
 //
-// It is attached PER ROUTE GROUP — RouteRegistrar.Group(prefix,
-// server.RequireForwardedClientCert(l)) or Use. There is no path allowlist and no
-// probe exemption: a route that must stay open is registered outside the guarded
-// group, the same stance as auth.Middleware.
-//
-// It parses the X-Amzn-Mtls-Clientcert-* headers itself rather than reading
-// ForwardedClientCertFromContext, so it holds under any
-// server.forwardedclientcert.enabled setting: with the engine-level middleware
-// unwired, an absent identity cannot be told from one never parsed. Like the
-// global require mode, it refuses with 401 when neither -Subject nor
-// -Serial-Number is present or when any of the four headers is duplicated, and
-// passes a -Leaf that fails to decode. It attaches the identity, and WARNs a lost
-// -Leaf, only when the engine-level middleware has not already done both.
-//
-// It performs identification, not authorization, and never establishes where
-// the headers came from; see ForwardedClientCert for the trust model. WARNs go
-// to l, or to the standard library log package when l is nil.
+// It re-parses the headers itself, since with enabled: false an absent identity
+// cannot be told from one never parsed, and refuses on the global require mode's
+// two conditions. WARNs go to l, or to the standard library log package when l
+// is nil. See wiki/forwarded_client_cert.md.
 func RequireForwardedClientCert(l logger.Logger) MiddlewareFunc {
 	return func(c HandlerContext, next func() error) error {
-		req := c.Request()
+		ec := c.echoContext()
+		req := ec.Request()
 		identity, err := parseForwardedClientCert(req.Header.Values)
 		switch {
 		case errors.Is(err, errDuplicateForwardedHeader):
-			logForwardedClientCertDuplicateWarning(l, c.echoContext(), err)
+			logForwardedClientCertDuplicateWarning(l, ec, err)
 			return NewUnauthorizedError(msgForwardedClientCertRequired)
 		case errors.Is(err, errNoForwardedCert):
-			logForwardedClientCertRejection(l, c.echoContext())
+			logForwardedClientCertRejection(l, ec)
 			return NewUnauthorizedError(msgForwardedClientCertRequired)
 		}
+		// Skipped when the engine-level middleware already attached it and WARNed a lost -Leaf.
 		if _, attached := ForwardedClientCertFromContext(req.Context()); !attached {
 			if err != nil {
-				logForwardedClientCertLeafWarning(l, c.echoContext(), err, firstHeaderValue(req.Header.Values(headerClientCertLeaf)))
+				logForwardedClientCertLeafWarning(l, ec, err, firstHeaderValue(req.Header.Values(headerClientCertLeaf)))
 			}
 			c.SetRequestContext(withForwardedClientCert(req.Context(), identity))
 		}
