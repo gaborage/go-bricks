@@ -426,11 +426,13 @@ case <-time.After(2 * time.Second):
 }
 base := "http://" + srv.BoundAddr().String()
 // ... drive requests against base ...
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
 require.NoError(t, srv.Shutdown(ctx))
 ```
 
 Both methods live on `*server.Server`, not on `app.ServerRunner`; code holding a `ServerRunner`
-type-asserts to `interface{ BoundAddr() net.Addr }`.
+type-asserts to `interface{ ReadyCh() <-chan struct{}; BoundAddr() net.Addr }`.
 
 ## Integration Testing with Testcontainers
 
