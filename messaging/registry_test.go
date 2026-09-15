@@ -2452,10 +2452,7 @@ type reconnectingMockClient struct {
 	subscriptions []chan amqp.Delivery
 }
 
-var (
-	_ AMQPClient          = (*reconnectingMockClient)(nil)
-	_ channelGenerationer = (*reconnectingMockClient)(nil)
-)
+var _ channelGenerationer = (*reconnectingMockClient)(nil)
 
 func newReconnectingMockClient() *reconnectingMockClient {
 	return &reconnectingMockClient{
@@ -2650,7 +2647,7 @@ func TestRegistryRedeclareDoesNotRetryFailedPassOnSameChannel(t *testing.T) {
 
 	client.locked(func() {
 		client.generation++
-		client.declareErrs["exchange:"+testExchangeName] = []error{errNotConnected}
+		client.declareErrs["exchange:"+testExchangeName] = []error{errors.New("invalid args table")}
 		client.consumeErrs = []error{errNotConnected, errNotConnected}
 	})
 	close(first)
