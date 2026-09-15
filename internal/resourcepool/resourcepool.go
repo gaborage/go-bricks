@@ -59,7 +59,8 @@ type PoolStats struct {
 	MaxSize      int           // Maximum allowed active entries (0 = unlimited)
 	TotalCreated int           // Total entries created since the pool started
 	Evictions    int           // Total evictions due to LRU policy
-	IdleCleanups int           // Total removals due to idle timeout
+	Removals     int           // Total explicit Remove calls that detached an entry, leased or not
+	IdleCleanups int           // Total cleanups due to idle timeout
 	Errors       int           // Total create failures (a recovered create panic included) and tracked close failures
 	IdleTTL      time.Duration // Idle timeout duration
 }
@@ -117,6 +118,7 @@ type Pool[V any] struct {
 	// Statistics (guarded by mu).
 	totalCreated int
 	evictions    int
+	removals     int
 	idleCleanups int
 
 	// errors counts create failures and tracked close failures. Atomic so incErrors and
@@ -463,11 +465,15 @@ func (p *Pool[V]) evictIfNeeded() *entry[V] {
 // Remove detaches the entry for key from the pool. If it exists and is unleased, it marks the
 // entry closed and returns (value, true) for the caller to close OUTSIDE the pool. If it is
 // still leased, the close is deferred to the final lease release and Remove returns
-// (zero, false). A missing key returns (zero, false).
+// (zero, false). A missing key returns (zero, false). Every Remove that detaches an entry, leased
+// or not, counts toward PoolStats.Removals.
 func (p *Pool[V]) Remove(key string) (v V, shouldClose bool) {
 	var zero V
 	p.mu.Lock()
 	e := p.removeEntryLocked(key)
+	if e != nil {
+		p.removals++
+	}
 	shouldClose = e != nil && e.refs <= 0 && !e.closed
 	if shouldClose {
 		e.closed = true
@@ -686,6 +692,7 @@ func (p *Pool[V]) Stats() PoolStats {
 		MaxSize:      p.maxSize,
 		TotalCreated: p.totalCreated,
 		Evictions:    p.evictions,
+		Removals:     p.removals,
 		IdleCleanups: p.idleCleanups,
 		Errors:       int(p.errors.Load()),
 		IdleTTL:      p.idleTTL,

@@ -989,6 +989,36 @@ func TestPoolRemoveNonexistent(t *testing.T) {
 	assert.Nil(t, got)
 }
 
+// TestPoolRemoveCountsRemovals pins that Removals counts every Remove that detached an entry,
+// leased or not, and nothing else: a missing key adds nothing and Evictions stays LRU-only.
+func TestPoolRemoveCountsRemovals(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(5, 0, tr.closer)
+	defer p.Close()
+	ctx := context.Background()
+
+	_, relOne, err := p.GetOrCreate(ctx, keyOne, keyedCreate(keyOne))
+	require.NoError(t, err)
+	relOne()
+	_, relTwo, err := p.GetOrCreate(ctx, keyTwo, keyedCreate(keyTwo))
+	require.NoError(t, err)
+	defer relTwo()
+
+	_, shouldClose := p.Remove(keyOne)
+	require.True(t, shouldClose)
+	assert.Equal(t, 1, p.Stats().Removals, "an unleased Remove counts")
+
+	_, shouldClose = p.Remove(keyTwo)
+	require.False(t, shouldClose)
+	assert.Equal(t, 2, p.Stats().Removals, "a leased Remove counts even though its close is deferred")
+
+	p.Remove("missing")
+	p.Remove(keyOne)
+	st := p.Stats()
+	assert.Equal(t, 2, st.Removals, "a Remove that detached nothing does not count")
+	assert.Equal(t, 0, st.Evictions, "Remove is not an LRU eviction")
+}
+
 // TestPoolLRUEvictionClosesOldest verifies LRU ordering and eviction of an unleased victim.
 func TestPoolLRUEvictionClosesOldest(t *testing.T) {
 	tr := newCloseTracker()
@@ -1432,6 +1462,7 @@ func TestPoolStatsSnapshot(t *testing.T) {
 	assert.Equal(t, 2, st.Size)
 	assert.Equal(t, 3, st.TotalCreated)
 	assert.Equal(t, 1, st.Evictions)
+	assert.Equal(t, 0, st.Removals, "an LRU eviction is not a Remove")
 }
 
 // TestPoolSnapshotReportsLiveEntries pins the observability-only Snapshot accessor: one

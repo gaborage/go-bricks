@@ -26,6 +26,7 @@ type ManagerStats struct {
 	ActiveCaches int   // Current number of active cache instances
 	TotalCreated int   // Total caches created since manager start
 	Evictions    int   // Total evictions due to LRU policy
+	Removals     int   // Total explicit Remove calls that detached an instance, leased or not
 	IdleCleanups int   // Total cleanups due to idle timeout
 	Errors       int   // Total initialization and close errors
 	MaxSize      int   // Maximum allowed active caches
@@ -240,6 +241,7 @@ func (m *CacheManager) Stats() ManagerStats {
 		ActiveCaches: ps.Size,
 		TotalCreated: ps.TotalCreated,
 		Evictions:    ps.Evictions,
+		Removals:     ps.Removals,
 		IdleCleanups: ps.IdleCleanups,
 		Errors:       ps.Errors,
 		MaxSize:      ps.MaxSize,

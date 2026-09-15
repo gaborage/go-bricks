@@ -869,6 +869,34 @@ func TestCacheManagerStats(t *testing.T) {
 	assert.Equal(t, 1, stats.Evictions)
 }
 
+// TestCacheManagerStatsCountsRemovals pins that ManagerStats.Removals counts every Remove that
+// detached an instance, leased or not, and that a missing key adds nothing.
+func TestCacheManagerStatsCountsRemovals(t *testing.T) {
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
+		return newMockCache(key), nil
+	}
+
+	mgr, err := cache.NewCacheManager(cache.DefaultManagerConfig(), connector)
+	require.NoError(t, err)
+	defer mgr.Close()
+
+	ctx := context.Background()
+	_, relOne, err := mgr.Get(ctx, tenantOne)
+	require.NoError(t, err)
+	relOne()
+	_, relTwo, err := mgr.Get(ctx, tenantTwo)
+	require.NoError(t, err)
+	defer relTwo()
+
+	require.NoError(t, mgr.Remove(tenantOne))
+	require.NoError(t, mgr.Remove(tenantTwo))
+	require.NoError(t, mgr.Remove("nonexistent"))
+
+	stats := mgr.Stats()
+	assert.Equal(t, 2, stats.Removals)
+	assert.Equal(t, 0, stats.Evictions)
+}
+
 // TestCacheManagerThreadSafety tests concurrent access to manager.
 func TestCacheManagerThreadSafety(t *testing.T) {
 	connector := func(_ context.Context, key string) (cache.Cache, error) {

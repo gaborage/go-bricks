@@ -218,6 +218,7 @@ func (m *DbManager) Stats() map[string]any {
 			"max_connections":    0,
 			"idle_ttl_seconds":   0,
 			"errors":             0,
+			"removals":           0,
 			"connections":        []map[string]any{},
 		}
 	}
@@ -230,7 +231,8 @@ func (m *DbManager) Stats() map[string]any {
 		"idle_ttl_seconds":   int(ps.IdleTTL.Seconds()),
 		// Pool create/close failures (including a deferred close on a handle still borrowed
 		// when Close ran, C581.3) — otherwise unobservable outside this Stats() call.
-		"errors": ps.Errors,
+		"errors":   ps.Errors,
+		"removals": ps.Removals,
 	}
 
 	// Rebuild the per-connection detail array from the pool's entry snapshot so the shape

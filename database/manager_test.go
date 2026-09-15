@@ -296,6 +296,7 @@ func TestDbManagerZeroValueMethodsAreSafe(t *testing.T) {
 	assert.Equal(t, 0, stats["active_connections"])
 	assert.Equal(t, 0, stats["max_connections"])
 	assert.Equal(t, 0, stats["idle_ttl_seconds"])
+	assert.Equal(t, 0, stats["removals"])
 	assert.Empty(t, stats["connections"])
 
 	assert.Equal(t, 0, m.Size(), "zero-value Size must be 0, not panic")
@@ -323,6 +324,7 @@ func TestDbManagerStatsEmptyManager(t *testing.T) {
 	assert.Equal(t, 0, stats["active_connections"])
 	assert.Equal(t, 5, stats["max_connections"])
 	assert.Equal(t, 600, stats["idle_ttl_seconds"])
+	assert.Equal(t, 0, stats["removals"])
 	conns, ok := stats["connections"].([]map[string]any)
 	require.True(t, ok, "connections key must be []map[string]any")
 	assert.Empty(t, conns, "empty manager has no connection entries")
@@ -396,6 +398,25 @@ func TestDbManagerStatsSurfacesPoolErrors(t *testing.T) {
 	release()
 
 	assert.Equal(t, 1, m.Stats()["errors"], "deferred close failure must be counted and surfaced")
+}
+
+// TestDbManagerStatsSurfacesRemovals pins that PoolStats.Removals reaches Stats()["removals"].
+func TestDbManagerStatsSurfacesRemovals(t *testing.T) {
+	connector := func(*config.DatabaseConfig, logger.Logger) (Interface, error) { return &stubDB{key: "a"}, nil }
+	src := &stubResourceSource{configs: map[string]*config.DatabaseConfig{"a": {Type: "postgresql", Host: "localhost"}}}
+	m := NewDbManager(src, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
+	defer func() { _ = m.Close() }()
+
+	_, release, err := m.Get(context.Background(), "a")
+	require.NoError(t, err)
+	release()
+	assert.Equal(t, 0, m.Stats()["removals"])
+
+	conn, shouldClose := m.pool.Remove("a")
+	require.True(t, shouldClose)
+	require.NoError(t, conn.Close())
+
+	assert.Equal(t, 1, m.Stats()["removals"])
 }
 
 // TestNewDbManagerStartsIdleCleanup pins ADR-067 decision 4: the manager starts its own idle
