@@ -1244,6 +1244,46 @@ func TestNewWithConfigUsesConnectors(t *testing.T) {
 	msgRelease()
 }
 
+// TestAppDBManagerIsTheManagerDepsDBBorrowsFrom pins the rotation door end to end: removing the
+// root key through App.DBManager closes the handle deps.DB handed out, and the next deps.DB
+// rebuilds it through the connector.
+func TestAppDBManagerIsTheManagerDepsDBBorrowsFrom(t *testing.T) {
+	var mu sync.Mutex
+	var built []*testmocks.MockDatabase
+	opts := &Options{
+		DatabaseConnector: func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+			db := &testmocks.MockDatabase{}
+			db.On("Close").Return(nil)
+			mu.Lock()
+			built = append(built, db)
+			mu.Unlock()
+			return db, nil
+		},
+		MessagingClientFactory: func(string, logger.Logger) messaging.AMQPClient {
+			return testmocks.NewMockAMQPClient()
+		},
+	}
+	app, _, err := NewWithConfig(defaultTestConfig(), opts)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	first, err := app.registry.deps.DB(ctx)
+	require.NoError(t, err)
+	mu.Lock()
+	cached, builtBefore := built[len(built)-1], len(built)
+	mu.Unlock()
+
+	require.NoError(t, app.DBManager().Remove(""))
+	cached.AssertCalled(t, "Close")
+
+	second, err := app.registry.deps.DB(ctx)
+	require.NoError(t, err)
+	assert.NotSame(t, first, second, "the next deps.DB rebuilds the evicted handle")
+	mu.Lock()
+	assert.Len(t, built, builtBefore+1, "the rebuild goes back through the connector")
+	mu.Unlock()
+}
+
 func TestNewWithOptionsLoadError(t *testing.T) {
 	opts := &Options{
 		ConfigLoader: func() (*config.Config, error) {
@@ -1352,6 +1392,24 @@ func TestMessagingDeclarations(t *testing.T) {
 
 		result := app.MessagingDeclarations()
 		assert.Equal(t, decls, result)
+	})
+}
+
+func TestAppManagerAccessors(t *testing.T) {
+	t.Run("nil_when_no_manager_was_built", func(t *testing.T) {
+		app := &App{}
+
+		assert.Nil(t, app.DBManager())
+		assert.Nil(t, app.CacheManager())
+	})
+
+	t.Run("return_the_built_managers", func(t *testing.T) {
+		dbManager := &database.DbManager{}
+		cacheManager := &cache.CacheManager{}
+		app := &App{dbManager: dbManager, cacheManager: cacheManager}
+
+		assert.Same(t, dbManager, app.DBManager())
+		assert.Same(t, cacheManager, app.CacheManager())
 	})
 }
 

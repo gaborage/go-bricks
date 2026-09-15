@@ -668,6 +668,22 @@ Size `multitenant.limits.tenants` to at least the number of tenants you expect t
 >
 > A connection that is **still in use** when evicted (held by an in-flight request, message, or job) is detached from the cache immediately but its `Close()` is **deferred until the last borrower releases its lease** — so an in-use connection is never closed under an active caller ([ADR-032](adr_032_lease_refcount_tenant_handles.md), the M3 fix). The lease is reference-counted by `DbManager` and released by the framework at each request/message/job boundary; **application code is unchanged** (`deps.DB(ctx)` keeps its `(Interface, error)` signature). Direct callers of `DbManager.Get` see a new `ReleaseFunc` third return — see [migrations.md](migrations.md).
 
+#### Evicting one connection (credential rotation)
+
+`DbManager.Remove(key)` evicts a single cached connection, so the next borrow re-resolves that key through `DBConfigProvider.DBConfig` — the recipe for rotating credentials without a restart:
+
+```go
+// Once your DBConfigProvider returns the new credentials for tenantID:
+if err := application.DBManager().Remove(tenantID); err != nil {
+    return err // database.ErrManagerClosed after shutdown, or the wrapped close error
+}
+// The next deps.DB(ctx) for tenantID connects with the new credentials.
+```
+
+- **Key:** `""` is the root database, `named:<name>` a `databases.<name>` handle (what `deps.DBByName` borrows), and the tenant ID a tenant's database in multi-tenant mode. An unknown key is a nil no-op.
+- **Leases:** an idle connection closes before `Remove` returns; a leased one is detached now and closes at its final release. That protects work inside a lease scope (an HTTP request, an AMQP message, a scheduler job) — a goroutine that borrowed a handle outside any scope released its lease immediately and is not protected.
+- **Shutdown and stats:** after `Close`, `Remove` returns `database.ErrManagerClosed`, as `Get` does. `DbManager.Stats()["removals"]` counts every `Remove` that detached a connection, leased or not, and `/ready` publishes it.
+
 ### Connection-manager pool tunables (`database.manager.*`)
 
 The manager's own lifecycle is operator-tunable, matching the `messaging.publisher.*` and `cache.manager.*` surfaces. All three keys default to today's hardcoded behavior, so leaving them unset changes nothing.

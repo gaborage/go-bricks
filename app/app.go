@@ -350,3 +350,18 @@ func (a *App) registerCloser(name string, closer interface{ Close() error }) {
 func (a *App) MessagingDeclarations() *messaging.Declarations {
 	return a.messagingDeclarations
 }
+
+// DBManager returns the framework-built database manager that deps.DB and deps.DBByName borrow
+// from — the handle for DbManager.Remove, which evicts one connection so the next borrow
+// re-resolves its configuration. Bootstrap builds it even when no database is configured, so it
+// is nil only on an App the framework did not build.
+func (a *App) DBManager() *database.DbManager {
+	return a.dbManager
+}
+
+// CacheManager returns the framework-built cache manager that deps.Cache borrows from — the
+// handle for CacheManager.Remove. Bootstrap builds it even for a disabled cache and aborts startup
+// when construction fails, so it is nil only on an App the framework did not build.
+func (a *App) CacheManager() *cache.CacheManager {
+	return a.cacheManager
+}

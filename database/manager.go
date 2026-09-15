@@ -32,11 +32,10 @@ type Connector func(*config.DatabaseConfig, logger.Logger) (Interface, error)
 // lease is released. See ADR-032.
 type ReleaseFunc func()
 
-// errManagerClosed is returned by Get after Close has been called, rather than
-// resurrecting a connection on a shut-down manager (backlog F22). It is unexported:
-// DbManager exposed no closed-state error before the resourcepool rewire, so this
-// closes F22 while keeping the public surface unchanged.
-var errManagerClosed = errors.New("database: manager closed")
+// ErrManagerClosed is returned by Get and Remove once Close has run, and by a zero-value
+// DbManager never built via NewDbManager, rather than resurrecting a connection on a
+// shut-down manager (backlog F22). Match it with errors.Is.
+var ErrManagerClosed = errors.New("database: manager closed")
 
 // ErrNoDatabaseConfig is returned when a DBConfigProvider hands back a nil configuration
 // with a nil error, a contract violation the manager rejects instead of dereferencing.
@@ -113,18 +112,44 @@ func (m *DbManager) Get(ctx context.Context, key string) (Interface, ReleaseFunc
 	if m.pool == nil {
 		// Zero-value manager (never built via NewDbManager): unusable, fail closed rather
 		// than panic — consistent with the Stats()/Close()/Size() zero-value guards.
-		return nil, nil, errManagerClosed
+		return nil, nil, ErrManagerClosed
 	}
 	conn, release, err := m.pool.GetOrCreate(ctx, key, func(ctx context.Context) (Interface, error) {
 		return m.createConnection(ctx, key)
 	})
 	if err != nil {
 		if errors.Is(err, resourcepool.ErrPoolClosed) {
-			return nil, nil, errManagerClosed
+			return nil, nil, ErrManagerClosed
 		}
 		return nil, nil, err
 	}
 	return conn, ReleaseFunc(release), nil
+}
+
+// Remove evicts the connection cached under key, so the next Get re-resolves the key's
+// configuration through the DBConfigProvider — the door for rotating credentials. key is the
+// resource key Get receives: "" for the root database, "named:<name>" for a named one, and the
+// tenant ID for a tenant's database in multi-tenant mode. An unknown key is a no-op returning nil.
+//
+// An unleased connection is closed before Remove returns, and a close failure is returned
+// wrapped. A connection still leased is detached now and closed at its final release, so Remove
+// returns nil without closing it. That deferral protects work inside a lease scope (an HTTP
+// request, an AMQP message, a scheduler job); a goroutine that borrowed a handle outside any
+// scope released its lease as the borrow returned, and is not protected. Returns
+// ErrManagerClosed after Close, or on a zero-value manager.
+func (m *DbManager) Remove(key string) error {
+	// The nil test must come first: Closed would dereference a nil pool.
+	if m.pool == nil || m.pool.Closed() {
+		return ErrManagerClosed
+	}
+	conn, shouldClose := m.pool.Remove(key)
+	if !shouldClose {
+		return nil
+	}
+	if err := conn.Close(); err != nil {
+		return fmt.Errorf("failed to close database connection %q: %w", key, err)
+	}
+	return nil
 }
 
 // createConnection resolves the per-key database configuration and opens a new connection.

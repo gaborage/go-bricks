@@ -590,6 +590,13 @@ cache:
     cleanupinterval: 10m # Less frequent cleanup
 ```
 
+**Evicting one instance.** `application.CacheManager().Remove(key)` closes the instance cached
+under `key` (`""` single-tenant, the tenant ID in multi-tenant mode), so the next
+`deps.Cache(ctx)` rebuilds it through the connector — after rotating Redis credentials, say. A
+leased instance closes at its final release instead, an unknown key is a nil no-op, and after
+shutdown `Remove` returns `cache.ErrManagerClosed`. `CacheManager.Stats().Removals` counts every
+`Remove` that detached an instance, and `/ready` publishes it as `removals`.
+
 ### Sizing `maxsize` for multi-tenant deployments
 
 `maxsize` is an LRU cap, not a per-tenant guarantee. When more tenants are active than `maxsize`, every request that targets a not-currently-cached tenant evicts the least-recently-used instance and recreates a fresh one — **eviction thrash** that silently degrades latency (each miss pays the full connect cost) without any error.
