@@ -1726,6 +1726,27 @@ fail-closed startup rules that cannot silently downgrade a TLS-only endpoint to 
 
 ---
 
+### [ADR-113: AMQP Topology Is Re-declared Once per Channel Generation After a Reconnect](adr_113_amqp_topology_redeclare_on_reconnect.md)
+
+**Date:** 2026-09-14 | **Status:** Accepted
+
+The registry declared its topology once, behind a process-lifetime latch, and the consumer supervisor
+re-subscribed after a reconnect without re-declaring, so a broker that lost a queue left the consumer
+retrying a channel-level `404` forever at Debug. Before re-subscribing, the registry now reads the
+client's channel generation through an unexported optional interface (`AMQPClient` is unchanged)
+and, once per new ready generation, records it and re-runs its exchange, queue and binding
+declarations; `DeclareInfrastructure` records its own generation, and a client without the accessor
+keeps the old behavior. The first failure ends the pass with a WARN and the next channel retries —
+except `PRECONDITION_FAILED`, which closes the channel on every attempt: that declaration is skipped
+until the process restarts, logged once, and never deleted or recreated. Re-subscribe failures
+escalate to WARN from the fifth attempt, with the broker's reply code and text when it gave one. No
+configuration key. See [migrations.md](migrations.md) `[C65.10]`.
+
+**Key Benefits:** a broker that lost topology recovers without a restart; a consumer that cannot
+re-attach is visible at WARN with the broker's reason; a healthy reconnect costs one idempotent pass.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2496,7 +2517,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-112) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-113) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
