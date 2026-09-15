@@ -8649,12 +8649,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   refusal on this boundary is inside `ErrInvalidPGIdentifier` plus the field name and value.
   It runs after the identifier floor and BEFORE a caller's `IdentifierPolicy`, so no policy
   can waive it (C65.4, ADR-061 amendment).
-- gist: a rotated database credential had no framework door — `DbManager` kept a connection
-  until LRU or idle eviction, and `App` exposed neither manager. `DbManager.Remove(key)` evicts
-  one, closing it now when idle or at its final release when leased, so the next `deps.DB(ctx)`
-  re-resolves the key through `DBConfigProvider.DBConfig`; `App.DBManager()` and
-  `App.CacheManager()` reach the framework-built managers, and both report a `removals` count
-  (C65.9, #1622).
+- gist: `DbManager.Remove(key)` evicts one cached connection so the next `deps.DB(ctx)` re-resolves
+  its config — the credential-rotation door — and `App` now exposes both managers (C65.9, #1622).
 
 ---
 
@@ -9725,19 +9721,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 ### [C65.9] `DbManager.Remove` evicts one cached connection — the credential-rotation door · additive-optional
 
-- note: New exported surface, all additive. `func (m *DbManager) Remove(key string) error` detaches
-  the connection cached under `key` — `""` root, `named:<name>`, or the tenant ID in multi-tenant
-  mode — so the next `Get`, and with it the next `deps.DB(ctx)`, re-resolves the key through
-  `DBConfigProvider.DBConfig`. An idle connection closes before `Remove` returns and a close
-  failure comes back wrapped; a leased one closes at its final release and `Remove` returns nil;
-  an unknown key is a nil no-op. After `Close`, or on a zero-value manager, it returns
-  `database.ErrManagerClosed`, now exported with the `database: manager closed` text `Get`
-  already returned. `func (a *App) DBManager() *database.DbManager` and
-  `func (a *App) CacheManager() *cache.CacheManager` return the framework-built managers (nil
-  only on an `App` the framework did not build), which also makes the existing
-  `CacheManager.Remove` reachable. `DbManager.Stats()` gains `removals` and `cache.ManagerStats`
-  gains `Removals`, counting every `Remove` that detached an entry, leased or not; the database
-  and cache `/ready` public stats carry the new key.
+- note: New exported surface, all additive: `DbManager.Remove(key string) error`,
+  `database.ErrManagerClosed`, `App.DBManager() *database.DbManager` and
+  `App.CacheManager() *cache.CacheManager`; `DbManager.Stats()` gains `removals` and
+  `cache.ManagerStats` gains `Removals`, both on the `/ready` public stats. Semantics and the
+  rotation recipe: [database.md](database.md#evicting-one-connection-credential-rotation).
 - ref: gaborage/go-bricks#1622 · `database/manager.go`
 
 ---

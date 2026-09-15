@@ -1260,11 +1260,14 @@ func TestAppDBManagerIsTheManagerDepsDBBorrowsFrom(t *testing.T) {
 			return db, nil
 		},
 		MessagingClientFactory: func(string, logger.Logger) messaging.AMQPClient {
-			return testmocks.NewMockAMQPClient()
+			client := testmocks.NewMockAMQPClient()
+			client.On("Close").Return(nil)
+			return client
 		},
 	}
 	app, _, err := NewWithConfig(defaultTestConfig(), opts)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = app.Shutdown(context.Background()) })
 	ctx := context.Background()
 
 	first, err := app.registry.deps.DB(ctx)

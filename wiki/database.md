@@ -680,7 +680,7 @@ if err := application.DBManager().Remove(tenantID); err != nil {
 // The next deps.DB(ctx) for tenantID connects with the new credentials.
 ```
 
-- **Key:** `""` is the root database, `named:<name>` a `databases.<name>` handle (what `deps.DBByName` borrows), and the tenant ID a tenant's database in multi-tenant mode. An unknown key is a nil no-op.
+- **Key:** `""` is the root database, `config.NamedDatabasePrefix + name` a `databases.<name>` handle (what `deps.DBByName` borrows), and the tenant ID a tenant's database in multi-tenant mode. An unknown key is a nil no-op.
 - **Leases:** an idle connection closes before `Remove` returns; a leased one is detached now and closes at its final release. That protects work inside a lease scope (an HTTP request, an AMQP message, a scheduler job) — a goroutine that borrowed a handle outside any scope released its lease immediately and is not protected.
 - **Shutdown and stats:** after `Close`, `Remove` returns `database.ErrManagerClosed`, as `Get` does. `DbManager.Stats()["removals"]` counts every `Remove` that detached a connection, leased or not, and `/ready` publishes it.
 

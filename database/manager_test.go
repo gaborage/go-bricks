@@ -23,24 +23,14 @@ const (
 )
 
 type stubResourceSource struct {
-	mu      sync.Mutex
 	configs map[string]*config.DatabaseConfig
 }
 
 func (s *stubResourceSource) DBConfig(_ context.Context, key string) (*config.DatabaseConfig, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if cfg, ok := s.configs[key]; ok {
 		return cfg, nil
 	}
 	return &config.DatabaseConfig{Type: "postgresql", Host: "localhost"}, nil
-}
-
-// set swaps key's configuration, as a provider does when credentials rotate.
-func (s *stubResourceSource) set(key string, cfg *config.DatabaseConfig) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.configs[key] = cfg
 }
 
 type failingResourceSource struct {
@@ -411,23 +401,6 @@ func TestDbManagerStatsSurfacesPoolErrors(t *testing.T) {
 	assert.Equal(t, 1, m.Stats()["errors"], "deferred close failure must be counted and surfaced")
 }
 
-// TestDbManagerStatsSurfacesRemovals pins that PoolStats.Removals reaches Stats()["removals"].
-func TestDbManagerStatsSurfacesRemovals(t *testing.T) {
-	connector := func(*config.DatabaseConfig, logger.Logger) (Interface, error) { return &stubDB{key: "a"}, nil }
-	src := &stubResourceSource{configs: map[string]*config.DatabaseConfig{"a": {Type: "postgresql", Host: "localhost"}}}
-	m := NewDbManager(src, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
-	defer func() { _ = m.Close() }()
-
-	_, release, err := m.Get(context.Background(), "a")
-	require.NoError(t, err)
-	release()
-	assert.Equal(t, 0, m.Stats()["removals"])
-
-	require.NoError(t, m.Remove("a"))
-
-	assert.Equal(t, 1, m.Stats()["removals"])
-}
-
 // TestNewDbManagerStartsIdleCleanup pins ADR-067 decision 4: the manager starts its own idle
 // sweep at construction, exactly as cache.NewCacheManager does. No StartCleanup call appears
 // in this test — a swept connection is the proof that the constructor started the loop.
@@ -594,8 +567,9 @@ func closeCountingConnector(closes *atomic.Int32) Connector {
 	}
 }
 
-// TestDbManagerRemoveClosesUnleased pins the evict door on an idle handle: Remove closes it once,
-// removing the now-missing key is a nil no-op, and the next Get rebuilds.
+// TestDbManagerRemoveClosesUnleased pins the evict door on an idle handle: Remove closes it once
+// and counts one removal, removing the now-missing key is an uncounted nil no-op, and the next Get
+// rebuilds.
 func TestDbManagerRemoveClosesUnleased(t *testing.T) {
 	var closes atomic.Int32
 	m := NewDbManager(&stubResourceSource{}, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, closeCountingConnector(&closes))
@@ -609,9 +583,11 @@ func TestDbManagerRemoveClosesUnleased(t *testing.T) {
 	require.NoError(t, m.Remove(tenantA))
 	assert.Equal(t, int32(1), closes.Load(), "an unleased handle closes during Remove")
 	assert.Equal(t, 0, m.Size())
+	assert.Equal(t, 1, m.Stats()["removals"])
 
 	require.NoError(t, m.Remove(tenantA), "removing a missing key is a nil no-op")
 	assert.Equal(t, int32(1), closes.Load(), "a missing key closes nothing")
+	assert.Equal(t, 1, m.Stats()["removals"], "a missing key is not counted as a removal")
 
 	second, release, err := m.Get(ctx, tenantA)
 	require.NoError(t, err)
@@ -767,12 +743,9 @@ func TestDbManagerRemoveReResolvesRotatedCredentials(t *testing.T) {
 	src := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
 		tenantA: {Type: "postgresql", Host: "localhost", Username: "app-v1"},
 	}}
-	var mu sync.Mutex
 	var users []string
 	var oldCloses atomic.Int32
 	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
-		mu.Lock()
-		defer mu.Unlock()
 		users = append(users, cfg.Username)
 		db := &stubDB{}
 		if len(users) == 1 {
@@ -781,13 +754,14 @@ func TestDbManagerRemoveReResolvesRotatedCredentials(t *testing.T) {
 		return db, nil
 	}
 	m := NewDbManager(src, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
+	t.Cleanup(func() { _ = m.Close() })
 	ctx := context.Background()
 
 	old, release, err := m.Get(ctx, tenantA)
 	require.NoError(t, err)
 	release()
 
-	src.set(tenantA, &config.DatabaseConfig{Type: "postgresql", Host: "localhost", Username: "app-v2"})
+	src.configs[tenantA] = &config.DatabaseConfig{Type: "postgresql", Host: "localhost", Username: "app-v2"}
 	require.NoError(t, m.Remove(tenantA))
 	assert.Equal(t, int32(1), oldCloses.Load(), "the rotated-out handle closes on Remove")
 
@@ -795,9 +769,7 @@ func TestDbManagerRemoveReResolvesRotatedCredentials(t *testing.T) {
 	require.NoError(t, err)
 	release()
 	assert.NotSame(t, old, fresh)
-	mu.Lock()
 	assert.Equal(t, []string{"app-v1", "app-v2"}, users, "the rebuild re-resolves the provider's new config")
-	mu.Unlock()
 
 	require.NoError(t, m.Close())
 	assert.Equal(t, int32(1), oldCloses.Load(), "Close never reaches the handle Remove already closed")

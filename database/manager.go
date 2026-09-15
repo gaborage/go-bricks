@@ -126,19 +126,13 @@ func (m *DbManager) Get(ctx context.Context, key string) (Interface, ReleaseFunc
 	return conn, ReleaseFunc(release), nil
 }
 
-// Remove evicts the connection cached under key, so the next Get re-resolves the key's
-// configuration through the DBConfigProvider — the door for rotating credentials. key is the
-// resource key Get receives: "" for the root database, "named:<name>" for a named one, and the
-// tenant ID for a tenant's database in multi-tenant mode. An unknown key is a no-op returning nil.
-//
-// An unleased connection is closed before Remove returns, and a close failure is returned
-// wrapped. A connection still leased is detached now and closed at its final release, so Remove
-// returns nil without closing it. That deferral protects work inside a lease scope (an HTTP
-// request, an AMQP message, a scheduler job); a goroutine that borrowed a handle outside any
-// scope released its lease as the borrow returned, and is not protected. Returns
-// ErrManagerClosed after Close, or on a zero-value manager.
+// Remove evicts the connection cached under key so the next Get re-resolves it through the
+// DBConfigProvider. key is "" for the root database, config.NamedDatabasePrefix+name for a named
+// database, and the tenant ID in multi-tenant mode. An idle connection closes now, its close error
+// returned wrapped; a leased one closes at its final release, which protects work inside a lease
+// scope (HTTP request, AMQP message, scheduler job) but not a handle borrowed outside any scope.
+// Returns ErrManagerClosed after Close or on a zero-value manager.
 func (m *DbManager) Remove(key string) error {
-	// The nil test must come first: Closed would dereference a nil pool.
 	if m.pool == nil || m.pool.Closed() {
 		return ErrManagerClosed
 	}
