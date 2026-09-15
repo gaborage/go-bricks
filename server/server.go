@@ -38,6 +38,7 @@ type Server struct {
 	conflicts    *routeConflictTracker
 	boundAddr    atomic.Pointer[net.Addr] // set via ListenerAddrFunc once Start's listener is bound; nil until then
 	ready        chan struct{}
+	started      atomic.Bool
 }
 
 // normalizeBasePath cannot use pathutil.NormalizePrefix because that helper
@@ -251,10 +252,19 @@ func (s *Server) dispatchReady(c *echo.Context) error {
 	return handler(c)
 }
 
+// ErrServerAlreadyStarted is returned by every Start on a Server after the first,
+// including after Shutdown.
+var ErrServerAlreadyStarted = goerrors.New("server: Start called more than once")
+
 // Start starts the HTTP server and begins accepting requests.
 // It blocks until the server is shut down or encounters an error.
-// A Server is single-use: Shutdown resets neither BoundAddr nor ReadyCh.
+// A Server is single-use: any later Start, including after Shutdown, returns
+// ErrServerAlreadyStarted without binding, and Shutdown resets neither
+// BoundAddr nor ReadyCh.
 func (s *Server) Start() error {
+	if !s.started.CompareAndSwap(false, true) {
+		return ErrServerAlreadyStarted
+	}
 	addr := fmt.Sprintf("%s:%d", s.cfg.Server.Host, s.cfg.Server.Port)
 
 	var tlsCfg *tls.Config

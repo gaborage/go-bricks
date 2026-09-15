@@ -302,6 +302,67 @@ func TestServerStartAndShutdown(t *testing.T) {
 	shutdownAndDrain(t, srv, errCh)
 }
 
+// requireStartRefused fails unless srv.Start returns ErrServerAlreadyStarted
+// promptly; a Start that binds and serves instead would block.
+func requireStartRefused(t *testing.T, srv *Server) {
+	t.Helper()
+	got := make(chan error, 1)
+	go func() {
+		got <- srv.Start()
+	}()
+	select {
+	case err := <-got:
+		require.ErrorIs(t, err, ErrServerAlreadyStarted)
+	case <-time.After(2 * time.Second):
+		t.Fatal("a repeated Start bound and served instead of being refused")
+	}
+}
+
+// TestServerStartRejectsSecondCall pins single-use: a repeated Start is refused
+// without touching the running server, while serving and after Shutdown alike.
+func TestServerStartRejectsSecondCall(t *testing.T) {
+	srv := newTestServer("", "", "")
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Start()
+	}()
+	waitForServerReady(t, srv)
+	firstAddr := srv.BoundAddr()
+	firstHTTP := srv.httpServer.Load()
+
+	requireStartRefused(t, srv)
+	assert.Equal(t, firstAddr, srv.BoundAddr())
+	assert.Same(t, firstHTTP, srv.httpServer.Load())
+
+	shutdownAndDrain(t, srv, errCh)
+	requireStartRefused(t, srv)
+	assert.Same(t, firstHTTP, srv.httpServer.Load())
+}
+
+// TestServerStartConcurrentCallsHaveOneWinner pins the latch under contention:
+// of two simultaneous Starts exactly one serves and the other is refused.
+func TestServerStartConcurrentCallsHaveOneWinner(t *testing.T) {
+	srv := newTestServer("", "", "")
+	results := make(chan error, 2)
+	begin := make(chan struct{})
+	for range 2 {
+		go func() {
+			<-begin
+			results <- srv.Start()
+		}()
+	}
+	close(begin)
+
+	select {
+	case err := <-results:
+		require.ErrorIs(t, err, ErrServerAlreadyStarted, "the first Start to return must be the refused one")
+	case <-time.After(2 * time.Second):
+		t.Fatal("neither concurrent Start was refused")
+	}
+	waitForServerReady(t, srv)
+	shutdownAndDrain(t, srv, results)
+}
+
 // TestServerReadyChClosesOnlyAfterHTTPServerStored pins ReadyCh to the stored
 // *http.Server rather than the bound address.
 func TestServerReadyChClosesOnlyAfterHTTPServerStored(t *testing.T) {
