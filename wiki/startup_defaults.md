@@ -95,7 +95,7 @@ Route registered  module=events method=POST path=/v1/events
 
 It is a **tri-state** flag: an explicit `server.logroutes` value always wins; when the key is absent it defaults to `app.env` being development (on in `dev`/`development`/`local`, off in `prod`/`staging` per ADR-022). So routes are visible at first `go run` while production stays silent — an N-route service pays **zero** extra boot lines in prod unless an operator opts in. Turn it on in production for a smoke-check with `server.logroutes: true`; silence a dev boot with `server.logroutes: false`.
 
-Attribution is by **registration order** (`module.Name()`), covering both typed (`server.GET/POST`) and raw (`RouteRegistrar.Add`) routes — `RouteDescriptor.ModuleName` is empty for every route, so the module is derived from the registration span, not the descriptor field. Routes registered before the module loop — the `health`/`ready` probes (one line per method, GET and HEAD) and debug / `_sys` — are attributed to `framework`.
+Attribution is by **registration order** (`module.Name()`), covering both typed (`server.GET/POST`) and raw (`RouteRegistrar.Add`) routes — the log ignores `RouteDescriptor.ModuleName` and derives the module from the registration span. Routes registered before the module loop — the `health`/`ready` probes (one line per method, GET and HEAD) and debug / `_sys` — are attributed to `framework`.
 
 ## Duplicate Route Detection
 
@@ -106,7 +106,7 @@ Startup fails when two registrations claim the same **exact method + full path**
 - `health`/`ready` probes register directly on the HTTP engine (not through `RouteRegistrar`), but `server.New` records their method+path pairs in the conflict tracker (and a descriptor per method in `server.DefaultRouteRegistry`) explicitly, so a module claiming `GET /health` (or the configured probe paths) fails startup like any other collision.
 - Param-name-differing route templates (e.g. `/users/:id` vs `/users/:uid`) are **excluded** — these are distinct strings and are not detected as duplicates, even though they collide in echo's radix tree at request time; echo's own behavior governs there.
 
-**Error shape:** startup aborts with one aggregate error naming every collision and both registrants (`HandlerName` + caller `Package`; module name is not available — see the route-logging note above on why `RouteDescriptor.ModuleName` stays empty):
+**Error shape:** startup aborts with one aggregate error naming every collision and both registrants (`HandlerName` + caller `Package`; the module name is not reported):
 
 ```text
 duplicate route registration (1 conflict(s))
@@ -121,7 +121,7 @@ There is no disable knob — a colliding route is always a startup-blocking bug,
 
 `app.Options.PostRegisterRoutes func([]server.RouteDescriptor) error` lets a service veto its own route table before traffic arrives — for example, reject a route outside the versioned prefix, or a raw route (nil `RequestType`) where only typed handlers are allowed. It runs once per `App.Run`, after every module's `RegisterRoutes`, the route log and the duplicate-route check above, and before the listener opens. A non-nil error aborts startup the same way a route conflict does, wrapped as `app.Options.PostRegisterRoutes rejected the route table: <err>`. A nil hook changes nothing.
 
-The slice holds every route this `App` registered and no other `App`'s, so several `App`s in one test binary each see their own:
+The slice holds every route this `App` registered and, as long as `App`s start one at a time, no other `App`'s — so several `App`s built in one test binary each see their own:
 
 - module routes, typed and raw — the scheduler's `/_sys/job*` included;
 - debug `/_sys/*` endpoints;

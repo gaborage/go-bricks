@@ -81,9 +81,7 @@ func (a *App) runPostRegisterRoutes(routesStart int) error {
 	if a.postRegisterRoutes == nil {
 		return nil
 	}
-	all := server.DefaultRouteRegistry.Routes()
-	attributeModuleNames(a.registry.routeSpans, all)
-	if err := a.postRegisterRoutes(slices.Concat(a.probeRoutes, all[routesStart:])); err != nil {
+	if err := a.postRegisterRoutes(slices.Concat(a.probeRoutes, a.registry.routesSince(routesStart))); err != nil {
 		return fmt.Errorf("app.Options.PostRegisterRoutes rejected the route table: %w", err)
 	}
 	return nil

@@ -40,6 +40,7 @@ type Options struct {
 	// descriptor per method) — after the duplicate-route check and before the listener
 	// opens. A non-nil error aborts startup. ModuleName on each descriptor is the
 	// registering module's Name(), unless the route set its own with server.WithModule,
-	// and is empty for routes the framework registers itself. Nil means no hook.
+	// and is empty for routes the framework registers itself. With an injected Server the
+	// slice carries no probe descriptors. Nil means no hook.
 	PostRegisterRoutes func(routes []server.RouteDescriptor) error
 }

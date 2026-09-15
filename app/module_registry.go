@@ -21,8 +21,9 @@ type ModuleRegistry struct {
 	// rootDBAbsent records the builder's rootDatabaseAbsent verdict, gating the
 	// DatabaseRequirer check. Zero value (false) leaves that check inert.
 	rootDBAbsent bool
-	// routeSpans are the per-module registration spans of the last RegisterRoutes, which
-	// attribute ModuleName on the route table handed to Options.PostRegisterRoutes.
+	// routeSpans are the per-module registration spans of the last RegisterRoutes (no
+	// framework span; a closing span ends the last module), which attribute ModuleName on
+	// the route table handed to Options.PostRegisterRoutes.
 	routeSpans []routeSpan
 }
 
@@ -249,10 +250,9 @@ func forEachSpanRoute(spans []routeSpan, routes []server.RouteDescriptor, fn fun
 }
 
 // collectRouteLogEntries resolves each span's [start, next.start) range against
-// the routes snapshot. Pure (no logger, no globals) so attribution — raw routes
-// (empty RouteDescriptor.ModuleName), zero-route modules, and the pre-loop
-// framework span — is unit-testable. Attribution is positional because no call
-// site populates RouteDescriptor.ModuleName.
+// the routes snapshot. Pure (no logger, no globals) so attribution — raw routes,
+// zero-route modules, and the pre-loop framework span — is unit-testable.
+// Attribution is positional and ignores RouteDescriptor.ModuleName.
 func collectRouteLogEntries(spans []routeSpan, routes []server.RouteDescriptor) []routeLogEntry {
 	var out []routeLogEntry
 	forEachSpanRoute(spans, routes, func(module string, route *server.RouteDescriptor) {
@@ -269,6 +269,14 @@ func attributeModuleNames(spans []routeSpan, routes []server.RouteDescriptor) {
 			route.ModuleName = module
 		}
 	})
+}
+
+// routesSince returns the registry's routes from start on, with ModuleName attributed from
+// the spans of the last RegisterRoutes.
+func (r *ModuleRegistry) routesSince(start int) []server.RouteDescriptor {
+	all := server.DefaultRouteRegistry.Routes()
+	attributeModuleNames(r.routeSpans, all)
+	return all[start:]
 }
 
 // CollectGlobalMiddleware gathers middleware from modules that implement

@@ -192,9 +192,8 @@ func TestRegisterRoutesRecordsModuleSpansWithRouteLoggingOff(t *testing.T) {
 }
 
 func TestCollectRouteLogEntriesAttributesRawAndTypedRoutes(t *testing.T) {
-	// Attribution is purely positional: RouteDescriptor.ModuleName is empty for
-	// every route (nothing calls server.WithModule), so the module is derived
-	// from the registration-order span, not the descriptor field.
+	// Attribution is purely positional: the module is derived from the
+	// registration-order span, never from RouteDescriptor.ModuleName.
 	routes := []server.RouteDescriptor{
 		{Method: "GET", Path: "/_sys/debug"}, // framework span
 		{Method: "GET", Path: "/v1/users"},   // modA, typed

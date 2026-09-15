@@ -694,34 +694,19 @@ func TestPrepareRuntimeAllowsDebugEndpointsWithAccessControl(t *testing.T) {
 // Built through the public constructor because the failure only appears once the
 // real manager and declaration wiring are in place.
 func TestPrepareRuntimeSucceedsWithNoMessagingConfigured(t *testing.T) {
-	a := newConfiguredApp(t, minimalAppConfig(""), nil)
-
-	require.NotNil(t, a.messagingManager,
-		"a messaging manager is built even with no broker configured — the premise of this guard")
-
-	require.NoError(t, a.prepareRuntime(context.Background()))
-}
-
-// minimalAppConfig is the smallest config NewWithConfig accepts: no Messaging and no
-// Database block at all.
-func minimalAppConfig(basePath string) *config.Config {
-	return &config.Config{
+	cfg := &config.Config{
 		App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
 		Server: config.ServerConfig{
 			Port: 8080,
 			// The validated timeout floor lives in one fixture; reuse it.
 			Timeout: defaultTestConfig().Server.Timeout,
-			Path:    config.PathConfig{Base: basePath},
 		},
 		Multitenant: config.MultitenantConfig{Enabled: false},
 		Log:         config.LogConfig{Level: "info"},
+		// No Messaging and no Database block at all.
 	}
-}
 
-// newConfiguredApp builds through the public constructor, so Options travel their real path.
-func newConfiguredApp(t *testing.T, cfg *config.Config, opts *Options) *App {
-	t.Helper()
-	a, _, err := NewWithConfig(cfg, opts)
+	a, _, err := NewWithConfig(cfg, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		if a.messagingManager != nil {
@@ -731,7 +716,11 @@ func newConfiguredApp(t *testing.T, cfg *config.Config, opts *Options) *App {
 			a.dbManager.StopCleanup()
 		}
 	})
-	return a
+
+	require.NotNil(t, a.messagingManager,
+		"a messaging manager is built even with no broker configured — the premise of this guard")
+
+	require.NoError(t, a.prepareRuntime(context.Background()))
 }
 
 func TestRunPostRegisterRoutesErrorAbortsStartup(t *testing.T) {
@@ -752,29 +741,6 @@ func TestRunPostRegisterRoutesErrorAbortsStartup(t *testing.T) {
 	require.ErrorContains(t, err, "PostRegisterRoutes")
 	assert.Equal(t, 1, calls)
 	assert.Zero(t, srv.startCount(), "a vetoed route table must never open the listener")
-}
-
-// routeTableModule registers one raw route and one typed route that names its own module.
-type routeTableModule struct{ name string }
-
-type routeTableRequest struct{}
-
-func (m *routeTableModule) Name() string             { return m.name }
-func (m *routeTableModule) Init(_ *ModuleDeps) error { return nil }
-func (m *routeTableModule) Shutdown() error          { return nil }
-func (m *routeTableModule) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
-	r.Add(http.MethodGet, "/"+m.name, func(c server.HandlerContext) error { return c.String(http.StatusOK, "") })
-	server.POST(hr, r, "/"+m.name, func(routeTableRequest, server.HandlerContext) (string, server.IAPIError) {
-		return "", nil
-	}, server.WithModule("billing"))
-}
-
-func handlerIDs(routes []server.RouteDescriptor) []string {
-	ids := make([]string, len(routes))
-	for i := range routes {
-		ids[i] = routes[i].HandlerID
-	}
-	return ids
 }
 
 func TestPrepareRuntimePostRegisterRoutesSeesEveryRouteWithItsModule(t *testing.T) {
