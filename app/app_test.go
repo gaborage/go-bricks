@@ -1244,10 +1244,10 @@ func TestNewWithConfigUsesConnectors(t *testing.T) {
 	msgRelease()
 }
 
-// TestAppDBManagerIsTheManagerDepsDBBorrowsFrom pins the rotation door end to end: removing the
-// root key through App.DBManager closes the handle deps.DB handed out, and the next deps.DB
-// rebuilds it through the connector.
-func TestAppDBManagerIsTheManagerDepsDBBorrowsFrom(t *testing.T) {
+// TestAppDBManagerBacksDepsDB pins end to end that App.DBManager is the manager deps.DB borrows
+// from: removing the root key through it closes the handle deps.DB handed out, and the next
+// deps.DB rebuilds it through the connector.
+func TestAppDBManagerBacksDepsDB(t *testing.T) {
 	var mu sync.Mutex
 	var built []*testmocks.MockDatabase
 	opts := &Options{

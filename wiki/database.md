@@ -682,6 +682,7 @@ if err := application.DBManager().Remove(tenantID); err != nil {
 
 - **Key:** `""` is the root database, `config.NamedDatabasePrefix + name` a `databases.<name>` handle (what `deps.DBByName` borrows), and the tenant ID a tenant's database in multi-tenant mode. An unknown key is a nil no-op.
 - **Leases:** an idle connection closes before `Remove` returns; a leased one is detached now and closes at its final release. That protects work inside a lease scope (an HTTP request, an AMQP message, a scheduler job) — a goroutine that borrowed a handle outside any scope released its lease immediately and is not protected.
+- **In-flight dials:** a `Get` whose dial began before `Remove` caches its connection after `Remove` returns — `Remove` never sees it, so that connection may carry the old credentials. Under steady traffic, call `Remove` again once in-flight dials complete, or drain traffic first ([#1669](https://github.com/gaborage/go-bricks/issues/1669)).
 - **Shutdown and stats:** after `Close`, `Remove` returns `database.ErrManagerClosed`, as `Get` does. `DbManager.Stats()["removals"]` counts every `Remove` that detached a connection, leased or not, and `/ready` publishes it.
 
 ### Connection-manager pool tunables (`database.manager.*`)

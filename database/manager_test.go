@@ -567,7 +567,7 @@ func closeCountingConnector(closes *atomic.Int32) Connector {
 	}
 }
 
-// TestDbManagerRemoveClosesUnleased pins the evict door on an idle handle: Remove closes it once
+// TestDbManagerRemoveClosesUnleased pins Remove on an idle handle: Remove closes it once
 // and counts one removal, removing the now-missing key is an uncounted nil no-op, and the next Get
 // rebuilds.
 func TestDbManagerRemoveClosesUnleased(t *testing.T) {
@@ -632,7 +632,7 @@ func TestDbManagerRemoveWhileLeasedDefersClose(t *testing.T) {
 	assert.Equal(t, int32(1), closes.Load(), "the final release runs the deferred close")
 }
 
-// TestDbManagerRemoveAfterCloseReturnsErrManagerClosed mirrors Get's F22 guard on the evict door.
+// TestDbManagerRemoveAfterCloseReturnsErrManagerClosed pins that Remove, like Get, fails closed after Close.
 func TestDbManagerRemoveAfterCloseReturnsErrManagerClosed(t *testing.T) {
 	m := NewDbManager(&stubResourceSource{}, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, nil)
 	require.NoError(t, m.Close())

@@ -131,7 +131,9 @@ func (m *DbManager) Get(ctx context.Context, key string) (Interface, ReleaseFunc
 // database, and the tenant ID in multi-tenant mode. An idle connection closes now, its close error
 // returned wrapped; a leased one closes at its final release, which protects work inside a lease
 // scope (HTTP request, AMQP message, scheduler job) but not a handle borrowed outside any scope.
-// Returns ErrManagerClosed after Close or on a zero-value manager.
+// Returns ErrManagerClosed after Close or on a zero-value manager. A Get whose dial began before
+// Remove caches its connection after Remove returns, unseen by it: under steady traffic call Remove
+// again once in-flight dials complete, or drain traffic first (#1669).
 func (m *DbManager) Remove(key string) error {
 	if m.pool == nil || m.pool.Closed() {
 		return ErrManagerClosed
