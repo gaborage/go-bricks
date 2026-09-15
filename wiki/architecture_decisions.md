@@ -1740,7 +1740,7 @@ keeps the old behavior. The first failure ends the pass with a WARN and the next
 except `PRECONDITION_FAILED`, which closes the channel on every attempt: that declaration is skipped
 until the process restarts, logged once, and never deleted or recreated. Re-subscribe failures
 escalate to WARN from the fifth attempt, with the broker's reply code and text when it gave one. No
-configuration key. See [migrations.md](migrations.md) `[C65.9]`.
+configuration key. See [migrations.md](migrations.md) `[C65.10]`.
 
 **Key Benefits:** a broker that lost topology recovers without a restart; a consumer that cannot
 re-attach is visible at WARN with the broker's reason; a healthy reconnect costs one idempotent pass.

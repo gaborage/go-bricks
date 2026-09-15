@@ -84,4 +84,4 @@ next channel.
 - #1618 — this decision; #480 — consumer auto-resubscribe
 - `messaging/registry.go` — `redeclareTopology`, `resubscribe`; `messaging/amqp_client.go` — `channelGeneration`
 - [ADR-058](adr_058_consumer_scoped_amqp_arguments.md), [ADR-059](adr_059_streams_consumption.md)
-- [migrations.md](migrations.md) `[C65.9]`
+- [migrations.md](migrations.md) `[C65.10]`
