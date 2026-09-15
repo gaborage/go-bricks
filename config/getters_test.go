@@ -99,6 +99,9 @@ func TestRequiredAccessors(t *testing.T) {
 	_, err = cfg.RequiredString(missing)
 	require.Error(t, err)
 
+	_, err = setupListConfig(t).RequiredString("custom.empty")
+	require.EqualError(t, err, "required configuration key 'custom.empty' is empty")
+
 	vInt, err := cfg.RequiredInt(port)
 	require.NoError(t, err)
 	assert.Equal(t, 8080, vInt)
