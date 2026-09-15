@@ -564,8 +564,10 @@ type allowAllChecker struct{}
 func (allowAllChecker) CheckPGIdentifier(string) error { return nil }
 
 // TestPGRoleSpecComparabilityFollowsItsPolicy pins the comparability claim in the
-// PGIdentifierCheckerFunc godoc: a func-backed policy makes the spec panic on ==
-// and as a map key, while a comparable policy leaves the spec comparable.
+// PGIdentifierCheckerFunc godoc: with a func-backed policy, == on otherwise-equal
+// copies panics, == on specs that differ in an earlier field returns false without
+// reaching the policy, and a map key always panics; a comparable policy leaves the
+// spec comparable.
 func TestPGRoleSpecComparabilityFollowsItsPolicy(t *testing.T) {
 	funcPolicySpec := PGRoleSpec{
 		Schema:           "tenant_a",
@@ -574,9 +576,19 @@ func TestPGRoleSpecComparabilityFollowsItsPolicy(t *testing.T) {
 		IdentifierPolicy: PGIdentifierCheckerFunc(func(string) error { return nil }),
 	}
 
-	t.Run("func_policy_panics_on_equality", func(t *testing.T) {
+	t.Run("func_policy_panics_on_equality_of_otherwise_equal_copies", func(t *testing.T) {
 		other := funcPolicySpec
 		require.Panics(t, func() { _ = funcPolicySpec == other })
+	})
+
+	t.Run("earlier_field_difference_stops_before_the_policy", func(t *testing.T) {
+		other := funcPolicySpec
+		other.Schema = "tenant_b"
+		var equal bool
+		require.NotPanics(t, func() { equal = funcPolicySpec == other })
+		if equal {
+			t.Fatal("specs that differ in Schema must compare unequal")
+		}
 	})
 
 	t.Run("func_policy_panics_as_map_key", func(t *testing.T) {

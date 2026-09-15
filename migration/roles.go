@@ -77,10 +77,13 @@ type PGIdentifierChecker interface {
 // so such a spec fails Validate instead of taking the process down. Leave the
 // field unset for "no policy".
 //
-// A func value is not comparable, so neither is a PGRoleSpec holding one: == on
-// the spec, or using it as a map key, panics at run time. Compare such specs
-// field by field or hold them by pointer; a comparable PGIdentifierChecker
-// implementation keeps the spec comparable.
+// A func value is not comparable, so a PGRoleSpec holding one is not safely
+// comparable either. == compares fields in order and stops at the first
+// difference, so it panics only when every earlier field is equal and the
+// comparison reaches IdentifierPolicy; using such a spec as a map key always
+// panics, because hashing reads every field. Compare such specs field by field
+// or hold them by pointer; a comparable PGIdentifierChecker implementation keeps
+// the spec comparable.
 type PGIdentifierCheckerFunc func(value string) error
 
 // errNilPGIdentifierCheckerFunc is what a nil PGIdentifierCheckerFunc refuses
