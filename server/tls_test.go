@@ -9,7 +9,6 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -188,33 +187,6 @@ func TestBuildServerTLSConfigMinVersion(t *testing.T) {
 	}
 }
 
-// waitForServerReady blocks until srv's ReadyCh closes, failing the test after
-// two seconds.
-func waitForServerReady(t *testing.T, srv *Server) {
-	t.Helper()
-	select {
-	case <-srv.ReadyCh():
-	case <-time.After(2 * time.Second):
-		t.Fatal("server did not become ready within timeout")
-	}
-}
-
-func shutdownAndDrain(t *testing.T, srv *Server, errCh <-chan error) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	t.Cleanup(cancel)
-	require.NoError(t, srv.Shutdown(ctx))
-
-	select {
-	case err := <-errCh:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-			t.Fatalf("unexpected error from server: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("server did not shut down in time")
-	}
-}
-
 func TestServerStartsTLSAndServesHealth(t *testing.T) {
 	caCertPEM, issueServer := newTestCA(t, "test-ca")
 	certPEM, keyPEM := issueServer("127.0.0.1")
@@ -240,6 +212,9 @@ func TestServerStartsTLSAndServesHealth(t *testing.T) {
 
 	waitForServerReady(t, srv)
 	addr := srv.BoundAddr()
+	tcpAddr, ok := addr.(*net.TCPAddr)
+	require.True(t, ok, "BoundAddr must be the TLS listener's TCP address")
+	assert.NotZero(t, tcpAddr.Port)
 
 	pool := x509.NewCertPool()
 	require.True(t, pool.AppendCertsFromPEM(caCertPEM))

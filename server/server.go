@@ -295,14 +295,12 @@ func (s *Server) Start() error {
 	return sc.Start(context.Background(), s.echo)
 }
 
-// onListenerBound is Start's ListenerAddrFunc.
 func (s *Server) onListenerBound(addr net.Addr) {
 	s.boundAddr.Store(&addr)
 }
 
-// onBeforeServe is Start's BeforeServeFunc: it applies the timeouts StartConfig
-// lacks, stores srv for Shutdown, and only then closes ready — once, since a
-// later Start finds a server already stored.
+// onBeforeServe applies the timeouts StartConfig lacks and stores srv before
+// closing ready; Shutdown never clears httpServer, so ready closes once.
 func (s *Server) onBeforeServe(srv *http.Server) error {
 	srv.ReadTimeout = s.cfg.Server.Timeout.Read
 	srv.WriteTimeout = s.cfg.Server.Timeout.Write
@@ -327,7 +325,8 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 // BoundAddr returns the address Start's listener bound (the port the OS picked
-// for server.port 0, TLS included), or nil before it binds. It never blocks.
+// when Server.Port is 0, TLS included), or nil before it first binds. It never
+// blocks.
 func (s *Server) BoundAddr() net.Addr {
 	if addr := s.boundAddr.Load(); addr != nil {
 		return *addr
@@ -335,7 +334,7 @@ func (s *Server) BoundAddr() net.Addr {
 	return nil
 }
 
-// ReadyCh returns a channel closed once Start is serving. It closes after the
+// ReadyCh returns a channel closed once Start first serves. It closes after the
 // *http.Server is stored, never when the listener binds: echo reports the bound
 // address first, and a Shutdown issued between the two finds no server and
 // returns without stopping anything. If Start fails before serving it never

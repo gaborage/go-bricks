@@ -406,9 +406,10 @@ a `server.Server` and drive it with `httptest` / `ServeHTTP` instead.
 
 ### Booting a real server on port 0
 
-To exercise a real listener (TLS, server timeouts, a plain `net/http` client), start a
-`server.Server` with `server.port: 0`, wait on `ReadyCh()`, then dial `BoundAddr()`. The OS
-picks the port, so there is no bind-then-release race:
+To exercise a real listener (TLS, server timeouts, a plain `net/http` client), hand
+`server.New` a config whose `Server.Port` is 0, wait on `ReadyCh()`, then dial `BoundAddr()`.
+The OS picks the port, so there is no bind-then-release race. Build that config by hand or with
+`config.LoadFromMap`: `config.Load` and the app constructors validate it and refuse port 0.
 
 ```go
 cfg.Server.Port = 0
@@ -428,8 +429,8 @@ base := "http://" + srv.BoundAddr().String()
 require.NoError(t, srv.Shutdown(ctx))
 ```
 
-Both methods live on `*server.Server`, not on `app.ServerRunner`: to keep the handle inside an
-app, build the server yourself and pass it as `app.Options.Server`.
+Both methods live on `*server.Server`, not on `app.ServerRunner`; code holding a `ServerRunner`
+type-asserts to `interface{ BoundAddr() net.Addr }`.
 
 ## Integration Testing with Testcontainers
 

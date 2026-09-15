@@ -251,8 +251,33 @@ func TestServerNewRegistersProbeDescriptors(t *testing.T) {
 	}, DefaultRouteRegistry.Routes())
 }
 
-// TestServerStartAndShutdown boots on port 0, waits on ReadyCh, and dials the
-// port BoundAddr reports.
+// waitForServerReady blocks until srv's ReadyCh closes, failing the test after
+// two seconds.
+func waitForServerReady(t *testing.T, srv *Server) {
+	t.Helper()
+	select {
+	case <-srv.ReadyCh():
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not become ready within timeout")
+	}
+}
+
+func shutdownAndDrain(t *testing.T, srv *Server, errCh <-chan error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+	require.NoError(t, srv.Shutdown(ctx))
+
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("unexpected error from server: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not shut down in time")
+	}
+}
+
 func TestServerStartAndShutdown(t *testing.T) {
 	srv := newTestServer("", "", "")
 	require.NotNil(t, srv)
@@ -277,10 +302,8 @@ func TestServerStartAndShutdown(t *testing.T) {
 	shutdownAndDrain(t, srv, errCh)
 }
 
-// TestServerReadyChClosesOnlyAfterHTTPServerStored pins the order echo forces:
-// no address before Start, then the bound address while ReadyCh stays open,
-// and ReadyCh closes only once the *http.Server that Shutdown needs is stored.
-// A repeat never re-closes.
+// TestServerReadyChClosesOnlyAfterHTTPServerStored pins ReadyCh to the stored
+// *http.Server rather than the bound address.
 func TestServerReadyChClosesOnlyAfterHTTPServerStored(t *testing.T) {
 	srv := newTestServer("", "", "")
 	assert.Nil(t, srv.BoundAddr())
@@ -303,7 +326,8 @@ func TestServerReadyChClosesOnlyAfterHTTPServerStored(t *testing.T) {
 		t.Fatal("ReadyCh still open after the http.Server was stored")
 	}
 
-	assert.NotPanics(t, func() { _ = srv.onBeforeServe(&http.Server{}) }, "a second serve must not close ReadyCh again")
+	require.NoError(t, srv.Shutdown(context.Background()))
+	assert.NotPanics(t, func() { _ = srv.onBeforeServe(&http.Server{}) }, "a serve after Shutdown must not close ReadyCh again")
 }
 
 // TestRootGroupRegistersAtURLRoot verifies RootGroup() returns a working registrar
