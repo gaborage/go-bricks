@@ -186,7 +186,7 @@ func (b *Builder) CreateApp() *Builder {
 	}
 	if b.opts != nil && b.opts.PostRegisterRoutes != nil {
 		b.app.postRegisterRoutes = b.opts.PostRegisterRoutes
-		b.app.probeRoutes = server.DefaultRouteRegistry.Routes()[probesStart:]
+		b.app.probeRoutes = slices.Clone(server.DefaultRouteRegistry.Routes()[probesStart:])
 	}
 
 	// Slots are installed here, before ConfigureRuntimeHelpers runs pre-initialization over

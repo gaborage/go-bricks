@@ -193,14 +193,7 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 	for _, p := range probes {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
 			e.Add(method, p.path, p.handler)
-			s.conflicts.record(method, p.path, RouteRegistrant{HandlerName: p.name, Package: serverPackagePath})
-			DefaultRouteRegistry.Register(&RouteDescriptor{
-				Method:      method,
-				Path:        p.path,
-				HandlerID:   formatHandlerID(method, p.path),
-				HandlerName: p.name,
-				Package:     serverPackagePath,
-			})
+			registerRoute(s.conflicts, method, p.path, RouteRegistrant{HandlerName: p.name, Package: serverPackagePath})
 		}
 	}
 

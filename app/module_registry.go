@@ -179,10 +179,11 @@ func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 	logRoutes := r.deps.Config != nil && r.deps.Config.ShouldLogRoutes()
 
 	// Attribution is by registration-order delta against DefaultRouteRegistry, NOT
-	// RouteDescriptor.ModuleName (no call site populates it). Startup registration is
-	// single-threaded and append-only, so recorded start indices resolve consistently
-	// against one post-loop Routes() snapshot. The spans are kept for the route-table hook.
-	var spans []routeSpan
+	// RouteDescriptor.ModuleName. Startup registration is single-threaded and append-only, so
+	// recorded start indices resolve consistently against one post-loop Routes() snapshot. The
+	// leading framework span covers what registered before this loop — the health/ready
+	// probes and debug/_sys routes (single-app-per-process assumed).
+	spans := []routeSpan{{module: frameworkRouteAttribution, start: 0}}
 	for _, module := range r.modules {
 		rr, ok := module.(RouteRegisterer)
 		if !ok {
@@ -195,13 +196,12 @@ func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 		spans = append(spans, routeSpan{module: module.Name(), start: server.DefaultRouteRegistry.Count()})
 		rr.RegisterRoutes(handlerRegistry, registrar)
 	}
-	r.routeSpans = spans
+	// A closing span with no module ends the last module's range where this loop ended.
+	spans = append(spans, routeSpan{start: server.DefaultRouteRegistry.Count()})
+	r.routeSpans = spans[1:]
 
 	if logRoutes {
-		// The leading framework span covers what registered before this loop — the
-		// health/ready probes and debug/_sys routes (single-app-per-process assumed).
-		logSpans := append([]routeSpan{{module: frameworkRouteAttribution, start: 0}}, spans...)
-		for _, e := range collectRouteLogEntries(logSpans, server.DefaultRouteRegistry.Routes()) {
+		for _, e := range collectRouteLogEntries(spans, server.DefaultRouteRegistry.Routes()) {
 			r.logger.Info().
 				Str("module", e.module).
 				Str("method", e.method).
@@ -229,21 +229,21 @@ type routeLogEntry struct {
 	module, method, path string
 }
 
-// forEachSpanRoute calls fn with each span's module and the index of every route in the
-// span's [start, next.start) range over a snapshot of n routes. A start past n resolves to
-// no routes, and a bogus successor start is clamped to n rather than corrupting this span.
-func forEachSpanRoute(spans []routeSpan, n int, fn func(module string, index int)) {
+// forEachSpanRoute calls fn with each span's module and every route in the span's
+// [start, next.start) range. A start past the snapshot resolves to no routes, and a bogus
+// successor start is clamped to the snapshot rather than corrupting this span.
+func forEachSpanRoute(spans []routeSpan, routes []server.RouteDescriptor, fn func(module string, route *server.RouteDescriptor)) {
 	for i, span := range spans {
 		if span.start < 0 {
 			continue // defensive: a negative start is impossible single-threaded
 		}
-		end := n
+		end := len(routes)
 		if i+1 < len(spans) {
 			end = spans[i+1].start
 		}
-		end = min(end, n)
+		end = min(end, len(routes))
 		for j := span.start; j < end; j++ {
-			fn(span.module, j)
+			fn(span.module, &routes[j])
 		}
 	}
 }
@@ -255,18 +255,18 @@ func forEachSpanRoute(spans []routeSpan, n int, fn func(module string, index int
 // site populates RouteDescriptor.ModuleName.
 func collectRouteLogEntries(spans []routeSpan, routes []server.RouteDescriptor) []routeLogEntry {
 	var out []routeLogEntry
-	forEachSpanRoute(spans, len(routes), func(module string, j int) {
-		out = append(out, routeLogEntry{module: module, method: routes[j].Method, path: routes[j].Path})
+	forEachSpanRoute(spans, routes, func(module string, route *server.RouteDescriptor) {
+		out = append(out, routeLogEntry{module: module, method: route.Method, path: route.Path})
 	})
 	return out
 }
 
 // attributeModuleNames sets ModuleName on every route inside a module's span that did not
-// name its own module with server.WithModule. Routes outside every span keep theirs empty.
+// name its own module with server.WithModule. Routes outside every module span keep theirs empty.
 func attributeModuleNames(spans []routeSpan, routes []server.RouteDescriptor) {
-	forEachSpanRoute(spans, len(routes), func(module string, j int) {
-		if routes[j].ModuleName == "" {
-			routes[j].ModuleName = module
+	forEachSpanRoute(spans, routes, func(module string, route *server.RouteDescriptor) {
+		if route.ModuleName == "" {
+			route.ModuleName = module
 		}
 	})
 }

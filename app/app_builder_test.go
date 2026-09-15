@@ -625,8 +625,8 @@ func TestCreateAppKeepsEachAppsOwnRouteTable(t *testing.T) {
 			return nil
 		}}
 	}
-	first := newRouteHookApp(t, routeHookConfig("/first"), recordAs("first"))
-	second := newRouteHookApp(t, routeHookConfig("/second"), recordAs("second"))
+	first := newConfiguredApp(t, minimalAppConfig("/first"), recordAs("first"))
+	second := newConfiguredApp(t, minimalAppConfig("/second"), recordAs("second"))
 	require.NoError(t, first.RegisterModule(&routeTableModule{name: "orders"}))
 	require.NoError(t, second.RegisterModule(&routeTableModule{name: "users"}))
 

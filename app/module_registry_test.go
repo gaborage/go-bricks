@@ -169,15 +169,16 @@ func TestAttributeModuleNamesFillsOnlyUnnamedModuleRoutes(t *testing.T) {
 		{HandlerID: "GET:/orders"},
 		{HandlerID: "POST:/orders", ModuleName: "billing"},
 		{HandlerID: "GET:/users"},
+		{HandlerID: "GET:/after-the-loop"},
 	}
 
-	attributeModuleNames([]routeSpan{{module: "orders", start: 1}, {module: "users", start: 3}}, routes)
+	attributeModuleNames([]routeSpan{{module: "orders", start: 1}, {module: "users", start: 3}, {start: 4}}, routes)
 
 	got := make([]string, len(routes))
 	for i := range routes {
 		got[i] = routes[i].ModuleName
 	}
-	assert.Equal(t, []string{"", "orders", "billing", "users"}, got)
+	assert.Equal(t, []string{"", "orders", "billing", "users", ""}, got)
 }
 
 func TestRegisterRoutesRecordsModuleSpansWithRouteLoggingOff(t *testing.T) {
@@ -187,7 +188,7 @@ func TestRegisterRoutesRecordsModuleSpansWithRouteLoggingOff(t *testing.T) {
 
 	reg.RegisterRoutes(nil)
 
-	assert.Equal(t, []routeSpan{{module: "users", start: 0}, {module: "orders", start: 1}}, reg.routeSpans)
+	assert.Equal(t, []routeSpan{{module: "users", start: 0}, {module: "orders", start: 1}, {start: 2}}, reg.routeSpans)
 }
 
 func TestCollectRouteLogEntriesAttributesRawAndTypedRoutes(t *testing.T) {

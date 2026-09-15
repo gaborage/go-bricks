@@ -694,28 +694,7 @@ func TestPrepareRuntimeAllowsDebugEndpointsWithAccessControl(t *testing.T) {
 // Built through the public constructor because the failure only appears once the
 // real manager and declaration wiring are in place.
 func TestPrepareRuntimeSucceedsWithNoMessagingConfigured(t *testing.T) {
-	cfg := &config.Config{
-		App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
-		Server: config.ServerConfig{
-			Port: 8080,
-			// The validated timeout floor lives in one fixture; reuse it.
-			Timeout: defaultTestConfig().Server.Timeout,
-		},
-		Multitenant: config.MultitenantConfig{Enabled: false},
-		Log:         config.LogConfig{Level: "info"},
-		// No Messaging and no Database block at all.
-	}
-
-	a, _, err := NewWithConfig(cfg, nil)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if a.messagingManager != nil {
-			a.messagingManager.StopCleanup()
-		}
-		if a.dbManager != nil {
-			a.dbManager.StopCleanup()
-		}
-	})
+	a := newConfiguredApp(t, minimalAppConfig(""), nil)
 
 	require.NotNil(t, a.messagingManager,
 		"a messaging manager is built even with no broker configured — the premise of this guard")
@@ -723,22 +702,24 @@ func TestPrepareRuntimeSucceedsWithNoMessagingConfigured(t *testing.T) {
 	require.NoError(t, a.prepareRuntime(context.Background()))
 }
 
-// routeHookConfig is the smallest config NewWithConfig accepts with no database or broker.
-func routeHookConfig(basePath string) *config.Config {
+// minimalAppConfig is the smallest config NewWithConfig accepts: no Messaging and no
+// Database block at all.
+func minimalAppConfig(basePath string) *config.Config {
 	return &config.Config{
 		App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
 		Server: config.ServerConfig{
-			Port:    8080,
+			Port: 8080,
+			// The validated timeout floor lives in one fixture; reuse it.
 			Timeout: defaultTestConfig().Server.Timeout,
 			Path:    config.PathConfig{Base: basePath},
 		},
 		Multitenant: config.MultitenantConfig{Enabled: false},
-		Log:         config.LogConfig{Level: "error"},
+		Log:         config.LogConfig{Level: "info"},
 	}
 }
 
-// newRouteHookApp builds through the public constructor so the hook travels the Options path.
-func newRouteHookApp(t *testing.T, cfg *config.Config, opts *Options) *App {
+// newConfiguredApp builds through the public constructor, so Options travel their real path.
+func newConfiguredApp(t *testing.T, cfg *config.Config, opts *Options) *App {
 	t.Helper()
 	a, _, err := NewWithConfig(cfg, opts)
 	require.NoError(t, err)
@@ -757,7 +738,7 @@ func TestRunPostRegisterRoutesErrorAbortsStartup(t *testing.T) {
 	srv := newMockServer()
 	veto := errors.New("route table vetoed")
 	calls := 0
-	a := newRouteHookApp(t, routeHookConfig(""), &Options{
+	a := newConfiguredApp(t, minimalAppConfig(""), &Options{
 		Server: srv,
 		PostRegisterRoutes: func([]server.RouteDescriptor) error {
 			calls++
@@ -796,45 +777,14 @@ func handlerIDs(routes []server.RouteDescriptor) []string {
 	return ids
 }
 
-func TestPrepareRuntimePostRegisterRoutesSeesEveryRoute(t *testing.T) {
+func TestPrepareRuntimePostRegisterRoutesSeesEveryRouteWithItsModule(t *testing.T) {
 	server.DefaultRouteRegistry.Clear()
 	t.Cleanup(server.DefaultRouteRegistry.Clear)
-	cfg := routeHookConfig("/api")
-	cfg.Debug = config.DebugConfig{
-		Enabled:    true,
-		PathPrefix: "/_sys",
-		AllowedIPs: []string{"127.0.0.1/32"},
-		Endpoints:  config.DebugEndpointsConfig{Info: true},
-	}
+	cfg := minimalAppConfig("/api")
+	cfg.Debug = debugCheckConfig([]string{localhostIPV4}, "").Debug
 	var calls [][]server.RouteDescriptor
-	a := newRouteHookApp(t, cfg, &Options{PostRegisterRoutes: func(routes []server.RouteDescriptor) error {
+	a := newConfiguredApp(t, cfg, &Options{PostRegisterRoutes: func(routes []server.RouteDescriptor) error {
 		calls = append(calls, routes)
-		return nil
-	}})
-	require.NoError(t, a.RegisterModule(&routeTableModule{name: "orders"}))
-
-	require.NoError(t, a.prepareRuntime(context.Background()))
-
-	require.Len(t, calls, 1)
-	assert.ElementsMatch(t, []string{
-		"GET:/api/health", "HEAD:/api/health", "GET:/api/ready", "HEAD:/api/ready",
-		"GET:/_sys/info", "GET:/api/orders", "POST:/api/orders",
-	}, handlerIDs(calls[0]))
-}
-
-func TestPrepareRuntimePostRegisterRoutesAttributesModuleName(t *testing.T) {
-	server.DefaultRouteRegistry.Clear()
-	t.Cleanup(server.DefaultRouteRegistry.Clear)
-	cfg := routeHookConfig("")
-	cfg.Debug = config.DebugConfig{
-		Enabled:    true,
-		PathPrefix: "/_sys",
-		AllowedIPs: []string{"127.0.0.1/32"},
-		Endpoints:  config.DebugEndpointsConfig{Info: true},
-	}
-	var got []server.RouteDescriptor
-	a := newRouteHookApp(t, cfg, &Options{PostRegisterRoutes: func(routes []server.RouteDescriptor) error {
-		got = routes
 		return nil
 	}})
 	require.NoError(t, a.RegisterModule(&routeTableModule{name: "orders"}))
@@ -842,15 +792,17 @@ func TestPrepareRuntimePostRegisterRoutesAttributesModuleName(t *testing.T) {
 
 	require.NoError(t, a.prepareRuntime(context.Background()))
 
+	require.Len(t, calls, 1)
+	require.Len(t, calls[0], 9)
 	modules := map[string]string{}
-	for _, d := range got {
+	for _, d := range calls[0] {
 		modules[d.HandlerID] = d.ModuleName
 	}
 	assert.Equal(t, map[string]string{
-		"GET:/health": "", "HEAD:/health": "", "GET:/ready": "", "HEAD:/ready": "",
-		"GET:/_sys/info": "",
-		"GET:/orders":    "orders", "POST:/orders": "billing",
-		"GET:/users": "users", "POST:/users": "billing",
+		"GET:/api/health": "", "HEAD:/api/health": "", "GET:/api/ready": "", "HEAD:/api/ready": "",
+		"GET:/_sys/health-debug": "",
+		"GET:/api/orders":        "orders", "POST:/api/orders": "billing",
+		"GET:/api/users": "users", "POST:/api/users": "billing",
 	}, modules)
 }
 
