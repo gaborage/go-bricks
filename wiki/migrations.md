@@ -9617,6 +9617,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
        so whatever the table still grants after step 2 travels with it.
      - Indexes, and sequences OWNED BY a column (`SERIAL`, `IDENTITY`), move with their table
        automatically. List only standalone sequences.
+     - A standalone sequence moves with its own statement, one per sequence on your list:
+       `ALTER SEQUENCE public."<sequence>" SET SCHEMA "tenant_a"`.
      - Other object kinds need their own statement — `ALTER VIEW`, `ALTER FUNCTION`,
        `ALTER TYPE … SET SCHEMA`.
      - **Then run provisioning ONCE MORE.** Step 4's `… ON ALL TABLES IN SCHEMA "tenant_a"` and
@@ -9640,7 +9642,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - verify: rerun your provisioning call and check it returns nil; the refusal is
   `errors.Is(err, migration.ErrReservedPGIdentifier)` if it does not.
 
-  The next two checks are case-split, and where a check has nothing to assert it is **N/A, not a
+  The next three checks are case-split, and where a check has nothing to assert it is **N/A, not a
   pass** — an assertion whose silence is meaningless has to say so out loud.
 
   - **Objects moved — the `Schema` case only; N/A in both role cases.**
@@ -9648,6 +9650,12 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
     `tenant_a` and no longer under `public`. Both role cases run steps 1–4 then 6 with no object
     move, so the tenant's tables never left the schema they were always in and this check
     asserts nothing about them.
+  - **Standalone sequences moved — the `Schema` case only; N/A in both role cases.** `pg_tables`
+    lists no sequences, so check them separately: `SELECT n.nspname, c.relname FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = 'S' AND n.nspname IN
+    ('public', 'tenant_a')` must show every standalone sequence on your step-5 list under
+    `tenant_a` and none of them under `public`. The role cases move no objects, so this check
+    asserts nothing there either.
   - **The new schema is owned by the migrator — a verdict wherever step 4 CREATED the schema;
     N/A where it did not.** Step 4 created it in the `Schema` case, in the `MigratorRole` case
     (where `CREATE SCHEMA … AUTHORIZATION "public"` had been refused, so no schema existed), and
