@@ -382,6 +382,10 @@ WHERE a.grantee = 0
   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
 ORDER BY 1, 2, 3, 4`
 
+// publicGrantProbeTable lives in the shared public schema, so the test drops it on
+// the way out whatever happens.
+const publicGrantProbeTable = "c654_public_grant_probe_tbl"
+
 // TestPGPublicGrantDetectSQLFindsEveryPublicResidue is the falsifiability check
 // on the atom's detect/verify query. Each of the four residues a RuntimeRole
 // spelled "public" leaves behind must be found, with the right source value, and
@@ -394,14 +398,28 @@ func TestPGPublicGrantDetectSQLFindsEveryPublicResidue(t *testing.T) {
 	admin := env.adminDB(t)
 
 	// The built-in `public` schema carries a PUBLIC USAGE grant on every
-	// PostgreSQL instance by design (PG15+ dropped CREATE, never USAGE), so the
-	// query always reports it. It cannot be excluded — `public` is exactly the
-	// schema a reserved-name spec provisions into — which is why the atom calls
-	// it out as expected baseline noise and why every assertion below is scoped
-	// to the probe schema it created.
-	require.Contains(t, publicGrantRows(ctx, t, admin, "public"),
-		"schema|public||USAGE",
-		"the built-in public schema is expected baseline noise, not a finding")
+	// PostgreSQL instance by design (PG15+ dropped CREATE, never USAGE). The only
+	// schema-level grant the template can add to public's own ACL is that same
+	// USAGE-to-PUBLIC entry, so a schema row for public could never tell residue
+	// from baseline, and an operator acting on it would strip the baseline from
+	// every unrelated role. The schema arm therefore never reports public.
+	require.Empty(t, publicGrantRows(ctx, t, admin, "public"),
+		"an untouched instance must report nothing on public, baseline USAGE included")
+
+	t.Run("public_relation_grant_still_reports", func(t *testing.T) {
+		_, err := admin.ExecContext(ctx, `CREATE TABLE public.`+publicGrantProbeTable+` (id INT PRIMARY KEY)`)
+		require.NoError(t, err)
+		defer func() {
+			_, cleanupErr := admin.ExecContext(ctx, `DROP TABLE IF EXISTS public.`+publicGrantProbeTable)
+			assert.NoError(t, cleanupErr)
+		}()
+		_, err = admin.ExecContext(ctx, `GRANT SELECT ON public.`+publicGrantProbeTable+` TO PUBLIC`)
+		require.NoError(t, err)
+
+		require.Equal(t, []string{"relation|public|" + publicGrantProbeTable + "|SELECT"},
+			publicGrantRows(ctx, t, admin, "public"),
+			"only the schema arm skips public; a PUBLIC grant on one of its tables is still a finding")
+	})
 
 	t.Run("all_four_residues", func(t *testing.T) {
 		_, err := admin.ExecContext(ctx, `CREATE SCHEMA acl_probe`)
@@ -804,8 +822,9 @@ ORDER BY 1, 2, 3, 4`
 // this test flaky; the table lives in the shared public schema and is therefore
 // dropped on the way out whatever happens.
 const (
-	namedGrantProbeRole  = "c654_named_grant_probe"
-	namedGrantProbeTable = "c654_named_grant_probe_tbl"
+	namedGrantProbeRole         = "c654_named_grant_probe"
+	namedGrantProbeTable        = "c654_named_grant_probe_tbl"
+	namedGrantProbeTenantSchema = "c654_named_grant_tenant"
 )
 
 // TestPGPublicNamedRoleGrantDetectSQLFindsNamedRoleGrants is the falsifiability
@@ -814,9 +833,10 @@ const (
 // oracle reproduces the exposure by hand with the same statement shapes
 // buildPGRoleStatements would have emitted against a real role.
 //
-// The middle assertion is the one that pins the CTE: the probe holds both grants
-// BEFORE its search_path is set, and the query must stay quiet, because a role
-// with no search_path residue is not a candidate at all.
+// The repoint assertion is the one that matters for verify: the atom's step 4
+// re-provisions against the tenant's own schema, which OVERWRITES search_path, so
+// a query that picked its roles by search_path would read clean over a grant the
+// revokes missed. The grants must be reported whatever search_path says.
 func TestPGPublicNamedRoleGrantDetectSQLFindsNamedRoleGrants(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx, cancel := testCtx(t)
@@ -859,18 +879,25 @@ func TestPGPublicNamedRoleGrantDetectSQLFindsNamedRoleGrants(t *testing.T) {
 			require.NoError(t, execErr, stmt)
 		}
 
-		require.Empty(t, publicNamedRoleGrantRows(ctx, t, admin, namedGrantProbeRole),
-			"a role with no search_path residue is not a candidate, however much it holds")
-
-		_, execErr := admin.ExecContext(ctx,
-			`ALTER ROLE `+namedGrantProbeRole+` SET search_path = public`)
-		require.NoError(t, execErr)
-
-		require.Equal(t, []string{
+		want := []string{
 			"relation|" + namedGrantProbeRole + "|" + namedGrantProbeTable + "|SELECT",
 			"schema|" + namedGrantProbeRole + "|public|USAGE",
-		}, publicNamedRoleGrantRows(ctx, t, admin, namedGrantProbeRole),
-			"both grants must be found, each tagged with the catalog it came from, in ORDER BY order")
+		}
+		require.Equal(t, want, publicNamedRoleGrantRows(ctx, t, admin, namedGrantProbeRole),
+			"both grants must be found whatever the role's search_path, each tagged with its catalog, in ORDER BY order")
+
+		for _, stmt := range []string{
+			`ALTER ROLE ` + namedGrantProbeRole + ` SET search_path = public`,
+			`ALTER ROLE ` + namedGrantProbeRole + ` SET search_path = ` + namedGrantProbeTenantSchema,
+		} {
+			_, execErr := admin.ExecContext(ctx, stmt)
+			require.NoError(t, execErr, stmt)
+		}
+		require.Equal(t, want, publicNamedRoleGrantRows(ctx, t, admin, namedGrantProbeRole),
+			"re-provisioning overwrites search_path; a grant the revokes missed must still be reported afterwards")
+
+		require.Empty(t, publicNamedRoleGrantRows(ctx, t, admin, env.adminUser),
+			"the table owner's own ACL entry is ownership, not a grant, and is not reported")
 
 		for _, stmt := range []string{
 			`REVOKE ALL ON public.` + namedGrantProbeTable + ` FROM ` + namedGrantProbeRole,
