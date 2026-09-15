@@ -9,7 +9,6 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -188,38 +187,6 @@ func TestBuildServerTLSConfigMinVersion(t *testing.T) {
 	}
 }
 
-// waitForServerReady polls the server's bound address and stored *http.Server
-// pointer, both of which must be non-nil before a test dials it. Echo fires
-// ListenerAddrFunc before BeforeServeFunc, so gating on boundAddr alone can
-// dial while httpServer is still nil — a state where Shutdown is a silent
-// no-op.
-func waitForServerReady(t *testing.T, srv *Server) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for srv.boundAddr.Load() == nil || srv.httpServer.Load() == nil {
-		if time.Now().After(deadline) {
-			t.Fatal("server did not become ready within timeout")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
-func shutdownAndDrain(t *testing.T, srv *Server, errCh <-chan error) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	t.Cleanup(cancel)
-	require.NoError(t, srv.Shutdown(ctx))
-
-	select {
-	case err := <-errCh:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-			t.Fatalf("unexpected error from server: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("server did not shut down in time")
-	}
-}
-
 func TestServerStartsTLSAndServesHealth(t *testing.T) {
 	caCertPEM, issueServer := newTestCA(t, "test-ca")
 	certPEM, keyPEM := issueServer("127.0.0.1")
@@ -244,7 +211,10 @@ func TestServerStartsTLSAndServesHealth(t *testing.T) {
 	}()
 
 	waitForServerReady(t, srv)
-	addr := *srv.boundAddr.Load()
+	addr := srv.BoundAddr()
+	tcpAddr, ok := addr.(*net.TCPAddr)
+	require.True(t, ok, "BoundAddr must be the TLS listener's TCP address")
+	assert.NotZero(t, tcpAddr.Port)
 
 	pool := x509.NewCertPool()
 	require.True(t, pool.AppendCertsFromPEM(caCertPEM))
@@ -283,7 +253,7 @@ func TestServerTLSBadMaterialFailsStart(t *testing.T) {
 
 	err := srv.Start()
 	require.Error(t, err)
-	assert.Nil(t, srv.boundAddr.Load())
+	assert.Nil(t, srv.BoundAddr())
 }
 
 // TestServerStaleMaterialWarnsWhenDisabled pins the fail-open-but-not-silent
@@ -309,7 +279,7 @@ func TestServerStaleMaterialWarnsWhenDisabled(t *testing.T) {
 	}()
 
 	waitForServerReady(t, srv)
-	addr := *srv.boundAddr.Load()
+	addr := srv.BoundAddr()
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, fmt.Sprintf("http://%s/health", addr.String()), http.NoBody)
 	require.NoError(t, err)
