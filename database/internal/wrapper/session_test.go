@@ -174,6 +174,84 @@ func TestSessionRowsIterationErrorIsNotTranslated(t *testing.T) {
 		"documented exception: rows-iteration errors are NOT translated to sql.ErrConnDone")
 }
 
+// TestSessionIterationBadConnInvalidatesSession pins the ErrConnDone promise for
+// the call AFTER a mid-stream driver.ErrBadConn: database/sql releases the
+// Rows' connection with the Close error, not the iteration error, so the pinned
+// *sql.Conn is not discarded by database/sql itself.
+func TestSessionIterationBadConnInvalidatesSession(t *testing.T) {
+	failingRows := func(m sqlmock.Sqlmock) {
+		m.ExpectQuery("SELECT n").WillReturnRows(
+			sqlmock.NewRows([]string{"n"}).AddRow(1).RowError(0, driver.ErrBadConn))
+	}
+	iterateToBadConn := func(t *testing.T, rows *sql.Rows) {
+		t.Helper()
+		assert.False(t, rows.Next())
+		require.ErrorIs(t, rows.Err(), driver.ErrBadConn)
+		require.NoError(t, rows.Close())
+	}
+	tests := []struct {
+		name      string
+		setup     func(sqlmock.Sqlmock)
+		observe   func(*testing.T, context.Context, types.Session)
+		followUps bool
+	}{
+		{name: "query_rows", setup: failingRows, followUps: true,
+			observe: func(t *testing.T, ctx context.Context, s types.Session) {
+				rows, err := s.Query(ctx, "SELECT n FROM t")
+				require.NoError(t, err)
+				iterateToBadConn(t, rows)
+			}},
+		{name: "query_row_scan", setup: failingRows, followUps: true,
+			observe: func(t *testing.T, ctx context.Context, s types.Session) {
+				var n int
+				require.ErrorIs(t, s.QueryRow(ctx, "SELECT n FROM t").Scan(&n), sql.ErrConnDone)
+			}},
+		{name: "rows_held_open_across_a_call_then_fail", followUps: true,
+			setup: func(m sqlmock.Sqlmock) {
+				failingRows(m)
+				m.ExpectExec("SET x").WillReturnResult(sqlmock.NewResult(0, 0))
+			},
+			observe: func(t *testing.T, ctx context.Context, s types.Session) {
+				rows, err := s.Query(ctx, "SELECT n FROM t")
+				require.NoError(t, err)
+				_, err = s.Exec(ctx, "SET x = 1")
+				require.NoError(t, err, "the Rows is still open, so this call must go through")
+				iterateToBadConn(t, rows)
+			}},
+		{name: "close_directly_after_rows_fail", setup: failingRows,
+			observe: func(t *testing.T, ctx context.Context, s types.Session) {
+				rows, err := s.Query(ctx, "SELECT n FROM t")
+				require.NoError(t, err)
+				iterateToBadConn(t, rows)
+			}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, sess := openMockSession(t)
+			ctx := context.Background()
+
+			tt.setup(mock)
+			mock.ExpectExec("SELECT 1").WillReturnResult(sqlmock.NewResult(0, 0))
+
+			tt.observe(t, ctx, sess)
+			if tt.followUps {
+				_, err := sess.Exec(ctx, "SELECT 1")
+				require.ErrorIs(t, err, sql.ErrConnDone, "the call after the dead backend was observed must not reach the driver")
+				rows, err := sess.Query(ctx, "SELECT 1")
+				require.ErrorIs(t, err, sql.ErrConnDone)
+				assert.Nil(t, rows)
+				require.ErrorIs(t, sess.QueryRow(ctx, "SELECT 1").Err(), sql.ErrConnDone)
+				_, err = sess.BeginTx(ctx, nil)
+				require.ErrorIs(t, err, sql.ErrConnDone)
+			}
+
+			require.NoError(t, sess.Close())
+			assert.Zero(t, db.Stats().OpenConnections, "a connection shown dead is discarded, not pooled")
+			require.ErrorIs(t, sess.Close(), sql.ErrConnDone)
+		})
+	}
+}
+
 // TestSessionCloseAfterRowsClosedReturnsPromptly pins the documented ordering
 // contract on types.Session: with the Rows closed first, Session.Close completes
 // instead of blocking on database/sql's closing mutex. The reverse order

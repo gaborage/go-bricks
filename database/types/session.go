@@ -35,7 +35,9 @@ package types
 // errors.Is(err, sql.ErrConnDone). After Close, every call does so
 // immediately. One exception: a failure that only surfaces while iterating the
 // *sql.Rows returned by Query reaches the caller RAW through rows.Next and
-// rows.Err, and is never translated.
+// rows.Err, and is never translated — the calls after it still return
+// sql.ErrConnDone, except when those Rows came from a Tx begun on the Session
+// (gaborage/go-bricks#1664).
 //
 // A Session must not be used concurrently: database/sql does not serialize
 // statements on a single pinned connection, so concurrent calls on one Session
