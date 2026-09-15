@@ -2063,7 +2063,7 @@ stats := cacheManager.Stats()  // From app internals
 //   ActiveCaches:  45,      // Current active instances
 //   TotalCreated:  128,     // Lifetime total
 //   Evictions:     12,      // LRU evictions
-//   Removals:      3,       // Explicit Remove calls
+//   Removals:      3,       // Explicit Remove calls that detached an instance
 //   IdleCleanups:  71,      // Timeout cleanups
 //   Errors:        0,       // Creation/close errors
 //   MaxSize:       100,
@@ -2587,7 +2587,7 @@ managerStats := cacheManager.Stats()
 //   ActiveCaches: 45,      // Current tenant caches
 //   TotalCreated: 128,     // Lifetime cache instances
 //   Evictions:    12,      // LRU evictions
-//   Removals:     3,       // Explicit Remove calls
+//   Removals:     3,       // Explicit Remove calls that detached an instance
 //   IdleCleanups: 71,      // Idle timeout cleanups
 //   Errors:       0        // Creation/close errors
 // }
