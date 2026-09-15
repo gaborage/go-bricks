@@ -136,6 +136,13 @@ tenant's schema, tables, ledger row and outbox event as one unit —
 validation and error wrapping, against a `database.Executor`:
 
 ```go
+import (
+    "context"
+
+    "github.com/gaborage/go-bricks/database"
+    "github.com/gaborage/go-bricks/migration"
+)
+
 err := database.WithTx(ctx, conn, func(ctx context.Context, tx database.Tx) error {
     if err := migration.ProvisionPGRolesTx(ctx, tx, spec); err != nil {
         return err
