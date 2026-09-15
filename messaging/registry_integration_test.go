@@ -48,10 +48,8 @@ func TestRegistryRedeclaresDeletedQueueAfterReconnect(t *testing.T) {
 	registry.RegisterConsumer(&ConsumerDeclaration{Queue: queue, EventType: testEventType, Workers: 1, Handler: handler})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(func() {
-		registry.StopConsumers()
-		cancel()
-	})
+	defer cancel()
+	defer registry.StopConsumers()
 	require.NoError(t, registry.DeclareInfrastructure(ctx))
 	require.NoError(t, registry.StartConsumers(ctx))
 	generation, _ := client.channelGeneration()
