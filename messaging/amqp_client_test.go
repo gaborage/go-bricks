@@ -1010,6 +1010,43 @@ func TestInitSuccessAndFailurePaths(t *testing.T) {
 	c.m.Unlock()
 }
 
+// TestAMQPClientChannelGenerationTracksReadyIncarnation pins the accessor the
+// registry's redeclare guard reads: one generation per channel incarnation,
+// reported together with whether that incarnation is ready, and readable
+// concurrently with a channel rotation (the race detector is the assertion).
+func TestAMQPClientChannelGenerationTracksReadyIncarnation(t *testing.T) {
+	c := newClientWithFakeChannel(t, &fakeChannel{})
+	gen, ready := c.channelGeneration()
+	assert.Equal(t, uint64(1), gen)
+	assert.True(t, ready)
+
+	c.m.Lock()
+	c.isReady = false
+	c.m.Unlock()
+
+	stop, stopped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stopped)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				c.channelGeneration()
+			}
+		}
+	}()
+	for range 20 {
+		c.changeChannel(&fakeChannel{})
+	}
+	close(stop)
+	<-stopped
+
+	gen, ready = c.channelGeneration()
+	assert.Equal(t, uint64(21), gen)
+	assert.False(t, ready)
+}
+
 func TestHandleReconnectExitsOnDone(t *testing.T) {
 	t.Log("spawn reconnect and close done")
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, brokerURL: "amqp://example", reconnectDelay: 5 * time.Millisecond}

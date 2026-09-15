@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -89,6 +90,13 @@ type Registry struct {
 	// after a delivery-channel close. Defaults to defaultConsumerResubscribeDelay;
 	// tests lower it for fast iteration.
 	resubscribeDelay time.Duration
+	// declaredGeneration is the channel generation the topology was last declared on.
+	declaredGeneration atomic.Uint64
+	// redeclareMu serializes redeclare passes. Lock order is redeclareMu before
+	// mu; DeclareInfrastructure holds mu without it, so declaredGeneration is atomic.
+	redeclareMu sync.Mutex
+	// redeclareSkip holds declarations refused with PRECONDITION_FAILED. Guarded by redeclareMu.
+	redeclareSkip map[string]struct{}
 }
 
 // setTenantStamps records whether this registry's consumers read a tenant stamp.
@@ -171,6 +179,7 @@ func NewRegistry(client AMQPClient, log logger.Logger) *Registry {
 		consumerIndex:    make(map[consumerKey]*ConsumerDeclaration),
 		consumerOrder:    make([]consumerKey, 0),
 		resubscribeDelay: defaultConsumerResubscribeDelay,
+		redeclareSkip:    make(map[string]struct{}),
 	}
 }
 
@@ -308,6 +317,11 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 		return fmt.Errorf("context canceled while waiting for AMQP client: %w", ctx.Err())
 	default: // readyWaitTimedOut (readyWaitDone is unreachable: done is nil)
 		return errors.New("timeout waiting for AMQP client to be ready")
+	}
+
+	if client, ok := r.client.(channelGenerationer); ok {
+		generation, _ := client.channelGeneration()
+		r.declaredGeneration.Store(generation)
 	}
 
 	r.logger.Info().
@@ -632,6 +646,7 @@ func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaratio
 			return nil, false
 		}
 
+		r.redeclareTopology(ctx)
 		deliveries, err := r.client.ConsumeFromQueue(ctx, opts)
 		if err == nil {
 			log.Info().Int("attempt", attempt).
@@ -669,6 +684,94 @@ func withAMQPReply(event logger.LogEvent, err error) logger.LogEvent {
 		return event.Int("amqp_reply_code", amqpErr.Code).Str("amqp_reply_text", amqpErr.Reason)
 	}
 	return event
+}
+
+// channelGenerationer is the optional client capability the reconnect
+// redeclare pass keys on. AMQPClientImpl implements it; a client without it (a
+// custom ClientFactory wrapper, an external AMQPClient) never redeclares.
+type channelGenerationer interface {
+	channelGeneration() (generation uint64, ready bool)
+}
+
+var _ channelGenerationer = (*AMQPClientImpl)(nil)
+
+// topologyStep is one recorded declaration, keyed for logs and the skip set.
+type topologyStep struct {
+	key     string
+	declare func(context.Context) error
+}
+
+// bindingKey is the topologyStep key of a binding.
+func bindingKey(b *BindingDeclaration) string {
+	return "binding:" + b.Queue + "|" + b.Exchange + "|" + b.RoutingKey
+}
+
+// topologySteps snapshots the declarations in order: exchanges, queues, bindings.
+func (r *Registry) topologySteps() []topologyStep {
+	exchanges, queues, bindings := r.Exchanges(), r.Queues(), r.Bindings()
+	steps := make([]topologyStep, 0, len(exchanges)+len(queues)+len(bindings))
+	for name, exchange := range exchanges {
+		steps = append(steps, topologyStep{key: "exchange:" + name, declare: func(ctx context.Context) error {
+			return r.client.DeclareExchange(ctx, exchange)
+		}})
+	}
+	for name, queue := range queues {
+		steps = append(steps, topologyStep{key: "queue:" + name, declare: func(ctx context.Context) error {
+			return r.client.DeclareQueue(ctx, queue)
+		}})
+	}
+	for _, binding := range bindings {
+		steps = append(steps, topologyStep{
+			key:     bindingKey(binding),
+			declare: func(ctx context.Context) error { return r.client.BindQueue(ctx, binding) },
+		})
+	}
+	return steps
+}
+
+// redeclareTopology re-runs the recorded declarations once per client channel
+// generation, before a consumer re-subscribes. It is a no-op for a client without
+// channelGeneration, a client not ready, or a generation already declared. The
+// first failure ends the pass; the next channel retries. A declaration refused
+// with PRECONDITION_FAILED is skipped by every later pass until the process
+// restarts: the operator fixes the server-side definition and restarts.
+func (r *Registry) redeclareTopology(ctx context.Context) {
+	client, ok := r.client.(channelGenerationer)
+	if !ok {
+		return
+	}
+	r.redeclareMu.Lock()
+	defer r.redeclareMu.Unlock()
+
+	generation, ready := client.channelGeneration()
+	if !ready || generation == r.declaredGeneration.Load() {
+		return
+	}
+	r.declaredGeneration.Store(generation)
+
+	for _, step := range r.topologySteps() {
+		if _, skipped := r.redeclareSkip[step.key]; skipped {
+			continue
+		}
+		err := step.declare(ctx)
+		if err == nil {
+			continue
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		msg := "Messaging topology redeclare failed, the next channel retries"
+		var amqpErr *amqp.Error
+		if errors.As(err, &amqpErr) && amqpErr.Code == amqp.PreconditionFailed {
+			r.redeclareSkip[step.key] = struct{}{}
+			msg = "Messaging declaration rejected with PRECONDITION_FAILED, skipped until restart: " +
+				"fix the server-side definition and restart the process"
+		}
+		withAMQPReply(r.logger.Warn(), err).Err(err).Str("declaration", step.key).
+			Uint64("channel_generation", generation).Msg(msg)
+		return
+	}
+	r.logger.Info().Uint64("channel_generation", generation).Msg("Messaging topology redeclared on new channel")
 }
 
 // handleMessages runs a single consumer session: it spawns a worker pool

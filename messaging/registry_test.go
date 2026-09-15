@@ -2250,24 +2250,7 @@ func TestRegistryConsumerResubscribesAfterDeliveryChannelCloses(t *testing.T) {
 	}, time.Second, 2*time.Millisecond, "consumer did not re-subscribe after delivery channel close")
 
 	// Prove the new subscription is live: a delivery on ch2 is processed.
-	acker := &mockAcknowledger{}
-	ch2 <- amqp.Delivery{
-		MessageId:    testMessageID,
-		Body:         []byte(testMessageBody),
-		Headers:      amqp.Table{},
-		Acknowledger: acker,
-	}
-	require.Eventually(t, func() bool {
-		return handler.CallCount() >= 1
-	}, time.Second, 2*time.Millisecond, "delivery after re-subscribe was not processed")
-
-	// Wait for processMessage's full tail (metrics + ack) to finish, not just
-	// the handler call, so this test's worker goroutine cannot outlive the
-	// test and race a later test's global meter/tracer reset (plan 099 wires
-	// tracking calls into the success path this delivery takes).
-	require.Eventually(t, func() bool {
-		return acker.AckCalled()
-	}, time.Second, 2*time.Millisecond, "delivery after re-subscribe was not acked")
+	deliverAndAwaitAck(t, ch2, handler)
 
 	registry.StopConsumers()
 }
@@ -2311,24 +2294,7 @@ func TestRegistryConsumerResubscribeRetriesUntilClientReady(t *testing.T) {
 		return client.consumeCallCount() >= 4
 	}, 2*time.Second, 2*time.Millisecond, "consumer did not retry re-subscribe until client ready")
 
-	acker := &mockAcknowledger{}
-	ch2 <- amqp.Delivery{
-		MessageId:    testMessageID,
-		Body:         []byte(testMessageBody),
-		Headers:      amqp.Table{},
-		Acknowledger: acker,
-	}
-	require.Eventually(t, func() bool {
-		return handler.CallCount() >= 1
-	}, time.Second, 2*time.Millisecond, "delivery after re-subscribe was not processed")
-
-	// Wait for processMessage's full tail (metrics + ack) to finish, not just
-	// the handler call, so this test's worker goroutine cannot outlive the
-	// test and race a later test's global meter/tracer reset (plan 099 wires
-	// tracking calls into the success path this delivery takes).
-	require.Eventually(t, func() bool {
-		return acker.AckCalled()
-	}, time.Second, 2*time.Millisecond, "delivery after re-subscribe was not acked")
+	deliverAndAwaitAck(t, ch2, handler)
 
 	registry.StopConsumers()
 
@@ -2454,6 +2420,338 @@ func TestRegistryConsumerResubscribeEscalatesToWarnFromFifthFailure(t *testing.T
 	success := log.Line(t, resubscribedMsg)
 	assert.Equal(t, gobrickslogger.LevelInfo, success.Level)
 	assert.Equal(t, []string{"6"}, success.Values("attempt"))
+}
+
+// ===== Topology Redeclare After Reconnect Tests =====
+
+const (
+	testBindingKey      = "binding:" + testQueueName + "|" + testExchangeName + "|orders.#"
+	redeclaredMsg       = "Messaging topology redeclared on new channel"
+	redeclareFailedMsg  = "Messaging topology redeclare failed, the next channel retries"
+	redeclareSkippedMsg = "Messaging declaration rejected with PRECONDITION_FAILED, skipped until restart: fix the server-side definition and restart the process"
+)
+
+// reconnectingMockClient fakes a broker behind a reconnecting client. It keeps
+// the declared queues, fails a consume on a missing queue with 404, fails the
+// declares scripted in declareErrs, and exposes a channel generation. A broker
+// error (*amqp.Error) closes the channel like RabbitMQ does: a failed consume
+// rotates the generation at once, a failed declare leaves the channel dead until
+// the next consume attempt observes it and the client reinitializes. Any other
+// declare error leaves the channel open.
+type reconnectingMockClient struct {
+	*simpleMockAMQPClient
+	callMu        sync.Mutex
+	generation    uint64
+	notReady      bool
+	channelClosed bool
+	notReadyCalls int
+	queues        map[string]bool
+	declareErrs   map[string][]error
+	consumeErrs   []error
+	declares      map[string][]string // key -> generation of each declare attempt, in order
+	subscriptions []chan amqp.Delivery
+}
+
+var (
+	_ AMQPClient          = (*reconnectingMockClient)(nil)
+	_ channelGenerationer = (*reconnectingMockClient)(nil)
+)
+
+func newReconnectingMockClient() *reconnectingMockClient {
+	return &reconnectingMockClient{
+		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
+		generation:           1,
+		queues:               map[string]bool{},
+		declareErrs:          map[string][]error{},
+		declares:             map[string][]string{},
+	}
+}
+
+func (m *reconnectingMockClient) locked(fn func()) {
+	m.callMu.Lock()
+	defer m.callMu.Unlock()
+	fn()
+}
+
+func (m *reconnectingMockClient) channelGeneration() (generation uint64, ready bool) {
+	m.callMu.Lock()
+	defer m.callMu.Unlock()
+	return m.generation, !m.notReady
+}
+
+func (m *reconnectingMockClient) declare(key string, onSuccess func()) error {
+	m.callMu.Lock()
+	defer m.callMu.Unlock()
+	if m.notReady {
+		return errNotConnected
+	}
+	m.declares[key] = append(m.declares[key], strconv.FormatUint(m.generation, 10))
+	if errs := m.declareErrs[key]; len(errs) > 0 {
+		m.declareErrs[key] = errs[1:]
+		var amqpErr *amqp.Error
+		if errors.As(errs[0], &amqpErr) {
+			m.channelClosed = true
+		}
+		return errs[0]
+	}
+	if onSuccess != nil {
+		onSuccess()
+	}
+	return nil
+}
+
+func (m *reconnectingMockClient) DeclareExchange(_ context.Context, exchange *ExchangeDeclaration) error {
+	return m.declare("exchange:"+exchange.Name, nil)
+}
+
+func (m *reconnectingMockClient) DeclareQueue(_ context.Context, queue *QueueDeclaration) error {
+	return m.declare("queue:"+queue.Name, func() { m.queues[queue.Name] = true })
+}
+
+func (m *reconnectingMockClient) BindQueue(_ context.Context, binding *BindingDeclaration) error {
+	return m.declare(bindingKey(binding), nil)
+}
+
+func (m *reconnectingMockClient) ConsumeFromQueue(_ context.Context, opts ConsumeOptions) (<-chan amqp.Delivery, error) {
+	m.callMu.Lock()
+	defer m.callMu.Unlock()
+	switch {
+	case m.notReady:
+		m.notReadyCalls++
+		return nil, errNotConnected
+	case m.channelClosed:
+		m.channelClosed = false
+		m.generation++
+		return nil, amqp.ErrClosed
+	case len(m.consumeErrs) > 0:
+		err := m.consumeErrs[0]
+		m.consumeErrs = m.consumeErrs[1:]
+		return nil, err
+	case !m.queues[opts.Queue]:
+		m.generation++
+		return nil, &amqp.Error{Code: amqp.NotFound, Reason: "NOT_FOUND - no queue '" + opts.Queue + "'", Server: true}
+	}
+	ch := make(chan amqp.Delivery, 1)
+	m.subscriptions = append(m.subscriptions, ch)
+	return ch, nil
+}
+
+// declaresOf returns the generation of every declare attempt for key, in order.
+func (m *reconnectingMockClient) declaresOf(key string) []string {
+	m.callMu.Lock()
+	defer m.callMu.Unlock()
+	return slices.Clone(m.declares[key])
+}
+
+// subscription returns the i-th successful subscription, or nil before it exists.
+func (m *reconnectingMockClient) subscription(i int) chan amqp.Delivery {
+	m.callMu.Lock()
+	defer m.callMu.Unlock()
+	if i < len(m.subscriptions) {
+		return m.subscriptions[i]
+	}
+	return nil
+}
+
+// startRedeclareRegistry declares one exchange, queue and binding plus a
+// consumer on the queue, then starts consuming on the client's first channel.
+func startRedeclareRegistry(t *testing.T, client AMQPClient, log gobrickslogger.Logger, handler MessageHandler) {
+	t.Helper()
+	registry := NewRegistry(client, log)
+	registry.resubscribeDelay = time.Millisecond
+	registry.RegisterExchange(&ExchangeDeclaration{Name: testExchangeName, Type: "topic", Durable: true})
+	registry.RegisterQueue(&QueueDeclaration{Name: testQueueName, Durable: true})
+	registry.RegisterBinding(&BindingDeclaration{Queue: testQueueName, Exchange: testExchangeName, RoutingKey: "orders.#"})
+	registry.RegisterConsumer(&ConsumerDeclaration{Queue: testQueueName, EventType: testEventType, Workers: 1, Handler: handler})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		registry.StopConsumers()
+		cancel()
+	})
+	require.NoError(t, registry.DeclareInfrastructure(ctx))
+	require.NoError(t, registry.StartConsumers(ctx))
+}
+
+// awaitSubscription waits until the client has handed out its i-th subscription.
+func awaitSubscription(t *testing.T, client *reconnectingMockClient, i int) chan amqp.Delivery {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		return client.subscription(i) != nil
+	}, 5*time.Second, time.Millisecond, "consumer did not subscribe a %d-th time", i+1)
+	return client.subscription(i)
+}
+
+// deliverAndAwaitAck proves a subscription is live: the delivery reaches the
+// handler and processMessage's tail acks it before the test moves on.
+func deliverAndAwaitAck(t *testing.T, ch chan amqp.Delivery, handler *countingTestHandler) {
+	t.Helper()
+	acker := &mockAcknowledger{}
+	ch <- amqp.Delivery{MessageId: testMessageID, Body: []byte(testMessageBody), Headers: amqp.Table{}, Acknowledger: acker}
+	require.Eventually(t, acker.AckCalled, 5*time.Second, time.Millisecond, "delivery was not acked")
+	assert.Positive(t, handler.CallCount())
+}
+
+// TestRegistryRedeclaresLostTopologyBeforeResubscribing is the acceptance test
+// for a broker that lost its topology across a reconnect: once the client is
+// ready on a new channel the registry declares the queue again, and the
+// consumer receives the next message.
+func TestRegistryRedeclaresLostTopologyBeforeResubscribing(t *testing.T) {
+	client := newReconnectingMockClient()
+	handler := &countingTestHandler{}
+	startRedeclareRegistry(t, client, &stubLogger{}, handler)
+	first := awaitSubscription(t, client, 0)
+
+	client.locked(func() {
+		delete(client.queues, testQueueName)
+		client.notReady = true
+		client.generation++
+	})
+	close(first)
+	require.Eventually(t, func() bool {
+		var calls int
+		client.locked(func() { calls = client.notReadyCalls })
+		return calls >= 2
+	}, 5*time.Second, time.Millisecond, "consumer did not retry while the client was reconnecting")
+	client.locked(func() { client.notReady = false })
+
+	deliverAndAwaitAck(t, awaitSubscription(t, client, 1), handler)
+	assert.Equal(t, []string{"1", "2"}, client.declaresOf("queue:"+testQueueName))
+}
+
+// TestRegistryRedeclaresOncePerChannelGeneration verifies a healthy reconnect
+// costs one declare pass per new channel: the backoff attempts that follow
+// within the same generation declare nothing.
+func TestRegistryRedeclaresOncePerChannelGeneration(t *testing.T) {
+	client := newReconnectingMockClient()
+	handler := &countingTestHandler{}
+	startRedeclareRegistry(t, client, &stubLogger{}, handler)
+	first := awaitSubscription(t, client, 0)
+
+	client.locked(func() {
+		client.generation++
+		client.consumeErrs = []error{errNotConnected, errNotConnected, errNotConnected}
+	})
+	close(first)
+
+	deliverAndAwaitAck(t, awaitSubscription(t, client, 1), handler)
+	for _, key := range []string{"exchange:" + testExchangeName, "queue:" + testQueueName, testBindingKey} {
+		assert.Equal(t, []string{"1", "2"}, client.declaresOf(key), key)
+	}
+}
+
+// TestRegistryRedeclareDoesNotRetryFailedPassOnSameChannel verifies a pass that fails
+// without losing the channel is not re-run by the backoff attempts on that generation.
+func TestRegistryRedeclareDoesNotRetryFailedPassOnSameChannel(t *testing.T) {
+	client := newReconnectingMockClient()
+	handler := &countingTestHandler{}
+	startRedeclareRegistry(t, client, &stubLogger{}, handler)
+	first := awaitSubscription(t, client, 0)
+
+	client.locked(func() {
+		client.generation++
+		client.declareErrs["exchange:"+testExchangeName] = []error{errNotConnected}
+		client.consumeErrs = []error{errNotConnected, errNotConnected}
+	})
+	close(first)
+
+	deliverAndAwaitAck(t, awaitSubscription(t, client, 1), handler)
+	assert.Equal(t, []string{"1", "2"}, client.declaresOf("exchange:"+testExchangeName))
+	assert.Equal(t, []string{"1"}, client.declaresOf("queue:"+testQueueName))
+	assert.Equal(t, []string{"1"}, client.declaresOf(testBindingKey))
+}
+
+// TestRegistryResubscribeOnSameChannelDoesNotRedeclare verifies a delivery
+// channel closed without a new channel (a broker basic.cancel) re-subscribes
+// without a pass, because DeclareInfrastructure recorded its generation.
+func TestRegistryResubscribeOnSameChannelDoesNotRedeclare(t *testing.T) {
+	client := newReconnectingMockClient()
+	handler := &countingTestHandler{}
+	startRedeclareRegistry(t, client, &stubLogger{}, handler)
+	close(awaitSubscription(t, client, 0))
+
+	deliverAndAwaitAck(t, awaitSubscription(t, client, 1), handler)
+	assert.Equal(t, []string{"1"}, client.declaresOf("queue:"+testQueueName))
+}
+
+// TestRegistryResubscribeWithoutChannelGenerationDoesNotRedeclare verifies a
+// client that does not expose channelGeneration keeps the behavior from before
+// the redeclare pass: re-subscribing declares nothing.
+func TestRegistryResubscribeWithoutChannelGenerationDoesNotRedeclare(t *testing.T) {
+	ch1 := make(chan amqp.Delivery)
+	client := &resubscribingMockClient{
+		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
+		results:              []consumeResult{{ch: ch1}},
+	}
+	_, exposesGeneration := AMQPClient(client).(channelGenerationer)
+	require.False(t, exposesGeneration)
+	startRedeclareRegistry(t, client, &stubLogger{}, &countingTestHandler{})
+
+	close(ch1)
+	require.Eventually(t, func() bool {
+		return client.consumeCallCount() >= 2
+	}, 5*time.Second, time.Millisecond, "consumer did not re-subscribe")
+	client.mu.RLock()
+	defer client.mu.RUnlock()
+	assert.Equal(t, []string{testQueueName}, client.declaredQueues)
+}
+
+// TestRegistryRedeclareSkipsDeclarationRejectedWithPreconditionFailed pins the
+// 406 rule: a declaration the broker refuses because a surviving entity has
+// different arguments ends that pass, logs one WARN, and is skipped by every
+// later pass in the process, so the consumer attaches to the surviving queue.
+func TestRegistryRedeclareSkipsDeclarationRejectedWithPreconditionFailed(t *testing.T) {
+	client := newReconnectingMockClient()
+	handler := &countingTestHandler{}
+	log := newRecordingLogger()
+	startRedeclareRegistry(t, client, log, handler)
+	first := awaitSubscription(t, client, 0)
+
+	mismatch := &amqp.Error{Code: amqp.PreconditionFailed, Reason: "PRECONDITION_FAILED - inequivalent arg 'x-queue-type'", Server: true}
+	client.locked(func() {
+		client.generation++
+		client.declareErrs["queue:"+testQueueName] = []error{mismatch, mismatch}
+	})
+	close(first)
+	second := awaitSubscription(t, client, 1)
+
+	client.locked(func() { client.generation++ })
+	close(second)
+	deliverAndAwaitAck(t, awaitSubscription(t, client, 2), handler)
+
+	assert.Equal(t, []string{"1", "2"}, client.declaresOf("queue:"+testQueueName))
+	assert.Equal(t, []string{"1", "3", "4"}, client.declaresOf(testBindingKey))
+	skipped := log.Line(t, redeclareSkippedMsg)
+	assert.Equal(t, gobrickslogger.LevelWarn, skipped.Level)
+	assert.Equal(t, []string{"406"}, skipped.Values("amqp_reply_code"))
+	assert.Equal(t, []string{mismatch.Reason}, skipped.Values("amqp_reply_text"))
+	assert.Equal(t, []string{"queue:" + testQueueName}, skipped.Values("declaration"))
+}
+
+// TestRegistryRedeclareRetriesFailedDeclarationOnNextChannel verifies a
+// redeclare failure other than PRECONDITION_FAILED logs a WARN carrying the
+// broker reply, keeps the re-subscribe loop going, and is declared again on the
+// next channel.
+func TestRegistryRedeclareRetriesFailedDeclarationOnNextChannel(t *testing.T) {
+	client := newReconnectingMockClient()
+	handler := &countingTestHandler{}
+	log := newRecordingLogger()
+	startRedeclareRegistry(t, client, log, handler)
+	first := awaitSubscription(t, client, 0)
+
+	client.locked(func() {
+		client.generation++
+		client.declareErrs["exchange:"+testExchangeName] = []error{amqp.ErrClosed}
+	})
+	close(first)
+
+	deliverAndAwaitAck(t, awaitSubscription(t, client, 1), handler)
+	assert.Equal(t, []string{"1", "2", "3"}, client.declaresOf("exchange:"+testExchangeName))
+	failed := log.Line(t, redeclareFailedMsg)
+	assert.Equal(t, gobrickslogger.LevelWarn, failed.Level)
+	assert.Equal(t, []string{"504"}, failed.Values("amqp_reply_code"))
+	assert.Equal(t, []string{"exchange:" + testExchangeName}, failed.Values("declaration"))
+	assert.Equal(t, []string{"3"}, log.Line(t, redeclaredMsg).Values("channel_generation"))
 }
 
 // ===== Consume metrics + receive span tests (plan 099) =====
