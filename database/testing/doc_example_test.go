@@ -5,6 +5,7 @@ package testing_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -57,6 +58,13 @@ func relayLedger(ctx context.Context, db *dbtesting.TestDB) (rowsAffected int64,
 	if err != nil {
 		return 0, err
 	}
+	// Neither Session.Close nor the unlock above ends the transaction, so every
+	// non-commit path rolls it back before the lock is released.
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
 	res, err := tx.Exec(ctx, docUpdateSQL)
 	if err != nil {
 		return 0, err
@@ -94,5 +102,30 @@ func TestExpectSessionDocExample(t *testing.T) {
 	execs := sess.ExecLog()
 	require.Len(t, execs, 2, "the lock and the unlock run on the session, the UPDATE on its transaction")
 	assert.Equal(t, docLockSQL, execs[0].SQL)
+	assert.Equal(t, docUnlockSQL, execs[1].SQL)
+}
+
+// TestExpectSessionDocExampleRollsBackFailedUpdate pins the example's
+// non-commit path: a failed UPDATE rolls the transaction back, and the unlock
+// and Close still run.
+func TestExpectSessionDocExampleRollsBackFailedUpdate(t *testing.T) {
+	ctx := context.Background()
+	errUpdate := errors.New("update failed")
+
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	sess := db.ExpectSession()
+	sess.ExpectExec("pg_advisory_lock").WillReturnRowsAffected(1)
+	sess.ExpectExec("pg_advisory_unlock").WillReturnRowsAffected(1)
+	sess.ExpectTransaction().ExpectExec("UPDATE ledger").WillReturnError(errUpdate)
+
+	rows, err := relayLedger(ctx, db)
+
+	require.ErrorIs(t, err, errUpdate)
+	assert.Zero(t, rows)
+	dbtesting.AssertTransactionRolledBack(t, db)
+	dbtesting.AssertSessionClosed(t, sess)
+
+	execs := sess.ExecLog()
+	require.Len(t, execs, 2, "the unlock still runs after a failed UPDATE")
 	assert.Equal(t, docUnlockSQL, execs[1].SQL)
 }
