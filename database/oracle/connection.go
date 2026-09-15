@@ -451,6 +451,13 @@ func (c *Connection) DatabaseType() string {
 	return types.Oracle
 }
 
+// Session opens a dedicated session pinned to a single physical connection, for
+// session-scoped state; the caller must Close it to release the connection back
+// to the pool. See types.Session for the error, concurrency and lifetime contract.
+func (c *Connection) Session(ctx context.Context) (types.Session, error) {
+	return c.OpenSession(ctx, types.Oracle)
+}
+
 // MigrationTable returns the migration table name for Oracle
 func (c *Connection) MigrationTable() string {
 	return "FLYWAY_SCHEMA_HISTORY"

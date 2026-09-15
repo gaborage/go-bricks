@@ -52,6 +52,7 @@ const (
 	sqlOpBegin    = "BEGIN"
 	sqlOpCommit   = "COMMIT"
 	sqlOpRollback = "ROLLBACK"
+	sqlOpSession  = "SESSION"
 	tableUnknown  = "unknown"
 
 	// Lowercase SQL operation labels returned by extractDBOperation.
@@ -64,6 +65,7 @@ const (
 	sqlOpLowerCreateTable = "create_table"
 	sqlOpLowerPrepare     = "prepare"
 	sqlOpLowerRollback    = "rollback"
+	sqlOpLowerSession     = "session"
 
 	// OpenTelemetry instrumentation constants
 	dbTracerName      = "go-bricks/database"
@@ -448,6 +450,8 @@ func extractDBOperation(query string) string {
 		return sqlOpLowerRollback
 	case equalFoldASCII(q, "CREATE_MIGRATION_TABLE"):
 		return sqlOpLowerCreateTable
+	case equalFoldASCII(q, sqlOpSession):
+		return sqlOpLowerSession
 	}
 
 	// Extract first word (SQL command)
