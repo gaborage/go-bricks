@@ -26,6 +26,19 @@ func TestRegistryRedeclaresDeletedQueueAfterReconnect(t *testing.T) {
 	require.Eventually(t, client.IsReady, 10*time.Second, 100*time.Millisecond, clientReadyMsg)
 
 	exchange, queue := uniqueName(t, "redeclare_exchange"), uniqueName(t, "redeclare_queue")
+
+	// Registered before the registry: t.Cleanup is LIFO, so consumers stop
+	// before these deletes run and cannot re-declare the queue behind them.
+	admin, err := amqp.Dial(brokerURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = admin.Close() })
+	adminCh, err := admin.Channel()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = adminCh.QueueDelete(queue, false, false, false)
+		_ = adminCh.ExchangeDelete(exchange, false, false)
+	})
+
 	handler := &countingTestHandler{}
 	registry := NewRegistry(client, log)
 	registry.resubscribeDelay = 50 * time.Millisecond
@@ -42,16 +55,6 @@ func TestRegistryRedeclaresDeletedQueueAfterReconnect(t *testing.T) {
 	require.NoError(t, registry.DeclareInfrastructure(ctx))
 	require.NoError(t, registry.StartConsumers(ctx))
 	generation, _ := client.channelGeneration()
-
-	admin, err := amqp.Dial(brokerURL)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = admin.Close() })
-	adminCh, err := admin.Channel()
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_, _ = adminCh.QueueDelete(queue, false, false, false)
-		_ = adminCh.ExchangeDelete(exchange, false, false)
-	})
 
 	_, err = adminCh.QueueDelete(queue, false, false, false)
 	require.NoError(t, err)

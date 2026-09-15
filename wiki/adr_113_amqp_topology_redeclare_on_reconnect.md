@@ -46,7 +46,7 @@ The framework never deletes or recreates broker state.
   it inherits it). Any other `AMQPClient` — an external implementation, or a wrapper holding the
   client in a field — never re-declares, which is the behavior before this ADR. A custom
   `app.Options.MessagingClientFactory` therefore keeps the pass only when it returns
-  `NewAMQPClient`'s client.
+  `NewAMQPClient`'s client or a struct embedding it.
 - The first failure ends the pass with one WARN naming the declaration and the channel generation,
   with the broker's reply code and text when the error is an `*amqp.Error`. A refused declare closes
   the channel, so the next generation retries. A failure once the consumer context is canceled ends

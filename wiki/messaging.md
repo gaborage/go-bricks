@@ -815,8 +815,10 @@ both when classifying. Prefer short ctx deadlines on latency-sensitive paths.
 ### Consumer re-subscribe and topology redeclare
 
 When the broker closes a consumer's delivery channel, the consumer re-subscribes with the same
-consume options (a stream consumer resumes past its last delivery): at once, then with full-jitter
-backoff on a fixed 5s base and 60s cap, not the `reconnect.*` keys, while the client reconnects.
+consume options (a stream consumer resumes past its last delivery). A session that lasted under 5s
+first waits out the rest of those 5s; the first attempt then runs at once, and a failed attempt
+retries with full-jitter backoff on a fixed 5s base and 60s cap, not the `reconnect.*` keys, while
+the client reconnects.
 Before re-subscribing on each new channel, the registry re-declares every exchange, queue and
 binding it declared at startup — once per channel, not once per attempt — so a broker that lost its
 topology (a restart without durable definitions, a deleted queue) is repaired without a process
@@ -834,9 +836,10 @@ restart. Declares are idempotent for matching arguments, so a healthy reconnect 
   channel-level 404), the channel closes and the next one re-declares.
 - Re-subscribe failures log at Debug for the first four consecutive attempts and at WARN from the
   fifth, with the broker's reply code and text when the error carries one.
-- Only the framework's own client, the one `messaging.NewAMQPClient` returns, re-declares. Any other
-  `AMQPClient` returned by a custom `app.Options.MessagingClientFactory` re-subscribes without a
-  pass.
+- The pass keys on the unexported `channelGeneration` method, so only a client whose type carries
+  it re-declares: the `*AMQPClientImpl` `messaging.NewAMQPClient` returns, or a struct embedding
+  it. A client type without it from a custom `app.Options.MessagingClientFactory` — an external
+  implementation, or a wrapper holding an `AMQPClient` in a field — re-subscribes without a pass.
 
 See [ADR-113](adr_113_amqp_topology_redeclare_on_reconnect.md).
 
