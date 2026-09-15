@@ -163,6 +163,33 @@ func TestRegisterRoutesAttributesRoutesToRegisteringModule(t *testing.T) {
 	assert.Equal(t, "orders", lines[2].str["module"])
 }
 
+func TestAttributeModuleNamesFillsOnlyUnnamedModuleRoutes(t *testing.T) {
+	routes := []server.RouteDescriptor{
+		{HandlerID: "GET:/health"},
+		{HandlerID: "GET:/orders"},
+		{HandlerID: "POST:/orders", ModuleName: "billing"},
+		{HandlerID: "GET:/users"},
+	}
+
+	attributeModuleNames([]routeSpan{{module: "orders", start: 1}, {module: "users", start: 3}}, routes)
+
+	got := make([]string, len(routes))
+	for i := range routes {
+		got[i] = routes[i].ModuleName
+	}
+	assert.Equal(t, []string{"", "orders", "billing", "users"}, got)
+}
+
+func TestRegisterRoutesRecordsModuleSpansWithRouteLoggingOff(t *testing.T) {
+	reg, _ := newRouteLogRegistry(t, "production", nil,
+		&fakeRouteModule{name: "users", routes: []server.RouteDescriptor{{Method: "GET", Path: "/v1/users"}}},
+		&fakeRouteModule{name: "orders", routes: []server.RouteDescriptor{{Method: "GET", Path: "/v1/orders"}}})
+
+	reg.RegisterRoutes(nil)
+
+	assert.Equal(t, []routeSpan{{module: "users", start: 0}, {module: "orders", start: 1}}, reg.routeSpans)
+}
+
 func TestCollectRouteLogEntriesAttributesRawAndTypedRoutes(t *testing.T) {
 	// Attribution is purely positional: RouteDescriptor.ModuleName is empty for
 	// every route (nothing calls server.WithModule), so the module is derived

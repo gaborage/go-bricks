@@ -8,6 +8,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/server"
 )
 
 // Builder orchestrates the step-by-step construction of an App instance
@@ -167,6 +168,7 @@ func (b *Builder) CreateApp() *Builder {
 		return b
 	}
 
+	probesStart := server.DefaultRouteRegistry.Count()
 	signalHandler, timeoutProvider, srv := b.bootstrap.coreComponents()
 
 	b.app = &App{
@@ -181,6 +183,10 @@ func (b *Builder) CreateApp() *Builder {
 		messagingManager: b.bundle.messagingManager,
 		cacheManager:     b.bundle.cacheManager,
 		resourceProvider: b.bundle.provider,
+	}
+	if b.opts != nil && b.opts.PostRegisterRoutes != nil {
+		b.app.postRegisterRoutes = b.opts.PostRegisterRoutes
+		b.app.probeRoutes = server.DefaultRouteRegistry.Routes()[probesStart:]
 	}
 
 	// Slots are installed here, before ConfigureRuntimeHelpers runs pre-initialization over

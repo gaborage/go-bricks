@@ -46,6 +46,9 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 		return err
 	}
 
+	// Every route registered from here on belongs to this App.
+	routesStart := server.DefaultRouteRegistry.Count()
+
 	// Register debug endpoints if enabled
 	if err := a.registerDebugHandlers(); err != nil {
 		return err
@@ -69,6 +72,20 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 	// at route registration), so the keystore's role log is complete.
 	warnDualRoleKeys(a.logger, a.registry.deps.KeyStore)
 
+	return a.runPostRegisterRoutes(routesStart)
+}
+
+// runPostRegisterRoutes hands the consumer's hook this App's route table once every
+// framework check has passed, so the consumer veto runs last.
+func (a *App) runPostRegisterRoutes(routesStart int) error {
+	if a.postRegisterRoutes == nil {
+		return nil
+	}
+	all := server.DefaultRouteRegistry.Routes()
+	attributeModuleNames(a.registry.routeSpans, all)
+	if err := a.postRegisterRoutes(slices.Concat(a.probeRoutes, all[routesStart:])); err != nil {
+		return fmt.Errorf("app.Options.PostRegisterRoutes rejected the route table: %w", err)
+	}
 	return nil
 }
 

@@ -21,6 +21,9 @@ type ModuleRegistry struct {
 	// rootDBAbsent records the builder's rootDatabaseAbsent verdict, gating the
 	// DatabaseRequirer check. Zero value (false) leaves that check inert.
 	rootDBAbsent bool
+	// routeSpans are the per-module registration spans of the last RegisterRoutes, which
+	// attribute ModuleName on the route table handed to Options.PostRegisterRoutes.
+	routeSpans []routeSpan
 }
 
 // NewModuleRegistry creates a new module registry with the given dependencies.
@@ -178,14 +181,8 @@ func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 	// Attribution is by registration-order delta against DefaultRouteRegistry, NOT
 	// RouteDescriptor.ModuleName (no call site populates it). Startup registration is
 	// single-threaded and append-only, so recorded start indices resolve consistently
-	// against one post-loop Routes() snapshot. The leading framework span captures debug/_sys
-	// routes registered before this loop (single-app-per-process assumed); health/ready bypass
-	// the registry entirely and are not covered here.
+	// against one post-loop Routes() snapshot. The spans are kept for the route-table hook.
 	var spans []routeSpan
-	if logRoutes {
-		spans = append(spans, routeSpan{module: frameworkRouteAttribution, start: 0})
-	}
-
 	for _, module := range r.modules {
 		rr, ok := module.(RouteRegisterer)
 		if !ok {
@@ -195,14 +192,16 @@ func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 			Str("module", module.Name()).
 			Msg("Registering module routes")
 
-		if logRoutes {
-			spans = append(spans, routeSpan{module: module.Name(), start: server.DefaultRouteRegistry.Count()})
-		}
+		spans = append(spans, routeSpan{module: module.Name(), start: server.DefaultRouteRegistry.Count()})
 		rr.RegisterRoutes(handlerRegistry, registrar)
 	}
+	r.routeSpans = spans
 
 	if logRoutes {
-		for _, e := range collectRouteLogEntries(spans, server.DefaultRouteRegistry.Routes()) {
+		// The leading framework span covers what registered before this loop — the
+		// health/ready probes and debug/_sys routes (single-app-per-process assumed).
+		logSpans := append([]routeSpan{{module: frameworkRouteAttribution, start: 0}}, spans...)
+		for _, e := range collectRouteLogEntries(logSpans, server.DefaultRouteRegistry.Routes()) {
 			r.logger.Info().
 				Str("module", e.module).
 				Str("method", e.method).
@@ -213,7 +212,7 @@ func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 }
 
 // frameworkRouteAttribution labels routes registered before the module loop
-// (debug/_sys endpoints via registerDebugHandlers) in the route-registered log.
+// (health/ready probes, debug/_sys endpoints) in the route-registered log.
 const frameworkRouteAttribution = "framework"
 
 // routeSpan marks the half-open registry index range [start, next.start) whose
@@ -230,6 +229,25 @@ type routeLogEntry struct {
 	module, method, path string
 }
 
+// forEachSpanRoute calls fn with each span's module and the index of every route in the
+// span's [start, next.start) range over a snapshot of n routes. A start past n resolves to
+// no routes, and a bogus successor start is clamped to n rather than corrupting this span.
+func forEachSpanRoute(spans []routeSpan, n int, fn func(module string, index int)) {
+	for i, span := range spans {
+		if span.start < 0 {
+			continue // defensive: a negative start is impossible single-threaded
+		}
+		end := n
+		if i+1 < len(spans) {
+			end = spans[i+1].start
+		}
+		end = min(end, n)
+		for j := span.start; j < end; j++ {
+			fn(span.module, j)
+		}
+	}
+}
+
 // collectRouteLogEntries resolves each span's [start, next.start) range against
 // the routes snapshot. Pure (no logger, no globals) so attribution — raw routes
 // (empty RouteDescriptor.ModuleName), zero-route modules, and the pre-loop
@@ -237,22 +255,20 @@ type routeLogEntry struct {
 // site populates RouteDescriptor.ModuleName.
 func collectRouteLogEntries(spans []routeSpan, routes []server.RouteDescriptor) []routeLogEntry {
 	var out []routeLogEntry
-	for i, span := range spans {
-		if span.start < 0 || span.start > len(routes) {
-			continue // defensive: this span's start is out of range (impossible single-threaded)
-		}
-		end := len(routes)
-		if i+1 < len(spans) {
-			end = spans[i+1].start
-		}
-		if end > len(routes) {
-			end = len(routes) // clamp: a bogus successor start must not corrupt this span
-		}
-		for j := span.start; j < end; j++ {
-			out = append(out, routeLogEntry{module: span.module, method: routes[j].Method, path: routes[j].Path})
-		}
-	}
+	forEachSpanRoute(spans, len(routes), func(module string, j int) {
+		out = append(out, routeLogEntry{module: module, method: routes[j].Method, path: routes[j].Path})
+	})
 	return out
+}
+
+// attributeModuleNames sets ModuleName on every route inside a module's span that did not
+// name its own module with server.WithModule. Routes outside every span keep theirs empty.
+func attributeModuleNames(spans []routeSpan, routes []server.RouteDescriptor) {
+	forEachSpanRoute(spans, len(routes), func(module string, j int) {
+		if routes[j].ModuleName == "" {
+			routes[j].ModuleName = module
+		}
+	})
 }
 
 // CollectGlobalMiddleware gathers middleware from modules that implement

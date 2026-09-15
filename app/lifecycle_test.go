@@ -723,6 +723,137 @@ func TestPrepareRuntimeSucceedsWithNoMessagingConfigured(t *testing.T) {
 	require.NoError(t, a.prepareRuntime(context.Background()))
 }
 
+// routeHookConfig is the smallest config NewWithConfig accepts with no database or broker.
+func routeHookConfig(basePath string) *config.Config {
+	return &config.Config{
+		App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
+		Server: config.ServerConfig{
+			Port:    8080,
+			Timeout: defaultTestConfig().Server.Timeout,
+			Path:    config.PathConfig{Base: basePath},
+		},
+		Multitenant: config.MultitenantConfig{Enabled: false},
+		Log:         config.LogConfig{Level: "error"},
+	}
+}
+
+// newRouteHookApp builds through the public constructor so the hook travels the Options path.
+func newRouteHookApp(t *testing.T, cfg *config.Config, opts *Options) *App {
+	t.Helper()
+	a, _, err := NewWithConfig(cfg, opts)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if a.messagingManager != nil {
+			a.messagingManager.StopCleanup()
+		}
+		if a.dbManager != nil {
+			a.dbManager.StopCleanup()
+		}
+	})
+	return a
+}
+
+func TestRunPostRegisterRoutesErrorAbortsStartup(t *testing.T) {
+	srv := newMockServer()
+	veto := errors.New("route table vetoed")
+	calls := 0
+	a := newRouteHookApp(t, routeHookConfig(""), &Options{
+		Server: srv,
+		PostRegisterRoutes: func([]server.RouteDescriptor) error {
+			calls++
+			return veto
+		},
+	})
+
+	err := a.Run()
+
+	require.ErrorIs(t, err, veto)
+	require.ErrorContains(t, err, "PostRegisterRoutes")
+	assert.Equal(t, 1, calls)
+	assert.Zero(t, srv.startCount(), "a vetoed route table must never open the listener")
+}
+
+// routeTableModule registers one raw route and one typed route that names its own module.
+type routeTableModule struct{ name string }
+
+type routeTableRequest struct{}
+
+func (m *routeTableModule) Name() string             { return m.name }
+func (m *routeTableModule) Init(_ *ModuleDeps) error { return nil }
+func (m *routeTableModule) Shutdown() error          { return nil }
+func (m *routeTableModule) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	r.Add(http.MethodGet, "/"+m.name, func(c server.HandlerContext) error { return c.String(http.StatusOK, "") })
+	server.POST(hr, r, "/"+m.name, func(routeTableRequest, server.HandlerContext) (string, server.IAPIError) {
+		return "", nil
+	}, server.WithModule("billing"))
+}
+
+func handlerIDs(routes []server.RouteDescriptor) []string {
+	ids := make([]string, len(routes))
+	for i := range routes {
+		ids[i] = routes[i].HandlerID
+	}
+	return ids
+}
+
+func TestPrepareRuntimePostRegisterRoutesSeesEveryRoute(t *testing.T) {
+	server.DefaultRouteRegistry.Clear()
+	t.Cleanup(server.DefaultRouteRegistry.Clear)
+	cfg := routeHookConfig("/api")
+	cfg.Debug = config.DebugConfig{
+		Enabled:    true,
+		PathPrefix: "/_sys",
+		AllowedIPs: []string{"127.0.0.1/32"},
+		Endpoints:  config.DebugEndpointsConfig{Info: true},
+	}
+	var calls [][]server.RouteDescriptor
+	a := newRouteHookApp(t, cfg, &Options{PostRegisterRoutes: func(routes []server.RouteDescriptor) error {
+		calls = append(calls, routes)
+		return nil
+	}})
+	require.NoError(t, a.RegisterModule(&routeTableModule{name: "orders"}))
+
+	require.NoError(t, a.prepareRuntime(context.Background()))
+
+	require.Len(t, calls, 1)
+	assert.ElementsMatch(t, []string{
+		"GET:/api/health", "HEAD:/api/health", "GET:/api/ready", "HEAD:/api/ready",
+		"GET:/_sys/info", "GET:/api/orders", "POST:/api/orders",
+	}, handlerIDs(calls[0]))
+}
+
+func TestPrepareRuntimePostRegisterRoutesAttributesModuleName(t *testing.T) {
+	server.DefaultRouteRegistry.Clear()
+	t.Cleanup(server.DefaultRouteRegistry.Clear)
+	cfg := routeHookConfig("")
+	cfg.Debug = config.DebugConfig{
+		Enabled:    true,
+		PathPrefix: "/_sys",
+		AllowedIPs: []string{"127.0.0.1/32"},
+		Endpoints:  config.DebugEndpointsConfig{Info: true},
+	}
+	var got []server.RouteDescriptor
+	a := newRouteHookApp(t, cfg, &Options{PostRegisterRoutes: func(routes []server.RouteDescriptor) error {
+		got = routes
+		return nil
+	}})
+	require.NoError(t, a.RegisterModule(&routeTableModule{name: "orders"}))
+	require.NoError(t, a.RegisterModule(&routeTableModule{name: "users"}))
+
+	require.NoError(t, a.prepareRuntime(context.Background()))
+
+	modules := map[string]string{}
+	for _, d := range got {
+		modules[d.HandlerID] = d.ModuleName
+	}
+	assert.Equal(t, map[string]string{
+		"GET:/health": "", "HEAD:/health": "", "GET:/ready": "", "HEAD:/ready": "",
+		"GET:/_sys/info": "",
+		"GET:/orders":    "orders", "POST:/orders": "billing",
+		"GET:/users": "users", "POST:/users": "billing",
+	}, modules)
+}
+
 // globalMWCapturingServer implements ServerRunner (via embedded mockServer) plus the
 // optional RegisterGlobalMiddleware capability, capturing what it receives.
 type globalMWCapturingServer struct {

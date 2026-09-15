@@ -19,6 +19,7 @@ import (
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/server"
 	testmocks "github.com/gaborage/go-bricks/testing/mocks"
 )
 
@@ -610,6 +611,36 @@ func TestAppBuilderCreateAppErrors(t *testing.T) {
 		assert.Equal(t, assert.AnError, result.err)
 		assert.Nil(t, result.app)
 	})
+}
+
+// TestCreateAppKeepsEachAppsOwnRouteTable builds both Apps before either starts, so a
+// registry read not scoped to one App's own server would hand it the other App's probes.
+func TestCreateAppKeepsEachAppsOwnRouteTable(t *testing.T) {
+	server.DefaultRouteRegistry.Clear()
+	t.Cleanup(server.DefaultRouteRegistry.Clear)
+	seen := map[string][]string{}
+	recordAs := func(name string) *Options {
+		return &Options{PostRegisterRoutes: func(routes []server.RouteDescriptor) error {
+			seen[name] = handlerIDs(routes)
+			return nil
+		}}
+	}
+	first := newRouteHookApp(t, routeHookConfig("/first"), recordAs("first"))
+	second := newRouteHookApp(t, routeHookConfig("/second"), recordAs("second"))
+	require.NoError(t, first.RegisterModule(&routeTableModule{name: "orders"}))
+	require.NoError(t, second.RegisterModule(&routeTableModule{name: "users"}))
+
+	require.NoError(t, first.prepareRuntime(context.Background()))
+	require.NoError(t, second.prepareRuntime(context.Background()))
+
+	assert.ElementsMatch(t, []string{
+		"GET:/first/health", "HEAD:/first/health", "GET:/first/ready", "HEAD:/first/ready",
+		"GET:/first/orders", "POST:/first/orders",
+	}, seen["first"])
+	assert.ElementsMatch(t, []string{
+		"GET:/second/health", "HEAD:/second/health", "GET:/second/ready", "HEAD:/second/ready",
+		"GET:/second/users", "POST:/second/users",
+	}, seen["second"])
 }
 
 func TestAppBuilderInitializeRegistryErrors(t *testing.T) {

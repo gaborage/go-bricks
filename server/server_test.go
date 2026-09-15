@@ -236,6 +236,33 @@ func TestServerNewInitializesEchoAndRoutes(t *testing.T) {
 	assertHealthEndpoints(t, srv, healthRoute, testReadyRoute)
 }
 
+func TestServerNewRegistersProbeDescriptors(t *testing.T) {
+	DefaultRouteRegistry.Clear()
+	t.Cleanup(DefaultRouteRegistry.Clear)
+
+	newTestServer(testAPIV1Path, customHealthRoute, statusRoute)
+
+	want := map[string]RouteDescriptor{
+		"GET:/api/v1/custom-health":  {Method: http.MethodGet, Path: "/api/v1/custom-health", HandlerName: "healthCheck"},
+		"HEAD:/api/v1/custom-health": {Method: http.MethodHead, Path: "/api/v1/custom-health", HandlerName: "healthCheck"},
+		"GET:/api/v1/status":         {Method: http.MethodGet, Path: "/api/v1/status", HandlerName: "dispatchReady"},
+		"HEAD:/api/v1/status":        {Method: http.MethodHead, Path: "/api/v1/status", HandlerName: "dispatchReady"},
+	}
+	routes := DefaultRouteRegistry.Routes()
+	require.Len(t, routes, len(want))
+	for _, got := range routes {
+		exp, ok := want[got.HandlerID]
+		require.True(t, ok, "unexpected probe descriptor %s", got.HandlerID)
+		delete(want, got.HandlerID)
+		assert.Equal(t, exp.Method, got.Method)
+		assert.Equal(t, exp.Path, got.Path)
+		assert.Equal(t, exp.HandlerName, got.HandlerName)
+		assert.Equal(t, "github.com/gaborage/go-bricks/server", got.Package)
+		assert.Nil(t, got.RequestType)
+		assert.Nil(t, got.ResponseType)
+	}
+}
+
 func TestServerStartAndShutdown(t *testing.T) {
 	srv := newTestServer("", "", "")
 	require.NotNil(t, srv)
