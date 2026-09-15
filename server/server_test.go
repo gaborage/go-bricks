@@ -261,16 +261,7 @@ func TestServerStartAndShutdown(t *testing.T) {
 		errCh <- srv.Start()
 	}()
 
-	// Wait until BeforeServeFunc stores the *http.Server, which fires
-	// immediately before the server starts accepting connections. This
-	// replaces a fragile time.Sleep with a deterministic readiness check.
-	deadline := time.Now().Add(2 * time.Second)
-	for srv.httpServer.Load() == nil {
-		if time.Now().After(deadline) {
-			t.Fatal("server did not become ready within timeout")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitForServerReady(t, srv)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	t.Cleanup(cancel)
@@ -285,6 +276,70 @@ func TestServerStartAndShutdown(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("server did not shut down in time")
 	}
+}
+
+// TestServerBoundAddrAndReadyChBeforeStart pins the pre-Start state: no address
+// and an open ready channel, both read without blocking.
+func TestServerBoundAddrAndReadyChBeforeStart(t *testing.T) {
+	srv := newTestServer("", "", "")
+
+	assert.Nil(t, srv.BoundAddr())
+	select {
+	case <-srv.ReadyCh():
+		t.Fatal("ReadyCh closed before Start")
+	default:
+	}
+}
+
+// TestServerReadyChBoundAddrOnPortZero pins the consumer pattern: with port 0,
+// ReadyCh closes once serving and BoundAddr names a real port that answers.
+func TestServerReadyChBoundAddrOnPortZero(t *testing.T) {
+	srv := newTestServer("", "", "")
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Start()
+	}()
+
+	waitForServerReady(t, srv)
+	addr, ok := srv.BoundAddr().(*net.TCPAddr)
+	require.True(t, ok, "BoundAddr must be the listener's TCP address")
+	assert.NotZero(t, addr.Port)
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, fmt.Sprintf("http://%s/health", addr.String()), http.NoBody)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	shutdownAndDrain(t, srv, errCh)
+}
+
+// TestServerReadyChClosesOnlyAfterHTTPServerStored pins the order echo forces:
+// the bound address arrives first, and ReadyCh stays open until the
+// *http.Server that Shutdown needs is stored. A repeat never re-closes.
+func TestServerReadyChClosesOnlyAfterHTTPServerStored(t *testing.T) {
+	srv := newTestServer("", "", "")
+	addr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 43210}
+
+	srv.onListenerBound(addr)
+	assert.Equal(t, addr, srv.BoundAddr())
+	select {
+	case <-srv.ReadyCh():
+		t.Fatal("ReadyCh closed when the listener bound, before the http.Server was stored")
+	default:
+	}
+
+	httpSrv := &http.Server{}
+	require.NoError(t, srv.onBeforeServe(httpSrv))
+	assert.Same(t, httpSrv, srv.httpServer.Load())
+	select {
+	case <-srv.ReadyCh():
+	default:
+		t.Fatal("ReadyCh still open after the http.Server was stored")
+	}
+
+	assert.NotPanics(t, func() { _ = srv.onBeforeServe(&http.Server{}) }, "a second serve must not close ReadyCh again")
 }
 
 // TestRootGroupRegistersAtURLRoot verifies RootGroup() returns a working registrar
