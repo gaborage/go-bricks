@@ -833,7 +833,8 @@ func c654AtomSQLFences(t *testing.T) []string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "wiki", "migrations.md"))
 	require.NoError(t, err)
-	doc := string(raw)
+	// A Windows checkout may carry CRLF line endings; the fences are matched on LF.
+	doc := strings.ReplaceAll(string(raw), "\r\n", "\n")
 
 	start := strings.Index(doc, "### [C65.4]")
 	require.NotEqual(t, -1, start, "the C65.4 atom must exist")
