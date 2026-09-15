@@ -3,6 +3,19 @@
 **Status:** Accepted
 **Date:** 2026-07-27
 
+> **Amended (2026-09-14, #1611 — requiring the identity per route group):** `require` stays
+> service-wide, and a route family now requires the identity by mounting
+> `server.RequireForwardedClientCert(l)` on its group. The guard re-parses the headers rather
+> than reading `ForwardedClientCertFromContext`, because with `enabled: false` an absent
+> identity cannot be told from one never parsed; it refuses on the two `Require` conditions
+> with the same 401, attaches the identity when the engine-level middleware did not, and
+> exempts no probe. Scoping `require` in YAML (a list of prefixes or hosts) was rejected: it
+> turns a bool key polymorphic, a breaking type change against ADR-077's delivered-empty rule;
+> the middleware runs before routing, so it could only match raw paths; and a host match would
+> key a security decision off the client-written `Host` header. Per-group attachment is the
+> `auth.Middleware` shape (ADR-109). No config key is added. The original decision never
+> weighed scoping; it was service-wide by omission.
+
 ## Context
 
 Confirmed deployment posture: partners (Visa et al.) require mTLS + IP whitelisting for

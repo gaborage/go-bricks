@@ -31,6 +31,29 @@ serve every request unauthenticated while asserting the opposite. On the YAML an
 (ADR-064), so the WARN only ever appears for configs that bypass `app.Builder.WithConfig`
 altogether.
 
+### Requiring the identity on one route family
+
+`require` is service-wide: it refuses every non-probe request that carries no identity. To
+require the identity on one route family only, leave `require` off and mount
+`server.RequireForwardedClientCert` on that family's group:
+
+```go
+func (m *PartnerModule) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	itsp := r.Group("/itsp", server.RequireForwardedClientCert(m.logger)) // m.logger = deps.Logger from Init
+	server.POST(hr, itsp, "/notifications", m.notify)
+}
+```
+
+The guard parses the headers itself, so it holds under any `enabled`/`require` setting. It
+refuses with the same 401 `require` produces, on the same two conditions: no `-Subject` and
+no `-Serial-Number`, or any of the four headers duplicated. A `-Leaf` that fails to decode
+still passes. When the engine-level middleware did not attach the identity (`enabled:
+false`), the guard attaches it, so `ForwardedClientCertFromContext` works behind the guard in
+every posture. Probes are not exempted: a route stays open by being registered outside the
+guarded group, as with [`auth.Middleware`](auth.md). WARNs go to the logger passed in; `nil`
+falls back to the standard library `log` package. The guard decides presence, never
+provenance — the [trust model](#trust-model) applies unchanged.
+
 ## What gets parsed
 
 AWS ALB verify mode forwards these headers (passthrough mode's single
@@ -132,8 +155,9 @@ got through and the deployment posture above needs attention.
 ## Probe exemption
 
 Health and ready probe paths (the same `healthPath`/`readyPath` passed into
-`server.SetupMiddlewares`) always skip this middleware. ALB health checks present no client
+`server.SetupMiddlewares`) always skip the engine-level middleware. ALB health checks present no client
 certificate, so a non-exempt `Require` would take the target group down on every deploy.
+`server.RequireForwardedClientCert` exempts nothing; keep probes outside the group it guards.
 
 ## Authorization recipe (application code)
 
