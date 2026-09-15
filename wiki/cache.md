@@ -592,8 +592,10 @@ cache:
 
 **Evicting one instance.** `application.CacheManager().Remove(key)` closes the instance cached
 under `key` (`""` single-tenant, the tenant ID in multi-tenant mode), so the next
-`deps.Cache(ctx)` rebuilds it through the connector — after rotating Redis credentials, say. A
-leased instance closes at its final release instead, an unknown key is a nil no-op, and after
+`deps.Cache(ctx)` rebuilds it through the connector — after rotating Redis credentials, say. An
+idle instance closes before `Remove` returns, and a `Close` failure comes back wrapped (`errors.Is`
+still matches the cause); a leased instance closes at its final release instead, an unknown key
+is a nil no-op, and after
 shutdown `Remove` returns `cache.ErrManagerClosed`. `CacheManager.Stats().Removals` counts every
 `Remove` that detached an instance, and `/ready` publishes it as `removals`.
 
