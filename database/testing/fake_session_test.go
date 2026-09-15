@@ -145,6 +145,7 @@ func TestTestSessionTransactionsPopInOrder(t *testing.T) {
 
 	gotTx, err := sess.Begin(t.Context())
 	require.NoError(t, err)
+	defer func() { _ = gotTx.Rollback(t.Context()) }()
 	assert.Same(t, tx, gotTx)
 
 	_, err = gotTx.Exec(t.Context(), "INSERT INTO events VALUES (1)")
@@ -165,6 +166,7 @@ func TestTestSessionTransactionsRegisterWithTheParentBookkeeping(t *testing.T) {
 
 	tx, err := sess.Begin(t.Context())
 	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(t.Context()) }()
 	require.NoError(t, tx.Commit(t.Context()))
 
 	// A transaction started from a session is a started transaction: the
@@ -186,6 +188,7 @@ func TestTestSessionBeginTxUsesSameQueue(t *testing.T) {
 
 	gotTx, err := sess.BeginTx(t.Context(), &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	require.NoError(t, err)
+	defer func() { _ = gotTx.Rollback(t.Context()) }()
 	assert.Same(t, tx, gotTx)
 }
 
