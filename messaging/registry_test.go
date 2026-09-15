@@ -2288,7 +2288,8 @@ func TestRegistryConsumerResubscribeRetriesUntilClientReady(t *testing.T) {
 			{ch: ch2},              // client ready again
 		},
 	}
-	registry := NewRegistry(client, &stubLogger{})
+	log := newRecordingLogger()
+	registry := NewRegistry(client, log)
 	registry.resubscribeDelay = 5 * time.Millisecond
 
 	handler := &countingTestHandler{}
@@ -2330,6 +2331,17 @@ func TestRegistryConsumerResubscribeRetriesUntilClientReady(t *testing.T) {
 	}, time.Second, 2*time.Millisecond, "delivery after re-subscribe was not acked")
 
 	registry.StopConsumers()
+
+	// errNotConnected is not an *amqp.Error, so its failure lines carry no broker reply.
+	var failures int
+	for _, ln := range log.Lines() {
+		if ln.Msg == "Consumer re-subscribe attempt failed, will retry" {
+			failures++
+			assert.Empty(t, ln.Values("amqp_reply_code"))
+			assert.Empty(t, ln.Values("amqp_reply_text"))
+		}
+	}
+	assert.Equal(t, 2, failures)
 }
 
 // TestRegistryConsumerSupervisorStopsOnContextCancel verifies the consumer
