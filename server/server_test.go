@@ -330,6 +330,23 @@ func TestServerReadyChClosesOnlyAfterHTTPServerStored(t *testing.T) {
 	assert.NotPanics(t, func() { _ = srv.onBeforeServe(&http.Server{}) }, "a serve after Shutdown must not close ReadyCh again")
 }
 
+// TestServerOnBeforeServeAppliesConfiguredTimeouts pins the timeouts Start
+// applies to the http.Server, which StartConfig does not expose.
+func TestServerOnBeforeServeAppliesConfiguredTimeouts(t *testing.T) {
+	srv := newTestServer("", "", "")
+	srv.cfg.Server.Timeout.Read = 3 * time.Second
+	srv.cfg.Server.Timeout.Write = 5 * time.Second
+	srv.cfg.Server.Timeout.Idle = 7 * time.Second
+
+	httpSrv := &http.Server{}
+	require.NoError(t, srv.onBeforeServe(httpSrv))
+
+	assert.Equal(t, 3*time.Second, httpSrv.ReadTimeout)
+	assert.Equal(t, 5*time.Second, httpSrv.WriteTimeout)
+	assert.Equal(t, 7*time.Second, httpSrv.IdleTimeout)
+	assert.Equal(t, 3*time.Second, httpSrv.ReadHeaderTimeout)
+}
+
 // TestRootGroupRegistersAtURLRoot verifies RootGroup() returns a working registrar
 // rooted at the engine with NO base path applied, even when a base path is configured.
 // This replaces the former Echo() accessor for framework-internal root endpoints.
