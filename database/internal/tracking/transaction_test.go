@@ -83,25 +83,21 @@ const (
 // A Transaction built from only logger/vendor/settings silently drops all three.
 func TestTransactionStatementCarriesServerAttributes(t *testing.T) {
 	tests := []struct {
-		name  string
-		begin func(t *testing.T, ctx context.Context, conn *Connection) types.Tx
+		name   string
+		source func(t *testing.T, ctx context.Context, conn *Connection) types.Transactor
 	}{
 		{
 			name: "from_connection_begin",
-			begin: func(t *testing.T, ctx context.Context, conn *Connection) types.Tx {
-				tx, err := conn.Begin(ctx)
-				require.NoError(t, err)
-				return tx
+			source: func(_ *testing.T, _ context.Context, conn *Connection) types.Transactor {
+				return conn
 			},
 		},
 		{
 			name: "from_session_begin",
-			begin: func(t *testing.T, ctx context.Context, conn *Connection) types.Tx {
+			source: func(t *testing.T, ctx context.Context, conn *Connection) types.Transactor {
 				sess, err := conn.Session(ctx)
 				require.NoError(t, err)
-				tx, err := sess.Begin(ctx)
-				require.NoError(t, err)
-				return tx
+				return sess
 			},
 		},
 	}
@@ -119,9 +115,11 @@ func TestTransactionStatementCarriesServerAttributes(t *testing.T) {
 			conn.SetServerInfo(txServerAddress, txServerPort, txNamespace)
 
 			ctx := context.Background()
-			tx := tt.begin(t, ctx, conn)
+			tx, err := tt.source(t, ctx, conn).Begin(ctx)
+			require.NoError(t, err)
+			defer func() { _ = tx.Rollback(ctx) }()
 
-			_, err := tx.Exec(ctx, "INSERT INTO t VALUES (1)")
+			_, err = tx.Exec(ctx, "INSERT INTO t VALUES (1)")
 			require.NoError(t, err)
 
 			span := obtest.NewSpanCollector(t, traceExporter).WithName(dbInsertMetric).AssertCount(1).First()

@@ -66,7 +66,12 @@ func TestSessionUseAfterCloseReturnsErrConnDone(t *testing.T) {
 	}
 	require.ErrorIs(t, err, sql.ErrConnDone)
 	require.ErrorIs(t, sess.QueryRow(ctx, "SELECT 1").Scan(new(int)), sql.ErrConnDone)
-	_, err = sess.Begin(ctx)
+	tx, err := sess.Begin(ctx)
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
 	require.ErrorIs(t, err, sql.ErrConnDone)
 }
 
@@ -94,7 +99,12 @@ func TestSessionBadConnSurfacesErrConnDone(t *testing.T) {
 		}},
 		{name: "begin_tx", call: func(ctx context.Context, s types.Session, m sqlmock.Sqlmock) error {
 			m.ExpectBegin().WillReturnError(driver.ErrBadConn)
-			_, err := s.BeginTx(ctx, nil)
+			tx, err := s.BeginTx(ctx, nil)
+			defer func() {
+				if tx != nil {
+					_ = tx.Rollback(ctx)
+				}
+			}()
 			return err
 		}},
 	}
@@ -249,7 +259,12 @@ func TestSessionIterationBadConnInvalidatesSession(t *testing.T) {
 				require.ErrorIs(t, err, sql.ErrConnDone)
 				assert.Nil(t, rows)
 				require.ErrorIs(t, sess.QueryRow(ctx, "SELECT 1").Err(), sql.ErrConnDone)
-				_, err = sess.BeginTx(ctx, nil)
+				tx, err := sess.BeginTx(ctx, nil)
+				defer func() {
+					if tx != nil {
+						_ = tx.Rollback(ctx)
+					}
+				}()
 				require.ErrorIs(t, err, sql.ErrConnDone)
 			}
 

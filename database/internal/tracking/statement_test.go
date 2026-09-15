@@ -85,27 +85,11 @@ const (
 // silently drops all three.
 func TestPreparedStatementCarriesServerAttributes(t *testing.T) {
 	tests := []struct {
-		name    string
-		prepare func(t *testing.T, ctx context.Context, conn *Connection) types.Statement
+		name string
+		inTx bool
 	}{
-		{
-			name: "from_connection_prepare",
-			prepare: func(t *testing.T, ctx context.Context, conn *Connection) types.Statement {
-				stmt, err := conn.Prepare(ctx, stmtParityQuery)
-				require.NoError(t, err)
-				return stmt
-			},
-		},
-		{
-			name: "from_transaction_prepare",
-			prepare: func(t *testing.T, ctx context.Context, conn *Connection) types.Statement {
-				tx, err := conn.Begin(ctx)
-				require.NoError(t, err)
-				stmt, err := tx.Prepare(ctx, stmtParityQuery)
-				require.NoError(t, err)
-				return stmt
-			},
-		},
+		{name: "from_connection_prepare"},
+		{name: "from_transaction_prepare", inTx: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -118,9 +102,19 @@ func TestPreparedStatementCarriesServerAttributes(t *testing.T) {
 			conn.SetServerInfo(stmtServerAddress, stmtServerPort, stmtNamespace)
 
 			ctx := context.Background()
-			stmt := tt.prepare(t, ctx, conn)
+			var preparer interface {
+				Prepare(context.Context, string) (types.Statement, error)
+			} = conn
+			if tt.inTx {
+				tx, err := conn.Begin(ctx)
+				require.NoError(t, err)
+				defer func() { _ = tx.Rollback(ctx) }()
+				preparer = tx
+			}
+			stmt, err := preparer.Prepare(ctx, stmtParityQuery)
+			require.NoError(t, err)
 
-			_, err := stmt.Exec(ctx)
+			_, err = stmt.Exec(ctx)
 			require.NoError(t, err)
 
 			// The statement's own span is the one whose query text carries the

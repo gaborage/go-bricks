@@ -189,12 +189,14 @@ func TestSessionBeginWrapsTransaction(t *testing.T) {
 
 	tx, err := sess.Begin(ctx)
 	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
 	if _, ok := tx.(*Transaction); !ok {
 		t.Fatalf("expected tracked transaction, got %T", tx)
 	}
 
 	txWithOpts, err := sess.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	require.NoError(t, err)
+	defer func() { _ = txWithOpts.Rollback(ctx) }()
 	if _, ok := txWithOpts.(*Transaction); !ok {
 		t.Fatalf("expected tracked transaction, got %T", txWithOpts)
 	}
@@ -203,6 +205,7 @@ func TestSessionBeginWrapsTransaction(t *testing.T) {
 	// session's apart from which handle issued it.
 	poolTx, err := conn.Begin(ctx)
 	require.NoError(t, err)
+	defer func() { _ = poolTx.Rollback(ctx) }()
 	if _, ok := poolTx.(*Transaction); !ok {
 		t.Fatalf("expected tracked transaction, got %T", poolTx)
 	}
@@ -236,12 +239,22 @@ func TestSessionBeginErrorsReturnNilTx(t *testing.T) {
 
 	tx, err := sess.Begin(context.Background())
 	require.ErrorIs(t, err, wantErr)
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback(context.Background())
+		}
+	}()
 	if tx != nil {
 		t.Fatalf("Begin must return a nil types.Tx on failure, got %T", tx)
 	}
 
 	txWithOpts, err := sess.BeginTx(context.Background(), &sql.TxOptions{})
 	require.ErrorIs(t, err, wantErr)
+	defer func() {
+		if txWithOpts != nil {
+			_ = txWithOpts.Rollback(context.Background())
+		}
+	}()
 	if txWithOpts != nil {
 		t.Fatalf("BeginTx must return a nil types.Tx on failure, got %T", txWithOpts)
 	}
