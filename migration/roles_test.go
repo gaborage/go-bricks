@@ -1,6 +1,7 @@
 package migration
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -401,4 +402,210 @@ func TestPGRoleSpecValidateRejectsControlCharPasswords(t *testing.T) {
 
 	empty := &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r"}
 	assert.NoError(t, empty.Validate(), "empty passwords stay valid — they emit no ALTER ROLE statement")
+}
+
+// errTestPolicyRejected is the sentinel returned by the test policies below, so
+// a test can assert the caller still reaches its own error through the wrap.
+var errTestPolicyRejected = errors.New("test policy rejected the identifier")
+
+// rejectUppercase refuses any identifier carrying an uppercase byte — a rule
+// the floor admits, so it exercises the tightening direction.
+func rejectUppercase(value string) error {
+	if strings.ToLower(value) != value {
+		return errTestPolicyRejected
+	}
+	return nil
+}
+
+func TestPGRoleSpecValidatePolicyErrorReachesCaller(t *testing.T) {
+	spec := &PGRoleSpec{
+		Schema:           "tenant_a",
+		MigratorRole:     "MigratorX",
+		RuntimeRole:      "r",
+		IdentifierPolicy: PGIdentifierCheckerFunc(rejectUppercase),
+	}
+	err := spec.Validate()
+	require.ErrorIs(t, err, ErrInvalidPGIdentifier)
+	require.ErrorIs(t, err, errTestPolicyRejected)
+	assert.Contains(t, err.Error(), pgRoleFieldMigratorRole)
+	assert.Contains(t, err.Error(), "MigratorX")
+}
+
+// An admit-everything policy must not re-admit what the floor refused — one
+// charset refusal and one length refusal, the floor's two independent rules.
+func TestPGRoleSpecValidatePolicyCannotWidenFloor(t *testing.T) {
+	admitEverything := PGIdentifierCheckerFunc(func(string) error { return nil })
+	tests := []struct {
+		name  string
+		spec  *PGRoleSpec
+		field string
+	}{
+		{
+			name:  "hyphen_schema",
+			spec:  &PGRoleSpec{Schema: "tenant-a", MigratorRole: "m", RuntimeRole: "r"},
+			field: pgRoleFieldSchema,
+		},
+		{
+			name:  "over_63_bytes_schema",
+			spec:  &PGRoleSpec{Schema: strings.Repeat("a", 64), MigratorRole: "m", RuntimeRole: "r"},
+			field: pgRoleFieldSchema,
+		},
+		{
+			name:  "hyphen_migrator_role",
+			spec:  &PGRoleSpec{Schema: "tenant_a", MigratorRole: "mig-rator", RuntimeRole: "r"},
+			field: pgRoleFieldMigratorRole,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.spec.IdentifierPolicy = admitEverything
+			err := tt.spec.Validate()
+			require.ErrorIs(t, err, ErrInvalidPGIdentifier)
+			assert.Contains(t, err.Error(), tt.field)
+		})
+	}
+}
+
+func TestPGRoleSpecValidatePolicySeesEveryIdentifier(t *testing.T) {
+	var seen []string
+	spec := &PGRoleSpec{
+		Schema:       "tenant_a",
+		MigratorRole: "migrator",
+		RuntimeRole:  "tenant_a_app",
+		IdentifierPolicy: PGIdentifierCheckerFunc(func(value string) error {
+			seen = append(seen, value)
+			return nil
+		}),
+	}
+	require.NoError(t, spec.Validate())
+	assert.Equal(t, []string{"tenant_a", "migrator", "tenant_a_app"}, seen)
+}
+
+// Every target below is an identifier the floor admits, so the policy is the
+// only thing that can refuse it — the tightening direction.
+func TestPGRoleSpecValidatePolicyRejectsEachIdentifierField(t *testing.T) {
+	tests := []struct {
+		name   string
+		spec   *PGRoleSpec
+		target string
+		field  string
+	}{
+		{
+			name:   "schema",
+			spec:   &PGRoleSpec{Schema: "TenantX", MigratorRole: "m", RuntimeRole: "r"},
+			target: "TenantX",
+			field:  pgRoleFieldSchema,
+		},
+		{
+			name:   "migrator_role",
+			spec:   &PGRoleSpec{Schema: "s", MigratorRole: "MigratorX", RuntimeRole: "r"},
+			target: "MigratorX",
+			field:  pgRoleFieldMigratorRole,
+		},
+		{
+			name:   "runtime_role",
+			spec:   &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "RuntimeX"},
+			target: "RuntimeX",
+			field:  pgRoleFieldRuntimeRole,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			floorOnly := *tt.spec
+			require.NoError(t, floorOnly.Validate(), "floor admits the identifier the policy refuses")
+
+			tt.spec.IdentifierPolicy = PGIdentifierCheckerFunc(func(value string) error {
+				if value == tt.target {
+					return errTestPolicyRejected
+				}
+				return nil
+			})
+			err := tt.spec.Validate()
+			require.ErrorIs(t, err, errTestPolicyRejected)
+			require.ErrorIs(t, err, ErrInvalidPGIdentifier)
+			assert.Contains(t, err.Error(), tt.field)
+			assert.Contains(t, err.Error(), tt.target)
+		})
+	}
+}
+
+func TestPGRoleSpecValidateFloorRunsBeforePolicy(t *testing.T) {
+	consulted := 0
+	spec := &PGRoleSpec{
+		Schema:       "tenant-a",
+		MigratorRole: "m",
+		RuntimeRole:  "r",
+		IdentifierPolicy: PGIdentifierCheckerFunc(func(string) error {
+			consulted++
+			return nil
+		}),
+	}
+	require.ErrorIs(t, spec.Validate(), ErrInvalidPGIdentifier)
+	assert.Zero(t, consulted, "policy must not see an identifier the floor already refused")
+}
+
+// A typed nil in the interface field is non-nil as an interface, so the adapter
+// is called. It must refuse rather than panic on the nil call.
+func TestPGRoleSpecValidateRefusesNilPolicyFunc(t *testing.T) {
+	spec := &PGRoleSpec{
+		Schema:           "tenant_a",
+		MigratorRole:     "m",
+		RuntimeRole:      "r",
+		IdentifierPolicy: PGIdentifierCheckerFunc(nil),
+	}
+	require.NotPanics(t, func() {
+		require.ErrorIs(t, spec.Validate(), ErrInvalidPGIdentifier)
+	})
+}
+
+// allowAllChecker is a comparable PGIdentifierChecker: a struct with no fields.
+type allowAllChecker struct{}
+
+func (allowAllChecker) CheckPGIdentifier(string) error { return nil }
+
+// TestPGRoleSpecComparabilityFollowsItsPolicy pins the comparability claim in the
+// PGIdentifierCheckerFunc godoc: with a func-backed policy, == on otherwise-equal
+// copies panics, == on specs that differ in an earlier field returns false without
+// reaching the policy, and a map key always panics; a comparable policy leaves the
+// spec comparable.
+func TestPGRoleSpecComparabilityFollowsItsPolicy(t *testing.T) {
+	funcPolicySpec := PGRoleSpec{
+		Schema:           "tenant_a",
+		MigratorRole:     "migrator",
+		RuntimeRole:      "tenant_a_app",
+		IdentifierPolicy: PGIdentifierCheckerFunc(func(string) error { return nil }),
+	}
+
+	t.Run("func_policy_panics_on_equality_of_otherwise_equal_copies", func(t *testing.T) {
+		other := funcPolicySpec
+		require.Panics(t, func() { _ = funcPolicySpec == other })
+	})
+
+	t.Run("earlier_field_difference_stops_before_the_policy", func(t *testing.T) {
+		other := funcPolicySpec
+		other.Schema = "tenant_b"
+		var equal bool
+		require.NotPanics(t, func() { equal = funcPolicySpec == other })
+		if equal {
+			t.Fatal("specs that differ in Schema must compare unequal")
+		}
+	})
+
+	t.Run("func_policy_panics_as_map_key", func(t *testing.T) {
+		specs := map[PGRoleSpec]struct{}{}
+		require.Panics(t, func() { specs[funcPolicySpec] = struct{}{} })
+	})
+
+	t.Run("comparable_policy_keeps_spec_comparable", func(t *testing.T) {
+		spec := PGRoleSpec{
+			Schema:           "tenant_a",
+			MigratorRole:     "migrator",
+			RuntimeRole:      "tenant_a_app",
+			IdentifierPolicy: allowAllChecker{},
+		}
+		other := spec
+		if spec != other {
+			t.Fatal("a spec holding a comparable policy must compare equal to its copy")
+		}
+	})
 }

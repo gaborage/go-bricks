@@ -49,6 +49,68 @@ type PGRoleSpec struct {
 	// as MigratorPassword — passing it on every call makes secret rotation a
 	// no-op rerun.
 	RuntimePassword string
+
+	// IdentifierPolicy optionally tightens the identifier rule Validate
+	// applies to Schema, MigratorRole and RuntimeRole; nil means the floor alone.
+	// Leave the field unset for that — storing a typed nil
+	// PGIdentifierCheckerFunc is a non-nil interface, and is refused. A spec
+	// holding a PGIdentifierCheckerFunc is not comparable; see that type.
+	IdentifierPolicy PGIdentifierChecker
+}
+
+// PGIdentifierChecker is a caller-supplied check layered on top of the
+// identifier floor (database/identifier.Validate for PostgreSQL). Validate
+// consults it once per identifier, after the floor has accepted that
+// identifier, so a policy can only refuse more — never admit a name the floor
+// rejects. A returned error is wrapped with ErrInvalidPGIdentifier and the
+// failing field name, so the policy itself does not need to identify the
+// identifier it judged.
+type PGIdentifierChecker interface {
+	CheckPGIdentifier(value string) error
+}
+
+// PGIdentifierCheckerFunc adapts a plain function to PGIdentifierChecker.
+//
+// A typed nil of this type stored in PGRoleSpec.IdentifierPolicy is NOT the
+// same as no policy: the interface value is non-nil, so Validate does consult
+// it. Rather than panic on the nil call, the adapter refuses every identifier,
+// so such a spec fails Validate instead of taking the process down. Leave the
+// field unset for "no policy".
+//
+// A func value is not comparable, so a PGRoleSpec holding one is not safely
+// comparable either. == compares fields in order and stops at the first
+// difference, so it panics only when every earlier field is equal and the
+// comparison reaches IdentifierPolicy; using such a spec as a map key always
+// panics, because hashing reads every field. Compare such specs field by field
+// or hold them by pointer; a comparable PGIdentifierChecker implementation keeps
+// the spec comparable.
+type PGIdentifierCheckerFunc func(value string) error
+
+// errNilPGIdentifierCheckerFunc is what a nil PGIdentifierCheckerFunc refuses
+// with; checkIdentifier wraps it with ErrInvalidPGIdentifier like any other
+// policy refusal.
+var errNilPGIdentifierCheckerFunc = errors.New("migration: IdentifierPolicy holds a nil PGIdentifierCheckerFunc")
+
+// CheckPGIdentifier calls f, or refuses when f is nil.
+func (f PGIdentifierCheckerFunc) CheckPGIdentifier(value string) error {
+	if f == nil {
+		return errNilPGIdentifierCheckerFunc
+	}
+	return f(value)
+}
+
+// checkIdentifier applies the identifier floor to the field's value and, when a
+// policy is configured, the policy on top of it. A refusal from either is
+// wrapped with ErrInvalidPGIdentifier plus the field name and value.
+func (s *PGRoleSpec) checkIdentifier(field, value string) error {
+	err := identifier.Validate(dbtypes.PostgreSQL, value)
+	if err == nil && s.IdentifierPolicy != nil {
+		err = s.IdentifierPolicy.CheckPGIdentifier(value)
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %s=%q: %w", ErrInvalidPGIdentifier, field, value, err)
+	}
+	return nil
 }
 
 // ErrInvalidPGIdentifier is returned by Validate when a role or schema name
@@ -82,6 +144,9 @@ const (
 // CR, LF, or NUL. Tenant IDs sourced from outside should be normalized to that
 // grammar upstream; rejecting at the migration boundary gives a single forcing
 // function rather than scattering input filters.
+// A non-nil IdentifierPolicy is consulted once per identifier after the floor
+// has accepted it, in Schema → MigratorRole → RuntimeRole order, stopping at
+// the first refusal.
 // Returns ErrInvalidPGIdentifier wrapped with the offending field name, value
 // and the identifier sentinel for an identifier failure, or
 // ErrPGRolePasswordHasControlChar wrapped with the offending field name —
@@ -92,8 +157,8 @@ func (s *PGRoleSpec) Validate() error {
 		{pgRoleFieldMigratorRole, s.MigratorRole},
 		{pgRoleFieldRuntimeRole, s.RuntimeRole},
 	} {
-		if err := identifier.Validate(dbtypes.PostgreSQL, f.value); err != nil {
-			return fmt.Errorf("%w: %s=%q: %w", ErrInvalidPGIdentifier, f.name, f.value, err)
+		if err := s.checkIdentifier(f.name, f.value); err != nil {
+			return err
 		}
 	}
 	if s.MigratorRole == s.RuntimeRole {
