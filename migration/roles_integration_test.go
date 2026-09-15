@@ -5,6 +5,7 @@ package migration
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/database"
 	testconsts "github.com/gaborage/go-bricks/testing"
 )
 
@@ -167,35 +169,156 @@ func TestPGRolesRuntimeRoleHasNoSuperPowers(t *testing.T) {
 	}
 }
 
-// TestPGRolesProvisioningIsIdempotent verifies that running ProvisionPGRoles
-// twice with the same spec is a no-op the second time — required because
-// PostgreSQL DDL isn't transactional across role + schema, so callers must
-// be able to converge by rerunning. Re-runs also exercise the in-place
-// password rotation path.
+// TestPGRolesProvisioningIsIdempotent verifies that running provisioning twice
+// with the same spec is a no-op the second time — required on the
+// ProvisionPGRoles path, where each statement lands on its own connection and a
+// partial failure leaves earlier steps in place, so callers converge by
+// rerunning. Re-runs also exercise the in-place password rotation path.
+//
+// Roles are INSTANCE-global, so the two runners get disjoint identifiers:
+// sharing them would make the second subtest provision over the first's roles
+// and stop testing anything. Each rerun is pinned as a rerun rather than a
+// fresh creation by asserting the prior run's state from outside its own
+// transaction — countRoles on a separate admin connection, which on the tx
+// door only passes once the transaction has committed — and again via the
+// rotated-password login at the end.
 func TestPGRolesProvisioningIsIdempotent(t *testing.T) {
+	tests := []struct {
+		name   string
+		suffix string
+		run    func(t *testing.T, ctx context.Context, env *integrationEnv, spec *PGRoleSpec) error
+	}{
+		{
+			name:   "sql_db_door",
+			suffix: "idem",
+			run: func(t *testing.T, ctx context.Context, env *integrationEnv, spec *PGRoleSpec) error {
+				t.Helper()
+				return ProvisionPGRoles(ctx, env.adminDB(t), spec)
+			},
+		},
+		{
+			name:   "tx_door",
+			suffix: "idemtx",
+			run: func(t *testing.T, ctx context.Context, env *integrationEnv, spec *PGRoleSpec) error {
+				t.Helper()
+				return database.WithTx(ctx, env.adminConn(t), func(ctx context.Context, tx database.Tx) error {
+					return ProvisionPGRolesTx(ctx, tx, spec)
+				})
+			},
+		},
+	}
+
+	env := newIntegrationEnv(t)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec := &PGRoleSpec{
+				Schema:           "tenant_" + tt.suffix,
+				MigratorRole:     "mig_" + tt.suffix,
+				MigratorPassword: testconsts.FakePassword("mig-" + tt.suffix),
+				RuntimeRole:      "rt_" + tt.suffix,
+				RuntimePassword:  testconsts.FakePassword("rt-" + tt.suffix),
+			}
+
+			ctx, cancel := testCtx(t)
+			defer cancel()
+
+			admin := env.adminDB(t)
+
+			require.NoError(t, tt.run(t, ctx, env, spec), "first run")
+			require.Equal(t, 2, countRoles(ctx, t, admin, spec),
+				"the first run must be visible outside its own transaction before the rerun is meaningful")
+			require.NoError(t, tt.run(t, ctx, env, spec), "second run must be idempotent")
+
+			// Rotate the runtime password and verify the new credential works.
+			spec.RuntimePassword = testconsts.FakePassword("rt-" + tt.suffix + "-rotated")
+			require.NoError(t, tt.run(t, ctx, env, spec), "rotate runtime password")
+
+			rotated := env.openAsRole(t, spec.RuntimeRole, spec.RuntimePassword)
+			require.NoError(t, rotated.PingContext(ctx))
+		})
+	}
+}
+
+// errRollbackProvisioning is returned from the WithTx callback below AFTER
+// provisioning succeeded, so WithTx rolls the transaction back with every
+// statement already applied inside it.
+var errRollbackProvisioning = errors.New("roll the provisioning back")
+
+// TestPGRolesProvisioningTxRollsBackWholesale pins that on the tx door a
+// rollback leaves NO trace of the spec — no role, no schema. The
+// post-conditions are read on a SEPARATE admin connection, so a leftover would
+// be genuinely visible rather than hidden behind the aborted session's own
+// snapshot: if any emitted statement really were non-transactional, its effect
+// would survive the rollback and be found here.
+func TestPGRolesProvisioningTxRollsBackWholesale(t *testing.T) {
 	env := newIntegrationEnv(t)
 	spec := &PGRoleSpec{
-		Schema:           "tenant_idem",
-		MigratorRole:     "mig_idem",
-		MigratorPassword: testconsts.FakePassword("mig-idem"),
-		RuntimeRole:      "rt_idem",
-		RuntimePassword:  testconsts.FakePassword("rt-idem"),
+		Schema:           "tenant_rb",
+		MigratorRole:     "mig_rb",
+		MigratorPassword: testconsts.FakePassword("mig-rb"),
+		RuntimeRole:      "rt_rb",
+		RuntimePassword:  testconsts.FakePassword("rt-rb"),
 	}
 
 	ctx, cancel := testCtx(t)
 	defer cancel()
 
 	admin := env.adminDB(t)
-	require.NoError(t, ProvisionPGRoles(ctx, admin, spec), "first run")
-	require.NoError(t, ProvisionPGRoles(ctx, admin, spec), "second run must be idempotent")
+	require.Zero(t, countRoles(ctx, t, admin, spec), "the roles must not exist before the run")
+	require.Zero(t, countSchemas(ctx, t, admin, spec), "the schema must not exist before the run")
 
-	// Rotate the runtime password and verify the new credential works while
-	// the old one is rejected.
-	spec.RuntimePassword = testconsts.FakePassword("rt-idem-rotated")
-	require.NoError(t, ProvisionPGRoles(ctx, admin, spec), "rotate runtime password")
+	err := database.WithTx(ctx, env.adminConn(t), func(ctx context.Context, tx database.Tx) error {
+		if provErr := ProvisionPGRolesTx(ctx, tx, spec); provErr != nil {
+			return provErr
+		}
+		// Proof the statements really ran inside this transaction: the
+		// transaction's own view sees the role it just created.
+		var visible int
+		if scanErr := tx.QueryRow(ctx,
+			`SELECT count(*) FROM pg_roles WHERE rolname IN ($1, $2)`,
+			spec.MigratorRole, spec.RuntimeRole).Scan(&visible); scanErr != nil {
+			return scanErr
+		}
+		// assert, not require: a require here would Goexit past the sentinel
+		// return and skip the rollback assertions below.
+		assert.Equal(t, 2, visible, "both roles must be visible inside the transaction")
+		// Without this, the post-rollback countSchemas assertion below passes
+		// vacuously for any run that never created the schema at all.
+		var schemaVisible int
+		if scanErr := tx.QueryRow(ctx,
+			`SELECT count(*) FROM pg_namespace WHERE nspname = $1`,
+			spec.Schema).Scan(&schemaVisible); scanErr != nil {
+			return scanErr
+		}
+		assert.Equal(t, 1, schemaVisible, "the schema must be visible inside the transaction")
+		return errRollbackProvisioning
+	})
+	require.ErrorIs(t, err, errRollbackProvisioning)
 
-	rotated := env.openAsRole(t, spec.RuntimeRole, spec.RuntimePassword)
-	require.NoError(t, rotated.PingContext(ctx))
+	assert.Zero(t, countRoles(ctx, t, admin, spec),
+		"a rolled-back provisioning must leave no role behind")
+	assert.Zero(t, countSchemas(ctx, t, admin, spec),
+		"a rolled-back provisioning must leave no schema behind")
+}
+
+// countRoles reports how many of the spec's two roles exist on the instance.
+func countRoles(ctx context.Context, t *testing.T, db *sql.DB, spec *PGRoleSpec) int {
+	t.Helper()
+	var n int
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT count(*) FROM pg_roles WHERE rolname IN ($1, $2)`,
+		spec.MigratorRole, spec.RuntimeRole).Scan(&n))
+	return n
+}
+
+// countSchemas reports how many schemas match the spec's name — 0 or 1.
+func countSchemas(ctx context.Context, t *testing.T, db *sql.DB, spec *PGRoleSpec) int {
+	t.Helper()
+	var n int
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT count(*) FROM pg_namespace WHERE nspname = $1`, spec.Schema).Scan(&n))
+	return n
 }
 
 // TestPGRolesSearchPathSetOnBothRoles verifies that provisioning sets a

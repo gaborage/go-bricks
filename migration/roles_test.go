@@ -1,19 +1,25 @@
 package migration
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/database/identifier"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -854,4 +860,184 @@ func c654AtomSQLFences(t *testing.T) []string {
 		fences = append(fences, strings.Join(lines, "\n"))
 	}
 	return fences
+}
+
+// recordingRoleExecutor is a database.Executor that captures every statement it
+// is handed and can fail at a chosen index, so a test can pin the statement
+// list, its order, and the error wrap without a database.
+type recordingRoleExecutor struct {
+	stmts   []string
+	failAt  int
+	failErr error
+}
+
+func newRecordingRoleExecutor() *recordingRoleExecutor {
+	return &recordingRoleExecutor{failAt: -1}
+}
+
+// Query completes the database.Executor surface; provisioning never queries.
+func (r *recordingRoleExecutor) Query(_ context.Context, _ string, _ ...any) (*sql.Rows, error) {
+	return nil, errors.New("Query is unused by the provisioning path")
+}
+
+func (r *recordingRoleExecutor) Exec(_ context.Context, query string, _ ...any) (sql.Result, error) {
+	r.stmts = append(r.stmts, query)
+	if len(r.stmts)-1 == r.failAt {
+		return nil, r.failErr
+	}
+	return driver.RowsAffected(0), nil
+}
+
+// valueRoleExecutor is a non-pointer database.Executor, so isNilExecutor's
+// non-nil-able default arm decides it.
+type valueRoleExecutor struct{ stmts *[]string }
+
+// Query completes the database.Executor surface; provisioning never queries.
+func (valueRoleExecutor) Query(_ context.Context, _ string, _ ...any) (*sql.Rows, error) {
+	return nil, errors.New("Query is unused by the provisioning path")
+}
+
+func (v valueRoleExecutor) Exec(_ context.Context, query string, _ ...any) (sql.Result, error) {
+	*v.stmts = append(*v.stmts, query)
+	return driver.RowsAffected(0), nil
+}
+
+// txDoorSpec is the spec the ProvisionPGRolesTx tests provision. Both passwords
+// are set so the optional ALTER ROLE ... PASSWORD statements are in the list.
+func txDoorSpec() *PGRoleSpec {
+	return &PGRoleSpec{
+		Schema:           "tenant_tx",
+		MigratorRole:     "mig_tx",
+		MigratorPassword: "mig-tx-pw",
+		RuntimeRole:      "rt_tx",
+		RuntimePassword:  "rt-tx-pw",
+	}
+}
+
+// Both doors must reach the identical statement list, in the identical order.
+// The *sql.DB door is driven through sqlmock so what it actually executed is
+// observed, not assumed.
+func TestProvisionPGRolesTxRunsTheSameStatementsAsTheSQLDBDoor(t *testing.T) {
+	spec := txDoorSpec()
+	want, err := PGRoleProvisioningSQL(spec)
+	require.NoError(t, err)
+	require.NotEmpty(t, want)
+
+	exec := newRecordingRoleExecutor()
+	require.NoError(t, ProvisionPGRolesTx(context.Background(), exec, spec))
+	require.Equal(t, want, exec.stmts, "the tx door must execute the published list verbatim, in order")
+
+	var viaSQLDB []string
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(
+		sqlmock.QueryMatcherFunc(func(_, actualSQL string) error {
+			viaSQLDB = append(viaSQLDB, actualSQL)
+			return nil
+		})))
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	mock.MatchExpectationsInOrder(true)
+	for range want {
+		mock.ExpectExec("").WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+
+	require.NoError(t, ProvisionPGRoles(context.Background(), db, spec))
+	require.NoError(t, mock.ExpectationsWereMet())
+	require.Equal(t, want, viaSQLDB, "the *sql.DB door must execute the same list, in the same order")
+}
+
+// The tx door runs Validate, so a refusing IdentifierPolicy must stop it before
+// the executor is touched at all.
+func TestProvisionPGRolesTxStopsBeforeExecWhenPolicyRefuses(t *testing.T) {
+	spec := txDoorSpec()
+	spec.IdentifierPolicy = PGIdentifierCheckerFunc(func(string) error { return errTestPolicyRejected })
+
+	exec := newRecordingRoleExecutor()
+	err := ProvisionPGRolesTx(context.Background(), exec, spec)
+	require.ErrorIs(t, err, errTestPolicyRejected)
+	require.ErrorIs(t, err, ErrInvalidPGIdentifier)
+	assert.Empty(t, exec.stmts, "a refused spec must reach no statement at all")
+}
+
+func TestProvisionPGRolesTxRejectsNilSpec(t *testing.T) {
+	exec := newRecordingRoleExecutor()
+	err := ProvisionPGRolesTx(context.Background(), exec, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-nil *PGRoleSpec")
+	assert.Empty(t, exec.stmts)
+}
+
+func TestProvisionPGRolesTxRejectsNilExecutor(t *testing.T) {
+	err := ProvisionPGRolesTx(context.Background(), nil, txDoorSpec())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-nil database.Executor")
+}
+
+// A non-nil-able executor lands on isNilExecutor's default arm, which must not
+// over-refuse it: provisioning has to run the full statement list through it.
+func TestProvisionPGRolesTxAcceptsAValueExecutor(t *testing.T) {
+	spec := txDoorSpec()
+	want, err := PGRoleProvisioningSQL(spec)
+	require.NoError(t, err)
+	require.NotEmpty(t, want)
+
+	var stmts []string
+	exec := valueRoleExecutor{stmts: &stmts}
+	require.NotEqual(t, reflect.Pointer, reflect.ValueOf(database.Executor(exec)).Kind(),
+		"premise: the boxed value must not be nil-able")
+
+	require.NoError(t, ProvisionPGRolesTx(context.Background(), exec, spec))
+	require.Equal(t, want, stmts, "a value executor must run the published list verbatim, in order")
+}
+
+// typedNilExecutor returns a nil *recordingRoleExecutor already boxed in the
+// interface. The boxing has to happen behind an interface-typed return or
+// staticcheck reads the concrete assignment and calls the premise check below
+// dead (SA4023) — the very property the check exists to assert.
+func typedNilExecutor() database.Executor {
+	return (*recordingRoleExecutor)(nil)
+}
+
+// A typed-nil executor is a non-nil interface, so a plain `exec == nil` guard
+// misses it and the call panics on the nil receiver inside the loop.
+func TestProvisionPGRolesTxRejectsTypedNilExecutor(t *testing.T) {
+	exec := typedNilExecutor()
+	// Pin the premise: the interface is non-nil while the value inside it is nil.
+	// Not a testify assertion: require.NotNil unwraps the pointer and would fail
+	// on the very value this test needs, and testifylint rewrites any comparison
+	// form into it.
+	if exec == nil {
+		t.Fatal("premise: a typed nil must box into a non-nil interface")
+	}
+	v := reflect.ValueOf(exec)
+	require.Equal(t, reflect.Pointer, v.Kind(), "premise: the boxed value must be a pointer")
+	require.True(t, v.IsNil(), "premise: the interface holds a nil pointer")
+
+	spec := txDoorSpec()
+	require.NoError(t, spec.Validate(), "the spec must be valid, so only the executor guard can refuse")
+
+	err := ProvisionPGRolesTx(context.Background(), exec, spec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-nil database.Executor")
+}
+
+// The tx door's wrap must name the step index and the redacted statement,
+// exactly as the *sql.DB door's does. Step 2 is the migrator's
+// ALTER ROLE ... PASSWORD, so the same failure pins index and redaction at once.
+func TestProvisionPGRolesTxWrapNamesStepAndRedactedStatement(t *testing.T) {
+	spec := txDoorSpec()
+	want, err := PGRoleProvisioningSQL(spec)
+	require.NoError(t, err)
+	require.Contains(t, want[2], "PASSWORD", "step 2 is the migrator password statement")
+
+	boom := errors.New("exec blew up")
+	exec := newRecordingRoleExecutor()
+	exec.failAt = 2
+	exec.failErr = boom
+
+	err = ProvisionPGRolesTx(context.Background(), exec, spec)
+	require.ErrorIs(t, err, boom)
+	assert.Contains(t, err.Error(), "provisioning step 2 (")
+	assert.Contains(t, err.Error(), "[REDACTED]")
+	assert.NotContains(t, err.Error(), spec.MigratorPassword)
+	assert.Len(t, exec.stmts, 3, "the loop must stop at the failing statement")
 }

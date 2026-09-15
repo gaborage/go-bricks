@@ -249,17 +249,11 @@ err := database.WithTx(ctx, adminDB, func(ctx context.Context, tx dbtypes.Tx) er
     }
 
     // 2. Roles + schema + grants (transactional on PostgreSQL, including
-    //    CREATE ROLE). PGRoleProvisioningSQL returns the ordered statement
-    //    list; executing it on this tx makes the ProvisionPGRoles
-    //    partial-progress caveat moot — everything rolls back together.
-    stmts, err := migration.PGRoleProvisioningSQL(spec)
-    if err != nil {
+    //    CREATE ROLE). The Tx door runs the same statement list as
+    //    ProvisionPGRoles on the transaction you already hold, so the
+    //    partial-progress caveat is moot — everything rolls back together.
+    if err := migration.ProvisionPGRolesTx(ctx, tx, spec); err != nil {
         return err
-    }
-    for _, s := range stmts {
-        if _, err := tx.Exec(ctx, s); err != nil {
-            return err
-        }
     }
 
     // 3. Tenant DDL + the ledger (see below), applied in filename order.
@@ -283,25 +277,54 @@ module). `database.WithTx` (`database/transaction.go`) commits on a nil
 return and rolls back on error or panic, so a crash or error anywhere in
 the callback rolls back schema, roles, tables, ledger, registry row, and
 outbox row together — there is no window where the tenant half-exists. A
-re-run converges: the statements from `PGRoleProvisioningSQL` are
-idempotent, and the ledger below skips scripts it has already applied.
-`PGRoleProvisioningSQL`'s own doc carries a `SECURITY` note that its
-returned statements can include a password literal in clear text — that
-applies here too; don't log the statement slice.
+re-run converges as far as the provisioning statements (idempotent) and
+the ledger below (it skips scripts it has already applied) — but not the
+outbox publish, which mints a fresh event ID per call, so re-running after
+a transaction that already committed inserts a second
+`tenant.provisioned` row. The registry row at step 4 is consumer-owned, so
+make it an upsert if you want the rerun to converge. Reach for
+`PGRoleProvisioningSQL` instead of `ProvisionPGRolesTx` only when you need
+the statements themselves (to inspect, log-redact, or hand to another
+runner) — its doc carries a `SECURITY` note that they can include a
+password literal in clear text, so don't log the slice.
 
 **Why the `ProvisionPGRoles` partial-progress caveat doesn't apply here.**
-`ProvisionPGRoles`'s doc comment (`migration/roles.go:139-142`) warns that
-a partial-progress failure can leak intermediate state. That caveat is
-about `ProvisionPGRoles`'s own execution mode: it takes a bare `*sql.DB`
-and calls `db.ExecContext` once per statement with no enclosing
-transaction, so each statement lands (and can survive a later failure)
-independently. The pattern above never calls `ProvisionPGRoles` — it calls
-its sibling, `PGRoleProvisioningSQL`, which only builds the statement list,
-and then executes that list itself with `tx.Exec` against the caller's own
-transaction. Run that way, the statements are ordinary transactional DDL
-inside one explicit transaction: PostgreSQL rolls back `CREATE ROLE`
-together with everything else issued on the same transaction, so the whole
-batch commits or rolls back as one unit.
+`ProvisionPGRoles`'s doc comment (`migration/roles.go`) warns that a
+partial-progress failure leaves earlier steps in place. That caveat is
+about `ProvisionPGRoles`'s own execution mode, not about the statements:
+it takes a bare `*sql.DB` and calls `db.ExecContext` once per statement
+with no enclosing transaction, so each statement lands (and survives a
+later failure) independently.
+
+The statements themselves are ordinary transactional DDL. PostgreSQL
+documents every statement that cannot run inside a transaction block on
+that statement's own reference page — usually as *"cannot be executed
+inside a transaction block"*, for the `CONCURRENTLY` forms as
+*"… can be performed within a transaction block, but … CONCURRENTLY
+cannot"*, and for `ALTER SYSTEM` as *"not allowed inside a transaction
+block or function"* — among them
+`CREATE`/`DROP DATABASE`, `CREATE`/`DROP TABLESPACE`,
+`CREATE INDEX CONCURRENTLY`, `DROP INDEX CONCURRENTLY`,
+`REINDEX CONCURRENTLY`, `VACUUM`, argument-less `CLUSTER`, and
+`ALTER SYSTEM`. `CREATE ROLE` is not on that list, and neither is anything
+else this template emits (`ALTER ROLE`, `CREATE SCHEMA`, `GRANT`,
+`ALTER DEFAULT PRIVILEGES`, the `DO` wrapper). The `DO` block's
+`BEGIN … EXCEPTION` is a PL/pgSQL subtransaction — the documented
+alternative to `SAVEPOINT` — and is legal inside an outer transaction; the
+one thing such a block may not do is issue transaction-control statements,
+which it does not.
+
+So the list can ride the caller's transaction, two ways. Pass the `tx` to
+`migration.ProvisionPGRolesTx(ctx, tx, spec)`, which validates the spec,
+composes the same list and executes it with the same error wrapping as
+`ProvisionPGRoles`; or call `PGRoleProvisioningSQL` for the statement list
+and execute it yourself.
+Either way PostgreSQL rolls `CREATE ROLE` back together with everything
+else on that transaction, so the whole batch commits or rolls back as one
+unit — and the rerun-to-converge guidance stops applying, because a
+rollback leaves nothing to converge from. It leaves the tenant
+unprovisioned instead, so after fixing the failure the caller reruns the
+whole transaction and must get a successful commit.
 
 ### The ledger table
 

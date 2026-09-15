@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/database/identifier"
 	"github.com/gaborage/go-bricks/database/sqlredact"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -222,10 +224,12 @@ func (s *PGRoleSpec) Validate() error {
 // are denied SUPERUSER, CREATEDB, CREATEROLE, BYPASSRLS, and REPLICATION
 // per the deliverables of #378.
 //
-// PostgreSQL is not fully transactional across role + schema boundaries
-// (CREATE ROLE in particular is not transactional), so a partial-progress
-// failure can leak intermediate state. Callers should rerun the same spec
-// to converge; the idempotent template makes that safe.
+// Each statement lands independently here: db is a connection, not a
+// transaction, so a partial-progress failure leaves the steps that already
+// succeeded in place. Callers should rerun the same spec to converge; the
+// idempotent template makes that safe. Nothing in the emitted list forces
+// that mode — use ProvisionPGRolesTx to run the same list inside a
+// transaction the caller owns.
 func ProvisionPGRoles(ctx context.Context, db *sql.DB, spec *PGRoleSpec) error {
 	if spec == nil {
 		return errors.New("migration: ProvisionPGRoles requires a non-nil *PGRoleSpec")
@@ -233,13 +237,74 @@ func ProvisionPGRoles(ctx context.Context, db *sql.DB, spec *PGRoleSpec) error {
 	if db == nil {
 		return errors.New("migration: ProvisionPGRoles requires a non-nil *sql.DB")
 	}
+	return provisionPGRoles(ctx, spec, func(ctx context.Context, stmt string) error {
+		_, err := db.ExecContext(ctx, stmt)
+		return err
+	})
+}
+
+// ProvisionPGRolesTx applies the same role-pair + schema list as
+// ProvisionPGRoles, but against a caller-owned database.Executor, so
+// provisioning can ride the transaction that also creates the tenant's tables,
+// ledger and registry row. database.Tx and database.Interface both satisfy
+// database.Executor as they stand, so the caller hands over the transaction (or
+// the connection) it already holds without an adapter.
+//
+// Every statement emitted here is ordinary transactional DDL, and CREATE ROLE
+// is not among the statements PostgreSQL refuses inside a transaction block;
+// the full list and the argument are in wiki/migration_provisioning.md.
+//
+// exec MUST be authenticated as described on ProvisionPGRoles; a typed-nil
+// executor is refused before any statement runs, like a nil interface. A plain
+// database.Interface connection also satisfies database.Executor; passed one,
+// each statement lands independently exactly as on the ProvisionPGRoles path,
+// with the same rerun-to-converge guidance. On a real transaction that guidance does not apply at all: a failed
+// statement puts the transaction in a failed block, every later command is
+// rejected with 25P02 until the block is ended (or rolled back to a savepoint
+// taken before the failure — the one way partial state can survive), and
+// ending it discards it.
+func ProvisionPGRolesTx(ctx context.Context, exec database.Executor, spec *PGRoleSpec) error {
+	if spec == nil {
+		return errors.New("migration: ProvisionPGRolesTx requires a non-nil *PGRoleSpec")
+	}
+	if isNilExecutor(exec) {
+		return errors.New("migration: ProvisionPGRolesTx requires a non-nil database.Executor")
+	}
+	return provisionPGRoles(ctx, spec, func(ctx context.Context, stmt string) error {
+		_, err := exec.Exec(ctx, stmt)
+		return err
+	})
+}
+
+// isNilExecutor reports whether exec is unusable: a nil interface, or a non-nil
+// interface holding a nil pointer (or other nil-able kind). The second case
+// would otherwise panic inside the statement loop instead of being refused at
+// the door. Mirrors httpclient.isNilLogger.
+func isNilExecutor(exec database.Executor) bool {
+	if exec == nil {
+		return true
+	}
+	v := reflect.ValueOf(exec)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Chan, reflect.Func, reflect.Slice, reflect.UnsafePointer:
+		return v.IsNil()
+	default:
+		return false
+	}
+}
+
+// provisionPGRoles validates spec and runs the composed statement list through
+// run, in order. Both exported doors funnel through here so the statement list,
+// its order, and the error wrap cannot drift between them. spec is assumed
+// non-nil; run is assumed non-nil.
+func provisionPGRoles(ctx context.Context, spec *PGRoleSpec, run func(ctx context.Context, stmt string) error) error {
 	if err := spec.Validate(); err != nil {
 		return err
 	}
 
 	stmts := buildPGRoleStatements(spec)
 	for i, stmt := range stmts {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
+		if err := run(ctx, stmt); err != nil {
 			return fmt.Errorf("migration: provisioning step %d (%s) failed: %w",
 				i, summarizeStmt(stmt), err)
 		}

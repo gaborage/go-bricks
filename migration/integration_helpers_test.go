@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/testing/containers"
 )
@@ -235,6 +236,18 @@ type schemaHistoryRow struct {
 func (e *integrationEnv) adminDB(t *testing.T) *sql.DB {
 	t.Helper()
 	return e.openAsRole(t, e.adminUser, e.adminPassword)
+}
+
+// adminConn returns a framework database.Interface authenticated as the
+// container admin user against the env's default database. Used by the
+// transaction-scoped provisioning tests, which need database.WithTx and the
+// database.Tx that ProvisionPGRolesTx consumes. Closed when the test ends.
+func (e *integrationEnv) adminConn(t *testing.T) database.Interface {
+	t.Helper()
+	conn, err := database.NewConnection(e.dbConfigFor(e.defaultDB), e.logger)
+	require.NoError(t, err, "open framework connection as admin")
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
 }
 
 // openAsRole returns a *sql.DB authenticated as the given PostgreSQL role
