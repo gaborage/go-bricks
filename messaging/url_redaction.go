@@ -6,7 +6,7 @@ import (
 )
 
 // #nosec G101 -- Placeholder text for redacted URLs, not actual credentials
-const redactedAMQPPlaceholder = "amqp://****:****@<host>:<port>/<vhost>"
+const redactedAMQPPlaceholder = "amqp://****:****@<host>:<port>/<vhost>" // NOSONAR S5332: placeholder text for redacted log output, not a connection target
 
 // redactAMQPURL removes sensitive credentials from AMQP URLs for safe logging.
 // It preserves the URL structure (scheme, host, port, vhost) while masking the password.
