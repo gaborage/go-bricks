@@ -596,8 +596,12 @@ under `key` (`""` single-tenant, the tenant ID in multi-tenant mode), so the nex
 idle instance closes before `Remove` returns, and a `Close` failure comes back wrapped (`errors.Is`
 still matches the cause); a leased instance closes at its final release instead, an unknown key
 is a nil no-op, and after
-shutdown `Remove` returns `cache.ErrManagerClosed`. `CacheManager.Stats().Removals` counts every
-`Remove` that detached an instance, and `/ready` publishes it as `removals`.
+shutdown `Remove` returns `cache.ErrManagerClosed`. A `deps.Cache(ctx)` whose instance is still
+being created when `Remove` runs caches it afterwards, unseen by `Remove` — built from the config
+it resolved before, so possibly the old credentials; under steady traffic, call `Remove` again once
+in-flight creates complete, or drain traffic first
+([#1669](https://github.com/gaborage/go-bricks/issues/1669)). `CacheManager.Stats().Removals`
+counts every `Remove` that detached an instance, and `/ready` publishes it as `removals`.
 
 ### Sizing `maxsize` for multi-tenant deployments
 

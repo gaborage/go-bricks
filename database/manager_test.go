@@ -714,7 +714,12 @@ func TestDbManagerRemoveDoesNotBlockOtherKeys(t *testing.T) {
 
 	removed := make(chan error, 1)
 	go func() { removed <- m.Remove("a") }()
-	<-closing
+	select {
+	case <-closing:
+	case <-time.After(5 * time.Second):
+		close(unblock)
+		t.Fatal("Remove never closed the idle handle")
+	}
 
 	got := make(chan error, 1)
 	go func() {
@@ -733,7 +738,12 @@ func TestDbManagerRemoveDoesNotBlockOtherKeys(t *testing.T) {
 	}
 
 	close(unblock)
-	require.NoError(t, <-removed)
+	select {
+	case rerr := <-removed:
+		require.NoError(t, rerr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Remove did not return after its Close unblocked")
+	}
 }
 
 // TestDbManagerRemoveReResolvesRotatedCredentials pins the rotation recipe: once the provider's
