@@ -350,3 +350,13 @@ func (a *App) registerCloser(name string, closer interface{ Close() error }) {
 func (a *App) MessagingDeclarations() *messaging.Declarations {
 	return a.messagingDeclarations
 }
+
+// DBManager returns the framework-built database manager; nil only on an App the framework did not build.
+func (a *App) DBManager() *database.DbManager {
+	return a.dbManager
+}
+
+// CacheManager returns the framework-built cache manager; nil only on an App the framework did not build.
+func (a *App) CacheManager() *cache.CacheManager {
+	return a.cacheManager
+}

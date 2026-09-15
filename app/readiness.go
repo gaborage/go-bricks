@@ -148,6 +148,7 @@ const (
 	// Shared across kinds.
 	statsErrorsKey         = "errors"
 	statsEvictionsKey      = "evictions"
+	statsRemovalsKey       = "removals"
 	statsIdleCleanupsKey   = "idle_cleanups"
 	statsIdleTTLSecondsKey = "idle_ttl_seconds"
 	// Database: each used once below, kept because "active_connections" and
@@ -199,6 +200,7 @@ const (
 var (
 	databasePublicStats = []string{
 		statsActiveConnectionsKey, statsMaxConnectionsKey, statsIdleTTLSecondsKey, statsErrorsKey,
+		statsRemovalsKey,
 	}
 	messagingPublicStats = []string{
 		statsActivePublishersKey, "max_publishers", "active_consumers", statsIdleTTLSecondsKey,
@@ -206,7 +208,7 @@ var (
 	}
 	cachePublicStats = []string{
 		statsActiveCachesKey, statsTotalCreatedKey, statsEvictionsKey, statsIdleCleanupsKey,
-		statsErrorsKey, statsMaxSizeKey, statsIdleTTLKey,
+		statsErrorsKey, statsMaxSizeKey, statsIdleTTLKey, statsRemovalsKey,
 	}
 	streamsPublicStats = []string{
 		statsStartedKey, statsConsumersKey, statsPublishersKey, readyStatus,
@@ -220,6 +222,7 @@ func convertCacheStatsToMap(stats cache.ManagerStats) map[string]any {
 		statsActiveCachesKey: stats.ActiveCaches,
 		statsTotalCreatedKey: stats.TotalCreated,
 		statsEvictionsKey:    stats.Evictions,
+		statsRemovalsKey:     stats.Removals,
 		statsIdleCleanupsKey: stats.IdleCleanups,
 		statsErrorsKey:       stats.Errors,
 		statsMaxSizeKey:      stats.MaxSize,

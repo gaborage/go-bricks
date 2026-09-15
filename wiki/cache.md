@@ -590,6 +590,19 @@ cache:
     cleanupinterval: 10m # Less frequent cleanup
 ```
 
+**Evicting one instance.** `application.CacheManager().Remove(key)` closes the instance cached
+under `key` (`""` single-tenant, the tenant ID in multi-tenant mode), so the next
+`deps.Cache(ctx)` rebuilds it through the connector — after rotating Redis credentials, say. An
+idle instance closes before `Remove` returns, and a `Close` failure comes back wrapped (`errors.Is`
+still matches the cause); a leased instance closes at its final release instead, an unknown key
+is a nil no-op, and after
+shutdown `Remove` returns `cache.ErrManagerClosed`. A `deps.Cache(ctx)` whose instance is still
+being created when `Remove` runs caches it afterwards, unseen by `Remove` — built from the config
+it resolved before, so possibly the old credentials; under steady traffic, call `Remove` again once
+in-flight creates complete, or drain traffic first
+([#1669](https://github.com/gaborage/go-bricks/issues/1669)). `CacheManager.Stats().Removals`
+counts every `Remove` that detached an instance, and `/ready` publishes it as `removals`.
+
 ### Sizing `maxsize` for multi-tenant deployments
 
 `maxsize` is an LRU cap, not a per-tenant guarantee. When more tenants are active than `maxsize`, every request that targets a not-currently-cached tenant evicts the least-recently-used instance and recreates a fresh one — **eviction thrash** that silently degrades latency (each miss pays the full connect cost) without any error.

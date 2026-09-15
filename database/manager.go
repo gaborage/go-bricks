@@ -32,11 +32,10 @@ type Connector func(*config.DatabaseConfig, logger.Logger) (Interface, error)
 // lease is released. See ADR-032.
 type ReleaseFunc func()
 
-// errManagerClosed is returned by Get after Close has been called, rather than
-// resurrecting a connection on a shut-down manager (backlog F22). It is unexported:
-// DbManager exposed no closed-state error before the resourcepool rewire, so this
-// closes F22 while keeping the public surface unchanged.
-var errManagerClosed = errors.New("database: manager closed")
+// ErrManagerClosed is returned by Get and Remove once Close has run, and by a zero-value
+// DbManager never built via NewDbManager, rather than resurrecting a connection on a
+// shut-down manager (backlog F22). Match it with errors.Is.
+var ErrManagerClosed = errors.New("database: manager closed")
 
 // ErrNoDatabaseConfig is returned when a DBConfigProvider hands back a nil configuration
 // with a nil error, a contract violation the manager rejects instead of dereferencing.
@@ -113,18 +112,41 @@ func (m *DbManager) Get(ctx context.Context, key string) (Interface, ReleaseFunc
 	if m.pool == nil {
 		// Zero-value manager (never built via NewDbManager): unusable, fail closed rather
 		// than panic — consistent with the Stats()/Close()/Size() zero-value guards.
-		return nil, nil, errManagerClosed
+		return nil, nil, ErrManagerClosed
 	}
 	conn, release, err := m.pool.GetOrCreate(ctx, key, func(ctx context.Context) (Interface, error) {
 		return m.createConnection(ctx, key)
 	})
 	if err != nil {
 		if errors.Is(err, resourcepool.ErrPoolClosed) {
-			return nil, nil, errManagerClosed
+			return nil, nil, ErrManagerClosed
 		}
 		return nil, nil, err
 	}
 	return conn, ReleaseFunc(release), nil
+}
+
+// Remove evicts the connection cached under key so the next Get re-resolves it through the
+// DBConfigProvider; key is "" for the root database, config.NamedDatabasePrefix+name for a named
+// one, the tenant ID in multi-tenant mode. An idle connection closes now (close error wrapped); a
+// leased one at its final release, protecting work in a lease scope (HTTP request, AMQP message,
+// scheduler job) but not a handle borrowed outside one. Returns ErrManagerClosed after Close or on
+// a zero-value manager. A Get still creating its connection when Remove runs caches it afterwards,
+// unseen by Remove and built from its earlier config, so possibly old credentials; under steady
+// traffic call Remove again once in-flight creates complete, or drain traffic first (#1669).
+func (m *DbManager) Remove(key string) error {
+	if m.pool == nil || m.pool.Closed() {
+		return ErrManagerClosed
+	}
+	conn, shouldClose := m.pool.Remove(key)
+	if !shouldClose {
+		return nil
+	}
+	if err := conn.Close(); err != nil {
+		m.pool.RecordCloseError()
+		return fmt.Errorf("failed to close database connection %q: %w", key, err)
+	}
+	return nil
 }
 
 // createConnection resolves the per-key database configuration and opens a new connection.
@@ -218,6 +240,7 @@ func (m *DbManager) Stats() map[string]any {
 			"max_connections":    0,
 			"idle_ttl_seconds":   0,
 			"errors":             0,
+			"removals":           0,
 			"connections":        []map[string]any{},
 		}
 	}
@@ -230,7 +253,8 @@ func (m *DbManager) Stats() map[string]any {
 		"idle_ttl_seconds":   int(ps.IdleTTL.Seconds()),
 		// Pool create/close failures (including a deferred close on a handle still borrowed
 		// when Close ran, C581.3) — otherwise unobservable outside this Stats() call.
-		"errors": ps.Errors,
+		"errors":   ps.Errors,
+		"removals": ps.Removals,
 	}
 
 	// Rebuild the per-connection detail array from the pool's entry snapshot so the shape
