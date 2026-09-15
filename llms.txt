@@ -1303,6 +1303,64 @@ func PromoteID(c server.HandlerContext, next func() error) error {
 }
 ```
 
+## Database Sessions
+
+`db.Session(ctx)` returns a `database.Session` pinned to ONE physical connection — the handle for state a shared pool connection can silently lose when the next statement lands on a different backend: PostgreSQL advisory locks, `SET`/`ALTER SESSION`, and temporary tables (ADR-112). Its surface is `Query`/`QueryRow`/`Exec`/`DatabaseType` + `Begin`/`BeginTx` + `Close`; it has no `Prepare`, `Health`, `Stats`, or migration-table methods. `Close` is mandatory — an open `Session` holds one of the pool's connections (25 by default) for its whole lifetime — and acquisition is tracked as the `SESSION` operation. The `types.Session` godoc (database/types/session.go) is the authoritative contract for Close semantics, `sql.ErrConnDone`, concurrency, open `Rows`, and tenant-lease scope; see also wiki/database.md's "Dedicated Sessions" section.
+
+The example below is PostgreSQL-specific (`pg_advisory_lock`, `$1` placeholders); an Oracle consumer gets no `DBMS_LOCK` without a grant, so its session-scoped uses are `ALTER SESSION` state and global temporary tables.
+
+If the lock only needs to span a single transaction, use `pg_advisory_xact_lock` on an ordinary transaction — no Session needed; the Session door is for state that must outlive a transaction.
+
+```go
+import (
+    "context"
+    "fmt"
+    "time"
+
+    "github.com/gaborage/go-bricks/database"
+)
+
+const ledgerLockID = 424242
+
+// RelayLedger holds a PostgreSQL advisory lock across a transaction: the lock
+// and the work it guards run on the same pinned physical connection.
+func RelayLedger(ctx context.Context, db database.Interface) (err error) {
+    sess, err := db.Session(ctx)
+    if err != nil {
+        return fmt.Errorf("open session: %w", err)
+    }
+    defer func() { _ = sess.Close() }() // returns the connection to the pool
+
+    if _, err = sess.Exec(ctx, "SELECT pg_advisory_lock($1)", ledgerLockID); err != nil {
+        return fmt.Errorf("acquire ledger lock: %w", err)
+    }
+    // Registered immediately after the lock succeeds, so no later early return
+    // can skip it, and (defers run LIFO) it runs BEFORE the Close above: Close
+    // returns the connection to the pool without ending the backend, so a
+    // session lock that was not released rides along on a recycled connection.
+    // The unlock runs on a cleanup context that ignores caller cancellation but
+    // is still bounded, so it fires even when ctx is already canceled.
+    defer func() {
+        unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+        defer cancel()
+        if _, unlockErr := sess.Exec(unlockCtx, "SELECT pg_advisory_unlock($1)", ledgerLockID); unlockErr != nil && err == nil {
+            err = fmt.Errorf("release ledger lock: %w", unlockErr)
+        }
+    }()
+
+    tx, err := sess.Begin(ctx)
+    if err != nil {
+        return fmt.Errorf("begin: %w", err)
+    }
+    defer tx.Rollback(ctx)
+
+    if _, err = tx.Exec(ctx, "UPDATE ledger SET relayed = true WHERE relayed = false"); err != nil {
+        return fmt.Errorf("relay: %w", err)
+    }
+    return tx.Commit(ctx)
+}
+```
+
 ## Database Builder & Operations
 
 ```go
@@ -1805,6 +1863,34 @@ func TestOrderServiceCreateWithItems(t *testing.T) {
 
     assert.NoError(t, err)
     dbtesting.AssertCommitted(t, tx)
+}
+```
+
+**Dedicated Session Test:**
+
+```go
+// Pinned by TestExpectSessionDocExample in database/testing/doc_example_test.go.
+func TestLedgerServiceRelay(t *testing.T) {
+    db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+    sess := db.ExpectSession()
+    sess.ExpectExec("pg_advisory_lock").WillReturnRowsAffected(1)
+    sess.ExpectExec("pg_advisory_unlock").WillReturnRowsAffected(1)
+    sess.ExpectTransaction().ExpectExec("UPDATE ledger").WillReturnRowsAffected(3)
+
+    deps := &app.ModuleDeps{
+        DB: func(ctx context.Context) (database.Interface, error) {
+            return db, nil
+        },
+    }
+
+    // RelayLedger pins a session with db.Session(ctx), takes the advisory lock
+    // on it, runs the UPDATE inside a transaction begun on that session,
+    // commits, unlocks, and closes the session.
+    svc := NewLedgerService(deps)
+    err := svc.RelayLedger(ctx)
+
+    assert.NoError(t, err)
+    dbtesting.AssertSessionClosed(t, sess)
 }
 ```
 

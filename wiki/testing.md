@@ -163,6 +163,23 @@ ctx := multitenant.SetTenant(context.Background(), "acme")
 result, err := svc.Process(ctx)  // Uses acme's TestDB
 ```
 
+**Dedicated Session Testing:**
+
+```go
+// Pinned by TestExpectSessionDocExample in database/testing/doc_example_test.go.
+db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+sess := db.ExpectSession()
+sess.ExpectExec("pg_advisory_lock").WillReturnRowsAffected(1)
+sess.ExpectExec("pg_advisory_unlock").WillReturnRowsAffected(1)
+sess.ExpectTransaction().ExpectExec("UPDATE ledger").WillReturnRowsAffected(3)
+
+// RelayLedger pins a session with db.Session(ctx), locks, runs the UPDATE in a
+// transaction begun on that session, commits, unlocks, and closes the session.
+svc.RelayLedger(ctx)
+
+dbtesting.AssertSessionClosed(t, sess)
+```
+
 **Key Features:**
 
 - Fluent expectation API (ExpectQuery/ExpectExec)
@@ -170,6 +187,7 @@ result, err := svc.Process(ctx)  // Uses acme's TestDB
 - Transaction tracking (commit/rollback assertions)
 - Vendor-agnostic RowSet builder
 - Partial SQL matching by default (or strict with StrictSQLMatching())
+- Dedicated-session fakes: `db.ExpectSession()` returns a `TestSession` carrying its OWN expectations (never the pool's), and `dbtesting.AssertSessionClosed(t, sess)` pins that the session was released
 
 See [database/testing](../database/testing/) package and llms.txt's "Database Testing" section for full examples.
 

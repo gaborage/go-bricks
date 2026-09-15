@@ -14,4 +14,4 @@ Unified `database.Interface` supporting PostgreSQL (pgx, `$1` placeholders) and 
 
 **Defaults applied automatically:** Connection pooling (25 max, keepalive 60s), session timezone (`UTC` per ADR-016), Oracle reserved word quoting.
 
-For named databases (multi-DB single-tenant), table aliases, mixed JOIN conditions, subqueries, SELECT expressions, Oracle UDT registration, pool defaults, and session-timezone opt-out, see [wiki/database.md](../wiki/database.md).
+For named databases (multi-DB single-tenant), table aliases, mixed JOIN conditions, subqueries, SELECT expressions, Oracle UDT registration, pool defaults, dedicated sessions (`db.Session(ctx)`, the connection-pinned handle for advisory locks, `SET` and temp tables — ADR-112), and session-timezone opt-out, see [wiki/database.md](../wiki/database.md).

@@ -15,7 +15,10 @@ package types
 // database.Interface handle reaches the door directly — the vendor connections
 // (postgresql.Connection, oracle.Connection) and the tracking wrapper the
 // framework hands back from database.NewConnection / deps.DB(ctx) alike.
-// Always Close it to return the physical connection to the pool.
+// Always Close it to return the physical connection to the pool. An open
+// Session holds one of that pool's connections (25 by default) for its whole
+// lifetime, so it is a scarce resource: acquire it late, release it early, and
+// never hold one across a wait that is not itself session-scoped.
 //
 // A Session holds no tenant lease of its own, so it must not outlive the
 // request or job scope in which it was acquired — the tenant's underlying

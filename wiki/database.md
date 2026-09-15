@@ -804,6 +804,65 @@ case err != nil:
 }
 ```
 
+## Dedicated Sessions ([ADR-112](adr_112_database_session_door.md))
+
+`db.Session(ctx)` returns a `database.Session` pinned to ONE physical connection, for state a shared pool connection can silently lose when the next statement lands on a different backend: PostgreSQL advisory locks, `SET`/`ALTER SESSION`, and temporary tables. `Close` is mandatory — an open `Session` holds one of the pool's connections (25 by default) for its whole lifetime. Acquisition is tracked as the `SESSION` operation, the way `Begin` is tracked as `BEGIN` ([ADR-112](adr_112_database_session_door.md)).
+
+The [`types.Session` godoc](../database/types/session.go) is the single authority for the contract: `Close` semantics, `sql.ErrConnDone`, concurrency, open `Rows`, and the tenant-lease scope rule. Read it before using the door.
+
+The example below is PostgreSQL-specific (`pg_advisory_lock`, `$1` placeholders). An Oracle consumer gets no `DBMS_LOCK` without a grant, so its session-scoped uses are `ALTER SESSION` state and global temporary tables.
+
+If the lock only needs to span a single transaction, use `pg_advisory_xact_lock` on an ordinary transaction — no Session needed; the Session door is for state that must outlive a transaction.
+
+```go
+import (
+    "context"
+    "fmt"
+    "time"
+
+    "github.com/gaborage/go-bricks/database"
+)
+
+const ledgerLockID = 424242
+
+func RelayLedger(ctx context.Context, db database.Interface) (err error) {
+    sess, err := db.Session(ctx)
+    if err != nil {
+        return fmt.Errorf("open session: %w", err)
+    }
+    defer func() { _ = sess.Close() }()
+
+    if _, err = sess.Exec(ctx, "SELECT pg_advisory_lock($1)", ledgerLockID); err != nil {
+        return fmt.Errorf("acquire ledger lock: %w", err)
+    }
+    // Registered immediately after the lock succeeds, so no later early return
+    // can skip it, and (defers run LIFO) it runs BEFORE the Close above: Close
+    // returns the connection to the pool without ending the backend, so a
+    // session lock that was not released rides along on a recycled connection.
+    // The unlock runs on a cleanup context that ignores caller cancellation but
+    // is still bounded, so it fires even when ctx is already canceled.
+    defer func() {
+        unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+        defer cancel()
+        if _, unlockErr := sess.Exec(unlockCtx, "SELECT pg_advisory_unlock($1)", ledgerLockID); unlockErr != nil && err == nil {
+            err = fmt.Errorf("release ledger lock: %w", unlockErr)
+        }
+    }()
+
+    // The lock and the work it guards run on the same physical connection.
+    tx, err := sess.Begin(ctx)
+    if err != nil {
+        return fmt.Errorf("begin: %w", err)
+    }
+    defer tx.Rollback(ctx)
+
+    if _, err = tx.Exec(ctx, "UPDATE ledger SET relayed = true WHERE relayed = false"); err != nil {
+        return fmt.Errorf("relay: %w", err)
+    }
+    return tx.Commit(ctx)
+}
+```
+
 ## Session Timezone (Breaking Change — ADR-016)
 
 | Setting | Default | Purpose |
