@@ -195,18 +195,23 @@ func TestSessionIterationBadConnInvalidatesSession(t *testing.T) {
 		observe   func(*testing.T, context.Context, types.Session)
 		followUps bool
 	}{
-		{name: "query_rows", setup: failingRows, followUps: true,
+		{
+			name: "query_rows", setup: failingRows, followUps: true,
 			observe: func(t *testing.T, ctx context.Context, s types.Session) {
 				rows, err := s.Query(ctx, "SELECT n FROM t")
 				require.NoError(t, err)
 				iterateToBadConn(t, rows)
-			}},
-		{name: "query_row_scan", setup: failingRows, followUps: true,
+			},
+		},
+		{
+			name: "query_row_scan", setup: failingRows, followUps: true,
 			observe: func(t *testing.T, ctx context.Context, s types.Session) {
 				var n int
 				require.ErrorIs(t, s.QueryRow(ctx, "SELECT n FROM t").Scan(&n), sql.ErrConnDone)
-			}},
-		{name: "rows_held_open_across_a_call_then_fail", followUps: true,
+			},
+		},
+		{
+			name: "rows_held_open_across_a_call_then_fail", followUps: true,
 			setup: func(m sqlmock.Sqlmock) {
 				failingRows(m)
 				m.ExpectExec("SET x").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -217,13 +222,16 @@ func TestSessionIterationBadConnInvalidatesSession(t *testing.T) {
 				_, err = s.Exec(ctx, "SET x = 1")
 				require.NoError(t, err, "the Rows is still open, so this call must go through")
 				iterateToBadConn(t, rows)
-			}},
-		{name: "close_directly_after_rows_fail", setup: failingRows,
+			},
+		},
+		{
+			name: "close_directly_after_rows_fail", setup: failingRows,
 			observe: func(t *testing.T, ctx context.Context, s types.Session) {
 				rows, err := s.Query(ctx, "SELECT n FROM t")
 				require.NoError(t, err)
 				iterateToBadConn(t, rows)
-			}},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
