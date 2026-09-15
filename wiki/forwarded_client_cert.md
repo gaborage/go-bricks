@@ -31,6 +31,29 @@ serve every request unauthenticated while asserting the opposite. On the YAML an
 (ADR-064), so the WARN only ever appears for configs that bypass `app.Builder.WithConfig`
 altogether.
 
+### Requiring the identity on one route family
+
+`require` is service-wide: it refuses every non-probe request that carries no identity. To
+require the identity on one route family only, leave `require` off and mount
+`server.RequireForwardedClientCert` on that family's group:
+
+```go
+func (m *PartnerModule) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	partner := r.Group("/partner", server.RequireForwardedClientCert(m.logger)) // m.logger = deps.Logger from Init
+	server.POST(hr, partner, "/notifications", m.notify)
+}
+```
+
+The guard parses the headers itself, so it holds under any `enabled`/`require` setting. It
+refuses with the same 401 `require` produces, on the same two conditions: no `-Subject` and
+no `-Serial-Number`, or any of the four headers duplicated. A `-Leaf` that fails to decode
+still passes. When the engine-level middleware did not attach the identity (`enabled:
+false`), the guard attaches it, so `ForwardedClientCertFromContext` works behind the guard in
+every posture. Probes are not exempted: a route stays open by being registered outside the
+guarded group, as with [`auth.Middleware`](auth.md). WARNs go to the logger passed in; `nil`
+falls back to the standard library `log` package. The guard decides presence, never
+provenance; mounting it is a [trust model](#trust-model) posture assertion.
+
 ## What gets parsed
 
 AWS ALB verify mode forwards these headers (passthrough mode's single
@@ -71,8 +94,9 @@ check that swaps the decoder (`server/forwardedcert_test.go`).
 
 ## Trust model
 
-Enabling `server.forwardedclientcert` is an explicit operator assertion of **three**
-things, together — never a single flag that "just trusts AWS":
+Enabling `server.forwardedclientcert`, or mounting `server.RequireForwardedClientCert` on a
+route group (for that family, in every environment, whatever `enabled` says), is an explicit
+operator assertion of **three** things, together — never a single flag that "just trusts AWS":
 
 1. An **mTLS-verify** ALB listener fronts this service (not passthrough, not a plain HTTP/S
    listener).
@@ -113,8 +137,8 @@ headers alone.
 **No in-app IP/proxy trust.** This middleware never derives trust from source IP or
 `X-Forwarded-For` — that is the anti-pattern already present elsewhere in this framework
 (`server/ratelimit.go`'s `ctx.RealIP()` unconditionally trusting XFF, ledgered as F23).
-`enabled` is the only trust signal; there is no source-IP/CIDR check to layer on top, and
-adding one would be v2 scope creep, not a v1 gap.
+`enabled` and a mounted guard are the only trust signals; there is no source-IP/CIDR check to
+layer on top, and adding one would be v2 scope creep, not a v1 gap.
 
 If AWS ever publishes a sanitization guarantee for `X-Amzn-Mtls-*`, this section and
 [ADR-043](adr_043_forwarded_client_cert.md)'s Consequences should be updated to cite it and
@@ -132,8 +156,9 @@ got through and the deployment posture above needs attention.
 ## Probe exemption
 
 Health and ready probe paths (the same `healthPath`/`readyPath` passed into
-`server.SetupMiddlewares`) always skip this middleware. ALB health checks present no client
-certificate, so a non-exempt `Require` would take the target group down on every deploy.
+`server.SetupMiddlewares`) always skip the engine-level middleware. ALB health checks present
+no client certificate, so a non-exempt `Require` would take the target group down on every
+deploy.
 
 ## Authorization recipe (application code)
 
@@ -154,6 +179,10 @@ func (m *WebhookModule) GlobalMiddleware() []server.MiddlewareFunc {
 	}
 }
 ```
+
+Behind `server.RequireForwardedClientCert`, put the subject check in the same group, after the
+guard: global middleware runs before group middleware, so with `enabled: false` it never sees
+the identity the guard attaches.
 
 Remember the trust-model boundary above: this recipe is only as strong as the ALB's trust
 store scoping a single partner CA. If your trust store is shared across partners, **fail

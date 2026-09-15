@@ -40,7 +40,7 @@ Bearer/JWT verification ships in the [`auth`](auth.md) package, and `auth.Middle
 attached **per route group** — `r.Group("/orders", auth.Middleware(v))` — never through
 `GlobalMiddlewareRegisterer`. That is a deliberate difference, not an oversight (ADR-109):
 
-| | Global middleware | `auth.Middleware` |
+| | Global middleware | `auth.Middleware`, `server.RequireForwardedClientCert` |
 | --- | --- | --- |
 | Scope | Every route, no opt-out | The groups it is attached to |
 | Exempting a route | A path list inside the gate body | Register the route outside the guarded group |
@@ -52,6 +52,8 @@ it exempts, and unable to say anything about a path that no longer exists. Per-g
 attachment puts the decision at the registration site, where a reviewer reads the route and
 its guard in one place. `auth` chose the second; a service that wants the first can still wrap
 `auth.Middleware` in its own global gate, but then it owns the exemption list.
+`server.RequireForwardedClientCert` makes the same choice for the forwarded client-certificate
+identity, beside the service-wide `server.forwardedclientcert.require` ([forwarded_client_cert.md](forwarded_client_cert.md), ADR-043).
 
 Use this seam for gates that genuinely have no route-shaped exemptions: a drain/maintenance
 gate, a global audit record, a shared API-key check in front of an internal service.
