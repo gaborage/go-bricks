@@ -1580,6 +1580,53 @@ func TestMessagingManagerStatsCountsConsumersAcrossRegistries(t *testing.T) {
 	assert.Equal(t, 3, stats["declared_consumers"])
 	assert.Equal(t, 3, stats["subscribed_consumers"])
 	assert.Equal(t, uint64(0), stats["consumer_resubscribes"])
+	assert.Equal(t, 0, stats["consumer_max_fail_streak"], "nothing is failing")
+}
+
+// TestMessagingManagerStatsPublishTheWorstCurrentFailStreak pins the one counter that makes
+// the intermediate state — a consumer unsubscribed but still inside its streak — readable
+// from /ready and /_sys/health-debug. The client is frozen INSIDE the fourth re-subscribe
+// attempt, so the three that already failed are read at rest rather than raced, and the
+// number is a bare count: it says how far the unluckiest consumer has got, never which one.
+func TestMessagingManagerStatsPublishTheWorstCurrentFailStreak(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New("error", false)
+
+	const pauseAt = 4
+	client := newPausingConsumeClient(pauseAt)
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		log,
+		ManagerOptions{MaxPublishers: 1, IdleTTL: time.Minute, ConsumerResubscribeDelay: time.Millisecond},
+		func(string, logger.Logger) AMQPClient { return client },
+	)
+	defer func() { _ = manager.Close() }() // stop supervisor goroutines
+
+	decls := NewDeclarations()
+	decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
+	decls.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testQueue,
+		Consumer:  testConsumer,
+		EventType: testEventType,
+		Handler:   &countingTestHandler{},
+	})
+	require.NoError(t, manager.EnsureConsumers(ctx, testTenantID, decls))
+
+	require.Equal(t, 0, manager.Stats()["consumer_max_fail_streak"], "a subscribed consumer has no streak")
+
+	close(client.first)
+	select {
+	case <-client.paused:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the re-subscribe loop never reached the paused attempt")
+	}
+	defer close(client.release)
+
+	stats := manager.Stats()
+
+	assert.Equal(t, pauseAt-1, stats["consumer_max_fail_streak"], "three attempts have failed and the fourth is in flight")
+	assert.Equal(t, 0, stats["subscribed_consumers"], "and the consumer reads unsubscribed while it retries")
+	assert.Equal(t, 1, stats["declared_consumers"])
 }
 
 // TestMessagingManagerConsumerStatesSpanEveryRegistry pins the detail door behind the

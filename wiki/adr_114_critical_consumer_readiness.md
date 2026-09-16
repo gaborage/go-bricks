@@ -64,11 +64,14 @@ configuration per probe.
   has given up.
 - The threshold is the WARN constant, not a second number. One threshold, one meaning: the point at
   which the supervisor has stopped looking like it is riding out a flap. A consumer whose channel
-  just closed stays ready, and that it is unsubscribed shows in `messaging_stats` — and in
-  `/_sys/health-debug`, which renders the same map — as `subscribed_consumers` below
-  `declared_consumers`, never in the verdict. The streak COUNT itself is published nowhere: it
-  is readable through `Registry.ConsumerStates()`/`Manager.ConsumerStates()` in Go, and reached
-  `/ready` through no key this decision adds.
+  just closed stays ready, and the intermediate state is visible instead of judged:
+  `messaging_stats` — the same map `/_sys/health-debug` renders — carries
+  `subscribed_consumers` below `declared_consumers` and, added by this decision,
+  `consumer_max_fail_streak`, the largest current-outage streak across declared consumers
+  (`0` when none is failing). An operator can therefore watch an outage climb toward the
+  threshold before it reaches the verdict. Like every other key in that map it is a bare
+  number: it never says WHICH consumer, which is what keeps `ConsumerState`'s identity fields
+  out of the unauthenticated body; `ConsumerStates()` remains the in-process door for those.
 - ADR-048 governs the body: the sentinel carries no queue name, consumer tag or event type, the
   slot declares no `PublicErr`, and the unauthenticated `503` renders the default
   `messaging unavailable`.

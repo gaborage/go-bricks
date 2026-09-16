@@ -233,7 +233,8 @@ var (
 	}
 	messagingPublicStats = []string{
 		statsActivePublishersKey, "max_publishers", "consumer_registries", "declared_consumers",
-		"subscribed_consumers", "consumer_resubscribes", statsIdleTTLSecondsKey,
+		"subscribed_consumers", "consumer_resubscribes", "consumer_max_fail_streak",
+		statsIdleTTLSecondsKey,
 		statsEvictionsKey, statsIdleCleanupsKey, statsErrorsKey,
 	}
 	cachePublicStats = []string{

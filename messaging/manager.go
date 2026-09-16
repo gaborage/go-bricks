@@ -593,16 +593,18 @@ func (m *Manager) consumerSnapshot() (registries int, states []ConsumerState) {
 
 // Stats returns statistics about the messaging manager. Publisher counters come from the
 // pool; the consumer counters come from the consumer map and the per-consumer subscription
-// state its registries keep. consumer_registries counts tenant keys, not consumers.
+// state its registries keep. consumer_registries counts tenant keys, not consumers, and
+// consumer_max_fail_streak is the largest current-outage re-subscribe streak across them.
 func (m *Manager) Stats() map[string]any {
 	registryCount, states := m.consumerSnapshot()
-	subscribed := 0
+	subscribed, maxFailStreak := 0, 0
 	var resubscribes uint64
 	for _, state := range states {
 		if state.Subscribed {
 			subscribed++
 		}
 		resubscribes += state.Resubscribes
+		maxFailStreak = max(maxFailStreak, state.FailStreak)
 	}
 
 	// A zero-value Manager (not built via NewMessagingManager, e.g. the lightweight stand-in
@@ -614,10 +616,15 @@ func (m *Manager) Stats() map[string]any {
 		"declared_consumers":    len(states),
 		"subscribed_consumers":  subscribed,
 		"consumer_resubscribes": resubscribes,
-		"idle_ttl_seconds":      0,
-		"evictions":             0,
-		"idle_cleanups":         0,
-		"errors":                0,
+		// The worst current outage as a bare number: how far the unluckiest consumer's
+		// supervisor has got through its re-subscribe streak, with no way back to WHICH
+		// consumer that is. Reads 0 while nothing is failing, and a stopped registry
+		// reports 0 because ConsumerStates masks a shutdown.
+		"consumer_max_fail_streak": maxFailStreak,
+		"idle_ttl_seconds":         0,
+		"evictions":                0,
+		"idle_cleanups":            0,
+		"errors":                   0,
 	}
 
 	if m.pubPool != nil {

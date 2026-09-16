@@ -1763,8 +1763,9 @@ That required `probeDescription.live` to mean what its name says: the judge used
 whenever `acquire` was set, which left the arm unreachable under per-tenant tenancy, where the lease
 resolves to nothing and the judge short-circuits to `per_tenant`. The threshold is what
 answers the restart-loop objection a broker-aware probe usually earns: a reconnect that recovers
-inside the streak never reaches the verdict, and the unsubscribed consumer shows in
-`messaging_stats` as `subscribed_consumers` below `declared_consumers` instead. Absent, the key changes nothing. The `503` renders ADR-048's fixed
+inside the streak never reaches the verdict, and the intermediate state shows in `messaging_stats`
+instead — `subscribed_consumers` below `declared_consumers`, plus the new
+`consumer_max_fail_streak`, a bare count of the worst current outage that names no consumer. Absent, the key changes nothing. The `503` renders ADR-048's fixed
 `messaging unavailable`, with no queue name or consumer tag in it. See
 [migrations.md](migrations.md) `[C65.12]`.
 
