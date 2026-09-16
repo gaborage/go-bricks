@@ -39,7 +39,15 @@ type Server struct {
 	boundAddr    atomic.Pointer[net.Addr] // set via ListenerAddrFunc once Start's listener is bound; nil until then
 	ready        chan struct{}
 	started      atomic.Bool
-	stopping     atomic.Bool
+	// lifecycleMu serializes the readiness commit in onBeforeServe with Shutdown.
+	// stopping and httpServer stay atomic because Start and the lifecycle tests read
+	// them outside this lock.
+	lifecycleMu sync.Mutex
+	stopping    atomic.Bool
+	// testHookReadyCommit runs inside the readiness commit while lifecycleMu is held.
+	// Only the lifecycle test sets it, to park a commit and prove Shutdown cannot
+	// return while one is in flight.
+	testHookReadyCommit func()
 }
 
 // normalizeBasePath cannot use pathutil.NormalizePrefix because that helper
@@ -319,14 +327,28 @@ func (s *Server) onListenerBound(addr net.Addr) {
 // http.ErrServerClosed without closing ready so echo closes the listener and
 // Start returns that sentinel. Shutdown never clears httpServer, so ready
 // closes once, and only when the server is actually serving.
+//
+// Storing srv, reading the latch and closing ready are one critical section
+// under lifecycleMu, so a Shutdown cannot land between the latch read and the
+// close and shut down a server this callback is about to report ready. The
+// ordering the lock still allows — Shutdown running after the commit but before
+// echo calls Serve — is indistinguishable from a Shutdown issued the instant
+// after readiness, and is an ordinary graceful stop rather than a false
+// readiness.
 func (s *Server) onBeforeServe(srv *http.Server) error {
 	srv.ReadTimeout = s.cfg.Server.Timeout.Read
 	srv.WriteTimeout = s.cfg.Server.Timeout.Write
 	srv.IdleTimeout = s.cfg.Server.Timeout.Idle
 	srv.ReadHeaderTimeout = s.cfg.Server.Timeout.Read
+
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 	first := s.httpServer.Swap(srv) == nil
 	if s.stopping.Load() {
 		return http.ErrServerClosed
+	}
+	if s.testHookReadyCommit != nil {
+		s.testHookReadyCommit()
 	}
 	if first {
 		close(s.ready)
@@ -339,11 +361,20 @@ func (s *Server) onBeforeServe(srv *http.Server) error {
 // A Shutdown issued before Start makes the later Start return
 // http.ErrServerClosed without binding. A Shutdown issued after the listener
 // binds but before the serve callback stores the *http.Server is observed by
-// that callback, which then refuses to serve.
+// that callback, which then refuses to serve. Setting the latch and reading the
+// stored server share onBeforeServe's critical section, so Shutdown never
+// returns while a readiness commit is in flight and ReadyCh never closes after
+// Shutdown returned.
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.lifecycleMu.Lock()
 	s.stopping.Store(true)
+	srv := s.httpServer.Load()
+	s.lifecycleMu.Unlock()
+
 	// In v5, Echo no longer has a Shutdown method. Shut down the http.Server directly.
-	if srv := s.httpServer.Load(); srv != nil {
+	// The drain runs outside lifecycleMu: it blocks until connections finish, and
+	// holding the lock there would stall a concurrent serve callback for its duration.
+	if srv != nil {
 		if err := srv.Shutdown(ctx); err != nil && !goerrors.Is(err, http.ErrServerClosed) {
 			return err
 		}

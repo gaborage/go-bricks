@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -425,6 +426,106 @@ func TestServerShutdownAfterBeforeServeStopsStoredServer(t *testing.T) {
 	require.NoError(t, srv.Shutdown(context.Background()))
 	assert.Same(t, httpSrv, srv.httpServer.Load())
 	assert.True(t, srv.stopping.Load())
+}
+
+// shutdownLockFrame and shutdownLockWaitReason are the two halves awaitShutdownParked
+// looks for in one goroutine's dump entry: the Shutdown frame, and the wait reason the
+// runtime prints for a goroutine blocked acquiring a sync.Mutex.
+const (
+	shutdownLockFrame      = "go-bricks/server.(*Server).Shutdown"
+	shutdownLockWaitReason = "[sync.Mutex.Lock]"
+)
+
+// isClosed reports whether ch is already closed, without blocking.
+func isClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
+
+// goroutineDump returns every goroutine's stack, growing the buffer until the dump
+// fits so no entry is truncated away.
+func goroutineDump() string {
+	buf := make([]byte, 64<<10)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return string(buf[:n])
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+}
+
+// awaitShutdownParked reports whether the Shutdown goroutine parked waiting for the
+// lifecycle lock (true) or ran to completion (false). It alternates a non-blocking
+// check of done with a goroutine dump, so it settles as soon as either outcome is
+// decided: both are terminal, so it needs no sleep and no deadline.
+func awaitShutdownParked(done <-chan struct{}) bool {
+	for {
+		if isClosed(done) {
+			return false
+		}
+		for _, entry := range strings.Split(goroutineDump(), "\n\n") {
+			if strings.Contains(entry, shutdownLockFrame) && strings.Contains(entry, shutdownLockWaitReason) {
+				return true
+			}
+		}
+	}
+}
+
+// runShutdownProbe shuts srv down and records whether ReadyCh was already closed when
+// Shutdown returned to its caller.
+func runShutdownProbe(srv *Server, readyAtReturn chan<- bool, done chan<- struct{}) {
+	_ = srv.Shutdown(context.Background())
+	readyAtReturn <- isClosed(srv.ReadyCh())
+	close(done)
+}
+
+// TestServerShutdownCannotReturnDuringTheReadinessCommit pins the serialization the
+// readiness commit needs. With the commit parked between its stopping check and
+// close(ready), a concurrent Shutdown must wait for the lifecycle lock instead of
+// running to completion: a Shutdown that returned first would already have stopped
+// the server the commit is about to report ready, so ReadyCh would close after the
+// caller had been told the server was down.
+func TestServerShutdownCannotReturnDuringTheReadinessCommit(t *testing.T) {
+	srv := newTestServer("", "", "")
+
+	commitParked := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseCommit) })
+	t.Cleanup(release)
+	srv.testHookReadyCommit = func() {
+		close(commitParked)
+		<-releaseCommit
+	}
+
+	httpSrv := &http.Server{ReadHeaderTimeout: time.Second}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.onBeforeServe(httpSrv) }()
+	<-commitParked
+
+	readyAtShutdownReturn := make(chan bool, 1)
+	shutdownReturned := make(chan struct{})
+	go runShutdownProbe(srv, readyAtShutdownReturn, shutdownReturned)
+
+	require.True(t, awaitShutdownParked(shutdownReturned),
+		"Shutdown ran to completion while the readiness commit was still in flight")
+
+	release()
+	require.NoError(t, <-serveErr)
+	<-shutdownReturned
+	assert.True(t, <-readyAtShutdownReturn, "Shutdown returned before ReadyCh closed")
+
+	// The commit won the lock, so Shutdown stopped the server it had stored. Echo
+	// calls Serve next, and it refuses: the residual window is an ordinary graceful
+	// stop, not a false readiness.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	assert.ErrorIs(t, httpSrv.Serve(ln), http.ErrServerClosed)
 }
 
 // TestServerShutdownBeforeStartRefusesStart pins Shutdown-before-Start: Start
