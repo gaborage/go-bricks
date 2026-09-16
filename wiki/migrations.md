@@ -8600,7 +8600,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   else (C65.7, ADR-097 amendment). A sealed key is then bound by equality to the delivery that
   minted it: `ValidateDedupKey` admits one only when it equals the key the sealed consume door
   stored on that delivery's context, so a key retained from delivery A is refused while handling
-  delivery B (C65.11, ADR-097 amendment).
+  delivery B (C65.12, ADR-097 amendment).
 
 - gist: `JOSETransport` passed every body it did not recognize straight through. In nested
   mode that was any response whose `Content-Type` was not `application/jose`; in envelope
@@ -8931,7 +8931,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   admission proves the key came from *some* sealed delivery, not from the one being handled: a
   sealed key retained past the delivery that minted it still passes, and the ledger then treats the next
   delivery as a duplicate and skips its handler. Binding the key to its originating delivery by
-  equality is `[C65.11]`. `messaging.IsSealedDedupKey` is deleted — read
+  equality is `[C65.12]`. `messaging.IsSealedDedupKey` is deleted — read
   `key.Sealed()`. Additive:
   `messaging.DedupKey` (`String()`, `Sealed()`) and `messaging.WireDedupKey(id string)
   (DedupKey, error)`, which applies the unchanged `^[A-Za-z0-9_-]{1,128}$` grammar.
@@ -8975,7 +8975,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `Metadata.DedupKey`), `inbox/inbox.go`, `app/module.go` (`InboxProcessor`),
   `inbox/testing/mock_inbox.go` · closes the exposure [C64.11] recorded
 
-### [C65.11] a sealed DedupKey is bound by equality to the delivery that minted it · breaking · when: match
+### [C65.12] a sealed DedupKey is bound by equality to the delivery that minted it · breaking · when: match
 
 - detect: nothing in your build flags this — no signature moves. `git grep -nE
   'ProcessOnce\(' -- '*.go'` finds every ledger call; a hit that does not pass
