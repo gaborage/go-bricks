@@ -25,6 +25,8 @@ const (
 	tenantTwo      = "tenant-2"
 	tenantThree    = "tenant-3"
 	closeFailedMsg = "close failed"
+	cacheUserV1    = "app-v1"
+	cacheUserV2    = "app-v2"
 )
 
 // mockCache implements cache.Cache for testing.
@@ -592,6 +594,105 @@ func TestCacheManagerRemove(t *testing.T) {
 	stats = mgr.Stats()
 	assert.Equal(t, 1, stats.ActiveCaches)
 	assert.Equal(t, 2, stats.TotalCreated)
+}
+
+type cacheGetResult struct {
+	c   cache.Cache
+	rel cache.ReleaseFunc
+	err error
+}
+
+// TestCacheManagerRemoveReResolvesRotatedCredentials pins the rotation recipe: once the
+// connector's credentials for a key change, Remove closes the old instance and the next Get
+// rebuilds with the new ones.
+func TestCacheManagerRemoveReResolvesRotatedCredentials(t *testing.T) {
+	var current atomic.Value
+	current.Store(cacheUserV1)
+	var ids []string
+	var oldCloses atomic.Int32
+	connector := func(_ context.Context, _ string) (cache.Cache, error) {
+		id := current.Load().(string)
+		ids = append(ids, id)
+		if id == cacheUserV1 {
+			return newTrackableMockCache(id, func(string) { oldCloses.Add(1) }), nil
+		}
+		return newMockCache(id), nil
+	}
+
+	mgr, err := cache.NewCacheManager(cache.DefaultManagerConfig(), connector)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	old, release, err := mgr.Get(context.Background(), tenantOne)
+	require.NoError(t, err)
+	release()
+
+	current.Store(cacheUserV2)
+	require.NoError(t, mgr.Remove(tenantOne))
+	assert.Equal(t, int32(1), oldCloses.Load(), "the rotated-out instance closes on Remove")
+
+	fresh, release, err := mgr.Get(context.Background(), tenantOne)
+	require.NoError(t, err)
+	release()
+	assert.NotSame(t, old, fresh)
+	assert.Equal(t, []string{cacheUserV1, cacheUserV2}, ids, "the rebuild uses the connector's new credentials")
+
+	require.NoError(t, mgr.Close())
+	assert.Equal(t, int32(1), oldCloses.Load(), "Close never reaches the instance Remove already closed")
+}
+
+// TestCacheManagerRemoveReResolvesRotatedCredentialsInFlight extends the rotation recipe to a
+// Get still creating when credentials are switched and Remove runs: that Get keeps the
+// pre-rotation instance (never cached), and the following Get observes the new credentials.
+func TestCacheManagerRemoveReResolvesRotatedCredentialsInFlight(t *testing.T) {
+	var current atomic.Value
+	current.Store(cacheUserV1)
+	started := make(chan struct{})
+	gate := make(chan struct{})
+	var startOnce, unblockOnce sync.Once
+	unblock := func() { unblockOnce.Do(func() { close(gate) }) }
+	t.Cleanup(unblock)
+
+	var mu sync.Mutex
+	var ids []string
+	connector := func(_ context.Context, _ string) (cache.Cache, error) {
+		id := current.Load().(string)
+		mu.Lock()
+		ids = append(ids, id)
+		mu.Unlock()
+		startOnce.Do(func() { close(started) })
+		<-gate
+		return newMockCache(id), nil
+	}
+
+	mgr, err := cache.NewCacheManager(cache.DefaultManagerConfig(), connector)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	gotCh := make(chan cacheGetResult, 1)
+	go func() {
+		c, rel, getErr := mgr.Get(context.Background(), tenantOne)
+		gotCh <- cacheGetResult{c, rel, getErr}
+	}()
+	<-started
+
+	current.Store(cacheUserV2)
+	require.NoError(t, mgr.Remove(tenantOne))
+
+	unblock()
+	first := <-gotCh
+	require.NoError(t, first.err)
+	require.NotNil(t, first.rel)
+	first.rel()
+
+	fresh, rel, err := mgr.Get(context.Background(), tenantOne)
+	require.NoError(t, err)
+	rel()
+	assert.NotSame(t, first.c, fresh)
+	mu.Lock()
+	gotIDs := append([]string(nil), ids...)
+	mu.Unlock()
+	assert.Equal(t, []string{cacheUserV1, cacheUserV2}, gotIDs, "the following Get observes the new credentials")
 }
 
 // TestCacheManagerRemoveNonexistent tests removing a cache that doesn't exist.

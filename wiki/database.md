@@ -682,8 +682,8 @@ if err := application.DBManager().Remove(tenantID); err != nil {
 
 - **Key:** `""` is the root database, `config.NamedDatabasePrefix + name` a `databases.<name>` handle (what `deps.DBByName` borrows), and the tenant ID a tenant's database in multi-tenant mode. An unknown key is a nil no-op.
 - **Leases:** an idle connection closes before `Remove` returns; a leased one is detached now and closes at its final release. That protects work inside a lease scope (an HTTP request, an AMQP message, a scheduler job) — a goroutine that borrowed a handle outside any scope released its lease immediately and is not protected.
-- **In-flight creates:** a `Get` whose connection is still being created when `Remove` runs caches it afterwards, unseen by `Remove` — built from the config it resolved before, so possibly the old credentials. Under steady traffic, call `Remove` again once in-flight creates complete, or drain traffic first ([#1669](https://github.com/gaborage/go-bricks/issues/1669)).
-- **Shutdown and stats:** after `Close`, `Remove` returns `database.ErrManagerClosed`, as `Get` does. `DbManager.Stats()["removals"]` counts every `Remove` that detached a connection, leased or not, and `/ready` publishes it.
+- **In-flight creates:** a `Get` still creating its connection when `Remove` runs is delivered that connection but the pool never caches it — it closes at the final lease release, same as a leased Remove. The next `Get` re-resolves the provider, so credential rotation does not need a second `Remove`.
+- **Shutdown and stats:** after `Close`, `Remove` returns `database.ErrManagerClosed`, as `Get` does. `DbManager.Stats()["removals"]` counts every `Remove` that detached a connection (cached or in-flight), leased or not, and `/ready` publishes it.
 
 ### Connection-manager pool tunables (`database.manager.*`)
 

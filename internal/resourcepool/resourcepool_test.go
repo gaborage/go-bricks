@@ -16,9 +16,11 @@ import (
 )
 
 const (
-	keyOne   = "key-1"
-	keyTwo   = "key-2"
-	keyThree = "key-3"
+	keyOne        = "key-1"
+	keyTwo        = "key-2"
+	keyThree      = "key-3"
+	inFlightOldID = "old"
+	inFlightNewID = "new"
 )
 
 // fakeResource is a trivial pooled value with a controllable close outcome.
@@ -100,6 +102,18 @@ func uniqueConnector(created *atomic.Int32) func(context.Context) (*fakeResource
 	return func(context.Context) (*fakeResource, error) {
 		id := created.Add(1)
 		return newFakeResource(fmt.Sprintf("res-%d", id)), nil
+	}
+}
+
+// gatedConnector returns a create that signals started once, then waits on gate before producing
+// a resource with id. Tests order Remove against an in-flight create through those channels
+// instead of sleeping.
+func gatedConnector(id string, started chan struct{}, gate <-chan struct{}) func(context.Context) (*fakeResource, error) {
+	var once sync.Once
+	return func(context.Context) (*fakeResource, error) {
+		once.Do(func() { close(started) })
+		<-gate
+		return newFakeResource(id), nil
 	}
 }
 
@@ -987,10 +1001,11 @@ func TestPoolRemoveNonexistent(t *testing.T) {
 	got, shouldClose := p.Remove("missing")
 	assert.False(t, shouldClose)
 	assert.Nil(t, got)
+	assert.Equal(t, 0, p.Stats().Removals, "a Remove that detached nothing does not count")
 }
 
-// TestPoolRemoveCountsRemovals pins that Removals counts every Remove that detached an entry,
-// leased or not, and nothing else: a missing key adds nothing and Evictions stays LRU-only.
+// TestPoolRemoveCountsRemovals pins that Removals counts every Remove that detached a cached
+// entry, leased or not, and nothing else: a missing key adds nothing and Evictions stays LRU-only.
 func TestPoolRemoveCountsRemovals(t *testing.T) {
 	tr := newCloseTracker()
 	p := New(5, 0, tr.closer)
@@ -1017,6 +1032,126 @@ func TestPoolRemoveCountsRemovals(t *testing.T) {
 	st := p.Stats()
 	assert.Equal(t, 2, st.Removals, "a Remove that detached nothing does not count")
 	assert.Equal(t, 0, st.Evictions, "Remove is not an LRU eviction")
+}
+
+// TestPoolRemoveInvalidatesInFlightCreate pins that Remove during a blocked create still
+// delivers that value to the in-flight waiter, never caches it, closes it once at final
+// release, and the next GetOrCreate runs create again.
+func TestPoolRemoveInvalidatesInFlightCreate(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+
+	started := make(chan struct{})
+	gate := make(chan struct{})
+	var unblockOnce sync.Once
+	unblock := func() { unblockOnce.Do(func() { close(gate) }) }
+	t.Cleanup(unblock)
+
+	gotCh := make(chan leaseResult, 1)
+	go func() {
+		v, rel, err := p.GetOrCreate(context.Background(), keyOne, gatedConnector(inFlightOldID, started, gate))
+		gotCh <- leaseResult{v, rel, err}
+	}()
+	<-started
+
+	removed, shouldClose := p.Remove(keyOne)
+	assert.False(t, shouldClose, "an in-flight-only Remove has no cached value to close")
+	assert.Nil(t, removed)
+	assert.Equal(t, 1, p.Stats().Removals, "invalidating an in-flight create counts a Removal")
+
+	unblock()
+	got := <-gotCh
+	require.NoError(t, got.err)
+	require.NotNil(t, got.rel)
+	assert.Equal(t, inFlightOldID, got.v.id)
+	assert.Equal(t, 0, p.Size(), "an invalidated create is never cached")
+
+	got.rel()
+	assert.Equal(t, 1, tr.count(inFlightOldID), "Close ran exactly once at final release")
+	assert.Equal(t, 0, p.Size())
+
+	fresh, rel, err := p.GetOrCreate(context.Background(), keyOne, func(context.Context) (*fakeResource, error) {
+		return newFakeResource(inFlightNewID), nil
+	})
+	require.NoError(t, err)
+	defer rel()
+	assert.Equal(t, inFlightNewID, fresh.id)
+	assert.NotSame(t, got.v, fresh)
+	assert.Equal(t, 1, p.Size(), "the next GetOrCreate caches the new resource")
+}
+
+// TestPoolRemoveCountsInFlightOnlyRemoval pins that Removals increments when Remove invalidates
+// a create and there is no cached entry, distinct from the empty-Remove no-op.
+func TestPoolRemoveCountsInFlightOnlyRemoval(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+
+	started := make(chan struct{})
+	gate := make(chan struct{})
+	var unblockOnce sync.Once
+	unblock := func() { unblockOnce.Do(func() { close(gate) }) }
+	t.Cleanup(unblock)
+
+	gotCh := make(chan leaseResult, 1)
+	go func() {
+		v, rel, err := p.GetOrCreate(context.Background(), keyOne, gatedConnector(inFlightOldID, started, gate))
+		gotCh <- leaseResult{v, rel, err}
+	}()
+	<-started
+
+	assert.Equal(t, 0, p.Stats().Removals)
+	_, shouldClose := p.Remove(keyOne)
+	require.False(t, shouldClose)
+	assert.Equal(t, 1, p.Stats().Removals)
+
+	unblock()
+	got := <-gotCh
+	require.NoError(t, got.err)
+	got.rel()
+}
+
+// TestPoolAbandonedCreateAfterRemoveClosesResource pins that a detached-at-birth entry still
+// holds its seed lease: if the sole waiter cancels after Remove, releaseAbandoned must release
+// that seed or the resource leaks.
+func TestPoolAbandonedCreateAfterRemoveClosesResource(t *testing.T) {
+	tr := newCloseTracker()
+	closedCh := make(chan struct{})
+	var closeOnce sync.Once
+	p := New(0, 0, func(r *fakeResource) error {
+		err := tr.closer(r)
+		closeOnce.Do(func() { close(closedCh) })
+		return err
+	})
+	defer p.Close()
+
+	started := make(chan struct{})
+	gate := make(chan struct{})
+	var unblockOnce sync.Once
+	unblock := func() { unblockOnce.Do(func() { close(gate) }) }
+	t.Cleanup(unblock)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	gotCh := make(chan leaseResult, 1)
+	go func() {
+		v, rel, err := p.GetOrCreate(ctx, keyOne, gatedConnector("abandoned", started, gate))
+		gotCh <- leaseResult{v, rel, err}
+	}()
+	<-started
+
+	p.Remove(keyOne)
+	cancel()
+	got := <-gotCh
+	assert.ErrorIs(t, got.err, context.Canceled)
+	assert.Nil(t, got.rel)
+
+	unblock()
+	<-closedCh
+	assert.Equal(t, 1, tr.count("abandoned"), "the abandoned create still closed once")
+	assert.Equal(t, 0, p.Size())
 }
 
 // TestPoolRecordCloseErrorCountsOnlyErrors pins that a caller-run close failure, recorded after

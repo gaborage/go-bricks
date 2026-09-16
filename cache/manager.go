@@ -26,7 +26,7 @@ type ManagerStats struct {
 	ActiveCaches int   // Current number of active cache instances
 	TotalCreated int   // Total caches created since manager start
 	Evictions    int   // Total evictions due to LRU policy
-	Removals     int   // Total explicit Remove calls that detached an instance, leased or not
+	Removals     int   // Total explicit Remove calls that detached a cached instance or invalidated an in-flight create
 	IdleCleanups int   // Total cleanups due to idle timeout
 	Errors       int   // Total initialization and close errors
 	MaxSize      int   // Maximum allowed active caches
@@ -191,9 +191,12 @@ func (m *CacheManager) Get(ctx context.Context, key string) (Cache, ReleaseFunc,
 	return value, ReleaseFunc(release), nil
 }
 
-// Remove explicitly removes a cache instance from the manager.
-// Returns ErrManagerClosed if Close() has been called, or if the manager is a zero value
-// that was never built via NewCacheManager.
+// Remove explicitly removes a cache instance from the manager so the next Get rebuilds it
+// through the connector. An idle instance closes now (close error wrapped); a leased one at its
+// final release. A Get still creating its instance when Remove runs is delivered that instance
+// but the pool never caches it — it closes at the final lease release — so the next Get dials
+// again with the connector's current config. Returns ErrManagerClosed if Close() has been called,
+// or if the manager is a zero value that was never built via NewCacheManager.
 func (m *CacheManager) Remove(key string) error {
 	// Unusable either way: never built via NewCacheManager, or already closed. The nil test
 	// must come first — Pool.Closed() takes the pool's mutex and would panic on a nil pool.
