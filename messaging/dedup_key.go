@@ -88,8 +88,10 @@ func sealedDedupKey(family, jti string) DedupKey {
 
 // sealedDeliveryKey marks a handler context as running under the sealed typed
 // door. Only the sealed handler sets it, and the value is that delivery's own
-// DedupKey — equality at the ledger door binds a sealed key to the delivery
-// that minted it.
+// DedupKey: the ledger door admits a sealed key only when it EQUALS this bound
+// value. The comparison is on the key (<SignFamily>:<jti>) and never on
+// delivery identity, so a redelivery of the same envelope composes the same key
+// and is admitted.
 type sealedDeliveryKey struct{}
 
 // sealedKeyFromDelivery reports the DedupKey the sealed typed door stored on

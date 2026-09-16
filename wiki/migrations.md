@@ -8927,8 +8927,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   construction). That marker is a boolean stamped identically on every sealed handler context, so
   admission proves the key came from *some* sealed delivery, not from the one being handled: a
   sealed key retained past the delivery that minted it still passes, and the ledger then treats the next
-  delivery as a duplicate and skips its handler. Binding the key to its originating delivery by
-  equality is `[C66.2]`. `messaging.IsSealedDedupKey` is deleted — read
+  delivery as a duplicate and skips its handler. Requiring the key to EQUAL the one bound to the
+  delivery in hand is `[C66.2]`. `messaging.IsSealedDedupKey` is deleted — read
   `key.Sealed()`. Additive:
   `messaging.DedupKey` (`String()`, `Sealed()`) and `messaging.WireDedupKey(id string)
   (DedupKey, error)`, which applies the unchanged `^[A-Za-z0-9_-]{1,128}$` grammar.
@@ -9813,7 +9813,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 ---
 
-## E66 · v0.65.0 → v0.66.0 — a unix-socket PostgreSQL connection string refuses the TLS claim its environment carries + a sealed DedupKey is bound to the delivery that minted it
+## E66 · v0.65.0 → v0.66.0 — a unix-socket PostgreSQL connection string refuses the TLS claim its environment carries + a sealed DedupKey must equal the one bound to the delivery in hand
 
 - gist: a PostgreSQL `connectionstring` whose host is a unix socket used to boot when the TLS
   claim arrived through `PGSSLMODE`/`PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY`/`PGSSLNEGOTIATION`
@@ -9821,12 +9821,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   merges those five variables under the DSN with pgx's own precedence and refuses, naming
   every source that carries one (C66.1, ADR-050 amendment, #1632).
 - gist: under a sealed delivery's context `ValidateDedupKey` admitted any sealed key, whichever
-  sealed delivery composed it, so a handler that kept one past the delivery that minted it made the
-  next delivery look like a duplicate and skipped its handler. The sealed consume door now stores
-  that delivery's own `Metadata.DedupKey()` on the handler context in place of the boolean `[C65.7]`
-  stamped, and a sealed key is admitted only when it equals that one. The comparison is on the key's
-  VALUE, so a key retained from delivery A is refused while handling delivery B unless both envelopes
-  carry the same `<SignFamily>:<jti>`. Wire keys stay unbound (C66.2, ADR-097 amendment, #1634).
+  envelope composed it, so a handler that kept one past the delivery it came from made the next
+  delivery look like a duplicate and skipped its handler. The sealed consume door now stores that
+  delivery's own `Metadata.DedupKey()` on the handler context in place of the boolean `[C65.7]`
+  stamped, and a sealed key is admitted only when it EQUALS that bound value. The check is value
+  equality on `<SignFamily>:<jti>` and never a comparison of delivery identity: a redelivery of the
+  same envelope composes the same key and passes, while a key held over from a different envelope is
+  refused. Wire keys stay unbound (C66.2, ADR-097 amendment, #1634).
 
 ---
 
@@ -9880,7 +9881,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `config/database_section.go` (`validatePostgreSQLConnectionString`, `effectivePostgresTLSClaims`) · same axis as
   [C65.2]
 
-### [C66.2] a sealed DedupKey is bound by equality to the delivery that minted it · breaking · when: match
+### [C66.2] a sealed DedupKey must equal the key bound to the delivery in hand · breaking · when: match
 
 - detect: nothing in your build flags this — no signature moves. `git grep -nE
   'ProcessOnce\(' -- '*.go'` finds every ledger call; a hit is in the population only

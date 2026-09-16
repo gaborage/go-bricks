@@ -15,14 +15,17 @@
   branches `research/amqp-envelope-standards`, `research/amqp-seal-seams`; prototype
   `prototype/amqp-seal-open`. Deep dive: [sealing.md](sealing.md).
 
-> **Amended (2026-09-16, #1634):** a sealed `DedupKey` is bound to the delivery that minted it,
-> by equality, not by a capability token. The sealed consume path stores that delivery's
+> **Amended (2026-09-16, #1634):** a sealed `DedupKey` must EQUAL the key bound to the delivery
+> in hand — value equality, not a capability token and not a comparison of delivery
+> identity. The sealed consume path stores that delivery's
 > composed key (`Metadata.DedupKey()`) on the handler context in place of the boolean the
 > 2026-09-12 amendment stamped; `IsSealedDelivery(ctx)` keeps its exported signature and is
 > true when the context carries a sealed delivery key. `ValidateDedupKey(ctx, key)` is
 > unchanged for wire keys; a sealed key is admitted only when the context carries a sealed
 > delivery key AND that key equals the one being validated. A key retained from delivery A is
-> therefore refused while handling delivery B, as is a sealed key under a plain context, both
+> therefore refused while handling delivery B, whose `<SignFamily>:<jti>` differs — a redelivery
+> of the same envelope composes the same key and still passes — as is a sealed key under a
+> plain context, both
 > wrapping `ErrInvalidEventID` and never carrying the key. Wire keys stay unbound. The streams
 > seal-guard and hold-queue replay are untouched; lifting that guard later must re-establish
 > the context key on replay. This closes the remaining gap the 2026-09-12 amendment recorded.
@@ -60,8 +63,8 @@
 > sealed handler context, so a key retained from an earlier sealed delivery still passes while a
 > later one is handled. It fails closed when a sealed key is used outside the sealed delivery
 > altogether (a detached goroutine), turning a plumbing mistake into a refusal rather than a silent
-> ledger write. Binding the key to its originating delivery by equality is the 2026-09-16
-> amendment ([C66.2]). The §4 `^[A-Za-z0-9_-]{1,128}$`
+> ledger write. Requiring the key to equal the one bound to the delivery in hand is the
+> 2026-09-16 amendment ([C66.2]). The §4 `^[A-Za-z0-9_-]{1,128}$`
 > grammar no longer runs at the ledger door: a wire key is grammar-checked exactly once, at
 > construction inside `WireDedupKey`. A sealed key is well formed because the seal layer validates
 > both halves before `Metadata.DedupKey()` composes them — the signed `jti` must match that same
@@ -388,8 +391,9 @@ the prototype asset that still shows the knob stays as-is (throwaway, dated).
 - `inbox.ProcessOnce` admits a sealed Dedup key only when it equals the key the sealed
   door stored on the handler's context (`messaging.IsSealedDelivery`): derive from the handler's context
   (`context.WithoutCancel(ctx)` for background work, never `context.Background()`) or the
-  marker is lost and the call fails closed with `ErrInvalidEventID`. A key retained from
-  another sealed delivery is refused the same way.
+  marker is lost and the call fails closed with `ErrInvalidEventID`. A key whose
+  `<SignFamily>:<jti>` differs from the bound one is refused the same way; delivery identity
+  is never compared, so a redelivery of the same envelope still passes.
 - Shared tenancy with `TenantOptional`: an unstamped delivery carrying a signed `tid` is
   accepted and the `tid` is surfaced on `Meta.Sealed().TenantID` without comparison; a
   consumer that cares refuses in the handler on `env.TenantID`.
