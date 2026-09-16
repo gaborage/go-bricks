@@ -1013,9 +1013,9 @@ func TestPoolRemoveNonexistent(t *testing.T) {
 	assert.Zero(t, p.generation["missing"], "a no-op Remove must not bump generation")
 }
 
-// TestPoolRemoveBumpsGeneration pins that an invalidating Remove increments the key's
-// generation (not decrement) and that a finished create deletes inFlight[key] rather than
-// leaving a zero counter that still occupies the map.
+// TestPoolRemoveBumpsGeneration pins that a Remove invalidating an in-flight create increments
+// the key's generation (not decrement) and that a finished create deletes inFlight[key] rather
+// than leaving a zero counter that still occupies the map.
 func TestPoolRemoveBumpsGeneration(t *testing.T) {
 	tr := newCloseTracker()
 	p := New(0, 0, tr.closer)
@@ -1027,10 +1027,133 @@ func TestPoolRemoveBumpsGeneration(t *testing.T) {
 	assert.False(t, ok, "a finished create must delete inFlight[key], not leave a zero")
 	rel()
 
-	before := p.generation[keyOne]
+	blocked := testutil.NewBlockedCreate(t)
+	gotCh := make(chan leaseResult, 1)
+	go func() {
+		v, lease, cerr := p.GetOrCreate(context.Background(), keyTwo, gatedConnector(inFlightOldID, blocked))
+		gotCh <- leaseResult{v, lease, cerr}
+	}()
+	<-blocked.Started
+
+	before := p.generation[keyTwo]
+	_, shouldClose := p.Remove(keyTwo)
+	require.False(t, shouldClose, "an in-flight-only Remove has no cached value to close")
+	assert.Equal(t, before+1, p.generation[keyTwo], "Remove increments generation so the in-flight create detaches")
+
+	blocked.Release()
+	got := <-gotCh
+	require.NoError(t, got.err)
+	got.rel()
+}
+
+// genLen reports how many keys the pool still tracks a generation for, read under the pool lock so
+// it is safe to call while a create is parked in flight.
+func genLen[V any](p *Pool[V]) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.generation)
+}
+
+// TestPoolRemoveReleasesGenerationEntries pins that Remove leaves no generation entry behind once
+// no create is in flight. The map invalidates in-flight creates; it is not a per-key ledger, so
+// removing many distinct tenant/connection keys must not grow it independently of maxSize.
+func TestPoolRemoveReleasesGenerationEntries(t *testing.T) {
+	removeKeys := []string{"tenant-a", "tenant-b", "tenant-c"}
+
+	tests := []struct {
+		name   string
+		remove func(t *testing.T, p *Pool[*fakeResource], tr *closeTracker, key string)
+	}{
+		{
+			name: "unleased_cached_entry",
+			remove: func(t *testing.T, p *Pool[*fakeResource], tr *closeTracker, key string) {
+				_, rel, err := p.GetOrCreate(context.Background(), key, keyedCreate(key))
+				require.NoError(t, err)
+				rel()
+				v, shouldClose := p.Remove(key)
+				require.True(t, shouldClose)
+				require.NoError(t, tr.closer(v))
+			},
+		},
+		{
+			name: "leased_cached_entry",
+			remove: func(t *testing.T, p *Pool[*fakeResource], _ *closeTracker, key string) {
+				_, rel, err := p.GetOrCreate(context.Background(), key, keyedCreate(key))
+				require.NoError(t, err)
+				_, shouldClose := p.Remove(key)
+				require.False(t, shouldClose, "a leased Remove defers its close")
+				rel()
+			},
+		},
+		{
+			name: "in_flight_create",
+			remove: func(t *testing.T, p *Pool[*fakeResource], _ *closeTracker, key string) {
+				blocked := testutil.NewBlockedCreate(t)
+				gotCh := make(chan leaseResult, 1)
+				go func() {
+					v, rel, err := p.GetOrCreate(context.Background(), key, gatedConnector(key, blocked))
+					gotCh <- leaseResult{v, rel, err}
+				}()
+				<-blocked.Started
+
+				_, shouldClose := p.Remove(key)
+				require.False(t, shouldClose)
+				require.Equal(t, 1, genLen(p), "the invalidated create still needs its generation until it installs")
+
+				blocked.Release()
+				got := <-gotCh
+				require.NoError(t, got.err)
+				got.rel()
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tr := newCloseTracker()
+			p := New(0, 0, tr.closer)
+
+			for _, key := range removeKeys {
+				tt.remove(t, p, tr, key)
+			}
+
+			assert.Equal(t, 0, genLen(p), "every settled Remove releases its generation entry")
+			require.NoError(t, p.Close())
+			assert.Equal(t, 0, genLen(p), "Close leaves no generation entry behind")
+		})
+	}
+}
+
+// TestPoolRemoveKeepsStaleCreateDetachedAfterGenerationRelease pins the ordering that makes
+// releasing the entry safe: the key starts with no generation, so the in-flight create captures
+// the zero value. installCreated must compare BEFORE ending its create — reading after the entry
+// is released would see zero again and cache a resource built under the pre-Remove config.
+func TestPoolRemoveKeepsStaleCreateDetachedAfterGenerationRelease(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+
+	blocked := testutil.NewBlockedCreate(t)
+	gotCh := make(chan leaseResult, 1)
+	go func() {
+		v, rel, err := p.GetOrCreate(context.Background(), keyOne, gatedConnector(inFlightOldID, blocked))
+		gotCh <- leaseResult{v, rel, err}
+	}()
+	<-blocked.Started
+	require.Equal(t, 0, genLen(p), "the create captured the zero generation")
+
 	_, shouldClose := p.Remove(keyOne)
-	require.True(t, shouldClose)
-	assert.Equal(t, before+1, p.generation[keyOne], "Remove increments generation so the next in-flight create detaches")
+	require.False(t, shouldClose)
+	require.Equal(t, 1, genLen(p))
+
+	blocked.Release()
+	got := <-gotCh
+	require.NoError(t, got.err)
+	assert.Equal(t, 0, p.Size(), "a create invalidated under the zero generation is still never cached")
+	assert.Equal(t, 0, genLen(p), "the last create in flight releases the generation entry")
+
+	got.rel()
+	assert.Equal(t, 1, tr.count(inFlightOldID), "the detached create closed at its final release")
 }
 
 // TestPoolRemoveCountsRemovals pins that Removals counts every Remove that detached a cached

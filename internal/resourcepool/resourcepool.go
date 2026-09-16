@@ -121,9 +121,12 @@ type Pool[V any] struct {
 	removals     int
 	idleCleanups int
 
-	// generation is bumped by Remove only when it actually invalidates (a cached entry or an
-	// in-flight create). A create that captured the previous value is delivered to its waiters
-	// but never installed.
+	// generation invalidates creates that are ALREADY in flight: Remove bumps the key's value
+	// while a create holds a captured one, so that create is delivered to its waiters but never
+	// installed. An entry therefore exists only while inFlight[key] > 0 — with no create to
+	// invalidate there is nothing to remember, and the last create to finish releases it. That
+	// bounds the map by concurrent creates; a per-key ledger would instead grow with every
+	// removed tenant or named connection, unbounded by maxSize.
 	generation map[string]uint64
 	// inFlight counts createEntry calls that have captured a generation but not yet finished
 	// installing. Remove uses it to count Removals for an in-flight-only invalidation.
@@ -445,11 +448,15 @@ func (p *Pool[V]) endCreate(key string) {
 	p.mu.Unlock()
 }
 
-// endCreateLocked decrements inFlight[key], deleting the entry at zero. Must be called with mu held.
+// endCreateLocked decrements inFlight[key], deleting the entry at zero and releasing the key's
+// generation with it: the last create to finish is the last one that could compare against it, so
+// keeping it would only grow the map. Must be called with mu held, and AFTER the caller has read
+// the generation it compares (see installCreated).
 func (p *Pool[V]) endCreateLocked(key string) {
 	n := p.inFlight[key] - 1
 	if n <= 0 {
 		delete(p.inFlight, key)
+		delete(p.generation, key)
 		return
 	}
 	p.inFlight[key] = n
@@ -465,6 +472,10 @@ func (p *Pool[V]) endCreateLocked(key string) {
 // overwriting the LRU (an overwritten entry would vanish from Close's map walk and leak).
 func (p *Pool[V]) installCreated(key string, gen uint64, value V) (*entry[V], error) {
 	p.mu.Lock()
+	// Read the generation BEFORE endCreateLocked: this create may be the last one in flight, and
+	// ending it releases the key's entry. Reading after would see the fresh zero value and make a
+	// create Remove invalidated under generation 0 look valid again.
+	detached := p.generation[key] != gen
 	p.endCreateLocked(key)
 	if p.closed.Load() {
 		p.mu.Unlock()
@@ -472,7 +483,6 @@ func (p *Pool[V]) installCreated(key string, gen uint64, value V) (*entry[V], er
 		return nil, ErrPoolClosed
 	}
 
-	detached := p.generation[key] != gen
 	if !detached {
 		if existing := p.entries[key]; existing != nil {
 			p.mu.Unlock()
@@ -555,7 +565,12 @@ func (p *Pool[V]) Remove(key string) (v V, shouldClose bool) {
 		p.mu.Unlock()
 		return zero, false
 	}
-	p.generation[key]++
+	if inFlight {
+		// Only a create that already captured a generation can be invalidated by bumping it. With
+		// none in flight, detaching the cached entry above IS the whole invalidation, and a stored
+		// generation would never be read again — it would just occupy the map forever.
+		p.generation[key]++
+	}
 	p.removals++
 	shouldClose = e != nil && e.refs <= 0 && !e.closed
 	if shouldClose {
