@@ -436,6 +436,12 @@ const (
 	shutdownLockWaitReason = "[sync.Mutex.Lock]"
 )
 
+// shutdownProbeDeadline bounds awaitShutdownParked. It is a failure bound, not an
+// ordering one: both real outcomes settle in microseconds, so only a stale probe —
+// a renamed symbol, or a runtime that spells the wait reason differently — can reach
+// it, and reaching it must fail the test rather than hang until go test's timeout.
+const shutdownProbeDeadline = 10 * time.Second
+
 // isClosed reports whether ch is already closed, without blocking.
 func isClosed(ch <-chan struct{}) bool {
 	select {
@@ -462,16 +468,28 @@ func goroutineDump() string {
 // awaitShutdownParked reports whether the Shutdown goroutine parked waiting for the
 // lifecycle lock (true) or ran to completion (false). It alternates a non-blocking
 // check of done with a goroutine dump, so it settles as soon as either outcome is
-// decided: both are terminal, so it needs no sleep and no deadline.
-func awaitShutdownParked(done <-chan struct{}) bool {
+// decided and never sleeps for an ordering. Neither outcome arriving means the stack
+// fragments no longer match what the runtime prints, so shutdownProbeDeadline fails
+// the test with the last dump instead of letting the loop spin until go test's timeout.
+func awaitShutdownParked(t *testing.T, done <-chan struct{}) bool {
+	t.Helper()
+	timer := time.NewTimer(shutdownProbeDeadline)
+	defer timer.Stop()
 	for {
 		if isClosed(done) {
 			return false
 		}
-		for _, entry := range strings.Split(goroutineDump(), "\n\n") {
+		dump := goroutineDump()
+		for _, entry := range strings.Split(dump, "\n\n") {
 			if strings.Contains(entry, shutdownLockFrame) && strings.Contains(entry, shutdownLockWaitReason) {
 				return true
 			}
+		}
+		select {
+		case <-timer.C:
+			t.Fatalf("no goroutine matched %q and %q within %s, so the stack probe is stale; last goroutine dump:\n%s",
+				shutdownLockFrame, shutdownLockWaitReason, shutdownProbeDeadline, dump)
+		default:
 		}
 	}
 }
@@ -511,7 +529,7 @@ func TestServerShutdownCannotReturnDuringTheReadinessCommit(t *testing.T) {
 	shutdownReturned := make(chan struct{})
 	go runShutdownProbe(srv, readyAtShutdownReturn, shutdownReturned)
 
-	require.True(t, awaitShutdownParked(shutdownReturned),
+	require.True(t, awaitShutdownParked(t, shutdownReturned),
 		"Shutdown ran to completion while the readiness commit was still in flight")
 
 	release()
