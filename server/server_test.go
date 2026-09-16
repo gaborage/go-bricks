@@ -522,7 +522,8 @@ func TestServerShutdownCannotReturnDuringTheReadinessCommit(t *testing.T) {
 	// The commit won the lock, so Shutdown stopped the server it had stored. Echo
 	// calls Serve next, and it refuses: the residual window is an ordinary graceful
 	// stop, not a false readiness.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	lc := net.ListenConfig{}
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })
 	assert.ErrorIs(t, httpSrv.Serve(ln), http.ErrServerClosed)
