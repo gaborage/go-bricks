@@ -268,7 +268,7 @@ rejection**; its one replay-related job is to make the message's identity un-for
   `DedupKey`, so what it catches is both a context that never came from the sealed door
   and a key whose `<SignFamily>:<jti>` differs from the bound one — delivery IDENTITY is
   never compared, so a redelivery of the same envelope composes the same key and passes,
-  while a key held over from a different envelope does not: `context.Background()` drops it
+  while a sealed key whose value differs from the bound key does not: `context.Background()` drops it
   and fails closed with `ErrInvalidEventID` instead of writing the ledger row silently,
   and a handler that carries delivery A's key into B's context is refused the same way.
   `context.WithoutCancel(ctx)` keeps every value, the bound key included, so detached work

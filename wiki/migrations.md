@@ -9826,8 +9826,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   delivery's own `Metadata.DedupKey()` on the handler context in place of the boolean `[C65.7]`
   stamped, and a sealed key is admitted only when it EQUALS that bound value. The check is value
   equality on `<SignFamily>:<jti>` and never a comparison of delivery identity: a redelivery of the
-  same envelope composes the same key and passes, while a key held over from a different envelope is
-  refused. Wire keys stay unbound (C66.2, ADR-097 amendment, #1634).
+  same envelope composes the same key and passes, while a sealed key whose value differs from the
+  bound key is refused. Wire keys stay unbound (C66.2, ADR-097 amendment, #1634).
 
 ---
 
