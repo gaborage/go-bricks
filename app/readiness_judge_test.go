@@ -205,3 +205,17 @@ func TestJudgeStillRelabelsANotConfiguredLeaseAfterAPassingLiveCheck(t *testing.
 	assert.Equal(t, perTenantStatus, status)
 	assert.NoError(t, err)
 }
+
+// TestJudgeFailsClosedOnADescriptionWithNoCheck pins the direction a wiring bug fails in. A
+// kind with neither arm is not a healthy kind — disabled and absent are their own fields — so
+// the judge must report unhealthy rather than pass a probe that checked nothing. Before the
+// live/acquire split this path called a nil live and panicked; healthy would have been the
+// worse answer of the three.
+func TestJudgeFailsClosedOnADescriptionWithNoCheck(t *testing.T) {
+	d := probeDescription{name: componentMessaging}
+
+	status, _, err := d.judge(context.Background())
+
+	assert.Equal(t, unhealthyStatus, status)
+	require.ErrorIs(t, err, errProbeHasNoCheck)
+}

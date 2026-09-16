@@ -64,8 +64,11 @@ configuration per probe.
   has given up.
 - The threshold is the WARN constant, not a second number. One threshold, one meaning: the point at
   which the supervisor has stopped looking like it is riding out a flap. A consumer whose channel
-  just closed stays ready; its intermediate state is visible in `messaging_stats` and in
-  `/_sys/health-debug`, never in the verdict.
+  just closed stays ready, and that it is unsubscribed shows in `messaging_stats` — and in
+  `/_sys/health-debug`, which renders the same map — as `subscribed_consumers` below
+  `declared_consumers`, never in the verdict. The streak COUNT itself is published nowhere: it
+  is readable through `Registry.ConsumerStates()`/`Manager.ConsumerStates()` in Go, and reached
+  `/ready` through no key this decision adds.
 - ADR-048 governs the body: the sentinel carries no queue name, consumer tag or event type, the
   slot declares no `PublicErr`, and the unauthenticated `503` renders the default
   `messaging unavailable`.
@@ -89,6 +92,14 @@ verdict.
 pod out of rotation even though nothing is wrong with the pod — which is the point, and is why it is
 opt-in. Operators who gate `livenessProbe` on `/ready` will restart such a pod; gate liveness on
 `/health`, which is static.
+
+The same mechanism is reachable deliberately, and the threat model should be read before enabling
+the key: anyone who can make a consumer's re-subscribe fail five times running — deleting its
+queue, revoking `consume` on it, or an argument change answering `PRECONDITION_FAILED`, which
+ADR-113 skips until the process restarts so the streak never recovers in-process — takes every
+replica out of the load balancer at once. The key therefore widens what a broker credential
+reaches: not only "this service stops consuming" but "this service stops serving HTTP". That is the
+trade the key exists to make, and it is why it is opt-in rather than the default.
 
 **Neutral:** `Manager.StopConsumers()` has one production caller (`app/lifecycle.go:464`, shutdown),
 so the "consumers are never revived after a stop" behavior sits entirely inside a closing process

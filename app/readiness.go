@@ -23,6 +23,10 @@ var (
 	// errStreamsNotOpen is the liveness error for a streams manager whose consumers or
 	// publishers are not all open.
 	errStreamsNotOpen = errors.New("stream consumers not open")
+	// errProbeHasNoCheck is the liveness error for a description that carries neither a
+	// lease-independent live check nor an acquire step: nothing to judge, so nothing may be
+	// reported ready. Fixed text, and unreachable from any kind the framework wires.
+	errProbeHasNoCheck = errors.New("probe has no liveness check")
 	// errConsumerResubscribeExhausted is the liveness error for a messaging kind with a
 	// declared consumer whose supervisor has given up re-subscribing. ADR-048: the text is
 	// a fixed identifier, so no queue name can reach the unauthenticated body through it.
@@ -58,9 +62,12 @@ type probeDescription struct {
 	// judged when that key resolves to nothing (a per-tenant deployment, where judge
 	// short-circuits the lease to per_tenant).
 	live func(ctx context.Context) error
-	// stats snapshots the kind's counters; called while the lease is held so the entry the
-	// probe itself pooled is counted (the messaging manager publishes active_publishers: 0
-	// beside a healthy verdict otherwise).
+	// stats snapshots the kind's counters. On every path that takes a lease it is called
+	// while that lease is held, so the entry the probe itself pooled is counted (the
+	// messaging manager publishes active_publishers: 0 beside a healthy verdict otherwise).
+	// A failing lease-independent live check returns before any lease exists, so its
+	// snapshot counts no probe-held entry; the unauthenticated 503 body carries no
+	// statistics at all, so that shows only on the access-controlled debug view.
 	stats func() map[string]any
 	// publicStats allowlists the statistics keys this kind may publish on the
 	// unauthenticated /ready body; every other key stays on the access-controlled debug
@@ -113,6 +120,12 @@ func (d probeDescription) judge(ctx context.Context) (status string, stats map[s
 		}
 	}
 	if d.acquire == nil {
+		if d.live == nil {
+			// A kind with no arm at all is a wiring bug, not a healthy kind: disabled and
+			// absent are their own fields, handled above. Fail closed — a probe that checks
+			// nothing must never report ready (root CLAUDE.md: Fail Fast, no silent failures).
+			return unhealthyStatus, d.snapshot(), errProbeHasNoCheck
+		}
 		return healthyStatus, d.snapshot(), nil
 	}
 

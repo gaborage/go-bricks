@@ -321,9 +321,10 @@ func (c *Config) IsCacheCritical() bool {
 }
 
 // IsMessagingConsumersCritical reports whether a consumer that has given up re-subscribing
-// should fail /ready with 503. Non-critical by default, the same shape as the cache probe
-// (ADR-094): only an explicit messaging.consumers.critical=true opts in, so an absent key —
-// and a nil receiver — leaves the messaging probe on its publisher arm alone.
+// should fail /ready with 503. Opt-in and absent-means-false, as cache.critical is after
+// ADR-094, but it decides more than criticality: an absent key — and a nil receiver — leaves
+// the consumer arm out of the probe entirely, so a consumer that gave up reads healthy rather
+// than unhealthy-but-advisory. See wiki/adr_114_critical_consumer_readiness.md.
 func (c *Config) IsMessagingConsumersCritical() bool {
 	if c == nil {
 		return false

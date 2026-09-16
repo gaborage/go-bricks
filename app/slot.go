@@ -231,17 +231,10 @@ func (s *messagingSlot) describe() (probeDescription, bool) {
 	if m == nil {
 		return disabledProbe(s.kind), true
 	}
-	consumersCritical := s.app.cfg.IsMessagingConsumersCritical()
-	return probeDescription{
-		critical:    consumersCritical,
+	description := probeDescription{
+		critical:    s.app.cfg.IsMessagingConsumersCritical(),
 		perTenant:   s.app.multiTenant(),
 		publicStats: messagingPublicStats,
-		live: func(context.Context) error {
-			if consumersCritical && m.AnyConsumerGivenUp() {
-				return errConsumerResubscribeExhausted
-			}
-			return nil
-		},
 		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
 			client, release, err := m.Publisher(ctx, "")
 			if err != nil {
@@ -255,7 +248,19 @@ func (s *messagingSlot) describe() (probeDescription, bool) {
 			}, release, nil
 		},
 		stats: m.Stats,
-	}, true
+	}
+	if description.critical {
+		// Installed only when the knob is on. An absent arm is how the judge is told there is
+		// nothing lease-independent to check, so the closure never has to re-test the knob and
+		// never runs on the poll path of a deployment that did not opt in.
+		description.live = func(context.Context) error {
+			if m.AnyConsumerGivenUp() {
+				return errConsumerResubscribeExhausted
+			}
+			return nil
+		}
+	}
+	return description, true
 }
 
 func (s *messagingSlot) preInitFatal() bool { return true }

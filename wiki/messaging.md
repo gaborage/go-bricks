@@ -854,9 +854,10 @@ publisher's `IsReady()` as before. The consumer arm is lease-independent, so it 
 tenancy mode — a per-tenant deployment with no root `messaging:` block, whose kind reports
 `per_tenant`, is judged on its consumers all the same. What the key makes critical, and why it is
 one bit rather than two, is [ADR-114](adr_114_critical_consumer_readiness.md). A consumer whose channel just
-closed stays ready while its supervisor is still inside the streak; that intermediate state is
-visible in `messaging_stats` and on `/_sys/health-debug`, not in the verdict, which is what keeps a
-healthy broker reconnect from becoming a restart loop. Absent, the key changes nothing: the probe
+closed stays ready while its supervisor is still inside the streak; that it is unsubscribed shows
+in `messaging_stats` as `subscribed_consumers` below `declared_consumers`, not in the verdict, which
+is what keeps a healthy broker reconnect from becoming a restart loop. The streak count itself is
+not published — read it from `ConsumerStates()` in Go. Absent, the key changes nothing: the probe
 leases the publisher, asks `IsReady()`, and is never critical. Gate `livenessProbe` on `/health`,
 never on `/ready`, before turning it on. See
 [ADR-114](adr_114_critical_consumer_readiness.md) and [startup_defaults.md](startup_defaults.md).
