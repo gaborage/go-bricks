@@ -1,0 +1,98 @@
+# ADR-114: A Consumer That Gave Up Re-subscribing Fails Readiness, Opt-in and Threshold-gated
+
+**Status:** Accepted
+**Date:** 2026-09-16
+**Issue:** #1666
+
+## Context
+
+The messaging kind's `/ready` probe leased the control-plane publisher and asked it `IsReady()`.
+Nothing on that path reads the consume side, so a service whose consumers were all detached — the
+broker deleted a queue, the re-subscribe loop had been failing for hours — answered `/ready` with
+`200` and stayed in the load balancer while its queues drained into nothing. The publisher-only
+verdict was not an oversight so much as the only signal available: before #1618 and the first link
+of #1666 the registry kept no per-consumer subscription state at all.
+
+That state now exists: `ConsumerState.GivenUp()` is true for a consumer that is unsubscribed and
+whose consecutive re-subscribe failures have reached `consumerResubscribeWarnFromAttempt`, the
+threshold at which the re-subscribe log escalates to WARN. The open question was whether, and how,
+readiness should act on it. The requesting service's own ADR-0007 argues against broker-aware
+readiness precisely because a healthy reconnect would otherwise flap a pod out of rotation and,
+under a restart-on-failure policy, into a restart loop.
+
+## Options Considered
+
+**A — fail readiness while any consumer is unsubscribed.** Rejected: that is the restart-loop
+objection verbatim. Every routine broker reconnect unsubscribes every consumer for the length of a
+flap.
+
+**B — fail readiness once a consumer's re-subscribe failure streak passes a threshold, always on.**
+Rejected as a default. It is the right predicate but the wrong rollout: a deployment whose
+`readinessProbe` gates traffic on `/ready` would change behavior on upgrade with no key to turn it
+back.
+
+**C — the same predicate behind an opt-in key.** Chosen.
+
+**D — a separate `consumers.critical` bit independent of the publisher arm.** Rejected: ADR-066
+gives a slot ONE critical bit, decided at describe time and never re-derived by the judge. Two
+criticality levels inside one kind would mean either a second slot or a judge that re-reads
+configuration per probe.
+
+## Decision
+
+- `messaging.consumers.critical` (bool, absent = false) opts the messaging kind in. Absent means
+  today's behavior verbatim: the probe leases the publisher, asks `IsReady()`, and is never
+  critical. Plain `bool` with no registered koanf default, matching `cache.critical` after ADR-094.
+- When the key is true the messaging slot is critical, and **both** of its arms are critical with
+  it — one bit per slot, set once in `describe()`. The publisher arm keeps exactly the flap profile
+  `cache.critical` accepted under ADR-094; the consumer arm is threshold-gated and does not flap.
+- The live closure checks the **consumer arm first**: any declared consumer whose `GivenUp()` is
+  true fails the probe with `errConsumerResubscribeExhausted`. Only then is the publisher's
+  `IsReady()` read, as before. The consumer arm names the steady-state loss the key exists to
+  report; the publisher arm is the transient one.
+- The threshold is the WARN constant, not a second number. One threshold, one meaning: the point at
+  which the supervisor has stopped looking like it is riding out a flap. A consumer whose channel
+  just closed stays ready; its intermediate state is visible in `messaging_stats` and in
+  `/_sys/health-debug`, never in the verdict.
+- ADR-048 governs the body: the sentinel carries no queue name, consumer tag or event type, the
+  slot declares no `PublicErr`, and the unauthenticated `503` renders the default
+  `messaging unavailable`.
+- Two semantics settled while building the state this decision reads, both of which the verdict
+  depends on. **Shutdown mask:** a stopped registry reports every consumer unsubscribed with no
+  streak, so shutting down is never an outage. **Session boundary:** every `StartConsumers` installs
+  fresh per-consumer state, so a restarted consumer's first flap is judged on its own attempts, not
+  on a previous session's streak. The cumulative counters survive both.
+- `ManagerOptions.ConsumerResubscribeDelay` (Go-only, no YAML key; zero keeps the registry's 5s
+  floor) is added so a test can drive a real streak in milliseconds. It follows
+  `ConnectionTimeout`'s idiom and reaches every registry the manager builds.
+
+## Consequences
+
+**Positive:** a service whose consumers are detached can be taken out of rotation by its own
+readiness probe, with one greppable key and no change for anyone who does not set it. The threshold
+answers the restart-loop objection: a reconnect that recovers within the streak never reaches the
+verdict.
+
+**Negative:** with the key on, a genuine broker outage long enough to exhaust the streak takes the
+pod out of rotation even though nothing is wrong with the pod — which is the point, and is why it is
+opt-in. Operators who gate `livenessProbe` on `/ready` will restart such a pod; gate liveness on
+`/health`, which is static.
+
+**Neutral:** `Manager.StopConsumers()` has one production caller (`app/lifecycle.go:464`, shutdown),
+so the "consumers are never revived after a stop" behavior sits entirely inside a closing process
+and cannot produce a readiness verdict. That `StopConsumers` cancels its supervisors without joining
+them is deliberate (ADR-029) and is the reason the state layer masks a stopped registry rather than
+clearing it; whether to join them is tracked as **#1685**, out of scope here.
+
+## References
+
+- #1666 — this decision; #1618 — the shared WARN threshold; #1685 — `StopConsumers` does not join
+  its supervisors
+- `config/types.go` — `MessagingConsumersConfig`; `config/config.go` — `IsMessagingConsumersCritical`
+- `app/slot.go` — `messagingSlot.describe`; `app/readiness.go` — `errConsumerResubscribeExhausted`
+- `messaging/registry.go` — `ConsumerState.GivenUp`, `consumerResubscribeWarnFromAttempt`
+- [ADR-029](adr_029_graceful_shutdown_order.md), [ADR-048](adr_048_ready_sanitize_by_default.md),
+  [ADR-066](adr_066_readiness_one_module.md), [ADR-094](adr_094_cache_readiness_non_critical_default.md),
+  [ADR-113](adr_113_amqp_topology_redeclare_on_reconnect.md)
+- [messaging.md](messaging.md), [startup_defaults.md](startup_defaults.md),
+  [migrations.md](migrations.md) `[C65.12]`

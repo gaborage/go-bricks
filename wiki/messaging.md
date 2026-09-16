@@ -843,6 +843,21 @@ restart. Declares are idempotent for matching arguments, so a healthy reconnect 
 
 See [ADR-113](adr_113_amqp_topology_redeclare_on_reconnect.md).
 
+#### Failing readiness when a consumer gives up (`messaging.consumers.critical`)
+
+Set `messaging.consumers.critical: true` (bool, absent = `false`; env
+`MESSAGING_CONSUMERS_CRITICAL`) to make the messaging `/ready` probe critical and fold the consume
+side into it. The probe then checks the consumers FIRST — any declared consumer that is unsubscribed
+with its re-subscribe failure streak at the fifth attempt, the same threshold that escalates the log
+to WARN, answers `/ready` with `503` and the fixed `messaging unavailable` body — and only then the
+publisher's `IsReady()` as before. One critical bit covers both arms. A consumer whose channel just
+closed stays ready while its supervisor is still inside the streak; that intermediate state is
+visible in `messaging_stats` and on `/_sys/health-debug`, not in the verdict, which is what keeps a
+healthy broker reconnect from becoming a restart loop. Absent, the key changes nothing: the probe
+leases the publisher, asks `IsReady()`, and is never critical. Gate `livenessProbe` on `/health`,
+never on `/ready`, before turning it on. See
+[ADR-114](adr_114_critical_consumer_readiness.md) and [startup_defaults.md](startup_defaults.md).
+
 ### Sizing the publisher pool for multi-tenant deployments
 
 `publisher.maxcached` is the LRU cap on cached publisher clients (in multi-tenant mode, it falls back to `multitenant.limits.tenants` when unset), not a per-tenant guarantee. When more tenants publish than the cap allows, every publish for a not-currently-cached tenant evicts the least-recently-used publisher and creates a fresh one — **eviction thrash** that silently degrades latency (each miss reopens a broker connection) without an error.
