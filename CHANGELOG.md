@@ -1,5 +1,69 @@
 # Changelog
 
+## [0.65.0](https://github.com/gaborage/go-bricks/compare/v0.64.0...v0.65.0) (2026-09-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **migration:** refuse reserved PostgreSQL schema and role names ([#1655](https://github.com/gaborage/go-bricks/issues/1655))
+* **database:** declare the session door on database.Interface ([#1650](https://github.com/gaborage/go-bricks/issues/1650))
+* **httpclient:** refuse a 2xx response that was not unwrapped ([#1637](https://github.com/gaborage/go-bricks/issues/1637))
+* **messaging:** bind sealed dedup admission to a typed DedupKey ([#1630](https://github.com/gaborage/go-bricks/issues/1630))
+* **config:** judge a PostgreSQL connection string's own host ([#1642](https://github.com/gaborage/go-bricks/issues/1642))
+* **config:** refuse TLS claimed on a unix-socket PostgreSQL host ([#1613](https://github.com/gaborage/go-bricks/issues/1613))
+
+### Added
+
+* **app:** add a post-registration hook to veto the route table ([#1672](https://github.com/gaborage/go-bricks/issues/1672)) ([4ab4c2c](https://github.com/gaborage/go-bricks/commit/4ab4c2c076459c2805e9cc0ac81a01fa41205c2d))
+* **auth:** add bearer credential verifier core ([#1601](https://github.com/gaborage/go-bricks/issues/1601)) ([a382762](https://github.com/gaborage/go-bricks/commit/a382762ed4ac6be6f333b4545f83de9351d691b8))
+* **auth:** add the bearer verification middleware and docs ([#1604](https://github.com/gaborage/go-bricks/issues/1604)) ([0da0453](https://github.com/gaborage/go-bricks/commit/0da04530db8556ae608fb940c7353993cf37d491))
+* **auth:** fetch issuer keys from a JWKS endpoint ([#1603](https://github.com/gaborage/go-bricks/issues/1603)) ([f63254b](https://github.com/gaborage/go-bricks/commit/f63254bed12e3325afd6e3804ce94cb6e055e2d3))
+* **cache:** dial Redis over TLS from redis.Config.TLS ([#1593](https://github.com/gaborage/go-bricks/issues/1593)) ([27596ed](https://github.com/gaborage/go-bricks/commit/27596ed83e675d71060d2bffdc0da508a3d85083))
+* **cmd:** add bare header flags and visa-mle envelope to seal-payload ([#1620](https://github.com/gaborage/go-bricks/issues/1620)) ([9578aca](https://github.com/gaborage/go-bricks/commit/9578aca9f046503226fda52b8bd7e1745dfe561b))
+* **cmd:** add bare-JWE mode and -enc to seal-payload ([#1615](https://github.com/gaborage/go-bricks/issues/1615)) ([dfbc680](https://github.com/gaborage/go-bricks/commit/dfbc6807039f2baedc93d2e91e05102a9113e6b6))
+* **cmd:** add open-event, the sealed-event inspection CLI ([#1640](https://github.com/gaborage/go-bricks/issues/1640)) ([068d16c](https://github.com/gaborage/go-bricks/commit/068d16c4537da1946e2c8527bdc5cbeeb2818ed8))
+* **config:** add cache.redis.tls and wire it to the Redis client ([#1594](https://github.com/gaborage/go-bricks/issues/1594)) ([fa2a4a0](https://github.com/gaborage/go-bricks/commit/fa2a4a07704d4a7b7ff8208f3992a8f39819a11b))
+* **config:** add Strings list getters and LoadFromMap constructor ([#1668](https://github.com/gaborage/go-bricks/issues/1668)) ([8be4800](https://github.com/gaborage/go-bricks/commit/8be480034fd013a2f2f043d69f977afd85b7ae49))
+* **config:** scan a PostgreSQL connection string for host and TLS claim ([#1626](https://github.com/gaborage/go-bricks/issues/1626)) ([e7a5b3b](https://github.com/gaborage/go-bricks/commit/e7a5b3bab8d24264df5830fbd0054f0e81cc5dbb))
+* **database:** add the dedicated session door ([#1639](https://github.com/gaborage/go-bricks/issues/1639)) ([8530d2d](https://github.com/gaborage/go-bricks/commit/8530d2dedb5e158913577cbce40f462c7c8d2cdb))
+* **database:** evict a cached connection on demand ([#1671](https://github.com/gaborage/go-bricks/issues/1671)) ([18ec0d6](https://github.com/gaborage/go-bricks/commit/18ec0d6ce462b60c1db7d487114dc9601ae4f5eb))
+* **database:** export upsert precondition sentinels ([#1612](https://github.com/gaborage/go-bricks/issues/1612)) ([6fcc8c6](https://github.com/gaborage/go-bricks/commit/6fcc8c690a52b5649ce1a7db1b590d98d8283dda))
+* **httpclient:** name the peer in a refused plaintext 2xx ([#1648](https://github.com/gaborage/go-bricks/issues/1648)) ([fbd11db](https://github.com/gaborage/go-bricks/commit/fbd11db77476006e7c5c8bd096ef81e4d99f31b8))
+* **jose:** add SealModeJWSofJWE to the policy surface ([#1610](https://github.com/gaborage/go-bricks/issues/1610)) ([cb8f042](https://github.com/gaborage/go-bricks/commit/cb8f04289ca8433b5929452664c43e607b22b98d))
+* **jose:** seal and open SealModeJWSofJWE bodies ([#1623](https://github.com/gaborage/go-bricks/issues/1623)) ([eb53a18](https://github.com/gaborage/go-bricks/commit/eb53a187d9cf559b51824186e72628f68d74406a))
+* **logger:** consult a Redactor hook before reflective walk ([#1624](https://github.com/gaborage/go-bricks/issues/1624)) ([154e984](https://github.com/gaborage/go-bricks/commit/154e9848b5c659b312dc62a279924b6fd60f7b08))
+* **messaging:** add a DedupKey type and the WireDedupKey door ([#1619](https://github.com/gaborage/go-bricks/issues/1619)) ([58e24cd](https://github.com/gaborage/go-bricks/commit/58e24cded335dbecc9083698e147b105be983072))
+* **messaging:** fail readiness once a consumer stops re-subscribing ([#1686](https://github.com/gaborage/go-bricks/issues/1686)) ([cc7346d](https://github.com/gaborage/go-bricks/commit/cc7346d68304b35d06fa1ffeeed4d9d024c25a89))
+* **messaging:** track per-consumer AMQP subscription state ([#1684](https://github.com/gaborage/go-bricks/issues/1684)) ([4203525](https://github.com/gaborage/go-bricks/commit/4203525d1d27a5d51fca6542fb69eba80eefd9a6))
+* **migration:** add a PGRoleSpec identifier policy hook ([#1646](https://github.com/gaborage/go-bricks/issues/1646)) ([2e5f920](https://github.com/gaborage/go-bricks/commit/2e5f920221feaa4777401403b8d78085e5223379))
+* **migration:** add a transaction-scoped PG role door ([#1657](https://github.com/gaborage/go-bricks/issues/1657)) ([fb1c6a6](https://github.com/gaborage/go-bricks/commit/fb1c6a66c899bac0a05da8e82f9bfc78d17d2491))
+* **sealcli:** make the signing key source optional per caller ([#1614](https://github.com/gaborage/go-bricks/issues/1614)) ([fd6abd5](https://github.com/gaborage/go-bricks/commit/fd6abd5eb900619e5ab7b4750d1e893640294bef))
+* **sealed:** add a type-free OpenDocument door ([#1633](https://github.com/gaborage/go-bricks/issues/1633)) ([950cc5d](https://github.com/gaborage/go-bricks/commit/950cc5d1da13ce5ea8e6f7aa1924e187ad30f012))
+* **server:** expose the bound listener address and a ready signal ([#1674](https://github.com/gaborage/go-bricks/issues/1674)) ([096de37](https://github.com/gaborage/go-bricks/commit/096de370ec02ad092f37a7e6cc3e9d3d132f73ae))
+* **server:** require the forwarded client cert per route group ([#1670](https://github.com/gaborage/go-bricks/issues/1670)) ([0da67bf](https://github.com/gaborage/go-bricks/commit/0da67bf09d0e9d828a108f1ad1f2f6b836af8c44))
+
+
+### Fixed
+
+* **config:** judge a PostgreSQL connection string's own host ([#1642](https://github.com/gaborage/go-bricks/issues/1642)) ([4ecc481](https://github.com/gaborage/go-bricks/commit/4ecc4814ba93af8265af8c41639b7b1f0ec002c9))
+* **config:** refuse TLS claimed on a unix-socket PostgreSQL host ([#1613](https://github.com/gaborage/go-bricks/issues/1613)) ([c27a817](https://github.com/gaborage/go-bricks/commit/c27a817f3f15a4a97d55cfbaaa7f96b012986770))
+* **database:** declare the session door on database.Interface ([#1650](https://github.com/gaborage/go-bricks/issues/1650)) ([fec0716](https://github.com/gaborage/go-bricks/commit/fec071676c9c12e57fd0c6c25c8f32feafb0ebd7))
+* **deps:** update aws-sdk-go-v2 monorepo ([#1587](https://github.com/gaborage/go-bricks/issues/1587)) ([b76dc57](https://github.com/gaborage/go-bricks/commit/b76dc57a5b18d333dbef3a7911cc7026a13b3d70))
+* **deps:** update aws-sdk-go-v2 monorepo ([#1663](https://github.com/gaborage/go-bricks/issues/1663)) ([c85283d](https://github.com/gaborage/go-bricks/commit/c85283de715aab089609f412876e5e305988b353))
+* **deps:** update module github.com/fxamacker/cbor/v2 to v2.9.4 ([#1661](https://github.com/gaborage/go-bricks/issues/1661)) ([e8ec026](https://github.com/gaborage/go-bricks/commit/e8ec026ef8fef2d721994c16c71fc24e502c81a7))
+* **deps:** update module github.com/rabbitmq/amqp091-go to v1.15.0 ([#1682](https://github.com/gaborage/go-bricks/issues/1682)) ([904159a](https://github.com/gaborage/go-bricks/commit/904159a96ac757ac6c9729d59e3dd08ed48e464d))
+* **httpclient:** refuse a 2xx response that was not unwrapped ([#1637](https://github.com/gaborage/go-bricks/issues/1637)) ([4a5b569](https://github.com/gaborage/go-bricks/commit/4a5b5695cd6bbe85acb0a28b500834b8bddd01a9))
+* **jose:** bound the protected header on every compact the adapter parses ([#1647](https://github.com/gaborage/go-bricks/issues/1647)) ([d3233ba](https://github.com/gaborage/go-bricks/commit/d3233ba98ee5bf9dad7c0bd7014fece76c0ebbce))
+* **messaging:** bind sealed dedup admission to a typed DedupKey ([#1630](https://github.com/gaborage/go-bricks/issues/1630)) ([73370c5](https://github.com/gaborage/go-bricks/commit/73370c5ccfaacfabbceecba273adb43c9685a2de))
+* **messaging:** escalate a failing consumer re-subscribe to WARN ([#1675](https://github.com/gaborage/go-bricks/issues/1675)) ([19affe3](https://github.com/gaborage/go-bricks/commit/19affe318f0ab2c09446252de9f3eb2d1ef73d70))
+* **messaging:** re-declare AMQP topology once per new channel ([#1676](https://github.com/gaborage/go-bricks/issues/1676)) ([c1c4da2](https://github.com/gaborage/go-bricks/commit/c1c4da200c7d499176af84edff6ac400a877ea80))
+* **migration:** refuse reserved PostgreSQL schema and role names ([#1655](https://github.com/gaborage/go-bricks/issues/1655)) ([ada58f5](https://github.com/gaborage/go-bricks/commit/ada58f557368d7d681f6f24cf2e4ff1f141d2788))
+
+
+### Changed
+
+* **httpclient:** extract client TLS loader into internal/clienttls ([#1592](https://github.com/gaborage/go-bricks/issues/1592)) ([cd54577](https://github.com/gaborage/go-bricks/commit/cd545774a51e2f73630e9fa46af4d62cad229efe))
+
 ## [0.64.0](https://github.com/gaborage/go-bricks/compare/v0.63.0...v0.64.0) (2026-09-10)
 
 
