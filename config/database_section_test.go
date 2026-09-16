@@ -3544,101 +3544,10 @@ func TestApplyDatabasePoolDefaultsRefusesTLSClaimOnSocketConnectionString(t *tes
 	}
 }
 
-// TestApplyDatabasePoolDefaultsRefusesPGSSLEnvTLSClaimOnSocketDSN pins [C65.11]: a socket
-// DSN whose TLS claim arrives through a PGSSL* variable is refused by rule 2, naming the
-// variable. DSN keys, including empty ones, still shadow env; empty variables are ignored.
-func TestApplyDatabasePoolDefaultsRefusesPGSSLEnvTLSClaimOnSocketDSN(t *testing.T) {
-	hermeticPGEnv(t)
-	const socketDSN = "host=/var/run/postgresql user=u"
-	const tcpDSN = "host=db.example.com user=u"
-
-	t.Run("claiming_env", func(t *testing.T) {
-		for _, env := range []struct {
-			name  string
-			key   string
-			value string
-		}{
-			{name: "pgsslmode_verify_full", key: "PGSSLMODE", value: "verify-full"},
-			{name: "pgsslmode_require", key: "PGSSLMODE", value: "require"},
-			{name: "pgsslmode_verify_ca", key: "PGSSLMODE", value: "verify-ca"},
-			{name: "pgsslrootcert", key: "PGSSLROOTCERT", value: "/etc/pg/ca.crt"},
-			{name: "pgsslcert", key: "PGSSLCERT", value: "/etc/pg/client.crt"},
-			{name: "pgsslkey", key: "PGSSLKEY", value: "/etc/pg/client.key"},
-			{name: "pgsslnegotiation_direct", key: "PGSSLNEGOTIATION", value: "direct"},
-		} {
-			t.Run(env.name, func(t *testing.T) {
-				t.Setenv(env.key, env.value)
-
-				cfgErr := assertConnStringRefusal(t, socketDSN, errCategoryInvalid)
-				assert.Contains(t, cfgErr.Message, "names TLS")
-				assert.Contains(t, cfgErr.Action, "this one arrived through "+env.key)
-			})
-		}
-	})
-
-	t.Run("non_claiming_env_accepted", func(t *testing.T) {
-		for _, env := range []struct {
-			name  string
-			key   string
-			value string
-		}{
-			{name: "pgsslmode_prefer", key: "PGSSLMODE", value: "prefer"},
-			{name: "pgsslmode_allow", key: "PGSSLMODE", value: "allow"},
-			{name: "pgsslmode_disable", key: "PGSSLMODE", value: "disable"},
-			{name: "empty_pgsslmode", key: "PGSSLMODE", value: ""},
-			{name: "empty_pgsslcert", key: "PGSSLCERT", value: ""},
-		} {
-			t.Run(env.name, func(t *testing.T) {
-				t.Setenv(env.key, env.value)
-				cfg := DatabaseConfig{ConnectionString: socketDSN}
-
-				require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
-			})
-		}
-	})
-
-	t.Run("dsn_key_shadows_env", func(t *testing.T) {
-		t.Run("sslmode_disable_shadows_pgsslmode", func(t *testing.T) {
-			t.Setenv("PGSSLMODE", "verify-full")
-			cfg := DatabaseConfig{ConnectionString: "host=/var/run/postgresql sslmode=disable user=u"}
-
-			require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
-		})
-		t.Run("empty_sslcert_shadows_pgsslcert", func(t *testing.T) {
-			t.Setenv("PGSSLCERT", "/x")
-			cfg := DatabaseConfig{ConnectionString: "host=/var/run/postgresql sslcert='' user=u"}
-
-			require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
-		})
-	})
-
-	t.Run("tcp_host_with_pgssl_accepted", func(t *testing.T) {
-		for _, env := range []struct{ key, value string }{
-			{key: "PGSSLMODE", value: "verify-full"},
-			{key: "PGSSLROOTCERT", value: "/etc/pg/ca.crt"},
-			{key: "PGSSLCERT", value: "/etc/pg/client.crt"},
-			{key: "PGSSLKEY", value: "/etc/pg/client.key"},
-			{key: "PGSSLNEGOTIATION", value: "direct"},
-		} {
-			t.Run(strings.ToLower(env.key), func(t *testing.T) {
-				t.Setenv(env.key, env.value)
-				cfg := DatabaseConfig{ConnectionString: tcpDSN}
-
-				require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
-			})
-		}
-	})
-
-	t.Run("pghost_socket_with_pgsslmode_require", func(t *testing.T) {
-		t.Setenv("PGHOST", "/var/run/postgresql")
-		t.Setenv("PGSSLMODE", "require")
-
-		cfgErr := assertConnStringRefusal(t, "user=u", errCategoryInvalid)
-		assert.Contains(t, cfgErr.Message, "names TLS")
-		assert.Contains(t, cfgErr.Action, "this one arrived through PGSSLMODE")
-	})
-}
-
+// TestApplyDatabasePoolDefaultsMatchesSharedTLSEnvFixtures pins [C65.11] against
+// testutil.PostgresSSLEnvTLSCases: a socket DSN whose TLS claim arrives through a PGSSL*
+// variable is refused by rule 2, naming that variable; DSN keys (empty included) still
+// shadow env; empty variables are ignored; a TCP host with a claiming variable is accepted.
 func TestApplyDatabasePoolDefaultsMatchesSharedTLSEnvFixtures(t *testing.T) {
 	hermeticPGEnv(t)
 	for _, c := range testutil.PostgresSSLEnvTLSCases {
@@ -3646,15 +3555,29 @@ func TestApplyDatabasePoolDefaultsMatchesSharedTLSEnvFixtures(t *testing.T) {
 			for _, e := range c.Env {
 				t.Setenv(e[0], e[1])
 			}
-			cfg := DatabaseConfig{ConnectionString: c.DSN}
-			err := ApplyDatabasePoolDefaults(&cfg)
-			if c.Refuse {
-				require.Error(t, err)
+			if !c.Refuse {
+				cfg := DatabaseConfig{ConnectionString: c.DSN}
+				require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
 				return
 			}
-			require.NoError(t, err)
+			cfgErr := assertConnStringRefusal(t, c.DSN, errCategoryInvalid)
+			assert.Contains(t, cfgErr.Message, "names TLS")
+			if src := claimingPGSSLEnv(c.Env); src != "" {
+				assert.Contains(t, cfgErr.Action, "this one arrived through "+src)
+			}
 		})
 	}
+}
+
+// claimingPGSSLEnv is the PGSSL* variable that actually carried the claim. PGHOST is a
+// host source, not a TLS claim, so a PGHOST+PGSSLMODE fixture names PGSSLMODE.
+func claimingPGSSLEnv(env [][2]string) string {
+	for _, e := range env {
+		if e[0] != "PGHOST" && e[1] != "" {
+			return e[0]
+		}
+	}
+	return ""
 }
 
 // TestApplyDatabasePoolDefaultsConnectionStringPassesThroughUntokenizableDSNs pins that a DSN
