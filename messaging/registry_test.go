@@ -2601,6 +2601,21 @@ func startStateRegistry(t *testing.T, client AMQPClient) *Registry {
 	return registry
 }
 
+// TestConsumerStateMarkUnsubscribedClearsTheStreak pins that the streak belongs to
+// the outage that starts at the unsubscribe, so a count left behind by a supervisor
+// still unwinding from an earlier one is not read as this outage's.
+func TestConsumerStateMarkUnsubscribedClearsTheStreak(t *testing.T) {
+	state := &consumerState{}
+	state.setFailStreak(consumerResubscribeWarnFromAttempt)
+	require.True(t, state.snapshot(testQueueName, true).GivenUp())
+
+	state.markUnsubscribed()
+
+	snapshot := state.snapshot(testQueueName, true)
+	assert.Zero(t, snapshot.FailStreak)
+	assert.False(t, snapshot.GivenUp())
+}
+
 // TestRegistryConsumerStatesDropTheStreakWhenConsumersRestart pins that a restart is
 // a clean slate: the previous run's failure streak must not make the first flap of
 // the new one read as abandoned.

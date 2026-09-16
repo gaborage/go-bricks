@@ -484,11 +484,15 @@ func (s *consumerState) markSubscribed() {
 	s.failStreak = 0
 }
 
-// markUnsubscribed records that the broker closed the delivery channel.
+// markUnsubscribed records that the broker closed the delivery channel. It clears
+// the streak because the outage the streak counts starts here: a supervisor still
+// unwinding from an earlier one must not leave its count behind to be read as this
+// outage's.
 func (s *consumerState) markUnsubscribed() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.subscribed = false
+	s.failStreak = 0
 }
 
 // setFailStreak records how many attempts the current re-subscribe loop has lost.
@@ -539,7 +543,10 @@ type ConsumerState struct {
 	Subscribed        bool
 	Resubscribes      uint64
 	LastResubscribeAt time.Time // zero until the first successful re-subscribe
-	FailStreak        int
+	// FailStreak counts failed re-subscribe attempts in the CURRENT outage only:
+	// it starts at zero when the delivery channel closes and the next success
+	// clears it, so it never carries a previous outage's count.
+	FailStreak int
 }
 
 // GivenUp reports a consumer whose outage stopped looking like a routine flap: it
@@ -643,6 +650,10 @@ func (s *streamResume) observe(headers amqp.Table) {
 // consumerStateFor returns the runtime state of a consumer declaration, seeding it
 // on first start. Callers must hold r.mu: only StartConsumers reaches it.
 func (r *Registry) consumerStateFor(consumer *ConsumerDeclaration) *consumerState {
+	if r.consumerStates == nil {
+		r.consumerStates = make(map[consumerKey]*consumerState)
+	}
+
 	key := consumerKeyFor(consumer)
 	state, ok := r.consumerStates[key]
 	if !ok {
