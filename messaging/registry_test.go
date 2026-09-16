@@ -2723,6 +2723,24 @@ func TestRegistryConsumerStatesCountTheAttemptTheLogEscalatesOn(t *testing.T) {
 	assert.True(t, state.GivenUp())
 }
 
+// TestRegistryConsumerStatesClearSubscribedWhenAHealthySessionIsCanceled pins the
+// half of the session end that only a healthy session can show: with no outage in
+// progress nothing has marked the consumer unsubscribed along the way, so the
+// supervisor's exit is the sole writer of that flag.
+func TestRegistryConsumerStatesClearSubscribedWhenAHealthySessionIsCanceled(t *testing.T) {
+	client, _ := newOutageClient() // the delivery channel stays open: no outage
+	registry, cancel := startStateRegistry(t, client, &stubLogger{})
+	defer cancel()
+
+	require.True(t, registry.ConsumerStates()[0].Subscribed)
+
+	cancel() // no StopConsumers: the mask stays off
+
+	require.Eventually(t, func() bool {
+		return !registry.ConsumerStates()[0].Subscribed
+	}, 5*time.Second, 2*time.Millisecond, "a canceled supervisor left the consumer reading subscribed")
+}
+
 // TestRegistryConsumerStatesEndTheSessionWhenTheContextIsCanceled pins the other way
 // a consumer stops: a caller that cancels the context it handed StartConsumers,
 // instead of calling StopConsumers, leaves consumersActive true, so the snapshot is
