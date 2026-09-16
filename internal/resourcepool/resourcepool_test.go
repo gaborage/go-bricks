@@ -62,6 +62,16 @@ func (t *closeTracker) wasClosed(id string) bool {
 	return t.count(id) > 0
 }
 
+func (t *closeTracker) total() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	n := 0
+	for _, c := range t.closed {
+		n += c
+	}
+	return n
+}
+
 // countingConnector returns a create function that produces a fresh fakeResource per key and
 // tallies creations.
 func countingConnector(created *atomic.Int32) func(context.Context) (*fakeResource, error) {
@@ -1145,10 +1155,10 @@ func TestPoolAbandonedCreateAfterRemoveClosesResource(t *testing.T) {
 	p.Remove(keyOne)
 	cancel()
 	got := <-gotCh
-	assert.ErrorIs(t, got.err, context.Canceled)
+	unblock()
+	require.ErrorIs(t, got.err, context.Canceled)
 	assert.Nil(t, got.rel)
 
-	unblock()
 	<-closedCh
 	assert.Equal(t, 1, tr.count("abandoned"), "the abandoned create still closed once")
 	assert.Equal(t, 0, p.Size())
@@ -1783,6 +1793,50 @@ func TestPoolConcurrentGetRacesRemove(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestPoolConcurrentGetRemoveClosesEveryCreate pins that Remove racing GetOrCreate cannot
+// orphan a handle: every create is closed once, either at final release or by Close. Forget
+// can split two same-generation creates; installCreated must close the duplicate rather than
+// overwrite the map (an overwritten LRU entry is invisible to Close).
+func TestPoolConcurrentGetRemoveClosesEveryCreate(t *testing.T) {
+	tr := newCloseTracker()
+	var created atomic.Int32
+	p := New(0, 0, tr.closer)
+
+	const workers = 16
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	create := countingConnector(&created)
+	for range workers {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, rel, err := p.GetOrCreate(context.Background(), keyOne, create)
+			if rel != nil {
+				rel()
+			}
+			errs <- err
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			if v, shouldClose := p.Remove(keyOne); shouldClose {
+				_ = tr.closer(v)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, p.Close())
+	assert.Equal(t, int(created.Load()), tr.total(), "every handle built is closed once Close returns")
 }
 
 // TestPoolStartCleanupAfterCloseIsNoOp pins the contract behind the StartCleanup/Close leak fix:

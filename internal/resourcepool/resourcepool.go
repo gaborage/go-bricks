@@ -121,8 +121,9 @@ type Pool[V any] struct {
 	removals     int
 	idleCleanups int
 
-	// generation is bumped by Remove for a key whether or not an entry is cached, so a
-	// create that captured the previous value is delivered to its waiters but never installed.
+	// generation is bumped by Remove only when it actually invalidates (a cached entry or an
+	// in-flight create). A create that captured the previous value is delivered to its waiters
+	// but never installed.
 	generation map[string]uint64
 	// inFlight counts createEntry calls that have captured a generation but not yet finished
 	// installing. Remove uses it to count Removals for an in-flight-only invalidation.
@@ -458,6 +459,10 @@ func (p *Pool[V]) endCreateLocked(key string) {
 // when Remove moved the key's generation during create. The in-flight count is dropped under the
 // same lock as the generation check so Remove cannot observe a torn "still in flight / already
 // installed" state. A closed pool still closes the orphaned instance and returns ErrPoolClosed.
+//
+// Forget can split singleflight so two creates capture the same generation and both try to
+// install. The occupant keeps the map slot; the extra value is closed here rather than
+// overwriting the LRU (an overwritten entry would vanish from Close's map walk and leak).
 func (p *Pool[V]) installCreated(key string, gen uint64, value V) (*entry[V], error) {
 	p.mu.Lock()
 	p.endCreateLocked(key)
@@ -467,13 +472,22 @@ func (p *Pool[V]) installCreated(key string, gen uint64, value V) (*entry[V], er
 		return nil, ErrPoolClosed
 	}
 
+	detached := p.generation[key] != gen
+	if !detached {
+		if existing := p.entries[key]; existing != nil {
+			p.mu.Unlock()
+			_ = p.closer(value) // duplicate create — close is best-effort, not counted
+			return existing, nil
+		}
+	}
+
 	e := &entry[V]{
 		value:    value,
 		key:      key,
 		lastUsed: time.Now(),
 		refs:     1,
 		seedHeld: true,
-		detached: p.generation[key] != gen,
+		detached: detached,
 	}
 	p.totalCreated++
 	if e.detached {
@@ -535,12 +549,14 @@ func (p *Pool[V]) evictIfNeeded() *entry[V] {
 func (p *Pool[V]) Remove(key string) (v V, shouldClose bool) {
 	var zero V
 	p.mu.Lock()
-	p.generation[key]++
 	e := p.removeEntryLocked(key)
 	inFlight := p.inFlight[key] > 0
-	if e != nil || inFlight {
-		p.removals++
+	if e == nil && !inFlight {
+		p.mu.Unlock()
+		return zero, false
 	}
+	p.generation[key]++
+	p.removals++
 	shouldClose = e != nil && e.refs <= 0 && !e.closed
 	if shouldClose {
 		e.closed = true
@@ -549,7 +565,8 @@ func (p *Pool[V]) Remove(key string) (v V, shouldClose bool) {
 
 	// Drop the singleflight key so a GetOrCreate that starts after this Remove does not join the
 	// invalidated create and cache (or even observe as "the" pooled value) a handle built from
-	// pre-removal config.
+	// pre-removal config. A true no-op (nothing cached, nothing in flight) returns above without
+	// Forget, so a create that has not yet captured a generation is not split into a duplicate.
 	p.sf.Forget(key)
 
 	if !shouldClose {
