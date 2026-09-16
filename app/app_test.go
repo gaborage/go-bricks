@@ -1109,10 +1109,11 @@ func TestReadyCheckScenarios(t *testing.T) {
 			},
 		},
 		{
-			// A service that declares no broker at all must not be held down by the consumer
-			// knob: the messaging slot describes itself as disabled, and a disabled kind has
-			// no arm to fail — the same shape cache.critical takes when the cache is absent.
-			name: "messaging_not_configured_stays_ready_when_consumers_critical",
+			// A service wired with no messaging manager at all must not be held down by the
+			// consumer knob: the slot describes itself as disabled, and a disabled kind has no
+			// arm to fail. The not-configured arm — a resolvable manager whose control-plane
+			// key answers nothing — is covered by the per-tenant tests instead.
+			name: "messaging_disabled_stays_ready_when_consumers_critical",
 			prepare: func(f *testAppFixture) {
 				f.db.On(methodHealth, mock.Anything).Return(nil)
 				f.app.cfg.Messaging.Consumers.Critical = true
@@ -1189,17 +1190,21 @@ type consumerOutageClient struct {
 	failing    bool
 	deliveries chan amqp.Delivery
 	failures   int
-	parkAt     int
-	parked     chan struct{}
-	release    chan struct{}
+	parks      map[int]*consumerParkSlot
+}
+
+// consumerParkSlot holds one re-subscribe attempt inside ConsumeFromQueue until the test
+// releases it, so the streak either side of that attempt is read at rest.
+type consumerParkSlot struct {
+	parked  chan struct{}
+	release chan struct{}
 }
 
 func newConsumerOutageClient() *consumerOutageClient {
 	return &consumerOutageClient{
 		ready:      true,
 		deliveries: make(chan amqp.Delivery),
-		parked:     make(chan struct{}),
-		release:    make(chan struct{}),
+		parks:      map[int]*consumerParkSlot{},
 	}
 }
 
@@ -1211,13 +1216,22 @@ func (c *consumerOutageClient) ConsumeFromQueue(context.Context, messaging.Consu
 		return deliveries, nil
 	}
 	c.failures++
-	park := c.failures == c.parkAt
-	parked, release := c.parked, c.release
+	slot := c.parks[c.failures]
 	c.mu.Unlock()
 
-	if park {
-		close(parked)
-		<-release
+	if slot != nil {
+		close(slot.parked)
+		<-slot.release
+
+		// Re-read the outage rather than failing on the decision taken before the park: a
+		// test that lifts the outage while this attempt is held gets its recovery on THIS
+		// attempt, with no backoff between the release and the observation.
+		c.mu.Lock()
+		failing, deliveries := c.failing, c.deliveries
+		c.mu.Unlock()
+		if !failing {
+			return deliveries, nil
+		}
 	}
 	return nil, errConsumerOutage
 }
@@ -1248,12 +1262,21 @@ func (c *consumerOutageClient) BindQueue(context.Context, *messaging.BindingDecl
 	return nil
 }
 
-// beginOutage closes the live delivery channel and fails every re-subscribe from then on,
-// parking inside the parkAt'th failure until releaseParked lets it return.
-func (c *consumerOutageClient) beginOutage(parkAt int) {
+// parkOn registers a hold on the attempt'th failed re-subscribe. Register every slot before
+// beginOutage — the supervisor starts retrying the moment the delivery channel closes.
+func (c *consumerOutageClient) parkOn(attempts ...int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, attempt := range attempts {
+		c.parks[attempt] = &consumerParkSlot{parked: make(chan struct{}), release: make(chan struct{})}
+	}
+}
+
+// beginOutage closes the live delivery channel and fails every re-subscribe from then on.
+func (c *consumerOutageClient) beginOutage() {
 	c.mu.Lock()
 	c.failing = true
-	c.parkAt = parkAt
 	deliveries := c.deliveries
 	c.mu.Unlock()
 
@@ -1274,17 +1297,28 @@ func (c *consumerOutageClient) setReady(ready bool) {
 	c.ready = ready
 }
 
-func (c *consumerOutageClient) releaseParked() { close(c.release) }
+func (c *consumerOutageClient) releaseParked(attempt int) {
+	c.mu.Lock()
+	slot := c.parks[attempt]
+	c.mu.Unlock()
 
-// awaitParked blocks until an attempt parks, so what the assertions after it read is a
-// state the supervisor is HOLDING, not one it is passing through.
-func (c *consumerOutageClient) awaitParked(t *testing.T) {
+	close(slot.release)
+}
+
+// awaitParked blocks until the given attempt parks, so what the assertions after it read is
+// a state the supervisor is HOLDING, not one it is passing through.
+func (c *consumerOutageClient) awaitParked(t *testing.T, attempt int) {
 	t.Helper()
 
+	c.mu.Lock()
+	slot := c.parks[attempt]
+	c.mu.Unlock()
+	require.NotNil(t, slot, "attempt %d was never registered as a park slot", attempt)
+
 	select {
-	case <-c.parked:
+	case <-slot.parked:
 	case <-time.After(5 * time.Second):
-		t.Fatal("no re-subscribe attempt parked")
+		t.Fatalf("re-subscribe attempt %d never parked", attempt)
 	}
 }
 
@@ -1301,13 +1335,48 @@ func (readyProbeHandler) EventType() string { return readyProbeEventType }
 func messagingManagerOver(t *testing.T, cfg *config.Config, c messaging.AMQPClient) *messaging.Manager {
 	t.Helper()
 
-	manager := messaging.NewMessagingManager(config.NewTenantStore(cfg), logger.New("error", false),
+	return messagingManagerOn(t, config.NewTenantStore(cfg), c)
+}
+
+// messagingManagerOn is messagingManagerOver with the broker source named explicitly, for the
+// per-tenant deployments whose control-plane key resolves to nothing.
+func messagingManagerOn(t *testing.T, source messaging.BrokerURLProvider, c messaging.AMQPClient) *messaging.Manager {
+	t.Helper()
+
+	manager := messaging.NewMessagingManager(source, logger.New("error", false),
 		messaging.ManagerOptions{MaxPublishers: 1, IdleTTL: time.Hour, ConsumerResubscribeDelay: time.Millisecond},
 		func(string, logger.Logger) messaging.AMQPClient { return c },
 	)
 	t.Cleanup(func() { _ = manager.Close() }) // stop the supervisor goroutines
 
 	return manager
+}
+
+// tenantOnlyBrokerSource resolves a broker URL for a tenant key only. Its control-plane ""
+// key answers NotConfigured, which is what a per-tenant deployment with no root messaging
+// block looks like to the probe's lease — the shape that hid the consumer arm when the arm
+// lived inside the leased closure.
+type tenantOnlyBrokerSource struct{}
+
+func (*tenantOnlyBrokerSource) BrokerURL(_ context.Context, key string) (string, error) {
+	if key == "" {
+		return "", config.NewNotConfiguredError("messaging", "MESSAGING_BROKER_URL", "messaging.broker.url")
+	}
+	return "amqp://guest:guest@localhost:5672/", nil
+}
+
+// perTenantMessagingFixture is a multi-tenant app whose consumers live under a tenant key and
+// whose control-plane key resolves to nothing, with client serving that tenant's registry.
+func perTenantMessagingFixture(t *testing.T, client messaging.AMQPClient) *testAppFixture {
+	t.Helper()
+
+	f := newTestAppFixture(t)
+	f.db.On(methodHealth, mock.Anything).Return(nil)
+	f.app.cfg.Multitenant.Enabled = true
+	f.app.cfg.Messaging.Consumers.Critical = true
+	f.useMessagingManager(t, messagingManagerOn(t, &tenantOnlyBrokerSource{}, client), testTenantID)
+
+	return f
 }
 
 // oneConsumerDeclaration is the smallest topology carrying a supervised consumer.
@@ -1323,14 +1392,25 @@ func oneConsumerDeclaration() *messaging.Declarations {
 	return decls
 }
 
-// withSupervisedConsumer points the fixture's app at a messaging manager serving client,
-// starts the one declared consumer on it and returns once that consumer is subscribed.
+// useMessagingManager installs manager in place of the fixture's own — closing that one, which
+// holds a mock client of its own — and starts the declared consumer under key.
+func (f *testAppFixture) useMessagingManager(t *testing.T, manager *messaging.Manager, key string) {
+	t.Helper()
+
+	if f.app.messagingManager != nil {
+		require.NoError(t, f.app.messagingManager.Close())
+	}
+	f.app.messagingManager = manager
+	f.rebuildLifecycle()
+	require.NoError(t, manager.EnsureConsumers(context.Background(), key, oneConsumerDeclaration()))
+}
+
+// withSupervisedConsumer points the fixture's app at a messaging manager serving client on the
+// control-plane key, and returns once its one declared consumer is subscribed.
 func (f *testAppFixture) withSupervisedConsumer(t *testing.T, client messaging.AMQPClient) {
 	t.Helper()
 
-	f.app.messagingManager = messagingManagerOver(t, f.app.cfg, client)
-	f.rebuildLifecycle()
-	require.NoError(t, f.app.messagingManager.EnsureConsumers(context.Background(), "", oneConsumerDeclaration()))
+	f.useMessagingManager(t, messagingManagerOver(t, f.app.cfg, client), "")
 }
 
 // readyResponse runs the real /ready handler and returns its status code and decoded body.
@@ -1374,6 +1454,7 @@ func assertNoConsumerCoordinates(t *testing.T, body map[string]any) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(rendered), readyProbeQueue)
 	assert.NotContains(t, string(rendered), readyProbeConsumer)
+	assert.NotContains(t, string(rendered), readyProbeEventType)
 	assert.NotContains(t, string(rendered), errConsumerOutage.Error())
 }
 
@@ -1397,15 +1478,16 @@ func TestReadyTurnsRedOnlyOnceAConsumerHasGivenUpReSubscribing(t *testing.T) {
 
 	// Edge 1 — unsubscribed, one attempt short of the threshold. The supervisor is parked
 	// inside the threshold attempt, so the streak cannot advance under the assertion.
-	client.beginOutage(consumerGiveUpAttempt)
-	client.awaitParked(t)
+	client.parkOn(consumerGiveUpAttempt, consumerGiveUpAttempt+1)
+	client.beginOutage()
+	client.awaitParked(t, consumerGiveUpAttempt)
 
 	code, body = f.readyResponse(t)
 	assert.Equal(t, http.StatusOK, code, "a consumer whose supervisor is still retrying must not fail readiness")
 	assert.Equal(t, healthyStatus, body[componentMessaging], "the intermediate state shows in the stats, not in the verdict")
 
 	// Edge 2 — the parked attempt fails, reaching the threshold.
-	client.releaseParked()
+	client.releaseParked(consumerGiveUpAttempt)
 	require.Eventually(t, func() bool {
 		return f.readyStatusCode() == http.StatusServiceUnavailable
 	}, 5*time.Second, 2*time.Millisecond, "the attempt that reached the threshold did not fail readiness")
@@ -1416,8 +1498,13 @@ func TestReadyTurnsRedOnlyOnceAConsumerHasGivenUpReSubscribing(t *testing.T) {
 	assert.Equal(t, componentMessaging+" unavailable", body[errorKey])
 	assertNoConsumerCoordinates(t, body)
 
-	// Edge 3 — the outage lifts and the consumer re-subscribes.
+	// Edge 3 — the outage lifts and the consumer re-subscribes. Held like the others: the
+	// next attempt is parked BEFORE the outage lifts, so recovery lands on that attempt
+	// rather than racing an exponential backoff that is already seconds wide.
+	client.awaitParked(t, consumerGiveUpAttempt+1)
 	client.endOutage()
+	client.releaseParked(consumerGiveUpAttempt + 1)
+
 	require.Eventually(t, func() bool {
 		return f.readyStatusCode() == http.StatusOK
 	}, 5*time.Second, 2*time.Millisecond, "a re-subscribed consumer did not restore readiness")
@@ -1435,7 +1522,7 @@ func TestReadyIgnoresAGivenUpConsumerWhenTheKnobIsOff(t *testing.T) {
 	client := newConsumerOutageClient()
 	f.withSupervisedConsumer(t, client)
 
-	client.beginOutage(0) // no park: nothing here is read mid-attempt
+	client.beginOutage() // no park: nothing here is read mid-attempt
 	awaitConsumerGaveUp(t, f.app.messagingManager)
 
 	code, body := f.readyResponse(t)
@@ -1454,7 +1541,7 @@ func TestReadyReportsTheConsumerArmBeforeThePublisherArm(t *testing.T) {
 	client := newConsumerOutageClient()
 	f.withSupervisedConsumer(t, client)
 
-	client.beginOutage(0)
+	client.beginOutage()
 	awaitConsumerGaveUp(t, f.app.messagingManager)
 	client.setReady(false)
 
@@ -1464,6 +1551,48 @@ func TestReadyReportsTheConsumerArmBeforeThePublisherArm(t *testing.T) {
 	require.ErrorIs(t, status.Err, errConsumerResubscribeExhausted)
 	require.NotErrorIs(t, status.Err, errPublisherNotReady)
 	assert.True(t, status.Critical, "the knob makes both arms critical at once")
+}
+
+// TestReadyFailsAPerTenantKindWhoseConsumerGaveUp pins the arm where it is easiest to lose.
+// Under per-tenant tenancy with no control-plane broker the probe's lease answers
+// NotConfigured and judge short-circuits to per_tenant with a nil error, so an arm evaluated
+// inside the leased closure never runs — in exactly the deployment holding the most consumers.
+// The arm is judged ahead of the lease, so it runs here.
+func TestReadyFailsAPerTenantKindWhoseConsumerGaveUp(t *testing.T) {
+	client := newConsumerOutageClient()
+	f := perTenantMessagingFixture(t, client)
+
+	client.beginOutage()
+	awaitConsumerGaveUp(t, f.app.messagingManager)
+
+	code, body := f.readyResponse(t)
+
+	require.Equal(t, http.StatusServiceUnavailable, code, "a per-tenant consumer that gave up must fail readiness")
+	assert.Equal(t, unhealthyStatus, body[componentMessaging])
+	assert.Equal(t, componentMessaging+" unavailable", body[errorKey])
+	assertNoConsumerCoordinates(t, body)
+}
+
+// TestReadyLeavesAHealthyPerTenantKindPerTenant is the other half: the arm running ahead of the
+// lease must not turn the per_tenant verdict into a failure while every consumer is subscribed.
+func TestReadyLeavesAHealthyPerTenantKindPerTenant(t *testing.T) {
+	f := perTenantMessagingFixture(t, newConsumerOutageClient())
+
+	code, body := f.readyResponse(t)
+
+	require.Equal(t, http.StatusOK, code)
+	assert.Equal(t, perTenantStatus, body[componentMessaging], "an unresolvable control-plane key is per_tenant, not an outage")
+}
+
+// TestConsumerGiveUpAttemptMatchesTheMessagingThreshold pins app's local mirror of messaging's
+// unexported threshold in BOTH directions against the predicate itself: lowering the constant
+// reds the acceptance test, and raising it reds this one.
+func TestConsumerGiveUpAttemptMatchesTheMessagingThreshold(t *testing.T) {
+	below := messaging.ConsumerState{FailStreak: consumerGiveUpAttempt - 1}
+	at := messaging.ConsumerState{FailStreak: consumerGiveUpAttempt}
+
+	assert.False(t, below.GivenUp(), "one attempt short of the threshold is not given up")
+	assert.True(t, at.GivenUp(), "the threshold attempt is given up")
 }
 
 func TestRunGracefulShutdown(t *testing.T) {

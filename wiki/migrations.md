@@ -9794,14 +9794,16 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   consumer is unsubscribed with five consecutive failed re-subscribe attempts — the same threshold
   that escalates the re-subscribe log to WARN, so a routine broker flap that recovers inside the
   streak never reaches the verdict; the publisher arm then carries the flap profile `cache.critical`
-  accepted under ADR-094. New exported Go surface, all additive: `config.MessagingConsumersConfig`,
+  accepted under ADR-094. The consumer arm is judged BEFORE the control-plane publisher lease, so
+  it holds in every tenancy mode — including a per-tenant deployment with no root `messaging:`
+  block, whose lease resolves to nothing and whose kind reports `per_tenant`. New exported Go surface, all additive: `config.MessagingConsumersConfig`,
   `MessagingConfig.Consumers`, `Config.IsMessagingConsumersCritical()` and
   `messaging.ManagerOptions.ConsumerResubscribeDelay` (zero keeps the registry's 5s floor), so an
   UNKEYED positional `messaging.ManagerOptions{…}` literal stops compiling and the compiler names it
   (run `go vet ./...` rather than `go build ./...`, since such literals usually live in `_test.go`);
   a KEYED literal is unaffected. Rationale, and the restart-loop objection the threshold answers:
   [ADR-114](adr_114_critical_consumer_readiness.md); operator guidance:
-  [messaging.md](messaging.md#consumer-subscription-state-and-stats),
+  [messaging.md](messaging.md#failing-readiness-when-a-consumer-gives-up-messagingconsumerscritical),
   [startup_defaults.md](startup_defaults.md#messaging-pre-warm-readiness-wait).
 - ref: gaborage/go-bricks#1666 · `config/types.go`, `config/config.go`, `app/slot.go`,
   `messaging/manager.go`

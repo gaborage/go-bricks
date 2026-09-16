@@ -341,11 +341,10 @@ the IP-allowlisted debug health endpoint at `<debug.pathprefix>/health-debug` (d
 verbatim in `data.components.cache.error`. The sanitization is not specific to this probe: it is
 the shared default for every critical probe (ADR-048) — an empty `HealthStatus.PublicErr`
 renders `<component> unavailable`, so the `database` `503` reads `database unavailable`, and
-and `messaging` reads `messaging unavailable` once `messaging.consumers.critical: true` opts it
-in (ADR-114) — while that key is absent the messaging probe is not critical and renders no `503`
-body at all. A custom
-`Options.CacheConnector`'s `Health` error is sanitized on `/ready` too, and reaches the same
-two channels.
+`messaging` reads `messaging unavailable` once `messaging.consumers.critical: true` opts it in
+(ADR-114) — while that key is absent the messaging probe is not critical and renders no `503`
+body at all. A custom `Options.CacheConnector`'s `Health` error is sanitized on `/ready` too,
+and reaches the same two channels.
 
 A hung Redis (packets dropped rather than refused) is reported the same way —
 `redis.Client.Health` wraps every ping failure, `context deadline exceeded` included, in a

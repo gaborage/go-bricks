@@ -850,7 +850,10 @@ Set `messaging.consumers.critical: true` (bool, absent = `false`; env
 side into it. The probe then checks the consumers FIRST — any declared consumer that is unsubscribed
 with its re-subscribe failure streak at the fifth attempt, the same threshold that escalates the log
 to WARN, answers `/ready` with `503` and the fixed `messaging unavailable` body — and only then the
-publisher's `IsReady()` as before. One critical bit covers both arms. A consumer whose channel just
+publisher's `IsReady()` as before. The consumer arm is judged BEFORE the control-plane publisher
+lease, so it holds in every tenancy mode: a per-tenant deployment with no root `messaging:` block,
+whose lease resolves to nothing and whose kind reports `per_tenant`, is judged on its consumers all
+the same. One critical bit covers both arms. A consumer whose channel just
 closed stays ready while its supervisor is still inside the streak; that intermediate state is
 visible in `messaging_stats` and on `/_sys/health-debug`, not in the verdict, which is what keeps a
 healthy broker reconnect from becoming a restart loop. Absent, the key changes nothing: the probe

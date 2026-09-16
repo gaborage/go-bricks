@@ -1,7 +1,7 @@
 # ADR-114: A Consumer That Gave Up Re-subscribing Fails Readiness, Opt-in and Threshold-gated
 
 **Status:** Accepted
-**Date:** 2026-09-16
+**Date:** 2026-09-15
 **Issue:** #1666
 
 ## Context
@@ -46,10 +46,16 @@ configuration per probe.
 - When the key is true the messaging slot is critical, and **both** of its arms are critical with
   it — one bit per slot, set once in `describe()`. The publisher arm keeps exactly the flap profile
   `cache.critical` accepted under ADR-094; the consumer arm is threshold-gated and does not flap.
-- The live closure checks the **consumer arm first**: any declared consumer whose `GivenUp()` is
-  true fails the probe with `errConsumerResubscribeExhausted`. Only then is the publisher's
-  `IsReady()` read, as before. The consumer arm names the steady-state loss the key exists to
-  report; the publisher arm is the transient one.
+- The **consumer arm is judged first, and ahead of the control-plane publisher lease**: any
+  declared consumer whose `GivenUp()` is true fails the probe with
+  `errConsumerResubscribeExhausted` before `Manager.Publisher(ctx, "")` is called. Only then is the
+  lease taken and the publisher's `IsReady()` read, as before. Order, because the consumer arm
+  names the steady-state loss the key exists to report and the publisher arm is the transient one.
+  Ahead of the lease, because the readiness judge short-circuits a `NotConfigured` lease to
+  `per_tenant` with a nil error: under `multitenant.enabled` with per-tenant tenancy and no root
+  `messaging:` block the lease resolves to nothing, so an arm evaluated inside the leased closure
+  would be unreachable in exactly the deployment holding the most consumers. The arm therefore
+  holds in every tenancy mode, and a healthy per-tenant kind still reports `per_tenant` and `200`.
 - The threshold is the WARN constant, not a second number. One threshold, one meaning: the point at
   which the supervisor has stopped looking like it is riding out a flap. A consumer whose channel
   just closed stays ready; its intermediate state is visible in `messaging_stats` and in

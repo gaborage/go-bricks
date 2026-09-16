@@ -225,7 +225,8 @@ type messagingSlot struct {
 // describe builds the messaging kind's description: leased through the fixed "" key, live
 // when the leased client reports ready and, under messaging.consumers.critical, when no
 // declared consumer has given up re-subscribing. The knob decides criticality for BOTH arms
-// at once, here, once — the judge never re-derives it (ADR-066).
+// at once, here, once — the judge never re-derives it (ADR-066). The consumer arm is judged
+// ahead of the lease, so it holds in every tenancy mode.
 func (s *messagingSlot) describe() (probeDescription, bool) {
 	m := s.app.messagingManager
 	if m == nil {
@@ -237,17 +238,20 @@ func (s *messagingSlot) describe() (probeDescription, bool) {
 		perTenant:   s.app.multiTenant(),
 		publicStats: messagingPublicStats,
 		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
+			// Consumer arm first, and BEFORE the lease: a consumer that has given up is the
+			// steady-state loss the knob exists to report, while the publisher arm flaps with
+			// the broker (the profile cache.critical accepted under ADR-094). Ahead of the
+			// lease because judge short-circuits a NotConfigured lease to per_tenant with no
+			// error — under per-tenant tenancy with no control-plane broker, an arm inside the
+			// leased closure would never run in the deployment holding the most consumers.
+			if consumersCritical && anyConsumerGivenUp(m.ConsumerStates()) {
+				return nil, nil, errConsumerResubscribeExhausted
+			}
 			client, release, err := m.Publisher(ctx, "")
 			if err != nil {
 				return nil, nil, err
 			}
 			return func(context.Context) error {
-				// Consumer arm first: a consumer that has given up is the steady-state
-				// loss the knob exists to report, while the publisher arm flaps with the
-				// broker (the profile cache.critical accepted under ADR-094).
-				if consumersCritical && anyConsumerGivenUp(m.ConsumerStates()) {
-					return errConsumerResubscribeExhausted
-				}
 				if !client.IsReady() {
 					return errPublisherNotReady
 				}
