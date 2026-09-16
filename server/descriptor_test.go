@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/jose"
 )
 
 type TestRequest struct {
@@ -190,4 +191,43 @@ func TestRouteRegistryGetByPathAndCount(t *testing.T) {
 
 	none := registry.ByPath("/missing")
 	assert.Empty(t, none)
+}
+
+func TestCloneDescriptorCopiesJOSEPolicies(t *testing.T) {
+	src := RouteDescriptor{
+		Method: "POST",
+		Path:   "/tokens",
+		InboundJOSE: &jose.Policy{
+			DecryptKid: "our-key",
+			VerifyKid:  "peer-key",
+			Mode:       jose.SealModeJWEofJWS,
+			ProtectedHeaders: map[string]any{
+				"iat": int64(1),
+			},
+		},
+		OutboundJOSE: &jose.Policy{
+			SignKid:    "our-key",
+			EncryptKid: "peer-key",
+			ProtectedHeaders: map[string]any{
+				"cty": "application/json",
+			},
+		},
+	}
+
+	got := cloneDescriptor(&src)
+	assert.Equal(t, src.InboundJOSE.DecryptKid, got.InboundJOSE.DecryptKid)
+	assert.Equal(t, src.OutboundJOSE.SignKid, got.OutboundJOSE.SignKid)
+	assert.NotSame(t, src.InboundJOSE, got.InboundJOSE)
+	assert.NotSame(t, src.OutboundJOSE, got.OutboundJOSE)
+
+	got.InboundJOSE.ProtectedHeaders["iat"] = int64(99)
+	assert.Equal(t, int64(1), src.InboundJOSE.ProtectedHeaders["iat"])
+	got.OutboundJOSE.ProtectedHeaders["cty"] = "text/plain"
+	assert.Equal(t, "application/json", src.OutboundJOSE.ProtectedHeaders["cty"])
+}
+
+func TestCloneDescriptorNilPoliciesStayNil(t *testing.T) {
+	got := cloneDescriptor(&RouteDescriptor{Method: "GET", Path: "/health"})
+	assert.Nil(t, got.InboundJOSE)
+	assert.Nil(t, got.OutboundJOSE)
 }
