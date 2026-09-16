@@ -609,8 +609,9 @@ host is a unix-socket entry while the DSN itself claims TLS (`sslmode` of `requi
 `sslrootcert`/`sslcert`/`sslkey`) — including when that claim arrives through
 `PGSSLMODE`/`PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY`/`PGSSLNEGOTIATION` rather than
 the DSN text (`[C66.1]`) — is refused the same way `[C65.6]` refuses it
-for the typed fields; drop the TLS claim from the DSN or the matching `PGSSL*`
-variable, or point the DSN at a TCP host. A DSN the
+for the typed fields; drop a claim the DSN itself carries, unset the `PGSSL*` variable
+that carries an env-sourced one — or shadow that variable with a non-claiming DSN key,
+which is what the rule reached past — or point the DSN at a TCP host. A DSN the
 scanner cannot tokenize passes through unjudged, same as it always has.
 
 Two pgx quirks worth knowing when choosing a mode: `require` plus `ca` behaves as
