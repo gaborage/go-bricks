@@ -88,6 +88,8 @@ var PostgresSSLEnvTLSCases = []PostgresSSLEnvTLSCase{
 	{Name: "socket_pgsslmode_require", DSN: socketUserDSN, Env: [][2]string{{envPGSSLMODE, sslModeRequire}}, Refuse: true},
 	{Name: "socket_pgsslmode_verify_ca", DSN: socketUserDSN, Env: [][2]string{{envPGSSLMODE, "verify-ca"}}, Refuse: true},
 	{Name: "socket_pgsslrootcert", DSN: socketUserDSN, Env: [][2]string{{"PGSSLROOTCERT", "/etc/pg/ca.crt"}}, Refuse: true},
+	// Material is judged by presence, so the `system` trust-store sentinel claims like a path.
+	{Name: "socket_pgsslrootcert_system", DSN: socketUserDSN, Env: [][2]string{{"PGSSLROOTCERT", "system"}}, Refuse: true},
 	{Name: "socket_pgsslcert", DSN: socketUserDSN, Env: [][2]string{{envPGSSLCERT, "/etc/pg/client.crt"}}, Refuse: true},
 	{Name: "socket_pgsslkey", DSN: socketUserDSN, Env: [][2]string{{"PGSSLKEY", "/etc/pg/client.key"}}, Refuse: true},
 	{Name: "socket_pgsslnegotiation_direct", DSN: socketUserDSN, Env: [][2]string{{"PGSSLNEGOTIATION", "direct"}}, Refuse: true},

@@ -9848,8 +9848,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   names both the DSN keys and the `PGSSL*` variables plus the source that actually carried
   this claim. Same doors as `[C65.2]`; `go-bricks-migrate` inherits through the exported
   `ApplyDatabasePoolDefaults` seam, no CLI change. `PGSERVICE`/service files stay unconsulted
-  (#1644). `PGPASSFILE`, `PGSSLPASSWORD`, `PGSSLSNI` and `PGSSLROOTCERT=system` are out of
-  scope. Oracle is unchanged. No signature moves.
+  (#1644). `PGPASSFILE`, `PGSSLPASSWORD` and `PGSSLSNI` are out of scope; `PGSSLROOTCERT` is
+  judged by presence alone, so the `system` trust-store sentinel claims TLS exactly as a CA
+  path does and is refused with the rest. Oracle is unchanged. No signature moves.
 - gate: match = a socket-host DSN (or host-less DSN with `PGHOST` a socket path) runs under a
   claiming `PGSSL*` variable the DSN does not shadow.
 - apply: unset the named `PGSSL*` variable, drop the matching DSN key, or point the DSN at a
