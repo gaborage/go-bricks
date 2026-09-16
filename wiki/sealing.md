@@ -263,15 +263,15 @@ rejection**; its one replay-related job is to make the message's identity un-for
   consumer-composed id, returns an unsealed key whatever the id spells. So admission at the
   ledger is by TYPE and provenance, not by spelling.
 - `inbox.ProcessOnce` (through `messaging.ValidateDedupKey`) refuses the zero key, and
-  refuses a SEALED key under a context the sealed door did not mark
-  (`messaging.IsSealedDelivery`). The marker is a context value, so what it catches is a
-  context that never came from the sealed door: `context.Background()` drops it and fails
-  closed with `ErrInvalidEventID` instead of writing the ledger row silently.
-  `context.WithoutCancel(ctx)` keeps every value, the marker included, so detached work
-  derived that way still passes admission — which is the point: give it a fresh bounded
-  timeout rather than reaching for `Background`. What the marker does not distinguish is
-  WHICH sealed delivery marked the context, so a handler that carries one delivery's key
-  into another's is still admitted ([#1634](https://github.com/gaborage/go-bricks/issues/1634)).
+  refuses a SEALED key unless the context carries a sealed delivery key that equals the
+  one being validated (`messaging.IsSealedDelivery`). The marker is that delivery's own
+  `DedupKey`, so what it catches is both a context that never came from the sealed door
+  and a key retained from a different sealed delivery: `context.Background()` drops it
+  and fails closed with `ErrInvalidEventID` instead of writing the ledger row silently,
+  and a handler that carries delivery A's key into B's context is refused the same way.
+  `context.WithoutCancel(ctx)` keeps every value, the bound key included, so detached work
+  derived that way still passes admission for THAT delivery's key — which is the point:
+  give it a fresh bounded timeout rather than reaching for `Background`.
 - The header-id grammar excludes `:`, so no header-sourced or consumer-composed id can even
   spell a sealed key: a publish-ACL holder on an unsealed sibling queue cannot pre-insert a
   sealed message's key and have the real one skip+ACK (the shared-ledger suppression

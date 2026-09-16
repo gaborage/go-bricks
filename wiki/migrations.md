@@ -8597,7 +8597,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   and make the real delivery skip+ACK. The key is now a value type, `messaging.DedupKey`, that
   records which door produced it: only the sealed consume door mints a sealed one, every other key
   is built by `messaging.WireDedupKey` under the ledger grammar, and `ProcessOnce` accepts nothing
-  else (C65.7, ADR-097 amendment).
+  else (C65.7, ADR-097 amendment). A sealed key is then bound by equality to the delivery that
+  minted it: `ValidateDedupKey` admits one only when it equals the key the sealed consume door
+  stored on that delivery's context, so a key retained from delivery A is refused while handling
+  delivery B (C65.11, ADR-097 amendment).
 
 - gist: `JOSETransport` passed every body it did not recognize straight through. In nested
   mode that was any response whose `Content-Type` was not `application/jose`; in envelope
@@ -8927,8 +8930,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   construction). That marker is a boolean stamped identically on every sealed handler context, so
   admission proves the key came from *some* sealed delivery, not from the one being handled: a
   sealed key retained past the delivery that minted it still passes, and the ledger then treats the next
-  delivery as a duplicate and skips its handler. Binding a key to its originating delivery is open
-  work, tracked as gaborage/go-bricks#1634. `messaging.IsSealedDedupKey` is deleted — read
+  delivery as a duplicate and skips its handler. Binding the key to its originating delivery by
+  equality is `[C65.11]`. `messaging.IsSealedDedupKey` is deleted — read
   `key.Sealed()`. Additive:
   `messaging.DedupKey` (`String()`, `Sealed()`) and `messaging.WireDedupKey(id string)
   (DedupKey, error)`, which applies the unchanged `^[A-Za-z0-9_-]{1,128}$` grammar.
@@ -8971,6 +8974,43 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   amendment · `messaging/dedup_key.go` (`DedupKey`, `WireDedupKey`, `ValidateDedupKey`,
   `Metadata.DedupKey`), `inbox/inbox.go`, `app/module.go` (`InboxProcessor`),
   `inbox/testing/mock_inbox.go` · closes the exposure [C64.11] recorded
+
+### [C65.11] a sealed DedupKey is bound by equality to the delivery that minted it · breaking · when: match
+
+- detect: nothing in your build flags this — no signature moves. `git grep -nE
+  'ProcessOnce\(' -- '*.go'` finds every ledger call; a hit that does not pass
+  `meta.DedupKey()` from the CURRENT sealed delivery is in the population. A handler
+  that stashes a `DedupKey` in a field, a cache, or a variable that outlives the
+  delivery and reuses it on a later one matches.
+- scope: `messaging.ValidateDedupKey(ctx, key DedupKey)` still refuses the zero key
+  and still admits every wire key under either context. A sealed key is now admitted
+  only when `ctx` carries a sealed delivery key AND that key equals the one being
+  validated. The sealed consume path stores `Metadata.DedupKey()` for that delivery
+  on the handler context in place of the boolean `[C65.7]` stamped; `IsSealedDelivery`
+  keeps its exported signature (true when such a key is present). A sealed key
+  retained from delivery A and passed to `inbox.ProcessOnce` (or the inbox testing
+  mock) while handling delivery B is refused with an error wrapping
+  `messaging.ErrInvalidEventID`, no ledger row is written, and the handler's
+  transactional work does not run — where `[C65.7]` admitted it and recorded A's id
+  for B's work. The same refusal still fires under a plain context. Unchanged:
+  signatures on `messaging` and `inbox`; `DedupKey` comparability; persisted
+  spellings; `inbox.sealed` metric labels (still `key.Sealed()` / spelling length
+  only); the streams seal-guard and hold-queue replay (sealed types still panic at
+  stream declaration).
+- gate: match — a sealed handler retains a `DedupKey` across deliveries, or calls
+  `ProcessOnce` with a sealed key that did not come from the delivery in hand.
+  no-match — every sealed `ProcessOnce` call passes the current delivery's
+  `meta.DedupKey()`.
+- apply: pass `meta.DedupKey()` from the delivery being handled; do not retain a
+  sealed key past that handler. Derive background work from the handler's context
+  (`context.WithoutCancel(ctx)`, never `context.Background()`) so the bound key
+  travels with it. A wire key you compose with `WireDedupKey` is still unbound.
+- verify: `go test ./messaging/ ./inbox/ ./inbox/testing/ -count=1`  # then confirm a
+  sealed handler that reuses another delivery's key nacks with `ErrInvalidEventID`
+  and writes no inbox row
+- ref: gaborage/go-bricks#1634 · [ADR-097](adr_097_sealed_amqp_messages.md) 2026-09-16
+  amendment · `messaging/dedup_key.go` (`ValidateDedupKey`, `IsSealedDelivery`),
+  `messaging/sealed_consumer.go` · closes the remaining gap [C65.7] recorded
 
 ### [C65.8] an unwrapped 2xx JOSE response is refused instead of passed through · breaking · when: match
 

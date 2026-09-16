@@ -129,8 +129,10 @@ func (h *sealedHandler[T]) Handle(ctx context.Context, delivery *amqp.Delivery) 
 	}
 
 	sealed := SealedEnvelope(env)
-	ctx = context.WithValue(ctx, sealedDeliveryKey{}, true)
-	return h.fn(ctx, payload, Metadata{delivery: delivery, sealed: &sealed})
+	meta := Metadata{delivery: delivery, sealed: &sealed}
+	key, _ := meta.DedupKey() // sealed branch: never errors
+	ctx = context.WithValue(ctx, sealedDeliveryKey{}, key)
+	return h.fn(ctx, payload, meta)
 }
 
 func (h *sealedHandler[T]) EventType() string {

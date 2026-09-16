@@ -25,26 +25,33 @@ type sealedEvt struct {
 }
 
 // fakeOpener records the tid rule of every call and answers with a fixed
-// envelope or error, writing a value into out when asked.
+// envelope or error, writing a value into out when asked. envFor, when set,
+// selects the envelope from the delivery body so concurrent Handles on one
+// handler can carry distinct jtis.
 type fakeOpener struct {
-	mu    sync.Mutex
-	rules []sealruntime.TenantRule
-	env   sealruntime.Envelope
-	err   error
-	write func(out any)
+	mu     sync.Mutex
+	rules  []sealruntime.TenantRule
+	env    sealruntime.Envelope
+	envFor func(body []byte) sealruntime.Envelope
+	err    error
+	write  func(out any)
 }
 
-func (o *fakeOpener) Open(_ context.Context, _ []byte, want sealruntime.TenantRule, out any) (sealruntime.Envelope, error) {
+func (o *fakeOpener) Open(_ context.Context, body []byte, want sealruntime.TenantRule, out any) (sealruntime.Envelope, error) {
 	o.mu.Lock()
 	o.rules = append(o.rules, want)
+	env, envFor, err, write := o.env, o.envFor, o.err, o.write
 	o.mu.Unlock()
-	if o.err != nil {
-		return sealruntime.Envelope{}, o.err
+	if err != nil {
+		return sealruntime.Envelope{}, err
 	}
-	if o.write != nil {
-		o.write(out)
+	if write != nil {
+		write(out)
 	}
-	return o.env, nil
+	if envFor != nil {
+		return envFor(body), nil
+	}
+	return env, nil
 }
 
 type consumerSpec struct{}
@@ -358,15 +365,58 @@ func TestSealedHandlerTenantRuleMatrix(t *testing.T) {
 	}
 }
 
-// TestValidateDedupKeyJudgesProvenanceNotSpelling varies the key's provenance
-// against the delivery context. The zero key is refused everywhere; a sealed key
-// is refused outside a sealed delivery; a wire key passes under either context.
-func TestValidateDedupKeyJudgesProvenanceNotSpelling(t *testing.T) {
+func sealedTestEnv(jti string) sealruntime.Envelope {
+	return sealruntime.Envelope{
+		JTI: jti, IssuedAt: time.Unix(1_800_000_000, 0).UTC(), EventType: "payment.authorized",
+		TenantID: "acme", SignKid: "svc-sign-v2", SignFamily: "svc-sign", EncKid: "aud-enc-v1",
+	}
+}
+
+// runSealedDoor opens one delivery through the real sealed consume door and
+// runs fn with the handler context and the DedupKey that door composed.
+func runSealedDoor(t *testing.T, jti string, fn func(ctx context.Context, key DedupKey) error) error {
+	t.Helper()
+	opener := &fakeOpener{
+		env:   sealedTestEnv(jti),
+		write: func(out any) { *out.(*sealedEvt) = sealedEvt{Card: "4111", Amount: 12} },
+	}
+	var result error
+	handler := declareSealed(t, opener, sealruntime.TenancyDisabled, false, func(ctx context.Context, _ sealedEvt, m Metadata) error {
+		key, err := m.DedupKey()
+		require.NoError(t, err)
+		result = fn(ctx, key)
+		return result
+	})
+	err := handler.Handle(t.Context(), sealedDelivery(nil))
+	require.Equal(t, result, err)
+	return result
+}
+
+func captureSealedDoor(t *testing.T, jti string) (context.Context, DedupKey) {
+	t.Helper()
+	var ctx context.Context
+	var key DedupKey
+	require.NoError(t, runSealedDoor(t, jti, func(c context.Context, k DedupKey) error {
+		ctx, key = c, k
+		return nil
+	}))
+	require.True(t, IsSealedDelivery(ctx))
+	return ctx, key
+}
+
+// TestValidateDedupKeyBindsASealedKeyToItsDelivery pins equality binding
+// through the real sealed consume door: a key minted for delivery A is refused
+// under B's context, each delivery admits its own key, a plain context still
+// refuses, and a wire key under a sealed context still passes.
+func TestValidateDedupKeyBindsASealedKeyToItsDelivery(t *testing.T) {
+	ctxA, keyA := captureSealedDoor(t, "jti-a")
+	ctxB, keyB := captureSealedDoor(t, "jti-b")
 	plain := t.Context()
-	sealedCtx := context.WithValue(plain, sealedDeliveryKey{}, true)
-	sealedKey := sealedDedupKey("svc-sign", "jti-1")
 	wireKey, err := WireDedupKey("evt-1")
 	require.NoError(t, err)
+	assert.True(t, keyA == sealedDedupKey("svc-sign", "jti-a"), "keys minted from the same inputs compare equal")
+	assert.False(t, keyA == keyB)
+	assert.False(t, IsSealedDelivery(plain), "the marker never leaks outside the handler")
 
 	cases := []struct {
 		name string
@@ -374,12 +424,14 @@ func TestValidateDedupKeyJudgesProvenanceNotSpelling(t *testing.T) {
 		key  DedupKey
 		ok   bool
 	}{
-		{"zero_key_plain_context", plain, DedupKey{}, false},
-		{"zero_key_sealed_context", sealedCtx, DedupKey{}, false},
-		{"sealed_key_sealed_context", sealedCtx, sealedKey, true},
-		{"sealed_key_plain_context", plain, sealedKey, false},
-		{"wire_key_plain_context", plain, wireKey, true},
-		{"wire_key_sealed_context", sealedCtx, wireKey, true},
+		{"a_key_under_b_context", ctxB, keyA, false},
+		{"b_key_under_b_context", ctxB, keyB, true},
+		{"a_key_under_a_context", ctxA, keyA, true},
+		{"a_key_under_plain_context", plain, keyA, false},
+		{"wire_key_under_sealed_context", ctxB, wireKey, true},
+		{"wire_key_under_plain_context", plain, wireKey, true},
+		{"empty_key_under_sealed_context", ctxB, DedupKey{}, false},
+		{"empty_key_under_plain_context", plain, DedupKey{}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -389,7 +441,59 @@ func TestValidateDedupKeyJudgesProvenanceNotSpelling(t *testing.T) {
 				return
 			}
 			require.ErrorIs(t, err, ErrInvalidEventID)
-			assert.NotContains(t, err.Error(), "jti-1", "the error never carries the key")
+			assert.NotContains(t, err.Error(), "jti-a", "the error never carries the key")
+			assert.NotContains(t, err.Error(), "jti-b", "the error never carries the key")
 		})
+	}
+}
+
+// TestValidateDedupKeyConcurrentDeliveriesAdmitOnlyTheirOwnKey runs two
+// deliveries on one sealed handler at the same time: each worker admits its
+// own key and refuses the other's.
+func TestValidateDedupKeyConcurrentDeliveriesAdmitOnlyTheirOwnKey(t *testing.T) {
+	const jtiA, jtiB = "jti-a", "jti-b"
+	opener := &fakeOpener{
+		envFor: func(body []byte) sealruntime.Envelope { return sealedTestEnv(string(body)) },
+		write:  func(out any) { *out.(*sealedEvt) = sealedEvt{Card: "4111", Amount: 12} },
+	}
+	handler := declareSealed(t, opener, sealruntime.TenancyDisabled, false, func(ctx context.Context, _ sealedEvt, m Metadata) error {
+		own, err := m.DedupKey()
+		if err != nil {
+			return err
+		}
+		if !IsSealedDelivery(ctx) {
+			return errors.New("expected a sealed delivery context")
+		}
+		if err := ValidateDedupKey(ctx, own); err != nil {
+			return err
+		}
+		otherJTI := jtiB
+		if own == sealedDedupKey("svc-sign", jtiB) {
+			otherJTI = jtiA
+		}
+		if err := ValidateDedupKey(ctx, sealedDedupKey("svc-sign", otherJTI)); err == nil {
+			return errors.New("peer delivery's key was admitted")
+		} else if !errors.Is(err, ErrInvalidEventID) {
+			return err
+		}
+		return nil
+	})
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for _, jti := range []string{jtiA, jtiB} {
+		wg.Add(1)
+		go func(jti string) {
+			defer wg.Done()
+			<-start
+			errs <- handler.Handle(t.Context(), &amqp.Delivery{Body: []byte(jti), Type: "payment.authorized"})
+		}(jti)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		assert.NoError(t, err)
 	}
 }

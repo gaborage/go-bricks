@@ -33,11 +33,13 @@ type Inbox struct {
 //
 // key comes from messaging.Metadata.DedupKey or messaging.WireDedupKey; the
 // ledger row carries key.String(). messaging.ValidateDedupKey runs BEFORE the
-// ledger: the zero DedupKey, and a Sealed key under a context the sealed typed
-// door did not mark (messaging.IsSealedDelivery), are refused with an error
-// wrapping messaging.ErrInvalidEventID and no row is written. Only the sealed
-// door mints a Sealed key, so no string a publisher or consumer writes can
-// occupy a sealed message's ledger row.
+// ledger: the zero DedupKey, a Sealed key under a context the sealed typed
+// door did not mark (messaging.IsSealedDelivery), and a Sealed key that does
+// not equal the key stored on that delivery's context, are refused with an
+// error wrapping messaging.ErrInvalidEventID and no row is written. Only the
+// sealed door mints a Sealed key, so no string a publisher or consumer writes
+// can occupy a sealed message's ledger row, and a key retained from another
+// sealed delivery cannot occupy this one's.
 func (i *Inbox) ProcessOnce(ctx context.Context, key messaging.DedupKey, fn func(ctx context.Context, tx dbtypes.Tx) error) error {
 	if err := messaging.ValidateDedupKey(ctx, key); err != nil {
 		return fmt.Errorf("inbox: %w", err)

@@ -87,36 +87,52 @@ func sealedDedupKey(family, jti string) DedupKey {
 }
 
 // sealedDeliveryKey marks a handler context as running under the sealed typed
-// door. Only the sealed handler sets it.
+// door. Only the sealed handler sets it, and the value is that delivery's own
+// DedupKey — equality at the ledger door binds a sealed key to the delivery
+// that minted it.
 type sealedDeliveryKey struct{}
+
+// sealedKeyFromDelivery reports the DedupKey the sealed typed door stored on
+// ctx, if any. A boolean leftover, a wire key, or a missing value is not a
+// sealed delivery.
+func sealedKeyFromDelivery(ctx context.Context) (DedupKey, bool) {
+	key, ok := ctx.Value(sealedDeliveryKey{}).(DedupKey)
+	return key, ok && key.Sealed()
+}
 
 // IsSealedDelivery reports whether ctx belongs to a delivery the sealed typed
 // door opened — the framework's own marker, unreachable from a header or from
-// consumer code. The ledger door cross-checks a Sealed DedupKey against it.
+// consumer code. True when the context carries that delivery's sealed DedupKey.
+// The ledger door cross-checks a Sealed DedupKey against it by equality.
 //
 // The marker travels with the handler's context: a handler that calls
 // inbox.ProcessOnce from a goroutine or with a context NOT derived from the one
 // it was handed (context.Background() instead of context.WithoutCancel(ctx))
 // loses it and gets ErrInvalidEventID — fail closed. Derive the context.
 func IsSealedDelivery(ctx context.Context) bool {
-	marked, _ := ctx.Value(sealedDeliveryKey{}).(bool)
-	return marked
+	_, ok := sealedKeyFromDelivery(ctx)
+	return ok
 }
 
 // ValidateDedupKey checks a key at the ledger door. Admission is by the key's
 // provenance, not its spelling: the zero DedupKey is refused, and a Sealed key
-// is refused under a context IsSealedDelivery does not mark. Only the sealed
-// branch of Metadata.DedupKey mints a Sealed key, so a caller can only hold its
-// own delivery's; the context check fails closed when that correct key is used
-// from somewhere that is not the sealed delivery (a detached goroutine, say),
-// turning a plumbing mistake into a refusal rather than a silent ledger write.
-// A wire key passes under either context; its grammar ran when WireDedupKey
-// built it. Both refusals wrap ErrInvalidEventID and never carry the key.
+// is admitted only when ctx carries a sealed delivery key AND that key equals
+// the one being validated. A key retained from delivery A is therefore refused
+// while handling delivery B, as is a sealed key under a plain context. Only the
+// sealed branch of Metadata.DedupKey mints a Sealed key, so a caller can only
+// hold a key some sealed delivery composed; the equality check binds it to the
+// one in hand. A wire key passes under either context; its grammar ran when
+// WireDedupKey built it. Both refusals wrap ErrInvalidEventID and never carry
+// the key.
 func ValidateDedupKey(ctx context.Context, key DedupKey) error {
 	if key.String() == "" {
 		return fmt.Errorf("%w: zero DedupKey", ErrInvalidEventID)
 	}
-	if key.Sealed() && !IsSealedDelivery(ctx) {
+	if !key.Sealed() {
+		return nil
+	}
+	bound, ok := sealedKeyFromDelivery(ctx)
+	if !ok || bound != key {
 		return fmt.Errorf("%w: sealed dedup key outside a sealed delivery", ErrInvalidEventID)
 	}
 	return nil

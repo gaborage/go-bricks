@@ -59,7 +59,8 @@ func (m *MockInbox) MarkAlreadyProcessed(eventID string) *MockInbox {
 
 // ProcessOnce implements app.InboxProcessor. It runs messaging.ValidateDedupKey
 // first and wraps its error as `inbox: %w`, exactly like Inbox.ProcessOnce — the
-// zero DedupKey, and a sealed key outside a sealed delivery, are refused before
+// zero DedupKey, a sealed key outside a sealed delivery, and a sealed key that
+// does not equal the key stored on that delivery's context, are refused before
 // anything is recorded — then records key.String() and runs fn (with a nil tx)
 // exactly once per key, unless an error is configured or the key was already
 // processed.
