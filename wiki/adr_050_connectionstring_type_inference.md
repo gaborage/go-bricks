@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-08-05
 
-> **Amended (2026-09-16)** — clause `[C65.11]` closes the `PGSSL*` residual `[C65.2]`
+> **Amended (2026-09-16)** — clause `[C66.1]` closes the `PGSSL*` residual `[C65.2]`
 > left open. `validatePostgreSQLConnectionString` merges `PGSSLMODE`,
 > `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY` and `PGSSLNEGOTIATION` under the DSN
 > with pgx's own precedence: a present DSN key, empty included, shadows the
@@ -11,7 +11,7 @@
 > `PGHOST`) is a unix-socket path and that merged claim is TLS, rule 2 refuses
 > and the Action names the source that carried it. `PGSERVICE`, `service=` and
 > service files remain unconsulted (gaborage/go-bricks#1644). See
-> [migrations.md](migrations.md) `[C65.11]`.
+> [migrations.md](migrations.md) `[C66.1]`.
 >
 > **Amended (2026-09-13)** — two clauses, `[C65.3]` (inference widening) and `[C65.2]`
 > (connection-string host rules):
@@ -51,7 +51,7 @@
 > unix-socket entry while the DSN claims TLS. `PGHOST` is honored only when the DSN carries
 > no `host` key at all: an empty `host=` key still shadows it, narrower than "any source
 > names a value" — pgx's own precedence, not this amendment's choice. The five `PGSSL*`
-> variables are judged the same way, per key, by `[C65.11]`. `PGSERVICE`, `service=`
+> variables are judged the same way, per key, by `[C66.1]`. `PGSERVICE`, `service=`
 > and service files are never consulted, in either direction; that gap is #1644.
 > `sslnegotiation=direct` counts as a TLS claim even paired with `sslmode=disable`/`allow`,
 > where pgx itself would connect in plaintext and libpq refuses the combination — a claim
@@ -61,7 +61,7 @@
 > refuse what pgx accepts.
 >
 > **What the two clauses leave open.** The `PGSSL*` residual tracked as
-> gaborage/go-bricks#1632 is closed by the 2026-09-16 amendment (`[C65.11]`).
+> gaborage/go-bricks#1632 is closed by the 2026-09-16 amendment (`[C66.1]`).
 > A `connectionstring` matching no URI prefix that the keyword-form test does
 > not claim — it does not tokenize, or its keys are not libpq keyword names, as
 > an Oracle TNS descriptor's are not — stays untyped. It is then refused as
@@ -73,7 +73,7 @@
 > can still supply a socket host this rule never sees (#1644). The 2026-09-07
 > amendment's tracked fail-open (a host-less raw DSN, #1551) is closed by these
 > two clauses. See [migrations.md](migrations.md) `[C65.3]`, `[C65.2]` and
-> `[C65.11]`, gaborage/go-bricks#1551.
+> `[C66.1]`, gaborage/go-bricks#1551.
 >
 > **Amended (2026-09-07):** The connect seam's "identity is the dial's job"
 > posture (stated in the 2026-08-14 amendment below and in Consequences, "the

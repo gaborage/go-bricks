@@ -68,7 +68,7 @@ var PostgresDSNHostCases = []PostgresDSNHostCase{
 	{Name: "keyword_unknown_key_is_a_runtime_param", DSN: "foo=1 host=h user=u", Host: "h", HostSet: true},
 }
 
-// PostgresSSLEnvTLSCase is one DSN+env combination the [C65.11] rule and pgx
+// PostgresSSLEnvTLSCase is one DSN+env combination the [C66.1] rule and pgx
 // ParseConfig must agree on: a socket host with a TLS claim is refused here and
 // yields TLSConfig == nil from pgx; a TCP host with a claim pgx honors yields a
 // non-nil TLSConfig. Env entries are applied with t.Setenv on a hermetic PG* env.

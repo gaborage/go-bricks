@@ -688,7 +688,7 @@ func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 }
 
 // validatePostgreSQLConnectionString refuses a DSN on the two axes the typed fields above are
-// refused on ([C65.2], widened by [C65.11]): a resolved host that names nothing, and a
+// refused on ([C65.2], widened by [C66.1]): a resolved host that names nothing, and a
 // unix-socket host under a TLS claim. An untokenizable DSN passes through — this seam must
 // never refuse what pgx accepts. PGHOST and the five PGSSL* variables are consulted only
 // when the DSN names no matching key at all; an empty DSN key still shadows env, mirroring

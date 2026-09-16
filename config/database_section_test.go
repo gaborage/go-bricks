@@ -3544,7 +3544,7 @@ func TestApplyDatabasePoolDefaultsRefusesTLSClaimOnSocketConnectionString(t *tes
 	}
 }
 
-// TestApplyDatabasePoolDefaultsMatchesSharedTLSEnvFixtures pins [C65.11] against
+// TestApplyDatabasePoolDefaultsMatchesSharedTLSEnvFixtures pins [C66.1] against
 // testutil.PostgresSSLEnvTLSCases: a socket DSN whose TLS claim arrives through a PGSSL*
 // variable is refused by rule 2, naming that variable; DSN keys (empty included) still
 // shadow env; empty variables are ignored; a TCP host with a claiming variable is accepted.
