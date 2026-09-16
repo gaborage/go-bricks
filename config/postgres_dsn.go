@@ -20,6 +20,8 @@ const (
 	pgDSNSSLCert        = "sslcert"
 	pgDSNSSLKey         = "sslkey"
 	pgDSNSSLNegotiation = "sslnegotiation"
+	// pgDSNSSLAlias is the URI-only spelling pgx rewrites into sslmode=require.
+	pgDSNSSLAlias = "ssl"
 )
 
 // pgSSLEnvKeys is the production table of TLS-claim env names. Hermetic test
@@ -52,6 +54,18 @@ type pgDSNScan struct {
 	hostSet bool
 	host    string
 	tls     pgDSNTLSKeys
+	// sslAlias records that sslmode was written by the ssl=true rewrite rather than by the DSN.
+	sslAlias bool
+}
+
+// claimSource is the key the DSN TEXT carries for a merged TLS key, so the refusal
+// names something the operator can find in the string: a sslmode pgx rewrote from
+// the URI ssl=true alias is reported as ssl.
+func (s *pgDSNScan) claimSource(dsnKey string) string {
+	if dsnKey == pgDSNSSLMode && s.sslAlias {
+		return pgDSNSSLAlias
+	}
+	return dsnKey
 }
 
 func pgDSNSettingOf(settings map[string]string, key string) pgDSNSetting {
@@ -115,9 +129,9 @@ func scanPostgresDSN(cs string) (pgDSNScan, bool) {
 		return pgDSNScan{}, false
 	}
 	var settings map[string]string
-	var ok bool
+	var aliased, ok bool
 	if body, isURI := pgURIBody(cs); isURI {
-		settings, ok = pgURISettings(body)
+		settings, aliased, ok = pgURISettings(body)
 	} else {
 		settings, ok = pgKeywordSettings(cs)
 	}
@@ -126,9 +140,10 @@ func scanPostgresDSN(cs string) (pgDSNScan, bool) {
 	}
 	host, hostSet := settings["host"]
 	return pgDSNScan{
-		hostSet: hostSet,
-		host:    host,
-		tls:     pgDSNTLSKeysFrom(settings),
+		hostSet:  hostSet,
+		host:     host,
+		tls:      pgDSNTLSKeysFrom(settings),
+		sslAlias: aliased,
 	}, true
 }
 
@@ -141,26 +156,27 @@ func pgURIBody(cs string) (string, bool) {
 }
 
 // pgURISettings mirrors pgx v5 pgconn parseURLSettings for the host and query settings.
-func pgURISettings(p string) (map[string]string, bool) {
-	settings := make(map[string]string)
+func pgURISettings(p string) (settings map[string]string, aliased, ok bool) {
+	settings = make(map[string]string)
 	if i := strings.IndexAny(p, "@/"); i >= 0 && p[i] == '@' {
 		p = p[i+1:]
 	}
 	hosts, p, ok := pgURIHosts(p)
 	if !ok {
-		return nil, false
+		return nil, false, false
 	}
 	if hosts != "" {
 		host, ok := pgURIDecode(hosts)
 		if !ok {
-			return nil, false
+			return nil, false, false
 		}
 		settings["host"] = host
 	}
 	if i := strings.IndexByte(p, '?'); i >= 0 {
-		return settings, pgURIQuery(p[i+1:], settings)
+		aliased, ok = pgURIQuery(p[i+1:], settings)
+		return settings, aliased, ok
 	}
-	return settings, true
+	return settings, false, true
 }
 
 // pgURIHosts returns the raw comma-joined host list of a URI authority and the unread rest.
@@ -202,32 +218,33 @@ func pgIndexAnyOrLen(s, chars string) int {
 }
 
 // pgURIQuery mirrors pgx v5 pgconn parseURLQueryParams.
-func pgURIQuery(params string, settings map[string]string) bool {
+func pgURIQuery(params string, settings map[string]string) (aliased, ok bool) {
 	sslWasLast := false
 	for params != "" {
 		var pair string
 		pair, params, _ = strings.Cut(params, "&")
 		rawKey, rawValue, found := strings.Cut(pair, "=")
 		if !found || strings.Contains(rawValue, "=") {
-			return false
+			return false, false
 		}
 		key, keyOK := pgURIDecode(rawKey)
 		value, valueOK := pgURIDecode(rawValue)
 		if !keyOK || !valueOK {
-			return false
+			return false, false
 		}
 		switch key {
-		case "ssl":
+		case pgDSNSSLAlias:
 			sslWasLast = true
 		case pgDSNSSLMode:
 			sslWasLast = false
 		}
 		settings[key] = value
 	}
-	if sslWasLast && settings["ssl"] == "true" {
+	if sslWasLast && settings[pgDSNSSLAlias] == "true" {
 		settings[pgDSNSSLMode] = sslModeRequire
+		return true, true
 	}
-	return true
+	return false, true
 }
 
 // pgURIDecode mirrors pgx v5 pgconn uriDecode.

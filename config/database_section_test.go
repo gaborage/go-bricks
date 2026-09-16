@@ -3544,6 +3544,19 @@ func TestApplyDatabasePoolDefaultsRefusesTLSClaimOnSocketConnectionString(t *tes
 	}
 }
 
+// TestApplyDatabasePoolDefaultsNamesSSLAliasAsSocketTLSClaimSource pins the source the
+// refusal names for a URI that spells its claim `ssl=true`: pgx rewrites that alias into
+// sslmode=require, but the operator's DSN carries no sslmode to drop, so rule 2 must name
+// the key the text actually has.
+func TestApplyDatabasePoolDefaultsNamesSSLAliasAsSocketTLSClaimSource(t *testing.T) {
+	hermeticPGEnv(t)
+
+	cfgErr := assertConnStringRefusal(t, "postgres://%2Fvar%2Frun%2Fpostgresql/db?ssl=true", errCategoryInvalid)
+
+	assert.Contains(t, cfgErr.Action, "this one arrived through ssl.")
+	assert.NotContains(t, cfgErr.Action, "this one arrived through sslmode")
+}
+
 // TestApplyDatabasePoolDefaultsMatchesSharedTLSEnvFixtures pins [C66.1] against
 // testutil.PostgresSSLEnvTLSCases: a socket DSN whose TLS claim arrives through a PGSSL*
 // variable is refused by rule 2, naming that variable; DSN keys (empty included) still

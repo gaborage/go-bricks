@@ -752,7 +752,7 @@ func effectivePostgresTLSClaim(scan *pgDSNScan) (claims bool, source string) {
 		st := scan.tls.setting(k.dsn)
 		var value, from string
 		if st.set {
-			value, from = st.value, k.dsn
+			value, from = st.value, scan.claimSource(k.dsn)
 		} else if env := os.Getenv(k.env); env != "" {
 			value, from = env, k.env
 		}
