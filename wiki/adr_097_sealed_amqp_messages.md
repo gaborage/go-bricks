@@ -26,7 +26,7 @@
 > wrapping `ErrInvalidEventID` and never carrying the key. Wire keys stay unbound. The streams
 > seal-guard and hold-queue replay are untouched; lifting that guard later must re-establish
 > the context key on replay. This closes the remaining gap the 2026-09-12 amendment recorded.
-> This amendment's change is `[C65.12]`, a runtime refusal: no signature moves.
+> This amendment's change is `[C66.2]`, a runtime refusal: no signature moves.
 >
 > **Amended (2026-09-12, #1409):** a byte-level opener, `jose/sealed.OpenDocument`, is the
 > type-free twin of `Open`: it shares `Open`'s rule chain (`openCore`, rules 1–10) but is
@@ -61,7 +61,7 @@
 > later one is handled. It fails closed when a sealed key is used outside the sealed delivery
 > altogether (a detached goroutine), turning a plumbing mistake into a refusal rather than a silent
 > ledger write. Binding the key to its originating delivery by equality is the 2026-09-16
-> amendment ([C65.12]). The §4 `^[A-Za-z0-9_-]{1,128}$`
+> amendment ([C66.2]). The §4 `^[A-Za-z0-9_-]{1,128}$`
 > grammar no longer runs at the ledger door: a wire key is grammar-checked exactly once, at
 > construction inside `WireDedupKey`. A sealed key is well formed because the seal layer validates
 > both halves before `Metadata.DedupKey()` composes them — the signed `jti` must match that same
