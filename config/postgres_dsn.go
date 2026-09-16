@@ -168,8 +168,8 @@ func pgURISettings(p string) (settings map[string]string, aliasOwnsClaim, ok boo
 		return nil, false, false
 	}
 	if hosts != "" {
-		host, ok := pgURIDecode(hosts)
-		if !ok {
+		host, decoded := pgURIDecode(hosts)
+		if !decoded {
 			return nil, false, false
 		}
 		settings["host"] = host
