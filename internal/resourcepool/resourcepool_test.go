@@ -1119,7 +1119,6 @@ func TestPoolRemoveReleasesGenerationEntries(t *testing.T) {
 
 			assert.Equal(t, 0, genLen(p), "every settled Remove releases its generation entry")
 			require.NoError(t, p.Close())
-			assert.Equal(t, 0, genLen(p), "Close leaves no generation entry behind")
 		})
 	}
 }
@@ -1154,6 +1153,42 @@ func TestPoolRemoveKeepsStaleCreateDetachedAfterGenerationRelease(t *testing.T) 
 
 	got.rel()
 	assert.Equal(t, 1, tr.count(inFlightOldID), "the detached create closed at its final release")
+}
+
+// TestPoolCloseDuringInvalidatedCreateReleasesGeneration pins the closed branch of installCreated,
+// the one install path that returns before touching entries or LRU: a create Remove invalidated
+// and Close then overtook must STILL end its create, draining inFlight[key] and the generation
+// entry Remove left for it, and close the orphaned instance exactly once. Close itself never walks
+// those maps, so this parked create is the only thing that can drain them after Close.
+func TestPoolCloseDuringInvalidatedCreateReleasesGeneration(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+
+	blocked := testutil.NewBlockedCreate(t)
+	gotCh := make(chan leaseResult, 1)
+	go func() {
+		v, rel, err := p.GetOrCreate(context.Background(), keyOne, gatedConnector(inFlightOldID, blocked))
+		gotCh <- leaseResult{v, rel, err}
+	}()
+	<-blocked.Started
+
+	_, shouldClose := p.Remove(keyOne)
+	require.False(t, shouldClose, "an in-flight-only Remove has no cached value to close")
+	require.Equal(t, 1, genLen(p), "the invalidated create still holds its generation across Close")
+
+	// Close does not join in-flight creates, so it returns while this one is still parked.
+	require.NoError(t, p.Close())
+	require.Equal(t, 1, genLen(p), "Close does not drain the generation of a create still in flight")
+
+	blocked.Release()
+	got := <-gotCh
+	require.ErrorIs(t, got.err, ErrPoolClosed)
+	assert.Nil(t, got.rel, "a failed GetOrCreate hands back no release")
+
+	assert.Equal(t, 0, genLen(p), "the closed install path still ends its create and releases the generation")
+	_, ok := p.inFlight[keyOne]
+	assert.False(t, ok, "the closed install path still drops inFlight[key]")
+	assert.Equal(t, 1, tr.count(inFlightOldID), "the orphaned instance closed exactly once")
 }
 
 // TestPoolRemoveCountsRemovals pins that Removals counts every Remove that detached a cached
