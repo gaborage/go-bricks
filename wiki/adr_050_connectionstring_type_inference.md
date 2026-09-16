@@ -9,10 +9,12 @@
 > with pgx's own precedence: a present DSN key, empty included, shadows the
 > variable; an empty variable is ignored. When the effective host (DSN, else
 > `PGHOST`) is a unix-socket path and that merged claim is TLS, rule 2 refuses
-> and the Action names the source that carried it, with the exits that close
-> that arm: an env-sourced claim is unset or shadowed by a non-claiming DSN
+> and the Action names every key that claims, each with the exits that close
+> its arm: an env-sourced claim is unset or shadowed by a non-claiming DSN
 > key — never by dropping one, since the rule reached the variable only
-> because no such key was there. `PGSERVICE`, `service=` and
+> because no such key was there. Since non-empty material claims as surely as
+> a mode, several can be in effect and each refuses alone, so naming only the
+> first would send the operator round the loop again. `PGSERVICE`, `service=` and
 > service files remain unconsulted (gaborage/go-bricks#1644). See
 > [migrations.md](migrations.md) `[C66.1]`.
 >
