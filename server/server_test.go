@@ -391,6 +391,58 @@ func TestServerReadyChClosesOnlyAfterHTTPServerStored(t *testing.T) {
 	assert.NotPanics(t, func() { _ = srv.onBeforeServe(&http.Server{}) }, "a serve after Shutdown must not close ReadyCh again")
 }
 
+// TestServerShutdownBetweenBindAndServeVetoesStart pins the stopping latch:
+// Shutdown after the listener binds and before the serve callback must make
+// onBeforeServe return http.ErrServerClosed and leave ReadyCh open.
+func TestServerShutdownBetweenBindAndServeVetoesStart(t *testing.T) {
+	srv := newTestServer("", "", "")
+	addr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 43211}
+	srv.onListenerBound(addr)
+	require.NoError(t, srv.Shutdown(context.Background()))
+
+	err := srv.onBeforeServe(&http.Server{})
+	require.ErrorIs(t, err, http.ErrServerClosed)
+	select {
+	case <-srv.ReadyCh():
+		t.Fatal("ReadyCh closed after a vetoed start")
+	default:
+	}
+}
+
+// TestServerShutdownAfterBeforeServeStopsStoredServer pins Shutdown after
+// the serve callback has stored the *http.Server: the latch is set and the
+// stored server is shut down, and ReadyCh stays closed from the successful store.
+func TestServerShutdownAfterBeforeServeStopsStoredServer(t *testing.T) {
+	srv := newTestServer("", "", "")
+	httpSrv := &http.Server{}
+	require.NoError(t, srv.onBeforeServe(httpSrv))
+	select {
+	case <-srv.ReadyCh():
+	default:
+		t.Fatal("ReadyCh still open after a successful store")
+	}
+
+	require.NoError(t, srv.Shutdown(context.Background()))
+	assert.Same(t, httpSrv, srv.httpServer.Load())
+	assert.True(t, srv.stopping.Load())
+}
+
+// TestServerShutdownBeforeStartRefusesStart pins Shutdown-before-Start: Start
+// returns http.ErrServerClosed without binding or closing ReadyCh.
+func TestServerShutdownBeforeStartRefusesStart(t *testing.T) {
+	srv := newTestServer("", "", "")
+	require.NoError(t, srv.Shutdown(context.Background()))
+
+	err := srv.Start()
+	require.ErrorIs(t, err, http.ErrServerClosed)
+	assert.Nil(t, srv.BoundAddr())
+	select {
+	case <-srv.ReadyCh():
+		t.Fatal("ReadyCh closed after a vetoed start")
+	default:
+	}
+}
+
 // TestServerOnBeforeServeAppliesConfiguredTimeouts pins the timeouts Start
 // applies to the http.Server, which StartConfig does not expose.
 func TestServerOnBeforeServeAppliesConfiguredTimeouts(t *testing.T) {
