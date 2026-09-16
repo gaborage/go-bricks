@@ -320,6 +320,18 @@ func (c *Config) IsCacheCritical() bool {
 	return c.Cache.Critical
 }
 
+// IsMessagingConsumersCritical reports whether a consumer that has given up re-subscribing
+// should fail /ready with 503. Opt-in and absent-means-false, as cache.critical is after
+// ADR-094, but it decides more than criticality: an absent key — and a nil receiver — leaves
+// the consumer arm out of the probe entirely, so a consumer that gave up reads healthy rather
+// than unhealthy-but-advisory. See wiki/adr_114_critical_consumer_readiness.md.
+func (c *Config) IsMessagingConsumersCritical() bool {
+	if c == nil {
+		return false
+	}
+	return c.Messaging.Consumers.Critical
+}
+
 // tryLoadYAMLFile attempts to load a YAML configuration file with both .yaml and .yml extensions.
 // It tries .yaml first, then falls back to .yml if .yaml is not found.
 // Both extensions are optional - no error is returned if neither file exists.

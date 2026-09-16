@@ -58,13 +58,17 @@ func createTestMessagingManagerWithNotReadyClient(t *testing.T) *messaging.Manag
 	// Create a mock client that reports not ready
 	mockClient := testmocks.NewMockAMQPClient()
 	mockClient.SetReady(false)
+	mockClient.ExpectClose(nil) // the manager's own Close, below, reaches the pooled client
 
-	return messaging.NewMessagingManager(resourceSource, log,
+	manager := messaging.NewMessagingManager(resourceSource, log,
 		messaging.ManagerOptions{MaxPublishers: 1, IdleTTL: time.Hour},
 		func(string, logger.Logger) messaging.AMQPClient {
 			return mockClient
 		},
 	)
+	t.Cleanup(func() { _ = manager.Close() }) // stop the idle-publisher sweep this manager starts
+
+	return manager
 }
 
 // cacheManagerServing returns a cache manager whose connector always serves c, registering

@@ -73,21 +73,30 @@ func newFailingConsumerManager(t *testing.T, log logger.Logger, source messaging
 		})
 }
 
+// The coordinates of the one consumer declarationsWithConsumer declares. Named because the
+// readiness tests assert they never reach the unauthenticated /ready body.
+const (
+	declaredQueue     = "orders.queue"
+	declaredConsumer  = "orders-consumer"
+	declaredEventType = "order.created"
+)
+
 // noopMessageHandler is a real (non-documentation-only) consumer handler, so the
 // fixture below models a service that actually consumes.
 type noopMessageHandler struct{}
 
 func (noopMessageHandler) Handle(context.Context, *amqp.Delivery) error { return nil }
-func (noopMessageHandler) EventType() string                            { return "order.created" }
+func (noopMessageHandler) EventType() string                            { return declaredEventType }
 
 // declarationsWithConsumer builds the declaration set of a service that actually
 // consumes — the only population whose failed bootstrap aborts startup.
 func declarationsWithConsumer() *messaging.Declarations {
 	decls := messaging.NewDeclarations()
+	decls.RegisterQueue(&messaging.QueueDeclaration{Name: declaredQueue})
 	decls.RegisterConsumer(&messaging.ConsumerDeclaration{
-		Queue:     "orders.queue",
-		Consumer:  "orders-consumer",
-		EventType: "order.created",
+		Queue:     declaredQueue,
+		Consumer:  declaredConsumer,
+		EventType: declaredEventType,
 		Handler:   noopMessageHandler{},
 	})
 	return decls
