@@ -1661,3 +1661,39 @@ func TestMessagingManagerConsumerStatesCarryTheManagerKey(t *testing.T) {
 	}
 	assert.ElementsMatch(t, []string{tenant1ID, tenant2ID}, keys)
 }
+
+// TestMessagingManagerAppliesTheConsumerResubscribeDelay pins that the option reaches
+// the registries the manager builds. At the default pace exhausting a re-subscribe
+// streak takes tens of seconds of jittered backoff, so a streak that completes inside
+// this test's budget can only come from the configured delay.
+func TestMessagingManagerAppliesTheConsumerResubscribeDelay(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New("error", false)
+
+	client, deliveries := newOutageClient()
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		log,
+		ManagerOptions{MaxPublishers: 1, IdleTTL: time.Minute, ConsumerResubscribeDelay: time.Millisecond},
+		func(string, logger.Logger) AMQPClient { return client },
+	)
+	defer func() { _ = manager.Close() }() // stop supervisor goroutines
+
+	decls := NewDeclarations()
+	decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
+	decls.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testQueue,
+		Consumer:  testConsumer,
+		EventType: testEventType,
+		Handler:   &countingTestHandler{},
+	})
+	require.NoError(t, manager.EnsureConsumers(ctx, testTenantID, decls))
+
+	client.setFailing(true)
+	close(deliveries)
+
+	require.Eventually(t, func() bool {
+		states := manager.ConsumerStates()
+		return len(states) == 1 && states[0].GivenUp()
+	}, 5*time.Second, 2*time.Millisecond, "the configured re-subscribe delay did not reach the registry")
+}

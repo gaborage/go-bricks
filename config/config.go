@@ -320,6 +320,17 @@ func (c *Config) IsCacheCritical() bool {
 	return c.Cache.Critical
 }
 
+// IsMessagingConsumersCritical reports whether a consumer that has given up re-subscribing
+// should fail /ready with 503. Non-critical by default, the same shape as the cache probe
+// (ADR-094): only an explicit messaging.consumers.critical=true opts in, so an absent key —
+// and a nil receiver — leaves the messaging probe on its publisher arm alone.
+func (c *Config) IsMessagingConsumersCritical() bool {
+	if c == nil {
+		return false
+	}
+	return c.Messaging.Consumers.Critical
+}
+
 // tryLoadYAMLFile attempts to load a YAML configuration file with both .yaml and .yml extensions.
 // It tries .yaml first, then falls back to .yml if .yaml is not found.
 // Both extensions are optional - no error is returned if neither file exists.

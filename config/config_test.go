@@ -1872,3 +1872,35 @@ func TestRenderDefaultRejectsANilPointer(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "keystore.secretminlength")
 }
+
+// TestIsMessagingConsumersCritical pins the knob from koanf through to the accessor the
+// readiness slot reads: absent means non-critical (ADR-094's shape, as with cache.critical),
+// an explicit true opts in, and a nil receiver answers false rather than panicking.
+func TestIsMessagingConsumersCritical(t *testing.T) {
+	t.Run("absent_is_not_critical", func(t *testing.T) {
+		clearEnvironmentVariables()
+
+		cfg, err := Load()
+
+		require.NoError(t, err)
+		assert.False(t, cfg.Messaging.Consumers.Critical)
+		assert.False(t, cfg.IsMessagingConsumersCritical(), "no key means the probe stays informational")
+	})
+
+	t.Run("explicit_true_opts_in", func(t *testing.T) {
+		clearEnvironmentVariables()
+		t.Setenv("MESSAGING_CONSUMERS_CRITICAL", "true")
+
+		cfg, err := Load()
+
+		require.NoError(t, err)
+		assert.True(t, cfg.Messaging.Consumers.Critical)
+		assert.True(t, cfg.IsMessagingConsumersCritical())
+	})
+
+	t.Run("nil_receiver_is_not_critical", func(t *testing.T) {
+		var cfg *Config
+
+		assert.False(t, cfg.IsMessagingConsumersCritical())
+	})
+}

@@ -309,7 +309,7 @@ func TestMessagingProbeNotReadyIsUnhealthyWithError(t *testing.T) {
 	got := messagingDescription(t, m, false).Run(context.Background())
 
 	assert.Equal(t, unhealthyStatus, got.Status)
-	assert.False(t, got.Critical, "messaging is never critical")
+	assert.False(t, got.Critical, "messaging is not critical without messaging.consumers.critical")
 	require.ErrorIs(t, got.Err, errPublisherNotReady)
 }
 

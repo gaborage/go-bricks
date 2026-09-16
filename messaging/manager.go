@@ -76,6 +76,9 @@ type Manager struct {
 	// manager builds so the consume side knows whether a delivery's tenant stamp
 	// is the authority for the handler's tenant.
 	tenantStamps bool
+	// consumerResubscribeDelay is ManagerOptions.ConsumerResubscribeDelay; zero leaves
+	// each registry on its own default.
+	consumerResubscribeDelay time.Duration
 }
 
 // consumerEntry represents a long-lived consumer
@@ -117,6 +120,11 @@ type ManagerOptions struct {
 	// AppName is the app.name config value stamped as the AMQP app_id property on every
 	// publish by clients created by the default factory (ADR-105). Empty stamps no app_id.
 	AppName string
+	// ConsumerResubscribeDelay is the backoff floor between a consumer's re-subscribe
+	// attempts, applied to every registry this manager builds. Zero (or negative)
+	// leaves the registry default (5s). The app never sets it: there is no config key,
+	// and the default is what a broker flap should be paced at.
+	ConsumerResubscribeDelay time.Duration
 	// TenantStamps makes consumers read the tenant stamp off each delivery and seed
 	// the handler context with it. True only under multitenant.enabled together with
 	// messaging.tenancy: shared — under per-tenant tenancy the replay key is already
@@ -173,9 +181,10 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 		pubPool: resourcepool.New[AMQPClient](opts.MaxPublishers, opts.IdleTTL, func(client AMQPClient) error {
 			return client.Close()
 		}),
-		consumers:     make(map[string]*consumerEntry),
-		replayedHashs: make(map[string]uint64),
-		tenantStamps:  opts.TenantStamps,
+		consumers:                make(map[string]*consumerEntry),
+		replayedHashs:            make(map[string]uint64),
+		tenantStamps:             opts.TenantStamps,
+		consumerResubscribeDelay: opts.ConsumerResubscribeDelay,
 	}
 
 	resourcepool.WarnIfCleanupIntervalTooLate(log, "messaging.publisher", opts.CleanupInterval, opts.IdleTTL)
@@ -301,6 +310,7 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 	// Create registry and replay declarations
 	registry := NewRegistry(client, m.logger)
 	registry.setTenantStamps(m.tenantStamps)
+	registry.setResubscribeDelay(m.consumerResubscribeDelay)
 	if err := decls.ReplayToRegistry(registry); err != nil {
 		m.closeClientOnRollback(client, key, "replay_declarations")
 		return fmt.Errorf("failed to replay messaging declarations: %w", err)

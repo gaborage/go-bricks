@@ -23,6 +23,10 @@ var (
 	// errStreamsNotOpen is the liveness error for a streams manager whose consumers or
 	// publishers are not all open.
 	errStreamsNotOpen = errors.New("stream consumers not open")
+	// errConsumerResubscribeExhausted is the liveness error for a messaging kind with a
+	// declared consumer whose supervisor has given up re-subscribing. ADR-048: the text is
+	// a fixed identifier, so no queue name can reach the unauthenticated body through it.
+	errConsumerResubscribeExhausted = errors.New("consumer re-subscribe exhausted")
 )
 
 // probeDescription is what a slot hands readiness so its kind can be judged: a fixed

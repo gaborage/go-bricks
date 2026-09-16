@@ -111,6 +111,15 @@ func (r *Registry) setTenantStamps(enabled bool) {
 	r.tenantStamps = enabled
 }
 
+// setResubscribeDelay overrides the backoff floor between re-subscribe attempts.
+// Called by the manager immediately after NewRegistry, before any consumer starts;
+// a non-positive delay leaves the default in place.
+func (r *Registry) setResubscribeDelay(delay time.Duration) {
+	if delay > 0 {
+		r.resubscribeDelay = delay
+	}
+}
+
 // ExchangeDeclaration defines an exchange to be declared
 type ExchangeDeclaration struct {
 	Name       string         // Exchange name

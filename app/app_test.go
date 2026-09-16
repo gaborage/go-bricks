@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -818,6 +819,37 @@ func TestCacheSlotCriticalityFromLoadedConfig(t *testing.T) {
 	}
 }
 
+// TestMessagingSlotCriticalityFromLoadedConfig is the messaging twin of the cache walk:
+// YAML through koanf into IsMessagingConsumersCritical into the messaging slot's
+// description — a Go struct literal cannot show that an omitted key survives the load
+// as non-critical.
+func TestMessagingSlotCriticalityFromLoadedConfig(t *testing.T) {
+	const brokerConfigured = "\nmessaging:\n  broker:\n    url: amqp://guest:guest@localhost:5672/\n"
+
+	tests := []struct {
+		name             string
+		messagingYAML    string
+		expectedCritical bool
+	}{
+		{name: "critical_omitted_is_non_critical", messagingYAML: brokerConfigured, expectedCritical: false},
+		{name: "critical_false_is_non_critical", messagingYAML: brokerConfigured + "  consumers:\n    critical: false\n", expectedCritical: false},
+		{name: "critical_true_opts_in", messagingYAML: brokerConfigured + "  consumers:\n    critical: true\n", expectedCritical: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := loadConfigFromYAML(t, minimumValidConfig+tc.messagingYAML)
+			app := &App{cfg: cfg, logger: logger.New("error", false), messagingManager: createTestMessagingManagerWithNotReadyClient(t)}
+
+			app.installSlots(slotInputs{})
+
+			status := slotDescription(t, app, componentMessaging).Run(context.Background())
+			assert.Equal(t, componentMessaging, status.Name)
+			assert.Equal(t, tc.expectedCritical, status.Critical)
+		})
+	}
+}
+
 // TestCriticalSlotDescriptionsRenderNoRawError enforces the Prober contract over
 // every kind the app actually wires, rather than kind by kind. SECURITY: readyCheck
 // renders a critical probe's failure into the unauthenticated /ready 503 body, so what
@@ -826,8 +858,12 @@ func TestCacheSlotCriticalityFromLoadedConfig(t *testing.T) {
 // error substituted in. The per-constructor tests pin the probes that exist today; this is
 // the only guard that catches a critical probe added tomorrow.
 func TestCriticalSlotDescriptionsRenderNoRawError(t *testing.T) {
-	cfg := &config.Config{Cache: config.CacheConfig{Critical: true}}
+	cfg := &config.Config{
+		Cache:     config.CacheConfig{Critical: true},
+		Messaging: config.MessagingConfig{Consumers: config.MessagingConsumersConfig{Critical: true}},
+	}
 	require.True(t, cfg.IsCacheCritical(), "the cache probe must be opted into criticality, or this test covers only the database probe")
+	require.True(t, cfg.IsMessagingConsumersCritical(), "the messaging probe must be opted in too, or its arm of this walk is vacuous")
 
 	app := &App{
 		cfg:              cfg,
@@ -867,7 +903,7 @@ func TestCriticalSlotDescriptionsRenderNoRawError(t *testing.T) {
 
 	// Without this the test would pass by iterating nothing the day every probe is made
 	// advisory — the exact change that would also silently retire the contract above.
-	require.GreaterOrEqual(t, criticalSeen, 2, "expected the database and cache probes to be critical")
+	require.GreaterOrEqual(t, criticalSeen, 3, "expected the database, cache and messaging probes to be critical")
 }
 
 func TestReadyCheckScenarios(t *testing.T) {
@@ -1073,6 +1109,23 @@ func TestReadyCheckScenarios(t *testing.T) {
 			},
 		},
 		{
+			// A service that declares no broker at all must not be held down by the consumer
+			// knob: the messaging slot describes itself as disabled, and a disabled kind has
+			// no arm to fail — the same shape cache.critical takes when the cache is absent.
+			name: "messaging_not_configured_stays_ready_when_consumers_critical",
+			prepare: func(f *testAppFixture) {
+				f.db.On(methodHealth, mock.Anything).Return(nil)
+				f.app.cfg.Messaging.Consumers.Critical = true
+				f.app.messagingManager = nil
+				f.rebuildLifecycle()
+			},
+			expectedStatus: http.StatusOK,
+			assertBody: func(t *testing.T, body map[string]any) {
+				assert.Equal(t, readyStatus, body[statusKey])
+				assert.Equal(t, disabledStatus, body[componentMessaging])
+			},
+		},
+		{
 			name: "cache_not_configured_stays_ready_when_critical",
 			prepare: func(f *testAppFixture) {
 				f.db.On(methodHealth, mock.Anything).Return(nil)
@@ -1107,6 +1160,310 @@ func TestReadyCheckScenarios(t *testing.T) {
 			fixture.db.AssertExpectations(t)
 		})
 	}
+}
+
+// consumerGiveUpAttempt mirrors messaging's unexported re-subscribe WARN threshold: the
+// attempt at which a consumer's supervisor is judged to have given up. The matrix below
+// parks one attempt short of it and then reaches it, so moving the threshold on the
+// messaging side reds these tests instead of silently moving the readiness verdict.
+const consumerGiveUpAttempt = 5
+
+const (
+	readyProbeQueue     = "ready-probe-queue"
+	readyProbeConsumer  = "ready-probe-consumer"
+	readyProbeEventType = "ready.probe"
+)
+
+// errConsumerOutage is what the fake broker answers a re-subscribe with while the outage
+// is open. It never reaches a rendered body — the probe replaces it with its own sentinel.
+var errConsumerOutage = errors.New("fake broker refused the subscription")
+
+// consumerOutageClient is app's own minimal messaging.AMQPClient. It serves one delivery
+// channel, can be put into an outage in which every re-subscribe fails, and parks inside a
+// chosen failed attempt so a test reads the failure streak AT REST instead of racing the
+// supervisor's backoff. Rebuilt here rather than exported from messaging: a package's test
+// fixtures are not API.
+type consumerOutageClient struct {
+	mu         sync.Mutex
+	ready      bool
+	failing    bool
+	deliveries chan amqp.Delivery
+	failures   int
+	parkAt     int
+	parked     chan struct{}
+	release    chan struct{}
+}
+
+func newConsumerOutageClient() *consumerOutageClient {
+	return &consumerOutageClient{
+		ready:      true,
+		deliveries: make(chan amqp.Delivery),
+		parked:     make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+}
+
+func (c *consumerOutageClient) ConsumeFromQueue(context.Context, messaging.ConsumeOptions) (<-chan amqp.Delivery, error) {
+	c.mu.Lock()
+	if !c.failing {
+		deliveries := c.deliveries
+		c.mu.Unlock()
+		return deliveries, nil
+	}
+	c.failures++
+	park := c.failures == c.parkAt
+	parked, release := c.parked, c.release
+	c.mu.Unlock()
+
+	if park {
+		close(parked)
+		<-release
+	}
+	return nil, errConsumerOutage
+}
+
+func (c *consumerOutageClient) Consume(context.Context, string) (<-chan amqp.Delivery, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.deliveries, nil
+}
+
+func (c *consumerOutageClient) Close() error { return nil }
+
+func (c *consumerOutageClient) IsReady() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ready
+}
+
+func (c *consumerOutageClient) DeclareQueue(context.Context, *messaging.QueueDeclaration) error {
+	return nil
+}
+
+func (c *consumerOutageClient) DeclareExchange(context.Context, *messaging.ExchangeDeclaration) error {
+	return nil
+}
+
+func (c *consumerOutageClient) BindQueue(context.Context, *messaging.BindingDeclaration) error {
+	return nil
+}
+
+// beginOutage closes the live delivery channel and fails every re-subscribe from then on,
+// parking inside the parkAt'th failure until releaseParked lets it return.
+func (c *consumerOutageClient) beginOutage(parkAt int) {
+	c.mu.Lock()
+	c.failing = true
+	c.parkAt = parkAt
+	deliveries := c.deliveries
+	c.mu.Unlock()
+
+	close(deliveries)
+}
+
+// endOutage lets the next re-subscribe attempt succeed, on a fresh delivery channel.
+func (c *consumerOutageClient) endOutage() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.failing = false
+	c.deliveries = make(chan amqp.Delivery)
+}
+
+func (c *consumerOutageClient) setReady(ready bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ready = ready
+}
+
+func (c *consumerOutageClient) releaseParked() { close(c.release) }
+
+// awaitParked blocks until an attempt parks, so what the assertions after it read is a
+// state the supervisor is HOLDING, not one it is passing through.
+func (c *consumerOutageClient) awaitParked(t *testing.T) {
+	t.Helper()
+
+	select {
+	case <-c.parked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no re-subscribe attempt parked")
+	}
+}
+
+// readyProbeHandler makes the probe's consumer declaration supervisable; nothing is ever
+// delivered to it in these tests.
+type readyProbeHandler struct{}
+
+func (readyProbeHandler) Handle(context.Context, *amqp.Delivery) error { return nil }
+
+func (readyProbeHandler) EventType() string { return readyProbeEventType }
+
+// messagingManagerOver builds a manager whose every client is c, paced so a full
+// re-subscribe streak completes in milliseconds instead of the default's tens of seconds.
+func messagingManagerOver(t *testing.T, cfg *config.Config, c messaging.AMQPClient) *messaging.Manager {
+	t.Helper()
+
+	manager := messaging.NewMessagingManager(config.NewTenantStore(cfg), logger.New("error", false),
+		messaging.ManagerOptions{MaxPublishers: 1, IdleTTL: time.Hour, ConsumerResubscribeDelay: time.Millisecond},
+		func(string, logger.Logger) messaging.AMQPClient { return c },
+	)
+	t.Cleanup(func() { _ = manager.Close() }) // stop the supervisor goroutines
+
+	return manager
+}
+
+// oneConsumerDeclaration is the smallest topology carrying a supervised consumer.
+func oneConsumerDeclaration() *messaging.Declarations {
+	decls := messaging.NewDeclarations()
+	decls.RegisterQueue(&messaging.QueueDeclaration{Name: readyProbeQueue})
+	decls.RegisterConsumer(&messaging.ConsumerDeclaration{
+		Queue:     readyProbeQueue,
+		Consumer:  readyProbeConsumer,
+		EventType: readyProbeEventType,
+		Handler:   readyProbeHandler{},
+	})
+	return decls
+}
+
+// withSupervisedConsumer points the fixture's app at a messaging manager serving client,
+// starts the one declared consumer on it and returns once that consumer is subscribed.
+func (f *testAppFixture) withSupervisedConsumer(t *testing.T, client messaging.AMQPClient) {
+	t.Helper()
+
+	f.app.messagingManager = messagingManagerOver(t, f.app.cfg, client)
+	f.rebuildLifecycle()
+	require.NoError(t, f.app.messagingManager.EnsureConsumers(context.Background(), "", oneConsumerDeclaration()))
+}
+
+// readyResponse runs the real /ready handler and returns its status code and decoded body.
+func (f *testAppFixture) readyResponse(t *testing.T) (code int, body map[string]any) {
+	t.Helper()
+
+	ctx, rec := f.newReadyContext()
+	require.NoError(t, f.app.readyCheck(ctx))
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+	return rec.Code, body
+}
+
+// readyStatusCode is readyResponse without the assertions, for use inside an Eventually
+// condition — require.* from that goroutine would abort the wrong test.
+func (f *testAppFixture) readyStatusCode() int {
+	ctx, rec := f.newReadyContext()
+	if err := f.app.readyCheck(ctx); err != nil {
+		return 0
+	}
+	return rec.Code
+}
+
+// awaitConsumerGaveUp waits until the declared consumer's supervisor reports it has given
+// up re-subscribing, so a test can assert on that state rather than on a delay.
+func awaitConsumerGaveUp(t *testing.T, manager *messaging.Manager) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		states := manager.ConsumerStates()
+		return len(states) == 1 && states[0].GivenUp()
+	}, 5*time.Second, 2*time.Millisecond, "the consumer never reached the give-up threshold")
+}
+
+// assertNoConsumerCoordinates enforces ADR-048 on the unauthenticated body: the probe's
+// fixed identifier reaches it, never the queue name or consumer tag the state carries.
+func assertNoConsumerCoordinates(t *testing.T, body map[string]any) {
+	t.Helper()
+
+	rendered, err := json.Marshal(body)
+	require.NoError(t, err)
+	assert.NotContains(t, string(rendered), readyProbeQueue)
+	assert.NotContains(t, string(rendered), readyProbeConsumer)
+	assert.NotContains(t, string(rendered), errConsumerOutage.Error())
+}
+
+// TestReadyTurnsRedOnlyOnceAConsumerHasGivenUpReSubscribing walks the three edges of
+// messaging.consumers.critical against the real /ready handler: a consumer in an outage
+// that is still short of the give-up threshold stays ready, the attempt that reaches the
+// threshold turns /ready 503 with the sanitized body, and a re-subscribe turns it back.
+// Each edge is read at a state the supervisor HOLDS — the fake parks inside the threshold
+// attempt — so no assertion races the backoff.
+func TestReadyTurnsRedOnlyOnceAConsumerHasGivenUpReSubscribing(t *testing.T) {
+	f := newTestAppFixture(t)
+	f.db.On(methodHealth, mock.Anything).Return(nil)
+	f.app.cfg.Messaging.Consumers.Critical = true
+
+	client := newConsumerOutageClient()
+	f.withSupervisedConsumer(t, client)
+
+	code, body := f.readyResponse(t)
+	require.Equal(t, http.StatusOK, code, "a subscribed consumer is ready")
+	require.Equal(t, healthyStatus, body[componentMessaging])
+
+	// Edge 1 — unsubscribed, one attempt short of the threshold. The supervisor is parked
+	// inside the threshold attempt, so the streak cannot advance under the assertion.
+	client.beginOutage(consumerGiveUpAttempt)
+	client.awaitParked(t)
+
+	code, body = f.readyResponse(t)
+	assert.Equal(t, http.StatusOK, code, "a consumer whose supervisor is still retrying must not fail readiness")
+	assert.Equal(t, healthyStatus, body[componentMessaging], "the intermediate state shows in the stats, not in the verdict")
+
+	// Edge 2 — the parked attempt fails, reaching the threshold.
+	client.releaseParked()
+	require.Eventually(t, func() bool {
+		return f.readyStatusCode() == http.StatusServiceUnavailable
+	}, 5*time.Second, 2*time.Millisecond, "the attempt that reached the threshold did not fail readiness")
+
+	code, body = f.readyResponse(t)
+	require.Equal(t, http.StatusServiceUnavailable, code)
+	assert.Equal(t, unhealthyStatus, body[componentMessaging])
+	assert.Equal(t, componentMessaging+" unavailable", body[errorKey])
+	assertNoConsumerCoordinates(t, body)
+
+	// Edge 3 — the outage lifts and the consumer re-subscribes.
+	client.endOutage()
+	require.Eventually(t, func() bool {
+		return f.readyStatusCode() == http.StatusOK
+	}, 5*time.Second, 2*time.Millisecond, "a re-subscribed consumer did not restore readiness")
+}
+
+// TestReadyIgnoresAGivenUpConsumerWhenTheKnobIsOff pins the shipped default: the same
+// consumer, given up for good, leaves /ready green and the messaging kind healthy while
+// messaging.consumers.critical is absent. Without this the feature could default to on and
+// every test above would still pass.
+func TestReadyIgnoresAGivenUpConsumerWhenTheKnobIsOff(t *testing.T) {
+	f := newTestAppFixture(t)
+	f.db.On(methodHealth, mock.Anything).Return(nil)
+	require.False(t, f.app.cfg.IsMessagingConsumersCritical(), "the fixture must leave the knob at its absent default")
+
+	client := newConsumerOutageClient()
+	f.withSupervisedConsumer(t, client)
+
+	client.beginOutage(0) // no park: nothing here is read mid-attempt
+	awaitConsumerGaveUp(t, f.app.messagingManager)
+
+	code, body := f.readyResponse(t)
+	assert.Equal(t, http.StatusOK, code, "the consumer arm is not folded in while the knob is off")
+	assert.Equal(t, healthyStatus, body[componentMessaging])
+}
+
+// TestReadyReportsTheConsumerArmBeforeThePublisherArm pins the order of the two arms the
+// knob makes critical. Both fail here; the probe must report the consumer outage — the
+// steady-state loss the knob exists to report — rather than the publisher flap, whose
+// error the sanitized body would hide.
+func TestReadyReportsTheConsumerArmBeforeThePublisherArm(t *testing.T) {
+	f := newTestAppFixture(t)
+	f.app.cfg.Messaging.Consumers.Critical = true
+
+	client := newConsumerOutageClient()
+	f.withSupervisedConsumer(t, client)
+
+	client.beginOutage(0)
+	awaitConsumerGaveUp(t, f.app.messagingManager)
+	client.setReady(false)
+
+	status := slotDescription(t, f.app, componentMessaging).Run(context.Background())
+
+	require.Error(t, status.Err)
+	assert.ErrorIs(t, status.Err, errConsumerResubscribeExhausted)
+	assert.NotErrorIs(t, status.Err, errPublisherNotReady)
+	assert.True(t, status.Critical, "the knob makes both arms critical at once")
 }
 
 func TestRunGracefulShutdown(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/messaging"
 )
 
 // A slot is the framework-side module that owns one resource kind's application lifecycle —
@@ -221,14 +222,18 @@ type messagingSlot struct {
 	app *App
 }
 
-// describe builds the messaging kind's description: never critical, leased through the
-// fixed "" key, live when the leased client reports ready.
+// describe builds the messaging kind's description: leased through the fixed "" key, live
+// when the leased client reports ready and, under messaging.consumers.critical, when no
+// declared consumer has given up re-subscribing. The knob decides criticality for BOTH arms
+// at once, here, once — the judge never re-derives it (ADR-066).
 func (s *messagingSlot) describe() (probeDescription, bool) {
 	m := s.app.messagingManager
 	if m == nil {
 		return disabledProbe(s.kind), true
 	}
+	consumersCritical := s.app.cfg.IsMessagingConsumersCritical()
 	return probeDescription{
+		critical:    consumersCritical,
 		perTenant:   s.app.multiTenant(),
 		publicStats: messagingPublicStats,
 		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
@@ -237,6 +242,12 @@ func (s *messagingSlot) describe() (probeDescription, bool) {
 				return nil, nil, err
 			}
 			return func(context.Context) error {
+				// Consumer arm first: a consumer that has given up is the steady-state
+				// loss the knob exists to report, while the publisher arm flaps with the
+				// broker (the profile cache.critical accepted under ADR-094).
+				if consumersCritical && anyConsumerGivenUp(m.ConsumerStates()) {
+					return errConsumerResubscribeExhausted
+				}
 				if !client.IsReady() {
 					return errPublisherNotReady
 				}
@@ -245,6 +256,19 @@ func (s *messagingSlot) describe() (probeDescription, bool) {
 		},
 		stats: m.Stats,
 	}, true
+}
+
+// anyConsumerGivenUp reports whether any declared consumer's supervisor has been unable to
+// re-subscribe for a full failure streak. Indexed, not ranged by value: ConsumerState is
+// wide enough that a value copy per entry trips gocritic's hugeParam, and GivenUp takes a
+// pointer receiver for the same reason.
+func anyConsumerGivenUp(states []messaging.ConsumerState) bool {
+	for i := range states {
+		if states[i].GivenUp() {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *messagingSlot) preInitFatal() bool { return true }
