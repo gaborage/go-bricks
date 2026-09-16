@@ -856,3 +856,18 @@ Eviction churn is observable via counters, not logs: `Manager.Stats()` exposes c
 > Eviction (and idle cleanup) closes the evicted publisher **outside** the manager lock, so a slow `Close()` on an evicted tenant never blocks concurrent `Publisher()` calls for other tenants.
 >
 > A publisher that is **still in use** when evicted (held by an in-flight request, message, or job) is detached immediately but its `Close()` is **deferred until the last borrower releases its lease** — so an in-use publisher is never closed under an active caller ([ADR-032](adr_032_lease_refcount_tenant_handles.md), the M3 fix). The lease is reference-counted by the messaging `Manager` and released by the framework at each request/message/job boundary; **application code is unchanged** (`deps.Messaging(ctx)` keeps its `(AMQPClient, error)` signature). Direct callers of `Manager.Publisher` see a new `ReleaseFunc` third return — see [migrations.md](migrations.md). (Consumers are long-lived and not leased.)
+
+### Consumer subscription state and stats
+
+`Manager.Stats()` — surfaced as `messaging_stats` in the `GET /ready` response and as the `messaging` component's `details` in `GET /_sys/health-debug` — carries four consumer counters beside the publisher ones:
+
+| Key | Counts |
+| --- | --- |
+| `consumer_registries` | tenant keys holding a consumer registry: one for a single-tenant service, whatever its consumer count |
+| `declared_consumers` | consumers declared across those registries, documentation-only ones without a handler included |
+| `subscribed_consumers` | those of them holding a live subscription right now |
+| `consumer_resubscribes` | cumulative successful re-subscribes since startup |
+
+`consumer_registries` replaces `active_consumers`, which counted tenant keys under a name that read like a consumer count — see [migrations.md](migrations.md) `[C65.11]`.
+
+`Registry.ConsumerStates()`, and `Manager.ConsumerStates()` across every key, returns the state behind those counters per consumer, in declaration order within each tenant key. Each row carries the consumer's full identity — `Key` (the manager key its registry was leased under: the tenant id under per-tenant replay, empty for the control plane, and empty on the registry-level accessor), `Queue`, `Consumer` (the tag) and `EventType`, since two consumers may legitimately share a queue — alongside `Subscribed`, `Resubscribes`, `LastResubscribeAt` and `FailStreak`. Those identity fields are for an operator reading `/_sys/health-debug` or a caller of the accessor: `Manager.Stats()` reduces the rows to counts, so none of them reaches the unauthenticated `/ready` body. `FailStreak` counts the current outage's consecutive failed re-subscribe attempts and the next success resets it; `ConsumerState.GivenUp()` is true once an unsubscribed consumer's streak reaches the fifth attempt, the same threshold that escalates the re-subscribe log to WARN. A consumer declared without a handler never subscribes and never reads as given up. A stopped registry reports every consumer unsubscribed with no streak, so a shutdown is never mistaken for an outage, and a restarted one starts a fresh session rather than inheriting the previous run's streak; the cumulative counters survive both.
