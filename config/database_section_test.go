@@ -3544,17 +3544,34 @@ func TestApplyDatabasePoolDefaultsRefusesTLSClaimOnSocketConnectionString(t *tes
 	}
 }
 
-// TestApplyDatabasePoolDefaultsNamesSSLAliasAsSocketTLSClaimSource pins the source the
-// refusal names for a URI that spells its claim `ssl=true`: pgx rewrites that alias into
-// sslmode=require, but the operator's DSN carries no sslmode to drop, so rule 2 must name
-// the key the text actually has.
-func TestApplyDatabasePoolDefaultsNamesSSLAliasAsSocketTLSClaimSource(t *testing.T) {
+// TestApplyDatabasePoolDefaultsNamesSocketTLSClaimSpellingTheDSNCarries pins which of the two
+// URI spellings rule 2 names. pgx rewrites `ssl=true` into sslmode=require, so the effective
+// key is not always one the text contains: the alias is named only when it is what claims,
+// and an sslmode claiming TLS on its own keeps its spelling even when the rewrite overwrote
+// its value. Every case is a socket host, so only the named source differs.
+func TestApplyDatabasePoolDefaultsNamesSocketTLSClaimSpellingTheDSNCarries(t *testing.T) {
 	hermeticPGEnv(t)
+	const socketURI = "postgres://%2Fvar%2Frun%2Fpostgresql/db?"
+	tests := []struct {
+		name    string
+		query   string
+		want    string
+		notWant string
+	}{
+		{name: "sslmode_written_in_the_dsn", query: "sslmode=require", want: pgDSNSSLMode, notWant: pgDSNSSLAlias},
+		{name: "ssl_alias_alone", query: "ssl=true", want: pgDSNSSLAlias, notWant: pgDSNSSLMode},
+		{name: "alias_over_a_claiming_sslmode", query: "sslmode=verify-full&ssl=true", want: pgDSNSSLMode, notWant: pgDSNSSLAlias},
+		{name: "alias_over_a_plaintext_sslmode", query: "sslmode=disable&ssl=true", want: pgDSNSSLAlias, notWant: pgDSNSSLMode},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfgErr := assertConnStringRefusal(t, socketURI+tt.query, errCategoryInvalid)
 
-	cfgErr := assertConnStringRefusal(t, "postgres://%2Fvar%2Frun%2Fpostgresql/db?ssl=true", errCategoryInvalid)
-
-	assert.Contains(t, cfgErr.Action, "this one arrived through ssl.")
-	assert.NotContains(t, cfgErr.Action, "this one arrived through sslmode")
+			// The trailing period is load-bearing: "ssl" is a prefix of "sslmode".
+			assert.Contains(t, cfgErr.Action, "this one arrived through "+tt.want+".")
+			assert.NotContains(t, cfgErr.Action, "this one arrived through "+tt.notWant+".")
+		})
+	}
 }
 
 // TestApplyDatabasePoolDefaultsMatchesSharedTLSEnvFixtures pins [C66.1] against

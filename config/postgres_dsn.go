@@ -54,15 +54,17 @@ type pgDSNScan struct {
 	hostSet bool
 	host    string
 	tls     pgDSNTLSKeys
-	// sslAlias records that sslmode was written by the ssl=true rewrite rather than by the DSN.
-	sslAlias bool
+	// sslAliasOwnsClaim records that the ssl=true rewrite, and not an sslmode the URI
+	// spelled itself, is what makes the effective sslmode claim TLS.
+	sslAliasOwnsClaim bool
 }
 
-// claimSource is the key the DSN TEXT carries for a merged TLS key, so the refusal
-// names something the operator can find in the string: a sslmode pgx rewrote from
-// the URI ssl=true alias is reported as ssl.
+// claimSource is the key the DSN TEXT carries for a merged TLS key, so the refusal names
+// something the operator can find in the string: a sslmode written by the URI ssl=true
+// alias is reported as ssl, while an sslmode the URI claims TLS with keeps its own
+// spelling even when the alias later overwrote its value.
 func (s *pgDSNScan) claimSource(dsnKey string) string {
-	if dsnKey == pgDSNSSLMode && s.sslAlias {
+	if dsnKey == pgDSNSSLMode && s.sslAliasOwnsClaim {
 		return pgDSNSSLAlias
 	}
 	return dsnKey
@@ -129,9 +131,9 @@ func scanPostgresDSN(cs string) (pgDSNScan, bool) {
 		return pgDSNScan{}, false
 	}
 	var settings map[string]string
-	var aliased, ok bool
+	var aliasOwnsClaim, ok bool
 	if body, isURI := pgURIBody(cs); isURI {
-		settings, aliased, ok = pgURISettings(body)
+		settings, aliasOwnsClaim, ok = pgURISettings(body)
 	} else {
 		settings, ok = pgKeywordSettings(cs)
 	}
@@ -140,10 +142,10 @@ func scanPostgresDSN(cs string) (pgDSNScan, bool) {
 	}
 	host, hostSet := settings["host"]
 	return pgDSNScan{
-		hostSet:  hostSet,
-		host:     host,
-		tls:      pgDSNTLSKeysFrom(settings),
-		sslAlias: aliased,
+		hostSet:           hostSet,
+		host:              host,
+		tls:               pgDSNTLSKeysFrom(settings),
+		sslAliasOwnsClaim: aliasOwnsClaim,
 	}, true
 }
 
@@ -156,7 +158,7 @@ func pgURIBody(cs string) (string, bool) {
 }
 
 // pgURISettings mirrors pgx v5 pgconn parseURLSettings for the host and query settings.
-func pgURISettings(p string) (settings map[string]string, aliased, ok bool) {
+func pgURISettings(p string) (settings map[string]string, aliasOwnsClaim, ok bool) {
 	settings = make(map[string]string)
 	if i := strings.IndexAny(p, "@/"); i >= 0 && p[i] == '@' {
 		p = p[i+1:]
@@ -173,8 +175,8 @@ func pgURISettings(p string) (settings map[string]string, aliased, ok bool) {
 		settings["host"] = host
 	}
 	if i := strings.IndexByte(p, '?'); i >= 0 {
-		aliased, ok = pgURIQuery(p[i+1:], settings)
-		return settings, aliased, ok
+		aliasOwnsClaim, ok = pgURIQuery(p[i+1:], settings)
+		return settings, aliasOwnsClaim, ok
 	}
 	return settings, false, true
 }
@@ -217,8 +219,12 @@ func pgIndexAnyOrLen(s, chars string) int {
 	return len(s)
 }
 
-// pgURIQuery mirrors pgx v5 pgconn parseURLQueryParams.
-func pgURIQuery(params string, settings map[string]string) (aliased, ok bool) {
+// pgURIQuery reads a URI's query pairs as pgx v5 pgconn parseURLQueryParams does, as far as
+// this scan judges: last occurrence wins, and ssl=true writes sslmode=require when it is the
+// later of the two spellings. aliasOwnsClaim reports that the rewrite, not an sslmode the URI
+// spelled itself, is what claims TLS — pgx keeps the same provenance in its parseURLMeta.
+// pgx additionally deletes the ssl key, which nothing here reads.
+func pgURIQuery(params string, settings map[string]string) (aliasOwnsClaim, ok bool) {
 	sslWasLast := false
 	for params != "" {
 		var pair string
@@ -241,8 +247,9 @@ func pgURIQuery(params string, settings map[string]string) (aliased, ok bool) {
 		settings[key] = value
 	}
 	if sslWasLast && settings[pgDSNSSLAlias] == "true" {
+		written := settings[pgDSNSSLMode]
 		settings[pgDSNSSLMode] = sslModeRequire
-		return true, true
+		return !pgTLSKeyClaims(pgDSNSSLMode, written), true
 	}
 	return false, true
 }
