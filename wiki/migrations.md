@@ -9818,7 +9818,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - gist: a PostgreSQL `connectionstring` whose host is a unix socket used to boot when the TLS
   claim arrived through `PGSSLMODE`/`PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY`/`PGSSLNEGOTIATION`
   rather than the DSN text, then pgx dialed the socket with `TLSConfig == nil`. Rule 2 now
-  merges those five variables under the DSN with pgx's own precedence and refuses, naming the
+  merges those five variables under the DSN with pgx's own precedence and refuses, naming
   every source that carries one (C66.1, ADR-050 amendment, #1632).
 
 ---
