@@ -2183,8 +2183,9 @@ type resubscribingMockClient struct {
 	optsSeen     []ConsumeOptions
 	exhaustedErr error
 	// failing simulates a broker outage the test controls at runtime: while set,
-	// every ConsumeFromQueue fails without consuming the script, so a test can
-	// observe an unrecovered consumer for as long as it needs to. Guarded by callMu.
+	// every ConsumeFromQueue fails without returning a scripted result (the call is
+	// still counted), so a test can observe an unrecovered consumer for as long as
+	// it needs to. Guarded by callMu.
 	failing bool
 }
 
@@ -2636,7 +2637,120 @@ func TestRegistryConsumerStatesStartEachRunWithAFreshSession(t *testing.T) {
 	assert.True(t, restarted.Subscribed)
 	assert.Zero(t, restarted.FailStreak, "a restarted consumer does not inherit the previous session's streak")
 	assert.False(t, restarted.GivenUp())
-	assert.Equal(t, uint64(1), restarted.Resubscribes, "the cumulative counters carry across a restart")
+	// A lower bound, not an equality: the previous run's supervisor is not joined, so
+	// it may land one more success before the carry-over reads its counters. A
+	// non-carrying implementation reports 0 and still fails here.
+	assert.GreaterOrEqual(t, restarted.Resubscribes, uint64(1), "the cumulative counters carry across a restart")
+}
+
+// pausingConsumeClient serves one subscription, fails every re-subscribe after it,
+// and blocks the attempt at pauseAt so a test can read the supervisor's state while
+// it is frozen at an exact attempt count.
+type pausingConsumeClient struct {
+	*simpleMockAMQPClient
+	first   chan amqp.Delivery
+	pauseAt int
+	paused  chan struct{}
+	release chan struct{}
+
+	mu    sync.Mutex
+	calls int
+}
+
+var _ AMQPClient = (*pausingConsumeClient)(nil)
+
+func newPausingConsumeClient(pauseAt int) *pausingConsumeClient {
+	return &pausingConsumeClient{
+		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
+		first:                make(chan amqp.Delivery),
+		pauseAt:              pauseAt,
+		paused:               make(chan struct{}),
+		release:              make(chan struct{}),
+	}
+}
+
+func (m *pausingConsumeClient) ConsumeFromQueue(_ context.Context, _ ConsumeOptions) (<-chan amqp.Delivery, error) {
+	m.mu.Lock()
+	idx := m.calls
+	m.calls++
+	m.mu.Unlock()
+
+	switch idx {
+	case 0:
+		return m.first, nil
+	case m.pauseAt:
+		close(m.paused)
+		<-m.release
+		return nil, errNotConnected
+	default:
+		return nil, errNotConnected
+	}
+}
+
+// TestRegistryConsumerStatesCountTheAttemptTheLogEscalatesOn pins the streak against
+// the re-subscribe loop's own attempt counter: the two must be one number, or the
+// WARN escalation and the readiness verdict would fire an attempt apart. The client
+// freezes inside the attempt after the escalating one, so both are read at rest.
+func TestRegistryConsumerStatesCountTheAttemptTheLogEscalatesOn(t *testing.T) {
+	// Call 0 is the initial subscription, so attempt N is call N. Freezing on the
+	// attempt after the threshold leaves exactly that many failures behind.
+	client := newPausingConsumeClient(consumerResubscribeWarnFromAttempt + 1)
+	log := newRecordingLogger()
+	registry := NewRegistry(client, log)
+	registry.resubscribeDelay = time.Millisecond
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Workers:   1,
+		Handler:   &countingTestHandler{},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, registry.StartConsumers(ctx))
+
+	close(client.first)
+	<-client.paused // every attempt up to the threshold has now failed
+	defer close(client.release)
+
+	state := registry.ConsumerStates()[0]
+	var warned []string
+	for _, line := range log.Lines() {
+		if line.Msg == "Consumer re-subscribe attempt failed, will retry" && line.Level == gobrickslogger.LevelWarn {
+			warned = append(warned, line.Values("attempt")...)
+		}
+	}
+	require.Len(t, warned, 1, "exactly the threshold attempt should have escalated to WARN")
+	assert.Equal(t, strconv.Itoa(state.FailStreak), warned[0],
+		"the streak and the attempt the log escalates on are one number")
+	assert.Equal(t, consumerResubscribeWarnFromAttempt, state.FailStreak)
+	assert.True(t, state.GivenUp())
+}
+
+// TestRegistryConsumerStatesClearSubscribedWhenTheContextIsCanceled pins the other
+// way a consumer stops: a caller that cancels the context it handed StartConsumers,
+// instead of calling StopConsumers, leaves consumersActive true, so the snapshot is
+// unmasked and the flag itself has to be honest.
+func TestRegistryConsumerStatesClearSubscribedWhenTheContextIsCanceled(t *testing.T) {
+	client := &resubscribingMockClient{simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true}}
+	registry := NewRegistry(client, &stubLogger{})
+	registry.resubscribeDelay = time.Millisecond
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Workers:   1,
+		Handler:   &countingTestHandler{},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, registry.StartConsumers(ctx))
+	require.True(t, registry.ConsumerStates()[0].Subscribed)
+
+	cancel() // no StopConsumers: the mask stays off
+
+	require.Eventually(t, func() bool {
+		return !registry.ConsumerStates()[0].Subscribed
+	}, 5*time.Second, 2*time.Millisecond, "a canceled supervisor left the consumer reading subscribed")
 }
 
 // TestRegistryConsumerStatesCoverEveryDeclaredConsumerInOrder pins the snapshot's

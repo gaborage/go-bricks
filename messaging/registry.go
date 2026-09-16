@@ -541,7 +541,10 @@ func (s *consumerState) snapshot(queue string, consumersActive bool) ConsumerSta
 
 // ConsumerState is a snapshot of one declared consumer's subscription state.
 type ConsumerState struct {
-	Queue             string
+	Queue string
+	// Subscribed flips false only once the session has fully ended: the handler
+	// pool drains first, so a consumer whose delivery channel the broker already
+	// closed still reads subscribed while its slowest handler runs.
 	Subscribed        bool
 	Resubscribes      uint64
 	LastResubscribeAt time.Time // zero until the first successful re-subscribe
@@ -653,8 +656,11 @@ func (s *streamResume) observe(headers amqp.Table) {
 // carries the previous session's counters into it. A restart always gets a FRESH
 // struct: StopConsumers cancels its supervisors without waiting for them, so one
 // still unwinding would otherwise share the new session's state and could revive
-// its subscribed flag or leave its failure streak behind. Writing to a struct
-// nothing reads any more, it cannot. Callers must hold r.mu; only StartConsumers
+// its subscribed flag or leave its failure streak behind. Writing to a struct the
+// new session does not read, it cannot. The carry-over below is the one read of the
+// old struct, so a success the old supervisor lands after it is dropped from
+// Resubscribes — at most one per restart, and the alternative is the false green
+// the fresh struct exists to prevent. Callers must hold r.mu; only StartConsumers
 // reaches this.
 func (r *Registry) consumerStateFor(consumer *ConsumerDeclaration) *consumerState {
 	if r.consumerStates == nil {
@@ -711,6 +717,13 @@ func (r *Registry) startSingleConsumer(ctx context.Context, consumer *ConsumerDe
 // every publish re-reads the live channel under lock, whereas a consumer
 // captures its delivery channel once, so it needs an explicit re-subscribe.
 func (r *Registry) superviseConsumer(ctx context.Context, consumer *ConsumerDeclaration, deliveries <-chan amqp.Delivery, resume *streamResume, state *consumerState) {
+	// Nothing else can hold this consumer subscribed, so every exit leaves it
+	// unsubscribed — cancellation as much as a channel the broker closed. Without
+	// this a caller that cancels the context it passed to StartConsumers, rather
+	// than calling StopConsumers, would leave the flag true with no supervisor
+	// behind it.
+	defer state.markUnsubscribed()
+
 	for {
 		// Run one subscription session until the delivery channel closes
 		// (reconnect needed) or the context is canceled (stop for good).
