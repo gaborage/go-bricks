@@ -2769,6 +2769,37 @@ func TestRegistryConsumerStatesEndTheSessionWhenTheContextIsCanceled(t *testing.
 	assert.Zero(t, registry.ConsumerStates()[0].FailStreak)
 }
 
+// TestRegistryConsumerStatesCarryTheWholeConsumerIdentity pins that a row names the
+// consumer, not merely its queue: RegisterConsumer's identity is queue + consumer tag +
+// event type, so two consumers legitimately sharing a queue must be told apart.
+func TestRegistryConsumerStatesCarryTheWholeConsumerIdentity(t *testing.T) {
+	const (
+		ordersTag    = "orders-worker"
+		auditTag     = "audit-worker"
+		ordersEvent  = "order.created"
+		auditedEvent = "order.audited"
+	)
+	client := &resubscribingMockClient{simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true}}
+	registry := NewRegistry(client, &stubLogger{})
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue: testQueueName, Consumer: ordersTag, EventType: ordersEvent,
+		Workers: 1, Handler: &countingTestHandler{},
+	})
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue: testQueueName, Consumer: auditTag, EventType: auditedEvent,
+		Workers: 1, Handler: &countingTestHandler{},
+	})
+
+	states := registry.ConsumerStates()
+
+	require.Len(t, states, 2, "two consumers on one queue are two rows")
+	assert.Equal(t, []string{testQueueName, ordersTag, ordersEvent},
+		[]string{states[0].Queue, states[0].Consumer, states[0].EventType})
+	assert.Equal(t, []string{testQueueName, auditTag, auditedEvent},
+		[]string{states[1].Queue, states[1].Consumer, states[1].EventType})
+	assert.Empty(t, states[0].Key, "a registry does not know the key it was leased under")
+}
+
 // TestRegistryConsumerStatesCoverEveryDeclaredConsumerInOrder pins the snapshot's
 // shape: one entry per declared consumer, in declaration order, including the
 // documentation-only consumer that has no handler and therefore never subscribes.

@@ -527,14 +527,14 @@ func (s *consumerState) markResubscribed(at time.Time) {
 	s.failStreak = 0
 }
 
-// snapshot renders the state for queue. A nil receiver is a consumer that was
+// snapshot renders the state of the consumer identified by key. A nil receiver is one that was
 // declared but never started — a documentation-only one, or any consumer before
 // StartConsumers — and reports the zero value. When consumersActive is false the
 // registry's consumers are stopped: no supervisor is trying, so the live flags have
 // no subject and read as "not subscribed, no streak", while the cumulative counters,
 // which are history, pass through.
-func (s *consumerState) snapshot(queue string, consumersActive bool) ConsumerState {
-	snapshot := ConsumerState{Queue: queue}
+func (s *consumerState) snapshot(key consumerKey, consumersActive bool) ConsumerState {
+	snapshot := ConsumerState{Queue: key.Queue, Consumer: key.Consumer, EventType: key.EventType}
 	if s == nil {
 		return snapshot
 	}
@@ -551,8 +551,19 @@ func (s *consumerState) snapshot(queue string, consumersActive bool) ConsumerSta
 }
 
 // ConsumerState is a snapshot of one declared consumer's subscription state.
+//
+// The identity fields — Key, Queue, Consumer, EventType — are for an operator reading
+// /_sys/health-debug or a caller of ConsumerStates, never for the unauthenticated /ready
+// body or a log line: Manager.Stats() reduces these rows to counts precisely so no
+// tenant key, queue name, consumer tag or event type leaves through them.
 type ConsumerState struct {
-	Queue string
+	// Key is the manager key the consumer's registry was leased under: the tenant id
+	// under per-tenant replay, "" for the control plane. Registry.ConsumerStates leaves
+	// it empty — a registry does not know the key it was leased under.
+	Key       string
+	Queue     string
+	Consumer  string // consumer tag
+	EventType string
 	// Subscribed flips false only once the session has fully ended: the handler
 	// pool drains first, so a consumer whose delivery channel the broker already
 	// closed still reads subscribed while its slowest handler runs.
@@ -570,7 +581,11 @@ type ConsumerState struct {
 // consumerResubscribeWarnFromAttempt, the same threshold that escalates the
 // re-subscribe log to WARN. The supervisor keeps retrying; this is the point at
 // which the outage is worth reporting.
-func (s ConsumerState) GivenUp() bool {
+//
+// The receiver is a pointer because the identity fields make the struct too heavy to
+// copy per call; a snapshot read out of a slice is addressable, so callers write
+// states[i].GivenUp() unchanged.
+func (s *ConsumerState) GivenUp() bool {
 	return !s.Subscribed && s.FailStreak >= consumerResubscribeWarnFromAttempt
 }
 
@@ -583,7 +598,7 @@ func (r *Registry) ConsumerStates() []ConsumerState {
 
 	states := make([]ConsumerState, 0, len(r.consumerOrder))
 	for _, key := range r.consumerOrder {
-		states = append(states, r.consumerStates[key].snapshot(key.Queue, r.consumersActive))
+		states = append(states, r.consumerStates[key].snapshot(key, r.consumersActive))
 	}
 	return states
 }

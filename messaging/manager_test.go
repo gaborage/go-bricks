@@ -1622,3 +1622,42 @@ func TestMessagingManagerConsumerStatesSpanEveryRegistry(t *testing.T) {
 	}
 	assert.ElementsMatch(t, []string{testQueue1Name, testQueue2Name}, queues)
 }
+
+// TestMessagingManagerConsumerStatesCarryTheManagerKey pins the other half of a consumer's
+// identity: under per-tenant replay every key declares the same consumers, so rows that are
+// otherwise identical are told apart only by the key their registry was leased under.
+func TestMessagingManagerConsumerStatesCarryTheManagerKey(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New("error", false)
+
+	factory := func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} }
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{tenant1ID: amqpURLTenant1, tenant2ID: amqpURLTenant2}},
+		log,
+		ManagerOptions{MaxPublishers: 2, IdleTTL: time.Minute},
+		factory,
+	)
+	defer func() { _ = manager.Close() }() // stop supervisor goroutines
+
+	for _, tenant := range []string{tenant1ID, tenant2ID} {
+		decls := NewDeclarations()
+		decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
+		decls.RegisterConsumer(&ConsumerDeclaration{
+			Queue:     testQueue,
+			Consumer:  testConsumer,
+			EventType: testEventType,
+			Handler:   &countingTestHandler{},
+		})
+		require.NoError(t, manager.EnsureConsumers(ctx, tenant, decls))
+	}
+
+	states := manager.ConsumerStates()
+
+	require.Len(t, states, 2)
+	keys := make([]string, 0, len(states))
+	for _, state := range states {
+		keys = append(keys, state.Key)
+		assert.Equal(t, testQueue, state.Queue, "the declarations are identical apart from their key")
+	}
+	assert.ElementsMatch(t, []string{tenant1ID, tenant2ID}, keys)
+}

@@ -551,7 +551,13 @@ func (m *Manager) consumerSnapshot() (registries int, states []ConsumerState) {
 			continue
 		}
 		registries++
-		states = append(states, entry.registry.ConsumerStates()...)
+		// The registry knows the consumers; only the manager knows the key they were
+		// leased under, and without it per-tenant replay makes every tenant's rows
+		// identical.
+		for _, state := range entry.registry.ConsumerStates() {
+			state.Key = entry.key
+			states = append(states, state)
+		}
 	}
 	return registries, states
 }
