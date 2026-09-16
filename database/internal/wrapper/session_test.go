@@ -430,6 +430,7 @@ func TestSessionTxBadConnInvalidatesSession(t *testing.T) {
 			tt.setup(mock)
 			tx, err := sess.BeginTx(ctx, nil)
 			require.NoError(t, err)
+			defer func() { _ = tx.Rollback(ctx) }()
 			tt.observe(t, ctx, tx)
 			if !tt.alive {
 				rows, qerr := tx.Query(ctx, "SELECT more")
