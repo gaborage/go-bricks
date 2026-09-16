@@ -9900,8 +9900,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   on the handler context in place of the boolean `[C65.7]` stamped; `IsSealedDelivery`
   keeps its exported signature (true when such a key is present). A sealed key
   retained from delivery A and passed to `inbox.ProcessOnce` (or the inbox testing
-  mock) while handling delivery B is refused with an error wrapping
-  `messaging.ErrInvalidEventID`, no ledger row is written, and the handler's
+  mock) while handling delivery B is refused when its `<SignFamily>:<jti>` differs from
+  B's bound key (a redelivery or sibling carrying the same value is admitted) — the
+  error wraps `messaging.ErrInvalidEventID`, no ledger row is written, and the handler's
   transactional work does not run — where `[C65.7]` admitted it and recorded A's id
   for B's work. The same refusal still fires under a plain context. Unchanged:
   signatures on `messaging` and `inbox`; `DedupKey` comparability; persisted
