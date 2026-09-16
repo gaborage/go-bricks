@@ -606,8 +606,11 @@ the same defect `[C64.8]` refuses for the typed `host` field; name a host throug
 those four sources (a service file is not one of them). A `connectionstring` whose resolved
 host is a unix-socket entry while the DSN itself claims TLS (`sslmode` of `require`,
 `verify-ca` or `verify-full`, `sslnegotiation=direct`, or non-empty
-`sslrootcert`/`sslcert`/`sslkey`) is refused the same way `[C65.1]` refuses it
-for the typed fields; drop the TLS claim or point the DSN at a TCP host. A DSN the
+`sslrootcert`/`sslcert`/`sslkey`) — including when that claim arrives through
+`PGSSLMODE`/`PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY`/`PGSSLNEGOTIATION` rather than
+the DSN text (`[C65.11]`) — is refused the same way `[C65.1]` refuses it
+for the typed fields; drop the TLS claim from the DSN or the matching `PGSSL*`
+variable, or point the DSN at a TCP host. A DSN the
 scanner cannot tokenize passes through unjudged, same as it always has.
 
 Two pgx quirks worth knowing when choosing a mode: `require` plus `ca` behaves as

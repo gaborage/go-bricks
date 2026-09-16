@@ -8656,6 +8656,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   bindings once per new channel before re-subscribing, skips (until restart) a declaration the
   broker refuses with `PRECONDITION_FAILED`, and escalates a failing re-subscribe to WARN from its
   fifth attempt (C65.10, ADR-113).
+- gist: a PostgreSQL `connectionstring` whose host is a unix socket used to boot when the TLS
+  claim arrived through `PGSSLMODE`/`PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY`/`PGSSLNEGOTIATION`
+  rather than the DSN text, then pgx dialed the socket with `TLSConfig == nil`. Rule 2 now
+  merges those five variables under the DSN with pgx's own precedence and refuses, naming the
+  source that carried the claim (C65.11, ADR-050 amendment, #1632).
 
 ---
 
@@ -8786,14 +8791,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   are never consulted: a DSN whose host would come only from a service file is refused as
   host-less by rule (1), and — the flip side of the same gap — a service file can supply a
   socket host this rule never sees, so a DSN combining `service=` with a TLS-claiming `sslmode`
-  is NOT refused by rule (2) even when the service file's own host is a socket. The `PGSSL*`
-  environment variables are likewise never judged, and that one is a RESIDUAL INSTANCE of the
-  defect rule (2) closes rather than a scope boundary: `PGSSLMODE=verify-full` (or
-  `PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY`) beside `connectionstring: "host=/var/run/postgresql
-  user=u"` is accepted and then dialed by pgx with `TLSConfig == nil`, TLS silently dropped —
-  deliberately out of scope because `claimsTLS` reads DSN text only, and asymmetric with
-  `PGHOST`, which this rule does read; tracked as gaborage/go-bricks#1632 and pinned as accepted
-  by `TestApplyDatabasePoolDefaultsAcceptsPGSSLEnvTLSClaimOnSocketDSN`.
+  is NOT refused by rule (2) even when the service file's own host is a socket. The five
+  `PGSSL*` environment variables **are** judged, per key, under the same DSN-over-env
+  precedence as `PGHOST` — that residual of rule (2) closed as `[C65.11]`.
   `scanPostgresDSN`'s `ok=false` (untokenizable)
   passes through unjudged — this seam must never refuse what pgx itself accepts, and
   `database/postgresql`'s `TestPgxRejectsConnectionStringsTheConfigScannerCannotTokenize` proves
@@ -8809,13 +8809,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   and `TestApplyDatabasePoolDefaultsRefusesTLSClaimOnSocketConnectionString` (2), both in
   `config/database_section_test.go`, pin it; `internal/testutil.PostgresDSNHostCases` is shared
   with `database/postgresql`'s `TestPgxResolvesSameHostAsConfigScanner` so the two host mirrors
-  cannot silently drift apart on a pgx bump.
+  cannot silently drift apart on a pgx bump. Env-sourced TLS claims are `[C65.11]`.
 - gate: match = such a connection string, override, or provider branch exists — a DSN whose
   resolved host is absent, empty-entried, or a socket beside a TLS claim.
 - apply: pick one exit per DSN. For (1), name a host through one of the four sources pgx itself
   consults — the URI authority, a `?host=` query parameter, a keyword `host=`, or `PGHOST` — a
   service file is not one of them, since this rule never reads it. For (2), drop the TLS claim
-  from the connection string, or point it at a TCP host.
+  from the connection string, or point it at a TCP host. A claim that arrived through a
+  `PGSSL*` variable is `[C65.11]`.
 - verify: `go build ./... && go test ./...`  # then boot, or resolve one tenant through your
   provider, and confirm the connection is acquired; for the migrate CLI, run `quiesce status
   --tenant <id>` against the control-plane target and confirm it resolves.
@@ -9813,6 +9814,46 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   [startup_defaults.md](startup_defaults.md#messaging-pre-warm-readiness-wait).
 - ref: gaborage/go-bricks#1666 · `config/types.go`, `config/config.go`, `app/slot.go`,
   `messaging/manager.go`
+
+### [C65.11] a unix-socket PostgreSQL connectionstring refuses a `PGSSL*` TLS claim · breaking · when: match
+
+- detect: a PostgreSQL section (or one whose scheme or keyword form infers PostgreSQL) whose
+  `connectionstring` resolves to a unix-socket host — URI authority, `?host=`, keyword `host=`,
+  or `PGHOST` when the DSN names no `host` key — AND any of `PGSSLMODE=require` /
+  `verify-ca` / `verify-full`, a non-empty `PGSSLROOTCERT` / `PGSSLCERT` / `PGSSLKEY`, or
+  `PGSSLNEGOTIATION=direct` is set in the process environment while the matching DSN key is
+  absent. The DSN-text half of this refusal is `[C65.2]`; this atom is the env half.
+  `git grep -nE 'connectionstring:' -- '*.yaml' '*.yml'` shortlists static DSNs; then read each
+  host the way `[C65.2]` does and check the five `PGSSL*` variables in every environment that
+  process loads (Compose, Helm, systemd, the operator's shell). Provider implementations and
+  the migrate CLI's control-plane target are the same two hand-read populations as `[C65.2]`.
+- scope: `scanPostgresDSN` records per-key presence for `sslmode`,
+  `sslrootcert`, `sslcert`, `sslkey` and `sslnegotiation`, then
+  `validatePostgreSQLConnectionString` merges
+  each corresponding `PGSSL*` variable under the DSN with pgx v5.11.0's own precedence: a
+  present DSN key, empty included (`sslmode=disable`, `sslcert=''`), shadows the variable; an
+  empty variable is ignored, as `parseEnvSettings` ignores it. The claim rule itself is
+  unchanged from `[C65.2]` — `sslmode` of `require`/`verify-ca`/`verify-full`,
+  `sslnegotiation=direct`, or non-empty material. When the effective host is a unix-socket
+  entry and that merged claim is TLS, rule 2 refuses with a `ConfigError` on
+  `database.connectionstring` (section-qualified), Category `invalid`, and an Action that
+  names both the DSN keys and the `PGSSL*` variables plus the source that actually carried
+  this claim. Same doors as `[C65.2]`; `go-bricks-migrate` inherits through the exported
+  `ApplyDatabasePoolDefaults` seam, no CLI change. `PGSERVICE`/service files stay unconsulted
+  (#1644). `PGPASSFILE`, `PGSSLPASSWORD`, `PGSSLSNI` and `PGSSLROOTCERT=system` are out of
+  scope. Oracle is unchanged. No signature moves.
+- gate: match = a socket-host DSN (or host-less DSN with `PGHOST` a socket path) runs under a
+  claiming `PGSSL*` variable the DSN does not shadow.
+- apply: unset the named `PGSSL*` variable, drop the matching DSN key, or point the DSN at a
+  TCP host. A DSN key that is present even when empty (`sslmode=disable`, `sslcert=''`)
+  already shadows env and is not this atom.
+- verify: `go build ./... && go test ./...`  # then boot, or resolve one tenant, without the
+  claiming variable — or with it beside a TCP host — and confirm the connection is acquired.
+- ref: gaborage/go-bricks#1632 ·
+  [ADR-050](adr_050_connectionstring_type_inference.md) amendment 2026-09-16 ·
+  `config/postgres_dsn.go` (`pgSSLEnvKeys`) ·
+  `config/database_section.go` (`validatePostgreSQLConnectionString`, `effectivePostgresTLSClaim`) · same axis as
+  [C65.2]
 
 ---
 

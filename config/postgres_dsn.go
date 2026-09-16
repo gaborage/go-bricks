@@ -6,11 +6,107 @@ import (
 	"strings"
 )
 
-// pgDSNScan is a connection string's own host and TLS claim; hostSet includes an empty host, which shadows PGHOST.
+// pgSSLEnvKey pairs a libpq PGSSL* environment variable with its DSN keyword.
+// pgx's parseEnvSettings maps these five (skipping empty values) and mergeSettings
+// copies DSN over env, so a present DSN key — empty included — shadows the variable.
+type pgSSLEnvKey struct {
+	env string
+	dsn string
+}
+
+const (
+	pgDSNSSLMode        = "sslmode"
+	pgDSNSSLRootCert    = "sslrootcert"
+	pgDSNSSLCert        = "sslcert"
+	pgDSNSSLKey         = "sslkey"
+	pgDSNSSLNegotiation = "sslnegotiation"
+)
+
+// pgSSLEnvKeys is the production table of TLS-claim env names. Hermetic test
+// helpers reuse it so a newly judged variable cannot slip past the scrub.
+var pgSSLEnvKeys = []pgSSLEnvKey{
+	{env: "PGSSLMODE", dsn: pgDSNSSLMode},
+	{env: "PGSSLROOTCERT", dsn: pgDSNSSLRootCert},
+	{env: "PGSSLCERT", dsn: pgDSNSSLCert},
+	{env: "PGSSLKEY", dsn: pgDSNSSLKey},
+	{env: "PGSSLNEGOTIATION", dsn: pgDSNSSLNegotiation},
+}
+
+// pgDSNSetting is one DSN key's presence and value; set includes an empty value, which shadows env.
+type pgDSNSetting struct {
+	set   bool
+	value string
+}
+
+// pgDSNTLSKeys is the five TLS keys scanPostgresDSN records presence for, parallel to pgSSLEnvKeys.
+type pgDSNTLSKeys struct {
+	sslmode        pgDSNSetting
+	sslrootcert    pgDSNSetting
+	sslcert        pgDSNSetting
+	sslkey         pgDSNSetting
+	sslnegotiation pgDSNSetting
+}
+
+// pgDSNScan is a connection string's own host and TLS-key presence; hostSet includes an empty host, which shadows PGHOST.
 type pgDSNScan struct {
-	hostSet   bool
-	host      string
-	claimsTLS bool
+	hostSet bool
+	host    string
+	tls     pgDSNTLSKeys
+}
+
+func pgDSNSettingOf(settings map[string]string, key string) pgDSNSetting {
+	value, set := settings[key]
+	return pgDSNSetting{set: set, value: value}
+}
+
+func pgDSNTLSKeysFrom(settings map[string]string) pgDSNTLSKeys {
+	return pgDSNTLSKeys{
+		sslmode:        pgDSNSettingOf(settings, pgDSNSSLMode),
+		sslrootcert:    pgDSNSettingOf(settings, pgDSNSSLRootCert),
+		sslcert:        pgDSNSettingOf(settings, pgDSNSSLCert),
+		sslkey:         pgDSNSettingOf(settings, pgDSNSSLKey),
+		sslnegotiation: pgDSNSettingOf(settings, pgDSNSSLNegotiation),
+	}
+}
+
+func (t pgDSNTLSKeys) setting(dsn string) pgDSNSetting {
+	switch dsn {
+	case pgDSNSSLMode:
+		return t.sslmode
+	case pgDSNSSLRootCert:
+		return t.sslrootcert
+	case pgDSNSSLCert:
+		return t.sslcert
+	case pgDSNSSLKey:
+		return t.sslkey
+	case pgDSNSSLNegotiation:
+		return t.sslnegotiation
+	default:
+		return pgDSNSetting{}
+	}
+}
+
+// pgTLSKeyClaims is the unchanged [C65.2] rule 2 claim test, applied to one merged key.
+func pgTLSKeyClaims(dsnKey, value string) bool {
+	switch dsnKey {
+	case pgDSNSSLMode:
+		return slices.Contains(pgTLSMandatorySSLModes, value)
+	case pgDSNSSLNegotiation:
+		return value == "direct"
+	default:
+		return value != ""
+	}
+}
+
+// dsnClaimsTLS is the DSN-text claim, with no environment: scanner tests stay hermetic.
+func (s pgDSNScan) dsnClaimsTLS() bool {
+	for _, k := range pgSSLEnvKeys {
+		st := s.tls.setting(k.dsn)
+		if st.set && pgTLSKeyClaims(k.dsn, st.value) {
+			return true
+		}
+	}
+	return false
 }
 
 // scanPostgresDSN mirrors pgx v5 pgconn ParseConfig's tokenizers, without its file and environment reads.
@@ -32,8 +128,7 @@ func scanPostgresDSN(cs string) (pgDSNScan, bool) {
 	return pgDSNScan{
 		hostSet: hostSet,
 		host:    host,
-		claimsTLS: slices.Contains(pgTLSMandatorySSLModes, settings["sslmode"]) || settings["sslnegotiation"] == "direct" ||
-			settings["sslrootcert"] != "" || settings["sslcert"] != "" || settings["sslkey"] != "",
+		tls:     pgDSNTLSKeysFrom(settings),
 	}, true
 }
 
@@ -124,13 +219,13 @@ func pgURIQuery(params string, settings map[string]string) bool {
 		switch key {
 		case "ssl":
 			sslWasLast = true
-		case "sslmode":
+		case pgDSNSSLMode:
 			sslWasLast = false
 		}
 		settings[key] = value
 	}
 	if sslWasLast && settings["ssl"] == "true" {
-		settings["sslmode"] = sslModeRequire
+		settings[pgDSNSSLMode] = sslModeRequire
 	}
 	return true
 }

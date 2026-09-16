@@ -59,3 +59,39 @@ var PostgresDSNHostCases = []PostgresDSNHostCase{
 	// which is why keyword-form inference tests the key's shape and not libpq's vocabulary.
 	{Name: "keyword_unknown_key_is_a_runtime_param", DSN: "foo=1 host=h user=u", Host: "h", HostSet: true},
 }
+
+// PostgresSSLEnvTLSCase is one DSN+env combination the [C65.11] rule and pgx
+// ParseConfig must agree on: a socket host with a TLS claim is refused here and
+// yields TLSConfig == nil from pgx; a TCP host with a claim pgx honors yields a
+// non-nil TLSConfig. Env entries are applied with t.Setenv on a hermetic PG* env.
+type PostgresSSLEnvTLSCase struct {
+	Name       string
+	DSN        string
+	Env        [][2]string
+	Refuse     bool
+	WantPgxTLS bool
+}
+
+// PostgresSSLEnvTLSCases is shared between config's rule-2 tests and
+// database/postgresql's pgconn.ParseConfig oracle so the env-under-DSN merge
+// cannot silently drift from a pgx bump.
+var PostgresSSLEnvTLSCases = []PostgresSSLEnvTLSCase{
+	{Name: "socket_pgsslmode_verify_full", DSN: "host=" + socketHost + " user=u", Env: [][2]string{{"PGSSLMODE", "verify-full"}}, Refuse: true},
+	{Name: "socket_pgsslmode_require", DSN: "host=" + socketHost + " user=u", Env: [][2]string{{"PGSSLMODE", "require"}}, Refuse: true},
+	{Name: "socket_pgsslmode_verify_ca", DSN: "host=" + socketHost + " user=u", Env: [][2]string{{"PGSSLMODE", "verify-ca"}}, Refuse: true},
+	{Name: "socket_pgsslrootcert", DSN: "host=" + socketHost + " user=u", Env: [][2]string{{"PGSSLROOTCERT", "/etc/pg/ca.crt"}}, Refuse: true},
+	{Name: "socket_pgsslcert", DSN: "host=" + socketHost + " user=u", Env: [][2]string{{"PGSSLCERT", "/etc/pg/client.crt"}}, Refuse: true},
+	{Name: "socket_pgsslkey", DSN: "host=" + socketHost + " user=u", Env: [][2]string{{"PGSSLKEY", "/etc/pg/client.key"}}, Refuse: true},
+	{Name: "socket_pgsslnegotiation_direct", DSN: "host=" + socketHost + " user=u", Env: [][2]string{{"PGSSLNEGOTIATION", "direct"}}, Refuse: true},
+	{Name: "socket_pgsslmode_prefer", DSN: "host=" + socketHost + " user=u", Env: [][2]string{{"PGSSLMODE", "prefer"}}},
+	{Name: "socket_pgsslmode_allow", DSN: "host=" + socketHost + " user=u", Env: [][2]string{{"PGSSLMODE", "allow"}}},
+	{Name: "socket_pgsslmode_disable", DSN: "host=" + socketHost + " user=u", Env: [][2]string{{"PGSSLMODE", "disable"}}},
+	{Name: "socket_empty_pgsslmode", DSN: "host=" + socketHost + " user=u", Env: [][2]string{{"PGSSLMODE", ""}}},
+	{Name: "socket_empty_pgsslcert", DSN: "host=" + socketHost + " user=u", Env: [][2]string{{"PGSSLCERT", ""}}},
+	{Name: "dsn_sslmode_disable_shadows_pgsslmode", DSN: "host=" + socketHost + " sslmode=disable user=u", Env: [][2]string{{"PGSSLMODE", "verify-full"}}},
+	{Name: "dsn_empty_sslcert_shadows_pgsslcert", DSN: "host=" + socketHost + " sslcert='' user=u", Env: [][2]string{{"PGSSLCERT", "/x"}}},
+	{Name: "tcp_pgsslmode_require", DSN: "host=db.example.com user=u", Env: [][2]string{{"PGSSLMODE", "require"}}, WantPgxTLS: true},
+	{Name: "tcp_pgsslmode_verify_full", DSN: "host=db.example.com user=u", Env: [][2]string{{"PGSSLMODE", "verify-full"}}, WantPgxTLS: true},
+	{Name: "tcp_pgsslnegotiation_direct", DSN: "host=db.example.com user=u", Env: [][2]string{{"PGSSLNEGOTIATION", "direct"}}, WantPgxTLS: true},
+	{Name: "pghost_socket_pgsslmode_require", DSN: "user=u", Env: [][2]string{{"PGHOST", socketHost}, {"PGSSLMODE", "require"}}, Refuse: true},
+}
