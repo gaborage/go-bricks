@@ -407,7 +407,9 @@ func captureSealedDoor(t *testing.T, jti string) (context.Context, DedupKey) {
 // TestValidateDedupKeyBindsASealedKeyToItsDelivery pins equality binding
 // through the real sealed consume door: a key minted for delivery A is refused
 // under B's context, each delivery admits its own key, a plain context still
-// refuses, and a wire key under a sealed context still passes.
+// refuses, and a wire key under a sealed context still passes. Each refusal
+// arm pins its OWN message, so swapping the two sealed messages fails here
+// rather than sending an operator to the wrong diagnosis.
 func TestValidateDedupKeyBindsASealedKeyToItsDelivery(t *testing.T) {
 	ctxA, keyA := captureSealedDoor(t, "jti-a")
 	ctxB, keyB := captureSealedDoor(t, "jti-b")
@@ -418,20 +420,29 @@ func TestValidateDedupKeyBindsASealedKeyToItsDelivery(t *testing.T) {
 	assert.NotEqual(t, keyA, keyB)
 	assert.False(t, IsSealedDelivery(plain), "the marker never leaks outside the handler")
 
+	// wantMsg is the refusal arm this case must land on, asserted verbatim: the
+	// three arms are distinguishable only by this text, so a shared substring
+	// would let a swap survive.
+	const (
+		msgUnbound  = "sealed dedup key outside a sealed delivery"
+		msgMismatch = "sealed dedup key belongs to another delivery"
+		msgZero     = "zero DedupKey"
+	)
 	cases := []struct {
-		name string
-		ctx  context.Context
-		key  DedupKey
-		ok   bool
+		name    string
+		ctx     context.Context
+		key     DedupKey
+		ok      bool
+		wantMsg string
 	}{
-		{"a_key_under_b_context", ctxB, keyA, false},
-		{"b_key_under_b_context", ctxB, keyB, true},
-		{"a_key_under_a_context", ctxA, keyA, true},
-		{"a_key_under_plain_context", plain, keyA, false},
-		{"wire_key_under_sealed_context", ctxB, wireKey, true},
-		{"wire_key_under_plain_context", plain, wireKey, true},
-		{"empty_key_under_sealed_context", ctxB, DedupKey{}, false},
-		{"empty_key_under_plain_context", plain, DedupKey{}, false},
+		{name: "a_key_under_b_context", ctx: ctxB, key: keyA, wantMsg: msgMismatch},
+		{name: "b_key_under_b_context", ctx: ctxB, key: keyB, ok: true},
+		{name: "a_key_under_a_context", ctx: ctxA, key: keyA, ok: true},
+		{name: "a_key_under_plain_context", ctx: plain, key: keyA, wantMsg: msgUnbound},
+		{name: "wire_key_under_sealed_context", ctx: ctxB, key: wireKey, ok: true},
+		{name: "wire_key_under_plain_context", ctx: plain, key: wireKey, ok: true},
+		{name: "empty_key_under_sealed_context", ctx: ctxB, key: DedupKey{}, wantMsg: msgZero},
+		{name: "empty_key_under_plain_context", ctx: plain, key: DedupKey{}, wantMsg: msgZero},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -441,6 +452,13 @@ func TestValidateDedupKeyBindsASealedKeyToItsDelivery(t *testing.T) {
 				return
 			}
 			require.ErrorIs(t, err, ErrInvalidEventID)
+			assert.ErrorContains(t, err, tc.wantMsg, "each refusal arm names itself")
+			for _, other := range []string{msgUnbound, msgMismatch, msgZero} {
+				if other == tc.wantMsg {
+					continue
+				}
+				assert.NotContains(t, err.Error(), other, "arms must not share a message")
+			}
 			assert.NotContains(t, err.Error(), "jti-a", "the error never carries the key")
 			assert.NotContains(t, err.Error(), "jti-b", "the error never carries the key")
 		})

@@ -118,12 +118,18 @@ func IsSealedDelivery(ctx context.Context) bool {
 // provenance, not its spelling: the zero DedupKey is refused, and a Sealed key
 // is admitted only when ctx carries a sealed delivery key AND that key equals
 // the one being validated. A key retained from delivery A is therefore refused
-// while handling delivery B, as is a sealed key under a plain context. Only the
-// sealed branch of Metadata.DedupKey mints a Sealed key, so a caller can only
-// hold a key some sealed delivery composed; the equality check binds it to the
-// one in hand. A wire key passes under either context; its grammar ran when
-// WireDedupKey built it. Both refusals wrap ErrInvalidEventID and never carry
-// the key.
+// while handling delivery B, whose jti differs, as is a sealed key under a
+// plain context. Only the sealed branch of Metadata.DedupKey mints a Sealed
+// key, so a caller can only hold a key some sealed delivery composed; the
+// equality check binds it to the one in hand. A wire key passes under either
+// context; its grammar ran when WireDedupKey built it.
+//
+// The two sealed refusals are reported apart, because they send an operator to
+// different code: ctx carries no sealed delivery at all (a lost marker — a
+// detached goroutine, context.Background()), or it carries one whose key differs
+// (a key held past its delivery). Every refusal wraps ErrInvalidEventID and
+// names only its arm: a sealed key spells a jti, so neither the offered key nor
+// the bound one is ever rendered.
 func ValidateDedupKey(ctx context.Context, key DedupKey) error {
 	if key.String() == "" {
 		return fmt.Errorf("%w: zero DedupKey", ErrInvalidEventID)
@@ -132,8 +138,11 @@ func ValidateDedupKey(ctx context.Context, key DedupKey) error {
 		return nil
 	}
 	bound, ok := sealedKeyFromDelivery(ctx)
-	if !ok || bound != key {
+	if !ok {
 		return fmt.Errorf("%w: sealed dedup key outside a sealed delivery", ErrInvalidEventID)
+	}
+	if bound != key {
+		return fmt.Errorf("%w: sealed dedup key belongs to another delivery", ErrInvalidEventID)
 	}
 	return nil
 }

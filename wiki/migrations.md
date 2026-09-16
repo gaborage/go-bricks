@@ -9920,7 +9920,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   travels with it. A wire key you compose with `WireDedupKey` is still unbound.
 - verify: `go test ./messaging/ ./inbox/ ./inbox/testing/ -count=1`  # then confirm a
   sealed handler that reuses another delivery's key nacks with `ErrInvalidEventID`
-  and writes no inbox row
+  wrapping `sealed dedup key belongs to another delivery`, and writes no inbox row.
+  The sibling arm — a sealed key under a context that carries no sealed delivery at
+  all, the `context.Background()` mistake — reads `sealed dedup key outside a sealed
+  delivery` instead, so the message says which of the two you hit. Neither renders the
+  key: a sealed key spells a `jti`.
 - ref: gaborage/go-bricks#1634 · [ADR-097](adr_097_sealed_amqp_messages.md) 2026-09-16
   amendment · `messaging/dedup_key.go` (`ValidateDedupKey`, `IsSealedDelivery`),
   `messaging/sealed_consumer.go` · closes the remaining gap [C65.7] recorded
