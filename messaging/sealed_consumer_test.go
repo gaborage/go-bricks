@@ -414,8 +414,8 @@ func TestValidateDedupKeyBindsASealedKeyToItsDelivery(t *testing.T) {
 	plain := t.Context()
 	wireKey, err := WireDedupKey("evt-1")
 	require.NoError(t, err)
-	assert.True(t, keyA == sealedDedupKey("svc-sign", "jti-a"), "keys minted from the same inputs compare equal")
-	assert.False(t, keyA == keyB)
+	assert.Equal(t, keyA, sealedDedupKey("svc-sign", "jti-a"), "keys minted from the same inputs compare equal")
+	assert.NotEqual(t, keyA, keyB)
 	assert.False(t, IsSealedDelivery(plain), "the marker never leaks outside the handler")
 
 	cases := []struct {
