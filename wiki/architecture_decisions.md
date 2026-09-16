@@ -1747,6 +1747,33 @@ re-attach is visible at WARN with the broker's reason; a healthy reconnect costs
 
 ---
 
+### [ADR-114: A Consumer That Gave Up Re-subscribing Fails Readiness, Opt-in and Threshold-gated](adr_114_critical_consumer_readiness.md)
+
+**Date:** 2026-09-15 | **Status:** Accepted
+
+The messaging `/ready` probe leased the control-plane publisher and asked it `IsReady()`, so a
+service whose consumers were all detached — a deleted queue, a re-subscribe loop failing for hours —
+stayed in the load balancer while its queues drained into nothing. The new opt-in
+`messaging.consumers.critical` makes the messaging kind critical, on both of its arms at once (one
+critical bit per slot, decided at describe time, ADR-066), and its live closure checks the consumer
+arm FIRST, as a LEASE-INDEPENDENT live check: any declared consumer whose supervisor has given up —
+unsubscribed with its consecutive re-subscribe failures at `consumerResubscribeWarnFromAttempt`, the
+same threshold that escalates the log to WARN — fails the probe before the publisher lease is taken.
+That required `probeDescription.live` to mean what its name says: the judge used to discard it
+whenever `acquire` was set, which left the arm unreachable under per-tenant tenancy, where the lease
+resolves to nothing and the judge short-circuits to `per_tenant`. The threshold is what
+answers the restart-loop objection a broker-aware probe usually earns: a reconnect that recovers
+inside the streak never reaches the verdict, and the intermediate state shows in `messaging_stats`
+instead — `subscribed_consumers` below `declared_consumers`, plus the new
+`consumer_max_fail_streak`, a bare count of the worst current outage that names no consumer. Absent, the key changes nothing. The `503` renders ADR-048's fixed
+`messaging unavailable`, with no queue name or consumer tag in it. See
+[migrations.md](migrations.md) `[C65.12]`.
+
+**Key Benefits:** a detached consumer can take its own pod out of rotation, behind one greppable
+key, without turning every broker flap into a restart loop.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2517,7 +2544,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-113) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-114) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

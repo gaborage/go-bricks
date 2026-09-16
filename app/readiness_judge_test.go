@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -160,4 +161,61 @@ func TestJudgementAllocsStableAcrossKindCount(t *testing.T) {
 
 	t.Logf("traversal allocs/op: %d kinds = %.1f, %d kinds = %.1f", kinds, single, 2*kinds, double)
 	assert.InDelta(t, single, double, 0, "the judgement path must not allocate per kind")
+}
+
+// TestJudgeRunsTheLeaseIndependentLiveCheckFirst pins the order the two liveness arms are
+// judged in, and that a failing lease-independent arm is answered WITHOUT a lease. A kind may
+// set live beside acquire (the messaging kind does, for its consumer arm); before that, live
+// was silently discarded whenever acquire was set.
+func TestJudgeRunsTheLeaseIndependentLiveCheckFirst(t *testing.T) {
+	errLiveFailed := errors.New("lease-independent check failed")
+	acquired := false
+
+	d := probeDescription{
+		name: componentMessaging,
+		live: func(context.Context) error { return errLiveFailed },
+		acquire: func(context.Context) (func(context.Context) error, func(), error) {
+			acquired = true
+			return func(context.Context) error { return nil }, func() {}, nil
+		},
+	}
+
+	status, _, err := d.judge(context.Background())
+
+	assert.Equal(t, unhealthyStatus, status)
+	require.ErrorIs(t, err, errLiveFailed)
+	assert.False(t, acquired, "a kind already known to be failing must not take a lease")
+}
+
+// TestJudgeStillRelabelsANotConfiguredLeaseAfterAPassingLiveCheck is the other half: a passing
+// lease-independent arm must not change what a not-configured lease answers. A per-tenant kind
+// whose fixed "" key resolves to nothing still reads per_tenant, with no error.
+func TestJudgeStillRelabelsANotConfiguredLeaseAfterAPassingLiveCheck(t *testing.T) {
+	d := probeDescription{
+		name:      componentMessaging,
+		perTenant: true,
+		live:      func(context.Context) error { return nil },
+		acquire: func(context.Context) (func(context.Context) error, func(), error) {
+			return nil, nil, config.NewNotConfiguredError("messaging", "MESSAGING_BROKER_URL", "messaging.broker.url")
+		},
+	}
+
+	status, _, err := d.judge(context.Background())
+
+	assert.Equal(t, perTenantStatus, status)
+	assert.NoError(t, err)
+}
+
+// TestJudgeFailsClosedOnADescriptionWithNoCheck pins the direction a wiring bug fails in. A
+// kind with neither arm is not a healthy kind — disabled and absent are their own fields — so
+// the judge must report unhealthy rather than pass a probe that checked nothing. Before the
+// live/acquire split this path called a nil live and panicked; healthy would have been the
+// worse answer of the three.
+func TestJudgeFailsClosedOnADescriptionWithNoCheck(t *testing.T) {
+	d := probeDescription{name: componentMessaging}
+
+	status, _, err := d.judge(context.Background())
+
+	assert.Equal(t, unhealthyStatus, status)
+	require.ErrorIs(t, err, errProbeHasNoCheck)
 }

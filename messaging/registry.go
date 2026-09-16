@@ -111,6 +111,15 @@ func (r *Registry) setTenantStamps(enabled bool) {
 	r.tenantStamps = enabled
 }
 
+// setResubscribeDelay overrides the backoff floor between re-subscribe attempts.
+// Called by the manager immediately after NewRegistry, before any consumer starts;
+// a non-positive delay leaves the default in place.
+func (r *Registry) setResubscribeDelay(delay time.Duration) {
+	if delay > 0 {
+		r.resubscribeDelay = delay
+	}
+}
+
 // ExchangeDeclaration defines an exchange to be declared
 type ExchangeDeclaration struct {
 	Name       string         // Exchange name
@@ -544,6 +553,22 @@ func (s *consumerState) markResubscribed(at time.Time) {
 	s.history.recordResubscribe(at)
 }
 
+// givenUp is ConsumerState.GivenUp asked of the live state in place, with no snapshot
+// allocated: the readiness probe wants one bool per poll, not a row per consumer. The
+// predicate itself stays defined in exactly one place — this builds the two fields it reads
+// on the stack and asks the exported method. A nil receiver is a consumer declared but never
+// started, which has no streak and so never reads as given up.
+func (s *consumerState) givenUp() bool {
+	if s == nil {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	live := ConsumerState{Subscribed: s.subscribed, FailStreak: s.failStreak}
+	return live.GivenUp()
+}
+
 // snapshot renders the state of the consumer identified by key. A nil receiver is one that was
 // declared but never started — a documentation-only one, or any consumer before
 // StartConsumers — and reports the zero value. When consumersActive is false the
@@ -617,6 +642,25 @@ func (r *Registry) ConsumerStates() []ConsumerState {
 		states = append(states, r.consumerStates[key].snapshot(key, r.consumersActive))
 	}
 	return states
+}
+
+// anyGivenUp reports whether any declared consumer's supervisor has given up re-subscribing.
+// It reads the same state ConsumerStates renders and under the same mask — a stopped registry
+// has no supervisor trying, so nothing there reads as given up — but allocates nothing and
+// stops at the first hit.
+func (r *Registry) anyGivenUp() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if !r.consumersActive {
+		return false
+	}
+	for _, key := range r.consumerOrder {
+		if r.consumerStates[key].givenUp() {
+			return true
+		}
+	}
+	return false
 }
 
 // consumeOptionsFor builds the ConsumeOptions for a consumer declaration. It is

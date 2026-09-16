@@ -843,6 +843,28 @@ restart. Declares are idempotent for matching arguments, so a healthy reconnect 
 
 See [ADR-113](adr_113_amqp_topology_redeclare_on_reconnect.md).
 
+#### Failing readiness when a consumer gives up (`messaging.consumers.critical`)
+
+Set `messaging.consumers.critical: true` (bool, absent = `false`; env
+`MESSAGING_CONSUMERS_CRITICAL`) to make the messaging `/ready` probe critical and fold the consume
+side into it. The probe then checks the consumers FIRST — any declared consumer that is unsubscribed
+with its re-subscribe failure streak at the fifth attempt, the same threshold that escalates the log
+to WARN, answers `/ready` with `503` and the fixed `messaging unavailable` body — and only then the
+publisher's `IsReady()` as before. The consumer arm is lease-independent, so it applies in every
+tenancy mode — a per-tenant deployment with no root `messaging:` block, whose kind reports
+`per_tenant`, is judged on its consumers all the same. What the key makes critical, and why it is
+one bit rather than two, is [ADR-114](adr_114_critical_consumer_readiness.md). A consumer whose channel just
+closed stays ready while its supervisor is still inside the streak; that intermediate state is
+visible in `messaging_stats` — `subscribed_consumers` below `declared_consumers`, and
+`consumer_max_fail_streak` counting how far the worst outage has got — and on
+`/_sys/health-debug`, not in the verdict, which is what keeps a healthy broker reconnect from
+becoming a restart loop. Alert on `consumer_max_fail_streak` to see an outage climbing before it
+reaches the verdict; neither key says WHICH consumer, which is deliberate
+(`ConsumerStates()` is the in-process door for that). Absent, the key changes nothing: the probe
+leases the publisher, asks `IsReady()`, and is never critical. Gate `livenessProbe` on `/health`,
+never on `/ready`, before turning it on. See
+[ADR-114](adr_114_critical_consumer_readiness.md) and [startup_defaults.md](startup_defaults.md).
+
 ### Sizing the publisher pool for multi-tenant deployments
 
 `publisher.maxcached` is the LRU cap on cached publisher clients (in multi-tenant mode, it falls back to `multitenant.limits.tenants` when unset), not a per-tenant guarantee. When more tenants publish than the cap allows, every publish for a not-currently-cached tenant evicts the least-recently-used publisher and creates a fresh one — **eviction thrash** that silently degrades latency (each miss reopens a broker connection) without an error.
@@ -867,6 +889,7 @@ Eviction churn is observable via counters, not logs: `Manager.Stats()` exposes c
 | `declared_consumers` | consumers declared across those registries, documentation-only ones without a handler included |
 | `subscribed_consumers` | those of them holding a live subscription right now |
 | `consumer_resubscribes` | cumulative successful re-subscribes since startup |
+| `consumer_max_fail_streak` | the largest CURRENT-outage re-subscribe failure streak across those consumers; `0` when none is failing, and the readiness threshold when one has given up |
 
 `consumer_registries` replaces `active_consumers`, which counted tenant keys under a name that read like a consumer count — see [migrations.md](migrations.md) `[C65.11]`.
 

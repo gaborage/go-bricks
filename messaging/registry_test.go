@@ -2572,6 +2572,61 @@ func TestRegistryConsumerStatesMaskGivenUpAfterStopConsumers(t *testing.T) {
 	assert.False(t, stopped.GivenUp(), "a stopped registry has no consumer that gave up")
 }
 
+// TestRegistrySetResubscribeDelayIgnoresANonPositiveDelay pins the guard's boundary: the
+// manager passes ManagerOptions.ConsumerResubscribeDelay straight through, and zero is what an
+// app that never sets the option sends, so a guard that accepted it would leave every consumer
+// re-subscribing with no backoff floor at all.
+func TestRegistrySetResubscribeDelayIgnoresANonPositiveDelay(t *testing.T) {
+	tests := []struct {
+		name     string
+		delay    time.Duration
+		expected time.Duration
+	}{
+		{name: "zero_keeps_the_default", delay: 0, expected: defaultConsumerResubscribeDelay},
+		{name: "negative_keeps_the_default", delay: -time.Second, expected: defaultConsumerResubscribeDelay},
+		{name: "positive_overrides", delay: time.Millisecond, expected: time.Millisecond},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := NewRegistry(&simpleMockAMQPClient{isReady: true}, gobrickslogger.New("error", false))
+
+			registry.setResubscribeDelay(tt.delay)
+
+			assert.Equal(t, tt.expected, registry.resubscribeDelay)
+		})
+	}
+}
+
+// TestRegistryAnyGivenUpMasksAStoppedRegistry pins the predicate the readiness probe reads
+// against the snapshot it mirrors: it must answer the same as ConsumerStates under the same
+// shutdown mask, so a stopped registry — whose supervisors are canceled, not failing — never
+// reads as an outage.
+func TestRegistryAnyGivenUpMasksAStoppedRegistry(t *testing.T) {
+	log := gobrickslogger.New("error", false)
+	client, deliveries := newOutageClient()
+	registry, cancel := startStateRegistry(t, client, log)
+	defer cancel()
+
+	require.False(t, registry.anyGivenUp(), "a subscribed consumer has not given up")
+
+	client.setFailing(true)
+	close(deliveries)
+	require.Eventually(t, registry.anyGivenUp, 5*time.Second, 2*time.Millisecond,
+		"the consumer never reached the give-up threshold")
+
+	states := registry.ConsumerStates()
+	require.Len(t, states, 1)
+	assert.True(t, states[0].GivenUp(), "the predicate and the snapshot must agree")
+
+	registry.StopConsumers()
+
+	assert.False(t, registry.anyGivenUp(), "a stopped registry has no consumer that gave up")
+	states = registry.ConsumerStates()
+	require.Len(t, states, 1)
+	assert.False(t, states[0].GivenUp(), "and the snapshot agrees there too")
+}
+
 // newOutageClient returns a client scripted with one subscription and the channel
 // that subscription feeds, so a test can close it and then hold the outage open with
 // setFailing for as long as it needs to observe an unrecovered consumer.

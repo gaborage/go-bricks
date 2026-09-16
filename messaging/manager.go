@@ -76,6 +76,9 @@ type Manager struct {
 	// manager builds so the consume side knows whether a delivery's tenant stamp
 	// is the authority for the handler's tenant.
 	tenantStamps bool
+	// consumerResubscribeDelay is ManagerOptions.ConsumerResubscribeDelay; zero leaves
+	// each registry on its own default.
+	consumerResubscribeDelay time.Duration
 }
 
 // consumerEntry represents a long-lived consumer
@@ -117,6 +120,13 @@ type ManagerOptions struct {
 	// AppName is the app.name config value stamped as the AMQP app_id property on every
 	// publish by clients created by the default factory (ADR-105). Empty stamps no app_id.
 	AppName string
+	// ConsumerResubscribeDelay is the backoff floor between a consumer's re-subscribe
+	// attempts, applied to every registry this manager builds. Zero (or negative) leaves
+	// the registry default (5s), which is what a broker flap should be paced at.
+	// Deliberately a Go-only seam with NO config mapping: BuildMessagingOptions never sets
+	// it, so no YAML key reaches it. It exists for an embedder — or a test — that drives a
+	// re-subscribe streak directly and cannot wait out the default's jittered ladder.
+	ConsumerResubscribeDelay time.Duration
 	// TenantStamps makes consumers read the tenant stamp off each delivery and seed
 	// the handler context with it. True only under multitenant.enabled together with
 	// messaging.tenancy: shared — under per-tenant tenancy the replay key is already
@@ -173,9 +183,10 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 		pubPool: resourcepool.New[AMQPClient](opts.MaxPublishers, opts.IdleTTL, func(client AMQPClient) error {
 			return client.Close()
 		}),
-		consumers:     make(map[string]*consumerEntry),
-		replayedHashs: make(map[string]uint64),
-		tenantStamps:  opts.TenantStamps,
+		consumers:                make(map[string]*consumerEntry),
+		replayedHashs:            make(map[string]uint64),
+		tenantStamps:             opts.TenantStamps,
+		consumerResubscribeDelay: opts.ConsumerResubscribeDelay,
 	}
 
 	resourcepool.WarnIfCleanupIntervalTooLate(log, "messaging.publisher", opts.CleanupInterval, opts.IdleTTL)
@@ -301,6 +312,7 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 	// Create registry and replay declarations
 	registry := NewRegistry(client, m.logger)
 	registry.setTenantStamps(m.tenantStamps)
+	registry.setResubscribeDelay(m.consumerResubscribeDelay)
 	if err := decls.ReplayToRegistry(registry); err != nil {
 		m.closeClientOnRollback(client, key, "replay_declarations")
 		return fmt.Errorf("failed to replay messaging declarations: %w", err)
@@ -538,6 +550,23 @@ func (m *Manager) ConsumerStates() []ConsumerState {
 	return states
 }
 
+// AnyConsumerGivenUp reports whether any consumer on any tenant key has stopped being able to
+// re-subscribe. It answers the readiness probe's question directly rather than through
+// ConsumerStates: /ready asks on every poll, and a snapshot would copy every declared
+// consumer's row — four identifier strings apiece — to compute one bool, carrying coordinates
+// that must never reach the unauthenticated body into the package that renders it.
+func (m *Manager) AnyConsumerGivenUp() bool {
+	m.consMu.RLock()
+	defer m.consMu.RUnlock()
+
+	for _, entry := range m.consumers {
+		if entry.registry != nil && entry.registry.anyGivenUp() {
+			return true
+		}
+	}
+	return false
+}
+
 // consumerSnapshot reads the consumer map once and returns both the number of tenant
 // keys holding a registry and the state of every consumer they declare, so the two
 // never come from different instants.
@@ -564,16 +593,18 @@ func (m *Manager) consumerSnapshot() (registries int, states []ConsumerState) {
 
 // Stats returns statistics about the messaging manager. Publisher counters come from the
 // pool; the consumer counters come from the consumer map and the per-consumer subscription
-// state its registries keep. consumer_registries counts tenant keys, not consumers.
+// state its registries keep. consumer_registries counts tenant keys, not consumers, and
+// consumer_max_fail_streak is the largest current-outage re-subscribe streak across them.
 func (m *Manager) Stats() map[string]any {
 	registryCount, states := m.consumerSnapshot()
-	subscribed := 0
+	subscribed, maxFailStreak := 0, 0
 	var resubscribes uint64
 	for _, state := range states {
 		if state.Subscribed {
 			subscribed++
 		}
 		resubscribes += state.Resubscribes
+		maxFailStreak = max(maxFailStreak, state.FailStreak)
 	}
 
 	// A zero-value Manager (not built via NewMessagingManager, e.g. the lightweight stand-in
@@ -585,10 +616,15 @@ func (m *Manager) Stats() map[string]any {
 		"declared_consumers":    len(states),
 		"subscribed_consumers":  subscribed,
 		"consumer_resubscribes": resubscribes,
-		"idle_ttl_seconds":      0,
-		"evictions":             0,
-		"idle_cleanups":         0,
-		"errors":                0,
+		// The worst current outage as a bare number: how far the unluckiest consumer's
+		// supervisor has got through its re-subscribe streak, with no way back to WHICH
+		// consumer that is. Reads 0 while nothing is failing, and a stopped registry
+		// reports 0 because ConsumerStates masks a shutdown.
+		"consumer_max_fail_streak": maxFailStreak,
+		"idle_ttl_seconds":         0,
+		"evictions":                0,
+		"idle_cleanups":            0,
+		"errors":                   0,
 	}
 
 	if m.pubPool != nil {

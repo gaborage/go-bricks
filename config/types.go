@@ -483,12 +483,13 @@ type OutputConfig struct {
 // Production-safe defaults are applied unconditionally at startup — even when
 // messaging.broker.url is unset (see config/messaging_section.go: normalizeMessaging).
 type MessagingConfig struct {
-	Broker    BrokerConfig        `koanf:"broker" json:"broker" yaml:"broker" toml:"broker" mapstructure:"broker"`
-	Routing   RoutingConfig       `koanf:"routing" json:"routing" yaml:"routing" toml:"routing" mapstructure:"routing"`
-	Headers   map[string]string   `koanf:"headers" json:"headers" yaml:"headers" toml:"headers" mapstructure:"headers"`
-	Reconnect ReconnectConfig     `koanf:"reconnect" json:"reconnect" yaml:"reconnect" toml:"reconnect" mapstructure:"reconnect"`
-	Publisher PublisherPoolConfig `koanf:"publisher" json:"publisher" yaml:"publisher" toml:"publisher" mapstructure:"publisher"`
-	Streams   StreamsConfig       `koanf:"streams" json:"streams" yaml:"streams" toml:"streams" mapstructure:"streams"`
+	Broker    BrokerConfig             `koanf:"broker" json:"broker" yaml:"broker" toml:"broker" mapstructure:"broker"`
+	Routing   RoutingConfig            `koanf:"routing" json:"routing" yaml:"routing" toml:"routing" mapstructure:"routing"`
+	Headers   map[string]string        `koanf:"headers" json:"headers" yaml:"headers" toml:"headers" mapstructure:"headers"`
+	Reconnect ReconnectConfig          `koanf:"reconnect" json:"reconnect" yaml:"reconnect" toml:"reconnect" mapstructure:"reconnect"`
+	Publisher PublisherPoolConfig      `koanf:"publisher" json:"publisher" yaml:"publisher" toml:"publisher" mapstructure:"publisher"`
+	Streams   StreamsConfig            `koanf:"streams" json:"streams" yaml:"streams" toml:"streams" mapstructure:"streams"`
+	Consumers MessagingConsumersConfig `koanf:"consumers" json:"consumers" yaml:"consumers" toml:"consumers" mapstructure:"consumers"`
 
 	// Tenancy selects which key the messaging kind's consumers and publishers are
 	// resolved and replayed under when multitenant.enabled is true:
@@ -525,6 +526,15 @@ type MessagingConfig struct {
 	// context.DeadlineExceeded.
 	// See wiki/messaging.md#aggregate-publish-bound-publishtimeout.
 	PublishTimeout time.Duration `koanf:"publishtimeout" json:"publishtimeout" yaml:"publishtimeout" toml:"publishtimeout" mapstructure:"publishtimeout"`
+}
+
+// MessagingConsumersConfig holds the consume side's deployment choices.
+type MessagingConsumersConfig struct {
+	// Critical fails /ready with 503 once a declared consumer's supervisor has been
+	// unable to re-subscribe for a full failure streak. Absent means non-critical
+	// (ADR-094), so a plain bool: no koanf default is registered. Read through
+	// Config.IsMessagingConsumersCritical. See wiki/messaging.md.
+	Critical bool `koanf:"critical" json:"critical" yaml:"critical" toml:"critical" mapstructure:"critical"`
 }
 
 // SealConfig holds the producer's payload-sealing choices. Key material itself

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -788,34 +789,67 @@ func TestAppUsesProvidedResourceSource(t *testing.T) {
 	assert.Positive(t, resource.msgCalls)
 }
 
-// TestCacheSlotCriticalityFromLoadedConfig walks the whole seam a deployment walks — YAML
-// through koanf into IsCacheCritical into the cache slot's description — because a Go
-// struct literal cannot show that an omitted key survives the load as nil.
-func TestCacheSlotCriticalityFromLoadedConfig(t *testing.T) {
-	const cacheEnabled = "\ncache:\n  enabled: true\n  redis:\n    host: localhost\n    port: 6379\n"
+// TestSlotCriticalityFromLoadedConfig walks the whole seam a deployment walks — YAML through
+// koanf into the criticality accessor into the slot's own description — for every kind that
+// has an opt-in criticality key. A Go struct literal cannot show that an omitted key survives
+// the load as non-critical, which is the property each of these rows exists to pin.
+func TestSlotCriticalityFromLoadedConfig(t *testing.T) {
+	const (
+		cacheEnabled     = "\ncache:\n  enabled: true\n  redis:\n    host: localhost\n    port: 6379\n"
+		brokerConfigured = "\nmessaging:\n  broker:\n    url: amqp://guest:guest@localhost:5672/\n"
+	)
 
 	tests := []struct {
 		name             string
-		cacheYAML        string
+		component        string
+		yaml             string
+		wire             func(t *testing.T, app *App)
 		expectedCritical bool
 	}{
-		{name: "critical_omitted_is_non_critical", cacheYAML: cacheEnabled, expectedCritical: false},
-		{name: "critical_false_is_non_critical", cacheYAML: cacheEnabled + "  critical: false\n", expectedCritical: false},
-		{name: "critical_true_opts_in", cacheYAML: cacheEnabled + "  critical: true\n", expectedCritical: true},
+		{
+			name: "cache_critical_omitted_is_non_critical", component: componentCache,
+			yaml: cacheEnabled, wire: wireCacheManager, expectedCritical: false,
+		},
+		{
+			name: "cache_critical_false_is_non_critical", component: componentCache,
+			yaml: cacheEnabled + "  critical: false\n", wire: wireCacheManager, expectedCritical: false,
+		},
+		{
+			name: "cache_critical_true_opts_in", component: componentCache,
+			yaml: cacheEnabled + "  critical: true\n", wire: wireCacheManager, expectedCritical: true,
+		},
+		{
+			name: "messaging_critical_omitted_is_non_critical", component: componentMessaging,
+			yaml: brokerConfigured, wire: wireMessagingManager, expectedCritical: false,
+		},
+		{
+			name: "messaging_critical_false_is_non_critical", component: componentMessaging,
+			yaml: brokerConfigured + "  consumers:\n    critical: false\n", wire: wireMessagingManager, expectedCritical: false,
+		},
+		{
+			name: "messaging_critical_true_opts_in", component: componentMessaging,
+			yaml: brokerConfigured + "  consumers:\n    critical: true\n", wire: wireMessagingManager, expectedCritical: true,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := loadConfigFromYAML(t, minimumValidConfig+tc.cacheYAML)
-			app := &App{cfg: cfg, logger: logger.New("error", false), cacheManager: createTestCacheManager(t)}
+			app := &App{cfg: loadConfigFromYAML(t, minimumValidConfig+tc.yaml), logger: logger.New("error", false)}
+			tc.wire(t, app)
 
 			app.installSlots(slotInputs{})
 
-			status := slotDescription(t, app, componentCache).Run(context.Background())
-			assert.Equal(t, componentCache, status.Name)
+			status := slotDescription(t, app, tc.component).Run(context.Background())
+			assert.Equal(t, tc.component, status.Name)
 			assert.Equal(t, tc.expectedCritical, status.Critical)
 		})
 	}
+}
+
+func wireCacheManager(t *testing.T, app *App) { app.cacheManager = createTestCacheManager(t) }
+
+func wireMessagingManager(t *testing.T, app *App) {
+	app.messagingManager = createTestMessagingManagerWithNotReadyClient(t)
 }
 
 // TestCriticalSlotDescriptionsRenderNoRawError enforces the Prober contract over
@@ -826,8 +860,12 @@ func TestCacheSlotCriticalityFromLoadedConfig(t *testing.T) {
 // error substituted in. The per-constructor tests pin the probes that exist today; this is
 // the only guard that catches a critical probe added tomorrow.
 func TestCriticalSlotDescriptionsRenderNoRawError(t *testing.T) {
-	cfg := &config.Config{Cache: config.CacheConfig{Critical: true}}
+	cfg := &config.Config{
+		Cache:     config.CacheConfig{Critical: true},
+		Messaging: config.MessagingConfig{Consumers: config.MessagingConsumersConfig{Critical: true}},
+	}
 	require.True(t, cfg.IsCacheCritical(), "the cache probe must be opted into criticality, or this test covers only the database probe")
+	require.True(t, cfg.IsMessagingConsumersCritical(), "the messaging probe must be opted in too, or its arm of this walk is vacuous")
 
 	app := &App{
 		cfg:              cfg,
@@ -867,7 +905,7 @@ func TestCriticalSlotDescriptionsRenderNoRawError(t *testing.T) {
 
 	// Without this the test would pass by iterating nothing the day every probe is made
 	// advisory — the exact change that would also silently retire the contract above.
-	require.GreaterOrEqual(t, criticalSeen, 2, "expected the database and cache probes to be critical")
+	require.GreaterOrEqual(t, criticalSeen, 3, "expected the database, cache and messaging probes to be critical")
 }
 
 func TestReadyCheckScenarios(t *testing.T) {
@@ -1073,6 +1111,24 @@ func TestReadyCheckScenarios(t *testing.T) {
 			},
 		},
 		{
+			// A service wired with no messaging manager at all must not be held down by the
+			// consumer knob: the slot describes itself as disabled, and a disabled kind has no
+			// arm to fail. The not-configured arm — a resolvable manager whose control-plane
+			// key answers nothing — is covered by the per-tenant tests instead.
+			name: "messaging_disabled_stays_ready_when_consumers_critical",
+			prepare: func(f *testAppFixture) {
+				f.db.On(methodHealth, mock.Anything).Return(nil)
+				f.app.cfg.Messaging.Consumers.Critical = true
+				f.app.messagingManager = nil
+				f.rebuildLifecycle()
+			},
+			expectedStatus: http.StatusOK,
+			assertBody: func(t *testing.T, body map[string]any) {
+				assert.Equal(t, readyStatus, body[statusKey])
+				assert.Equal(t, disabledStatus, body[componentMessaging])
+			},
+		},
+		{
 			name: "cache_not_configured_stays_ready_when_critical",
 			prepare: func(f *testAppFixture) {
 				f.db.On(methodHealth, mock.Anything).Return(nil)
@@ -1095,18 +1151,409 @@ func TestReadyCheckScenarios(t *testing.T) {
 			fixture := newTestAppFixture(t)
 			tc.prepare(fixture)
 
-			ctx, rec := fixture.newReadyContext()
-			err := fixture.app.readyCheck(ctx)
-			require.NoError(t, err)
-			assert.Equal(t, tc.expectedStatus, rec.Code)
-
-			var body map[string]any
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+			code, body := fixture.readyResponse(t)
+			assert.Equal(t, tc.expectedStatus, code)
 			tc.assertBody(t, body)
 
 			fixture.db.AssertExpectations(t)
 		})
 	}
+}
+
+// consumerGiveUpAttempt mirrors messaging's unexported re-subscribe WARN threshold: the
+// attempt at which a consumer's supervisor is judged to have given up. The matrix below
+// parks one attempt short of it and then reaches it, so moving the threshold on the
+// messaging side reds these tests instead of silently moving the readiness verdict.
+const consumerGiveUpAttempt = 5
+
+// errConsumerOutage is what the fake broker answers a re-subscribe with while the outage
+// is open. It never reaches a rendered body — the probe replaces it with its own sentinel.
+var errConsumerOutage = errors.New("fake broker refused the subscription")
+
+// consumerOutageClient is app's own minimal messaging.AMQPClient. It serves one delivery
+// channel, can be put into an outage in which every re-subscribe fails, and parks inside a
+// chosen failed attempt so a test reads the failure streak AT REST instead of racing the
+// supervisor's backoff. Rebuilt here rather than exported from messaging: a package's test
+// fixtures are not API.
+type consumerOutageClient struct {
+	mu         sync.Mutex
+	ready      bool
+	failing    bool
+	deliveries chan amqp.Delivery
+	failures   int
+	parks      map[int]*consumerParkSlot
+}
+
+// consumerParkSlot holds one re-subscribe attempt inside ConsumeFromQueue until the test
+// releases it, so the streak either side of that attempt is read at rest.
+type consumerParkSlot struct {
+	parked  chan struct{}
+	release chan struct{}
+}
+
+func newConsumerOutageClient() *consumerOutageClient {
+	return &consumerOutageClient{
+		ready:      true,
+		deliveries: make(chan amqp.Delivery),
+		parks:      map[int]*consumerParkSlot{},
+	}
+}
+
+func (c *consumerOutageClient) ConsumeFromQueue(context.Context, messaging.ConsumeOptions) (<-chan amqp.Delivery, error) {
+	c.mu.Lock()
+	if !c.failing {
+		deliveries := c.deliveries
+		c.mu.Unlock()
+		return deliveries, nil
+	}
+	c.failures++
+	slot := c.parks[c.failures]
+	c.mu.Unlock()
+
+	if slot != nil {
+		close(slot.parked)
+		<-slot.release
+
+		// Re-read the outage rather than failing on the decision taken before the park: a
+		// test that lifts the outage while this attempt is held gets its recovery on THIS
+		// attempt, with no backoff between the release and the observation.
+		c.mu.Lock()
+		failing, deliveries := c.failing, c.deliveries
+		c.mu.Unlock()
+		if !failing {
+			return deliveries, nil
+		}
+	}
+	return nil, errConsumerOutage
+}
+
+func (c *consumerOutageClient) Consume(context.Context, string) (<-chan amqp.Delivery, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.deliveries, nil
+}
+
+func (c *consumerOutageClient) Close() error { return nil }
+
+func (c *consumerOutageClient) IsReady() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ready
+}
+
+func (c *consumerOutageClient) DeclareQueue(context.Context, *messaging.QueueDeclaration) error {
+	return nil
+}
+
+func (c *consumerOutageClient) DeclareExchange(context.Context, *messaging.ExchangeDeclaration) error {
+	return nil
+}
+
+func (c *consumerOutageClient) BindQueue(context.Context, *messaging.BindingDeclaration) error {
+	return nil
+}
+
+// parkOn registers a hold on the attempt'th failed re-subscribe. Register every slot before
+// beginOutage — the supervisor starts retrying the moment the delivery channel closes.
+func (c *consumerOutageClient) parkOn(attempts ...int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, attempt := range attempts {
+		c.parks[attempt] = &consumerParkSlot{parked: make(chan struct{}), release: make(chan struct{})}
+	}
+}
+
+// beginOutage closes the live delivery channel and fails every re-subscribe from then on.
+func (c *consumerOutageClient) beginOutage() {
+	c.mu.Lock()
+	c.failing = true
+	deliveries := c.deliveries
+	c.mu.Unlock()
+
+	close(deliveries)
+}
+
+// endOutage lets the next re-subscribe attempt succeed, on a fresh delivery channel.
+func (c *consumerOutageClient) endOutage() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.failing = false
+	c.deliveries = make(chan amqp.Delivery)
+}
+
+func (c *consumerOutageClient) setReady(ready bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ready = ready
+}
+
+func (c *consumerOutageClient) releaseParked(t *testing.T, attempt int) {
+	t.Helper()
+
+	c.mu.Lock()
+	slot := c.parks[attempt]
+	c.mu.Unlock()
+	require.NotNil(t, slot, "attempt %d was never registered as a park slot", attempt)
+
+	close(slot.release)
+}
+
+// awaitParked blocks until the given attempt parks, so what the assertions after it read is
+// a state the supervisor is HOLDING, not one it is passing through.
+func (c *consumerOutageClient) awaitParked(t *testing.T, attempt int) {
+	t.Helper()
+
+	c.mu.Lock()
+	slot := c.parks[attempt]
+	c.mu.Unlock()
+	require.NotNil(t, slot, "attempt %d was never registered as a park slot", attempt)
+
+	select {
+	case <-slot.parked:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("re-subscribe attempt %d never parked", attempt)
+	}
+}
+
+// messagingManagerOn builds a manager whose every client is c, resolving broker URLs through
+// source, and paced so a full re-subscribe streak completes in milliseconds instead of the
+// default's tens of seconds.
+func messagingManagerOn(t *testing.T, source messaging.BrokerURLProvider, c messaging.AMQPClient) *messaging.Manager {
+	t.Helper()
+
+	manager := messaging.NewMessagingManager(source, logger.New("error", false),
+		messaging.ManagerOptions{MaxPublishers: 1, IdleTTL: time.Hour, ConsumerResubscribeDelay: time.Millisecond},
+		func(string, logger.Logger) messaging.AMQPClient { return c },
+	)
+	t.Cleanup(func() { _ = manager.Close() }) // stop the supervisor goroutines
+
+	return manager
+}
+
+// tenantOnlyBrokerSource resolves a broker URL for a tenant key only. Its control-plane ""
+// key answers NotConfigured, which is what a per-tenant deployment with no root messaging
+// block looks like to the probe's lease — the shape that hid the consumer arm when the arm
+// lived inside the leased closure.
+type tenantOnlyBrokerSource struct{}
+
+func (*tenantOnlyBrokerSource) BrokerURL(_ context.Context, key string) (string, error) {
+	if key == "" {
+		return "", config.NewNotConfiguredError("messaging", "MESSAGING_BROKER_URL", "messaging.broker.url")
+	}
+	return "amqp://guest:guest@localhost:5672/", nil
+}
+
+// perTenantMessagingFixture is a multi-tenant app whose consumers live under a tenant key and
+// whose control-plane key resolves to nothing, with client serving that tenant's registry.
+func perTenantMessagingFixture(t *testing.T, client messaging.AMQPClient) *testAppFixture {
+	t.Helper()
+
+	f := newTestAppFixture(t)
+	f.db.On(methodHealth, mock.Anything).Return(nil)
+	f.app.cfg.Multitenant.Enabled = true
+	f.app.cfg.Messaging.Consumers.Critical = true
+	f.useMessagingManager(t, messagingManagerOn(t, &tenantOnlyBrokerSource{}, client), testTenantID)
+
+	return f
+}
+
+// useMessagingManager installs manager in place of the fixture's own — closing that one, which
+// holds a mock client of its own — and starts the declared consumer under key.
+func (f *testAppFixture) useMessagingManager(t *testing.T, manager *messaging.Manager, key string) {
+	t.Helper()
+
+	if f.app.messagingManager != nil {
+		require.NoError(t, f.app.messagingManager.Close())
+	}
+	f.app.messagingManager = manager
+	f.rebuildLifecycle()
+	require.NoError(t, manager.EnsureConsumers(context.Background(), key, declarationsWithConsumer()))
+}
+
+// withSupervisedConsumer points the fixture's app at a messaging manager serving client on the
+// control-plane key, and returns once its one declared consumer is subscribed.
+func (f *testAppFixture) withSupervisedConsumer(t *testing.T, client messaging.AMQPClient) {
+	t.Helper()
+
+	f.useMessagingManager(t, messagingManagerOn(t, config.NewTenantStore(f.app.cfg), client), "")
+}
+
+// readyResponse runs the real /ready handler and returns its status code and decoded body.
+func (f *testAppFixture) readyResponse(t *testing.T) (code int, body map[string]any) {
+	t.Helper()
+
+	ctx, rec := f.newReadyContext()
+	require.NoError(t, f.app.readyCheck(ctx))
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+	return rec.Code, body
+}
+
+// readyStatusCode is readyResponse without the assertions, for use inside an Eventually
+// condition — require.* from that goroutine would abort the wrong test.
+func (f *testAppFixture) readyStatusCode() int {
+	ctx, rec := f.newReadyContext()
+	if err := f.app.readyCheck(ctx); err != nil {
+		return 0
+	}
+	return rec.Code
+}
+
+// awaitConsumerGaveUp waits until the declared consumer's supervisor reports it has given
+// up re-subscribing, so a test can assert on that state rather than on a delay.
+func awaitConsumerGaveUp(t *testing.T, manager *messaging.Manager) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		states := manager.ConsumerStates()
+		return len(states) == 1 && states[0].GivenUp()
+	}, 5*time.Second, 2*time.Millisecond, "the consumer never reached the give-up threshold")
+}
+
+// assertNoConsumerCoordinates enforces ADR-048 on the unauthenticated body: the probe's
+// fixed identifier reaches it, never the queue name or consumer tag the state carries.
+func assertNoConsumerCoordinates(t *testing.T, body map[string]any) {
+	t.Helper()
+
+	assertReadyBodyOmits(t, body, declaredQueue, declaredConsumer, declaredEventType, errConsumerOutage.Error())
+}
+
+// TestReadyTurnsRedOnlyOnceAConsumerHasGivenUpReSubscribing walks the three edges of
+// messaging.consumers.critical against the real /ready handler: a consumer in an outage
+// that is still short of the give-up threshold stays ready, the attempt that reaches the
+// threshold turns /ready 503 with the sanitized body, and a re-subscribe turns it back.
+// Each edge is read at a state the supervisor HOLDS — the fake parks inside the threshold
+// attempt — so no assertion races the backoff.
+func TestReadyTurnsRedOnlyOnceAConsumerHasGivenUpReSubscribing(t *testing.T) {
+	f := newTestAppFixture(t)
+	f.db.On(methodHealth, mock.Anything).Return(nil)
+	f.app.cfg.Messaging.Consumers.Critical = true
+
+	client := newConsumerOutageClient()
+	f.withSupervisedConsumer(t, client)
+
+	code, body := f.readyResponse(t)
+	require.Equal(t, http.StatusOK, code, "a subscribed consumer is ready")
+	require.Equal(t, healthyStatus, body[componentMessaging])
+
+	// Edge 1 — unsubscribed, one attempt short of the threshold. The supervisor is parked
+	// inside the threshold attempt, so the streak cannot advance under the assertion.
+	client.parkOn(consumerGiveUpAttempt, consumerGiveUpAttempt+1)
+	client.beginOutage()
+	client.awaitParked(t, consumerGiveUpAttempt)
+
+	code, body = f.readyResponse(t)
+	assert.Equal(t, http.StatusOK, code, "a consumer whose supervisor is still retrying must not fail readiness")
+	assert.Equal(t, healthyStatus, body[componentMessaging], "the intermediate state shows in the stats, not in the verdict")
+
+	// Edge 2 — the parked attempt fails, reaching the threshold.
+	client.releaseParked(t, consumerGiveUpAttempt)
+	require.Eventually(t, func() bool {
+		return f.readyStatusCode() == http.StatusServiceUnavailable
+	}, 5*time.Second, 2*time.Millisecond, "the attempt that reached the threshold did not fail readiness")
+
+	code, body = f.readyResponse(t)
+	require.Equal(t, http.StatusServiceUnavailable, code)
+	assert.Equal(t, unhealthyStatus, body[componentMessaging])
+	assert.Equal(t, componentMessaging+" unavailable", body[errorKey])
+	assertNoConsumerCoordinates(t, body)
+
+	// Edge 3 — the outage lifts and the consumer re-subscribes. Held like the others: the
+	// next attempt is parked BEFORE the outage lifts, so recovery lands on that attempt
+	// rather than racing an exponential backoff that is already seconds wide.
+	client.awaitParked(t, consumerGiveUpAttempt+1)
+	client.endOutage()
+	client.releaseParked(t, consumerGiveUpAttempt+1)
+
+	require.Eventually(t, func() bool {
+		return f.readyStatusCode() == http.StatusOK
+	}, 5*time.Second, 2*time.Millisecond, "a re-subscribed consumer did not restore readiness")
+}
+
+// TestReadyIgnoresAGivenUpConsumerWhenTheKnobIsOff pins the shipped default: the same
+// consumer, given up for good, leaves /ready green and the messaging kind healthy while
+// messaging.consumers.critical is absent. Without this the feature could default to on and
+// every test above would still pass.
+func TestReadyIgnoresAGivenUpConsumerWhenTheKnobIsOff(t *testing.T) {
+	f := newTestAppFixture(t)
+	f.db.On(methodHealth, mock.Anything).Return(nil)
+	require.False(t, f.app.cfg.IsMessagingConsumersCritical(), "the fixture must leave the knob at its absent default")
+
+	client := newConsumerOutageClient()
+	f.withSupervisedConsumer(t, client)
+
+	client.beginOutage() // no park: nothing here is read mid-attempt
+	awaitConsumerGaveUp(t, f.app.messagingManager)
+
+	code, body := f.readyResponse(t)
+	assert.Equal(t, http.StatusOK, code, "the consumer arm is not folded in while the knob is off")
+	assert.Equal(t, healthyStatus, body[componentMessaging])
+}
+
+// TestReadyReportsTheConsumerArmBeforeThePublisherArm pins the order of the two arms the
+// knob makes critical. Both fail here; the probe must report the consumer outage — the
+// steady-state loss the knob exists to report — rather than the publisher flap, whose
+// error the sanitized body would hide.
+func TestReadyReportsTheConsumerArmBeforeThePublisherArm(t *testing.T) {
+	f := newTestAppFixture(t)
+	f.app.cfg.Messaging.Consumers.Critical = true
+
+	client := newConsumerOutageClient()
+	f.withSupervisedConsumer(t, client)
+
+	client.beginOutage()
+	awaitConsumerGaveUp(t, f.app.messagingManager)
+	client.setReady(false)
+
+	status := slotDescription(t, f.app, componentMessaging).Run(context.Background())
+
+	require.Error(t, status.Err)
+	require.ErrorIs(t, status.Err, errConsumerResubscribeExhausted)
+	require.NotErrorIs(t, status.Err, errPublisherNotReady)
+	assert.True(t, status.Critical, "the knob makes both arms critical at once")
+}
+
+// TestReadyFailsAPerTenantKindWhoseConsumerGaveUp pins the arm where it is easiest to lose.
+// Under per-tenant tenancy with no control-plane broker the probe's lease answers
+// NotConfigured and judge short-circuits to per_tenant with a nil error, so an arm reachable
+// only through the lease never runs — in exactly the deployment holding the most consumers.
+// The arm is a lease-independent live check, so it runs here.
+func TestReadyFailsAPerTenantKindWhoseConsumerGaveUp(t *testing.T) {
+	client := newConsumerOutageClient()
+	f := perTenantMessagingFixture(t, client)
+
+	client.beginOutage()
+	awaitConsumerGaveUp(t, f.app.messagingManager)
+
+	code, body := f.readyResponse(t)
+
+	require.Equal(t, http.StatusServiceUnavailable, code, "a per-tenant consumer that gave up must fail readiness")
+	assert.Equal(t, unhealthyStatus, body[componentMessaging])
+	assert.Equal(t, componentMessaging+" unavailable", body[errorKey])
+	assertNoConsumerCoordinates(t, body)
+}
+
+// TestReadyLeavesAHealthyPerTenantKindPerTenant is the other half: the arm running ahead of the
+// lease must not turn the per_tenant verdict into a failure while every consumer is subscribed.
+func TestReadyLeavesAHealthyPerTenantKindPerTenant(t *testing.T) {
+	f := perTenantMessagingFixture(t, newConsumerOutageClient())
+
+	code, body := f.readyResponse(t)
+
+	require.Equal(t, http.StatusOK, code)
+	assert.Equal(t, perTenantStatus, body[componentMessaging], "an unresolvable control-plane key is per_tenant, not an outage")
+}
+
+// TestConsumerGiveUpAttemptMatchesTheMessagingThreshold pins app's local mirror of messaging's
+// unexported threshold in BOTH directions against the predicate itself: lowering the constant
+// reds the acceptance test, and raising it reds this one.
+func TestConsumerGiveUpAttemptMatchesTheMessagingThreshold(t *testing.T) {
+	below := messaging.ConsumerState{FailStreak: consumerGiveUpAttempt - 1}
+	at := messaging.ConsumerState{FailStreak: consumerGiveUpAttempt}
+
+	assert.False(t, below.GivenUp(), "one attempt short of the threshold is not given up")
+	assert.True(t, at.GivenUp(), "the threshold attempt is given up")
 }
 
 func TestRunGracefulShutdown(t *testing.T) {

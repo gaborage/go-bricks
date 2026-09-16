@@ -1580,6 +1580,53 @@ func TestMessagingManagerStatsCountsConsumersAcrossRegistries(t *testing.T) {
 	assert.Equal(t, 3, stats["declared_consumers"])
 	assert.Equal(t, 3, stats["subscribed_consumers"])
 	assert.Equal(t, uint64(0), stats["consumer_resubscribes"])
+	assert.Equal(t, 0, stats["consumer_max_fail_streak"], "nothing is failing")
+}
+
+// TestMessagingManagerStatsPublishTheWorstCurrentFailStreak pins the one counter that makes
+// the intermediate state — a consumer unsubscribed but still inside its streak — readable
+// from /ready and /_sys/health-debug. The client is frozen INSIDE the fourth re-subscribe
+// attempt, so the three that already failed are read at rest rather than raced, and the
+// number is a bare count: it says how far the unluckiest consumer has got, never which one.
+func TestMessagingManagerStatsPublishTheWorstCurrentFailStreak(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New("error", false)
+
+	const pauseAt = 4
+	client := newPausingConsumeClient(pauseAt)
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		log,
+		ManagerOptions{MaxPublishers: 1, IdleTTL: time.Minute, ConsumerResubscribeDelay: time.Millisecond},
+		func(string, logger.Logger) AMQPClient { return client },
+	)
+	defer func() { _ = manager.Close() }() // stop supervisor goroutines
+
+	decls := NewDeclarations()
+	decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
+	decls.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testQueue,
+		Consumer:  testConsumer,
+		EventType: testEventType,
+		Handler:   &countingTestHandler{},
+	})
+	require.NoError(t, manager.EnsureConsumers(ctx, testTenantID, decls))
+
+	require.Equal(t, 0, manager.Stats()["consumer_max_fail_streak"], "a subscribed consumer has no streak")
+
+	close(client.first)
+	select {
+	case <-client.paused:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the re-subscribe loop never reached the paused attempt")
+	}
+	defer close(client.release)
+
+	stats := manager.Stats()
+
+	assert.Equal(t, pauseAt-1, stats["consumer_max_fail_streak"], "three attempts have failed and the fourth is in flight")
+	assert.Equal(t, 0, stats["subscribed_consumers"], "and the consumer reads unsubscribed while it retries")
+	assert.Equal(t, 1, stats["declared_consumers"])
 }
 
 // TestMessagingManagerConsumerStatesSpanEveryRegistry pins the detail door behind the
@@ -1660,4 +1707,86 @@ func TestMessagingManagerConsumerStatesCarryTheManagerKey(t *testing.T) {
 		assert.Equal(t, testQueue, state.Queue, "the declarations are identical apart from their key")
 	}
 	assert.ElementsMatch(t, []string{tenant1ID, tenant2ID}, keys)
+}
+
+// TestMessagingManagerAnyConsumerGivenUpSpansEveryRegistry pins that the readiness predicate
+// sees every tenant key, not just the first: under per-tenant replay one tenant's broker can
+// fail while the rest are healthy, and that tenant's consumers are the ones nothing else
+// reports.
+func TestMessagingManagerAnyConsumerGivenUpSpansEveryRegistry(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New("error", false)
+
+	healthy, _ := newOutageClient()
+	failing, failingDeliveries := newOutageClient()
+	clients := map[string]AMQPClient{tenant1ID: healthy, tenant2ID: failing}
+
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{tenant1ID: amqpURLTenant1, tenant2ID: amqpURLTenant2}},
+		log,
+		ManagerOptions{MaxPublishers: 2, IdleTTL: time.Minute, ConsumerResubscribeDelay: time.Millisecond},
+		func(url string, _ logger.Logger) AMQPClient {
+			if url == amqpURLTenant2 {
+				return failing
+			}
+			return healthy
+		},
+	)
+	defer func() { _ = manager.Close() }() // stop supervisor goroutines
+
+	for tenant := range clients {
+		decls := NewDeclarations()
+		decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
+		decls.RegisterConsumer(&ConsumerDeclaration{
+			Queue:     testQueue,
+			Consumer:  testConsumer,
+			EventType: testEventType,
+			Handler:   &countingTestHandler{},
+		})
+		require.NoError(t, manager.EnsureConsumers(ctx, tenant, decls))
+	}
+
+	require.False(t, manager.AnyConsumerGivenUp(), "every tenant is subscribed")
+
+	failing.setFailing(true)
+	close(failingDeliveries)
+
+	assert.Eventually(t, manager.AnyConsumerGivenUp, 5*time.Second, 2*time.Millisecond,
+		"one tenant's consumer gave up and the manager did not report it")
+}
+
+// TestMessagingManagerAppliesTheConsumerResubscribeDelay pins that the option reaches
+// the registries the manager builds. At the default pace exhausting a re-subscribe
+// streak takes tens of seconds of jittered backoff, so a streak that completes inside
+// this test's budget can only come from the configured delay.
+func TestMessagingManagerAppliesTheConsumerResubscribeDelay(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New("error", false)
+
+	client, deliveries := newOutageClient()
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		log,
+		ManagerOptions{MaxPublishers: 1, IdleTTL: time.Minute, ConsumerResubscribeDelay: time.Millisecond},
+		func(string, logger.Logger) AMQPClient { return client },
+	)
+	defer func() { _ = manager.Close() }() // stop supervisor goroutines
+
+	decls := NewDeclarations()
+	decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
+	decls.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testQueue,
+		Consumer:  testConsumer,
+		EventType: testEventType,
+		Handler:   &countingTestHandler{},
+	})
+	require.NoError(t, manager.EnsureConsumers(ctx, testTenantID, decls))
+
+	client.setFailing(true)
+	close(deliveries)
+
+	require.Eventually(t, func() bool {
+		states := manager.ConsumerStates()
+		return len(states) == 1 && states[0].GivenUp()
+	}, 5*time.Second, 2*time.Millisecond, "the configured re-subscribe delay did not reach the registry")
 }
