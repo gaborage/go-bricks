@@ -718,7 +718,7 @@ func validatePostgreSQLConnectionString(cs string) error {
 		}
 	}
 
-	claims, source := effectivePostgresTLSClaim(scan)
+	claims, source := effectivePostgresTLSClaim(&scan)
 	if claims && slices.ContainsFunc(entries, isUnixSocketHost) {
 		return &ConfigError{
 			Category: errCategoryInvalid,
@@ -747,7 +747,7 @@ func pgTLSOnSocketAction(source string) string {
 // effectivePostgresTLSClaim merges each PGSSL* variable under the DSN with pgx
 // precedence (DSN key present, empty included, wins; empty env is ignored) and
 // returns the first claiming source — the DSN keyword or the environment variable.
-func effectivePostgresTLSClaim(scan pgDSNScan) (claims bool, source string) {
+func effectivePostgresTLSClaim(scan *pgDSNScan) (claims bool, source string) {
 	for _, k := range pgSSLEnvKeys {
 		st := scan.tls.setting(k.dsn)
 		var value, from string

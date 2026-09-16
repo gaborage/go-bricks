@@ -69,7 +69,7 @@ func pgDSNTLSKeysFrom(settings map[string]string) pgDSNTLSKeys {
 	}
 }
 
-func (t pgDSNTLSKeys) setting(dsn string) pgDSNSetting {
+func (t *pgDSNTLSKeys) setting(dsn string) pgDSNSetting {
 	switch dsn {
 	case pgDSNSSLMode:
 		return t.sslmode
@@ -99,7 +99,7 @@ func pgTLSKeyClaims(dsnKey, value string) bool {
 }
 
 // dsnClaimsTLS is the DSN-text claim, with no environment: scanner tests stay hermetic.
-func (s pgDSNScan) dsnClaimsTLS() bool {
+func (s *pgDSNScan) dsnClaimsTLS() bool {
 	for _, k := range pgSSLEnvKeys {
 		st := s.tls.setting(k.dsn)
 		if st.set && pgTLSKeyClaims(k.dsn, st.value) {
