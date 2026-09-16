@@ -61,7 +61,9 @@ func assertConnStringRefusal(t *testing.T, cs, wantCategory string) *ConfigError
 		assert.Regexp(t, `Unset that variable|Drop that key`, cfgErr.Action)
 		assert.Contains(t, cfgErr.Action, "use a TCP host")
 		assert.Contains(t, cfgErr.Action, "connection string")
-		assert.Contains(t, cfgErr.Action, "this one arrived through")
+		// One claiming source reads "this one arrived through X"; several are enumerated
+		// instead. Either way the Action must attribute the refusal, never just refuse.
+		assert.Regexp(t, `this one arrived through|each refuses on its own`, cfgErr.Action)
 		for _, k := range pgSSLEnvKeys {
 			assert.Contains(t, cfgErr.Action, k.dsn, "rule 2 must name every DSN TLS key")
 			assert.Contains(t, cfgErr.Action, k.env, "rule 2 must name every PGSSL* variable")
@@ -3579,6 +3581,55 @@ func TestApplyDatabasePoolDefaultsNamesSocketTLSClaimSpellingTheDSNCarries(t *te
 	}
 }
 
+// TestApplyDatabasePoolDefaultsNamesEveryClaimingSocketTLSSource pins that the refusal lists
+// every source that claims after the merge, each with its own arm's exit. Each claim refuses
+// on its own, so an operator who cleared only the first named one would be refused again at
+// the next boot with a different source named.
+func TestApplyDatabasePoolDefaultsNamesEveryClaimingSocketTLSSource(t *testing.T) {
+	hermeticPGEnv(t)
+	const socketDSN = "host=/var/run/postgresql user=u"
+	tests := []struct {
+		name string
+		cs   string
+		env  [][2]string
+		want []string
+	}{
+		{
+			name: "two_env_variables",
+			cs:   socketDSN,
+			env:  [][2]string{{"PGSSLMODE", sslModeRequire}, {"PGSSLROOTCERT", "/ca.pem"}},
+			want: []string{
+				"PGSSLMODE — Unset that variable, or shadow it with a non-claiming sslmode",
+				"PGSSLROOTCERT — Unset that variable, or shadow it with a non-claiming sslrootcert",
+			},
+		},
+		{
+			name: "dsn_key_and_env_variable",
+			cs:   "host=/var/run/postgresql sslcert=/c.pem user=u",
+			env:  [][2]string{{"PGSSLKEY", "/k.pem"}},
+			want: []string{
+				"sslcert — Drop that key from the connection string",
+				"PGSSLKEY — Unset that variable, or shadow it with a non-claiming sslkey",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, e := range tt.env {
+				t.Setenv(e[0], e[1])
+			}
+
+			cfgErr := assertConnStringRefusal(t, tt.cs, errCategoryInvalid)
+
+			for _, want := range tt.want {
+				assert.Contains(t, cfgErr.Action, want, "every claiming source needs its own exit")
+			}
+			assert.Contains(t, cfgErr.Action, "each refuses on its own")
+			assert.Contains(t, cfgErr.Action, "use a TCP host, which clears them all")
+		})
+	}
+}
+
 // TestApplyDatabasePoolDefaultsMatchesSharedTLSEnvFixtures pins [C66.1] against
 // testutil.PostgresSSLEnvTLSCases: a socket DSN whose TLS claim arrives through a PGSSL*
 // variable is refused by rule 2, naming that variable; DSN keys (empty included) still
@@ -3601,8 +3652,7 @@ func TestApplyDatabasePoolDefaultsMatchesSharedTLSEnvFixtures(t *testing.T) {
 				assert.Contains(t, cfgErr.Action, "this one arrived through "+src)
 				// The DSN names no such key — the merge is what reached the variable —
 				// so the remedy is the variable, or a DSN value that shadows it.
-				dsn, isEnv := pgSSLEnvDSNKey(src)
-				require.True(t, isEnv)
+				dsn := dsnKeyShadowedBy(t, src)
 				assert.Contains(t, cfgErr.Action, "Unset that variable")
 				assert.Contains(t, cfgErr.Action, "shadow it with a non-claiming "+dsn)
 				assert.NotContains(t, cfgErr.Action, "Drop that key")
@@ -3619,6 +3669,19 @@ func claimingPGSSLEnv(env [][2]string) string {
 			return e[0]
 		}
 	}
+	return ""
+}
+
+// dsnKeyShadowedBy is the DSN keyword a PGSSL* variable loses to, read from the production
+// table so a renamed pairing cannot pass by agreeing with a second copy.
+func dsnKeyShadowedBy(t *testing.T, env string) string {
+	t.Helper()
+	for _, k := range pgSSLEnvKeys {
+		if k.env == env {
+			return k.dsn
+		}
+	}
+	require.FailNow(t, "no DSN key pairs with "+env)
 	return ""
 }
 
