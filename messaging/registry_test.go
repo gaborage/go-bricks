@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2185,8 +2184,8 @@ type resubscribingMockClient struct {
 	exhaustedErr error
 	// failing simulates a broker outage the test controls at runtime: while set,
 	// every ConsumeFromQueue fails without consuming the script, so a test can
-	// observe an unrecovered consumer for as long as it needs to.
-	failing atomic.Bool
+	// observe an unrecovered consumer for as long as it needs to. Guarded by callMu.
+	failing bool
 }
 
 var _ AMQPClient = (*resubscribingMockClient)(nil)
@@ -2197,7 +2196,7 @@ func (m *resubscribingMockClient) ConsumeFromQueue(_ context.Context, opts Consu
 	idx := m.calls
 	m.calls++
 	m.optsSeen = append(m.optsSeen, opts)
-	if m.failing.Load() {
+	if m.failing {
 		return nil, errNotConnected
 	}
 	if idx < len(m.results) {
@@ -2207,6 +2206,13 @@ func (m *resubscribingMockClient) ConsumeFromQueue(_ context.Context, opts Consu
 		return nil, m.exhaustedErr // keep the supervisor in the retry/backoff loop
 	}
 	return make(chan amqp.Delivery), nil // park: open channel that never closes
+}
+
+// setFailing opens or closes a broker outage the supervisor cannot script its way out of.
+func (m *resubscribingMockClient) setFailing(failing bool) {
+	m.callMu.Lock()
+	defer m.callMu.Unlock()
+	m.failing = failing
 }
 
 func (m *resubscribingMockClient) consumeCallCount() int {
@@ -2487,9 +2493,9 @@ func TestRegistryConsumerStatesTrackSubscriptionAndResubscribe(t *testing.T) {
 	registry.StopConsumers()
 }
 
-// TestConsumerStateGivenUp pins the predicate the readiness probe keys on: a
-// consumer counts as abandoned only while it is unsubscribed AND its consecutive
-// failures have reached the same threshold that escalates the re-subscribe log.
+// TestConsumerStateGivenUp pins the predicate: a consumer counts as abandoned only
+// while it is unsubscribed AND its consecutive failures have reached the same
+// threshold that escalates the re-subscribe log.
 func TestConsumerStateGivenUp(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -2514,27 +2520,11 @@ func TestConsumerStateGivenUp(t *testing.T) {
 // through a broker outage: each failed re-subscribe attempt lengthens the streak
 // until the snapshot reports GivenUp, and a success clears it.
 func TestRegistryConsumerStatesCountFailedResubscribeAttempts(t *testing.T) {
-	ch1 := make(chan amqp.Delivery)
-	client := &resubscribingMockClient{
-		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
-		results:              []consumeResult{{ch: ch1}},
-	}
-	registry := NewRegistry(client, &stubLogger{})
-	registry.resubscribeDelay = time.Millisecond
+	client, ch1 := newOutageClient()
+	registry := startStateRegistry(t, client)
 
-	registry.RegisterConsumer(&ConsumerDeclaration{
-		Queue:     testQueueName,
-		EventType: testEventType,
-		Workers:   1,
-		Handler:   &countingTestHandler{},
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	require.NoError(t, registry.StartConsumers(ctx))
-
-	client.failing.Store(true) // the outage lasts until the test lifts it
-	close(ch1)                 // flap into an outage the supervisor cannot recover from
+	client.setFailing(true) // the outage lasts until the test lifts it
+	close(ch1)              // flap into an outage the supervisor cannot recover from
 
 	require.Eventually(t, func() bool {
 		state := registry.ConsumerStates()[0]
@@ -2542,7 +2532,7 @@ func TestRegistryConsumerStatesCountFailedResubscribeAttempts(t *testing.T) {
 	}, 5*time.Second, 2*time.Millisecond, "failure streak did not reach the threshold")
 	assert.True(t, registry.ConsumerStates()[0].GivenUp())
 
-	client.failing.Store(false) // broker back
+	client.setFailing(false) // broker back
 
 	require.Eventually(t, func() bool {
 		return registry.ConsumerStates()[0].Subscribed
@@ -2564,26 +2554,10 @@ func TestRegistryConsumerStatesCountFailedResubscribeAttempts(t *testing.T) {
 // not an outage: a stopped registry has no supervisor left to re-subscribe, so
 // its consumers report unsubscribed with no streak rather than abandoned.
 func TestRegistryConsumerStatesMaskGivenUpAfterStopConsumers(t *testing.T) {
-	ch1 := make(chan amqp.Delivery)
-	client := &resubscribingMockClient{
-		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
-		results:              []consumeResult{{ch: ch1}},
-	}
-	registry := NewRegistry(client, &stubLogger{})
-	registry.resubscribeDelay = time.Millisecond
+	client, ch1 := newOutageClient()
+	registry := startStateRegistry(t, client)
 
-	registry.RegisterConsumer(&ConsumerDeclaration{
-		Queue:     testQueueName,
-		EventType: testEventType,
-		Workers:   1,
-		Handler:   &countingTestHandler{},
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	require.NoError(t, registry.StartConsumers(ctx))
-
-	client.failing.Store(true)
+	client.setFailing(true)
 	close(ch1)
 	require.Eventually(t, func() bool {
 		return registry.ConsumerStates()[0].GivenUp()
@@ -2595,6 +2569,60 @@ func TestRegistryConsumerStatesMaskGivenUpAfterStopConsumers(t *testing.T) {
 	assert.False(t, stopped.Subscribed)
 	assert.Zero(t, stopped.FailStreak)
 	assert.False(t, stopped.GivenUp(), "a stopped registry has no consumer that gave up")
+}
+
+// newOutageClient returns a client scripted with one subscription and the channel
+// that subscription feeds, so a test can close it and then hold the outage open with
+// setFailing for as long as it needs to observe an unrecovered consumer.
+func newOutageClient() (client *resubscribingMockClient, deliveries chan amqp.Delivery) {
+	deliveries = make(chan amqp.Delivery)
+	return &resubscribingMockClient{
+		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
+		results:              []consumeResult{{ch: deliveries}},
+	}, deliveries
+}
+
+// startStateRegistry starts a registry with one handler-backed consumer on client,
+// paced for fast re-subscribes. The caller stops the consumers.
+func startStateRegistry(t *testing.T, client AMQPClient) *Registry {
+	t.Helper()
+	registry := NewRegistry(client, &stubLogger{})
+	registry.resubscribeDelay = time.Millisecond
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Workers:   1,
+		Handler:   &countingTestHandler{},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	require.NoError(t, registry.StartConsumers(ctx))
+	return registry
+}
+
+// TestRegistryConsumerStatesDropTheStreakWhenConsumersRestart pins that a restart is
+// a clean slate: the previous run's failure streak must not make the first flap of
+// the new one read as abandoned.
+func TestRegistryConsumerStatesDropTheStreakWhenConsumersRestart(t *testing.T) {
+	client, ch1 := newOutageClient()
+	registry := startStateRegistry(t, client)
+
+	client.setFailing(true)
+	close(ch1)
+	require.Eventually(t, func() bool {
+		return registry.ConsumerStates()[0].GivenUp()
+	}, 5*time.Second, 2*time.Millisecond, "failure streak did not reach the threshold")
+
+	registry.StopConsumers()
+	client.setFailing(false)
+	require.NoError(t, registry.StartConsumers(context.Background()))
+	defer registry.StopConsumers()
+
+	restarted := registry.ConsumerStates()[0]
+	assert.True(t, restarted.Subscribed)
+	assert.Zero(t, restarted.FailStreak, "a restarted consumer does not inherit the previous outage's streak")
+	assert.False(t, restarted.GivenUp())
 }
 
 // TestRegistryConsumerStatesCoverEveryDeclaredConsumerInOrder pins the snapshot's

@@ -27,7 +27,9 @@ import (
 const defaultConsumerResubscribeDelay = 5 * time.Second
 
 // consumerResubscribeWarnFromAttempt is the first consecutive failed
-// re-subscribe attempt logged at WARN instead of Debug.
+// re-subscribe attempt logged at WARN instead of Debug. It is also the streak at
+// which ConsumerState.GivenUp reports the outage, so moving it moves a readiness
+// verdict as well as a log level.
 const consumerResubscribeWarnFromAttempt = 5
 
 // RegistryInterface defines the contract for messaging infrastructure management.
@@ -67,12 +69,13 @@ type Registry struct {
 	queues     map[string]*QueueDeclaration
 	bindings   []*BindingDeclaration
 	publishers []*PublisherDeclaration
-	// Mutex protects: exchanges, queues, bindings, publishers, consumerIndex, consumerOrder, consumersActive, declared
+	// Mutex protects: exchanges, queues, bindings, publishers, consumerIndex, consumerOrder, consumerStates, consumersActive, declared
 	// NOTE: GoBricks startup is single-threaded, but multi-tenant scenarios
 	// may have concurrent registry access during tenant initialization.
 	mu              sync.RWMutex
 	consumerIndex   map[consumerKey]*ConsumerDeclaration // Defense-in-depth deduplication
 	consumerOrder   []consumerKey                        // Deterministic iteration order
+	consumerStates  map[consumerKey]*consumerState       // Runtime subscription state, seeded when a consumer starts
 	declared        bool
 	consumersActive bool
 	cancelConsumers context.CancelFunc
@@ -99,12 +102,6 @@ type Registry struct {
 	redeclareMu sync.Mutex
 	// redeclareSkip holds declarations refused with PRECONDITION_FAILED. Guarded by redeclareMu.
 	redeclareSkip map[string]struct{}
-	// stateMu guards consumerStates. It is deliberately not mu: StartConsumers holds
-	// mu across its whole body while it spawns the supervisors, and every supervisor
-	// write lands outside mu. Where both are held the order is mu before stateMu;
-	// stateMu never nests with redeclareMu.
-	stateMu        sync.Mutex
-	consumerStates map[consumerKey]*consumerState
 }
 
 // setTenantStamps records whether this registry's consumers read a tenant stamp.
@@ -186,6 +183,7 @@ func NewRegistry(client AMQPClient, log logger.Logger) *Registry {
 		publishers:       make([]*PublisherDeclaration, 0),
 		consumerIndex:    make(map[consumerKey]*ConsumerDeclaration),
 		consumerOrder:    make([]consumerKey, 0),
+		consumerStates:   make(map[consumerKey]*consumerState),
 		resubscribeDelay: defaultConsumerResubscribeDelay,
 		redeclareSkip:    make(map[string]struct{}),
 	}
@@ -465,71 +463,74 @@ func (r *Registry) StopConsumers() {
 	r.logger.Info().Msg("All consumers stopped")
 }
 
-// consumerState is one declared consumer's runtime subscription state, written by
-// its supervisor goroutine and read back by ConsumerStates.
+// consumerState is one declared consumer's runtime subscription state. Its
+// supervisor goroutine owns the pointer for the consumer's whole life — the same
+// way it owns streamResume — and the mutex below is a leaf: nothing else is taken
+// while it is held, so it orders against no other lock in this file.
 type consumerState struct {
+	mu                sync.Mutex
 	subscribed        bool
 	resubscribes      uint64
 	lastResubscribeAt time.Time
 	failStreak        int
 }
 
-// consumerKeyFor is a declaration's identity, matching RegisterConsumer's key.
-func consumerKeyFor(declaration *ConsumerDeclaration) consumerKey {
-	return consumerKey{
-		Queue:     declaration.Queue,
-		Consumer:  declaration.Consumer,
-		EventType: declaration.EventType,
+// markSubscribed records the subscription a consumer session opens with. It clears
+// the streak so a restarted registry does not inherit the previous outage's.
+func (s *consumerState) markSubscribed() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscribed = true
+	s.failStreak = 0
+}
+
+// markUnsubscribed records that the broker closed the delivery channel.
+func (s *consumerState) markUnsubscribed() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscribed = false
+}
+
+// setFailStreak records how many attempts the current re-subscribe loop has lost.
+// The loop's own attempt counter is the streak, so the number the WARN escalation
+// branches on and the number GivenUp judges are one number.
+func (s *consumerState) setFailStreak(attempts int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failStreak = attempts
+}
+
+// markResubscribed records a successful re-subscribe at the given time.
+func (s *consumerState) markResubscribed(at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscribed = true
+	s.resubscribes++
+	s.lastResubscribeAt = at
+	s.failStreak = 0
+}
+
+// snapshot renders the state for queue. A nil receiver is a consumer that was
+// declared but never started — a documentation-only one, or any consumer before
+// StartConsumers — and reports the zero value. When active is false the registry's
+// consumers are stopped: no supervisor is trying, so the live flags have no subject
+// and read as "not subscribed, no streak", while the cumulative counters, which are
+// history, pass through.
+func (s *consumerState) snapshot(queue string, active bool) ConsumerState {
+	snapshot := ConsumerState{Queue: queue}
+	if s == nil {
+		return snapshot
 	}
-}
 
-// withConsumerState runs mutate against key's state under stateMu, creating the
-// entry on first touch. Every write to consumerStates goes through it.
-func (r *Registry) withConsumerState(key consumerKey, mutate func(*consumerState)) {
-	r.stateMu.Lock()
-	defer r.stateMu.Unlock()
-	if r.consumerStates == nil {
-		r.consumerStates = make(map[consumerKey]*consumerState)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snapshot.Resubscribes = s.resubscribes
+	snapshot.LastResubscribeAt = s.lastResubscribeAt
+	if active {
+		snapshot.Subscribed = s.subscribed
+		snapshot.FailStreak = s.failStreak
 	}
-	state, ok := r.consumerStates[key]
-	if !ok {
-		state = &consumerState{}
-		r.consumerStates[key] = state
-	}
-	mutate(state)
-}
-
-// markSubscribed records the first subscription of a consumer session.
-func (r *Registry) markSubscribed(key consumerKey) {
-	r.withConsumerState(key, func(state *consumerState) {
-		state.subscribed = true
-	})
-}
-
-// markUnsubscribed records that the broker closed the consumer's delivery channel.
-func (r *Registry) markUnsubscribed(key consumerKey) {
-	r.withConsumerState(key, func(state *consumerState) {
-		state.subscribed = false
-	})
-}
-
-// markResubscribeFailed lengthens the consecutive-failure streak of a consumer
-// whose re-subscribe attempt was refused.
-func (r *Registry) markResubscribeFailed(key consumerKey) {
-	r.withConsumerState(key, func(state *consumerState) {
-		state.failStreak++
-	})
-}
-
-// markResubscribed records a successful re-subscribe: the consumer is live again,
-// and the cumulative counter and timestamp move.
-func (r *Registry) markResubscribed(key consumerKey) {
-	r.withConsumerState(key, func(state *consumerState) {
-		state.subscribed = true
-		state.resubscribes++
-		state.lastResubscribeAt = time.Now()
-		state.failStreak = 0
-	})
+	return snapshot
 }
 
 // ConsumerState is a snapshot of one declared consumer's subscription state.
@@ -544,8 +545,8 @@ type ConsumerState struct {
 // GivenUp reports a consumer whose outage stopped looking like a routine flap: it
 // is unsubscribed and its consecutive re-subscribe failures have reached
 // consumerResubscribeWarnFromAttempt, the same threshold that escalates the
-// re-subscribe log to WARN. One threshold, one meaning. The supervisor itself
-// keeps retrying; this is the point at which it is worth reporting.
+// re-subscribe log to WARN. The supervisor keeps retrying; this is the point at
+// which the outage is worth reporting.
 func (s ConsumerState) GivenUp() bool {
 	return !s.Subscribed && s.FailStreak >= consumerResubscribeWarnFromAttempt
 }
@@ -556,25 +557,10 @@ func (s ConsumerState) GivenUp() bool {
 func (r *Registry) ConsumerStates() []ConsumerState {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	r.stateMu.Lock()
-	defer r.stateMu.Unlock()
 
 	states := make([]ConsumerState, 0, len(r.consumerOrder))
 	for _, key := range r.consumerOrder {
-		snapshot := ConsumerState{Queue: key.Queue}
-		if state, ok := r.consumerStates[key]; ok {
-			snapshot.Resubscribes = state.resubscribes
-			snapshot.LastResubscribeAt = state.lastResubscribeAt
-			// Shutdown is not an outage: a stopped registry has no supervisor left
-			// to re-subscribe, so its live flags are reported as "not subscribed,
-			// no streak" and a supervisor still unwinding cannot resurrect them.
-			// The cumulative counters above are history and survive.
-			if r.consumersActive {
-				snapshot.Subscribed = state.subscribed
-				snapshot.FailStreak = state.failStreak
-			}
-		}
-		states = append(states, snapshot)
+		states = append(states, r.consumerStates[key].snapshot(key.Queue, r.consumersActive))
 	}
 	return states
 }
@@ -654,6 +640,18 @@ func (s *streamResume) observe(headers amqp.Table) {
 	}
 }
 
+// consumerStateFor returns the runtime state of a consumer declaration, seeding it
+// on first start. Callers must hold r.mu: only StartConsumers reaches it.
+func (r *Registry) consumerStateFor(consumer *ConsumerDeclaration) *consumerState {
+	key := consumerKeyFor(consumer)
+	state, ok := r.consumerStates[key]
+	if !ok {
+		state = &consumerState{}
+		r.consumerStates[key] = state
+	}
+	return state
+}
+
 // startSingleConsumer starts a consumer for a specific queue and routes messages to the handler.
 // The first subscription is established synchronously so an unreachable broker
 // fails startup (fail-fast); the supervisor goroutine then keeps the consumer
@@ -663,7 +661,6 @@ func (r *Registry) startSingleConsumer(ctx context.Context, consumer *ConsumerDe
 	if err != nil {
 		return fmt.Errorf("failed to start consuming from queue %s: %w", consumer.Queue, err)
 	}
-	r.markSubscribed(consumerKeyFor(consumer))
 
 	// Stream-ness comes from the declared queue table, never from a delivery
 	// header, so a publisher-forged x-stream-offset cannot enable the resume
@@ -674,11 +671,17 @@ func (r *Registry) startSingleConsumer(ctx context.Context, consumer *ConsumerDe
 		resume = &streamResume{}
 	}
 
+	// StartConsumers holds r.mu across its whole body, so the state map is seeded
+	// directly here (as r.queues is read above). From here the supervisor owns the
+	// pointer and never takes r.mu again.
+	state := r.consumerStateFor(consumer)
+	state.markSubscribed()
+
 	// Supervise the subscription so it survives AMQP reconnects: when the broker
 	// closes the delivery channel (connection/channel flap), superviseConsumer
 	// re-subscribes on the client's new channel instead of leaving the queue
 	// with zero consumers until a process restart.
-	go r.superviseConsumer(ctx, consumer, deliveries, resume)
+	go r.superviseConsumer(ctx, consumer, deliveries, resume, state)
 
 	return nil
 }
@@ -689,8 +692,7 @@ func (r *Registry) startSingleConsumer(ctx context.Context, consumer *ConsumerDe
 // to the client's reconnection supervisor: the publisher path recovers because
 // every publish re-reads the live channel under lock, whereas a consumer
 // captures its delivery channel once, so it needs an explicit re-subscribe.
-func (r *Registry) superviseConsumer(ctx context.Context, consumer *ConsumerDeclaration, deliveries <-chan amqp.Delivery, resume *streamResume) {
-	key := consumerKeyFor(consumer)
+func (r *Registry) superviseConsumer(ctx context.Context, consumer *ConsumerDeclaration, deliveries <-chan amqp.Delivery, resume *streamResume, state *consumerState) {
 	for {
 		// Run one subscription session until the delivery channel closes
 		// (reconnect needed) or the context is canceled (stop for good).
@@ -698,7 +700,7 @@ func (r *Registry) superviseConsumer(ctx context.Context, consumer *ConsumerDecl
 		if !r.handleMessages(ctx, consumer, deliveries, resume) {
 			return // context canceled → stop for good
 		}
-		r.markUnsubscribed(key)
+		state.markUnsubscribed()
 
 		// Rapid-flap guard: if the session barely lasted, the broker is handing
 		// back channels that close almost immediately. Pace re-subscribes by the
@@ -710,7 +712,7 @@ func (r *Registry) superviseConsumer(ctx context.Context, consumer *ConsumerDecl
 			}
 		}
 
-		next, ok := r.resubscribe(ctx, consumer, resume)
+		next, ok := r.resubscribe(ctx, consumer, resume, state)
 		if !ok {
 			return // context canceled while waiting to re-subscribe
 		}
@@ -756,10 +758,9 @@ func consumerLogFields(consumer *ConsumerDeclaration) map[string]any {
 // client only hands out a fresh usable channel via its own reconnect supervisor
 // (handleReInit, paced by reInitDelay), and while the client is not ready
 // ConsumeFromQueue returns errNotConnected, which takes the backoff path below.
-func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaration, resume *streamResume) (<-chan amqp.Delivery, bool) {
+func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaration, resume *streamResume, state *consumerState) (<-chan amqp.Delivery, bool) {
 	log := r.logger.WithFields(consumerLogFields(consumer))
 
-	key := consumerKeyFor(consumer)
 	opts := r.consumeOptionsFor(consumer, resume)
 
 	for attempt := 1; ; attempt++ {
@@ -771,13 +772,13 @@ func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaratio
 		r.redeclareTopology(ctx)
 		deliveries, err := r.client.ConsumeFromQueue(ctx, opts)
 		if err == nil {
-			r.markResubscribed(key)
+			state.markResubscribed(time.Now())
 			log.Info().Int("attempt", attempt).
 				Msg("Consumer re-subscribed after delivery channel closed")
 			return deliveries, true
 		}
 
-		r.markResubscribeFailed(key)
+		state.setFailStreak(attempt)
 
 		// errNotConnected is expected while the client is still reconnecting;
 		// early attempts log at debug to avoid noise during a flap. Full-jitter

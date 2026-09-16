@@ -534,29 +534,33 @@ func (m *Manager) Close() error {
 // tenant key that holds a consumer registry. Order is declaration order within a key;
 // across keys it is map order.
 func (m *Manager) ConsumerStates() []ConsumerState {
+	_, states := m.consumerSnapshot()
+	return states
+}
+
+// consumerSnapshot reads the consumer map once and returns both the number of tenant
+// keys holding a registry and the state of every consumer they declare, so the two
+// never come from different instants.
+func (m *Manager) consumerSnapshot() (registries int, states []ConsumerState) {
 	m.consMu.RLock()
 	defer m.consMu.RUnlock()
 
-	var states []ConsumerState
+	states = make([]ConsumerState, 0, len(m.consumers))
 	for _, entry := range m.consumers {
 		if entry.registry == nil {
 			continue
 		}
+		registries++
 		states = append(states, entry.registry.ConsumerStates()...)
 	}
-	return states
+	return registries, states
 }
 
 // Stats returns statistics about the messaging manager. Publisher counters come from the
-// pool; the consumer counters come from the directly-managed consumer map and the
-// per-consumer subscription state its registries keep. consumer_registries counts tenant
-// keys, not consumers: a single-tenant service with forty consumers reports one.
+// pool; the consumer counters come from the consumer map and the per-consumer subscription
+// state its registries keep. consumer_registries counts tenant keys, not consumers.
 func (m *Manager) Stats() map[string]any {
-	m.consMu.RLock()
-	registryCount := len(m.consumers)
-	m.consMu.RUnlock()
-
-	states := m.ConsumerStates()
+	registryCount, states := m.consumerSnapshot()
 	subscribed := 0
 	var resubscribes uint64
 	for _, state := range states {
