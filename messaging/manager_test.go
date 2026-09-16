@@ -1662,6 +1662,52 @@ func TestMessagingManagerConsumerStatesCarryTheManagerKey(t *testing.T) {
 	assert.ElementsMatch(t, []string{tenant1ID, tenant2ID}, keys)
 }
 
+// TestMessagingManagerAnyConsumerGivenUpSpansEveryRegistry pins that the readiness predicate
+// sees every tenant key, not just the first: under per-tenant replay one tenant's broker can
+// fail while the rest are healthy, and that tenant's consumers are the ones nothing else
+// reports.
+func TestMessagingManagerAnyConsumerGivenUpSpansEveryRegistry(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New("error", false)
+
+	healthy, _ := newOutageClient()
+	failing, failingDeliveries := newOutageClient()
+	clients := map[string]AMQPClient{tenant1ID: healthy, tenant2ID: failing}
+
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{tenant1ID: amqpURLTenant1, tenant2ID: amqpURLTenant2}},
+		log,
+		ManagerOptions{MaxPublishers: 2, IdleTTL: time.Minute, ConsumerResubscribeDelay: time.Millisecond},
+		func(url string, _ logger.Logger) AMQPClient {
+			if url == amqpURLTenant2 {
+				return failing
+			}
+			return healthy
+		},
+	)
+	defer func() { _ = manager.Close() }() // stop supervisor goroutines
+
+	for tenant := range clients {
+		decls := NewDeclarations()
+		decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
+		decls.RegisterConsumer(&ConsumerDeclaration{
+			Queue:     testQueue,
+			Consumer:  testConsumer,
+			EventType: testEventType,
+			Handler:   &countingTestHandler{},
+		})
+		require.NoError(t, manager.EnsureConsumers(ctx, tenant, decls))
+	}
+
+	require.False(t, manager.AnyConsumerGivenUp(), "every tenant is subscribed")
+
+	failing.setFailing(true)
+	close(failingDeliveries)
+
+	assert.Eventually(t, manager.AnyConsumerGivenUp, 5*time.Second, 2*time.Millisecond,
+		"one tenant's consumer gave up and the manager did not report it")
+}
+
 // TestMessagingManagerAppliesTheConsumerResubscribeDelay pins that the option reaches
 // the registries the manager builds. At the default pace exhausting a re-subscribe
 // streak takes tens of seconds of jittered backoff, so a streak that completes inside

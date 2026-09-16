@@ -9789,14 +9789,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - note: New opt-in key `messaging.consumers.critical` (bool, absent = `false`, env
   `MESSAGING_CONSUMERS_CRITICAL`). Absent keeps today's behavior verbatim: the messaging probe
   leases the control-plane publisher, asks `IsReady()`, and is never critical. Set true and the
-  messaging kind becomes critical on BOTH arms at once. The consumer arm is checked first and fails
+  messaging kind becomes critical (see ADR-114 for what that covers). The consumer arm is checked first and fails
   `/ready` with `503` and the fixed `messaging unavailable` body (ADR-048) once any declared
   consumer is unsubscribed with five consecutive failed re-subscribe attempts — the same threshold
   that escalates the re-subscribe log to WARN, so a routine broker flap that recovers inside the
   streak never reaches the verdict; the publisher arm then carries the flap profile `cache.critical`
-  accepted under ADR-094. The consumer arm is judged BEFORE the control-plane publisher lease, so
-  it holds in every tenancy mode — including a per-tenant deployment with no root `messaging:`
-  block, whose lease resolves to nothing and whose kind reports `per_tenant`. New exported Go surface, all additive: `config.MessagingConsumersConfig`,
+  accepted under ADR-094. The consumer arm is lease-independent, so it applies in every tenancy
+  mode — including a per-tenant deployment with no root `messaging:` block, whose kind reports
+  `per_tenant`. New exported door `messaging.Manager.AnyConsumerGivenUp()`. New exported Go surface, all additive: `config.MessagingConsumersConfig`,
   `MessagingConfig.Consumers`, `Config.IsMessagingConsumersCritical()` and
   `messaging.ManagerOptions.ConsumerResubscribeDelay` (zero keeps the registry's 5s floor), so an
   UNKEYED positional `messaging.ManagerOptions{…}` literal stops compiling and the compiler names it

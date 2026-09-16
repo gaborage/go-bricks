@@ -789,65 +789,67 @@ func TestAppUsesProvidedResourceSource(t *testing.T) {
 	assert.Positive(t, resource.msgCalls)
 }
 
-// TestCacheSlotCriticalityFromLoadedConfig walks the whole seam a deployment walks — YAML
-// through koanf into IsCacheCritical into the cache slot's description — because a Go
-// struct literal cannot show that an omitted key survives the load as nil.
-func TestCacheSlotCriticalityFromLoadedConfig(t *testing.T) {
-	const cacheEnabled = "\ncache:\n  enabled: true\n  redis:\n    host: localhost\n    port: 6379\n"
+// TestSlotCriticalityFromLoadedConfig walks the whole seam a deployment walks — YAML through
+// koanf into the criticality accessor into the slot's own description — for every kind that
+// has an opt-in criticality key. A Go struct literal cannot show that an omitted key survives
+// the load as non-critical, which is the property each of these rows exists to pin.
+func TestSlotCriticalityFromLoadedConfig(t *testing.T) {
+	const (
+		cacheEnabled     = "\ncache:\n  enabled: true\n  redis:\n    host: localhost\n    port: 6379\n"
+		brokerConfigured = "\nmessaging:\n  broker:\n    url: amqp://guest:guest@localhost:5672/\n"
+	)
 
 	tests := []struct {
 		name             string
-		cacheYAML        string
+		component        string
+		yaml             string
+		wire             func(t *testing.T, app *App)
 		expectedCritical bool
 	}{
-		{name: "critical_omitted_is_non_critical", cacheYAML: cacheEnabled, expectedCritical: false},
-		{name: "critical_false_is_non_critical", cacheYAML: cacheEnabled + "  critical: false\n", expectedCritical: false},
-		{name: "critical_true_opts_in", cacheYAML: cacheEnabled + "  critical: true\n", expectedCritical: true},
+		{
+			name: "cache_critical_omitted_is_non_critical", component: componentCache,
+			yaml: cacheEnabled, wire: wireCacheManager, expectedCritical: false,
+		},
+		{
+			name: "cache_critical_false_is_non_critical", component: componentCache,
+			yaml: cacheEnabled + "  critical: false\n", wire: wireCacheManager, expectedCritical: false,
+		},
+		{
+			name: "cache_critical_true_opts_in", component: componentCache,
+			yaml: cacheEnabled + "  critical: true\n", wire: wireCacheManager, expectedCritical: true,
+		},
+		{
+			name: "messaging_critical_omitted_is_non_critical", component: componentMessaging,
+			yaml: brokerConfigured, wire: wireMessagingManager, expectedCritical: false,
+		},
+		{
+			name: "messaging_critical_false_is_non_critical", component: componentMessaging,
+			yaml: brokerConfigured + "  consumers:\n    critical: false\n", wire: wireMessagingManager, expectedCritical: false,
+		},
+		{
+			name: "messaging_critical_true_opts_in", component: componentMessaging,
+			yaml: brokerConfigured + "  consumers:\n    critical: true\n", wire: wireMessagingManager, expectedCritical: true,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := loadConfigFromYAML(t, minimumValidConfig+tc.cacheYAML)
-			app := &App{cfg: cfg, logger: logger.New("error", false), cacheManager: createTestCacheManager(t)}
+			app := &App{cfg: loadConfigFromYAML(t, minimumValidConfig+tc.yaml), logger: logger.New("error", false)}
+			tc.wire(t, app)
 
 			app.installSlots(slotInputs{})
 
-			status := slotDescription(t, app, componentCache).Run(context.Background())
-			assert.Equal(t, componentCache, status.Name)
+			status := slotDescription(t, app, tc.component).Run(context.Background())
+			assert.Equal(t, tc.component, status.Name)
 			assert.Equal(t, tc.expectedCritical, status.Critical)
 		})
 	}
 }
 
-// TestMessagingSlotCriticalityFromLoadedConfig is the messaging twin of the cache walk:
-// YAML through koanf into IsMessagingConsumersCritical into the messaging slot's
-// description — a Go struct literal cannot show that an omitted key survives the load
-// as non-critical.
-func TestMessagingSlotCriticalityFromLoadedConfig(t *testing.T) {
-	const brokerConfigured = "\nmessaging:\n  broker:\n    url: amqp://guest:guest@localhost:5672/\n"
+func wireCacheManager(t *testing.T, app *App) { app.cacheManager = createTestCacheManager(t) }
 
-	tests := []struct {
-		name             string
-		messagingYAML    string
-		expectedCritical bool
-	}{
-		{name: "critical_omitted_is_non_critical", messagingYAML: brokerConfigured, expectedCritical: false},
-		{name: "critical_false_is_non_critical", messagingYAML: brokerConfigured + "  consumers:\n    critical: false\n", expectedCritical: false},
-		{name: "critical_true_opts_in", messagingYAML: brokerConfigured + "  consumers:\n    critical: true\n", expectedCritical: true},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := loadConfigFromYAML(t, minimumValidConfig+tc.messagingYAML)
-			app := &App{cfg: cfg, logger: logger.New("error", false), messagingManager: createTestMessagingManagerWithNotReadyClient(t)}
-
-			app.installSlots(slotInputs{})
-
-			status := slotDescription(t, app, componentMessaging).Run(context.Background())
-			assert.Equal(t, componentMessaging, status.Name)
-			assert.Equal(t, tc.expectedCritical, status.Critical)
-		})
-	}
+func wireMessagingManager(t *testing.T, app *App) {
+	app.messagingManager = createTestMessagingManagerWithNotReadyClient(t)
 }
 
 // TestCriticalSlotDescriptionsRenderNoRawError enforces the Prober contract over
@@ -1149,13 +1151,8 @@ func TestReadyCheckScenarios(t *testing.T) {
 			fixture := newTestAppFixture(t)
 			tc.prepare(fixture)
 
-			ctx, rec := fixture.newReadyContext()
-			err := fixture.app.readyCheck(ctx)
-			require.NoError(t, err)
-			assert.Equal(t, tc.expectedStatus, rec.Code)
-
-			var body map[string]any
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+			code, body := fixture.readyResponse(t)
+			assert.Equal(t, tc.expectedStatus, code)
 			tc.assertBody(t, body)
 
 			fixture.db.AssertExpectations(t)
@@ -1168,12 +1165,6 @@ func TestReadyCheckScenarios(t *testing.T) {
 // parks one attempt short of it and then reaches it, so moving the threshold on the
 // messaging side reds these tests instead of silently moving the readiness verdict.
 const consumerGiveUpAttempt = 5
-
-const (
-	readyProbeQueue     = "ready-probe-queue"
-	readyProbeConsumer  = "ready-probe-consumer"
-	readyProbeEventType = "ready.probe"
-)
 
 // errConsumerOutage is what the fake broker answers a re-subscribe with while the outage
 // is open. It never reaches a rendered body — the probe replaces it with its own sentinel.
@@ -1297,10 +1288,13 @@ func (c *consumerOutageClient) setReady(ready bool) {
 	c.ready = ready
 }
 
-func (c *consumerOutageClient) releaseParked(attempt int) {
+func (c *consumerOutageClient) releaseParked(t *testing.T, attempt int) {
+	t.Helper()
+
 	c.mu.Lock()
 	slot := c.parks[attempt]
 	c.mu.Unlock()
+	require.NotNil(t, slot, "attempt %d was never registered as a park slot", attempt)
 
 	close(slot.release)
 }
@@ -1322,24 +1316,9 @@ func (c *consumerOutageClient) awaitParked(t *testing.T, attempt int) {
 	}
 }
 
-// readyProbeHandler makes the probe's consumer declaration supervisable; nothing is ever
-// delivered to it in these tests.
-type readyProbeHandler struct{}
-
-func (readyProbeHandler) Handle(context.Context, *amqp.Delivery) error { return nil }
-
-func (readyProbeHandler) EventType() string { return readyProbeEventType }
-
-// messagingManagerOver builds a manager whose every client is c, paced so a full
-// re-subscribe streak completes in milliseconds instead of the default's tens of seconds.
-func messagingManagerOver(t *testing.T, cfg *config.Config, c messaging.AMQPClient) *messaging.Manager {
-	t.Helper()
-
-	return messagingManagerOn(t, config.NewTenantStore(cfg), c)
-}
-
-// messagingManagerOn is messagingManagerOver with the broker source named explicitly, for the
-// per-tenant deployments whose control-plane key resolves to nothing.
+// messagingManagerOn builds a manager whose every client is c, resolving broker URLs through
+// source, and paced so a full re-subscribe streak completes in milliseconds instead of the
+// default's tens of seconds.
 func messagingManagerOn(t *testing.T, source messaging.BrokerURLProvider, c messaging.AMQPClient) *messaging.Manager {
 	t.Helper()
 
@@ -1379,19 +1358,6 @@ func perTenantMessagingFixture(t *testing.T, client messaging.AMQPClient) *testA
 	return f
 }
 
-// oneConsumerDeclaration is the smallest topology carrying a supervised consumer.
-func oneConsumerDeclaration() *messaging.Declarations {
-	decls := messaging.NewDeclarations()
-	decls.RegisterQueue(&messaging.QueueDeclaration{Name: readyProbeQueue})
-	decls.RegisterConsumer(&messaging.ConsumerDeclaration{
-		Queue:     readyProbeQueue,
-		Consumer:  readyProbeConsumer,
-		EventType: readyProbeEventType,
-		Handler:   readyProbeHandler{},
-	})
-	return decls
-}
-
 // useMessagingManager installs manager in place of the fixture's own — closing that one, which
 // holds a mock client of its own — and starts the declared consumer under key.
 func (f *testAppFixture) useMessagingManager(t *testing.T, manager *messaging.Manager, key string) {
@@ -1402,7 +1368,7 @@ func (f *testAppFixture) useMessagingManager(t *testing.T, manager *messaging.Ma
 	}
 	f.app.messagingManager = manager
 	f.rebuildLifecycle()
-	require.NoError(t, manager.EnsureConsumers(context.Background(), key, oneConsumerDeclaration()))
+	require.NoError(t, manager.EnsureConsumers(context.Background(), key, declarationsWithConsumer()))
 }
 
 // withSupervisedConsumer points the fixture's app at a messaging manager serving client on the
@@ -1410,7 +1376,7 @@ func (f *testAppFixture) useMessagingManager(t *testing.T, manager *messaging.Ma
 func (f *testAppFixture) withSupervisedConsumer(t *testing.T, client messaging.AMQPClient) {
 	t.Helper()
 
-	f.useMessagingManager(t, messagingManagerOver(t, f.app.cfg, client), "")
+	f.useMessagingManager(t, messagingManagerOn(t, config.NewTenantStore(f.app.cfg), client), "")
 }
 
 // readyResponse runs the real /ready handler and returns its status code and decoded body.
@@ -1450,12 +1416,7 @@ func awaitConsumerGaveUp(t *testing.T, manager *messaging.Manager) {
 func assertNoConsumerCoordinates(t *testing.T, body map[string]any) {
 	t.Helper()
 
-	rendered, err := json.Marshal(body)
-	require.NoError(t, err)
-	assert.NotContains(t, string(rendered), readyProbeQueue)
-	assert.NotContains(t, string(rendered), readyProbeConsumer)
-	assert.NotContains(t, string(rendered), readyProbeEventType)
-	assert.NotContains(t, string(rendered), errConsumerOutage.Error())
+	assertReadyBodyOmits(t, body, declaredQueue, declaredConsumer, declaredEventType, errConsumerOutage.Error())
 }
 
 // TestReadyTurnsRedOnlyOnceAConsumerHasGivenUpReSubscribing walks the three edges of
@@ -1487,7 +1448,7 @@ func TestReadyTurnsRedOnlyOnceAConsumerHasGivenUpReSubscribing(t *testing.T) {
 	assert.Equal(t, healthyStatus, body[componentMessaging], "the intermediate state shows in the stats, not in the verdict")
 
 	// Edge 2 — the parked attempt fails, reaching the threshold.
-	client.releaseParked(consumerGiveUpAttempt)
+	client.releaseParked(t, consumerGiveUpAttempt)
 	require.Eventually(t, func() bool {
 		return f.readyStatusCode() == http.StatusServiceUnavailable
 	}, 5*time.Second, 2*time.Millisecond, "the attempt that reached the threshold did not fail readiness")
@@ -1503,7 +1464,7 @@ func TestReadyTurnsRedOnlyOnceAConsumerHasGivenUpReSubscribing(t *testing.T) {
 	// rather than racing an exponential backoff that is already seconds wide.
 	client.awaitParked(t, consumerGiveUpAttempt+1)
 	client.endOutage()
-	client.releaseParked(consumerGiveUpAttempt + 1)
+	client.releaseParked(t, consumerGiveUpAttempt+1)
 
 	require.Eventually(t, func() bool {
 		return f.readyStatusCode() == http.StatusOK
@@ -1555,9 +1516,9 @@ func TestReadyReportsTheConsumerArmBeforeThePublisherArm(t *testing.T) {
 
 // TestReadyFailsAPerTenantKindWhoseConsumerGaveUp pins the arm where it is easiest to lose.
 // Under per-tenant tenancy with no control-plane broker the probe's lease answers
-// NotConfigured and judge short-circuits to per_tenant with a nil error, so an arm evaluated
-// inside the leased closure never runs — in exactly the deployment holding the most consumers.
-// The arm is judged ahead of the lease, so it runs here.
+// NotConfigured and judge short-circuits to per_tenant with a nil error, so an arm reachable
+// only through the lease never runs — in exactly the deployment holding the most consumers.
+// The arm is a lease-independent live check, so it runs here.
 func TestReadyFailsAPerTenantKindWhoseConsumerGaveUp(t *testing.T) {
 	client := newConsumerOutageClient()
 	f := perTenantMessagingFixture(t, client)

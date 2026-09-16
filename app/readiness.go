@@ -50,9 +50,13 @@ type probeDescription struct {
 	// a shared-ledger control-plane database (ADR-041) resolves through exactly that key.
 	perTenant bool
 	// acquire leases the kind's fixed-key resource and returns how to check it is live and
-	// how to release it. nil for kinds probed without a lease, which set live directly.
+	// how to release it. nil for kinds probed without a lease, which set live alone.
 	acquire func(ctx context.Context) (live func(context.Context) error, release func(), err error)
-	// live checks a lease-less kind (only read when acquire is nil).
+	// live is the kind's LEASE-INDEPENDENT liveness check, judged before the lease is taken
+	// and, when it fails, instead of taking one. A kind may set it beside acquire: the two
+	// then run in that order, so a condition that does not need the fixed "" key is still
+	// judged when that key resolves to nothing (a per-tenant deployment, where judge
+	// short-circuits the lease to per_tenant).
 	live func(ctx context.Context) error
 	// stats snapshots the kind's counters; called while the lease is held so the entry the
 	// probe itself pooled is counted (the messaging manager publishes active_publishers: 0
@@ -101,19 +105,27 @@ func (d probeDescription) judge(ctx context.Context) (status string, stats map[s
 	if d.absent {
 		return d.notConfigured(), d.snapshot(), nil
 	}
-	live := d.live
-	if d.acquire != nil {
-		leasedLive, release, acquireErr := d.acquire(ctx)
-		if acquireErr != nil {
-			if config.IsNotConfigured(acquireErr) {
-				return d.notConfigured(), d.snapshot(), nil
-			}
-			return unhealthyStatus, d.snapshot(), acquireErr
+	// The lease-independent check first: it is the one arm that still has an answer when the
+	// fixed "" key resolves to nothing, and a kind already known to be failing need not lease.
+	if d.live != nil {
+		if liveErr := d.live(ctx); liveErr != nil {
+			return unhealthyStatus, d.snapshot(), liveErr
 		}
-		defer release() // the probe holds no scope; the snapshot below is taken before this runs
-		live = leasedLive
 	}
-	if liveErr := live(ctx); liveErr != nil {
+	if d.acquire == nil {
+		return healthyStatus, d.snapshot(), nil
+	}
+
+	leasedLive, release, acquireErr := d.acquire(ctx)
+	if acquireErr != nil {
+		if config.IsNotConfigured(acquireErr) {
+			return d.notConfigured(), d.snapshot(), nil
+		}
+		return unhealthyStatus, d.snapshot(), acquireErr
+	}
+	defer release() // the probe holds no scope; the snapshot below is taken before this runs
+
+	if liveErr := leasedLive(ctx); liveErr != nil {
 		return unhealthyStatus, d.snapshot(), liveErr
 	}
 	return healthyStatus, d.snapshot(), nil

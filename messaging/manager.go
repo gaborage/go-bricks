@@ -121,9 +121,11 @@ type ManagerOptions struct {
 	// publish by clients created by the default factory (ADR-105). Empty stamps no app_id.
 	AppName string
 	// ConsumerResubscribeDelay is the backoff floor between a consumer's re-subscribe
-	// attempts, applied to every registry this manager builds. Zero (or negative)
-	// leaves the registry default (5s). The app never sets it: there is no config key,
-	// and the default is what a broker flap should be paced at.
+	// attempts, applied to every registry this manager builds. Zero (or negative) leaves
+	// the registry default (5s), which is what a broker flap should be paced at.
+	// Deliberately a Go-only seam with NO config mapping: BuildMessagingOptions never sets
+	// it, so no YAML key reaches it. It exists for an embedder — or a test — that drives a
+	// re-subscribe streak directly and cannot wait out the default's jittered ladder.
 	ConsumerResubscribeDelay time.Duration
 	// TenantStamps makes consumers read the tenant stamp off each delivery and seed
 	// the handler context with it. True only under multitenant.enabled together with
@@ -546,6 +548,23 @@ func (m *Manager) Close() error {
 func (m *Manager) ConsumerStates() []ConsumerState {
 	_, states := m.consumerSnapshot()
 	return states
+}
+
+// AnyConsumerGivenUp reports whether any consumer on any tenant key has stopped being able to
+// re-subscribe. It answers the readiness probe's question directly rather than through
+// ConsumerStates: /ready asks on every poll, and a snapshot would copy every declared
+// consumer's row — four identifier strings apiece — to compute one bool, carrying coordinates
+// that must never reach the unauthenticated body into the package that renders it.
+func (m *Manager) AnyConsumerGivenUp() bool {
+	m.consMu.RLock()
+	defer m.consMu.RUnlock()
+
+	for _, entry := range m.consumers {
+		if entry.registry != nil && entry.registry.anyGivenUp() {
+			return true
+		}
+	}
+	return false
 }
 
 // consumerSnapshot reads the consumer map once and returns both the number of tenant
