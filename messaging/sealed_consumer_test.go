@@ -452,7 +452,7 @@ func TestValidateDedupKeyBindsASealedKeyToItsDelivery(t *testing.T) {
 				return
 			}
 			require.ErrorIs(t, err, ErrInvalidEventID)
-			assert.ErrorContains(t, err, tc.wantMsg, "each refusal arm names itself")
+			require.ErrorContains(t, err, tc.wantMsg, "each refusal arm names itself")
 			for _, other := range []string{msgUnbound, msgMismatch, msgZero} {
 				if other == tc.wantMsg {
 					continue
