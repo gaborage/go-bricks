@@ -817,7 +817,7 @@ type dbGetResult struct {
 }
 
 // TestDbManagerRemoveReResolvesRotatedCredentialsInFlight extends the rotation recipe to a
-// Get still dialling when config is switched and Remove runs: that Get keeps the pre-rotation
+// Get still dialing when config is switched and Remove runs: that Get keeps the pre-rotation
 // handle (never cached), and the following Get observes the new credentials.
 func TestDbManagerRemoveReResolvesRotatedCredentialsInFlight(t *testing.T) {
 	src := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
