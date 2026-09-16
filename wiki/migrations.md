@@ -9793,8 +9793,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `/ready` with `503` and the fixed `messaging unavailable` body (ADR-048) once any declared
   consumer is unsubscribed with five consecutive failed re-subscribe attempts — the same threshold
   that escalates the re-subscribe log to WARN, so a routine broker flap that recovers inside the
-  streak never reaches the verdict; the publisher arm then carries the flap profile `cache.critical`
-  accepted under ADR-094. The consumer arm is lease-independent, so it applies in every tenancy
+  streak never reaches the verdict; the publisher arm keeps its existing `IsReady()` check, now
+  judged critically, with the flap profile ADR-094 accepted for an opt-in critical probe. There is
+  no second key: `messaging.consumers.critical` alone governs both arms. The consumer arm is lease-independent, so it applies in every tenancy
   mode — including a per-tenant deployment with no root `messaging:` block, whose kind reports
   `per_tenant`. New exported door `messaging.Manager.AnyConsumerGivenUp()`. New exported Go surface, all additive: `config.MessagingConsumersConfig`,
   `MessagingConfig.Consumers`, `Config.IsMessagingConsumersCritical()` and

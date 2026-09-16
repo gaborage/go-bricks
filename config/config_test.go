@@ -1138,6 +1138,7 @@ func clearEnvironmentVariables() {
 		"DATABASE_ORACLE_SERVICE_NAME", "DATABASE_ORACLE_SERVICE_SID", "DATABASE_CONNECTIONSTRING",
 		"LOG_LEVEL", "LOG_PRETTY", "LOG_OUTPUT_FORMAT", "LOG_OUTPUT_FILE",
 		"MESSAGING_BROKER_URL", "MESSAGING_ROUTING_EXCHANGE", "MESSAGING_ROUTING_KEY",
+		"MESSAGING_CONSUMERS_CRITICAL",
 		"MESSAGING_BROKER_VIRTUALHOST",
 		// Bool keys (ADR-077). The unset-keeps-the-default assertions read absence, so an
 		// ambient value in the developer's or runner's environment would make them pass or
