@@ -468,11 +468,37 @@ func (r *Registry) StopConsumers() {
 // it owns streamResume — and the mutex below is a leaf: it is taken under r.mu by
 // the readers, but nothing is ever taken while it is held.
 type consumerState struct {
+	mu         sync.Mutex
+	subscribed bool
+	failStreak int
+	// history belongs to the consumer, not to this session: every session of the same
+	// consumer writes the same record, so a session still unwinding when the next one
+	// starts still has its successes counted. Its mutex is a leaf taken under mu.
+	history *consumerHistory
+}
+
+// consumerHistory is a consumer's cumulative record, outliving each session that writes it.
+// Its mutex is a leaf and is taken UNDER a session's: every writer holds consumerState.mu
+// first, so nothing may ever take a consumerState.mu while holding this one.
+type consumerHistory struct {
 	mu                sync.Mutex
-	subscribed        bool
 	resubscribes      uint64
 	lastResubscribeAt time.Time
-	failStreak        int
+}
+
+// recordResubscribe counts one successful re-subscribe, whichever session landed it.
+func (h *consumerHistory) recordResubscribe(at time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.resubscribes++
+	h.lastResubscribeAt = at
+}
+
+// read returns the record so far.
+func (h *consumerHistory) read() (resubscribes uint64, lastResubscribeAt time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.resubscribes, h.lastResubscribeAt
 }
 
 // markSubscribed records the subscription a consumer session opens with.
@@ -500,14 +526,6 @@ func (s *consumerState) markSupervisorStopped() {
 	s.failStreak = 0
 }
 
-// history returns the counters that outlive the session: a restart carries them
-// into the next one, so a stop does not erase what already happened.
-func (s *consumerState) history() (resubscribes uint64, lastResubscribeAt time.Time) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.resubscribes, s.lastResubscribeAt
-}
-
 // setFailStreak records how many attempts the current re-subscribe loop has lost.
 // The loop's own attempt counter is the streak, so the number the WARN escalation
 // branches on and the number GivenUp judges are one number.
@@ -522,9 +540,8 @@ func (s *consumerState) markResubscribed(at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.subscribed = true
-	s.resubscribes++
-	s.lastResubscribeAt = at
 	s.failStreak = 0
+	s.history.recordResubscribe(at)
 }
 
 // snapshot renders the state of the consumer identified by key. A nil receiver is one that was
@@ -541,8 +558,7 @@ func (s *consumerState) snapshot(key consumerKey, consumersActive bool) Consumer
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	snapshot.Resubscribes = s.resubscribes
-	snapshot.LastResubscribeAt = s.lastResubscribeAt
+	snapshot.Resubscribes, snapshot.LastResubscribeAt = s.history.read()
 	if consumersActive {
 		snapshot.Subscribed = s.subscribed
 		snapshot.FailStreak = s.failStreak
@@ -678,25 +694,22 @@ func (s *streamResume) observe(headers amqp.Table) {
 	}
 }
 
-// consumerStateFor installs the state a starting consumer session writes to and
-// carries the previous session's counters into it. A restart always gets a FRESH
-// struct: StopConsumers cancels its supervisors without waiting for them, so one
-// still unwinding would otherwise share the new session's state and could revive
-// its subscribed flag or leave its failure streak behind. Writing to a struct the
-// new session does not read, it cannot. The carry-over below is the one read of the
-// old struct, so a success the old supervisor lands after it is dropped from
-// Resubscribes — at most one per restart, and the alternative is the false green
-// the fresh struct exists to prevent. Callers must hold r.mu; only StartConsumers
-// reaches this.
+// consumerStateFor installs the state a starting consumer session writes to. A restart
+// always gets a FRESH struct: StopConsumers cancels its supervisors without waiting for
+// them, so one still unwinding would otherwise share the new session's state and could
+// revive its subscribed flag or leave its failure streak behind. It keeps the consumer's
+// history, though — the same record, not a copy — because a success that lands late is
+// still a success this consumer had, and a copy would drop it. History is per consumer,
+// session state is per start. Callers must hold r.mu; only StartConsumers reaches this.
 func (r *Registry) consumerStateFor(consumer *ConsumerDeclaration) *consumerState {
 	if r.consumerStates == nil {
 		r.consumerStates = make(map[consumerKey]*consumerState)
 	}
 
 	key := consumerKeyFor(consumer)
-	state := &consumerState{}
+	state := &consumerState{history: &consumerHistory{}}
 	if previous, ok := r.consumerStates[key]; ok {
-		state.resubscribes, state.lastResubscribeAt = previous.history()
+		state.history = previous.history
 	}
 	r.consumerStates[key] = state
 	return state

@@ -9758,7 +9758,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 - detect: `git grep -n 'active_consumers'` over your dashboards, alert rules and scrape configs —
   anything reading `messaging_stats.active_consumers` from `GET /ready`, or the `messaging`
-  component's `details` on `GET /_sys/health-debug`.
+  component's `details` on `GET /_sys/health-debug`. A grep reads only what is in the checkout:
+  before accepting a no-match, check the readers that live outside it — Grafana dashboards saved in
+  the UI, alert rules held by the monitoring platform, and scrape or collector configuration
+  managed by another team — since those go flat silently rather than failing.
 - scope: the key is renamed, not retired. It counted tenant keys in the consumer map — one for a
   single-tenant service, whatever its consumer count — and that count is now
   `consumer_registries`. Three counters join it: `declared_consumers` (consumers declared across
@@ -9769,7 +9772,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `Manager.ConsumerStates()`. No configuration key; no consumer of the Go API breaks.
 - gate: match — a dashboard, alert rule or scrape reads `active_consumers`; it reads nothing after
   the bump and the series silently goes flat. no-match — nothing outside the service reads the
-  messaging stats map.
+  messaging stats map, in the checkout OR in the externally managed configuration above.
 - before: `"messaging_stats": {"active_consumers": 1, …}`.
 - after: `"messaging_stats": {"consumer_registries": 1, "declared_consumers": 3,
   "subscribed_consumers": 3, "consumer_resubscribes": 0, …}`.

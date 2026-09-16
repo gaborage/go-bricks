@@ -2769,6 +2769,42 @@ func TestRegistryConsumerStatesEndTheSessionWhenTheContextIsCanceled(t *testing.
 	assert.Zero(t, registry.ConsumerStates()[0].FailStreak)
 }
 
+// TestRegistryConsumerHistoryOutlivesItsSession pins the split between what belongs to a
+// consumer and what belongs to one run of it. StopConsumers does not wait for its
+// supervisors and AMQPClientImpl.ConsumeFromQueue ignores the context, so a replaced
+// session can still land a success: it must reach the cumulative record, and it must not
+// touch the live flags of the session that replaced it.
+func TestRegistryConsumerHistoryOutlivesItsSession(t *testing.T) {
+	client := &resubscribingMockClient{simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true}}
+	registry := NewRegistry(client, &stubLogger{})
+	declaration := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Workers:   1,
+		Handler:   &countingTestHandler{},
+	}
+	registry.RegisterConsumer(declaration)
+
+	// One goroutine throughout, so consumerStateFor's "callers hold r.mu" contract is
+	// trivially met without starting real supervisors.
+	first := registry.consumerStateFor(declaration)
+	first.markResubscribed(time.Now())
+	second := registry.consumerStateFor(declaration)
+	second.markSubscribed()
+	registry.consumersActive = true
+
+	// The replaced session's supervisor, still unwinding, lands one more of everything.
+	first.markResubscribed(time.Now())
+	first.setFailStreak(consumerResubscribeWarnFromAttempt)
+	first.markUnsubscribed()
+
+	state := registry.ConsumerStates()[0]
+	assert.Equal(t, uint64(2), state.Resubscribes, "the record counts every session's successes")
+	assert.False(t, state.LastResubscribeAt.IsZero())
+	assert.True(t, state.Subscribed, "a replaced session cannot clear the live session's flags")
+	assert.Zero(t, state.FailStreak, "nor lengthen its streak")
+}
+
 // TestRegistryConsumerStatesCarryTheWholeConsumerIdentity pins that a row names the
 // consumer, not merely its queue: RegisterConsumer's identity is queue + consumer tag +
 // event type, so two consumers legitimately sharing a queue must be told apart.
