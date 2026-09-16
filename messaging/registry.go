@@ -465,8 +465,8 @@ func (r *Registry) StopConsumers() {
 
 // consumerState is one consumer session's runtime subscription state. The
 // supervisor goroutine owns the pointer for the session's whole life — the same way
-// it owns streamResume — and the mutex below is a leaf: it is taken under r.mu by
-// the readers, but nothing is ever taken while it is held.
+// it owns streamResume. The mutex below is taken under r.mu by the readers, and the
+// only lock ever taken while it is held is the history's leaf mutex.
 type consumerState struct {
 	mu         sync.Mutex
 	subscribed bool
