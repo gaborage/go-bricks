@@ -332,11 +332,14 @@ func TestSessionTxIterationBadConnInvalidatesTrackedSession(t *testing.T) {
 
 	tx, err := sess.BeginTx(ctx, nil)
 	require.NoError(t, err)
-	rows, err := tx.Query(ctx, "SELECT n FROM t")
-	require.NoError(t, err)
-	assert.False(t, rows.Next())
-	require.ErrorIs(t, rows.Err(), driver.ErrBadConn)
-	require.NoError(t, rows.Close())
+	observe := func() {
+		rows, qerr := tx.Query(ctx, "SELECT n FROM t")
+		require.NoError(t, qerr)
+		defer func() { require.NoError(t, rows.Close()) }()
+		assert.False(t, rows.Next())
+		require.ErrorIs(t, rows.Err(), driver.ErrBadConn)
+	}
+	observe()
 	require.NoError(t, tx.Rollback(ctx))
 
 	_, err = sess.Exec(ctx, "SELECT 1")

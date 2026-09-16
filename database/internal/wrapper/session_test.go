@@ -328,7 +328,6 @@ func TestSessionTxBadConnInvalidatesSession(t *testing.T) {
 		t.Helper()
 		assert.False(t, rows.Next())
 		require.ErrorIs(t, rows.Err(), driver.ErrBadConn)
-		require.NoError(t, rows.Close())
 	}
 
 	tests := []struct {
@@ -348,6 +347,7 @@ func TestSessionTxBadConnInvalidatesSession(t *testing.T) {
 			observe: func(t *testing.T, ctx context.Context, tx types.Tx) {
 				rows, err := tx.Query(ctx, "SELECT n FROM t")
 				require.NoError(t, err)
+				defer func() { require.NoError(t, rows.Close()) }()
 				iterateToBadConn(t, rows)
 			},
 			endTx: func(t *testing.T, ctx context.Context, tx types.Tx) {
@@ -364,6 +364,7 @@ func TestSessionTxBadConnInvalidatesSession(t *testing.T) {
 			observe: func(t *testing.T, ctx context.Context, tx types.Tx) {
 				rows, err := tx.Query(ctx, "SELECT n FROM t")
 				require.NoError(t, err)
+				defer func() { require.NoError(t, rows.Close()) }()
 				iterateToBadConn(t, rows)
 			},
 			endTx: func(t *testing.T, ctx context.Context, tx types.Tx) {
@@ -396,7 +397,7 @@ func TestSessionTxBadConnInvalidatesSession(t *testing.T) {
 				_, err := tx.Exec(ctx, "INSERT INTO t VALUES (1)")
 				require.ErrorIs(t, err, sql.ErrConnDone)
 			},
-			endTx: func(t *testing.T, ctx context.Context, tx types.Tx) {
+			endTx: func(_ *testing.T, ctx context.Context, tx types.Tx) {
 				_ = tx.Rollback(ctx)
 			},
 		},
@@ -411,9 +412,9 @@ func TestSessionTxBadConnInvalidatesSession(t *testing.T) {
 			observe: func(t *testing.T, ctx context.Context, tx types.Tx) {
 				rows, err := tx.Query(ctx, "SELECT n FROM t")
 				require.NoError(t, err)
+				defer func() { require.NoError(t, rows.Close()) }()
 				assert.True(t, rows.Next())
 				require.NoError(t, rows.Err())
-				require.NoError(t, rows.Close())
 			},
 			endTx: func(t *testing.T, ctx context.Context, tx types.Tx) {
 				require.NoError(t, tx.Commit(ctx))
