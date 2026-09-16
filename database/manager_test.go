@@ -15,6 +15,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -823,11 +824,7 @@ func TestDbManagerRemoveReResolvesRotatedCredentialsInFlight(t *testing.T) {
 	src := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
 		tenantA: {Type: "postgresql", Host: "localhost", Username: dbUserV1},
 	}}
-	started := make(chan struct{})
-	gate := make(chan struct{})
-	var startOnce, unblockOnce sync.Once
-	unblock := func() { unblockOnce.Do(func() { close(gate) }) }
-	t.Cleanup(unblock)
+	blocked := testutil.NewBlockedCreate(t)
 
 	var mu sync.Mutex
 	var users []string
@@ -835,8 +832,7 @@ func TestDbManagerRemoveReResolvesRotatedCredentialsInFlight(t *testing.T) {
 		mu.Lock()
 		users = append(users, cfg.Username)
 		mu.Unlock()
-		startOnce.Do(func() { close(started) })
-		<-gate
+		blocked.Arrive()
 		return &stubDB{}, nil
 	}
 	m := NewDbManager(src, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
@@ -847,12 +843,12 @@ func TestDbManagerRemoveReResolvesRotatedCredentialsInFlight(t *testing.T) {
 		db, rel, err := m.Get(context.Background(), tenantA)
 		gotCh <- dbGetResult{db, rel, err}
 	}()
-	<-started
+	<-blocked.Started
 
 	src.configs[tenantA] = &config.DatabaseConfig{Type: "postgresql", Host: "localhost", Username: dbUserV2}
 	require.NoError(t, m.Remove(tenantA))
 
-	unblock()
+	blocked.Release()
 	first := <-gotCh
 	require.NoError(t, first.err)
 	require.NotNil(t, first.rel)

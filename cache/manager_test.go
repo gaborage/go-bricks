@@ -16,6 +16,7 @@ import (
 
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/cache/internal/tracking"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
@@ -647,11 +648,7 @@ func TestCacheManagerRemoveReResolvesRotatedCredentials(t *testing.T) {
 func TestCacheManagerRemoveReResolvesRotatedCredentialsInFlight(t *testing.T) {
 	var current atomic.Value
 	current.Store(cacheUserV1)
-	started := make(chan struct{})
-	gate := make(chan struct{})
-	var startOnce, unblockOnce sync.Once
-	unblock := func() { unblockOnce.Do(func() { close(gate) }) }
-	t.Cleanup(unblock)
+	blocked := testutil.NewBlockedCreate(t)
 
 	var mu sync.Mutex
 	var ids []string
@@ -660,8 +657,7 @@ func TestCacheManagerRemoveReResolvesRotatedCredentialsInFlight(t *testing.T) {
 		mu.Lock()
 		ids = append(ids, id)
 		mu.Unlock()
-		startOnce.Do(func() { close(started) })
-		<-gate
+		blocked.Arrive()
 		return newMockCache(id), nil
 	}
 
@@ -674,12 +670,12 @@ func TestCacheManagerRemoveReResolvesRotatedCredentialsInFlight(t *testing.T) {
 		c, rel, getErr := mgr.Get(context.Background(), tenantOne)
 		gotCh <- cacheGetResult{c, rel, getErr}
 	}()
-	<-started
+	<-blocked.Started
 
 	current.Store(cacheUserV2)
 	require.NoError(t, mgr.Remove(tenantOne))
 
-	unblock()
+	blocked.Release()
 	first := <-gotCh
 	require.NoError(t, first.err)
 	require.NotNil(t, first.rel)

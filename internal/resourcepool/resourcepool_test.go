@@ -13,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
 const (
@@ -115,14 +117,10 @@ func uniqueConnector(created *atomic.Int32) func(context.Context) (*fakeResource
 	}
 }
 
-// gatedConnector returns a create that signals started once, then waits on gate before producing
-// a resource with id. Tests order Remove against an in-flight create through those channels
-// instead of sleeping.
-func gatedConnector(id string, started chan struct{}, gate <-chan struct{}) func(context.Context) (*fakeResource, error) {
-	var once sync.Once
+// gatedConnector returns a create that parks on blocked until Release, producing a resource with id.
+func gatedConnector(id string, blocked *testutil.BlockedCreate) func(context.Context) (*fakeResource, error) {
 	return func(context.Context) (*fakeResource, error) {
-		once.Do(func() { close(started) })
-		<-gate
+		blocked.Arrive()
 		return newFakeResource(id), nil
 	}
 }
@@ -1073,25 +1071,21 @@ func TestPoolRemoveInvalidatesInFlightCreate(t *testing.T) {
 	p := New(0, 0, tr.closer)
 	defer p.Close()
 
-	started := make(chan struct{})
-	gate := make(chan struct{})
-	var unblockOnce sync.Once
-	unblock := func() { unblockOnce.Do(func() { close(gate) }) }
-	t.Cleanup(unblock)
+	blocked := testutil.NewBlockedCreate(t)
 
 	gotCh := make(chan leaseResult, 1)
 	go func() {
-		v, rel, err := p.GetOrCreate(context.Background(), keyOne, gatedConnector(inFlightOldID, started, gate))
+		v, rel, err := p.GetOrCreate(context.Background(), keyOne, gatedConnector(inFlightOldID, blocked))
 		gotCh <- leaseResult{v, rel, err}
 	}()
-	<-started
+	<-blocked.Started
 
 	removed, shouldClose := p.Remove(keyOne)
 	assert.False(t, shouldClose, "an in-flight-only Remove has no cached value to close")
 	assert.Nil(t, removed)
 	assert.Equal(t, 1, p.Stats().Removals, "invalidating an in-flight create counts a Removal")
 
-	unblock()
+	blocked.Release()
 	got := <-gotCh
 	require.NoError(t, got.err)
 	require.NotNil(t, got.rel)
@@ -1121,25 +1115,21 @@ func TestPoolRemoveCountsInFlightOnlyRemoval(t *testing.T) {
 	p := New(0, 0, tr.closer)
 	defer p.Close()
 
-	started := make(chan struct{})
-	gate := make(chan struct{})
-	var unblockOnce sync.Once
-	unblock := func() { unblockOnce.Do(func() { close(gate) }) }
-	t.Cleanup(unblock)
+	blocked := testutil.NewBlockedCreate(t)
 
 	gotCh := make(chan leaseResult, 1)
 	go func() {
-		v, rel, err := p.GetOrCreate(context.Background(), keyOne, gatedConnector(inFlightOldID, started, gate))
+		v, rel, err := p.GetOrCreate(context.Background(), keyOne, gatedConnector(inFlightOldID, blocked))
 		gotCh <- leaseResult{v, rel, err}
 	}()
-	<-started
+	<-blocked.Started
 
 	assert.Equal(t, 0, p.Stats().Removals)
 	_, shouldClose := p.Remove(keyOne)
 	require.False(t, shouldClose)
 	assert.Equal(t, 1, p.Stats().Removals)
 
-	unblock()
+	blocked.Release()
 	got := <-gotCh
 	require.NoError(t, got.err)
 	got.rel()
@@ -1159,26 +1149,22 @@ func TestPoolAbandonedCreateAfterRemoveClosesResource(t *testing.T) {
 	})
 	defer p.Close()
 
-	started := make(chan struct{})
-	gate := make(chan struct{})
-	var unblockOnce sync.Once
-	unblock := func() { unblockOnce.Do(func() { close(gate) }) }
-	t.Cleanup(unblock)
+	blocked := testutil.NewBlockedCreate(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	gotCh := make(chan leaseResult, 1)
 	go func() {
-		v, rel, err := p.GetOrCreate(ctx, keyOne, gatedConnector("abandoned", started, gate))
+		v, rel, err := p.GetOrCreate(ctx, keyOne, gatedConnector("abandoned", blocked))
 		gotCh <- leaseResult{v, rel, err}
 	}()
-	<-started
+	<-blocked.Started
 
 	p.Remove(keyOne)
 	cancel()
 	got := <-gotCh
-	unblock()
+	blocked.Release()
 	require.ErrorIs(t, got.err, context.Canceled)
 	assert.Nil(t, got.rel)
 
