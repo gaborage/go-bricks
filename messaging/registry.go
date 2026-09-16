@@ -489,6 +489,17 @@ func (s *consumerState) markUnsubscribed() {
 	s.subscribed = false
 }
 
+// markSupervisorStopped records that the consumer's supervisor has gone: it is not
+// subscribed, and no outage is in progress for a streak to describe. Nothing else
+// can re-subscribe the consumer, so a streak left behind would read as a supervisor
+// still failing to — forever, since none is running.
+func (s *consumerState) markSupervisorStopped() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscribed = false
+	s.failStreak = 0
+}
+
 // history returns the counters that outlive the session: a restart carries them
 // into the next one, so a stop does not erase what already happened.
 func (s *consumerState) history() (resubscribes uint64, lastResubscribeAt time.Time) {
@@ -717,12 +728,12 @@ func (r *Registry) startSingleConsumer(ctx context.Context, consumer *ConsumerDe
 // every publish re-reads the live channel under lock, whereas a consumer
 // captures its delivery channel once, so it needs an explicit re-subscribe.
 func (r *Registry) superviseConsumer(ctx context.Context, consumer *ConsumerDeclaration, deliveries <-chan amqp.Delivery, resume *streamResume, state *consumerState) {
-	// Nothing else can hold this consumer subscribed, so every exit leaves it
-	// unsubscribed — cancellation as much as a channel the broker closed. Without
-	// this a caller that cancels the context it passed to StartConsumers, rather
-	// than calling StopConsumers, would leave the flag true with no supervisor
-	// behind it.
-	defer state.markUnsubscribed()
+	// Nothing else can hold this consumer subscribed or re-subscribe it, so every
+	// exit ends the session — cancellation as much as a channel the broker closed.
+	// Without this a caller that cancels the context it passed to StartConsumers,
+	// rather than calling StopConsumers, would leave the flags behind with no
+	// supervisor to justify them: subscribed forever, or given up forever.
+	defer state.markSupervisorStopped()
 
 	for {
 		// Run one subscription session until the delivery channel closes

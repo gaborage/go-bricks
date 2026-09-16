@@ -2183,9 +2183,9 @@ type resubscribingMockClient struct {
 	optsSeen     []ConsumeOptions
 	exhaustedErr error
 	// failing simulates a broker outage the test controls at runtime: while set,
-	// every ConsumeFromQueue fails without returning a scripted result (the call is
-	// still counted), so a test can observe an unrecovered consumer for as long as
-	// it needs to. Guarded by callMu.
+	// every ConsumeFromQueue fails without returning a scripted result — the call is
+	// still counted, so it advances past one — and a test can observe an unrecovered
+	// consumer for as long as it needs to. Guarded by callMu.
 	failing bool
 }
 
@@ -2522,7 +2522,7 @@ func TestConsumerStateGivenUp(t *testing.T) {
 // until the snapshot reports GivenUp, and a success clears it.
 func TestRegistryConsumerStatesCountFailedResubscribeAttempts(t *testing.T) {
 	client, ch1 := newOutageClient()
-	registry := startStateRegistry(t, client)
+	registry, _ := startStateRegistry(t, client, &stubLogger{})
 
 	client.setFailing(true) // the outage lasts until the test lifts it
 	close(ch1)              // flap into an outage the supervisor cannot recover from
@@ -2556,7 +2556,7 @@ func TestRegistryConsumerStatesCountFailedResubscribeAttempts(t *testing.T) {
 // its consumers report unsubscribed with no streak rather than abandoned.
 func TestRegistryConsumerStatesMaskGivenUpAfterStopConsumers(t *testing.T) {
 	client, ch1 := newOutageClient()
-	registry := startStateRegistry(t, client)
+	registry, _ := startStateRegistry(t, client, &stubLogger{})
 
 	client.setFailing(true)
 	close(ch1)
@@ -2584,10 +2584,12 @@ func newOutageClient() (client *resubscribingMockClient, deliveries chan amqp.De
 }
 
 // startStateRegistry starts a registry with one handler-backed consumer on client,
-// paced for fast re-subscribes. The caller stops the consumers.
-func startStateRegistry(t *testing.T, client AMQPClient) *Registry {
+// paced for fast re-subscribes, and returns it with the cancel of the context its
+// consumers run under — cleanup calls that cancel too, so a caller takes it only to
+// end the session early. The caller stops the consumers.
+func startStateRegistry(t *testing.T, client AMQPClient, log gobrickslogger.Logger) (*Registry, context.CancelFunc) {
 	t.Helper()
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, log)
 	registry.resubscribeDelay = time.Millisecond
 	registry.RegisterConsumer(&ConsumerDeclaration{
 		Queue:     testQueueName,
@@ -2599,7 +2601,7 @@ func startStateRegistry(t *testing.T, client AMQPClient) *Registry {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	require.NoError(t, registry.StartConsumers(ctx))
-	return registry
+	return registry, cancel
 }
 
 // TestRegistryConsumerStatesStartEachRunWithAFreshSession pins the session
@@ -2613,7 +2615,7 @@ func TestRegistryConsumerStatesStartEachRunWithAFreshSession(t *testing.T) {
 		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
 		results:              []consumeResult{{ch: ch1}, {ch: ch2}},
 	}
-	registry := startStateRegistry(t, client)
+	registry, _ := startStateRegistry(t, client, &stubLogger{})
 
 	// Recover once, so the cumulative counter has something to carry across.
 	close(ch1)
@@ -2645,7 +2647,8 @@ func TestRegistryConsumerStatesStartEachRunWithAFreshSession(t *testing.T) {
 
 // pausingConsumeClient serves one subscription, fails every re-subscribe after it,
 // and blocks the attempt at pauseAt so a test can read the supervisor's state while
-// it is frozen at an exact attempt count.
+// it is frozen at an exact attempt count. Call 0 is the initial subscription, so
+// pauseAt is an attempt number and must be at least 1.
 type pausingConsumeClient struct {
 	*simpleMockAMQPClient
 	first   chan amqp.Delivery
@@ -2696,21 +2699,14 @@ func TestRegistryConsumerStatesCountTheAttemptTheLogEscalatesOn(t *testing.T) {
 	// attempt after the threshold leaves exactly that many failures behind.
 	client := newPausingConsumeClient(consumerResubscribeWarnFromAttempt + 1)
 	log := newRecordingLogger()
-	registry := NewRegistry(client, log)
-	registry.resubscribeDelay = time.Millisecond
-	registry.RegisterConsumer(&ConsumerDeclaration{
-		Queue:     testQueueName,
-		EventType: testEventType,
-		Workers:   1,
-		Handler:   &countingTestHandler{},
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	require.NoError(t, registry.StartConsumers(ctx))
+	registry, _ := startStateRegistry(t, client, log)
 
 	close(client.first)
-	<-client.paused // every attempt up to the threshold has now failed
+	select {
+	case <-client.paused: // every attempt up to the threshold has now failed
+	case <-time.After(5 * time.Second):
+		t.Fatal("supervisor never reached the paused attempt")
+	}
 	defer close(client.release)
 
 	state := registry.ConsumerStates()[0]
@@ -2727,30 +2723,32 @@ func TestRegistryConsumerStatesCountTheAttemptTheLogEscalatesOn(t *testing.T) {
 	assert.True(t, state.GivenUp())
 }
 
-// TestRegistryConsumerStatesClearSubscribedWhenTheContextIsCanceled pins the other
-// way a consumer stops: a caller that cancels the context it handed StartConsumers,
+// TestRegistryConsumerStatesEndTheSessionWhenTheContextIsCanceled pins the other way
+// a consumer stops: a caller that cancels the context it handed StartConsumers,
 // instead of calling StopConsumers, leaves consumersActive true, so the snapshot is
-// unmasked and the flag itself has to be honest.
-func TestRegistryConsumerStatesClearSubscribedWhenTheContextIsCanceled(t *testing.T) {
-	client := &resubscribingMockClient{simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true}}
-	registry := NewRegistry(client, &stubLogger{})
-	registry.resubscribeDelay = time.Millisecond
-	registry.RegisterConsumer(&ConsumerDeclaration{
-		Queue:     testQueueName,
-		EventType: testEventType,
-		Workers:   1,
-		Handler:   &countingTestHandler{},
-	})
+// unmasked and the flags themselves have to be honest. Neither may outlive the
+// supervisor — subscribed with nothing consuming, or given up with nothing retrying.
+func TestRegistryConsumerStatesEndTheSessionWhenTheContextIsCanceled(t *testing.T) {
+	client, ch1 := newOutageClient()
+	registry, cancel := startStateRegistry(t, client, &stubLogger{})
+	defer cancel()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	require.NoError(t, registry.StartConsumers(ctx))
 	require.True(t, registry.ConsumerStates()[0].Subscribed)
+
+	// Cancel an outage in progress, so both flags are set when the supervisor goes.
+	client.setFailing(true)
+	close(ch1)
+	require.Eventually(t, func() bool {
+		return registry.ConsumerStates()[0].GivenUp()
+	}, 5*time.Second, 2*time.Millisecond, "failure streak did not reach the threshold")
 
 	cancel() // no StopConsumers: the mask stays off
 
 	require.Eventually(t, func() bool {
-		return !registry.ConsumerStates()[0].Subscribed
-	}, 5*time.Second, 2*time.Millisecond, "a canceled supervisor left the consumer reading subscribed")
+		state := registry.ConsumerStates()[0]
+		return !state.Subscribed && !state.GivenUp()
+	}, 5*time.Second, 2*time.Millisecond, "a canceled supervisor left its flags behind")
+	assert.Zero(t, registry.ConsumerStates()[0].FailStreak)
 }
 
 // TestRegistryConsumerStatesCoverEveryDeclaredConsumerInOrder pins the snapshot's

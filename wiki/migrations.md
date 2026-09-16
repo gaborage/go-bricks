@@ -9760,8 +9760,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   anything reading `messaging_stats.active_consumers` from `GET /ready`, or the `messaging`
   component's `details` on `GET /_sys/health-debug`.
 - scope: the key is renamed, not retired. It counted tenant keys in the consumer map — one for a
-  single-tenant service, whatever its consumer count — and that count, now narrowed to the keys
-  actually holding a registry, is `consumer_registries`. Three counters join it: `declared_consumers` (consumers declared across
+  single-tenant service, whatever its consumer count — and that count is now
+  `consumer_registries`. Three counters join it: `declared_consumers` (consumers declared across
   those registries, documentation-only ones without a handler included), `subscribed_consumers`
   (those holding a live subscription right now) and `consumer_resubscribes` (cumulative successful
   re-subscribes since startup). All four are on the `/ready` public-stats allowlist. Additive
