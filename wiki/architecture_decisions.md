@@ -921,6 +921,11 @@ URI prefixes now infers `postgresql` when it is pgx's keyword/value form by a po
 key-shape test, so "unrecognized scheme" above means "recognized by neither test" (`[C65.3]`),
 and a raw PostgreSQL `connectionstring` is additionally judged by its own resolved host and
 TLS claim (`[C65.2]`).
+Amended 2026-09-16 (#1632): that TLS claim no longer has to be written into the DSN text —
+`PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY` and `PGSSLNEGOTIATION` are merged under
+the DSN with pgx's own precedence (a present DSN key, empty included, shadows the variable),
+so a unix-socket host under an env-sourced claim is refused too, closing the `PGSSL*`
+residual `[C65.2]` left open (`[C66.1]`).
 `config.ApplyDatabasePoolDefaults` applies the same inference on the dynamic
 multi-tenant resolution path, which bypasses `Validate` entirely. Inference is
 unconditional on both paths — the `Options.DatabaseConnector` exemption covers the
