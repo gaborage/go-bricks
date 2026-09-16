@@ -608,7 +608,7 @@ host is a unix-socket entry while the DSN itself claims TLS (`sslmode` of `requi
 `verify-ca` or `verify-full`, `sslnegotiation=direct`, or non-empty
 `sslrootcert`/`sslcert`/`sslkey`) — including when that claim arrives through
 `PGSSLMODE`/`PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY`/`PGSSLNEGOTIATION` rather than
-the DSN text (`[C66.1]`) — is refused the same way `[C65.1]` refuses it
+the DSN text (`[C66.1]`) — is refused the same way `[C65.6]` refuses it
 for the typed fields; drop the TLS claim from the DSN or the matching `PGSSL*`
 variable, or point the DSN at a TCP host. A DSN the
 scanner cannot tokenize passes through unjudged, same as it always has.
