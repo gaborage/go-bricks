@@ -27,7 +27,9 @@ import (
 const defaultConsumerResubscribeDelay = 5 * time.Second
 
 // consumerResubscribeWarnFromAttempt is the first consecutive failed
-// re-subscribe attempt logged at WARN instead of Debug.
+// re-subscribe attempt logged at WARN instead of Debug. It is also the streak at
+// which ConsumerState.GivenUp reports the outage, so moving it moves a readiness
+// verdict as well as a log level.
 const consumerResubscribeWarnFromAttempt = 5
 
 // RegistryInterface defines the contract for messaging infrastructure management.
@@ -67,12 +69,13 @@ type Registry struct {
 	queues     map[string]*QueueDeclaration
 	bindings   []*BindingDeclaration
 	publishers []*PublisherDeclaration
-	// Mutex protects: exchanges, queues, bindings, publishers, consumerIndex, consumerOrder, consumersActive, declared
+	// Mutex protects: exchanges, queues, bindings, publishers, consumerIndex, consumerOrder, consumerStates, consumersActive, declared
 	// NOTE: GoBricks startup is single-threaded, but multi-tenant scenarios
 	// may have concurrent registry access during tenant initialization.
 	mu              sync.RWMutex
 	consumerIndex   map[consumerKey]*ConsumerDeclaration // Defense-in-depth deduplication
 	consumerOrder   []consumerKey                        // Deterministic iteration order
+	consumerStates  map[consumerKey]*consumerState       // Runtime subscription state, seeded when a consumer starts
 	declared        bool
 	consumersActive bool
 	cancelConsumers context.CancelFunc
@@ -106,6 +109,15 @@ type Registry struct {
 // stored or any consumer starts, so no delivery can observe it unset.
 func (r *Registry) setTenantStamps(enabled bool) {
 	r.tenantStamps = enabled
+}
+
+// setResubscribeDelay overrides the backoff floor between re-subscribe attempts.
+// Called by the manager immediately after NewRegistry, before any consumer starts;
+// a non-positive delay leaves the default in place.
+func (r *Registry) setResubscribeDelay(delay time.Duration) {
+	if delay > 0 {
+		r.resubscribeDelay = delay
+	}
 }
 
 // ExchangeDeclaration defines an exchange to be declared
@@ -180,6 +192,7 @@ func NewRegistry(client AMQPClient, log logger.Logger) *Registry {
 		publishers:       make([]*PublisherDeclaration, 0),
 		consumerIndex:    make(map[consumerKey]*ConsumerDeclaration),
 		consumerOrder:    make([]consumerKey, 0),
+		consumerStates:   make(map[consumerKey]*consumerState),
 		resubscribeDelay: defaultConsumerResubscribeDelay,
 		redeclareSkip:    make(map[string]struct{}),
 	}
@@ -265,11 +278,7 @@ func (r *Registry) RegisterConsumer(declaration *ConsumerDeclaration) {
 		r.consumerIndex = make(map[consumerKey]*ConsumerDeclaration)
 	}
 
-	key := consumerKey{
-		Queue:     declaration.Queue,
-		Consumer:  declaration.Consumer,
-		EventType: declaration.EventType,
-	}
+	key := consumerKeyFor(declaration)
 
 	// Defense-in-depth: warn and skip if duplicate detected during replay
 	if _, exists := r.consumerIndex[key]; exists {
@@ -463,6 +472,197 @@ func (r *Registry) StopConsumers() {
 	r.logger.Info().Msg("All consumers stopped")
 }
 
+// consumerState is one consumer session's runtime subscription state. The
+// supervisor goroutine owns the pointer for the session's whole life — the same way
+// it owns streamResume. The mutex below is taken under r.mu by the readers, and the
+// only lock ever taken while it is held is the history's leaf mutex.
+type consumerState struct {
+	mu         sync.Mutex
+	subscribed bool
+	failStreak int
+	// history belongs to the consumer, not to this session: every session of the same
+	// consumer writes the same record, so a session still unwinding when the next one
+	// starts still has its successes counted. Its mutex is a leaf taken under mu.
+	history *consumerHistory
+}
+
+// consumerHistory is a consumer's cumulative record, outliving each session that writes it.
+// Its mutex is a leaf and is taken UNDER a session's: every writer holds consumerState.mu
+// first, so nothing may ever take a consumerState.mu while holding this one.
+type consumerHistory struct {
+	mu                sync.Mutex
+	resubscribes      uint64
+	lastResubscribeAt time.Time
+}
+
+// recordResubscribe counts one successful re-subscribe, whichever session landed it.
+func (h *consumerHistory) recordResubscribe(at time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.resubscribes++
+	h.lastResubscribeAt = at
+}
+
+// read returns the record so far.
+func (h *consumerHistory) read() (resubscribes uint64, lastResubscribeAt time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.resubscribes, h.lastResubscribeAt
+}
+
+// markSubscribed records the subscription a consumer session opens with.
+func (s *consumerState) markSubscribed() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscribed = true
+}
+
+// markUnsubscribed records that the broker closed the delivery channel.
+func (s *consumerState) markUnsubscribed() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscribed = false
+}
+
+// markSupervisorStopped records that the consumer's supervisor has gone: it is not
+// subscribed, and no outage is in progress for a streak to describe. Nothing else
+// can re-subscribe the consumer, so a streak left behind would read as a supervisor
+// still failing to — forever, since none is running.
+func (s *consumerState) markSupervisorStopped() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscribed = false
+	s.failStreak = 0
+}
+
+// setFailStreak records how many attempts the current re-subscribe loop has lost.
+// The loop's own attempt counter is the streak, so the number the WARN escalation
+// branches on and the number GivenUp judges are one number.
+func (s *consumerState) setFailStreak(attempts int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failStreak = attempts
+}
+
+// markResubscribed records a successful re-subscribe at the given time.
+func (s *consumerState) markResubscribed(at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscribed = true
+	s.failStreak = 0
+	s.history.recordResubscribe(at)
+}
+
+// givenUp is ConsumerState.GivenUp asked of the live state in place, with no snapshot
+// allocated: the readiness probe wants one bool per poll, not a row per consumer. The
+// predicate itself stays defined in exactly one place — this builds the two fields it reads
+// on the stack and asks the exported method. A nil receiver is a consumer declared but never
+// started, which has no streak and so never reads as given up.
+func (s *consumerState) givenUp() bool {
+	if s == nil {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	live := ConsumerState{Subscribed: s.subscribed, FailStreak: s.failStreak}
+	return live.GivenUp()
+}
+
+// snapshot renders the state of the consumer identified by key. A nil receiver is one that was
+// declared but never started — a documentation-only one, or any consumer before
+// StartConsumers — and reports the zero value. When consumersActive is false the
+// registry's consumers are stopped: no supervisor is trying, so the live flags have
+// no subject and read as "not subscribed, no streak", while the cumulative counters,
+// which are history, pass through.
+func (s *consumerState) snapshot(key consumerKey, consumersActive bool) ConsumerState {
+	snapshot := ConsumerState{Queue: key.Queue, Consumer: key.Consumer, EventType: key.EventType}
+	if s == nil {
+		return snapshot
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snapshot.Resubscribes, snapshot.LastResubscribeAt = s.history.read()
+	if consumersActive {
+		snapshot.Subscribed = s.subscribed
+		snapshot.FailStreak = s.failStreak
+	}
+	return snapshot
+}
+
+// ConsumerState is a snapshot of one declared consumer's subscription state.
+//
+// The identity fields — Key, Queue, Consumer, EventType — are for an operator reading
+// /_sys/health-debug or a caller of ConsumerStates, never for the unauthenticated /ready
+// body or a log line: Manager.Stats() reduces these rows to counts precisely so no
+// tenant key, queue name, consumer tag or event type leaves through them.
+type ConsumerState struct {
+	// Key is the manager key the consumer's registry was leased under: the tenant id
+	// under per-tenant replay, "" for the control plane. Registry.ConsumerStates leaves
+	// it empty — a registry does not know the key it was leased under.
+	Key       string
+	Queue     string
+	Consumer  string // consumer tag
+	EventType string
+	// Subscribed flips false only once the session has fully ended: the handler
+	// pool drains first, so a consumer whose delivery channel the broker already
+	// closed still reads subscribed while its slowest handler runs.
+	Subscribed        bool
+	Resubscribes      uint64
+	LastResubscribeAt time.Time // zero until the first successful re-subscribe
+	// FailStreak counts failed re-subscribe attempts in the CURRENT outage only:
+	// the next success clears it and a restarted consumer starts a fresh count, so
+	// it never carries a previous outage's, or a previous session's, total.
+	FailStreak int
+}
+
+// GivenUp reports a consumer whose outage stopped looking like a routine flap: it
+// is unsubscribed and its consecutive re-subscribe failures have reached
+// consumerResubscribeWarnFromAttempt, the same threshold that escalates the
+// re-subscribe log to WARN. The supervisor keeps retrying; this is the point at
+// which the outage is worth reporting.
+//
+// The receiver is a pointer because the identity fields make the struct too heavy to
+// copy per call; a snapshot read out of a slice is addressable, so callers write
+// states[i].GivenUp() unchanged.
+func (s *ConsumerState) GivenUp() bool {
+	return !s.Subscribed && s.FailStreak >= consumerResubscribeWarnFromAttempt
+}
+
+// ConsumerStates returns a snapshot of every declared consumer's subscription state
+// in declaration order. A consumer declared without a handler (documentation only)
+// never subscribes, so it reports Subscribed false forever.
+func (r *Registry) ConsumerStates() []ConsumerState {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	states := make([]ConsumerState, 0, len(r.consumerOrder))
+	for _, key := range r.consumerOrder {
+		states = append(states, r.consumerStates[key].snapshot(key, r.consumersActive))
+	}
+	return states
+}
+
+// anyGivenUp reports whether any declared consumer's supervisor has given up re-subscribing.
+// It reads the same state ConsumerStates renders and under the same mask — a stopped registry
+// has no supervisor trying, so nothing there reads as given up — but allocates nothing and
+// stops at the first hit.
+func (r *Registry) anyGivenUp() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if !r.consumersActive {
+		return false
+	}
+	for _, key := range r.consumerOrder {
+		if r.consumerStates[key].givenUp() {
+			return true
+		}
+	}
+	return false
+}
+
 // consumeOptionsFor builds the ConsumeOptions for a consumer declaration. It is
 // shared by the initial subscription and every re-subscription so the broker
 // re-applies identical settings (QoS/prefetch, consumer tag, ack mode) on the
@@ -538,6 +738,27 @@ func (s *streamResume) observe(headers amqp.Table) {
 	}
 }
 
+// consumerStateFor installs the state a starting consumer session writes to. A restart
+// always gets a FRESH struct: StopConsumers cancels its supervisors without waiting for
+// them, so one still unwinding would otherwise share the new session's state and could
+// revive its subscribed flag or leave its failure streak behind. It keeps the consumer's
+// history, though — the same record, not a copy — because a success that lands late is
+// still a success this consumer had, and a copy would drop it. History is per consumer,
+// session state is per start. Callers must hold r.mu; only StartConsumers reaches this.
+func (r *Registry) consumerStateFor(consumer *ConsumerDeclaration) *consumerState {
+	if r.consumerStates == nil {
+		r.consumerStates = make(map[consumerKey]*consumerState)
+	}
+
+	key := consumerKeyFor(consumer)
+	state := &consumerState{history: &consumerHistory{}}
+	if previous, ok := r.consumerStates[key]; ok {
+		state.history = previous.history
+	}
+	r.consumerStates[key] = state
+	return state
+}
+
 // startSingleConsumer starts a consumer for a specific queue and routes messages to the handler.
 // The first subscription is established synchronously so an unreachable broker
 // fails startup (fail-fast); the supervisor goroutine then keeps the consumer
@@ -557,11 +778,17 @@ func (r *Registry) startSingleConsumer(ctx context.Context, consumer *ConsumerDe
 		resume = &streamResume{}
 	}
 
+	// StartConsumers holds r.mu across its whole body, so the state map is seeded
+	// directly here (as r.queues is read above). From here the supervisor owns the
+	// pointer and never takes r.mu again.
+	state := r.consumerStateFor(consumer)
+	state.markSubscribed()
+
 	// Supervise the subscription so it survives AMQP reconnects: when the broker
 	// closes the delivery channel (connection/channel flap), superviseConsumer
 	// re-subscribes on the client's new channel instead of leaving the queue
 	// with zero consumers until a process restart.
-	go r.superviseConsumer(ctx, consumer, deliveries, resume)
+	go r.superviseConsumer(ctx, consumer, deliveries, resume, state)
 
 	return nil
 }
@@ -572,7 +799,14 @@ func (r *Registry) startSingleConsumer(ctx context.Context, consumer *ConsumerDe
 // to the client's reconnection supervisor: the publisher path recovers because
 // every publish re-reads the live channel under lock, whereas a consumer
 // captures its delivery channel once, so it needs an explicit re-subscribe.
-func (r *Registry) superviseConsumer(ctx context.Context, consumer *ConsumerDeclaration, deliveries <-chan amqp.Delivery, resume *streamResume) {
+func (r *Registry) superviseConsumer(ctx context.Context, consumer *ConsumerDeclaration, deliveries <-chan amqp.Delivery, resume *streamResume, state *consumerState) {
+	// Nothing else can hold this consumer subscribed or re-subscribe it, so every
+	// exit ends the session — cancellation as much as a channel the broker closed.
+	// Without this a caller that cancels the context it passed to StartConsumers,
+	// rather than calling StopConsumers, would leave the flags behind with no
+	// supervisor to justify them: subscribed forever, or given up forever.
+	defer state.markSupervisorStopped()
+
 	for {
 		// Run one subscription session until the delivery channel closes
 		// (reconnect needed) or the context is canceled (stop for good).
@@ -580,6 +814,7 @@ func (r *Registry) superviseConsumer(ctx context.Context, consumer *ConsumerDecl
 		if !r.handleMessages(ctx, consumer, deliveries, resume) {
 			return // context canceled → stop for good
 		}
+		state.markUnsubscribed()
 
 		// Rapid-flap guard: if the session barely lasted, the broker is handing
 		// back channels that close almost immediately. Pace re-subscribes by the
@@ -591,7 +826,7 @@ func (r *Registry) superviseConsumer(ctx context.Context, consumer *ConsumerDecl
 			}
 		}
 
-		next, ok := r.resubscribe(ctx, consumer, resume)
+		next, ok := r.resubscribe(ctx, consumer, resume, state)
 		if !ok {
 			return // context canceled while waiting to re-subscribe
 		}
@@ -637,7 +872,7 @@ func consumerLogFields(consumer *ConsumerDeclaration) map[string]any {
 // client only hands out a fresh usable channel via its own reconnect supervisor
 // (handleReInit, paced by reInitDelay), and while the client is not ready
 // ConsumeFromQueue returns errNotConnected, which takes the backoff path below.
-func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaration, resume *streamResume) (<-chan amqp.Delivery, bool) {
+func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaration, resume *streamResume, state *consumerState) (<-chan amqp.Delivery, bool) {
 	log := r.logger.WithFields(consumerLogFields(consumer))
 
 	opts := r.consumeOptionsFor(consumer, resume)
@@ -651,10 +886,13 @@ func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaratio
 		r.redeclareTopology(ctx)
 		deliveries, err := r.client.ConsumeFromQueue(ctx, opts)
 		if err == nil {
+			state.markResubscribed(time.Now())
 			log.Info().Int("attempt", attempt).
 				Msg("Consumer re-subscribed after delivery channel closed")
 			return deliveries, true
 		}
+
+		state.setFailStreak(attempt)
 
 		// errNotConnected is expected while the client is still reconnecting;
 		// early attempts log at debug to avoid noise during a flap. Full-jitter

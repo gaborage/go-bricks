@@ -25,6 +25,15 @@ type consumerKey struct {
 	EventType string
 }
 
+// consumerKeyFor is a declaration's identity: the one place the key is built.
+func consumerKeyFor(declaration *ConsumerDeclaration) consumerKey {
+	return consumerKey{
+		Queue:     declaration.Queue,
+		Consumer:  declaration.Consumer,
+		EventType: declaration.EventType,
+	}
+}
+
 // queueConflict records a queue name declared twice with shapes that cannot merge.
 type queueConflict struct {
 	Queue    string
@@ -253,11 +262,7 @@ func (d *Declarations) RegisterConsumer(c *ConsumerDeclaration) {
 		return
 	}
 
-	key := consumerKey{
-		Queue:     c.Queue,
-		Consumer:  c.Consumer,
-		EventType: c.EventType,
-	}
+	key := consumerKeyFor(c)
 
 	// Deduplication: panic if duplicate registration detected
 	if d.consumerIndex == nil {
@@ -724,11 +729,7 @@ func (d *Declarations) Clone() *Declarations {
 		if consumer.Args != nil {
 			maps.Copy(cloneConsumer.Args, consumer.Args)
 		}
-		cloneKey := consumerKey{
-			Queue:     consumer.Queue,
-			Consumer:  consumer.Consumer,
-			EventType: consumer.EventType,
-		}
+		cloneKey := consumerKeyFor(consumer)
 		clone.consumerIndex[cloneKey] = cloneConsumer
 		clone.consumerOrder = append(clone.consumerOrder, cloneKey)
 	}

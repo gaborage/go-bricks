@@ -23,6 +23,14 @@ var (
 	// errStreamsNotOpen is the liveness error for a streams manager whose consumers or
 	// publishers are not all open.
 	errStreamsNotOpen = errors.New("stream consumers not open")
+	// errProbeHasNoCheck is the liveness error for a description that carries neither a
+	// lease-independent live check nor an acquire step: nothing to judge, so nothing may be
+	// reported ready. Fixed text, and unreachable from any kind the framework wires.
+	errProbeHasNoCheck = errors.New("probe has no liveness check")
+	// errConsumerResubscribeExhausted is the liveness error for a messaging kind with a
+	// declared consumer whose supervisor has given up re-subscribing. ADR-048: the text is
+	// a fixed identifier, so no queue name can reach the unauthenticated body through it.
+	errConsumerResubscribeExhausted = errors.New("consumer re-subscribe exhausted")
 )
 
 // probeDescription is what a slot hands readiness so its kind can be judged: a fixed
@@ -46,13 +54,20 @@ type probeDescription struct {
 	// a shared-ledger control-plane database (ADR-041) resolves through exactly that key.
 	perTenant bool
 	// acquire leases the kind's fixed-key resource and returns how to check it is live and
-	// how to release it. nil for kinds probed without a lease, which set live directly.
+	// how to release it. nil for kinds probed without a lease, which set live alone.
 	acquire func(ctx context.Context) (live func(context.Context) error, release func(), err error)
-	// live checks a lease-less kind (only read when acquire is nil).
+	// live is the kind's LEASE-INDEPENDENT liveness check, judged before the lease is taken
+	// and, when it fails, instead of taking one. A kind may set it beside acquire: the two
+	// then run in that order, so a condition that does not need the fixed "" key is still
+	// judged when that key resolves to nothing (a per-tenant deployment, where judge
+	// short-circuits the lease to per_tenant).
 	live func(ctx context.Context) error
-	// stats snapshots the kind's counters; called while the lease is held so the entry the
-	// probe itself pooled is counted (the messaging manager publishes active_publishers: 0
-	// beside a healthy verdict otherwise).
+	// stats snapshots the kind's counters. On every path that takes a lease it is called
+	// while that lease is held, so the entry the probe itself pooled is counted (the
+	// messaging manager publishes active_publishers: 0 beside a healthy verdict otherwise).
+	// A failing lease-independent live check returns before any lease exists, so its
+	// snapshot counts no probe-held entry; the unauthenticated 503 body carries no
+	// statistics at all, so that shows only on the access-controlled debug view.
 	stats func() map[string]any
 	// publicStats allowlists the statistics keys this kind may publish on the
 	// unauthenticated /ready body; every other key stays on the access-controlled debug
@@ -97,19 +112,33 @@ func (d probeDescription) judge(ctx context.Context) (status string, stats map[s
 	if d.absent {
 		return d.notConfigured(), d.snapshot(), nil
 	}
-	live := d.live
-	if d.acquire != nil {
-		leasedLive, release, acquireErr := d.acquire(ctx)
-		if acquireErr != nil {
-			if config.IsNotConfigured(acquireErr) {
-				return d.notConfigured(), d.snapshot(), nil
-			}
-			return unhealthyStatus, d.snapshot(), acquireErr
+	// The lease-independent check first: it is the one arm that still has an answer when the
+	// fixed "" key resolves to nothing, and a kind already known to be failing need not lease.
+	if d.live != nil {
+		if liveErr := d.live(ctx); liveErr != nil {
+			return unhealthyStatus, d.snapshot(), liveErr
 		}
-		defer release() // the probe holds no scope; the snapshot below is taken before this runs
-		live = leasedLive
 	}
-	if liveErr := live(ctx); liveErr != nil {
+	if d.acquire == nil {
+		if d.live == nil {
+			// A kind with no arm at all is a wiring bug, not a healthy kind: disabled and
+			// absent are their own fields, handled above. Fail closed — a probe that checks
+			// nothing must never report ready (root CLAUDE.md: Fail Fast, no silent failures).
+			return unhealthyStatus, d.snapshot(), errProbeHasNoCheck
+		}
+		return healthyStatus, d.snapshot(), nil
+	}
+
+	leasedLive, release, acquireErr := d.acquire(ctx)
+	if acquireErr != nil {
+		if config.IsNotConfigured(acquireErr) {
+			return d.notConfigured(), d.snapshot(), nil
+		}
+		return unhealthyStatus, d.snapshot(), acquireErr
+	}
+	defer release() // the probe holds no scope; the snapshot below is taken before this runs
+
+	if liveErr := leasedLive(ctx); liveErr != nil {
 		return unhealthyStatus, d.snapshot(), liveErr
 	}
 	return healthyStatus, d.snapshot(), nil
@@ -156,9 +185,9 @@ const (
 	statsActiveConnectionsKey = "active_connections"
 	statsMaxConnectionsKey    = "max_connections"
 	// Messaging: statsActivePublishersKey is used once below, like its neighbors
-	// "max_publishers" and "active_consumers" (left inlined — neither appears anywhere else
-	// in the package), but "active_publishers" also recurs across this kind's test fixtures
-	// and assertions, so goconst requires the symbol.
+	// "max_publishers" and the four consumer counters (left inlined — none appears anywhere
+	// else in the package), but "active_publishers" also recurs across this kind's test
+	// fixtures and assertions, so goconst requires the symbol.
 	statsActivePublishersKey = "active_publishers"
 	// Cache.
 	statsActiveCachesKey = "active_caches"
@@ -203,7 +232,9 @@ var (
 		statsRemovalsKey,
 	}
 	messagingPublicStats = []string{
-		statsActivePublishersKey, "max_publishers", "active_consumers", statsIdleTTLSecondsKey,
+		statsActivePublishersKey, "max_publishers", "consumer_registries", "declared_consumers",
+		"subscribed_consumers", "consumer_resubscribes", "consumer_max_fail_streak",
+		statsIdleTTLSecondsKey,
 		statsEvictionsKey, statsIdleCleanupsKey, statsErrorsKey,
 	}
 	cachePublicStats = []string{
