@@ -1012,6 +1012,27 @@ func TestPoolRemoveNonexistent(t *testing.T) {
 	assert.False(t, shouldClose)
 	assert.Nil(t, got)
 	assert.Equal(t, 0, p.Stats().Removals, "a Remove that detached nothing does not count")
+	assert.Zero(t, p.generation["missing"], "a no-op Remove must not bump generation")
+}
+
+// TestPoolRemoveBumpsGeneration pins that an invalidating Remove increments the key's
+// generation (not decrement) and that a finished create deletes inFlight[key] rather than
+// leaving a zero counter that still occupies the map.
+func TestPoolRemoveBumpsGeneration(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+
+	_, rel, err := p.GetOrCreate(context.Background(), keyOne, keyedCreate(keyOne))
+	require.NoError(t, err)
+	_, ok := p.inFlight[keyOne]
+	assert.False(t, ok, "a finished create must delete inFlight[key], not leave a zero")
+	rel()
+
+	before := p.generation[keyOne]
+	_, shouldClose := p.Remove(keyOne)
+	require.True(t, shouldClose)
+	assert.Equal(t, before+1, p.generation[keyOne], "Remove increments generation so the next in-flight create detaches")
 }
 
 // TestPoolRemoveCountsRemovals pins that Removals counts every Remove that detached a cached
@@ -1089,6 +1110,8 @@ func TestPoolRemoveInvalidatesInFlightCreate(t *testing.T) {
 	assert.Equal(t, inFlightNewID, fresh.id)
 	assert.NotSame(t, got.v, fresh)
 	assert.Equal(t, 1, p.Size(), "the next GetOrCreate caches the new resource")
+	_, ok := p.inFlight[keyOne]
+	assert.False(t, ok, "a finished create must delete inFlight[key], not leave a zero")
 }
 
 // TestPoolRemoveCountsInFlightOnlyRemoval pins that Removals increments when Remove invalidates
