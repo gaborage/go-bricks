@@ -1461,8 +1461,8 @@ func TestReadyReportsTheConsumerArmBeforeThePublisherArm(t *testing.T) {
 	status := slotDescription(t, f.app, componentMessaging).Run(context.Background())
 
 	require.Error(t, status.Err)
-	assert.ErrorIs(t, status.Err, errConsumerResubscribeExhausted)
-	assert.NotErrorIs(t, status.Err, errPublisherNotReady)
+	require.ErrorIs(t, status.Err, errConsumerResubscribeExhausted)
+	require.NotErrorIs(t, status.Err, errPublisherNotReady)
 	assert.True(t, status.Critical, "the knob makes both arms critical at once")
 }
 
