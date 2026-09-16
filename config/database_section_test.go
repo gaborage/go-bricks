@@ -56,7 +56,9 @@ func assertConnStringRefusal(t *testing.T, cs, wantCategory string) *ConfigError
 			assert.Contains(t, cfgErr.Action, want, "rule 1 must name every host source and the service-file gap")
 		}
 	case errCategoryInvalid:
-		assert.Contains(t, cfgErr.Action, "drop the TLS claim")
+		// Which remedy is named depends on the arm; the arm tests pin that. Here only
+		// that ONE of them is named, so a source-aware Action cannot lose both.
+		assert.Regexp(t, `Unset that variable|Drop that key`, cfgErr.Action)
 		assert.Contains(t, cfgErr.Action, "use a TCP host")
 		assert.Contains(t, cfgErr.Action, "connection string")
 		assert.Contains(t, cfgErr.Action, "this one arrived through")
@@ -3570,6 +3572,9 @@ func TestApplyDatabasePoolDefaultsNamesSocketTLSClaimSpellingTheDSNCarries(t *te
 			// The trailing period is load-bearing: "ssl" is a prefix of "sslmode".
 			assert.Contains(t, cfgErr.Action, "this one arrived through "+tt.want+".")
 			assert.NotContains(t, cfgErr.Action, "this one arrived through "+tt.notWant+".")
+			// A claim the DSN text carries is dropped there; only the env arm shadows.
+			assert.Contains(t, cfgErr.Action, "Drop that key from the connection string")
+			assert.NotContains(t, cfgErr.Action, "Unset that variable")
 		})
 	}
 }
@@ -3594,6 +3599,13 @@ func TestApplyDatabasePoolDefaultsMatchesSharedTLSEnvFixtures(t *testing.T) {
 			assert.Contains(t, cfgErr.Message, "names TLS")
 			if src := claimingPGSSLEnv(c.Env); src != "" {
 				assert.Contains(t, cfgErr.Action, "this one arrived through "+src)
+				// The DSN names no such key — the merge is what reached the variable —
+				// so the remedy is the variable, or a DSN value that shadows it.
+				dsn, isEnv := pgSSLEnvDSNKey(src)
+				require.True(t, isEnv)
+				assert.Contains(t, cfgErr.Action, "Unset that variable")
+				assert.Contains(t, cfgErr.Action, "shadow it with a non-claiming "+dsn)
+				assert.NotContains(t, cfgErr.Action, "Drop that key")
 			}
 		})
 	}

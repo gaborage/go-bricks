@@ -730,8 +730,22 @@ func validatePostgreSQLConnectionString(cs string) error {
 	return nil
 }
 
-// pgTLSOnSocketAction names both the DSN keys and the PGSSL* variables, then the source
-// that actually carried this claim, so the operator knows which one to unset.
+// pgSSLEnvDSNKey is the DSN keyword a PGSSL* variable shadows, and whether source names a
+// variable at all.
+func pgSSLEnvDSNKey(source string) (dsn string, isEnv bool) {
+	for _, k := range pgSSLEnvKeys {
+		if k.env == source {
+			return k.dsn, true
+		}
+	}
+	return "", false
+}
+
+// pgTLSOnSocketAction names the source that carried this claim, then the exits that close
+// it. The two arms differ because the merge is DSN-over-env: an env-sourced claim is only
+// reachable when the DSN names no such key, so there is nothing in the string to drop, and
+// dropping a key that shadows the variable would expose it instead. Its DSN-side exit is
+// therefore to ADD a non-claiming value. Both arms end with the judged surface.
 func pgTLSOnSocketAction(source string) string {
 	dsnKeys := make([]string, 0, len(pgSSLEnvKeys))
 	envKeys := make([]string, 0, len(pgSSLEnvKeys))
@@ -739,9 +753,16 @@ func pgTLSOnSocketAction(source string) string {
 		dsnKeys = append(dsnKeys, k.dsn)
 		envKeys = append(envKeys, k.env)
 	}
-	return "drop the TLS claim from the connection string (" + strings.Join(dsnKeys, "/") +
-		") or the matching " + strings.Join(envKeys, "/") + " environment variable; this one arrived through " +
-		source + ". Or use a TCP host"
+	judged := " Judged: " + strings.Join(dsnKeys, "/") + " in the connection string, " +
+		strings.Join(envKeys, "/") + " in the environment"
+
+	if dsn, isEnv := pgSSLEnvDSNKey(source); isEnv {
+		return "this one arrived through " + source + ". Unset that variable, or shadow it with a " +
+			"non-claiming " + dsn + " in the connection string (a present key, empty included, wins " +
+			"over the environment), or use a TCP host." + judged
+	}
+	return "this one arrived through " + source + ". Drop that key from the connection string or " +
+		"give it a non-claiming value, or use a TCP host." + judged
 }
 
 // effectivePostgresTLSClaim merges each PGSSL* variable under the DSN with pgx
