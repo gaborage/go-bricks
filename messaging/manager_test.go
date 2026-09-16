@@ -1581,3 +1581,44 @@ func TestMessagingManagerStatsCountsConsumersAcrossRegistries(t *testing.T) {
 	assert.Equal(t, 3, stats["subscribed_consumers"])
 	assert.Equal(t, uint64(0), stats["consumer_resubscribes"])
 }
+
+// TestMessagingManagerConsumerStatesSpanEveryRegistry pins the detail door behind the
+// counters: one entry per declared consumer across every tenant key holding a registry,
+// each carrying its own queue and live flag.
+func TestMessagingManagerConsumerStatesSpanEveryRegistry(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New("error", false)
+
+	factory := func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} }
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{tenant1ID: amqpURLTenant1, tenant2ID: amqpURLTenant2}},
+		log,
+		ManagerOptions{MaxPublishers: 2, IdleTTL: time.Minute},
+		factory,
+	)
+	defer func() { _ = manager.Close() }() // stop supervisor goroutines
+
+	assert.Empty(t, manager.ConsumerStates(), "a manager with no consumers has no state to report")
+
+	for tenant, queue := range map[string]string{tenant1ID: testQueue1Name, tenant2ID: testQueue2Name} {
+		decls := NewDeclarations()
+		decls.RegisterQueue(&QueueDeclaration{Name: queue})
+		decls.RegisterConsumer(&ConsumerDeclaration{
+			Queue:     queue,
+			Consumer:  testConsumer,
+			EventType: testEventType,
+			Handler:   &countingTestHandler{},
+		})
+		require.NoError(t, manager.EnsureConsumers(ctx, tenant, decls))
+	}
+
+	states := manager.ConsumerStates()
+	require.Len(t, states, 2)
+	queues := make([]string, 0, len(states))
+	for _, state := range states {
+		queues = append(queues, state.Queue)
+		assert.True(t, state.Subscribed, "queue %s is not subscribed", state.Queue)
+		assert.Zero(t, state.Resubscribes)
+	}
+	assert.ElementsMatch(t, []string{testQueue1Name, testQueue2Name}, queues)
+}

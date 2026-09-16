@@ -2601,30 +2601,28 @@ func startStateRegistry(t *testing.T, client AMQPClient) *Registry {
 	return registry
 }
 
-// TestConsumerStateMarkUnsubscribedClearsTheStreak pins that the streak belongs to
-// the outage that starts at the unsubscribe, so a count left behind by a supervisor
-// still unwinding from an earlier one is not read as this outage's.
-func TestConsumerStateMarkUnsubscribedClearsTheStreak(t *testing.T) {
-	state := &consumerState{}
-	state.setFailStreak(consumerResubscribeWarnFromAttempt)
-	require.True(t, state.snapshot(testQueueName, true).GivenUp())
-
-	state.markUnsubscribed()
-
-	snapshot := state.snapshot(testQueueName, true)
-	assert.Zero(t, snapshot.FailStreak)
-	assert.False(t, snapshot.GivenUp())
-}
-
-// TestRegistryConsumerStatesDropTheStreakWhenConsumersRestart pins that a restart is
-// a clean slate: the previous run's failure streak must not make the first flap of
-// the new one read as abandoned.
-func TestRegistryConsumerStatesDropTheStreakWhenConsumersRestart(t *testing.T) {
-	client, ch1 := newOutageClient()
+// TestRegistryConsumerStatesStartEachRunWithAFreshSession pins the session
+// boundary: a restarted consumer writes to fresh state, so neither the previous
+// run's failure streak nor a supervisor still unwinding from it can be read as the
+// new run's, while the cumulative counters carry across.
+func TestRegistryConsumerStatesStartEachRunWithAFreshSession(t *testing.T) {
+	ch1 := make(chan amqp.Delivery)
+	ch2 := make(chan amqp.Delivery)
+	client := &resubscribingMockClient{
+		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
+		results:              []consumeResult{{ch: ch1}, {ch: ch2}},
+	}
 	registry := startStateRegistry(t, client)
 
-	client.setFailing(true)
+	// Recover once, so the cumulative counter has something to carry across.
 	close(ch1)
+	require.Eventually(t, func() bool {
+		return registry.ConsumerStates()[0].Resubscribes == 1
+	}, 5*time.Second, 2*time.Millisecond, "consumer did not re-subscribe")
+
+	// Then an outage it cannot recover from, until the streak reaches the threshold.
+	client.setFailing(true)
+	close(ch2)
 	require.Eventually(t, func() bool {
 		return registry.ConsumerStates()[0].GivenUp()
 	}, 5*time.Second, 2*time.Millisecond, "failure streak did not reach the threshold")
@@ -2636,8 +2634,9 @@ func TestRegistryConsumerStatesDropTheStreakWhenConsumersRestart(t *testing.T) {
 
 	restarted := registry.ConsumerStates()[0]
 	assert.True(t, restarted.Subscribed)
-	assert.Zero(t, restarted.FailStreak, "a restarted consumer does not inherit the previous outage's streak")
+	assert.Zero(t, restarted.FailStreak, "a restarted consumer does not inherit the previous session's streak")
 	assert.False(t, restarted.GivenUp())
+	assert.Equal(t, uint64(1), restarted.Resubscribes, "the cumulative counters carry across a restart")
 }
 
 // TestRegistryConsumerStatesCoverEveryDeclaredConsumerInOrder pins the snapshot's

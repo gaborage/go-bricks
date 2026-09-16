@@ -463,10 +463,10 @@ func (r *Registry) StopConsumers() {
 	r.logger.Info().Msg("All consumers stopped")
 }
 
-// consumerState is one declared consumer's runtime subscription state. Its
-// supervisor goroutine owns the pointer for the consumer's whole life — the same
-// way it owns streamResume — and the mutex below is a leaf: nothing else is taken
-// while it is held, so it orders against no other lock in this file.
+// consumerState is one consumer session's runtime subscription state. The
+// supervisor goroutine owns the pointer for the session's whole life — the same way
+// it owns streamResume — and the mutex below is a leaf: it is taken under r.mu by
+// the readers, but nothing is ever taken while it is held.
 type consumerState struct {
 	mu                sync.Mutex
 	subscribed        bool
@@ -475,24 +475,26 @@ type consumerState struct {
 	failStreak        int
 }
 
-// markSubscribed records the subscription a consumer session opens with. It clears
-// the streak so a restarted registry does not inherit the previous outage's.
+// markSubscribed records the subscription a consumer session opens with.
 func (s *consumerState) markSubscribed() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.subscribed = true
-	s.failStreak = 0
 }
 
-// markUnsubscribed records that the broker closed the delivery channel. It clears
-// the streak because the outage the streak counts starts here: a supervisor still
-// unwinding from an earlier one must not leave its count behind to be read as this
-// outage's.
+// markUnsubscribed records that the broker closed the delivery channel.
 func (s *consumerState) markUnsubscribed() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.subscribed = false
-	s.failStreak = 0
+}
+
+// history returns the counters that outlive the session: a restart carries them
+// into the next one, so a stop does not erase what already happened.
+func (s *consumerState) history() (resubscribes uint64, lastResubscribeAt time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resubscribes, s.lastResubscribeAt
 }
 
 // setFailStreak records how many attempts the current re-subscribe loop has lost.
@@ -516,11 +518,11 @@ func (s *consumerState) markResubscribed(at time.Time) {
 
 // snapshot renders the state for queue. A nil receiver is a consumer that was
 // declared but never started — a documentation-only one, or any consumer before
-// StartConsumers — and reports the zero value. When active is false the registry's
-// consumers are stopped: no supervisor is trying, so the live flags have no subject
-// and read as "not subscribed, no streak", while the cumulative counters, which are
-// history, pass through.
-func (s *consumerState) snapshot(queue string, active bool) ConsumerState {
+// StartConsumers — and reports the zero value. When consumersActive is false the
+// registry's consumers are stopped: no supervisor is trying, so the live flags have
+// no subject and read as "not subscribed, no streak", while the cumulative counters,
+// which are history, pass through.
+func (s *consumerState) snapshot(queue string, consumersActive bool) ConsumerState {
 	snapshot := ConsumerState{Queue: queue}
 	if s == nil {
 		return snapshot
@@ -530,7 +532,7 @@ func (s *consumerState) snapshot(queue string, active bool) ConsumerState {
 	defer s.mu.Unlock()
 	snapshot.Resubscribes = s.resubscribes
 	snapshot.LastResubscribeAt = s.lastResubscribeAt
-	if active {
+	if consumersActive {
 		snapshot.Subscribed = s.subscribed
 		snapshot.FailStreak = s.failStreak
 	}
@@ -544,8 +546,8 @@ type ConsumerState struct {
 	Resubscribes      uint64
 	LastResubscribeAt time.Time // zero until the first successful re-subscribe
 	// FailStreak counts failed re-subscribe attempts in the CURRENT outage only:
-	// it starts at zero when the delivery channel closes and the next success
-	// clears it, so it never carries a previous outage's count.
+	// the next success clears it and a restarted consumer starts a fresh count, so
+	// it never carries a previous outage's, or a previous session's, total.
 	FailStreak int
 }
 
@@ -647,19 +649,24 @@ func (s *streamResume) observe(headers amqp.Table) {
 	}
 }
 
-// consumerStateFor returns the runtime state of a consumer declaration, seeding it
-// on first start. Callers must hold r.mu: only StartConsumers reaches it.
+// consumerStateFor installs the state a starting consumer session writes to and
+// carries the previous session's counters into it. A restart always gets a FRESH
+// struct: StopConsumers cancels its supervisors without waiting for them, so one
+// still unwinding would otherwise share the new session's state and could revive
+// its subscribed flag or leave its failure streak behind. Writing to a struct
+// nothing reads any more, it cannot. Callers must hold r.mu; only StartConsumers
+// reaches this.
 func (r *Registry) consumerStateFor(consumer *ConsumerDeclaration) *consumerState {
 	if r.consumerStates == nil {
 		r.consumerStates = make(map[consumerKey]*consumerState)
 	}
 
 	key := consumerKeyFor(consumer)
-	state, ok := r.consumerStates[key]
-	if !ok {
-		state = &consumerState{}
-		r.consumerStates[key] = state
+	state := &consumerState{}
+	if previous, ok := r.consumerStates[key]; ok {
+		state.resubscribes, state.lastResubscribeAt = previous.history()
 	}
+	r.consumerStates[key] = state
 	return state
 }
 
