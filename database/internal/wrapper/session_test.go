@@ -431,6 +431,14 @@ func TestSessionTxBadConnInvalidatesSession(t *testing.T) {
 			tx, err := sess.BeginTx(ctx, nil)
 			require.NoError(t, err)
 			tt.observe(t, ctx, tx)
+			if !tt.alive {
+				rows, qerr := tx.Query(ctx, "SELECT more")
+				if rows != nil {
+					defer rows.Close()
+				}
+				require.ErrorIs(t, qerr, sql.ErrConnDone,
+					"a later Tx query must not reach the driver once the session is dead")
+			}
 			tt.endTx(t, ctx, tx)
 
 			result, err := sess.Exec(ctx, "SELECT 1")
