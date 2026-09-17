@@ -254,11 +254,11 @@ func (s *PGRoleSpec) Validate() error {
 //   - spec.SkipFloorReassert (see that field for why);
 //   - membership in MigratorRole WITH INHERIT TRUE, SET TRUE — SET for
 //     CREATE SCHEMA ... AUTHORIZATION, INHERIT for ALTER DEFAULT PRIVILEGES
-//     FOR ROLE and for the grants on the schema the migrator owns. A creator is granted a role with ADMIN alone, so for a migrator
-//     this call creates, set createrole_self_grant = 'set, inherit' on the
-//     provisioner beforehand; for one created out of band (SkipMigratorRole), a
-//     DBA runs GRANT <migrator> TO <provisioner> WITH INHERIT TRUE, SET TRUE
-//     once;
+//     FOR ROLE and for the grants on the schema the migrator owns. A creator
+//     is granted a role with ADMIN alone, so for a migrator this call creates,
+//     set createrole_self_grant = 'set, inherit' on the provisioner
+//     beforehand; for one created out of band (SkipMigratorRole), a DBA runs
+//     GRANT <migrator> TO <provisioner> WITH INHERIT TRUE, SET TRUE once;
 //   - ADMIN on every role it alters (a password or search_path), which it holds
 //     on the roles it created itself.
 //
