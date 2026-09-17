@@ -520,8 +520,11 @@ func (p guardedProvider) DBConfig(ctx context.Context, tenantID string) (*config
 Pass `guardedProvider{inner: provider, allowedHosts: map[string]bool{"tenants.db.internal": true}}`
 to `MigrateAll` in place of `provider`. A decorator guards only the calls that
 go through it: resolve a single-database `MigrateFor` target through the same
-wrapper. The host check is only as strong as the conf — Flyway targets `Host`
-unless the conf hard-codes `flyway.url`.
+wrapper. The host check holds only where Flyway targets `Host`: a PostgreSQL
+config with discrete fields, whose framework-built `-url=` outranks the conf
+([ADR-085](adr_085_framework_owned_flyway_url.md)). For Oracle or a
+`connectionstring` config, the conf's `flyway.url` sets the target, so check
+that instead.
 
 What a decorator can do:
 
