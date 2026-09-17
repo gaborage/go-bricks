@@ -31,11 +31,11 @@ is two framework defects, not a missing door: topology is never re-declared
 after a reconnect, so a consumer can loop on `404 NOT_FOUND` forever and
 silently (#1618), and the consumer supervisor tracks no subscription state
 for readiness to read (#1666). Both are fixed inside the framework's own
-messaging slot. The requesting service's own architecture record
-(`cifra-token-api-go` ADR-0007) also keeps consumer readiness deliberately
-broker-blind, because failing readiness during a reconnect turns the
-reconnect into a restart loop and takes the queue's only consumer away while
-it recovers. So the one concrete caller would leave the door unused.
+messaging slot. The requesting service's own architecture record also
+keeps consumer readiness deliberately broker-blind, because failing
+readiness during a reconnect turns the reconnect into a restart loop and
+takes the queue's only consumer away while it recovers. So the one
+concrete caller would leave the door unused.
 
 What a consumer with a genuinely foreign dependency can do today:
 `Server.RegisterReadyHandler` replaces `/ready` wholesale. It is a
