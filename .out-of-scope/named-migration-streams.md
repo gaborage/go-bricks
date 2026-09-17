@@ -36,7 +36,7 @@ caller. That is an alias, not a mechanism.
 The real gap is documentation: there is no two-tree recipe, and nothing warns
 that `BaseConfig` merges per field, so supplying only `ConfigPath` silently
 pairs a custom conf with the vendor-default `migrations/<vendor>` directory.
-Both belong in a documentation issue rather than new API.
+Both are tracked in #1705 rather than as new API.
 
 **Reopen when either fires:**
 

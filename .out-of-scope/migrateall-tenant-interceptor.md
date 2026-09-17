@@ -43,7 +43,8 @@ with such a protocol deliberately does.
 
 The two concrete needs bundled into the request are handled on their own:
 the migrator-identity overlay (#1694) and the fleet verdict that separates
-"nothing was attempted" from "a tenant failed" (#1692).
+"nothing was attempted" from "a tenant failed" (#1692). The decorator
+provider this entry points callers at is documented under #1705.
 
 **Reopen when either fires:**
 
