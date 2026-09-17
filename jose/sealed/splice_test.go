@@ -154,14 +154,9 @@ func TestIsCompactJOSEAcceptsEveryBase64URLByteAndDots(t *testing.T) {
 	assert.False(t, isCompactJOSE("AB:C"))
 }
 
-// memberFixtures is the one fixture set removeMember and OpenedDocument.Render are pinned
-// by, so a change to the separator rule fails both. It covers the three separator shapes: a
-// leading comma to swallow (middle or last member), a trailing comma to swallow (first
-// member, more follow), and no comma at all (the only member). The whitespace cases are the
-// regression net for the first-member fixup: the decoder's peek skips whitespace, so any
-// padding between the opening brace and the subject key must not defeat it and emit `{ ,…`.
-// A middle member keeps the padding before its swallowed leading comma, which stays valid
-// either way. The value cases put `}`, `,` and escaped quotes inside the subject value.
+// memberFixtures pins both removeMember and Render, so a separator-rule change fails both:
+// the three separator shapes (leading comma, trailing comma, none), whitespace around the
+// first member, and subject values holding `}`, `,` and escaped quotes.
 var memberFixtures = []struct {
 	name string
 	doc  string
@@ -198,10 +193,8 @@ func TestRemoveMemberDeletesTheMemberAndOneSeparator(t *testing.T) {
 	}
 }
 
-// TestOpenedDocumentRenderRestoresTheRemovedMember pins Render against the same fixtures:
-// the opened Document is removeMember's output, rendering the original value reproduces the
-// document byte for byte, and any replacement value lands in the subject's place as valid
-// JSON that removes back to the same Document.
+// TestOpenedDocumentRenderRestoresTheRemovedMember: Document is removeMember's output, and
+// Render keeps every byte but the subject value, for the original value and replacements.
 func TestOpenedDocumentRenderRestoresTheRemovedMember(t *testing.T) {
 	replacements := []string{`"<redacted>"`, `{"pan":"4111","n":[1,{"}":","}]}`}
 	for _, tc := range memberFixtures {
@@ -216,14 +209,11 @@ func TestOpenedDocumentRenderRestoresTheRemovedMember(t *testing.T) {
 			for _, value := range replacements {
 				out, err := opened.Render(json.RawMessage(value))
 				require.NoError(t, err)
+				assert.True(t, json.Valid(out), "rendered with %s: %s", value, out)
 
-				var members map[string]json.RawMessage
-				require.NoError(t, json.Unmarshal(out, &members), "rendered with %s: %s", value, out)
-				assert.JSONEq(t, value, string(members["card"]), "the replacement is the subject member's value")
-
-				again, err := locateSubject(out, "card")
-				require.NoError(t, err)
-				assert.Equal(t, tc.removed, string(removeMember(out, again)), "removing the rendered member restores the Document")
+				require.Equal(t, 1, bytes.Count([]byte(tc.doc), span.value), "the fixture value must locate one spot")
+				want := bytes.Replace([]byte(tc.doc), span.value, []byte(value), 1)
+				assert.Equal(t, want, out, "only the subject value changes")
 			}
 			assert.Equal(t, tc.doc, string(opened.payload), "rendering must not mutate the retained payload")
 		})
@@ -239,7 +229,7 @@ func TestOpenedDocumentRenderRefusesInvalidInput(t *testing.T) {
 		subject json.RawMessage
 		wantErr error
 	}{
-		{name: "zero_value_document", doc: &OpenedDocument{Document: []byte(`{"z":1}`)}, subject: json.RawMessage(`"x"`), wantErr: errRenderNotOpened},
+		{name: "hand_built_document", doc: &OpenedDocument{Document: []byte(`{"z":1}`)}, subject: json.RawMessage(`"4111"`), wantErr: errRenderNotOpened},
 		{name: "subject_not_json", doc: opened, subject: json.RawMessage(`4111 1111`), wantErr: errRenderSubjectInvalid},
 		{name: "empty_subject", doc: opened, subject: nil, wantErr: errRenderSubjectInvalid},
 	}
@@ -253,8 +243,7 @@ func TestOpenedDocumentRenderRefusesInvalidInput(t *testing.T) {
 	}
 }
 
-// openedFrom builds the OpenedDocument OpenDocument would return for doc as the verified
-// payload, skipping the crypto: the Subject is the member named "card".
+// openedFrom opens doc as a verified payload without the crypto; the Subject is "card".
 func openedFrom(t *testing.T, doc string) (*OpenedDocument, subjectSpan) {
 	t.Helper()
 	payload := []byte(doc)

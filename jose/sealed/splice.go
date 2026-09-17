@@ -174,11 +174,10 @@ func removeMember(doc []byte, span subjectSpan) []byte {
 	return append(out, doc[end:]...)
 }
 
-// Render returns the opened document with the Subject member back in its place and subject
-// as its value: every other byte — member order, whitespace, and the separators removeMember
-// took — is the verified payload's own, so rendering Subject reproduces the document the
-// producer sealed and a redaction placeholder changes nothing but the value. subject must be
-// a valid JSON value. d is not mutated.
+// Render returns the verified document with subject as the Subject member's value and every
+// other byte as the producer sealed it; it reads the retained payload, not Document. subject
+// must be a valid JSON value. Rendering Subject emits the plaintext: Subject's never-log
+// caution applies to the result.
 func (d *OpenedDocument) Render(subject json.RawMessage) ([]byte, error) {
 	if d.payload == nil {
 		return nil, errRenderNotOpened

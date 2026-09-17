@@ -346,11 +346,10 @@ func TestOpenDocumentSubjectAtLocatesTheRemovedMember(t *testing.T) {
 	}
 }
 
-// TestOpenDocumentSubjectAtSplicesAReplacementThroughOddLayout is the narrowed contract on its
-// hardest input: whitespace on BOTH sides of the delimiter the removed member took with it.
-// The original bytes are gone — that is documented, not a defect — but a redaction spliced at
-// SubjectAt with the caller's own separator must still yield a valid JSON object with the
-// clear members intact, which is the promise a caller splicing its own member relies on.
+// TestOpenDocumentSubjectAtSplicesAReplacementThroughOddLayout covers the hardest layout:
+// whitespace on BOTH sides of the delimiter the removed member took with it. Document and
+// SubjectAt alone cannot restore those bytes, but a caller's own splice there stays valid JSON
+// with the clear members intact — and Render restores the layout exactly.
 func TestOpenDocumentSubjectAtSplicesAReplacementThroughOddLayout(t *testing.T) {
 	k := testKeys(t)
 	consumer := jositest.NewTestResolver(map[string]any{signKid: &k.signPriv.PublicKey, encKid: k.encPriv})

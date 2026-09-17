@@ -211,9 +211,8 @@ func Open(body []byte, spec *Spec, opts *OpenOptions, out any) (*Envelope, error
 // It returns an *OpenedDocument: the document with the Subject member ABSENT rather than
 // substituting a redaction placeholder — the library never decides what a caller should
 // splice in its place — the decrypted subject plaintext separately, the offset the member
-// sat at, and the same Envelope Open would return for the same body. SubjectAt positions a
-// REPLACEMENT member; reproducing the original bytes is not part of the contract (see its
-// own comment).
+// sat at, and the same Envelope Open would return for the same body. Render puts a member
+// back byte for byte with a value the caller chooses.
 //
 // Every rule 1–10 refusal is code-identical to Open's: the same *OpenError Err.Code, Rule
 // and Details for the same input. Rule 11 (decode into spec.Type) is out of a type-free
@@ -235,8 +234,7 @@ func OpenDocument(body []byte, spec *Spec, opts *OpenOptions) (*OpenedDocument, 
 	return newOpenedDocument(core), nil
 }
 
-// newOpenedDocument builds the result of a successful OpenDocument, retaining the verified
-// payload and the Subject span privately so Render can put a member back byte for byte.
+// newOpenedDocument keeps the verified payload and Subject span privately for Render.
 func newOpenedDocument(core *openedCore) *OpenedDocument {
 	return &OpenedDocument{
 		Document:  removeMember(core.payload, core.span),
