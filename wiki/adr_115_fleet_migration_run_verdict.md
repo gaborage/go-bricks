@@ -64,9 +64,12 @@ run matches Go's success idiom, so `if v := res.Verdict(); v != nil` reads corre
   it excludes never-dispatched tenants and points at `Verdict`. The verdict is computed from the
   result's fields alone and does not replace the error, so callers check both.
 - Both runners share one pre-dispatch check: the context, then the quiesce gate, then the context
-  again, because a database-backed quiesce check that a cancel interrupts fails open. Parallel
-  dispatch runs it before contending for a worker slot, so a context that is already done
-  dispatches zero tenants, deterministically, as the sequential path does. The context now wins
+  again, because a database-backed quiesce check that a cancel interrupts fails open. The
+  sequential runner runs it before each tenant. The parallel runner checks only the context before
+  contending for a worker slot, so a context that is already done dispatches zero tenants,
+  deterministically, as the sequential path does; once it holds a slot it runs the full check and
+  releases the slot when blocked, because waiting for a slot can outlast a fail-fast cancel or a
+  quiesce flip. The context now wins
   over quiesce in both runners: a parallel run that is both canceled and quiesced returns the
   context's error, where it returned `ErrQuiesceBlocked`.
 - **CLI mapping, decided here and shipped separately.** `go-bricks-migrate` will exit **0** for a

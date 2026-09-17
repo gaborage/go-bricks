@@ -1795,8 +1795,9 @@ nil when at least one tenant was listed and every listed tenant was dispatched a
 dispatched and at least one failed or was never dispatched, and `ErrNothingAttempted` when none was
 dispatched, a nil result included. A Flyway timeout or cancel on a dispatched tenant stays a
 failure. The per-tenant outcome enum and the `Prepare` skip sentinel were rejected, and the quiesce
-pins on `Results` stand. Both runners check the context before and after the quiesce check, and
-parallel dispatch does so before it contends for a worker slot. The CLI's exit codes are unchanged
+pins on `Results` stand. Both runners check the context before and after the quiesce check; parallel
+dispatch checks the context before it contends for a worker slot and judges both again once it holds
+one. The CLI's exit codes are unchanged
 in this release; their 0/1/2 mapping is decided here.
 See [migrations.md](migrations.md) `[C66.5]`.
 
