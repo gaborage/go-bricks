@@ -9990,9 +9990,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   every literal. A run is in the population when the code after it treats the run as successful
   from the error and `Failed()` alone (`err == nil && len(res.Failed()) == 0`, as the old
   `multi_tenant_migration.md` library example did). A literal is in it only when unkeyed
-  (`MigrateAllResult{migration.ActionMigrate, rows}`). A parallel run is in it when it passes
-  `Parallelism` above 1 and a caller-supplied context that can be done before `MigrateAll`
-  dispatches, and some code depends on which tenants were dispatched.
+  (`MigrateAllResult{migration.ActionMigrate, rows}`). A run's dispatch timing is in it when the
+  caller supplies a context it can cancel and some code depends on which tenants were dispatched:
+  a parallel run (`Parallelism` above 1) whose context is done before `MigrateAll` dispatches or
+  is canceled while dispatch waits for a worker slot, a run of either runner whose context is
+  canceled during a quiesce check, and a parallel run whose quiesce flag is set while dispatch
+  waits for a slot. A `migration.ErrQuiesceBlocked` match is in it only where the context can
+  also be done: a run both canceled and quiesced now returns the context's error. A match on a
+  quiesce-only run is not.
 - scope: `migration.MigrateAllResult` gains `NeverDispatched []string`: the listed IDs the run
   stopped before dispatching, in listing order. Dispatch follows the listing, so they are its tail.
   `Listed()` returns the dispatched rows plus those IDs. `(*MigrateAllResult).Verdict() error` returns nil when at least one tenant was
@@ -10015,9 +10020,12 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `(result, error)` shape and `Hook` do not move. `go-bricks-migrate` still exits 0 or 1 in this
   hop; its three-way mapping is recorded in ADR-115 and ships in a later CLI release.
 - gate: match = a caller reads success off the error and `Failed()` without `Verdict()`, OR an
-  unkeyed `MigrateAllResult` literal, OR a parallel run's caller depends on the tenants a done
-  context dispatched. no-match = no `MigrateAll` caller, or one already gating on a listed count
-  it checks itself.
+  unkeyed `MigrateAllResult` literal, OR a caller with a cancelable context depends on which
+  tenants were dispatched (a done context, a cancel during a quiesce check or a worker-slot wait,
+  or a quiesce flag set during a slot wait), OR a caller matches `ErrQuiesceBlocked` on a run whose
+  context can also be done. no-match = no `MigrateAll` caller, or one that gates on a listed count
+  it checks itself, depends on no dispatch timing, and matches `ErrQuiesceBlocked` only on
+  quiesce-only runs.
 - apply: gate the run on `res.Verdict()` beside the error, for example `if v := res.Verdict(); v !=
   nil { return errors.Join(v, err) }; return err`. Decide explicitly what a zero-tenant environment
   does: `errors.Is(v, migration.ErrNothingAttempted)` is now the only signal that nothing was
