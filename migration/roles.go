@@ -121,10 +121,7 @@ func (f PGIdentifierCheckerFunc) CheckPGIdentifier(value string) error {
 // caller's policy. A refusal from any of the three is wrapped with
 // ErrInvalidPGIdentifier plus the field name and value.
 func (s *PGRoleSpec) checkIdentifier(field, value string) error {
-	err := identifier.Validate(dbtypes.PostgreSQL, value)
-	if err == nil {
-		err = checkReservedPGIdentifier(field, value)
-	}
+	err := checkPGIdentifierFloor(field, value)
 	if err == nil && s.IdentifierPolicy != nil {
 		err = s.IdentifierPolicy.CheckPGIdentifier(value)
 	}
@@ -132,6 +129,15 @@ func (s *PGRoleSpec) checkIdentifier(field, value string) error {
 		return fmt.Errorf("%w: %s=%q: %w", ErrInvalidPGIdentifier, field, value, err)
 	}
 	return nil
+}
+
+// checkPGIdentifierFloor applies the identifier floor, then the reserved-name
+// rule — every check but the caller's policy.
+func checkPGIdentifierFloor(field, value string) error {
+	if err := identifier.Validate(dbtypes.PostgreSQL, value); err != nil {
+		return err
+	}
+	return checkReservedPGIdentifier(field, value)
 }
 
 // checkReservedPGIdentifier refuses the names PostgreSQL owns, per the ADR-061
@@ -248,7 +254,7 @@ func (s *PGRoleSpec) Validate() error {
 //   - spec.SkipFloorReassert (see that field for why);
 //   - membership in MigratorRole WITH INHERIT TRUE, SET TRUE — SET for
 //     CREATE SCHEMA ... AUTHORIZATION, INHERIT for ALTER DEFAULT PRIVILEGES
-//     FOR ROLE. A creator is granted a role with ADMIN alone, so for a migrator
+//     FOR ROLE and for the grants on the schema the migrator owns. A creator is granted a role with ADMIN alone, so for a migrator
 //     this call creates, set createrole_self_grant = 'set, inherit' on the
 //     provisioner beforehand; for one created out of band (SkipMigratorRole), a
 //     DBA runs GRANT <migrator> TO <provisioner> WITH INHERIT TRUE, SET TRUE
@@ -351,7 +357,8 @@ func provisionPGRoles(ctx context.Context, spec *PGRoleSpec, run func(ctx contex
 // PGRoleProvisioningSQL returns the SQL statements that ProvisionPGRoles
 // would execute for spec, in order. Use this when operators want to inspect
 // or apply the provisioning manually via psql, or feed it into their own
-// migration runner (Flyway, Liquibase) rather than the Go helper.
+// migration runner (Flyway, Liquibase) rather than the Go helper. The
+// executing role needs the privileges listed on ProvisionPGRoles.
 //
 // Returns Validate's error when spec fails it — ErrInvalidPGIdentifier,
 // ErrPGRolePasswordHasControlChar or ErrPGRoleSkippedMigratorHasPassword. The
@@ -488,24 +495,21 @@ FROM pg_catalog.pg_roles WHERE rolname = $1`
 // non-superuser provisioner can run it. With PGRoleSpec.SkipFloorReassert set,
 // provisioning no longer repairs drift; this reports it instead.
 //
-// Returns ErrInvalidPGIdentifier when role fails the identifier floor or the
-// reserved-name rule PGRoleSpec.Validate applies (before any query),
-// ErrPGRoleNotFound when no role has the name, or
-// ErrPGRoleFloorViolated naming every attribute held above the floor.
+// Returns an error for a nil db; ErrInvalidPGIdentifier when role fails the
+// identifier floor or the reserved-name rule PGRoleSpec.Validate applies
+// (before any query); ErrPGRoleNotFound when no role has the name; the wrapped
+// driver error when the read fails; or ErrPGRoleFloorViolated naming every
+// attribute held above the floor.
 func CheckPGRoleFloor(ctx context.Context, db *sql.DB, role string) error {
 	if db == nil {
 		return errors.New("migration: CheckPGRoleFloor requires a non-nil *sql.DB")
 	}
-	err := identifier.Validate(dbtypes.PostgreSQL, role)
-	if err == nil {
-		err = checkReservedPGIdentifier("role", role)
-	}
-	if err != nil {
+	if err := checkPGIdentifierFloor("role", role); err != nil {
 		return fmt.Errorf("%w: role=%q: %w", ErrInvalidPGIdentifier, role, err)
 	}
 
 	var super, createDB, createRole, replication, bypassRLS bool
-	err = db.QueryRowContext(ctx, pgRoleFloorSQL, role).
+	err := db.QueryRowContext(ctx, pgRoleFloorSQL, role).
 		Scan(&super, &createDB, &createRole, &replication, &bypassRLS)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("%w: %q", ErrPGRoleNotFound, role)

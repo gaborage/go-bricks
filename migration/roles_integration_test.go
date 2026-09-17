@@ -1328,12 +1328,8 @@ func sourceColumn(rows []string) []string {
 	return out
 }
 
-// TestPGRolesCreateroleProvisionerMintsTheMigrator provisions a tenant as a
-// CREATEROLE NOSUPERUSER provisioner with the floor re-assert skipped and the
-// migrator minted in band. On PostgreSQL 16+ the creator of a role is granted
-// it with ADMIN alone; the provisioner's createrole_self_grant adds SET, which
-// CREATE SCHEMA ... AUTHORIZATION needs, and INHERIT, which ALTER DEFAULT
-// PRIVILEGES FOR ROLE needs.
+// TestPGRolesCreateroleProvisionerMintsTheMigrator provisions as a CREATEROLE-only
+// provisioner that mints the migrator, then reports floor drift with CheckPGRoleFloor.
 func TestPGRolesCreateroleProvisionerMintsTheMigrator(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx, cancel := testCtx(t)
@@ -1368,20 +1364,17 @@ func TestPGRolesCreateroleProvisionerMintsTheMigrator(t *testing.T) {
 	assert.Contains(t, err.Error(), "holds CREATEDB")
 }
 
-// TestPGRolesCreateroleProvisionerLeavesASharedMigratorUntouched provisions two
-// tenants against one out-of-band migrator. The provisioner carries no
-// createrole_self_grant: the one-time DBA grant of the migrator WITH INHERIT
-// TRUE, SET TRUE is all the skipped-migrator path needs. The migrator's
-// attributes, password and role settings must read back exactly as the DBA
-// left them.
+// TestPGRolesCreateroleProvisionerLeavesASharedMigratorUntouched provisions three
+// tenants against one out-of-band migrator and reads it back unchanged.
 func TestPGRolesCreateroleProvisionerLeavesASharedMigratorUntouched(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx, cancel := testCtx(t)
 	defer cancel()
 
 	admin := env.adminDB(t)
-	provDB := createroleProvisioner(ctx, t, env, "prov_shared", "")
-	const migrator = "mig_shared"
+	const provisioner, migrator = "prov_shared", "mig_shared"
+	// No createrole_self_grant: the DBA grant below is all this path needs.
+	provDB := createroleProvisioner(ctx, t, env, provisioner, "")
 	migratorPassword := testconsts.FakePassword("mig-shared")
 	for i, stmt := range []string{
 		// CREATEDB and a role setting stand in for what a DBA grants a migrator
@@ -1390,7 +1383,7 @@ func TestPGRolesCreateroleProvisionerLeavesASharedMigratorUntouched(t *testing.T
 		fmt.Sprintf(`CREATE ROLE %s LOGIN CREATEDB PASSWORD %s`,
 			quotePGIdent(migrator), quotePGStringLiteral(migratorPassword)),
 		fmt.Sprintf(`ALTER ROLE %s SET statement_timeout = '5min'`, quotePGIdent(migrator)),
-		fmt.Sprintf(`GRANT %s TO %s WITH INHERIT TRUE, SET TRUE`, quotePGIdent(migrator), quotePGIdent("prov_shared")),
+		fmt.Sprintf(`GRANT %s TO %s WITH INHERIT TRUE, SET TRUE`, quotePGIdent(migrator), quotePGIdent(provisioner)),
 	} {
 		_, err := admin.ExecContext(ctx, stmt)
 		require.NoError(t, err, "out-of-band setup statement %d", i)
@@ -1399,16 +1392,25 @@ func TestPGRolesCreateroleProvisionerLeavesASharedMigratorUntouched(t *testing.T
 	require.Contains(t, before, "statement_timeout=5min", "premise: the snapshot must read the DBA's role setting")
 
 	migratorDB := env.openAsRole(t, migrator, migratorPassword)
-	for _, tenant := range []string{"a", "b"} {
+	for _, tt := range []struct {
+		tenant string
+		db     *sql.DB
+	}{
+		{tenant: "a", db: provDB},
+		{tenant: "b", db: provDB},
+		// The superuser may rewrite the migrator, so for this tenant the snapshot
+		// comparison, not a server refusal, is what catches a regression.
+		{tenant: "c", db: admin},
+	} {
 		spec := &PGRoleSpec{
-			Schema:            "tenant_shared_" + tenant,
+			Schema:            "tenant_shared_" + tt.tenant,
 			MigratorRole:      migrator,
-			RuntimeRole:       "rt_shared_" + tenant,
-			RuntimePassword:   testconsts.FakePassword("rt-shared-" + tenant),
+			RuntimeRole:       "rt_shared_" + tt.tenant,
+			RuntimePassword:   testconsts.FakePassword("rt-shared-" + tt.tenant),
 			SkipMigratorRole:  true,
 			SkipFloorReassert: true,
 		}
-		require.NoError(t, ProvisionPGRoles(ctx, provDB, spec), "tenant %s", tenant)
+		require.NoError(t, ProvisionPGRoles(ctx, tt.db, spec), "tenant %s", tt.tenant)
 		requireRuntimeRoleSeparation(ctx, t, migratorDB,
 			env.openAsRole(t, spec.RuntimeRole, spec.RuntimePassword), spec.Schema)
 	}
@@ -1462,12 +1464,9 @@ func pgRoleSnapshot(ctx context.Context, t *testing.T, db *sql.DB, role string) 
 	return snapshot
 }
 
-// createroleProvisioner creates a LOGIN CREATEROLE NOSUPERUSER role holding
-// CREATE on the env's database — the non-superuser provisioner the docs
-// sanction — and returns a connection authenticated as it. selfGrant, when
-// non-empty, is stored as the role's createrole_self_grant before the
-// connection opens, so every role it creates is granted back to it with those
-// options.
+// createroleProvisioner creates a LOGIN CREATEROLE NOSUPERUSER role with CREATE
+// on the database, stores selfGrant as its createrole_self_grant when non-empty,
+// and connects as it.
 func createroleProvisioner(ctx context.Context, t *testing.T, env *integrationEnv, name, selfGrant string) *sql.DB {
 	t.Helper()
 	admin := env.adminDB(t)
@@ -1506,16 +1505,16 @@ func requireRuntimeRoleSeparation(ctx context.Context, t *testing.T, migratorDB,
 	_, err := migratorDB.ExecContext(ctx, `CREATE TABLE `+qualified+` (id INT PRIMARY KEY, qty INT NOT NULL)`)
 	require.NoError(t, err, "the migrator must create tables in the schema it owns")
 
-	for _, stmt := range []string{
-		`INSERT INTO ` + qualified + ` (id, qty) VALUES (1, 5)`,
-		`UPDATE ` + qualified + ` SET qty = qty + 1 WHERE id = 1`,
-		`DELETE FROM ` + qualified + ` WHERE id = 1`,
-	} {
-		_, err = runtimeDB.ExecContext(ctx, stmt)
-		require.NoError(t, err, "default privileges must reach the runtime role: %s", stmt)
-	}
-	var n int
-	require.NoError(t, runtimeDB.QueryRowContext(ctx, `SELECT count(*) FROM `+qualified).Scan(&n))
+	_, err = runtimeDB.ExecContext(ctx, `INSERT INTO `+qualified+` (id, qty) VALUES (1, 5)`)
+	require.NoError(t, err, "default privileges must grant INSERT")
+	_, err = runtimeDB.ExecContext(ctx, `UPDATE `+qualified+` SET qty = qty + 1 WHERE id = 1`)
+	require.NoError(t, err, "default privileges must grant UPDATE")
+	var qty int
+	require.NoError(t, runtimeDB.QueryRowContext(ctx, `SELECT qty FROM `+qualified+` WHERE id = 1`).Scan(&qty),
+		"default privileges must grant SELECT")
+	require.Equal(t, 6, qty)
+	_, err = runtimeDB.ExecContext(ctx, `DELETE FROM `+qualified+` WHERE id = 1`)
+	require.NoError(t, err, "default privileges must grant DELETE")
 
 	for _, stmt := range []string{
 		`CREATE TABLE ` + quotePGIdent(schema) + `.unauthorized (id INT)`,

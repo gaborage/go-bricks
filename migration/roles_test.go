@@ -1194,10 +1194,13 @@ type floorAttrs struct {
 	super, createDB, createRole, replication, bypassRLS bool
 }
 
+// floorColumns are the pg_roles columns CheckPGRoleFloor scans, in order.
+var floorColumns = []string{"rolsuper", "rolcreatedb", "rolcreaterole", "rolreplication", "rolbypassrls"}
+
 // expectFloorRow queues the pg_roles read CheckPGRoleFloor issues for role.
 func expectFloorRow(mock sqlmock.Sqlmock, role string, attrs floorAttrs) {
 	mock.ExpectQuery(`FROM pg_catalog\.pg_roles WHERE rolname = \$1`).WithArgs(role).WillReturnRows(
-		sqlmock.NewRows([]string{"rolsuper", "rolcreatedb", "rolcreaterole", "rolreplication", "rolbypassrls"}).
+		sqlmock.NewRows(floorColumns).
 			AddRow(attrs.super, attrs.createDB, attrs.createRole, attrs.replication, attrs.bypassRLS))
 }
 
@@ -1243,12 +1246,29 @@ func TestCheckPGRoleFloorNamesEveryAttributeAboveTheFloor(t *testing.T) {
 	}
 }
 
+// Every attribute the template's floor denies must be one CheckPGRoleFloor
+// reads back and names.
+func TestCheckPGRoleFloorCoversEveryLockdownAttribute(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	expectFloorRow(mock, "rt", floorAttrs{super: true, createDB: true, createRole: true, replication: true, bypassRLS: true})
+
+	err = CheckPGRoleFloor(context.Background(), db, "rt")
+	require.ErrorIs(t, err, ErrPGRoleFloorViolated)
+	lockdown := strings.Fields(pgRoleLockdownAttrs)
+	require.Len(t, lockdown, len(floorColumns), "premise: one scanned column per lockdown attribute")
+	for _, attr := range lockdown {
+		assert.Contains(t, err.Error(), strings.TrimPrefix(attr, "NO"))
+	}
+}
+
 func TestCheckPGRoleFloorReportsAMissingRole(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 	mock.ExpectQuery(`FROM pg_catalog\.pg_roles`).WithArgs("gone").WillReturnRows(
-		sqlmock.NewRows([]string{"rolsuper", "rolcreatedb", "rolcreaterole", "rolreplication", "rolbypassrls"}))
+		sqlmock.NewRows(floorColumns))
 
 	err = CheckPGRoleFloor(context.Background(), db, "gone")
 	require.ErrorIs(t, err, ErrPGRoleNotFound)
