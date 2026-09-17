@@ -5139,6 +5139,7 @@ The CLI's AWS Secrets Manager wrapper at `tools/migration/internal/awssm/` is CL
 ```go
 import (
     "context"
+    "errors"
     "fmt"
     "os"
 
@@ -5183,11 +5184,11 @@ func RunReleaseMigrations(ctx context.Context) error {
             myLogger.Info().Str("tenant", r.TenantID).Dur("dur", r.Duration).Msg("tenant migrated")
         },
     })
-    if err != nil { return err }
-    if failed := res.Failed(); len(failed) > 0 {
-        return fmt.Errorf("%d tenants failed", len(failed))
+    // Verdict: nil clean, ErrFleetSplit, or ErrNothingAttempted (an empty listing is not success).
+    if verdict := res.Verdict(); verdict != nil {
+        return errors.Join(verdict, err)
     }
-    return nil
+    return err
 }
 ```
 
