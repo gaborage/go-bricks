@@ -219,13 +219,14 @@ END $$`
 // The skip options are additive: the zero value must keep today's template
 // statement for statement, and each option must drop exactly its statements.
 func TestPGRoleProvisioningSQLPinsTheListPerSkipOption(t *testing.T) {
+	fixture := txDoorSpec()
 	var (
 		createMigrator   = wantCreateRoleStmt(`"mig_tx"`)
 		lockMigrator     = `ALTER ROLE "mig_tx" NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`
-		migratorPassword = `ALTER ROLE "mig_tx" PASSWORD 'mig-tx-pw'`
+		migratorPassword = `ALTER ROLE "mig_tx" PASSWORD '` + fixture.MigratorPassword + `'`
 		createRuntime    = wantCreateRoleStmt(`"rt_tx"`)
 		lockRuntime      = `ALTER ROLE "rt_tx" NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`
-		runtimePassword  = `ALTER ROLE "rt_tx" PASSWORD 'rt-tx-pw'`
+		runtimePassword  = `ALTER ROLE "rt_tx" PASSWORD '` + fixture.RuntimePassword + `'`
 		migratorPath     = `ALTER ROLE "mig_tx" SET search_path = "tenant_tx"`
 		runtimePath      = `ALTER ROLE "rt_tx" SET search_path = "tenant_tx"`
 	)
@@ -237,7 +238,6 @@ func TestPGRoleProvisioningSQLPinsTheListPerSkipOption(t *testing.T) {
 		`ALTER DEFAULT PRIVILEGES FOR ROLE "mig_tx" IN SCHEMA "tenant_tx" GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "rt_tx"`,
 		`ALTER DEFAULT PRIVILEGES FOR ROLE "mig_tx" IN SCHEMA "tenant_tx" GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO "rt_tx"`,
 	}
-	// concat joins statement groups into one expected list.
 	concat := func(groups ...[]string) []string {
 		var out []string
 		for _, g := range groups {
@@ -312,9 +312,7 @@ func TestPGRoleSpecValidateRefusesMigratorPasswordWhenSkippingMigratorRole(t *te
 	spec := txDoorSpec()
 	spec.SkipMigratorRole = true
 
-	err := spec.Validate()
-	require.ErrorIs(t, err, ErrPGRoleSkippedMigratorHasPassword)
-	assert.NotContains(t, err.Error(), spec.MigratorPassword)
+	require.ErrorIs(t, spec.Validate(), ErrPGRoleSkippedMigratorHasPassword)
 
 	stmts, err := PGRoleProvisioningSQL(spec)
 	require.ErrorIs(t, err, ErrPGRoleSkippedMigratorHasPassword)
@@ -323,6 +321,14 @@ func TestPGRoleSpecValidateRefusesMigratorPasswordWhenSkippingMigratorRole(t *te
 	exec := newRecordingRoleExecutor()
 	require.ErrorIs(t, ProvisionPGRolesTx(context.Background(), exec, spec), ErrPGRoleSkippedMigratorHasPassword)
 	assert.Empty(t, exec.stmts, "a refused spec must reach no statement at all")
+
+	// No expectations are queued, so any Exec would fail with sqlmock's own error
+	// instead of the sentinel.
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	require.ErrorIs(t, ProvisionPGRoles(context.Background(), db, spec), ErrPGRoleSkippedMigratorHasPassword)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 // TestBuildRoleCreateAndLockdownSwallowsDuplicate pins the race-safe

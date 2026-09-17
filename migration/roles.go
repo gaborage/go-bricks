@@ -18,9 +18,9 @@ import (
 // migrator-vs-runtime role-separation model defined in issue #378.
 //
 // Migrator role: owns the per-tenant schema, holds DDL privileges, used
-// exclusively by the migration runner. Created with NOSUPERUSER NOCREATEDB
-// NOCREATEROLE NOREPLICATION NOBYPASSRLS so even a compromised migrator
-// credential cannot escalate itself.
+// exclusively by the migration runner. Unless SkipMigratorRole is set, created
+// with NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS so even a
+// compromised migrator credential cannot escalate itself.
 //
 // Runtime role: per-tenant LOGIN role granted only DML on the tenant schema.
 // Does not own the schema, so PostgreSQL's default ownership model rejects
@@ -62,7 +62,7 @@ type PGRoleSpec struct {
 	// SkipFloorReassert drops the ALTER ROLE that re-applies the attribute floor
 	// to a role on every call. CREATE ROLE still carries the full floor, so a
 	// role this spec creates starts locked down, but later drift is no longer
-	// repaired. Required when the provisioner is not a superuser: of the five
+	// repaired. A provisioner that is not a superuser needs it: of the five
 	// lockdown attributes, PostgreSQL lets a CREATEROLE-only role ALTER only
 	// NOCREATEROLE.
 	SkipFloorReassert bool
@@ -414,10 +414,10 @@ func buildPGRoleStatements(spec *PGRoleSpec) []string {
 	// unqualified runtime queries silently miss tenant tables. A skipped
 	// migrator keeps its own: the setting is cluster-wide, so a migrator shared
 	// across tenants would otherwise point at whichever tenant ran last.
-	if !spec.SkipMigratorRole {
-		stmts = append(stmts, fmt.Sprintf(`ALTER ROLE %s SET search_path = %s`, migrator, schema))
+	for _, r := range roles {
+		stmts = append(stmts, fmt.Sprintf(`ALTER ROLE %s SET search_path = %s`, r.quotedIdent, schema))
 	}
-	return append(stmts, fmt.Sprintf(`ALTER ROLE %s SET search_path = %s`, runtime, schema))
+	return stmts
 }
 
 // buildRoleCreateAndLockdown returns the two-statement idempotent template
@@ -446,9 +446,8 @@ func buildRoleCreateAndLockdown(quotedIdent string) []string {
 // starts at.
 const pgRoleLockdownAttrs = "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
 
-// buildRoleCreate returns the race-safe CREATE ROLE block alone — the first
-// statement of buildRoleCreateAndLockdown, emitted without the floor re-assert
-// when PGRoleSpec.SkipFloorReassert is set.
+// buildRoleCreate returns the race-safe CREATE ROLE block alone, the first
+// statement of buildRoleCreateAndLockdown.
 func buildRoleCreate(quotedIdent string) string {
 	return fmt.Sprintf(`DO $$ BEGIN
   BEGIN
