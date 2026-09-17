@@ -153,6 +153,12 @@ any tenant is listed. The role-separation model in
 [migration_roles.md](migration_roles.md) needs the overlay; `go-bricks-migrate`
 does not expose it yet.
 
+The overlay presents one credential with DDL rights on every tenant schema to
+every tenant's host, so a tenant document naming a wrong or hostile host exposes
+that shared credential rather than one tenant's. Keep tenant host fields under
+the same control as the secret store, and set `tls.mode: verify-full` on
+PostgreSQL tenant documents so Flyway verifies the server before authenticating.
+
 ## Schema targeting (PostgreSQL)
 
 When the target `DatabaseConfig` carries a non-empty `postgresql.schema`, the
