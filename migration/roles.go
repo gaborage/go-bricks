@@ -382,11 +382,11 @@ func buildPGRoleStatements(spec *PGRoleSpec) []string {
 	// Pre-size for the worst case: 2 roles × (create + lockdown + password) + 8 schema/grant/search_path statements.
 	stmts := make([]string, 0, 2*3+8)
 	for _, r := range roles {
-		roleStmts := buildRoleCreateAndLockdown(r.quotedIdent)
 		if spec.SkipFloorReassert {
-			roleStmts = roleStmts[:1]
+			stmts = append(stmts, buildRoleCreate(r.quotedIdent))
+		} else {
+			stmts = append(stmts, buildRoleCreateAndLockdown(r.quotedIdent)...)
 		}
-		stmts = append(stmts, roleStmts...)
 		if r.password != "" {
 			stmts = append(stmts, fmt.Sprintf(
 				`ALTER ROLE %s PASSWORD %s`,
@@ -434,20 +434,29 @@ func buildPGRoleStatements(spec *PGRoleSpec) []string {
 // index, the loser raises unique_violation instead — so both must be swallowed
 // for the concurrent path to be safe. The ALTER on the next statement
 // re-applies the attribute floor on every run so manual drift (e.g. someone ran
-// ALTER ROLE ... SUPERUSER) snaps back; buildPGRoleStatements drops it when
-// PGRoleSpec.SkipFloorReassert is set.
+// ALTER ROLE ... SUPERUSER) snaps back.
 func buildRoleCreateAndLockdown(quotedIdent string) []string {
-	const lockdownAttrs = "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
 	return []string{
-		fmt.Sprintf(`DO $$ BEGIN
+		buildRoleCreate(quotedIdent),
+		fmt.Sprintf(`ALTER ROLE %s %s`, quotedIdent, pgRoleLockdownAttrs),
+	}
+}
+
+// pgRoleLockdownAttrs is the attribute floor every role the template creates
+// starts at.
+const pgRoleLockdownAttrs = "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+
+// buildRoleCreate returns the race-safe CREATE ROLE block alone — the first
+// statement of buildRoleCreateAndLockdown, emitted without the floor re-assert
+// when PGRoleSpec.SkipFloorReassert is set.
+func buildRoleCreate(quotedIdent string) string {
+	return fmt.Sprintf(`DO $$ BEGIN
   BEGIN
     CREATE ROLE %s LOGIN %s;
   EXCEPTION WHEN duplicate_object OR unique_violation THEN
     NULL; -- another provisioner created it concurrently; not an error
   END;
-END $$`, quotedIdent, lockdownAttrs),
-		fmt.Sprintf(`ALTER ROLE %s %s`, quotedIdent, lockdownAttrs),
-	}
+END $$`, quotedIdent, pgRoleLockdownAttrs)
 }
 
 // quotePGIdent returns the PostgreSQL-safe quoted form of ident. Callers must

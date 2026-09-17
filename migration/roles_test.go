@@ -219,24 +219,16 @@ END $$`
 // The skip options are additive: the zero value must keep today's template
 // statement for statement, and each option must drop exactly its statements.
 func TestPGRoleProvisioningSQLPinsTheListPerSkipOption(t *testing.T) {
-	const (
-		createMigrator   = "create_migrator"
-		lockMigrator     = "lock_migrator"
-		migratorPassword = "migrator_password"
-		createRuntime    = "create_runtime"
-		lockRuntime      = "lock_runtime"
-		runtimePassword  = "runtime_password"
-		migratorPath     = "migrator_search_path"
+	var (
+		createMigrator   = wantCreateRoleStmt(`"mig_tx"`)
+		lockMigrator     = `ALTER ROLE "mig_tx" NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`
+		migratorPassword = `ALTER ROLE "mig_tx" PASSWORD 'mig-tx-pw'`
+		createRuntime    = wantCreateRoleStmt(`"rt_tx"`)
+		lockRuntime      = `ALTER ROLE "rt_tx" NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`
+		runtimePassword  = `ALTER ROLE "rt_tx" PASSWORD 'rt-tx-pw'`
+		migratorPath     = `ALTER ROLE "mig_tx" SET search_path = "tenant_tx"`
+		runtimePath      = `ALTER ROLE "rt_tx" SET search_path = "tenant_tx"`
 	)
-	stmt := map[string]string{
-		createMigrator:   wantCreateRoleStmt(`"mig_tx"`),
-		lockMigrator:     `ALTER ROLE "mig_tx" NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`,
-		migratorPassword: `ALTER ROLE "mig_tx" PASSWORD 'mig-tx-pw'`,
-		createRuntime:    wantCreateRoleStmt(`"rt_tx"`),
-		lockRuntime:      `ALTER ROLE "rt_tx" NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`,
-		runtimePassword:  `ALTER ROLE "rt_tx" PASSWORD 'rt-tx-pw'`,
-		migratorPath:     `ALTER ROLE "mig_tx" SET search_path = "tenant_tx"`,
-	}
 	schemaAndGrants := []string{
 		`CREATE SCHEMA IF NOT EXISTS "tenant_tx" AUTHORIZATION "mig_tx"`,
 		`GRANT USAGE ON SCHEMA "tenant_tx" TO "rt_tx"`,
@@ -245,18 +237,13 @@ func TestPGRoleProvisioningSQLPinsTheListPerSkipOption(t *testing.T) {
 		`ALTER DEFAULT PRIVILEGES FOR ROLE "mig_tx" IN SCHEMA "tenant_tx" GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "rt_tx"`,
 		`ALTER DEFAULT PRIVILEGES FOR ROLE "mig_tx" IN SCHEMA "tenant_tx" GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO "rt_tx"`,
 	}
-	runtimePath := `ALTER ROLE "rt_tx" SET search_path = "tenant_tx"`
-
-	list := func(head []string, withMigratorPath bool) []string {
-		out := make([]string, 0, len(head)+len(schemaAndGrants)+2)
-		for _, key := range head {
-			out = append(out, stmt[key])
+	// concat joins statement groups into one expected list.
+	concat := func(groups ...[]string) []string {
+		var out []string
+		for _, g := range groups {
+			out = append(out, g...)
 		}
-		out = append(out, schemaAndGrants...)
-		if withMigratorPath {
-			out = append(out, stmt[migratorPath])
-		}
-		return append(out, runtimePath)
+		return out
 	}
 
 	tests := []struct {
@@ -267,10 +254,11 @@ func TestPGRoleProvisioningSQLPinsTheListPerSkipOption(t *testing.T) {
 		{
 			name:  "zero_value_is_the_current_template",
 			apply: func(*PGRoleSpec) {},
-			want: list([]string{
-				createMigrator, lockMigrator, migratorPassword,
-				createRuntime, lockRuntime, runtimePassword,
-			}, true),
+			want: concat(
+				[]string{createMigrator, lockMigrator, migratorPassword, createRuntime, lockRuntime, runtimePassword},
+				schemaAndGrants,
+				[]string{migratorPath, runtimePath},
+			),
 		},
 		{
 			name: "skip_migrator_role",
@@ -278,15 +266,20 @@ func TestPGRoleProvisioningSQLPinsTheListPerSkipOption(t *testing.T) {
 				s.SkipMigratorRole = true
 				s.MigratorPassword = ""
 			},
-			want: list([]string{createRuntime, lockRuntime, runtimePassword}, false),
+			want: concat(
+				[]string{createRuntime, lockRuntime, runtimePassword},
+				schemaAndGrants,
+				[]string{runtimePath},
+			),
 		},
 		{
 			name:  "skip_floor_reassert",
 			apply: func(s *PGRoleSpec) { s.SkipFloorReassert = true },
-			want: list([]string{
-				createMigrator, migratorPassword,
-				createRuntime, runtimePassword,
-			}, true),
+			want: concat(
+				[]string{createMigrator, migratorPassword, createRuntime, runtimePassword},
+				schemaAndGrants,
+				[]string{migratorPath, runtimePath},
+			),
 		},
 		{
 			name: "skip_both",
@@ -295,7 +288,11 @@ func TestPGRoleProvisioningSQLPinsTheListPerSkipOption(t *testing.T) {
 				s.SkipFloorReassert = true
 				s.MigratorPassword = ""
 			},
-			want: list([]string{createRuntime, runtimePassword}, false),
+			want: concat(
+				[]string{createRuntime, runtimePassword},
+				schemaAndGrants,
+				[]string{runtimePath},
+			),
 		},
 	}
 	for _, tt := range tests {
@@ -1091,6 +1088,7 @@ func TestProvisionPGRolesDoorsHonourTheSkipOptions(t *testing.T) {
 		})))
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
+	mock.MatchExpectationsInOrder(true)
 	for range want {
 		mock.ExpectExec("").WillReturnResult(sqlmock.NewResult(0, 0))
 	}
