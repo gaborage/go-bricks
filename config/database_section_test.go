@@ -3689,7 +3689,7 @@ func dsnKeyShadowedBy(t *testing.T, env string) string {
 // TestApplyDatabasePoolDefaultsRefusesLibpqServiceConnectionString pins [C66.3] against
 // testutil.PostgresServiceCases: a DSN that resolves through a libpq service is refused ahead
 // of [C65.2]'s rules whatever PGHOST says, naming the one source that carries the service; an
-// empty DSN service= shadows PGSERVICE, and servicefile= or PGSERVICEFILE alone is inert.
+// empty DSN service= is refused too, and servicefile= or PGSERVICEFILE alone is inert.
 func TestApplyDatabasePoolDefaultsRefusesLibpqServiceConnectionString(t *testing.T) {
 	hermeticPGEnv(t)
 	for _, c := range testutil.PostgresServiceCases {
@@ -3703,21 +3703,28 @@ func TestApplyDatabasePoolDefaultsRefusesLibpqServiceConnectionString(t *testing
 			assertServiceRefusal(t, c.DSN, c.RefusedBy)
 		})
 	}
+
+	// pgx skips whitespace after '=', so the password becomes the service value.
+	t.Run("password_swallowed_as_service_never_reaches_the_error", func(t *testing.T) {
+		cfgErr := assertServiceRefusal(t, "service= password=hunter2 host=h", "service=")
+		assert.NotContains(t, cfgErr.Error(), "hunter2")
+	})
 }
 
 // assertServiceRefusal pins [C66.3]'s refusal of cs: the Action names the carrier of the
 // service, and every exit whichever source it was.
-func assertServiceRefusal(t *testing.T, cs, carrier string) {
+func assertServiceRefusal(t *testing.T, cs, carrier string) *ConfigError {
 	t.Helper()
 	cfgErr := requireConnStringRefusal(t, cs)
 	assert.Equal(t, errCategoryInvalid, cfgErr.Category)
 	assert.Contains(t, cfgErr.Message, "resolves through a libpq service file")
 	assert.Contains(t, cfgErr.Action, "named by "+carrier)
 	for _, want := range []string{
-		"host, port, user, dbname, sslmode", "drop service=", "unset PGSERVICE",
+		"every key the service section sets", "drop service=", "unset PGSERVICE",
 	} {
 		assert.Contains(t, cfgErr.Action, want, "every exit must be named whichever source carried it")
 	}
+	return cfgErr
 }
 
 // TestApplyDatabasePoolDefaultsConnectionStringPassesThroughUntokenizableDSNs pins that a DSN

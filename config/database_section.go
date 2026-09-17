@@ -705,9 +705,9 @@ func validatePostgreSQLConnectionString(cs string) error {
 			Field:    fieldDatabaseConnectionString,
 			Message: "connection string resolves through a libpq service file, which go-bricks does " +
 				"not read, so the host and TLS settings it supplies go unjudged",
-			Action: "the service is named by " + source + ". Inline the service's settings (host, port, " +
-				"user, dbname, sslmode) into the connection string, drop service= from it and unset " +
-				"PGSERVICE: a service is refused whichever of the two names it",
+			Action: "the service is named by " + source + ". Inline every key the service section sets " +
+				"into the connection string, drop service= from it, even an empty one, and unset PGSERVICE: " +
+				"a service is refused whichever of the two names it",
 		}
 	}
 
@@ -744,16 +744,16 @@ func validatePostgreSQLConnectionString(cs string) error {
 	return nil
 }
 
-// pgServiceSource names what makes pgx resolve a libpq service, or "" when nothing does.
+// pgServiceSource names what makes pgx resolve a libpq service, or "" when nothing does. pgx
+// keys on the DSN key's presence: an empty service= still resolves, from an unnamed [] section.
 func pgServiceSource(scan *pgDSNScan) string {
-	service, fromEnv := scan.service.over(os.Getenv("PGSERVICE"))
 	switch {
-	case service == "":
-		return ""
-	case fromEnv:
+	case scan.service.set:
+		return "service= in the connection string"
+	case os.Getenv("PGSERVICE") != "":
 		return "PGSERVICE in the environment"
 	}
-	return "service= in the connection string"
+	return ""
 }
 
 // pgTLSClaim is one key that claims TLS after the merge. The arm decides the exit, so it

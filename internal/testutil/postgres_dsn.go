@@ -126,13 +126,15 @@ const (
 	PostgresServicePort = 6543
 )
 
-// PostgresServiceFileBody is the service file the pgx oracle writes.
-const PostgresServiceFileBody = "[" + serviceName + "]\nhost=" + PostgresServiceHost + "\nport=6543\nuser=u\n"
+// PostgresServiceFileBody is the service file the pgx oracle writes: a named service, and an
+// unnamed [] section, which pgservicefile files under "" and so answers an empty service=.
+const PostgresServiceFileBody = "[" + serviceName + "]\nhost=" + PostgresServiceHost + "\nport=6543\nuser=u\n" +
+	"[]\nhost=" + PostgresServiceHost + "\nport=6543\nuser=u\n"
 
 // PostgresServiceCase is one DSN+env combination whose libpq service resolution pgx and the
 // config seam must agree on. RefusedBy is the source the config refusal names as carrying the
-// service (service= or PGSERVICE), empty when the seam accepts — and exactly the rows pgx
-// resolves through the service. PgxHost is the host pgconn.ParseConfig resolves under
+// service (service= or PGSERVICE), empty when the seam accepts; every row pgx resolves through
+// a service is refused. PgxHost is the host pgconn.ParseConfig resolves under
 // PostgresServiceFileBody, empty when pgx refuses the DSN. Env entries are applied with SetEnv
 // on a hermetic PG* env.
 type PostgresServiceCase struct {
@@ -156,8 +158,11 @@ var PostgresServiceCases = []PostgresServiceCase{
 	{Name: "uri_query_service", DSN: "postgres:///db?service=" + serviceName + "&sslmode=" + sslModeRequire, RefusedBy: serviceDSNSource, PgxHost: PostgresServiceHost},
 	// The DSN host wins, but the service still supplies whatever the DSN leaves unset.
 	{Name: "dsn_host_beside_dsn_service", DSN: "host=" + tcpHost + " service=" + serviceName, RefusedBy: serviceDSNSource, PgxHost: tcpHost},
-	// A present DSN key, empty included, shadows PGSERVICE; pgx then looks up the empty name.
-	{Name: "empty_dsn_service_shadows_pgservice", DSN: tcpHostUserDSN + " service=''", Env: [][2]string{{envPGSERVICE, serviceName}}},
+	// pgx resolves a service on the key's presence: an empty service= reads the unnamed [] section.
+	{Name: "empty_dsn_service_over_tcp_pghost", DSN: "service='' sslmode=" + sslModeRequire, Env: [][2]string{{envPGHOST, tcpHost}}, RefusedBy: serviceDSNSource, PgxHost: PostgresServiceHost},
+	{Name: "uri_empty_query_service_over_tcp_pghost", DSN: "postgres:///db?service=&sslmode=" + sslModeRequire, Env: [][2]string{{envPGHOST, tcpHost}}, RefusedBy: serviceDSNSource, PgxHost: PostgresServiceHost},
+	// The empty DSN key shadows PGSERVICE, so the DSN is the carrier named.
+	{Name: "empty_dsn_service_shadows_pgservice", DSN: tcpHostUserDSN + " service=''", Env: [][2]string{{envPGSERVICE, serviceName}}, RefusedBy: serviceDSNSource, PgxHost: tcpHost},
 	// Negative pin: pgx skips whitespace after '=', so the next pair becomes the service name.
 	{Name: "empty_service_swallows_next_pair", DSN: "service= " + tcpHostUserDSN, Env: [][2]string{{envPGSERVICE, serviceName}}, RefusedBy: serviceDSNSource},
 	{Name: "dsn_servicefile_without_service", DSN: "servicefile=/x/pg_service.conf " + tcpHostUserDSN, PgxHost: tcpHost},

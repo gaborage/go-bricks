@@ -8,14 +8,16 @@
 > and under the DSN, so a service's host shadows a TCP `PGHOST`, and its port, user
 > and `sslmode` fill whatever the DSN leaves unset, while this seam reads only the DSN
 > text and the environment. `validatePostgreSQLConnectionString` now refuses, ahead
-> of rules 1 and 2 and whatever `PGHOST` or a DSN `host=` says, a DSN whose effective
-> `service` is non-empty: the DSN's own `service=` when the key is present, otherwise
-> a non-empty `PGSERVICE`. An empty DSN `service=` shadows the variable and names no
-> service, which pgx then fails to look up, so it is refused at parse instead of
-> here. `servicefile=` or `PGSERVICEFILE` with no service named is inert, as in pgx.
-> The refusal is a `ConfigError` on `database.connectionstring`, Category `invalid`;
-> its Action names the one source that carried the service and every exit: inline
-> the service's settings into the DSN, drop `service=`, unset `PGSERVICE`. The seam
+> of rules 1 and 2 and whatever `PGHOST` or a DSN `host=` says, a DSN that carries a
+> `service` key at all, empty included, or carries none while `PGSERVICE` is
+> non-empty. pgx resolves a service on the key's PRESENCE, and `pgservicefile` files
+> a `[]` section under the empty name, so `service=''` or `?service=` reads that
+> section of the default `~/.pg_service.conf` like any named one; this overrides the
+> triage brief, which had accepted an empty key. `servicefile=` or `PGSERVICEFILE`
+> with no service named is inert, as in pgx. The refusal is a `ConfigError` on
+> `database.connectionstring`, Category `invalid`; its Action names the one source
+> that carried the service and every exit: inline every key the service section sets
+> into the DSN, drop `service=`, unset `PGSERVICE`. The seam
 > refuses rather than resolves so config stays file-free: resolving would import
 > pgx's service-file search path (`servicefile`, `PGSERVICEFILE`,
 > `~/.pg_service.conf`, `PGSYSCONFDIR`) and its INI parsing into validation. A

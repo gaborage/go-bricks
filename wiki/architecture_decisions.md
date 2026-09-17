@@ -926,8 +926,8 @@ Amended 2026-09-16 (#1632): that TLS claim no longer has to be written into the 
 the DSN with pgx's own precedence (a present DSN key, empty included, shadows the variable),
 so a unix-socket host under an env-sourced claim is refused too, closing the `PGSSL*`
 residual `[C65.2]` left open (`[C66.1]`).
-Amended 2026-09-16 (#1644): a DSN that resolves through a libpq service — a non-empty
-`service=`, or `PGSERVICE` when the DSN names no `service` key — is refused ahead of both host
+Amended 2026-09-16 (#1644): a DSN that resolves through a libpq service — any `service` key,
+empty included, or `PGSERVICE` when the DSN carries no `service` key — is refused ahead of both host
 rules, because pgx lets the service file's host shadow `PGHOST` and config never reads the file
 (`[C66.3]`).
 `config.ApplyDatabasePoolDefaults` applies the same inference on the dynamic

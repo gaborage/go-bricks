@@ -603,11 +603,11 @@ constant `failed to parse PostgreSQL config`; unwrap with `errors.As` to
 authority, a `?host=` query parameter, a keyword `host=`, or `PGHOST` — names nothing at
 all, or carries an empty comma-separated entry, is refused naming `database.connectionstring`,
 the same defect `[C64.8]` refuses for the typed `host` field; name a host through one of
-those four sources. A libpq service is not one of them: a `connectionstring` naming a
-non-empty `service=`, or running under `PGSERVICE` with no `service` key of its own, is
-refused before either host rule, because its service file can supply a host that shadows
-`PGHOST` and the seam never reads it — inline the service's settings, drop `service=` and
-unset `PGSERVICE` (`[C66.3]`). A `connectionstring` whose resolved
+those four sources. A libpq service is not one of them: a `connectionstring` carrying a
+`service` key, empty included, or running under `PGSERVICE` with no `service` key of its own,
+is refused before either host rule, because its service file can supply a host that shadows
+`PGHOST` and the seam never reads it — inline every key the service section sets, drop
+`service=` and unset `PGSERVICE` (`[C66.3]`). A `connectionstring` whose resolved
 host is a unix-socket entry while the DSN itself claims TLS (`sslmode` of `require`,
 `verify-ca` or `verify-full`, `sslnegotiation=direct`, or non-empty
 `sslrootcert`/`sslcert`/`sslkey`) — including when that claim arrives through
