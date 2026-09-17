@@ -1,10 +1,16 @@
 package testutil
 
+import "testing"
+
 const (
 	// socketHost is the unix-socket directory these fixtures resolve to.
 	socketHost        = "/var/run/postgresql"
-	tcpHostUserDSN    = "host=db.example.com user=u"
-	socketUserDSN     = "host=" + socketHost + " user=u"
+	tcpHost           = "db.example.com"
+	userPair          = " user=u"
+	sslModeKey        = " sslmode="
+	tcpHostUserDSN    = "host=" + tcpHost + userPair
+	socketUserDSN     = "host=" + socketHost + userPair
+	envPGHOST         = "PGHOST"
 	envPGSSLMODE      = "PGSSLMODE"
 	envPGSSLCERT      = "PGSSLCERT"
 	sslModeRequire    = "require"
@@ -14,7 +20,7 @@ const (
 // UntokenizablePostgresDSNs are connection strings pgx v5 refuses to parse, so a scanner
 // that cannot tokenize them may pass them through unjudged.
 var UntokenizablePostgresDSNs = []string{
-	"host='" + socketHost + " sslmode=" + sslModeRequire,
+	"host='" + socketHost + sslModeKey + sslModeRequire,
 	`host='/a\' user=u`,
 	`host='/a\`,
 	"host",
@@ -52,14 +58,14 @@ type PostgresDSNHostCase struct {
 }
 
 var PostgresDSNHostCases = []PostgresDSNHostCase{
-	{Name: "keyword_tcp_host", DSN: tcpHostUserDSN, Host: "db.example.com", HostSet: true},
-	{Name: "keyword_socket_host_tls_material_never_read", DSN: "host=" + socketHost + " sslmode=" + sslModeVerifyFull + " user=u", Host: socketHost, HostSet: true},
+	{Name: "keyword_tcp_host", DSN: tcpHostUserDSN, Host: tcpHost, HostSet: true},
+	{Name: "keyword_socket_host_tls_material_never_read", DSN: "host=" + socketHost + sslModeKey + sslModeVerifyFull + userPair, Host: socketHost, HostSet: true},
 	{Name: "keyword_socket_host_no_claim", DSN: socketUserDSN, Host: socketHost, HostSet: true},
 	// pgx drops the unescaped backslash, so the host is TCP "C:pg", not a socket path.
-	{Name: "keyword_windows_drive_tcp_host", DSN: `host=C:\pg sslmode=` + sslModeRequire + ` user=u`, Host: "C:pg", HostSet: true},
+	{Name: "keyword_windows_drive_tcp_host", DSN: `host=C:\pg sslmode=` + sslModeRequire + userPair, Host: "C:pg", HostSet: true},
 	// The escaped backslash survives as one literal backslash, so pgx treats this as a socket path.
-	{Name: "keyword_windows_drive_socket_host", DSN: `host=C:\\pg sslmode=` + sslModeRequire + ` user=u`, Host: `C:\pg`, HostSet: true},
-	{Name: "uri_tcp_host", DSN: "postgres://u@db.example.com/db", Host: "db.example.com", HostSet: true},
+	{Name: "keyword_windows_drive_socket_host", DSN: `host=C:\\pg sslmode=` + sslModeRequire + userPair, Host: `C:\pg`, HostSet: true},
+	{Name: "uri_tcp_host", DSN: "postgres://u@" + tcpHost + "/db", Host: tcpHost, HostSet: true},
 	{Name: "uri_percent_encoded_socket_host", DSN: "postgres://u@%2Fvar%2Frun%2Fpostgresql/db?sslmode=" + sslModeRequire, Host: socketHost, HostSet: true},
 	{Name: "uri_ipv6_host", DSN: "postgres://u@[::1]/db", Host: "::1", HostSet: true},
 	{Name: "uri_query_host_overrides_authority", DSN: "postgres://u@a/db?host=c", Host: "c", HostSet: true},
@@ -103,5 +109,72 @@ var PostgresSSLEnvTLSCases = []PostgresSSLEnvTLSCase{
 	{Name: "tcp_pgsslmode_require", DSN: tcpHostUserDSN, Env: [][2]string{{envPGSSLMODE, sslModeRequire}}, WantPgxTLS: true},
 	{Name: "tcp_pgsslmode_verify_full", DSN: tcpHostUserDSN, Env: [][2]string{{envPGSSLMODE, sslModeVerifyFull}}, WantPgxTLS: true},
 	{Name: "tcp_pgsslnegotiation_direct", DSN: tcpHostUserDSN, Env: [][2]string{{"PGSSLNEGOTIATION", "direct"}}, WantPgxTLS: true},
-	{Name: "pghost_socket_pgsslmode_require", DSN: "user=u", Env: [][2]string{{"PGHOST", socketHost}, {envPGSSLMODE, sslModeRequire}}, Refuse: true},
+	{Name: "pghost_socket_pgsslmode_require", DSN: "user=u", Env: [][2]string{{envPGHOST, socketHost}, {envPGSSLMODE, sslModeRequire}}, Refuse: true},
+}
+
+const (
+	envPGSERVICE       = "PGSERVICE"
+	serviceDSNSource   = "service="
+	serviceName        = "svc"
+	serviceClaimDSN    = "service=" + serviceName + sslModeKey + sslModeRequire
+	serviceEnvClaimDSN = "user=u sslmode=" + sslModeRequire
+)
+
+// PostgresServiceHost and PostgresServicePort are what PostgresServiceFileBody's service sets:
+// a unix-socket host, so a DSN that resolves through it dials the socket with TLS skipped, and a
+// port no fixture DSN names, so pgx's port shows whether it read the service at all.
+const (
+	PostgresServiceHost = socketHost
+	PostgresServicePort = 6543
+)
+
+// PostgresServiceFileBody is the service file the pgx oracle writes: a named service, and an
+// unnamed [] section, which pgservicefile files under "" and so answers an empty service=.
+const PostgresServiceFileBody = "[" + serviceName + "]\nhost=" + PostgresServiceHost + "\nport=6543\nuser=u\n" +
+	"[]\nhost=" + PostgresServiceHost + "\nport=6543\nuser=u\n"
+
+// PostgresServiceCase is one DSN+env combination whose libpq service resolution pgx and the
+// config seam must agree on. RefusedBy is the source the config refusal names as carrying the
+// service (service= or PGSERVICE), empty when the seam accepts; every row pgx resolves through
+// a service is refused. PgxHost is the host pgconn.ParseConfig resolves under
+// PostgresServiceFileBody, empty when pgx refuses the DSN. Env entries are applied with SetEnv
+// on a hermetic PG* env.
+type PostgresServiceCase struct {
+	Name      string
+	DSN       string
+	Env       [][2]string
+	RefusedBy string
+	PgxHost   string
+}
+
+// PostgresServiceCases is shared between config's service-rule tests and
+// database/postgresql's pgconn.ParseConfig oracle, so the service merge cannot silently
+// drift from a pgx bump.
+var PostgresServiceCases = []PostgresServiceCase{
+	{Name: "dsn_service_without_pghost", DSN: serviceClaimDSN, RefusedBy: serviceDSNSource, PgxHost: PostgresServiceHost},
+	{Name: "dsn_service_over_tcp_pghost", DSN: serviceClaimDSN, Env: [][2]string{{envPGHOST, tcpHost}}, RefusedBy: serviceDSNSource, PgxHost: PostgresServiceHost},
+	{Name: "pgservice_without_pghost", DSN: serviceEnvClaimDSN, Env: [][2]string{{envPGSERVICE, serviceName}}, RefusedBy: envPGSERVICE, PgxHost: PostgresServiceHost},
+	{Name: "pgservice_over_tcp_pghost", DSN: serviceEnvClaimDSN, Env: [][2]string{{envPGSERVICE, serviceName}, {envPGHOST, tcpHost}}, RefusedBy: envPGSERVICE, PgxHost: PostgresServiceHost},
+	// The DSN's own service= is the carrier; PGSERVICE behind it is shadowed, not named.
+	{Name: "dsn_service_beside_pgservice", DSN: serviceClaimDSN, Env: [][2]string{{envPGSERVICE, "other"}}, RefusedBy: serviceDSNSource, PgxHost: PostgresServiceHost},
+	{Name: "uri_query_service", DSN: "postgres:///db?service=" + serviceName + "&sslmode=" + sslModeRequire, RefusedBy: serviceDSNSource, PgxHost: PostgresServiceHost},
+	// The DSN host wins, but the service still supplies whatever the DSN leaves unset.
+	{Name: "dsn_host_beside_dsn_service", DSN: "host=" + tcpHost + " service=" + serviceName, RefusedBy: serviceDSNSource, PgxHost: tcpHost},
+	// pgx resolves a service on the key's presence: an empty service= reads the unnamed [] section.
+	{Name: "empty_dsn_service_over_tcp_pghost", DSN: "service='' sslmode=" + sslModeRequire, Env: [][2]string{{envPGHOST, tcpHost}}, RefusedBy: serviceDSNSource, PgxHost: PostgresServiceHost},
+	{Name: "uri_empty_query_service_over_tcp_pghost", DSN: "postgres:///db?service=&sslmode=" + sslModeRequire, Env: [][2]string{{envPGHOST, tcpHost}}, RefusedBy: serviceDSNSource, PgxHost: PostgresServiceHost},
+	// The empty DSN key shadows PGSERVICE, so the DSN is the carrier named.
+	{Name: "empty_dsn_service_shadows_pgservice", DSN: tcpHostUserDSN + " service=''", Env: [][2]string{{envPGSERVICE, serviceName}}, RefusedBy: serviceDSNSource, PgxHost: tcpHost},
+	// Negative pin: pgx skips whitespace after '=', so the next pair becomes the service name.
+	{Name: "empty_service_swallows_next_pair", DSN: "service= " + tcpHostUserDSN, Env: [][2]string{{envPGSERVICE, serviceName}}, RefusedBy: serviceDSNSource},
+	{Name: "dsn_servicefile_without_service", DSN: "servicefile=/x/pg_service.conf " + tcpHostUserDSN, PgxHost: tcpHost},
+	{Name: "pgservicefile_without_service", DSN: tcpHostUserDSN, Env: [][2]string{{"PGSERVICEFILE", "/x"}}, PgxHost: tcpHost},
+}
+
+// SetEnv applies each fixture env pair with t.Setenv.
+func SetEnv(t testing.TB, env [][2]string) {
+	t.Helper()
+	for _, e := range env {
+		t.Setenv(e[0], e[1])
+	}
 }

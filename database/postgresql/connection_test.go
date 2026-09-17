@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"os"
 	"reflect"
 	"regexp"
 	"testing"
@@ -369,9 +370,7 @@ func TestPgxTLSConfigAgreesWithConfigTLSEnvFixtures(t *testing.T) {
 
 	for _, c := range testutil.PostgresSSLEnvTLSCases {
 		t.Run(c.Name, func(t *testing.T) {
-			for _, e := range c.Env {
-				t.Setenv(e[0], e[1])
-			}
+			testutil.SetEnv(t, c.Env)
 			pc, err := pgconn.ParseConfig(c.DSN)
 			require.NoError(t, err)
 			if c.Refuse {
@@ -380,6 +379,38 @@ func TestPgxTLSConfigAgreesWithConfigTLSEnvFixtures(t *testing.T) {
 			}
 			if c.WantPgxTLS {
 				assert.NotNil(t, pc.TLSConfig)
+			}
+		})
+	}
+}
+
+// TestPgxResolvesServiceHostOverPGHOST uses pgx as the oracle for
+// testutil.PostgresServiceCases: a service's socket host wins over a TCP PGHOST and dials
+// with TLSConfig nil, which is why the config seam refuses service indirection
+// (gaborage/go-bricks#1644).
+func TestPgxResolvesServiceHostOverPGHOST(t *testing.T) {
+	hermeticPgxEnv(t)
+	require.NoError(t, os.WriteFile(os.Getenv("PGSERVICEFILE"), []byte(testutil.PostgresServiceFileBody), 0o600))
+
+	for _, c := range testutil.PostgresServiceCases {
+		t.Run(c.Name, func(t *testing.T) {
+			testutil.SetEnv(t, c.Env)
+			pc, err := pgconn.ParseConfig(c.DSN)
+			if c.PgxHost == "" {
+				require.ErrorContains(t, err, "failed to read service")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, c.PgxHost, pc.Host)
+			if c.RefusedBy == "" {
+				assert.EqualValues(t, 5432, pc.Port, "pgx must not have read the service")
+				return
+			}
+			assert.EqualValues(t, testutil.PostgresServicePort, pc.Port, "the service fills what the DSN leaves unset")
+			if c.PgxHost == testutil.PostgresServiceHost {
+				network, _ := pgconn.NetworkAddress(pc.Host, pc.Port)
+				assert.Equal(t, "unix", network)
+				assert.Nil(t, pc.TLSConfig)
 			}
 		})
 	}

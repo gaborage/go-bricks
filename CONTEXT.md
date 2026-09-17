@@ -14,19 +14,19 @@ _Avoid_: database config, DB block, DSN block
 
 **Connection string**:
 The raw DSN a database section's `connectionstring` key carries, passed to the driver
-unparsed apart from type inference (ADR-050) and, for PostgreSQL, a scan of its resolved
-host and its own TLS claim (`[C65.2]`: a host that names nothing is refused, and so is a
-unix-socket host under a TLS claim — `sslmode` of `require`/`verify-ca`/`verify-full`,
-`sslnegotiation=direct`, or non-empty `sslrootcert`/`sslcert`/`sslkey`, from the DSN
-or from the matching `PGSSL*` variable (`[C66.1]`) — the seam never
-otherwise parses it.
+unparsed apart from type inference (ADR-050) and, for PostgreSQL, a scan of its libpq
+service, resolved host and TLS claim: any `service` key, or a non-empty `PGSERVICE` when it has none, is refused
+(`[C66.3]`); a host that names nothing is refused, and so is a unix-socket host under a TLS
+claim — `sslmode` of `require`/`verify-ca`/`verify-full`, `sslnegotiation=direct`, or
+non-empty `sslrootcert`/`sslcert`/`sslkey`, from the DSN or from the matching `PGSSL*`
+variable (`[C65.2]`, `[C66.1]`). The seam never otherwise parses it.
 _Avoid_: conn string, database URL
 
 **Host source**:
 Any of the four places a PostgreSQL connection string's host can be named: the URI
 authority, a `?host=` query parameter, a keyword `host=` pair, or the `PGHOST`
 environment variable — the last consulted only when the connection string carries no
-`host` key of its own at all.
+`host` key of its own at all. A libpq service is not a host source: it is refused.
 _Avoid_: host (unqualified, for this concept), PGHOST (as a stand-in for the concept)
 
 **Implicit socket**:

@@ -33,27 +33,35 @@ func hermeticPGEnv(t *testing.T) {
 	}
 }
 
-// assertConnStringRefusal runs the connect door on a section carrying only cs and returns the
+// requireConnStringRefusal runs the connect door on a section carrying only cs and returns the
 // ConfigError it must produce. The no-echo assertion lives here so every refusal case gets it:
-// a scanned DSN can carry password text. The Action assertions live here too — the remedy text
-// is the operator's whole exit, and the category already says which rule fired.
-func assertConnStringRefusal(t *testing.T, cs, wantCategory string) *ConfigError {
+// a scanned DSN can carry password text.
+func requireConnStringRefusal(t *testing.T, cs string) *ConfigError {
 	t.Helper()
 	cfg := DatabaseConfig{ConnectionString: cs}
 
 	var cfgErr *ConfigError
 	require.ErrorAs(t, ApplyDatabasePoolDefaults(&cfg), &cfgErr)
 	assert.Equal(t, fieldDatabaseConnectionString, cfgErr.Field)
-	assert.Equal(t, wantCategory, cfgErr.Category)
 	assert.NotContains(t, cfgErr.Error(), cs, "must never echo the connection string")
+	return cfgErr
+}
+
+// assertConnStringRefusal is requireConnStringRefusal for [C65.2]'s two host rules. The Action
+// assertions live here — the remedy text is the operator's whole exit, and the category
+// already says which of the two rules fired.
+func assertConnStringRefusal(t *testing.T, cs, wantCategory string) *ConfigError {
+	t.Helper()
+	cfgErr := requireConnStringRefusal(t, cs)
+	assert.Equal(t, wantCategory, cfgErr.Category)
 
 	switch wantCategory {
 	case errCategoryMissing:
 		for _, want := range []string{
 			"URI authority", "?host= query parameter", "keyword host=",
-			"PGHOST environment variable", "PGSERVICE service file is not consulted",
+			"PGHOST environment variable", "a libpq service (service= or PGSERVICE) is refused",
 		} {
-			assert.Contains(t, cfgErr.Action, want, "rule 1 must name every host source and the service-file gap")
+			assert.Contains(t, cfgErr.Action, want, "rule 1 must name every host source and the service refusal")
 		}
 	case errCategoryInvalid:
 		// Which remedy is named depends on the arm; the arm tests pin that. Here only
@@ -3431,9 +3439,6 @@ func TestApplyDatabasePoolDefaultsRefusesImplicitSocketConnectionString(t *testi
 		{name: "keyword_empty_host_at_end", cs: "user=u host="},
 		{name: "keyword_empty_entry", cs: "host=a,,b user=u"},
 		{name: "uri_empty_entry", cs: "postgres://a,,b/db"},
-		// service=/PGSERVICE: the scanner never reads a service file, so a DSN whose host
-		// would come from one is refused as host-less, the same class as an absent PGHOST.
-		{name: "service_dsn_without_host", cs: "service=svc sslmode=require"},
 	}
 	for _, tt := range refused {
 		t.Run(tt.name, func(t *testing.T) {
@@ -3615,9 +3620,7 @@ func TestApplyDatabasePoolDefaultsNamesEveryClaimingSocketTLSSource(t *testing.T
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			for _, e := range tt.env {
-				t.Setenv(e[0], e[1])
-			}
+			testutil.SetEnv(t, tt.env)
 
 			cfgErr := assertConnStringRefusal(t, tt.cs, errCategoryInvalid)
 
@@ -3638,9 +3641,7 @@ func TestApplyDatabasePoolDefaultsMatchesSharedTLSEnvFixtures(t *testing.T) {
 	hermeticPGEnv(t)
 	for _, c := range testutil.PostgresSSLEnvTLSCases {
 		t.Run(c.Name, func(t *testing.T) {
-			for _, e := range c.Env {
-				t.Setenv(e[0], e[1])
-			}
+			testutil.SetEnv(t, c.Env)
 			if !c.Refuse {
 				cfg := DatabaseConfig{ConnectionString: c.DSN}
 				require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
@@ -3683,6 +3684,47 @@ func dsnKeyShadowedBy(t *testing.T, env string) string {
 	}
 	require.FailNow(t, "no DSN key pairs with "+env)
 	return ""
+}
+
+// TestApplyDatabasePoolDefaultsRefusesLibpqServiceConnectionString pins [C66.3] against
+// testutil.PostgresServiceCases: a DSN that resolves through a libpq service is refused ahead
+// of [C65.2]'s rules whatever PGHOST says, naming the one source that carries the service; an
+// empty DSN service= is refused too, and servicefile= or PGSERVICEFILE alone is inert.
+func TestApplyDatabasePoolDefaultsRefusesLibpqServiceConnectionString(t *testing.T) {
+	hermeticPGEnv(t)
+	for _, c := range testutil.PostgresServiceCases {
+		t.Run(c.Name, func(t *testing.T) {
+			testutil.SetEnv(t, c.Env)
+			if c.RefusedBy == "" {
+				cfg := DatabaseConfig{ConnectionString: c.DSN}
+				require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
+				return
+			}
+			assertServiceRefusal(t, c.DSN, c.RefusedBy)
+		})
+	}
+
+	// pgx skips whitespace after '=', so the password becomes the service value.
+	t.Run("password_swallowed_as_service_never_reaches_the_error", func(t *testing.T) {
+		cfgErr := assertServiceRefusal(t, "service= password=hunter2 host=h", "service=")
+		assert.NotContains(t, cfgErr.Error(), "hunter2")
+	})
+}
+
+// assertServiceRefusal pins [C66.3]'s refusal of cs: the Action names the carrier of the
+// service, and every exit whichever source it was.
+func assertServiceRefusal(t *testing.T, cs, carrier string) *ConfigError {
+	t.Helper()
+	cfgErr := requireConnStringRefusal(t, cs)
+	assert.Equal(t, errCategoryInvalid, cfgErr.Category)
+	assert.Contains(t, cfgErr.Message, "resolves through a libpq service file")
+	assert.Contains(t, cfgErr.Action, "named by "+carrier)
+	for _, want := range []string{
+		"every key the service section sets", "drop service=", "unset PGSERVICE",
+	} {
+		assert.Contains(t, cfgErr.Action, want, "every exit must be named whichever source carried it")
+	}
+	return cfgErr
 }
 
 // TestApplyDatabasePoolDefaultsConnectionStringPassesThroughUntokenizableDSNs pins that a DSN

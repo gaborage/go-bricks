@@ -192,3 +192,45 @@ func TestScanPostgresDSNRecordsTLSKeyPresence(t *testing.T) {
 		})
 	}
 }
+
+func TestPgDSNSettingOver(t *testing.T) {
+	tests := []struct {
+		name        string
+		setting     pgDSNSetting
+		env         string
+		wantValue   string
+		wantFromEnv bool
+	}{
+		{name: "present_key_wins", setting: pgDSNSetting{set: true, value: "dsn"}, env: "env", wantValue: "dsn"},
+		{name: "present_empty_key_shadows_env", setting: pgDSNSetting{set: true}, env: "env"},
+		{name: "absent_key_inherits_env", env: "env", wantValue: "env", wantFromEnv: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value, fromEnv := tt.setting.over(tt.env)
+			assert.Equal(t, tt.wantValue, value)
+			assert.Equal(t, tt.wantFromEnv, fromEnv)
+		})
+	}
+}
+
+func TestScanPostgresDSNRecordsServicePresence(t *testing.T) {
+	tests := []struct {
+		name string
+		dsn  string
+		want pgDSNSetting
+	}{
+		{name: "keyword_service", dsn: "host=h service=svc", want: pgDSNSetting{set: true, value: "svc"}},
+		{name: "keyword_empty_service_still_present", dsn: "host=h service=''", want: pgDSNSetting{set: true}},
+		{name: "uri_query_service", dsn: "postgres:///db?service=svc", want: pgDSNSetting{set: true, value: "svc"}},
+		{name: "absent", dsn: "host=h", want: pgDSNSetting{}},
+		{name: "servicefile_is_not_service", dsn: "host=h servicefile=/x", want: pgDSNSetting{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := scanPostgresDSN(tt.dsn)
+			require.True(t, ok)
+			assert.Equal(t, tt.want, got.service)
+		})
+	}
+}

@@ -22,6 +22,7 @@ const (
 	pgDSNSSLNegotiation = "sslnegotiation"
 	// pgDSNSSLAlias is the URI-only spelling pgx rewrites into sslmode=require.
 	pgDSNSSLAlias = "ssl"
+	pgDSNService  = "service"
 )
 
 // pgSSLEnvKeys is the production table of TLS-claim env names. Hermetic test
@@ -49,10 +50,11 @@ type pgDSNTLSKeys struct {
 	sslnegotiation pgDSNSetting
 }
 
-// pgDSNScan is a connection string's own host and TLS-key presence; hostSet includes an empty host, which shadows PGHOST.
+// pgDSNScan is a connection string's own host, service and TLS-key presence; hostSet includes an empty host, which shadows PGHOST.
 type pgDSNScan struct {
 	hostSet bool
 	host    string
+	service pgDSNSetting
 	tls     pgDSNTLSKeys
 	// sslAliasOwnsClaim records that the ssl=true rewrite, and not an sslmode the URI
 	// spelled itself, is what makes the effective sslmode claim TLS.
@@ -68,6 +70,14 @@ func (s *pgDSNScan) claimSource(dsnKey string) string {
 		return pgDSNSSLAlias
 	}
 	return dsnKey
+}
+
+// over merges env under s with pgx's precedence; fromEnv reports that the DSN names no such key.
+func (s pgDSNSetting) over(env string) (value string, fromEnv bool) {
+	if s.set {
+		return s.value, false
+	}
+	return env, true
 }
 
 func pgDSNSettingOf(settings map[string]string, key string) pgDSNSetting {
@@ -144,6 +154,7 @@ func scanPostgresDSN(cs string) (pgDSNScan, bool) {
 	return pgDSNScan{
 		hostSet:           hostSet,
 		host:              host,
+		service:           pgDSNSettingOf(settings, pgDSNService),
 		tls:               pgDSNTLSKeysFrom(settings),
 		sslAliasOwnsClaim: aliasOwnsClaim,
 	}, true
