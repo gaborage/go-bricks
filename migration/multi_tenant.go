@@ -209,7 +209,7 @@ func runSequential(
 		if quiesceBlocks(ctx, opts.Quiesce, opts.Logger) {
 			return out, ErrQuiesceBlocked
 		}
-		res := runOne(ctx, migrator, configs, action, id, opts.BaseConfig, opts.MigratorIdentity)
+		res := runOne(ctx, migrator, configs, action, id, &opts)
 		out.Results = append(out.Results, res)
 
 		if opts.Hook != nil {
@@ -319,7 +319,7 @@ type parallelState struct {
 }
 
 func (s *parallelState) runWorker(ctx context.Context, idx int, tenantID string) {
-	res := runOne(ctx, s.migrator, s.configs, s.action, tenantID, s.opts.BaseConfig, s.opts.MigratorIdentity)
+	res := runOne(ctx, s.migrator, s.configs, s.action, tenantID, &s.opts)
 	s.out.Results[idx] = res
 
 	if s.opts.Hook != nil {
@@ -348,8 +348,7 @@ func runOne(
 	configs database.DBConfigProvider,
 	action Action,
 	tenantID string,
-	baseCfg *Config,
-	identity *MigratorIdentity,
+	opts *MigrateAllOptions,
 ) TenantResult {
 	start := time.Now()
 	res := TenantResult{TenantID: tenantID}
@@ -366,7 +365,7 @@ func runOne(
 		return res
 	}
 	res.Vendor = dbCfg.Type
-	if identity != nil {
+	if identity := opts.MigratorIdentity; identity != nil {
 		overlaid := *dbCfg
 		overlaid.Username = identity.Username
 		overlaid.Password = identity.Password
@@ -374,7 +373,7 @@ func runOne(
 	}
 
 	defaults := migrator.DefaultMigrationConfigForVendor(dbCfg.Type)
-	cfg := mergeConfigs(defaults, baseCfg)
+	cfg := mergeConfigs(defaults, opts.BaseConfig)
 
 	switch action {
 	case ActionMigrate:

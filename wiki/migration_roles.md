@@ -15,7 +15,7 @@ tenant:
 
 | Role | Owns | Privileges | Used by |
 | ------ | ------ | ----------- | --------- |
-| **Migrator** (one per deployment, shared across tenants) | Every tenant schema (the `AUTHORIZATION` target of each provisioning call) | DDL on its own schemas | `migration.MigrateAll` with `MigrateAllOptions.MigratorIdentity` set to the migrator's credentials ([migrator identity](multi_tenant_migration.md#migrator-identity)); the `go-bricks-migrate` CLI only when every tenant secret's `username` is the migrator |
+| **Migrator** (one per deployment, shared across tenants) | Every tenant schema (the `AUTHORIZATION` target of each provisioning call) | DDL on its own schemas | `migration.MigrateAll` via [`MigrateAllOptions.MigratorIdentity`](multi_tenant_migration.md#migrator-identity); the `go-bricks-migrate` CLI only when every tenant secret's `username` is the migrator |
 | **Per-tenant runtime** (one per tenant) | Nothing | `USAGE` on the tenant schema; `SELECT/INSERT/UPDATE/DELETE` on all current and future tables; `USAGE/SELECT/UPDATE` on sequences | The running service (connects with the runtime role's credentials via `database.username`/`database.password` in `config.yaml`) |
 
 Every role the helper creates starts at the same locked-down attribute floor:
@@ -350,12 +350,11 @@ deployment. Treat its credentials accordingly:
 - **Where:** AWS Secrets Manager, HashiCorp Vault, GCP Secret Manager, or
   equivalent. Never check the password into a config file or environment
   variable that is broadly readable.
-- **Who:** Only the migration runner. `migration.MigrateAll` takes them as
-  `MigrateAllOptions.MigratorIdentity`, which replaces the username and
-  password on every tenant's resolved coordinates before Flyway runs.
-  `go-bricks-migrate` does not expose that overlay yet and connects as each
-  tenant secret's `username`. Runtime services must connect as their
-  per-tenant runtime role, never as the migrator.
+- **Who:** Only the migration runner, via
+  [`MigrateAllOptions.MigratorIdentity`](multi_tenant_migration.md#migrator-identity);
+  `go-bricks-migrate` does not expose it yet and connects as each tenant
+  secret's `username`. Runtime services must connect as their per-tenant
+  runtime role, never as the migrator.
 - **Rotation:** The shared migrator (provisioned with `SkipMigratorRole`) is
   rotated out of band. A migrator the call manages takes the new password as
   `MigratorPassword` on the next provisioning call; the helper emits

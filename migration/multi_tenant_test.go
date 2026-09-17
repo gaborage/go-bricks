@@ -547,7 +547,7 @@ func TestMigrateAllRejectsNilTenantConfig(t *testing.T) {
 	require.ErrorIs(t, one.Err, database.ErrNoDatabaseConfig)
 }
 
-// createEnvCapturingFlywayStub builds a flyway-stub that appends the connection
+// createEnvCapturingFlywayStub builds a flyway-stub that appends the DB_*/ORACLE_*
 // environment and argv it was started with to capturePath, one KEY=value per line,
 // then emits a parseable migrate success envelope.
 func createEnvCapturingFlywayStub(t *testing.T) (stubPath, capturePath string) {
@@ -555,18 +555,9 @@ func createEnvCapturingFlywayStub(t *testing.T) (stubPath, capturePath string) {
 	dir := t.TempDir()
 	stubPath = filepath.Join(dir, "flyway-stub.sh")
 	capturePath = filepath.Join(dir, "captured_env")
-
-	var script strings.Builder
-	script.WriteString("#!/bin/sh\n{\n")
-	for _, name := range []string{
-		"DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME",
-		"ORACLE_HOST", "ORACLE_PORT", "ORACLE_USER", "ORACLE_PASSWORD", "ORACLE_PDB",
-	} {
-		fmt.Fprintf(&script, "printf '%s=%%s\\n' \"${%s}\"\n", name, name)
-	}
-	fmt.Fprintf(&script, "printf 'ARGS=%%s\\n' \"$*\"\n} >> %q\n", capturePath)
-	script.WriteString("echo '" + minimalMigrateSuccessJSON + "'\nexit 0\n")
-	require.NoError(t, os.WriteFile(stubPath, []byte(script.String()), 0o755))
+	script := fmt.Sprintf("#!/bin/sh\n{ env | grep -E '^(DB|ORACLE)_'; echo \"ARGS=$*\"; } >> %q\necho '%s'\nexit 0\n",
+		capturePath, minimalMigrateSuccessJSON)
+	require.NoError(t, os.WriteFile(stubPath, []byte(script), 0o755))
 	return stubPath, capturePath
 }
 
@@ -583,21 +574,35 @@ func readCapturedEnv(t *testing.T, capturePath string) map[string]string {
 	return env
 }
 
+// cachingConfigProvider hands out the same *config.DatabaseConfig on every call, the
+// way a caching provider does, so a mutation of the returned value is observable.
+type cachingConfigProvider struct {
+	cfg *config.DatabaseConfig
+}
+
+func (p cachingConfigProvider) DBConfig(context.Context, string) (*config.DatabaseConfig, error) {
+	return p.cfg, nil
+}
+
 func TestMigrateAllMigratorIdentityOverlaysTenantCredentials(t *testing.T) {
 	if runtime.GOOS == windowsOS {
 		t.Skip("shell stubs not supported on windows CI")
 	}
 
-	pgTenant := &config.DatabaseConfig{
-		Type: "postgresql", Host: "tenant-pg-host", Port: 5432, Database: "tenant_db",
-		Username: "tenant_runtime", Password: "pw-tenant-runtime",
-		PostgreSQL: config.PostgreSQLConfig{Schema: "tenant_schema"},
-	}
-	oracleTenant := &config.DatabaseConfig{
-		Type: "oracle", Host: "tenant-ora-host", Port: 1521, Database: "TENANTPDB",
-		Username: "tenant_runtime", Password: "pw-tenant-runtime",
-	}
+	const tenantUser, tenantPassword = "tenant_runtime", "pw-tenant-runtime"
 	migrator := &MigratorIdentity{Username: "fleet_migrator", Password: "pw-fleet-migrator"}
+	newPGTenant := func() *config.DatabaseConfig {
+		return &config.DatabaseConfig{
+			Type: "postgresql", Host: "tenant-pg-host", Port: 5432, Database: "tenant_db",
+			Username: tenantUser, Password: tenantPassword,
+			PostgreSQL: config.PostgreSQLConfig{Schema: "tenant_schema"},
+		}
+	}
+	pgMigratorEnv := map[string]string{
+		"DB_USER": "fleet_migrator", "DB_PASSWORD": "pw-fleet-migrator",
+		"DB_HOST": "tenant-pg-host", "DB_PORT": "5432", "DB_NAME": "tenant_db",
+	}
+	pgSchemaArgs := []string{"-schemas=tenant_schema", "-defaultSchema=tenant_schema"}
 
 	cases := []struct {
 		name     string
@@ -607,44 +612,27 @@ func TestMigrateAllMigratorIdentityOverlaysTenantCredentials(t *testing.T) {
 		wantEnv  map[string]string
 		wantArgs []string
 	}{
+		{name: "postgresql_migrate_connects_as_migrator", tenant: newPGTenant(), action: ActionMigrate, identity: migrator, wantEnv: pgMigratorEnv, wantArgs: pgSchemaArgs},
+		{name: "postgresql_validate_connects_as_migrator", tenant: newPGTenant(), action: ActionValidate, identity: migrator, wantEnv: pgMigratorEnv, wantArgs: pgSchemaArgs},
+		{name: "postgresql_info_connects_as_migrator", tenant: newPGTenant(), action: ActionInfo, identity: migrator, wantEnv: pgMigratorEnv, wantArgs: pgSchemaArgs},
 		{
-			name: "postgresql_migrate_connects_as_migrator", tenant: pgTenant, action: ActionMigrate, identity: migrator,
-			wantEnv: map[string]string{
-				"DB_USER": "fleet_migrator", "DB_PASSWORD": "pw-fleet-migrator",
-				"DB_HOST": "tenant-pg-host", "DB_PORT": "5432", "DB_NAME": "tenant_db",
+			name: "oracle_migrate_connects_as_migrator", action: ActionMigrate, identity: migrator,
+			tenant: &config.DatabaseConfig{
+				Type: "oracle", Host: "tenant-ora-host", Port: 1521, Database: "TENANTPDB",
+				Username: tenantUser, Password: tenantPassword,
 			},
-			wantArgs: []string{"-schemas=tenant_schema", "-defaultSchema=tenant_schema"},
-		},
-		{
-			name: "postgresql_validate_connects_as_migrator", tenant: pgTenant, action: ActionValidate, identity: migrator,
-			wantEnv: map[string]string{
-				"DB_USER": "fleet_migrator", "DB_PASSWORD": "pw-fleet-migrator",
-				"DB_HOST": "tenant-pg-host", "DB_NAME": "tenant_db",
-			},
-			wantArgs: []string{"-schemas=tenant_schema"},
-		},
-		{
-			name: "postgresql_info_connects_as_migrator", tenant: pgTenant, action: ActionInfo, identity: migrator,
-			wantEnv: map[string]string{
-				"DB_USER": "fleet_migrator", "DB_PASSWORD": "pw-fleet-migrator",
-				"DB_HOST": "tenant-pg-host", "DB_NAME": "tenant_db",
-			},
-			wantArgs: []string{"-schemas=tenant_schema"},
-		},
-		{
-			name: "oracle_migrate_connects_as_migrator", tenant: oracleTenant, action: ActionMigrate, identity: migrator,
 			wantEnv: map[string]string{
 				"ORACLE_USER": "fleet_migrator", "ORACLE_PASSWORD": "pw-fleet-migrator",
 				"ORACLE_HOST": "tenant-ora-host", "ORACLE_PORT": "1521", "ORACLE_PDB": "TENANTPDB",
 			},
 		},
 		{
-			name: "nil_identity_connects_as_tenant_secret", tenant: pgTenant, action: ActionMigrate,
+			name: "nil_identity_connects_as_tenant_secret", tenant: newPGTenant(), action: ActionMigrate,
 			wantEnv: map[string]string{
-				"DB_USER": "tenant_runtime", "DB_PASSWORD": "pw-tenant-runtime",
+				"DB_USER": tenantUser, "DB_PASSWORD": tenantPassword,
 				"DB_HOST": "tenant-pg-host", "DB_PORT": "5432", "DB_NAME": "tenant_db",
 			},
-			wantArgs: []string{"-schemas=tenant_schema", "-defaultSchema=tenant_schema"},
+			wantArgs: pgSchemaArgs,
 		},
 	}
 
@@ -655,7 +643,7 @@ func TestMigrateAllMigratorIdentityOverlaysTenantCredentials(t *testing.T) {
 				context.Background(),
 				newFlywayMigratorForTest(t),
 				&fakeLister{ids: []string{"t1"}},
-				newFakeConfigProvider(map[string]*config.DatabaseConfig{"t1": tc.tenant}),
+				cachingConfigProvider{cfg: tc.tenant},
 				tc.action,
 				MigrateAllOptions{BaseConfig: makeBaseConfig(t, stub), MigratorIdentity: tc.identity},
 			)
@@ -669,57 +657,10 @@ func TestMigrateAllMigratorIdentityOverlaysTenantCredentials(t *testing.T) {
 			for _, arg := range tc.wantArgs {
 				assert.Contains(t, env["ARGS"], arg)
 			}
+			assert.Equal(t, tenantUser, tc.tenant.Username, "provider's document must not be mutated")
+			assert.Equal(t, tenantPassword, tc.tenant.Password, "provider's document must not be mutated")
 		})
 	}
-}
-
-// cachingConfigProvider hands out the same *config.DatabaseConfig on every call, the
-// way a caching provider does, so a mutation of the returned value is observable.
-type cachingConfigProvider struct {
-	cfg *config.DatabaseConfig
-}
-
-func (p cachingConfigProvider) DBConfig(context.Context, string) (*config.DatabaseConfig, error) {
-	return p.cfg, nil
-}
-
-func TestMigrateAllMigratorIdentityLeavesProviderDocumentUntouched(t *testing.T) {
-	if runtime.GOOS == windowsOS {
-		t.Skip("shell stubs not supported on windows CI")
-	}
-
-	stub, capture := createEnvCapturingFlywayStub(t)
-	cached := &config.DatabaseConfig{
-		Type: "postgresql", Host: "tenant-pg-host", Port: 5432, Database: "tenant_db",
-		Username: "tenant_runtime", Password: "pw-tenant-runtime",
-	}
-
-	_, err := MigrateAll(
-		context.Background(),
-		newFlywayMigratorForTest(t),
-		&fakeLister{ids: []string{"t1", "t2"}},
-		cachingConfigProvider{cfg: cached},
-		ActionMigrate,
-		MigrateAllOptions{
-			BaseConfig:       makeBaseConfig(t, stub),
-			MigratorIdentity: &MigratorIdentity{Username: "fleet_migrator", Password: "pw-fleet-migrator"},
-		},
-	)
-
-	require.NoError(t, err)
-	assert.Equal(t, "tenant_runtime", cached.Username)
-	assert.Equal(t, "pw-tenant-runtime", cached.Password)
-	assert.Equal(t, "fleet_migrator", readCapturedEnv(t, capture)["DB_USER"])
-}
-
-type countingLister struct {
-	ids   []string
-	calls atomic.Int32
-}
-
-func (l *countingLister) ListTenants(context.Context) ([]string, error) {
-	l.calls.Add(1)
-	return l.ids, nil
 }
 
 func TestMigrateAllRejectsIncompleteMigratorIdentity(t *testing.T) {
@@ -734,16 +675,11 @@ func TestMigrateAllRejectsIncompleteMigratorIdentity(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			lister := &countingLister{ids: []string{"t1"}}
-			provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
-				"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "pw-tenant-1"},
-			})
-
 			res, err := MigrateAll(
 				context.Background(),
 				newFlywayMigratorForTest(t),
-				lister,
-				provider,
+				&fakeLister{err: errors.New("lister must not run")},
+				nilConfigProvider{},
 				ActionMigrate,
 				MigrateAllOptions{MigratorIdentity: tc.identity},
 			)
@@ -752,8 +688,6 @@ func TestMigrateAllRejectsIncompleteMigratorIdentity(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.wantMsg)
 			assert.NotContains(t, err.Error(), "pw-fleet-migrator")
 			assert.Nil(t, res)
-			assert.Zero(t, lister.calls.Load())
-			assert.Empty(t, provider.hits)
 		})
 	}
 }
