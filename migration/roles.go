@@ -63,9 +63,8 @@ type PGRoleSpec struct {
 	// to a role on every call. CREATE ROLE still carries the full floor, so a
 	// role this spec creates starts locked down, but later drift is no longer
 	// repaired — report it with CheckPGRoleFloor. A provisioner that is not a
-	// superuser needs it: of the five
-	// lockdown attributes, PostgreSQL lets a CREATEROLE-only role ALTER only
-	// NOCREATEROLE.
+	// superuser needs it: of the five lockdown attributes, PostgreSQL lets a
+	// CREATEROLE-only role ALTER only NOCREATEROLE.
 	SkipFloorReassert bool
 
 	// IdentifierPolicy optionally tightens the identifier rule Validate
@@ -246,8 +245,7 @@ func (s *PGRoleSpec) Validate() error {
 // db MUST be authenticated as a superuser, which can run every spec, or as a
 // CREATEROLE NOSUPERUSER provisioner holding CREATE on the database, which
 // needs three things on PostgreSQL 16+:
-//   - spec.SkipFloorReassert, because of the lockdown attributes such a role
-//     may ALTER only NOCREATEROLE;
+//   - spec.SkipFloorReassert (see that field for why);
 //   - membership in MigratorRole WITH INHERIT TRUE, SET TRUE — SET for
 //     CREATE SCHEMA ... AUTHORIZATION, INHERIT for ALTER DEFAULT PRIVILEGES
 //     FOR ROLE. A creator is granted a role with ADMIN alone, so for a migrator
@@ -490,19 +488,24 @@ FROM pg_catalog.pg_roles WHERE rolname = $1`
 // non-superuser provisioner can run it. With PGRoleSpec.SkipFloorReassert set,
 // provisioning no longer repairs drift; this reports it instead.
 //
-// Returns ErrInvalidPGIdentifier when role fails database/identifier.Validate
-// (before any query), ErrPGRoleNotFound when no role has the name, or
+// Returns ErrInvalidPGIdentifier when role fails the identifier floor or the
+// reserved-name rule PGRoleSpec.Validate applies (before any query),
+// ErrPGRoleNotFound when no role has the name, or
 // ErrPGRoleFloorViolated naming every attribute held above the floor.
 func CheckPGRoleFloor(ctx context.Context, db *sql.DB, role string) error {
 	if db == nil {
 		return errors.New("migration: CheckPGRoleFloor requires a non-nil *sql.DB")
 	}
-	if err := identifier.Validate(dbtypes.PostgreSQL, role); err != nil {
+	err := identifier.Validate(dbtypes.PostgreSQL, role)
+	if err == nil {
+		err = checkReservedPGIdentifier("role", role)
+	}
+	if err != nil {
 		return fmt.Errorf("%w: role=%q: %w", ErrInvalidPGIdentifier, role, err)
 	}
 
 	var super, createDB, createRole, replication, bypassRLS bool
-	err := db.QueryRowContext(ctx, pgRoleFloorSQL, role).
+	err = db.QueryRowContext(ctx, pgRoleFloorSQL, role).
 		Scan(&super, &createDB, &createRole, &replication, &bypassRLS)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("%w: %q", ErrPGRoleNotFound, role)
