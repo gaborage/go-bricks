@@ -1418,36 +1418,108 @@ func TestPGRolesCreateroleProvisionerLeavesASharedMigratorUntouched(t *testing.T
 	assert.Equal(t, before, pgRoleSnapshot(ctx, t, admin, migrator))
 }
 
-// TestPGRolesCreateroleProvisionerLimits backs the privilege requirements with
-// the server's own refusals: the default spec stops at the floor re-assert, and
-// a migrator minted without createrole_self_grant stops at CREATE SCHEMA.
+// TestPGRolesCreateroleProvisionerLimits pins, by SQLSTATE and failing step,
+// each privilege a CREATEROLE-only provisioner is refused without.
 func TestPGRolesCreateroleProvisionerLimits(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx, cancel := testCtx(t)
 	defer cancel()
 
-	t.Run("default_spec_is_refused_at_the_floor_reassert", func(t *testing.T) {
-		provDB := createroleProvisioner(ctx, t, env, "prov_default", "set, inherit")
-		spec := &PGRoleSpec{Schema: "tenant_default", MigratorRole: "mig_default", RuntimeRole: "rt_default"}
-
-		err := ProvisionPGRoles(ctx, provDB, spec)
-		requireSQLState(t, err, "42501")
-		assert.Contains(t, err.Error(), `provisioning step 1 (ALTER ROLE "mig_default" NOSUPERUSER`)
-	})
-
-	t.Run("minted_migrator_without_self_grant_is_refused_at_create_schema", func(t *testing.T) {
-		provDB := createroleProvisioner(ctx, t, env, "prov_noself", "")
-		spec := &PGRoleSpec{
-			Schema:            "tenant_noself",
-			MigratorRole:      "mig_noself",
-			RuntimeRole:       "rt_noself",
-			SkipFloorReassert: true,
+	admin := env.adminDB(t)
+	adminExec := func(t *testing.T, stmt string) {
+		t.Helper()
+		_, err := admin.ExecContext(ctx, stmt)
+		require.NoError(t, err)
+	}
+	outOfBandMigrator := func(grant string) func(t *testing.T, prov, mig, rt string) {
+		return func(t *testing.T, prov, mig, _ string) {
+			adminExec(t, `CREATE ROLE `+quotePGIdent(mig)+` LOGIN`)
+			if grant != "" {
+				adminExec(t, `GRANT `+quotePGIdent(mig)+` TO `+quotePGIdent(prov)+` `+grant)
+			}
 		}
+	}
+	skipBoth := func(s *PGRoleSpec) {
+		s.SkipMigratorRole = true
+		s.SkipFloorReassert = true
+	}
+	skipReassert := func(s *PGRoleSpec) { s.SkipFloorReassert = true }
 
-		err := ProvisionPGRoles(ctx, provDB, spec)
-		requireSQLState(t, err, "42501")
-		assert.Contains(t, err.Error(), `provisioning step 2 (CREATE SCHEMA IF NOT EXISTS "tenant_noself"`)
-	})
+	tests := []struct {
+		name      string
+		selfGrant string
+		setup     func(t *testing.T, prov, mig, rt string)
+		options   func(*PGRoleSpec)
+		// wantStep is a format taking the case's role/schema suffix.
+		wantStep string
+	}{
+		{
+			name:      "default_spec_is_refused_at_the_floor_reassert",
+			selfGrant: "set, inherit",
+			options:   func(*PGRoleSpec) {},
+			wantStep:  `provisioning step 1 (ALTER ROLE "mig_%s" NOSUPERUSER`,
+		},
+		{
+			name:     "minted_migrator_without_self_grant_is_refused_at_create_schema",
+			options:  skipReassert,
+			wantStep: `provisioning step 2 (CREATE SCHEMA IF NOT EXISTS "tenant_%s"`,
+		},
+		{
+			name:      "self_grant_without_inherit_is_refused_at_the_schema_grant",
+			selfGrant: "set",
+			options:   skipReassert,
+			wantStep:  `provisioning step 3 (GRANT USAGE ON SCHEMA "tenant_%s"`,
+		},
+		{
+			name:      "self_grant_without_set_is_refused_at_create_schema",
+			selfGrant: "inherit",
+			options:   skipReassert,
+			wantStep:  `provisioning step 2 (CREATE SCHEMA IF NOT EXISTS "tenant_%s"`,
+		},
+		{
+			name:     "out_of_band_migrator_without_grant_is_refused_at_create_schema",
+			setup:    outOfBandMigrator(""),
+			options:  skipBoth,
+			wantStep: `provisioning step 1 (CREATE SCHEMA IF NOT EXISTS "tenant_%s"`,
+		},
+		{
+			name:     "out_of_band_grant_without_inherit_is_refused_at_the_schema_grant",
+			setup:    outOfBandMigrator("WITH SET TRUE, INHERIT FALSE"),
+			options:  skipBoth,
+			wantStep: `provisioning step 2 (GRANT USAGE ON SCHEMA "tenant_%s"`,
+		},
+		{
+			name:     "out_of_band_grant_without_set_is_refused_at_create_schema",
+			setup:    outOfBandMigrator("WITH INHERIT TRUE, SET FALSE"),
+			options:  skipBoth,
+			wantStep: `provisioning step 1 (CREATE SCHEMA IF NOT EXISTS "tenant_%s"`,
+		},
+		{
+			name:      "runtime_role_created_by_another_role_is_refused_at_its_search_path",
+			selfGrant: "set, inherit",
+			setup: func(t *testing.T, _, _, rt string) {
+				adminExec(t, `CREATE ROLE `+quotePGIdent(rt)+` LOGIN`)
+			},
+			options:  skipReassert,
+			wantStep: `provisioning step 9 (ALTER ROLE "rt_%s" SET search_path`,
+		},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			suffix := fmt.Sprintf("lim%d", i)
+			prov, mig, rt := "prov_"+suffix, "mig_"+suffix, "rt_"+suffix
+			provDB := createroleProvisioner(ctx, t, env, prov, tt.selfGrant)
+			if tt.setup != nil {
+				tt.setup(t, prov, mig, rt)
+			}
+			spec := &PGRoleSpec{Schema: "tenant_" + suffix, MigratorRole: mig, RuntimeRole: rt}
+			tt.options(spec)
+
+			err := ProvisionPGRoles(ctx, provDB, spec)
+			requireSQLState(t, err, "42501")
+			assert.Contains(t, err.Error(), fmt.Sprintf(tt.wantStep, suffix))
+		})
+	}
 }
 
 // pgRoleSnapshot renders every pg_roles column a provisioning call could change
