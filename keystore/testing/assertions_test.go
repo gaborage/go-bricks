@@ -42,6 +42,55 @@ func (r *recordingT) FailNow() {
 
 var _ keyStoreReporter = (*recordingT)(nil)
 
+// testifyLabelLine and testifyContinuationLine match the two line shapes of testify's
+// labeled failure block: "\t<Label>:<pad>\t<content>" and "\t<spaces>\t<content>".
+var (
+	testifyLabelLine        = regexp.MustCompile(`^\t([^\t ][^\t]*): *\t`)
+	testifyContinuationLine = regexp.MustCompile(`^\t +\t`)
+)
+
+// messageText is the recorded failure text without testify's Error Trace section, whose
+// absolute source paths depend on where the repository is checked out. A line of neither
+// labeled shape ends the section and is kept, so an unrecognized format leaves the guards
+// judging more text, never less.
+func (r *recordingT) messageText() string {
+	var kept []string
+	inTrace := false
+	for _, recorded := range r.errors {
+		for _, line := range strings.Split(recorded, "\n") {
+			if label := testifyLabelLine.FindStringSubmatch(line); label != nil {
+				inTrace = label[1] == "Error Trace"
+			} else if !testifyContinuationLine.MatchString(line) {
+				inTrace = false
+			}
+			if !inTrace {
+				kept = append(kept, line)
+			}
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+// TestRecordingTMessageTextExcludesErrorTrace pins the leak guards' subject to what the
+// helper said: testify's Error Trace carries absolute source paths, so a checkout path
+// with a digit run would otherwise trip keyMaterialDigits (#1708).
+func TestRecordingTMessageTextExcludesErrorTrace(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	rec := &recordingT{}
+
+	func() { assert.Fail(rec, "unexpected key returned", "public key %q should not be found", "stray") }()
+
+	require.Len(t, rec.errors, 1)
+	require.GreaterOrEqual(t, strings.Count(rec.errors[0], thisFile), 2,
+		"premise: the recorded trace spans two frames of this file, so a continuation line is exercised")
+	text := rec.messageText()
+	assert.NotContains(t, text, thisFile)
+	assert.NotContains(t, text, "Error Trace")
+	assert.Contains(t, text, "unexpected key returned")
+	assert.Contains(t, text, `public key "stray" should not be found`)
+}
+
 // runAborting runs fn on its own goroutine and reports whether it returned normally.
 // false means fn called FailNow: Goexit unwinds the goroutine, so the line after fn never
 // executes while the deferred close still fires.
@@ -194,14 +243,14 @@ func TestAssertKeyNotFoundRejectsReturnedKey(t *testing.T) {
 				"FailNow distinguishes require (abort) from assert (continue)")
 			require.Len(t, rec.errors, tt.wantErrCount)
 
-			joined := strings.Join(rec.errors, "\n")
+			said := rec.messageText()
 			if tt.wantErrSubstr != "" {
-				assert.Contains(t, joined, tt.wantErrSubstr, "the stray key is named by type")
-				assert.Contains(t, joined, `"stray"`, "the failure must name the key looked up")
+				assert.Contains(t, said, tt.wantErrSubstr, "the stray key is named by type")
+				assert.Contains(t, said, `"stray"`, "the failure must name the key looked up")
 			}
-			assert.NotRegexp(t, keyMaterialDigits, joined,
+			assert.NotRegexp(t, keyMaterialDigits, said,
 				"a long digit run means a key VALUE reached the test log")
-			assert.NotContains(t, joined, "&{",
+			assert.NotContains(t, said, "&{",
 				"Go's pointer-to-struct render shape means a key VALUE reached the test log")
 		})
 	}
