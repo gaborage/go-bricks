@@ -1751,6 +1751,7 @@ func TestValidateExchangeTypes(t *testing.T) {
 		{name: "core_fanout", exchangeType: ExchangeTypeFanout},
 		{name: "core_headers", exchangeType: ExchangeTypeHeaders},
 		{name: "x_plugin_type", exchangeType: "x-delayed-message"},
+		{name: "bare_x_prefix", exchangeType: "x-"},
 		{name: "empty", exchangeType: "", wantErr: true},
 		{name: "wrong_case", exchangeType: "Direct", wantErr: true},
 		{name: "misspelled", exchangeType: "topc", wantErr: true},

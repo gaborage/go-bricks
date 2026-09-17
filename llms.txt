@@ -3732,7 +3732,7 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 | Concern | API |
 |---|---|
 | Get client (tenant-aware) | `client, err := deps.Messaging(ctx)` |
-| Declare an exchange | `decls.DeclareTopicExchange(name)` / `decls.DeclareDirectExchange(name)`; a hand-built `Type` is `messaging.ExchangeTypeDirect`/`Topic`/`Fanout`/`Headers` or an `x-` plugin type. Any other type fails `Validate()` at startup |
+| Declare an exchange | `decls.DeclareTopicExchange(name)` / `decls.DeclareDirectExchange(name)`; a hand-built `Type` is `messaging.ExchangeTypeDirect`, `messaging.ExchangeTypeTopic`, `messaging.ExchangeTypeFanout`, `messaging.ExchangeTypeHeaders` or an `x-` plugin type. Any other type fails `Validate()` at startup |
 | Declare a publisher (returns the handle) | `pub := messaging.DeclareTypedPublisher[OrderCreatedEvent](decls, &messaging.PublisherOptions{Exchange: "orders.events", RoutingKey: "order.created", EventType: "OrderCreated"})` |
 | Publish — routed | `pub.Publish(ctx, client, evt)` — destination and headers come from the declaration |
 | Publish — default exchange | declare with `Exchange: ""` and `RoutingKey: queueName`, then the same `pub.Publish(ctx, client, evt)` |
