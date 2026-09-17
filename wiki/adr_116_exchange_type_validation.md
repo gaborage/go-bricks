@@ -52,7 +52,6 @@ at validate time.
   wrong-case or misspelled `Type` fails `Validate()` at startup where it used to fail at the
   broker. Every such declaration was already unusable. The change is when it fails and what
   the error names. Migration is [migrations.md](migrations.md) `[C66.4]`.
-- **Nothing in a consumer's build flags it.** The change adds API only.
 - **Exchange `Args` are still not judged per type** (`x-delayed-type` and similar). The broker
   keeps that check.
 
@@ -61,5 +60,5 @@ at validate time.
 - [ADR-040](adr_040_declaration_args_passthrough.md): declaration `Args` reach the broker
 - [ADR-106](adr_106_dlq_helper_declares_quorum_queues.md): the queue-type check this sits beside
 - [wiki/messaging.md](messaging.md#helper-functions-for-simplified-declarations): the helpers
-- `messaging/helpers.go` (`ExchangeType*`, `NewDirectExchange`, `DeclareDirectExchange`),
-  `messaging/declarations.go` (`validateExchangeTypes`)
+- `messaging/constants.go` (`ExchangeType*`), `messaging/helpers.go` (`NewDirectExchange`,
+  `DeclareDirectExchange`), `messaging/declarations.go` (`validateExchangeTypes`)

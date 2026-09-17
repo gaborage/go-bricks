@@ -88,8 +88,7 @@ RabbitMQ 4.3.0 denies `transient_nonexcl_queues` by default: a queue declared wi
 **Key Helpers:** `DeclareTopicExchange()`, `DeclareDirectExchange()`, `DeclareQueue()`, `DeclareBinding()`, `DeclareTypedPublisher[T]()`, `DeclareConsumer()`
 
 **Exchange types:** a direct exchange routes on an exact routing-key match, for example a
-`<domain>.commands` exchange. `DeclareDirectExchange` has the same defaults as the topic helper.
-A hand-built `ExchangeDeclaration` names its `Type` with `messaging.ExchangeTypeDirect`,
+`<domain>.commands` exchange. A hand-built `ExchangeDeclaration` names its `Type` with `messaging.ExchangeTypeDirect`,
 `ExchangeTypeTopic`, `ExchangeTypeFanout` or `ExchangeTypeHeaders`, or with an `x-` plugin type
 such as `x-delayed-message`. `Declarations.Validate()` refuses any other `Type` at startup, and
 that includes an empty or wrong-case one. The error names the exchange and the type (ADR-116).

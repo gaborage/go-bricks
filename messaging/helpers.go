@@ -6,15 +6,6 @@ import (
 	"time"
 )
 
-// AMQP 0-9-1 core exchange types, for ExchangeDeclaration.Type.
-// Declarations.Validate admits these and any "x-" plugin type.
-const (
-	ExchangeTypeDirect  = "direct"
-	ExchangeTypeTopic   = "topic"
-	ExchangeTypeFanout  = "fanout"
-	ExchangeTypeHeaders = "headers"
-)
-
 // NewTopicExchange creates a topic exchange with production-safe defaults.
 // Topic exchanges route messages based on routing key patterns (e.g., "order.*", "user.#").
 //
@@ -24,15 +15,7 @@ const (
 //   - Internal: false (can be published to directly)
 //   - NoWait: false (waits for broker confirmation)
 func NewTopicExchange(name string) *ExchangeDeclaration {
-	return &ExchangeDeclaration{
-		Name:       name,
-		Type:       ExchangeTypeTopic,
-		Durable:    true,
-		AutoDelete: false,
-		Internal:   false,
-		NoWait:     false,
-		Args:       make(map[string]any),
-	}
+	return newDurableExchange(name, ExchangeTypeTopic)
 }
 
 // NewDirectExchange creates a direct exchange with production-safe defaults.
@@ -44,9 +27,13 @@ func NewTopicExchange(name string) *ExchangeDeclaration {
 //   - Internal: false (can be published to directly)
 //   - NoWait: false (waits for broker confirmation)
 func NewDirectExchange(name string) *ExchangeDeclaration {
+	return newDurableExchange(name, ExchangeTypeDirect)
+}
+
+func newDurableExchange(name, exchangeType string) *ExchangeDeclaration {
 	return &ExchangeDeclaration{
 		Name:       name,
-		Type:       ExchangeTypeDirect,
+		Type:       exchangeType,
 		Durable:    true,
 		AutoDelete: false,
 		Internal:   false,

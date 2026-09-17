@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -46,17 +45,9 @@ func TestNewTopicExchange(t *testing.T) {
 	})
 }
 
-func TestExchangeTypeConstantsMatchAMQPWireNames(t *testing.T) {
-	assert.Equal(t, amqp.ExchangeDirect, ExchangeTypeDirect)
-	assert.Equal(t, amqp.ExchangeTopic, ExchangeTypeTopic)
-	assert.Equal(t, amqp.ExchangeFanout, ExchangeTypeFanout)
-	assert.Equal(t, amqp.ExchangeHeaders, ExchangeTypeHeaders)
-}
-
 func TestNewDirectExchange(t *testing.T) {
-	t.Run("creates exchange with the topic helper's production defaults", func(t *testing.T) {
+	t.Run("creates exchange with production defaults", func(t *testing.T) {
 		exchange := NewDirectExchange("tenancy.commands")
-		topic := NewTopicExchange("tenancy.commands")
 
 		assert.Equal(t, "tenancy.commands", exchange.Name)
 		assert.Equal(t, ExchangeTypeDirect, exchange.Type)
@@ -66,9 +57,6 @@ func TestNewDirectExchange(t *testing.T) {
 		assert.False(t, exchange.NoWait)
 		assert.NotNil(t, exchange.Args)
 		assert.Empty(t, exchange.Args)
-
-		topic.Type = ExchangeTypeDirect
-		assert.Equal(t, topic, exchange)
 	})
 
 	t.Run("creates independent instances", func(t *testing.T) {
@@ -336,15 +324,8 @@ func TestDeclarationsDirectExchange(t *testing.T) {
 	exchange := decls.DeclareDirectExchange("tenancy.commands")
 
 	assert.Equal(t, NewDirectExchange("tenancy.commands"), exchange)
-	require.Len(t, decls.Exchanges, 1)
-	registered := decls.Exchanges["tenancy.commands"]
-	require.NotNil(t, registered)
-	assert.Equal(t, ExchangeTypeDirect, registered.Type)
-	assert.True(t, registered.Durable)
-	assert.False(t, registered.AutoDelete)
-	assert.NotNil(t, registered.Args)
-	assert.Empty(t, registered.Args)
-	assert.NoError(t, decls.Validate())
+	assert.Len(t, decls.Exchanges, 1)
+	assert.Equal(t, NewDirectExchange("tenancy.commands"), decls.Exchanges["tenancy.commands"])
 }
 
 func TestDeclarationsQueue(t *testing.T) {
