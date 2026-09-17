@@ -30,7 +30,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"time"
 
 	"github.com/gaborage/go-bricks/internal/sealcli"
@@ -187,7 +186,7 @@ func openPlan(cfg *cliConfig) (*sealed.Spec, sealed.TenantExpectation, error) {
 	if err := validateConfig(cfg); err != nil {
 		return nil, noTenant, err
 	}
-	spec, err := documentSpec(cfg)
+	spec, err := sealcli.DocumentSpec(cfg.signKid, cfg.encryptKid, cfg.subject)
 	if err != nil {
 		return nil, noTenant, err
 	}
@@ -200,7 +199,7 @@ func openPlan(cfg *cliConfig) (*sealed.Spec, sealed.TenantExpectation, error) {
 
 // validateConfig enforces exactly-one-of per key source pair (delegated to sealcli, which
 // owns the refusal strings) and the four required flags. Kid GRAMMAR is checked in
-// documentSpec, where the family it derives is what the Spec needs.
+// sealcli.DocumentSpec, where the family it derives is what the Spec needs.
 func validateConfig(cfg *cliConfig) error {
 	if err := cfg.keys.Validate(); err != nil {
 		return err
@@ -217,30 +216,6 @@ func validateConfig(cfg *cliConfig) error {
 		}
 	}
 	return nil
-}
-
-// documentSpec derives each Logical family from its concrete Generation and builds the
-// raw-document Spec, exactly as seal-event does: the wire carries the Generation while the
-// Spec names the family, so the CLI takes the concrete kid and splits it.
-func documentSpec(cfg *cliConfig) (*sealed.Spec, error) {
-	signFamily, err := splitFamily("-sign-kid", cfg.signKid)
-	if err != nil {
-		return nil, err
-	}
-	encryptFamily, err := splitFamily("-encrypt-kid", cfg.encryptKid)
-	if err != nil {
-		return nil, err
-	}
-	return sealed.NewDocumentSpec(signFamily, encryptFamily, cfg.subject)
-}
-
-// splitFamily reports the Logical family of a concrete kid, naming the flag that carried it.
-func splitFamily(flagName, kid string) (string, error) {
-	family, _, ok := sealed.SplitGenerationKid(kid)
-	if !ok {
-		return "", fmt.Errorf("%s %q is not a generation: expected <logical>-v<N> with N a positive integer without leading zeros", flagName, kid)
-	}
-	return family, nil
 }
 
 // tenantExpectation maps the consumer tenancy vocabulary onto the tid rule, the same way
@@ -322,7 +297,10 @@ func render(cfg *cliConfig, opened *sealed.OpenedDocument, stdout, stderr io.Wri
 		}
 		value = opened.Subject
 	}
-	doc := spliceMember(opened.Document, opened.SubjectAt, cfg.subject, value)
+	doc, err := opened.Render(value)
+	if err != nil {
+		return fmt.Errorf("render document: %w", err)
+	}
 
 	if cfg.jsonOut {
 		return writeJSON(stdout, jsonOpened{Envelope: newJSONEnvelope(opened.Envelope), Document: doc})
@@ -334,27 +312,6 @@ func render(cfg *cliConfig, opened *sealed.OpenedDocument, stdout, stderr io.Wri
 		return fmt.Errorf("write document: %w", err)
 	}
 	return nil
-}
-
-// spliceMember puts the subject member back where OpenDocument removed it, with value as
-// its JSON value. removeMember took exactly one adjacent separator with the member, so the
-// separator this puts back is the one the surviving neighbors need: a following key means
-// the member was first and owned the comma after it; a following comma means it had a
-// leading one; and with nothing following, only a non-empty object still needs a comma.
-func spliceMember(doc []byte, at int, name string, value []byte) []byte {
-	key, _ := json.Marshal(name) // a Go string always marshals
-	member := slices.Concat(key, []byte(":"), value)
-
-	rest := bytes.TrimLeft(doc[at:], " \t\r\n")
-	switch {
-	case bytes.HasPrefix(rest, []byte(`"`)):
-		member = append(member, ',')
-	case bytes.HasPrefix(rest, []byte(",")):
-		member = slices.Concat([]byte(","), member)
-	case !bytes.HasSuffix(bytes.TrimRight(doc[:at], " \t\r\n"), []byte("{")):
-		member = slices.Concat([]byte(","), member)
-	}
-	return slices.Concat(doc[:at], member, doc[at:])
 }
 
 // jsonEnvelope is the -json envelope shape: every Envelope field, and nothing else.

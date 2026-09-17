@@ -232,12 +232,20 @@ func OpenDocument(body []byte, spec *Spec, opts *OpenOptions) (*OpenedDocument, 
 	if !json.Valid(core.plaintext) {
 		return nil, openError(11, ErrOpenFailed, CodePayloadUndecodable, "subject plaintext is not a valid JSON value", nil)
 	}
+	return newOpenedDocument(core), nil
+}
+
+// newOpenedDocument builds the result of a successful OpenDocument, retaining the verified
+// payload and the Subject span privately so Render can put a member back byte for byte.
+func newOpenedDocument(core *openedCore) *OpenedDocument {
 	return &OpenedDocument{
 		Document:  removeMember(core.payload, core.span),
 		Subject:   core.plaintext,
 		SubjectAt: core.span.memberStart,
 		Envelope:  core.env,
-	}, nil
+		payload:   core.payload,
+		span:      core.span,
+	}
 }
 
 // OpenedDocument is what OpenDocument proved and recovered: the verified document with the
@@ -254,11 +262,13 @@ type OpenedDocument struct {
 	// Subject as its value — instead of appending it or re-walking the document. The caller
 	// supplies the separator it needs: removing the member took one adjacent separator with
 	// it, and any whitespace that surrounded that separator, so the ORIGINAL bytes are not
-	// recoverable from an OpenedDocument alone. gaborage/go-bricks#1638 tracks moving the
-	// splice into this package, which is where a byte-exact contract would belong.
+	// recoverable from Document and SubjectAt alone. Render is the byte-exact door.
 	SubjectAt int
 	// Envelope is what the message proved about itself — the same one Open returns.
 	Envelope *Envelope
+
+	payload []byte      // the verified payload document, Subject member still in place
+	span    subjectSpan // the Subject value's span within payload
 }
 
 // openedCore is what rules 1–10 and rule 12 hand to rule 11: the verified payload document,
