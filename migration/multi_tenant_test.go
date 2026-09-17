@@ -608,14 +608,16 @@ func TestMigrateAllMigratorIdentityOverlaysTenantCredentials(t *testing.T) {
 	pgSchemaArgs := []string{"-schemas=tenant_schema", "-defaultSchema=tenant_schema"}
 
 	cases := []struct {
-		name     string
-		tenant   *config.DatabaseConfig
-		action   Action
-		identity *MigratorIdentity
-		wantEnv  map[string]string
-		wantArgs []string
+		name        string
+		tenant      *config.DatabaseConfig
+		action      Action
+		identity    *MigratorIdentity
+		parallelism int
+		wantEnv     map[string]string
+		wantArgs    []string
 	}{
 		{name: "postgresql_migrate_connects_as_migrator", tenant: newPGTenant(), action: ActionMigrate, identity: migrator, wantEnv: pgMigratorEnv, wantArgs: pgSchemaArgs},
+		{name: "parallel_postgresql_migrate_connects_as_migrator", tenant: newPGTenant(), action: ActionMigrate, identity: migrator, parallelism: 2, wantEnv: pgMigratorEnv, wantArgs: pgSchemaArgs},
 		{name: "postgresql_validate_connects_as_migrator", tenant: newPGTenant(), action: ActionValidate, identity: migrator, wantEnv: pgMigratorEnv, wantArgs: pgSchemaArgs},
 		{name: "postgresql_info_connects_as_migrator", tenant: newPGTenant(), action: ActionInfo, identity: migrator, wantEnv: pgMigratorEnv, wantArgs: pgSchemaArgs},
 		{
@@ -648,7 +650,7 @@ func TestMigrateAllMigratorIdentityOverlaysTenantCredentials(t *testing.T) {
 				&fakeLister{ids: []string{"t1"}},
 				cachingConfigProvider{cfg: tc.tenant},
 				tc.action,
-				MigrateAllOptions{BaseConfig: makeBaseConfig(t, stub), MigratorIdentity: tc.identity},
+				MigrateAllOptions{BaseConfig: makeBaseConfig(t, stub), MigratorIdentity: tc.identity, Parallelism: tc.parallelism},
 			)
 
 			require.NoError(t, err)
@@ -666,15 +668,33 @@ func TestMigrateAllMigratorIdentityOverlaysTenantCredentials(t *testing.T) {
 	}
 }
 
-func TestMigrateAllRejectsIncompleteMigratorIdentity(t *testing.T) {
+func TestMigrateAllRejectsInvalidMigratorIdentity(t *testing.T) {
 	migratorPassword := testconsts.FakePassword("fleet-migrator")
 	cases := []struct {
-		name     string
-		identity *MigratorIdentity
-		wantMsg  string
+		name      string
+		identity  *MigratorIdentity
+		wantMsg   string
+		wantCause error
 	}{
 		{name: "empty_username", identity: &MigratorIdentity{Password: migratorPassword}, wantMsg: "username"},
 		{name: "empty_password", identity: &MigratorIdentity{Username: "fleet_migrator"}, wantMsg: "password"},
+		{
+			name:      "password_too_short_to_redact",
+			identity:  &MigratorIdentity{Username: "fleet_migrator", Password: strings.Repeat("x", config.MinDatabasePasswordLength-1)},
+			wantCause: ErrDatabasePasswordTooShort,
+		},
+		{
+			name:      "password_with_line_feed",
+			identity:  &MigratorIdentity{Username: "fleet_migrator", Password: migratorPassword + "\n"},
+			wantMsg:   "Password",
+			wantCause: ErrEnvFieldHasControlChar,
+		},
+		{
+			name:      "username_with_nul",
+			identity:  &MigratorIdentity{Username: "fleet_migrator\x00", Password: migratorPassword},
+			wantMsg:   "Username",
+			wantCause: ErrEnvFieldHasControlChar,
+		},
 	}
 
 	for _, tc := range cases {
@@ -690,6 +710,9 @@ func TestMigrateAllRejectsIncompleteMigratorIdentity(t *testing.T) {
 			)
 
 			require.ErrorIs(t, err, ErrInvalidMigratorIdentity)
+			if tc.wantCause != nil {
+				require.ErrorIs(t, err, tc.wantCause)
+			}
 			assert.Contains(t, err.Error(), tc.wantMsg)
 			assert.NotContains(t, err.Error(), migratorPassword)
 			assert.Nil(t, res)

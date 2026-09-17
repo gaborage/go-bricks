@@ -142,7 +142,7 @@ Minimum IAM for the runner role:
 }
 ```
 
-### Migrator identity
+## Migrator identity
 
 `MigrateAllOptions.MigratorIdentity` makes Flyway connect as one shared migrator
 role across the fleet (see [library usage](#library-usage-in-process-from-your-back-office)).
@@ -150,8 +150,9 @@ For each tenant, `MigrateAll` copies the resolved `DatabaseConfig` and replaces
 only `username` and `password`; host, port, database, schema targeting and TLS
 stay the tenant's, and the provider's own value is never mutated. It applies to
 migrate, validate and info on PostgreSQL and Oracle. An empty username or
-password fails `MigrateAll` with `migration.ErrInvalidMigratorIdentity` before
-any tenant is listed. The role-separation model in
+password, a password shorter than `config.MinDatabasePasswordLength` (too short
+to redact from Flyway output), or a CR, LF or NUL in either fails `MigrateAll`
+with `migration.ErrInvalidMigratorIdentity` before any tenant is listed. The role-separation model in
 [migration_roles.md](migration_roles.md) needs the overlay; `go-bricks-migrate`
 does not expose it yet.
 

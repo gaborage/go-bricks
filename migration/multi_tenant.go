@@ -1,12 +1,14 @@
 package migration
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -123,7 +125,8 @@ type MigratorIdentity struct {
 var ErrNoLister = errors.New("migration: TenantLister is nil")
 
 // ErrInvalidMigratorIdentity is returned when MigrateAllOptions.MigratorIdentity is
-// set with an empty username or password.
+// set with an empty username or password, a password too short to redact from
+// Flyway output, or a CR/LF/NUL in either.
 var ErrInvalidMigratorIdentity = errors.New("migration: invalid migrator identity")
 
 // ErrNoConfigProvider is returned when MigrateAll is called without a DBConfigProvider.
@@ -189,6 +192,10 @@ func validateMigratorIdentity(identity *MigratorIdentity) error {
 		return fmt.Errorf("%w: username is empty", ErrInvalidMigratorIdentity)
 	case identity.Password == "":
 		return fmt.Errorf("%w: password is empty", ErrInvalidMigratorIdentity)
+	}
+	creds := &config.DatabaseConfig{Username: identity.Username, Password: identity.Password}
+	if err := cmp.Or(validateEnvFields(creds), ensurePasswordRedactable(creds)); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidMigratorIdentity, err)
 	}
 	return nil
 }
