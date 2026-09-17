@@ -96,6 +96,54 @@ func makeBaseConfig(t *testing.T, stub string) *Config {
 	}
 }
 
+// requireShellStubs skips tests whose Flyway stand-in is a shell script.
+func requireShellStubs(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell stubs not supported on windows CI")
+	}
+}
+
+// stubTenantConfigs returns a PostgreSQL config per tenant ID.
+func stubTenantConfigs(ids ...string) map[string]*config.DatabaseConfig {
+	cfgs := make(map[string]*config.DatabaseConfig, len(ids))
+	for _, id := range ids {
+		cfgs[id] = &config.DatabaseConfig{
+			Type: "postgresql", Host: "h-" + id, Port: 5432, Database: "d-" + id,
+			Username: "u-" + id, Password: "pw-tenant-" + id,
+		}
+	}
+	return cfgs
+}
+
+type migrateAllOutcome struct {
+	res *MigrateAllResult
+	err error
+}
+
+// migrateAllAsync runs MigrateAll on a goroutine so a test can act while it is in flight.
+func migrateAllAsync(
+	ctx context.Context, fm *FlywayMigrator, ids []string, provider database.DBConfigProvider, opts MigrateAllOptions,
+) <-chan migrateAllOutcome {
+	done := make(chan migrateAllOutcome, 1)
+	go func() {
+		res, err := MigrateAll(ctx, fm, &fakeLister{ids: ids}, provider, ActionMigrate, opts)
+		done <- migrateAllOutcome{res: res, err: err}
+	}()
+	return done
+}
+
+func awaitMigrateAll(t *testing.T, done <-chan migrateAllOutcome, limit time.Duration) migrateAllOutcome {
+	t.Helper()
+	select {
+	case got := <-done:
+		return got
+	case <-time.After(limit):
+		t.Fatal("MigrateAll did not return in time")
+		return migrateAllOutcome{}
+	}
+}
+
 func TestMigrateAllSequentialSuccess(t *testing.T) {
 	if runtime.GOOS == windowsOS {
 		t.Skip("shell stubs not supported on windows CI")
@@ -354,30 +402,35 @@ func TestMigrateAllEmptyTenantListAttemptsNothing(t *testing.T) {
 	}
 }
 
-func TestMigrateAllAlreadyDoneContextDispatchesNothing(t *testing.T) {
+func TestMigrateAllDispatchesNothingWhenStoppedBeforeFirstDispatch(t *testing.T) {
 	ids := []string{"t1", "t2", "t3", "t4"}
 	// A parallel dispatch select racing the done channel would dispatch a random
 	// prefix on some runs, so one clean run proves nothing there.
 	cases := []struct {
-		name        string
-		parallelism int
-		runs        int
+		name         string
+		parallelism  int
+		runs         int
+		cancelInGate bool
 	}{
-		{name: "sequential", parallelism: 1, runs: 1},
-		{name: "parallel", parallelism: 4, runs: 32},
+		{name: "done_context_sequential", parallelism: 1, runs: 1},
+		{name: "done_context_parallel", parallelism: 4, runs: 32},
+		{name: "cancel_during_quiesce_check_sequential", parallelism: 1, runs: 1, cancelInGate: true},
+		{name: "cancel_during_quiesce_check_parallel", parallelism: 2, runs: 32, cancelInGate: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fm := newFlywayMigratorForTest(t)
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel()
-
 			for run := range tc.runs {
+				ctx, cancel := context.WithCancel(context.Background())
+				opts := MigrateAllOptions{Parallelism: tc.parallelism}
+				if tc.cancelInGate {
+					opts.Quiesce = &cancelingQuiesceGate{cancel: cancel}
+				} else {
+					cancel()
+				}
 				provider := newFakeConfigProvider(nil)
-				res, err := MigrateAll(
-					ctx, fm, &fakeLister{ids: ids}, provider, ActionMigrate,
-					MigrateAllOptions{Parallelism: tc.parallelism},
-				)
+				res, err := MigrateAll(ctx, fm, &fakeLister{ids: ids}, provider, ActionMigrate, opts)
+				cancel()
 				require.ErrorIs(t, err, context.Canceled)
 				require.Empty(t, provider.hits, "run %d dispatched a tenant", run)
 				require.Empty(t, res.Results)
@@ -389,46 +442,55 @@ func TestMigrateAllAlreadyDoneContextDispatchesNothing(t *testing.T) {
 	}
 }
 
-func TestMigrateAllContextEndingMidRunSplitsFleet(t *testing.T) {
-	if runtime.GOOS == windowsOS {
-		t.Skip("shell stubs not supported on windows CI")
+func TestMigrateAllSequentialStopMidRunSplitsFleet(t *testing.T) {
+	cases := []struct {
+		name    string
+		opts    func(cancel context.CancelFunc) MigrateAllOptions
+		wantErr error
+	}{
+		{
+			name: "context_canceled_after_first_tenant",
+			opts: func(cancel context.CancelFunc) MigrateAllOptions {
+				return MigrateAllOptions{Hook: func(TenantResult) { cancel() }}
+			},
+			wantErr: context.Canceled,
+		},
+		{
+			name: "quiesce_set_after_first_tenant",
+			opts: func(context.CancelFunc) MigrateAllOptions {
+				return MigrateAllOptions{Quiesce: &countingQuiesceGate{blockAfter: 1}}
+			},
+			wantErr: ErrQuiesceBlocked,
+		},
 	}
-	stub := createFlywayStub(t, "postgresql")
-	fm := newFlywayMigratorForTest(t)
-	base := makeBaseConfig(t, stub)
-	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
-		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "pw-tenant-1"},
-		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "pw-tenant-2"},
-		"t3": {Type: "postgresql", Host: "h3", Port: 5432, Database: "d3", Username: "u3", Password: "pw-tenant-3"},
-	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			requireShellStubs(t)
+			fm := newFlywayMigratorForTest(t)
+			ids := []string{"t1", "t2", "t3"}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			opts := tc.opts(cancel)
+			opts.BaseConfig = makeBaseConfig(t, createFlywayStub(t, "postgresql"))
 
-	res, err := MigrateAll(
-		ctx, fm, &fakeLister{ids: []string{"t1", "t2", "t3"}}, provider, ActionMigrate,
-		MigrateAllOptions{BaseConfig: base, Hook: func(TenantResult) { cancel() }},
-	)
-	require.ErrorIs(t, err, context.Canceled)
-	require.Len(t, res.Results, 1)
-	require.NoError(t, res.Results[0].Err)
-	assert.Empty(t, res.Failed())
-	assert.Equal(t, []string{"t2", "t3"}, res.NeverDispatched)
-	require.ErrorIs(t, res.Verdict(), ErrFleetSplit, "never-dispatched tenants split the fleet with no failure")
+			res, err := MigrateAll(ctx, fm, &fakeLister{ids: ids}, newFakeConfigProvider(stubTenantConfigs(ids...)), ActionMigrate, opts)
+			require.ErrorIs(t, err, tc.wantErr)
+			require.Len(t, res.Results, 1)
+			require.NoError(t, res.Results[0].Err)
+			assert.Equal(t, []string{"t2", "t3"}, res.NeverDispatched)
+			require.ErrorIs(t, res.Verdict(), ErrFleetSplit, "never-dispatched tenants split the fleet with no failure")
+		})
+	}
 }
 
 func TestMigrateAllFlywayTimeoutCountsAsFailed(t *testing.T) {
-	if runtime.GOOS == windowsOS {
-		t.Skip("shell stubs not supported on windows CI")
-	}
+	requireShellStubs(t)
 	fm := newFlywayMigratorForTest(t)
 	base := makeBaseConfig(t, createSlowFlywayStub(t, 5*time.Second))
 	base.Timeout = 300 * time.Millisecond
-	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
-		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "pw-tenant-1"},
-	})
 
 	res, err := MigrateAll(
-		context.Background(), fm, &fakeLister{ids: []string{"t1"}}, provider, ActionMigrate,
+		context.Background(), fm, &fakeLister{ids: []string{"t1"}}, newFakeConfigProvider(stubTenantConfigs("t1")), ActionMigrate,
 		MigrateAllOptions{BaseConfig: base},
 	)
 	require.ErrorIs(t, err, ErrFlywayTimeout)
@@ -440,44 +502,23 @@ func TestMigrateAllFlywayTimeoutCountsAsFailed(t *testing.T) {
 }
 
 func TestMigrateAllFlywayCancelCountsInFlightTenantAsFailed(t *testing.T) {
-	if runtime.GOOS == windowsOS {
-		t.Skip("shell stubs not supported on windows CI")
-	}
+	requireShellStubs(t)
 	readyMarker := filepath.Join(t.TempDir(), "flyway-started.marker")
 	fm := newFlywayMigratorForTest(t)
 	base := makeBaseConfig(t, createReadySignalingFlywayStub(t, readyMarker, 5*time.Second))
-	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
-		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "pw-tenant-1"},
-		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "pw-tenant-2"},
-	})
+	ids := []string{"t1", "t2"}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	type outcome struct {
-		res *MigrateAllResult
-		err error
-	}
-	done := make(chan outcome, 1)
-	go func() {
-		res, err := MigrateAll(
-			ctx, fm, &fakeLister{ids: []string{"t1", "t2"}}, provider, ActionMigrate,
-			MigrateAllOptions{BaseConfig: base, ContinueOnError: true},
-		)
-		done <- outcome{res: res, err: err}
-	}()
-
+	done := migrateAllAsync(ctx, fm, ids, newFakeConfigProvider(stubTenantConfigs(ids...)),
+		MigrateAllOptions{BaseConfig: base, ContinueOnError: true})
 	require.Eventually(t, func() bool {
 		_, statErr := os.Stat(readyMarker)
 		return statErr == nil
 	}, 5*time.Second, 10*time.Millisecond, "Flyway stub never signaled readiness")
 	cancel()
 
-	var got outcome
-	select {
-	case got = <-done:
-	case <-time.After(flywayKillGraceDelay + 5*time.Second):
-		t.Fatal("MigrateAll did not return after the cancel")
-	}
+	got := awaitMigrateAll(t, done, flywayKillGraceDelay+5*time.Second)
 	require.ErrorIs(t, got.err, context.Canceled)
 	failed := got.res.Failed()
 	require.Len(t, failed, 1)
@@ -683,38 +724,6 @@ func (g *cancelingQuiesceGate) Query(context.Context) (*QuiesceStatus, error) {
 	return &QuiesceStatus{}, nil
 }
 
-func TestMigrateAllCancelDuringQuiesceCheckDispatchesNothing(t *testing.T) {
-	ids := []string{"t1", "t2"}
-	cases := []struct {
-		name        string
-		parallelism int
-		runs        int
-	}{
-		{name: "sequential", parallelism: 1, runs: 1},
-		{name: "parallel", parallelism: 2, runs: 32},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			fm := newFlywayMigratorForTest(t)
-			for run := range tc.runs {
-				ctx, cancel := context.WithCancel(context.Background())
-				provider := newFakeConfigProvider(nil)
-				res, err := MigrateAll(
-					ctx, fm, &fakeLister{ids: ids}, provider, ActionMigrate,
-					MigrateAllOptions{Parallelism: tc.parallelism, Quiesce: &cancelingQuiesceGate{cancel: cancel}},
-				)
-				cancel()
-				require.ErrorIs(t, err, context.Canceled)
-				require.Empty(t, provider.hits, "run %d dispatched a tenant after the quiesce check failed open", run)
-				require.Empty(t, res.Results)
-				require.Equal(t, ids, res.NeverDispatched)
-				require.Equal(t, len(ids), res.Listed())
-				require.ErrorIs(t, res.Verdict(), ErrNothingAttempted)
-			}
-		})
-	}
-}
-
 func TestMigrateAllParallelStopsDispatchWhenQuiesceFlipsMidRun(t *testing.T) {
 	if runtime.GOOS == windowsOS {
 		t.Skip("shell stubs not supported on windows CI")
@@ -745,46 +754,15 @@ func TestMigrateAllParallelStopsDispatchWhenQuiesceFlipsMidRun(t *testing.T) {
 	assert.NoError(t, res.Results[0].Err, "the already-dispatched tenant completes normally")
 }
 
-func TestMigrateAllSequentialQuiesceFlipMidRunSplitsFleet(t *testing.T) {
-	if runtime.GOOS == windowsOS {
-		t.Skip("shell stubs not supported on windows CI")
-	}
-	stub := createFlywayStub(t, "postgresql")
-	fm := newFlywayMigratorForTest(t)
-	base := makeBaseConfig(t, stub)
-	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
-		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "pw-tenant-1"},
-		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "pw-tenant-2"},
-		"t3": {Type: "postgresql", Host: "h3", Port: 5432, Database: "d3", Username: "u3", Password: "pw-tenant-3"},
-	})
-
-	res, err := MigrateAll(
-		context.Background(), fm, &fakeLister{ids: []string{"t1", "t2", "t3"}}, provider, ActionMigrate,
-		MigrateAllOptions{BaseConfig: base, Quiesce: &countingQuiesceGate{blockAfter: 1}},
-	)
-	require.ErrorIs(t, err, ErrQuiesceBlocked)
-	require.Len(t, res.Results, 1)
-	assert.Empty(t, res.Failed())
-	assert.Equal(t, []string{"t2", "t3"}, res.NeverDispatched)
-	require.ErrorIs(t, res.Verdict(), ErrFleetSplit)
-}
-
 func TestMigrateAllParallelFailFastCountsInFlightSiblingAsFailed(t *testing.T) {
-	if runtime.GOOS == windowsOS {
-		t.Skip("shell stubs not supported on windows CI")
-	}
+	requireShellStubs(t)
 	fm := newFlywayMigratorForTest(t)
 	base := makeBaseConfig(t, createSlowFlywayStub(t, time.Minute))
 	// t2 has no config, so it fails at once while t1's Flyway is still running;
 	// fail-fast then cancels t1 and stops dispatch before t3.
-	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
-		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "pw-tenant-1"},
-		"t3": {Type: "postgresql", Host: "h3", Port: 5432, Database: "d3", Username: "u3", Password: "pw-tenant-3"},
-	})
-
 	res, err := MigrateAll(
-		context.Background(), fm, &fakeLister{ids: []string{"t1", "t2", "t3"}}, provider, ActionMigrate,
-		MigrateAllOptions{BaseConfig: base, Parallelism: 2},
+		context.Background(), fm, &fakeLister{ids: []string{"t1", "t2", "t3"}}, newFakeConfigProvider(stubTenantConfigs("t1", "t3")),
+		ActionMigrate, MigrateAllOptions{BaseConfig: base, Parallelism: 2},
 	)
 	require.Error(t, err)
 	failed := res.Failed()
@@ -795,17 +773,10 @@ func TestMigrateAllParallelFailFastCountsInFlightSiblingAsFailed(t *testing.T) {
 }
 
 func TestMigrateAllParallelRechecksQuiesceAfterWaitingForSlot(t *testing.T) {
-	if runtime.GOOS == windowsOS {
-		t.Skip("shell stubs not supported on windows CI")
-	}
-	stub := createFlywayStub(t, "postgresql")
+	requireShellStubs(t)
 	fm := newFlywayMigratorForTest(t)
-	base := makeBaseConfig(t, stub)
-	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
-		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "pw-tenant-1"},
-		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "pw-tenant-2"},
-		"t3": {Type: "postgresql", Host: "h3", Port: 5432, Database: "d3", Username: "u3", Password: "pw-tenant-3"},
-	})
+	base := makeBaseConfig(t, createFlywayStub(t, "postgresql"))
+	ids := []string{"t1", "t2", "t3"}
 	gate := NewMemoryQuiesceController()
 	// The first hook to run holds its worker slot, and the hook mutex keeps the
 	// other worker's slot held too, so t3 waits for a slot until release closes.
@@ -816,19 +787,8 @@ func TestMigrateAllParallelRechecksQuiesceAfterWaitingForSlot(t *testing.T) {
 		<-release
 	}
 
-	type outcome struct {
-		res *MigrateAllResult
-		err error
-	}
-	done := make(chan outcome, 1)
-	go func() {
-		res, err := MigrateAll(
-			context.Background(), fm, &fakeLister{ids: []string{"t1", "t2", "t3"}}, provider, ActionMigrate,
-			MigrateAllOptions{BaseConfig: base, Parallelism: 2, Quiesce: gate, Hook: hook},
-		)
-		done <- outcome{res: res, err: err}
-	}()
-
+	done := migrateAllAsync(context.Background(), fm, ids, newFakeConfigProvider(stubTenantConfigs(ids...)),
+		MigrateAllOptions{BaseConfig: base, Parallelism: 2, Quiesce: gate, Hook: hook})
 	select {
 	case <-hookStarted:
 	case <-time.After(10 * time.Second):
@@ -838,12 +798,7 @@ func TestMigrateAllParallelRechecksQuiesceAfterWaitingForSlot(t *testing.T) {
 	require.NoError(t, err)
 	close(release)
 
-	var got outcome
-	select {
-	case got = <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("MigrateAll did not return after the slots were released")
-	}
+	got := awaitMigrateAll(t, done, 10*time.Second)
 	require.ErrorIs(t, got.err, ErrQuiesceBlocked)
 	assert.Len(t, got.res.Results, 2)
 	assert.Equal(t, []string{"t3"}, got.res.NeverDispatched, "quiesce set while t3 waited for a slot must stop it")
