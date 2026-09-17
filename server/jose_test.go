@@ -453,6 +453,43 @@ func TestJOSERegistrationPanicsWhenNoResolverWired(t *testing.T) {
 		registerJOSE[taggedReq, taggedResp](nil))
 }
 
+func TestRoutesCloneDoesNotMutateLiveJOSEPolicy(t *testing.T) {
+	DefaultRouteRegistry.Clear()
+	t.Cleanup(DefaultRouteRegistry.Clear)
+
+	f := newJOSEFixture(t)
+	e := echo.New()
+	e.Validator = NewValidator()
+	hr := NewHandlerRegistry(&config.Config{App: config.AppConfig{Env: "development"}}, WithJOSEResolver(f.resolver))
+	registrar := newRouteGroup(e.Group(""), "", nil)
+	POST(hr, registrar, "/tokens", func(req taggedReq, _ HandlerContext) (taggedResp, IAPIError) {
+		return taggedResp{Token: "tok-" + req.Pan}, nil
+	})
+
+	drive := func() *httptest.ResponseRecorder {
+		t.Helper()
+		plainReq := []byte(`{"pan":"4111111111111111"}`)
+		compactReq := jositest.SealForTest(t, plainReq, f.peerOutbound(), f.resolver)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens", bytes.NewReader([]byte(compactReq)))
+		req.Header.Set(echo.HeaderContentType, "application/jose")
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		return rec
+	}
+
+	first := drive()
+	require.Equal(t, http.StatusOK, first.Code)
+
+	routes := DefaultRouteRegistry.Routes()
+	require.Len(t, routes, 1)
+	require.NotNil(t, routes[0].InboundJOSE)
+	routes[0].InboundJOSE.DecryptKid = "ghost-key"
+	routes[0].InboundJOSE.Mode = jose.SealModeBareJWE
+
+	second := drive()
+	require.Equal(t, http.StatusOK, second.Code, "mutating a Routes() policy must not change the serving kids")
+}
+
 func TestNonJOSERouteUnaffectedByResolver(t *testing.T) {
 	f := newJOSEFixture(t)
 	defer DefaultRouteRegistry.Clear()

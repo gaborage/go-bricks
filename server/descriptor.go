@@ -2,6 +2,7 @@
 package server
 
 import (
+	"maps"
 	"reflect"
 	"sync"
 
@@ -184,9 +185,10 @@ func (r *RouteRegistry) RoutesByModule(moduleName string) []RouteDescriptor {
 	return r.ByModule(moduleName)
 }
 
-// cloneDescriptor deep-copies slice fields to prevent external mutation.
-// JOSE policy pointers are shared by reference: policies are immutable after
-// registration-time validation, so callers cannot mutate them through a clone.
+// cloneDescriptor deep-copies slice fields and both JOSE policies so a registry
+// reader cannot mutate a live route by writing through the returned pointers.
+// Policy map values inside ProtectedHeaders are not copied further: they are
+// consumer-supplied any and stay shared with the clone's map.
 func cloneDescriptor(d *RouteDescriptor) RouteDescriptor {
 	if d == nil {
 		return RouteDescriptor{}
@@ -199,5 +201,20 @@ func cloneDescriptor(d *RouteDescriptor) RouteDescriptor {
 	if d.Middleware != nil {
 		out.Middleware = append([]string(nil), d.Middleware...)
 	}
+	out.InboundJOSE = clonePolicy(d.InboundJOSE)
+	out.OutboundJOSE = clonePolicy(d.OutboundJOSE)
 	return out
+}
+
+// clonePolicy returns a detached copy of p, including a shallow clone of
+// ProtectedHeaders. A nil policy stays nil. Map values are not copied.
+func clonePolicy(p *jose.Policy) *jose.Policy {
+	if p == nil {
+		return nil
+	}
+	out := *p
+	if p.ProtectedHeaders != nil {
+		out.ProtectedHeaders = maps.Clone(p.ProtectedHeaders)
+	}
+	return &out
 }
