@@ -176,8 +176,8 @@ func removeMember(doc []byte, span subjectSpan) []byte {
 
 // Render returns the verified document with subject as the Subject member's value and every
 // other byte as the producer sealed it; it reads the retained payload, not Document. subject
-// must be a valid JSON value. Rendering Subject emits the plaintext: Subject's never-log
-// caution applies to the result.
+// must be a valid JSON value. An OpenedDocument not returned by OpenDocument is refused.
+// Rendering Subject emits the plaintext: Subject's never-log caution applies to the result.
 func (d *OpenedDocument) Render(subject json.RawMessage) ([]byte, error) {
 	if d.payload == nil {
 		return nil, errRenderNotOpened

@@ -3,6 +3,7 @@ package sealed
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -158,25 +159,26 @@ func TestIsCompactJOSEAcceptsEveryBase64URLByteAndDots(t *testing.T) {
 // the three separator shapes (leading comma, trailing comma, none), whitespace around the
 // first member, and subject values holding `}`, `,` and escaped quotes.
 var memberFixtures = []struct {
-	name string
-	doc  string
+	name  string
+	doc   string
+	value string // the subject member's value as spelled in doc
 	// removed is doc after removeMember: the subject member and one separator gone.
 	removed string
 }{
-	{name: "only_member", doc: `{"card":{"pan":"4111"}}`, removed: `{}`},
-	{name: "first_of_two", doc: `{"card":{"pan":"4111"},"z":true}`, removed: `{"z":true}`},
-	{name: "first_of_three_with_whitespace", doc: `{"card":1  ,  "a":2,"z":3}`, removed: `{"a":2,"z":3}`},
-	{name: "leading_whitespace_first_member", doc: `{ "card":1,"z":2}`, removed: `{ "z":2}`},
-	{name: "leading_newline_first_member", doc: "{\n  \"card\": 1,\n  \"z\": 2\n}", removed: "{\n  \"z\": 2\n}"},
-	{name: "leading_crlf_first_member", doc: "{\r\n\"card\":1,\r\n\"z\":2}", removed: "{\r\n\"z\":2}"},
-	{name: "leading_whitespace_only_member", doc: "{\n  \"card\": 1\n}", removed: "{\n  \n}"},
-	{name: "middle", doc: `{"a":1,"card":{"pan":"4111"},"z":true}`, removed: `{"a":1,"z":true}`},
-	{name: "middle_whitespace_before_the_comma", doc: `{"a":1 , "card":2, "z":3}`, removed: `{"a":1 , "z":3}`},
-	{name: "middle_whitespace_on_both_sides", doc: `{"a":1 , "card":2 , "z":3}`, removed: `{"a":1  , "z":3}`},
-	{name: "last", doc: `{"a":1,"z":true,"card":{"pan":"4111"}}`, removed: `{"a":1,"z":true}`},
-	{name: "value_with_brace", doc: `{"card":"x}y","z":1}`, removed: `{"z":1}`},
-	{name: "value_with_comma", doc: `{"a":1,"card":"x,\"b\":2","z":3}`, removed: `{"a":1,"z":3}`},
-	{name: "value_with_escaped_quotes", doc: `{"a":1,"card":"say \"hi\"\""}`, removed: `{"a":1}`},
+	{name: "only_member", doc: `{"card":{"pan":"4111"}}`, value: `{"pan":"4111"}`, removed: `{}`},
+	{name: "first_of_two", doc: `{"card":{"pan":"4111"},"z":true}`, value: `{"pan":"4111"}`, removed: `{"z":true}`},
+	{name: "first_of_three_with_whitespace", doc: `{"card":1  ,  "a":2,"z":3}`, value: `1`, removed: `{"a":2,"z":3}`},
+	{name: "leading_whitespace_first_member", doc: `{ "card":1,"z":2}`, value: `1`, removed: `{ "z":2}`},
+	{name: "leading_newline_first_member", doc: "{\n  \"card\": 1,\n  \"z\": 2\n}", value: `1`, removed: "{\n  \"z\": 2\n}"},
+	{name: "leading_crlf_first_member", doc: "{\r\n\"card\":1,\r\n\"z\":2}", value: `1`, removed: "{\r\n\"z\":2}"},
+	{name: "leading_whitespace_only_member", doc: "{\n  \"card\": 1\n}", value: `1`, removed: "{\n  \n}"},
+	{name: "middle", doc: `{"a":1,"card":{"pan":"4111"},"z":true}`, value: `{"pan":"4111"}`, removed: `{"a":1,"z":true}`},
+	{name: "middle_whitespace_before_the_comma", doc: `{"a":1 , "card":2, "z":3}`, value: `2`, removed: `{"a":1 , "z":3}`},
+	{name: "middle_whitespace_on_both_sides", doc: `{"a":1 , "card":2 , "z":3}`, value: `2`, removed: `{"a":1  , "z":3}`},
+	{name: "last", doc: `{"a":1,"z":true,"card":{"pan":"4111"}}`, value: `{"pan":"4111"}`, removed: `{"a":1,"z":true}`},
+	{name: "value_with_brace", doc: `{"card":"x}y","z":1}`, value: `"x}y"`, removed: `{"z":1}`},
+	{name: "value_with_comma", doc: `{"a":1,"card":"x,\"b\":2","z":3}`, value: `"x,\"b\":2"`, removed: `{"a":1,"z":3}`},
+	{name: "value_with_escaped_quotes", doc: `{"a":1,"card":"say \"hi\"\""}`, value: `"say \"hi\"\""`, removed: `{"a":1}`},
 }
 
 func TestRemoveMemberDeletesTheMemberAndOneSeparator(t *testing.T) {
@@ -185,6 +187,7 @@ func TestRemoveMemberDeletesTheMemberAndOneSeparator(t *testing.T) {
 			doc := []byte(tc.doc)
 			span, err := locateSubject(doc, "card")
 			require.NoError(t, err)
+			assert.Equal(t, tc.value, string(span.value))
 			out := removeMember(doc, span)
 			assert.Equal(t, []byte(tc.removed), out)
 			assert.True(t, json.Valid(out))
@@ -199,10 +202,10 @@ func TestOpenedDocumentRenderRestoresTheRemovedMember(t *testing.T) {
 	replacements := []string{`"<redacted>"`, `{"pan":"4111","n":[1,{"}":","}]}`}
 	for _, tc := range memberFixtures {
 		t.Run(tc.name, func(t *testing.T) {
-			opened, span := openedFrom(t, tc.doc)
+			opened := openedFrom(t, tc.doc)
 			assert.Equal(t, tc.removed, string(opened.Document))
 
-			restored, err := opened.Render(span.value)
+			restored, err := opened.Render(json.RawMessage(tc.value))
 			require.NoError(t, err)
 			assert.Equal(t, tc.doc, string(restored), "the original value renders the original bytes")
 
@@ -211,8 +214,8 @@ func TestOpenedDocumentRenderRestoresTheRemovedMember(t *testing.T) {
 				require.NoError(t, err)
 				assert.True(t, json.Valid(out), "rendered with %s: %s", value, out)
 
-				require.Equal(t, 1, bytes.Count([]byte(tc.doc), span.value), "the fixture value must locate one spot")
-				want := bytes.Replace([]byte(tc.doc), span.value, []byte(value), 1)
+				require.Equal(t, 1, strings.Count(tc.doc, tc.value), "the fixture value must locate one spot")
+				want := []byte(strings.Replace(tc.doc, tc.value, value, 1))
 				assert.Equal(t, want, out, "only the subject value changes")
 			}
 			assert.Equal(t, tc.doc, string(opened.payload), "rendering must not mutate the retained payload")
@@ -221,7 +224,7 @@ func TestOpenedDocumentRenderRestoresTheRemovedMember(t *testing.T) {
 }
 
 func TestOpenedDocumentRenderRefusesInvalidInput(t *testing.T) {
-	opened, _ := openedFrom(t, `{"card":"x","z":1}`)
+	opened := openedFrom(t, `{"card":"x","z":1}`)
 
 	cases := []struct {
 		name    string
@@ -244,12 +247,12 @@ func TestOpenedDocumentRenderRefusesInvalidInput(t *testing.T) {
 }
 
 // openedFrom opens doc as a verified payload without the crypto; the Subject is "card".
-func openedFrom(t *testing.T, doc string) (*OpenedDocument, subjectSpan) {
+func openedFrom(t *testing.T, doc string) *OpenedDocument {
 	t.Helper()
 	payload := []byte(doc)
 	span, err := locateSubject(payload, "card")
 	require.NoError(t, err)
-	return newOpenedDocument(&openedCore{payload: payload, span: span, plaintext: span.value}), span
+	return newOpenedDocument(&openedCore{payload: payload, span: span, plaintext: span.value})
 }
 
 func TestNextMemberReadsOneMember(t *testing.T) {
