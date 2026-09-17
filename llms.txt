@@ -5205,7 +5205,7 @@ The framework's `migration` module stays AWS-SDK-free; AWS SM lives in the CLI's
 
 ### Second migration tree and provider decorator
 
-A second tree for the same vendor needs no new API: copy the vendor defaults and override both paths. `BaseConfig` merges over the vendor defaults **per field** — always set `ConfigPath` and `MigrationPath` together (CLI: `--flyway-config` with `--migrations-dir`), and don't name a tree conf `flyway-<vendor>.conf`. The `*For` methods use a `Config` as given (no merge). Set `Audit.Target` (the tree label) on single-database runs only — a `BaseConfig` target replaces every tenant's database name. A mixed-vendor fleet needs a tenant source per vendor tree.
+A second tree for the same vendor needs no new API: copy the vendor defaults and override both paths. `BaseConfig` merges over the vendor defaults **per field** — always set `ConfigPath` and `MigrationPath` together (CLI: `--flyway-config` with `--migrations-dir`), and don't name a tree conf `flyway-<vendor>.conf`. The `*For` methods use a `Config` as given (no merge). Set `Audit.Target` (the tree label) on single-database runs only — `BaseConfig.Audit.Target` gives every tenant's audit event the same label instead of its database name; it never changes the Flyway target. A mixed-vendor fleet needs a tenant source per vendor tree.
 
 ```go
 defaults := fm.DefaultMigrationConfigForVendor("postgresql")
@@ -5221,7 +5221,7 @@ if err != nil { return err }
 if _, err := fm.MigrateFor(ctx, controlDB, &controlTree); err != nil { return err }
 ```
 
-The pre-Flyway seam is a decorator `database.DBConfigProvider`: validate or overlay on a copy, or refuse a tenant — `MigrateAll` wraps the error with `%w`, so `errors.Is(r.Err, ErrTenantRefused)` holds on `res.Failed()` entries, and under default fail-fast a refusal stops the run, cancelling in-flight tenants in a parallel run — set `ContinueOnError` whenever refusals are expected. It guards only calls routed through it, and `Host` is the Flyway target only for a PostgreSQL discrete-field config (Oracle and `connectionstring` configs use the conf's `flyway.url`). It cannot run after Flyway (`Hook` only observes), see the action, or mark a tenant skipped; a pre/post protocol loops over `MigrateFor` itself. For a custom secret-name grammar set `SecretsProvider.NameFor` instead. Full guide: [wiki/multi_tenant_migration.md](wiki/multi_tenant_migration.md#decorating-the-config-provider).
+The pre-Flyway seam is a decorator `database.DBConfigProvider`: validate or overlay on a copy, or refuse a tenant — `MigrateAll` wraps the error with `%w`, so `errors.Is(r.Err, ErrTenantRefused)` holds on `res.Failed()` entries, and under default fail-fast a refusal stops the run, cancelling in-flight tenants in a parallel run — set `ContinueOnError` whenever refusals are expected. It guards only calls routed through it — pass the wrapper to `MigrateAll` and resolve `controlDB` through it too — and `Host` is the Flyway target only for a PostgreSQL discrete-field config — the example refuses other shapes, whose target is the conf's `flyway.url`. It cannot run after Flyway (`Hook` only observes), see the action, or mark a tenant skipped; a pre/post protocol loops over `MigrateFor` itself. For a custom secret-name grammar set `SecretsProvider.NameFor` instead. Full guide: [wiki/multi_tenant_migration.md](wiki/multi_tenant_migration.md#decorating-the-config-provider).
 
 ```go
 var ErrTenantRefused = errors.New("tenant refused by migration guard")
@@ -5233,7 +5233,9 @@ func (p guardedProvider) DBConfig(ctx context.Context, tenantID string) (*config
     if err != nil { return nil, err }
     if cfg == nil { return nil, database.ErrNoDatabaseConfig }
     out := *cfg // copy: the inner provider may cache its document
-    if !p.allowedHosts[out.Host] { return nil, fmt.Errorf("%w: tenant %q", ErrTenantRefused, tenantID) }
+    if out.Type != config.PostgreSQL || out.ConnectionString != "" || !p.allowedHosts[out.Host] { // only PG discrete fields target Host
+        return nil, fmt.Errorf("%w: tenant %q", ErrTenantRefused, tenantID)
+    }
     return &out, nil
 }
 ```

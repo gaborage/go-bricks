@@ -420,15 +420,12 @@ controlTree.Audit.Target = "control-plane"
 Run the tenant tree across the fleet through `BaseConfig`:
 
 ```go
-res, err := migration.MigrateAll(ctx, fm, lister, provider, migration.ActionMigrate, migration.MigrateAllOptions{
+_, err := migration.MigrateAll(ctx, fm, lister, provider, migration.ActionMigrate, migration.MigrateAllOptions{
     BaseConfig: &tenantTree,
     Logger:     myLogger,
 })
-if err != nil {
+if err != nil { // fail-fast: the first tenant failure stops the run and is returned here
     return err
-}
-if failed := res.Failed(); len(failed) > 0 {
-    return fmt.Errorf("%d tenants failed", len(failed))
 }
 ```
 
@@ -461,8 +458,9 @@ if _, err := fm.MigrateFor(ctx, controlDB, &controlTree); err != nil {
 
 `Audit.Target` labels which tree a `migration.applied` event came from; when
 empty it defaults to the database name. Set it on a single-database run only:
-a `BaseConfig` target is stamped on every tenant's event and replaces each
-tenant's database name, which is why `tenantTree` leaves it empty.
+`BaseConfig.Audit.Target` gives every tenant's event the same label instead of
+its database name (the Flyway target is unaffected), which is why `tenantTree`
+leaves it empty.
 
 On the CLI, `migrate`, `validate` and `info` accept the same path flags.
 `--tenant` runs one database through the same credential lookup (with the
@@ -510,7 +508,8 @@ func (p guardedProvider) DBConfig(ctx context.Context, tenantID string) (*config
         return nil, database.ErrNoDatabaseConfig
     }
     out := *cfg // copy: the inner provider may cache its document
-    if !p.allowedHosts[out.Host] {
+    // Host is Flyway's target only for PostgreSQL discrete fields; refuse what it cannot judge.
+    if out.Type != config.PostgreSQL || out.ConnectionString != "" || !p.allowedHosts[out.Host] {
         return nil, fmt.Errorf("%w: tenant %q", ErrTenantRefused, tenantID)
     }
     return &out, nil
@@ -520,11 +519,11 @@ func (p guardedProvider) DBConfig(ctx context.Context, tenantID string) (*config
 Pass `guardedProvider{inner: provider, allowedHosts: map[string]bool{"tenants.db.internal": true}}`
 to `MigrateAll` in place of `provider`. A decorator guards only the calls that
 go through it: resolve a single-database `MigrateFor` target through the same
-wrapper. The host check holds only where Flyway targets `Host`: a PostgreSQL
+wrapper. The example judges `Host` only where Flyway targets it — a PostgreSQL
 config with discrete fields, whose framework-built `-url=` outranks the conf
-([ADR-085](adr_085_framework_owned_flyway_url.md)). For Oracle or a
-`connectionstring` config, the conf's `flyway.url` sets the target, so check
-that instead.
+([ADR-085](adr_085_framework_owned_flyway_url.md)) — and refuses every other
+shape. For Oracle or a `connectionstring` config the conf's `flyway.url` sets the
+target, so a guard that admits them must validate that URL instead.
 
 What a decorator can do:
 
