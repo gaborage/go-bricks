@@ -3,9 +3,10 @@
 // exactly-one-of-per-pair refusal keymaterial deliberately leaves to its
 // callers, and the size-capped file-or-stdin payload read. The flags come in
 // two roles — KeySources for a producer (sign PRIVATE, encrypt PUBLIC) and
-// ConsumerKeySources for an opener (sign PUBLIC, encrypt PRIVATE) — and each
-// command keeps only its own flags, its own required-flag checks and its own
-// call into jose.
+// ConsumerKeySources for an opener (sign PUBLIC, encrypt PRIVATE). DocumentSpec
+// turns the kid and subject flags into a raw-document Spec. Each command keeps
+// only its own flags, its own required-flag checks and its own seal or open
+// call.
 package sealcli
 
 import (

@@ -3,6 +3,7 @@ package sealed
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -154,42 +155,104 @@ func TestIsCompactJOSEAcceptsEveryBase64URLByteAndDots(t *testing.T) {
 	assert.False(t, isCompactJOSE("AB:C"))
 }
 
-// TestRemoveMemberDeletesTheMemberAndOneSeparator covers the three separator shapes: a
-// leading comma to swallow (middle or last member), a trailing comma to swallow (first
-// member, more follow), and no comma at all (the only member) — every result must stay
-// valid JSON with every other byte untouched. The whitespace cases are the regression net
-// for the first-member fixup: the decoder's peek skips whitespace, so any padding between
-// the opening brace and the subject key must not defeat it and emit `{ ,…`. A middle member
-// keeps the padding before its swallowed leading comma, which stays valid either way.
+// memberFixtures pins both removeMember and Render, so a separator-rule change fails both:
+// the three separator shapes (leading comma, trailing comma, none), whitespace around the
+// first member, and subject values holding `}`, `,` and escaped quotes.
+var memberFixtures = []struct {
+	name  string
+	doc   string
+	value string // the subject member's value as spelled in doc
+	// removed is doc after removeMember: the subject member and one separator gone.
+	removed string
+}{
+	{name: "only_member", doc: `{"card":{"pan":"4111"}}`, value: `{"pan":"4111"}`, removed: `{}`},
+	{name: "first_of_two", doc: `{"card":{"pan":"4111"},"z":true}`, value: `{"pan":"4111"}`, removed: `{"z":true}`},
+	{name: "first_of_three_with_whitespace", doc: `{"card":1  ,  "a":2,"z":3}`, value: `1`, removed: `{"a":2,"z":3}`},
+	{name: "leading_whitespace_first_member", doc: `{ "card":1,"z":2}`, value: `1`, removed: `{ "z":2}`},
+	{name: "leading_newline_first_member", doc: "{\n  \"card\": 1,\n  \"z\": 2\n}", value: `1`, removed: "{\n  \"z\": 2\n}"},
+	{name: "leading_crlf_first_member", doc: "{\r\n\"card\":1,\r\n\"z\":2}", value: `1`, removed: "{\r\n\"z\":2}"},
+	{name: "leading_whitespace_only_member", doc: "{\n  \"card\": 1\n}", value: `1`, removed: "{\n  \n}"},
+	{name: "middle", doc: `{"a":1,"card":{"pan":"4111"},"z":true}`, value: `{"pan":"4111"}`, removed: `{"a":1,"z":true}`},
+	{name: "middle_whitespace_before_the_comma", doc: `{"a":1 , "card":2, "z":3}`, value: `2`, removed: `{"a":1 , "z":3}`},
+	{name: "middle_whitespace_on_both_sides", doc: `{"a":1 , "card":2 , "z":3}`, value: `2`, removed: `{"a":1  , "z":3}`},
+	{name: "last", doc: `{"a":1,"z":true,"card":{"pan":"4111"}}`, value: `{"pan":"4111"}`, removed: `{"a":1,"z":true}`},
+	{name: "value_with_brace", doc: `{"card":"x}y","z":1}`, value: `"x}y"`, removed: `{"z":1}`},
+	{name: "value_with_comma", doc: `{"a":1,"card":"x,\"b\":2","z":3}`, value: `"x,\"b\":2"`, removed: `{"a":1,"z":3}`},
+	{name: "value_with_escaped_quotes", doc: `{"a":1,"card":"say \"hi\"\""}`, value: `"say \"hi\"\""`, removed: `{"a":1}`},
+}
+
 func TestRemoveMemberDeletesTheMemberAndOneSeparator(t *testing.T) {
-	cases := []struct {
-		name string
-		doc  string
-		want string
-	}{
-		{name: "only_member", doc: `{"card":{"pan":"4111"}}`, want: `{}`},
-		{name: "first_of_two", doc: `{"card":{"pan":"4111"},"z":true}`, want: `{"z":true}`},
-		{name: "first_of_three_with_whitespace", doc: `{"card":1  ,  "a":2,"z":3}`, want: `{"a":2,"z":3}`},
-		{name: "leading_whitespace_first_member", doc: `{ "card":1,"z":2}`, want: `{ "z":2}`},
-		{name: "leading_newline_first_member", doc: "{\n  \"card\": 1,\n  \"z\": 2\n}", want: "{\n  \"z\": 2\n}"},
-		{name: "leading_crlf_first_member", doc: "{\r\n\"card\":1,\r\n\"z\":2}", want: "{\r\n\"z\":2}"},
-		{name: "leading_whitespace_only_member", doc: "{\n  \"card\": 1\n}", want: "{\n  \n}"},
-		{name: "middle", doc: `{"a":1,"card":{"pan":"4111"},"z":true}`, want: `{"a":1,"z":true}`},
-		{name: "middle_whitespace_before_the_comma", doc: `{"a":1 , "card":2, "z":3}`, want: `{"a":1 , "z":3}`},
-		{name: "middle_whitespace_on_both_sides", doc: `{"a":1 , "card":2 , "z":3}`, want: `{"a":1  , "z":3}`},
-		{name: "last", doc: `{"a":1,"z":true,"card":{"pan":"4111"}}`, want: `{"a":1,"z":true}`},
-	}
-	for _, tc := range cases {
+	for _, tc := range memberFixtures {
 		t.Run(tc.name, func(t *testing.T) {
 			doc := []byte(tc.doc)
 			span, err := locateSubject(doc, "card")
 			require.NoError(t, err)
+			assert.Equal(t, tc.value, string(span.value))
 			out := removeMember(doc, span)
-			assert.Equal(t, []byte(tc.want), out)
+			assert.Equal(t, []byte(tc.removed), out)
 			assert.True(t, json.Valid(out))
 			assert.Equal(t, tc.doc, string(doc), "input must not be mutated")
 		})
 	}
+}
+
+// TestOpenedDocumentRenderRestoresTheRemovedMember: Document is removeMember's output, and
+// Render keeps every byte but the subject value, for the original value and replacements.
+func TestOpenedDocumentRenderRestoresTheRemovedMember(t *testing.T) {
+	replacements := []string{`"<redacted>"`, `{"pan":"4111","n":[1,{"}":","}]}`}
+	for _, tc := range memberFixtures {
+		t.Run(tc.name, func(t *testing.T) {
+			opened := openedFrom(t, tc.doc)
+			assert.Equal(t, tc.removed, string(opened.Document))
+
+			restored, err := opened.Render(json.RawMessage(tc.value))
+			require.NoError(t, err)
+			assert.Equal(t, tc.doc, string(restored), "the original value renders the original bytes")
+
+			for _, value := range replacements {
+				out, err := opened.Render(json.RawMessage(value))
+				require.NoError(t, err)
+				assert.True(t, json.Valid(out), "rendered with %s: %s", value, out)
+
+				require.Equal(t, 1, strings.Count(tc.doc, tc.value), "the fixture value must locate one spot")
+				want := []byte(strings.Replace(tc.doc, tc.value, value, 1))
+				assert.Equal(t, want, out, "only the subject value changes")
+			}
+			assert.Equal(t, tc.doc, string(opened.payload), "rendering must not mutate the retained payload")
+		})
+	}
+}
+
+func TestOpenedDocumentRenderRefusesInvalidInput(t *testing.T) {
+	opened := openedFrom(t, `{"card":"x","z":1}`)
+
+	cases := []struct {
+		name    string
+		doc     *OpenedDocument
+		subject json.RawMessage
+		wantErr error
+	}{
+		{name: "hand_built_document", doc: &OpenedDocument{Document: []byte(`{"z":1}`)}, subject: json.RawMessage(`"4111"`), wantErr: errRenderNotOpened},
+		{name: "subject_not_json", doc: opened, subject: json.RawMessage(`4111 1111`), wantErr: errRenderSubjectInvalid},
+		{name: "empty_subject", doc: opened, subject: nil, wantErr: errRenderSubjectInvalid},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := tc.doc.Render(tc.subject)
+			require.ErrorIs(t, err, tc.wantErr)
+			assert.Nil(t, out)
+			assert.NotContains(t, err.Error(), "4111", "a refusal never echoes the subject")
+		})
+	}
+}
+
+// openedFrom opens doc as a verified payload without the crypto; the Subject is "card".
+func openedFrom(t *testing.T, doc string) *OpenedDocument {
+	t.Helper()
+	payload := []byte(doc)
+	span, err := locateSubject(payload, "card")
+	require.NoError(t, err)
+	return newOpenedDocument(&openedCore{payload: payload, span: span, plaintext: span.value})
 }
 
 func TestNextMemberReadsOneMember(t *testing.T) {

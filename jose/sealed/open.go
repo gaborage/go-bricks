@@ -211,9 +211,8 @@ func Open(body []byte, spec *Spec, opts *OpenOptions, out any) (*Envelope, error
 // It returns an *OpenedDocument: the document with the Subject member ABSENT rather than
 // substituting a redaction placeholder — the library never decides what a caller should
 // splice in its place — the decrypted subject plaintext separately, the offset the member
-// sat at, and the same Envelope Open would return for the same body. SubjectAt positions a
-// REPLACEMENT member; reproducing the original bytes is not part of the contract (see its
-// own comment).
+// sat at, and the same Envelope Open would return for the same body. Render puts a member
+// back byte for byte with a value the caller chooses.
 //
 // Every rule 1–10 refusal is code-identical to Open's: the same *OpenError Err.Code, Rule
 // and Details for the same input. Rule 11 (decode into spec.Type) is out of a type-free
@@ -232,12 +231,19 @@ func OpenDocument(body []byte, spec *Spec, opts *OpenOptions) (*OpenedDocument, 
 	if !json.Valid(core.plaintext) {
 		return nil, openError(11, ErrOpenFailed, CodePayloadUndecodable, "subject plaintext is not a valid JSON value", nil)
 	}
+	return newOpenedDocument(core), nil
+}
+
+// newOpenedDocument keeps the verified payload and Subject span privately for Render.
+func newOpenedDocument(core *openedCore) *OpenedDocument {
 	return &OpenedDocument{
 		Document:  removeMember(core.payload, core.span),
 		Subject:   core.plaintext,
 		SubjectAt: core.span.memberStart,
 		Envelope:  core.env,
-	}, nil
+		payload:   core.payload,
+		span:      core.span,
+	}
 }
 
 // OpenedDocument is what OpenDocument proved and recovered: the verified document with the
@@ -249,16 +255,17 @@ type OpenedDocument struct {
 	// Subject is the decrypted Subject plaintext: PAN-class data by construction. Never log,
 	// echo or otherwise emit it — rendering it is the caller's deliberate decision.
 	Subject []byte
-	// SubjectAt is the byte offset IN Document where the removed member sat, so a renderer
-	// splices a REPLACEMENT member there — `"card":"<redacted>"`, or the member spelled with
-	// Subject as its value — instead of appending it or re-walking the document. The caller
-	// supplies the separator it needs: removing the member took one adjacent separator with
-	// it, and any whitespace that surrounded that separator, so the ORIGINAL bytes are not
-	// recoverable from an OpenedDocument alone. gaborage/go-bricks#1638 tracks moving the
-	// splice into this package, which is where a byte-exact contract would belong.
+	// SubjectAt is the byte offset IN Document where the removed member sat. To put a member
+	// back, call Render, which restores the original layout. Splicing at SubjectAt directly
+	// leaves the separator to the caller: removing the member took one adjacent separator and
+	// the whitespace around it, so the original bytes are not recoverable from Document and
+	// SubjectAt alone.
 	SubjectAt int
 	// Envelope is what the message proved about itself — the same one Open returns.
 	Envelope *Envelope
+
+	payload []byte      // the verified payload document, Subject member still in place
+	span    subjectSpan // the Subject value's span within payload
 }
 
 // openedCore is what rules 1–10 and rule 12 hand to rule 11: the verified payload document,

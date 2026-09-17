@@ -75,7 +75,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// The Spec is built before any key is read and before stdin is drained: it is a pure
 	// string check, so a mistyped kid should not cost two file reads and an RSA parse, and
 	// must not leave an interactive operator blocked on a stdin that never closes.
-	spec, err := documentSpec(cfg)
+	spec, err := sealcli.DocumentSpec(cfg.signKid, cfg.encryptKid, cfg.subject)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -150,8 +150,8 @@ func parseFlags(args []string, stderr io.Writer) (*cliConfig, error) {
 
 // validateConfig enforces exactly-one-of per key source pair (delegated to
 // sealcli, which owns the refusal strings) and the four required flags. Kid
-// GRAMMAR is checked later, in documentSpec, where the family it derives is
-// what the Spec needs.
+// GRAMMAR is checked later, in sealcli.DocumentSpec, where the family it
+// derives is what the Spec needs.
 func validateConfig(cfg *cliConfig) error {
 	if err := cfg.keys.Validate(); err != nil {
 		return err
@@ -169,30 +169,4 @@ func validateConfig(cfg *cliConfig) error {
 		return errors.New("-event-type is required")
 	}
 	return nil
-}
-
-// documentSpec derives each Logical family from its concrete Generation and
-// builds the raw-document Spec. The wire carries the Generation while the
-// Spec — like the consumer's seal tag — names the family, so the CLI takes the
-// concrete kid and splits it rather than asking the operator for both.
-func documentSpec(cfg *cliConfig) (*sealed.Spec, error) {
-	signFamily, err := splitFamily("-sign-kid", cfg.signKid)
-	if err != nil {
-		return nil, err
-	}
-	encryptFamily, err := splitFamily("-encrypt-kid", cfg.encryptKid)
-	if err != nil {
-		return nil, err
-	}
-	return sealed.NewDocumentSpec(signFamily, encryptFamily, cfg.subject)
-}
-
-// splitFamily reports the Logical family of a concrete kid, naming the flag
-// that carried it so the operator knows which of the two to fix.
-func splitFamily(flagName, kid string) (string, error) {
-	family, _, ok := sealed.SplitGenerationKid(kid)
-	if !ok {
-		return "", fmt.Errorf("%s %q is not a generation: expected <logical>-v<N> with N a positive integer without leading zeros", flagName, kid)
-	}
-	return family, nil
 }

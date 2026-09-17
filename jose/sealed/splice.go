@@ -32,6 +32,9 @@ var (
 	// by construction a case variant of the Subject path the caller already knows, and any
 	// other document byte is caller data the error path must not carry (ADR-081 class).
 	errSubjectCaseFoldTwin = errors.New("a clear member case-folds to the subject member")
+
+	errRenderNotOpened      = errors.New("sealed: Render needs an OpenedDocument returned by OpenDocument")
+	errRenderSubjectInvalid = errors.New("sealed: Render subject is not a valid JSON value")
 )
 
 // pinSubject is the SEALER's view of a document: locateSubject's rules plus the G9 case-fold
@@ -169,6 +172,20 @@ func removeMember(doc []byte, span subjectSpan) []byte {
 	}
 	out := append([]byte(nil), doc[:span.memberStart]...)
 	return append(out, doc[end:]...)
+}
+
+// Render returns the verified document with subject as the Subject member's value and every
+// other byte as the producer sealed it; it reads the retained payload, not Document. subject
+// must be a valid JSON value. An OpenedDocument not returned by OpenDocument is refused.
+// Rendering Subject emits the plaintext: Subject's never-log caution applies to the result.
+func (d *OpenedDocument) Render(subject json.RawMessage) ([]byte, error) {
+	if d.payload == nil {
+		return nil, errRenderNotOpened
+	}
+	if !json.Valid(subject) {
+		return nil, errRenderSubjectInvalid
+	}
+	return spliceRaw(d.payload, d.span, subject), nil
 }
 
 // isCompactJOSE reports whether s consists only of base64url characters and dots.

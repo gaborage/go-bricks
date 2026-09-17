@@ -910,6 +910,16 @@ func TestOpenEventEmitReportsWriteFailures(t *testing.T) {
 	}
 }
 
+// TestOpenEventEmitReportsRenderFailure pins the render error path: an OpenedDocument that
+// Render refuses is a tool error, reported on stderr, with nothing written to stdout.
+func TestOpenEventEmitReportsRenderFailure(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := emit(&cliConfig{subject: "card"}, &sealed.OpenedDocument{}, &stdout, &stderr)
+	require.Equal(t, exitToolError, code)
+	assert.Contains(t, stderr.String(), "render document:")
+	assert.Empty(t, stdout.String())
+}
+
 // TestOpenEventRefusalReportsWriteFailures pins the same for the refusal door: exit 3 must
 // not be returned by an invocation that printed no refusal at all.
 func TestOpenEventRefusalReportsWriteFailures(t *testing.T) {
