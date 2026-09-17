@@ -6,7 +6,6 @@ import (
 	"database/sql/driver"
 	"errors"
 	"os"
-	"path/filepath"
 	"reflect"
 	"regexp"
 	"testing"
@@ -349,20 +348,17 @@ func TestPgxResolvesSameHostAsConfigScanner(t *testing.T) {
 	}
 }
 
-// hermeticPgxEnv returns the PGSERVICEFILE path it points pgx at; nothing exists there yet.
-func hermeticPgxEnv(t *testing.T) (serviceFile string) {
+func hermeticPgxEnv(t *testing.T) {
 	t.Helper()
 	home := t.TempDir()
-	serviceFile = filepath.Join(home, "pg_service.conf")
 	t.Setenv("HOME", home)
 	t.Setenv("PGSERVICE", "")
-	t.Setenv("PGSERVICEFILE", serviceFile)
+	t.Setenv("PGSERVICEFILE", home+"/pg_service.conf")
 	t.Setenv("PGPASSFILE", home+"/pgpass")
 	t.Setenv("PGHOST", "")
 	for _, k := range []string{"PGSSLMODE", "PGSSLROOTCERT", "PGSSLCERT", "PGSSLKEY", "PGSSLNEGOTIATION"} {
 		t.Setenv(k, "")
 	}
-	return serviceFile
 }
 
 // TestPgxTLSConfigAgreesWithConfigTLSEnvFixtures uses pgx as the oracle for
@@ -395,8 +391,8 @@ func TestPgxTLSConfigAgreesWithConfigTLSEnvFixtures(t *testing.T) {
 // with TLSConfig nil, which is why the config seam refuses service indirection
 // (gaborage/go-bricks#1644).
 func TestPgxResolvesServiceHostOverPGHOST(t *testing.T) {
-	serviceFile := hermeticPgxEnv(t)
-	require.NoError(t, os.WriteFile(serviceFile, []byte(testutil.PostgresServiceFileBody), 0o600))
+	hermeticPgxEnv(t)
+	require.NoError(t, os.WriteFile(os.Getenv("PGSERVICEFILE"), []byte(testutil.PostgresServiceFileBody), 0o600))
 
 	for _, c := range testutil.PostgresServiceCases {
 		t.Run(c.Name, func(t *testing.T) {
@@ -404,22 +400,14 @@ func TestPgxResolvesServiceHostOverPGHOST(t *testing.T) {
 				t.Setenv(e[0], e[1])
 			}
 			pc, err := pgconn.ParseConfig(c.DSN)
-			if c.Pgx == testutil.PgxServiceUnresolved {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "failed to read service")
+			if c.PgxHost == "" {
+				require.ErrorContains(t, err, "failed to read service")
 				return
 			}
 			require.NoError(t, err)
-			network, _ := pgconn.NetworkAddress(pc.Host, pc.Port)
-			switch c.Pgx {
-			case testutil.PgxServiceSocket:
-				assert.Equal(t, "unix", network)
+			assert.Equal(t, c.PgxHost, pc.Host)
+			if network, _ := pgconn.NetworkAddress(pc.Host, pc.Port); network == "unix" {
 				assert.Nil(t, pc.TLSConfig)
-			case testutil.PgxServiceTCPHost:
-				assert.Equal(t, "tcp", network)
-				assert.Equal(t, "db.internal", pc.Host)
-			default:
-				require.FailNow(t, "fixture names no pgx outcome")
 			}
 		})
 	}

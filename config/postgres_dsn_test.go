@@ -193,6 +193,27 @@ func TestScanPostgresDSNRecordsTLSKeyPresence(t *testing.T) {
 	}
 }
 
+func TestPgDSNSettingOver(t *testing.T) {
+	tests := []struct {
+		name        string
+		setting     pgDSNSetting
+		env         string
+		wantValue   string
+		wantFromEnv bool
+	}{
+		{name: "present_key_wins", setting: pgDSNSetting{set: true, value: "dsn"}, env: "env", wantValue: "dsn"},
+		{name: "present_empty_key_shadows_env", setting: pgDSNSetting{set: true}, env: "env"},
+		{name: "absent_key_inherits_env", env: "env", wantValue: "env", wantFromEnv: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value, fromEnv := tt.setting.over(tt.env)
+			assert.Equal(t, tt.wantValue, value)
+			assert.Equal(t, tt.wantFromEnv, fromEnv)
+		})
+	}
+}
+
 func TestScanPostgresDSNRecordsServicePresence(t *testing.T) {
 	tests := []struct {
 		name string

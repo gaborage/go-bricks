@@ -8784,10 +8784,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   other). Neither message nor action ever echoes the connection string or a host entry — a
   scanned host can carry password text (`host= password=hunter2`, where pgx skips whitespace
   after `=` and the NEXT pair becomes the host value). `PGSERVICE`/`service=` and service files
-  are read by neither rule: a DSN naming a service is refused ahead of both by `[C66.3]`, which
-  closes the two shapes this gap used to leave — a service-only host refused by rule (1) as
-  naming no host, and a service file's socket host passing rule (2) beside a TLS-claiming
-  `sslmode`, since pgx lets it shadow even a TCP `PGHOST`. The five
+  are refused ahead of both rules by `[C66.3]`. The five
   `PGSSL*` environment variables **are** judged, per key, under the same DSN-over-env
   precedence as `PGHOST` — that residual of rule (2) closed as `[C66.1]`.
   `scanPostgresDSN`'s `ok=false` (untokenizable)
@@ -9965,10 +9962,6 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   with the service named, and rule (1)'s Action now says a service is refused rather than "not
   consulted". Same doors as `[C65.2]`; `go-bricks-migrate` inherits through the exported
   `ApplyDatabasePoolDefaults` seam, no CLI change. Oracle is unchanged. No signature moves.
-  `internal/testutil.PostgresServiceCases` is shared between
-  `TestApplyDatabasePoolDefaultsRefusesLibpqServiceConnectionString` and
-  `database/postgresql`'s `TestPgxResolvesServiceHostOverPGHOST`, which writes a real service
-  file, so a pgx bump that changes service precedence fails a test.
 - gate: match = a DSN names a non-empty service, or runs under a non-empty `PGSERVICE` it does
   not shadow with a `service` key of its own.
 - apply: copy the service's settings — `host`, `port`, `user`, `dbname`, `sslmode` and any TLS

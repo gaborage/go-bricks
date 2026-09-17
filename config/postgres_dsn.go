@@ -72,6 +72,14 @@ func (s *pgDSNScan) claimSource(dsnKey string) string {
 	return dsnKey
 }
 
+// over merges env under s with pgx's precedence; fromEnv reports that the DSN names no such key.
+func (s pgDSNSetting) over(env string) (value string, fromEnv bool) {
+	if s.set {
+		return s.value, false
+	}
+	return env, true
+}
+
 func pgDSNSettingOf(settings map[string]string, key string) pgDSNSetting {
 	value, set := settings[key]
 	return pgDSNSetting{set: set, value: value}

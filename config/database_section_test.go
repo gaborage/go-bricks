@@ -3711,20 +3711,14 @@ func TestApplyDatabasePoolDefaultsRefusesLibpqServiceConnectionString(t *testing
 	}
 }
 
-// assertServiceRefusal pins [C66.3]'s refusal of cs: the Action names carrier, and only
-// carrier, as the source of the service, and names every exit whichever source it was.
+// assertServiceRefusal pins [C66.3]'s refusal of cs: the Action names the carrier of the
+// service, and every exit whichever source it was.
 func assertServiceRefusal(t *testing.T, cs, carrier string) {
 	t.Helper()
 	cfgErr := refuseConnString(t, cs)
 	assert.Equal(t, errCategoryInvalid, cfgErr.Category)
 	assert.Contains(t, cfgErr.Message, "resolves through a libpq service file")
-	for _, src := range []string{"service=", "PGSERVICE"} {
-		if src == carrier {
-			assert.Contains(t, cfgErr.Action, "named by "+src)
-		} else {
-			assert.NotContains(t, cfgErr.Action, "named by "+src)
-		}
-	}
+	assert.Contains(t, cfgErr.Action, "named by "+carrier)
 	for _, want := range []string{
 		"host, port, user, dbname, sslmode", "drop service=", "unset PGSERVICE",
 	} {

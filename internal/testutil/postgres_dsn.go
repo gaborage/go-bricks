@@ -3,7 +3,8 @@ package testutil
 const (
 	// socketHost is the unix-socket directory these fixtures resolve to.
 	socketHost        = "/var/run/postgresql"
-	tcpHostUserDSN    = "host=db.example.com user=u"
+	tcpHost           = "db.example.com"
+	tcpHostUserDSN    = "host=" + tcpHost + " user=u"
 	socketUserDSN     = "host=" + socketHost + " user=u"
 	envPGHOST         = "PGHOST"
 	envPGSSLMODE      = "PGSSLMODE"
@@ -108,62 +109,47 @@ var PostgresSSLEnvTLSCases = []PostgresSSLEnvTLSCase{
 }
 
 const (
-	envPGSERVICE     = "PGSERVICE"
-	serviceDSNSource = "service="
-	serviceTCPHost   = "db.internal"
-	serviceTCPDSN    = "host=" + serviceTCPHost + " user=u"
-	serviceClaimDSN  = "service=" + PostgresServiceName + " sslmode=" + sslModeRequire
+	envPGSERVICE       = "PGSERVICE"
+	serviceDSNSource   = "service="
+	serviceName        = "svc"
+	serviceClaimDSN    = "service=" + serviceName + " sslmode=" + sslModeRequire
+	serviceEnvClaimDSN = "user=u sslmode=" + sslModeRequire
 )
-
-// PostgresServiceName is the one service PostgresServiceFileBody defines.
-const PostgresServiceName = "svc"
 
 // PostgresServiceFileBody is the service file the pgx oracle writes. Its service names a
 // unix-socket host, so a DSN that resolves through it dials the socket with TLS skipped.
-const PostgresServiceFileBody = "[" + PostgresServiceName + "]\nhost=" + socketHost + "\nuser=u\n"
-
-// PgxServiceOutcome is what pgconn.ParseConfig makes of a PostgresServiceCase when
-// PostgresServiceFileBody is the service file in effect.
-type PgxServiceOutcome int
-
-const (
-	// PgxServiceSocket: the service's socket host wins, over PGHOST too, and TLSConfig is nil.
-	PgxServiceSocket PgxServiceOutcome = iota + 1
-	// PgxServiceTCPHost: pgx dials the DSN's own TCP host.
-	PgxServiceTCPHost
-	// PgxServiceUnresolved: pgx looks up a service the file does not define and refuses the DSN.
-	PgxServiceUnresolved
-)
+const PostgresServiceFileBody = "[" + serviceName + "]\nhost=" + socketHost + "\nuser=u\n"
 
 // PostgresServiceCase is one DSN+env combination whose libpq service resolution pgx and the
 // config seam must agree on. Refuse is the source the config refusal names as carrying the
-// service (service= or PGSERVICE), empty when the seam accepts. Env entries are applied with
-// t.Setenv on a hermetic PG* env.
+// service (service= or PGSERVICE), empty when the seam accepts. PgxHost is the host
+// pgconn.ParseConfig resolves under PostgresServiceFileBody, empty when pgx refuses the DSN.
+// Env entries are applied with t.Setenv on a hermetic PG* env.
 type PostgresServiceCase struct {
-	Name   string
-	DSN    string
-	Env    [][2]string
-	Refuse string
-	Pgx    PgxServiceOutcome
+	Name    string
+	DSN     string
+	Env     [][2]string
+	Refuse  string
+	PgxHost string
 }
 
 // PostgresServiceCases is shared between config's service-rule tests and
 // database/postgresql's pgconn.ParseConfig oracle, so the service merge cannot silently
 // drift from a pgx bump.
 var PostgresServiceCases = []PostgresServiceCase{
-	{Name: "dsn_service_without_pghost", DSN: serviceClaimDSN, Refuse: serviceDSNSource, Pgx: PgxServiceSocket},
-	{Name: "dsn_service_over_tcp_pghost", DSN: serviceClaimDSN, Env: [][2]string{{envPGHOST, serviceTCPHost}}, Refuse: serviceDSNSource, Pgx: PgxServiceSocket},
-	{Name: "pgservice_without_pghost", DSN: "user=u sslmode=" + sslModeRequire, Env: [][2]string{{envPGSERVICE, PostgresServiceName}}, Refuse: envPGSERVICE, Pgx: PgxServiceSocket},
-	{Name: "pgservice_over_tcp_pghost", DSN: "user=u sslmode=" + sslModeRequire, Env: [][2]string{{envPGSERVICE, PostgresServiceName}, {envPGHOST, serviceTCPHost}}, Refuse: envPGSERVICE, Pgx: PgxServiceSocket},
+	{Name: "dsn_service_without_pghost", DSN: serviceClaimDSN, Refuse: serviceDSNSource, PgxHost: socketHost},
+	{Name: "dsn_service_over_tcp_pghost", DSN: serviceClaimDSN, Env: [][2]string{{envPGHOST, tcpHost}}, Refuse: serviceDSNSource, PgxHost: socketHost},
+	{Name: "pgservice_without_pghost", DSN: serviceEnvClaimDSN, Env: [][2]string{{envPGSERVICE, serviceName}}, Refuse: envPGSERVICE, PgxHost: socketHost},
+	{Name: "pgservice_over_tcp_pghost", DSN: serviceEnvClaimDSN, Env: [][2]string{{envPGSERVICE, serviceName}, {envPGHOST, tcpHost}}, Refuse: envPGSERVICE, PgxHost: socketHost},
 	// The DSN's own service= is the carrier; PGSERVICE behind it is shadowed, not named.
-	{Name: "dsn_service_beside_pgservice", DSN: serviceClaimDSN, Env: [][2]string{{envPGSERVICE, "other"}}, Refuse: serviceDSNSource, Pgx: PgxServiceSocket},
-	{Name: "uri_query_service", DSN: "postgres:///db?service=" + PostgresServiceName + "&sslmode=" + sslModeRequire, Refuse: serviceDSNSource, Pgx: PgxServiceSocket},
+	{Name: "dsn_service_beside_pgservice", DSN: serviceClaimDSN, Env: [][2]string{{envPGSERVICE, "other"}}, Refuse: serviceDSNSource, PgxHost: socketHost},
+	{Name: "uri_query_service", DSN: "postgres:///db?service=" + serviceName + "&sslmode=" + sslModeRequire, Refuse: serviceDSNSource, PgxHost: socketHost},
 	// The DSN host wins, but the service still supplies whatever the DSN leaves unset.
-	{Name: "dsn_host_beside_dsn_service", DSN: "host=" + serviceTCPHost + " service=" + PostgresServiceName, Refuse: serviceDSNSource, Pgx: PgxServiceTCPHost},
+	{Name: "dsn_host_beside_dsn_service", DSN: "host=" + tcpHost + " service=" + serviceName, Refuse: serviceDSNSource, PgxHost: tcpHost},
 	// A present DSN key, empty included, shadows PGSERVICE; pgx then looks up the empty name.
-	{Name: "empty_dsn_service_shadows_pgservice", DSN: serviceTCPDSN + " service=''", Env: [][2]string{{envPGSERVICE, PostgresServiceName}}, Pgx: PgxServiceUnresolved},
+	{Name: "empty_dsn_service_shadows_pgservice", DSN: tcpHostUserDSN + " service=''", Env: [][2]string{{envPGSERVICE, serviceName}}},
 	// Negative pin: pgx skips whitespace after '=', so the next pair becomes the service name.
-	{Name: "empty_service_swallows_next_pair", DSN: "service= " + serviceTCPDSN, Env: [][2]string{{envPGSERVICE, PostgresServiceName}}, Refuse: serviceDSNSource, Pgx: PgxServiceUnresolved},
-	{Name: "dsn_servicefile_without_service", DSN: "servicefile=/x/pg_service.conf " + serviceTCPDSN, Pgx: PgxServiceTCPHost},
-	{Name: "pgservicefile_without_service", DSN: serviceTCPDSN, Env: [][2]string{{"PGSERVICEFILE", "/x"}}, Pgx: PgxServiceTCPHost},
+	{Name: "empty_service_swallows_next_pair", DSN: "service= " + tcpHostUserDSN, Env: [][2]string{{envPGSERVICE, serviceName}}, Refuse: serviceDSNSource},
+	{Name: "dsn_servicefile_without_service", DSN: "servicefile=/x/pg_service.conf " + tcpHostUserDSN, PgxHost: tcpHost},
+	{Name: "pgservicefile_without_service", DSN: tcpHostUserDSN, Env: [][2]string{{"PGSERVICEFILE", "/x"}}, PgxHost: tcpHost},
 }

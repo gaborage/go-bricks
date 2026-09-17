@@ -657,9 +657,9 @@ func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 // validatePostgreSQLFields fails closed on the PostgreSQL shapes pgx would silently discard
 // or downgrade: the database.tls blocks of ADR-062, and an empty host, which is where the
 // ADR-050 amendment's one identity exception lives. Check order is load-bearing:
-// connectionstring short-circuits (into its own service rule, [C66.3], then two DSN-host
-// rules, [C65.2]), then the empty-host refusal, then the mode allowlist, then the
-// unix-socket-host refusal, then the material/mode coherence rule, then the cert/key pairing.
+// connectionstring short-circuits (into validatePostgreSQLConnectionString), then the
+// empty-host refusal, then the mode allowlist, then the unix-socket-host refusal, then the
+// material/mode coherence rule, then the cert/key pairing.
 func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 	if cfg.ConnectionString != "" {
 		if cfg.TLS.Mode != "" || cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" || cfg.TLS.CAFile != "" {
@@ -699,8 +699,6 @@ func validatePostgreSQLConnectionString(cs string) error {
 		return nil
 	}
 
-	// Ahead of both host rules and blind to PGHOST: pgx merges the service file over the
-	// environment, so the host the rules below would judge is not the one pgx dials.
 	if source := pgServiceSource(&scan); source != "" {
 		return &ConfigError{
 			Category: errCategoryInvalid,
@@ -746,16 +744,16 @@ func validatePostgreSQLConnectionString(cs string) error {
 	return nil
 }
 
-// pgServiceSource names what makes pgx resolve a libpq service, or "" when nothing does. A
-// present DSN key shadows PGSERVICE, so an empty service= names no service at all.
+// pgServiceSource names what makes pgx resolve a libpq service, or "" when nothing does.
 func pgServiceSource(scan *pgDSNScan) string {
+	service, fromEnv := scan.service.over(os.Getenv("PGSERVICE"))
 	switch {
-	case scan.service.value != "":
-		return "service= in the connection string"
-	case !scan.service.set && os.Getenv("PGSERVICE") != "":
+	case service == "":
+		return ""
+	case fromEnv:
 		return "PGSERVICE in the environment"
 	}
-	return ""
+	return "service= in the connection string"
 }
 
 // pgTLSClaim is one key that claims TLS after the merge. The arm decides the exit, so it
@@ -812,17 +810,15 @@ func pgTLSOnSocketAction(claims []pgTLSClaim) string {
 func effectivePostgresTLSClaims(scan *pgDSNScan) []pgTLSClaim {
 	var claims []pgTLSClaim
 	for _, k := range pgSSLEnvKeys {
-		st := scan.tls.setting(k.dsn)
-		var value string
-		claim := pgTLSClaim{dsn: k.dsn}
-		if st.set {
-			value, claim.source = st.value, scan.claimSource(k.dsn)
-		} else if env := os.Getenv(k.env); env != "" {
-			value, claim.source, claim.isEnv = env, k.env, true
+		value, fromEnv := scan.tls.setting(k.dsn).over(os.Getenv(k.env))
+		if !pgTLSKeyClaims(k.dsn, value) {
+			continue
 		}
-		if claim.source != "" && pgTLSKeyClaims(k.dsn, value) {
-			claims = append(claims, claim)
+		claim := pgTLSClaim{source: scan.claimSource(k.dsn), dsn: k.dsn, isEnv: fromEnv}
+		if fromEnv {
+			claim.source = k.env
 		}
+		claims = append(claims, claim)
 	}
 	return claims
 }
