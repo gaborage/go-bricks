@@ -688,10 +688,11 @@ func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 }
 
 // validatePostgreSQLConnectionString refuses a DSN on the two axes the typed fields above are
-// refused on ([C65.2]): a resolved host that names nothing, and a unix-socket host under a TLS
-// claim. An untokenizable DSN passes through — this seam must never refuse what pgx accepts.
-// PGHOST is consulted only when the DSN names no host key at all; an empty host= key still
-// shadows it, mirroring pgx's own precedence.
+// refused on ([C65.2], widened by [C66.1]): a resolved host that names nothing, and a
+// unix-socket host under a TLS claim. An untokenizable DSN passes through — this seam must
+// never refuse what pgx accepts. PGHOST and the five PGSSL* variables are consulted only
+// when the DSN names no matching key at all; an empty DSN key still shadows env, mirroring
+// pgx's own precedence.
 func validatePostgreSQLConnectionString(cs string) error {
 	scan, ok := scanPostgresDSN(cs)
 	if !ok {
@@ -703,7 +704,7 @@ func validatePostgreSQLConnectionString(cs string) error {
 	}
 	entries := pgHostEntries(effective)
 
-	// Rule 1 is unconditional — never gated on claimsTLS, since a claim can coexist with a
+	// Rule 1 is unconditional — never gated on the TLS claim, since a claim can coexist with a
 	// plaintext dial (sslnegotiation=direct with sslmode=disable) and gating would reopen
 	// exactly the hole rule 2 closes.
 	if slices.Contains(entries, "") {
@@ -717,15 +718,85 @@ func validatePostgreSQLConnectionString(cs string) error {
 		}
 	}
 
-	if scan.claimsTLS && slices.ContainsFunc(entries, isUnixSocketHost) {
+	claims := effectivePostgresTLSClaims(&scan)
+	if len(claims) > 0 && slices.ContainsFunc(entries, isUnixSocketHost) {
 		return &ConfigError{
 			Category: errCategoryInvalid,
 			Field:    fieldDatabaseConnectionString,
 			Message:  "connection string names TLS on a unix-socket host, where pgx skips TLS",
-			Action:   "drop the TLS claim from the connection string, or use a TCP host",
+			Action:   pgTLSOnSocketAction(claims),
 		}
 	}
 	return nil
+}
+
+// pgTLSClaim is one key that claims TLS after the merge. The arm decides the exit, so it
+// travels with the source; source and dsn are key NAMES, never the values behind them.
+type pgTLSClaim struct {
+	source string
+	dsn    string
+	isEnv  bool
+}
+
+// exit is the remedy for one claim, worded for the arm it arrived on. The arms differ
+// because the merge is DSN-over-env: an env-sourced claim is only reachable when the DSN
+// names no such key, so there is nothing in the string to drop, and dropping a key that
+// shadows the variable would expose it instead — that arm's DSN-side exit is to ADD a
+// non-claiming value.
+func (c pgTLSClaim) exit() string {
+	if c.isEnv {
+		return "Unset that variable, or shadow it with a non-claiming " + c.dsn +
+			" in the connection string (a present key, empty included, wins over the environment)"
+	}
+	return "Drop that key from the connection string or give it a non-claiming value"
+}
+
+// pgTLSOnSocketAction names EVERY claiming source with its own exit, because each one
+// refuses on its own: clearing the first would only surface the next at the following
+// boot. The TCP-host exit is the one that clears them all, and both forms end with the
+// judged surface.
+func pgTLSOnSocketAction(claims []pgTLSClaim) string {
+	dsnKeys := make([]string, 0, len(pgSSLEnvKeys))
+	envKeys := make([]string, 0, len(pgSSLEnvKeys))
+	for _, k := range pgSSLEnvKeys {
+		dsnKeys = append(dsnKeys, k.dsn)
+		envKeys = append(envKeys, k.env)
+	}
+	judged := " Judged: " + strings.Join(dsnKeys, "/") + " in the connection string, " +
+		strings.Join(envKeys, "/") + " in the environment"
+
+	if len(claims) == 1 {
+		return "this one arrived through " + claims[0].source + ". " + claims[0].exit() +
+			", or use a TCP host." + judged
+	}
+	per := make([]string, 0, len(claims))
+	for _, c := range claims {
+		per = append(per, c.source+" — "+c.exit())
+	}
+	return "several claims are in effect and each refuses on its own: " + strings.Join(per, "; ") +
+		"; or use a TCP host, which clears them all." + judged
+}
+
+// effectivePostgresTLSClaims merges each PGSSL* variable under the DSN with pgx
+// precedence (DSN key present, empty included, wins; empty env is ignored) and
+// returns every claiming source in the scan's key order — the DSN keyword or the
+// environment variable, per key.
+func effectivePostgresTLSClaims(scan *pgDSNScan) []pgTLSClaim {
+	var claims []pgTLSClaim
+	for _, k := range pgSSLEnvKeys {
+		st := scan.tls.setting(k.dsn)
+		var value string
+		claim := pgTLSClaim{dsn: k.dsn}
+		if st.set {
+			value, claim.source = st.value, scan.claimSource(k.dsn)
+		} else if env := os.Getenv(k.env); env != "" {
+			value, claim.source, claim.isEnv = env, k.env, true
+		}
+		if claim.source != "" && pgTLSKeyClaims(k.dsn, value) {
+			claims = append(claims, claim)
+		}
+	}
+	return claims
 }
 
 // validatePostgreSQLTLSCoherence refuses a database.tls block pgx would not honor: TLS claimed

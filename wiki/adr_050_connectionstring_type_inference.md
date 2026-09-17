@@ -3,6 +3,21 @@
 **Status:** Accepted
 **Date:** 2026-08-05
 
+> **Amended (2026-09-16)** — clause `[C66.1]` closes the `PGSSL*` residual `[C65.2]`
+> left open. `validatePostgreSQLConnectionString` merges `PGSSLMODE`,
+> `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY` and `PGSSLNEGOTIATION` under the DSN
+> with pgx's own precedence: a present DSN key, empty included, shadows the
+> variable; an empty variable is ignored. When the effective host (DSN, else
+> `PGHOST`) is a unix-socket path and that merged claim is TLS, rule 2 refuses
+> and the Action names every key that claims, each with the exits that close
+> its arm: an env-sourced claim is unset or shadowed by a non-claiming DSN
+> key — never by dropping one, since the rule reached the variable only
+> because no such key was there. Since non-empty material claims as surely as
+> a mode, several can be in effect and each refuses alone, so naming only the
+> first would send the operator round the loop again. `PGSERVICE`, `service=` and
+> service files remain unconsulted (gaborage/go-bricks#1644). See
+> [migrations.md](migrations.md) `[C66.1]`.
+>
 > **Amended (2026-09-13)** — two clauses, `[C65.3]` (inference widening) and `[C65.2]`
 > (connection-string host rules):
 >
@@ -40,9 +55,9 @@
 > host that resolves to nothing and, on the same axis as `[C65.1]`, a resolved host that is a
 > unix-socket entry while the DSN claims TLS. `PGHOST` is honored only when the DSN carries
 > no `host` key at all: an empty `host=` key still shadows it, narrower than "any source
-> names a value" — pgx's own precedence, not this amendment's choice. `PGSERVICE`, `service=`
-> and service files are never consulted, in either direction, and the `PGSSL*` environment
-> variables are likewise never judged; those are documented gaps, not decisions closed here.
+> names a value" — pgx's own precedence, not this amendment's choice. The five `PGSSL*`
+> variables are judged the same way, per key, by `[C66.1]`. `PGSERVICE`, `service=`
+> and service files are never consulted, in either direction; that gap is #1644.
 > `sslnegotiation=direct` counts as a TLS claim even paired with `sslmode=disable`/`allow`,
 > where pgx itself would connect in plaintext and libpq refuses the combination — a claim
 > only ever adds a refusal on this seam, never suppresses one — while empty TLS material
@@ -50,22 +65,20 @@
 > `scanPostgresDSN` cannot tokenize passes through unjudged, because this seam must never
 > refuse what pgx accepts.
 >
-> **What the two clauses leave open.** The unjudged `PGSSL*` variables are not merely out of
-> scope: `PGSSLMODE=verify-full` (or `PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY`) beside
-> `connectionstring: "host=/var/run/postgresql user=u"` is accepted here and then dialed by pgx
-> with `TLSConfig == nil` — a residual instance of the very defect clause `[C65.2]` closes,
-> kept out of scope deliberately because `claimsTLS` reads DSN text only, and asymmetric with
-> `PGHOST`, which this seam does read; it is tracked as gaborage/go-bricks#1632 and pinned as
-> accepted by `TestApplyDatabasePoolDefaultsAcceptsPGSSLEnvTLSClaimOnSocketDSN`, so a change of
-> posture flips a test. The other shape still unjudged is a `connectionstring` matching no URI
-> prefix that the keyword-form test does not claim — it does not tokenize, or its keys are not
-> libpq keyword names, as an Oracle TNS descriptor's are not — which stays untyped. It is then
-> refused as untyped rather than dialed only where nothing else supplies the vendor: an explicit
-> `type:` still types the section (`normalizeWithConnectionString` keeps an `oracle` type on such
-> a DSN, and only a contradicting inference errors), and a consumer supplying its own
-> `Options.DatabaseConnector` bypasses the builder's untyped refusal entirely. The 2026-09-07 amendment's tracked fail-open (a
-> host-less raw DSN, #1551) is closed by these two clauses. See
-> [migrations.md](migrations.md) `[C65.3]` and `[C65.2]`, gaborage/go-bricks#1551.
+> **What the two clauses leave open.** The `PGSSL*` residual tracked as
+> gaborage/go-bricks#1632 is closed by the 2026-09-16 amendment (`[C66.1]`).
+> A `connectionstring` matching no URI prefix that the keyword-form test does
+> not claim — it does not tokenize, or its keys are not libpq keyword names, as
+> an Oracle TNS descriptor's are not — stays untyped. It is then refused as
+> untyped rather than dialed only where nothing else supplies the vendor: an
+> explicit `type:` still types the section (`normalizeWithConnectionString`
+> keeps an `oracle` type on such a DSN, and only a contradicting inference
+> errors), and a consumer supplying its own `Options.DatabaseConnector` bypasses
+> the builder's untyped refusal entirely. `PGSERVICE`/`service=`/service files
+> can still supply a socket host this rule never sees (#1644). The 2026-09-07
+> amendment's tracked fail-open (a host-less raw DSN, #1551) is closed by these
+> two clauses. See [migrations.md](migrations.md) `[C65.3]`, `[C65.2]` and
+> `[C66.1]`, gaborage/go-bricks#1551.
 >
 > **Amended (2026-09-07):** The connect seam's "identity is the dial's job"
 > posture (stated in the 2026-08-14 amendment below and in Consequences, "the

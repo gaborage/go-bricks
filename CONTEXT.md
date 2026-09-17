@@ -17,7 +17,8 @@ The raw DSN a database section's `connectionstring` key carries, passed to the d
 unparsed apart from type inference (ADR-050) and, for PostgreSQL, a scan of its resolved
 host and its own TLS claim (`[C65.2]`: a host that names nothing is refused, and so is a
 unix-socket host under a TLS claim — `sslmode` of `require`/`verify-ca`/`verify-full`,
-`sslnegotiation=direct`, or non-empty `sslrootcert`/`sslcert`/`sslkey`) — the seam never
+`sslnegotiation=direct`, or non-empty `sslrootcert`/`sslcert`/`sslkey`, from the DSN
+or from the matching `PGSSL*` variable (`[C66.1]`) — the seam never
 otherwise parses it.
 _Avoid_: conn string, database URL
 

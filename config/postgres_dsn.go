@@ -6,11 +6,123 @@ import (
 	"strings"
 )
 
-// pgDSNScan is a connection string's own host and TLS claim; hostSet includes an empty host, which shadows PGHOST.
+// pgSSLEnvKey pairs a libpq PGSSL* environment variable with its DSN keyword.
+// pgx's parseEnvSettings maps these five (skipping empty values) and mergeSettings
+// copies DSN over env, so a present DSN key — empty included — shadows the variable.
+type pgSSLEnvKey struct {
+	env string
+	dsn string
+}
+
+const (
+	pgDSNSSLMode        = "sslmode"
+	pgDSNSSLRootCert    = "sslrootcert"
+	pgDSNSSLCert        = "sslcert"
+	pgDSNSSLKey         = "sslkey"
+	pgDSNSSLNegotiation = "sslnegotiation"
+	// pgDSNSSLAlias is the URI-only spelling pgx rewrites into sslmode=require.
+	pgDSNSSLAlias = "ssl"
+)
+
+// pgSSLEnvKeys is the production table of TLS-claim env names. Hermetic test
+// helpers reuse it so a newly judged variable cannot slip past the scrub.
+var pgSSLEnvKeys = []pgSSLEnvKey{
+	{env: "PGSSLMODE", dsn: pgDSNSSLMode},
+	{env: "PGSSLROOTCERT", dsn: pgDSNSSLRootCert},
+	{env: "PGSSLCERT", dsn: pgDSNSSLCert},
+	{env: "PGSSLKEY", dsn: pgDSNSSLKey},
+	{env: "PGSSLNEGOTIATION", dsn: pgDSNSSLNegotiation},
+}
+
+// pgDSNSetting is one DSN key's presence and value; set includes an empty value, which shadows env.
+type pgDSNSetting struct {
+	set   bool
+	value string
+}
+
+// pgDSNTLSKeys is the five TLS keys scanPostgresDSN records presence for, parallel to pgSSLEnvKeys.
+type pgDSNTLSKeys struct {
+	sslmode        pgDSNSetting
+	sslrootcert    pgDSNSetting
+	sslcert        pgDSNSetting
+	sslkey         pgDSNSetting
+	sslnegotiation pgDSNSetting
+}
+
+// pgDSNScan is a connection string's own host and TLS-key presence; hostSet includes an empty host, which shadows PGHOST.
 type pgDSNScan struct {
-	hostSet   bool
-	host      string
-	claimsTLS bool
+	hostSet bool
+	host    string
+	tls     pgDSNTLSKeys
+	// sslAliasOwnsClaim records that the ssl=true rewrite, and not an sslmode the URI
+	// spelled itself, is what makes the effective sslmode claim TLS.
+	sslAliasOwnsClaim bool
+}
+
+// claimSource is the key the DSN TEXT carries for a merged TLS key, so the refusal names
+// something the operator can find in the string: a sslmode written by the URI ssl=true
+// alias is reported as ssl, while an sslmode the URI claims TLS with keeps its own
+// spelling even when the alias later overwrote its value.
+func (s *pgDSNScan) claimSource(dsnKey string) string {
+	if dsnKey == pgDSNSSLMode && s.sslAliasOwnsClaim {
+		return pgDSNSSLAlias
+	}
+	return dsnKey
+}
+
+func pgDSNSettingOf(settings map[string]string, key string) pgDSNSetting {
+	value, set := settings[key]
+	return pgDSNSetting{set: set, value: value}
+}
+
+func pgDSNTLSKeysFrom(settings map[string]string) pgDSNTLSKeys {
+	return pgDSNTLSKeys{
+		sslmode:        pgDSNSettingOf(settings, pgDSNSSLMode),
+		sslrootcert:    pgDSNSettingOf(settings, pgDSNSSLRootCert),
+		sslcert:        pgDSNSettingOf(settings, pgDSNSSLCert),
+		sslkey:         pgDSNSettingOf(settings, pgDSNSSLKey),
+		sslnegotiation: pgDSNSettingOf(settings, pgDSNSSLNegotiation),
+	}
+}
+
+func (t *pgDSNTLSKeys) setting(dsn string) pgDSNSetting {
+	switch dsn {
+	case pgDSNSSLMode:
+		return t.sslmode
+	case pgDSNSSLRootCert:
+		return t.sslrootcert
+	case pgDSNSSLCert:
+		return t.sslcert
+	case pgDSNSSLKey:
+		return t.sslkey
+	case pgDSNSSLNegotiation:
+		return t.sslnegotiation
+	default:
+		return pgDSNSetting{}
+	}
+}
+
+// pgTLSKeyClaims is the unchanged [C65.2] rule 2 claim test, applied to one merged key.
+func pgTLSKeyClaims(dsnKey, value string) bool {
+	switch dsnKey {
+	case pgDSNSSLMode:
+		return slices.Contains(pgTLSMandatorySSLModes, value)
+	case pgDSNSSLNegotiation:
+		return value == "direct"
+	default:
+		return value != ""
+	}
+}
+
+// dsnClaimsTLS is the DSN-text claim, with no environment: scanner tests stay hermetic.
+func (s *pgDSNScan) dsnClaimsTLS() bool {
+	for _, k := range pgSSLEnvKeys {
+		st := s.tls.setting(k.dsn)
+		if st.set && pgTLSKeyClaims(k.dsn, st.value) {
+			return true
+		}
+	}
+	return false
 }
 
 // scanPostgresDSN mirrors pgx v5 pgconn ParseConfig's tokenizers, without its file and environment reads.
@@ -19,9 +131,9 @@ func scanPostgresDSN(cs string) (pgDSNScan, bool) {
 		return pgDSNScan{}, false
 	}
 	var settings map[string]string
-	var ok bool
+	var aliasOwnsClaim, ok bool
 	if body, isURI := pgURIBody(cs); isURI {
-		settings, ok = pgURISettings(body)
+		settings, aliasOwnsClaim, ok = pgURISettings(body)
 	} else {
 		settings, ok = pgKeywordSettings(cs)
 	}
@@ -30,10 +142,10 @@ func scanPostgresDSN(cs string) (pgDSNScan, bool) {
 	}
 	host, hostSet := settings["host"]
 	return pgDSNScan{
-		hostSet: hostSet,
-		host:    host,
-		claimsTLS: slices.Contains(pgTLSMandatorySSLModes, settings["sslmode"]) || settings["sslnegotiation"] == "direct" ||
-			settings["sslrootcert"] != "" || settings["sslcert"] != "" || settings["sslkey"] != "",
+		hostSet:           hostSet,
+		host:              host,
+		tls:               pgDSNTLSKeysFrom(settings),
+		sslAliasOwnsClaim: aliasOwnsClaim,
 	}, true
 }
 
@@ -46,26 +158,27 @@ func pgURIBody(cs string) (string, bool) {
 }
 
 // pgURISettings mirrors pgx v5 pgconn parseURLSettings for the host and query settings.
-func pgURISettings(p string) (map[string]string, bool) {
-	settings := make(map[string]string)
+func pgURISettings(p string) (settings map[string]string, aliasOwnsClaim, ok bool) {
+	settings = make(map[string]string)
 	if i := strings.IndexAny(p, "@/"); i >= 0 && p[i] == '@' {
 		p = p[i+1:]
 	}
 	hosts, p, ok := pgURIHosts(p)
 	if !ok {
-		return nil, false
+		return nil, false, false
 	}
 	if hosts != "" {
-		host, ok := pgURIDecode(hosts)
-		if !ok {
-			return nil, false
+		host, decoded := pgURIDecode(hosts)
+		if !decoded {
+			return nil, false, false
 		}
 		settings["host"] = host
 	}
 	if i := strings.IndexByte(p, '?'); i >= 0 {
-		return settings, pgURIQuery(p[i+1:], settings)
+		aliasOwnsClaim, ok = pgURIQuery(p[i+1:], settings)
+		return settings, aliasOwnsClaim, ok
 	}
-	return settings, true
+	return settings, false, true
 }
 
 // pgURIHosts returns the raw comma-joined host list of a URI authority and the unread rest.
@@ -106,33 +219,39 @@ func pgIndexAnyOrLen(s, chars string) int {
 	return len(s)
 }
 
-// pgURIQuery mirrors pgx v5 pgconn parseURLQueryParams.
-func pgURIQuery(params string, settings map[string]string) bool {
+// pgURIQuery reads a URI's query pairs as pgx v5 pgconn parseURLQueryParams does, as far as
+// this scan judges: last occurrence wins, and ssl=true writes sslmode=require when it is the
+// later of the two spellings. aliasOwnsClaim reports that the rewrite, not an sslmode the URI
+// spelled itself, is what claims TLS — pgx keeps the same provenance in its parseURLMeta.
+// pgx additionally deletes the ssl key, which nothing here reads.
+func pgURIQuery(params string, settings map[string]string) (aliasOwnsClaim, ok bool) {
 	sslWasLast := false
 	for params != "" {
 		var pair string
 		pair, params, _ = strings.Cut(params, "&")
 		rawKey, rawValue, found := strings.Cut(pair, "=")
 		if !found || strings.Contains(rawValue, "=") {
-			return false
+			return false, false
 		}
 		key, keyOK := pgURIDecode(rawKey)
 		value, valueOK := pgURIDecode(rawValue)
 		if !keyOK || !valueOK {
-			return false
+			return false, false
 		}
 		switch key {
-		case "ssl":
+		case pgDSNSSLAlias:
 			sslWasLast = true
-		case "sslmode":
+		case pgDSNSSLMode:
 			sslWasLast = false
 		}
 		settings[key] = value
 	}
-	if sslWasLast && settings["ssl"] == "true" {
-		settings["sslmode"] = sslModeRequire
+	if sslWasLast && settings[pgDSNSSLAlias] == "true" {
+		written := settings[pgDSNSSLMode]
+		settings[pgDSNSSLMode] = sslModeRequire
+		return !pgTLSKeyClaims(pgDSNSSLMode, written), true
 	}
-	return true
+	return false, true
 }
 
 // pgURIDecode mirrors pgx v5 pgconn uriDecode.

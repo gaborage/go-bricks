@@ -347,6 +347,44 @@ func TestPgxResolvesSameHostAsConfigScanner(t *testing.T) {
 	}
 }
 
+func hermeticPgxEnv(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PGSERVICE", "")
+	t.Setenv("PGSERVICEFILE", home+"/pg_service.conf")
+	t.Setenv("PGPASSFILE", home+"/pgpass")
+	t.Setenv("PGHOST", "")
+	for _, k := range []string{"PGSSLMODE", "PGSSLROOTCERT", "PGSSLCERT", "PGSSLKEY", "PGSSLNEGOTIATION"} {
+		t.Setenv(k, "")
+	}
+}
+
+// TestPgxTLSConfigAgreesWithConfigTLSEnvFixtures uses pgx as the oracle for
+// testutil.PostgresSSLEnvTLSCases: every fixture the config seam refuses is a
+// unix-socket dial whose TLSConfig is nil, and every TCP-host fixture that
+// carries a claim pgx honors has a non-nil TLSConfig (gaborage/go-bricks#1632).
+func TestPgxTLSConfigAgreesWithConfigTLSEnvFixtures(t *testing.T) {
+	hermeticPgxEnv(t)
+
+	for _, c := range testutil.PostgresSSLEnvTLSCases {
+		t.Run(c.Name, func(t *testing.T) {
+			for _, e := range c.Env {
+				t.Setenv(e[0], e[1])
+			}
+			pc, err := pgconn.ParseConfig(c.DSN)
+			require.NoError(t, err)
+			if c.Refuse {
+				assert.Nil(t, pc.TLSConfig)
+				return
+			}
+			if c.WantPgxTLS {
+				assert.NotNil(t, pc.TLSConfig)
+			}
+		})
+	}
+}
+
 func TestConnectionNewConnectionSuccess(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
