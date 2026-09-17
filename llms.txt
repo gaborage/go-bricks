@@ -5203,6 +5203,39 @@ provider := &migration.SecretsProvider{
 
 The framework's `migration` module stays AWS-SDK-free; AWS SM lives in the CLI's separate `tools/migration` go.mod.
 
+### Second migration tree and provider decorator
+
+A second tree for the same vendor needs no new API. `BaseConfig` merges over the vendor defaults **per field** — always set `ConfigPath` and `MigrationPath` together (CLI: `--flyway-config` with `--migrations-dir`), and don't name a tree conf `flyway-<vendor>.conf`. The `*For` methods use a `Config` as given (no merge), so copy the vendor defaults first:
+
+```go
+res, err := migration.MigrateAll(ctx, fm, lister, provider, migration.ActionMigrate, migration.MigrateAllOptions{
+    BaseConfig: &migration.Config{ConfigPath: "flyway/tenant-postgresql.conf", MigrationPath: "migrations/tenant/postgresql"},
+})
+
+controlTree := *fm.DefaultMigrationConfigForVendor("postgresql")
+controlTree.ConfigPath = "flyway/control-plane-postgresql.conf"
+controlTree.MigrationPath = "migrations/control-plane/postgresql"
+controlTree.Audit.Target = "control-plane" // single-database runs only; a BaseConfig Target stamps every tenant
+controlDB, err := provider.DBConfig(ctx, "control-plane")
+if err != nil { return err }
+_, err = fm.MigrateFor(ctx, controlDB, &controlTree) // CLI: --tenant control-plane plus both path flags
+```
+
+The pre-Flyway seam is a decorator `database.DBConfigProvider`: validate or overlay on a copy, or refuse a tenant — `MigrateAll` wraps the error with `%w`, so `errors.Is(r.Err, ErrTenantRefused)` holds on `res.Failed()` entries. It cannot run after Flyway, see the action, or mark a tenant skipped; a pre/post protocol loops over `MigrateFor` itself. For a custom secret-name grammar use `SecretsProvider.NameFor` instead. Full guide: [wiki/multi_tenant_migration.md](wiki/multi_tenant_migration.md#decorating-the-config-provider).
+
+```go
+type guardedProvider struct{ inner database.DBConfigProvider; allowedHosts map[string]bool }
+
+func (p guardedProvider) DBConfig(ctx context.Context, tenantID string) (*config.DatabaseConfig, error) {
+    cfg, err := p.inner.DBConfig(ctx, tenantID)
+    if err != nil { return nil, err }
+    if cfg == nil { return nil, database.ErrNoDatabaseConfig }
+    out := *cfg // never mutate the inner provider's document
+    if !p.allowedHosts[out.Host] { return nil, fmt.Errorf("%w: tenant %q", ErrTenantRefused, tenantID) }
+    return &out, nil
+}
+```
+
 ### Audit Events
 
 Every Flyway `migrate` invocation emits a `migration.applied` audit event. The default path is an OpenTelemetry span (`migration.audit.migration.applied`) plus a structured log record at INFO/ERROR via the framework's `LoggerProvider` — no wiring required. For compliance-grade durable delivery (Kafka/S3/etc.), implement `migration.AuditRecorder`:

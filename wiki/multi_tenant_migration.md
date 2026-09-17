@@ -395,6 +395,156 @@ provider := &migration.SecretsProvider{
 }
 ```
 
+## Running more than one migration tree
+
+The defaults assume one tree per vendor: `flyway/flyway-<vendor>.conf` plus
+`migrations/<vendor>/`. A second tree for the same vendor — for example a
+control-plane tree applied once and a tenant tree applied to every tenant —
+needs no extra API: give each tree its own `migration.Config`.
+
+```go
+fm := migration.NewFlywayMigrator(myCfg, myLogger)
+
+// Tenant tree: MigrateAll merges BaseConfig over each tenant's vendor defaults.
+tenantTree := &migration.Config{
+    ConfigPath:    "flyway/tenant-postgresql.conf",
+    MigrationPath: "migrations/tenant/postgresql",
+}
+res, err := migration.MigrateAll(ctx, fm, lister, provider, migration.ActionMigrate, migration.MigrateAllOptions{
+    BaseConfig: tenantTree,
+    Logger:     myLogger,
+})
+```
+
+> **Always set `ConfigPath` and `MigrationPath` together** (on the CLI,
+> `--flyway-config` and `--migrations-dir`). `BaseConfig` is merged over the
+> vendor defaults field by field, so supplying only `ConfigPath` silently pairs
+> your conf with the default `migrations/<vendor>` directory. For the same
+> reason, don't name a tree-specific conf `flyway-<vendor>.conf`: that basename
+> is the vendor default, so a run that dropped the path still looks correct.
+
+`BaseConfig` paths are used as given for every listed tenant, with no vendor
+interpolation, so in a mixed-vendor fleet each run needs a lister that returns
+only the tenants of the vendor its tree targets.
+
+For a single database, call the `*For` methods directly. They use the `Config`
+exactly as passed, with no merge, so copy the vendor defaults and override:
+
+```go
+controlTree := *fm.DefaultMigrationConfigForVendor("postgresql")
+controlTree.ConfigPath = "flyway/control-plane-postgresql.conf"
+controlTree.MigrationPath = "migrations/control-plane/postgresql"
+controlTree.Audit.Target = "control-plane"
+
+controlDB, err := provider.DBConfig(ctx, "control-plane")
+if err != nil {
+    return err
+}
+if err := fm.ValidateFor(ctx, controlDB, &controlTree); err != nil { // InfoFor has the same shape
+    return err
+}
+_, err = fm.MigrateFor(ctx, controlDB, &controlTree)
+```
+
+`Audit.Target` labels which tree a `migration.applied` event came from; when
+empty it defaults to the database name. Set it on a single-database run only:
+a `BaseConfig` target is stamped on every tenant's event and replaces each
+tenant's database name.
+
+The CLI equivalent uses the same flags on `migrate`, `validate` and `info`.
+`--tenant` addresses one database through the same credential lookup (with
+the default source, the secret `<prefix>control-plane`):
+
+```bash
+# Tenant tree across the fleet
+go-bricks-migrate migrate \
+  --source-url https://control-plane.example.com/api \
+  --aws-region us-east-1 \
+  --flyway-config flyway/tenant-postgresql.conf \
+  --migrations-dir migrations/tenant/postgresql
+
+# Control-plane tree, one database
+go-bricks-migrate migrate \
+  --tenant control-plane \
+  --aws-region us-east-1 \
+  --flyway-config flyway/control-plane-postgresql.conf \
+  --migrations-dir migrations/control-plane/postgresql
+```
+
+The CLI has no flag for `Audit.Target`; its events carry each database name.
+
+## Decorating the config provider
+
+`MigrateAll` resolves each tenant through its `database.DBConfigProvider`
+immediately before running Flyway for that tenant. Wrapping the provider is the
+supported pre-Flyway seam; the CLI wraps its own provider the same way to
+validate each resolved configuration.
+
+```go
+var ErrTenantRefused = errors.New("tenant refused by migration guard")
+
+type guardedProvider struct {
+    inner        database.DBConfigProvider
+    allowedHosts map[string]bool
+}
+
+func (p guardedProvider) DBConfig(ctx context.Context, tenantID string) (*config.DatabaseConfig, error) {
+    cfg, err := p.inner.DBConfig(ctx, tenantID)
+    if err != nil {
+        return nil, err
+    }
+    if cfg == nil {
+        return nil, database.ErrNoDatabaseConfig
+    }
+    out := *cfg // work on a copy: the inner provider may cache its document
+    if !p.allowedHosts[out.Host] {
+        return nil, fmt.Errorf("%w: tenant %q", ErrTenantRefused, tenantID)
+    }
+    return &out, nil
+}
+```
+
+Pass `guardedProvider{inner: provider, allowedHosts: hosts}` to `MigrateAll` in
+place of `provider`.
+
+What a decorator can do:
+
+- Validate or overlay a tenant's coordinates, always on a copy.
+- Refuse a tenant. Flyway never starts for it, and the error lands in that
+  tenant's `TenantResult.Err` wrapped with `%w`, so
+  `errors.Is(r.Err, ErrTenantRefused)` holds on `res.Failed()` entries.
+
+What it cannot do:
+
+- Run anything after Flyway: it returns before Flyway starts.
+- See which action is running. `DBConfig` receives only the context and tenant
+  ID, so build a separate provider per action when the check differs.
+- Mark a tenant "skipped". Any error it returns is a per-tenant failure.
+  Fleet-level outcome reporting is tracked in
+  [#1692](https://github.com/gaborage/go-bricks/issues/1692), and running Flyway
+  as a dedicated migrator identity in
+  [#1694](https://github.com/gaborage/go-bricks/issues/1694).
+
+A caller that needs a pre/post protocol around Flyway — a lock held across its
+own DDL and the Flyway run, say — should loop over tenants and call `MigrateFor`
+itself. `MigrateAll` will not grow per-tenant callbacks; see
+[the rejected interceptor proposal](../.out-of-scope/migrateall-tenant-interceptor.md).
+
+When the need is only a different secret-name grammar, no decorator is needed:
+`SecretsProvider.NameFor` replaces the default `Prefix + tenantID`
+composition. It receives the tenant ID already trimmed and allowlist-validated,
+and `Prefix` is ignored for lookups while it is set (library only; the CLI
+exposes `--secrets-prefix`).
+
+```go
+provider := &migration.SecretsProvider{
+    NameFor: func(tenantID string) (string, error) {
+        return "/prod/platform/" + tenantID + "/db", nil
+    },
+    Fetch: fetcher,
+}
+```
+
 ## Operational notes
 
 - **Idempotency**: Flyway tracks applied migrations in
