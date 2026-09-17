@@ -501,10 +501,9 @@ func (d *Declarations) validateQueueTypeDeclarations() error {
 	return errors.Join(errs...)
 }
 
-// validateExchangeTypes reports every exchange whose Type is neither an AMQP
-// core type nor an "x-" plugin type (x-delayed-message, x-consistent-hash), in
-// sorted order: a misspelled type would otherwise pass startup and fail at the
-// broker on declaration replay.
+var coreExchangeTypes = []string{ExchangeTypeDirect, ExchangeTypeTopic, ExchangeTypeFanout, ExchangeTypeHeaders}
+
+// validateExchangeTypes reports, in sorted order, every exchange the broker would refuse to declare.
 func (d *Declarations) validateExchangeTypes() error {
 	var errs []error
 
@@ -513,19 +512,15 @@ func (d *Declarations) validateExchangeTypes() error {
 		if isKnownExchangeType(exchangeType) {
 			continue
 		}
-		errs = append(errs, fmt.Errorf("exchange %q has unknown type %q: use %s, %s, %s, %s or an x- plugin type",
-			name, exchangeType, ExchangeTypeDirect, ExchangeTypeTopic, ExchangeTypeFanout, ExchangeTypeHeaders))
+		errs = append(errs, fmt.Errorf("exchange %q has unknown type %q: use %s or an x- plugin type",
+			name, exchangeType, strings.Join(coreExchangeTypes, ", ")))
 	}
 
 	return errors.Join(errs...)
 }
 
 func isKnownExchangeType(exchangeType string) bool {
-	switch exchangeType {
-	case ExchangeTypeDirect, ExchangeTypeTopic, ExchangeTypeFanout, ExchangeTypeHeaders:
-		return true
-	}
-	return strings.HasPrefix(exchangeType, "x-")
+	return slices.Contains(coreExchangeTypes, exchangeType) || strings.HasPrefix(exchangeType, "x-")
 }
 
 // validateQuorumQueueShape reports every quorum queue carrying a flag or arg the

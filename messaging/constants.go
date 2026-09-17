@@ -41,6 +41,16 @@ const (
 	genericEventType = "event_type"
 )
 
+// AMQP 0-9-1 core exchange types for ExchangeDeclaration.Type, spelled direct,
+// topic, fanout and headers (case-sensitive). Validate admits these and any
+// "x-" plugin type.
+const (
+	ExchangeTypeDirect  = amqp.ExchangeDirect
+	ExchangeTypeTopic   = amqp.ExchangeTopic
+	ExchangeTypeFanout  = amqp.ExchangeFanout
+	ExchangeTypeHeaders = amqp.ExchangeHeaders
+)
+
 // AMQP declaration/consume argument keys, shared by the declaration
 // constructors in helpers.go, the validators in declarations.go, and the
 // consumer session in registry.go.
@@ -62,14 +72,6 @@ const (
 	// QueueTypeQuorum. Any other value fails Validate.
 	QueueTypeQuorum  = "quorum"
 	QueueTypeClassic = "classic"
-
-	// ExchangeTypeDirect, ExchangeTypeTopic, ExchangeTypeFanout and
-	// ExchangeTypeHeaders are the AMQP 0-9-1 core ExchangeDeclaration.Type
-	// values. Validate admits these and any "x-" plugin type.
-	ExchangeTypeDirect  = amqp.ExchangeDirect
-	ExchangeTypeTopic   = amqp.ExchangeTopic
-	ExchangeTypeFanout  = amqp.ExchangeFanout
-	ExchangeTypeHeaders = amqp.ExchangeHeaders
 
 	// Named x-stream-offset start positions ("next" is the broker default).
 	streamOffsetFirst = "first"

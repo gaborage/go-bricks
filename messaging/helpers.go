@@ -256,12 +256,7 @@ func (d *Declarations) DeclareQueueWithDLQ(name string, dl *DeadLetterSpec) *Que
 		parking = name + ".dlq"
 	}
 
-	d.RegisterExchange(&ExchangeDeclaration{
-		Name:    dlx,
-		Type:    ExchangeTypeFanout,
-		Durable: true,
-		Args:    make(map[string]any),
-	})
+	d.RegisterExchange(newDurableExchange(dlx, ExchangeTypeFanout))
 	queueType := d.resolveDeadLetterQueueType(name, dl.QueueType)
 	parkingQueue := NewQueue(parking)
 	d.applyQueueType(parkingQueue, queueType)

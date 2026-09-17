@@ -1740,7 +1740,7 @@ func TestCloneCopiesQueueTypeError(t *testing.T) {
 	assert.Contains(t, err.Error(), "bogus")
 }
 
-func TestValidateExchangeType(t *testing.T) {
+func TestValidateExchangeTypes(t *testing.T) {
 	tests := []struct {
 		name         string
 		exchangeType string
@@ -1775,7 +1775,7 @@ func TestValidateExchangeType(t *testing.T) {
 	}
 }
 
-func TestValidateExchangeTypeAggregatesEveryViolation(t *testing.T) {
+func TestValidateExchangeTypesAggregatesEveryViolation(t *testing.T) {
 	d := NewDeclarations()
 	d.RegisterExchange(&ExchangeDeclaration{Name: "b.exchange", Type: "topc"})
 	d.RegisterExchange(&ExchangeDeclaration{Name: "a.exchange", Type: ""})
