@@ -42,6 +42,31 @@ func (r *recordingT) FailNow() {
 
 var _ keyStoreReporter = (*recordingT)(nil)
 
+// testifyErrorTrace matches testify's Error Trace label line and its continuation lines.
+// Any other line ends the match, so an unrecognized format removes nothing.
+var testifyErrorTrace = regexp.MustCompile(`(?m)^\tError Trace: *\t.*(?:\n\t +\t.*)*`)
+
+func (r *recordingT) messageText() string {
+	return testifyErrorTrace.ReplaceAllString(strings.Join(r.errors, "\n"), "")
+}
+
+// TestRecordingTMessageTextExcludesErrorTrace keeps checkout paths out of the leak guards (#1708).
+func TestRecordingTMessageTextExcludesErrorTrace(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	rec := &recordingT{}
+
+	func() { assert.Fail(rec, "unexpected key returned", "public key %q should not be found", "stray") }()
+
+	require.Len(t, rec.errors, 1)
+	require.GreaterOrEqual(t, strings.Count(rec.errors[0], thisFile), 2,
+		"premise: the recorded trace spans two frames of this file, so a continuation line is exercised")
+	text := rec.messageText()
+	assert.NotContains(t, text, thisFile)
+	assert.Contains(t, text, "unexpected key returned")
+	assert.Contains(t, text, `public key "stray" should not be found`)
+}
+
 // runAborting runs fn on its own goroutine and reports whether it returned normally.
 // false means fn called FailNow: Goexit unwinds the goroutine, so the line after fn never
 // executes while the deferred close still fires.
@@ -194,14 +219,14 @@ func TestAssertKeyNotFoundRejectsReturnedKey(t *testing.T) {
 				"FailNow distinguishes require (abort) from assert (continue)")
 			require.Len(t, rec.errors, tt.wantErrCount)
 
-			joined := strings.Join(rec.errors, "\n")
+			text := rec.messageText()
 			if tt.wantErrSubstr != "" {
-				assert.Contains(t, joined, tt.wantErrSubstr, "the stray key is named by type")
-				assert.Contains(t, joined, `"stray"`, "the failure must name the key looked up")
+				assert.Contains(t, text, tt.wantErrSubstr, "the stray key is named by type")
+				assert.Contains(t, text, `"stray"`, "the failure must name the key looked up")
 			}
-			assert.NotRegexp(t, keyMaterialDigits, joined,
+			assert.NotRegexp(t, keyMaterialDigits, text,
 				"a long digit run means a key VALUE reached the test log")
-			assert.NotContains(t, joined, "&{",
+			assert.NotContains(t, text, "&{",
 				"Go's pointer-to-struct render shape means a key VALUE reached the test log")
 		})
 	}
