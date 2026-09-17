@@ -657,9 +657,9 @@ func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 // validatePostgreSQLFields fails closed on the PostgreSQL shapes pgx would silently discard
 // or downgrade: the database.tls blocks of ADR-062, and an empty host, which is where the
 // ADR-050 amendment's one identity exception lives. Check order is load-bearing:
-// connectionstring short-circuits (into its own two DSN-host rules, [C65.2]), then the
-// empty-host refusal, then the mode allowlist, then the unix-socket-host refusal, then the
-// material/mode coherence rule, then the cert/key pairing.
+// connectionstring short-circuits (into its own service rule, [C66.3], then two DSN-host
+// rules, [C65.2]), then the empty-host refusal, then the mode allowlist, then the
+// unix-socket-host refusal, then the material/mode coherence rule, then the cert/key pairing.
 func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 	if cfg.ConnectionString != "" {
 		if cfg.TLS.Mode != "" || cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" || cfg.TLS.CAFile != "" {
@@ -687,17 +687,32 @@ func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 	return validatePostgreSQLTLSCoherence(cfg)
 }
 
-// validatePostgreSQLConnectionString refuses a DSN on the two axes the typed fields above are
-// refused on ([C65.2], widened by [C66.1]): a resolved host that names nothing, and a
-// unix-socket host under a TLS claim. An untokenizable DSN passes through — this seam must
-// never refuse what pgx accepts. PGHOST and the five PGSSL* variables are consulted only
-// when the DSN names no matching key at all; an empty DSN key still shadows env, mirroring
-// pgx's own precedence.
+// validatePostgreSQLConnectionString refuses a DSN that resolves through a libpq service
+// ([C66.3]), then on the two axes the typed fields above are refused on ([C65.2], widened by
+// [C66.1]): a resolved host that names nothing, and a unix-socket host under a TLS claim. An
+// untokenizable DSN passes through — this seam must never refuse what pgx accepts. PGSERVICE,
+// PGHOST and the five PGSSL* variables are consulted only when the DSN names no matching key
+// at all; an empty DSN key still shadows env, mirroring pgx's own precedence.
 func validatePostgreSQLConnectionString(cs string) error {
 	scan, ok := scanPostgresDSN(cs)
 	if !ok {
 		return nil
 	}
+
+	// Ahead of both host rules and blind to PGHOST: pgx merges the service file over the
+	// environment, so the host the rules below would judge is not the one pgx dials.
+	if source := pgServiceSource(&scan); source != "" {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    fieldDatabaseConnectionString,
+			Message: "connection string resolves through a libpq service file, which go-bricks does " +
+				"not read, so the host and TLS settings it supplies go unjudged",
+			Action: "the service is named by " + source + ". Inline the service's settings (host, port, " +
+				"user, dbname, sslmode) into the connection string, drop service= from it and unset " +
+				"PGSERVICE: a service is refused whichever of the two names it",
+		}
+	}
+
 	effective := scan.host
 	if !scan.hostSet {
 		effective = os.Getenv("PGHOST")
@@ -714,7 +729,8 @@ func validatePostgreSQLConnectionString(cs string) error {
 			Message: "connection string names no host: pgx resolves an implicit unix socket " +
 				"there and skips TLS",
 			Action: "name a host in the URI authority, a ?host= query parameter, a keyword " +
-				"host=, or the PGHOST environment variable; a PGSERVICE service file is not consulted",
+				"host=, or the PGHOST environment variable; a libpq service (service= or PGSERVICE) " +
+				"is refused",
 		}
 	}
 
@@ -728,6 +744,18 @@ func validatePostgreSQLConnectionString(cs string) error {
 		}
 	}
 	return nil
+}
+
+// pgServiceSource names what makes pgx resolve a libpq service, or "" when nothing does. A
+// present DSN key shadows PGSERVICE, so an empty service= names no service at all.
+func pgServiceSource(scan *pgDSNScan) string {
+	switch {
+	case scan.service.value != "":
+		return "service= in the connection string"
+	case !scan.service.set && os.Getenv("PGSERVICE") != "":
+		return "PGSERVICE in the environment"
+	}
+	return ""
 }
 
 // pgTLSClaim is one key that claims TLS after the merge. The arm decides the exit, so it

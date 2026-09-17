@@ -3,6 +3,25 @@
 **Status:** Accepted
 **Date:** 2026-08-05
 
+> **Amended (2026-09-16, #1644)** — clause `[C66.3]` closes the libpq-service gap
+> `[C65.2]` and `[C66.1]` left open. pgx merges a service file over the environment
+> and under the DSN, so a service's host shadows a TCP `PGHOST`, and its port, user
+> and `sslmode` fill whatever the DSN leaves unset, while this seam reads only the DSN
+> text and the environment. `validatePostgreSQLConnectionString` now refuses, ahead
+> of rules 1 and 2 and whatever `PGHOST` or a DSN `host=` says, a DSN whose effective
+> `service` is non-empty: the DSN's own `service=` when the key is present, otherwise
+> a non-empty `PGSERVICE`. An empty DSN `service=` shadows the variable and names no
+> service, which pgx then fails to look up, so it is refused at parse instead of
+> here. `servicefile=` or `PGSERVICEFILE` with no service named is inert, as in pgx.
+> The refusal is a `ConfigError` on `database.connectionstring`, Category `invalid`;
+> its Action names the one source that carried the service and every exit: inline
+> the service's settings into the DSN, drop `service=`, unset `PGSERVICE`. The seam
+> refuses rather than resolves so config stays file-free: resolving would import
+> pgx's service-file search path (`servicefile`, `PGSERVICEFILE`,
+> `~/.pg_service.conf`, `PGSYSCONFDIR`) and its INI parsing into validation. A
+> configuration pairing a service with `PGHOST` that booted before now fails at
+> startup. See [migrations.md](migrations.md) `[C66.3]`.
+>
 > **Amended (2026-09-16)** — clause `[C66.1]` closes the `PGSSL*` residual `[C65.2]`
 > left open. `validatePostgreSQLConnectionString` merges `PGSSLMODE`,
 > `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY` and `PGSSLNEGOTIATION` under the DSN
@@ -14,8 +33,8 @@
 > key — never by dropping one, since the rule reached the variable only
 > because no such key was there. Since non-empty material claims as surely as
 > a mode, several can be in effect and each refuses alone, so naming only the
-> first would send the operator round the loop again. `PGSERVICE`, `service=` and
-> service files remain unconsulted (gaborage/go-bricks#1644). See
+> first would send the operator round the loop again. A DSN naming a service, through
+> `service=` or `PGSERVICE`, is refused ahead of this rule by `[C66.3]`. See
 > [migrations.md](migrations.md) `[C66.1]`.
 >
 > **Amended (2026-09-13)** — two clauses, `[C65.3]` (inference widening) and `[C65.2]`
@@ -57,7 +76,7 @@
 > no `host` key at all: an empty `host=` key still shadows it, narrower than "any source
 > names a value" — pgx's own precedence, not this amendment's choice. The five `PGSSL*`
 > variables are judged the same way, per key, by `[C66.1]`. `PGSERVICE`, `service=`
-> and service files are never consulted, in either direction; that gap is #1644.
+> and service files are refused, ahead of both rules, by `[C66.3]`.
 > `sslnegotiation=direct` counts as a TLS claim even paired with `sslmode=disable`/`allow`,
 > where pgx itself would connect in plaintext and libpq refuses the combination — a claim
 > only ever adds a refusal on this seam, never suppresses one — while empty TLS material
@@ -74,11 +93,11 @@
 > explicit `type:` still types the section (`normalizeWithConnectionString`
 > keeps an `oracle` type on such a DSN, and only a contradicting inference
 > errors), and a consumer supplying its own `Options.DatabaseConnector` bypasses
-> the builder's untyped refusal entirely. `PGSERVICE`/`service=`/service files
-> can still supply a socket host this rule never sees (#1644). The 2026-09-07
+> the builder's untyped refusal entirely. The socket host a `PGSERVICE`/`service=`
+> service file could supply unseen is closed by `[C66.3]`. The 2026-09-07
 > amendment's tracked fail-open (a host-less raw DSN, #1551) is closed by these
-> two clauses. See [migrations.md](migrations.md) `[C65.3]`, `[C65.2]` and
-> `[C66.1]`, gaborage/go-bricks#1551.
+> two clauses. See [migrations.md](migrations.md) `[C65.3]`, `[C65.2]`,
+> `[C66.1]` and `[C66.3]`, gaborage/go-bricks#1551.
 >
 > **Amended (2026-09-07):** The connect seam's "identity is the dial's job"
 > posture (stated in the 2026-08-14 amendment below and in Consequences, "the
