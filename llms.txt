@@ -5071,7 +5071,7 @@ Default secret name (overridable via `--secrets-prefix` / `GOBRICKS_MIGRATE_SECR
 gobricks/migrate/<tenant_id>
 ```
 
-Flyway connects as the secret's `username` (which then needs DDL rights) unless `MigrateAllOptions.MigratorIdentity` is set; it replaces only the username and password, on a copy of each tenant's document. See [wiki/multi_tenant_migration.md#migrator-identity](wiki/multi_tenant_migration.md#migrator-identity).
+The payload below carries the tenant's runtime role and assumes `MigrateAllOptions.MigratorIdentity` is set (library only — `go-bricks-migrate` does not expose it yet), which replaces only the username and password on a copy of each tenant's document. Without it, Flyway connects as the secret's `username`, which then needs DDL rights. See [wiki/multi_tenant_migration.md#migrator-identity](wiki/multi_tenant_migration.md#migrator-identity).
 
 Canonical payload (preferred) — matches `config.DatabaseConfig` fields:
 

@@ -20,6 +20,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
+	testconsts "github.com/gaborage/go-bricks/testing"
 )
 
 type fakeLister struct {
@@ -589,8 +590,10 @@ func TestMigrateAllMigratorIdentityOverlaysTenantCredentials(t *testing.T) {
 		t.Skip("shell stubs not supported on windows CI")
 	}
 
-	const tenantUser, tenantPassword = "tenant_runtime", "pw-tenant-runtime"
-	migrator := &MigratorIdentity{Username: "fleet_migrator", Password: "pw-fleet-migrator"}
+	const tenantUser = "tenant_runtime"
+	tenantPassword := testconsts.FakePassword("tenant-runtime")
+	migratorPassword := testconsts.FakePassword("fleet-migrator")
+	migrator := &MigratorIdentity{Username: "fleet_migrator", Password: migratorPassword}
 	newPGTenant := func() *config.DatabaseConfig {
 		return &config.DatabaseConfig{
 			Type: "postgresql", Host: "tenant-pg-host", Port: 5432, Database: "tenant_db",
@@ -599,7 +602,7 @@ func TestMigrateAllMigratorIdentityOverlaysTenantCredentials(t *testing.T) {
 		}
 	}
 	pgMigratorEnv := map[string]string{
-		"DB_USER": "fleet_migrator", "DB_PASSWORD": "pw-fleet-migrator",
+		"DB_USER": "fleet_migrator", "DB_PASSWORD": migratorPassword,
 		"DB_HOST": "tenant-pg-host", "DB_PORT": "5432", "DB_NAME": "tenant_db",
 	}
 	pgSchemaArgs := []string{"-schemas=tenant_schema", "-defaultSchema=tenant_schema"}
@@ -622,7 +625,7 @@ func TestMigrateAllMigratorIdentityOverlaysTenantCredentials(t *testing.T) {
 				Username: tenantUser, Password: tenantPassword,
 			},
 			wantEnv: map[string]string{
-				"ORACLE_USER": "fleet_migrator", "ORACLE_PASSWORD": "pw-fleet-migrator",
+				"ORACLE_USER": "fleet_migrator", "ORACLE_PASSWORD": migratorPassword,
 				"ORACLE_HOST": "tenant-ora-host", "ORACLE_PORT": "1521", "ORACLE_PDB": "TENANTPDB",
 			},
 		},
@@ -664,30 +667,33 @@ func TestMigrateAllMigratorIdentityOverlaysTenantCredentials(t *testing.T) {
 }
 
 func TestMigrateAllRejectsIncompleteMigratorIdentity(t *testing.T) {
+	migratorPassword := testconsts.FakePassword("fleet-migrator")
 	cases := []struct {
 		name     string
 		identity *MigratorIdentity
 		wantMsg  string
 	}{
-		{name: "empty_username", identity: &MigratorIdentity{Password: "pw-fleet-migrator"}, wantMsg: "username"},
+		{name: "empty_username", identity: &MigratorIdentity{Password: migratorPassword}, wantMsg: "username"},
 		{name: "empty_password", identity: &MigratorIdentity{Username: "fleet_migrator"}, wantMsg: "password"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			provider := newFakeConfigProvider(nil)
 			res, err := MigrateAll(
 				context.Background(),
 				newFlywayMigratorForTest(t),
 				&fakeLister{err: errors.New("lister must not run")},
-				nilConfigProvider{},
+				provider,
 				ActionMigrate,
 				MigrateAllOptions{MigratorIdentity: tc.identity},
 			)
 
 			require.ErrorIs(t, err, ErrInvalidMigratorIdentity)
 			assert.Contains(t, err.Error(), tc.wantMsg)
-			assert.NotContains(t, err.Error(), "pw-fleet-migrator")
+			assert.NotContains(t, err.Error(), migratorPassword)
 			assert.Nil(t, res)
+			assert.Empty(t, provider.hits)
 		})
 	}
 }
@@ -697,7 +703,7 @@ func TestMigrateAllMigratorIdentityPasswordStaysOutOfLogsAndErrors(t *testing.T)
 		t.Skip("shell stubs not supported on windows CI")
 	}
 
-	const migratorPassword = "pw-fleet-migrator"
+	migratorPassword := testconsts.FakePassword("fleet-migrator")
 	dir := t.TempDir()
 	stub := filepath.Join(dir, "flyway-leaky.sh")
 	script := "#!/bin/sh\n" +
@@ -716,7 +722,7 @@ func TestMigrateAllMigratorIdentityPasswordStaysOutOfLogsAndErrors(t *testing.T)
 			NewFlywayMigrator(cfg, log),
 			&fakeLister{ids: []string{"t1"}},
 			newFakeConfigProvider(map[string]*config.DatabaseConfig{
-				"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "pw-tenant-1"},
+				"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: testconsts.FakePassword("tenant-1")},
 			}),
 			ActionMigrate,
 			MigrateAllOptions{

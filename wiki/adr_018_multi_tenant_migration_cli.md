@@ -128,8 +128,8 @@ present:
 `postgresql`; `oracle`/`oracle-se2` → `oracle`).
 
 Flyway connects as the secret's `username`, which then needs DDL rights, unless
-`MigrateAllOptions.MigratorIdentity` (#1694) overlays a shared migrator's
-credentials — see [multi_tenant_migration.md](multi_tenant_migration.md#migrator-identity).
+`MigrateAllOptions.MigratorIdentity` (#1694; library only, not yet exposed by the
+CLI) overlays a shared migrator's credentials — see [multi_tenant_migration.md](multi_tenant_migration.md#migrator-identity).
 
 Minimum IAM for the runner role:
 
