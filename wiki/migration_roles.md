@@ -15,16 +15,17 @@ tenant:
 
 | Role | Owns | Privileges | Used by |
 | ------ | ------ | ----------- | --------- |
-| **Migrator** (one per deployment, shared across tenants) | The tenant schema(s) it provisioned | DDL on its own schemas | `go-bricks-migrate` CLI / `migration.MigrateAll` |
+| **Migrator** (one per deployment, shared across tenants) | Every tenant schema (the `AUTHORIZATION` target of each provisioning call) | DDL on its own schemas | `go-bricks-migrate` CLI / `migration.MigrateAll` |
 | **Per-tenant runtime** (one per tenant) | Nothing | `USAGE` on the tenant schema; `SELECT/INSERT/UPDATE/DELETE` on all current and future tables; `USAGE/SELECT/UPDATE` on sequences | The running service (connects with the runtime role's credentials via `database.username`/`database.password` in `config.yaml`) |
 
 Every role the helper creates starts at the same locked-down attribute floor:
 `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`. By default
 the attribute lockdown is reapplied on every provisioning call so a
-misconfigured role (e.g., someone ran `ALTER ROLE migrator SUPERUSER`
-manually) snaps back on the next migration run. `SkipFloorReassert` drops that
-repair; drift is then reported only when the caller runs `CheckPGRoleFloor`
-(see [Provisioner privileges](#provisioner-privileges)).
+misconfigured role (e.g., someone ran `ALTER ROLE tenant_a_app SUPERUSER`
+manually) snaps back on the next provisioning call. `SkipFloorReassert` drops
+that repair; drift is then reported only when the caller runs
+`CheckPGRoleFloor` (see
+[Reporting drift instead of repairing it](#reporting-drift-instead-of-repairing-it)).
 A migrator shared across tenants is created once, out of band, and provisioned
 with `SkipMigratorRole` (see
 [Shared and out-of-band migrators](#shared-and-out-of-band-migrators)).
@@ -65,7 +66,7 @@ ALTER ROLE "tenant_a_app" SET search_path = "tenant_a";
 ```
 
 This is idempotent: re-running the same spec converges the setting, and
-manual drift (e.g. someone runs `ALTER ROLE migrator SET search_path =
+manual drift (e.g. someone runs `ALTER ROLE tenant_a_app SET search_path =
 public`) snaps back on the next provisioning call. The runtime statement is
 always emitted; `SkipMigratorRole` drops the migrator's.
 
@@ -91,8 +92,8 @@ always emitted; `SkipMigratorRole` drops the migrator's.
 
 **Scoping decision:** the statements use plain `ALTER ROLE ... SET`
 (cluster-global default for the role), not `ALTER ROLE ... IN DATABASE ...
-SET`. That is only sound for a role that belongs to one schema: the runtime
-role is per tenant, so its cluster-global default is equivalent to a
+SET`. That is sound only for a role used with one schema in one database: the
+runtime role is per tenant, so its cluster-global default behaves like a
 database-scoped one in practice, and DB-scoping was deferred as unnecessary
 complexity for v1. A migrator shared across tenants does not belong to one
 schema; see [Shared and out-of-band migrators](#shared-and-out-of-band-migrators).
@@ -122,8 +123,9 @@ spec := &migration.PGRoleSpec{
     RuntimePassword:  strings.TrimSpace(os.Getenv("TENANT_A_RUNTIME_PASSWORD")),
 }
 
-// db is an *sql.DB authenticated as the provisioner — the instance bootstrap
-// superuser, or a CREATEROLE-only provisioner set up as in "Provisioner privileges".
+// db is an *sql.DB authenticated as the provisioner: the instance bootstrap
+// superuser. A CREATEROLE-only provisioner also needs SkipFloorReassert: true
+// and the setup in "Provisioner privileges".
 if err := migration.ProvisionPGRoles(ctx, db, spec); err != nil {
     return fmt.Errorf("provision tenant %q: %w", spec.Schema, err)
 }
@@ -138,10 +140,9 @@ because the provisioning path cannot carry them log-safely (see
 [ADR-061](adr_061_role_password_control_chars.md)).
 
 All operations are idempotent, so rerunning the same spec converges instead
-of failing. Every call reapplies the attribute floor (unless
-`SkipFloorReassert`), each managed role's `search_path`, and a non-empty
-`MigratorPassword` / `RuntimePassword` — repairing drift and making secret
-rotation a plain rerun.
+of failing. Every call reapplies each managed role's attribute floor (unless
+`SkipFloorReassert`) and `search_path`, and a non-empty `MigratorPassword` /
+`RuntimePassword` — repairing drift and making secret rotation a plain rerun.
 
 ### Shared and out-of-band migrators
 
@@ -240,7 +241,8 @@ Why each requirement exists:
   CREATEROLE-only role may `ALTER ROLE` only `NOCREATEROLE`. `CREATE ROLE`
   with the same five attributes is allowed, so a role the call creates still
   starts at the floor. With the default spec such a provisioner fails at
-  step 1, the migrator's lockdown `ALTER ROLE`, with SQLSTATE 42501.
+  step 1 (the error counts steps from 0), the migrator's lockdown
+  `ALTER ROLE`, with SQLSTATE 42501.
 - **`SET` and `INHERIT` on the migrator.** `CREATE SCHEMA … AUTHORIZATION
   migrator` requires the right to `SET ROLE migrator`; `ALTER DEFAULT
   PRIVILEGES FOR ROLE migrator`, and the grants on the schema the migrator
@@ -347,9 +349,10 @@ deployment. Treat its credentials accordingly:
 - **Who:** Only the migration runner (the `go-bricks-migrate` CLI or the
   in-process `migration.MigrateAll` caller). Runtime services must connect
   as their per-tenant runtime role, never as the migrator.
-- **Rotation:** Pass the new password as `MigratorPassword` on the next
-  provisioning call (a migrator provisioned with `SkipMigratorRole` is
-  rotated out of band instead). The helper emits `ALTER ROLE ... PASSWORD ...`
+- **Rotation:** The shared migrator (provisioned with `SkipMigratorRole`) is
+  rotated out of band. A migrator the call manages takes the new password as
+  `MigratorPassword` on the next provisioning call; the helper emits
+  `ALTER ROLE ... PASSWORD ...`
   unconditionally when the field is non-empty, so rerunning with a rotated
   secret is sufficient — trim it first if it came from a file, a mounted
   secret, or a command substitution, since a stray CR/LF/NUL is rejected.
@@ -390,6 +393,7 @@ see [multi_tenant_migration.md](multi_tenant_migration.md#aws-secrets-manager-co
    └─────────────────────────────────────────────────┘
    [M] not emitted with SkipMigratorRole
    [F] not emitted with SkipFloorReassert
+   runtime = the spec's RuntimeRole (tenant_a_app above)
 ```
 
 After provisioning:

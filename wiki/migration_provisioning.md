@@ -53,8 +53,8 @@ store, err := provisioning.NewPostgresStore(adminDB, "" /* default table */)
 if err != nil { return err }
 if err := store.CreateTable(ctx); err != nil { return err }
 
-// Wire the steps. CreateSchema + CreateRole call ProvisionPGRoles from #378;
-// Migrate runs Flyway; Seed and Cleanup are consumer-specific.
+// Wire the steps. CreateSchema calls ProvisionPGRoles from #378 (CreateRole is
+// then a no-op); Migrate runs Flyway; Seed and Cleanup are consumer-specific.
 steps := provisioning.Steps{
     CreateSchema: func(ctx context.Context, job *provisioning.Job) error {
         return migration.ProvisionPGRoles(ctx, adminDB, &migration.PGRoleSpec{
@@ -70,6 +70,7 @@ steps := provisioning.Steps{
         return nil
     },
     Migrate: func(ctx context.Context, job *provisioning.Job) error {
+        // tenantDBConfig must set postgresql.schema: the shared migrator has no search_path default.
         _, err := flywayMigrator.MigrateFor(ctx, tenantDBConfig(job.TenantID), nil)
         return err
     },
@@ -246,7 +247,7 @@ import (
     "github.com/gaborage/go-bricks/migration"
 )
 
-err := database.WithTx(ctx, adminDB, func(ctx context.Context, tx dbtypes.Tx) error {
+err := database.WithTx(ctx, adminConn, func(ctx context.Context, tx dbtypes.Tx) error {
     // 1. Serialize concurrent provisioning of the same tenant.
     if _, err := tx.Exec(ctx,
         `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenantID); err != nil {
@@ -276,7 +277,9 @@ err := database.WithTx(ctx, adminDB, func(ctx context.Context, tx dbtypes.Tx) er
 })
 ```
 
-`spec` is the same `*migration.PGRoleSpec` used in the Quick start above,
+`adminConn` is a `database.Interface` authenticated as the provisioner
+(`WithTx` does not take the Quick start's `*sql.DB`), `spec` is a
+`*migration.PGRoleSpec` like the one the Quick start's `CreateSchema` builds,
 and `outboxPub` is an `app.OutboxPublisher` (`deps.Outbox` inside a
 module). `database.WithTx` (`database/transaction.go`) commits on a nil
 return and rolls back on error or panic, so a crash or error anywhere in
