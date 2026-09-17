@@ -5230,7 +5230,7 @@ func (p guardedProvider) DBConfig(ctx context.Context, tenantID string) (*config
     cfg, err := p.inner.DBConfig(ctx, tenantID)
     if err != nil { return nil, err }
     if cfg == nil { return nil, database.ErrNoDatabaseConfig }
-    out := *cfg // never mutate the inner provider's document
+    out := *cfg // copy: the inner provider may cache its document
     if !p.allowedHosts[out.Host] { return nil, fmt.Errorf("%w: tenant %q", ErrTenantRefused, tenantID) }
     return &out, nil
 }

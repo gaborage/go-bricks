@@ -440,9 +440,7 @@ controlDB, err := provider.DBConfig(ctx, "control-plane")
 if err != nil {
     return err
 }
-if err := fm.ValidateFor(ctx, controlDB, &controlTree); err != nil { // InfoFor has the same shape
-    return err
-}
+// ValidateFor and InfoFor take the same arguments and return only an error.
 _, err = fm.MigrateFor(ctx, controlDB, &controlTree)
 ```
 
@@ -496,7 +494,7 @@ func (p guardedProvider) DBConfig(ctx context.Context, tenantID string) (*config
     if cfg == nil {
         return nil, database.ErrNoDatabaseConfig
     }
-    out := *cfg // work on a copy: the inner provider may cache its document
+    out := *cfg // copy: the inner provider may cache its document
     if !p.allowedHosts[out.Host] {
         return nil, fmt.Errorf("%w: tenant %q", ErrTenantRefused, tenantID)
     }
