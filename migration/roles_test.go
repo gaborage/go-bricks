@@ -1041,67 +1041,55 @@ func txDoorSpec() *PGRoleSpec {
 	}
 }
 
-// Both doors must reach the identical statement list, in the identical order.
-// The *sql.DB door is driven through sqlmock so what it actually executed is
+// Both doors must reach the identical statement list, in the identical order,
+// with and without the skip options that live in the shared builder. The
+// *sql.DB door is driven through sqlmock so what it actually executed is
 // observed, not assumed.
 func TestProvisionPGRolesTxRunsTheSameStatementsAsTheSQLDBDoor(t *testing.T) {
-	spec := txDoorSpec()
-	want, err := PGRoleProvisioningSQL(spec)
-	require.NoError(t, err)
-	require.NotEmpty(t, want)
-
-	exec := newRecordingRoleExecutor()
-	require.NoError(t, ProvisionPGRolesTx(context.Background(), exec, spec))
-	require.Equal(t, want, exec.stmts, "the tx door must execute the published list verbatim, in order")
-
-	var viaSQLDB []string
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(
-		sqlmock.QueryMatcherFunc(func(_, actualSQL string) error {
-			viaSQLDB = append(viaSQLDB, actualSQL)
-			return nil
-		})))
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-	mock.MatchExpectationsInOrder(true)
-	for range want {
-		mock.ExpectExec("").WillReturnResult(sqlmock.NewResult(0, 0))
+	tests := []struct {
+		name  string
+		apply func(*PGRoleSpec)
+	}{
+		{name: "default_spec", apply: func(*PGRoleSpec) {}},
+		{
+			name: "skip_options",
+			apply: func(s *PGRoleSpec) {
+				s.SkipMigratorRole = true
+				s.SkipFloorReassert = true
+				s.MigratorPassword = ""
+			},
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec := txDoorSpec()
+			tt.apply(spec)
+			want, err := PGRoleProvisioningSQL(spec)
+			require.NoError(t, err)
+			require.NotEmpty(t, want)
 
-	require.NoError(t, ProvisionPGRoles(context.Background(), db, spec))
-	require.NoError(t, mock.ExpectationsWereMet())
-	require.Equal(t, want, viaSQLDB, "the *sql.DB door must execute the same list, in the same order")
-}
+			exec := newRecordingRoleExecutor()
+			require.NoError(t, ProvisionPGRolesTx(context.Background(), exec, spec))
+			require.Equal(t, want, exec.stmts, "the tx door must execute the published list verbatim, in order")
 
-// The skip options live in the shared builder, so both doors must still execute
-// the published list for a spec that sets them.
-func TestProvisionPGRolesDoorsHonourTheSkipOptions(t *testing.T) {
-	spec := txDoorSpec()
-	spec.SkipMigratorRole = true
-	spec.SkipFloorReassert = true
-	spec.MigratorPassword = ""
-	want, err := PGRoleProvisioningSQL(spec)
-	require.NoError(t, err)
+			var viaSQLDB []string
+			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(
+				sqlmock.QueryMatcherFunc(func(_, actualSQL string) error {
+					viaSQLDB = append(viaSQLDB, actualSQL)
+					return nil
+				})))
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+			mock.MatchExpectationsInOrder(true)
+			for range want {
+				mock.ExpectExec("").WillReturnResult(sqlmock.NewResult(0, 0))
+			}
 
-	exec := newRecordingRoleExecutor()
-	require.NoError(t, ProvisionPGRolesTx(context.Background(), exec, spec))
-	assert.Equal(t, want, exec.stmts)
-
-	var viaSQLDB []string
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(
-		sqlmock.QueryMatcherFunc(func(_, actualSQL string) error {
-			viaSQLDB = append(viaSQLDB, actualSQL)
-			return nil
-		})))
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-	mock.MatchExpectationsInOrder(true)
-	for range want {
-		mock.ExpectExec("").WillReturnResult(sqlmock.NewResult(0, 0))
+			require.NoError(t, ProvisionPGRoles(context.Background(), db, spec))
+			require.NoError(t, mock.ExpectationsWereMet())
+			require.Equal(t, want, viaSQLDB, "the *sql.DB door must execute the same list, in the same order")
+		})
 	}
-
-	require.NoError(t, ProvisionPGRoles(context.Background(), db, spec))
-	require.NoError(t, mock.ExpectationsWereMet())
-	assert.Equal(t, want, viaSQLDB)
 }
 
 // The tx door runs Validate, so a refusing IdentifierPolicy must stop it before
