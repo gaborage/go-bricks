@@ -91,9 +91,9 @@ queues the helper touches, and an empty value resolves to quorum.**
   single validated declaration set and cost nothing per tenant. Per-tenant replay is
   unchanged: it replays the same resolved `Args` it always did.
 
-**The fleet is quorum-capable.** Every NovoPayment broker supports quorum queues —
-confirmed by the maintainer at triage on 2026-09-08 — so the default flip does not
-strand a deployment on an old broker that cannot honour it. CI declares against
+**The fleet is quorum-capable.** Every broker this framework is deployed against supports
+quorum queues — confirmed by the maintainer at triage on 2026-09-08 — so the default flip
+does not strand a deployment on an old broker that cannot honour it. CI declares against
 `rabbitmq:4.3.5-management-alpine` (`.github/workflows/ci-v2.yml`). This is recorded as
 a fact about the fleet the framework is developed for, not as a claim about every broker
 a consumer might point a service at; a consumer whose broker is older sets

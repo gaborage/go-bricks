@@ -66,7 +66,7 @@ multitenant:
       prefix: /itsp        # optional gate; only paths under here are eligible
 ```
 
-Use this when downstream clients route by URL path rather than header or hostname. The NovoPayment tokenization services (ITSP, TRTSP, 3DS, Click-to-Pay, Backoffice) are the canonical examples — their public contracts are `/itsp/{clientID}/lifecycle/...`, `/trtsp/{clientID}/provisioning/...`, etc.
+Use this when downstream clients route by URL path rather than header or hostname. Payment-tokenization APIs are the canonical example — public contracts shaped like `/itsp/{clientID}/lifecycle/...`, `/trtsp/{clientID}/provisioning/...`.
 
 **Segment indexing is 1-indexed**: segment 1 is the first non-empty path part after the leading `/`. For `/itsp/acme/lifecycle`, segment 2 yields `acme`.
 
