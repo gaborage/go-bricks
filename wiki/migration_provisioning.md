@@ -53,15 +53,16 @@ store, err := provisioning.NewPostgresStore(adminDB, "" /* default table */)
 if err != nil { return err }
 if err := store.CreateTable(ctx); err != nil { return err }
 
-// Wire the steps. CreateSchema + CreateRole call ProvisionPGRoles from #378;
-// Migrate runs Flyway; Seed and Cleanup are consumer-specific.
+// Wire the steps. CreateSchema calls ProvisionPGRoles from #378 (CreateRole is
+// then a no-op); Migrate runs Flyway; Seed and Cleanup are consumer-specific.
 steps := provisioning.Steps{
     CreateSchema: func(ctx context.Context, job *provisioning.Job) error {
         return migration.ProvisionPGRoles(ctx, adminDB, &migration.PGRoleSpec{
             Schema:           "tenant_" + job.TenantID,
-            MigratorRole:     "migrator",
+            MigratorRole:     "migrator", // one shared migrator for all tenants, created out of band
             RuntimeRole:      "tenant_" + job.TenantID + "_app",
             RuntimePassword:  fetchSecret(job.TenantID),
+            SkipMigratorRole: true, // never re-provision a shared migrator per tenant
         })
     },
     CreateRole: func(_ context.Context, _ *provisioning.Job) error {
@@ -69,14 +70,17 @@ steps := provisioning.Steps{
         return nil
     },
     Migrate: func(ctx context.Context, job *provisioning.Job) error {
-        _, err := flywayMigrator.MigrateFor(ctx, tenantDBConfig(job.TenantID), nil)
+        dbCfg := tenantDBConfig(job.TenantID)
+        // Required: the shared migrator has no search_path default.
+        dbCfg.PostgreSQL.Schema = "tenant_" + job.TenantID
+        _, err := flywayMigrator.MigrateFor(ctx, dbCfg, nil)
         return err
     },
     Seed: func(ctx context.Context, job *provisioning.Job) error {
         return seedReferenceData(ctx, tenantDB(job.TenantID))
     },
     Cleanup: func(ctx context.Context, job *provisioning.Job) error {
-        return dropTenantArtifacts(ctx, adminDB, "tenant_"+job.TenantID, "migrator", "tenant_"+job.TenantID+"_app")
+        return dropTenantArtifacts(ctx, adminDB, "tenant_"+job.TenantID, "tenant_"+job.TenantID+"_app")
     },
 }
 
@@ -84,12 +88,16 @@ exec, err := provisioning.NewExecutor(store, steps, logger.New("info", false))
 if err != nil { return err }
 
 // Provision a new tenant (idempotent by job ID).
-job := &provisioning.Job{ID: "job-tenant-a-2026-05-13", TenantID: "tenant-a"}
+job := &provisioning.Job{ID: "job-tenant-a-2026-05-13", TenantID: "a"}
 if _, err := store.Upsert(ctx, job); err != nil { return err }
 if err := exec.Run(ctx, job.ID); err != nil {
     return err // job ended in StateFailed; LastError carries the diagnostic
 }
 ```
+
+The sample assumes a superuser `adminDB`; a CREATEROLE-only provisioner needs
+the options and one-time grant in
+[Provisioner privileges](migration_roles.md#provisioner-privileges).
 
 `Migrate` is any callback — Flyway is the common choice, and the
 single-transaction pattern (see [the section
@@ -156,7 +164,7 @@ to preserve the persisted metadata unchanged.
 ```sql
 SELECT id, tenant_id, state, attempts, last_error, updated_at
 FROM provisioning_jobs
-WHERE tenant_id = 'tenant-a'
+WHERE tenant_id = 'a'
 ORDER BY updated_at DESC;
 ```
 
@@ -199,7 +207,7 @@ subpackage provides `MockStateStore` with `WithGetError`, `WithUpsertError`,
 
 ## Single-transaction provisioning on PostgreSQL (consumer-side pattern)
 
-On PostgreSQL, a tenant's entire provisioning unit — schema, role-pair, and
+On PostgreSQL, a tenant's entire provisioning unit — schema, roles, and
 tenant-table DDL, plus the tenant registry row and the "tenant
 provisioned" outbox event (both DML) — fits in a single transaction: it
 can commit or roll back as one unit. Flyway, however, is a subprocess; it
@@ -241,7 +249,7 @@ import (
     "github.com/gaborage/go-bricks/migration"
 )
 
-err := database.WithTx(ctx, adminDB, func(ctx context.Context, tx dbtypes.Tx) error {
+err := database.WithTx(ctx, adminConn, func(ctx context.Context, tx dbtypes.Tx) error {
     // 1. Serialize concurrent provisioning of the same tenant.
     if _, err := tx.Exec(ctx,
         `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenantID); err != nil {
@@ -271,7 +279,9 @@ err := database.WithTx(ctx, adminDB, func(ctx context.Context, tx dbtypes.Tx) er
 })
 ```
 
-`spec` is the same `*migration.PGRoleSpec` used in the Quick start above,
+`adminConn` is a `database.Interface` authenticated as the provisioner
+(`WithTx` does not take the Quick start's `*sql.DB`), `spec` is a
+`*migration.PGRoleSpec` like the one the Quick start's `CreateSchema` builds,
 and `outboxPub` is an `app.OutboxPublisher` (`deps.Outbox` inside a
 module). `database.WithTx` (`database/transaction.go`) commits on a nil
 return and rolls back on error or panic, so a crash or error anywhere in
