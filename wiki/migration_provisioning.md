@@ -58,10 +58,14 @@ if err := store.CreateTable(ctx); err != nil { return err }
 steps := provisioning.Steps{
     CreateSchema: func(ctx context.Context, job *provisioning.Job) error {
         return migration.ProvisionPGRoles(ctx, adminDB, &migration.PGRoleSpec{
-            Schema:           "tenant_" + job.TenantID,
-            MigratorRole:     "migrator",
-            RuntimeRole:      "tenant_" + job.TenantID + "_app",
-            RuntimePassword:  fetchSecret(job.TenantID),
+            Schema:          "tenant_" + job.TenantID,
+            MigratorRole:    "migrator", // one migrator for every tenant, created out of band
+            RuntimeRole:     "tenant_" + job.TenantID + "_app",
+            RuntimePassword: fetchSecret(job.TenantID),
+            // A shared migrator must not be re-provisioned per tenant; a
+            // CREATEROLE-only adminDB also needs SkipFloorReassert. See
+            // migration_roles.md#provisioner-privileges.
+            SkipMigratorRole: true,
         })
     },
     CreateRole: func(_ context.Context, _ *provisioning.Job) error {
