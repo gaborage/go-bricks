@@ -342,9 +342,10 @@ func provisionPGRoles(ctx context.Context, spec *PGRoleSpec, run func(ctx contex
 // or apply the provisioning manually via psql, or feed it into their own
 // migration runner (Flyway, Liquibase) rather than the Go helper.
 //
-// Returns ErrInvalidPGIdentifier when spec fails Validate. The returned
-// slice does not include trailing semicolons; callers concatenating them
-// into a single script should add separators themselves.
+// Returns Validate's error when spec fails it — ErrInvalidPGIdentifier,
+// ErrPGRolePasswordHasControlChar or ErrPGRoleSkippedMigratorHasPassword. The
+// returned slice does not include trailing semicolons; callers concatenating
+// them into a single script should add separators themselves.
 //
 // SECURITY: when spec.MigratorPassword or spec.RuntimePassword is non-empty,
 // the returned statements include the password as an in-clear SQL literal
