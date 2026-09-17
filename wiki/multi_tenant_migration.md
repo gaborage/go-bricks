@@ -400,20 +400,36 @@ provider := &migration.SecretsProvider{
 The defaults assume one tree per vendor: `flyway/flyway-<vendor>.conf` plus
 `migrations/<vendor>/`. A second tree for the same vendor — for example a
 control-plane tree applied once and a tenant tree applied to every tenant —
-needs no extra API: give each tree its own `migration.Config`.
+needs no extra API: give each tree its own `migration.Config`, copied from the
+vendor defaults and overridden.
 
 ```go
 fm := migration.NewFlywayMigrator(myCfg, myLogger)
+defaults := fm.DefaultMigrationConfigForVendor("postgresql")
 
-// Tenant tree: MigrateAll merges BaseConfig over each tenant's vendor defaults.
-tenantTree := &migration.Config{
-    ConfigPath:    "flyway/tenant-postgresql.conf",
-    MigrationPath: "migrations/tenant/postgresql",
-}
+tenantTree := *defaults
+tenantTree.ConfigPath = "flyway/tenant-postgresql.conf"
+tenantTree.MigrationPath = "migrations/tenant/postgresql"
+
+controlTree := *defaults
+controlTree.ConfigPath = "flyway/control-plane-postgresql.conf"
+controlTree.MigrationPath = "migrations/control-plane/postgresql"
+controlTree.Audit.Target = "control-plane"
+```
+
+Run the tenant tree across the fleet through `BaseConfig`:
+
+```go
 res, err := migration.MigrateAll(ctx, fm, lister, provider, migration.ActionMigrate, migration.MigrateAllOptions{
-    BaseConfig: tenantTree,
+    BaseConfig: &tenantTree,
     Logger:     myLogger,
 })
+if err != nil {
+    return err
+}
+if failed := res.Failed(); len(failed) > 0 {
+    return fmt.Errorf("%d tenants failed", len(failed))
+}
 ```
 
 > **Always set `ConfigPath` and `MigrationPath` together** (on the CLI,
@@ -427,31 +443,30 @@ res, err := migration.MigrateAll(ctx, fm, lister, provider, migration.ActionMigr
 interpolation, so in a mixed-vendor fleet each run needs a lister that returns
 only the tenants of the vendor its tree targets.
 
-For a single database, call the `*For` methods directly. They use the `Config`
-exactly as passed, with no merge, so copy the vendor defaults and override:
+Run a single-database tree with `MigrateFor`, `ValidateFor` or `InfoFor`. These
+use the `Config` exactly as passed, with no merge — which is why the trees above
+start from a copy of the defaults:
 
 ```go
-controlTree := *fm.DefaultMigrationConfigForVendor("postgresql")
-controlTree.ConfigPath = "flyway/control-plane-postgresql.conf"
-controlTree.MigrationPath = "migrations/control-plane/postgresql"
-controlTree.Audit.Target = "control-plane"
-
 controlDB, err := provider.DBConfig(ctx, "control-plane")
 if err != nil {
     return err
 }
-// ValidateFor and InfoFor take the same arguments and return only an error.
-_, err = fm.MigrateFor(ctx, controlDB, &controlTree)
+if _, err := fm.MigrateFor(ctx, controlDB, &controlTree); err != nil {
+    return err
+}
 ```
+
+`ValidateFor` and `InfoFor` take the same arguments and return only an error.
 
 `Audit.Target` labels which tree a `migration.applied` event came from; when
 empty it defaults to the database name. Set it on a single-database run only:
 a `BaseConfig` target is stamped on every tenant's event and replaces each
-tenant's database name.
+tenant's database name, which is why `tenantTree` leaves it empty.
 
-The CLI equivalent uses the same flags on `migrate`, `validate` and `info`.
-`--tenant` addresses one database through the same credential lookup (with
-the default source, the secret `<prefix>control-plane`):
+On the CLI, `migrate`, `validate` and `info` accept the same path flags.
+`--tenant` runs one database through the same credential lookup (with the
+default source, the secret `<prefix>control-plane`):
 
 ```bash
 # Tenant tree across the fleet
@@ -474,9 +489,9 @@ The CLI has no flag for `Audit.Target`; its events carry each database name.
 ## Decorating the config provider
 
 `MigrateAll` resolves each tenant through its `database.DBConfigProvider`
-immediately before running Flyway for that tenant. Wrapping the provider is the
-supported pre-Flyway seam; the CLI wraps its own provider the same way to
-validate each resolved configuration.
+before running Flyway for that tenant. Wrapping the provider is the supported
+pre-Flyway seam; the CLI wraps its own provider the same way to validate each
+resolved configuration.
 
 ```go
 var ErrTenantRefused = errors.New("tenant refused by migration guard")
@@ -502,12 +517,14 @@ func (p guardedProvider) DBConfig(ctx context.Context, tenantID string) (*config
 }
 ```
 
-Pass `guardedProvider{inner: provider, allowedHosts: hosts}` to `MigrateAll` in
-place of `provider`.
+Pass `guardedProvider{inner: provider, allowedHosts: map[string]bool{"tenants.db.internal": true}}`
+to `MigrateAll` in place of `provider`.
 
 What a decorator can do:
 
-- Validate or overlay a tenant's coordinates, always on a copy.
+- Validate or overlay a tenant's coordinates, always on a copy. Running Flyway
+  as a dedicated migrator identity is tracked in
+  [#1694](https://github.com/gaborage/go-bricks/issues/1694).
 - Refuse a tenant. Flyway never starts for it, and the error lands in that
   tenant's `TenantResult.Err` wrapped with `%w`, so
   `errors.Is(r.Err, ErrTenantRefused)` holds on `res.Failed()` entries.
@@ -515,33 +532,25 @@ What a decorator can do:
 What it cannot do:
 
 - Run anything after Flyway: it returns before Flyway starts.
+  `MigrateAllOptions.Hook` observes each tenant's result afterwards but cannot
+  change it.
 - See which action is running. `DBConfig` receives only the context and tenant
   ID, so build a separate provider per action when the check differs.
-- Mark a tenant "skipped". Any error it returns is a per-tenant failure.
-  Fleet-level outcome reporting is tracked in
-  [#1692](https://github.com/gaborage/go-bricks/issues/1692), and running Flyway
-  as a dedicated migrator identity in
-  [#1694](https://github.com/gaborage/go-bricks/issues/1694).
+- Mark a tenant "skipped". Any error it returns is a per-tenant failure, and
+  under the default fail-fast mode the first one stops the run; set
+  `ContinueOnError` to refuse a tenant and carry on. Fleet-level outcome
+  reporting is tracked in [#1692](https://github.com/gaborage/go-bricks/issues/1692).
 
 A caller that needs a pre/post protocol around Flyway — a lock held across its
 own DDL and the Flyway run, say — should loop over tenants and call `MigrateFor`
-itself. `MigrateAll` will not grow per-tenant callbacks; see
+itself. `MigrateAll` will not grow `Prepare`/`Finish` interceptor callbacks; see
 [the rejected interceptor proposal](../.out-of-scope/migrateall-tenant-interceptor.md).
 
 When the need is only a different secret-name grammar, no decorator is needed:
-`SecretsProvider.NameFor` replaces the default `Prefix + tenantID`
-composition. It receives the tenant ID already trimmed and allowlist-validated,
-and `Prefix` is ignored for lookups while it is set (library only; the CLI
-exposes `--secrets-prefix`).
-
-```go
-provider := &migration.SecretsProvider{
-    NameFor: func(tenantID string) (string, error) {
-        return "/prod/platform/" + tenantID + "/db", nil
-    },
-    Fetch: fetcher,
-}
-```
+set `SecretsProvider.NameFor` (for example to compose `/env/platform/<id>/db`).
+It replaces the default `Prefix + tenantID` composition, receives the tenant ID
+already trimmed and allowlist-validated, and is library-only; the CLI exposes
+`--secrets-prefix`.
 
 ## Operational notes
 

@@ -5205,25 +5205,27 @@ The framework's `migration` module stays AWS-SDK-free; AWS SM lives in the CLI's
 
 ### Second migration tree and provider decorator
 
-A second tree for the same vendor needs no new API. `BaseConfig` merges over the vendor defaults **per field** — always set `ConfigPath` and `MigrationPath` together (CLI: `--flyway-config` with `--migrations-dir`), and don't name a tree conf `flyway-<vendor>.conf`. The `*For` methods use a `Config` as given (no merge), so copy the vendor defaults first:
+A second tree for the same vendor needs no new API: copy the vendor defaults and override both paths. `BaseConfig` merges over the vendor defaults **per field** — always set `ConfigPath` and `MigrationPath` together (CLI: `--flyway-config` with `--migrations-dir`), and don't name a tree conf `flyway-<vendor>.conf`. The `*For` methods use a `Config` as given (no merge). `Audit.Target` labels a single-database run only — a `BaseConfig` target replaces every tenant's database name.
 
 ```go
-res, err := migration.MigrateAll(ctx, fm, lister, provider, migration.ActionMigrate, migration.MigrateAllOptions{
-    BaseConfig: &migration.Config{ConfigPath: "flyway/tenant-postgresql.conf", MigrationPath: "migrations/tenant/postgresql"},
-})
+defaults := fm.DefaultMigrationConfigForVendor("postgresql")
+tenantTree, controlTree := *defaults, *defaults
+tenantTree.ConfigPath, tenantTree.MigrationPath = "flyway/tenant-postgresql.conf", "migrations/tenant/postgresql"
+controlTree.ConfigPath, controlTree.MigrationPath = "flyway/control-plane-postgresql.conf", "migrations/control-plane/postgresql"
+controlTree.Audit.Target = "control-plane"
 
-controlTree := *fm.DefaultMigrationConfigForVendor("postgresql")
-controlTree.ConfigPath = "flyway/control-plane-postgresql.conf"
-controlTree.MigrationPath = "migrations/control-plane/postgresql"
-controlTree.Audit.Target = "control-plane" // single-database runs only; a BaseConfig Target stamps every tenant
-controlDB, err := provider.DBConfig(ctx, "control-plane")
+if _, err := migration.MigrateAll(ctx, fm, lister, provider, migration.ActionMigrate, migration.MigrateAllOptions{BaseConfig: &tenantTree}); err != nil { return err }
+
+controlDB, err := provider.DBConfig(ctx, "control-plane") // CLI: --tenant control-plane plus both path flags
 if err != nil { return err }
-_, err = fm.MigrateFor(ctx, controlDB, &controlTree) // CLI: --tenant control-plane plus both path flags
+if _, err := fm.MigrateFor(ctx, controlDB, &controlTree); err != nil { return err }
 ```
 
-The pre-Flyway seam is a decorator `database.DBConfigProvider`: validate or overlay on a copy, or refuse a tenant — `MigrateAll` wraps the error with `%w`, so `errors.Is(r.Err, ErrTenantRefused)` holds on `res.Failed()` entries. It cannot run after Flyway, see the action, or mark a tenant skipped; a pre/post protocol loops over `MigrateFor` itself. For a custom secret-name grammar use `SecretsProvider.NameFor` instead. Full guide: [wiki/multi_tenant_migration.md](wiki/multi_tenant_migration.md#decorating-the-config-provider).
+The pre-Flyway seam is a decorator `database.DBConfigProvider`: validate or overlay on a copy, or refuse a tenant — `MigrateAll` wraps the error with `%w`, so `errors.Is(r.Err, ErrTenantRefused)` holds on `res.Failed()` entries, and under default fail-fast a refusal stops the run (`ContinueOnError` carries on). It cannot run after Flyway (`Hook` only observes), see the action, or mark a tenant skipped; a pre/post protocol loops over `MigrateFor` itself. For a custom secret-name grammar set `SecretsProvider.NameFor` instead. Full guide: [wiki/multi_tenant_migration.md](wiki/multi_tenant_migration.md#decorating-the-config-provider).
 
 ```go
+var ErrTenantRefused = errors.New("tenant refused by migration guard")
+
 type guardedProvider struct{ inner database.DBConfigProvider; allowedHosts map[string]bool }
 
 func (p guardedProvider) DBConfig(ctx context.Context, tenantID string) (*config.DatabaseConfig, error) {
