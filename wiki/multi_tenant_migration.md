@@ -440,8 +440,8 @@ if failed := res.Failed(); len(failed) > 0 {
 > is the vendor default, so a run that dropped the path still looks correct.
 
 `BaseConfig` paths are used as given for every listed tenant, with no vendor
-interpolation, so in a mixed-vendor fleet each run needs a lister that returns
-only the tenants of the vendor its tree targets.
+interpolation, so in a mixed-vendor fleet each run — library or CLI — needs a
+tenant source that returns only the tenants of the vendor its tree targets.
 
 Run a single-database tree with `MigrateFor`, `ValidateFor` or `InfoFor`. These
 use the `Config` exactly as passed, with no merge — which is why the trees above
@@ -518,7 +518,10 @@ func (p guardedProvider) DBConfig(ctx context.Context, tenantID string) (*config
 ```
 
 Pass `guardedProvider{inner: provider, allowedHosts: map[string]bool{"tenants.db.internal": true}}`
-to `MigrateAll` in place of `provider`.
+to `MigrateAll` in place of `provider`. A decorator guards only the calls that
+go through it: resolve a single-database `MigrateFor` target through the same
+wrapper. The host check is only as strong as the conf — Flyway targets `Host`
+unless the conf hard-codes `flyway.url`.
 
 What a decorator can do:
 
@@ -537,8 +540,9 @@ What it cannot do:
 - See which action is running. `DBConfig` receives only the context and tenant
   ID, so build a separate provider per action when the check differs.
 - Mark a tenant "skipped". Any error it returns is a per-tenant failure, and
-  under the default fail-fast mode the first one stops the run; set
-  `ContinueOnError` to refuse a tenant and carry on. Fleet-level outcome
+  under the default fail-fast mode the first one stops the run — in a parallel
+  run that cancels other tenants' in-flight Flyway processes, leaving their
+  schema state unknown. Set `ContinueOnError` whenever refusals are expected. Fleet-level outcome
   reporting is tracked in [#1692](https://github.com/gaborage/go-bricks/issues/1692).
 
 A caller that needs a pre/post protocol around Flyway — a lock held across its
