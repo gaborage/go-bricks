@@ -28,13 +28,13 @@ var (
 	errSubjectDuplicate   = errors.New("subject member appears more than once")
 	errDocTrailingContent = errors.New("document has trailing content")
 	errNotCompactJOSE     = errors.New("replacement is not a compact JOSE serialization")
-	// errRenderNotOpened and errRenderSubjectInvalid carry no document or subject byte.
-	errRenderNotOpened      = errors.New("sealed: Render needs an OpenedDocument returned by OpenDocument")
-	errRenderSubjectInvalid = errors.New("sealed: Render subject is not a valid JSON value")
 	// errSubjectCaseFoldTwin names nothing from the document on purpose: the twin's name is
 	// by construction a case variant of the Subject path the caller already knows, and any
 	// other document byte is caller data the error path must not carry (ADR-081 class).
 	errSubjectCaseFoldTwin = errors.New("a clear member case-folds to the subject member")
+
+	errRenderNotOpened      = errors.New("sealed: Render needs an OpenedDocument returned by OpenDocument")
+	errRenderSubjectInvalid = errors.New("sealed: Render subject is not a valid JSON value")
 )
 
 // pinSubject is the SEALER's view of a document: locateSubject's rules plus the G9 case-fold
@@ -180,7 +180,7 @@ func removeMember(doc []byte, span subjectSpan) []byte {
 // producer sealed and a redaction placeholder changes nothing but the value. subject must be
 // a valid JSON value. d is not mutated.
 func (d *OpenedDocument) Render(subject json.RawMessage) ([]byte, error) {
-	if d == nil || d.payload == nil {
+	if d.payload == nil {
 		return nil, errRenderNotOpened
 	}
 	if !json.Valid(subject) {

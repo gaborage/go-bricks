@@ -257,12 +257,11 @@ type OpenedDocument struct {
 	// Subject is the decrypted Subject plaintext: PAN-class data by construction. Never log,
 	// echo or otherwise emit it — rendering it is the caller's deliberate decision.
 	Subject []byte
-	// SubjectAt is the byte offset IN Document where the removed member sat, so a renderer
-	// splices a REPLACEMENT member there — `"card":"<redacted>"`, or the member spelled with
-	// Subject as its value — instead of appending it or re-walking the document. The caller
-	// supplies the separator it needs: removing the member took one adjacent separator with
-	// it, and any whitespace that surrounded that separator, so the ORIGINAL bytes are not
-	// recoverable from Document and SubjectAt alone. Render is the byte-exact door.
+	// SubjectAt is the byte offset IN Document where the removed member sat. To put a member
+	// back, call Render, which restores the original layout. Splicing at SubjectAt directly
+	// leaves the separator to the caller: removing the member took one adjacent separator and
+	// the whitespace around it, so the original bytes are not recoverable from Document and
+	// SubjectAt alone.
 	SubjectAt int
 	// Envelope is what the message proved about itself — the same one Open returns.
 	Envelope *Envelope
