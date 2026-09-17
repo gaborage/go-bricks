@@ -383,7 +383,7 @@ func TestMessagingManagerHashBasedIdempotency(t *testing.T) {
 		manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
 
 		decls := NewDeclarations()
-		decls.RegisterExchange(&ExchangeDeclaration{Name: genericEx, Type: exchangeTypeTopic, Durable: true})
+		decls.RegisterExchange(&ExchangeDeclaration{Name: genericEx, Type: ExchangeTypeTopic, Durable: true})
 		decls.RegisterQueue(&QueueDeclaration{Name: genericQueue, Durable: true})
 		decls.RegisterConsumer(&ConsumerDeclaration{Queue: genericQueue, Consumer: genericConsumer, EventType: eventTestEvent, Handler: &mockMessageHandler{}})
 
@@ -414,7 +414,7 @@ func TestMessagingManagerHashBasedIdempotency(t *testing.T) {
 
 		// First set of declarations
 		decls1 := NewDeclarations()
-		decls1.RegisterExchange(&ExchangeDeclaration{Name: genericEx, Type: exchangeTypeTopic, Durable: true})
+		decls1.RegisterExchange(&ExchangeDeclaration{Name: genericEx, Type: ExchangeTypeTopic, Durable: true})
 		decls1.RegisterQueue(&QueueDeclaration{Name: genericQueue, Durable: true})
 		decls1.RegisterConsumer(&ConsumerDeclaration{Queue: genericQueue, Consumer: genericConsumer, EventType: eventA, Handler: &mockMessageHandler{}})
 
@@ -423,7 +423,7 @@ func TestMessagingManagerHashBasedIdempotency(t *testing.T) {
 
 		// Second set of declarations - different structure
 		decls2 := NewDeclarations()
-		decls2.RegisterExchange(&ExchangeDeclaration{Name: genericEx, Type: exchangeTypeTopic, Durable: false}) // Different Durable flag
+		decls2.RegisterExchange(&ExchangeDeclaration{Name: genericEx, Type: ExchangeTypeTopic, Durable: false}) // Different Durable flag
 		decls2.RegisterQueue(&QueueDeclaration{Name: genericQueue, Durable: true})
 		decls2.RegisterConsumer(&ConsumerDeclaration{Queue: genericQueue, Consumer: genericConsumer, EventType: eventA, Handler: &mockMessageHandler{}})
 
@@ -1118,7 +1118,7 @@ func TestNewMessagingManagerDefaultFactoryForwardsAppName(t *testing.T) {
 // share, so a fixture change lands in one place instead of three.
 func newSetupDeclarations() *Declarations {
 	decls := NewDeclarations()
-	decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: exchangeTypeTopic})
+	decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeTopic})
 	decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
 	decls.RegisterBinding(&BindingDeclaration{Queue: testQueue, Exchange: testExchange, RoutingKey: testQueue})
 	decls.RegisterConsumer(&ConsumerDeclaration{Queue: testQueue, Consumer: testConsumer, Handler: &mockMessageHandler{}})

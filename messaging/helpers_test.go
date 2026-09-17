@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -16,7 +17,7 @@ func TestNewTopicExchange(t *testing.T) {
 		exchange := NewTopicExchange("test.exchange")
 
 		assert.Equal(t, "test.exchange", exchange.Name)
-		assert.Equal(t, exchangeTypeTopic, exchange.Type)
+		assert.Equal(t, ExchangeTypeTopic, exchange.Type)
 		assert.True(t, exchange.Durable)
 		assert.False(t, exchange.AutoDelete)
 		assert.False(t, exchange.Internal)
@@ -29,7 +30,7 @@ func TestNewTopicExchange(t *testing.T) {
 		exchange := NewTopicExchange("")
 
 		assert.Empty(t, exchange.Name)
-		assert.Equal(t, exchangeTypeTopic, exchange.Type)
+		assert.Equal(t, ExchangeTypeTopic, exchange.Type)
 		assert.True(t, exchange.Durable)
 	})
 
@@ -42,6 +43,41 @@ func TestNewTopicExchange(t *testing.T) {
 
 		assert.Equal(t, testValue1, ex1.Args[testKey])
 		assert.Equal(t, testValue2, ex2.Args[testKey])
+	})
+}
+
+func TestExchangeTypeConstantsMatchAMQPWireNames(t *testing.T) {
+	assert.Equal(t, amqp.ExchangeDirect, ExchangeTypeDirect)
+	assert.Equal(t, amqp.ExchangeTopic, ExchangeTypeTopic)
+	assert.Equal(t, amqp.ExchangeFanout, ExchangeTypeFanout)
+	assert.Equal(t, amqp.ExchangeHeaders, ExchangeTypeHeaders)
+}
+
+func TestNewDirectExchange(t *testing.T) {
+	t.Run("creates exchange with the topic helper's production defaults", func(t *testing.T) {
+		exchange := NewDirectExchange("tenancy.commands")
+		topic := NewTopicExchange("tenancy.commands")
+
+		assert.Equal(t, "tenancy.commands", exchange.Name)
+		assert.Equal(t, ExchangeTypeDirect, exchange.Type)
+		assert.True(t, exchange.Durable)
+		assert.False(t, exchange.AutoDelete)
+		assert.False(t, exchange.Internal)
+		assert.False(t, exchange.NoWait)
+		assert.NotNil(t, exchange.Args)
+		assert.Empty(t, exchange.Args)
+
+		topic.Type = ExchangeTypeDirect
+		assert.Equal(t, topic, exchange)
+	})
+
+	t.Run("creates independent instances", func(t *testing.T) {
+		ex1 := NewDirectExchange("exchange1")
+		ex2 := NewDirectExchange("exchange2")
+
+		ex1.Args[testKey] = testValue1
+
+		assert.Empty(t, ex2.Args)
 	})
 }
 
@@ -252,7 +288,7 @@ func TestDeclarationsTopicExchange(t *testing.T) {
 
 		assert.NotNil(t, exchange)
 		assert.Equal(t, "test.exchange", exchange.Name)
-		assert.Equal(t, exchangeTypeTopic, exchange.Type)
+		assert.Equal(t, ExchangeTypeTopic, exchange.Type)
 		assert.True(t, exchange.Durable)
 
 		// Verify it's registered
@@ -292,6 +328,23 @@ func TestDeclarationsTopicExchange(t *testing.T) {
 		assert.NotNil(t, ex2)
 		assert.Len(t, decls.Exchanges, 2)
 	})
+}
+
+func TestDeclarationsDirectExchange(t *testing.T) {
+	decls := NewDeclarations()
+
+	exchange := decls.DeclareDirectExchange("tenancy.commands")
+
+	assert.Equal(t, NewDirectExchange("tenancy.commands"), exchange)
+	require.Len(t, decls.Exchanges, 1)
+	registered := decls.Exchanges["tenancy.commands"]
+	require.NotNil(t, registered)
+	assert.Equal(t, ExchangeTypeDirect, registered.Type)
+	assert.True(t, registered.Durable)
+	assert.False(t, registered.AutoDelete)
+	assert.NotNil(t, registered.Args)
+	assert.Empty(t, registered.Args)
+	assert.NoError(t, decls.Validate())
 }
 
 func TestDeclarationsQueue(t *testing.T) {
@@ -598,7 +651,7 @@ func TestDeclareQueueWithDLQDefaults(t *testing.T) {
 
 	dlx, ok := decls.Exchanges["orders.queue.dlx"]
 	assert.True(t, ok)
-	assert.Equal(t, exchangeTypeFanout, dlx.Type)
+	assert.Equal(t, ExchangeTypeFanout, dlx.Type)
 	assert.True(t, dlx.Durable)
 
 	dlq, ok := decls.Queues["orders.queue.dlq"]

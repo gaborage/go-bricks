@@ -139,7 +139,7 @@ func TestDeclarationsRegisterExchange(t *testing.T) {
 		decls := NewDeclarations()
 		exchange := &ExchangeDeclaration{
 			Name:       testExchange,
-			Type:       exchangeTypeTopic,
+			Type:       ExchangeTypeTopic,
 			Durable:    true,
 			AutoDelete: false,
 			Internal:   false,
@@ -176,7 +176,7 @@ func TestDeclarationsRegisterExchange(t *testing.T) {
 		decls := NewDeclarations()
 		exchange := &ExchangeDeclaration{
 			Name: testExchange,
-			Type: exchangeTypeDirect,
+			Type: ExchangeTypeDirect,
 			Args: nil,
 		}
 
@@ -189,14 +189,14 @@ func TestDeclarationsRegisterExchange(t *testing.T) {
 
 	t.Run("overwrites existing exchange", func(t *testing.T) {
 		decls := NewDeclarations()
-		exchange1 := &ExchangeDeclaration{Name: testName, Type: exchangeTypeDirect}
-		exchange2 := &ExchangeDeclaration{Name: testName, Type: exchangeTypeTopic}
+		exchange1 := &ExchangeDeclaration{Name: testName, Type: ExchangeTypeDirect}
+		exchange2 := &ExchangeDeclaration{Name: testName, Type: ExchangeTypeTopic}
 
 		decls.RegisterExchange(exchange1)
 		decls.RegisterExchange(exchange2)
 
 		assert.Len(t, decls.Exchanges, 1)
-		assert.Equal(t, exchangeTypeTopic, decls.Exchanges[testName].Type)
+		assert.Equal(t, ExchangeTypeTopic, decls.Exchanges[testName].Type)
 	})
 }
 
@@ -493,7 +493,7 @@ func TestDeclarationsRegisterConsumer(t *testing.T) {
 func TestDeclarationsValidate(t *testing.T) {
 	t.Run("valid declarations", func(t *testing.T) {
 		decls := NewDeclarations()
-		decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: exchangeTypeTopic})
+		decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeTopic})
 		decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
 		decls.RegisterBinding(&BindingDeclaration{Queue: testQueue, Exchange: testExchange})
 		decls.RegisterPublisher(&PublisherDeclaration{Exchange: testExchange})
@@ -506,7 +506,7 @@ func TestDeclarationsValidate(t *testing.T) {
 
 	t.Run("binding references non-existent queue", func(t *testing.T) {
 		decls := NewDeclarations()
-		decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: exchangeTypeTopic})
+		decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeTopic})
 		decls.RegisterBinding(&BindingDeclaration{Queue: missingQueue, Exchange: testExchange})
 
 		err := decls.Validate()
@@ -591,7 +591,7 @@ func TestDeclarationsReplayToRegistry(t *testing.T) {
 		mockReg := &mockRegistry{}
 
 		// Set up declarations
-		exchange := &ExchangeDeclaration{Name: testExchange, Type: exchangeTypeTopic}
+		exchange := &ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeTopic}
 		queue := &QueueDeclaration{Name: testQueue}
 		binding := &BindingDeclaration{Queue: testQueue, Exchange: testExchange}
 		publisher := &PublisherDeclaration{Exchange: testExchange}
@@ -650,8 +650,8 @@ func TestDeclarationsReplayToRegistry(t *testing.T) {
 func TestDeclarationsStats(t *testing.T) {
 	t.Run("returns correct counts", func(t *testing.T) {
 		decls := NewDeclarations()
-		decls.RegisterExchange(&ExchangeDeclaration{Name: shortExchange1, Type: exchangeTypeTopic})
-		decls.RegisterExchange(&ExchangeDeclaration{Name: shortExchange2, Type: exchangeTypeDirect})
+		decls.RegisterExchange(&ExchangeDeclaration{Name: shortExchange1, Type: ExchangeTypeTopic})
+		decls.RegisterExchange(&ExchangeDeclaration{Name: shortExchange2, Type: ExchangeTypeDirect})
 		decls.RegisterQueue(&QueueDeclaration{Name: shortQueue1})
 		decls.RegisterBinding(&BindingDeclaration{Queue: shortQueue1, Exchange: shortExchange1})
 		decls.RegisterBinding(&BindingDeclaration{Queue: shortQueue1, Exchange: shortExchange2})
@@ -688,7 +688,7 @@ func TestDeclarationsClone(t *testing.T) {
 
 		decls.RegisterExchange(&ExchangeDeclaration{
 			Name: testExchange,
-			Type: exchangeTypeTopic,
+			Type: ExchangeTypeTopic,
 			Args: map[string]any{testKey: testValue},
 		})
 		decls.RegisterQueue(&QueueDeclaration{
@@ -855,7 +855,7 @@ func TestDeclarationsIsEmptyMatchesZeroStats(t *testing.T) {
 		want     DeclarationStats
 	}{
 		{"exchange_only", func(d *Declarations) {
-			d.RegisterExchange(&ExchangeDeclaration{Name: shortExchange1, Type: exchangeTypeTopic})
+			d.RegisterExchange(&ExchangeDeclaration{Name: shortExchange1, Type: ExchangeTypeTopic})
 		}, DeclarationStats{Exchanges: 1}},
 		{"queue_only", func(d *Declarations) { d.RegisterQueue(&QueueDeclaration{Name: shortQueue1}) }, DeclarationStats{Queues: 1}},
 		{"binding_only", func(d *Declarations) {
@@ -1013,7 +1013,7 @@ func TestDeclarationsHashSeparatesTenantOptional(t *testing.T) {
 // writeInt64 / writeFloat64.
 func TestDeclarationsHashCoversAllArgTypes(t *testing.T) {
 	d := NewDeclarations()
-	d.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: exchangeTypeTopic, Durable: true})
+	d.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeTopic, Durable: true})
 	d.RegisterQueue(&QueueDeclaration{
 		Name:    testQueue,
 		Durable: true,
@@ -1738,4 +1738,64 @@ func TestCloneCopiesQueueTypeError(t *testing.T) {
 	err := d.Clone().Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "bogus")
+}
+
+func TestValidateExchangeType(t *testing.T) {
+	tests := []struct {
+		name         string
+		exchangeType string
+		wantErr      bool
+	}{
+		{name: "core_direct", exchangeType: ExchangeTypeDirect},
+		{name: "core_topic", exchangeType: ExchangeTypeTopic},
+		{name: "core_fanout", exchangeType: ExchangeTypeFanout},
+		{name: "core_headers", exchangeType: ExchangeTypeHeaders},
+		{name: "x_plugin_type", exchangeType: "x-delayed-message"},
+		{name: "empty", exchangeType: "", wantErr: true},
+		{name: "wrong_case", exchangeType: "Direct", wantErr: true},
+		{name: "misspelled", exchangeType: "topc", wantErr: true},
+		{name: "plugin_prefix_without_dash", exchangeType: "xdelayed", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewDeclarations()
+			d.RegisterExchange(&ExchangeDeclaration{Name: "orders.commands", Type: tt.exchangeType, Durable: true})
+
+			err := d.Validate()
+
+			if !tt.wantErr {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `exchange "orders.commands"`)
+			assert.Contains(t, err.Error(), fmt.Sprintf("type %q", tt.exchangeType))
+		})
+	}
+}
+
+func TestValidateExchangeTypeAggregatesEveryViolation(t *testing.T) {
+	d := NewDeclarations()
+	d.RegisterExchange(&ExchangeDeclaration{Name: "b.exchange", Type: "topc"})
+	d.RegisterExchange(&ExchangeDeclaration{Name: "a.exchange", Type: ""})
+
+	err := d.Validate()
+
+	require.Error(t, err)
+	assert.Equal(t,
+		`exchange "a.exchange" has unknown type "": use direct, topic, fanout, headers or an x- plugin type`+"\n"+
+			`exchange "b.exchange" has unknown type "topc": use direct, topic, fanout, headers or an x- plugin type`,
+		err.Error())
+}
+
+func TestValidateAcceptsDirectExchangeReferences(t *testing.T) {
+	d := NewDeclarations()
+	d.DeclareDirectExchange("tenancy.commands")
+	d.DeclareQueue("tenancy.provision")
+	d.DeclareBinding("tenancy.provision", "tenancy.commands", "tenant.provision")
+	d.RegisterPublisher(&PublisherDeclaration{Exchange: "tenancy.commands", RoutingKey: "tenant.provision", EventType: "tenant.provision"})
+	d.RegisterConsumer(&ConsumerDeclaration{Queue: "tenancy.provision", Consumer: "provisioner", EventType: "tenant.provision"})
+
+	assert.NoError(t, d.Validate())
 }

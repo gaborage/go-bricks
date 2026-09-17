@@ -3149,6 +3149,7 @@ var _ app.MessagingDeclarer = (*Module)(nil)
 func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 	// Topology — production-safe defaults: durable=true, auto_delete=false
 	exchange := decls.DeclareTopicExchange("orders.events")
+	decls.DeclareDirectExchange("orders.commands") // exact routing-key match; same defaults
 	queue := decls.DeclareQueue("orders.processing")
 	notices := decls.DeclareQueue("orders.notices") // consumed elsewhere; see the notice publisher below
 	decls.DeclareBinding(queue.Name, exchange.Name, "order.*")
@@ -3731,6 +3732,7 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 | Concern | API |
 |---|---|
 | Get client (tenant-aware) | `client, err := deps.Messaging(ctx)` |
+| Declare an exchange | `decls.DeclareTopicExchange(name)` / `decls.DeclareDirectExchange(name)`; a hand-built `Type` is `messaging.ExchangeTypeDirect`/`Topic`/`Fanout`/`Headers` or an `x-` plugin type. Any other type fails `Validate()` at startup |
 | Declare a publisher (returns the handle) | `pub := messaging.DeclareTypedPublisher[OrderCreatedEvent](decls, &messaging.PublisherOptions{Exchange: "orders.events", RoutingKey: "order.created", EventType: "OrderCreated"})` |
 | Publish — routed | `pub.Publish(ctx, client, evt)` — destination and headers come from the declaration |
 | Publish — default exchange | declare with `Exchange: ""` and `RoutingKey: queueName`, then the same `pub.Publish(ctx, client, evt)` |

@@ -288,7 +288,7 @@ func TestMockAMQPClientDeclareQueue(t *testing.T) {
 func TestMockAMQPClientDeclareExchange(t *testing.T) {
 	client := NewMockAMQPClient()
 
-	err := client.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: testExchange, Type: "topic", Durable: true})
+	err := client.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeTopic, Durable: true})
 	require.NoError(t, err)
 	assert.True(t, client.exchanges[testExchange])
 }
@@ -326,7 +326,7 @@ func TestMockAMQPClientNotReady(t *testing.T) {
 	assert.Equal(t, errNotConnected, err)
 
 	// Test DeclareExchange
-	err = client.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: "test", Type: "topic", Durable: true})
+	err = client.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: "test", Type: ExchangeTypeTopic, Durable: true})
 	require.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
 

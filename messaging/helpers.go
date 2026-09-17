@@ -6,9 +6,13 @@ import (
 	"time"
 )
 
+// AMQP 0-9-1 core exchange types, for ExchangeDeclaration.Type.
+// Declarations.Validate admits these and any "x-" plugin type.
 const (
-	exchangeTypeTopic  = "topic"
-	exchangeTypeFanout = "fanout"
+	ExchangeTypeDirect  = "direct"
+	ExchangeTypeTopic   = "topic"
+	ExchangeTypeFanout  = "fanout"
+	ExchangeTypeHeaders = "headers"
 )
 
 // NewTopicExchange creates a topic exchange with production-safe defaults.
@@ -22,7 +26,27 @@ const (
 func NewTopicExchange(name string) *ExchangeDeclaration {
 	return &ExchangeDeclaration{
 		Name:       name,
-		Type:       exchangeTypeTopic,
+		Type:       ExchangeTypeTopic,
+		Durable:    true,
+		AutoDelete: false,
+		Internal:   false,
+		NoWait:     false,
+		Args:       make(map[string]any),
+	}
+}
+
+// NewDirectExchange creates a direct exchange with production-safe defaults.
+// Direct exchanges route messages to bindings whose routing key matches exactly.
+//
+// Production defaults:
+//   - Durable: true (survives broker restart)
+//   - AutoDelete: false (won't delete when unused)
+//   - Internal: false (can be published to directly)
+//   - NoWait: false (waits for broker confirmation)
+func NewDirectExchange(name string) *ExchangeDeclaration {
+	return &ExchangeDeclaration{
+		Name:       name,
+		Type:       ExchangeTypeDirect,
 		Durable:    true,
 		AutoDelete: false,
 		Internal:   false,
@@ -144,6 +168,17 @@ func (d *Declarations) DeclareTopicExchange(name string) *ExchangeDeclaration {
 	return exchange
 }
 
+// DeclareDirectExchange creates and registers a direct exchange in one step.
+// RegisterExchange copies the Args map into a new declaration, so — as with
+// DeclareQueue — the returned pointer is not the stored one and Args set on it
+// afterwards are discarded. Set them on d.Exchanges[name].Args, or build with
+// NewDirectExchange and register that.
+func (d *Declarations) DeclareDirectExchange(name string) *ExchangeDeclaration {
+	exchange := NewDirectExchange(name)
+	d.RegisterExchange(exchange)
+	return exchange
+}
+
 // DeclareQueue creates and registers a queue in one step. It registers
 // IMMEDIATELY, and RegisterQueue copies Args into a new declaration, so the
 // returned pointer is NOT the stored one: setting Args on it afterwards changes
@@ -236,7 +271,7 @@ func (d *Declarations) DeclareQueueWithDLQ(name string, dl *DeadLetterSpec) *Que
 
 	d.RegisterExchange(&ExchangeDeclaration{
 		Name:    dlx,
-		Type:    exchangeTypeFanout,
+		Type:    ExchangeTypeFanout,
 		Durable: true,
 		Args:    make(map[string]any),
 	})

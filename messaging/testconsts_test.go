@@ -28,9 +28,6 @@ const (
 	testValue2 = "value2"
 	testArg    = "arg"
 
-	// Exchange types (exchangeTypeTopic defined in helpers.go)
-	exchangeTypeDirect = "direct"
-
 	// Map keys (commonly used in Args/Headers)
 	dlxArgKey     = "x-dead-letter-exchange"
 	mapKeyTTL     = "ttl"

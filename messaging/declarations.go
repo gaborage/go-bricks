@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -354,6 +355,10 @@ func (d *Declarations) Validate() error {
 		return err
 	}
 
+	if err := d.validateExchangeTypes(); err != nil {
+		return err
+	}
+
 	for _, publisher := range d.Publishers {
 		if err := d.validatePublisherDestination(publisher); err != nil {
 			return err
@@ -494,6 +499,33 @@ func (d *Declarations) validateQueueTypeDeclarations() error {
 	errs := slices.Clone(d.queueTypeErrs)
 	errs = append(errs, d.validateQuorumQueueShape()...)
 	return errors.Join(errs...)
+}
+
+// validateExchangeTypes reports every exchange whose Type is neither an AMQP
+// core type nor an "x-" plugin type (x-delayed-message, x-consistent-hash), in
+// sorted order: a misspelled type would otherwise pass startup and fail at the
+// broker on declaration replay.
+func (d *Declarations) validateExchangeTypes() error {
+	var errs []error
+
+	for _, name := range slices.Sorted(maps.Keys(d.Exchanges)) {
+		exchangeType := d.Exchanges[name].Type
+		if isKnownExchangeType(exchangeType) {
+			continue
+		}
+		errs = append(errs, fmt.Errorf("exchange %q has unknown type %q: use %s, %s, %s, %s or an x- plugin type",
+			name, exchangeType, ExchangeTypeDirect, ExchangeTypeTopic, ExchangeTypeFanout, ExchangeTypeHeaders))
+	}
+
+	return errors.Join(errs...)
+}
+
+func isKnownExchangeType(exchangeType string) bool {
+	switch exchangeType {
+	case ExchangeTypeDirect, ExchangeTypeTopic, ExchangeTypeFanout, ExchangeTypeHeaders:
+		return true
+	}
+	return strings.HasPrefix(exchangeType, "x-")
 }
 
 // validateQuorumQueueShape reports every quorum queue carrying a flag or arg the

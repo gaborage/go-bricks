@@ -244,7 +244,7 @@ func TestRegistryDeclareInfrastructureSuccessSimple(t *testing.T) {
 	// Register infrastructure
 	registry.RegisterExchange(&ExchangeDeclaration{
 		Name: testExchangeName,
-		Type: "topic",
+		Type: ExchangeTypeTopic,
 	})
 	registry.RegisterQueue(&QueueDeclaration{
 		Name:    testQueueName,
@@ -323,7 +323,7 @@ func TestRegistryDeclareInfrastructureExchangeDeclarationErrorSimple(t *testing.
 
 	registry.RegisterExchange(&ExchangeDeclaration{
 		Name: testExchangeName,
-		Type: "topic",
+		Type: ExchangeTypeTopic,
 	})
 
 	err := registry.DeclareInfrastructure(t.Context())
@@ -491,7 +491,7 @@ func TestRegistryRegisterAfterDeclaredSimple(t *testing.T) {
 	// Now try to register new components (should log warnings but not fail)
 	registry.RegisterExchange(&ExchangeDeclaration{
 		Name: lateExchangeName,
-		Type: "topic",
+		Type: ExchangeTypeTopic,
 	})
 
 	registry.RegisterQueue(&QueueDeclaration{
@@ -597,12 +597,12 @@ func TestRegistryExchanges(t *testing.T) {
 	// Add exchanges
 	ex1 := &ExchangeDeclaration{
 		Name:    testExchange1Name,
-		Type:    "topic",
+		Type:    ExchangeTypeTopic,
 		Durable: true,
 	}
 	ex2 := &ExchangeDeclaration{
 		Name:       testExchange2Name,
-		Type:       "direct",
+		Type:       ExchangeTypeDirect,
 		AutoDelete: true,
 	}
 
@@ -749,7 +749,7 @@ func TestRegistryDeclareInfrastructureClientBecomesReady(t *testing.T) {
 
 	registry.RegisterExchange(&ExchangeDeclaration{
 		Name: testExchangeName,
-		Type: "topic",
+		Type: ExchangeTypeTopic,
 	})
 
 	// Start declaration in a goroutine
@@ -3080,7 +3080,7 @@ func startRedeclareRegistry(ctx context.Context, t *testing.T, client AMQPClient
 	t.Helper()
 	registry := NewRegistry(client, log)
 	registry.resubscribeDelay = time.Millisecond
-	registry.RegisterExchange(&ExchangeDeclaration{Name: testExchangeName, Type: "topic", Durable: true})
+	registry.RegisterExchange(&ExchangeDeclaration{Name: testExchangeName, Type: ExchangeTypeTopic, Durable: true})
 	registry.RegisterQueue(&QueueDeclaration{Name: testQueueName, Durable: true})
 	registry.RegisterBinding(&BindingDeclaration{Queue: testQueueName, Exchange: testExchangeName, RoutingKey: "orders.#"})
 	for _, binding := range bindings {
