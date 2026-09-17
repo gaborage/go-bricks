@@ -1188,3 +1188,90 @@ func TestProvisionPGRolesTxWrapNamesStepAndRedactedStatement(t *testing.T) {
 	assert.NotContains(t, err.Error(), spec.MigratorPassword)
 	assert.Len(t, exec.stmts, 3, "the loop must stop at the failing statement")
 }
+
+// expectFloorRow queues the pg_roles read CheckPGRoleFloor issues for role,
+// answering with the five attributes in the floor's order.
+func expectFloorRow(mock sqlmock.Sqlmock, role string, attrs [5]bool) {
+	mock.ExpectQuery(`FROM pg_catalog\.pg_roles WHERE rolname = \$1`).WithArgs(role).WillReturnRows(
+		sqlmock.NewRows([]string{"rolsuper", "rolcreatedb", "rolcreaterole", "rolreplication", "rolbypassrls"}).
+			AddRow(attrs[0], attrs[1], attrs[2], attrs[3], attrs[4]))
+}
+
+func TestCheckPGRoleFloorPassesARoleAtTheFloor(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	expectFloorRow(mock, "rt", [5]bool{})
+
+	require.NoError(t, CheckPGRoleFloor(context.Background(), db, "rt"))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCheckPGRoleFloorNamesEveryAttributeAboveTheFloor(t *testing.T) {
+	const prefix = `migration: role holds attributes above the provisioning floor: role "rt" holds `
+	tests := []struct {
+		name  string
+		attrs [5]bool
+		want  string
+	}{
+		{name: "superuser", attrs: [5]bool{true, false, false, false, false}, want: "SUPERUSER"},
+		{name: "createdb", attrs: [5]bool{false, true, false, false, false}, want: "CREATEDB"},
+		{name: "createrole", attrs: [5]bool{false, false, true, false, false}, want: "CREATEROLE"},
+		{name: "replication", attrs: [5]bool{false, false, false, true, false}, want: "REPLICATION"},
+		{name: "bypassrls", attrs: [5]bool{false, false, false, false, true}, want: "BYPASSRLS"},
+		{name: "all_five", attrs: [5]bool{true, true, true, true, true}, want: "SUPERUSER, CREATEDB, CREATEROLE, REPLICATION, BYPASSRLS"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+			expectFloorRow(mock, "rt", tt.attrs)
+
+			err = CheckPGRoleFloor(context.Background(), db, "rt")
+			require.ErrorIs(t, err, ErrPGRoleFloorViolated)
+			assert.EqualError(t, err, prefix+tt.want)
+		})
+	}
+}
+
+func TestCheckPGRoleFloorReportsAMissingRole(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	mock.ExpectQuery(`FROM pg_catalog\.pg_roles`).WithArgs("gone").WillReturnRows(
+		sqlmock.NewRows([]string{"rolsuper", "rolcreatedb", "rolcreaterole", "rolreplication", "rolbypassrls"}))
+
+	err = CheckPGRoleFloor(context.Background(), db, "gone")
+	require.ErrorIs(t, err, ErrPGRoleNotFound)
+	assert.NotErrorIs(t, err, ErrPGRoleFloorViolated)
+}
+
+func TestCheckPGRoleFloorWrapsAQueryFailure(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	boom := errors.New("connection reset")
+	mock.ExpectQuery(`FROM pg_catalog\.pg_roles`).WithArgs("rt").WillReturnError(boom)
+
+	err = CheckPGRoleFloor(context.Background(), db, "rt")
+	require.ErrorIs(t, err, boom)
+	require.NotErrorIs(t, err, ErrPGRoleNotFound)
+	assert.NotErrorIs(t, err, ErrPGRoleFloorViolated)
+}
+
+func TestCheckPGRoleFloorRejectsAnInvalidIdentifierBeforeQuerying(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	err = CheckPGRoleFloor(context.Background(), db, `bad"role`)
+	require.ErrorIs(t, err, ErrInvalidPGIdentifier)
+	require.NoError(t, mock.ExpectationsWereMet(), "an invalid role must not reach the database")
+}
+
+func TestCheckPGRoleFloorRejectsNilDB(t *testing.T) {
+	err := CheckPGRoleFloor(context.Background(), nil, "rt")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-nil *sql.DB")
+}
