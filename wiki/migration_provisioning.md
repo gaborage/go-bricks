@@ -161,7 +161,7 @@ to preserve the persisted metadata unchanged.
 ```sql
 SELECT id, tenant_id, state, attempts, last_error, updated_at
 FROM provisioning_jobs
-WHERE tenant_id = 'tenant-a'
+WHERE tenant_id = 'a'
 ORDER BY updated_at DESC;
 ```
 
