@@ -116,60 +116,110 @@ func TestProcessOnceRefusesTheSealedKeyShapeFromAHeader(t *testing.T) {
 }
 
 // TestProcessOnceAdmitsTheSealedKeyOnlyFromTheSealedDoor pins the provenance
-// cross-check: the sealed door's own key passes inside its handler, the same
-// key carried out of that context is refused before the ledger, and a wire key
-// is admitted under the sealed context (ADR-097 §4: the grammar governs wire
-// keys, which never collide with the sealed key space).
+// cross-check through the real sealed consume door: a delivery admits its own
+// sealed key, a key retained from another delivery is refused before the
+// ledger, a wire key is admitted under the sealed context (ADR-097 §4: the
+// grammar governs wire keys, which never collide with the sealed key space),
+// and a sealed key under a plain context is still refused.
 func TestProcessOnceAdmitsTheSealedKeyOnlyFromTheSealedDoor(t *testing.T) {
-	t.Run("sealed_delivery", func(t *testing.T) {
-		db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
-		db.ExpectTransaction().ExpectExec(`INSERT INTO gobricks_inbox`).WillReturnRowsAffected(1)
-		in := newTestInbox(db)
-		ran := false
-		err := runSealed(t, func(ctx context.Context, key messaging.DedupKey) error {
-			return in.ProcessOnce(ctx, key, func(context.Context, dbtypes.Tx) error {
-				ran = true
-				return nil
-			})
-		})
-		require.NoError(t, err)
-		assert.True(t, ran)
-	})
+	const jtiA, jtiB = "jti-a", "jti-b"
+	var keyA messaging.DedupKey
+	require.NoError(t, runSealedWithJTI(t, jtiA, func(_ context.Context, key messaging.DedupKey) error {
+		keyA = key
+		return nil
+	}))
+	require.True(t, keyA.Sealed())
 
-	t.Run("sealed_key_outside_the_sealed_delivery", func(t *testing.T) {
-		var escaped messaging.DedupKey
-		require.NoError(t, runSealed(t, func(_ context.Context, key messaging.DedupKey) error {
-			escaped = key
-			return nil
-		}))
-		require.True(t, escaped.Sealed())
-
-		db := dbtesting.NewTestDB(dbtypes.PostgreSQL) // no expectations: any Begin fails
-		in := newTestInbox(db)
-		ran := false
-		err := in.ProcessOnce(t.Context(), escaped, func(context.Context, dbtypes.Tx) error {
-			ran = true
-			return nil
+	cases := []struct {
+		name    string
+		run     func(t *testing.T, in *Inbox) (ran bool, err error)
+		wantErr bool
+	}{
+		{
+			name: "a_key_under_b_context",
+			run: func(t *testing.T, in *Inbox) (bool, error) {
+				ran := false
+				err := runSealedWithJTI(t, jtiB, func(ctx context.Context, _ messaging.DedupKey) error {
+					return in.ProcessOnce(ctx, keyA, func(context.Context, dbtypes.Tx) error {
+						ran = true
+						return nil
+					})
+				})
+				return ran, err
+			},
+			wantErr: true,
+		},
+		{
+			name: "b_key_under_b_context",
+			run: func(t *testing.T, in *Inbox) (bool, error) {
+				ran := false
+				err := runSealedWithJTI(t, jtiB, func(ctx context.Context, key messaging.DedupKey) error {
+					return in.ProcessOnce(ctx, key, func(context.Context, dbtypes.Tx) error {
+						ran = true
+						return nil
+					})
+				})
+				return ran, err
+			},
+		},
+		{
+			name: "a_key_under_a_context",
+			run: func(t *testing.T, in *Inbox) (bool, error) {
+				ran := false
+				err := runSealedWithJTI(t, jtiA, func(ctx context.Context, key messaging.DedupKey) error {
+					return in.ProcessOnce(ctx, key, func(context.Context, dbtypes.Tx) error {
+						ran = true
+						return nil
+					})
+				})
+				return ran, err
+			},
+		},
+		{
+			name: "a_key_under_plain_context",
+			run: func(t *testing.T, in *Inbox) (bool, error) {
+				ran := false
+				err := in.ProcessOnce(t.Context(), keyA, func(context.Context, dbtypes.Tx) error {
+					ran = true
+					return nil
+				})
+				return ran, err
+			},
+			wantErr: true,
+		},
+		{
+			name: "wire_key_under_the_sealed_delivery",
+			run: func(t *testing.T, in *Inbox) (bool, error) {
+				ran := false
+				err := runSealedWithJTI(t, jtiB, func(ctx context.Context, _ messaging.DedupKey) error {
+					return in.ProcessOnce(ctx, wireKey(t, "business-key-7"), func(context.Context, dbtypes.Tx) error {
+						ran = true
+						return nil
+					})
+				})
+				return ran, err
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+			if !tc.wantErr {
+				db.ExpectTransaction().ExpectExec(`INSERT INTO gobricks_inbox`).WillReturnRowsAffected(1)
+			}
+			in := newTestInbox(db)
+			ran, err := tc.run(t, in)
+			if tc.wantErr {
+				require.ErrorIs(t, err, messaging.ErrInvalidEventID)
+				assert.False(t, ran, "fn never runs for a refused key")
+				assert.Empty(t, db.ExecLog(), "no INSERT reaches the ledger for a refused key")
+				assert.NotContains(t, err.Error(), jtiA, "the error never carries the key")
+				return
+			}
+			require.NoError(t, err)
+			assert.True(t, ran)
 		})
-		require.ErrorIs(t, err, messaging.ErrInvalidEventID)
-		assert.False(t, ran)
-		assert.Empty(t, db.ExecLog())
-	})
-
-	t.Run("wire_key_under_the_sealed_delivery", func(t *testing.T) {
-		db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
-		db.ExpectTransaction().ExpectExec(`INSERT INTO gobricks_inbox`).WillReturnRowsAffected(1)
-		in := newTestInbox(db)
-		ran := false
-		err := runSealed(t, func(ctx context.Context, _ messaging.DedupKey) error {
-			return in.ProcessOnce(ctx, wireKey(t, "business-key-7"), func(context.Context, dbtypes.Tx) error {
-				ran = true
-				return nil
-			})
-		})
-		require.NoError(t, err)
-		assert.True(t, ran)
-	})
+	}
 }
 
 func TestProcessOnceRunsFnOnFirstEvent(t *testing.T) {
@@ -331,9 +381,13 @@ const (
 
 type stubOpener struct{}
 
-func (stubOpener) Open(_ context.Context, _ []byte, _ messaging.SealTenantRule, out any) (messaging.SealEnvelope, error) {
+func (stubOpener) Open(_ context.Context, body []byte, _ messaging.SealTenantRule, out any) (messaging.SealEnvelope, error) {
 	*out.(*sealedEvent) = sealedEvent{Ref: "abc"}
-	return messaging.SealEnvelope{JTI: sealedTestJTI, SignFamily: sealedTestFamily}, nil
+	jti := sealedTestJTI
+	if len(body) > 0 {
+		jti = string(body)
+	}
+	return messaging.SealEnvelope{JTI: jti, SignFamily: sealedTestFamily}, nil
 }
 
 type stubCodec struct{}
@@ -356,9 +410,16 @@ func (stubCodec) NewOpener(messaging.SealSpec, string, *messaging.SealRuntime) (
 var registerStubCodec sync.Once
 
 // runSealed runs body inside a handler the sealed typed door installed, handing
-// it the handler's context (which carries the sealed-delivery marker) and the
-// Sealed DedupKey the door composed.
+// it the handler's context (which carries the sealed-delivery key) and the
+// Sealed DedupKey the door composed for sealedTestJTI.
 func runSealed(t *testing.T, body func(ctx context.Context, key messaging.DedupKey) error) error {
+	t.Helper()
+	return runSealedWithJTI(t, sealedTestJTI, body)
+}
+
+// runSealedWithJTI is runSealed for a chosen jti, so two deliveries can carry
+// distinct sealed keys through the same consume door.
+func runSealedWithJTI(t *testing.T, jti string, body func(ctx context.Context, key messaging.DedupKey) error) error {
 	t.Helper()
 	registerStubCodec.Do(func() { messaging.RegisterSealCodec(stubCodec{}) })
 	messaging.ConfigureSealing(&messaging.SealRuntime{KeyStore: kstest.NewMockKeyStore()})
@@ -375,7 +436,7 @@ func runSealed(t *testing.T, body func(ctx context.Context, key messaging.DedupK
 		return result
 	})
 	require.NoError(t, decls.Validate())
-	err := opts.Handler.Handle(t.Context(), &amqp.Delivery{Body: []byte("a.b.c")})
+	err := opts.Handler.Handle(t.Context(), &amqp.Delivery{Body: []byte(jti)})
 	require.Equal(t, result, err)
 	return result
 }
