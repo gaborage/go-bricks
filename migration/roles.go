@@ -18,9 +18,9 @@ import (
 // migrator-vs-runtime role-separation model defined in issue #378.
 //
 // Migrator role: owns the per-tenant schema, holds DDL privileges, used
-// exclusively by the migration runner. Created with NOSUPERUSER NOCREATEDB
-// NOCREATEROLE NOREPLICATION NOBYPASSRLS so even a compromised migrator
-// credential cannot escalate itself.
+// exclusively by the migration runner. Unless SkipMigratorRole is set, created
+// with NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS so even a
+// compromised migrator credential cannot escalate itself.
 //
 // Runtime role: per-tenant LOGIN role granted only DML on the tenant schema.
 // Does not own the schema, so PostgreSQL's default ownership model rejects
@@ -51,6 +51,21 @@ type PGRoleSpec struct {
 	// as MigratorPassword — passing it on every call makes secret rotation a
 	// no-op rerun.
 	RuntimePassword string
+
+	// SkipMigratorRole leaves MigratorRole untouched: no CREATE ROLE, attribute
+	// lockdown, password or search_path statement is emitted for it. Set it when
+	// the migrator is created out of band or shared across tenants. MigratorRole
+	// is still required — it remains the schema's AUTHORIZATION and the FOR ROLE
+	// target of the default privileges — and MigratorPassword must be empty.
+	SkipMigratorRole bool
+
+	// SkipFloorReassert drops the ALTER ROLE that re-applies the attribute floor
+	// to a role on every call. CREATE ROLE still carries the full floor, so a
+	// role this spec creates starts locked down, but later drift is no longer
+	// repaired. A provisioner that is not a superuser needs it: of the five
+	// lockdown attributes, PostgreSQL lets a CREATEROLE-only role ALTER only
+	// NOCREATEROLE.
+	SkipFloorReassert bool
 
 	// IdentifierPolicy optionally tightens the identifier rule Validate
 	// applies to Schema, MigratorRole and RuntimeRole; nil means the floor alone.
@@ -158,6 +173,11 @@ var ErrReservedPGIdentifier = errors.New("migration: identifier is reserved by P
 // subprocess environment.
 var ErrPGRolePasswordHasControlChar = errors.New("migration: role password contains forbidden control character (CR/LF/NUL)")
 
+// ErrPGRoleSkippedMigratorHasPassword is returned by Validate when
+// SkipMigratorRole is set together with a non-empty MigratorPassword, so a
+// leftover password can never alter a migrator role managed out of band.
+var ErrPGRoleSkippedMigratorHasPassword = errors.New("migration: MigratorPassword must be empty when SkipMigratorRole is set")
+
 // Field name constants used in Validate error messages — the identifier
 // fields via ErrInvalidPGIdentifier, the password fields via
 // ErrPGRolePasswordHasControlChar — so callers (including tests) can assert
@@ -186,7 +206,9 @@ const (
 // Returns ErrInvalidPGIdentifier wrapped with the offending field name, value
 // and the identifier sentinel for an identifier failure, or
 // ErrPGRolePasswordHasControlChar wrapped with the offending field name —
-// never the value — for a password failure.
+// never the value — for a password failure, or
+// ErrPGRoleSkippedMigratorHasPassword when SkipMigratorRole is set with a
+// non-empty MigratorPassword.
 func (s *PGRoleSpec) Validate() error {
 	for _, f := range []struct{ name, value string }{
 		{pgRoleFieldSchema, s.Schema},
@@ -199,6 +221,9 @@ func (s *PGRoleSpec) Validate() error {
 	}
 	if s.MigratorRole == s.RuntimeRole {
 		return fmt.Errorf("%w: MigratorRole and RuntimeRole must differ", ErrInvalidPGIdentifier)
+	}
+	if s.SkipMigratorRole && s.MigratorPassword != "" {
+		return ErrPGRoleSkippedMigratorHasPassword
 	}
 	for _, f := range []struct{ name, value string }{
 		{pgRoleFieldMigratorPassword, s.MigratorPassword},
@@ -317,9 +342,10 @@ func provisionPGRoles(ctx context.Context, spec *PGRoleSpec, run func(ctx contex
 // or apply the provisioning manually via psql, or feed it into their own
 // migration runner (Flyway, Liquibase) rather than the Go helper.
 //
-// Returns ErrInvalidPGIdentifier when spec fails Validate. The returned
-// slice does not include trailing semicolons; callers concatenating them
-// into a single script should add separators themselves.
+// Returns Validate's error when spec fails it — ErrInvalidPGIdentifier,
+// ErrPGRolePasswordHasControlChar or ErrPGRoleSkippedMigratorHasPassword. The
+// returned slice does not include trailing semicolons; callers concatenating
+// them into a single script should add separators themselves.
 //
 // SECURITY: when spec.MigratorPassword or spec.RuntimePassword is non-empty,
 // the returned statements include the password as an in-clear SQL literal
@@ -344,18 +370,24 @@ func buildPGRoleStatements(spec *PGRoleSpec) []string {
 	migrator := quotePGIdent(spec.MigratorRole)
 	runtime := quotePGIdent(spec.RuntimeRole)
 
-	roles := []struct {
+	type managedRole struct {
 		quotedIdent string
 		password    string
-	}{
-		{migrator, spec.MigratorPassword},
-		{runtime, spec.RuntimePassword},
 	}
+	roles := make([]managedRole, 0, 2)
+	if !spec.SkipMigratorRole {
+		roles = append(roles, managedRole{migrator, spec.MigratorPassword})
+	}
+	roles = append(roles, managedRole{runtime, spec.RuntimePassword})
 
 	// Pre-size for the worst case: 2 roles × (create + lockdown + password) + 8 schema/grant/search_path statements.
 	stmts := make([]string, 0, 2*3+8)
 	for _, r := range roles {
-		stmts = append(stmts, buildRoleCreateAndLockdown(r.quotedIdent)...)
+		if spec.SkipFloorReassert {
+			stmts = append(stmts, buildRoleCreate(r.quotedIdent))
+		} else {
+			stmts = append(stmts, buildRoleCreateAndLockdown(r.quotedIdent)...)
+		}
 		if r.password != "" {
 			stmts = append(stmts, fmt.Sprintf(
 				`ALTER ROLE %s PASSWORD %s`,
@@ -376,13 +408,16 @@ func buildPGRoleStatements(spec *PGRoleSpec) []string {
 		// by future Flyway migrations auto-grant to the runtime role.
 		fmt.Sprintf(`ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA %s GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %s`, migrator, schema, runtime),
 		fmt.Sprintf(`ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA %s GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO %s`, migrator, schema, runtime),
-		// Default search_path for both roles: without it, every unqualified
-		// statement from either role resolves to public — migrations from the
-		// migrator role land in the wrong schema (pre-#716 fallback), and
-		// unqualified runtime queries silently miss tenant tables.
-		fmt.Sprintf(`ALTER ROLE %s SET search_path = %s`, migrator, schema),
-		fmt.Sprintf(`ALTER ROLE %s SET search_path = %s`, runtime, schema),
 	)
+	// Default search_path for both roles: without it, every unqualified
+	// statement from either role resolves to public — migrations from the
+	// migrator role land in the wrong schema (pre-#716 fallback), and
+	// unqualified runtime queries silently miss tenant tables. A skipped
+	// migrator keeps its own: the setting is cluster-wide, so a migrator shared
+	// across tenants would otherwise point at whichever tenant ran last.
+	for _, r := range roles {
+		stmts = append(stmts, fmt.Sprintf(`ALTER ROLE %s SET search_path = %s`, r.quotedIdent, schema))
+	}
 	return stmts
 }
 
@@ -398,21 +433,30 @@ func buildPGRoleStatements(spec *PGRoleSpec) []string {
 // CREATE raises duplicate_object; if two sessions both pass CREATE ROLE's
 // internal existence check and then collide on the pg_authid rolname unique
 // index, the loser raises unique_violation instead — so both must be swallowed
-// for the concurrent path to be safe. The unconditional ALTER on the next
-// statement re-applies the attribute floor on every run so manual drift
-// (e.g. someone ran ALTER ROLE ... SUPERUSER) snaps back.
+// for the concurrent path to be safe. The ALTER on the next statement
+// re-applies the attribute floor on every run so manual drift (e.g. someone ran
+// ALTER ROLE ... SUPERUSER) snaps back.
 func buildRoleCreateAndLockdown(quotedIdent string) []string {
-	const lockdownAttrs = "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
 	return []string{
-		fmt.Sprintf(`DO $$ BEGIN
+		buildRoleCreate(quotedIdent),
+		fmt.Sprintf(`ALTER ROLE %s %s`, quotedIdent, pgRoleLockdownAttrs),
+	}
+}
+
+// pgRoleLockdownAttrs is the attribute floor every role the template creates
+// starts at.
+const pgRoleLockdownAttrs = "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+
+// buildRoleCreate returns the race-safe CREATE ROLE block alone, the first
+// statement of buildRoleCreateAndLockdown.
+func buildRoleCreate(quotedIdent string) string {
+	return fmt.Sprintf(`DO $$ BEGIN
   BEGIN
     CREATE ROLE %s LOGIN %s;
   EXCEPTION WHEN duplicate_object OR unique_violation THEN
     NULL; -- another provisioner created it concurrently; not an error
   END;
-END $$`, quotedIdent, lockdownAttrs),
-		fmt.Sprintf(`ALTER ROLE %s %s`, quotedIdent, lockdownAttrs),
-	}
+END $$`, quotedIdent, pgRoleLockdownAttrs)
 }
 
 // quotePGIdent returns the PostgreSQL-safe quoted form of ident. Callers must

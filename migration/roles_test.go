@@ -204,6 +204,133 @@ func TestPGRoleProvisioningSQLOmitsEmptyPasswordALTERs(t *testing.T) {
 		"empty passwords must not emit ALTER ROLE ... PASSWORD statements")
 }
 
+// wantCreateRoleStmt spells out the race-safe CREATE ROLE block for one quoted
+// role, attribute floor included, as the template emits it.
+func wantCreateRoleStmt(quotedRole string) string {
+	return `DO $$ BEGIN
+  BEGIN
+    CREATE ROLE ` + quotedRole + ` LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+  EXCEPTION WHEN duplicate_object OR unique_violation THEN
+    NULL; -- another provisioner created it concurrently; not an error
+  END;
+END $$`
+}
+
+// The skip options are additive: the zero value must keep today's template
+// statement for statement, and each option must drop exactly its statements.
+func TestPGRoleProvisioningSQLPinsTheListPerSkipOption(t *testing.T) {
+	fixture := txDoorSpec()
+	var (
+		createMigrator   = wantCreateRoleStmt(`"mig_tx"`)
+		lockMigrator     = `ALTER ROLE "mig_tx" NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`
+		migratorPassword = `ALTER ROLE "mig_tx" PASSWORD '` + fixture.MigratorPassword + `'`
+		createRuntime    = wantCreateRoleStmt(`"rt_tx"`)
+		lockRuntime      = `ALTER ROLE "rt_tx" NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`
+		runtimePassword  = `ALTER ROLE "rt_tx" PASSWORD '` + fixture.RuntimePassword + `'`
+		migratorPath     = `ALTER ROLE "mig_tx" SET search_path = "tenant_tx"`
+		runtimePath      = `ALTER ROLE "rt_tx" SET search_path = "tenant_tx"`
+	)
+	schemaAndGrants := []string{
+		`CREATE SCHEMA IF NOT EXISTS "tenant_tx" AUTHORIZATION "mig_tx"`,
+		`GRANT USAGE ON SCHEMA "tenant_tx" TO "rt_tx"`,
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "tenant_tx" TO "rt_tx"`,
+		`GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA "tenant_tx" TO "rt_tx"`,
+		`ALTER DEFAULT PRIVILEGES FOR ROLE "mig_tx" IN SCHEMA "tenant_tx" GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "rt_tx"`,
+		`ALTER DEFAULT PRIVILEGES FOR ROLE "mig_tx" IN SCHEMA "tenant_tx" GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO "rt_tx"`,
+	}
+	concat := func(groups ...[]string) []string {
+		var out []string
+		for _, g := range groups {
+			out = append(out, g...)
+		}
+		return out
+	}
+
+	tests := []struct {
+		name  string
+		apply func(*PGRoleSpec)
+		want  []string
+	}{
+		{
+			name:  "zero_value_is_the_current_template",
+			apply: func(*PGRoleSpec) {},
+			want: concat(
+				[]string{createMigrator, lockMigrator, migratorPassword, createRuntime, lockRuntime, runtimePassword},
+				schemaAndGrants,
+				[]string{migratorPath, runtimePath},
+			),
+		},
+		{
+			name: "skip_migrator_role",
+			apply: func(s *PGRoleSpec) {
+				s.SkipMigratorRole = true
+				s.MigratorPassword = ""
+			},
+			want: concat(
+				[]string{createRuntime, lockRuntime, runtimePassword},
+				schemaAndGrants,
+				[]string{runtimePath},
+			),
+		},
+		{
+			name:  "skip_floor_reassert",
+			apply: func(s *PGRoleSpec) { s.SkipFloorReassert = true },
+			want: concat(
+				[]string{createMigrator, migratorPassword, createRuntime, runtimePassword},
+				schemaAndGrants,
+				[]string{migratorPath, runtimePath},
+			),
+		},
+		{
+			name: "skip_both",
+			apply: func(s *PGRoleSpec) {
+				s.SkipMigratorRole = true
+				s.SkipFloorReassert = true
+				s.MigratorPassword = ""
+			},
+			want: concat(
+				[]string{createRuntime, runtimePassword},
+				schemaAndGrants,
+				[]string{runtimePath},
+			),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec := txDoorSpec()
+			tt.apply(spec)
+			stmts, err := PGRoleProvisioningSQL(spec)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, stmts)
+		})
+	}
+}
+
+// A leftover MigratorPassword must never reach an out-of-band migrator: the
+// combination is refused at Validate, before any door composes a statement.
+func TestPGRoleSpecValidateRefusesMigratorPasswordWhenSkippingMigratorRole(t *testing.T) {
+	spec := txDoorSpec()
+	spec.SkipMigratorRole = true
+
+	require.ErrorIs(t, spec.Validate(), ErrPGRoleSkippedMigratorHasPassword)
+
+	stmts, err := PGRoleProvisioningSQL(spec)
+	require.ErrorIs(t, err, ErrPGRoleSkippedMigratorHasPassword)
+	assert.Nil(t, stmts)
+
+	exec := newRecordingRoleExecutor()
+	require.ErrorIs(t, ProvisionPGRolesTx(context.Background(), exec, spec), ErrPGRoleSkippedMigratorHasPassword)
+	assert.Empty(t, exec.stmts, "a refused spec must reach no statement at all")
+
+	// No expectations are queued, so any Exec would fail with sqlmock's own error
+	// instead of the sentinel.
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	require.ErrorIs(t, ProvisionPGRoles(context.Background(), db, spec), ErrPGRoleSkippedMigratorHasPassword)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestBuildRoleCreateAndLockdownSwallowsDuplicate pins the race-safe
 // CREATE ROLE form: an EXCEPTION handler that swallows both duplicate_object
 // (42710, role already committed) and unique_violation (23505, the loser of a
@@ -914,35 +1041,55 @@ func txDoorSpec() *PGRoleSpec {
 	}
 }
 
-// Both doors must reach the identical statement list, in the identical order.
-// The *sql.DB door is driven through sqlmock so what it actually executed is
+// Both doors must reach the identical statement list, in the identical order,
+// with and without the skip options that live in the shared builder. The
+// *sql.DB door is driven through sqlmock so what it actually executed is
 // observed, not assumed.
 func TestProvisionPGRolesTxRunsTheSameStatementsAsTheSQLDBDoor(t *testing.T) {
-	spec := txDoorSpec()
-	want, err := PGRoleProvisioningSQL(spec)
-	require.NoError(t, err)
-	require.NotEmpty(t, want)
-
-	exec := newRecordingRoleExecutor()
-	require.NoError(t, ProvisionPGRolesTx(context.Background(), exec, spec))
-	require.Equal(t, want, exec.stmts, "the tx door must execute the published list verbatim, in order")
-
-	var viaSQLDB []string
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(
-		sqlmock.QueryMatcherFunc(func(_, actualSQL string) error {
-			viaSQLDB = append(viaSQLDB, actualSQL)
-			return nil
-		})))
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-	mock.MatchExpectationsInOrder(true)
-	for range want {
-		mock.ExpectExec("").WillReturnResult(sqlmock.NewResult(0, 0))
+	tests := []struct {
+		name  string
+		apply func(*PGRoleSpec)
+	}{
+		{name: "default_spec", apply: func(*PGRoleSpec) {}},
+		{
+			name: "skip_options",
+			apply: func(s *PGRoleSpec) {
+				s.SkipMigratorRole = true
+				s.SkipFloorReassert = true
+				s.MigratorPassword = ""
+			},
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec := txDoorSpec()
+			tt.apply(spec)
+			want, err := PGRoleProvisioningSQL(spec)
+			require.NoError(t, err)
+			require.NotEmpty(t, want)
 
-	require.NoError(t, ProvisionPGRoles(context.Background(), db, spec))
-	require.NoError(t, mock.ExpectationsWereMet())
-	require.Equal(t, want, viaSQLDB, "the *sql.DB door must execute the same list, in the same order")
+			exec := newRecordingRoleExecutor()
+			require.NoError(t, ProvisionPGRolesTx(context.Background(), exec, spec))
+			require.Equal(t, want, exec.stmts, "the tx door must execute the published list verbatim, in order")
+
+			var viaSQLDB []string
+			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(
+				sqlmock.QueryMatcherFunc(func(_, actualSQL string) error {
+					viaSQLDB = append(viaSQLDB, actualSQL)
+					return nil
+				})))
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+			mock.MatchExpectationsInOrder(true)
+			for range want {
+				mock.ExpectExec("").WillReturnResult(sqlmock.NewResult(0, 0))
+			}
+
+			require.NoError(t, ProvisionPGRoles(context.Background(), db, spec))
+			require.NoError(t, mock.ExpectationsWereMet())
+			require.Equal(t, want, viaSQLDB, "the *sql.DB door must execute the same list, in the same order")
+		})
+	}
 }
 
 // The tx door runs Validate, so a refusing IdentifierPolicy must stop it before
