@@ -136,9 +136,11 @@ itself accepts such passwords — the restriction is the framework's, taken
 because the provisioning path cannot carry them log-safely (see
 [ADR-061](adr_061_role_password_control_chars.md)).
 
-All operations are idempotent — rerunning with the same spec is a no-op
-except that `MigratorPassword` / `RuntimePassword` (when non-empty) are
-reapplied on every call, which makes secret rotation a no-op rerun.
+All operations are idempotent, so rerunning the same spec converges instead
+of failing. Every call reapplies the attribute floor (unless
+`SkipFloorReassert`), each managed role's `search_path`, and a non-empty
+`MigratorPassword` / `RuntimePassword` — repairing drift and making secret
+rotation a plain rerun.
 
 ### Shared and out-of-band migrators
 
@@ -416,7 +418,8 @@ superuser):
 
 1. **`TestPGRolesCreateroleProvisionerMintsTheMigrator`** — with
    `SkipFloorReassert` and `createrole_self_grant`, provisioning succeeds, the
-   first two claims above still hold, and `CheckPGRoleFloor` names a
+   runtime role is still refused DDL (permission denied) and still gets DML on
+   tables the migrator creates later, and `CheckPGRoleFloor` names a
    `CREATEDB` granted afterwards.
 2. **`TestPGRolesCreateroleProvisionerLeavesASharedMigratorUntouched`** — three
    tenants provisioned against one out-of-band migrator, two by the
