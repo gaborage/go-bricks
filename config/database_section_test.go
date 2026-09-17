@@ -33,10 +33,10 @@ func hermeticPGEnv(t *testing.T) {
 	}
 }
 
-// refuseConnString runs the connect door on a section carrying only cs and returns the
+// requireConnStringRefusal runs the connect door on a section carrying only cs and returns the
 // ConfigError it must produce. The no-echo assertion lives here so every refusal case gets it:
 // a scanned DSN can carry password text.
-func refuseConnString(t *testing.T, cs string) *ConfigError {
+func requireConnStringRefusal(t *testing.T, cs string) *ConfigError {
 	t.Helper()
 	cfg := DatabaseConfig{ConnectionString: cs}
 
@@ -47,12 +47,12 @@ func refuseConnString(t *testing.T, cs string) *ConfigError {
 	return cfgErr
 }
 
-// assertConnStringRefusal is refuseConnString for [C65.2]'s two host rules. The Action
+// assertConnStringRefusal is requireConnStringRefusal for [C65.2]'s two host rules. The Action
 // assertions live here — the remedy text is the operator's whole exit, and the category
 // already says which of the two rules fired.
 func assertConnStringRefusal(t *testing.T, cs, wantCategory string) *ConfigError {
 	t.Helper()
-	cfgErr := refuseConnString(t, cs)
+	cfgErr := requireConnStringRefusal(t, cs)
 	assert.Equal(t, wantCategory, cfgErr.Category)
 
 	switch wantCategory {
@@ -3620,9 +3620,7 @@ func TestApplyDatabasePoolDefaultsNamesEveryClaimingSocketTLSSource(t *testing.T
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			for _, e := range tt.env {
-				t.Setenv(e[0], e[1])
-			}
+			testutil.SetEnv(t, tt.env)
 
 			cfgErr := assertConnStringRefusal(t, tt.cs, errCategoryInvalid)
 
@@ -3643,9 +3641,7 @@ func TestApplyDatabasePoolDefaultsMatchesSharedTLSEnvFixtures(t *testing.T) {
 	hermeticPGEnv(t)
 	for _, c := range testutil.PostgresSSLEnvTLSCases {
 		t.Run(c.Name, func(t *testing.T) {
-			for _, e := range c.Env {
-				t.Setenv(e[0], e[1])
-			}
+			testutil.SetEnv(t, c.Env)
 			if !c.Refuse {
 				cfg := DatabaseConfig{ConnectionString: c.DSN}
 				require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
@@ -3698,15 +3694,13 @@ func TestApplyDatabasePoolDefaultsRefusesLibpqServiceConnectionString(t *testing
 	hermeticPGEnv(t)
 	for _, c := range testutil.PostgresServiceCases {
 		t.Run(c.Name, func(t *testing.T) {
-			for _, e := range c.Env {
-				t.Setenv(e[0], e[1])
-			}
-			if c.Refuse == "" {
+			testutil.SetEnv(t, c.Env)
+			if c.RefusedBy == "" {
 				cfg := DatabaseConfig{ConnectionString: c.DSN}
 				require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
 				return
 			}
-			assertServiceRefusal(t, c.DSN, c.Refuse)
+			assertServiceRefusal(t, c.DSN, c.RefusedBy)
 		})
 	}
 }
@@ -3715,7 +3709,7 @@ func TestApplyDatabasePoolDefaultsRefusesLibpqServiceConnectionString(t *testing
 // service, and every exit whichever source it was.
 func assertServiceRefusal(t *testing.T, cs, carrier string) {
 	t.Helper()
-	cfgErr := refuseConnString(t, cs)
+	cfgErr := requireConnStringRefusal(t, cs)
 	assert.Equal(t, errCategoryInvalid, cfgErr.Category)
 	assert.Contains(t, cfgErr.Message, "resolves through a libpq service file")
 	assert.Contains(t, cfgErr.Action, "named by "+carrier)

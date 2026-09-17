@@ -814,11 +814,11 @@ func effectivePostgresTLSClaims(scan *pgDSNScan) []pgTLSClaim {
 		if !pgTLSKeyClaims(k.dsn, value) {
 			continue
 		}
-		claim := pgTLSClaim{source: scan.claimSource(k.dsn), dsn: k.dsn, isEnv: fromEnv}
-		if fromEnv {
-			claim.source = k.env
+		source := k.env
+		if !fromEnv {
+			source = scan.claimSource(k.dsn)
 		}
-		claims = append(claims, claim)
+		claims = append(claims, pgTLSClaim{source: source, dsn: k.dsn, isEnv: fromEnv})
 	}
 	return claims
 }

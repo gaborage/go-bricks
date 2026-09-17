@@ -8783,8 +8783,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `[C65.6]`'s typed refusal (`invalid` — a coherent-looking DSN whose claims contradict each
   other). Neither message nor action ever echoes the connection string or a host entry — a
   scanned host can carry password text (`host= password=hunter2`, where pgx skips whitespace
-  after `=` and the NEXT pair becomes the host value). `PGSERVICE`/`service=` and service files
-  are refused ahead of both rules by `[C66.3]`. The five
+  after `=` and the NEXT pair becomes the host value). a DSN naming a service through `PGSERVICE`
+  or `service=` is refused ahead of both rules by `[C66.3]`. The five
   `PGSSL*` environment variables **are** judged, per key, under the same DSN-over-env
   precedence as `PGHOST` — that residual of rule (2) closed as `[C66.1]`.
   `scanPostgresDSN`'s `ok=false` (untokenizable)
@@ -8807,7 +8807,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   resolved host is absent, empty-entried, or a socket beside a TLS claim.
 - apply: pick one exit per DSN. For (1), name a host through one of the four sources pgx itself
   consults — the URI authority, a `?host=` query parameter, a keyword `host=`, or `PGHOST` — a
-  service is not one of them, and a DSN naming one is `[C66.3]`. For (2), drop the TLS claim
+  service is not one of them, and a DSN naming one is refused by `[C66.3]`. For (2), drop the TLS claim
   from the connection string, or point it at a TCP host. A claim that arrived through a
   `PGSSL*` variable is `[C66.1]`.
 - verify: `go build ./... && go test ./...`  # then boot, or resolve one tenant through your
@@ -9952,9 +9952,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   a TCP `PGHOST` and dials the socket with `TLSConfig == nil`; the seam never reads service
   files, so it cannot judge that host, or the port, user and `sslmode` the file supplies. A
   present but empty DSN `service=` shadows `PGSERVICE` and is not refused here; pgx then fails
-  to parse the DSN, looking up a service with an empty name, so it is no exit either. Spell it
-  `service=''` or last: pgx skips whitespace after `=`, so `service= user=u` names the service
-  `user=u` and is refused. `servicefile=` or `PGSERVICEFILE` with no service named is inert, as
+  to parse the DSN, looking up a service with an empty name, so it is no exit either. An empty
+  value needs `service=''` or the key last: pgx skips whitespace after `=`, so `service= user=u`
+  names the service `user=u` and is refused. `servicefile=` or `PGSERVICEFILE` with no service named is inert, as
   in pgx. The refusal is a `ConfigError` on `database.connectionstring` (section-qualified),
   Category `invalid`, never echoing the DSN; its Action names the one source that carried the
   service (the DSN key when both are set, since it shadows the variable) and every exit. A
@@ -9964,8 +9964,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `ApplyDatabasePoolDefaults` seam, no CLI change. Oracle is unchanged. No signature moves.
 - gate: match = a DSN names a non-empty service, or runs under a non-empty `PGSERVICE` it does
   not shadow with a `service` key of its own.
-- apply: copy the service's settings — `host`, `port`, `user`, `dbname`, `sslmode` and any TLS
-  material — from its `pg_service.conf` section into the connection string, drop `service=`
+- apply: copy the service's settings (`host`, `port`, `user`, `dbname`, `sslmode`, and every other
+  key its `pg_service.conf` section sets) into the connection string, drop `service=`
   from it, and unset `PGSERVICE` wherever it is set: dropping `service=` alone exposes a
   `PGSERVICE` it was shadowing. Then re-read the inlined DSN against `[C65.2]` and `[C66.1]`,
   which now judge the socket `host` or TLS claim the service used to supply unseen.

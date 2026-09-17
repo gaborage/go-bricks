@@ -1,5 +1,7 @@
 package testutil
 
+import "testing"
+
 const (
 	// socketHost is the unix-socket directory these fixtures resolve to.
 	socketHost        = "/var/run/postgresql"
@@ -54,14 +56,14 @@ type PostgresDSNHostCase struct {
 }
 
 var PostgresDSNHostCases = []PostgresDSNHostCase{
-	{Name: "keyword_tcp_host", DSN: tcpHostUserDSN, Host: "db.example.com", HostSet: true},
+	{Name: "keyword_tcp_host", DSN: tcpHostUserDSN, Host: tcpHost, HostSet: true},
 	{Name: "keyword_socket_host_tls_material_never_read", DSN: "host=" + socketHost + " sslmode=" + sslModeVerifyFull + " user=u", Host: socketHost, HostSet: true},
 	{Name: "keyword_socket_host_no_claim", DSN: socketUserDSN, Host: socketHost, HostSet: true},
 	// pgx drops the unescaped backslash, so the host is TCP "C:pg", not a socket path.
 	{Name: "keyword_windows_drive_tcp_host", DSN: `host=C:\pg sslmode=` + sslModeRequire + ` user=u`, Host: "C:pg", HostSet: true},
 	// The escaped backslash survives as one literal backslash, so pgx treats this as a socket path.
 	{Name: "keyword_windows_drive_socket_host", DSN: `host=C:\\pg sslmode=` + sslModeRequire + ` user=u`, Host: `C:\pg`, HostSet: true},
-	{Name: "uri_tcp_host", DSN: "postgres://u@db.example.com/db", Host: "db.example.com", HostSet: true},
+	{Name: "uri_tcp_host", DSN: "postgres://u@" + tcpHost + "/db", Host: tcpHost, HostSet: true},
 	{Name: "uri_percent_encoded_socket_host", DSN: "postgres://u@%2Fvar%2Frun%2Fpostgresql/db?sslmode=" + sslModeRequire, Host: socketHost, HostSet: true},
 	{Name: "uri_ipv6_host", DSN: "postgres://u@[::1]/db", Host: "::1", HostSet: true},
 	{Name: "uri_query_host_overrides_authority", DSN: "postgres://u@a/db?host=c", Host: "c", HostSet: true},
@@ -116,40 +118,56 @@ const (
 	serviceEnvClaimDSN = "user=u sslmode=" + sslModeRequire
 )
 
-// PostgresServiceFileBody is the service file the pgx oracle writes. Its service names a
-// unix-socket host, so a DSN that resolves through it dials the socket with TLS skipped.
-const PostgresServiceFileBody = "[" + serviceName + "]\nhost=" + socketHost + "\nuser=u\n"
+// PostgresServiceHost and PostgresServicePort are what PostgresServiceFileBody's service sets:
+// a unix-socket host, so a DSN that resolves through it dials the socket with TLS skipped, and a
+// port no fixture DSN names, so pgx's port shows whether it read the service at all.
+const (
+	PostgresServiceHost = socketHost
+	PostgresServicePort = 6543
+)
+
+// PostgresServiceFileBody is the service file the pgx oracle writes.
+const PostgresServiceFileBody = "[" + serviceName + "]\nhost=" + PostgresServiceHost + "\nport=6543\nuser=u\n"
 
 // PostgresServiceCase is one DSN+env combination whose libpq service resolution pgx and the
-// config seam must agree on. Refuse is the source the config refusal names as carrying the
-// service (service= or PGSERVICE), empty when the seam accepts. PgxHost is the host
-// pgconn.ParseConfig resolves under PostgresServiceFileBody, empty when pgx refuses the DSN.
-// Env entries are applied with t.Setenv on a hermetic PG* env.
+// config seam must agree on. RefusedBy is the source the config refusal names as carrying the
+// service (service= or PGSERVICE), empty when the seam accepts — and exactly the rows pgx
+// resolves through the service. PgxHost is the host pgconn.ParseConfig resolves under
+// PostgresServiceFileBody, empty when pgx refuses the DSN. Env entries are applied with SetEnv
+// on a hermetic PG* env.
 type PostgresServiceCase struct {
-	Name    string
-	DSN     string
-	Env     [][2]string
-	Refuse  string
-	PgxHost string
+	Name      string
+	DSN       string
+	Env       [][2]string
+	RefusedBy string
+	PgxHost   string
 }
 
 // PostgresServiceCases is shared between config's service-rule tests and
 // database/postgresql's pgconn.ParseConfig oracle, so the service merge cannot silently
 // drift from a pgx bump.
 var PostgresServiceCases = []PostgresServiceCase{
-	{Name: "dsn_service_without_pghost", DSN: serviceClaimDSN, Refuse: serviceDSNSource, PgxHost: socketHost},
-	{Name: "dsn_service_over_tcp_pghost", DSN: serviceClaimDSN, Env: [][2]string{{envPGHOST, tcpHost}}, Refuse: serviceDSNSource, PgxHost: socketHost},
-	{Name: "pgservice_without_pghost", DSN: serviceEnvClaimDSN, Env: [][2]string{{envPGSERVICE, serviceName}}, Refuse: envPGSERVICE, PgxHost: socketHost},
-	{Name: "pgservice_over_tcp_pghost", DSN: serviceEnvClaimDSN, Env: [][2]string{{envPGSERVICE, serviceName}, {envPGHOST, tcpHost}}, Refuse: envPGSERVICE, PgxHost: socketHost},
+	{Name: "dsn_service_without_pghost", DSN: serviceClaimDSN, RefusedBy: serviceDSNSource, PgxHost: PostgresServiceHost},
+	{Name: "dsn_service_over_tcp_pghost", DSN: serviceClaimDSN, Env: [][2]string{{envPGHOST, tcpHost}}, RefusedBy: serviceDSNSource, PgxHost: PostgresServiceHost},
+	{Name: "pgservice_without_pghost", DSN: serviceEnvClaimDSN, Env: [][2]string{{envPGSERVICE, serviceName}}, RefusedBy: envPGSERVICE, PgxHost: PostgresServiceHost},
+	{Name: "pgservice_over_tcp_pghost", DSN: serviceEnvClaimDSN, Env: [][2]string{{envPGSERVICE, serviceName}, {envPGHOST, tcpHost}}, RefusedBy: envPGSERVICE, PgxHost: PostgresServiceHost},
 	// The DSN's own service= is the carrier; PGSERVICE behind it is shadowed, not named.
-	{Name: "dsn_service_beside_pgservice", DSN: serviceClaimDSN, Env: [][2]string{{envPGSERVICE, "other"}}, Refuse: serviceDSNSource, PgxHost: socketHost},
-	{Name: "uri_query_service", DSN: "postgres:///db?service=" + serviceName + "&sslmode=" + sslModeRequire, Refuse: serviceDSNSource, PgxHost: socketHost},
+	{Name: "dsn_service_beside_pgservice", DSN: serviceClaimDSN, Env: [][2]string{{envPGSERVICE, "other"}}, RefusedBy: serviceDSNSource, PgxHost: PostgresServiceHost},
+	{Name: "uri_query_service", DSN: "postgres:///db?service=" + serviceName + "&sslmode=" + sslModeRequire, RefusedBy: serviceDSNSource, PgxHost: PostgresServiceHost},
 	// The DSN host wins, but the service still supplies whatever the DSN leaves unset.
-	{Name: "dsn_host_beside_dsn_service", DSN: "host=" + tcpHost + " service=" + serviceName, Refuse: serviceDSNSource, PgxHost: tcpHost},
+	{Name: "dsn_host_beside_dsn_service", DSN: "host=" + tcpHost + " service=" + serviceName, RefusedBy: serviceDSNSource, PgxHost: tcpHost},
 	// A present DSN key, empty included, shadows PGSERVICE; pgx then looks up the empty name.
 	{Name: "empty_dsn_service_shadows_pgservice", DSN: tcpHostUserDSN + " service=''", Env: [][2]string{{envPGSERVICE, serviceName}}},
 	// Negative pin: pgx skips whitespace after '=', so the next pair becomes the service name.
-	{Name: "empty_service_swallows_next_pair", DSN: "service= " + tcpHostUserDSN, Env: [][2]string{{envPGSERVICE, serviceName}}, Refuse: serviceDSNSource},
+	{Name: "empty_service_swallows_next_pair", DSN: "service= " + tcpHostUserDSN, Env: [][2]string{{envPGSERVICE, serviceName}}, RefusedBy: serviceDSNSource},
 	{Name: "dsn_servicefile_without_service", DSN: "servicefile=/x/pg_service.conf " + tcpHostUserDSN, PgxHost: tcpHost},
 	{Name: "pgservicefile_without_service", DSN: tcpHostUserDSN, Env: [][2]string{{"PGSERVICEFILE", "/x"}}, PgxHost: tcpHost},
+}
+
+// SetEnv applies each fixture env pair with t.Setenv.
+func SetEnv(t testing.TB, env [][2]string) {
+	t.Helper()
+	for _, e := range env {
+		t.Setenv(e[0], e[1])
+	}
 }

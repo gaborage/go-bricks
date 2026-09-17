@@ -75,8 +75,8 @@
 > unix-socket entry while the DSN claims TLS. `PGHOST` is honored only when the DSN carries
 > no `host` key at all: an empty `host=` key still shadows it, narrower than "any source
 > names a value" — pgx's own precedence, not this amendment's choice. The five `PGSSL*`
-> variables are judged the same way, per key, by `[C66.1]`. `PGSERVICE`, `service=`
-> and service files are refused, ahead of both rules, by `[C66.3]`.
+> variables are judged the same way, per key, by `[C66.1]`. A DSN naming a service
+> through `PGSERVICE` or `service=` is refused, ahead of both rules, by `[C66.3]`.
 > `sslnegotiation=direct` counts as a TLS claim even paired with `sslmode=disable`/`allow`,
 > where pgx itself would connect in plaintext and libpq refuses the combination — a claim
 > only ever adds a refusal on this seam, never suppresses one — while empty TLS material

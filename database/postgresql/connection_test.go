@@ -370,9 +370,7 @@ func TestPgxTLSConfigAgreesWithConfigTLSEnvFixtures(t *testing.T) {
 
 	for _, c := range testutil.PostgresSSLEnvTLSCases {
 		t.Run(c.Name, func(t *testing.T) {
-			for _, e := range c.Env {
-				t.Setenv(e[0], e[1])
-			}
+			testutil.SetEnv(t, c.Env)
 			pc, err := pgconn.ParseConfig(c.DSN)
 			require.NoError(t, err)
 			if c.Refuse {
@@ -396,9 +394,7 @@ func TestPgxResolvesServiceHostOverPGHOST(t *testing.T) {
 
 	for _, c := range testutil.PostgresServiceCases {
 		t.Run(c.Name, func(t *testing.T) {
-			for _, e := range c.Env {
-				t.Setenv(e[0], e[1])
-			}
+			testutil.SetEnv(t, c.Env)
 			pc, err := pgconn.ParseConfig(c.DSN)
 			if c.PgxHost == "" {
 				require.ErrorContains(t, err, "failed to read service")
@@ -406,7 +402,14 @@ func TestPgxResolvesServiceHostOverPGHOST(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, c.PgxHost, pc.Host)
-			if network, _ := pgconn.NetworkAddress(pc.Host, pc.Port); network == "unix" {
+			if c.RefusedBy == "" {
+				assert.EqualValues(t, 5432, pc.Port, "pgx must not have read the service")
+				return
+			}
+			assert.EqualValues(t, testutil.PostgresServicePort, pc.Port, "the service fills what the DSN leaves unset")
+			if c.PgxHost == testutil.PostgresServiceHost {
+				network, _ := pgconn.NetworkAddress(pc.Host, pc.Port)
+				assert.Equal(t, "unix", network)
 				assert.Nil(t, pc.TLSConfig)
 			}
 		})
