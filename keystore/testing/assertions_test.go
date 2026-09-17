@@ -42,33 +42,14 @@ func (r *recordingT) FailNow() {
 
 var _ keyStoreReporter = (*recordingT)(nil)
 
-// testifyLabelLine and testifyContinuationLine match the two line shapes of testify's
-// labeled failure block: "\t<Label>:<pad>\t<content>" and "\t<spaces>\t<content>".
-var (
-	testifyLabelLine        = regexp.MustCompile(`^\t([^\t ][^\t]*): *\t`)
-	testifyContinuationLine = regexp.MustCompile(`^\t +\t`)
-)
+// errorTrace matches testify's Error Trace section: its label line and the indented
+// continuation lines under it, whose absolute source paths depend on where the repository
+// is checked out. Any other line ends the match, so an unrecognized format removes nothing.
+var errorTrace = regexp.MustCompile(`(?m)^\tError Trace: *\t.*(?:\n\t +\t.*)*`)
 
-// messageText is the recorded failure text without testify's Error Trace section, whose
-// absolute source paths depend on where the repository is checked out. A line of neither
-// labeled shape ends the section and is kept, so an unrecognized format leaves the guards
-// judging more text, never less.
+// messageText is the recorded failure text without testify's Error Trace section.
 func (r *recordingT) messageText() string {
-	var kept []string
-	inTrace := false
-	for _, recorded := range r.errors {
-		for _, line := range strings.Split(recorded, "\n") {
-			if label := testifyLabelLine.FindStringSubmatch(line); label != nil {
-				inTrace = label[1] == "Error Trace"
-			} else if !testifyContinuationLine.MatchString(line) {
-				inTrace = false
-			}
-			if !inTrace {
-				kept = append(kept, line)
-			}
-		}
-	}
-	return strings.Join(kept, "\n")
+	return errorTrace.ReplaceAllString(strings.Join(r.errors, "\n"), "")
 }
 
 // TestRecordingTMessageTextExcludesErrorTrace pins the leak guards' subject to what the
@@ -86,7 +67,6 @@ func TestRecordingTMessageTextExcludesErrorTrace(t *testing.T) {
 		"premise: the recorded trace spans two frames of this file, so a continuation line is exercised")
 	text := rec.messageText()
 	assert.NotContains(t, text, thisFile)
-	assert.NotContains(t, text, "Error Trace")
 	assert.Contains(t, text, "unexpected key returned")
 	assert.Contains(t, text, `public key "stray" should not be found`)
 }
