@@ -366,13 +366,19 @@ func (s *parallelState) dispatch(ctx context.Context, tenantIDs []string, parall
 	for i, id := range tenantIDs {
 		// Checked before the select: with a free slot and a done context both
 		// cases are ready, and select would dispatch a random prefix.
-		if err := dispatchBlocked(ctx, s.opts); err != nil {
+		if err := ctx.Err(); err != nil {
 			return i, err
 		}
 		select {
 		case <-ctx.Done():
 			return i, ctx.Err()
 		case sem <- struct{}{}:
+		}
+		// Judged again once the slot is held: waiting for it can outlast a
+		// fail-fast cancel or a quiesce flip.
+		if err := dispatchBlocked(ctx, s.opts); err != nil {
+			<-sem
+			return i, err
 		}
 
 		s.wg.Add(1)

@@ -794,6 +794,61 @@ func TestMigrateAllParallelFailFastCountsInFlightSiblingAsFailed(t *testing.T) {
 	require.ErrorIs(t, res.Verdict(), ErrFleetSplit)
 }
 
+func TestMigrateAllParallelRechecksQuiesceAfterWaitingForSlot(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell stubs not supported on windows CI")
+	}
+	stub := createFlywayStub(t, "postgresql")
+	fm := newFlywayMigratorForTest(t)
+	base := makeBaseConfig(t, stub)
+	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
+		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "pw-tenant-1"},
+		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "pw-tenant-2"},
+		"t3": {Type: "postgresql", Host: "h3", Port: 5432, Database: "d3", Username: "u3", Password: "pw-tenant-3"},
+	})
+	gate := NewMemoryQuiesceController()
+	// The first hook to run holds its worker slot, and the hook mutex keeps the
+	// other worker's slot held too, so t3 waits for a slot until release closes.
+	hookStarted := make(chan struct{}, 2)
+	release := make(chan struct{})
+	hook := func(TenantResult) {
+		hookStarted <- struct{}{}
+		<-release
+	}
+
+	type outcome struct {
+		res *MigrateAllResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := MigrateAll(
+			context.Background(), fm, &fakeLister{ids: []string{"t1", "t2", "t3"}}, provider, ActionMigrate,
+			MigrateAllOptions{BaseConfig: base, Parallelism: 2, Quiesce: gate, Hook: hook},
+		)
+		done <- outcome{res: res, err: err}
+	}()
+
+	select {
+	case <-hookStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no tenant finished while both worker slots were free")
+	}
+	_, err := gate.Set(context.Background(), QuiesceSetOptions{By: "deployer", TTL: time.Hour})
+	require.NoError(t, err)
+	close(release)
+
+	var got outcome
+	select {
+	case got = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("MigrateAll did not return after the slots were released")
+	}
+	require.ErrorIs(t, got.err, ErrQuiesceBlocked)
+	assert.Len(t, got.res.Results, 2)
+	assert.Equal(t, []string{"t3"}, got.res.NeverDispatched, "quiesce set while t3 waited for a slot must stop it")
+}
+
 // TestMigrateAllRejectsNilTenantConfig proves a provider returning (nil, nil) yields a
 // TenantResult error wrapping database.ErrNoDatabaseConfig instead of dereferencing it.
 func TestMigrateAllRejectsNilTenantConfig(t *testing.T) {
