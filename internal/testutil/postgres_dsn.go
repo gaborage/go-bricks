@@ -6,8 +6,10 @@ const (
 	// socketHost is the unix-socket directory these fixtures resolve to.
 	socketHost        = "/var/run/postgresql"
 	tcpHost           = "db.example.com"
-	tcpHostUserDSN    = "host=" + tcpHost + " user=u"
-	socketUserDSN     = "host=" + socketHost + " user=u"
+	userPair          = " user=u"
+	sslModeKey        = " sslmode="
+	tcpHostUserDSN    = "host=" + tcpHost + userPair
+	socketUserDSN     = "host=" + socketHost + userPair
 	envPGHOST         = "PGHOST"
 	envPGSSLMODE      = "PGSSLMODE"
 	envPGSSLCERT      = "PGSSLCERT"
@@ -18,7 +20,7 @@ const (
 // UntokenizablePostgresDSNs are connection strings pgx v5 refuses to parse, so a scanner
 // that cannot tokenize them may pass them through unjudged.
 var UntokenizablePostgresDSNs = []string{
-	"host='" + socketHost + " sslmode=" + sslModeRequire,
+	"host='" + socketHost + sslModeKey + sslModeRequire,
 	`host='/a\' user=u`,
 	`host='/a\`,
 	"host",
@@ -57,12 +59,12 @@ type PostgresDSNHostCase struct {
 
 var PostgresDSNHostCases = []PostgresDSNHostCase{
 	{Name: "keyword_tcp_host", DSN: tcpHostUserDSN, Host: tcpHost, HostSet: true},
-	{Name: "keyword_socket_host_tls_material_never_read", DSN: "host=" + socketHost + " sslmode=" + sslModeVerifyFull + " user=u", Host: socketHost, HostSet: true},
+	{Name: "keyword_socket_host_tls_material_never_read", DSN: "host=" + socketHost + sslModeKey + sslModeVerifyFull + userPair, Host: socketHost, HostSet: true},
 	{Name: "keyword_socket_host_no_claim", DSN: socketUserDSN, Host: socketHost, HostSet: true},
 	// pgx drops the unescaped backslash, so the host is TCP "C:pg", not a socket path.
-	{Name: "keyword_windows_drive_tcp_host", DSN: `host=C:\pg sslmode=` + sslModeRequire + ` user=u`, Host: "C:pg", HostSet: true},
+	{Name: "keyword_windows_drive_tcp_host", DSN: `host=C:\pg sslmode=` + sslModeRequire + userPair, Host: "C:pg", HostSet: true},
 	// The escaped backslash survives as one literal backslash, so pgx treats this as a socket path.
-	{Name: "keyword_windows_drive_socket_host", DSN: `host=C:\\pg sslmode=` + sslModeRequire + ` user=u`, Host: `C:\pg`, HostSet: true},
+	{Name: "keyword_windows_drive_socket_host", DSN: `host=C:\\pg sslmode=` + sslModeRequire + userPair, Host: `C:\pg`, HostSet: true},
 	{Name: "uri_tcp_host", DSN: "postgres://u@" + tcpHost + "/db", Host: tcpHost, HostSet: true},
 	{Name: "uri_percent_encoded_socket_host", DSN: "postgres://u@%2Fvar%2Frun%2Fpostgresql/db?sslmode=" + sslModeRequire, Host: socketHost, HostSet: true},
 	{Name: "uri_ipv6_host", DSN: "postgres://u@[::1]/db", Host: "::1", HostSet: true},
@@ -114,7 +116,7 @@ const (
 	envPGSERVICE       = "PGSERVICE"
 	serviceDSNSource   = "service="
 	serviceName        = "svc"
-	serviceClaimDSN    = "service=" + serviceName + " sslmode=" + sslModeRequire
+	serviceClaimDSN    = "service=" + serviceName + sslModeKey + sslModeRequire
 	serviceEnvClaimDSN = "user=u sslmode=" + sslModeRequire
 )
 
