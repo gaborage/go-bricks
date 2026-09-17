@@ -127,6 +127,12 @@ present:
 `engine` maps to `type` (`postgres`/`postgresql`/`aurora-postgresql` →
 `postgresql`; `oracle`/`oracle-se2` → `oracle`).
 
+The secret's `username`/`password` are the identity Flyway connects with only
+while no migrator identity is configured, and that role must then hold DDL
+rights. `MigrateAllOptions.MigratorIdentity` (#1694) replaces them with a shared
+migrator's credentials on a copy of each tenant's document; host, port,
+database, schema and TLS stay the secret's.
+
 Minimum IAM for the runner role:
 
 ```json

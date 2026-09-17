@@ -93,6 +93,12 @@ Default secret name (configurable via `--secrets-prefix`):
 gobricks/migrate/<tenant_id>
 ```
 
+The secret carries the tenant's coordinates — host, port, database, schema
+targeting and TLS — plus a `username`/`password`. Flyway connects with that
+`username` (the `tenant_a_app` examples below) only while no
+[migrator identity](#migrator-identity) is configured, and that role must then
+hold DDL rights on the tenant schema.
+
 Secret payload — canonical shape (preferred):
 
 ```json
@@ -136,6 +142,29 @@ Minimum IAM for the runner role:
   ]
 }
 ```
+
+### Migrator identity
+
+`MigrateAllOptions.MigratorIdentity` makes Flyway connect as one shared migrator
+role across the fleet. For each tenant, `MigrateAll` copies the resolved
+`DatabaseConfig` and replaces only `username` and `password`; host, port,
+database, schema targeting and TLS stay the tenant's, and the provider's own
+value is never mutated. It applies to migrate, validate and info on PostgreSQL
+and Oracle, and the credentials still reach Flyway through the environment,
+never argv.
+
+```go
+opts := migration.MigrateAllOptions{
+    // Loaded from your secret store; nil connects as each tenant secret's username.
+    MigratorIdentity: &migration.MigratorIdentity{Username: migratorUser, Password: migratorPassword},
+}
+```
+
+A set identity with an empty username or password fails `MigrateAll` with
+`migration.ErrInvalidMigratorIdentity` before any tenant is listed. The
+role-separation model in [migration_roles.md](migration_roles.md) needs the
+overlay. `go-bricks-migrate` does not expose it yet, so the CLI connects as each
+tenant secret's `username`.
 
 ## Schema targeting (PostgreSQL)
 
@@ -370,6 +399,8 @@ func RunReleaseMigrations(ctx context.Context) error {
 
     res, err := migration.MigrateAll(ctx, fm, lister, provider, migration.ActionMigrate, migration.MigrateAllOptions{
         Logger: myLogger,
+        // Flyway connects as the migrator; host, database and schema stay each tenant's.
+        MigratorIdentity: &migration.MigratorIdentity{Username: migratorUser, Password: migratorPassword},
         Hook: func(r migration.TenantResult) {
             myLogger.Info().Str("tenant", r.TenantID).Dur("dur", r.Duration).Msg("tenant migrated")
         },
