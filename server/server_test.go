@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -389,6 +390,177 @@ func TestServerReadyChClosesOnlyAfterHTTPServerStored(t *testing.T) {
 
 	require.NoError(t, srv.Shutdown(context.Background()))
 	assert.NotPanics(t, func() { _ = srv.onBeforeServe(&http.Server{}) }, "a serve after Shutdown must not close ReadyCh again")
+}
+
+// TestServerShutdownBetweenBindAndServeVetoesStart pins the stopping latch:
+// Shutdown after the listener binds and before the serve callback must make
+// onBeforeServe return http.ErrServerClosed and leave ReadyCh open.
+func TestServerShutdownBetweenBindAndServeVetoesStart(t *testing.T) {
+	srv := newTestServer("", "", "")
+	addr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 43211}
+	srv.onListenerBound(addr)
+	require.NoError(t, srv.Shutdown(context.Background()))
+
+	err := srv.onBeforeServe(&http.Server{})
+	require.ErrorIs(t, err, http.ErrServerClosed)
+	select {
+	case <-srv.ReadyCh():
+		t.Fatal("ReadyCh closed after a vetoed start")
+	default:
+	}
+}
+
+// TestServerShutdownAfterBeforeServeStopsStoredServer pins Shutdown after
+// the serve callback has stored the *http.Server: the latch is set and the
+// stored server is shut down, and ReadyCh stays closed from the successful store.
+func TestServerShutdownAfterBeforeServeStopsStoredServer(t *testing.T) {
+	srv := newTestServer("", "", "")
+	httpSrv := &http.Server{}
+	require.NoError(t, srv.onBeforeServe(httpSrv))
+	select {
+	case <-srv.ReadyCh():
+	default:
+		t.Fatal("ReadyCh still open after a successful store")
+	}
+
+	require.NoError(t, srv.Shutdown(context.Background()))
+	assert.Same(t, httpSrv, srv.httpServer.Load())
+	assert.True(t, srv.stopping.Load())
+}
+
+// shutdownLockFrame and shutdownLockWaitReason are the two halves awaitShutdownParked
+// looks for in one goroutine's dump entry: the Shutdown frame, and the wait reason the
+// runtime prints for a goroutine blocked acquiring a sync.Mutex.
+const (
+	shutdownLockFrame      = "go-bricks/server.(*Server).Shutdown"
+	shutdownLockWaitReason = "[sync.Mutex.Lock]"
+)
+
+// shutdownProbeDeadline bounds awaitShutdownParked. It is a failure bound, not an
+// ordering one: both real outcomes settle in microseconds, so only a stale probe —
+// a renamed symbol, or a runtime that spells the wait reason differently — can reach
+// it, and reaching it must fail the test rather than hang until go test's timeout.
+const shutdownProbeDeadline = 10 * time.Second
+
+// isClosed reports whether ch is already closed, without blocking.
+func isClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
+
+// goroutineDump returns every goroutine's stack, growing the buffer until the dump
+// fits so no entry is truncated away.
+func goroutineDump() string {
+	buf := make([]byte, 64<<10)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return string(buf[:n])
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+}
+
+// awaitShutdownParked reports whether the Shutdown goroutine parked waiting for the
+// lifecycle lock (true) or ran to completion (false). It alternates a non-blocking
+// check of done with a goroutine dump, so it settles as soon as either outcome is
+// decided and never sleeps for an ordering. Neither outcome arriving means the stack
+// fragments no longer match what the runtime prints, so shutdownProbeDeadline fails
+// the test with the last dump instead of letting the loop spin until go test's timeout.
+func awaitShutdownParked(t *testing.T, done <-chan struct{}) bool {
+	t.Helper()
+	timer := time.NewTimer(shutdownProbeDeadline)
+	defer timer.Stop()
+	for {
+		if isClosed(done) {
+			return false
+		}
+		dump := goroutineDump()
+		for _, entry := range strings.Split(dump, "\n\n") {
+			if strings.Contains(entry, shutdownLockFrame) && strings.Contains(entry, shutdownLockWaitReason) {
+				return true
+			}
+		}
+		select {
+		case <-timer.C:
+			t.Fatalf("no goroutine matched %q and %q within %s, so the stack probe is stale; last goroutine dump:\n%s",
+				shutdownLockFrame, shutdownLockWaitReason, shutdownProbeDeadline, dump)
+		default:
+		}
+	}
+}
+
+// runShutdownProbe shuts srv down and records whether ReadyCh was already closed when
+// Shutdown returned to its caller.
+func runShutdownProbe(srv *Server, readyAtReturn chan<- bool, done chan<- struct{}) {
+	_ = srv.Shutdown(context.Background())
+	readyAtReturn <- isClosed(srv.ReadyCh())
+	close(done)
+}
+
+// TestServerShutdownCannotReturnDuringTheReadinessCommit pins the serialization the
+// readiness commit needs. With the commit parked between its stopping check and
+// close(ready), a concurrent Shutdown must wait for the lifecycle lock instead of
+// running to completion: a Shutdown that returned first would already have stopped
+// the server the commit is about to report ready, so ReadyCh would close after the
+// caller had been told the server was down.
+func TestServerShutdownCannotReturnDuringTheReadinessCommit(t *testing.T) {
+	srv := newTestServer("", "", "")
+
+	commitParked := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseCommit) })
+	t.Cleanup(release)
+	srv.testHookReadyCommit = func() {
+		close(commitParked)
+		<-releaseCommit
+	}
+
+	httpSrv := &http.Server{ReadHeaderTimeout: time.Second}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.onBeforeServe(httpSrv) }()
+	<-commitParked
+
+	readyAtShutdownReturn := make(chan bool, 1)
+	shutdownReturned := make(chan struct{})
+	go runShutdownProbe(srv, readyAtShutdownReturn, shutdownReturned)
+
+	require.True(t, awaitShutdownParked(t, shutdownReturned),
+		"Shutdown ran to completion while the readiness commit was still in flight")
+
+	release()
+	require.NoError(t, <-serveErr)
+	<-shutdownReturned
+	assert.True(t, <-readyAtShutdownReturn, "Shutdown returned before ReadyCh closed")
+
+	// The commit won the lock, so Shutdown stopped the server it had stored. Echo
+	// calls Serve next, and it refuses: the residual window is an ordinary graceful
+	// stop, not a false readiness.
+	lc := net.ListenConfig{}
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	assert.ErrorIs(t, httpSrv.Serve(ln), http.ErrServerClosed)
+}
+
+// TestServerShutdownBeforeStartRefusesStart pins Shutdown-before-Start: Start
+// returns http.ErrServerClosed without binding or closing ReadyCh.
+func TestServerShutdownBeforeStartRefusesStart(t *testing.T) {
+	srv := newTestServer("", "", "")
+	require.NoError(t, srv.Shutdown(context.Background()))
+
+	err := srv.Start()
+	require.ErrorIs(t, err, http.ErrServerClosed)
+	assert.Nil(t, srv.BoundAddr())
+	select {
+	case <-srv.ReadyCh():
+		t.Fatal("ReadyCh closed after a vetoed start")
+	default:
+	}
 }
 
 // TestServerOnBeforeServeAppliesConfiguredTimeouts pins the timeouts Start
