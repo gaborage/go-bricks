@@ -3,13 +3,16 @@ package tracking
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"testing"
 
+	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database/internal/wrapper"
 	"github.com/gaborage/go-bricks/database/types"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
@@ -302,4 +305,45 @@ func TestConnectionSessionPropagatesUnderlyingError(t *testing.T) {
 	if sess != nil {
 		t.Fatalf("typed-nil session returned: %T", sess)
 	}
+}
+
+// TestSessionTxIterationBadConnInvalidatesTrackedSession pins that the tracking
+// decorator stays transparent: a Tx begun on a tracked Session still feeds
+// iteration ErrBadConn into the underlying wrapper Session, so sess.Exec
+// satisfies sql.ErrConnDone and Close discards the pinned connection.
+func TestSessionTxIterationBadConnInvalidatesTrackedSession(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	raw, err := (&wrapper.Connection{DB: db}).OpenSession(context.Background(), "postgresql")
+	require.NoError(t, err)
+	sess := NewSession(raw, &Context{
+		Logger:   newRecordingLogger(),
+		Vendor:   "postgresql",
+		Settings: NewSettings(&config.DatabaseConfig{}),
+	})
+	ctx := context.Background()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT n").WillReturnRows(
+		sqlmock.NewRows([]string{"n"}).AddRow(1).RowError(0, driver.ErrBadConn))
+	mock.ExpectRollback()
+
+	tx, err := sess.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	observe := func() {
+		rows, qerr := tx.Query(ctx, "SELECT n FROM t")
+		require.NoError(t, qerr)
+		defer func() { require.NoError(t, rows.Close()) }()
+		assert.False(t, rows.Next())
+		require.ErrorIs(t, rows.Err(), driver.ErrBadConn)
+	}
+	observe()
+	require.NoError(t, tx.Rollback(ctx))
+
+	_, err = sess.Exec(ctx, "SELECT 1")
+	require.ErrorIs(t, err, sql.ErrConnDone)
+	require.NoError(t, sess.Close())
+	assert.Zero(t, db.Stats().OpenConnections, "a connection shown dead is discarded, not pooled")
 }

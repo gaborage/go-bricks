@@ -313,3 +313,147 @@ func TestSessionCloseIsNotIdempotent(t *testing.T) {
 	require.ErrorIs(t, sess.Close(), sql.ErrConnDone,
 		"Close is not idempotent: the second call reports the connection is already done")
 }
+
+// TestSessionTxBadConnInvalidatesSession pins the ErrConnDone contract across a
+// transaction begun on the Session: Tx-scoped Rows join the Session's probe,
+// QueryRow uses the same translating shim, and Exec/Commit/Rollback feed
+// driver.ErrBadConn into markDead. After the Tx ends, sess.Exec must not reach
+// the driver and Close must discard the pinned connection.
+func TestSessionTxBadConnInvalidatesSession(t *testing.T) {
+	failingRows := func(m sqlmock.Sqlmock) {
+		m.ExpectQuery("SELECT n").WillReturnRows(
+			sqlmock.NewRows([]string{"n"}).AddRow(1).RowError(0, driver.ErrBadConn))
+	}
+	iterateToBadConn := func(t *testing.T, rows *sql.Rows) {
+		t.Helper()
+		assert.False(t, rows.Next())
+		require.ErrorIs(t, rows.Err(), driver.ErrBadConn)
+	}
+
+	tests := []struct {
+		name    string
+		setup   func(sqlmock.Sqlmock)
+		observe func(*testing.T, context.Context, types.Tx)
+		endTx   func(*testing.T, context.Context, types.Tx)
+		alive   bool
+	}{
+		{
+			name: "query_rows_rollback",
+			setup: func(m sqlmock.Sqlmock) {
+				m.ExpectBegin()
+				failingRows(m)
+				m.ExpectRollback()
+			},
+			observe: func(t *testing.T, ctx context.Context, tx types.Tx) {
+				rows, err := tx.Query(ctx, "SELECT n FROM t")
+				require.NoError(t, err)
+				defer func() { require.NoError(t, rows.Close()) }()
+				iterateToBadConn(t, rows)
+			},
+			endTx: func(t *testing.T, ctx context.Context, tx types.Tx) {
+				require.NoError(t, tx.Rollback(ctx))
+			},
+		},
+		{
+			name: "query_rows_commit",
+			setup: func(m sqlmock.Sqlmock) {
+				m.ExpectBegin()
+				failingRows(m)
+				m.ExpectCommit()
+			},
+			observe: func(t *testing.T, ctx context.Context, tx types.Tx) {
+				rows, err := tx.Query(ctx, "SELECT n FROM t")
+				require.NoError(t, err)
+				defer func() { require.NoError(t, rows.Close()) }()
+				iterateToBadConn(t, rows)
+			},
+			endTx: func(t *testing.T, ctx context.Context, tx types.Tx) {
+				require.NoError(t, tx.Commit(ctx))
+			},
+		},
+		{
+			name: "query_row_scan",
+			setup: func(m sqlmock.Sqlmock) {
+				m.ExpectBegin()
+				failingRows(m)
+				m.ExpectRollback()
+			},
+			observe: func(t *testing.T, ctx context.Context, tx types.Tx) {
+				var n int
+				require.ErrorIs(t, tx.QueryRow(ctx, "SELECT n FROM t").Scan(&n), sql.ErrConnDone)
+			},
+			endTx: func(t *testing.T, ctx context.Context, tx types.Tx) {
+				require.NoError(t, tx.Rollback(ctx))
+			},
+		},
+		{
+			name: "exec_errbadconn",
+			setup: func(m sqlmock.Sqlmock) {
+				m.ExpectBegin()
+				m.ExpectExec("INSERT INTO t").WillReturnError(driver.ErrBadConn)
+				m.ExpectRollback()
+			},
+			observe: func(t *testing.T, ctx context.Context, tx types.Tx) {
+				_, err := tx.Exec(ctx, "INSERT INTO t VALUES (1)")
+				require.ErrorIs(t, err, sql.ErrConnDone)
+			},
+			endTx: func(_ *testing.T, ctx context.Context, tx types.Tx) {
+				_ = tx.Rollback(ctx)
+			},
+		},
+		{
+			name: "healthy_commit",
+			setup: func(m sqlmock.Sqlmock) {
+				m.ExpectBegin()
+				m.ExpectQuery("SELECT n").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(1))
+				m.ExpectCommit()
+				m.ExpectExec("SELECT 1").WillReturnResult(sqlmock.NewResult(0, 0))
+			},
+			observe: func(t *testing.T, ctx context.Context, tx types.Tx) {
+				rows, err := tx.Query(ctx, "SELECT n FROM t")
+				require.NoError(t, err)
+				defer func() { require.NoError(t, rows.Close()) }()
+				assert.True(t, rows.Next())
+				require.NoError(t, rows.Err())
+			},
+			endTx: func(t *testing.T, ctx context.Context, tx types.Tx) {
+				require.NoError(t, tx.Commit(ctx))
+			},
+			alive: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, sess := openMockSession(t)
+			ctx := context.Background()
+
+			tt.setup(mock)
+			tx, err := sess.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			defer func() { _ = tx.Rollback(ctx) }()
+			tt.observe(t, ctx, tx)
+			if !tt.alive {
+				rows, qerr := tx.Query(ctx, "SELECT more")
+				if rows != nil {
+					defer rows.Close()
+				}
+				require.ErrorIs(t, qerr, sql.ErrConnDone,
+					"a later Tx query must not reach the driver once the session is dead")
+			}
+			tt.endTx(t, ctx, tx)
+
+			result, err := sess.Exec(ctx, "SELECT 1")
+			if tt.alive {
+				require.NoError(t, err, "a healthy Tx must leave the session alive so Exec reaches the driver")
+				assert.NotNil(t, result)
+				require.NoError(t, sess.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+				return
+			}
+
+			require.ErrorIs(t, err, sql.ErrConnDone, "the call after the dead backend was observed must not reach the driver")
+			require.NoError(t, sess.Close())
+			assert.Zero(t, db.Stats().OpenConnections, "a connection shown dead is discarded, not pooled")
+		})
+	}
+}

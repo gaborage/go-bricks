@@ -122,7 +122,7 @@ func (s *Session) BeginTx(ctx context.Context, opts *sql.TxOptions) (types.Tx, e
 	if err != nil {
 		return nil, wrapConnErr(err)
 	}
-	return NewTransaction(tx), nil
+	return newSessionTransaction(tx, s), nil
 }
 
 // Close releases the pinned physical connection back to the pool. A connection
