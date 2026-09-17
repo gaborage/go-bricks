@@ -82,8 +82,11 @@ always emitted; `SkipMigratorRole` drops the migrator's.
   role-level default is the belt to that suspenders, covering any caller
   that provisions roles without going through the runner's explicit args.
   A migrator provisioned with `SkipMigratorRole` gets no such default, so
-  the runner's explicit args — passed only when the target `DatabaseConfig`
-  sets `postgresql.schema` — are its only aim.
+  every tenant `DatabaseConfig` a shared-migrator run passes to the runner
+  **must** set `postgresql.schema`: the runner emits `-schemas` /
+  `-defaultSchema` only when it is set, and with it empty Flyway falls back to
+  the connection's default schema (typically `public`) and still reports
+  success. Nothing enforces this today — the caller owns it.
 - **Runtime side.** Without a role default, unqualified `INSERT`/`SELECT`
   statements from the running service resolve against `public`. The grants
   boundary still prevents cross-tenant reads (this is not a leak), but an
@@ -166,7 +169,8 @@ The migrator still owns the schema and is still the `FOR ROLE` target of both
 `ALTER DEFAULT PRIVILEGES` statements. `Validate` refuses a non-empty
 `MigratorPassword` with `ErrPGRoleSkippedMigratorHasPassword`, so its password
 is rotated out of band. The runner's explicit schema targeting — not the
-role's `search_path` — aims a shared migrator at each tenant (see
+role's `search_path` — aims a shared migrator at each tenant, so each tenant's
+`DatabaseConfig` must set `postgresql.schema` (see
 [Default search_path](#default-search_path)).
 
 ### Running inside your own transaction

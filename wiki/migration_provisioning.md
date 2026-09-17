@@ -70,8 +70,10 @@ steps := provisioning.Steps{
         return nil
     },
     Migrate: func(ctx context.Context, job *provisioning.Job) error {
-        // tenantDBConfig must set postgresql.schema: the shared migrator has no search_path default.
-        _, err := flywayMigrator.MigrateFor(ctx, tenantDBConfig(job.TenantID), nil)
+        dbCfg := tenantDBConfig(job.TenantID)
+        // Required: the shared migrator has no search_path default.
+        dbCfg.PostgreSQL.Schema = "tenant_" + job.TenantID
+        _, err := flywayMigrator.MigrateFor(ctx, dbCfg, nil)
         return err
     },
     Seed: func(ctx context.Context, job *provisioning.Job) error {
