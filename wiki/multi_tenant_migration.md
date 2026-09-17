@@ -93,10 +93,15 @@ Default secret name (configurable via `--secrets-prefix`):
 gobricks/migrate/<tenant_id>
 ```
 
-The payloads in this guide carry the tenant's runtime role (`tenant_a_app`) and
-assume a [migrator identity](#migrator-identity) is set, so Flyway connects as
-the migrator. Without one, Flyway connects as the secret's `username`, which must
-then hold DDL rights on the tenant schema; `go-bricks-migrate` cannot set one yet.
+The payloads in this guide are library-only: they carry the tenant's runtime
+role (`tenant_a_app`) and assume a [migrator identity](#migrator-identity) is
+set, so Flyway connects as the migrator instead. `go-bricks-migrate` cannot set
+one — it calls `MigrateAll` without the overlay and connects with each tenant
+secret's `username` *and* `password` as stored. A CLI-driven fleet therefore
+carries the shared migrator's own username and password in every tenant secret;
+swapping in the migrator's username alone authenticates it with the runtime
+role's password, and a secret left on the runtime role connects without DDL
+rights on the tenant schema.
 
 Secret payload — canonical shape (preferred):
 
