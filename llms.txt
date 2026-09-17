@@ -4638,7 +4638,7 @@ multitenant:
     proxies: true            # trust X-Forwarded-Host (only behind a trusted proxy)
 ```
 
-**Path (for `/<service>/{tenantID}/...` URLs — e.g. NovoPayment ITSP/TRTSP/3DS):**
+**Path (for `/<service>/{tenantID}/...` URLs — e.g. payment-tokenization APIs):**
 
 ```yaml
 multitenant:

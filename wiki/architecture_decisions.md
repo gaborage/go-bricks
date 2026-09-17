@@ -1797,8 +1797,8 @@ halves of one route different types. An unknown value is a declaration-time vali
 rather than a passthrough, and a quorum-resolved queue whose shape the broker rejects
 (non-durable, auto-delete or exclusive, `x-max-priority`, `x-queue-mode`) is refused by name
 at declaration time instead of by the broker's `PRECONDITION_FAILED` mid-startup. Both checks
-live in the validate-once path, so per-tenant replay is unchanged. Every NovoPayment broker is
-quorum-capable (maintainer, triage 2026-09-08); CI declares against
+live in the validate-once path, so per-tenant replay is unchanged. Every broker this framework is
+deployed against is quorum-capable (maintainer, triage 2026-09-08); CI declares against
 `rabbitmq:4.3.5-management-alpine`. Compiler-invisible: an existing classic primary, or classic
 parking queue (`ParkingQueue` when the spec sets it, else `<queue>.dlq`), cannot be redeclared as
 quorum, so set `QueueType: messaging.QueueTypeClassic` to keep today's topology or delete/migrate
