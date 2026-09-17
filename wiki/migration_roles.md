@@ -78,6 +78,9 @@ always emitted; `SkipMigratorRole` drops the migrator's.
   for how the runner passes `-schemas`/`-defaultSchema` explicitly — this
   role-level default is the belt to that suspenders, covering any caller
   that provisions roles without going through the runner's explicit args.
+  A migrator provisioned with `SkipMigratorRole` gets no such default, so
+  the runner's explicit args — passed only when the target `DatabaseConfig`
+  sets `postgresql.schema` — are its only aim.
 - **Runtime side.** Without a role default, unqualified `INSERT`/`SELECT`
   statements from the running service resolve against `public`. The grants
   boundary still prevents cross-tenant reads (this is not a leak), but an
@@ -89,13 +92,16 @@ always emitted; `SkipMigratorRole` drops the migrator's.
 SET`. That is only sound for a role that belongs to one schema: the runtime
 role is per tenant, so its cluster-global default is equivalent to a
 database-scoped one in practice, and DB-scoping was deferred as unnecessary
-complexity for v1. A migrator shared across tenants is not — each call would
-repoint its one cluster-wide default at the tenant that ran last — so a shared
-migrator is provisioned with `SkipMigratorRole`, and Flyway's explicit schema
-targeting aims it at each tenant. Shared-cluster deployments that reuse role
-names across databases would need to revisit this.
+complexity for v1. A migrator shared across tenants does not belong to one
+schema; see [Shared and out-of-band migrators](#shared-and-out-of-band-migrators).
+Shared-cluster deployments that reuse role names across databases would need
+to revisit this.
 
 ## Using the helper
+
+The call below creates a migrator dedicated to `tenant_a`. For the model's
+migrator shared across tenants, see
+[Shared and out-of-band migrators](#shared-and-out-of-band-migrators).
 
 ```go
 import (
@@ -115,7 +121,7 @@ spec := &migration.PGRoleSpec{
 }
 
 // db is an *sql.DB authenticated as the provisioner — the instance bootstrap
-// superuser, or a CREATEROLE role set up as in "Provisioner privileges".
+// superuser, or a CREATEROLE-only provisioner set up as in "Provisioner privileges".
 if err := migration.ProvisionPGRoles(ctx, db, spec); err != nil {
     return fmt.Errorf("provision tenant %q: %w", spec.Schema, err)
 }
@@ -151,13 +157,12 @@ spec := &migration.PGRoleSpec{
 }
 ```
 
-No statement then creates the migrator, locks it down, sets its password or
-sets its `search_path`; it still owns the schema and is still the `FOR ROLE`
-target of both `ALTER DEFAULT PRIVILEGES` statements. `Validate` refuses a
-non-empty `MigratorPassword` with `ErrPGRoleSkippedMigratorHasPassword`.
-Flyway's explicit schema targeting (`-schemas` / `-defaultSchema`, see
-[Schema targeting (PostgreSQL)](multi_tenant_migration.md#schema-targeting-postgresql))
-— not the role's `search_path` — is what aims a shared migrator at each tenant.
+The migrator still owns the schema and is still the `FOR ROLE` target of both
+`ALTER DEFAULT PRIVILEGES` statements. `Validate` refuses a non-empty
+`MigratorPassword` with `ErrPGRoleSkippedMigratorHasPassword`, so its password
+is rotated out of band. The runner's explicit schema targeting — not the
+role's `search_path` — aims a shared migrator at each tenant (see
+[Default search_path](#default-search_path)).
 
 ### Running inside your own transaction
 
@@ -216,12 +221,12 @@ for _, s := range stmts {
 
 `ProvisionPGRoles` runs as a **provisioner** — never as the migrator or the
 runtime role. What that connection needs depends on who it is and where the
-migrator comes from (PostgreSQL 16+):
+migrator comes from (PostgreSQL 16+; the integration tests run on 18):
 
 | Provisioner | Migrator | Spec options | One-time setup |
 | ----------- | -------- | ------------ | -------------- |
-| Superuser | created by the call, or out of band | any | none |
-| `LOGIN CREATEROLE NOSUPERUSER` with `CREATE` on the database | created by the call | `SkipFloorReassert: true` | `ALTER ROLE provisioner SET createrole_self_grant = 'set, inherit'` before the first call |
+| Superuser | created by the call, or out of band | any; `SkipMigratorRole` for a shared migrator | none |
+| `LOGIN CREATEROLE NOSUPERUSER` with `CREATE` on the database | created by the call | `SkipFloorReassert: true` | `ALTER ROLE provisioner SET createrole_self_grant = 'set, inherit'`, before the provisioning connections open |
 | `LOGIN CREATEROLE NOSUPERUSER` with `CREATE` on the database | created out of band | `SkipMigratorRole: true`, `SkipFloorReassert: true` | `GRANT migrator TO provisioner WITH INHERIT TRUE, SET TRUE` |
 
 Why each requirement exists:
@@ -234,11 +239,14 @@ Why each requirement exists:
   step 1, the migrator's lockdown `ALTER ROLE`, with SQLSTATE 42501.
 - **`SET` and `INHERIT` on the migrator.** `CREATE SCHEMA … AUTHORIZATION
   migrator` requires the right to `SET ROLE migrator`; `ALTER DEFAULT
-  PRIVILEGES FOR ROLE migrator` requires inheriting its privileges.
+  PRIVILEGES FOR ROLE migrator`, and the grants on the schema the migrator
+  owns, require inheriting its privileges.
   PostgreSQL 16+ grants a role's creator `ADMIN` alone, so without the setup
-  above the call fails at `CREATE SCHEMA` with SQLSTATE 42501.
-  `createrole_self_grant` applies only to roles created after it is set; for
-  a migrator that already exists, use the `GRANT` form.
+  above the call fails at `CREATE SCHEMA`, and with `SET` but no `INHERIT` at
+  the first schema `GRANT`, both with SQLSTATE 42501. `createrole_self_grant`
+  applies only to roles created after it is set, and a role setting reaches
+  only sessions opened after it; for a migrator that already exists, use the
+  `GRANT` form.
 - **`ADMIN` on every role the call alters.** A password or `search_path` needs
   it. The provisioner holds it on the roles it created itself, but not on a
   runtime role that a different role created earlier.
@@ -248,8 +256,9 @@ privileges of every runtime role it creates. Its `ADMIN` on those roles already
 let it grant itself that membership, so this adds no reach it could not take.
 
 The framework neither emits these grants nor checks the server version: the
-table above is the whole contract, and
-`TestPGRolesCreateroleProvisionerLimits` pins both refusals by SQLSTATE.
+table and the three requirements above are the whole contract, and
+`TestPGRolesCreateroleProvisionerLimits` pins each refusal by SQLSTATE and
+failing step.
 
 ### Reporting drift instead of repairing it
 
@@ -334,7 +343,8 @@ deployment. Treat its credentials accordingly:
   in-process `migration.MigrateAll` caller). Runtime services must connect
   as their per-tenant runtime role, never as the migrator.
 - **Rotation:** Pass the new password as `MigratorPassword` on the next
-  provisioning call. The helper emits `ALTER ROLE ... PASSWORD ...`
+  provisioning call (a migrator provisioned with `SkipMigratorRole` is
+  rotated out of band instead). The helper emits `ALTER ROLE ... PASSWORD ...`
   unconditionally when the field is non-empty, so rerunning with a rotated
   secret is sufficient — trim it first if it came from a file, a mounted
   secret, or a command substitution, since a stray CR/LF/NUL is rejected.
@@ -353,7 +363,7 @@ see [multi_tenant_migration.md](multi_tenant_migration.md#aws-secrets-manager-co
                          ▼
    ┌─────────────────────────────────────────────────┐
    │ DO $$ … CREATE ROLE migrator LOGIN NO* …        │ [M]    create; EXCEPTION swallows
-   │   EXCEPTION WHEN duplicate_object … $$          │        an existing role
+   │   EXCEPTION WHEN duplicate_object … $$          │        an existing or concurrent one
    │ ALTER ROLE migrator NO*                         │ [M][F] attribute floor re-assert
    │ ALTER ROLE migrator PASSWORD '...'              │ [M]    only when set (rotation)
    │ DO $$ … CREATE ROLE runtime LOGIN NO* … $$      │        create
@@ -364,14 +374,14 @@ see [multi_tenant_migration.md](multi_tenant_migration.md#aws-secrets-manager-co
    │ GRANT USAGE ON SCHEMA tenant_a TO runtime       │
    │ GRANT SELECT/INSERT/UPDATE/DELETE               │        existing-object grants
    │   ON ALL TABLES IN SCHEMA tenant_a TO runtime   │
-   │ GRANT USAGE/SELECT/UPDATE                       │
-   │   ON ALL SEQUENCES IN SCHEMA tenant_a TO runtime│
+   │ GRANT USAGE/SELECT/UPDATE ON ALL SEQUENCES      │
+   │   IN SCHEMA tenant_a TO runtime                 │
    │ ALTER DEFAULT PRIVILEGES FOR ROLE migrator      │        future-object grants
    │   IN SCHEMA tenant_a … ON TABLES TO runtime     │
    │ ALTER DEFAULT PRIVILEGES FOR ROLE migrator      │
    │   IN SCHEMA tenant_a … ON SEQUENCES TO runtime  │
-   │ ALTER ROLE migrator SET search_path = tenant_a  │ [M]
-   │ ALTER ROLE runtime  SET search_path = tenant_a  │
+   │ ALTER ROLE migrator SET search_path = tenant_a  │ [M]    role-level default schema
+   │ ALTER ROLE runtime  SET search_path = tenant_a  │        role-level default schema
    └─────────────────────────────────────────────────┘
    [M] not emitted with SkipMigratorRole
    [F] not emitted with SkipFloorReassert
@@ -398,18 +408,19 @@ three claims that should remain true forever:
    `rolsuper=false`, `rolcreatedb=false`, `rolcreaterole=false`,
    `rolbypassrls=false`, and `rolreplication=false` in `pg_catalog.pg_roles`.
 
-Three more run the helper as a `CREATEROLE NOSUPERUSER` provisioner instead of
-the container superuser, backing [Provisioner privileges](#provisioner-privileges):
+Three more run the helper as a CREATEROLE-only provisioner, backing
+[Provisioner privileges](#provisioner-privileges):
 
 1. **`TestPGRolesCreateroleProvisionerMintsTheMigrator`** — with
    `SkipFloorReassert` and `createrole_self_grant`, provisioning succeeds, the
    first two claims above still hold, and `CheckPGRoleFloor` names a
    `CREATEDB` granted afterwards.
-2. **`TestPGRolesCreateroleProvisionerLeavesASharedMigratorUntouched`** — two
-   tenants provisioned against one out-of-band migrator leave its attributes,
+2. **`TestPGRolesCreateroleProvisionerLeavesASharedMigratorUntouched`** — three
+   tenants provisioned against one out-of-band migrator, two by the
+   CREATEROLE provisioner and one by the superuser, leave its attributes,
    password and role settings exactly as they were.
-3. **`TestPGRolesCreateroleProvisionerLimits`** — the default spec, and a
-   minted migrator without `createrole_self_grant`, fail with SQLSTATE 42501.
+3. **`TestPGRolesCreateroleProvisionerLimits`** — each requirement in the
+   table, left out, fails with SQLSTATE 42501 at the step named there.
 
 Run them with:
 

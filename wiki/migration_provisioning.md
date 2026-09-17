@@ -58,14 +58,11 @@ if err := store.CreateTable(ctx); err != nil { return err }
 steps := provisioning.Steps{
     CreateSchema: func(ctx context.Context, job *provisioning.Job) error {
         return migration.ProvisionPGRoles(ctx, adminDB, &migration.PGRoleSpec{
-            Schema:          "tenant_" + job.TenantID,
-            MigratorRole:    "migrator", // one migrator for every tenant, created out of band
-            RuntimeRole:     "tenant_" + job.TenantID + "_app",
-            RuntimePassword: fetchSecret(job.TenantID),
-            // A shared migrator must not be re-provisioned per tenant; a
-            // CREATEROLE-only adminDB also needs SkipFloorReassert. See
-            // migration_roles.md#provisioner-privileges.
-            SkipMigratorRole: true,
+            Schema:           "tenant_" + job.TenantID,
+            MigratorRole:     "migrator", // one migrator for every tenant, created out of band
+            RuntimeRole:      "tenant_" + job.TenantID + "_app",
+            RuntimePassword:  fetchSecret(job.TenantID),
+            SkipMigratorRole: true, // never re-provision a shared migrator per tenant
         })
     },
     CreateRole: func(_ context.Context, _ *provisioning.Job) error {
@@ -80,7 +77,7 @@ steps := provisioning.Steps{
         return seedReferenceData(ctx, tenantDB(job.TenantID))
     },
     Cleanup: func(ctx context.Context, job *provisioning.Job) error {
-        return dropTenantArtifacts(ctx, adminDB, "tenant_"+job.TenantID, "migrator", "tenant_"+job.TenantID+"_app")
+        return dropTenantArtifacts(ctx, adminDB, "tenant_"+job.TenantID, "tenant_"+job.TenantID+"_app")
     },
 }
 
@@ -88,12 +85,16 @@ exec, err := provisioning.NewExecutor(store, steps, logger.New("info", false))
 if err != nil { return err }
 
 // Provision a new tenant (idempotent by job ID).
-job := &provisioning.Job{ID: "job-tenant-a-2026-05-13", TenantID: "tenant-a"}
+job := &provisioning.Job{ID: "job-tenant-a-2026-05-13", TenantID: "a"}
 if _, err := store.Upsert(ctx, job); err != nil { return err }
 if err := exec.Run(ctx, job.ID); err != nil {
     return err // job ended in StateFailed; LastError carries the diagnostic
 }
 ```
+
+The sample assumes a superuser `adminDB`; a CREATEROLE-only provisioner needs
+the options and one-time grant in
+[Provisioner privileges](migration_roles.md#provisioner-privileges).
 
 `Migrate` is any callback — Flyway is the common choice, and the
 single-transaction pattern (see [the section
