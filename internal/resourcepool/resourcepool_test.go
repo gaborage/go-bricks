@@ -13,12 +13,16 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
 const (
-	keyOne   = "key-1"
-	keyTwo   = "key-2"
-	keyThree = "key-3"
+	keyOne        = "key-1"
+	keyTwo        = "key-2"
+	keyThree      = "key-3"
+	inFlightOldID = "old"
+	inFlightNewID = "new"
 )
 
 // fakeResource is a trivial pooled value with a controllable close outcome.
@@ -58,6 +62,16 @@ func (t *closeTracker) count(id string) int {
 
 func (t *closeTracker) wasClosed(id string) bool {
 	return t.count(id) > 0
+}
+
+func (t *closeTracker) total() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	n := 0
+	for _, c := range t.closed {
+		n += c
+	}
+	return n
 }
 
 // countingConnector returns a create function that produces a fresh fakeResource per key and
@@ -100,6 +114,14 @@ func uniqueConnector(created *atomic.Int32) func(context.Context) (*fakeResource
 	return func(context.Context) (*fakeResource, error) {
 		id := created.Add(1)
 		return newFakeResource(fmt.Sprintf("res-%d", id)), nil
+	}
+}
+
+// gatedConnector returns a create that parks on blocked until Release, producing a resource with id.
+func gatedConnector(id string, blocked *testutil.BlockedCreate) func(context.Context) (*fakeResource, error) {
+	return func(context.Context) (*fakeResource, error) {
+		blocked.Arrive()
+		return newFakeResource(id), nil
 	}
 }
 
@@ -987,10 +1009,190 @@ func TestPoolRemoveNonexistent(t *testing.T) {
 	got, shouldClose := p.Remove("missing")
 	assert.False(t, shouldClose)
 	assert.Nil(t, got)
+	assert.Equal(t, 0, p.Stats().Removals, "a Remove that detached nothing does not count")
+	assert.Zero(t, p.generation["missing"], "a no-op Remove must not bump generation")
 }
 
-// TestPoolRemoveCountsRemovals pins that Removals counts every Remove that detached an entry,
-// leased or not, and nothing else: a missing key adds nothing and Evictions stays LRU-only.
+// TestPoolRemoveBumpsGeneration pins that a Remove invalidating an in-flight create increments
+// the key's generation (not decrement) and that a finished create deletes inFlight[key] rather
+// than leaving a zero counter that still occupies the map.
+func TestPoolRemoveBumpsGeneration(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+
+	_, rel, err := p.GetOrCreate(context.Background(), keyOne, keyedCreate(keyOne))
+	require.NoError(t, err)
+	_, ok := p.inFlight[keyOne]
+	assert.False(t, ok, "a finished create must delete inFlight[key], not leave a zero")
+	rel()
+
+	blocked := testutil.NewBlockedCreate(t)
+	gotCh := make(chan leaseResult, 1)
+	go func() {
+		v, lease, cerr := p.GetOrCreate(context.Background(), keyTwo, gatedConnector(inFlightOldID, blocked))
+		gotCh <- leaseResult{v, lease, cerr}
+	}()
+	<-blocked.Started
+
+	before := p.generation[keyTwo]
+	_, shouldClose := p.Remove(keyTwo)
+	require.False(t, shouldClose, "an in-flight-only Remove has no cached value to close")
+	assert.Equal(t, before+1, p.generation[keyTwo], "Remove increments generation so the in-flight create detaches")
+
+	blocked.Release()
+	got := <-gotCh
+	require.NoError(t, got.err)
+	got.rel()
+}
+
+// genLen reports how many keys the pool still tracks a generation for, read under the pool lock so
+// it is safe to call while a create is parked in flight.
+func genLen[V any](p *Pool[V]) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.generation)
+}
+
+// TestPoolRemoveReleasesGenerationEntries pins that Remove leaves no generation entry behind once
+// no create is in flight. The map invalidates in-flight creates; it is not a per-key ledger, so
+// removing many distinct tenant/connection keys must not grow it independently of maxSize.
+func TestPoolRemoveReleasesGenerationEntries(t *testing.T) {
+	removeKeys := []string{"tenant-a", "tenant-b", "tenant-c"}
+
+	tests := []struct {
+		name   string
+		remove func(t *testing.T, p *Pool[*fakeResource], tr *closeTracker, key string)
+	}{
+		{
+			name: "unleased_cached_entry",
+			remove: func(t *testing.T, p *Pool[*fakeResource], tr *closeTracker, key string) {
+				_, rel, err := p.GetOrCreate(context.Background(), key, keyedCreate(key))
+				require.NoError(t, err)
+				rel()
+				v, shouldClose := p.Remove(key)
+				require.True(t, shouldClose)
+				require.NoError(t, tr.closer(v))
+			},
+		},
+		{
+			name: "leased_cached_entry",
+			remove: func(t *testing.T, p *Pool[*fakeResource], _ *closeTracker, key string) {
+				_, rel, err := p.GetOrCreate(context.Background(), key, keyedCreate(key))
+				require.NoError(t, err)
+				_, shouldClose := p.Remove(key)
+				require.False(t, shouldClose, "a leased Remove defers its close")
+				rel()
+			},
+		},
+		{
+			name: "in_flight_create",
+			remove: func(t *testing.T, p *Pool[*fakeResource], _ *closeTracker, key string) {
+				blocked := testutil.NewBlockedCreate(t)
+				gotCh := make(chan leaseResult, 1)
+				go func() {
+					v, rel, err := p.GetOrCreate(context.Background(), key, gatedConnector(key, blocked))
+					gotCh <- leaseResult{v, rel, err}
+				}()
+				<-blocked.Started
+
+				_, shouldClose := p.Remove(key)
+				require.False(t, shouldClose)
+				require.Equal(t, 1, genLen(p), "the invalidated create still needs its generation until it installs")
+
+				blocked.Release()
+				got := <-gotCh
+				require.NoError(t, got.err)
+				got.rel()
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tr := newCloseTracker()
+			p := New(0, 0, tr.closer)
+
+			for _, key := range removeKeys {
+				tt.remove(t, p, tr, key)
+			}
+
+			assert.Equal(t, 0, genLen(p), "every settled Remove releases its generation entry")
+			require.NoError(t, p.Close())
+		})
+	}
+}
+
+// TestPoolRemoveKeepsStaleCreateDetachedAfterGenerationRelease pins the ordering that makes
+// releasing the entry safe: the key starts with no generation, so the in-flight create captures
+// the zero value. installCreated must compare BEFORE ending its create — reading after the entry
+// is released would see zero again and cache a resource built under the pre-Remove config.
+func TestPoolRemoveKeepsStaleCreateDetachedAfterGenerationRelease(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+
+	blocked := testutil.NewBlockedCreate(t)
+	gotCh := make(chan leaseResult, 1)
+	go func() {
+		v, rel, err := p.GetOrCreate(context.Background(), keyOne, gatedConnector(inFlightOldID, blocked))
+		gotCh <- leaseResult{v, rel, err}
+	}()
+	<-blocked.Started
+	require.Equal(t, 0, genLen(p), "the create captured the zero generation")
+
+	_, shouldClose := p.Remove(keyOne)
+	require.False(t, shouldClose)
+	require.Equal(t, 1, genLen(p))
+
+	blocked.Release()
+	got := <-gotCh
+	require.NoError(t, got.err)
+	assert.Equal(t, 0, p.Size(), "a create invalidated under the zero generation is still never cached")
+	assert.Equal(t, 0, genLen(p), "the last create in flight releases the generation entry")
+
+	got.rel()
+	assert.Equal(t, 1, tr.count(inFlightOldID), "the detached create closed at its final release")
+}
+
+// TestPoolCloseDuringInvalidatedCreateReleasesGeneration pins the closed branch of installCreated,
+// the one install path that returns before touching entries or LRU: a create Remove invalidated
+// and Close then overtook must STILL end its create, draining inFlight[key] and the generation
+// entry Remove left for it, and close the orphaned instance exactly once. Close itself never walks
+// those maps, so this parked create is the only thing that can drain them after Close.
+func TestPoolCloseDuringInvalidatedCreateReleasesGeneration(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+
+	blocked := testutil.NewBlockedCreate(t)
+	gotCh := make(chan leaseResult, 1)
+	go func() {
+		v, rel, err := p.GetOrCreate(context.Background(), keyOne, gatedConnector(inFlightOldID, blocked))
+		gotCh <- leaseResult{v, rel, err}
+	}()
+	<-blocked.Started
+
+	_, shouldClose := p.Remove(keyOne)
+	require.False(t, shouldClose, "an in-flight-only Remove has no cached value to close")
+	require.Equal(t, 1, genLen(p), "the invalidated create still holds its generation across Close")
+
+	// Close does not join in-flight creates, so it returns while this one is still parked.
+	require.NoError(t, p.Close())
+	require.Equal(t, 1, genLen(p), "Close does not drain the generation of a create still in flight")
+
+	blocked.Release()
+	got := <-gotCh
+	require.ErrorIs(t, got.err, ErrPoolClosed)
+	assert.Nil(t, got.rel, "a failed GetOrCreate hands back no release")
+
+	assert.Equal(t, 0, genLen(p), "the closed install path still ends its create and releases the generation")
+	_, ok := p.inFlight[keyOne]
+	assert.False(t, ok, "the closed install path still drops inFlight[key]")
+	assert.Equal(t, 1, tr.count(inFlightOldID), "the orphaned instance closed exactly once")
+}
+
+// TestPoolRemoveCountsRemovals pins that Removals counts every Remove that detached a cached
+// entry, leased or not, and nothing else: a missing key adds nothing and Evictions stays LRU-only.
 func TestPoolRemoveCountsRemovals(t *testing.T) {
 	tr := newCloseTracker()
 	p := New(5, 0, tr.closer)
@@ -1017,6 +1219,116 @@ func TestPoolRemoveCountsRemovals(t *testing.T) {
 	st := p.Stats()
 	assert.Equal(t, 2, st.Removals, "a Remove that detached nothing does not count")
 	assert.Equal(t, 0, st.Evictions, "Remove is not an LRU eviction")
+}
+
+// TestPoolRemoveInvalidatesInFlightCreate pins that Remove during a blocked create still
+// delivers that value to the in-flight waiter, never caches it, closes it once at final
+// release, and the next GetOrCreate runs create again.
+func TestPoolRemoveInvalidatesInFlightCreate(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+
+	blocked := testutil.NewBlockedCreate(t)
+
+	gotCh := make(chan leaseResult, 1)
+	go func() {
+		v, rel, err := p.GetOrCreate(context.Background(), keyOne, gatedConnector(inFlightOldID, blocked))
+		gotCh <- leaseResult{v, rel, err}
+	}()
+	<-blocked.Started
+
+	removed, shouldClose := p.Remove(keyOne)
+	assert.False(t, shouldClose, "an in-flight-only Remove has no cached value to close")
+	assert.Nil(t, removed)
+	assert.Equal(t, 1, p.Stats().Removals, "invalidating an in-flight create counts a Removal")
+
+	blocked.Release()
+	got := <-gotCh
+	require.NoError(t, got.err)
+	require.NotNil(t, got.rel)
+	assert.Equal(t, inFlightOldID, got.v.id)
+	assert.Equal(t, 0, p.Size(), "an invalidated create is never cached")
+
+	got.rel()
+	assert.Equal(t, 1, tr.count(inFlightOldID), "Close ran exactly once at final release")
+	assert.Equal(t, 0, p.Size())
+
+	fresh, rel, err := p.GetOrCreate(context.Background(), keyOne, func(context.Context) (*fakeResource, error) {
+		return newFakeResource(inFlightNewID), nil
+	})
+	require.NoError(t, err)
+	defer rel()
+	assert.Equal(t, inFlightNewID, fresh.id)
+	assert.NotSame(t, got.v, fresh)
+	assert.Equal(t, 1, p.Size(), "the next GetOrCreate caches the new resource")
+	_, ok := p.inFlight[keyOne]
+	assert.False(t, ok, "a finished create must delete inFlight[key], not leave a zero")
+}
+
+// TestPoolRemoveCountsInFlightOnlyRemoval pins that Removals increments when Remove invalidates
+// a create and there is no cached entry, distinct from the empty-Remove no-op.
+func TestPoolRemoveCountsInFlightOnlyRemoval(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+
+	blocked := testutil.NewBlockedCreate(t)
+
+	gotCh := make(chan leaseResult, 1)
+	go func() {
+		v, rel, err := p.GetOrCreate(context.Background(), keyOne, gatedConnector(inFlightOldID, blocked))
+		gotCh <- leaseResult{v, rel, err}
+	}()
+	<-blocked.Started
+
+	assert.Equal(t, 0, p.Stats().Removals)
+	_, shouldClose := p.Remove(keyOne)
+	require.False(t, shouldClose)
+	assert.Equal(t, 1, p.Stats().Removals)
+
+	blocked.Release()
+	got := <-gotCh
+	require.NoError(t, got.err)
+	got.rel()
+}
+
+// TestPoolAbandonedCreateAfterRemoveClosesResource pins that a detached-at-birth entry still
+// holds its seed lease: if the sole waiter cancels after Remove, releaseAbandoned must release
+// that seed or the resource leaks.
+func TestPoolAbandonedCreateAfterRemoveClosesResource(t *testing.T) {
+	tr := newCloseTracker()
+	closedCh := make(chan struct{})
+	var closeOnce sync.Once
+	p := New(0, 0, func(r *fakeResource) error {
+		err := tr.closer(r)
+		closeOnce.Do(func() { close(closedCh) })
+		return err
+	})
+	defer p.Close()
+
+	blocked := testutil.NewBlockedCreate(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	gotCh := make(chan leaseResult, 1)
+	go func() {
+		v, rel, err := p.GetOrCreate(ctx, keyOne, gatedConnector("abandoned", blocked))
+		gotCh <- leaseResult{v, rel, err}
+	}()
+	<-blocked.Started
+
+	p.Remove(keyOne)
+	cancel()
+	got := <-gotCh
+	blocked.Release()
+	require.ErrorIs(t, got.err, context.Canceled)
+	assert.Nil(t, got.rel)
+
+	<-closedCh
+	assert.Equal(t, 1, tr.count("abandoned"), "the abandoned create still closed once")
+	assert.Equal(t, 0, p.Size())
 }
 
 // TestPoolRecordCloseErrorCountsOnlyErrors pins that a caller-run close failure, recorded after
@@ -1648,6 +1960,50 @@ func TestPoolConcurrentGetRacesRemove(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestPoolConcurrentGetRemoveClosesEveryCreate pins that Remove racing GetOrCreate cannot
+// orphan a handle: every create is closed once, either at final release or by Close. Forget
+// can split two same-generation creates; installCreated must close the duplicate rather than
+// overwrite the map (an overwritten LRU entry is invisible to Close).
+func TestPoolConcurrentGetRemoveClosesEveryCreate(t *testing.T) {
+	tr := newCloseTracker()
+	var created atomic.Int32
+	p := New(0, 0, tr.closer)
+
+	const workers = 16
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	create := countingConnector(&created)
+	for range workers {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, rel, err := p.GetOrCreate(context.Background(), keyOne, create)
+			if rel != nil {
+				rel()
+			}
+			errs <- err
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			if v, shouldClose := p.Remove(keyOne); shouldClose {
+				_ = tr.closer(v)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, p.Close())
+	assert.Equal(t, int(created.Load()), tr.total(), "every handle built is closed once Close returns")
 }
 
 // TestPoolStartCleanupAfterCloseIsNoOp pins the contract behind the StartCleanup/Close leak fix:

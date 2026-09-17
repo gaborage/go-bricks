@@ -130,10 +130,10 @@ func (m *DbManager) Get(ctx context.Context, key string) (Interface, ReleaseFunc
 // DBConfigProvider; key is "" for the root database, config.NamedDatabasePrefix+name for a named
 // one, the tenant ID in multi-tenant mode. An idle connection closes now (close error wrapped); a
 // leased one at its final release, protecting work in a lease scope (HTTP request, AMQP message,
-// scheduler job) but not a handle borrowed outside one. Returns ErrManagerClosed after Close or on
-// a zero-value manager. A Get still creating its connection when Remove runs caches it afterwards,
-// unseen by Remove and built from its earlier config, so possibly old credentials; under steady
-// traffic call Remove again once in-flight creates complete, or drain traffic first (#1669).
+// scheduler job) but not a handle borrowed outside one. A Get still creating its connection when
+// Remove runs is delivered that connection but the pool never caches it — it closes at the final
+// lease release — so the next Get re-resolves the provider. Returns ErrManagerClosed after Close
+// or on a zero-value manager.
 func (m *DbManager) Remove(key string) error {
 	if m.pool == nil || m.pool.Closed() {
 		return ErrManagerClosed

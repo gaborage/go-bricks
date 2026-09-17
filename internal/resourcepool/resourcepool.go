@@ -59,7 +59,7 @@ type PoolStats struct {
 	MaxSize      int           // Maximum allowed active entries (0 = unlimited)
 	TotalCreated int           // Total entries created since the pool started
 	Evictions    int           // Total evictions due to LRU policy
-	Removals     int           // Total explicit Remove calls that detached an entry, leased or not
+	Removals     int           // Total explicit Remove calls that detached a cached entry or invalidated an in-flight create
 	IdleCleanups int           // Total cleanups due to idle timeout
 	Errors       int           // Total create failures (a recovered create panic included) and tracked close failures
 	IdleTTL      time.Duration // Idle timeout duration
@@ -121,6 +121,17 @@ type Pool[V any] struct {
 	removals     int
 	idleCleanups int
 
+	// generation invalidates creates that are ALREADY in flight: Remove bumps the key's value
+	// while a create holds a captured one, so that create is delivered to its waiters but never
+	// installed. An entry therefore exists only while inFlight[key] > 0 — with no create to
+	// invalidate there is nothing to remember, and the last create to finish releases it. That
+	// bounds the map by concurrent creates; a per-key ledger would instead grow with every
+	// removed tenant or named connection, unbounded by maxSize.
+	generation map[string]uint64
+	// inFlight counts createEntry calls that have captured a generation but not yet finished
+	// installing. Remove uses it to count Removals for an in-flight-only invalidation.
+	inFlight map[string]int
+
 	// errors counts create failures and tracked close failures. Atomic so incErrors and
 	// noteCleanupCloseErr can bump it without taking mu.
 	errors atomic.Int64
@@ -148,11 +159,13 @@ type Pool[V any] struct {
 // unlimited; idleTTL <= 0 disables idle cleanup.
 func New[V any](maxSize int, idleTTL time.Duration, closer Closer[V]) *Pool[V] {
 	return &Pool[V]{
-		entries: make(map[string]*entry[V]),
-		lru:     list.New(),
-		maxSize: maxSize,
-		idleTTL: idleTTL,
-		closer:  closer,
+		entries:    make(map[string]*entry[V]),
+		lru:        list.New(),
+		generation: make(map[string]uint64),
+		inFlight:   make(map[string]int),
+		maxSize:    maxSize,
+		idleTTL:    idleTTL,
+		closer:     closer,
 	}
 }
 
@@ -249,10 +262,12 @@ func (p *Pool[V]) acquireShared(ctx context.Context, key string, create func(con
 
 // releaseAbandoned settles a collapsed create whose caller returned early on its own context. The
 // create ran to completion, and a freshly created entry carries an unclaimed seed lease — taking
-// and immediately releasing a lease hands that seed back, leaving a normal unleased cached entry
-// that eviction, idle cleanup, and Close can close. Without it the seed would pin refs >= 1
-// forever and a later eviction would detach the resource with its close deferred to a release that
-// never comes, leaking it. Runs on its own goroutine, bounded by the create's own completion.
+// and immediately releasing a lease hands that seed back. A still-valid create becomes a normal
+// unleased cached entry that eviction, idle cleanup, and Close can close; a create that Remove
+// invalidated while in flight is detached at birth, so this release is what runs its Closer. Without
+// it the seed would pin refs >= 1 forever and a later eviction would detach the resource with its
+// close deferred to a release that never comes, leaking it. Runs on its own goroutine, bounded by
+// the create's own completion.
 //
 // These goroutines are deliberately NOT joined by Close, unlike the cleanup loop. Joining them
 // would make Close wait on an in-flight CREATE, and creation currently carries no bound of its own
@@ -383,6 +398,12 @@ func callCreate[V any](ctx context.Context, key string, create func(context.Cont
 // between the caller's closed check and here, the just-created resource is closed and
 // ErrPoolClosed is returned rather than resurrecting the cleared map.
 //
+// The key's generation is captured before create runs. If Remove bumps it before install, the
+// value is still returned to every waiter of this create (they hold a valid lease) but the entry
+// is marked detached and never enters the map or LRU — it closes at the final lease release,
+// including via releaseAbandoned when every waiter gave up. That is what makes credential
+// rotation safe: a dial that started under the old config cannot be cached afterwards.
+//
 // create runs on a context DERIVED from the initiating caller's: values and any deadline carry
 // over, but cancellation is severed, so one collapsed caller's early cancel cannot fail the SHARED
 // create for every waiter (or for the future callers an installed entry is meant to serve). The
@@ -399,19 +420,76 @@ func (p *Pool[V]) createEntry(ctx context.Context, key string, create func(conte
 		createCtx, cancel = context.WithDeadline(createCtx, deadline)
 		defer cancel()
 	}
+
+	gen := p.beginCreate(key)
 	value, err := callCreate(createCtx, key, create)
 	if err != nil {
+		p.endCreate(key)
 		return nil, err
 	}
 
+	return p.installCreated(key, gen, value)
+}
+
+// beginCreate records that a create for key is in flight and returns the generation to compare
+// at install. Must be paired with endCreate / installCreated even when create fails, or Remove
+// would keep counting an in-flight invalidation that already finished.
+func (p *Pool[V]) beginCreate(key string) uint64 {
 	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.inFlight[key]++
+	return p.generation[key]
+}
+
+// endCreate drops the in-flight count for a create that failed before installCreated.
+func (p *Pool[V]) endCreate(key string) {
+	p.mu.Lock()
+	p.endCreateLocked(key)
+	p.mu.Unlock()
+}
+
+// endCreateLocked decrements inFlight[key], deleting the entry at zero and releasing the key's
+// generation with it: the last create to finish is the last one that could compare against it, so
+// keeping it would only grow the map. Must be called with mu held, and AFTER the caller has read
+// the generation it compares (see installCreated).
+func (p *Pool[V]) endCreateLocked(key string) {
+	n := p.inFlight[key] - 1
+	if n <= 0 {
+		delete(p.inFlight, key)
+		delete(p.generation, key)
+		return
+	}
+	p.inFlight[key] = n
+}
+
+// installCreated places a successfully created value into the pool, or marks it detached-at-birth
+// when Remove moved the key's generation during create. The in-flight count is dropped under the
+// same lock as the generation check so Remove cannot observe a torn "still in flight / already
+// installed" state. A closed pool still closes the orphaned instance and returns ErrPoolClosed.
+//
+// Forget can split singleflight so two creates capture the same generation and both try to
+// install. The occupant keeps the map slot; the extra value is closed here rather than
+// overwriting the LRU (an overwritten entry would vanish from Close's map walk and leak).
+func (p *Pool[V]) installCreated(key string, gen uint64, value V) (*entry[V], error) {
+	p.mu.Lock()
+	// Read the generation BEFORE endCreateLocked: this create may be the last one in flight, and
+	// ending it releases the key's entry. Reading after would see the fresh zero value and make a
+	// create Remove invalidated under generation 0 look valid again.
+	detached := p.generation[key] != gen
+	p.endCreateLocked(key)
 	if p.closed.Load() {
 		p.mu.Unlock()
 		_ = p.closer(value) // orphaned instance — close is best-effort, not counted
 		return nil, ErrPoolClosed
 	}
 
-	evicted := p.evictIfNeeded()
+	if !detached {
+		if existing := p.entries[key]; existing != nil {
+			p.mu.Unlock()
+			_ = p.closer(value) // duplicate create — close is best-effort, not counted
+			return existing, nil
+		}
+	}
 
 	e := &entry[V]{
 		value:    value,
@@ -419,10 +497,17 @@ func (p *Pool[V]) createEntry(ctx context.Context, key string, create func(conte
 		lastUsed: time.Now(),
 		refs:     1,
 		seedHeld: true,
+		detached: detached,
 	}
+	p.totalCreated++
+	if e.detached {
+		p.mu.Unlock()
+		return e, nil
+	}
+
+	evicted := p.evictIfNeeded()
 	e.element = p.lru.PushFront(e)
 	p.entries[key] = e
-	p.totalCreated++
 	p.mu.Unlock()
 
 	// Close the evicted resource outside the lock (eviction close failures are not counted).
@@ -462,23 +547,42 @@ func (p *Pool[V]) evictIfNeeded() *entry[V] {
 	return e
 }
 
-// Remove detaches the entry for key from the pool. If it exists and is unleased, it marks the
-// entry closed and returns (value, true) for the caller to close OUTSIDE the pool. If it is
-// still leased, the close is deferred to the final lease release and Remove returns
-// (zero, false). A missing key returns (zero, false). Every Remove that detaches an entry, leased
-// or not, counts toward PoolStats.Removals.
+// Remove detaches the entry for key from the pool and invalidates any create still in flight
+// for that key. If a cached entry exists and is unleased, it marks the entry closed and returns
+// (value, true) for the caller to close OUTSIDE the pool. If it is still leased, the close is
+// deferred to the final lease release and Remove returns (zero, false). A missing key with no
+// in-flight create returns (zero, false). A create that captured the key's generation before this
+// call still delivers its value to every waiter of that create, but the entry is marked detached
+// and never cached, so the next GetOrCreate runs create again. Every Remove that detaches a cached
+// entry or invalidates an in-flight create counts toward PoolStats.Removals; a no-op Remove does
+// not.
 func (p *Pool[V]) Remove(key string) (v V, shouldClose bool) {
 	var zero V
 	p.mu.Lock()
 	e := p.removeEntryLocked(key)
-	if e != nil {
-		p.removals++
+	inFlight := p.inFlight[key] > 0
+	if e == nil && !inFlight {
+		p.mu.Unlock()
+		return zero, false
 	}
+	if inFlight {
+		// Only a create that already captured a generation can be invalidated by bumping it. With
+		// none in flight, detaching the cached entry above IS the whole invalidation, and a stored
+		// generation would never be read again — it would just occupy the map forever.
+		p.generation[key]++
+	}
+	p.removals++
 	shouldClose = e != nil && e.refs <= 0 && !e.closed
 	if shouldClose {
 		e.closed = true
 	}
 	p.mu.Unlock()
+
+	// Drop the singleflight key so a GetOrCreate that starts after this Remove does not join the
+	// invalidated create and cache (or even observe as "the" pooled value) a handle built from
+	// pre-removal config. A true no-op (nothing cached, nothing in flight) returns above without
+	// Forget, so a create that has not yet captured a generation is not split into a duplicate.
+	p.sf.Forget(key)
 
 	if !shouldClose {
 		return zero, false

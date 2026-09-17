@@ -15,11 +15,14 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 )
 
 const (
-	tenantA = "tenant-a"
+	tenantA  = "tenant-a"
+	dbUserV1 = "app-v1"
+	dbUserV2 = "app-v2"
 )
 
 type stubResourceSource struct {
@@ -774,7 +777,7 @@ func TestDbManagerRemoveDoesNotBlockOtherKeys(t *testing.T) {
 // with the new credentials.
 func TestDbManagerRemoveReResolvesRotatedCredentials(t *testing.T) {
 	src := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
-		tenantA: {Type: "postgresql", Host: "localhost", Username: "app-v1"},
+		tenantA: {Type: "postgresql", Host: "localhost", Username: dbUserV1},
 	}}
 	var users []string
 	var oldCloses atomic.Int32
@@ -794,7 +797,7 @@ func TestDbManagerRemoveReResolvesRotatedCredentials(t *testing.T) {
 	require.NoError(t, err)
 	release()
 
-	src.configs[tenantA] = &config.DatabaseConfig{Type: "postgresql", Host: "localhost", Username: "app-v2"}
+	src.configs[tenantA] = &config.DatabaseConfig{Type: "postgresql", Host: "localhost", Username: dbUserV2}
 	require.NoError(t, m.Remove(tenantA))
 	assert.Equal(t, int32(1), oldCloses.Load(), "the rotated-out handle closes on Remove")
 
@@ -802,10 +805,63 @@ func TestDbManagerRemoveReResolvesRotatedCredentials(t *testing.T) {
 	require.NoError(t, err)
 	release()
 	assert.NotSame(t, old, fresh)
-	assert.Equal(t, []string{"app-v1", "app-v2"}, users, "the rebuild re-resolves the provider's new config")
+	assert.Equal(t, []string{dbUserV1, dbUserV2}, users, "the rebuild re-resolves the provider's new config")
 
 	require.NoError(t, m.Close())
 	assert.Equal(t, int32(1), oldCloses.Load(), "Close never reaches the handle Remove already closed")
+}
+
+type dbGetResult struct {
+	db  Interface
+	rel ReleaseFunc
+	err error
+}
+
+// TestDbManagerRemoveReResolvesRotatedCredentialsInFlight extends the rotation recipe to a
+// Get still dialing when config is switched and Remove runs: that Get keeps the pre-rotation
+// handle (never cached), and the following Get observes the new credentials.
+func TestDbManagerRemoveReResolvesRotatedCredentialsInFlight(t *testing.T) {
+	src := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
+		tenantA: {Type: "postgresql", Host: "localhost", Username: dbUserV1},
+	}}
+	blocked := testutil.NewBlockedCreate(t)
+
+	var mu sync.Mutex
+	var users []string
+	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
+		mu.Lock()
+		users = append(users, cfg.Username)
+		mu.Unlock()
+		blocked.Arrive()
+		return &stubDB{}, nil
+	}
+	m := NewDbManager(src, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
+	t.Cleanup(func() { _ = m.Close() })
+
+	gotCh := make(chan dbGetResult, 1)
+	go func() {
+		db, rel, err := m.Get(context.Background(), tenantA)
+		gotCh <- dbGetResult{db, rel, err}
+	}()
+	<-blocked.Started
+
+	src.configs[tenantA] = &config.DatabaseConfig{Type: "postgresql", Host: "localhost", Username: dbUserV2}
+	require.NoError(t, m.Remove(tenantA))
+
+	blocked.Release()
+	first := <-gotCh
+	require.NoError(t, first.err)
+	require.NotNil(t, first.rel)
+	first.rel()
+
+	fresh, rel, err := m.Get(context.Background(), tenantA)
+	require.NoError(t, err)
+	rel()
+	assert.NotSame(t, first.db, fresh)
+	mu.Lock()
+	gotUsers := append([]string(nil), users...)
+	mu.Unlock()
+	assert.Equal(t, []string{dbUserV1, dbUserV2}, gotUsers, "the following Get observes the new credentials")
 }
 
 // TestDbManagerDynamicConfigGetsPoolDefaults proves a dynamic DBConfigProvider
