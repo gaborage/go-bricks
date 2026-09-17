@@ -42,19 +42,15 @@ func (r *recordingT) FailNow() {
 
 var _ keyStoreReporter = (*recordingT)(nil)
 
-// errorTrace matches testify's Error Trace section: its label line and the indented
-// continuation lines under it, whose absolute source paths depend on where the repository
-// is checked out. Any other line ends the match, so an unrecognized format removes nothing.
-var errorTrace = regexp.MustCompile(`(?m)^\tError Trace: *\t.*(?:\n\t +\t.*)*`)
+// testifyErrorTrace matches testify's Error Trace label line and its continuation lines.
+// Any other line ends the match, so an unrecognized format removes nothing.
+var testifyErrorTrace = regexp.MustCompile(`(?m)^\tError Trace: *\t.*(?:\n\t +\t.*)*`)
 
-// messageText is the recorded failure text without testify's Error Trace section.
 func (r *recordingT) messageText() string {
-	return errorTrace.ReplaceAllString(strings.Join(r.errors, "\n"), "")
+	return testifyErrorTrace.ReplaceAllString(strings.Join(r.errors, "\n"), "")
 }
 
-// TestRecordingTMessageTextExcludesErrorTrace pins the leak guards' subject to what the
-// helper said: testify's Error Trace carries absolute source paths, so a checkout path
-// with a digit run would otherwise trip keyMaterialDigits (#1708).
+// TestRecordingTMessageTextExcludesErrorTrace keeps checkout paths out of the leak guards (#1708).
 func TestRecordingTMessageTextExcludesErrorTrace(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	require.True(t, ok)
@@ -223,14 +219,14 @@ func TestAssertKeyNotFoundRejectsReturnedKey(t *testing.T) {
 				"FailNow distinguishes require (abort) from assert (continue)")
 			require.Len(t, rec.errors, tt.wantErrCount)
 
-			said := rec.messageText()
+			text := rec.messageText()
 			if tt.wantErrSubstr != "" {
-				assert.Contains(t, said, tt.wantErrSubstr, "the stray key is named by type")
-				assert.Contains(t, said, `"stray"`, "the failure must name the key looked up")
+				assert.Contains(t, text, tt.wantErrSubstr, "the stray key is named by type")
+				assert.Contains(t, text, `"stray"`, "the failure must name the key looked up")
 			}
-			assert.NotRegexp(t, keyMaterialDigits, said,
+			assert.NotRegexp(t, keyMaterialDigits, text,
 				"a long digit run means a key VALUE reached the test log")
-			assert.NotContains(t, said, "&{",
+			assert.NotContains(t, text, "&{",
 				"Go's pointer-to-struct render shape means a key VALUE reached the test log")
 		})
 	}
