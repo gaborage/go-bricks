@@ -59,7 +59,7 @@ steps := provisioning.Steps{
     CreateSchema: func(ctx context.Context, job *provisioning.Job) error {
         return migration.ProvisionPGRoles(ctx, adminDB, &migration.PGRoleSpec{
             Schema:           "tenant_" + job.TenantID,
-            MigratorRole:     "migrator", // one migrator for every tenant, created out of band
+            MigratorRole:     "migrator", // one shared migrator for all tenants, created out of band
             RuntimeRole:      "tenant_" + job.TenantID + "_app",
             RuntimePassword:  fetchSecret(job.TenantID),
             SkipMigratorRole: true, // never re-provision a shared migrator per tenant

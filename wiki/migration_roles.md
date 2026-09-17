@@ -21,8 +21,9 @@ Both roles are created with the same locked-down attribute floor:
 `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`. By default
 the attribute lockdown is reapplied on every provisioning call so a
 misconfigured role (e.g., someone ran `ALTER ROLE migrator SUPERUSER`
-manually) snaps back on the next migration run; `SkipFloorReassert` turns the
-repair into a report (see [Provisioner privileges](#provisioner-privileges)).
+manually) snaps back on the next migration run. `SkipFloorReassert` drops that
+repair; drift is then reported only when the caller runs `CheckPGRoleFloor`
+(see [Provisioner privileges](#provisioner-privileges)).
 A migrator shared across tenants is created once, out of band, and provisioned
 with `SkipMigratorRole` (see
 [Shared and out-of-band migrators](#shared-and-out-of-band-migrators)).
@@ -153,7 +154,7 @@ spec := &migration.PGRoleSpec{
     RuntimeRole:       "tenant_a_app",
     RuntimePassword:   strings.TrimSpace(os.Getenv("TENANT_A_RUNTIME_PASSWORD")),
     SkipMigratorRole:  true,
-    SkipFloorReassert: true, // required for a CREATEROLE-only provisioner
+    SkipFloorReassert: true, // CREATEROLE-only provisioner; a superuser omits it to keep the repair
 }
 ```
 
@@ -249,7 +250,8 @@ Why each requirement exists:
   `GRANT` form.
 - **`ADMIN` on every role the call alters.** A password or `search_path` needs
   it. The provisioner holds it on the roles it created itself, but not on a
-  runtime role that a different role created earlier.
+  runtime role that a different role created earlier; there the call fails at
+  that role's `ALTER ROLE`, with SQLSTATE 42501.
 
 `createrole_self_grant = 'set, inherit'` also lets the provisioner inherit the
 privileges of every runtime role it creates. Its `ADMIN` on those roles already
@@ -408,8 +410,9 @@ three claims that should remain true forever:
    `rolsuper=false`, `rolcreatedb=false`, `rolcreaterole=false`,
    `rolbypassrls=false`, and `rolreplication=false` in `pg_catalog.pg_roles`.
 
-Three more run the helper as a CREATEROLE-only provisioner, backing
-[Provisioner privileges](#provisioner-privileges):
+Three more back [Provisioner privileges](#provisioner-privileges), provisioning
+as a CREATEROLE-only provisioner (the second also provisions one tenant as the
+superuser):
 
 1. **`TestPGRolesCreateroleProvisionerMintsTheMigrator`** — with
    `SkipFloorReassert` and `createrole_self_grant`, provisioning succeeds, the
@@ -419,8 +422,8 @@ Three more run the helper as a CREATEROLE-only provisioner, backing
    tenants provisioned against one out-of-band migrator, two by the
    CREATEROLE provisioner and one by the superuser, leave its attributes,
    password and role settings exactly as they were.
-3. **`TestPGRolesCreateroleProvisionerLimits`** — each requirement in the
-   table, left out, fails with SQLSTATE 42501 at the step named there.
+3. **`TestPGRolesCreateroleProvisionerLimits`** — each requirement above, left
+   out, fails with SQLSTATE 42501 at the statement its bullet names.
 
 Run them with:
 
