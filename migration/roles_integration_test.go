@@ -1327,3 +1327,274 @@ func sourceColumn(rows []string) []string {
 	}
 	return out
 }
+
+// TestPGRolesCreateroleProvisionerMintsTheMigrator provisions as a CREATEROLE-only
+// provisioner that mints the migrator, then reports floor drift with CheckPGRoleFloor.
+func TestPGRolesCreateroleProvisionerMintsTheMigrator(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx, cancel := testCtx(t)
+	defer cancel()
+
+	admin := env.adminDB(t)
+	provDB := createroleProvisioner(ctx, t, env, "prov_inband", "set, inherit")
+	spec := &PGRoleSpec{
+		Schema:            "tenant_inband",
+		MigratorRole:      "mig_inband",
+		MigratorPassword:  testconsts.FakePassword("mig-inband"),
+		RuntimeRole:       "rt_inband",
+		RuntimePassword:   testconsts.FakePassword("rt-inband"),
+		SkipFloorReassert: true,
+	}
+
+	require.NoError(t, ProvisionPGRoles(ctx, provDB, spec), "first run")
+	require.NoError(t, ProvisionPGRoles(ctx, provDB, spec), "a rerun must converge")
+
+	requireRuntimeRoleSeparation(ctx, t,
+		env.openAsRole(t, spec.MigratorRole, spec.MigratorPassword),
+		env.openAsRole(t, spec.RuntimeRole, spec.RuntimePassword),
+		spec.Schema)
+
+	for _, role := range []string{spec.MigratorRole, spec.RuntimeRole} {
+		require.NoError(t, CheckPGRoleFloor(ctx, provDB, role), "CREATE ROLE must set the floor on %s", role)
+	}
+	_, err := admin.ExecContext(ctx, `ALTER ROLE `+quotePGIdent(spec.RuntimeRole)+` CREATEDB`)
+	require.NoError(t, err)
+	err = CheckPGRoleFloor(ctx, provDB, spec.RuntimeRole)
+	require.ErrorIs(t, err, ErrPGRoleFloorViolated)
+	assert.Contains(t, err.Error(), "holds CREATEDB")
+}
+
+// TestPGRolesCreateroleProvisionerLeavesASharedMigratorUntouched provisions three
+// tenants against one out-of-band migrator and reads it back unchanged.
+func TestPGRolesCreateroleProvisionerLeavesASharedMigratorUntouched(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx, cancel := testCtx(t)
+	defer cancel()
+
+	admin := env.adminDB(t)
+	const provisioner, migrator = "prov_shared", "mig_shared"
+	// No createrole_self_grant: the DBA grant below is all this path needs.
+	provDB := createroleProvisioner(ctx, t, env, provisioner, "")
+	migratorPassword := testconsts.FakePassword("mig-shared")
+	for i, stmt := range []string{
+		// CREATEDB and a role setting stand in for what a DBA grants a migrator
+		// on purpose; the default template would strip the first and repoint
+		// the migrator's search_path.
+		fmt.Sprintf(`CREATE ROLE %s LOGIN CREATEDB PASSWORD %s`,
+			quotePGIdent(migrator), quotePGStringLiteral(migratorPassword)),
+		fmt.Sprintf(`ALTER ROLE %s SET statement_timeout = '5min'`, quotePGIdent(migrator)),
+		fmt.Sprintf(`GRANT %s TO %s WITH INHERIT TRUE, SET TRUE`, quotePGIdent(migrator), quotePGIdent(provisioner)),
+	} {
+		_, err := admin.ExecContext(ctx, stmt)
+		require.NoError(t, err, "out-of-band setup statement %d", i)
+	}
+	before := pgRoleSnapshot(ctx, t, admin, migrator)
+	require.Contains(t, before, "statement_timeout=5min", "premise: the snapshot must read the DBA's role setting")
+
+	migratorDB := env.openAsRole(t, migrator, migratorPassword)
+	for _, tt := range []struct {
+		tenant string
+		db     *sql.DB
+	}{
+		{tenant: "a", db: provDB},
+		{tenant: "b", db: provDB},
+		// The superuser may rewrite the migrator, so for this tenant the snapshot
+		// comparison, not a server refusal, is what catches a regression.
+		{tenant: "c", db: admin},
+	} {
+		spec := &PGRoleSpec{
+			Schema:            "tenant_shared_" + tt.tenant,
+			MigratorRole:      migrator,
+			RuntimeRole:       "rt_shared_" + tt.tenant,
+			RuntimePassword:   testconsts.FakePassword("rt-shared-" + tt.tenant),
+			SkipMigratorRole:  true,
+			SkipFloorReassert: true,
+		}
+		require.NoError(t, ProvisionPGRoles(ctx, tt.db, spec), "tenant %s", tt.tenant)
+		requireRuntimeRoleSeparation(ctx, t, migratorDB,
+			env.openAsRole(t, spec.RuntimeRole, spec.RuntimePassword), spec.Schema)
+	}
+
+	assert.Equal(t, before, pgRoleSnapshot(ctx, t, admin, migrator))
+}
+
+// TestPGRolesCreateroleProvisionerLimits pins, by SQLSTATE and failing step,
+// each privilege a CREATEROLE-only provisioner is refused without.
+func TestPGRolesCreateroleProvisionerLimits(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx, cancel := testCtx(t)
+	defer cancel()
+
+	admin := env.adminDB(t)
+	adminExec := func(t *testing.T, stmt string) {
+		t.Helper()
+		_, err := admin.ExecContext(ctx, stmt)
+		require.NoError(t, err)
+	}
+	outOfBandMigrator := func(grant string) func(t *testing.T, prov, mig, rt string) {
+		return func(t *testing.T, prov, mig, _ string) {
+			adminExec(t, `CREATE ROLE `+quotePGIdent(mig)+` LOGIN`)
+			if grant != "" {
+				adminExec(t, `GRANT `+quotePGIdent(mig)+` TO `+quotePGIdent(prov)+` `+grant)
+			}
+		}
+	}
+	skipBoth := func(s *PGRoleSpec) {
+		s.SkipMigratorRole = true
+		s.SkipFloorReassert = true
+	}
+	skipReassert := func(s *PGRoleSpec) { s.SkipFloorReassert = true }
+
+	tests := []struct {
+		name      string
+		selfGrant string
+		setup     func(t *testing.T, prov, mig, rt string)
+		options   func(*PGRoleSpec)
+		// wantStep is a format taking the case's role/schema suffix.
+		wantStep string
+	}{
+		{
+			name:      "default_spec_is_refused_at_the_floor_reassert",
+			selfGrant: "set, inherit",
+			options:   func(*PGRoleSpec) {},
+			wantStep:  `provisioning step 1 (ALTER ROLE "mig_%s" NOSUPERUSER`,
+		},
+		{
+			name:     "minted_migrator_without_self_grant_is_refused_at_create_schema",
+			options:  skipReassert,
+			wantStep: `provisioning step 2 (CREATE SCHEMA IF NOT EXISTS "tenant_%s"`,
+		},
+		{
+			name:      "self_grant_without_inherit_is_refused_at_the_schema_grant",
+			selfGrant: "set",
+			options:   skipReassert,
+			wantStep:  `provisioning step 3 (GRANT USAGE ON SCHEMA "tenant_%s"`,
+		},
+		{
+			name:      "self_grant_without_set_is_refused_at_create_schema",
+			selfGrant: "inherit",
+			options:   skipReassert,
+			wantStep:  `provisioning step 2 (CREATE SCHEMA IF NOT EXISTS "tenant_%s"`,
+		},
+		{
+			name:     "out_of_band_migrator_without_grant_is_refused_at_create_schema",
+			setup:    outOfBandMigrator(""),
+			options:  skipBoth,
+			wantStep: `provisioning step 1 (CREATE SCHEMA IF NOT EXISTS "tenant_%s"`,
+		},
+		{
+			name:     "out_of_band_grant_without_inherit_is_refused_at_the_schema_grant",
+			setup:    outOfBandMigrator("WITH SET TRUE, INHERIT FALSE"),
+			options:  skipBoth,
+			wantStep: `provisioning step 2 (GRANT USAGE ON SCHEMA "tenant_%s"`,
+		},
+		{
+			name:     "out_of_band_grant_without_set_is_refused_at_create_schema",
+			setup:    outOfBandMigrator("WITH INHERIT TRUE, SET FALSE"),
+			options:  skipBoth,
+			wantStep: `provisioning step 1 (CREATE SCHEMA IF NOT EXISTS "tenant_%s"`,
+		},
+		{
+			name:      "runtime_role_created_by_another_role_is_refused_at_its_search_path",
+			selfGrant: "set, inherit",
+			setup: func(t *testing.T, _, _, rt string) {
+				adminExec(t, `CREATE ROLE `+quotePGIdent(rt)+` LOGIN`)
+			},
+			options:  skipReassert,
+			wantStep: `provisioning step 9 (ALTER ROLE "rt_%s" SET search_path`,
+		},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			suffix := fmt.Sprintf("lim%d", i)
+			prov, mig, rt := "prov_"+suffix, "mig_"+suffix, "rt_"+suffix
+			provDB := createroleProvisioner(ctx, t, env, prov, tt.selfGrant)
+			if tt.setup != nil {
+				tt.setup(t, prov, mig, rt)
+			}
+			spec := &PGRoleSpec{Schema: "tenant_" + suffix, MigratorRole: mig, RuntimeRole: rt}
+			tt.options(spec)
+
+			err := ProvisionPGRoles(ctx, provDB, spec)
+			requireSQLState(t, err, "42501")
+			assert.Contains(t, err.Error(), fmt.Sprintf(tt.wantStep, suffix))
+		})
+	}
+}
+
+// pgRoleSnapshot renders every pg_roles column a provisioning call could change
+// on role, plus a digest of its stored password, as one comparable string.
+func pgRoleSnapshot(ctx context.Context, t *testing.T, db *sql.DB, role string) string {
+	t.Helper()
+	var snapshot string
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT row(r.rolsuper, r.rolinherit, r.rolcreaterole, r.rolcreatedb, r.rolcanlogin,
+		            r.rolreplication, r.rolbypassrls, r.rolconnlimit, r.rolvaliduntil, r.rolconfig,
+		            md5(coalesce(a.rolpassword, '')))::text
+		 FROM pg_catalog.pg_roles r JOIN pg_catalog.pg_authid a ON a.oid = r.oid
+		 WHERE r.rolname = $1`, role).Scan(&snapshot))
+	return snapshot
+}
+
+// createroleProvisioner creates a LOGIN CREATEROLE NOSUPERUSER role with CREATE
+// on the database, stores selfGrant as its createrole_self_grant when non-empty,
+// and connects as it.
+func createroleProvisioner(ctx context.Context, t *testing.T, env *integrationEnv, name, selfGrant string) *sql.DB {
+	t.Helper()
+	admin := env.adminDB(t)
+	password := testconsts.FakePassword(name)
+	stmts := []string{
+		fmt.Sprintf(`CREATE ROLE %s LOGIN CREATEROLE NOSUPERUSER PASSWORD %s`,
+			quotePGIdent(name), quotePGStringLiteral(password)),
+		fmt.Sprintf(`GRANT CREATE ON DATABASE %s TO %s`, quotePGIdent(env.defaultDB), quotePGIdent(name)),
+	}
+	if selfGrant != "" {
+		stmts = append(stmts, fmt.Sprintf(`ALTER ROLE %s SET createrole_self_grant = %s`,
+			quotePGIdent(name), quotePGStringLiteral(selfGrant)))
+	}
+	for i, stmt := range stmts {
+		_, err := admin.ExecContext(ctx, stmt)
+		require.NoError(t, err, "provisioner setup statement %d", i)
+	}
+	return env.openAsRole(t, name, password)
+}
+
+// requireSQLState asserts err carries the server's SQLSTATE code.
+func requireSQLState(t *testing.T, err error, code string) {
+	t.Helper()
+	var coded interface{ SQLState() string }
+	require.ErrorAs(t, err, &coded, "the pgx driver must expose the server's SQLSTATE on this error")
+	require.Equal(t, code, coded.SQLState())
+}
+
+// requireRuntimeRoleSeparation runs the role-separation acceptance checks
+// against a provisioned tenant: the migrator creates a table after
+// provisioning, the runtime role reaches it through the default privileges,
+// and the runtime role is refused DDL in the schema.
+func requireRuntimeRoleSeparation(ctx context.Context, t *testing.T, migratorDB, runtimeDB *sql.DB, schema string) {
+	t.Helper()
+	qualified := quotePGIdent(schema) + ".gadgets"
+	_, err := migratorDB.ExecContext(ctx, `CREATE TABLE `+qualified+` (id INT PRIMARY KEY, qty INT NOT NULL)`)
+	require.NoError(t, err, "the migrator must create tables in the schema it owns")
+
+	_, err = runtimeDB.ExecContext(ctx, `INSERT INTO `+qualified+` (id, qty) VALUES (1, 5)`)
+	require.NoError(t, err, "default privileges must grant INSERT")
+	_, err = runtimeDB.ExecContext(ctx, `UPDATE `+qualified+` SET qty = qty + 1 WHERE id = 1`)
+	require.NoError(t, err, "default privileges must grant UPDATE")
+	var qty int
+	require.NoError(t, runtimeDB.QueryRowContext(ctx, `SELECT qty FROM `+qualified+` WHERE id = 1`).Scan(&qty),
+		"default privileges must grant SELECT")
+	require.Equal(t, 6, qty)
+	_, err = runtimeDB.ExecContext(ctx, `DELETE FROM `+qualified+` WHERE id = 1`)
+	require.NoError(t, err, "default privileges must grant DELETE")
+
+	for _, stmt := range []string{
+		`CREATE TABLE ` + quotePGIdent(schema) + `.unauthorized (id INT)`,
+		`ALTER TABLE ` + qualified + ` ADD COLUMN sneaky TEXT`,
+		`DROP TABLE ` + qualified,
+	} {
+		_, err = runtimeDB.ExecContext(ctx, stmt)
+		require.Error(t, err, "the runtime role must be refused DDL: %s", stmt)
+		assert.True(t, isPermissionDenied(err), "want permission denied for %s, got: %v", stmt, err)
+	}
+}

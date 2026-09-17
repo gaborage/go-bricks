@@ -62,9 +62,9 @@ type PGRoleSpec struct {
 	// SkipFloorReassert drops the ALTER ROLE that re-applies the attribute floor
 	// to a role on every call. CREATE ROLE still carries the full floor, so a
 	// role this spec creates starts locked down, but later drift is no longer
-	// repaired. A provisioner that is not a superuser needs it: of the five
-	// lockdown attributes, PostgreSQL lets a CREATEROLE-only role ALTER only
-	// NOCREATEROLE.
+	// repaired — report it with CheckPGRoleFloor. A provisioner that is not a
+	// superuser needs it: of the five lockdown attributes, PostgreSQL lets a
+	// CREATEROLE-only role ALTER only NOCREATEROLE.
 	SkipFloorReassert bool
 
 	// IdentifierPolicy optionally tightens the identifier rule Validate
@@ -121,10 +121,7 @@ func (f PGIdentifierCheckerFunc) CheckPGIdentifier(value string) error {
 // caller's policy. A refusal from any of the three is wrapped with
 // ErrInvalidPGIdentifier plus the field name and value.
 func (s *PGRoleSpec) checkIdentifier(field, value string) error {
-	err := identifier.Validate(dbtypes.PostgreSQL, value)
-	if err == nil {
-		err = checkReservedPGIdentifier(field, value)
-	}
+	err := checkPGIdentifierFloor(field, value)
 	if err == nil && s.IdentifierPolicy != nil {
 		err = s.IdentifierPolicy.CheckPGIdentifier(value)
 	}
@@ -132,6 +129,15 @@ func (s *PGRoleSpec) checkIdentifier(field, value string) error {
 		return fmt.Errorf("%w: %s=%q: %w", ErrInvalidPGIdentifier, field, value, err)
 	}
 	return nil
+}
+
+// checkPGIdentifierFloor applies the identifier floor, then the reserved-name
+// rule — every check but the caller's policy.
+func checkPGIdentifierFloor(field, value string) error {
+	if err := identifier.Validate(dbtypes.PostgreSQL, value); err != nil {
+		return err
+	}
+	return checkReservedPGIdentifier(field, value)
 }
 
 // checkReservedPGIdentifier refuses the names PostgreSQL owns, per the ADR-061
@@ -242,9 +248,20 @@ func (s *PGRoleSpec) Validate() error {
 // MigratorPassword / RuntimePassword (when non-empty) are reapplied on
 // every call to support secret rotation.
 //
-// db MUST be authenticated as a role with CREATEROLE plus the right to
-// CREATE SCHEMA AUTHORIZATION <other> — typically the instance bootstrap
-// superuser or a dedicated provisioner role granted those capabilities.
+// db MUST be authenticated as a superuser, which can run every spec, or as a
+// CREATEROLE NOSUPERUSER provisioner holding CREATE on the database, which
+// needs three things on PostgreSQL 16+:
+//   - spec.SkipFloorReassert (see that field for why);
+//   - membership in MigratorRole WITH INHERIT TRUE, SET TRUE — SET for
+//     CREATE SCHEMA ... AUTHORIZATION, INHERIT for ALTER DEFAULT PRIVILEGES
+//     FOR ROLE and for the grants on the schema the migrator owns. A creator
+//     is granted a role with ADMIN alone, so for a migrator this call creates,
+//     set createrole_self_grant = 'set, inherit' on the provisioner
+//     beforehand; for one created out of band (SkipMigratorRole), a DBA runs
+//     GRANT <migrator> TO <provisioner> WITH INHERIT TRUE, SET TRUE once;
+//   - ADMIN on every role it alters (a password or search_path), which it holds
+//     on the roles it created itself.
+//
 // The migrator and runtime roles created here cannot self-provision: they
 // are denied SUPERUSER, CREATEDB, CREATEROLE, BYPASSRLS, and REPLICATION
 // per the deliverables of #378.
@@ -340,7 +357,8 @@ func provisionPGRoles(ctx context.Context, spec *PGRoleSpec, run func(ctx contex
 // PGRoleProvisioningSQL returns the SQL statements that ProvisionPGRoles
 // would execute for spec, in order. Use this when operators want to inspect
 // or apply the provisioning manually via psql, or feed it into their own
-// migration runner (Flyway, Liquibase) rather than the Go helper.
+// migration runner (Flyway, Liquibase) rather than the Go helper. The
+// executing role needs the privileges listed on ProvisionPGRoles.
 //
 // Returns Validate's error when spec fails it — ErrInvalidPGIdentifier,
 // ErrPGRolePasswordHasControlChar or ErrPGRoleSkippedMigratorHasPassword. The
@@ -457,6 +475,68 @@ func buildRoleCreate(quotedIdent string) string {
     NULL; -- another provisioner created it concurrently; not an error
   END;
 END $$`, quotedIdent, pgRoleLockdownAttrs)
+}
+
+// ErrPGRoleFloorViolated is returned by CheckPGRoleFloor when a role holds an
+// attribute the provisioning floor denies; the message names each one.
+var ErrPGRoleFloorViolated = errors.New("migration: role holds attributes above the provisioning floor")
+
+// ErrPGRoleNotFound is returned by CheckPGRoleFloor when no role has the name.
+var ErrPGRoleNotFound = errors.New("migration: role not found")
+
+// pgRoleFloorSQL reads the five attributes the provisioning floor denies, in
+// the order CheckPGRoleFloor names them.
+const pgRoleFloorSQL = `SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls
+FROM pg_catalog.pg_roles WHERE rolname = $1`
+
+// CheckPGRoleFloor reports whether role still sits at the attribute floor the
+// provisioning template creates roles with: no SUPERUSER, CREATEDB, CREATEROLE,
+// REPLICATION or BYPASSRLS. It only reads pg_catalog.pg_roles, so a
+// non-superuser provisioner can run it. With PGRoleSpec.SkipFloorReassert set,
+// provisioning no longer repairs drift; this reports it instead.
+//
+// Returns an error for a nil db; ErrInvalidPGIdentifier when role fails the
+// identifier floor or the reserved-name rule PGRoleSpec.Validate applies
+// (before any query); ErrPGRoleNotFound when no role has the name; the wrapped
+// driver error when the read fails; or ErrPGRoleFloorViolated naming every
+// attribute held above the floor.
+func CheckPGRoleFloor(ctx context.Context, db *sql.DB, role string) error {
+	if db == nil {
+		return errors.New("migration: CheckPGRoleFloor requires a non-nil *sql.DB")
+	}
+	if err := checkPGIdentifierFloor("role", role); err != nil {
+		return fmt.Errorf("%w: role=%q: %w", ErrInvalidPGIdentifier, role, err)
+	}
+
+	var super, createDB, createRole, replication, bypassRLS bool
+	err := db.QueryRowContext(ctx, pgRoleFloorSQL, role).
+		Scan(&super, &createDB, &createRole, &replication, &bypassRLS)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: %q", ErrPGRoleNotFound, role)
+	}
+	if err != nil {
+		return fmt.Errorf("migration: reading the attribute floor of role %q: %w", role, err)
+	}
+
+	var held []string
+	for _, attr := range []struct {
+		name string
+		held bool
+	}{
+		{"SUPERUSER", super},
+		{"CREATEDB", createDB},
+		{"CREATEROLE", createRole},
+		{"REPLICATION", replication},
+		{"BYPASSRLS", bypassRLS},
+	} {
+		if attr.held {
+			held = append(held, attr.name)
+		}
+	}
+	if len(held) > 0 {
+		return fmt.Errorf("%w: role %q holds %s", ErrPGRoleFloorViolated, role, strings.Join(held, ", "))
+	}
+	return nil
 }
 
 // quotePGIdent returns the PostgreSQL-safe quoted form of ident. Callers must
