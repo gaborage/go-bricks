@@ -604,7 +604,7 @@ authority, a `?host=` query parameter, a keyword `host=`, or `PGHOST` — names 
 all, or carries an empty comma-separated entry, is refused naming `database.connectionstring`,
 the same defect `[C64.8]` refuses for the typed `host` field; name a host through one of
 those four sources. A libpq service is not one of them: a `connectionstring` carrying a
-`service` key, empty included, or running under `PGSERVICE` with no `service` key of its own,
+`service` key, empty included, or running under a non-empty `PGSERVICE` with no `service` key of its own,
 is refused before either host rule, because its service file can supply a host that shadows
 `PGHOST` and the seam never reads it — inline every key the service section sets, drop
 `service=` and unset `PGSERVICE` (`[C66.3]`). A `connectionstring` whose resolved

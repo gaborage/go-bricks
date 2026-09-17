@@ -927,7 +927,7 @@ the DSN with pgx's own precedence (a present DSN key, empty included, shadows th
 so a unix-socket host under an env-sourced claim is refused too, closing the `PGSSL*`
 residual `[C65.2]` left open (`[C66.1]`).
 Amended 2026-09-16 (#1644): a DSN that resolves through a libpq service — any `service` key,
-empty included, or `PGSERVICE` when the DSN carries no `service` key — is refused ahead of both host
+empty included, or a non-empty `PGSERVICE` when the DSN carries no `service` key — is refused ahead of both host
 rules, because pgx lets the service file's host shadow `PGHOST` and config never reads the file
 (`[C66.3]`).
 `config.ApplyDatabasePoolDefaults` applies the same inference on the dynamic

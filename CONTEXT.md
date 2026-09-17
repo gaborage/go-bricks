@@ -15,7 +15,7 @@ _Avoid_: database config, DB block, DSN block
 **Connection string**:
 The raw DSN a database section's `connectionstring` key carries, passed to the driver
 unparsed apart from type inference (ADR-050) and, for PostgreSQL, a scan of its libpq
-service, resolved host and TLS claim: any `service` key, or a `PGSERVICE` it lacks one for, is refused
+service, resolved host and TLS claim: any `service` key, or a non-empty `PGSERVICE` when it has none, is refused
 (`[C66.3]`); a host that names nothing is refused, and so is a unix-socket host under a TLS
 claim — `sslmode` of `require`/`verify-ca`/`verify-full`, `sslnegotiation=direct`, or
 non-empty `sslrootcert`/`sslcert`/`sslkey`, from the DSN or from the matching `PGSSL*`
