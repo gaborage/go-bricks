@@ -204,7 +204,7 @@ subpackage provides `MockStateStore` with `WithGetError`, `WithUpsertError`,
 
 ## Single-transaction provisioning on PostgreSQL (consumer-side pattern)
 
-On PostgreSQL, a tenant's entire provisioning unit — schema, role-pair, and
+On PostgreSQL, a tenant's entire provisioning unit — schema, roles, and
 tenant-table DDL, plus the tenant registry row and the "tenant
 provisioned" outbox event (both DML) — fits in a single transaction: it
 can commit or roll back as one unit. Flyway, however, is a subprocess; it

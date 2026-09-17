@@ -10,14 +10,15 @@ because its user/role/grant model is fundamentally different.
 
 ## The model
 
-Two roles per tenant:
+Two kinds of role — one migrator for the deployment and one runtime role per
+tenant:
 
 | Role | Owns | Privileges | Used by |
 | ------ | ------ | ----------- | --------- |
 | **Migrator** (one per deployment, shared across tenants) | The tenant schema(s) it provisioned | DDL on its own schemas | `go-bricks-migrate` CLI / `migration.MigrateAll` |
 | **Per-tenant runtime** (one per tenant) | Nothing | `USAGE` on the tenant schema; `SELECT/INSERT/UPDATE/DELETE` on all current and future tables; `USAGE/SELECT/UPDATE` on sequences | The running service (connects with the runtime role's credentials via `database.username`/`database.password` in `config.yaml`) |
 
-Both roles are created with the same locked-down attribute floor:
+Every role the helper creates starts at the same locked-down attribute floor:
 `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`. By default
 the attribute lockdown is reapplied on every provisioning call so a
 misconfigured role (e.g., someone ran `ALTER ROLE migrator SUPERUSER`
@@ -56,7 +57,7 @@ DML-accessible to the runtime role.
 
 ## Default search_path
 
-Every provisioning run also sets a default `search_path` on both roles:
+Every provisioning run also sets a default `search_path` on each role it manages:
 
 ```sql
 ALTER ROLE "migrator" SET search_path = "tenant_a";
