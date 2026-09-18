@@ -2,6 +2,7 @@ package redis
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gaborage/go-bricks/cache"
@@ -19,6 +20,12 @@ type Config struct {
 
 	// Port is the Redis server port (default: 6379).
 	Port int `config:"port" default:"6379"`
+
+	// Username is the Redis ACL user to authenticate as, sent as
+	// AUTH <username> <password>. Empty authenticates as the implicit "default"
+	// user. Required by deployments that gate access with ACLs, such as Amazon
+	// ElastiCache RBAC. Environment variable: CACHE_REDIS_USERNAME
+	Username string
 
 	// Password for Redis authentication (optional).
 	// Should be provided via environment variable: CACHE_REDIS_PASSWORD
@@ -108,6 +115,13 @@ func (c *Config) validate() (clienttls.Material, error) {
 
 	if c.Port <= 0 || c.Port > 65535 {
 		return clienttls.Material{}, cache.NewConfigError("redis.port", fmt.Sprintf("invalid port: %d", c.Port), nil)
+	}
+
+	// Empty is the default user; whitespace-only is a typo that would travel as an
+	// AUTH argument no ACL rule can match. The password is judged independently —
+	// an ACL nopass user authenticates by name alone.
+	if c.Username != "" && strings.TrimSpace(c.Username) == "" {
+		return clienttls.Material{}, cache.NewConfigError("redis.username", "username cannot be whitespace-only", nil)
 	}
 
 	if c.Database < 0 || c.Database > 15 {

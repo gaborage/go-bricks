@@ -56,6 +56,7 @@ cache:
   redis:
     host: localhost
     port: 6379
+    username: ""                       # Redis ACL user; empty = the "default" user
     password: ${CACHE_REDIS_PASSWORD}  # From environment
     database: 0
     poolsize: 10
@@ -557,6 +558,41 @@ fails when they do, and a cache connection carries session and token material th
 man-in-the-middle would read in clear. Pinning a private CA through `cafile`/`cavalue` is the
 supported path for a self-signed or internally-issued endpoint; a local Redis that cannot
 serve a certificate should run with `tls.enabled` false rather than with verification off.
+
+## Amazon ElastiCache
+
+ElastiCache gates access with RBAC, not a shared password: the deployment creates a user with
+an access string and the client authenticates as that user. `cache.redis.username` carries the
+name, `cache.redis.password` the secret, and the two travel as `AUTH <username> <password>`.
+
+```yaml
+cache:
+  enabled: true
+  type: redis
+  redis:
+    host: my-cache.serverless.use1.cache.amazonaws.com
+    port: 6379
+    username: ${CACHE_REDIS_USERNAME}
+    password: ${CACHE_REDIS_PASSWORD}
+    tls:
+      enabled: true
+```
+
+- **`username` is independent of `password`.** Neither key implies the other: an ACL user
+  configured `nopass` authenticates by name alone, and an empty `username` with a password is
+  the legacy `AUTH <password>` form against the implicit `default` user. Only a
+  whitespace-only `username` is refused, as a typo that no ACL rule could match.
+- **`tls.enabled: true` is required, not optional.** ElastiCache serverless serves encrypted
+  in transit always, so a plaintext dial is dropped by the endpoint. Mutual TLS is not
+  supported there, so leave `certfile`/`keyfile` unset and let the connection verify against
+  the system roots.
+- **Security groups must allow 6379 and 6380.** The serverless endpoint uses 6379 for writes
+  and 6380 for reads; a group that opens only 6379 breaks in ways that look like an
+  intermittent cache.
+
+Cluster mode (`cache.redis.mode`) and key prefixing (`cache.redis.keyprefix`) — the other two
+halves of running against a serverless endpoint — arrive in the two changes that follow this
+one under issue #1727.
 
 ## Cache Manager Defaults
 

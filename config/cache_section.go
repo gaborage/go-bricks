@@ -87,6 +87,13 @@ func validateRedisCache(cfg *RedisConfig) error {
 		return NewInvalidFieldError("cache.redis.port", fmt.Sprintf(errInvalidField, cfg.Port), []string{portRange})
 	}
 
+	// A whitespace-only ACL user is a typo, not an identity: it travels to Redis as an
+	// AUTH argument no ACL rule can match. Empty stays valid and is not tied to the
+	// password — an empty password means the default user, and ACL nopass users exist.
+	if cfg.Username != "" && strings.TrimSpace(cfg.Username) == "" {
+		return NewValidationError("cache.redis.username", "must not be whitespace-only")
+	}
+
 	if cfg.Database < 0 || cfg.Database > 15 {
 		return NewValidationError(fieldCacheRedisDB, "must be between 0 and 15")
 	}

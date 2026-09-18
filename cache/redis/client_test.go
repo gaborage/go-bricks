@@ -1146,3 +1146,87 @@ func TestBuildRedisOptionsTLSMaterialErrorIsConfigError(t *testing.T) {
 	assert.Equal(t, "redis.tls", configErr.Field)
 	assert.Contains(t, err.Error(), "cache: redis: tls:")
 }
+
+// TestNewClientAuthenticatesAsNamedACLUser proves Config.Username reaches the
+// dial as the AUTH identity rather than being dropped: a server that knows only
+// the "svc" ACL user round-trips a value for a client carrying that name, and
+// refuses the identical password when the name is absent (which is AUTH as the
+// implicit "default" user). This is the shape ElastiCache RBAC requires.
+func TestNewClientAuthenticatesAsNamedACLUser(t *testing.T) {
+	const (
+		aclUser = "svc"
+		aclPass = "pw"
+	)
+
+	t.Run("named_user_connects", func(t *testing.T) {
+		mr := miniredis.RunT(t)
+		mr.RequireUserAuth(aclUser, aclPass)
+
+		cfg := testConfig(mr)
+		cfg.Username = aclUser
+		cfg.Password = aclPass
+
+		client, err := NewClient(cfg)
+		require.NoError(t, err)
+		defer client.Close()
+
+		ctx := context.Background()
+		require.NoError(t, client.Set(ctx, testKey1, []byte(testNewValue), time.Minute))
+
+		got, err := client.Get(ctx, testKey1)
+		require.NoError(t, err)
+		assert.Equal(t, []byte(testNewValue), got)
+	})
+
+	t.Run("absent_username_is_refused", func(t *testing.T) {
+		mr := miniredis.RunT(t)
+		mr.RequireUserAuth(aclUser, aclPass)
+
+		cfg := testConfig(mr)
+		cfg.Password = aclPass
+
+		client, err := NewClient(cfg)
+		require.Error(t, err)
+		assert.Nil(t, client)
+	})
+}
+
+// TestConfigValidateUsername mirrors the config layer's rule at the client's own
+// door, which a hand-built Config reaches without passing through config
+// validation: a whitespace-only ACL user is refused, while an empty one and a
+// named one with no password (ACL nopass) stand.
+func TestConfigValidateUsername(t *testing.T) {
+	tests := []struct {
+		name      string
+		username  string
+		password  string
+		wantField string
+	}{
+		{name: "named_user_with_password", username: "svc", password: "pw"},
+		{name: "named_user_without_password", username: "svc"},
+		{name: "absent_username_with_password", password: "pw"},
+		{name: "whitespace_only_username", username: " \t ", wantField: "redis.username"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Host:     "localhost",
+				Port:     6379,
+				PoolSize: 10,
+				Username: tt.username,
+				Password: tt.password,
+			}
+
+			err := cfg.Validate()
+			if tt.wantField == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			var configErr *cache.ConfigError
+			require.ErrorAs(t, err, &configErr)
+			assert.Equal(t, tt.wantField, configErr.Field)
+		})
+	}
+}

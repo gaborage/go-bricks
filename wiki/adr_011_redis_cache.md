@@ -5,6 +5,8 @@
 **Status:** Accepted
 **Context:** Multi-tenant caching infrastructure and distributed locking support
 
+> **Amendment (2026-09-18):** the multi-tenant isolation mechanism decided here — a separate Redis database per tenant — is superseded by the key prefix in [ADR-116](adr_116_cache_key_namespace_and_cluster_mode.md); read isolation as by key prefix, plus a separate database where the deployment supports one.
+>
 > **Note (2026-05-12):** Code examples in this ADR were updated to reflect the S8179 rename (`GetCache` → `Cache` field on `ModuleDeps`, mirroring the `GetDB` → `DB` / `GetMessaging` → `Messaging` renames). The decision, rationale, and lifecycle behaviour are unchanged. The full rename table lives in [wiki/migrations.md](migrations.md). Entries in the "Completed PRs" list (further down) are deliberately preserved with their original names as a historical record.
 
 ## Problem Statement

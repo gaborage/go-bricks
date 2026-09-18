@@ -514,3 +514,47 @@ func TestValidateRedisTLSAcceptsLoadableMaterial(t *testing.T) {
 
 	assert.NoError(t, checkCache(&cfg))
 }
+
+// TestValidateCacheRedisUsername pins cache.redis.username as an identity that
+// stands on its own: a named ACL user is accepted with or without a password
+// (ACL nopass users exist), and a whitespace-only name — which reaches Redis as
+// an AUTH argument no ACL rule can match — is refused.
+func TestValidateCacheRedisUsername(t *testing.T) {
+	tests := []struct {
+		name      string
+		username  string
+		password  string
+		wantField string
+	}{
+		{name: "named_user_with_password", username: "svc", password: "pw"},
+		{name: "named_user_without_password", username: "svc"},
+		{name: "absent_username_with_password", password: "pw"},
+		{name: "whitespace_only_username", username: " \t ", wantField: "cache.redis.username"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := CacheConfig{
+				Enabled: true,
+				Type:    CacheTypeRedis,
+				Redis: RedisConfig{
+					Host:     "localhost",
+					Port:     6379,
+					PoolSize: 10,
+					Username: tt.username,
+					Password: tt.password,
+				},
+			}
+
+			err := checkCache(&cfg)
+			if tt.wantField == "" {
+				require.NoError(t, err)
+				return
+			}
+
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+		})
+	}
+}

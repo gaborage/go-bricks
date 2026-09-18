@@ -856,3 +856,43 @@ func TestCheckStaticTenantMapEmptyMapErrorIsNotAConfigError(t *testing.T) {
 	var cfgErr *ConfigError
 	require.NotErrorAs(t, err, &cfgErr, "the empty-map rejection stays a plain error")
 }
+
+// TestValidateMultitenantTenantsCacheUsernameIsTenantAddressed proves the ACL
+// user rule reaches the tenant mirror with the tenant-qualified spelling, so a
+// consumer matching on ConfigError.Field learns whose cache carries the typo.
+func TestValidateMultitenantTenantsCacheUsernameIsTenantAddressed(t *testing.T) {
+	cfg := &Config{
+		App:    createValidAppConfig(),
+		Server: createValidServerConfig(),
+		Log:    createValidLogConfig(),
+		Multitenant: MultitenantConfig{
+			Enabled: true,
+			Resolver: ResolverConfig{
+				Type:   "header",
+				Header: testTenantHeader,
+			},
+			Tenants: map[string]TenantEntry{
+				"acme": {
+					Database: DatabaseConfig{
+						Type:     PostgreSQL,
+						Host:     "acme.db",
+						Port:     5432,
+						Database: "acme",
+						Username: "acme_user",
+					},
+					Cache: CacheConfig{
+						Enabled: true,
+						Redis:   RedisConfig{Host: "acme.redis", Username: " \t "},
+					},
+				},
+			},
+		},
+		Source: SourceConfig{Type: SourceTypeStatic},
+	}
+
+	err := Validate(cfg)
+	require.Error(t, err, "a whitespace-only tenant ACL user must fail at startup")
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "multitenant.tenants.acme.cache.redis.username", cfgErr.Field)
+}
