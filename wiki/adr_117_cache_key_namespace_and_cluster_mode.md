@@ -213,8 +213,9 @@ that always holds.
   advertises both.
 - **`mode` shipped before `keyprefix`, so a shared cluster endpoint had no per-tenant separation
   in between.** The mode flip takes the database lever away (`database` must be 0) and the prefix
-  arrived one change later; until it did, a multi-tenant deployment on cluster mode gave each
-  tenant its own endpoint. The mode was deliberately not refused for multi-tenant deployments to
+  arrived one change later; until it did, isolating tenants on cluster mode meant configuring a
+  separate endpoint per tenant — the mode grants no separation of its own, and `database` is
+  pinned to 0. The mode was deliberately not refused for multi-tenant deployments to
   close that window. Each tenant's cache config is checked on its own — `checkTenantCache` per
   entry at startup, and `(*redis.Config).Validate()` inside `NewClient` for a tenant a dynamic
   config source or `ResourceSource` delivers at first use — so "do these tenants share an endpoint?"
