@@ -150,8 +150,9 @@ ADR-011 introduced — break silently under them.
 
 - **Three changes, one decision.** `username` shipped first and is additive. `mode` followed.
   `keyprefix` ships last and is breaking, because a deployment's existing keys are not under
-  the new default prefix; the cost is one cold-cache cycle and the old keys expire by TTL. This
-  ADR was written Proposed with the first and moves to Accepted with the last.
+  the new default prefix; the cost is one cold-cache cycle, plus an operator sweep of whatever
+  the old layout wrote with no TTL (below). This ADR was written Proposed with the first and
+  moves to Accepted with the last.
 
 ## Supersedes part of ADR-011
 
@@ -174,9 +175,13 @@ that always holds.
 - **An RBAC access string can finally be written narrowly.** With a known key namespace, a
   deployment can scope a user to `~<prefix>:*` instead of granting the whole keyspace.
 - **The default prefix changes the keys of an existing deployment.** `app.name` is applied when
-  `keyprefix` is absent, so an upgrade reads through to the backing store once and the orphaned
-  keys expire by TTL. `keyprefix: ""` at the root restores the old layout exactly. Two services
-  that deliberately shared a keyspace must now set the same explicit `keyprefix` on both, and two
+  `keyprefix` is absent, so an upgrade reads through to the backing store once and leaves the old
+  keys orphaned. Only the TTL-backed ones expire on their own: `cache.Cache.Set` and `GetOrSet`
+  store without expiration when `ttl == 0`, so an entry written with a zero TTL under the old
+  layout stays until an operator deletes it — `redis-cli --scan --pattern` over the old,
+  un-prefixed key shapes, then `DEL`, or `FLUSHDB` where the database holds nothing but this
+  cache. `keyprefix: ""` at the root restores the old layout exactly. Two services that
+  deliberately shared a keyspace must now set the same explicit `keyprefix` on both, and two
   services that share an `app.name` still collide — the default separates services by name, not
   by deployment. See [migrations.md](migrations.md) `[C66.6]`.
 - **`Stats()` means something different under cluster mode**, which is why it reports which mode
