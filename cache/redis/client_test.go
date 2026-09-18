@@ -1200,58 +1200,54 @@ func TestNewClientAuthenticatesAsNamedACLUser(t *testing.T) {
 // default-user form and stands, as does neither key set, and a whitespace-only
 // name is refused ahead of the coupling rule.
 func TestConfigValidateUsername(t *testing.T) {
-	tests := []struct {
-		name      string
-		username  string
-		password  string
-		wantField string
-		wantMsg   string
-	}{
-		{name: "named_user_with_password", username: "svc", password: "pw"},
-		{name: "absent_username_with_password", password: "pw"},
-		{name: "neither_username_nor_password"},
-		{
-			name:      "named_user_without_password",
-			username:  "svc",
-			wantField: "redis.username",
-			wantMsg:   "redis.password",
-		},
-		{
-			name:      "whitespace_only_username_with_password",
-			username:  " \t ",
-			password:  "pw",
-			wantField: "redis.username",
-			wantMsg:   "whitespace-only",
-		},
-		{
-			name:      "whitespace_only_username_without_password",
-			username:  " \t ",
-			wantField: "redis.username",
-			wantMsg:   "whitespace-only",
-		},
-	}
+	t.Run("named_user_with_password", func(t *testing.T) {
+		assert.NoError(t, usernameConfig("svc", "pw").Validate())
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := &Config{
-				Host:     "localhost",
-				Port:     6379,
-				PoolSize: 10,
-				Username: tt.username,
-				Password: tt.password,
-			}
+	t.Run("absent_username_with_password", func(t *testing.T) {
+		assert.NoError(t, usernameConfig("", "pw").Validate())
+	})
 
-			err := cfg.Validate()
-			if tt.wantField == "" {
-				assert.NoError(t, err)
-				return
-			}
-			require.Error(t, err)
-			var configErr *cache.ConfigError
-			require.ErrorAs(t, err, &configErr)
-			assert.Equal(t, tt.wantField, configErr.Field)
-			assert.Contains(t, configErr.Message, tt.wantMsg,
-				"the message must name the rule that fired, not just the field both rules share")
-		})
+	t.Run("neither_username_nor_password", func(t *testing.T) {
+		assert.NoError(t, usernameConfig("", "").Validate())
+	})
+
+	t.Run("named_user_without_password", func(t *testing.T) {
+		requireUsernameRejected(t, usernameConfig("svc", ""), "redis.password")
+	})
+
+	t.Run("whitespace_only_username_with_password", func(t *testing.T) {
+		requireUsernameRejected(t, usernameConfig(" \t ", "pw"), "whitespace-only")
+	})
+
+	t.Run("whitespace_only_username_without_password", func(t *testing.T) {
+		requireUsernameRejected(t, usernameConfig(" \t ", ""), "whitespace-only")
+	})
+}
+
+// usernameConfig returns an otherwise valid Config carrying the ACL identity
+// under test, so a case states only the two fields the username rules read.
+func usernameConfig(username, password string) *Config {
+	return &Config{
+		Host:     "localhost",
+		Port:     6379,
+		PoolSize: 10,
+		Username: username,
+		Password: password,
 	}
+}
+
+// requireUsernameRejected asserts Validate refuses cfg with a ConfigError
+// addressed to redis.username — the field both username rules share — carrying
+// wantMsg, which is what tells the two rules apart.
+func requireUsernameRejected(t *testing.T, cfg *Config, wantMsg string) {
+	t.Helper()
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	var configErr *cache.ConfigError
+	require.ErrorAs(t, err, &configErr)
+	assert.Equal(t, "redis.username", configErr.Field)
+	assert.Contains(t, configErr.Message, wantMsg,
+		"the message must name the rule that fired, not just the field both rules share")
 }
