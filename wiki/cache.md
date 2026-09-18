@@ -61,9 +61,11 @@ cache:
     password: ${CACHE_REDIS_PASSWORD}  # From environment
     database: 0
     poolsize: 10
-    # keyprefix: orders                # key namespace, <prefix>:<key>. OMIT the key to take
-                                       # app.name (the default); "" opts THAT section out;
-                                       # a tenant's own "" still yields <tenantID>
+    # keyprefix: orders                # key namespace, <prefix>:<key>; a tenant cache's keys are
+                                       # <prefix>:<tenantID>:<key>. ONE segment — no ":" in the
+                                       # prefix. OMIT the key to take app.name (the default);
+                                       # "" opts THAT section out; a tenant's own "" still
+                                       # yields <tenantID>:<key>
 ```
 
 **Module Setup Pattern:**
@@ -276,18 +278,21 @@ and the later write-back wins.
 **Multi-Tenant Isolation:**
 
 - Isolation is by **key prefix**: every key a cache writes travels as `<prefix>:<key>`, and a
-  tenant's cache folds the tenant id in as `<prefix>:<tenantID>` (ADR-117). The prefix comes
-  from `cache.redis.keyprefix`, defaulting to `app.name`, so two services on one endpoint
-  cannot overwrite each other and two tenants cannot read each other's entries. Two services
-  that share an `app.name` are the exception — the default separates services by name, so they
-  resolve to one prefix and still collide; give them distinct explicit values
+  tenant's cache folds the tenant id in, so its stored keys are `<prefix>:<tenantID>:<key>`
+  (ADR-117). The prefix comes from `cache.redis.keyprefix`, defaulting to `app.name`, so two
+  services on one endpoint cannot overwrite each other and two tenants cannot read each other's
+  entries. A configured prefix is ONE segment — a `:` in it fails startup — which is what makes
+  that hold for every caller key: the prefix owns the first segment, so no key can reach across
+  into another prefix's namespace. Two services that share an `app.name` are the exception —
+  the default separates services by name, so they resolve to one prefix and still collide; give
+  them distinct explicit values
 - Plus a **separate Redis database** per tenant where the deployment supports one
   (`cache.redis.database`, configurable per-tenant). A cluster endpoint has only database 0,
   so this layers on top of the prefix rather than replacing it
 - Each section resolves its own namespace: a tenant may set `keyprefix` in its own mirror, and
   a tenant that sets none takes `app.name` — not the root's explicit prefix, which is the root
   instance's setting rather than a deployment-wide one. An explicit `keyprefix: ""` at the root
-  opts out of prefixing entirely; under a tenant it still yields `<tenantID>`, because
+  opts out of prefixing entirely; under a tenant it still yields `<tenantID>:<key>`, because
   cross-tenant isolation on a shared endpoint is not optional
 - Cache instances managed by CacheManager with automatic lifecycle
 - Context propagation ensures tenant resolution via `deps.Cache(ctx)`
@@ -607,7 +612,7 @@ cache:
   databases, but the client cannot reach them. **Multi-tenant deployments lose the database lever
   with it**: every tenant on one cluster endpoint writes database 0, which is where two standalone
   tenants that never set distinct numbers already are. `cache.redis.keyprefix` is what separates
-  them now: a tenant's keys travel as `<prefix>:<tenantID>`
+  them now: a tenant's keys travel as `<prefix>:<tenantID>:<key>`
   ([ADR-117](adr_117_cache_key_namespace_and_cluster_mode.md)), so one cluster endpoint serves many
   tenants without collision. An RBAC access string narrows that namespace rather than standing in
   for it — it scopes by key pattern, and the pattern needs a namespace to select.

@@ -1825,7 +1825,7 @@ additions only. See [migrations.md](migrations.md) `[C66.4]`.
 
 ### [ADR-117: Cache Key Namespace and Cluster Mode](adr_117_cache_key_namespace_and_cluster_mode.md)
 
-**Date:** 2026-09-18 | **Status:** Accepted | **Breaking:** `cache.redis.keyprefix` defaults to `app.name`, so every deployment's cache keys move under a namespace once (`cache.redis.username` and `cache.redis.mode` are additive)
+**Date:** 2026-09-18 | **Status:** Accepted | **Breaking:** `cache.redis.keyprefix` defaults to `app.name`, so namespacing is the DEFAULT and a cache-enabled deployment's keys move under it once on the upgrade — the explicit root opt-out `cache.redis.keyprefix: ""` keeps the old layout (`cache.redis.username` and `cache.redis.mode` are additive)
 
 The Redis cache dialed one address with one password, selected a database number, and wrote the
 key it was handed. A managed endpoint grants none of that: ElastiCache Serverless speaks cluster
@@ -1837,8 +1837,8 @@ when the password is empty and the connection would then run as the default user
 `cache.redis.mode` selects `standalone` (default) or `cluster` through
 one `redis.NewUniversalClient` path, with `mode: cluster` plus a non-zero `database` rejected at
 startup because the cluster client drops `DB` rather than refusing it. `cache.redis.keyprefix`
-namespaces every key as `<prefix>:<key>`, defaults to `app.name`, folds a tenant in as
-`<prefix>:<tenantID>`, and is applied as a `cache.Cache` decorator above whichever connector is in
+namespaces every key as `<prefix>:<key>`, defaults to `app.name`, folds a tenant in so its stored
+keys are `<prefix>:<tenantID>:<key>`, and is applied as a `cache.Cache` decorator above whichever connector is in
 play — so a consumer-supplied `Options.CacheConnector` is namespaced too, and the prefix never
 reaches the transport. The key is a tri-state `*string`: absent takes `app.name`, an explicit
 empty string opts out at the root and still leaves the tenant id under a tenant. Prefixing inside
