@@ -733,6 +733,7 @@ func TestValidateCacheRedisKeyPrefix(t *testing.T) {
 		{name: "whitespace_is_rejected", keyPrefix: new("bad name"), wantField: "cache.redis.keyprefix"},
 		{name: "glob_is_rejected", keyPrefix: new("orders*"), wantField: "cache.redis.keyprefix"},
 		{name: "hash_tag_is_rejected", keyPrefix: new("{orders}"), wantField: "cache.redis.keyprefix"},
+		{name: "glob_escape_is_rejected", keyPrefix: new(`orders\`), wantField: "cache.redis.keyprefix"},
 		{name: "trailing_separator_is_rejected", keyPrefix: new("orders:"), wantField: "cache.redis.keyprefix"},
 		{name: "inner_separator_is_rejected", keyPrefix: new("orders:v2"), wantField: "cache.redis.keyprefix"},
 	}

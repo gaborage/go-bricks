@@ -10089,7 +10089,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   default, so absence stays distinguishable. The prefix is applied by `cache.WithKeyPrefix`, a
   decorator installed once per pooled instance above whichever connector is in play; it forwards
   `cache.LoadTimeoutProvider` and passes every inner error through, so `cache.loadtimeout` and
-  `errors.Is(err, cache.ErrNotFound)` are unchanged. A prefix carrying whitespace, `*?[]`, `{}`
+  `errors.Is(err, cache.ErrNotFound)` are unchanged. A prefix carrying whitespace, `*?[]`, `\`, `{}`
   or a `:` anywhere in it is refused at startup — the prefix is ONE segment, or a caller key
   opening with another prefix's tail would bridge the two namespaces — and where the default
   applies `app.name` must itself
@@ -10108,7 +10108,12 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   layout survives as an orphan until someone deletes it. Sweep those out of band — the old layout
   wrote the caller's key verbatim, so the pattern is your own un-prefixed key shape
   (`redis-cli --scan --pattern 'user:*'`, then `DEL` what it lists), or `FLUSHDB` where the
-  database holds nothing but this cache. Act in three cases: (1) another service or tool shares
+  database holds nothing but this cache. Sweep BEFORE the new writers start, or check the
+  pattern is disjoint from the effective prefix first: with `keyprefix: user`, `user:*` also
+  matches the `user:<tenantID>:<key>` entries the new layout is writing, so a post-rollout
+  `DEL` over it deletes live data. Repeat the sweep in EACH database the old layout used —
+  ADR-011 isolated tenants by `cache.redis.database`, so a tenant's orphans sit in its own
+  number, not the root's — and confirm afterwards that the old pattern returns nothing. Act in three cases: (1) another service or tool shares
   this keyspace — give both sides the same explicit `cache.redis.keyprefix`, or teach the
   external reader the effective one (`<app.name>:` where you set none); (2) two services already
   share one `app.name` on one endpoint — they still collide, because the default separates by

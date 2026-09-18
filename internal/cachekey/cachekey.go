@@ -18,10 +18,13 @@ const Sep = ":"
 
 // forbidden are the characters a prefix may not contain. The glob
 // metacharacters *?[] would make a prefix match keys it does not own in any
-// pattern-taking command an operator runs against the namespace; the braces {}
-// would turn the prefix into a Redis Cluster hash tag, pinning every key of the
-// service to one slot and defeating the sharding a cluster endpoint exists for.
-const forbidden = "*?[]{}"
+// pattern-taking command an operator runs against the namespace; the backslash
+// is the same grammar's ESCAPE, so a prefix carrying one writes literal-backslash
+// keys that the ACL pattern spelling it (~orders\:*, where \: reads as a plain
+// colon) does not authorize, and every command is denied; the braces {} would turn
+// the prefix into a Redis Cluster hash tag, pinning every key of the service to one
+// slot and defeating the sharding a cluster endpoint exists for.
+const forbidden = "*?[]{}\\"
 
 // Validate reports whether prefix is a usable cache key namespace. The empty
 // prefix is valid: it is the documented opt-out from namespacing. Errors are

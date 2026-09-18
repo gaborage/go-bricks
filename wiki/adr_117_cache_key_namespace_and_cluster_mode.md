@@ -107,7 +107,10 @@ ADR-011 introduced — break silently under them.
 - **`cache.redis.keyprefix` namespaces every key, defaulting to `app.name`.** The wire layout is
   `<prefix>:<key>` with a fixed `:` separator. The grammar lives in `internal/cachekey`, because
   the config layer must enforce it long before a cache exists and `cache` imports `config`: a
-  prefix may not carry whitespace, the glob metacharacters `*?[]`, braces `{}` (a hash tag would
+  prefix may not carry whitespace, the glob metacharacters `*?[]`, the glob ESCAPE `\` (a prefix
+  carrying one writes literal-backslash keys, which the ACL pattern spelling it — `~orders\:*`,
+  where `\:` reads as a plain colon — does not authorize, so every command is denied), braces `{}`
+  (a hash tag would
   pin every key of the deployment to one slot and defeat serverless sharding) or a `:` anywhere
   in it — **a prefix is ONE segment**. Not merely a trailing one: a prefix spanning two segments
   would be reachable from another prefix's caller key, since `orders` writing `v2:user:1` and
@@ -196,7 +199,10 @@ that always holds.
   store without expiration when `ttl == 0`, so an entry written with a zero TTL under the old
   layout stays until an operator deletes it — `redis-cli --scan --pattern` over the old,
   un-prefixed key shapes, then `DEL`, or `FLUSHDB` where the database holds nothing but this
-  cache. `keyprefix: ""` at the root restores the old layout exactly. Two services that
+  cache — before the new writers start, or against a pattern verified disjoint from the
+  effective prefix, since a caller key shape like `user:*` also matches the new
+  `user:<tenantID>:<key>` entries when the prefix is `user`; and once per database the old
+  layout used, because ADR-011 put each tenant in its own. `keyprefix: ""` at the root restores the old layout exactly. Two services that
   deliberately shared a keyspace must now set the same explicit `keyprefix` on both, and two
   services that share an `app.name` still collide — the default separates services by name, not
   by deployment. See [migrations.md](migrations.md) `[C66.6]`.

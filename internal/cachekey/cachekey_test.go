@@ -27,6 +27,7 @@ func TestValidate(t *testing.T) {
 		{name: "glob_star", prefix: "orders*"},
 		{name: "glob_question_mark", prefix: "a?b"},
 		{name: "glob_class", prefix: "[x]"},
+		{name: "glob_escape_backslash", prefix: `orders\`},
 		{name: "hash_tag_braces", prefix: "{tag}"},
 		{name: "open_brace_alone", prefix: "orders{"},
 		{name: "close_brace_alone", prefix: "orders}"},
@@ -86,6 +87,7 @@ func TestValidateNamespace(t *testing.T) {
 		{name: "whitespace_in_a_later_segment", ns: "orders:bad name"},
 		{name: "glob_in_a_later_segment", ns: "orders:acme*"},
 		{name: "hash_tag_in_a_later_segment", ns: "orders:{acme}"},
+		{name: "backslash_in_a_later_segment", ns: `orders:acme\`},
 	}
 
 	for _, tt := range tests {

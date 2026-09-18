@@ -148,6 +148,7 @@ func TestWithKeyPrefixRejectsAnInvalidPrefix(t *testing.T) {
 		{name: "leading_separator", prefix: ":orders"},
 		{name: "empty_inner_segment", prefix: "orders::acme"},
 		{name: "whitespace_in_a_later_segment", prefix: "orders:bad name"},
+		{name: "glob_escape_backslash", prefix: `orders\`},
 	}
 
 	for _, tt := range tests {
