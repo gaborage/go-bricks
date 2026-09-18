@@ -123,42 +123,56 @@ func TestValidateMultitenantTenantsCacheTLSMisconfigIsTenantAddressed(t *testing
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &Config{
-				App:    createValidAppConfig(),
-				Server: createValidServerConfig(),
-				Log:    createValidLogConfig(),
-				Multitenant: MultitenantConfig{
-					Enabled: true,
-					Resolver: ResolverConfig{
-						Type:   "header",
-						Header: testTenantHeader,
-					},
-					Tenants: map[string]TenantEntry{
-						"acme": {
-							Database: DatabaseConfig{
-								Type:     PostgreSQL,
-								Host:     "acme.db",
-								Port:     5432,
-								Database: "acme",
-								Username: "acme_user",
-							},
-							Cache: CacheConfig{
-								Enabled: true,
-								Redis:   RedisConfig{Host: "acme.redis", TLS: tt.tls},
-							},
-						},
-					},
-				},
-				Source: SourceConfig{Type: SourceTypeStatic},
-			}
-
-			err := Validate(cfg)
-			require.Error(t, err, "a TLS misconfiguration must fail at startup")
-			var cfgErr *ConfigError
-			require.ErrorAs(t, err, &cfgErr)
+			cfgErr := tenantCacheValidationError(t,
+				&RedisConfig{Host: "acme.redis", TLS: tt.tls},
+				"a TLS misconfiguration must fail at startup")
 			assert.Equal(t, tt.wantField, cfgErr.Field)
 		})
 	}
+}
+
+// tenantCacheValidationError validates a single-tenant Config whose "acme" cache
+// carries redisCfg and returns the ConfigError it fails with. Every tenant cache
+// rule asserts the same way — that the failure is a ConfigError whose Field names
+// the tenant — so only the dirtied Redis field differs between them, and the
+// surrounding tenant literal is stated once here rather than per rule.
+func tenantCacheValidationError(t *testing.T, redisCfg *RedisConfig, failMsg string) *ConfigError {
+	t.Helper()
+
+	cfg := &Config{
+		App:    createValidAppConfig(),
+		Server: createValidServerConfig(),
+		Log:    createValidLogConfig(),
+		Multitenant: MultitenantConfig{
+			Enabled: true,
+			Resolver: ResolverConfig{
+				Type:   "header",
+				Header: testTenantHeader,
+			},
+			Tenants: map[string]TenantEntry{
+				"acme": {
+					Database: DatabaseConfig{
+						Type:     PostgreSQL,
+						Host:     "acme.db",
+						Port:     5432,
+						Database: "acme",
+						Username: "acme_user",
+					},
+					Cache: CacheConfig{
+						Enabled: true,
+						Redis:   *redisCfg,
+					},
+				},
+			},
+		},
+		Source: SourceConfig{Type: SourceTypeStatic},
+	}
+
+	err := Validate(cfg)
+	require.Error(t, err, failMsg)
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	return cfgErr
 }
 
 // normalizeTenantsAndCheckMultitenant runs the tenant half of normalize before
@@ -861,38 +875,8 @@ func TestCheckStaticTenantMapEmptyMapErrorIsNotAConfigError(t *testing.T) {
 // user rule reaches the tenant mirror with the tenant-qualified spelling, so a
 // consumer matching on ConfigError.Field learns whose cache carries the typo.
 func TestValidateMultitenantTenantsCacheUsernameIsTenantAddressed(t *testing.T) {
-	cfg := &Config{
-		App:    createValidAppConfig(),
-		Server: createValidServerConfig(),
-		Log:    createValidLogConfig(),
-		Multitenant: MultitenantConfig{
-			Enabled: true,
-			Resolver: ResolverConfig{
-				Type:   "header",
-				Header: testTenantHeader,
-			},
-			Tenants: map[string]TenantEntry{
-				"acme": {
-					Database: DatabaseConfig{
-						Type:     PostgreSQL,
-						Host:     "acme.db",
-						Port:     5432,
-						Database: "acme",
-						Username: "acme_user",
-					},
-					Cache: CacheConfig{
-						Enabled: true,
-						Redis:   RedisConfig{Host: "acme.redis", Username: " \t "},
-					},
-				},
-			},
-		},
-		Source: SourceConfig{Type: SourceTypeStatic},
-	}
-
-	err := Validate(cfg)
-	require.Error(t, err, "a whitespace-only tenant ACL user must fail at startup")
-	var cfgErr *ConfigError
-	require.ErrorAs(t, err, &cfgErr)
+	cfgErr := tenantCacheValidationError(t,
+		&RedisConfig{Host: "acme.redis", Username: " \t "},
+		"a whitespace-only tenant ACL user must fail at startup")
 	assert.Equal(t, "multitenant.tenants.acme.cache.redis.username", cfgErr.Field)
 }

@@ -112,11 +112,10 @@ ADR-011 introduced — break silently under them.
 ADR-011 stands, except for the isolation mechanism. Three claims in it are replaced by the
 prefix decided here:
 
-- `wiki/adr_011_redis_cache.md:25` — "Manual tenant ID prefixing error-prone and verbose",
-  listed as a problem the framework solves. It still solves it, but by owning the prefix rather
-  than by avoiding one.
-- `wiki/adr_011_redis_cache.md:159` — "Tenant isolation without manual key prefixing".
-- `wiki/adr_011_redis_cache.md:403` — "Multi-tenant isolation via separate Redis databases".
+- "Manual tenant ID prefixing error-prone and verbose", listed as a problem the framework
+  solves. It still solves it, but by owning the prefix rather than by avoiding one.
+- "Tenant isolation without manual key prefixing".
+- "Multi-tenant isolation via separate Redis databases".
 
 Read all three as: isolation by key prefix, plus a separate database where the deployment
 supports one. A cluster endpoint supports exactly one database, so the prefix is the mechanism

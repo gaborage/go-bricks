@@ -24,7 +24,10 @@ type Config struct {
 	// Username is the Redis ACL user to authenticate as, sent as
 	// AUTH <username> <password>. Empty authenticates as the implicit "default"
 	// user. Required by deployments that gate access with ACLs, such as Amazon
-	// ElastiCache RBAC. Environment variable: CACHE_REDIS_USERNAME
+	// ElastiCache RBAC. Filled from config.RedisConfig, which owns the
+	// cache.redis.username key (env CACHE_REDIS_USERNAME); deliberately carries
+	// no config: tag, because nothing injects this struct and the tags on the
+	// fields around it are dead (#1729).
 	Username string
 
 	// Password for Redis authentication (optional).
