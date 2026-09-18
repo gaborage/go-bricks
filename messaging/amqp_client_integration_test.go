@@ -145,9 +145,9 @@ func TestAMQPClientDeclareExchange(t *testing.T) {
 		exchangeName string
 		kind         string
 	}{
-		{"direct", uniqueName(t, "ex-direct"), "direct"},
-		{"fanout", uniqueName(t, "ex-fanout"), "fanout"},
-		{"topic", uniqueName(t, "ex-topic"), "topic"},
+		{ExchangeTypeDirect, uniqueName(t, "ex-direct"), ExchangeTypeDirect},
+		{ExchangeTypeFanout, uniqueName(t, "ex-fanout"), ExchangeTypeFanout},
+		{ExchangeTypeTopic, uniqueName(t, "ex-topic"), ExchangeTypeTopic},
 	}
 
 	for _, tt := range tests {
@@ -174,7 +174,7 @@ func TestAMQPClientBindQueue(t *testing.T) {
 	queueName := uniqueName(t, "bind-test-queue")
 
 	// Declare exchange and queue
-	err := client.DeclareExchange(t.Context(), &ExchangeDeclaration{Name: exchangeName, Type: "direct", AutoDelete: true})
+	err := client.DeclareExchange(t.Context(), &ExchangeDeclaration{Name: exchangeName, Type: ExchangeTypeDirect, AutoDelete: true})
 	require.NoError(t, err)
 
 	err = client.DeclareQueue(t.Context(), &QueueDeclaration{Name: queueName, AutoDelete: true})
@@ -219,7 +219,7 @@ func TestAMQPClientDeclareQueueArgsDeadLetter(t *testing.T) {
 	workQueueName := uniqueName(t, "work-queue")
 
 	// Declare the DLX as a fanout exchange.
-	require.NoError(t, client.DeclareExchange(ctx, &ExchangeDeclaration{Name: dlxName, Type: "fanout", Durable: true}))
+	require.NoError(t, client.DeclareExchange(ctx, &ExchangeDeclaration{Name: dlxName, Type: ExchangeTypeFanout, Durable: true}))
 
 	// Declare the DLQ and bind it to the DLX (binding key irrelevant under fanout).
 	require.NoError(t, client.DeclareQueue(ctx, &QueueDeclaration{Name: dlqName, Durable: true}))
@@ -418,7 +418,7 @@ func TestAMQPClientpublishBytes(t *testing.T) {
 	routingKey := "test-route"
 
 	// Setup exchange, queue, and binding
-	err := client.DeclareExchange(t.Context(), &ExchangeDeclaration{Name: exchangeName, Type: "direct", AutoDelete: true})
+	err := client.DeclareExchange(t.Context(), &ExchangeDeclaration{Name: exchangeName, Type: ExchangeTypeDirect, AutoDelete: true})
 	require.NoError(t, err)
 
 	err = client.DeclareQueue(t.Context(), &QueueDeclaration{Name: queueName, AutoDelete: true})
@@ -607,7 +607,7 @@ func TestAMQPClientPublishImmediatelyOnColdStart(t *testing.T) {
 	queueName := uniqueName(t, "cold-start-queue")
 	routingKey := "cold-start-route"
 
-	require.NoError(t, setup.DeclareExchange(t.Context(), &ExchangeDeclaration{Name: exchangeName, Type: "direct", AutoDelete: true}))
+	require.NoError(t, setup.DeclareExchange(t.Context(), &ExchangeDeclaration{Name: exchangeName, Type: ExchangeTypeDirect, AutoDelete: true}))
 	require.NoError(t, setup.DeclareQueue(t.Context(), &QueueDeclaration{Name: queueName, AutoDelete: true}))
 	require.NoError(t, setup.BindQueue(t.Context(), &BindingDeclaration{Queue: queueName, Exchange: exchangeName, RoutingKey: routingKey}))
 	deliveries, err := setup.Consume(ctx, queueName)

@@ -193,7 +193,7 @@ func TestDeclarationsValidateRefusesAnOversizedName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			d := NewDeclarations()
-			d.Exchanges["ex"] = &ExchangeDeclaration{Name: "ex", Type: "topic"}
+			d.Exchanges["ex"] = &ExchangeDeclaration{Name: "ex", Type: ExchangeTypeTopic}
 			d.Queues["q"] = &QueueDeclaration{Name: "q"}
 			tt.build(d)
 
@@ -211,7 +211,7 @@ func TestDeclarationsValidateRefusesAnOversizedName(t *testing.T) {
 func TestDeclarationsValidateAcceptsNamesAtTheLimit(t *testing.T) {
 	limit := strings.Repeat("e", 255)
 	d := NewDeclarations()
-	d.Exchanges[limit] = &ExchangeDeclaration{Name: limit, Type: "topic"}
+	d.Exchanges[limit] = &ExchangeDeclaration{Name: limit, Type: ExchangeTypeTopic}
 	d.Queues["q"] = &QueueDeclaration{Name: "q"}
 	d.Bindings = append(d.Bindings, &BindingDeclaration{Queue: "q", Exchange: limit, RoutingKey: strings.Repeat("r", 255)})
 	d.Publishers = append(d.Publishers, &PublisherDeclaration{
@@ -230,7 +230,7 @@ func TestDeclarationsValidateAcceptsNamesAtTheLimit(t *testing.T) {
 func TestDeclarationsValidateReportsEveryOversizedName(t *testing.T) {
 	otherOversized := strings.Repeat("q", 300)
 	d := NewDeclarations()
-	d.Exchanges[oversizedShortStr] = &ExchangeDeclaration{Name: oversizedShortStr, Type: "topic"}
+	d.Exchanges[oversizedShortStr] = &ExchangeDeclaration{Name: oversizedShortStr, Type: ExchangeTypeTopic}
 	d.Queues[otherOversized] = &QueueDeclaration{Name: otherOversized}
 
 	err := d.Validate()
@@ -247,7 +247,7 @@ func TestDeclarationsValidateReportsEveryOversizedName(t *testing.T) {
 // names beside them do.
 func TestDeclarationsValidateRefusesAnOversizedArgsKey(t *testing.T) {
 	d := NewDeclarations()
-	d.Exchanges["ex"] = &ExchangeDeclaration{Name: "ex", Type: "topic"}
+	d.Exchanges["ex"] = &ExchangeDeclaration{Name: "ex", Type: ExchangeTypeTopic}
 	d.Queues["q"] = &QueueDeclaration{Name: "q", Args: map[string]any{oversizedShortStr: "v"}}
 
 	err := d.Validate()
@@ -300,7 +300,7 @@ func TestDeclarationsValidateReportsANilDeclaration(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			d := NewDeclarations()
-			d.Exchanges["ex"] = &ExchangeDeclaration{Name: "ex", Type: "topic"}
+			d.Exchanges["ex"] = &ExchangeDeclaration{Name: "ex", Type: ExchangeTypeTopic}
 			d.Queues["q"] = &QueueDeclaration{Name: "q"}
 			tt.build(d)
 

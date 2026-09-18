@@ -1,6 +1,10 @@
 package messaging
 
-import "time"
+import (
+	"time"
+
+	amqp "github.com/rabbitmq/amqp091-go"
+)
 
 // Consumer concurrency + prefetch tuning. Previously inline literals in
 // helpers.go's worker auto-scaling logic.
@@ -35,6 +39,16 @@ const (
 	genericQueue     = "queue"
 	genericConsumer  = "consumer"
 	genericEventType = "event_type"
+)
+
+// AMQP 0-9-1 core exchange types for ExchangeDeclaration.Type, spelled direct,
+// topic, fanout and headers (case-sensitive). Validate admits these and any
+// "x-" plugin type.
+const (
+	ExchangeTypeDirect  = amqp.ExchangeDirect
+	ExchangeTypeTopic   = amqp.ExchangeTopic
+	ExchangeTypeFanout  = amqp.ExchangeFanout
+	ExchangeTypeHeaders = amqp.ExchangeHeaders
 )
 
 // AMQP declaration/consume argument keys, shared by the declaration

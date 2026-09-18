@@ -52,7 +52,7 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 
 **Production-Safe Defaults:**
 
-- Exchanges: `Durable: true`, `AutoDelete: false`, `Type: "topic"`
+- Exchanges: `Durable: true`, `AutoDelete: false`, `Type: messaging.ExchangeTypeTopic` (`DeclareTopicExchange`) or `messaging.ExchangeTypeDirect` (`DeclareDirectExchange`)
 - Queues: `Durable: true`, `AutoDelete: false`, `Exclusive: false`
 - Publishers: `Mandatory: false`, `Immediate: false`
 - Consumers: `AutoAck: false`, `Exclusive: false`, `NoLocal: false`
@@ -85,7 +85,13 @@ the frame.
 
 RabbitMQ 4.3.0 denies `transient_nonexcl_queues` by default: a queue declared with both `Durable: false` and `Exclusive: false` gets the connection closed with a 541 instead of the queue created. The helpers above are unaffected — `NewQueue` defaults to `Durable: true` — but a hand-built `QueueDeclaration` using that transient shape needs the broker configured with `deprecated_features.permit.transient_nonexcl_queues = true`, which is what GoBricks' own RabbitMQ test container sets.
 
-**Key Helpers:** `DeclareTopicExchange()`, `DeclareQueue()`, `DeclareBinding()`, `DeclareTypedPublisher[T]()`, `DeclareConsumer()`
+**Key Helpers:** `DeclareTopicExchange()`, `DeclareDirectExchange()`, `DeclareQueue()`, `DeclareBinding()`, `DeclareTypedPublisher[T]()`, `DeclareConsumer()`
+
+**Exchange types:** a direct exchange routes on an exact routing-key match, for example a
+`<domain>.commands` exchange. A hand-built `ExchangeDeclaration` names its `Type` with `messaging.ExchangeTypeDirect`,
+`messaging.ExchangeTypeTopic`, `messaging.ExchangeTypeFanout` or `messaging.ExchangeTypeHeaders`, or with an `x-` plugin type
+such as `x-delayed-message`. `Declarations.Validate()` refuses any other `Type` at startup, and
+that includes an empty or wrong-case one. The error names the exchange and the type (ADR-116).
 
 **Publishing** uses the handle from the declaration and the tenant-aware client:
 `m.issuanceCreated.Publish(ctx, client, evt)`, where `client` comes from `deps.Messaging(ctx)`.

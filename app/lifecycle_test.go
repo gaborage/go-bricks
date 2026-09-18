@@ -250,7 +250,7 @@ func (publisherDeclaringModule) Shutdown() error          { return nil }
 func (publisherDeclaringModule) DeclareMessaging(decls *messaging.Declarations) {
 	decls.RegisterExchange(&messaging.ExchangeDeclaration{
 		Name:    "test.exchange",
-		Type:    "topic",
+		Type:    messaging.ExchangeTypeTopic,
 		Durable: true,
 	})
 	decls.RegisterPublisher(&messaging.PublisherDeclaration{

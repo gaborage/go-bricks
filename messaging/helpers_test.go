@@ -16,7 +16,7 @@ func TestNewTopicExchange(t *testing.T) {
 		exchange := NewTopicExchange("test.exchange")
 
 		assert.Equal(t, "test.exchange", exchange.Name)
-		assert.Equal(t, exchangeTypeTopic, exchange.Type)
+		assert.Equal(t, ExchangeTypeTopic, exchange.Type)
 		assert.True(t, exchange.Durable)
 		assert.False(t, exchange.AutoDelete)
 		assert.False(t, exchange.Internal)
@@ -29,7 +29,7 @@ func TestNewTopicExchange(t *testing.T) {
 		exchange := NewTopicExchange("")
 
 		assert.Empty(t, exchange.Name)
-		assert.Equal(t, exchangeTypeTopic, exchange.Type)
+		assert.Equal(t, ExchangeTypeTopic, exchange.Type)
 		assert.True(t, exchange.Durable)
 	})
 
@@ -42,6 +42,30 @@ func TestNewTopicExchange(t *testing.T) {
 
 		assert.Equal(t, testValue1, ex1.Args[testKey])
 		assert.Equal(t, testValue2, ex2.Args[testKey])
+	})
+}
+
+func TestNewDirectExchange(t *testing.T) {
+	t.Run("creates exchange with production defaults", func(t *testing.T) {
+		exchange := NewDirectExchange("tenancy.commands")
+
+		assert.Equal(t, "tenancy.commands", exchange.Name)
+		assert.Equal(t, ExchangeTypeDirect, exchange.Type)
+		assert.True(t, exchange.Durable)
+		assert.False(t, exchange.AutoDelete)
+		assert.False(t, exchange.Internal)
+		assert.False(t, exchange.NoWait)
+		assert.NotNil(t, exchange.Args)
+		assert.Empty(t, exchange.Args)
+	})
+
+	t.Run("creates independent instances", func(t *testing.T) {
+		ex1 := NewDirectExchange("exchange1")
+		ex2 := NewDirectExchange("exchange2")
+
+		ex1.Args[testKey] = testValue1
+
+		assert.Empty(t, ex2.Args)
 	})
 }
 
@@ -252,7 +276,7 @@ func TestDeclarationsTopicExchange(t *testing.T) {
 
 		assert.NotNil(t, exchange)
 		assert.Equal(t, "test.exchange", exchange.Name)
-		assert.Equal(t, exchangeTypeTopic, exchange.Type)
+		assert.Equal(t, ExchangeTypeTopic, exchange.Type)
 		assert.True(t, exchange.Durable)
 
 		// Verify it's registered
@@ -292,6 +316,16 @@ func TestDeclarationsTopicExchange(t *testing.T) {
 		assert.NotNil(t, ex2)
 		assert.Len(t, decls.Exchanges, 2)
 	})
+}
+
+func TestDeclarationsDirectExchange(t *testing.T) {
+	decls := NewDeclarations()
+
+	exchange := decls.DeclareDirectExchange("tenancy.commands")
+
+	assert.Equal(t, NewDirectExchange("tenancy.commands"), exchange)
+	assert.Len(t, decls.Exchanges, 1)
+	assert.Equal(t, NewDirectExchange("tenancy.commands"), decls.Exchanges["tenancy.commands"])
 }
 
 func TestDeclarationsQueue(t *testing.T) {
@@ -598,7 +632,7 @@ func TestDeclareQueueWithDLQDefaults(t *testing.T) {
 
 	dlx, ok := decls.Exchanges["orders.queue.dlx"]
 	assert.True(t, ok)
-	assert.Equal(t, exchangeTypeFanout, dlx.Type)
+	assert.Equal(t, ExchangeTypeFanout, dlx.Type)
 	assert.True(t, dlx.Durable)
 
 	dlq, ok := decls.Queues["orders.queue.dlq"]

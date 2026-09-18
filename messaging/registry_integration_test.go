@@ -42,7 +42,7 @@ func TestRegistryRedeclaresDeletedQueueAfterReconnect(t *testing.T) {
 	handler := &countingTestHandler{}
 	registry := NewRegistry(client, log)
 	registry.resubscribeDelay = 50 * time.Millisecond
-	registry.RegisterExchange(&ExchangeDeclaration{Name: exchange, Type: "topic"})
+	registry.RegisterExchange(&ExchangeDeclaration{Name: exchange, Type: ExchangeTypeTopic})
 	registry.RegisterQueue(&QueueDeclaration{Name: queue})
 	registry.RegisterBinding(&BindingDeclaration{Queue: queue, Exchange: exchange, RoutingKey: "orders.#"})
 	registry.RegisterConsumer(&ConsumerDeclaration{Queue: queue, EventType: testEventType, Workers: 1, Handler: handler})

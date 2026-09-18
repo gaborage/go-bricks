@@ -1806,6 +1806,23 @@ which tenants a re-run still has to reach.
 
 ---
 
+### [ADR-116: Declarations Refuse an Unknown Exchange Type at Startup](adr_116_exchange_type_validation.md)
+
+**Date:** 2026-09-16 | **Status:** Accepted | **Breaking:** `Declarations.Validate()` refuses an exchange whose `Type` is neither an AMQP core type nor an `x-` plugin type, where it used to boot and fail at the broker
+
+`ExchangeDeclaration.Type` is a plain string that `Validate()` never read, so `Type: "Direct"`,
+a typo or an omitted type passed startup. The broker then refused the declare on replay with a
+channel exception naming no call site. `Validate()` now refuses any type that is not exactly
+`direct`, `topic`, `fanout` or `headers` and does not start with `x-`, the prefix RabbitMQ gives
+plugin exchanges. Every violation is reported, and each error names the exchange and the type.
+`ExchangeTypeDirect`/`Topic`/`Fanout`/`Headers` are exported, and `NewDirectExchange` and
+`DeclareDirectExchange` mirror the topic helpers. `Type` stays `string`, so the API change is
+additions only. See [migrations.md](migrations.md) `[C66.4]`.
+
+**Key Benefits:** a misspelled exchange type fails at boot and names its declaration.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2576,7 +2593,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-115) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-116) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

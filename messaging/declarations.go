@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -354,6 +355,10 @@ func (d *Declarations) Validate() error {
 		return err
 	}
 
+	if err := d.validateExchangeTypes(); err != nil {
+		return err
+	}
+
 	for _, publisher := range d.Publishers {
 		if err := d.validatePublisherDestination(publisher); err != nil {
 			return err
@@ -494,6 +499,28 @@ func (d *Declarations) validateQueueTypeDeclarations() error {
 	errs := slices.Clone(d.queueTypeErrs)
 	errs = append(errs, d.validateQuorumQueueShape()...)
 	return errors.Join(errs...)
+}
+
+var coreExchangeTypes = []string{ExchangeTypeDirect, ExchangeTypeTopic, ExchangeTypeFanout, ExchangeTypeHeaders}
+
+// validateExchangeTypes reports, in sorted order, every exchange the broker would refuse to declare.
+func (d *Declarations) validateExchangeTypes() error {
+	var errs []error
+
+	for _, name := range slices.Sorted(maps.Keys(d.Exchanges)) {
+		exchangeType := d.Exchanges[name].Type
+		if isKnownExchangeType(exchangeType) {
+			continue
+		}
+		errs = append(errs, fmt.Errorf("exchange %q has unknown type %q: use %s or an x- plugin type",
+			name, exchangeType, strings.Join(coreExchangeTypes, ", ")))
+	}
+
+	return errors.Join(errs...)
+}
+
+func isKnownExchangeType(exchangeType string) bool {
+	return slices.Contains(coreExchangeTypes, exchangeType) || strings.HasPrefix(exchangeType, "x-")
 }
 
 // validateQuorumQueueShape reports every quorum queue carrying a flag or arg the

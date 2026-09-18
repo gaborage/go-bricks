@@ -123,7 +123,7 @@ func (r *Registry) setResubscribeDelay(delay time.Duration) {
 // ExchangeDeclaration defines an exchange to be declared
 type ExchangeDeclaration struct {
 	Name       string         // Exchange name
-	Type       string         // Exchange type (direct, topic, fanout, headers)
+	Type       string         // Exchange type: an ExchangeType* constant or an "x-" plugin type
 	Durable    bool           // Survive server restart
 	AutoDelete bool           // Delete when no longer used
 	Internal   bool           // Internal exchange

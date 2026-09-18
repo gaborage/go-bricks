@@ -906,7 +906,7 @@ func TestDeclareExchangeQueueBindSuccess(t *testing.T) {
 	if err := c.DeclareQueue(context.Background(), &QueueDeclaration{Name: "q", Durable: true}); err != nil {
 		t.Fatalf("DeclareQueue err=%v", err)
 	}
-	if err := c.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: "ex", Type: "topic", Durable: true}); err != nil {
+	if err := c.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: "ex", Type: ExchangeTypeTopic, Durable: true}); err != nil {
 		t.Fatalf("DeclareExchange err=%v", err)
 	}
 	if err := c.BindQueue(context.Background(), &BindingDeclaration{Queue: "q", Exchange: "ex", RoutingKey: "rk"}); err != nil {
@@ -939,7 +939,7 @@ func TestAMQPClientDeclareQueuePassesArgs(t *testing.T) {
 			c := newClientWithFakeChannel(t, ch)
 
 			require.NoError(t, c.DeclareQueue(context.Background(), &QueueDeclaration{Name: "q", Durable: true, Args: tt.args}))
-			require.NoError(t, c.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: "ex", Type: "topic", Durable: true, Args: tt.args}))
+			require.NoError(t, c.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: "ex", Type: ExchangeTypeTopic, Durable: true, Args: tt.args}))
 			require.NoError(t, c.BindQueue(context.Background(), &BindingDeclaration{Queue: "q", Exchange: "ex", RoutingKey: "rk", Args: tt.args}))
 
 			assert.Equal(t, tt.want, ch.gotQueueArgs)
@@ -959,7 +959,7 @@ func TestAMQPClientDeclareCanceledContext(t *testing.T) {
 	cancel()
 
 	require.ErrorIs(t, c.DeclareQueue(ctx, &QueueDeclaration{Name: "q", Durable: true}), context.Canceled)
-	require.ErrorIs(t, c.DeclareExchange(ctx, &ExchangeDeclaration{Name: "ex", Type: "topic", Durable: true}), context.Canceled)
+	require.ErrorIs(t, c.DeclareExchange(ctx, &ExchangeDeclaration{Name: "ex", Type: ExchangeTypeTopic, Durable: true}), context.Canceled)
 	require.ErrorIs(t, c.BindQueue(ctx, &BindingDeclaration{Queue: "q", Exchange: "ex", RoutingKey: "rk"}), context.Canceled)
 	assert.Empty(t, ch.declaredQueue, "no broker call after cancellation")
 	assert.Empty(t, ch.declaredExchange, "no broker call after cancellation")
@@ -2145,7 +2145,7 @@ func TestAMQPClientDeclareExchangeNotReadyError(t *testing.T) {
 	defer closeAndWaitForReconnect(client) // Prevent goroutine leak / cross-test race
 
 	// Client not ready
-	err := client.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: "test-exchange", Type: "topic", Durable: true})
+	err := client.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: "test-exchange", Type: ExchangeTypeTopic, Durable: true})
 
 	require.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
