@@ -127,6 +127,11 @@ present:
 `engine` maps to `type` (`postgres`/`postgresql`/`aurora-postgresql` →
 `postgresql`; `oracle`/`oracle-se2` → `oracle`).
 
+Flyway connects with the secret's `username` and `password` as stored, so CLI use
+needs the migrator's own username and password in every tenant secret, unless
+`MigrateAllOptions.MigratorIdentity` (#1694; library only, not yet exposed by the
+CLI) overlays a shared migrator's credentials — see [multi_tenant_migration.md](multi_tenant_migration.md#migrator-identity).
+
 Minimum IAM for the runner role:
 
 ```json

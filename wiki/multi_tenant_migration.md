@@ -93,6 +93,16 @@ Default secret name (configurable via `--secrets-prefix`):
 gobricks/migrate/<tenant_id>
 ```
 
+The payloads in this guide are library-only: they carry the tenant's runtime
+role (`tenant_a_app`) and assume a [migrator identity](#migrator-identity) is
+set, so Flyway connects as the migrator instead. `go-bricks-migrate` cannot set
+one — it calls `MigrateAll` without the overlay and connects with each tenant
+secret's `username` *and* `password` as stored. A CLI-driven fleet therefore
+carries the shared migrator's own username and password in every tenant secret;
+swapping in the migrator's username alone authenticates it with the runtime
+role's password, and a secret left on the runtime role connects without DDL
+rights on the tenant schema.
+
 Secret payload — canonical shape (preferred):
 
 ```json
@@ -136,6 +146,26 @@ Minimum IAM for the runner role:
   ]
 }
 ```
+
+## Migrator identity
+
+`MigrateAllOptions.MigratorIdentity` makes Flyway connect as one shared migrator
+role across the fleet (see [library usage](#library-usage-in-process-from-your-back-office)).
+For each tenant, `MigrateAll` copies the resolved `DatabaseConfig` and replaces
+only `username` and `password`; host, port, database, schema targeting and TLS
+stay the tenant's, and the provider's own value is never mutated. It applies to
+migrate, validate and info on PostgreSQL and Oracle. An empty username or
+password, a password shorter than `config.MinDatabasePasswordLength` (too short
+to redact from Flyway output), or a CR, LF or NUL in either fails `MigrateAll`
+with `migration.ErrInvalidMigratorIdentity` before any tenant is listed. The role-separation model in
+[migration_roles.md](migration_roles.md) needs the overlay; `go-bricks-migrate`
+does not expose it yet.
+
+The overlay presents one credential with DDL rights on every tenant schema to
+every tenant's host, so a tenant document naming a wrong or hostile host exposes
+that shared credential rather than one tenant's. Keep tenant host fields under
+the same control as the secret store, and set `tls.mode: verify-full` on
+PostgreSQL tenant documents so Flyway verifies the server before authenticating.
 
 ## Schema targeting (PostgreSQL)
 
@@ -370,6 +400,7 @@ func RunReleaseMigrations(ctx context.Context) error {
 
     res, err := migration.MigrateAll(ctx, fm, lister, provider, migration.ActionMigrate, migration.MigrateAllOptions{
         Logger: myLogger,
+        MigratorIdentity: &migration.MigratorIdentity{Username: migratorUser, Password: migratorPassword},
         Hook: func(r migration.TenantResult) {
             myLogger.Info().Str("tenant", r.TenantID).Dur("dur", r.Duration).Msg("tenant migrated")
         },

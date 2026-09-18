@@ -5071,6 +5071,8 @@ Default secret name (overridable via `--secrets-prefix` / `GOBRICKS_MIGRATE_SECR
 gobricks/migrate/<tenant_id>
 ```
 
+The payload below carries the tenant's runtime role and assumes `MigrateAllOptions.MigratorIdentity` is set (library only — `go-bricks-migrate` does not expose it yet), which replaces only the username and password on a copy of each tenant's document. Without it, Flyway connects with the secret's `username` and `password` as stored, so a CLI-driven fleet must carry the migrator's own username and password in every tenant secret. See [wiki/multi_tenant_migration.md#migrator-identity](wiki/multi_tenant_migration.md#migrator-identity).
+
 Canonical payload (preferred) — matches `config.DatabaseConfig` fields:
 
 ```json
@@ -5176,6 +5178,7 @@ func RunReleaseMigrations(ctx context.Context) error {
 
     res, err := migration.MigrateAll(ctx, fm, lister, provider, migration.ActionMigrate, migration.MigrateAllOptions{
         Logger: myLogger,
+        MigratorIdentity: &migration.MigratorIdentity{Username: migratorUser, Password: migratorPassword},
         Hook: func(r migration.TenantResult) {
             myLogger.Info().Str("tenant", r.TenantID).Dur("dur", r.Duration).Msg("tenant migrated")
         },

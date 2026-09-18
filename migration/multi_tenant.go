@@ -1,12 +1,14 @@
 package migration
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -105,10 +107,27 @@ type MigrateAllOptions struct {
 	// tenants drain) and MigrateAll returns ErrQuiesceBlocked with the partial
 	// result. Nil disables the check (fully opt-in). Check errors fail open.
 	Quiesce QuiesceGate
+
+	// MigratorIdentity, when set, replaces the username and password on a copy of
+	// every tenant's resolved database config before Flyway runs; host, port,
+	// database, schema targeting and TLS stay the tenant's. Nil keeps the
+	// provider's credentials.
+	MigratorIdentity *MigratorIdentity
+}
+
+// MigratorIdentity is the shared role Flyway connects as across the fleet.
+type MigratorIdentity struct {
+	Username string
+	Password string
 }
 
 // ErrNoLister is returned when MigrateAll is called without a TenantLister.
 var ErrNoLister = errors.New("migration: TenantLister is nil")
+
+// ErrInvalidMigratorIdentity is returned when MigrateAllOptions.MigratorIdentity is
+// set with an empty username or password, a password too short to redact from
+// Flyway output, or a CR/LF/NUL in either.
+var ErrInvalidMigratorIdentity = errors.New("migration: invalid migrator identity")
 
 // ErrNoConfigProvider is returned when MigrateAll is called without a DBConfigProvider.
 var ErrNoConfigProvider = errors.New("migration: database.DBConfigProvider is nil")
@@ -137,6 +156,9 @@ func MigrateAll(
 	if configs == nil {
 		return nil, ErrNoConfigProvider
 	}
+	if err := validateMigratorIdentity(opts.MigratorIdentity); err != nil {
+		return nil, err
+	}
 
 	tenantIDs, err := lister.ListTenants(ctx)
 	if err != nil {
@@ -162,6 +184,22 @@ func MigrateAll(
 	return runParallel(ctx, migrator, configs, action, tenantIDs, opts)
 }
 
+func validateMigratorIdentity(identity *MigratorIdentity) error {
+	switch {
+	case identity == nil:
+		return nil
+	case identity.Username == "":
+		return fmt.Errorf("%w: username is empty", ErrInvalidMigratorIdentity)
+	case identity.Password == "":
+		return fmt.Errorf("%w: password is empty", ErrInvalidMigratorIdentity)
+	}
+	creds := &config.DatabaseConfig{Username: identity.Username, Password: identity.Password}
+	if err := cmp.Or(validateEnvFields(creds), ensurePasswordRedactable(creds)); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidMigratorIdentity, err)
+	}
+	return nil
+}
+
 func runSequential(
 	ctx context.Context,
 	migrator *FlywayMigrator,
@@ -178,7 +216,7 @@ func runSequential(
 		if quiesceBlocks(ctx, opts.Quiesce, opts.Logger) {
 			return out, ErrQuiesceBlocked
 		}
-		res := runOne(ctx, migrator, configs, action, id, opts.BaseConfig)
+		res := runOne(ctx, migrator, configs, action, id, &opts)
 		out.Results = append(out.Results, res)
 
 		if opts.Hook != nil {
@@ -288,7 +326,7 @@ type parallelState struct {
 }
 
 func (s *parallelState) runWorker(ctx context.Context, idx int, tenantID string) {
-	res := runOne(ctx, s.migrator, s.configs, s.action, tenantID, s.opts.BaseConfig)
+	res := runOne(ctx, s.migrator, s.configs, s.action, tenantID, &s.opts)
 	s.out.Results[idx] = res
 
 	if s.opts.Hook != nil {
@@ -317,7 +355,7 @@ func runOne(
 	configs database.DBConfigProvider,
 	action Action,
 	tenantID string,
-	baseCfg *Config,
+	opts *MigrateAllOptions,
 ) TenantResult {
 	start := time.Now()
 	res := TenantResult{TenantID: tenantID}
@@ -334,9 +372,15 @@ func runOne(
 		return res
 	}
 	res.Vendor = dbCfg.Type
+	if identity := opts.MigratorIdentity; identity != nil {
+		overlaid := *dbCfg
+		overlaid.Username = identity.Username
+		overlaid.Password = identity.Password
+		dbCfg = &overlaid
+	}
 
 	defaults := migrator.DefaultMigrationConfigForVendor(dbCfg.Type)
-	cfg := mergeConfigs(defaults, baseCfg)
+	cfg := mergeConfigs(defaults, opts.BaseConfig)
 
 	switch action {
 	case ActionMigrate:
