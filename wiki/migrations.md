@@ -10068,6 +10068,48 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `migration/multi_tenant.go` (`MigrateAllResult`, `Verdict`, `dispatchBlocked`) ·
   [multi_tenant_migration.md](multi_tenant_migration.md#run-verdicts)
 
+### [C66.6] every cache key travels under a `<prefix>:` namespace, defaulting to `app.name` · breaking · when: always
+
+- detect: `git grep -n 'keyprefix' -- 'config*.yaml' 'config*.yml'` finds the deployments that
+  already pin a namespace; every cache-enabled deployment WITHOUT that key is in the population
+  and takes `app.name`. Then look for anything that reads or writes the same Redis keyspace from
+  outside this service's `cache.Cache`: a sibling service pointed at the same endpoint, a
+  dashboard, a `redis-cli`/Lua maintenance script, an ElastiCache RBAC access string with a key
+  pattern (`~app::*`), and any monitoring that greps key names. A custom
+  `Options.CacheConnector` is in the population too — the namespace decorator sits above it.
+- scope: `config.RedisConfig` gains `KeyPrefix *string` (`cache.redis.keyprefix`, env
+  `CACHE_REDIS_KEYPREFIX`, per-tenant mirror `multitenant.tenants.<id>.cache.redis.keyprefix`).
+  Every key a resolved cache writes becomes `<prefix>:<key>`, and a tenant cache's becomes
+  `<prefix>:<tenantID>:<key>`. The key is a tri-state: absent takes `app.name`, an explicit value
+  is honored as written, and an explicit `""` opts out — at the root entirely, and under a tenant
+  down to `<tenantID>` alone, because cross-tenant isolation is not optional. It has no koanf
+  default, so absence stays distinguishable. The prefix is applied by `cache.WithKeyPrefix`, a
+  decorator installed once per pooled instance above whichever connector is in play; it forwards
+  `cache.LoadTimeoutProvider` and passes every inner error through, so `cache.loadtimeout` and
+  `errors.Is(err, cache.ErrNotFound)` are unchanged. A prefix carrying whitespace, `*?[]`, `{}`
+  or a trailing `:` is refused at startup, and where the default applies `app.name` must itself
+  pass that grammar — an unusable name fails startup naming `app.name` and offering
+  `cache.redis.keyprefix`. Unchanged: the six `cache.Cache` methods, the CBOR encoding, TTLs, the
+  manager lifecycle, and `cache/redis.Config`, which never receives the prefix.
+- gate: always, for any deployment with a cache enabled. Nothing here is opt-in: the keys move on
+  the upgrade whether or not you set the new key. no-match = no cache configured.
+- apply: usually nothing. The old keys are simply no longer read, so the service reads through to
+  its origin once and the orphans expire by their own TTL — budget one cold-cache cycle, and
+  expect the keyspace to hold both copies until they do. Act in three cases: (1) another service
+  or tool shares this keyspace — give both sides the same explicit `cache.redis.keyprefix`, or
+  teach the external reader the `<app.name>:` prefix; (2) two services already share one
+  `app.name` on one endpoint — they still collide, because the default separates by name, so set
+  distinct explicit prefixes; (3) the key layout must not move at all — set `cache.redis.keyprefix:
+  ""` at the root, which restores the previous layout exactly. On ElastiCache, pair the prefix
+  with the RBAC access string: a user scoped `~orders:* +@all` requires `keyprefix: orders`, and a
+  mismatch fails every command with `NOPERM`.
+- verify: `go build ./... && go test ./...`  # then, against a real endpoint, run one cache write
+  and confirm the wire key: `redis-cli --scan --pattern '<app.name>:*' | head`.
+- ref: gaborage/go-bricks#1727 · [ADR-117](adr_117_cache_key_namespace_and_cluster_mode.md) ·
+  supersedes the per-tenant-database isolation of [ADR-011](adr_011_redis_cache.md) ·
+  `cache/keyprefix.go` (`WithKeyPrefix`), `internal/cachekey`, `app/factory_resolver.go`
+  (`CacheConnector`) · [cache.md](cache.md#amazon-elasticache)
+
 ---
 
 *The sections below are reference material: the two config-key rename lookup tables (linked from atoms C401.1 and C41.7), followed by pre-v0.39 changes retained for consumers upgrading from older releases.*

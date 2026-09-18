@@ -12,6 +12,7 @@ import (
 
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/cache/redis"
+	cachetest "github.com/gaborage/go-bricks/cache/testing"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/clienttls"
 	"github.com/gaborage/go-bricks/logger"
@@ -54,15 +55,15 @@ func TestFactoryResolverCacheConnector(t *testing.T) {
 		assert.True(t, config.IsNotConfigured(err), notConfiguredErrMsg)
 	})
 
-	t.Run("returns custom connector from options", func(t *testing.T) {
+	t.Run("returns custom connector from options behind the namespace view", func(t *testing.T) {
 		customConnectorCalled := false
-		expectedCache := &mockCacheInstance{}
+		customCache := &mockCacheInstance{}
 
 		opts := &Options{
 			CacheConnector: func(_ context.Context, key string) (cache.Cache, error) {
 				customConnectorCalled = true
 				assert.Equal(t, testCacheKey, key)
-				return expectedCache, nil
+				return customCache, nil
 			},
 		}
 
@@ -74,8 +75,14 @@ func TestFactoryResolverCacheConnector(t *testing.T) {
 		// Custom connector should be called
 		result, err := connector(context.Background(), testCacheKey)
 		require.NoError(t, err)
-		assert.Equal(t, expectedCache, result)
 		assert.True(t, customConnectorCalled, "custom connector should have been called")
+
+		// A custom connector's cache is namespaced like any other (ADR-117). This
+		// resolver carries no app name, so the resource key alone is the namespace and
+		// what comes back is the view over the custom cache, which still delegates to it.
+		assert.NotSame(t, customCache, result)
+		_, err = result.CompareAndDelete(context.Background(), "k", nil)
+		require.ErrorIs(t, err, cache.ErrNilExpectedValue)
 	})
 
 	t.Run("custom connector can return errors", func(t *testing.T) {
@@ -725,6 +732,8 @@ func TestRedisClientConfigCarriesTLSBlock(t *testing.T) {
 // is a test failure rather than a setting that silently never reaches the dial.
 var redisConfigParityExclusions = map[string]string{
 	"TLS": "moved as a whole block by struct conversion, asserted below",
+	"KeyPrefix": "deliberately never reaches the transport: the namespace is applied by the " +
+		"cache.WithKeyPrefix decorator above the client, so the Redis config has no field for it (ADR-117)",
 }
 
 // fillDistinctFields sets every settable field behind v to a distinct non-zero
@@ -750,6 +759,15 @@ func fillDistinctFields(t *testing.T, v reflect.Value, seed *int) {
 			target.SetBool(true)
 		case reflect.Struct:
 			fillDistinctFields(t, target, seed)
+		case reflect.Pointer:
+			// Tri-state settings (*string) are filled non-nil rather than skipped: a
+			// skipped field would stay nil on both sides and compare equal to a copy
+			// that dropped it, which is the very failure this helper exists to catch.
+			if target.Type().Elem().Kind() != reflect.String {
+				t.Fatalf("fillDistinctFields cannot fill *%s (field %s)", target.Type().Elem().Kind(), field.Name)
+			}
+			filled := strings.ToLower(field.Name) + "-value"
+			target.Set(reflect.ValueOf(&filled))
 		default:
 			t.Fatalf("fillDistinctFields cannot fill %s (field %s)", target.Kind(), field.Name)
 		}
@@ -788,4 +806,204 @@ func TestRedisConfigFieldParity(t *testing.T) {
 	}
 
 	assert.Equal(t, redis.TLSConfig(cacheCfg.Redis.TLS), got.TLS, "the excluded TLS block must still survive the struct conversion")
+}
+
+const (
+	keyPrefixAppName = "orders"
+	keyPrefixTenant  = "acme"
+	keyPrefixLogical = "user:1"
+)
+
+// stubCacheConfigStore serves a canned cache section per resource key and reports
+// every other key as not configured, the shape config.TenantStore uses for a cache
+// that was never declared.
+type stubCacheConfigStore struct {
+	byKey map[string]*config.CacheConfig
+}
+
+func (s *stubCacheConfigStore) DBConfig(context.Context, string) (*config.DatabaseConfig, error) {
+	return nil, config.NewNotConfiguredError("database", "DATABASE_HOST", "database.host")
+}
+
+func (s *stubCacheConfigStore) BrokerURL(context.Context, string) (string, error) {
+	return "", config.NewNotConfiguredError("messaging", "MESSAGING_BROKER_URL", "messaging.broker.url")
+}
+
+func (s *stubCacheConfigStore) CacheConfig(_ context.Context, key string) (*config.CacheConfig, error) {
+	if cfg, ok := s.byKey[key]; ok {
+		return cfg, nil
+	}
+	return nil, config.NewNotConfiguredError("cache", "CACHE_REDIS_HOST", "cache.redis.host")
+}
+
+func (s *stubCacheConfigStore) IsDynamic() bool { return false }
+
+// cacheSectionWithKeyPrefix builds an enabled Redis cache section carrying keyPrefix
+// in its tri-state form: nil is an absent key, a pointer is an explicit value.
+func cacheSectionWithKeyPrefix(keyPrefix *string) *config.CacheConfig {
+	return &config.CacheConfig{
+		Enabled: true,
+		Type:    config.CacheTypeRedis,
+		Redis:   config.RedisConfig{Host: "localhost", Port: 6379, PoolSize: 10, KeyPrefix: keyPrefix},
+	}
+}
+
+// connectorOverMock returns a resolver whose cache connector hands out mock, plus the
+// store that answers the prefix lookup.
+func connectorOverMock(t *testing.T, mock cache.Cache, store TenantStore) cache.Connector {
+	t.Helper()
+	resolver := newFactoryResolverForConfig(&Options{
+		CacheConnector: func(context.Context, string) (cache.Cache, error) { return mock, nil },
+	}, &config.Config{App: config.AppConfig{Name: keyPrefixAppName}})
+	return resolver.CacheConnector(store, logger.New("error", true))
+}
+
+// TestFactoryResolverCacheConnectorNamespacesKeys pins the whole prefix resolution at
+// its one wiring site: the app name is the default namespace, a tenant id folds in
+// after it, an explicit prefix displaces the app name, and an explicit empty prefix
+// opts out — at the root entirely, and for a tenant down to the tenant id alone,
+// because cross-tenant isolation on a shared endpoint is not optional.
+func TestFactoryResolverCacheConnectorNamespacesKeys(t *testing.T) {
+	optOut := ""
+	override := "legacy"
+
+	tests := []struct {
+		name        string
+		key         string
+		keyPrefix   *string
+		wantWireKey string
+	}{
+		{name: "root_takes_the_app_name", key: "", wantWireKey: "orders:user:1"},
+		{name: "tenant_folds_the_tenant_id", key: keyPrefixTenant, wantWireKey: "orders:acme:user:1"},
+		{name: "root_opt_out_is_unprefixed", key: "", keyPrefix: &optOut, wantWireKey: "user:1"},
+		{name: "tenant_opt_out_keeps_the_tenant_id", key: keyPrefixTenant, keyPrefix: &optOut, wantWireKey: "acme:user:1"},
+		{name: "root_override_displaces_the_app_name", key: "", keyPrefix: &override, wantWireKey: "legacy:user:1"},
+		{name: "tenant_override_still_folds_the_tenant_id", key: keyPrefixTenant, keyPrefix: &override, wantWireKey: "legacy:acme:user:1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := cachetest.NewMockCache()
+			store := &stubCacheConfigStore{byKey: map[string]*config.CacheConfig{
+				tt.key: cacheSectionWithKeyPrefix(tt.keyPrefix),
+			}}
+
+			connector := connectorOverMock(t, mock, store)
+			c, err := connector(context.Background(), tt.key)
+			require.NoError(t, err)
+
+			require.NoError(t, c.Set(context.Background(), keyPrefixLogical, []byte("v"), time.Minute))
+
+			assert.Equal(t, []string{tt.wantWireKey}, mock.AllKeys())
+		})
+	}
+}
+
+// TestFactoryResolverCacheConnectorFailsClosedOnAnUnusablePrefix proves the wiring
+// never hands back an instance it could not namespace. A prefix that reached the
+// connector without passing config.Validate — a dynamic tenant source is not obliged
+// to run it — closes the instance the inner connector just dialed rather than leaking
+// an unprefixed cache into the pool.
+func TestFactoryResolverCacheConnectorFailsClosedOnAnUnusablePrefix(t *testing.T) {
+	unusable := "bad name"
+	mock := cachetest.NewMockCache()
+	store := &stubCacheConfigStore{byKey: map[string]*config.CacheConfig{
+		keyPrefixTenant: cacheSectionWithKeyPrefix(&unusable),
+	}}
+
+	connector := connectorOverMock(t, mock, store)
+	c, err := connector(context.Background(), keyPrefixTenant)
+
+	require.ErrorIs(t, err, cache.ErrInvalidKeyPrefix)
+	assert.Nil(t, c)
+	cachetest.AssertCacheClosed(t, mock)
+}
+
+// TestFactoryResolverCacheConnectorFallsBackToTheAppNameWithoutASection proves an
+// unreadable cache section still namespaces. A section that cannot be read carries no
+// override to honor, and the app-name default is what a custom CacheConnector — whose
+// deployment may declare no cache.* block at all — gets. The unsafe outcome would be
+// an unprefixed instance, which is exactly what the fallback prevents.
+func TestFactoryResolverCacheConnectorFallsBackToTheAppNameWithoutASection(t *testing.T) {
+	t.Run("store_reports_not_configured", func(t *testing.T) {
+		mock := cachetest.NewMockCache()
+
+		connector := connectorOverMock(t, mock, &stubCacheConfigStore{})
+		c, err := connector(context.Background(), "")
+		require.NoError(t, err)
+
+		require.NoError(t, c.Set(context.Background(), keyPrefixLogical, []byte("v"), time.Minute))
+		assert.Equal(t, []string{"orders:user:1"}, mock.AllKeys())
+	})
+
+	t.Run("no_store_at_all", func(t *testing.T) {
+		mock := cachetest.NewMockCache()
+
+		connector := connectorOverMock(t, mock, nil)
+		c, err := connector(context.Background(), keyPrefixTenant)
+		require.NoError(t, err)
+
+		require.NoError(t, c.Set(context.Background(), keyPrefixLogical, []byte("v"), time.Minute))
+		assert.Equal(t, []string{"orders:acme:user:1"}, mock.AllKeys())
+	})
+}
+
+// TestFactoryResolverCacheConnectorReportsANilCacheInsteadOfPanicking pins the one
+// path where the wrapper has nothing to close: a connector that broke its contract and
+// returned a nil cache with a nil error. The framework reports it rather than closing
+// the nil it was handed.
+func TestFactoryResolverCacheConnectorReportsANilCacheInsteadOfPanicking(t *testing.T) {
+	resolver := newFactoryResolverForConfig(&Options{
+		CacheConnector: func(context.Context, string) (cache.Cache, error) { return nil, nil },
+	}, &config.Config{App: config.AppConfig{Name: keyPrefixAppName}})
+
+	connector := resolver.CacheConnector(&stubCacheConfigStore{}, logger.New("error", true))
+	c, err := connector(context.Background(), "")
+
+	require.ErrorIs(t, err, cache.ErrNilCache)
+	assert.Nil(t, c)
+}
+
+// timedMockCache is a cache that carries a configured load-through bound, the shape
+// the framework's Redis client has.
+type timedMockCache struct {
+	*cachetest.MockCache
+	loadTimeout time.Duration
+}
+
+func (c *timedMockCache) LoadTimeout() time.Duration { return c.loadTimeout }
+
+// TestCacheManagerNamespacesOncePerInstance proves the decorator is installed by the
+// connector and therefore exactly once per pooled instance: a second lease returns the
+// same pointer, which is what keeps LoadThrough's per-instance singleflight scoping
+// intact, and the pooled view still reports the deployment's cache.loadtimeout instead
+// of falling back to the hand-written-cache bound.
+func TestCacheManagerNamespacesOncePerInstance(t *testing.T) {
+	inner := &timedMockCache{MockCache: cachetest.NewMockCache(), loadTimeout: 250 * time.Millisecond}
+	store := &stubCacheConfigStore{byKey: map[string]*config.CacheConfig{
+		"": cacheSectionWithKeyPrefix(nil),
+	}}
+	resolver := newFactoryResolverForConfig(&Options{
+		CacheConnector: func(context.Context, string) (cache.Cache, error) { return inner, nil },
+	}, &config.Config{App: config.AppConfig{Name: keyPrefixAppName}})
+	factory := NewResourceManagerFactory(resolver, NewManagerConfigBuilder(false, 50), logger.New("error", false))
+
+	manager, err := factory.CreateCacheManager(store)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = manager.Close() })
+
+	first, releaseFirst, err := manager.Get(context.Background(), "")
+	require.NoError(t, err)
+	defer releaseFirst()
+	second, releaseSecond, err := manager.Get(context.Background(), "")
+	require.NoError(t, err)
+	defer releaseSecond()
+
+	assert.Same(t, first, second, "the pool must hand out one namespaced instance per key")
+	provider, ok := first.(cache.LoadTimeoutProvider)
+	require.True(t, ok, "the pooled cache must still carry its load-through bound")
+	assert.Equal(t, 250*time.Millisecond, provider.LoadTimeout())
+
+	require.NoError(t, first.Set(context.Background(), keyPrefixLogical, []byte("v"), time.Minute))
+	assert.Equal(t, []string{"orders:user:1"}, inner.AllKeys())
 }

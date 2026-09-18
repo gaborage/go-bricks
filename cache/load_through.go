@@ -31,9 +31,9 @@ var (
 	// non-positive duration.
 	ErrInvalidCacheTimeout = errors.New("cache: load-through cache timeout must be positive")
 
-	// ErrNilCache is returned by LoadThrough when the Cache is nil, including a typed nil
-	// behind the interface.
-	ErrNilCache = errors.New("cache: load-through requires a non-nil cache")
+	// ErrNilCache is returned when a Cache is nil, including a typed nil behind the
+	// interface: by LoadThrough, and by WithKeyPrefix when there is nothing to wrap.
+	ErrNilCache = errors.New("cache: a non-nil cache is required")
 )
 
 // Loader produces the value for a key from the origin when the cache cannot serve it. It

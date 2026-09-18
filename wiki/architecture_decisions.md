@@ -1825,7 +1825,7 @@ additions only. See [migrations.md](migrations.md) `[C66.4]`.
 
 ### [ADR-117: Cache Key Namespace and Cluster Mode](adr_117_cache_key_namespace_and_cluster_mode.md)
 
-**Date:** 2026-09-18 | **Status:** Proposed | **Breaking:** not in this change — `cache.redis.username` is additive; the `cache.redis.keyprefix` default lands breaking with the third change under #1727
+**Date:** 2026-09-18 | **Status:** Accepted | **Breaking:** `cache.redis.keyprefix` defaults to `app.name`, so every deployment's cache keys move under a namespace once (`cache.redis.username` and `cache.redis.mode` are additive)
 
 The Redis cache dialed one address with one password, selected a database number, and wrote the
 key it was handed. A managed endpoint grants none of that: ElastiCache Serverless speaks cluster
@@ -1840,8 +1840,9 @@ startup because the cluster client drops `DB` rather than refusing it. `cache.re
 namespaces every key as `<prefix>:<key>`, defaults to `app.name`, folds a tenant in as
 `<prefix>:<tenantID>`, and is applied as a `cache.Cache` decorator above whichever connector is in
 play — so a consumer-supplied `Options.CacheConnector` is namespaced too, and the prefix never
-reaches the transport. Prefixing inside `cache/redis`, and leaving the whole problem to a custom
-consumer connector, were both rejected. Read-from-replica knobs stay unexposed: eventual
+reaches the transport. The key is a tri-state `*string`: absent takes `app.name`, an explicit
+empty string opts out at the root and still leaves the tenant id under a tenant. Prefixing inside
+`cache/redis`, and leaving the whole problem to a custom consumer connector, were both rejected. Read-from-replica knobs stay unexposed: eventual
 consistency breaks `GetOrSet`'s leader/follower semantics.
 
 **Key Benefits:** a serverless endpoint is four keys of YAML instead of a forked cache layer, and

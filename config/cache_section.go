@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/gaborage/go-bricks/internal/cachekey"
 	"github.com/gaborage/go-bricks/internal/clienttls"
 )
 
@@ -94,24 +95,12 @@ func validateRedisCache(cfg *RedisConfig) error {
 		return err
 	}
 
-	// A whitespace-only ACL user is a typo, not an identity: it travels to Redis as an
-	// AUTH argument no ACL rule can match. Checked before the coupling rule below so a
-	// name that is both blank and unaccompanied is reported as the typo it is.
-	if cfg.Username != "" && strings.TrimSpace(cfg.Username) == "" {
-		return NewValidationError("cache.redis.username", "must not be whitespace-only")
+	if err := validateRedisKeyPrefix(cfg); err != nil {
+		return err
 	}
 
-	// A name with no password is refused rather than dialed. go-redis builds the
-	// HELLO handshake's AUTH clause inside `if password != ""`, and gates the legacy
-	// AUTH fallback the same way, so an empty password sends no AUTH at all: the
-	// connection would run as whatever identity the endpoint gives an unauthenticated
-	// client — on a stock Redis the `default` user, typically `nopass ~* +@all`. Failing
-	// closed here turns that silent privilege swap into a startup error. The reverse
-	// pair is fine: a password alone is the legacy form that selects the default user.
-	if cfg.Username != "" && cfg.Password == "" {
-		return NewValidationError("cache.redis.username",
-			"requires cache.redis.password: the client sends no AUTH without one, "+
-				"so the connection would silently run as the default user")
+	if err := validateRedisUsername(cfg); err != nil {
+		return err
 	}
 
 	if cfg.Database < 0 || cfg.Database > 15 {
@@ -163,6 +152,90 @@ func validateRedisMode(cfg *RedisConfig) error {
 	}
 
 	return nil
+}
+
+// validateRedisUsername checks the ACL identity and the one key it requires.
+//
+// A whitespace-only ACL user is a typo, not an identity: it travels to Redis as an
+// AUTH argument no ACL rule can match. Checked before the coupling rule so a name
+// that is both blank and unaccompanied is reported as the typo it is.
+//
+// A name with no password is refused rather than dialed. go-redis builds the HELLO
+// handshake's AUTH clause inside `if password != ""`, and gates the legacy AUTH
+// fallback the same way, so an empty password sends no AUTH at all: the connection
+// would run as whatever identity the endpoint gives an unauthenticated client — on a
+// stock Redis the `default` user, typically `nopass ~* +@all`. Failing closed here
+// turns that silent privilege swap into a startup error. The reverse pair is fine: a
+// password alone is the legacy form that selects the default user.
+func validateRedisUsername(cfg *RedisConfig) error {
+	if cfg.Username == "" {
+		return nil
+	}
+	if strings.TrimSpace(cfg.Username) == "" {
+		return NewValidationError("cache.redis.username", "must not be whitespace-only")
+	}
+	if cfg.Password == "" {
+		return NewValidationError("cache.redis.username",
+			"requires cache.redis.password: the client sends no AUTH without one, "+
+				"so the connection would silently run as the default user")
+	}
+	return nil
+}
+
+// validateRedisKeyPrefix checks an explicitly delivered key namespace against the
+// shared grammar. An absent key (nil) carries no value to check: it takes app.name,
+// whose own fitness is checkCacheKeyNamespace's rule. An explicit empty string is the
+// opt-out and passes the grammar unchanged.
+func validateRedisKeyPrefix(cfg *RedisConfig) error {
+	if cfg.KeyPrefix == nil {
+		return nil
+	}
+	if err := cachekey.Validate(*cfg.KeyPrefix); err != nil {
+		return NewValidationError(fieldCacheRedisKeyPrefix, err.Error())
+	}
+	return nil
+}
+
+// checkCacheKeyNamespace enforces the one rule the app.name default creates: where no
+// cache.redis.keyprefix was delivered, app.name IS the cache key namespace, so it must
+// be usable as one. Without this check a name like "my service" would boot green and
+// fail at the first cache access instead.
+//
+// The rule binds wherever the default applies, which is not only the root section: a
+// multi-tenant deployment may enable caches solely under multitenant.tenants.<id>.cache,
+// and those prefixes fold the same app.name in. Every failing section produces the same
+// error — the fault is the name — so the tenant that tripped it is not named.
+func checkCacheKeyNamespace(cfg *Config) error {
+	if !cacheKeyPrefixDefaultApplies(cfg) {
+		return nil
+	}
+	if err := cachekey.Validate(cfg.App.Name); err != nil {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    fieldAppName,
+			Message:  "is the default cache key namespace and " + err.Error(),
+			Action:   "rename the application, or set cache.redis.keyprefix to a usable namespace",
+		}
+	}
+	return nil
+}
+
+// cacheKeyPrefixDefaultApplies reports whether any enabled cache section would take its
+// namespace from app.name.
+func cacheKeyPrefixDefaultApplies(cfg *Config) bool {
+	if cfg.Cache.Enabled && cfg.Cache.Redis.KeyPrefix == nil {
+		return true
+	}
+	if !cfg.Multitenant.Enabled {
+		return false
+	}
+	for tenantID := range cfg.Multitenant.Tenants {
+		tenant := cfg.Multitenant.Tenants[tenantID]
+		if tenant.Cache.Enabled && tenant.Cache.Redis.KeyPrefix == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // fieldCacheRedisTLSPrefix namespaces a clienttls.Violation's relative key

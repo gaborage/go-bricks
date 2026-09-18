@@ -898,3 +898,36 @@ func TestNormalizeMultitenantTenantsFillsCacheRedisMode(t *testing.T) {
 	assert.Equal(t, "cluster", tenants["globex"].Cache.Redis.Mode,
 		"an explicit tenant mode must survive the fill")
 }
+
+// TestValidateMultitenantTenantsCacheKeyPrefixIsTenantAddressed proves the key
+// namespace grammar reaches the tenant mirror with the tenant-qualified spelling,
+// so a consumer matching on ConfigError.Field learns whose cache carries the fault.
+func TestValidateMultitenantTenantsCacheKeyPrefixIsTenantAddressed(t *testing.T) {
+	badPrefix := "bad name"
+
+	cfgErr := tenantCacheValidationError(t,
+		&RedisConfig{Host: "acme.redis", KeyPrefix: &badPrefix},
+		"a tenant key prefix that is not a usable namespace must fail at startup")
+
+	assert.Equal(t, "multitenant.tenants.acme.cache.redis.keyprefix", cfgErr.Field)
+}
+
+// TestValidateMultitenantTenantCacheKeyPrefixDefaultNeedsAValidAppName proves the
+// app.name cross-check binds where the default actually applies, not only at the
+// root: a deployment whose caches live only under multitenant.tenants.<id>.cache
+// has nothing enabled at the root, and its tenant prefixes still fold app.name in.
+func TestValidateMultitenantTenantCacheKeyPrefixDefaultNeedsAValidAppName(t *testing.T) {
+	cfg := tenantCacheConfig(&CacheConfig{
+		Enabled: true,
+		Redis:   RedisConfig{Host: "acme.redis"},
+	})
+	cfg.App.Name = "bad name"
+	require.False(t, cfg.Cache.Enabled, "the root cache must stay off: the tenant cache alone must trigger the rule")
+
+	err := Validate(cfg)
+
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "app.name", cfgErr.Field)
+	assert.Contains(t, cfgErr.Action, "cache.redis.keyprefix")
+}
