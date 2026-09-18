@@ -13,13 +13,23 @@ import (
 	"github.com/gaborage/go-bricks/cache"
 )
 
-// clusterKeys hash to different slots, so a client that reaches all of them has
-// followed the slot map rather than pinned one connection.
-var clusterKeys = []string{"cluster:alpha", "cluster:beta", "cluster:gamma", "cluster:delta"}
+// clusterKeys hash to four DIFFERENT slots, which
+// requireClusterKeysSpanDistinctSlots holds them to.
+//
+// The spread is not what today's pass demonstrates. One node owns all 16384
+// slots here, so a client that pinned a single connection reaches all four keys
+// exactly as a client following the slot map does: the two behaviours are the
+// same behaviour on this fixture. The spread is what BECOMES load-bearing the
+// moment the same assertions run against a sharded endpoint, where reaching all
+// four means four routing decisions went right — and keeping it falsifiable now
+// is what makes that run mean something later.
+var clusterKeys = []string{"cluster:alpha", "cluster:epsilon", "cluster:gamma", "cluster:delta"}
 
 // setupClusterRedis returns a cluster-mode client on the package-wide
 // cluster-enabled container (see integration_main_test.go), with the keyspace
-// emptied first. There is no logical-database split to isolate with: the cluster
+// emptied first — FlushDB is keyless, so go-redis routes it to one node, and
+// with one node that is the whole keyspace. There is no logical-database split
+// to isolate with either: the cluster
 // protocol has only database 0, which is the whole reason Config.Validate
 // refuses a non-zero database under this mode.
 func setupClusterRedis(t *testing.T) (*Client, context.Context) {
@@ -42,12 +52,37 @@ func setupClusterRedis(t *testing.T) (*Client, context.Context) {
 	return client, ctx
 }
 
-// TestRealRedisClusterModeRoundTrips drives every cache.Cache operation across
-// keys in different slots. It is the proof that the mode switch is a transport
-// change only: the Lua scripts, the SET NX GET path and the miss semantics all
-// behave as they do on a single node.
-func TestRealRedisClusterModeRoundTrips(t *testing.T) {
-	client, ctx := setupClusterRedis(t)
+// requireClusterKeysSpanDistinctSlots asks the SERVER which slot each of
+// clusterKeys lands in and requires one distinct answer per key.
+//
+// It exists because nothing else here can fail when they collide: this fixture
+// is one node owning all 16384 slots, so keys sharing a slot round-trip exactly
+// as happily as keys spanning slots and the suite passes either way. The spread
+// is the entire reason the key set exists, which makes it worth four extra
+// round-trips on an already-open pool to keep it falsifiable.
+func requireClusterKeysSpanDistinctSlots(t *testing.T, ctx context.Context, client *Client) {
+	t.Helper()
+
+	slots := make(map[int64]struct{}, len(clusterKeys))
+	for _, key := range clusterKeys {
+		slot, err := client.client.ClusterKeySlot(ctx, key).Result()
+		require.NoError(t, err, "the server owns the key-to-slot mapping, so it is the one asked")
+		slots[slot] = struct{}{}
+	}
+
+	require.Len(t, slots, len(clusterKeys),
+		"these keys must land in distinct slots: the spread is what will make the round trip observable against a sharded endpoint, and nothing on this one-node fixture would notice it collapsing")
+}
+
+// assertClusterRoundTrips drives Set, Get and Delete across keys in different
+// slots, plus the miss a Get after Delete must report. Shared by the plaintext
+// and TLS cluster tests: the operations
+// and their expected answers are identical, and what differs is the transport
+// the caller already built its client on.
+func assertClusterRoundTrips(t *testing.T, ctx context.Context, client *Client) {
+	t.Helper()
+
+	requireClusterKeysSpanDistinctSlots(t, ctx, client)
 
 	for _, key := range clusterKeys {
 		value := []byte("value-for-" + key)
@@ -64,12 +99,13 @@ func TestRealRedisClusterModeRoundTrips(t *testing.T) {
 	}
 }
 
-// TestRealRedisClusterModeGetOrSet pins the SET NX GET path, which needs Redis
-// 7.0+ and is the operation the version floor exists for.
-func TestRealRedisClusterModeGetOrSet(t *testing.T) {
-	client, ctx := setupClusterRedis(t)
+// assertClusterGetOrSet drives the SET NX GET path: the first call stores and
+// reports it, the second finds the value already there and hands back what is
+// stored rather than what was offered. The key is the caller's, so the two
+// fixtures never write the same one.
+func assertClusterGetOrSet(t *testing.T, ctx context.Context, client *Client, key string) {
+	t.Helper()
 
-	const key = "cluster:getorset"
 	first := []byte("first")
 
 	stored, wasSet, err := client.GetOrSet(ctx, key, first, time.Minute)
@@ -83,9 +119,39 @@ func TestRealRedisClusterModeGetOrSet(t *testing.T) {
 	assert.Equal(t, first, stored)
 }
 
-// TestRealRedisClusterModeCompareAndSwap drives the two Lua scripts. A script
-// routes by its single KEYS entry, so this is where a slot-routing mistake would
-// surface as a CROSSSLOT or MOVED error rather than a wrong answer.
+// TestRealRedisClusterModeRoundTrips drives Set, Get and Delete across keys in
+// different slots, plus the miss that follows the Delete — four of the seven
+// things cache.Cache asks for. GetOrSet, the two compare-and-swap operations and
+// Health have their own tests below. Together they are the evidence that the
+// mode switch is a transport change only: the stored values and the miss
+// semantics are what they are on a single node.
+//
+// CompareAndSet and CompareAndDelete are not exercised over TLS. That is
+// deliberate rather than an omission: the issue's acceptance criteria name
+// Set/Get/Delete plus GetOrSet on the encrypted path, and the two Lua scripts
+// are pinned here, on the plaintext cluster fixture.
+func TestRealRedisClusterModeRoundTrips(t *testing.T) {
+	client, ctx := setupClusterRedis(t)
+
+	assertClusterRoundTrips(t, ctx, client)
+}
+
+// TestRealRedisClusterModeGetOrSet pins the SET NX GET path, which needs Redis
+// 7.0+ and is the operation the version floor exists for.
+func TestRealRedisClusterModeGetOrSet(t *testing.T) {
+	client, ctx := setupClusterRedis(t)
+
+	assertClusterGetOrSet(t, ctx, client, "cluster:getorset")
+}
+
+// TestRealRedisClusterModeCompareAndSwap drives the two Lua scripts through the
+// cluster client: that an EVAL reaches a cluster node at all (it routes by its
+// single KEYS entry), and that the scripts' integer replies survive that client
+// as the same booleans a standalone client reports.
+//
+// It is NOT where a slot-routing mistake would surface. CROSSSLOT needs two keys
+// in different slots and every call here passes exactly one, and MOVED needs a
+// second shard, which a one-node fixture has not got.
 func TestRealRedisClusterModeCompareAndSwap(t *testing.T) {
 	client, ctx := setupClusterRedis(t)
 
@@ -116,10 +182,11 @@ func TestRealRedisClusterModeCompareAndSwap(t *testing.T) {
 
 // TestRealRedisClusterModeStatsAndHealth pins what an operator reading Stats()
 // sees — the probe set never calls it, rendering an allowlisted manager map
-// instead. The mode key is what tells that reader how to read the rest:
-// redis_info comes from whichever single node answered INFO, and the pool
-// counters are the aggregate across every node's pool — replicas included, since
-// ClusterClient.PoolStats accumulates over Masters and then over Slaves.
+// instead. The mode key is what tells that reader how to read the rest, and
+// redis_info is what it names: whichever single node answered INFO. The pool_*
+// counters are not read here, and how they aggregate is documented where it
+// holds for the production client rather than for this fixture — cache/redis
+// client.go and wiki/cache.md.
 func TestRealRedisClusterModeStatsAndHealth(t *testing.T) {
 	client, ctx := setupClusterRedis(t)
 

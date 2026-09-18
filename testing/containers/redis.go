@@ -69,15 +69,20 @@ type RedisContainerConfig struct {
 	// StartupTimeout for container initialization (default: 60 seconds)
 	StartupTimeout time.Duration
 	// Cluster starts the node with --cluster-enabled yes and gives it every one
-	// of the 16384 slots, so one server answers for the whole keyspace over the
-	// cluster protocol — the shape Amazon ElastiCache Serverless presents behind
-	// its single endpoint. Mutually exclusive with TLS: both replace the
-	// container command, and the combination is not a fixture anything needs.
+	// of the 16384 slots, so one server answers for the whole keyspace and a
+	// cluster-protocol client has a single endpoint to talk to — the CLIENT-side
+	// shape an Amazon ElastiCache Serverless deployment requires. It is not that
+	// service's topology: serverless shards and redirects (ADR-117), and neither
+	// is reproduced here. Composes with TLS: the two arms contribute separate
+	// flags to one command line, and the bootstrap then speaks TLS to the node
+	// it just started.
 	Cluster bool
 	// TLS, when non-nil, makes the server TLS-only: the plaintext listener is
 	// disabled and TLS is bound to 6379 instead, so Host() and Port() address
 	// the TLS listener exactly as they address the plaintext one — a caller only
-	// has to turn TLS on client-side. Nil (the default) serves plaintext.
+	// has to turn TLS on client-side. Nil (the default) serves plaintext. Under
+	// Cluster the fixture's own bootstrap dials that same listener from inside
+	// the container, verifying it against the same CA.
 	TLS *RedisTLSMaterial
 }
 
@@ -154,39 +159,71 @@ func StartRedisContainerForTestMain(ctx context.Context, cfg *RedisContainerConf
 // verification) prevents a race where the log appears but Redis is not ready to accept
 // connections.
 //
-// With cfg.TLS set, the PEM material is copied in and bound by command flags.
-// WithCmdArgs (not WithCmd) is what the upstream module uses for its own TLS
-// mode: the image's entrypoint prepends `redis-server` to any argument list
-// starting with a dash, so passing bare flags replaces the default command
-// without naming the binary twice. `--port 0` disables the plaintext listener
-// while TLS binds the same 6379, so the listening-port wait still holds.
-// Client certificates are not required (`--tls-auth-clients no`): the fixture
-// exercises server verification, and demanding a client cert would make every
-// negative test fail for the wrong reason.
+// Cluster and TLS each contribute to one accumulated argument list rather than
+// owning the command, so a fixture asking for both gets both. WithCmdArgs (not
+// WithCmd) is what the upstream module uses for its own TLS mode: the image's
+// entrypoint prepends `redis-server` to any argument list starting with a dash,
+// so passing bare flags replaces the default command without naming the binary
+// twice. It APPENDS to the request's command, which is why arms compose at all,
+// why collecting every arm's flags into one call reads the same as several, and
+// why the plain standalone case needs no guard: appending nothing leaves the
+// image's own command exactly as it was.
+//
+// Each arm owns every flag it is responsible for, so `--tls-cluster yes` sits in
+// the cluster arm: it configures the CLUSTER BUS, and without it the bus port
+// derives from the disabled plaintext port (measured: bus 10000 rather than
+// tls-port + 10000). Nothing here exercises that bus — one node owning every
+// slot never dials a peer — so removing the flag was measured NOT to fail a
+// test. It is correct for a real cluster and unproven by this fixture; treat it
+// as load-bearing anyway.
+//
+// `--port 0` disables the plaintext listener while TLS binds the same 6379, so
+// the listening-port wait still holds. Client certificates are not required
+// (`--tls-auth-clients no`): the fixture exercises SERVER verification, and no
+// client under test presents one. Demanding a client cert would redden the
+// POSITIVE tests — the handshakes that are meant to succeed — not the negative
+// ones, which already fail client-side (unknown authority, hostname mismatch)
+// before the server's demand is ever reached.
 func redisOptions(cfg *RedisContainerConfig) []testcontainers.ContainerCustomizer {
 	opts := make([]testcontainers.ContainerCustomizer, 0, 3)
 	opts = append(opts, waitOptionWithin(cfg.StartupTimeout,
 		wait.ForLog("Ready to accept connections"),
 		wait.ForListeningPort(redisPort),
 	))
-	// Cluster and TLS are mutually exclusive (startRedisContainerInternal refuses
-	// the pair); a switch says so as a shape rather than leaving it to the order
-	// two ifs happen to be written in.
-	switch {
-	case cfg.Cluster:
-		return append(opts, testcontainers.WithCmdArgs("--cluster-enabled", "yes"))
-	case cfg.TLS == nil:
-		return opts
+
+	args := make([]string, 0, 16)
+	if cfg.Cluster {
+		args = append(args, "--cluster-enabled", "yes")
+		if cfg.TLS != nil {
+			args = append(args, "--tls-cluster", "yes")
+		}
+	}
+	if cfg.TLS != nil {
+		opts = append(opts, testcontainers.WithFiles(redisTLSFiles(cfg.TLS)...))
+		args = append(args,
+			"--tls-port", strings.TrimSuffix(redisPort, "/tcp"),
+			"--port", "0",
+			"--tls-cert-file", redisTLSCertPath,
+			"--tls-key-file", redisTLSKeyPath,
+			"--tls-ca-cert-file", redisTLSCAPath,
+			"--tls-auth-clients", "no",
+		)
 	}
 
+	return append(opts, testcontainers.WithCmdArgs(args...))
+}
+
+// redisTLSFiles is the PEM material copied into a TLS-only container, each at
+// the path its own command flag names.
+func redisTLSFiles(material *RedisTLSMaterial) []testcontainers.ContainerFile {
 	files := make([]testcontainers.ContainerFile, 0, 3)
 	for _, f := range []struct {
 		path string
 		pem  []byte
 	}{
-		{redisTLSCAPath, cfg.TLS.CA},
-		{redisTLSCertPath, cfg.TLS.Cert},
-		{redisTLSKeyPath, cfg.TLS.Key},
+		{redisTLSCAPath, material.CA},
+		{redisTLSCertPath, material.Cert},
+		{redisTLSKeyPath, material.Key},
 	} {
 		files = append(files, testcontainers.ContainerFile{
 			Reader:            bytes.NewReader(f.pem),
@@ -194,18 +231,7 @@ func redisOptions(cfg *RedisContainerConfig) []testcontainers.ContainerCustomize
 			FileMode:          redisTLSFileMode,
 		})
 	}
-
-	return append(opts,
-		testcontainers.WithFiles(files...),
-		testcontainers.WithCmdArgs(
-			"--tls-port", strings.TrimSuffix(redisPort, "/tcp"),
-			"--port", "0",
-			"--tls-cert-file", redisTLSCertPath,
-			"--tls-key-file", redisTLSKeyPath,
-			"--tls-ca-cert-file", redisTLSCAPath,
-			"--tls-auth-clients", "no",
-		),
-	)
+	return files
 }
 
 // startRedisContainerInternal does the actual testcontainer setup without
@@ -214,10 +240,6 @@ func redisOptions(cfg *RedisContainerConfig) []testcontainers.ContainerCustomize
 func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig) (*RedisContainer, error) {
 	if cfg == nil {
 		cfg = DefaultRedisConfig()
-	}
-
-	if cfg.Cluster && cfg.TLS != nil {
-		return nil, fmt.Errorf("redis container: cluster and TLS both replace the container command, so they cannot be combined")
 	}
 
 	// redis.Run can hand back a started container together with an error (a
@@ -241,7 +263,7 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 	if !cfg.Cluster {
 		return c, nil
 	}
-	if err := bootstrapRedisCluster(ctx, c, cfg.StartupTimeout); err != nil {
+	if err := bootstrapRedisCluster(ctx, c, cfg); err != nil {
 		terminateOnFailure(ctx, redisContainer)
 		return nil, err
 	}
@@ -258,23 +280,83 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 // and port no host-side client can dial. Announcing the mapped host address
 // makes the node advertise where the test actually reaches it, so the client's
 // first redirect lands rather than hangs.
-func bootstrapRedisCluster(ctx context.Context, c *RedisContainer, timeout time.Duration) error {
+//
+// WHICH port key carries it depends on the listener the client arrived on: a
+// node serves a TLS caller the TLS port and a plaintext caller the plaintext
+// one, from two separate settings, so the TLS arm sets cluster-announce-tls-port
+// and nothing else. wiki/testing.md records the ablation that established it.
+func bootstrapRedisCluster(ctx context.Context, c *RedisContainer, cfg *RedisContainerConfig) error {
 	announceIP, err := resolveAnnounceIP(ctx, c.host)
 	if err != nil {
 		return err
 	}
 
+	announcePortKey := "cluster-announce-port"
+	if cfg.TLS != nil {
+		announcePortKey = "cluster-announce-tls-port"
+	}
+
 	for _, args := range [][]string{
-		{redisCLI, "config", "set", "cluster-announce-ip", announceIP},
-		{redisCLI, "config", "set", "cluster-announce-port", strconv.Itoa(c.port)},
-		{redisCLI, "cluster", "addslotsrange", "0", "16383"},
+		{"config", "set", "cluster-announce-ip", announceIP},
+		{"config", "set", announcePortKey, strconv.Itoa(c.port)},
+		{"cluster", "addslotsrange", "0", "16383"},
 	} {
-		if err := execInRedisContainer(ctx, c, args); err != nil {
+		if err := execRedisCLI(ctx, c, cfg, args...); err != nil {
 			return err
 		}
 	}
 
-	return waitForRedisClusterReady(ctx, c, timeout)
+	return waitForRedisClusterReady(ctx, c, cfg)
+}
+
+// redisCLICommand builds one in-container redis-cli invocation.
+//
+// `-e` is the flag that makes an exit status worth reading: by default redis-cli
+// exits 0 on a command the server refused, and with -e an error reply exits
+// non-zero instead. Every invocation carries it, plaintext and TLS alike, so
+// both doors inherit the detection — execRedisCLI from its own exit-code check,
+// and wait.ForExec for free, since its default ExitCodeMatcher already
+// requires 0.
+//
+// A TLS-only node has no plaintext listener left for the bootstrap to arrive on,
+// so the admin path speaks TLS itself, and it verifies: --cacert pins the same
+// CA the client under test trusts, and nothing here weakens that — --insecure
+// and its kin never appear. Hostname verification is not part of what redis-cli
+// does here (measured: it validates the chain, not the name), so the fixture's
+// leaf need not cover the address redis-cli dials.
+func redisCLICommand(cfg *RedisContainerConfig, args ...string) []string {
+	cmd := make([]string, 0, len(args)+5)
+	cmd = append(cmd, redisCLI, "-e")
+	if cfg.TLS != nil {
+		cmd = append(cmd, "--tls", "--cacert", redisTLSCAPath)
+	}
+	return append(cmd, args...)
+}
+
+// execRedisCLI builds one in-container redis-cli command and runs it: the single
+// door for the bootstrap, so that no call site can build a command and forget to
+// run it through the builder — which on a TLS-only node would silently exec a
+// plaintext redis-cli against a listener that no longer exists.
+//
+// A non-zero exit is the whole verdict, because redisCLICommand passes -e. The
+// error names the LOGICAL command rather than the built line: the transport
+// flags are fixture-chosen and add nothing to a diagnosis, while a future
+// capability's flags (credentials, say) would turn an exec failure into a
+// credential leak. Multiplexed strips the Docker stream framing, so the message
+// quotes what redis-cli printed rather than the wire bytes.
+func execRedisCLI(ctx context.Context, c *RedisContainer, cfg *RedisContainerConfig, args ...string) error {
+	code, reader, err := c.container.Exec(ctx, redisCLICommand(cfg, args...), tcexec.Multiplexed())
+	if err != nil {
+		return fmt.Errorf("redis container: exec %v: %w", args, err)
+	}
+	var out bytes.Buffer
+	if _, copyErr := out.ReadFrom(reader); copyErr != nil {
+		return fmt.Errorf("redis container: reading output of %v: %w", args, copyErr)
+	}
+	if code != 0 {
+		return fmt.Errorf("redis container: %v exited %d: %s", args, code, strings.TrimSpace(out.String()))
+	}
+	return nil
 }
 
 // resolveAnnounceIP turns the host side of the mapped address into something
@@ -302,22 +384,16 @@ func resolveAnnounceIP(ctx context.Context, host string) (string, error) {
 	return ips[0].String(), nil
 }
 
-// execInRedisContainer runs one redis-cli command inside the container, treating
-// a non-zero exit as an error. Multiplexed strips the Docker stream framing, so
-// the message quotes what redis-cli printed rather than the wire bytes.
-func execInRedisContainer(ctx context.Context, c *RedisContainer, args []string) error {
-	code, reader, err := c.container.Exec(ctx, args, tcexec.Multiplexed())
-	if err != nil {
-		return fmt.Errorf("redis container: exec %v: %w", args, err)
-	}
-	var out bytes.Buffer
-	if _, copyErr := out.ReadFrom(reader); copyErr != nil {
-		return fmt.Errorf("redis container: reading output of %v: %w", args, copyErr)
-	}
-	if code != 0 {
-		return fmt.Errorf("redis container: %v exited %d: %s", args, code, strings.TrimSpace(out.String()))
-	}
-	return nil
+// clusterReadyTimeout is the deadline the cluster-ready wait runs under: the
+// caller's StartupTimeout, or the package default when the caller left it zero.
+//
+// WithStartupTimeout stores a POINTER, so a zero is honored rather than falling
+// back to the library default: the wait context would expire before the first
+// poll and report a timeout no amount of waiting could have avoided. Only a nil
+// cfg gets DefaultRedisConfig, so a caller that builds RedisContainerConfig by
+// hand reaches here with zero.
+func clusterReadyTimeout(cfg *RedisContainerConfig) time.Duration {
+	return cmp.Or(cfg.StartupTimeout, DefaultRedisConfig().StartupTimeout)
 }
 
 // waitForRedisClusterReady waits until the node reports the whole slot space as
@@ -326,16 +402,11 @@ func execInRedisContainer(ctx context.Context, c *RedisContainer, args []string)
 // strategy, the same post-start readiness seam enableStreamPlugin uses, rather
 // than a hand-rolled deadline loop. The strategy reports only that it timed out,
 // so the last CLUSTER INFO it saw is carried out alongside it.
-func waitForRedisClusterReady(ctx context.Context, c *RedisContainer, timeout time.Duration) error {
-	// WithStartupTimeout stores a POINTER, so a zero is honored rather than
-	// falling back to the library default: the wait context would expire before
-	// the first poll and report a timeout no amount of waiting could have
-	// avoided. Only a nil cfg gets DefaultRedisConfig, so a caller that builds
-	// RedisContainerConfig by hand reaches here with zero.
-	timeout = cmp.Or(timeout, DefaultRedisConfig().StartupTimeout)
+func waitForRedisClusterReady(ctx context.Context, c *RedisContainer, cfg *RedisContainerConfig) error {
+	timeout := clusterReadyTimeout(cfg)
 
 	var last string
-	strategy := wait.ForExec([]string{redisCLI, "cluster", "info"}).
+	strategy := wait.ForExec(redisCLICommand(cfg, "cluster", "info")).
 		WithResponseMatcher(func(body io.Reader) bool {
 			out, err := io.ReadAll(body)
 			if err != nil {

@@ -635,7 +635,10 @@ cache:
   to is verified against. A serverless endpoint presents one certificate for that name, so this is
   invisible there; on a self-managed cluster whose node certificates do not also cover the
   configuration endpoint's hostname, those redirected dials fail closed — set `tls.servername`
-  accordingly.
+  accordingly. What an integration test covers is the pinned-name path, against a
+  cluster-protocol, TLS-only server: the certificate covers only the pinned `tls.servername`,
+  the slot map advertises an address it does not cover, and the redirected dials succeed. The
+  fail-closed half is pinned on the standalone fixture instead.
 - **`Stats()` reports which mode produced it.** The `mode` key reads `standalone` or `cluster`,
   and it says how to read the rest: under cluster, `redis_info` comes from whichever single node
   answered `INFO` and the `pool_*` counters are the aggregate across every node's pool, replicas
