@@ -4,6 +4,7 @@ package containers
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -35,8 +36,10 @@ const (
 	redisTLSKeyPath  = "/tls/server.key"
 )
 
-// Cluster bootstrap knobs. The bound is the caller's StartupTimeout, so the one
-// knob covers the whole fixture rather than only the container start.
+// Cluster bootstrap knobs. StartupTimeout bounds the cluster-ready wait as well
+// as the container start — each leg separately, not the two together, so a
+// cluster fixture's worst case is twice the configured value and must still fit
+// the caller's own budget (the Shared deadline in integration_main_test.go).
 const (
 	redisClusterReadyState    = "cluster_state:ok"
 	redisClusterBootstrapPoll = 250 * time.Millisecond
@@ -316,6 +319,13 @@ func execInRedisContainer(ctx context.Context, c *RedisContainer, args []string)
 // than a hand-rolled deadline loop. The strategy reports only that it timed out,
 // so the last CLUSTER INFO it saw is carried out alongside it.
 func waitForRedisClusterReady(ctx context.Context, c *RedisContainer, timeout time.Duration) error {
+	// WithStartupTimeout stores a POINTER, so a zero is honored rather than
+	// falling back to the library default: the wait context would expire before
+	// the first poll and report a timeout no amount of waiting could have
+	// avoided. Only a nil cfg gets DefaultRedisConfig, so a caller that builds
+	// RedisContainerConfig by hand reaches here with zero.
+	timeout = cmp.Or(timeout, DefaultRedisConfig().StartupTimeout)
+
 	var last string
 	strategy := wait.ForExec([]string{"redis-cli", "cluster", "info"}).
 		WithResponseMatcher(func(body io.Reader) bool {

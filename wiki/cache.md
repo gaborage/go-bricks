@@ -589,13 +589,27 @@ cache:
   both keys. The go-redis cluster client has no database selection, so accepting the pair would
   move the whole keyspace to database 0 silently on the mode flip; the engine may advertise more
   databases, but the client cannot reach them.
-- **The Redis 7.0 floor is checked on one node.** `INFO` is keyless, so the cluster client routes
-  the startup version check to whichever node answers. On a serverless endpoint that is the only
-  node and the check is exhaustive; on a self-managed cluster mid-rolling-upgrade a master still
-  below 7.0 can go unnoticed at startup and fail `GetOrSet` for the keys routed to it.
+- **`poolsize` is per node under cluster, not per deployment.** go-redis applies `PoolSize` to
+  each cluster node's own pool, so a value sized against a single server multiplies by the number
+  of nodes the slot map discovers. Re-size it when flipping the mode against a sharded endpoint,
+  or a provisioned connection limit will be hit at a fraction of the expected load.
+- **Keyless commands reach one node, so two startup and probe checks sample rather than verify.**
+  `INFO` (the Redis 7.0 version floor, which `GetOrSet`'s `SET NX GET` needs) and `PING`
+  (`Health`, and therefore the `/ready` cache probe) carry no key, so the cluster client routes
+  each to whichever node it picks. On a serverless endpoint there is one virtual node and the
+  distinction is empty. On a sharded cluster, a master still below 7.0 mid-rolling-upgrade can go
+  unnoticed at startup and then fail `GetOrSet` for the keys routed to it, and `Health` can report
+  green while an entire shard is unreachable.
+- **TLS verifies every node against the configuration endpoint's name.** `tls.servername` defaults
+  to `cache.redis.host`, and that one name is what every per-node connection the slot map redirects
+  to is verified against. A serverless endpoint presents one certificate for that name, so this is
+  invisible there; on a self-managed cluster whose node certificates do not also cover the
+  configuration endpoint's hostname, those redirected dials fail closed — set `tls.servername`
+  accordingly.
 - **`Stats()` reports which mode produced it.** The `mode` key reads `standalone` or `cluster`,
   and it says how to read the rest: under cluster, `redis_info` comes from whichever single node
-  answered `INFO` and the `pool_*` counters are the aggregate across every master's pool. Under
+  answered `INFO` and the `pool_*` counters are the aggregate across every node's pool, replicas
+  included (`ClusterClient.PoolStats` accumulates over masters and then over replicas). Under
   standalone both describe the one server.
 
 - **`username` requires `password`; `password` alone selects the default user.** A

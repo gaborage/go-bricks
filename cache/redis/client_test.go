@@ -1386,6 +1386,31 @@ func TestBuildRedisOptionsCarriesTheMode(t *testing.T) {
 	}
 }
 
+// TestEffectiveMode pins the resolver itself, both arms. TestStatsReportsTheMode
+// below can only reach the standalone one — its fake is a single node, and a
+// cluster-mode client would not finish dialing it — so without this the cluster
+// arm would be pinned solely by the Docker-gated integration test, and
+// effectiveMode collapsed to a bare `return ModeStandalone` would survive every
+// test that runs without a container.
+func TestEffectiveMode(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+		want string
+	}{
+		{name: "empty_resolves_to_standalone", want: ModeStandalone},
+		{name: "standalone_is_itself", mode: ModeStandalone, want: ModeStandalone},
+		{name: "cluster_is_itself", mode: ModeCluster, want: ModeCluster},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Mode: tt.mode}
+			assert.Equal(t, tt.want, cfg.effectiveMode())
+		})
+	}
+}
+
 // TestStatsReportsTheMode pins the key an operator reading Stats() needs to
 // interpret the rest of the map: under cluster, redis_info describes whichever
 // single node answered and the pool counters are an aggregate, so the numbers mean

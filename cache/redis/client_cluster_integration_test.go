@@ -118,7 +118,8 @@ func TestRealRedisClusterModeCompareAndSwap(t *testing.T) {
 // sees — the probe set never calls it, rendering an allowlisted manager map
 // instead. The mode key is what tells that reader how to read the rest:
 // redis_info comes from whichever single node answered INFO, and the pool
-// counters are the aggregate across every master's pool.
+// counters are the aggregate across every node's pool — replicas included, since
+// ClusterClient.PoolStats accumulates over Masters and then over Slaves.
 func TestRealRedisClusterModeStatsAndHealth(t *testing.T) {
 	client, ctx := setupClusterRedis(t)
 
