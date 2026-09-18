@@ -585,6 +585,9 @@ serve a certificate should run with `tls.enabled` false rather than with verific
 ElastiCache gates access with RBAC, not a shared password: the deployment creates a user with
 an access string and the client authenticates as that user. `cache.redis.username` carries the
 name, `cache.redis.password` the secret, and the two travel as `AUTH <username> <password>`.
+IAM authentication (a SigV4 token as the password) is not supported and will not be added: it is
+AWS-only and would link the AWS SDK into the framework. Use an RBAC user; ElastiCache lets one
+user carry two passwords, so rotation needs no downtime. See `.out-of-scope/elasticache-iam-auth.md`.
 
 ```yaml
 cache:
