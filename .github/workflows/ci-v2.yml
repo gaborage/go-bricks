@@ -268,7 +268,7 @@ jobs:
     needs: changes
     # Gates on `code` so integration coverage is part of every merged report.
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     env:
       # Provides the real Flyway binary the integration test runs against; the
       # migration/testdata/flyway files are captured JSON-output samples used by
