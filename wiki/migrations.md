@@ -10075,7 +10075,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   and takes `app.name`. Then look for anything that reads or writes the same Redis keyspace from
   outside this service's `cache.Cache`: a sibling service pointed at the same endpoint, a
   dashboard, a `redis-cli`/Lua maintenance script, an ElastiCache RBAC access string with a key
-  pattern (`~app::*`), and any monitoring that greps key names. A custom
+  pattern (`~<app.name>:*`), and any monitoring that greps key names. A custom
   `Options.CacheConnector` is in the population too — the namespace decorator sits above it.
 - scope: `config.RedisConfig` gains `KeyPrefix *string` (`cache.redis.keyprefix`, env
   `CACHE_REDIS_KEYPREFIX`, per-tenant mirror `multitenant.tenants.<id>.cache.redis.keyprefix`).

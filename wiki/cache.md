@@ -282,7 +282,9 @@ and the later write-back wins.
 - Plus a **separate Redis database** per tenant where the deployment supports one
   (`cache.redis.database`, configurable per-tenant). A cluster endpoint has only database 0,
   so this layers on top of the prefix rather than replacing it
-- A tenant may override `keyprefix` in its own mirror. An explicit `keyprefix: ""` at the root
+- Each section resolves its own namespace: a tenant may set `keyprefix` in its own mirror, and
+  a tenant that sets none takes `app.name` — not the root's explicit prefix, which is the root
+  instance's setting rather than a deployment-wide one. An explicit `keyprefix: ""` at the root
   opts out of prefixing entirely; under a tenant it still yields `<tenantID>`, because
   cross-tenant isolation on a shared endpoint is not optional
 - Cache instances managed by CacheManager with automatic lifecycle

@@ -996,3 +996,82 @@ func TestCacheManagerNamespacesOncePerInstance(t *testing.T) {
 	require.NoError(t, first.Set(context.Background(), keyPrefixLogical, []byte("v"), time.Minute))
 	assert.Equal(t, []string{"orders:user:1"}, inner.AllKeys())
 }
+
+// failingCacheConfigStore reports an opaque failure rather than a *config.ConfigError,
+// the shape a dynamic tenant source has when its own backend is unreachable — as
+// distinct from the store reporting that no cache section is declared.
+type failingCacheConfigStore struct {
+	TenantStore
+	err error
+}
+
+func (s *failingCacheConfigStore) CacheConfig(context.Context, string) (*config.CacheConfig, error) {
+	return nil, s.err
+}
+
+// namespaceFallbackWarning is the substring that proves the fallback was reported.
+const namespaceFallbackWarning = "falls back to the application name"
+
+// connectorLoggingAt returns the cache connector over mock at a log level that lets
+// warnings through, built inside the caller's stdout capture because the framework
+// logger binds stdout at construction.
+func connectorLoggingAt(store TenantStore, mock cache.Cache) cache.Connector {
+	resolver := newFactoryResolverForConfig(&Options{
+		CacheConnector: func(context.Context, string) (cache.Cache, error) { return mock, nil },
+	}, &config.Config{App: config.AppConfig{Name: keyPrefixAppName}})
+	return resolver.CacheConnector(store, logger.New("warn", false))
+}
+
+// TestFactoryResolverCacheConnectorReportsAnUnreadableSection pins the one case the
+// app.name fallback must not be silent about. A store that FAILED is not a store
+// reporting no section: a section carrying an explicit keyprefix resolves to the
+// default namespace instead of its own and strands the entries already written under
+// it, so the fallback is logged. A store merely reporting that nothing is declared —
+// the custom-connector deployment with no cache.* block — stays silent, or every such
+// deployment would warn on every pooled instance.
+func TestFactoryResolverCacheConnectorReportsAnUnreadableSection(t *testing.T) {
+	t.Run("an_opaque_read_failure_is_logged", func(t *testing.T) {
+		mock := cachetest.NewMockCache()
+		store := &failingCacheConfigStore{TenantStore: config.NewTenantStore(&config.Config{}), err: assert.AnError}
+
+		out := captureStdout(t, func() {
+			c, err := connectorLoggingAt(store, mock)(context.Background(), keyPrefixTenant)
+			require.NoError(t, err)
+			assertWireKey(t, c, mock, "orders:acme:user:1")
+		})
+
+		assert.Contains(t, out, namespaceFallbackWarning)
+	})
+
+	t.Run("no_section_declared_stays_silent", func(t *testing.T) {
+		mock := cachetest.NewMockCache()
+
+		out := captureStdout(t, func() {
+			c, err := connectorLoggingAt(config.NewTenantStore(&config.Config{}), mock)(context.Background(), "")
+			require.NoError(t, err)
+			assertWireKey(t, c, mock, "orders:user:1")
+		})
+
+		assert.NotContains(t, out, namespaceFallbackWarning)
+	})
+}
+
+// TestFactoryResolverCacheConnectorTenantDoesNotInheritTheRootPrefix pins that each
+// section resolves its own namespace. A tenant that sets no keyprefix takes app.name,
+// never the root's explicit value: TenantStore serves the tenant's own mirror and
+// never folds the root section into it, so a root prefix is not a deployment-wide
+// setting that tenants narrow.
+func TestFactoryResolverCacheConnectorTenantDoesNotInheritTheRootPrefix(t *testing.T) {
+	mock := cachetest.NewMockCache()
+	cfg := &config.Config{Cache: *cacheSectionWithKeyPrefix(new("legacy"))}
+	cfg.Multitenant.Enabled = true
+	cfg.Multitenant.Tenants = map[string]config.TenantEntry{
+		keyPrefixTenant: {Cache: *cacheSectionWithKeyPrefix(nil)},
+	}
+
+	connector := connectorOverMock(t, mock, config.NewTenantStore(cfg))
+	c, err := connector(context.Background(), keyPrefixTenant)
+	require.NoError(t, err)
+
+	assertWireKey(t, c, mock, "orders:acme:user:1")
+}

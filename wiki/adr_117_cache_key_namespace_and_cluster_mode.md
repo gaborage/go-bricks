@@ -139,9 +139,11 @@ ADR-011 introduced — break silently under them.
 - **A tenant folds into the prefix as `<prefix>:<tenantID>`.** The root instance uses
   `<prefix>` alone. The folding happens at the one wiring site that knows the manager key, so
   the `cache` package never learns what a tenant is. A tenant may override `keyprefix` in its
-  own mirror; an explicit empty prefix at the root opts out of prefixing entirely, while at a
-  tenant it still yields `<tenantID>` — cross-tenant isolation on a shared endpoint is not
-  optional. Tenant ids already match `^[a-z0-9-]{1,64}$`, so a tenant id can never fail the
+  own mirror, and a tenant that sets none takes `app.name` rather than the root's explicit
+  prefix: each section resolves its own namespace, so a root prefix is the root instance's
+  setting and not a deployment-wide one. An explicit empty prefix at the root opts out of
+  prefixing entirely, while at a tenant it still yields `<tenantID>` — cross-tenant isolation
+  on a shared endpoint is not optional. Tenant ids already match `^[a-z0-9-]{1,64}$`, so a tenant id can never fail the
   grammar and no second validation of it exists.
 
 - **Three changes, one decision.** `username` shipped first and is additive. `mode` followed.

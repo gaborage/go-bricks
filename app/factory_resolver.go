@@ -156,7 +156,7 @@ func (f *FactoryResolver) namespacedCacheConnector(inner cache.Connector, resour
 			return nil, err
 		}
 
-		prefix := cachekey.Join(f.cacheKeyPrefixBase(ctx, resourceSource, key), key)
+		prefix := cachekey.Join(f.cacheKeyPrefixBase(ctx, resourceSource, key, log), key)
 		namespaced, err := cache.WithKeyPrefix(instance, prefix)
 		if err != nil {
 			// A connector that broke its contract and returned a nil cache with no error
@@ -184,12 +184,28 @@ func (f *FactoryResolver) namespacedCacheConnector(inner cache.Connector, resour
 // the outcome worth failing over is an unnamespaced instance, not a defaulted one. The
 // default Redis connector has already read the same section by the time this runs; the
 // read is per pooled instance, not per request.
-func (f *FactoryResolver) cacheKeyPrefixBase(ctx context.Context, resourceSource TenantStore, key string) string {
+//
+// The two ways to have no section are not the same event, though the answer is. A
+// *config.ConfigError is the store reporting that none is declared here — the
+// single-tenant not-configured case, and a tenant that declares no cache — and is the
+// silent one. Anything else is a source that FAILED, and a section carrying an explicit
+// keyprefix then resolves to the default namespace instead of its own, stranding the
+// entries already written under it; that is worth a line in the log even though the
+// instance is still namespaced.
+func (f *FactoryResolver) cacheKeyPrefixBase(ctx context.Context, resourceSource TenantStore, key string, log logger.Logger) string {
 	if resourceSource == nil {
 		return f.appName
 	}
 	cacheCfg, err := resourceSource.CacheConfig(ctx, key)
-	if err != nil || cacheCfg == nil || cacheCfg.Redis.KeyPrefix == nil {
+	if err != nil {
+		var cfgErr *config.ConfigError
+		if !errors.As(err, &cfgErr) {
+			log.Warn().Err(err).Str("key", key).
+				Msg("Cache section could not be read; the key namespace falls back to the application name")
+		}
+		return f.appName
+	}
+	if cacheCfg == nil || cacheCfg.Redis.KeyPrefix == nil {
 		return f.appName
 	}
 	return *cacheCfg.Redis.KeyPrefix
