@@ -779,6 +779,10 @@ func TestValidateCacheKeyPrefixDefaultNeedsAValidAppName(t *testing.T) {
 	}{
 		{name: "namespaceable_app_name", appName: "orders", enabled: true},
 		{name: "unnamespaceable_app_name_with_cache", appName: "bad name", enabled: true, wantErr: true},
+		// A name that is one SEGMENT is the same rule: an app.name carrying ':' would
+		// become a two-segment default namespace, which is the ambiguity the prefix
+		// grammar removes, so it fails here and asks for an explicit keyprefix.
+		{name: "app_name_carrying_a_separator", appName: "orders:v2", enabled: true, wantErr: true},
 		{name: "unnamespaceable_app_name_with_explicit_prefix", appName: "bad name", enabled: true, keyPrefix: new("ok")},
 		{name: "unnamespaceable_app_name_with_the_opt_out", appName: "bad name", enabled: true, keyPrefix: new("")},
 		{name: "unnamespaceable_app_name_without_cache", appName: "bad name"},
