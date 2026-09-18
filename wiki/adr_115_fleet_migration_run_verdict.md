@@ -55,7 +55,7 @@ run matches Go's success idiom, so `if v := res.Verdict(); v != nil` reads corre
   - **`ErrNothingAttempted`:** no tenant was dispatched, whether because the listing was empty or
     because the context or quiesce stopped the run first. No schema was touched. A nil result is
     `ErrNothingAttempted` too, which covers every `MigrateAll` return that carries no result: a
-    nil argument, or a listing failure.
+    nil argument, an invalid migrator identity, or a listing failure.
 - Classification is by **dispatch**, never by the failure's cause. A dispatched tenant that ends
   in `ErrFlywayTimeout` or `ErrFlywayCanceled` stays a failure, because its schema state is unknown.
   So does an in-flight sibling that fail-fast canceled, and so does a dispatched tenant whose
