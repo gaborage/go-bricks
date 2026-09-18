@@ -119,6 +119,13 @@ cache:
                                      # without one. ElastiCache RBAC (env: CACHE_REDIS_USERNAME)
     password: ""                     # Redis password (use environment variable: CACHE_REDIS_PASSWORD)
     database: 0                      # Redis database number (0-15)
+    # keyprefix: orders              # Key namespace: every key travels as <prefix>:<key>, and a
+                                     # tenant cache's as <prefix>:<tenantID>:<key>. OMIT this key to take
+                                     # app.name (the default); "" opts THIS section out — a
+                                     # tenant section's own "" still yields <tenantID>:<key>.
+                                     # ONE segment: no ":" in the prefix (the caller's key may
+                                     # carry them). Must match the ACL access string's key
+                                     # pattern, e.g. ~orders:* (env: CACHE_REDIS_KEYPREFIX)
     poolsize: 10                     # Maximum number of connections in pool
     dialtimeout: 5s                  # Timeout for establishing new connections
     readtimeout: 3s                  # Timeout for read operations (-1 = no timeout)

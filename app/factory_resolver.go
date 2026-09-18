@@ -10,6 +10,7 @@ import (
 	"github.com/gaborage/go-bricks/cache/redis"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
+	"github.com/gaborage/go-bricks/internal/cachekey"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 )
@@ -121,12 +122,153 @@ func (f *FactoryResolver) MessagingClientFactoryWithOptions(opts MessagingClient
 // CacheConnector returns the appropriate cache connector function.
 // If no custom connector is provided in options, returns a Redis connector that
 // reads configuration from the resourceSource for the given tenant/key.
+//
+// Whichever connector is in play, the instance it produces comes back behind the
+// key-namespace decorator (ADR-117): the cache a custom Options.CacheConnector dials
+// is namespaced exactly like the framework's own. That is the one thing such a
+// connector does inherit — cache.redis.username and cache.redis.mode never reach it,
+// because it owns its own dial, and no field of the resolved cache config applies to
+// it. This method is CreateCacheManager's only caller, so the decorator is installed
+// exactly once per pooled instance.
 func (f *FactoryResolver) CacheConnector(resourceSource TenantStore, log logger.Logger) cache.Connector {
+	return f.namespacedCacheConnector(f.innerCacheConnector(resourceSource, log), resourceSource, log)
+}
+
+// innerCacheConnector picks the connector that actually dials: the custom one from
+// Options, else the default Redis connector.
+func (f *FactoryResolver) innerCacheConnector(resourceSource TenantStore, log logger.Logger) cache.Connector {
 	if f.opts != nil && f.opts.CacheConnector != nil {
 		return f.opts.CacheConnector
 	}
-
 	return newRedisConnector(resourceSource, log)
+}
+
+// errUnresolvedCacheNamespace reports a cache whose namespace resolved to nothing
+// without anyone asking it to. It is not the documented opt-out: that one is an
+// explicit cache.redis.keyprefix: "", and it is honored.
+var errUnresolvedCacheNamespace = errors.New(
+	"app: cache key namespace resolved to nothing; set app.name, or cache.redis.keyprefix to opt out explicitly")
+
+// namespacedCacheConnector returns inner's instances behind the key-prefix decorator.
+//
+// It fails closed three times over, each one closing the instance inner just dialed
+// rather than pooling a cache under a namespace nobody chose. A prefix the grammar
+// refuses — reachable when a dynamic tenant source delivers a section config.Validate
+// never saw — would otherwise be an unnamespaced or ambiguous cache, which on a shared
+// endpoint is exactly the collision the prefix exists to prevent. A section the store
+// could not READ would otherwise resolve to app.name while the section it hid may carry
+// a prefix of its own. And a namespace that resolved to nothing at all is refused too:
+// the exported NewFactoryResolver carries no app name, so a root key with no section
+// prefix would otherwise join to "" and hand back the instance unwrapped, silently
+// dropping the namespace for every consumer that builds a resolver itself. An explicit
+// "" is a different event and still opts out.
+func (f *FactoryResolver) namespacedCacheConnector(inner cache.Connector, resourceSource TenantStore, log logger.Logger) cache.Connector {
+	return func(ctx context.Context, key string) (cache.Cache, error) {
+		instance, err := inner(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+
+		base, explicit, err := f.cacheKeyPrefixBase(ctx, resourceSource, key)
+		if err != nil {
+			closeRejectedCacheInstance(instance, key, log)
+			log.Error().Err(err).Str("key", key).
+				Msg("Cache section could not be read; the key namespace cannot be resolved")
+			return nil, err
+		}
+
+		// The base passes the ONE-SEGMENT grammar before the tenant fold appends to it.
+		// Joined first, a base the grammar refuses can read as a legal namespace:
+		// "orders:v2" folds to "orders:v2:acme", three segments each legal on its own,
+		// and the ambiguity the one-segment rule removed is back — a service prefixed
+		// "orders" writing "v2:acme:…" lands on the same keys. A dynamic tenant source
+		// is not obliged to have run config.Validate, so this is reachable.
+		if err = cachekey.Validate(base); err != nil {
+			closeRejectedCacheInstance(instance, key, log)
+			return nil, reportUnusableCachePrefix(
+				fmt.Errorf("%w %q: %w", cache.ErrInvalidKeyPrefix, base, err), key, log)
+		}
+
+		prefix := cachekey.Join(base, key)
+
+		// WithKeyPrefix runs first even for the empty prefix, so the nil-cache contract
+		// break is caught here rather than by a Close below on the nil it returned.
+		namespaced, err := cache.WithKeyPrefix(instance, prefix)
+		if err != nil {
+			// A connector that broke its contract and returned a nil cache with no error
+			// has nothing to close, and closing it would panic where the framework must
+			// only report. Anything else is a live instance that must not leak.
+			if !errors.Is(err, cache.ErrNilCache) {
+				closeRejectedCacheInstance(instance, key, log)
+			}
+			return nil, reportUnusableCachePrefix(err, key, log)
+		}
+
+		if prefix == "" && !explicit {
+			// namespaced is instance itself — WithKeyPrefix installs no wrapper for an
+			// empty prefix — and nothing asked for an unnamespaced cache.
+			closeRejectedCacheInstance(namespaced, key, log)
+			log.Error().Str("key", key).Msg("Cache key namespace is unresolved")
+			return nil, errUnresolvedCacheNamespace
+		}
+		return namespaced, nil
+	}
+}
+
+// reportUnusableCachePrefix logs err against the resource key and returns it unchanged,
+// so both namespace checks — the base before the fold, the assembled prefix after it —
+// report a refusal the same way.
+func reportUnusableCachePrefix(err error, key string, log logger.Logger) error {
+	log.Error().Err(err).Str("key", key).Msg("Cache key prefix is not a usable namespace")
+	return err
+}
+
+// closeRejectedCacheInstance releases an instance the namespace check refused, so a
+// dialed connection does not leak behind an error the caller never sees a cache for.
+func closeRejectedCacheInstance(instance cache.Cache, key string, log logger.Logger) {
+	if closeErr := instance.Close(); closeErr != nil {
+		log.Warn().Err(closeErr).Str("key", key).
+			Msg("Failed to close the cache instance rejected by the key-prefix check")
+	}
+}
+
+// cacheKeyPrefixBase resolves the namespace the resource key hangs off: the section's
+// own cache.redis.keyprefix when one was delivered, else app.name.
+//
+// The two ways to have no section are NOT the same event, and they no longer share an
+// answer. A *config.ConfigError is the store reporting that none is declared here — the
+// single-tenant not-configured case, a tenant that declares no cache, and the custom
+// Options.CacheConnector deployment with no cache.* block at all. There is no override
+// to honor, the app.name default still namespaces, and it is silent: failing here would
+// fail every such deployment on every pooled instance.
+//
+// Anything else is a source that FAILED, and its answer is the error. The section it
+// could not deliver may carry an explicit keyprefix, so defaulting to app.name would put
+// this key's entries in a different keyspace from the ones already written under that
+// prefix — and the instance is POOLED, so the wrong namespace outlives the outage that
+// produced it. The default Redis connector has already read the same section by the time
+// this runs, which is why a custom connector is the case that reaches here with a live
+// instance to close; the read is per pooled instance, not per request.
+//
+// The bool reports whether the section DELIVERED the value, which is what separates
+// the documented opt-out from an app.name that was never set: only an explicit prefix
+// may resolve a root instance to no namespace at all.
+func (f *FactoryResolver) cacheKeyPrefixBase(ctx context.Context, resourceSource TenantStore, key string) (base string, explicit bool, err error) {
+	if resourceSource == nil {
+		return f.appName, false, nil
+	}
+	cacheCfg, err := resourceSource.CacheConfig(ctx, key)
+	if err != nil {
+		var cfgErr *config.ConfigError
+		if !errors.As(err, &cfgErr) {
+			return "", false, fmt.Errorf("app: cache key namespace for key %q could not be resolved: %w", key, err)
+		}
+		return f.appName, false, nil
+	}
+	if cacheCfg == nil || cacheCfg.Redis.KeyPrefix == nil {
+		return f.appName, false, nil
+	}
+	return *cacheCfg.Redis.KeyPrefix, true, nil
 }
 
 // ResourceSource returns the appropriate tenant resource source.

@@ -1,6 +1,6 @@
 # ADR-117: Cache Key Namespace and Cluster Mode
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-09-18
 **Issue:** #1727
 
@@ -105,24 +105,73 @@ ADR-011 introduced — break silently under them.
   instead. Additive; the zero value is today's behaviour.
 
 - **`cache.redis.keyprefix` namespaces every key, defaulting to `app.name`.** The wire layout is
-  `<prefix>:<key>` with a fixed `:` separator. The prefix is validated against whitespace, the
-  glob metacharacters `*?[]`, braces `{}` (a hash tag would pin every key of the deployment to
-  one slot and defeat serverless sharding) and a trailing `:`. It is applied as a `cache.Cache`
-  decorator wrapped once per resolved instance, above whichever connector is in play, and the
-  decorator forwards `cache.LoadTimeoutProvider` so `LoadThrough` keeps its configured bound.
-  The prefix never reaches the transport, so it is not mirrored onto `cache/redis.Config`.
+  `<prefix>:<key>` with a fixed `:` separator. The grammar lives in `internal/cachekey`, because
+  the config layer must enforce it long before a cache exists and `cache` imports `config`: a
+  prefix may not carry whitespace, the glob metacharacters `*?[]`, the glob ESCAPE `\` (a prefix
+  carrying one writes literal-backslash keys, which the ACL pattern spelling it — `~orders\:*`,
+  where `\:` reads as a plain colon — does not authorize, so every command is denied), braces `{}`
+  (a hash tag would
+  pin every key of the deployment to one slot and defeat serverless sharding) or a `:` anywhere
+  in it — **a prefix is ONE segment**. Not merely a trailing one: a prefix spanning two segments
+  would be reachable from another prefix's caller key, since `orders` writing `v2:user:1` and
+  `orders:v2` writing `user:1` both land on `orders:v2:user:1`, and two services with distinct
+  prefixes could still overwrite each other. Single-segment, the prefix owns the first segment of
+  every key it writes and the tenant id (which the id grammar already keeps `:`-free) owns the
+  second; the caller key stays free-form. The ASSEMBLED namespace the decorator receives
+  (`<prefix>:<tenantID>`) passes a segment-wise door of its own, `ValidateNamespace`: every
+  segment must be a prefix `Validate` accepts and none may be empty, so a base that reached the
+  connector with a trailing `:` from a dynamic source is refused as `orders::acme` rather than
+  writing into a namespace nobody configured.
+  The key is a **tri-state** `*string`: absent means `app.name`, and an explicit value — the
+  empty string included — is honored as written. It therefore gets no koanf default, which would
+  fill the absent arm and make the `app.name` default unreachable. Because an absent key makes
+  `app.name` the namespace, a cross-section check requires `app.name` itself to pass the same
+  grammar wherever the default applies, naming `app.name` and offering `cache.redis.keyprefix`
+  as the fix; without it a name like `my service` would boot green and fail at the first cache
+  access.
+
+- **The prefix is a `cache.Cache` decorator, installed by the connector.** `cache.WithKeyPrefix`
+  returns a pointer type holding the wrapped cache as a NAMED field, never embedded, so a
+  key-taking method added to `cache.Cache` tomorrow fails to compile here instead of silently
+  escaping the namespace. It forwards `cache.LoadTimeoutProvider` — without that forward every
+  `LoadThrough` through a prefixed cache would drop to the hand-written-cache fallback instead of
+  the deployment's `cache.loadtimeout` — and passes every inner error through untouched, so
+  `errors.Is(err, cache.ErrNotFound)` still holds. An empty prefix returns the cache itself,
+  unwrapped. The wrapping happens in `FactoryResolver.CacheConnector`, whose only caller is
+  `CreateCacheManager`, so the decorator is installed exactly once per pooled instance and
+  `LoadThrough`'s per-instance singleflight scoping is unaffected. It wraps whichever connector
+  is in play: a consumer-supplied `Options.CacheConnector` is namespaced like the framework's own
+  — the one thing such a connector inherits, since `username` and `mode` never reach it. Wiring
+  fails closed: a prefix the grammar refuses (reachable when a dynamic tenant source delivers a
+  section `config.Validate` never saw) closes the instance just dialed rather than returning an
+  unnamespaced cache, and so does a namespace that resolved to nothing at all — the exported
+  `NewFactoryResolver` carries no app name, so a root key with no section prefix would otherwise
+  hand the instance back unwrapped. An explicit `""` is a different event and still opts out. So is a
+  section the store could not READ: an opaque failure (anything that is not a
+  `*config.ConfigError`) fails closed too, because the section it hid may carry an explicit
+  prefix and the instance is pooled, so defaulting to `app.name` would strand this key's entries
+  in a different keyspace for as long as that instance lives. A `*config.ConfigError` — no
+  section declared, which is the single-tenant not-configured case and the custom-connector
+  deployment with no `cache.*` block — carries no override to honor, so the `app.name` default
+  applies, silently, and the instance is still namespaced. The prefix never
+  reaches the transport, so it is not mirrored onto `cache/redis.Config`; the field-parity test
+  carries that one named exclusion.
 
 - **A tenant folds into the prefix as `<prefix>:<tenantID>`.** The root instance uses
   `<prefix>` alone. The folding happens at the one wiring site that knows the manager key, so
   the `cache` package never learns what a tenant is. A tenant may override `keyprefix` in its
-  own mirror; an explicit empty prefix at the root opts out of prefixing entirely, while at a
-  tenant it still yields `<tenantID>` — cross-tenant isolation on a shared endpoint is not
-  optional.
+  own mirror, and a tenant that sets none takes `app.name` rather than the root's explicit
+  prefix: each section resolves its own namespace, so a root prefix is the root instance's
+  setting and not a deployment-wide one. An explicit empty prefix at the root opts out of
+  prefixing entirely, while at a tenant it still yields `<tenantID>` — cross-tenant isolation
+  on a shared endpoint is not optional. Tenant ids already match `^[a-z0-9-]{1,64}$`, so a tenant id can never fail the
+  grammar and no second validation of it exists.
 
-- **Three changes, one decision.** `username` ships first and is additive. `mode` follows.
+- **Three changes, one decision.** `username` shipped first and is additive. `mode` followed.
   `keyprefix` ships last and is breaking, because a deployment's existing keys are not under
-  the new default prefix; the cost is one cold-cache cycle and the old keys expire by TTL. This
-  ADR is written Proposed with the first and moves to Accepted with the last.
+  the new default prefix; the cost is one cold-cache cycle, plus an operator sweep of whatever
+  the old layout wrote with no TTL (below). This ADR was written Proposed with the first and
+  moves to Accepted with the last.
 
 ## Supersedes part of ADR-011
 
@@ -145,28 +194,39 @@ that always holds.
 - **An RBAC access string can finally be written narrowly.** With a known key namespace, a
   deployment can scope a user to `~<prefix>:*` instead of granting the whole keyspace.
 - **The default prefix changes the keys of an existing deployment.** `app.name` is applied when
-  `keyprefix` is absent, so an upgrade reads through to the backing store once and the orphaned
-  keys expire by TTL. `keyprefix: ""` at the root restores the old layout exactly.
+  `keyprefix` is absent, so an upgrade reads through to the backing store once and leaves the old
+  keys orphaned. Only the TTL-backed ones expire on their own: `cache.Cache.Set` and `GetOrSet`
+  store without expiration when `ttl == 0`, so an entry written with a zero TTL under the old
+  layout stays until an operator deletes it — `redis-cli --scan --pattern` over the old,
+  un-prefixed key shapes, then `DEL`, or `FLUSHDB` where the database holds nothing but this
+  cache — before the new writers start, or against a pattern verified disjoint from the
+  effective prefix, since a caller key shape like `user:*` also matches the new
+  `user:<tenantID>:<key>` entries when the prefix is `user`; and once per database the old
+  layout used, because ADR-011 put each tenant in its own. `keyprefix: ""` at the root restores the old layout exactly. Two services that
+  deliberately shared a keyspace must now set the same explicit `keyprefix` on both, and two
+  services that share an `app.name` still collide — the default separates services by name, not
+  by deployment. See [migrations.md](migrations.md) `[C66.6]`.
 - **`Stats()` means something different under cluster mode**, which is why it reports which mode
   produced it: `redis_info` describes a single node while the pool counters aggregate.
 - **Replica reads stay unavailable**, so a deployment that wants them must still front the cache
   itself. The security group must open both 6379 and 6380 regardless, because the endpoint
   advertises both.
-- **`mode` ships before `keyprefix`, so a shared cluster endpoint has no per-tenant separation in
-  between.** The mode flip takes the database lever away (`database` must be 0) and the prefix
-  arrives one change later; until it does, a multi-tenant deployment on cluster mode gives each
-  tenant its own endpoint. The mode is deliberately not refused for multi-tenant deployments to
+- **`mode` shipped before `keyprefix`, so a shared cluster endpoint had no per-tenant separation
+  in between.** The mode flip takes the database lever away (`database` must be 0) and the prefix
+  arrived one change later; until it did, isolating tenants on cluster mode meant configuring a
+  separate endpoint per tenant — the mode grants no separation of its own, and `database` is
+  pinned to 0. The mode was deliberately not refused for multi-tenant deployments to
   close that window. Each tenant's cache config is checked on its own — `checkTenantCache` per
   entry at startup, and `(*redis.Config).Validate()` inside `NewClient` for a tenant a dynamic
   config source or `ResourceSource` delivers at first use — so "do these tenants share an endpoint?"
   is answerable only for the statically-configured map, and a gate that fails open on the dynamic
   path, which is the pool-model fleet most likely to share one, is not a boundary. A blanket
-  refusal would also reject the topology that is already safe, one cluster endpoint per tenant, and
-  would be a shim to delete one change later. The collision it would guard against is not new to
-  cluster mode either: `database` defaults to 0, so two standalone tenants sharing an endpoint
-  without explicit numbers already collide. What the mode changes is that the number can no longer
-  be set, which [wiki/cache.md](cache.md) now states at both the isolation summary and the
-  ElastiCache section.
+  refusal would also have rejected the topology that was already safe, one cluster endpoint per
+  tenant, and would have been a shim to delete one change later. The collision it would have
+  guarded against was not new to cluster mode either: `database` defaults to 0, so two standalone
+  tenants sharing an endpoint without explicit numbers collided before the prefix. What the mode
+  changes is that the number can no longer be set, which [wiki/cache.md](cache.md) states at both
+  the isolation summary and the ElastiCache section.
 
 ## References
 

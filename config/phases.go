@@ -116,6 +116,12 @@ func check(cfg *Config) error {
 		return fmt.Errorf("cache config: %w", err)
 	}
 
+	// Cross-section: the cache key namespace defaults to app.name, so it runs after
+	// both sections have been checked on their own.
+	if err := checkCacheKeyNamespace(cfg); err != nil {
+		return fmt.Errorf("cache config: %w", err)
+	}
+
 	if err := checkMessaging(&cfg.Messaging, cfg.Multitenant.Enabled); err != nil {
 		return fmt.Errorf("messaging config: %w", err)
 	}

@@ -61,6 +61,11 @@ cache:
     password: ${CACHE_REDIS_PASSWORD}  # From environment
     database: 0
     poolsize: 10
+    # keyprefix: orders                # key namespace, <prefix>:<key>; a tenant cache's keys are
+                                       # <prefix>:<tenantID>:<key>. ONE segment — no ":" in the
+                                       # prefix. OMIT the key to take app.name (the default);
+                                       # "" opts THAT section out; a tenant's own "" still
+                                       # yields <tenantID>:<key>
 ```
 
 **Module Setup Pattern:**
@@ -272,15 +277,25 @@ and the later write-back wins.
 
 **Multi-Tenant Isolation:**
 
-- Each tenant gets a separate Redis database under `mode: standalone` — configurable per-tenant, and
-  isolating only where the deployment assigns distinct numbers: `database` defaults to 0 for every
-  tenant, so tenants pointed at one endpoint without explicit numbers share one keyspace
+- Isolation is by **key prefix**: every key a cache writes travels as `<prefix>:<key>`, and a
+  tenant's cache folds the tenant id in, so its stored keys are `<prefix>:<tenantID>:<key>`
+  (ADR-117). The prefix comes from `cache.redis.keyprefix`, defaulting to `app.name`, so two
+  services on one endpoint cannot overwrite each other and two tenants cannot read each other's
+  entries. A configured prefix is ONE segment — a `:` in it fails startup — which is what makes
+  that hold for every caller key: the prefix owns the first segment, so no key can reach across
+  into another prefix's namespace. Two services that share an `app.name` are the exception —
+  the default separates services by name, so they resolve to one prefix and still collide; give
+  them distinct explicit values
+- Plus a **separate Redis database** per tenant where the deployment supports one
+  (`cache.redis.database`, configurable per-tenant). A cluster endpoint has only database 0,
+  so this layers on top of the prefix rather than replacing it
+- Each section resolves its own namespace: a tenant may set `keyprefix` in its own mirror, and
+  a tenant that sets none takes `app.name` — not the root's explicit prefix, which is the root
+  instance's setting rather than a deployment-wide one. An explicit `keyprefix: ""` at the root
+  opts out of prefixing entirely; under a tenant it still yields `<tenantID>:<key>`, because
+  cross-tenant isolation on a shared endpoint is not optional
 - Cache instances managed by CacheManager with automatic lifecycle
 - Context propagation ensures tenant resolution via `deps.Cache(ctx)`
-- **`mode: cluster` removes the database lever entirely** — the cluster client has no database
-  selection, so every tenant on one cluster endpoint writes database 0 and their keys collide.
-  Separate such tenants at the endpoint (one cache per tenant) until `cache.redis.keyprefix` makes
-  the prefix the mechanism that always holds ([ADR-117](adr_117_cache_key_namespace_and_cluster_mode.md), #1727)
 
 **Observability Integration:**
 When `observability.enabled: true`, cache operations automatically emit:
@@ -581,6 +596,7 @@ cache:
     mode: cluster
     username: ${CACHE_REDIS_USERNAME}
     password: ${CACHE_REDIS_PASSWORD}
+    keyprefix: orders                 # must match the ACL access string's key pattern
     tls:
       enabled: true
 ```
@@ -595,10 +611,11 @@ cache:
   move the whole keyspace to database 0 silently on the mode flip; the engine may advertise more
   databases, but the client cannot reach them. **Multi-tenant deployments lose the database lever
   with it**: every tenant on one cluster endpoint writes database 0, which is where two standalone
-  tenants that never set distinct numbers already are. Until `cache.redis.keyprefix` lands
-  ([ADR-117](adr_117_cache_key_namespace_and_cluster_mode.md)), give each tenant its own endpoint —
-  an RBAC access string cannot substitute, because it scopes by key pattern and the framework owns
-  no key namespace yet for a pattern to select.
+  tenants that never set distinct numbers already are. `cache.redis.keyprefix` is what separates
+  them now: a tenant's keys travel as `<prefix>:<tenantID>:<key>`
+  ([ADR-117](adr_117_cache_key_namespace_and_cluster_mode.md)), so one cluster endpoint serves many
+  tenants without collision. An RBAC access string narrows that namespace rather than standing in
+  for it — it scopes by key pattern, and the pattern needs a namespace to select.
 - **`poolsize` is per node under cluster, not per deployment.** go-redis applies `PoolSize` to
   each cluster node's own pool, so a value sized against a single server multiplies by the number
   of nodes the slot map discovers. Re-size it when flipping the mode against a sharded endpoint,
@@ -643,8 +660,20 @@ cache:
   else in the deployment that reaches for the reader endpoint fails in ways that look like an
   intermittent cache.
 
-Key prefixing (`cache.redis.keyprefix`) — the remaining half of running against a serverless
-endpoint — arrives in the change that follows this one under issue #1727.
+- **The key prefix and the RBAC access string are one decision.** An access string scopes a user
+  to key patterns, so a user created with `~orders:* +@all` can touch nothing outside the
+  `orders:` namespace — which only works if the client actually writes there. `cache.redis.keyprefix`
+  is what puts it there, and the two must match: a prefix of `orders` against `~billing:*` fails
+  every command with `NOPERM`, and an access string of `~*` grants the whole shared keyspace back.
+  The prefix defaults to `app.name`, so write the access string against that name unless the key
+  is set explicitly. Under multi-tenancy the keys are `<prefix>:<tenantID>:…`, which `~<prefix>:*`
+  already covers.
+- **A custom `Options.CacheConnector` gets the prefix, and nothing else.** The namespace decorator
+  sits above whichever connector is in play, so a consumer-supplied connector's cache is namespaced
+  exactly like the framework's own. It owns its own dial, so no field of the resolved cache config
+  reaches it: `username`, `password`, `mode`, `database`, `poolsize`, the timeouts and the whole
+  `tls` block are the connector's own business. A connector dialing a serverless endpoint must
+  therefore speak cluster protocol and authenticate itself.
 
 ## Cache Manager Defaults
 

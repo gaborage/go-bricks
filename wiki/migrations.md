@@ -10068,6 +10068,70 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `migration/multi_tenant.go` (`MigrateAllResult`, `Verdict`, `dispatchBlocked`) ·
   [multi_tenant_migration.md](multi_tenant_migration.md#run-verdicts)
 
+### [C66.6] every cache key travels under a `<prefix>:` namespace, defaulting to `app.name` · breaking · when: always
+
+- detect: `git grep -n 'keyprefix' -- 'config*.yaml' 'config*.yml'` finds the deployments that
+  already pin a namespace; every cache-enabled deployment WITHOUT that key is in the population
+  and takes `app.name`. Then look for anything that reads or writes the same Redis keyspace from
+  outside this service's `cache.Cache`: a sibling service pointed at the same endpoint, a
+  dashboard, a `redis-cli`/Lua maintenance script, an ElastiCache RBAC access string with a key
+  pattern (`~<app.name>:*`), and any monitoring that greps key names. A custom
+  `Options.CacheConnector` is in the population too — the namespace decorator sits above it.
+- scope: `config.RedisConfig` gains `KeyPrefix *string` (`cache.redis.keyprefix`, env
+  `CACHE_REDIS_KEYPREFIX`, which binds the ROOT key only; the per-tenant mirror is
+  `multitenant.tenants.<id>.cache.redis.keyprefix`, whose env form is
+  `MULTITENANT_TENANTS_<ID>_CACHE_REDIS_KEYPREFIX` — the id uppercased, which round-trips for
+  every id ADR-090 admits (`^[a-z0-9-]+$`)).
+  Every key a resolved cache writes becomes `<prefix>:<key>`, and a tenant cache's becomes
+  `<prefix>:<tenantID>:<key>`. The key is a tri-state: absent takes `app.name`, an explicit value
+  is honored as written, and an explicit `""` opts out — at the root entirely, and under a tenant
+  down to `<tenantID>` alone, because cross-tenant isolation is not optional. It has no koanf
+  default, so absence stays distinguishable. The prefix is applied by `cache.WithKeyPrefix`, a
+  decorator installed once per pooled instance above whichever connector is in play; it forwards
+  `cache.LoadTimeoutProvider` and passes every inner error through, so `cache.loadtimeout` and
+  `errors.Is(err, cache.ErrNotFound)` are unchanged. A prefix carrying whitespace, `*?[]`, `\`, `{}`
+  or a `:` anywhere in it is refused at startup — the prefix is ONE segment, or a caller key
+  opening with another prefix's tail would bridge the two namespaces — and where the default
+  applies `app.name` must itself
+  pass that grammar — an unusable name fails startup naming `app.name` and offering
+  `cache.redis.keyprefix`. Unchanged: the six `cache.Cache` methods, the CBOR encoding, TTLs, the
+  manager lifecycle, and `cache/redis.Config`, which never receives the prefix.
+- gate: always, for any deployment with a cache enabled. The migration applies BY DEFAULT — the
+  keys move on the upgrade whether or not you set the new key — and the one way to keep the old
+  layout is the explicit root opt-out `cache.redis.keyprefix: ""`. A tenant section's own `""`
+  still yields `<tenantID>`, so a tenant cache cannot opt out of namespacing. no-match = no cache
+  configured.
+- apply: usually nothing, though the old keys do not all clear themselves. They are simply no
+  longer read, so the service reads through to its origin once — budget one cold-cache cycle, and
+  expect the keyspace to hold both copies. Only TTL-BACKED entries then expire: `Set`/`GetOrSet`
+  store without expiration when `ttl == 0`, so anything written with a zero TTL under the old
+  layout survives as an orphan until someone deletes it. Sweep those out of band — the old layout
+  wrote the caller's key verbatim, so the pattern is your own un-prefixed key shape
+  (`redis-cli --scan --pattern 'user:*'`, then `DEL` what it lists), or `FLUSHDB` where the
+  database holds nothing but this cache. Sweep BEFORE the new writers start, or check the
+  pattern is disjoint from the effective prefix first: with `keyprefix: user`, `user:*` also
+  matches the `user:<tenantID>:<key>` entries the new layout is writing, so a post-rollout
+  `DEL` over it deletes live data. Repeat the sweep in EACH database the old layout used —
+  ADR-011 isolated tenants by `cache.redis.database`, so a tenant's orphans sit in its own
+  number, not the root's — and confirm afterwards that the old pattern returns nothing. Act in three cases: (1) another service or tool shares
+  this keyspace — give both sides the same explicit `cache.redis.keyprefix`, or teach the
+  external reader the effective one (`<app.name>:` where you set none); (2) two services already
+  share one `app.name` on one endpoint — they still collide, because the default separates by
+  name, so set distinct explicit prefixes; (3) the key layout must not move at all — set `cache.redis.keyprefix:
+  ""` at the root, which restores the previous layout exactly. On ElastiCache, pair the prefix
+  with the RBAC access string: a user scoped `~orders:* +@all` requires `keyprefix: orders`, and a
+  mismatch fails every command with `NOPERM`.
+- verify: `go build ./... && go test ./...`  # then, against a real endpoint, run one cache write
+  and confirm the wire key under the EFFECTIVE prefix — that section's `cache.redis.keyprefix`
+  when it set one, else `app.name`: `redis-cli --scan --pattern '<prefix>:*' | head`. A tenant
+  cache's keys are `<prefix>:<tenantID>:*`, where `<prefix>` is that tenant's own
+  `multitenant.tenants.<id>.cache.redis.keyprefix` (else `app.name`) — a tenant does not inherit
+  the root's explicit prefix.
+- ref: gaborage/go-bricks#1727 · [ADR-117](adr_117_cache_key_namespace_and_cluster_mode.md) ·
+  supersedes the per-tenant-database isolation of [ADR-011](adr_011_redis_cache.md) ·
+  `cache/keyprefix.go` (`WithKeyPrefix`), `internal/cachekey`, `app/factory_resolver.go`
+  (`CacheConnector`) · [cache.md](cache.md#amazon-elasticache)
+
 ---
 
 *The sections below are reference material: the two config-key rename lookup tables (linked from atoms C401.1 and C41.7), followed by pre-v0.39 changes retained for consumers upgrading from older releases.*

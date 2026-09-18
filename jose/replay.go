@@ -135,9 +135,15 @@ func CheckJTIReplayInNamespace(ctx context.Context, recorder ReplayRecorder, nam
 // keeps the namespace boundary unambiguous, so no namespace string can alias
 // another namespace by embedding the separator.
 //
-// Per-tenant separation holds only when each tenant's CacheConfig resolves a
-// distinct Redis instance or logical DB — the Redis client does no key
-// prefixing, so tenants sharing one address+DB share this keyspace too.
+// Per-tenant separation holds through the framework's cache key namespace: every
+// key a resolved cache writes travels as <prefix>:<key>, and a tenant's cache
+// folds the tenant id in as <prefix>:<tenantID>:<key> (ADR-117), so this keyspace
+// is already per-tenant on a shared address+DB. The tenant id folds in whatever the
+// prefix resolves to, so no setting of that key collapses two tenants onto one
+// keyspace: a tenant's own cache.redis.keyprefix: "" still yields <tenantID>:<key>, and
+// the root's opt-out reaches the root instance alone, never a tenant's. A distinct
+// Redis instance or logical DB per tenant layers on top where the deployment
+// supports one.
 func replayKeyIn(ns, jti string) string {
 	return "jose:jti:" + strconv.Itoa(len(ns)) + ":" + ns + ":" + jti
 }

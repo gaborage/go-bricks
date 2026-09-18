@@ -418,9 +418,20 @@ type RedisConfig struct {
 	// the slot map from. Under cluster, Database must be 0: the cluster client
 	// has no database selection, so a non-zero value is refused at startup rather
 	// than silently dropped.
-	Mode            string        `koanf:"mode" json:"mode" yaml:"mode" toml:"mode" mapstructure:"mode"`
-	Password        string        `koanf:"password" json:"password" yaml:"password" toml:"password" mapstructure:"password"`
-	Database        int           `koanf:"database" json:"database" yaml:"database" toml:"database" mapstructure:"database"`
+	Mode     string `koanf:"mode" json:"mode" yaml:"mode" toml:"mode" mapstructure:"mode"`
+	Password string `koanf:"password" json:"password" yaml:"password" toml:"password" mapstructure:"password"`
+	Database int    `koanf:"database" json:"database" yaml:"database" toml:"database" mapstructure:"database"`
+	// KeyPrefix namespaces every key this cache writes as <prefix>:<key>, so two
+	// services on one endpoint cannot overwrite each other. It is ONE segment and may
+	// not contain ':', which is what keeps that promise for every caller key.
+	// Tri-state: absent (nil) takes app.name, and an explicit value — including the
+	// empty string, which opts out of prefixing entirely — is honored as given. Under
+	// multi-tenancy the tenant id folds in after the prefix (<prefix>:<tenantID>:<key>),
+	// and a tenant's explicit empty string still leaves the tenant id: cross-tenant
+	// isolation is not optional.
+	// Deliberately has no koanf default — one would fill the absent arm and make the
+	// app.name default unreachable.
+	KeyPrefix       *string       `koanf:"keyprefix" json:"keyprefix" yaml:"keyprefix" toml:"keyprefix" mapstructure:"keyprefix"`
 	PoolSize        int           `koanf:"poolsize" json:"poolsize" yaml:"poolsize" toml:"poolsize" mapstructure:"poolsize"`
 	DialTimeout     time.Duration `koanf:"dialtimeout" json:"dialtimeout" yaml:"dialtimeout" toml:"dialtimeout" mapstructure:"dialtimeout"`
 	ReadTimeout     time.Duration `koanf:"readtimeout" json:"readtimeout" yaml:"readtimeout" toml:"readtimeout" mapstructure:"readtimeout"`

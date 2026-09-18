@@ -715,3 +715,144 @@ func TestNormalizeCacheRedisModeDefaultsToStandalone(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateCacheRedisKeyPrefix pins the namespace grammar at the config door.
+// An absent key is the app.name default and an explicit empty string is the
+// documented opt-out, so both pass; every value that would make the prefix match
+// keys it does not own — whitespace, a glob metacharacter, a cluster hash tag, a
+// dangling separator — is refused at startup rather than written to Redis.
+func TestValidateCacheRedisKeyPrefix(t *testing.T) {
+	tests := []struct {
+		name      string
+		keyPrefix *string
+		wantField string
+	}{
+		{name: "absent_takes_the_app_name_default"},
+		{name: "explicit_empty_is_the_opt_out", keyPrefix: new("")},
+		{name: "plain_prefix", keyPrefix: new("orders")},
+		{name: "whitespace_is_rejected", keyPrefix: new("bad name"), wantField: "cache.redis.keyprefix"},
+		{name: "glob_is_rejected", keyPrefix: new("orders*"), wantField: "cache.redis.keyprefix"},
+		{name: "hash_tag_is_rejected", keyPrefix: new("{orders}"), wantField: "cache.redis.keyprefix"},
+		{name: "glob_escape_is_rejected", keyPrefix: new(`orders\`), wantField: "cache.redis.keyprefix"},
+		{name: "trailing_separator_is_rejected", keyPrefix: new("orders:"), wantField: "cache.redis.keyprefix"},
+		{name: "inner_separator_is_rejected", keyPrefix: new("orders:v2"), wantField: "cache.redis.keyprefix"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := CacheConfig{
+				Enabled: true,
+				Type:    CacheTypeRedis,
+				Redis: RedisConfig{
+					Host:      "localhost",
+					Port:      6379,
+					PoolSize:  10,
+					KeyPrefix: tt.keyPrefix,
+				},
+			}
+
+			err := checkCache(&cfg)
+			if tt.wantField == "" {
+				require.NoError(t, err)
+				return
+			}
+
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+		})
+	}
+}
+
+// TestValidateCacheKeyPrefixDefaultNeedsAValidAppName pins the one cross-section
+// rule the default creates: with no cache.redis.keyprefix, app.name IS the cache
+// namespace, so a name that cannot be one fails startup instead of failing at the
+// first cache access. The rule binds wherever the default applies — the root cache
+// and a per-tenant cache alike — and never where an explicit prefix (including the
+// empty opt-out) has displaced it.
+func TestValidateCacheKeyPrefixDefaultNeedsAValidAppName(t *testing.T) {
+	tests := []struct {
+		name      string
+		appName   string
+		enabled   bool
+		keyPrefix *string
+		wantErr   bool
+	}{
+		{name: "namespaceable_app_name", appName: "orders", enabled: true},
+		{name: "unnamespaceable_app_name_with_cache", appName: "bad name", enabled: true, wantErr: true},
+		// A name that is one SEGMENT is the same rule: an app.name carrying ':' would
+		// become a two-segment default namespace, which is the ambiguity the prefix
+		// grammar removes, so it fails here and asks for an explicit keyprefix.
+		{name: "app_name_carrying_a_separator", appName: "orders:v2", enabled: true, wantErr: true},
+		{name: "unnamespaceable_app_name_with_explicit_prefix", appName: "bad name", enabled: true, keyPrefix: new("ok")},
+		{name: "unnamespaceable_app_name_with_the_opt_out", appName: "bad name", enabled: true, keyPrefix: new("")},
+		{name: "unnamespaceable_app_name_without_cache", appName: "bad name"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				App:    createValidAppConfig(),
+				Server: createValidServerConfig(),
+				Log:    createValidLogConfig(),
+				Cache: CacheConfig{
+					Enabled: tt.enabled,
+					Type:    CacheTypeRedis,
+					Redis:   RedisConfig{Host: "localhost", KeyPrefix: tt.keyPrefix},
+				},
+			}
+			cfg.App.Name = tt.appName
+
+			err := Validate(cfg)
+			if !tt.wantErr {
+				require.NoError(t, err)
+				return
+			}
+
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, "app.name", cfgErr.Field, "the fault is the name, not the cache key that was never set")
+			assert.Contains(t, cfgErr.Action, "cache.redis.keyprefix", "the operator must be offered the override as the fix")
+		})
+	}
+}
+
+// TestLoadRedisKeyPrefixTriState proves the loader keeps the three arms apart, which is
+// what the *string is for: an absent key stays nil so the app.name default can apply, an
+// explicit empty string arrives as a non-nil empty value (the opt-out), and a value
+// arrives as itself — from YAML and from the environment alike.
+func TestLoadRedisKeyPrefixTriState(t *testing.T) {
+	load := func(t *testing.T, redisLines string, env map[string]string) *Config {
+		t.Helper()
+		cfg, err := loadDeliveredEmptyFixture(t, "cache:\n  enabled: true\n  redis:\n    host: localhost\n"+redisLines, env)
+		require.NoError(t, err)
+		return cfg
+	}
+
+	t.Run("absent_stays_nil", func(t *testing.T) {
+		cfg := load(t, "", nil)
+
+		assert.Nil(t, cfg.Cache.Redis.KeyPrefix, "an absent key must stay absent, or app.name can never apply")
+	})
+
+	t.Run("explicit_empty_is_delivered", func(t *testing.T) {
+		cfg := load(t, "    keyprefix: \"\"\n", nil)
+
+		require.NotNil(t, cfg.Cache.Redis.KeyPrefix, "the opt-out must be distinguishable from an absent key")
+		assert.Empty(t, *cfg.Cache.Redis.KeyPrefix)
+	})
+
+	t.Run("value_is_delivered", func(t *testing.T) {
+		cfg := load(t, "    keyprefix: orders\n", nil)
+
+		require.NotNil(t, cfg.Cache.Redis.KeyPrefix)
+		assert.Equal(t, "orders", *cfg.Cache.Redis.KeyPrefix)
+	})
+
+	t.Run("environment_overrides_yaml", func(t *testing.T) {
+		cfg := load(t, "    keyprefix: orders\n", map[string]string{"CACHE_REDIS_KEYPREFIX": "from-env"})
+
+		require.NotNil(t, cfg.Cache.Redis.KeyPrefix)
+		assert.Equal(t, "from-env", *cfg.Cache.Redis.KeyPrefix)
+	})
+}
