@@ -305,9 +305,9 @@ func (r *ModuleRegistry) DeclareMessaging(decls *messaging.Declarations) error {
 	for _, module := range r.modules {
 		if md, ok := module.(MessagingDeclarer); ok {
 			// Per-module attribution, not the running total, so a topology conflict
-			// names its owner. Zeros mean the module added nothing new: exchanges are
-			// map-keyed and RegisterQueue merges, so re-declaring a neighbor's
-			// topology contributes none.
+			// names its owner. Zeros mean the module added nothing new:
+			// RegisterExchange and RegisterQueue both merge a compatible
+			// re-declaration, so re-declaring a neighbor's topology contributes none.
 			before := decls.Stats()
 			md.DeclareMessaging(decls)
 			after := decls.Stats()

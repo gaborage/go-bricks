@@ -35,6 +35,15 @@ func consumerKeyFor(declaration *ConsumerDeclaration) consumerKey {
 	}
 }
 
+// exchangeConflict records an exchange name declared twice with shapes that
+// cannot merge.
+type exchangeConflict struct {
+	Exchange string
+	Field    string // Type, a flag name, or `Args["<key>"]`
+	Kept     string // the incumbent's value, which stays in effect
+	Rejected string
+}
+
 // queueConflict records a queue name declared twice with shapes that cannot merge.
 type queueConflict struct {
 	Queue    string
@@ -47,15 +56,16 @@ type queueConflict struct {
 // This is a pure data structure (no client dependencies) that can be validated once
 // and replayed to multiple per-tenant registries.
 type Declarations struct {
-	Exchanges      map[string]*ExchangeDeclaration
-	Queues         map[string]*QueueDeclaration
-	Bindings       []*BindingDeclaration
-	Publishers     []*PublisherDeclaration
-	consumerIndex  map[consumerKey]*ConsumerDeclaration // Deduplication + O(1) lookup
-	consumerOrder  []consumerKey                        // Deterministic iteration order
-	queueConflicts []queueConflict                      // Incompatible queue re-declarations, reported by Validate
-	queueTypeErrs  []error                              // Queue types a declaration helper refused, reported by Validate
-	sealErr        error                                // First seal-tagged declaration that cannot seal, reported by Validate
+	Exchanges         map[string]*ExchangeDeclaration
+	Queues            map[string]*QueueDeclaration
+	Bindings          []*BindingDeclaration
+	Publishers        []*PublisherDeclaration
+	consumerIndex     map[consumerKey]*ConsumerDeclaration // Deduplication + O(1) lookup
+	consumerOrder     []consumerKey                        // Deterministic iteration order
+	exchangeConflicts []exchangeConflict                   // Incompatible exchange re-declarations, reported by Validate
+	queueConflicts    []queueConflict                      // Incompatible queue re-declarations, reported by Validate
+	queueTypeErrs     []error                              // Queue types a declaration helper refused, reported by Validate
+	sealErr           error                                // First seal-tagged declaration that cannot seal, reported by Validate
 }
 
 // recordQueueTypeError keeps a helper's rejected queue type for Validate to
@@ -87,12 +97,34 @@ func NewDeclarations() *Declarations {
 
 // RegisterExchange adds an exchange declaration to the store.
 //
-// Re-declaring a name keeps the last declaration, unlike RegisterQueue: no
-// framework helper builds a divergent exchange shape for a name a caller would
-// also declare by hand. The one to watch is DeclareQueueWithDLQ's fanout DLX,
-// which several primary queues may share — today every repeat is identical.
+// Re-declaring a name merges when the shapes are compatible, so which call ran
+// last no longer decides the type the broker gets. An incompatible
+// re-declaration keeps the incumbent and records a conflict that Validate
+// reports, because declaration order across modules is invisible at any single
+// call site (ADR-118). RegisterQueue's Args caveat applies here unchanged: the
+// conflict is reported by rendering the contested values, so exchange Args are
+// broker topology and must not carry secrets either.
 func (d *Declarations) RegisterExchange(e *ExchangeDeclaration) {
 	if e == nil {
+		return
+	}
+
+	// Exchanges is exported: an entry can be a caller's own pointer, or nil. A
+	// missing key and a nil value both mean there is nothing to merge into, so
+	// both fall through to the copy path, which replaces the nil entry.
+	if incumbent := d.Exchanges[e.Name]; incumbent != nil {
+		if conflict, incompatible := exchangeMergeConflict(incumbent, e); incompatible {
+			d.recordExchangeConflict(conflict)
+			return
+		}
+		// The incumbent's Args map is already our own, so merging in place cannot
+		// reach the caller's map (a map stored as a VALUE inside it still is).
+		// A directly-inserted incumbent may carry a nil map, which maps.Copy
+		// cannot write into.
+		if incumbent.Args == nil {
+			incumbent.Args = make(map[string]any)
+		}
+		maps.Copy(incumbent.Args, e.Args)
 		return
 	}
 
@@ -115,6 +147,91 @@ func (d *Declarations) RegisterExchange(e *ExchangeDeclaration) {
 	d.Exchanges[e.Name] = decl
 }
 
+// firstArgsDisagreement returns the first key both maps set to different
+// values, visiting next's keys in sorted order so the recorded conflict — and
+// therefore the startup error — is identical across runs. Only next's keys are
+// scanned: a key only the incumbent holds is not contested, it survives the
+// merge untouched.
+func firstArgsDisagreement(incumbent, next map[string]any) (key string, kept, rejected any, found bool) {
+	for _, k := range slices.Sorted(maps.Keys(next)) {
+		incumbentValue, shared := incumbent[k]
+		nextValue := next[k]
+		// reflect.DeepEqual, not ==: Args values are `any`, and == panics on an
+		// uncomparable dynamic type such as a slice or an amqp.Table.
+		if !shared || reflect.DeepEqual(incumbentValue, nextValue) {
+			continue
+		}
+		return k, incumbentValue, nextValue, true
+	}
+
+	return "", nil, nil, false
+}
+
+// renderConflictValues renders one contested pair for the startup error. The
+// common case is %v and stays exactly that, so existing messages do not move.
+// %v alone is not enough for Args, whose values are `any` compared with
+// reflect.DeepEqual: that comparison is type-sensitive, so int(1) against "1"
+// or int64(1) is a real conflict whose two sides render identically — naming no
+// change an operator could make, and folding two distinct conflicts into one at
+// recordExchangeConflict/recordQueueConflict, which dedup over the all-string
+// struct. Only when the two renderings collide is the type the distinguishing
+// fact, and only then is it printed. %T(%v), not %#v: %#v renders both int(1) and int64(1) as `1`, so
+// it does not even separate the pair the gate compares, and it bypasses a
+// value's own String(), printing more of that value than %v was willing to.
+func renderConflictValues(kept, rejected any) (keptText, rejectedText string) {
+	keptText, rejectedText = fmt.Sprintf("%v", kept), fmt.Sprintf("%v", rejected)
+	if keptText != rejectedText {
+		return keptText, rejectedText
+	}
+	return fmt.Sprintf("%T(%s)", kept, keptText), fmt.Sprintf("%T(%s)", rejected, rejectedText)
+}
+
+// exchangeMergeConflict reports the first difference that blocks merging two
+// declarations of one exchange name: Type first, because it is the field the
+// broker routes on and the one a shared DLX name actually collides over, then
+// any differing flag, then one Args key carrying two values
+// (firstArgsDisagreement).
+func exchangeMergeConflict(incumbent, next *ExchangeDeclaration) (conflict exchangeConflict, incompatible bool) {
+	switch {
+	case incumbent.Type != next.Type:
+		return newExchangeConflict(incumbent.Name, "Type", incumbent.Type, next.Type), true
+	case incumbent.Durable != next.Durable:
+		return newExchangeConflict(incumbent.Name, "Durable", incumbent.Durable, next.Durable), true
+	case incumbent.AutoDelete != next.AutoDelete:
+		return newExchangeConflict(incumbent.Name, "AutoDelete", incumbent.AutoDelete, next.AutoDelete), true
+	case incumbent.Internal != next.Internal:
+		return newExchangeConflict(incumbent.Name, "Internal", incumbent.Internal, next.Internal), true
+	case incumbent.NoWait != next.NoWait:
+		return newExchangeConflict(incumbent.Name, "NoWait", incumbent.NoWait, next.NoWait), true
+	}
+
+	if key, kept, rejected, found := firstArgsDisagreement(incumbent.Args, next.Args); found {
+		return newExchangeConflict(incumbent.Name, fmt.Sprintf("Args[%q]", key), kept, rejected), true
+	}
+
+	return exchangeConflict{}, false
+}
+
+func newExchangeConflict(exchange, field string, kept, rejected any) exchangeConflict {
+	keptText, rejectedText := renderConflictValues(kept, rejected)
+	return exchangeConflict{
+		Exchange: exchange,
+		Field:    field,
+		Kept:     keptText,
+		Rejected: rejectedText,
+	}
+}
+
+// recordExchangeConflict drops repeats of a disagreement already recorded, so
+// the aggregate error counts distinct problems rather than rejected
+// declarations. exchangeConflict is all-string, hence comparable.
+func (d *Declarations) recordExchangeConflict(c exchangeConflict) {
+	if slices.Contains(d.exchangeConflicts, c) {
+		return
+	}
+	d.exchangeConflicts = append(d.exchangeConflicts, c)
+}
+
 // RegisterQueue adds a queue declaration to the store.
 //
 // Re-declaring a name merges when the shapes are compatible, so
@@ -130,13 +247,21 @@ func (d *Declarations) RegisterQueue(q *QueueDeclaration) {
 		return
 	}
 
-	if incumbent, exists := d.Queues[q.Name]; exists {
+	// Queues is exported: an entry can be a caller's own pointer, or nil. A
+	// missing key and a nil value both mean there is nothing to merge into, so
+	// both fall through to the copy path, which replaces the nil entry.
+	if incumbent := d.Queues[q.Name]; incumbent != nil {
 		if conflict, incompatible := queueMergeConflict(incumbent, q); incompatible {
 			d.recordQueueConflict(conflict)
 			return
 		}
 		// The incumbent's Args map is already our own, so merging in place cannot
 		// reach the caller's map (a map stored as a VALUE inside it still is).
+		// A directly-inserted incumbent may carry a nil map, which maps.Copy
+		// cannot write into.
+		if incumbent.Args == nil {
+			incumbent.Args = make(map[string]any)
+		}
 		maps.Copy(incumbent.Args, q.Args)
 		return
 	}
@@ -161,8 +286,7 @@ func (d *Declarations) RegisterQueue(q *QueueDeclaration) {
 
 // queueMergeConflict reports the first difference that blocks merging two
 // declarations of one queue name: any differing flag, or one Args key carrying
-// two values. Args keys are visited in sorted order so the recorded conflict —
-// and therefore the startup error — is identical across runs.
+// two values (firstArgsDisagreement).
 func queueMergeConflict(incumbent, next *QueueDeclaration) (conflict queueConflict, incompatible bool) {
 	switch {
 	case incumbent.Durable != next.Durable:
@@ -175,14 +299,7 @@ func queueMergeConflict(incumbent, next *QueueDeclaration) (conflict queueConfli
 		return newQueueConflict(incumbent.Name, "NoWait", incumbent.NoWait, next.NoWait), true
 	}
 
-	for _, key := range slices.Sorted(maps.Keys(next.Args)) {
-		kept, shared := incumbent.Args[key]
-		rejected := next.Args[key]
-		// reflect.DeepEqual, not ==: Args values are `any`, and == panics on an
-		// uncomparable dynamic type such as a slice or an amqp.Table.
-		if !shared || reflect.DeepEqual(kept, rejected) {
-			continue
-		}
+	if key, kept, rejected, found := firstArgsDisagreement(incumbent.Args, next.Args); found {
 		return newQueueConflict(incumbent.Name, fmt.Sprintf("Args[%q]", key), kept, rejected), true
 	}
 
@@ -190,11 +307,12 @@ func queueMergeConflict(incumbent, next *QueueDeclaration) (conflict queueConfli
 }
 
 func newQueueConflict(queue, field string, kept, rejected any) queueConflict {
+	keptText, rejectedText := renderConflictValues(kept, rejected)
 	return queueConflict{
 		Queue:    queue,
 		Field:    field,
-		Kept:     fmt.Sprintf("%v", kept),
-		Rejected: fmt.Sprintf("%v", rejected),
+		Kept:     keptText,
+		Rejected: rejectedText,
 	}
 }
 
@@ -328,6 +446,10 @@ func (d *Declarations) Validate() error {
 		return d.sealErr
 	}
 	if err := d.validateQueueConflicts(); err != nil {
+		return err
+	}
+
+	if err := d.validateExchangeConflicts(); err != nil {
 		return err
 	}
 
@@ -602,6 +724,25 @@ func (d *Declarations) validateQueueConflicts() error {
 	return errors.Join(errs...)
 }
 
+// validateExchangeConflicts aggregates every incompatible exchange
+// re-declaration into one error, so an app with several conflicts sees them all
+// in a single boot.
+func (d *Declarations) validateExchangeConflicts() error {
+	if len(d.exchangeConflicts) == 0 {
+		return nil
+	}
+
+	errs := []error{fmt.Errorf(
+		"conflicting exchange declarations (%d conflict(s)) — declarations merge only when compatible; "+
+			"align the call sites (DeclareQueueWithDLQ's fanout DLX and "+
+			"DeclareTopicExchange/DeclareDirectExchange on one name must agree)",
+		len(d.exchangeConflicts))}
+	for _, c := range d.exchangeConflicts {
+		errs = append(errs, fmt.Errorf("exchange %q: %s kept %q vs rejected %q", c.Exchange, c.Field, c.Kept, c.Rejected))
+	}
+	return errors.Join(errs...)
+}
+
 // ReplayToRegistry applies all declarations to a runtime registry.
 // The order is important: exchanges first, then queues, then bindings, then publishers/consumers.
 func (d *Declarations) ReplayToRegistry(reg RegistryInterface) error {
@@ -700,6 +841,7 @@ func (d *Declarations) Clone() *Declarations {
 	}
 
 	// A clone that passed a validation its source failed would be a trap.
+	clone.exchangeConflicts = slices.Clone(d.exchangeConflicts)
 	clone.queueConflicts = slices.Clone(d.queueConflicts)
 	clone.queueTypeErrs = slices.Clone(d.queueTypeErrs)
 	clone.sealErr = d.sealErr

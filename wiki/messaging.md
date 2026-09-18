@@ -21,9 +21,9 @@ var _ app.MessagingDeclarer = (*Module)(nil)
 ```
 
 At startup the log names each asserting module with the exchanges, queues, bindings,
-publishers and consumers it **added** — "added", because exchanges are map-keyed and
-`RegisterQueue` merges a compatible re-declaration, so zeros mean the module added nothing
-new, not that its declarer is empty. A module with the wrong method name or signature has no
+publishers and consumers it **added** — "added", because `RegisterExchange` and
+`RegisterQueue` both merge a compatible re-declaration and neither counts a repeat, so zeros
+mean the module added nothing new, not that its declarer is empty. A module with the wrong method name or signature has no
 line at all.
 
 ## Helper Functions for Simplified Declarations
@@ -118,7 +118,19 @@ queue "payments.events.queue": Durable kept "true" vs rejected "false"
 
 Two caveats on `Args`. Values are compared with `reflect.DeepEqual`, which is **type-sensitive**: `int(1)` and `int64(1)` are a conflict, not a match, so give one `Args` key the same Go type at every call site. And the contested values are rendered into the startup error, which the framework logs — `Args` is broker topology, so never put credentials, tokens, or PII there.
 
-Exchanges and bindings are unaffected: `RegisterExchange` still keeps the last declaration of a name, and `RegisterBinding` still appends every declaration it is given (two identical bindings both reach the broker; neither replaces the other).
+**Re-declaring one exchange name follows the same rule.** Two declarations of the same exchange *merge*: `Type` and the four flags (`Durable`, `AutoDelete`, `Internal`, `NoWait`) must be equal, and any `Args` key they share must carry the same value; the union of their `Args` is what reaches the broker. `Type` is compared first, because it is the field the broker routes on and the one `DeclareQueueWithDLQ`'s fanout dead-letter exchange collides over — see [ADR-118](adr_118_exchange_redeclaration_conflicts.md) for why registration order used to decide that type and what it cost. An incompatible pair now keeps the first declaration and fails startup with a single aggregate error naming every conflict:
+
+```text
+declaration validation failed: conflicting exchange declarations (2 conflict(s)) — declarations merge only when compatible; align the call sites (DeclareQueueWithDLQ's fanout DLX and DeclareTopicExchange/DeclareDirectExchange on one name must agree)
+exchange "orders.events.queue.dlx": Type kept "fanout" vs rejected "topic"
+exchange "payments.events.exchange": Durable kept "true" vs rejected "false"
+```
+
+`kept` and `rejected` read exactly as they do for queues, and repeats of one disagreement collapse the same way. Both `Args` caveats above apply unchanged: `reflect.DeepEqual` is type-sensitive, and the contested values reach a logged startup error, so exchange `Args` must carry no credentials, tokens, or PII. Several primary queues sharing one DLX (via `DeadLetterSpec.Exchange`) stay silent — that repeat is identical.
+
+A compatible repeat that only *adds* `Args` still changes what reaches the broker, because the union is what is declared. A broker that already holds that exchange refuses the new arguments with `PRECONDITION_FAILED`, which [ADR-113](adr_113_amqp_topology_redeclare_on_reconnect.md) skips until the process restarts. Drop the added `Args` where the argument is not actually required; where it is, follow the controlled migration in [migrations.md](migrations.md) `[C66.7]`. Do **not** simply delete and recreate the exchange: `exchange.delete` takes its bindings with it, and a publish made after the exchange is recreated but before its bindings are restored is unroutable and silently discarded, since `mandatory` defaults to `false`.
+
+Bindings are unaffected: `RegisterBinding` still appends every declaration it is given (two identical bindings both reach the broker; neither replaces the other).
 
 **For verbose before/after comparison**, see [messaging/declarations.go](../messaging/declarations.go)
 

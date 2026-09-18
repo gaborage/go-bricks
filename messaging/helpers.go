@@ -376,8 +376,10 @@ func (d *Declarations) DeclareStreamQueue(name string, spec *StreamQueueSpec) *Q
 
 // DeclarePublisher creates and registers a publisher in one step.
 //
-// If exchange is non-nil and not already registered, it will be automatically registered.
-// This hybrid approach allows publishers to optionally declare their dependencies.
+// A non-nil exchange is registered, merging with any existing declaration of
+// the same name; an incompatible shape keeps the incumbent and becomes a
+// startup conflict (see RegisterExchange). This hybrid approach allows
+// publishers to optionally declare their dependencies.
 //
 // Usage:
 //   - Pass nil if exchange is already registered separately
@@ -389,9 +391,7 @@ func (d *Declarations) DeclareStreamQueue(name string, spec *StreamQueueSpec) *Q
 // reaching the stored entry afterwards means indexing that slice.
 func (d *Declarations) DeclarePublisher(opts *PublisherOptions, exchange *ExchangeDeclaration) *PublisherDeclaration {
 	if exchange != nil {
-		if _, exists := d.Exchanges[exchange.Name]; !exists {
-			d.RegisterExchange(exchange)
-		}
+		d.RegisterExchange(exchange)
 	}
 
 	publisher := NewPublisher(opts)

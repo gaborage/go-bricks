@@ -277,6 +277,42 @@ func TestDeclareMessagingFailsOnConflictingQueueDeclarations(t *testing.T) {
 	assert.Contains(t, err.Error(), `Durable kept "true" vs rejected "false"`)
 }
 
+// exchangeConflictModule reproduces issue #1714 inside one module:
+// DeclareQueueWithDLQ registers its DLX as a fanout, and a typed exchange of
+// that same name cannot merge with it. Across two modules — the shape that
+// actually shipped — neither call site can see the other.
+type exchangeConflictModule struct {
+	name  string
+	queue string
+}
+
+func (m *exchangeConflictModule) Name() string             { return m.name }
+func (m *exchangeConflictModule) Init(_ *ModuleDeps) error { return nil }
+func (m *exchangeConflictModule) Shutdown() error          { return nil }
+func (m *exchangeConflictModule) DeclareMessaging(decls *messaging.Declarations) {
+	decls.DeclareQueueWithDLQ(m.queue, nil)
+	decls.DeclareTopicExchange(m.queue + ".dlx")
+}
+
+// TestDeclareMessagingFailsOnConflictingExchangeDeclarations pins that an
+// exchange conflict reaches the fatal startup path rather than being silently
+// overwritten: DeclareMessaging is what app.buildMessagingDeclarations calls.
+func TestDeclareMessagingFailsOnConflictingExchangeDeclarations(t *testing.T) {
+	const queue = "orders.events.queue"
+	reg := NewModuleRegistry(&ModuleDeps{Logger: &recLogger{}, Config: &config.Config{}})
+	require.NoError(t, reg.Register(&exchangeConflictModule{name: "orders", queue: queue}))
+
+	err := reg.DeclareMessaging(messaging.NewDeclarations())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "declaration validation failed")
+	assert.Contains(t, err.Error(), "conflicting exchange declarations (1 conflict(s))")
+	assert.Contains(t, err.Error(), queue+".dlx")
+	// The whole detail line: the fanout is the incumbent here, and a swapped
+	// kept/rejected pair would point the operator at the wrong call site.
+	assert.Contains(t, err.Error(), `Type kept "fanout" vs rejected "topic"`)
+}
+
 // fakeDBRequiringModule declares DatabaseRequirer with a configurable verdict and
 // records whether Init ran, so a test can assert the guard fires BEFORE Init rather
 // than merely alongside it.
