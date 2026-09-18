@@ -56,7 +56,7 @@ cache:
   redis:
     host: localhost
     port: 6379
-    username: ""                       # Redis ACL user; empty = the "default" user
+    username: ""                       # Redis ACL user; sent only alongside a password
     password: ${CACHE_REDIS_PASSWORD}  # From environment
     database: 0
     poolsize: 10
@@ -590,8 +590,12 @@ cache:
   in transit always, so a plaintext dial is dropped by the endpoint. Mutual TLS is not
   supported there, so leave `certfile`/`keyfile` unset and let the connection verify against
   the system roots.
-- **Security groups must allow 6379 and 6380.** The serverless endpoint uses 6379 for writes
-  and 6380 for reads; a group that opens only 6379 breaks in ways that look like an
+- **Security groups must allow 6379 and 6380.** The serverless endpoint serves writes and
+  strongly consistent reads on 6379, and exposes 6380 as a separate read-optimized endpoint.
+  GoBricks dials only the address in `cache.redis.host`/`port`, so all of its own traffic —
+  reads included — goes to that one port; the read-from-replica knobs are deliberately not
+  exposed, because eventual consistency would break `GetOrSet`. Open both regardless: anything
+  else in the deployment that reaches for the reader endpoint fails in ways that look like an
   intermittent cache.
 
 Cluster mode (`cache.redis.mode`) and key prefixing (`cache.redis.keyprefix`) — the other two

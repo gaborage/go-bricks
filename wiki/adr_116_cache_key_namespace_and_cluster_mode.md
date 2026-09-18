@@ -25,15 +25,16 @@ Amazon ElastiCache Serverless is the concrete case:
   2026-04-28, and the endpoint serves writes on 6379 and reads on 6380
   ([in-transit-encryption](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/in-transit-encryption.html)).
   ADR-108 already supplies the TLS block this needs.
-- **Database selection is gone in practice.** go-redis v9.22.0's `ClusterOptions` carries no
-  `DB` field, and `UniversalOptions.DB` is dropped on the cluster path. Valkey 9 serverless
-  advertises 1024 databases, but no cluster client can select one — so the engine version does
-  not rescue the assumption.
+- **Database selection is gone in practice — as a client limit, not a server one.** go-redis
+  v9.22.0's `ClusterOptions` carries no `DB` field, and `UniversalOptions.DB` is dropped on the
+  cluster path. Valkey 9 serverless advertises 1024 databases and documents a `SELECT` range,
+  but the client this framework dials with cannot reach past the first — so the engine version
+  does not rescue the assumption.
 
 The third assumption is ours, not the vendor's. ADR-011 promised multi-tenant isolation by
-giving each tenant its own Redis database number. On a cluster endpoint there is exactly one
-logical database, so that promise evaporates and every tenant's keys land in one keyspace with
-nothing between them. RBAC access strings key off patterns, which is another way of saying the
+giving each tenant its own Redis database number. Through a cluster client only the first
+logical database is reachable — the engine may advertise more — so that promise evaporates and
+every tenant's keys land in one keyspace with nothing between them. RBAC access strings key off patterns, which is another way of saying the
 deployment expects an application-owned key namespace to exist.
 
 go-redis v9.22.0 offers `Options.Username`, and `UniversalOptions.IsClusterMode` — documented
