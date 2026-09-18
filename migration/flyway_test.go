@@ -1545,21 +1545,37 @@ func TestMigrateForPassesSchemaFlags(t *testing.T) {
 	}
 	// A per-tenant DatabaseConfig carrying postgresql.schema must target that
 	// schema explicitly so schema-per-tenant topologies don't collapse into one.
-	stub, capturePath := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
-	fm, mcfg := newMigrateFixture(t, stub, "longenough-pw")
-	tenantDB := &config.DatabaseConfig{
-		Type:       "postgresql",
-		Password:   "longenough-pw",
-		PostgreSQL: config.PostgreSQLConfig{Schema: "tenant_a"},
+	// The shared row proves the guard is a precondition, not a rewrite: with the
+	// schema set, a shared migrator emits the same flags as any other runner.
+	tests := []struct {
+		name   string
+		shared bool
+	}{
+		{name: "default"},
+		{name: "shared_migrator", shared: true},
 	}
-	_, err := fm.MigrateFor(t.Context(), tenantDB, mcfg)
-	require.NoError(t, err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stub, capturePath := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
+			fm, mcfg := newMigrateFixture(t, stub, "longenough-pw")
+			if tc.shared {
+				fm.WithSharedMigrator()
+			}
+			tenantDB := &config.DatabaseConfig{
+				Type:       "postgresql",
+				Password:   "longenough-pw",
+				PostgreSQL: config.PostgreSQLConfig{Schema: "tenant_a"},
+			}
+			_, err := fm.MigrateFor(t.Context(), tenantDB, mcfg)
+			require.NoError(t, err)
 
-	captured, readErr := os.ReadFile(capturePath)
-	require.NoError(t, readErr)
-	args := string(captured)
-	assert.Contains(t, args, "-schemas=tenant_a", "a configured schema must be passed to Flyway")
-	assert.Contains(t, args, "-defaultSchema=tenant_a", "-defaultSchema pins where flyway_schema_history lives")
+			captured, readErr := os.ReadFile(capturePath)
+			require.NoError(t, readErr)
+			args := string(captured)
+			assert.Contains(t, args, "-schemas=tenant_a", "a configured schema must be passed to Flyway")
+			assert.Contains(t, args, "-defaultSchema=tenant_a", "-defaultSchema pins where flyway_schema_history lives")
+		})
+	}
 }
 
 func TestMigrateOmitsSchemaFlagsWhenUnset(t *testing.T) {
@@ -1596,7 +1612,9 @@ func TestSchemaArgsBoundary(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			db := &config.DatabaseConfig{PostgreSQL: config.PostgreSQLConfig{Schema: tt.schema}}
-			args, err := schemaArgs(db, config.PostgreSQL)
+			// Identifier validation is independent of the shared-migrator gate,
+			// which only ever fires on an EMPTY schema.
+			args, err := schemaArgs(db, config.PostgreSQL, false)
 			if tt.wantOK {
 				require.NoError(t, err)
 				assert.Equal(t, []string{flagSchemas + tt.schema, flagDefaultSchema + tt.schema}, args)
@@ -1605,6 +1623,114 @@ func TestSchemaArgsBoundary(t *testing.T) {
 			require.ErrorIs(t, err, ErrInvalidPGIdentifier)
 			require.ErrorIs(t, err, tt.want, "identifier sentinel must pass through")
 			assert.Contains(t, err.Error(), "database.postgresql.schema=")
+		})
+	}
+}
+
+func TestSchemaArgsRequiresExplicitSchemaForSharedMigrator(t *testing.T) {
+	// The refusal is built one call below by a single fmt.Errorf that
+	// interpolates db.Database and nothing else, so this is the closest place to
+	// pin that it can never grow into a credential leak.
+	const fixturePassword = "schema-args-pw"
+	tests := []struct {
+		name            string
+		vendor          string
+		schema          string
+		requireExplicit bool
+		wantErr         bool
+		wantFlags       bool
+	}{
+		// Default runner: an empty schema keeps legacy behavior — the conf or the
+		// role's search_path decides, so no flags and no error.
+		{name: "empty_schema_postgresql_default", vendor: config.PostgreSQL},
+		{name: "empty_schema_postgresql_shared", vendor: config.PostgreSQL, requireExplicit: true, wantErr: true},
+		// Oracle's schema is the connecting user, already per-tenant, so a shared
+		// migrator is not refused there.
+		{name: "empty_schema_oracle_shared", vendor: config.Oracle, requireExplicit: true},
+		{
+			name: "set_schema_postgresql_shared", vendor: config.PostgreSQL, schema: "tenant_a",
+			requireExplicit: true, wantFlags: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &config.DatabaseConfig{
+				Database:   "tenant_db",
+				Password:   fixturePassword,
+				PostgreSQL: config.PostgreSQLConfig{Schema: tc.schema},
+			}
+			args, err := schemaArgs(db, tc.vendor, tc.requireExplicit)
+			if tc.wantErr {
+				require.ErrorIs(t, err, ErrSharedMigratorSchemaRequired)
+				assert.Nil(t, args, "a refused schema target must emit no flags")
+				assert.Contains(t, err.Error(), "database.postgresql.schema",
+					"the message must name the key that has to carry the target")
+				assert.Contains(t, err.Error(), "flyway.conf",
+					"the message must say the framework cannot read a conf-owned target")
+				assert.Contains(t, err.Error(), `database="tenant_db"`)
+				assert.NotContains(t, err.Error(), fixturePassword, "the refusal must never echo a credential")
+				return
+			}
+			require.NoError(t, err)
+			if tc.wantFlags {
+				assert.Equal(t, []string{flagSchemas + tc.schema, flagDefaultSchema + tc.schema}, args)
+				return
+			}
+			assert.Nil(t, args, "no explicit schema target must emit no flags")
+		})
+	}
+}
+
+func TestMigrateForRefusesEmptySchemaForSharedMigrator(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+	// A shared migrator has no role-level search_path default, so an empty
+	// postgresql.schema is refused for EVERY verb: a validate or info aimed at
+	// the connection's default schema reports the wrong schema's state, the
+	// same silent-wrong-answer bug as a misdirected migrate.
+	//
+	// The stub is a real executable on disk — that is what makes the IsNotExist
+	// assertion below a genuine negative. Its stdout is empty because the
+	// refusal returns before anything could run it, let alone read it.
+	stub, capturePath := createCommandCapturingStub(t, "")
+	fm, mcfg := newMigrateFixture(t, stub, "longenough-pw")
+	require.Same(t, fm, fm.WithSharedMigrator(), "the builder returns the receiver for chaining")
+	// Host/Port/Database are filled in to keep the IsNotExist assertion below
+	// discriminating, not to reach the subprocess: in runFor schemaArgs runs
+	// before urlArgs, so under the shipped guard the refusal preempts urlArgs
+	// whatever these fields hold. They matter if the guard ever regresses — a
+	// half-filled config would then be rejected by urlArgs and the stub still
+	// would not run, so the assertion would pass for the wrong reason and mask
+	// the regression. Database is also what the database="tenant_db" message
+	// assertion reads.
+	tenantDB := &config.DatabaseConfig{
+		Type:     config.PostgreSQL,
+		Host:     "tenant-db.example.com",
+		Port:     5432,
+		Database: "tenant_db",
+	}
+	verbs := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "migrate", run: func() error {
+			_, err := fm.MigrateFor(context.Background(), tenantDB, mcfg)
+			return err
+		}},
+		{name: "validate", run: func() error { return fm.ValidateFor(context.Background(), tenantDB, mcfg) }},
+		{name: "info", run: func() error { return fm.InfoFor(context.Background(), tenantDB, mcfg) }},
+	}
+	for _, v := range verbs {
+		t.Run(v.name, func(t *testing.T) {
+			err := v.run()
+			require.ErrorIs(t, err, ErrSharedMigratorSchemaRequired)
+			assert.Contains(t, err.Error(), "database.postgresql.schema")
+			assert.Contains(t, err.Error(), `database="tenant_db"`)
+
+			_, statErr := os.Stat(capturePath)
+			assert.True(t, os.IsNotExist(statErr),
+				"schema target refused up front — the Flyway stub must never have executed")
 		})
 	}
 }
