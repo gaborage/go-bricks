@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -60,11 +61,57 @@ type TenantResult struct {
 
 // MigrateAllResult aggregates per-tenant results from a MigrateAll run.
 type MigrateAllResult struct {
-	Action  Action
+	Action Action
+
+	// Results holds one row per dispatched tenant. A listed tenant that was
+	// never dispatched has no row; it appears in NeverDispatched instead.
 	Results []TenantResult
+
+	// NeverDispatched holds the listed tenant IDs the run stopped before
+	// dispatching (context done, quiesce, fail-fast), in listing order.
+	NeverDispatched []string
 }
 
-// Failed returns only the tenant results whose Err is non-nil.
+// Listed returns how many tenant IDs the TenantLister returned: the dispatched
+// rows plus the never-dispatched IDs.
+func (r *MigrateAllResult) Listed() int {
+	if r == nil {
+		return 0
+	}
+	return len(r.Results) + len(r.NeverDispatched)
+}
+
+// ErrFleetSplit is the Verdict of a run that dispatched at least one tenant
+// but left at least one listed tenant failed or never dispatched: the fleet
+// may be at mixed versions and needs a re-run.
+var ErrFleetSplit = errors.New("migration: fleet split")
+
+// ErrNothingAttempted is the Verdict of a run that dispatched no tenant (empty
+// listing, listing failure, context done or quiesce set before the first
+// dispatch): no schema was touched.
+var ErrNothingAttempted = errors.New("migration: no tenant attempted")
+
+// Verdict classifies the run as a whole: nil when at least one tenant was
+// listed and every listed tenant was dispatched and succeeded, ErrFleetSplit,
+// or ErrNothingAttempted. A nil result is ErrNothingAttempted. It is
+// independent of MigrateAll's returned error.
+func (r *MigrateAllResult) Verdict() error {
+	if r == nil || len(r.Results) == 0 {
+		return ErrNothingAttempted
+	}
+	if len(r.NeverDispatched) > 0 {
+		return ErrFleetSplit
+	}
+	for i := range r.Results {
+		if r.Results[i].Err != nil {
+			return ErrFleetSplit
+		}
+	}
+	return nil
+}
+
+// Failed returns the dispatched tenant results whose Err is non-nil. Tenants
+// that were never dispatched are not included; see NeverDispatched and Verdict.
 func (r *MigrateAllResult) Failed() []TenantResult {
 	if r == nil {
 		return nil
@@ -178,10 +225,15 @@ func MigrateAll(
 			Str("action", action.String())
 	}, "Starting multi-tenant migration")
 
+	var out *MigrateAllResult
 	if opts.Parallelism <= 1 {
-		return runSequential(ctx, migrator, configs, action, tenantIDs, opts)
+		out, err = runSequential(ctx, migrator, configs, action, tenantIDs, opts)
+	} else {
+		out, err = runParallel(ctx, migrator, configs, action, tenantIDs, opts)
 	}
-	return runParallel(ctx, migrator, configs, action, tenantIDs, opts)
+	// Both paths dispatch in listing order, so the undispatched tenants are the tail.
+	out.NeverDispatched = slices.Clone(tenantIDs[len(out.Results):])
+	return out, err
 }
 
 func validateMigratorIdentity(identity *MigratorIdentity) error {
@@ -210,11 +262,8 @@ func runSequential(
 ) (*MigrateAllResult, error) {
 	out := &MigrateAllResult{Action: action, Results: make([]TenantResult, 0, len(tenantIDs))}
 	for _, id := range tenantIDs {
-		if err := ctx.Err(); err != nil {
+		if err := dispatchBlocked(ctx, opts); err != nil {
 			return out, err
-		}
-		if quiesceBlocks(ctx, opts.Quiesce, opts.Logger) {
-			return out, ErrQuiesceBlocked
 		}
 		res := runOne(ctx, migrator, configs, action, id, &opts)
 		out.Results = append(out.Results, res)
@@ -262,49 +311,33 @@ func runParallel(
 		action:   action,
 		opts:     opts,
 	}
-	sem := make(chan struct{}, parallelism)
-	dispatched := 0
-	quiesced := false
-
-dispatch:
-	for i, id := range tenantIDs {
-		if quiesceBlocks(runCtx, opts.Quiesce, opts.Logger) {
-			quiesced = true
-			break dispatch
-		}
-		select {
-		case <-runCtx.Done():
-			break dispatch
-		case sem <- struct{}{}:
-		}
-
-		dispatched++
-		state.wg.Add(1)
-		go func(idx int, tenantID string) {
-			defer state.wg.Done()
-			defer func() { <-sem }()
-			state.runWorker(runCtx, idx, tenantID)
-		}(i, id)
-	}
-
+	dispatched, stopErr := state.dispatch(runCtx, tenantIDs, parallelism)
 	state.wg.Wait()
 
 	// Trim trailing zero-value slots when the dispatch loop exited early so
 	// callers iterating Results don't see synthetic empty tenants.
-	if dispatched < len(out.Results) {
-		out.Results = out.Results[:dispatched]
-	}
+	out.Results = out.Results[:dispatched]
 
 	if state.firstErr != nil {
 		return out, state.firstErr
 	}
-	if quiesced {
-		return out, ErrQuiesceBlocked
+	if stopErr != nil {
+		return out, stopErr
 	}
+	return out, ctx.Err()
+}
+
+// dispatchBlocked returns why a runner must not dispatch its next tenant: the
+// context's error, ErrQuiesceBlocked, or nil. The context is checked again after
+// the quiesce check, which a cancel can outlast and which then fails open.
+func dispatchBlocked(ctx context.Context, opts MigrateAllOptions) error {
 	if err := ctx.Err(); err != nil {
-		return out, err
+		return err
 	}
-	return out, nil
+	if quiesceBlocks(ctx, opts.Quiesce, opts.Logger) {
+		return ErrQuiesceBlocked
+	}
+	return ctx.Err()
 }
 
 // parallelState bundles the shared state of a runParallel invocation. Inputs
@@ -323,6 +356,39 @@ type parallelState struct {
 	hookMu   sync.Mutex
 	errMu    sync.Mutex
 	firstErr error
+}
+
+// dispatch starts one worker per tenant, in listing order, until the list is
+// exhausted or the run must stop. It returns how many tenants it dispatched and
+// why it stopped early, if it did.
+func (s *parallelState) dispatch(ctx context.Context, tenantIDs []string, parallelism int) (int, error) {
+	sem := make(chan struct{}, parallelism)
+	for i, id := range tenantIDs {
+		// Checked before the select: with a free slot and a done context both
+		// cases are ready, and select would dispatch a random prefix.
+		if err := ctx.Err(); err != nil {
+			return i, err
+		}
+		select {
+		case <-ctx.Done():
+			return i, ctx.Err()
+		case sem <- struct{}{}:
+		}
+		// Judged again once the slot is held: waiting for it can outlast a
+		// fail-fast cancel or a quiesce flip.
+		if err := dispatchBlocked(ctx, s.opts); err != nil {
+			<-sem
+			return i, err
+		}
+
+		s.wg.Add(1)
+		go func(idx int, tenantID string) {
+			defer s.wg.Done()
+			defer func() { <-sem }()
+			s.runWorker(ctx, idx, tenantID)
+		}(i, id)
+	}
+	return len(tenantIDs), nil
 }
 
 func (s *parallelState) runWorker(ctx context.Context, idx int, tenantID string) {
