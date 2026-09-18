@@ -198,6 +198,15 @@ func NewClient(cfg *Config) (*Client, error) {
 		return nil, cache.NewConnectionError("ping", cfg.Address(), err)
 	}
 
+	// INFO is keyless, so under ModeCluster the cluster client routes it to one
+	// node and the floor is proven of that node alone. A cluster mid-rolling-
+	// upgrade can therefore pass startup while another master still answers
+	// below 7.0, and GetOrSet fails for the keys routed there. Checking every
+	// master instead is not available on this seam — ForEachMaster is on
+	// *redis.ClusterClient, not on the redis.UniversalClient the one code path
+	// holds — and it would trade this edge case for a startup that a single
+	// unreachable master can fail. The target endpoint (ElastiCache Serverless)
+	// presents one virtual node, where the two checks coincide.
 	if info, infoErr := readServerInfo(ctx, client); infoErr == nil {
 		if tooOld, version := redisVersionTooOld(info); tooOld {
 			client.Close()

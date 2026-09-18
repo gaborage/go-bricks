@@ -589,6 +589,10 @@ cache:
   both keys. The go-redis cluster client has no database selection, so accepting the pair would
   move the whole keyspace to database 0 silently on the mode flip; the engine may advertise more
   databases, but the client cannot reach them.
+- **The Redis 7.0 floor is checked on one node.** `INFO` is keyless, so the cluster client routes
+  the startup version check to whichever node answers. On a serverless endpoint that is the only
+  node and the check is exhaustive; on a self-managed cluster mid-rolling-upgrade a master still
+  below 7.0 can go unnoticed at startup and fail `GetOrSet` for the keys routed to it.
 - **`Stats()` reports which mode produced it.** The `mode` key reads `standalone` or `cluster`,
   and it says how to read the rest: under cluster, `redis_info` comes from whichever single node
   answered `INFO` and the `pool_*` counters are the aggregate across every master's pool. Under

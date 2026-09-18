@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"strconv"
 	"strings"
 	"testing"
@@ -252,9 +253,9 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 // makes the node advertise where the test actually reaches it, so the client's
 // first redirect lands rather than hangs.
 func bootstrapRedisCluster(ctx context.Context, c *RedisContainer, timeout time.Duration) error {
-	announceIP := c.host
-	if announceIP == "localhost" {
-		announceIP = "127.0.0.1"
+	announceIP, err := resolveAnnounceIP(ctx, c.host)
+	if err != nil {
+		return err
 	}
 
 	for _, args := range [][]string{
@@ -268,6 +269,26 @@ func bootstrapRedisCluster(ctx context.Context, c *RedisContainer, timeout time.
 	}
 
 	return waitForRedisClusterReady(ctx, c, timeout)
+}
+
+// resolveAnnounceIP turns the host side of the mapped address into something
+// cluster-announce-ip will take. Host() is not always an IP literal — a TCP
+// Docker endpoint or TESTCONTAINERS_HOST_OVERRIDE hands back a name — and some
+// Redis builds reject a hostname there outright, which would fail the bootstrap
+// at its first CONFIG SET. IPv4 only: the announced address is what a host-side
+// client dials back, and the fixture publishes a v4 mapping.
+func resolveAnnounceIP(ctx context.Context, host string) (string, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		return host, nil
+	}
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip4", host)
+	if err != nil {
+		return "", fmt.Errorf("redis container: resolving %q for cluster-announce-ip: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return "", fmt.Errorf("redis container: %q has no IPv4 address to announce as cluster-announce-ip", host)
+	}
+	return ips[0].String(), nil
 }
 
 // execInRedisContainer runs one redis-cli command inside the container, treating
