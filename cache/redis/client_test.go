@@ -1189,44 +1189,46 @@ func TestNewClientAuthenticatesAsNamedACLUser(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, client)
 	})
-
-	// A name alone never authenticates. go-redis builds the HELLO handshake's
-	// AUTH clause inside `if password != ""` (commands.go Hello), and gates the
-	// legacy AUTH fallback the same way, so an empty password means no AUTH is
-	// sent at all and the connection runs as whatever identity the server hands
-	// an unauthenticated client. Pinned here because the config layer accepts
-	// this pair — it is the deployment's job to supply the secret, and a silent
-	// downgrade to the implicit "default" user is the failure worth naming.
-	t.Run("username_without_password_sends_no_auth", func(t *testing.T) {
-		mr := miniredis.RunT(t)
-		mr.RequireUserAuth(aclUser, aclPass)
-
-		cfg := testConfig(mr)
-		cfg.Username = aclUser
-
-		client, err := NewClient(cfg)
-		require.Error(t, err, "the ACL name alone must not authenticate")
-		assert.Nil(t, client)
-	})
 }
 
 // TestConfigValidateUsername mirrors the config layer's rule at the client's own
 // door, which a hand-built Config reaches without passing through config
-// validation: a whitespace-only ACL user is refused, while an empty one and a
-// named one with no password stand. Validation never couples the two keys; what
-// a name with no password does at the dial is pinned separately, by
-// TestNewClientAuthenticatesAsNamedACLUser.
+// validation. go-redis builds the AUTH clause only when the password is
+// non-empty, so a name with an empty password would dial with no AUTH at all and
+// run as whatever identity the server hands an unauthenticated client: the pair
+// is refused, naming both keys. An empty name with a password is the legacy
+// default-user form and stands, as does neither key set, and a whitespace-only
+// name is refused ahead of the coupling rule.
 func TestConfigValidateUsername(t *testing.T) {
 	tests := []struct {
 		name      string
 		username  string
 		password  string
 		wantField string
+		wantMsg   string
 	}{
 		{name: "named_user_with_password", username: "svc", password: "pw"},
-		{name: "named_user_without_password", username: "svc"},
 		{name: "absent_username_with_password", password: "pw"},
-		{name: "whitespace_only_username", username: " \t ", wantField: "redis.username"},
+		{name: "neither_username_nor_password"},
+		{
+			name:      "named_user_without_password",
+			username:  "svc",
+			wantField: "redis.username",
+			wantMsg:   "redis.password",
+		},
+		{
+			name:      "whitespace_only_username_with_password",
+			username:  " \t ",
+			password:  "pw",
+			wantField: "redis.username",
+			wantMsg:   "whitespace-only",
+		},
+		{
+			name:      "whitespace_only_username_without_password",
+			username:  " \t ",
+			wantField: "redis.username",
+			wantMsg:   "whitespace-only",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1248,6 +1250,8 @@ func TestConfigValidateUsername(t *testing.T) {
 			var configErr *cache.ConfigError
 			require.ErrorAs(t, err, &configErr)
 			assert.Equal(t, tt.wantField, configErr.Field)
+			assert.Contains(t, configErr.Message, tt.wantMsg,
+				"the message must name the rule that fired, not just the field both rules share")
 		})
 	}
 }

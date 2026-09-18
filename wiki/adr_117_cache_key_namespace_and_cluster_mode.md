@@ -73,16 +73,17 @@ ADR-011 introduced — break silently under them.
 
 ## Decision
 
-- **`cache.redis.username` carries a Redis ACL identity.** It is sent as
-  `AUTH <username> <password>` and is independent of `password` at validation: neither key
-  implies the other, and an empty `username` keeps today's `default`-user behaviour. The
-  independence is a config rule, not a wire one — go-redis builds the AUTH clause only when
-  the password is non-empty, so a name with no secret is never sent and the dial falls back to
-  the implicit `default` user. Reaching an ACL user requires both keys.
-  The only rule is that a non-empty value must not be whitespace-only, checked in
-  `validateRedisCache` (the single site root and tenant config both reach) and again in
-  `(*redis.Config).Validate()`, the door a hand-built config reaches. Additive; the zero value
-  is today's behaviour.
+- **`cache.redis.username` carries a Redis ACL identity, and requires `cache.redis.password`.**
+  It is sent as `AUTH <username> <password>`, and an empty `username` keeps today's
+  `default`-user behaviour. The two keys are coupled in one direction: a `username` with an
+  empty `password` is refused at startup, naming both keys, because go-redis builds the AUTH
+  clause only when the password is non-empty — the name would never reach the wire and the
+  connection would silently run as whatever identity the endpoint gives an unauthenticated
+  client, on a stock Redis the `default` user with `nopass ~* +@all`. A `password` alone is
+  the legacy form that selects the default user and stays valid. A non-empty `username` must
+  also not be whitespace-only. Both rules live in `validateRedisCache` (the single site root
+  and tenant config both reach) and again in `(*redis.Config).Validate()`, the door a
+  hand-built config reaches. Additive; the zero value is today's behaviour.
 
 - **`cache.redis.mode` selects `standalone` (default) or `cluster`.** One code path:
   `redis.NewUniversalClient` with `IsClusterMode` set for `cluster`, so the client field becomes

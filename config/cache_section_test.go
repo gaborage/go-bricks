@@ -516,20 +516,43 @@ func TestValidateRedisTLSAcceptsLoadableMaterial(t *testing.T) {
 }
 
 // TestValidateCacheRedisUsername pins cache.redis.username as an identity that
-// stands on its own: a named ACL user is accepted with or without a password —
-// validation never couples the two keys — and a whitespace-only name, which
-// reaches Redis as an AUTH argument no ACL rule can match, is refused.
+// cannot stand alone: go-redis builds the AUTH clause only when the password is
+// non-empty, so a name with an empty password sends no AUTH at all and the
+// connection silently runs as whatever identity the endpoint hands an
+// unauthenticated client. That pair is refused naming both keys. A password
+// alone selects the implicit "default" user and stays valid, neither key set
+// stays valid, and a whitespace-only name — an AUTH argument no ACL rule can
+// match — is refused ahead of the coupling rule.
 func TestValidateCacheRedisUsername(t *testing.T) {
 	tests := []struct {
 		name      string
 		username  string
 		password  string
 		wantField string
+		wantMsg   string
 	}{
 		{name: "named_user_with_password", username: "svc", password: "pw"},
-		{name: "named_user_without_password", username: "svc"},
 		{name: "absent_username_with_password", password: "pw"},
-		{name: "whitespace_only_username", username: " \t ", wantField: "cache.redis.username"},
+		{name: "neither_username_nor_password"},
+		{
+			name:      "named_user_without_password",
+			username:  "svc",
+			wantField: "cache.redis.username",
+			wantMsg:   "cache.redis.password",
+		},
+		{
+			name:      "whitespace_only_username_with_password",
+			username:  " \t ",
+			password:  "pw",
+			wantField: "cache.redis.username",
+			wantMsg:   "whitespace-only",
+		},
+		{
+			name:      "whitespace_only_username_without_password",
+			username:  " \t ",
+			wantField: "cache.redis.username",
+			wantMsg:   "whitespace-only",
+		},
 	}
 
 	for _, tt := range tests {
@@ -555,6 +578,8 @@ func TestValidateCacheRedisUsername(t *testing.T) {
 			var cfgErr *ConfigError
 			require.ErrorAs(t, err, &cfgErr)
 			assert.Equal(t, tt.wantField, cfgErr.Field)
+			assert.Contains(t, cfgErr.Message, tt.wantMsg,
+				"the message must name the rule that fired, not just the field both rules share")
 		})
 	}
 }

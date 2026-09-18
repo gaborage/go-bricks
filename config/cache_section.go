@@ -88,13 +88,23 @@ func validateRedisCache(cfg *RedisConfig) error {
 	}
 
 	// A whitespace-only ACL user is a typo, not an identity: it travels to Redis as an
-	// AUTH argument no ACL rule can match. Empty stays valid and is not tied to the
-	// password — an empty password means the default user. Validation never couples the
-	// two keys, but a name without a password does not authenticate at the dial either:
-	// go-redis sends AUTH only when the password is non-empty, so an ACL deployment must
-	// supply both.
+	// AUTH argument no ACL rule can match. Checked before the coupling rule below so a
+	// name that is both blank and unaccompanied is reported as the typo it is.
 	if cfg.Username != "" && strings.TrimSpace(cfg.Username) == "" {
 		return NewValidationError("cache.redis.username", "must not be whitespace-only")
+	}
+
+	// A name with no password is refused rather than dialled. go-redis builds the
+	// HELLO handshake's AUTH clause inside `if password != ""`, and gates the legacy
+	// AUTH fallback the same way, so an empty password sends no AUTH at all: the
+	// connection would run as whatever identity the endpoint gives an unauthenticated
+	// client — on a stock Redis the `default` user, typically `nopass ~* +@all`. Failing
+	// closed here turns that silent privilege swap into a startup error. The reverse
+	// pair is fine: a password alone is the legacy form that selects the default user.
+	if cfg.Username != "" && cfg.Password == "" {
+		return NewValidationError("cache.redis.username",
+			"requires cache.redis.password: the client sends no AUTH without one, "+
+				"so the connection would silently run as the default user")
 	}
 
 	if cfg.Database < 0 || cfg.Database > 15 {

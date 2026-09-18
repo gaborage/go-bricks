@@ -871,12 +871,27 @@ func TestCheckStaticTenantMapEmptyMapErrorIsNotAConfigError(t *testing.T) {
 	require.NotErrorAs(t, err, &cfgErr, "the empty-map rejection stays a plain error")
 }
 
-// TestValidateMultitenantTenantsCacheUsernameIsTenantAddressed proves the ACL
-// user rule reaches the tenant mirror with the tenant-qualified spelling, so a
-// consumer matching on ConfigError.Field learns whose cache carries the typo.
+// TestValidateMultitenantTenantsCacheUsernameIsTenantAddressed proves both ACL
+// user rules reach the tenant mirror with the tenant-qualified spelling, so a
+// consumer matching on ConfigError.Field learns whose cache carries the fault.
+// The message stays root-spelled — qualification rewrites the field, not the
+// prose — so the remedy it names is the key relative to the tenant's own cache.
 func TestValidateMultitenantTenantsCacheUsernameIsTenantAddressed(t *testing.T) {
-	cfgErr := tenantCacheValidationError(t,
-		&RedisConfig{Host: "acme.redis", Username: " \t "},
-		"a whitespace-only tenant ACL user must fail at startup")
-	assert.Equal(t, "multitenant.tenants.acme.cache.redis.username", cfgErr.Field)
+	const wantField = "multitenant.tenants.acme.cache.redis.username"
+
+	t.Run("whitespace_only_username", func(t *testing.T) {
+		cfgErr := tenantCacheValidationError(t,
+			&RedisConfig{Host: "acme.redis", Username: " \t "},
+			"a whitespace-only tenant ACL user must fail at startup")
+		assert.Equal(t, wantField, cfgErr.Field)
+		assert.Contains(t, cfgErr.Message, "whitespace-only")
+	})
+
+	t.Run("named_user_without_password", func(t *testing.T) {
+		cfgErr := tenantCacheValidationError(t,
+			&RedisConfig{Host: "acme.redis", Username: "svc"},
+			"a tenant ACL user with no password must fail at startup")
+		assert.Equal(t, wantField, cfgErr.Field)
+		assert.Contains(t, cfgErr.Message, "cache.redis.password")
+	})
 }
