@@ -352,6 +352,7 @@ adapter over the AWS SDK (or HashiCorp Vault, GCP Secret Manager, etc.):
 ```go
 import (
     "context"
+    "errors"
     "fmt"
     "os"
 
@@ -405,11 +406,12 @@ func RunReleaseMigrations(ctx context.Context) error {
             myLogger.Info().Str("tenant", r.TenantID).Dur("dur", r.Duration).Msg("tenant migrated")
         },
     })
-    if err != nil { return err }
-    if failed := res.Failed(); len(failed) > 0 {
-        return fmt.Errorf("%d tenants failed", len(failed))
+    // An empty listing returns a nil error and an empty Failed(); only the
+    // verdict says the run attempted nothing.
+    if verdict := res.Verdict(); verdict != nil {
+        return errors.Join(verdict, err)
     }
-    return nil
+    return err
 }
 ```
 
@@ -588,6 +590,26 @@ set `SecretsProvider.NameFor` (for example to compose `/env/platform/<id>/db`).
 It replaces the default `Prefix + tenantID` composition, receives the tenant ID
 already trimmed and allowlist-validated, and is library-only; the CLI exposes
 `--secrets-prefix`.
+
+## Run verdicts
+
+`MigrateAll`'s `Results` hold one row per tenant it **dispatched**. A listed tenant that the run
+stopped before dispatching (context done, quiesce flag, fail-fast) has no row; its ID is in
+`NeverDispatched`, and `Listed()` says how many IDs the lister returned. `res.Verdict()` classifies
+the whole run ([ADR-115](adr_115_fleet_migration_run_verdict.md)):
+
+| Verdict | When | Schema state | Operator action |
+| --- | --- | --- | --- |
+| `nil` (clean) | At least one tenant listed, every listed tenant dispatched, none failed | The action succeeded on every tenant (for a non-dry-run `ActionMigrate`, the fleet is at head) | Proceed |
+| `migration.ErrFleetSplit` | At least one tenant dispatched, and at least one failed or was never dispatched | Mixed versions possible; a failed tenant's state may be unknown | Repair the failed tenants, then re-run; the never-dispatched IDs still need the new SQL |
+| `migration.ErrNothingAttempted` | No tenant dispatched: empty listing, listing failure (nil result), context done or quiesce set before the first dispatch | Untouched | Fix the cause outside the database, then re-run |
+
+A dispatched tenant that ends in `ErrFlywayTimeout` or `ErrFlywayCanceled` is a failure, not a
+never-dispatched tenant: its schema state is unknown. The verdict does not replace `MigrateAll`'s
+error, so check both.
+
+The `go-bricks-migrate` CLI still exits `0` on success and `1` on any error; the three-way exit-code
+mapping recorded in ADR-115 ships in a later CLI release.
 
 ## Operational notes
 

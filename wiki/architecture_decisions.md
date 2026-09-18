@@ -1783,6 +1783,29 @@ key, without turning every broker flap into a restart loop.
 
 ---
 
+### [ADR-115: A Fleet Migration Run Carries a Three-Way Verdict, and Never-Dispatched Tenants Are Counted, Not Rowed](adr_115_fleet_migration_run_verdict.md)
+
+**Date:** 2026-09-17 | **Status:** Accepted | **Breaking:** `MigrateAllResult` gains `NeverDispatched` and `Listed()`, and a parallel `MigrateAll` under an already-done context dispatches no tenant where it used to dispatch a random prefix
+
+`MigrateAll` keeps one `Results` row per dispatched tenant, but the result never recorded how many
+tenants were listed, so an empty listing read as a clean zero-failure run and a run stopped before
+its first dispatch looked like one stopped halfway. The result now carries `Listed()` and the
+never-dispatched IDs (the listing's tail, in order), and `Verdict()` classifies the run by dispatch:
+nil when at least one tenant was listed and every listed tenant was dispatched and none failed, `ErrFleetSplit` when at least one was
+dispatched and at least one failed or was never dispatched, and `ErrNothingAttempted` when none was
+dispatched, a nil result included. A Flyway timeout or cancel on a dispatched tenant stays a
+failure. The per-tenant outcome enum and the `Prepare` skip sentinel were rejected, and the quiesce
+pins on `Results` stand. Both runners check the context before and after the quiesce check; parallel
+dispatch checks the context before it contends for a worker slot and judges both again once it holds
+one. The CLI's exit codes are unchanged
+in this release; their 0/1/2 mapping is decided here.
+See [migrations.md](migrations.md) `[C66.5]`.
+
+**Key Benefits:** a pipeline can tell "nothing was touched" from "the fleet is split" and knows
+which tenants a re-run still has to reach.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2553,7 +2576,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-114) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-115) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

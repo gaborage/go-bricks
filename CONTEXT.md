@@ -234,6 +234,21 @@ tenants that share its partition.
 _Avoid_: DLQ (where a classic-lane message goes instead), quarantine, retry
 queue, parking lot
 
+### Migration
+
+**Run verdict**:
+The classification of a whole `MigrateAll` fleet run by what it dispatched:
+clean (at least one tenant listed, every listed tenant dispatched, none failed),
+fleet split, or nothing attempted (ADR-115). Distinct from a database section's
+**Verdict**; say "run verdict" wherever both could be meant.
+_Avoid_: outcome, status, exit code (the CLI maps a run verdict to one)
+
+**Never-dispatched tenant**:
+A listed tenant the run stopped before handing to a worker (context done,
+quiesce, fail-fast). It has no row in `Results`; a dispatched tenant that a
+cancel or timeout interrupted is failed, never this.
+_Avoid_: skipped, not attempted (for one tenant), pending
+
 ### Identity
 
 **Principal**:
