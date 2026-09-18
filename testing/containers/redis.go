@@ -24,6 +24,9 @@ import (
 // addresses.
 const redisPort = "6379/tcp"
 
+// redisCLI is the in-container client every bootstrap and readiness exec runs.
+const redisCLI = "redis-cli"
+
 // redisTerminateTimeout bounds the teardown of a container whose startup
 // failed, independent of the caller's (likely expired) startup deadline.
 const redisTerminateTimeout = 30 * time.Second
@@ -262,9 +265,9 @@ func bootstrapRedisCluster(ctx context.Context, c *RedisContainer, timeout time.
 	}
 
 	for _, args := range [][]string{
-		{"redis-cli", "config", "set", "cluster-announce-ip", announceIP},
-		{"redis-cli", "config", "set", "cluster-announce-port", strconv.Itoa(c.port)},
-		{"redis-cli", "cluster", "addslotsrange", "0", "16383"},
+		{redisCLI, "config", "set", "cluster-announce-ip", announceIP},
+		{redisCLI, "config", "set", "cluster-announce-port", strconv.Itoa(c.port)},
+		{redisCLI, "cluster", "addslotsrange", "0", "16383"},
 	} {
 		if err := execInRedisContainer(ctx, c, args); err != nil {
 			return err
@@ -279,10 +282,15 @@ func bootstrapRedisCluster(ctx context.Context, c *RedisContainer, timeout time.
 // Docker endpoint or TESTCONTAINERS_HOST_OVERRIDE hands back a name — and some
 // Redis builds reject a hostname there outright, which would fail the bootstrap
 // at its first CONFIG SET. IPv4 only: the announced address is what a host-side
-// client dials back, and the fixture publishes a v4 mapping.
+// client dials back, and the fixture publishes a v4 mapping — so an IPv6 literal
+// is refused here rather than announced into a slot map no redirect could reach.
 func resolveAnnounceIP(ctx context.Context, host string) (string, error) {
 	if ip := net.ParseIP(host); ip != nil {
-		return host, nil
+		ip4 := ip.To4()
+		if ip4 == nil {
+			return "", fmt.Errorf("redis container: %q is an IPv6 literal, and cluster-announce-ip needs the IPv4 address the fixture maps", host)
+		}
+		return ip4.String(), nil
 	}
 	ips, err := net.DefaultResolver.LookupIP(ctx, "ip4", host)
 	if err != nil {
@@ -327,7 +335,7 @@ func waitForRedisClusterReady(ctx context.Context, c *RedisContainer, timeout ti
 	timeout = cmp.Or(timeout, DefaultRedisConfig().StartupTimeout)
 
 	var last string
-	strategy := wait.ForExec([]string{"redis-cli", "cluster", "info"}).
+	strategy := wait.ForExec([]string{redisCLI, "cluster", "info"}).
 		WithResponseMatcher(func(body io.Reader) bool {
 			out, err := io.ReadAll(body)
 			if err != nil {

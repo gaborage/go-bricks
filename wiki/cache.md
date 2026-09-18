@@ -633,9 +633,8 @@ cache:
   else in the deployment that reaches for the reader endpoint fails in ways that look like an
   intermittent cache.
 
-Cluster mode (`cache.redis.mode`) and key prefixing (`cache.redis.keyprefix`) — the other two
-halves of running against a serverless endpoint — arrive in the two changes that follow this
-one under issue #1727.
+Key prefixing (`cache.redis.keyprefix`) — the remaining half of running against a serverless
+endpoint — arrives in the change that follows this one under issue #1727.
 
 ## Cache Manager Defaults
 
