@@ -6,7 +6,7 @@ Repo-wide rules stay in the root [CLAUDE.md](../CLAUDE.md).
 
 AMQP-based messaging with **validate-once, replay-many** pattern. Declarations validated upfront, replayed per-tenant for isolation. Automatic reconnection with exponential backoff. Context propagation for tenant IDs and tracing.
 
-**Concise declaration pattern (use the helpers, not raw structs):** in `DeclareMessaging`, use `decls.DeclareTopicExchange` / `DeclareDirectExchange` / `DeclareQueue` / `DeclareBinding` / `messaging.DeclareTypedPublisher[T]` (returns the `Publisher[T]` handle publishes go through) / `DeclareConsumer` (full example in [llms.txt](../llms.txt)).
+**Concise declaration pattern (use the helpers, not raw structs):** in `DeclareMessaging`, use `decls.DeclareTopicExchange` / `decls.DeclareDirectExchange` / `decls.DeclareQueue` / `decls.DeclareBinding` / `messaging.DeclareTypedPublisher[T]` (returns the `Publisher[T]` handle publishes go through) / `decls.DeclareConsumer` (full example in [llms.txt](../llms.txt)).
 
 **Critical Rules:**
 
