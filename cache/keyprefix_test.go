@@ -47,7 +47,7 @@ func TestWithKeyPrefixPrefixesEveryKey(t *testing.T) {
 
 		require.NoError(t, prefixed.Set(ctx, kpKey, []byte("fresh"), kpTTL))
 
-		assert.Equal(t, []string{"orders:user:1"}, mock.AllKeys())
+		assert.Equal(t, []string{kpWireKey}, mock.AllKeys())
 		cachetest.AssertKeyExists(t, mock, kpWireKey)
 	})
 
@@ -68,7 +68,7 @@ func TestWithKeyPrefixPrefixesEveryKey(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, wasSet)
 		assert.Equal(t, []byte("fresh"), stored)
-		assert.Equal(t, []string{"orders:user:1"}, mock.AllKeys())
+		assert.Equal(t, []string{kpWireKey}, mock.AllKeys())
 	})
 
 	t.Run("get_or_set_on_seeded_key", func(t *testing.T) {
@@ -175,18 +175,9 @@ func TestWithKeyPrefixRejectsANilCache(t *testing.T) {
 	})
 }
 
-// kpTimedCache is a Cache that also carries a configured load-through bound, the
-// shape the framework's Redis client has.
-type kpTimedCache struct {
-	*cachetest.MockCache
-	loadTimeout time.Duration
-}
-
-func (c *kpTimedCache) LoadTimeout() time.Duration { return c.loadTimeout }
-
 func TestWithKeyPrefixForwardsLoadTimeout(t *testing.T) {
 	t.Run("inner_provides_one", func(t *testing.T) {
-		inner := &kpTimedCache{MockCache: cachetest.NewMockCache(), loadTimeout: 250 * time.Millisecond}
+		inner := ltTimedCache{MockCache: cachetest.NewMockCache(), bound: 250 * time.Millisecond}
 
 		prefixed, err := cache.WithKeyPrefix(inner, kpPrefix)
 		require.NoError(t, err)
@@ -254,5 +245,5 @@ func TestWithKeyPrefixComposesWithLoadThrough(t *testing.T) {
 	assert.Equal(t, "from-origin", got)
 	require.Eventually(t, func() bool { return mock.Has(kpWireKey) }, ltWaitFor, ltWaitTick,
 		"the load-through write-back must land under the prefixed key")
-	assert.Equal(t, []string{"orders:user:1"}, mock.AllKeys())
+	assert.Equal(t, []string{kpWireKey}, mock.AllKeys())
 }

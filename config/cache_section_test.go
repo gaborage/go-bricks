@@ -716,10 +716,6 @@ func TestNormalizeCacheRedisModeDefaultsToStandalone(t *testing.T) {
 	}
 }
 
-// keyPrefixPtr returns a pointer to s: the "explicitly set" arm of the
-// cache.redis.keyprefix tri-state, as distinct from an absent key (nil).
-func keyPrefixPtr(s string) *string { return &s }
-
 // TestValidateCacheRedisKeyPrefix pins the namespace grammar at the config door.
 // An absent key is the app.name default and an explicit empty string is the
 // documented opt-out, so both pass; every value that would make the prefix match
@@ -732,13 +728,13 @@ func TestValidateCacheRedisKeyPrefix(t *testing.T) {
 		wantField string
 	}{
 		{name: "absent_takes_the_app_name_default"},
-		{name: "explicit_empty_is_the_opt_out", keyPrefix: keyPrefixPtr("")},
-		{name: "plain_prefix", keyPrefix: keyPrefixPtr("orders")},
-		{name: "namespaced_prefix", keyPrefix: keyPrefixPtr("orders:v2")},
-		{name: "whitespace_is_rejected", keyPrefix: keyPrefixPtr("bad name"), wantField: "cache.redis.keyprefix"},
-		{name: "glob_is_rejected", keyPrefix: keyPrefixPtr("orders*"), wantField: "cache.redis.keyprefix"},
-		{name: "hash_tag_is_rejected", keyPrefix: keyPrefixPtr("{orders}"), wantField: "cache.redis.keyprefix"},
-		{name: "trailing_separator_is_rejected", keyPrefix: keyPrefixPtr("orders:"), wantField: "cache.redis.keyprefix"},
+		{name: "explicit_empty_is_the_opt_out", keyPrefix: new("")},
+		{name: "plain_prefix", keyPrefix: new("orders")},
+		{name: "namespaced_prefix", keyPrefix: new("orders:v2")},
+		{name: "whitespace_is_rejected", keyPrefix: new("bad name"), wantField: "cache.redis.keyprefix"},
+		{name: "glob_is_rejected", keyPrefix: new("orders*"), wantField: "cache.redis.keyprefix"},
+		{name: "hash_tag_is_rejected", keyPrefix: new("{orders}"), wantField: "cache.redis.keyprefix"},
+		{name: "trailing_separator_is_rejected", keyPrefix: new("orders:"), wantField: "cache.redis.keyprefix"},
 	}
 
 	for _, tt := range tests {
@@ -783,8 +779,8 @@ func TestValidateCacheKeyPrefixDefaultNeedsAValidAppName(t *testing.T) {
 	}{
 		{name: "namespaceable_app_name", appName: "orders", enabled: true},
 		{name: "unnamespaceable_app_name_with_cache", appName: "bad name", enabled: true, wantErr: true},
-		{name: "unnamespaceable_app_name_with_explicit_prefix", appName: "bad name", enabled: true, keyPrefix: keyPrefixPtr("ok")},
-		{name: "unnamespaceable_app_name_with_the_opt_out", appName: "bad name", enabled: true, keyPrefix: keyPrefixPtr("")},
+		{name: "unnamespaceable_app_name_with_explicit_prefix", appName: "bad name", enabled: true, keyPrefix: new("ok")},
+		{name: "unnamespaceable_app_name_with_the_opt_out", appName: "bad name", enabled: true, keyPrefix: new("")},
 		{name: "unnamespaceable_app_name_without_cache", appName: "bad name"},
 	}
 
@@ -821,56 +817,35 @@ func TestValidateCacheKeyPrefixDefaultNeedsAValidAppName(t *testing.T) {
 // explicit empty string arrives as a non-nil empty value (the opt-out), and a value
 // arrives as itself — from YAML and from the environment alike.
 func TestLoadRedisKeyPrefixTriState(t *testing.T) {
-	load := func(t *testing.T, redisLines string) *Config {
+	load := func(t *testing.T, redisLines string, env map[string]string) *Config {
 		t.Helper()
-		dir := t.TempDir()
-		yamlBody := "cache:\n" +
-			"  enabled: true\n" +
-			"  redis:\n" +
-			"    host: localhost\n" +
-			redisLines
-		require.NoError(t, os.WriteFile(filepath.Join(dir, testConfigFileYAML), []byte(yamlBody), 0o600))
-		t.Chdir(dir)
-		cfg, err := Load()
+		cfg, err := loadDeliveredEmptyFixture(t, "cache:\n  enabled: true\n  redis:\n    host: localhost\n"+redisLines, env)
 		require.NoError(t, err)
 		return cfg
 	}
 
 	t.Run("absent_stays_nil", func(t *testing.T) {
-		clearEnvironmentVariables()
-		defer clearEnvironmentVariables()
-
-		cfg := load(t, "")
+		cfg := load(t, "", nil)
 
 		assert.Nil(t, cfg.Cache.Redis.KeyPrefix, "an absent key must stay absent, or app.name can never apply")
 	})
 
 	t.Run("explicit_empty_is_delivered", func(t *testing.T) {
-		clearEnvironmentVariables()
-		defer clearEnvironmentVariables()
-
-		cfg := load(t, "    keyprefix: \"\"\n")
+		cfg := load(t, "    keyprefix: \"\"\n", nil)
 
 		require.NotNil(t, cfg.Cache.Redis.KeyPrefix, "the opt-out must be distinguishable from an absent key")
 		assert.Empty(t, *cfg.Cache.Redis.KeyPrefix)
 	})
 
 	t.Run("value_is_delivered", func(t *testing.T) {
-		clearEnvironmentVariables()
-		defer clearEnvironmentVariables()
-
-		cfg := load(t, "    keyprefix: orders\n")
+		cfg := load(t, "    keyprefix: orders\n", nil)
 
 		require.NotNil(t, cfg.Cache.Redis.KeyPrefix)
 		assert.Equal(t, "orders", *cfg.Cache.Redis.KeyPrefix)
 	})
 
 	t.Run("environment_overrides_yaml", func(t *testing.T) {
-		clearEnvironmentVariables()
-		defer clearEnvironmentVariables()
-		t.Setenv("CACHE_REDIS_KEYPREFIX", "from-env")
-
-		cfg := load(t, "    keyprefix: orders\n")
+		cfg := load(t, "    keyprefix: orders\n", map[string]string{"CACHE_REDIS_KEYPREFIX": "from-env"})
 
 		require.NotNil(t, cfg.Cache.Redis.KeyPrefix)
 		assert.Equal(t, "from-env", *cfg.Cache.Redis.KeyPrefix)

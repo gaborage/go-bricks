@@ -814,30 +814,6 @@ const (
 	keyPrefixLogical = "user:1"
 )
 
-// stubCacheConfigStore serves a canned cache section per resource key and reports
-// every other key as not configured, the shape config.TenantStore uses for a cache
-// that was never declared.
-type stubCacheConfigStore struct {
-	byKey map[string]*config.CacheConfig
-}
-
-func (s *stubCacheConfigStore) DBConfig(context.Context, string) (*config.DatabaseConfig, error) {
-	return nil, config.NewNotConfiguredError("database", "DATABASE_HOST", "database.host")
-}
-
-func (s *stubCacheConfigStore) BrokerURL(context.Context, string) (string, error) {
-	return "", config.NewNotConfiguredError("messaging", "MESSAGING_BROKER_URL", "messaging.broker.url")
-}
-
-func (s *stubCacheConfigStore) CacheConfig(_ context.Context, key string) (*config.CacheConfig, error) {
-	if cfg, ok := s.byKey[key]; ok {
-		return cfg, nil
-	}
-	return nil, config.NewNotConfiguredError("cache", "CACHE_REDIS_HOST", "cache.redis.host")
-}
-
-func (s *stubCacheConfigStore) IsDynamic() bool { return false }
-
 // cacheSectionWithKeyPrefix builds an enabled Redis cache section carrying keyPrefix
 // in its tri-state form: nil is an absent key, a pointer is an explicit value.
 func cacheSectionWithKeyPrefix(keyPrefix *string) *config.CacheConfig {
@@ -846,6 +822,29 @@ func cacheSectionWithKeyPrefix(keyPrefix *string) *config.CacheConfig {
 		Type:    config.CacheTypeRedis,
 		Redis:   config.RedisConfig{Host: "localhost", Port: 6379, PoolSize: 10, KeyPrefix: keyPrefix},
 	}
+}
+
+// storeServingCacheSection returns the shipped store carrying section under key: the
+// root cache for the empty key, a tenant mirror otherwise. The real store is used
+// rather than a fake so the prefix lookup meets the same key semantics and the same
+// not-configured errors the framework meets in production.
+func storeServingCacheSection(key string, section *config.CacheConfig) TenantStore {
+	cfg := &config.Config{}
+	if key == "" {
+		cfg.Cache = *section
+	} else {
+		cfg.Multitenant.Enabled = true
+		cfg.Multitenant.Tenants = map[string]config.TenantEntry{key: {Cache: *section}}
+	}
+	return config.NewTenantStore(cfg)
+}
+
+// assertWireKey writes one logical key through c and asserts the single key that
+// reached the inner cache, which is the whole observable effect of the namespace.
+func assertWireKey(t *testing.T, c cache.Cache, inner *cachetest.MockCache, want string) {
+	t.Helper()
+	require.NoError(t, c.Set(context.Background(), keyPrefixLogical, []byte("v"), time.Minute))
+	assert.Equal(t, []string{want}, inner.AllKeys())
 }
 
 // connectorOverMock returns a resolver whose cache connector hands out mock, plus the
@@ -884,17 +883,13 @@ func TestFactoryResolverCacheConnectorNamespacesKeys(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mock := cachetest.NewMockCache()
-			store := &stubCacheConfigStore{byKey: map[string]*config.CacheConfig{
-				tt.key: cacheSectionWithKeyPrefix(tt.keyPrefix),
-			}}
+			store := storeServingCacheSection(tt.key, cacheSectionWithKeyPrefix(tt.keyPrefix))
 
 			connector := connectorOverMock(t, mock, store)
 			c, err := connector(context.Background(), tt.key)
 			require.NoError(t, err)
 
-			require.NoError(t, c.Set(context.Background(), keyPrefixLogical, []byte("v"), time.Minute))
-
-			assert.Equal(t, []string{tt.wantWireKey}, mock.AllKeys())
+			assertWireKey(t, c, mock, tt.wantWireKey)
 		})
 	}
 }
@@ -907,9 +902,7 @@ func TestFactoryResolverCacheConnectorNamespacesKeys(t *testing.T) {
 func TestFactoryResolverCacheConnectorFailsClosedOnAnUnusablePrefix(t *testing.T) {
 	unusable := "bad name"
 	mock := cachetest.NewMockCache()
-	store := &stubCacheConfigStore{byKey: map[string]*config.CacheConfig{
-		keyPrefixTenant: cacheSectionWithKeyPrefix(&unusable),
-	}}
+	store := storeServingCacheSection(keyPrefixTenant, cacheSectionWithKeyPrefix(&unusable))
 
 	connector := connectorOverMock(t, mock, store)
 	c, err := connector(context.Background(), keyPrefixTenant)
@@ -928,12 +921,11 @@ func TestFactoryResolverCacheConnectorFallsBackToTheAppNameWithoutASection(t *te
 	t.Run("store_reports_not_configured", func(t *testing.T) {
 		mock := cachetest.NewMockCache()
 
-		connector := connectorOverMock(t, mock, &stubCacheConfigStore{})
+		connector := connectorOverMock(t, mock, config.NewTenantStore(&config.Config{}))
 		c, err := connector(context.Background(), "")
 		require.NoError(t, err)
 
-		require.NoError(t, c.Set(context.Background(), keyPrefixLogical, []byte("v"), time.Minute))
-		assert.Equal(t, []string{"orders:user:1"}, mock.AllKeys())
+		assertWireKey(t, c, mock, "orders:user:1")
 	})
 
 	t.Run("no_store_at_all", func(t *testing.T) {
@@ -943,8 +935,7 @@ func TestFactoryResolverCacheConnectorFallsBackToTheAppNameWithoutASection(t *te
 		c, err := connector(context.Background(), keyPrefixTenant)
 		require.NoError(t, err)
 
-		require.NoError(t, c.Set(context.Background(), keyPrefixLogical, []byte("v"), time.Minute))
-		assert.Equal(t, []string{"orders:acme:user:1"}, mock.AllKeys())
+		assertWireKey(t, c, mock, "orders:acme:user:1")
 	})
 }
 
@@ -957,7 +948,7 @@ func TestFactoryResolverCacheConnectorReportsANilCacheInsteadOfPanicking(t *test
 		CacheConnector: func(context.Context, string) (cache.Cache, error) { return nil, nil },
 	}, &config.Config{App: config.AppConfig{Name: keyPrefixAppName}})
 
-	connector := resolver.CacheConnector(&stubCacheConfigStore{}, logger.New("error", true))
+	connector := resolver.CacheConnector(config.NewTenantStore(&config.Config{}), logger.New("error", true))
 	c, err := connector(context.Background(), "")
 
 	require.ErrorIs(t, err, cache.ErrNilCache)
@@ -980,9 +971,7 @@ func (c *timedMockCache) LoadTimeout() time.Duration { return c.loadTimeout }
 // of falling back to the hand-written-cache bound.
 func TestCacheManagerNamespacesOncePerInstance(t *testing.T) {
 	inner := &timedMockCache{MockCache: cachetest.NewMockCache(), loadTimeout: 250 * time.Millisecond}
-	store := &stubCacheConfigStore{byKey: map[string]*config.CacheConfig{
-		"": cacheSectionWithKeyPrefix(nil),
-	}}
+	store := storeServingCacheSection("", cacheSectionWithKeyPrefix(nil))
 	resolver := newFactoryResolverForConfig(&Options{
 		CacheConnector: func(context.Context, string) (cache.Cache, error) { return inner, nil },
 	}, &config.Config{App: config.AppConfig{Name: keyPrefixAppName}})
