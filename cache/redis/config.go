@@ -121,8 +121,11 @@ func (c *Config) validate() (clienttls.Material, error) {
 	}
 
 	// Empty is the default user; whitespace-only is a typo that would travel as an
-	// AUTH argument no ACL rule can match. The password is judged independently —
-	// an ACL nopass user authenticates by name alone.
+	// AUTH argument no ACL rule can match. The password is judged independently:
+	// neither key implies the other. That independence stops here, though — go-redis
+	// builds the AUTH clause inside `if password != ""`, so a name with no secret is
+	// never sent and the dial runs as the implicit "default" user. Pinned by
+	// TestNewClientAuthenticatesAsNamedACLUser.
 	if c.Username != "" && strings.TrimSpace(c.Username) == "" {
 		return clienttls.Material{}, cache.NewConfigError("redis.username", "username cannot be whitespace-only", nil)
 	}

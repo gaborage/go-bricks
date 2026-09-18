@@ -1189,12 +1189,33 @@ func TestNewClientAuthenticatesAsNamedACLUser(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, client)
 	})
+
+	// A name alone never authenticates. go-redis builds the HELLO handshake's
+	// AUTH clause inside `if password != ""` (commands.go Hello), and gates the
+	// legacy AUTH fallback the same way, so an empty password means no AUTH is
+	// sent at all and the connection runs as whatever identity the server hands
+	// an unauthenticated client. Pinned here because the config layer accepts
+	// this pair — it is the deployment's job to supply the secret, and a silent
+	// downgrade to the implicit "default" user is the failure worth naming.
+	t.Run("username_without_password_sends_no_auth", func(t *testing.T) {
+		mr := miniredis.RunT(t)
+		mr.RequireUserAuth(aclUser, aclPass)
+
+		cfg := testConfig(mr)
+		cfg.Username = aclUser
+
+		client, err := NewClient(cfg)
+		require.Error(t, err, "the ACL name alone must not authenticate")
+		assert.Nil(t, client)
+	})
 }
 
 // TestConfigValidateUsername mirrors the config layer's rule at the client's own
 // door, which a hand-built Config reaches without passing through config
 // validation: a whitespace-only ACL user is refused, while an empty one and a
-// named one with no password (ACL nopass) stand.
+// named one with no password stand. Validation never couples the two keys; what
+// a name with no password does at the dial is pinned separately, by
+// TestNewClientAuthenticatesAsNamedACLUser.
 func TestConfigValidateUsername(t *testing.T) {
 	tests := []struct {
 		name      string

@@ -516,9 +516,9 @@ func TestValidateRedisTLSAcceptsLoadableMaterial(t *testing.T) {
 }
 
 // TestValidateCacheRedisUsername pins cache.redis.username as an identity that
-// stands on its own: a named ACL user is accepted with or without a password
-// (ACL nopass users exist), and a whitespace-only name — which reaches Redis as
-// an AUTH argument no ACL rule can match — is refused.
+// stands on its own: a named ACL user is accepted with or without a password —
+// validation never couples the two keys — and a whitespace-only name, which
+// reaches Redis as an AUTH argument no ACL rule can match, is refused.
 func TestValidateCacheRedisUsername(t *testing.T) {
 	tests := []struct {
 		name      string

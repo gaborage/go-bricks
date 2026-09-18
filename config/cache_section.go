@@ -89,7 +89,10 @@ func validateRedisCache(cfg *RedisConfig) error {
 
 	// A whitespace-only ACL user is a typo, not an identity: it travels to Redis as an
 	// AUTH argument no ACL rule can match. Empty stays valid and is not tied to the
-	// password — an empty password means the default user, and ACL nopass users exist.
+	// password — an empty password means the default user. Validation never couples the
+	// two keys, but a name without a password does not authenticate at the dial either:
+	// go-redis sends AUTH only when the password is non-empty, so an ACL deployment must
+	// supply both.
 	if cfg.Username != "" && strings.TrimSpace(cfg.Username) == "" {
 		return NewValidationError("cache.redis.username", "must not be whitespace-only")
 	}

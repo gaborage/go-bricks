@@ -1832,8 +1832,8 @@ key it was handed. A managed endpoint grants none of that: ElastiCache Serverles
 protocol only, authenticates named RBAC users rather than a shared password, and offers one
 logical database — which dissolves ADR-011's promise of per-tenant isolation by separate Redis
 database. Three additions answer it. `cache.redis.username` carries an ACL identity sent as
-`AUTH <username> <password>`, independent of `password` because ACL `nopass` users exist, refused
-only when whitespace-only. `cache.redis.mode` selects `standalone` (default) or `cluster` through
+`AUTH <username> <password>`, independent of `password` at validation though the driver sends
+neither unless the password is set, refused only when whitespace-only. `cache.redis.mode` selects `standalone` (default) or `cluster` through
 one `redis.NewUniversalClient` path, with `mode: cluster` plus a non-zero `database` rejected at
 startup because the cluster client drops `DB` rather than refusing it. `cache.redis.keyprefix`
 namespaces every key as `<prefix>:<key>`, defaults to `app.name`, folds a tenant in as

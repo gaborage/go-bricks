@@ -578,10 +578,14 @@ cache:
       enabled: true
 ```
 
-- **`username` is independent of `password`.** Neither key implies the other: an ACL user
-  configured `nopass` authenticates by name alone, and an empty `username` with a password is
-  the legacy `AUTH <password>` form against the implicit `default` user. Only a
-  whitespace-only `username` is refused, as a typo that no ACL rule could match.
+- **`username` is independent of `password` in configuration, but set both.** Neither key
+  implies the other at validation, and an empty `username` with a password is the legacy
+  `AUTH <password>` form against the implicit `default` user. Only a whitespace-only
+  `username` is refused, as a typo that no ACL rule could match. A `username` with an **empty
+  password does not authenticate as that user**: go-redis builds the AUTH clause only when the
+  password is non-empty, so nothing is sent and the connection runs as whatever identity the
+  endpoint gives an unauthenticated client. An ACL user provisioned `nopass` therefore cannot
+  be reached by name alone — give it a password, or expect the `default` user's privileges.
 - **`tls.enabled: true` is required, not optional.** ElastiCache serverless serves encrypted
   in transit always, so a plaintext dial is dropped by the endpoint. Mutual TLS is not
   supported there, so leave `certfile`/`keyfile` unset and let the connection verify against

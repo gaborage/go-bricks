@@ -73,8 +73,11 @@ ADR-011 introduced — break silently under them.
 ## Decision
 
 - **`cache.redis.username` carries a Redis ACL identity.** It is sent as
-  `AUTH <username> <password>` and is independent of `password`: an ACL `nopass` user
-  authenticates by name alone, and an empty `username` keeps today's `default`-user behaviour.
+  `AUTH <username> <password>` and is independent of `password` at validation: neither key
+  implies the other, and an empty `username` keeps today's `default`-user behaviour. The
+  independence is a config rule, not a wire one — go-redis builds the AUTH clause only when
+  the password is non-empty, so a name with no secret is never sent and the dial falls back to
+  the implicit `default` user. Reaching an ACL user requires both keys.
   The only rule is that a non-empty value must not be whitespace-only, checked in
   `validateRedisCache` (the single site root and tenant config both reach) and again in
   `(*redis.Config).Validate()`, the door a hand-built config reaches. Additive; the zero value
