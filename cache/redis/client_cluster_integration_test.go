@@ -18,8 +18,8 @@ import (
 //
 // The spread is not what today's pass demonstrates. One node owns all 16384
 // slots here, so a client that pinned a single connection reaches all four keys
-// exactly as a client following the slot map does: the two behaviours are the
-// same behaviour on this fixture. The spread is what BECOMES load-bearing the
+// exactly as a client following the slot map does: the two behaviors are the
+// same behavior on this fixture. The spread is what BECOMES load-bearing the
 // moment the same assertions run against a sharded endpoint, where reaching all
 // four means four routing decisions went right — and keeping it falsifiable now
 // is what makes that run mean something later.
@@ -60,7 +60,7 @@ func setupClusterRedis(t *testing.T) (*Client, context.Context) {
 // as happily as keys spanning slots and the suite passes either way. The spread
 // is the entire reason the key set exists, which makes it worth four extra
 // round-trips on an already-open pool to keep it falsifiable.
-func requireClusterKeysSpanDistinctSlots(t *testing.T, ctx context.Context, client *Client) {
+func requireClusterKeysSpanDistinctSlots(ctx context.Context, t *testing.T, client *Client) {
 	t.Helper()
 
 	slots := make(map[int64]struct{}, len(clusterKeys))
@@ -79,10 +79,10 @@ func requireClusterKeysSpanDistinctSlots(t *testing.T, ctx context.Context, clie
 // and TLS cluster tests: the operations
 // and their expected answers are identical, and what differs is the transport
 // the caller already built its client on.
-func assertClusterRoundTrips(t *testing.T, ctx context.Context, client *Client) {
+func assertClusterRoundTrips(ctx context.Context, t *testing.T, client *Client) {
 	t.Helper()
 
-	requireClusterKeysSpanDistinctSlots(t, ctx, client)
+	requireClusterKeysSpanDistinctSlots(ctx, t, client)
 
 	for _, key := range clusterKeys {
 		value := []byte("value-for-" + key)
@@ -103,7 +103,7 @@ func assertClusterRoundTrips(t *testing.T, ctx context.Context, client *Client) 
 // reports it, the second finds the value already there and hands back what is
 // stored rather than what was offered. The key is the caller's, so the two
 // fixtures never write the same one.
-func assertClusterGetOrSet(t *testing.T, ctx context.Context, client *Client, key string) {
+func assertClusterGetOrSet(ctx context.Context, t *testing.T, client *Client, key string) {
 	t.Helper()
 
 	first := []byte("first")
@@ -133,7 +133,7 @@ func assertClusterGetOrSet(t *testing.T, ctx context.Context, client *Client, ke
 func TestRealRedisClusterModeRoundTrips(t *testing.T) {
 	client, ctx := setupClusterRedis(t)
 
-	assertClusterRoundTrips(t, ctx, client)
+	assertClusterRoundTrips(ctx, t, client)
 }
 
 // TestRealRedisClusterModeGetOrSet pins the SET NX GET path, which needs Redis
@@ -141,7 +141,7 @@ func TestRealRedisClusterModeRoundTrips(t *testing.T) {
 func TestRealRedisClusterModeGetOrSet(t *testing.T) {
 	client, ctx := setupClusterRedis(t)
 
-	assertClusterGetOrSet(t, ctx, client, "cluster:getorset")
+	assertClusterGetOrSet(ctx, t, client, "cluster:getorset")
 }
 
 // TestRealRedisClusterModeCompareAndSwap drives the two Lua scripts through the

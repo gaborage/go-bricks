@@ -56,7 +56,7 @@ func setupClusterTLSRedis(t *testing.T) (*Client, context.Context) {
 	t.Cleanup(func() { _ = client.Close() })
 
 	require.NoError(t, client.client.FlushDB(ctx).Err(), "failed to flush the cluster keyspace")
-	requireSlotMapAvoidsPinnedName(t, ctx, client)
+	requireSlotMapAvoidsPinnedName(ctx, t, client)
 
 	return client, ctx
 }
@@ -92,7 +92,7 @@ func requireLeafCoversOnlyPinnedName(t *testing.T, certPEM []byte) {
 // slot map ever advertised the pinned name itself, both derivations of a node's
 // expected name would agree and every test in this file would pass without
 // proving anything (see setupClusterTLSRedis).
-func requireSlotMapAvoidsPinnedName(t *testing.T, ctx context.Context, client *Client) {
+func requireSlotMapAvoidsPinnedName(ctx context.Context, t *testing.T, client *Client) {
 	t.Helper()
 
 	slots, err := client.client.ClusterSlots(ctx).Result()
@@ -117,7 +117,7 @@ func requireSlotMapAvoidsPinnedName(t *testing.T, ctx context.Context, client *C
 func TestRealRedisClusterTLSRoundTrips(t *testing.T) {
 	client, ctx := setupClusterTLSRedis(t)
 
-	assertClusterRoundTrips(t, ctx, client)
+	assertClusterRoundTrips(ctx, t, client)
 }
 
 // TestRealRedisClusterTLSGetOrSet pins the SET NX GET path over the same
@@ -127,5 +127,5 @@ func TestRealRedisClusterTLSRoundTrips(t *testing.T) {
 func TestRealRedisClusterTLSGetOrSet(t *testing.T) {
 	client, ctx := setupClusterTLSRedis(t)
 
-	assertClusterGetOrSet(t, ctx, client, "cluster:tls:getorset")
+	assertClusterGetOrSet(ctx, t, client, "cluster:tls:getorset")
 }

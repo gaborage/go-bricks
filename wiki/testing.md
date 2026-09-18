@@ -485,7 +485,7 @@ Recognising a recurrence: grep the job log for `wait for reaper` or `Reaper hand
 
 `Cluster` and `TLS` compose: each contributes flags to one accumulated command line rather than owning the command, and the cluster arm adds `--tls-cluster yes` when TLS is on, so the cluster bus is encrypted too. Under TLS the bootstrap dials the node's own TLS listener with `--tls --cacert`, which verifies against the fixture CA; no verification-skipping flag is used or needed.
 
-Two behaviours to know before extending this fixture:
+Two behaviors to know before extending this fixture:
 
 - **The announce key depends on the listener the client arrived on.** A node serves a TLS caller the TLS port and a plaintext caller the plaintext one, from two separate settings, so the TLS arm sets `cluster-announce-tls-port` and the plaintext arm `cluster-announce-port`. Measured here: with `cluster-announce-port` alone, a TLS caller was still handed the container-side `6379` and its redirect was unreachable.
 - **`redis-cli` exits 0 on an error REPLY** by default in this image — a rejected `CONFIG SET` and an unknown command alike — which is why every in-container invocation is built with `-e`, the flag that turns an error reply into a non-zero exit. It is replies from a connected server that `-e` is about; a connection that never lands already exits non-zero without it. Without `-e` a refused bootstrap command passes silently and resurfaces much later as an opaque cluster-readiness timeout naming nothing; with it the exit status is the whole verdict, for the readiness `wait.ForExec` as much as for the bootstrap, since that strategy already requires exit 0.
