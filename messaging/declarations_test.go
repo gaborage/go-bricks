@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1405,9 +1406,13 @@ func TestCloneCopiesQueueConflicts(t *testing.T) {
 		conflict(d, name)
 	}
 	require.Error(t, d.Validate())
-	// Spare capacity is what makes the rest of this test discriminating: without
-	// it every later append reallocates, and a clone that merely aliased the
-	// source's slice would behave identically to a real copy.
+	// Create the spare capacity deliberately rather than relying on append's
+	// growth factor, which is an implementation detail: three records do not
+	// guarantee cap > len. Spare capacity is what makes the rest of this test
+	// discriminating — a clone that aliased the source's slice would append into
+	// that same spare slot instead of reallocating away from it, so the two
+	// sides would overwrite each other's record and the aliasing would show.
+	d.queueConflicts = slices.Grow(d.queueConflicts, 1)
 	require.Greater(t, cap(d.queueConflicts), len(d.queueConflicts))
 
 	clone := d.Clone()
@@ -1912,9 +1917,13 @@ func TestCloneCopiesExchangeConflicts(t *testing.T) {
 		conflict(d, name)
 	}
 	require.Error(t, d.Validate())
-	// Spare capacity is what makes the rest of this test discriminating: without
-	// it every later append reallocates, and a clone that merely aliased the
-	// source's slice would behave identically to a real copy.
+	// Create the spare capacity deliberately rather than relying on append's
+	// growth factor, which is an implementation detail: three records do not
+	// guarantee cap > len. Spare capacity is what makes the rest of this test
+	// discriminating — a clone that aliased the source's slice would append into
+	// that same spare slot instead of reallocating away from it, so the two
+	// sides would overwrite each other's record and the aliasing would show.
+	d.exchangeConflicts = slices.Grow(d.exchangeConflicts, 1)
 	require.Greater(t, cap(d.exchangeConflicts), len(d.exchangeConflicts))
 
 	clone := d.Clone()
