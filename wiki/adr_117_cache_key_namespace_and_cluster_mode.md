@@ -143,8 +143,14 @@ ADR-011 introduced — break silently under them.
   section `config.Validate` never saw) closes the instance just dialed rather than returning an
   unnamespaced cache, and so does a namespace that resolved to nothing at all — the exported
   `NewFactoryResolver` carries no app name, so a root key with no section prefix would otherwise
-  hand the instance back unwrapped. An explicit `""` is a different event and still opts out. A section that cannot be read is not that case — it carries no override to
-  honor, so the `app.name` default applies and the instance is still namespaced. The prefix never
+  hand the instance back unwrapped. An explicit `""` is a different event and still opts out. So is a
+  section the store could not READ: an opaque failure (anything that is not a
+  `*config.ConfigError`) fails closed too, because the section it hid may carry an explicit
+  prefix and the instance is pooled, so defaulting to `app.name` would strand this key's entries
+  in a different keyspace for as long as that instance lives. A `*config.ConfigError` — no
+  section declared, which is the single-tenant not-configured case and the custom-connector
+  deployment with no `cache.*` block — carries no override to honor, so the `app.name` default
+  applies, silently, and the instance is still namespaced. The prefix never
   reaches the transport, so it is not mirrored onto `cache/redis.Config`; the field-parity test
   carries that one named exclusion.
 

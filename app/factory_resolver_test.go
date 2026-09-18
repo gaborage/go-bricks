@@ -944,11 +944,12 @@ func TestFactoryResolverCacheConnectorValidatesTheBaseBeforeTheTenantFold(t *tes
 	}
 }
 
-// TestFactoryResolverCacheConnectorFallsBackToTheAppNameWithoutASection proves an
-// unreadable cache section still namespaces. A section that cannot be read carries no
-// override to honor, and the app-name default is what a custom CacheConnector — whose
-// deployment may declare no cache.* block at all — gets. The unsafe outcome would be
-// an unprefixed instance, which is exactly what the fallback prevents.
+// TestFactoryResolverCacheConnectorFallsBackToTheAppNameWithoutASection proves a cache
+// section that was never DECLARED still namespaces. No section carries no override to
+// honor, and the app-name default is what a custom CacheConnector — whose deployment may
+// declare no cache.* block at all — gets. The unsafe outcome would be an unprefixed
+// instance, which is exactly what the fallback prevents. A section the store could not
+// READ is the other arm and is refused, not defaulted: see the fail-closed test.
 func TestFactoryResolverCacheConnectorFallsBackToTheAppNameWithoutASection(t *testing.T) {
 	t.Run("store_reports_not_configured", func(t *testing.T) {
 		mock := cachetest.NewMockCache()
@@ -1041,8 +1042,8 @@ func (s *failingCacheConfigStore) CacheConfig(context.Context, string) (*config.
 	return nil, s.err
 }
 
-// namespaceFallbackWarning is the substring that proves the fallback was reported.
-const namespaceFallbackWarning = "falls back to the application name"
+// namespaceReadFailure is the substring that proves an unreadable section was reported.
+const namespaceReadFailure = "the key namespace cannot be resolved"
 
 // connectorLoggingAt returns the cache connector over mock at a log level that lets
 // warnings through, built inside the caller's stdout capture because the framework
@@ -1054,28 +1055,31 @@ func connectorLoggingAt(store TenantStore, mock cache.Cache) cache.Connector {
 	return resolver.CacheConnector(store, logger.New("warn", false))
 }
 
-// TestFactoryResolverCacheConnectorReportsAnUnreadableSection pins the one case the
-// app.name fallback must not be silent about. A store that FAILED is not a store
-// reporting no section: a section carrying an explicit keyprefix resolves to the
-// default namespace instead of its own and strands the entries already written under
-// it, so the fallback is logged. A store merely reporting that nothing is declared —
-// the custom-connector deployment with no cache.* block — stays silent, or every such
-// deployment would warn on every pooled instance.
-func TestFactoryResolverCacheConnectorReportsAnUnreadableSection(t *testing.T) {
-	t.Run("an_opaque_read_failure_is_logged", func(t *testing.T) {
+// TestFactoryResolverCacheConnectorFailsClosedOnAnUnreadableSection pins the line
+// between the two ways to have no section. A store that FAILED is not a store reporting
+// that none is declared: its section may carry an explicit keyprefix, so falling back to
+// app.name would put a tenant's keys in a DIFFERENT keyspace from the one its entries
+// were written under — and the instance is pooled, so the wrong namespace outlives the
+// outage that caused it. That arm now fails closed, closing the instance already dialed.
+// A *config.ConfigError is the silent arm — the single-tenant not-configured case and the
+// custom-connector deployment with no cache.* block — and still takes app.name, or every
+// such deployment would fail on every pooled instance.
+func TestFactoryResolverCacheConnectorFailsClosedOnAnUnreadableSection(t *testing.T) {
+	t.Run("an_opaque_read_failure_is_refused", func(t *testing.T) {
 		mock := cachetest.NewMockCache()
 		store := &failingCacheConfigStore{TenantStore: config.NewTenantStore(&config.Config{}), err: assert.AnError}
 
 		out := captureStdout(t, func() {
 			c, err := connectorLoggingAt(store, mock)(context.Background(), keyPrefixTenant)
-			require.NoError(t, err)
-			assertWireKey(t, c, mock, "orders:acme:user:1")
+			require.ErrorIs(t, err, assert.AnError, "the store's own failure must reach the caller")
+			assert.Nil(t, c)
 		})
 
-		assert.Contains(t, out, namespaceFallbackWarning)
+		cachetest.AssertCacheClosed(t, mock)
+		assert.Contains(t, out, namespaceReadFailure)
 	})
 
-	t.Run("no_section_declared_stays_silent", func(t *testing.T) {
+	t.Run("no_section_declared_still_takes_the_app_name", func(t *testing.T) {
 		mock := cachetest.NewMockCache()
 
 		out := captureStdout(t, func() {
@@ -1084,7 +1088,7 @@ func TestFactoryResolverCacheConnectorReportsAnUnreadableSection(t *testing.T) {
 			assertWireKey(t, c, mock, "orders:user:1")
 		})
 
-		assert.NotContains(t, out, namespaceFallbackWarning)
+		assert.NotContains(t, out, namespaceReadFailure)
 	})
 }
 
