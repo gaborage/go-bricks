@@ -912,6 +912,38 @@ func TestFactoryResolverCacheConnectorFailsClosedOnAnUnusablePrefix(t *testing.T
 	cachetest.AssertCacheClosed(t, mock)
 }
 
+// TestFactoryResolverCacheConnectorValidatesTheBaseBeforeTheTenantFold pins WHERE the
+// grammar binds. The tenant fold appends a segment, so a base the grammar refuses can
+// read as a legal namespace once joined: "orders:v2" folds to "orders:v2:acme", three
+// segments each legal on its own, and the deployment is back to the ambiguity the
+// one-segment rule removed — a service prefixed "orders" writing "v2:acme:…" reaches
+// the same keys. A dynamic tenant source is not obliged to have run config.Validate, so
+// the base is checked before it is joined, and the instance already dialed is closed.
+func TestFactoryResolverCacheConnectorValidatesTheBaseBeforeTheTenantFold(t *testing.T) {
+	tests := []struct {
+		name      string
+		keyPrefix string
+	}{
+		{name: "multi_segment_base", keyPrefix: "orders:v2"},
+		{name: "base_ending_in_the_separator", keyPrefix: "orders:"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyPrefix := tt.keyPrefix
+			mock := cachetest.NewMockCache()
+			store := storeServingCacheSection(keyPrefixTenant, cacheSectionWithKeyPrefix(&keyPrefix))
+
+			connector := connectorOverMock(t, mock, store)
+			c, err := connector(context.Background(), keyPrefixTenant)
+
+			require.ErrorIs(t, err, cache.ErrInvalidKeyPrefix)
+			assert.Nil(t, c)
+			cachetest.AssertCacheClosed(t, mock)
+		})
+	}
+}
+
 // TestFactoryResolverCacheConnectorFallsBackToTheAppNameWithoutASection proves an
 // unreadable cache section still namespaces. A section that cannot be read carries no
 // override to honor, and the app-name default is what a custom CacheConnector — whose

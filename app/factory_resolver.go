@@ -167,6 +167,19 @@ func (f *FactoryResolver) namespacedCacheConnector(inner cache.Connector, resour
 		}
 
 		base, explicit := f.cacheKeyPrefixBase(ctx, resourceSource, key, log)
+
+		// The base passes the ONE-SEGMENT grammar before the tenant fold appends to it.
+		// Joined first, a base the grammar refuses can read as a legal namespace:
+		// "orders:v2" folds to "orders:v2:acme", three segments each legal on its own,
+		// and the ambiguity the one-segment rule removed is back — a service prefixed
+		// "orders" writing "v2:acme:…" lands on the same keys. A dynamic tenant source
+		// is not obliged to have run config.Validate, so this is reachable.
+		if err := cachekey.Validate(base); err != nil {
+			closeRejectedCacheInstance(instance, key, log)
+			return nil, reportUnusableCachePrefix(
+				fmt.Errorf("%w %q: %w", cache.ErrInvalidKeyPrefix, base, err), key, log)
+		}
+
 		prefix := cachekey.Join(base, key)
 
 		// WithKeyPrefix runs first even for the empty prefix, so the nil-cache contract
@@ -179,8 +192,7 @@ func (f *FactoryResolver) namespacedCacheConnector(inner cache.Connector, resour
 			if !errors.Is(err, cache.ErrNilCache) {
 				closeRejectedCacheInstance(instance, key, log)
 			}
-			log.Error().Err(err).Str("key", key).Msg("Cache key prefix is not a usable namespace")
-			return nil, err
+			return nil, reportUnusableCachePrefix(err, key, log)
 		}
 
 		if prefix == "" && !explicit {
@@ -192,6 +204,14 @@ func (f *FactoryResolver) namespacedCacheConnector(inner cache.Connector, resour
 		}
 		return namespaced, nil
 	}
+}
+
+// reportUnusableCachePrefix logs err against the resource key and returns it unchanged,
+// so both namespace checks — the base before the fold, the assembled prefix after it —
+// report a refusal the same way.
+func reportUnusableCachePrefix(err error, key string, log logger.Logger) error {
+	log.Error().Err(err).Str("key", key).Msg("Cache key prefix is not a usable namespace")
+	return err
 }
 
 // closeRejectedCacheInstance releases an instance the namespace check refused, so a
