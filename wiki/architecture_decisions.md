@@ -1827,7 +1827,7 @@ additions only. See [migrations.md](migrations.md) `[C66.4]`.
 
 **Date:** 2026-09-18 | **Status:** Proposed | **Breaking:** not in this change — `cache.redis.username` is additive; the `cache.redis.keyprefix` default lands breaking with the third change under #1727
 
-The Redis cache dialled one address with one password, selected a database number, and wrote the
+The Redis cache dialed one address with one password, selected a database number, and wrote the
 key it was handed. A managed endpoint grants none of that: ElastiCache Serverless speaks cluster
 protocol only, authenticates named RBAC users rather than a shared password, and offers one
 logical database — which dissolves ADR-011's promise of per-tenant isolation by separate Redis

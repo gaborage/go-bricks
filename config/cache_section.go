@@ -94,7 +94,7 @@ func validateRedisCache(cfg *RedisConfig) error {
 		return NewValidationError("cache.redis.username", "must not be whitespace-only")
 	}
 
-	// A name with no password is refused rather than dialled. go-redis builds the
+	// A name with no password is refused rather than dialed. go-redis builds the
 	// HELLO handshake's AUTH clause inside `if password != ""`, and gates the legacy
 	// AUTH fallback the same way, so an empty password sends no AUTH at all: the
 	// connection would run as whatever identity the endpoint gives an unauthenticated

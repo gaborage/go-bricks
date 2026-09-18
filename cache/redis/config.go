@@ -132,7 +132,7 @@ func (c *Config) validate() (clienttls.Material, error) {
 	// A name with no password never authenticates: go-redis builds the HELLO
 	// handshake's AUTH clause inside `if password != ""`, and gates the legacy AUTH
 	// fallback the same way, so nothing is sent and the dial runs as whatever identity
-	// the server hands an unauthenticated client. Refused here rather than dialled,
+	// the server hands an unauthenticated client. Refused here rather than dialed,
 	// mirroring config.validateRedisCache, because a hand-built Config reaches this
 	// door without passing through the config layer. A password alone is the legacy
 	// form that selects the implicit "default" user and stands.
