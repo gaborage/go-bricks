@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"cmp"
 	"fmt"
 	"strings"
 	"time"
@@ -273,10 +274,7 @@ func (t *TLSConfig) material() clienttls.Material {
 // effectiveMode reports the mode the client dials with, resolving the empty
 // Mode to ModeStandalone so a reader never has to decide what "" means.
 func (c *Config) effectiveMode() string {
-	if c.Mode == "" {
-		return ModeStandalone
-	}
-	return c.Mode
+	return cmp.Or(c.Mode, ModeStandalone)
 }
 
 // Address returns the Redis server address in "host:port" format.

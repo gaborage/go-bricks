@@ -6,12 +6,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/testcontainers/testcontainers-go"
+	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/modules/redis"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -32,17 +34,11 @@ const (
 	redisTLSKeyPath  = "/tls/server.key"
 )
 
-// Cluster bootstrap knobs. A cluster-enabled node starts owning no slots and
-// reports cluster_state:fail until every slot is claimed and the cron that
-// re-reads the announced address has run, so the claim is followed by a poll
-// rather than assumed.
+// Cluster bootstrap knobs. The bound is the caller's StartupTimeout, so the one
+// knob covers the whole fixture rather than only the container start.
 const (
-	redisClusterFirstSlot        = "0"
-	redisClusterLastSlot         = "16383"
-	redisClusterReadyState       = "cluster_state:ok"
-	redisClusterBootstrapWait    = 60 * time.Second
-	redisClusterBootstrapPoll    = 250 * time.Millisecond
-	redisClusterLoopbackAnnounce = "127.0.0.1"
+	redisClusterReadyState    = "cluster_state:ok"
+	redisClusterBootstrapPoll = 250 * time.Millisecond
 )
 
 // redisTLSFileMode makes the copied PEM world-readable: redis-server drops to
@@ -166,10 +162,13 @@ func redisOptions(cfg *RedisContainerConfig) []testcontainers.ContainerCustomize
 		wait.ForLog("Ready to accept connections"),
 		wait.ForListeningPort(redisPort),
 	))
-	if cfg.Cluster {
+	// Cluster and TLS are mutually exclusive (startRedisContainerInternal refuses
+	// the pair); a switch says so as a shape rather than leaving it to the order
+	// two ifs happen to be written in.
+	switch {
+	case cfg.Cluster:
 		return append(opts, testcontainers.WithCmdArgs("--cluster-enabled", "yes"))
-	}
-	if cfg.TLS == nil {
+	case cfg.TLS == nil:
 		return opts
 	}
 
@@ -235,7 +234,7 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 	if !cfg.Cluster {
 		return c, nil
 	}
-	if err := bootstrapRedisCluster(ctx, c); err != nil {
+	if err := bootstrapRedisCluster(ctx, c, cfg.StartupTimeout); err != nil {
 		terminateOnFailure(ctx, redisContainer)
 		return nil, err
 	}
@@ -243,73 +242,77 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 }
 
 // bootstrapRedisCluster turns a freshly started cluster-enabled node into a
-// one-node cluster that owns every slot.
+// one-node cluster that owns every slot. The node starts owning none and reports
+// cluster_state:fail until the claim lands and the cluster cron has run, so the
+// claim is followed by a wait rather than assumed.
 //
 // The announce pair is what makes it reachable: the slot map a cluster client
 // follows carries each node's OWN address, which inside Docker is a container IP
 // and port no host-side client can dial. Announcing the mapped host address
 // makes the node advertise where the test actually reaches it, so the client's
 // first redirect lands rather than hangs.
-func bootstrapRedisCluster(ctx context.Context, c *RedisContainer) error {
+func bootstrapRedisCluster(ctx context.Context, c *RedisContainer, timeout time.Duration) error {
 	announceIP := c.host
 	if announceIP == "localhost" {
-		announceIP = redisClusterLoopbackAnnounce
+		announceIP = "127.0.0.1"
 	}
 
 	for _, args := range [][]string{
 		{"redis-cli", "config", "set", "cluster-announce-ip", announceIP},
 		{"redis-cli", "config", "set", "cluster-announce-port", strconv.Itoa(c.port)},
-		{"redis-cli", "cluster", "addslotsrange", redisClusterFirstSlot, redisClusterLastSlot},
+		{"redis-cli", "cluster", "addslotsrange", "0", "16383"},
 	} {
-		if _, err := execInRedisContainer(ctx, c, args); err != nil {
+		if err := execInRedisContainer(ctx, c, args); err != nil {
 			return err
 		}
 	}
 
-	return waitForRedisClusterReady(ctx, c)
+	return waitForRedisClusterReady(ctx, c, timeout)
 }
 
-// execInRedisContainer runs one redis-cli command inside the container and
-// returns its output, treating a non-zero exit as an error.
-func execInRedisContainer(ctx context.Context, c *RedisContainer, args []string) (string, error) {
-	code, reader, err := c.container.Exec(ctx, args)
+// execInRedisContainer runs one redis-cli command inside the container, treating
+// a non-zero exit as an error. Multiplexed strips the Docker stream framing, so
+// the message quotes what redis-cli printed rather than the wire bytes.
+func execInRedisContainer(ctx context.Context, c *RedisContainer, args []string) error {
+	code, reader, err := c.container.Exec(ctx, args, tcexec.Multiplexed())
 	if err != nil {
-		return "", fmt.Errorf("redis container: exec %v: %w", args, err)
+		return fmt.Errorf("redis container: exec %v: %w", args, err)
 	}
 	var out bytes.Buffer
 	if _, copyErr := out.ReadFrom(reader); copyErr != nil {
-		return "", fmt.Errorf("redis container: reading output of %v: %w", args, copyErr)
+		return fmt.Errorf("redis container: reading output of %v: %w", args, copyErr)
 	}
 	if code != 0 {
-		return "", fmt.Errorf("redis container: %v exited %d: %s", args, code, strings.TrimSpace(out.String()))
+		return fmt.Errorf("redis container: %v exited %d: %s", args, code, strings.TrimSpace(out.String()))
 	}
-	return out.String(), nil
+	return nil
 }
 
-// waitForRedisClusterReady polls CLUSTER INFO until the node reports the whole
-// slot space as served. Polling rather than sleeping: the state flips on the
-// cluster cron, whose timing is the server's business, not the fixture's.
-func waitForRedisClusterReady(ctx context.Context, c *RedisContainer) error {
-	deadline := time.Now().Add(redisClusterBootstrapWait)
+// waitForRedisClusterReady waits until the node reports the whole slot space as
+// served. The state flips on the cluster cron, whose timing is the server's
+// business, so this polls rather than sleeps — through the library's own exec
+// strategy, the same post-start readiness seam enableStreamPlugin uses, rather
+// than a hand-rolled deadline loop. The strategy reports only that it timed out,
+// so the last CLUSTER INFO it saw is carried out alongside it.
+func waitForRedisClusterReady(ctx context.Context, c *RedisContainer, timeout time.Duration) error {
 	var last string
-	for time.Now().Before(deadline) {
-		out, err := execInRedisContainer(ctx, c, []string{"redis-cli", "cluster", "info"})
-		if err != nil {
-			return err
-		}
-		if strings.Contains(out, redisClusterReadyState) {
-			return nil
-		}
-		last = strings.TrimSpace(out)
+	strategy := wait.ForExec([]string{"redis-cli", "cluster", "info"}).
+		WithResponseMatcher(func(body io.Reader) bool {
+			out, err := io.ReadAll(body)
+			if err != nil {
+				return false
+			}
+			last = strings.TrimSpace(string(out))
+			return strings.Contains(last, redisClusterReadyState)
+		}).
+		WithStartupTimeout(timeout).
+		WithPollInterval(redisClusterBootstrapPoll)
 
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(redisClusterBootstrapPoll):
-		}
+	if err := strategy.WaitUntilReady(ctx, c.container); err != nil {
+		return fmt.Errorf("redis container: cluster did not reach %s within %s (%w); last CLUSTER INFO: %s",
+			redisClusterReadyState, timeout, err, last)
 	}
-	return fmt.Errorf("redis container: cluster did not reach %s within %s; last CLUSTER INFO: %s",
-		redisClusterReadyState, redisClusterBootstrapWait, last)
+	return nil
 }
 
 // terminateOnFailure tears down a container whose startup failed. The
