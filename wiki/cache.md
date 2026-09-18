@@ -272,10 +272,15 @@ and the later write-back wins.
 
 **Multi-Tenant Isolation:**
 
-- Each tenant gets separate Redis database (configurable per-tenant)
+- Each tenant gets a separate Redis database under `mode: standalone` — configurable per-tenant, and
+  isolating only where the deployment assigns distinct numbers: `database` defaults to 0 for every
+  tenant, so tenants pointed at one endpoint without explicit numbers share one keyspace
 - Cache instances managed by CacheManager with automatic lifecycle
 - Context propagation ensures tenant resolution via `deps.Cache(ctx)`
-- No key collision between tenants (different Redis databases)
+- **`mode: cluster` removes the database lever entirely** — the cluster client has no database
+  selection, so every tenant on one cluster endpoint writes database 0 and their keys collide.
+  Separate such tenants at the endpoint (one cache per tenant) until `cache.redis.keyprefix` makes
+  the prefix the mechanism that always holds ([ADR-117](adr_117_cache_key_namespace_and_cluster_mode.md), #1727)
 
 **Observability Integration:**
 When `observability.enabled: true`, cache operations automatically emit:
@@ -588,7 +593,12 @@ cache:
 - **`database` must stay 0 under `mode: cluster`.** A non-zero value is a startup error naming
   both keys. The go-redis cluster client has no database selection, so accepting the pair would
   move the whole keyspace to database 0 silently on the mode flip; the engine may advertise more
-  databases, but the client cannot reach them.
+  databases, but the client cannot reach them. **Multi-tenant deployments lose the database lever
+  with it**: every tenant on one cluster endpoint writes database 0, which is where two standalone
+  tenants that never set distinct numbers already are. Until `cache.redis.keyprefix` lands
+  ([ADR-117](adr_117_cache_key_namespace_and_cluster_mode.md)), give each tenant its own endpoint —
+  an RBAC access string cannot substitute, because it scopes by key pattern and the framework owns
+  no key namespace yet for a pattern to select.
 - **`poolsize` is per node under cluster, not per deployment.** go-redis applies `PoolSize` to
   each cluster node's own pool, so a value sized against a single server multiplies by the number
   of nodes the slot map discovers. Re-size it when flipping the mode against a sharded endpoint,

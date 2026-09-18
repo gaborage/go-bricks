@@ -97,9 +97,12 @@ ADR-011 introduced — break silently under them.
   whole keyspace would otherwise move to database 0 on the mode flip alone. Both rules live in
   `validateRedisCache` and again in `(*redis.Config).Validate()` — the second copy is load-bearing,
   not belt-and-braces: `config.LoadFromMap` and a consumer-supplied dynamic `ResourceSource` never
-  reach the first. `Stats()` gains a `mode` key so an operator reading `Stats()` knows whether
-  `redis_info` describes one node or the fleet; the probe set never calls it, rendering an
-  allowlisted manager map instead. Additive; the zero value is today's behaviour.
+  reach the first. `Stats()` gains a `mode` key so an operator reading `Stats()` knows how to read
+  the rest: under `cluster`, `redis_info` is a sample from whichever single node answered the
+  keyless `INFO` — never a fleet-wide figure — while only the `pool_*` counters aggregate, across
+  every master's pool and then every replica's (`ClusterClient.PoolStats`). Under `standalone` both
+  describe the one server. The probe set never calls `Stats()`, rendering an allowlisted manager map
+  instead. Additive; the zero value is today's behaviour.
 
 - **`cache.redis.keyprefix` namespaces every key, defaulting to `app.name`.** The wire layout is
   `<prefix>:<key>` with a fixed `:` separator. The prefix is validated against whitespace, the
@@ -149,6 +152,21 @@ that always holds.
 - **Replica reads stay unavailable**, so a deployment that wants them must still front the cache
   itself. The security group must open both 6379 and 6380 regardless, because the endpoint
   advertises both.
+- **`mode` ships before `keyprefix`, so a shared cluster endpoint has no per-tenant separation in
+  between.** The mode flip takes the database lever away (`database` must be 0) and the prefix
+  arrives one change later; until it does, a multi-tenant deployment on cluster mode gives each
+  tenant its own endpoint. The mode is deliberately not refused for multi-tenant deployments to
+  close that window. Each tenant's cache config is checked on its own — `checkTenantCache` per
+  entry at startup, and `(*redis.Config).Validate()` inside `NewClient` for a tenant a dynamic
+  config source or `ResourceSource` delivers at first use — so "do these tenants share an endpoint?"
+  is answerable only for the statically-configured map, and a gate that fails open on the dynamic
+  path, which is the pool-model fleet most likely to share one, is not a boundary. A blanket
+  refusal would also reject the topology that is already safe, one cluster endpoint per tenant, and
+  would be a shim to delete one change later. The collision it would guard against is not new to
+  cluster mode either: `database` defaults to 0, so two standalone tenants sharing an endpoint
+  without explicit numbers already collide. What the mode changes is that the number can no longer
+  be set, which [wiki/cache.md](cache.md) now states at both the isolation summary and the
+  ElastiCache section.
 
 ## References
 
