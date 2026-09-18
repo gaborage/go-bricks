@@ -796,7 +796,7 @@ func TestNewClientRejectsOldRedis(t *testing.T) {
 	t.Run("too_old_fails_construction", func(t *testing.T) {
 		original := readServerInfo
 		t.Cleanup(func() { readServerInfo = original })
-		readServerInfo = func(_ context.Context, _ *redis.Client) (string, error) {
+		readServerInfo = func(_ context.Context, _ redis.UniversalClient) (string, error) {
 			return "redis_version:6.2.14\r\n", nil
 		}
 
@@ -811,7 +811,7 @@ func TestNewClientRejectsOldRedis(t *testing.T) {
 	t.Run("info_error_fails_open", func(t *testing.T) {
 		original := readServerInfo
 		t.Cleanup(func() { readServerInfo = original })
-		readServerInfo = func(_ context.Context, _ *redis.Client) (string, error) {
+		readServerInfo = func(_ context.Context, _ redis.UniversalClient) (string, error) {
 			return "", errors.New("NOPERM this user has no permissions to run the 'info' command")
 		}
 
@@ -1026,7 +1026,7 @@ func TestBuildRedisOptionsWithoutTLS(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, opts)
-	assert.Equal(t, "cache.example:6380", opts.Addr)
+	assert.Equal(t, []string{"cache.example:6380"}, opts.Addrs)
 	assert.Equal(t, password, opts.Password)
 	assert.Equal(t, 3, opts.DB)
 	assert.Equal(t, 7, opts.PoolSize)
@@ -1250,4 +1250,195 @@ func requireUsernameRejected(t *testing.T, cfg *Config, wantMsg string) {
 	assert.Equal(t, "redis.username", configErr.Field)
 	assert.Contains(t, configErr.Message, wantMsg,
 		"the message must name the rule that fired, not just the field both rules share")
+}
+
+// TestConfigValidateMode pins the transport selector at the package's own
+// validation door, which a hand-built Config reaches without passing through
+// config validation. Empty is standalone, so a Config that predates the field
+// keeps dialing a single node; anything outside the two names is refused rather
+// than silently dialed standalone, where the first key on a cluster endpoint
+// would answer MOVED. The enum is case-sensitive AND untrimmed: the names are
+// config values, not user prose, and an env var carries its own whitespace all
+// the way here — so a padded value fails startup rather than degrading to the
+// standalone default, which is the outcome the closed enum exists for.
+func TestConfigValidateMode(t *testing.T) {
+	tests := []struct {
+		name      string
+		mode      string
+		wantField string
+	}{
+		{name: "empty_is_standalone"},
+		{name: "standalone_is_accepted", mode: ModeStandalone},
+		{name: "cluster_is_accepted", mode: ModeCluster},
+		{name: "unknown_mode_is_rejected", mode: "sentinel", wantField: "redis.mode"},
+		{name: "capitalised_name_is_rejected", mode: "Cluster", wantField: "redis.mode"},
+		{name: "padded_name_is_rejected", mode: " cluster", wantField: "redis.mode"},
+		{name: "trailing_newline_is_rejected", mode: "cluster\n", wantField: "redis.mode"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Host:     "localhost",
+				Port:     6379,
+				PoolSize: 10,
+				Mode:     tt.mode,
+			}
+
+			err := cfg.Validate()
+			if tt.wantField == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			var configErr *cache.ConfigError
+			require.ErrorAs(t, err, &configErr)
+			assert.Equal(t, tt.wantField, configErr.Field)
+			assert.Contains(t, configErr.Message, "standalone")
+			assert.Contains(t, configErr.Message, "cluster",
+				"the message must name both allowed values, not just the one it is not")
+		})
+	}
+}
+
+// TestConfigValidateClusterRejectsNonZeroDatabase pins the one coupling the
+// cluster protocol forces. UniversalOptions.DB is dropped on the way to the
+// cluster client, so a deployment that had selected database 3 would silently
+// move its whole keyspace to database 0 on flipping the mode. The error is
+// addressed to the database key — that is the value that cannot be honored —
+// and names the mode that made it impossible. The rule runs ahead of the 0-15
+// range check, because under cluster that range does not apply at all: an
+// out-of-range database under cluster is reported as the coupling, which the
+// message assertion below distinguishes from the range error.
+func TestConfigValidateClusterRejectsNonZeroDatabase(t *testing.T) {
+	tests := []struct {
+		name      string
+		mode      string
+		database  int
+		wantField string
+	}{
+		{name: "standalone_keeps_a_selected_database", mode: ModeStandalone, database: 3},
+		{name: "empty_mode_keeps_a_selected_database", database: 3},
+		{name: "cluster_on_database_zero_is_accepted", mode: ModeCluster},
+		{name: "cluster_with_a_selected_database_is_rejected", mode: ModeCluster, database: 3, wantField: "redis.database"},
+		{name: "cluster_with_the_last_database_is_rejected", mode: ModeCluster, database: 15, wantField: "redis.database"},
+		{name: "cluster_outranks_the_range_check", mode: ModeCluster, database: 99, wantField: "redis.database"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Host:     "localhost",
+				Port:     6379,
+				PoolSize: 10,
+				Mode:     tt.mode,
+				Database: tt.database,
+			}
+
+			err := cfg.Validate()
+			if tt.wantField == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			var configErr *cache.ConfigError
+			require.ErrorAs(t, err, &configErr)
+			assert.Equal(t, tt.wantField, configErr.Field)
+			assert.Contains(t, configErr.Message, "redis.mode",
+				"the operator has to know which of the two keys to change, so the message names the other one")
+		})
+	}
+}
+
+// TestBuildRedisOptionsCarriesTheMode proves the mode reaches the dialer as the
+// one flag that decides which client go-redis builds. The address travels as a
+// one-element seed list in both modes — a cluster endpoint is a single
+// configuration address the client follows the slot map from, not a node list —
+// so only IsClusterMode distinguishes them.
+func TestBuildRedisOptionsCarriesTheMode(t *testing.T) {
+	tests := []struct {
+		name          string
+		mode          string
+		wantIsCluster bool
+	}{
+		{name: "empty_mode_dials_standalone", wantIsCluster: false},
+		{name: "standalone_dials_standalone", mode: ModeStandalone, wantIsCluster: false},
+		{name: "cluster_dials_cluster", mode: ModeCluster, wantIsCluster: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Host:     "cache.example",
+				Port:     6380,
+				PoolSize: 10,
+				Mode:     tt.mode,
+			}
+
+			material := cfg.TLS.material()
+			opts, err := buildRedisOptions(cfg, &material)
+
+			require.NoError(t, err)
+			require.NotNil(t, opts)
+			assert.Equal(t, []string{"cache.example:6380"}, opts.Addrs)
+			assert.Equal(t, tt.wantIsCluster, opts.IsClusterMode)
+		})
+	}
+}
+
+// TestEffectiveMode pins the resolver itself, both arms. TestStatsReportsTheMode
+// below can only reach the standalone one — its fake is a single node, and a
+// cluster-mode client would not finish dialing it — so without this the cluster
+// arm would be pinned solely by the Docker-gated integration test, and
+// effectiveMode collapsed to a bare `return ModeStandalone` would survive every
+// test that runs without a container.
+func TestEffectiveMode(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+		want string
+	}{
+		{name: "empty_resolves_to_standalone", want: ModeStandalone},
+		{name: "standalone_is_itself", mode: ModeStandalone, want: ModeStandalone},
+		{name: "cluster_is_itself", mode: ModeCluster, want: ModeCluster},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Mode: tt.mode}
+			assert.Equal(t, tt.want, cfg.effectiveMode())
+		})
+	}
+}
+
+// TestStatsReportsTheMode pins the key an operator reading Stats() needs to
+// interpret the rest of the map: under cluster, redis_info describes whichever
+// single node answered and the pool counters are an aggregate, so the numbers mean
+// different things in the two modes. The effective mode is reported, not the
+// configured string, so an unset Mode reads as standalone rather than empty.
+func TestStatsReportsTheMode(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+	}{
+		{name: "empty_mode_reports_standalone"},
+		{name: "standalone_reports_standalone", mode: ModeStandalone},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mr := miniredis.RunT(t)
+			cfg := testConfig(mr)
+			cfg.Mode = tt.mode
+
+			client, err := NewClient(cfg)
+			require.NoError(t, err)
+			defer client.Close()
+
+			stats, err := client.Stats()
+
+			require.NoError(t, err)
+			assert.Equal(t, "standalone", stats["mode"])
+		})
+	}
 }

@@ -850,3 +850,51 @@ func TestValidateMultitenantTenantsCacheUsernameIsTenantAddressed(t *testing.T) 
 		assert.Contains(t, cfgErr.Message, "cache.redis.password")
 	})
 }
+
+// TestValidateMultitenantTenantsCacheModeIsTenantAddressed proves both mode
+// rules reach the tenant mirror with the tenant-qualified spelling, so a
+// consumer matching on ConfigError.Field learns whose cache carries the fault.
+// The messages stay root-spelled — qualification rewrites the field, not the
+// prose — so the key they name is the one relative to the tenant's own cache.
+func TestValidateMultitenantTenantsCacheModeIsTenantAddressed(t *testing.T) {
+	t.Run("unknown_mode", func(t *testing.T) {
+		cfgErr := tenantCacheValidationError(t,
+			&RedisConfig{Host: "acme.redis", Mode: "sentinel"},
+			"an unrecognized tenant cache mode must fail at startup")
+		assert.Equal(t, "multitenant.tenants.acme.cache.redis.mode", cfgErr.Field)
+		assert.Contains(t, cfgErr.Action, "cluster")
+	})
+
+	t.Run("cluster_with_a_selected_database", func(t *testing.T) {
+		cfgErr := tenantCacheValidationError(t,
+			&RedisConfig{Host: "acme.redis", Mode: "cluster", Database: 3},
+			"a tenant cluster cache on a non-zero database must fail at startup")
+		assert.Equal(t, "multitenant.tenants.acme.cache.redis.database", cfgErr.Field)
+		assert.Contains(t, cfgErr.Message, "cache.redis.mode")
+	})
+}
+
+// TestNormalizeMultitenantTenantsFillsCacheRedisMode proves the default reaches
+// a per-tenant cache. The root section gets cache.redis.mode from koanf; the
+// tenant subtree has no koanf defaults at all, so applyRedisDefaults running
+// inside the tenant loop is the only thing standing between a tenant cache and
+// an empty mode.
+func TestNormalizeMultitenantTenantsFillsCacheRedisMode(t *testing.T) {
+	tenantDB := DatabaseConfig{Type: PostgreSQL, Host: "tenant.db", Port: 5432, Database: "tenant", Username: "tenant_user"}
+	tenants := map[string]TenantEntry{
+		"acme": {
+			Database: tenantDB,
+			Cache:    CacheConfig{Enabled: true, Type: CacheTypeRedis, Redis: RedisConfig{Host: "acme.redis"}},
+		},
+		"globex": {
+			Database: tenantDB,
+			Cache:    CacheConfig{Enabled: true, Type: CacheTypeRedis, Redis: RedisConfig{Host: "globex.redis", Mode: "cluster"}},
+		},
+	}
+
+	require.NoError(t, normalizeMultitenantTenants(tenants))
+
+	assert.Equal(t, "standalone", tenants["acme"].Cache.Redis.Mode)
+	assert.Equal(t, "cluster", tenants["globex"].Cache.Redis.Mode,
+		"an explicit tenant mode must survive the fill")
+}

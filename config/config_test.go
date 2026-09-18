@@ -1635,10 +1635,11 @@ app:
 func TestDerivedDefaultsRenderTheSameValuesAsTheOldLiteral(t *testing.T) {
 	want := map[string]any{
 		"app.startup.timeout": "10s",
-		// cache.loadtimeout is not one of the relocated literals — it is a key that was
-		// born derived (the allowlist is meant to grow, see derivedDefaultKeys) — so it
-		// is pinned here for its value, not as evidence of a move.
+		// cache.loadtimeout and cache.redis.mode are not relocated literals — they were
+		// born derived (the allowlist is meant to grow, see derivedDefaultKeys) — so they
+		// are pinned here for their value, not as evidence of a move.
 		"cache.loadtimeout":           "500ms",
+		"cache.redis.mode":            "standalone",
 		"cache.redis.port":            6379,
 		"cache.redis.poolsize":        10,
 		"cache.redis.dialtimeout":     "5s",
@@ -1669,6 +1670,7 @@ func TestDerivedDefaultsDecodeToTypedFields(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 10*time.Second, cfg.App.Startup.Timeout)
+	assert.Equal(t, "standalone", cfg.Cache.Redis.Mode)
 	assert.Equal(t, 6379, cfg.Cache.Redis.Port)
 	assert.Equal(t, 10, cfg.Cache.Redis.PoolSize)
 	assert.Equal(t, 5*time.Second, cfg.Cache.Redis.DialTimeout)

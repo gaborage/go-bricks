@@ -77,7 +77,7 @@ return 0
 `
 
 // readServerInfo is a seam: tests override it to drive the version floor.
-var readServerInfo = func(ctx context.Context, c *redis.Client) (string, error) {
+var readServerInfo = func(ctx context.Context, c redis.UniversalClient) (string, error) {
 	return c.Info(ctx, "server").Result()
 }
 
@@ -108,7 +108,7 @@ var _ cache.Cache = (*Client)(nil)
 
 // Client implements the cache.Cache interface using Redis as the backend.
 type Client struct {
-	client *redis.Client
+	client redis.UniversalClient
 	config *Config
 	closed atomic.Bool
 }
@@ -131,17 +131,20 @@ func (c *Client) namespace(ctx context.Context) string {
 	return ""
 }
 
-// buildRedisOptions turns a validated Config into go-redis dial options. TLS is
-// off unless cfg.TLS.Enabled, in which case the material is loaded here so a
-// broken bundle fails the dial rather than the first command.
+// buildRedisOptions turns a validated Config into go-redis dial options. The one
+// address travels as a one-element seed list in both modes: a cluster endpoint is
+// a configuration address the client follows the slot map from, not a node list.
+// TLS is off unless cfg.TLS.Enabled, in which case the material is loaded here so
+// a broken bundle fails the dial rather than the first command.
 //
 // material is the projection validation already built from cfg.TLS; it is
 // passed in rather than rebuilt so one NewClient call projects it exactly once.
 // It is taken by pointer and mutated (the SNI fallback below), so the caller
 // must own the copy it hands over.
-func buildRedisOptions(cfg *Config, material *clienttls.Material) (*redis.Options, error) {
-	opts := &redis.Options{
-		Addr:            cfg.Address(),
+func buildRedisOptions(cfg *Config, material *clienttls.Material) (*redis.UniversalOptions, error) {
+	opts := &redis.UniversalOptions{
+		Addrs:           []string{cfg.Address()},
+		IsClusterMode:   cfg.Mode == ModeCluster,
 		Username:        cfg.Username,
 		Password:        cfg.Password,
 		DB:              cfg.Database,
@@ -184,7 +187,7 @@ func NewClient(cfg *Config) (*Client, error) {
 		return nil, err
 	}
 
-	client := redis.NewClient(opts)
+	client := redis.NewUniversalClient(opts)
 
 	// Test connection with PING
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -195,6 +198,15 @@ func NewClient(cfg *Config) (*Client, error) {
 		return nil, cache.NewConnectionError("ping", cfg.Address(), err)
 	}
 
+	// INFO is keyless, so under ModeCluster the cluster client routes it to one
+	// node and the floor is proven of that node alone. A cluster mid-rolling-
+	// upgrade can therefore pass startup while another master still answers
+	// below 7.0, and GetOrSet fails for the keys routed there. Checking every
+	// master instead is not available on this seam — ForEachMaster is on
+	// *redis.ClusterClient, not on the redis.UniversalClient the one code path
+	// holds — and it would trade this edge case for a startup that a single
+	// unreachable master can fail. The target endpoint (ElastiCache Serverless)
+	// presents one virtual node, where the two checks coincide.
 	if info, infoErr := readServerInfo(ctx, client); infoErr == nil {
 		if tooOld, version := redisVersionTooOld(info); tooOld {
 			client.Close()
@@ -441,6 +453,11 @@ func (c *Client) Health(ctx context.Context) error {
 
 // Stats returns Redis server statistics.
 // Includes metrics from Redis INFO command.
+//
+// The "mode" entry says how to read the rest: under ModeCluster, INFO is
+// answered by whichever single node the command was routed to, and the pool
+// counters are the aggregate across every node's pool. Under ModeStandalone
+// both describe the one server.
 func (c *Client) Stats() (map[string]any, error) {
 	if c.closed.Load() {
 		return nil, cache.ErrClosed
@@ -457,6 +474,7 @@ func (c *Client) Stats() (map[string]any, error) {
 	poolStats := c.client.PoolStats()
 
 	return map[string]any{
+		"mode":             c.config.effectiveMode(),
 		"redis_info":       info,
 		"pool_hits":        poolStats.Hits,
 		"pool_misses":      poolStats.Misses,

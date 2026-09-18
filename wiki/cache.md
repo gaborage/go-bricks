@@ -56,6 +56,7 @@ cache:
   redis:
     host: localhost
     port: 6379
+    mode: standalone                   # "standalone" (default) or "cluster"
     username: ""                       # Redis ACL user; requires a password when set
     password: ${CACHE_REDIS_PASSWORD}  # From environment
     database: 0
@@ -271,10 +272,15 @@ and the later write-back wins.
 
 **Multi-Tenant Isolation:**
 
-- Each tenant gets separate Redis database (configurable per-tenant)
+- Each tenant gets a separate Redis database under `mode: standalone` — configurable per-tenant, and
+  isolating only where the deployment assigns distinct numbers: `database` defaults to 0 for every
+  tenant, so tenants pointed at one endpoint without explicit numbers share one keyspace
 - Cache instances managed by CacheManager with automatic lifecycle
 - Context propagation ensures tenant resolution via `deps.Cache(ctx)`
-- No key collision between tenants (different Redis databases)
+- **`mode: cluster` removes the database lever entirely** — the cluster client has no database
+  selection, so every tenant on one cluster endpoint writes database 0 and their keys collide.
+  Separate such tenants at the endpoint (one cache per tenant) until `cache.redis.keyprefix` makes
+  the prefix the mechanism that always holds ([ADR-117](adr_117_cache_key_namespace_and_cluster_mode.md), #1727)
 
 **Observability Integration:**
 When `observability.enabled: true`, cache operations automatically emit:
@@ -572,11 +578,49 @@ cache:
   redis:
     host: my-cache.serverless.use1.cache.amazonaws.com
     port: 6379
+    mode: cluster
     username: ${CACHE_REDIS_USERNAME}
     password: ${CACHE_REDIS_PASSWORD}
     tls:
       enabled: true
 ```
+
+- **`mode: cluster` is required for serverless.** The endpoint speaks the cluster protocol only,
+  and a single-node client fails on the first `MOVED`. The one address in `cache.redis.host`/
+  `port` is the configuration endpoint: the client follows the slot map from it rather than
+  needing a node list, so there is no `addrs` key. Everything else about the cache is unchanged —
+  the same six `cache.Cache` methods, the same Lua scripts, the same `GetOrSet` semantics.
+- **`database` must stay 0 under `mode: cluster`.** A non-zero value is a startup error naming
+  both keys. The go-redis cluster client has no database selection, so accepting the pair would
+  move the whole keyspace to database 0 silently on the mode flip; the engine may advertise more
+  databases, but the client cannot reach them. **Multi-tenant deployments lose the database lever
+  with it**: every tenant on one cluster endpoint writes database 0, which is where two standalone
+  tenants that never set distinct numbers already are. Until `cache.redis.keyprefix` lands
+  ([ADR-117](adr_117_cache_key_namespace_and_cluster_mode.md)), give each tenant its own endpoint —
+  an RBAC access string cannot substitute, because it scopes by key pattern and the framework owns
+  no key namespace yet for a pattern to select.
+- **`poolsize` is per node under cluster, not per deployment.** go-redis applies `PoolSize` to
+  each cluster node's own pool, so a value sized against a single server multiplies by the number
+  of nodes the slot map discovers. Re-size it when flipping the mode against a sharded endpoint,
+  or a provisioned connection limit will be hit at a fraction of the expected load.
+- **Keyless commands reach one node, so two startup and probe checks sample rather than verify.**
+  `INFO` (the Redis 7.0 version floor, which `GetOrSet`'s `SET NX GET` needs) and `PING`
+  (`Health`, and therefore the `/ready` cache probe) carry no key, so the cluster client routes
+  each to whichever node it picks. On a serverless endpoint there is one virtual node and the
+  distinction is empty. On a sharded cluster, a master still below 7.0 mid-rolling-upgrade can go
+  unnoticed at startup and then fail `GetOrSet` for the keys routed to it, and `Health` can report
+  green while an entire shard is unreachable.
+- **TLS verifies every node against the configuration endpoint's name.** `tls.servername` defaults
+  to `cache.redis.host`, and that one name is what every per-node connection the slot map redirects
+  to is verified against. A serverless endpoint presents one certificate for that name, so this is
+  invisible there; on a self-managed cluster whose node certificates do not also cover the
+  configuration endpoint's hostname, those redirected dials fail closed — set `tls.servername`
+  accordingly.
+- **`Stats()` reports which mode produced it.** The `mode` key reads `standalone` or `cluster`,
+  and it says how to read the rest: under cluster, `redis_info` comes from whichever single node
+  answered `INFO` and the `pool_*` counters are the aggregate across every node's pool, replicas
+  included (`ClusterClient.PoolStats` accumulates over masters and then over replicas). Under
+  standalone both describe the one server.
 
 - **`username` requires `password`; `password` alone selects the default user.** A
   `username` with an empty `password` is refused at startup, naming both keys: go-redis builds
@@ -599,9 +643,8 @@ cache:
   else in the deployment that reaches for the reader endpoint fails in ways that look like an
   intermittent cache.
 
-Cluster mode (`cache.redis.mode`) and key prefixing (`cache.redis.keyprefix`) — the other two
-halves of running against a serverless endpoint — arrive in the two changes that follow this
-one under issue #1727.
+Key prefixing (`cache.redis.keyprefix`) — the remaining half of running against a serverless
+endpoint — arrives in the change that follows this one under issue #1727.
 
 ## Cache Manager Defaults
 

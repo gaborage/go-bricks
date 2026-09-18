@@ -110,6 +110,10 @@ cache:
   redis:
     host: localhost                  # Redis server hostname
     port: 6379                       # Redis server port
+    mode: standalone                 # "standalone" (default) or "cluster". Cluster is required by an
+                                     # endpoint that answers MOVED to a single-node client, such as
+                                     # ElastiCache Serverless. Under cluster a non-zero database is
+                                     # REFUSED at startup, not coerced (env: CACHE_REDIS_MODE)
     username: ""                     # Redis ACL user (AUTH <username> <password>); empty = the "default"
                                      # user. Requires a password when set — the client sends no AUTH
                                      # without one. ElastiCache RBAC (env: CACHE_REDIS_USERNAME)

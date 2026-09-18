@@ -30,6 +30,18 @@ var pkgRedis = containers.NewShared("Redis", 3*time.Minute,
 		return containers.StartRedisContainerForTestMain(ctx, nil)
 	})
 
+// pkgRedisCluster holds the single cluster-enabled Redis container this
+// package's test binary shares, mirroring pkgRedis. One node owns all 16384
+// slots, which is the shape Amazon ElastiCache Serverless presents behind its
+// single endpoint. It boots lazily, so a run with no cluster test pays nothing
+// for it.
+var pkgRedisCluster = containers.NewShared("Redis cluster", 3*time.Minute,
+	func(ctx context.Context) (*containers.RedisContainer, bool, error) {
+		cfg := containers.DefaultRedisConfig()
+		cfg.Cluster = true
+		return containers.StartRedisContainerForTestMain(ctx, cfg)
+	})
+
 // tlsRedisContainer carries the CA the TLS tests must trust alongside the
 // container that presents it: Shared hands back exactly one value, and the CA
 // is minted inside the start func, so it travels with the container.
@@ -65,5 +77,6 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	pkgRedis.Close()
 	pkgRedisTLS.Close()
+	pkgRedisCluster.Close()
 	os.Exit(code)
 }
