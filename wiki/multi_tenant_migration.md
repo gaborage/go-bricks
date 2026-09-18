@@ -161,6 +161,13 @@ with `migration.ErrInvalidMigratorIdentity` before any tenant is listed. The rol
 [migration_roles.md](migration_roles.md) needs the overlay; `go-bricks-migrate`
 does not expose it yet.
 
+Its pair is [`WithSharedMigrator`](#schema-targeting-postgresql). Setting
+`MigratorIdentity` does **not** arm that guard: database-per-tenant PostgreSQL
+with one migrator role across every database and the target schema (typically
+`public`) in each is a legitimate deployment where the role-level `search_path`
+is correct everywhere, so inferring the requirement here would break real
+setups.
+
 The overlay presents one credential with DDL rights on every tenant schema to
 every tenant's host, so a tenant document naming a wrong or hostile host exposes
 that shared credential rather than one tenant's. Keep tenant host fields under
@@ -194,10 +201,33 @@ targeting a schema is the whole wiring — add a `postgresql` block to the secre
 }
 ```
 
-An empty schema keeps legacy behavior unchanged — the conf file or the
-connection's `search_path` decides where migrations land. Note this koanf key
+An empty schema keeps legacy behavior unchanged **by default** — the conf file
+or the connection's `search_path` decides where migrations land. A migrator
+shared across tenants has no role-level `search_path` to fall back on (see
+[Shared and out-of-band migrators](migration_roles.md#shared-and-out-of-band-migrators)),
+so build that runner with `migration.NewFlywayMigrator(cfg, log).WithSharedMigrator()`:
+an empty `postgresql.schema` is then refused with `ErrSharedMigratorSchemaRequired`
+before Flyway runs, for `migrate`, `validate` and `info` alike, rather than
+silently targeting `public` and reporting success. The flag is not limited to a
+shared role — a hand-provisioned migrator, a partially applied
+`PGRoleProvisioningSQL` script, or `search_path` drift under `SkipFloorReassert`
+leave the same gap, and it is library-only today (see
+[migration_roles.md](migration_roles.md#the-model) for the CLI caveat).
+
+The guard is deliberately fail-closed on one legitimate shape: a `flyway.conf`
+owning `flyway.defaultSchema` also aims a run, but the framework never reads
+`flyway.conf` (the same boundary `ErrIncompleteMigrationTarget` draws), so it
+cannot see that target and refuses anyway. Under this flag,
+`postgresql.schema` is what must carry the target. Note this koanf key
 (`database.postgresql.schema`) now has two consumers: the observability
 namespace and this migration-targeting path.
+
+Under `MigrateAll` the refusal is per tenant: it lands as that tenant's
+`TenantResult.Err`, whose `TenantID` names it, and `res.Verdict()` is
+`ErrFleetSplit` — a refused tenant was dispatched and failed, and
+[ADR-115](adr_115_fleet_migration_run_verdict.md) classifies strictly by
+dispatch, with no "skipped" state. Fix the tenant's `postgresql.schema` and
+re-run.
 
 Schema names must match `^[A-Za-z_][A-Za-z0-9_$]*$` within 63 bytes; an invalid name fails
 fast with `ErrInvalidPGIdentifier` before Flyway runs (the value is formatted

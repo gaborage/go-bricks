@@ -72,6 +72,8 @@ type FlywayMigrator struct {
 	defaultConfig  func(*FlywayMigrator) *Config
 	validatedPaths sync.Map
 	audit          *auditEmitter
+	// sharedMigrator is set by WithSharedMigrator; see its godoc.
+	sharedMigrator bool
 }
 
 // Config configuration for migrations
@@ -155,6 +157,34 @@ func (fm *FlywayMigrator) WithAuditRecorder(sink AuditRecorder) *FlywayMigrator 
 		cancel()
 	}
 	fm.audit = newAuditEmitter(fm.logger, sink)
+	return fm
+}
+
+// WithSharedMigrator declares that this runner must not rely on an implicit
+// search_path, and makes an explicit Flyway schema target mandatory. Returns
+// the receiver for chaining; intended to be called once at startup.
+//
+// With it set, every PostgreSQL DatabaseConfig must aim Flyway explicitly: an
+// empty database.postgresql.schema is refused with
+// ErrSharedMigratorSchemaRequired before Flyway runs, for migrate, validate and
+// info alike, instead of silently resolving against the connection's default
+// schema (typically public) and reporting success. The framework never reads
+// flyway.conf, so a conf-owned flyway.defaultSchema does not satisfy the
+// requirement — postgresql.schema must carry the target. That covers the
+// runner's own database.* config, not just per-tenant ones: Migrate, Validate
+// and Info gate on it too, so RunMigrationsAtStartup on a runner built with
+// this flag and an empty database.postgresql.schema fails startup. Oracle is
+// unaffected: its schema is the connecting user, which is already per-tenant.
+//
+// A migrator role shared across tenants is the motivating case — it is
+// provisioned with PGRoleSpec.SkipMigratorRole, so it gets no role-level
+// search_path default and the explicit -schemas/-defaultSchema args are the
+// only thing aiming Flyway at a tenant. It is not the only one: a
+// hand-provisioned migrator, a partially applied PGRoleProvisioningSQL script,
+// and search_path drift under SkipFloorReassert leave the identical gap. Set
+// this whenever the role's own default cannot be trusted to aim the run.
+func (fm *FlywayMigrator) WithSharedMigrator() *FlywayMigrator {
+	fm.sharedMigrator = true
 	return fm
 }
 
@@ -300,7 +330,7 @@ func (fm *FlywayMigrator) runFor(ctx context.Context, db *config.DatabaseConfig,
 
 	vendor := dbVendor(db, fm.config.Database.Type)
 
-	schemaFlags, err := schemaArgs(db, vendor)
+	schemaFlags, err := schemaArgs(db, vendor, fm.sharedMigrator)
 	if err != nil {
 		return Result{}, err
 	}
@@ -516,12 +546,18 @@ func dbVendor(db *config.DatabaseConfig, fallback string) string {
 // same check as role provisioning — it is formatted into
 // subprocess argv, and -schemas is comma-separated, so an unvalidated value
 // could smuggle a second schema.
-func schemaArgs(db *config.DatabaseConfig, vendor string) ([]string, error) {
+//
+// requireExplicitSchema (set by FlywayMigrator.WithSharedMigrator) turns the
+// empty-schema case into ErrSharedMigratorSchemaRequired.
+func schemaArgs(db *config.DatabaseConfig, vendor string, requireExplicitSchema bool) ([]string, error) {
 	if db == nil || vendor != config.PostgreSQL {
 		return nil, nil
 	}
 	schema := db.PostgreSQL.Schema
 	if schema == "" {
+		if requireExplicitSchema {
+			return nil, fmt.Errorf("%w: database=%q", ErrSharedMigratorSchemaRequired, db.Database)
+		}
 		return nil, nil
 	}
 	if err := identifier.Validate(dbtypes.PostgreSQL, schema); err != nil {
@@ -529,6 +565,13 @@ func schemaArgs(db *config.DatabaseConfig, vendor string) ([]string, error) {
 	}
 	return []string{flagSchemas + schema, flagDefaultSchema + schema}, nil
 }
+
+// ErrSharedMigratorSchemaRequired is returned by every verb when a runner built
+// with WithSharedMigrator (see its godoc) targets a PostgreSQL DatabaseConfig
+// whose database.postgresql.schema is empty. Match with errors.Is.
+var ErrSharedMigratorSchemaRequired = errors.New(
+	"migration: shared migrator requires an explicit database.postgresql.schema; the framework does not read " +
+		"flyway.conf, so a conf-owned flyway.defaultSchema cannot aim this run")
 
 // ErrEnvFieldHasControlChar is returned when a DatabaseConfig field destined
 // for the Flyway subprocess environment contains a forbidden control character

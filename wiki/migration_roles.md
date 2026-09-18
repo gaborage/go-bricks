@@ -18,6 +18,12 @@ tenant:
 | **Migrator** (one per deployment, shared across tenants) | Every tenant schema (the `AUTHORIZATION` target of each provisioning call) | DDL on its own schemas | `migration.MigrateAll` via [`MigrateAllOptions.MigratorIdentity`](multi_tenant_migration.md#migrator-identity); the `go-bricks-migrate` CLI only when every tenant secret carries the migrator's own `username` and `password` |
 | **Per-tenant runtime** (one per tenant) | Nothing | `USAGE` on the tenant schema; `SELECT/INSERT/UPDATE/DELETE` on all current and future tables; `USAGE/SELECT/UPDATE` on sequences | The running service (connects with the runtime role's credentials via `database.username`/`database.password` in `config.yaml`) |
 
+The `WithSharedMigrator` guard described below is **library-only today**:
+`go-bricks-migrate` builds its runner with a bare `NewFlywayMigrator` and has no
+flag for it, so a CLI-driven shared-migrator fleet still owns the
+`postgresql.schema` requirement itself. Exposing it on the CLI is tracked in
+[#1730](https://github.com/gaborage/go-bricks/issues/1730).
+
 Every role the helper creates starts at the same locked-down attribute floor:
 `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`. By default
 the attribute lockdown is reapplied on every provisioning call so a
@@ -86,7 +92,9 @@ always emitted; `SkipMigratorRole` drops the migrator's.
   **must** set `postgresql.schema`: the runner emits `-schemas` /
   `-defaultSchema` only when it is set, and with it empty Flyway falls back to
   the connection's default schema (typically `public`) and still reports
-  success. Nothing enforces this today — the caller owns it.
+  success. Build the runner with
+  [`FlywayMigrator.WithSharedMigrator()`](multi_tenant_migration.md#schema-targeting-postgresql)
+  and it is enforced rather than left to the caller.
 - **Runtime side.** Without a role default, unqualified `INSERT`/`SELECT`
   statements from the running service resolve against `public`. The grants
   boundary still prevents cross-tenant reads (this is not a leak), but an
@@ -171,7 +179,8 @@ The migrator still owns the schema and is still the `FOR ROLE` target of both
 is rotated out of band. The runner's explicit schema targeting — not the
 role's `search_path` — aims a shared migrator at each tenant, so each tenant's
 `DatabaseConfig` must set `postgresql.schema` (see
-[Default search_path](#default-search_path)).
+[Default search_path](#default-search_path), which `WithSharedMigrator`
+enforces).
 
 ### Running inside your own transaction
 

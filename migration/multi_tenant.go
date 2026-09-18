@@ -163,6 +163,14 @@ type MigrateAllOptions struct {
 }
 
 // MigratorIdentity is the shared role Flyway connects as across the fleet.
+//
+// Its pair is FlywayMigrator.WithSharedMigrator, which refuses a tenant that
+// does not aim Flyway at an explicit schema. Setting MigratorIdentity does NOT
+// arm that guard: database-per-tenant PostgreSQL with one migrator role across
+// every database and the target schema (typically public) in each is a
+// legitimate deployment where the role-level search_path is correct everywhere,
+// so inferring the requirement from this field would break real setups. The
+// signal is explicit for that reason.
 type MigratorIdentity struct {
 	Username string
 	Password string

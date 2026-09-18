@@ -53,6 +53,11 @@ store, err := provisioning.NewPostgresStore(adminDB, "" /* default table */)
 if err != nil { return err }
 if err := store.CreateTable(ctx); err != nil { return err }
 
+// One migrator serves the whole fleet, so it carries no role-level search_path
+// default; WithSharedMigrator makes the explicit per-tenant schema target below
+// mandatory instead of optional.
+flywayMigrator := migration.NewFlywayMigrator(appCfg, logger.New("info", false)).WithSharedMigrator()
+
 // Wire the steps. CreateSchema calls ProvisionPGRoles from #378 (CreateRole is
 // then a no-op); Migrate runs Flyway; Seed and Cleanup are consumer-specific.
 steps := provisioning.Steps{

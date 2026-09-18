@@ -1003,6 +1003,55 @@ func TestMigrateAllRejectsInvalidMigratorIdentity(t *testing.T) {
 	}
 }
 
+func TestMigrateAllSharedMigratorRefusesTenantWithoutSchema(t *testing.T) {
+	requireShellStubs(t)
+	// A shared migrator's refusal is per tenant, so it lands as that tenant's
+	// TenantResult.Err — errors are never joined, and TenantResult.TenantID is
+	// what names the tenant. The run therefore splits the fleet: ADR-115
+	// classifies strictly by dispatch and has no "skipped" state, so a refused
+	// tenant is a failure like any other.
+	stub := createFlywayStub(t, "postgresql")
+	fm := newFlywayMigratorForTest(t).WithSharedMigrator()
+	base := makeBaseConfig(t, stub)
+
+	cfgs := stubTenantConfigs("t1", "t2")
+	cfgs["t1"].PostgreSQL = config.PostgreSQLConfig{Schema: "tenant_t1"}
+	// t2 keeps stubTenantConfigs' empty postgresql.schema — the failure case.
+	provider := newFakeConfigProvider(cfgs)
+
+	res, err := MigrateAll(
+		context.Background(),
+		fm,
+		&fakeLister{ids: []string{"t1", "t2"}},
+		provider,
+		ActionMigrate,
+		MigrateAllOptions{BaseConfig: base},
+	)
+
+	require.ErrorIs(t, err, ErrSharedMigratorSchemaRequired)
+	require.NotNil(t, res)
+	require.Len(t, res.Results, 2, "both tenants were dispatched")
+	assert.Empty(t, res.NeverDispatched)
+
+	assert.Equal(t, "t1", res.Results[0].TenantID)
+	require.NoError(t, res.Results[0].Err, "an explicitly targeted tenant still migrates")
+
+	failed := res.Failed()
+	require.Len(t, failed, 1)
+	assert.Equal(t, "t2", failed[0].TenantID, "the refusal names its tenant via TenantResult.TenantID")
+	require.ErrorIs(t, failed[0].Err, ErrSharedMigratorSchemaRequired)
+	assert.Contains(t, failed[0].Err.Error(), "database.postgresql.schema")
+	// Propagation, not construction: the schemaArgs unit test pins that the
+	// fmt.Errorf itself interpolates no credential; this pins that nothing
+	// between schemaArgs and TenantResult.Err re-renders one. runOne assigns
+	// the error unwrapped today, so only a future wrapper would trip this.
+	assert.NotContains(t, failed[0].Err.Error(), cfgs["t2"].Password,
+		"the refused tenant's password must not ride the refusal out to TenantResult.Err")
+
+	require.ErrorIs(t, res.Verdict(), ErrFleetSplit,
+		"a refused tenant is a dispatched failure, so the fleet is split")
+}
+
 func TestMigrateAllMigratorIdentityPasswordStaysOutOfLogsAndErrors(t *testing.T) {
 	if runtime.GOOS == windowsOS {
 		t.Skip("shell stubs not supported on windows CI")
