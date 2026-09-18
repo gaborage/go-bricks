@@ -10,9 +10,10 @@ import (
 )
 
 // ErrInvalidKeyPrefix is returned by WithKeyPrefix when the prefix is not a usable
-// namespace: whitespace, a glob metacharacter, a Redis Cluster hash tag, or a
-// separator anywhere in it — a prefix is one segment. Callers can match it with
-// errors.Is; the wrapped cause spells out which rule was broken.
+// namespace: any segment of it carrying whitespace, a glob metacharacter or a Redis
+// Cluster hash tag, or an EMPTY segment — a leading, trailing or doubled separator.
+// Callers can match it with errors.Is; the wrapped cause spells out which rule was
+// broken.
 var ErrInvalidKeyPrefix = errors.New("cache: invalid key prefix")
 
 // WithKeyPrefix returns a view of c whose every key travels as <prefix>:<key>, so two
@@ -20,10 +21,12 @@ var ErrInvalidKeyPrefix = errors.New("cache: invalid key prefix")
 // other's entries. It is connector-agnostic: the framework wraps whichever cache
 // instance the connector produced, including a custom app.Options.CacheConnector.
 //
-// The prefix is ONE segment and may carry no ":" — the caller key is free to. That is
-// what makes the isolation hold for every key: the prefix owns the first segment, so
-// two distinct prefixes cannot be bridged by a caller key that opens with the other's
-// tail.
+// prefix is the ASSEMBLED namespace: one or more ":"-separated segments, each of which
+// must carry no whitespace, glob metacharacter or hash tag, and none of which may be
+// empty. A CONFIGURED prefix is a single segment — cache.redis.keyprefix refuses a ":"
+// at startup — and the framework folds a tenant id in as the second, so the isolation
+// holds for every caller key: the configured prefix owns the first segment, and no
+// caller key (which may carry ":" freely) can reach across into another's namespace.
 //
 // An empty prefix is the documented opt-out and returns c itself, unwrapped. A nil c
 // returns ErrNilCache and an unusable prefix returns an error wrapping

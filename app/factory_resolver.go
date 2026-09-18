@@ -183,7 +183,7 @@ func (f *FactoryResolver) namespacedCacheConnector(inner cache.Connector, resour
 		// and the ambiguity the one-segment rule removed is back — a service prefixed
 		// "orders" writing "v2:acme:…" lands on the same keys. A dynamic tenant source
 		// is not obliged to have run config.Validate, so this is reachable.
-		if err := cachekey.Validate(base); err != nil {
+		if err = cachekey.Validate(base); err != nil {
 			closeRejectedCacheInstance(instance, key, log)
 			return nil, reportUnusableCachePrefix(
 				fmt.Errorf("%w %q: %w", cache.ErrInvalidKeyPrefix, base, err), key, log)
