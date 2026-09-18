@@ -16,6 +16,13 @@ import (
 	"github.com/gaborage/go-bricks/testing/containers"
 )
 
+// integrationAppName gives the fixtures below the app.name every validated config
+// carries. A root cache instance (empty resource key) draws its whole key namespace
+// from app.name, and one that resolves to nothing is refused (ADR-117), so those
+// subtests build the resolver the way bootstrap does. Tenant-keyed subtests keep the
+// exported constructor: the tenant id is a namespace segment of its own.
+const integrationAppName = "cache-integration"
+
 // TestFactoryResolverRedisConnectorIntegration tests the Redis cache connector
 func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -27,6 +34,7 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 	t.Run("single tenant - cache enabled", func(t *testing.T) {
 		// Create config with Redis pointing to test container
 		cfg := &config.Config{
+			App: config.AppConfig{Name: integrationAppName},
 			Cache: config.CacheConfig{
 				Enabled: true,
 				Redis: config.RedisConfig{
@@ -40,7 +48,7 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 
 		// Create tenant store and factory resolver
 		store := config.NewTenantStore(cfg)
-		resolver := NewFactoryResolver(nil)
+		resolver := newFactoryResolverForConfig(nil, cfg)
 		log := logger.New("debug", true)
 
 		// Get connector and create cache instance
@@ -214,6 +222,7 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 	t.Run("CBOR serialization round-trip", func(t *testing.T) {
 		// Create config with Redis
 		cfg := &config.Config{
+			App: config.AppConfig{Name: integrationAppName},
 			Cache: config.CacheConfig{
 				Enabled: true,
 				Redis: config.RedisConfig{
@@ -226,7 +235,7 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		}
 
 		store := config.NewTenantStore(cfg)
-		resolver := NewFactoryResolver(nil)
+		resolver := newFactoryResolverForConfig(nil, cfg)
 		log := logger.New("debug", true)
 
 		connector := resolver.CacheConnector(store, log)
@@ -279,6 +288,7 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 
 	t.Run("concurrent deduplication with GetOrSet", func(t *testing.T) {
 		cfg := &config.Config{
+			App: config.AppConfig{Name: integrationAppName},
 			Cache: config.CacheConfig{
 				Enabled: true,
 				Redis: config.RedisConfig{
@@ -291,7 +301,7 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		}
 
 		store := config.NewTenantStore(cfg)
-		resolver := NewFactoryResolver(nil)
+		resolver := newFactoryResolverForConfig(nil, cfg)
 		log := logger.New("debug", true)
 
 		connector := resolver.CacheConnector(store, log)
@@ -324,6 +334,7 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 
 	t.Run("distributed locking with CompareAndSet", func(t *testing.T) {
 		cfg := &config.Config{
+			App: config.AppConfig{Name: integrationAppName},
 			Cache: config.CacheConfig{
 				Enabled: true,
 				Redis: config.RedisConfig{
@@ -336,7 +347,7 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		}
 
 		store := config.NewTenantStore(cfg)
-		resolver := NewFactoryResolver(nil)
+		resolver := newFactoryResolverForConfig(nil, cfg)
 		log := logger.New("debug", true)
 
 		connector := resolver.CacheConnector(store, log)
@@ -367,6 +378,7 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 
 	t.Run("cache health and stats", func(t *testing.T) {
 		cfg := &config.Config{
+			App: config.AppConfig{Name: integrationAppName},
 			Cache: config.CacheConfig{
 				Enabled: true,
 				Redis: config.RedisConfig{
@@ -379,7 +391,7 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		}
 
 		store := config.NewTenantStore(cfg)
-		resolver := NewFactoryResolver(nil)
+		resolver := newFactoryResolverForConfig(nil, cfg)
 		log := logger.New("debug", true)
 
 		connector := resolver.CacheConnector(store, log)
