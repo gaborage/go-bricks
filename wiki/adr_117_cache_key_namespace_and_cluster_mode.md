@@ -108,7 +108,17 @@ ADR-011 introduced — break silently under them.
   `<prefix>:<key>` with a fixed `:` separator. The grammar lives in `internal/cachekey`, because
   the config layer must enforce it long before a cache exists and `cache` imports `config`: a
   prefix may not carry whitespace, the glob metacharacters `*?[]`, braces `{}` (a hash tag would
-  pin every key of the deployment to one slot and defeat serverless sharding) or a trailing `:`.
+  pin every key of the deployment to one slot and defeat serverless sharding) or a `:` anywhere
+  in it — **a prefix is ONE segment**. Not merely a trailing one: a prefix spanning two segments
+  would be reachable from another prefix's caller key, since `orders` writing `v2:user:1` and
+  `orders:v2` writing `user:1` both land on `orders:v2:user:1`, and two services with distinct
+  prefixes could still overwrite each other. Single-segment, the prefix owns the first segment of
+  every key it writes and the tenant id (which the id grammar already keeps `:`-free) owns the
+  second; the caller key stays free-form. The ASSEMBLED namespace the decorator receives
+  (`<prefix>:<tenantID>`) passes a segment-wise door of its own, `ValidateNamespace`: every
+  segment must be a prefix `Validate` accepts and none may be empty, so a base that reached the
+  connector with a trailing `:` from a dynamic source is refused as `orders::acme` rather than
+  writing into a namespace nobody configured.
   The key is a **tri-state** `*string`: absent means `app.name`, and an explicit value — the
   empty string included — is honored as written. It therefore gets no koanf default, which would
   fill the absent arm and make the `app.name` default unreachable. Because an absent key makes

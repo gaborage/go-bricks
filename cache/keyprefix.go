@@ -11,14 +11,19 @@ import (
 
 // ErrInvalidKeyPrefix is returned by WithKeyPrefix when the prefix is not a usable
 // namespace: whitespace, a glob metacharacter, a Redis Cluster hash tag, or a
-// trailing separator. Callers can match it with errors.Is; the wrapped cause spells
-// out which rule was broken.
+// separator anywhere in it — a prefix is one segment. Callers can match it with
+// errors.Is; the wrapped cause spells out which rule was broken.
 var ErrInvalidKeyPrefix = errors.New("cache: invalid key prefix")
 
 // WithKeyPrefix returns a view of c whose every key travels as <prefix>:<key>, so two
 // services (or two tenants) sharing one Redis endpoint cannot read or overwrite each
 // other's entries. It is connector-agnostic: the framework wraps whichever cache
 // instance the connector produced, including a custom app.Options.CacheConnector.
+//
+// The prefix is ONE segment and may carry no ":" — the caller key is free to. That is
+// what makes the isolation hold for every key: the prefix owns the first segment, so
+// two distinct prefixes cannot be bridged by a caller key that opens with the other's
+// tail.
 //
 // An empty prefix is the documented opt-out and returns c itself, unwrapped. A nil c
 // returns ErrNilCache and an unusable prefix returns an error wrapping
@@ -30,7 +35,7 @@ func WithKeyPrefix(c Cache, prefix string) (Cache, error) {
 	if isNilValue(c) {
 		return nil, ErrNilCache
 	}
-	if err := cachekey.Validate(prefix); err != nil {
+	if err := cachekey.ValidateNamespace(prefix); err != nil {
 		return nil, fmt.Errorf("%w %q: %w", ErrInvalidKeyPrefix, prefix, err)
 	}
 	if prefix == "" {

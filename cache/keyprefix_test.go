@@ -145,6 +145,9 @@ func TestWithKeyPrefixRejectsAnInvalidPrefix(t *testing.T) {
 		{name: "glob_metacharacter", prefix: "orders*"},
 		{name: "hash_tag", prefix: "{orders}"},
 		{name: "trailing_separator", prefix: "orders:"},
+		{name: "leading_separator", prefix: ":orders"},
+		{name: "empty_inner_segment", prefix: "orders::acme"},
+		{name: "whitespace_in_a_later_segment", prefix: "orders:bad name"},
 	}
 
 	for _, tt := range tests {
@@ -155,6 +158,36 @@ func TestWithKeyPrefixRejectsAnInvalidPrefix(t *testing.T) {
 			assert.Nil(t, got)
 		})
 	}
+}
+
+// TestWithKeyPrefixDistinctPrefixesCannotCollide proves what the one-segment prefix
+// rule buys at the wire. A configured prefix carries no separator (config refuses one,
+// and the framework assembles the tenant segment itself), so it occupies exactly the
+// first segment of every key it writes and two services with distinct prefixes differ
+// in that segment whatever caller key either one chooses. While "orders:v2" was a legal
+// configured prefix, "orders" + "v2:user:1" and "orders:v2" + "user:1" both wrote
+// "orders:v2:user:1" — one service reading and overwriting the other's entries, which
+// is the collision the namespace exists to prevent.
+func TestWithKeyPrefixDistinctPrefixesCannotCollide(t *testing.T) {
+	ctx := context.Background()
+
+	first := cachetest.NewMockCache()
+	firstView, err := cache.WithKeyPrefix(first, "orders")
+	require.NoError(t, err)
+
+	second := cachetest.NewMockCache()
+	secondView, err := cache.WithKeyPrefix(second, "ordersv2")
+	require.NoError(t, err)
+
+	// The caller key still carries separators freely, and is chosen here to be the
+	// one that used to close the gap between the two namespaces.
+	require.NoError(t, firstView.Set(ctx, "v2:user:1", []byte("first"), kpTTL))
+	require.NoError(t, secondView.Set(ctx, kpKey, []byte("second"), kpTTL))
+
+	assert.Equal(t, []string{"orders:v2:user:1"}, first.AllKeys())
+	assert.Equal(t, []string{"ordersv2:user:1"}, second.AllKeys())
+	assert.NotEqual(t, first.AllKeys(), second.AllKeys(),
+		"distinct single-segment prefixes must not meet on any caller key")
 }
 
 func TestWithKeyPrefixRejectsANilCache(t *testing.T) {

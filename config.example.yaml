@@ -123,8 +123,9 @@ cache:
                                      # tenant cache as <prefix>:<tenantID>. OMIT this key to take
                                      # app.name (the default); "" opts THIS section out — a
                                      # tenant section's own "" still yields <tenantID>:<key>.
-                                     # Must match the ACL access string's key pattern, e.g.
-                                     # ~orders:* (env: CACHE_REDIS_KEYPREFIX)
+                                     # ONE segment: no ":" in the prefix (the caller's key may
+                                     # carry them). Must match the ACL access string's key
+                                     # pattern, e.g. ~orders:* (env: CACHE_REDIS_KEYPREFIX)
     poolsize: 10                     # Maximum number of connections in pool
     dialtimeout: 5s                  # Timeout for establishing new connections
     readtimeout: 3s                  # Timeout for read operations (-1 = no timeout)

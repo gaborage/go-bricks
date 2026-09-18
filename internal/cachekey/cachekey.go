@@ -27,6 +27,14 @@ const forbidden = "*?[]{}"
 // prefix is valid: it is the documented opt-out from namespacing. Errors are
 // reason-only, carrying no field key — each layer addresses them to its own
 // (cache.redis.keyprefix, app.name).
+//
+// A prefix is ONE segment: no Sep anywhere in it, not merely none at the end. A
+// prefix that spanned two segments would collide with a caller key that opened
+// with the second — "orders" writing "v2:user:1" and "orders:v2" writing
+// "user:1" both land on "orders:v2:user:1" — so two services with distinct
+// prefixes could still read and overwrite each other's entries. Single-segment,
+// the prefix owns the first segment of every key it writes, and a tenant id
+// (which cannot carry Sep either) owns the second.
 func Validate(prefix string) error {
 	if prefix == "" {
 		return nil
@@ -41,8 +49,36 @@ func Validate(prefix string) error {
 		}
 	}
 
-	if strings.HasSuffix(prefix, Sep) {
-		return errors.New("must not end with '" + Sep + "': the separator is added between the prefix and the key")
+	if strings.Contains(prefix, Sep) {
+		return errors.New("must not contain '" + Sep +
+			"': the prefix is one segment; '" + Sep + "' separates prefix, tenant and key")
+	}
+
+	return nil
+}
+
+// ValidateNamespace reports whether ns is a usable ASSEMBLED namespace: the value Join
+// produced, which is one or more prefix segments. Every segment must be a prefix
+// Validate accepts, and none may be empty — "orders::acme" is a base that ended in the
+// separator, and letting it through would put the keys in a namespace the operator did
+// not write.
+//
+// This is the door a namespace the FRAMEWORK assembled passes (<prefix>:<tenantID>),
+// where Validate is the stricter door a CONFIGURED prefix passes: an operator's prefix
+// is one segment, so it can never reach across into another service's namespace, while
+// the segment the framework folds in is a tenant id it validated itself.
+func ValidateNamespace(ns string) error {
+	if ns == "" {
+		return nil
+	}
+
+	for _, segment := range strings.Split(ns, Sep) {
+		if segment == "" {
+			return errors.New("must not contain an empty segment between two '" + Sep + "' separators")
+		}
+		if err := Validate(segment); err != nil {
+			return err
+		}
 	}
 
 	return nil

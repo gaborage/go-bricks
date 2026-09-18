@@ -10090,7 +10090,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   decorator installed once per pooled instance above whichever connector is in play; it forwards
   `cache.LoadTimeoutProvider` and passes every inner error through, so `cache.loadtimeout` and
   `errors.Is(err, cache.ErrNotFound)` are unchanged. A prefix carrying whitespace, `*?[]`, `{}`
-  or a trailing `:` is refused at startup, and where the default applies `app.name` must itself
+  or a `:` anywhere in it is refused at startup — the prefix is ONE segment, or a caller key
+  opening with another prefix's tail would bridge the two namespaces — and where the default
+  applies `app.name` must itself
   pass that grammar — an unusable name fails startup naming `app.name` and offering
   `cache.redis.keyprefix`. Unchanged: the six `cache.Cache` methods, the CBOR encoding, TTLs, the
   manager lifecycle, and `cache/redis.Config`, which never receives the prefix.
