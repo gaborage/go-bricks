@@ -1823,7 +1823,7 @@ additions only. See [migrations.md](migrations.md) `[C66.4]`.
 
 ---
 
-### [ADR-116: Cache Key Namespace and Cluster Mode](adr_116_cache_key_namespace_and_cluster_mode.md)
+### [ADR-117: Cache Key Namespace and Cluster Mode](adr_117_cache_key_namespace_and_cluster_mode.md)
 
 **Date:** 2026-09-18 | **Status:** Proposed | **Breaking:** not in this change — `cache.redis.username` is additive; the `cache.redis.keyprefix` default lands breaking with the third change under #1727
 
@@ -2619,7 +2619,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-116) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-117) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

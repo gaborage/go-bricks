@@ -1,4 +1,4 @@
-# ADR-116: Cache Key Namespace and Cluster Mode
+# ADR-117: Cache Key Namespace and Cluster Mode
 
 **Status:** Proposed
 **Date:** 2026-09-18
