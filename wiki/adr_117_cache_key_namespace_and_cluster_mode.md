@@ -95,9 +95,11 @@ ADR-011 introduced — break silently under them.
   `cache.redis.mode`, because the cluster client drops `DB` rather than refusing it
   (`UniversalOptions.Cluster()` copies no `DB`, and `ClusterOptions` has no such field) — the
   whole keyspace would otherwise move to database 0 on the mode flip alone. Both rules live in
-  `validateRedisCache` and again in `(*redis.Config).Validate()`. `Stats()` gains a `mode` key so
-  a `/ready` reader knows whether `redis_info` describes one node or the fleet. Additive; the
-  zero value is today's behaviour.
+  `validateRedisCache` and again in `(*redis.Config).Validate()` — the second copy is load-bearing,
+  not belt-and-braces: `config.LoadFromMap` and a consumer-supplied dynamic `ResourceSource` never
+  reach the first. `Stats()` gains a `mode` key so an operator reading `Stats()` knows whether
+  `redis_info` describes one node or the fleet; the probe set never calls it, rendering an
+  allowlisted manager map instead. Additive; the zero value is today's behaviour.
 
 - **`cache.redis.keyprefix` namespaces every key, defaulting to `app.name`.** The wire layout is
   `<prefix>:<key>` with a fixed `:` separator. The prefix is validated against whitespace, the

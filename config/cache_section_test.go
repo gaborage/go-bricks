@@ -589,7 +589,9 @@ func TestValidateCacheRedisUsername(t *testing.T) {
 // default dials a single node and a cluster-protocol endpoint answers MOVED to
 // the first key — a typo would otherwise surface as a runtime cache failure
 // instead of a startup one. The error carries the allowed pair so the operator
-// does not have to find the list.
+// does not have to find the list. The enum is case-sensitive AND untrimmed: the
+// env provider hands the value through verbatim and no decode hook trims a
+// scalar, so a padded value fails startup rather than degrading to standalone.
 func TestValidateCacheRedisMode(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -601,6 +603,8 @@ func TestValidateCacheRedisMode(t *testing.T) {
 		{name: "cluster_is_accepted", mode: "cluster"},
 		{name: "unknown_mode_is_rejected", mode: "sentinel", wantField: "cache.redis.mode"},
 		{name: "capitalised_name_is_rejected", mode: "Cluster", wantField: "cache.redis.mode"},
+		{name: "padded_name_is_rejected", mode: " cluster", wantField: "cache.redis.mode"},
+		{name: "trailing_newline_is_rejected", mode: "cluster\n", wantField: "cache.redis.mode"},
 	}
 
 	for _, tt := range tests {

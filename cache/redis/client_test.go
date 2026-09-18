@@ -1257,8 +1257,10 @@ func requireUsernameRejected(t *testing.T, cfg *Config, wantMsg string) {
 // config validation. Empty is standalone, so a Config that predates the field
 // keeps dialing a single node; anything outside the two names is refused rather
 // than silently dialed standalone, where the first key on a cluster endpoint
-// would answer MOVED. The enum is case-sensitive: the names are config values,
-// not user prose.
+// would answer MOVED. The enum is case-sensitive AND untrimmed: the names are
+// config values, not user prose, and an env var carries its own whitespace all
+// the way here — so a padded value fails startup rather than degrading to the
+// standalone default, which is the outcome the closed enum exists for.
 func TestConfigValidateMode(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1270,6 +1272,8 @@ func TestConfigValidateMode(t *testing.T) {
 		{name: "cluster_is_accepted", mode: ModeCluster},
 		{name: "unknown_mode_is_rejected", mode: "sentinel", wantField: "redis.mode"},
 		{name: "capitalised_name_is_rejected", mode: "Cluster", wantField: "redis.mode"},
+		{name: "padded_name_is_rejected", mode: " cluster", wantField: "redis.mode"},
+		{name: "trailing_newline_is_rejected", mode: "cluster\n", wantField: "redis.mode"},
 	}
 
 	for _, tt := range tests {
@@ -1382,9 +1386,9 @@ func TestBuildRedisOptionsCarriesTheMode(t *testing.T) {
 	}
 }
 
-// TestStatsReportsTheMode pins the key a /ready reader needs to interpret the
-// rest of the map: under cluster, redis_info describes whichever single node
-// answered and the pool counters are an aggregate, so the numbers mean
+// TestStatsReportsTheMode pins the key an operator reading Stats() needs to
+// interpret the rest of the map: under cluster, redis_info describes whichever
+// single node answered and the pool counters are an aggregate, so the numbers mean
 // different things in the two modes. The effective mode is reported, not the
 // configured string, so an unset Mode reads as standalone rather than empty.
 func TestStatsReportsTheMode(t *testing.T) {
