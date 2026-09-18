@@ -717,3 +717,75 @@ func TestRedisClientConfigCarriesTLSBlock(t *testing.T) {
 	assert.Equal(t, redis.TLSConfig(tlsBlock), got.TLS)
 	assert.NotZero(t, got.TLS)
 }
+
+// redisConfigParityExclusions names the config.RedisConfig fields redisClientConfig
+// does not carry across by a same-named field copy, each with the reason it is
+// exempt. A field absent from this map must survive the hand copy by name and by
+// value, so adding one to config.RedisConfig without adding it to redisClientConfig
+// is a test failure rather than a setting that silently never reaches the dial.
+var redisConfigParityExclusions = map[string]string{
+	"TLS": "moved as a whole block by struct conversion, asserted below",
+}
+
+// fillDistinctFields sets every settable field behind v to a distinct non-zero
+// value. Driven by reflection rather than a literal so a field added tomorrow is
+// covered without editing this helper — and so a dropped field shows up as a
+// zero on the far side instead of matching an all-zero source by accident.
+func fillDistinctFields(t *testing.T, v reflect.Value, seed *int) {
+	t.Helper()
+
+	for i := range v.NumField() {
+		field := v.Type().Field(i)
+		target := v.Field(i)
+		if !target.CanSet() {
+			continue
+		}
+		*seed++
+		switch target.Kind() {
+		case reflect.String:
+			target.SetString(strings.ToLower(field.Name) + "-value")
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			target.SetInt(int64(*seed))
+		case reflect.Bool:
+			target.SetBool(true)
+		case reflect.Struct:
+			fillDistinctFields(t, target, seed)
+		default:
+			t.Fatalf("fillDistinctFields cannot fill %s (field %s)", target.Kind(), field.Name)
+		}
+	}
+}
+
+// TestRedisConfigFieldParity proves the hand copy in redisClientConfig is total:
+// every exported config.RedisConfig field reaches cache/redis.Config under the
+// same name with the same value, unless it is named in
+// redisConfigParityExclusions with a reason. The source block is filled by
+// reflection, so a field added to config.RedisConfig and forgotten in the copy
+// fails here instead of reaching production as a setting that never dials.
+func TestRedisConfigFieldParity(t *testing.T) {
+	cacheCfg := &config.CacheConfig{}
+	seed := 0
+	fillDistinctFields(t, reflect.ValueOf(&cacheCfg.Redis).Elem(), &seed)
+
+	got := redisClientConfig(cacheCfg)
+	gotValue := reflect.ValueOf(*got)
+	srcValue := reflect.ValueOf(cacheCfg.Redis)
+	srcType := srcValue.Type()
+
+	require.NotZero(t, srcType.NumField())
+	for i := range srcType.NumField() {
+		field := srcType.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		if _, excluded := redisConfigParityExclusions[field.Name]; excluded {
+			continue
+		}
+
+		dst := gotValue.FieldByName(field.Name)
+		require.True(t, dst.IsValid(), "redis.Config has no %s field to carry config.RedisConfig.%s", field.Name, field.Name)
+		assert.Equal(t, srcValue.Field(i).Interface(), dst.Interface(), "redisClientConfig drops config.RedisConfig.%s", field.Name)
+	}
+
+	assert.Equal(t, redis.TLSConfig(cacheCfg.Redis.TLS), got.TLS, "the excluded TLS block must still survive the struct conversion")
+}

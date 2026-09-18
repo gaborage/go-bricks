@@ -404,8 +404,13 @@ type CacheManagerConfig struct {
 
 // RedisConfig holds Redis-specific cache settings.
 type RedisConfig struct {
-	Host            string        `koanf:"host" json:"host" yaml:"host" toml:"host" mapstructure:"host"`
-	Port            int           `koanf:"port" json:"port" yaml:"port" toml:"port" mapstructure:"port"`
+	Host string `koanf:"host" json:"host" yaml:"host" toml:"host" mapstructure:"host"`
+	Port int    `koanf:"port" json:"port" yaml:"port" toml:"port" mapstructure:"port"`
+	// Username is the Redis ACL user to authenticate as (AUTH <username> <password>);
+	// empty authenticates as the implicit "default" user, today's behavior. Requires
+	// Password: the driver sends no AUTH at all when the password is empty, so a name
+	// on its own is refused at startup rather than dialed as the default user.
+	Username        string        `koanf:"username" json:"username" yaml:"username" toml:"username" mapstructure:"username"`
 	Password        string        `koanf:"password" json:"password" yaml:"password" toml:"password" mapstructure:"password"`
 	Database        int           `koanf:"database" json:"database" yaml:"database" toml:"database" mapstructure:"database"`
 	PoolSize        int           `koanf:"poolsize" json:"poolsize" yaml:"poolsize" toml:"poolsize" mapstructure:"poolsize"`

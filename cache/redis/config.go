@@ -2,6 +2,7 @@ package redis
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gaborage/go-bricks/cache"
@@ -19,6 +20,17 @@ type Config struct {
 
 	// Port is the Redis server port (default: 6379).
 	Port int `config:"port" default:"6379"`
+
+	// Username is the Redis ACL user to authenticate as, sent as
+	// AUTH <username> <password>. Empty authenticates as the implicit "default"
+	// user. Requires Password — Validate refuses a name with an empty password,
+	// because the driver then sends no AUTH and the dial would run as the default
+	// user. Required by deployments that gate access with ACLs, such as Amazon
+	// ElastiCache RBAC. Filled from config.RedisConfig, which owns the
+	// cache.redis.username key (env CACHE_REDIS_USERNAME); deliberately carries
+	// no config: tag, because nothing injects this struct and the tags on the
+	// fields around it are dead (#1729).
+	Username string
 
 	// Password for Redis authentication (optional).
 	// Should be provided via environment variable: CACHE_REDIS_PASSWORD
@@ -108,6 +120,26 @@ func (c *Config) validate() (clienttls.Material, error) {
 
 	if c.Port <= 0 || c.Port > 65535 {
 		return clienttls.Material{}, cache.NewConfigError("redis.port", fmt.Sprintf("invalid port: %d", c.Port), nil)
+	}
+
+	// Empty is the default user; whitespace-only is a typo that would travel as an
+	// AUTH argument no ACL rule can match. Checked before the coupling rule below so
+	// a name that is both blank and unaccompanied is reported as the typo it is.
+	if c.Username != "" && strings.TrimSpace(c.Username) == "" {
+		return clienttls.Material{}, cache.NewConfigError("redis.username", "username cannot be whitespace-only", nil)
+	}
+
+	// A name with no password never authenticates: go-redis builds the HELLO
+	// handshake's AUTH clause inside `if password != ""`, and gates the legacy AUTH
+	// fallback the same way, so nothing is sent and the dial runs as whatever identity
+	// the server hands an unauthenticated client. Refused here rather than dialed,
+	// mirroring config.validateRedisCache, because a hand-built Config reaches this
+	// door without passing through the config layer. A password alone is the legacy
+	// form that selects the implicit "default" user and stands.
+	if c.Username != "" && c.Password == "" {
+		return clienttls.Material{}, cache.NewConfigError("redis.username",
+			"username requires redis.password: the client sends no AUTH without one, "+
+				"so the connection would silently run as the default user", nil)
 	}
 
 	if c.Database < 0 || c.Database > 15 {

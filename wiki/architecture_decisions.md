@@ -1823,6 +1823,33 @@ additions only. See [migrations.md](migrations.md) `[C66.4]`.
 
 ---
 
+### [ADR-117: Cache Key Namespace and Cluster Mode](adr_117_cache_key_namespace_and_cluster_mode.md)
+
+**Date:** 2026-09-18 | **Status:** Proposed | **Breaking:** not in this change — `cache.redis.username` is additive; the `cache.redis.keyprefix` default lands breaking with the third change under #1727
+
+The Redis cache dialed one address with one password, selected a database number, and wrote the
+key it was handed. A managed endpoint grants none of that: ElastiCache Serverless speaks cluster
+protocol only, authenticates named RBAC users rather than a shared password, and offers one
+logical database — which dissolves ADR-011's promise of per-tenant isolation by separate Redis
+database. Three additions answer it. `cache.redis.username` carries an ACL identity sent as
+`AUTH <username> <password>` and refused without one, because go-redis sends no AUTH at all
+when the password is empty and the connection would then run as the default user.
+`cache.redis.mode` selects `standalone` (default) or `cluster` through
+one `redis.NewUniversalClient` path, with `mode: cluster` plus a non-zero `database` rejected at
+startup because the cluster client drops `DB` rather than refusing it. `cache.redis.keyprefix`
+namespaces every key as `<prefix>:<key>`, defaults to `app.name`, folds a tenant in as
+`<prefix>:<tenantID>`, and is applied as a `cache.Cache` decorator above whichever connector is in
+play — so a consumer-supplied `Options.CacheConnector` is namespaced too, and the prefix never
+reaches the transport. Prefixing inside `cache/redis`, and leaving the whole problem to a custom
+consumer connector, were both rejected. Read-from-replica knobs stay unexposed: eventual
+consistency breaks `GetOrSet`'s leader/follower semantics.
+
+**Key Benefits:** a serverless endpoint is four keys of YAML instead of a forked cache layer, and
+tenant isolation rests on a mechanism that holds on every deployment shape rather than on a
+database number a cluster endpoint does not have.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2593,7 +2620,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-116) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-117) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

@@ -16,37 +16,13 @@ import (
 // zero-value Redis config reaches the cache client and fails at first request
 // instead of at startup.
 func TestValidateMultitenantTenantsCacheDefaults(t *testing.T) {
-	cfg := &Config{
-		App:    createValidAppConfig(),
-		Server: createValidServerConfig(),
-		Log:    createValidLogConfig(),
-		Multitenant: MultitenantConfig{
-			Enabled: true,
-			Resolver: ResolverConfig{
-				Type:   "header",
-				Header: testTenantHeader,
-			},
-			Tenants: map[string]TenantEntry{
-				"acme": {
-					Database: DatabaseConfig{
-						Type:     PostgreSQL,
-						Host:     "acme.db",
-						Port:     5432,
-						Database: "acme",
-						Username: "acme_user",
-					},
-					Cache: CacheConfig{
-						Enabled: true,
-						// Type, Port and PoolSize intentionally left at zero
-						// values: there are no koanf defaults for per-tenant
-						// cache keys, so validation must apply them itself.
-						Redis: RedisConfig{Host: "acme.redis"},
-					},
-				},
-			},
-		},
-		Source: SourceConfig{Type: SourceTypeStatic},
-	}
+	// Type, Port and PoolSize intentionally left at zero values: there are no
+	// koanf defaults for per-tenant cache keys, so validation must apply them
+	// itself.
+	cfg := tenantCacheConfig(&CacheConfig{
+		Enabled: true,
+		Redis:   RedisConfig{Host: "acme.redis"},
+	})
 
 	require.NoError(t, Validate(cfg))
 
@@ -63,34 +39,8 @@ func TestValidateMultitenantTenantsCacheDefaults(t *testing.T) {
 // posture: a genuinely misconfigured tenant cache (enabled but no host) is
 // rejected at startup, not deferred to the first per-request cache access.
 func TestValidateMultitenantTenantsCacheMisconfigFailsFast(t *testing.T) {
-	cfg := &Config{
-		App:    createValidAppConfig(),
-		Server: createValidServerConfig(),
-		Log:    createValidLogConfig(),
-		Multitenant: MultitenantConfig{
-			Enabled: true,
-			Resolver: ResolverConfig{
-				Type:   "header",
-				Header: testTenantHeader,
-			},
-			Tenants: map[string]TenantEntry{
-				"acme": {
-					Database: DatabaseConfig{
-						Type:     PostgreSQL,
-						Host:     "acme.db",
-						Port:     5432,
-						Database: "acme",
-						Username: "acme_user",
-					},
-					Cache: CacheConfig{
-						Enabled: true,
-						// Host omitted: must fail fast at startup.
-					},
-				},
-			},
-		},
-		Source: SourceConfig{Type: SourceTypeStatic},
-	}
+	// Host omitted: must fail fast at startup.
+	cfg := tenantCacheConfig(&CacheConfig{Enabled: true})
 
 	err := Validate(cfg)
 	require.Error(t, err, "enabled tenant cache without a host must fail at startup")
@@ -123,41 +73,60 @@ func TestValidateMultitenantTenantsCacheTLSMisconfigIsTenantAddressed(t *testing
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &Config{
-				App:    createValidAppConfig(),
-				Server: createValidServerConfig(),
-				Log:    createValidLogConfig(),
-				Multitenant: MultitenantConfig{
-					Enabled: true,
-					Resolver: ResolverConfig{
-						Type:   "header",
-						Header: testTenantHeader,
-					},
-					Tenants: map[string]TenantEntry{
-						"acme": {
-							Database: DatabaseConfig{
-								Type:     PostgreSQL,
-								Host:     "acme.db",
-								Port:     5432,
-								Database: "acme",
-								Username: "acme_user",
-							},
-							Cache: CacheConfig{
-								Enabled: true,
-								Redis:   RedisConfig{Host: "acme.redis", TLS: tt.tls},
-							},
-						},
-					},
-				},
-				Source: SourceConfig{Type: SourceTypeStatic},
-			}
-
-			err := Validate(cfg)
-			require.Error(t, err, "a TLS misconfiguration must fail at startup")
-			var cfgErr *ConfigError
-			require.ErrorAs(t, err, &cfgErr)
+			cfgErr := tenantCacheValidationError(t,
+				&RedisConfig{Host: "acme.redis", TLS: tt.tls},
+				"a TLS misconfiguration must fail at startup")
 			assert.Equal(t, tt.wantField, cfgErr.Field)
 		})
+	}
+}
+
+// tenantCacheValidationError validates a single-tenant Config whose "acme" cache
+// carries redisCfg and returns the ConfigError it fails with. Every tenant cache
+// rule asserts the same way — that the failure is a ConfigError whose Field names
+// the tenant — so only the dirtied Redis field differs between them.
+func tenantCacheValidationError(t *testing.T, redisCfg *RedisConfig, failMsg string) *ConfigError {
+	t.Helper()
+
+	cfg := tenantCacheConfig(&CacheConfig{Enabled: true, Redis: *redisCfg})
+
+	err := Validate(cfg)
+	require.Error(t, err, failMsg)
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	return cfgErr
+}
+
+// tenantCacheConfig returns a valid single-tenant Config whose "acme" tenant
+// carries cacheCfg. Every tenant cache rule needs the same surrounding tenant —
+// a valid app/server/log shell, a header resolver and a reachable database — so
+// the tenant literal is stated once here and each caller varies only the cache
+// block it is about to dirty.
+func tenantCacheConfig(cacheCfg *CacheConfig) *Config {
+	return &Config{
+		App:    createValidAppConfig(),
+		Server: createValidServerConfig(),
+		Log:    createValidLogConfig(),
+		Multitenant: MultitenantConfig{
+			Enabled: true,
+			Resolver: ResolverConfig{
+				Type:   "header",
+				Header: testTenantHeader,
+			},
+			Tenants: map[string]TenantEntry{
+				"acme": {
+					Database: DatabaseConfig{
+						Type:     PostgreSQL,
+						Host:     "acme.db",
+						Port:     5432,
+						Database: "acme",
+						Username: "acme_user",
+					},
+					Cache: *cacheCfg,
+				},
+			},
+		},
+		Source: SourceConfig{Type: SourceTypeStatic},
 	}
 }
 
@@ -855,4 +824,29 @@ func TestCheckStaticTenantMapEmptyMapErrorIsNotAConfigError(t *testing.T) {
 	require.Error(t, err)
 	var cfgErr *ConfigError
 	require.NotErrorAs(t, err, &cfgErr, "the empty-map rejection stays a plain error")
+}
+
+// TestValidateMultitenantTenantsCacheUsernameIsTenantAddressed proves both ACL
+// user rules reach the tenant mirror with the tenant-qualified spelling, so a
+// consumer matching on ConfigError.Field learns whose cache carries the fault.
+// The message stays root-spelled — qualification rewrites the field, not the
+// prose — so the remedy it names is the key relative to the tenant's own cache.
+func TestValidateMultitenantTenantsCacheUsernameIsTenantAddressed(t *testing.T) {
+	const wantField = "multitenant.tenants.acme.cache.redis.username"
+
+	t.Run("whitespace_only_username", func(t *testing.T) {
+		cfgErr := tenantCacheValidationError(t,
+			&RedisConfig{Host: "acme.redis", Username: " \t "},
+			"a whitespace-only tenant ACL user must fail at startup")
+		assert.Equal(t, wantField, cfgErr.Field)
+		assert.Contains(t, cfgErr.Message, "whitespace-only")
+	})
+
+	t.Run("named_user_without_password", func(t *testing.T) {
+		cfgErr := tenantCacheValidationError(t,
+			&RedisConfig{Host: "acme.redis", Username: "svc"},
+			"a tenant ACL user with no password must fail at startup")
+		assert.Equal(t, wantField, cfgErr.Field)
+		assert.Contains(t, cfgErr.Message, "cache.redis.password")
+	})
 }

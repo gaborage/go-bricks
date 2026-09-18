@@ -56,6 +56,7 @@ cache:
   redis:
     host: localhost
     port: 6379
+    username: ""                       # Redis ACL user; requires a password when set
     password: ${CACHE_REDIS_PASSWORD}  # From environment
     database: 0
     poolsize: 10
@@ -557,6 +558,50 @@ fails when they do, and a cache connection carries session and token material th
 man-in-the-middle would read in clear. Pinning a private CA through `cafile`/`cavalue` is the
 supported path for a self-signed or internally-issued endpoint; a local Redis that cannot
 serve a certificate should run with `tls.enabled` false rather than with verification off.
+
+## Amazon ElastiCache
+
+ElastiCache gates access with RBAC, not a shared password: the deployment creates a user with
+an access string and the client authenticates as that user. `cache.redis.username` carries the
+name, `cache.redis.password` the secret, and the two travel as `AUTH <username> <password>`.
+
+```yaml
+cache:
+  enabled: true
+  type: redis
+  redis:
+    host: my-cache.serverless.use1.cache.amazonaws.com
+    port: 6379
+    username: ${CACHE_REDIS_USERNAME}
+    password: ${CACHE_REDIS_PASSWORD}
+    tls:
+      enabled: true
+```
+
+- **`username` requires `password`; `password` alone selects the default user.** A
+  `username` with an empty `password` is refused at startup, naming both keys: go-redis builds
+  the AUTH clause only when the password is non-empty, so the name would never reach the wire
+  and the connection would run as whatever identity the endpoint gives an unauthenticated
+  client — on a stock Redis the `default` user, typically `nopass ~* +@all`. An ACL user
+  cannot be reached by name alone, so an ACL deployment gives its user a password. The reverse
+  is unchanged: an empty `username` with a password is the legacy `AUTH <password>` form
+  against the implicit `default` user. A whitespace-only `username` is refused separately, as
+  a typo that no ACL rule could match.
+- **`tls.enabled: true` is required, not optional.** ElastiCache serverless serves encrypted
+  in transit always, so a plaintext dial is dropped by the endpoint. Mutual TLS is not
+  supported there, so leave `certfile`/`keyfile` unset and let the connection verify against
+  the system roots.
+- **Security groups must allow 6379 and 6380.** The serverless endpoint serves writes and
+  strongly consistent reads on 6379, and exposes 6380 as a separate read-optimized endpoint.
+  GoBricks dials only the address in `cache.redis.host`/`port`, so all of its own traffic —
+  reads included — goes to that one port; the read-from-replica knobs are deliberately not
+  exposed, because eventual consistency would break `GetOrSet`. Open both regardless: anything
+  else in the deployment that reaches for the reader endpoint fails in ways that look like an
+  intermittent cache.
+
+Cluster mode (`cache.redis.mode`) and key prefixing (`cache.redis.keyprefix`) — the other two
+halves of running against a serverless endpoint — arrive in the two changes that follow this
+one under issue #1727.
 
 ## Cache Manager Defaults
 

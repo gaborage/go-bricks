@@ -110,6 +110,9 @@ cache:
   redis:
     host: localhost                  # Redis server hostname
     port: 6379                       # Redis server port
+    username: ""                     # Redis ACL user (AUTH <username> <password>); empty = the "default"
+                                     # user. Requires a password when set — the client sends no AUTH
+                                     # without one. ElastiCache RBAC (env: CACHE_REDIS_USERNAME)
     password: ""                     # Redis password (use environment variable: CACHE_REDIS_PASSWORD)
     database: 0                      # Redis database number (0-15)
     poolsize: 10                     # Maximum number of connections in pool

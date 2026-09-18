@@ -142,6 +142,7 @@ func (c *Client) namespace(ctx context.Context) string {
 func buildRedisOptions(cfg *Config, material *clienttls.Material) (*redis.Options, error) {
 	opts := &redis.Options{
 		Addr:            cfg.Address(),
+		Username:        cfg.Username,
 		Password:        cfg.Password,
 		DB:              cfg.Database,
 		PoolSize:        cfg.PoolSize,

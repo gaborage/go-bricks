@@ -1146,3 +1146,108 @@ func TestBuildRedisOptionsTLSMaterialErrorIsConfigError(t *testing.T) {
 	assert.Equal(t, "redis.tls", configErr.Field)
 	assert.Contains(t, err.Error(), "cache: redis: tls:")
 }
+
+// TestNewClientAuthenticatesAsNamedACLUser proves Config.Username reaches the
+// dial as the AUTH identity rather than being dropped: a server that knows only
+// the "svc" ACL user round-trips a value for a client carrying that name, and
+// refuses the identical password when the name is absent (which is AUTH as the
+// implicit "default" user). This is the shape ElastiCache RBAC requires.
+func TestNewClientAuthenticatesAsNamedACLUser(t *testing.T) {
+	const (
+		aclUser = "svc"
+		aclPass = "pw"
+	)
+
+	t.Run("named_user_connects", func(t *testing.T) {
+		mr := miniredis.RunT(t)
+		mr.RequireUserAuth(aclUser, aclPass)
+
+		cfg := testConfig(mr)
+		cfg.Username = aclUser
+		cfg.Password = aclPass
+
+		client, err := NewClient(cfg)
+		require.NoError(t, err)
+		defer client.Close()
+
+		ctx := context.Background()
+		require.NoError(t, client.Set(ctx, testKey1, []byte(testNewValue), time.Minute))
+
+		got, err := client.Get(ctx, testKey1)
+		require.NoError(t, err)
+		assert.Equal(t, []byte(testNewValue), got)
+	})
+
+	t.Run("absent_username_is_refused", func(t *testing.T) {
+		mr := miniredis.RunT(t)
+		mr.RequireUserAuth(aclUser, aclPass)
+
+		cfg := testConfig(mr)
+		cfg.Password = aclPass
+
+		client, err := NewClient(cfg)
+		require.Error(t, err)
+		assert.Nil(t, client)
+	})
+}
+
+// TestConfigValidateUsername mirrors the config layer's rule at the client's own
+// door, which a hand-built Config reaches without passing through config
+// validation. go-redis builds the AUTH clause only when the password is
+// non-empty, so a name with an empty password would dial with no AUTH at all and
+// run as whatever identity the server hands an unauthenticated client: the pair
+// is refused, naming both keys. An empty name with a password is the legacy
+// default-user form and stands, as does neither key set, and a whitespace-only
+// name is refused ahead of the coupling rule.
+func TestConfigValidateUsername(t *testing.T) {
+	t.Run("named_user_with_password", func(t *testing.T) {
+		assert.NoError(t, usernameConfig("svc", "pw").Validate())
+	})
+
+	t.Run("absent_username_with_password", func(t *testing.T) {
+		assert.NoError(t, usernameConfig("", "pw").Validate())
+	})
+
+	t.Run("neither_username_nor_password", func(t *testing.T) {
+		assert.NoError(t, usernameConfig("", "").Validate())
+	})
+
+	t.Run("named_user_without_password", func(t *testing.T) {
+		requireUsernameRejected(t, usernameConfig("svc", ""), "redis.password")
+	})
+
+	t.Run("whitespace_only_username_with_password", func(t *testing.T) {
+		requireUsernameRejected(t, usernameConfig(" \t ", "pw"), "whitespace-only")
+	})
+
+	t.Run("whitespace_only_username_without_password", func(t *testing.T) {
+		requireUsernameRejected(t, usernameConfig(" \t ", ""), "whitespace-only")
+	})
+}
+
+// usernameConfig returns an otherwise valid Config carrying the ACL identity
+// under test, so a case states only the two fields the username rules read.
+func usernameConfig(username, password string) *Config {
+	return &Config{
+		Host:     "localhost",
+		Port:     6379,
+		PoolSize: 10,
+		Username: username,
+		Password: password,
+	}
+}
+
+// requireUsernameRejected asserts Validate refuses cfg with a ConfigError
+// addressed to redis.username — the field both username rules share — carrying
+// wantMsg, which is what tells the two rules apart.
+func requireUsernameRejected(t *testing.T, cfg *Config, wantMsg string) {
+	t.Helper()
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	var configErr *cache.ConfigError
+	require.ErrorAs(t, err, &configErr)
+	assert.Equal(t, "redis.username", configErr.Field)
+	assert.Contains(t, configErr.Message, wantMsg,
+		"the message must name the rule that fired, not just the field both rules share")
+}
