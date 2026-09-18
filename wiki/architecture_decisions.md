@@ -1815,9 +1815,9 @@ a typo or an omitted type passed startup. The broker then refused the declare on
 channel exception naming no call site. `Validate()` now refuses any type that is not exactly
 `direct`, `topic`, `fanout` or `headers` and does not start with `x-`, the prefix RabbitMQ gives
 plugin exchanges. Every violation is reported, and each error names the exchange and the type.
-`ExchangeTypeDirect`/`Topic`/`Fanout`/`Headers` are exported, and `DeclareDirectExchange` mirrors
-the topic helper. `Type` stays `string`, so the API change is additions only. See
-[migrations.md](migrations.md) `[C66.4]`.
+`ExchangeTypeDirect`/`Topic`/`Fanout`/`Headers` are exported, and `NewDirectExchange` and
+`DeclareDirectExchange` mirror the topic helpers. `Type` stays `string`, so the API change is
+additions only. See [migrations.md](migrations.md) `[C66.4]`.
 
 **Key Benefits:** a misspelled exchange type fails at boot and names its declaration.
 
