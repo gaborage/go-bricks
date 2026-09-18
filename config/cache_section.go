@@ -214,7 +214,9 @@ func checkCacheKeyNamespace(cfg *Config) error {
 			Category: errCategoryInvalid,
 			Field:    fieldAppName,
 			Message:  "is the default cache key namespace and " + err.Error(),
-			Action:   "rename the application, or set cache.redis.keyprefix to a usable namespace",
+			Action: "rename the application, or set a usable keyprefix on each enabled cache " +
+				"section (cache.redis.keyprefix, multitenant.tenants.<id>.cache.redis.keyprefix); " +
+				"a tenant section does not inherit the root one",
 		}
 	}
 	return nil

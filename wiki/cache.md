@@ -62,8 +62,8 @@ cache:
     database: 0
     poolsize: 10
     # keyprefix: orders                # key namespace, <prefix>:<key>. OMIT the key to take
-                                       # app.name (the default); "" opts out of prefixing
-                                       # entirely. A tenant cache uses <prefix>:<tenantID>
+                                       # app.name (the default); "" opts THAT section out;
+                                       # a tenant's own "" still yields <tenantID>
 ```
 
 **Module Setup Pattern:**
@@ -278,7 +278,9 @@ and the later write-back wins.
 - Isolation is by **key prefix**: every key a cache writes travels as `<prefix>:<key>`, and a
   tenant's cache folds the tenant id in as `<prefix>:<tenantID>` (ADR-117). The prefix comes
   from `cache.redis.keyprefix`, defaulting to `app.name`, so two services on one endpoint
-  cannot overwrite each other and two tenants cannot read each other's entries
+  cannot overwrite each other and two tenants cannot read each other's entries. Two services
+  that share an `app.name` are the exception — the default separates services by name, so they
+  resolve to one prefix and still collide; give them distinct explicit values
 - Plus a **separate Redis database** per tenant where the deployment supports one
   (`cache.redis.database`, configurable per-tenant). A cluster endpoint has only database 0,
   so this layers on top of the prefix rather than replacing it

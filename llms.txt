@@ -2025,7 +2025,7 @@ cache:
     host: localhost
     port: 6379
     mode: standalone # "cluster" for a cluster-protocol endpoint (ElastiCache Serverless); then a non-zero database is refused at startup
-    # keyprefix: orders # key namespace, <prefix>:<key> (tenant: <prefix>:<tenantID>); OMIT to take app.name, "" opts out
+    # keyprefix: orders # key namespace, <prefix>:<key> (tenant: <prefix>:<tenantID>); OMIT to take app.name, "" opts that section out (a tenant's own "" still yields <tenantID>)
     password: ${CACHE_REDIS_PASSWORD} # from env
     database: 0
     poolsize: 10

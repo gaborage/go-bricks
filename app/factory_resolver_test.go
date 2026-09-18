@@ -1075,3 +1075,51 @@ func TestFactoryResolverCacheConnectorTenantDoesNotInheritTheRootPrefix(t *testi
 
 	assertWireKey(t, c, mock, "orders:acme:user:1")
 }
+
+// TestFactoryResolverCacheConnectorRefusesAnUnresolvedNamespace pins the second
+// fail-closed arm. The exported NewFactoryResolver carries no app name, so a consumer
+// wiring its own resolver with a custom connector would otherwise join the root key to
+// the empty prefix and get its cache back unwrapped — two such services on one endpoint
+// writing each other's keys, which is the collision the namespace exists to prevent. An
+// explicit keyprefix: "" is a different event: it is the documented opt-out, and it is
+// still honored, unwrapped and without error.
+func TestFactoryResolverCacheConnectorRefusesAnUnresolvedNamespace(t *testing.T) {
+	connectorFor := func(resolver *FactoryResolver, store TenantStore) cache.Connector {
+		return resolver.CacheConnector(store, logger.New("error", true))
+	}
+	customFor := func(mock cache.Cache) *Options {
+		return &Options{CacheConnector: func(context.Context, string) (cache.Cache, error) { return mock, nil }}
+	}
+
+	t.Run("no_app_name_and_no_section_is_refused", func(t *testing.T) {
+		mock := cachetest.NewMockCache()
+
+		c, err := connectorFor(NewFactoryResolver(customFor(mock)), config.NewTenantStore(&config.Config{}))(
+			context.Background(), "")
+
+		require.ErrorIs(t, err, errUnresolvedCacheNamespace)
+		assert.Nil(t, c)
+		cachetest.AssertCacheClosed(t, mock)
+	})
+
+	t.Run("an_explicit_opt_out_is_still_honored", func(t *testing.T) {
+		mock := cachetest.NewMockCache()
+		store := storeServingCacheSection("", cacheSectionWithKeyPrefix(new("")))
+
+		c, err := connectorFor(NewFactoryResolver(customFor(mock)), store)(context.Background(), "")
+
+		require.NoError(t, err)
+		assert.Same(t, mock, c, "the opt-out must hand back the cache itself, unwrapped")
+		assertWireKey(t, c, mock, keyPrefixLogical)
+	})
+
+	t.Run("a_tenant_key_is_a_namespace_of_its_own", func(t *testing.T) {
+		mock := cachetest.NewMockCache()
+
+		c, err := connectorFor(NewFactoryResolver(customFor(mock)), config.NewTenantStore(&config.Config{}))(
+			context.Background(), keyPrefixTenant)
+
+		require.NoError(t, err)
+		assertWireKey(t, c, mock, "acme:user:1")
+	})
+}

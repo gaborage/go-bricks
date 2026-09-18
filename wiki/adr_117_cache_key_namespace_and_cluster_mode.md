@@ -131,7 +131,9 @@ ADR-011 introduced — break silently under them.
   — the one thing such a connector inherits, since `username` and `mode` never reach it. Wiring
   fails closed: a prefix the grammar refuses (reachable when a dynamic tenant source delivers a
   section `config.Validate` never saw) closes the instance just dialed rather than returning an
-  unnamespaced cache. A section that cannot be read is not that case — it carries no override to
+  unnamespaced cache, and so does a namespace that resolved to nothing at all — the exported
+  `NewFactoryResolver` carries no app name, so a root key with no section prefix would otherwise
+  hand the instance back unwrapped. An explicit `""` is a different event and still opts out. A section that cannot be read is not that case — it carries no override to
   honor, so the `app.name` default applies and the instance is still namespaced. The prefix never
   reaches the transport, so it is not mirrored onto `cache/redis.Config`; the field-parity test
   carries that one named exclusion.

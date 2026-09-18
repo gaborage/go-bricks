@@ -143,12 +143,22 @@ func (f *FactoryResolver) innerCacheConnector(resourceSource TenantStore, log lo
 	return newRedisConnector(resourceSource, log)
 }
 
+// errUnresolvedCacheNamespace reports a cache whose namespace resolved to nothing
+// without anyone asking it to. It is not the documented opt-out: that one is an
+// explicit cache.redis.keyprefix: "", and it is honored.
+var errUnresolvedCacheNamespace = errors.New(
+	"app: cache key namespace resolved to nothing; set app.name, or cache.redis.keyprefix to opt out explicitly")
+
 // namespacedCacheConnector returns inner's instances behind the key-prefix decorator.
 //
-// It fails closed: a prefix the grammar refuses — reachable when a dynamic tenant
-// source delivers a section config.Validate never saw — closes the instance inner just
-// dialed rather than returning an unnamespaced cache, which on a shared endpoint is
-// exactly the collision the prefix exists to prevent.
+// It fails closed twice over. A prefix the grammar refuses — reachable when a dynamic
+// tenant source delivers a section config.Validate never saw — closes the instance
+// inner just dialed rather than returning an unnamespaced cache, which on a shared
+// endpoint is exactly the collision the prefix exists to prevent. So does a namespace
+// that resolved to nothing at all: the exported NewFactoryResolver carries no app name,
+// so a root key with no section prefix would otherwise join to "" and hand back the
+// instance unwrapped, silently dropping the namespace for every consumer that builds a
+// resolver itself. An explicit "" is a different event and still opts out.
 func (f *FactoryResolver) namespacedCacheConnector(inner cache.Connector, resourceSource TenantStore, log logger.Logger) cache.Connector {
 	return func(ctx context.Context, key string) (cache.Cache, error) {
 		instance, err := inner(ctx, key)
@@ -156,22 +166,40 @@ func (f *FactoryResolver) namespacedCacheConnector(inner cache.Connector, resour
 			return nil, err
 		}
 
-		prefix := cachekey.Join(f.cacheKeyPrefixBase(ctx, resourceSource, key, log), key)
+		base, explicit := f.cacheKeyPrefixBase(ctx, resourceSource, key, log)
+		prefix := cachekey.Join(base, key)
+
+		// WithKeyPrefix runs first even for the empty prefix, so the nil-cache contract
+		// break is caught here rather than by a Close below on the nil it returned.
 		namespaced, err := cache.WithKeyPrefix(instance, prefix)
 		if err != nil {
 			// A connector that broke its contract and returned a nil cache with no error
 			// has nothing to close, and closing it would panic where the framework must
 			// only report. Anything else is a live instance that must not leak.
 			if !errors.Is(err, cache.ErrNilCache) {
-				if closeErr := instance.Close(); closeErr != nil {
-					log.Warn().Err(closeErr).Str("key", key).
-						Msg("Failed to close the cache instance rejected by the key-prefix check")
-				}
+				closeRejectedCacheInstance(instance, key, log)
 			}
 			log.Error().Err(err).Str("key", key).Msg("Cache key prefix is not a usable namespace")
 			return nil, err
 		}
+
+		if prefix == "" && !explicit {
+			// namespaced is instance itself — WithKeyPrefix installs no wrapper for an
+			// empty prefix — and nothing asked for an unnamespaced cache.
+			closeRejectedCacheInstance(namespaced, key, log)
+			log.Error().Str("key", key).Msg("Cache key namespace is unresolved")
+			return nil, errUnresolvedCacheNamespace
+		}
 		return namespaced, nil
+	}
+}
+
+// closeRejectedCacheInstance releases an instance the namespace check refused, so a
+// dialed connection does not leak behind an error the caller never sees a cache for.
+func closeRejectedCacheInstance(instance cache.Cache, key string, log logger.Logger) {
+	if closeErr := instance.Close(); closeErr != nil {
+		log.Warn().Err(closeErr).Str("key", key).
+			Msg("Failed to close the cache instance rejected by the key-prefix check")
 	}
 }
 
@@ -192,9 +220,12 @@ func (f *FactoryResolver) namespacedCacheConnector(inner cache.Connector, resour
 // keyprefix then resolves to the default namespace instead of its own, stranding the
 // entries already written under it; that is worth a line in the log even though the
 // instance is still namespaced.
-func (f *FactoryResolver) cacheKeyPrefixBase(ctx context.Context, resourceSource TenantStore, key string, log logger.Logger) string {
+// The bool reports whether the section DELIVERED the value, which is what separates
+// the documented opt-out from an app.name that was never set: only an explicit prefix
+// may resolve a root instance to no namespace at all.
+func (f *FactoryResolver) cacheKeyPrefixBase(ctx context.Context, resourceSource TenantStore, key string, log logger.Logger) (base string, explicit bool) {
 	if resourceSource == nil {
-		return f.appName
+		return f.appName, false
 	}
 	cacheCfg, err := resourceSource.CacheConfig(ctx, key)
 	if err != nil {
@@ -203,12 +234,12 @@ func (f *FactoryResolver) cacheKeyPrefixBase(ctx context.Context, resourceSource
 			log.Warn().Err(err).Str("key", key).
 				Msg("Cache section could not be read; the key namespace falls back to the application name")
 		}
-		return f.appName
+		return f.appName, false
 	}
 	if cacheCfg == nil || cacheCfg.Redis.KeyPrefix == nil {
-		return f.appName
+		return f.appName, false
 	}
-	return *cacheCfg.Redis.KeyPrefix
+	return *cacheCfg.Redis.KeyPrefix, true
 }
 
 // ResourceSource returns the appropriate tenant resource source.

@@ -121,7 +121,8 @@ cache:
     database: 0                      # Redis database number (0-15)
     # keyprefix: orders              # Key namespace: every key travels as <prefix>:<key>, and a
                                      # tenant cache as <prefix>:<tenantID>. OMIT this key to take
-                                     # app.name (the default); "" opts out of prefixing entirely.
+                                     # app.name (the default); "" opts THIS section out — a
+                                     # tenant section's own "" still yields <tenantID>:<key>.
                                      # Must match the ACL access string's key pattern, e.g.
                                      # ~orders:* (env: CACHE_REDIS_KEYPREFIX)
     poolsize: 10                     # Maximum number of connections in pool
