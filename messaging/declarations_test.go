@@ -187,7 +187,7 @@ func TestDeclarationsRegisterExchange(t *testing.T) {
 		assert.Empty(t, registered.Args)
 	})
 
-	t.Run("overwrites existing exchange", func(t *testing.T) {
+	t.Run("keeps the first declaration and records a type conflict", func(t *testing.T) {
 		decls := NewDeclarations()
 		exchange1 := &ExchangeDeclaration{Name: testName, Type: ExchangeTypeDirect}
 		exchange2 := &ExchangeDeclaration{Name: testName, Type: ExchangeTypeTopic}
@@ -196,7 +196,8 @@ func TestDeclarationsRegisterExchange(t *testing.T) {
 		decls.RegisterExchange(exchange2)
 
 		assert.Len(t, decls.Exchanges, 1)
-		assert.Equal(t, ExchangeTypeTopic, decls.Exchanges[testName].Type)
+		assert.Equal(t, ExchangeTypeDirect, decls.Exchanges[testName].Type, "first wins; the repeat does not mutate the store")
+		require.Error(t, decls.Validate(), "the rejected repeat is recorded as a conflict, not merged")
 	})
 }
 
@@ -1109,6 +1110,51 @@ func TestRegisterQueueIdenticalIsIdempotent(t *testing.T) {
 	assert.Equal(t, ttlValue3600, d.Queues[testQueue].Args[mapKeyTTL])
 }
 
+// TestRegisterQueueDirectlyInsertedIncumbentDoesNotPanic pins the exported-map
+// hazard: Declarations.Queues is exported, so a consumer can store a
+// declaration RegisterQueue never built — one whose Args map was never made, or
+// a bare nil — and the compatible-repeat branch then merged into it.
+func TestRegisterQueueDirectlyInsertedIncumbentDoesNotPanic(t *testing.T) {
+	// A nil Args map is not an empty one: maps.Copy into it panics as soon as
+	// the incoming declaration carries a key.
+	t.Run("nil_args_incumbent_accepts_incoming_args", func(t *testing.T) {
+		d := NewDeclarations()
+		d.Queues[mergeQueue] = &QueueDeclaration{Name: mergeQueue, Durable: true}
+
+		require.NotPanics(t, func() {
+			d.RegisterQueue(&QueueDeclaration{
+				Name:    mergeQueue,
+				Durable: true,
+				Args:    map[string]any{mapKeyTTL: ttlValue3600},
+			})
+		})
+
+		require.NoError(t, d.Validate())
+		assert.Equal(t, ttlValue3600, d.Queues[mergeQueue].Args[mapKeyTTL])
+	})
+
+	// A nil VALUE makes the key present, so the merge path ran and dereferenced
+	// it. Nil is not a declaration: it is replaced, like a missing key.
+	t.Run("nil_map_entry_is_replaced", func(t *testing.T) {
+		d := NewDeclarations()
+		d.Queues[mergeQueue] = nil
+
+		require.NotPanics(t, func() {
+			d.RegisterQueue(&QueueDeclaration{
+				Name:    mergeQueue,
+				Durable: true,
+				Args:    map[string]any{mapKeyTTL: ttlValue3600},
+			})
+		})
+
+		require.NoError(t, d.Validate())
+		stored := d.Queues[mergeQueue]
+		require.NotNil(t, stored)
+		assert.True(t, stored.Durable)
+		assert.Equal(t, ttlValue3600, stored.Args[mapKeyTTL])
+	})
+}
+
 func TestRegisterQueueConflictingArgsRecorded(t *testing.T) {
 	t.Run("single_contested_key", func(t *testing.T) {
 		d := NewDeclarations()
@@ -1209,6 +1255,66 @@ func TestRegisterQueueDeduplicatesIdenticalConflicts(t *testing.T) {
 	assert.Contains(t, err.Error(), fmt.Sprintf("(%d conflict(s))", len(d.queueConflicts)))
 	assert.Equal(t, 1, strings.Count(err.Error(), `Durable kept "true" vs rejected "false"`),
 		"one detail line per distinct conflict")
+}
+
+// TestRegisterQueueConflictRendersTypeWhenValuesCollide pins the type-aware
+// half of renderConflictValues. Args values are `any` compared with
+// reflect.DeepEqual, so a pair differing only in dynamic type IS a conflict,
+// and %v alone renders both sides identically — a message naming no change the
+// operator could make.
+func TestRegisterQueueConflictRendersTypeWhenValuesCollide(t *testing.T) {
+	tests := []struct {
+		name     string
+		kept     any
+		rejected any
+		want     string
+	}{
+		{
+			name:     "int_vs_string",
+			kept:     1,
+			rejected: "1",
+			want:     `Args["` + argKeyA + `"] kept "int(1)" vs rejected "string(1)"`,
+		},
+		{
+			name:     "int_vs_int64",
+			kept:     1,
+			rejected: int64(1),
+			want:     `Args["` + argKeyA + `"] kept "int(1)" vs rejected "int64(1)"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewDeclarations()
+			d.RegisterQueue(&QueueDeclaration{Name: mergeQueue, Args: map[string]any{argKeyA: tt.kept}})
+			d.RegisterQueue(&QueueDeclaration{Name: mergeQueue, Args: map[string]any{argKeyA: tt.rejected}})
+
+			err := d.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+			assert.NotContains(t, err.Error(), `kept "1" vs rejected "1"`,
+				"two sides rendered alike tell the operator nothing")
+		})
+	}
+}
+
+// TestRegisterQueueTypeDistinctConflictsDoNotDeduplicate covers the second half
+// of the same hazard: recordQueueConflict dedups over the all-string struct, so
+// two genuinely distinct rejections that rendered alike collapsed into one and
+// one vanished from the report.
+func TestRegisterQueueTypeDistinctConflictsDoNotDeduplicate(t *testing.T) {
+	d := NewDeclarations()
+	d.RegisterQueue(&QueueDeclaration{Name: mergeQueue, Args: map[string]any{argKeyA: 1}})
+	d.RegisterQueue(&QueueDeclaration{Name: mergeQueue, Args: map[string]any{argKeyA: "1"}})
+	d.RegisterQueue(&QueueDeclaration{Name: mergeQueue, Args: map[string]any{argKeyA: int64(1)}})
+
+	require.Len(t, d.queueConflicts, 2)
+
+	err := d.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "(2 conflict(s))")
+	assert.Contains(t, err.Error(), `Args["`+argKeyA+`"] kept "int(1)" vs rejected "string(1)"`)
+	assert.Contains(t, err.Error(), `Args["`+argKeyA+`"] kept "int(1)" vs rejected "int64(1)"`)
 }
 
 // TestRegisterQueueConflictKeepsIncumbent proves first-wins: a rejected
@@ -1344,6 +1450,513 @@ func TestRegisterQueueUncomparableArgsValues(t *testing.T) {
 		require.NotPanics(t, func() {
 			d.RegisterQueue(&QueueDeclaration{Name: testQueue, Args: map[string]any{testKey: []string{"a"}}})
 			d.RegisterQueue(&QueueDeclaration{Name: testQueue, Args: map[string]any{testKey: []string{"b"}}})
+		})
+
+		err := d.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `Args["`+testKey+`"]`)
+		assert.Contains(t, err.Error(), "[a]")
+		assert.Contains(t, err.Error(), "[b]")
+	})
+}
+
+// --- Exchange re-declaration merge semantics ---
+
+const (
+	mergeExchange  = "orders.events.exchange"
+	mergeExchangeB = "payments.events.exchange"
+	mergeExchangeC = "shipping.events.exchange"
+)
+
+// topicExchange builds the compatible baseline every exchange-merge test starts
+// from: a valid Type is mandatory, because a merge that succeeds lets Validate
+// fall through to validateExchangeTypes, which refuses an empty one.
+func topicExchange(name string, args map[string]any) *ExchangeDeclaration {
+	return &ExchangeDeclaration{Name: name, Type: ExchangeTypeTopic, Durable: true, Args: args}
+}
+
+// fanoutExchange is topicExchange's deliberate incompatible twin: same name and
+// flags, the one Type the broker routes on differently, so a pair of the two
+// conflicts on Type and on nothing else.
+func fanoutExchange(name string, args map[string]any) *ExchangeDeclaration {
+	return &ExchangeDeclaration{Name: name, Type: ExchangeTypeFanout, Durable: true, Args: args}
+}
+
+// TestRegisterExchangeDLXTypeConflictFailsInBothOrders pins the regression
+// (#1714): DeclareQueueWithDLQ registers its DLX as a FANOUT bound with an
+// empty routing key, so before the conflict check registration order decided
+// the broker type — the typed exchange winning dropped every dead-lettered
+// message that carried a routing key, the fanout winning silently declared the
+// module's exchange as fanout, and neither failed startup.
+func TestRegisterExchangeDLXTypeConflictFailsInBothOrders(t *testing.T) {
+	dlx := mergeQueue + ".dlx"
+
+	t.Run("dlq_first_then_topic_exchange", func(t *testing.T) {
+		d := NewDeclarations()
+		d.DeclareQueueWithDLQ(mergeQueue, nil)
+		d.DeclareTopicExchange(dlx)
+
+		err := d.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "conflicting exchange declarations (1 conflict(s))")
+		assert.Contains(t, err.Error(), dlx)
+		assert.Contains(t, err.Error(), `Type kept "fanout" vs rejected "topic"`)
+		assert.Equal(t, ExchangeTypeFanout, d.Exchanges[dlx].Type)
+	})
+
+	t.Run("topic_exchange_first_then_dlq", func(t *testing.T) {
+		d := NewDeclarations()
+		d.DeclareTopicExchange(dlx)
+		d.DeclareQueueWithDLQ(mergeQueue, nil)
+
+		err := d.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "conflicting exchange declarations (1 conflict(s))")
+		assert.Contains(t, err.Error(), dlx)
+		assert.Contains(t, err.Error(), `Type kept "topic" vs rejected "fanout"`)
+		assert.Equal(t, ExchangeTypeTopic, d.Exchanges[dlx].Type)
+	})
+
+	// The same collision through DeclareDirectExchange, the other typed helper a
+	// module reaches for. A direct DLX would drop the dead-lettered message too:
+	// the parking binding uses an empty routing key.
+	t.Run("direct_exchange_first_then_dlq", func(t *testing.T) {
+		d := NewDeclarations()
+		d.DeclareDirectExchange(dlx)
+		d.DeclareQueueWithDLQ(mergeQueue, nil)
+
+		err := d.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `Type kept "direct" vs rejected "fanout"`)
+	})
+}
+
+// TestDeclarePublisherExchangeConflictsWithDLX pins the publisher door as a
+// declaration site. It registers the exchange it is handed unconditionally, so
+// a DLX name a publisher also declares as a topic exchange fails startup in
+// either order. Skipping an already-registered name instead would leave the
+// publisher believing it held a topic exchange while the broker held the
+// fanout, which ignores the routing key and delivers every message to every
+// bound queue.
+func TestDeclarePublisherExchangeConflictsWithDLX(t *testing.T) {
+	dlx := mergeQueue + ".dlx"
+	opts := func() *PublisherOptions {
+		return &PublisherOptions{Exchange: dlx, RoutingKey: "orders.parked", EventType: "OrderParked"}
+	}
+
+	t.Run("dlq_first_then_publisher_exchange", func(t *testing.T) {
+		d := NewDeclarations()
+		d.DeclareQueueWithDLQ(mergeQueue, nil)
+		d.DeclarePublisher(opts(), NewTopicExchange(dlx))
+
+		err := d.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), dlx)
+		assert.Contains(t, err.Error(), `Type kept "fanout" vs rejected "topic"`)
+		assert.Equal(t, ExchangeTypeFanout, d.Exchanges[dlx].Type)
+	})
+
+	t.Run("publisher_exchange_first_then_dlq", func(t *testing.T) {
+		d := NewDeclarations()
+		d.DeclarePublisher(opts(), NewTopicExchange(dlx))
+		d.DeclareQueueWithDLQ(mergeQueue, nil)
+
+		err := d.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), dlx)
+		assert.Contains(t, err.Error(), `Type kept "topic" vs rejected "fanout"`)
+		assert.Equal(t, ExchangeTypeTopic, d.Exchanges[dlx].Type)
+	})
+}
+
+// TestDeclareQueueWithDLQSharedDLXMerges is the other half: several primary
+// queues legitimately share one DLX, and that repeat is identical, so it must
+// stay silent.
+func TestDeclareQueueWithDLQSharedDLXMerges(t *testing.T) {
+	d := NewDeclarations()
+	spec := &DeadLetterSpec{Exchange: "shared.dlx", ParkingQueue: "shared.dlq"}
+
+	d.DeclareQueueWithDLQ(mergeQueue, spec)
+	d.DeclareQueueWithDLQ(mergeQueueB, spec)
+
+	require.NoError(t, d.Validate())
+	assert.Empty(t, d.exchangeConflicts)
+	assert.Equal(t, ExchangeTypeFanout, d.Exchanges["shared.dlx"].Type)
+}
+
+func TestRegisterExchangeIdenticalIsIdempotent(t *testing.T) {
+	d := NewDeclarations()
+	e := topicExchange(testExchange, map[string]any{mapKeyTTL: ttlValue3600})
+
+	d.RegisterExchange(e)
+	d.RegisterExchange(e)
+
+	require.NoError(t, d.Validate())
+	assert.Len(t, d.Exchanges, 1)
+	assert.Equal(t, ttlValue3600, d.Exchanges[testExchange].Args[mapKeyTTL])
+}
+
+// TestRegisterExchangeDirectlyInsertedIncumbentDoesNotPanic pins the
+// exported-map hazard on the exchange half: Declarations.Exchanges is exported,
+// so a consumer can store a declaration RegisterExchange never built — one
+// whose Args map was never made, or a bare nil — and the compatible-repeat
+// branch then merged into it.
+func TestRegisterExchangeDirectlyInsertedIncumbentDoesNotPanic(t *testing.T) {
+	// A nil Args map is not an empty one: maps.Copy into it panics as soon as
+	// the incoming declaration carries a key.
+	t.Run("nil_args_incumbent_accepts_incoming_args", func(t *testing.T) {
+		d := NewDeclarations()
+		d.Exchanges[mergeExchange] = &ExchangeDeclaration{
+			Name:    mergeExchange,
+			Type:    ExchangeTypeTopic,
+			Durable: true,
+		}
+
+		require.NotPanics(t, func() {
+			d.RegisterExchange(topicExchange(mergeExchange, map[string]any{mapKeyTTL: ttlValue3600}))
+		})
+
+		require.NoError(t, d.Validate())
+		assert.Equal(t, ttlValue3600, d.Exchanges[mergeExchange].Args[mapKeyTTL])
+	})
+
+	// A nil VALUE makes the key present, so the merge path ran and dereferenced
+	// it in exchangeMergeConflict. Nil is not a declaration: it is replaced,
+	// like a missing key.
+	t.Run("nil_map_entry_is_replaced", func(t *testing.T) {
+		d := NewDeclarations()
+		d.Exchanges[mergeExchange] = nil
+
+		require.NotPanics(t, func() {
+			d.RegisterExchange(topicExchange(mergeExchange, map[string]any{mapKeyTTL: ttlValue3600}))
+		})
+
+		require.NoError(t, d.Validate())
+		stored := d.Exchanges[mergeExchange]
+		require.NotNil(t, stored)
+		assert.Equal(t, ExchangeTypeTopic, stored.Type)
+		assert.Equal(t, ttlValue3600, stored.Args[mapKeyTTL])
+	})
+}
+
+func TestRegisterExchangeConflictingArgsRecorded(t *testing.T) {
+	t.Run("single_contested_key", func(t *testing.T) {
+		d := NewDeclarations()
+		d.RegisterExchange(topicExchange(mergeExchange, map[string]any{argKeyA: "a-incumbent"}))
+		d.RegisterExchange(topicExchange(mergeExchange, map[string]any{argKeyA: "a-rejected"}))
+
+		err := d.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), mergeExchange)
+		assert.Contains(t, err.Error(), `Args["`+argKeyA+`"] kept "a-incumbent" vs rejected "a-rejected"`)
+	})
+
+	// Two keys disagree at once — the only shape that can distinguish sorted
+	// iteration from bare map order, which would report either key at random.
+	t.Run("lexicographically_first_contested_key_is_reported", func(t *testing.T) {
+		d := NewDeclarations()
+		d.RegisterExchange(topicExchange(mergeExchange, map[string]any{
+			argKeyA: "a-incumbent",
+			argKeyZ: "z-incumbent",
+		}))
+		d.RegisterExchange(topicExchange(mergeExchange, map[string]any{
+			argKeyA: "a-rejected",
+			argKeyZ: "z-rejected",
+		}))
+
+		err := d.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `Args["`+argKeyA+`"] kept "a-incumbent" vs rejected "a-rejected"`)
+		assert.NotContains(t, err.Error(), argKeyZ)
+		assert.NotContains(t, err.Error(), "z-incumbent")
+	})
+}
+
+func TestRegisterExchangeConflictingFieldsRecorded(t *testing.T) {
+	// want is asserted verbatim: the kept/rejected labels are what tell an
+	// operator which of the two call sites is in effect, so their order in the
+	// message is part of the contract (and is reproduced in wiki/messaging.md).
+	// Type leads the comparison order because it is the field the broker routes
+	// on; the case list is in that comparison order on purpose.
+	tests := []struct {
+		name  string
+		first *ExchangeDeclaration
+		next  *ExchangeDeclaration
+		want  string
+	}{
+		{
+			name:  "type_mismatch",
+			first: &ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeFanout},
+			next:  &ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeTopic},
+			want:  `Type kept "fanout" vs rejected "topic"`,
+		},
+		{
+			name:  "durable_mismatch",
+			first: &ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeTopic, Durable: true},
+			next:  &ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeTopic, Durable: false},
+			want:  `Durable kept "true" vs rejected "false"`,
+		},
+		{
+			name:  "autodelete_mismatch",
+			first: &ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeTopic, AutoDelete: false},
+			next:  &ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeTopic, AutoDelete: true},
+			want:  `AutoDelete kept "false" vs rejected "true"`,
+		},
+		{
+			name:  "internal_mismatch",
+			first: &ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeTopic, Internal: false},
+			next:  &ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeTopic, Internal: true},
+			want:  `Internal kept "false" vs rejected "true"`,
+		},
+		{
+			name:  "nowait_mismatch",
+			first: &ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeTopic, NoWait: false},
+			next:  &ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeTopic, NoWait: true},
+			want:  `NoWait kept "false" vs rejected "true"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewDeclarations()
+			d.RegisterExchange(tt.first)
+			d.RegisterExchange(tt.next)
+
+			err := d.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), testExchange)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+// TestRegisterExchangeTypeIsComparedFirst pins the documented comparison order
+// where it is observable: a pair disagreeing on Type AND on a flag reports
+// Type, because Type is what changes how the broker routes.
+func TestRegisterExchangeTypeIsComparedFirst(t *testing.T) {
+	d := NewDeclarations()
+	d.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeFanout, Durable: true})
+	d.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeTopic, Durable: false})
+
+	err := d.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `Type kept "fanout" vs rejected "topic"`)
+	assert.NotContains(t, err.Error(), "Durable")
+}
+
+// TestRegisterExchangeDeduplicatesIdenticalConflicts keeps the aggregate error
+// an enumeration of distinct problems: repeating one disagreement must not
+// inflate the count, which would also make the count depend on declaration
+// order.
+func TestRegisterExchangeDeduplicatesIdenticalConflicts(t *testing.T) {
+	d := NewDeclarations()
+	d.RegisterExchange(topicExchange(mergeExchange, nil))
+	for range 3 {
+		d.RegisterExchange(fanoutExchange(mergeExchange, nil))
+	}
+
+	require.Len(t, d.exchangeConflicts, 1)
+
+	err := d.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), fmt.Sprintf("(%d conflict(s))", len(d.exchangeConflicts)))
+	assert.Equal(t, 1, strings.Count(err.Error(), `Type kept "topic" vs rejected "fanout"`),
+		"one detail line per distinct conflict")
+}
+
+// TestRegisterExchangeConflictRendersTypeWhenValuesCollide is the exchange twin
+// of TestRegisterQueueConflictRendersTypeWhenValuesCollide: this branch adds a
+// second population reaching renderConflictValues, and the two paths mirror
+// each other.
+func TestRegisterExchangeConflictRendersTypeWhenValuesCollide(t *testing.T) {
+	tests := []struct {
+		name     string
+		kept     any
+		rejected any
+		want     string
+	}{
+		{
+			name:     "int_vs_string",
+			kept:     1,
+			rejected: "1",
+			want:     `Args["` + argKeyA + `"] kept "int(1)" vs rejected "string(1)"`,
+		},
+		{
+			name:     "int_vs_int64",
+			kept:     1,
+			rejected: int64(1),
+			want:     `Args["` + argKeyA + `"] kept "int(1)" vs rejected "int64(1)"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewDeclarations()
+			d.RegisterExchange(topicExchange(mergeExchange, map[string]any{argKeyA: tt.kept}))
+			d.RegisterExchange(topicExchange(mergeExchange, map[string]any{argKeyA: tt.rejected}))
+
+			err := d.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+			assert.NotContains(t, err.Error(), `kept "1" vs rejected "1"`,
+				"two sides rendered alike tell the operator nothing")
+		})
+	}
+}
+
+// TestRegisterExchangeTypeDistinctConflictsDoNotDeduplicate covers the second
+// half of the same hazard: recordExchangeConflict dedups over the all-string
+// struct, so two genuinely distinct rejections that rendered alike collapsed
+// into one and one vanished from the report.
+func TestRegisterExchangeTypeDistinctConflictsDoNotDeduplicate(t *testing.T) {
+	d := NewDeclarations()
+	d.RegisterExchange(topicExchange(mergeExchange, map[string]any{argKeyA: 1}))
+	d.RegisterExchange(topicExchange(mergeExchange, map[string]any{argKeyA: "1"}))
+	d.RegisterExchange(topicExchange(mergeExchange, map[string]any{argKeyA: int64(1)}))
+
+	require.Len(t, d.exchangeConflicts, 2)
+
+	err := d.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "(2 conflict(s))")
+	assert.Contains(t, err.Error(), `Args["`+argKeyA+`"] kept "int(1)" vs rejected "string(1)"`)
+	assert.Contains(t, err.Error(), `Args["`+argKeyA+`"] kept "int(1)" vs rejected "int64(1)"`)
+}
+
+// TestRegisterExchangeConflictKeepsIncumbent proves first-wins: a rejected
+// re-declaration must not land even partially.
+func TestRegisterExchangeConflictKeepsIncumbent(t *testing.T) {
+	t.Run("type_conflict", func(t *testing.T) {
+		d := NewDeclarations()
+		d.RegisterExchange(topicExchange(mergeExchange, map[string]any{argKeyB: "b-incumbent"}))
+		d.RegisterExchange(fanoutExchange(mergeExchange, map[string]any{argKeyB: "b-rejected", mapKeyTTL: ttlValue7200}))
+
+		require.Error(t, d.Validate())
+		stored := d.Exchanges[mergeExchange]
+		assert.Equal(t, ExchangeTypeTopic, stored.Type, "incumbent type must survive")
+		assert.Equal(t, "b-incumbent", stored.Args[argKeyB])
+		assert.NotContains(t, stored.Args, mapKeyTTL, "no partial merge from a rejected declaration")
+	})
+
+	// Type and the flags agree here, so the rejection comes from the Args scan
+	// itself. That is the only shape in which a scan that merged as it went
+	// could leak the rejected declaration's other keys: argKeyA sorts before the
+	// contested argKeyB, so it is visited while the scan still believes the
+	// merge is on.
+	t.Run("args_conflict_leaks_no_sibling_key", func(t *testing.T) {
+		d := NewDeclarations()
+		d.RegisterExchange(topicExchange(mergeExchange, map[string]any{argKeyB: "b-incumbent"}))
+		d.RegisterExchange(topicExchange(mergeExchange, map[string]any{
+			argKeyA: "a-rejected",
+			argKeyB: "b-rejected",
+		}))
+
+		require.Error(t, d.Validate())
+		stored := d.Exchanges[mergeExchange]
+		assert.Equal(t, "b-incumbent", stored.Args[argKeyB], "the contested key keeps the incumbent value")
+		assert.NotContains(t, stored.Args, argKeyA, "a key new to the incumbent must not land from a rejected declaration")
+	})
+}
+
+func TestValidateAggregatesMultipleExchangeConflicts(t *testing.T) {
+	d := NewDeclarations()
+	d.RegisterExchange(topicExchange(mergeExchange, nil))
+	d.RegisterExchange(fanoutExchange(mergeExchange, nil))
+	d.RegisterExchange(topicExchange(mergeExchangeB, map[string]any{argKeyA: "a-incumbent"}))
+	d.RegisterExchange(topicExchange(mergeExchangeB, map[string]any{argKeyA: ""}))
+
+	err := d.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "conflicting exchange declarations (2 conflict(s))")
+	assert.Contains(t, err.Error(), mergeExchange)
+	assert.Contains(t, err.Error(), mergeExchangeB)
+}
+
+// TestRegisterExchangeMergeHashIsOrderIndependent pins what the merge buys: the
+// stored topology is a function of the declaration set, not of the sequence
+// that produced it, so the same modules registering in either order describe the
+// same exchange. Before the merge, the two orderings below stored different
+// Args outright.
+func TestRegisterExchangeMergeHashIsOrderIndependent(t *testing.T) {
+	withArgs := func() *ExchangeDeclaration {
+		return topicExchange(mergeExchange, map[string]any{mapKeyTTL: ttlValue3600})
+	}
+	bare := func() *ExchangeDeclaration { return topicExchange(mergeExchange, nil) }
+
+	argsFirst := NewDeclarations()
+	argsFirst.RegisterExchange(withArgs())
+	argsFirst.RegisterExchange(bare())
+
+	bareFirst := NewDeclarations()
+	bareFirst.RegisterExchange(bare())
+	bareFirst.RegisterExchange(withArgs())
+
+	require.NoError(t, argsFirst.Validate())
+	require.NoError(t, bareFirst.Validate())
+	assert.Equal(t, ttlValue3600, bareFirst.Exchanges[mergeExchange].Args[mapKeyTTL],
+		"the union must reach the store whichever declaration carried the key")
+	assert.Equal(t, argsFirst.Hash(), bareFirst.Hash())
+}
+
+func TestCloneCopiesExchangeConflicts(t *testing.T) {
+	const cloneOnlyExchange = "clone.only.exchange"
+	const sourceOnlyExchange = "source.only.exchange"
+
+	conflict := func(d *Declarations, name string) {
+		d.RegisterExchange(topicExchange(name, nil))
+		d.RegisterExchange(fanoutExchange(name, nil))
+	}
+
+	d := NewDeclarations()
+	for _, name := range []string{mergeExchange, mergeExchangeB, mergeExchangeC} {
+		conflict(d, name)
+	}
+	require.Error(t, d.Validate())
+	// Spare capacity is what makes the rest of this test discriminating: without
+	// it every later append reallocates, and a clone that merely aliased the
+	// source's slice would behave identically to a real copy.
+	require.Greater(t, cap(d.exchangeConflicts), len(d.exchangeConflicts))
+
+	clone := d.Clone()
+	require.Error(t, clone.Validate(), "a clone must not pass a validation its source failed")
+
+	// Both sides now record one more conflict. A shared backing array would let
+	// the source's append overwrite the clone's at the same index.
+	conflict(clone, cloneOnlyExchange)
+	conflict(d, sourceOnlyExchange)
+
+	assert.Contains(t, clone.Validate().Error(), cloneOnlyExchange)
+	assert.NotContains(t, clone.Validate().Error(), sourceOnlyExchange)
+	assert.Contains(t, d.Validate().Error(), sourceOnlyExchange)
+	assert.NotContains(t, d.Validate().Error(), cloneOnlyExchange)
+}
+
+// TestRegisterExchangeUncomparableArgsValues pins reflect.DeepEqual over ==:
+// broker args routinely hold slices and tables, and == on those dynamic types
+// panics at runtime, turning a declaration-time diagnostic into a boot panic.
+func TestRegisterExchangeUncomparableArgsValues(t *testing.T) {
+	t.Run("equal_uncomparable_values_merge", func(t *testing.T) {
+		d := NewDeclarations()
+		require.NotPanics(t, func() {
+			d.RegisterExchange(topicExchange(testExchange, map[string]any{
+				testKey: []string{"a"},
+				testArg: amqp.Table{"nested": "v"},
+			}))
+			d.RegisterExchange(topicExchange(testExchange, map[string]any{
+				testKey: []string{"a"},
+				testArg: amqp.Table{"nested": "v"},
+			}))
+		})
+
+		require.NoError(t, d.Validate())
+		assert.Equal(t, []string{"a"}, d.Exchanges[testExchange].Args[testKey])
+	})
+
+	t.Run("differing_uncomparable_values_conflict", func(t *testing.T) {
+		d := NewDeclarations()
+		require.NotPanics(t, func() {
+			d.RegisterExchange(topicExchange(testExchange, map[string]any{testKey: []string{"a"}}))
+			d.RegisterExchange(topicExchange(testExchange, map[string]any{testKey: []string{"b"}}))
 		})
 
 		err := d.Validate()

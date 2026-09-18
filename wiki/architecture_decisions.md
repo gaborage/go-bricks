@@ -1851,6 +1851,26 @@ database number a cluster endpoint does not have.
 
 ---
 
+### [ADR-118: Declarations Merge a Compatible Exchange Re-Declaration and Refuse the Rest](adr_118_exchange_redeclaration_conflicts.md)
+
+**Date:** 2026-09-18 | **Status:** Accepted | **Breaking:** two declarations of one exchange name that disagree on `Type`, a flag, or a shared `Args` value fail `Validate()` at startup, where the later one used to overwrite the earlier one silently
+
+`RegisterExchange` had no existence check, so re-declaring a name replaced the earlier
+declaration whatever its shape. `DeclareQueueWithDLQ` registers its dead-letter exchange as a
+**fanout** bound with an empty routing key, so a `DeclareTopicExchange` or
+`DeclareDirectExchange` of that same name let registration order pick the broker's type: the
+typed exchange winning dropped every dead-lettered message carrying a routing key, the fanout
+winning fanned the module's own traffic out. A compatible repeat now merges — `Type` and the
+four flags equal, shared `Args` values equal, the `Args` union stored — and an incompatible one
+keeps the FIRST declaration and records a conflict `Validate()` reports, aborting startup with
+every conflict named in one boot. The mechanism is the queue merge's sibling field for field,
+`Type` first because it is what the broker routes on. See [migrations.md](migrations.md) `[C66.7]`.
+
+**Key Benefits:** a shared exchange name can no longer hand the broker a type neither call site
+asked for, and the failure names both declarations instead of surfacing as lost messages.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2621,7 +2641,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-117) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-118) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

@@ -286,22 +286,23 @@ func TestDeclarationsTopicExchange(t *testing.T) {
 		assert.Equal(t, "test.exchange", registered.Name)
 	})
 
-	t.Run("overwrites existing exchange with same name", func(t *testing.T) {
+	t.Run("merges a compatible repeat and keeps the incumbent args", func(t *testing.T) {
 		decls := NewDeclarations()
 
 		ex1 := decls.DeclareTopicExchange("test.exchange")
 		// Modify registered copy directly
 		decls.Exchanges["test.exchange"].Args["first"] = "value1"
 
-		// Declare again with same name - this creates a new exchange and overwrites
+		// Declare again with the same name. The two shapes agree, so the repeat
+		// merges its (empty) Args into the incumbent instead of replacing it: the
+		// merge scan visits the SECOND declaration's keys, so a key only the
+		// incumbent carries is an asymmetry, not a conflict.
 		ex2 := decls.DeclareTopicExchange("test.exchange")
 
+		require.NoError(t, decls.Validate())
 		assert.Len(t, decls.Exchanges, 1)
 		registered := decls.Exchanges["test.exchange"]
-		// Second declaration overwrites, so "first" is lost
-		assert.Nil(t, registered.Args["first"])
-		// New exchange has empty args by default
-		assert.Empty(t, registered.Args)
+		assert.Equal(t, "value1", registered.Args["first"], "an Args key only the incumbent set must survive the repeat")
 		assert.NotNil(t, ex1)
 		assert.NotNil(t, ex2)
 	})
@@ -460,14 +461,15 @@ func TestDeclarationsPublisher(t *testing.T) {
 		assert.Equal(t, "auto.exchange", decls.Exchanges["auto.exchange"].Name)
 	})
 
-	t.Run("does not re-register already registered exchange", func(t *testing.T) {
+	t.Run("merges a compatible repeat of an already registered exchange", func(t *testing.T) {
 		decls := NewDeclarations()
 
-		// Pre-register exchange with custom args (modify registered copy)
+		// Pre-register the exchange, then put a custom arg on the stored copy.
 		decls.DeclareTopicExchange("existing.exchange")
 		decls.Exchanges["existing.exchange"].Args["custom"] = "value"
 
-		// Try to auto-register same exchange - should skip because already exists
+		// The publisher hands over a compatible repeat of that name: it merges,
+		// and sets no Args of its own, so the incumbent's survive.
 		newExchange := NewTopicExchange("existing.exchange")
 		opts := &PublisherOptions{
 			Exchange:   "existing.exchange",
@@ -479,9 +481,9 @@ func TestDeclarationsPublisher(t *testing.T) {
 		assert.NotNil(t, publisher)
 		assert.Len(t, decls.Exchanges, 1)
 
-		// Original exchange should be preserved (not overwritten)
 		registered := decls.Exchanges["existing.exchange"]
 		assert.Equal(t, "value", registered.Args["custom"])
+		require.NoError(t, decls.Validate(), "a compatible repeat records no conflict")
 	})
 
 	t.Run("allows multiple publishers", func(t *testing.T) {
