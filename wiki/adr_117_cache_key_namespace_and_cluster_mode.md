@@ -87,10 +87,17 @@ ADR-011 introduced — break silently under them.
 
 - **`cache.redis.mode` selects `standalone` (default) or `cluster`.** One code path:
   `redis.NewUniversalClient` with `IsClusterMode` set for `cluster`, so the client field becomes
-  a `redis.UniversalClient`. `mode: cluster` with a non-zero `database` is a startup error
-  naming both keys, because the cluster client drops `DB` rather than refusing it. `Stats()`
-  gains a `mode` key so a `/ready` reader knows whether `redis_info` describes one node or the
-  fleet.
+  a `redis.UniversalClient` and the one configured address travels as a one-element seed list in
+  both modes — a cluster endpoint is a configuration address the client follows the slot map
+  from, not a node list. The enum is closed and case-sensitive; an empty value means
+  `standalone`, so a config written before this key keeps dialing one node. `mode: cluster` with
+  a non-zero `database` is a startup error addressed to `cache.redis.database` and naming
+  `cache.redis.mode`, because the cluster client drops `DB` rather than refusing it
+  (`UniversalOptions.Cluster()` copies no `DB`, and `ClusterOptions` has no such field) — the
+  whole keyspace would otherwise move to database 0 on the mode flip alone. Both rules live in
+  `validateRedisCache` and again in `(*redis.Config).Validate()`. `Stats()` gains a `mode` key so
+  a `/ready` reader knows whether `redis_info` describes one node or the fleet. Additive; the
+  zero value is today's behaviour.
 
 - **`cache.redis.keyprefix` namespaces every key, defaulting to `app.name`.** The wire layout is
   `<prefix>:<key>` with a fixed `:` separator. The prefix is validated against whitespace, the

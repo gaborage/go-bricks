@@ -583,3 +583,131 @@ func TestValidateCacheRedisUsername(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateCacheRedisMode pins cache.redis.mode as a closed enum. An
+// unrecognized value is refused rather than treated as the default, because the
+// default dials a single node and a cluster-protocol endpoint answers MOVED to
+// the first key — a typo would otherwise surface as a runtime cache failure
+// instead of a startup one. The error carries the allowed pair so the operator
+// does not have to find the list.
+func TestValidateCacheRedisMode(t *testing.T) {
+	tests := []struct {
+		name      string
+		mode      string
+		wantField string
+	}{
+		{name: "empty_is_standalone"},
+		{name: "standalone_is_accepted", mode: "standalone"},
+		{name: "cluster_is_accepted", mode: "cluster"},
+		{name: "unknown_mode_is_rejected", mode: "sentinel", wantField: "cache.redis.mode"},
+		{name: "capitalised_name_is_rejected", mode: "Cluster", wantField: "cache.redis.mode"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := CacheConfig{
+				Enabled: true,
+				Type:    CacheTypeRedis,
+				Redis: RedisConfig{
+					Host:     "localhost",
+					Port:     6379,
+					PoolSize: 10,
+					Mode:     tt.mode,
+				},
+			}
+
+			err := checkCache(&cfg)
+			if tt.wantField == "" {
+				require.NoError(t, err)
+				return
+			}
+
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+			assert.Contains(t, cfgErr.Action, "standalone")
+			assert.Contains(t, cfgErr.Action, "cluster",
+				"the operator must be given the whole allowed list, not just the half it missed")
+		})
+	}
+}
+
+// TestValidateCacheRedisClusterRejectsNonZeroDatabase pins the coupling the
+// cluster protocol forces: go-redis drops the selected database on the way to
+// the cluster client, so accepting the pair would move a deployment's whole
+// keyspace to database 0 on the mode flip alone. The error is addressed to the
+// database key and names the mode, because either key could be the one the
+// operator meant to change. The rule runs ahead of the 0-15 range check, because
+// under cluster that range does not apply at all: an out-of-range database under
+// cluster is reported as the coupling, which the message assertion below
+// distinguishes from the range error.
+func TestValidateCacheRedisClusterRejectsNonZeroDatabase(t *testing.T) {
+	tests := []struct {
+		name      string
+		mode      string
+		database  int
+		wantField string
+	}{
+		{name: "standalone_keeps_a_selected_database", mode: "standalone", database: 3},
+		{name: "cluster_on_database_zero_is_accepted", mode: "cluster"},
+		{name: "cluster_with_a_selected_database_is_rejected", mode: "cluster", database: 3, wantField: "cache.redis.database"},
+		{name: "cluster_with_the_last_database_is_rejected", mode: "cluster", database: 15, wantField: "cache.redis.database"},
+		{name: "cluster_outranks_the_range_check", mode: "cluster", database: 99, wantField: "cache.redis.database"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := CacheConfig{
+				Enabled: true,
+				Type:    CacheTypeRedis,
+				Redis: RedisConfig{
+					Host:     "localhost",
+					Port:     6379,
+					PoolSize: 10,
+					Mode:     tt.mode,
+					Database: tt.database,
+				},
+			}
+
+			err := checkCache(&cfg)
+			if tt.wantField == "" {
+				require.NoError(t, err)
+				return
+			}
+
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+			assert.Contains(t, cfgErr.Message, "cache.redis.mode",
+				"the message must name the other key, so the operator knows which of the two to change")
+		})
+	}
+}
+
+// TestNormalizeCacheRedisModeDefaultsToStandalone pins the fill itself. It
+// matters beyond the root section, where koanf would also write the default:
+// applyRedisDefaults is the only place a per-tenant cache gets one, so without
+// the fill here a tenant's mode would stay empty and no reader could tell an
+// absent value from a chosen one.
+func TestNormalizeCacheRedisModeDefaultsToStandalone(t *testing.T) {
+	tests := []struct {
+		name  string
+		given string
+		want  string
+	}{
+		{name: "absent_takes_the_default", given: "", want: "standalone"},
+		{name: "cluster_is_kept", given: "cluster", want: "cluster"},
+		{name: "an_unknown_value_is_left_for_validation", given: "sentinel", want: "sentinel"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &CacheConfig{Enabled: true, Type: CacheTypeRedis}
+			cfg.Redis.Host = "localhost"
+			cfg.Redis.Mode = tt.given
+
+			require.NoError(t, normalizeCache(cfg, false))
+			assert.Equal(t, tt.want, cfg.Redis.Mode)
+		})
+	}
+}

@@ -51,6 +51,9 @@ func checkCache(cfg *CacheConfig) error {
 // is the only place those values are populated for tenant caches. Host is left
 // untouched: a missing host is a real misconfiguration that must fail fast.
 func applyRedisDefaults(cfg *RedisConfig) {
+	if cfg.Mode == "" {
+		cfg.Mode = cacheRedisModeStandalone
+	}
 	if cfg.Port == 0 {
 		cfg.Port = defaultRedisPort
 	}
@@ -85,6 +88,10 @@ func validateRedisCache(cfg *RedisConfig) error {
 
 	if cfg.Port <= 0 || cfg.Port > 65535 {
 		return NewInvalidFieldError("cache.redis.port", fmt.Sprintf(errInvalidField, cfg.Port), []string{portRange})
+	}
+
+	if err := validateRedisMode(cfg); err != nil {
+		return err
 	}
 
 	// A whitespace-only ACL user is a typo, not an identity: it travels to Redis as an
@@ -128,6 +135,34 @@ func validateRedisCache(cfg *RedisConfig) error {
 	}
 
 	return validateRedisTLS(&cfg.TLS)
+}
+
+// validateRedisMode checks the transport selector and the one setting it
+// forecloses. The enum is closed: an unrecognized value is refused rather than
+// defaulted, because the default dials a single node and a cluster-protocol
+// endpoint answers MOVED to the first key, so a typo would surface as a runtime
+// cache failure instead of a startup one.
+//
+// Under cluster the database must be 0. go-redis drops the selected database on
+// the way to the cluster client (UniversalOptions.Cluster copies no DB, and
+// ClusterOptions has no such field), so accepting the pair would move the whole
+// keyspace to database 0 on the mode flip alone. That error is addressed to the
+// database key — the value that cannot be honored — and names the mode, because
+// either could be the one the operator meant to change. It runs before the 0-15
+// range check, since under cluster the range does not apply at all.
+func validateRedisMode(cfg *RedisConfig) error {
+	cacheRedisModes := []string{cacheRedisModeStandalone, cacheRedisModeCluster}
+	if cfg.Mode != "" && !slices.Contains(cacheRedisModes, cfg.Mode) {
+		return NewInvalidFieldError(fieldCacheRedisMode, fmt.Sprintf(errNotSupportedFmt, cfg.Mode), cacheRedisModes)
+	}
+
+	if cfg.Mode == cacheRedisModeCluster && cfg.Database != 0 {
+		return NewValidationError(fieldCacheRedisDB, fmt.Sprintf(
+			"must be 0 when %s is %s: the cluster client has no database selection",
+			fieldCacheRedisMode, cacheRedisModeCluster))
+	}
+
+	return nil
 }
 
 // fieldCacheRedisTLSPrefix namespaces a clienttls.Violation's relative key

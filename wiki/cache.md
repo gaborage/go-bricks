@@ -56,6 +56,7 @@ cache:
   redis:
     host: localhost
     port: 6379
+    mode: standalone                   # "standalone" (default) or "cluster"
     username: ""                       # Redis ACL user; requires a password when set
     password: ${CACHE_REDIS_PASSWORD}  # From environment
     database: 0
@@ -572,11 +573,26 @@ cache:
   redis:
     host: my-cache.serverless.use1.cache.amazonaws.com
     port: 6379
+    mode: cluster
     username: ${CACHE_REDIS_USERNAME}
     password: ${CACHE_REDIS_PASSWORD}
     tls:
       enabled: true
 ```
+
+- **`mode: cluster` is required for serverless.** The endpoint speaks the cluster protocol only,
+  and a single-node client fails on the first `MOVED`. The one address in `cache.redis.host`/
+  `port` is the configuration endpoint: the client follows the slot map from it rather than
+  needing a node list, so there is no `addrs` key. Everything else about the cache is unchanged —
+  the same six `cache.Cache` methods, the same Lua scripts, the same `GetOrSet` semantics.
+- **`database` must stay 0 under `mode: cluster`.** A non-zero value is a startup error naming
+  both keys. The go-redis cluster client has no database selection, so accepting the pair would
+  move the whole keyspace to database 0 silently on the mode flip; the engine may advertise more
+  databases, but the client cannot reach them.
+- **`Stats()` reports which mode produced it.** The `mode` key reads `standalone` or `cluster`,
+  and it says how to read the rest: under cluster, `redis_info` comes from whichever single node
+  answered `INFO` and the `pool_*` counters are the aggregate across every master's pool. Under
+  standalone both describe the one server.
 
 - **`username` requires `password`; `password` alone selects the default user.** A
   `username` with an empty `password` is refused at startup, naming both keys: go-redis builds

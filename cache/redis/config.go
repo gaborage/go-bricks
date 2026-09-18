@@ -13,6 +13,19 @@ import (
 // "cafile") into this package's config-error field.
 const tlsFieldPrefix = "redis.tls."
 
+// Connection modes selecting which protocol the client speaks.
+const (
+	// ModeStandalone dials one server and speaks the single-node protocol. It is
+	// the default, and the empty Mode means exactly this.
+	ModeStandalone = "standalone"
+
+	// ModeCluster speaks the cluster protocol against the single configured
+	// address, which the client treats as a seed and follows the slot map from.
+	// Required by endpoints that answer MOVED to a single-node client, such as
+	// Amazon ElastiCache Serverless.
+	ModeCluster = "cluster"
+)
+
 // Config holds Redis-specific configuration options.
 type Config struct {
 	// Host is the Redis server hostname or IP address.
@@ -20,6 +33,16 @@ type Config struct {
 
 	// Port is the Redis server port (default: 6379).
 	Port int `config:"port" default:"6379"`
+
+	// Mode selects the protocol the client speaks: ModeStandalone (the default,
+	// and what the empty string means) or ModeCluster. Cluster is required for a
+	// cluster-protocol endpoint such as Amazon ElastiCache Serverless, which
+	// answers MOVED to a single-node client. Under cluster, Database must be 0 —
+	// the cluster client has no database selection. Filled from
+	// config.RedisConfig, which owns the cache.redis.mode key (env
+	// CACHE_REDIS_MODE); deliberately carries no config: tag, because nothing
+	// injects this struct and the tags on the fields around it are dead (#1729).
+	Mode string
 
 	// Username is the Redis ACL user to authenticate as, sent as
 	// AUTH <username> <password>. Empty authenticates as the implicit "default"
@@ -106,9 +129,61 @@ type TLSConfig struct {
 
 // Validate performs fail-fast validation of Redis configuration.
 // Returns error if configuration is invalid.
+//
+// One rule is a coupling rather than a range check: under ModeCluster a
+// non-zero Database is refused, because go-redis drops UniversalOptions.DB when
+// it builds the cluster client (UniversalOptions.Cluster copies no DB, and
+// ClusterOptions has no such field). Accepting it would move a deployment's
+// whole keyspace to database 0 on the mode flip alone, with nothing said.
 func (c *Config) Validate() error {
 	_, err := c.validate()
 	return err
+}
+
+// validateMode checks the transport selector and the one setting it forecloses:
+// under ModeCluster the database must be 0. The second error is addressed to
+// redis.database, because that is the value that cannot be honored, and names
+// redis.mode so the operator knows which of the two to change. It runs before
+// the 0-15 range check, since under cluster the range does not apply at all.
+func (c *Config) validateMode() error {
+	if c.Mode != "" && c.Mode != ModeStandalone && c.Mode != ModeCluster {
+		return cache.NewConfigError("redis.mode",
+			fmt.Sprintf("invalid mode: %q (must be %s or %s)", c.Mode, ModeStandalone, ModeCluster), nil)
+	}
+
+	if c.Mode == ModeCluster && c.Database != 0 {
+		return cache.NewConfigError("redis.database",
+			fmt.Sprintf("database %d cannot be selected when redis.mode is %s: the cluster client has no database selection",
+				c.Database, ModeCluster), nil)
+	}
+
+	return nil
+}
+
+// validateUsername checks the ACL identity. Empty is the default user;
+// whitespace-only is a typo that would travel as an AUTH argument no ACL rule
+// can match, and is checked first so a name that is both blank and
+// unaccompanied is reported as the typo it is.
+//
+// A name with no password never authenticates: go-redis builds the HELLO
+// handshake's AUTH clause inside `if password != ""`, and gates the legacy AUTH
+// fallback the same way, so nothing is sent and the dial runs as whatever
+// identity the server hands an unauthenticated client. Refused here rather than
+// dialed, mirroring config.validateRedisCache, because a hand-built Config
+// reaches this door without passing through the config layer. A password alone
+// is the legacy form that selects the implicit "default" user and stands.
+func (c *Config) validateUsername() error {
+	if c.Username != "" && strings.TrimSpace(c.Username) == "" {
+		return cache.NewConfigError("redis.username", "username cannot be whitespace-only", nil)
+	}
+
+	if c.Username != "" && c.Password == "" {
+		return cache.NewConfigError("redis.username",
+			"username requires redis.password: the client sends no AUTH without one, "+
+				"so the connection would silently run as the default user", nil)
+	}
+
+	return nil
 }
 
 // validate is Validate plus the TLS material projection it built on the way,
@@ -122,24 +197,12 @@ func (c *Config) validate() (clienttls.Material, error) {
 		return clienttls.Material{}, cache.NewConfigError("redis.port", fmt.Sprintf("invalid port: %d", c.Port), nil)
 	}
 
-	// Empty is the default user; whitespace-only is a typo that would travel as an
-	// AUTH argument no ACL rule can match. Checked before the coupling rule below so
-	// a name that is both blank and unaccompanied is reported as the typo it is.
-	if c.Username != "" && strings.TrimSpace(c.Username) == "" {
-		return clienttls.Material{}, cache.NewConfigError("redis.username", "username cannot be whitespace-only", nil)
+	if err := c.validateMode(); err != nil {
+		return clienttls.Material{}, err
 	}
 
-	// A name with no password never authenticates: go-redis builds the HELLO
-	// handshake's AUTH clause inside `if password != ""`, and gates the legacy AUTH
-	// fallback the same way, so nothing is sent and the dial runs as whatever identity
-	// the server hands an unauthenticated client. Refused here rather than dialed,
-	// mirroring config.validateRedisCache, because a hand-built Config reaches this
-	// door without passing through the config layer. A password alone is the legacy
-	// form that selects the implicit "default" user and stands.
-	if c.Username != "" && c.Password == "" {
-		return clienttls.Material{}, cache.NewConfigError("redis.username",
-			"username requires redis.password: the client sends no AUTH without one, "+
-				"so the connection would silently run as the default user", nil)
+	if err := c.validateUsername(); err != nil {
+		return clienttls.Material{}, err
 	}
 
 	if c.Database < 0 || c.Database > 15 {
@@ -205,6 +268,15 @@ func (t *TLSConfig) material() clienttls.Material {
 		ServerName: t.ServerName,
 		MinVersion: t.MinVersion,
 	}
+}
+
+// effectiveMode reports the mode the client dials with, resolving the empty
+// Mode to ModeStandalone so a reader never has to decide what "" means.
+func (c *Config) effectiveMode() string {
+	if c.Mode == "" {
+		return ModeStandalone
+	}
+	return c.Mode
 }
 
 // Address returns the Redis server address in "host:port" format.

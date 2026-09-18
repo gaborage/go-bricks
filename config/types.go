@@ -410,7 +410,15 @@ type RedisConfig struct {
 	// empty authenticates as the implicit "default" user, today's behavior. Requires
 	// Password: the driver sends no AUTH at all when the password is empty, so a name
 	// on its own is refused at startup rather than dialed as the default user.
-	Username        string        `koanf:"username" json:"username" yaml:"username" toml:"username" mapstructure:"username"`
+	Username string `koanf:"username" json:"username" yaml:"username" toml:"username" mapstructure:"username"`
+	// Mode selects the protocol the client speaks: "standalone" (the default) or
+	// "cluster". Cluster is required by an endpoint that answers MOVED to a
+	// single-node client — Amazon ElastiCache Serverless exposes one such address
+	// — and the one address is then a configuration endpoint the client follows
+	// the slot map from. Under cluster, Database must be 0: the cluster client
+	// has no database selection, so a non-zero value is refused at startup rather
+	// than silently dropped.
+	Mode            string        `koanf:"mode" json:"mode" yaml:"mode" toml:"mode" mapstructure:"mode"`
 	Password        string        `koanf:"password" json:"password" yaml:"password" toml:"password" mapstructure:"password"`
 	Database        int           `koanf:"database" json:"database" yaml:"database" toml:"database" mapstructure:"database"`
 	PoolSize        int           `koanf:"poolsize" json:"poolsize" yaml:"poolsize" toml:"poolsize" mapstructure:"poolsize"`

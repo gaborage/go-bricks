@@ -229,6 +229,7 @@ func redisClientConfig(cacheCfg *config.CacheConfig) *redis.Config {
 	return &redis.Config{
 		Host:            cacheCfg.Redis.Host,
 		Port:            cacheCfg.Redis.Port,
+		Mode:            cacheCfg.Redis.Mode,
 		Username:        cacheCfg.Redis.Username,
 		Password:        cacheCfg.Redis.Password,
 		Database:        cacheCfg.Redis.Database,

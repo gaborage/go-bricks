@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,19 @@ const (
 	redisTLSKeyPath  = "/tls/server.key"
 )
 
+// Cluster bootstrap knobs. A cluster-enabled node starts owning no slots and
+// reports cluster_state:fail until every slot is claimed and the cron that
+// re-reads the announced address has run, so the claim is followed by a poll
+// rather than assumed.
+const (
+	redisClusterFirstSlot        = "0"
+	redisClusterLastSlot         = "16383"
+	redisClusterReadyState       = "cluster_state:ok"
+	redisClusterBootstrapWait    = 60 * time.Second
+	redisClusterBootstrapPoll    = 250 * time.Millisecond
+	redisClusterLoopbackAnnounce = "127.0.0.1"
+)
+
 // redisTLSFileMode makes the copied PEM world-readable: redis-server drops to
 // an unprivileged user before opening them, so 0o600 owned by root would make
 // the server fail to start rather than fail to verify.
@@ -51,6 +65,12 @@ type RedisContainerConfig struct {
 	ImageTag string
 	// StartupTimeout for container initialization (default: 60 seconds)
 	StartupTimeout time.Duration
+	// Cluster starts the node with --cluster-enabled yes and gives it every one
+	// of the 16384 slots, so one server answers for the whole keyspace over the
+	// cluster protocol — the shape Amazon ElastiCache Serverless presents behind
+	// its single endpoint. Mutually exclusive with TLS: both replace the
+	// container command, and the combination is not a fixture anything needs.
+	Cluster bool
 	// TLS, when non-nil, makes the server TLS-only: the plaintext listener is
 	// disabled and TLS is bound to 6379 instead, so Host() and Port() address
 	// the TLS listener exactly as they address the plaintext one — a caller only
@@ -146,6 +166,9 @@ func redisOptions(cfg *RedisContainerConfig) []testcontainers.ContainerCustomize
 		wait.ForLog("Ready to accept connections"),
 		wait.ForListeningPort(redisPort),
 	))
+	if cfg.Cluster {
+		return append(opts, testcontainers.WithCmdArgs("--cluster-enabled", "yes"))
+	}
 	if cfg.TLS == nil {
 		return opts
 	}
@@ -187,6 +210,10 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 		cfg = DefaultRedisConfig()
 	}
 
+	if cfg.Cluster && cfg.TLS != nil {
+		return nil, fmt.Errorf("redis container: cluster and TLS both replace the container command, so they cannot be combined")
+	}
+
 	// redis.Run can hand back a started container together with an error (a
 	// wait-strategy timeout, say), so terminate it before returning — the same
 	// contract newRedisContainer honors for its own later failures.
@@ -201,7 +228,88 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 		return nil, fmt.Errorf("failed to start Redis container: %w", err)
 	}
 
-	return newRedisContainer(ctx, redisContainer)
+	c, err := newRedisContainer(ctx, redisContainer)
+	if err != nil {
+		return nil, err
+	}
+	if !cfg.Cluster {
+		return c, nil
+	}
+	if err := bootstrapRedisCluster(ctx, c); err != nil {
+		terminateOnFailure(ctx, redisContainer)
+		return nil, err
+	}
+	return c, nil
+}
+
+// bootstrapRedisCluster turns a freshly started cluster-enabled node into a
+// one-node cluster that owns every slot.
+//
+// The announce pair is what makes it reachable: the slot map a cluster client
+// follows carries each node's OWN address, which inside Docker is a container IP
+// and port no host-side client can dial. Announcing the mapped host address
+// makes the node advertise where the test actually reaches it, so the client's
+// first redirect lands rather than hangs.
+func bootstrapRedisCluster(ctx context.Context, c *RedisContainer) error {
+	announceIP := c.host
+	if announceIP == "localhost" {
+		announceIP = redisClusterLoopbackAnnounce
+	}
+
+	for _, args := range [][]string{
+		{"redis-cli", "config", "set", "cluster-announce-ip", announceIP},
+		{"redis-cli", "config", "set", "cluster-announce-port", strconv.Itoa(c.port)},
+		{"redis-cli", "cluster", "addslotsrange", redisClusterFirstSlot, redisClusterLastSlot},
+	} {
+		if _, err := execInRedisContainer(ctx, c, args); err != nil {
+			return err
+		}
+	}
+
+	return waitForRedisClusterReady(ctx, c)
+}
+
+// execInRedisContainer runs one redis-cli command inside the container and
+// returns its output, treating a non-zero exit as an error.
+func execInRedisContainer(ctx context.Context, c *RedisContainer, args []string) (string, error) {
+	code, reader, err := c.container.Exec(ctx, args)
+	if err != nil {
+		return "", fmt.Errorf("redis container: exec %v: %w", args, err)
+	}
+	var out bytes.Buffer
+	if _, copyErr := out.ReadFrom(reader); copyErr != nil {
+		return "", fmt.Errorf("redis container: reading output of %v: %w", args, copyErr)
+	}
+	if code != 0 {
+		return "", fmt.Errorf("redis container: %v exited %d: %s", args, code, strings.TrimSpace(out.String()))
+	}
+	return out.String(), nil
+}
+
+// waitForRedisClusterReady polls CLUSTER INFO until the node reports the whole
+// slot space as served. Polling rather than sleeping: the state flips on the
+// cluster cron, whose timing is the server's business, not the fixture's.
+func waitForRedisClusterReady(ctx context.Context, c *RedisContainer) error {
+	deadline := time.Now().Add(redisClusterBootstrapWait)
+	var last string
+	for time.Now().Before(deadline) {
+		out, err := execInRedisContainer(ctx, c, []string{"redis-cli", "cluster", "info"})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(out, redisClusterReadyState) {
+			return nil
+		}
+		last = strings.TrimSpace(out)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(redisClusterBootstrapPoll):
+		}
+	}
+	return fmt.Errorf("redis container: cluster did not reach %s within %s; last CLUSTER INFO: %s",
+		redisClusterReadyState, redisClusterBootstrapWait, last)
 }
 
 // terminateOnFailure tears down a container whose startup failed. The
