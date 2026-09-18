@@ -1056,6 +1056,45 @@ func TestFactoryResolverCacheConnectorReportsAnUnreadableSection(t *testing.T) {
 	})
 }
 
+// refusedCloseWarning is the substring that proves the close of a refused instance was
+// reported as having failed.
+const refusedCloseWarning = "Failed to close the cache instance rejected by the key-prefix check"
+
+// TestFactoryResolverCacheConnectorReportsAFailedCloseOfARefusedInstance pins the one
+// thing the fail-closed path can still get wrong after it has decided to refuse: the
+// close it performs on the way out is itself fallible, and a connection it could not
+// release is a leak the operator only learns about from the log — the caller is already
+// getting the namespace error either way. The clean close is the half that must stay
+// silent, or every refusal would report a failure that did not happen.
+func TestFactoryResolverCacheConnectorReportsAFailedCloseOfARefusedInstance(t *testing.T) {
+	unusable := "bad name"
+	refuse := func(t *testing.T, mock *cachetest.MockCache) string {
+		t.Helper()
+		store := storeServingCacheSection(keyPrefixTenant, cacheSectionWithKeyPrefix(&unusable))
+		return captureStdout(t, func() {
+			c, err := connectorLoggingAt(store, mock)(context.Background(), keyPrefixTenant)
+			require.ErrorIs(t, err, cache.ErrInvalidKeyPrefix)
+			assert.Nil(t, c)
+		})
+	}
+
+	t.Run("a_close_that_failed_is_reported", func(t *testing.T) {
+		out := refuse(t, cachetest.NewMockCache().WithCloseFailure(assert.AnError))
+
+		assert.Contains(t, out, refusedCloseWarning)
+		assert.Contains(t, out, assert.AnError.Error(), "the warning must carry the close error itself")
+	})
+
+	t.Run("a_close_that_succeeded_stays_silent", func(t *testing.T) {
+		mock := cachetest.NewMockCache()
+
+		out := refuse(t, mock)
+
+		cachetest.AssertCacheClosed(t, mock)
+		assert.NotContains(t, out, refusedCloseWarning)
+	})
+}
+
 // TestFactoryResolverCacheConnectorTenantDoesNotInheritTheRootPrefix pins that each
 // section resolves its own namespace. A tenant that sets no keyprefix takes app.name,
 // never the root's explicit value: TenantStore serves the tenant's own mirror and
