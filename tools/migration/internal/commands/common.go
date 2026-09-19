@@ -62,10 +62,6 @@ func resolveFlags(cmd *cobra.Command, flags *CommonFlags) error {
 	applyEnvFallback(cmd, "git-sha", envGitSHA, &flags.GitSHA)
 	applyEnvFallback(cmd, "pipeline-run-id", envPipelineRunID, &flags.PipelineRunID)
 
-	if err := resolveMigratorIdentity(flags); err != nil {
-		return err
-	}
-
 	if flags.Tenant == "" && flags.SourceURL == "" && flags.SourceConfig == "" {
 		return errors.New("one of --source-url, --source-config, or --tenant is required")
 	}
@@ -103,6 +99,11 @@ func applyEnvFallback(cmd *cobra.Command, flagName, envVar string, dst *string) 
 // Both variables or neither: presence pairs them, not emptiness, so a set-but-empty
 // value reaches MigrateAll and fails with migration.ErrInvalidMigratorIdentity
 // before any tenant is listed rather than silently running as the tenant's role.
+//
+// Called from runAction rather than resolveFlags because runAction is the only
+// consumer. quiesce shares resolveFlags but opens its control plane with the
+// tenant secret's own credentials, so validating the pair there would refuse a
+// credential that path never uses.
 func resolveMigratorIdentity(flags *CommonFlags) error {
 	user, userSet := os.LookupEnv(envMigratorUser)
 	password, passwordSet := os.LookupEnv(envMigratorPassword)
@@ -443,6 +444,9 @@ func newCLILogger(flags *CommonFlags) logger.Logger {
 // runAction is the shared entry point for migrate/validate/info subcommands.
 func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) error {
 	if err := resolveFlags(cmd, flags); err != nil {
+		return err
+	}
+	if err := resolveMigratorIdentity(flags); err != nil {
 		return err
 	}
 

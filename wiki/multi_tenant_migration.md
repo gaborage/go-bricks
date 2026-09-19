@@ -321,7 +321,9 @@ The [migrator identity](#migrator-identity) has no flag, because no flag carries
 a password. Set both `GOBRICKS_MIGRATE_MIGRATOR_USER` and
 `GOBRICKS_MIGRATE_MIGRATOR_PASSWORD`, or neither; exactly one set is a startup
 error naming the missing variable, and a set-but-empty value fails with
-`migration.ErrInvalidMigratorIdentity` before any tenant is listed.
+`migration.ErrInvalidMigratorIdentity` before any tenant is listed. It applies to
+`migrate`, `validate` and `info`; `quiesce` opens its control plane with the
+tenant secret's own credentials and ignores both variables.
 
 ## CI/CD recipe (GitHub Actions, OIDC → AWS)
 

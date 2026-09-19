@@ -30,7 +30,7 @@ func TestInfoCommandInvokesFlywayInfo(t *testing.T) {
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
 	t.Setenv("AWS_REGION", "us-east-1")
 
-	stub, capture := stubFlywayCapturing(t, "info")
+	stub, capture, _ := stubFlywayCapturing(t, "info")
 	cmd := NewInfoCommand()
 	cmd.SetArgs([]string{
 		"--source-url", listSrv.URL, "--allow-insecure-scheme",

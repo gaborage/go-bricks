@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -363,97 +362,4 @@ func TestResolveFlagsAuditExplicitWinsOverEnv(t *testing.T) {
 	require.NoError(t, resolveFlags(cmd, flags))
 
 	assert.Equal(t, "explicit@op", flags.AppliedBy, "an explicit --applied-by must win over the env fallback")
-}
-
-// unsetMigratorEnv clears both migrator-identity variables for the duration of
-// the test. t.Setenv registers the restore; os.Unsetenv then makes the variable
-// genuinely absent, which t.Setenv alone cannot express.
-func unsetMigratorEnv(t *testing.T) {
-	t.Helper()
-	for _, k := range []string{envMigratorUser, envMigratorPassword} {
-		t.Setenv(k, "")
-		require.NoError(t, os.Unsetenv(k))
-	}
-}
-
-func TestResolveFlagsMigratorIdentityEnvPairs(t *testing.T) {
-	const (
-		user     = "fleet_migrator"
-		password = "migrator-secret-value"
-	)
-
-	tests := []struct {
-		name         string
-		setUser      bool
-		userValue    string
-		setPassword  bool
-		passwordVal  string
-		wantIdentity *migration.MigratorIdentity
-		wantErr      string
-	}{
-		{
-			name:         "both_unset",
-			wantIdentity: nil,
-		},
-		{
-			name:         "both_set",
-			setUser:      true,
-			userValue:    user,
-			setPassword:  true,
-			passwordVal:  password,
-			wantIdentity: &migration.MigratorIdentity{Username: user, Password: password},
-		},
-		{
-			name:      "only_user_set",
-			setUser:   true,
-			userValue: user,
-			wantErr: envMigratorPassword + " is required when " + envMigratorUser +
-				" is set; set both or neither",
-		},
-		{
-			name:        "only_password_set",
-			setPassword: true,
-			passwordVal: password,
-			wantErr: envMigratorUser + " is required when " + envMigratorPassword +
-				" is set; set both or neither",
-		},
-		{
-			// Presence, not emptiness, pairs the two: a set-but-empty value must
-			// reach MigrateAll so it fails with ErrInvalidMigratorIdentity rather
-			// than silently running as the tenant's runtime role.
-			name:         "user_set_empty_password_set",
-			setUser:      true,
-			userValue:    "",
-			setPassword:  true,
-			passwordVal:  password,
-			wantIdentity: &migration.MigratorIdentity{Username: "", Password: password},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			unsetMigratorEnv(t)
-			if tt.setUser {
-				t.Setenv(envMigratorUser, tt.userValue)
-			}
-			if tt.setPassword {
-				t.Setenv(envMigratorPassword, tt.passwordVal)
-			}
-
-			cmd := &cobra.Command{}
-			flags := addCommonFlags(cmd)
-			flags.Tenant = "t1" // satisfy the source requirement
-
-			err := resolveFlags(cmd, flags)
-			if tt.wantErr != "" {
-				// Exact, not Contains: both names appear in either message, so only
-				// the whole string tells the two branches apart.
-				require.EqualError(t, err, tt.wantErr)
-				assert.Nil(t, flags.migratorIdentity)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.wantIdentity, flags.migratorIdentity)
-		})
-	}
 }

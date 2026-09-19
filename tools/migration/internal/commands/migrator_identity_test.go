@@ -7,8 +7,6 @@ import (
 	stdhttp "net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -28,29 +26,23 @@ const (
 	identityMigrator = "fleet_migrator"
 )
 
-// fakeMigratorPassword composes the migrator's synthetic password. Composed
-// rather than written as a literal for the same reason as fakePassword, and long
-// enough to clear redactPassword's floor.
-func fakeMigratorPassword() string {
-	return "not-a-real-" + identityMigrator + "-password"
+// unsetMigratorEnv clears both migrator-identity variables for the duration of
+// the test. t.Setenv registers the restore; os.Unsetenv then makes the variable
+// genuinely absent, which t.Setenv alone cannot express.
+func unsetMigratorEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{envMigratorUser, envMigratorPassword} {
+		t.Setenv(k, "")
+		require.NoError(t, os.Unsetenv(k))
+	}
 }
 
-// stubFlywayCapturingEnv writes a shell script that records its environment to
-// capturePath and emits a success envelope for the given operation. Credentials
-// reach Flyway by environment only, so the environment is where the overlay is
-// observable. Skips on Windows.
-func stubFlywayCapturingEnv(t *testing.T, operation string) (stubPath, capturePath string) {
+// setMigratorEnv exports a full migrator identity.
+func setMigratorEnv(t *testing.T) {
 	t.Helper()
-	if runtime.GOOS == windowsOS {
-		t.Skip("shell script stub not supported on windows CI")
-	}
-	dir := t.TempDir()
-	capturePath = filepath.Join(dir, "env.txt")
-	envelope := `{"operation":"` + operation + `","success":true,"targetSchemaVersion":"2","flywayVersion":"12.8.1"}`
-	script := "#!/bin/sh\nenv >> \"" + capturePath + "\"\necho '" + envelope + "'\nexit 0\n"
-	stubPath = filepath.Join(dir, "flyway-env-capture.sh")
-	require.NoError(t, os.WriteFile(stubPath, []byte(script), 0o755))
-	return stubPath, capturePath
+	unsetMigratorEnv(t)
+	t.Setenv(envMigratorUser, identityMigrator)
+	t.Setenv(envMigratorPassword, fakePassword(identityMigrator))
 }
 
 // readCapturedEnv parses the KEY=VALUE dump the stub recorded. An absent file
@@ -71,16 +63,6 @@ func readCapturedEnv(t *testing.T, capturePath string) map[string]string {
 	return env
 }
 
-// identityRun is what one driven command leaves behind: the environment the stub
-// Flyway saw (empty when it never ran), everything the command wrote, its error,
-// and how many times the control plane was asked to list tenants.
-type identityRun struct {
-	env      map[string]string
-	output   string
-	err      error
-	listHits int64
-}
-
 // captureStdout redirects os.Stdout — where logger.New writes — for the duration
 // of fn, so the run's log lines can be grepped alongside the command's own output.
 func captureStdout(t *testing.T, fn func()) string {
@@ -92,9 +74,8 @@ func captureStdout(t *testing.T, fn func()) string {
 
 	drained := make(chan string, 1)
 	go func() {
-		var buf bytes.Buffer
-		_, _ = io.Copy(&buf, r)
-		drained <- buf.String()
+		b, _ := io.ReadAll(r)
+		drained <- string(b)
 	}()
 
 	defer func() {
@@ -104,6 +85,16 @@ func captureStdout(t *testing.T, fn func()) string {
 	fn()
 	require.NoError(t, w.Close())
 	return <-drained
+}
+
+// identityRun is what one driven command leaves behind: the environment the stub
+// Flyway saw (empty when it never ran), everything the command wrote, its error,
+// and how many times the control plane was asked to list tenants.
+type identityRun struct {
+	env      map[string]string
+	output   string
+	err      error
+	listHits int64
 }
 
 // runIdentityCommand drives cmd against a one-tenant control plane and a fake
@@ -131,7 +122,7 @@ func runIdentityCommand(t *testing.T, cmd *cobra.Command, operation string, extr
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
 	t.Setenv("AWS_REGION", "us-east-1")
 
-	stub, capture := stubFlywayCapturingEnv(t, operation)
+	stub, _, envPath := stubFlywayCapturing(t, operation)
 	cmd.SetArgs(append([]string{
 		"--source-url", listSrv.URL, "--allow-insecure-scheme",
 		"--aws-endpoint", smSrv.URL, "--aws-region", "us-east-1",
@@ -147,36 +138,76 @@ func runIdentityCommand(t *testing.T, cmd *cobra.Command, operation string, extr
 	logged := captureStdout(t, func() { err = cmd.Execute() })
 
 	return identityRun{
-		env:      readCapturedEnv(t, capture),
+		env:      readCapturedEnv(t, envPath),
 		output:   out.String() + logged,
 		err:      err,
 		listHits: listHits.Load(),
 	}
 }
 
-func TestMigrateCommandAppliesMigratorIdentityToFlywayEnv(t *testing.T) {
-	unsetMigratorEnv(t)
-	t.Setenv(envMigratorUser, identityMigrator)
-	t.Setenv(envMigratorPassword, fakeMigratorPassword())
+func TestResolveMigratorIdentityEnvPairs(t *testing.T) {
+	password := fakePassword(identityMigrator)
 
-	run := runIdentityCommand(t, NewMigrateCommand(), "migrate")
-	require.NoError(t, run.err)
+	tests := []struct {
+		name string
+		// env is the environment as presence, not as values: a key absent from the
+		// map is an unset variable, mirroring the os.LookupEnv semantics under test.
+		env          map[string]string
+		wantIdentity *migration.MigratorIdentity
+		wantErr      string
+	}{
+		{
+			name:         "both_unset",
+			wantIdentity: nil,
+		},
+		{
+			name:         "both_set",
+			env:          map[string]string{envMigratorUser: identityMigrator, envMigratorPassword: password},
+			wantIdentity: &migration.MigratorIdentity{Username: identityMigrator, Password: password},
+		},
+		{
+			name: "only_user_set",
+			env:  map[string]string{envMigratorUser: identityMigrator},
+			wantErr: envMigratorPassword + " is required when " + envMigratorUser +
+				" is set; set both or neither",
+		},
+		{
+			name: "only_password_set",
+			env:  map[string]string{envMigratorPassword: password},
+			wantErr: envMigratorUser + " is required when " + envMigratorPassword +
+				" is set; set both or neither",
+		},
+		{
+			// Presence, not emptiness, pairs the two: a set-but-empty value must
+			// reach MigrateAll so it fails with ErrInvalidMigratorIdentity rather
+			// than silently running as the tenant's runtime role.
+			name:         "user_set_empty_password_set",
+			env:          map[string]string{envMigratorUser: "", envMigratorPassword: password},
+			wantIdentity: &migration.MigratorIdentity{Username: "", Password: password},
+		},
+	}
 
-	assert.Equal(t, identityMigrator, run.env["DB_USER"], "Flyway must connect as the migrator, not the tenant's runtime role")
-	assert.Equal(t, fakeMigratorPassword(), run.env["DB_PASSWORD"])
-	assert.Equal(t, identityHost, run.env["DB_HOST"], "host targeting stays the tenant's")
-	assert.Equal(t, identityDatabase, run.env["DB_NAME"], "database targeting stays the tenant's")
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unsetMigratorEnv(t)
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
 
-func TestMigrateCommandWithoutMigratorIdentityUsesTenantCredentials(t *testing.T) {
-	unsetMigratorEnv(t)
+			flags := addCommonFlags(&cobra.Command{})
+			err := resolveMigratorIdentity(flags)
 
-	run := runIdentityCommand(t, NewMigrateCommand(), "migrate")
-	require.NoError(t, run.err)
-
-	assert.Equal(t, identityRuntime, run.env["DB_USER"], "with no overlay Flyway keeps the secret's own username")
-	assert.Equal(t, fakePassword(identityRuntime), run.env["DB_PASSWORD"])
-	assert.NotContains(t, run.output, "Migrator identity overlay active")
+			if tt.wantErr != "" {
+				// Exact, not Contains: both names appear in either message, so only
+				// the whole string tells the two branches apart.
+				require.EqualError(t, err, tt.wantErr)
+				assert.Nil(t, flags.migratorIdentity)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantIdentity, flags.migratorIdentity)
+		})
+	}
 }
 
 func TestMigratorIdentityAppliesToEveryAction(t *testing.T) {
@@ -192,17 +223,28 @@ func TestMigratorIdentityAppliesToEveryAction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			unsetMigratorEnv(t)
-			t.Setenv(envMigratorUser, identityMigrator)
-			t.Setenv(envMigratorPassword, fakeMigratorPassword())
+			setMigratorEnv(t)
 
 			run := runIdentityCommand(t, tt.newCmd(), tt.operation)
 			require.NoError(t, run.err)
 
-			assert.Equal(t, identityMigrator, run.env["DB_USER"])
-			assert.Equal(t, fakeMigratorPassword(), run.env["DB_PASSWORD"])
+			assert.Equal(t, identityMigrator, run.env["DB_USER"], "Flyway must connect as the migrator, not the tenant's runtime role")
+			assert.Equal(t, fakePassword(identityMigrator), run.env["DB_PASSWORD"])
+			assert.Equal(t, identityHost, run.env["DB_HOST"], "host targeting stays the tenant's")
+			assert.Equal(t, identityDatabase, run.env["DB_NAME"], "database targeting stays the tenant's")
 		})
 	}
+}
+
+func TestMigrateCommandWithoutMigratorIdentityUsesTenantCredentials(t *testing.T) {
+	unsetMigratorEnv(t)
+
+	run := runIdentityCommand(t, NewMigrateCommand(), "migrate")
+	require.NoError(t, run.err)
+
+	assert.Equal(t, identityRuntime, run.env["DB_USER"], "with no overlay Flyway keeps the secret's own username")
+	assert.Equal(t, fakePassword(identityRuntime), run.env["DB_PASSWORD"])
+	assert.NotContains(t, run.output, "Migrator identity overlay active")
 }
 
 func TestMigrateCommandNeverPrintsMigratorPassword(t *testing.T) {
@@ -212,9 +254,7 @@ func TestMigrateCommandNeverPrintsMigratorPassword(t *testing.T) {
 			name = "json_records"
 		}
 		t.Run(name, func(t *testing.T) {
-			unsetMigratorEnv(t)
-			t.Setenv(envMigratorUser, identityMigrator)
-			t.Setenv(envMigratorPassword, fakeMigratorPassword())
+			setMigratorEnv(t)
 
 			var extra []string
 			if asJSON {
@@ -226,11 +266,10 @@ func TestMigrateCommandNeverPrintsMigratorPassword(t *testing.T) {
 			if asJSON {
 				require.Contains(t, run.output, `"event":"tenant_complete"`, "--json must have produced a record to grep")
 			}
-
 			// Positive control: the overlay ran and its username was logged, so an
 			// absent password is silence about the password, not silence about the run.
 			assert.Contains(t, run.output, identityMigrator)
-			assert.NotContains(t, run.output, fakeMigratorPassword())
+			assert.NotContains(t, run.output, fakePassword(identityMigrator))
 		})
 	}
 }
@@ -243,7 +282,7 @@ func TestMigrateCommandRejectsPartialMigratorIdentityBeforeListing(t *testing.T)
 		missing string
 	}{
 		{name: "only_user_set", envVar: envMigratorUser, value: identityMigrator, missing: envMigratorPassword},
-		{name: "only_password_set", envVar: envMigratorPassword, value: fakeMigratorPassword(), missing: envMigratorUser},
+		{name: "only_password_set", envVar: envMigratorPassword, value: fakePassword(identityMigrator), missing: envMigratorUser},
 	}
 
 	for _, tt := range tests {
@@ -257,7 +296,11 @@ func TestMigrateCommandRejectsPartialMigratorIdentityBeforeListing(t *testing.T)
 			assert.Contains(t, run.err.Error(), tt.missing)
 			assert.Zero(t, run.listHits, "the run must fail before the control plane is asked for tenants")
 			assert.Empty(t, run.env, "Flyway must never be invoked")
-			assert.NotContains(t, run.output, fakeMigratorPassword())
+			if tt.envVar == envMigratorPassword {
+				// Only meaningful in this arm: the other never put a password in the
+				// environment, so its absence from the output would prove nothing.
+				assert.NotContains(t, run.output, tt.value)
+			}
 		})
 	}
 }
@@ -274,16 +317,17 @@ func TestMigrateCommandRejectsInvalidMigratorIdentityBeforeListing(t *testing.T)
 	assert.Empty(t, run.env, "Flyway must never be invoked")
 }
 
-// TestQuiesceRejectsPartialMigratorIdentity pins the blast radius of the
-// both-or-neither check. It lives in resolveFlags, which `quiesce` also calls, so
-// a half-set pair stops quiesce too — before the control plane is opened. The
-// `list` subcommand deliberately bypasses resolveFlags and is unaffected.
-func TestQuiesceRejectsPartialMigratorIdentity(t *testing.T) {
-	opened := false
+// TestQuiesceIgnoresMigratorIdentity pins the scope boundary. quiesce shares
+// resolveFlags with the action subcommands but opens its control plane with the
+// tenant secret's own credentials, so it neither applies the overlay nor refuses
+// a half-set pair. Whether quiesce should connect as the migrator is open
+// (its CreateTable is DDL); until that is decided it must not fail on a
+// credential it never reads.
+func TestQuiesceIgnoresMigratorIdentity(t *testing.T) {
+	mem := migration.NewMemoryQuiesceController()
 	orig := controllerOpener
 	controllerOpener = func(context.Context, *CommonFlags, string) (migration.QuiesceController, func(), error) {
-		opened = true
-		return migration.NewMemoryQuiesceController(), func() {}, nil
+		return mem, func() {}, nil
 	}
 	t.Cleanup(func() { controllerOpener = orig })
 
@@ -297,8 +341,5 @@ func TestQuiesceRejectsPartialMigratorIdentity(t *testing.T) {
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), envMigratorPassword)
-	assert.False(t, opened, "the control plane must not be opened on a half-set identity")
+	require.NoError(t, cmd.Execute(), "a half-set identity must not stop a path that never uses it")
 }

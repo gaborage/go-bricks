@@ -253,6 +253,16 @@ Recorded on every `migration.applied` audit event. The principal is **never infe
 | `GOBRICKS_MIGRATE_MIGRATOR_USER` | Username Flyway connects as, replacing each tenant secret's own. No flag; set together with the password below. |
 | `GOBRICKS_MIGRATE_MIGRATOR_PASSWORD` | Password for that user. Exactly one of the two set is a startup error naming the missing variable. |
 
+A password gets no flag, only an environment variable — a flag value is visible
+in `ps` output and in shell history. `--source-token` predates that rule and
+still accepts a bearer token directly; prefer its
+`GOBRICKS_MIGRATE_SOURCE_TOKEN` fallback, and follow the migrator variables
+above, not `--source-token`, when adding a credential here.
+
+The migrator identity applies to `migrate`, `validate` and `info`. `quiesce`
+opens its control plane with the tenant secret's own credentials and ignores
+both variables; `list` needs no credentials at all.
+
 ## JSON output (for CI consumers)
 
 With `--json`, the CLI streams a JSON object per tenant and a final summary
