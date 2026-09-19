@@ -354,14 +354,9 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 	// not interleave with one a redeclare source drives. redeclareMu before mu is
 	// the documented order — topologySteps reads the declarations through the
 	// accessors, which take mu. A source that wakes during startup therefore
-	// queues behind this whole body, readiness wait included. That wait is
-	// bounded by readyTimeoutDuration (30s, constants.go), NOT by
-	// reconnect.readytimeout, which bounds the publish pre-flight and never
-	// reaches the registry — the two share the 100ms cadence, not the timeout.
-	// "Bounded" stops there: the declares that follow are amqp091 RPCs, which are
-	// not ctx-cancelable on the wire, so the true hold is 30s plus those
-	// round-trips. infraSetupTimeout (45s) is the manager-side soft cap over the
-	// whole call.
+	// queues behind this whole body, readiness wait included — bounded by
+	// readyTimeoutDuration (30s, constants.go), never by reconnect.readytimeout.
+	// ADR-113 carries the distinction and what "bounded" does not cover.
 	r.redeclareMu.Lock()
 	defer r.redeclareMu.Unlock()
 	r.mu.Lock()

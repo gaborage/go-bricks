@@ -5048,8 +5048,9 @@ func TestRegistryStartsOneRedeclareObserverAcrossRepeatedDeclares(t *testing.T) 
 
 // gatedRedeclareSource parks a pass inside channelGeneration — after it has taken
 // redeclareMu and released mu, and before the replay that needs mu again — so a
-// test can hold redeclareMu across a concurrent DeclareInfrastructure. The gate
-// is one-shot, so the loop's second reading returns straight away.
+// test can hold redeclareMu across a concurrent DeclareInfrastructure. Arrive
+// blocks on EVERY call, so the loop's second reading returns only because
+// Release already ran: moving Release after the pass completes would deadlock.
 type gatedRedeclareSource struct {
 	generation uint64
 	gate       *testutil.BlockedCreate
