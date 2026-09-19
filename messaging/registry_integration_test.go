@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/testing/containers"
 )
 
 // TestRegistryRedeclaresDeletedQueueAfterReconnect is the broker-backed
@@ -31,11 +32,7 @@ func TestRegistryRedeclaresDeletedQueueAfterReconnect(t *testing.T) {
 
 	// Registered before the registry: t.Cleanup is LIFO, so consumers stop
 	// before these deletes run and cannot re-declare the queue behind them.
-	admin, err := amqp.Dial(brokerURL)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = admin.Close() })
-	adminCh, err := admin.Channel()
-	require.NoError(t, err)
+	adminCh := dialChannel(t, brokerURL)
 	t.Cleanup(func() {
 		_, _ = adminCh.QueueDelete(queue, false, false, false)
 		_ = adminCh.ExchangeDelete(exchange, false, false)
@@ -56,7 +53,7 @@ func TestRegistryRedeclaresDeletedQueueAfterReconnect(t *testing.T) {
 	require.NoError(t, registry.StartConsumers(ctx))
 	generation, _ := client.channelGeneration()
 
-	_, err = adminCh.QueueDelete(queue, false, false, false)
+	_, err := adminCh.QueueDelete(queue, false, false, false)
 	require.NoError(t, err)
 	client.m.RLock()
 	channel := client.channel
@@ -94,11 +91,7 @@ func TestRegistryConsumesFromAnExternalExchangeWithoutConfigurePermission(t *tes
 	exchange, queue := uniqueName(t, "external_exchange"), uniqueName(t, "nonowner_queue")
 
 	// The owner declares the exchange out of band, as another service would.
-	owner, err := amqp.Dial(brokerURL)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = owner.Close() })
-	ownerCh, err := owner.Channel()
-	require.NoError(t, err)
+	ownerCh := dialChannel(t, brokerURL)
 	require.NoError(t, ownerCh.ExchangeDeclare(exchange, ExchangeTypeTopic, true, false, false, false, nil))
 	t.Cleanup(func() {
 		_, _ = ownerCh.QueueDelete(queue, false, false, false)
@@ -107,9 +100,7 @@ func TestRegistryConsumesFromAnExternalExchangeWithoutConfigurePermission(t *tes
 
 	// The non-owner may create its own queue and nothing else: no configure
 	// permission reaches the exchange name.
-	user := uniqueName(t, "nonowner_user")
-	nonOwnerURL, err := broker.AddUser(ctx, user, "nonowner-pw", "^"+regexp.QuoteMeta(queue)+"$", ".*", ".*")
-	require.NoError(t, err)
+	nonOwnerURL := nonOwnerURLFor(ctx, t, broker, queue)
 
 	client := NewAMQPClient(nonOwnerURL, log, WithReinitDelay(50*time.Millisecond))
 	t.Cleanup(func() { _ = client.Close() })
@@ -118,7 +109,7 @@ func TestRegistryConsumesFromAnExternalExchangeWithoutConfigurePermission(t *tes
 	handler := &countingTestHandler{}
 	registry := NewRegistry(client, log)
 	registry.resubscribeDelay = 50 * time.Millisecond
-	registry.RegisterExchange(&ExchangeDeclaration{Name: exchange, Passive: true})
+	registry.RegisterExchange(NewExternalExchange(exchange))
 	registry.RegisterQueue(&QueueDeclaration{Name: queue})
 	registry.RegisterBinding(&BindingDeclaration{Queue: queue, Exchange: exchange, RoutingKey: "orders.#"})
 	registry.RegisterConsumer(&ConsumerDeclaration{Queue: queue, EventType: testEventType, Workers: 1, Handler: handler})
@@ -140,14 +131,61 @@ func TestRegistryConsumesFromAnExternalExchangeWithoutConfigurePermission(t *tes
 	// Control, on its own connection so the registry's channel is undisturbed:
 	// the same user cannot ACTIVELY declare that exchange. Without this the
 	// passive success above could be a mis-provisioned permission set.
-	refused, err := amqp.Dial(nonOwnerURL)
-	require.NoError(t, err)
-	defer refused.Close()
-	refusedCh, err := refused.Channel()
-	require.NoError(t, err)
-	err = refusedCh.ExchangeDeclare(exchange, ExchangeTypeTopic, true, false, false, false, nil)
+	err := dialChannel(t, nonOwnerURL).ExchangeDeclare(exchange, ExchangeTypeTopic, true, false, false, false, nil)
 	require.Error(t, err)
 	var amqpErr *amqp.Error
 	require.ErrorAs(t, err, &amqpErr)
 	assert.Equal(t, amqp.AccessRefused, amqpErr.Code)
+}
+
+// TestRegistryDeclareInfrastructureFailsOnAnAbsentExternalExchange pins what a
+// missing external exchange costs at startup, against a real broker: the pass
+// ends carrying the broker's own 404 naming the exchange, and — the ADR-119
+// criterion — nothing lands in the redeclare skip set, because a passive declare
+// answers 404, never 406.
+func TestRegistryDeclareInfrastructureFailsOnAnAbsentExternalExchange(t *testing.T) {
+	broker := pkgBroker.Get(t)
+	log := logger.New("disabled", true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	absent, queue := uniqueName(t, "absent_exchange"), uniqueName(t, "nonowner_queue")
+	client := NewAMQPClient(nonOwnerURLFor(ctx, t, broker, queue), log, WithReinitDelay(50*time.Millisecond))
+	t.Cleanup(func() { _ = client.Close() })
+	require.Eventually(t, client.IsReady, 10*time.Second, 100*time.Millisecond, clientReadyMsg)
+
+	registry := NewRegistry(client, log)
+	registry.RegisterExchange(NewExternalExchange(absent))
+
+	err := registry.DeclareInfrastructure(ctx)
+
+	require.Error(t, err)
+	var amqpErr *amqp.Error
+	require.ErrorAs(t, err, &amqpErr)
+	assert.Equal(t, amqp.NotFound, amqpErr.Code)
+	assert.Contains(t, err.Error(), absent)
+	registry.redeclareMu.Lock()
+	defer registry.redeclareMu.Unlock()
+	assert.Empty(t, registry.redeclareSkip)
+}
+
+// dialChannel opens a control connection and channel, closing the connection
+// when the test ends.
+func dialChannel(t *testing.T, url string) *amqp.Channel {
+	t.Helper()
+	conn, err := amqp.Dial(url)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	channel, err := conn.Channel()
+	require.NoError(t, err)
+	return channel
+}
+
+// nonOwnerURLFor returns the URL of a broker user that may create the named
+// queue and nothing else — no configure permission reaches any exchange.
+func nonOwnerURLFor(ctx context.Context, t *testing.T, broker *containers.RabbitMQContainer, queue string) string {
+	t.Helper()
+	url, err := broker.AddUser(ctx, uniqueName(t, "nonowner_user"), "nonowner-pw", "^"+regexp.QuoteMeta(queue)+"$", ".*", ".*")
+	require.NoError(t, err)
+	return url
 }

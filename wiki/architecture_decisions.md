@@ -1885,9 +1885,9 @@ and it is VERIFIED on every declare pass — the startup pass and each ADR-113 r
 real shape still succeeds. The marker rides on the declaration (`ExchangeDeclaration.Passive`), so
 `AMQPClient` is unchanged and only the internal channel adapter gains the passive door. A missing
 exchange is the broker's own 404, which ends the pass and is retried on the next channel
-generation; a passive step never enters ADR-113's 406 skip set, because a passive declare cannot
-legitimately answer `PRECONDITION_FAILED` and remembering one would wedge the reference until
-restart. One name both declared locally and marked external is a conflict class of its own,
+generation; nothing external reaches ADR-113's 406 skip set, by the protocol rather than by a code
+exemption, since a passive declare answers declare-ok or 404 and never `PRECONDITION_FAILED`. One
+name both declared locally and marked external is a conflict class of its own,
 reported in the ADR-118 aggregate style under its own header. The reference errors were reworded to
 say they are a local check that never contacted the broker. Boot-and-converge was declined; the
 bounded opt-in startup wait is decided in the ADR and shipped separately. No migration: both new

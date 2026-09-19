@@ -325,16 +325,9 @@ func TestDeclarationsExternalExchange(t *testing.T) {
 
 		exchange := decls.DeclareExternalExchange(externalExchangeName)
 
-		require.NotNil(t, exchange)
-		assert.Equal(t, externalExchangeName, exchange.Name)
-		assert.True(t, exchange.Passive, "an external exchange is verified, never declared")
-		// Name only: the broker ignores every other field on a passive declare.
-		assert.Empty(t, exchange.Type)
-		assert.False(t, exchange.Durable)
-		assert.False(t, exchange.AutoDelete)
-		assert.False(t, exchange.Internal)
-		assert.False(t, exchange.NoWait)
-		assert.Empty(t, exchange.Args)
+		// Whole-value, so a field added to ExchangeDeclaration and left set here
+		// fails this test instead of quietly escaping the name-only rule.
+		assert.Equal(t, &ExchangeDeclaration{Name: externalExchangeName, Passive: true}, exchange)
 
 		registered := decls.Exchanges[externalExchangeName]
 		require.NotNil(t, registered)
