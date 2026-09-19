@@ -62,11 +62,30 @@ sends the reader to `rabbitmqctl` and the management UI, which show a healthy ex
 
 ## Startup wait
 
-<!-- PLACEHOLDER: link 2 of #1760 replaces this section. -->
-NOT IN THIS CHANGE. The bounded, opt-in in-process wait is decided here (see *Alternatives
-considered*, boot-and-converge) and ships in the second link of this stack, which documents its
-configuration key. Until it lands, a startup pass that cannot verify an external exchange aborts at
-once.
+`messaging.declare.externalwait` (duration, default `0`, env `MESSAGING_DECLARE_EXTERNALWAIT`) is
+the bounded, opt-in answer to a consumer deploying before the owner. When the single-tenant startup
+declare pass fails with a 404 — the broker's answer for an exchange that does not exist — the
+framework re-runs the whole pass with backoff (1s, doubling to a 5s ceiling) until it succeeds or
+the wait elapses, then aborts with the broker's own 404 naming the exchange rather than a bare
+timeout. `0` aborts at once, which is the pre-key behavior.
+
+**The wait only DELAYS an abort that would otherwise happen; it never introduces one.** Every rule
+below follows from that one sentence rather than from a separate decision:
+
+- **A publisher-only service never waits.** It warns and continues on this failure today, so there
+  is no abort to delay — holding it at startup would buy nothing and cost boot time, and its next
+  channel generation redeclares the topology anyway (#1761).
+- **Only a 404 is retried.** Every other startup failure stays fatal immediately, keeping the
+  fail-fast contract `TestPrepareRuntimeConsumersFailsStartupOnEnsureError` pins. A 406 in
+  particular is ADR-113's business, not this wait's.
+- **Per-tenant lazy passes never wait.** A tenant's pass runs inside a request with its own
+  deadline; it fails that request at once and the next request re-runs the pass, which is already
+  the convergence the wait exists to provide.
+
+The wait is gated on the 404 alone rather than on the set containing an external exchange. A bind
+404 against an exchange nobody has declared yet converges exactly the same way, and by the sentence
+above, delaying an abort that was going to happen either way costs nothing — so the narrower gate
+would add a condition without changing an outcome.
 
 ## Alternatives considered
 

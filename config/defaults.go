@@ -277,6 +277,8 @@ const (
 	fieldMessagingSealActive     = "messaging.seal.active"
 	fieldMessagingPublishTimeout = "messaging.publishtimeout"
 
+	fieldMessagingDeclareExternalWait = "messaging.declare.externalwait"
+
 	fieldDatabaseTLS              = "database.tls"
 	fieldDatabaseConnectionString = "database.connectionstring"
 

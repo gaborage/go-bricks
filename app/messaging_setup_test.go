@@ -3,11 +3,14 @@ package app
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"testing"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
@@ -231,4 +234,139 @@ func TestPrepareRuntimeConsumersNoOpsWithoutManagerOrDeclarations(t *testing.T) 
 		require.NoError(t, a.prepareRuntimeConsumers(context.Background(), nil))
 		assert.Zero(t, source.callCount(), "no declarations means nothing to replay")
 	})
+}
+
+// externalExchange is the exchange another service owns in the startup-wait
+// tests; it appears in the broker's own 404 reason, which is what the abort
+// error must carry through to the operator.
+const externalExchange = "billing.events"
+
+// errExternalExchangeMissing is the broker's answer to a passive declare for an
+// exchange that does not exist yet (ADR-119) — the one failure the startup wait
+// is allowed to retry.
+var errExternalExchangeMissing = &amqp.Error{
+	Code:   amqp.NotFound,
+	Reason: "NOT_FOUND - no exchange '" + externalExchange + "' in vhost '/'",
+}
+
+// flakyBrokerURLProvider fails the first failures resolutions with err and then
+// succeeds, counting every attempt. It stands in for a declare pass that answers
+// 404 until the owning service declares the exchange: the attempt count is what
+// the wait tests assert on, so ordering is observed rather than slept for.
+type flakyBrokerURLProvider struct {
+	mu       sync.Mutex
+	calls    int
+	failures int
+	err      error
+}
+
+func (p *flakyBrokerURLProvider) BrokerURL(context.Context, string) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls++
+	if p.calls <= p.failures {
+		return "", p.err
+	}
+	return "amqp://guest:guest@localhost:5672/", nil
+}
+
+func (p *flakyBrokerURLProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+// newExternalWaitApp wires a single-tenant App whose consumer bootstrap fails
+// through source, with messaging.declare.externalwait set to wait.
+func newExternalWaitApp(t *testing.T, source messaging.BrokerURLProvider, wait time.Duration) *App {
+	t.Helper()
+	log := logger.New("debug", true)
+	manager := messaging.NewMessagingManager(source, log, messaging.ManagerOptions{},
+		func(string, logger.Logger) messaging.AMQPClient {
+			// Programmed to SUCCEED: once the broker URL resolves, the declare
+			// pass and the subscribe must go through, or the wait's success arm
+			// could never be observed.
+			client := testmocks.NewMockAMQPClient()
+			client.ExpectDeclareQueueAny(nil)
+			client.ExpectDeclareExchangeAny(nil)
+			client.ExpectBindQueueAny(nil)
+			client.On("ConsumeFromQueue", mock.Anything, mock.Anything).Return(nil, nil)
+			client.On("Close").Return(nil)
+			return client
+		})
+	t.Cleanup(func() { _ = manager.Close() })
+	return newMinimalMessagingApp(log, manager, &config.Config{
+		Multitenant: config.MultitenantConfig{Enabled: false},
+		Messaging:   config.MessagingConfig{Declare: config.DeclareConfig{ExternalWait: wait}},
+	})
+}
+
+// TestPrepareRuntimeConsumersWaitsForExternalExchange is the feature: a
+// consumer-declaring service deployed before the service that owns its external
+// exchange starts consuming once the exchange appears, without a restart.
+func TestPrepareRuntimeConsumersWaitsForExternalExchange(t *testing.T) {
+	source := &flakyBrokerURLProvider{failures: 2, err: errExternalExchangeMissing}
+	a := newExternalWaitApp(t, source, 2*time.Second)
+
+	require.NoError(t, a.prepareRuntimeConsumers(context.Background(), declarationsWithConsumer()))
+	assert.Greater(t, source.callCount(), 2, "the pass must be re-run until the exchange appears")
+}
+
+// TestPrepareRuntimeConsumersAbortsAfterExternalWaitElapses pins the bound: an
+// exchange that never appears still aborts startup, and the operator gets the
+// broker's own 404 naming it rather than a bare timeout.
+func TestPrepareRuntimeConsumersAbortsAfterExternalWaitElapses(t *testing.T) {
+	source := &flakyBrokerURLProvider{failures: math.MaxInt, err: errExternalExchangeMissing}
+	a := newExternalWaitApp(t, source, 150*time.Millisecond)
+
+	err := a.prepareRuntimeConsumers(context.Background(), declarationsWithConsumer())
+
+	require.ErrorContains(t, err, externalExchange, "the abort must name the exchange the broker named")
+	assert.Greater(t, source.callCount(), 1, "the wait must have re-run the pass at least once")
+}
+
+// TestPrepareRuntimeConsumersDoesNotWaitWhenExternalWaitZero pins the default:
+// zero keeps the pre-key semantics exactly, which is one attempt and abort.
+func TestPrepareRuntimeConsumersDoesNotWaitWhenExternalWaitZero(t *testing.T) {
+	source := &flakyBrokerURLProvider{failures: math.MaxInt, err: errExternalExchangeMissing}
+	a := newExternalWaitApp(t, source, 0)
+
+	require.Error(t, a.prepareRuntimeConsumers(context.Background(), declarationsWithConsumer()))
+	assert.Equal(t, 1, source.callCount(), "externalwait 0 must abort at once")
+}
+
+// TestPrepareRuntimeConsumersDoesNotWaitOnOtherErrors keeps the wait narrow:
+// only a 404 is retried. Every other startup failure stays fatal immediately,
+// which is what TestPrepareRuntimeConsumersFailsStartupOnEnsureError pins.
+func TestPrepareRuntimeConsumersDoesNotWaitOnOtherErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "precondition_failed_is_not_retried", err: &amqp.Error{Code: amqp.PreconditionFailed, Reason: "PRECONDITION_FAILED - inequivalent arg"}},
+		{name: "plain_error_is_not_retried", err: errBrokerLookupFailed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := &flakyBrokerURLProvider{failures: math.MaxInt, err: tt.err}
+			a := newExternalWaitApp(t, source, 2*time.Second)
+
+			require.Error(t, a.prepareRuntimeConsumers(context.Background(), declarationsWithConsumer()))
+			assert.Equal(t, 1, source.callCount(), "only a 404 is worth waiting on")
+		})
+	}
+}
+
+// TestPrepareRuntimeConsumersPublisherOnlyNeverWaits pins the rule that keeps
+// the wait honest: it only DELAYS an abort that would otherwise happen, it never
+// introduces one. A publisher-only service does not abort on this failure at
+// all, so it must not be held at startup either — the next channel generation
+// redeclares its topology.
+func TestPrepareRuntimeConsumersPublisherOnlyNeverWaits(t *testing.T) {
+	source := &flakyBrokerURLProvider{failures: math.MaxInt, err: errExternalExchangeMissing}
+	a := newExternalWaitApp(t, source, 2*time.Second)
+
+	require.NoError(t, a.prepareRuntimeConsumers(context.Background(), messaging.NewDeclarations()))
+	assert.Equal(t, 1, source.callCount(), "a publisher-only service must not be held at startup")
 }

@@ -1114,3 +1114,68 @@ func TestValidateMessagingPublishTimeoutFloorIsModeIndependent(t *testing.T) {
 	accepted := MessagingConfig{PublishTimeout: 35 * time.Second}
 	require.NoError(t, normalizeAndCheckMessaging(&accepted, true))
 }
+
+// TestValidateMessagingDeclareExternalWait pins messaging.declare.externalwait's
+// three states — unset/zero (abort at once, today's semantics), negative
+// (rejected), and positive (accepted verbatim). Zero is the opt-out sentinel and
+// must stay legal, which is what makes the check `< 0` rather than `<= 0`.
+func TestValidateMessagingDeclareExternalWait(t *testing.T) {
+	tests := []struct {
+		name             string
+		config           MessagingConfig
+		errorContains    []string
+		wantExternalWait time.Duration
+	}{
+		{
+			// The opt-in default: an absent key stays 0, so no deployment
+			// acquires a startup wait it never configured.
+			name:             "unset_stays_zero_and_is_accepted",
+			config:           MessagingConfig{},
+			wantExternalWait: 0,
+		},
+		{
+			// Zero spelled explicitly is the documented opt-out, not an
+			// omission. Without this case a `<= 0` mutant survives.
+			name:             "zero_accepted",
+			config:           MessagingConfig{Declare: DeclareConfig{ExternalWait: 0}},
+			wantExternalWait: 0,
+		},
+		{
+			// One nanosecond under zero is the tightest rejection there is, so
+			// it pins the comparison and not merely a blanket refusal.
+			name:          "negative_one_nanosecond_rejected",
+			config:        MessagingConfig{Declare: DeclareConfig{ExternalWait: -time.Nanosecond}},
+			errorContains: []string{"messaging.declare.externalwait"},
+		},
+		{
+			name:          "negative_rejected",
+			config:        MessagingConfig{Declare: DeclareConfig{ExternalWait: -time.Second}},
+			errorContains: []string{"messaging.declare.externalwait"},
+		},
+		{
+			// Carried verbatim: normalization must not round, floor or default a
+			// configured wait.
+			name:             "positive_accepted_verbatim",
+			config:           MessagingConfig{Declare: DeclareConfig{ExternalWait: 30 * time.Second}},
+			wantExternalWait: 30 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.config
+			err := normalizeAndCheckMessaging(&cfg, false)
+
+			if len(tt.errorContains) == 0 {
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantExternalWait, cfg.Declare.ExternalWait,
+					"normalization must leave messaging.declare.externalwait exactly as configured")
+				return
+			}
+			require.Error(t, err)
+			for _, want := range tt.errorContains {
+				assert.Contains(t, err.Error(), want)
+			}
+		})
+	}
+}

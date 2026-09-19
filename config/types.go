@@ -380,6 +380,24 @@ type CacheConfig struct {
 	LoadTimeout time.Duration `koanf:"loadtimeout" json:"loadtimeout" yaml:"loadtimeout" toml:"loadtimeout" mapstructure:"loadtimeout"`
 }
 
+// DeclareConfig holds settings for the declare pass — the startup pass and each
+// redeclare pass on a new channel generation (ADR-113).
+type DeclareConfig struct {
+	// ExternalWait bounds an in-process wait for an EXTERNAL exchange that does
+	// not exist yet (ADR-119). When set (> 0) and the single-tenant startup
+	// declare pass fails because the passive declare answered 404, the framework
+	// re-runs the pass with backoff until it succeeds or this elapses, then
+	// aborts with the broker's 404 naming the exchange. It exists so a consumer
+	// can deploy before the service that owns the exchange.
+	//
+	// It only ever DELAYS an abort that would otherwise happen; it never
+	// introduces one. Zero — the default — aborts at once, the pre-key behavior.
+	// Every non-404 startup failure stays fatal immediately, a publisher-only
+	// service keeps its warn-and-continue without waiting, and a per-tenant lazy
+	// pass never waits: that request fails at once and the next one retries.
+	ExternalWait time.Duration `koanf:"externalwait" json:"externalwait" yaml:"externalwait" toml:"externalwait" mapstructure:"externalwait"`
+}
+
 // CacheManagerConfig holds cache manager lifecycle settings.
 // Production-safe defaults are applied automatically:
 //   - MaxSize: 100 (maximum tenant cache instances, single-tenant; multi-tenant
@@ -514,6 +532,7 @@ type MessagingConfig struct {
 	Publisher PublisherPoolConfig      `koanf:"publisher" json:"publisher" yaml:"publisher" toml:"publisher" mapstructure:"publisher"`
 	Streams   StreamsConfig            `koanf:"streams" json:"streams" yaml:"streams" toml:"streams" mapstructure:"streams"`
 	Consumers MessagingConsumersConfig `koanf:"consumers" json:"consumers" yaml:"consumers" toml:"consumers" mapstructure:"consumers"`
+	Declare   DeclareConfig            `koanf:"declare" json:"declare" yaml:"declare" toml:"declare" mapstructure:"declare"`
 
 	// Tenancy selects which key the messaging kind's consumers and publishers are
 	// resolved and replayed under when multitenant.enabled is true:
