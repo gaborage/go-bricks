@@ -3673,11 +3673,11 @@ func TestRegistryRedeclaresOncePerGenerationWhenTheConsumerWinsTheChannel(t *tes
 	awaitDeclares(t, client, "queue:"+testQueueName, "1", "2", "3")
 }
 
-// awaitObserverExit waits for the redeclare observer goroutine to return.
-func awaitObserverExit(t *testing.T, registry *Registry) {
+// awaitObserverExit waits for the redeclare observer goroutine behind done to return.
+func awaitObserverExit(t *testing.T, done <-chan struct{}) {
 	t.Helper()
 	select {
-	case <-registry.redeclareObserverDone:
+	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("redeclare observer did not exit")
 	}
@@ -3694,7 +3694,7 @@ func TestRegistryRedeclareObserverStopsWhenTheClientCloses(t *testing.T) {
 
 	require.NoError(t, client.Close())
 
-	awaitObserverExit(t, registry)
+	awaitObserverExit(t, registry.redeclareObserverDone)
 }
 
 // TestRegistryStartsNoRedeclareObserverWithoutTheAnnouncement verifies a client
@@ -3720,7 +3720,7 @@ func TestRegistryRedeclareObserverStopsOnStopConsumers(t *testing.T) {
 
 	registry.StopConsumers()
 
-	awaitObserverExit(t, registry)
+	awaitObserverExit(t, registry.redeclareObserverDone)
 }
 
 // TestRegistryStopsARedeclarePassAlreadyInFlight pins that halting the registry
@@ -3742,7 +3742,7 @@ func TestRegistryStopsARedeclarePassAlreadyInFlight(t *testing.T) {
 
 	registry.StopConsumers()
 	gate.Release()
-	awaitObserverExit(t, registry)
+	awaitObserverExit(t, registry.redeclareObserverDone)
 
 	assert.Equal(t, []string{"1"}, client.declaresOf("queue:"+testQueueName),
 		"the halted pass declared nothing past the declaration it was parked in")
@@ -4948,6 +4948,12 @@ func (s *staticRedeclareSource) channelGeneration() (generation uint64, ready bo
 	return s.generation, true
 }
 
+// tokenFor gives a hand-driven source the ledger identity NewRegistry builds for
+// the registry's own client.
+func tokenFor(source channelGenerationer) *redeclareToken {
+	return &redeclareToken{source: source}
+}
+
 // TestRegistryRedeclareGuardIsPerSource pins which pair the once-per-generation
 // guard is keyed by: sources number their channels independently, so two
 // sources reporting the same generation are two different channels and each
@@ -4960,7 +4966,7 @@ func TestRegistryRedeclareGuardIsPerSource(t *testing.T) {
 	require.Equal(t, []string{"1"}, client.declaresOf(key), "DeclareInfrastructure declares once")
 
 	ctx := context.Background()
-	publisher, peer := &staticRedeclareSource{generation: 2}, &staticRedeclareSource{generation: 2}
+	publisher, peer := tokenFor(&staticRedeclareSource{generation: 2}), tokenFor(&staticRedeclareSource{generation: 2})
 	registry.redeclareTopologyFrom(ctx, publisher)
 	registry.redeclareTopologyFrom(ctx, peer)
 	assert.Equal(t, []string{"1", "1", "1"}, client.declaresOf(key), "two sources on the same generation are two channels")
@@ -4977,7 +4983,7 @@ func TestRegistryRefusesARedeclarePassOnceStopped(t *testing.T) {
 	registry := newPublisherOnlyRegistry(t, client)
 
 	registry.StopConsumers()
-	registry.redeclareTopologyFrom(context.Background(), &staticRedeclareSource{generation: 2})
+	registry.redeclareTopologyFrom(context.Background(), tokenFor(&staticRedeclareSource{generation: 2}))
 
 	assert.Equal(t, []string{"1"}, client.declaresOf("exchange:"+testExchangeName))
 }
@@ -4995,7 +5001,7 @@ func TestRegistryRedeclaresOnTheFirstGenerationASourceIsSeenAt(t *testing.T) {
 	key := "exchange:" + testExchangeName
 	require.Equal(t, []string{"1"}, client.declaresOf(key), "DeclareInfrastructure declares once")
 
-	registry.redeclareTopologyFrom(context.Background(), &staticRedeclareSource{generation: 1})
+	registry.redeclareTopologyFrom(context.Background(), tokenFor(&staticRedeclareSource{generation: 1}))
 
 	assert.Equal(t, []string{"1", "1"}, client.declaresOf(key),
 		"an unseen source's generation 1 is a channel this registry has never declared on")
@@ -5013,10 +5019,171 @@ func TestRegistryRunsNoRedeclarePassBeforeDeclareInfrastructure(t *testing.T) {
 	defer registry.StopConsumers()
 	key := "exchange:" + testExchangeName
 
-	registry.redeclareTopologyFrom(context.Background(), &staticRedeclareSource{generation: 2})
+	registry.redeclareTopologyFrom(context.Background(), tokenFor(&staticRedeclareSource{generation: 2}))
 
 	assert.Empty(t, client.declaresOf(key), "an unlatched registry declares nothing")
 	require.NoError(t, registry.DeclareInfrastructure(context.Background()))
 	assert.Equal(t, []string{"1"}, client.declaresOf(key),
 		"the registry did hold topology to replay, so the empty above was the latch")
+}
+
+// uncomparableClientWrapper is the client shape wiki/messaging.md blesses for a
+// custom MessagingClientFactory — a struct EMBEDDING the framework's own client,
+// which promotes both redeclare seams — handed over as a value. Its map field
+// makes that value uncomparable, and an interface-keyed ledger cannot hash it.
+type uncomparableClientWrapper struct {
+	*reconnectingMockClient
+	tags map[string]string
+}
+
+var _ redeclareSource = uncomparableClientWrapper{}
+
+// TestRegistryRedeclaresThroughAnUncomparableClientWrapper pins that no ledger
+// entry is ever keyed by the client value: the wrapper above would panic an
+// interface-keyed map on the seed write and again on every pass, taking down the
+// observer goroutine — and one frame up in the manager, skipping the client
+// rollback, so each rebuilt client leaked its reconnect loop.
+func TestRegistryRedeclaresThroughAnUncomparableClientWrapper(t *testing.T) {
+	client := newReconnectingMockClient()
+	wrapper := uncomparableClientWrapper{reconnectingMockClient: client, tags: map[string]string{"lane": "wrapped"}}
+	registry := newPublisherOnlyRegistry(t, wrapper)
+	defer registry.StopConsumers()
+
+	client.newChannel()
+
+	awaitDeclares(t, client, "exchange:"+testExchangeName, "1", "2")
+}
+
+// TestRegistryRepairsTopologyAfterAStopStartCycle pins that StopConsumers halts
+// repair for the stop and not for the registry's life: StartConsumers re-arms it,
+// so a restarted consumer's re-subscribe still re-declares, the way it did before
+// the pass gained a halt gate.
+func TestRegistryRepairsTopologyAfterAStopStartCycle(t *testing.T) {
+	client := newReconnectingMockClient()
+	handler := &countingTestHandler{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, handler)
+	defer registry.StopConsumers()
+	awaitSubscription(t, client, 0)
+
+	registry.StopConsumers()
+	require.NoError(t, registry.StartConsumers(ctx))
+	restarted := awaitSubscription(t, client, 1)
+
+	// Rotate through locked() alone: the stop ended the observer for good, so the
+	// re-subscribe below is the only driver left to prove.
+	client.locked(func() { client.generation++ })
+	close(restarted)
+
+	deliverAndAwaitAck(t, awaitSubscription(t, client, 2), handler)
+	assert.Equal(t, []string{"1", "2"}, client.declaresOf("queue:"+testQueueName))
+}
+
+// TestObserveChannelReadyTakesTheBroadcastBeforeThePass pins the ordering that
+// keeps a rotation landing mid-pass from being lost: the observer is already
+// holding the current broadcast when it runs the pass, so a channel replaced
+// meanwhile closes a broadcast it is about to select on. Running the pass first
+// instead would rotate against no broadcast at all — the previous one is closed
+// and dropped, the next not yet taken — and the wake would wait for a further
+// rotation that may never come.
+func TestObserveChannelReadyTakesTheBroadcastBeforeThePass(t *testing.T) {
+	client := newReconnectingMockClient()
+	stop := make(chan struct{})
+	secondPass := make(chan struct{})
+	observerDone := make(chan struct{})
+	passes := 0 // touched only by the observer goroutine
+
+	go func() {
+		defer close(observerDone)
+		observeChannelReady(client, stop, func() {
+			passes++
+			switch passes {
+			case 1:
+				client.newChannel() // the rotation lands while this pass runs
+			case 2:
+				close(secondPass)
+			}
+		})
+	}()
+
+	select {
+	case <-secondPass:
+	case <-time.After(5 * time.Second):
+		t.Error("a rotation that landed during the pass woke nobody")
+	}
+	close(stop)
+	<-observerDone
+}
+
+// TestRegistryStartsOneRedeclareObserverAcrossRepeatedDeclares pins the second
+// job of DeclareInfrastructure's already-declared guard: it is what makes
+// startRedeclaring run once. A second trip through it would start a second
+// observer and overwrite cancelRedeclare, leaving the first goroutine with
+// nothing left that can ever stop it.
+func TestRegistryStartsOneRedeclareObserverAcrossRepeatedDeclares(t *testing.T) {
+	client := newReconnectingMockClient()
+	registry := newPublisherOnlyRegistry(t, client)
+	first := registry.redeclareObserverDone
+	require.NotNil(t, first)
+
+	require.NoError(t, registry.DeclareInfrastructure(context.Background()))
+
+	assert.Equal(t, first, registry.redeclareObserverDone, "a second DeclareInfrastructure started a second observer")
+	registry.StopConsumers()
+	awaitObserverExit(t, first)
+}
+
+// gatedRedeclareSource parks a pass inside channelGeneration — after it has taken
+// redeclareMu and released mu, and before the replay that needs mu again — so a
+// test can hold redeclareMu across a concurrent DeclareInfrastructure. The gate
+// is one-shot, so the loop's second reading returns straight away.
+type gatedRedeclareSource struct {
+	generation uint64
+	gate       *testutil.BlockedCreate
+}
+
+func (s *gatedRedeclareSource) channelGeneration() (generation uint64, ready bool) {
+	s.gate.Arrive()
+	return s.generation, true
+}
+
+// TestDeclareInfrastructureTakesRedeclareMuBeforeMu pins the documented lock
+// order. POSITIVE CONTROL: swapping the two Lock calls in DeclareInfrastructure
+// deadlocks this test — the parked pass holds redeclareMu and then needs mu for
+// its replay, while DeclareInfrastructure would be holding mu and waiting on
+// redeclareMu, and both waits below time out. The one bounded wait is the sleep:
+// a goroutine blocking on a mutex emits no signal to observe, and without it the
+// released pass races DeclareInfrastructure to mu and the inverted order can
+// finish before it deadlocks.
+func TestDeclareInfrastructureTakesRedeclareMuBeforeMu(t *testing.T) {
+	client := newReconnectingMockClient()
+	registry := newPublisherOnlyRegistry(t, client)
+
+	gate := testutil.NewBlockedCreate(t)
+	passDone := make(chan struct{})
+	go func() {
+		defer close(passDone)
+		registry.redeclareTopologyFrom(context.Background(), tokenFor(&gatedRedeclareSource{generation: 2, gate: gate}))
+	}()
+	<-gate.Started
+
+	declareDone := make(chan error, 1)
+	go func() { declareDone <- registry.DeclareInfrastructure(context.Background()) }()
+	time.Sleep(50 * time.Millisecond)
+
+	gate.Release()
+
+	select {
+	case <-passDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the parked pass never reached mu: DeclareInfrastructure holds it while waiting for redeclareMu")
+	}
+	select {
+	case err := <-declareDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("DeclareInfrastructure never returned")
+	}
+	registry.StopConsumers()
 }
