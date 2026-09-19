@@ -13,7 +13,9 @@
 > takes any source and DECLARES through the registry's own client — topology is broker-global, and a
 > declare that sat on a publishing channel would hold up the traffic it is restoring — and its
 > once-per-generation guard is keyed per `(source, generation)`, because sources number their
-> channels independently. The `channelGeneration()` gate below is unchanged and deliberate: a client
+> channels independently — through an internal per-source token the ledger keys by pointer, never the
+> client value, since a custom `MessagingClientFactory` may return a shape Go cannot hash. The
+> `channelGeneration()` gate below is unchanged and deliberate: a client
 > carrying neither seam is never a source. `AMQPClient`, the 406 skip, the WARN logging and the
 > first-failure-ends-the-pass rule are untouched.
 
@@ -101,7 +103,11 @@ The framework never deletes or recreates broker state.
   seeded it, so it keeps the trace and tenant values and carries no deadline.
 - `StopConsumers` ends every driver: the observer stops, and the registry refuses any later pass. It
   has to refuse rather than only stop its own observer, because a source that outlives the
-  registry's consumers has no other way to learn the registry is done.
+  registry's consumers has no other way to learn the registry is done. The refusal lasts for the
+  stop, not for the registry's lifetime: `StartConsumers` re-arms it, so the consumer's
+  pre-subscribe pass works across a stop/start as it did before the halt gate existed. The observer
+  is not restarted with it — `DeclareInfrastructure` starts it at most once — so after a stop the
+  re-subscribe is the only driver left.
 - `PRECONDITION_FAILED` (406) is the exception: a surviving entity whose arguments differ from the
   declaration. The triage brief asked for "WARN and the consume proceeds", but amqp091 closes the
   channel on a 406, so the consume on that incarnation cannot proceed, and re-declaring on every later

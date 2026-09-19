@@ -879,7 +879,10 @@ does not cancel on the wire, so the hold is that 30s plus their round-trips.
   implementation, or a wrapper holding an `AMQPClient` in a field — is never a source and never
   re-declares, on either driver. That boundary is deliberate, not a gap.
 - `StopConsumers` ends the passes: the observer stops, and the registry refuses any later pass
-  outright, so a source that outlives the registry's consumers cannot restart one.
+  outright, so a source that outlives the registry's consumers cannot restart one. A later
+  `StartConsumers` re-arms the refusal, so a stop/start cycle leaves the consumer's pre-subscribe
+  pass working; the observer is not restarted, so a registry stopped with no consumers to restart
+  stays unrepaired.
 
 See [ADR-113](adr_113_amqp_topology_redeclare_on_reconnect.md).
 
