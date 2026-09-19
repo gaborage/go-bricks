@@ -45,18 +45,18 @@ func newMinimalMessagingApp(log logger.Logger, manager *messaging.Manager, cfg *
 // failures that make single-tenant consumer bootstrap fail at startup.
 var errBrokerLookupFailed = errors.New("broker lookup failed")
 
-// failingBrokerURLProvider fails broker-URL resolution and counts the attempts,
+// scriptedBrokerURLProvider scripts broker-URL resolution and counts the attempts,
 // so a test can prove consumer bootstrap was reached — or never was. The zero
 // value fails every call with errBrokerLookupFailed; succeedAfter lets it start
 // succeeding, standing in for an external exchange that appears mid-wait.
-type failingBrokerURLProvider struct {
+type scriptedBrokerURLProvider struct {
 	mu           sync.Mutex
 	calls        int
 	succeedAfter int
 	err          error
 }
 
-func (p *failingBrokerURLProvider) BrokerURL(context.Context, string) (string, error) {
+func (p *scriptedBrokerURLProvider) BrokerURL(context.Context, string) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.calls++
@@ -69,7 +69,7 @@ func (p *failingBrokerURLProvider) BrokerURL(context.Context, string) (string, e
 	return "", errBrokerLookupFailed
 }
 
-func (p *failingBrokerURLProvider) callCount() int {
+func (p *scriptedBrokerURLProvider) callCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.calls
@@ -121,7 +121,7 @@ func declarationsWithConsumer() *messaging.Declarations {
 // nothing.
 func TestPrepareRuntimeConsumersFailsStartupOnEnsureError(t *testing.T) {
 	log := logger.New("debug", true)
-	source := &failingBrokerURLProvider{}
+	source := &scriptedBrokerURLProvider{}
 	a := newMinimalMessagingApp(log, newFailingConsumerManager(t, log, source),
 		&config.Config{Multitenant: config.MultitenantConfig{Enabled: false}})
 
@@ -139,7 +139,7 @@ func TestPrepareRuntimeConsumersFailsStartupOnEnsureError(t *testing.T) {
 // declaration set and an unresolvable broker URL — must still boot.
 func TestPrepareRuntimeConsumersWarnsOnlyWithoutConsumers(t *testing.T) {
 	log := logger.New("debug", true)
-	source := &failingBrokerURLProvider{}
+	source := &scriptedBrokerURLProvider{}
 	a := newMinimalMessagingApp(log, newFailingConsumerManager(t, log, source),
 		&config.Config{Multitenant: config.MultitenantConfig{Enabled: false}})
 
@@ -152,7 +152,7 @@ func TestPrepareRuntimeConsumersWarnsOnlyWithoutConsumers(t *testing.T) {
 // cannot be resolved at startup must not abort the boot.
 func TestPrepareRuntimeConsumersSkipsEnsureInMultiTenantMode(t *testing.T) {
 	log := logger.New("debug", true)
-	source := &failingBrokerURLProvider{}
+	source := &scriptedBrokerURLProvider{}
 	a := newMinimalMessagingApp(log, newFailingConsumerManager(t, log, source),
 		&config.Config{Multitenant: config.MultitenantConfig{Enabled: true}})
 
@@ -188,7 +188,7 @@ func TestPrepareRuntimeConsumersUnderSharedTenancy(t *testing.T) {
 
 	t.Run("shared_replays_on_control_plane_key", func(t *testing.T) {
 		log := logger.New("debug", true)
-		source := &failingBrokerURLProvider{}
+		source := &scriptedBrokerURLProvider{}
 		a := newMinimalMessagingApp(log, newFailingConsumerManager(t, log, source), sharedCfg())
 
 		err := a.prepareRuntimeConsumers(context.Background(), messaging.NewDeclarations())
@@ -200,7 +200,7 @@ func TestPrepareRuntimeConsumersUnderSharedTenancy(t *testing.T) {
 
 	t.Run("per_tenant_still_skips", func(t *testing.T) {
 		log := logger.New("debug", true)
-		source := &failingBrokerURLProvider{}
+		source := &scriptedBrokerURLProvider{}
 		a := newMinimalMessagingApp(log, newFailingConsumerManager(t, log, source),
 			&config.Config{
 				Multitenant: config.MultitenantConfig{Enabled: true},
@@ -238,7 +238,7 @@ func TestPrepareRuntimeConsumersNoOpsWithoutManagerOrDeclarations(t *testing.T) 
 	})
 
 	t.Run("nil_declarations", func(t *testing.T) {
-		source := &failingBrokerURLProvider{}
+		source := &scriptedBrokerURLProvider{}
 		a := newMinimalMessagingApp(log, newFailingConsumerManager(t, log, source),
 			&config.Config{Multitenant: config.MultitenantConfig{Enabled: false}})
 		require.NoError(t, a.prepareRuntimeConsumers(context.Background(), nil))
@@ -287,7 +287,7 @@ func newExternalWaitApp(t *testing.T, source messaging.BrokerURLProvider, wait t
 // consumer-declaring service deployed before the service that owns its external
 // exchange starts consuming once the exchange appears, without a restart.
 func TestPrepareRuntimeConsumersWaitsForExternalExchange(t *testing.T) {
-	source := &failingBrokerURLProvider{succeedAfter: 2, err: errExternalExchangeMissing}
+	source := &scriptedBrokerURLProvider{succeedAfter: 2, err: errExternalExchangeMissing}
 	a := newExternalWaitApp(t, source, 600*time.Millisecond)
 
 	require.NoError(t, a.prepareRuntimeConsumers(context.Background(), declarationsWithConsumer()))
@@ -340,7 +340,7 @@ func (*fixedBrokerURLProvider) BrokerURL(context.Context, string) (string, error
 // overshoot the configured budget by a whole backoff ceiling.
 func TestPrepareRuntimeConsumersAbortsAfterExternalWaitElapses(t *testing.T) {
 	const wait = 300 * time.Millisecond
-	source := &failingBrokerURLProvider{err: errExternalExchangeMissing}
+	source := &scriptedBrokerURLProvider{err: errExternalExchangeMissing}
 	a := newExternalWaitApp(t, source, wait)
 
 	start := time.Now()
@@ -351,6 +351,78 @@ func TestPrepareRuntimeConsumersAbortsAfterExternalWaitElapses(t *testing.T) {
 	assert.Greater(t, source.callCount(), 1, "the wait must have re-run the pass at least once")
 	assert.Less(t, elapsed, wait+externalWaitMaxBackoff,
 		"the last sleep must be clamped to the remaining budget, not the backoff ceiling")
+}
+
+// TestPrepareRuntimeConsumersHonorsACancelableContextDuringTheWait pins the
+// loop's ctx arm. It is DEFENSIVE, not a production path: slot.go hands this
+// function context.WithoutCancel over a Background root, so Done() is nil and
+// the arm cannot fire today. The test calls the function directly, which is the
+// only way to reach it — it exists so the loop is already correct if that
+// wrapper ever changes, per context_deadlines.md.
+func TestPrepareRuntimeConsumersHonorsACancelableContextDuringTheWait(t *testing.T) {
+	source := &scriptedBrokerURLProvider{err: errExternalExchangeMissing}
+	a := newExternalWaitApp(t, source, time.Hour)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	require.Error(t, a.prepareRuntimeConsumers(ctx, declarationsWithConsumer()))
+	assert.Less(t, time.Since(start), 30*time.Second, "a canceled context must not wait out the budget")
+}
+
+// TestPrepareRuntimeConsumersWaitsUnderSharedTenancy pins the arm three doc
+// pages now promise: messaging.tenancy: shared makes a multi-tenant deployment
+// run the control-plane startup pass, so the wait applies there too.
+// perTenantMessaging() is multiTenant() && !sharedMessaging(), and only the
+// per-tenant half returns early.
+func TestPrepareRuntimeConsumersWaitsUnderSharedTenancy(t *testing.T) {
+	source := &scriptedBrokerURLProvider{succeedAfter: 2, err: errExternalExchangeMissing}
+	log := logger.New("debug", true)
+	manager := messaging.NewMessagingManager(source, log, messaging.ManagerOptions{},
+		func(string, logger.Logger) messaging.AMQPClient {
+			client := testmocks.NewMockAMQPClient()
+			client.ExpectDeclareQueueAny(nil)
+			client.ExpectDeclareExchangeAny(nil)
+			client.ExpectBindQueueAny(nil)
+			client.On("ConsumeFromQueue", mock.Anything, mock.Anything).Return(nil, nil)
+			client.ExpectClose(nil)
+			return client
+		})
+	t.Cleanup(func() { _ = manager.Close() })
+	a := newMinimalMessagingApp(log, manager, &config.Config{
+		Multitenant: config.MultitenantConfig{Enabled: true},
+		Messaging: config.MessagingConfig{
+			Tenancy: config.TenancyShared,
+			Declare: config.DeclareConfig{ExternalWait: 600 * time.Millisecond},
+		},
+	})
+
+	require.NoError(t, a.prepareRuntimeConsumers(context.Background(), declarationsWithConsumer()))
+	assert.Greater(t, source.callCount(), 2, "the shared control-plane pass must be re-run too")
+}
+
+// TestPrepareRuntimeConsumersPerTenantNeverWaits pins the spec's last sentence.
+// A per-tenant deployment declares lazily inside a request, so there is no
+// startup pass to hold: it must return before the wait is even reached. The
+// assertion is on the attempt count, which would move the moment the wait was
+// pushed down into the manager.
+func TestPrepareRuntimeConsumersPerTenantNeverWaits(t *testing.T) {
+	source := &scriptedBrokerURLProvider{err: errExternalExchangeMissing}
+	log := logger.New("debug", true)
+	manager := messaging.NewMessagingManager(source, log, messaging.ManagerOptions{},
+		func(string, logger.Logger) messaging.AMQPClient { return testmocks.NewMockAMQPClient() })
+	t.Cleanup(func() { _ = manager.Close() })
+	a := newMinimalMessagingApp(log, manager, &config.Config{
+		Multitenant: config.MultitenantConfig{Enabled: true},
+		Messaging: config.MessagingConfig{
+			Tenancy: config.TenancyPerTenant,
+			Declare: config.DeclareConfig{ExternalWait: time.Hour},
+		},
+	})
+
+	require.NoError(t, a.prepareRuntimeConsumers(context.Background(), declarationsWithConsumer()))
+	assert.Zero(t, source.callCount(), "a per-tenant deployment must not run a startup pass at all")
 }
 
 // TestPrepareRuntimeConsumersNeverWaits collects the arms where the wait must not
@@ -398,7 +470,7 @@ func TestPrepareRuntimeConsumersNeverWaits(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			source := &failingBrokerURLProvider{err: tt.err}
+			source := &scriptedBrokerURLProvider{err: tt.err}
 			a := newExternalWaitApp(t, source, tt.wait)
 
 			err := a.prepareRuntimeConsumers(context.Background(), tt.decls)
