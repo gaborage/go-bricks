@@ -601,9 +601,11 @@ target, so a guard that admits them must validate that URL instead.
 
 What a decorator can do:
 
-- Validate or overlay a tenant's coordinates, always on a copy. Running Flyway
-  as a dedicated migrator identity is tracked in
-  [#1694](https://github.com/gaborage/go-bricks/issues/1694).
+- Validate or overlay a tenant's coordinates, always on a copy. A decorator is
+  not needed to run Flyway as a dedicated migrator role: use
+  [`MigrateAllOptions.MigratorIdentity`](#migrator-identity) in process, or
+  `GOBRICKS_MIGRATE_MIGRATOR_USER` / `GOBRICKS_MIGRATE_MIGRATOR_PASSWORD` on
+  `go-bricks-migrate` ([#1694](https://github.com/gaborage/go-bricks/issues/1694)).
 - Refuse a tenant. Flyway never starts for it, and the error lands in that
   tenant's `TenantResult.Err` wrapped with `%w`, so
   `errors.Is(r.Err, ErrTenantRefused)` holds on `res.Failed()` entries.
