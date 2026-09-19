@@ -105,6 +105,15 @@ type fakeChannel struct {
 	// or neither). Read through lastPublishCtxDeadline, never directly.
 	publishCtxDeadline    time.Time
 	publishCtxHasDeadline bool
+	// holdExchangeDeclare parks every ExchangeDeclare inside the fake:
+	// exDeclareEntered is closed by the first call that parks and exDeclareRelease
+	// lets it go, so a test can hold a redeclare pass open across a concurrent
+	// publish. Both channels are the test's to make; exDeclareOnce keeps the
+	// close single when more than one declaration parks.
+	holdExchangeDeclare bool
+	exDeclareEntered    chan struct{}
+	exDeclareRelease    chan struct{}
+	exDeclareOnce       sync.Once
 	// Mutex to protect concurrent access to fields
 	mu sync.RWMutex
 	// nextDeliveryTag is incremented by GetNextPublishSeqNo to mimic the
@@ -200,6 +209,10 @@ func (f *fakeChannel) QueueDeclare(name string, _, _, _, _ bool, args amqp.Table
 func (f *fakeChannel) ExchangeDeclare(name, _ string, _, _, _, _ bool, args amqp.Table) error {
 	f.declaredExchange = name
 	f.gotExchangeArgs = args
+	if f.holdExchangeDeclare {
+		f.exDeclareOnce.Do(func() { close(f.exDeclareEntered) })
+		<-f.exDeclareRelease
+	}
 	return f.exDeclareErr
 }
 
@@ -1174,6 +1187,38 @@ func TestAMQPClientMarkReadyStaysSilentAfterClose(t *testing.T) {
 	after, open := c.channelReadyNotify()
 	assert.False(t, open)
 	assert.Nil(t, after)
+}
+
+// TestAMQPClientPublishesWhileARedeclarePassIsInFlight pins that a topology
+// redeclare never stands in a publish's way. The pass repairs topology over the
+// registry's own connection, and since #1761 a background observer runs it on
+// every new channel — the same connection the service publishes on — so a
+// declare that held the publish path would stall exactly the traffic the repair
+// exists to restore. The fake parks inside ExchangeDeclare; the publish must
+// complete with the declare still parked.
+func TestAMQPClientPublishesWhileARedeclarePassIsInFlight(t *testing.T) {
+	ch := &fakeChannel{
+		holdExchangeDeclare: true,
+		exDeclareEntered:    make(chan struct{}),
+		exDeclareRelease:    make(chan struct{}),
+	}
+	c := newClientWithFakeChannel(t, ch)
+	c.connectionTimeout = 5 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	declared := make(chan error, 1)
+	go func() {
+		declared <- c.DeclareExchange(ctx, &ExchangeDeclaration{Name: testExchangeName, Type: ExchangeTypeTopic})
+	}()
+	<-ch.exDeclareEntered
+
+	ackNextSuccessfulPublish(ctx, t, c, ch)
+	require.NoError(t, c.publishBytes(ctx, publishOptions{Exchange: testExchangeName, RoutingKey: testKeyValue}, []byte(testMessageBody)),
+		"the publish must not wait on the redeclare pass still parked in ExchangeDeclare")
+
+	close(ch.exDeclareRelease)
+	require.NoError(t, <-declared)
 }
 
 func TestHandleReconnectExitsOnDone(t *testing.T) {
