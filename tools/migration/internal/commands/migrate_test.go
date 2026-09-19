@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -405,14 +406,13 @@ func runMigrateJSON(t *testing.T, args ...string) (stdout string, err error) {
 	return out.String(), err
 }
 
-// An empty fleet is now visible in the record. The exit code still follows the
-// error, so this run remains a success here; the three-way mapping lands with
-// the classifier.
-func TestMigrateCommandEmptyTenantListReportsNothingAttempted(t *testing.T) {
+func TestMigrateCommandEmptyTenantListIsNothingAttempted(t *testing.T) {
 	listURL, smURL := fakeFleet(t)
 
 	stdout, err := runMigrateJSON(t, fleetArgs(t, listURL, smURL, stubFlyway(t))...)
-	require.NoError(t, err)
+	require.Error(t, err)
+	require.ErrorIs(t, err, migration.ErrNothingAttempted)
+	assert.Equal(t, ExitNothingAttempted, ExitCode(err))
 
 	rec := requireSummary(t, stdout)
 	assert.Equal(t, verdictNothingAttempted, rec.Verdict)
@@ -432,6 +432,8 @@ func TestMigrateCommandListTenantsFailureStillEmitsSummary(t *testing.T) {
 
 	stdout, err := runMigrateJSON(t, fleetArgs(t, listSrv.URL, smSrv.URL, stubFlyway(t))...)
 	require.Error(t, err)
+	require.ErrorIs(t, err, migration.ErrNothingAttempted)
+	assert.Equal(t, ExitNothingAttempted, ExitCode(err))
 	assert.Equal(t, verdictNothingAttempted, requireSummary(t, stdout).Verdict)
 }
 
@@ -442,20 +444,108 @@ func TestMigrateCommandUnreadableTenantStoreIsNothingAttempted(t *testing.T) {
 		"--source-config", filepath.Join(t.TempDir(), "absent.yaml"),
 	)
 	require.Error(t, err)
+	require.ErrorIs(t, err, migration.ErrNothingAttempted)
+	assert.Equal(t, ExitNothingAttempted, ExitCode(err))
 
 	rec := requireSummary(t, stdout)
 	assert.Equal(t, verdictNothingAttempted, rec.Verdict)
 	assert.Equal(t, "migrate", rec.Action)
 }
 
-// A flag that does not resolve dispatched nothing, and the record says so.
-func TestMigrateCommandInvalidCredentialSourceStillEmitsSummary(t *testing.T) {
+// A misuse dispatched no tenant, so it exits 2 like any other pre-dispatch
+// failure — exit 1 stays reserved for a split fleet, which a pipeline must be
+// able to trust (ADR-115).
+func TestMigrateCommandInvalidCredentialSourceIsNothingAttempted(t *testing.T) {
 	stdout, err := runMigrateJSON(t,
 		"--tenant", "t1",
 		"--credentials-from", "not-a-credential-source",
 	)
 	require.Error(t, err)
+	require.ErrorIs(t, err, migration.ErrNothingAttempted)
+	assert.Equal(t, ExitNothingAttempted, ExitCode(err))
 	assert.Equal(t, verdictNothingAttempted, requireSummary(t, stdout).Verdict)
+}
+
+// Misuse is marked wherever it is detected, so exit 1 keeps meaning a split
+// fleet and nothing else. These go through the real root with every subcommand
+// attached, because several of the paths (an unknown command, a non-runnable
+// parent, list/quiesce flag resolution) never reach an action at all.
+func TestRootMarksEveryMisuseAsNothingAttempted(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "unknown_command_at_the_root", args: []string{"not-a-command"}},
+		{name: "unknown_flag", args: []string{"migrate", "--not-a-flag"}},
+		{name: "stray_positional_on_an_action", args: []string{"migrate", "stray"}},
+		{name: "stray_positional_on_a_parent", args: []string{"quiesce", "stray"}},
+		{name: "stray_positional_on_version", args: []string{"version", "stray"}},
+		{name: "list_without_a_source_selector", args: []string{"list"}},
+		{name: "list_with_two_source_selectors", args: []string{"list", "--source-url", "http://x", "--tenant", "y"}},
+		{name: "quiesce_without_a_source_selector", args: []string{"quiesce", "status"}},
+		// A flag VALUE cobra cannot parse, as distinct from an unknown flag.
+		{name: "unparseable_flag_value", args: []string{"migrate", "--parallel", "notanumber", "--tenant", "t1"}},
+		// The same config misuse must cost the same on every subcommand: a
+		// plaintext source URL without the opt-in, and a credential provider
+		// that cannot be built.
+		{name: "list_rejects_a_plaintext_source_url", args: []string{"list", "--source-url", "http://x"}},
+		{name: "migrate_rejects_a_plaintext_source_url", args: []string{"migrate", "--source-url", "http://x"}},
+		{name: "list_with_an_absent_tenant_store", args: []string{"list", "--source-config", "/absent.yaml"}},
+		// These two die in resolveFlags, before any provider is built.
+		{
+			name: "migrate_with_config_file_credentials_and_no_store",
+			args: []string{"migrate", "--tenant", "t1", "--credentials-from", "config-file"},
+		},
+		{
+			name: "quiesce_with_config_file_credentials_and_no_store",
+			args: []string{"quiesce", "status", "--tenant", "t1", "--credentials-from", "config-file"},
+		},
+		// A prefix without its trailing slash passes flag resolution and fails
+		// inside buildConfigProvider, which is the arm these reach.
+		{
+			name: "migrate_cannot_build_the_credential_provider",
+			args: []string{"migrate", "--tenant", "t1", "--secrets-prefix", "no-slash"},
+		},
+		{
+			name: "quiesce_cannot_build_the_credential_provider",
+			args: []string{"quiesce", "status", "--tenant", "t1", "--secrets-prefix", "no-slash"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := newTestRoot()
+			root.SetArgs(tc.args)
+
+			err := root.Execute()
+			require.Error(t, err)
+			require.ErrorIs(t, err, migration.ErrNothingAttempted)
+			assert.Equal(t, ExitNothingAttempted, ExitCode(err))
+		})
+	}
+}
+
+// A bare invocation is not a misuse: it answers with help and exits 0. Neither
+// is a subcommand that does its job without dispatching anything.
+func TestRootExitsCleanWhenNothingIsMisused(t *testing.T) {
+	for _, args := range [][]string{{}, {"quiesce"}, {"version"}} {
+		root := newTestRoot()
+		root.SetArgs(args)
+		err := root.Execute()
+		require.NoError(t, err)
+		assert.Equal(t, ExitClean, ExitCode(err))
+	}
+}
+
+// newTestRoot builds the command tree main wires up, with output captured.
+func newTestRoot() *cobra.Command {
+	root := NewRootCommand()
+	root.AddCommand(
+		NewMigrateCommand(), NewValidateCommand(), NewInfoCommand(),
+		NewListCommand(), NewQuiesceCommand(), NewVersionCommand("test"),
+	)
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	return root
 }
 
 func TestMigrateCommandFailFastIsFleetSplitWithNeverDispatched(t *testing.T) {
@@ -463,6 +553,8 @@ func TestMigrateCommandFailFastIsFleetSplitWithNeverDispatched(t *testing.T) {
 
 	stdout, err := runMigrateJSON(t, fleetArgs(t, listURL, smURL, stubFlywayFailing(t))...)
 	require.Error(t, err)
+	require.ErrorIs(t, err, migration.ErrFleetSplit)
+	assert.Equal(t, ExitFleetSplit, ExitCode(err))
 
 	// t1 was dispatched and failed; fail-fast left t2 and t3 unreached.
 	rec := requireSummary(t, stdout)
@@ -478,6 +570,7 @@ func TestMigrateCommandCleanRunIsExitZero(t *testing.T) {
 
 	stdout, err := runMigrateJSON(t, fleetArgs(t, listURL, smURL, stubFlyway(t))...)
 	require.NoError(t, err)
+	assert.Equal(t, ExitClean, ExitCode(err))
 
 	rec := requireSummary(t, stdout)
 	assert.Equal(t, verdictClean, rec.Verdict)

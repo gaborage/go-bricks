@@ -2,8 +2,11 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"runtime/debug"
+
+	"github.com/spf13/cobra"
 
 	"github.com/gaborage/go-bricks/tools/migration/internal/commands"
 )
@@ -26,6 +29,17 @@ func resolveVersion(ldflags string, read func() (*debug.BuildInfo, bool)) string
 	return "dev"
 }
 
+// run executes the command tree and maps its error onto the process exit code
+// (ADR-115). Split from main so the mapping is testable without spawning a
+// process.
+func run(root *cobra.Command, stderr io.Writer) int {
+	if err := root.Execute(); err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return commands.ExitCode(err)
+	}
+	return commands.ExitClean
+}
+
 func main() {
 	version = resolveVersion(version, debug.ReadBuildInfo)
 	root := commands.NewRootCommand()
@@ -39,8 +53,5 @@ func main() {
 		commands.NewVersionCommand(version),
 	)
 
-	if err := root.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
+	os.Exit(run(root, os.Stderr))
 }

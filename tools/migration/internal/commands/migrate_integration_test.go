@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/migration"
 	"github.com/gaborage/go-bricks/testing/containers"
 )
 
@@ -227,7 +228,9 @@ func TestCLIMigrateEndToEndMultiTenantWithFailure(t *testing.T) {
 
 	stream, err := env.runMigrate(t, "--continue-on-error")
 	require.Error(t, err, "one tenant fails so the process must exit non-zero")
-	assert.Contains(t, err.Error(), "one or more tenants failed")
+	// Every tenant was dispatched and one failed: the fleet is split, exit 1.
+	require.ErrorIs(t, err, migration.ErrFleetSplit)
+	require.Equal(t, ExitFleetSplit, ExitCode(err))
 
 	events := parseTenantEvents(t, stream)
 	require.Contains(t, events, "tenant_a")
