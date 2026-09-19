@@ -845,7 +845,10 @@ ready on, and a consumer additionally asks before every re-subscribe attempt. Wh
 first, the pass runs at most once per channel, because the guard is keyed per `(source, generation)`
 — sources number their channels independently, so a per-registry counter would swallow a rotation
 only one of them saw. The announcement is what covers a **publisher-only service** (declarations, no
-consumers): before it, a registry with nothing to re-subscribe never re-declared at all.
+consumers): before it, a registry with nothing to re-subscribe never re-declared at all. The
+consumer's ask is not a redundant second driver — it runs under the same pass mutex, so a completed
+pass on the current generation happens-before the `ConsumeFromQueue` that follows it, an ordering the
+announcement cannot give because it is eventual.
 The pass always DECLARES through the registry's own client: topology is broker-global, so repairing
 it over the registry's connection is correct, and a declare that sat on the publishing path would
 hold up the traffic it is restoring. The pass runs when a channel is replaced, never inside a
@@ -853,7 +856,10 @@ publish, so no publish waits on a declare. Declares are idempotent for matching 
 healthy reconnect costs one pass.
 `DeclareInfrastructure` is both the startup declare and the latch: an announcement that lands before
 it declares nothing and records nothing, and one that lands during it queues behind the whole call,
-readiness wait included — a wait bounded by `reconnect.readytimeout`.
+readiness wait included. That wait is the registry's own 30s `readyTimeoutDuration`, not
+`reconnect.readytimeout` — that key bounds the publish pre-flight and never reaches the registry; the
+two share the 100ms poll cadence, not the timeout. The declares after it are amqp091 RPCs the context
+does not cancel on the wire, so the hold is that 30s plus their round-trips.
 
 - A failed redeclare logs one WARN naming the declaration, with `amqp_reply_code` and
   `amqp_reply_text` when the broker refused it, and ends that pass; the next channel retries. A pass

@@ -487,7 +487,10 @@ func (m *Manager) StopCleanup() {
 // handlers via their context, but they are not synchronously joined here. Idempotent:
 // Registry.StopConsumers guards on its active flag, so a subsequent Close (which also stops
 // consumers) is safe. Unlike Close it does not mark the manager closed and leaves the replay
-// state intact, so a Stop is recoverable while a Close is terminal.
+// state intact, so a Stop is recoverable while a Close is terminal. One thing a Stop does not
+// restore: it halts each registry's topology repair permanently, and a later EnsureConsumers
+// reuses the same Registry through the fast path, so the ADR-113 redeclare pass stays dead for
+// that key until the process restarts.
 func (m *Manager) StopConsumers() {
 	m.consMu.Lock()
 	defer m.consMu.Unlock()

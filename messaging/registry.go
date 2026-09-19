@@ -92,28 +92,39 @@ type Registry struct {
 	// after a delivery-channel close. Defaults to defaultConsumerResubscribeDelay;
 	// tests lower it for fast iteration.
 	resubscribeDelay time.Duration
-	// declaredGenerations is the channel generation the topology was last declared
-	// on, PER redeclare source. It is keyed per source and not once for the
+	// handledGenerations is an event de-dup ledger, not a record of where the
+	// topology lives: the topology is never declared on a source's channel —
+	// every pass declares through r.client — so what this map answers is which
+	// rotation of which source the registry has already reacted to, at most one
+	// repair per observed rotation. It is keyed per source and not once for the
 	// registry because sources number their channels independently — each starts
 	// at generation 1 — so a rotation only one of them saw would otherwise be
-	// swallowed by a number another source already used. Keys are always
-	// pointers — channelGeneration is unexported, so only this package's client
-	// types can be a source — and never an uncomparable value.
-	// Guarded by redeclareMu.
-	declaredGenerations map[channelGenerationer]uint64
+	// swallowed by a number another source already used. While the registry
+	// observes only its own client the source and the declare target are one
+	// client and the two readings coincide; they part as soon as a second source
+	// drives the pass. A source must be HASHABLE — in practice a pointer, since a
+	// value type carrying a map, slice or func field would panic this map's
+	// write. Guarded by redeclareMu.
+	handledGenerations map[channelGenerationer]uint64
 	// redeclareMu serializes redeclare passes, so two sources never declare the
-	// same generation twice and neither declaredGenerations nor redeclareSkip is
+	// same generation twice and neither handledGenerations nor redeclareSkip is
 	// written concurrently. Lock order is redeclareMu before mu, including in
-	// DeclareInfrastructure, which seeds declaredGenerations.
+	// DeclareInfrastructure, which seeds handledGenerations.
 	redeclareMu sync.Mutex
 	// redeclareSkip holds declarations refused with PRECONDITION_FAILED. Guarded by redeclareMu.
 	redeclareSkip map[string]struct{}
-	// redeclareStop is closed once, by StopConsumers, and ends every redeclare
-	// driver this registry has: the observer it runs on its own client parks on
-	// it. Created by NewRegistry; nil on a zero-value Registry, which the two
-	// helpers below tolerate the way the manager's zero-value guards do.
-	redeclareStop     chan struct{}
-	redeclareStopOnce sync.Once
+	// redeclareCtx is this registry's topology-repair lifetime: opened by
+	// startRedeclaring with DeclareInfrastructure's values but neither its
+	// deadline nor its cancellation, and canceled by stopRedeclaring. It ends
+	// every driver — the observer parks on Done, a pass already inside
+	// replayTopology aborts on it, and redeclareHalted refuses a later one. It is
+	// opened for every registry that declares, announcing client or not, because
+	// a source the registry does not own has no other way to learn the registry
+	// is done. Nil before DeclareInfrastructure declares, which the two helpers
+	// below tolerate the way the manager's zero-value guards do. Written under
+	// redeclareMu AND mu, so either lock alone is enough to read it.
+	redeclareCtx    context.Context
+	cancelRedeclare context.CancelFunc
 	// redeclareObserverDone is closed when the observer this registry runs on its
 	// own client returns, as the client's reconnectDone is, so a test can confirm
 	// the exit instead of waiting on a leak. Nil until DeclareInfrastructure
@@ -121,12 +132,14 @@ type Registry struct {
 	redeclareObserverDone chan struct{}
 }
 
-// stopRedeclaring ends every redeclare driver, idempotently.
+// stopRedeclaring ends every redeclare driver, idempotently: the observer wakes
+// and returns, a pass in flight aborts on its next declare, and every later pass
+// is refused. context.CancelFunc is a no-op after the first call, so the
+// nil-guard is the whole of what idempotence needs.
 func (r *Registry) stopRedeclaring() {
-	if r.redeclareStop == nil {
-		return
+	if r.cancelRedeclare != nil {
+		r.cancelRedeclare()
 	}
-	r.redeclareStopOnce.Do(func() { close(r.redeclareStop) })
 }
 
 // setTenantStamps records whether this registry's consumers read a tenant stamp.
@@ -209,19 +222,18 @@ type ConsumerDeclaration struct {
 // NewRegistry creates a new messaging registry
 func NewRegistry(client AMQPClient, log logger.Logger) *Registry {
 	return &Registry{
-		client:              client,
-		logger:              log,
-		exchanges:           make(map[string]*ExchangeDeclaration),
-		queues:              make(map[string]*QueueDeclaration),
-		bindings:            make([]*BindingDeclaration, 0),
-		publishers:          make([]*PublisherDeclaration, 0),
-		consumerIndex:       make(map[consumerKey]*ConsumerDeclaration),
-		consumerOrder:       make([]consumerKey, 0),
-		consumerStates:      make(map[consumerKey]*consumerState),
-		resubscribeDelay:    defaultConsumerResubscribeDelay,
-		redeclareSkip:       make(map[string]struct{}),
-		redeclareStop:       make(chan struct{}),
-		declaredGenerations: make(map[channelGenerationer]uint64),
+		client:             client,
+		logger:             log,
+		exchanges:          make(map[string]*ExchangeDeclaration),
+		queues:             make(map[string]*QueueDeclaration),
+		bindings:           make([]*BindingDeclaration, 0),
+		publishers:         make([]*PublisherDeclaration, 0),
+		consumerIndex:      make(map[consumerKey]*ConsumerDeclaration),
+		consumerOrder:      make([]consumerKey, 0),
+		consumerStates:     make(map[consumerKey]*consumerState),
+		resubscribeDelay:   defaultConsumerResubscribeDelay,
+		redeclareSkip:      make(map[string]struct{}),
+		handledGenerations: make(map[channelGenerationer]uint64),
 	}
 }
 
@@ -329,12 +341,18 @@ func (r *Registry) RegisterConsumer(declaration *ConsumerDeclaration) {
 
 // DeclareInfrastructure declares all registered messaging infrastructure
 func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
-	// The first declare IS a topology pass: it seeds declaredGenerations and must
+	// The first declare IS a topology pass: it seeds handledGenerations and must
 	// not interleave with one a redeclare source drives. redeclareMu before mu is
 	// the documented order — topologySteps reads the declarations through the
 	// accessors, which take mu. A source that wakes during startup therefore
-	// queues behind this whole body, readiness wait included, and that wait is
-	// bounded by reconnect.readytimeout.
+	// queues behind this whole body, readiness wait included. That wait is
+	// bounded by readyTimeoutDuration (30s, constants.go), NOT by
+	// reconnect.readytimeout, which bounds the publish pre-flight and never
+	// reaches the registry — the two share the 100ms cadence, not the timeout.
+	// "Bounded" stops there: the declares that follow are amqp091 RPCs, which are
+	// not ctx-cancelable on the wire, so the true hold is 30s plus those
+	// round-trips. infraSetupTimeout (45s) is the manager-side soft cap over the
+	// whole call.
 	r.redeclareMu.Lock()
 	defer r.redeclareMu.Unlock()
 	r.mu.Lock()
@@ -367,7 +385,7 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 
 	if source, ok := r.client.(channelGenerationer); ok {
 		generation, _ := source.channelGeneration()
-		r.declaredGenerations[source] = generation
+		r.handledGenerations[source] = generation
 	}
 
 	r.logger.Info().
@@ -410,7 +428,7 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 	}
 
 	r.declared = true
-	r.startRedeclareObserver(ctx)
+	r.startRedeclaring(ctx)
 	r.logger.Info().Msg("All messaging infrastructure declared successfully")
 
 	return nil
@@ -493,24 +511,23 @@ func (r *Registry) StopConsumers() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// The redeclare drivers are not consumers: a publisher-only registry has
-	// them without ever activating consumers, so they have to stop ahead of the
-	// guard below or they outlive every registry that has no consumer to stop.
+	if r.consumersActive {
+		r.logger.Info().Msg("Stopping all consumers")
+
+		if r.cancelConsumers != nil {
+			r.cancelConsumers()
+			r.cancelConsumers = nil
+		}
+
+		r.consumersActive = false
+		r.logger.Info().Msg("All consumers stopped")
+	}
+
+	// Topology repair is not a consumer: a publisher-only registry runs it with
+	// no consumer to stop, so it halts unconditionally rather than behind the
+	// guard above — and AFTER the consumers, or a re-subscribe could still attach
+	// on repair that is already dead.
 	r.stopRedeclaring()
-
-	if !r.consumersActive {
-		return
-	}
-
-	r.logger.Info().Msg("Stopping all consumers")
-
-	if r.cancelConsumers != nil {
-		r.cancelConsumers()
-		r.cancelConsumers = nil
-	}
-
-	r.consumersActive = false
-	r.logger.Info().Msg("All consumers stopped")
 }
 
 // consumerState is one consumer session's runtime subscription state. The
@@ -974,8 +991,6 @@ type channelGenerationer interface {
 	channelGeneration() (generation uint64, ready bool)
 }
 
-var _ channelGenerationer = (*AMQPClientImpl)(nil)
-
 // channelReadyNotifier is the optional client capability that announces a new
 // channel. It is what turns a client into a redeclare DRIVER: without it only a
 // consumer re-subscribe runs a pass, so a registry that declares but consumes
@@ -997,24 +1012,29 @@ type redeclareSource interface {
 
 var _ redeclareSource = (*AMQPClientImpl)(nil)
 
-// startRedeclareObserver starts the one goroutine that redeclares on every new
-// channel generation of the registry's OWN client, for as long as the registry
-// lives, consumers or not. Called from DeclareInfrastructure with the pass locks
-// held, and only there, so a registry never runs two.
-func (r *Registry) startRedeclareObserver(ctx context.Context) {
+// startRedeclaring opens the registry's topology-repair lifetime and, for a
+// client that announces its channels, starts the one goroutine that redeclares
+// on every new channel generation of that client — for as long as the registry
+// lives, consumers or not. The context is opened even when the client does not
+// announce, because it is also the halt signal: a source the registry does not
+// own is refused through that signal alone. Called from DeclareInfrastructure
+// with the pass locks held, and only there, so a registry never runs two.
+func (r *Registry) startRedeclaring(ctx context.Context) {
+	// ctx is a setup budget that expires; repair lives as long as the registry,
+	// so it keeps the values (trace, tenant) and drops the deadline.
+	redeclareCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	r.redeclareCtx, r.cancelRedeclare = redeclareCtx, cancel
+
 	source, ok := r.client.(redeclareSource)
 	if !ok {
 		return
 	}
-	// ctx is a setup budget that expires; this goroutine lives as long as the
-	// registry, so it keeps the values (trace, tenant) and drops the deadline.
-	observerCtx := context.WithoutCancel(ctx)
 	done := make(chan struct{})
 	r.redeclareObserverDone = done
 	go func() {
 		defer close(done)
-		observeChannelReady(source, r.redeclareStop, func(s redeclareSource) {
-			r.redeclareTopologyFrom(observerCtx, s)
+		observeChannelReady(source, redeclareCtx.Done(), func() {
+			r.redeclareTopologyFrom(redeclareCtx, source)
 		})
 	}()
 }
@@ -1025,14 +1045,14 @@ func (r *Registry) startRedeclareObserver(ctx context.Context) {
 // instead of being lost. It returns when stop fires or source closes, whichever
 // comes first: a failed StartConsumers closes the client and drops the registry
 // without ever calling StopConsumers, so the client's own end has to be an exit
-// too. A nil stop leaves the client's end as the only one.
-func observeChannelReady(source redeclareSource, stop <-chan struct{}, redeclare func(redeclareSource)) {
+// too.
+func observeChannelReady(source channelReadyNotifier, stop <-chan struct{}, redeclare func()) {
 	for {
 		ready, open := source.channelReadyNotify()
 		if !open {
 			return
 		}
-		redeclare(source)
+		redeclare()
 		select {
 		case <-ready:
 		case <-stop:
@@ -1115,39 +1135,21 @@ func (r *Registry) redeclareTopologyFrom(ctx context.Context, source channelGene
 
 	for !r.redeclareHalted() && ctx.Err() == nil {
 		generation, ready := source.channelGeneration()
-		if !ready || generation == r.declaredGenerations[source] {
+		if !ready || generation == r.handledGenerations[source] {
 			return
 		}
-		r.declaredGenerations[source] = generation
+		r.handledGenerations[source] = generation
 		r.replayTopology(ctx, generation)
 	}
 }
 
-// forgetRedeclareSource drops the generation recorded for a source whose
-// channels can no longer rotate. A registry outlives its sources, so without
-// this the map keeps one entry — and one dead client pointer — per retired
-// source, for the process lifetime. A source forgotten and then seen again is
-// unseen: its next sighting declares.
-func (r *Registry) forgetRedeclareSource(source channelGenerationer) {
-	r.redeclareMu.Lock()
-	defer r.redeclareMu.Unlock()
-	delete(r.declaredGenerations, source)
-}
-
 // redeclareHalted reports whether StopConsumers has ended this registry's
-// redeclare drivers. A source that outlives the registry's consumers has no
-// other way to learn the registry is done, so the pass refuses rather than
-// relying on every driver having stopped.
+// topology repair. A source that outlives the registry's consumers has no other
+// way to learn the registry is done, so the pass refuses rather than relying on
+// every driver having stopped. A registry that never declared has no repair to
+// halt, and the latch above already refuses its passes.
 func (r *Registry) redeclareHalted() bool {
-	if r.redeclareStop == nil {
-		return false
-	}
-	select {
-	case <-r.redeclareStop:
-		return true
-	default:
-		return false
-	}
+	return r.redeclareCtx != nil && r.redeclareCtx.Err() != nil
 }
 
 // replayTopology runs one pass of the recorded declarations on generation.

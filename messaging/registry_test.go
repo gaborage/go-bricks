@@ -25,6 +25,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/gaborage/go-bricks/internal/testutil"
 	gobrickslogger "github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 	"github.com/gaborage/go-bricks/multitenant"
@@ -2967,12 +2968,11 @@ type reconnectingMockClient struct {
 	// the consumer driver on its own.
 	chanReady    chan struct{}
 	clientClosed bool
-	// closedNotify is closed by the first channelReadyNotify that answers
-	// (nil, false) — the call an observer makes on its way out, and its only
-	// exit. Created once at construction and never replaced, so a test reads the
-	// field directly; closedNotifyDone keeps the close single, under callMu.
-	closedNotify     chan struct{}
-	closedNotifyDone bool
+	// parkOn is the declares key whose declare parks inside the fake, so a test
+	// can hold a redeclare pass open across a StopConsumers; nil parkGate leaves
+	// every declare unparked.
+	parkOn   string
+	parkGate *testutil.BlockedCreate
 }
 
 var (
@@ -2987,7 +2987,6 @@ func newReconnectingMockClient() *reconnectingMockClient {
 		queues:               map[string]bool{},
 		declareErrs:          map[string][]error{},
 		declares:             map[string][]string{},
-		closedNotify:         make(chan struct{}),
 	}
 }
 
@@ -3007,10 +3006,6 @@ func (m *reconnectingMockClient) channelReadyNotify() (ready <-chan struct{}, op
 	m.callMu.Lock()
 	defer m.callMu.Unlock()
 	if m.clientClosed {
-		if !m.closedNotifyDone {
-			m.closedNotifyDone = true
-			close(m.closedNotify)
-		}
 		return nil, false
 	}
 	if m.chanReady == nil {
@@ -3053,7 +3048,25 @@ func (m *reconnectingMockClient) wakeObservers() {
 	}
 }
 
-func (m *reconnectingMockClient) declare(key string, onSuccess func()) error {
+// parkIfArmed blocks a declare of key until the test releases it. The gate is
+// read under callMu but waited on outside it, so a parked declare holds no lock.
+func (m *reconnectingMockClient) parkIfArmed(key string) {
+	m.callMu.Lock()
+	gate, armed := m.parkGate, m.parkOn == key
+	m.callMu.Unlock()
+	if gate != nil && armed {
+		gate.Arrive()
+	}
+}
+
+func (m *reconnectingMockClient) declare(ctx context.Context, key string, onSuccess func()) error {
+	m.parkIfArmed(key)
+	// The real client refuses a declare on a canceled context before it touches
+	// the channel (AMQPClientImpl.DeclareExchange), so a halted pass stops here
+	// instead of finishing on the broker.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.callMu.Lock()
 	defer m.callMu.Unlock()
 	if m.notReady {
@@ -3079,16 +3092,16 @@ func (m *reconnectingMockClient) declare(key string, onSuccess func()) error {
 	return nil
 }
 
-func (m *reconnectingMockClient) DeclareExchange(_ context.Context, exchange *ExchangeDeclaration) error {
-	return m.declare("exchange:"+exchange.Name, nil)
+func (m *reconnectingMockClient) DeclareExchange(ctx context.Context, exchange *ExchangeDeclaration) error {
+	return m.declare(ctx, "exchange:"+exchange.Name, nil)
 }
 
-func (m *reconnectingMockClient) DeclareQueue(_ context.Context, queue *QueueDeclaration) error {
-	return m.declare("queue:"+queue.Name, func() { m.queues[queue.Name] = true })
+func (m *reconnectingMockClient) DeclareQueue(ctx context.Context, queue *QueueDeclaration) error {
+	return m.declare(ctx, "queue:"+queue.Name, func() { m.queues[queue.Name] = true })
 }
 
-func (m *reconnectingMockClient) BindQueue(_ context.Context, binding *BindingDeclaration) error {
-	return m.declare(fakeBindingKey(binding), nil)
+func (m *reconnectingMockClient) BindQueue(ctx context.Context, binding *BindingDeclaration) error {
+	return m.declare(ctx, fakeBindingKey(binding), nil)
 }
 
 // fakeBindingKey is the fake broker's declares key of a binding: every field of
@@ -3620,6 +3633,31 @@ func TestRegistryRedeclareObserverStopsOnStopConsumers(t *testing.T) {
 	registry.StopConsumers()
 
 	awaitObserverExit(t, registry)
+}
+
+// TestRegistryStopsARedeclarePassAlreadyInFlight pins that halting the registry
+// reaches a pass already inside replayTopology, not only the next one: the
+// observer runs on a context StopConsumers cancels, so the declarations after
+// the one it was parked in are never issued onto a connection shutdown is about
+// to close.
+func TestRegistryStopsARedeclarePassAlreadyInFlight(t *testing.T) {
+	client := newReconnectingMockClient()
+	registry := NewRegistry(client, &stubLogger{})
+	registry.RegisterExchange(&ExchangeDeclaration{Name: testExchangeName, Type: ExchangeTypeTopic, Durable: true})
+	registry.RegisterQueue(&QueueDeclaration{Name: testQueueName})
+	require.NoError(t, registry.DeclareInfrastructure(context.Background()))
+
+	gate := testutil.NewBlockedCreate(t)
+	client.locked(func() { client.parkOn, client.parkGate = "exchange:"+testExchangeName, gate })
+	client.newChannel()
+	<-gate.Started
+
+	registry.StopConsumers()
+	gate.Release()
+	awaitObserverExit(t, registry)
+
+	assert.Equal(t, []string{"1"}, client.declaresOf("queue:"+testQueueName),
+		"the halted pass declared nothing past the declaration it was parked in")
 }
 
 // ===== Consume metrics + receive span tests (plan 099) =====
@@ -4893,25 +4931,4 @@ func TestRegistryRunsNoRedeclarePassBeforeDeclareInfrastructure(t *testing.T) {
 	require.NoError(t, registry.DeclareInfrastructure(context.Background()))
 	assert.Equal(t, []string{"1"}, client.declaresOf(key),
 		"the registry did hold topology to replay, so the empty above was the latch")
-}
-
-// TestRegistryForgetsARetiredRedeclareSource pins the map's eviction door: a
-// registry outlives its sources, and a source dropped from the guard is unseen
-// again rather than pinned to the last generation it reported.
-func TestRegistryForgetsARetiredRedeclareSource(t *testing.T) {
-	client := newReconnectingMockClient()
-	registry := newPublisherOnlyRegistry(t, client)
-	defer registry.StopConsumers()
-	key := "exchange:" + testExchangeName
-	ctx := context.Background()
-	source := &staticRedeclareSource{generation: 2}
-
-	registry.redeclareTopologyFrom(ctx, source)
-	registry.redeclareTopologyFrom(ctx, source)
-	require.Equal(t, []string{"1", "1"}, client.declaresOf(key), "one source twice on one generation is one pass")
-
-	registry.forgetRedeclareSource(source)
-	registry.redeclareTopologyFrom(ctx, source)
-
-	assert.Equal(t, []string{"1", "1", "1"}, client.declaresOf(key), "a forgotten source is unseen again")
 }
