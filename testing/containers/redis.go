@@ -6,13 +6,18 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
@@ -62,6 +67,75 @@ type RedisTLSMaterial struct {
 	Key  []byte
 }
 
+// RedisACLUser is one Redis ACL identity: the name a client presents, the
+// password it authenticates with, and the rules it is granted. Empty Rules take
+// the fixture's default for the slot the user occupies — redisACLAdminRules for
+// Admin, redisACLDefaultAppRules for App and AdditionalUsers — so a caller that
+// names none still gets a narrow user rather than having to invent a rule list.
+type RedisACLUser struct {
+	Username string
+	Password string
+	Rules    []string
+}
+
+// RedisACL gates the container behind Redis ACLs. Disabling the implicit
+// `default` user is the whole point: left enabled it is `nopass ~* +@all`, so an
+// unauthenticated client works and a credential test passes whether or not the
+// credential ever traveled. With it off, every connection must authenticate.
+//
+// Admin is what the fixture's own execs run as and App is the credential under
+// test; why the two are granted so differently is on the rule vars below.
+//
+// A password here reaches the server as a SHA-256 rule, so the boot argument a
+// failing server prints to its log — which testcontainers dumps to the test output
+// — carries a digest rather than the credential. The clear-text value still
+// travels: it is what a client under test authenticates with, and what the
+// fixture's own redis-cli execs pass as `--pass`. Only throwaway values belong in
+// these fields.
+type RedisACL struct {
+	Admin RedisACLUser
+	App   RedisACLUser
+	// AdditionalUsers installs further named identities alongside App, each with
+	// its own Rules, for a test that needs a second credential with different
+	// grants on the same server.
+	AdditionalUsers []RedisACLUser
+}
+
+// redisACLUserFlag is the boot argument that opens every `--user` directive;
+// it appears in the default-off directive, in each installed identity, and in
+// the authenticated redis-cli prefix.
+const redisACLUserFlag = "--user"
+
+// redisACLDefaultUsername is Redis' implicit user. Every ACL-gated fixture turns
+// it off, so it is also the one name a fixture identity may not claim: declaring
+// it twice is what makes the server reject the whole directive at boot.
+const redisACLDefaultUsername = "default"
+
+// redisACLAdminRules make the admin identity a fixture superuser: it exists to
+// run the bootstrap chores — CONFIG SET, CLUSTER ADDSLOTSRANGE, CLUSTER INFO —
+// not to be exercised.
+var redisACLAdminRules = []string{"~*", "&*", "+@all"}
+
+// redisACLDefaultAppRules is what an App or additional user naming no Rules is
+// granted: narrow on purpose, because an app user holding the admin commands
+// would be a superuser under another name and a test authenticating as it would
+// demonstrate less. The keyspace stays `~*` because this fixture proves credential
+// authentication, not key-pattern enforcement; the command list is what keeps the
+// user from being an admin alias, and it holds neither CONFIG nor FLUSHDB. The
+// per-grant derivation lives with the package that measured it, in
+// cache/redis/integration_main_test.go.
+var redisACLDefaultAppRules = []string{
+	"~*",
+	"+ping",
+	"+info",
+	"+get",
+	"+set",
+	"+del",
+	"+eval",
+	"+command",
+	"+cluster|slots",
+}
+
 // RedisContainerConfig holds configuration for Redis test container
 type RedisContainerConfig struct {
 	// ImageTag specifies the Redis version (default: the pin in DefaultRedisConfig)
@@ -84,6 +158,14 @@ type RedisContainerConfig struct {
 	// Cluster the fixture's own bootstrap dials that same listener from inside
 	// the container, verifying it against the same CA.
 	TLS *RedisTLSMaterial
+	// ACL, when non-nil, disables the implicit `default` user and installs the
+	// identities it names, so the server accepts nothing unauthenticated.
+	// Nil (the default) leaves the stock open server every other fixture uses.
+	// Composes with Cluster and TLS exactly as those two compose with each
+	// other: each arm contributes its own flags to the one command line, and the
+	// fixture's own redis-cli then carries the transport flags and the admin
+	// credential together on the one invocation.
+	ACL *RedisACL
 }
 
 // DefaultRedisConfig returns a RedisContainerConfig populated with sensible defaults.
@@ -159,8 +241,9 @@ func StartRedisContainerForTestMain(ctx context.Context, cfg *RedisContainerConf
 // verification) prevents a race where the log appears but Redis is not ready to accept
 // connections.
 //
-// Cluster and TLS each contribute to one accumulated argument list rather than
-// owning the command, so a fixture asking for both gets both. WithCmdArgs (not
+// Cluster, TLS and ACL each contribute to one accumulated argument list rather
+// than owning the command, so a fixture asking for all three gets all three.
+// WithCmdArgs (not
 // WithCmd) is what the upstream module uses for its own TLS mode: the image's
 // entrypoint prepends `redis-server` to any argument list starting with a dash,
 // so passing bare flags replaces the default command without naming the binary
@@ -184,6 +267,11 @@ func StartRedisContainerForTestMain(ctx context.Context, cfg *RedisContainerConf
 // POSITIVE tests — the handshakes that are meant to succeed — not the negative
 // ones, which already fail client-side (unknown authority, hostname mismatch)
 // before the server's demand is ever reached.
+//
+// The ACL arm comes last, so a reader comparing a gated fixture's command with an
+// open one sees the credential directives appended to an otherwise identical
+// line. redisACLArgs says why they are boot arguments rather than post-start
+// ACL SETUSER execs.
 func redisOptions(cfg *RedisContainerConfig) []testcontainers.ContainerCustomizer {
 	opts := make([]testcontainers.ContainerCustomizer, 0, 3)
 	opts = append(opts, waitOptionWithin(cfg.StartupTimeout,
@@ -209,8 +297,114 @@ func redisOptions(cfg *RedisContainerConfig) []testcontainers.ContainerCustomize
 			"--tls-auth-clients", "no",
 		)
 	}
+	if cfg.ACL != nil {
+		args = append(args, redisACLArgs(cfg.ACL)...)
+	}
 
 	return append(opts, testcontainers.WithCmdArgs(args...))
+}
+
+// redisACLArgs renders cfg.ACL as boot arguments: the implicit `default` user
+// turned off first, then one directive per installed identity.
+//
+// Boot arguments rather than post-start ACL SETUSER execs: a malformed rule
+// fails the server's startup outright, and the server never accepts a connection
+// during a window in which the ACL is not yet installed. Redis refuses to mix
+// `--user` directives with an `--aclfile`, so this fixture uses only the former.
+// No shell is involved (testcontainers passes argv straight through), so
+// `#<digest>` and `~*` need no quoting.
+func redisACLArgs(acl *RedisACL) []string {
+	// Admin first so the fixture's own execs have an identity, then App, then
+	// any additional identity a test installs. Capacity is an estimate: three
+	// tokens for the default-off directive, then five plus a rule list each.
+	args := make([]string, 0, 3+(2+len(acl.AdditionalUsers))*(5+len(redisACLDefaultAppRules)))
+	args = append(args, redisACLUserFlag, redisACLDefaultUsername, "off")
+	args = append(args, redisACLUserArgs(acl.Admin, redisACLAdminRules)...)
+	for _, u := range slices.Concat([]RedisACLUser{acl.App}, acl.AdditionalUsers) {
+		args = append(args, redisACLUserArgs(u, redisACLDefaultAppRules)...)
+	}
+	return args
+}
+
+// validateRedisACLUsernames refuses a user set the server would reject while
+// parsing its own boot arguments. That rejection is what puts a directive in a log
+// at all: Redis echoes the whole offending `--user` directive and exits, and
+// testcontainers dumps that log to stderr when the readiness wait fails, where go
+// test folds it into the CI job log. The password rule in it is a SHA-256 digest
+// (redisACLUserArgs), so this check removes the trigger while the hashed form
+// removes the payload — and it names the fixture's own bug instead of leaving a
+// readiness timeout to explain. A bad *rule* prints only the rule token; a
+// duplicate or reserved *username* prints the directive. redisACLArgs renders
+// arguments with no error channel, so the check lives on the start path, before
+// anything starts.
+func validateRedisACLUsernames(acl *RedisACL) error {
+	seen := make(map[string]struct{}, 2+len(acl.AdditionalUsers))
+	for _, u := range slices.Concat([]RedisACLUser{acl.Admin, acl.App}, acl.AdditionalUsers) {
+		// Whitespace ANYWHERE is refused with the empty case, not just a
+		// whitespace-only name: Redis quotes each argv element before parsing, so
+		// `user " " on …` and `user "a b" on …` both install rather than failing at
+		// boot, and yield an identity no client can sensibly present — while the
+		// server's own ACL-file grammar splits the same directive on whitespace. NUL
+		// joins them: it terminates the C string the server compares against, so a
+		// name carrying one is not the name the caller wrote. This is wider than
+		// cache/redis's own Config.validateUsername, which refuses only the
+		// whitespace-only form because an AUTH argument is not a config token.
+		switch {
+		case u.Username == "" || strings.ContainsFunc(u.Username, func(r rune) bool { return unicode.IsSpace(r) || r == 0 }):
+			return errors.New("redis container: every ACL user needs a username, and one of Admin, App or AdditionalUsers has none, has only whitespace, or carries whitespace or a NUL inside it")
+		case u.Password == "":
+			// Not a shape nit: sha256("") is a perfectly valid rule, so the
+			// identity installs and authenticates with the empty string. A
+			// `+@all` Admin with an empty credential boots a server every ACL
+			// assertion still passes against, which is the vacuity this fixture
+			// exists to prevent. Whitespace is a legitimate password, so only
+			// the empty one is refused.
+			return fmt.Errorf("redis container: ACL user %q needs a password; an empty one installs sha256(\"\") and authenticates with the empty string", u.Username)
+		case u.Username == redisACLDefaultUsername:
+			return fmt.Errorf("redis container: ACL username %q is the implicit user the fixture disables; declaring it again makes Redis refuse the directive at boot", u.Username)
+		}
+		if _, dup := seen[u.Username]; dup {
+			return fmt.Errorf("redis container: ACL username %q is declared twice, and Redis refuses a duplicate user declaration at boot", u.Username)
+		}
+		seen[u.Username] = struct{}{}
+	}
+	return nil
+}
+
+// redisACLUserArgs renders one
+// `--user <name> <rules...> resetpass on #<sha256-of-password>` directive, falling
+// back to the fixture's default rules for a user that names none. The generated auth
+// state trails the caller's rules, and `resetpass` sits immediately in front of it,
+// so the identity requires exactly the password it was declared with.
+//
+// Two mechanisms, because Redis treats the two rule families differently. A FLAG-LIKE
+// rule — `nopass`, `off`, `reset` — sets a state the last token to touch it wins, so
+// position alone overrides a caller rule that would have disabled authentication.
+// (`reset` also wipes the key patterns and command grants that preceded it, and
+// nothing below restores those: such an identity authenticates and then gets NOPERM
+// on its first operation — loud, and the direction a fixture should fail in.) A
+// PASSWORD rule is not a flag: `>pw` and `#hash` APPEND to the identity's password
+// list, so a caller's own password form survives whatever follows it. Measured on
+// this image, `--user probe ">otherpw" … on "#<digest>"` left BOTH passwords
+// authenticating — a second valid credential on an identity this fixture claims has
+// one. `resetpass` empties that list (and clears `nopass` with it) just before the
+// generated state is applied, so only the digest below remains. Neither mechanism
+// enumerates rules, so neither has a token to miss.
+//
+// The hashed rule form rather than `>password`: the directive is a boot argument a
+// failing server can echo to a log the test output captures, and a digest there is
+// not a credential a reader can replay. Redis hashes what a client AUTHs with and
+// compares, so the client still presents the clear-text password.
+func redisACLUserArgs(u RedisACLUser, fallback []string) []string {
+	rules := u.Rules
+	if len(rules) == 0 {
+		rules = fallback
+	}
+	digest := sha256.Sum256([]byte(u.Password))
+	args := make([]string, 0, 5+len(rules))
+	args = append(args, redisACLUserFlag, u.Username)
+	args = append(args, rules...)
+	return append(args, "resetpass", "on", "#"+hex.EncodeToString(digest[:]))
 }
 
 // redisTLSFiles is the PEM material copied into a TLS-only container, each at
@@ -240,6 +434,12 @@ func redisTLSFiles(material *RedisTLSMaterial) []testcontainers.ContainerFile {
 func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig) (*RedisContainer, error) {
 	if cfg == nil {
 		cfg = DefaultRedisConfig()
+	}
+
+	if cfg.ACL != nil {
+		if err := validateRedisACLUsernames(cfg.ACL); err != nil {
+			return nil, err
+		}
 	}
 
 	// redis.Run can hand back a started container together with an error (a
@@ -324,13 +524,35 @@ func bootstrapRedisCluster(ctx context.Context, c *RedisContainer, cfg *RedisCon
 // and its kin never appear. Hostname verification is not part of what redis-cli
 // does here (measured: it validates the chain, not the name), so the fixture's
 // leaf need not cover the address redis-cli dials.
+//
+// On an ACL-gated node the `default` user is off, so an unauthenticated bootstrap
+// or readiness exec is refused and the cluster never reaches cluster_state:ok —
+// these run as the admin identity. The credential arm is here rather than in a
+// second builder precisely so it cannot miss a transport arm: a container that is
+// cluster AND TLS AND ACL needs the CA flags and the credential on the SAME
+// invocation, and two builders could each serve only half of it.
+// --no-auth-warning suppresses the stderr notice redis-cli prints for a
+// command-line password, which Multiplexed() folds into the same buffer as the
+// command's own output.
 func redisCLICommand(cfg *RedisContainerConfig, args ...string) []string {
-	cmd := make([]string, 0, len(args)+5)
+	cmd := make([]string, 0, len(args)+10)
 	cmd = append(cmd, redisCLI, "-e")
 	if cfg.TLS != nil {
 		cmd = append(cmd, "--tls", "--cacert", redisTLSCAPath)
 	}
+	if cfg.ACL != nil {
+		cmd = append(cmd, redisACLUserFlag, cfg.ACL.Admin.Username, "--pass", cfg.ACL.Admin.Password, "--no-auth-warning")
+	}
 	return append(cmd, args...)
+}
+
+// withoutRedisCLICredential strips the admin password out of text built from a
+// full redis-cli argv. It is the only secret redisCLICommand puts there.
+func withoutRedisCLICredential(cfg *RedisContainerConfig, text string) string {
+	if cfg.ACL == nil || cfg.ACL.Admin.Password == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, cfg.ACL.Admin.Password, "<redacted>")
 }
 
 // execRedisCLI builds one in-container redis-cli command and runs it: the single
@@ -340,21 +562,28 @@ func redisCLICommand(cfg *RedisContainerConfig, args ...string) []string {
 //
 // A non-zero exit is the whole verdict, because redisCLICommand passes -e. The
 // error names the LOGICAL command rather than the built line: the transport
-// flags are fixture-chosen and add nothing to a diagnosis, while a future
-// capability's flags (credentials, say) would turn an exec failure into a
-// credential leak. Multiplexed strips the Docker stream framing, so the message
-// quotes what redis-cli printed rather than the wire bytes.
+// flags are fixture-chosen and add nothing to a diagnosis, while the credential
+// arm's flags would turn an exec failure into a credential leak. Multiplexed
+// strips the Docker stream framing, so the message quotes what redis-cli printed
+// rather than the wire bytes.
+//
+// Naming the logical command is what keeps the argv out; withoutRedisCLICredential
+// is the second half, over the two texts this function does not author — the
+// exec error, which carries whatever the daemon reported, and redis-cli's own
+// output. %s rather than %w on the first of those: wrapping would re-embed the
+// unredacted original instead of the redacted rendering.
 func execRedisCLI(ctx context.Context, c *RedisContainer, cfg *RedisContainerConfig, args ...string) error {
 	code, reader, err := c.container.Exec(ctx, redisCLICommand(cfg, args...), tcexec.Multiplexed())
 	if err != nil {
-		return fmt.Errorf("redis container: exec %v: %w", args, err)
+		return fmt.Errorf("redis container: exec %v: %s", args, withoutRedisCLICredential(cfg, err.Error()))
 	}
 	var out bytes.Buffer
 	if _, copyErr := out.ReadFrom(reader); copyErr != nil {
 		return fmt.Errorf("redis container: reading output of %v: %w", args, copyErr)
 	}
 	if code != 0 {
-		return fmt.Errorf("redis container: %v exited %d: %s", args, code, strings.TrimSpace(out.String()))
+		return fmt.Errorf("redis container: %v exited %d: %s", args, code,
+			withoutRedisCLICredential(cfg, strings.TrimSpace(out.String())))
 	}
 	return nil
 }
@@ -419,8 +648,11 @@ func waitForRedisClusterReady(ctx context.Context, c *RedisContainer, cfg *Redis
 		WithPollInterval(redisClusterBootstrapPoll)
 
 	if err := strategy.WaitUntilReady(ctx, c.container); err != nil {
-		return fmt.Errorf("redis container: cluster did not reach %s within %s (%w); last CLUSTER INFO: %s",
-			redisClusterReadyState, timeout, err, last)
+		// %s, not %w: the strategy holds the full redis-cli argv, so wrapping would
+		// re-embed the unredacted original instead of the redacted rendering.
+		return fmt.Errorf("redis container: cluster did not reach %s within %s (%s); last CLUSTER INFO: %s",
+			redisClusterReadyState, timeout, withoutRedisCLICredential(cfg, err.Error()),
+			withoutRedisCLICredential(cfg, last))
 	}
 	return nil
 }

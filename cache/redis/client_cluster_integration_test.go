@@ -75,10 +75,10 @@ func requireClusterKeysSpanDistinctSlots(ctx context.Context, t *testing.T, clie
 }
 
 // assertClusterRoundTrips drives Set, Get and Delete across keys in different
-// slots, plus the miss a Get after Delete must report. Shared by the plaintext
-// and TLS cluster tests: the operations
-// and their expected answers are identical, and what differs is the transport
-// the caller already built its client on.
+// slots, plus the miss a Get after Delete must report. Shared by the cluster
+// fixtures — plaintext, TLS and ACL alike: the operations and their expected
+// answers are identical, and what differs is the client the caller already
+// built.
 func assertClusterRoundTrips(ctx context.Context, t *testing.T, client *Client) {
 	t.Helper()
 
@@ -101,8 +101,8 @@ func assertClusterRoundTrips(ctx context.Context, t *testing.T, client *Client) 
 
 // assertClusterGetOrSet drives the SET NX GET path: the first call stores and
 // reports it, the second finds the value already there and hands back what is
-// stored rather than what was offered. The key is the caller's, so the two
-// fixtures never write the same one.
+// stored rather than what was offered. The key is the caller's: every caller
+// passes its own.
 func assertClusterGetOrSet(ctx context.Context, t *testing.T, client *Client, key string) {
 	t.Helper()
 
