@@ -29,9 +29,17 @@ type stampingPublisher struct {
 	// control-plane client. It is a stamp source, not a label — see
 	// tenantstamp.Resolve.
 	key string
+	// stopObserver ends the redeclare observer the manager attached to the wrapped
+	// client, and observerDone closes when that goroutine has exited. They live on
+	// the pooled value because the pool's closer receives exactly this value on
+	// every retirement path, which makes the wrapper the client's own lifetime
+	// record — a side map would be a second one to keep in step. Both are nil for
+	// a client that announces no channels.
+	stopObserver func()
+	observerDone <-chan struct{}
 }
 
-func newStampingPublisher(base AMQPClient, key string) AMQPClient {
+func newStampingPublisher(base AMQPClient, key string) *stampingPublisher {
 	door, _ := base.(bytePublisher)
 	return &stampingPublisher{AMQPClient: base, door: door, key: key}
 }

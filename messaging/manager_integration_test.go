@@ -17,19 +17,6 @@ import (
 // came back from the one that warmed the connection up before it was destroyed.
 const testRecoveredBody = "published after the exchange came back"
 
-// drainQueue empties queue so a later Get can only return a message published
-// after this call.
-func drainQueue(t *testing.T, ch *amqp.Channel, queue string) {
-	t.Helper()
-	for {
-		_, ok, err := ch.Get(queue, true)
-		require.NoError(t, err)
-		if !ok {
-			return
-		}
-	}
-}
-
 // TestManagerRedeclaresDeletedExchangeThroughAPooledPublisher is the
 // production-wiring acceptance test for #1761: a publisher-only service, wired
 // exactly as the app wires it (EnsureConsumers declares the topology, publishes
@@ -90,7 +77,8 @@ func TestManagerRedeclaresDeletedExchangeThroughAPooledPublisher(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return publish(testMessageBody) == nil
 	}, 20*time.Second, 200*time.Millisecond, "the pooled publisher never reached the broker")
-	drainQueue(t, adminCh, queue)
+	_, err = adminCh.QueuePurge(queue, false)
+	require.NoError(t, err)
 
 	// Out of band, under a live connection: deleting the exchange takes its
 	// bindings with it, so nothing short of a redeclare pass routes a publish to

@@ -2034,14 +2034,6 @@ func TestManagerRedeclaresTopologyFromAPooledPublisherChannel(t *testing.T) {
 	assert.Empty(t, publisherClient.declaresOf(key), "the pass must declare through the registry's own client")
 }
 
-// observedPublisherCount reports how many pooled publishers the manager still
-// runs a redeclare observer for, read under the lock that guards the map.
-func observedPublisherCount(m *Manager) int {
-	m.obsMu.Lock()
-	defer m.obsMu.Unlock()
-	return len(m.publisherObservers)
-}
-
 // redeclareSourceCount reports how many sources the registry still records a
 // channel generation for, read under the lock that guards the ledger.
 func redeclareSourceCount(r *Registry) int {
@@ -2061,16 +2053,20 @@ func TestManagerPublisherChannelObserverEndsWithItsClient(t *testing.T) {
 
 	ctx := context.Background()
 	require.NoError(t, m.EnsureConsumers(ctx, "", publisherOnlyDeclarations()))
-	_, release, err := m.Publisher(ctx, "")
+	publisher, release, err := m.Publisher(ctx, "")
 	require.NoError(t, err)
 	release()
-	require.Equal(t, 1, observedPublisherCount(m), "the pooled publisher was never observed")
+	pooled, ok := publisher.(*stampingPublisher)
+	require.True(t, ok)
+	require.NotNil(t, pooled.observerDone, "the pooled publisher was never observed")
 
 	require.NoError(t, m.Close())
 
-	require.Eventually(t, func() bool {
-		return observedPublisherCount(m) == 0
-	}, 5*time.Second, time.Millisecond, "the pooled publisher's redeclare observer outlived the manager")
+	select {
+	case <-pooled.observerDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pooled publisher's redeclare observer outlived the manager")
+	}
 }
 
 // TestManagerForgetsAPooledPublisherOnceItCloses pins the bookkeeping the

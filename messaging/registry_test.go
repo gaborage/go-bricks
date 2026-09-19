@@ -5210,3 +5210,56 @@ func TestRegistryRestartsItsObserverAfterAStopStartCycle(t *testing.T) {
 	client.newChannel()
 	awaitDeclares(t, client, key, "1", "2")
 }
+
+// TestRegistryRearmsWhileThePreviousObserverIsParkedMidPass pins the one thing
+// re-arming under redeclareMu and mu must never do: WAIT for the observer the
+// halt ended. That goroutine may be inside a pass, so waiting for its done signal
+// would be a cycle. Re-arm spawns without waiting, and the halted observer stays
+// inert on its own — its context is canceled, so every pass it drives is refused
+// — which is what makes "at most one ACTIVE observer" hold by construction.
+//
+// Re-arm DOES take redeclareMu, so it queues behind a pass already in flight for
+// as long as that pass runs. That is 2a's shape, not this change's: rearm has
+// taken redeclareMu as its first statement since it existed. The property under
+// test is therefore that the cycle completes once the pass does, and that the
+// rotation after it runs exactly one pass — not that StartConsumers returns while
+// a pass is parked, which was never true.
+func TestRegistryRearmsWhileThePreviousObserverIsParkedMidPass(t *testing.T) {
+	client := newReconnectingMockClient()
+	registry := newPublisherOnlyRegistry(t, client)
+	key := "exchange:" + testExchangeName
+
+	// Park the first observer inside a pass, then halt it there.
+	gate := testutil.NewBlockedCreate(t)
+	client.locked(func() { client.parkOn, client.parkGate = key, gate })
+	client.newChannel()
+	<-gate.Started
+	registry.StopConsumers()
+
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		close(started)
+		assert.NoError(t, registry.StartConsumers(context.Background()))
+	}()
+	<-started
+
+	// Unpark the halted pass: the re-arm behind it may now proceed.
+	client.locked(func() { client.parkOn, client.parkGate = "", nil })
+	gate.Release()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StartConsumers never completed after the parked pass was released")
+	}
+
+	// Exactly one pass on the next rotation: the re-armed observer runs it, and the
+	// halted one is refused because its context is canceled.
+	client.newChannel()
+	// "2" is absent on purpose: the pass parked at generation 2 was halted, and a
+	// halted declare refuses on its canceled context before it reaches the broker,
+	// so it records nothing. The re-armed observer then runs generation 3.
+	awaitDeclares(t, client, key, "1", "3")
+}

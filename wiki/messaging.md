@@ -921,7 +921,11 @@ exchange under a live connection — the channel that takes the broker's 404 is 
 the registry's own client sits idle and never rotates — and together they cover a **publisher-only
 service** (declarations, no consumers), which before this re-declared nothing at all. A pooled
 publisher's entry leaves the guard when the pool retires the client (LRU eviction, the idle sweep,
-`Close`), so the map does not grow one dead source per eviction. A stop/start cycle restarts the
+`Close`), so the map does not grow one dead source per eviction. A newly pooled publisher is a
+source the guard has never seen, so its first ready channel runs one pass: that is the deliberate
+cost of the repair, and it is what recovers a key whose exchange was deleted while no publisher
+existed for it. Declares are idempotent for matching arguments, so the pass is a no-op at the broker
+when nothing was lost. A stop/start cycle restarts the
 registry's own announcement observer: for a publisher-only registry it is the only driver the
 registry owns. The
 consumer's ask is not a redundant second driver — it runs under the same pass mutex, so a completed
