@@ -134,17 +134,19 @@ func (f *FactoryResolver) CacheConnector(resourceSource TenantStore, log logger.
 	return f.namespacedCacheConnector(f.innerCacheConnector(resourceSource, log), resourceSource, log)
 }
 
-// resolvedCacheConnector is cache.Connector's shape plus the cache section the connector
+// dialingCacheConnector is cache.Connector's shape plus the cache section the connector
 // dialed from, so the namespace layer above derives the key prefix from that one snapshot
-// instead of asking the store again. A nil section means none was handed forward and that
-// layer reads the store itself.
-type resolvedCacheConnector func(ctx context.Context, key string) (cache.Cache, *config.CacheConfig, error)
+// instead of asking the store again — pairing an endpoint with a prefix from a LATER
+// snapshot is the split this type exists to prevent, and the instance is pooled, so it
+// would outlive the mutation that caused it. A nil section means none was handed forward
+// and that layer reads the store itself, which is the custom-connector path. This is the
+// invariant the rest of this file refers back to.
+type dialingCacheConnector func(ctx context.Context, key string) (cache.Cache, *config.CacheConfig, error)
 
 // innerCacheConnector picks the connector that actually dials: the custom one from
-// Options, else the default Redis connector. Only the default one resolves a cache
-// section, so only it hands a snapshot forward; a custom connector owns its dial and
-// hands back none, which leaves the namespace layer that path's single reader.
-func (f *FactoryResolver) innerCacheConnector(resourceSource TenantStore, log logger.Logger) resolvedCacheConnector {
+// Options, else the default Redis connector. A custom connector owns its dial, so it
+// hands back no section (see dialingCacheConnector).
+func (f *FactoryResolver) innerCacheConnector(resourceSource TenantStore, log logger.Logger) dialingCacheConnector {
 	if f.opts != nil && f.opts.CacheConnector != nil {
 		custom := f.opts.CacheConnector
 		return func(ctx context.Context, key string) (cache.Cache, *config.CacheConfig, error) {
@@ -168,13 +170,14 @@ var errUnresolvedCacheNamespace = errors.New(
 // refuses — reachable when a dynamic tenant source delivers a section config.Validate
 // never saw — would otherwise be an unnamespaced or ambiguous cache, which on a shared
 // endpoint is exactly the collision the prefix exists to prevent. A section the store
-// could not READ would otherwise resolve to app.name while the section it hid may carry
-// a prefix of its own. And a namespace that resolved to nothing at all is refused too:
+// could not READ — reachable on the custom-connector path, the only one that still reads
+// the store at this layer — would otherwise resolve to app.name while the section it hid
+// may carry a prefix of its own. And a namespace that resolved to nothing at all is refused too:
 // the exported NewFactoryResolver carries no app name, so a root key with no section
 // prefix would otherwise join to "" and hand back the instance unwrapped, silently
 // dropping the namespace for every consumer that builds a resolver itself. An explicit
 // "" is a different event and still opts out.
-func (f *FactoryResolver) namespacedCacheConnector(inner resolvedCacheConnector, resourceSource TenantStore, log logger.Logger) cache.Connector {
+func (f *FactoryResolver) namespacedCacheConnector(inner dialingCacheConnector, resourceSource TenantStore, log logger.Logger) cache.Connector {
 	return func(ctx context.Context, key string) (cache.Cache, error) {
 		instance, resolved, err := inner(ctx, key)
 		if err != nil {
@@ -247,12 +250,9 @@ func closeRejectedCacheInstance(instance cache.Cache, key string, log logger.Log
 // cacheKeyPrefixBase resolves the namespace the resource key hangs off: the section's
 // own cache.redis.keyprefix when one was delivered, else app.name.
 //
-// resolved is the section the inner connector dialed from, and when it is non-nil it is
-// the whole answer: reading the store again could land on a different snapshot and pair
-// one snapshot's endpoint with another's prefix on an instance that is POOLED, so the
-// split would outlive the mutation that caused it. A nil resolved is the custom-connector
-// path, which dialed from nothing this layer can see, so the store is read here — that
-// path's single read.
+// A non-nil resolved is the whole answer, per dialingCacheConnector. A nil one is the
+// custom-connector path, which dialed from nothing this layer can see, so the store is
+// read here — that path's single read.
 //
 // The bool reports whether the section DELIVERED the value, which is what separates
 // the documented opt-out from an app.name that was never set: only an explicit prefix
@@ -331,9 +331,8 @@ func (f *FactoryResolver) HasCustomFactories() bool {
 
 // newRedisConnector creates a cache connector that reads Redis configuration
 // from the resourceSource for each tenant/key and creates Redis cache instances.
-// The section it dialed from travels back with the instance, so the namespace layer
-// above names the cache from the very snapshot that chose its endpoint.
-func newRedisConnector(resourceSource TenantStore, log logger.Logger) resolvedCacheConnector {
+// The section it dialed from travels back with the instance (see dialingCacheConnector).
+func newRedisConnector(resourceSource TenantStore, log logger.Logger) dialingCacheConnector {
 	return func(ctx context.Context, key string) (cache.Cache, *config.CacheConfig, error) {
 		if resourceSource == nil {
 			err := fmt.Errorf("tenant resource source is nil for key '%s'", key)
