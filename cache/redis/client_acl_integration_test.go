@@ -255,30 +255,6 @@ func TestRealRedisACLRejectsBadCredentials(t *testing.T) {
 		{name: "cluster", mode: ModeCluster, lease: pkgRedisACLCluster.Get},
 	}
 
-	credentials := []struct {
-		name     string
-		username string
-		password string
-		wantErr  string
-	}{
-		{
-			name:     "wrong_password_is_rejected",
-			username: aclAppUsername,
-			password: aclAppPassword + "-tampered",
-			wantErr:  "WRONGPASS",
-		},
-		{
-			name:     "unknown_username_is_rejected",
-			username: aclAppUsername + "-does-not-exist",
-			password: aclAppPassword,
-			wantErr:  "WRONGPASS",
-		},
-		{
-			name:    "no_credentials_is_rejected",
-			wantErr: "NOAUTH",
-		},
-	}
-
 	for _, server := range servers {
 		t.Run(server.name, func(t *testing.T) {
 			// Leased here rather than in the table literal above, which the parent
@@ -287,7 +263,7 @@ func TestRealRedisACLRejectsBadCredentials(t *testing.T) {
 			// on the arm that asked for the container.
 			container := server.lease(t)
 
-			for _, tt := range credentials {
+			for _, tt := range aclBadCredentials {
 				t.Run(tt.name, func(t *testing.T) {
 					client, err := NewClient(&Config{
 						Host:     container.Host(),

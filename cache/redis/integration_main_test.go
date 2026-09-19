@@ -73,6 +73,30 @@ var (
 	aclInjectedPassword = gbtesting.FakePassword("redis-acl-injected")
 )
 
+// aclBadCredentials is the credential set both ACL negative tests drive —
+// TestRealRedisACLRejectsBadCredentials and
+// TestRealRedisClusterTLSACLRejectsBadCredentials. Only the expectations are
+// shared: what each refusal licenses differs per file, so the assertion messages
+// stay with their own test.
+var aclBadCredentials = []struct{ name, username, password, wantErr string }{
+	{
+		name:     "wrong_password_is_rejected",
+		username: aclAppUsername,
+		password: aclAppPassword + "-tampered",
+		wantErr:  "WRONGPASS",
+	},
+	{
+		name:     "unknown_username_is_rejected",
+		username: aclAppUsername + "-does-not-exist",
+		password: aclAppPassword,
+		wantErr:  "WRONGPASS",
+	},
+	{
+		name:    "no_credentials_is_rejected",
+		wantErr: "NOAUTH",
+	},
+}
+
 // aclAppRules is the narrowest grant set that carries everything this package's
 // Client does, established by running the suite against each grant removed:
 //
