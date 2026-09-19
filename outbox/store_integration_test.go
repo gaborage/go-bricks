@@ -137,7 +137,7 @@ func TestOutboxStoreManagedAlterIntegration(t *testing.T) {
 
 	backlog := time.Now().UTC().Add(-time.Hour)
 	for i := range 3 {
-		_, err := conn.Exec(ctx, fmt.Sprintf(
+		_, err = conn.Exec(ctx, fmt.Sprintf(
 			`INSERT INTO %s (id, event_type, aggregate_id, payload, exchange, routing_key, status, created_at)
 			 VALUES (gen_random_uuid(), $1, $2, $3, 'ex', 'k', 'pending', $4)`, itTable),
 			"it.event", fmt.Sprintf("agg-%d", i), []byte(`{}`), backlog.Add(time.Duration(i)*time.Second))
@@ -163,7 +163,7 @@ func TestOutboxStoreManagedAlterIntegration(t *testing.T) {
 		fmt.Sprintf(`INSERT INTO %s_leader (id) VALUES (1) ON CONFLICT (id) DO NOTHING`, itTable),
 	}
 	for i, stmt := range migration {
-		_, err := conn.Exec(ctx, stmt)
+		_, err = conn.Exec(ctx, stmt)
 		require.NoErrorf(t, err, "migration statement %d failed", i)
 	}
 

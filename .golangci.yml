@@ -1,6 +1,12 @@
 version: "2"
 run:
   tests: true
+  # `run` loads PACKAGES under the build tags it is given. Removing this silently
+  # un-lints every //go:build integration file. It lives here rather than on a
+  # command line so `make lint`, every CI golangci-lint step and editor plugins
+  # read one file set from one place — see wiki/linting.md.
+  build-tags:
+    - integration
 linters:
   enable:
     - bodyclose                 # checks whether HTTP response body is closed successfully

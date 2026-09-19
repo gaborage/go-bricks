@@ -229,15 +229,19 @@ func TestConnectionPrepareStatement(t *testing.T) {
 	require.NoError(t, err, "Prepare should succeed")
 	defer stmt.Close()
 
-	// Execute prepared statement multiple times
+	// Each iteration runs in its own closure so `defer rows.Close()` fires per
+	// iteration, and on the Goexit a failing require triggers.
 	for _, name := range []string{"alice", "bob", "charlie"} {
-		rows, err := stmt.Query(ctx, name)
-		require.NoError(t, err, "Prepared statement execution should succeed")
-		require.True(t, rows.Next(), "Should return inserted ID")
-		var id int
-		require.NoError(t, rows.Scan(&id))
-		assert.Positive(t, id, "Inserted ID should be positive")
-		rows.Close()
+		func() {
+			rows, err := stmt.Query(ctx, name)
+			require.NoError(t, err, "Prepared statement execution should succeed")
+			defer rows.Close()
+
+			require.True(t, rows.Next(), "Should return inserted ID")
+			var id int
+			require.NoError(t, rows.Scan(&id))
+			assert.Positive(t, id, "Inserted ID should be positive")
+		}()
 	}
 
 	// Verify all inserts
@@ -576,7 +580,7 @@ func TestConnectionWithTLSMode(t *testing.T) {
 
 // queryPostgresTimezone returns the value PostgreSQL reports for the current
 // session's timezone setting via current_setting('timezone').
-func queryPostgresTimezone(t *testing.T, ctx context.Context, conn *Connection) string {
+func queryPostgresTimezone(ctx context.Context, t *testing.T, conn *Connection) string {
 	t.Helper()
 	var tz string
 	row := conn.DB.QueryRowContext(ctx, "SELECT current_setting('timezone')")
@@ -617,13 +621,13 @@ func newConnectionWithTimezone(t *testing.T, timezone string) (*Connection, cont
 
 func TestConnectionSessionTimezoneAppliedAsiaTokyo(t *testing.T) {
 	conn, ctx := newConnectionWithTimezone(t, "Asia/Tokyo")
-	assert.Equal(t, "Asia/Tokyo", queryPostgresTimezone(t, ctx, conn),
+	assert.Equal(t, "Asia/Tokyo", queryPostgresTimezone(ctx, t, conn),
 		"PostgreSQL session timezone must equal cfg.Timezone (RuntimeParams must be sent on every new connection)")
 }
 
 func TestConnectionSessionTimezoneAppliedUTC(t *testing.T) {
 	conn, ctx := newConnectionWithTimezone(t, "UTC")
-	assert.Equal(t, "UTC", queryPostgresTimezone(t, ctx, conn))
+	assert.Equal(t, "UTC", queryPostgresTimezone(ctx, t, conn))
 }
 
 func TestConnectionSessionTimezoneOptOutPreservesServerDefault(t *testing.T) {
@@ -665,7 +669,7 @@ func TestConnectionSessionTimezoneOptOutPreservesServerDefault(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	optOutTZ := queryPostgresTimezone(t, ctx, conn.(*Connection))
+	optOutTZ := queryPostgresTimezone(ctx, t, conn.(*Connection))
 	assert.Equal(t, baselineTZ, optOutTZ,
 		`opt-out ("-") must report the same session timezone as a raw connection — a regression that forces UTC on the opt-out path would fail this assertion when baseline differs`)
 }

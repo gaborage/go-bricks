@@ -148,7 +148,6 @@ func TestPGRolesRuntimeRoleHasNoSuperPowers(t *testing.T) {
 	require.NoError(t, ProvisionPGRoles(ctx, admin, spec))
 
 	for _, role := range []string{spec.MigratorRole, spec.RuntimeRole} {
-		role := role
 		t.Run(role, func(t *testing.T) {
 			var attrs struct {
 				IsSuperuser, CanCreateDB, CanCreateRole, CanBypassRLS, CanReplicate bool
@@ -1151,15 +1150,18 @@ func TestPGReservedRoleDetectSQLFindsCaseVariantRoles(t *testing.T) {
 		require.NoError(t, err)
 
 		// Dropped on the way out whatever happens, so a failure here cannot
-		// poison a later run sharing the same container.
-		defer func() {
-			_, dropErr := admin.ExecContext(ctx, `DROP ROLE IF EXISTS "Public"`)
-			assert.NoError(t, dropErr)
-			_, dropErr = admin.ExecContext(ctx, `DROP ROLE IF EXISTS "PG_Probe"`)
-			assert.NoError(t, dropErr)
-			_, dropErr = admin.ExecContext(ctx, `DROP ROLE IF EXISTS pgx_probe`)
-			assert.NoError(t, dropErr)
-		}()
+		// poison a later run sharing the same container. assert, not require: a
+		// require on the first drop would Goexit past the other two.
+		t.Cleanup(func() {
+			for _, stmt := range []string{
+				`DROP ROLE IF EXISTS "Public"`,
+				`DROP ROLE IF EXISTS "PG_Probe"`,
+				`DROP ROLE IF EXISTS pgx_probe`,
+			} {
+				_, dropErr := admin.ExecContext(ctx, stmt)
+				assert.NoError(t, dropErr, stmt)
+			}
+		})
 
 		got := reservedRoleNames(ctx, t, admin)
 		require.Contains(t, got, "Public",
