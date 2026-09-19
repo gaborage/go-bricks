@@ -575,8 +575,10 @@ func TestConfigValidate(t *testing.T) {
 					return
 				}
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "cache configuration error: loadtimeout")
-				assert.Contains(t, err.Error(), "cannot be negative")
+				var cfgErr *cache.ConfigError
+				require.ErrorAs(t, err, &cfgErr)
+				assert.Equal(t, "loadtimeout", cfgErr.Field)
+				assert.Contains(t, cfgErr.Message, "cannot be negative")
 			})
 		}
 	})
