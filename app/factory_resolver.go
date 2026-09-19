@@ -137,8 +137,7 @@ func (f *FactoryResolver) CacheConnector(resourceSource TenantStore, log logger.
 // resolvedCacheConnector is cache.Connector's shape plus the cache section the connector
 // dialed from, so the namespace layer above derives the key prefix from that one snapshot
 // instead of asking the store again. A nil section means none was handed forward and that
-// layer reads the store itself. Package-private: the exported cache.Connector surface,
-// and the Options field that accepts one, are unchanged.
+// layer reads the store itself.
 type resolvedCacheConnector func(ctx context.Context, key string) (cache.Cache, *config.CacheConfig, error)
 
 // innerCacheConnector picks the connector that actually dials: the custom one from
@@ -261,16 +260,15 @@ func closeRejectedCacheInstance(instance cache.Cache, key string, log logger.Log
 func (f *FactoryResolver) cacheKeyPrefixBase(
 	ctx context.Context, resourceSource TenantStore, key string, resolved *config.CacheConfig,
 ) (base string, explicit bool, err error) {
-	cacheCfg := resolved
-	if cacheCfg == nil {
-		if cacheCfg, err = f.readCacheSectionForNamespace(ctx, resourceSource, key); err != nil {
+	if resolved == nil {
+		if resolved, err = f.readCacheSectionForNamespace(ctx, resourceSource, key); err != nil {
 			return "", false, err
 		}
 	}
-	if cacheCfg == nil || cacheCfg.Redis.KeyPrefix == nil {
+	if resolved == nil || resolved.Redis.KeyPrefix == nil {
 		return f.appName, false, nil
 	}
-	return *cacheCfg.Redis.KeyPrefix, true, nil
+	return *resolved.Redis.KeyPrefix, true, nil
 }
 
 // readCacheSectionForNamespace reads the section the namespace is taken from when the
@@ -289,8 +287,8 @@ func (f *FactoryResolver) cacheKeyPrefixBase(
 // could not deliver may carry an explicit keyprefix, so defaulting to app.name would put
 // this key's entries in a different keyspace from the ones already written under that
 // prefix — and the instance is POOLED, so the wrong namespace outlives the outage that
-// produced it. Only this path reads the store, which is why the custom connector is the
-// case that reaches that failure with a live instance to close; the read is per pooled
+// produced it. Only this path reads the store for the namespace, which is why the custom
+// connector is the one that can reach that failure at all; the read is per pooled
 // instance, not per request.
 func (f *FactoryResolver) readCacheSectionForNamespace(
 	ctx context.Context, resourceSource TenantStore, key string,

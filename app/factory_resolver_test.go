@@ -844,8 +844,15 @@ func storeServingCacheSection(key string, section *config.CacheConfig) TenantSto
 // reached the inner cache, which is the whole observable effect of the namespace.
 func assertWireKey(t *testing.T, c cache.Cache, inner *cachetest.MockCache, want string) {
 	t.Helper()
+	assertWireKeyFrom(t, c, inner.AllKeys, want)
+}
+
+// assertWireKeyFrom is assertWireKey over any observer of the keys that reached the wire,
+// so the real server the default path dials is asserted by the same contract as the mock.
+func assertWireKeyFrom(t *testing.T, c cache.Cache, keys func() []string, want string) {
+	t.Helper()
 	require.NoError(t, c.Set(context.Background(), keyPrefixLogical, []byte("v"), time.Minute))
-	assert.Equal(t, []string{want}, inner.AllKeys())
+	assert.Equal(t, []string{want}, keys())
 }
 
 // connectorOverMock returns a resolver whose cache connector hands out mock, plus the
@@ -1243,9 +1250,7 @@ func TestFactoryResolverCacheConnectorReadsTheCacheSectionOncePerInstance(t *tes
 	t.Cleanup(func() { _ = c.Close() })
 
 	assert.Equal(t, 1, store.reads, "the default path must read the cache section once per created instance")
-	require.NoError(t, c.Set(context.Background(), keyPrefixLogical, []byte("v"), time.Minute))
-	assert.Equal(t, []string{dialedPrefix + ":" + keyPrefixLogical}, mr.Keys(),
-		"the namespace must come from the snapshot that dialed")
+	assertWireKeyFrom(t, c, mr.Keys, dialedPrefix+":"+keyPrefixLogical)
 }
 
 // TestFactoryResolverCacheConnectorReadsOnceOnTheCustomPath keeps the custom-connector
