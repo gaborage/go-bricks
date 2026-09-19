@@ -3152,9 +3152,13 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 	// Topology — production-safe defaults: durable=true, auto_delete=false
 	exchange := decls.DeclareTopicExchange("orders.events")
 	decls.DeclareDirectExchange("orders.commands") // exact routing-key match; same defaults
+	// An exchange ANOTHER service owns: referenced by name, verified with a passive
+	// declare on every declare pass, never created here (ADR-119).
+	billing := decls.DeclareExternalExchange("billing.events")
 	queue := decls.DeclareQueue("orders.processing")
 	notices := decls.DeclareQueue("orders.notices") // consumed elsewhere; see the notice publisher below
 	decls.DeclareBinding(queue.Name, exchange.Name, "order.*")
+	decls.DeclareBinding(queue.Name, billing.Name, "invoice.*")
 
 	// Publisher contract — validates routing-key + event-type pair upfront AND hands back
 	// the typed handle every publish goes through. Keep it (there is no deps accessor to
@@ -3735,6 +3739,7 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 |---|---|
 | Get client (tenant-aware) | `client, err := deps.Messaging(ctx)` |
 | Declare an exchange | `decls.DeclareTopicExchange(name)` / `decls.DeclareDirectExchange(name)`; a hand-built `Type` is `messaging.ExchangeTypeDirect`, `messaging.ExchangeTypeTopic`, `messaging.ExchangeTypeFanout`, `messaging.ExchangeTypeHeaders` or an `x-` plugin type. Any other type fails `Validate()` at startup |
+| Reference an exchange another service owns | `decls.DeclareExternalExchange(name)` — name only (a passive declare ignores every other field), verified on every declare pass, never created. Declaring one name both locally and as external fails `Validate()` at startup |
 | Declare a publisher (returns the handle) | `pub := messaging.DeclareTypedPublisher[OrderCreatedEvent](decls, &messaging.PublisherOptions{Exchange: "orders.events", RoutingKey: "order.created", EventType: "OrderCreated"})` |
 | Publish — routed | `pub.Publish(ctx, client, evt)` — destination and headers come from the declaration |
 | Publish — default exchange | declare with `Exchange: ""` and `RoutingKey: queueName`, then the same `pub.Publish(ctx, client, evt)` |

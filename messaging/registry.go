@@ -129,6 +129,9 @@ type ExchangeDeclaration struct {
 	Internal   bool           // Internal exchange
 	NoWait     bool           // Do not wait for server confirmation
 	Args       map[string]any // Additional arguments
+	// Passive marks an EXTERNAL exchange: a name this service references but does
+	// not own, verified rather than created (ADR-119).
+	Passive bool
 }
 
 // QueueDeclaration defines a queue to be declared
@@ -345,6 +348,14 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 	for name, exchange := range r.exchanges {
 		if err := r.client.DeclareExchange(ctx, exchange); err != nil {
 			return fmt.Errorf("failed to declare exchange %s: %w", name, err)
+		}
+		if exchange.Passive {
+			// No type: the broker ignores one on a passive declare, so logging an
+			// empty string as this exchange's type would read as a defect.
+			r.logger.Info().
+				Str("exchange", name).
+				Msg("External exchange verified")
+			continue
 		}
 		r.logger.Info().
 			Str("exchange", name).

@@ -1871,6 +1871,33 @@ asked for, and the failure names both declarations instead of surfacing as lost 
 
 ---
 
+### [ADR-119: A Declaration Set May Reference an Exchange Another Service Owns, Verified Passively](adr_119_external_exchange_passive_verification.md)
+
+**Date:** 2026-09-19 | **Status:** Accepted
+
+`Validate()` required every binding's exchange — and every typed publisher's — to be declared in
+the same set, so the single-declarer pattern could not be expressed: a non-owner had to repeat the
+owner's declaration and accept the shape race at the broker, which ADR-118 can only settle within
+one process. `DeclareExternalExchange(name)` now records a name this service references but does
+not own. It is name-only, because a passive `exchange.declare` ignores every field except the name,
+and it is VERIFIED on every declare pass — the startup pass and each ADR-113 redeclare pass — with
+`passive=true` rather than created, so the owner's shape is never raced and a later declare of the
+real shape still succeeds. The marker rides on the declaration (`ExchangeDeclaration.Passive`), so
+`AMQPClient` is unchanged and only the internal channel adapter gains the passive door. A missing
+exchange is the broker's own 404, which ends the pass and is retried on the next channel
+generation; nothing external reaches ADR-113's 406 skip set, by the protocol rather than by a code
+exemption, since a passive declare answers declare-ok or 404 and never `PRECONDITION_FAILED`. One
+name both declared locally and marked external is a conflict class of its own,
+reported in the ADR-118 aggregate style under its own header. The reference errors were reworded to
+say they are a local check that never contacted the broker. Boot-and-converge was declined; the
+bounded opt-in startup wait is decided in the ADR and shipped separately. No migration: both new
+refusals need a call site that did not exist before.
+
+**Key Benefits:** a service can bind to or publish through an exchange it does not own without
+duplicating the owner's declaration, and a dangling reference no longer reads as a broker fact.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2641,7 +2668,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-118) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-119) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

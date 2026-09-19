@@ -1101,6 +1101,8 @@ func (c *AMQPClientImpl) DeclareQueue(ctx context.Context, queue *QueueDeclarati
 }
 
 // DeclareExchange declares an exchange from the given declaration (ctx: pre-flight check, see DeclareQueue).
+// A declaration marked Passive is an EXTERNAL exchange and is VERIFIED rather
+// than created (ADR-119).
 func (c *AMQPClientImpl) DeclareExchange(ctx context.Context, exchange *ExchangeDeclaration) error {
 	if exchange == nil {
 		return errNilDeclaration
@@ -1113,7 +1115,12 @@ func (c *AMQPClientImpl) DeclareExchange(ctx context.Context, exchange *Exchange
 		return err
 	}
 
-	return channel.ExchangeDeclare(exchange.Name, exchange.Type, exchange.Durable, exchange.AutoDelete, exchange.Internal, exchange.NoWait, toTable(exchange.Args))
+	declare := channel.ExchangeDeclare
+	if exchange.Passive {
+		declare = channel.ExchangeDeclarePassive
+	}
+
+	return declare(exchange.Name, exchange.Type, exchange.Durable, exchange.AutoDelete, exchange.Internal, exchange.NoWait, toTable(exchange.Args))
 }
 
 // BindQueue binds a queue to an exchange from the given declaration (ctx: pre-flight check, see DeclareQueue).

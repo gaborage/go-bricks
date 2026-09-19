@@ -197,6 +197,16 @@ Everything a delivery shares across lanes — leadership, the ledger writes,
 ordering and the publish bound — stays outside it.
 _Avoid_: publisher (messaging's word), sender, transport, lane client, courier
 
+**External exchange**:
+An exchange this service references but does not own: another service declares
+it, and this one only binds to it or publishes through it. It is recorded by
+name alone and VERIFIED on every declare pass with a passive declare, never
+created, so this service cannot race the owner's shape. Verification answers
+existence only — a type or durability mismatch is not detectable passively and
+is not detected.
+_Avoid_: foreign, remote, shared, passive exchange (passive is the wire
+mechanic that verifies one, not the thing)
+
 ### Tenancy
 
 **Control-plane key**:

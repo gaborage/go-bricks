@@ -482,7 +482,7 @@ func TestDeclareTypedConsumerLeavesQueueToTheCaller(t *testing.T) {
 
 	err := decls.Validate()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "consumer references non-existent queue: "+missingQueue)
+	assert.Contains(t, err.Error(), `consumer references queue "`+missingQueue+`", absent from this declaration set`)
 
 	decls.DeclareQueue(missingQueue)
 	assert.NoError(t, decls.Validate())

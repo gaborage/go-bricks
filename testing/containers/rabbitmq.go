@@ -212,16 +212,8 @@ func startRabbitMQContainerInternal(ctx context.Context, cfg *RabbitMQContainerC
 // its listener to accept connections on the mapped port. The container's own wait
 // strategy ran before the plugin existed, so readiness is polled here.
 func enableStreamPlugin(ctx context.Context, c *rabbitmq.RabbitMQContainer) (port int, err error) {
-	code, reader, err := c.Exec(ctx, []string{"rabbitmq-plugins", "enable", "rabbitmq_stream"})
-	if err != nil {
-		return 0, fmt.Errorf("failed to enable rabbitmq_stream plugin: %w", err)
-	}
-	if code != 0 {
-		output, readErr := io.ReadAll(reader)
-		if readErr != nil {
-			return 0, fmt.Errorf("rabbitmq-plugins enable rabbitmq_stream exited %d; reading its output failed: %w", code, readErr)
-		}
-		return 0, fmt.Errorf("rabbitmq-plugins enable rabbitmq_stream exited %d: %s", code, output)
+	if execErr := execIn(ctx, c, "rabbitmq-plugins", "enable", "rabbitmq_stream"); execErr != nil {
+		return 0, execErr
 	}
 
 	strategy := wait.ForListeningPort(streamPortSpec).
@@ -263,15 +255,69 @@ func (r *RabbitMQContainer) StreamPort() int {
 // Clients must also pin an address resolver to Host/StreamPort: the broker
 // advertises its container-internal address, which the host cannot dial.
 func (r *RabbitMQContainer) StreamURI() string {
-	// url.UserPassword escapes credentials containing @ : or /, and JoinHostPort
-	// brackets an IPv6 literal, which some Docker setups return from Host(). The
-	// vhost is appended already-encoded: %2f is how the default "/" vhost is spelled.
-	u := url.URL{
-		Scheme: "rabbitmq-stream",
-		User:   url.UserPassword(r.username, r.password),
-		Host:   net.JoinHostPort(r.host, strconv.Itoa(r.streamPort)),
-	}
+	// The vhost is appended already-encoded: %2f is how the default "/" vhost is
+	// spelled.
+	u := r.credentialedURL("rabbitmq-stream", r.username, r.password, r.streamPort)
 	return u.String() + "/%2f"
+}
+
+// AddUser creates a broker user, grants it permissions on the default vhost and
+// returns the AMQP URL it connects with. configure, write and read are AMQP
+// permission regexes: "" grants none, ".*" grants all. It is how a test proves
+// a code path against a user that CANNOT create a given entity — the broker's
+// own answer, not a fake's.
+//
+// The user is never removed, so callers pass a name unique to the test.
+func (r *RabbitMQContainer) AddUser(ctx context.Context, username, password, configure, write, read string) (string, error) {
+	if err := r.exec(ctx, "rabbitmqctl", "add_user", username, password); err != nil {
+		return "", err
+	}
+	if err := r.exec(ctx, "rabbitmqctl", "set_permissions", "-p", "/", username, configure, write, read); err != nil {
+		return "", err
+	}
+
+	u := r.credentialedURL("amqp", username, password, r.port)
+	u.Path = "/"
+	return u.String(), nil
+}
+
+// exec runs one command inside the running container.
+func (r *RabbitMQContainer) exec(ctx context.Context, args ...string) error {
+	return execIn(ctx, r.container, args...)
+}
+
+// execIn runs one command in c, turning a non-zero exit into an error carrying
+// the command's own output.
+//
+// Only the program and its subcommand are rendered, never the remaining
+// arguments: AddUser passes a password there, and these errors travel through
+// t.Fatalf into CI logs. rabbitmqctl names the offending entity in its own
+// output, which is what a caller needs to diagnose the failure.
+func execIn(ctx context.Context, c *rabbitmq.RabbitMQContainer, args ...string) error {
+	command := strings.Join(args[:min(2, len(args))], " ")
+	code, reader, err := c.Exec(ctx, args)
+	if err != nil {
+		return fmt.Errorf("failed to run %s in the RabbitMQ container: %w", command, err)
+	}
+	if code == 0 {
+		return nil
+	}
+	output, readErr := io.ReadAll(reader)
+	if readErr != nil {
+		return fmt.Errorf("%s exited %d; reading its output failed: %w", command, code, readErr)
+	}
+	return fmt.Errorf("%s exited %d: %s", command, code, output)
+}
+
+// credentialedURL builds a dial URL for this container. url.UserPassword escapes
+// credentials containing @ : or /, and JoinHostPort brackets an IPv6 literal,
+// which some Docker setups return from Host().
+func (r *RabbitMQContainer) credentialedURL(scheme, username, password string, port int) url.URL {
+	return url.URL{
+		Scheme: scheme,
+		User:   url.UserPassword(username, password),
+		Host:   net.JoinHostPort(r.host, strconv.Itoa(port)),
+	}
 }
 
 // Terminate stops and removes the RabbitMQ container

@@ -30,6 +30,14 @@ func NewDirectExchange(name string) *ExchangeDeclaration {
 	return newDurableExchange(name, ExchangeTypeDirect)
 }
 
+// NewExternalExchange builds a reference to an exchange another service owns,
+// for registration straight onto a Registry where there is no Declarations to
+// call DeclareExternalExchange on. Name only, and no Args map: a passive
+// declare ignores every field but the name (ADR-119).
+func NewExternalExchange(name string) *ExchangeDeclaration {
+	return &ExchangeDeclaration{Name: name, Passive: true}
+}
+
 func newDurableExchange(name, exchangeType string) *ExchangeDeclaration {
 	return &ExchangeDeclaration{
 		Name:       name,
@@ -162,6 +170,21 @@ func (d *Declarations) DeclareTopicExchange(name string) *ExchangeDeclaration {
 // NewDirectExchange and register that.
 func (d *Declarations) DeclareDirectExchange(name string) *ExchangeDeclaration {
 	exchange := NewDirectExchange(name)
+	d.RegisterExchange(exchange)
+	return exchange
+}
+
+// DeclareExternalExchange records an EXTERNAL exchange: a name this service
+// references but does not own. It satisfies reference validation for bindings
+// and typed publishers exactly as a locally declared exchange does, and every
+// declare pass verifies it with a passive exchange.declare instead of creating
+// it, so the owner's shape is never raced (ADR-119).
+//
+// Name only: a passive declare ignores every field except the name, so there is
+// no type, no flag and no Args to give. Declaring the same name locally AND as
+// external in one set is self-contradictory and fails startup.
+func (d *Declarations) DeclareExternalExchange(name string) *ExchangeDeclaration {
+	exchange := NewExternalExchange(name)
 	d.RegisterExchange(exchange)
 	return exchange
 }

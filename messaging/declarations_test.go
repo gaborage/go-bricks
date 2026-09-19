@@ -506,7 +506,7 @@ func TestDeclarationsValidate(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	t.Run("binding references non-existent queue", func(t *testing.T) {
+	t.Run("binding references a queue absent from the set", func(t *testing.T) {
 		decls := NewDeclarations()
 		decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: ExchangeTypeTopic})
 		decls.RegisterBinding(&BindingDeclaration{Queue: missingQueue, Exchange: testExchange})
@@ -514,10 +514,11 @@ func TestDeclarationsValidate(t *testing.T) {
 		err := decls.Validate()
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "binding references non-existent queue: missing-queue")
+		assert.Contains(t, err.Error(), `binding references queue "missing-queue", absent from this declaration set `+
+			`(a local check; the broker was not contacted): declare it with DeclareQueue`)
 	})
 
-	t.Run("binding references non-existent exchange", func(t *testing.T) {
+	t.Run("binding references an exchange absent from the set", func(t *testing.T) {
 		decls := NewDeclarations()
 		decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
 		decls.RegisterBinding(&BindingDeclaration{Queue: testQueue, Exchange: missingExchange})
@@ -525,27 +526,32 @@ func TestDeclarationsValidate(t *testing.T) {
 		err := decls.Validate()
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "binding references non-existent exchange: missing-exchange")
+		assert.Contains(t, err.Error(), `binding references exchange "missing-exchange", absent from this declaration set `+
+			`(a local check; the broker was not contacted): declare it, or mark it external with `+
+			`DeclareExternalExchange when another service owns it`)
 	})
 
-	t.Run("consumer references non-existent queue", func(t *testing.T) {
+	t.Run("consumer references a queue absent from the set", func(t *testing.T) {
 		decls := NewDeclarations()
 		decls.RegisterConsumer(&ConsumerDeclaration{Queue: missingQueue})
 
 		err := decls.Validate()
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "consumer references non-existent queue: missing-queue")
+		assert.Contains(t, err.Error(), `consumer references queue "missing-queue", absent from this declaration set `+
+			`(a local check; the broker was not contacted): declare it with DeclareQueue`)
 	})
 
-	t.Run("publisher references non-existent exchange", func(t *testing.T) {
+	t.Run("publisher references an exchange absent from the set", func(t *testing.T) {
 		decls := NewDeclarations()
 		decls.RegisterPublisher(&PublisherDeclaration{Exchange: missingExchange})
 
 		err := decls.Validate()
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "publisher references non-existent exchange: missing-exchange")
+		assert.Contains(t, err.Error(), `publisher references exchange "missing-exchange", absent from this declaration set `+
+			`(a local check; the broker was not contacted): declare it, or mark it external with `+
+			`DeclareExternalExchange when another service owns it`)
 	})
 
 	t.Run("publisher on the default exchange needs no declaration", func(t *testing.T) {
@@ -1875,6 +1881,143 @@ func TestValidateAggregatesMultipleExchangeConflicts(t *testing.T) {
 	assert.Contains(t, err.Error(), "conflicting exchange declarations (2 conflict(s))")
 	assert.Contains(t, err.Error(), mergeExchange)
 	assert.Contains(t, err.Error(), mergeExchangeB)
+}
+
+// TestRegisterExchangeLocalAndExternalOneNameConflicts pins the conflict class
+// ADR-119 adds: a name is either owned by this service or referenced as another
+// service's, never both. It is reported in either registration order, because
+// which module ran first is invisible at either call site.
+func TestRegisterExchangeLocalAndExternalOneNameConflicts(t *testing.T) {
+	t.Run("local declared first", func(t *testing.T) {
+		d := NewDeclarations()
+		d.RegisterExchange(topicExchange(mergeExchange, nil))
+		d.DeclareExternalExchange(mergeExchange)
+
+		err := d.Validate()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "conflicting exchange declarations (1 conflict(s))")
+		assert.Contains(t, err.Error(), "declared locally and marked external")
+		assert.Contains(t, err.Error(), mergeExchange)
+		assert.False(t, d.Exchanges[mergeExchange].Passive, "the incumbent survives a refused declaration")
+	})
+
+	t.Run("external declared first", func(t *testing.T) {
+		d := NewDeclarations()
+		d.DeclareExternalExchange(mergeExchange)
+		d.RegisterExchange(topicExchange(mergeExchange, nil))
+
+		err := d.Validate()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "declared locally and marked external")
+		assert.Contains(t, err.Error(), mergeExchange)
+		assert.True(t, d.Exchanges[mergeExchange].Passive, "the incumbent survives a refused declaration")
+	})
+}
+
+func TestValidateAggregatesExternalExchangeConflicts(t *testing.T) {
+	t.Run("ownership conflicts alone", func(t *testing.T) {
+		d := NewDeclarations()
+		for _, name := range []string{mergeExchange, mergeExchangeB} {
+			d.RegisterExchange(topicExchange(name, nil))
+			d.DeclareExternalExchange(name)
+			d.DeclareExternalExchange(name)
+		}
+
+		err := d.Validate()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "conflicting exchange declarations (2 conflict(s))",
+			"a repeated disagreement is one conflict, not one per rejected declaration")
+		assert.Contains(t, err.Error(), mergeExchange)
+		assert.Contains(t, err.Error(), mergeExchangeB)
+	})
+
+	// The two classes carry different remedies and so different headers, but they
+	// are joined rather than reported in sequence: a set holding one of each must
+	// name BOTH in one boot, or fixing the first only reveals the second on the
+	// next. Reverting Validate to the sequential pair fails this.
+	t.Run("a shape conflict and an ownership conflict in one boot", func(t *testing.T) {
+		d := NewDeclarations()
+		d.RegisterExchange(topicExchange(mergeExchange, nil))
+		d.RegisterExchange(fanoutExchange(mergeExchange, nil))
+		d.RegisterExchange(topicExchange(mergeExchangeB, nil))
+		d.DeclareExternalExchange(mergeExchangeB)
+
+		err := d.Validate()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "declarations merge only when compatible",
+			"the shape conflict's header must survive the join")
+		assert.Contains(t, err.Error(), "a name is either declared by this "+
+			"service or marked external with DeclareExternalExchange",
+			"the ownership conflict's header must survive the join")
+		assert.Contains(t, err.Error(), `exchange "`+mergeExchange+`": Type kept`)
+		assert.Contains(t, err.Error(), `exchange "`+mergeExchangeB+`": declared locally and marked external`)
+	})
+}
+
+// TestCloneAndHashCarryTheExternalMarker pins what multi-tenant replay rests on:
+// Clone hands each tenant's pass the same external declaration, and Hash tells a
+// local declaration apart from an external one of the same name, so the
+// manager's replay key cannot confuse the two.
+func TestCloneAndHashCarryTheExternalMarker(t *testing.T) {
+	local := NewDeclarations()
+	local.RegisterExchange(topicExchange(mergeExchange, nil))
+	external := NewDeclarations()
+	external.DeclareExternalExchange(mergeExchange)
+	require.NoError(t, local.Validate())
+	require.NoError(t, external.Validate())
+
+	assert.NotEqual(t, local.Hash(), external.Hash(),
+		"one name declared locally and referenced externally are different topologies")
+
+	// Hash is a function of the whole declaration set, independent of Validate.
+	// These two differ ONLY in the marker — the mistake of forgetting
+	// DeclareExternalExchange — and must not collapse onto one replay key.
+	unmarked := NewDeclarations()
+	unmarked.RegisterExchange(&ExchangeDeclaration{Name: mergeExchange})
+	marked := NewDeclarations()
+	marked.RegisterExchange(NewExternalExchange(mergeExchange))
+	assert.NotEqual(t, unmarked.Hash(), marked.Hash(), "the marker alone must change the hash")
+
+	clone := external.Clone()
+	require.NoError(t, clone.Validate())
+	assert.True(t, clone.Exchanges[mergeExchange].Passive, "a tenant's pass must verify, never declare")
+	assert.Equal(t, external.Hash(), clone.Hash())
+}
+
+func TestCloneCopiesExternalExchangeConflicts(t *testing.T) {
+	d := NewDeclarations()
+	d.RegisterExchange(topicExchange(mergeExchange, nil))
+	d.DeclareExternalExchange(mergeExchange)
+	require.Error(t, d.Validate())
+
+	// A clone that passed a validation its source failed would be a trap.
+	assert.Error(t, d.Clone().Validate())
+}
+
+// TestValidateRefusesAnExternalExchangeCarryingShape pins the name-only
+// contract on a hand-built declaration: a passive declare ignores every field
+// but the name, so shape on one is a field the broker never reads — and two
+// external declarations of one name that disagree on it would otherwise report
+// a Type conflict naming neither call site's real mistake.
+func TestValidateRefusesAnExternalExchangeCarryingShape(t *testing.T) {
+	d := NewDeclarations()
+	d.RegisterExchange(&ExchangeDeclaration{
+		Name:    mergeExchange,
+		Passive: true,
+		Type:    ExchangeTypeTopic,
+		Durable: true,
+		Args:    map[string]any{mapKeyTTL: ttlValue3600},
+	})
+
+	err := d.Validate()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `external exchange "`+mergeExchange+`" is name-only, but sets Args, Durable, Type`,
+		"every field set is named, in a fixed order")
 }
 
 // TestRegisterExchangeMergeHashIsOrderIndependent pins what the merge buys: the
