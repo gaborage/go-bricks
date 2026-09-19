@@ -3153,12 +3153,14 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 	exchange := decls.DeclareTopicExchange("orders.events")
 	decls.DeclareDirectExchange("orders.commands") // exact routing-key match; same defaults
 	// An exchange ANOTHER service owns: referenced by name, verified with a passive
-	// declare on every declare pass, never created here (ADR-119).
+	// declare on every declare pass, never created here (ADR-119). Publishing
+	// through one is where that verification earns its keep — a binding's own
+	// queue.bind already answers 404, but nothing would check a publish-only
+	// reference until the first publish.
 	billing := decls.DeclareExternalExchange("billing.events")
 	queue := decls.DeclareQueue("orders.processing")
 	notices := decls.DeclareQueue("orders.notices") // consumed elsewhere; see the notice publisher below
 	decls.DeclareBinding(queue.Name, exchange.Name, "order.*")
-	decls.DeclareBinding(queue.Name, billing.Name, "invoice.*")
 
 	// Publisher contract — validates routing-key + event-type pair upfront AND hands back
 	// the typed handle every publish goes through. Keep it (there is no deps accessor to
@@ -3179,6 +3181,14 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 		Exchange:   "",
 		RoutingKey: notices.Name,
 		EventType:  "OrderNotice",
+	})
+
+	// Publish into the exchange the billing service owns. This service declares
+	// no shape for it, so it cannot race the owner's.
+	m.svc.invoiceRaised = messaging.DeclareTypedPublisher[InvoiceRaised](decls, &messaging.PublisherOptions{
+		Exchange:   billing.Name,
+		RoutingKey: "invoice.raised",
+		EventType:  "InvoiceRaised",
 	})
 
 	// Consumer — auto-scales to NumCPU*4 workers for I/O-bound handlers
@@ -3429,12 +3439,19 @@ type OrderNotice struct {
 	Text    string `json:"text"     validate:"required"`
 }
 
+// InvoiceRaised travels to billing.events, an exchange the billing service owns.
+type InvoiceRaised struct {
+	OrderID   int64 `json:"order_id"   validate:"required"`
+	AmountCts int64 `json:"amount_cts" validate:"required"`
+}
+
 type OrderService struct {
-	getDB        func(context.Context) (database.Interface, error)
-	getMessaging func(context.Context) (messaging.AMQPClient, error)
-	orderCreated *messaging.Publisher[OrderCreatedEvent] // set in Module.DeclareMessaging (Step 2)
-	orderNotice  *messaging.Publisher[OrderNotice]       // default-exchange handle, same place
-	logger       logger.Logger
+	getDB         func(context.Context) (database.Interface, error)
+	getMessaging  func(context.Context) (messaging.AMQPClient, error)
+	orderCreated  *messaging.Publisher[OrderCreatedEvent] // set in Module.DeclareMessaging (Step 2)
+	orderNotice   *messaging.Publisher[OrderNotice]       // default-exchange handle, same place
+	invoiceRaised *messaging.Publisher[InvoiceRaised]     // publishes into another service's exchange
+	logger        logger.Logger
 }
 
 func NewOrderService(getDB func(context.Context) (database.Interface, error),
@@ -3463,6 +3480,16 @@ func (s *OrderService) NotifyDirectQueue(ctx context.Context, notice OrderNotice
 		return err
 	}
 	return s.orderNotice.Publish(ctx, client, notice)
+}
+
+// RaiseInvoice — publishes into billing.events, which this service references as
+// an external exchange and never declares.
+func (s *OrderService) RaiseInvoice(ctx context.Context, evt InvoiceRaised) error {
+	client, err := s.getMessaging(ctx)
+	if err != nil {
+		return err
+	}
+	return s.invoiceRaised.Publish(ctx, client, evt)
 }
 ```
 

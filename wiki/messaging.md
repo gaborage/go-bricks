@@ -186,8 +186,8 @@ startup at once, as above.
 
 #### Reference errors
 
-A binding, consumer or publisher naming an entity no declaration in the set carries now says so,
-and says the broker was not contacted:
+A binding, consumer or publisher that names an entity absent from the declaration set now fails
+with an error naming that entity and stating the broker was not contacted:
 
 ```text
 binding references exchange "billing.events", absent from this declaration set (a local check; the broker was not contacted): declare it, or mark it external with DeclareExternalExchange when another service owns it
