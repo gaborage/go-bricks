@@ -2003,6 +2003,25 @@ func publisherOnlyDeclarations() *Declarations {
 	return decls
 }
 
+// newPooledPublisherManager wires the shape every pooled-publisher test needs: a
+// manager whose factory hands out consumerClient and then publisherClient, a
+// declared publisher-only registry, and the pooled publisher itself, already
+// released back to the pool. Closing the manager is left to the caller, because
+// half these tests close it as the act under test.
+func newPooledPublisherManager(t *testing.T, consumerClient, publisherClient AMQPClient) (*Manager, *stampingPublisher) {
+	t.Helper()
+	m := NewMessagingManager(&stubMessagingSource{}, logger.New("error", false), ManagerOptions{},
+		newQueuedClientFactory(t, consumerClient, publisherClient))
+	require.NoError(t, m.EnsureConsumers(context.Background(), "", publisherOnlyDeclarations()))
+
+	publisher, release, err := m.Publisher(context.Background(), "")
+	require.NoError(t, err)
+	release()
+	pooled, ok := publisher.(*stampingPublisher)
+	require.True(t, ok, "the pool must hand back the framework's own wrapper")
+	return m, pooled
+}
+
 // TestManagerRedeclaresTopologyFromAPooledPublisherChannel is the acceptance test
 // for the second redeclare driver: the client that eats the broker's 404 is a
 // pooled publisher, not the registry's own, so a rotation only that client saw
@@ -2010,15 +2029,8 @@ func publisherOnlyDeclarations() *Declarations {
 // own client, because that is the connection the registry owns.
 func TestManagerRedeclaresTopologyFromAPooledPublisherChannel(t *testing.T) {
 	consumerClient, publisherClient := newReconnectingMockClient(), newReconnectingMockClient()
-	m := NewMessagingManager(&stubMessagingSource{}, logger.New("error", false), ManagerOptions{},
-		newQueuedClientFactory(t, consumerClient, publisherClient))
+	m, _ := newPooledPublisherManager(t, consumerClient, publisherClient)
 	t.Cleanup(func() { _ = m.Close() })
-
-	ctx := context.Background()
-	require.NoError(t, m.EnsureConsumers(ctx, "", publisherOnlyDeclarations()))
-	_, release, err := m.Publisher(ctx, "")
-	require.NoError(t, err)
-	defer release()
 
 	// Every recorded generation is the DECLARING client's own, and the consumer
 	// client never rotates here — the pooled publisher does.
@@ -2039,17 +2051,7 @@ func TestManagerRedeclaresTopologyFromAPooledPublisherChannel(t *testing.T) {
 // observer and closes the client on eviction, on the idle sweep and on Close, and
 // a goroutine that survived any of those would leak one per retired client.
 func TestManagerPublisherChannelObserverEndsWithItsClient(t *testing.T) {
-	consumerClient, publisherClient := newReconnectingMockClient(), newReconnectingMockClient()
-	m := NewMessagingManager(&stubMessagingSource{}, logger.New("error", false), ManagerOptions{},
-		newQueuedClientFactory(t, consumerClient, publisherClient))
-
-	ctx := context.Background()
-	require.NoError(t, m.EnsureConsumers(ctx, "", publisherOnlyDeclarations()))
-	publisher, release, err := m.Publisher(ctx, "")
-	require.NoError(t, err)
-	release()
-	pooled, ok := publisher.(*stampingPublisher)
-	require.True(t, ok)
+	m, pooled := newPooledPublisherManager(t, newReconnectingMockClient(), newReconnectingMockClient())
 	require.NotNil(t, pooled.observerDone, "the pooled publisher was never observed")
 
 	require.NoError(t, m.Close())
@@ -2066,16 +2068,9 @@ func TestManagerPublisherChannelObserverEndsWithItsClient(t *testing.T) {
 // publisher the pool evicts, so a generation entry that is never dropped
 // accumulates one dead source per eviction for the process lifetime.
 func TestManagerForgetsAPooledPublisherOnceItCloses(t *testing.T) {
-	consumerClient, publisherClient := newReconnectingMockClient(), newReconnectingMockClient()
-	m := NewMessagingManager(&stubMessagingSource{}, logger.New("error", false), ManagerOptions{},
-		newQueuedClientFactory(t, consumerClient, publisherClient))
+	publisherClient := newReconnectingMockClient()
+	m, _ := newPooledPublisherManager(t, newReconnectingMockClient(), publisherClient)
 	t.Cleanup(func() { _ = m.Close() })
-
-	ctx := context.Background()
-	require.NoError(t, m.EnsureConsumers(ctx, "", publisherOnlyDeclarations()))
-	_, release, err := m.Publisher(ctx, "")
-	require.NoError(t, err)
-	release()
 
 	registry := m.registryFor("")
 	require.NotNil(t, registry)
@@ -2113,18 +2108,8 @@ func (c *neverClosingBroadcastClient) channelReadyNotify() (ready <-chan struct{
 // the client's own end. A client that never closes its broadcast would otherwise
 // leak one goroutine per pooled client for the process lifetime.
 func TestManagerStopsAPublisherObserverWhoseClientKeepsAnnouncing(t *testing.T) {
-	consumerClient := newReconnectingMockClient()
 	publisherClient := &neverClosingBroadcastClient{reconnectingMockClient: newReconnectingMockClient()}
-	m := NewMessagingManager(&stubMessagingSource{}, logger.New("error", false), ManagerOptions{},
-		newQueuedClientFactory(t, consumerClient, publisherClient))
-
-	ctx := context.Background()
-	require.NoError(t, m.EnsureConsumers(ctx, "", publisherOnlyDeclarations()))
-	publisher, release, err := m.Publisher(ctx, "")
-	require.NoError(t, err)
-	release()
-	pooled, ok := publisher.(*stampingPublisher)
-	require.True(t, ok)
+	m, pooled := newPooledPublisherManager(t, newReconnectingMockClient(), publisherClient)
 	require.NotNil(t, pooled.observerDone, "the pooled publisher was never observed")
 
 	require.NoError(t, m.Close())
