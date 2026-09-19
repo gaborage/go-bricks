@@ -928,9 +928,9 @@ func TestAMQPClientDeclareExchangeVerifiesAnExternalExchange(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
 
-	require.NoError(t, c.DeclareExchange(context.Background(), NewExternalExchange(externalExchangeName)))
+	require.NoError(t, c.DeclareExchange(context.Background(), NewExternalExchange(testExternalExchange)))
 
-	assert.Equal(t, externalExchangeName, ch.verifiedExchange)
+	assert.Equal(t, testExternalExchange, ch.verifiedExchange)
 	assert.Empty(t, ch.declaredExchange, "an external exchange is never created by this service")
 }
 
@@ -939,17 +939,17 @@ func TestAMQPClientDeclareExchangeVerifiesAnExternalExchange(t *testing.T) {
 // errors.As, so the pass ends with the reply code and text rather than a
 // framework paraphrase.
 func TestAMQPClientDeclareExchangeSurfacesTheBrokersNotFound(t *testing.T) {
-	notFound := &amqp.Error{Code: amqp.NotFound, Reason: "no exchange '" + externalExchangeName + "' in vhost '/'"}
+	notFound := &amqp.Error{Code: amqp.NotFound, Reason: "no exchange '" + testExternalExchange + "' in vhost '/'"}
 	ch := &fakeChannel{exVerifyErr: notFound}
 	c := newClientWithFakeChannel(t, ch)
 
-	err := c.DeclareExchange(context.Background(), NewExternalExchange(externalExchangeName))
+	err := c.DeclareExchange(context.Background(), NewExternalExchange(testExternalExchange))
 
 	require.Error(t, err)
 	var amqpErr *amqp.Error
 	require.ErrorAs(t, err, &amqpErr)
 	assert.Equal(t, amqp.NotFound, amqpErr.Code)
-	assert.Contains(t, err.Error(), "no exchange '"+externalExchangeName+"' in vhost '/'")
+	assert.Contains(t, err.Error(), "no exchange '"+testExternalExchange+"' in vhost '/'")
 }
 
 // TestAMQPClientDeclareQueuePassesArgs pins toTable's normalization: a populated

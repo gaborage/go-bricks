@@ -8,7 +8,7 @@
 
 `Declarations.Validate` required every binding's exchange — and every typed publisher's — to be
 declared in the same set, so the single-declarer pattern could not be expressed. One service owns a
-shared exchange; every other service only binds to it or publishes through it. To say that today, a
+one exchange; every other service only binds to it or publishes through it. To say that today, a
 non-owner must repeat the owner's declaration and accept the shape race: two active
 `exchange.declare` calls that disagree on `Type` or a flag are a `PRECONDITION_FAILED` at the
 broker, which since [ADR-113](adr_113_amqp_topology_redeclare_on_reconnect.md) is skipped until the
@@ -27,7 +27,9 @@ sends the reader to `rabbitmqctl` and the management UI, which show a healthy ex
   publishers exactly as a locally declared one does. Name only: a passive `exchange.declare`
   ignores every field except the name and no-wait (AMQP 0-9-1), so a type, a flag or an `Args` key
   on one would be a value nobody reads and the owner alone decides. `Validate()` refuses an
-  external declaration that carries any of them, naming every field set.
+  external declaration that carries any of them, naming every field set — `NoWait` included, and
+  for the opposite reason: the broker DOES honour it, and a declare that does not wait for its
+  reply cannot deliver the 404 the verification exists to catch.
 - **Verified on every declare pass, never created.** The marker rides on the declaration as
   `ExchangeDeclaration.Passive`, and the client issues `exchange.declare` with `passive=true`
   instead of creating the exchange. That covers the startup pass and each redeclare pass on a new
@@ -60,9 +62,11 @@ sends the reader to `rabbitmqctl` and the management UI, which show a healthy ex
 
 ## Startup wait
 
-<!-- PLACEHOLDER: filled by link 2 of #1760 (gb-executor-4). -->
-Shipped in link 2 as the opt-in `messaging.declare.externalwait` — decided here (see
-*Alternatives considered*, boot-and-converge), documented in the link that carries the key.
+<!-- PLACEHOLDER: link 2 of #1760 replaces this section. -->
+NOT IN THIS CHANGE. The bounded, opt-in in-process wait is decided here (see *Alternatives
+considered*, boot-and-converge) and ships in the second link of this stack, which documents its
+configuration key. Until it lands, a startup pass that cannot verify an external exchange aborts at
+once.
 
 ## Alternatives considered
 
@@ -75,9 +79,11 @@ The accepted answer to a consumer deploying before the owner is a bounded, opt-i
 at startup, decided here and shipped separately.
 
 **A validator-only marker that never reaches the broker.** It would satisfy the reference check
-with no wire cost. Rejected on evidence: a passive declare needs no `configure` permission —
-measured against a real broker with a user holding `configure=""`, where the passive declare
-answered declare-ok and an active one was refused with 403. A publisher-only service is the case
+with no wire cost. Rejected on evidence: a passive declare needs no `configure` permission on the
+exchange. The integration test proves it against a real broker with a user whose `configure`
+permission covers its own queue and nothing else — the passive declare answers declare-ok, and the
+same user's ACTIVE declare of that exchange is refused `403 ACCESS_REFUSED`, which is what makes
+the first result a real negative rather than a mis-provisioned permission set. A publisher-only service is the case
 that needs the check: nothing else contacts the exchange until the first publish, which is loud
 only after `reconnect.maxpublishattempts`.
 
@@ -107,5 +113,5 @@ the framework creating the topology it owns.
 - [ADR-118](adr_118_exchange_redeclaration_conflicts.md): the exchange-conflict aggregate this mirrors
 - [ADR-116](adr_116_exchange_type_validation.md): the exchange-type check an external declaration is exempt from
 - [wiki/messaging.md](messaging.md#external-exchanges): the door, its rules and the operator-facing failures
-- `messaging/helpers.go` (`DeclareExternalExchange`), `messaging/declarations.go` (`validateExternalExchangeConflicts`, `validateExternalExchangeShape`)
+- `messaging/helpers.go` (`DeclareExternalExchange`, `NewExternalExchange`), `messaging/declarations.go` (`validateExternalExchangeConflicts`, `validateExchangeShapes`, `externalShapeFields`)
 - `messaging/amqp_client.go` (`DeclareExchange`), `messaging/amqp_adapters.go` (`amqpChannel.ExchangeDeclarePassive`)

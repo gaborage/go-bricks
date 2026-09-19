@@ -323,30 +323,30 @@ func TestDeclarationsExternalExchange(t *testing.T) {
 	t.Run("records a name-only passive declaration", func(t *testing.T) {
 		decls := NewDeclarations()
 
-		exchange := decls.DeclareExternalExchange(externalExchangeName)
+		exchange := decls.DeclareExternalExchange(testExternalExchange)
 
 		// Whole-value, so a field added to ExchangeDeclaration and left set here
 		// fails this test instead of quietly escaping the name-only rule.
-		assert.Equal(t, &ExchangeDeclaration{Name: externalExchangeName, Passive: true}, exchange)
+		assert.Equal(t, &ExchangeDeclaration{Name: testExternalExchange, Passive: true}, exchange)
 
-		registered := decls.Exchanges[externalExchangeName]
+		registered := decls.Exchanges[testExternalExchange]
 		require.NotNil(t, registered)
 		assert.True(t, registered.Passive)
 	})
 
 	t.Run("satisfies a binding reference", func(t *testing.T) {
 		decls := NewDeclarations()
-		decls.DeclareExternalExchange(externalExchangeName)
+		decls.DeclareExternalExchange(testExternalExchange)
 		decls.DeclareQueue("local.queue")
-		decls.DeclareBinding("local.queue", externalExchangeName, "orders.#")
+		decls.DeclareBinding("local.queue", testExternalExchange, "orders.#")
 
 		assert.NoError(t, decls.Validate())
 	})
 
 	t.Run("satisfies a publisher reference", func(t *testing.T) {
 		decls := NewDeclarations()
-		decls.DeclareExternalExchange(externalExchangeName)
-		decls.RegisterPublisher(&PublisherDeclaration{Exchange: externalExchangeName, RoutingKey: "orders.created"})
+		decls.DeclareExternalExchange(testExternalExchange)
+		decls.RegisterPublisher(&PublisherDeclaration{Exchange: testExternalExchange, RoutingKey: "orders.created"})
 
 		assert.NoError(t, decls.Validate())
 	})
@@ -354,8 +354,8 @@ func TestDeclarationsExternalExchange(t *testing.T) {
 	t.Run("a repeat merges silently", func(t *testing.T) {
 		decls := NewDeclarations()
 
-		decls.DeclareExternalExchange(externalExchangeName)
-		decls.DeclareExternalExchange(externalExchangeName)
+		decls.DeclareExternalExchange(testExternalExchange)
+		decls.DeclareExternalExchange(testExternalExchange)
 
 		require.NoError(t, decls.Validate())
 		assert.Len(t, decls.Exchanges, 1)

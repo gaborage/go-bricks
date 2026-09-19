@@ -1933,6 +1933,36 @@ func TestValidateAggregatesExternalExchangeConflicts(t *testing.T) {
 	assert.Contains(t, err.Error(), mergeExchangeB)
 }
 
+// TestCloneAndHashCarryTheExternalMarker pins what multi-tenant replay rests on:
+// Clone hands each tenant's pass the same external declaration, and Hash tells a
+// local declaration apart from an external one of the same name, so the
+// manager's replay key cannot confuse the two.
+func TestCloneAndHashCarryTheExternalMarker(t *testing.T) {
+	local := NewDeclarations()
+	local.RegisterExchange(topicExchange(mergeExchange, nil))
+	external := NewDeclarations()
+	external.DeclareExternalExchange(mergeExchange)
+	require.NoError(t, local.Validate())
+	require.NoError(t, external.Validate())
+
+	assert.NotEqual(t, local.Hash(), external.Hash(),
+		"one name declared locally and referenced externally are different topologies")
+
+	// Hash is a function of the whole declaration set, independent of Validate.
+	// These two differ ONLY in the marker — the mistake of forgetting
+	// DeclareExternalExchange — and must not collapse onto one replay key.
+	unmarked := NewDeclarations()
+	unmarked.RegisterExchange(&ExchangeDeclaration{Name: mergeExchange})
+	marked := NewDeclarations()
+	marked.RegisterExchange(NewExternalExchange(mergeExchange))
+	assert.NotEqual(t, unmarked.Hash(), marked.Hash(), "the marker alone must change the hash")
+
+	clone := external.Clone()
+	require.NoError(t, clone.Validate())
+	assert.True(t, clone.Exchanges[mergeExchange].Passive, "a tenant's pass must verify, never declare")
+	assert.Equal(t, external.Hash(), clone.Hash())
+}
+
 func TestCloneCopiesExternalExchangeConflicts(t *testing.T) {
 	d := NewDeclarations()
 	d.RegisterExchange(topicExchange(mergeExchange, nil))

@@ -40,8 +40,8 @@ const (
 	testQueue3     = "queue3"
 	testBenchQueue = "bench-queue"
 	testExchange1  = "exchange1"
-	// externalExchangeName is an exchange another service owns (ADR-119).
-	externalExchangeName = "owner.events"
+	// testExternalExchange is an exchange another service owns (ADR-119).
+	testExternalExchange = "owner.events"
 	testExchange2        = "exchange2"
 	testConsumer1        = "consumer1"
 	testConsumer2        = "consumer2"
