@@ -123,11 +123,14 @@ func (e *pgEnv) dropTenantArtifacts(t *testing.T, schema, migratorRole, runtimeR
 	ctx, cancel := testCtx(t)
 	defer cancel()
 	// CASCADE drops dependent objects (tables, sequences). Roles must be
-	// dropped after the schema since they own it.
+	// dropped after the schema since they own it. %q is Go quoting, not PG
+	// identifier quoting (it escapes an interior " as \" where PG doubles it);
+	// safe here because every caller passes a fixed literal. Production quotes
+	// identifiers with quotePGIdent.
 	for _, stmt := range []string{
-		fmt.Sprintf(`DROP SCHEMA IF EXISTS "%s" CASCADE`, schema),
-		fmt.Sprintf(`DROP ROLE IF EXISTS "%s"`, runtimeRole),
-		fmt.Sprintf(`DROP ROLE IF EXISTS "%s"`, migratorRole),
+		fmt.Sprintf(`DROP SCHEMA IF EXISTS %q CASCADE`, schema),
+		fmt.Sprintf(`DROP ROLE IF EXISTS %q`, runtimeRole),
+		fmt.Sprintf(`DROP ROLE IF EXISTS %q`, migratorRole),
 	} {
 		if _, err := e.adminDB.ExecContext(ctx, stmt); err != nil {
 			t.Logf("cleanup of %q failed (test-side): %v", stmt, err)
@@ -236,7 +239,7 @@ func TestProvisioningCleanupOnFailureDropsArtifacts(t *testing.T) {
 	// fails — this is the realistic failure mode in production. Cleanup
 	// must roll back the schema and role created in CreateSchema.
 	steps := env.realRoleProvisioningSteps(t, spec)
-	steps.Migrate = func(_ context.Context, job *Job) error {
+	steps.Migrate = func(_ context.Context, _ *Job) error {
 		return errors.New("migration failed: simulated Flyway error")
 	}
 
@@ -288,7 +291,7 @@ func TestProvisioningRerunSameJobIDIsNoOp(t *testing.T) {
 
 	var seedCalls int
 	steps := env.realRoleProvisioningSteps(t, spec)
-	steps.Seed = func(_ context.Context, job *Job) error {
+	steps.Seed = func(_ context.Context, _ *Job) error {
 		seedCalls++
 		return nil
 	}

@@ -72,7 +72,7 @@ func sanitizeStreamName(name string) string {
 // newITNames derives this test's topology names from its own name plus a random
 // suffix - the suffix is what keeps a -count=2 run from reusing the offsets its
 // first pass committed - and deletes what the test declared once it finishes.
-func newITNames(t *testing.T, opts ManagerOptions) itNames {
+func newITNames(t *testing.T, opts *ManagerOptions) itNames {
 	t.Helper()
 
 	base := sanitizeStreamName(t.Name())
@@ -94,7 +94,7 @@ func newITNames(t *testing.T, opts ManagerOptions) itNames {
 // deleteDeclaredStreams drops the test's topology from the shared broker so it
 // does not accumulate over the run. Best effort throughout: a test that never
 // declared its super stream is not a failure.
-func deleteDeclaredStreams(opts ManagerOptions, names itNames) {
+func deleteDeclaredStreams(opts *ManagerOptions, names itNames) {
 	env, err := stream.NewEnvironment(streamEnvironmentOptions(opts))
 	if err != nil {
 		return

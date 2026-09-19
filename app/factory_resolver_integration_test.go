@@ -107,7 +107,7 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 
 	t.Run("multi tenant - tenant exists with cache enabled", func(t *testing.T) {
 		// Two services with DIFFERENT app names, one tenant, one Redis database: the
-		// documented tenant namespace is <app.name>:<tenantID>, so the neighbour must
+		// documented tenant namespace is <app.name>:<tenantID>, so the neighbor must
 		// not see this tenant's entry. Dropping app.name from a tenant key would leave
 		// both on "acme" and turn the miss below into a hit.
 		log := logger.New("debug", true)
@@ -155,8 +155,8 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, testValue, retrievedValue)
 
-		neighbour := tenantCache("other-" + integrationAppName)
-		_, err = neighbour.Get(ctx, testKey)
+		neighbor := tenantCache("other-" + integrationAppName)
+		_, err = neighbor.Get(ctx, testKey)
 		require.ErrorIs(t, err, cachepkg.ErrNotFound,
 			"another service's cache for the same tenant must not read this one's entry")
 	})

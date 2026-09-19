@@ -227,8 +227,8 @@ func enableStreamPlugin(ctx context.Context, c *rabbitmq.RabbitMQContainer) (por
 	strategy := wait.ForListeningPort(streamPortSpec).
 		WithStartupTimeout(streamPluginReadyTimeout).
 		WithPollInterval(streamPluginPollInterval)
-	if err := strategy.WaitUntilReady(ctx, c); err != nil {
-		return 0, fmt.Errorf("rabbitmq_stream listener did not become ready: %w", err)
+	if waitErr := strategy.WaitUntilReady(ctx, c); waitErr != nil {
+		return 0, fmt.Errorf("rabbitmq_stream listener did not become ready: %w", waitErr)
 	}
 
 	mapped, err := c.MappedPort(ctx, streamPortSpec)
