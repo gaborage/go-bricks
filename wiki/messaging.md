@@ -182,8 +182,9 @@ and ADR-113's one rule still covers the step. See
 Two services that release independently have no ordering guarantee between them, so a consumer
 starting before the service that owns its external exchange is ordinary rather than exceptional.
 `messaging.declare.externalwait` (duration, default `0`, env `MESSAGING_DECLARE_EXTERNALWAIT`) buys
-that case a bounded wait: on a 404 the control-plane startup pass is re-run with backoff — 1s,
-doubling to a 5s ceiling — until it succeeds or the wait elapses. A service whose exchange appears
+that case a bounded wait: on a 404 the control-plane startup pass is re-run with backoff — the first
+gap is `min(1s, externalwait/4)`, doubling to a 5s ceiling, so a short budget still gets several
+attempts instead of spending itself asleep — until it succeeds or the wait elapses. A service whose exchange appears
 in time starts consuming with no restart; one whose exchange never appears aborts with the broker's
 own 404 naming it. `0`, the default, aborts at once.
 
