@@ -153,9 +153,7 @@ func TestMigrateCommandSuccessAcrossPagesAndShapes(t *testing.T) {
 	})
 	defer smSrv.Close()
 
-	t.Setenv("AWS_ACCESS_KEY_ID", "test")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
-	t.Setenv("AWS_REGION", "us-east-1")
+	setFakeAWSEnv(t)
 
 	cmd := NewMigrateCommand()
 	cmd.SetArgs([]string{
@@ -198,9 +196,7 @@ func TestMigrateCommandFailFastStopsAfterFirstFailure(t *testing.T) {
 	})
 	defer smSrv.Close()
 
-	t.Setenv("AWS_ACCESS_KEY_ID", "test")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
-	t.Setenv("AWS_REGION", "us-east-1")
+	setFakeAWSEnv(t)
 
 	cmd := NewMigrateCommand()
 	cmd.SetArgs([]string{
@@ -244,9 +240,7 @@ func TestMigrateCommandContinueOnErrorListsAllFailures(t *testing.T) {
 	})
 	defer smSrv.Close()
 
-	t.Setenv("AWS_ACCESS_KEY_ID", "test")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
-	t.Setenv("AWS_REGION", "us-east-1")
+	setFakeAWSEnv(t)
 
 	cmd := NewMigrateCommand()
 	cmd.SetArgs([]string{
@@ -288,9 +282,7 @@ func TestMigrateCommandMalformedSecretMentionsTenant(t *testing.T) {
 	})
 	defer smSrv.Close()
 
-	t.Setenv("AWS_ACCESS_KEY_ID", "test")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
-	t.Setenv("AWS_REGION", "us-east-1")
+	setFakeAWSEnv(t)
 
 	cmd := NewMigrateCommand()
 	cmd.SetArgs([]string{
@@ -328,4 +320,168 @@ func makeTempDir(t *testing.T) string {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	return dir
+}
+
+// setFakeAWSEnv points the AWS SDK at throwaway credentials so the fake
+// Secrets Manager endpoint is reached without a real credential chain.
+func setFakeAWSEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+	t.Setenv("AWS_REGION", "us-east-1")
+}
+
+// tenantListServer serves one page of the control-plane listing envelope.
+func tenantListServer(ids ...string) *httptest.Server {
+	tenants := make([]map[string]string, 0, len(ids))
+	for _, id := range ids {
+		tenants = append(tenants, map[string]string{"id": id})
+	}
+	return httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		writeEnvelope(w, map[string]any{"tenants": tenants, "next_cursor": ""})
+	}))
+}
+
+// summaryRecords returns the NDJSON summary records found in a --json run's
+// output. A pipeline must see exactly one per invocation.
+func summaryRecords(t *testing.T, out string) []summaryRecord {
+	t.Helper()
+	var recs []summaryRecord
+	for _, line := range strings.Split(out, "\n") {
+		// A subcommand exercised outside the root prints cobra's usage block on
+		// error; only the NDJSON records are of interest here.
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var rec summaryRecord
+		require.NoError(t, json.Unmarshal([]byte(line), &rec))
+		if rec.Event == "summary" {
+			recs = append(recs, rec)
+		}
+	}
+	return recs
+}
+
+// fakeFleet starts the control-plane listing and Secrets Manager endpoints for
+// the named tenants and points the AWS SDK at them, returning both URLs.
+func fakeFleet(t *testing.T, ids ...string) (listURL, smURL string) {
+	t.Helper()
+	secrets := make(map[string]string, len(ids))
+	for _, id := range ids {
+		secrets[secretName(id)] = canonicalTenantSecret("h", "d", "u")
+	}
+	listSrv := tenantListServer(ids...)
+	smSrv := fakeSecretsManager(t, secrets)
+	t.Cleanup(listSrv.Close)
+	t.Cleanup(smSrv.Close)
+	setFakeAWSEnv(t)
+	return listSrv.URL, smSrv.URL
+}
+
+// fleetArgs is the flag set every fleet run in these tests shares.
+func fleetArgs(t *testing.T, listURL, smURL, flywayPath string) []string {
+	t.Helper()
+	return []string{
+		"--source-url", listURL,
+		"--allow-insecure-scheme",
+		"--aws-endpoint", smURL,
+		"--aws-region", "us-east-1",
+		"--flyway-path", flywayPath,
+		"--flyway-config", flywayConfPath(t),
+		"--migrations-dir", makeTempDir(t),
+	}
+}
+
+// runMigrateJSON runs the migrate subcommand in --json mode and returns its
+// stdout with the command's error.
+func runMigrateJSON(t *testing.T, args ...string) (stdout string, err error) {
+	t.Helper()
+	cmd := NewMigrateCommand()
+	cmd.SetArgs(append(args, "--json"))
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetContext(context.Background())
+	err = cmd.Execute()
+	return out.String(), err
+}
+
+// An empty fleet is now visible in the record. The exit code still follows the
+// error, so this run remains a success here; the three-way mapping lands with
+// the classifier.
+func TestMigrateCommandEmptyTenantListReportsNothingAttempted(t *testing.T) {
+	listURL, smURL := fakeFleet(t)
+
+	stdout, err := runMigrateJSON(t, fleetArgs(t, listURL, smURL, stubFlyway(t))...)
+	require.NoError(t, err)
+
+	rec := requireSummary(t, stdout)
+	assert.Equal(t, verdictNothingAttempted, rec.Verdict)
+	assert.Zero(t, rec.Listed)
+}
+
+func TestMigrateCommandListTenantsFailureStillEmitsSummary(t *testing.T) {
+	listSrv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		stdhttp.Error(w, "control plane down", stdhttp.StatusInternalServerError)
+	}))
+	defer listSrv.Close()
+
+	// The listing fails, so no secret is ever fetched; this endpoint only has to exist.
+	smSrv := fakeSecretsManager(t, nil)
+	defer smSrv.Close()
+	setFakeAWSEnv(t)
+
+	stdout, err := runMigrateJSON(t, fleetArgs(t, listSrv.URL, smSrv.URL, stubFlyway(t))...)
+	require.Error(t, err)
+	assert.Equal(t, verdictNothingAttempted, requireSummary(t, stdout).Verdict)
+}
+
+func TestMigrateCommandUnreadableTenantStoreIsNothingAttempted(t *testing.T) {
+	stdout, err := runMigrateJSON(t,
+		"--tenant", "t1",
+		"--credentials-from", "config-file",
+		"--source-config", filepath.Join(t.TempDir(), "absent.yaml"),
+	)
+	require.Error(t, err)
+
+	rec := requireSummary(t, stdout)
+	assert.Equal(t, verdictNothingAttempted, rec.Verdict)
+	assert.Equal(t, "migrate", rec.Action)
+}
+
+// A flag that does not resolve dispatched nothing, and the record says so.
+func TestMigrateCommandInvalidCredentialSourceStillEmitsSummary(t *testing.T) {
+	stdout, err := runMigrateJSON(t,
+		"--tenant", "t1",
+		"--credentials-from", "not-a-credential-source",
+	)
+	require.Error(t, err)
+	assert.Equal(t, verdictNothingAttempted, requireSummary(t, stdout).Verdict)
+}
+
+func TestMigrateCommandFailFastIsFleetSplitWithNeverDispatched(t *testing.T) {
+	listURL, smURL := fakeFleet(t, "t1", "t2", "t3")
+
+	stdout, err := runMigrateJSON(t, fleetArgs(t, listURL, smURL, stubFlywayFailing(t))...)
+	require.Error(t, err)
+
+	// t1 was dispatched and failed; fail-fast left t2 and t3 unreached.
+	rec := requireSummary(t, stdout)
+	assert.Equal(t, verdictFleetSplit, rec.Verdict)
+	assert.Equal(t, 3, rec.Listed)
+	assert.Equal(t, 1, rec.Attempted)
+	assert.Equal(t, 1, rec.Failed)
+	assert.Equal(t, 2, rec.NotAttempted)
+}
+
+func TestMigrateCommandCleanRunIsExitZero(t *testing.T) {
+	listURL, smURL := fakeFleet(t, "t1")
+
+	stdout, err := runMigrateJSON(t, fleetArgs(t, listURL, smURL, stubFlyway(t))...)
+	require.NoError(t, err)
+
+	rec := requireSummary(t, stdout)
+	assert.Equal(t, verdictClean, rec.Verdict)
+	assert.Equal(t, 1, rec.Listed)
+	assert.Equal(t, 1, rec.Attempted)
+	assert.Zero(t, rec.NotAttempted)
 }
