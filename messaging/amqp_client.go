@@ -1092,6 +1092,11 @@ func (c *AMQPClientImpl) channelGeneration() (generation uint64, ready bool) {
 // becomes ready on a fresh channel, and reports whether the client is still
 // open. A closed client returns (nil, false), which is how an observer learns to
 // stop instead of parking on a channel nothing will close again.
+//
+// The broadcast is edge-triggered and remembers nothing: a wake that fires while
+// nobody holds a channel is lost. Take the channel BEFORE acting on the
+// generation and park on it afterwards, so a rotation during that work closes
+// the channel already in hand instead of being missed.
 func (c *AMQPClientImpl) channelReadyNotify() (ready <-chan struct{}, open bool) {
 	c.m.Lock()
 	defer c.m.Unlock()
