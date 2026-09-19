@@ -575,7 +575,7 @@ func TestConfigValidate(t *testing.T) {
 					return
 				}
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "redis.load_timeout")
+				assert.Contains(t, err.Error(), "cache configuration error: loadtimeout")
 				assert.Contains(t, err.Error(), "cannot be negative")
 			})
 		}
