@@ -1790,3 +1790,62 @@ func TestMessagingManagerAppliesTheConsumerResubscribeDelay(t *testing.T) {
 		return len(states) == 1 && states[0].GivenUp()
 	}, 5*time.Second, 2*time.Millisecond, "the configured re-subscribe delay did not reach the registry")
 }
+
+// panicSecretValue stands in for a consumer-chosen panic payload. ADR-081 says a
+// recovered panic is reported by TYPE, never by value, so this string must never
+// reach the error the caller sees.
+const panicSecretValue = "declare exploded with tenant-secret-9f3a"
+
+// panickingDeclareClient panics from the declare path — AFTER the factory handed
+// the client over, which is the window where the rollback the singleflight
+// recover sits above is the only thing that can close it.
+type panickingDeclareClient struct {
+	*stubAMQPClient
+}
+
+func (c *panickingDeclareClient) DeclareExchange(context.Context, *ExchangeDeclaration) error {
+	panic(panicSecretValue)
+}
+
+// TestEnsureConsumersClosesTheClientWhenSetupPanics pins the leak a panic past
+// client creation used to open: the recover lives in the singleflight closure,
+// one frame above every rollback, so the client survived unclosed with its
+// reconnect supervisor and dial loop running, and because nothing was recorded
+// every later request for the key built another one.
+func TestEnsureConsumersClosesTheClientWhenSetupPanics(t *testing.T) {
+	var mu sync.Mutex
+	built, closed := 0, 0
+	factory := func(string, logger.Logger) AMQPClient {
+		mu.Lock()
+		built++
+		mu.Unlock()
+		return &panickingDeclareClient{stubAMQPClient: &stubAMQPClient{closeCallback: func() {
+			mu.Lock()
+			closed++
+			mu.Unlock()
+		}}}
+	}
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		factory,
+	)
+	defer func() { _ = manager.Close() }()
+	decls := newSetupDeclarations()
+
+	const attempts = 3
+	for range attempts {
+		err := manager.EnsureConsumers(context.Background(), testTenantID, decls)
+		require.ErrorContains(t, err, "panic during consumer setup")
+		// ADR-081: re-panicking leaves the singleflight recover as the only converter,
+		// so the caller still gets the type and never the consumer-chosen value.
+		require.ErrorContains(t, err, "(type: string)")
+		require.NotContains(t, err.Error(), panicSecretValue)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, attempts, built, "a panicked setup records nothing, so every attempt rebuilds")
+	assert.Equal(t, attempts, closed, "every client a panicked setup built must be closed, not left dialing")
+}

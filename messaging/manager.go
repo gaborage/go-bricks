@@ -309,6 +309,18 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 		return err
 	}
 
+	// A panic from here on skips every rollback below — the nearest recover is in
+	// EnsureConsumers' singleflight closure, one frame up and past them — leaving
+	// the client unclosed with its reconnect supervisor still dialing, and
+	// recording nothing, so every later request for the key builds another one.
+	// Close on the way out and re-panic, leaving that recover to convert it.
+	defer func() {
+		if p := recover(); p != nil {
+			m.closeClientOnRollback(client, key, "panic")
+			panic(p)
+		}
+	}()
+
 	// Create registry and replay declarations
 	registry := NewRegistry(client, m.logger)
 	registry.setTenantStamps(m.tenantStamps)
