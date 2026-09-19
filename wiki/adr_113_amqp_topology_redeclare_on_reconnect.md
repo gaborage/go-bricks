@@ -54,7 +54,11 @@ The framework never deletes or recreates broker state.
   `AMQPClient` is unchanged: adding a method to it would break every external implementer. The
   registry observes its own client for as long as it lives, whether or not it has consumers, and the
   observer stops on the client's own end as well as on `StopConsumers` — a failed `StartConsumers`
-  closes the client and drops the registry without ever calling `StopConsumers`.
+  closes the client and drops the registry without ever calling `StopConsumers`. Equal for the guard
+  is not equal in ordering, though: the inline pre-subscribe call is a BARRIER, taken under the same
+  pass mutex as the pass, so a completed pass on the current generation happens-before the
+  `ConsumeFromQueue` that follows it. The observer is eventual and orders nothing against a
+  re-subscribe, so the inline call is not a redundant second driver and cannot be dropped as one.
 - A source only says WHEN to declare. The pass always declares through the registry's OWN client:
   topology is broker-global, so repairing it over the registry's connection is correct, and it is the
   only connection the registry owns — a declare that sat on a publishing channel would hold up the
@@ -67,9 +71,7 @@ The framework never deletes or recreates broker state.
   saw. A source's FIRST sighting therefore declares rather than being adopted at whatever generation
   it reports: that channel is one this registry has not declared on, and the route has to exist
   before the first publish goes out on it. Backoff attempts within the same generation declare
-  nothing, and the re-subscribe call is a no-op once its generation is recorded. The map carries an
-  eviction door so a registry that outlives a source can drop its entry rather than hold a dead
-  client pointer; a source dropped and seen again is unseen, and its next sighting declares.
+  nothing, and the re-subscribe call is a no-op once its generation is recorded.
 - The announcement is what covers a registry that has declarations but no consumers at all: the
   re-subscribe driver alone never reached it.
 - `DeclareInfrastructure` is the latch as well as the first pass. It records, for the registry's own
@@ -78,8 +80,14 @@ The framework never deletes or recreates broker state.
   nothing and records nothing, so the startup topology is never run off a background wake outside the
   error path that makes a failed startup fatal. It holds the pass mutex across its whole body,
   readiness wait included, which makes that first declare one of the passes rather than a race
-  against one. The cost is that a background observer waking during startup queues behind it; the
-  queue is bounded, because the readiness wait is bounded by `reconnect.readytimeout`.
+  against one. Anything that wakes during startup queues behind the whole body — no source can
+  today, since the only one is the registry's own observer and `startRedeclaring` does not create it
+  until the declare has finished, so this is the cost of a second source rather than one paid here.
+  That queue is bounded only loosely: the readiness wait is `readyTimeoutDuration` (30s,
+  `messaging/constants.go`), NOT the 5s `reconnect.readytimeout`, which bounds the publish pre-flight
+  and never reaches the registry — the two share the 100ms poll cadence, not the timeout. The
+  declares that follow are amqp091 RPCs the context does not cancel on the wire, so the hold is that
+  30s plus N uncancelable round-trips, under the manager-side soft `infraSetupTimeout` (45s).
 - Only `*AMQPClientImpl`, the type `NewAMQPClient` returns, carries either seam (a struct that embeds
   it inherits them). Any other `AMQPClient` — an external implementation, or a wrapper holding the
   client in a field — never re-declares, on either driver, which is the behavior before this ADR. A
@@ -117,8 +125,9 @@ healthy reconnect costs one idempotent declare pass.
 
 **Negative:** an argument mismatch that appears at runtime is logged once and then stays skipped until
 restart, by design. A pass that fails part-way leaves the rest of that generation undeclared until the
-next channel. Each registry costs one background goroutine for its lifetime, and an observer that
-wakes during startup blocks until `DeclareInfrastructure` returns.
+next channel. Each registry costs one background goroutine for its lifetime, and once a second
+source exists, one waking during startup blocks until `DeclareInfrastructure` returns — 30s of
+readiness wait plus uncancelable declare round-trips, at worst.
 
 **Neutral:** no configuration key and no exported API. `RegistryInterface`, `testing/mocks` and
 `testing/fixtures` are unchanged.

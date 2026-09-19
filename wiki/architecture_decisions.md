@@ -1756,8 +1756,9 @@ for as long as the registry lives — so a service that declares but consumes no
 where before it never did and published into lost topology until a restart. The guard becomes per
 `(source, generation)`, since sources number their channels independently, and a source's first
 sighting declares rather than being adopted. `DeclareInfrastructure` is the latch: a sighting before
-it does nothing, one during it queues behind the readiness wait, itself bounded by
-`reconnect.readytimeout`. A client carrying neither seam still never re-declares.
+it does nothing, one during it queues behind the whole call — a 30s `readyTimeoutDuration` readiness
+wait (not `reconnect.readytimeout`, which bounds the publish pre-flight) plus declare round-trips
+amqp091 does not cancel on the wire. A client carrying neither seam still never re-declares.
 
 **Key Benefits:** a broker that lost topology recovers without a restart; a consumer that cannot
 re-attach is visible at WARN with the broker's reason; a healthy reconnect costs one idempotent pass.

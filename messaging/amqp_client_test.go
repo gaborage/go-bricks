@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/internal/publishdoor"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
@@ -105,15 +106,11 @@ type fakeChannel struct {
 	// or neither). Read through lastPublishCtxDeadline, never directly.
 	publishCtxDeadline    time.Time
 	publishCtxHasDeadline bool
-	// holdExchangeDeclare parks every ExchangeDeclare inside the fake:
-	// exDeclareEntered is closed by the first call that parks and exDeclareRelease
-	// lets it go, so a test can hold a redeclare pass open across a concurrent
-	// publish. Both channels are the test's to make; exDeclareOnce keeps the
-	// close single when more than one declaration parks.
-	holdExchangeDeclare bool
-	exDeclareEntered    chan struct{}
-	exDeclareRelease    chan struct{}
-	exDeclareOnce       sync.Once
+	// exDeclareGate parks every ExchangeDeclare inside the fake, so a test can
+	// hold a redeclare pass open across a concurrent publish. Nil leaves declares
+	// unparked; the gate releases itself on cleanup, so a failed assertion cannot
+	// strand the parked goroutine.
+	exDeclareGate *testutil.BlockedCreate
 	// Mutex to protect concurrent access to fields
 	mu sync.RWMutex
 	// nextDeliveryTag is incremented by GetNextPublishSeqNo to mimic the
@@ -209,9 +206,8 @@ func (f *fakeChannel) QueueDeclare(name string, _, _, _, _ bool, args amqp.Table
 func (f *fakeChannel) ExchangeDeclare(name, _ string, _, _, _, _ bool, args amqp.Table) error {
 	f.declaredExchange = name
 	f.gotExchangeArgs = args
-	if f.holdExchangeDeclare {
-		f.exDeclareOnce.Do(func() { close(f.exDeclareEntered) })
-		<-f.exDeclareRelease
+	if f.exDeclareGate != nil {
+		f.exDeclareGate.Arrive()
 	}
 	return f.exDeclareErr
 }
@@ -1197,11 +1193,8 @@ func TestAMQPClientMarkReadyStaysSilentAfterClose(t *testing.T) {
 // exists to restore. The fake parks inside ExchangeDeclare; the publish must
 // complete with the declare still parked.
 func TestAMQPClientPublishesWhileARedeclarePassIsInFlight(t *testing.T) {
-	ch := &fakeChannel{
-		holdExchangeDeclare: true,
-		exDeclareEntered:    make(chan struct{}),
-		exDeclareRelease:    make(chan struct{}),
-	}
+	gate := testutil.NewBlockedCreate(t)
+	ch := &fakeChannel{exDeclareGate: gate}
 	c := newClientWithFakeChannel(t, ch)
 	c.connectionTimeout = 5 * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1211,13 +1204,13 @@ func TestAMQPClientPublishesWhileARedeclarePassIsInFlight(t *testing.T) {
 	go func() {
 		declared <- c.DeclareExchange(ctx, &ExchangeDeclaration{Name: testExchangeName, Type: ExchangeTypeTopic})
 	}()
-	<-ch.exDeclareEntered
+	<-gate.Started
 
 	ackNextSuccessfulPublish(ctx, t, c, ch)
 	require.NoError(t, c.publishBytes(ctx, publishOptions{Exchange: testExchangeName, RoutingKey: testKeyValue}, []byte(testMessageBody)),
 		"the publish must not wait on the redeclare pass still parked in ExchangeDeclare")
 
-	close(ch.exDeclareRelease)
+	gate.Release()
 	require.NoError(t, <-declared)
 }
 
