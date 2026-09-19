@@ -63,6 +63,7 @@ type Declarations struct {
 	consumerIndex     map[consumerKey]*ConsumerDeclaration // Deduplication + O(1) lookup
 	consumerOrder     []consumerKey                        // Deterministic iteration order
 	exchangeConflicts []exchangeConflict                   // Incompatible exchange re-declarations, reported by Validate
+	externalConflicts []string                             // Exchange names declared locally AND marked external, reported by Validate
 	queueConflicts    []queueConflict                      // Incompatible queue re-declarations, reported by Validate
 	queueTypeErrs     []error                              // Queue types a declaration helper refused, reported by Validate
 	sealErr           error                                // First seal-tagged declaration that cannot seal, reported by Validate
@@ -113,6 +114,14 @@ func (d *Declarations) RegisterExchange(e *ExchangeDeclaration) {
 	// missing key and a nil value both mean there is nothing to merge into, so
 	// both fall through to the copy path, which replaces the nil entry.
 	if incumbent := d.Exchanges[e.Name]; incumbent != nil {
+		// Ownership before shape. A local declaration and an external reference
+		// disagree on every shape field at once — the external one carries none —
+		// so the shape comparison would report Type and name neither call site's
+		// real mistake (ADR-119).
+		if incumbent.Passive != e.Passive {
+			d.recordExternalConflict(e.Name)
+			return
+		}
 		if conflict, incompatible := exchangeMergeConflict(incumbent, e); incompatible {
 			d.recordExchangeConflict(conflict)
 			return
@@ -137,6 +146,7 @@ func (d *Declarations) RegisterExchange(e *ExchangeDeclaration) {
 		AutoDelete: e.AutoDelete,
 		Internal:   e.Internal,
 		NoWait:     e.NoWait,
+		Passive:    e.Passive,
 		Args:       make(map[string]any),
 	}
 
@@ -230,6 +240,15 @@ func (d *Declarations) recordExchangeConflict(c exchangeConflict) {
 		return
 	}
 	d.exchangeConflicts = append(d.exchangeConflicts, c)
+}
+
+// recordExternalConflict drops repeats, so the aggregate error counts names in
+// dispute rather than rejected declarations.
+func (d *Declarations) recordExternalConflict(name string) {
+	if slices.Contains(d.externalConflicts, name) {
+		return
+	}
+	d.externalConflicts = append(d.externalConflicts, name)
 }
 
 // RegisterQueue adds a queue declaration to the store.
@@ -453,6 +472,10 @@ func (d *Declarations) Validate() error {
 		return err
 	}
 
+	if err := d.validateExternalExchangeConflicts(); err != nil {
+		return err
+	}
+
 	// Length-bound every declared shortstr here rather than letting the first
 	// publish discover it: an over-long name is unwritable, and on the publish
 	// path that costs the shared connection (#1123).
@@ -477,6 +500,10 @@ func (d *Declarations) Validate() error {
 		return err
 	}
 
+	if err := d.validateExternalExchangeShape(); err != nil {
+		return err
+	}
+
 	if err := d.validateExchangeTypes(); err != nil {
 		return err
 	}
@@ -490,22 +517,41 @@ func (d *Declarations) Validate() error {
 	return nil
 }
 
+// absentQueue and absentExchange render a dangling reference. Both say what was
+// checked — a name missing from this declaration set, decided by a map lookup —
+// because the old wording ("non-existent exchange") read as a broker fact and
+// sent the reader to rabbitmqctl and the management UI, which show a healthy
+// exchange. Only the exchange form offers the external remedy: a reference-only
+// queue is not a thing this framework has (#1760).
+func absentQueue(kind, name string) error {
+	return fmt.Errorf("%s references queue %q, absent from this declaration set "+
+		"(a local check; the broker was not contacted): declare it with DeclareQueue", kind, name)
+}
+
+func absentExchange(kind, name, suffix string) error {
+	return fmt.Errorf("%s references exchange %q, absent from this declaration set "+
+		"(a local check; the broker was not contacted): declare it, or mark it external with "+
+		"DeclareExternalExchange when another service owns it%s", kind, name, suffix)
+}
+
 // validateReferences checks that every binding and consumer names a
 // declaration that exists: a dangling reference is a relationship between
-// modules, invisible at either call site.
+// modules, invisible at either call site. An external exchange satisfies a
+// reference exactly as a locally declared one does — it is in d.Exchanges,
+// carrying Passive.
 func (d *Declarations) validateReferences() error {
 	for _, binding := range d.Bindings {
 		if _, exists := d.Queues[binding.Queue]; !exists {
-			return fmt.Errorf("binding references non-existent queue: %s", binding.Queue)
+			return absentQueue("binding", binding.Queue)
 		}
 		if _, exists := d.Exchanges[binding.Exchange]; !exists {
-			return fmt.Errorf("binding references non-existent exchange: %s", binding.Exchange)
+			return absentExchange("binding", binding.Exchange, "")
 		}
 	}
 
 	for _, consumer := range d.Consumers() {
 		if _, exists := d.Queues[consumer.Queue]; !exists {
-			return fmt.Errorf("consumer references non-existent queue: %s", consumer.Queue)
+			return absentQueue("consumer", consumer.Queue)
 		}
 	}
 	return nil
@@ -529,7 +575,7 @@ func (d *Declarations) validatePublisherDestination(publisher *PublisherDeclarat
 	}
 
 	if _, exists := d.Exchanges[publisher.Exchange]; !exists {
-		return fmt.Errorf("publisher references non-existent exchange: %s", publisher.Exchange)
+		return absentExchange("publisher", publisher.Exchange, eventTypeSuffix(publisher.EventType))
 	}
 
 	return nil
@@ -630,6 +676,12 @@ func (d *Declarations) validateExchangeTypes() error {
 	var errs []error
 
 	for _, name := range slices.Sorted(maps.Keys(d.Exchanges)) {
+		// An external exchange carries no type: a passive declare ignores every
+		// field but the name, so demanding one would ask for a value the broker
+		// never reads and the owner alone decides (ADR-119).
+		if d.Exchanges[name].Passive {
+			continue
+		}
 		exchangeType := d.Exchanges[name].Type
 		if isKnownExchangeType(exchangeType) {
 			continue
@@ -743,6 +795,71 @@ func (d *Declarations) validateExchangeConflicts() error {
 	return errors.Join(errs...)
 }
 
+// validateExternalExchangeConflicts aggregates every name this set both declares
+// and marks external. The remedy is not the merge's — no shape can be aligned —
+// so it carries its own header (ADR-119).
+func (d *Declarations) validateExternalExchangeConflicts() error {
+	if len(d.externalConflicts) == 0 {
+		return nil
+	}
+
+	errs := []error{fmt.Errorf(
+		"conflicting exchange declarations (%d conflict(s)) — a name is either declared by this "+
+			"service or marked external with DeclareExternalExchange, never both; drop one call site",
+		len(d.externalConflicts))}
+	for _, name := range d.externalConflicts {
+		errs = append(errs, fmt.Errorf("exchange %q: declared locally and marked external in the same declaration set", name))
+	}
+	return errors.Join(errs...)
+}
+
+// externalShapeFields names the fields set on a passive declaration, in a stable
+// order so the startup error is identical across runs.
+func externalShapeFields(e *ExchangeDeclaration) []string {
+	var fields []string
+	if len(e.Args) > 0 {
+		fields = append(fields, "Args")
+	}
+	if e.AutoDelete {
+		fields = append(fields, "AutoDelete")
+	}
+	if e.Durable {
+		fields = append(fields, "Durable")
+	}
+	if e.Internal {
+		fields = append(fields, "Internal")
+	}
+	if e.NoWait {
+		fields = append(fields, "NoWait")
+	}
+	if e.Type != "" {
+		fields = append(fields, "Type")
+	}
+	return fields
+}
+
+// validateExternalExchangeShape holds an external declaration to name-only. The
+// broker ignores every field but the name on a passive declare, so shape on one
+// is a value nobody reads — and two external declarations of one name that set
+// it differently would report a shape conflict instead of this (ADR-119).
+func (d *Declarations) validateExternalExchangeShape() error {
+	var errs []error
+
+	for _, name := range slices.Sorted(maps.Keys(d.Exchanges)) {
+		exchange := d.Exchanges[name]
+		if !exchange.Passive {
+			continue
+		}
+		if fields := externalShapeFields(exchange); len(fields) > 0 {
+			errs = append(errs, fmt.Errorf(
+				"external exchange %q is name-only, but sets %s: a passive declare ignores every field "+
+					"but the name, so the owner alone decides the shape", name, strings.Join(fields, ", ")))
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
 // ReplayToRegistry applies all declarations to a runtime registry.
 // The order is important: exchanges first, then queues, then bindings, then publishers/consumers.
 func (d *Declarations) ReplayToRegistry(reg RegistryInterface) error {
@@ -818,6 +935,7 @@ func (d *Declarations) Clone() *Declarations {
 			AutoDelete: exchange.AutoDelete,
 			Internal:   exchange.Internal,
 			NoWait:     exchange.NoWait,
+			Passive:    exchange.Passive,
 			Args:       make(map[string]any),
 		}
 		if exchange.Args != nil {
@@ -842,6 +960,7 @@ func (d *Declarations) Clone() *Declarations {
 
 	// A clone that passed a validation its source failed would be a trap.
 	clone.exchangeConflicts = slices.Clone(d.exchangeConflicts)
+	clone.externalConflicts = slices.Clone(d.externalConflicts)
 	clone.queueConflicts = slices.Clone(d.queueConflicts)
 	clone.queueTypeErrs = slices.Clone(d.queueTypeErrs)
 	clone.sealErr = d.sealErr
@@ -922,6 +1041,7 @@ func (d *Declarations) Hash() uint64 {
 		writeBool(h, ex.AutoDelete)
 		writeBool(h, ex.Internal)
 		writeBool(h, ex.NoWait)
+		writeBool(h, ex.Passive)
 		writeMapArgs(h, ex.Args)
 	}
 

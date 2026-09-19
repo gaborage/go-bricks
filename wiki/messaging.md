@@ -134,6 +134,56 @@ Bindings are unaffected: `RegisterBinding` still appends every declaration it is
 
 **For verbose before/after comparison**, see [messaging/declarations.go](../messaging/declarations.go)
 
+### External exchanges
+
+An exchange another service owns is referenced, not declared. `DeclareExternalExchange(name)`
+records the name; it satisfies reference validation for bindings and typed publishers exactly as a
+locally declared exchange does, and this service never creates it:
+
+```go
+// Another service owns billing.events and declares its shape.
+billing := decls.DeclareExternalExchange("billing.events")
+queue := decls.DeclareQueue("orders.invoices")
+decls.DeclareBinding(queue.Name, billing.Name, "invoice.*")
+```
+
+The name is all there is to give. Every declare pass — the startup pass and each redeclare pass on
+a new channel generation ([ADR-113](adr_113_amqp_topology_redeclare_on_reconnect.md)) — verifies it
+with `exchange.declare` `passive=true`, and RabbitMQ ignores every field but the name on a passive
+declare, so a type, a flag or an `Args` key on an external declaration would be a value nobody
+reads. `Validate()` refuses one that carries any of them, naming every field set. The same name
+declared locally *and* marked external is refused too, under its own header — no shape can be
+aligned, so the remedy is to drop one call site:
+
+```text
+declaration validation failed: conflicting exchange declarations (1 conflict(s)) — a name is either declared by this service or marked external with DeclareExternalExchange, never both; drop one call site
+exchange "billing.events": declared locally and marked external in the same declaration set
+```
+
+**What it buys, and what it does not.** The owner's shape is never raced: this service sends no
+shape, so the owner's later declare of the real exchange still succeeds where a duplicated
+declaration would have met `PRECONDITION_FAILED`. A passive declare needs no `configure`
+permission, so the broker user can be scoped to the entities this service really owns. But
+verification is **existence only** — a type or durability mismatch against the owner's exchange is
+not detectable passively and is not detected. For a *binding* the passive step adds nothing
+`queue.bind` does not already answer; it is the publisher-only service that gains a check it did
+not have, whose first publish would otherwise be the check.
+
+**When it is missing.** The broker answers 404 and closes the channel. At startup that ends the
+declare pass and the error carries the broker's own reply code and text; a consumer-declaring
+service aborts startup. After a reconnect the pass ends and the next channel generation retries it.
+A passive step never enters ADR-113's skip-until-restart set: a passive declare cannot legitimately
+answer `PRECONDITION_FAILED`, and remembering one would wedge the reference for the process
+lifetime with no surviving definition for an operator to fix. See
+[ADR-119](adr_119_external_exchange_passive_verification.md).
+
+**Reference errors name the check.** A binding, consumer or publisher naming an entity no
+declaration in the set carries now says so, and says the broker was not contacted:
+
+```text
+binding references exchange "billing.events", absent from this declaration set (a local check; the broker was not contacted): declare it, or mark it external with DeclareExternalExchange when another service owns it
+```
+
 ## Consumer Registration Best Practices
 
 ### CRITICAL: Deduplication Rules
@@ -192,7 +242,7 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 }
 ```
 
-`T` is inferred from the function, so it is never spelled out. `ConsumerOptions.Handler` must be nil — the helper builds the handler and panics at declaration time if one is already set (use `DeclareConsumer` for a hand-written `MessageHandler`). The queue argument is deliberately absent: declare the queue yourself, exactly as an untyped `DeclareConsumer(opts, nil)` does. A consumer naming a queue nobody declared surfaces at `Declarations.Validate()` as `consumer references non-existent queue`, not at the call site.
+`T` is inferred from the function, so it is never spelled out. `ConsumerOptions.Handler` must be nil — the helper builds the handler and panics at declaration time if one is already set (use `DeclareConsumer` for a hand-written `MessageHandler`). The queue argument is deliberately absent: declare the queue yourself, exactly as an untyped `DeclareConsumer(opts, nil)` does. A consumer naming a queue nobody declared surfaces at `Declarations.Validate()` as `consumer references queue "…", absent from this declaration set`, not at the call site.
 
 `messaging.NewTypedHandler[T](eventType, fn)` builds the same adapter without registering anything, for a hand-assembled `ConsumerOptions`.
 

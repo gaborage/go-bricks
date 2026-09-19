@@ -4,10 +4,12 @@ package messaging
 
 import (
 	"context"
+	"regexp"
 	"testing"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/logger"
@@ -73,4 +75,79 @@ func TestRegistryRedeclaresDeletedQueueAfterReconnect(t *testing.T) {
 			amqp.Publishing{MessageId: testMessageID, Body: []byte(testMessageBody)})
 		return handler.CallCount() > 0
 	}, 20*time.Second, 200*time.Millisecond, "delivery did not resume after the queue was redeclared")
+}
+
+// TestRegistryConsumesFromAnExternalExchangeWithoutConfigurePermission is the
+// broker-backed acceptance test for ADR-119. The non-owner runs as a user with
+// configure permission on its OWN queue and none on the exchange, which is the
+// deployment the external door exists for: it must verify the exchange, bind to
+// it and consume, while an active declare of the same name is refused. It also
+// pins that the reference costs the owner nothing — a later declare of the real
+// shape still succeeds, because the non-owner never created a shape to race.
+func TestRegistryConsumesFromAnExternalExchangeWithoutConfigurePermission(t *testing.T) {
+	broker := pkgBroker.Get(t)
+	brokerURL := broker.BrokerURL()
+	log := logger.New("disabled", true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	exchange, queue := uniqueName(t, "external_exchange"), uniqueName(t, "nonowner_queue")
+
+	// The owner declares the exchange out of band, as another service would.
+	owner, err := amqp.Dial(brokerURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = owner.Close() })
+	ownerCh, err := owner.Channel()
+	require.NoError(t, err)
+	require.NoError(t, ownerCh.ExchangeDeclare(exchange, ExchangeTypeTopic, true, false, false, false, nil))
+	t.Cleanup(func() {
+		_, _ = ownerCh.QueueDelete(queue, false, false, false)
+		_ = ownerCh.ExchangeDelete(exchange, false, false)
+	})
+
+	// The non-owner may create its own queue and nothing else: no configure
+	// permission reaches the exchange name.
+	user := uniqueName(t, "nonowner_user")
+	nonOwnerURL, err := broker.AddUser(ctx, user, "nonowner-pw", "^"+regexp.QuoteMeta(queue)+"$", ".*", ".*")
+	require.NoError(t, err)
+
+	client := NewAMQPClient(nonOwnerURL, log, WithReinitDelay(50*time.Millisecond))
+	t.Cleanup(func() { _ = client.Close() })
+	require.Eventually(t, client.IsReady, 10*time.Second, 100*time.Millisecond, clientReadyMsg)
+
+	handler := &countingTestHandler{}
+	registry := NewRegistry(client, log)
+	registry.resubscribeDelay = 50 * time.Millisecond
+	registry.RegisterExchange(&ExchangeDeclaration{Name: exchange, Passive: true})
+	registry.RegisterQueue(&QueueDeclaration{Name: queue})
+	registry.RegisterBinding(&BindingDeclaration{Queue: queue, Exchange: exchange, RoutingKey: "orders.#"})
+	registry.RegisterConsumer(&ConsumerDeclaration{Queue: queue, EventType: testEventType, Workers: 1, Handler: handler})
+
+	defer registry.StopConsumers()
+	require.NoError(t, registry.DeclareInfrastructure(ctx), "a passive declare must not need configure permission")
+	require.NoError(t, registry.StartConsumers(ctx))
+
+	require.Eventually(t, func() bool {
+		_ = ownerCh.PublishWithContext(ctx, exchange, "orders.created", false, false,
+			amqp.Publishing{MessageId: testMessageID, Body: []byte(testMessageBody)})
+		return handler.CallCount() > 0
+	}, 20*time.Second, 200*time.Millisecond, "the non-owner did not receive a message through the external exchange")
+
+	// The owner's later declare of the real shape still succeeds: the non-owner
+	// never sent a shape for the broker to compare against.
+	require.NoError(t, ownerCh.ExchangeDeclare(exchange, ExchangeTypeTopic, true, false, false, false, nil))
+
+	// Control, on its own connection so the registry's channel is undisturbed:
+	// the same user cannot ACTIVELY declare that exchange. Without this the
+	// passive success above could be a mis-provisioned permission set.
+	refused, err := amqp.Dial(nonOwnerURL)
+	require.NoError(t, err)
+	defer refused.Close()
+	refusedCh, err := refused.Channel()
+	require.NoError(t, err)
+	err = refusedCh.ExchangeDeclare(exchange, ExchangeTypeTopic, true, false, false, false, nil)
+	require.Error(t, err)
+	var amqpErr *amqp.Error
+	require.ErrorAs(t, err, &amqpErr)
+	assert.Equal(t, amqp.AccessRefused, amqpErr.Code)
 }
