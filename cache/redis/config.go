@@ -230,7 +230,8 @@ func (c *Config) validate() (clienttls.Material, error) {
 	// negative is rejected here because a hand-built Config never passes through the config
 	// layer's cache.loadtimeout normalization, and LoadThrough treats a non-positive value
 	// as "not configured" — so without this the operator's value would be silently ignored
-	// rather than corrected or refused.
+	// rather than corrected or refused. The field carries no "redis." head on purpose: the
+	// key is cache.loadtimeout, one level above the Redis sub-block.
 	if c.LoadTimeout < 0 {
 		return clienttls.Material{}, cache.NewConfigError("loadtimeout", "load timeout cannot be negative", nil)
 	}

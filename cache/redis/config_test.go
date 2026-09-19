@@ -2,6 +2,7 @@ package redis
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,7 +20,7 @@ import (
 //
 // The walk starts at the cache section rather than its redis sub-block on purpose: the
 // load-timeout bound is copied from cache.loadtimeout, one level above redis, and a
-// redis-only walk would either miss it or reject it wrongly.
+// redis-only walk would reject it wrongly.
 func settableCacheKeys() map[string]struct{} {
 	keys := make(map[string]struct{})
 
@@ -27,19 +28,18 @@ func settableCacheKeys() map[string]struct{} {
 	walk = func(rt reflect.Type, prefix string) {
 		for i := range rt.NumField() {
 			f := rt.Field(i)
-			tag := f.Tag.Get("koanf")
-			if tag == "" {
+			// Same normalization the config package's own walks use
+			// (config/types_test.go koanfTagName): koanf reads the name up to the
+			// first comma, and "-" means the field is not a key at all.
+			tag, _, _ := strings.Cut(f.Tag.Get("koanf"), ",")
+			if tag == "" || tag == "-" {
 				continue
 			}
 			key := prefix + tag
 			keys[key] = struct{}{}
 
-			ft := f.Type
-			for ft.Kind() == reflect.Pointer {
-				ft = ft.Elem()
-			}
-			if ft.Kind() == reflect.Struct {
-				walk(ft, key+".")
+			if f.Type.Kind() == reflect.Struct {
+				walk(f.Type, key+".")
 			}
 		}
 	}
@@ -48,26 +48,13 @@ func settableCacheKeys() map[string]struct{} {
 	return keys
 }
 
-// TestSettableCacheKeysOracle pins the oracle itself before anything asserts against it:
-// an empty or redis-only key set would make every field assertion below pass vacuously.
-func TestSettableCacheKeysOracle(t *testing.T) {
-	keys := settableCacheKeys()
-
-	assert.Contains(t, keys, "redis.poolsize")
-	assert.Contains(t, keys, "redis.tls.cafile")
-	assert.Contains(t, keys, "loadtimeout", "the load-timeout key sits on the cache section, not under redis")
-	assert.NotContains(t, keys, "redis.pool_size")
-	assert.NotContains(t, keys, "redis.loadtimeout")
-}
-
 // TestRedisConfigErrorFieldsAreSettableKeys proves every validation failure this package
 // raises is addressed to a key an operator can set, by reflection over the operator-facing
-// config structs rather than a list of literals — so a field added tomorrow with a
-// mismatched error spelling fails here.
+// config structs rather than a list of literals — so renaming a koanf tag in config/types.go
+// fails here rather than at an operator's terminal. Reflection cannot enumerate validation
+// arms, so a new arm still needs its own case below.
 func TestRedisConfigErrorFieldsAreSettableKeys(t *testing.T) {
-	valid := func() Config {
-		return Config{Host: "localhost", Port: 6379, PoolSize: 10}
-	}
+	base := Config{Host: "localhost", Port: 6379, PoolSize: 10}
 
 	tests := []struct {
 		name   string
@@ -86,12 +73,31 @@ func TestRedisConfigErrorFieldsAreSettableKeys(t *testing.T) {
 		{name: "write_timeout_below_minus_one", mutate: func(c *Config) { c.WriteTimeout = -2 }},
 		{name: "negative_load_timeout", mutate: func(c *Config) { c.LoadTimeout = -time.Millisecond }},
 		{name: "staged_tls_material_while_disabled", mutate: func(c *Config) { c.TLS.CAFile = "/etc/ca.pem" }},
+		{name: "tls_ca_from_two_sources", mutate: func(c *Config) {
+			c.TLS = TLSConfig{Enabled: true, CAFile: "/etc/ca.pem", CAValue: "Zm9v"}
+		}},
+		{name: "tls_cert_without_key", mutate: func(c *Config) {
+			c.TLS = TLSConfig{Enabled: true, CertFile: "/etc/cert.pem"}
+		}},
+		{name: "tls_key_without_cert", mutate: func(c *Config) {
+			c.TLS = TLSConfig{Enabled: true, KeyFile: "/etc/key.pem"}
+		}},
+		{name: "tls_unknown_min_version", mutate: func(c *Config) {
+			c.TLS = TLSConfig{Enabled: true, MinVersion: "1.1"}
+		}},
 	}
 
 	keys := settableCacheKeys()
+
+	// The main assertion below sees an oracle that is too SMALL — a shrunken key set
+	// fails every case. It cannot see one that is too BROAD, so pin the one over-breadth
+	// that would let a wrong spelling through: were loadtimeout ever also mounted under
+	// the redis sub-block, "redis.loadtimeout" would start passing.
+	assert.NotContains(t, keys, "redis.loadtimeout")
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := valid()
+			cfg := base
 			tt.mutate(&cfg)
 
 			err := cfg.Validate()
