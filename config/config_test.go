@@ -914,6 +914,10 @@ func TestEnvOverrideReachesRenamedKeys(t *testing.T) {
 	t.Setenv("OUTBOX_BATCHSIZE", "250")
 	t.Setenv("OUTBOX_AUTOCREATETABLE", "true")
 	t.Setenv("MESSAGING_RECONNECT_CONNECTIONTIMEOUT", "45s")
+	// Two levels deep under a NEW sub-block (ADR-119): the env loader's "_"->"."
+	// mapping has to reach a nested struct this key introduced, not just a
+	// pre-existing one.
+	t.Setenv("MESSAGING_DECLARE_EXTERNALWAIT", "90s")
 	t.Setenv("KEYSTORE_SECRETMINLENGTH", "64")
 	t.Setenv("LOG_SENSITIVEFIELDS", "pan, cvv2 ,otp")
 
@@ -923,6 +927,7 @@ func TestEnvOverrideReachesRenamedKeys(t *testing.T) {
 	assert.Equal(t, 250, cfg.Outbox.BatchSize)
 	assert.True(t, cfg.Outbox.AutoCreateTable)
 	assert.Equal(t, 45*time.Second, cfg.Messaging.Reconnect.ConnectionTimeout)
+	assert.Equal(t, 90*time.Second, cfg.Messaging.Declare.ExternalWait)
 	require.NotNil(t, cfg.KeyStore.SecretMinLength)
 	assert.Equal(t, 64, *cfg.KeyStore.SecretMinLength)
 	assert.Equal(t, []string{"pan", "cvv2", "otp"}, cfg.Log.SensitiveFields)

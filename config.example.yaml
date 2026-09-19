@@ -247,6 +247,8 @@ messaging:
                                      # only and is never critical. Set true and /ready answers 503 once a
                                      # declared consumer has failed to re-subscribe five consecutive times.
                                      # Read wiki/adr_114_critical_consumer_readiness.md before enabling.
+  # declare:
+  #   externalwait: 60s   # Bound an in-process wait for an EXTERNAL exchange another service owns but has not declared yet, so a consumer can deploy before its owner. On 404 the single-tenant startup declare pass is re-run with backoff until it succeeds or this elapses, then startup aborts with the broker's own 404. Unset/0 = abort at once. Adds to the pre-listen boot window. See wiki/startup_defaults.md and wiki/messaging.md#startup-wait
   # publishtimeout: 40s   # Aggregate bound on one whole publish; unset = unbounded. Must be >= reconnect.readytimeout + reconnect.connectiontimeout (35s at defaults). Bounds every cancellation-aware wait on the publish path (readiness, publish slot, retry loop), not an in-flight socket write. See wiki/messaging.md#aggregate-publish-bound-publishtimeout
   # Native stream-protocol consumption (OPTIONAL - see wiki/streams.md).
   # Required only when a module declares streams or consumers via streams.StreamDeclarer.
