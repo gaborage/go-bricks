@@ -469,3 +469,26 @@ func TestWriteSummaryVerdictDescribesTheFleetNotTheRun(t *testing.T) {
 		})
 	}
 }
+
+// A parallel run whose every tenant was dispatched and succeeded still returns
+// the parent context's error (migration/multi_tenant.go, runParallel's tail).
+// The fleet is consistent, so the record says clean; the run failed, so the
+// process exits 1. The record must not contradict its own counts to match it.
+func TestCleanFleetWithRunErrorReportsCleanAndExitsNonZero(t *testing.T) {
+	result := &migration.MigrateAllResult{
+		Action:  migration.ActionMigrate,
+		Results: []migration.TenantResult{{TenantID: "t1"}},
+	}
+	runErr := verdictError(result, context.Canceled)
+
+	var buf bytes.Buffer
+	writeSummary(&buf, result, true)
+	rec := requireSummary(t, buf.String())
+
+	assert.Equal(t, verdictClean, rec.Verdict)
+	assert.Zero(t, rec.Failed)
+	assert.Zero(t, rec.NotAttempted)
+	assert.Equal(t, rec.Listed, rec.Attempted)
+	require.ErrorIs(t, runErr, context.Canceled)
+	assert.Equal(t, ExitFleetSplit, ExitCode(runErr))
+}

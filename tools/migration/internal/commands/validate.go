@@ -11,7 +11,7 @@ func NewValidateCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "validate",
 		Short: "Validate migrations for every tenant without applying them",
-		Args:  cobra.NoArgs,
+		Args:  noArgs,
 	}
 	flags := addCommonFlags(cmd)
 	cmd.RunE = func(c *cobra.Command, _ []string) error {

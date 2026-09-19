@@ -45,7 +45,9 @@ func NewQuiesceCommand() *cobra.Command {
 While set, provisioning workers park pending jobs and MigrateAll stops
 dispatching new tenants; in-flight work drains. The flag auto-releases at its
 TTL (crash-safe) and can be cleared by any operator.`,
-		Args: cobra.NoArgs,
+		Args: noArgs,
+		// Runnable so noArgs fires; a bare `quiesce` still answers with help.
+		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
 	cmd.AddCommand(newQuiesceSetCommand(), newQuiesceClearCommand(), newQuiesceStatusCommand())
 	return cmd
@@ -63,7 +65,7 @@ func newQuiesceSetCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   useQuiesceSet,
 		Short: "Activate (or renew) the deployment quiesce flag",
-		Args:  cobra.NoArgs,
+		Args:  noArgs,
 	}
 	flags := addQuiesceFlags(cmd)
 	cmd.Flags().StringVar(&flags.reason, "reason", "", "Operator-supplied reason recorded with the flag and audit event")
@@ -80,7 +82,7 @@ func newQuiesceClearCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   useQuiesceClear,
 		Short: "Deactivate the deployment quiesce flag (operator override)",
-		Args:  cobra.NoArgs,
+		Args:  noArgs,
 	}
 	flags := addQuiesceFlags(cmd)
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
@@ -95,7 +97,7 @@ func newQuiesceStatusCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   useQuiesceStatus,
 		Short: "Show the deployment quiesce flag status",
-		Args:  cobra.NoArgs,
+		Args:  noArgs,
 	}
 	flags := addQuiesceFlags(cmd)
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
@@ -240,7 +242,8 @@ var controllerOpener = func(ctx context.Context, flags *CommonFlags, table strin
 // The controller's resources are released on return.
 func withControlPlaneController(cmd *cobra.Command, flags *quiesceFlags, fn func(context.Context, migration.QuiesceController) error) error {
 	if err := resolveFlags(cmd, flags.common); err != nil {
-		return err
+		// Flag resolution failing is a misuse: nothing was attempted.
+		return markNothingAttempted(err)
 	}
 	ctx := cmd.Context()
 
@@ -260,28 +263,30 @@ func withControlPlaneController(cmd *cobra.Command, flags *quiesceFlags, fn func
 // existing credential machinery and opens a pgx *sql.DB to it.
 func openControlPlaneDB(ctx context.Context, flags *CommonFlags) (db *sql.DB, closeFn func(), err error) {
 	if flags.Tenant == "" {
-		return nil, nil, errors.New("quiesce requires --tenant naming the control-plane database target")
+		return nil, nil, markNothingAttempted(errors.New("quiesce requires --tenant naming the control-plane database target"))
 	}
+	// Everything below happens before the controller exists, so a failure here
+	// dispatched nothing and touched nothing.
 	fileStore, err := maybeLoadFileStore(flags)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, markNothingAttempted(err)
 	}
 	provider, err := buildConfigProvider(ctx, flags, fileStore)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, markNothingAttempted(err)
 	}
 	dbCfg, err := resolveControlPlaneConfig(ctx, provider, flags.Tenant)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, markNothingAttempted(err)
 	}
 
 	opened, err := sql.Open("pgx", controlPlaneDSN(dbCfg))
 	if err != nil {
-		return nil, nil, fmt.Errorf("open control-plane db: %w", err)
+		return nil, nil, markNothingAttempted(fmt.Errorf("open control-plane db: %w", err))
 	}
 	if err := opened.PingContext(ctx); err != nil {
 		_ = opened.Close()
-		return nil, nil, fmt.Errorf("connect control-plane db: %w", err)
+		return nil, nil, markNothingAttempted(fmt.Errorf("connect control-plane db: %w", err))
 	}
 	return opened, func() { _ = opened.Close() }, nil
 }
