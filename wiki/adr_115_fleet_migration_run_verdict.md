@@ -97,10 +97,11 @@ implementation:
   command that never ran dispatched nothing, which is what exit 2 means. This covers an unresolvable
   flag combination (marked in `runAction`), an unknown flag, an unparseable flag value and a stray
   positional argument (marked at the root, because cobra rejects those before any action runs), and
-  everything that fails before `list` or `quiesce` does its work — an unusable source, a credential
-  provider that cannot be built, an unreachable control plane, an unusable `--table`. Only a failure
-  of their own work, such as a `quiesce set` that cannot write the flag, still exits 1, and it
-  carries no fleet meaning. An invocation that reaches `migrate`/`validate`/`info` emits exactly one
+  everything that fails before `list` or `quiesce` does its work: `list`'s flag resolution and
+  tenant-source construction, `quiesce`'s control-plane connection, an unusable `--table` and the
+  rest of controller construction. Their own work failing still exits 1, carrying no fleet meaning —
+  `list`'s listing call and the printing of its result, `quiesce`'s `set`/`clear`/`status`
+  operation. An invocation that reaches `migrate`/`validate`/`info` emits exactly one
   summary record; a flag cobra rejects outright never reaches them and emits none, while still
   exiting 2.
 

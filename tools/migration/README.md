@@ -334,11 +334,13 @@ Exit `1` is reserved for a split fleet, so a pipeline can trust it: every misuse
 exits `2`, because a command that never ran dispatched nothing — an unknown
 command or flag, a stray argument, or a flag combination that does not resolve,
 on any subcommand. `list` and `quiesce` follow the same rule: anything that
-fails before they do their work — misuse, a source that cannot be built, a
-credential provider that cannot be built, a control plane that cannot be
-reached — exits `2`, because nothing was dispatched and nothing was touched.
-Only a failure of the work itself, such as a `quiesce set` that cannot write the
-flag, exits `1`, and it carries no fleet meaning. A bare invocation answers with
+fails before they do their work exits `2`, because nothing was attempted and
+nothing was touched, while a failure of the work itself exits `1`, carrying no
+fleet meaning. The boundary sits where each command starts working — for `list`,
+setup is flag resolution and building the tenant source, and the work is the
+listing call and printing its result; for `quiesce`, setup runs through
+connecting to the control plane and constructing the controller, and the work is
+the `set`/`clear`/`status` operation. A bare invocation answers with
 help and exits `0`. The one case
 where the record and the exit code differ is a run that errored with every
 tenant dispatched and green — a parallel run canceled after its last tenant

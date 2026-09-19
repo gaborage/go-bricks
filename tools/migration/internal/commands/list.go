@@ -35,15 +35,15 @@ func NewListCommand() *cobra.Command {
 			ctx = context.Background()
 		}
 
+		// Listing IS this command's work, and writing the ids is its result, so
+		// a failure here is not "nothing attempted": it exits 1, carrying no
+		// fleet meaning. Only the setup above can reach exit 2.
 		ids, err := lister.ListTenants(ctx)
 		if err != nil {
-			return markNothingAttempted(err)
+			return err
 		}
 
-		if err := writeTenantIDs(c.OutOrStdout(), ids, flags.JSON); err != nil {
-			return markNothingAttempted(err)
-		}
-		return nil
+		return writeTenantIDs(c.OutOrStdout(), ids, flags.JSON)
 	}
 	return cmd
 }

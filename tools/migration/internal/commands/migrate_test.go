@@ -539,6 +539,24 @@ func TestRootMarksEveryMisuseAsNothingAttempted(t *testing.T) {
 	}
 }
 
+// list's own work failing is not "nothing attempted": the command ran, the
+// control plane answered badly, and exit 2's promise does not apply. Only its
+// setup can reach 2.
+func TestListOutageExitsOneNotTwo(t *testing.T) {
+	srv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		stdhttp.Error(w, "control plane down", stdhttp.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	root := newTestRoot()
+	root.SetArgs([]string{"list", "--source-url", srv.URL, "--allow-insecure-scheme"})
+
+	err := root.Execute()
+	require.Error(t, err)
+	require.NotErrorIs(t, err, migration.ErrNothingAttempted)
+	assert.Equal(t, ExitFleetSplit, ExitCode(err))
+}
+
 // A bare invocation is not a misuse: it answers with help and exits 0. Neither
 // is a subcommand that does its job without dispatching anything.
 func TestRootExitsCleanWhenNothingIsMisused(t *testing.T) {

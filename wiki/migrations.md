@@ -10271,11 +10271,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 ### [C67.1] `go-bricks-migrate` exits by run verdict; an empty fleet is exit 2, not 0 · breaking · when: match
 
-- detect: `git grep -nE 'go-bricks-migrate (migrate|validate|info)'` over the pipeline definitions
+- detect: `git grep -nE 'go-bricks-migrate'` over the pipeline definitions
   (`.github/workflows/*.yml` AND `*.yaml`, Jenkinsfiles, deploy scripts, Dockerfile entrypoints)
-  finds every invocation. One is in the population when anything downstream reads its exit code or
-  consumes the `--json` stream at all: an `if`/`&&`/`||` on the command, `set -e` under a step that
-  may list zero tenants, an explicit `$?` test, or any reader of the summary record — a
+  finds every invocation. Match the BINARY alone, never `go-bricks-migrate (migrate|validate|info)`:
+  a step commonly splits the command across shell continuations (`go-bricks-migrate \` with
+  `migrate` on the next line), which a same-line pattern misses silently. Read each hit's whole
+  command, continuation lines included. One is in the population when anything downstream reads its
+  exit code or consumes the `--json` stream at all: an `if`/`&&`/`||` on the command, `set -e` under
+  a step that may list zero tenants, an explicit `$?` test, or any reader of the summary record — a
   `select(.event=="summary")`, a `jq` expression naming `.total` or any other summary key, or a log
   scrape of the text summary line. `.total` still exists and still means the dispatched count, so a
   reader of it keeps working; only the exit codes move.
@@ -10286,7 +10289,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   (an unknown flag, a stray positional argument, a flag combination that does not resolve — on every
   subcommand, `list`/`quiesce`/`version` included — a bare invocation still answers with help and
   exits 0). `list` and `quiesce` follow the same rule for everything that fails before they do their
-  work: an unusable source, a credential provider that cannot be built, an unreachable control plane.
+  work — `list`'s flag resolution and tenant-source construction, `quiesce`'s control-plane
+  connection and controller construction; their own work failing exits 1 instead.
   Exit 2 means no schema was touched, and exit 1 now means a split fleet and nothing else, except for
   a failure of `list`/`quiesce`'s own work, which carries no fleet meaning. The `--json` summary record keeps `total` (still the
   dispatched count) and gains `listed`, `attempted`, `failed`, `not_attempted` and `verdict`

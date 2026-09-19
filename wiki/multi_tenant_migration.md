@@ -666,10 +666,11 @@ The `go-bricks-migrate` CLI exits on the same three classes:
 Exit `1` is reserved for a split fleet so a pipeline can trust it: every misuse exits `2`, because a
 command that never ran dispatched nothing — an unknown command or flag, a stray argument, or a flag
 combination that does not resolve, on any subcommand. `list` and `quiesce` follow the same rule: anything failing
-before they do their work — misuse, an unusable source, a credential provider that cannot be built,
-an unreachable control plane — exits `2`, since nothing was dispatched. Only a failure of the work
-itself, such as a `quiesce set` that cannot write the flag, exits `1`, and it carries no fleet
-meaning. The record's `verdict` describes the FLEET and is derived
+before they do their work exits `2`, since nothing was attempted, and a failure of the work itself
+exits `1`, carrying no fleet meaning. The boundary sits where each command starts working — `list`'s
+setup is flag resolution and building the tenant source, its work is the listing call and printing
+the result; `quiesce`'s setup runs through connecting to the control plane and constructing the
+controller, its work is the `set`/`clear`/`status` operation. The record's `verdict` describes the FLEET and is derived
 from the dispatch counts, so it never contradicts them; the exit code describes the RUN. The two
 coincide except in one state — a parallel run whose every tenant was dispatched and succeeded still
 returns the parent context's error, so the record reads `clean` while the process exits `1`. On the
