@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/migration"
 	"github.com/gaborage/go-bricks/testing/containers"
 )
 
@@ -97,6 +98,18 @@ func TestCLIQuiesceSetStatusClearEndToEnd(t *testing.T) {
 	require.NoError(t, err, out)
 	assert.Contains(t, out, `"active": false`)
 	assert.Contains(t, out, `"cleared": true`)
+}
+
+// An unusable --table is rejected when the controller is constructed, which is
+// only reachable once the control-plane connection is open. It is misuse, so it
+// must cost exit 2 like every other misuse, not exit 1.
+func TestCLIQuiesceUnusableTableIsNothingAttempted(t *testing.T) {
+	env := newQuiesceCLIEnv(t)
+
+	out, err := env.run(t, "status", "--table", "not a valid table")
+	require.Error(t, err, out)
+	require.ErrorIs(t, err, migration.ErrNothingAttempted)
+	require.Equal(t, ExitNothingAttempted, ExitCode(err))
 }
 
 func TestCLIQuiesceClearWhenInactiveSucceeds(t *testing.T) {

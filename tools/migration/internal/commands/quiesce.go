@@ -229,7 +229,8 @@ var controllerOpener = func(ctx context.Context, flags *CommonFlags, table strin
 	ctrl, err := migration.NewPostgresQuiesceController(db, table)
 	if err != nil {
 		closeDB()
-		return nil, nil, err
+		// An unusable --table is misuse, and the controller does not exist yet.
+		return nil, nil, markNothingAttempted(err)
 	}
 	// Emit quiesce.set / quiesce.cleared through the always-on OTel seam (span +
 	// structured log), mirroring how the migrate path wires migration.applied.

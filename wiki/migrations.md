@@ -10310,7 +10310,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - verify: `go-bricks-migrate migrate --source-config <a store with zero tenants> --credentials-from
   config-file --json; echo $?`  # one summary record carrying `"verdict":"nothing_attempted"`, exit 2.
 - ref: gaborage/go-bricks#1692 · [ADR-115](adr_115_fleet_migration_run_verdict.md) ·
-  `tools/migration/internal/commands/exit.go`, `common.go` (`writeSummary`, `verdictError`) ·
+  `tools/migration/internal/commands/exit.go`, `verdict.go`, `common.go` (`writeSummary`,
+  `verdictError`) ·
   [multi_tenant_migration.md](multi_tenant_migration.md#run-verdicts) · `[C66.5]` (the library verdict)
 
 ---
