@@ -63,8 +63,8 @@ sends the reader to `rabbitmqctl` and the management UI, which show a healthy ex
 ## Startup wait
 
 `messaging.declare.externalwait` (duration, default `0`, env `MESSAGING_DECLARE_EXTERNALWAIT`) is
-the bounded, opt-in answer to a consumer deploying before the owner. When the single-tenant startup
-declare pass fails with a 404 — the broker's answer for an exchange that does not exist — the
+the bounded, opt-in answer to a consumer deploying before the owner. When the control-plane startup declare
+pass fails with a 404 (single-tenant, or multi-tenant under `messaging.tenancy: shared`) — the broker's answer for an exchange that does not exist — the
 framework re-runs the whole pass with backoff (1s, doubling to a 5s ceiling) until it succeeds or
 the wait elapses, then aborts with the broker's own 404 naming the exchange rather than a bare
 timeout. `0` aborts at once, which is the pre-key behavior.

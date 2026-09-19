@@ -70,8 +70,12 @@ func (a *App) ensureConsumersWithExternalWait(ctx context.Context, decls *messag
 		return nil
 	}
 
-	// Read below the happy path: a directly-constructed App may carry no config
-	// (app.go guards a.cfg the same way), and it never reaches here on success.
+	// A directly-constructed App may carry no config, which app.go's multiTenant
+	// and sharedMessaging guard the same way. Moving the read below the happy
+	// path is not that guard: this is the failure path, and it runs.
+	if a.cfg == nil {
+		return err
+	}
 	wait := a.cfg.Messaging.Declare.ExternalWait
 	if wait <= 0 || !hasConsumers || !isBrokerNotFound(err) {
 		return err
@@ -84,9 +88,17 @@ func (a *App) ensureConsumersWithExternalWait(ctx context.Context, decls *messag
 
 	deadline := time.Now().Add(wait)
 	// Derived so a wait shorter than the fixed first gap still gets several
-	// attempts instead of spending its whole budget asleep.
+	// attempts instead of spending its whole budget asleep. A base of 0 would
+	// spin, but that needs wait < 4ns, where the deadline check below has
+	// already fired — keep that true if the deadline semantics ever change.
 	base := min(externalWaitFirstBackoff, wait/4)
 
+	// No cancellation arm: the startup pass runs under context.WithoutCancel
+	// (slot.go, deliberately — consumers outlive prepareRuntime), rooted at
+	// context.Background(), so ctx.Done() is nil on every production path and a
+	// select on it would be a safety valve wired shut. The deadline is the only
+	// exit; SIGTERM still ends the process, since the signal handler is installed
+	// after prepareRuntime returns.
 	for attempt := 0; ; attempt++ {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
@@ -95,11 +107,7 @@ func (a *App) ensureConsumersWithExternalWait(ctx context.Context, decls *messag
 
 		// Never sleep past the deadline: the ceiling is 5s, so the last gap
 		// could otherwise overshoot the configured budget by nearly that much.
-		select {
-		case <-ctx.Done():
-			return err
-		case <-time.After(min(rawbackoff.Saturating(base, externalWaitMaxBackoff, attempt), remaining)):
-		}
+		time.Sleep(min(rawbackoff.Saturating(base, externalWaitMaxBackoff, attempt), remaining))
 
 		if err = a.messagingManager.EnsureConsumers(ctx, "", decls); err == nil || !isBrokerNotFound(err) {
 			return err
