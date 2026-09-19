@@ -35,6 +35,13 @@ type stampingPublisher struct {
 	// every retirement path, which makes the wrapper the client's own lifetime
 	// record — a side map would be a second one to keep in step. Both are nil for
 	// a client that announces no channels.
+	//
+	// Shutdown CANCELS the observer and does not join observerDone. Joining would
+	// put Manager.Close behind a declare pass already past its guard, and that pass
+	// runs broker RPCs no context cancels; letting it end on its own costs at most
+	// one WARN from a connection that is closing anyway. observerDone is therefore
+	// a termination signal for tests to wait on deterministically, not a shutdown
+	// barrier — if it ever becomes one, Close is the place, with that cost priced in.
 	stopObserver func()
 	observerDone <-chan struct{}
 }

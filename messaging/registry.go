@@ -549,11 +549,26 @@ func (r *Registry) StartConsumers(ctx context.Context) error {
 // channel it captured, never the field. At most one observer is ACTIVE even while
 // an old one is still winding down.
 func (r *Registry) rearmRedeclaring(ctx context.Context) {
+	// Pre-checked under mu ALONE, which is legal because redeclareCtx is written
+	// under redeclareMu and mu both, so either lock reads it. The point is to keep
+	// the common case — a start with nothing halted — off redeclareMu entirely: a
+	// pass holds that mutex across broker RPCs no context cancels, and the caller
+	// above us holds the manager-wide consMu across this whole call, so queueing
+	// here would stall every other key's EnsureConsumers behind one slow broker.
+	r.mu.RLock()
+	needsRearm := r.declared && r.redeclareHalted()
+	r.mu.RUnlock()
+	if !needsRearm {
+		return
+	}
+
 	r.redeclareMu.Lock()
 	defer r.redeclareMu.Unlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Re-checked under both locks: the pre-check is advisory, and a StartConsumers
+	// racing another one must not re-arm twice.
 	if !r.declared || !r.redeclareHalted() {
 		return
 	}
