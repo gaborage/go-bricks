@@ -10272,10 +10272,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 ### [C67.1] `go-bricks-migrate` exits by run verdict; an empty fleet is exit 2, not 0 · breaking · when: match
 
 - detect: `git grep -nE 'go-bricks-migrate (migrate|validate|info)'` over the pipeline definitions
-  (`.github/workflows/*.yml`, Jenkinsfiles, deploy scripts, Dockerfile entrypoints) finds every
-  invocation. One is in the population when anything downstream reads its exit code or parses the
-  `--json` summary record: an `if`/`&&`/`||` on the command, `set -e` under a step that may list zero
-  tenants, an explicit `$?` test, or a `jq` expression naming `.total` — `.total` still exists and still means the dispatched count, so only the exit codes move.
+  (`.github/workflows/*.yml` AND `*.yaml`, Jenkinsfiles, deploy scripts, Dockerfile entrypoints)
+  finds every invocation. One is in the population when anything downstream reads its exit code or
+  consumes the `--json` stream at all: an `if`/`&&`/`||` on the command, `set -e` under a step that
+  may list zero tenants, an explicit `$?` test, or any reader of the summary record — a
+  `select(.event=="summary")`, a `jq` expression naming `.total` or any other summary key, or a log
+  scrape of the text summary line. `.total` still exists and still means the dispatched count, so a
+  reader of it keeps working; only the exit codes move.
 - scope: the CLI's `migrate`, `validate` and `info` actions exit **0** when the run was clean, **1**
   when the fleet is split (at least one tenant dispatched, and at least one failed or was never
   dispatched), and **2** when no tenant was dispatched at all — an empty listing, a listing failure,
@@ -10292,8 +10295,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   summary record, the exit-2 paths included, where a listing failure used to emit none; a flag cobra
   rejects outright emits none and still exits 2.
   Unchanged: the per-tenant `tenant_complete` records and every flag.
-- gate: match = a pipeline step branches on the exit code or parses `.total` from the summary record,
-  and the binary it runs is being upgraded past the `tools/migration` tag carrying this change.
+- gate: match = a pipeline step branches on the exit code, or reads the summary record at all
+  (whatever key it names, `.total` included), and the binary it runs is being upgraded past the
+  `tools/migration` tag carrying this change.
   no-match = the CLI runs where nothing reads its status, or the step already treats any non-zero as
   a stop and the fleet is never legitimately empty.
 - apply: a step that treated exit 1 as "the fleet may be split" must now also handle 2 for the
