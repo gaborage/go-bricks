@@ -251,13 +251,20 @@ func TestQuiesceRejectsNonPostgresControlPlane(t *testing.T) {
 		"a non-PostgreSQL control-plane target must be rejected before any DB connection")
 }
 
-func TestQuiesceCommandPathWithInjectedController(t *testing.T) {
-	mem := migration.NewMemoryQuiesceController()
+// injectController points controllerOpener at ctrl for the duration of the test,
+// so a quiesce command runs its whole path without a database.
+func injectController(t *testing.T, ctrl migration.QuiesceController) {
+	t.Helper()
 	orig := controllerOpener
 	controllerOpener = func(context.Context, *CommonFlags, string) (migration.QuiesceController, func(), error) {
-		return mem, func() {}, nil
+		return ctrl, func() {}, nil
 	}
 	t.Cleanup(func() { controllerOpener = orig })
+}
+
+func TestQuiesceCommandPathWithInjectedController(t *testing.T) {
+	mem := migration.NewMemoryQuiesceController()
+	injectController(t, mem)
 
 	run := func(args ...string) (string, error) {
 		cmd := NewQuiesceCommand()
@@ -362,11 +369,7 @@ type createTableErrController struct {
 func (createTableErrController) CreateTable(context.Context) error { return stringError("ddl failed") }
 
 func TestWithControlPlaneControllerCreateTableError(t *testing.T) {
-	orig := controllerOpener
-	controllerOpener = func(context.Context, *CommonFlags, string) (migration.QuiesceController, func(), error) {
-		return createTableErrController{migration.NewMemoryQuiesceController()}, func() {}, nil
-	}
-	t.Cleanup(func() { controllerOpener = orig })
+	injectController(t, createTableErrController{migration.NewMemoryQuiesceController()})
 
 	cmd := NewQuiesceCommand()
 	cmd.SetArgs([]string{"status", "--tenant", "cp"})
