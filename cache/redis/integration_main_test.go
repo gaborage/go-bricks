@@ -257,6 +257,23 @@ var pkgRedisClusterTLS = containers.NewShared("Redis cluster TLS", 3*time.Minute
 		return startTLSRedisContainer(ctx, cfg, clusterTLSServerName)
 	})
 
+// pkgRedisClusterTLSACL holds the container carrying all three legs at once —
+// cluster protocol, TLS-only listener, ACL-gated identities — which is the shape
+// an ElastiCache Serverless endpoint presents. Each leg is proven alone by the
+// fixtures above; what only this one can show is a slot-map-discovered node
+// being re-dialed with BOTH the transport config and the credential, since that
+// second dial is the single place the two have to travel together.
+//
+// It composes from the two seams the other fixtures already established rather
+// than declaring the triple itself: aclRedisConfig sets Cluster and ACL,
+// startTLSRedisContainer adds the TLS material. Its leaf covers
+// clusterTLSServerName and nothing else, for the reason pkgRedisClusterTLS
+// documents. Lazy like the rest.
+var pkgRedisClusterTLSACL = containers.NewShared("Redis cluster TLS ACL", 3*time.Minute,
+	func(ctx context.Context) (*tlsRedisContainer, bool, error) {
+		return startTLSRedisContainer(ctx, aclRedisConfig(true), clusterTLSServerName)
+	})
+
 // startTLSRedisContainer mints a throwaway CA and a leaf covering certHosts,
 // attaches them to the caller's cfg, starts the container and hands the CA and
 // the leaf back alongside it — the clients under test have no other way to
@@ -291,5 +308,6 @@ func TestMain(m *testing.M) {
 	pkgRedisClusterTLS.Close()
 	pkgRedisACL.Close()
 	pkgRedisACLCluster.Close()
+	pkgRedisClusterTLSACL.Close()
 	os.Exit(code)
 }
