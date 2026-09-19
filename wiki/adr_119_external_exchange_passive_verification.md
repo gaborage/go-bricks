@@ -69,23 +69,31 @@ framework re-runs the whole pass with backoff (1s, doubling to a 5s ceiling) unt
 the wait elapses, then aborts with the broker's own 404 naming the exchange rather than a bare
 timeout. `0` aborts at once, which is the pre-key behavior.
 
-**The wait only DELAYS an abort that would otherwise happen; it never introduces one.** Every rule
-below follows from that one sentence rather than from a separate decision:
+**The wait may only DELAY an abort that would otherwise happen; it never introduces one.** That is
+the constraint the design is held to, not a derivation of every rule below:
 
-- **A publisher-only service never waits.** It warns and continues on this failure today, so there
-  is no abort to delay — holding it at startup would buy nothing and cost boot time, and its next
-  channel generation redeclares the topology anyway (#1761).
-- **Only a 404 is retried.** Every other startup failure stays fatal immediately, keeping the
-  fail-fast contract `TestPrepareRuntimeConsumersFailsStartupOnEnsureError` pins. A 406 in
-  particular is ADR-113's business, not this wait's.
-- **Per-tenant lazy passes never wait.** A tenant's pass runs inside a request with its own
-  deadline; it fails that request at once and the next request re-runs the pass, which is already
-  the convergence the wait exists to provide.
+- **A publisher-only service never waits** — derived. It warns and continues on this failure, so
+  there is no abort to delay, and holding it at startup would buy nothing. (It is also not healed
+  by waiting: a publisher-only service does not redeclare its topology after a reconnect at all
+  today — #1761 — so what heals it is the owner creating the exchange.)
+- **Per-tenant lazy passes never wait** — derived. A tenant's pass runs inside a request rather
+  than at startup, so again there is no abort to delay; it fails that request and the next one
+  re-runs the pass.
+- **Only a 404 is retried** — NOT derived, and worth re-examining on its own merits when a new
+  retryable class appears. The constraint alone would permit retrying *more*, since delaying any
+  fatal error only delays an abort. The reason to stop at 404 is legibility: it is the one refusal
+  that plausibly converges, and every other failure is more useful fast than slow.
 
-The wait is gated on the 404 alone rather than on the set containing an external exchange. A bind
-404 against an exchange nobody has declared yet converges exactly the same way, and by the sentence
-above, delaying an abort that was going to happen either way costs nothing — so the narrower gate
-would add a condition without changing an outcome.
+The retry is gated on the reply code alone rather than on the declaration set carrying an external
+exchange. Not because the broad gate is free — it is not — but because the narrow one would not
+catch the failure that actually never converges. A binding to an exchange nobody declared cannot
+reach the broker at all (`Declarations.validateReferences` refuses it locally), so the reachable
+never-converging case is a **typo in the external name itself** — which is an external declaration,
+and so passes the narrow gate too. The narrow gate would cost a condition and change no outcome.
+
+The residual cost is real and is the reason this key is opt-in and off by default: a mistyped
+`DeclareExternalExchange` name spends the whole `externalwait` budget before aborting, turning a
+fast, legible failure into a slow one in the crash-loop of a fresh deploy.
 
 ## Alternatives considered
 

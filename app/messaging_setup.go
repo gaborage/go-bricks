@@ -8,12 +8,12 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
+	rawbackoff "github.com/gaborage/go-bricks/internal/backoff"
 	"github.com/gaborage/go-bricks/messaging"
 )
 
-// Retry pacing for the external-exchange startup wait. The first gap is short
-// enough that an exchange declared moments later costs almost nothing, and the
-// ceiling keeps a long wait from becoming a busy loop.
+// Retry pacing for the external-exchange startup wait. Each attempt dials a
+// fresh connection, so the ceiling keeps a long wait from becoming a dial loop.
 const (
 	externalWaitFirstBackoff = time.Second
 	externalWaitMaxBackoff   = 5 * time.Second
@@ -39,7 +39,9 @@ func (a *App) prepareRuntimeConsumers(ctx context.Context, decls *messaging.Decl
 		return nil
 	}
 
-	hasConsumers := len(decls.Consumers()) > 0
+	// Stats reads the consumer index length; Consumers() would allocate a slice
+	// copy on every successful boot to answer a boolean.
+	hasConsumers := decls.Stats().Consumers > 0
 
 	if err := a.ensureConsumersWithExternalWait(ctx, decls, hasConsumers); err != nil {
 		if hasConsumers {
@@ -53,59 +55,64 @@ func (a *App) prepareRuntimeConsumers(ctx context.Context, decls *messaging.Decl
 	return nil
 }
 
-// ensureConsumersWithExternalWait runs the control-plane declare pass, and when
-// messaging.declare.externalwait is set re-runs it while the broker keeps
-// answering 404 — an exchange that does not exist yet (ADR-119) — so a consumer
-// can deploy before the service that owns its external exchange.
+// ensureConsumersWithExternalWait runs the control-plane declare pass, re-running
+// it while the broker answers 404 until messaging.declare.externalwait elapses,
+// so a consumer can deploy before the service owning its external exchange.
 //
-// The wait only DELAYS an abort that would otherwise happen; it never introduces
-// one. That is why it is gated on hasConsumers: a publisher-only service warns
-// and continues on this failure, so holding it at startup would buy nothing and
-// cost boot time, and its next channel generation redeclares the topology anyway.
-// Every non-404 failure returns immediately, keeping the fail-fast contract
-// TestPrepareRuntimeConsumersFailsStartupOnEnsureError pins.
-//
-// The 404 is returned verbatim when the wait elapses, so the operator reads the
-// broker's own reply naming the exchange rather than a bare timeout.
+// The wait may only DELAY an abort that would otherwise happen, never introduce
+// one — which is why it is gated on hasConsumers: a publisher-only service warns
+// and continues on this failure, so there is no abort to delay. Stopping at 404
+// is a separate call: it is the one refusal that plausibly converges, and every
+// other failure is more useful fast than slow. See ADR-119.
 func (a *App) ensureConsumersWithExternalWait(ctx context.Context, decls *messaging.Declarations, hasConsumers bool) error {
 	err := a.messagingManager.EnsureConsumers(ctx, "", decls)
+	if err == nil {
+		return nil
+	}
 
+	// Read below the happy path: a directly-constructed App may carry no config
+	// (app.go guards a.cfg the same way), and it never reaches here on success.
 	wait := a.cfg.Messaging.Declare.ExternalWait
-	if err == nil || wait <= 0 || !hasConsumers || !isExchangeNotFound(err) {
+	if wait <= 0 || !hasConsumers || !isBrokerNotFound(err) {
 		return err
 	}
 
+	// The broker names the entity in its own reply; this line must not claim
+	// which one it was, because a 404 can also come from a bind or a consume.
 	a.logger.Warn().Err(err).Dur("externalwait", wait).
-		Msg("External exchange is absent, waiting for it before aborting startup")
+		Msg("Broker answered 404, re-running the startup declare pass until it succeeds or externalwait elapses")
 
 	deadline := time.Now().Add(wait)
-	// Derived rather than fixed: a wait shorter than the default first gap would
-	// otherwise spend its whole budget asleep and retry once at the very end.
-	backoff := max(min(externalWaitFirstBackoff, wait/4), time.Millisecond)
+	// Derived so a wait shorter than the fixed first gap still gets several
+	// attempts instead of spending its whole budget asleep.
+	base := min(externalWaitFirstBackoff, wait/4)
 
-	for {
+	for attempt := 0; ; attempt++ {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return err
 		}
 
+		// Never sleep past the deadline: the ceiling is 5s, so the last gap
+		// could otherwise overshoot the configured budget by nearly that much.
 		select {
 		case <-ctx.Done():
 			return err
-		case <-time.After(min(backoff, remaining)):
+		case <-time.After(min(rawbackoff.Saturating(base, externalWaitMaxBackoff, attempt), remaining)):
 		}
 
-		if err = a.messagingManager.EnsureConsumers(ctx, "", decls); err == nil || !isExchangeNotFound(err) {
+		if err = a.messagingManager.EnsureConsumers(ctx, "", decls); err == nil || !isBrokerNotFound(err) {
 			return err
 		}
-		backoff = min(backoff*2, externalWaitMaxBackoff)
+		a.logger.Debug().Err(err).Int("attempt", attempt+1).Dur("remaining", time.Until(deadline)).
+			Msg("External exchange still absent")
 	}
 }
 
-// isExchangeNotFound reports whether the broker refused with 404 NOT_FOUND, the
-// answer a passive declare gives for an exchange that does not exist and the one
-// refusal the startup wait retries.
-func isExchangeNotFound(err error) bool {
+// isBrokerNotFound reports whether the broker refused with 404 NOT_FOUND. Named
+// for the reply code rather than the entity: a passive exchange declare, a bind
+// and a consume can all raise it, and this sees only the code.
+func isBrokerNotFound(err error) bool {
 	var amqpErr *amqp.Error
 	return errors.As(err, &amqpErr) && amqpErr.Code == amqp.NotFound
 }

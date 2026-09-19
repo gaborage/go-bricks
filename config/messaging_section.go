@@ -66,11 +66,9 @@ func checkMessaging(cfg *MessagingConfig, multitenant bool) error {
 	return checkMessagingStreams(cfg, multitenant)
 }
 
-// checkMessagingDeclareExternalWait judges messaging.declare.externalwait, the
-// bound on waiting for an external exchange to appear (ADR-119). Zero is the
-// opt-out sentinel — abort at once, the pre-key behavior — so only a negative is
-// refused; there is no floor, because the wait delays an abort rather than
-// bounding work, and a wait too short to help is merely ineffective.
+// checkMessagingDeclareExternalWait judges messaging.declare.externalwait
+// (ADR-119). Zero is the opt-out sentinel — abort at once — so only a negative
+// is refused; a wait too short to help is merely ineffective, not invalid.
 func checkMessagingDeclareExternalWait(cfg *MessagingConfig) error {
 	if cfg.Declare.ExternalWait < 0 {
 		return NewValidationError(fieldMessagingDeclareExternalWait, errMustBeNonNegative+" (0 aborts at once)")
