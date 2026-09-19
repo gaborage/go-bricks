@@ -117,7 +117,8 @@ type Registry struct {
 	redeclareMu sync.Mutex
 	// redeclareSkip holds declarations refused with PRECONDITION_FAILED. Guarded by redeclareMu.
 	redeclareSkip map[string]struct{}
-	// redeclareCtx is this registry's topology-repair lifetime: opened by
+	// redeclareDone is the Done channel of this registry's topology-repair
+	// lifetime: opened by
 	// startRedeclaring with DeclareInfrastructure's values but neither its
 	// deadline nor its cancellation, canceled by stopRedeclaring and replaced by
 	// rearmRedeclaring on a later StartConsumers. While canceled it ends
@@ -128,7 +129,10 @@ type Registry struct {
 	// is done. Nil before DeclareInfrastructure declares, which the two helpers
 	// below tolerate the way the manager's zero-value guards do. Written under
 	// redeclareMu AND mu, so either lock alone is enough to read it.
-	redeclareCtx    context.Context
+	// The context itself is not held: only the observer needs it, and it has it
+	// in its closure. Storing the channel keeps the lifetime readable here
+	// without parking a context in a struct.
+	redeclareDone   <-chan struct{}
 	cancelRedeclare context.CancelFunc
 	// redeclareObserverDone is closed when the observer this registry runs on its
 	// own client returns, as the client's reconnectDone is, so a test can confirm
@@ -528,7 +532,7 @@ func (r *Registry) StartConsumers(ctx context.Context) error {
 // rearmRedeclaring reopens topology repair on a registry that declared and was
 // then halted by StopConsumers, so a stop/start cycle leaves the consumer-driven
 // pass working instead of refused for the registry's lifetime. It runs before
-// StartConsumers takes mu, because writing redeclareCtx needs redeclareMu first.
+// StartConsumers takes mu, because writing redeclareDone needs redeclareMu first.
 // The new-channel observer is NOT restarted — DeclareInfrastructure starts it at
 // most once — so after a stop a consumer re-subscribe is the only driver left.
 func (r *Registry) rearmRedeclaring(ctx context.Context) {
@@ -541,7 +545,7 @@ func (r *Registry) rearmRedeclaring(ctx context.Context) {
 		return
 	}
 	redeclareCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	r.redeclareCtx, r.cancelRedeclare = redeclareCtx, cancel
+	r.redeclareDone, r.cancelRedeclare = redeclareCtx.Done(), cancel
 }
 
 // StopConsumers gracefully stops all running consumers and halts topology repair
@@ -1073,7 +1077,7 @@ func (r *Registry) startRedeclaring(ctx context.Context) {
 	// ctx is a setup budget that expires; repair lives as long as the registry,
 	// so it keeps the values (trace, tenant) and drops the deadline.
 	redeclareCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	r.redeclareCtx, r.cancelRedeclare = redeclareCtx, cancel
+	r.redeclareDone, r.cancelRedeclare = redeclareCtx.Done(), cancel
 
 	source, ok := r.client.(redeclareSource)
 	if !ok {
@@ -1200,7 +1204,14 @@ func (r *Registry) redeclareTopologyFrom(ctx context.Context, token *redeclareTo
 // A registry that never declared has no repair to halt, and the latch above
 // already refuses its passes.
 func (r *Registry) redeclareHalted() bool {
-	return r.redeclareCtx != nil && r.redeclareCtx.Err() != nil
+	// A nil channel is never ready, so a registry that has not declared yet takes
+	// the default arm and reports not-halted without a guard of its own.
+	select {
+	case <-r.redeclareDone:
+		return true
+	default:
+		return false
+	}
 }
 
 // replayTopology runs one pass of the recorded declarations on generation.
