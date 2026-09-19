@@ -362,21 +362,31 @@ func TestPrepareRuntimeConsumersAbortsAfterExternalWaitElapses(t *testing.T) {
 }
 
 // TestPrepareRuntimeConsumersHonorsACancelableContextDuringTheWait pins the
-// loop's ctx arm. It is DEFENSIVE, not a production path: slot.go hands this
-// function context.WithoutCancel over a Background root, so Done() is nil and
-// the arm cannot fire today. The test calls the function directly, which is the
-// only way to reach it — it exists so the loop is already correct if that
-// wrapper ever changes, per context_deadlines.md.
+// loop's ctx arm. It is DEFENSIVE: slot.go hands this function
+// context.WithoutCancel over a Background root, so Done() is nil and the arm
+// cannot fire in production. It exists so the loop is already correct if that
+// wrapper changes, per context_deadlines.md.
+//
+// The context must still be LIVE for the first pass: a context already canceled
+// on entry is refused by Manager.EnsureConsumers with a context error, which is
+// not a 404, so the wait never engages and the arm is never reached — an earlier
+// version of this test canceled up front and passed with the arm deleted.
 func TestPrepareRuntimeConsumersHonorsACancelableContextDuringTheWait(t *testing.T) {
 	source := &scriptedBrokerURLProvider{err: errExternalExchangeMissing}
 	a := newExternalWaitApp(t, source, time.Hour)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	// Expires while the loop is in its first backoff, which is 1s at this budget.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
 
-	start := time.Now()
 	require.Error(t, a.prepareRuntimeConsumers(ctx, declarationsWithConsumer()))
-	assert.Less(t, time.Since(start), 30*time.Second, "a canceled context must not wait out the budget")
+
+	// Attempt count, not elapsed time: without the arm the loop still returns
+	// after ONE backoff, because the next EnsureConsumers is refused by the
+	// expired context — about a second, which any generous time bound would
+	// have accepted. The arm's actual effect is that the second pass never runs.
+	assert.Equal(t, 1, source.callCount(),
+		"cancellation during the backoff must return before re-running the pass")
 }
 
 // TestPrepareRuntimeConsumersWaitsUnderSharedTenancy pins the arm three doc
