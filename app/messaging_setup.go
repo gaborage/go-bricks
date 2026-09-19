@@ -39,8 +39,6 @@ func (a *App) prepareRuntimeConsumers(ctx context.Context, decls *messaging.Decl
 		return nil
 	}
 
-	// Stats reads the consumer index length; Consumers() would allocate a slice
-	// copy on every successful boot to answer a boolean.
 	hasConsumers := decls.Stats().Consumers > 0
 
 	if err := a.ensureConsumersWithExternalWait(ctx, decls, hasConsumers); err != nil {
@@ -70,9 +68,7 @@ func (a *App) ensureConsumersWithExternalWait(ctx context.Context, decls *messag
 		return nil
 	}
 
-	// A directly-constructed App may carry no config, which app.go's multiTenant
-	// and sharedMessaging guard the same way. Moving the read below the happy
-	// path is not that guard: this is the failure path, and it runs.
+	// A directly-constructed App may carry no config; app.go guards it the same way.
 	if a.cfg == nil {
 		return err
 	}
@@ -88,17 +84,17 @@ func (a *App) ensureConsumersWithExternalWait(ctx context.Context, decls *messag
 
 	deadline := time.Now().Add(wait)
 	// Derived so a wait shorter than the fixed first gap still gets several
-	// attempts instead of spending its whole budget asleep. A base of 0 would
-	// spin, but that needs wait < 4ns, where the deadline check below has
-	// already fired — keep that true if the deadline semantics ever change.
+	// attempts instead of spending its whole budget asleep. A zero base would
+	// spin; that needs wait < 4ns, where the deadline check below fires first.
 	base := min(externalWaitFirstBackoff, wait/4)
 
-	// No cancellation arm: the startup pass runs under context.WithoutCancel
-	// (slot.go, deliberately — consumers outlive prepareRuntime), rooted at
-	// context.Background(), so ctx.Done() is nil on every production path and a
-	// select on it would be a safety valve wired shut. The deadline is the only
-	// exit; SIGTERM still ends the process, since the signal handler is installed
-	// after prepareRuntime returns.
+	// The ctx arm cannot fire on today's production path — slot.go passes
+	// context.WithoutCancel (consumers outlive prepareRuntime, ADR-029) over a
+	// Background root, so Done() is nil and a nil channel is never ready. It
+	// stays because context_deadlines.md wants a ctx check at every iteration
+	// boundary, it costs one case, and it is what makes this loop correct the
+	// day that wrapper changes. SIGTERM ends the process regardless: the signal
+	// handler is installed after prepareRuntime returns.
 	for attempt := 0; ; attempt++ {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
@@ -107,7 +103,11 @@ func (a *App) ensureConsumersWithExternalWait(ctx context.Context, decls *messag
 
 		// Never sleep past the deadline: the ceiling is 5s, so the last gap
 		// could otherwise overshoot the configured budget by nearly that much.
-		time.Sleep(min(rawbackoff.Saturating(base, externalWaitMaxBackoff, attempt), remaining))
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(min(rawbackoff.Saturating(base, externalWaitMaxBackoff, attempt), remaining)):
+		}
 
 		if err = a.messagingManager.EnsureConsumers(ctx, "", decls); err == nil || !isBrokerNotFound(err) {
 			return err

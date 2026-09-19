@@ -89,7 +89,9 @@ exchange. Not because the broad gate is free — it is not — but because the n
 catch the failure that actually never converges. A binding to an exchange nobody declared cannot
 reach the broker at all (`Declarations.validateReferences` refuses it locally), so the reachable
 never-converging case is a **typo in the external name itself** — which is an external declaration,
-and so passes the narrow gate too. The narrow gate would cost a condition and change no outcome.
+and so passes the narrow gate too. The narrow gate would cost a condition without catching the case
+that matters. It is not free, though: a service declaring no external exchange at all can still
+spend the budget on a bind or consume 404.
 
 The residual cost is real and is the reason this key is opt-in and off by default: a mistyped
 `DeclareExternalExchange` name spends the whole `externalwait` budget before aborting, turning a
