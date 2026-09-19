@@ -9810,7 +9810,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 ---
 
-## E66 · v0.65.0 → v0.66.0 — a unix-socket PostgreSQL connection string refuses the TLS claim its environment carries + a sealed DedupKey must equal the one bound to the delivery in hand + a PostgreSQL connection string that resolves through a libpq service is refused + an unknown exchange type fails startup + a fleet migration run that dispatched nothing is no longer clean + an incompatible exchange re-declaration fails startup instead of overwriting
+## E66 · v0.65.0 → v0.66.0 — a unix-socket PostgreSQL connection string refuses the TLS claim its environment carries + a sealed DedupKey must equal the one bound to the delivery in hand + a PostgreSQL connection string that resolves through a libpq service is refused + an unknown exchange type fails startup + a fleet migration run that dispatched nothing is no longer clean + every cache-enabled deployment namespaces its keys under a `<prefix>:` that defaults to `app.name` + an incompatible exchange re-declaration fails startup instead of overwriting
 
 - gist: a PostgreSQL `connectionstring` whose host is a unix socket used to boot when the TLS
   claim arrived through `PGSSLMODE`/`PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY`/`PGSSLNEGOTIATION`
@@ -9843,6 +9843,15 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `Listed()`, and `Verdict()` classifies the run by dispatch: nil, `ErrFleetSplit` or
   `ErrNothingAttempted`. Parallel dispatch now checks the context before it takes a worker slot
   (C66.5, ADR-115, #1692).
+- gist: the old key layout wrote the caller's key verbatim and isolated tenants by a separate
+  Redis database — which a cluster endpoint does not have. `cache.redis.keyprefix` (per-tenant
+  mirror `multitenant.tenants.<id>.cache.redis.keyprefix`) now namespaces every key a resolved
+  cache writes as `<prefix>:<key>`, and a tenant cache's keys as `<prefix>:<tenantID>:<key>`. The
+  setting is a tri-state with no koanf default: ABSENT takes `app.name`, so EVERY cache-enabled
+  deployment re-keys once on upgrade; an explicit value is honored as written; an explicit `""`
+  restores the old layout at the root, and still yields `<tenantID>` under a tenant, because
+  cross-tenant isolation is not optional. `config.RedisConfig.KeyPrefix` and
+  `cache.WithKeyPrefix` are new (C66.6, ADR-117, #1727).
 - gist: `RegisterExchange` had no existence check, so re-declaring one exchange name replaced the
   earlier declaration whatever its `Type`, flags or `Args`. `DeclareQueueWithDLQ` registers its
   dead-letter exchange as a **fanout** bound with an empty routing key, so a `DeclareTopicExchange`
