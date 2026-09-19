@@ -179,10 +179,22 @@ and ADR-113's one rule still covers the step. See
 
 #### Startup wait
 
-<!-- PLACEHOLDER: link 2 of #1760 replaces this section. -->
-NOT IN THIS RELEASE. A bounded, opt-in wait for an external exchange that does not exist yet ships
-in a follow-up, which documents its configuration key. Today an absent external exchange aborts
-startup at once, as above.
+Two services that release independently have no ordering guarantee between them, so a consumer
+starting before the service that owns its external exchange is ordinary rather than exceptional.
+`messaging.declare.externalwait` (duration, default `0`, env `MESSAGING_DECLARE_EXTERNALWAIT`) buys
+that case a bounded wait: on a 404 the control-plane startup pass is re-run with backoff — the first
+gap is `min(1s, externalwait/4)`, doubling to a 5s ceiling, so a short budget still gets several
+attempts instead of spending itself asleep — until it succeeds or the wait elapses. A service whose exchange appears
+in time starts consuming with no restart; one whose exchange never appears aborts with the broker's
+own 404 naming it. `0`, the default, aborts at once.
+
+The wait may only **delay an abort that would otherwise happen; it never introduces one**. So a
+publisher-only service is not held at startup — it warns and continues on this failure regardless —
+and a per-tenant lazy pass never waits, since it fails one request and the next re-runs the pass.
+Only a 404 is retried, which is a separate legibility call: it is the one refusal that plausibly
+converges. Note the cost of setting this key: a **mistyped** external exchange name never converges
+either, so it spends the whole budget before aborting. See
+[ADR-119](adr_119_external_exchange_passive_verification.md).
 
 #### Reference errors
 

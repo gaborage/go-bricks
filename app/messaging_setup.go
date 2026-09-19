@@ -2,9 +2,21 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
+	amqp "github.com/rabbitmq/amqp091-go"
+
+	rawbackoff "github.com/gaborage/go-bricks/internal/backoff"
 	"github.com/gaborage/go-bricks/messaging"
+)
+
+// Retry pacing for the external-exchange startup wait. Each attempt dials a
+// fresh connection, so the ceiling keeps a long wait from becoming a dial loop.
+const (
+	externalWaitFirstBackoff = time.Second
+	externalWaitMaxBackoff   = 5 * time.Second
 )
 
 // prepareRuntimeConsumers starts AMQP consumers according to the deployment mode.
@@ -27,8 +39,10 @@ func (a *App) prepareRuntimeConsumers(ctx context.Context, decls *messaging.Decl
 		return nil
 	}
 
-	if err := a.messagingManager.EnsureConsumers(ctx, "", decls); err != nil {
-		if len(decls.Consumers()) > 0 {
+	hasConsumers := decls.Stats().Consumers > 0
+
+	if err := a.ensureConsumersWithExternalWait(ctx, decls, hasConsumers); err != nil {
+		if hasConsumers {
 			return fmt.Errorf("failed to start consumers on the control-plane key: %w", err)
 		}
 		a.logger.Warn().Err(err).Msg("Failed to start consumers on the control-plane key")
@@ -37,4 +51,79 @@ func (a *App) prepareRuntimeConsumers(ctx context.Context, decls *messaging.Decl
 
 	a.logger.Info().Msg("Consumers started on the control-plane key")
 	return nil
+}
+
+// ensureConsumersWithExternalWait runs the control-plane declare pass, re-running
+// it while the broker answers 404 until messaging.declare.externalwait elapses,
+// so a consumer can deploy before the service owning its external exchange.
+//
+// The wait may only DELAY an abort that would otherwise happen, never introduce
+// one — which is why it is gated on hasConsumers: a publisher-only service warns
+// and continues on this failure, so there is no abort to delay. Stopping at 404
+// is a separate call: it is the one refusal that plausibly converges, and every
+// other failure is more useful fast than slow. See ADR-119.
+func (a *App) ensureConsumersWithExternalWait(ctx context.Context, decls *messaging.Declarations, hasConsumers bool) error {
+	err := a.messagingManager.EnsureConsumers(ctx, "", decls)
+	if err == nil {
+		return nil
+	}
+
+	// A directly-constructed App may carry no config; app.go guards it the same way.
+	if a.cfg == nil {
+		return err
+	}
+	wait := a.cfg.Messaging.Declare.ExternalWait
+	if wait <= 0 || !hasConsumers || !isBrokerNotFound(err) {
+		return err
+	}
+
+	// The broker names the entity in its own reply; this line must not claim
+	// which one it was, because a 404 can also come from a bind or a consume.
+	a.logger.Warn().Err(err).Dur("externalwait", wait).
+		Msg("Broker answered 404, re-running the startup declare pass until it succeeds or externalwait elapses")
+
+	deadline := time.Now().Add(wait)
+	// Derived so a wait shorter than the fixed first gap still gets several
+	// attempts instead of spending its whole budget asleep. A zero base would
+	// spin; that needs wait < 4ns, where the deadline check below fires first.
+	base := min(externalWaitFirstBackoff, wait/4)
+
+	// The ctx arm cannot fire on today's production path — slot.go passes
+	// context.WithoutCancel (consumers outlive prepareRuntime, ADR-029) over a
+	// Background root, so Done() is nil and a nil channel is never ready. It
+	// stays because context_deadlines.md wants a ctx check at every iteration
+	// boundary, it costs one case, and it is what makes this loop correct the
+	// day that wrapper changes. SIGTERM ends the process regardless: the signal
+	// handler is installed after prepareRuntime returns.
+	for attempt := 0; ; attempt++ {
+		// Asked as "is there budget left" rather than "is the remainder <= 0":
+		// the numeric form's boundary needs a remainder of exactly zero to be
+		// observable, so nothing can pin it.
+		if !time.Now().Before(deadline) {
+			return err
+		}
+		remaining := time.Until(deadline)
+
+		// Never sleep past the deadline: the ceiling is 5s, so the last gap
+		// could otherwise overshoot the configured budget by nearly that much.
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(min(rawbackoff.Saturating(base, externalWaitMaxBackoff, attempt), remaining)):
+		}
+
+		if err = a.messagingManager.EnsureConsumers(ctx, "", decls); err == nil || !isBrokerNotFound(err) {
+			return err
+		}
+		a.logger.Debug().Err(err).Int("attempt", attempt+1).Dur("remaining", time.Until(deadline)).
+			Msg("External exchange still absent")
+	}
+}
+
+// isBrokerNotFound reports whether the broker refused with 404 NOT_FOUND. Named
+// for the reply code rather than the entity: a passive exchange declare, a bind
+// and a consume can all raise it, and this sees only the code.
+func isBrokerNotFound(err error) bool {
+	var amqpErr *amqp.Error
+	return errors.As(err, &amqpErr) && amqpErr.Code == amqp.NotFound
 }

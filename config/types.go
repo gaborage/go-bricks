@@ -380,6 +380,18 @@ type CacheConfig struct {
 	LoadTimeout time.Duration `koanf:"loadtimeout" json:"loadtimeout" yaml:"loadtimeout" toml:"loadtimeout" mapstructure:"loadtimeout"`
 }
 
+// DeclareConfig holds settings for the declare pass. Today that is the STARTUP
+// pass only; ADR-113's per-channel-generation redeclare pass has no settings here.
+type DeclareConfig struct {
+	// ExternalWait bounds an in-process wait for an EXTERNAL exchange that does
+	// not exist yet, so a consumer can deploy before the service that owns it.
+	// Zero — the default — aborts at once. It engages on the control-plane
+	// startup pass (single-tenant, or multi-tenant under messaging.tenancy:
+	// shared) and only for a service that declared consumers; a per-tenant lazy
+	// pass never waits. Deliberately has no ceiling. See ADR-119 for the rules.
+	ExternalWait time.Duration `koanf:"externalwait" json:"externalwait" yaml:"externalwait" toml:"externalwait" mapstructure:"externalwait"`
+}
+
 // CacheManagerConfig holds cache manager lifecycle settings.
 // Production-safe defaults are applied automatically:
 //   - MaxSize: 100 (maximum tenant cache instances, single-tenant; multi-tenant
@@ -514,6 +526,7 @@ type MessagingConfig struct {
 	Publisher PublisherPoolConfig      `koanf:"publisher" json:"publisher" yaml:"publisher" toml:"publisher" mapstructure:"publisher"`
 	Streams   StreamsConfig            `koanf:"streams" json:"streams" yaml:"streams" toml:"streams" mapstructure:"streams"`
 	Consumers MessagingConsumersConfig `koanf:"consumers" json:"consumers" yaml:"consumers" toml:"consumers" mapstructure:"consumers"`
+	Declare   DeclareConfig            `koanf:"declare" json:"declare" yaml:"declare" toml:"declare" mapstructure:"declare"`
 
 	// Tenancy selects which key the messaging kind's consumers and publishers are
 	// resolved and replayed under when multitenant.enabled is true:

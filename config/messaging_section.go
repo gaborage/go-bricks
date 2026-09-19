@@ -50,6 +50,10 @@ func checkMessaging(cfg *MessagingConfig, multitenant bool) error {
 		return err
 	}
 
+	if err := checkMessagingDeclareExternalWait(cfg); err != nil {
+		return err
+	}
+
 	if cfg.Tenancy != TenancyPerTenant && cfg.Tenancy != TenancyShared {
 		return NewInvalidFieldError("messaging.tenancy",
 			fmt.Sprintf(errNotSupportedFmt, cfg.Tenancy),
@@ -60,6 +64,18 @@ func checkMessaging(cfg *MessagingConfig, multitenant bool) error {
 		return err
 	}
 	return checkMessagingStreams(cfg, multitenant)
+}
+
+// checkMessagingDeclareExternalWait judges messaging.declare.externalwait
+// (ADR-119). Zero is the opt-out sentinel — abort at once — so only a negative
+// is refused; a wait too short to help is merely ineffective, not invalid, and
+// there is deliberately no ceiling: the cost of a large value is this pod's own
+// boot window, which wiki/startup_defaults.md tells the operator to size for.
+func checkMessagingDeclareExternalWait(cfg *MessagingConfig) error {
+	if cfg.Declare.ExternalWait < 0 {
+		return NewValidationError(fieldMessagingDeclareExternalWait, errMustBeNonNegative+" (0 aborts at once)")
+	}
+	return nil
 }
 
 // checkMessagingPublishTimeout judges messaging.publishtimeout, the aggregate

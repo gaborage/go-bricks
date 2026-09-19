@@ -62,11 +62,41 @@ sends the reader to `rabbitmqctl` and the management UI, which show a healthy ex
 
 ## Startup wait
 
-<!-- PLACEHOLDER: link 2 of #1760 replaces this section. -->
-NOT IN THIS CHANGE. The bounded, opt-in in-process wait is decided here (see *Alternatives
-considered*, boot-and-converge) and ships in the second link of this stack, which documents its
-configuration key. Until it lands, a startup pass that cannot verify an external exchange aborts at
-once.
+`messaging.declare.externalwait` (duration, default `0`, env `MESSAGING_DECLARE_EXTERNALWAIT`) is
+the bounded, opt-in answer to a consumer deploying before the owner. When the control-plane startup declare
+pass fails with a 404 (single-tenant, or multi-tenant under `messaging.tenancy: shared`) — the broker's answer for an exchange that does not exist — the
+framework re-runs the whole pass with backoff — the first gap is `min(1s, externalwait/4)`, doubling
+to a 5s ceiling — until it succeeds or
+the wait elapses, then aborts with the broker's own 404 naming the exchange rather than a bare
+timeout. `0` aborts at once, which is the pre-key behavior.
+
+**The wait may only DELAY an abort that would otherwise happen; it never introduces one.** That is
+the constraint the design is held to, not a derivation of every rule below:
+
+- **A publisher-only service never waits** — derived. It warns and continues on this failure, so
+  there is no abort to delay, and holding it at startup would buy nothing. (It is also not healed
+  by waiting: a publisher-only service does not redeclare its topology after a reconnect at all
+  today — #1761 — so what heals it is the owner creating the exchange.)
+- **Per-tenant lazy passes never wait** — derived. A tenant's pass runs inside a request rather
+  than at startup, so again there is no abort to delay; it fails that request and the next one
+  re-runs the pass.
+- **Only a 404 is retried** — NOT derived, and worth re-examining on its own merits when a new
+  retryable class appears. The constraint alone would permit retrying *more*, since delaying any
+  fatal error only delays an abort. The reason to stop at 404 is legibility: it is the one refusal
+  that plausibly converges, and every other failure is more useful fast than slow.
+
+The retry is gated on the reply code alone rather than on the declaration set carrying an external
+exchange. Not because the broad gate is free — it is not — but because the narrow one would not
+catch the failure that actually never converges. A binding to an exchange nobody declared cannot
+reach the broker at all (`Declarations.validateReferences` refuses it locally), so the reachable
+never-converging case is a **typo in the external name itself** — which is an external declaration,
+and so passes the narrow gate too. The narrow gate would cost a condition without catching the case
+that matters. It is not free, though: a service declaring no external exchange at all can still
+spend the budget on a bind or consume 404.
+
+The residual cost is real and is the reason this key is opt-in and off by default: a mistyped
+`DeclareExternalExchange` name spends the whole `externalwait` budget before aborting, turning a
+fast, legible failure into a slow one in the crash-loop of a fresh deploy.
 
 ## Alternatives considered
 
