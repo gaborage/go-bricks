@@ -309,6 +309,14 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 		return err
 	}
 
+	// A panic from here on skips every rollback below — the nearest recover is in
+	// EnsureConsumers' singleflight closure, one frame up and past them — leaving
+	// the client unclosed with its reconnect supervisor still dialing, and
+	// recording nothing, so every later request for the key builds another one.
+	// The flag flips at the map write below, past which the entry owns the client.
+	owned := false
+	defer func() { m.closeOnPanicUnlessOwned(recover(), client, key, &owned) }()
+
 	// Create registry and replay declarations
 	registry := NewRegistry(client, m.logger)
 	registry.setTenantStamps(m.tenantStamps)
@@ -342,6 +350,7 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 		started:  true,
 		key:      key,
 	}
+	owned = true // the map owns the client now: closing it here would kill live consumers
 
 	m.replayedHashs[key] = declHash
 
@@ -436,6 +445,13 @@ func (m *Manager) createAMQPClient(ctx context.Context, key string) (AMQPClient,
 	// Create AMQP client using injected factory
 	client := m.clientFactory(amqpURL, m.logger)
 
+	// m.logger is consumer code and the client is still only a local here, one
+	// statement above where a caller can arm its own guard: a panic in the line
+	// below would leak it with its reconnect supervisor already dialing.
+	// nil: ownership passes only when the caller receives the client, which no
+	// statement here can interrupt, so nothing in this function ever owns it.
+	defer func() { m.closeOnPanicUnlessOwned(recover(), client, key, nil) }()
+
 	m.logger.Info().
 		Str("key", key).
 		Str("broker_url", redactAMQPURL(amqpURL)).
@@ -444,11 +460,43 @@ func (m *Manager) createAMQPClient(ctx context.Context, key string) (AMQPClient,
 	return client, nil
 }
 
+// closeOnPanicUnlessOwned takes the value a deferred literal recovered and closes
+// client when that frame unwound through a panic while the client was still held
+// in a local, leaving it alone once *owned says something else is responsible —
+// the caller that received it, or the consumers map that holds it. A nil owned
+// means nothing in the calling frame ever owns the client. It re-panics, so the
+// caller's frame still unwinds; call it as
+// defer func() { m.closeOnPanicUnlessOwned(recover(), ...) }(), since recover
+// only reports a panic to the deferred function itself. Closing an owned
+// client is worse than the leak this guards: the owner closes it a second time,
+// and the entry it belongs to still reads as started.
+//
+// The close is itself guarded because both the client and the logger it uses are
+// consumer-supplied: a second panic would replace the first, costing the %T the
+// caller's error carries (ADR-081) and leaving the client open anyway. The
+// original is re-panicked, leaving EnsureConsumers' singleflight recover as the
+// only thing that converts it.
+func (m *Manager) closeOnPanicUnlessOwned(p any, client AMQPClient, key string, owned *bool) {
+	if p == nil {
+		return
+	}
+	if owned == nil || !*owned {
+		// Never let a panicking close mask the original: both the client and the
+		// logger it uses are consumer code.
+		func() {
+			defer func() { _ = recover() }()
+			m.closeClientOnRollback(client, key, "panic")
+		}()
+	}
+	panic(p)
+}
+
 // closeClientOnRollback closes an AMQP client during an error-rollback path
 // and logs (but does not propagate) any close failure. The primary error is
 // what the caller cares about; we keep the close failure observable for
 // forensics. The `phase` argument identifies which rollback site triggered
-// the close (e.g. "replay_declarations", "declare_infrastructure").
+// the close (e.g. "replay_declarations", "declare_infrastructure"), and
+// "panic" for the unwind path closeOnPanicUnlessOwned guards.
 func (m *Manager) closeClientOnRollback(client AMQPClient, key, phase string) {
 	if err := client.Close(); err != nil {
 		m.logger.Error().
