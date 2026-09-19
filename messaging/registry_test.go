@@ -523,12 +523,12 @@ func TestRegistryRegisterAfterDeclaredSimple(t *testing.T) {
 func TestRegistryDeclareInfrastructureVerifiesAnExternalExchange(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: true}
 	registry := NewRegistry(client, &stubLogger{})
-	registry.RegisterExchange(NewExternalExchange(externalExchangeName))
+	registry.RegisterExchange(NewExternalExchange(testExternalExchange))
 	registry.RegisterExchange(&ExchangeDeclaration{Name: testExchangeName, Type: ExchangeTypeTopic, Durable: true})
 
 	require.NoError(t, registry.DeclareInfrastructure(context.Background()))
 
-	assert.Equal(t, []string{externalExchangeName}, client.verifiedExchanges)
+	assert.Equal(t, []string{testExternalExchange}, client.verifiedExchanges)
 	assert.Equal(t, []string{testExchangeName}, client.declaredExchanges)
 }
 
@@ -3181,7 +3181,7 @@ func TestRegistryRedeclareRepeatsThePassiveStep(t *testing.T) {
 	handler := &countingTestHandler{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	registry := startRedeclareRegistryOn(ctx, t, client, &stubLogger{}, handler, NewExternalExchange(externalExchangeName))
+	registry := startRedeclareRegistryOn(ctx, t, client, &stubLogger{}, handler, NewExternalExchange(testExternalExchange))
 	defer registry.StopConsumers()
 	first := awaitSubscription(t, client, 0)
 
@@ -3189,7 +3189,7 @@ func TestRegistryRedeclareRepeatsThePassiveStep(t *testing.T) {
 	close(first)
 
 	deliverAndAwaitAck(t, awaitSubscription(t, client, 1), handler)
-	assert.Equal(t, []string{"1", "2"}, client.declaresOf("exchange:"+externalExchangeName))
+	assert.Equal(t, []string{"1", "2"}, client.declaresOf("exchange:"+testExternalExchange))
 }
 
 // TestRegistryRedeclarePassiveConflictSkipsLikeAnyStep pins that ADR-119 carves
@@ -3207,27 +3207,27 @@ func TestRegistryRedeclarePassiveConflictSkipsLikeAnyStep(t *testing.T) {
 	log := newRecordingLogger()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	registry := startRedeclareRegistryOn(ctx, t, client, log, handler, NewExternalExchange(externalExchangeName))
+	registry := startRedeclareRegistryOn(ctx, t, client, log, handler, NewExternalExchange(testExternalExchange))
 	defer registry.StopConsumers()
 	first := awaitSubscription(t, client, 0)
 
 	mismatch := &amqp.Error{Code: amqp.PreconditionFailed, Reason: "PRECONDITION_FAILED - inequivalent arg 'type'", Server: true}
 	client.locked(func() {
 		client.generation++
-		client.declareErrs["exchange:"+externalExchangeName] = []error{mismatch}
+		client.declareErrs["exchange:"+testExternalExchange] = []error{mismatch}
 	})
 	close(first)
 
 	deliverAndAwaitAck(t, awaitSubscription(t, client, 1), handler)
 
-	bindingKey := fakeBindingKey(&BindingDeclaration{Queue: testQueueName, Exchange: externalExchangeName, RoutingKey: "orders.#"})
-	assert.Equal(t, []string{"1", "2"}, client.declaresOf("exchange:"+externalExchangeName),
+	bindingKey := fakeBindingKey(&BindingDeclaration{Queue: testQueueName, Exchange: testExternalExchange, RoutingKey: "orders.#"})
+	assert.Equal(t, []string{"1", "2"}, client.declaresOf("exchange:"+testExternalExchange),
 		"the refused step is skipped by every later pass, like any other 406")
 	assert.Equal(t, []string{"1", "3"}, client.declaresOf(bindingKey),
 		"the pass must reach the binding on the next generation instead of stalling on the skipped step")
 	skipped := log.Line(t, redeclareSkippedMsg)
 	assert.Equal(t, []string{"406"}, skipped.Values("amqp_reply_code"))
-	assert.Equal(t, []string{"exchange:" + externalExchangeName}, skipped.Values("declaration"))
+	assert.Equal(t, []string{"exchange:" + testExternalExchange}, skipped.Values("declaration"))
 }
 
 // TestRegistryRedeclaresOncePerChannelGeneration verifies a healthy reconnect

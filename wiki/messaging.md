@@ -179,9 +179,10 @@ and ADR-113's one rule still covers the step. See
 
 #### Startup wait
 
-<!-- PLACEHOLDER: filled by link 2 of #1760 (gb-executor-4). -->
-Shipped in link 2 as the opt-in `messaging.declare.externalwait` — documented in the link that
-carries the key. Until then, an absent external exchange aborts startup at once, as above.
+<!-- PLACEHOLDER: link 2 of #1760 replaces this section. -->
+NOT IN THIS RELEASE. A bounded, opt-in wait for an external exchange that does not exist yet ships
+in a follow-up, which documents its configuration key. Today an absent external exchange aborts
+startup at once, as above.
 
 #### Reference errors
 

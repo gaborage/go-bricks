@@ -140,9 +140,13 @@ func TestRegistryConsumesFromAnExternalExchangeWithoutConfigurePermission(t *tes
 
 // TestRegistryDeclareInfrastructureFailsOnAnAbsentExternalExchange pins what a
 // missing external exchange costs at startup, against a real broker: the pass
-// ends carrying the broker's own 404 naming the exchange, and — the ADR-119
-// criterion — nothing lands in the redeclare skip set, because a passive declare
-// answers 404, never 406.
+// ends carrying the broker's own 404 naming the exchange, reachable with
+// errors.As.
+//
+// It deliberately asserts NOTHING about the ADR-113 skip set. That set is
+// written only by replayTopology, which the startup path never reaches, so an
+// emptiness check here could not fail. The skip behavior is pinned where it can
+// fail, in TestRegistryRedeclarePassiveConflictSkipsLikeAnyStep.
 func TestRegistryDeclareInfrastructureFailsOnAnAbsentExternalExchange(t *testing.T) {
 	broker := pkgBroker.Get(t)
 	log := logger.New("disabled", true)
@@ -164,9 +168,6 @@ func TestRegistryDeclareInfrastructureFailsOnAnAbsentExternalExchange(t *testing
 	require.ErrorAs(t, err, &amqpErr)
 	assert.Equal(t, amqp.NotFound, amqpErr.Code)
 	assert.Contains(t, err.Error(), absent)
-	registry.redeclareMu.Lock()
-	defer registry.redeclareMu.Unlock()
-	assert.Empty(t, registry.redeclareSkip)
 }
 
 // dialChannel opens a control connection and channel, closing the connection
