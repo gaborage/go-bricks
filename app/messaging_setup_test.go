@@ -351,7 +351,10 @@ func TestPrepareRuntimeConsumersAbortsAfterExternalWaitElapses(t *testing.T) {
 
 	require.ErrorContains(t, err, externalExchange, "the abort must name the exchange the broker named")
 	assert.Greater(t, source.callCount(), 1, "the wait must have re-run the pass at least once")
-	assert.Less(t, elapsed, wait+externalWaitMaxBackoff,
+	// Tight on purpose: the clamped schedule at this budget is 75+150+75ms, the
+	// unclamped one 75+150+300ms. A bound of wait+ceiling would accept both, so
+	// it would pin nothing — and gremlins does not mutate min().
+	assert.Less(t, elapsed, wait+200*time.Millisecond,
 		"the last sleep must be clamped to the remaining budget, not the backoff ceiling")
 	// The backoff must actually grow. With the loop counter walking backwards the
 	// shift goes negative, every gap collapses to zero and the budget is spent
