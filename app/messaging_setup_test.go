@@ -353,6 +353,12 @@ func TestPrepareRuntimeConsumersAbortsAfterExternalWaitElapses(t *testing.T) {
 	assert.Greater(t, source.callCount(), 1, "the wait must have re-run the pass at least once")
 	assert.Less(t, elapsed, wait+externalWaitMaxBackoff,
 		"the last sleep must be clamped to the remaining budget, not the backoff ceiling")
+	// The backoff must actually grow. With the loop counter walking backwards the
+	// shift goes negative, every gap collapses to zero and the budget is spent
+	// hammering the broker instead of waiting on it — same error, same elapsed
+	// time, so only the attempt COUNT can see it.
+	assert.Less(t, source.callCount(), 10,
+		"a growing backoff must bound the attempts; a collapsed one spins")
 }
 
 // TestPrepareRuntimeConsumersHonorsACancelableContextDuringTheWait pins the
@@ -432,14 +438,40 @@ func TestPrepareRuntimeConsumersPerTenantNeverWaits(t *testing.T) {
 // package's other capture helper does that, and it races against the manager
 // goroutines these tests leave shutting down.
 type capturingLogger struct {
-	mu    sync.Mutex
-	warns []string
+	mu     sync.Mutex
+	warns  []string
+	debugs []loggedLine
+}
+
+// loggedLine keeps the int fields alongside the message, so a test can assert the
+// value a line reports and not merely that it was emitted.
+type loggedLine struct {
+	msg  string
+	ints map[string]int
 }
 
 func (l *capturingLogger) record(msg string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.warns = append(l.warns, msg)
+}
+
+func (l *capturingLogger) recordDebug(line loggedLine) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.debugs = append(l.debugs, line)
+}
+
+// firstDebug returns the first DEBUG line whose message contains substr.
+func (l *capturingLogger) firstDebug(substr string) (loggedLine, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, d := range l.debugs {
+		if strings.Contains(d.msg, substr) {
+			return d, true
+		}
+	}
+	return loggedLine{}, false
 }
 
 func (l *capturingLogger) warned(substr string) bool {
@@ -456,7 +488,7 @@ func (l *capturingLogger) warned(substr string) bool {
 func (l *capturingLogger) Warn() logger.LogEvent         { return &capturingEvent{sink: l} }
 func (l *capturingLogger) Info() logger.LogEvent         { return &capturingEvent{} }
 func (l *capturingLogger) Error() logger.LogEvent        { return &capturingEvent{} }
-func (l *capturingLogger) Debug() logger.LogEvent        { return &capturingEvent{} }
+func (l *capturingLogger) Debug() logger.LogEvent        { return &capturingEvent{debug: l} }
 func (l *capturingLogger) Fatal() logger.LogEvent        { return &capturingEvent{} }
 func (l *capturingLogger) WithContext(any) logger.Logger { return l }
 func (l *capturingLogger) WithFields(map[string]any) logger.Logger {
@@ -465,12 +497,22 @@ func (l *capturingLogger) WithFields(map[string]any) logger.Logger {
 
 // capturingEvent drops every field; only the message matters here. A nil sink is
 // a level the test does not record.
-type capturingEvent struct{ sink *capturingLogger }
+type capturingEvent struct {
+	sink  *capturingLogger
+	debug *capturingLogger
+	ints  map[string]int
+}
 
-func (e *capturingEvent) Str(_, _ string) logger.LogEvent           { return e }
-func (e *capturingEvent) Err(error) logger.LogEvent                 { return e }
-func (e *capturingEvent) Uint64(string, uint64) logger.LogEvent     { return e }
-func (e *capturingEvent) Int(string, int) logger.LogEvent           { return e }
+func (e *capturingEvent) Str(_, _ string) logger.LogEvent       { return e }
+func (e *capturingEvent) Err(error) logger.LogEvent             { return e }
+func (e *capturingEvent) Uint64(string, uint64) logger.LogEvent { return e }
+func (e *capturingEvent) Int(k string, v int) logger.LogEvent {
+	if e.ints == nil {
+		e.ints = map[string]int{}
+	}
+	e.ints[k] = v
+	return e
+}
 func (e *capturingEvent) Int64(string, int64) logger.LogEvent       { return e }
 func (e *capturingEvent) Dur(string, time.Duration) logger.LogEvent { return e }
 func (e *capturingEvent) Interface(string, any) logger.LogEvent     { return e }
@@ -480,6 +522,9 @@ func (e *capturingEvent) Enabled() bool                             { return tru
 func (e *capturingEvent) Msg(msg string) {
 	if e.sink != nil {
 		e.sink.record(msg)
+	}
+	if e.debug != nil {
+		e.debug.recordDebug(loggedLine{msg: msg, ints: e.ints})
 	}
 }
 func (e *capturingEvent) Msgf(format string, args ...any) { e.Msg(fmt.Sprintf(format, args...)) }
@@ -508,6 +553,28 @@ func TestPrepareRuntimeConsumersAnnouncesTheWaitOnlyWhenItWaits(t *testing.T) {
 
 	assert.False(t, run(0).warned(announcement), "externalwait 0 must not announce a wait")
 	assert.True(t, run(150*time.Millisecond).warned(announcement), "a configured wait must be announced")
+}
+
+// TestPrepareRuntimeConsumersNumbersItsRetriesFromOne pins the attempt number the
+// progress line reports. The loop counter is zero-based, so the line adds one; the
+// value is otherwise unobservable, and an operator reading "attempt 0" for the
+// first retry would mis-count how much of the budget is gone.
+func TestPrepareRuntimeConsumersNumbersItsRetriesFromOne(t *testing.T) {
+	log := &capturingLogger{}
+	source := &scriptedBrokerURLProvider{err: errExternalExchangeMissing}
+	manager := messaging.NewMessagingManager(source, logger.New("error", false), messaging.ManagerOptions{},
+		func(string, logger.Logger) messaging.AMQPClient { return testmocks.NewMockAMQPClient() })
+	t.Cleanup(func() { _ = manager.Close() })
+	a := newMinimalMessagingApp(log, manager, &config.Config{
+		Multitenant: config.MultitenantConfig{Enabled: false},
+		Messaging:   config.MessagingConfig{Declare: config.DeclareConfig{ExternalWait: 300 * time.Millisecond}},
+	})
+
+	require.Error(t, a.prepareRuntimeConsumers(context.Background(), declarationsWithConsumer()))
+
+	line, ok := log.firstDebug("still absent")
+	require.True(t, ok, "each retry must report progress")
+	assert.Equal(t, 1, line.ints["attempt"], "the first retry is attempt 1, not 0")
 }
 
 // TestPrepareRuntimeConsumersNeverWaits collects the arms where the wait must not

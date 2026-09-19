@@ -96,10 +96,13 @@ func (a *App) ensureConsumersWithExternalWait(ctx context.Context, decls *messag
 	// day that wrapper changes. SIGTERM ends the process regardless: the signal
 	// handler is installed after prepareRuntime returns.
 	for attempt := 0; ; attempt++ {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
+		// Asked as "is there budget left" rather than "is the remainder <= 0":
+		// the numeric form's boundary needs a remainder of exactly zero to be
+		// observable, so nothing can pin it.
+		if !time.Now().Before(deadline) {
 			return err
 		}
+		remaining := time.Until(deadline)
 
 		// Never sleep past the deadline: the ceiling is 5s, so the last gap
 		// could otherwise overshoot the configured budget by nearly that much.
