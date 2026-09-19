@@ -552,7 +552,7 @@ func (r *Registry) StartConsumers(ctx context.Context) error {
 // channel it captured, never the field. At most one observer is ACTIVE even while
 // an old one is still winding down.
 func (r *Registry) rearmRedeclaring(ctx context.Context) {
-	// Pre-checked under mu ALONE, which is legal because redeclareCtx is written
+	// Pre-checked under mu ALONE, which is legal because redeclareDone is written
 	// under redeclareMu and mu both, so either lock reads it. The point is to keep
 	// the common case — a start with nothing halted — off redeclareMu entirely: a
 	// pass holds that mutex across broker RPCs no context cancels, and the caller
