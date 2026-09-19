@@ -292,10 +292,27 @@ treat absence as "no signal" rather than "zero".
 {
   "event": "summary",
   "action": "migrate",
+  "verdict": "clean",
   "total": 3,
-  "failed": 0
+  "listed": 3,
+  "attempted": 3,
+  "failed": 0,
+  "not_attempted": 0
 }
 ```
+
+`listed` is what the tenant source returned, `attempted` how many of them were
+dispatched, and `not_attempted` the rest — the tenants a re-run still has to
+reach. `verdict` is `clean`, `fleet_split` or `nothing_attempted`, and describes
+the FLEET: it is derived from the dispatch counts, so it never contradicts them.
+`total` keeps the meaning it has always had — the dispatched count, which
+`attempted` now names too; prefer `attempted` or `listed` in new code. On a run
+that dispatched nothing, `listed` is what the run managed to observe, and is 0
+when the tenant listing itself failed.
+
+Every invocation that reaches `migrate`, `validate` or `info` emits exactly one
+summary record, including the runs that ended before the first tenant was
+dispatched — a tenant listing failure used to emit none.
 
 A failed tenant adds `"status": "fail"` and an `"error"` field; the process
 exits non-zero whenever `failed > 0`. Idempotent reruns against already-

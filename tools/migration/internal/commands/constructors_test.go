@@ -258,20 +258,79 @@ func TestFormatSchemaSummaryFallsBackToLastAppliedWhenEndingMissing(t *testing.T
 	assert.Equal(t, "schema=v2→v4 (2 applied)", got)
 }
 
+// summaryRecord is the one-per-run summary event, decoded into the types the
+// counts actually carry — JSON hands every number back as a float64.
+type summaryRecord struct {
+	Event        string `json:"event"`
+	Action       string `json:"action"`
+	Total        int    `json:"total"`
+	Verdict      string `json:"verdict"`
+	Listed       int    `json:"listed"`
+	Attempted    int    `json:"attempted"`
+	Failed       int    `json:"failed"`
+	NotAttempted int    `json:"not_attempted"`
+}
+
+// requireSummary reads the one summary record a run must have emitted.
+func requireSummary(t *testing.T, out string) summaryRecord {
+	t.Helper()
+	recs := summaryRecords(t, out)
+	require.Len(t, recs, 1)
+	return recs[0]
+}
+
 func TestWriteSummaryJSON(t *testing.T) {
 	var buf bytes.Buffer
+	// Two dispatched tenants (one failed) plus two the run never reached: a
+	// four-tenant listing that ended split.
 	result := &migration.MigrateAllResult{
 		Action: migration.ActionMigrate,
 		Results: []migration.TenantResult{
 			{TenantID: "t1"},
 			{TenantID: "t2", Err: errors.New("x")},
 		},
+		NeverDispatched: []string{"t3", "t4"},
 	}
 	writeSummary(&buf, result, true)
-	out := buf.String()
-	assert.Contains(t, out, `"event":"summary"`)
-	assert.Contains(t, out, `"action":"migrate"`)
-	assert.Contains(t, out, `"failed":1`)
+	rec := requireSummary(t, buf.String())
+	assert.Equal(t, "summary", rec.Event)
+	assert.Equal(t, "migrate", rec.Action)
+	assert.Equal(t, 4, rec.Listed)
+	assert.Equal(t, 2, rec.Attempted)
+	assert.Equal(t, 1, rec.Failed)
+	assert.Equal(t, 2, rec.NotAttempted)
+	assert.Equal(t, verdictFleetSplit, rec.Verdict)
+	// total keeps the meaning it always had: the dispatched count.
+	assert.Equal(t, 2, rec.Total)
+	assert.Equal(t, rec.Attempted, rec.Total)
+}
+
+func TestWriteSummaryJSONCleanRun(t *testing.T) {
+	var buf bytes.Buffer
+	result := &migration.MigrateAllResult{
+		Action:  migration.ActionMigrate,
+		Results: []migration.TenantResult{{TenantID: "t1"}, {TenantID: "t2"}},
+	}
+	writeSummary(&buf, result, true)
+	rec := requireSummary(t, buf.String())
+	assert.Equal(t, verdictClean, rec.Verdict)
+	assert.Equal(t, 2, rec.Listed)
+	assert.Equal(t, 2, rec.Attempted)
+	assert.Zero(t, rec.Failed)
+	assert.Zero(t, rec.NotAttempted)
+}
+
+func TestWriteSummaryJSONNilResultReportsNothingAttempted(t *testing.T) {
+	var buf bytes.Buffer
+	writeSummary(&buf, &migration.MigrateAllResult{Action: migration.ActionValidate}, true)
+	rec := requireSummary(t, buf.String())
+	assert.Equal(t, "summary", rec.Event)
+	assert.Equal(t, "validate", rec.Action)
+	assert.Equal(t, verdictNothingAttempted, rec.Verdict)
+	assert.Zero(t, rec.Listed)
+	assert.Zero(t, rec.Attempted)
+	assert.Zero(t, rec.Failed)
+	assert.Zero(t, rec.NotAttempted)
 }
 
 func TestWriteSummaryPlainText(t *testing.T) {
@@ -282,18 +341,26 @@ func TestWriteSummaryPlainText(t *testing.T) {
 			{TenantID: "t1"},
 			{TenantID: "t2", Err: errors.New("kaboom")},
 		},
+		NeverDispatched: []string{"t3"},
 	}
 	writeSummary(&buf, result, false)
 	out := buf.String()
 	assert.Contains(t, out, "Validate summary")
+	assert.Contains(t, out, "3 listed")
+	assert.Contains(t, out, "2 attempted")
 	assert.Contains(t, out, "1 failed")
+	assert.Contains(t, out, "1 not attempted")
+	assert.Contains(t, out, verdictFleetSplit)
 	assert.Contains(t, out, "kaboom")
 }
 
-func TestWriteSummaryNilNoOp(t *testing.T) {
+func TestWriteSummaryPlainTextNilResultReportsNothingAttempted(t *testing.T) {
 	var buf bytes.Buffer
-	writeSummary(&buf, nil, false)
-	assert.Empty(t, buf.String())
+	writeSummary(&buf, &migration.MigrateAllResult{Action: migration.ActionMigrate}, false)
+	out := buf.String()
+	assert.Contains(t, out, "Migrate summary")
+	assert.Contains(t, out, verdictNothingAttempted)
+	assert.Contains(t, out, "0 listed")
 }
 
 func TestBuildBaseConfig(t *testing.T) {
@@ -362,4 +429,43 @@ func TestResolveFlagsAuditExplicitWinsOverEnv(t *testing.T) {
 	require.NoError(t, resolveFlags(cmd, flags))
 
 	assert.Equal(t, "explicit@op", flags.AppliedBy, "an explicit --applied-by must win over the env fallback")
+}
+
+// The verdict names the FLEET, by dispatch counts; the exit code names the RUN.
+// They agree except where a run error accompanies a consistent fleet, and the
+// record must then still describe the fleet it observed — never a split one
+// beside counts saying nothing failed.
+func TestWriteSummaryVerdictDescribesTheFleetNotTheRun(t *testing.T) {
+	green := []migration.TenantResult{{TenantID: "t1"}}
+
+	tests := []struct {
+		name        string
+		result      *migration.MigrateAllResult
+		wantVerdict string
+	}{
+		{
+			name:        "every_listed_tenant_dispatched_and_green",
+			result:      &migration.MigrateAllResult{Action: migration.ActionMigrate, Results: green},
+			wantVerdict: verdictClean,
+		},
+		{
+			name: "a_listed_tenant_was_never_reached",
+			result: &migration.MigrateAllResult{
+				Action: migration.ActionMigrate, Results: green, NeverDispatched: []string{"t2"},
+			},
+			wantVerdict: verdictFleetSplit,
+		},
+		{
+			name:        "nothing_was_dispatched",
+			result:      &migration.MigrateAllResult{Action: migration.ActionMigrate},
+			wantVerdict: verdictNothingAttempted,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			writeSummary(&buf, tc.result, true)
+			assert.Equal(t, tc.wantVerdict, requireSummary(t, buf.String()).Verdict)
+		})
+	}
 }

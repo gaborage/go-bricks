@@ -655,8 +655,17 @@ A dispatched tenant that ends in `ErrFlywayTimeout` or `ErrFlywayCanceled` is a 
 never-dispatched tenant: its schema state is unknown. The verdict does not replace `MigrateAll`'s
 error, so check both.
 
-The `go-bricks-migrate` CLI still exits `0` on success and `1` on any error; the three-way exit-code
-mapping recorded in ADR-115 ships in a later CLI release.
+The `go-bricks-migrate` CLI reports the same classification in its summary record, which every
+invocation of `migrate`/`validate`/`info` emits exactly once — the runs that end before the first
+dispatch included:
+
+```json
+{"event":"summary","action":"migrate","verdict":"fleet_split","total":1,"listed":3,"attempted":1,"failed":1,"not_attempted":2}
+```
+
+`verdict` is derived from the dispatch counts, so it never contradicts them, and `listed` is what
+the run observed — 0 when the listing itself failed. The CLI still exits `0` on success and `1` on
+any error; the three-way exit-code mapping recorded in ADR-115 ships in a later CLI release.
 
 ## Operational notes
 

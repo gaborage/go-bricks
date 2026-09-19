@@ -443,9 +443,13 @@ func newCLILogger(flags *CommonFlags) logger.Logger {
 }
 
 // runAction is the shared entry point for migrate/validate/info subcommands.
+// Every invocation emits exactly one summary record, including the runs that
+// end before the first dispatch, so a pipeline parsing the stream always has a
+// terminal record to read.
 func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) error {
+	out := cmd.OutOrStdout()
 	if err := resolveFlags(cmd, flags); err != nil {
-		return err
+		return failedBeforeDispatch(out, action, flags.JSON, err)
 	}
 	if err := resolveMigratorIdentity(flags); err != nil {
 		return err
@@ -456,19 +460,9 @@ func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) 
 		ctx = context.Background()
 	}
 
-	fileStore, err := maybeLoadFileStore(flags)
+	lister, provider, err := buildRunDeps(ctx, flags)
 	if err != nil {
-		return err
-	}
-
-	lister, err := buildLister(flags, fileStore)
-	if err != nil {
-		return fmt.Errorf("build tenant lister: %w", err)
-	}
-
-	provider, err := buildConfigProvider(ctx, flags, fileStore)
-	if err != nil {
-		return fmt.Errorf("build config provider: %w", err)
+		return failedBeforeDispatch(out, action, flags.JSON, err)
 	}
 
 	log := newCLILogger(flags)
@@ -488,7 +482,6 @@ func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) 
 		log.Info().Str("migrator_user", identity.Username).Msg(migratorOverlayLogMsg)
 	}
 
-	out := cmd.OutOrStdout()
 	hook := makeHook(out, flags.JSON)
 
 	result, err := migration.MigrateAll(ctx, migrator, lister, provider, action, migration.MigrateAllOptions{
@@ -499,15 +492,46 @@ func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) 
 		Hook:             hook,
 		MigratorIdentity: flags.migratorIdentity,
 	})
-	if err != nil && result == nil {
-		return err
+	if result == nil {
+		// MigrateAll returns no result when it failed before the first dispatch;
+		// an empty one carries the same verdict and lets the summary name the run.
+		result = &migration.MigrateAllResult{Action: action}
 	}
-
 	writeSummary(out, result, flags.JSON)
 
-	if result != nil && len(result.Failed()) > 0 {
+	if len(result.Failed()) > 0 {
 		return errAtLeastOneFailed
 	}
+	return err
+}
+
+// buildRunDeps resolves everything a run needs before its first dispatch. The
+// three steps share the tenant store and fail the same way, so they are one
+// phase: every failure here is a run that touched no schema, and collecting
+// them keeps that classification at a single call site.
+func buildRunDeps(ctx context.Context, flags *CommonFlags) (migration.TenantLister, database.DBConfigProvider, error) {
+	fileStore, err := maybeLoadFileStore(flags)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	lister, err := buildLister(flags, fileStore)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build tenant lister: %w", err)
+	}
+
+	provider, err := buildConfigProvider(ctx, flags, fileStore)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build config provider: %w", err)
+	}
+	return lister, provider, nil
+}
+
+// failedBeforeDispatch reports a failure that happened before the first tenant
+// was dispatched. The run still emits its summary record, because a pipeline
+// reads one per invocation and "nothing ran" is exactly what it needs to see.
+func failedBeforeDispatch(out io.Writer, action migration.Action, asJSON bool, err error) error {
+	writeSummary(out, &migration.MigrateAllResult{Action: action}, asJSON)
 	return err
 }
 
@@ -612,24 +636,36 @@ func vendorOrUnknown(v string) string {
 	return v
 }
 
+// writeSummary emits the one summary record every run produces, including the
+// runs that ended before the first dispatch — a pipeline reads exactly one per
+// invocation. The verdict describes the fleet the run leaves behind, so it is
+// derived from the result rather than from the error the process exits on: a
+// run that errored with every tenant dispatched and green leaves a clean fleet
+// and says so, while the exit code still reports the failure.
 func writeSummary(out io.Writer, result *migration.MigrateAllResult, asJSON bool) {
-	if result == nil {
-		return
-	}
 	failed := result.Failed()
-	total := len(result.Results)
+	verdict := verdictName(result.Verdict())
 
 	if asJSON {
 		_ = json.NewEncoder(out).Encode(map[string]any{
 			"event":  "summary",
 			"action": result.Action.String(),
-			"total":  total,
-			"failed": len(failed),
+			// total keeps the meaning it has always had — the dispatched count,
+			// which attempted now names too. Kept so a pipeline reading it
+			// still works; prefer attempted or listed in new code.
+			"total":         len(result.Results),
+			"verdict":       verdict,
+			"listed":        result.Listed(),
+			"attempted":     len(result.Results),
+			"failed":        len(failed),
+			"not_attempted": len(result.NeverDispatched),
 		})
 		return
 	}
 
-	fmt.Fprintf(out, "\n%s summary: %d tenants total, %d failed\n", titleASCII(result.Action.String()), total, len(failed))
+	fmt.Fprintf(out, "\n%s summary: verdict=%s, %d listed, %d attempted, %d failed, %d not attempted\n",
+		titleASCII(result.Action.String()), verdict, result.Listed(), len(result.Results),
+		len(failed), len(result.NeverDispatched))
 	for i := range failed {
 		fmt.Fprintf(out, "  - %s: %v\n", failed[i].TenantID, failed[i].Err)
 	}
