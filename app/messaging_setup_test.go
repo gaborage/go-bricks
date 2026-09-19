@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -423,6 +425,89 @@ func TestPrepareRuntimeConsumersPerTenantNeverWaits(t *testing.T) {
 
 	require.NoError(t, a.prepareRuntimeConsumers(context.Background(), declarationsWithConsumer()))
 	assert.Zero(t, source.callCount(), "a per-tenant deployment must not run a startup pass at all")
+}
+
+// capturingLogger records WARN messages through the logger.Logger seam the App
+// already takes, so a test can pin a log line without swapping os.Stdout — the
+// package's other capture helper does that, and it races against the manager
+// goroutines these tests leave shutting down.
+type capturingLogger struct {
+	mu    sync.Mutex
+	warns []string
+}
+
+func (l *capturingLogger) record(msg string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.warns = append(l.warns, msg)
+}
+
+func (l *capturingLogger) warned(substr string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, w := range l.warns {
+		if strings.Contains(w, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *capturingLogger) Warn() logger.LogEvent         { return &capturingEvent{sink: l} }
+func (l *capturingLogger) Info() logger.LogEvent         { return &capturingEvent{} }
+func (l *capturingLogger) Error() logger.LogEvent        { return &capturingEvent{} }
+func (l *capturingLogger) Debug() logger.LogEvent        { return &capturingEvent{} }
+func (l *capturingLogger) Fatal() logger.LogEvent        { return &capturingEvent{} }
+func (l *capturingLogger) WithContext(any) logger.Logger { return l }
+func (l *capturingLogger) WithFields(map[string]any) logger.Logger {
+	return l
+}
+
+// capturingEvent drops every field; only the message matters here. A nil sink is
+// a level the test does not record.
+type capturingEvent struct{ sink *capturingLogger }
+
+func (e *capturingEvent) Str(_, _ string) logger.LogEvent           { return e }
+func (e *capturingEvent) Err(error) logger.LogEvent                 { return e }
+func (e *capturingEvent) Uint64(string, uint64) logger.LogEvent     { return e }
+func (e *capturingEvent) Int(string, int) logger.LogEvent           { return e }
+func (e *capturingEvent) Int64(string, int64) logger.LogEvent       { return e }
+func (e *capturingEvent) Dur(string, time.Duration) logger.LogEvent { return e }
+func (e *capturingEvent) Interface(string, any) logger.LogEvent     { return e }
+func (e *capturingEvent) Bytes(string, []byte) logger.LogEvent      { return e }
+func (e *capturingEvent) Bool(string, bool) logger.LogEvent         { return e }
+func (e *capturingEvent) Enabled() bool                             { return true }
+func (e *capturingEvent) Msg(msg string) {
+	if e.sink != nil {
+		e.sink.record(msg)
+	}
+}
+func (e *capturingEvent) Msgf(format string, args ...any) { e.Msg(fmt.Sprintf(format, args...)) }
+
+// TestPrepareRuntimeConsumersAnnouncesTheWaitOnlyWhenItWaits pins the `wait <= 0`
+// clause, which attempt counts cannot see: weakened to `wait < 0`, a zero wait
+// still falls through to a deadline of now and returns on the first
+// `remaining <= 0`, so it makes exactly one attempt either way. The only
+// observable difference is this WARN, announcing a wait that will not happen.
+func TestPrepareRuntimeConsumersAnnouncesTheWaitOnlyWhenItWaits(t *testing.T) {
+	const announcement = "re-running the startup declare pass"
+
+	run := func(wait time.Duration) *capturingLogger {
+		log := &capturingLogger{}
+		source := &scriptedBrokerURLProvider{err: errExternalExchangeMissing}
+		manager := messaging.NewMessagingManager(source, logger.New("error", false), messaging.ManagerOptions{},
+			func(string, logger.Logger) messaging.AMQPClient { return testmocks.NewMockAMQPClient() })
+		t.Cleanup(func() { _ = manager.Close() })
+		a := newMinimalMessagingApp(log, manager, &config.Config{
+			Multitenant: config.MultitenantConfig{Enabled: false},
+			Messaging:   config.MessagingConfig{Declare: config.DeclareConfig{ExternalWait: wait}},
+		})
+		_ = a.prepareRuntimeConsumers(context.Background(), declarationsWithConsumer())
+		return log
+	}
+
+	assert.False(t, run(0).warned(announcement), "externalwait 0 must not announce a wait")
+	assert.True(t, run(150*time.Millisecond).warned(announcement), "a configured wait must be announced")
 }
 
 // TestPrepareRuntimeConsumersNeverWaits collects the arms where the wait must not
