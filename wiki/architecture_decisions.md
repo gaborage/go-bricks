@@ -1752,7 +1752,7 @@ escalate to WARN from the fifth attempt, with the broker's reply code and text w
 configuration key. See [migrations.md](migrations.md) `[C65.10]`.
 Amended 2026-09-19 (#1761): the pass is no longer consumer-driven. A client announces every channel
 it becomes ready on over a second unexported seam, and the registry observes its own client on it
-for as long as the registry lives — so a service that declares but consumes nothing re-declares too,
+until StopConsumers ends repair — so a service that declares but consumes nothing re-declares too,
 where before it never did and published into lost topology until a restart. The guard becomes per
 `(source, generation)`, since sources number their channels independently, and a source's first
 sighting declares rather than being adopted. `DeclareInfrastructure` is the latch: a sighting before

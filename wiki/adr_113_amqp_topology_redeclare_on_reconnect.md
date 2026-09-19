@@ -9,7 +9,7 @@
 > holding declarations but no consumers never re-declared at all — a publisher-only service kept
 > publishing into topology the broker had lost until someone restarted the process. A client now
 > announces every channel it becomes ready on over a second unexported seam, and the registry
-> observes its own client on that seam for as long as it lives, consumers or not. The pass itself
+> observes its own client on that seam until StopConsumers ends repair, consumers or not. The pass itself
 > takes any source and DECLARES through the registry's own client — topology is broker-global, and a
 > declare that sat on a publishing channel would hold up the traffic it is restoring — and its
 > once-per-generation guard is keyed per `(source, generation)`, because sources number their
@@ -54,7 +54,7 @@ The framework never deletes or recreates broker state.
   generation before each re-subscribe attempt, through an unexported optional interface,
   `channelGeneration() (generation uint64, ready bool)`, which `AMQPClientImpl` implements.
   `AMQPClient` is unchanged: adding a method to it would break every external implementer. The
-  registry observes its own client for as long as it lives, whether or not it has consumers, and the
+  registry observes its own client until repair ends, whether or not it has consumers, and the
   observer stops on the client's own end as well as on `StopConsumers` — a failed `StartConsumers`
   closes the client and drops the registry without ever calling `StopConsumers`. Equal for the guard
   is not equal in ordering, though: the inline pre-subscribe call is a BARRIER, taken under the same
