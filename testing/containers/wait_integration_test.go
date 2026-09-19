@@ -11,17 +11,23 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// waitFromOptions applies every customizer a module-based helper's seam returns to an
-// empty request and hands back the wait strategy they left behind — proving the strategy
-// survives the module wrapper rather than only that one was built. No Docker involved:
+// requestFromOptions applies every customizer a module-based helper's seam returns to
+// an empty request and hands back what they left behind. No Docker involved:
 // ContainerCustomizer.Customize only mutates the request struct.
-func waitFromOptions(t *testing.T, opts []testcontainers.ContainerCustomizer) wait.Strategy {
+func requestFromOptions(t *testing.T, opts []testcontainers.ContainerCustomizer) testcontainers.GenericContainerRequest {
 	t.Helper()
 	var req testcontainers.GenericContainerRequest
 	for i, opt := range opts {
 		require.NoErrorf(t, opt.Customize(&req), "customizer %d (%T)", i, opt)
 	}
-	return req.WaitingFor
+	return req
+}
+
+// waitFromOptions narrows that to the wait strategy — proving the strategy survives
+// the module wrapper rather than only that one was built.
+func waitFromOptions(t *testing.T, opts []testcontainers.ContainerCustomizer) wait.Strategy {
+	t.Helper()
+	return requestFromOptions(t, opts).WaitingFor
 }
 
 // assertBoundWithin pins every level of a helper's wait strategy to want: the composite's
