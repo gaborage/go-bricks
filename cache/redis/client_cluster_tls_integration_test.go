@@ -57,6 +57,7 @@ func setupClusterTLSRedis(t *testing.T) (*Client, context.Context) {
 
 	require.NoError(t, client.client.FlushDB(ctx).Err(), "failed to flush the cluster keyspace")
 	requireSlotMapAvoidsPinnedName(ctx, t, client)
+	requireSlotMapAvoidsSeedAddress(ctx, t, client)
 
 	return client, ctx
 }
@@ -95,18 +96,67 @@ func requireLeafCoversOnlyPinnedName(t *testing.T, certPEM []byte) {
 func requireSlotMapAvoidsPinnedName(ctx context.Context, t *testing.T, client *Client) {
 	t.Helper()
 
+	for _, addr := range clusterSlotNodeAddrs(ctx, t, client) {
+		host, _, splitErr := net.SplitHostPort(addr)
+		require.NoError(t, splitErr, "an advertised node address must split into host and port")
+		require.NotEqual(t, clusterTLSServerName, host,
+			"pinned-name guard: the slot map must advertise a host the pinned SNI name does not cover")
+	}
+}
+
+// requireSlotMapAvoidsSeedAddress holds the premise every discovered-node
+// re-dial claim rests on, and it is a DIFFERENT premise from the one
+// requireSlotMapAvoidsPinnedName holds.
+//
+// That guard compares the advertised host against the pinned SNI NAME, which is
+// what makes the handshake evidence work. This one compares the advertised
+// address against the SEED ADDRESS the client was handed — and only that
+// comparison decides whether a second node client exists at all. go-redis keys
+// its node clients by address string: it dials the seed, reads CLUSTER SLOTS,
+// and builds a client per advertised address. When the fixture announces the
+// address the client already seeded with, go-redis reuses the seed's connection
+// and no second dial happens, while every assertion around it still passes.
+//
+// The seed is read back off the client rather than re-derived: buildRedisOptions
+// seeds Addrs with cfg.Address() and NewClient keeps that same *Config as
+// client.config, so client.config.Address() is the literal string go-redis was
+// handed.
+//
+// The two guards are easy to conflate because both are true today for the same
+// underlying reason — the fixture seeds with whatever Docker reports as the host
+// and announces the IPv4 literal resolveAnnounceIP returns. But "the advertised
+// host is not the pinned name" stays true in exactly the case where the seed and
+// the advertised address have collapsed onto one string, so the pinned-name
+// guard cannot notice it. This is a hard require rather than a skip: on a
+// configuration where they collide the test is not proving what it claims, and a
+// loud failure naming the collision is diagnosable where a silent pass is not.
+func requireSlotMapAvoidsSeedAddress(ctx context.Context, t *testing.T, client *Client) {
+	t.Helper()
+
+	seedAddr := client.config.Address()
+	for _, addr := range clusterSlotNodeAddrs(ctx, t, client) {
+		require.NotEqual(t, seedAddr, addr,
+			"seed-address guard: the slot map must advertise an address the client did not already seed with, or go-redis reuses the seed connection and nothing dials a discovered node")
+	}
+}
+
+// clusterSlotNodeAddrs reads the slot map the two guards above judge and
+// flattens every node address in it, so each guard carries only its own
+// predicate.
+func clusterSlotNodeAddrs(ctx context.Context, t *testing.T, client *Client) []string {
+	t.Helper()
+
 	slots, err := client.client.ClusterSlots(ctx).Result()
 	require.NoError(t, err, "the slot map is what the client's per-node dials follow")
 	require.NotEmpty(t, slots, "a bootstrapped cluster serves at least one slot range")
 
+	addrs := make([]string, 0, len(slots))
 	for _, slot := range slots {
 		for _, node := range slot.Nodes {
-			host, _, splitErr := net.SplitHostPort(node.Addr)
-			require.NoError(t, splitErr)
-			require.NotEqual(t, clusterTLSServerName, host,
-				"the slot map must advertise an address the pinned SNI name does not cover")
+			addrs = append(addrs, node.Addr)
 		}
 	}
+	return addrs
 }
 
 // TestRealRedisClusterTLSRoundTrips drives keys in four different slots over a
