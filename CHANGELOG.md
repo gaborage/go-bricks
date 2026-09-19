@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.66.0](https://github.com/gaborage/go-bricks/compare/v0.65.0...v0.66.0) (2026-09-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **messaging:** refuse conflicting exchange re-declarations ([#1736](https://github.com/gaborage/go-bricks/issues/1736))
+* **cache:** namespace every cache key under the service name ([#1740](https://github.com/gaborage/go-bricks/issues/1740))
+* **messaging:** add DeclareDirectExchange, validate exchange Type ([#1712](https://github.com/gaborage/go-bricks/issues/1712))
+* **migration:** give fleet runs a three-way verdict ([#1721](https://github.com/gaborage/go-bricks/issues/1721))
+* **config:** refuse a libpq service in a PostgreSQL connectionstring ([#1715](https://github.com/gaborage/go-bricks/issues/1715))
+* **messaging:** bind a sealed DedupKey to its delivery ([#1700](https://github.com/gaborage/go-bricks/issues/1700))
+* **config:** judge PGSSL* TLS claims against a socket host ([#1699](https://github.com/gaborage/go-bricks/issues/1699))
+
+### Added
+
+* **cache:** authenticate the Redis client as a named ACL user ([#1734](https://github.com/gaborage/go-bricks/issues/1734)) ([ab657f5](https://github.com/gaborage/go-bricks/commit/ab657f55f0f2f32b23540b7cf8a43b6aa93b73c0))
+* **cache:** connect to cluster-protocol Redis endpoints ([#1738](https://github.com/gaborage/go-bricks/issues/1738)) ([60db6bc](https://github.com/gaborage/go-bricks/commit/60db6bc818f54b0553664094613e38455b639431))
+* **messaging:** add DeclareDirectExchange, validate exchange Type ([#1712](https://github.com/gaborage/go-bricks/issues/1712)) ([f95c84a](https://github.com/gaborage/go-bricks/commit/f95c84a0bb3a52f09ed0af5a95f4624d061980e1))
+* **migration:** add skip options to PGRoleSpec ([#1717](https://github.com/gaborage/go-bricks/issues/1717)) ([e432cae](https://github.com/gaborage/go-bricks/commit/e432caecb6e4206b6c905cc6be731c7e10a7d184))
+* **migration:** check role floor, prove non-superuser provisioning ([#1718](https://github.com/gaborage/go-bricks/issues/1718)) ([a797717](https://github.com/gaborage/go-bricks/commit/a797717b4838734dc0082c3f1a3efb9788eef256))
+* **migration:** overlay a migrator identity in MigrateAll ([#1711](https://github.com/gaborage/go-bricks/issues/1711)) ([2c69076](https://github.com/gaborage/go-bricks/commit/2c69076acc917ec9868bdb6a4f2ee0eb9146e690))
+* **migration:** refuse an empty schema on shared-migrator runs ([#1737](https://github.com/gaborage/go-bricks/issues/1737)) ([aa07f53](https://github.com/gaborage/go-bricks/commit/aa07f53a027b0bfc8158def211660a5479891cf7))
+
+
+### Fixed
+
+* **cache:** namespace every cache key under the service name ([#1740](https://github.com/gaborage/go-bricks/issues/1740)) ([b24c323](https://github.com/gaborage/go-bricks/commit/b24c32373513581c894217b61789abfa68c86ce2))
+* **config:** judge PGSSL* TLS claims against a socket host ([#1699](https://github.com/gaborage/go-bricks/issues/1699)) ([19ccede](https://github.com/gaborage/go-bricks/commit/19ccedea2996fb679a211611540bf77025d272d5))
+* **config:** refuse a libpq service in a PostgreSQL connectionstring ([#1715](https://github.com/gaborage/go-bricks/issues/1715)) ([481087a](https://github.com/gaborage/go-bricks/commit/481087a8e11a7b69d95512d259bd00745ee29589))
+* **database:** mark session dead on Tx-scoped ErrBadConn ([#1697](https://github.com/gaborage/go-bricks/issues/1697)) ([aea633f](https://github.com/gaborage/go-bricks/commit/aea633f68f6331a37cb8ced43797685787b6a255))
+* **deps:** update module google.golang.org/grpc to v1.84.0 ([#1726](https://github.com/gaborage/go-bricks/issues/1726)) ([59881c1](https://github.com/gaborage/go-bricks/commit/59881c123592a4d8f2a63b43448e2b17b0f4f5a1))
+* **messaging:** bind a sealed DedupKey to its delivery ([#1700](https://github.com/gaborage/go-bricks/issues/1700)) ([6efc095](https://github.com/gaborage/go-bricks/commit/6efc0953f0efcd5199b6fe4ae7e434bc2de8c9db))
+* **messaging:** refuse conflicting exchange re-declarations ([#1736](https://github.com/gaborage/go-bricks/issues/1736)) ([a23d916](https://github.com/gaborage/go-bricks/commit/a23d916c17c9eb2c8b1c4d8cc824904616a826a7))
+* **migration:** give fleet runs a three-way verdict ([#1721](https://github.com/gaborage/go-bricks/issues/1721)) ([91ef96e](https://github.com/gaborage/go-bricks/commit/91ef96e06dc66985e8feecf516e455a7b0c7ab4a))
+* **resourcepool:** invalidate in-flight creates on Remove ([#1698](https://github.com/gaborage/go-bricks/issues/1698)) ([8d6f0b1](https://github.com/gaborage/go-bricks/commit/8d6f0b1e374d5895802d5e1a54ba300fa68249dd))
+* **server:** detach JOSE policies when cloning route descriptors ([#1696](https://github.com/gaborage/go-bricks/issues/1696)) ([be12c26](https://github.com/gaborage/go-bricks/commit/be12c2609219b5221aea0de9adf4ab62f311806a))
+* **server:** veto Start when Shutdown wins the bind window ([#1695](https://github.com/gaborage/go-bricks/issues/1695)) ([5fe1510](https://github.com/gaborage/go-bricks/commit/5fe1510d62b37f9801cedb91959ce532eb4cfb05))
+
+
+### Changed
+
+* **sealed:** host CLI doc-spec helper and add Render door ([#1716](https://github.com/gaborage/go-bricks/issues/1716)) ([f8c7ced](https://github.com/gaborage/go-bricks/commit/f8c7ced36c6c51562e97ba77fbae44905d89ff4d))
+
 ## [0.65.0](https://github.com/gaborage/go-bricks/compare/v0.64.0...v0.65.0) (2026-09-16)
 
 
