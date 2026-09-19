@@ -2,7 +2,6 @@ package commands
 
 import (
 	"bytes"
-	"context"
 	"io"
 	stdhttp "net/http"
 	"net/http/httptest"
@@ -78,12 +77,16 @@ func captureStdout(t *testing.T, fn func()) string {
 		drained <- string(b)
 	}()
 
-	defer func() {
-		os.Stdout = orig
-		require.NoError(t, r.Close())
+	defer func() { require.NoError(t, r.Close()) }()
+	func() {
+		// Closing w must survive a panic in fn, or the reader blocks on io.ReadAll
+		// forever and the test hangs instead of failing.
+		defer func() {
+			os.Stdout = orig
+			require.NoError(t, w.Close())
+		}()
+		fn()
 	}()
-	fn()
-	require.NoError(t, w.Close())
 	return <-drained
 }
 
@@ -244,7 +247,7 @@ func TestMigrateCommandWithoutMigratorIdentityUsesTenantCredentials(t *testing.T
 
 	assert.Equal(t, identityRuntime, run.env["DB_USER"], "with no overlay Flyway keeps the secret's own username")
 	assert.Equal(t, fakePassword(identityRuntime), run.env["DB_PASSWORD"])
-	assert.NotContains(t, run.output, "Migrator identity overlay active")
+	assert.NotContains(t, run.output, migratorOverlayLogMsg)
 }
 
 func TestMigrateCommandNeverPrintsMigratorPassword(t *testing.T) {
@@ -266,9 +269,10 @@ func TestMigrateCommandNeverPrintsMigratorPassword(t *testing.T) {
 			if asJSON {
 				require.Contains(t, run.output, `"event":"tenant_complete"`, "--json must have produced a record to grep")
 			}
-			// Positive control: the overlay ran and its username was logged, so an
-			// absent password is silence about the password, not silence about the run.
-			assert.Contains(t, run.output, identityMigrator)
+			// Positive control on a string the password does not contain: asserting
+			// the username would be satisfiable by the leak itself, since
+			// fakePassword composes the username into the password.
+			assert.Contains(t, run.output, migratorOverlayLogMsg)
 			assert.NotContains(t, run.output, fakePassword(identityMigrator))
 		})
 	}
@@ -324,12 +328,7 @@ func TestMigrateCommandRejectsInvalidMigratorIdentityBeforeListing(t *testing.T)
 // (its CreateTable is DDL); until that is decided it must not fail on a
 // credential it never reads.
 func TestQuiesceIgnoresMigratorIdentity(t *testing.T) {
-	mem := migration.NewMemoryQuiesceController()
-	orig := controllerOpener
-	controllerOpener = func(context.Context, *CommonFlags, string) (migration.QuiesceController, func(), error) {
-		return mem, func() {}, nil
-	}
-	t.Cleanup(func() { controllerOpener = orig })
+	injectController(t, migration.NewMemoryQuiesceController())
 
 	unsetMigratorEnv(t)
 	t.Setenv(envMigratorUser, identityMigrator)

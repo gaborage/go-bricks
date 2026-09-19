@@ -17,7 +17,9 @@ import (
 // stubFlywayCapturing writes a shell script that records its argv and its
 // environment to separate files and emits a success envelope for the given
 // operation. Credentials reach Flyway by environment only, so the env dump is the
-// only place an overlaid credential is observable. Skips on Windows.
+// only place an overlaid credential is observable. The envelope carries
+// targetSchemaVersion, so it models an applied run rather than a no-op rerun for
+// every caller. Skips on Windows.
 func stubFlywayCapturing(t *testing.T, operation string) (stubPath, argvPath, envPath string) {
 	t.Helper()
 	if runtime.GOOS == windowsOS {

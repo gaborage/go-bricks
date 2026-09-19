@@ -39,6 +39,10 @@ const (
 	envMigratorUser     = "GOBRICKS_MIGRATE_MIGRATOR_USER"
 	envMigratorPassword = "GOBRICKS_MIGRATE_MIGRATOR_PASSWORD"
 
+	// migratorOverlayLogMsg records that Flyway will connect as the migrator. The
+	// username is logged beside it; the password never is.
+	migratorOverlayLogMsg = "Migrator identity overlay active"
+
 	jsonKeyTenants = "tenants"
 
 	// migrateCLIAppName is reported as the built JDBC URL's application_name, so a
@@ -95,24 +99,21 @@ func applyEnvFallback(cmd *cobra.Command, flagName, envVar string, dst *string) 
 	}
 }
 
-// resolveMigratorIdentity reads the migrator overlay from the environment.
-// Both variables or neither: presence pairs them, not emptiness, so a set-but-empty
-// value reaches MigrateAll and fails with migration.ErrInvalidMigratorIdentity
-// before any tenant is listed rather than silently running as the tenant's role.
-//
-// Called from runAction rather than resolveFlags because runAction is the only
-// consumer. quiesce shares resolveFlags but opens its control plane with the
-// tenant secret's own credentials, so validating the pair there would refuse a
-// credential that path never uses.
+// resolveMigratorIdentity reads the migrator overlay from the environment. Both
+// variables or neither, paired by presence rather than emptiness so a set-but-empty
+// value reaches MigrateAll's own validation. Called from runAction, its only
+// consumer — quiesce shares resolveFlags but never reads the pair.
 func resolveMigratorIdentity(flags *CommonFlags) error {
 	user, userSet := os.LookupEnv(envMigratorUser)
 	password, passwordSet := os.LookupEnv(envMigratorPassword)
-	switch {
-	case userSet && !passwordSet:
-		return fmt.Errorf("%s is required when %s is set; set both or neither", envMigratorPassword, envMigratorUser)
-	case passwordSet && !userSet:
-		return fmt.Errorf("%s is required when %s is set; set both or neither", envMigratorUser, envMigratorPassword)
-	case userSet && passwordSet:
+	if userSet != passwordSet {
+		missing, present := envMigratorPassword, envMigratorUser
+		if passwordSet {
+			missing, present = envMigratorUser, envMigratorPassword
+		}
+		return fmt.Errorf("%s is required when %s is set; set both or neither", missing, present)
+	}
+	if userSet {
 		flags.migratorIdentity = &migration.MigratorIdentity{Username: user, Password: password}
 	}
 	return nil
@@ -484,7 +485,7 @@ func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) 
 	if identity := flags.migratorIdentity; identity != nil {
 		// The username is safe to log and tells an operator which role Flyway ran
 		// as; the password is never logged, in any form.
-		log.Info().Str("migrator_user", identity.Username).Msg("Migrator identity overlay active")
+		log.Info().Str("migrator_user", identity.Username).Msg(migratorOverlayLogMsg)
 	}
 
 	out := cmd.OutOrStdout()

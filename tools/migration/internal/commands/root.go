@@ -35,8 +35,7 @@ type CommonFlags struct {
 	GitSHA        string
 	PipelineRunID string
 
-	// Migrator identity (#1694). Env-only — no flag carries the password. Resolved
-	// by runAction, not by resolveFlags, because runAction is its only consumer.
+	// Migrator identity (#1694). Env-only — no flag carries a password.
 	migratorIdentity *migration.MigratorIdentity
 
 	// Behavior.
