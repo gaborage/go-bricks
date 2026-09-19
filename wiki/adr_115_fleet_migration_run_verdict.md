@@ -76,8 +76,10 @@ run matches Go's success idiom, so `if v := res.Verdict(); v != nil` reads corre
   clean run, **1** for a split fleet, and **2** when zero tenants were dispatched. Exit 2 also
   covers failures before the loop exists: a failed tenant listing, or a credential provider that
   could not be built. The text and `--json` summary will report the listed, attempted, failed and
-  not-attempted counts plus the verdict, and the CLI will emit it on the exit-2 paths too, so a
-  pipeline always gets one summary record. The CLI pins a released go-bricks and CI builds it with
+  not-attempted counts plus the verdict, and the CLI will emit it on the exit-2 paths that reach
+  `migrate`/`validate`/`info` too, so a pipeline parsing that stream always gets one summary record
+  per run it started. (Amended: a flag cobra rejects outright never reaches an action and emits no
+  record, while still exiting 2 — see the amendment below.) The CLI pins a released go-bricks and CI builds it with
   `GOWORK=off`, so this part lands after the release that carries this library change and the pin
   bump that follows it.
 
