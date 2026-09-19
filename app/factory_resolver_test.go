@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -843,8 +844,15 @@ func storeServingCacheSection(key string, section *config.CacheConfig) TenantSto
 // reached the inner cache, which is the whole observable effect of the namespace.
 func assertWireKey(t *testing.T, c cache.Cache, inner *cachetest.MockCache, want string) {
 	t.Helper()
+	assertWireKeyFrom(t, c, inner.AllKeys, want)
+}
+
+// assertWireKeyFrom is assertWireKey over any observer of the keys that reached the wire,
+// so the real server the default path dials is asserted by the same contract as the mock.
+func assertWireKeyFrom(t *testing.T, c cache.Cache, keys func() []string, want string) {
+	t.Helper()
 	require.NoError(t, c.Set(context.Background(), keyPrefixLogical, []byte("v"), time.Minute))
-	assert.Equal(t, []string{want}, inner.AllKeys())
+	assert.Equal(t, []string{want}, keys())
 }
 
 // connectorOverMock returns a resolver whose cache connector hands out mock, plus the
@@ -1197,4 +1205,65 @@ func TestFactoryResolverCacheConnectorRefusesAnUnresolvedNamespace(t *testing.T)
 		require.NoError(t, err)
 		assertWireKey(t, c, mock, "acme:user:1")
 	})
+}
+
+const (
+	dialedPrefix  = "dialed"
+	mutatedPrefix = "mutated"
+)
+
+// countingCacheConfigStore counts the reads of the cache section and moves the key
+// prefix on every read after the first, so a namespace taken from a later snapshot
+// than the one that dialed shows up in the wire key rather than only in the count.
+type countingCacheConfigStore struct {
+	TenantStore
+	host  string
+	port  int
+	reads int
+}
+
+func (s *countingCacheConfigStore) CacheConfig(context.Context, string) (*config.CacheConfig, error) {
+	s.reads++
+	prefix := dialedPrefix
+	if s.reads > 1 {
+		prefix = mutatedPrefix
+	}
+	section := cacheSectionWithKeyPrefix(&prefix)
+	section.Redis.Host = s.host
+	section.Redis.Port = s.port
+	return section, nil
+}
+
+// TestFactoryResolverCacheConnectorReadsTheCacheSectionOncePerInstance pins the
+// atomicity of the endpoint/prefix pair on the default Redis path: the connector that
+// dials hands its snapshot forward, so a store mutation between what used to be two
+// reads cannot pair one snapshot's endpoint with another's prefix. The instance is
+// pooled, so such a mismatch would outlive the mutation that caused it.
+func TestFactoryResolverCacheConnectorReadsTheCacheSectionOncePerInstance(t *testing.T) {
+	mr := miniredis.RunT(t)
+	store := &countingCacheConfigStore{host: mr.Host(), port: mr.Server().Addr().Port}
+	resolver := newFactoryResolverForConfig(nil, &config.Config{App: config.AppConfig{Name: keyPrefixAppName}})
+
+	c, err := resolver.CacheConnector(store, logger.New("error", true))(context.Background(), "")
+	require.NoError(t, err)
+	require.NotNil(t, c)
+	t.Cleanup(func() { _ = c.Close() })
+
+	assert.Equal(t, 1, store.reads, "the default path must read the cache section once per created instance")
+	assertWireKeyFrom(t, c, mr.Keys, dialedPrefix+":"+keyPrefixLogical)
+}
+
+// TestFactoryResolverCacheConnectorReadsOnceOnTheCustomPath keeps the custom-connector
+// path at the one read it always had: such a connector owns its dial and hands no
+// snapshot forward, so the namespace layer is the only reader there.
+func TestFactoryResolverCacheConnectorReadsOnceOnTheCustomPath(t *testing.T) {
+	mock := cachetest.NewMockCache()
+	store := &countingCacheConfigStore{}
+
+	c, err := connectorOverMock(t, mock, store)(context.Background(), "")
+	require.NoError(t, err)
+	require.NotNil(t, c)
+
+	assert.Equal(t, 1, store.reads, "the custom path must read the cache section once per created instance")
+	assertWireKey(t, c, mock, dialedPrefix+":"+keyPrefixLogical)
 }
