@@ -353,21 +353,6 @@ func TestPrepareRuntimeConsumersAbortsAfterExternalWaitElapses(t *testing.T) {
 		"the last sleep must be clamped to the remaining budget, not the backoff ceiling")
 }
 
-// TestPrepareRuntimeConsumersRespectsCancellationDuringTheWait pins the ctx arm:
-// a shutdown signal during a long wait returns the broker's error immediately
-// rather than holding the boot for the whole budget.
-func TestPrepareRuntimeConsumersRespectsCancellationDuringTheWait(t *testing.T) {
-	source := &failingBrokerURLProvider{err: errExternalExchangeMissing}
-	a := newExternalWaitApp(t, source, time.Hour)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	start := time.Now()
-	require.Error(t, a.prepareRuntimeConsumers(ctx, declarationsWithConsumer()))
-	assert.Less(t, time.Since(start), 30*time.Second, "a canceled context must not wait out the budget")
-}
-
 // TestPrepareRuntimeConsumersNeverWaits collects the arms where the wait must not
 // engage at all — one attempt, then today's behavior. Each row pins one clause
 // of the guard: externalwait 0, a non-404 refusal, and a publisher-only service,

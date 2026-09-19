@@ -385,8 +385,10 @@ type CacheConfig struct {
 type DeclareConfig struct {
 	// ExternalWait bounds an in-process wait for an EXTERNAL exchange that does
 	// not exist yet, so a consumer can deploy before the service that owns it.
-	// Zero — the default — aborts at once. Single-tenant and consumer-declaring
-	// only. See ADR-119 for the rules and why they are what they are.
+	// Zero — the default — aborts at once. It engages on the control-plane
+	// startup pass (single-tenant, or multi-tenant under messaging.tenancy:
+	// shared) and only for a service that declared consumers; a per-tenant lazy
+	// pass never waits. Deliberately has no ceiling. See ADR-119 for the rules.
 	ExternalWait time.Duration `koanf:"externalwait" json:"externalwait" yaml:"externalwait" toml:"externalwait" mapstructure:"externalwait"`
 }
 
