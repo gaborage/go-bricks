@@ -1043,9 +1043,7 @@ func TestInitSuccessAndFailurePaths(t *testing.T) {
 	// Manually create a connection that returns a real *amqp.Channel is not feasible; instead emulate init steps:
 	// call changeChannel and toggle ready
 	c.changeChannel(ch)
-	c.m.Lock()
-	c.isReady = true
-	c.m.Unlock()
+	c.markReady()
 }
 
 // TestAMQPClientChannelGenerationTracksReadyIncarnation pins the accessor the
@@ -1083,6 +1081,63 @@ func TestAMQPClientChannelGenerationTracksReadyIncarnation(t *testing.T) {
 	gen, ready = c.channelGeneration()
 	assert.Equal(t, uint64(21), gen)
 	assert.False(t, ready)
+}
+
+// requireBroadcastOpen and requireBroadcastClosed read a broadcast channel's
+// state without waiting, so the assertion is the state at the call and not a
+// race with whatever runs next.
+func requireBroadcastOpen(t *testing.T, ch <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-ch:
+		t.Fatal("broadcast channel was closed")
+	default:
+	}
+}
+
+func requireBroadcastClosed(t *testing.T, ch <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-ch:
+	default:
+		t.Fatal("broadcast channel was not closed")
+	}
+}
+
+// TestAMQPClientChannelReadyNotifyWakesOnEveryReadyChannel pins the broadcast the
+// registry's redeclare observer waits on: rotating the channel alone wakes nobody
+// (the generation moved but the client is not ready on it yet), becoming ready
+// closes the channel every waiter holds, and the next ask hands out a fresh one.
+func TestAMQPClientChannelReadyNotifyWakesOnEveryReadyChannel(t *testing.T) {
+	c := newClientWithFakeChannel(t, &fakeChannel{})
+	ready, open := c.channelReadyNotify()
+	require.True(t, open)
+	requireBroadcastOpen(t, ready)
+
+	c.changeChannel(&fakeChannel{})
+	requireBroadcastOpen(t, ready)
+	c.markReady()
+	requireBroadcastClosed(t, ready)
+
+	next, open := c.channelReadyNotify()
+	require.True(t, open)
+	requireBroadcastOpen(t, next)
+}
+
+// TestAMQPClientChannelReadyNotifyReportsAClosedClient pins the observer's exit:
+// Close wakes whoever is parked on the broadcast and the next ask says the client
+// is gone, so nobody waits on a channel that will never be replaced.
+func TestAMQPClientChannelReadyNotifyReportsAClosedClient(t *testing.T) {
+	c := newClientWithFakeChannel(t, &fakeChannel{})
+	ready, open := c.channelReadyNotify()
+	require.True(t, open)
+
+	require.NoError(t, c.Close())
+
+	requireBroadcastClosed(t, ready)
+	after, open := c.channelReadyNotify()
+	assert.False(t, open)
+	assert.Nil(t, after)
 }
 
 func TestHandleReconnectExitsOnDone(t *testing.T) {
@@ -1219,9 +1274,7 @@ func TestInitSuccessCompleteFlow(t *testing.T) {
 	}
 
 	c.changeChannel(ch)
-	c.m.Lock()
-	c.isReady = true
-	c.m.Unlock()
+	c.markReady()
 
 	if !c.IsReady() {
 		t.Fatalf("expected client to be ready after successful init")
