@@ -1101,6 +1101,16 @@ func (c *AMQPClientImpl) DeclareQueue(ctx context.Context, queue *QueueDeclarati
 }
 
 // DeclareExchange declares an exchange from the given declaration (ctx: pre-flight check, see DeclareQueue).
+//
+// A declaration marked Passive is an EXTERNAL exchange — a name another service
+// owns — and is VERIFIED rather than created: the broker answers declare-ok when
+// one of that name exists and closes the channel with 404 NOT_FOUND when it does
+// not, so the pass ends and the next channel generation retries (ADR-119).
+//
+// The Passive marker rides on the declaration rather than on AMQPClient, which
+// stays unchanged (the ADR-113 precedent). An external AMQPClient implementation
+// that ignores it issues an active declare with no type, which the broker refuses
+// loudly.
 func (c *AMQPClientImpl) DeclareExchange(ctx context.Context, exchange *ExchangeDeclaration) error {
 	if exchange == nil {
 		return errNilDeclaration
@@ -1111,6 +1121,10 @@ func (c *AMQPClientImpl) DeclareExchange(ctx context.Context, exchange *Exchange
 	channel, err := c.readyChannel()
 	if err != nil {
 		return err
+	}
+
+	if exchange.Passive {
+		return channel.ExchangeDeclarePassive(exchange.Name, exchange.Type, exchange.Durable, exchange.AutoDelete, exchange.Internal, exchange.NoWait, toTable(exchange.Args))
 	}
 
 	return channel.ExchangeDeclare(exchange.Name, exchange.Type, exchange.Durable, exchange.AutoDelete, exchange.Internal, exchange.NoWait, toTable(exchange.Args))

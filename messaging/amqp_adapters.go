@@ -21,6 +21,11 @@ type amqpChannel interface {
 	Consume(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp.Table) (<-chan amqp.Delivery, error)
 	QueueDeclare(name string, durable, autoDelete, exclusive, noWait bool, args amqp.Table) (amqp.Queue, error)
 	ExchangeDeclare(name, kind string, durable, autoDelete, internal, noWait bool, args amqp.Table) error
+	// ExchangeDeclarePassive VERIFIES an exchange instead of creating it: the
+	// broker answers declare-ok when one of that name exists and 404 NOT_FOUND
+	// when it does not, ignoring every other field. It is how an EXTERNAL
+	// exchange — one another service owns — is checked (ADR-119).
+	ExchangeDeclarePassive(name, kind string, durable, autoDelete, internal, noWait bool, args amqp.Table) error
 	QueueBind(name, key, exchange string, noWait bool, args amqp.Table) error
 	NotifyClose(c chan *amqp.Error) chan *amqp.Error
 	NotifyPublish(confirm chan amqp.Confirmation) chan amqp.Confirmation

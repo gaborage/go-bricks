@@ -274,6 +274,49 @@ func (r *RabbitMQContainer) StreamURI() string {
 	return u.String() + "/%2f"
 }
 
+// AddUser creates a broker user, grants it permissions on the default vhost and
+// returns the AMQP URL it connects with. configure, write and read are AMQP
+// permission regexes: "" grants none, ".*" grants all. It is how a test proves
+// a code path against a user that CANNOT create a given entity — the broker's
+// own answer, not a fake's.
+//
+// The user is never removed, so callers pass a name unique to the test.
+func (r *RabbitMQContainer) AddUser(ctx context.Context, username, password, configure, write, read string) (string, error) {
+	if err := r.exec(ctx, "rabbitmqctl", "add_user", username, password); err != nil {
+		return "", err
+	}
+	if err := r.exec(ctx, "rabbitmqctl", "set_permissions", "-p", "/", username, configure, write, read); err != nil {
+		return "", err
+	}
+
+	// url.UserPassword escapes credentials containing @ : or /, and JoinHostPort
+	// brackets an IPv6 literal, which some Docker setups return from Host().
+	u := url.URL{
+		Scheme: "amqp",
+		User:   url.UserPassword(username, password),
+		Host:   net.JoinHostPort(r.host, strconv.Itoa(r.port)),
+		Path:   "/",
+	}
+	return u.String(), nil
+}
+
+// exec runs one command inside the running container, turning a non-zero exit
+// into an error carrying the command's own output.
+func (r *RabbitMQContainer) exec(ctx context.Context, args ...string) error {
+	code, reader, err := r.container.Exec(ctx, args)
+	if err != nil {
+		return fmt.Errorf("failed to run %v in the RabbitMQ container: %w", args, err)
+	}
+	if code == 0 {
+		return nil
+	}
+	output, readErr := io.ReadAll(reader)
+	if readErr != nil {
+		return fmt.Errorf("%v exited %d; reading its output failed: %w", args, code, readErr)
+	}
+	return fmt.Errorf("%v exited %d: %s", args, code, output)
+}
+
 // Terminate stops and removes the RabbitMQ container
 func (r *RabbitMQContainer) Terminate(ctx context.Context) error {
 	if r.container == nil {

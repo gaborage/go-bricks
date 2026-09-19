@@ -319,6 +319,56 @@ func TestDeclarationsTopicExchange(t *testing.T) {
 	})
 }
 
+func TestDeclarationsExternalExchange(t *testing.T) {
+	t.Run("records a name-only passive declaration", func(t *testing.T) {
+		decls := NewDeclarations()
+
+		exchange := decls.DeclareExternalExchange(externalExchangeName)
+
+		require.NotNil(t, exchange)
+		assert.Equal(t, externalExchangeName, exchange.Name)
+		assert.True(t, exchange.Passive, "an external exchange is verified, never declared")
+		// Name only: the broker ignores every other field on a passive declare.
+		assert.Empty(t, exchange.Type)
+		assert.False(t, exchange.Durable)
+		assert.False(t, exchange.AutoDelete)
+		assert.False(t, exchange.Internal)
+		assert.False(t, exchange.NoWait)
+		assert.Empty(t, exchange.Args)
+
+		registered := decls.Exchanges[externalExchangeName]
+		require.NotNil(t, registered)
+		assert.True(t, registered.Passive)
+	})
+
+	t.Run("satisfies a binding reference", func(t *testing.T) {
+		decls := NewDeclarations()
+		decls.DeclareExternalExchange(externalExchangeName)
+		decls.DeclareQueue("local.queue")
+		decls.DeclareBinding("local.queue", externalExchangeName, "orders.#")
+
+		assert.NoError(t, decls.Validate())
+	})
+
+	t.Run("satisfies a publisher reference", func(t *testing.T) {
+		decls := NewDeclarations()
+		decls.DeclareExternalExchange(externalExchangeName)
+		decls.RegisterPublisher(&PublisherDeclaration{Exchange: externalExchangeName, RoutingKey: "orders.created"})
+
+		assert.NoError(t, decls.Validate())
+	})
+
+	t.Run("a repeat merges silently", func(t *testing.T) {
+		decls := NewDeclarations()
+
+		decls.DeclareExternalExchange(externalExchangeName)
+		decls.DeclareExternalExchange(externalExchangeName)
+
+		require.NoError(t, decls.Validate())
+		assert.Len(t, decls.Exchanges, 1)
+	})
+}
+
 func TestDeclarationsDirectExchange(t *testing.T) {
 	decls := NewDeclarations()
 

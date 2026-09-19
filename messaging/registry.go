@@ -129,6 +129,11 @@ type ExchangeDeclaration struct {
 	Internal   bool           // Internal exchange
 	NoWait     bool           // Do not wait for server confirmation
 	Args       map[string]any // Additional arguments
+	// Passive marks an EXTERNAL exchange: a name this service references but does
+	// not own, verified with a passive exchange.declare rather than created. The
+	// broker ignores every other field on a passive declare, so a passive
+	// declaration carries a name and nothing else (ADR-119).
+	Passive bool
 }
 
 // QueueDeclaration defines a queue to be declared
@@ -937,7 +942,10 @@ var _ channelGenerationer = (*AMQPClientImpl)(nil)
 
 // topologyStep is one recorded declaration, keyed for logs and the skip set.
 type topologyStep struct {
-	key     string
+	key string
+	// passive marks the step as an external exchange's verification, which the
+	// 406 skip set must never hold (ADR-119).
+	passive bool
 	declare func(context.Context) error
 }
 
@@ -949,7 +957,7 @@ func (r *Registry) topologySteps() []topologyStep {
 	exchanges, queues, bindings := r.Exchanges(), r.Queues(), r.Bindings()
 	steps := make([]topologyStep, 0, len(exchanges)+len(queues)+len(bindings))
 	for name, exchange := range exchanges {
-		steps = append(steps, topologyStep{key: "exchange:" + name, declare: func(ctx context.Context) error {
+		steps = append(steps, topologyStep{key: "exchange:" + name, passive: exchange.Passive, declare: func(ctx context.Context) error {
 			return r.client.DeclareExchange(ctx, exchange)
 		}})
 	}
@@ -1008,7 +1016,12 @@ func (r *Registry) replayTopology(ctx context.Context, generation uint64) {
 		}
 		msg := "Messaging topology redeclare failed, the next channel retries"
 		var amqpErr *amqp.Error
-		if errors.As(err, &amqpErr) && amqpErr.Code == amqp.PreconditionFailed {
+		// A passive declare is exempt: the broker ignores every field it could
+		// disagree over, so it cannot legitimately answer PRECONDITION_FAILED.
+		// One that does is a broker anomaly, and remembering it for the process
+		// lifetime would wedge the external reference on it — with no surviving
+		// definition for an operator to fix (ADR-119).
+		if errors.As(err, &amqpErr) && amqpErr.Code == amqp.PreconditionFailed && !step.passive {
 			r.redeclareSkip[step.key] = struct{}{}
 			msg = "Messaging declaration rejected with PRECONDITION_FAILED, skipped until restart: " +
 				"fix the server-side definition and restart the process"
