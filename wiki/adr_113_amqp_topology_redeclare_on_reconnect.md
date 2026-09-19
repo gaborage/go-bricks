@@ -118,15 +118,21 @@ The framework never deletes or recreates broker state.
   the DRIVING source's own counter, so two sources can both report generation 2 for different
   channels — with the broker's reply code and text when the error is an `*amqp.Error`. A refused declare closes
   the channel, so the next generation retries. A failure once the driving context is canceled ends
-  the pass without a log; an announced pass runs on a context detached from the setup budget that
-  seeded it, so it keeps the trace and tenant values and carries no deadline.
+  the pass without a log; a pass announced by the registry's OWN client runs on a context detached
+  from the setup budget that seeded it, so it keeps the trace and tenant values and carries no
+  deadline. A pass announced by a pooled publisher runs on a background context instead, for the
+  ownership reason given above: that client belongs to no one request.
 - `StopConsumers` ends every driver: the observer stops, and the registry refuses any later pass. It
   has to refuse rather than only stop its own observer, because a source that outlives the
   registry's consumers has no other way to learn the registry is done. The refusal lasts for the
   stop, not for the registry's lifetime: `StartConsumers` re-arms it, so the consumer's
-  pre-subscribe pass works across a stop/start as it did before the halt gate existed. The observer
-  is not restarted with it — `DeclareInfrastructure` starts it at most once — so after a stop the
-  re-subscribe is the only driver left.
+  pre-subscribe pass works across a stop/start as it did before the halt gate existed. The observer is
+  restarted with it: `DeclareInfrastructure` starts the first one and a re-arm starts another on the
+  reopened context, because for a publisher-only registry that observer is the only driver the
+  registry owns. The re-arm never WAITS for the observer the halt ended — that one may be inside a
+  pass holding the pass mutex — and it does not need to: the halted observer runs its loop against
+  the context it captured at spawn, which the halt canceled, so its passes end on that check even
+  though the re-arm has already replaced the registry's own context.
 - `PRECONDITION_FAILED` (406) is the exception: a surviving entity whose arguments differ from the
   declaration. The triage brief asked for "WARN and the consume proceeds", but amqp091 closes the
   channel on a 406, so the consume on that incarnation cannot proceed, and re-declaring on every later
@@ -150,9 +156,15 @@ healthy reconnect costs one idempotent declare pass.
 
 **Negative:** an argument mismatch that appears at runtime is logged once and then stays skipped until
 restart, by design. A pass that fails part-way leaves the rest of that generation undeclared until the
-next channel. Each registry costs one background goroutine for its lifetime, and once a second
-source exists, one waking during startup blocks until `DeclareInfrastructure` returns — 30s of
-readiness wait plus uncancelable declare round-trips, at worst.
+next channel. The background goroutines are one per registry plus one per pooled publisher client,
+each for that client's pooled life. The repair is priced per SOURCE, not per registry: a broker
+restart that rotates every channel costs one full declare pass for each of the T registries and each
+of their M pooled publishers, and those passes serialize behind one mutex per registry. A newly
+pooled publisher pays one pass on its first channel too, on creation and on every re-creation after
+an eviction or the idle sweep. Declares are idempotent for matching arguments, so a pass that finds
+nothing lost is a no-op at the broker — it is round-trips, not damage. One waking during startup
+blocks until `DeclareInfrastructure` returns — 30s of readiness wait plus uncancelable declare
+round-trips, at worst.
 
 **Neutral:** no configuration key and no exported API. `RegistryInterface`, `testing/mocks` and
 `testing/fixtures` are unchanged.

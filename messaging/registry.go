@@ -548,7 +548,7 @@ func (r *Registry) StartConsumers(ctx context.Context) error {
 // not need to. The old observer drives its passes on the context it captured at
 // spawn, which the halt canceled, and redeclareTopologyFrom's loop guard checks
 // THAT context — not redeclareHalted, which reads the registry's field and is
-// live again the moment this function replaces it. It also closes only the done
+// false again the moment this function replaces it. It also closes only the done
 // channel it captured, never the field. At most one observer is ACTIVE even while
 // an old one is still winding down.
 func (r *Registry) rearmRedeclaring(ctx context.Context) {
