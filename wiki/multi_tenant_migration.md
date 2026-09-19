@@ -374,6 +374,10 @@ jobs:
       - name: Apply migrations to every tenant
         env:
           GOBRICKS_MIGRATE_SOURCE_TOKEN: ${{ secrets.CONTROL_PLANE_TOKEN }}
+          # The tenant secrets carry each tenant's runtime role, which has no DDL
+          # rights; these two make Flyway connect as the migrator instead.
+          GOBRICKS_MIGRATE_MIGRATOR_USER: ${{ secrets.MIGRATOR_USER }}
+          GOBRICKS_MIGRATE_MIGRATOR_PASSWORD: ${{ secrets.MIGRATOR_PASSWORD }}
         run: |
           ./go-bricks-migrate migrate \
             --source-url https://control-plane.example.com/api \

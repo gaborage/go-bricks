@@ -5128,6 +5128,9 @@ go-bricks-migrate migrate --source-url ... --aws-region us-east-1 --json
 
 # Connect as the shared migrator instead of each tenant secret's own role.
 # Both or neither — exactly one set is a startup error. No flag carries the password.
+# Applies to migrate, validate and info; list and quiesce ignore both variables.
+# This secret holds the raw password, not a tenant-style JSON document, so the whole
+# SecretString is the value — read a `password` field out of it with --query if yours does.
 export GOBRICKS_MIGRATE_MIGRATOR_USER=fleet_migrator
 export GOBRICKS_MIGRATE_MIGRATOR_PASSWORD="$(aws secretsmanager get-secret-value --secret-id gobricks/migrate/migrator --query SecretString --output text)"
 go-bricks-migrate migrate --source-url ... --aws-region us-east-1
