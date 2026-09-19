@@ -294,22 +294,51 @@ treat absence as "no signal" rather than "zero".
 
 `listed` is what the tenant source returned, `attempted` how many of them were
 dispatched, and `not_attempted` the rest — the tenants a re-run still has to
-reach. `verdict` is `clean`, `fleet_split` or `nothing_attempted`, and describes
-the FLEET: it is derived from the dispatch counts, so it never contradicts them.
-`total` keeps the meaning it has always had — the dispatched count, which
-`attempted` now names too; prefer `attempted` or `listed` in new code. On a run
-that dispatched nothing, `listed` is what the run managed to observe, and is 0
-when the tenant listing itself failed.
+reach. `verdict` is `clean`, `fleet_split` or `nothing_attempted`, and it describes the
+FLEET: it is derived from the dispatch counts, so it never contradicts them. The
+exit code describes the RUN. `total` keeps the meaning it has always had — the
+dispatched count, which `attempted` now names too; prefer `attempted` or
+`listed` in new code. On the exit-2 paths `listed` is what the run managed to
+observe, and is 0 when the tenant listing itself failed, whatever the fleet's
+real size.
 
 Every invocation that reaches `migrate`, `validate` or `info` emits exactly one
 summary record, including the runs that ended before the first tenant was
-dispatched — a tenant listing failure used to emit none.
+dispatched. A flag cobra rejects outright never reaches them, so it emits no
+record — it still exits 2.
 
-A failed tenant adds `"status": "fail"` and an `"error"` field; the process
-exits non-zero whenever `failed > 0`. Idempotent reruns against already-
-migrated tenants omit `applied_versions` (zero-length slices follow the same
-omit-when-empty rule as the other Result-derived keys) with `ending_version`
-mirroring `starting_version`.
+A failed tenant adds `"status": "fail"` and an `"error"` field to its own
+record. Idempotent reruns against already-migrated tenants omit
+`applied_versions` (zero-length slices follow the same omit-when-empty rule as
+the other Result-derived keys) with `ending_version` mirroring
+`starting_version`.
+
+### Exit codes
+
+| Exit | Verdict | Meaning |
+| ---- | ------- | ------- |
+| `0` | `clean` | Every listed tenant was dispatched and succeeded |
+| `1` | `fleet_split` | At least one tenant was dispatched, and at least one failed or was never reached — the fleet may be at mixed versions |
+| `2` | `nothing_attempted` | No tenant was dispatched: empty listing, listing failure, unreadable tenant store, a credential provider that could not be built, or a misuse (unknown flag, stray argument, unresolvable flag combination). No schema was touched |
+
+Exit `1` is reserved for a split fleet, so a pipeline can trust it: every misuse
+exits `2`, because a command that never ran dispatched nothing — an unknown
+command or flag, a stray argument, or a flag combination that does not resolve,
+on any subcommand. `list` and `quiesce` follow the same rule: anything that
+fails before they do their work — misuse, a source that cannot be built, a
+credential provider that cannot be built, a control plane that cannot be
+reached — exits `2`, because nothing was dispatched and nothing was touched.
+Only a failure of the work itself, such as a `quiesce set` that cannot write the
+flag, exits `1`, and it carries no fleet meaning. A bare invocation answers with
+help and exits `0`. The one case
+where the record and the exit code differ is a run that errored with every
+tenant dispatched and green — a parallel run canceled after its last tenant
+finished. The fleet is consistent, so the record says `clean`; the run failed,
+so the process exits `1`.
+
+A pipeline that gates a deploy on the fleet being considered treats `2` as a
+failure; an environment that may legitimately hold zero tenants has to accept it
+explicitly (ADR-115).
 
 ## CI integration
 
@@ -321,6 +350,7 @@ GitHub Actions example for a fleet rollout step:
     AWS_REGION: us-east-1
     GOBRICKS_MIGRATE_SOURCE_TOKEN: ${{ secrets.CP_TOKEN }}
   run: |
+    set +e
     go-bricks-migrate migrate \
       --source-url https://control.internal/v1/tenants \
       --credentials-from aws-secrets-manager \
@@ -328,7 +358,13 @@ GitHub Actions example for a fleet rollout step:
       --parallel 10 \
       --continue-on-error \
       --json > migrate.log
+    code=$?
+    set -e
     cat migrate.log | jq -c 'select(.status=="fail")'
+    # Exit 2 means no tenant was dispatched, so no schema changed. Decide
+    # deliberately: fail the deploy gate here, or accept it for an environment
+    # that may legitimately hold zero tenants.
+    exit "$code"
 ```
 
 `--continue-on-error` ensures one tenant's failure doesn't strand the rest;

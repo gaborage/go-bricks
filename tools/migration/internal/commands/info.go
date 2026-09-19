@@ -11,7 +11,7 @@ func NewInfoCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "info",
 		Short: "Print migration status for every tenant",
-		Args:  cobra.NoArgs,
+		Args:  noArgs,
 	}
 	flags := addCommonFlags(cmd)
 	cmd.RunE = func(c *cobra.Command, _ []string) error {

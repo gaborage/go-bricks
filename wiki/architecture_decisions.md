@@ -1797,9 +1797,12 @@ dispatched, a nil result included. A Flyway timeout or cancel on a dispatched te
 failure. The per-tenant outcome enum and the `Prepare` skip sentinel were rejected, and the quiesce
 pins on `Results` stand. Both runners check the context before and after the quiesce check; parallel
 dispatch checks the context before it contends for a worker slot and judges both again once it holds
-one. The CLI's exit codes are unchanged
-in this release; their 0/1/2 mapping is decided here.
-See [migrations.md](migrations.md) `[C66.5]`.
+one. The CLI's 0/1/2 mapping is decided here and
+shipped separately (#1692, amendment 2026-09-19): `go-bricks-migrate` exits 0 clean, 1 split, 2 when
+no tenant was dispatched — misuse included, so exit 1 means a split fleet and nothing else — and its
+summary record keeps `total` while adding listed/attempted/failed/not_attempted plus the verdict,
+which names the fleet where the exit code names the run.
+See [migrations.md](migrations.md) `[C66.5]`, `[C67.1]`.
 
 **Key Benefits:** a pipeline can tell "nothing was touched" from "the fleet is split" and knows
 which tenants a re-run still has to reach.
