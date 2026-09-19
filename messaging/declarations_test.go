@@ -514,9 +514,8 @@ func TestDeclarationsValidate(t *testing.T) {
 		err := decls.Validate()
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), `binding references queue "missing-queue", absent from this declaration set`)
-		assert.Contains(t, err.Error(), "a local check; the broker was not contacted")
-		assert.Contains(t, err.Error(), "declare it with DeclareQueue")
+		assert.Contains(t, err.Error(), `binding references queue "missing-queue", absent from this declaration set `+
+			`(a local check; the broker was not contacted): declare it with DeclareQueue`)
 	})
 
 	t.Run("binding references an exchange absent from the set", func(t *testing.T) {
@@ -527,9 +526,9 @@ func TestDeclarationsValidate(t *testing.T) {
 		err := decls.Validate()
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), `binding references exchange "missing-exchange", absent from this declaration set`)
-		assert.Contains(t, err.Error(), "a local check; the broker was not contacted")
-		assert.Contains(t, err.Error(), "mark it external with DeclareExternalExchange")
+		assert.Contains(t, err.Error(), `binding references exchange "missing-exchange", absent from this declaration set `+
+			`(a local check; the broker was not contacted): declare it, or mark it external with `+
+			`DeclareExternalExchange when another service owns it`)
 	})
 
 	t.Run("consumer references a queue absent from the set", func(t *testing.T) {
@@ -539,9 +538,8 @@ func TestDeclarationsValidate(t *testing.T) {
 		err := decls.Validate()
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), `consumer references queue "missing-queue", absent from this declaration set`)
-		assert.Contains(t, err.Error(), "a local check; the broker was not contacted")
-		assert.Contains(t, err.Error(), "declare it with DeclareQueue")
+		assert.Contains(t, err.Error(), `consumer references queue "missing-queue", absent from this declaration set `+
+			`(a local check; the broker was not contacted): declare it with DeclareQueue`)
 	})
 
 	t.Run("publisher references an exchange absent from the set", func(t *testing.T) {
@@ -551,9 +549,9 @@ func TestDeclarationsValidate(t *testing.T) {
 		err := decls.Validate()
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), `publisher references exchange "missing-exchange", absent from this declaration set`)
-		assert.Contains(t, err.Error(), "a local check; the broker was not contacted")
-		assert.Contains(t, err.Error(), "mark it external with DeclareExternalExchange")
+		assert.Contains(t, err.Error(), `publisher references exchange "missing-exchange", absent from this declaration set `+
+			`(a local check; the broker was not contacted): declare it, or mark it external with `+
+			`DeclareExternalExchange when another service owns it`)
 	})
 
 	t.Run("publisher on the default exchange needs no declaration", func(t *testing.T) {
@@ -1963,10 +1961,8 @@ func TestValidateRefusesAnExternalExchangeCarryingShape(t *testing.T) {
 	err := d.Validate()
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "external exchange")
-	assert.Contains(t, err.Error(), mergeExchange)
-	assert.Contains(t, err.Error(), "name-only")
-	assert.Contains(t, err.Error(), "Args, Durable, Type", "every field set is named, in a stable order")
+	assert.Contains(t, err.Error(), `external exchange "`+mergeExchange+`" is name-only, but sets Args, Durable, Type`,
+		"every field set is named, in a fixed order")
 }
 
 // TestRegisterExchangeMergeHashIsOrderIndependent pins what the merge buys: the

@@ -523,31 +523,13 @@ func TestRegistryRegisterAfterDeclaredSimple(t *testing.T) {
 func TestRegistryDeclareInfrastructureVerifiesAnExternalExchange(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: true}
 	registry := NewRegistry(client, &stubLogger{})
-	registry.RegisterExchange(&ExchangeDeclaration{Name: externalExchangeName, Passive: true})
+	registry.RegisterExchange(NewExternalExchange(externalExchangeName))
 	registry.RegisterExchange(&ExchangeDeclaration{Name: testExchangeName, Type: ExchangeTypeTopic, Durable: true})
 
 	require.NoError(t, registry.DeclareInfrastructure(context.Background()))
 
 	assert.Equal(t, []string{externalExchangeName}, client.verifiedExchanges)
 	assert.Equal(t, []string{testExchangeName}, client.declaredExchanges)
-}
-
-// TestRegistryDeclareInfrastructureSurfacesTheBrokersNotFound pins what a
-// missing external exchange costs at startup: the pass ends carrying the
-// broker's own reply code and text, not a framework paraphrase.
-func TestRegistryDeclareInfrastructureSurfacesTheBrokersNotFound(t *testing.T) {
-	notFound := &amqp.Error{Code: amqp.NotFound, Reason: "NOT_FOUND - no exchange '" + externalExchangeName + "' in vhost '/'", Server: true}
-	client := &simpleMockAMQPClient{isReady: true, declareExchangeErr: notFound}
-	registry := NewRegistry(client, &stubLogger{})
-	registry.RegisterExchange(&ExchangeDeclaration{Name: externalExchangeName, Passive: true})
-
-	err := registry.DeclareInfrastructure(context.Background())
-
-	require.Error(t, err)
-	var amqpErr *amqp.Error
-	require.ErrorAs(t, err, &amqpErr)
-	assert.Equal(t, amqp.NotFound, amqpErr.Code)
-	assert.Contains(t, err.Error(), "no exchange '"+externalExchangeName+"' in vhost '/'")
 }
 
 func TestRegistryDeclareInfrastructureAlreadyDeclaredSimple(t *testing.T) {
@@ -3199,8 +3181,7 @@ func TestRegistryRedeclareRepeatsThePassiveStep(t *testing.T) {
 	handler := &countingTestHandler{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	registry := startRedeclareRegistryOn(ctx, t, client, &stubLogger{}, handler,
-		&ExchangeDeclaration{Name: externalExchangeName, Passive: true})
+	registry := startRedeclareRegistryOn(ctx, t, client, &stubLogger{}, handler, NewExternalExchange(externalExchangeName))
 	defer registry.StopConsumers()
 	first := awaitSubscription(t, client, 0)
 
@@ -3211,19 +3192,22 @@ func TestRegistryRedeclareRepeatsThePassiveStep(t *testing.T) {
 	assert.Equal(t, []string{"1", "2"}, client.declaresOf("exchange:"+externalExchangeName))
 }
 
-// TestRegistryRedeclareNeverSkipsAnExternalExchange pins the ADR-113 skip set's
-// boundary: a passive declare cannot legitimately answer PRECONDITION_FAILED —
-// the broker ignores every field it could disagree over — so a 406 there is a
-// broker anomaly, and remembering it until restart would wedge the reference on
-// one. The next generation retries it, like any other refused declaration.
-func TestRegistryRedeclareNeverSkipsAnExternalExchange(t *testing.T) {
+// TestRegistryRedeclarePassiveConflictSkipsLikeAnyStep pins that ADR-119 carves
+// NO exemption into ADR-113's skip set. A real broker cannot answer 406 to a
+// passive declare — its passive path is lookup-or-404 — so the criterion "an
+// external exchange never enters the skip set" is satisfied by the protocol, not
+// by code. Were a broker ever to answer 406, exempting the step would be worse
+// than skipping it: replayTopology ends a pass at the first failure and
+// exchanges run before bindings, so a never-skipped step would block every later
+// pass. Skipping degrades instead — the pass reaches the queue and the binding,
+// whose own 404 still surfaces a genuinely absent exchange.
+func TestRegistryRedeclarePassiveConflictSkipsLikeAnyStep(t *testing.T) {
 	client := newReconnectingMockClient()
 	handler := &countingTestHandler{}
 	log := newRecordingLogger()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	registry := startRedeclareRegistryOn(ctx, t, client, log, handler,
-		&ExchangeDeclaration{Name: externalExchangeName, Passive: true})
+	registry := startRedeclareRegistryOn(ctx, t, client, log, handler, NewExternalExchange(externalExchangeName))
 	defer registry.StopConsumers()
 	first := awaitSubscription(t, client, 0)
 
@@ -3235,11 +3219,15 @@ func TestRegistryRedeclareNeverSkipsAnExternalExchange(t *testing.T) {
 	close(first)
 
 	deliverAndAwaitAck(t, awaitSubscription(t, client, 1), handler)
-	assert.Equal(t, []string{"1", "2", "3"}, client.declaresOf("exchange:"+externalExchangeName),
-		"the refused passive step must be attempted again on the next generation")
-	for _, line := range log.Lines() {
-		assert.NotEqual(t, redeclareSkippedMsg, line.Msg, "an external exchange never enters the skip set")
-	}
+
+	bindingKey := fakeBindingKey(&BindingDeclaration{Queue: testQueueName, Exchange: externalExchangeName, RoutingKey: "orders.#"})
+	assert.Equal(t, []string{"1", "2"}, client.declaresOf("exchange:"+externalExchangeName),
+		"the refused step is skipped by every later pass, like any other 406")
+	assert.Equal(t, []string{"1", "3"}, client.declaresOf(bindingKey),
+		"the pass must reach the binding on the next generation instead of stalling on the skipped step")
+	skipped := log.Line(t, redeclareSkippedMsg)
+	assert.Equal(t, []string{"406"}, skipped.Values("amqp_reply_code"))
+	assert.Equal(t, []string{"exchange:" + externalExchangeName}, skipped.Values("declaration"))
 }
 
 // TestRegistryRedeclaresOncePerChannelGeneration verifies a healthy reconnect

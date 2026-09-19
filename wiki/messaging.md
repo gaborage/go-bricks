@@ -172,13 +172,21 @@ not have, whose first publish would otherwise be the check.
 **When it is missing.** The broker answers 404 and closes the channel. At startup that ends the
 declare pass and the error carries the broker's own reply code and text; a consumer-declaring
 service aborts startup. After a reconnect the pass ends and the next channel generation retries it.
-A passive step never enters ADR-113's skip-until-restart set: a passive declare cannot legitimately
-answer `PRECONDITION_FAILED`, and remembering one would wedge the reference for the process
-lifetime with no surviving definition for an operator to fix. See
+Nothing external reaches ADR-113's skip-until-restart set, and no code enforces that: a passive
+declare answers declare-ok or 404, never `PRECONDITION_FAILED`, so the skip set has nothing to hold
+and ADR-113's one rule still covers the step. See
 [ADR-119](adr_119_external_exchange_passive_verification.md).
 
-**Reference errors name the check.** A binding, consumer or publisher naming an entity no
-declaration in the set carries now says so, and says the broker was not contacted:
+#### Startup wait
+
+<!-- PLACEHOLDER: filled by link 2 of #1760 (gb-executor-4). -->
+Shipped in link 2 as the opt-in `messaging.declare.externalwait` — documented in the link that
+carries the key. Until then, an absent external exchange aborts startup at once, as above.
+
+#### Reference errors
+
+A binding, consumer or publisher naming an entity no declaration in the set carries now says so,
+and says the broker was not contacted:
 
 ```text
 binding references exchange "billing.events", absent from this declaration set (a local check; the broker was not contacted): declare it, or mark it external with DeclareExternalExchange when another service owns it

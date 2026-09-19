@@ -928,7 +928,7 @@ func TestAMQPClientDeclareExchangeVerifiesAnExternalExchange(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
 
-	require.NoError(t, c.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: externalExchangeName, Passive: true}))
+	require.NoError(t, c.DeclareExchange(context.Background(), NewExternalExchange(externalExchangeName)))
 
 	assert.Equal(t, externalExchangeName, ch.verifiedExchange)
 	assert.Empty(t, ch.declaredExchange, "an external exchange is never created by this service")
@@ -943,7 +943,7 @@ func TestAMQPClientDeclareExchangeSurfacesTheBrokersNotFound(t *testing.T) {
 	ch := &fakeChannel{exVerifyErr: notFound}
 	c := newClientWithFakeChannel(t, ch)
 
-	err := c.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: externalExchangeName, Passive: true})
+	err := c.DeclareExchange(context.Background(), NewExternalExchange(externalExchangeName))
 
 	require.Error(t, err)
 	var amqpErr *amqp.Error

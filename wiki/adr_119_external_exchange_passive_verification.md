@@ -44,16 +44,25 @@ sends the reader to `rabbitmqctl` and the management UI, which show a healthy ex
   name in one boot — but under its own header, because no shape can be aligned: the remedy is to
   drop one call site. Ownership is compared before shape, or the external declaration's absent
   `Type` would be reported as a type conflict and name neither call site's real mistake.
-- **A passive step never enters the 406 skip set.** A passive declare cannot legitimately answer
-  `PRECONDITION_FAILED`: the broker ignores every field it could disagree over. One that does is an
-  anomaly, and ADR-113's skip-until-restart would wedge the reference on it for the process
-  lifetime — with no surviving definition for an operator to fix. It is retried on the next
-  generation like any other refused declaration. ADR-113's 406 semantics for local declarations are
-  untouched.
+- **No exemption from the 406 skip set, and no code enforcing one.** A passive declare answers
+  declare-ok or 404, never `PRECONDITION_FAILED` — the broker ignores every field it could disagree
+  over — so "an external reference never enters the skip set" holds by the protocol and needs
+  nothing in the framework. An exemption would also be worse than the mechanism it carved out of:
+  `replayTopology` ends a pass at its first failure and exchanges run before bindings, so a step
+  refused forever and never skipped would block every later pass, leaving queues and bindings
+  undeclared and the consumer unable to re-attach. ADR-113's one rule therefore covers every step:
+  were a broker ever to answer 406, that step is skipped and the binding's own 404 still surfaces a
+  genuinely absent exchange.
 - **Reference errors say what they checked.** The binding, consumer and publisher reference errors
   name the missing entity, state that this is a local check and that the broker was not contacted,
   and name the remedy. Only the exchange forms offer the external one: a reference-only queue is
   not a thing this framework has.
+
+## Startup wait
+
+<!-- PLACEHOLDER: filled by link 2 of #1760 (gb-executor-4). -->
+Shipped in link 2 as the opt-in `messaging.declare.externalwait` — decided here (see
+*Alternatives considered*, boot-and-converge), documented in the link that carries the key.
 
 ## Alternatives considered
 
@@ -99,4 +108,4 @@ the framework creating the topology it owns.
 - [ADR-116](adr_116_exchange_type_validation.md): the exchange-type check an external declaration is exempt from
 - [wiki/messaging.md](messaging.md#external-exchanges): the door, its rules and the operator-facing failures
 - `messaging/helpers.go` (`DeclareExternalExchange`), `messaging/declarations.go` (`validateExternalExchangeConflicts`, `validateExternalExchangeShape`)
-- `messaging/amqp_client.go` (`DeclareExchange`), `messaging/amqp_adapters.go` (`amqpChannel.ExchangeDeclarePassive`), `messaging/registry.go` (`topologyStep.passive`)
+- `messaging/amqp_client.go` (`DeclareExchange`), `messaging/amqp_adapters.go` (`amqpChannel.ExchangeDeclarePassive`)

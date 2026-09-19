@@ -468,11 +468,10 @@ func (d *Declarations) Validate() error {
 		return err
 	}
 
-	if err := d.validateExchangeConflicts(); err != nil {
-		return err
-	}
-
-	if err := d.validateExternalExchangeConflicts(); err != nil {
+	// Joined, not sequential: the two classes carry different remedies and so
+	// different headers, but a set holding one of each must still name both in
+	// one boot — the property ADR-118 bought.
+	if err := errors.Join(d.validateExchangeConflicts(), d.validateExternalExchangeConflicts()); err != nil {
 		return err
 	}
 
@@ -500,11 +499,7 @@ func (d *Declarations) Validate() error {
 		return err
 	}
 
-	if err := d.validateExternalExchangeShape(); err != nil {
-		return err
-	}
-
-	if err := d.validateExchangeTypes(); err != nil {
+	if err := d.validateExchangeShapes(); err != nil {
 		return err
 	}
 
@@ -523,15 +518,18 @@ func (d *Declarations) Validate() error {
 // sent the reader to rabbitmqctl and the management UI, which show a healthy
 // exchange. Only the exchange form offers the external remedy: a reference-only
 // queue is not a thing this framework has (#1760).
+func absentReference(kind, entity, name, remedy, suffix string) error {
+	return fmt.Errorf("%s references %s %q, absent from this declaration set "+
+		"(a local check; the broker was not contacted): %s%s", kind, entity, name, remedy, suffix)
+}
+
 func absentQueue(kind, name string) error {
-	return fmt.Errorf("%s references queue %q, absent from this declaration set "+
-		"(a local check; the broker was not contacted): declare it with DeclareQueue", kind, name)
+	return absentReference(kind, "queue", name, "declare it with DeclareQueue", "")
 }
 
 func absentExchange(kind, name, suffix string) error {
-	return fmt.Errorf("%s references exchange %q, absent from this declaration set "+
-		"(a local check; the broker was not contacted): declare it, or mark it external with "+
-		"DeclareExternalExchange when another service owns it%s", kind, name, suffix)
+	return absentReference(kind, "exchange", name,
+		"declare it, or mark it external with DeclareExternalExchange when another service owns it", suffix)
 }
 
 // validateReferences checks that every binding and consumer names a
@@ -671,23 +669,29 @@ func (d *Declarations) validateQueueTypeDeclarations() error {
 
 var coreExchangeTypes = []string{ExchangeTypeDirect, ExchangeTypeTopic, ExchangeTypeFanout, ExchangeTypeHeaders}
 
-// validateExchangeTypes reports, in sorted order, every exchange the broker would refuse to declare.
-func (d *Declarations) validateExchangeTypes() error {
+// validateExchangeShapes reports, in sorted order, every exchange whose declared
+// shape cannot reach the broker: a local one naming a type the broker does not
+// know (ADR-116), and an external one carrying shape at all (ADR-119). One walk
+// over one map, because the two rules partition it — a declaration is always
+// judged by exactly one of them, and a boot reports both classes.
+func (d *Declarations) validateExchangeShapes() error {
 	var errs []error
 
 	for _, name := range slices.Sorted(maps.Keys(d.Exchanges)) {
-		// An external exchange carries no type: a passive declare ignores every
-		// field but the name, so demanding one would ask for a value the broker
-		// never reads and the owner alone decides (ADR-119).
-		if d.Exchanges[name].Passive {
+		exchange := d.Exchanges[name]
+		if exchange.Passive {
+			if fields := externalShapeFields(exchange); len(fields) > 0 {
+				errs = append(errs, fmt.Errorf(
+					"external exchange %q is name-only, but sets %s: the owner alone decides the shape (ADR-119)",
+					name, strings.Join(fields, ", ")))
+			}
 			continue
 		}
-		exchangeType := d.Exchanges[name].Type
-		if isKnownExchangeType(exchangeType) {
+		if isKnownExchangeType(exchange.Type) {
 			continue
 		}
 		errs = append(errs, fmt.Errorf("exchange %q has unknown type %q: use %s or an x- plugin type",
-			name, exchangeType, strings.Join(coreExchangeTypes, ", ")))
+			name, exchange.Type, strings.Join(coreExchangeTypes, ", ")))
 	}
 
 	return errors.Join(errs...)
@@ -813,8 +817,8 @@ func (d *Declarations) validateExternalExchangeConflicts() error {
 	return errors.Join(errs...)
 }
 
-// externalShapeFields names the fields set on a passive declaration, in a stable
-// order so the startup error is identical across runs.
+// externalShapeFields names the fields set on a passive declaration. Naming them
+// is the point: the operator has to find the call site that set one.
 func externalShapeFields(e *ExchangeDeclaration) []string {
 	var fields []string
 	if len(e.Args) > 0 {
@@ -836,28 +840,6 @@ func externalShapeFields(e *ExchangeDeclaration) []string {
 		fields = append(fields, "Type")
 	}
 	return fields
-}
-
-// validateExternalExchangeShape holds an external declaration to name-only. The
-// broker ignores every field but the name on a passive declare, so shape on one
-// is a value nobody reads — and two external declarations of one name that set
-// it differently would report a shape conflict instead of this (ADR-119).
-func (d *Declarations) validateExternalExchangeShape() error {
-	var errs []error
-
-	for _, name := range slices.Sorted(maps.Keys(d.Exchanges)) {
-		exchange := d.Exchanges[name]
-		if !exchange.Passive {
-			continue
-		}
-		if fields := externalShapeFields(exchange); len(fields) > 0 {
-			errs = append(errs, fmt.Errorf(
-				"external exchange %q is name-only, but sets %s: a passive declare ignores every field "+
-					"but the name, so the owner alone decides the shape", name, strings.Join(fields, ", ")))
-		}
-	}
-
-	return errors.Join(errs...)
 }
 
 // ReplayToRegistry applies all declarations to a runtime registry.
