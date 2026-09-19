@@ -1145,6 +1145,9 @@ func clearEnvironmentVariables() {
 		"MESSAGING_BROKER_URL", "MESSAGING_ROUTING_EXCHANGE", "MESSAGING_ROUTING_KEY",
 		"MESSAGING_CONSUMERS_CRITICAL",
 		"MESSAGING_BROKER_VIRTUALHOST",
+		// ADR-119: an ambient value would reach every Load() in this file, and a
+		// positive one also arms the startup wait.
+		"MESSAGING_DECLARE_EXTERNALWAIT",
 		// Bool keys (ADR-077). The unset-keeps-the-default assertions read absence, so an
 		// ambient value in the developer's or runner's environment would make them pass or
 		// fail for a reason the test never set.
