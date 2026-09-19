@@ -1134,22 +1134,11 @@ func TestValidateMessagingDeclareExternalWait(t *testing.T) {
 			wantExternalWait: 0,
 		},
 		{
-			// Zero spelled explicitly is the documented opt-out, not an
-			// omission. Without this case a `<= 0` mutant survives.
-			name:             "zero_accepted",
-			config:           MessagingConfig{Declare: DeclareConfig{ExternalWait: 0}},
-			wantExternalWait: 0,
-		},
-		{
-			// One nanosecond under zero is the tightest rejection there is, so
-			// it pins the comparison and not merely a blanket refusal.
+			// One nanosecond under zero is the tightest rejection there is:
+			// adjacent to the accepted zero above, so it pins the comparison as
+			// `< 0` rather than a blanket refusal.
 			name:          "negative_one_nanosecond_rejected",
 			config:        MessagingConfig{Declare: DeclareConfig{ExternalWait: -time.Nanosecond}},
-			errorContains: []string{"messaging.declare.externalwait"},
-		},
-		{
-			name:          "negative_rejected",
-			config:        MessagingConfig{Declare: DeclareConfig{ExternalWait: -time.Second}},
 			errorContains: []string{"messaging.declare.externalwait"},
 		},
 		{

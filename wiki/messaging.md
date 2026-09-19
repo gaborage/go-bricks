@@ -187,11 +187,13 @@ doubling to a 5s ceiling — until it succeeds or the wait elapses. A service wh
 in time starts consuming with no restart; one whose exchange never appears aborts with the broker's
 own 404 naming it. `0`, the default, aborts at once.
 
-The wait only **delays an abort that would otherwise happen; it never introduces one**. So a
-publisher-only service is not held at startup (it warns and continues on this failure regardless,
-and its next channel generation redeclares), only a 404 is retried (every other failure stays fatal
-immediately), and a per-tenant lazy pass never waits (it fails that request and the next one
-re-runs the pass). See [ADR-119](adr_119_external_exchange_passive_verification.md).
+The wait may only **delay an abort that would otherwise happen; it never introduces one**. So a
+publisher-only service is not held at startup — it warns and continues on this failure regardless —
+and a per-tenant lazy pass never waits, since it fails one request and the next re-runs the pass.
+Only a 404 is retried, which is a separate legibility call: it is the one refusal that plausibly
+converges. Note the cost of setting this key: a **mistyped** external exchange name never converges
+either, so it spends the whole budget before aborting. See
+[ADR-119](adr_119_external_exchange_passive_verification.md).
 
 #### Reference errors
 

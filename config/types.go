@@ -380,21 +380,13 @@ type CacheConfig struct {
 	LoadTimeout time.Duration `koanf:"loadtimeout" json:"loadtimeout" yaml:"loadtimeout" toml:"loadtimeout" mapstructure:"loadtimeout"`
 }
 
-// DeclareConfig holds settings for the declare pass — the startup pass and each
-// redeclare pass on a new channel generation (ADR-113).
+// DeclareConfig holds settings for the declare pass. Today that is the STARTUP
+// pass only; ADR-113's per-channel-generation redeclare pass has no settings here.
 type DeclareConfig struct {
 	// ExternalWait bounds an in-process wait for an EXTERNAL exchange that does
-	// not exist yet (ADR-119). When set (> 0) and the single-tenant startup
-	// declare pass fails because the passive declare answered 404, the framework
-	// re-runs the pass with backoff until it succeeds or this elapses, then
-	// aborts with the broker's 404 naming the exchange. It exists so a consumer
-	// can deploy before the service that owns the exchange.
-	//
-	// It only ever DELAYS an abort that would otherwise happen; it never
-	// introduces one. Zero — the default — aborts at once, the pre-key behavior.
-	// Every non-404 startup failure stays fatal immediately, a publisher-only
-	// service keeps its warn-and-continue without waiting, and a per-tenant lazy
-	// pass never waits: that request fails at once and the next one retries.
+	// not exist yet, so a consumer can deploy before the service that owns it.
+	// Zero — the default — aborts at once. Single-tenant and consumer-declaring
+	// only. See ADR-119 for the rules and why they are what they are.
 	ExternalWait time.Duration `koanf:"externalwait" json:"externalwait" yaml:"externalwait" toml:"externalwait" mapstructure:"externalwait"`
 }
 
