@@ -830,17 +830,30 @@ both when classifying. Prefer short ctx deadlines on latency-sensitive paths.
 > different `AMQPClient` implementation sidesteps the concept entirely: it receives only
 > `(url, log)`, so `reconnect.readytimeout` never reaches it.
 
-### Consumer re-subscribe and topology redeclare
+### Topology redeclare and consumer re-subscribe
 
 When the broker closes a consumer's delivery channel, the consumer re-subscribes with the same
 consume options (a stream consumer resumes past its last delivery). A session that lasted under 5s
 first waits out the rest of those 5s; the first attempt then runs at once, and a failed attempt
 retries with full-jitter backoff on a fixed 5s base and 60s cap, not the `reconnect.*` keys, while
 the client reconnects.
-Before re-subscribing on each new channel, the registry re-declares every exchange, queue and
-binding it declared at startup — once per channel, not once per attempt — so a broker that lost its
-topology (a restart without durable definitions, a deleted queue) is repaired without a process
-restart. Declares are idempotent for matching arguments, so a healthy reconnect costs one pass.
+On each new channel the registry re-declares every exchange, queue and binding it declared at
+startup — once per channel, not once per attempt — so a broker that lost its topology (a restart
+without durable definitions, a deleted queue or exchange) is repaired without a process restart.
+Two drivers reach the pass and neither is privileged: the client announces every channel it becomes
+ready on, and a consumer additionally asks before every re-subscribe attempt. Whichever arrives
+first, the pass runs at most once per channel, because the guard is keyed per `(source, generation)`
+— sources number their channels independently, so a per-registry counter would swallow a rotation
+only one of them saw. The announcement is what covers a **publisher-only service** (declarations, no
+consumers): before it, a registry with nothing to re-subscribe never re-declared at all.
+The pass always DECLARES through the registry's own client: topology is broker-global, so repairing
+it over the registry's connection is correct, and a declare that sat on the publishing path would
+hold up the traffic it is restoring. The pass runs when a channel is replaced, never inside a
+publish, so no publish waits on a declare. Declares are idempotent for matching arguments, so a
+healthy reconnect costs one pass.
+`DeclareInfrastructure` is both the startup declare and the latch: an announcement that lands before
+it declares nothing and records nothing, and one that lands during it queues behind the whole call,
+readiness wait included — a wait bounded by `reconnect.readytimeout`.
 
 - A failed redeclare logs one WARN naming the declaration, with `amqp_reply_code` and
   `amqp_reply_text` when the broker refused it, and ends that pass; the next channel retries. A pass
@@ -854,10 +867,13 @@ restart. Declares are idempotent for matching arguments, so a healthy reconnect 
   channel-level 404), the channel closes and the next one re-declares.
 - Re-subscribe failures log at Debug for the first four consecutive attempts and at WARN from the
   fifth, with the broker's reply code and text when the error carries one.
-- The pass keys on the unexported `channelGeneration` method, so only a client whose type carries
-  it re-declares: the `*AMQPClientImpl` `messaging.NewAMQPClient` returns, or a struct embedding
-  it. A client type without it from a custom `app.Options.MessagingClientFactory` — an external
-  implementation, or a wrapper holding an `AMQPClient` in a field — re-subscribes without a pass.
+- Both seams — the new-channel announcement and the `channelGeneration` method — are unexported and
+  carried only by the `*AMQPClientImpl` `messaging.NewAMQPClient` returns, or a struct embedding it.
+  A client type without them from a custom `app.Options.MessagingClientFactory` — an external
+  implementation, or a wrapper holding an `AMQPClient` in a field — is never a source and never
+  re-declares, on either driver. That boundary is deliberate, not a gap.
+- `StopConsumers` ends the passes: the observer stops, and the registry refuses any later pass
+  outright, so a source that outlives the registry's consumers cannot restart one.
 
 See [ADR-113](adr_113_amqp_topology_redeclare_on_reconnect.md).
 

@@ -74,3 +74,64 @@ func TestRegistryRedeclaresDeletedQueueAfterReconnect(t *testing.T) {
 		return handler.CallCount() > 0
 	}, 20*time.Second, 200*time.Millisecond, "delivery did not resume after the queue was redeclared")
 }
+
+// TestRegistryRedeclaresDeletedExchangeForPublisherOnlyService is the
+// broker-backed acceptance test for the second driver: a service that declares
+// and publishes but consumes nothing has no re-subscribe to carry a redeclare
+// pass, so the deleted exchange comes back only because the client announced its
+// new channel. Without that driver the publish 404s forever.
+func TestRegistryRedeclaresDeletedExchangeForPublisherOnlyService(t *testing.T) {
+	brokerURL := setupTestBroker(t)
+	log := logger.New("disabled", true)
+	client := NewAMQPClient(brokerURL, log,
+		WithReinitDelay(50*time.Millisecond),
+		WithPublishTimeout(2*time.Second))
+	t.Cleanup(func() { _ = client.Close() })
+	require.Eventually(t, client.IsReady, 10*time.Second, 100*time.Millisecond, clientReadyMsg)
+
+	exchange, queue := uniqueName(t, "publisher_exchange"), uniqueName(t, "publisher_queue")
+
+	admin, err := amqp.Dial(brokerURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = admin.Close() })
+	adminCh, err := admin.Channel()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = adminCh.QueueDelete(queue, false, false, false)
+		_ = adminCh.ExchangeDelete(exchange, false, false)
+	})
+
+	registry := NewRegistry(client, log)
+	registry.RegisterExchange(&ExchangeDeclaration{Name: exchange, Type: ExchangeTypeTopic})
+	registry.RegisterQueue(&QueueDeclaration{Name: queue})
+	registry.RegisterBinding(&BindingDeclaration{Queue: queue, Exchange: exchange, RoutingKey: "orders.#"})
+	registry.RegisterPublisher(&PublisherDeclaration{Exchange: exchange, RoutingKey: "orders.created", EventType: testEventType})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer registry.StopConsumers()
+	require.NoError(t, registry.DeclareInfrastructure(ctx))
+	require.Empty(t, registry.Consumers())
+	generation, _ := client.channelGeneration()
+
+	// Deleting the exchange takes its bindings with it, so nothing short of a
+	// redeclare pass can route a publish to the queue again.
+	require.NoError(t, adminCh.ExchangeDelete(exchange, false, false))
+	client.m.RLock()
+	channel := client.channel
+	client.m.RUnlock()
+	_ = channel.Close()
+
+	require.Eventually(t, func() bool {
+		current, ready := client.channelGeneration()
+		return ready && current > generation
+	}, 10*time.Second, 50*time.Millisecond, "client did not reconnect onto a new channel")
+
+	require.Eventually(t, func() bool {
+		if err := client.publishBytes(ctx, publishOptions{Exchange: exchange, RoutingKey: "orders.created"}, []byte(testMessageBody)); err != nil {
+			return false
+		}
+		msg, ok, err := adminCh.Get(queue, true)
+		return err == nil && ok && string(msg.Body) == testMessageBody
+	}, 20*time.Second, 200*time.Millisecond, "the publish did not reach the queue after the exchange was redeclared")
+}
