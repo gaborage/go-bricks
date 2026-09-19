@@ -1811,11 +1811,6 @@ func (c *panickingDeclareClient) DeclareExchange(context.Context, *ExchangeDecla
 	panic(panicSecretValue)
 }
 
-// TestEnsureConsumersClosesTheClientWhenSetupPanics pins the leak a panic past
-// client creation used to open: the recover lives in the singleflight closure,
-// one frame above every rollback, so the client survived unclosed with its
-// reconnect supervisor and dial loop running, and because nothing was recorded
-// every later request for the key built another one.
 // TestEnsureConsumersKeepsTheSetupPanicWhenClosingAlsoPanics pins the guard
 // around the rollback close. Both the client and its logger are
 // consumer-supplied, so a panic while closing would otherwise replace the setup
@@ -1842,6 +1837,11 @@ func TestEnsureConsumersKeepsTheSetupPanicWhenClosingAlsoPanics(t *testing.T) {
 	require.NotContains(t, err.Error(), "(type: int)", "the close panic must not replace the setup panic")
 }
 
+// TestEnsureConsumersClosesTheClientWhenSetupPanics pins the leak a panic past
+// client creation used to open: the recover lives in the singleflight closure,
+// one frame above every rollback, so the client survived unclosed with its
+// reconnect supervisor and dial loop running, and because nothing was recorded
+// every later request for the key built another one.
 func TestEnsureConsumersClosesTheClientWhenSetupPanics(t *testing.T) {
 	var mu sync.Mutex
 	built, closed := 0, 0
@@ -1878,4 +1878,93 @@ func TestEnsureConsumersClosesTheClientWhenSetupPanics(t *testing.T) {
 	defer mu.Unlock()
 	require.Equal(t, attempts, built, "a panicked setup records nothing, so every attempt rebuilds")
 	assert.Equal(t, attempts, closed, "every client a panicked setup built must be closed, not left dialing")
+}
+
+// clientCounter hands out a ClientFactory and counts what it built against what
+// was closed, which is the whole question for a client held only in a local.
+type clientCounter struct {
+	mu     sync.Mutex
+	built  int
+	closed int
+}
+
+func (c *clientCounter) factory() ClientFactory {
+	return func(string, logger.Logger) AMQPClient {
+		c.mu.Lock()
+		c.built++
+		c.mu.Unlock()
+		return &stubAMQPClient{closeCallback: func() {
+			c.mu.Lock()
+			c.closed++
+			c.mu.Unlock()
+		}}
+	}
+}
+
+func (c *clientCounter) counts() (built, closed int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.built, c.closed
+}
+
+// TestEnsureConsumersClosesTheClientWhenTheCreationLogPanics pins the window one
+// statement ABOVE the setup guard: createAMQPClient logs through the
+// consumer-supplied logger while the fresh client is still only a local, so a
+// panic there leaks exactly the client this guard exists to close.
+func TestEnsureConsumersClosesTheClientWhenTheCreationLogPanics(t *testing.T) {
+	clients := &clientCounter{}
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		&stubLogger{panicOn: "Created AMQP client for key", panicWith: panicSecretValue},
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		clients.factory(),
+	)
+	defer func() { _ = manager.Close() }()
+
+	err := manager.EnsureConsumers(context.Background(), testTenantID, newSetupDeclarations())
+
+	require.ErrorContains(t, err, "panic during consumer setup")
+	require.ErrorContains(t, err, "(type: string)")
+	require.NotContains(t, err.Error(), panicSecretValue)
+
+	built, closed := clients.counts()
+	require.Equal(t, 1, built)
+	assert.Equal(t, 1, closed, "a panic in the creation log must not leave the client it just built dialing")
+}
+
+// TestEnsureConsumersKeepsTheMapOwnedClientWhenTheStartedLogPanics pins the other
+// side of the same guard. Past the consumers map write the entry owns the client,
+// so a panic in the trailing log must leave it open: closing it there strands a
+// started entry over a dead client — every later EnsureConsumers a silent no-op,
+// and Close closing the same client a second time.
+func TestEnsureConsumersKeepsTheMapOwnedClientWhenTheStartedLogPanics(t *testing.T) {
+	clients := &clientCounter{}
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		&stubLogger{panicOn: "Consumers started for key", panicWith: panicSecretValue},
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		clients.factory(),
+	)
+	defer func() { _ = manager.Close() }()
+	decls := newSetupDeclarations()
+
+	err := manager.EnsureConsumers(context.Background(), testTenantID, decls)
+	require.ErrorContains(t, err, "panic during consumer setup")
+
+	built, closed := clients.counts()
+	require.Equal(t, 1, built)
+	require.Equal(t, 0, closed, "the map owns the client past the entry write, and Close is what closes it")
+
+	manager.consMu.RLock()
+	entry, exists := manager.consumers[testTenantID]
+	manager.consMu.RUnlock()
+	require.True(t, exists, "the entry written before the panic must survive it")
+	require.True(t, entry.client.IsReady(), "the surviving entry must still hold a live client")
+
+	// The recorded state makes every later call a no-op, so that no-op has to be
+	// over consumers that are actually running.
+	require.NoError(t, manager.EnsureConsumers(context.Background(), testTenantID, decls))
+	built, closed = clients.counts()
+	assert.Equal(t, 1, built, "the no-op must not build a replacement client")
+	assert.Equal(t, 0, closed)
 }
