@@ -1796,6 +1796,10 @@ func TestMessagingManagerAppliesTheConsumerResubscribeDelay(t *testing.T) {
 // reach the error the caller sees.
 const panicSecretValue = "declare exploded with tenant-secret-9f3a"
 
+// closePanicValue is a DIFFERENT type from panicSecretValue on purpose, so a
+// test can tell which panic reached the caller.
+const closePanicValue = 42
+
 // panickingDeclareClient panics from the declare path — AFTER the factory handed
 // the client over, which is the window where the rollback the singleflight
 // recover sits above is the only thing that can close it.
@@ -1812,6 +1816,32 @@ func (c *panickingDeclareClient) DeclareExchange(context.Context, *ExchangeDecla
 // one frame above every rollback, so the client survived unclosed with its
 // reconnect supervisor and dial loop running, and because nothing was recorded
 // every later request for the key built another one.
+// TestEnsureConsumersKeepsTheSetupPanicWhenClosingAlsoPanics pins the guard
+// around the rollback close. Both the client and its logger are
+// consumer-supplied, so a panic while closing would otherwise replace the setup
+// panic still in flight — the caller would be told the close's type instead of
+// the setup's, and the client this defer exists to close would stay open.
+func TestEnsureConsumersKeepsTheSetupPanicWhenClosingAlsoPanics(t *testing.T) {
+	factory := func(string, logger.Logger) AMQPClient {
+		return &panickingDeclareClient{stubAMQPClient: &stubAMQPClient{closeCallback: func() {
+			panic(closePanicValue)
+		}}}
+	}
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		factory,
+	)
+	defer func() { _ = manager.Close() }()
+
+	err := manager.EnsureConsumers(context.Background(), testTenantID, newSetupDeclarations())
+
+	require.ErrorContains(t, err, "panic during consumer setup")
+	require.ErrorContains(t, err, "(type: string)", "the setup panic's type must survive a panicking close")
+	require.NotContains(t, err.Error(), "(type: int)", "the close panic must not replace the setup panic")
+}
+
 func TestEnsureConsumersClosesTheClientWhenSetupPanics(t *testing.T) {
 	var mu sync.Mutex
 	built, closed := 0, 0

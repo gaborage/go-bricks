@@ -316,7 +316,14 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 	// Close on the way out and re-panic, leaving that recover to convert it.
 	defer func() {
 		if p := recover(); p != nil {
-			m.closeClientOnRollback(client, key, "panic")
+			// Close, but never let a panicking close mask the original panic: both
+			// the client and the logger it uses are consumer-supplied, and a second
+			// panic here would replace p, costing the %T the caller's error carries
+			// and leaving the client this defer exists to close still open.
+			func() {
+				defer func() { _ = recover() }()
+				m.closeClientOnRollback(client, key, "panic")
+			}()
 			panic(p)
 		}
 	}()
