@@ -5241,7 +5241,14 @@ func TestRegistryRearmsWhileThePreviousObserverIsParkedMidPass(t *testing.T) {
 	gate := testutil.NewBlockedCreate(t)
 	client.locked(func() { client.parkOn, client.parkGate = key, gate })
 	client.newChannel()
-	<-gate.Started
+	// Bounded: if no observer is running, nothing ever arrives at the gate, and an
+	// unbounded receive would turn that regression into a package-wide go-test
+	// timeout instead of a failure naming this test.
+	select {
+	case <-gate.Started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no pass reached the gate: the registry is running no observer to park")
+	}
 	registry.StopConsumers()
 
 	started := make(chan struct{})
