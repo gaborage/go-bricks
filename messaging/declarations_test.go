@@ -1917,20 +1917,45 @@ func TestRegisterExchangeLocalAndExternalOneNameConflicts(t *testing.T) {
 }
 
 func TestValidateAggregatesExternalExchangeConflicts(t *testing.T) {
-	d := NewDeclarations()
-	for _, name := range []string{mergeExchange, mergeExchangeB} {
-		d.RegisterExchange(topicExchange(name, nil))
-		d.DeclareExternalExchange(name)
-		d.DeclareExternalExchange(name)
-	}
+	t.Run("ownership conflicts alone", func(t *testing.T) {
+		d := NewDeclarations()
+		for _, name := range []string{mergeExchange, mergeExchangeB} {
+			d.RegisterExchange(topicExchange(name, nil))
+			d.DeclareExternalExchange(name)
+			d.DeclareExternalExchange(name)
+		}
 
-	err := d.Validate()
+		err := d.Validate()
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "conflicting exchange declarations (2 conflict(s))",
-		"a repeated disagreement is one conflict, not one per rejected declaration")
-	assert.Contains(t, err.Error(), mergeExchange)
-	assert.Contains(t, err.Error(), mergeExchangeB)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "conflicting exchange declarations (2 conflict(s))",
+			"a repeated disagreement is one conflict, not one per rejected declaration")
+		assert.Contains(t, err.Error(), mergeExchange)
+		assert.Contains(t, err.Error(), mergeExchangeB)
+	})
+
+	// The two classes carry different remedies and so different headers, but they
+	// are joined rather than reported in sequence: a set holding one of each must
+	// name BOTH in one boot, or fixing the first only reveals the second on the
+	// next. Reverting Validate to the sequential pair fails this.
+	t.Run("a shape conflict and an ownership conflict in one boot", func(t *testing.T) {
+		d := NewDeclarations()
+		d.RegisterExchange(topicExchange(mergeExchange, nil))
+		d.RegisterExchange(fanoutExchange(mergeExchange, nil))
+		d.RegisterExchange(topicExchange(mergeExchangeB, nil))
+		d.DeclareExternalExchange(mergeExchangeB)
+
+		err := d.Validate()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "declarations merge only when compatible",
+			"the shape conflict's header must survive the join")
+		assert.Contains(t, err.Error(), "a name is either declared by this "+
+			"service or marked external with DeclareExternalExchange",
+			"the ownership conflict's header must survive the join")
+		assert.Contains(t, err.Error(), `exchange "`+mergeExchange+`": Type kept`)
+		assert.Contains(t, err.Error(), `exchange "`+mergeExchangeB+`": declared locally and marked external`)
+	})
 }
 
 // TestCloneAndHashCarryTheExternalMarker pins what multi-tenant replay rests on:
