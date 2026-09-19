@@ -460,10 +460,14 @@ func (m *Manager) createAMQPClient(ctx context.Context, key string) (AMQPClient,
 	return client, nil
 }
 
-// closeOnPanicUnlessOwned returns a deferred guard that closes client when its
-// frame unwinds through a panic while the client is still held in a local, and
-// leaves it alone once *owned says something else is responsible for it — the
-// caller that received it, or the consumers map that holds it. Closing an owned
+// closeOnPanicUnlessOwned takes the value a deferred literal recovered and closes
+// client when that frame unwound through a panic while the client was still held
+// in a local, leaving it alone once *owned says something else is responsible —
+// the caller that received it, or the consumers map that holds it. A nil owned
+// means nothing in the calling frame ever owns the client. It re-panics, so the
+// caller's frame still unwinds; call it as
+// defer func() { m.closeOnPanicUnlessOwned(recover(), ...) }(), since recover
+// only reports a panic to the deferred function itself. Closing an owned
 // client is worse than the leak this guards: the owner closes it a second time,
 // and the entry it belongs to still reads as started.
 //
@@ -491,7 +495,8 @@ func (m *Manager) closeOnPanicUnlessOwned(p any, client AMQPClient, key string, 
 // and logs (but does not propagate) any close failure. The primary error is
 // what the caller cares about; we keep the close failure observable for
 // forensics. The `phase` argument identifies which rollback site triggered
-// the close (e.g. "replay_declarations", "declare_infrastructure").
+// the close (e.g. "replay_declarations", "declare_infrastructure"), and
+// "panic" for the unwind path closeOnPanicUnlessOwned guards.
 func (m *Manager) closeClientOnRollback(client AMQPClient, key, phase string) {
 	if err := client.Close(); err != nil {
 		m.logger.Error().
