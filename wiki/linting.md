@@ -293,10 +293,25 @@ error (`can't load config: gofumpt is a formatter`); they belong in a top-level
 
 `golangci-lint fmt` walks **files**, while `run` loads **packages** under the build tags it
 was invoked with. So `fmt` reaches build-tagged files (`//go:build integration`)
-unconditionally, whereas `run` sees them only when passed a matching
-`--build-tags=integration`. GoBricks' `make lint` and CI jobs do not pass it, so `fmt` is
-the only thing keeping those files formatted here — check your own invocations before
-assuming the same.
+unconditionally, whereas `run` sees them only when the tag is declared. GoBricks declares it
+in the config (`run:` / `build-tags: [integration]`) rather than on any command line, so
+`make lint`, every CI golangci-lint step and editor plugins read the same file set. A
+tagged `_test.go` file is then held to the same rules as any other `_test.go` file — the
+`path: _test\.go` exclusion rule in `.golangci.yml` still applies to it — and a tagged file
+that is *not* `_test.go`, such as `testing/containers/*.go`, is held to full strictness.
+
+A `run` without the tag simply never reads those files. Over the whole module — how
+`make lint` and every CI step invoke it — that is **silent**: `0 issues.`, exit 0, and no
+mention of the packages it skipped. Pointed at a fully integration-tagged package on its
+own it does fail loudly (`no go files to analyze`, exit 5), but nothing here invokes it
+that way. An unlinted file is indistinguishable from one that passed, so its violations
+become the precedent the next author finds when they grep for how the repo does something.
+
+This settles `integration` only, because it is the one tag in the tree with no `!integration`
+complement. A tag that comes in pairs — `race`/`!race`, `windows`/`!windows` — cannot be
+declared here without blinding its sibling file, so those need a second `run` instead; CI
+already does exactly that for `GOOS: windows`. Tracked in
+[#1757](https://github.com/gaborage/go-bricks/issues/1757).
 
 ## Related
 

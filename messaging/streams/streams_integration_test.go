@@ -90,12 +90,12 @@ func (r *recorder) propertiesSnapshot() []map[string]any {
 
 // streamsTestEnv points the manager options every test in this file uses at the
 // stream-enabled broker the whole test binary shares (see integration_main_test.go).
-func streamsTestEnv(t *testing.T) ManagerOptions {
+func streamsTestEnv(t *testing.T) *ManagerOptions {
 	t.Helper()
 
 	container := pkgBroker.Get(t)
 
-	return ManagerOptions{
+	return &ManagerOptions{
 		URI: container.StreamURI(),
 		// Without the resolver the broker advertises its container-internal address
 		// and the client's follow-up dial from the host fails.
@@ -110,7 +110,7 @@ func streamsTestEnv(t *testing.T) ManagerOptions {
 // streamEnvironmentOptions is how both the tests and the cleanup dial the broker:
 // the manager's URI plus the address resolver the container demands, since the
 // broker advertises an address only reachable from inside it.
-func streamEnvironmentOptions(opts ManagerOptions) *stream.EnvironmentOptions {
+func streamEnvironmentOptions(opts *ManagerOptions) *stream.EnvironmentOptions {
 	return stream.NewEnvironmentOptions().
 		SetUri(opts.URI).
 		SetAddressResolver(stream.AddressResolver{Host: opts.AddressResolverHost, Port: opts.AddressResolverPort})
@@ -118,7 +118,7 @@ func streamEnvironmentOptions(opts ManagerOptions) *stream.EnvironmentOptions {
 
 // testEnvironment dials the broker the way the manager does, for the test's own
 // producing and querying.
-func testEnvironment(t *testing.T, opts ManagerOptions) *stream.Environment {
+func testEnvironment(t *testing.T, opts *ManagerOptions) *stream.Environment {
 	t.Helper()
 
 	env, err := stream.NewEnvironment(streamEnvironmentOptions(opts))
@@ -128,7 +128,7 @@ func testEnvironment(t *testing.T, opts ManagerOptions) *stream.Environment {
 
 // publish writes n messages through a test-only producer environment. Producers
 // are deliberately outside the framework surface, so tests drive the client directly.
-func publish(t *testing.T, opts ManagerOptions, streamName string, bodies []string) {
+func publish(t *testing.T, opts *ManagerOptions, streamName string, bodies []string) {
 	t.Helper()
 
 	env := testEnvironment(t, opts)
@@ -153,7 +153,7 @@ func bodiesFrom(prefix string, from, count int) []string {
 	return out
 }
 
-func startManager(t *testing.T, opts ManagerOptions, names itNames, handler Handler) *Manager {
+func startManager(t *testing.T, opts *ManagerOptions, names itNames, handler Handler) *Manager {
 	t.Helper()
 
 	decls := NewDeclarations()
@@ -165,7 +165,7 @@ func startManager(t *testing.T, opts ManagerOptions, names itNames, handler Hand
 		Handler: handler,
 	})
 
-	m := NewManager(opts)
+	m := NewManager(*opts)
 	require.NoError(t, m.Start(context.Background(), decls))
 	return m
 }
@@ -271,7 +271,7 @@ func partitionName(superStream string, index int) string {
 // publishing into it directly is exactly what a routing strategy would do — and it
 // keeps which body lands on which partition deterministic, which a hash strategy
 // would not.
-func publishAcrossPartitions(t *testing.T, opts ManagerOptions, names itNames, bodies []string) map[string][]string {
+func publishAcrossPartitions(t *testing.T, opts *ManagerOptions, names itNames, bodies []string) map[string][]string {
 	t.Helper()
 
 	perPartition := make(map[string][]string, itPartitions)
@@ -286,7 +286,7 @@ func publishAcrossPartitions(t *testing.T, opts ManagerOptions, names itNames, b
 }
 
 // startSuperStreamManager starts one super-stream consumer group member.
-func startSuperStreamManager(t *testing.T, opts ManagerOptions, names itNames, handler Handler) *Manager {
+func startSuperStreamManager(t *testing.T, opts *ManagerOptions, names itNames, handler Handler) *Manager {
 	t.Helper()
 
 	decls := NewDeclarations()
@@ -298,7 +298,7 @@ func startSuperStreamManager(t *testing.T, opts ManagerOptions, names itNames, h
 		Handler:     handler,
 	})
 
-	m := NewManager(opts)
+	m := NewManager(*opts)
 	require.NoError(t, m.Start(context.Background(), decls))
 	return m
 }
@@ -358,7 +358,7 @@ func roundOwnership(members []*recorder, baselines []map[string]int) (owners map
 // consumer-connection vs locator-connection window ADR-059 accepts), which is why the
 // gate needs a second agreeing round and why the whole thing retries. The returned
 // bodies must stay out of whatever the caller measures.
-func warmUpGroup(t *testing.T, opts ManagerOptions, names itNames, members ...*recorder) []string {
+func warmUpGroup(t *testing.T, opts *ManagerOptions, names itNames, members ...*recorder) []string {
 	t.Helper()
 
 	warmUp := bodiesFrom("warmup", 0, itPartitions)
@@ -536,13 +536,13 @@ func TestStreamsManagerSuperStreamPartitionMismatchIsSilentIntegration(t *testin
 	opts := streamsTestEnv(t)
 	names := newITNames(t, opts)
 
-	first := NewManager(opts)
+	first := NewManager(*opts)
 	firstDecls := NewDeclarations()
 	firstDecls.DeclareSuperStream(names.superStream, itPartitions, nil)
 	require.NoError(t, first.Start(ctx, firstDecls))
 	stopManager(t, first)
 
-	second := NewManager(opts)
+	second := NewManager(*opts)
 	conflicting := NewDeclarations()
 	conflicting.DeclareSuperStream(names.superStream, itPartitions+2, nil)
 
@@ -561,7 +561,7 @@ func TestStreamsManagerSuperStreamPartitionMismatchIsSilentIntegration(t *testin
 
 // startSACManager starts a single active consumer, whose promotion callback is the
 // code path the client invokes from its own read-loop goroutine.
-func startSACManager(t *testing.T, opts ManagerOptions, names itNames, handler Handler) *Manager {
+func startSACManager(t *testing.T, opts *ManagerOptions, names itNames, handler Handler) *Manager {
 	t.Helper()
 
 	decls := NewDeclarations()
@@ -574,7 +574,7 @@ func startSACManager(t *testing.T, opts ManagerOptions, names itNames, handler H
 		Handler: handler,
 	})
 
-	m := NewManager(opts)
+	m := NewManager(*opts)
 	require.NoError(t, m.Start(context.Background(), decls))
 	return m
 }
@@ -633,7 +633,7 @@ func TestStreamsManagerRejectsAConflictingRetentionIntegration(t *testing.T) {
 	opts := streamsTestEnv(t)
 	names := newITNames(t, opts)
 
-	first := NewManager(opts)
+	first := NewManager(*opts)
 	firstDecls := NewDeclarations()
 	firstDecls.DeclareStream(names.stream, &StreamSpec{MaxAge: time.Hour})
 	require.NoError(t, first.Start(ctx, firstDecls))
@@ -641,7 +641,7 @@ func TestStreamsManagerRejectsAConflictingRetentionIntegration(t *testing.T) {
 	require.NoError(t, first.Close())
 
 	// Same stream, different retention: the broker rejects the declaration.
-	second := NewManager(opts)
+	second := NewManager(*opts)
 	conflicting := NewDeclarations()
 	conflicting.DeclareStream(names.stream, &StreamSpec{MaxAge: 48 * time.Hour})
 
@@ -679,7 +679,7 @@ func TestStreamsPublisherRoundTripIntegration(t *testing.T) {
 	publisher := decls.DeclarePublisher(&PublisherOptions{Stream: names.stream})
 	require.NoError(t, decls.Validate())
 
-	m := NewManager(opts)
+	m := NewManager(*opts)
 	require.NoError(t, m.Start(ctx, decls))
 	t.Cleanup(func() {
 		m.StopConsumers()
@@ -867,7 +867,7 @@ func TestStreamsSuperStreamPublisherPartitionsIntegration(t *testing.T) {
 	publisher := decls.DeclareSuperStreamPublisher(&SuperStreamPublisherOptions{SuperStream: names.superStream})
 	require.NoError(t, decls.Validate())
 
-	m := NewManager(opts)
+	m := NewManager(*opts)
 	require.NoError(t, m.Start(ctx, decls))
 	t.Cleanup(func() { stopManager(t, m) })
 
@@ -900,7 +900,7 @@ func TestStreamsPublisherRejectedAfterStopIntegration(t *testing.T) {
 	publisher := decls.DeclarePublisher(&PublisherOptions{Stream: names.stream})
 	require.NoError(t, decls.Validate())
 
-	m := NewManager(opts)
+	m := NewManager(*opts)
 	require.NoError(t, m.Start(ctx, decls))
 
 	publishCtx, cancel := context.WithTimeout(ctx, itWaitTimeout)

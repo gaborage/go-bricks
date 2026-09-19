@@ -293,6 +293,25 @@ field on the policy, not a second door: the same seal and open calls read it.
 _Avoid_: bare encryption, raw JWE, MLE (Visa's name for their instance of the
 bare shape, not a framework term)
 
+**Visa envelope**:
+The wire dress Visa's message-level encryption puts around a bare seal: the
+compact JWE travels as the single `encData` member of a JSON object, and a
+request announces which Visa Key-ID it was sealed for in a `keyId` header.
+Request and response wear the same wrapper. Sender authentication stays the
+transport's job, as for any bare seal.
+_Avoid_: MLE (Visa's name for the whole arrangement, not a framework term),
+encData body, Visa mode (an envelope over the bare seal mode, not a fourth
+mode)
+
+**Visa Key-ID**:
+The identifier Visa issues per project for one credential set — Visa's
+encryption certificate and the client's key pair — with up to three live at
+once. It is the value both the `keyId` header and the JWE `kid` carry, so a
+Visa peer's key is named by Visa, never by a logical kid or a keystore entry.
+Rotation means a second Key-ID goes live beside the first, then the old one is
+revoked.
+_Avoid_: kid (the wire field, not the identifier), key id (ambiguous), MLE key
+
 **Subject**:
 The one field of an event declared sensitive: its value travels encrypted
 while its sibling routing fields stay clear, and its wire name is what the

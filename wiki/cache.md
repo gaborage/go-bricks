@@ -653,7 +653,10 @@ cache:
   cannot be reached by name alone, so an ACL deployment gives its user a password. The reverse
   is unchanged: an empty `username` with a password is the legacy `AUTH <password>` form
   against the implicit `default` user. A whitespace-only `username` is refused separately, as
-  a typo that no ACL rule could match.
+  a typo that no ACL rule could match. `cache/redis/client_acl_integration_test.go`
+  proves the pair end to end against a real ACL-gated Redis, standalone and cluster: the
+  container disables `default`, so a client with no credentials is refused with `NOAUTH` and a
+  wrong one with `WRONGPASS`.
 - **`tls.enabled: true` is required, not optional.** ElastiCache serverless serves encrypted
   in transit always, so a plaintext dial is dropped by the endpoint. Mutual TLS is not
   supported there, so leave `certfile`/`keyfile` unset and let the connection verify against
@@ -674,6 +677,32 @@ cache:
   The prefix defaults to `app.name`, so write the access string against that name unless the key
   is set explicitly. Under multi-tenancy the keys are `<prefix>:<tenantID>:…`, which `~<prefix>:*`
   already covers.
+- **Narrowing the command set needs grants the method list does not suggest.** Scoping keys
+  with `~orders:*` is the easy half; replacing `+@all` is where a working deployment breaks in
+  ways that do not look like ACL problems. The `cache.Cache` surface **requires**
+  `+ping +get +set +del +eval`, plus `+cluster|slots` under `mode: cluster`; deny any of those and
+  the client fails. Three further grants are **optional** — `+info`, `+command` and, on Redis 7.2
+  and later only, `+client|setinfo` — and what each one costs when denied is below. Grant
+  `+client|setinfo` only on 7.2+: it names a command that did not exist before, so on the 7.0 and
+  7.1 servers this framework still supports, Redis rejects the whole rule with
+  `ERR ... Unknown command or category name in ACL` and the ACL never applies. The optional three
+  are the dangerous kind, because denying them breaks nothing visible: go-redis asks the server for a
+  command's key positions with `COMMAND`, and sends `CLIENT SETINFO` on every new connection
+  (`DisableIdentity` is never set in `cache/redis`), and it tolerates a `NOPERM` on either. What the
+  denial costs is an audit trail, not a log. The server does **not** log it — Redis routes every
+  denial to `ACL LOG`, a ring of 128 entries by default, so a steady stream of benign denials
+  evicts genuine ACL violations from the only record the server keeps of them. Separately and
+  client-side, go-redis's own logger emits one line per affected call
+  (`getting command info: NOPERM User … 'command'`), which is noise in the application's log and
+  nothing more. `+cluster|slots` is the one that fails loudly instead, which is why it sits in the
+  required set: the cluster client reads the slot map before its first `PING`, so leaving it out
+  fails construction outright. `+info` degrades quietly in the other direction: the Redis 7.0 floor
+  check fails open when `INFO` is denied, so leaving it out costs the version check rather than the
+  client — a deployment that narrows it away stops being told its server is too old for
+  `GetOrSet`'s `SET NX GET`.
+  `cache/redis/client_acl_integration_test.go` drives the set against a real ACL-gated server with
+  `+client|setinfo` deliberately withheld — that suite passing is the evidence that the denial costs
+  only the `ACL LOG` entry and the client-side log line, neither of which reaches a cache operation.
 - **A custom `Options.CacheConnector` gets the prefix, and nothing else.** The namespace decorator
   sits above whichever connector is in play, so a consumer-supplied connector's cache is namespaced
   exactly like the framework's own. It owns its own dial, so no field of the resolved cache config

@@ -82,7 +82,7 @@ func setupTestSchema(t *testing.T) (*Connection, context.Context) {
 // currentSchema returns the Oracle user/schema name backing conn. Used by UDT
 // tests that must fully-qualify CREATE TYPE statements to a specific schema so
 // DROP USER ... CASCADE reclaims them on teardown.
-func currentSchema(t *testing.T, ctx context.Context, conn *Connection) string {
+func currentSchema(ctx context.Context, t *testing.T, conn *Connection) string {
 	t.Helper()
 	var user string
 	require.NoError(t, conn.QueryRow(ctx, currentUserQuery).Scan(&user), "SELECT USER FROM DUAL")
@@ -566,7 +566,7 @@ type Product struct {
 
 func TestOracleUDTCollectionIntegration(t *testing.T) {
 	conn, ctx := setupTestSchema(t)
-	schemaName := currentSchema(t, ctx, conn)
+	schemaName := currentSchema(ctx, t, conn)
 
 	// Setup: Create UDT types and bulk insert procedure. Fully-qualify UDT
 	// owners so DROP USER ... CASCADE reclaims them on teardown (ADR-020).
@@ -752,7 +752,7 @@ func TestOracleUDTWithSchemaOwnerIntegration(t *testing.T) {
 // Coverage target: connection.go line 375 (else branch)
 func TestOracleUDTObjectOnlyRegistration(t *testing.T) {
 	conn, ctx := setupTestSchema(t)
-	schemaName := currentSchema(t, ctx, conn)
+	schemaName := currentSchema(ctx, t, conn)
 
 	// Create simple object type (no collection). Fully-qualified per ADR-020.
 	setupSQL := fmt.Sprintf(`
@@ -806,7 +806,7 @@ func TestOracleUDTObjectOnlyWithOwner(t *testing.T) {
 	conn, ctx := setupTestSchema(t)
 
 	// Get current user for owner parameter
-	currentUser := currentSchema(t, ctx, conn)
+	currentUser := currentSchema(ctx, t, conn)
 
 	// Create object type. Fully-qualified per ADR-020.
 	setupSQL := fmt.Sprintf(`
@@ -858,7 +858,7 @@ func TestOracleUDTRegistrationLogging(t *testing.T) {
 	conn, ctx := setupTestSchema(t)
 
 	// Get current user
-	currentUser := currentSchema(t, ctx, conn)
+	currentUser := currentSchema(ctx, t, conn)
 
 	// Create type. Fully-qualified per ADR-020.
 	setupSQL := fmt.Sprintf(`
@@ -900,7 +900,7 @@ func TestOracleUDTCollectionWithOwner(t *testing.T) {
 	conn, ctx := setupTestSchema(t)
 
 	// Get current user for owner parameter
-	currentUser := currentSchema(t, ctx, conn)
+	currentUser := currentSchema(ctx, t, conn)
 
 	// Create object type. Fully-qualified per ADR-020.
 	objectTypeSQL := fmt.Sprintf(`
@@ -1047,7 +1047,7 @@ func TestConnectionWithKeepAliveZeroInterval(t *testing.T) {
 
 // queryOracleSessionTimezone returns the value Oracle reports for the current
 // session timezone via SESSIONTIMEZONE.
-func queryOracleSessionTimezone(t *testing.T, ctx context.Context, conn *Connection) string {
+func queryOracleSessionTimezone(ctx context.Context, t *testing.T, conn *Connection) string {
 	t.Helper()
 	var tz string
 	row := conn.DB.QueryRowContext(ctx, "SELECT SESSIONTIMEZONE FROM dual")
@@ -1088,14 +1088,14 @@ func newOracleConnectionWithTimezone(t *testing.T, timezone string) (*Connection
 
 func TestConnectionSessionTimezoneAppliedAsiaTokyo(t *testing.T) {
 	conn, ctx := newOracleConnectionWithTimezone(t, "Asia/Tokyo")
-	tz := queryOracleSessionTimezone(t, ctx, conn)
+	tz := queryOracleSessionTimezone(ctx, t, conn)
 	assert.Equal(t, "Asia/Tokyo", tz,
 		"Oracle SESSIONTIMEZONE must equal cfg.Timezone (the tzConnector wrapper must run ALTER SESSION on every new connection)")
 }
 
 func TestConnectionSessionTimezoneAppliedUTC(t *testing.T) {
 	conn, ctx := newOracleConnectionWithTimezone(t, "UTC")
-	tz := queryOracleSessionTimezone(t, ctx, conn)
+	tz := queryOracleSessionTimezone(ctx, t, conn)
 	assert.Equal(t, "UTC", tz)
 }
 
@@ -1138,7 +1138,7 @@ func TestConnectionSessionTimezoneOptOutPreservesServerDefault(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	optOutTZ := queryOracleSessionTimezone(t, ctx, conn.(*Connection))
+	optOutTZ := queryOracleSessionTimezone(ctx, t, conn.(*Connection))
 	assert.Equal(t, baselineTZ, optOutTZ,
 		`opt-out ("-") must report the same SESSIONTIMEZONE as a raw connection — a regression that forces UTC on the opt-out path would fail this assertion`)
 }

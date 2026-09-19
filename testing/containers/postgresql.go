@@ -34,6 +34,11 @@ const postgreSQLPort = "5432/tcp"
 // with a named cause instead of "sql: database is closed".
 var errAdminAfterTerminate = errors.New("postgresql container: admin pool used after Terminate")
 
+// errContainerNotInitialized is what the Host and MappedPort accessors return
+// when the wrapper holds no container, naming the cause once instead of at each
+// return site.
+var errContainerNotInitialized = errors.New("container not initialized")
+
 // PostgreSQLContainerConfig holds configuration for PostgreSQL test container
 type PostgreSQLContainerConfig struct {
 	// ImageTag specifies the PostgreSQL version (default: the pin in DefaultPostgreSQLConfig)
@@ -237,7 +242,7 @@ func (p *PostgreSQLContainer) admin() (*sql.DB, error) {
 // Host returns the container host
 func (p *PostgreSQLContainer) Host(ctx context.Context) (string, error) {
 	if p.container == nil {
-		return "", fmt.Errorf("container not initialized")
+		return "", errContainerNotInitialized
 	}
 	return p.container.Host(ctx)
 }
@@ -245,7 +250,7 @@ func (p *PostgreSQLContainer) Host(ctx context.Context) (string, error) {
 // MappedPort returns the mapped port for PostgreSQL
 func (p *PostgreSQLContainer) MappedPort(ctx context.Context) (int, error) {
 	if p.container == nil {
-		return 0, fmt.Errorf("container not initialized")
+		return 0, errContainerNotInitialized
 	}
 	mappedPort, err := p.container.MappedPort(ctx, postgreSQLPort)
 	if err != nil {

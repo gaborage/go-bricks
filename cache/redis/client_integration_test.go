@@ -3,6 +3,7 @@
 package redis
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -151,12 +152,12 @@ func TestRealRedisConnectionPoolConcurrency(t *testing.T) {
 	close(errChan)
 
 	// Check for errors
-	var errors []error
+	var workerErrors []error
 	for err := range errChan {
-		errors = append(errors, err)
+		workerErrors = append(workerErrors, err)
 	}
 
-	assert.Empty(t, errors, "No errors should occur during concurrent operations")
+	assert.Empty(t, workerErrors, "No errors should occur during concurrent operations")
 }
 
 // runConnectionPoolWorker performs a Set/Get/Delete cycle for a slice of keys
@@ -178,7 +179,7 @@ func runConnectionPoolWorker(ctx context.Context, client *Client, workerID, numO
 			continue
 		}
 
-		if string(retrieved) != string(value) {
+		if !bytes.Equal(retrieved, value) {
 			errChan <- fmt.Errorf("worker %d op %d value mismatch: got %s, want %s",
 				workerID, j, string(retrieved), string(value))
 		}
@@ -452,7 +453,7 @@ func TestRealRedisContextCancellation(t *testing.T) {
 
 	// Operations should fail with context error
 	_, err := client.Get(ctx, "test:key")
-	require.Error(t, err, "Get should fail with cancelled context")
+	require.Error(t, err, "Get should fail with canceled context")
 	assert.Contains(t, err.Error(), "context canceled", "Error should mention context cancellation")
 }
 
