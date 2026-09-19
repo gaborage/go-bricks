@@ -3601,6 +3601,14 @@ func newPublisherOnlyRegistry(t *testing.T, client AMQPClient) *Registry {
 	return registry
 }
 
+// redeclareSourceCount reports how many sources the registry still records a
+// channel generation for, read under the lock that guards the ledger.
+func redeclareSourceCount(r *Registry) int {
+	r.redeclareMu.Lock()
+	defer r.redeclareMu.Unlock()
+	return len(r.handledGenerations)
+}
+
 // awaitDeclares waits for key to have been declared as many times as want, then
 // pins which generations those declares ran on.
 func awaitDeclares(t *testing.T, client *reconnectingMockClient, key string, want ...string) {

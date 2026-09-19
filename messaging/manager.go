@@ -466,11 +466,19 @@ func (m *Manager) observePublisherChannels(key string, client AMQPClient, pooled
 	// client value the wiki's blessed wrapper shape makes uncomparable still gets
 	// an entry, and two pooled clients never share one.
 	token := &redeclareToken{source: source}
-	// Background, NOT the pool's create context: that one belongs to whichever
-	// caller happened to miss the pool, and resourcepool's create contract says a
-	// create must not retain it — holding it would pin that request's context, and
-	// whatever it carries, for the client's whole pooled life. Nothing on the pass
-	// reads a value from it; the pass logs off the registry's own logger.
+	// Background, NOT the pool's create context. This deliberately diverges from
+	// how the registry derives its OWN observer's context (WithoutCancel of the
+	// startup context, "keeps the values, drops the deadline"), and the difference
+	// is the ownership: a registry's observer belongs to the startup that built it,
+	// while a pooled publisher belongs to no one request — it is created by
+	// whichever caller happened to miss the pool and then serves every later
+	// borrower. Inheriting that caller's context would pin one arbitrary request's
+	// values for the client's whole pooled life (under messaging.tenancy: shared,
+	// one tenant's, on a client every tenant publishes through), which
+	// resourcepool's create contract forbids and which would file every later
+	// repair under that first request's trace. No trace beats the wrong trace.
+	// Nothing on the pass reads a value from it: the declare doors read only
+	// ctx.Err(), and the pass logs off the registry's own logger.
 	//
 	// Canceling it is also the observer's stop signal, which is why it is a real
 	// context and not a nil channel: a client's own end is not a signal to rely on

@@ -2034,14 +2034,6 @@ func TestManagerRedeclaresTopologyFromAPooledPublisherChannel(t *testing.T) {
 	assert.Empty(t, publisherClient.declaresOf(key), "the pass must declare through the registry's own client")
 }
 
-// redeclareSourceCount reports how many sources the registry still records a
-// channel generation for, read under the lock that guards the ledger.
-func redeclareSourceCount(r *Registry) int {
-	r.redeclareMu.Lock()
-	defer r.redeclareMu.Unlock()
-	return len(r.handledGenerations)
-}
-
 // TestManagerPublisherChannelObserverEndsWithItsClient pins that the observer the
 // manager attaches to a pooled publisher cannot outlive it: the pool stops the
 // observer and closes the client on eviction, on the idle sweep and on Close, and
@@ -2097,4 +2089,49 @@ func TestManagerForgetsAPooledPublisherOnceItCloses(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return redeclareSourceCount(registry) == 1
 	}, 5*time.Second, time.Millisecond, "the closed publisher's generation entry outlived it")
+}
+
+// neverClosingBroadcastClient keeps announcing new channels after Close. That is
+// allowed: answering (nil, false) once closed is AMQPClientImpl's behavior, not a
+// contract every ClientFactory product shares. It makes the pool closer's stop the
+// ONLY thing that can retire this client's observer, which is the reason that stop
+// exists.
+type neverClosingBroadcastClient struct {
+	*reconnectingMockClient
+}
+
+func (c *neverClosingBroadcastClient) channelReadyNotify() (ready <-chan struct{}, open bool) {
+	announced, _ := c.reconnectingMockClient.channelReadyNotify()
+	if announced == nil {
+		announced = make(chan struct{})
+	}
+	return announced, true
+}
+
+// TestManagerStopsAPublisherObserverWhoseClientKeepsAnnouncing pins that retiring
+// a pooled publisher ends its observer through the pool closer, not by relying on
+// the client's own end. A client that never closes its broadcast would otherwise
+// leak one goroutine per pooled client for the process lifetime.
+func TestManagerStopsAPublisherObserverWhoseClientKeepsAnnouncing(t *testing.T) {
+	consumerClient := newReconnectingMockClient()
+	publisherClient := &neverClosingBroadcastClient{reconnectingMockClient: newReconnectingMockClient()}
+	m := NewMessagingManager(&stubMessagingSource{}, logger.New("error", false), ManagerOptions{},
+		newQueuedClientFactory(t, consumerClient, publisherClient))
+
+	ctx := context.Background()
+	require.NoError(t, m.EnsureConsumers(ctx, "", publisherOnlyDeclarations()))
+	publisher, release, err := m.Publisher(ctx, "")
+	require.NoError(t, err)
+	release()
+	pooled, ok := publisher.(*stampingPublisher)
+	require.True(t, ok)
+	require.NotNil(t, pooled.observerDone, "the pooled publisher was never observed")
+
+	require.NoError(t, m.Close())
+
+	select {
+	case <-pooled.observerDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the observer outlived a client that keeps announcing; the pool closer's stop never reached it")
+	}
 }

@@ -136,8 +136,11 @@ type Registry struct {
 	cancelRedeclare context.CancelFunc
 	// redeclareObserverDone is closed when the observer this registry runs on its
 	// own client returns, as the client's reconnectDone is, so a test can confirm
-	// the exit instead of waiting on a leak. Nil until DeclareInfrastructure
-	// starts an observer, and it starts at most one.
+	// the exit instead of waiting on a leak. Nil until DeclareInfrastructure starts
+	// the first observer. A re-arm after StopConsumers starts another and REPLACES
+	// this field, so it always names the ACTIVE observer; each goroutine closes the
+	// channel it captured at spawn, so one still winding down never closes a
+	// later one's.
 	redeclareObserverDone chan struct{}
 }
 

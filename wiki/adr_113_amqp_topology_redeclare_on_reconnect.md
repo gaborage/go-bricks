@@ -68,7 +68,14 @@ The framework never deletes or recreates broker state.
   owns, so a stop/start cycle must not retire it for the process lifetime. The manager observes each
   pooled publisher on the same seam, stops that observer when the pool retires the client — LRU
   eviction, the idle sweep, `Close` — and drops the client's ledger entry as the observer exits, so
-  the guard's per-source map does not grow one dead entry per eviction. Equal for the guard
+  the guard's per-source map does not grow one dead entry per eviction. A pooled publisher's
+  observer runs on a background context rather than inheriting the one that created the client,
+  which is the opposite of what the registry's own observer does. The difference is ownership: a
+  registry's observer belongs to the startup that built it, while a pooled publisher belongs to no
+  one request — it is created by whichever caller missed the pool and then serves every later
+  borrower. Inheriting that caller's context would file every later repair under that one request's
+  trace, and under `messaging.tenancy: shared` that is one tenant's context on a client every tenant
+  publishes through. No trace beats the wrong trace. Equal for the guard
   is not equal in ordering, though: the inline pre-subscribe call is a BARRIER, taken under the same
   pass mutex as the pass, so a completed pass on the current generation happens-before the
   `ConsumeFromQueue` that follows it. The observer is eventual and orders nothing against a

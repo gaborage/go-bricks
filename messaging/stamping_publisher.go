@@ -18,6 +18,10 @@ import (
 // their own consumers would then nack every delivery. Wrapping is what makes
 // "the framework is the stamp's only writer" true for every client, whatever
 // produced it.
+//
+// It doubles as the pooled client's lifetime record: the pool's closer receives
+// exactly this value on every retirement path, so what has to end with the client
+// is reachable from it without a second map to keep in step.
 type stampingPublisher struct {
 	AMQPClient
 	// door is the wrapped client's byte door, asserted ONCE at construction; nil
