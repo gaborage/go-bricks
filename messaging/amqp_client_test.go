@@ -1045,9 +1045,8 @@ func TestAMQPClientChannelGenerationTracksReadyIncarnation(t *testing.T) {
 	assert.False(t, ready)
 }
 
-// requireBroadcastOpen and requireBroadcastClosed read a broadcast channel's
-// state without waiting, so the assertion is the state at the call and not a
-// race with whatever runs next.
+// requireBroadcastOpen reads a broadcast channel's state without waiting, so the
+// assertion is the state at the call and not a race with whatever runs next.
 func requireBroadcastOpen(t *testing.T, ch <-chan struct{}) {
 	t.Helper()
 	select {
@@ -1057,6 +1056,7 @@ func requireBroadcastOpen(t *testing.T, ch <-chan struct{}) {
 	}
 }
 
+// requireBroadcastClosed is requireBroadcastOpen's opposite, read the same way.
 func requireBroadcastClosed(t *testing.T, ch <-chan struct{}) {
 	t.Helper()
 	select {
@@ -1097,6 +1097,42 @@ func TestAMQPClientChannelReadyNotifyReportsAClosedClient(t *testing.T) {
 	require.NoError(t, c.Close())
 
 	requireBroadcastClosed(t, ready)
+	after, open := c.channelReadyNotify()
+	assert.False(t, open)
+	assert.Nil(t, after)
+}
+
+// TestAMQPClientChannelReadyNotifyIsSharedByEveryObserver pins that one ask does
+// not steal another's wake: every observer holding the broadcast is released by
+// the same ready flip. Handing each asker its own channel would orphan all but
+// the last, which is the lost-wake class this seam exists to prevent.
+func TestAMQPClientChannelReadyNotifyIsSharedByEveryObserver(t *testing.T) {
+	c := newClientWithFakeChannel(t, &fakeChannel{})
+	first, open := c.channelReadyNotify()
+	require.True(t, open)
+	second, open := c.channelReadyNotify()
+	require.True(t, open)
+
+	c.markReady()
+
+	requireBroadcastClosed(t, first)
+	requireBroadcastClosed(t, second)
+}
+
+// TestAMQPClientMarkReadyStaysSilentAfterClose pins the other half of the exit
+// contract: a ready flip that lands after Close must neither revive the client
+// nor hand a later asker a channel nothing will ever close.
+func TestAMQPClientMarkReadyStaysSilentAfterClose(t *testing.T) {
+	c := newClientWithFakeChannel(t, &fakeChannel{})
+	require.NoError(t, c.Close())
+
+	c.markReady()
+
+	c.m.RLock()
+	ready := c.isReady
+	c.m.RUnlock()
+	assert.False(t, ready, "a closed client must stay not-ready")
+
 	after, open := c.channelReadyNotify()
 	assert.False(t, open)
 	assert.Nil(t, after)
