@@ -486,11 +486,15 @@ func (m *Manager) StopCleanup() {
 // fresh messages to modules that are about to shut down. Cancellation propagates to in-flight
 // handlers via their context, but they are not synchronously joined here. Idempotent:
 // Registry.StopConsumers guards on its active flag, so a subsequent Close (which also stops
-// consumers) is safe. Unlike Close it does not mark the manager closed and leaves the replay
-// state intact, so a Stop is recoverable while a Close is terminal. One thing a Stop does not
-// restore: it halts each registry's topology repair permanently, and a later EnsureConsumers
-// reuses the same Registry through the fast path, so the ADR-113 redeclare pass stays dead for
-// that key until the process restarts.
+// consumers) is safe. Registry.StopConsumers also halts topology repair, outside its active-flag
+// guard so a publisher-only registry stops too. Unlike Close it does not mark the manager closed
+// and leaves the replay state intact, so a Stop is recoverable while a Close is terminal.
+//
+// One thing a Stop does not restore: Registry.StartConsumers re-arms repair, but no path through
+// the Manager reaches it again for a stopped key. This clears neither started nor replayedHashs,
+// so EnsureConsumers short-circuits on the unchanged hash, and a CHANGED hash is a hard error
+// rather than a fresh setup. The ADR-113 pass therefore stays dead for that key until the process
+// restarts; only a direct Registry.StartConsumers caller gets the re-arm.
 func (m *Manager) StopConsumers() {
 	m.consMu.Lock()
 	defer m.consMu.Unlock()
