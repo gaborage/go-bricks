@@ -7,8 +7,8 @@
 ## Context
 
 `Declarations.Validate` required every binding's exchange — and every typed publisher's — to be
-declared in the same set, so the single-declarer pattern could not be expressed. One service owns a
-one exchange; every other service only binds to it or publishes through it. To say that today, a
+declared in the same set, so the single-declarer pattern could not be expressed. One service owns an
+exchange; every other service only binds to it or publishes through it. To say that today, a
 non-owner must repeat the owner's declaration and accept the shape race: two active
 `exchange.declare` calls that disagree on `Type` or a flag are a `PRECONDITION_FAILED` at the
 broker, which since [ADR-113](adr_113_amqp_topology_redeclare_on_reconnect.md) is skipped until the
