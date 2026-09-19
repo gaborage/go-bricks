@@ -15,9 +15,6 @@ const (
 	ExitNothingAttempted = 2
 )
 
-// Run verdicts as the summary names them (ADR-115). Indexed by exit code, so
-// the name a pipeline reads and the status a shell reads are two renderings of
-// one classification and cannot drift apart.
 // ExitCode maps a command error onto the process exit code. It classifies by
 // the run verdict the error carries, so any wrapping depth works. Misuse is
 // marked ErrNothingAttempted where it is detected — nothing was dispatched, so

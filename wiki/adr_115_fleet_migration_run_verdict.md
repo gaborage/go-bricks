@@ -95,10 +95,14 @@ implementation:
   key.
 - Every misuse exits 2, not 1. Exit 1 is reserved for a split fleet so a pipeline can trust it, and a
   command that never ran dispatched nothing, which is what exit 2 means. This covers an unresolvable
-  flag combination (marked in `runAction`), an unknown flag and a stray positional argument (marked
-  at the root, because cobra rejects both before any action runs). An invocation that reaches
-  `migrate`/`validate`/`info` emits exactly one summary record; a flag cobra rejects outright never
-  reaches them and emits none, while still exiting 2.
+  flag combination (marked in `runAction`), an unknown flag, an unparseable flag value and a stray
+  positional argument (marked at the root, because cobra rejects those before any action runs), and
+  everything that fails before `list` or `quiesce` does its work — an unusable source, a credential
+  provider that cannot be built, an unreachable control plane, an unusable `--table`. Only a failure
+  of their own work, such as a `quiesce set` that cannot write the flag, still exits 1, and it
+  carries no fleet meaning. An invocation that reaches `migrate`/`validate`/`info` emits exactly one
+  summary record; a flag cobra rejects outright never reaches them and emits none, while still
+  exiting 2.
 
 - The verdict names the FLEET; the exit code names the RUN. The record's verdict is derived from
   `Verdict()`, so it never contradicts the counts printed beside it, while the exit code is derived
