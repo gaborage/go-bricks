@@ -27,13 +27,16 @@ const (
 	ModeCluster = "cluster"
 )
 
-// Config holds Redis-specific configuration options.
+// Config holds Redis-specific configuration options. Nothing decodes it: the app
+// layer fills it by hand from the resolved config.CacheConfig, so it carries no
+// injection tags at all and the operator-facing keys live on config.RedisConfig,
+// whose koanf tags are the spelling every error below is addressed in (#1729).
 type Config struct {
-	// Host is the Redis server hostname or IP address.
-	Host string `config:"host" required:"true"`
+	// Host is the Redis server hostname or IP address. Required.
+	Host string
 
 	// Port is the Redis server port (default: 6379).
-	Port int `config:"port" default:"6379"`
+	Port int
 
 	// Mode selects the protocol the client speaks: ModeStandalone (the default,
 	// and what the empty string means) or ModeCluster. Cluster is required for a
@@ -41,8 +44,7 @@ type Config struct {
 	// answers MOVED to a single-node client. Under cluster, Database must be 0 —
 	// the cluster client has no database selection. Filled from
 	// config.RedisConfig, which owns the cache.redis.mode key (env
-	// CACHE_REDIS_MODE); deliberately carries no config: tag, because nothing
-	// injects this struct and the tags on the fields around it are dead (#1729).
+	// CACHE_REDIS_MODE).
 	Mode string
 
 	// Username is the Redis ACL user to authenticate as, sent as
@@ -51,52 +53,50 @@ type Config struct {
 	// because the driver then sends no AUTH and the dial would run as the default
 	// user. Required by deployments that gate access with ACLs, such as Amazon
 	// ElastiCache RBAC. Filled from config.RedisConfig, which owns the
-	// cache.redis.username key (env CACHE_REDIS_USERNAME); deliberately carries
-	// no config: tag, because nothing injects this struct and the tags on the
-	// fields around it are dead (#1729).
+	// cache.redis.username key (env CACHE_REDIS_USERNAME).
 	Username string
 
 	// Password for Redis authentication (optional).
 	// Should be provided via environment variable: CACHE_REDIS_PASSWORD
-	Password string `config:"password"`
+	Password string
 
 	// Database number to use (default: 0).
 	// Redis supports databases 0-15 by default.
-	Database int `config:"database" default:"0"`
+	Database int
 
 	// PoolSize is the maximum number of socket connections (default: 10).
 	// Higher values allow more concurrent operations but consume more resources.
-	PoolSize int `config:"pool_size" default:"10"`
+	PoolSize int
 
 	// DialTimeout is the timeout for establishing new connections (default: 5s).
-	DialTimeout time.Duration `config:"dial_timeout" default:"5s"`
+	DialTimeout time.Duration
 
-	// LoadTimeout bounds each cache leg of cache.LoadThrough (cache.loadtimeout).
-	// Zero leaves the helper on its own fallback; a deployment-resolved config always
-	// carries a positive value.
-	LoadTimeout time.Duration `config:"load_timeout" default:"500ms"`
+	// LoadTimeout bounds each cache leg of cache.LoadThrough (cache.loadtimeout,
+	// default: 500ms). Zero leaves the helper on its own fallback; a deployment-resolved
+	// config always carries a positive value.
+	LoadTimeout time.Duration
 
 	// ReadTimeout is the timeout for socket reads (default: 3s).
 	// -1 disables timeout.
-	ReadTimeout time.Duration `config:"read_timeout" default:"3s"`
+	ReadTimeout time.Duration
 
 	// WriteTimeout is the timeout for socket writes (default: 3s).
 	// -1 disables timeout.
-	WriteTimeout time.Duration `config:"write_timeout" default:"3s"`
+	WriteTimeout time.Duration
 
 	// MaxRetries is the maximum number of retries before giving up (default: 3).
 	// -1 disables retries.
-	MaxRetries int `config:"max_retries" default:"3"`
+	MaxRetries int
 
 	// MinRetryBackoff is the minimum backoff between retries (default: 8ms).
-	MinRetryBackoff time.Duration `config:"min_retry_backoff" default:"8ms"`
+	MinRetryBackoff time.Duration
 
 	// MaxRetryBackoff is the maximum backoff between retries (default: 512ms).
-	MaxRetryBackoff time.Duration `config:"max_retry_backoff" default:"512ms"`
+	MaxRetryBackoff time.Duration
 
 	// TLS configures the client-side TLS of the connection. Zero value =
 	// plaintext.
-	TLS TLSConfig `config:"tls"`
+	TLS TLSConfig
 }
 
 // TLSConfig enables TLS on the Redis connection. Each PEM piece comes from a
@@ -107,25 +107,25 @@ type Config struct {
 // this config exists to prevent.
 type TLSConfig struct {
 	// Enabled turns TLS on. False with any other field set is refused.
-	Enabled bool `config:"enabled"`
+	Enabled bool
 
 	// CAFile and CAValue name the root bundle that verifies the server.
-	CAFile  string `config:"cafile"`
-	CAValue string `config:"cavalue"`
+	CAFile  string
+	CAValue string
 
 	// CertFile and CertValue name the client certificate; a cert requires a key.
-	CertFile  string `config:"certfile"`
-	CertValue string `config:"certvalue"`
+	CertFile  string
+	CertValue string
 
 	// KeyFile and KeyValue name the client key; a key requires a cert.
-	KeyFile  string `config:"keyfile"`
-	KeyValue string `config:"keyvalue"`
+	KeyFile  string
+	KeyValue string
 
 	// ServerName overrides the SNI/verification hostname; empty defaults to Host.
-	ServerName string `config:"servername"`
+	ServerName string
 
 	// MinVersion: "" or "1.2" (default floor) | "1.3".
-	MinVersion string `config:"minversion"`
+	MinVersion string
 }
 
 // Validate performs fail-fast validation of Redis configuration.
@@ -211,28 +211,29 @@ func (c *Config) validate() (clienttls.Material, error) {
 	}
 
 	if c.PoolSize <= 0 {
-		return clienttls.Material{}, cache.NewConfigError("redis.pool_size", fmt.Sprintf("invalid pool size: %d (must be > 0)", c.PoolSize), nil)
+		return clienttls.Material{}, cache.NewConfigError("redis.poolsize", fmt.Sprintf("invalid pool size: %d (must be > 0)", c.PoolSize), nil)
 	}
 
 	if c.DialTimeout < 0 {
-		return clienttls.Material{}, cache.NewConfigError("redis.dial_timeout", "dial timeout cannot be negative", nil)
+		return clienttls.Material{}, cache.NewConfigError("redis.dialtimeout", "dial timeout cannot be negative", nil)
 	}
 
 	if c.ReadTimeout < -1 {
-		return clienttls.Material{}, cache.NewConfigError("redis.read_timeout", "read timeout cannot be less than -1", nil)
+		return clienttls.Material{}, cache.NewConfigError("redis.readtimeout", "read timeout cannot be less than -1", nil)
 	}
 
 	if c.WriteTimeout < -1 {
-		return clienttls.Material{}, cache.NewConfigError("redis.write_timeout", "write timeout cannot be less than -1", nil)
+		return clienttls.Material{}, cache.NewConfigError("redis.writetimeout", "write timeout cannot be less than -1", nil)
 	}
 
 	// Zero stays valid: it means "unset", and LoadThrough then uses its own fallback. A
 	// negative is rejected here because a hand-built Config never passes through the config
 	// layer's cache.loadtimeout normalization, and LoadThrough treats a non-positive value
 	// as "not configured" — so without this the operator's value would be silently ignored
-	// rather than corrected or refused.
+	// rather than corrected or refused. The field carries no "redis." head on purpose: the
+	// key is cache.loadtimeout, one level above the Redis sub-block.
 	if c.LoadTimeout < 0 {
-		return clienttls.Material{}, cache.NewConfigError("redis.load_timeout", "load timeout cannot be negative", nil)
+		return clienttls.Material{}, cache.NewConfigError("loadtimeout", "load timeout cannot be negative", nil)
 	}
 
 	return c.TLS.validate()
