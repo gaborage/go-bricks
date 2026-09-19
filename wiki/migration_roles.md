@@ -15,7 +15,7 @@ tenant:
 
 | Role | Owns | Privileges | Used by |
 | ------ | ------ | ----------- | --------- |
-| **Migrator** (one per deployment, shared across tenants) | Every tenant schema (the `AUTHORIZATION` target of each provisioning call) | DDL on its own schemas | `migration.MigrateAll` via [`MigrateAllOptions.MigratorIdentity`](multi_tenant_migration.md#migrator-identity); the `go-bricks-migrate` CLI only when every tenant secret carries the migrator's own `username` and `password` |
+| **Migrator** (one per deployment, shared across tenants) | Every tenant schema (the `AUTHORIZATION` target of each provisioning call) | DDL on its own schemas | `migration.MigrateAll` via [`MigrateAllOptions.MigratorIdentity`](multi_tenant_migration.md#migrator-identity); the `go-bricks-migrate` CLI via `GOBRICKS_MIGRATE_MIGRATOR_USER` / `GOBRICKS_MIGRATE_MIGRATOR_PASSWORD` |
 | **Per-tenant runtime** (one per tenant) | Nothing | `USAGE` on the tenant schema; `SELECT/INSERT/UPDATE/DELETE` on all current and future tables; `USAGE/SELECT/UPDATE` on sequences | The running service (connects with the runtime role's credentials via `database.username`/`database.password` in `config.yaml`) |
 
 The `WithSharedMigrator` guard described below is **library-only today**:
@@ -359,12 +359,16 @@ deployment. Treat its credentials accordingly:
 - **Where:** AWS Secrets Manager, HashiCorp Vault, GCP Secret Manager, or
   equivalent. Never check the password into a config file or environment
   variable that is broadly readable.
-- **Who:** Only the migration runner, via
-  [`MigrateAllOptions.MigratorIdentity`](multi_tenant_migration.md#migrator-identity);
-  `go-bricks-migrate` does not expose it yet and connects with each tenant
-  secret's `username` and `password` as stored, so CLI use means storing both
-  of the migrator's credential fields in every tenant secret. Runtime services
-  must connect as their per-tenant runtime role, never as the migrator.
+- **Who:** Only the migration runner — in process via
+  [`MigrateAllOptions.MigratorIdentity`](multi_tenant_migration.md#migrator-identity),
+  or on `go-bricks-migrate` via `GOBRICKS_MIGRATE_MIGRATOR_USER` and
+  `GOBRICKS_MIGRATE_MIGRATOR_PASSWORD` (both or neither; no flag carries the
+  password). Injecting those two from the store above into the runner's own
+  environment for the length of the run is the delivery step, not a second home
+  for the secret. Without an identity Flyway connects with each tenant secret's
+  `username` and `password` as stored, which means storing both of the
+  migrator's credential fields in every tenant secret. Runtime services must
+  connect as their per-tenant runtime role, never as the migrator.
 - **Rotation:** The shared migrator (provisioned with `SkipMigratorRole`) is
   rotated out of band. A migrator the call manages takes the new password as
   `MigratorPassword` on the next provisioning call; the helper emits

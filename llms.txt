@@ -5075,7 +5075,7 @@ Default secret name (overridable via `--secrets-prefix` / `GOBRICKS_MIGRATE_SECR
 gobricks/migrate/<tenant_id>
 ```
 
-The payload below carries the tenant's runtime role and assumes `MigrateAllOptions.MigratorIdentity` is set (library only — `go-bricks-migrate` does not expose it yet), which replaces only the username and password on a copy of each tenant's document. Without it, Flyway connects with the secret's `username` and `password` as stored, so a CLI-driven fleet must carry the migrator's own username and password in every tenant secret. See [wiki/multi_tenant_migration.md#migrator-identity](wiki/multi_tenant_migration.md#migrator-identity).
+The payload below carries the tenant's runtime role and assumes a migrator identity is set — `MigrateAllOptions.MigratorIdentity` in process, or `GOBRICKS_MIGRATE_MIGRATOR_USER` / `GOBRICKS_MIGRATE_MIGRATOR_PASSWORD` on `go-bricks-migrate` — which replaces only the username and password on a copy of each tenant's document. Without it, Flyway connects with the secret's `username` and `password` as stored, so the fleet must carry the migrator's own username and password in every tenant secret. See [wiki/multi_tenant_migration.md#migrator-identity](wiki/multi_tenant_migration.md#migrator-identity).
 
 Canonical payload (preferred) — matches `config.DatabaseConfig` fields:
 
@@ -5125,6 +5125,12 @@ go-bricks-migrate migrate --tenant tenant-a --aws-region us-east-1
 
 # JSON progress for CI parsing
 go-bricks-migrate migrate --source-url ... --aws-region us-east-1 --json
+
+# Connect as the shared migrator instead of each tenant secret's own role.
+# Both or neither — exactly one set is a startup error. No flag carries the password.
+export GOBRICKS_MIGRATE_MIGRATOR_USER=fleet_migrator
+export GOBRICKS_MIGRATE_MIGRATOR_PASSWORD="$(aws secretsmanager get-secret-value --secret-id gobricks/migrate/migrator --query SecretString --output text)"
+go-bricks-migrate migrate --source-url ... --aws-region us-east-1
 ```
 
 Default behavior is **sequential, fail-fast**. `--continue-on-error` keeps iterating after a per-tenant failure. `--parallel <N>` (max 32) processes tenants concurrently while preserving fail-fast: on the first per-tenant error, siblings still queued exit immediately and in-flight Flyway processes are cancelled before `MigrateAll` returns. Combine with `--continue-on-error` to keep iterating instead.

@@ -93,15 +93,16 @@ Default secret name (configurable via `--secrets-prefix`):
 gobricks/migrate/<tenant_id>
 ```
 
-The payloads in this guide are library-only: they carry the tenant's runtime
-role (`tenant_a_app`) and assume a [migrator identity](#migrator-identity) is
-set, so Flyway connects as the migrator instead. `go-bricks-migrate` cannot set
-one — it calls `MigrateAll` without the overlay and connects with each tenant
-secret's `username` *and* `password` as stored. A CLI-driven fleet therefore
-carries the shared migrator's own username and password in every tenant secret;
-swapping in the migrator's username alone authenticates it with the runtime
-role's password, and a secret left on the runtime role connects without DDL
-rights on the tenant schema.
+The payloads in this guide carry the tenant's runtime role (`tenant_a_app`) and
+assume a [migrator identity](#migrator-identity) is set, so Flyway connects as
+the migrator instead — `MigrateAllOptions.MigratorIdentity` in process, or
+`GOBRICKS_MIGRATE_MIGRATOR_USER` / `GOBRICKS_MIGRATE_MIGRATOR_PASSWORD` on
+`go-bricks-migrate`. Without one, Flyway connects with each tenant secret's
+`username` *and* `password` as stored, so the fleet must carry the shared
+migrator's own username and password in every tenant secret; swapping in the
+migrator's username alone authenticates it with the runtime role's password, and
+a secret left on the runtime role connects without DDL rights on the tenant
+schema.
 
 Secret payload — canonical shape (preferred):
 
@@ -158,8 +159,10 @@ migrate, validate and info on PostgreSQL and Oracle. An empty username or
 password, a password shorter than `config.MinDatabasePasswordLength` (too short
 to redact from Flyway output), or a CR, LF or NUL in either fails `MigrateAll`
 with `migration.ErrInvalidMigratorIdentity` before any tenant is listed. The role-separation model in
-[migration_roles.md](migration_roles.md) needs the overlay; `go-bricks-migrate`
-does not expose it yet.
+[migration_roles.md](migration_roles.md) needs the overlay. `go-bricks-migrate`
+reads it from `GOBRICKS_MIGRATE_MIGRATOR_USER` and
+`GOBRICKS_MIGRATE_MIGRATOR_PASSWORD` — both or neither, and no flag carries the
+password.
 
 Its pair is [`WithSharedMigrator`](#schema-targeting-postgresql). Setting
 `MigratorIdentity` does **not** arm that guard: database-per-tenant PostgreSQL
@@ -313,6 +316,12 @@ go-bricks-migrate quiesce clear  --source-url https://control-plane.example.com/
 | `--allow-insecure-scheme` | `false` | Allow `http://` base URLs for `--source-url` (dev/LocalStack only; bearer token would be cleartext) |
 | `--verbose` / `-v` | `false` | Enable debug-level logging |
 | `--timeout` | `0` (vendor default, 5m) | Per-tenant Flyway timeout override (e.g. `30m`); raise for large index builds/backfills |
+
+The [migrator identity](#migrator-identity) has no flag, because no flag carries
+a password. Set both `GOBRICKS_MIGRATE_MIGRATOR_USER` and
+`GOBRICKS_MIGRATE_MIGRATOR_PASSWORD`, or neither; exactly one set is a startup
+error naming the missing variable, and a set-but-empty value fails with
+`migration.ErrInvalidMigratorIdentity` before any tenant is listed.
 
 ## CI/CD recipe (GitHub Actions, OIDC → AWS)
 

@@ -250,6 +250,8 @@ Recorded on every `migration.applied` audit event. The principal is **never infe
 | `GOBRICKS_MIGRATE_APPLIED_BY` | Default `--applied-by`. An explicit flag still wins. |
 | `GOBRICKS_MIGRATE_GIT_SHA` | Default `--git-sha` (e.g. `--git-sha "$GITHUB_SHA"`). |
 | `GOBRICKS_MIGRATE_PIPELINE_RUN_ID` | Default `--pipeline-run-id` (e.g. `--pipeline-run-id "$GITHUB_RUN_ID"`). |
+| `GOBRICKS_MIGRATE_MIGRATOR_USER` | Username Flyway connects as, replacing each tenant secret's own. No flag; set together with the password below. |
+| `GOBRICKS_MIGRATE_MIGRATOR_PASSWORD` | Password for that user. Exactly one of the two set is a startup error naming the missing variable. |
 
 ## JSON output (for CI consumers)
 
