@@ -51,6 +51,13 @@ type AMQPClientImpl struct {
 	// Close must still stop its reconnection goroutine. Guarded by c.m.
 	closed bool
 
+	// chanReady is the broadcast a registry's redeclare observer parks on: it is
+	// closed and dropped every time the client becomes ready on a fresh channel,
+	// and once more by Close so nobody waits on a channel that will never be
+	// replaced. Created on first ask, so a client nobody observes allocates none.
+	// Guarded by c.m.
+	chanReady chan struct{}
+
 	// pendingPublishes correlates broker confirmations to the in-flight publish
 	// that issued them. Keyed by (channel generation, DeliveryTag) →
 	// chan amqp.Confirmation (buffered, capacity 1). The generation rotates on
@@ -1081,6 +1088,52 @@ func (c *AMQPClientImpl) channelGeneration() (generation uint64, ready bool) {
 	return c.generation, c.isReady
 }
 
+// channelReadyNotify hands back the broadcast closed the next time the client
+// becomes ready on a fresh channel, and reports whether the client is still
+// open. A closed client returns (nil, false), which is how an observer learns to
+// stop instead of parking on a channel nothing will close again.
+//
+// The broadcast is edge-triggered and remembers nothing: a wake that fires while
+// nobody holds a channel is lost. Take the channel BEFORE acting on the
+// generation and park on it afterwards, so a rotation during that work closes
+// the channel already in hand instead of being missed.
+func (c *AMQPClientImpl) channelReadyNotify() (ready <-chan struct{}, open bool) {
+	c.m.Lock()
+	defer c.m.Unlock()
+	if c.closed {
+		return nil, false
+	}
+	if c.chanReady == nil {
+		c.chanReady = make(chan struct{})
+	}
+	return c.chanReady, true
+}
+
+// markReady flips the client to ready on the channel changeChannel just
+// installed and announces it. Don't flip back to ready if Close already ran: a
+// concurrent Close sets closed under c.m, and a closed client must stay
+// not-ready. The announcement belongs here and not in changeChannel: there the
+// generation has rotated but the client is not ready on it yet, so an observer
+// woken that early would find nothing to declare on.
+func (c *AMQPClientImpl) markReady() {
+	c.m.Lock()
+	defer c.m.Unlock()
+	if c.closed {
+		return
+	}
+	c.isReady = true
+	c.wakeChannelReady()
+}
+
+// wakeChannelReady closes the current broadcast and drops it, so the next asker
+// gets a fresh one. Callers hold c.m.
+func (c *AMQPClientImpl) wakeChannelReady() {
+	if c.chanReady != nil {
+		close(c.chanReady)
+		c.chanReady = nil
+	}
+}
+
 // DeclareQueue declares a queue from the given declaration.
 // ctx is honored as a pre-flight check: amqp091 declare/bind operations are not
 // context-aware on the wire, so a canceled context fails fast before the call.
@@ -1147,6 +1200,7 @@ func (c *AMQPClientImpl) Close() error {
 
 	close(c.done)
 	c.isReady = false
+	c.wakeChannelReady()
 
 	var err error
 	if c.channel != nil {
@@ -1332,13 +1386,7 @@ func (c *AMQPClientImpl) init(conn amqpConnection) error {
 	}
 
 	c.changeChannel(ch)
-	c.m.Lock()
-	// Don't flip back to ready if Close already ran: a concurrent Close sets
-	// closed under c.m, and a closed client must stay not-ready.
-	if !c.closed {
-		c.isReady = true
-	}
-	c.m.Unlock()
+	c.markReady()
 
 	tracking.RecordChannelEvent("create", nil)
 
