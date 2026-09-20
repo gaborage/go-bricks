@@ -76,10 +76,49 @@ run matches Go's success idiom, so `if v := res.Verdict(); v != nil` reads corre
   clean run, **1** for a split fleet, and **2** when zero tenants were dispatched. Exit 2 also
   covers failures before the loop exists: a failed tenant listing, or a credential provider that
   could not be built. The text and `--json` summary will report the listed, attempted, failed and
-  not-attempted counts plus the verdict, and the CLI will emit it on the exit-2 paths too, so a
-  pipeline always gets one summary record. The CLI pins a released go-bricks and CI builds it with
+  not-attempted counts plus the verdict, and the CLI will emit it on the exit-2 paths that reach
+  `migrate`/`validate`/`info` too, so a pipeline parsing that stream always gets one summary record
+  per run it started. (Amended: a flag cobra rejects outright never reaches an action and emits no
+  record, while still exiting 2 — see the amendment below.) The CLI pins a released go-bricks and CI builds it with
   `GOWORK=off`, so this part lands after the release that carries this library change and the pin
-  bump that follows it. Until then the CLI keeps its two exit codes.
+  bump that follows it.
+
+## Amended 2026-09-19 (#1692) — the CLI mapping shipped
+
+`go-bricks-migrate` now exits 0, 1 and 2 as decided above. Three details the decision left to the
+implementation:
+
+- `total` stays, with the meaning it has always had: the dispatched count, which `attempted` now
+  names too. Dropping it was tried and reverted — the acceptance criteria say "unchanged output apart
+  from the new summary fields", and a pipeline may already read it. The record carries `total`,
+  `listed`, `attempted`, `failed`, `not_attempted` and `verdict` beside `event` and `action`. The
+  redundancy between `total` and `attempted` is deliberate and is a follow-up candidate, not
+  something this change decides. The never-dispatched IDs stay a library-side field, not a summary
+  key.
+- Every misuse exits 2, not 1. Exit 1 is reserved for a split fleet so a pipeline can trust it, and a
+  command that never ran dispatched nothing, which is what exit 2 means. This covers an unresolvable
+  flag combination (marked in `runAction`), an unknown flag, an unparseable flag value and a stray
+  positional argument (marked at the root, because cobra rejects those before any action runs), a
+  half-set `GOBRICKS_MIGRATE_MIGRATOR_USER`/`_PASSWORD` pair (#1766), and
+  everything that fails before `list` or `quiesce` does its work: `list`'s flag resolution and
+  tenant-source construction, `quiesce`'s control-plane connection, an unusable `--table` and the
+  rest of controller construction. Their own work failing still exits 1, carrying no fleet meaning —
+  `list`'s listing call and the printing of its result, `quiesce`'s `set`/`clear`/`status`
+  operation. An invocation that reaches `migrate`/`validate`/`info` emits exactly one
+  summary record; a flag cobra rejects outright never reaches them and emits none, while still
+  exiting 2.
+
+- The verdict names the FLEET; the exit code names the RUN. The record's verdict is derived from
+  `Verdict()`, so it never contradicts the counts printed beside it, while the exit code is derived
+  from the error the process returns. The two agree everywhere except one reachable state: a
+  parallel run whose every tenant was dispatched and succeeded still returns the parent context's
+  error (`runParallel`'s tail), so the fleet is consistent and the record says `clean` while the
+  process exits 1. Deriving both from the error instead was tried and rejected — it made the record
+  claim `fleet_split` beside `failed: 0, not_attempted: 0`, contradicting the count-based definition
+  of the verdict this ADR sets. A pipeline that must distinguish the two asks the record about the
+  fleet and the exit code about the run.
+
+See [migrations.md](migrations.md) `[C67.1]`.
 
 ## Consequences
 

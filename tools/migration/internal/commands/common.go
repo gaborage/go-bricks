@@ -443,18 +443,19 @@ func newCLILogger(flags *CommonFlags) logger.Logger {
 }
 
 // runAction is the shared entry point for migrate/validate/info subcommands.
-// Every invocation emits exactly one summary record, including the runs that
-// end before the first dispatch, so a pipeline parsing the stream always has a
-// terminal record to read.
+// Every invocation emits exactly one summary record and returns an error
+// carrying the run verdict the exit code is read from (ADR-115). A flag that
+// did not resolve dispatched no tenant, so it is ErrNothingAttempted like any
+// other pre-dispatch failure.
 func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) error {
 	out := cmd.OutOrStdout()
 	if err := resolveFlags(cmd, flags); err != nil {
-		return failedBeforeDispatch(out, action, flags.JSON, err)
+		return nothingAttempted(out, action, flags.JSON, err)
 	}
 	if err := resolveMigratorIdentity(flags); err != nil {
 		// A half-set identity pair is caught before any tenant is dispatched, so
 		// it reports like every other pre-dispatch failure.
-		return failedBeforeDispatch(out, action, flags.JSON, err)
+		return nothingAttempted(out, action, flags.JSON, err)
 	}
 
 	ctx := cmd.Context()
@@ -464,7 +465,7 @@ func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) 
 
 	lister, provider, err := buildRunDeps(ctx, flags)
 	if err != nil {
-		return failedBeforeDispatch(out, action, flags.JSON, err)
+		return nothingAttempted(out, action, flags.JSON, err)
 	}
 
 	log := newCLILogger(flags)
@@ -500,11 +501,7 @@ func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) 
 		result = &migration.MigrateAllResult{Action: action}
 	}
 	writeSummary(out, result, flags.JSON)
-
-	if len(result.Failed()) > 0 {
-		return errAtLeastOneFailed
-	}
-	return err
+	return verdictError(result, err)
 }
 
 // buildRunDeps resolves everything a run needs before its first dispatch. The
@@ -529,16 +526,28 @@ func buildRunDeps(ctx context.Context, flags *CommonFlags) (migration.TenantList
 	return lister, provider, nil
 }
 
-// failedBeforeDispatch reports a failure that happened before the first tenant
-// was dispatched. The run still emits its summary record, because a pipeline
-// reads one per invocation and "nothing ran" is exactly what it needs to see.
-func failedBeforeDispatch(out io.Writer, action migration.Action, asJSON bool, err error) error {
+// nothingAttempted reports a failure that happened before the first tenant was
+// dispatched. No schema was touched, so the run is ErrNothingAttempted; the
+// summary is still emitted, because a pipeline reads one record per run.
+func nothingAttempted(out io.Writer, action migration.Action, asJSON bool, err error) error {
 	writeSummary(out, &migration.MigrateAllResult{Action: action}, asJSON)
-	return err
+	return markNothingAttempted(err)
 }
 
-// errAtLeastOneFailed signals a non-zero exit without printing a duplicate message.
-var errAtLeastOneFailed = errors.New("one or more tenants failed")
+// verdictError turns a finished run into the error the CLI exits on. The
+// verdict decides the exit code, so a run that dispatched nothing exits 2 even
+// when MigrateAll returned no error at all.
+func verdictError(result *migration.MigrateAllResult, err error) error {
+	verdict := result.Verdict()
+	switch {
+	case verdict == nil:
+		return err
+	case err == nil:
+		return verdict
+	default:
+		return fmt.Errorf("%w: %w", verdict, err)
+	}
+}
 
 type fixedLister struct{ ids []string }
 

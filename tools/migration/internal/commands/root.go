@@ -2,6 +2,7 @@
 package commands
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -64,9 +65,20 @@ Example:
     --source-url https://control-plane.example.com/api \
     --secrets-prefix gobricks/migrate/ \
     --aws-region us-east-1`,
+		Args:          noArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+
+	// Cobra validates Args only on a runnable command, and it answers a bare
+	// invocation with help, so the root needs a RunE for noArgs to fire at all.
+	root.RunE = func(cmd *cobra.Command, _ []string) error { return cmd.Help() }
+
+	// A flag cobra itself rejects never reaches an action, so mark it here:
+	// no tenant was dispatched, which is exit 2 (ADR-115).
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return markNothingAttempted(err)
+	})
 
 	return root
 }
@@ -109,4 +121,22 @@ func addCommonFlags(cmd *cobra.Command) *CommonFlags {
 		"Per-tenant Flyway timeout (e.g. 30m); 0 or a negative value uses the vendor default (5m). Raise for large index builds/backfills.")
 
 	return flags
+}
+
+// markNothingAttempted marks a failure that dispatched no tenant, so the
+// process exits 2 rather than 1 — exit 1 is reserved for a split fleet, which a
+// pipeline must be able to trust (ADR-115). It covers misuse and any failure
+// that happens before a subcommand does its work, on every subcommand.
+func markNothingAttempted(err error) error {
+	return fmt.Errorf("%w: %w", migration.ErrNothingAttempted, err)
+}
+
+// noArgs rejects positional arguments exactly as cobra.NoArgs does, marking the
+// refusal as a misuse. cobra validates Args before the action runs, so this
+// never reaches runAction's own marking.
+func noArgs(cmd *cobra.Command, args []string) error {
+	if err := cobra.NoArgs(cmd, args); err != nil {
+		return markNothingAttempted(err)
+	}
+	return nil
 }

@@ -17,7 +17,7 @@ func NewListCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List the tenant IDs returned by the configured source",
-		Args:  cobra.NoArgs,
+		Args:  noArgs,
 	}
 	flags := addCommonFlags(cmd)
 	cmd.RunE = func(c *cobra.Command, _ []string) error {
@@ -27,7 +27,7 @@ func NewListCommand() *cobra.Command {
 
 		lister, err := buildLister(flags, nil)
 		if err != nil {
-			return err
+			return markNothingAttempted(err)
 		}
 
 		ctx := c.Context()
@@ -35,6 +35,9 @@ func NewListCommand() *cobra.Command {
 			ctx = context.Background()
 		}
 
+		// Listing IS this command's work, and writing the ids is its result, so
+		// a failure here is not "nothing attempted": it exits 1, carrying no
+		// fleet meaning. Only the setup above can reach exit 2.
 		ids, err := lister.ListTenants(ctx)
 		if err != nil {
 			return err
@@ -67,7 +70,7 @@ func requireExactlyOneSource(flags *CommonFlags) error {
 		selectors++
 	}
 	if selectors != 1 {
-		return errors.New("exactly one of --source-url, --source-config, or --tenant is required")
+		return markNothingAttempted(errors.New("exactly one of --source-url, --source-config, or --tenant is required"))
 	}
 	return nil
 }

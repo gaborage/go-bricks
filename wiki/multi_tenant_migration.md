@@ -624,8 +624,8 @@ What it cannot do:
 - Mark a tenant "skipped". Any error it returns is a per-tenant failure, and
   under the default fail-fast mode the first one stops the run — in a parallel
   run that cancels other tenants' in-flight Flyway processes, leaving their
-  schema state unknown. Set `ContinueOnError` whenever refusals are expected. Fleet-level outcome
-  reporting is tracked in [#1692](https://github.com/gaborage/go-bricks/issues/1692).
+  schema state unknown. Set `ContinueOnError` whenever refusals are expected. The run-level outcome
+  is reported by [`Verdict()`](#run-verdicts), not by this callback.
 
 A caller that needs a pre/post protocol around Flyway — a lock held across its
 own DDL and the Flyway run, say — should loop over tenants and call `MigrateFor`
@@ -655,17 +655,35 @@ A dispatched tenant that ends in `ErrFlywayTimeout` or `ErrFlywayCanceled` is a 
 never-dispatched tenant: its schema state is unknown. The verdict does not replace `MigrateAll`'s
 error, so check both.
 
-The `go-bricks-migrate` CLI reports the same classification in its summary record, which every
-invocation of `migrate`/`validate`/`info` emits exactly once — the runs that end before the first
-dispatch included:
+The `go-bricks-migrate` CLI exits on the same three classes:
+
+| Exit | Verdict | Meaning |
+| --- | --- | --- |
+| `0` | clean | Every listed tenant was dispatched and succeeded |
+| `1` | `ErrFleetSplit`, or any run error | At least one tenant was dispatched and at least one failed or was never reached — or the run itself errored while the fleet stayed consistent |
+| `2` | `ErrNothingAttempted` | No tenant was dispatched — empty listing, listing failure, unreadable tenant store, a credential provider that could not be built, a half-set `GOBRICKS_MIGRATE_MIGRATOR_USER`/`_PASSWORD` pair, or a misuse (unknown flag, stray argument, flag combination that does not resolve). No schema was touched |
+
+Exit `1` is reserved for a split fleet so a pipeline can trust it: every misuse exits `2`, because a
+command that never ran dispatched nothing — an unknown command or flag, a stray argument, or a flag
+combination that does not resolve, on any subcommand. `list` and `quiesce` follow the same rule: anything failing
+before they do their work exits `2`, since nothing was attempted, and a failure of the work itself
+exits `1`, carrying no fleet meaning. The boundary sits where each command starts working — `list`'s
+setup is flag resolution and building the tenant source, its work is the listing call and printing
+the result; `quiesce`'s setup runs through connecting to the control plane and constructing the
+controller, its work is the `set`/`clear`/`status` operation. The record's `verdict` describes the FLEET and is derived
+from the dispatch counts, so it never contradicts them; the exit code describes the RUN. The two
+coincide except in one state — a parallel run whose every tenant was dispatched and succeeded still
+returns the parent context's error, so the record reads `clean` while the process exits `1`. On the
+exit-2 paths `listed` is what the run observed, and is 0 when the listing itself failed. Every
+invocation that reaches `migrate`/`validate`/`info` emits exactly one summary record — text, or one NDJSON object under `--json` — the
+exit-2 paths included, so a pipeline always has one record to parse:
 
 ```json
 {"event":"summary","action":"migrate","verdict":"fleet_split","total":1,"listed":3,"attempted":1,"failed":1,"not_attempted":2}
 ```
 
-`verdict` is derived from the dispatch counts, so it never contradicts them, and `listed` is what
-the run observed — 0 when the listing itself failed. The CLI still exits `0` on success and `1` on
-any error; the three-way exit-code mapping recorded in ADR-115 ships in a later CLI release.
+A deploy gate that must never run against an unconsidered fleet treats `2` as a failure; an
+environment that may legitimately hold zero tenants has to accept it explicitly.
 
 ## Operational notes
 
