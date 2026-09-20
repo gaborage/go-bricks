@@ -371,7 +371,7 @@ func TestStartSlotsStopsAlreadyStartedKindsOnFatal(t *testing.T) {
 func TestPrepareRuntimeAbortsWhenDeclaredConsumersCannotStart(t *testing.T) {
 	rec := &recLogger{}
 	a := newLifecycleCheckAppWithLogger(t, defaultTestConfig(), rec)
-	a.messagingManager = newFailingConsumerManager(t, rec, &failingBrokerURLProvider{})
+	a.messagingManager = newFailingConsumerManager(t, rec, &scriptedBrokerURLProvider{})
 	a.messagingDeclarations = declaredConsumerFixture(t)
 
 	err := a.prepareRuntime(context.Background())
@@ -539,7 +539,7 @@ func TestPrepareRuntimeWarnsOnlyWhenPreWarmFails(t *testing.T) {
 			if tt.messagingOnly {
 				// dbManager stays nil: this row isolates the messagingManager-only
 				// pre-warm failure path (messagingSlot.start in slot.go).
-				source := &failingBrokerURLProvider{}
+				source := &scriptedBrokerURLProvider{}
 				a.messagingManager = newFailingConsumerManager(t, rec, source)
 				wantErrSubstring = errBrokerLookupFailed.Error()
 			} else {
