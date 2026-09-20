@@ -452,7 +452,9 @@ func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) 
 		return failedBeforeDispatch(out, action, flags.JSON, err)
 	}
 	if err := resolveMigratorIdentity(flags); err != nil {
-		return err
+		// A half-set identity pair is caught before any tenant is dispatched, so
+		// it reports like every other pre-dispatch failure.
+		return failedBeforeDispatch(out, action, flags.JSON, err)
 	}
 
 	ctx := cmd.Context()
