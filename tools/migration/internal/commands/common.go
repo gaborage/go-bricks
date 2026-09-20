@@ -36,6 +36,13 @@ const (
 	envGitSHA        = "GOBRICKS_MIGRATE_GIT_SHA"
 	envPipelineRunID = "GOBRICKS_MIGRATE_PIPELINE_RUN_ID"
 
+	envMigratorUser     = "GOBRICKS_MIGRATE_MIGRATOR_USER"
+	envMigratorPassword = "GOBRICKS_MIGRATE_MIGRATOR_PASSWORD"
+
+	// migratorOverlayLogMsg records that Flyway will connect as the migrator. The
+	// username is logged beside it; the password never is.
+	migratorOverlayLogMsg = "Migrator identity overlay active"
+
 	jsonKeyTenants = "tenants"
 
 	// migrateCLIAppName is reported as the built JDBC URL's application_name, so a
@@ -90,6 +97,26 @@ func applyEnvFallback(cmd *cobra.Command, flagName, envVar string, dst *string) 
 	if v := os.Getenv(envVar); v != "" {
 		*dst = v
 	}
+}
+
+// resolveMigratorIdentity reads the migrator overlay from the environment. Both
+// variables or neither, paired by presence rather than emptiness so a set-but-empty
+// value reaches MigrateAll's own validation. Called from runAction, its only
+// consumer — quiesce shares resolveFlags but never reads the pair.
+func resolveMigratorIdentity(flags *CommonFlags) error {
+	user, userSet := os.LookupEnv(envMigratorUser)
+	password, passwordSet := os.LookupEnv(envMigratorPassword)
+	if userSet != passwordSet {
+		missing, present := envMigratorPassword, envMigratorUser
+		if passwordSet {
+			missing, present = envMigratorUser, envMigratorPassword
+		}
+		return fmt.Errorf("%s is required when %s is set; set both or neither", missing, present)
+	}
+	if userSet {
+		flags.migratorIdentity = &migration.MigratorIdentity{Username: user, Password: password}
+	}
+	return nil
 }
 
 // maybeLoadFileStore parses the YAML config file once when either the listing
@@ -420,6 +447,9 @@ func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) 
 	if err := resolveFlags(cmd, flags); err != nil {
 		return err
 	}
+	if err := resolveMigratorIdentity(flags); err != nil {
+		return err
+	}
 
 	ctx := cmd.Context()
 	if ctx == nil {
@@ -452,15 +482,22 @@ func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) 
 	migCfg := &config.Config{App: config.AppConfig{Name: migrateCLIAppName, Env: "production"}}
 	migrator := migration.NewFlywayMigrator(migCfg, log)
 
+	if identity := flags.migratorIdentity; identity != nil {
+		// The username is safe to log and tells an operator which role Flyway ran
+		// as; the password is never logged, in any form.
+		log.Info().Str("migrator_user", identity.Username).Msg(migratorOverlayLogMsg)
+	}
+
 	out := cmd.OutOrStdout()
 	hook := makeHook(out, flags.JSON)
 
 	result, err := migration.MigrateAll(ctx, migrator, lister, provider, action, migration.MigrateAllOptions{
-		BaseConfig:      buildBaseConfig(flags),
-		ContinueOnError: flags.ContinueOnError,
-		Parallelism:     flags.Parallel,
-		Logger:          log,
-		Hook:            hook,
+		BaseConfig:       buildBaseConfig(flags),
+		ContinueOnError:  flags.ContinueOnError,
+		Parallelism:      flags.Parallel,
+		Logger:           log,
+		Hook:             hook,
+		MigratorIdentity: flags.migratorIdentity,
 	})
 	if err != nil && result == nil {
 		return err

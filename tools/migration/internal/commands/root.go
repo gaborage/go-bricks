@@ -35,6 +35,9 @@ type CommonFlags struct {
 	GitSHA        string
 	PipelineRunID string
 
+	// Migrator identity (#1694). Env-only — no flag carries a password.
+	migratorIdentity *migration.MigratorIdentity
+
 	// Behavior.
 	ContinueOnError bool
 	Parallel        int
