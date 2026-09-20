@@ -72,8 +72,10 @@ type fakeChannel struct {
 		exchange, key        string
 		mandatory, immediate bool
 	}
+	exVerifyErr      error
 	declaredQueue    string
 	declaredExchange string
+	verifiedExchange string
 	boundQueue       struct{ q, ex, rk string }
 	gotQueueArgs     amqp.Table
 	gotExchangeArgs  amqp.Table
@@ -199,6 +201,11 @@ func (f *fakeChannel) ExchangeDeclare(name, _ string, _, _, _, _ bool, args amqp
 	f.declaredExchange = name
 	f.gotExchangeArgs = args
 	return f.exDeclareErr
+}
+
+func (f *fakeChannel) ExchangeDeclarePassive(name, _ string, _, _, _, _ bool, _ amqp.Table) error {
+	f.verifiedExchange = name
+	return f.exVerifyErr
 }
 
 func (f *fakeChannel) QueueBind(name, key, exchange string, _ bool, args amqp.Table) error {
@@ -912,6 +919,37 @@ func TestDeclareExchangeQueueBindSuccess(t *testing.T) {
 	if err := c.BindQueue(context.Background(), &BindingDeclaration{Queue: "q", Exchange: "ex", RoutingKey: "rk"}); err != nil {
 		t.Fatalf("BindQueue err=%v", err)
 	}
+}
+
+// TestAMQPClientDeclareExchangeVerifiesAnExternalExchange pins the door ADR-119
+// adds: a Passive declaration is VERIFIED with a passive exchange.declare, never
+// created, so a service that does not own the exchange cannot race its shape.
+func TestAMQPClientDeclareExchangeVerifiesAnExternalExchange(t *testing.T) {
+	ch := &fakeChannel{}
+	c := newClientWithFakeChannel(t, ch)
+
+	require.NoError(t, c.DeclareExchange(context.Background(), NewExternalExchange(testExternalExchange)))
+
+	assert.Equal(t, testExternalExchange, ch.verifiedExchange)
+	assert.Empty(t, ch.declaredExchange, "an external exchange is never created by this service")
+}
+
+// TestAMQPClientDeclareExchangeSurfacesTheBrokersNotFound pins the failure a
+// missing external exchange produces: the broker's own 404, reachable with
+// errors.As, so the pass ends with the reply code and text rather than a
+// framework paraphrase.
+func TestAMQPClientDeclareExchangeSurfacesTheBrokersNotFound(t *testing.T) {
+	notFound := &amqp.Error{Code: amqp.NotFound, Reason: "no exchange '" + testExternalExchange + "' in vhost '/'"}
+	ch := &fakeChannel{exVerifyErr: notFound}
+	c := newClientWithFakeChannel(t, ch)
+
+	err := c.DeclareExchange(context.Background(), NewExternalExchange(testExternalExchange))
+
+	require.Error(t, err)
+	var amqpErr *amqp.Error
+	require.ErrorAs(t, err, &amqpErr)
+	assert.Equal(t, amqp.NotFound, amqpErr.Code)
+	assert.Contains(t, err.Error(), "no exchange '"+testExternalExchange+"' in vhost '/'")
 }
 
 // TestAMQPClientDeclareQueuePassesArgs pins toTable's normalization: a populated

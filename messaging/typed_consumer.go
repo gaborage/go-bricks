@@ -143,7 +143,7 @@ func (h *typedHandler[T]) EventType() string {
 // The queue is not declared here: pass it to DeclareQueue or
 // DeclareQueueWithDLQ separately, exactly as an untyped DeclareConsumer with a
 // nil queue does. A consumer naming a queue nobody declared surfaces at
-// Declarations.Validate() as "consumer references non-existent queue", not here.
+// Declarations.Validate() as "consumer references queue ... absent from this declaration set", not here.
 //
 // It panics on a nil decls, a nil opts, or an opts that already carries a
 // Handler — all three are declaration-time wiring mistakes, and the package
