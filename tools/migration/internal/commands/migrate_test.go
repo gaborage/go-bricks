@@ -458,6 +458,22 @@ func TestMigrateCommandInvalidCredentialSourceStillEmitsSummary(t *testing.T) {
 	assert.Equal(t, verdictNothingAttempted, requireSummary(t, stdout).Verdict)
 }
 
+// A half-set GOBRICKS_MIGRATE_MIGRATOR_USER/_PASSWORD pair (#1766) is rejected
+// before the first dispatch, so it reports like every other pre-dispatch
+// failure: the run still emits exactly one summary record.
+func TestMigrateCommandHalfSetMigratorPairStillEmitsSummary(t *testing.T) {
+	t.Setenv(envMigratorUser, "migrator")
+	os.Unsetenv(envMigratorPassword)
+
+	stdout, err := runMigrateJSON(t, "--tenant", "t1")
+	require.Error(t, err)
+	require.ErrorContains(t, err, envMigratorPassword)
+
+	rec := requireSummary(t, stdout)
+	assert.Equal(t, verdictNothingAttempted, rec.Verdict)
+	assert.Zero(t, rec.Listed)
+}
+
 func TestMigrateCommandFailFastIsFleetSplitWithNeverDispatched(t *testing.T) {
 	listURL, smURL := fakeFleet(t, "t1", "t2", "t3")
 
