@@ -380,6 +380,10 @@ func TestAMQPCentralizedArchitectureConsistentProcessing(t *testing.T) {
 type stubLogger struct {
 	entries []string
 	mu      sync.RWMutex
+	// panicOn makes the line carrying exactly that message panic with panicWith,
+	// standing in for the consumer logger blowing up mid-statement. Empty disables.
+	panicOn   string
+	panicWith any
 }
 
 // reset clears all log entries safely
@@ -410,8 +414,12 @@ type stubEvent struct{ l *stubLogger }
 
 func (e *stubEvent) Msg(msg string) {
 	e.l.mu.Lock()
-	defer e.l.mu.Unlock()
 	e.l.entries = append(e.l.entries, msg)
+	panicOn, panicWith := e.l.panicOn, e.l.panicWith
+	e.l.mu.Unlock()
+	if panicOn != "" && msg == panicOn {
+		panic(panicWith)
+	}
 }
 
 func (e *stubEvent) Msgf(format string, args ...any) {
