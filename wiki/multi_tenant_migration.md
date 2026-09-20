@@ -661,7 +661,7 @@ The `go-bricks-migrate` CLI exits on the same three classes:
 | --- | --- | --- |
 | `0` | clean | Every listed tenant was dispatched and succeeded |
 | `1` | `ErrFleetSplit`, or any run error | At least one tenant was dispatched and at least one failed or was never reached — or the run itself errored while the fleet stayed consistent |
-| `2` | `ErrNothingAttempted` | No tenant was dispatched — empty listing, listing failure, unreadable tenant store, a credential provider that could not be built, or a misuse (unknown flag, stray argument, flag combination that does not resolve). No schema was touched |
+| `2` | `ErrNothingAttempted` | No tenant was dispatched — empty listing, listing failure, unreadable tenant store, a credential provider that could not be built, a half-set `GOBRICKS_MIGRATE_MIGRATOR_USER`/`_PASSWORD` pair, or a misuse (unknown flag, stray argument, flag combination that does not resolve). No schema was touched |
 
 Exit `1` is reserved for a split fleet so a pipeline can trust it: every misuse exits `2`, because a
 command that never ran dispatched nothing — an unknown command or flag, a stray argument, or a flag

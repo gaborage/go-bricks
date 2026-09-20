@@ -10285,7 +10285,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - scope: the CLI's `migrate`, `validate` and `info` actions exit **0** when the run was clean, **1**
   when the fleet is split (at least one tenant dispatched, and at least one failed or was never
   dispatched), and **2** when no tenant was dispatched at all — an empty listing, a listing failure,
-  a tenant store that could not be read, a credential provider that could not be built, or a misuse
+  a tenant store that could not be read, a credential provider that could not be built, a half-set
+  `GOBRICKS_MIGRATE_MIGRATOR_USER`/`_PASSWORD` pair, or a misuse
   (an unknown flag, a stray positional argument, a flag combination that does not resolve — on every
   subcommand, `list`/`quiesce`/`version` included — a bare invocation still answers with help and
   exits 0). `list` and `quiesce` follow the same rule for everything that fails before they do their

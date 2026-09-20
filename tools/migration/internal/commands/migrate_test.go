@@ -467,19 +467,22 @@ func TestMigrateCommandInvalidCredentialSourceIsNothingAttempted(t *testing.T) {
 }
 
 // A half-set GOBRICKS_MIGRATE_MIGRATOR_USER/_PASSWORD pair (#1766) is rejected
-// before the first dispatch, so it reports like every other pre-dispatch
-// failure: the run still emits exactly one summary record.
-func TestMigrateCommandHalfSetMigratorPairStillEmitsSummary(t *testing.T) {
+// before the first dispatch, so it costs what every other misuse costs: exit 2,
+// with exactly one summary record.
+func TestMigrateCommandHalfSetMigratorPairIsNothingAttempted(t *testing.T) {
 	t.Setenv(envMigratorUser, "migrator")
 	os.Unsetenv(envMigratorPassword)
 
 	stdout, err := runMigrateJSON(t, "--tenant", "t1")
 	require.Error(t, err)
 	require.ErrorContains(t, err, envMigratorPassword)
+	require.ErrorIs(t, err, migration.ErrNothingAttempted)
+	assert.Equal(t, ExitNothingAttempted, ExitCode(err))
 
 	rec := requireSummary(t, stdout)
 	assert.Equal(t, verdictNothingAttempted, rec.Verdict)
 	assert.Zero(t, rec.Listed)
+}
 
 // Misuse is marked wherever it is detected, so exit 1 keeps meaning a split
 // fleet and nothing else. These go through the real root with every subcommand

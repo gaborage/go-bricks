@@ -98,7 +98,8 @@ implementation:
 - Every misuse exits 2, not 1. Exit 1 is reserved for a split fleet so a pipeline can trust it, and a
   command that never ran dispatched nothing, which is what exit 2 means. This covers an unresolvable
   flag combination (marked in `runAction`), an unknown flag, an unparseable flag value and a stray
-  positional argument (marked at the root, because cobra rejects those before any action runs), and
+  positional argument (marked at the root, because cobra rejects those before any action runs), a
+  half-set `GOBRICKS_MIGRATE_MIGRATOR_USER`/`_PASSWORD` pair (#1766), and
   everything that fails before `list` or `quiesce` does its work: `list`'s flag resolution and
   tenant-source construction, `quiesce`'s control-plane connection, an unusable `--table` and the
   rest of controller construction. Their own work failing still exits 1, carrying no fleet meaning —
