@@ -459,6 +459,9 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 // pass survives a stop/start cycle.
 func (r *Registry) StartConsumers(ctx context.Context) error {
 	r.rearmRedeclaring(ctx)
+	// After rearm, never inside it: rearm holds redeclareMu AND mu, and an
+	// observer started under them would run its first pass against both.
+	r.restartRedeclareObserver()
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -533,8 +536,8 @@ func (r *Registry) StartConsumers(ctx context.Context) error {
 // then halted by StopConsumers, so a stop/start cycle leaves the consumer-driven
 // pass working instead of refused for the registry's lifetime. It runs before
 // StartConsumers takes mu, because writing redeclareDone needs redeclareMu first.
-// The new-channel observer is NOT restarted — DeclareInfrastructure starts it at
-// most once — so after a stop a consumer re-subscribe is the only driver left.
+// It only reopens the repair lifetime; restartRedeclareObserver, which
+// StartConsumers calls next with no lock held, brings the observer back.
 func (r *Registry) rearmRedeclaring(ctx context.Context) {
 	r.redeclareMu.Lock()
 	defer r.redeclareMu.Unlock()
@@ -546,6 +549,64 @@ func (r *Registry) rearmRedeclaring(ctx context.Context) {
 	}
 	redeclareCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	r.redeclareDone, r.cancelRedeclare = redeclareCtx.Done(), cancel
+}
+
+// restartRedeclareObserver brings back the new-channel observer StopConsumers
+// ended, on the context rearmRedeclaring just reopened. For a publisher-only
+// registry that observer is the ONLY driver the registry owns — no consumer
+// re-subscribe stands behind it — so without this a stop/start cycle would leave
+// the registry unable to repair topology for the rest of the process, which is
+// #1761 one lifecycle event later.
+//
+// It is a no-op while the previous observer is still winding down: that one is
+// parked on a context already canceled and exits on its own, and starting a
+// second would orphan redeclareObserverDone, the single channel the first one
+// closes. The next StartConsumers picks it up instead — this is repair, not a
+// deadline.
+func (r *Registry) restartRedeclareObserver() {
+	r.redeclareMu.Lock()
+	defer r.redeclareMu.Unlock()
+
+	source, ok := r.client.(redeclareSource)
+	if !ok || r.redeclareCtx == nil || r.redeclareHalted() || !r.observerFinished() {
+		return
+	}
+	r.mu.RLock()
+	declared := r.declared
+	r.mu.RUnlock()
+	if !declared {
+		return
+	}
+
+	redeclareCtx, token := r.redeclareCtx, r.clientToken
+	done := make(chan struct{})
+	r.mu.Lock()
+	r.redeclareObserverDone = done
+	r.mu.Unlock()
+	go func() {
+		defer close(done)
+		observeChannelReady(source, redeclareCtx.Done(), func() {
+			r.redeclareTopologyFrom(redeclareCtx, token)
+		})
+	}()
+}
+
+// observerFinished reports whether the registry's own observer has exited, so a
+// restart never runs two on one done channel. A registry that never started one
+// counts as finished.
+func (r *Registry) observerFinished() bool {
+	r.mu.RLock()
+	done := r.redeclareObserverDone
+	r.mu.RUnlock()
+	if done == nil {
+		return true
+	}
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
 }
 
 // StopConsumers gracefully stops all running consumers and halts topology repair
@@ -1585,4 +1646,15 @@ func (r *Registry) Bindings() []*BindingDeclaration {
 	bindings := make([]*BindingDeclaration, len(r.bindings))
 	copy(bindings, r.bindings)
 	return bindings
+}
+
+// forgetRedeclareSource drops a source's entry from the generation ledger, which
+// its driver calls as it stops. The ledger is de-dup state, not a record of who
+// may declare: a source that comes back gets a fresh token and re-earns its first
+// pass, which is one redundant declare, while never forgetting would hold a dead
+// client pointer per retired publisher for the registry's lifetime.
+func (r *Registry) forgetRedeclareSource(token *redeclareToken) {
+	r.redeclareMu.Lock()
+	defer r.redeclareMu.Unlock()
+	delete(r.handledGenerations, token)
 }

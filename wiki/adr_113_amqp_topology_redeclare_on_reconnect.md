@@ -9,7 +9,14 @@
 > holding declarations but no consumers never re-declared at all — a publisher-only service kept
 > publishing into topology the broker had lost until someone restarted the process. A client now
 > announces every channel it becomes ready on over a second unexported seam, and the registry
-> observes its own client on that seam until StopConsumers ends repair, consumers or not. The pass itself
+> observes its own client on that seam until StopConsumers ends repair, consumers or not, and again
+> on the observer a later re-arm starts — and the manager attaches the same observer to every
+> publisher client it pools under the registry's key, which is
+> what makes the mechanism reach the connection that actually breaks: when an operator deletes an
+> exchange under a LIVE connection, the channel that takes the 404 belongs to a pooled PUBLISHER,
+> while the registry's own client sits idle and never rotates at all. Without that source every
+> publish failed, the channel closed, the pending publish drained as a synthetic NACK, and the caller
+> got `ErrPublishRetriesExhausted` for the rest of the process's life. The pass itself
 > takes any source and DECLARES through the registry's own client — topology is broker-global, and a
 > declare that sat on a publishing channel would hold up the traffic it is restoring — and its
 > once-per-generation guard is keyed per `(source, generation)`, because sources number their
@@ -56,7 +63,12 @@ The framework never deletes or recreates broker state.
   `AMQPClient` is unchanged: adding a method to it would break every external implementer. The
   registry observes its own client until repair ends, whether or not it has consumers, and the
   observer stops on the client's own end as well as on `StopConsumers` — a failed `StartConsumers`
-  closes the client and drops the registry without ever calling `StopConsumers`. Equal for the guard
+  closes the client and drops the registry without ever calling `StopConsumers`. A later
+  `StartConsumers` starts it again: for a publisher-only registry that observer is the only driver it
+  owns, so a stop/start cycle must not retire it for the process lifetime. The manager observes each
+  pooled publisher on the same seam, stops that observer when the pool retires the client — LRU
+  eviction, the idle sweep, `Close` — and drops the client's ledger entry as the observer exits, so
+  the guard's per-source map does not grow one dead entry per eviction. Equal for the guard
   is not equal in ordering, though: the inline pre-subscribe call is a BARRIER, taken under the same
   pass mutex as the pass, so a completed pass on the current generation happens-before the
   `ConsumeFromQueue` that follows it. The observer is eventual and orders nothing against a

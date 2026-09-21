@@ -79,6 +79,13 @@ type Manager struct {
 	// consumerResubscribeDelay is ManagerOptions.ConsumerResubscribeDelay; zero leaves
 	// each registry on its own default.
 	consumerResubscribeDelay time.Duration
+
+	// obsMu guards publisherObservers, which maps a POOLED publisher value to the
+	// call that stops the redeclare observer watching its client. The pool hands
+	// its closer that same value, which is why the map is keyed by it rather than
+	// by the raw client. Never held across a broker call.
+	obsMu              sync.Mutex
+	publisherObservers map[AMQPClient]func()
 }
 
 // consumerEntry represents a long-lived consumer
@@ -172,22 +179,30 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 	}
 
 	m := &Manager{
-		logger:         log,
-		resourceSource: resourceSource,
-		clientFactory:  clientFactory,
-		// The pool closer surfaces each publisher's raw Close() error; pool.Close() joins them.
-		// Unlike the consumer loop below, these are not wrapped with the per-key label — the
-		// closer receives only the AMQPClient value (and key=="" uses a bare client), matching
-		// the database rewire's deliberate tradeoff: error coverage and the aggregate prefix are
-		// preserved, only the per-publisher-key context is dropped.
-		pubPool: resourcepool.New[AMQPClient](opts.MaxPublishers, opts.IdleTTL, func(client AMQPClient) error {
-			return client.Close()
-		}),
+		logger:                   log,
+		resourceSource:           resourceSource,
+		clientFactory:            clientFactory,
 		consumers:                make(map[string]*consumerEntry),
 		replayedHashs:            make(map[string]uint64),
 		tenantStamps:             opts.TenantStamps,
 		consumerResubscribeDelay: opts.ConsumerResubscribeDelay,
+		publisherObservers:       make(map[AMQPClient]func()),
 	}
+	// Assigned after the struct rather than inside it: the closer calls back into
+	// the manager to retire the client's redeclare observer, so it needs m.
+	//
+	// The pool closer surfaces each publisher's raw Close() error; pool.Close() joins them.
+	// Unlike the consumer loop below, these are not wrapped with the per-key label — the
+	// closer receives only the AMQPClient value (and key=="" uses a bare client), matching
+	// the database rewire's deliberate tradeoff: error coverage and the aggregate prefix are
+	// preserved, only the per-publisher-key context is dropped.
+	m.pubPool = resourcepool.New[AMQPClient](opts.MaxPublishers, opts.IdleTTL, func(client AMQPClient) error {
+		// Before the close, so the observer is already told to stop by the time the
+		// client's own broadcast ends. Every retirement path — LRU eviction, the idle
+		// sweep, Manager.Close — arrives here.
+		m.retirePublisher(client)
+		return client.Close()
+	})
 
 	resourcepool.WarnIfCleanupIntervalTooLate(log, "messaging.publisher", opts.CleanupInterval, opts.IdleTTL)
 	m.pubPool.StartCleanup(opts.CleanupInterval)
@@ -431,7 +446,96 @@ func (m *Manager) createPublisher(ctx context.Context, key string) (AMQPClient, 
 	if err != nil {
 		return nil, err
 	}
-	return newStampingPublisher(client, key), nil
+	// Observed BEFORE the wrapper, and on the raw client: the redeclare seam is
+	// unexported, and embedding an AMQPClient interface promotes none of the
+	// concrete client's unexported methods, so the pooled value can never be
+	// asserted back to it.
+	pooled := newStampingPublisher(client, key)
+	m.observePublisherChannels(ctx, key, client, pooled)
+	return pooled, nil
+}
+
+// observePublisherChannels makes this publisher client a redeclare driver for
+// key's registry: every new channel it becomes ready on runs one topology pass,
+// which the registry executes over its OWN connection. Without it the only driver
+// is a consumer re-subscribe, and the client that takes the broker's 404 when an
+// operator deletes an exchange under a live connection is precisely this one — a
+// publisher-only service would then publish into a missing exchange for the rest
+// of the process (#1761).
+//
+// The registry is resolved on every wake rather than captured here: a pooled
+// publisher is created on demand and can predate the key's registry entirely
+// (multi-tenant consumers start lazily), and a wake with no registry installed
+// has no recorded topology to replay, which is the right answer, not a miss.
+func (m *Manager) observePublisherChannels(ctx context.Context, key string, client, pooled AMQPClient) {
+	source, ok := client.(redeclareSource)
+	if !ok {
+		return
+	}
+	// One token per pooled source. The ledger is keyed by token POINTER, so a
+	// client value the wiki's blessed wrapper shape makes uncomparable still gets
+	// an entry, and two pooled clients never share one.
+	token := &redeclareToken{source: source}
+	// A real stop channel, not a nil one: a client's own end is not a signal this
+	// observer can rely on — channelReadyNotify answering (nil, false) is
+	// AMQPClientImpl's behavior, and a custom ClientFactory's client that never
+	// closes its broadcast would leak one goroutine per pooled client.
+	stop := make(chan struct{})
+	m.obsMu.Lock()
+	m.publisherObservers[pooled] = sync.OnceFunc(func() { close(stop) })
+	m.obsMu.Unlock()
+
+	// ctx is the pool's create budget and expires; this observer lives as long as
+	// the client, so it keeps the values (trace, tenant) and drops the deadline.
+	observerCtx := context.WithoutCancel(ctx)
+	go func() {
+		defer m.forgetPublisher(key, pooled, token)
+		observeChannelReady(source, stop, func() {
+			if registry := m.registryFor(key); registry != nil {
+				registry.redeclareTopologyFrom(observerCtx, token)
+			}
+		})
+	}()
+}
+
+// retirePublisher stops the redeclare observer watching the pooled client the
+// pool is retiring. The map entry is left for the observer to remove as it exits,
+// so the entry's lifetime is the goroutine's, not the caller's.
+func (m *Manager) retirePublisher(pooled AMQPClient) {
+	m.obsMu.Lock()
+	stop := m.publisherObservers[pooled]
+	m.obsMu.Unlock()
+	if stop != nil {
+		stop()
+	}
+}
+
+// forgetPublisher drops what a retired publisher left behind: its stop call and
+// its entry in the registry's generation ledger. A registry outlives every
+// publisher the pool evicts, so a ledger entry that is never dropped accumulates
+// one dead source per eviction for the process lifetime.
+func (m *Manager) forgetPublisher(key string, pooled AMQPClient, token *redeclareToken) {
+	m.obsMu.Lock()
+	delete(m.publisherObservers, pooled)
+	m.obsMu.Unlock()
+	if registry := m.registryFor(key); registry != nil {
+		registry.forgetRedeclareSource(token)
+	}
+}
+
+// registryFor returns the consumer registry installed for key, or nil when the
+// key has none — before its first EnsureConsumers, and after Close drained the
+// map. A plain RLock, not consumersReplayed's TryRLock: this runs on a background
+// observer, where waiting out an in-flight setup pass costs nothing and losing the
+// pass would cost a repair.
+func (m *Manager) registryFor(key string) *Registry {
+	m.consMu.RLock()
+	defer m.consMu.RUnlock()
+	entry, ok := m.consumers[key]
+	if !ok {
+		return nil
+	}
+	return entry.registry
 }
 
 // createAMQPClient creates a new AMQP client for the given key

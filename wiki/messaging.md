@@ -911,12 +911,19 @@ the client reconnects.
 On each new channel the registry re-declares every exchange, queue and binding it declared at
 startup — once per channel, not once per attempt — so a broker that lost its topology (a restart
 without durable definitions, a deleted queue or exchange) is repaired without a process restart.
-Two drivers reach the pass and neither is privileged: the client announces every channel it becomes
+Two drivers reach the pass and neither is privileged: a client announces every channel it becomes
 ready on, and a consumer additionally asks before every re-subscribe attempt. Whichever arrives
 first, the pass runs at most once per channel, because the guard is keyed per `(source, generation)`
 — sources number their channels independently, so a per-registry counter would swallow a rotation
-only one of them saw. The announcement is what covers a **publisher-only service** (declarations, no
-consumers): before it, a registry with nothing to re-subscribe never re-declared at all. The
+only one of them saw. Every client the manager builds for the key announces: the registry's own, and
+each **pooled publisher**. That second source is the one that matters when an operator deletes an
+exchange under a live connection — the channel that takes the broker's 404 is the publisher's, while
+the registry's own client sits idle and never rotates — and together they cover a **publisher-only
+service** (declarations, no consumers), which before this re-declared nothing at all. A pooled
+publisher's entry leaves the guard when the pool retires the client (LRU eviction, the idle sweep,
+`Close`), so the map does not grow one dead source per eviction. A stop/start cycle restarts the
+registry's own announcement observer: for a publisher-only registry it is the only driver the
+registry owns. The
 consumer's ask is not a redundant second driver — it runs under the same pass mutex, so a completed
 pass on the current generation happens-before the `ConsumeFromQueue` that follows it, an ordering the
 announcement cannot give because it is eventual.

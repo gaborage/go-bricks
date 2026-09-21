@@ -5188,3 +5188,25 @@ func TestDeclareInfrastructureTakesRedeclareMuBeforeMu(t *testing.T) {
 	}
 	registry.StopConsumers()
 }
+
+// TestRegistryRestartsItsObserverAfterAStopStartCycle pins the residual 2a left
+// documented: StopConsumers ends the registry's own new-channel observer, and
+// re-arming reopens the repair context without bringing an observer back. For a
+// publisher-only registry that observer is the ONLY driver it owns — there is no
+// consumer re-subscribe behind it — so a stop/start cycle would otherwise leave
+// the registry unable to repair its topology for the process lifetime, which is
+// the bug #1761 is about, one lifecycle event later.
+func TestRegistryRestartsItsObserverAfterAStopStartCycle(t *testing.T) {
+	client := newReconnectingMockClient()
+	registry := newPublisherOnlyRegistry(t, client)
+	key := "exchange:" + testExchangeName
+
+	registry.StopConsumers()
+	awaitObserverExit(t, registry.redeclareObserverDone)
+
+	require.NoError(t, registry.StartConsumers(context.Background()))
+
+	// The rotation an operator's exchange delete causes, after the cycle.
+	client.newChannel()
+	awaitDeclares(t, client, key, "1", "2")
+}
