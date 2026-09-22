@@ -461,6 +461,11 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 
 // StartConsumers starts all registered consumers with handlers.
 // This should be called after DeclareInfrastructure and before starting the main application.
+//
+// It blocks while a redeclare pass is in flight on a halted registry: re-arming takes the pass
+// mutex, which a pass holds across declare RPCs no context cancels. The framework's own path
+// never hits that wait (a Manager-built registry is always freshly declared here, so the re-arm
+// short-circuits), but a consumer calling this directly after StopConsumers can.
 // It also re-arms topology repair after a StopConsumers, so the consumer-driven
 // pass survives a stop/start cycle.
 func (r *Registry) StartConsumers(ctx context.Context) error {
@@ -1277,6 +1282,11 @@ func (r *Registry) redeclareTopologyFrom(ctx context.Context, token *redeclareTo
 	if r.redeclareHalted() {
 		// Refused before the ledger write, or cut short after it: either way the
 		// next re-arm owes this pass, because no channel rotated to carry a retry.
+		//
+		// A pass that declared EVERYTHING and was halted only between the last
+		// declare and this check is owed too, which is imprecise on purpose: the
+		// alternative is carrying "did it finish" out of replayTopology, and the
+		// cost of the imprecision is one idempotent replay at the next re-arm.
 		r.repairOwed = true
 	}
 }
