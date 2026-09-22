@@ -343,7 +343,11 @@ fails with `path: tag` when a tag falls outside its allowlist. The allowlist liv
 with one comment per entry naming the pass that covers it. To add a tag, add a pass that reads its
 side, or extend the allowlist and say which pass does.
 
-**What the guard does not catch.** It reads EXPLICIT `//go:build` expressions only,
+**What the guard does not catch.** It reads tags LITERALLY — `set -f` is on, so a tag carrying a
+glob is never path-expanded, and a crafted filename cannot steer a tag into the allowlist. It parses
+`git grep -n`'s `path:line:content` stream on `:`, so a tracked file whose NAME contained a colon
+would mis-split (colons are illegal in filenames on Windows, which CI builds on). It reads EXPLICIT
+`//go:build` expressions only,
 so Go's implicit filename constraints (`foo_darwin.go`, `foo_arm64.go`) are invisible to it — the
 tree's one GOOS-constrained file, `migration/proc_windows.go`, carries the explicit tag as well.
 And the allowlist asserts in a comment that a pass covers each tag; it does not verify it. Delete a
