@@ -5313,3 +5313,41 @@ func TestRegistryRepairsATopologyRotatedWhileHalted(t *testing.T) {
 	// One pass, with no further rotation from anyone.
 	awaitDeclares(t, registryClient, key, "1", "1", "1")
 }
+
+// TestRegistryRepairsATopologyPassCutShortByHalt covers the sibling of the
+// refused-pass case: a pass that was IN FLIGHT when StopConsumers halted repair.
+// redeclareTopologyFrom records the generation BEFORE replayTopology, so the
+// interrupted pass counts as handled even though it declared nothing past the
+// declaration it was parked in — and no channel rotated, so no later generation
+// carries the retry that a FAILED declare would get. The re-arm therefore owes
+// that pass.
+func TestRegistryRepairsATopologyPassCutShortByHalt(t *testing.T) {
+	client := newReconnectingMockClient()
+	registry := NewRegistry(client, &stubLogger{})
+	registry.RegisterExchange(&ExchangeDeclaration{Name: testExchangeName, Type: ExchangeTypeTopic, Durable: true})
+	registry.RegisterQueue(&QueueDeclaration{Name: testQueueName})
+	require.NoError(t, registry.DeclareInfrastructure(context.Background()))
+
+	// Park the pass inside the exchange declare, so the queue after it is never
+	// reached, then halt repair while it is parked.
+	gate := testutil.NewBlockedCreate(t)
+	client.locked(func() { client.parkOn, client.parkGate = "exchange:"+testExchangeName, gate })
+	client.newChannel()
+	select {
+	case <-gate.Started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no pass reached the gate: the registry is running no observer to park")
+	}
+	registry.StopConsumers()
+	client.locked(func() { client.parkOn, client.parkGate = "", nil })
+	gate.Release()
+	awaitObserverExit(t, registry.redeclareObserverDone)
+
+	require.Equal(t, []string{"1"}, client.declaresOf("queue:"+testQueueName),
+		"the halted pass must not have reached the queue")
+
+	require.NoError(t, registry.StartConsumers(context.Background()))
+
+	// No rotation follows: the re-arm alone must finish what the halt cut short.
+	awaitDeclares(t, client, "queue:"+testQueueName, "1", "2")
+}
