@@ -43,7 +43,10 @@ ALLOWED="integration race windows"
 # tags_of <//go:build line> — the identifiers in one expression, space separated.
 # Operators and parentheses are separators; `!` binds to its term, and a negated
 # tag is the same tag to both callers.
-tags_of() { local expr="${1#*//go:build}"; echo "${expr//[()!\&|]/ }"; }
+# The CR strip is load-bearing, not cosmetic: on a CRLF checkout the last token
+# carries a trailing \r, so `race\r` != `race` and --packages-for silently drops
+# the file — the race passes would then scan nothing and still exit 0.
+tags_of() { local expr="${1#*//go:build}"; expr="${expr//$'\r'/}"; echo "${expr//[()!\&|]/ }"; }
 
 if [ "${1:-}" = "--packages-for" ]; then
   # No cd: git grep scopes to the caller's directory and prints paths relative
