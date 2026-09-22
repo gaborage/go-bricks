@@ -126,14 +126,19 @@ lint: ## Run golangci-lint (pinned + GOWORK=off, mirroring CI; LINT_CLEAN=1 wipe
 # skipped rather than passed to golangci-lint, is in wiki/linting.md (#1757).
 # An already-installed binary at the pinned version is preferred over `go run`:
 # CI's lint jobs have one on PATH from golangci-lint-action, and building it from
-# source there costs minutes that setup-go's go.sum-keyed cache never warms.
+# source there costs minutes that setup-go's go.sum-keyed cache never warms. The
+# comparison strips a leading `v` from both sides — `golangci-lint version` prints
+# `has version 2.13.2`, unprefixed, so matching the pin literally never fires and
+# the fast path is silently dead.
 lint-race: ## Lint the race side of the race/!race pair (own target so CI calls the same definition)
 	@pkgs="$$(./scripts/check-build-tags.sh --packages-for race)"; \
 	if [ -z "$$pkgs" ]; then \
 		echo "lint-race: no race-tagged packages — skipped"; \
 		exit 0; \
 	fi; \
-	if command -v golangci-lint >/dev/null 2>&1 && golangci-lint version 2>/dev/null | grep -q '$(GOLANGCI_LINT_VERSION)'; then \
+	want="$(GOLANGCI_LINT_VERSION)"; want="$${want#v}"; \
+	have="$$(golangci-lint version 2>/dev/null | sed -n 's/.*has version \([^ ]*\).*/\1/p')"; \
+	if [ -n "$$have" ] && [ "$${have#v}" = "$$want" ]; then \
 		gcl="golangci-lint"; \
 	else \
 		gcl="go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)"; \
