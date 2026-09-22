@@ -121,6 +121,9 @@ jobs:
               - 'tools/migration/**/testdata/**'
             code:
               - '**/*.go'
+              # Assembly is compiled code, so the test, coverage, merge and Sonar
+              # jobs that gate on `code` must see an .s-only change (#1757).
+              - '**/*.s'
               - 'go.mod'
               - 'go.sum'
               - 'go.work'
