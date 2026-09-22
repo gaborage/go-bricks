@@ -67,7 +67,13 @@ violations=$(
   while IFS=: read -r file _line expr; do
     case "$expr" in
       *'// +build'*)
-        printf '%s: legacy +build constraint; use //go:build\n' "$file"
+        # Only an UNPAIRED +build is a coverage gap. The dual form (both lines,
+        # the Go 1.17 migration shape gofmt still preserves) is legal and its
+        # //go:build sibling is parsed below, so flagging it would fail a legal
+        # file for style.
+        if ! git grep -qE '^[[:space:]]*//go:build' -- "$file"; then
+          printf '%s: legacy +build constraint with no //go:build sibling\n' "$file"
+        fi
         continue
         ;;
     esac
