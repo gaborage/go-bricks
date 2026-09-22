@@ -14,7 +14,11 @@
 # Only EXPLICIT //go:build expressions are read. Go's implicit filename
 # constraints (foo_darwin.go, foo_arm64.go) are invisible here; the tree's one
 # GOOS-constrained file, migration/proc_windows.go, carries the explicit tag too.
-set -euo pipefail
+# -f disables pathname expansion. Both loops below word-split tags_of's output on
+# purpose, and that split otherwise GLOBS: a tag carrying `*` or `?` is replaced by
+# matching filenames from the cwd, so a crafted name could expand an unknown tag
+# into an allowlisted one and the guard would pass having read nothing.
+set -euo pipefail -f
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
