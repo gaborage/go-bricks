@@ -5270,13 +5270,17 @@ func TestRegistryRearmsWhileThePreviousObserverIsParkedMidPass(t *testing.T) {
 		t.Fatal("StartConsumers never completed after the parked pass was released")
 	}
 
-	// Exactly one pass on the next rotation: the re-armed observer runs it, and the
-	// halted one is refused because its context is canceled.
+	// The re-arm OWES a pass: the one parked at generation 2 was cut short by the
+	// halt and declared nothing, so the restarted observer replays it at the
+	// generation standing now. Awaited before the rotation below, because otherwise
+	// the owed pass and the rotation race and the recorded generation depends on
+	// which lands first.
+	awaitDeclares(t, client, key, "1", "2")
+
+	// And one more on the next rotation, from the re-armed observer; the halted one
+	// stays refused, because its own context is canceled.
 	client.newChannel()
-	// "2" is absent on purpose: the pass parked at generation 2 was halted, and a
-	// halted declare refuses on its canceled context before it reaches the broker,
-	// so it records nothing. The re-armed observer then runs generation 3.
-	awaitDeclares(t, client, key, "1", "3")
+	awaitDeclares(t, client, key, "1", "2", "3")
 }
 
 // TestRegistryRepairsATopologyRotatedWhileHalted pins the hole a re-arm would

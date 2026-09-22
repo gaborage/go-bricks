@@ -78,7 +78,10 @@ The framework never deletes or recreates broker state.
   pooled publisher's observer, which survives the halt on its background context, has already
   parked on the broadcast it took. Without the flag that topology would stay undeclared until the
   same source rotated again. Only the owed case forces a pass, so a stop/start cycle that neither
-  refused nor interrupted one still runs at most one pass per generation. A pooled publisher's
+  refused nor interrupted one still runs at most one pass per generation. An observer whose OWN
+  context ends mid-pass owes nothing by contrast, and deliberately: the cancellation comes from
+  the pool retiring that client, so the channel the pass ran under is going away with it, and the
+  entry it claimed leaves the ledger with the observer. A pooled publisher's
   observer runs on a background context rather than inheriting the one that created the client,
   which is the opposite of what the registry's own observer does. The difference is ownership: a
   registry's observer belongs to the startup that built it, while a pooled publisher belongs to no

@@ -115,8 +115,8 @@ type Registry struct {
 	// written concurrently. Lock order is redeclareMu before mu, including in
 	// DeclareInfrastructure, which seeds handledGenerations.
 	redeclareMu sync.Mutex
-	// repairOwed records a pass the halt refused, so the next re-arm replays it.
-	// Guarded by redeclareMu.
+	// repairOwed records a pass the halt refused or cut short, so the next re-arm
+	// replays it. Guarded by redeclareMu.
 	repairOwed bool
 	// redeclareSkip holds declarations refused with PRECONDITION_FAILED. Guarded by redeclareMu.
 	redeclareSkip map[string]struct{}
@@ -583,16 +583,23 @@ func (r *Registry) rearmRedeclaring(ctx context.Context) {
 	redeclareCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	r.redeclareDone, r.cancelRedeclare = redeclareCtx.Done(), cancel
 
-	// A pass refused while repair was halted owes one now. That driver's rotation
-	// was never recorded — the halt guard returns before the ledger write — and a
-	// pooled publisher's observer, which survives the halt on its background
-	// context, has already parked on the broadcast it took, so nothing will wake it
-	// until the same source rotates AGAIN. Emptying the ledger makes the restarted
-	// observer's first pass unconditional, which repairs the topology that rotation
-	// was about. It is narrowed to the owed case deliberately: a stop/start with no
-	// refused pass leaves the guard alone, so a re-subscribe still runs at most one
-	// pass per generation. Every pass declares the same broker-global topology
-	// through the registry's own client, and declares are idempotent, so the
+	// A pass the halt refused, or cut short once it was already replaying, owes one
+	// now — and the ledger cannot be trusted either way. A refusal returns before
+	// the ledger write, so nothing records it; an interrupted pass DID record its
+	// generation yet declared only as far as it got, which is why this empties the
+	// ledger rather than seeding it. Neither earns the retry a FAILED declare gets,
+	// because that one closes the channel and the next generation carries it, while
+	// a halt rotates nothing — and a pooled publisher's observer, which survives the
+	// halt on its background context, has already parked on the broadcast it took.
+	//
+	// Emptying drops POOLED entries too, which costs nothing: observeChannelReady
+	// parks on the NEXT broadcast, so a parked observer's following pass already
+	// carries a new generation and would pass the guard either way.
+	//
+	// Narrowed to the owed case deliberately: a stop/start that neither refused nor
+	// interrupted a pass leaves the guard alone, so a re-subscribe still runs at
+	// most one pass per generation. Every pass declares the same broker-global
+	// topology through the registry's own client, and declares are idempotent, so a
 	// redundant one costs round-trips.
 	if r.repairOwed {
 		clear(r.handledGenerations)
@@ -1267,14 +1274,9 @@ func (r *Registry) redeclareTopologyFrom(ctx context.Context, token *redeclareTo
 	}
 	// Falling out of the loop means the halt (or this driver's own context) ended
 	// the pass rather than the generation guard, which returns above.
-	r.repairOwedByHalt()
-}
-
-// repairOwedByHalt records that a driver asked for a pass the halt refused, which
-// is what a re-arm has to replay: the refusal happens before the ledger write, so
-// the generation that prompted it leaves no trace of its own.
-func (r *Registry) repairOwedByHalt() {
 	if r.redeclareHalted() {
+		// Refused before the ledger write, or cut short after it: either way the
+		// next re-arm owes this pass, because no channel rotated to carry a retry.
 		r.repairOwed = true
 	}
 }
