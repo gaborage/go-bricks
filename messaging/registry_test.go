@@ -3601,6 +3601,14 @@ func newPublisherOnlyRegistry(t *testing.T, client AMQPClient) *Registry {
 	return registry
 }
 
+// redeclareSourceCount reports how many sources the registry still records a
+// channel generation for, read under the lock that guards the ledger.
+func redeclareSourceCount(r *Registry) int {
+	r.redeclareMu.Lock()
+	defer r.redeclareMu.Unlock()
+	return len(r.handledGenerations)
+}
+
 // awaitDeclares waits for key to have been declared as many times as want, then
 // pins which generations those declares ran on.
 func awaitDeclares(t *testing.T, client *reconnectingMockClient, key string, want ...string) {
@@ -5187,4 +5195,163 @@ func TestDeclareInfrastructureTakesRedeclareMuBeforeMu(t *testing.T) {
 		t.Fatal("DeclareInfrastructure never returned")
 	}
 	registry.StopConsumers()
+}
+
+// TestRegistryRestartsItsObserverAfterAStopStartCycle pins the residual 2a left
+// documented: StopConsumers ends the registry's own new-channel observer, and
+// re-arming reopens the repair context without bringing an observer back. For a
+// publisher-only registry that observer is the ONLY driver it owns — there is no
+// consumer re-subscribe behind it — so a stop/start cycle would otherwise leave
+// the registry unable to repair its topology for the process lifetime, which is
+// the bug #1761 is about, one lifecycle event later.
+func TestRegistryRestartsItsObserverAfterAStopStartCycle(t *testing.T) {
+	client := newReconnectingMockClient()
+	registry := newPublisherOnlyRegistry(t, client)
+	key := "exchange:" + testExchangeName
+
+	registry.StopConsumers()
+	awaitObserverExit(t, registry.redeclareObserverDone)
+
+	require.NoError(t, registry.StartConsumers(context.Background()))
+
+	// The rotation an operator's exchange delete causes, after the cycle.
+	client.newChannel()
+	awaitDeclares(t, client, key, "1", "2")
+}
+
+// TestRegistryRearmsWhileThePreviousObserverIsParkedMidPass pins the one thing
+// re-arming under redeclareMu and mu must never do: WAIT for the observer the
+// halt ended. That goroutine may be inside a pass, so waiting for its done signal
+// would be a cycle. Re-arm spawns without waiting, and the halted observer stays
+// inert on its own — its context is canceled, so every pass it drives is refused
+// — which is what makes "at most one ACTIVE observer" hold by construction.
+//
+// Re-arm DOES take redeclareMu, so it queues behind a pass already in flight for
+// as long as that pass runs. That is 2a's shape, not this change's: rearm has
+// taken redeclareMu as its first statement since it existed. The property under
+// test is therefore that the cycle completes once the pass does, and that the
+// rotation after it runs exactly one pass — not that StartConsumers returns while
+// a pass is parked, which was never true.
+func TestRegistryRearmsWhileThePreviousObserverIsParkedMidPass(t *testing.T) {
+	client := newReconnectingMockClient()
+	registry := newPublisherOnlyRegistry(t, client)
+	key := "exchange:" + testExchangeName
+
+	// Park the first observer inside a pass, then halt it there.
+	gate := testutil.NewBlockedCreate(t)
+	client.locked(func() { client.parkOn, client.parkGate = key, gate })
+	client.newChannel()
+	// Bounded: if no observer is running, nothing ever arrives at the gate, and an
+	// unbounded receive would turn that regression into a package-wide go-test
+	// timeout instead of a failure naming this test.
+	select {
+	case <-gate.Started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no pass reached the gate: the registry is running no observer to park")
+	}
+	registry.StopConsumers()
+
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		close(started)
+		assert.NoError(t, registry.StartConsumers(context.Background()))
+	}()
+	<-started
+
+	// Unpark the halted pass: the re-arm behind it may now proceed.
+	client.locked(func() { client.parkOn, client.parkGate = "", nil })
+	gate.Release()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StartConsumers never completed after the parked pass was released")
+	}
+
+	// The re-arm OWES a pass: the one parked at generation 2 was cut short by the
+	// halt and declared nothing, so the restarted observer replays it at the
+	// generation standing now. Awaited before the rotation below, because otherwise
+	// the owed pass and the rotation race and the recorded generation depends on
+	// which lands first.
+	awaitDeclares(t, client, key, "1", "2")
+
+	// And one more on the next rotation, from the re-armed observer; the halted one
+	// stays refused, because its own context is canceled.
+	client.newChannel()
+	awaitDeclares(t, client, key, "1", "2", "3")
+}
+
+// TestRegistryRepairsATopologyRotatedWhileHalted pins the hole a re-arm would
+// otherwise leave. A pooled publisher's observer outlives StopConsumers — it runs
+// on a background context, not the registry's — so a rotation during the halt
+// reaches redeclareTopologyFrom, which refuses it at the halt guard WITHOUT
+// recording that generation, and the observer then parks on the broadcast it had
+// already taken. The registry's own client did not rotate (the 404 landed on the
+// publisher's channel), so a re-arm that trusted generation equality would skip
+// its restarted pass too, and the topology the broker lost would stay lost until
+// that publisher happened to rotate again — #1761 one lifecycle event later.
+func TestRegistryRepairsATopologyRotatedWhileHalted(t *testing.T) {
+	registryClient := newReconnectingMockClient()
+	registry := newPublisherOnlyRegistry(t, registryClient)
+	key := "exchange:" + testExchangeName
+
+	// A pooled publisher, driven the way Manager.observePublisherChannels drives one.
+	pooled := newReconnectingMockClient()
+	pooledToken := &redeclareToken{source: pooled}
+	registry.redeclareTopologyFrom(context.Background(), pooledToken)
+	awaitDeclares(t, registryClient, key, "1", "1")
+
+	registry.StopConsumers()
+
+	// The operator's exchange delete: only the pooled publisher's channel takes the
+	// 404, and it rotates while repair is halted.
+	pooled.newChannel()
+	registry.redeclareTopologyFrom(context.Background(), pooledToken)
+	assert.Equal(t, []string{"1", "1"}, registryClient.declaresOf(key),
+		"a halted pass must declare nothing")
+
+	require.NoError(t, registry.StartConsumers(context.Background()))
+
+	// One pass, with no further rotation from anyone.
+	awaitDeclares(t, registryClient, key, "1", "1", "1")
+}
+
+// TestRegistryRepairsATopologyPassCutShortByHalt covers the sibling of the
+// refused-pass case: a pass that was IN FLIGHT when StopConsumers halted repair.
+// redeclareTopologyFrom records the generation BEFORE replayTopology, so the
+// interrupted pass counts as handled even though it declared nothing past the
+// declaration it was parked in — and no channel rotated, so no later generation
+// carries the retry that a FAILED declare would get. The re-arm therefore owes
+// that pass.
+func TestRegistryRepairsATopologyPassCutShortByHalt(t *testing.T) {
+	client := newReconnectingMockClient()
+	registry := NewRegistry(client, &stubLogger{})
+	registry.RegisterExchange(&ExchangeDeclaration{Name: testExchangeName, Type: ExchangeTypeTopic, Durable: true})
+	registry.RegisterQueue(&QueueDeclaration{Name: testQueueName})
+	require.NoError(t, registry.DeclareInfrastructure(context.Background()))
+
+	// Park the pass inside the exchange declare, so the queue after it is never
+	// reached, then halt repair while it is parked.
+	gate := testutil.NewBlockedCreate(t)
+	client.locked(func() { client.parkOn, client.parkGate = "exchange:"+testExchangeName, gate })
+	client.newChannel()
+	select {
+	case <-gate.Started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no pass reached the gate: the registry is running no observer to park")
+	}
+	registry.StopConsumers()
+	client.locked(func() { client.parkOn, client.parkGate = "", nil })
+	gate.Release()
+	awaitObserverExit(t, registry.redeclareObserverDone)
+
+	require.Equal(t, []string{"1"}, client.declaresOf("queue:"+testQueueName),
+		"the halted pass must not have reached the queue")
+
+	require.NoError(t, registry.StartConsumers(context.Background()))
+
+	// No rotation follows: the re-arm alone must finish what the halt cut short.
+	awaitDeclares(t, client, "queue:"+testQueueName, "1", "2")
 }

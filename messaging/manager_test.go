@@ -1968,3 +1968,155 @@ func TestEnsureConsumersKeepsTheMapOwnedClientWhenTheStartedLogPanics(t *testing
 	assert.Equal(t, 1, built, "the no-op must not build a replacement client")
 	assert.Equal(t, 0, closed)
 }
+
+// ===== Redeclare driven by a pooled publisher client (#1761) =====
+
+// newQueuedClientFactory hands the manager the given clients in creation order,
+// so a test can tell the consumer client apart from the pooled publisher client
+// the manager builds next.
+func newQueuedClientFactory(t *testing.T, clients ...AMQPClient) ClientFactory {
+	t.Helper()
+	var mu sync.Mutex
+	queue := clients
+	return func(string, logger.Logger) AMQPClient {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(queue) == 0 {
+			// Errorf, not Fatalf: the factory runs inside the singleflight setup
+			// pass, which neither recovers nor forwards a runtime.Goexit.
+			t.Errorf("client factory called more often than the test queued clients")
+			return &simpleMockAMQPClient{isReady: true}
+		}
+		client := queue[0]
+		queue = queue[1:]
+		return client
+	}
+}
+
+// publisherOnlyDeclarations declares one exchange and the publisher targeting
+// it, and no consumer: the shape whose only channel rotation happens on the
+// pooled publisher client.
+func publisherOnlyDeclarations() *Declarations {
+	decls := NewDeclarations()
+	decls.RegisterExchange(&ExchangeDeclaration{Name: testExchangeName, Type: ExchangeTypeTopic, Durable: true})
+	decls.RegisterPublisher(&PublisherDeclaration{Exchange: testExchangeName, RoutingKey: testKeyValue, EventType: testEventType})
+	return decls
+}
+
+// newPooledPublisherManager wires the shape every pooled-publisher test needs: a
+// manager whose factory hands out consumerClient and then publisherClient, a
+// declared publisher-only registry, and the pooled publisher itself, already
+// released back to the pool. Closing the manager is left to the caller, because
+// half these tests close it as the act under test.
+func newPooledPublisherManager(t *testing.T, consumerClient, publisherClient AMQPClient) (*Manager, *stampingPublisher) {
+	t.Helper()
+	m := NewMessagingManager(&stubMessagingSource{}, logger.New("error", false), ManagerOptions{},
+		newQueuedClientFactory(t, consumerClient, publisherClient))
+	require.NoError(t, m.EnsureConsumers(context.Background(), "", publisherOnlyDeclarations()))
+
+	publisher, release, err := m.Publisher(context.Background(), "")
+	require.NoError(t, err)
+	release()
+	pooled, ok := publisher.(*stampingPublisher)
+	require.True(t, ok, "the pool must hand back the framework's own wrapper")
+	return m, pooled
+}
+
+// TestManagerRedeclaresTopologyFromAPooledPublisherChannel is the acceptance test
+// for the second redeclare driver: the client that eats the broker's 404 is a
+// pooled publisher, not the registry's own, so a rotation only that client saw
+// still has to run a pass — and the pass has to declare through the registry's
+// own client, because that is the connection the registry owns.
+func TestManagerRedeclaresTopologyFromAPooledPublisherChannel(t *testing.T) {
+	consumerClient, publisherClient := newReconnectingMockClient(), newReconnectingMockClient()
+	m, _ := newPooledPublisherManager(t, consumerClient, publisherClient)
+	t.Cleanup(func() { _ = m.Close() })
+
+	// Every recorded generation is the DECLARING client's own, and the consumer
+	// client never rotates here — the pooled publisher does.
+	key := "exchange:" + testExchangeName
+	// The pooled client numbers its channels independently of the registry's, so
+	// its first ready channel is already a generation the registry never declared
+	// on: one pass lands before the first publish.
+	awaitDeclares(t, consumerClient, key, "1", "1")
+	// And one per rotation after it — the rotation an operator's exchange delete
+	// causes, which only this client sees.
+	publisherClient.newChannel()
+	awaitDeclares(t, consumerClient, key, "1", "1", "1")
+	assert.Empty(t, publisherClient.declaresOf(key), "the pass must declare through the registry's own client")
+}
+
+// TestManagerPublisherChannelObserverEndsWithItsClient pins that the observer the
+// manager attaches to a pooled publisher cannot outlive it: the pool stops the
+// observer and closes the client on eviction, on the idle sweep and on Close, and
+// a goroutine that survived any of those would leak one per retired client.
+func TestManagerPublisherChannelObserverEndsWithItsClient(t *testing.T) {
+	m, pooled := newPooledPublisherManager(t, newReconnectingMockClient(), newReconnectingMockClient())
+	require.NotNil(t, pooled.observerDone, "the pooled publisher was never observed")
+
+	require.NoError(t, m.Close())
+
+	select {
+	case <-pooled.observerDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pooled publisher's redeclare observer outlived the manager")
+	}
+}
+
+// TestManagerForgetsAPooledPublisherOnceItCloses pins the bookkeeping the
+// per-source guard makes possible to get wrong: a registry outlives every
+// publisher the pool evicts, so a generation entry that is never dropped
+// accumulates one dead source per eviction for the process lifetime.
+func TestManagerForgetsAPooledPublisherOnceItCloses(t *testing.T) {
+	publisherClient := newReconnectingMockClient()
+	m, _ := newPooledPublisherManager(t, newReconnectingMockClient(), publisherClient)
+	t.Cleanup(func() { _ = m.Close() })
+
+	registry := m.registryFor("")
+	require.NotNil(t, registry)
+	require.Eventually(t, func() bool {
+		return redeclareSourceCount(registry) == 2
+	}, 5*time.Second, time.Millisecond, "the pooled publisher never became a recorded source")
+
+	// What an LRU eviction or the idle sweep does to a pooled client.
+	require.NoError(t, publisherClient.Close())
+
+	require.Eventually(t, func() bool {
+		return redeclareSourceCount(registry) == 1
+	}, 5*time.Second, time.Millisecond, "the closed publisher's generation entry outlived it")
+}
+
+// neverClosingBroadcastClient keeps announcing new channels after Close. That is
+// allowed: answering (nil, false) once closed is AMQPClientImpl's behavior, not a
+// contract every ClientFactory product shares. It makes the pool closer's stop the
+// ONLY thing that can retire this client's observer, which is the reason that stop
+// exists.
+type neverClosingBroadcastClient struct {
+	*reconnectingMockClient
+}
+
+func (c *neverClosingBroadcastClient) channelReadyNotify() (ready <-chan struct{}, open bool) {
+	announced, _ := c.reconnectingMockClient.channelReadyNotify()
+	if announced == nil {
+		announced = make(chan struct{})
+	}
+	return announced, true
+}
+
+// TestManagerStopsAPublisherObserverWhoseClientKeepsAnnouncing pins that retiring
+// a pooled publisher ends its observer through the pool closer, not by relying on
+// the client's own end. A client that never closes its broadcast would otherwise
+// leak one goroutine per pooled client for the process lifetime.
+func TestManagerStopsAPublisherObserverWhoseClientKeepsAnnouncing(t *testing.T) {
+	publisherClient := &neverClosingBroadcastClient{reconnectingMockClient: newReconnectingMockClient()}
+	m, pooled := newPooledPublisherManager(t, newReconnectingMockClient(), publisherClient)
+	require.NotNil(t, pooled.observerDone, "the pooled publisher was never observed")
+
+	require.NoError(t, m.Close())
+
+	select {
+	case <-pooled.observerDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the observer outlived a client that keeps announcing; the pool closer's stop never reached it")
+	}
+}

@@ -115,6 +115,9 @@ type Registry struct {
 	// written concurrently. Lock order is redeclareMu before mu, including in
 	// DeclareInfrastructure, which seeds handledGenerations.
 	redeclareMu sync.Mutex
+	// repairOwed records a pass the halt refused or cut short, so the next re-arm
+	// replays it. Guarded by redeclareMu.
+	repairOwed bool
 	// redeclareSkip holds declarations refused with PRECONDITION_FAILED. Guarded by redeclareMu.
 	redeclareSkip map[string]struct{}
 	// redeclareDone is the Done channel of this registry's topology-repair
@@ -136,8 +139,11 @@ type Registry struct {
 	cancelRedeclare context.CancelFunc
 	// redeclareObserverDone is closed when the observer this registry runs on its
 	// own client returns, as the client's reconnectDone is, so a test can confirm
-	// the exit instead of waiting on a leak. Nil until DeclareInfrastructure
-	// starts an observer, and it starts at most one.
+	// the exit instead of waiting on a leak. Nil until DeclareInfrastructure starts
+	// the first observer. A re-arm after StopConsumers starts another and REPLACES
+	// this field, so it always names the ACTIVE observer; each goroutine closes the
+	// channel it captured at spawn, so one still winding down never closes a
+	// later one's.
 	redeclareObserverDone chan struct{}
 }
 
@@ -455,6 +461,11 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 
 // StartConsumers starts all registered consumers with handlers.
 // This should be called after DeclareInfrastructure and before starting the main application.
+//
+// It blocks while a redeclare pass is in flight on a halted registry: re-arming takes the pass
+// mutex, which a pass holds across declare RPCs no context cancels. The framework's own path
+// never hits that wait (a Manager-built registry is always freshly declared here, so the re-arm
+// short-circuits), but a consumer calling this directly after StopConsumers can.
 // It also re-arms topology repair after a StopConsumers, so the consumer-driven
 // pass survives a stop/start cycle.
 func (r *Registry) StartConsumers(ctx context.Context) error {
@@ -530,22 +541,77 @@ func (r *Registry) StartConsumers(ctx context.Context) error {
 }
 
 // rearmRedeclaring reopens topology repair on a registry that declared and was
-// then halted by StopConsumers, so a stop/start cycle leaves the consumer-driven
-// pass working instead of refused for the registry's lifetime. It runs before
-// StartConsumers takes mu, because writing redeclareDone needs redeclareMu first.
-// The new-channel observer is NOT restarted — DeclareInfrastructure starts it at
-// most once — so after a stop a consumer re-subscribe is the only driver left.
+// then halted by StopConsumers, and starts a fresh observer on the reopened
+// repair lifetime, so a stop/start cycle leaves BOTH drivers working instead of
+// refused for the registry's lifetime. For a publisher-only registry the observer
+// is the only driver the registry owns, so without the respawn the cycle would
+// retire repair for the rest of the process — #1761 one lifecycle event later.
+//
+// It runs before StartConsumers takes mu, because writing redeclareDone needs
+// redeclareMu first.
+//
+// It never WAITS for the observer the halt ended, which is the one thing these
+// locks cannot survive: that goroutine may be inside a pass holding redeclareMu,
+// so waiting for its done signal while holding redeclareMu is the cycle. It does
+// not need to. The old observer drives its passes on the context it captured at
+// spawn, which the halt canceled, and redeclareTopologyFrom's loop guard checks
+// THAT context — not redeclareHalted, which reads the registry's field and is
+// false again the moment this function replaces it. It also closes only the done
+// channel it captured, never the field. At most one observer is ACTIVE even while
+// an old one is still winding down.
 func (r *Registry) rearmRedeclaring(ctx context.Context) {
+	// Pre-checked under mu ALONE, which is legal because redeclareDone is written
+	// under redeclareMu and mu both, so either lock reads it. The point is to keep
+	// the common case — a start with nothing halted — off redeclareMu entirely: a
+	// pass holds that mutex across broker RPCs no context cancels, and the caller
+	// above us holds the manager-wide consMu across this whole call, so queueing
+	// here would stall every other key's EnsureConsumers behind one slow broker.
+	r.mu.RLock()
+	needsRearm := r.declared && r.redeclareHalted()
+	r.mu.RUnlock()
+	if !needsRearm {
+		return
+	}
+
 	r.redeclareMu.Lock()
 	defer r.redeclareMu.Unlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Re-checked under both locks: the pre-check is advisory, and a StartConsumers
+	// racing another one must not re-arm twice.
 	if !r.declared || !r.redeclareHalted() {
 		return
 	}
+	// ctx is a setup budget that expires; repair lives as long as the registry,
+	// so it keeps the values (trace, tenant) and drops the deadline.
 	redeclareCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	r.redeclareDone, r.cancelRedeclare = redeclareCtx.Done(), cancel
+
+	// A pass the halt refused, or cut short once it was already replaying, owes one
+	// now — and the ledger cannot be trusted either way. A refusal returns before
+	// the ledger write, so nothing records it; an interrupted pass DID record its
+	// generation yet declared only as far as it got, which is why this empties the
+	// ledger rather than seeding it. Neither earns the retry a FAILED declare gets,
+	// because that one closes the channel and the next generation carries it, while
+	// a halt rotates nothing — and a pooled publisher's observer, which survives the
+	// halt on its background context, has already parked on the broadcast it took.
+	//
+	// Emptying drops POOLED entries too, which costs nothing: observeChannelReady
+	// parks on the NEXT broadcast, so a parked observer's following pass already
+	// carries a new generation and would pass the guard either way.
+	//
+	// Narrowed to the owed case deliberately: a stop/start that neither refused nor
+	// interrupted a pass leaves the guard alone, so a re-subscribe still runs at
+	// most one pass per generation. Every pass declares the same broker-global
+	// topology through the registry's own client, and declares are idempotent, so a
+	// redundant one costs round-trips.
+	if r.repairOwed {
+		clear(r.handledGenerations)
+		r.repairOwed = false
+	}
+
+	r.spawnRedeclareObserverLocked(redeclareCtx)
 }
 
 // StopConsumers gracefully stops all running consumers and halts topology repair
@@ -1078,7 +1144,23 @@ func (r *Registry) startRedeclaring(ctx context.Context) {
 	// so it keeps the values (trace, tenant) and drops the deadline.
 	redeclareCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	r.redeclareDone, r.cancelRedeclare = redeclareCtx.Done(), cancel
+	r.spawnRedeclareObserverLocked(redeclareCtx)
+}
 
+// spawnRedeclareObserverLocked starts the goroutine that redeclares on every new
+// channel generation of the registry's OWN client, on redeclareCtx. A client that
+// does not announce its channels gets none — the consumer re-subscribe is then
+// the registry's only driver, and the halt signal still refuses passes.
+//
+// The caller holds redeclareMu AND mu: both spawn sites (DeclareInfrastructure's
+// first declare, and a re-arm after StopConsumers) already hold them, and a
+// goroutine that blocks on a mutex its spawner is about to release is not a
+// lock-order problem. Waiting for a previous observer here WOULD be — see
+// rearmRedeclaring.
+//
+// Each goroutine closes the done channel it captured, never the field, so an
+// observer still winding down cannot close a later one's channel.
+func (r *Registry) spawnRedeclareObserverLocked(redeclareCtx context.Context) {
 	source, ok := r.client.(redeclareSource)
 	if !ok {
 		return
@@ -1194,6 +1276,18 @@ func (r *Registry) redeclareTopologyFrom(ctx context.Context, token *redeclareTo
 		}
 		r.handledGenerations[token] = generation
 		r.replayTopology(ctx, generation)
+	}
+	// Falling out of the loop means the halt (or this driver's own context) ended
+	// the pass rather than the generation guard, which returns above.
+	if r.redeclareHalted() {
+		// Refused before the ledger write, or cut short after it: either way the
+		// next re-arm owes this pass, because no channel rotated to carry a retry.
+		//
+		// A pass that declared EVERYTHING and was halted only between the last
+		// declare and this check is owed too, which is imprecise on purpose: the
+		// alternative is carrying "did it finish" out of replayTopology, and the
+		// cost of the imprecision is one idempotent replay at the next re-arm.
+		r.repairOwed = true
 	}
 }
 
@@ -1585,4 +1679,15 @@ func (r *Registry) Bindings() []*BindingDeclaration {
 	bindings := make([]*BindingDeclaration, len(r.bindings))
 	copy(bindings, r.bindings)
 	return bindings
+}
+
+// forgetRedeclareSource drops a source's entry from the generation ledger, which
+// its driver calls as it stops. The ledger is de-dup state, not a record of who
+// may declare: a source that comes back gets a fresh token and re-earns its first
+// pass, which is one redundant declare, while never forgetting would hold a dead
+// client pointer per retired publisher for the registry's lifetime.
+func (r *Registry) forgetRedeclareSource(token *redeclareToken) {
+	r.redeclareMu.Lock()
+	defer r.redeclareMu.Unlock()
+	delete(r.handledGenerations, token)
 }
