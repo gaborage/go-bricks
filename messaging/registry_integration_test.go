@@ -30,10 +30,16 @@ func newRedeclareFixture(t *testing.T, log logger.Logger, exchange, queue string
 
 	// Registered before the registry: t.Cleanup is LIFO, so consumers stop
 	// before these deletes run and cannot re-declare the queue behind them.
+	//
+	// The two deletes run on SEPARATE channels. A test that removed the queue
+	// itself leaves QueueDelete a 404, which is a channel-level exception: on one
+	// shared channel that close would take the exchange delete with it and leak
+	// the exchange on a broker every test in the package shares.
 	adminCh := dialChannel(t, brokerURL)
+	exchangeCh := dialChannel(t, brokerURL)
 	t.Cleanup(func() {
 		_, _ = adminCh.QueueDelete(queue, false, false, false)
-		_ = adminCh.ExchangeDelete(exchange, false, false)
+		_ = exchangeCh.ExchangeDelete(exchange, false, false)
 	})
 	return client, adminCh
 }
