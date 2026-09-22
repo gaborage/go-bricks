@@ -48,13 +48,13 @@ ALLOWED="integration race windows"
 # the file — the race passes would then scan nothing and still exit 0.
 tags_of() { local expr="${1#*//go:build}"; expr="${expr//$'\r'/}"; echo "${expr//[()!\&|]/ }"; }
 
-if [ "${1:-}" = "--packages-for" ]; then
+if [[ "${1:-}" == "--packages-for" ]]; then
   # No cd: git grep scopes to the caller's directory and prints paths relative
   # to it, which is exactly the scoping a submodule needs.
-  want="${2:-}"; [ -n "$want" ] || die "--packages-for needs a tag"
+  want="${2:-}"; [[ -n "${want}" ]] || die "--packages-for needs a tag"
   while IFS=: read -r file _line expr; do
     for tag in $(tags_of "$expr"); do
-      if [ "$tag" = "$want" ]; then printf './%s\n' "$(dirname "$file")"; fi
+      if [[ "${tag}" == "${want}" ]]; then printf './%s\n' "$(dirname "${file}")"; fi
     done
   done < <(git grep -nE '^[[:space:]]*//go:build' -- '*.go' '*.s') | sort -u
   exit 0
@@ -71,11 +71,15 @@ violations=$(
         # the Go 1.17 migration shape gofmt still preserves) is legal and its
         # //go:build sibling is parsed below, so flagging it would fail a legal
         # file for style.
-        if ! git grep -qE '^[[:space:]]*//go:build' -- "$file"; then
+        # --literal-pathspecs: a tracked filename may itself contain glob
+        # characters, and without it `-- "$file"` is a PATHSPEC — `x*.go` would
+        # match a sibling's //go:build and the unpaired line would pass as paired.
+        if ! git --literal-pathspecs grep -qE '^[[:space:]]*//go:build' -- "$file"; then
           printf '%s: legacy +build constraint with no //go:build sibling\n' "$file"
         fi
         continue
         ;;
+      *) ;;  # any other constraint line falls through to tag parsing
     esac
     for tag in $(tags_of "$expr"); do
       case " $ALLOWED " in
@@ -86,7 +90,7 @@ violations=$(
   done < <(git grep -nE '^[[:space:]]*(//go:build|// \+build)' -- '*.go' '*.s') | sort -u
 )
 
-[ -n "$violations" ] || exit 0
+[[ -n "${violations}" ]] || exit 0
 
 printf '%s\n' "$violations"
 cat >&2 <<'MSG'

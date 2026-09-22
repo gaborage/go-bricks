@@ -95,6 +95,9 @@ jobs:
           filters: |
             framework:
               - '**/*.go'
+              # The guard scans .s too, so an assembly-only change must reach the
+              # jobs that run it — same reasoning as '**/*.go' above (#1757).
+              - '**/*.s'
               - 'go.mod'
               - 'go.sum'
               - 'Makefile'
@@ -107,6 +110,7 @@ jobs:
               - '**/testdata/**'
             migrate_tool:
               - 'tools/migration/**/*.go'
+              - 'tools/migration/**/*.s'
               - 'tools/migration/go.mod'
               - 'tools/migration/go.sum'
               - 'tools/migration/Makefile'
