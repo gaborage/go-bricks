@@ -345,8 +345,10 @@ side, or extend the allowlist and say which pass does.
 
 **What the guard does catch, deliberately.** An INDENTED `//go:build` — `go/build` trims the line
 before recognising a constraint, so an indented one is live and the scan is anchored to see it. A
-legacy `// +build` line with no `//go:build` sibling, which Go still honours: it is refused outright
-rather than parsed, with its own message. Both `.go` and `.s` sources. And tags are read LITERALLY:
+legacy `// +build` line with NO `//go:build` sibling, which Go still honours: it is refused outright
+rather than parsed, with its own message. The dual form — both lines, the Go 1.17 migration shape
+`gofmt` still preserves — is legal and passes, because its `//go:build` line is the one parsed. Both
+`.go` and `.s` sources. And tags are read LITERALLY:
 `set -f` is on, so a tag carrying a glob is never path-expanded and a crafted filename cannot steer
 a tag into the allowlist.
 
