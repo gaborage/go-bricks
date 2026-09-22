@@ -1,79 +1,68 @@
 #!/usr/bin/env bash
-# Build-tag tooling for the closed tag class (#1757).
+# Build-tag tooling for the closed tag class (#1757). Two jobs, one tokenizer:
 #
-# A file behind a build tag is invisible to every pass that does not name that
-# tag, and a gate that reads nothing still exits 0. Two jobs, one tokenizer:
+#   (no args)             guard: fail when a tag appears that no pass reads.
+#                         Prints `path: tag` per violation, exits 1; silent 0.
+#   --packages-for <tag>  print the package directory of every tracked .go file
+#                         whose //go:build expression mentions <tag>, negated or
+#                         not, one `./path` per line, relative to the CALLER's
+#                         directory — so a submodule scopes the query simply by
+#                         running it from its own root. Empty output is a valid
+#                         answer the caller must handle; see wiki/linting.md for
+#                         why an empty package list is not "nothing to do".
 #
-#   (no args)              guard: fail when a tag appears that no pass reads.
-#                          Prints `path: tag` per violation, exits 1; silent 0.
-#   --packages-for <tag> [pathspec...]
-#                          print the package directory of every tracked .go file
-#                          whose //go:build expression mentions <tag>, negated or
-#                          not, one `./path` per line, REPO-ROOT-relative (a
-#                          submodule caller passes a pathspec and rewrites the
-#                          prefix). Empty output is a valid answer and the caller
-#                          must handle it: aiming
-#                          golangci-lint at an empty package list fails with
-#                          `no go files to analyze`, exit 5, which reads as a
-#                          lint failure rather than "nothing to do".
-#
-# Tracked .go files only, `_test.go` included. The expression is tokenized, never
-# substring-matched: `myrace` and `race_detector` are not `race`.
-set -uo pipefail
+# Only EXPLICIT //go:build expressions are read. Go's implicit filename
+# constraints (foo_darwin.go, foo_arm64.go) are invisible here; the tree's one
+# GOOS-constrained file, migration/proc_windows.go, carries the explicit tag too.
+set -euo pipefail
 
-# One entry per tag, each naming the pass that reads it. Negations are implied:
-# `!x` is covered by whichever pass reads the UNtagged side.
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+# One entry per tag, each naming the pass that reads it. A NEGATED occurrence
+# still requires its base name here: `!x` implies an `x` side somewhere that
+# needs a pass of its own, so the guard asks for the entry either way.
 #   integration — golangci `run.build-tags: [integration]` (make lint, both CI
 #                 lint jobs) and gosec invocation 1 (`-tags integration`).
-#   race        — the race-scoped golangci pass and gosec invocation 2
-#                 (`-tags integration,race`), both over --packages-for race.
+#   race        — make lint-race and gosec invocation 2 (`-tags integration,race`),
+#                 both over --packages-for race.
 #   windows     — CI's `GOOS: windows` golangci pass and gosec invocation 3
 #                 (`GOOS=windows`). The `!windows` side is the default build.
 ALLOWED="integration race windows"
 
-cd "$(git rev-parse --show-toplevel)" || exit 1
-
-# tags_of <expression> — the identifiers in one //go:build expression, one per
-# line. Operators and parentheses are separators; `!` binds to its term and a
-# negated tag is the same tag for both callers.
-tags_of() {
-  printf '%s\n' "${1#*//go:build}" \
-    | tr '()!' '   ' \
-    | sed 's/&&/ /g; s/||/ /g' \
-    | tr -s '[:space:]' '\n' \
-    | grep -v '^$' || true
-}
+# tags_of <//go:build line> — the identifiers in one expression, space separated.
+# Operators and parentheses are separators; `!` binds to its term, and a negated
+# tag is the same tag to both callers.
+tags_of() { local expr="${1#*//go:build}"; echo "${expr//[()!\&|]/ }"; }
 
 if [ "${1:-}" = "--packages-for" ]; then
-  want="${2:?--packages-for needs a tag}"
-  shift 2
-  # git ORs multiple pathspecs, so a caller's scope cannot be ANDed with a `*.go`
-  # pathspec — the .go filter is applied per line instead.
-  scope=("$@"); [ ${#scope[@]} -eq 0 ] && scope=(.)
+  # No cd: git grep scopes to the caller's directory and prints paths relative
+  # to it, which is exactly the scoping a submodule needs.
+  want="${2:-}"; [ -n "$want" ] || die "--packages-for needs a tag"
   while IFS=: read -r file _line expr; do
-    case "$file" in *.go) ;; *) continue ;; esac
     for tag in $(tags_of "$expr"); do
-      [ "$tag" = "$want" ] && printf './%s\n' "$(dirname "$file")"
+      if [ "$tag" = "$want" ]; then printf './%s\n' "$(dirname "$file")"; fi
     done
-  done < <(git grep -n '^//go:build' -- "${scope[@]}") | sort -u
+  done < <(git grep -n '^//go:build' -- '*.go') | sort -u
   exit 0
 fi
 
-violations=""
-while IFS=: read -r file _line expr; do
-  for tag in $(tags_of "$expr"); do
-    case " $ALLOWED " in
-      *" $tag "*) ;;
-      *) violations="${violations}${file}: ${tag}"$'\n' ;;
-    esac
-  done
-done < <(git grep -n '^//go:build' -- '*.go')
+ROOT="$(git rev-parse --show-toplevel)" || die "not in a git repo"
+cd "$ROOT"
 
-if [ -z "$violations" ]; then
-  exit 0
-fi
+violations=$(
+  while IFS=: read -r file _line expr; do
+    for tag in $(tags_of "$expr"); do
+      case " $ALLOWED " in
+        *" $tag "*) ;;
+        *) printf '%s: %s\n' "$file" "$tag" ;;
+      esac
+    done
+  done < <(git grep -n '^//go:build' -- '*.go') | sort -u
+)
 
-printf '%s' "$violations" | sort -u
+[ -n "$violations" ] || exit 0
+
+printf '%s\n' "$violations"
 cat >&2 <<'MSG'
 
 check-build-tags: a build tag appeared that no lint or security pass reads.

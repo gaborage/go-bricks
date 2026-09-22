@@ -111,6 +111,9 @@ jobs:
               - 'tools/migration/go.sum'
               - 'tools/migration/Makefile'
               - '.github/workflows/ci-v2.yml'
+              # This module's lint-race and sec run ../../scripts/check-build-tags.sh,
+              # so the same entry the framework filter carries is needed here too.
+              - 'scripts/**'
               - 'tools/migration/**/testdata/**'
             code:
               - '**/*.go'
@@ -789,11 +792,9 @@ jobs:
           working-directory: tools/migration
           args: --timeout=5m
 
-      # The race side of the race/!race pair. .golangci.yml cannot declare `race`
-      # without blinding the `!race` sibling, so it is a second invocation over the
-      # race-tagged packages only, skipped when that list is empty (an empty package
-      # list makes golangci-lint exit 5). Delegated to the make target so local and
-      # CI run one definition; this module has no race-tagged file, so it skips.
+      # The race side of the race/!race pair (#1757; rationale in wiki/linting.md).
+      # Delegated to the make target so local and CI run one definition; this module
+      # has no race-tagged file, so it skips.
       - name: golangci-lint race pass (migrate tool)
         working-directory: tools/migration
         run: make lint-race
@@ -875,8 +876,7 @@ jobs:
           version: v2.13.2
           args: --timeout=5m
 
-      # See the migrate-tool job for why this is a second invocation rather than a
-      # config entry. internal/racedetect/race.go is read by this pass and no other.
+      # internal/racedetect/race.go is read by this pass and no other (#1757).
       - name: golangci-lint race pass (framework)
         run: make lint-race
 

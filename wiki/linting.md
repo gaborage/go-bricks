@@ -343,6 +343,14 @@ fails with `path: tag` when a tag falls outside its allowlist. The allowlist liv
 with one comment per entry naming the pass that covers it. To add a tag, add a pass that reads its
 side, or extend the allowlist and say which pass does.
 
+**What the guard does not catch.** It reads EXPLICIT `//go:build` expressions only,
+so Go's implicit filename constraints (`foo_darwin.go`, `foo_arm64.go`) are invisible to it — the
+tree's one GOOS-constrained file, `migration/proc_windows.go`, carries the explicit tag as well.
+And the allowlist asserts in a comment that a pass covers each tag; it does not verify it. Delete a
+pass and the guard stays green while its files go unread — it closes "an unknown tag appeared", not
+"a known tag lost its pass". Making the tag-to-pass mapping executable (one table the guard, the
+Makefiles and this page all read) would close that too, and is tracked separately.
+
 **Two traps this shape exists to avoid.** golangci-lint aimed at an empty package list fails with
 `no go files to analyze` and exit 5, which reads as a lint failure rather than "nothing to do" —
 both race passes therefore check the list and skip with a message. And `GOOS=windows go run

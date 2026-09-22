@@ -12,13 +12,13 @@ GOVULNCHECK_VERSION := v1.8.0
 # Keep in sync with the other module's Makefile.
 # renovate: datasource=go depName=github.com/securego/gosec/v2
 GOSEC_VERSION := v2.29.0
-# Installed, not `go run`: `GOOS=windows go run <tool>@version` cross-compiles the
-# TOOL and dies with `exec format error` (#1757). Version-stamped path so a pin
-# bump cannot be served a stale binary.
-GOSEC_BIN := $(CURDIR)/.tools/gosec-$(GOSEC_VERSION)/gosec
-# Race-tagged packages in THIS module, repo-root paths rewritten module-relative.
-# There are none today, so both race passes below skip — visibly, on purpose.
-RACE_PKGS_CMD = ../../scripts/check-build-tags.sh --packages-for race tools/migration | sed 's|^\./tools/migration|.|'
+# Installed, not `go run`, for the reason on the root Makefile's GOSEC_DIR (#1757).
+GOSEC_DIR := $(CURDIR)/.tools/gosec-$(GOSEC_VERSION)
+GOSEC_BIN := $(GOSEC_DIR)/gosec
+# Race-tagged packages in THIS module: the query scopes itself to the directory it
+# runs from, so no path rewriting. There are none today, so both race passes below
+# skip — visibly, on purpose.
+RACE_PKGS_CMD = ../../scripts/check-build-tags.sh --packages-for race
 # Keep in sync with the other module's Makefile and CI (ci-v2.yml golangci-lint-action version).
 # renovate: datasource=go depName=github.com/golangci/golangci-lint/v2
 GOLANGCI_LINT_VERSION := v2.13.2
@@ -79,7 +79,7 @@ verify-mod: ## Verify go.mod/go.sum are tidy (mirrors CI)
 	go mod tidy
 	git diff --exit-code go.mod go.sum
 
-dev-deps: ## Install development dependencies
+dev-deps: $(GOSEC_BIN) ## Install development dependencies
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 # GOWORK=off for the reason spelled out on the root Makefile's `vuln` target:
@@ -90,8 +90,8 @@ dev-deps: ## Install development dependencies
 vuln: ## Run govulncheck vulnerability scan (pinned + GOWORK=off, mirroring CI)
 	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
-sec: ## Run gosec security scanner (pinned; identical to CI)
-	@$(MAKE) --no-print-directory $(GOSEC_BIN)
+# Three invocations, for the reason on the root Makefile's `sec` (#1757).
+sec: $(GOSEC_BIN) ## Run gosec security scanner (pinned; identical to CI)
 	$(GOSEC_BIN) -tags integration ./cmd/... ./internal/...
 	@pkgs="$$($(RACE_PKGS_CMD))"; \
 	if [ -z "$$pkgs" ]; then \
@@ -102,11 +102,8 @@ sec: ## Run gosec security scanner (pinned; identical to CI)
 	fi
 	GOOS=windows $(GOSEC_BIN) -tags integration ./cmd/... ./internal/...
 
-# Three invocations for the same reason as the root module (#1757); this module
-# carries no race- or windows-tagged file today, so the race scan skips and the
-# GOOS pass simply re-reads the same files under a windows GOOS.
 $(GOSEC_BIN):
-	GOBIN=$(dir $(GOSEC_BIN)) go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
+	GOBIN=$(GOSEC_DIR) go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
 
 release-dry-run: ## Test release build without publishing
 	@echo "Testing release build for version: $(VERSION)"
