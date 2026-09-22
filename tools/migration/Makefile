@@ -1,4 +1,4 @@
-.PHONY: help build test lint fmt update clean install check test-coverage validate-cli dev-deps release-dry-run vuln sec verify-mod
+.PHONY: help build test lint lint-race fmt update clean install check test-coverage validate-cli dev-deps release-dry-run vuln sec verify-mod
 # verify-mod mutates go.mod/go.sum via `go mod tidy` — under `make -j check`
 # that would race lint/test reading the same module files. Force check's
 # prerequisites to run serially regardless of -j.
@@ -12,6 +12,13 @@ GOVULNCHECK_VERSION := v1.8.0
 # Keep in sync with the other module's Makefile.
 # renovate: datasource=go depName=github.com/securego/gosec/v2
 GOSEC_VERSION := v2.29.0
+# Installed, not `go run`, for the reason on the root Makefile's GOSEC_DIR (#1757).
+GOSEC_DIR := $(CURDIR)/.tools/gosec-$(GOSEC_VERSION)
+GOSEC_BIN := $(GOSEC_DIR)/gosec
+# Race-tagged packages in THIS module: the query scopes itself to the directory it
+# runs from, so no path rewriting. There are none today, so both race passes below
+# skip — visibly, on purpose.
+RACE_PKGS_CMD = ../../scripts/check-build-tags.sh --packages-for race
 # Keep in sync with the other module's Makefile and CI (ci-v2.yml golangci-lint-action version).
 # renovate: datasource=go depName=github.com/golangci/golangci-lint/v2
 GOLANGCI_LINT_VERSION := v2.13.2
@@ -32,6 +39,16 @@ test-coverage: ## Run tests with coverage
 
 lint: ## Run golangci-lint (pinned; identical to CI)
 	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run
+	@$(MAKE) --no-print-directory lint-race
+
+lint-race: ## Lint the race side (own target so CI calls the same definition; empty here today)
+	@pkgs="$$($(RACE_PKGS_CMD))"; \
+	if [ -z "$$pkgs" ]; then \
+		echo "lint-race: no race-tagged packages in tools/migration — skipped"; \
+	else \
+		echo "lint-race: (integration,race) over $$pkgs"; \
+		go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run --build-tags=integration,race $$pkgs; \
+	fi
 
 # Mirrors the root Makefile: golangci-lint resolves ../../.golangci.yml from
 # here, so this module is held to the same formatters block (gofumpt + gci) and
@@ -62,7 +79,7 @@ verify-mod: ## Verify go.mod/go.sum are tidy (mirrors CI)
 	go mod tidy
 	git diff --exit-code go.mod go.sum
 
-dev-deps: ## Install development dependencies
+dev-deps: $(GOSEC_BIN) ## Install development dependencies
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 # GOWORK=off for the reason spelled out on the root Makefile's `vuln` target:
@@ -73,8 +90,20 @@ dev-deps: ## Install development dependencies
 vuln: ## Run govulncheck vulnerability scan (pinned + GOWORK=off, mirroring CI)
 	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
-sec: ## Run gosec security scanner (pinned; identical to CI)
-	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) ./cmd/... ./internal/...
+# Three invocations, for the reason on the root Makefile's `sec` (#1757).
+sec: $(GOSEC_BIN) ## Run gosec security scanner (pinned; identical to CI)
+	$(GOSEC_BIN) -tags integration ./cmd/... ./internal/...
+	@pkgs="$$($(RACE_PKGS_CMD))"; \
+	if [ -z "$$pkgs" ]; then \
+		echo "sec: no race-tagged packages in tools/migration — race scan skipped"; \
+	else \
+		echo "sec: race scan (integration,race) over $$pkgs"; \
+		$(GOSEC_BIN) -tags integration,race $$pkgs; \
+	fi
+	GOOS=windows $(GOSEC_BIN) -tags integration ./cmd/... ./internal/...
+
+$(GOSEC_BIN):
+	GOBIN=$(GOSEC_DIR) go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
 
 release-dry-run: ## Test release build without publishing
 	@echo "Testing release build for version: $(VERSION)"

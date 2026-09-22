@@ -95,21 +95,35 @@ jobs:
           filters: |
             framework:
               - '**/*.go'
+              # The guard scans .s too, so an assembly-only change must reach the
+              # jobs that run it — same reasoning as '**/*.go' above (#1757).
+              - '**/*.s'
               - 'go.mod'
               - 'go.sum'
               - 'Makefile'
               - '.golangci.yml'
               - '.github/workflows/ci-v2.yml'
+              # scripts/ holds the build-tag guard and the race package query the
+              # lint and security jobs run (#1757). Without this entry, editing
+              # them alone would skip the very jobs that execute them.
+              - 'scripts/**'
               - '**/testdata/**'
             migrate_tool:
               - 'tools/migration/**/*.go'
+              - 'tools/migration/**/*.s'
               - 'tools/migration/go.mod'
               - 'tools/migration/go.sum'
               - 'tools/migration/Makefile'
               - '.github/workflows/ci-v2.yml'
+              # This module's lint-race and sec run ../../scripts/check-build-tags.sh,
+              # so the same entry the framework filter carries is needed here too.
+              - 'scripts/**'
               - 'tools/migration/**/testdata/**'
             code:
               - '**/*.go'
+              # Assembly is compiled code, so the test, coverage, merge and Sonar
+              # jobs that gate on `code` must see an .s-only change (#1757).
+              - '**/*.s'
               - 'go.mod'
               - 'go.sum'
               - 'go.work'
@@ -785,6 +799,13 @@ jobs:
           working-directory: tools/migration
           args: --timeout=5m
 
+      # The race side of the race/!race pair (#1757; rationale in wiki/linting.md).
+      # Delegated to the make target so local and CI run one definition; this module
+      # has no race-tagged file, so it skips.
+      - name: golangci-lint race pass (migrate tool)
+        working-directory: tools/migration
+        run: make lint-race
+
   security-migrate-tool:
     permissions:
       contents: read
@@ -861,6 +882,15 @@ jobs:
         with:
           version: v2.13.2
           args: --timeout=5m
+
+      # internal/racedetect/race.go is read by this pass and no other (#1757).
+      - name: golangci-lint race pass (framework)
+        run: make lint-race
+
+      # Keeps the tag set a closed class: fails when a //go:build tag appears that
+      # no lint or security pass reads, so the next tag cannot arrive unnoticed.
+      - name: Build-tag allowlist guard
+        run: make check-tags
 
   security-framework:
     permissions:

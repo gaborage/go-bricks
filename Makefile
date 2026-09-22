@@ -1,4 +1,4 @@
-.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint lint-md fmt update clean check docker-check vuln sec verify-mod mutate mutate-baseline release release-cli
+.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint lint-md fmt update clean check check-tags lint-race docker-check vuln sec verify-mod mutate mutate-baseline release release-cli
 # verify-mod mutates go.mod/go.sum/go.work.sum via `go mod tidy` — under `make
 # -j check` that would race lint/test reading the same module files. Force
 # check's prerequisites to run serially regardless of -j.
@@ -13,6 +13,10 @@ GOVULNCHECK_VERSION := v1.8.0
 # Keep in sync with the other module's Makefile.
 # renovate: datasource=go depName=github.com/securego/gosec/v2
 GOSEC_VERSION := v2.29.0
+# gosec is INSTALLED, not `go run`, and the path carries the version so a pin
+# bump cannot be served a stale binary. Why not `go run`: wiki/linting.md.
+GOSEC_DIR := $(CURDIR)/.tools/gosec-$(GOSEC_VERSION)
+GOSEC_BIN := $(GOSEC_DIR)/gosec
 # Keep in sync with the other module's Makefile and CI (ci-v2.yml golangci-lint-action version).
 # renovate: datasource=go depName=github.com/golangci/golangci-lint/v2
 GOLANGCI_LINT_VERSION := v2.13.2
@@ -115,6 +119,32 @@ lint: ## Run golangci-lint (pinned + GOWORK=off, mirroring CI; LINT_CLEAN=1 wipe
 		GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) cache clean; \
 	fi
 	GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run --timeout=5m
+	@$(MAKE) --no-print-directory lint-race
+
+# The race side of the race/!race pair, which .golangci.yml cannot declare without
+# blinding norace.go — the whole rationale, and why an empty package list is
+# skipped rather than passed to golangci-lint, is in wiki/linting.md (#1757).
+# An already-installed binary at the pinned version is preferred over `go run`:
+# CI's lint jobs have one on PATH from golangci-lint-action, and building it from
+# source there costs minutes that setup-go's go.sum-keyed cache never warms. The
+# comparison strips a leading `v` from both sides — `golangci-lint version` prints
+# `has version 2.13.2`, unprefixed, so matching the pin literally never fires and
+# the fast path is silently dead.
+lint-race: ## Lint the race side of the race/!race pair (own target so CI calls the same definition)
+	@pkgs="$$(./scripts/check-build-tags.sh --packages-for race)"; \
+	if [ -z "$$pkgs" ]; then \
+		echo "lint-race: no race-tagged packages — skipped"; \
+		exit 0; \
+	fi; \
+	want="$(GOLANGCI_LINT_VERSION)"; want="$${want#v}"; \
+	have="$$(golangci-lint version 2>/dev/null | sed -n 's/.*has version \([^ ]*\).*/\1/p')"; \
+	if [ -n "$$have" ] && [ "$${have#v}" = "$$want" ]; then \
+		gcl="golangci-lint"; src="installed $$(command -v golangci-lint)"; \
+	else \
+		gcl="go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)"; src="go run (pinned source)"; \
+	fi; \
+	echo "lint-race: via $$src, (integration,race) over $$pkgs"; \
+	GOWORK=off $$gcl run --timeout=5m --build-tags=integration,race $$pkgs
 
 # No globs on the command line: .markdownlint-cli2.jsonc owns both `globs` and
 # `ignores`, so the file set has one definition that this target, CI, and an
@@ -152,12 +182,16 @@ clean: ## Clean build cache and test artifacts
 	rm -f coverage.out coverage-integration.out coverage.html coverage.func
 	rm -f *.test
 	rm -rf .mutatediff-cache
+	rm -rf .tools
 
 # `sec` is not redundant with `lint`: golangci-lint's gosec runs under the
 # common-false-positives preset, so classes like G304 are suppressed there and
 # reported only by the standalone scanner CI runs. Leaving it out of `check` meant
 # a clean local run could still fail the security-framework job.
-check: fmt lint lint-md test test-alloc vuln sec verify-mod ## Run fmt, lint, markdownlint, test, alloc guards, vuln scan, gosec, and mod-tidy verification (pre-commit checks; mirrors CI)
+check: check-tags fmt lint lint-md test test-alloc vuln sec verify-mod ## Run the build-tag guard, fmt, lint, markdownlint, test, alloc guards, vuln scan, gosec, and mod-tidy verification (pre-commit checks; mirrors CI)
+
+check-tags: ## Fail when a //go:build tag appears that no lint or security pass reads (#1757)
+	./scripts/check-build-tags.sh
 
 verify-mod: ## Verify go.mod/go.sum are tidy and go.work.sum is settled (mirrors CI)
 	go mod tidy
@@ -176,7 +210,10 @@ verify-mod: ## Verify go.mod/go.sum are tidy and go.work.sum is settled (mirrors
 vuln: ## Run govulncheck vulnerability scan (pinned + GOWORK=off, mirroring CI)
 	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
-sec: ## Run gosec security scanner (pinned; identical to CI)
+# Three invocations, because no single one sees all three tag sides (#1757):
+# see wiki/linting.md. The race scan skips an empty package list for the same
+# reason the lint pass does.
+sec: $(GOSEC_BIN) ## Run gosec security scanner (pinned; identical to CI)
 	# gosec only accepts relative patterns — the previous $(PKGS) import paths
 	# silently scanned 0 files (a no-op gate). This now scans ./... as a backstop to
 	# golangci-lint's gosec (make lint), which is the fine-grained gate that honors the
@@ -184,7 +221,18 @@ sec: ## Run gosec security scanner (pinned; identical to CI)
 	# Close errors) are excluded to match make lint's stance: the .golangci.yml
 	# common-false-positives + std-error-handling presets already treat both classes as
 	# non-issues, so gating them only here would diverge from the repo's gosec policy.
-	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) -exclude=G103,G104 ./...
+	$(GOSEC_BIN) -exclude=G103,G104 -tags integration ./...
+	@pkgs="$$(./scripts/check-build-tags.sh --packages-for race)"; \
+	if [ -z "$$pkgs" ]; then \
+		echo "sec: no race-tagged packages — race scan skipped"; \
+	else \
+		echo "sec: race scan (integration,race) over $$pkgs"; \
+		$(GOSEC_BIN) -exclude=G103,G104 -tags integration,race $$pkgs; \
+	fi
+	GOOS=windows $(GOSEC_BIN) -exclude=G103,G104 -tags integration ./...
+
+$(GOSEC_BIN):
+	GOBIN=$(GOSEC_DIR) go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
 
 # Mutation builds and temp trees are sandboxed away from the machine-shared
 # GOCACHE and system temp, and cleaned by the gate itself; MUTATE_GOCACHE_CAP

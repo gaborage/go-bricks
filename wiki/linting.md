@@ -308,10 +308,69 @@ that way. An unlinted file is indistinguishable from one that passed, so its vio
 become the precedent the next author finds when they grep for how the repo does something.
 
 This settles `integration` only, because it is the one tag in the tree with no `!integration`
-complement. A tag that comes in pairs — `race`/`!race`, `windows`/`!windows` — cannot be
-declared here without blinding its sibling file, so those need a second `run` instead; CI
-already does exactly that for `GOOS: windows`. Tracked in
-[#1757](https://github.com/gaborage/go-bricks/issues/1757).
+complement. A tag that comes in pairs — `race`/`!race`, `windows`/`!windows` — cannot be declared
+here without blinding its sibling file, so each pair needs a second invocation instead.
+
+### The tag class is closed
+
+Every build tag in the tree has a pass that reads its side, and a guard fails the build when a tag
+appears that does not:
+
+| tag | read by |
+| --- | --- |
+| `integration` | `run.build-tags` above (`make lint`, both CI lint jobs) and gosec invocation 1 |
+| `!integration` | the same passes — the untagged side is the default build |
+| `race` | `make lint-race` (a second golangci invocation, also a step in both CI lint jobs) and gosec invocation 2 |
+| `!race` | the default build, read by every pass that does not name `race` |
+| `windows` | CI's `GOOS: windows` golangci pass (**CI-only** — `make lint` does not cross-lint) and gosec invocation 3 |
+| `!windows` | the default build on a non-Windows host |
+
+`make lint-race` and the race gosec scan are scoped **dynamically**: the package list comes from
+`scripts/check-build-tags.sh --packages-for race`, computed from the tracked tree at run time, so a
+race-tagged file in a new package is picked up without editing a list. `--build-tags` on the command
+line REPLACES `run.build-tags` rather than merging with it, which is why the passes send the whole
+set, `integration,race`.
+
+`make sec` runs gosec three times, because no single invocation can see all three sides: the plain
+scan reads no build-tagged file at all, so `-tags integration` is what reaches
+`testing/containers/*.go`; the race scan is the only one that reads `internal/racedetect/race.go`;
+and `GOOS=windows` is the only one that reads `migration/proc_windows.go`. `tools/migration` mirrors
+the shape; it carries no race-tagged file, so its race passes skip visibly.
+
+`make check-tags` (`scripts/check-build-tags.sh`, wired into `make check` and the framework lint
+job) enumerates every `//go:build` expression in tracked `.go` files — `_test.go` included — and
+fails with `path: tag` when a tag falls outside its allowlist. The allowlist lives in the script
+with one comment per entry naming the pass that covers it. To add a tag, add a pass that reads its
+side, or extend the allowlist and say which pass does.
+
+**What the guard does catch, deliberately.** An INDENTED `//go:build` — `go/build` trims the line
+before recognising a constraint, so an indented one is live and the scan is anchored to see it. A
+legacy `// +build` line with NO `//go:build` sibling, which Go still honours: it is refused outright
+rather than parsed, with its own message. The dual form — both lines, the Go 1.17 migration shape
+`gofmt` still preserves — is legal and passes, because its `//go:build` line is the one parsed. Both
+`.go` and `.s` sources. And tags are read LITERALLY:
+`set -f` is on, so a tag carrying a glob is never path-expanded and a crafted filename cannot steer
+a tag into the allowlist.
+
+**What it does not catch.** It parses `git grep -n`'s `path:line:content` stream on `:`, so a
+tracked file whose NAME contained a colon would mis-split (colons are illegal in filenames on
+Windows, which CI builds on). It reads TRACKED content, so an untracked file is invisible until
+staged — CI commits everything, and locally `git add -N` makes a new file visible. It does not scan
+cgo `.c`/`.h` sources. It reads EXPLICIT
+`//go:build` expressions only,
+so Go's implicit filename constraints (`foo_darwin.go`, `foo_arm64.go`) are invisible to it — the
+tree's one GOOS-constrained file, `migration/proc_windows.go`, carries the explicit tag as well.
+And the allowlist asserts in a comment that a pass covers each tag; it does not verify it. Delete a
+pass and the guard stays green while its files go unread — it closes "an unknown tag appeared", not
+"a known tag lost its pass". Making the tag-to-pass mapping executable (one table the guard, the
+Makefiles and this page all read) would close that too, and is tracked separately.
+
+**Two traps this shape exists to avoid.** golangci-lint aimed at an empty package list fails with
+`no go files to analyze` and exit 5, which reads as a lint failure rather than "nothing to do" —
+both race passes therefore check the list and skip with a message. And `GOOS=windows go run
+<tool>@version` cross-compiles the TOOL, not the analysis, dying with `exec format error` and exit
+1, which reads as a finding — gosec is installed into a version-stamped tool directory first and
+`GOOS` is set only on the scan invocation.
 
 ## Related
 
