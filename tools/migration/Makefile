@@ -1,4 +1,4 @@
-.PHONY: help build test lint fmt update clean install check test-coverage validate-cli dev-deps release-dry-run vuln sec verify-mod
+.PHONY: help build test lint lint-race fmt update clean install check test-coverage validate-cli dev-deps release-dry-run vuln sec verify-mod
 # verify-mod mutates go.mod/go.sum via `go mod tidy` — under `make -j check`
 # that would race lint/test reading the same module files. Force check's
 # prerequisites to run serially regardless of -j.
@@ -12,6 +12,13 @@ GOVULNCHECK_VERSION := v1.8.0
 # Keep in sync with the other module's Makefile.
 # renovate: datasource=go depName=github.com/securego/gosec/v2
 GOSEC_VERSION := v2.29.0
+# Installed, not `go run`: `GOOS=windows go run <tool>@version` cross-compiles the
+# TOOL and dies with `exec format error` (#1757). Version-stamped path so a pin
+# bump cannot be served a stale binary.
+GOSEC_BIN := $(CURDIR)/.tools/gosec-$(GOSEC_VERSION)/gosec
+# Race-tagged packages in THIS module, repo-root paths rewritten module-relative.
+# There are none today, so both race passes below skip — visibly, on purpose.
+RACE_PKGS_CMD = ../../scripts/check-build-tags.sh --packages-for race tools/migration | sed 's|^\./tools/migration|.|'
 # Keep in sync with the other module's Makefile and CI (ci-v2.yml golangci-lint-action version).
 # renovate: datasource=go depName=github.com/golangci/golangci-lint/v2
 GOLANGCI_LINT_VERSION := v2.13.2
@@ -32,6 +39,16 @@ test-coverage: ## Run tests with coverage
 
 lint: ## Run golangci-lint (pinned; identical to CI)
 	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run
+	@$(MAKE) --no-print-directory lint-race
+
+lint-race: ## Lint the race side (own target so CI calls the same definition; empty here today)
+	@pkgs="$$($(RACE_PKGS_CMD))"; \
+	if [ -z "$$pkgs" ]; then \
+		echo "lint-race: no race-tagged packages in tools/migration — skipped"; \
+	else \
+		echo "lint-race: (integration,race) over $$pkgs"; \
+		go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run --build-tags=integration,race $$pkgs; \
+	fi
 
 # Mirrors the root Makefile: golangci-lint resolves ../../.golangci.yml from
 # here, so this module is held to the same formatters block (gofumpt + gci) and
@@ -74,7 +91,22 @@ vuln: ## Run govulncheck vulnerability scan (pinned + GOWORK=off, mirroring CI)
 	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 sec: ## Run gosec security scanner (pinned; identical to CI)
-	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) ./cmd/... ./internal/...
+	@$(MAKE) --no-print-directory $(GOSEC_BIN)
+	$(GOSEC_BIN) -tags integration ./cmd/... ./internal/...
+	@pkgs="$$($(RACE_PKGS_CMD))"; \
+	if [ -z "$$pkgs" ]; then \
+		echo "sec: no race-tagged packages in tools/migration — race scan skipped"; \
+	else \
+		echo "sec: race scan (integration,race) over $$pkgs"; \
+		$(GOSEC_BIN) -tags integration,race $$pkgs; \
+	fi
+	GOOS=windows $(GOSEC_BIN) -tags integration ./cmd/... ./internal/...
+
+# Three invocations for the same reason as the root module (#1757); this module
+# carries no race- or windows-tagged file today, so the race scan skips and the
+# GOOS pass simply re-reads the same files under a windows GOOS.
+$(GOSEC_BIN):
+	GOBIN=$(dir $(GOSEC_BIN)) go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
 
 release-dry-run: ## Test release build without publishing
 	@echo "Testing release build for version: $(VERSION)"

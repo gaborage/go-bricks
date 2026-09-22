@@ -100,6 +100,10 @@ jobs:
               - 'Makefile'
               - '.golangci.yml'
               - '.github/workflows/ci-v2.yml'
+              # scripts/ holds the build-tag guard and the race package query the
+              # lint and security jobs run (#1757). Without this entry, editing
+              # them alone would skip the very jobs that execute them.
+              - 'scripts/**'
               - '**/testdata/**'
             migrate_tool:
               - 'tools/migration/**/*.go'
@@ -785,6 +789,15 @@ jobs:
           working-directory: tools/migration
           args: --timeout=5m
 
+      # The race side of the race/!race pair. .golangci.yml cannot declare `race`
+      # without blinding the `!race` sibling, so it is a second invocation over the
+      # race-tagged packages only, skipped when that list is empty (an empty package
+      # list makes golangci-lint exit 5). Delegated to the make target so local and
+      # CI run one definition; this module has no race-tagged file, so it skips.
+      - name: golangci-lint race pass (migrate tool)
+        working-directory: tools/migration
+        run: make lint-race
+
   security-migrate-tool:
     permissions:
       contents: read
@@ -861,6 +874,16 @@ jobs:
         with:
           version: v2.13.2
           args: --timeout=5m
+
+      # See the migrate-tool job for why this is a second invocation rather than a
+      # config entry. internal/racedetect/race.go is read by this pass and no other.
+      - name: golangci-lint race pass (framework)
+        run: make lint-race
+
+      # Keeps the tag set a closed class: fails when a //go:build tag appears that
+      # no lint or security pass reads, so the next tag cannot arrive unnoticed.
+      - name: Build-tag allowlist guard
+        run: make check-tags
 
   security-framework:
     permissions:

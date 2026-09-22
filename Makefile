@@ -1,4 +1,4 @@
-.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint lint-md fmt update clean check docker-check vuln sec verify-mod mutate mutate-baseline release release-cli
+.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint lint-md fmt update clean check check-tags lint-race docker-check vuln sec verify-mod mutate mutate-baseline release release-cli
 # verify-mod mutates go.mod/go.sum/go.work.sum via `go mod tidy` — under `make
 # -j check` that would race lint/test reading the same module files. Force
 # check's prerequisites to run serially regardless of -j.
@@ -13,6 +13,11 @@ GOVULNCHECK_VERSION := v1.8.0
 # Keep in sync with the other module's Makefile.
 # renovate: datasource=go depName=github.com/securego/gosec/v2
 GOSEC_VERSION := v2.29.0
+# gosec is INSTALLED, not `go run`: the GOOS=windows scan below must retarget the
+# ANALYSIS, and `GOOS=windows go run <tool>@version` cross-compiles the TOOL —
+# it dies with `exec format error`, exit 1, indistinguishable from a finding.
+# The path carries the version so a pin bump cannot be served a stale binary.
+GOSEC_BIN := $(CURDIR)/.tools/gosec-$(GOSEC_VERSION)/gosec
 # Keep in sync with the other module's Makefile and CI (ci-v2.yml golangci-lint-action version).
 # renovate: datasource=go depName=github.com/golangci/golangci-lint/v2
 GOLANGCI_LINT_VERSION := v2.13.2
@@ -115,6 +120,24 @@ lint: ## Run golangci-lint (pinned + GOWORK=off, mirroring CI; LINT_CLEAN=1 wipe
 		GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) cache clean; \
 	fi
 	GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run --timeout=5m
+	@$(MAKE) --no-print-directory lint-race
+
+lint-race: ## Lint the race side of the race/!race pair (own target so CI calls the same definition)
+	@pkgs="$$(./scripts/check-build-tags.sh --packages-for race)"; \
+	if [ -z "$$pkgs" ]; then \
+		echo "lint-race: no race-tagged packages — skipped"; \
+	else \
+		echo "lint-race: (integration,race) over $$pkgs"; \
+		GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run --timeout=5m --build-tags=integration,race $$pkgs; \
+	fi
+
+# The race pass above is the second half of the tag class (#1757). .golangci.yml's
+# run.build-tags cannot name `race`: declaring it would blind norace.go, the
+# `!race` sibling. So the tag set is passed WHOLE on the command line — the flag
+# REPLACES the config list rather than merging with it — over only the packages
+# that carry the tag, computed from the tracked tree at run time. The empty case
+# is skipped deliberately: golangci-lint aimed at no packages exits 5 with
+# `no go files to analyze`, which reads as a lint failure, not as "nothing to do".
 
 # No globs on the command line: .markdownlint-cli2.jsonc owns both `globs` and
 # `ignores`, so the file set has one definition that this target, CI, and an
@@ -157,7 +180,10 @@ clean: ## Clean build cache and test artifacts
 # common-false-positives preset, so classes like G304 are suppressed there and
 # reported only by the standalone scanner CI runs. Leaving it out of `check` meant
 # a clean local run could still fail the security-framework job.
-check: fmt lint lint-md test test-alloc vuln sec verify-mod ## Run fmt, lint, markdownlint, test, alloc guards, vuln scan, gosec, and mod-tidy verification (pre-commit checks; mirrors CI)
+check: fmt lint lint-md check-tags test test-alloc vuln sec verify-mod ## Run fmt, lint, markdownlint, build-tag guard, test, alloc guards, vuln scan, gosec, and mod-tidy verification (pre-commit checks; mirrors CI)
+
+check-tags: ## Fail when a //go:build tag appears that no lint or security pass reads (#1757)
+	./scripts/check-build-tags.sh
 
 verify-mod: ## Verify go.mod/go.sum are tidy and go.work.sum is settled (mirrors CI)
 	go mod tidy
@@ -184,7 +210,24 @@ sec: ## Run gosec security scanner (pinned; identical to CI)
 	# Close errors) are excluded to match make lint's stance: the .golangci.yml
 	# common-false-positives + std-error-handling presets already treat both classes as
 	# non-issues, so gating them only here would diverge from the repo's gosec policy.
-	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) -exclude=G103,G104 ./...
+	@$(MAKE) --no-print-directory $(GOSEC_BIN)
+	$(GOSEC_BIN) -exclude=G103,G104 -tags integration ./...
+	@pkgs="$$(./scripts/check-build-tags.sh --packages-for race)"; \
+	if [ -z "$$pkgs" ]; then \
+		echo "sec: no race-tagged packages — race scan skipped"; \
+	else \
+		echo "sec: race scan (integration,race) over $$pkgs"; \
+		$(GOSEC_BIN) -exclude=G103,G104 -tags integration,race $$pkgs; \
+	fi
+	GOOS=windows $(GOSEC_BIN) -exclude=G103,G104 -tags integration ./...
+
+# Three invocations, because one cannot see all three tag sides (#1757): the
+# default scan reads no build-tagged file at all, so `-tags integration` is what
+# reaches testing/containers/*.go, the race scan is the only one that reads
+# race.go, and GOOS=windows is the only one that reads proc_windows.go. The race
+# scan is skipped on an empty package list for the same reason the lint pass is.
+$(GOSEC_BIN):
+	GOBIN=$(dir $(GOSEC_BIN)) go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
 
 # Mutation builds and temp trees are sandboxed away from the machine-shared
 # GOCACHE and system temp, and cleaned by the gate itself; MUTATE_GOCACHE_CAP
