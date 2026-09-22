@@ -68,7 +68,14 @@ The framework never deletes or recreates broker state.
   owns, so a stop/start cycle must not retire it for the process lifetime. The manager observes each
   pooled publisher on the same seam, stops that observer when the pool retires the client — LRU
   eviction, the idle sweep, `Close` — and drops the client's ledger entry as the observer exits, so
-  the guard's per-source map does not grow one dead entry per eviction. A pooled publisher's
+  the guard's per-source map does not grow one dead entry per eviction. A pass refused because
+  repair is halted sets a `repairOwed` flag, which the next re-arm honours by emptying the
+  generation ledger and clearing the flag: the refusal happens before the ledger write, so the
+  rotation that prompted it leaves no trace, and a pooled publisher's observer — which survives the
+  halt on its background context — has already parked on the broadcast it took. Without the flag
+  that rotation would stay undeclared until the same source rotated again. Only the owed case
+  forces a pass, so a stop/start cycle that refused nothing still runs at most one pass per
+  generation. A pooled publisher's
   observer runs on a background context rather than inheriting the one that created the client,
   which is the opposite of what the registry's own observer does. The difference is ownership: a
   registry's observer belongs to the startup that built it, while a pooled publisher belongs to no

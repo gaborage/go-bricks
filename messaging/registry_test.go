@@ -5278,3 +5278,38 @@ func TestRegistryRearmsWhileThePreviousObserverIsParkedMidPass(t *testing.T) {
 	// so it records nothing. The re-armed observer then runs generation 3.
 	awaitDeclares(t, client, key, "1", "3")
 }
+
+// TestRegistryRepairsATopologyRotatedWhileHalted pins the hole a re-arm would
+// otherwise leave. A pooled publisher's observer outlives StopConsumers — it runs
+// on a background context, not the registry's — so a rotation during the halt
+// reaches redeclareTopologyFrom, which refuses it at the halt guard WITHOUT
+// recording that generation, and the observer then parks on the broadcast it had
+// already taken. The registry's own client did not rotate (the 404 landed on the
+// publisher's channel), so a re-arm that trusted generation equality would skip
+// its restarted pass too, and the topology the broker lost would stay lost until
+// that publisher happened to rotate again — #1761 one lifecycle event later.
+func TestRegistryRepairsATopologyRotatedWhileHalted(t *testing.T) {
+	registryClient := newReconnectingMockClient()
+	registry := newPublisherOnlyRegistry(t, registryClient)
+	key := "exchange:" + testExchangeName
+
+	// A pooled publisher, driven the way Manager.observePublisherChannels drives one.
+	pooled := newReconnectingMockClient()
+	pooledToken := &redeclareToken{source: pooled}
+	registry.redeclareTopologyFrom(context.Background(), pooledToken)
+	awaitDeclares(t, registryClient, key, "1", "1")
+
+	registry.StopConsumers()
+
+	// The operator's exchange delete: only the pooled publisher's channel takes the
+	// 404, and it rotates while repair is halted.
+	pooled.newChannel()
+	registry.redeclareTopologyFrom(context.Background(), pooledToken)
+	assert.Equal(t, []string{"1", "1"}, registryClient.declaresOf(key),
+		"a halted pass must declare nothing")
+
+	require.NoError(t, registry.StartConsumers(context.Background()))
+
+	// One pass, with no further rotation from anyone.
+	awaitDeclares(t, registryClient, key, "1", "1", "1")
+}
