@@ -139,11 +139,11 @@ lint-race: ## Lint the race side of the race/!race pair (own target so CI calls 
 	want="$(GOLANGCI_LINT_VERSION)"; want="$${want#v}"; \
 	have="$$(golangci-lint version 2>/dev/null | sed -n 's/.*has version \([^ ]*\).*/\1/p')"; \
 	if [ -n "$$have" ] && [ "$${have#v}" = "$$want" ]; then \
-		gcl="golangci-lint"; \
+		gcl="golangci-lint"; src="installed $$(command -v golangci-lint)"; \
 	else \
-		gcl="go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)"; \
+		gcl="go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)"; src="go run (pinned source)"; \
 	fi; \
-	echo "lint-race: (integration,race) over $$pkgs"; \
+	echo "lint-race: via $$src, (integration,race) over $$pkgs"; \
 	GOWORK=off $$gcl run --timeout=5m --build-tags=integration,race $$pkgs
 
 # No globs on the command line: .markdownlint-cli2.jsonc owns both `globs` and
