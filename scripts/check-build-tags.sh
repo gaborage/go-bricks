@@ -11,9 +11,16 @@
 #                         answer the caller must handle; see wiki/linting.md for
 #                         why an empty package list is not "nothing to do".
 #
-# Only EXPLICIT //go:build expressions are read. Go's implicit filename
-# constraints (foo_darwin.go, foo_arm64.go) are invisible here; the tree's one
-# GOOS-constrained file, migration/proc_windows.go, carries the explicit tag too.
+# Only EXPLICIT constraints are read. Go's implicit filename constraints
+# (foo_darwin.go, foo_arm64.go) are invisible here; the tree's one GOOS-constrained
+# file, migration/proc_windows.go, carries the explicit tag too. Tracked .go and .s
+# sources only: cgo .c/.h and UNTRACKED files are not scanned, since git grep reads
+# tracked content (CI commits everything; locally, `git add -N` first).
+#
+# go/build TRIMS the line before recognising a constraint, so an INDENTED
+# `//go:build` is live and the scan must be anchored loosely enough to see it.
+# A legacy `// +build` line with no //go:build sibling is still honoured by Go and
+# is refused outright rather than parsed.
 # -f disables pathname expansion. Both loops below word-split tags_of's output on
 # purpose, and that split otherwise GLOBS: a tag carrying `*` or `?` is replaced by
 # matching filenames from the cwd, so a crafted name could expand an unknown tag
@@ -46,7 +53,7 @@ if [ "${1:-}" = "--packages-for" ]; then
     for tag in $(tags_of "$expr"); do
       if [ "$tag" = "$want" ]; then printf './%s\n' "$(dirname "$file")"; fi
     done
-  done < <(git grep -n '^//go:build' -- '*.go') | sort -u
+  done < <(git grep -nE '^[[:space:]]*//go:build' -- '*.go' '*.s') | sort -u
   exit 0
 fi
 
@@ -55,13 +62,19 @@ cd "$ROOT"
 
 violations=$(
   while IFS=: read -r file _line expr; do
+    case "$expr" in
+      *'// +build'*)
+        printf '%s: legacy +build constraint; use //go:build\n' "$file"
+        continue
+        ;;
+    esac
     for tag in $(tags_of "$expr"); do
       case " $ALLOWED " in
         *" $tag "*) ;;
         *) printf '%s: %s\n' "$file" "$tag" ;;
       esac
     done
-  done < <(git grep -n '^//go:build' -- '*.go') | sort -u
+  done < <(git grep -nE '^[[:space:]]*(//go:build|// \+build)' -- '*.go' '*.s') | sort -u
 )
 
 [ -n "$violations" ] || exit 0

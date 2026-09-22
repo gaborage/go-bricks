@@ -343,10 +343,18 @@ fails with `path: tag` when a tag falls outside its allowlist. The allowlist liv
 with one comment per entry naming the pass that covers it. To add a tag, add a pass that reads its
 side, or extend the allowlist and say which pass does.
 
-**What the guard does not catch.** It reads tags LITERALLY — `set -f` is on, so a tag carrying a
-glob is never path-expanded, and a crafted filename cannot steer a tag into the allowlist. It parses
-`git grep -n`'s `path:line:content` stream on `:`, so a tracked file whose NAME contained a colon
-would mis-split (colons are illegal in filenames on Windows, which CI builds on). It reads EXPLICIT
+**What the guard does catch, deliberately.** An INDENTED `//go:build` — `go/build` trims the line
+before recognising a constraint, so an indented one is live and the scan is anchored to see it. A
+legacy `// +build` line with no `//go:build` sibling, which Go still honours: it is refused outright
+rather than parsed, with its own message. Both `.go` and `.s` sources. And tags are read LITERALLY:
+`set -f` is on, so a tag carrying a glob is never path-expanded and a crafted filename cannot steer
+a tag into the allowlist.
+
+**What it does not catch.** It parses `git grep -n`'s `path:line:content` stream on `:`, so a
+tracked file whose NAME contained a colon would mis-split (colons are illegal in filenames on
+Windows, which CI builds on). It reads TRACKED content, so an untracked file is invisible until
+staged — CI commits everything, and locally `git add -N` makes a new file visible. It does not scan
+cgo `.c`/`.h` sources. It reads EXPLICIT
 `//go:build` expressions only,
 so Go's implicit filename constraints (`foo_darwin.go`, `foo_arm64.go`) are invisible to it — the
 tree's one GOOS-constrained file, `migration/proc_windows.go`, carries the explicit tag as well.
