@@ -61,7 +61,7 @@ fi
 if [ -n "$problems" ]; then
   printf 'GoBricks test-convention violations in %s:\n\n' "$file" >&2
   printf '%s' "$problems" >&2
-  printf '\nFix before continuing — see CLAUDE.md "Testing Conventions".\n' >&2
+  printf '\nFix before continuing — see CLAUDE.md "Test Naming Conventions".\n' >&2
   exit 2
 fi
 exit 0

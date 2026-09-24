@@ -270,7 +270,7 @@ phase('Discover')
 const inv = await agent(
   `Enumerate this repository's tracked documentation and Go source for a drift analysis. Use git, wc, and ls. Return structured data.
 
-DOCS: list tracked doc files with \`git ls-files | grep -E '\\.(md|txt)$'\`. EXCLUDE anything under \`.claude/\` or \`docs/superpowers/\` (those are tooling/spec artifacts, not project docs) and EXCLUDE \`WARP.md\` (it is a symlink to CLAUDE.md). For each remaining file: get its line count with \`wc -l\`, and classify lens — "adr" if the path matches wiki/adr*.md, "index" if the path is exactly wiki/architecture_decisions.md, otherwise "living".
+DOCS: list tracked doc files with \`git ls-files | grep -E '\\.(md|txt)$'\`. EXCLUDE anything under \`.claude/\` or \`docs/superpowers/\` (those are tooling/spec artifacts, not project docs). For each remaining file: get its line count with \`wc -l\`, and classify lens — "adr" if the path matches wiki/adr*.md, "index" if the path is exactly wiki/architecture_decisions.md, otherwise "living".
 
 CODE: list tracked non-test Go files with \`git ls-files '*.go' | grep -v '_test\\.go$'\`. Return them all in codeFiles.
 
