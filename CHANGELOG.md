@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.67.0](https://github.com/gaborage/go-bricks/compare/v0.66.0...v0.67.0) (2026-09-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* **migrate:** exit by run verdict and mark every misuse ([#1771](https://github.com/gaborage/go-bricks/issues/1771))
+
+### Added
+
+* **messaging:** reference an exchange another service owns ([#1773](https://github.com/gaborage/go-bricks/issues/1773)) ([56e948b](https://github.com/gaborage/go-bricks/commit/56e948b5016cb5d136da36c44d1d03af21ce2ddc))
+* **messaging:** wait for an external exchange at startup ([#1774](https://github.com/gaborage/go-bricks/issues/1774)) ([00b391b](https://github.com/gaborage/go-bricks/commit/00b391b0cff41373910a45c0043d3996aaf5f9d5))
+* **migrate:** read migrator identity from the environment ([#1766](https://github.com/gaborage/go-bricks/issues/1766)) ([30a0e58](https://github.com/gaborage/go-bricks/commit/30a0e587b0f8f0171df646a8b883d61396efad3f))
+* **migrate:** report what a fleet run did in its summary record ([#1770](https://github.com/gaborage/go-bricks/issues/1770)) ([2a9b366](https://github.com/gaborage/go-bricks/commit/2a9b3661605bbf553fd34100a35789dec2cc81af))
+
+
+### Fixed
+
+* **app:** read the cache section once per pooled instance ([#1767](https://github.com/gaborage/go-bricks/issues/1767)) ([ce38a24](https://github.com/gaborage/go-bricks/commit/ce38a249d688c0ffeeccaba3ee092f0ab61e093c))
+* **cache:** address Redis config errors to settable keys ([#1765](https://github.com/gaborage/go-bricks/issues/1765)) ([a64f434](https://github.com/gaborage/go-bricks/commit/a64f434e11a02d92cfaed94a78fecb3a77a2fb27))
+* **deps:** update module github.com/go-playground/validator/v10 to v10.30.5 ([#1782](https://github.com/gaborage/go-bricks/issues/1782)) ([db6aa35](https://github.com/gaborage/go-bricks/commit/db6aa35addf7b87ee3174df0709b72a8fb727caa))
+* **messaging:** announce every new ready channel to redeclare observers ([#1769](https://github.com/gaborage/go-bricks/issues/1769)) ([d6a9adb](https://github.com/gaborage/go-bricks/commit/d6a9adb727828ad3378c6ff793d35ac66ad355b7))
+* **messaging:** close the client when consumer setup panics ([#1778](https://github.com/gaborage/go-bricks/issues/1778)) ([f5c8583](https://github.com/gaborage/go-bricks/commit/f5c85836619860af4e284397f856b410694facf9))
+* **messaging:** drive the redeclare pass from every client for a key ([#1779](https://github.com/gaborage/go-bricks/issues/1779)) ([43b1e08](https://github.com/gaborage/go-bricks/commit/43b1e08354df3ce7df68a46c3178a3ced8d5202f))
+* **messaging:** redeclare topology per source, not per registry ([#1776](https://github.com/gaborage/go-bricks/issues/1776)) ([322b24f](https://github.com/gaborage/go-bricks/commit/322b24f6d88d1fa5a13abcce02c09560ce7f4a15))
+* **migrate:** exit by run verdict and mark every misuse ([#1771](https://github.com/gaborage/go-bricks/issues/1771)) ([70770be](https://github.com/gaborage/go-bricks/commit/70770be5a319a3dce1b35d3e97eb244b8c4a6ae7))
+
 ## [0.66.0](https://github.com/gaborage/go-bricks/compare/v0.65.0...v0.66.0) (2026-09-19)
 
 
