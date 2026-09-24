@@ -330,7 +330,7 @@ jobs:
           docker pull rabbitmq:4.3.6-management-alpine &
           pids="$pids $!"
           # renovate: datasource=docker depName=redis
-          docker pull redis:8.10.1-alpine &
+          docker pull redis:8.10.2-alpine &
           pids="$pids $!"
           rc=0
           for pid in $pids; do
