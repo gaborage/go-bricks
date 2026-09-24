@@ -32,17 +32,18 @@ If that yields nothing, fall back to `git diff HEAD` and `git diff --staged`.
 
 1. **Raw-SQL annotation (Security First).** Run
    `git grep -nE 'f\.Raw\(|jf\.Raw\(|database\.Raw\(|SetExpr\(|Having\(|MustExpr\(|[.]Expr\(|RawExpression\{'`,
-   cross-check against the diff, and flag any added or modified hit without an
-   adjacent `// SECURITY: Manual SQL review completed - <rationale>` naming a
-   specific property. Squirrel's own `Expr` inside `database/internal/builder`,
+   cross-check against the diff, and flag any added or modified hit without a
+   `// SECURITY: Manual SQL review completed - <rationale>` annotation directly
+   above it or above an enclosing dispatch, naming a specific property.
+   Squirrel's own `Expr` inside `database/internal/builder`,
    and the `Expr`/`MustExpr` doors themselves (`database/types`, the builder,
    `testing/mocks`), are plumbing — skip those hits. `database.Raw` deserves at least as much
    scrutiny as `f.Raw`/`jf.Raw`: it replaces the whole statement. The rule
    itself lives in root CLAUDE.md Security Guidelines.
 
 2. **S8179 getter naming.** New exported getters must be `X()` not `GetX()`.
-   The migration table in CLAUDE.md intentionally keeps old `Get*` names — do
-   NOT flag those. Only flag NEW code.
+   Legacy `Get*` names listed in `.claude/skills/breaking-changes/SKILL.md` are
+   intentional; flag only new code.
 
 3. **S8196 interface naming.** New interfaces follow the precedent
    (`Executor`, `Prober`, `DBConfigProvider`, …) — agentive `-er`, not
@@ -60,8 +61,8 @@ If that yields nothing, fall back to `git diff HEAD` and `git diff --staged`.
 
 6. **Version / doc drift.** If `go.mod`'s Go version changed, check that BOTH
    `llms.txt` and README.md `### Requirements` still state it. If a new package directory was
-   added, check it is reflected in CLAUDE.md (Core Components, File
-   Organization, Key Interfaces) and has a `wiki/<package>.md` stub.
+   added, check it has a Core Components bullet in CLAUDE.md and a
+   `wiki/<package>.md` stub.
 
 7. **`.gitignore` allowlist.** Repo uses an allowlist `.gitignore`. Any new
    tracked file type not matching an existing `!` rule will be silently

@@ -4,9 +4,7 @@ How the engineering skills should consume this repo's domain documentation when 
 
 ## Before exploring, read these
 
-- **`CONTEXT.md`** at the repo root — the glossary. It does not exist yet; `/domain-modeling` creates it lazily
-  when a term actually gets resolved. It is allowlisted in `.gitignore` (`!CONTEXT.md`), so it will not be ignored
-  and can be added to the change when it appears.
+- **`CONTEXT.md`** at the repo root — the glossary; `/domain-modeling` extends it when a term gets resolved.
 - **`wiki/architecture_decisions.md`** — the ADR index. Skim it for decisions touching the area you're about to
   work in, then read the linked `wiki/adr_NNN_<slug>.md` file(s).
 - **`wiki/<topic>.md`** — deep dives per subsystem (`database.md`, `messaging.md`, `outbox.md`, …). CLAUDE.md's
@@ -15,15 +13,13 @@ How the engineering skills should consume this repo's domain documentation when 
   `observability/`, `outbox/`, `jose/`. Claude Code loads one automatically when you touch a file under that
   directory; nothing to open by hand.
 
-If `CONTEXT.md` doesn't exist, **proceed silently**. Don't flag its absence; don't suggest creating it upfront.
-
 ## File structure
 
 Single-context repo. ADRs live in `wiki/`, **not** `docs/adr/` — never create `docs/adr/`.
 
 ```text
 /
-├── CONTEXT.md                        ← glossary (lazily created)
+├── CONTEXT.md                        ← glossary
 ├── wiki/
 │   ├── architecture_decisions.md     ← ADR index; every ADR has an entry here
 │   ├── adr_001_enhanced_handler_system.md
@@ -57,8 +53,8 @@ When `/domain-modeling` (or any skill) records a decision, follow the existing c
    `wiki/architecture_decisions.md` (date, status, one-paragraph summary, `**Key Benefits:**` line, `---`
    separator) **and** bump the `ADR-001 through ADR-NNN` counter at the foot of that file. File + index move
    together — an ADR without an index entry is a CodeRabbit finding.
-4. **Breaking change?** Also add an atom to `wiki/migrations.md`, list it under CLAUDE.md `## Breaking Changes`,
-   and use a `!` commit type (`fix(scope)!:`).
+4. **Breaking change?** Also follow CLAUDE.md `## Breaking Changes` (skill entry, `wiki/migrations.md`
+   atom, `fix(scope)!:`).
 
 ## Use the glossary's vocabulary
 
