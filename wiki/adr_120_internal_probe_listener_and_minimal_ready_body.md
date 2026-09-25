@@ -78,8 +78,10 @@ streams counters have no OTel instrument. The unredacted detail's gated home, `/
   HTTP: no credential rides a probe, and after Part 2 the body carries one status word. A TLS
   opt-in would need its own certificate material and rotation for no confidentiality gain. Until
   Part 2 ships, the probe listener serves today's detailed body in plaintext, so a deployment that
-  sets `probes.port` restricts the listener to its probe sources and keeps it off every public
-  network path (see Consequences); TLS is not required for that.
+  sets `probes.port` restricts the listener to its probe sources, keeps it off every public network
+  path (see Consequences), and keeps probe traffic on a trusted, isolated network: restricting
+  sources does not stop a passive observer on a shared one. A deployment that cannot guarantee that
+  isolation waits for Part 2 before setting `probes.port`; the probe listener offers no TLS.
 - **Seam.** `ServerRunner` is unchanged. The probe listener is reached through an optional
   interface (`ProbeErrors() <-chan error`, `ProbeBoundAddr() net.Addr`), type-asserted on the
   injected runner the way `applyGlobalMiddleware` asserts its seam. With `probes.port > 0` and an
