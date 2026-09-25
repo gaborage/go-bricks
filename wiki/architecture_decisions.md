@@ -1910,6 +1910,30 @@ duplicating the owner's declaration, and a dangling reference no longer reads as
 
 ---
 
+### [ADR-120: Probes May Be Served on an Internal Listener, and `/ready` Answers Status Only](adr_120_internal_probe_listener_and_minimal_ready_body.md)
+
+**Date:** 2026-09-23 | **Status:** Proposed (Part 1 may ship under it; Part 2 flips it to Accepted) | **Breaking:** Part 2 — the `/ready` body and `HealthStatus.PublicErr`
+
+`/health` and `/ready` shared the application's engine, port, base path and rate limiters, so an
+internet-facing service exposed its probes, and the `/ready` 200 body told an anonymous caller the
+service's name, environment and version, its backends, and their pool and consumer counters. Part 1
+adds an opt-in probe listener: `server.probes.port` (`0` = off) binds a second, plain-HTTP server
+inside `Server.Start`, immediately before the application listener, that serves only the probes on
+unprefixed paths, with its own Echo engine and no limiter, tenant resolution, CORS or TLS; the
+application listener then stops serving them. `dispatchReady` answers `503` while stopping and
+until the application listener has bound, and the probe listener stops last. Part 2 trims `/ready`
+to `{"status":"ready"}` / `{"status":"not ready"}` and deletes the public projection, shipping in
+the same PR a per-kind readiness gauge, consumer and streams gauges for the counters the body
+carried, and a rate-limited WARN for an unhealthy non-critical kind. It amends ADR-002 (base path),
+ADR-048 (503 text), ADR-066 (rule 3), ADR-094 and ADR-114. An IP allowlist, a probe bearer token
+and a flag-gated detailed body were declined.
+
+**Key Benefits:** probes stop being reachable through the public listener and stop competing for
+application rate-limit budget, and readiness detail moves to metrics and an access-controlled debug
+endpoint instead of an unauthenticated body.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2680,7 +2704,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-119) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-120) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
