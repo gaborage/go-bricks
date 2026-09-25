@@ -53,11 +53,11 @@ streams counters have no OTel instrument. The unredacted detail's gated home, `/
   `normalizeServer` resolves an empty value to `server.host`, and `server.New` applies the same
   helper so a Go-assembled config that skipped normalization binds the same address. A deployment
   that probes over loopback only (a sidecar) sets `127.0.0.1`.
-- **Test seam.** Tests bind an ephemeral probe port through an unexported hook (`0` stays
+- **Test seam.** Tests bind the probe listener to an ephemeral port through an unexported hook (`0` stays
   "disabled" in config); `Server.ProbeBoundAddr()` returns the bound address, like `BoundAddr()`.
 - **Paths.** The probe listener serves `server.path.health` and `server.path.ready` exactly,
   **without** `server.path.base`. The base path routes public traffic through a shared ingress; the
-  probe port is never behind one. This amends ADR-002's "base applies to all routes including
+  probe listener is never behind one. This amends ADR-002's "base applies to all routes including
   health endpoints" for the probe listener only.
 - **Engine and middleware.** The probe listener is its own Echo engine, with the same
   panic-logging `HTTPErrorHandler` wrapper around `customErrorHandler` and both recover layers the
@@ -68,7 +68,7 @@ streams counters have no OTel instrument. The unredacted detail's gated home, `/
   probes from OTel, tenant resolution and forwarded client certificate only; gzip, body limit and
   the limiters run on them.)
 - **No limiter.** No IP-keyed or application-shared limiter may be added to the probe listener:
-  removing the shared budget is what fixes the `429` defect. Coalescing concurrent `/ready` walks
+  removing the shared budget is what fixes the `429` defect. Coalescing concurrent `/ready` judgments
   behind a singleflight is allowed.
 - **Timeouts.** The probe listener reuses `server.timeout.read`, `.write`, `.idle` and
   `.middleware`; there are no probe-specific timeout keys.
@@ -100,8 +100,17 @@ its detached budget keeps a probe in flight at the deadline from failing a clean
 
 **`dispatchReady`.** It is the probe listener's `/ready` handler, and it checks `stopping` first:
 set, it answers `503` `{"status":"not ready"}`. It then answers the same `503` until `ReadyCh` has
-closed (a no-op on the application listener, which only serves after `ReadyCh` closes), and only
-then calls the registered handler. `RegisterReadyHandler` replaces that handler on whichever
+closed (a no-op on the application listener, which only serves after `ReadyCh` closes). On the
+probe listener it then runs the **application-listener check**: a `HEAD` of the reserved
+`<base><ready path>` sent to the application listener's bound address (`BoundAddr()`, loopback when
+bound to all interfaces) with a 500ms timeout, a fixed constant. That path has no route there, so a
+live engine answers `404` through its whole middleware chain; any non-`5xx` answer passes, and a
+timeout, connection error or `5xx` answers `503` and logs WARN `Application listener unresponsive`.
+A TCP connect alone would not do: the kernel completes the handshake into the accept backlog even
+when the process has stopped serving. The reserved paths are exempt from the rate limiters and the
+IP pre-guard on the application listener, alongside the probe skipper's existing exemptions, so the
+check never spends or is refused limiter budget; the exemption is safe because those paths only
+ever answer `404` there. Only then does it call the registered handler. `RegisterReadyHandler` replaces that handler on whichever
 listener serves `/ready`. The status-only rule of Part 2 binds the framework's handlers; a consumer
 override's body is the consumer's own disclosure. The latch and the application listener's close
 happen in one call, so the `503` is not a deregistration signal: a `preStop` sleep (or the load
@@ -133,13 +142,16 @@ and `HEAD` for each probe) carry `Listener: "probes"`, `Path` the unprefixed pro
 
 **Replacement signal, in the same PR.** The trim never lands without it.
 
-- **Readiness gauge.** `app.readiness.status` (Int64 observable gauge), one series per registered
-  kind, attributes `readiness.kind` (`database`, `messaging`, `cache`, `streams`) and
-  `readiness.critical`. `1` is ready-equivalent, `0` failing. The callback reports each kind's most
-  recent result recorded by a walk (`/ready` or `/_sys/health-debug`) and never runs a probe
-  itself, so metric export adds no backend round-trip; a kind the gate did not reach keeps its last
-  value. The gauge is only as fresh as the last walk: with nothing polling `/ready`, it holds a stale
-  value, so alerting keys on the probe itself, not on this series alone.
+- **Readiness gauge.** `app.readiness.status` (Int64 observable gauge) reports each kind's **last
+  verdict** — the status the most recent readiness judgment (`/ready` or `/_sys/health-debug`)
+  recorded for it — with attributes `readiness.kind` (`database`, `messaging`, `cache`, `streams`)
+  and `readiness.critical`: `1` for `healthy`, `0` for `unhealthy`. A kind has a series only while
+  its last verdict is one of those two; `disabled`, `not_configured`, `per_tenant` and a kind not
+  yet judged have none, so a dashboard never shows an unused kind as healthy and a deploy never
+  starts at `0`. The last verdict is a view, never an input: judging never consults it, and the
+  callback never runs a probe, so export adds no backend round-trip. It is only as fresh as the
+  last judgment — with nothing polling `/ready` it holds a stale value — so alerting keys on the
+  probe itself, not on this series alone.
 - **Consumer and streams gauges.** Int64 observable gauges read from the managers' in-memory
   `Stats()` at collection, covering the `_stats` counters OTel lacks:
 
@@ -156,11 +168,12 @@ and `HEAD` for each probe) carry `Listener: "probes"`, `Path` the unprefixed pro
   Database pool and cache manager counters already have instruments (`db.client.connection.*`,
   `cache.manager.*`). The remaining manager counters (messaging publisher pool, database manager
   `removals`/`errors`, streams offset settings) stay on `/_sys/health-debug` only.
-- **Non-critical WARN.** When a walk records a non-critical kind as `unhealthy`, the framework logs
-  WARN `Readiness component unhealthy` (`component=<kind>`, `critical=false`, full error) on the
-  transition into `unhealthy`, then at most once per minute per kind while it stays so (a fixed
-  constant, not a config key). Critical kinds keep the ERROR line. With observability disabled this
-  WARN is the only in-process signal.
+- **Non-critical WARN.** When a judgment records a non-critical kind as `unhealthy`, the framework
+  logs WARN `Readiness component unhealthy` (`component=<kind>`, `critical=false`, full error) on
+  the transition into `unhealthy`, then at most once per minute per kind while it stays so (a fixed
+  constant, not a config key), and one INFO `Readiness component recovered` on the transition out,
+  so the end of an incident is visible in logs alone. Critical kinds keep the ERROR line. With
+  observability disabled these lines are the only in-process signal.
 
 ## Alternatives Considered
 
@@ -180,6 +193,10 @@ and `HEAD` for each probe) carry `Listener: "probes"`, `Path` the unprefixed pro
   scheduler's `GET /_sys/job` and `POST /_sys/job/:jobId` (gated by
   `scheduler.security.cidrallowlist`) are already access-controlled, and moving them changes the
   ADR-049 contract. That deserves its own decision.
+- **Keep `/health` on the application listener, move only `/ready`.** It would restore liveness
+  restarts for a wedged application listener, but leaves a probe reachable publicly and splits the
+  probes across two listeners. The application-listener check takes the pod out of rotation
+  instead.
 - **Make the probe port the default** (for example `8081`). Rejected for now: it would silently
   break every deployment whose probes target `server.port`. A later ADR can flip the default.
 
@@ -198,6 +215,10 @@ and `HEAD` for each probe) carry `Listener: "probes"`, `Path` the unprefixed pro
 - **HTTP against `/ready` only, never TCP.** A TCP connect succeeds as soon as the probe listener
   binds and throughout the application drain, so it says nothing about the application port. A
   deployment limited to TCP health checks keeps `probes.port: 0`.
+- **`/ready` watches the application listener; `/health` does not.** The application-listener
+  check makes a wedged application listener fail `/ready`, so the pod leaves rotation. `/health`
+  keeps meaning "the process is alive" and does not restart it, which avoids restart loops under
+  load; a pod that stays unready is the deployment's alert to raise.
 - **Load-balancer cutover.** A target group health-checks one port for every target, so in a
   rolling deploy old tasks (no probe port) and new ones (no probes on the traffic port) cannot both
   pass. Cut over with blue/green or weighted target groups, or relax the unhealthy threshold for
@@ -210,7 +231,7 @@ and `HEAD` for each probe) carry `Listener: "probes"`, `Path` the unprefixed pro
   security groups admitting the load balancer's subnets, or a host firewall on VMs; `docker -P`,
   NodePort and `hostNetwork` publish it unless excluded. Under a mesh that rewrites probes, check
   the rewritten probe targets the probe port.
-- Probes on the probe port stop sharing rate-limit budget and source-IP buckets with application
+- Probes on the probe listener stop sharing rate-limit budget and source-IP buckets with application
   traffic. Until Part 2 ships, the probe listener serves today's body in plaintext.
 
 **Consumers of the `/ready` body (Part 2):**

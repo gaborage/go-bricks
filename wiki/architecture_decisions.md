@@ -1920,8 +1920,9 @@ service's name, environment and version, its backends, and their pool and consum
 adds an opt-in probe listener: `server.probes.port` (`0` = off) binds a second, plain-HTTP server
 inside `Server.Start`, immediately before the application listener, that serves only the probes on
 unprefixed paths, with its own Echo engine and no limiter, tenant resolution, CORS or TLS; the
-application listener then stops serving them. `dispatchReady` answers `503` while stopping and
-until the application listener has bound, and the probe listener stops last. Part 2 trims `/ready`
+application listener then stops serving them. `dispatchReady` answers `503` while stopping, until
+the application listener has bound, and when a `HEAD` sent to the application listener gets no
+live answer, so a wedged application listener leaves rotation; the probe listener stops last. Part 2 trims `/ready`
 to `{"status":"ready"}` / `{"status":"not ready"}` and deletes the public projection, shipping in
 the same PR a per-kind readiness gauge, consumer and streams gauges for the counters the body
 carried, and a rate-limited WARN for an unhealthy non-critical kind. It amends ADR-002 (base path),

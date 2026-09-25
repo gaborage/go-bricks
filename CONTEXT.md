@@ -121,12 +121,29 @@ which of its statistics may appear on the unauthenticated `/ready` body.
 _Avoid_: health check, prober (the exported interface), probe config
 
 **Readiness**:
-The single judgment of whether the application may take traffic, and the two
-views of it — the `/ready` verdict and body, and the debug detail. Both are
-produced from the probe descriptions each slot sealed once after its own start,
-asked of the slot list at judgment time and never cached as a set of their own,
-and from the same list of statuses that count as ready.
-_Avoid_: health (as the noun for this), liveness, ready check
+The single judgment of whether the application may take traffic, and the views
+of it — the `/ready` verdict and body, the debug detail, and the last verdict.
+All are produced from the probe descriptions each slot sealed once after its own
+start, asked of the slot list at judgment time and never cached as a set of
+their own, and from the same list of statuses that count as ready.
+_Avoid_: health (as the noun for this), liveness, ready check, walk
+
+**Last verdict**:
+The status the most recent readiness judgment recorded for one kind, kept only
+so metrics can report readiness between judgments. It is a view, never an
+input: judging never consults it, and it is only as fresh as the last judgment.
+_Avoid_: cached readiness, current status
+
+**Application listener**:
+The listener that serves module routes, and the probes too unless a probe
+listener is configured.
+_Avoid_: main server, public port
+
+**Probe listener**:
+The optional second listener that serves only the liveness and readiness
+probes, so they are never reachable where module routes are. Say "probe port"
+only for its port number.
+_Avoid_: health server, management port, internal port
 
 ### Messaging
 
