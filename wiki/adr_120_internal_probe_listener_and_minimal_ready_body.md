@@ -67,14 +67,19 @@ streams counters have no OTel instrument. The unredacted detail's gated home, `/
   gzip, body limit or OTel HTTP middleware. (On the application listener the probe skipper exempts
   probes from OTel, tenant resolution and forwarded client certificate only; gzip, body limit and
   the limiters run on them.)
-- **No limiter.** No IP-keyed or application-shared limiter may be added to the probe listener:
-  removing the shared budget is what fixes the `429` defect. Coalescing concurrent `/ready` judgments
-  behind a singleflight is allowed.
+- **No limiter, but coalesced.** No IP-keyed or application-shared request-rate limiter may be
+  added to the probe listener: removing the shared budget is what fixes the `429` defect. Concurrent
+  `/ready` requests that reach the judgment (not stopping, `ReadyCh` closed) are coalesced behind a
+  singleflight, so a burst runs one judgment and one application-listener check, not one per
+  request; this shares an in-flight judgment and never reuses a finished one.
 - **Timeouts.** The probe listener reuses `server.timeout.read`, `.write`, `.idle` and
   `.middleware`; there are no probe-specific timeout keys.
 - **No TLS.** `server.tls.*` governs the application listener only. The probe listener is plain
   HTTP: no credential rides a probe, and after Part 2 the body carries one status word. A TLS
-  opt-in would need its own certificate material and rotation for no confidentiality gain.
+  opt-in would need its own certificate material and rotation for no confidentiality gain. Until
+  Part 2 ships, the probe listener serves today's detailed body in plaintext, so a deployment that
+  sets `probes.port` restricts the listener to its probe sources and keeps it off every public
+  network path (see Consequences); TLS is not required for that.
 - **Seam.** `ServerRunner` is unchanged. The probe listener is reached through an optional
   interface (`ProbeErrors() <-chan error`, `ProbeBoundAddr() net.Addr`), type-asserted on the
   injected runner the way `applyGlobalMiddleware` asserts its seam. With `probes.port > 0` and an

@@ -125,7 +125,8 @@ The single judgment of whether the application may take traffic, and the views
 of it — the `/ready` verdict and body, the debug detail, and the last verdict.
 All are produced from the probe descriptions each slot sealed once after its own
 start, asked of the slot list at judgment time and never cached as a set of
-their own, and from the same list of statuses that count as ready.
+their own, and from the same list of statuses that count as ready. These are
+the framework's views; a consumer may replace the `/ready` view with its own.
 _Avoid_: health (as the noun for this), liveness, ready check, walk
 
 **Last verdict**:
