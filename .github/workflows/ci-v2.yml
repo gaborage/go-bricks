@@ -290,7 +290,7 @@ jobs:
       # distribution server (Maven Central stopped publishing the self-contained
       # platform CLI tarballs mid-11.x; see the Install step).
       # renovate: datasource=github-releases depName=flyway/flyway
-      FLYWAY_VERSION: 13.7.0
+      FLYWAY_VERSION: 13.8.0
       FLYWAY_SHA256: b9ac9846e6d2254bc045168ee080d56df3d3ff52b865aea53c18fb305b1145ba
       TESTCONTAINERS_SESSION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       # Every test binary shares the reaper above, and Ryuk exits 10s after its
