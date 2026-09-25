@@ -244,7 +244,8 @@ and `HEAD` for each probe) carry `Listener: "probes"`, `Path` the unprefixed pro
   NodePort and `hostNetwork` publish it unless excluded. Under a mesh that rewrites probes, check
   the rewritten probe targets the probe port.
 - Probes on the probe listener stop sharing rate-limit budget and source-IP buckets with application
-  traffic. Until Part 2 ships, the probe listener serves today's body in plaintext.
+  traffic. Until Part 2 ships, the probe listener serves today's body in plaintext, so its traffic
+  stays on a trusted, isolated network (see **No TLS**).
 
 **Consumers of the `/ready` body (Part 2):**
 
