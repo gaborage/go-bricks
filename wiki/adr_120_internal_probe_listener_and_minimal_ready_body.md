@@ -103,7 +103,11 @@ set, it answers `503` `{"status":"not ready"}`. It then answers the same `503` u
 closed (a no-op on the application listener, which only serves after `ReadyCh` closes). On the
 probe listener it then runs the **application-listener check**: a `HEAD` of the reserved
 `<base><ready path>` sent to the application listener's bound address (`BoundAddr()`, loopback when
-bound to all interfaces) with a 500ms timeout, a fixed constant. That path has no route there, so a
+bound to all interfaces) with a 500ms timeout, a fixed constant. It speaks HTTPS when
+`server.tls.enabled` is set and HTTP otherwise; under TLS it skips certificate verification,
+because it dials the process's own bound address, which no certificate SAN names, and it tests
+liveness, not identity. `server.tls` verifies no client certificates, so the check needs none; a
+future client-certificate mode must revisit it. That path has no route there, so a
 live engine answers `404` through its whole middleware chain; any non-`5xx` answer passes, and a
 timeout, connection error or `5xx` answers `503` and logs WARN `Application listener unresponsive`.
 A TCP connect alone would not do: the kernel completes the handshake into the accept backlog even
@@ -145,7 +149,8 @@ and `HEAD` for each probe) carry `Listener: "probes"`, `Path` the unprefixed pro
 - **Readiness gauge.** `app.readiness.status` (Int64 observable gauge) reports each kind's **last
   verdict** — the status the most recent readiness judgment (`/ready` or `/_sys/health-debug`)
   recorded for it — with attributes `readiness.kind` (`database`, `messaging`, `cache`, `streams`)
-  and `readiness.critical`: `1` for `healthy`, `0` for `unhealthy`. A kind has a series only while
+  and `readiness.critical` (the kind's critical setting). The value is `1` for `healthy` and `0`
+  for `unhealthy`. A kind has a series only while
   its last verdict is one of those two; `disabled`, `not_configured`, `per_tenant` and a kind not
   yet judged have none, so a dashboard never shows an unused kind as healthy and a deploy never
   starts at `0`. The last verdict is a view, never an input: judging never consults it, and the
