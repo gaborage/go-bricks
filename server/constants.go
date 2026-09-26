@@ -20,6 +20,10 @@ const (
 	msgRateLimitExceeded = "Rate limit exceeded"
 )
 
+// slowRequestThreshold is the latency at which the access logger marks a request slow
+// (result_code WARN), on the application and probe engines alike.
+const slowRequestThreshold = time.Second
+
 // Standard log/JSON field key constants used in handlers and middleware.
 const (
 	fieldStatus    = "status"
