@@ -467,3 +467,128 @@ func TestNormalizeServerBodyLimit(t *testing.T) {
 		assert.Equal(t, DefaultBodyLimitBytes, cfg.Server.BodyLimit)
 	})
 }
+
+// probeServerConfig returns a ServerConfig that satisfies every other checkServer
+// check, so any error can only come from the probe keys.
+func probeServerConfig(host string, port int, probeHost string, probePort int) ServerConfig {
+	cfg := createValidServerConfig()
+	cfg.Host = host
+	cfg.Port = port
+	cfg.Probes = ProbesConfig{Host: probeHost, Port: probePort}
+	return cfg
+}
+
+// TestServerProbesPortRange pins server.probes.port's domain: 0 disables the listener,
+// 1..65535 enables it, anything else fails naming the key.
+func TestServerProbesPortRange(t *testing.T) {
+	tests := []struct {
+		name    string
+		port    int
+		wantErr bool
+	}{
+		{name: "zero_disables", port: 0},
+		{name: "minimum", port: 1},
+		{name: "maximum", port: 65535},
+		{name: "negative", port: -1, wantErr: true},
+		{name: "too_high", port: 65536, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := probeServerConfig("0.0.0.0", 8080, "", tt.port)
+
+			err := checkServer(&cfg)
+
+			if !tt.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, "server.probes.port", cfgErr.Field)
+		})
+	}
+}
+
+// TestServerProbesCollisionMatrix pins ADR-120's collision rule: an equal port is refused
+// when the effective hosts are equal strings or either is unspecified, and passes between
+// distinct specific hosts, aliases included.
+func TestServerProbesCollisionMatrix(t *testing.T) {
+	tests := []struct {
+		name      string
+		host      string
+		probeHost string
+		probePort int
+		wantErr   bool
+	}{
+		{name: "equal_hosts_same_port", host: "127.0.0.1", probeHost: "127.0.0.1", probePort: 8080, wantErr: true},
+		{name: "inherited_host_same_port", host: "10.0.0.5", probeHost: "", probePort: 8080, wantErr: true},
+		{name: "unspecified_server_host_specific_probe_host", host: "0.0.0.0", probeHost: "127.0.0.1", probePort: 8080, wantErr: true},
+		{name: "specific_server_host_unspecified_probe_host", host: "127.0.0.1", probeHost: "0.0.0.0", probePort: 8080, wantErr: true},
+		{name: "empty_server_host_specific_probe_host", host: "", probeHost: "127.0.0.1", probePort: 8080, wantErr: true},
+		{name: "ipv6_unspecified_server_host", host: "::", probeHost: "127.0.0.1", probePort: 8080, wantErr: true},
+		{name: "bracketed_ipv6_unspecified_probe_host", host: "127.0.0.1", probeHost: "[::]", probePort: 8080, wantErr: true},
+		{name: "distinct_specific_hosts_same_port", host: "10.0.0.5", probeHost: "127.0.0.1", probePort: 8080},
+		// An alias pair is not judged here; the second bind fails with the OS error.
+		{name: "alias_hosts_same_port", host: "localhost", probeHost: "127.0.0.1", probePort: 8080},
+		{name: "equal_hosts_distinct_port", host: "0.0.0.0", probeHost: "", probePort: 9090},
+		{name: "disabled_never_collides", host: "0.0.0.0", probeHost: "", probePort: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := probeServerConfig(tt.host, 8080, tt.probeHost, tt.probePort)
+
+			err := checkServer(&cfg)
+
+			assert.Equal(t, tt.wantErr, cfg.CheckProbeCollision() != nil, "validation and server.Start must apply one rule")
+			if !tt.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, "server.probes.port", cfgErr.Field)
+			assert.Contains(t, cfgErr.Message, "server.port")
+		})
+	}
+}
+
+// TestServerEffectiveProbeHost pins the accessor's fallback: server.probes.host when set,
+// else server.host.
+func TestServerEffectiveProbeHost(t *testing.T) {
+	cfg := ServerConfig{Host: "0.0.0.0"}
+	assert.Equal(t, "0.0.0.0", cfg.EffectiveProbeHost())
+
+	cfg.Probes.Host = "127.0.0.1"
+	assert.Equal(t, "127.0.0.1", cfg.EffectiveProbeHost())
+}
+
+// TestLoadServerProbesFromEnv pins the env mapping of both probe keys, and that the
+// listener is off by default.
+func TestLoadServerProbesFromEnv(t *testing.T) {
+	cfg, err := loadConfigFixture(t, nil, nil)
+	require.NoError(t, err)
+	assert.Zero(t, cfg.Server.Probes.Port, "the probe listener is opt-in")
+	assert.Empty(t, cfg.Server.Probes.Host)
+
+	cfg, err = loadConfigFixture(t, nil, map[string]string{
+		"SERVER_PROBES_PORT": "9090",
+		"SERVER_PROBES_HOST": "127.0.0.1",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 9090, cfg.Server.Probes.Port)
+	assert.Equal(t, "127.0.0.1", cfg.Server.Probes.Host)
+	assert.Equal(t, "127.0.0.1", cfg.Server.EffectiveProbeHost())
+}
+
+// TestLoadServerProbesCollisionFailsLoad pins that the collision rule runs on the Load path,
+// not only through checkServer: the default server.host is unspecified, so reusing
+// server.port refuses.
+func TestLoadServerProbesCollisionFailsLoad(t *testing.T) {
+	_, err := loadConfigFixture(t, nil, map[string]string{"SERVER_PROBES_PORT": "8080"})
+
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "server.probes.port", cfgErr.Field)
+}

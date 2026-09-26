@@ -132,13 +132,17 @@ func TestLoadAllowedIPsDeliberateShapesUnchanged(t *testing.T) {
 	})
 }
 
-// TestDeliveredEmptyListCheckCoversOnlyAllowedIPs is the containment pin. The mechanism is
-// list-driven so a future key joins by adding one name, which is exactly why the list needs a
-// test that FAILS when a name is added silently: every other []string key must still accept a
-// delivered-empty value, because clearing those tightens the posture (or fails elsewhere)
-// rather than removing a control.
-func TestDeliveredEmptyListCheckCoversOnlyAllowedIPs(t *testing.T) {
-	assert.Equal(t, []string{"debug.allowedips"}, deliveredEmptyRejectingKeys,
+// TestDeliveredEmptyCheckCoversOnlyItsKeys is the containment pin. The mechanism is
+// table-driven so a future key joins by adding one entry, which is exactly why the table needs
+// a test that FAILS when an entry is added silently: every other []string key must still
+// accept a delivered-empty value, because clearing those tightens the posture (or fails
+// elsewhere) rather than removing a control.
+func TestDeliveredEmptyCheckCoversOnlyItsKeys(t *testing.T) {
+	keys := make([]string, 0, len(deliveredEmptyRejectingKeys))
+	for _, r := range deliveredEmptyRejectingKeys {
+		keys = append(keys, r.key)
+	}
+	assert.Equal(t, []string{"debug.allowedips", "server.probes.host"}, keys,
 		"adding a key here changes startup for every deployment that clears it — add its case below too")
 
 	const header = "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n"
@@ -278,4 +282,74 @@ func TestLoadAllowedIPsEntryShapesStillBoot(t *testing.T) {
 			assert.Equal(t, tt.want, cfg.Debug.AllowedIPs)
 		})
 	}
+}
+
+// TestLoadRejectsDeliveredEmptyProbeHost pins ADR-120's delivered-empty rule for
+// server.probes.host. Unset, the key takes server.host (0.0.0.0 by default), so every
+// delivery that renders no host would widen a loopback-only probe bind without a word.
+func TestLoadRejectsDeliveredEmptyProbeHost(t *testing.T) {
+	const header = "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n"
+
+	tests := []struct {
+		name string
+		yaml string
+		env  map[string]string
+	}{
+		{name: "env_empty", yaml: header, env: map[string]string{"SERVER_PROBES_HOST": ""}},
+		{name: "env_whitespace", yaml: header, env: map[string]string{"SERVER_PROBES_HOST": "  "}},
+		{name: "yaml_empty_string", yaml: header + "  probes:\n    port: 9090\n    host: \"\"\n"},
+		{name: "yaml_bare_null", yaml: header + "  probes:\n    port: 9090\n    host:\n"},
+		{name: "env_empty_over_real_yaml_host", yaml: header + "  probes:\n    host: 127.0.0.1\n", env: map[string]string{"SERVER_PROBES_HOST": ""}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := loadDeliveredEmptyFixture(t, tt.yaml, tt.env)
+
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, "server.probes.host", cfgErr.Field)
+			assert.Contains(t, cfgErr.Message, "delivered empty")
+			assert.Contains(t, cfgErr.Action, "SERVER_PROBES_HOST")
+			assert.Contains(t, cfgErr.Action, "remove the key")
+		})
+	}
+}
+
+// TestLoadProbeHostDeliberateShapesUnchanged is the counterweight: an absent key takes
+// server.host, and a real value is kept.
+func TestLoadProbeHostDeliberateShapesUnchanged(t *testing.T) {
+	const header = "app:\n  name: a\n  version: v1\nserver:\n  host: 0.0.0.0\n  port: 8080\n"
+
+	t.Run("absent_takes_server_host", func(t *testing.T) {
+		cfg, err := loadDeliveredEmptyFixture(t, header+"  probes:\n    port: 9090\n", nil)
+
+		require.NoError(t, err)
+		assert.Empty(t, cfg.Server.Probes.Host)
+		assert.Equal(t, "0.0.0.0", cfg.Server.EffectiveProbeHost())
+	})
+
+	t.Run("explicit_host_kept", func(t *testing.T) {
+		cfg, err := loadDeliveredEmptyFixture(t, header+"  probes:\n    port: 9090\n    host: 127.0.0.1\n", nil)
+
+		require.NoError(t, err)
+		assert.Equal(t, "127.0.0.1", cfg.Server.EffectiveProbeHost())
+	})
+}
+
+// TestDeliveredEmptyCheckLeavesServerHostClearable pins server.probes.host's sibling string
+// key outside the check: an empty server.host binds every interface, which is its documented
+// meaning rather than a fallback.
+func TestDeliveredEmptyCheckLeavesServerHostClearable(t *testing.T) {
+	cfg, err := loadDeliveredEmptyFixture(t, "", map[string]string{"SERVER_HOST": ""})
+
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Server.Host)
+}
+
+// TestDeliveredEmptyActionNamesTheKeyWithoutAnEnvVar pins the hint's fallback: a key no
+// environment variable reaches is named as a key, never as a variable that lands elsewhere.
+func TestDeliveredEmptyActionNamesTheKeyWithoutAnEnvVar(t *testing.T) {
+	assert.Equal(t, "set SERVER_PROBES_HOST to a value, or x", deliveredEmptyAction("server.probes.host", "x"))
+	assert.Equal(t, "give databases.report_db.host a value, or x", deliveredEmptyAction("databases.report_db.host", "x"))
 }
