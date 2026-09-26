@@ -231,10 +231,11 @@ module routes are legal. With the port set the reservation is the `404` stub (se
 routes**), which carries no descriptor. `RouteDescriptor` gains `Listener string`: empty for the
 application listener, `"probes"` for the probe listener. With the port set, the four probe
 descriptors (`GET` and `HEAD` for each probe) carry `Listener: "probes"`, `Path` the unprefixed
-probe path, and `HandlerID` `formatHandlerID(method, path)` (`GET:/ready`). For a probe-listener
-descriptor `HandlerID` identifies the route on its own listener; it intentionally differs from the
-application listener's reservation key `<base><path>` in the conflict tracker (`GET:/api/ready`
-under base `/api`), and `formatHandlerID`'s doc says so. `PostRegisterRoutes` and
+probe path, and a `HandlerID` namespaced by listener, `probes:` + `formatHandlerID(method, path)`
+(`probes:GET:/ready`). `HandlerID` stays unique across listeners: under base `/api` a module's
+root-group `GET /ready` is legal (the reservation is `/api/ready`) and keeps `GET:/ready`, so an
+inventory keyed by `HandlerID` loses neither route. The probe-listener ID also never equals the
+application listener's reservation key `<base><path>` in the conflict tracker. `PostRegisterRoutes` and
 `server.logroutes` see these descriptors; the route log line adds a `listener` field.
 
 ### 2. `/ready` answers status only — breaking
