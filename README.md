@@ -377,9 +377,11 @@ server:
     base: "/api/v1"     # All routes prefixed
     health: "/health"   # Liveness endpoint
     ready: "/ready"     # Readiness endpoint
+  probes:
+    port: 0             # >0 serves both probes only on this plain-HTTP port, unprefixed
 ```
 
-Override with environment variables: `SERVER_PATH_BASE`, `SERVER_PATH_HEALTH`, `SERVER_PATH_READY`.
+Override with environment variables: `SERVER_PATH_BASE`, `SERVER_PATH_HEALTH`, `SERVER_PATH_READY`, `SERVER_PROBES_PORT`, `SERVER_PROBES_HOST`. The probe listener is opt-in; read [wiki/startup_defaults.md](wiki/startup_defaults.md#internal-probe-listener) before setting it.
 
 ---
 

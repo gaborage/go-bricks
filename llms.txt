@@ -5407,6 +5407,15 @@ When `observability.enabled: true`, the framework auto-emits:
 | `GET /health` | `200` `{"status":"ok"}` always (liveness only — no component probes) | none |
 | `GET /ready` | `200` with one `<name>` + `<name>_stats` pair per registered kind (`database`, `messaging`, `cache` always; `streams` once streams are declared); `503` when the **database** probe fails, when the **cache** probe fails under `cache.critical: true`, or when the **messaging** probe fails under `messaging.consumers.critical: true`. The `503` `error` is never the probe's raw error: it is the fixed `<component> unavailable` (`database unavailable`, `cache unavailable`, `messaging unavailable`), synthesized for every critical probe and overridable per probe via `HealthStatus.PublicErr` (ADR-048). Messaging 503s only under `messaging.consumers.critical: true`, and then while EITHER arm fails: any declared consumer on any tenant key is unsubscribed AND has five or more consecutive failed re-subscribes, or the control-plane publisher reports not ready. Each consumer owns its streak and a success clears that one, so readiness returns once no consumer is over the threshold and the publisher is ready (ADR-114). The full error stays on the app log and, where debug is enabled and access-controlled, on `/_sys/health-debug` | DB: lease a connection, then `conn.Health(ctx)` (always critical). Messaging: check every declared consumer's re-subscribe streak FIRST (lease-independent, so it also applies when the control-plane key resolves to nothing), then lease a publisher and check its `IsReady()`; non-critical by default, and the consumer arm is only evaluated at all under `messaging.consumers.critical: true` (ADR-114). Cache: lease an instance, then `cache.Health(ctx)` (Redis `PING` per probe); non-critical by default — `cache.critical: true` opts in (ADR-094) |
 
+Both probes can move to an opt-in plain-HTTP probe listener (ADR-120). It serves them at their unprefixed paths, the application listener answers `404` at `<base><path>`, and `/ready` there also answers `503` until the application listener serves or whenever it stops answering. Point every orchestrator probe at that port over HTTP (`wiki/startup_defaults.md#internal-probe-listener`):
+
+```yaml
+server:
+  probes:
+    port: 9090   # 0 (default) = off; env SERVER_PROBES_PORT
+    # host: unset = server.host; env SERVER_PROBES_HOST
+```
+
 ### Configuration — Layered by Environment
 
 The recommended pattern is **stdout for dev → OTEL Collector for prod → vendor headers as a side concern**. The collector decouples your app from vendor specifics (failover, sampling, transformation, multi-backend export).

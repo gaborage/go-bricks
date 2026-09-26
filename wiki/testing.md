@@ -434,6 +434,17 @@ require.NoError(t, srv.Shutdown(ctx))
 Both methods live on `*server.Server`, not on `app.ServerRunner`; code holding a `ServerRunner`
 type-asserts to `interface{ ReadyCh() <-chan struct{}; BoundAddr() net.Addr }`.
 
+`server.probes.port: 0` means the probe listener is disabled, so it has no OS-picked port. A
+test that wants one sets `cfg.Server.Probes.Port` to a real free port — listen on
+`127.0.0.1:0`, read the port, close the listener, and accept that another process may take it
+first (framework tests use `internal/testutil.ReserveFreePort`, which consumers cannot import)
+— and `cfg.Server.Probes.Host` to `127.0.0.1`, since unset it takes `Server.Host`. After
+`ReadyCh()` closes, dial `ProbeBoundAddr()`, which also lives only on `*server.Server`, with a
+client whose Transport sets `DisableKeepAlives: true`, as the framework's own probe tests do: a
+keep-alive client can leave a never-used connection that holds the probe listener's 1s stop
+budget open and logs its overrun WARN. The port collision rule stays quiet because
+`Server.Port` 0 never equals the probe port.
+
 ## Integration Testing with Testcontainers
 
 **Prerequisites:** Docker Desktop or Docker Engine running
