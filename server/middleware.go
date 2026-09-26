@@ -113,32 +113,11 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	setupIdentityMiddlewares(e, log, cfg, probeSkipper)
 
 	// Logger middleware with zerolog
-	e.Use(loggerWithConfigEcho(log, LoggerConfig{
-		HealthPath:           healthPath,
-		ReadyPath:            readyPath,
-		SlowRequestThreshold: 1 * time.Second,
-	}))
+	e.Use(requestLoggerEcho(log, healthPath, readyPath))
 
-	// Recovery. DisableStackAll keeps the capture to the panicking goroutine:
-	// PanicStackError.Error() concatenates the stack, and that string becomes the
-	// OTel span's status description on every 500, so the default all-goroutine
-	// dump puts up to 4 KB of unrelated stacks on a hot-path attribute. The
-	// panicking goroutine is the one that identifies the site.
-	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{DisableStackAll: true}))
+	usePanicRecovery(e)
 
-	e.Use(sanitizePanicValue())
-
-	// Registered AFTER Recover, so it sits INSIDE it and sees the raw recovered
-	// value. Order matters and is the whole point — see sanitizePanicValue.
-
-	// Security headers
-	e.Use(middleware.SecureWithConfig(middleware.SecureConfig{
-		XSSProtection:         "1; mode=block",
-		ContentTypeNosniff:    "nosniff",
-		XFrameOptions:         "SAMEORIGIN",
-		HSTSMaxAge:            3600,
-		ContentSecurityPolicy: "default-src 'self'",
-	}))
+	e.Use(secureHeadersEcho())
 
 	// Timeout - add a request-scoped deadline without swapping the response writer.
 	// This prevents goroutine panics when the context is canceled mid-flight.
@@ -174,6 +153,57 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	if cfg.Server.ResponseTime.Enabled {
 		e.Use(timingEcho())
 	}
+}
+
+// setupProbeMiddlewares registers the probe listener's chain (ADR-120): the application
+// chain's outermost recover, request ID, request logger, Recover + sanitizePanicValue,
+// Secure headers and middleware timeout, in the same order. Nothing that limits,
+// identifies or reshapes a request joins it — no rate limiter or IP pre-guard, and no
+// requestEnrich, OTel, CORS, tenant, forwarded client cert, body limit, gzip or timing.
+// No limiter may be added here: sharing the application's budget is what let a noisy
+// client push /ready to 429. Probes carry no trace context, and without requestEnrich's
+// lease scope a handle a probe borrows is released at once.
+func setupProbeMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healthPath, readyPath string) {
+	e.Use(outermostRecoverEcho(log, cfg))
+	e.Use(requestIDMiddlewareEcho())
+	e.Use(requestLoggerEcho(log, healthPath, readyPath))
+	usePanicRecovery(e)
+	e.Use(secureHeadersEcho())
+	e.Use(timeoutEcho(cfg.Server.Timeout.Middleware))
+}
+
+// requestLoggerEcho is the zerolog access logger, with its probe-path handling keyed on
+// the paths this engine serves the probes at.
+func requestLoggerEcho(log logger.Logger, healthPath, readyPath string) echo.MiddlewareFunc {
+	return loggerWithConfigEcho(log, LoggerConfig{
+		HealthPath:           healthPath,
+		ReadyPath:            readyPath,
+		SlowRequestThreshold: 1 * time.Second,
+	})
+}
+
+// usePanicRecovery registers Echo's Recover, then sanitizePanicValue. Registered AFTER
+// Recover, sanitizePanicValue sits INSIDE it and sees the raw recovered value. Order
+// matters and is the whole point — see sanitizePanicValue.
+//
+// DisableStackAll keeps the capture to the panicking goroutine: PanicStackError.Error()
+// concatenates the stack, and that string becomes the OTel span's status description on
+// every 500, so the default all-goroutine dump puts up to 4 KB of unrelated stacks on a
+// hot-path attribute. The panicking goroutine is the one that identifies the site.
+func usePanicRecovery(e *echo.Echo) {
+	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{DisableStackAll: true}))
+	e.Use(sanitizePanicValue())
+}
+
+// secureHeadersEcho sets the security response headers.
+func secureHeadersEcho() echo.MiddlewareFunc {
+	return middleware.SecureWithConfig(middleware.SecureConfig{
+		XSSProtection:         "1; mode=block",
+		ContentTypeNosniff:    "nosniff",
+		XFrameOptions:         "SAMEORIGIN",
+		HSTSMaxAge:            3600,
+		ContentSecurityPolicy: "default-src 'self'",
+	})
 }
 
 // setupIdentityMiddlewares registers the identity-establishing middlewares

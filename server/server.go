@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	goerrors "errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
@@ -48,6 +49,54 @@ type Server struct {
 	// Only the lifecycle test sets it, to park a commit and prove Shutdown cannot
 	// return while one is in flight.
 	testHookReadyCommit func()
+
+	// probeEcho serves /health and /ready on the probe listener (ADR-120); nil when the
+	// listener is disabled and the application engine serves the probes itself.
+	probeEcho      *echo.Echo
+	probeAddr      string
+	probe          atomic.Pointer[probeListener]
+	probeBoundAddr atomic.Pointer[net.Addr]
+	probeErrs      chan error
+	closeProbeErrs func()
+	// probeStopBudget bounds the probe listener's graceful stop; only a test shortens it.
+	probeStopBudget time.Duration
+}
+
+// probeListener is the probe listener's server and the socket it serves, stored together
+// so a stop releases the socket even before Serve has tracked it.
+type probeListener struct {
+	srv *http.Server
+	ln  net.Listener
+}
+
+// close stops the probe listener at once. Closing ln as well releases the port even when
+// Serve has not yet tracked the listener, which srv.Close alone would miss.
+func (p *probeListener) close() {
+	_ = p.srv.Close()
+	_ = p.ln.Close()
+}
+
+// probeStopTimeout is the probe listener's graceful-stop budget, detached from the
+// caller's Shutdown context so a probe in flight at that deadline cannot fail a clean exit.
+const probeStopTimeout = time.Second
+
+// probeMethods are the methods each probe answers.
+var probeMethods = []string{http.MethodGet, http.MethodHead}
+
+// serverOption adjusts a Server in newServer before its engines and routes are wired.
+type serverOption func(*Server)
+
+// withEphemeralProbeListener enables the probe listener on 127.0.0.1:0 while
+// server.probes.port stays 0, so the Start-time collision rule does not judge it. Tests
+// only: a consumer test that wants a probe listener binds a real free port.
+func withEphemeralProbeListener() serverOption {
+	return func(s *Server) { s.probeAddr = "127.0.0.1:0" }
+}
+
+// hostPort joins a listener's bind address. It trims brackets first, so "::" and "[::]",
+// both spellings the probe collision rule accepts, bind the same address.
+func hostPort(host string, port int) string {
+	return net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(port))
 }
 
 // normalizeBasePath cannot use pathutil.NormalizePrefix because that helper
@@ -132,26 +181,16 @@ func trustedProxyOptions(trustedProxies []string, log logger.Logger) []echo.Trus
 
 // New creates a new HTTP server instance with the given configuration and logger.
 // It initializes Echo with middlewares, error handling, and health check endpoints.
+// With server.probes.port set it also builds the probe listener's engine (ADR-120).
 func New(cfg *config.Config, log logger.Logger) *Server {
+	return newServer(cfg, log)
+}
+
+func newServer(cfg *config.Config, log logger.Logger, opts ...serverOption) *Server {
 	SetCaptureStackTraces(cfg.App.IsDevelopment())
 
 	e := echo.New()
-	// Use an error handler that emits standardized APIResponse envelopes.
-	// Echo v5's Recover middleware wraps panics in middleware.PanicStackError;
-	// we log them here with structured zerolog fields before normal error handling.
-	e.HTTPErrorHandler = func(c *echo.Context, err error) {
-		var panicErr *middleware.PanicStackError
-		if goerrors.As(err, &panicErr) {
-			// SECURITY: debug-gate the panic cause the same way as the unhandled-5xx
-			// path — a panicking driver/downstream error can embed PII/PCI, and the
-			// SensitiveDataFilter masks by field name, not message content.
-			appendErrorDetail(
-				log.Error().Bytes("stack", panicErr.Stack).Str("request_id", safeGetRequestID(c)),
-				panicErr.Unwrap(), cfg.App.Debug,
-			).Msg("Panic recovered")
-		}
-		customErrorHandler(c, err, cfg, log)
-	}
+	e.HTTPErrorHandler = httpErrorHandler(cfg, log)
 
 	// Derive RealIP() by walking X-Forwarded-For right-to-left and returning the
 	// first untrusted hop, so the address that keys rate limits and appears in
@@ -171,15 +210,24 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 	readyRoute := normalizeRoutePath(cfg.Server.Path.Ready, "/ready")
 
 	s := &Server{
-		echo:         e,
-		cfg:          cfg,
-		logger:       log,
-		basePath:     basePath,
-		healthRoute:  healthRoute,
-		readyRoute:   readyRoute,
-		readyHandler: nil,
-		conflicts:    newRouteConflictTracker(),
-		ready:        make(chan struct{}),
+		echo:            e,
+		cfg:             cfg,
+		logger:          log,
+		basePath:        basePath,
+		healthRoute:     healthRoute,
+		readyRoute:      readyRoute,
+		readyHandler:    nil,
+		conflicts:       newRouteConflictTracker(),
+		ready:           make(chan struct{}),
+		probeErrs:       make(chan error, 1),
+		probeStopBudget: probeStopTimeout,
+	}
+	s.closeProbeErrs = sync.OnceFunc(func() { close(s.probeErrs) })
+	if cfg.Server.Probes.Port > 0 {
+		s.probeAddr = hostPort(cfg.Server.EffectiveProbeHost(), cfg.Server.Probes.Port)
+	}
+	for _, opt := range opts {
+		opt(s)
 	}
 
 	// Compute full paths for probe endpoints before middleware setup
@@ -190,24 +238,14 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 	// middleware is registered only when observability is enabled (zero overhead when off).
 	SetupMiddlewares(e, log, cfg, cfg.Bool("observability.enabled", false), healthPath, readyPath)
 
-	s.RegisterReadyHandler(nil)
+	if s.probeAddr != "" {
+		s.probeEcho = newProbeEngine(e, cfg, log, healthRoute, readyRoute)
+	} else {
+		s.closeProbeErrs()
+	}
 
-	// The probes register directly on the engine (not through a routeGroup), so record
-	// them explicitly: a module claiming the health/ready path must fail startup like
-	// any other collision, and the route table must list them like any other route.
-	probes := []struct {
-		path, name string
-		handler    echo.HandlerFunc
-	}{
-		{healthPath, "healthCheck", s.healthCheck},
-		{readyPath, "dispatchReady", s.dispatchReady},
-	}
-	for _, p := range probes {
-		for _, method := range []string{http.MethodGet, http.MethodHead} {
-			e.Add(method, p.path, p.handler)
-			registerRoute(s.conflicts, method, p.path, RouteRegistrant{HandlerName: p.name, Package: serverPackagePath})
-		}
-	}
+	s.RegisterReadyHandler(nil)
+	s.registerProbeRoutes(healthPath, readyPath)
 
 	log.Debug().
 		Str("base_path", basePath).
@@ -216,6 +254,73 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 		Msg("Server paths configured")
 
 	return s
+}
+
+// httpErrorHandler emits standardized APIResponse envelopes; both engines use it.
+// Echo v5's Recover middleware wraps panics in middleware.PanicStackError; it logs
+// them with structured zerolog fields before normal error handling.
+func httpErrorHandler(cfg *config.Config, log logger.Logger) echo.HTTPErrorHandler {
+	return func(c *echo.Context, err error) {
+		var panicErr *middleware.PanicStackError
+		if goerrors.As(err, &panicErr) {
+			// SECURITY: debug-gate the panic cause the same way as the unhandled-5xx
+			// path — a panicking driver/downstream error can embed PII/PCI, and the
+			// SensitiveDataFilter masks by field name, not message content.
+			appendErrorDetail(
+				log.Error().Bytes("stack", panicErr.Stack).Str("request_id", safeGetRequestID(c)),
+				panicErr.Unwrap(), cfg.App.Debug,
+			).Msg("Panic recovered")
+		}
+		customErrorHandler(c, err, cfg, log)
+	}
+}
+
+// newProbeEngine builds the probe listener's engine (ADR-120). It shares the application
+// engine's error handler, and its client-IP extractor so the probe access log resolves
+// client.address by the same trusted-proxy walk; it gets its own minimal chain.
+func newProbeEngine(app *echo.Echo, cfg *config.Config, log logger.Logger, healthRoute, readyRoute string) *echo.Echo {
+	pe := echo.New()
+	pe.HTTPErrorHandler = app.HTTPErrorHandler
+	pe.IPExtractor = app.IPExtractor
+	setupProbeMiddlewares(pe, log, cfg, healthRoute, readyRoute)
+	return pe
+}
+
+// registerProbeRoutes wires /health and /ready. They register directly on the engine
+// (not through a routeGroup), so they are recorded explicitly: a module claiming a probe
+// path must fail startup like any other collision, and the route table must list them
+// like any other route. The reservation at <base><path> holds whatever
+// server.probes.port says, so flipping it never changes which module routes are legal;
+// with the probe listener enabled the application engine answers 404 there, and the
+// probe engine serves the probes at their unprefixed paths.
+func (s *Server) registerProbeRoutes(healthPath, readyPath string) {
+	probes := []struct {
+		path, route, name     string
+		handler, probeHandler echo.HandlerFunc
+	}{
+		{healthPath, s.healthRoute, "healthCheck", s.healthCheck, s.healthCheck},
+		{readyPath, s.readyRoute, "dispatchReady", s.dispatchReady, s.dispatchProbeReady},
+	}
+	for _, p := range probes {
+		appHandler := p.handler
+		if s.probeEcho != nil {
+			appHandler = reservedProbeRoute
+		}
+		for _, method := range probeMethods {
+			s.echo.Add(method, p.path, appHandler)
+			registerRoute(s.conflicts, method, p.path, RouteRegistrant{HandlerName: p.name, Package: serverPackagePath})
+			if s.probeEcho != nil {
+				s.probeEcho.Add(method, p.route, p.probeHandler)
+			}
+		}
+	}
+}
+
+// reservedProbeRoute holds a probe's <base><path> on the application engine while the
+// probe listener serves it. Echo matches a static route ahead of a param or wildcard
+// route, so a module's /:id or /* under the base never serves the reserved path.
+func reservedProbeRoute(*echo.Context) error {
+	return echo.ErrNotFound
 }
 
 // ModuleGroup returns a route registrar with the base path applied for module route
@@ -257,14 +362,31 @@ func (s *Server) RegisterReadyHandler(handler Handler) {
 // stopping latch it answers 503 instead and never calls the handler.
 func (s *Server) dispatchReady(c *echo.Context) error {
 	if s.stopping.Load() {
-		return c.JSON(http.StatusServiceUnavailable, map[string]string{
-			fieldStatus: statusNotReady,
-		})
+		return notReady(c)
 	}
 	s.readyMu.RLock()
 	handler := s.readyHandler
 	s.readyMu.RUnlock()
 	return handler(c)
+}
+
+// dispatchProbeReady serves /ready on the probe listener. That listener binds before the
+// application listener serves, so it answers 503 until ReadyCh closes, then defers to
+// dispatchReady.
+func (s *Server) dispatchProbeReady(c *echo.Context) error {
+	select {
+	case <-s.ready:
+		return s.dispatchReady(c)
+	default:
+		return notReady(c)
+	}
+}
+
+// notReady writes the /ready gates' 503 verdict.
+func notReady(c *echo.Context) error {
+	return c.JSON(http.StatusServiceUnavailable, map[string]string{
+		fieldStatus: statusNotReady,
+	})
 }
 
 // ErrServerAlreadyStarted is returned by every Start on a Server after the first,
@@ -277,30 +399,29 @@ var ErrServerAlreadyStarted = goerrors.New("server: Start called more than once"
 // ErrServerAlreadyStarted without binding, and Shutdown resets neither
 // BoundAddr nor ReadyCh. Shutdown called before the first Start makes that
 // Start return http.ErrServerClosed without binding or serving.
+//
+// With the probe listener enabled it binds and serves first; a probe bind failure
+// returns before the application listener binds, and any later failure closes the
+// probe listener before Start returns.
 func (s *Server) Start() error {
 	if !s.started.CompareAndSwap(false, true) {
 		return ErrServerAlreadyStarted
 	}
 	if s.stopping.Load() {
+		s.closeProbeErrs()
 		return http.ErrServerClosed
 	}
-	addr := fmt.Sprintf("%s:%d", s.cfg.Server.Host, s.cfg.Server.Port)
+	addr := hostPort(s.cfg.Server.Host, s.cfg.Server.Port)
 
-	var tlsCfg *tls.Config
-	if s.cfg.Server.TLS.Enabled {
-		var err error
-		tlsCfg, err = buildServerTLSConfig(&s.cfg.Server.TLS)
-		if err != nil {
-			return err
-		}
-	} else if hasStagedServerTLSMaterial(&s.cfg.Server.TLS) {
-		// Fail-open is deliberate — staging material ahead of a flip is a
-		// legitimate rollout step — but a mistyped SERVER_TLS_ENABLED that
-		// leaves full material configured and serves plaintext must never be
-		// silent.
-		s.logger.Warn().
-			Str("field", "server.tls.enabled").
-			Msg("server.tls material is configured but server.tls.enabled is false; serving plaintext")
+	tlsCfg, err := s.serverTLSConfig()
+	if err != nil {
+		s.closeProbeErrs()
+		return err
+	}
+
+	closeProbes, err := s.startProbeListener()
+	if err != nil {
+		return err
 	}
 
 	s.logger.Info().
@@ -321,7 +442,92 @@ func (s *Server) Start() error {
 		BeforeServeFunc:  s.onBeforeServe,
 	}
 
-	return sc.Start(context.Background(), s.echo)
+	// Echo returns nil only after a graceful Shutdown, which owns the probe listener's
+	// stop from then on: it runs last, after the application drain.
+	if err := sc.Start(context.Background(), s.echo); err != nil {
+		closeProbes()
+		return err
+	}
+	return nil
+}
+
+// serverTLSConfig builds the application listener's TLS config, or nil when TLS is off.
+func (s *Server) serverTLSConfig() (*tls.Config, error) {
+	if s.cfg.Server.TLS.Enabled {
+		return buildServerTLSConfig(&s.cfg.Server.TLS)
+	}
+	if hasStagedServerTLSMaterial(&s.cfg.Server.TLS) {
+		// Fail-open is deliberate — staging material ahead of a flip is a
+		// legitimate rollout step — but a mistyped SERVER_TLS_ENABLED that
+		// leaves full material configured and serves plaintext must never be
+		// silent.
+		s.logger.Warn().
+			Str("field", "server.tls.enabled").
+			Msg("server.tls material is configured but server.tls.enabled is false; serving plaintext")
+	}
+	return nil, nil
+}
+
+// startProbeListener binds and serves the probe listener ahead of the application bind
+// (ADR-120) and returns what closes it at once; a no-op when the listener is disabled.
+// Every refusal closes ProbeErrors, since no Serve goroutine will. The store shares a
+// lifecycleMu critical section with the stopping read, as onBeforeServe's commit does,
+// so a Shutdown that already latched vetoes it and one that latches later finds the
+// listener to stop.
+func (s *Server) startProbeListener() (closeProbes func(), err error) {
+	if s.probeEcho == nil {
+		return func() {}, nil
+	}
+	defer func() {
+		if err != nil {
+			s.closeProbeErrs()
+		}
+	}()
+	if collision := s.cfg.Server.CheckProbeCollision(); collision != nil {
+		return nil, collision
+	}
+	lc := net.ListenConfig{}
+	ln, err := lc.Listen(context.Background(), "tcp", s.probeAddr)
+	if err != nil {
+		return nil, err
+	}
+	p := &probeListener{
+		srv: &http.Server{
+			Handler:           s.probeEcho,
+			ErrorLog:          slog.NewLogLogger(s.probeEcho.Logger.Handler(), slog.LevelError),
+			ReadHeaderTimeout: s.cfg.Server.Timeout.Read, // in the literal for gosec G112
+		},
+		ln: ln,
+	}
+	applyServerTimeouts(p.srv, s.cfg.Server.Timeout)
+
+	s.lifecycleMu.Lock()
+	vetoed := s.stopping.Load()
+	if !vetoed {
+		s.probe.Store(p)
+	}
+	s.lifecycleMu.Unlock()
+	if vetoed {
+		_ = ln.Close()
+		return nil, http.ErrServerClosed
+	}
+
+	boundAddr := ln.Addr()
+	s.probeBoundAddr.Store(&boundAddr)
+	s.logger.Info().
+		Str("address", boundAddr.String()).
+		Msg("Starting probe listener...")
+	go s.serveProbes(p.srv, ln)
+	return p.close, nil
+}
+
+// serveProbes runs the probe listener until it stops, sends any serve error other than
+// http.ErrServerClosed on ProbeErrors, and then closes it.
+func (s *Server) serveProbes(srv *http.Server, ln net.Listener) {
+	defer s.closeProbeErrs()
+	if err := srv.Serve(ln); err != nil && !goerrors.Is(err, http.ErrServerClosed) {
+		s.probeErrs <- err
+	}
 }
 
 func (s *Server) onListenerBound(addr net.Addr) {
@@ -342,10 +548,7 @@ func (s *Server) onListenerBound(addr net.Addr) {
 // after readiness, and is an ordinary graceful stop rather than a false
 // readiness.
 func (s *Server) onBeforeServe(srv *http.Server) error {
-	srv.ReadTimeout = s.cfg.Server.Timeout.Read
-	srv.WriteTimeout = s.cfg.Server.Timeout.Write
-	srv.IdleTimeout = s.cfg.Server.Timeout.Idle
-	srv.ReadHeaderTimeout = s.cfg.Server.Timeout.Read
+	applyServerTimeouts(srv, s.cfg.Server.Timeout)
 
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
@@ -362,6 +565,15 @@ func (s *Server) onBeforeServe(srv *http.Server) error {
 	return nil
 }
 
+// applyServerTimeouts applies server.timeout.* to either listener's *http.Server.
+// ReadHeaderTimeout follows Read.
+func applyServerTimeouts(srv *http.Server, t config.TimeoutConfig) {
+	srv.ReadTimeout = t.Read
+	srv.WriteTimeout = t.Write
+	srv.IdleTimeout = t.Idle
+	srv.ReadHeaderTimeout = t.Read
+}
+
 // Shutdown gracefully shuts down the HTTP server with the given context.
 // It waits for existing connections to finish within the context timeout.
 // A Shutdown issued before Start makes the later Start return
@@ -371,20 +583,51 @@ func (s *Server) onBeforeServe(srv *http.Server) error {
 // stored server share onBeforeServe's critical section, so Shutdown never
 // returns while a readiness commit is in flight and ReadyCh never closes after
 // Shutdown returned.
+//
+// The probe listener stops last, after the application drain, so /ready answers 503
+// rather than refusing connections throughout it (ADR-120). It gets its own budget,
+// detached from ctx; a probe listener that overruns it is closed with a WARN, and that
+// alone is not an error.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.lifecycleMu.Lock()
 	s.stopping.Store(true)
 	srv := s.httpServer.Load()
+	probe := s.probe.Load()
 	s.lifecycleMu.Unlock()
 
 	// In v5, Echo no longer has a Shutdown method. Shut down the http.Server directly.
 	// The drain runs outside lifecycleMu: it blocks until connections finish, and
 	// holding the lock there would stall a concurrent serve callback for its duration.
+	var err error
 	if srv != nil {
-		if err := srv.Shutdown(ctx); err != nil && !goerrors.Is(err, http.ErrServerClosed) {
-			return err
+		if drainErr := srv.Shutdown(ctx); drainErr != nil && !goerrors.Is(drainErr, http.ErrServerClosed) {
+			err = drainErr
 		}
 	}
+	if probeErr := s.stopProbeListener(ctx, probe); probeErr != nil {
+		return goerrors.Join(err, probeErr)
+	}
+	return err
+}
+
+// stopProbeListener stops the probe listener within probeStopBudget, detached from the
+// caller's ctx, and closes it on expiry. The deadline is logged, not returned.
+func (s *Server) stopProbeListener(ctx context.Context, p *probeListener) error {
+	if p == nil {
+		return nil
+	}
+	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.probeStopBudget)
+	defer cancel()
+	err := p.srv.Shutdown(stopCtx)
+	// Shutdown closes only a listener Serve has tracked; one stored before then is still bound.
+	_ = p.ln.Close()
+	if !goerrors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	s.logger.Warn().
+		Dur("budget", s.probeStopBudget).
+		Msg("Probe listener did not drain within its stop budget; closing it")
+	_ = p.srv.Close()
 	return nil
 }
 
@@ -396,6 +639,23 @@ func (s *Server) BoundAddr() net.Addr {
 		return *addr
 	}
 	return nil
+}
+
+// ProbeBoundAddr returns the address the probe listener bound, or nil before it binds
+// or when it is disabled. It never blocks.
+func (s *Server) ProbeBoundAddr() net.Addr {
+	if addr := s.probeBoundAddr.Load(); addr != nil {
+		return *addr
+	}
+	return nil
+}
+
+// ProbeErrors reports the probe listener's serve error: at most one, never
+// http.ErrServerClosed. It is non-nil from New and closed exactly once — at New when the
+// listener is disabled, when Start returns without binding it, or when its Serve goroutine
+// exits.
+func (s *Server) ProbeErrors() <-chan error {
+	return s.probeErrs
 }
 
 // ReadyCh returns a channel closed once Start first serves. It closes after the
