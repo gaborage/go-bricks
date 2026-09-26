@@ -96,19 +96,11 @@ streams counters have no OTel instrument. The unredacted detail's gated home, `/
   param route, a wildcard route or a group's `RouteNotFound` catch-all, whatever the registration
   order, so a module `/:id`, `/*` or middleware-bearing group under the base never serves the
   reserved path. Other methods at that path route as they do today.
-- **Limiter exemption on the application listener.** Only with `probes.port > 0`, the rate limiter
-  and the IP pre-guard skip a `GET` or `HEAD` whose matched route template (`c.Path()`) is the
-  reserved `<base><ready path>`, so the application-listener check never spends or is refused
-  limiter budget; such a request can only reach the `404` stub. `c.Path()` holds the template
-  because both limiters sit in the `e.Use` chain, which Echo runs after routing, and the framework
-  registers no `e.Pre` middleware; a request with no route has an empty `c.Path()` and is never
-  exempt. The rule matches the template, never the decoded URL path: `<base>/%72eady` decodes to
-  the reserved path but routes on its raw form, to a module param or wildcard route or a group
-  catch-all. The method guard keeps a module's own `POST <base><ready path>`, which the tracker
-  allows and which carries the same template, inside the limiters. At `probes.port: 0` the
-  limiters apply to probes exactly as today (`wiki/startup_defaults.md`). The skipper compares
-  values fixed at setup and adds no per-request allocation (ADR-026;
-  `TestDefaultMiddlewareChainAllocsStable`, ceiling 64).
+- **No limiter exemption on the application listener.** The rate limiter and the IP pre-guard stay
+  on the reserved paths at every `probes.port`, the application-listener check's `HEAD` included:
+  a limiter's `429` is below `500`, so it already counts as a live listener, and exempting the
+  reserved path would let any anonymous client send unlimited, unlogged requests to it. The
+  probes leave the limiters by moving to the probe listener, not by a skipper.
 - **No limiter on the probe listener.** No IP-keyed or application-shared request-rate limiter may
   be added to the probe listener: removing the shared budget is what fixes the `429` defect.
   Coalescing (below) bounds what a burst costs the backends instead — for the framework's own
@@ -202,8 +194,8 @@ naming both keys. The check never sets `InsecureSkipVerify`: SonarCloud `go:S483
 CRITICAL vulnerability rule in the project profile. `server.tls` verifies no client certificates,
 so the check needs none; a future client-certificate mode must revisit it.
 
-The reserved route answers `404` through the application engine's whole middleware chain, minus
-the limiters (see **Limiter exemption**); any non-`5xx` answer passes, and a timeout, connection
+The reserved route answers `404` through the application engine's whole middleware chain,
+limiters included (a `429` from an exhausted budget still passes); any non-`5xx` answer passes, and a timeout, connection
 error, flight error or `5xx` fails the gate. A TCP connect alone would not do: the kernel completes
 the handshake into the accept backlog even when the process has stopped serving.
 
@@ -316,10 +308,10 @@ under base `/api`), and `formatHandlerID`'s doc says so. `PostRegisterRoutes` an
   break every deployment whose probes target `server.port`. A later ADR can flip the default.
 - **Leave the reserved paths without an engine route on the application listener.** Rejected: Echo
   would route `<base><ready path>` to a module param or wildcard route or a group catch-all, so the
-  check would run consumer code and pass or fail on its status, and the limiter exemption would
-  cover consumer traffic.
-- **Exempt on the decoded URL path, as `CreateProbeSkipper` matches.** Rejected: Echo routes on the
-  raw path, so `<base>/%72eady` would carry the exemption to whichever route serves it.
+  check would run consumer code and pass or fail on its status.
+- **Exempt the check's target from the limiters.** Rejected: the check already treats a `429` as a
+  live listener, so an exemption buys nothing, and keyed on the method and route template alone it
+  would open an unlimited, unlogged request path to any anonymous client.
 - **Skip certificate verification in the check.** Rejected: `InsecureSkipVerify` trips SonarCloud
   `go:S4830`, a CRITICAL vulnerability, and gosec G402. Pinning the process's own leaf costs no
   more and confirms the peer presents this process's certificate.
@@ -394,8 +386,8 @@ It finds 23 files today: `app/`, `server/server_test.go`,
 `wiki/{cache,database,messaging,observability,streams,troubleshooting}.md`, `llms.txt`, the
 `SKILL.md` entries for ADR-047/048/094 and `.out-of-scope/readiness-contribution-door.md`. ADRs and
 existing atoms get amendment blockquotes, not rewrites. Part 1 docs it cannot find:
-`wiki/startup_defaults.md` (`probes.port` as the `429` mitigation, the exemption only with it set,
-and the forwarded-client-cert probe line), `wiki/server_tls.md`, the `wiki/cache.md` probe
+`wiki/startup_defaults.md` (`probes.port` as the `429` mitigation, with no exemption on the
+application listener, and the forwarded-client-cert probe line), `wiki/server_tls.md`, the `wiki/cache.md` probe
 manifests and their `timeoutSeconds` arithmetic (the check spends up to 500ms before the
 judgment), `wiki/observability.md` (an override replaces `/ready` behind the gates, not
 wholesale), the `wiki/testing.md` port-0 server recipe (a probe listener needs a real free port),
@@ -411,15 +403,17 @@ stack, bottom to top; it breaks nothing, so it may ship under Proposed:
 
 1. This contract.
 2. `dispatchReady` answers `503` while stopping; `statusNotReady`.
-3. The config keys, the server-package probe listener lifecycle and the reserved routes. Probe
-   serve errors reach `Run` only from the next layer.
-4. App integration: the optional-interface assert failing closed, error fan-in, drain, shutdown
+3. The config keys and their validation.
+4. The server-package probe listener lifecycle and the reserved routes. Probe serve errors reach
+   `Run` only from the next layer.
+5. App integration: the optional-interface assert failing closed, error fan-in, drain, shutdown
    order.
-5. Route table: the `Listener` field, probe descriptors, the `server.logroutes` field,
+6. Route table: the `Listener` field, probe descriptors, the `server.logroutes` field,
    `PostRegisterRoutes`, and the ADR-002 amendment blockquote.
-6. The application-listener check, pinned TLS, coalescing, the limiter and pre-guard exemption,
-   and the ADR-057 amendment blockquote.
-7. Operator docs: the Part 1 list under **Inventory**.
+7. The application-listener check and pinned TLS (the leaf is verified once at `Start`), and the
+   ADR-057 amendment blockquote.
+8. Coalescing: the singleflights for the check and for the framework judgment.
+9. Operator docs: the Part 1 list under **Inventory**.
 
 Part 2 is one PR, `fix(app)!: answer /ready with status only`, with the gauges and the non-critical
 WARN in the same diff. It adds amendment blockquotes to ADR-048, ADR-066, ADR-094 and ADR-114, the
