@@ -253,8 +253,14 @@ func (s *Server) RegisterReadyHandler(handler Handler) {
 	}
 }
 
-// dispatchReady executes the currently registered ready handler.
+// dispatchReady executes the currently registered ready handler. Once Shutdown sets the
+// stopping latch it answers 503 instead and never calls the handler.
 func (s *Server) dispatchReady(c *echo.Context) error {
+	if s.stopping.Load() {
+		return c.JSON(http.StatusServiceUnavailable, map[string]string{
+			fieldStatus: statusNotReady,
+		})
+	}
 	s.readyMu.RLock()
 	handler := s.readyHandler
 	s.readyMu.RUnlock()

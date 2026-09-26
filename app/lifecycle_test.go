@@ -903,10 +903,11 @@ func TestCheckRouteConflictsAggregatesAndSkips(t *testing.T) {
 }
 
 // TestReadyCheckDowngradesCallerCancellationLog pins that a probe failure caused by the
-// caller abandoning its own request cannot mint ERROR lines: /ready is unauthenticated and
-// exempt from rate limiting, and wiki/cache.md tells operators to alert on that line. The
-// discriminator is the caller's own request context, not the probe error: a context.Canceled
-// raised while the caller is still waiting is an internal fault and must stay ERROR.
+// caller abandoning its own request cannot mint ERROR lines: /ready is unauthenticated
+// (though not exempt from the rate limiters), and wiki/cache.md tells operators to alert on
+// that line. The discriminator is the caller's own request context, not the probe error: a
+// context.Canceled raised while the caller is still waiting is an internal fault and must
+// stay ERROR.
 func TestReadyCheckDowngradesCallerCancellationLog(t *testing.T) {
 	tests := []struct {
 		name         string

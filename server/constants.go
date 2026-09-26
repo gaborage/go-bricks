@@ -31,6 +31,9 @@ const (
 
 	statusOK    = "ok"
 	statusReady = "ready"
+	// statusNotReady is the /ready 503 verdict; it must equal app's notReadyStatus,
+	// which this package cannot import.
+	statusNotReady = "not ready"
 )
 
 // reservedMetaKeys enumerates envelope meta keys owned by the framework. Handler-supplied
