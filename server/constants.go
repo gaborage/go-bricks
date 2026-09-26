@@ -20,6 +20,12 @@ const (
 	msgRateLimitExceeded = "Rate limit exceeded"
 )
 
+// URL schemes the OTel url.scheme attribute and the application-listener check use.
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
+)
+
 // slowRequestThreshold is the latency at which the access logger marks a request slow
 // (result_code WARN), on the application and probe engines alike.
 const slowRequestThreshold = time.Second

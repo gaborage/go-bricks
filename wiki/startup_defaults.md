@@ -145,6 +145,8 @@ The slice holds every route this `App` registered and, as long as `App`s start o
 | `app.rate.ippreguard.enabled` | `true` | Registers the per-IP pre-guard |
 | `app.rate.ippreguard.threshold` | 2000 rps/IP | Yes — per-IP abuse ceiling |
 
+No path is exempt from either limiter. With `server.probes.port` set, `/health` and `/ready` leave both by moving to the probe listener, which has none; on the application listener the reserved probe paths stay inside both, the `HEAD` the application-listener check sends included, and a `429` there still counts as a live listener ([ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md)).
+
 That per-IP ceiling is only a ceiling because the client IP is derived through the trusted-proxy chain (`echo.ExtractIPFromXFFHeader` in `server.New`, plus `server.trustedproxies` for a proxy on a public address) — before [ADR-057](adr_057_trusted_proxy_ip_extraction.md) the key was the caller-written left-most `X-Forwarded-For` entry, which any client could rotate to get a fresh bucket per request.
 
 Probe traffic is always keyed by **client IP**, never by tenant: the probe skipper bypasses tenant resolution on the health and ready paths. The two limiters differ in what else lands in that same IP bucket: `app.rate.ippreguard.threshold` (`ipPreGuardEcho`) runs *before* tenant resolution and keys every request — probe or tenant-resolved — by client IP, so it is one shared per-IP budget across all traffic from that address, while `app.rate.limit` (`rateLimitEcho`) runs *after* tenant resolution and keys by the resolved **tenant ID** first, falling back to client IP only when no tenant was resolved — true for probes, but not for a tenant's own ordinary traffic, which draws on that tenant's separate budget instead.
