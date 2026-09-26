@@ -673,16 +673,21 @@ type readinessVerdict struct {
 // readinessFlightKey keys the one framework-judgment flight per App.
 const readinessFlightKey = "readiness-judgment"
 
+// readinessVerdictGrace bounds how long a waiter whose own deadline expired still waits for
+// the flight's verdict. A context-aware probe returns within it, so the log names the blocking
+// kind; a probe that ignores its context cannot hold the waiter past it.
+const readinessVerdictGrace = 500 * time.Millisecond
+
 // judgeReadiness runs the framework judgment at most once across concurrent /ready requests
 // (ADR-120). Only an in-flight verdict is shared: the next request after a judgment finishes
 // starts a new one. A caller whose request is canceled stops waiting at once with a verdict
 // naming readiness itself and carrying its ctx error, since the blocking kind is not yet
 // known, while the judgment runs on for the rest. A caller whose own deadline expires waits
-// for the verdict instead, so it still names the kind that blocked: the flight ends by the
-// leader's deadline, so the leader waits only the probes' return latency past its own. A
-// probe that ignores its context holds the caller, as it held the request that judged on its
-// own. The only error is a flight that panicked, which the caller
-// returns to the engine's error handler.
+// for the verdict instead, for at most readinessVerdictGrace, so it still names the kind that
+// blocked: the flight ends by the leader's deadline, so a context-aware probe returns inside
+// the grace. A probe that ignores its context cannot hold the caller past it; the caller then
+// answers with a verdict naming readiness itself. The only error is a flight that panicked,
+// which the caller returns to the engine's error handler.
 func (a *App) judgeReadiness(ctx context.Context) (readinessVerdict, error) {
 	results := a.readyFlight.DoChan(readinessFlightKey, func() (any, error) {
 		return a.readinessFlight(ctx)
@@ -694,7 +699,13 @@ func (a *App) judgeReadiness(ctx context.Context) (readinessVerdict, error) {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return readinessVerdict{blocking: readinessFailure(ctx.Err()), found: true}, nil
 		}
-		result = <-results
+		grace := time.NewTimer(readinessVerdictGrace)
+		defer grace.Stop()
+		select {
+		case result = <-results:
+		case <-grace.C:
+			return readinessVerdict{blocking: readinessFailure(ctx.Err()), found: true}, nil
+		}
 	}
 	if result.Err != nil {
 		return readinessVerdict{}, result.Err

@@ -330,6 +330,39 @@ func TestReadyCheckLeaderDeadlineNamesTheBlockingKind(t *testing.T) {
 	assert.Contains(t, event.err, context.DeadlineExceeded.Error())
 }
 
+// TestReadyCheckBoundsTheWaitOnAProbeIgnoringItsContext pins that a waiter whose deadline
+// expired waits at most readinessVerdictGrace for the verdict: a probe that ignores its
+// context and blocks (a lock held across broker work) cannot hold /ready indefinitely.
+func TestReadyCheckBoundsTheWaitOnAProbeIgnoringItsContext(t *testing.T) {
+	const deadline = 50 * time.Millisecond
+	cfg := &config.Config{App: config.AppConfig{Name: testApp}}
+	cfg.Server.Timeout.Middleware = time.Minute
+	app := &App{cfg: cfg, logger: &recLogger{}}
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	installSealedSlots(app, probeDescription{
+		name:     componentDatabase,
+		critical: true,
+		live: func(context.Context) error {
+			<-release
+			return nil
+		},
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), deadline)
+	defer cancel()
+
+	start := time.Now()
+	verdict, err := app.judgeReadiness(ctx)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	assert.True(t, verdict.found)
+	assert.Equal(t, componentReadiness, verdict.blocking.Name)
+	require.ErrorIs(t, verdict.blocking.Err, context.DeadlineExceeded)
+	assert.GreaterOrEqual(t, elapsed, deadline+readinessVerdictGrace, "waits the grace for a verdict")
+	assert.Less(t, elapsed, deadline+readinessVerdictGrace+2*time.Second, "then stops waiting")
+}
+
 // TestReadinessFlightKeepsTheLeaderValues pins that the judgment flight inherits the leader's
 // request-scoped values, a trace span among them: it detaches the leader's cancellation, not
 // its context.
