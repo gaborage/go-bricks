@@ -94,12 +94,14 @@ In single-tenant mode, startup pre-warms the messaging publisher and then waits 
 Set `server.logroutes` (bool; env `SERVER_LOGROUTES`) to emit one `Info` line per registered HTTP route at startup:
 
 ```text
-Route registered  module=events method=POST path=/v1/events
+Route registered  module=events method=POST path=/v1/events listener=application
 ```
 
 It is a **tri-state** flag: an explicit `server.logroutes` value always wins; when the key is absent it defaults to `app.env` being development (on in `dev`/`development`/`local`, off in `prod`/`staging` per ADR-022). So routes are visible at first `go run` while production stays silent — an N-route service pays **zero** extra boot lines in prod unless an operator opts in. Turn it on in production for a smoke-check with `server.logroutes: true`; silence a dev boot with `server.logroutes: false`.
 
 Attribution is by **registration order** (`module.Name()`), covering both typed (`server.GET/POST`) and raw (`RouteRegistrar.Add`) routes — the log ignores `RouteDescriptor.ModuleName` and derives the module from the registration span. Routes registered before the module loop — the `health`/`ready` probes (one line per method, GET and HEAD) and debug / `_sys` — are attributed to `framework`.
+
+Every line carries `listener`: `application`, or `probes` for the probes when `server.probes.port` is set, which then log their unprefixed paths (`path=/ready`) and no line for the application listener's `404` reservation at `<base><path>` ([ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md)).
 
 ## Duplicate Route Detection
 
@@ -107,7 +109,7 @@ Startup fails when two registrations claim the same **exact method + full path**
 
 **Coverage notes:**
 
-- `health`/`ready` probes register directly on the HTTP engine (not through `RouteRegistrar`), but `server.New` records their method+path pairs in the conflict tracker (and a descriptor per method in `server.DefaultRouteRegistry`) explicitly, so a module claiming `GET /health` (or the configured probe paths) fails startup like any other collision.
+- `health`/`ready` probes register directly on the HTTP engine (not through `RouteRegistrar`), but `server.New` records their method+path pairs in the conflict tracker (and a descriptor per method in `server.DefaultRouteRegistry` — at the unprefixed path on the probe listener when `server.probes.port` is set, with none for the reservation) explicitly, so a module claiming `GET /health` (or the configured probe paths) fails startup like any other collision.
 - Param-name-differing route templates (e.g. `/users/:id` vs `/users/:uid`) are **excluded** — these are distinct strings and are not detected as duplicates, even though they collide in echo's radix tree at request time; echo's own behavior governs there.
 
 **Error shape:** startup aborts with one aggregate error naming every collision and both registrants (`HandlerName` + caller `Package`; the module name is not reported):
@@ -129,9 +131,9 @@ The slice holds every route this `App` registered and, as long as `App`s start o
 
 - module routes, typed and raw — the scheduler's `/_sys/job*` included;
 - debug `/_sys/*` endpoints;
-- the `health`/`ready` probes, base-path-qualified, **one descriptor per method** (GET and HEAD, so four), with `Package` set to `github.com/gaborage/go-bricks/server` and nil `RequestType`/`ResponseType`. With an injected `app.Options.Server`, the slice carries no probe descriptors.
+- the `health`/`ready` probes, **one descriptor per method** (GET and HEAD, so four), with `Package` set to `github.com/gaborage/go-bricks/server` and nil `RequestType`/`ResponseType`. At `server.probes.port: 0` they are base-path-qualified with an empty `Listener`; with the port set they carry `Listener: server.ListenerProbes` (`"probes"`), the unprefixed path and a `HandlerID` such as `GET:/ready`, and the application listener's `404` reservation at `<base><path>` has no descriptor ([ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md)). With an injected `app.Options.Server`, the slice carries no probe descriptors.
 
-`ModuleName` on this slice is the registering module's `Name()`, taken from the registration span, unless the route set its own with `server.WithModule`; routes the framework registers itself (probes, debug) carry an empty `ModuleName`. The descriptors in `server.DefaultRouteRegistry` are not changed.
+`ModuleName` on this slice is the registering module's `Name()`, taken from the registration span, unless the route set its own with `server.WithModule`; routes the framework registers itself (probes, debug) carry an empty `ModuleName`. `Listener` is empty for every route but the probe listener's. The descriptors in `server.DefaultRouteRegistry` are not changed.
 
 ## Probe Endpoints and Rate Limiting
 

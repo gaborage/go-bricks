@@ -60,16 +60,30 @@ func (rg *routeGroup) Add(method, path string, handler Handler, middleware ...Mi
 }
 
 // registerRoute records a route that carries no request/response models in the conflict
-// tracker and in DefaultRouteRegistry: raw routes and the health/ready probes.
+// tracker and in DefaultRouteRegistry: raw routes and, at server.probes.port 0, the
+// health/ready probes (with the probe listener enabled see registerProbeListenerRoute).
 func registerRoute(tracker *routeConflictTracker, method, fullPath string, reg RouteRegistrant) {
 	tracker.record(method, fullPath, reg)
-	DefaultRouteRegistry.Register(&RouteDescriptor{
+	DefaultRouteRegistry.Register(modellessDescriptor(method, fullPath, reg))
+}
+
+// registerProbeListenerRoute records a probe served on the probe listener in
+// DefaultRouteRegistry only, at its unprefixed path. The application listener's
+// reservation of <base><path> is the tracker's, and carries no descriptor.
+func registerProbeListenerRoute(method, path string, reg RouteRegistrant) {
+	d := modellessDescriptor(method, path, reg)
+	d.Listener = ListenerProbes
+	DefaultRouteRegistry.Register(d)
+}
+
+func modellessDescriptor(method, path string, reg RouteRegistrant) *RouteDescriptor {
+	return &RouteDescriptor{
 		Method:      method,
-		Path:        fullPath,
-		HandlerID:   formatHandlerID(method, fullPath),
+		Path:        path,
+		HandlerID:   formatHandlerID(method, path),
 		HandlerName: reg.HandlerName,
 		Package:     reg.Package,
-	})
+	}
 }
 
 func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRegistrar {

@@ -253,6 +253,31 @@ func TestServerNewRegistersProbeDescriptors(t *testing.T) {
 	}, DefaultRouteRegistry.Routes())
 }
 
+// TestServerNewRegistersProbeListenerDescriptors pins the route table with the probe
+// listener enabled: the four probe descriptors name the probe listener and the unprefixed
+// path, the application engine's 404 reservations carry no descriptor, and the conflict
+// tracker does not also record the unprefixed path (TestServerReservedProbePathStillConflicts
+// pins the prefixed reservation).
+func TestServerNewRegistersProbeListenerDescriptors(t *testing.T) {
+	DefaultRouteRegistry.Clear()
+	t.Cleanup(DefaultRouteRegistry.Clear)
+	cfg := newTestConfig(testAPIV1Path, customHealthRoute, statusRoute)
+	cfg.Server.Probes.Port = 9091
+
+	srv := New(cfg, &testLogger{})
+
+	const pkg = "github.com/gaborage/go-bricks/server"
+	assert.ElementsMatch(t, []RouteDescriptor{
+		{Method: http.MethodGet, Path: "/custom-health", Listener: ListenerProbes, HandlerID: "GET:/custom-health", HandlerName: "healthCheck", Package: pkg},
+		{Method: http.MethodHead, Path: "/custom-health", Listener: ListenerProbes, HandlerID: "HEAD:/custom-health", HandlerName: "healthCheck", Package: pkg},
+		{Method: http.MethodGet, Path: "/status", Listener: ListenerProbes, HandlerID: "GET:/status", HandlerName: "dispatchReady", Package: pkg},
+		{Method: http.MethodHead, Path: "/status", Listener: ListenerProbes, HandlerID: "HEAD:/status", HandlerName: "dispatchReady", Package: pkg},
+	}, DefaultRouteRegistry.Routes())
+
+	srv.RootGroup().Add(http.MethodGet, statusRoute, func(c HandlerContext) error { return c.String(http.StatusOK, "") })
+	assert.Empty(t, srv.RouteConflicts(), "the probe listener's unprefixed path is free on the application listener")
+}
+
 // waitForServerReady blocks until srv's ReadyCh closes, failing the test after
 // two seconds.
 func waitForServerReady(t *testing.T, srv *Server) {

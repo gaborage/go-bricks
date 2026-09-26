@@ -18,6 +18,7 @@ import (
 type RouteDescriptor struct {
 	Method       string       // HTTP method (GET, POST, etc.)
 	Path         string       // Route path pattern (/users/:id)
+	Listener     string       // Serving listener: empty for the application listener, ListenerProbes for the probe listener
 	HandlerID    string       // Unique identifier for handler function
 	HandlerName  string       // Function name (e.g., "getUser")
 	ModuleName   string       // Module that registered this route (empty for raw routes)
@@ -33,9 +34,16 @@ type RouteDescriptor struct {
 	OutboundJOSE *jose.Policy // Resolved at registration time from response type's jose: tag; nil for raw routes
 }
 
+// ListenerProbes is RouteDescriptor.Listener for a route served on the probe listener
+// (server.probes.port, ADR-120).
+const ListenerProbes = "probes"
+
 // formatHandlerID builds the canonical HandlerID for a route ("METHOD:/full/path"). Both the
 // typed registration path (RegisterHandler) and the raw path (RouteRegistrar.Add) use it so the
 // identifiers stay identical across paths — consumers keying inventories by HandlerID depend on it.
+// A probe-listener descriptor's ID is per-listener: it names the unprefixed probe path on that
+// listener (GET:/ready) and intentionally differs from the application listener's conflict-tracker
+// key for the reserved probe path (GET:/api/ready under base /api).
 func formatHandlerID(method, fullPath string) string {
 	return method + ":" + fullPath
 }
