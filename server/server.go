@@ -292,7 +292,8 @@ func newProbeEngine(app *echo.Echo, cfg *config.Config, log logger.Logger, healt
 // like any other route. The reservation at <base><path> holds whatever
 // server.probes.port says, so flipping it never changes which module routes are legal;
 // with the probe listener enabled the application engine answers 404 there, and the
-// probe engine serves the probes at their unprefixed paths.
+// probe engine serves the probes at their unprefixed paths. Then the route table lists
+// the probe listener's routes, not the reservation.
 func (s *Server) registerProbeRoutes(healthPath, readyPath string) {
 	probes := []struct {
 		path, route, name     string
@@ -302,16 +303,17 @@ func (s *Server) registerProbeRoutes(healthPath, readyPath string) {
 		{readyPath, s.readyRoute, "dispatchReady", s.dispatchReady, s.dispatchProbeReady},
 	}
 	for _, p := range probes {
-		appHandler := p.handler
-		if s.probeEcho != nil {
-			appHandler = reservedProbeRoute
-		}
+		reg := RouteRegistrant{HandlerName: p.name, Package: serverPackagePath}
 		for _, method := range probeMethods {
-			s.echo.Add(method, p.path, appHandler)
-			registerRoute(s.conflicts, method, p.path, RouteRegistrant{HandlerName: p.name, Package: serverPackagePath})
-			if s.probeEcho != nil {
-				s.probeEcho.Add(method, p.route, p.probeHandler)
+			if s.probeEcho == nil {
+				s.echo.Add(method, p.path, p.handler)
+				registerRoute(s.conflicts, method, p.path, reg)
+				continue
 			}
+			s.echo.Add(method, p.path, reservedProbeRoute)
+			s.conflicts.record(method, p.path, reg)
+			s.probeEcho.Add(method, p.route, p.probeHandler)
+			registerProbeListenerRoute(method, p.route, reg)
 		}
 	}
 }

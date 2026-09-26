@@ -511,3 +511,49 @@ func TestRunServesRealProbeListenerUntilShutdown(t *testing.T) {
 	_, open := <-srv.ProbeErrors()
 	assert.False(t, open, "ProbeErrors must be closed once Run returns")
 }
+
+// TestPostRegisterRoutesSeesProbeDescriptorsOnTheirListener pins the route table the hook
+// receives in both modes: exactly four probe descriptors, base-prefixed on the application
+// listener at port 0, unprefixed on the probe listener with the port set, where the
+// application listener's 404 reservations carry no descriptor.
+func TestPostRegisterRoutesSeesProbeDescriptorsOnTheirListener(t *testing.T) {
+	tests := []struct {
+		name      string
+		probePort int
+		want      map[string]string // HandlerID -> Listener
+	}{
+		{name: "probe_listener_disabled", probePort: 0, want: map[string]string{
+			"GET:/api/health": "", "HEAD:/api/health": "", "GET:/api/ready": "", "HEAD:/api/ready": "",
+			"GET:/api/orders": "", "POST:/api/orders": "",
+		}},
+		{name: "probe_listener_enabled", probePort: probeSeamPort, want: map[string]string{
+			"probes:GET:/health": server.ListenerProbes, "probes:HEAD:/health": server.ListenerProbes,
+			"probes:GET:/ready": server.ListenerProbes, "probes:HEAD:/ready": server.ListenerProbes,
+			"GET:/api/orders": "", "POST:/api/orders": "",
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server.DefaultRouteRegistry.Clear()
+			t.Cleanup(server.DefaultRouteRegistry.Clear)
+			cfg := minimalAppConfig("/api")
+			cfg.Server.Probes.Port = tt.probePort
+			var got []server.RouteDescriptor
+			a := newConfiguredApp(t, cfg, &Options{PostRegisterRoutes: func(routes []server.RouteDescriptor) error {
+				got = routes
+				return nil
+			}})
+			require.NoError(t, a.RegisterModule(&routeTableModule{name: "orders"}))
+
+			require.NoError(t, a.prepareRuntime(context.Background()))
+
+			require.Len(t, a.probeRoutes, 4)
+			listeners := map[string]string{}
+			for _, d := range got {
+				listeners[d.HandlerID] = d.Listener
+			}
+			assert.Len(t, got, len(tt.want), "one descriptor per route, none for a reservation")
+			assert.Equal(t, tt.want, listeners)
+		})
+	}
+}

@@ -127,6 +127,21 @@ func TestRegisterRoutesLogsInDevelopment(t *testing.T) {
 	assert.Equal(t, "POST", lines[1].str["method"])
 }
 
+// TestRegisterRoutesLogsListener pins that every route line names its listener: the
+// probe listener's routes by their Listener, application routes as "application".
+func TestRegisterRoutesLogsListener(t *testing.T) {
+	reg, rec := newRouteLogRegistry(t, "development", nil,
+		&fakeRouteModule{name: "users", routes: []server.RouteDescriptor{{Method: "GET", Path: "/v1/users"}}})
+	server.DefaultRouteRegistry.Register(&server.RouteDescriptor{Method: "GET", Path: "/ready", Listener: server.ListenerProbes})
+
+	reg.RegisterRoutes(nil)
+
+	lines := rec.routeRegisteredLines()
+	require.Len(t, lines, 2)
+	assert.Equal(t, map[string]string{"module": "framework", "method": "GET", "path": "/ready", "listener": "probes"}, lines[0].str)
+	assert.Equal(t, map[string]string{"module": "users", "method": "GET", "path": "/v1/users", "listener": "application"}, lines[1].str)
+}
+
 func TestRegisterRoutesSilentInProduction(t *testing.T) {
 	reg, rec := newRouteLogRegistry(t, "production", nil,
 		&fakeRouteModule{name: "users", routes: []server.RouteDescriptor{{Method: "GET", Path: "/v1/users"}}})

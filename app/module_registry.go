@@ -207,6 +207,7 @@ func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 				Str("module", e.module).
 				Str("method", e.method).
 				Str("path", e.path).
+				Str("listener", routeListenerLabel(e.listener)).
 				Msg("Route registered")
 		}
 	}
@@ -215,6 +216,17 @@ func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 // frameworkRouteAttribution labels routes registered before the module loop
 // (health/ready probes, debug/_sys endpoints) in the route-registered log.
 const frameworkRouteAttribution = "framework"
+
+// applicationListenerLabel is the route log's listener value for a descriptor whose
+// Listener is empty; every line names its listener.
+const applicationListenerLabel = "application"
+
+func routeListenerLabel(listener string) string {
+	if listener == "" {
+		return applicationListenerLabel
+	}
+	return listener
+}
 
 // routeSpan marks the half-open registry index range [start, next.start) whose
 // descriptors were appended by module. Recorded during the module loop; resolved
@@ -228,6 +240,7 @@ type routeSpan struct {
 // a routes snapshot.
 type routeLogEntry struct {
 	module, method, path string
+	listener             string // RouteDescriptor.Listener, unlabeled
 }
 
 // forEachSpanRoute calls fn with each span's module and every route in the span's
@@ -256,7 +269,7 @@ func forEachSpanRoute(spans []routeSpan, routes []server.RouteDescriptor, fn fun
 func collectRouteLogEntries(spans []routeSpan, routes []server.RouteDescriptor) []routeLogEntry {
 	var out []routeLogEntry
 	forEachSpanRoute(spans, routes, func(module string, route *server.RouteDescriptor) {
-		out = append(out, routeLogEntry{module: module, method: route.Method, path: route.Path})
+		out = append(out, routeLogEntry{module: module, method: route.Method, path: route.Path, listener: route.Listener})
 	})
 	return out
 }
