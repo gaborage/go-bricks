@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	echootel "github.com/labstack/echo-opentelemetry"
 	"github.com/labstack/echo/v5"
@@ -178,7 +177,7 @@ func requestLoggerEcho(log logger.Logger, healthPath, readyPath string) echo.Mid
 	return loggerWithConfigEcho(log, LoggerConfig{
 		HealthPath:           healthPath,
 		ReadyPath:            readyPath,
-		SlowRequestThreshold: 1 * time.Second,
+		SlowRequestThreshold: slowRequestThreshold,
 	})
 }
 
