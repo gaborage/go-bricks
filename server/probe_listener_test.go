@@ -137,6 +137,24 @@ func requireProbeErrorsClosed(t *testing.T, srv *Server) {
 	}
 }
 
+// requireStartRefusedBeforeBind runs Start and fails unless it returns a config refusal
+// having bound neither listener and closed ProbeErrors; it returns that refusal.
+func requireStartRefusedBeforeBind(t *testing.T, srv *Server, fatalMsg string) *config.ConfigError {
+	t.Helper()
+	var err error
+	select {
+	case err = <-startServer(srv):
+	case <-time.After(2 * time.Second):
+		t.Fatal(fatalMsg)
+	}
+	var cfgErr *config.ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Nil(t, srv.BoundAddr())
+	assert.Nil(t, srv.ProbeBoundAddr())
+	requireProbeErrorsClosed(t, srv)
+	return cfgErr
+}
+
 // occupyPort holds a loopback port for the rest of the test.
 func occupyPort(t *testing.T) int {
 	t.Helper()
@@ -263,7 +281,7 @@ func TestServerProbeReadyGatesInProcess(t *testing.T) {
 	assert.JSONEq(t, probeTestNotReadyBody, serveEngine(srv.probeEcho, http.MethodGet, testReadyRoute).Body.String())
 	assert.Zero(t, calls, "the override must not run before ReadyCh closes")
 
-	require.NoError(t, srv.onBeforeServe(&http.Server{}))
+	markProbeReadyInProcess(t, srv)
 	ready := serveEngine(srv.probeEcho, http.MethodGet, testReadyRoute)
 	assert.Equal(t, http.StatusOK, ready.Code)
 	assert.JSONEq(t, `{"status":"custom"}`, ready.Body.String())
@@ -404,19 +422,8 @@ func TestServerStartRefusesProbeCollision(t *testing.T) {
 	cfg.Server.Probes.Port = cfg.Server.Port
 	srv := New(cfg, &testLogger{})
 
-	var err error
-	select {
-	case err = <-startServer(srv):
-	case <-time.After(2 * time.Second):
-		t.Fatal("Start bound and served despite the probe listener colliding with the application listener")
-	}
-
-	var cfgErr *config.ConfigError
-	require.ErrorAs(t, err, &cfgErr)
+	cfgErr := requireStartRefusedBeforeBind(t, srv, "Start bound and served despite the probe listener colliding with the application listener")
 	assert.Equal(t, "server.probes.port", cfgErr.Field)
-	assert.Nil(t, srv.BoundAddr())
-	assert.Nil(t, srv.ProbeBoundAddr())
-	requireProbeErrorsClosed(t, srv)
 }
 
 // TestServerStartTLSFailureClosesProbeErrors pins the exit before the probe bind: a TLS
@@ -452,7 +459,7 @@ func TestServerProbeStoreVetoedByLatch(t *testing.T) {
 	srv := New(cfg, &testLogger{})
 	srv.stopping.Store(true)
 
-	closeProbes, err := srv.startProbeListener()
+	closeProbes, err := srv.startProbeListener(nil)
 
 	require.ErrorIs(t, err, http.ErrServerClosed)
 	assert.Nil(t, closeProbes)
@@ -481,10 +488,12 @@ func TestServerShutdownReleasesAnUntrackedProbeListener(t *testing.T) {
 }
 
 // TestServerShutdownStopsProbeListenerLast pins the shutdown order: while the application
-// listener drains a held request, the probe listener still serves and /ready answers 503;
-// once Shutdown returns the probe listener is closed too.
+// listener drains a held request, the probe listener still serves and /ready answers 503
+// from the stopping latch, without judging the closing application listener; once Shutdown
+// returns the probe listener is closed too.
 func TestServerShutdownStopsProbeListenerLast(t *testing.T) {
-	srv := newProbeTestServer(newProbeTestConfig(""), &testLogger{})
+	log := &testLogger{}
+	srv := newProbeTestServer(newProbeTestConfig(""), log)
 	slow, arrived, release := heldHandler(t)
 	srv.ModuleGroup().Add(http.MethodGet, "/slow", slow)
 
@@ -504,6 +513,8 @@ func TestServerShutdownStopsProbeListenerLast(t *testing.T) {
 	require.NoError(t, err, "the probe listener must serve throughout the application drain")
 	assert.Equal(t, http.StatusServiceUnavailable, during.code)
 	assert.JSONEq(t, probeTestNotReadyBody, during.body)
+	assert.Nil(t, findLogEntry(log.logEntries(), appListenerUnresponsiveMsg),
+		"the stopping latch answers before the application-listener check runs")
 	select {
 	case shutdownErr := <-shutdownDone:
 		t.Fatalf("Shutdown returned while the application listener was still draining: %v", shutdownErr)
@@ -572,7 +583,7 @@ func TestServerProbeEngineChain(t *testing.T) {
 	cfg.App.Rate.IPPreGuard.Enabled = true
 	cfg.App.Rate.IPPreGuard.Threshold = 1
 	srv := newProbeTestServer(cfg, &testLogger{})
-	require.NoError(t, srv.onBeforeServe(&http.Server{}))
+	markProbeReadyInProcess(t, srv)
 
 	const burst = 20
 	appLimited := 0
@@ -691,7 +702,7 @@ func TestServerProbeEnginePanicIsRecoveredByTypeOnly(t *testing.T) {
 	cfg := newProbeTestConfig("")
 	cfg.App.Debug = true // the debug branch logs the error itself; only sanitizePanicValue keeps the value out
 	srv := newProbeTestServer(cfg, log)
-	require.NoError(t, srv.onBeforeServe(&http.Server{}))
+	markProbeReadyInProcess(t, srv)
 	srv.RegisterReadyHandler(func(HandlerContext) error { panic(recoverProbeSecret) })
 
 	rec := serveEngine(srv.probeEcho, http.MethodGet, testReadyRoute)
@@ -745,7 +756,7 @@ func TestServerProbeEngineAppliesMiddlewareTimeout(t *testing.T) {
 	cfg := newProbeTestConfig("")
 	cfg.Server.Timeout.Middleware = 2 * time.Second
 	srv := newProbeTestServer(cfg, &testLogger{})
-	require.NoError(t, srv.onBeforeServe(&http.Server{}))
+	markProbeReadyInProcess(t, srv)
 	var hasDeadline bool
 	srv.RegisterReadyHandler(func(c HandlerContext) error {
 		_, hasDeadline = c.RequestContext().Deadline()

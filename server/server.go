@@ -58,6 +58,9 @@ type Server struct {
 	probeBoundAddr atomic.Pointer[net.Addr]
 	probeErrs      chan error
 	closeProbeErrs func()
+	// appCheck is the probe listener's application-listener check, built in Start before
+	// either bind; nil when the probe listener is disabled.
+	appCheck *appListenerCheck
 	// probeStopBudget bounds the probe listener's graceful stop; only a test shortens it.
 	probeStopBudget time.Duration
 }
@@ -372,16 +375,31 @@ func (s *Server) dispatchReady(c *echo.Context) error {
 	return handler(c)
 }
 
-// dispatchProbeReady serves /ready on the probe listener. That listener binds before the
-// application listener serves, so it answers 503 until ReadyCh closes, then defers to
-// dispatchReady.
+// dispatchProbeReady serves /ready on the probe listener, gating in order: the stopping
+// latch; ReadyCh, since that listener binds before the application listener serves; then
+// the application-listener check. Only then does it defer to dispatchReady. The latch
+// comes first so a probe during the drain answers 503 without judging a listener that is
+// closing on purpose, and a failed check re-reads it: a Shutdown that latched after the
+// first read closed that listener on purpose, so no WARN. Nor does a failed check whose
+// probe request's own context is done, as when the prober's timeout expires mid-check:
+// that failure judges the abandoned probe, not the listener.
 func (s *Server) dispatchProbeReady(c *echo.Context) error {
+	if s.stopping.Load() {
+		return notReady(c)
+	}
 	select {
 	case <-s.ready:
-		return s.dispatchReady(c)
 	default:
 		return notReady(c)
 	}
+	ctx := c.Request().Context()
+	if err := s.checkApplicationListener(ctx); err != nil {
+		if !s.stopping.Load() && !goerrors.Is(ctx.Err(), context.Canceled) {
+			s.logger.Warn().Err(err).Msg("Application listener unresponsive")
+		}
+		return notReady(c)
+	}
+	return s.dispatchReady(c)
 }
 
 // notReady writes the /ready gates' 503 verdict.
@@ -404,7 +422,9 @@ var ErrServerAlreadyStarted = goerrors.New("server: Start called more than once"
 //
 // With the probe listener enabled it binds and serves first; a probe bind failure
 // returns before the application listener binds, and any later failure closes the
-// probe listener before Start returns.
+// probe listener before Start returns. A TLS leaf the probe listener's
+// application-listener check cannot pin (no SAN) or verify against that pin (no serverAuth
+// use, outside its validity period) refuses Start before either bind.
 func (s *Server) Start() error {
 	if !s.started.CompareAndSwap(false, true) {
 		return ErrServerAlreadyStarted
@@ -421,7 +441,7 @@ func (s *Server) Start() error {
 		return err
 	}
 
-	closeProbes, err := s.startProbeListener()
+	closeProbes, err := s.startProbeListener(tlsCfg)
 	if err != nil {
 		return err
 	}
@@ -470,13 +490,27 @@ func (s *Server) serverTLSConfig() (*tls.Config, error) {
 	return nil, nil
 }
 
-// startProbeListener binds and serves the probe listener ahead of the application bind
-// (ADR-120) and returns what closes it at once; a no-op when the listener is disabled.
-// Every refusal closes ProbeErrors, since no Serve goroutine will. The store shares a
-// lifecycleMu critical section with the stopping read, as onBeforeServe's commit does,
-// so a Shutdown that already latched vetoes it and one that latches later finds the
-// listener to stop.
-func (s *Server) startProbeListener() (closeProbes func(), err error) {
+// buildAppListenerCheck builds the probe listener's application-listener check from the
+// application listener's TLS config. A TLS leaf it cannot pin refuses Start before either
+// bind.
+func (s *Server) buildAppListenerCheck(tlsCfg *tls.Config) error {
+	check, err := newAppListenerCheck(s.cfg.Server.Host, s.buildFullPath(s.readyRoute), tlsCfg)
+	if err != nil {
+		return err
+	}
+	s.appCheck = check
+	return nil
+}
+
+// startProbeListener builds the application-listener check from tlsCfg, the application
+// listener's TLS config, then binds and serves the probe listener ahead of the application
+// bind (ADR-120) and returns what closes it at once; a no-op when the listener is
+// disabled. Every refusal closes ProbeErrors, since no Serve goroutine will. The check is
+// stored before the Serve goroutine starts, which publishes it to probe handlers. The
+// store shares a lifecycleMu critical section with the stopping read, as onBeforeServe's
+// commit does, so a Shutdown that already latched vetoes it and one that latches later
+// finds the listener to stop.
+func (s *Server) startProbeListener(tlsCfg *tls.Config) (closeProbes func(), err error) {
 	if s.probeEcho == nil {
 		return func() {
 			// No probe listener was bound, so there is nothing to close.
@@ -489,6 +523,9 @@ func (s *Server) startProbeListener() (closeProbes func(), err error) {
 	}()
 	if collision := s.cfg.Server.CheckProbeCollision(); collision != nil {
 		return nil, collision
+	}
+	if checkErr := s.buildAppListenerCheck(tlsCfg); checkErr != nil {
+		return nil, checkErr
 	}
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(context.Background(), "tcp", s.probeAddr)

@@ -77,9 +77,9 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 				// url.scheme from r.TLS alone; we additionally honor X-Forwarded-Proto.
 				// Appended after the defaults so our value wins attribute.Set's
 				// last-value-wins de-duplication (a duplicate url.scheme key is harmless).
-				scheme := "http"
-				if c.Request().TLS != nil || c.Request().Header.Get("X-Forwarded-Proto") == "https" {
-					scheme = "https"
+				scheme := schemeHTTP
+				if c.Request().TLS != nil || c.Request().Header.Get("X-Forwarded-Proto") == schemeHTTPS {
+					scheme = schemeHTTPS
 				}
 				attrs = append(attrs, attribute.String("url.scheme", scheme))
 

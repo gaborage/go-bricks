@@ -4,6 +4,12 @@
 - **Date**: 2026-08-10
 - **Related**: [ADR-015](adr_015_echo_v5_migration.md) (recorded this follow-up), [ADR-043](adr_043_forwarded_client_cert.md) (named the anti-pattern), [migrations.md](migrations.md) `[C59.1]`
 
+> **Amended (2026-09-26, by [ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md)):**
+> with `server.probes.port` set, `/ready` moves to the probe listener, which has no rate limiter or
+> IP pre-guard. On the application listener both middlewares still use `middleware.DefaultSkipper`,
+> so the probe paths ADR-120 reserves there stay inside both, the application-listener check's
+> `HEAD` included; a `429` there still counts as a live listener.
+>
 > **Amended (2026-08-21, by [ADR-080](adr_080_client_ip_answers_only_from_observed_hops.md)):**
 > two things below are no longer true, and one was never as broad as it reads.
 >

@@ -626,16 +626,18 @@ func (a *App) readyCheck(c server.HandlerContext) error {
 	report, blocking, found := a.judge.gate(ctx)
 
 	if found {
-		// /ready is unauthenticated and the limiters do not exempt it, but they key probes
-		// by client IP (probeSkipper skips tenant resolution, not the limiters), so one
-		// source can still abandon many requests in a row. That IP is derived through the
-		// trusted-proxy chain (ADR-057), so only a caller already inside a default-trusted
-		// range (loopback, link-local, RFC1918, IPv6 ULA) can still choose its own key, and
-		// the budget is per-source either way. An abandoned request — the
-		// caller's own context canceled, and the probe reports that same context.Canceled —
-		// is not a readiness incident, so it logs WARN, not ERROR. The caller's context must
-		// actually be done: a probe that reports context.Canceled while the request is still
-		// live was canceled from inside, which is a genuine incident and stays ERROR.
+		// /ready is unauthenticated. On the application listener the limiters apply to it
+		// and key probes by client IP (probeSkipper skips tenant resolution, not the
+		// limiters); with server.probes.port set, /ready is on the probe listener, which has
+		// no limiter (ADR-120). Either way one source can still abandon many requests in a
+		// row. Where the limiters apply, the IP is derived through the trusted-proxy chain
+		// (ADR-057), so only a caller already inside a default-trusted range (loopback,
+		// link-local, RFC1918, IPv6 ULA) can still choose its own key, and the budget is
+		// per-source. An abandoned request — the caller's own context canceled, and the
+		// probe reports that same context.Canceled — is not a readiness incident, so it logs
+		// WARN, not ERROR. The caller's context must actually be done: a probe that reports
+		// context.Canceled while the request is still live was canceled from inside, which is
+		// a genuine incident and stays ERROR.
 		event := a.logger.Error()
 		if errors.Is(ctx.Err(), context.Canceled) && errors.Is(blocking.Err, context.Canceled) {
 			event = a.logger.Warn()
