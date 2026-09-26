@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -626,6 +627,117 @@ func TestRegisterReadyHandlerOverrideAndRestore(t *testing.T) {
 	var restored map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &restored))
 	assert.Equal(t, "ready", restored["status"])
+}
+
+func serveReady(srv *Server, method string) *httptest.ResponseRecorder {
+	req := httptest.NewRequestWithContext(context.Background(), method, testReadyRoute, http.NoBody)
+	rec := httptest.NewRecorder()
+	srv.echo.ServeHTTP(rec, req)
+	return rec
+}
+
+// TestServerDispatchReadyStopping pins that once Shutdown sets the stopping latch, /ready
+// answers 503 on GET and HEAD ahead of a RegisterReadyHandler override, which answers as
+// registered before Shutdown and never runs after it, while /health still answers 200.
+func TestServerDispatchReadyStopping(t *testing.T) {
+	srv := newTestServer("", "", "")
+	calls := 0
+	srv.RegisterReadyHandler(func(c HandlerContext) error {
+		calls++
+		return c.JSON(http.StatusOK, map[string]string{"status": "custom"})
+	})
+
+	before := serveReady(srv, http.MethodGet)
+	assert.Equal(t, http.StatusOK, before.Code)
+	assert.JSONEq(t, `{"status":"custom"}`, before.Body.String())
+	require.Equal(t, 1, calls)
+
+	require.NoError(t, srv.Shutdown(context.Background()))
+
+	get := serveReady(srv, http.MethodGet)
+	assert.Equal(t, http.StatusServiceUnavailable, get.Code)
+	assert.JSONEq(t, `{"status":"not ready"}`, get.Body.String())
+	// Only HEAD's status is dispatchReady's; net/http drops its body on the wire.
+	assert.Equal(t, http.StatusServiceUnavailable, serveReady(srv, http.MethodHead).Code)
+	assert.Equal(t, 1, calls, "the override must not run while stopping")
+
+	assertHTTPGetResponse(t, srv, healthRoute, http.StatusOK, `"status":"ok"`)
+}
+
+// TestServerDispatchReadyStoppingDuringDrain pins the serving half: a /ready request the
+// listener accepted before Shutdown, dispatched once the latch is set, answers 503 while the
+// drain waits on it, and the override never runs. It fails if the latch follows the drain.
+func TestServerDispatchReadyStoppingDuringDrain(t *testing.T) {
+	cfg := newTestConfig("", "", "")
+	// The held request outlives newTestConfig's 50ms read/write timeouts.
+	cfg.Server.Timeout.Read = 5 * time.Second
+	cfg.Server.Timeout.Write = 5 * time.Second
+	srv := New(cfg, &testLogger{})
+
+	var calls atomic.Int32
+	srv.RegisterReadyHandler(func(c HandlerContext) error {
+		calls.Add(1)
+		return c.JSON(http.StatusOK, map[string]string{"status": "custom"})
+	})
+	arrived := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	srv.echo.Pre(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c *echo.Context) error {
+			if c.Request().URL.Path == testReadyRoute {
+				once.Do(func() { close(arrived) })
+				<-release
+			}
+			return next(c)
+		}
+	})
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Start() }()
+	waitForServerReady(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+srv.BoundAddr().String()+testReadyRoute, http.NoBody)
+	require.NoError(t, err)
+	type result struct {
+		code int
+		body string
+		err  error
+	}
+	got := make(chan result, 1)
+	go func() {
+		resp, doErr := http.DefaultClient.Do(req)
+		if doErr != nil {
+			got <- result{err: doErr}
+			return
+		}
+		defer resp.Body.Close()
+		body, readErr := io.ReadAll(resp.Body)
+		got <- result{code: resp.StatusCode, body: string(body), err: readErr}
+	}()
+	select {
+	case <-arrived:
+	case res := <-got:
+		t.Fatalf("/ready answered before the middleware held it: %v", res.err)
+	}
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- srv.Shutdown(ctx) }()
+	latched := assert.Eventually(t, srv.stopping.Load, 2*time.Second, 5*time.Millisecond,
+		"Shutdown must set the latch before it drains in-flight requests")
+	close(release)
+
+	res := <-got
+	require.NoError(t, res.err)
+	require.NoError(t, <-shutdownDone)
+	<-errCh
+	if !latched {
+		return
+	}
+	assert.Equal(t, http.StatusServiceUnavailable, res.code)
+	assert.JSONEq(t, `{"status":"not ready"}`, res.body)
+	assert.Zero(t, calls.Load(), "the override must not run while stopping")
 }
 
 func TestPathNormalization(t *testing.T) {

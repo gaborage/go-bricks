@@ -250,12 +250,9 @@ func (a *App) serve() <-chan error {
 		err := a.server.Start()
 		a.logger.Info().Err(err).Msg("Server goroutine terminating")
 
-		// Send the error (could be nil if graceful shutdown, or actual error)
-		select {
-		case errCh <- err:
-		default:
-			// Channel might be closed already during shutdown
-		}
+		// Send the error (could be nil if graceful shutdown, or actual error). This goroutine
+		// is errCh's only sender and closer, so the one-slot buffer never blocks the send.
+		errCh <- err
 		close(errCh)
 	}()
 

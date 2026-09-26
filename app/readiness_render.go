@@ -17,7 +17,8 @@ const statsSuffix = "_stats"
 
 const (
 	// notReadyStatus and criticalStatus complete the status vocabulary app.go opens: the
-	// former is the 503 body's verdict, the latter the debug summary's.
+	// former is the 503 body's verdict, the latter the debug summary's. notReadyStatus must
+	// equal server's statusNotReady, the verdict /ready serves while the server is stopping.
 	notReadyStatus = "not ready"
 	criticalStatus = "critical"
 	// timeKey and the app-envelope keys of the /ready 200 body.
