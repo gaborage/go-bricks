@@ -478,6 +478,15 @@ func probeServerConfig(host string, port int, probeHost string, probePort int) S
 	return cfg
 }
 
+// TestServerProbesCollisionDisabledOnEphemeralServerPort pins that a disabled probe
+// listener never collides, even beside server.port 0 — the ephemeral port a Go-assembled
+// config uses in tests, which server.Start re-checks without validation.
+func TestServerProbesCollisionDisabledOnEphemeralServerPort(t *testing.T) {
+	cfg := probeServerConfig("0.0.0.0", 0, "", 0)
+
+	assert.NoError(t, cfg.CheckProbeCollision())
+}
+
 // TestServerProbesPortRange pins server.probes.port's domain: 0 disables the listener,
 // 1..65535 enables it, anything else fails naming the key.
 func TestServerProbesPortRange(t *testing.T) {

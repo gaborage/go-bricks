@@ -90,8 +90,9 @@ func (c *ServerConfig) EffectiveProbeHost() string {
 // CheckProbeCollision refuses an enabled probe listener on server.port when the two
 // effective hosts overlap: equal as strings, or either one unspecified. Distinct specific
 // hosts pass, aliases included (localhost and 127.0.0.1); an alias pair fails at bind with
-// the OS error only when the addresses the names resolve to overlap. server.Start re-applies it before either bind, because a Go-assembled
-// config skips validation and darwin binds 0.0.0.0:P beside 127.0.0.1:P without error.
+// the OS error only when the addresses the names resolve to overlap. server.Start
+// re-applies it before either bind, because a Go-assembled config skips validation and
+// darwin binds 0.0.0.0:P beside 127.0.0.1:P without error.
 func (c *ServerConfig) CheckProbeCollision() error {
 	if c.Probes.Port <= 0 || c.Probes.Port != c.Port {
 		return nil
