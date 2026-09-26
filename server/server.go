@@ -476,7 +476,9 @@ func (s *Server) serverTLSConfig() (*tls.Config, error) {
 // listener to stop.
 func (s *Server) startProbeListener() (closeProbes func(), err error) {
 	if s.probeEcho == nil {
-		return func() {}, nil
+		return func() {
+			// No probe listener was bound, so there is nothing to close.
+		}, nil
 	}
 	defer func() {
 		if err != nil {
