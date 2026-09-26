@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -38,8 +38,9 @@ const (
 )
 
 // testLogEntry captures a single log emission with its level, message, structured field
-// keys, and (for Str fields) the values actually recorded — post-filtering when the
-// owning testLogger carries a SensitiveDataFilter, so tests can assert on masking.
+// keys, and (for Str, Err and Bytes fields) the values actually recorded — Str
+// post-filtering when the owning testLogger carries a SensitiveDataFilter, so tests can
+// assert on masking.
 type testLogEntry struct {
 	level  string
 	msg    string
@@ -154,8 +155,12 @@ func (e *testLogEvent) Interface(key string, _ any) logger.LogEvent {
 	return e
 }
 
-func (e *testLogEvent) Bytes(key string, _ []byte) logger.LogEvent {
+func (e *testLogEvent) Bytes(key string, val []byte) logger.LogEvent {
 	e.fields = append(e.fields, key)
+	if e.values == nil {
+		e.values = make(map[string]string)
+	}
+	e.values[key] = string(val)
 	return e
 }
 
@@ -504,19 +509,6 @@ func isClosed(ch <-chan struct{}) bool {
 	}
 }
 
-// goroutineDump returns every goroutine's stack, growing the buffer until the dump
-// fits so no entry is truncated away.
-func goroutineDump() string {
-	buf := make([]byte, 64<<10)
-	for {
-		n := runtime.Stack(buf, true)
-		if n < len(buf) {
-			return string(buf[:n])
-		}
-		buf = make([]byte, 2*len(buf))
-	}
-}
-
 // awaitShutdownParked reports whether the Shutdown goroutine parked waiting for the
 // lifecycle lock (true) or ran to completion (false). It alternates a non-blocking
 // check of done with a goroutine dump, so it settles as soon as either outcome is
@@ -531,7 +523,7 @@ func awaitShutdownParked(t *testing.T, done <-chan struct{}) bool {
 		if isClosed(done) {
 			return false
 		}
-		dump := goroutineDump()
+		dump := testutil.GoroutineDump()
 		for _, entry := range strings.Split(dump, "\n\n") {
 			if strings.Contains(entry, shutdownLockFrame) && strings.Contains(entry, shutdownLockWaitReason) {
 				return true

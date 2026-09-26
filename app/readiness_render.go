@@ -112,15 +112,22 @@ func (j readinessJudge) walk(ctx context.Context, stopAtCritical bool) (report r
 
 // notStartedResult is the blocking result a judge asked before the start walk completed
 // synthesizes: nothing started, so nothing may take traffic.
+func notStartedResult() HealthStatus {
+	return readinessFailure(errors.New("the application has not started"))
+}
+
+// readinessFailure is a blocking result that names readiness itself, for a failure no kind
+// can carry: the judge asked before start, or a request canceled while it waited on the
+// shared judgment, before any kind was judged for it.
 //
 // SECURITY: componentReadiness is a fixed component identifier, like every other name that
 // reaches the unauthenticated /ready body (ADR-048).
-func notStartedResult() HealthStatus {
+func readinessFailure(err error) HealthStatus {
 	return HealthStatus{
 		Name:     componentReadiness,
 		Status:   unhealthyStatus,
 		Critical: true,
-		Err:      errors.New("the application has not started"),
+		Err:      err,
 	}
 }
 

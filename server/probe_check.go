@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -176,11 +177,46 @@ func (c *appListenerCheck) run(ctx context.Context, addr net.Addr) error {
 	return nil
 }
 
-// checkApplicationListener runs the application-listener check against the application
-// listener's bound port.
+// checkApplicationListener runs the application-listener check, sharing one in-flight check
+// across concurrent probe /ready requests (ADR-120). Only an in-flight result is shared: the
+// next request after a check finishes starts a new one. Each caller waits on its own ctx, so
+// an abandoned probe leaves at once with its ctx error while the check runs on for the rest.
 func (s *Server) checkApplicationListener(ctx context.Context) error {
+	results := s.appCheckFlight.DoChan(appListenerCheckFlightKey, func() (any, error) {
+		return nil, s.appListenerCheckFlight(ctx)
+	})
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case result := <-results:
+		return result.Err
+	}
+}
+
+// appListenerCheckFlightKey keys the one application-listener check flight per Server.
+const appListenerCheckFlightKey = "application-listener-check"
+
+// appListenerCheckFlight is one check against the application listener's bound port. It
+// runs on the leader's context detached from its cancellation, so the leader walking away
+// fails no follower; run bounds it by appListenerCheckTimeout. It recovers its own panic,
+// names it by type only (ADR-081) and logs it with its stack, which carries no panic value:
+// DoChan re-panics a flight's panic on a new goroutine that no recover reaches, which would
+// end the process. completed, not the recovered value, separates a normal return from a
+// panic: under GODEBUG=panicnil=1 a panic(nil) recovers as nil.
+func (s *Server) appListenerCheckFlight(leaderCtx context.Context) (err error) {
 	if s.appCheck == nil {
 		return errAppListenerCheckUnset
 	}
-	return s.appCheck.run(ctx, s.BoundAddr())
+	completed := false
+	defer func() {
+		if completed {
+			return
+		}
+		r := recover()
+		err = fmt.Errorf("application-listener check panicked (type: %T)", r)
+		s.logger.Error().Err(err).Bytes("stack", debug.Stack()).Msg("Application-listener check panicked")
+	}()
+	err = s.appCheck.run(context.WithoutCancel(leaderCtx), s.BoundAddr())
+	completed = true
+	return err
 }

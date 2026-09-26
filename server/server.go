@@ -18,6 +18,7 @@ import (
 
 	"github.com/labstack/echo/v5"
 	"github.com/labstack/echo/v5/middleware"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/pathutil"
@@ -61,6 +62,9 @@ type Server struct {
 	// appCheck is the probe listener's application-listener check, built in Start before
 	// either bind; nil when the probe listener is disabled.
 	appCheck *appListenerCheck
+	// appCheckFlight shares one in-flight application-listener check across concurrent
+	// probe /ready requests (ADR-120).
+	appCheckFlight singleflight.Group
 	// probeStopBudget bounds the probe listener's graceful stop; only a test shortens it.
 	probeStopBudget time.Duration
 }

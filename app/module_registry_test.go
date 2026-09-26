@@ -16,9 +16,9 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
-// recLogger is a recording logger.Logger that captures each event's level, Str
-// and Int fields, Err text and terminal Msg, so tests can assert emissions without
-// swapping the process-global os.Stdout.
+// recLogger is a recording logger.Logger that captures each event's level, Str and
+// Bytes fields (both as text), Int fields, Err text and terminal Msg, so tests can
+// assert emissions without swapping the process-global os.Stdout.
 type recLogger struct {
 	mu     sync.Mutex
 	events []recEvent
@@ -76,7 +76,7 @@ func (e *recEvent) Int64(_ string, _ int64) logger.LogEvent       { return e }
 func (e *recEvent) Uint64(_ string, _ uint64) logger.LogEvent     { return e }
 func (e *recEvent) Dur(k string, v time.Duration) logger.LogEvent { e.dur[k] = v; return e }
 func (e *recEvent) Interface(_ string, _ any) logger.LogEvent     { return e }
-func (e *recEvent) Bytes(_ string, _ []byte) logger.LogEvent      { return e }
+func (e *recEvent) Bytes(k string, v []byte) logger.LogEvent      { e.str[k] = string(v); return e }
 func (e *recEvent) Bool(_ string, _ bool) logger.LogEvent         { return e }
 func (e *recEvent) Enabled() bool                                 { return true }
 

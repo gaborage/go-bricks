@@ -289,8 +289,9 @@ func TestAppListenerCheckRejectsANonTCPAddress(t *testing.T) {
 	require.Error(t, check.run(t.Context(), nil))
 }
 
-// TestAppListenerCheckHonoursTheProbeRequestContext pins that the check runs on the probe
-// request's context, so its cancellation or deadline bounds the check.
+// TestAppListenerCheckHonoursTheProbeRequestContext pins that the check honors the context
+// it runs on, so its cancellation or deadline bounds the check. The flight hands it the
+// leader's context detached from its cancellation, bounded by appListenerCheckTimeout.
 func TestAppListenerCheckHonoursTheProbeRequestContext(t *testing.T) {
 	stub := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(stub.Close)
