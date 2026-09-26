@@ -36,9 +36,10 @@ func normalize(cfg *Config) error {
 		return fmt.Errorf("database config: %w", err)
 	}
 
-	// Same step, same reason: a list key delivered empty cannot be shaped either, and its
-	// empty value disables a control rather than relaxing one (ADR-078).
-	if err := validateNoDeliveredEmptyList(cfg); err != nil {
+	// Same step, same reason: a key delivered empty cannot be shaped either, and its empty
+	// value disables a control or widens a default rather than relaxing one (ADR-078,
+	// ADR-120).
+	if err := validateNoDeliveredEmptyKeys(cfg); err != nil {
 		return err
 	}
 
