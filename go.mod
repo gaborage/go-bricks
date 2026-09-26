@@ -19,7 +19,7 @@ require (
 	github.com/knadh/koanf/providers/env/v2 v2.0.1
 	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/providers/rawbytes v1.0.1
-	github.com/knadh/koanf/v2 v2.3.6
+	github.com/knadh/koanf/v2 v2.3.7
 	github.com/labstack/echo-opentelemetry v0.0.3
 	github.com/labstack/echo/v5 v5.3.1
 	github.com/rabbitmq/amqp091-go v1.15.0
