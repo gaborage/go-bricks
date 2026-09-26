@@ -205,19 +205,23 @@ one:
 | Flight | Key | Budget |
 | --- | --- | --- |
 | The application-listener check | Per `Server` | 500ms |
-| The framework's readiness judgment, inside `App.readyCheck` | Per `App` | `server.timeout.middleware` |
+| The framework's readiness judgment, inside `App.readyCheck` | Per `App` | The earlier of the leader's deadline and `server.timeout.middleware` |
 
 The judgment flight sits in `App.readyCheck`, so it coalesces on either listener and at
 `probes.port: 0`; a consumer `RegisterReadyHandler` override is not coalesced. Each flight runs on
 `context.WithoutCancel` of the leader's request context, bounded by its budget, so the leader's
-cancellation reaches no follower. Waiters join through `DoChan` and also select on their own
-request context: a waiter whose request is canceled leaves early, and on the judgment it logs
-today's abandoned-request WARN. A flight returns a verdict and writes no response, because a
+cancellation reaches no follower. The judgment's budget keeps the leader's deadline, so on the
+probe listener the middleware timeout bounds the check and the judgment together, and a hung
+backend resolves inside the leader's request with the blocking kind named. Waiters join through
+`DoChan` and also select on their own request context: a waiter whose request is canceled leaves
+early, and on the judgment it logs today's abandoned-request WARN (component `readiness`, since
+the verdict is not known yet); a waiter whose deadline expires waits for the verdict instead. A flight returns a verdict and writes no response, because a
 handler writes to one request's `echo.Context`; each waiter logs and renders its own answer from
 the verdict. The flight function recovers its own panic and returns it as an error naming the
 panic by type only (`%T`, ADR-081), so `DoChan`'s `go panic(e)`, which no recover layer catches,
-is unreachable. A waiter treats that error as a failed flight: the check's gate fails, and the
-judgment's waiters return it through the engine's error handler, as a handler panic answers today.
+is unreachable; the flight logs `debug.Stack()` once at ERROR, which carries no panic value. A
+waiter treats that error as a failed flight: the check's gate fails, and the judgment's waiters
+return it through the engine's error handler, as a handler panic answers today.
 
 **Route table.** `/health` and `/ready` stay reserved in the application listener's conflict
 tracker at `<base><path>` whatever `probes.port` says, so flipping the key never changes which
