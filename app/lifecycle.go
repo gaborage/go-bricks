@@ -8,11 +8,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -620,12 +623,16 @@ func (a *App) Shutdown(ctx context.Context) error {
 
 // readyCheck handles the readiness endpoint: one probe run, one gate, one body (ADR-066).
 // The run stops at the first failing critical kind, so an outage costs the probes ahead of
-// it and no more.
+// it and no more. Concurrent requests share one judgment (ADR-120), but each logs and
+// renders its own answer from the verdict, so the failure log fires once per request, as
+// it did before the judgment was shared.
 func (a *App) readyCheck(c server.HandlerContext) error {
 	ctx := c.RequestContext()
-	report, blocking, found := a.judge.gate(ctx)
-
-	if found {
+	verdict, err := a.judgeReadiness(ctx)
+	if err != nil {
+		return err
+	}
+	if verdict.found {
 		// /ready is unauthenticated. On the application listener the limiters apply to it
 		// and key probes by client IP (probeSkipper skips tenant resolution, not the
 		// limiters); with server.probes.port set, /ready is on the probe listener, which has
@@ -634,21 +641,109 @@ func (a *App) readyCheck(c server.HandlerContext) error {
 		// (ADR-057), so only a caller already inside a default-trusted range (loopback,
 		// link-local, RFC1918, IPv6 ULA) can still choose its own key, and the budget is
 		// per-source. An abandoned request — the caller's own context canceled, and the
-		// probe reports that same context.Canceled — is not a readiness incident, so it logs
-		// WARN, not ERROR. The caller's context must actually be done: a probe that reports
-		// context.Canceled while the request is still live was canceled from inside, which is
-		// a genuine incident and stays ERROR.
+		// probe reports that same context.Canceled, or the request stopped waiting on the
+		// shared judgment when it was canceled — is not a readiness incident, so it logs
+		// WARN, not ERROR. The caller's context must actually be done: a probe that
+		// reports context.Canceled while the request is still live was canceled from inside,
+		// which is a genuine incident and stays ERROR.
+		blocking := &verdict.blocking
 		event := a.logger.Error()
 		if errors.Is(ctx.Err(), context.Canceled) && errors.Is(blocking.Err, context.Canceled) {
 			event = a.logger.Warn()
 		}
 		event.Err(blocking.Err).Str("component", blocking.Name).Msg("Readiness check failed")
-		return c.JSON(http.StatusServiceUnavailable, notReadyBody(&blocking))
+		return c.JSON(http.StatusServiceUnavailable, notReadyBody(blocking))
 	}
 
 	app := &config.AppConfig{}
 	if a.cfg != nil {
 		app = &a.cfg.App
 	}
-	return c.JSON(http.StatusOK, report.readyBody(app, time.Now()))
+	return c.JSON(http.StatusOK, verdict.report.readyBody(app, time.Now()))
+}
+
+// readinessVerdict is one framework judgment: what a readiness flight shares with every
+// /ready request waiting on it.
+type readinessVerdict struct {
+	report   readinessReport
+	blocking HealthStatus
+	found    bool
+}
+
+// readinessFlightKey keys the one framework-judgment flight per App.
+const readinessFlightKey = "readiness-judgment"
+
+// judgeReadiness runs the framework judgment at most once across concurrent /ready requests
+// (ADR-120). Only an in-flight verdict is shared: the next request after a judgment finishes
+// starts a new one. A caller whose request is canceled stops waiting at once with a verdict
+// naming readiness itself and carrying its ctx error, since the blocking kind is not yet
+// known, while the judgment runs on for the rest. A caller whose own deadline expires waits
+// for the verdict instead, so it still names the kind that blocked: the flight ends by the
+// leader's deadline, so the leader waits only the probes' return latency past its own. A
+// probe that ignores its context holds the caller, as it held the request that judged on its
+// own. The only error is a flight that panicked, which the caller
+// returns to the engine's error handler.
+func (a *App) judgeReadiness(ctx context.Context) (readinessVerdict, error) {
+	results := a.readyFlight.DoChan(readinessFlightKey, func() (any, error) {
+		return a.readinessFlight(ctx)
+	})
+	var result singleflight.Result
+	select {
+	case result = <-results:
+	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return readinessVerdict{blocking: readinessFailure(ctx.Err()), found: true}, nil
+		}
+		result = <-results
+	}
+	if result.Err != nil {
+		return readinessVerdict{}, result.Err
+	}
+	verdict, _ := result.Val.(readinessVerdict) // a flight that returns no error returns a verdict
+	return verdict, nil
+}
+
+// readinessFlight is one framework judgment on readinessFlightContext's context. It recovers
+// its own panic, names it by type only (ADR-081) and logs it with its stack, which carries no
+// panic value: DoChan re-panics a flight's panic on a new goroutine that no recover reaches,
+// which would end the process, and the waiters return the error to an error handler that
+// logs no stack for it. completed, not the recovered value, separates a normal return from a
+// panic: under GODEBUG=panicnil=1 a panic(nil) recovers as nil.
+func (a *App) readinessFlight(leaderCtx context.Context) (verdict readinessVerdict, err error) {
+	completed := false
+	defer func() {
+		if completed {
+			return
+		}
+		r := recover()
+		err = fmt.Errorf("readiness judgment panicked (type: %T)", r)
+		a.logger.Error().Err(err).Bytes("stack", debug.Stack()).Msg("Readiness judgment panicked")
+	}()
+	ctx, cancel := a.readinessFlightContext(leaderCtx)
+	defer cancel()
+	report, blocking, found := a.judge.gate(ctx)
+	completed = true
+	return readinessVerdict{report: report, blocking: blocking, found: found}, nil
+}
+
+// readinessFlightContext is a judgment's context: the leader's, detached from its
+// cancellation so the leader walking away fails no follower, ending at the earlier of the
+// leader's own deadline and server.timeout.middleware from now. The engine sets that deadline
+// to the same timeout from the start of the leader's request, so the flight ends with the
+// leader's budget, which on the probe listener covers the application-listener check too;
+// with neither, no deadline is added, as none bounded that request. Shutdown waits for no
+// flight: one that outlives stopSlots reads a stopping slot and reports unhealthy, while
+// /ready already answers 503 from the server's stopping latch.
+func (a *App) readinessFlightContext(leaderCtx context.Context) (context.Context, context.CancelFunc) {
+	ctx := context.WithoutCancel(leaderCtx)
+	deadline, bounded := leaderCtx.Deadline()
+	if a.cfg != nil && a.cfg.Server.Timeout.Middleware > 0 {
+		if budget := time.Now().Add(a.cfg.Server.Timeout.Middleware); !bounded || budget.Before(deadline) {
+			deadline, bounded = budget, true
+		}
+	}
+	if !bounded {
+		return context.WithCancel(ctx)
+	}
+	return context.WithDeadline(ctx, deadline)
 }
