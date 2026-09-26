@@ -63,7 +63,7 @@ streams counters have no OTel instrument. The unredacted detail's gated home, `/
   | --- | --- |
   | Equal | Refused, naming the key |
   | Either unspecified (`""`, `0.0.0.0`, `::`) | Refused, naming the key |
-  | Distinct, aliases included (`localhost` and `127.0.0.1`) | Passes; an alias pair fails at bind with the OS error |
+  | Distinct, aliases included (`localhost` and `127.0.0.1`) | Passes; the bind fails with the OS error only when the addresses the two names resolve to overlap |
 
   `Start` re-applies the rule to the configured keys before either bind: a Go-assembled config
   skips validation, and darwin binds `0.0.0.0:P` beside `127.0.0.1:P` without error. The test
@@ -111,13 +111,16 @@ streams counters have no OTel instrument. The unredacted detail's gated home, `/
   `TestDefaultMiddlewareChainAllocsStable`, ceiling 64).
 - **No limiter on the probe listener.** No IP-keyed or application-shared request-rate limiter may
   be added to the probe listener: removing the shared budget is what fixes the `429` defect.
-  Coalescing (below) bounds what a burst costs the backends instead.
+  Coalescing (below) bounds what a burst costs the backends instead — for the framework's own
+  work only: a consumer `RegisterReadyHandler` override runs once per request, so an override that
+  reaches a backend bounds its own cost.
 - **Timeouts.** The probe listener reuses `server.timeout.read`, `.write`, `.idle` and
   `.middleware`; there are no probe-specific timeout keys. On the probe listener the middleware
   timeout bounds the application-listener check and the judgment together.
 - **No TLS.** `server.tls.*` governs the application listener only. The probe listener is plain
   HTTP: no credential rides a probe, and after Part 2 the body carries one status word. A TLS
-  opt-in would need its own certificate material and rotation for no confidentiality gain. Until
+  opt-in would need its own certificate material and rotation, and after Part 2 it would protect
+  nothing but that status word. Until
   Part 2 ships, the probe listener serves today's detailed body in plaintext, so a deployment that
   sets `probes.port` restricts the listener to its probe sources, keeps it off every public network
   path (see Consequences), and keeps probe traffic on a trusted, isolated network: restricting
@@ -145,7 +148,7 @@ port has today's semantics, and `startupProbe` sizing in `wiki/startup_defaults.
 | Later failure in `Start` | Any failure after the probe listener bound (the application bind included) closes the probe listener before `Start` returns. |
 | `Start` return | `nil` after a graceful `Shutdown`, because Echo filters `http.ErrServerClosed`; `http.ErrServerClosed` comes only from a latch veto. |
 | Error fan-in | A change: `serve()` goes from a capacity-1 channel with one sender to capacity 2 with one sender per listener, the `Start` goroutine and a forwarder reading `ProbeErrors()`. A `sync.WaitGroup` over both senders gates `close`. `drainServerError` changes from one receive to reading until the channel closes, bounded by the outer timeout, and `Run` calls it on the server-error path as well as the shutdown path. Either listener's serve error ends `Run`. |
-| Shutdown | `Server.Shutdown` sets `stopping`, drains the application listener within the caller's ctx, then stops the probe listener at the end of `Server.Shutdown` — before `App.Shutdown` reaches `stopSlots` — with a 1s ctx detached from the caller's (`context.WithoutCancel`) and `Close()` on expiry. A deadline error from the probe listener alone logs WARN and is not returned. |
+| Shutdown | `Server.Shutdown` sets `stopping`, drains the application listener within the caller's ctx, and then stops the probe listener — on every path, including when the application drain returns an error, which is returned only after the probe cleanup. The cleanup runs at the end of `Server.Shutdown`, before `App.Shutdown` reaches `stopSlots`, with a 1s ctx detached from the caller's (`context.WithoutCancel`) and `Close()` on expiry. A deadline error from the probe listener alone logs WARN and is not returned. |
 | In-flight judgments | A judgment on the probe listener is bounded by its flight budget (see **Coalescing**), not by the probe listener's stop: `Close()` does not wait for handlers, and `stopSlots` does not wait for a flight that outlives it. A late flight reads a stopping slot and reports unhealthy, which is harmless: `/ready` already answers `503` from the latch. |
 | Shutdown before `Start` | The latch vetoes both listeners; `Start` returns `http.ErrServerClosed` and binds neither. |
 
@@ -182,6 +185,9 @@ configured `server.host`, never the bound address string (`BoundAddr()` reports 
 | `""` or `0.0.0.0` | `127.0.0.1` |
 | `::` or `[::]` | `::1` |
 | Anything else | `server.host` as configured |
+
+Every listen and dial address is built with `net.JoinHostPort`, so a bare IPv6 host such as `::`
+yields `[::]:P`; a `host:port` built by string formatting would produce the invalid `:::P`.
 
 It speaks HTTPS when `server.tls.enabled` is set and HTTP otherwise. Under TLS, verification is
 pinned, never skipped: `RootCAs` is a pool holding only the application listener's own configured
@@ -359,7 +365,7 @@ under base `/api`), and `formatHandlerID`'s doc says so. `PostRegisterRoutes` an
   the rewritten probe targets the probe port.
 - Probes on the probe listener stop sharing rate-limit budget and source-IP buckets with application
   traffic, and ADR-057's per-IP pre-guard ceiling stops covering `/ready`; coalescing bounds a
-  burst's backend cost instead. Until Part 2 ships, the probe listener serves today's body in
+  burst's backend cost instead, for the framework's work (a consumer override bounds its own). Until Part 2 ships, the probe listener serves today's body in
   plaintext, so its traffic stays on a trusted, isolated network (see **No TLS**).
 
 **Consumers of the `/ready` body (Part 2):**
