@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -31,6 +32,10 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 	}
 
 	if err := a.requireJudge(); err != nil {
+		return err
+	}
+
+	if err := a.requireProbeSeam(); err != nil {
 		return err
 	}
 
@@ -210,6 +215,23 @@ func (a *App) applyGlobalMiddleware() error {
 	return nil
 }
 
+// requireProbeSeam fails closed when server.probes.port is set but the configured server
+// cannot report the probe listener's serve error: the key would otherwise be silently
+// ignored (ADR-120). *server.Server always implements the seam; an injected
+// Options.Server may not.
+func (a *App) requireProbeSeam() error {
+	if a.cfg == nil || a.cfg.Server.Probes.Port <= 0 {
+		return nil
+	}
+	if _, ok := a.server.(probeRunner); ok {
+		return nil
+	}
+	return fmt.Errorf("server.probes.port is set (%d) but the configured server does not support the probe listener",
+		a.cfg.Server.Probes.Port)
+}
+
+var _ probeRunner = (*server.Server)(nil)
+
 // assertMessagingConfiguredIfDeclared fails-fast in single-tenant mode when
 // a module has declared messaging infrastructure but no broker URL is set —
 // without this check the declarations would be silently dropped (issue #366).
@@ -241,22 +263,55 @@ func (a *App) registerDebugHandlers() error {
 	return debugHandlers.RegisterDebugEndpoints(a.server.RootGroup())
 }
 
-// serve starts the HTTP server in a goroutine and returns an error channel
+// serve starts the HTTP server in a goroutine and returns the channel both listeners report
+// on (ADR-120): Start's result, and the probe listener's serve error when the server has
+// one. Each of the two senders sends at most once, so the two-slot buffer never blocks a
+// send, and the channel closes only after both have finished.
 func (a *App) serve() <-chan error {
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
+	var senders sync.WaitGroup
 
-	go func() {
+	senders.Go(func() {
 		a.logger.Info().Msg("Server goroutine starting")
 		err := a.server.Start()
 		a.logger.Info().Err(err).Msg("Server goroutine terminating")
 
-		// Send the error (could be nil if graceful shutdown, or actual error). This goroutine
-		// is errCh's only sender and closer, so the one-slot buffer never blocks the send.
+		// nil after a graceful shutdown, which Start may report only once its drain ends.
 		errCh <- err
+	})
+	// A nil ProbeErrors breaks the seam's contract; ranging over it would park the forwarder,
+	// and with it the close, for good.
+	if probes, ok := a.server.(probeRunner); ok && probes.ProbeErrors() != nil {
+		probeErrs := probes.ProbeErrors()
+		senders.Go(func() { forwardProbeError(probeErrs, errCh) })
+	}
+	go func() {
+		senders.Wait()
 		close(errCh)
 	}()
 
 	return errCh
+}
+
+// forwardProbeError relays the probe listener's first serve failure onto errCh and returns
+// once ProbeErrors closes. A clean stop sends nothing, so the probe listener stopping never
+// ends Run; sending at most once keeps serve's buffer from blocking on a runner that breaks
+// the ProbeErrors contract.
+func forwardProbeError(probeErrs <-chan error, errCh chan<- error) {
+	sent := false
+	for err := range probeErrs {
+		if isServeFailure(err) && !sent {
+			errCh <- err
+			sent = true
+		}
+	}
+}
+
+// isServeFailure reports whether a listener's result is a failure rather than a clean
+// stop: nil follows a graceful Shutdown, and http.ErrServerClosed a Shutdown that vetoed
+// Start.
+func isServeFailure(err error) bool {
+	return err != nil && !errors.Is(err, http.ErrServerClosed)
 }
 
 // waitForShutdownOrServerError waits for either a shutdown signal or server error
@@ -300,36 +355,48 @@ func (a *App) shutdownTimeouts() (inner, outer time.Duration) {
 	return inner, outer
 }
 
-// drainServerError drains any remaining error from the server error channel
+// drainServerError reads the server error channel until it closes, bounded by the outer
+// shutdown timeout, and returns every serve failure either listener reported, joined
+// (ADR-120). Clean stops (nil, http.ErrServerClosed) are dropped value by value, so a
+// joined result never hides a failure behind the sentinel.
 func (a *App) drainServerError(ch <-chan error) error {
 	if ch == nil {
 		return nil
 	}
 
 	_, outer := a.shutdownTimeouts()
-	timeout := time.After(outer)
 
 	if a.logger != nil {
 		a.logger.Debug().Msg("Draining server error channel")
 	}
 
-	select {
-	case err, ok := <-ch:
-		if !ok {
-			if a.logger != nil {
-				a.logger.Debug().Msg("Server error channel closed normally")
+	err := errors.Join(a.receiveServeFailures(ch, time.After(outer))...)
+	if a.logger != nil && err != nil {
+		a.logger.Debug().Err(err).Msg("Server error channel returned error")
+	}
+	return err
+}
+
+// receiveServeFailures collects the serve failures ch carries until it closes. If timeout
+// fires first, a sender never finished, which is itself a failure, reported alongside
+// those already collected.
+func (a *App) receiveServeFailures(ch <-chan error, timeout <-chan time.Time) []error {
+	var failures []error
+	for {
+		select {
+		case err, ok := <-ch:
+			if !ok {
+				return failures
 			}
-			return nil
+			if isServeFailure(err) {
+				failures = append(failures, err)
+			}
+		case <-timeout:
+			if a.logger != nil {
+				a.logger.Warn().Msg("Timeout waiting for server goroutine to complete - this may indicate a shutdown issue")
+			}
+			return append(failures, errors.New("server goroutine failed to complete within timeout"))
 		}
-		if a.logger != nil {
-			a.logger.Debug().Err(err).Msg("Server error channel returned error")
-		}
-		return err
-	case <-timeout:
-		if a.logger != nil {
-			a.logger.Warn().Msg("Timeout waiting for server goroutine to complete - this may indicate a shutdown issue")
-		}
-		return errors.New("server goroutine failed to complete within timeout")
 	}
 }
 
@@ -350,7 +417,7 @@ func (a *App) Run() error {
 		a.logger.Info().Msg("Shutdown signal received")
 	}
 
-	if serverErr != nil && !errors.Is(serverErr, http.ErrServerClosed) {
+	if isServeFailure(serverErr) {
 		a.logger.Error().Err(serverErr).Msg("Server stopped unexpectedly")
 	}
 
@@ -378,28 +445,27 @@ func (a *App) Run() error {
 		return errors.New("shutdown timed out")
 	}
 
-	var errs []error
+	return a.runResult(serverErr, serverErrCh, shutdownErr)
+}
 
-	if shutdownRequested {
-		a.logger.Info().Msg("Waiting for server goroutine to complete")
-		if err := a.drainServerError(serverErrCh); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errs = append(errs, fmt.Errorf(serverErrorMsg, err))
-		} else {
-			a.logger.Info().Msg("Server goroutine completed successfully")
-		}
-	} else if serverErr != nil && !errors.Is(serverErr, http.ErrServerClosed) {
+// runResult joins what Run reports once shutdown has completed: the serve error that woke
+// it, whatever either listener still reports while the channel drains, and the shutdown
+// error. The drain runs on the server-error path too, so a probe listener failure that
+// follows an application one is joined rather than lost (ADR-120).
+func (a *App) runResult(serverErr error, serverErrCh <-chan error, shutdownErr error) error {
+	var errs []error
+	if isServeFailure(serverErr) {
 		errs = append(errs, fmt.Errorf(serverErrorMsg, serverErr))
 	}
 
-	if shutdownErr != nil {
-		errs = append(errs, shutdownErr)
+	a.logger.Info().Msg("Waiting for server goroutine to complete")
+	if err := a.drainServerError(serverErrCh); err != nil {
+		errs = append(errs, fmt.Errorf(serverErrorMsg, err))
+	} else if len(errs) == 0 {
+		a.logger.Info().Msg("Server goroutine completed successfully")
 	}
 
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-
-	return nil
+	return errors.Join(append(errs, shutdownErr)...)
 }
 
 // shutdownResource safely shuts down a resource and handles error logging

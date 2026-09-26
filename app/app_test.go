@@ -172,6 +172,8 @@ type mockServer struct {
 	startCalls    int32
 	shutdownCalls int32
 	readyHandler  server.Handler
+	// onShutdown, when set, runs at the start of Shutdown.
+	onShutdown func()
 
 	gate     chan struct{}
 	gateOnce sync.Once
@@ -198,6 +200,9 @@ func (m *mockServer) Start() error {
 
 func (m *mockServer) Shutdown(ctx context.Context) error {
 	_ = ctx
+	if m.onShutdown != nil {
+		m.onShutdown()
+	}
 	atomic.AddInt32(&m.shutdownCalls, 1)
 	m.releaseStart()
 	return m.shutdownErr
@@ -2219,9 +2224,10 @@ func TestDrainServerError(t *testing.T) {
 		ch := make(chan error, 1)
 		expectedErr := errors.New("server error")
 		ch <- expectedErr
+		close(ch)
 
 		err := app.drainServerError(ch)
-		assert.Equal(t, expectedErr, err)
+		assert.ErrorIs(t, err, expectedErr)
 	})
 }
 

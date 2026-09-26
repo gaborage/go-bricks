@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -134,17 +135,6 @@ func requireProbeErrorsClosed(t *testing.T, srv *Server) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("ProbeErrors was not closed")
 	}
-}
-
-// reserveFreePort returns a loopback port that was free a moment ago.
-func reserveFreePort(t *testing.T) int {
-	t.Helper()
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
-	require.True(t, ok)
-	require.NoError(t, ln.Close())
-	return tcpAddr.Port
 }
 
 // occupyPort holds a loopback port for the rest of the test.
@@ -409,7 +399,7 @@ func TestServerApplicationBindFailureClosesProbeListener(t *testing.T) {
 func TestServerStartRefusesProbeCollision(t *testing.T) {
 	cfg := newProbeTestConfig("")
 	cfg.Server.Host = "0.0.0.0"
-	cfg.Server.Port = reserveFreePort(t)
+	cfg.Server.Port = testutil.ReserveFreePort(t)
 	cfg.Server.Probes.Host = "127.0.0.1"
 	cfg.Server.Probes.Port = cfg.Server.Port
 	srv := New(cfg, &testLogger{})
@@ -458,7 +448,7 @@ func TestServerShutdownBeforeStartVetoesProbeListener(t *testing.T) {
 func TestServerProbeStoreVetoedByLatch(t *testing.T) {
 	cfg := newProbeTestConfig("")
 	cfg.Server.Probes.Host = "127.0.0.1"
-	cfg.Server.Probes.Port = reserveFreePort(t)
+	cfg.Server.Probes.Port = testutil.ReserveFreePort(t)
 	srv := New(cfg, &testLogger{})
 	srv.stopping.Store(true)
 
