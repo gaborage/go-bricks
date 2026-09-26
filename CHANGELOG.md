@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.68.0](https://github.com/gaborage/go-bricks/compare/v0.67.0...v0.68.0) (2026-09-26)
+
+
+### Added
+
+* **app:** coalesce concurrent readiness judgments and checks ([#1807](https://github.com/gaborage/go-bricks/issues/1807)) ([4f63d42](https://github.com/gaborage/go-bricks/commit/4f63d42c773b7ecf82dfa6505f4bde98f06b4dd9))
+* **app:** report probe listener failures and require its seam ([#1804](https://github.com/gaborage/go-bricks/issues/1804)) ([97eaeb0](https://github.com/gaborage/go-bricks/commit/97eaeb02f8cbe47d267887c8db30fb8c03b33315))
+* **config:** add server.probes.port and server.probes.host ([#1802](https://github.com/gaborage/go-bricks/issues/1802)) ([8b17a47](https://github.com/gaborage/go-bricks/commit/8b17a471df76ca207f369e02dac84c24ff2e7f36))
+* **server:** answer /ready 503 while the server is stopping ([#1801](https://github.com/gaborage/go-bricks/issues/1801)) ([4dd2afe](https://github.com/gaborage/go-bricks/commit/4dd2afe2c48bb1f7249c8dcc0820406d59e5d2c8))
+* **server:** describe probe routes on the probe listener ([#1805](https://github.com/gaborage/go-bricks/issues/1805)) ([989d2df](https://github.com/gaborage/go-bricks/commit/989d2dfe26c3711cbdfe6e2ea5e0623d4fab08a2))
+* **server:** gate probe /ready on a live application listener ([#1806](https://github.com/gaborage/go-bricks/issues/1806)) ([883901b](https://github.com/gaborage/go-bricks/commit/883901b7ce0c2d6c5ada2b23544e1c9b6a79b2d1))
+* **server:** serve probes on an opt-in internal listener ([#1803](https://github.com/gaborage/go-bricks/issues/1803)) ([51441e0](https://github.com/gaborage/go-bricks/commit/51441e012a451692cc9e9d17ffc7bdd8d484647b))
+
 ## [0.67.0](https://github.com/gaborage/go-bricks/compare/v0.66.0...v0.67.0) (2026-09-24)
 
 
