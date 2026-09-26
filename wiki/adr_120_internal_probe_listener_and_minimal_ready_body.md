@@ -186,8 +186,9 @@ configured `server.host`, never the bound address string (`BoundAddr()` reports 
 | `::` or `[::]` | `::1` |
 | Anything else | `server.host` as configured |
 
-Every listen and dial address is built with `net.JoinHostPort`, so a bare IPv6 host such as `::`
-yields `[::]:P`; a `host:port` built by string formatting would produce the invalid `:::P`.
+Every listen and dial address is built with `net.JoinHostPort` after trimming any surrounding
+brackets from the host, so `::` and `[::]` both yield `[::]:P`; string formatting would produce the
+invalid `:::P`, and `JoinHostPort` on a still-bracketed host the invalid `[[::]]:P`.
 
 It speaks HTTPS when `server.tls.enabled` is set and HTTP otherwise. Under TLS, verification is
 pinned, never skipped: `RootCAs` is a pool holding only the application listener's own configured
