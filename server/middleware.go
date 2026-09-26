@@ -53,16 +53,15 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	// Gate it on observabilityEnabled (RequestID/RequestEnrich below stay
 	// unconditional so W3C trace propagation works regardless).
 	// Shared probe skipper: health/ready requests bypass the observability and
-	// identity-establishing middlewares below.
-	probeSkipper := CreateProbeSkipper(healthPath, readyPath)
+	// identity-establishing middlewares below. Keyed on the matched route template, so the
+	// exemption covers exactly the probe routes this server registered (see isProbeRequest).
+	skipProbe := newProbeSkipper(healthPath, readyPath)
 
 	if observabilityEnabled {
 		e.Use(echootel.NewMiddlewareWithConfig(echootel.Config{
 			ServerName:     cfg.App.Name,
 			TracerProvider: otel.GetTracerProvider(),
-			Skipper: func(c *echo.Context) bool {
-				return probeSkipper(c.Request())
-			},
+			Skipper:        middleware.Skipper(skipProbe),
 			MetricAttributes: func(c *echo.Context, v *echootel.Values) []attribute.KeyValue {
 				// echo-opentelemetry treats a non-empty MetricAttributes return as a
 				// REPLACEMENT for its default attribute set: Metrics.Record falls back to
@@ -109,7 +108,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 		e.Use(ipPreGuardEcho(cfg.App.Rate.IPPreGuard.Threshold, log))
 	}
 
-	setupIdentityMiddlewares(e, log, cfg, probeSkipper)
+	setupIdentityMiddlewares(e, log, cfg, skipProbe)
 
 	// Logger middleware with zerolog
 	e.Use(requestLoggerEcho(log, healthPath, readyPath))
@@ -209,13 +208,13 @@ func secureHeadersEcho() echo.MiddlewareFunc {
 // (tenant resolution, ALB forwarded-client-cert). Both run before the access
 // logger so their rejection paths can leave their own WARN trail, and both
 // honor the shared probe skipper.
-func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, probeSkipper SkipperFunc) {
+func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, skipProbe probeSkipper) {
 	// Multi-tenant tenant resolver middleware (if enabled)
 	if cfg.Multitenant.Enabled {
 		resolver := buildTenantResolver(cfg)
 		if resolver != nil {
 			// Use skipper-aware middleware to bypass tenant resolution for health probes
-			e.Use(tenantMiddlewareEcho(resolver, probeSkipper, log))
+			e.Use(tenantMiddlewareEcho(resolver, skipProbe, log))
 		} else {
 			log.Warn().Msg("Tenant resolver could not be constructed; skipping tenant middleware")
 		}
@@ -239,7 +238,7 @@ func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Confi
 				"require implies the middleware; enabling it (config.Validate rejects this combination, " +
 				"but this config path bypassed validation). Set enabled=true explicitly.")
 		}
-		e.Use(forwardedClientCertMiddlewareEcho(fcc, probeSkipper, log))
+		e.Use(forwardedClientCertMiddlewareEcho(fcc, skipProbe, log))
 	}
 }
 

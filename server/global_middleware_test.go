@@ -26,35 +26,44 @@ func blockUnlessAuthorized(c HandlerContext, next func() error) error {
 }
 
 // TestSkipProbesBypassesProbePathsOnly verifies the skipProbes wrapper runs the wrapped
-// middleware for normal paths and bypasses it for the health/ready probes.
+// middleware for normal routes and bypasses it for the health/ready probes. The decision
+// reads the matched route TEMPLATE, so each case seeds the template the router would have
+// stamped; the request URL is deliberately unrelated to it in the last two cases, which is
+// the shape a URL-keyed decision got wrong.
 func TestSkipProbesBypassesProbePathsOnly(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
 	var mwCalls int
 	wrapped := skipProbes(func(_ HandlerContext, next func() error) error {
 		mwCalls++
 		return next()
-	}, CreateProbeSkipper("/health", "/ready"))
+	}, newProbeSkipper("/health", "/ready"))
 
 	cases := []struct {
-		path   string
-		wantMW bool
+		name     string
+		template string
+		url      string
+		wantMW   bool
 	}{
-		{"/health", false},
-		{"/ready", false},
-		{"/api/x", true},
+		{name: "health", template: "/health", url: "/health", wantMW: false},
+		{name: "ready", template: "/ready", url: "/ready", wantMW: false},
+		{name: "module_route", template: "/api/:id", url: "/api/x", wantMW: true},
+		{name: "module_route_url_decodes_to_probe", template: "/api/:id", url: "/api/%72eady", wantMW: true},
+		{name: "module_route_url_rewritten_to_probe", template: "/api/:id", url: "/health", wantMW: true},
 	}
 	for _, tc := range cases {
-		mwCalls = 0
-		nextCalls := 0
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tc.path, http.NoBody)
-		ctx := NewHandlerContextForTest(httptest.NewRecorder(), req, cfg)
-		require.NoError(t, wrapped(ctx, func() error { nextCalls++; return nil }))
-		assert.Equal(t, 1, nextCalls, "next must always run for %s", tc.path)
-		if tc.wantMW {
-			assert.Equal(t, 1, mwCalls, "wrapped middleware must run for %s", tc.path)
-		} else {
-			assert.Equal(t, 0, mwCalls, "wrapped middleware must be skipped for %s", tc.path)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			mwCalls = 0
+			nextCalls := 0
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tc.url, http.NoBody)
+			ctx := NewHandlerContextForTestWithOptions(httptest.NewRecorder(), req, cfg, WithRouteTemplate(tc.template))
+			require.NoError(t, wrapped(ctx, func() error { nextCalls++; return nil }))
+			assert.Equal(t, 1, nextCalls, "next must always run")
+			if tc.wantMW {
+				assert.Equal(t, 1, mwCalls, "wrapped middleware must run")
+			} else {
+				assert.Equal(t, 0, mwCalls, "wrapped middleware must be skipped")
+			}
+		})
 	}
 }
 
@@ -203,4 +212,58 @@ func TestRegisterGlobalMiddlewareSkipsNilEntries(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.True(t, ran, "non-nil middleware must run; nil entries are skipped without panicking")
+}
+
+// TestRegisterGlobalMiddlewareGatesNonProbeRequests drives the whole default chain: a global
+// middleware carrying an auth gate (ADR-036) must run for every request the probe routes do not
+// serve — a percent-encoded spelling, a non-probe method — and must keep bypassing the genuine
+// probes on both methods they answer.
+func TestRegisterGlobalMiddlewareGatesNonProbeRequests(t *testing.T) {
+	srv := newTestServer(probeSkipBase, "", "")
+	srv.echo.Add(http.MethodGet, probeSkipModuleRoute, okEchoHandler)
+	srv.echo.Add(http.MethodHead, probeSkipModuleRoute, okEchoHandler)
+	srv.echo.Add(http.MethodPost, probeSkipReady, okEchoHandler)
+	srv.RegisterGlobalMiddleware(blockUnlessAuthorized)
+
+	for _, method := range probeMethods {
+		for _, tc := range []struct {
+			name, path string
+			wantCode   int
+		}{
+			{"registered_health", probeSkipHealth, http.StatusOK},
+			{"registered_ready", probeSkipReady, http.StatusOK},
+			{"encoded_health", probeSkipEncodedHlth, http.StatusUnauthorized},
+			{"encoded_ready", probeSkipEncodedRdy, http.StatusUnauthorized},
+		} {
+			t.Run(method+"_"+tc.name, func(t *testing.T) {
+				assertServeCode(t, srv.echo, method, tc.path, tc.wantCode)
+			})
+		}
+	}
+
+	t.Run("post_on_probe_path", func(t *testing.T) {
+		assertServeCode(t, srv.echo, http.MethodPost, probeSkipReady, http.StatusUnauthorized,
+			"a module route owning a non-probe method on the probe path stays gated")
+	})
+}
+
+// TestRegisterGlobalMiddlewareGatesURLRewrittenByEarlierMiddleware covers the chained shape: a
+// global middleware runs before the gate and rewrites the request URL onto the probe path. The
+// gate's exemption reads the matched route template, so the rewrite cannot exempt the request;
+// a URL-keyed exemption would have skipped the gate (and RawPath stays empty here, so comparing
+// the raw path would not have helped either).
+func TestRegisterGlobalMiddlewareGatesURLRewrittenByEarlierMiddleware(t *testing.T) {
+	srv := newTestServer(probeSkipBase, "", "")
+	srv.echo.GET(probeSkipModuleRoute, okEchoHandler)
+
+	rewriter := func(c HandlerContext, next func() error) error {
+		c.Request().URL.Path = probeSkipHealth
+		return next()
+	}
+	srv.RegisterGlobalMiddleware(rewriter, blockUnlessAuthorized)
+
+	assertServeCode(t, srv.echo, http.MethodGet, probeSkipBase+"/thing", http.StatusUnauthorized,
+		"an upstream URL rewrite must not exempt a module route from the gate")
+	assertServeCode(t, srv.echo, http.MethodGet, probeSkipHealth, http.StatusOK,
+		"the genuine probe still bypasses the gate")
 }

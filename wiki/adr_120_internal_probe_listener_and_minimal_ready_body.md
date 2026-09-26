@@ -85,8 +85,9 @@ streams counters have no OTel instrument. The unredacted detail's gated home, `/
   `requestEnrich` and the opt-in timing middleware is deliberate: probes carry no trace context, as
   the OTel middleware already skips them, and without the lease scope a handle a probe borrows is
   released at once, the documented fallback for unscoped contexts. (On the application listener
-  the probe skipper exempts probes from OTel, tenant resolution, forwarded client certificate and
-  module global middleware (ADR-036), and the request logger has its own probe-path handling;
+  the probe skipper exempts probes from OTel, tenant resolution, forwarded client certificate,
+  module global middleware (ADR-036) and the access log, all from one decision keyed on the matched
+  route and the probe methods;
   `requestEnrich`, CORS, the IP pre-guard, Secure headers, the middleware timeout, body limit,
   gzip, the rate limiter and the opt-in timing middleware run on them.)
 - **Reserved routes.** With `probes.port > 0` the application engine registers static `GET` and

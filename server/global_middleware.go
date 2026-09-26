@@ -7,7 +7,7 @@ import "github.com/labstack/echo/v5"
 // recovery, ...) and before the route handler, and skips the health/ready probes. It must
 // be called during startup, before Start().
 func (s *Server) RegisterGlobalMiddleware(mw ...MiddlewareFunc) {
-	skipper := CreateProbeSkipper(s.buildFullPath(s.healthRoute), s.buildFullPath(s.readyRoute))
+	skipper := newProbeSkipper(s.buildFullPath(s.healthRoute), s.buildFullPath(s.readyRoute))
 	adapted := make([]echo.MiddlewareFunc, 0, len(mw))
 	for _, m := range mw {
 		if m == nil {
@@ -21,9 +21,13 @@ func (s *Server) RegisterGlobalMiddleware(mw ...MiddlewareFunc) {
 	s.echo.Use(adapted...)
 }
 
-func skipProbes(mw MiddlewareFunc, skipper SkipperFunc) MiddlewareFunc {
+// skipProbes exempts the probe routes from one global middleware. The decision reads the
+// matched route template (isProbeRequest), not the request URL: a global middleware
+// registered earlier in the chain can rewrite r.URL.Path, and this seat is exactly where
+// consumer code sits.
+func skipProbes(mw MiddlewareFunc, skipper probeSkipper) MiddlewareFunc {
 	return func(c HandlerContext, next func() error) error {
-		if skipper(c.Request()) {
+		if skipper(c.ectx) {
 			return next()
 		}
 		return mw(c, next)

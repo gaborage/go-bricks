@@ -32,8 +32,26 @@ The framework collects implementers' middleware in `prepareRuntime` (after every
 `Init()`, before route registration and `Start`), so the middleware may capture
 dependencies a module wired up in `Init()` (e.g. a keystore-backed token verifier). It is
 registered once on the root engine chain via a new `*server.Server` method,
-`RegisterGlobalMiddleware`, which wraps each with a health/ready probe skipper
-(`CreateProbeSkipper`) and appends via `s.echo.Use`.
+`RegisterGlobalMiddleware`, which wraps each with a health/ready probe skipper and appends via
+`s.echo.Use`.
+
+**Amendment (2026-09-26).** The probe exemption is keyed on the route the ROUTER matched, not on
+the request URL, and it covers only the methods the probes answer. `RegisterGlobalMiddleware` wraps
+each middleware with the internal, template-keyed predicate (`newProbeSkipper` over
+`isProbeRequest`, `server/probe_skip.go`), which the four other framework seats — OTel, tenant
+resolution, the forwarded-client-cert identity and the access logger — read as well, so one
+decision serves them all. A URL-keyed exemption exempted requests the probe routes never served:
+echo's router matches the ESCAPED path, so `<base>/%72eady` decodes onto the ready path while
+routing to a module param or wildcard route; route registration is per method+path, so a module may
+own a non-probe method on a probe path; and a global middleware earlier in the chain can rewrite
+`r.URL.Path` outright. Because a global middleware is the documented seat for cross-cutting auth,
+each of those ran consumer code with the gate skipped. The template cannot be moved by any of the
+three, and it identifies the probe HANDLER because the duplicate-route check (`app.checkRouteConflicts`)
+refuses a module that claims a probe path. `CreateProbeSkipper` remains exported for consumer
+middleware built on `server.SkipperFunc`, and answers from the same key: echo stamps the matched
+template on the request as `r.Pattern`, with the raw path as the fallback when no template was
+stamped. Consumer exemptions written inside a middleware body follow the same rule — match
+`c.RouteTemplate()`, never `c.Request().URL.Path` (see [global_middleware.md](global_middleware.md)).
 
 Registration goes on the **raw root chain** (`s.echo.Use`), not a group. Echo's root `Use`
 recompiles the whole global chain (`buildRouterChains`) and applies to every request after

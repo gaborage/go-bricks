@@ -300,6 +300,12 @@ func TestOTelMiddlewareHealthProbeExclusion(t *testing.T) {
 		return c.JSON(http.StatusOK, map[string]string{"data": "test"})
 	})
 
+	// A module param route at the root, so a percent-encoded spelling of a probe path has
+	// somewhere to route: it must be traced like any other module request.
+	e.GET("/:id", func(c *echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"routed": "module"})
+	})
+
 	tests := []struct {
 		name          string
 		path          string
@@ -321,6 +327,20 @@ func TestOTelMiddlewareHealthProbeExclusion(t *testing.T) {
 		{
 			name:          "normal_endpoint_traced",
 			path:          "/api/data",
+			shouldTrace:   true,
+			expectedSpans: 1,
+		},
+		{
+			// Decodes to the health path but routes to /:id, so it is not a probe and the
+			// span must be created.
+			name:          "encoded_health_spelling_traced",
+			path:          "/%68ealth",
+			shouldTrace:   true,
+			expectedSpans: 1,
+		},
+		{
+			name:          "encoded_ready_spelling_traced",
+			path:          "/%72eady",
 			shouldTrace:   true,
 			expectedSpans: 1,
 		},

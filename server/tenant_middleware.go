@@ -11,11 +11,6 @@ import (
 	"github.com/gaborage/go-bricks/multitenant"
 )
 
-// SkipperFunc decides whether middleware processing is skipped for a request. It receives
-// the stdlib *http.Request — all a skip decision needs — so application code never names an
-// echo type and the decision never depends on per-request state that may be unpopulated.
-type SkipperFunc func(r *http.Request) bool
-
 // TenantMiddleware resolves the tenant ID and injects it into the request context.
 // If a skipper function is provided, certain routes (e.g., health probes) can bypass tenant resolution.
 // If skipper is nil, all routes will undergo tenant resolution.
@@ -26,7 +21,7 @@ type SkipperFunc func(r *http.Request) bool
 // Constructed here with a nil logger — see tenantMiddlewareEcho for the
 // framework-logger form.
 func TenantMiddleware(resolver multitenant.TenantResolver, skipper SkipperFunc) MiddlewareFunc {
-	return fromEchoMiddleware(tenantMiddlewareEcho(resolver, skipper, nil))
+	return fromEchoMiddleware(tenantMiddlewareEcho(resolver, skipperFromRequest(skipper), nil))
 }
 
 // tenantMiddlewareEcho is the echo-native tenant-resolution middleware constructor.
@@ -35,13 +30,15 @@ func TenantMiddleware(resolver multitenant.TenantResolver, skipper SkipperFunc) 
 // trail — this middleware is registered outer to the access logger
 // (server/middleware.go), so a short-circuited request never reaches it and would
 // otherwise leave zero server-side trail when observability is disabled. The
-// SkipperFunc is invoked with c.Request(). l may be nil, in which case the
-// warning falls back to the stdlib log package (mirrors corsWarnf).
-func tenantMiddlewareEcho(resolver multitenant.TenantResolver, skipper SkipperFunc, l logger.Logger) echo.MiddlewareFunc {
+// The skipper is the echo-native form (see probeSkipper): the framework passes the
+// template-keyed probe predicate, and a public SkipperFunc arrives through
+// skipperFromRequest. l may be nil, in which case the warning falls back to the stdlib log
+// package (mirrors corsWarnf).
+func tenantMiddlewareEcho(resolver multitenant.TenantResolver, skipper probeSkipper, l logger.Logger) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
 			// Skip tenant resolution for specified routes
-			if skipper != nil && skipper(c.Request()) {
+			if skipper != nil && skipper(c) {
 				return next(c)
 			}
 
@@ -85,15 +82,4 @@ func logTenantRejection(l logger.Logger, c *echo.Context, resolveErr error) {
 		return
 	}
 	l.Warn().Msg(msg)
-}
-
-// CreateProbeSkipper creates a skipper function for health probe endpoints.
-// It returns true for paths that should bypass tenant middleware (health, ready).
-// The implementation uses exact path matching for optimal performance and precision.
-func CreateProbeSkipper(healthPath, readyPath string) SkipperFunc {
-	return func(r *http.Request) bool {
-		path := r.URL.Path
-
-		return path == healthPath || path == readyPath
-	}
 }

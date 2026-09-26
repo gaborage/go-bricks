@@ -797,3 +797,24 @@ func TestServerProbeEngineSharesTheClientIPExtractor(t *testing.T) {
 
 	assert.Equal(t, []string{"203.0.113.9"}, actionLogValues(log, "client.address"))
 }
+
+// TestProbeListenerStubRoutesKeepGlobalMiddleware verifies the exemption stays harmless with
+// server.probes.port set: on the application engine the probe paths are 404 stubs (the probe
+// listener serves the real probes), so exempting them reaches no consumer code, while the
+// encoded spelling still routes to the module route and keeps its global middleware.
+func TestProbeListenerStubRoutesKeepGlobalMiddleware(t *testing.T) {
+	srv := newServer(newProbeTestConfig(probeSkipBase), &testLogger{}, withEphemeralProbeListener())
+	require.NotNil(t, srv.probeEcho, "precondition: the probe listener engine is wired")
+	srv.echo.GET(probeSkipModuleRoute, okEchoHandler)
+	srv.RegisterGlobalMiddleware(blockUnlessAuthorized)
+
+	assertServeCode(t, srv.echo, http.MethodGet, probeSkipHealth, http.StatusNotFound)
+	assertServeCode(t, srv.echo, http.MethodGet, probeSkipReady, http.StatusNotFound)
+	assertServeCode(t, srv.echo, http.MethodGet, probeSkipEncodedRdy, http.StatusUnauthorized)
+
+	// The probe listener serves the probes at their unprefixed paths and knows nothing of the
+	// encoded spelling. /health is asserted here because /ready gates on a live application
+	// listener (ADR-120) and this server was never started.
+	assertServeCode(t, srv.probeEcho, http.MethodGet, healthRoute, http.StatusOK)
+	assertServeCode(t, srv.probeEcho, http.MethodGet, "/%68ealth", http.StatusNotFound)
+}

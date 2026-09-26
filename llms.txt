@@ -1083,10 +1083,14 @@ func RateLimitWithSkipper(rps int, skipper server.SkipperFunc) server.Middleware
 	}
 }
 
-// Common skipper - skip health and ready probes (server.SkipperFunc = func(*http.Request) bool)
-func healthSkipper(r *http.Request) bool {
-	path := r.URL.Path
-	return path == "/health" || path == "/ready"
+// Common skipper - skip health and ready probes. Use the framework's constructor: it keys the
+// decision on the route the ROUTER matched (r.Pattern, which echo stamps on the request) plus the
+// probe methods, where a hand-rolled skipper comparing the decoded r.URL.Path exempts requests
+// that route elsewhere. Pass the FULL paths: the probes are registered at
+// "<server.path.base><server.path.health>" (the route defaults to /health, the base to none), so
+// bare "/health" matches nothing under a base path.
+func newHealthSkipper(basePath string) server.SkipperFunc {
+	return server.CreateProbeSkipper(basePath+"/health", basePath+"/ready")
 }
 
 // === Context Propagation Pattern (Tenant/User Injection) ===

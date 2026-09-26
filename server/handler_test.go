@@ -2783,25 +2783,6 @@ func TestPublicTenantMiddlewareReturnsFlatForm(t *testing.T) {
 	assert.Equal(t, "acme", rec.Body.String(), "tenant resolved by the flat TenantMiddleware must reach the handler context")
 }
 
-// TestCreateProbeSkipperFlatForm verifies CreateProbeSkipper returns the echo-free
-// func(*http.Request) bool form and skips exactly the configured probe paths.
-func TestCreateProbeSkipperFlatForm(t *testing.T) {
-	skipper := CreateProbeSkipper("/health", "/ready")
-
-	cases := []struct {
-		path string
-		skip bool
-	}{
-		{"/health", true},
-		{"/ready", true},
-		{"/api/users", false},
-	}
-	for _, tc := range cases {
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tc.path, http.NoBody)
-		assert.Equal(t, tc.skip, skipper(req), "skipper decision for %s", tc.path)
-	}
-}
-
 // newTypedPathServer wires a typed GET handler through a real routeGroup (which implements
 // the echoAdder addEcho seam) so benchmarks/alloc tests measure the ADR-026 hot path.
 func newTypedPathServer(tb testing.TB) (*echo.Echo, *http.Request) {
