@@ -57,7 +57,7 @@ server:
 
 ## Server TLS Listener
 
-`server.tls.*` enables HTTPS on the HTTP server listener (ADR-042). The default posture is **disabled** — every field defaults to its zero value, which leaves the listener plaintext, byte-for-byte unchanged from prior behavior:
+`server.tls.*` enables HTTPS on the application listener (ADR-042); the probe listener stays plain HTTP (see [Internal Probe Listener](#internal-probe-listener)). The default posture is **disabled** — every field defaults to its zero value, which leaves the listener plaintext, byte-for-byte unchanged from prior behavior:
 
 | Setting | Default | Purpose |
 | --------- | --------- | --------- |
@@ -77,7 +77,7 @@ Bad or unreadable material fails `Start()` fast — it never silently falls back
 | `server.forwardedclientcert.enabled` | `false` | Wire the middleware; parse and expose the identity |
 | `server.forwardedclientcert.require` | `false` | Reject (401) requests missing both `-Subject` and `-Serial-Number` (a malformed `-Leaf` alone never rejects); requires `enabled: true` |
 
-Health/ready probes always skip this middleware regardless of `require`. See [forwarded_client_cert.md](forwarded_client_cert.md) for the config reference, the trust model (including the AWS doc-silence finding on header spoofing), and an authorization recipe.
+On the application listener, health/ready probes — or, with `server.probes.port` set, their reserved `<base><path>` — always skip this middleware regardless of `require`; the probe listener does not install it at all. See [forwarded_client_cert.md](forwarded_client_cert.md) for the config reference, the trust model (including the AWS doc-silence finding on header spoofing), and an authorization recipe.
 
 ## Messaging Pre-Warm Readiness Wait
 
@@ -87,7 +87,7 @@ In single-tenant mode, startup pre-warms the messaging publisher and then waits 
 
 **Waiting for an exchange another service owns is opt-in and off by default.** `messaging.declare.externalwait` (duration, default `0`, env `MESSAGING_DECLARE_EXTERNALWAIT`) bounds an in-process wait for an external exchange that does not exist yet, so a consumer can deploy before its owner. On a 404 the control-plane startup declare pass — single-tenant, or multi-tenant under `messaging.tenancy: shared` — is re-run with backoff (first gap `min(1s, externalwait/4)`, doubling to a 5s ceiling) until it succeeds or the wait elapses, then startup aborts with the broker's own 404 naming the exchange. `0` aborts at once, which is the pre-key behavior. The wait only delays an abort that would otherwise happen, so a publisher-only service is never held, only a 404 is retried, and per-tenant lazy passes never wait. **Size a `startupProbe` from more than this number:** the key bounds when the last attempt *starts*, so the worst-case boot window is the first attempt, plus `externalwait`, plus one final attempt that runs to its own infrastructure-setup timeout. Details: [messaging.md](messaging.md#startup-wait), [ADR-119](adr_119_external_exchange_passive_verification.md).
 
-**Operator guidance:** because the HTTP listener starts only after pre-warm completes, raising `messaging.reconnect.readytimeout` directly stretches the pre-listen boot window whenever the broker is unreachable. `messaging.declare.externalwait` adds its own budget on top, but under the opposite condition — a REACHABLE broker that answers 404 for a missing external exchange; an unreachable broker is not a 404, so that failure still aborts at once. Size Kubernetes `startupProbe`/`livenessProbe` initial-delay and failure-threshold settings (or any other external "is it up yet" check) to comfortably exceed the whole pre-listen budget, not just the steady-state startup time: `readytimeout` when the broker is unreachable, and — when `externalwait` is set — the first declare attempt plus `externalwait` plus one final attempt that runs to its own infrastructure-setup timeout. The two are alternatives, not addends: a given boot hits one condition or the other.
+**Operator guidance:** because neither the application listener nor the probe listener starts until pre-warm completes, raising `messaging.reconnect.readytimeout` directly stretches the pre-listen boot window whenever the broker is unreachable. `messaging.declare.externalwait` adds its own budget on top, but under the opposite condition — a REACHABLE broker that answers 404 for a missing external exchange; an unreachable broker is not a 404, so that failure still aborts at once. Size Kubernetes `startupProbe`/`livenessProbe` initial-delay and failure-threshold settings (or any other external "is it up yet" check) to comfortably exceed the whole pre-listen budget, not just the steady-state startup time: `readytimeout` when the broker is unreachable, and — when `externalwait` is set — the first declare attempt plus `externalwait` plus one final attempt that runs to its own infrastructure-setup timeout. The two are alternatives, not addends: a given boot hits one condition or the other.
 
 ## Startup Route Logging
 
@@ -125,7 +125,7 @@ There is no disable knob — a colliding route is always a startup-blocking bug,
 
 ## Route Table Hook
 
-`app.Options.PostRegisterRoutes func([]server.RouteDescriptor) error` lets a service veto its own route table before traffic arrives — for example, reject a route outside the versioned prefix, or a raw route (nil `RequestType`) where only typed handlers are allowed. It runs once per `App.Run`, after every module's `RegisterRoutes`, the route log and the duplicate-route check above, and before the listener opens. A non-nil error aborts startup the same way a route conflict does, wrapped as `app.Options.PostRegisterRoutes rejected the route table: <err>`. A nil hook changes nothing.
+`app.Options.PostRegisterRoutes func([]server.RouteDescriptor) error` lets a service veto its own route table before traffic arrives — for example, reject a route outside the versioned prefix, or a raw route (nil `RequestType`) where only typed handlers are allowed. It runs once per `App.Run`, after every module's `RegisterRoutes`, the route log and the duplicate-route check above, and before either listener opens. A non-nil error aborts startup the same way a route conflict does, wrapped as `app.Options.PostRegisterRoutes rejected the route table: <err>`. A nil hook changes nothing.
 
 The slice holds every route this `App` registered and, as long as `App`s start one at a time, no other `App`'s — so several `App`s built in one test binary each see their own:
 
@@ -135,9 +135,42 @@ The slice holds every route this `App` registered and, as long as `App`s start o
 
 `ModuleName` on this slice is the registering module's `Name()`, taken from the registration span, unless the route set its own with `server.WithModule`; routes the framework registers itself (probes, debug) carry an empty `ModuleName`. `Listener` is empty for every route but the probe listener's. The descriptors in `server.DefaultRouteRegistry` are not changed.
 
+## Internal Probe Listener
+
+`server.probes.*` ([ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md)) serves `/health` and `/ready` on a second, plain-HTTP **probe listener**, so they are never reachable where module routes are. The default posture is **disabled**:
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `server.probes.port` | `0` (off) | Probe port, `1..65535`; `0` keeps the probes on the application listener at `<base><path>` |
+| `server.probes.host` | unset (takes `server.host`) | Probe listener bind host; `127.0.0.1` for a loopback-only prober such as a sidecar |
+
+The env vars are `SERVER_PROBES_PORT` and `SERVER_PROBES_HOST`. A delivered-empty `server.probes.host` — `SERVER_PROBES_HOST=`, or YAML `host: ""`, a bare `host:`, or a whitespace- or comma-only value — fails configuration resolution instead of widening a loopback bind to `server.host`; remove the key to take the default. The probe port may equal `server.port` only when the two effective hosts are distinct specific addresses: equal hosts, or either one unspecified (`""`, `0.0.0.0`, `::`), fail startup naming `server.probes.port` — at config validation, and again in `Start` before either bind for a config assembled in Go. With the port set, an injected `app.Options.Server` that does not implement the probe seam (`ProbeErrors()`, `ProbeBoundAddr()`) also fails startup.
+
+**What moves.** The probe listener serves `server.path.health` and `server.path.ready` exactly, **without** `server.path.base` (`/api/v1/ready` becomes `/ready`), and nothing else. The application listener keeps `<base><path>` reserved for `GET` and `HEAD` and answers `404` there; there is no dual-serve mode. The probe listener runs recover, request ID, the access logger (probe paths skipped), Secure headers and the `server.timeout.middleware` deadline — no rate limiter or IP pre-guard, tenant resolution, forwarded client certificate, CORS, gzip, body limit, OTel or module global middleware, and no TLS ([server_tls.md](server_tls.md#d-the-probe-listener-stays-plain-http)). It reuses `server.timeout.read`, `.write`, `.idle` and `.middleware`. Both listeners bind in `Start`, after pre-warm, the probe listener first; on shutdown it stops last, within a 1s budget of its own, so `/ready` answers `503` instead of refusing connections across the application drain.
+
+**`/ready` gates.** Before the registered handler runs, `/ready` answers `503` `{"status":"not ready"}` when:
+
+| Gate | Probe listener | Application listener (`server.probes.port: 0`) |
+| --- | --- | --- |
+| Shutdown has begun | Yes | Yes |
+| The application listener is not serving yet (`ReadyCh` still open) | Yes | No |
+| The application-listener check fails | Yes, with WARN `Application listener unresponsive` | No |
+
+The check is a `HEAD` of the reserved `<base><ready path>` on the application listener with a fixed 500ms timeout, dialing `127.0.0.1` or `::1` when `server.host` is unspecified, else `server.host`. Any answer below `500` passes — the reservation's `404`, or a limiter's `429`; a timeout, connection error or `5xx` fails. Under `server.tls` it speaks HTTPS pinned to the listener's own leaf. No WARN is logged when the failure comes from shutdown beginning mid-check or from the prober abandoning its request. The check runs before the judgment inside the same `server.timeout.middleware` deadline, so the two share that budget. Concurrent requests share one in-flight check, never a finished result; for the judgment and a `RegisterReadyHandler` override see [observability.md](observability.md#readiness-endpoint).
+
+**`/health` means the process is alive; `/ready` also watches the application listener.** A wedged application listener fails `/ready`, so the instance leaves rotation, but `/health` keeps passing and nothing restarts it — alert on an instance that stays unready.
+
+**Operator guidance:**
+
+- **Retarget port and path.** Kubernetes probes get `port: <probes.port>` and the unprefixed path ([manifest](cache.md#wiring-kubernetes-probes)); an ALB target group gets a health-check port override instead of `traffic-port`, and the unprefixed path; GKE Ingress needs a `BackendConfig` `healthCheck` with the port and path; the AWS Load Balancer Controller needs the `healthcheck-port` and `healthcheck-path` annotations. Under `server.tls`, also switch the probe scheme or `HealthCheckProtocol` to HTTP. External monitors that probed the public URL lose `/ready`, by design.
+- **HTTP against `/ready`, never TCP.** A TCP connect succeeds as soon as the probe listener binds and throughout the application drain, so it says nothing about the application listener. A deployment limited to TCP health checks keeps `server.probes.port: 0`.
+- **Load-balancer cutover.** A target group health-checks one port for every target, so during a rolling deploy old targets (no probe port) and new ones (no probes on the traffic port) cannot both pass. Cut over with blue/green or weighted target groups, or relax the unhealthy threshold for the rollout window. Kubelet probes are per-pod and need no cutover. ECS bridge mode with dynamic host ports is unsupported, since the health-check port override is fixed; use `awsvpc` or a static host port.
+- **Network posture is the deployment's.** The framework binds the probe port; it does not restrict who reaches it, and `server.probes.host` defaults to `server.host`, typically `0.0.0.0`. Expose the port in the container but not on the public Service or Ingress, and restrict it with a NetworkPolicy, security groups admitting only the load balancer's subnets, or a host firewall; `docker -P`, NodePort and `hostNetwork` publish it unless excluded. Under a mesh that rewrites probes, check that the rewritten probe targets the probe port.
+- **The body is still the detailed one, in plaintext.** Until ADR-120 Part 2 trims `/ready` to status only, the probe listener serves today's `/ready` body — service name, version, backend kinds and pool statistics — unencrypted. Keep probe traffic on a trusted, isolated network (restricting sources does not stop a passive observer on a shared one), or leave `server.probes.port` at `0` until then.
+
 ## Probe Endpoints and Rate Limiting
 
-`/health` and `/ready` are **not** exempt from the framework's rate limiters. Both limiters are installed engine-globally with echo's never-skip skipper, so probe requests consume limiter budget like any other route:
+`/health` and `/ready` on the application listener are **not** exempt from the framework's rate limiters. Both limiters are installed engine-globally with echo's never-skip skipper, so probe requests consume limiter budget like any other route:
 
 | Setting | Default | Applies to probes |
 | --- | --- | --- |
@@ -151,6 +184,6 @@ That per-IP ceiling is only a ceiling because the client IP is derived through t
 
 Probe traffic is always keyed by **client IP**, never by tenant: the probe skipper bypasses tenant resolution on the health and ready paths. The two limiters differ in what else lands in that same IP bucket: `app.rate.ippreguard.threshold` (`ipPreGuardEcho`) runs *before* tenant resolution and keys every request — probe or tenant-resolved — by client IP, so it is one shared per-IP budget across all traffic from that address, while `app.rate.limit` (`rateLimitEcho`) runs *after* tenant resolution and keys by the resolved **tenant ID** first, falling back to client IP only when no tenant was resolved — true for probes, but not for a tenant's own ordinary traffic, which draws on that tenant's separate budget instead.
 
-**Operational consequence.** A saturating client that shares a source IP with the prober — an L3/L4 NAT, or any hop that forwards without rewriting the client address — can push the probes themselves to `429` on the pre-guard regardless of that client's own tenant, and on the global limiter too whenever the client's traffic is itself untenanted. The two outcomes differ: a rejected `/ready` drops the instance from the load balancer's rotation, while a rejected `/health` fails one liveness probe; per the wiring documented under [Wiring Kubernetes probes](cache.md#wiring-kubernetes-probes), repeated `/health` failures — `failureThreshold` consecutive ones, not a single `429` — can restart the container, and a failing readiness probe never restarts anything. Mitigate by raising `app.rate.limit` / `app.rate.ippreguard.threshold` for that deployment, or by giving probe traffic a path to the instance that does not share a source IP with application traffic.
+**Operational consequence.** A saturating client that shares a source IP with the prober — an L3/L4 NAT, or any hop that forwards without rewriting the client address — can push the probes themselves to `429` on the pre-guard regardless of that client's own tenant, and on the global limiter too whenever the client's traffic is itself untenanted. The two outcomes differ: a rejected `/ready` drops the instance from the load balancer's rotation, while a rejected `/health` fails one liveness probe; per the wiring documented under [Wiring Kubernetes probes](cache.md#wiring-kubernetes-probes), repeated `/health` failures — `failureThreshold` consecutive ones, not a single `429` — can restart the container, and a failing readiness probe never restarts anything. Mitigate by raising `app.rate.limit` / `app.rate.ippreguard.threshold` for that deployment, or by giving probe traffic a path to the instance that does not share a source IP with application traffic — structurally, [`server.probes.port`](#internal-probe-listener), which takes the probes out of both limiters.
 
 These are *koanf* defaults. A `*config.Config` assembled in Go rather than loaded through configuration leaves both at zero, and the global limiter is a pass-through at `<= 0` — such a deployment has no ceiling at all (see [ADR-049](adr_049_debug_endpoints_fail_closed.md)).
