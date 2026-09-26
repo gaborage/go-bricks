@@ -69,10 +69,13 @@ func registerRoute(tracker *routeConflictTracker, method, fullPath string, reg R
 
 // registerProbeListenerRoute records a probe served on the probe listener in
 // DefaultRouteRegistry only, at its unprefixed path. The application listener's
-// reservation of <base><path> is the tracker's, and carries no descriptor.
+// reservation of <base><path> is the tracker's, and carries no descriptor. The
+// HandlerID carries the "probes:" prefix (probes:GET:/ready), so it stays unique
+// across listeners and never equals a tracker key.
 func registerProbeListenerRoute(method, path string, reg RouteRegistrant) {
 	d := modellessDescriptor(method, path, reg)
 	d.Listener = ListenerProbes
+	d.HandlerID = formatListenerHandlerID(ListenerProbes, method, path)
 	DefaultRouteRegistry.Register(d)
 }
 

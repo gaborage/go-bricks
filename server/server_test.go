@@ -268,14 +268,40 @@ func TestServerNewRegistersProbeListenerDescriptors(t *testing.T) {
 
 	const pkg = "github.com/gaborage/go-bricks/server"
 	assert.ElementsMatch(t, []RouteDescriptor{
-		{Method: http.MethodGet, Path: "/custom-health", Listener: ListenerProbes, HandlerID: "GET:/custom-health", HandlerName: "healthCheck", Package: pkg},
-		{Method: http.MethodHead, Path: "/custom-health", Listener: ListenerProbes, HandlerID: "HEAD:/custom-health", HandlerName: "healthCheck", Package: pkg},
-		{Method: http.MethodGet, Path: "/status", Listener: ListenerProbes, HandlerID: "GET:/status", HandlerName: "dispatchReady", Package: pkg},
-		{Method: http.MethodHead, Path: "/status", Listener: ListenerProbes, HandlerID: "HEAD:/status", HandlerName: "dispatchReady", Package: pkg},
+		{Method: http.MethodGet, Path: "/custom-health", Listener: ListenerProbes, HandlerID: "probes:GET:/custom-health", HandlerName: "healthCheck", Package: pkg},
+		{Method: http.MethodHead, Path: "/custom-health", Listener: ListenerProbes, HandlerID: "probes:HEAD:/custom-health", HandlerName: "healthCheck", Package: pkg},
+		{Method: http.MethodGet, Path: "/status", Listener: ListenerProbes, HandlerID: "probes:GET:/status", HandlerName: "dispatchReady", Package: pkg},
+		{Method: http.MethodHead, Path: "/status", Listener: ListenerProbes, HandlerID: "probes:HEAD:/status", HandlerName: "dispatchReady", Package: pkg},
 	}, DefaultRouteRegistry.Routes())
 
 	srv.RootGroup().Add(http.MethodGet, statusRoute, func(c HandlerContext) error { return c.String(http.StatusOK, "") })
 	assert.Empty(t, srv.RouteConflicts(), "the probe listener's unprefixed path is free on the application listener")
+}
+
+// TestServerProbeListenerHandlerIDsStayUniqueAcrossListeners pins that a RootGroup route at
+// the probe's unprefixed path and the probe-listener probe at that path carry distinct
+// HandlerIDs, so a consumer keying its route inventory by HandlerID keeps every descriptor.
+func TestServerProbeListenerHandlerIDsStayUniqueAcrossListeners(t *testing.T) {
+	DefaultRouteRegistry.Clear()
+	t.Cleanup(DefaultRouteRegistry.Clear)
+	cfg := newTestConfig(testAPIV1Path, customHealthRoute, statusRoute)
+	cfg.Server.Probes.Port = 9091
+	srv := New(cfg, &testLogger{})
+
+	srv.RootGroup().Add(http.MethodGet, statusRoute, func(c HandlerContext) error { return c.String(http.StatusOK, "") })
+	require.Empty(t, srv.RouteConflicts())
+
+	routes := DefaultRouteRegistry.Routes()
+	atStatus := map[string]string{} // Listener -> HandlerID
+	byID := map[string]RouteDescriptor{}
+	for _, d := range routes {
+		byID[d.HandlerID] = d
+		if d.Method == http.MethodGet && d.Path == statusRoute {
+			atStatus[d.Listener] = d.HandlerID
+		}
+	}
+	assert.Equal(t, map[string]string{"": "GET:/status", ListenerProbes: "probes:GET:/status"}, atStatus)
+	assert.Len(t, byID, len(routes), "an inventory keyed by HandlerID keeps every descriptor")
 }
 
 // waitForServerReady blocks until srv's ReadyCh closes, failing the test after

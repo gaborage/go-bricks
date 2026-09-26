@@ -527,8 +527,8 @@ func TestPostRegisterRoutesSeesProbeDescriptorsOnTheirListener(t *testing.T) {
 			"GET:/api/orders": "", "POST:/api/orders": "",
 		}},
 		{name: "probe_listener_enabled", probePort: probeSeamPort, want: map[string]string{
-			"GET:/health": server.ListenerProbes, "HEAD:/health": server.ListenerProbes,
-			"GET:/ready": server.ListenerProbes, "HEAD:/ready": server.ListenerProbes,
+			"probes:GET:/health": server.ListenerProbes, "probes:HEAD:/health": server.ListenerProbes,
+			"probes:GET:/ready": server.ListenerProbes, "probes:HEAD:/ready": server.ListenerProbes,
 			"GET:/api/orders": "", "POST:/api/orders": "",
 		}},
 	}

@@ -19,7 +19,7 @@ type RouteDescriptor struct {
 	Method       string       // HTTP method (GET, POST, etc.)
 	Path         string       // Route path pattern (/users/:id)
 	Listener     string       // Serving listener: empty for the application listener, ListenerProbes for the probe listener
-	HandlerID    string       // Unique identifier for handler function
+	HandlerID    string       // Unique across listeners: formatHandlerID on the application listener, "probes:"-prefixed on the probe listener
 	HandlerName  string       // Function name (e.g., "getUser")
 	ModuleName   string       // Module that registered this route (empty for raw routes)
 	Package      string       // Go package path
@@ -38,14 +38,21 @@ type RouteDescriptor struct {
 // (server.probes.port, ADR-120).
 const ListenerProbes = "probes"
 
-// formatHandlerID builds the canonical HandlerID for a route ("METHOD:/full/path"). Both the
-// typed registration path (RegisterHandler) and the raw path (RouteRegistrar.Add) use it so the
-// identifiers stay identical across paths — consumers keying inventories by HandlerID depend on it.
-// A probe-listener descriptor's ID is per-listener: it names the unprefixed probe path on that
-// listener (GET:/ready) and intentionally differs from the application listener's conflict-tracker
-// key for the reserved probe path (GET:/api/ready under base /api).
+// formatHandlerID builds the canonical HandlerID for an application-listener route
+// ("METHOD:/full/path"). Both the typed registration path (RegisterHandler) and the raw path
+// (RouteRegistrar.Add) use it so the identifiers stay identical across paths — consumers keying
+// inventories by HandlerID depend on it. HandlerID is unique across listeners: a probe-listener
+// route's ID comes from formatListenerHandlerID instead.
 func formatHandlerID(method, fullPath string) string {
 	return method + ":" + fullPath
+}
+
+// formatListenerHandlerID builds the HandlerID for a route served on a non-application listener
+// ("probes:GET:/ready"). The listener prefix keeps it distinct from an application-listener route
+// at the same path (a RootGroup GET /ready under base /api), and it never equals a conflict-tracker
+// key, which begins with the HTTP method.
+func formatListenerHandlerID(listener, method, path string) string {
+	return listener + ":" + formatHandlerID(method, path)
 }
 
 // RouteRegistry maintains discovered routes for introspection
