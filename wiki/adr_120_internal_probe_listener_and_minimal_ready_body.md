@@ -215,7 +215,9 @@ probe listener the middleware timeout bounds the check and the judgment together
 backend resolves inside the leader's request with the blocking kind named. Waiters join through
 `DoChan` and also select on their own request context: a waiter whose request is canceled leaves
 early, and on the judgment it logs today's abandoned-request WARN (component `readiness`, since
-the verdict is not known yet); a waiter whose deadline expires waits for the verdict instead. A flight returns a verdict and writes no response, because a
+the verdict is not known yet); a waiter whose deadline expires waits for the verdict for at
+most 500ms more, so a context-aware probe still names the blocking kind while a probe that ignores
+its context (a lock held across broker work) cannot hold `/ready` past that bound. A flight returns a verdict and writes no response, because a
 handler writes to one request's `echo.Context`; each waiter logs and renders its own answer from
 the verdict. The flight function recovers its own panic and returns it as an error naming the
 panic by type only (`%T`, ADR-081), so `DoChan`'s `go panic(e)`, which no recover layer catches,
