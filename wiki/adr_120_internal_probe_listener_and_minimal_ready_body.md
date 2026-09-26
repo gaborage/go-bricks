@@ -132,7 +132,7 @@ port has today's semantics, and `startupProbe` sizing in `wiki/startup_defaults.
 
 | Concern | Rule |
 | --- | --- |
-| Storage | `probeServer atomic.Pointer[http.Server]`, stored in a new `lifecycleMu` critical section inside `Start`, before the application bind, that reads `stopping`. `onBeforeServe`'s section cannot hold it: it runs inside Echo's start, after the application bind. A set latch vetoes the store: the listener closes and `Start` returns `http.ErrServerClosed`. |
+| Storage | The probe listener binds first, outside any lock (no I/O under `lifecycleMu`); its server and socket are then stored together in a new `lifecycleMu` critical section inside `Start`, before the application bind, that reads `stopping`. `onBeforeServe`'s section cannot hold it: it runs inside Echo's start, after the application bind. A latch set before the store vetoes it: the just-bound socket closes and `Start` returns `http.ErrServerClosed`, so no listener is ever published after shutdown began. A `Shutdown` that latches after the store finds the stored listener and stops it, closing the socket even if `Serve` has not yet tracked it. |
 | Start once | The existing `started` CAS covers both listeners; a second `Start` binds neither. |
 | Start-time refusals | Before either bind, with the probe listener enabled: the collision rule, re-applied to the configured keys; and with `server.tls.enabled` too, a leaf certificate with no SAN (see **Application-listener check**). |
 | Bind order | Inside `Server.Start`, after the TLS config is built: the probe listener binds and serves, then the application listener binds immediately after. |
