@@ -65,14 +65,20 @@ Currently this is a documented developer convenience: TestMain always spins up a
 #   connectionstring still needs a type. A partial one now fails startup
 #   (see ADR-003, ADR-047)
 
-# /ready returns 200 with "database": "not_configured"
-# → Expected for a service with NO database: block. If the service DOES need one,
-#   its config never reached the process — implement app.DatabaseRequirer so this
-#   aborts startup instead of going green (see ADR-047)
+# /ready returns 200, and /_sys/health-debug shows data.components.database.status
+# "not_configured"
+# → Expected for a service with NO database: block. /ready's body carries the
+#   verdict alone since ADR-120, so the kind is read off the debug view (or off
+#   app.readiness.status, which has NO series for a not_configured kind). If the
+#   service DOES need a database, its config never reached the process —
+#   implement app.DatabaseRequirer so this aborts startup instead of going green
+#   (see ADR-047)
 
-# /ready returns 200 with "database": "per_tenant"
+# /ready returns 200, and /_sys/health-debug shows data.components.database.status
+# "per_tenant"
 # → Multi-tenant, and the fixed "" key does not resolve — no tenant database has
-#   ever been probed, so /ready carries no database signal for this deployment.
+#   ever been probed, so nothing gates on a database for this deployment (and,
+#   like not_configured, the kind has no app.readiness.status series).
 #   A multi-tenant service that DOES configure a root block (a shared-ledger
 #   control plane) is still probed and still 503s when that database is down
 

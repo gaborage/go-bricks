@@ -104,8 +104,10 @@ cache:
   enabled: false                    # Enable/disable cache functionality
   type: redis                        # Cache backend type (currently only "redis" supported)
   # critical: true                   # OPT-IN. Unset (the default) = the cache probe is informational:
-                                     # /ready reports it in the body and stays 200 while the cache is
-                                     # down. Set true only when the service cannot serve correctly
+                                     # /ready stays 200 while the cache is down. /ready's body never names
+                                     # the cache (ADR-120) — the outage shows up as the app.readiness.status
+                                     # gauge at 0 for readiness.kind=cache and a WARN "Readiness component
+                                     # unhealthy". Set true only when the service cannot serve correctly
                                      # without its cache — a Redis outage then answers 503 on every replica.
   redis:
     host: localhost                  # Redis server hostname

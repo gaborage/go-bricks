@@ -454,8 +454,11 @@ early.
 ## Database-Free Services and Readiness (ADR-047)
 
 The `database:` block is all-or-nothing. Omit it entirely and the service is
-database-free: `/ready` reports `database: "not_configured"` and returns **200**, and
-`deps.DB(ctx)` returns an error satisfying `config.IsNotConfigured`. Set *any* identity
+database-free: the database probe reports `not_configured`, `/ready` returns **200**, and
+`deps.DB(ctx)` returns an error satisfying `config.IsNotConfigured`. Since ADR-120
+`/ready`'s body is the verdict alone, so the per-kind status is read off
+`data.components.database.status` on `/_sys/health-debug`; `not_configured` also has no
+`app.readiness.status` series at all, which is itself the signal. Set *any* identity
 field — `type`, `host`, `port`, `database`, `username`, `password`, `connectionstring`,
 `oracle.service.name`, `oracle.service.sid` — and the section counts as intended, so an incomplete one **fails startup** rather than
 loading and failing at first query. Complete means `type` + `host` + `port` + `username`
@@ -473,24 +476,27 @@ extend to a raw `connectionstring`, which `postgresql.NewConnection` hands to
 to the password file, and for a unix-socket host pgx looks up `localhost` in it. Put the
 password in the DSN, or use the typed fields.
 
-| Config | Startup | `/ready` |
-| --- | --- | --- |
-| No `database:` block | starts (one advisory WARN) | 200 · `not_configured` |
-| Complete and reachable | starts | 200 · `healthy` |
-| Complete but unreachable | starts | **503** — the probe stays `critical` |
-| Any identity field, incomplete | **fails** | n/a |
-| Multi-tenant | starts | 200 · `per_tenant` |
+The `/ready` column below is the status code; the probe status beside it is what
+`/_sys/health-debug` and the readiness gauge report, not something the body carries.
+
+| Config | Startup | `/ready` | Probe status |
+| --- | --- | --- | --- |
+| No `database:` block | starts (one advisory WARN) | 200 | `not_configured` (no gauge series) |
+| Complete and reachable | starts | 200 | `healthy` (gauge `1`) |
+| Complete but unreachable | starts | **503** — the probe stays `critical` | `unhealthy` (gauge `0`) |
+| Any identity field, incomplete | **fails** | n/a | n/a |
+| Multi-tenant | starts | 200 | `per_tenant` (no gauge series) |
 
 Two consequences worth knowing:
 
-- **Multi-tenant `/ready` carries no database signal.** The probe
+- **Multi-tenant readiness carries no database signal.** The probe
   resolves the fixed `""` key. With static tenants, validation rejects a root block
   outright, so that key cannot resolve and no tenant database has ever been probed —
   `per_tenant` states that plainly rather than claiming the service has no database.
   A multi-tenant deployment that *does* configure a root block (a shared-ledger
   control plane, `outbox.tenancy: shared`) is still probed and still `critical`.
-  Where the key genuinely does not resolve, `/ready` carries no database signal at
-  all: no critical probe, no startup gate, and no WARN.
+  Where the key genuinely does not resolve, nothing about a database gates traffic:
+  no critical probe, no startup gate, and no WARN.
 - **A module that genuinely needs a database should say so.** Implement
   `app.DatabaseRequirer`; registration then aborts startup when the database is absent,
   instead of the service going green and serving errors.
@@ -692,7 +698,7 @@ if err := application.DBManager().Remove(tenantID); err != nil {
 - **Key:** `""` is the root database, `config.NamedDatabasePrefix + name` a `databases.<name>` handle (what `deps.DBByName` borrows), and the tenant ID a tenant's database in multi-tenant mode. An unknown key is a nil no-op.
 - **Leases:** an idle connection closes before `Remove` returns; a leased one is detached now and closes at its final release. That protects work inside a lease scope (an HTTP request, an AMQP message, a scheduler job) — a goroutine that borrowed a handle outside any scope released its lease immediately and is not protected.
 - **In-flight creates:** a `Get` still creating its connection when `Remove` runs is delivered that connection but the pool never caches it — it closes at the final lease release, same as a leased Remove. The next `Get` re-resolves the provider, so credential rotation does not need a second `Remove`.
-- **Shutdown and stats:** after `Close`, `Remove` returns `database.ErrManagerClosed`, as `Get` does. `DbManager.Stats()["removals"]` counts every `Remove` that detached a connection (cached or in-flight), leased or not, and `/ready` publishes it.
+- **Shutdown and stats:** after `Close`, `Remove` returns `database.ErrManagerClosed`, as `Get` does. `DbManager.Stats()["removals"]` counts every `Remove` that detached a connection (cached or in-flight), leased or not. Since ADR-120 it reaches an operator only through `data.components.database.details` on `/_sys/health-debug`: `/ready` no longer carries it, and no gauge covers `DbManager`'s resourcepool counters — `db.client.connection.*` measures the driver's `sql.DB` pool, which is a different pool.
 
 ### Connection-manager pool tunables (`database.manager.*`)
 
