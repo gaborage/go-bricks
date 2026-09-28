@@ -388,8 +388,10 @@ func (m *Module) DeclareStreams(decls *streams.Declarations) {
   standbys. Partitions are fixed at declaration time; sizing them is a capacity
   decision, not something to change casually (see the mismatch trap below).
 - Offsets, the commit policy, the skip-on-failure semantics and the shutdown
-  flush all work per partition. `/ready` and `Stats` report one position per
-  partition, keyed `<partition>/<consumer name>`.
+  flush all work per partition. `Manager.Stats()` reports one position per
+  partition, keyed `<partition>/<consumer name>`, and reaches an operator through
+  `data.components.streams.details` on `/_sys/health-debug` — `/ready` carries its
+  verdict alone (ADR-120).
 - Declaring a super stream requires **RabbitMQ 3.13+** (the client's
   `DeclareSuperStream` command); plain-stream SAC only needs 3.11+.
 - **Trap: re-declaring a super stream with a different partition count is
@@ -564,11 +566,13 @@ one is discarded and replaced rather than carried.
 
 ### Readiness, stats and shutdown
 
-Publishers count on the same non-critical `streams` probe as consumers: `/ready`
-reports `unhealthy` unless every bound publisher's connection is open, and the
-`streams_stats` body carries a `publishers` count beside `consumers`. The probe
-exists for a publisher-only service too — the manager is built whenever anything
-was declared.
+Publishers count on the same non-critical `streams` probe as consumers: the probe
+judges the kind `unhealthy` unless every bound publisher's connection is open, and
+`Manager.Stats()` carries a `publishers` count beside `consumers`. Both counts are
+exported as the `messaging.streams.publishers` and `messaging.streams.consumers`
+gauges; the verdict itself is `app.readiness.status{readiness.kind="streams"}`. The
+probe exists for a publisher-only service too — the manager is built whenever
+anything was declared.
 
 `Publisher.Ready()` answers the same question for one publisher: whether its
 producer is connected to the broker as the HA layer reports it (`open` is ready;
@@ -628,10 +632,15 @@ attributes. Unlike the consumed counter, the sent counter increments **only for
 a confirmed publish** — a failed or abandoned one is visible as duration with an
 `error.type`.
 
-`/ready` gains a `streams` component (and `streams_stats`) once anything is
-declared on this lane: `healthy` while every consumer and publisher is
-connected, `unhealthy` whenever one is not — reconnecting, closed, found lost
-([A lost stream](#a-lost-stream)), or the manager stopped. The probe is **non-critical** —
+Readiness gains a `streams` component once anything is declared on this lane:
+`healthy` while every consumer and publisher is connected, `unhealthy` whenever one
+is not — reconnecting, closed, found lost
+([A lost stream](#a-lost-stream)), or the manager stopped. That verdict reaches an
+operator as `app.readiness.status{readiness.kind="streams"}` (1 healthy, 0
+unhealthy), as `data.components.streams` on `/_sys/health-debug` — with the
+`Manager.Stats()` map under `details` — and, on the transition, as the WARN
+`Readiness component unhealthy` and the INFO `Readiness component recovered`.
+`/ready`'s own body names no kind (ADR-120). The probe is **non-critical** —
 the reliable consumers and producers recover on their own, so a broker flap must
 not pull the whole service out of the load
 balancer. The exception is a stream the broker no longer has, which nothing
@@ -667,8 +676,10 @@ open, and go unreported.
 
 The handle stays closed and the `streams` component stays unhealthy, even when
 the client later reports a super-stream handle open again because another of its
-partitions reconnected. Because the component is non-critical, `/ready` stays
-healthy, so alert on the ERROR. Only a
+partitions reconnected. Because the component is non-critical, `/ready` keeps
+answering `200`, so alert on the ERROR — or on
+`app.readiness.status{readiness.kind="streams"} == 0` and the WARN `Readiness
+component unhealthy`, which the verdict does reach. Only a
 **restart** re-declares the stream. Opt-in re-creation is deferred to
 [#1826](https://github.com/gaborage/go-bricks/issues/1826). A replica that
 restarts does not revive the others, so restart every replica that logged it.

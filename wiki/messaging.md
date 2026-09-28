@@ -974,17 +974,19 @@ Set `messaging.consumers.critical: true` (bool, absent = `false`; env
 `MESSAGING_CONSUMERS_CRITICAL`) to make the messaging `/ready` probe critical and fold the consume
 side into it. The probe then checks the consumers FIRST — any declared consumer that is unsubscribed
 with its re-subscribe failure streak at the fifth attempt, the same threshold that escalates the log
-to WARN, answers `/ready` with `503` and the fixed `messaging unavailable` body — and only then the
-publisher's `IsReady()` as before. The consumer arm is lease-independent, so it applies in every
+to WARN, answers `/ready` with `503 {"status":"not ready"}` — the body names no kind since ADR-120;
+the blocking kind and its full error are on the `Readiness check failed` ERROR line — and only then
+the publisher's `IsReady()` as before. The consumer arm is lease-independent, so it applies in every
 tenancy mode — a per-tenant deployment with no root `messaging:` block, whose kind reports
 `per_tenant`, is judged on its consumers all the same. What the key makes critical, and why it is
 one bit rather than two, is [ADR-114](adr_114_critical_consumer_readiness.md). A consumer whose channel just
 closed stays ready while its supervisor is still inside the streak; that intermediate state is
-visible in `messaging_stats` — `subscribed_consumers` below `declared_consumers`, and
-`consumer_max_fail_streak` counting how far the worst outage has got — and on
+visible in the `messaging.consumer.*` gauges — `messaging.consumer.subscribed` below
+`messaging.consumer.declared`, and `messaging.consumer.max_fail_streak` counting how far the worst
+outage has got — and in the same counters under `data.components.messaging.details` on
 `/_sys/health-debug`, not in the verdict, which is what keeps a healthy broker reconnect from
-becoming a restart loop. Alert on `consumer_max_fail_streak` to see an outage climbing before it
-reaches the verdict; neither key says WHICH consumer, which is deliberate
+becoming a restart loop. Alert on `messaging.consumer.max_fail_streak` to see an outage climbing
+before it reaches the verdict; neither counter says WHICH consumer, which is deliberate
 (`ConsumerStates()` is the in-process door for that). Absent, the key changes nothing: the probe
 leases the publisher, asks `IsReady()`, and is never critical. Gate `livenessProbe` on `/health`,
 never on `/ready`, before turning it on. See
@@ -998,7 +1000,7 @@ Size the cap to hold every concurrently-publishing tenant. For **statically-conf
 
 Idle-TTL eviction is sweep-driven: publishers are only checked when the cleanup goroutine wakes every `publisher.cleanupinterval` (default 2m), so an idle publisher can outlive its `publisher.idlettl` by up to one full sweep interval — keep `cleanupinterval` well below `idlettl`. The sweep starts when the manager is constructed and stops in `Manager.Close()`; calling `StartCleanup` yourself is not required, and a second call while a loop is already running is a no-op.
 
-Eviction churn is observable via counters, not logs: `Manager.Stats()` exposes cumulative `evictions` and `idle_cleanups` counters alongside `active_publishers` (there is no per-event log line for either removal path). The stats map is surfaced as `messaging_stats` in the `GET /ready` response and as the `messaging` component's `details` in `GET /_sys/health-debug` (when debug endpoints are enabled). A steadily climbing `evictions` count under normal load is the signature of an undersized cap.
+Eviction churn is observable via counters, not logs: `Manager.Stats()` exposes cumulative `evictions` and `idle_cleanups` counters alongside `active_publishers` (there is no per-event log line for either removal path). Those three have no instrument of their own and, since ADR-120 trimmed the `/ready` body, reach an operator only as the `messaging` component's `details` in `GET /_sys/health-debug` (when debug endpoints are enabled, which needs at least one of `debug.allowedips` or `debug.bearertoken`; each configured control is enforced, so with both set a request must come from an allowlisted IP AND carry the token). A steadily climbing `evictions` count under normal load is the signature of an undersized cap.
 
 > Eviction (and idle cleanup) closes the evicted publisher **outside** the manager lock, so a slow `Close()` on an evicted tenant never blocks concurrent `Publisher()` calls for other tenants.
 >
@@ -1006,16 +1008,16 @@ Eviction churn is observable via counters, not logs: `Manager.Stats()` exposes c
 
 ### Consumer subscription state and stats
 
-`Manager.Stats()` — surfaced as `messaging_stats` in the `GET /ready` response and as the `messaging` component's `details` in `GET /_sys/health-debug` — carries four consumer counters beside the publisher ones:
+`Manager.Stats()` — surfaced as the `messaging` component's `details` in `GET /_sys/health-debug`, and, unlike the publisher counters above, exported as five gauges too — carries five consumer counters beside the publisher ones:
 
-| Key | Counts |
-| --- | --- |
-| `consumer_registries` | tenant keys holding a consumer registry: one for a single-tenant service, whatever its consumer count |
-| `declared_consumers` | consumers declared across those registries, documentation-only ones without a handler included |
-| `subscribed_consumers` | those of them holding a live subscription right now |
-| `consumer_resubscribes` | cumulative successful re-subscribes since startup |
-| `consumer_max_fail_streak` | the largest CURRENT-outage re-subscribe failure streak across those consumers; `0` when none is failing, and the readiness threshold when one has given up |
+| Key | Gauge | Counts |
+| --- | --- | --- |
+| `consumer_registries` | `messaging.consumer.registries` | tenant keys holding a consumer registry: one for a single-tenant service, whatever its consumer count |
+| `declared_consumers` | `messaging.consumer.declared` | consumers declared across those registries, documentation-only ones without a handler included |
+| `subscribed_consumers` | `messaging.consumer.subscribed` | those of them holding a live subscription right now |
+| `consumer_resubscribes` | `messaging.consumer.resubscribes` | cumulative successful re-subscribes since startup |
+| `consumer_max_fail_streak` | `messaging.consumer.max_fail_streak` | the largest CURRENT-outage re-subscribe failure streak across those consumers; `0` when none is failing, and the readiness threshold when one has given up |
 
 `consumer_registries` replaces `active_consumers`, which counted tenant keys under a name that read like a consumer count — see [migrations.md](migrations.md) `[C65.11]`.
 
-`Registry.ConsumerStates()`, and `Manager.ConsumerStates()` across every key, returns the state behind those counters per consumer, in declaration order within each tenant key. Each row carries the consumer's full identity — `Key` (the manager key its registry was leased under: the tenant id under per-tenant replay, empty for the control plane, and empty on the registry-level accessor), `Queue`, `Consumer` (the tag) and `EventType`, since two consumers may legitimately share a queue — alongside `Subscribed`, `Resubscribes`, `LastResubscribeAt` and `FailStreak`. Those identity fields are for an operator reading `/_sys/health-debug` or a caller of the accessor: `Manager.Stats()` reduces the rows to counts, so none of them reaches the unauthenticated `/ready` body. `FailStreak` counts the current outage's consecutive failed re-subscribe attempts and the next success resets it; `ConsumerState.GivenUp()` is true once an unsubscribed consumer's streak reaches the fifth attempt, the same threshold that escalates the re-subscribe log to WARN. A consumer declared without a handler never subscribes and never reads as given up. A stopped registry reports every consumer unsubscribed with no streak, so a shutdown is never mistaken for an outage, and a restarted one starts a fresh session rather than inheriting the previous run's streak; the cumulative counters survive both.
+`Registry.ConsumerStates()`, and `Manager.ConsumerStates()` across every key, returns the state behind those counters per consumer, in declaration order within each tenant key. Each row carries the consumer's full identity — `Key` (the manager key its registry was leased under: the tenant id under per-tenant replay, empty for the control plane, and empty on the registry-level accessor), `Queue`, `Consumer` (the tag) and `EventType`, since two consumers may legitimately share a queue — alongside `Subscribed`, `Resubscribes`, `LastResubscribeAt` and `FailStreak`. Those identity fields are for an operator reading `/_sys/health-debug` or a caller of the accessor: `Manager.Stats()` reduces the rows to counts, so none of them reaches the `messaging.consumer.*` gauges either (and nothing at all reaches the unauthenticated `/ready` body, which carries its verdict alone since ADR-120). `FailStreak` counts the current outage's consecutive failed re-subscribe attempts and the next success resets it; `ConsumerState.GivenUp()` is true once an unsubscribed consumer's streak reaches the fifth attempt, the same threshold that escalates the re-subscribe log to WARN. A consumer declared without a handler never subscribes and never reads as given up. A stopped registry reports every consumer unsubscribed with no streak, so a shutdown is never mistaken for an outage, and a restarted one starts a fresh session rather than inheriting the previous run's streak; the cumulative counters survive both.

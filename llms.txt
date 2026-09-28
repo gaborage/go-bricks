@@ -382,7 +382,7 @@ database:
   connectionstring: ${DATABASE_URL}      # e.g. postgres://user:pass@host:5432/dbname?sslmode=require
 ```
 
-Per ADR-003 and ADR-047, the `database:` block is all-or-nothing: omit it entirely for a database-free service (`/ready` then reports `not_configured` and returns 200), or complete it. Setting *any* identity field — `type`, `host`, `port`, `database`, `username`, `password`, `connectionstring`, `oracle.service.name`, `oracle.service.sid` — marks the section as intended, and an intended section that is incomplete fails startup. A module that cannot work without a database should implement `app.DatabaseRequirer` so absence aborts startup rather than going green. Pool defaults are production-safe — override only when you have a measured reason (see wiki/database.md "Connection Pool Defaults"). Multiple databases can be exposed under `databases.<name>` and accessed via `deps.DBByName(ctx, "name")`.
+Per ADR-003 and ADR-047, the `database:` block is all-or-nothing: omit it entirely for a database-free service (the database probe then reports `not_configured`, visible on `/_sys/health-debug`, and `/ready` returns 200), or complete it. Setting *any* identity field — `type`, `host`, `port`, `database`, `username`, `password`, `connectionstring`, `oracle.service.name`, `oracle.service.sid` — marks the section as intended, and an intended section that is incomplete fails startup. A module that cannot work without a database should implement `app.DatabaseRequirer` so absence aborts startup rather than going green. Pool defaults are production-safe — override only when you have a measured reason (see wiki/database.md "Connection Pool Defaults"). Multiple databases can be exposed under `databases.<name>` and accessed via `deps.DBByName(ctx, "name")`.
 
 ### Step 2: Access the Connection from a Module
 
@@ -2600,19 +2600,24 @@ managerStats := cacheManager.Stats()
 ```
 
 `GET /health` is a liveness-only probe with no component breakdown (`{"status": "ok"}`).
-`GET /ready` reports one `<name>` + `<name>_stats` pair per registered kind (database,
-messaging, cache always; streams once streams are declared) — the cache probe's
-result is surfaced as the top-level `cache` and `cache_stats` keys in the `200` body (the
-`503` body carries only `status`/`cache`/`error`; an `App` assembled without a cache manager
-reports `cache: "disabled"` with `cache_stats: {"status":"disabled"}`). The probe leases
+`GET /ready` answers `{"status":"ready"}` (200) or `{"status":"not ready"}` (503) and nothing
+else (ADR-120): it names no kind, carries no statistics and carries no error text, on the
+application listener and the probe listener alike. Per-kind status lives on the
+`app.readiness.status` gauge (attributes `readiness.kind`, `readiness.critical`; `1` healthy,
+`0` unhealthy, and no series at all for `disabled`, `not_configured`, `per_tenant` or a kind no
+judgment has reached), and per-kind detail and full errors live on `/_sys/health-debug`
+(`debug.enabled` plus `debug.allowedips` or `debug.bearertoken`). The cache probe leases
 an instance from the manager and calls `Cache.Health(ctx)` on it — a Redis `PING` per poll,
 capped at 500ms so a hung Redis reports unhealthy instead of consuming the `/ready` request
 budget — so an outage that starts after the instance was built is reported on the next poll. It fails
 `/ready` with `503` **only under `cache.critical: true`** (ADR-094): `cache.critical` is
-unregistered, so an absent key means non-critical and the outage is reported in the `200` body
-alone; an explicit `false` is the same and emits no WARN. The `503` body's `error` is the fixed string `cache unavailable` (the connector
-error names the Redis host, port and IP, and `/ready` is unauthenticated); the full error goes
-to the application log and the IP-allowlisted `/_sys/health-debug`. The probe leases key
+unregistered, so an absent key means non-critical and `/ready` stays `200` — the outage then
+shows up as the gauge falling to `0` and the WARN `Readiness component unhealthy`
+(`component=cache`), repeated at most once a minute, with an INFO `Readiness component
+recovered` on the way out; an explicit `false` is the same and emits no WARN at startup. The
+`503` withholds the connector error, which names the Redis host, port and IP, because `/ready`
+is unauthenticated; the full error goes to the `Readiness check failed` log line and the
+access-controlled `/_sys/health-debug`. The probe leases key
 `""`, so it observes only the top-level `cache.*` connection and never per-tenant caches —
 alert on Redis separately either way.
 
@@ -5391,7 +5396,7 @@ When `observability.enabled: true`, the framework auto-emits:
 | Cache | `cache.hit` / `cache.miss` | Counter | `cache.operation` |
 | Cache | `db.client.operation.duration` (cache shares the OTel db client family) | Histogram (s) | `db.system.name=redis` |
 | Cache manager | `cache.manager.active_caches` | UpDownCounter | — |
-| Cache manager | `cache.manager.evictions` / `.idle_cleanups` / `.total_created` / `.errors` | Counter | — |
+| Cache manager | `cache.manager.evictions` / `.idle_cleanups` / `.total_created` / `.errors` — manager lifecycle, not probe health (`.errors` counts pool create and close failures only) | Counter | — |
 | Go runtime | `process.runtime.go.{mem.*,goroutines,gc.*,sched.*}` | various | OTel runtime semconv |
 | JOSE | `jose.failures.total` | Counter | `code`, `direction`, `http.method`, `http.route` (omitted when the engine reports no template: an unmatched path, or a middleware-bearing group's catch-all) |
 | JOSE | `jose.operation.duration` | Histogram | `operation` |
@@ -5409,7 +5414,7 @@ When `observability.enabled: true`, the framework auto-emits:
 | Path | Returns | Probes |
 |---|---|---|
 | `GET /health` | `200` `{"status":"ok"}` always (liveness only — no component probes) | none |
-| `GET /ready` | `200` with one `<name>` + `<name>_stats` pair per registered kind (`database`, `messaging`, `cache` always; `streams` once streams are declared); `503` when the **database** probe fails, when the **cache** probe fails under `cache.critical: true`, or when the **messaging** probe fails under `messaging.consumers.critical: true`. The `503` `error` is never the probe's raw error: it is the fixed `<component> unavailable` (`database unavailable`, `cache unavailable`, `messaging unavailable`), synthesized for every critical probe and overridable per probe via `HealthStatus.PublicErr` (ADR-048). Messaging 503s only under `messaging.consumers.critical: true`, and then while EITHER arm fails: any declared consumer on any tenant key is unsubscribed AND has five or more consecutive failed re-subscribes, or the control-plane publisher reports not ready. Each consumer owns its streak and a success clears that one, so readiness returns once no consumer is over the threshold and the publisher is ready (ADR-114). The full error stays on the app log and, where debug is enabled and access-controlled, on `/_sys/health-debug` | DB: lease a connection, then `conn.Health(ctx)` (always critical). Messaging: check every declared consumer's re-subscribe streak FIRST (lease-independent, so it also applies when the control-plane key resolves to nothing), then lease a publisher and check its `IsReady()`; non-critical by default, and the consumer arm is only evaluated at all under `messaging.consumers.critical: true` (ADR-114). Cache: lease an instance, then `cache.Health(ctx)` (Redis `PING` per probe); non-critical by default — `cache.critical: true` opts in (ADR-094) |
+| `GET /ready` | `200` `{"status":"ready"}` or `503` `{"status":"not ready"}` — the body is the verdict alone and names no kind (ADR-120). `503` when the **database** probe fails, when the **cache** probe fails under `cache.critical: true`, or when the **messaging** probe fails under `messaging.consumers.critical: true`. The blocking kind and its full error go to the `Readiness check failed` log line (`component=<kind>`). The readiness signal itself is the `app.readiness.status` gauge (`readiness.kind` / `readiness.critical`; `1` healthy, `0` unhealthy, no series for `not_configured` / `disabled` / `per_tenant`), the `Readiness component unhealthy` WARN a NON-critical kind's outage raises, and the per-kind detail on `/_sys/health-debug`. The `messaging.consumer.*` and `messaging.streams.*` gauges carry the counters the body dropped, read through each kind's stats hook at collection time — outside any lease and without a judgment, so they are manager state at scrape, not the last verdict. `cache.manager.*` is not one of them and is no readiness substitute: the cache manager registers it itself, so it reports MANAGER LIFECYCLE — `cache.manager.errors` counts pool create and close failures only, so a failing warm-instance `Cache.Health` `PING` leaves it flat while the gauge drops to `0`. Messaging 503s only under `messaging.consumers.critical: true`, and then while EITHER arm fails: any declared consumer on any tenant key is unsubscribed AND has five or more consecutive failed re-subscribes, or the control-plane publisher reports not ready. Each consumer owns its streak and a success clears that one, so readiness returns once no consumer has five or more consecutive failures and the publisher is ready (ADR-114). The full error stays on the app log and, where debug is enabled and access-controlled, on `/_sys/health-debug` | DB: lease a connection, then `conn.Health(ctx)` (always critical). Messaging: check every declared consumer's re-subscribe streak FIRST (lease-independent, so it also applies when the control-plane key resolves to nothing), then lease a publisher and check its `IsReady()`; non-critical by default, and the consumer arm is only evaluated at all under `messaging.consumers.critical: true` (ADR-114). Cache: lease an instance, then `cache.Health(ctx)` (Redis `PING` per probe); non-critical by default — `cache.critical: true` opts in (ADR-094) |
 
 Both probes can move to an opt-in plain-HTTP probe listener (ADR-120). It serves them at their unprefixed paths, the application listener answers `404` at `<base><path>`, and `/ready` there also answers `503` until the application listener serves or whenever it stops answering. Point every orchestrator probe at that port over HTTP (`wiki/startup_defaults.md#internal-probe-listener`):
 
