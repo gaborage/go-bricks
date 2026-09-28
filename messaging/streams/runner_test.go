@@ -342,6 +342,20 @@ func TestConsumerRunnerDropsWhatAHandleOpenedBeforeTheResetSettles(t *testing.T)
 	assert.Equal(t, []int64{3}, storer.offsets(), "only a handle opened after the reset is tracked")
 }
 
+func TestOffsetBookResetForgetsCommittedPositions(t *testing.T) {
+	book := newOffsetBook(func() *offsetTracker { return newOffsetTracker(1, time.Hour, nil) })
+	runner := newTestRunnerWithBook(t, noopHandler, book)
+	storer := &fakeStorer{}
+	runner.deliverer()(testStream, 40, amqpMessage("before the reset"), storer)
+	require.Equal(t, map[string]int64{testStream: 40}, book.stored(), "the premise: a position was committed")
+
+	book.reset()
+
+	assert.Empty(t, book.stored(), "a reset forgets every committed position")
+	assert.Empty(t, book.flush(storerByStream(map[string]offsetStorer{testStream: storer})))
+	assert.Equal(t, []int64{40}, storer.offsets(), "nothing is committed again after the reset")
+}
+
 func TestOffsetBookKeepsOneTrackerPerStream(t *testing.T) {
 	created := 0
 	book := newOffsetBook(func() *offsetTracker {
