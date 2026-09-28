@@ -54,6 +54,7 @@ type client struct {
 	config               *Config
 	requestInterceptors  []RequestInterceptor
 	responseInterceptors []ResponseInterceptor
+	bearer               *bearerTokenFile // nil unless WithBearerTokenFile was used
 	callCount            int64
 }
 
@@ -92,6 +93,8 @@ type Builder struct {
 	// so Build reads it from here to normalize and validate the policies before
 	// resolveTransport builds the JOSETransport from it.
 	joseConfig *JOSEConfig
+	// bearer is WithBearerTokenFile's input; Build validates it and reads the file.
+	bearer *bearerFileSpec
 }
 
 // transportLayer orders RoundTripper wrappers independently of the order the
@@ -580,6 +583,7 @@ var ErrUnsafeTransportComposition = errors.New("unsafe transport composition")
 // see ADR-044 for scope (what counts, what doesn't). A WithJOSE policy that
 // fails jose.Policy.Validate is reported on a separate error path that carries
 // the underlying *jose.Error (match it with errors.As), not that sentinel.
+// WithBearerTokenFile's conflicts and its eager file read fail Build as well.
 func (b *Builder) Build() (Client, error) {
 	if b == nil || b.config == nil || isNilLogger(b.logger) {
 		panic("httpclient: Build requires a Builder created by NewBuilder") // NOSONAR: Fail-fast on invalid initialization (manifesto: configuration errors crash at startup)
@@ -644,6 +648,11 @@ func (b *Builder) Build() (Client, error) {
 		return nil, fmt.Errorf("httpclient: %w: %s", ErrUnsafeTransportComposition, strings.Join(issues, "; "))
 	}
 
+	bearer, err := b.newBearerTokenFile()
+	if err != nil {
+		return nil, err
+	}
+
 	if rt != nil {
 		httpClient.Transport = rt
 	}
@@ -654,6 +663,7 @@ func (b *Builder) Build() (Client, error) {
 		config:               cfg,
 		requestInterceptors:  cfg.RequestInterceptors,
 		responseInterceptors: cfg.ResponseInterceptors,
+		bearer:               bearer,
 	}, nil
 }
 
@@ -1292,6 +1302,9 @@ func (c *client) buildRequest(ctx context.Context, method string, req *Request) 
 
 	c.applyHeaders(httpReq, req)
 	c.applyAuth(httpReq, req)
+	if c.bearer != nil {
+		c.bearer.apply(httpReq)
+	}
 
 	if err := c.runRequestInterceptors(ctx, httpReq); err != nil {
 		return nil, NewInterceptorError("request interceptor failed", "request", err)
