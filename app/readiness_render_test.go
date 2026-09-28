@@ -59,13 +59,12 @@ type wantComponent struct {
 	details  map[string]any
 }
 
-// TestReadinessViews is the module's one table: each row is a probe set, and every row
-// asserts the four things the two views must agree on — the /ready status code, how far
-// /ready's run got, the exact /ready body, and the debug components plus summary. Since
-// ADR-120 that body is the verdict alone, identical on every row, so asserting it per row is
-// what pins the trim: a kind, a counter or an error text that starts rendering again fails
-// every row at once. wantReadyRuns is the other half: /ready stops at the blocking probe,
-// while the debug view runs them all.
+// TestReadinessViews is the module's one table: each row is a probe set, and every row asserts
+// four things — whether the gate blocks, how far /ready's run got, and the debug components
+// plus summary. wantReadyRuns is the half that separates the views: /ready stops at the
+// blocking probe, while the debug view runs them all.
+// The bodies themselves are parameterless, so they are pinned once in
+// TestReadyBodyPinsTheWireFormat / TestNotReadyBodyPinsTheWireFormat rather than per row.
 func TestReadinessViews(t *testing.T) {
 	const (
 		streamKey   = "payments-ledger/fraud-scoring"
@@ -100,8 +99,8 @@ func TestReadinessViews(t *testing.T) {
 	tests := []struct {
 		name           string
 		descriptions   []probeDescription
-		wantCode       int
-		wantReadyRuns  int // probes /ready evaluates before it answers
+		wantBlocked    bool // the gate found a blocking kind, so /ready answers 503
+		wantReadyRuns  int  // probes /ready evaluates before it answers
 		wantComponents map[string]wantComponent
 		wantSummary    healthSummary
 	}{
@@ -113,7 +112,7 @@ func TestReadinessViews(t *testing.T) {
 				describeNotConfigured(componentCache, true, false, cacheStats),
 				describe(componentStreams, false, nil, streamStats),
 			},
-			wantCode:      200,
+			wantBlocked:   false,
 			wantReadyRuns: 4,
 			wantComponents: map[string]wantComponent{
 				componentDatabase:  {status: healthyStatus, critical: true, details: withStatus(dbStats, healthyStatus)},
@@ -129,7 +128,7 @@ func TestReadinessViews(t *testing.T) {
 				describe(componentDatabase, true, errors.New(driverError), dbStats),
 				describe(componentCache, true, errors.New(redisAddr+": connection refused"), cacheStats),
 			},
-			wantCode:      503,
+			wantBlocked:   true,
 			wantReadyRuns: 1,
 			wantComponents: map[string]wantComponent{
 				componentDatabase: {status: unhealthyStatus, critical: true, errText: driverError, details: withStatus(dbStats, unhealthyStatus)},
@@ -143,7 +142,7 @@ func TestReadinessViews(t *testing.T) {
 				describe(componentDatabase, true, nil, dbStats),
 				describe(componentStreams, false, errStreamsNotOpen, streamStats),
 			},
-			wantCode:      200,
+			wantBlocked:   false,
 			wantReadyRuns: 2,
 			wantComponents: map[string]wantComponent{
 				componentDatabase: {status: healthyStatus, critical: true, details: withStatus(dbStats, healthyStatus)},
@@ -160,7 +159,7 @@ func TestReadinessViews(t *testing.T) {
 				describeNotConfigured(componentMessaging, false, true, nil),
 				disabledProbe(componentCache),
 			},
-			wantCode:      200,
+			wantBlocked:   false,
 			wantReadyRuns: 3,
 			wantComponents: map[string]wantComponent{
 				componentDatabase:  {status: notConfiguredStatus, critical: true, details: withStatus(dbStats, notConfiguredStatus)},
@@ -176,7 +175,7 @@ func TestReadinessViews(t *testing.T) {
 			descriptions: []probeDescription{
 				describe("vault", false, nil, map[string]any{"addr": "10.0.0.9:8200"}),
 			},
-			wantCode:      200,
+			wantBlocked:   false,
 			wantReadyRuns: 1,
 			wantComponents: map[string]wantComponent{
 				"vault": {status: healthyStatus, details: map[string]any{statusKey: healthyStatus, "addr": "10.0.0.9:8200"}},
@@ -190,7 +189,7 @@ func TestReadinessViews(t *testing.T) {
 			descriptions: []probeDescription{
 				{name: "vault", live: func(context.Context) error { return nil }},
 			},
-			wantCode:      200,
+			wantBlocked:   false,
 			wantReadyRuns: 1,
 			wantComponents: map[string]wantComponent{
 				"vault": {status: healthyStatus, details: map[string]any{statusKey: healthyStatus}},
@@ -202,7 +201,7 @@ func TestReadinessViews(t *testing.T) {
 			// 503 is a different fact entirely — see TestJudgeBeforeTheStartWalkFailsClosed.
 			name:           "no_kind_renders_is_a_normal_ready",
 			descriptions:   []probeDescription{},
-			wantCode:       200,
+			wantBlocked:    false,
 			wantReadyRuns:  0,
 			wantComponents: map[string]wantComponent{},
 			wantSummary:    healthSummary{OverallStatus: unknownStatus},
@@ -214,18 +213,8 @@ func TestReadinessViews(t *testing.T) {
 			// /ready's run: slot order, stopping at the first failing critical kind.
 			report, _, found := judgeOf(tt.descriptions...).gate(context.Background())
 
-			wantFound := tt.wantCode == 503
-			assert.Equal(t, wantFound, found, "the gate decides the status code")
+			assert.Equal(t, tt.wantBlocked, found, "the gate decides the status code")
 			assert.Len(t, report, tt.wantReadyRuns, "/ready must not evaluate past the blocking kind")
-
-			// The verdict, and nothing this row's kinds reported, is the whole body.
-			body, wantBody := readyBody(), readyBodyJSON
-			if found {
-				body, wantBody = notReadyBody(), notReadyBodyJSON
-			}
-			encoded, marshalErr := json.Marshal(body)
-			require.NoError(t, marshalErr)
-			assert.JSONEq(t, wantBody, string(encoded))
 
 			// The debug view's run: every kind, whatever /ready decided.
 			full := judgeOf(tt.descriptions...).full(context.Background())
@@ -252,8 +241,9 @@ func TestReadinessViews(t *testing.T) {
 }
 
 // TestReadinessProbeOrderIsRegistrationOrder pins that the report — and therefore the
-// gate's "first failing critical" — follows registration order, which is what makes the
-// 503 body name the database rather than whichever kind the map iteration happened to hit.
+// gate's "first failing critical" — follows registration order, which is what decides which
+// kind reaches component= on the Readiness check failed line, and whose verdict record stores
+// first, rather than whichever kind the map iteration happened to hit.
 func TestReadinessProbeOrderIsRegistrationOrder(t *testing.T) {
 	report := judgeOf(
 		disabledProbe(componentDatabase),
@@ -300,9 +290,9 @@ func TestJudgeStopsAtTheFirstBlockingKind(t *testing.T) {
 	assert.Len(t, report, 2, "evaluation stops at the blocking probe")
 }
 
-// TestJudgeRunsEveryKindWhenNothingBlocks is the other direction: with no
-// blocking kind, /ready's run reaches every probe, so a healthy deployment's body still
-// carries all of them.
+// TestJudgeRunsEveryKindWhenNothingBlocks is the other direction: with no blocking kind,
+// /ready's run reaches every probe, so a healthy deployment's report still carries all of
+// them into record. The body carries none of them (ADR-120).
 func TestJudgeRunsEveryKindWhenNothingBlocks(t *testing.T) {
 	report, _, found := judgeOf(
 		describe(componentDatabase, true, nil, nil),
@@ -311,7 +301,7 @@ func TestJudgeRunsEveryKindWhenNothingBlocks(t *testing.T) {
 	).gate(context.Background())
 
 	assert.False(t, found)
-	assert.Len(t, report, 3, "a non-critical failure must not truncate the body")
+	assert.Len(t, report, 3, "a non-critical failure must not truncate the recorded set")
 }
 
 // TestReadyBodyPinsTheWireFormat is the one assertion whose expected side spells no
@@ -338,13 +328,7 @@ func TestNotReadyBodyPinsTheWireFormat(t *testing.T) {
 // two bodies too (ADR-120).
 func TestReadyBodiesNameNoKind(t *testing.T) {
 	for _, body := range []map[string]string{readyBody(), notReadyBody()} {
-		encoded, err := json.Marshal(body)
-		require.NoError(t, err)
-		for _, kind := range []string{
-			componentDatabase, componentMessaging, componentCache, componentStreams, componentReadiness,
-		} {
-			assert.NotContainsf(t, string(encoded), kind,
-				"/ready is unauthenticated; %q must not reach its body", kind)
-		}
+		assertReadyBodyOmits(t, body,
+			componentDatabase, componentMessaging, componentCache, componentStreams, componentReadiness)
 	}
 }

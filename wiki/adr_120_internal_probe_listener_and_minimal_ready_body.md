@@ -112,12 +112,11 @@ streams counters have no OTel instrument. The unredacted detail's gated home, `/
 - **No TLS.** `server.tls.*` governs the application listener only. The probe listener is plain
   HTTP: no credential rides a probe, and after Part 2 the body carries one status word. A TLS
   opt-in would need its own certificate material and rotation, and after Part 2 it would protect
-  nothing but that status word. Until
-  Part 2 ships, the probe listener serves today's detailed body in plaintext, so a deployment that
-  sets `probes.port` restricts the listener to its probe sources, keeps it off every public network
-  path (see Consequences), and keeps probe traffic on a trusted, isolated network: restricting
-  sources does not stop a passive observer on a shared one. A deployment that cannot guarantee that
-  isolation waits for Part 2 before setting `probes.port`; the probe listener offers no TLS.
+  nothing but that status word. What is left is a network-posture obligation, not a disclosure one:
+  a deployment that sets `probes.port` restricts the listener to its probe sources and keeps it off
+  every public network path (see Consequences), because the framework binds the port and does not
+  police who reaches it. A passive observer on a shared network reads the framework's verdict and
+  nothing else.
 - **Seam.** `ServerRunner` is unchanged. The probe listener is reached through an optional
   interface (`ProbeErrors() <-chan error`, `ProbeBoundAddr() net.Addr`), type-asserted on the
   injected runner the way `applyGlobalMiddleware` asserts its seam. With `probes.port > 0` and an
@@ -279,9 +278,13 @@ application listener's reservation key `<base><path>` in the conflict tracker. `
   | `messaging.streams.consumers` | `streams_stats.consumers` |
   | `messaging.streams.publishers` | `streams_stats.publishers` |
 
-  Database pool and cache manager counters already have instruments (`db.client.connection.*`,
-  `cache.manager.*`). The remaining manager counters (messaging publisher pool, database manager
-  `removals`/`errors`, streams offset settings) stay on `/_sys/health-debug` only.
+  The cache manager's counters already have instruments (`cache.manager.*`), and
+  `db.client.connection.*` covers the DRIVER's pool — `sql.DB` statistics per database
+  connection, not the counters `database_stats` carried. Those are `DbManager`'s own
+  resourcepool (`active_connections`, `max_connections`, `idle_ttl_seconds`, `errors`,
+  `removals`): how many per-tenant or named-database pools are held against the cap, which no
+  instrument covers. They stay on `/_sys/health-debug` only, with the messaging publisher pool,
+  the cache manager's `removals`/`max_size`/`idle_ttl` and the streams offset settings.
 - **Non-critical WARN.** When a judgment records a non-critical kind as `unhealthy`, the framework
   logs WARN `Readiness component unhealthy` (`component=<kind>`, `critical=false`, full error) on
   the transition into `unhealthy`, then at most once per minute per kind while it stays so (a fixed
@@ -365,13 +368,15 @@ application listener's reservation key `<base><path>` in the conflict tracker. `
   the rewritten probe targets the probe port.
 - Probes on the probe listener stop sharing rate-limit budget and source-IP buckets with application
   traffic, and ADR-057's per-IP pre-guard ceiling stops covering `/ready`; coalescing bounds a
-  burst's backend cost instead, for the framework's work (a consumer override bounds its own). Until Part 2 ships, the probe listener serves today's body in
-  plaintext, so its traffic stays on a trusted, isolated network (see **No TLS**).
+  burst's backend cost instead, for the framework's work (a consumer override bounds its own). What
+  an unthrottled caller reads off the plaintext probe listener is the verdict alone (see **No TLS**).
 
 **Consumers of the `/ready` body (Part 2):**
 
 - **Migrate to metrics first**: `app.readiness.status`, the consumer and streams gauges above, and
-  the existing `db.client.connection.*` and `cache.manager.*` instruments.
+  the existing `cache.manager.*` instruments. `db.client.connection.*` is the DRIVER's pool, not a
+  replacement for `database_stats` — those are `DbManager`'s resourcepool counters (above), which no
+  instrument covers and which stay on `/_sys/health-debug`.
 - **`/_sys/health-debug` second**, for per-kind details and full errors. It needs
   `debug.enabled: true`, `debug.endpoints.health` (default `true`), and `debug.allowedips` or
   `debug.bearertoken` (ADR-049 refuses neither). It is more sensitive than the old body. Behind an
@@ -386,12 +391,18 @@ application listener's reservation key `<base><path>` in the conflict tracker. `
 ```sh
 git grep -nE '(database|messaging|cache|streams)(_stats| unavailable)|/ready`? (reports|publishes|carries|gains|and `?Stats)|public-stats|publicStats|PublicErr|publicProbeError|publicProjection|errorKey|\["time"\]' \
   -- app/ server/ 'wiki/*.md' llms.txt README.md .claude/skills/ .out-of-scope/ \
-  ':!wiki/adr_*' ':!wiki/migrations.md' ':!wiki/architecture_decisions.md'
+  ':!wiki/adr_*' ':!wiki/migrations.md' ':!wiki/architecture_decisions.md' \
+  ':!.claude/skills/breaking-changes/SKILL.md'
 ```
 
-It finds 9 files once the trim lands, all of them prose: `llms.txt`,
-`wiki/{cache,database,messaging,observability,streams,troubleshooting}.md`, the `SKILL.md` entries
-for ADR-047/048/094 and `.out-of-scope/readiness-contribution-door.md`. `app/` and `server/` leave
+`SKILL.md` is excluded for the same reason as the ADRs and the atoms: a file whose job is to
+DESCRIBE the break always matches it. Its two hits are the ADR-048 entry this PR amended — which
+keeps `PublicErr` deliberately, as the record of the contract ADR-048 set — and the ADR-120
+entry, which cannot avoid naming `PublicErr` and `_stats`.
+
+It finds 8 files once the trim lands, all of them prose: `llms.txt`,
+`wiki/{cache,database,messaging,observability,streams,troubleshooting}.md` and
+`.out-of-scope/readiness-contribution-door.md`. `app/` and `server/` leave
 the list with the symbols the trim deletes, and `README.md` matches nothing. ADRs and
 existing atoms get amendment blockquotes, not rewrites. Part 1 docs it cannot find:
 `wiki/startup_defaults.md` (`probes.port` as the `429` mitigation, with no exemption on the

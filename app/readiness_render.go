@@ -17,11 +17,6 @@ const (
 	// equal server's statusNotReady, the verdict /ready serves while the server is stopping.
 	notReadyStatus = "not ready"
 	criticalStatus = "critical"
-	// The app-envelope keys of the access-controlled debug info body (debug_handlers.go),
-	// its only reader since /ready stopped carrying an envelope.
-	appNameKey    = "name"
-	appEnvKey     = "environment"
-	appVersionKey = "version"
 )
 
 // probeResult is one probe's outcome and the timing the debug view reports.

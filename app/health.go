@@ -28,7 +28,7 @@ type HealthStatus struct {
 // its verdict alone (ADR-120). Err and Name go to the application log; Err, Details and Name
 // go to the access-controlled <debug.pathprefix>/health-debug. So a probe may put the whole
 // diagnostic in Err — the connection identity a driver renders, the address a connector names
-// — without sanitizing it first, but only ever behind one of those two.
+// — unredacted, but only ever behind one of those two.
 type Prober interface {
 	Run(ctx context.Context) HealthStatus
 }

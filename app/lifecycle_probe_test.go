@@ -530,13 +530,8 @@ func TestRunServesRealProbeListenerUntilShutdown(t *testing.T) {
 	done := runInBackground(a)
 	require.Eventually(t, func() bool { return srv.ProbeBoundAddr() != nil }, probeRunDeadline, 10*time.Millisecond)
 
-	client := probeRunClient()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+srv.ProbeBoundAddr().String()+"/health", http.NoBody)
-	require.NoError(t, err)
-	resp, err := client.Do(req)
-	require.NoError(t, err)
-	require.NoError(t, resp.Body.Close())
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	code, _ := getOverHTTP(t, probeRunClient(), "http://"+srv.ProbeBoundAddr().String()+"/health")
+	assert.Equal(t, http.StatusOK, code)
 
 	sig.requestShutdown(t)
 	require.NoError(t, awaitRun(t, done))
@@ -663,13 +658,9 @@ func TestReadyAnswersStatusOnlyOnEitherListener(t *testing.T) {
 
 				assert.Equal(t, verdict.wantCode, code)
 				assert.JSONEq(t, verdict.wantBody, body)
-				for _, kind := range []string{
+				assertReadyBodyOmits(t, body,
 					componentDatabase, componentMessaging, componentCache, componentStreams, componentReadiness,
-				} {
-					assert.NotContainsf(t, body, kind,
-						"/ready is unauthenticated; %q must not reach its body", kind)
-				}
-				assert.NotContains(t, body, "active_connections", "nor may any counter")
+					"active_connections")
 			})
 		}
 	}

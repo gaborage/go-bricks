@@ -181,12 +181,12 @@ func TestGetAppInfo(t *testing.T) {
 	}
 }
 
-// TestHealthDebugKeepsFullCacheErrorWhileReadySanitizes pins both halves of the cache
+// TestHealthDebugKeepsFullCacheErrorWhileReadyOmitsIt pins both halves of the cache
 // error-routing contract from a single probe set: /ready (no allowlist, no auth) discloses
 // nothing about the backend, while the application log and the IP-allowlisted /health-debug
-// keep the address an operator needs. Sanitizing at the probe would pass the /ready half
-// alone, so the two are asserted together.
-func TestHealthDebugKeepsFullCacheErrorWhileReadySanitizes(t *testing.T) {
+// keep the address an operator needs. Redacting inside the cache connector or the probe would
+// satisfy the /ready half alone and gut the other, so the two are asserted together.
+func TestHealthDebugKeepsFullCacheErrorWhileReadyOmitsIt(t *testing.T) {
 	cacheManager := createTestCacheManagerWithGetError(t,
 		cache.NewConnectionError("ping", redisProbeAddress, errors.New(errorRedisDown)))
 
@@ -218,7 +218,7 @@ func TestHealthDebugKeepsFullCacheErrorWhileReadySanitizes(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, debugRec.Code)
 	assert.Contains(t, debugRec.Body.String(), redisProbeAddress,
-		"/health-debug must keep the address; sanitizing HealthStatus.Err itself would gut the diagnostic")
+		"/health-debug must keep the address; redacting HealthStatus.Err itself would gut the diagnostic")
 	assert.Contains(t, debugRec.Body.String(), errorRedisDown)
 
 	logged, ok := loggedEvent(log, "Readiness check failed")
@@ -227,7 +227,7 @@ func TestHealthDebugKeepsFullCacheErrorWhileReadySanitizes(t *testing.T) {
 	assert.Contains(t, logged.err, redisProbeAddress,
 		"readyCheck must log the full error so operators keep the diagnostic the 503 body drops")
 	assert.Equal(t, componentCache, logged.str["component"],
-		"the sanitized body no longer identifies the failure, so the log must name the component")
+		"the verdict-only body no longer identifies the failure, so the log must name the component")
 }
 
 // TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem pins both halves of the

@@ -288,8 +288,8 @@ func TestReadyCheckCoalescedFailureFailsEveryRequest(t *testing.T) {
 
 // TestReadyCheckLeaderDeadlineNamesTheBlockingKind pins that a request whose own deadline
 // expires mid-judgment waits for the verdict rather than leaving with readiness itself: the
-// flight ends with the leader's deadline, so a hung kind still reaches the ERROR line and the
-// body by name, as it did when the request judged on its own.
+// flight ends with the leader's deadline, so a hung kind still reaches the ERROR line by name,
+// as it did when the request judged on its own. The body names no kind (ADR-120).
 func TestReadyCheckLeaderDeadlineNamesTheBlockingKind(t *testing.T) {
 	const budget = 100 * time.Millisecond
 	cfg := &config.Config{App: config.AppConfig{Name: testApp}}

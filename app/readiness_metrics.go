@@ -58,9 +58,9 @@ type statGauge struct {
 }
 
 // statGaugeSpecs are the manager counters the /ready body stopped carrying (ADR-120) that no
-// other instrument covers: the database pool and the cache manager already have their own
-// (db.client.connection.*, cache.manager.*), and the rest stay on the access-controlled debug
-// view.
+// other instrument covers: the cache manager already has cache.manager.*, and the driver's pool
+// has db.client.connection.* — which is not DbManager's resourcepool. That group, and the rest,
+// stay on the access-controlled debug view.
 //
 // Keyed by the kind whose sealed probe description carries the Stats() snapshot the group reads,
 // so the callback resolves a group by walking the slot list instead of holding a manager.

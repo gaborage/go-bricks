@@ -89,7 +89,7 @@ func TestReadyReportsEveryKindTheSlotsSealed(t *testing.T) {
 	require.Equal(t, 200, code)
 	assert.Equal(t, readyBodyMap, body)
 
-	components := app.judge.full(context.Background()).debugComponents()
+	components := judgedComponents(t, app)
 	assert.Equal(t, healthyStatus, components[componentDatabase].Status)
 	assert.Equal(t, disabledStatus, components[componentCache].Status)
 	assert.NotContains(t, components, componentStreams)

@@ -47,7 +47,7 @@ const (
 	localHost      = "localhost"
 	amqpBrokerURL  = "amqp://broker"
 
-	// Redis coordinates the sanitized 503 body must never disclose.
+	// Redis coordinates the 503 body must never disclose.
 	redisProbePort    = "6379"
 	redisProbeAddress = localHost + ":" + redisProbePort
 
@@ -562,13 +562,11 @@ func wantStatusOnlyBody(code int) map[string]any {
 	return notReadyBodyMap
 }
 
-// readyComponents re-judges every registered kind and returns the debug view's entries.
-// Since ADR-120 /ready answers its verdict alone, so a per-kind status — the fact several
-// tests below are actually about — is read here rather than out of the body.
+// readyComponents is judgedComponents for a fixture's own App.
 func (f *testAppFixture) readyComponents(t *testing.T) map[string]componentHealth {
 	t.Helper()
 
-	return f.app.judge.full(context.Background()).debugComponents()
+	return judgedComponents(t, f.app)
 }
 
 func (f *testAppFixture) newReadyContext() (server.HandlerContext, *httptest.ResponseRecorder) {
@@ -914,8 +912,8 @@ func TestReadyCheckScenarios(t *testing.T) {
 		{
 			// The headline of the non-critical default (ADR-094): cfg.Cache.Critical is left at
 			// its false zero value, the non-critical default, so this only passes while
-			// Config.IsCacheCritical answers false for it. The outage still shows in the body —
-			// informational, never a 503.
+			// Config.IsCacheCritical answers false for it. The outage still shows on the debug
+			// view — informational, never a 503.
 			name: "cache_unset_critical_stays_ready",
 			prepare: func(f *testAppFixture) {
 				f.db.On(methodHealth, mock.Anything).Return(nil)
@@ -1329,12 +1327,7 @@ func assertConsumerOutageIsDebugOnly(t *testing.T, f *testAppFixture, body map[s
 	t.Helper()
 
 	assert.Equal(t, notReadyBodyMap, body)
-	raw, err := json.Marshal(body)
-	require.NoError(t, err)
-	for _, coordinate := range []string{declaredQueue, declaredConsumer, declaredEventType} {
-		assert.NotContainsf(t, string(raw), coordinate,
-			"/ready is unauthenticated; %q must not reach its body", coordinate)
-	}
+	assertReadyBodyOmits(t, body, declaredQueue, declaredConsumer, declaredEventType)
 
 	messagingKind := f.readyComponents(t)[componentMessaging]
 	assert.Equal(t, unhealthyStatus, messagingKind.Status)
@@ -1344,7 +1337,7 @@ func assertConsumerOutageIsDebugOnly(t *testing.T, f *testAppFixture, body map[s
 // TestReadyTurnsRedOnlyOnceAConsumerHasGivenUpReSubscribing walks the three edges of
 // messaging.consumers.critical against the real /ready handler: a consumer in an outage
 // that is still short of the give-up threshold stays ready, the attempt that reaches the
-// threshold turns /ready 503 with the sanitized body, and a re-subscribe turns it back.
+// threshold turns /ready 503, and a re-subscribe turns it back.
 // Each edge is read at a state the supervisor HOLDS — the fake parks inside the threshold
 // attempt — so no assertion races the backoff.
 func TestReadyTurnsRedOnlyOnceAConsumerHasGivenUpReSubscribing(t *testing.T) {
@@ -1417,8 +1410,8 @@ func TestReadyIgnoresAGivenUpConsumerWhenTheKnobIsOff(t *testing.T) {
 
 // TestReadyReportsTheConsumerArmBeforeThePublisherArm pins the order of the two arms the
 // knob makes critical. Both fail here; the probe must report the consumer outage — the
-// steady-state loss the knob exists to report — rather than the publisher flap, whose
-// error the sanitized body would hide.
+// steady-state loss the knob exists to report — rather than the publisher flap, whose error
+// would otherwise be the one reaching the Readiness check failed line and the debug view.
 func TestReadyReportsTheConsumerArmBeforeThePublisherArm(t *testing.T) {
 	f := newTestAppFixture(t)
 	f.app.cfg.Messaging.Consumers.Critical = true

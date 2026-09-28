@@ -409,7 +409,7 @@ func TestPrepareRuntimeSealsEachKindsReadinessAfterTheStartPhase(t *testing.T) {
 	assert.Equal(t, http.StatusOK, afterCode)
 	assert.Equal(t, readyBodyMap, after)
 
-	components := a.judge.full(context.Background()).debugComponents()
+	components := judgedComponents(t, a)
 	for _, kind := range []string{componentDatabase, componentMessaging, componentCache} {
 		assert.Equal(t, disabledStatus, components[kind].Status, "the start phase must be followed by a seal")
 	}
@@ -991,7 +991,7 @@ func TestReadyCheckWithholdsDatabaseIdentityFromBody(t *testing.T) {
 		assert.Contains(t, event.err, "10.0.0.5:5432")
 	})
 
-	t.Run("probe_built_by_the_real_constructor_is_sanitized", func(t *testing.T) {
+	t.Run("real_constructor_identity_never_reaches_the_body_either", func(t *testing.T) {
 		// Same path, but the description comes from the database slot's own describe()
 		// rather than a hand-built one, so it covers that wiring reaching readyCheck.
 		cfg := &config.Config{App: config.AppConfig{Name: testApp}}
@@ -1068,7 +1068,7 @@ func TestReadyCheckOmitsStreamsWhenNoneDeclared(t *testing.T) {
 	assert.Equal(t, http.StatusOK, code)
 	assert.Equal(t, readyBodyMap, body)
 
-	components := app.judge.full(context.Background()).debugComponents()
+	components := judgedComponents(t, app)
 	assert.Equal(t, disabledStatus, components[componentDatabase].Status)
 	assert.NotContains(t, components, componentStreams)
 }
@@ -1110,7 +1110,7 @@ func TestReadyReportsStreamsOnceItsManagerExists(t *testing.T) {
 	assert.Equal(t, http.StatusOK, code)
 	assert.Equal(t, readyBodyMap, body, "a declared stream reaches no unauthenticated body")
 
-	streams := app.judge.full(context.Background()).debugComponents()[componentStreams]
+	streams := judgedComponents(t, app)[componentStreams]
 	assert.Equal(t, healthyStatus, streams.Status)
 	assert.Contains(t, streams.Details, "stored_offsets",
 		"the access-controlled view keeps the offsets /ready never published")

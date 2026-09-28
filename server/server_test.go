@@ -225,7 +225,7 @@ func assertHealthEndpoints(t *testing.T, server *Server, healthPath, readyPath s
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	// The fallback answers the same verdict-only body the App's override does (ADR-120).
-	assert.JSONEq(t, `{"status":"ready"}`, rec.Body.String())
+	assert.JSONEq(t, probeTestReadyBody, rec.Body.String())
 }
 
 func TestServerNewInitializesEchoAndRoutes(t *testing.T) {

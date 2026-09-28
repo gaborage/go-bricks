@@ -24,6 +24,7 @@ import (
 
 const (
 	probeTestBase         = "/api"
+	probeTestReadyBody    = `{"status":"ready"}`
 	probeTestNotReadyBody = `{"status":"not ready"}`
 	probeStopOverrunMsg   = "Probe listener did not drain within its stop budget; closing it"
 )
@@ -859,7 +860,7 @@ func TestServerReadyBodiesAreVerdictOnlyOnEitherListener(t *testing.T) {
 
 			ready := tt.serve(t, srv)
 			assert.Equal(t, http.StatusOK, ready.Code)
-			assert.JSONEq(t, `{"status":"ready"}`, ready.Body.String())
+			assert.JSONEq(t, probeTestReadyBody, ready.Body.String())
 
 			require.NoError(t, srv.Shutdown(context.Background()))
 

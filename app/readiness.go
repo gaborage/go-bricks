@@ -163,11 +163,13 @@ func (d probeDescription) snapshot() map[string]any {
 // cold-poll caveat.
 const cacheProbePingTimeout = 500 * time.Millisecond
 
-// The cache counter names, hoisted into constants because convertCacheStatsToMap below and
-// the tests that read its output must agree on the spelling. Every other kind's counters are
-// the manager's own map keys, built in database, messaging and streams. The messaging and
-// streams ones are respelled once more in readiness_metrics.go, where the gauges read them by
-// name; the debug view renders whatever the manager published, without naming any of them.
+// The cache counter names, hoisted into constants because goconst counts their spellings in
+// this package's _test.go files too and reports the repeat at the production literal below —
+// the linter's path exclusion suppresses the report in the test file, not the count. Every
+// other kind's counters are the manager's own map keys, built in database, messaging and
+// streams. The messaging and streams ones are respelled once more in readiness_metrics.go,
+// where the gauges read them by name; the debug view renders whatever the manager published,
+// without naming any of them.
 const (
 	statsActiveCachesKey = "active_caches"
 	statsTotalCreatedKey = "total_created"

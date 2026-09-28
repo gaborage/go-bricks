@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -37,6 +38,34 @@ var (
 	readyBodyMap    = map[string]any{"status": "ready"}
 	notReadyBodyMap = map[string]any{"status": "not ready"}
 )
+
+// assertReadyBodyOmits pins that none of the given strings appears ANYWHERE in a /ready body —
+// not only under the key it was expected on, so a future field (or one nobody has written yet)
+// that reintroduces the value elsewhere is caught too. It asserts nothing about which status code
+// produced the body: a leak has no status code. body is the rendered body off the wire, or any
+// value to render.
+func assertReadyBodyOmits(t *testing.T, body any, forbidden ...string) {
+	t.Helper()
+
+	rendered, ok := body.(string)
+	if !ok {
+		raw, err := json.Marshal(body)
+		require.NoError(t, err)
+		rendered = string(raw)
+	}
+	for _, s := range forbidden {
+		assert.NotContainsf(t, rendered, s, "/ready is unauthenticated; %q must not reach its body", s)
+	}
+}
+
+// judgedComponents re-judges every registered kind and returns the debug view's entries. Since
+// ADR-120 /ready answers its verdict alone, so a per-kind status — the fact several tests are
+// actually about — is read here rather than out of the body.
+func judgedComponents(t *testing.T, a *App) map[string]componentHealth {
+	t.Helper()
+
+	return a.judge.full(context.Background()).debugComponents()
+}
 
 // Manager fixtures shared by the readiness, lifecycle, app and debug-health tests.
 
