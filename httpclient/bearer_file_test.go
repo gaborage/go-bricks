@@ -119,27 +119,6 @@ func TestBuildBearerTokenFileAcceptsTokenAtSizeCap(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestValidHeaderValueRejectsControlBytesOnly(t *testing.T) {
-	tests := []struct {
-		name  string
-		value string
-		want  bool
-	}{
-		{name: "interior_tab", value: "a\tb", want: true},
-		{name: "interior_space", value: "a b", want: true},
-		{name: "obs_text_byte", value: "a\x80b", want: true},
-		{name: "nul", value: "a\x00b", want: false},
-		{name: "line_feed", value: "a\nb", want: false},
-		{name: "unit_separator", value: "a\x1fb", want: false},
-		{name: "del", value: "a\x7fb", want: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, validHeaderValue(tt.value))
-		})
-	}
-}
-
 func TestLooksLikeTokenSeparatesTokensFromPaths(t *testing.T) {
 	const jwt = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJwcm9iZSJ9.c2lnbmF0dXJl"
 	tests := []struct {

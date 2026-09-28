@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 
+	"golang.org/x/net/http/httpguts"
+
 	"github.com/gaborage/go-bricks/internal/secretfile"
 )
 
@@ -129,21 +131,10 @@ func (s *bearerTokenFile) read() (string, error) {
 	if token == "" {
 		return "", fmt.Errorf("httpclient: bearer token file %s is empty", secretfile.SafeRef(s.path))
 	}
-	if !validHeaderValue(token) {
+	if !httpguts.ValidHeaderFieldValue(token) {
 		return "", fmt.Errorf("httpclient: bearer token file %s is not a valid header value", secretfile.SafeRef(s.path))
 	}
 	return token, nil
-}
-
-// validHeaderValue mirrors the check net/http applies before sending a header:
-// no control byte other than a tab.
-func validHeaderValue(v string) bool {
-	for i := 0; i < len(v); i++ {
-		if c := v[i]; (c < 0x20 && c != '\t') || c == 0x7f {
-			return false
-		}
-	}
-	return true
 }
 
 func (s *bearerTokenFile) apply(req *nethttp.Request) {

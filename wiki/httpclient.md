@@ -730,8 +730,12 @@ if err != nil {
   `Authorization` header (`WithDefaultHeader`, any spelling): both would claim the same header.
 - **Logging.** Under `WithLogPayloads(true)` the header is masked by the logger's
   `SensitiveDataFilter` (its default `auth` and `authorization` needles), and spans never carry
-  request headers. On a redirect, net/http forwards the header only to the same domain or a
-  subdomain of it.
+  request headers.
+- **Scope.** The token is bound to the client, not to a host: every request carries it, whatever
+  URL it names. Use one client per counterparty, and never pass it a URL you did not build (a
+  pagination link, a callback URL). On a redirect, net/http forwards the header to the same
+  domain or a subdomain of it whatever the scheme, so an `https` to `http` redirect on the same
+  host sends it in cleartext.
 
 ## Metrics
 
