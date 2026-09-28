@@ -499,7 +499,9 @@ Two consequences worth knowing:
   control plane, `outbox.tenancy: shared`) is probed through exactly that key, is still
   `critical`, and returns `503` while it is unreachable — its readiness is not weaker
   than a single-tenant one. Only where the key genuinely does not resolve does nothing
-  about a database gate traffic: no critical probe, no startup gate, and no WARN.
+  about a database gate traffic: the probe is still registered `critical: true`, but
+  `per_tenant` relabels its not-configured verdict, so no database verdict can fail the
+  gate — and there is no startup gate and no WARN.
 - **A module that genuinely needs a database should say so.** Implement
   `app.DatabaseRequirer`; registration then aborts startup when the database is absent,
   instead of the service going green and serving errors.
