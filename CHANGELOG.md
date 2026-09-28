@@ -18,6 +18,7 @@
 
 * **deps:** update aws-sdk-go-v2 monorepo ([#1792](https://github.com/gaborage/go-bricks/issues/1792)) ([4f2b3c2](https://github.com/gaborage/go-bricks/commit/4f2b3c2d5835f73e666d643a1ab7d129eb1f16cd))
 * **deps:** update module github.com/knadh/koanf/v2 to v2.3.7 ([#1793](https://github.com/gaborage/go-bricks/issues/1793)) ([4e78085](https://github.com/gaborage/go-bricks/commit/4e78085f44c2b8c8e817316b7b55d6fde4b6d326))
+* **server:** key the probe exemption on the routed request ([GHSA-h4jw-4c64-48mh](https://github.com/gaborage/go-bricks/security/advisories/GHSA-h4jw-4c64-48mh)) ([1b53097](https://github.com/gaborage/go-bricks/commit/1b53097a2d90bb01fabd7136cc07f651c720afb3))
 
 ## [0.67.0](https://github.com/gaborage/go-bricks/compare/v0.66.0...v0.67.0) (2026-09-24)
 
