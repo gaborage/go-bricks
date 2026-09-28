@@ -45,6 +45,8 @@ type fakeHandle struct {
 	// onClose records the close in an order shared with other fakes, so the
 	// shutdown SEQUENCE is assertable and not only its outcome.
 	onClose func()
+	// statusReads counts GetStatus calls, so a test can wait on the supervisor.
+	statusReads int
 }
 
 func (f *fakeHandle) StoreCustomOffset(offset int64) error {
@@ -72,7 +74,22 @@ func (f *fakeHandle) Close() error {
 func (f *fakeHandle) GetStatus() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.statusReads++
 	return f.status
+}
+
+func (f *fakeHandle) statusReadCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.statusReads
+}
+
+// setStatus changes the status a started manager reads, under the lock its
+// supervisor reads it under.
+func (f *fakeHandle) setStatus(status int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.status = status
 }
 
 func (f *fakeHandle) recorded() []string {
@@ -850,7 +867,7 @@ func TestManagerReady(t *testing.T) {
 			startOnFake(t, m, fake, oneConsumerDecls())
 			consumer := fake.consumer(testStream)
 			require.NotNil(t, consumer)
-			consumer.events.status = tt.status
+			consumer.events.setStatus(tt.status)
 			m.started = tt.started
 
 			assert.Equal(t, tt.want, m.Ready())

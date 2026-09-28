@@ -914,3 +914,66 @@ func TestStreamsPublisherRejectedAfterStopIntegration(t *testing.T) {
 
 	assert.ErrorIs(t, err, ErrPublisherClosed)
 }
+
+// lostStreamWait bounds how long a deleted stream takes to surface: the client
+// waits a random 3-11s before it asks the broker whether the stream still exists,
+// and a producer waits twice.
+const lostStreamWait = 90 * time.Second
+
+// startLostStreamManager starts a consumer and a publisher on one stream, with a
+// supervisor that polls fast and a logger the test reads back.
+func startLostStreamManager(t *testing.T, opts *ManagerOptions, names itNames, handler Handler) (*Manager, *recordingLogger) {
+	t.Helper()
+
+	log := &recordingLogger{}
+	managerOpts := *opts
+	managerOpts.Logger = log
+
+	decls := NewDeclarations()
+	decls.DeclareStream(names.stream, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
+	decls.DeclareConsumer(&ConsumerOptions{
+		Stream:  names.stream,
+		Name:    names.consumer,
+		Start:   OffsetFirst(),
+		Handler: handler,
+	})
+	decls.DeclarePublisher(&PublisherOptions{Stream: names.stream})
+	require.NoError(t, decls.Validate())
+
+	m := NewManager(managerOpts)
+	m.superviseEvery = 100 * time.Millisecond
+	require.NoError(t, m.Start(context.Background(), decls))
+	t.Cleanup(func() {
+		m.StopConsumers()
+		require.NoError(t, m.Close())
+	})
+	return m, log
+}
+
+// deleteStream drops a stream out from under a running manager, the way an
+// operator or a broker data loss would.
+func deleteStream(t *testing.T, opts *ManagerOptions, streamName string) {
+	t.Helper()
+
+	env := testEnvironment(t, opts)
+	defer func() { require.NoError(t, env.Close()) }()
+	require.NoError(t, env.DeleteStream(streamName))
+}
+
+// TestStreamsSupervisorReportsADeletedStreamIntegration pins the report: a stream
+// deleted on a live broker is reported at ERROR and leaves the streams component
+// unhealthy.
+func TestStreamsSupervisorReportsADeletedStreamIntegration(t *testing.T) {
+	opts := streamsTestEnv(t)
+	names := newITNames(t, opts)
+	received := &recorder{failAt: -1}
+	m, log := startLostStreamManager(t, opts, names, received.handle)
+	require.True(t, m.Ready())
+
+	deleteStream(t, opts, names.stream)
+
+	require.Eventually(t, func() bool { return slices.Contains(log.messagesAt("error"), msgConsumerLost) },
+		lostStreamWait, itPollInterval, "the lost consumer is reported at ERROR")
+	assert.Equal(t, names.stream, log.fieldAt("error", msgConsumerLost, logFieldStream))
+	assert.False(t, m.Ready(), "the streams component stays unhealthy")
+}

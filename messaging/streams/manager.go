@@ -91,6 +91,11 @@ type runningConsumer struct {
 	// runner is this consumer's delivery state. The drain reaches a holding
 	// consumer's held set through it.
 	runner *consumerRunner
+	// super marks a super-stream consumer.
+	super bool
+	// lost marks a consumer the supervisor found lost: reported once, skipped by
+	// the shutdown flush, and never ready again. Guarded by Manager.mu.
+	lost bool
 }
 
 // Manager owns the single stream-protocol Environment of a single-tenant service
@@ -122,12 +127,20 @@ type Manager struct {
 	// Manager owns its own dialer, so tests need no save-and-restore.
 	dialEnvironment func(*stream.EnvironmentOptions) (environment, error)
 
+	// superviseEvery is superviseInterval, held as a field so tests can shrink it.
+	superviseEvery time.Duration
+
 	mu         sync.Mutex
 	env        environment
 	consumers  []*runningConsumer
 	publishers []*Publisher
 	started    bool
 	cancel     context.CancelFunc
+	// supervisorDone closes when the running supervisor exits; nil when none runs.
+	supervisorDone chan struct{}
+	// lostPublishers holds the publishers the supervisor already accounted for,
+	// the publisher half of runningConsumer.lost.
+	lostPublishers map[*Publisher]bool
 }
 
 // NewManager creates a Manager. It performs no I/O: the environment is dialed by
@@ -169,6 +182,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		log:             opts.Logger,
 		flushBudget:     shutdownFlushBudget,
 		dialEnvironment: dialVendorEnvironment,
+		superviseEvery:  superviseInterval,
 	}
 }
 
@@ -270,6 +284,7 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 	}
 
 	m.started = true
+	m.startSupervisorLocked(consumeCtx)
 	return nil
 }
 
@@ -476,13 +491,14 @@ func (m *Manager) trackConsumer(decl *consumerDeclaration, handle consumerHandle
 		offsets:   runner.offsets,
 		storerFor: storerFor,
 		runner:    runner,
+		super:     decl.Super,
 	})
 
 	m.log.Info().
 		Str(logFieldStream, decl.Stream).
 		Str(logFieldConsumer, decl.Name).
 		Bool("single_active", decl.SAC).
-		Bool("partitioned", decl.Super).
+		Bool(logFieldPartitioned, decl.Super).
 		Msg("Stream consumer started")
 }
 
@@ -530,7 +546,7 @@ func (m *Manager) bindPublisher(env environment, decl *publisherDeclaration) err
 
 	m.log.Info().
 		Str(logFieldStream, decl.Stream).
-		Bool("partitioned", decl.Super).
+		Bool(logFieldPartitioned, decl.Super).
 		Msg("Stream publisher started")
 	return nil
 }
@@ -736,25 +752,42 @@ func clampedMaxAge(maxAge time.Duration) time.Duration {
 // This is shutdown phase one, not a pause: the environment stays open for Close
 // to dispose, and Start stays refused until then.
 func (m *Manager) StopConsumers() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.stopLocked()
+	stopCtx, cancel := m.stopPhase()
+	defer cancel()
+	m.awaitSupervisor(stopCtx, m.stop(stopCtx))
 }
 
-func (m *Manager) stopLocked() {
+// stopPhase is one shutdown phase's single flush budget, which the flush and the
+// wait for the supervisor share: what it bounds is how long App.Shutdown waits,
+// and granting each step, or each consumer, the full budget would multiply the
+// very delay it exists to cap.
+func (m *Manager) stopPhase() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), m.flushBudget)
+}
+
+// stop runs stopLocked under m.mu and hands back what the caller waits on once
+// the lock is released.
+func (m *Manager) stop(flushCtx context.Context) (supervisorDone <-chan struct{}) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stopLocked(flushCtx)
+}
+
+// stopLocked hands back the supervisor's exit signal, since waiting on it under
+// m.mu would deadlock.
+func (m *Manager) stopLocked(flushCtx context.Context) (supervisorDone <-chan struct{}) {
+	// First, so the supervisor stops before any handle it watches closes. A
+	// handle the client closed since the last pass is marked lost here, while
+	// every handle is still one the manager has not closed, so its flush is
+	// skipped too.
 	if m.cancel != nil {
+		m.reportClosedLocked()
 		m.cancel()
 		m.cancel = nil
 	}
 
-	// One budget for the whole phase rather than one per consumer: what this bounds
-	// is how long App.Shutdown waits, and granting each consumer the full budget
-	// would multiply the very delay it exists to cap.
-	flushCtx, cancelFlush := context.WithTimeout(context.Background(), m.flushBudget)
-	defer cancelFlush()
-
 	for _, rc := range m.consumers {
-		m.flushOffsetsLocked(flushCtx, rc)
+		m.flushUnlessLostLocked(flushCtx, rc)
 		if err := rc.handle.Close(); err != nil {
 			m.log.Warn().Err(err).
 				Str(logFieldStream, rc.stream).
@@ -766,6 +799,7 @@ func (m *Manager) stopLocked() {
 	m.consumers = nil
 	m.stopPublishersLocked()
 	m.started = false
+	return m.detachSupervisorLocked()
 }
 
 // stopPublishersLocked closes every bound publisher, AFTER the consumers are
@@ -780,6 +814,21 @@ func (m *Manager) stopPublishersLocked() {
 		}
 	}
 	m.publishers = nil
+	m.lostPublishers = nil
+}
+
+// flushUnlessLostLocked flushes a consumer the supervisor did not find lost. A
+// lost one's positions belong to a stream another replica may have re-created
+// under the same name, where committing them would skip or stall its consumers.
+func (m *Manager) flushUnlessLostLocked(flushCtx context.Context, rc *runningConsumer) {
+	if !rc.lost {
+		m.flushOffsetsLocked(flushCtx, rc)
+		return
+	}
+	m.log.Warn().
+		Str(logFieldStream, rc.stream).
+		Str(logFieldConsumer, rc.name).
+		Msg(msgLostFlushSkipped)
 }
 
 // flushOffsetsLocked commits one consumer's pending offsets, giving up once the
@@ -843,7 +892,9 @@ func (m *Manager) warnFlushSkipped(rc *runningConsumer) {
 // error as fatal without calling Close leaks nothing and a retried Start cannot
 // orphan the previous connection pool.
 func (m *Manager) abortStartLocked() {
-	m.stopLocked()
+	flushCtx, cancel := m.stopPhase()
+	defer cancel()
+	m.stopLocked(flushCtx)
 	if err := m.closeEnvLocked(); err != nil {
 		m.log.Warn().Err(err).Msg("Failed to close stream environment after a failed start")
 	}
@@ -862,11 +913,20 @@ func (m *Manager) closeEnvLocked() error {
 
 // Close stops the consumers and closes the environment. Idempotent.
 func (m *Manager) Close() error {
+	stopCtx, cancel := m.stopPhase()
+	defer cancel()
+	supervisorDone, err := m.stopAndCloseEnv(stopCtx)
+	m.awaitSupervisor(stopCtx, supervisorDone)
+	return err
+}
+
+// stopAndCloseEnv runs stopLocked and closeEnvLocked under m.mu and hands back
+// what the caller waits on once the lock is released.
+func (m *Manager) stopAndCloseEnv(flushCtx context.Context) (supervisorDone <-chan struct{}, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	m.stopLocked()
-	return m.closeEnvLocked()
+	supervisorDone = m.stopLocked(flushCtx)
+	return supervisorDone, m.closeEnvLocked()
 }
 
 // Stats reports the manager state for the readiness probe and /ready body.
@@ -895,7 +955,8 @@ func (m *Manager) Stats() map[string]any {
 }
 
 // Ready reports whether every started consumer and publisher is currently
-// connected.
+// connected and none was found lost: a super-stream handle the client reports open
+// again after giving up on a partition stays lost.
 func (m *Manager) Ready() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -907,12 +968,12 @@ func (m *Manager) readyLocked() bool {
 		return false
 	}
 	for _, rc := range m.consumers {
-		if rc.handle.GetStatus() != ha.StatusOpen {
+		if rc.lost || rc.handle.GetStatus() != ha.StatusOpen {
 			return false
 		}
 	}
 	for _, p := range m.publishers {
-		if !p.Ready() {
+		if m.lostPublishers[p] || !p.Ready() {
 			return false
 		}
 	}

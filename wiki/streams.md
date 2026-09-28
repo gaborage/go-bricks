@@ -630,11 +630,12 @@ a confirmed publish** — a failed or abandoned one is visible as duration with 
 
 `/ready` gains a `streams` component (and `streams_stats`) once anything is
 declared on this lane: `healthy` while every consumer and publisher is
-connected, `unhealthy` whenever one is not — reconnecting, closed, or the
-manager stopped. The probe is **non-critical** —
+connected, `unhealthy` whenever one is not — reconnecting, closed, found lost
+([A lost stream](#a-lost-stream)), or the manager stopped. The probe is **non-critical** —
 the reliable consumers and producers recover on their own, so a broker flap must
 not pull the whole service out of the load
-balancer. Trace-context propagation from published messages is read back on the
+balancer. The exception is a stream the broker no longer has, which nothing
+recovers from on its own: see [A lost stream](#a-lost-stream). Trace-context propagation from published messages is read back on the
 consume side, through the shared delivery pipeline.
 
 ## Operations
@@ -646,6 +647,41 @@ consume side, through the shared delivery pipeline.
 - Behind an LB or NAT, set `messaging.streams.addressresolver.*`.
 - Streams need explicit retention (`MaxAge` / `MaxLengthBytes`); they do not
   shrink when consumed.
+
+### A lost stream
+
+The client reattaches consumers and publishers after a broker outage by itself.
+It gives up when the stream is gone — deleted by an operator, or lost with
+broker data: it checks the stream's metadata, finds no stream, and closes the
+handle for good. It gives up the same way when the broker answers that metadata
+check with an error it does not recognize, such as access refused or an internal
+error, although the stream still exists. Nothing in the client retries after that.
+
+The manager's supervisor reads every handle's status every 5s. A handle that
+closed without the manager closing it is reported **once, at ERROR**, naming the
+stream and the consumer (a publisher is named by its stream). An orderly shutdown
+is never reported. Detection needs the handle to stay closed until the next pass:
+the client retries a super stream's partitions one at a time, so a partition lost
+while another is still queued for retry can pass straight back to reconnecting and
+open, and go unreported.
+
+The handle stays closed and the `streams` component stays unhealthy, even when
+the client later reports a super-stream handle open again because another of its
+partitions reconnected. Because the component is non-critical, `/ready` stays
+healthy, so alert on the ERROR. Only a
+**restart** re-declares the stream. Opt-in re-creation is deferred to
+[#1826](https://github.com/gaborage/go-bricks/issues/1826). A replica that
+restarts does not revive the others, so restart every replica that logged it.
+The supervisor leaves the consumer's offsets alone: a super-stream consumer whose
+client gave up on some partitions keeps delivering and committing on the others.
+Only its **shutdown flush is skipped**, with a WARN naming it, because that flush
+commits by name and another replica may have re-created the stream by then. What
+it handled since its last commit replays after the restart.
+
+Once a publisher's producer has closed, a publish to it fails at once: the closed
+producer refuses the send. A publish issued while the client was still retrying
+is bounded by the caller's context, as during any reconnect. See
+[ADR-123](adr_123_streams_lost_topology_supervisor.md).
 
 ### Super-stream `SubEntrySize = 1` (vendor pin)
 
@@ -685,4 +721,5 @@ opts := streams.ManagerOptions{
 
 See `messaging/streams/streams_integration_test.go` for the offset-restore and
 skip-on-failure proofs, the publish round trip, super-stream partitioning by
-routing key, and publish rejection after a stop.
+routing key, publish rejection after a stop, and a stream deleted under a
+running manager and reported.

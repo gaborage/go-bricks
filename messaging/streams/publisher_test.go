@@ -81,6 +81,12 @@ func (f *fakeProducer) GetStatus() int {
 	return f.status
 }
 
+func (f *fakeProducer) setStatus(status int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.status = status
+}
+
 func (f *fakeProducer) sentCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
