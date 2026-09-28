@@ -462,16 +462,9 @@ type boundField struct {
 // field, instructions are appended param, then query, then header — matching
 // bindFieldFromTags's precedence so replay order is unchanged. Unexported fields are
 // skipped (equivalent to today's per-request CanSet skip). Anonymous/embedded fields
-// are treated as a single field, same as today — no recursion.
-//
-// Non-struct t is a no-op (nil plan): NumField() on a non-struct type panics (known
-// gap, F26), and that panic must stay at request time, not move here to registration
-// time. See bindRequest's isStruct-gated fallback in requestProcessor.process.
+// are treated as a single field, same as today — no recursion. t must be a struct kind
+// (requestStructType).
 func buildBindingPlan(t reflect.Type) []boundField {
-	if t.Kind() != reflect.Struct {
-		return nil
-	}
-
 	var plan []boundField
 	for i := range t.NumField() {
 		field := t.Field(i)
@@ -505,32 +498,44 @@ type requestProcessor[T any] struct {
 	// fieldPathIsSchema is the JSON decode-summary gate for T, decided once here
 	// because it depends on T alone. See saferender.FieldPathIsSchema.
 	fieldPathIsSchema bool
-	isStruct          bool
 }
 
-// newRequestProcessor creates a new request processor for type T. The tag-binding plan
-// is computed once here (not per request) from T's underlying struct type, reusing the
-// allocator's elemType/pointer-unwrap logic so pointer-typed T gets the struct's plan.
-func newRequestProcessor[T any](binder *RequestBinder, cfg *config.Config) *requestProcessor[T] {
-	allocator := newRequestAllocator[T]()
-
-	structType := allocator.elemType
+// requestStructType returns the struct a typed handler binds its request into: T itself,
+// or T's element when T is a pointer. ok is false for any other kind, a pointer to a
+// pointer, and a struct the validator refuses — time.Time and types convertible to it,
+// the same test validator.StructCtx applies.
+func requestStructType(t reflect.Type) (structType reflect.Type, ok bool) {
+	structType = t
 	if structType.Kind() == reflect.Pointer {
 		structType = structType.Elem()
 	}
-	isStruct := structType.Kind() == reflect.Struct
+	return structType, structType.Kind() == reflect.Struct && !structType.ConvertibleTo(timeType)
+}
 
-	var plan []boundField
-	if isStruct {
-		plan = buildBindingPlan(structType)
+func unbindableRequestTypeReason(t reflect.Type) string {
+	return "request type " + t.String() + " must be a struct or a pointer to a struct (time.Time excluded); wrap the value in a struct field"
+}
+
+// newRequestProcessor creates a new request processor for type T. The tag-binding plan
+// is computed once here (not per request) from T's underlying struct type. It panics
+// when T cannot bind, which covers WrapHandler; RegisterHandler refuses such a T earlier,
+// naming the route.
+func newRequestProcessor[T any](binder *RequestBinder, cfg *config.Config) *requestProcessor[T] {
+	allocator := newRequestAllocator[T]()
+
+	// reflect.TypeFor[T]() rather than allocator.elemType: the allocator's field holds T's own
+	// type, so the name would read as a second unwrap that does not happen. Both doors judge the
+	// same type, and requestStructType does the one unwrap.
+	structType, ok := requestStructType(reflect.TypeFor[T]())
+	if !ok {
+		panic("server: " + unbindableRequestTypeReason(allocator.elemType))
 	}
 
 	return &requestProcessor[T]{
 		allocator:         allocator,
 		binder:            binder,
 		cfg:               cfg,
-		plan:              plan,
-		isStruct:          isStruct,
+		plan:              buildBindingPlan(structType),
 		fieldPathIsSchema: saferender.FieldPathIsSchema(structType),
 	}
 }
@@ -543,16 +548,7 @@ func (rp *requestProcessor[T]) process(c *echo.Context) (T, IAPIError) {
 	request, requestPtr := rp.allocator.allocate()
 
 	// Bind request data from multiple sources (JSON, query, params, headers).
-	// Struct T takes the precomputed-plan fast path; non-struct T (F26, untested
-	// backlog gap) falls back to the legacy reflect-per-request path so its
-	// request-time NumField() panic stays exactly where it is today.
-	var bindErr error
-	if rp.isStruct {
-		bindErr = rp.binder.bindRequestPlanned(c, requestPtr, rp.plan, rp.fieldPathIsSchema)
-	} else {
-		bindErr = rp.binder.bindRequest(c, requestPtr, rp.fieldPathIsSchema)
-	}
-	if bindErr != nil {
+	if bindErr := rp.binder.bindRequestPlanned(c, requestPtr, rp.plan, rp.fieldPathIsSchema); bindErr != nil {
 		// SECURITY: bindErr renders request input; only the summary may be echoed.
 		return empty, NewBadRequestError("Invalid request data").WithDetails("error", bindSummary(bindErr))
 	}
@@ -738,6 +734,8 @@ func (hw *handlerWrapper[T, R]) selectErrorFormatter() func(*echo.Context, IAPIE
 // It handles request binding, validation, response formatting, and error handling.
 // Supports both value and pointer types for requests (T) and responses (R).
 // Pointer types eliminate copy overhead for large payloads (>1KB recommended).
+// It panics when the wrapper is built if T, after removing one pointer level, is not a
+// struct the validator accepts (ADR-121).
 //
 // This function delegates to handlerWrapper which composes specialized components:
 // - contextChecker: Detects request cancellation/timeout
@@ -781,18 +779,18 @@ func wrapHandlerWithJOSE[T any, R any](
 	return wrapper.wrap(handlerFunc)
 }
 
-// bindRequest binds request data from various sources to the target struct. It is the
-// legacy per-request-reflecting path, kept alive as requestProcessor.process's fallback
-// for non-struct T (F26): bindStructFields's NumField() call panics at request time for
-// non-struct types, and that panic must stay exactly there. Struct T never reaches this
-// path — it uses bindRequestPlanned instead. It binds body-then-tags in the same order,
-// so the source-precedence note on bindRequestPlanned applies here too.
-func (rb *RequestBinder) bindRequest(c *echo.Context, target any, fieldPathIsSchema bool) error {
+// bindRequest binds request data from various sources to the target struct, reflecting
+// over its tags per request. No request path calls it: every typed request binds through
+// bindRequestPlanned, whose tests use this as their differential oracle. It binds
+// body-then-tags in the same order, so the source-precedence note on bindRequestPlanned
+// applies here too. Its decode-summary gate is fixed at true, the value those tests pass
+// to bindRequestPlanned.
+func (rb *RequestBinder) bindRequest(c *echo.Context, target any) error {
 	targetValue := reflect.ValueOf(target).Elem()
 	targetType := targetValue.Type()
 
 	// Bind JSON body if present
-	if err := rb.bindJSONBody(c, target, fieldPathIsSchema); err != nil {
+	if err := rb.bindJSONBody(c, target, true); err != nil {
 		return err
 	}
 
@@ -1536,6 +1534,7 @@ func NewHandlerRegistry(cfg *config.Config, opts ...HandlerRegistryOption) *Hand
 }
 
 // RegisterHandler registers a typed handler with the route registrar and captures metadata.
+// It panics when T, after removing one pointer level, is not a struct the validator accepts.
 func RegisterHandler[T any, R any](
 	hr *HandlerRegistry,
 	r RouteRegistrar,
@@ -1543,18 +1542,22 @@ func RegisterHandler[T any, R any](
 	handler HandlerFunc[T, R],
 	opts ...RouteOption,
 ) {
-	var reqType T
+	reqType := reflect.TypeFor[T]()
 	var respType R
 
 	// Determine final path after registrar adjustments (e.g. base path prefixes)
 	fullPath := r.FullPath(path)
+
+	if _, ok := requestStructType(reqType); !ok {
+		panic("server: handler registration failed for " + method + " " + fullPath + ": " + unbindableRequestTypeReason(reqType))
+	}
 
 	// Create descriptor with type information
 	descriptor := RouteDescriptor{
 		Method:       method,
 		Path:         fullPath,
 		HandlerID:    formatHandlerID(method, fullPath),
-		RequestType:  reflect.TypeOf(reqType),
+		RequestType:  reqType,
 		ResponseType: reflect.TypeOf(respType),
 		Package:      getCallerPackage(3), // getCallerPackage → RegisterHandler → GET/POST/etc → module
 		HandlerName:  extractHandlerName(handler),

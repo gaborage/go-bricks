@@ -1939,6 +1939,25 @@ endpoint instead of an unauthenticated body.
 
 ---
 
+### [ADR-121: A Typed Handler's Request Type Must Be a Struct, Checked at Registration](adr_121_typed_handler_request_type_must_be_struct.md)
+
+**Date:** 2026-09-27 | **Status:** Accepted | **Breaking:** a typed handler whose request type, after one pointer level, is not a struct, or is `time.Time` or a type convertible to it, panics at registration, where it used to boot and fail every request to that route
+
+A `string`, slice, map, `json.RawMessage`, `any` or `**Req` request type registered without
+complaint and then failed every request: the tag binder panicked, which Echo's `Recover` answered
+with a 500, unless echo's JSON binder rejected the body first with a 400; `time.Time`, a struct
+the validator refuses, answered 400 on every request.
+`RegisterHandler` (and `GET`/`POST`/…) now panics before the route reaches `DefaultRouteRegistry`
+or the router, naming the method, the full path and the type. The refusal mirrors
+`validator.StructCtx`, so registration refuses exactly the types validation would refuse.
+`WrapHandler` panics the same way when the wrapper is built, and the per-request fallback to the
+legacy reflect-per-request binder is removed. Decoding a non-struct body into `T`
+was rejected: the validator refuses every non-struct pointer, so it would only turn the 500 into a
+400. See [migrations.md](migrations.md) `[C69.4]`.
+
+**Key Benefits:** a route that can never answer fails startup with its method, path and type named,
+instead of failing every request at runtime.
+
 ### [ADR-122: A Returned Mandatory Publish Fails Instead of Reporting Success](adr_122_returned_mandatory_publish_fails.md)
 
 **Date:** 2026-09-27 | **Status:** Accepted | **Breaking:** a `Mandatory: true` publish the broker returns as unroutable fails with `ErrPublishRetriesExhausted` wrapping the new `ErrPublishUnroutable`, where it returned nil

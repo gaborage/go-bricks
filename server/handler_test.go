@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -3201,7 +3202,7 @@ func TestBuildBindingPlanWithinFieldOrderAndLastWriteWins(t *testing.T) {
 	assert.Equal(t, "H", planned.Triple, "header is applied last, so it wins")
 
 	var legacy dualTagRequest
-	require.NoError(t, binder.bindRequest(newCtx(), &legacy, true))
+	require.NoError(t, binder.bindRequest(newCtx(), &legacy))
 	assert.Equal(t, planned, legacy, "legacy and planned binding must be byte-identical")
 }
 
@@ -3233,30 +3234,178 @@ func TestLegacyBindPathMatchesPlanned(t *testing.T) {
 	require.NoError(t, binder.bindRequestPlanned(newCtx(), &planned, plan, true))
 
 	var legacy planBindingPinReq
-	require.NoError(t, binder.bindRequest(newCtx(), &legacy, true))
+	require.NoError(t, binder.bindRequest(newCtx(), &legacy))
 
 	assert.Equal(t, planned, legacy, "legacy and planned binding must agree across all three sources")
 }
 
-// TestNonStructRequestTypePreservesF26Panic pins the F26 fallback contract: building the
-// processor for a non-struct request type must NOT panic (the plan build no-ops rather
-// than moving the panic to registration time), and the bind still panics at request time
-// via the legacy path's NumField call — byte-identical to pre-refactor behavior.
-func TestNonStructRequestTypePreservesF26Panic(t *testing.T) {
+type bindableReq struct {
+	Name string `json:"name"`
+}
+
+// unbindableTime is a struct kind the validator still refuses: it converts to time.Time.
+type unbindableTime time.Time
+
+type requestTypeCase struct {
+	name     string
+	typeName string
+	typ      reflect.Type
+	register func(hr *HandlerRegistry, r RouteRegistrar, path string)
+}
+
+func requestTypeCaseOf[T any](name string) requestTypeCase {
+	return requestTypeCase{
+		name:     name,
+		typeName: reflect.TypeFor[T]().String(),
+		typ:      reflect.TypeFor[T](),
+		register: func(hr *HandlerRegistry, r RouteRegistrar, path string) {
+			GET(hr, r, path, func(T, HandlerContext) (helloResp, IAPIError) {
+				return helloResp{Message: "ok"}, nil
+			})
+		},
+	}
+}
+
+// TestRegisterHandlerRejectsUnbindableRequestTypes pins the struct-only request type rule:
+// registration panics naming the method, the full path and the type, before the route
+// reaches the descriptor registry or the router.
+// refusedRequestTypeCases and acceptedRequestTypeCases are the two populations the [C69.4]
+// atom enumerates. They are package vars so TestRequestStructTypeMatchesValidator can assert
+// the guard and the validator agree over exactly the cases the rule is documented against.
+var refusedRequestTypeCases = []requestTypeCase{
+	requestTypeCaseOf[string]("string"),
+	requestTypeCaseOf[*string]("pointer_to_string"),
+	requestTypeCaseOf[*[]bindableReq]("pointer_to_slice"),
+	requestTypeCaseOf[int64]("int64"),
+	requestTypeCaseOf[bool]("bool"),
+	requestTypeCaseOf[any]("any"),
+	requestTypeCaseOf[error]("interface"),
+	requestTypeCaseOf[[]bindableReq]("slice_of_struct"),
+	requestTypeCaseOf[map[string]string]("map"),
+	requestTypeCaseOf[json.RawMessage]("raw_message"),
+	requestTypeCaseOf[[16]byte]("byte_array"),
+	requestTypeCaseOf[time.Time]("time"),
+	requestTypeCaseOf[*time.Time]("pointer_to_time"),
+	requestTypeCaseOf[unbindableTime]("convertible_to_time"),
+	requestTypeCaseOf[**bindableReq]("pointer_to_pointer_to_struct"),
+}
+
+var acceptedRequestTypeCases = []requestTypeCase{
+	requestTypeCaseOf[bindableReq]("struct"),
+	requestTypeCaseOf[*bindableReq]("pointer_to_struct"),
+	requestTypeCaseOf[struct{}]("empty_struct"),
+	requestTypeCaseOf[allocProbeRequestPtr]("defined_pointer_to_struct"),
+}
+
+// TestRequestStructTypeMatchesValidator is the differential pin behind ADR-121's central claim:
+// requestStructType refuses exactly the types validation would refuse. The guard hand-copies
+// go-playground/validator's own predicate (Kind() != Struct || ConvertibleTo(time.Time), after one
+// pointer unwrap) rather than calling it, because RegisterHandler holds no validator instance and
+// the route's validator may be a consumer's. That copy is the risk: the dependency is
+// Renovate-bumped, and a rule change there would make the guard refuse a type validation accepts
+// (a false startup abort) or accept one it refuses (silently restoring the 400-on-every-request
+// bug), with every other test still green. This asserts the agreement over both documented
+// populations, against the same call the request path makes — c.Validate on a fresh one-level
+// pointer.
+func TestRequestStructTypeMatchesValidator(t *testing.T) {
+	v := NewValidator()
+
+	assertAgrees := func(t *testing.T, typ reflect.Type) {
+		t.Helper()
+		structType, guardAccepts := requestStructType(typ)
+
+		probe := typ
+		if probe.Kind() == reflect.Pointer {
+			probe = probe.Elem()
+		}
+		err := v.Validate(reflect.New(probe).Interface())
+		var invalid *validator.InvalidValidationError
+		validatorRefuses := errors.As(err, &invalid)
+
+		assert.Equal(t, guardAccepts, !validatorRefuses,
+			"the guard and the validator must agree on %s (guard accepts=%v, validator refuses=%v)",
+			typ, guardAccepts, validatorRefuses)
+		if guardAccepts {
+			require.NotNil(t, structType, "an accepted type must yield the struct to bind into")
+			assert.Equal(t, reflect.Struct, structType.Kind())
+		}
+	}
+
+	for _, tc := range refusedRequestTypeCases {
+		t.Run("refused_"+tc.name, func(t *testing.T) { assertAgrees(t, tc.typ) })
+	}
+	for _, tc := range acceptedRequestTypeCases {
+		t.Run("accepted_"+tc.name, func(t *testing.T) { assertAgrees(t, tc.typ) })
+	}
+}
+
+func TestRegisterHandlerRejectsUnbindableRequestTypes(t *testing.T) {
+	cases := refusedRequestTypeCases
+
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	DefaultRouteRegistry.Clear()
+	t.Cleanup(DefaultRouteRegistry.Clear)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := echo.New()
+			rg := newRouteGroup(e.Group("/api"), "/api", cfg)
+			before := DefaultRouteRegistry.Count()
+
+			want := "GET /api/" + tc.name + ": request type " + tc.typeName + " must be a struct"
+			if tc.name == "string" {
+				// One case pins the whole message: ADR-121, the [C69.4] atom's detect step and
+				// wiki/handler_patterns.md all quote the remediation clause verbatim, so deleting
+				// it must fail a test rather than silently falsifying three documents.
+				want += " or a pointer to a struct (time.Time excluded); wrap the value in a struct field"
+			}
+			assertRegistrationPanics(t, want, func() {
+				tc.register(NewHandlerRegistry(cfg), rg, "/"+tc.name)
+			})
+			assert.Equal(t, before, DefaultRouteRegistry.Count(), "a refused route must not reach the descriptor registry")
+			assert.Empty(t, e.Router().Routes(), "a refused route must not reach the router")
+		})
+	}
+}
+
+// TestRegisterHandlerAcceptsStructRequestTypes pins the accepted side of the rule: a struct,
+// a pointer to one, an empty struct and a defined pointer type register and answer 200.
+func TestRegisterHandlerAcceptsStructRequestTypes(t *testing.T) {
+	cases := acceptedRequestTypeCases
+
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	DefaultRouteRegistry.Clear()
+	t.Cleanup(DefaultRouteRegistry.Clear)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := echo.New()
+			e.Validator = NewValidator()
+			rg := newRouteGroup(e.Group("/api"), "/api", cfg)
+			require.NotPanics(t, func() { tc.register(NewHandlerRegistry(cfg), rg, "/"+tc.name) })
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/"+tc.name, http.NoBody)
+			e.ServeHTTP(rec, req)
+
+			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.Contains(t, rec.Body.String(), `"data":{"message":"ok"}`)
+		})
+	}
+}
+
+// TestWrapHandlerRejectsNonStructRequestType pins the struct-only rule on the door that
+// bypasses RegisterHandler: building the wrapper panics naming the type.
+func TestWrapHandlerRejectsNonStructRequestType(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	binder := NewRequestBinder()
 
-	var rp *requestProcessor[string]
-	require.NotPanics(t, func() { rp = newRequestProcessor[string](binder, cfg) },
-		"plan build must no-op for non-struct T, not panic at registration time")
-	assert.False(t, rp.isStruct, "non-struct T routes to the legacy fallback")
-	assert.Nil(t, rp.plan, "non-struct T has no binding plan")
-
-	e := echo.New()
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", http.NoBody)
-	c := e.NewContext(req, httptest.NewRecorder())
-	assert.Panics(t, func() { _ = binder.bindRequest(c, new(string), true) },
-		"non-struct T still panics at request time (F26 remains open by design)")
+	assertRegistrationPanics(t, "request type string must be a struct", func() {
+		WrapHandler(func(string, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil }, binder, cfg)
+	})
+	assertRegistrationPanics(t, "request type time.Time must be a struct", func() {
+		WrapHandler(func(time.Time, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil }, binder, cfg)
+	})
 }
 
 // BenchmarkBindRequestPlannedVsLegacy isolates the refactor's win: the planned path (empty
@@ -3287,7 +3436,7 @@ func BenchmarkBindRequestPlannedVsLegacy(b *testing.B) {
 		})
 	})
 	b.Run("legacy", func(b *testing.B) {
-		run(b, func(c *echo.Context, d *wideJSONOnlyRequest) error { return binder.bindRequest(c, d, true) })
+		run(b, func(c *echo.Context, d *wideJSONOnlyRequest) error { return binder.bindRequest(c, d) })
 	})
 }
 
@@ -3372,7 +3521,7 @@ func TestBindNamedStringSliceElementType(t *testing.T) {
 			assert.Equal(t, tc.want, planned, "planned path must bind the named element type")
 
 			var legacy namedSliceReq
-			require.NoError(t, binder.bindRequest(newCtx(tc.setup), &legacy, true))
+			require.NoError(t, binder.bindRequest(newCtx(tc.setup), &legacy))
 			assert.Equal(t, tc.want, legacy, "legacy and planned paths must agree")
 		})
 	}
