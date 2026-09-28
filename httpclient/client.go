@@ -648,7 +648,7 @@ func (b *Builder) Build() (Client, error) {
 		return nil, fmt.Errorf("httpclient: %w: %s", ErrUnsafeTransportComposition, strings.Join(issues, "; "))
 	}
 
-	bearer, err := b.newBearerTokenFile()
+	bearer, err := b.newBearerTokenFile(httpClient.Timeout)
 	if err != nil {
 		return nil, err
 	}

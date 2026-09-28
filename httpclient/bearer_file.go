@@ -89,7 +89,8 @@ type bearerTokenFile struct {
 
 // newBearerTokenFile validates WithBearerTokenFile's input against the rest of
 // the builder and performs the eager read. It returns nil when the option is unset.
-func (b *Builder) newBearerTokenFile() (*bearerTokenFile, error) {
+// waitLimit is the Timeout of the *http.Client the client sends with.
+func (b *Builder) newBearerTokenFile(waitLimit time.Duration) (*bearerTokenFile, error) {
 	spec := b.bearer
 	if spec == nil {
 		return nil, nil
@@ -126,7 +127,7 @@ func (b *Builder) newBearerTokenFile() (*bearerTokenFile, error) {
 		readFile:  spec.readFile,
 		logger:    b.logger,
 		lock:      make(chan struct{}, 1),
-		waitLimit: b.config.Timeout,
+		waitLimit: waitLimit,
 	}
 	token, err := s.read()
 	if err != nil {

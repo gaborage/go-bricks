@@ -471,22 +471,35 @@ func TestBearerTokenFileRefreshWaitHonorsRequestContext(t *testing.T) {
 
 func TestBearerTokenFileRefreshWaitIsBoundedByClientTimeout(t *testing.T) {
 	const limit = 50 * time.Millisecond
-	c, url, _ := holdBearerLock(t, NewBuilder(quietLogger()).WithTimeout(limit))
+	tests := []struct {
+		name    string
+		builder func() *Builder
+	}{
+		{name: "builder_timeout", builder: func() *Builder { return NewBuilder(quietLogger()).WithTimeout(limit) }},
+		{name: "http_client_timeout", builder: func() *Builder {
+			return NewBuilder(quietLogger()).WithTimeout(0).WithHTTPClient(&nethttp.Client{Timeout: limit})
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, url, _ := holdBearerLock(t, tt.builder())
 
-	start := time.Now()
-	done := make(chan error, 1)
-	go func() {
-		_, err := c.Get(context.Background(), &Request{URL: url})
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		require.Error(t, err)
-		assert.True(t, IsErrorType(err, TimeoutError), "got %v", err)
-		assert.Contains(t, err.Error(), "timed out waiting for the token")
-		assert.GreaterOrEqual(t, time.Since(start), limit)
-	case <-time.After(5 * time.Second):
-		t.Fatal("the wait for the token must end at the client Timeout")
+			start := time.Now()
+			done := make(chan error, 1)
+			go func() {
+				_, err := c.Get(context.Background(), &Request{URL: url})
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				require.Error(t, err)
+				assert.True(t, IsErrorType(err, TimeoutError), "got %v", err)
+				assert.Contains(t, err.Error(), "timed out waiting for the token")
+				assert.GreaterOrEqual(t, time.Since(start), limit)
+			case <-time.After(5 * time.Second):
+				t.Fatal("the wait for the token must end at the client Timeout")
+			}
+		})
 	}
 }
 
