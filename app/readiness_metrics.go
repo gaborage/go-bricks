@@ -57,7 +57,8 @@ type statGauge struct {
 	gauge       metric.Int64ObservableGauge
 }
 
-// statGaugeSpecs are the manager counters the /ready body stops carrying and no other instrument
+// statGaugeSpecs are the manager counters the /ready body will stop carrying (ADR-120) and no
+// other instrument
 // covers: the database pool and the cache manager already have their own
 // (db.client.connection.*, cache.manager.*), and the rest stay on the access-controlled debug
 // view (ADR-120).
@@ -89,8 +90,9 @@ type gaugeSources struct {
 	slots    []resourceSlot
 }
 
-// registerRuntimeGauges publishes the signal that replaces the statistics the /ready body stops
-// carrying (ADR-120): each kind's last readiness verdict, and the manager counters OTel lacks.
+// registerRuntimeGauges publishes the signal that will replace the statistics the /ready body
+// still carries until ADR-120 trims it: each kind's last readiness verdict, and the manager
+// counters OTel lacks.
 //
 // The callback runs no probe and makes no I/O — it reads what a judgment already decided and
 // what the managers already hold in memory. One read is not free: streams' Stats() takes that
