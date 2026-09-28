@@ -136,7 +136,6 @@ func (t *routeConflictTracker) record(method, fullPath string, reg RouteRegistra
 func routeNodeKey(method, path string) string {
 	path = pathutil.EnsureLeadingSlash(path)
 	var b strings.Builder
-	b.Grow(len(method) + 1 + len(path))
 	b.WriteString(method)
 	b.WriteByte(' ')
 	for i := 0; i < len(path); i++ {
