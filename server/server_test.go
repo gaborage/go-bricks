@@ -224,10 +224,8 @@ func assertHealthEndpoints(t *testing.T, server *Server, healthPath, readyPath s
 	server.echo.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var readyPayload map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &readyPayload))
-	assert.Equal(t, "ready", readyPayload["status"])
-	assert.NotZero(t, readyPayload["time"])
+	// The fallback answers the same verdict-only body the App's override does (ADR-120).
+	assert.JSONEq(t, `{"status":"ready"}`, rec.Body.String())
 }
 
 func TestServerNewInitializesEchoAndRoutes(t *testing.T) {

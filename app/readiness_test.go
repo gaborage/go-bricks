@@ -2,8 +2,8 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"slices"
 	"testing"
 	"time"
 
@@ -214,24 +214,15 @@ func TestDatabaseProbeUnhealthyWhenHealthFails(t *testing.T) {
 	assert.EqualError(t, got.Err, "pg down")
 }
 
-// TestDatabaseProbeRendersFixedPublicError pins what the database description contributes
-// to the unauthenticated 503 body: it is critical, so readyCheck renders it, and the
-// rendered string is the synthesized default rather than the pgconn identity string
-// (`user=… database=…` plus the resolved host:port). The description declares no
-// publicErr — that it is safe anyway is the whole point of the inverted default.
-func TestDatabaseProbeRendersFixedPublicError(t *testing.T) {
-	st := databaseDescription(t, newRealConnectorDBManager(&config.Config{}), false).Run(context.Background())
-	require.True(t, st.Critical, "a non-critical probe would never reach the 503 render path")
+// TestDatabaseProbeKeepsConnectionIdentityOnErrAlone pins the split the readiness module
+// performs. SECURITY: the description is critical, so a failure gates /ready — whose body
+// carries its verdict alone (ADR-120) — while the full identity-bearing driver error
+// (`user=… database=…` plus the resolved host:port) stays on HealthStatus.Err for the app
+// log and the IP-allowlisted /_sys/health-debug.
+func TestDatabaseProbeKeepsConnectionIdentityOnErrAlone(t *testing.T) {
+	require.True(t, databaseDescription(t, newRealConnectorDBManager(&config.Config{}), false).critical,
+		"a non-critical probe would never gate /ready at all")
 
-	st.Err = errors.New(pgconnIdentityError)
-	assert.Equal(t, databaseUnavailableBody, publicProbeError(&st))
-}
-
-// TestDatabaseProbePublicErrorHidesConnectionIdentity pins the split /ready performs: the
-// sanitized string is what the unauthenticated body gets, while the full identity-bearing
-// driver error stays on HealthStatus.Err for the app log and the IP-allowlisted
-// /_sys/health-debug.
-func TestDatabaseProbePublicErrorHidesConnectionIdentity(t *testing.T) {
 	driverErr := errors.New(pgconnIdentityError)
 	probe := probeDescription{
 		name:     componentDatabase,
@@ -241,10 +232,14 @@ func TestDatabaseProbePublicErrorHidesConnectionIdentity(t *testing.T) {
 
 	result := probe.Run(context.Background())
 
-	assert.Equal(t, databaseUnavailableBody, publicProbeError(&result))
-	// /_sys/health-debug renders Err verbatim and must keep the detail operators need.
 	require.ErrorIs(t, result.Err, driverErr)
 	assert.Contains(t, result.Err.Error(), "user=app")
+
+	// The premise the split rests on: the 503 the gate would serve is rendered without ever
+	// reading the result, so the driver error has nowhere to reach.
+	rendered, err := json.Marshal(notReadyBody())
+	require.NoError(t, err)
+	assert.NotContains(t, string(rendered), "user=app")
 }
 
 func TestDatabaseProbeReportsNotConfigured(t *testing.T) {
@@ -443,108 +438,11 @@ func TestConvertCacheStatsToMap(t *testing.T) {
 	})
 }
 
-// The two manager keys the allowlists deliberately withhold, spelled out rather than
-// imported so the assertions pin the wire format instead of restating a production value.
-const (
-	connectionsStatsKey   = "connections"
-	storedOffsetsStatsKey = "stored_offsets"
-)
-
-// TestPublicStatsAllowlistsMatchManagerCounters pins every allowlist against the keys the
-// real manager publishes. SECURITY: an allowlist that silently falls behind a manager is
-// how a new identifier-bearing counter reaches the unauthenticated /ready body — this test
-// fails the day a manager gains a key, forcing the "publish or withhold" decision.
-func TestPublicStatsAllowlistsMatchManagerCounters(t *testing.T) {
-	tests := []struct {
-		name     string
-		stats    map[string]any
-		allow    []string
-		withheld []string
-	}{
-		{
-			name:     "database",
-			stats:    (&database.DbManager{}).Stats(),
-			allow:    databasePublicStats,
-			withheld: []string{connectionsStatsKey},
-		},
-		{
-			name:  "messaging",
-			stats: (&messaging.Manager{}).Stats(),
-			allow: messagingPublicStats,
-		},
-		{
-			name:  "cache",
-			stats: convertCacheStatsToMap(cache.ManagerStats{}),
-			allow: cachePublicStats,
-		},
-		{
-			name:     "streams",
-			stats:    (&streams.Manager{}).Stats(),
-			allow:    streamsPublicStats,
-			withheld: []string{storedOffsetsStatsKey},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			published := make([]string, 0, len(tt.stats))
-			for key := range tt.stats {
-				published = append(published, key)
-			}
-			assert.ElementsMatch(t, published, slices.Concat(tt.allow, tt.withheld),
-				"every manager counter is either allowlisted or listed as deliberately withheld")
-			for _, key := range tt.withheld {
-				assert.NotContains(t, tt.allow, key)
-			}
-		})
-	}
-}
-
-// TestProbeConstructorsWireTheirPublicStatsAllowlist pins the other half of the disclosure
-// guard. SECURITY: an allowlist only withholds anything where the constructor carries it —
-// dropping `publicStats:` from one description leaves every body assertion green (the kind
-// simply publishes its status alone) right up until that kind's stats matter, and for
-// streams the dropped line is what puts stored_offsets back on the unauthenticated body.
-func TestProbeConstructorsWireTheirPublicStatsAllowlist(t *testing.T) {
-	streamsManager := streams.NewManager(streams.ManagerOptions{
-		URI:    unreachableStreamURI,
-		Logger: logger.New("error", false),
-	})
-
-	tests := []struct {
-		name        string
-		description probeDescription
-		allow       []string
-	}{
-		{
-			name:        "database",
-			description: databaseDescription(t, createTestDbManager(t), false),
-			allow:       databasePublicStats,
-		},
-		{
-			name:        "messaging",
-			description: messagingDescription(t, createTestMessagingManager(t), false),
-			allow:       messagingPublicStats,
-		},
-		{
-			name:        "cache",
-			description: cacheDescription(t, createTestCacheManager(t), true, false, false),
-			allow:       cachePublicStats,
-		},
-		{
-			name:        "streams",
-			description: streamsDescription(t, streamsManager),
-			allow:       streamsPublicStats,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.allow, tt.description.publicStats,
-				"the description the app registers must carry its kind's allowlist")
-		})
-	}
-}
+// connectionsStatsKey is DbManager.Stats()' per-connection array: the one counter whose
+// values are resourcepool keys — tenant IDs in a multi-tenant deployment. Spelled out rather
+// than imported so the assertions pin the manager's own key instead of restating a value
+// this package derives from it.
+const connectionsStatsKey = "connections"
 
 // Fixtures used only by the per-kind descriptions above.
 

@@ -6,30 +6,29 @@ import (
 
 // HealthStatus captures the outcome of a readiness probe.
 type HealthStatus struct {
-	// Name is interpolated into the unauthenticated /ready body by publicProbeError.
-	// Keep it a fixed component identifier — never a tenant, host, or database name.
+	// Name identifies the component on the `Readiness check failed` log line, as the debug
+	// view's map key, and as the readiness gauge's readiness.kind attribute. Keep it a fixed
+	// component identifier — never a tenant, host, or database name: the first two are read
+	// by operators, and the third is a metric dimension whose cardinality must stay bounded.
 	Name string
 	// Status is one of "healthy", "unhealthy", "not_configured", "disabled", "per_tenant". A
 	// component is failing iff Status == "unhealthy"; /ready answers 503 (and the debug
 	// summary counts an error) on failing && Critical — the gate keys off Status, not Err;
 	// framework probes always set Err alongside "unhealthy".
-	Status  string
-	Details map[string]any
-	Err     error
-	// PublicErr overrides the error text on the unauthenticated /ready body. Empty
-	// synthesizes "<Name> unavailable"; Err never reaches that body either way.
-	PublicErr string
-	Critical  bool
+	Status   string
+	Details  map[string]any
+	Err      error
+	Critical bool
 }
 
 // Prober is the probe description's own contract, implemented by the framework's own
 // descriptions (probeDescription) and by nothing else — there is no registration door for a
 // foreign Prober, and the judge only ever walks the slot list (ADR-066 as amended).
-// SECURITY: the /ready body is unauthenticated, so publicProbeError never renders
-// HealthStatus.Err — a description that wants wording other than the synthesized
-// "<name> unavailable" sets HealthStatus.PublicErr, which must be a fixed string and never
-// derived from config. The same constraint binds Name, which the synthesized default
-// interpolates.
+// SECURITY: no field of HealthStatus reaches the unauthenticated /ready body, which carries
+// its verdict alone (ADR-120). Err, Details and Name go to the application log and to the
+// access-controlled <debug.pathprefix>/health-debug, so a probe may put the whole diagnostic
+// in Err — the connection identity a driver renders, the address a connector names — without
+// sanitizing it first.
 type Prober interface {
 	Run(ctx context.Context) HealthStatus
 }

@@ -43,7 +43,7 @@ func TestDebugHealthHandlers(t *testing.T) {
 
 				app := &App{cfg: cfg, logger: logger.New("info", false)}
 				installSealedSlots(app, describe(componentDatabase, false, nil,
-					map[string]any{"connection_count": 5}, databasePublicStats))
+					map[string]any{"connection_count": 5}))
 				return app
 			},
 			expectedStatus: http.StatusOK,
@@ -67,7 +67,7 @@ func TestDebugHealthHandlers(t *testing.T) {
 
 				app := &App{cfg: cfg, logger: logger.New("info", false)}
 				installSealedSlots(app, describe(componentDatabase, true, assert.AnError,
-					map[string]any{"connection_count": 5}, databasePublicStats))
+					map[string]any{"connection_count": 5}))
 				return app
 			},
 			expectedStatus: http.StatusOK,
@@ -213,7 +213,8 @@ func TestHealthDebugKeepsFullCacheErrorWhileReadySanitizes(t *testing.T) {
 	var readyBody map[string]any
 	require.NoError(t, json.Unmarshal(readyRec.Body.Bytes(), &readyBody))
 	assert.Equal(t, http.StatusServiceUnavailable, readyRec.Code)
-	assertCacheErrorSanitized(t, readyBody)
+	assert.Equal(t, notReadyBodyMap, readyBody,
+		"the 503 names neither the failing kind nor the Redis coordinates its error carries")
 
 	assert.Equal(t, http.StatusOK, debugRec.Code)
 	assert.Contains(t, debugRec.Body.String(), redisProbeAddress,
@@ -230,13 +231,13 @@ func TestHealthDebugKeepsFullCacheErrorWhileReadySanitizes(t *testing.T) {
 }
 
 // TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem pins both halves of the
-// database_stats routing contract from a single DbManager. SECURITY: a pooled connection's
-// key is the resourcepool key — the tenant ID in a multi-tenant deployment — so /ready's 200 body
+// statistics routing contract from a single DbManager. SECURITY: a pooled connection's key is
+// the resourcepool key — the tenant ID in a multi-tenant deployment — so /ready's 200 body
 // used to answer an unauthenticated, unthrottled caller with a live tenant enumeration plus
-// per-tenant timing. It must now carry the scalar counters only, while the access-controlled
+// per-tenant timing. It now carries its verdict alone (ADR-120), while the access-controlled
 // /health-debug keeps the per-connection detail operators diagnose with. Redacting inside
-// DbManager.Stats() or the probe would satisfy the /ready half alone, so the two are
-// asserted together.
+// DbManager.Stats() or the probe would satisfy the /ready half alone and gut the other, so
+// the two are asserted together.
 func TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem(t *testing.T) {
 	const (
 		tenantAlpha = "tenant-alpha"
@@ -281,16 +282,8 @@ func TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem(t *testing.T) {
 	var readyBody map[string]any
 	require.NoError(t, json.Unmarshal(readyRec.Body.Bytes(), &readyBody))
 	assert.Equal(t, http.StatusOK, readyRec.Code)
-
-	dbStats, ok := readyBody["database_stats"].(map[string]any)
-	require.True(t, ok, "the 200 body must still carry database_stats")
-	assert.Contains(t, dbStats, "active_connections")
-	assert.Contains(t, dbStats, "max_connections")
-	assert.Contains(t, dbStats, "idle_ttl_seconds")
-	assert.Equal(t, healthyStatus, dbStats[statusKey])
-	assert.NotContains(t, dbStats, connectionsStatsKey,
-		"the per-connection array enumerates tenants on an unauthenticated endpoint")
-	assertReadyBodyOmits(t, readyBody, tenantAlpha, tenantBeta)
+	assert.Equal(t, readyBodyMap, readyBody,
+		"the 200 carries its verdict alone, so no counter of any kind can enumerate tenants")
 
 	assert.Equal(t, http.StatusOK, debugRec.Code)
 	var debugBody struct {
@@ -323,16 +316,14 @@ func TestHealthDebugRendersOneEntryPerKind(t *testing.T) {
 	}
 	installSealedSlots(app,
 		probeDescription{
-			name:        componentDatabase,
-			critical:    true,
-			publicStats: databasePublicStats,
-			live:        func(context.Context) error { return nil },
-			stats:       func() map[string]any { return map[string]any{"active_connections": 1} },
+			name:     componentDatabase,
+			critical: true,
+			live:     func(context.Context) error { return nil },
+			stats:    func() map[string]any { return map[string]any{"active_connections": 1} },
 		},
 		probeDescription{
-			name:        componentStreams,
-			publicStats: streamsPublicStats,
-			live:        func(context.Context) error { return errStreamsNotOpen },
+			name: componentStreams,
+			live: func(context.Context) error { return errStreamsNotOpen },
 			stats: func() map[string]any {
 				return map[string]any{"stored_offsets": map[string]int64{"orders/projector": 7}}
 			},
@@ -361,7 +352,7 @@ func TestHealthDebugRendersOneEntryPerKind(t *testing.T) {
 		slices.Collect(maps.Keys(decoded.Data.Components)), "one entry per registered kind, and no *_manager entries")
 	assert.Equal(t, errStreamsNotOpen.Error(), decoded.Data.Components[componentStreams].Error)
 	assert.Contains(t, decoded.Data.Components[componentStreams].Details, "stored_offsets",
-		"the access-controlled view keeps what the /ready projection withholds")
+		"the access-controlled view is where the offsets live; /ready never carried them")
 	assert.Equal(t, healthSummary{
 		OverallStatus: degradedStatus,
 		TotalProbes:   2,
@@ -379,8 +370,8 @@ func TestHealthDebugRunsEveryProbeBehindAFailingCriticalKind(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: appName, Env: testName, Version: appVersion}}
 	app := &App{cfg: cfg, logger: logger.New("error", false)}
 	installSealedSlots(app,
-		describe(componentDatabase, true, errors.New("connection refused"), nil, databasePublicStats),
-		describe(componentCache, true, nil, nil, cachePublicStats),
+		describe(componentDatabase, true, errors.New("connection refused"), nil),
+		describe(componentCache, true, nil, nil),
 	)
 
 	handlers := NewDebugHandlers(app, &config.DebugConfig{Enabled: true, PathPrefix: "/_debug"}, app.logger)

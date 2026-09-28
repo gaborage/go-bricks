@@ -552,52 +552,23 @@ func defaultTestConfig() *config.Config {
 	}
 }
 
-// assertReadyBodyOmits pins that none of the given strings appears ANYWHERE in a /ready
-// body — not only under the key it was expected on, so a future field (or one nobody has
-// written yet) that reintroduces the value elsewhere is caught too. It asserts nothing about
-// which status code produced the body: a leak has no status code.
-func assertReadyBodyOmits(t *testing.T, body map[string]any, forbidden ...string) {
-	t.Helper()
-
-	raw, err := json.Marshal(body)
-	require.NoError(t, err)
-	rendered := string(raw)
-	for _, s := range forbidden {
-		assert.NotContainsf(t, rendered, s, "/ready is unauthenticated; %q must not reach its body", s)
+// wantStatusOnlyBody is the exact body /ready serves for a status code. Handler tests assert
+// the whole map against it rather than probing key by key, so a key that comes back — a kind,
+// a counter, an error text — fails wherever it was added.
+func wantStatusOnlyBody(code int) map[string]any {
+	if code == http.StatusOK {
+		return readyBodyMap
 	}
+	return notReadyBodyMap
 }
 
-// assertNoCacheCoordinates applies the whole-body lens above to the Redis coordinates and the
-// raw probe text the cache probe's error carries.
-// assertCacheUnhealthyButReady pins the non-critical shape: the outage is reported in the
-// body — `cache` and `cache_stats.status` both unhealthy — while the status stays ready, no
-// error key is rendered, and no Redis coordinates leak.
-func assertCacheUnhealthyButReady(t *testing.T, body map[string]any) {
-	t.Helper()
-	assert.Equal(t, readyStatus, body[statusKey])
-	assert.Equal(t, unhealthyStatus, body[componentCache])
-	cacheStats, ok := body["cache_stats"].(map[string]any)
-	require.True(t, ok, "cache_stats must be present in the ready body")
-	assert.Equal(t, unhealthyStatus, cacheStats[statusKey])
-	assert.NotContains(t, body, errorKey)
-	assertNoCacheCoordinates(t, body)
-}
-
-func assertNoCacheCoordinates(t *testing.T, body map[string]any) {
+// readyComponents re-judges every registered kind and returns the debug view's entries.
+// Since ADR-120 /ready answers its verdict alone, so a per-kind status — the fact several
+// tests below are actually about — is read here rather than out of the body.
+func (f *testAppFixture) readyComponents(t *testing.T) map[string]componentHealth {
 	t.Helper()
 
-	assertReadyBodyOmits(t, body, redisProbeAddress, localHost, errorRedisDown)
-}
-
-// assertCacheErrorSanitized pins the /ready 503 body for a failing cache: the stable public
-// message, plus the whole-body absence of everything the raw error carried.
-func assertCacheErrorSanitized(t *testing.T, body map[string]any) {
-	t.Helper()
-
-	errMsg, ok := body[errorKey].(string)
-	require.True(t, ok, "the 503 body must carry an error string")
-	assert.Equal(t, cacheUnavailableBody, errMsg)
-	assertNoCacheCoordinates(t, body)
+	return f.app.judge.full(context.Background()).debugComponents()
 }
 
 func (f *testAppFixture) newReadyContext() (server.HandlerContext, *httptest.ResponseRecorder) {
@@ -857,68 +828,15 @@ func wireMessagingManager(t *testing.T, app *App) {
 	app.messagingManager = createTestMessagingManagerWithNotReadyClient(t)
 }
 
-// TestCriticalSlotDescriptionsRenderNoRawError enforces the Prober contract over
-// every kind the app actually wires, rather than kind by kind. SECURITY: readyCheck
-// renders a critical probe's failure into the unauthenticated /ready 503 body, so what
-// matters is the rendered string, not whether the probe remembered to declare one — the
-// assertion drives each probe's status through publicProbeError with an identity-bearing
-// error substituted in. The per-constructor tests pin the probes that exist today; this is
-// the only guard that catches a critical probe added tomorrow.
-func TestCriticalSlotDescriptionsRenderNoRawError(t *testing.T) {
-	cfg := &config.Config{
-		Cache:     config.CacheConfig{Critical: true},
-		Messaging: config.MessagingConfig{Consumers: config.MessagingConsumersConfig{Critical: true}},
-	}
-	require.True(t, cfg.IsCacheCritical(), "the cache probe must be opted into criticality, or this test covers only the database probe")
-	require.True(t, cfg.IsMessagingConsumersCritical(), "the messaging probe must be opted in too, or its arm of this walk is vacuous")
-
-	app := &App{
-		cfg:              cfg,
-		logger:           logger.New("error", false),
-		dbManager:        newRealConnectorDBManager(cfg),
-		messagingManager: createTestMessagingManagerWithNotReadyClient(t),
-		cacheManager:     createTestCacheManager(t),
-	}
-
-	app.installSlots(slotInputs{})
-
-	// The real described set, not a hand-listed one: a kind added to installSlots tomorrow
-	// is covered here the day it lands. The tripwire keeps the claim honest — a describe()
-	// that starts withholding its kind would otherwise shrink this walk silently.
-	kinds := describedKinds(app)
-	require.Len(t, kinds, len(app.slots)-1, "every kind but streams (no manager here) describes itself")
-
-	criticalSeen := 0
-	for _, kind := range kinds {
-		st := slotDescription(t, app, kind).Run(context.Background())
-		if !st.Critical {
-			continue
-		}
-		criticalSeen++
-
-		// The inversion removed "the author forgot to sanitize"; the residual vector is an
-		// override that is itself leaky (a host, a DSN, a tenant key). No framework probe
-		// declares one today. This is meant to break when someone adds a legitimate
-		// override — the break is the prompt to review the string it introduces.
-		assert.Emptyf(t, st.PublicErr,
-			"framework probe %q declares an override; it must be a reviewed fixed string", st.Name)
-
-		st.Err = errors.New(pgconnIdentityError)
-		assert.Equalf(t, st.Name+" unavailable", publicProbeError(&st),
-			"critical probe %q must render its synthesized safe error", st.Name)
-	}
-
-	// Without this the test would pass by iterating nothing the day every probe is made
-	// advisory — the exact change that would also silently retire the contract above.
-	require.GreaterOrEqual(t, criticalSeen, 3, "expected the database, cache and messaging probes to be critical")
-}
-
 func TestReadyCheckScenarios(t *testing.T) {
 	cases := []struct {
 		name           string
 		prepare        func(f *testAppFixture)
 		expectedStatus int
-		assertBody     func(t *testing.T, body map[string]any)
+		// assertComponents reads the per-kind verdicts off the debug view: the status code
+		// is all /ready itself discloses now (ADR-120), so a row whose point is a kind's
+		// status asserts it there. Rows whose point IS the code leave it nil.
+		assertComponents func(t *testing.T, components map[string]componentHealth)
 	}{
 		{
 			name: healthyStatus,
@@ -927,19 +845,14 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.messaging.SetReady(true)
 			},
 			expectedStatus: http.StatusOK,
-			assertBody: func(t *testing.T, body map[string]any) {
-				assert.Equal(t, readyStatus, body[statusKey])
-				assert.Equal(t, healthyStatus, body[componentDatabase])
-				stats, ok := body["database_stats"].(map[string]any)
-				assert.True(t, ok)
-				assert.Contains(t, stats, "active_connections")
-				assert.Equal(t, healthyStatus, body[componentMessaging])
-				msgStats, ok := body["messaging_stats"].(map[string]any)
-				assert.True(t, ok)
-				assert.Contains(t, msgStats, "active_publishers")
-				assert.Equal(t, disabledStatus, body[componentCache])
-				assert.Equal(t, map[string]any{statusKey: disabledStatus}, body["cache_stats"],
-					"every registered kind renders both keys, disabled included")
+			assertComponents: func(t *testing.T, components map[string]componentHealth) {
+				assert.Equal(t, healthyStatus, components[componentDatabase].Status)
+				assert.Contains(t, components[componentDatabase].Details, "active_connections")
+				assert.Equal(t, healthyStatus, components[componentMessaging].Status)
+				assert.Contains(t, components[componentMessaging].Details, "active_publishers")
+				assert.Equal(t, disabledStatus, components[componentCache].Status)
+				assert.Equal(t, map[string]any{statusKey: disabledStatus}, components[componentCache].Details,
+					"every registered kind is judged, disabled included")
 			},
 		},
 		{
@@ -954,28 +867,19 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.messaging.SetReady(true)
 			},
 			expectedStatus: http.StatusOK,
-			assertBody: func(t *testing.T, body map[string]any) {
-				assert.Equal(t, readyStatus, body[statusKey])
-				assert.Equal(t, notConfiguredStatus, body[componentDatabase])
-				dbStats, ok := body["database_stats"].(map[string]any)
-				require.True(t, ok, "an absent database still renders database_stats")
-				assert.Equal(t, notConfiguredStatus, dbStats[statusKey])
-				assert.NotContains(t, body, "error")
+			assertComponents: func(t *testing.T, components map[string]componentHealth) {
+				assert.Equal(t, notConfiguredStatus, components[componentDatabase].Status)
+				assert.Equal(t, notConfiguredStatus, components[componentDatabase].Details[statusKey])
 			},
 		},
 		{
-			// The database probe now sanitizes like the cache one (#879): a driver error
-			// names the user, database and resolved address, and /ready is unauthenticated.
+			// #879: a driver error names the user, database and resolved address, and /ready
+			// is unauthenticated — so the outage shows as a bare 503 and in the log alone.
 			name: "database unhealthy",
 			prepare: func(f *testAppFixture) {
 				f.db.On(methodHealth, mock.Anything).Return(errors.New(errorDBDown))
 			},
 			expectedStatus: http.StatusServiceUnavailable,
-			assertBody: func(t *testing.T, body map[string]any) {
-				assert.Equal(t, "not ready", body[statusKey])
-				assert.Equal(t, "unhealthy", body[componentDatabase])
-				assert.Equal(t, databaseUnavailableBody, body["error"])
-			},
 		},
 		{
 			name: "messaging disabled",
@@ -986,13 +890,10 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusOK,
-			assertBody: func(t *testing.T, body map[string]any) {
-				assert.Equal(t, readyStatus, body[statusKey])
-				assert.Equal(t, healthyStatus, body[componentDatabase])
-				assert.Equal(t, "disabled", body[componentMessaging])
-				msgStats, ok := body["messaging_stats"].(map[string]any)
-				assert.True(t, ok)
-				assert.Equal(t, map[string]any{statusKey: disabledStatus}, msgStats)
+			assertComponents: func(t *testing.T, components map[string]componentHealth) {
+				assert.Equal(t, healthyStatus, components[componentDatabase].Status)
+				assert.Equal(t, disabledStatus, components[componentMessaging].Status)
+				assert.Equal(t, map[string]any{statusKey: disabledStatus}, components[componentMessaging].Details)
 			},
 		},
 		{
@@ -1004,14 +905,10 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusOK,
-			assertBody: func(t *testing.T, body map[string]any) {
-				assert.Equal(t, readyStatus, body[statusKey])
-				assert.Equal(t, healthyStatus, body[componentCache])
-				cacheStats, ok := body["cache_stats"].(map[string]any)
-				require.True(t, ok, "cache_stats must be present in the ready body")
-				assert.Equal(t, healthyStatus, cacheStats[statusKey])
-				assert.Contains(t, cacheStats, "active_caches")
-				assert.Contains(t, cacheStats, "total_created")
+			assertComponents: func(t *testing.T, components map[string]componentHealth) {
+				assert.Equal(t, healthyStatus, components[componentCache].Status)
+				assert.Contains(t, components[componentCache].Details, statsActiveCachesKey)
+				assert.Contains(t, components[componentCache].Details, statsTotalCreatedKey)
 			},
 		},
 		{
@@ -1029,7 +926,10 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusOK,
-			assertBody:     assertCacheUnhealthyButReady,
+			assertComponents: func(t *testing.T, components map[string]componentHealth) {
+				assert.Equal(t, unhealthyStatus, components[componentCache].Status,
+					"the outage shows on the debug view; the verdict stays ready")
+			},
 		},
 		{
 			// #860: an unhealthy cache used to be invisible on /ready. Cold pool — the
@@ -1045,7 +945,10 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusOK,
-			assertBody:     assertCacheUnhealthyButReady,
+			assertComponents: func(t *testing.T, components map[string]componentHealth) {
+				assert.Equal(t, unhealthyStatus, components[componentCache].Status,
+					"the outage shows on the debug view; the verdict stays ready")
+			},
 		},
 		{
 			// #860: a pod that opts in with `critical: true` and boots with Redis unreachable
@@ -1063,10 +966,10 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusServiceUnavailable,
-			assertBody: func(t *testing.T, body map[string]any) {
-				assert.Equal(t, "not ready", body[statusKey])
-				assert.Equal(t, unhealthyStatus, body[componentCache])
-				assertCacheErrorSanitized(t, body)
+			assertComponents: func(t *testing.T, components map[string]componentHealth) {
+				assert.Equal(t, unhealthyStatus, components[componentCache].Status)
+				assert.Contains(t, components[componentCache].Error, redisProbeAddress,
+					"the access-controlled view keeps the diagnostic the 503 body drops")
 			},
 		},
 		{
@@ -1080,7 +983,10 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusOK,
-			assertBody:     assertCacheUnhealthyButReady,
+			assertComponents: func(t *testing.T, components map[string]componentHealth) {
+				assert.Equal(t, unhealthyStatus, components[componentCache].Status,
+					"the outage shows on the debug view; the verdict stays ready")
+			},
 		},
 		{
 			name: "cache_warm_pool_outage_critical",
@@ -1092,10 +998,10 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusServiceUnavailable,
-			assertBody: func(t *testing.T, body map[string]any) {
-				assert.Equal(t, "not ready", body[statusKey])
-				assert.Equal(t, unhealthyStatus, body[componentCache])
-				assertCacheErrorSanitized(t, body)
+			assertComponents: func(t *testing.T, components map[string]componentHealth) {
+				assert.Equal(t, unhealthyStatus, components[componentCache].Status)
+				assert.Contains(t, components[componentCache].Error, redisProbeAddress,
+					"the access-controlled view keeps the diagnostic the 503 body drops")
 			},
 		},
 		{
@@ -1107,12 +1013,9 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusOK,
-			assertBody: func(t *testing.T, body map[string]any) {
-				assert.Equal(t, readyStatus, body[statusKey])
-				assert.Equal(t, disabledStatus, body[componentCache])
-				cacheStats, ok := body["cache_stats"].(map[string]any)
-				require.True(t, ok, "cache_stats must be present in the ready body")
-				assert.Equal(t, map[string]any{statusKey: disabledStatus}, cacheStats)
+			assertComponents: func(t *testing.T, components map[string]componentHealth) {
+				assert.Equal(t, disabledStatus, components[componentCache].Status)
+				assert.Equal(t, map[string]any{statusKey: disabledStatus}, components[componentCache].Details)
 			},
 		},
 		{
@@ -1128,9 +1031,8 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusOK,
-			assertBody: func(t *testing.T, body map[string]any) {
-				assert.Equal(t, readyStatus, body[statusKey])
-				assert.Equal(t, disabledStatus, body[componentMessaging])
+			assertComponents: func(t *testing.T, components map[string]componentHealth) {
+				assert.Equal(t, disabledStatus, components[componentMessaging].Status)
 			},
 		},
 		{
@@ -1144,9 +1046,8 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusOK,
-			assertBody: func(t *testing.T, body map[string]any) {
-				assert.Equal(t, readyStatus, body[statusKey])
-				assert.Equal(t, notConfiguredStatus, body[componentCache])
+			assertComponents: func(t *testing.T, components map[string]componentHealth) {
+				assert.Equal(t, notConfiguredStatus, components[componentCache].Status)
 			},
 		},
 	}
@@ -1158,7 +1059,11 @@ func TestReadyCheckScenarios(t *testing.T) {
 
 			code, body := fixture.readyResponse(t)
 			assert.Equal(t, tc.expectedStatus, code)
-			tc.assertBody(t, body)
+			assert.Equal(t, wantStatusOnlyBody(code), body,
+				"whatever this row wired, /ready answers its verdict and nothing else")
+			if tc.assertComponents != nil {
+				tc.assertComponents(t, fixture.readyComponents(t))
+			}
 
 			fixture.db.AssertExpectations(t)
 		})
@@ -1416,12 +1321,24 @@ func awaitConsumerGaveUp(t *testing.T, manager *messaging.Manager) {
 	}, 5*time.Second, 2*time.Millisecond, "the consumer never reached the give-up threshold")
 }
 
-// assertNoConsumerCoordinates enforces ADR-048 on the unauthenticated body: the probe's
-// fixed identifier reaches it, never the queue name or consumer tag the state carries.
-func assertNoConsumerCoordinates(t *testing.T, body map[string]any) {
+// assertConsumerOutageIsDebugOnly pins where a consumer outage is legible: the 503 body is the
+// bare verdict, none of the topology the supervisor's state carries — the queue, the consumer
+// tag, the event type — appears anywhere in it, and the messaging kind reads unhealthy with the
+// full error on the access-controlled debug view.
+func assertConsumerOutageIsDebugOnly(t *testing.T, f *testAppFixture, body map[string]any) {
 	t.Helper()
 
-	assertReadyBodyOmits(t, body, declaredQueue, declaredConsumer, declaredEventType, errConsumerOutage.Error())
+	assert.Equal(t, notReadyBodyMap, body)
+	raw, err := json.Marshal(body)
+	require.NoError(t, err)
+	for _, coordinate := range []string{declaredQueue, declaredConsumer, declaredEventType} {
+		assert.NotContainsf(t, string(raw), coordinate,
+			"/ready is unauthenticated; %q must not reach its body", coordinate)
+	}
+
+	messagingKind := f.readyComponents(t)[componentMessaging]
+	assert.Equal(t, unhealthyStatus, messagingKind.Status)
+	assert.Contains(t, messagingKind.Error, errConsumerResubscribeExhausted.Error())
 }
 
 // TestReadyTurnsRedOnlyOnceAConsumerHasGivenUpReSubscribing walks the three edges of
@@ -1440,7 +1357,8 @@ func TestReadyTurnsRedOnlyOnceAConsumerHasGivenUpReSubscribing(t *testing.T) {
 
 	code, body := f.readyResponse(t)
 	require.Equal(t, http.StatusOK, code, "a subscribed consumer is ready")
-	require.Equal(t, healthyStatus, body[componentMessaging])
+	require.Equal(t, readyBodyMap, body)
+	require.Equal(t, healthyStatus, f.readyComponents(t)[componentMessaging].Status)
 
 	// Edge 1 — unsubscribed, one attempt short of the threshold. The supervisor is parked
 	// inside the threshold attempt, so the streak cannot advance under the assertion.
@@ -1450,7 +1368,9 @@ func TestReadyTurnsRedOnlyOnceAConsumerHasGivenUpReSubscribing(t *testing.T) {
 
 	code, body = f.readyResponse(t)
 	assert.Equal(t, http.StatusOK, code, "a consumer whose supervisor is still retrying must not fail readiness")
-	assert.Equal(t, healthyStatus, body[componentMessaging], "the intermediate state shows in the stats, not in the verdict")
+	assert.Equal(t, readyBodyMap, body)
+	assert.Equal(t, healthyStatus, f.readyComponents(t)[componentMessaging].Status,
+		"the intermediate state shows in the statistics, not in the verdict")
 
 	// Edge 2 — the parked attempt fails, reaching the threshold.
 	client.releaseParked(t, consumerGiveUpAttempt)
@@ -1460,9 +1380,7 @@ func TestReadyTurnsRedOnlyOnceAConsumerHasGivenUpReSubscribing(t *testing.T) {
 
 	code, body = f.readyResponse(t)
 	require.Equal(t, http.StatusServiceUnavailable, code)
-	assert.Equal(t, unhealthyStatus, body[componentMessaging])
-	assert.Equal(t, componentMessaging+" unavailable", body[errorKey])
-	assertNoConsumerCoordinates(t, body)
+	assertConsumerOutageIsDebugOnly(t, f, body)
 
 	// Edge 3 — the outage lifts and the consumer re-subscribes. Held like the others: the
 	// next attempt is parked BEFORE the outage lifts, so recovery lands on that attempt
@@ -1493,7 +1411,8 @@ func TestReadyIgnoresAGivenUpConsumerWhenTheKnobIsOff(t *testing.T) {
 
 	code, body := f.readyResponse(t)
 	assert.Equal(t, http.StatusOK, code, "the consumer arm is not folded in while the knob is off")
-	assert.Equal(t, healthyStatus, body[componentMessaging])
+	assert.Equal(t, readyBodyMap, body)
+	assert.Equal(t, healthyStatus, f.readyComponents(t)[componentMessaging].Status)
 }
 
 // TestReadyReportsTheConsumerArmBeforeThePublisherArm pins the order of the two arms the
@@ -1534,9 +1453,7 @@ func TestReadyFailsAPerTenantKindWhoseConsumerGaveUp(t *testing.T) {
 	code, body := f.readyResponse(t)
 
 	require.Equal(t, http.StatusServiceUnavailable, code, "a per-tenant consumer that gave up must fail readiness")
-	assert.Equal(t, unhealthyStatus, body[componentMessaging])
-	assert.Equal(t, componentMessaging+" unavailable", body[errorKey])
-	assertNoConsumerCoordinates(t, body)
+	assertConsumerOutageIsDebugOnly(t, f, body)
 }
 
 // TestReadyLeavesAHealthyPerTenantKindPerTenant is the other half: the arm running ahead of the
@@ -1547,7 +1464,9 @@ func TestReadyLeavesAHealthyPerTenantKindPerTenant(t *testing.T) {
 	code, body := f.readyResponse(t)
 
 	require.Equal(t, http.StatusOK, code)
-	assert.Equal(t, perTenantStatus, body[componentMessaging], "an unresolvable control-plane key is per_tenant, not an outage")
+	assert.Equal(t, readyBodyMap, body)
+	assert.Equal(t, perTenantStatus, f.readyComponents(t)[componentMessaging].Status,
+		"an unresolvable control-plane key is per_tenant, not an outage")
 }
 
 // TestConsumerGiveUpAttemptMatchesTheMessagingThreshold pins app's local mirror of messaging's

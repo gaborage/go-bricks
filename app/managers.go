@@ -259,8 +259,8 @@ func messagingClientFactoryOptions(o *messaging.ManagerOptions) MessagingClientF
 // CreateCacheManager creates a cache manager using the resolved factory
 // and appropriate configuration options for the deployment mode.
 //
-// It fails closed: a nil manager registers no cache readiness probe, so /ready reports
-// the cache "disabled" and answers 200 — a service that asked for a cache, got none, and
+// It fails closed: a nil manager leaves the cache kind with nothing to probe, so it is
+// judged "disabled" and /ready answers 200 — a service that asked for a cache, got none, and
 // joined the rotation anyway. Returning the error instead of logging it still matters after
 // WithConfig's config.Validate call (ADR-064): normalizeCache only fills Manager.MaxSize/IdleTTL/CleanupInterval
 // when cache.enabled is true, so a negative value on a disabled cache reaches here unvalidated.

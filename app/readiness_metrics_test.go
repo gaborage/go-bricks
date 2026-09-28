@@ -186,7 +186,7 @@ func TestReadinessStatusGaugeAttributesNameTheKindAndItsCriticality(t *testing.T
 // series no kind owns.
 func TestReadinessStatusGaugeOnlyNamesTheFrameworkKinds(t *testing.T) {
 	store, _, _ := newTestVerdictStore()
-	notStarted := judgeOf(describe(componentDatabase, true, nil, nil, nil))
+	notStarted := judgeOf(describe(componentDatabase, true, nil, nil))
 	notStarted.started = false
 
 	report, blocking, found := notStarted.gate(context.Background())
@@ -199,10 +199,10 @@ func TestReadinessStatusGaugeOnlyNamesTheFrameworkKinds(t *testing.T) {
 		"a result no kind produced has no series")
 
 	started := judgeOf(
-		describe(componentDatabase, true, nil, nil, nil),
-		describe(componentMessaging, false, nil, nil, nil),
-		describe(componentCache, false, errors.New("connection refused"), nil, nil),
-		describe(componentStreams, false, nil, nil, nil),
+		describe(componentDatabase, true, nil, nil),
+		describe(componentMessaging, false, nil, nil),
+		describe(componentCache, false, errors.New("connection refused"), nil),
+		describe(componentStreams, false, nil, nil),
 	)
 	started.full(context.Background()).record(store)
 

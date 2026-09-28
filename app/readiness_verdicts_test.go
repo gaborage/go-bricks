@@ -231,8 +231,8 @@ func TestVerdictStoreDropsAStaleCommit(t *testing.T) {
 func TestConcurrentJudgmentsRecordSafely(t *testing.T) {
 	store, _, _ := newTestVerdictStore()
 	judge := judgeOf(
-		describe(componentDatabase, true, nil, nil, nil),
-		describe(componentCache, false, errors.New("connection refused"), nil, nil),
+		describe(componentDatabase, true, nil, nil),
+		describe(componentCache, false, errors.New("connection refused"), nil),
 	)
 
 	var wg sync.WaitGroup

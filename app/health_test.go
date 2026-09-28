@@ -23,10 +23,19 @@ const (
 	// not the username, the database name, or the resolved internal address.
 	pgconnIdentityError = "failed to connect to `user=app database=payments`: 10.0.0.5:5432 (10.0.0.5): dial error"
 
-	// The strings /ready actually serves. Spelled out here rather than imported from a
-	// production constant so the assertions pin the wire format instead of restating it.
-	databaseUnavailableBody = "database unavailable"
-	cacheUnavailableBody    = "cache unavailable"
+	// The two bodies /ready serves since ADR-120, whatever the probe set and whichever
+	// listener answers. Spelled out here rather than built from the production renderers so
+	// every assertion pins the wire format instead of restating a constant.
+	readyBodyJSON    = `{"status":"ready"}`
+	notReadyBodyJSON = `{"status":"not ready"}`
+)
+
+// readyBodyMap and notReadyBodyMap are those same two bodies decoded, for the handler tests
+// that unmarshal before asserting. Whole-map equality is the assertion throughout: a kind
+// name, a counter or an error text that reappears fails it wherever it is added.
+var (
+	readyBodyMap    = map[string]any{"status": "ready"}
+	notReadyBodyMap = map[string]any{"status": "not ready"}
 )
 
 // Manager fixtures shared by the readiness, lifecycle, app and debug-health tests.
@@ -98,7 +107,7 @@ func createWarmCacheManagerWithOutage(t *testing.T) *cache.CacheManager {
 	manager := warmCacheManager(t, mc)
 
 	// The shape redis.Client.Health actually returns on a live outage — it names the address,
-	// which is what the sanitized /ready body must withhold.
+	// which is why it reaches the log and the access-controlled debug view and never /ready.
 	mc.WithHealthFailure(cache.NewConnectionError("ping", redisProbeAddress, errors.New(errorRedisDown)))
 	return manager
 }

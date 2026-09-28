@@ -28,8 +28,9 @@ var (
 	// reported ready. Fixed text, and unreachable from any kind the framework wires.
 	errProbeHasNoCheck = errors.New("probe has no liveness check")
 	// errConsumerResubscribeExhausted is the liveness error for a messaging kind with a
-	// declared consumer whose supervisor has given up re-subscribing. ADR-048: the text is
-	// a fixed identifier, so no queue name can reach the unauthenticated body through it.
+	// declared consumer whose supervisor has given up re-subscribing. The text names no
+	// queue and no consumer tag, so the log line and the debug view carry the condition
+	// rather than the topology.
 	errConsumerResubscribeExhausted = errors.New("consumer re-subscribe exhausted")
 )
 
@@ -37,8 +38,9 @@ var (
 // component name, whether the kind is critical, how to lease it, how to check it is live,
 // and its statistics. Zero-value fields mean "this kind has no such step".
 //
-// SECURITY: name is interpolated into the unauthenticated /ready body ("<name> unavailable",
-// ADR-048) — keep it a fixed component identifier, never a tenant, host or database name.
+// name reaches no unauthenticated body since ADR-120; keep it a fixed component identifier
+// all the same, for the `component=` log field, the debug view's map key and the readiness
+// gauge's readiness.kind attribute — never a tenant, host or database name.
 type probeDescription struct {
 	name string
 	// critical is decided once, when the description is built (config verdict × absence);
@@ -62,17 +64,13 @@ type probeDescription struct {
 	// judged when that key resolves to nothing (a per-tenant deployment, where judge
 	// short-circuits the lease to per_tenant).
 	live func(ctx context.Context) error
-	// stats snapshots the kind's counters. On every path that takes a lease it is called
-	// while that lease is held, so the entry the probe itself pooled is counted (the
-	// messaging manager publishes active_publishers: 0 beside a healthy verdict otherwise).
-	// A failing lease-independent live check returns before any lease exists, so its
-	// snapshot counts no probe-held entry; the unauthenticated 503 body carries no
-	// statistics at all, so that shows only on the access-controlled debug view.
+	// stats snapshots the kind's counters for the access-controlled debug view, the one
+	// reader left since ADR-120 trimmed the /ready body. On every path that takes a lease it
+	// is called while that lease is held, so the entry the probe itself pooled is counted
+	// (the messaging manager publishes active_publishers: 0 beside a healthy verdict
+	// otherwise). A failing lease-independent live check returns before any lease exists, so
+	// its snapshot counts no probe-held entry.
 	stats func() map[string]any
-	// publicStats allowlists the statistics keys this kind may publish on the
-	// unauthenticated /ready body; every other key stays on the access-controlled debug
-	// view. nil means "status only".
-	publicStats []string
 }
 
 // disabledProbe describes a kind whose manager does not exist.
@@ -164,87 +162,20 @@ func (d probeDescription) snapshot() map[string]any {
 // cold-poll caveat.
 const cacheProbePingTimeout = 500 * time.Millisecond
 
-// The statistics key names hoisted into constants where two or more sites must agree on the
-// spelling: a manager's counters rendered into a map here (convertCacheStatsToMap) and the
-// allowlist that admits it, an allowlist reused across kinds, or — despite a single use in
-// this file — a string value goconst (min-occurrences 3) also finds recurring elsewhere in
-// the package. A key with none of those reasons lives inline in its own allowlist instead.
-// These constants say nothing about the managers themselves: database.DbManager,
-// messaging.Manager, and streams.Manager hardcode their own map keys in their own packages,
-// unreachable from here, so it is TestPublicStatsAllowlistsMatchManagerCounters
-// (readiness_test.go) that pins spelling against them.
+// The cache counter names, hoisted into constants because convertCacheStatsToMap below and
+// the tests that read its output must agree on the spelling. Every other kind's counters are
+// the manager's own map keys, built in database, messaging and streams and never respelled
+// here. Nothing in this package maps them any more: ADR-120 left the debug view as their one
+// reader, and it renders whatever the manager published.
 const (
-	// Shared across kinds.
-	statsErrorsKey         = "errors"
-	statsEvictionsKey      = "evictions"
-	statsRemovalsKey       = "removals"
-	statsIdleCleanupsKey   = "idle_cleanups"
-	statsIdleTTLSecondsKey = "idle_ttl_seconds"
-	// Database: each used once below, kept because "active_connections" and
-	// "max_connections" also recur across this kind's test fixtures and assertions.
-	statsActiveConnectionsKey = "active_connections"
-	statsMaxConnectionsKey    = "max_connections"
-	// Messaging: statsActivePublishersKey is used once below, like its neighbors
-	// "max_publishers" and the four consumer counters (left inlined — none appears anywhere
-	// else in the package), but "active_publishers" also recurs across this kind's test
-	// fixtures and assertions, so goconst requires the symbol.
-	statsActivePublishersKey = "active_publishers"
-	// Cache.
 	statsActiveCachesKey = "active_caches"
 	statsTotalCreatedKey = "total_created"
+	statsEvictionsKey    = "evictions"
+	statsRemovalsKey     = "removals"
+	statsIdleCleanupsKey = "idle_cleanups"
+	statsErrorsKey       = "errors"
 	statsMaxSizeKey      = "max_size"
 	statsIdleTTLKey      = "idle_ttl"
-	// Streams: each used once below, kept as constants because every value here also
-	// recurs elsewhere in the package — a zerolog field name in ModuleRegistry's
-	// declaration-summary log for "consumers", test fixtures and assertions for the rest.
-	// "ready" is not among them: it reuses readyStatus (app.go) at its allowlist site
-	// instead of a redundant twin constant.
-	statsStartedKey             = "started"
-	statsConsumersKey           = "consumers"
-	statsPublishersKey          = "publishers"
-	statsOffsetStoreCountKey    = "offset_store_count"
-	statsOffsetFlushIntervalKey = "offset_flush_interval"
-)
-
-// The per-kind public-stats allowlists: the only statistics keys that may reach the
-// unauthenticated /ready 200 body. An allowlist and not a denylist, so a counter added to a
-// manager tomorrow stays off that body until someone reviews it.
-//
-// SECURITY: two manager keys are deliberately absent. DbManager.Stats()["connections"] holds
-// one entry per live pooled connection, and each entry's "key" is the resourcepool key — the
-// tenant ID in a multi-tenant deployment, the named-database key otherwise — alongside
-// last_used and idle_duration, so polling /ready enumerated which tenants were active and
-// when each was last served. streams.Manager.Stats()["stored_offsets"] is keyed
-// "<stream>/<consumer>" — declared topology that usually names the domain — with live offsets
-// as values, so differencing two polls yields the per-stream message rate. /ready carries no
-// authentication and no IP allowlist, and its throttles are two IP-keyed rate limits
-// (app.rate.limit, koanf default 100 rps; app.rate.ippreguard.threshold, koanf default
-// 2000 rps/IP) that a Go-assembled config leaves at zero entirely (ADR-049) — no barrier to
-// enumeration either way.
-//
-// The allowlists are declared here, beside the kinds they describe, and applied at the
-// render seam (publicProjection, readiness_render.go) rather than in the managers or the
-// probes: the access-controlled <debug.pathprefix>/health-debug renders the same details
-// map unredacted, and operators need both withheld keys there.
-var (
-	databasePublicStats = []string{
-		statsActiveConnectionsKey, statsMaxConnectionsKey, statsIdleTTLSecondsKey, statsErrorsKey,
-		statsRemovalsKey,
-	}
-	messagingPublicStats = []string{
-		statsActivePublishersKey, "max_publishers", "consumer_registries", "declared_consumers",
-		"subscribed_consumers", "consumer_resubscribes", "consumer_max_fail_streak",
-		statsIdleTTLSecondsKey,
-		statsEvictionsKey, statsIdleCleanupsKey, statsErrorsKey,
-	}
-	cachePublicStats = []string{
-		statsActiveCachesKey, statsTotalCreatedKey, statsEvictionsKey, statsIdleCleanupsKey,
-		statsErrorsKey, statsMaxSizeKey, statsIdleTTLKey, statsRemovalsKey,
-	}
-	streamsPublicStats = []string{
-		statsStartedKey, statsConsumersKey, statsPublishersKey, readyStatus,
-		statsOffsetStoreCountKey, statsOffsetFlushIntervalKey,
-	}
 )
 
 // convertCacheStatsToMap renders cache.ManagerStats as the counters map every kind reports.

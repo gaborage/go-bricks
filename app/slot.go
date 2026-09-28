@@ -17,9 +17,10 @@ import (
 // it (database.DbManager, messaging.Manager, cache.CacheManager, streams.Manager) know
 // nothing about it.
 type resourceSlot interface {
-	// name is the kind's fixed component identifier, used in the startup log lines and the
-	// fatal startup error. The /ready body's name is that same identifier: seal stamps it
-	// onto what describe() built — never a tenant, host or database name.
+	// name is the kind's fixed component identifier, used in the startup log lines, the fatal
+	// startup error, the `Readiness check failed` line, the debug view and the readiness
+	// gauge. seal stamps it onto what describe() built — never a tenant, host or database
+	// name.
 	name() string
 
 	// describe builds the kind's probe description, and reports whether the kind renders at
@@ -135,8 +136,9 @@ type sealedReadiness struct {
 	kind        string
 }
 
-// name is the kind's fixed component identifier, shared by the startup log lines and the
-// /ready body — never a tenant, host or database name.
+// name is the kind's fixed component identifier, shared by the startup log lines and every
+// readiness view but the /ready body, which names no kind — never a tenant, host or database
+// name.
 func (s *sealedReadiness) name() string { return s.kind }
 
 // seal stores what the slot's describe built; a kind that renders nothing seals nil. The
@@ -169,9 +171,8 @@ func (s *databaseSlot) describe() (probeDescription, bool) {
 		return disabledProbe(s.kind), true
 	}
 	return probeDescription{
-		critical:    true,
-		perTenant:   s.app.multiTenant(),
-		publicStats: databasePublicStats,
+		critical:  true,
+		perTenant: s.app.multiTenant(),
 		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
 			conn, release, err := m.Get(ctx, "")
 			if err != nil {
@@ -232,9 +233,8 @@ func (s *messagingSlot) describe() (probeDescription, bool) {
 		return disabledProbe(s.kind), true
 	}
 	description := probeDescription{
-		critical:    s.app.cfg.IsMessagingConsumersCritical(),
-		perTenant:   s.app.multiTenant(),
-		publicStats: messagingPublicStats,
+		critical:  s.app.cfg.IsMessagingConsumersCritical(),
+		perTenant: s.app.multiTenant(),
 		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
 			client, release, err := m.Publisher(ctx, "")
 			if err != nil {
@@ -320,10 +320,9 @@ func (s *cacheSlot) describe() (probeDescription, bool) {
 		return disabledProbe(s.kind), true
 	}
 	return probeDescription{
-		critical:    s.app.cfg.IsCacheCritical(),
-		absent:      s.absent,
-		perTenant:   s.app.multiTenant(),
-		publicStats: cachePublicStats,
+		critical:  s.app.cfg.IsCacheCritical(),
+		absent:    s.absent,
+		perTenant: s.app.multiTenant(),
 		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
 			instance, release, err := m.Get(ctx, "")
 			if err != nil {
@@ -381,10 +380,10 @@ type streamsSlot struct {
 }
 
 // describe withholds a description until the manager exists. Sealing a disabled one would
-// add "streams" and "streams_stats" to the /ready body of every service in the fleet, the
-// overwhelming majority of which never declared a stream (ADR-066 rule 5 renders every
-// kind that renders at all). The seal runs after this slot's start, so a service that did
-// declare streams has its manager by then.
+// add a "streams" entry to the debug health view and the readiness report of every service
+// in the fleet, the overwhelming majority of which never declared a stream (ADR-066 rule 5
+// judges every kind that describes itself at all). The seal runs after this slot's start,
+// so a service that did declare streams has its manager by then.
 //
 // Otherwise: NON-critical (the reliable consumers reconnect on their own, so a broker flap
 // must not take the service out of the load balancer), lease-less, live when every consumer
@@ -395,7 +394,6 @@ func (s *streamsSlot) describe() (probeDescription, bool) {
 		return probeDescription{}, false
 	}
 	return probeDescription{
-		publicStats: streamsPublicStats,
 		live: func(context.Context) error {
 			if !m.Ready() {
 				return errStreamsNotOpen

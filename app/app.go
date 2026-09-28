@@ -43,11 +43,10 @@ const (
 	componentMessaging = "messaging"
 	componentCache     = "cache"
 	componentStreams   = "streams"
-	// componentReadiness names readiness itself on a 503 body no kind's name can carry: an
-	// application that never started, or a request canceled while it waited on the shared
-	// judgment.
+	// componentReadiness names readiness itself on the `Readiness check failed` log line of
+	// a failure no kind's name can carry: an application that never started, or a request
+	// canceled while it waited on the shared judgment.
 	componentReadiness = "readiness"
-	errorKey           = "error"
 )
 
 // ErrNoTenantInContext is multitenant.ErrNoTenant under the name app's accessors
