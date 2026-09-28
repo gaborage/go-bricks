@@ -295,6 +295,26 @@ func TestRuntimeGaugesSkipUnreadableStats(t *testing.T) {
 	assert.Len(t, gaugeDataPoints(t, rm, metricConsumerSubscribed), 1, "its readable neighbor still reports")
 }
 
+// TestRuntimeGaugesCarryTheLargestConvertibleCounter pins the uint64 conversion at its exact
+// boundary: MaxInt64 is carryable and must report, one more is not. A guard that rejected MaxInt64
+// too would lose a legitimate reading, and the over-cap neighbor above only proves the far side.
+func TestRuntimeGaugesCarryTheLargestConvertibleCounter(t *testing.T) {
+	mp := registerTestGauges(t, gaugeSources{slots: []resourceSlot{
+		statsSlot(componentMessaging, func() map[string]any {
+			return map[string]any{
+				gaugeConsumerResubscribesKey: uint64(math.MaxInt64),
+				gaugeSubscribedConsumersKey:  uint64(math.MaxInt64) + 1,
+			}
+		}),
+	}})
+
+	rm := mp.Collect(t)
+	points := gaugeDataPoints(t, rm, metricConsumerResubscribes)
+	require.Len(t, points, 1, "a uint64 of exactly MaxInt64 is convertible and must report")
+	assert.Equal(t, int64(math.MaxInt64), points[0].Value)
+	assert.Empty(t, gaugeDataPoints(t, rm, metricConsumerSubscribed), "one past MaxInt64 reports nothing")
+}
+
 // TestRuntimeGaugesReportNothingWithoutSources pins the shape of a deployment that has none of
 // this: no store, messaging unconfigured — which seals a disabled description carrying no
 // statistics — and the native streams lane that never started, which seals no description at
