@@ -32,7 +32,9 @@ default and this one does not.
 - **The manager owns a supervisor.** One goroutine reads every tracked consumer's and publisher's
   status every 5s. The client has no close callback, so polling is the only signal. It starts at the
   end of a successful `Start` when a consumer or publisher came up, and it runs under the consumers'
-  own context.
+  own context. A pass that finds the manager lock held is skipped, not waited for, so a stop whose
+  flush spends its whole budget never leaves the supervisor parked on the lock; the next tick
+  retries.
 - **Loud.** A handle in `StatusClosed` that the manager did not close is reported once at ERROR,
   naming the stream and the consumer, or the stream a publisher targets. The line says the handle
   stays down until the service restarts. Nothing is re-declared.
