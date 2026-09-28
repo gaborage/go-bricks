@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 
@@ -136,10 +135,10 @@ func registerRuntimeGauges(meter metric.Meter, sources gaugeSources) (func() err
 		// rejections are joined into err (sdk/metric/meter.go). This path returns no cleanup, so
 		// a registration left standing would go on observing the slots for the rest of the
 		// process — past Shutdown, which would have nothing to stop it with.
+		// Unregister's own error is dropped: both SDK registrations (unregisterFuncs and
+		// noopRegister) always return nil, and this App only ever holds an SDK or noop provider.
 		if registration != nil {
-			if unregisterErr := registration.Unregister(); unregisterErr != nil {
-				err = errors.Join(err, unregisterErr)
-			}
+			_ = registration.Unregister()
 		}
 		return nil, fmt.Errorf("app: register runtime gauges failed: %w", err)
 	}
