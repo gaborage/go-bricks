@@ -687,6 +687,26 @@ func (c *AMQPClientImpl) armPublishFailure(err error) *retryArm {
 	}
 }
 
+// armConfirmation returns the retry arm for a NACK, or nil for a publish the
+// broker ACKed.
+func (c *AMQPClientImpl) armConfirmation(confirm *amqp.Confirmation) *retryArm {
+	if confirm.Ack {
+		return nil
+	}
+	tag := confirm.DeliveryTag
+	return &retryArm{
+		cause:        ErrPublishNacked,
+		deliveryTag:  &tag,
+		logMsg:       "Message publish not acknowledged, retrying...",
+		metricReason: "nack",
+		spanReason:   "message not acknowledged",
+		// nackBackoff spaces NACK retries — replacing the old zero-delay hot-spin
+		// so a transiently-unroutable publish gets a few spaced attempts without
+		// pinning a core.
+		backoff: c.nackBackoff,
+	}
+}
+
 // publishAttempt sends one already-prepared publish, then waits for its
 // confirmation. It returns (nil, nil) once the broker ACKs, the failed attempt's retryArm when
 // the loop should retry, or a terminal error the caller must return.
@@ -721,7 +741,8 @@ func (c *AMQPClientImpl) publishAttempt(
 		c.pendingPublishes.Delete(key)
 		return nil, c.publishAbort(ctx, options, publishStart, span, errShutdown, lastCause)
 	case confirm := <-confirmCh:
-		if confirm.Ack {
+		arm := c.armConfirmation(&confirm)
+		if arm == nil {
 			// Track elapsed time and increment AMQP counter in context for request tracking.
 			// publishStart (not startTime) excludes the pre-flight readiness wait so a
 			// cold-start publish doesn't misreport that wait as broker latency.
@@ -746,19 +767,7 @@ func (c *AMQPClientImpl) publishAttempt(
 			span.SetStatus(codes.Ok, "")
 			return nil, nil
 		}
-		// NACK received - retry the publish
-		tag := confirm.DeliveryTag
-		return &retryArm{
-			cause:        ErrPublishNacked,
-			deliveryTag:  &tag,
-			logMsg:       "Message publish not acknowledged, retrying...",
-			metricReason: "nack",
-			spanReason:   "message not acknowledged",
-			// nackBackoff spaces NACK retries — replacing the old zero-delay hot-spin
-			// so a transiently-unroutable publish gets a few spaced attempts without
-			// pinning a core.
-			backoff: c.nackBackoff,
-		}, nil
+		return arm, nil
 	case <-time.After(c.connectionTimeout):
 		// Drop this attempt's waiter from pendingPublishes before retrying.
 		// Unlike the NACK path (where the dispatcher already consumed the
@@ -942,14 +951,7 @@ func (c *AMQPClientImpl) publishAttemptGuard(
 func (c *AMQPClientImpl) publishRetryEpilogue(
 	ctx context.Context, options publishOptions, startTime time.Time, span trace.Span, retryCount int, arm *retryArm,
 ) error {
-	event := c.log.Warn()
-	if arm.logCause != nil {
-		event = event.Err(arm.logCause)
-	}
-	if arm.deliveryTag != nil {
-		event = event.Uint64("delivery_tag", *arm.deliveryTag)
-	}
-	event.Int("retry_count", retryCount).Msg(arm.logMsg)
+	c.logRetry(arm, retryCount)
 
 	tracking.RecordPublishRetry(ctx, options.Exchange, options.RoutingKey, arm.metricReason)
 
@@ -981,6 +983,18 @@ func (c *AMQPClientImpl) publishRetryEpilogue(
 	case <-time.After(arm.backoff):
 		return nil
 	}
+}
+
+// logRetry writes the WARN every failed attempt emits.
+func (c *AMQPClientImpl) logRetry(arm *retryArm, retryCount int) {
+	event := c.log.Warn()
+	if arm.logCause != nil {
+		event = event.Err(arm.logCause)
+	}
+	if arm.deliveryTag != nil {
+		event = event.Uint64("delivery_tag", *arm.deliveryTag)
+	}
+	event.Int("retry_count", retryCount).Msg(arm.logMsg)
 }
 
 // recordPublishFailure stamps the shared terminal metrics/span state for a publish that is
@@ -1425,8 +1439,9 @@ type confirmKey struct {
 // changeChannel updates the channel, rotates the generation, drains any
 // pending publishes from the previous incarnation (synthetic NACK so their
 // waiters retry on the new channel instead of hanging on a tag the new
-// generation will never emit), and starts a fresh dispatcher pinned to the
-// new generation. Acquires publishSerial unconditionally — this is the
+// generation will never emit), registers the new channel's confirm and return
+// listeners, and starts a fresh dispatcher pinned to the new generation.
+// Acquires publishSerial unconditionally — this is the
 // reconnect path, with no caller deadline — so it is mutually exclusive with
 // in-flight publish-handshake critical sections.
 func (c *AMQPClientImpl) changeChannel(channel amqpChannel) {
@@ -1449,14 +1464,18 @@ func (c *AMQPClientImpl) changeChannel(channel amqpChannel) {
 	// goroutine drains it; the broker will block PublishWithContext if this
 	// fills up, providing natural backpressure.
 	c.notifyConfirm = make(chan amqp.Confirmation, defaultConfirmBufferSize)
+	// Sized like the confirm buffer, since amqp091's reader waits up to 5s for
+	// a listener to take each return.
+	returns := make(chan amqp.Return, defaultConfirmBufferSize)
 	channel.NotifyClose(c.notifyChanClose)
 	channel.NotifyPublish(c.notifyConfirm)
+	channel.NotifyReturn(returns)
 
 	// Start the dispatcher for this channel incarnation, pinned to newGen
 	// so late confirms from a previous channel (read by the previous
 	// dispatcher, which is still running until its source channel closes)
 	// route only to entries of THAT generation — never to ours.
-	go c.dispatchConfirms(c.notifyConfirm, newGen)
+	go c.dispatchConfirms(c.notifyConfirm, returns, newGen)
 }
 
 // drainPendingPublishesWithNack signals every pending publish from the given
@@ -1493,33 +1512,46 @@ func (c *AMQPClientImpl) drainPendingPublishesWithNack(gen uint64) {
 // channel), looked up under the previous generation, and never touch entries
 // from the new generation even though the tags collide.
 //
+// It takes each return off returns as it arrives, so amqp091's reader never
+// waits on the listener.
+//
 // Exits when src is closed (channel teardown) OR when c.done is closed (full
 // client shutdown). Unmatched confirmations are silently dropped — they happen
 // when a publish errored out before registering or when the publisher already
 // drained via NACK after channel reinit.
-func (c *AMQPClientImpl) dispatchConfirms(src <-chan amqp.Confirmation, gen uint64) {
+func (c *AMQPClientImpl) dispatchConfirms(src <-chan amqp.Confirmation, returns <-chan amqp.Return, gen uint64) {
 	for {
 		select {
 		case <-c.done:
 			return
+		case _, ok := <-returns:
+			if !ok {
+				returns = nil
+			}
 		case confirm, ok := <-src:
 			if !ok {
 				return // channel closed by broker / channel teardown
 			}
-			v, ok := c.pendingPublishes.LoadAndDelete(confirmKey{generation: gen, tag: confirm.DeliveryTag})
-			if !ok {
-				continue
-			}
-			ch, ok := v.(chan amqp.Confirmation)
-			if !ok {
-				continue
-			}
-			// Non-blocking send: publisher may have abandoned via ctx.Done.
-			select {
-			case ch <- confirm:
-			default:
-			}
+			c.routeConfirm(gen, confirm)
 		}
+	}
+}
+
+// routeConfirm hands one confirmation to the publisher registered for its
+// (generation, DeliveryTag).
+func (c *AMQPClientImpl) routeConfirm(gen uint64, confirm amqp.Confirmation) {
+	v, ok := c.pendingPublishes.LoadAndDelete(confirmKey{generation: gen, tag: confirm.DeliveryTag})
+	if !ok {
+		return
+	}
+	ch, ok := v.(chan amqp.Confirmation)
+	if !ok {
+		return
+	}
+	// Non-blocking send: publisher may have abandoned via ctx.Done.
+	select {
+	case ch <- confirm:
+	default:
 	}
 }
 

@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -64,6 +65,13 @@ type fakeChannel struct {
 	closeErr        error
 	notifyCloseCh   chan *amqp.Error
 	notifyConfirmCh chan amqp.Confirmation
+	notifyReturnCh  chan amqp.Return
+	// unroutableRemaining answers that many successful Mandatory publishes with
+	// basic.return then basic.ack for the same tag, as a broker does.
+	unroutableRemaining int
+	// autoAck acks every other successful publish from inside the fake, so the
+	// external ack helpers must not also ack it.
+	autoAck bool
 	// publishings records every amqp.Publishing the client handed over, in
 	// attempt order, so a retry test can compare one attempt against the next
 	// instead of only seeing the last one. Read through publishedMessages or
@@ -145,6 +153,7 @@ func (f *fakeChannel) PublishWithContext(ctx context.Context, exchange, key stri
 	var tag uint64
 	if err == nil {
 		tag = atomic.AddUint64(&f.nextDeliveryTag, 1)
+		f.answerLocked(&msg, exchange, key, mandatory, tag)
 	}
 
 	// Signal that a publish attempt occurred (non-blocking)
@@ -162,6 +171,38 @@ func (f *fakeChannel) PublishWithContext(ctx context.Context, exchange, key stri
 	}
 	f.mu.Unlock()
 	return err
+}
+
+// answerLocked plays the broker's replies to a publish that reached it. Callers
+// hold f.mu.
+func (f *fakeChannel) answerLocked(msg *amqp.Publishing, exchange, key string, mandatory bool, tag uint64) {
+	ack := amqp.Confirmation{DeliveryTag: tag, Ack: true}
+	if mandatory && f.unroutableRemaining > 0 {
+		f.unroutableRemaining--
+		if f.notifyReturnCh != nil {
+			f.notifyReturnCh <- amqp.Return{
+				ReplyCode:  amqp.NoRoute,
+				ReplyText:  "NO_ROUTE",
+				Exchange:   exchange,
+				RoutingKey: key,
+				MessageId:  msg.MessageId,
+				Body:       msg.Body,
+			}
+		}
+		f.notifyConfirmCh <- ack
+		return
+	}
+	if f.autoAck {
+		f.notifyConfirmCh <- ack
+	}
+}
+
+// returnListener is the channel the client registered with NotifyReturn, or
+// nil when it registered none.
+func (f *fakeChannel) returnListener() chan amqp.Return {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.notifyReturnCh
 }
 
 // publishedMessages returns every publishing the client sent, in attempt order.
@@ -238,6 +279,14 @@ func (f *fakeChannel) NotifyPublish(confirm chan amqp.Confirmation) chan amqp.Co
 	f.notifyConfirmCh = confirm
 	return confirm
 }
+
+func (f *fakeChannel) NotifyReturn(c chan amqp.Return) chan amqp.Return {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.notifyReturnCh = c
+	return c
+}
+
 func (f *fakeChannel) Close() error { return f.closeErr }
 
 // sendConfirmsAfterEachAttempt arranges for each given Confirmation to be sent
@@ -1655,6 +1704,87 @@ func TestFakeChannelFailedPublishConsumesNoDeliveryTag(t *testing.T) {
 	require.NoError(t, ch.PublishWithContext(context.Background(), "ex", "rk", false, false, amqp.Publishing{}))
 	assert.Equal(t, uint64(1), atomic.LoadUint64(&ch.nextDeliveryTag), "the first publish to land takes tag 1")
 	assert.Equal(t, uint64(3), atomic.LoadUint64(&ch.publishAttempts), "every attempt counts, landed or not")
+}
+
+// TestFakeChannelAnswersAnUnroutableMandatoryPublishWithReturnThenAck pins the
+// broker behavior the return tests rely on: only a mandatory publish is
+// returned, the return and the ack name the same publish, and the count runs out.
+func TestFakeChannelAnswersAnUnroutableMandatoryPublishWithReturnThenAck(t *testing.T) {
+	ch := &fakeChannel{unroutableRemaining: 1, autoAck: true}
+	returns := ch.NotifyReturn(make(chan amqp.Return, 4))
+	confirms := ch.NotifyPublish(make(chan amqp.Confirmation, 4))
+	msg := amqp.Publishing{MessageId: "m-1", Body: []byte(testMessageBody)}
+
+	require.NoError(t, ch.PublishWithContext(t.Context(), "ex", "rk", false, false, msg))
+	require.Empty(t, returns, "a non-mandatory publish is never returned")
+	assert.Equal(t, amqp.Confirmation{DeliveryTag: 1, Ack: true}, <-confirms)
+
+	require.NoError(t, ch.PublishWithContext(t.Context(), "ex", "rk", true, false, msg))
+	require.Len(t, returns, 1)
+	ret := <-returns
+	assert.Equal(t, uint16(amqp.NoRoute), ret.ReplyCode)
+	assert.Equal(t, "ex", ret.Exchange)
+	assert.Equal(t, "rk", ret.RoutingKey)
+	assert.Equal(t, "m-1", ret.MessageId)
+	assert.Equal(t, amqp.Confirmation{DeliveryTag: 2, Ack: true}, <-confirms, "a returned publish is still acked")
+
+	require.NoError(t, ch.PublishWithContext(t.Context(), "ex", "rk", true, false, msg))
+	assert.Empty(t, returns, "the count ran out")
+	assert.Equal(t, amqp.Confirmation{DeliveryTag: 3, Ack: true}, <-confirms)
+}
+
+func TestChangeChannelRegistersAReturnListenerPerGeneration(t *testing.T) {
+	ch1 := &fakeChannel{}
+	c := newClientWithFakeChannel(t, ch1)
+	require.NotNil(t, ch1.returnListener(), "the first generation must listen for returns")
+
+	ch2 := &fakeChannel{}
+	c.changeChannel(ch2)
+	require.NotNil(t, ch2.returnListener(), "every new generation must listen for returns")
+	assert.NotEqual(t, ch1.returnListener(), ch2.returnListener(), "each generation gets its own listener")
+}
+
+// TestDispatchConfirmsTakesEveryReturn requires the dispatcher to keep the return
+// listener empty: amqp091's reader waits up to 5s on each return a listener has
+// not taken.
+func TestDispatchConfirmsTakesEveryReturn(t *testing.T) {
+	ch := &fakeChannel{}
+	newClientWithFakeChannel(t, ch)
+	returns := ch.returnListener()
+	require.NotNil(t, returns, "the client must listen for returns")
+
+	returns <- amqp.Return{ReplyCode: amqp.NoRoute, MessageId: "m-1"}
+	returns <- amqp.Return{ReplyCode: amqp.NoRoute, MessageId: "m-2"}
+	awaitDrained(t, returns)
+}
+
+// awaitDrained waits until the dispatcher has taken everything buffered on ch.
+func awaitDrained[T any](t *testing.T, ch chan T) {
+	t.Helper()
+	require.Eventually(t, func() bool { return len(ch) == 0 }, 2*time.Second, time.Millisecond)
+}
+
+// TestDispatchConfirmsStopsReadingAClosedReturnListener requires the dispatcher to
+// park once amqp091 closes the return listener, and to keep taking confirmations.
+// A loop still reading the closed listener never parks, so the goroutine dump
+// tells the two apart.
+func TestDispatchConfirmsStopsReadingAClosedReturnListener(t *testing.T) {
+	c := &AMQPClientImpl{done: make(chan bool)}
+	t.Cleanup(func() { close(c.done) })
+	confirms, returns := make(chan amqp.Confirmation), make(chan amqp.Return)
+	go c.dispatchConfirms(confirms, returns, 1)
+
+	close(returns)
+	// The dispatcher is the one goroutine this test function started.
+	dispatcher := "created by " + reflect.TypeFor[AMQPClientImpl]().PkgPath() + "." + t.Name()
+	require.Eventually(t, func() bool { return testutil.ParkedInSelect(dispatcher) == 1 }, 2*time.Second, time.Millisecond,
+		"the dispatcher must stop reading a closed return listener")
+
+	select {
+	case confirms <- amqp.Confirmation{DeliveryTag: 1, Ack: true}:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the dispatcher must keep taking confirmations once the return listener closes")
+	}
 }
 
 // TestPublishBytesMultipleRetriesBeforeSuccess proves one transient publish
