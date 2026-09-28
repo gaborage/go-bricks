@@ -1305,7 +1305,9 @@ func (c *client) buildRequest(ctx context.Context, method string, req *Request) 
 	c.applyHeaders(httpReq, req)
 	c.applyAuth(httpReq, req)
 	if c.bearer != nil {
-		c.bearer.apply(httpReq)
+		if err := c.bearer.apply(ctx, httpReq); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := c.runRequestInterceptors(ctx, httpReq); err != nil {

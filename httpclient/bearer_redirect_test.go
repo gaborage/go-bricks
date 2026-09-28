@@ -35,7 +35,7 @@ func TestBearerTokenFileRefusesRedirectDowngradeWithoutRetry(t *testing.T) {
 	c, err := NewBuilder(quietLogger()).
 		WithHTTPClient(secure.Client()).
 		WithRetries(2, time.Millisecond).
-		WithBearerTokenFile(path).
+		WithBearerTokenFile(path, BearerTokenFileOptions{}).
 		Build()
 	require.NoError(t, err)
 
@@ -67,7 +67,7 @@ func TestBearerTokenFileFollowsSameSchemeRedirect(t *testing.T) {
 	}))
 	t.Cleanup(secure.Close)
 
-	c, err := NewBuilder(quietLogger()).WithHTTPClient(secure.Client()).WithBearerTokenFile(path).Build()
+	c, err := NewBuilder(quietLogger()).WithHTTPClient(secure.Client()).WithBearerTokenFile(path, BearerTokenFileOptions{}).Build()
 	require.NoError(t, err)
 
 	resp, err := c.Get(context.Background(), &Request{URL: secure.URL + "/start"})
@@ -83,7 +83,7 @@ func TestBearerTokenFileKeepsCallerRedirectPolicy(t *testing.T) {
 	custom := secure.Client()
 	custom.CheckRedirect = func(*nethttp.Request, []*nethttp.Request) error { return nil }
 
-	c, err := NewBuilder(quietLogger()).WithHTTPClient(custom).WithBearerTokenFile(path).Build()
+	c, err := NewBuilder(quietLogger()).WithHTTPClient(custom).WithBearerTokenFile(path, BearerTokenFileOptions{}).Build()
 	require.NoError(t, err)
 
 	_, err = c.Get(context.Background(), &Request{URL: secure.URL})
@@ -101,7 +101,7 @@ func TestBearerTokenFileCapsRedirectsAtTen(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c, err := NewBuilder(quietLogger()).WithBearerTokenFile(path).Build()
+	c, err := NewBuilder(quietLogger()).WithBearerTokenFile(path, BearerTokenFileOptions{}).Build()
 	require.NoError(t, err)
 
 	_, err = c.Get(context.Background(), &Request{URL: srv.URL + "/1"})

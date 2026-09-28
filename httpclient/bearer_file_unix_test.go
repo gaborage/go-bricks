@@ -20,7 +20,7 @@ func TestBuildBearerTokenFileRejectsFIFOWithoutBlocking(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := NewBuilder(quietLogger()).WithBearerTokenFile(path).Build()
+		_, err := NewBuilder(quietLogger()).WithBearerTokenFile(path, BearerTokenFileOptions{}).Build()
 		done <- err
 	}()
 
