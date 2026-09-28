@@ -352,22 +352,33 @@ func startConsumers(ctx context.Context, decls []*consumerDeclaration, start fun
 	return nil
 }
 
-// startConsumer starts one consumer for a declaration, on the client API its kind
-// requires. env is the caller's snapshot of m.env, taken under m.mu.
+// startConsumer starts one consumer for a declaration. env is the caller's
+// snapshot of m.env, taken under m.mu.
 func (m *Manager) startConsumer(ctx context.Context, env environment, decl *consumerDeclaration) error {
-	if decl.Super {
-		return m.startSuperStreamConsumer(ctx, env, decl)
-	}
-	return m.startStreamConsumer(ctx, env, decl)
-}
-
-// startStreamConsumer starts one reliable consumer on a plain stream.
-func (m *Manager) startStreamConsumer(ctx context.Context, env environment, decl *consumerDeclaration) error {
 	runner := m.newRunner(ctx, decl)
 	if err := m.loadHeld(ctx, runner); err != nil {
 		return err
 	}
+	handle, storerFor, err := m.openConsumer(env, decl, runner)
+	if err != nil {
+		return err
+	}
+	m.trackConsumer(decl, handle, runner, storerFor)
+	return nil
+}
 
+// openConsumer attaches one client consumer to runner, on the client API its
+// kind requires, and returns the flush target of each stream it reads, apart from
+// tracking it, so that a consumer can be reopened on the runner it already has.
+func (m *Manager) openConsumer(env environment, decl *consumerDeclaration, runner *consumerRunner) (consumerHandle, func(string) offsetStorer, error) {
+	if decl.Super {
+		return m.openSuperStreamConsumer(env, decl, runner)
+	}
+	return m.openStreamConsumer(env, decl, runner)
+}
+
+// openStreamConsumer attaches one reliable consumer to a plain stream.
+func (m *Manager) openStreamConsumer(env environment, decl *consumerDeclaration, runner *consumerRunner) (consumerHandle, func(string) offsetStorer, error) {
 	opts := stream.NewConsumerOptions().
 		SetConsumerName(decl.Name).
 		SetOffset(m.resolveOffset(env, decl.Name, decl.Stream, decl.Start, runner.offsets))
@@ -390,9 +401,9 @@ func (m *Manager) startStreamConsumer(ctx context.Context, env environment, decl
 			}))
 	}
 
-	handle, err := env.NewConsumer(decl.Stream, opts, runner.deliver)
+	handle, err := env.NewConsumer(decl.Stream, opts, runner.deliverer())
 	if err != nil {
-		return fmt.Errorf("failed to start consumer %q on stream %q: %w", decl.Name, decl.Stream, err)
+		return nil, nil, fmt.Errorf("failed to start consumer %q on stream %q: %w", decl.Name, decl.Stream, err)
 	}
 
 	// One stream, so one flush target: the reliable consumer itself. The assertion
@@ -400,25 +411,19 @@ func (m *Manager) startStreamConsumer(ctx context.Context, env environment, decl
 	// handle has no StoreCustomOffset at all — and a handle that is not a storer
 	// commits nothing rather than panicking (errNoOffsetStorer).
 	storer, _ := handle.(offsetStorer)
-	m.trackConsumer(decl, handle, runner, func(string) offsetStorer { return storer })
-	return nil
+	return handle, func(string) offsetStorer { return storer }, nil
 }
 
-// startSuperStreamConsumer starts one reliable consumer across every partition of
-// a super stream. env is the caller's snapshot of m.env, taken under m.mu.
-func (m *Manager) startSuperStreamConsumer(ctx context.Context, env environment, decl *consumerDeclaration) error {
-	runner := m.newRunner(ctx, decl)
-	if err := m.loadHeld(ctx, runner); err != nil {
-		return err
-	}
-
+// openSuperStreamConsumer attaches one reliable consumer across every partition
+// of a super stream.
+func (m *Manager) openSuperStreamConsumer(env environment, decl *consumerDeclaration, runner *consumerRunner) (consumerHandle, func(string) offsetStorer, error) {
 	// Always a single active consumer group. The client attaches every partition
 	// with one shared offset specification, so this callback — which the broker
 	// fires once per partition, on promotion — is the only place a per-partition
 	// stored offset can be restored. See ADR-059.
 	//
 	// It closes over the env snapshot rather than m.env, for the reason spelled out
-	// in startStreamConsumer: the client calls this from its own goroutine, outside
+	// in openStreamConsumer: the client calls this from its own goroutine, outside
 	// m.mu, with no recover() in its call path.
 	opts := stream.NewSuperStreamConsumerOptions().
 		SetConsumerName(decl.Name).
@@ -428,19 +433,18 @@ func (m *Manager) startSuperStreamConsumer(ctx context.Context, env environment,
 				return m.resolveOffset(env, decl.Name, partition, decl.Start, runner.offsets)
 			}))
 
-	handle, err := env.NewSuperStreamConsumer(decl.Stream, opts, runner.deliver)
+	handle, err := env.NewSuperStreamConsumer(decl.Stream, opts, runner.deliverer())
 	if err != nil {
-		return fmt.Errorf("failed to start consumer %q on super stream %q: %w", decl.Name, decl.Stream, err)
+		return nil, nil, fmt.Errorf("failed to start consumer %q on super stream %q: %w", decl.Name, decl.Stream, err)
 	}
 
 	// The shutdown flush goes through the Environment port, per partition:
 	// *ha.ReliableSuperStreamConsumer has no StoreCustomOffset, and the partition
 	// consumer that delivered the last message may already have been replaced by a
 	// reconnect.
-	m.trackConsumer(decl, handle, runner, func(partition string) offsetStorer {
+	return handle, func(partition string) offsetStorer {
 		return envOffsetStorer{env: env, consumer: decl.Name, stream: partition}
-	})
-	return nil
+	}, nil
 }
 
 // newRunner builds the delivery callback state of one declared consumer.
@@ -555,7 +559,7 @@ func (m *Manager) constructProducer(env environment, decl *publisherDeclaration)
 // the answer is the key the caller registered with that exact message.
 //
 // It closes over m.log rather than reading a guarded field, for the reason spelled
-// out in startStreamConsumer: the client calls this from the sending goroutine,
+// out in openStreamConsumer: the client calls this from the sending goroutine,
 // outside m.mu, with no recover() in its call path. m.log is immutable after
 // NewManager, and the waiters map takes only its own lock.
 //

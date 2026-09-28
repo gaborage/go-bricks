@@ -162,19 +162,32 @@ type offsetBook struct {
 
 	mu       sync.Mutex
 	trackers map[string]*offsetTracker
+	// generation counts resets. A handle is bound to the one it was opened in.
+	generation uint64
 }
 
 func newOffsetBook(newTracker func() *offsetTracker) *offsetBook {
 	return &offsetBook{newTracker: newTracker, trackers: make(map[string]*offsetTracker)}
 }
 
-// trackerFor returns one stream's tracker, creating it on first use. The client
-// calls this from one delivery goroutine per partition, so the map is guarded even
-// though each tracker only ever serves a single one of them.
-func (b *offsetBook) trackerFor(streamName string) *offsetTracker {
+// currentGeneration is the generation a handle opened now is bound to.
+func (b *offsetBook) currentGeneration() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.generation
+}
+
+// trackerFor returns one stream's tracker, creating it on first use, or nil for a
+// delivery through a handle opened before the last reset. The client calls this
+// from one delivery goroutine per partition, so the map is guarded even though
+// each tracker only ever serves a single one of them.
+func (b *offsetBook) trackerFor(generation uint64, streamName string) *offsetTracker {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	if generation != b.generation {
+		return nil
+	}
 	tracker, ok := b.trackers[streamName]
 	if !ok {
 		tracker = b.newTracker()
@@ -208,6 +221,15 @@ func (b *offsetBook) stored() map[string]int64 {
 	return offsets
 }
 
+// reset forgets every tracked position and starts a new generation, so a
+// replaced handle's later settlements find no tracker and are dropped.
+func (b *offsetBook) reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	clear(b.trackers)
+	b.generation++
+}
+
 func (b *offsetBook) snapshot() map[string]*offsetTracker {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -224,7 +246,7 @@ type consumerRunner struct {
 	retry *delivery.Retry
 	// screen rejects a message the handler could not have accepted, without
 	// running it. Only a typed declaration supplies one, and only the hold's gated
-	// path calls it — see deliver.
+	// path calls it — see deliverFrom.
 	screen func(*Message) error
 
 	// tenantStamps and tenantOptional are handed to the shared delivery pipeline,
@@ -249,9 +271,23 @@ type consumerRunner struct {
 	baseCtx context.Context // NOSONAR S8242: no parameter to pass it through - the vendor callback signature is fixed
 }
 
-// deliver runs the handler for one message, then applies the commit policy.
-// store is the consumer that delivered it, which is what the in-flight commit
-// goes through.
+// deliverySource is the handle one delivery came through: the consumer its
+// in-flight commit goes through, and the offset book generation it was opened in.
+type deliverySource struct {
+	store      offsetStorer
+	generation uint64
+}
+
+// deliverer is the callback a handle opened now delivers through, bound to the
+// offset book's current generation.
+func (r *consumerRunner) deliverer() messageHandler {
+	generation := r.offsets.currentGeneration()
+	return func(streamName string, offset int64, message *amqp.Message, store offsetStorer) {
+		r.deliverFrom(deliverySource{store: store, generation: generation}, streamName, offset, message)
+	}
+}
+
+// deliverFrom runs the handler for one message, then applies the commit policy.
 //
 // The client invokes this sequentially per STREAM — which for a super stream
 // means per partition, where one runner serves every partition and the client
@@ -261,7 +297,7 @@ type consumerRunner struct {
 // claim messages behind it were handled. Anything reachable from here that is not
 // per-stream state must therefore be safe for concurrent use — the offset book
 // is, precisely because it hands each stream its own tracker.
-func (r *consumerRunner) deliver(streamName string, offset int64, message *amqp.Message, store offsetStorer) {
+func (r *consumerRunner) deliverFrom(src deliverySource, streamName string, offset int64, message *amqp.Message) {
 	msg := &Message{
 		Data:       message.GetData(),
 		Offset:     offset,
@@ -335,10 +371,10 @@ func (r *consumerRunner) deliver(streamName string, offset int64, message *amqp.
 		},
 		Settle: func(res *delivery.Result) {
 			if r.parks(res, tenant) {
-				r.parkFailed(res, streamName, offset, tenant, msg, message, store)
+				r.parkFailed(res, streamName, offset, tenant, msg, message, src)
 				return
 			}
-			r.commitOffset(res, streamName, offset, store)
+			r.commitOffset(res, streamName, offset, src)
 		},
 	})
 }
@@ -380,15 +416,19 @@ func (r *consumerRunner) logOutcome(res *delivery.Result, streamName string, off
 // commitOffset is this lane's settlement: record the outcome against the
 // batching tracker, which commits the batch high-water mark only when every
 // message in it succeeded (ADR-059).
-func (r *consumerRunner) commitOffset(res *delivery.Result, streamName string, offset int64, store offsetStorer) {
-	r.recordSettled(res.Log, streamName, offset, res.Err, store)
+func (r *consumerRunner) commitOffset(res *delivery.Result, streamName string, offset int64, src deliverySource) {
+	r.recordSettled(res.Log, streamName, offset, res.Err, src)
 }
 
 // recordSettled hands one settled delivery to the batching tracker and reports a
 // commit that failed. handleErr nil means the offset may advance — which a parked
 // delivery also earns, since the ledger owns the message once the park lands.
-func (r *consumerRunner) recordSettled(log logger.Logger, streamName string, offset int64, handleErr error, store offsetStorer) {
-	if storeErr := r.offsets.trackerFor(streamName).record(offset, handleErr, store); storeErr != nil {
+func (r *consumerRunner) recordSettled(log logger.Logger, streamName string, offset int64, handleErr error, src deliverySource) {
+	tracker := r.offsets.trackerFor(src.generation, streamName)
+	if tracker == nil {
+		return
+	}
+	if storeErr := tracker.record(offset, handleErr, src.store); storeErr != nil {
 		// The context-bound logger, not r.log: it carries the trace_id and span_id a
 		// real ZeroLogger contributes, exactly as the classic lane's ack/nack failure
 		// lines do.
