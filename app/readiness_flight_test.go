@@ -348,10 +348,11 @@ func TestReadyCheckBoundsTheWaitOnAProbeIgnoringItsContext(t *testing.T) {
 			return nil
 		},
 	})
+	// Started before the deadline's clock, so elapsed never undercounts the wait it bounds.
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(t.Context(), deadline)
 	defer cancel()
 
-	start := time.Now()
 	verdict, err := app.judgeReadiness(ctx)
 	elapsed := time.Since(start)
 
