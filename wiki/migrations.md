@@ -10359,6 +10359,62 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `messaging/registry.go` (`spawnRedeclareObserverLocked`, `redeclareTopologyFrom`,
   `forgetRedeclareSource`)
 
+## E68 · v0.67.0 → v0.68.0 — the probe exemption follows the route the router matched, on GET/HEAD only
+
+- gist: every middleware the framework exempts for the health and ready probes — tenant resolution,
+  the ALB forwarded-client-cert identity, OTel, module global middleware (ADR-036) and the access
+  logger — asked the request URL whether it was looking at a probe, comparing the DECODED
+  `r.URL.Path` against the full probe paths and ignoring the method. The decision now asks the
+  router what it matched (the route template) and requires one of the methods the probes answer,
+  from one predicate the five seats share. Exempting less is the whole point, so the change is
+  fail-closed: a request that used to skip those middlewares now runs them (C68.1, ADR-036
+  amendment).
+
+### [C68.1] the probe exemption is keyed on the matched route and the probe methods · silent-behavior · when: match
+
+- detect: `git grep -nE 'CreateProbeSkipper|SkipperFunc|RegisterGlobalMiddleware'` over your own
+  code finds the callers that can see this. Then read every liveness/readiness/monitor definition
+  that targets the probe paths — Kubernetes `httpGet` probes (always GET, never in the population),
+  an ALB or NLB target-group health check (GET), and anything hand-rolled: a synthetic monitor, a
+  smoke test, a load-balancer check or a `curl` in a deploy script that reaches `<base>/health` or
+  `<base>/ready` with `POST`, `HEAD` excepted, or with a percent-encoded spelling. A monitor using
+  `HEAD` is unaffected: `HEAD` is one of the two methods the probes answer.
+- scope: a request is exempt from the five probe-keyed middlewares only when the route the router
+  matched is the registered health or ready path AND the method is `GET` or `HEAD`. Three shapes
+  that used to be exempt no longer are: a non-`GET`/`HEAD` method on a probe path; a percent-encoded
+  spelling of a probe path (`<base>/%72eady`), which echo's router matches on its escaped form and
+  serves from a module param or wildcard route while `r.URL.Path` decodes onto the probe path; and
+  any request whose `r.URL.Path` a middleware earlier in the chain rewrote onto a probe path. The
+  access logger follows the same predicate, so it also stops dropping an unmatched request whose
+  decoded URL reads as a probe path, and a non-probe method on the probe route — both now appear in
+  the access log. `server.SkipperFunc` and `server.CreateProbeSkipper` move to
+  `server/probe_skip.go` with their signatures unmoved; the constructor now keys on `r.Pattern`
+  (the template echo's router stamps on the request) and falls back to the raw path only when no
+  template was stamped. Unchanged: a `GET`/`HEAD` probe on its registered path is exempt exactly as
+  before, the `server.path.health`/`server.path.ready`/`server.path.base` keys, and
+  `server.probes.port`, whose application-listener stub routes were and remain 404s.
+- gate: match = a probe, monitor or script calls a probe path with a method other than `GET`/`HEAD`,
+  or your code builds a `server.SkipperFunc` that compares `r.URL.Path`, or a global middleware of
+  yours rewrites the request URL.
+  no-match = your probes are the ordinary `GET` (or `HEAD`) on the configured paths and you write no
+  custom skipper — the overwhelmingly common case, where nothing needs doing.
+- apply: point any non-`GET`/`HEAD` caller of a probe path at `GET` (or `HEAD`), because that
+  request now runs the identity chain: under `multitenant` it answers 400 without a tenant header,
+  and under `forwardedclientcert.require` 401 without a client certificate, where it used to answer
+  405. Re-key a custom `server.SkipperFunc` on `r.Pattern`, falling back to
+  `cmp.Or(r.URL.RawPath, r.URL.Path)` — never the decoded `r.URL.Path` alone, which exempts requests
+  that route elsewhere; inside a `server.MiddlewareFunc`, match `c.RouteTemplate()` instead. If a
+  dashboard or alert counts access-log lines for the probe paths, expect the two newly logged shapes.
+- verify: with a `/:id` route registered under the base path and a global middleware that rejects
+  unauthenticated requests, `curl -si '<base>/%72eady'` answers 401 from that middleware where it
+  used to reach the module route, and `curl -si <base>/health` still answers 200. Under
+  `multitenant.enabled`, `curl -si -X POST <base>/health` answers 400 instead of 405.
+- ref: [GHSA-h4jw-4c64-48mh](https://github.com/gaborage/go-bricks/security/advisories/GHSA-h4jw-4c64-48mh) ·
+  [ADR-036](adr_036_global_middleware.md) amendment ·
+  `server/probe_skip.go` (`isProbeRequest`, `isProbeMethod`, `matchesProbePath`,
+  `CreateProbeSkipper`) ·
+  [global_middleware.md](global_middleware.md#public-route-exemptions)
+
 ---
 
 *The sections below are reference material: the two config-key rename lookup tables (linked from atoms C401.1 and C41.7), followed by pre-v0.39 changes retained for consumers upgrading from older releases.*
@@ -10487,50 +10543,3 @@ zone.
 scheduler:
   timezone: "-"   # preserve pre-upgrade host-local behavior
 ```
-
-## E68 · v0.67.0 → v0.68.0 — the probe exemption follows the route the router matched, on GET/HEAD only
-
-- gist: every middleware the framework exempts for the health and ready probes — tenant resolution,
-  the ALB forwarded-client-cert identity, OTel, module global middleware (ADR-036) and the access
-  logger — asked the request URL whether it was looking at a probe, comparing the DECODED
-  `r.URL.Path` against the full probe paths and ignoring the method. The decision now asks the
-  router what it matched (the route template) and requires one of the methods the probes answer,
-  from one predicate the five seats share. Exempting less is the whole point, so the change is
-  fail-closed: a request that used to skip those middlewares now runs them (C68.1, ADR-036
-  amendment).
-
-### [C68.1] the probe exemption is keyed on the matched route and the probe methods · silent-behavior · when: match
-
-- detect: `git grep -nE 'CreateProbeSkipper|SkipperFunc|RegisterGlobalMiddleware'` over your own
-  code finds the callers that can see this. Then read every liveness/readiness/monitor definition
-  that targets the probe paths — Kubernetes `httpGet` probes (always GET, never in the population),
-  an ALB or NLB target-group health check (GET), and anything hand-rolled: a synthetic monitor, a
-  smoke test, a load-balancer check or a `curl` in a deploy script that reaches `<base>/health` or
-  `<base>/ready` with `POST`, `HEAD` excepted, or with a percent-encoded spelling. A monitor using
-  `HEAD` is unaffected: `HEAD` is one of the two methods the probes answer.
-- scope: a request is exempt from the five probe-keyed middlewares only when the route the router
-  matched is the registered health or ready path AND the method is `GET` or `HEAD`. Three shapes
-  that used to be exempt no longer are: a non-`GET`/`HEAD` method on a probe path; a percent-encoded
-  spelling of a probe path (`<base>/%72eady`), which echo's router matches on its escaped form and
-  serves from a module param or wildcard route while `r.URL.Path` decodes onto the probe path; and
-  any request whose `r.URL.Path` a middleware earlier in the chain rewrote onto a probe path. The
-  access logger follows the same predicate, so it also stops dropping an unmatched request whose
-  decoded URL reads as a probe path, and a non-probe method on the probe route — both now appear in
-  the access log. `server.SkipperFunc` and `server.CreateProbeSkipper` move to
-  `server/probe_skip.go` with their signatures unmoved; the constructor now keys on `r.Pattern`
-  (the template echo's router stamps on the request) and falls back to the raw path only when no
-  template was stamped. Unchanged: a `GET`/`HEAD` probe on its registered path is exempt exactly as
-  before, the `server.path.health`/`server.path.ready`/`server.path.base` keys, and
-  `server.probes.port`, whose application-listener stub routes were and remain 404s.
-- gate: match = a probe, monitor or script calls a probe path with a method other than `GET`/`HEAD`,
-  or your code builds a `server.SkipperFunc` that compares `r.URL.Path`, or a global middleware of
-  yours rewrites the request URL.
-  no-match = your probes are the ordinary `GET` (or `HEAD`) on the configured paths and you write no
-  custom skipper — the overwhelmingly common case, where nothing needs doing.
-- apply: point any non-`GET`/`HEAD` caller of a probe path at `GET` (or `HEAD`), because that
-  request now runs the identity chain: under `multitenant` it answers 400 without a tenant header,
-  and under `forwardedclientcert.require` 401 without a client certificate, where it used to answer
-  405. Re-key a custom `server.SkipperFunc` on `r.Pattern`, falling back to
-  `cmp.Or(r.URL.RawPath, r.URL.Path)` — never the decoded `r.URL.Path` alone, which exempts requests
-  that route elsewhere; inside a `server.MiddlewareFunc`, match `c.RouteTemplate()` instead. If a
-  dashboard or alert counts access-log lines for the probe paths, expect the two newly logged shapes.
