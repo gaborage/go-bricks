@@ -22,7 +22,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -388,17 +387,20 @@ func TestBearerTokenFileRetryCarriesTokenRotatedBetweenAttempts(t *testing.T) {
 	assert.Equal(t, []string{"Bearer tok-v1", "Bearer tok-v2"}, got, "the retry must carry the token rotated after the first attempt")
 }
 
-func TestBearerTokenFileConcurrentRefreshReadsOnce(t *testing.T) {
+func TestBearerTokenFileServesLastGoodTokenDuringRefresh(t *testing.T) {
 	const workers = 32
 	path := writeTestFile(t, t.TempDir(), "token", []byte("tok-v1"))
 	srv, seen := authServer(t)
 	clk := newFakeClock()
 
 	var reads atomic.Int32
-	release := make(chan struct{})
+	parked, release := make(chan struct{}), make(chan struct{})
+	releaseReader := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseReader)
 	b := bearerBuilder(quietLogger(), path, BearerTokenFileOptions{RefreshInterval: bearerTestInterval}, clk)
 	b.bearer.readFile = func(p string) ([]byte, error) {
-		if reads.Add(1) > 1 {
+		if reads.Add(1) == 2 {
+			close(parked)
 			<-release
 		}
 		return readBearerTokenFile(p)
@@ -408,112 +410,44 @@ func TestBearerTokenFileConcurrentRefreshReadsOnce(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("tok-v2"), 0o600))
 	clk.advance(bearerTestInterval)
 
-	var wg sync.WaitGroup
-	for range workers {
-		wg.Go(func() {
-			_, getErr := c.Get(context.Background(), &Request{URL: srv.URL})
-			assert.NoError(t, getErr)
-		})
+	refresher := make(chan error, 1)
+	go func() {
+		_, getErr := c.Get(context.Background(), &Request{URL: srv.URL})
+		refresher <- getErr
+	}()
+	select {
+	case <-parked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the refresh never started")
 	}
-	// One worker holds the lock inside the read; every other one must be parked
-	// on it before the read may finish.
-	require.Eventually(t, func() bool {
-		return testutil.ParkedInSelect("httpclient.(*bearerTokenFile).current(") == workers-1
-	}, 5*time.Second, time.Millisecond)
-	close(release)
-	wg.Wait()
 
-	assert.Equal(t, int32(2), reads.Load(), "one read at Build plus exactly one refresh")
+	errs := make(chan error, workers)
+	for range workers {
+		go func() {
+			_, getErr := c.Get(context.Background(), &Request{URL: srv.URL})
+			errs <- getErr
+		}()
+	}
+	timeout := time.After(5 * time.Second)
+	for range workers {
+		select {
+		case getErr := <-errs:
+			require.NoError(t, getErr)
+		case <-timeout:
+			t.Fatal("a request waited on another request's re-read instead of being served the last good token")
+		}
+	}
 	got := seen()
 	require.Len(t, got, workers)
 	for _, h := range got {
-		assert.Equal(t, "Bearer tok-v2", h)
+		assert.Equal(t, "Bearer tok-v1", h)
 	}
-}
 
-const bearerWaiterFrame = "httpclient.(*bearerTokenFile).acquire("
-
-// holdBearerLock builds a client on a token file and takes its refresh lock, as a
-// re-read in flight would; release frees it.
-func holdBearerLock(t *testing.T, b *Builder) (c Client, srvURL string, release func()) {
-	t.Helper()
-	path := writeTestFile(t, t.TempDir(), "token", []byte("tok-v1"))
-	srv, _ := authServer(t)
-	c, err := b.WithBearerTokenFile(path, BearerTokenFileOptions{}).Build()
-	require.NoError(t, err)
-	s := c.(*client).bearer
-	s.lock <- struct{}{}
-	release = sync.OnceFunc(func() { <-s.lock })
-	t.Cleanup(release)
-	return c, srv.URL, release
-}
-
-func TestBearerTokenFileRefreshWaitHonorsRequestContext(t *testing.T) {
-	c, url, _ := holdBearerLock(t, NewBuilder(quietLogger()))
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		_, err := c.Get(ctx, &Request{URL: url})
-		done <- err
-	}()
-	require.Eventually(t, func() bool { return testutil.ParkedInSelect(bearerWaiterFrame) == 1 }, 5*time.Second, time.Millisecond)
-	cancel()
-
-	select {
-	case err := <-done:
-		require.ErrorIs(t, err, context.Canceled)
-		assert.Contains(t, err.Error(), "bearer token file: waiting for the token")
-	case <-time.After(5 * time.Second):
-		t.Fatal("a request waiting on the refresh must give up at its own context")
-	}
-}
-
-func TestBearerTokenFileRefreshWaitIsBoundedByClientTimeout(t *testing.T) {
-	const limit = 50 * time.Millisecond
-	tests := []struct {
-		name    string
-		builder func() *Builder
-	}{
-		{name: "builder_timeout", builder: func() *Builder { return NewBuilder(quietLogger()).WithTimeout(limit) }},
-		{name: "http_client_timeout", builder: func() *Builder {
-			return NewBuilder(quietLogger()).WithTimeout(0).WithHTTPClient(&nethttp.Client{Timeout: limit})
-		}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			c, url, _ := holdBearerLock(t, tt.builder())
-
-			start := time.Now()
-			done := make(chan error, 1)
-			go func() {
-				_, err := c.Get(context.Background(), &Request{URL: url})
-				done <- err
-			}()
-			select {
-			case err := <-done:
-				require.Error(t, err)
-				assert.True(t, IsErrorType(err, TimeoutError), "got %v", err)
-				assert.Contains(t, err.Error(), "timed out waiting for the token")
-				assert.GreaterOrEqual(t, time.Since(start), limit)
-			case <-time.After(5 * time.Second):
-				t.Fatal("the wait for the token must end at the client Timeout")
-			}
-		})
-	}
-}
-
-func TestBearerTokenFileRefreshWaitWithoutTimeoutWaitsForTheLock(t *testing.T) {
-	c, url, release := holdBearerLock(t, NewBuilder(quietLogger()).WithTimeout(0))
-
-	done := make(chan error, 1)
-	go func() {
-		_, err := c.Get(context.Background(), &Request{URL: url})
-		done <- err
-	}()
-	require.Eventually(t, func() bool { return testutil.ParkedInSelect(bearerWaiterFrame) == 1 }, 5*time.Second, time.Millisecond)
-	release()
-	require.NoError(t, <-done)
+	releaseReader()
+	require.NoError(t, <-refresher)
+	mustGet(t, c, srv.URL)
+	assert.Equal(t, int32(2), reads.Load(), "one read at Build plus exactly one refresh")
+	assert.Equal(t, []string{"Bearer tok-v2", "Bearer tok-v2"}, seen()[workers:])
 }
 
 // blockingWarnSink blocks the write of the refresh-failure WARN until released.
@@ -532,9 +466,11 @@ func (w *blockingWarnSink) Write(p []byte) (int, error) {
 
 func TestBearerTokenFileWarnsAfterReleasingTheLock(t *testing.T) {
 	path := writeTestFile(t, t.TempDir(), "token", []byte("tok-v1"))
-	srv, _ := authServer(t)
+	srv, seen := authServer(t)
 	clk := newFakeClock()
 	sink := &blockingWarnSink{entered: make(chan struct{}), release: make(chan struct{})}
+	releaseWarn := sync.OnceFunc(func() { close(sink.release) })
+	t.Cleanup(releaseWarn)
 	log := logger.New("warn", false).WithContext(zerolog.New(sink).WithContext(context.Background()))
 	c, err := bearerBuilder(log, path, BearerTokenFileOptions{RefreshInterval: bearerTestInterval}, clk).Build()
 	require.NoError(t, err)
@@ -552,28 +488,13 @@ func TestBearerTokenFileWarnsAfterReleasingTheLock(t *testing.T) {
 		t.Fatal("the failed refresh never logged")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_, err = c.Get(ctx, &Request{URL: srv.URL})
-	close(sink.release)
-	require.NoError(t, err, "a request must not wait for another request's WARN")
+	// While the WARN is still being written, the next due refresh must be able to take the lock.
+	writeTestFile(t, filepath.Dir(path), "token", []byte("tok-healed"))
+	clk.advance(bearerTestInterval)
+	mustGet(t, c, srv.URL)
+	assert.Equal(t, []string{"Bearer tok-healed"}, seen(), "a WARN written under the lock would leave this request the stale token")
+	releaseWarn()
 	require.NoError(t, <-failed)
-}
-
-func TestBearerTokenFileFreeLockIgnoresDoneContext(t *testing.T) {
-	path := writeTestFile(t, t.TempDir(), "token", []byte("tok-v1"))
-	c, err := NewBuilder(quietLogger()).WithBearerTokenFile(path, BearerTokenFileOptions{}).Build()
-	require.NoError(t, err)
-	s := c.(*client).bearer
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	// select picks among ready cases at random; repeating makes a lost order visible.
-	for range 32 {
-		header, getErr := s.current(ctx)
-		require.NoError(t, getErr, "a free lock must be taken even under a done context")
-		require.Equal(t, "Bearer tok-v1", header)
-	}
 }
 
 func TestBearerTokenFileFailedRefreshKeepsCachedToken(t *testing.T) {

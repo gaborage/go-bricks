@@ -648,7 +648,7 @@ func (b *Builder) Build() (Client, error) {
 		return nil, fmt.Errorf("httpclient: %w: %s", ErrUnsafeTransportComposition, strings.Join(issues, "; "))
 	}
 
-	bearer, err := b.newBearerTokenFile(httpClient.Timeout)
+	bearer, err := b.newBearerTokenFile()
 	if err != nil {
 		return nil, err
 	}
@@ -1305,9 +1305,7 @@ func (c *client) buildRequest(ctx context.Context, method string, req *Request) 
 	c.applyHeaders(httpReq, req)
 	c.applyAuth(httpReq, req)
 	if c.bearer != nil {
-		if err := c.bearer.apply(ctx, httpReq); err != nil {
-			return nil, err
-		}
+		c.bearer.apply(httpReq)
 	}
 
 	if err := c.runRequestInterceptors(ctx, httpReq); err != nil {

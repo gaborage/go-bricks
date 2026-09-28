@@ -732,11 +732,11 @@ if err != nil {
   `DefaultBearerTokenRefreshInterval`, one minute — client-go's period for the same file; a
   negative value fails `Build()`), then the next attempt re-reads the file. Each attempt checks,
   so a retry that lands after the interval lapsed carries a token rotated since the attempt before
-  it; within the interval it resends the cached one. The read runs on the request path under a
-  lock, so concurrent requests at the boundary cause one read, and there is no background
-  goroutine to stop. A request waiting on that read gives up when its context is done, or with a
-  `TimeoutError` once the client `Timeout` passes; the request performing the read cannot, so a
-  stalled filesystem holds that one request. A symlink swap (the kubelet's atomic writer) is
+  it; within the interval it resends the cached one. The read runs on the request path, in the
+  one request that takes a lock, so concurrent requests at the boundary cause one read, and there
+  is no background goroutine to stop. A request that finds a re-read in progress is served the
+  last good token; a stalled read holds only the request performing it. A read stalled past the
+  token's own expiry keeps serving the expired token until it returns. A symlink swap (the kubelet's atomic writer) is
   picked up; so is an in-place write, but a writer that truncates and then writes can be read
   half-way, and a truncated token that is still visible ASCII is then served for an interval, so
   write a temporary file and rename it over the path.
