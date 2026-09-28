@@ -10532,12 +10532,15 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 ### [C69.1] `/ready` answers `{"status":"ready"}` / `{"status":"not ready"}` and nothing else · breaking · when: match
 
 - detect: two greps, because the population straddles the build. Over your Go code and test
-  fixtures, `git grep -nE '(database|messaging|cache|streams)_stats|(database|messaging|cache|streams) unavailable|\[.(time|app|database|messaging|cache|streams).\]' -- '*.go'`
+  fixtures, `git grep -nE '(database|messaging|cache|streams)_stats|(database|messaging|cache|streams) unavailable|\[.(time|app|database|messaging|cache|streams|error).\]' -- '*.go'`
   finds every read of an old body key and of ADR-048's error text — the bracket arm catches the
-  `body["time"]` / `body["cache"]` map-index shape that a key-name search alone misses. Keep the
-  pattern free of `\b`/`\s`/`\w`: `git grep -E` has no PCRE escapes, so a pattern carrying one
-  silently matches nothing and the gate reports "not affected". Then, over everything that probes
-  or scrapes, `git grep -niE '/ready' -- '*.yml' '*.yaml' '*.json' '*.tf' '*.sh' 'Dockerfile*'`
+  `body["time"]` / `body["cache"]` / `body["error"]` map-index shape that a key-name search alone
+  misses, `error` among them because the `503` carried it and no key-name search can isolate a key
+  that generic. That arm is the noisy one: `error` is also the API error envelope's key and a log
+  record's, so an `["error"]` hit joins the population only when the map was decoded from a
+  `/ready` response. Keep the pattern free of `\b`/`\s`/`\w`: `git grep -E` has no PCRE escapes,
+  so a pattern carrying one silently matches nothing and the gate reports "not affected". Then,
+  over everything that probes or scrapes, `git grep -niE '/ready' -- '*.yml' '*.yaml' '*.json' '*.tf' '*.sh' 'Dockerfile*'`
   (add your dashboard and alert-rule sources — they are commonly outside the repository, and this
   atom's population is exactly where they live). A hit is in the population only if it reads the
   BODY: a `readinessProbe`, an ALB health check or any check that reads the status code alone is
