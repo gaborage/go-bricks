@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -321,38 +320,29 @@ func TestAuthMiddlewareRejectsWhenNoTokenConfigured(t *testing.T) {
 	}
 }
 
+// The three accessors every call site here reaches for, all projections of recLogger.linesWith
+// (module_registry_test.go), which owns the one walk over the recorder and its lock.
+
 // loggedEvent returns the first recorded log event whose message contains substr.
 func loggedEvent(rec *recLogger, substr string) (recEvent, bool) {
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	for _, e := range rec.events {
-		if strings.Contains(e.msg, substr) {
-			return e, true
-		}
+	lines := rec.linesWith(substr)
+	if len(lines) == 0 {
+		return recEvent{}, false
 	}
-	return recEvent{}, false
+	return lines[0], true
 }
 
 // loggedMsgContains reports whether rec recorded any log line whose message
 // contains substr.
 func loggedMsgContains(rec *recLogger, substr string) bool {
-	_, ok := loggedEvent(rec, substr)
-	return ok
+	return len(rec.linesWith(substr)) > 0
 }
 
 // loggedCount reports how many log lines rec recorded whose message contains
 // substr — the "exactly once" form of loggedEvent, for call sites that must tell
 // one emission of a line apart from two.
 func loggedCount(rec *recLogger, substr string) int {
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	n := 0
-	for _, e := range rec.events {
-		if strings.Contains(e.msg, substr) {
-			n++
-		}
-	}
-	return n
+	return len(rec.linesWith(substr))
 }
 
 // debugProbe is one request issued against a registered debug group: the peer address and

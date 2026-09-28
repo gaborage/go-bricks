@@ -120,6 +120,12 @@ type App struct {
 	// readyFlight shares one in-flight framework judgment across concurrent /ready
 	// requests on either listener (ADR-120); a RegisterReadyHandler override bypasses it.
 	readyFlight singleflight.Group
+	// verdicts is the last verdict per kind: written by the two judgment entry points from the
+	// report they got, and read by the readiness gauge. The judge itself never touches it.
+	verdicts *verdictStore
+	// unregisterGauges stops the readiness and manager gauge callback; Shutdown calls it
+	// before the slots stop, so no collection lands inside a manager's teardown.
+	unregisterGauges func() error
 }
 
 // multiTenant reports whether this deployment resolves its resources per tenant. Nil-guarded

@@ -58,6 +58,9 @@ func (d *DebugHandlers) handleHealthDebug(c server.HandlerContext) error {
 	start := time.Now()
 
 	report := d.app.judge.full(c.RequestContext())
+	// This view judges every kind, including the ones /ready's gate stops short of, so it is
+	// also the freshest verdict those kinds get (ADR-120).
+	report.record(d.app.verdicts)
 	components := report.debugComponents()
 
 	healthInfo := &healthDebugInfo{

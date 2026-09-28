@@ -10,7 +10,8 @@ import (
 
 // The two readiness views — /ready's verdict and body, and the access-controlled debug
 // detail — are produced here from one probe run and one predicate, so they cannot disagree
-// (ADR-066, rules 2 and 3).
+// (ADR-066, rules 2 and 3). One report feeds a third reader beside them: record hands each
+// judged kind's verdict to the store behind the readiness gauge (ADR-120).
 
 // statsSuffix turns a component name into its statistics key on the /ready 200 body.
 const statsSuffix = "_stats"
@@ -147,6 +148,18 @@ func isReadyEquivalent(status string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// record is the third view of one report, beside readyBody and debugComponents: every judged
+// kind's verdict handed to the store the readiness gauge reads and the non-critical WARN is
+// emitted from. Both judgment entry points call it — the shared /ready flight and the debug
+// view's full() — so recording is a step at the entry point rather than a side effect inside
+// the walk. The gate's short-circuit appends the blocking kind before it returns, so the
+// recorded set is the judged set either way.
+func (r readinessReport) record(s *verdictStore) {
+	for i := range r {
+		s.record(&r[i].status)
 	}
 }
 
