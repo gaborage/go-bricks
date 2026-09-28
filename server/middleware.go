@@ -12,6 +12,7 @@ import (
 	"github.com/labstack/echo/v5/middleware"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.39.0"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -89,6 +90,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 
 				return attrs
 			},
+			SpanStartAttributes: overrideSpanURLPath,
 		}))
 	}
 
@@ -151,6 +153,31 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	if cfg.Server.ResponseTime.Enabled {
 		e.Use(timingEcho())
 	}
+}
+
+// overrideSpanURLPath rewrites the incoming-request span's url.path to the path the ROUTER
+// keyed on — the same value the access log records (routerPath, probe_skip.go). The library
+// fills url.path from r.URL.Path (echo-opentelemetry extrator.go), the DECODED spelling, so a
+// percent-encoded request would otherwise pair a path it never reached with the http.route on
+// that very span.
+//
+// Replaced in place rather than appended. The duplicate url.scheme in MetricAttributes above is
+// safe because the metric path resolves its attributes through attribute.NewSet; a duplicate
+// span-start attribute would instead rest on the trace SDK de-duplicating what it was handed,
+// which is an implementation detail and not a documented guarantee. The library emits the
+// attribute only for a non-empty path, so finding no url.path here means there is nothing to
+// override.
+//
+// A named function, not a closure in SetupMiddlewares: the loop pushes that function past the
+// gocognit ceiling (make lint).
+func overrideSpanURLPath(c *echo.Context, _ *echootel.Values, attrs []attribute.KeyValue) []attribute.KeyValue {
+	for i := range attrs {
+		if attrs[i].Key == semconv.URLPathKey {
+			attrs[i].Value = attribute.StringValue(routerPath(c.Request()))
+			break
+		}
+	}
+	return attrs
 }
 
 // setupProbeMiddlewares registers the probe listener's chain (ADR-120): the application

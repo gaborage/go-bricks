@@ -31,7 +31,7 @@ type LoggerConfig struct {
 // This reduces parameter passing and improves code clarity.
 type requestMetadata struct {
 	Method      string
-	URI         string
+	URLPath     string
 	Route       string
 	RequestID   string
 	TraceID     string
@@ -213,7 +213,7 @@ func logActionSummary(
 		err:        err,
 	})
 
-	event.Msg(createActionMessage(metadata.Method, metadata.URI, latency, status))
+	event.Msg(createActionMessage(metadata.Method, metadata.URLPath, latency, status))
 }
 
 // buildLogEvent populates the given event with all OpenTelemetry action-log fields.
@@ -236,7 +236,7 @@ func buildLogEvent(event logger.LogEvent, params *logEventParams) logger.LogEven
 		Str("http.request.method", params.metadata.Method).
 		Int("http.response.status_code", params.status).
 		Int64("http.server.request.duration", params.latency.Nanoseconds()). // OTel uses nanoseconds
-		Str("url.path", params.metadata.URI).
+		Str("url.path", params.metadata.URLPath).
 		Str("http.route", params.metadata.Route).
 		Str("client.address", params.metadata.ClientAddr).
 		Str("user_agent.original", params.metadata.UserAgent).
@@ -341,8 +341,10 @@ func extractRequestMetadata(c *echo.Context) requestMetadata {
 	}
 
 	return requestMetadata{
-		Method:      c.Request().Method,
-		URI:         c.Request().URL.Path,
+		Method: c.Request().Method,
+		// url.path must name the path the ROUTER keyed on, so it and http.route below describe
+		// the same request (routerPath, probe_skip.go).
+		URLPath:     routerPath(c.Request()),
 		Route:       c.Path(), // Echo route pattern (e.g., /api/users/:id)
 		RequestID:   requestID,
 		TraceID:     getTraceID(c),
