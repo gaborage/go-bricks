@@ -10494,21 +10494,23 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - detect: `git grep -n 'go-bricks/messaging/streams"' -- '*.go'` — only a service that imports the
   native streams lane runs the supervisor.
 - scope: a stream or super stream the broker lost while the service ran is now reported once at
-  ERROR per consumer or publisher on it, naming the stream and the consumer. Nothing is re-declared:
-  the handle stays down and the non-critical `streams` component stays unhealthy until the service
-  restarts, as before, and now also when the client later reports a super-stream handle open again
-  because another of its partitions reconnected. A lost consumer's shutdown offset flush is skipped,
-  with a WARN naming it, since another replica may have re-created the stream under the same name,
-  so the restart replays what it handled since its last commit. Its offsets are otherwise untouched,
-  and a super-stream consumer that lost only some partitions keeps committing on the rest. No
-  exported Go surface and no configuration key changes.
+  ERROR per consumer or publisher on it, naming the stream and the consumer. Nothing is re-declared
+  (opt-in re-creation is tracked as gaborage/go-bricks#1826): the handle stays down and the
+  non-critical `streams` component stays unhealthy until the service restarts, as before, and now
+  also when the client later reports a super-stream handle open again because another of its
+  partitions reconnected. A lost consumer's shutdown offset flush is skipped, with a WARN naming it,
+  since another replica may have re-created the stream under the same name, so the restart replays
+  what it handled since its last commit. Its offsets are otherwise untouched, and a super-stream
+  consumer that lost only some partitions keeps committing on the rest. No exported Go surface and
+  no configuration key changes.
 - gate: match = the service consumes or publishes through `messaging/streams`. no-match = nothing
   runs the supervisor, so nothing moves.
 - apply: move an alert keyed on the stream client's own `won't be reconnected` line to the new
   ERROR, and restart every replica that logs it. The extra replay after that restart is what
   at-least-once delivery already permits, so idempotent handlers need no change.
 - verify: delete a declared stream on a test broker under a running service: one ERROR per consumer
-  and publisher on it within about 30s, and the `streams` component reports unhealthy.
+  and publisher on it within about 30s, and the `streams` component reports unhealthy. A super
+  stream takes longer, since the client retries its partitions one after another, 3–11s each.
 - ref: gaborage/go-bricks#1797 · [ADR-123](adr_123_streams_lost_topology_supervisor.md) ·
   `messaging/streams/supervisor.go` · `messaging/streams/manager.go` ·
   [streams.md](streams.md#a-lost-stream)

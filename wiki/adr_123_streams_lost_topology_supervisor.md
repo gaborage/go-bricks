@@ -62,14 +62,21 @@ default and this one does not.
   that covers every partition, including the ones that kept delivering.
 - Readiness follows the supervisor as well as the client: a super stream that lost one partition
   keeps the component unhealthy while its other partitions deliver.
-- Detection lags the client's own metadata retry (3–11s for a consumer, 6–22s for a producer, which
-  waits once before the retry and again inside it) by up to one 5s interval, at the cost of one
-  goroutine and a status read per handle per interval.
+- For a plain stream, detection lags the client's own metadata retry (3–11s for a consumer,
+  6–22s for a producer, which waits once before the retry and again inside it) by up to one 5s
+  interval. A super stream takes longer. The client retries its lost partitions one after another
+  in a single goroutine, 3–11s each for a consumer or a producer, so the handle settles on closed
+  only after the last partition's retry fails, and the lag grows with the partition count. The
+  cost is one goroutine and a status read per handle per interval.
 
 ## Alternatives considered
 
 - **Re-create a lost stream by default.** Rejected: it silently discards offsets and can skip
   messages, and a deleted stream is sometimes deliberate.
+- **Re-create a lost stream on opt-in.** Deferred to
+  [#1826](https://github.com/gaborage/go-bricks/issues/1826). A draft failed review: the client's
+  super-stream consumer `Close` is unguarded, so a second `Close` crashes, and closing a
+  super-stream consumer while the client retries its partitions races the client.
 - **Call `Start` again.** Rejected: `Start` refuses while an environment is open, and closing and
   redialing would drop every healthy handle to repair one stream.
 - **Make the `streams` component critical on a loss.** Out of scope. The component stays

@@ -666,13 +666,14 @@ The handle stays closed and the `streams` component stays unhealthy, even when
 the client later reports a super-stream handle open again because another of its
 partitions reconnected. Because the component is non-critical, `/ready` stays
 healthy, so alert on the ERROR. Only a
-**restart** re-declares the stream. A replica that restarts does not revive the
-others, so restart every replica that logged it. The supervisor leaves the
-consumer's offsets alone: a super-stream consumer whose client gave up on some
-partitions keeps delivering and committing on the others. Only its **shutdown
-flush is skipped**, with a WARN naming it, because that flush commits by name and
-another replica may have re-created the stream by then. What it handled since its
-last commit replays after the restart.
+**restart** re-declares the stream. Opt-in re-creation is deferred to
+[#1826](https://github.com/gaborage/go-bricks/issues/1826). A replica that
+restarts does not revive the others, so restart every replica that logged it.
+The supervisor leaves the consumer's offsets alone: a super-stream consumer whose
+client gave up on some partitions keeps delivering and committing on the others.
+Only its **shutdown flush is skipped**, with a WARN naming it, because that flush
+commits by name and another replica may have re-created the stream by then. What
+it handled since its last commit replays after the restart.
 
 Once a publisher's producer has closed, a publish to it fails at once: the closed
 producer refuses the send. A publish issued while the client was still retrying
