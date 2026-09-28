@@ -485,18 +485,21 @@ The `/ready` column below is the status code; the probe status beside it is what
 | Complete and reachable | starts | 200 | `healthy` (gauge `1`) |
 | Complete but unreachable | starts | **503** — the probe stays `critical` | `unhealthy` (gauge `0`) |
 | Any identity field, incomplete | **fails** | n/a | n/a |
-| Multi-tenant | starts | 200 | `per_tenant` (no gauge series) |
+| Multi-tenant, `""` resolves nothing | starts | 200 | `per_tenant` (no gauge series) |
+| Multi-tenant, root block resolves under `""` | as the two `Complete` rows above | as above — **503** when unreachable, the probe stays `critical` | `healthy` / `unhealthy` (gauge `1`/`0`) |
 
 Two consequences worth knowing:
 
-- **Multi-tenant readiness carries no database signal.** The probe
-  resolves the fixed `""` key. With static tenants, validation rejects a root block
-  outright, so that key cannot resolve and no tenant database has ever been probed —
-  `per_tenant` states that plainly rather than claiming the service has no database.
-  A multi-tenant deployment that *does* configure a root block (a shared-ledger
-  control plane, `outbox.tenancy: shared`) is still probed and still `critical`.
-  Where the key genuinely does not resolve, nothing about a database gates traffic:
-  no critical probe, no startup gate, and no WARN.
+- **Multi-tenant readiness carries no database signal — unless the `""` key resolves.**
+  The probe resolves the fixed `""` key, and `per_tenant` only relabels a verdict of
+  *not configured*; it never skips the lease. With static tenants, validation rejects a
+  root block outright, so that key cannot resolve and no tenant database has ever been
+  probed — `per_tenant` states that plainly rather than claiming the service has no
+  database. A multi-tenant deployment that *does* configure a root block (a shared-ledger
+  control plane, `outbox.tenancy: shared`) is probed through exactly that key, is still
+  `critical`, and returns `503` while it is unreachable — its readiness is not weaker
+  than a single-tenant one. Only where the key genuinely does not resolve does nothing
+  about a database gate traffic: no critical probe, no startup gate, and no WARN.
 - **A module that genuinely needs a database should say so.** Implement
   `app.DatabaseRequirer`; registration then aborts startup when the database is absent,
   instead of the service going green and serving errors.

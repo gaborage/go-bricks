@@ -820,8 +820,12 @@ tenant. `IsDatabaseConfigured` widens from three fields to every connection-iden
 seven shared ones plus Oracle's two target identifiers (`oracle.service.name`, `oracle.service.sid`) — so a partially delivered config fails startup instead of reading as intentional
 absence; defaulted fields (timezone/pool/query) are excluded so the verdict is stable across
 defaulting. The database probe stays `critical: true`, and multi-tenant deployments report a
-distinct `per_tenant` status — a consequence worth stating plainly is that multi-tenant
-the probe there stays `critical: true` but reports `per_tenant` with a nil error, so it never blocks readiness (a cache-enabled service still has the critical cache probe from ADR-046).
+distinct `per_tenant` status. A consequence worth stating plainly: in a multi-tenant deployment
+the probe still resolves the fixed `""` key and stays `critical: true`, and `per_tenant` only
+relabels a verdict of *not configured* — it never skips the lease. Where that key resolves nothing
+the kind cannot block readiness (a cache-enabled service still has the critical cache probe from
+ADR-046); where a root block does resolve under it, the probe is leased, can fail, and gates with
+a `503` like any other critical kind.
 
 **Key Benefits:** `/ready` returns 200 for a database-free service, which `app/health.go`
 always intended; every static multi-tenant deployment stops returning a permanent 503; a

@@ -353,8 +353,10 @@ last verdict it did produce until `/ready` recovers or `/_sys/health-debug` judg
   `component=cache` and the probe's full error. There is no WARN on this path — the ERROR
   already reports it. This is the only way into readiness
   gating; nothing is derived from the rest of the config.
-- `false` — the same as leaving it unset. Set it explicitly only to state the intent in config
-  review; it emits no WARN.
+- `false` — identical to leaving it unset: `Critical` is a plain `bool`, so both spellings
+  reach `IsCacheCritical` as `false` with no branch between them, and a failing probe still
+  drops the gauge to `0` and still emits the `Readiness component unhealthy` WARN described
+  above. Set it explicitly only to state the intent in config review.
 
 **What the `503` discloses.** Nothing but `{"status":"not ready"}` — no probe error, no
 component name, no counters (ADR-120). That matters here because the connector error names the
