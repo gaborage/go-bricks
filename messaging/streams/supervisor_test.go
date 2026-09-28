@@ -243,6 +243,25 @@ func TestSupervisorExitsOnShutdown(t *testing.T) {
 	}
 }
 
+func TestSupervisorExitsWhileAStopHoldsTheLock(t *testing.T) {
+	m, log := supervisedManager()
+	m.superviseEvery = time.Millisecond
+	startOnFake(t, m, newFakeEnvironment(), oneConsumerDecls())
+	t.Cleanup(func() { _ = m.Close() })
+	// The flush against a broker that is gone spent the whole budget.
+	spent, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	time.Sleep(20 * m.superviseEvery)
+	done := m.stopLocked(spent)
+
+	awaitClosed(t, done, "the supervisor waited for the lock the stop holds")
+	m.awaitSupervisor(spent, done)
+	assert.NotContains(t, log.warnMessages(), msgSupervisorAbandoned)
+}
+
 func TestAwaitSupervisorGivesUpWithTheStopPhase(t *testing.T) {
 	m, log := supervisedManager()
 	m.flushBudget = time.Hour

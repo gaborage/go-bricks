@@ -653,14 +653,17 @@ consume side, through the shared delivery pipeline.
 The client reattaches consumers and publishers after a broker outage by itself.
 It gives up when the stream is gone — deleted by an operator, or lost with
 broker data: it checks the stream's metadata, finds no stream, and closes the
-handle for good. It gives up the same way when that metadata check fails for a
-reason it does not recognize, such as a timeout, although the stream still
-exists. Nothing in the client retries after that.
+handle for good. It gives up the same way when the broker answers that metadata
+check with an error it does not recognize, such as access refused or an internal
+error, although the stream still exists. Nothing in the client retries after that.
 
 The manager's supervisor reads every handle's status every 5s. A handle that
 closed without the manager closing it is reported **once, at ERROR**, naming the
 stream and the consumer (a publisher is named by its stream). An orderly shutdown
-is never reported.
+is never reported. Detection needs the handle to stay closed until the next pass:
+the client retries a super stream's partitions one at a time, so a partition lost
+while another is still queued for retry can pass straight back to reconnecting and
+open, and go unreported.
 
 The handle stays closed and the `streams` component stays unhealthy, even when
 the client later reports a super-stream handle open again because another of its

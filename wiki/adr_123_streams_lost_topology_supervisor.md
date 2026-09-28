@@ -10,9 +10,10 @@ The streams lane declares its topology once, in `Manager.Start`, and `Start` ref
 while an environment is open. The client's HA layer (rabbitmq-stream-go-client v1.8.3, `pkg/ha`)
 reattaches a consumer or producer after a broker outage by itself. It gives up when the stream is
 gone: its retry asks for the stream's metadata, gets `StreamDoesNotExist`, and sets the handle to
-`StatusClosed`, which is final. There is no further retry and no callback. A metadata query that
-fails with an error the retry does not classify, such as a timeout, ends the same way, although the
-stream still exists.
+`StatusClosed`, which is final. There is no further retry and no callback. A metadata query the
+broker answers with an error the retry does not classify, such as access refused or an internal
+error, ends the same way, although the stream still exists. A query that gets no answer, such as
+one that times out, is retried instead.
 
 So a stream deleted by an operator, or lost with broker data, stopped consumption and publishing for
 the life of the process. The only traces were the vendor's unstructured `log.Printf` line and the
@@ -60,14 +61,17 @@ default and this one does not.
 - The one other change is the skipped shutdown flush: what a lost consumer handled since its last
   commit replays after the restart, which at-least-once delivery already permits. For a super stream
   that covers every partition, including the ones that kept delivering.
-- Readiness follows the supervisor as well as the client: a super stream that lost one partition
-  keeps the component unhealthy while its other partitions deliver.
+- Readiness follows the supervisor as well as the client: a super stream found to have lost one
+  partition keeps the component unhealthy while its other partitions deliver.
 - For a plain stream, detection lags the client's own metadata retry (3–11s for a consumer,
   6–22s for a producer, which waits once before the retry and again inside it) by up to one 5s
   interval. A super stream takes longer. The client retries its lost partitions one after another
   in a single goroutine, 3–11s each for a consumer or a producer, so the handle settles on closed
   only after the last partition's retry fails, and the lag grows with the partition count. The
   cost is one goroutine and a status read per handle per interval.
+- Detection needs the handle to stay closed until the next pass. A super-stream partition lost while
+  the client still has another partition queued for retry leaves the handle closed only until that
+  retry starts, so it can pass straight back to reconnecting and open, and the loss goes unreported.
 
 ## Alternatives considered
 

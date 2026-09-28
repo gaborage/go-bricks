@@ -91,8 +91,8 @@ type runningConsumer struct {
 	// runner is this consumer's delivery state. The drain reaches a holding
 	// consumer's held set through it.
 	runner *consumerRunner
-	// decl is the declaration this consumer was started from.
-	decl *consumerDeclaration
+	// super marks a super-stream consumer.
+	super bool
 	// lost marks a consumer the supervisor found lost: reported once, skipped by
 	// the shutdown flush, and never ready again. Guarded by Manager.mu.
 	lost bool
@@ -491,7 +491,7 @@ func (m *Manager) trackConsumer(decl *consumerDeclaration, handle consumerHandle
 		offsets:   runner.offsets,
 		storerFor: storerFor,
 		runner:    runner,
-		decl:      decl,
+		super:     decl.Super,
 	})
 
 	m.log.Info().
@@ -911,12 +911,14 @@ func (m *Manager) closeEnvLocked() error {
 func (m *Manager) Close() error {
 	stopCtx, cancel := m.stopPhase()
 	defer cancel()
-	supervisorDone, err := m.closeLocked(stopCtx)
+	supervisorDone, err := m.stopAndCloseEnv(stopCtx)
 	m.awaitSupervisor(stopCtx, supervisorDone)
 	return err
 }
 
-func (m *Manager) closeLocked(flushCtx context.Context) (supervisorDone <-chan struct{}, err error) {
+// stopAndCloseEnv runs stopLocked and closeEnvLocked under m.mu and hands back
+// what the caller waits on once the lock is released.
+func (m *Manager) stopAndCloseEnv(flushCtx context.Context) (supervisorDone <-chan struct{}, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	supervisorDone = m.stopLocked(flushCtx)

@@ -78,8 +78,15 @@ func (m *Manager) supervise(ctx context.Context, done chan<- struct{}) {
 // reported: stopLocked empties the handle lists under m.mu before it releases the
 // lock. The ctx check keeps a supervisor whose stop stopped waiting for it off the
 // handles of a later Start.
+//
+// A pass that finds m.mu held is skipped rather than waited for: the holder may be
+// a stop whose flush spends the whole budget, which would leave this goroutine
+// parked past awaitSupervisor's wait. A stop leaves nothing to report, and any
+// other holder's skipped pass is retried on the next tick.
 func (m *Manager) superviseOnce(ctx context.Context) {
-	m.mu.Lock()
+	if !m.mu.TryLock() {
+		return
+	}
 	defer m.mu.Unlock()
 
 	if ctx.Err() != nil {
@@ -125,7 +132,7 @@ func (m *Manager) reportLostConsumer(rc *runningConsumer) {
 	m.log.Error().
 		Str(logFieldStream, rc.stream).
 		Str(logFieldConsumer, rc.name).
-		Bool(logFieldPartitioned, rc.decl.Super).
+		Bool(logFieldPartitioned, rc.super).
 		Msg(msgConsumerLost)
 }
 

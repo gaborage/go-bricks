@@ -10494,7 +10494,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - detect: `git grep -n 'go-bricks/messaging/streams"' -- '*.go'` — only a service that imports the
   native streams lane runs the supervisor.
 - scope: a stream or super stream the broker lost while the service ran is now reported once at
-  ERROR per consumer or publisher on it, naming the stream and the consumer. Nothing is re-declared
+  ERROR per consumer or publisher on it, naming the stream and the consumer. A super-stream partition
+  lost while the client still has another partition queued for retry can pass straight back to
+  reconnecting and open, and go unreported. Nothing is re-declared
   (opt-in re-creation is tracked as gaborage/go-bricks#1826): the handle stays down and the
   non-critical `streams` component stays unhealthy until the service restarts, as before, and now
   also when the client later reports a super-stream handle open again because another of its
@@ -10510,7 +10512,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   at-least-once delivery already permits, so idempotent handlers need no change.
 - verify: delete a declared stream on a test broker under a running service: one ERROR per consumer
   and publisher on it within about 30s, and the `streams` component reports unhealthy. A super
-  stream takes longer, since the client retries its partitions one after another, 3–11s each.
+  stream takes longer, since the client retries its partitions one after another, 3–11s each. Delete
+  the whole super stream: a single lost partition can go unreported.
 - ref: gaborage/go-bricks#1797 · [ADR-123](adr_123_streams_lost_topology_supervisor.md) ·
   `messaging/streams/supervisor.go` · `messaging/streams/manager.go` ·
   [streams.md](streams.md#a-lost-stream)
