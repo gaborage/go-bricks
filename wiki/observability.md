@@ -325,7 +325,7 @@ The remaining seven gauges read their manager's in-memory `Stats()` at collectio
 | `messaging.streams.consumers` | Native stream consumers running on this process | `streams_stats.consumers` |
 | `messaging.streams.publishers` | Native stream publishers open on this process | `streams_stats.publishers` |
 
-A group reports nothing while its manager does not exist — messaging unconfigured, or the native streams lane never started — and, as with the verdict gauge, absent means **no series, not a zero**: a reported `0` would read as an idle consumer rather than an absent one. The cache manager's counters already have their own instruments (`cache.manager.*`); `db.client.connection.*` covers the DRIVER's pool, not `DbManager`'s resourcepool, whose counters no instrument reads, and the manager counters that no gauge covers stay on the IP-allowlisted `/_sys/health-debug`, which remains the place for per-component detail and full error text.
+A group reports nothing while its manager does not exist — messaging unconfigured, or the native streams lane never started — and, as with the verdict gauge, absent means **no series, not a zero**: a reported `0` would read as an idle consumer rather than an absent one. The cache manager's counters already have their own instruments (`cache.manager.*`); `db.client.connection.*` covers the DRIVER's pool, not `DbManager`'s resourcepool, whose counters no instrument reads, and the manager counters that no gauge covers stay on the access-controlled `/_sys/health-debug`, which remains the place for per-component detail and full error text.
 
 ## Custom Metrics
 

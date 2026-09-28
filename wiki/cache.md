@@ -315,8 +315,10 @@ under `cache.critical: true`. Where its verdict does reach an operator:
   `disabled`, or before any judgment has run.
 - `data.components.cache` on `/_sys/health-debug` — the status, the full probe error, and the
   manager counters under `details` (the object the `cache_stats` key used to carry, plus a
-  `status` mirror). It needs `debug.enabled: true` plus `debug.allowedips` or
-  `debug.bearertoken`.
+  `status` mirror). It needs `debug.enabled: true` plus at least one of `debug.allowedips` or
+  `debug.bearertoken` — ADR-049 refuses to serve with neither. Each configured control is
+  enforced and they compose, so with both set a request must come from an allowlisted IP
+  AND carry the token.
 - The `Readiness component unhealthy` WARN (non-critical only, rate-floored to once a minute
   per kind, with an INFO `Readiness component recovered` on the way out) and the `Readiness
   check failed` line on every `503` — at ERROR, or at WARN when the caller abandoned the
@@ -365,7 +367,7 @@ authentication. (No tenant identity would have been exposed either way: the prob
 the empty top-level key, so `CacheManager.Get`'s `failed to create cache for key %q` wrap on a
 cold-pool poll renders `key ""`.) The full error reaches
 the application log (`readyCheck` logs it at ERROR with a `component` field on every `503`) and
-the IP-allowlisted debug health endpoint at `<debug.pathprefix>/health-debug` (default
+the access-controlled debug health endpoint at `<debug.pathprefix>/health-debug` (default
 `/_sys/health-debug`, gated on `debug.enabled` and `debug.endpoints.health`), where it renders
 verbatim in `data.components.cache.error`. This is not specific to the cache probe: no kind
 reaches either body, so the `database` and `messaging` `503`s are byte-identical to this one

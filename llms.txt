@@ -2617,7 +2617,7 @@ shows up as the gauge falling to `0` and the WARN `Readiness component unhealthy
 recovered` on the way out; an explicit `false` is the same and emits no WARN at startup. The
 `503` withholds the connector error, which names the Redis host, port and IP, because `/ready`
 is unauthenticated; the full error goes to the `Readiness check failed` log line and the
-IP-allowlisted `/_sys/health-debug`. The probe leases key
+access-controlled `/_sys/health-debug`. The probe leases key
 `""`, so it observes only the top-level `cache.*` connection and never per-tenant caches —
 alert on Redis separately either way.
 
