@@ -1935,6 +1935,25 @@ endpoint instead of an unauthenticated body.
 
 ---
 
+### [ADR-123: The Streams Lane Reports a Stream the Broker Lost](adr_123_streams_lost_topology_supervisor.md)
+
+**Date:** 2026-09-27 | **Status:** Accepted
+
+The streams lane declared its topology once, at startup, and the client's HA layer gives a handle up
+for good (`StatusClosed`, no callback) when its stream no longer exists, so a deleted stream stopped
+consumption and publishing until the process restarted, with only an unstructured vendor log line to
+show for it. A supervisor owned by the manager now polls every handle's status and reports each one
+that closed without the manager closing it, once, at ERROR, naming the stream and the consumer or
+publisher. Nothing is re-declared: the non-critical `streams` component stays unhealthy until a
+restart, and a lost consumer's shutdown flush is skipped, since another replica may have re-created
+its stream under the same name. An orderly shutdown is never reported: the stop path cancels the
+supervisor and empties the handle lists under the manager lock before releasing it, and waits for
+the supervisor to exit within the same flush budget.
+
+**Key Benefits:** a lost stream is a structured, alertable ERROR instead of a silent outage.
+
+---
+
 ### [ADR-124: The Server Keeps the First Registration of a Route and Refuses to Start on a Duplicate](adr_124_server_level_duplicate_route_refusal.md)
 
 **Date:** 2026-09-27 | **Status:** Accepted | **Breaking:** a service built on `server.New` that registers one route twice now keeps the first handler and fails `Start`, where the later handler used to serve; templates differing only in a parameter or wildcard name now conflict under `app` too; `RouteConflict` gains `FirstPath`, so an unkeyed `server.RouteConflict{...}` literal no longer compiles

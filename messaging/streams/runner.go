@@ -29,9 +29,10 @@ const (
 	attrStreamOffset = "messaging.stream.offset"
 	messagingSystem  = "rabbitmq"
 
-	logFieldStream   = "stream"
-	logFieldConsumer = "consumer"
-	logFieldOffset   = "offset"
+	logFieldStream      = "stream"
+	logFieldConsumer    = "consumer"
+	logFieldOffset      = "offset"
+	logFieldPartitioned = "partitioned"
 )
 
 // offsetStorer is the seam the stream client's consumers satisfy
