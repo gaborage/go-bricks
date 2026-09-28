@@ -83,7 +83,7 @@ type bearerTokenFile struct {
 	readFile func(string) ([]byte, error)
 	logger   logger.Logger
 
-	mu     sync.Mutex             // only ever tried; guards next
+	mu     sync.Mutex             // guards next; a request only tries it
 	header atomic.Pointer[string] // "Bearer <token>"
 	next   time.Time
 }
@@ -127,8 +127,7 @@ func (b *Builder) newBearerTokenFile() (*bearerTokenFile, error) {
 		readFile: spec.readFile,
 		logger:   b.logger,
 	}
-	s.mu.Lock()
-	if err := s.refreshAndUnlock(); err != nil {
+	if err := s.refresh(); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -204,16 +203,20 @@ func (s *bearerTokenFile) current() string {
 	if !s.mu.TryLock() {
 		return *s.header.Load()
 	}
-	if err := s.refreshAndUnlock(); err != nil {
+	err := func() error {
+		defer s.mu.Unlock()
+		return s.refresh()
+	}()
+	if err != nil {
 		s.logger.Warn().Err(err).Msg("httpclient: bearer token file refresh failed; keeping the last good token")
 	}
 	return *s.header.Load()
 }
 
-// refreshAndUnlock runs with mu held and unlocks it. A failed read keeps the
-// cached header and returns the read error.
-func (s *bearerTokenFile) refreshAndUnlock() error {
-	defer s.mu.Unlock()
+// refresh re-reads the file when it is due; the caller holds mu, or is Build,
+// before the file is shared. A failed read keeps the cached header and returns
+// the read error.
+func (s *bearerTokenFile) refresh() error {
 	now := s.now()
 	if now.Before(s.next) {
 		return nil

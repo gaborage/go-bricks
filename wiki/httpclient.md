@@ -785,7 +785,8 @@ spec:
 The kubelet rewrites the token once it is 80% through `expirationSeconds` (or older than 24
 hours) — about 12 minutes before expiry for the 3600 above — so the default one-minute interval
 picks the new token up long before the old one lapses. `expirationSeconds` cannot go below 600;
-keep `RefreshInterval` well under a fifth of whatever you set.
+keep `RefreshInterval` at most a tenth of whatever you set: a failed re-read waits a full interval
+for the next one, and the rotated token must still arrive before the old one lapses.
 
 ## Metrics
 
