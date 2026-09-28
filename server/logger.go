@@ -110,14 +110,18 @@ func (rl *requestLogger) Handle(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-// shouldSkipPath checks if the request path should be excluded from logging.
-// Returns true for health and readiness probe endpoints.
+// shouldSkipPath checks whether the request should be excluded from logging: it is one of
+// this engine's own probes, decided by the same predicate every other framework seat uses
+// (isProbeRequest), so the probe exemption has one key in one place.
+//
+// The old form was template-first with a decoded-URL fallback when the template was empty,
+// so it kept two shapes out of the log that now appear: an UNMATCHED request whose decoded
+// URL reads as a probe path (the fallback is gone — nothing matched, so it is not a probe),
+// and a non-probe method on the probe route (echo leaves c.Path() set to the best-match
+// template on a top-level 405, so POST <base>/health is logged because the method check
+// rejects it, not because the template differs).
 func (rl *requestLogger) shouldSkipPath(c *echo.Context) bool {
-	path := c.Path()
-	if path == "" {
-		path = c.Request().URL.Path
-	}
-	return path == rl.config.HealthPath || path == rl.config.ReadyPath
+	return isProbeRequest(c, rl.config.HealthPath, rl.config.ReadyPath)
 }
 
 // extractStatus extracts HTTP status code from error or response.

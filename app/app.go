@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
@@ -41,8 +43,9 @@ const (
 	componentMessaging = "messaging"
 	componentCache     = "cache"
 	componentStreams   = "streams"
-	// componentReadiness names readiness itself on the 503 body an application that never
-	// started renders — no kind sealed a description, so no kind's name can carry it.
+	// componentReadiness names readiness itself on a 503 body no kind's name can carry: an
+	// application that never started, or a request canceled while it waited on the shared
+	// judgment.
 	componentReadiness = "readiness"
 	errorKey           = "error"
 )
@@ -114,6 +117,9 @@ type App struct {
 	// Builder.CreateHealthProbes. It caches no description: it asks each slot for the one
 	// that slot sealed after start (ADR-066 as amended).
 	judge readinessJudge
+	// readyFlight shares one in-flight framework judgment across concurrent /ready
+	// requests on either listener (ADR-120); a RegisterReadyHandler override bypasses it.
+	readyFlight singleflight.Group
 }
 
 // multiTenant reports whether this deployment resolves its resources per tenant. Nil-guarded

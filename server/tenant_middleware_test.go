@@ -115,3 +115,51 @@ func TestTenantRejectionLogEscapesRequestValues(t *testing.T) {
 		logTenantRejection(l, c, nil)
 	})
 }
+
+// TestTenantMiddlewareResolvesPercentEncodedProbePath verifies tenant resolution runs for a
+// percent-encoded probe spelling (rejected as an invalid tenant without the header) while the
+// genuine probe still bypasses it.
+func TestTenantMiddlewareResolvesPercentEncodedProbePath(t *testing.T) {
+	cfg := newTestConfig(probeSkipBase, "", "")
+	cfg.Multitenant.Enabled = true
+	cfg.Multitenant.Resolver.Type = config.ResolverTypeHeader
+	srv := New(cfg, &testLogger{})
+	srv.echo.GET(probeSkipModuleRoute, okEchoHandler)
+
+	assertServeCode(t, srv.echo, http.MethodGet, probeSkipEncodedRdy, http.StatusBadRequest)
+	assertServeCode(t, srv.echo, http.MethodGet, probeSkipReady, http.StatusOK)
+}
+
+// TestTenantMiddlewareHonorsConsumerSkipper pins that a SkipperFunc handed to the public
+// constructor actually reaches the decision (skipperFromRequest): the probe route is exempt
+// without a tenant header, while a module route reached through an encoded spelling is not.
+func TestTenantMiddlewareHonorsConsumerSkipper(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	e := newTenantTestEcho()
+	resolver := &multitenant.HeaderResolver{HeaderName: HeaderXTenantID}
+	e.Use(adaptMiddleware(TenantMiddleware(resolver, CreateProbeSkipper("/health", "/ready")), cfg))
+	e.GET("/health", func(c *echo.Context) error { return c.String(http.StatusOK, "ok") })
+	e.GET("/:id", func(c *echo.Context) error { return c.String(http.StatusOK, "module") })
+
+	assert.Equal(t, http.StatusOK, serveEngine(e, http.MethodGet, "/health").Code,
+		"the consumer skipper must exempt the probe path")
+	assert.Equal(t, http.StatusBadRequest, serveEngine(e, http.MethodGet, "/%68ealth").Code,
+		"an encoded spelling routes to a module route, so tenant resolution still applies")
+}
+
+// TestTenantMiddlewareNilSkipperResolvesEveryRoute pins the nil-skipper contract of the public
+// constructor: without a skipper nothing is exempt, so even a probe path resolves a tenant.
+func TestTenantMiddlewareNilSkipperResolvesEveryRoute(t *testing.T) {
+	e := newTenantTestEcho()
+	e.Use(adaptMiddleware(TenantMiddleware(&multitenant.HeaderResolver{HeaderName: HeaderXTenantID}, nil), &config.Config{App: config.AppConfig{Env: "development"}}))
+	e.GET("/health", func(c *echo.Context) error { return c.String(http.StatusOK, "ok") })
+
+	assert.Equal(t, http.StatusBadRequest, serveEngine(e, http.MethodGet, "/health").Code,
+		"a nil skipper exempts nothing, so the probe path still needs a tenant")
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", http.NoBody)
+	req.Header.Set(HeaderXTenantID, "acme")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code, "with a tenant header the same request resolves")
+}

@@ -113,11 +113,17 @@ func newHandlerContext(c *echo.Context, cfg *config.Config) HandlerContext {
 type TestContextOption func(*HandlerContext)
 
 // WithRouteTemplate stamps the matched route template so RouteTemplate() reports it on an
-// otherwise-unrouted test context (which never routes and would report ""). On a live
-// request the router owns this value; the option is reachable only through the test
-// constructor, so it cannot mutate a routed context's identity. See issue #639.
+// otherwise-unrouted test context (which never routes and would report ""). It stamps both
+// places the router writes on a live request — the context and r.Pattern, which echo sets for
+// standard-library middlewares and which CreateProbeSkipper reads — so a test context cannot
+// present a template through one and an empty one through the other. On a live request the
+// router owns both values; the option is reachable only through the test constructor, so it
+// cannot mutate a routed context's identity. See issue #639.
 func WithRouteTemplate(template string) TestContextOption {
-	return func(c *HandlerContext) { c.ectx.SetPath(template) }
+	return func(c *HandlerContext) {
+		c.ectx.SetPath(template)
+		c.ectx.Request().Pattern = template
+	}
 }
 
 // NewHandlerContextForTest builds a HandlerContext backed by a real Echo context for use

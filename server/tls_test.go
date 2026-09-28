@@ -31,6 +31,17 @@ import (
 // opaque handshake failures rather than a clean rejection.
 func newTestCA(t *testing.T, cn string) (caCertPEM []byte, issueServer func(cn string) (certPEM, keyPEM []byte)) {
 	t.Helper()
+	caCertPEM, issueLeaf := newTestCAWithSANs(t, cn)
+	return caCertPEM, func(leafCN string) (leafCertPEM, leafKeyPEM []byte) {
+		return issueLeaf(leafCN, []string{"127.0.0.1"}, []net.IP{net.ParseIP("127.0.0.1")})
+	}
+}
+
+// newTestCAWithSANs is newTestCA with a leaf factory that takes the leaf's exact SANs,
+// none included, for the probe listener's pinned application-listener check; each option
+// edits the leaf template before signing.
+func newTestCAWithSANs(t *testing.T, cn string) (caCertPEM []byte, issueLeaf func(cn string, dnsNames []string, ips []net.IP, opts ...func(*x509.Certificate)) (certPEM, keyPEM []byte)) {
+	t.Helper()
 
 	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
@@ -55,7 +66,7 @@ func newTestCA(t *testing.T, cn string) (caCertPEM []byte, issueServer func(cn s
 
 	nextSerial := int64(2) // 1 is the CA's own serial
 
-	issueServer = func(leafCN string) (leafCertPEM, leafKeyPEM []byte) {
+	issueLeaf = func(leafCN string, dnsNames []string, ips []net.IP, opts ...func(*x509.Certificate)) (leafCertPEM, leafKeyPEM []byte) {
 		t.Helper()
 
 		leafKey, keyErr := rsa.GenerateKey(rand.Reader, 2048)
@@ -70,8 +81,11 @@ func newTestCA(t *testing.T, cn string) (caCertPEM []byte, issueServer func(cn s
 			NotBefore:    time.Now().Add(-time.Minute),
 			NotAfter:     time.Now().Add(time.Hour),
 			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-			DNSNames:     []string{"127.0.0.1"},
-			IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+			DNSNames:     dnsNames,
+			IPAddresses:  ips,
+		}
+		for _, opt := range opts {
+			opt(leafTemplate)
 		}
 
 		leafDER, certErr := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
@@ -85,7 +99,7 @@ func newTestCA(t *testing.T, cn string) (caCertPEM []byte, issueServer func(cn s
 		return leafCertPEM, leafKeyPEM
 	}
 
-	return caCertPEM, issueServer
+	return caCertPEM, issueLeaf
 }
 
 func TestBuildServerTLSConfigMaterial(t *testing.T) {

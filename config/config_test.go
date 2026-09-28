@@ -196,6 +196,7 @@ func TestLoadRejectsEmptyNumericEnv(t *testing.T) {
 		{name: "keystore_secretminlength", envVar: "KEYSTORE_SECRETMINLENGTH", wantKey: "keystore.secretminlength"},
 		{name: "server_bodylimit", envVar: "SERVER_BODYLIMIT", wantKey: "server.bodylimit"},
 		{name: "server_port", envVar: "SERVER_PORT", wantKey: "server.port"},
+		{name: "server_probes_port", envVar: "SERVER_PROBES_PORT", wantKey: "server.probes.port"},
 		// database.port is an ADR-051 identity key AND numeric, so the numeric guard
 		// reaches it first: it now fails at decode rather than with the identity error.
 		{name: "database_port_changes_error_class", envVar: "DATABASE_PORT", wantKey: "database.port"},
@@ -1136,6 +1137,8 @@ func clearEnvironmentVariables() {
 		"SERVER_TIMEOUT_IDLE", "SERVER_TIMEOUT_MIDDLEWARE", "SERVER_TIMEOUT_SHUTDOWN",
 		"SERVER_PATH_BASE", "SERVER_PATH_HEALTH", "SERVER_PATH_READY", "SERVER_GZIP_MINLENGTH",
 		"SERVER_BODYLIMIT", "SERVER_RESPONSETIME_ENABLED",
+		// ADR-120: the probe listener is opt-in, and a delivered-empty host fails Load.
+		"SERVER_PROBES_PORT", "SERVER_PROBES_HOST",
 		"DATABASE_TYPE", "DATABASE_HOST", "DATABASE_PORT", testDatabaseDatabase,
 		testDatabaseUsername, "DATABASE_PASSWORD", "DATABASE_TLS_MODE",
 		testDatabaseMaxConns, "DATABASE_POOL_IDLE_CONNECTIONS",

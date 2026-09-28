@@ -1178,6 +1178,7 @@ func TestRequestLoggerShouldSkipPath(t *testing.T) {
 
 	tests := []struct {
 		name     string
+		method   string // defaults to GET when empty
 		path     string
 		urlPath  string
 		expected bool
@@ -1198,16 +1199,41 @@ func TestRequestLoggerShouldSkipPath(t *testing.T) {
 			expected: false,
 		},
 		{
-			name:     "empty path falls back to URL path - health",
+			// No route matched, so the request is not a probe however its URL reads.
+			// Keeping a URL fallback here dropped percent-encoded probing of the base
+			// path from the access log.
+			name:     "unmatched route with probe-looking url is logged",
 			path:     "",
 			urlPath:  testHealthPath,
-			expected: true,
+			expected: false,
 		},
 		{
-			name:     "empty path falls back to URL path - normal",
+			name:     "unmatched route with normal url is logged",
 			path:     "",
 			urlPath:  "/api/data",
 			expected: false,
+		},
+		{
+			// The template is what the router matched; a module param route never
+			// carries the probe path even when the raw request decodes to it.
+			name:     "module param route matched by encoded probe spelling is logged",
+			path:     "/api/:id",
+			urlPath:  "/api/%68ealth",
+			expected: false,
+		},
+		{
+			// Echo leaves the best-match template set on a top-level 405, so only the
+			// method check keeps this request in the access log.
+			name:     "non-probe method on the probe route is logged",
+			method:   http.MethodPost,
+			path:     testHealthPath,
+			expected: false,
+		},
+		{
+			name:     "head probe is skipped like get",
+			method:   http.MethodHead,
+			path:     testReadyPath,
+			expected: true,
 		},
 	}
 
@@ -1218,7 +1244,11 @@ func TestRequestLoggerShouldSkipPath(t *testing.T) {
 			if urlPath == "" {
 				urlPath = tt.path
 			}
-			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, urlPath, http.NoBody)
+			method := tt.method
+			if method == "" {
+				method = http.MethodGet
+			}
+			req := httptest.NewRequestWithContext(context.Background(), method, urlPath, http.NoBody)
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
 			c.SetPath(tt.path)

@@ -10,6 +10,12 @@
 > `server.path.ready`). The decision below is unchanged; only the key names and
 > struct shape differ. Examples in this document reflect the current nested
 > layout.
+>
+> **Amendment (2026-09-26):** with `server.probes.port` set, the health and
+> ready routes move to the probe listener and are served without
+> `server.path.base` ([ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md));
+> the application listener keeps the base-prefixed paths reserved and answers
+> 404 there. At `server.probes.port: 0` everything below still holds.
 
 ## Context
 

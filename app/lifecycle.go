@@ -8,10 +8,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -31,6 +35,10 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 	}
 
 	if err := a.requireJudge(); err != nil {
+		return err
+	}
+
+	if err := a.requireProbeSeam(); err != nil {
 		return err
 	}
 
@@ -210,6 +218,23 @@ func (a *App) applyGlobalMiddleware() error {
 	return nil
 }
 
+// requireProbeSeam fails closed when server.probes.port is set but the configured server
+// cannot report the probe listener's serve error: the key would otherwise be silently
+// ignored (ADR-120). *server.Server always implements the seam; an injected
+// Options.Server may not.
+func (a *App) requireProbeSeam() error {
+	if a.cfg == nil || a.cfg.Server.Probes.Port <= 0 {
+		return nil
+	}
+	if _, ok := a.server.(probeRunner); ok {
+		return nil
+	}
+	return fmt.Errorf("server.probes.port is set (%d) but the configured server does not support the probe listener",
+		a.cfg.Server.Probes.Port)
+}
+
+var _ probeRunner = (*server.Server)(nil)
+
 // assertMessagingConfiguredIfDeclared fails-fast in single-tenant mode when
 // a module has declared messaging infrastructure but no broker URL is set —
 // without this check the declarations would be silently dropped (issue #366).
@@ -241,25 +266,55 @@ func (a *App) registerDebugHandlers() error {
 	return debugHandlers.RegisterDebugEndpoints(a.server.RootGroup())
 }
 
-// serve starts the HTTP server in a goroutine and returns an error channel
+// serve starts the HTTP server in a goroutine and returns the channel both listeners report
+// on (ADR-120): Start's result, and the probe listener's serve error when the server has
+// one. Each of the two senders sends at most once, so the two-slot buffer never blocks a
+// send, and the channel closes only after both have finished.
 func (a *App) serve() <-chan error {
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
+	var senders sync.WaitGroup
 
-	go func() {
+	senders.Go(func() {
 		a.logger.Info().Msg("Server goroutine starting")
 		err := a.server.Start()
 		a.logger.Info().Err(err).Msg("Server goroutine terminating")
 
-		// Send the error (could be nil if graceful shutdown, or actual error)
-		select {
-		case errCh <- err:
-		default:
-			// Channel might be closed already during shutdown
-		}
+		// nil after a graceful shutdown, which Start may report only once its drain ends.
+		errCh <- err
+	})
+	// A nil ProbeErrors breaks the seam's contract; ranging over it would park the forwarder,
+	// and with it the close, for good.
+	if probes, ok := a.server.(probeRunner); ok && probes.ProbeErrors() != nil {
+		probeErrs := probes.ProbeErrors()
+		senders.Go(func() { forwardProbeError(probeErrs, errCh) })
+	}
+	go func() {
+		senders.Wait()
 		close(errCh)
 	}()
 
 	return errCh
+}
+
+// forwardProbeError relays the probe listener's first serve failure onto errCh and returns
+// once ProbeErrors closes. A clean stop sends nothing, so the probe listener stopping never
+// ends Run; sending at most once keeps serve's buffer from blocking on a runner that breaks
+// the ProbeErrors contract.
+func forwardProbeError(probeErrs <-chan error, errCh chan<- error) {
+	sent := false
+	for err := range probeErrs {
+		if isServeFailure(err) && !sent {
+			errCh <- err
+			sent = true
+		}
+	}
+}
+
+// isServeFailure reports whether a listener's result is a failure rather than a clean
+// stop: nil follows a graceful Shutdown, and http.ErrServerClosed a Shutdown that vetoed
+// Start.
+func isServeFailure(err error) bool {
+	return err != nil && !errors.Is(err, http.ErrServerClosed)
 }
 
 // waitForShutdownOrServerError waits for either a shutdown signal or server error
@@ -303,36 +358,48 @@ func (a *App) shutdownTimeouts() (inner, outer time.Duration) {
 	return inner, outer
 }
 
-// drainServerError drains any remaining error from the server error channel
+// drainServerError reads the server error channel until it closes, bounded by the outer
+// shutdown timeout, and returns every serve failure either listener reported, joined
+// (ADR-120). Clean stops (nil, http.ErrServerClosed) are dropped value by value, so a
+// joined result never hides a failure behind the sentinel.
 func (a *App) drainServerError(ch <-chan error) error {
 	if ch == nil {
 		return nil
 	}
 
 	_, outer := a.shutdownTimeouts()
-	timeout := time.After(outer)
 
 	if a.logger != nil {
 		a.logger.Debug().Msg("Draining server error channel")
 	}
 
-	select {
-	case err, ok := <-ch:
-		if !ok {
-			if a.logger != nil {
-				a.logger.Debug().Msg("Server error channel closed normally")
+	err := errors.Join(a.receiveServeFailures(ch, time.After(outer))...)
+	if a.logger != nil && err != nil {
+		a.logger.Debug().Err(err).Msg("Server error channel returned error")
+	}
+	return err
+}
+
+// receiveServeFailures collects the serve failures ch carries until it closes. If timeout
+// fires first, a sender never finished, which is itself a failure, reported alongside
+// those already collected.
+func (a *App) receiveServeFailures(ch <-chan error, timeout <-chan time.Time) []error {
+	var failures []error
+	for {
+		select {
+		case err, ok := <-ch:
+			if !ok {
+				return failures
 			}
-			return nil
+			if isServeFailure(err) {
+				failures = append(failures, err)
+			}
+		case <-timeout:
+			if a.logger != nil {
+				a.logger.Warn().Msg("Timeout waiting for server goroutine to complete - this may indicate a shutdown issue")
+			}
+			return append(failures, errors.New("server goroutine failed to complete within timeout"))
 		}
-		if a.logger != nil {
-			a.logger.Debug().Err(err).Msg("Server error channel returned error")
-		}
-		return err
-	case <-timeout:
-		if a.logger != nil {
-			a.logger.Warn().Msg("Timeout waiting for server goroutine to complete - this may indicate a shutdown issue")
-		}
-		return errors.New("server goroutine failed to complete within timeout")
 	}
 }
 
@@ -353,7 +420,7 @@ func (a *App) Run() error {
 		a.logger.Info().Msg("Shutdown signal received")
 	}
 
-	if serverErr != nil && !errors.Is(serverErr, http.ErrServerClosed) {
+	if isServeFailure(serverErr) {
 		a.logger.Error().Err(serverErr).Msg("Server stopped unexpectedly")
 	}
 
@@ -381,28 +448,27 @@ func (a *App) Run() error {
 		return errors.New("shutdown timed out")
 	}
 
-	var errs []error
+	return a.runResult(serverErr, serverErrCh, shutdownErr)
+}
 
-	if shutdownRequested {
-		a.logger.Info().Msg("Waiting for server goroutine to complete")
-		if err := a.drainServerError(serverErrCh); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errs = append(errs, fmt.Errorf(serverErrorMsg, err))
-		} else {
-			a.logger.Info().Msg("Server goroutine completed successfully")
-		}
-	} else if serverErr != nil && !errors.Is(serverErr, http.ErrServerClosed) {
+// runResult joins what Run reports once shutdown has completed: the serve error that woke
+// it, whatever either listener still reports while the channel drains, and the shutdown
+// error. The drain runs on the server-error path too, so a probe listener failure that
+// follows an application one is joined rather than lost (ADR-120).
+func (a *App) runResult(serverErr error, serverErrCh <-chan error, shutdownErr error) error {
+	var errs []error
+	if isServeFailure(serverErr) {
 		errs = append(errs, fmt.Errorf(serverErrorMsg, serverErr))
 	}
 
-	if shutdownErr != nil {
-		errs = append(errs, shutdownErr)
+	a.logger.Info().Msg("Waiting for server goroutine to complete")
+	if err := a.drainServerError(serverErrCh); err != nil {
+		errs = append(errs, fmt.Errorf(serverErrorMsg, err))
+	} else if len(errs) == 0 {
+		a.logger.Info().Msg("Server goroutine completed successfully")
 	}
 
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-
-	return nil
+	return errors.Join(append(errs, shutdownErr)...)
 }
 
 // shutdownResource safely shuts down a resource and handles error logging
@@ -557,33 +623,138 @@ func (a *App) Shutdown(ctx context.Context) error {
 
 // readyCheck handles the readiness endpoint: one probe run, one gate, one body (ADR-066).
 // The run stops at the first failing critical kind, so an outage costs the probes ahead of
-// it and no more.
+// it and no more. Concurrent requests share one judgment (ADR-120), but each logs and
+// renders its own answer from the verdict, so the failure log fires once per request, as
+// it did before the judgment was shared.
 func (a *App) readyCheck(c server.HandlerContext) error {
 	ctx := c.RequestContext()
-	report, blocking, found := a.judge.gate(ctx)
-
-	if found {
-		// /ready is unauthenticated and the limiters do not exempt it, but they key probes
-		// by client IP (probeSkipper skips tenant resolution, not the limiters), so one
-		// source can still abandon many requests in a row. That IP is derived through the
-		// trusted-proxy chain (ADR-057), so only a caller already inside a default-trusted
-		// range (loopback, link-local, RFC1918, IPv6 ULA) can still choose its own key, and
-		// the budget is per-source either way. An abandoned request — the
-		// caller's own context canceled, and the probe reports that same context.Canceled —
-		// is not a readiness incident, so it logs WARN, not ERROR. The caller's context must
-		// actually be done: a probe that reports context.Canceled while the request is still
-		// live was canceled from inside, which is a genuine incident and stays ERROR.
+	verdict, err := a.judgeReadiness(ctx)
+	if err != nil {
+		return err
+	}
+	if verdict.found {
+		// /ready is unauthenticated. On the application listener the limiters apply to it
+		// and key probes by client IP (probeSkipper skips tenant resolution, not the
+		// limiters); with server.probes.port set, /ready is on the probe listener, which has
+		// no limiter (ADR-120). Either way one source can still abandon many requests in a
+		// row. Where the limiters apply, the IP is derived through the trusted-proxy chain
+		// (ADR-057), so only a caller already inside a default-trusted range (loopback,
+		// link-local, RFC1918, IPv6 ULA) can still choose its own key, and the budget is
+		// per-source. An abandoned request — the caller's own context canceled, and the
+		// probe reports that same context.Canceled, or the request stopped waiting on the
+		// shared judgment when it was canceled — is not a readiness incident, so it logs
+		// WARN, not ERROR. The caller's context must actually be done: a probe that
+		// reports context.Canceled while the request is still live was canceled from inside,
+		// which is a genuine incident and stays ERROR.
+		blocking := &verdict.blocking
 		event := a.logger.Error()
 		if errors.Is(ctx.Err(), context.Canceled) && errors.Is(blocking.Err, context.Canceled) {
 			event = a.logger.Warn()
 		}
 		event.Err(blocking.Err).Str("component", blocking.Name).Msg("Readiness check failed")
-		return c.JSON(http.StatusServiceUnavailable, notReadyBody(&blocking))
+		return c.JSON(http.StatusServiceUnavailable, notReadyBody(blocking))
 	}
 
 	app := &config.AppConfig{}
 	if a.cfg != nil {
 		app = &a.cfg.App
 	}
-	return c.JSON(http.StatusOK, report.readyBody(app, time.Now()))
+	return c.JSON(http.StatusOK, verdict.report.readyBody(app, time.Now()))
+}
+
+// readinessVerdict is one framework judgment: what a readiness flight shares with every
+// /ready request waiting on it.
+type readinessVerdict struct {
+	report   readinessReport
+	blocking HealthStatus
+	found    bool
+}
+
+// readinessFlightKey keys the one framework-judgment flight per App.
+const readinessFlightKey = "readiness-judgment"
+
+// readinessVerdictGrace bounds how long a waiter whose own deadline expired still waits for
+// the flight's verdict. A context-aware probe returns within it, so the log names the blocking
+// kind; a probe that ignores its context cannot hold the waiter past it.
+const readinessVerdictGrace = 500 * time.Millisecond
+
+// judgeReadiness runs the framework judgment at most once across concurrent /ready requests
+// (ADR-120). Only an in-flight verdict is shared: the next request after a judgment finishes
+// starts a new one. A caller whose request is canceled stops waiting at once with a verdict
+// naming readiness itself and carrying its ctx error, since the blocking kind is not yet
+// known, while the judgment runs on for the rest. A caller whose own deadline expires waits
+// for the verdict instead, for at most readinessVerdictGrace, so it still names the kind that
+// blocked: the flight ends by the leader's deadline, so a context-aware probe returns inside
+// the grace. A probe that ignores its context cannot hold the caller past it; the caller then
+// answers with a verdict naming readiness itself. The only error is a flight that panicked,
+// which the caller returns to the engine's error handler.
+func (a *App) judgeReadiness(ctx context.Context) (readinessVerdict, error) {
+	results := a.readyFlight.DoChan(readinessFlightKey, func() (any, error) {
+		return a.readinessFlight(ctx)
+	})
+	var result singleflight.Result
+	select {
+	case result = <-results:
+	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return readinessVerdict{blocking: readinessFailure(ctx.Err()), found: true}, nil
+		}
+		grace := time.NewTimer(readinessVerdictGrace)
+		defer grace.Stop()
+		select {
+		case result = <-results:
+		case <-grace.C:
+			return readinessVerdict{blocking: readinessFailure(ctx.Err()), found: true}, nil
+		}
+	}
+	if result.Err != nil {
+		return readinessVerdict{}, result.Err
+	}
+	verdict, _ := result.Val.(readinessVerdict) // a flight that returns no error returns a verdict
+	return verdict, nil
+}
+
+// readinessFlight is one framework judgment on readinessFlightContext's context. It recovers
+// its own panic, names it by type only (ADR-081) and logs it with its stack, which carries no
+// panic value: DoChan re-panics a flight's panic on a new goroutine that no recover reaches,
+// which would end the process, and the waiters return the error to an error handler that
+// logs no stack for it. completed, not the recovered value, separates a normal return from a
+// panic: under GODEBUG=panicnil=1 a panic(nil) recovers as nil.
+func (a *App) readinessFlight(leaderCtx context.Context) (verdict readinessVerdict, err error) {
+	completed := false
+	defer func() {
+		if completed {
+			return
+		}
+		r := recover()
+		err = fmt.Errorf("readiness judgment panicked (type: %T)", r)
+		a.logger.Error().Err(err).Bytes("stack", debug.Stack()).Msg("Readiness judgment panicked")
+	}()
+	ctx, cancel := a.readinessFlightContext(leaderCtx)
+	defer cancel()
+	report, blocking, found := a.judge.gate(ctx)
+	completed = true
+	return readinessVerdict{report: report, blocking: blocking, found: found}, nil
+}
+
+// readinessFlightContext is a judgment's context: the leader's, detached from its
+// cancellation so the leader walking away fails no follower, ending at the earlier of the
+// leader's own deadline and server.timeout.middleware from now. The engine sets that deadline
+// to the same timeout from the start of the leader's request, so the flight ends with the
+// leader's budget, which on the probe listener covers the application-listener check too;
+// with neither, no deadline is added, as none bounded that request. Shutdown waits for no
+// flight: one that outlives stopSlots reads a stopping slot and reports unhealthy, while
+// /ready already answers 503 from the server's stopping latch.
+func (a *App) readinessFlightContext(leaderCtx context.Context) (context.Context, context.CancelFunc) {
+	ctx := context.WithoutCancel(leaderCtx)
+	deadline, bounded := leaderCtx.Deadline()
+	if a.cfg != nil && a.cfg.Server.Timeout.Middleware > 0 {
+		if budget := time.Now().Add(a.cfg.Server.Timeout.Middleware); !bounded || budget.Before(deadline) {
+			deadline, bounded = budget, true
+		}
+	}
+	if !bounded {
+		return context.WithCancel(ctx)
+	}
+	return context.WithDeadline(ctx, deadline)
 }

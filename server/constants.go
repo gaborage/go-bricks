@@ -20,6 +20,16 @@ const (
 	msgRateLimitExceeded = "Rate limit exceeded"
 )
 
+// URL schemes the OTel url.scheme attribute and the application-listener check use.
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
+)
+
+// slowRequestThreshold is the latency at which the access logger marks a request slow
+// (result_code WARN), on the application and probe engines alike.
+const slowRequestThreshold = time.Second
+
 // Standard log/JSON field key constants used in handlers and middleware.
 const (
 	fieldStatus    = "status"
@@ -31,6 +41,9 @@ const (
 
 	statusOK    = "ok"
 	statusReady = "ready"
+	// statusNotReady is the /ready 503 verdict; it must equal app's notReadyStatus,
+	// which this package cannot import.
+	statusNotReady = "not ready"
 )
 
 // reservedMetaKeys enumerates envelope meta keys owned by the framework. Handler-supplied

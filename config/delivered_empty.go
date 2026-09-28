@@ -1,23 +1,48 @@
 package config
 
-// deliveredEmptyRejectingKeys are the list-shaped keys where a delivered-empty value is a
-// broken template rather than an instruction. A key earns a place here only when clearing
-// it FAILS OPEN — where the empty list disables a control instead of tightening one — so the
-// list is deliberately short and each addition is its own decision.
-//
-// debug.allowedips is the one such key today (ADR-078). Its default is the loopback pair, so
-// an empty value REPLACES a control with nothing: with debug.bearertoken set, ADR-049's
-// registration gate is satisfied by the token alone and the IP whitelist is never installed.
-// The other list keys are safe to clear — scheduler.security.cidrallowlist fails closed to
-// localhost, multitenant.resolver.order fails validation, and the trusted-proxy and
-// sensitive-field lists treat empty as the stricter posture.
-var deliveredEmptyRejectingKeys = []string{"debug.allowedips"}
+// deliveredEmptyRejection is a key where a delivered-empty value is a broken template
+// rather than an instruction: the reason its error gives, and the deliberate spelling an
+// operator uses instead, which no template renders by accident.
+type deliveredEmptyRejection struct {
+	key        string
+	message    string
+	deliberate string
+}
 
-// validateNoDeliveredEmptyList fails startup when one of those keys was delivered as an
-// empty STRING rather than an empty list. It is a composite of two questions. PRESENCE is
-// the recorded delivery of the key by an operator layer (ADR-104) — these keys carry
-// defaults, so the framework's own preload must not answer it. EMPTINESS is then read from
-// the raw koanf value, which keeps the shape the source actually delivered —
+// deliveredEmptyRejectingKeys are the keys a delivered-empty value may not reach. A key
+// earns a place here only when clearing it FAILS OPEN — where the empty value disables a
+// control or widens a default instead of tightening one — so the list is deliberately
+// short and each addition is its own decision.
+//
+// debug.allowedips (ADR-078): its default is the loopback pair, so an empty value REPLACES
+// a control with nothing: with debug.bearertoken set, ADR-049's registration gate is
+// satisfied by the token alone and the IP whitelist is never installed. The other list
+// keys are safe to clear — scheduler.security.cidrallowlist fails closed to localhost,
+// multitenant.resolver.order fails validation, and the trusted-proxy and sensitive-field
+// lists treat empty as the stricter posture.
+//
+// server.probes.host (ADR-120): unset, it takes server.host — typically 0.0.0.0 — so
+// SERVER_PROBES_HOST= rendered from an unset Helm value would widen a loopback-only probe
+// bind to every interface without a word. A scalar has no deliberate-empty spelling to
+// spare, unlike a list's `[]`: removing the key is how an operator asks for the default.
+var deliveredEmptyRejectingKeys = []deliveredEmptyRejection{
+	{
+		key:        "debug.allowedips",
+		message:    "delivered empty — an empty value here removes a control rather than relaxing one",
+		deliberate: "write `debug.allowedips: []` in config.yaml to clear it deliberately",
+	},
+	{
+		key:        fieldServerProbesHost,
+		message:    "delivered empty — an empty value here falls back to a wider default rather than meaning none",
+		deliberate: "remove the key to take its default deliberately",
+	},
+}
+
+// validateNoDeliveredEmptyKeys fails startup when one of those keys was delivered as an
+// empty STRING (or a YAML null). It is a composite of two questions. PRESENCE is the
+// recorded delivery of the key by an operator layer (ADR-104) — these keys carry defaults,
+// so the framework's own preload must not answer it. EMPTINESS is then read from the raw
+// koanf value, which keeps the shape the source actually delivered —
 //
 //	unset                  -> []string{"127.0.0.1", "::1"}   (the default; not delivered)
 //	DEBUG_ALLOWEDIPS=      -> ""                             (delivered empty; rejected)
@@ -32,21 +57,18 @@ var deliveredEmptyRejectingKeys = []string{"debug.allowedips"}
 // A hand-built Config literal has no source, so every key reads absent and this is inert for
 // it without a check of its own, exactly as validateNoDeliveredEmptyDatabase is: the
 // app-layer ADR-049 gate remains the second seam.
-func validateNoDeliveredEmptyList(cfg *Config) error {
-	for _, key := range deliveredEmptyRejectingKeys {
-		if !cfg.delivered(key) {
-			continue
-		}
+func validateNoDeliveredEmptyKeys(cfg *Config) error {
+	for _, r := range deliveredEmptyRejectingKeys {
 		// Delivery now means "recorded AND still in the final tree" by definition, so one
 		// Get suffices; it returns nil for a YAML null, which is a delivered empty.
-		if !deliveredEmptyValue(cfg.koanfTree().Get(key)) {
+		if !cfg.delivered(r.key) || !deliveredEmptyValue(cfg.koanfTree().Get(r.key)) {
 			continue
 		}
 		return &ConfigError{
 			Category: errCategoryInvalid,
-			Field:    key,
-			Message:  "delivered empty — an empty value here removes a control rather than relaxing one",
-			Action:   deliveredEmptyListAction(key),
+			Field:    r.key,
+			Message:  r.message,
+			Action:   deliveredEmptyAction(r.key, r.deliberate),
 		}
 	}
 	return nil
@@ -67,6 +89,9 @@ func validateNoDeliveredEmptyList(cfg *Config) error {
 //     unset decodes to the loopback pair, null decodes to nil — so the same spelling that is
 //     harmless there removes a control here. A bare `allowedips:` is what
 //     `allowedips: {{ .Values.debug.allowedIPs }}` renders when the value is unset.
+//
+// A scalar key reads through the same rule: a blank string splits into nothing, and a
+// comma-only one is no usable value either.
 func deliveredEmptyValue(raw any) bool {
 	if raw == nil {
 		return true
@@ -75,14 +100,14 @@ func deliveredEmptyValue(raw any) bool {
 	return isString && len(splitAndTrimList(str, listSeparator)) == 0
 }
 
-// deliveredEmptyListAction names both ways out, in the order an operator wants them: put a
-// value back, or say "no entries" in the one spelling that cannot be rendered by accident.
-// The env half is emitted only when a variable actually reaches the key (envVarForKey), so
-// the hint never sends anyone to set a variable that lands somewhere else.
-func deliveredEmptyListAction(key string) string {
+// deliveredEmptyAction names both ways out, in the order an operator wants them: put a
+// value back, or the key's deliberate spelling. The env half is emitted only when a
+// variable actually reaches the key (envVarForKey), so the hint never sends anyone to set a
+// variable that lands somewhere else.
+func deliveredEmptyAction(key, deliberate string) string {
 	set := "give " + key + " a value"
 	if envVar := envVarForKey(key); envVar != "" {
 		set = "set " + envVar + " to a value"
 	}
-	return set + ", or write `" + key + ": []` in config.yaml to clear it deliberately"
+	return set + ", or " + deliberate
 }

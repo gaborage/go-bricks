@@ -439,6 +439,9 @@ checks no dependency at all — it returns `200 {"status":"ok"}` for as long as 
 serving HTTP (`server.healthCheck`), and unlike `/ready` it has no override seam. Both paths
 are configurable (`server.path.health`, `server.path.ready`) and are prefixed by
 `server.path.base`, so a service on `base: /api/v1` must be probed at `/api/v1/ready`.
+With `server.probes.port` set, use the variant after the manifest
+([startup_defaults.md](startup_defaults.md#internal-probe-listener) for cutover and network
+posture).
 
 Under `cache.critical: true` a pod that boots while Redis is unreachable never becomes Ready: it
 is kept out of the Service endpoints, and a Deployment rollout stalls after taking down at most
@@ -472,7 +475,8 @@ readinessProbe:
   periodSeconds: 10
   # Kubernetes defaults this to 1s, which a cold poll loses: building the instance
   # costs a 5s-budget construction PING plus the INFO version check before the
-  # probe spends its own 500ms cap. 6s covers that and still fits inside the period.
+  # probe spends its own 500ms cap. 6s covers that and still fits inside the period
+  # (7s on the probe listener — see the variant below).
   timeoutSeconds: 6
   # 3 consecutive failures (~30s here) rides out a Redis blip, so a transient
   # outage does not evict every replica from rotation at the same moment.
@@ -487,6 +491,26 @@ livenessProbe:
   # slack for a busy event loop, not for Redis.
   timeoutSeconds: 2
   failureThreshold: 3
+```
+
+With `server.probes.port: 9090`, both probes target the probe listener; fields not shown stay
+as above:
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /ready  # server.path.ready, never prefixed by server.path.base here
+    port: 9090    # server.probes.port
+    scheme: HTTP  # the probe listener is plain HTTP, even under server.tls
+  # The application-listener check spends up to 500ms of the request's
+  # server.timeout.middleware budget before the judgment starts, while a cold
+  # poll's 5s construction budget is its own, so 6s leaves no headroom here.
+  timeoutSeconds: 7
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 9090
+    scheme: HTTP
 ```
 
 Probe traffic is excluded from request logging and from HTTP spans and metrics, so the `503`

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"net"
 	"os"
 	"time"
 
@@ -41,6 +42,15 @@ type TenantStore interface {
 	// from external sources (e.g., AWS Secrets Manager, Vault). Returns false for
 	// stores that use static YAML configuration. This controls pre-initialization behavior.
 	IsDynamic() bool
+}
+
+// probeRunner is the optional seam through which App reaches the internal probe listener
+// (ADR-120); ServerRunner stays unchanged. Implementations keep *server.Server's contract:
+// ProbeErrors is non-nil, carries at most one serve error (never http.ErrServerClosed) and
+// closes exactly once, since serve holds its error channel open until it closes.
+type probeRunner interface {
+	ProbeErrors() <-chan error
+	ProbeBoundAddr() net.Addr
 }
 
 // declarationSetter is an internal interface for setting messaging declarations

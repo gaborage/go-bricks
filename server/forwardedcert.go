@@ -186,10 +186,10 @@ func parseForwardedLeaf(encoded string) (*x509.Certificate, error) {
 // non-exempt Require would take the target group down on deploy). l may be
 // nil, in which case rejection/warning falls back to the stdlib log package
 // (mirrors logTenantRejection's nil-logger fallback).
-func forwardedClientCertMiddlewareEcho(cfg config.ForwardedClientCertConfig, skipper SkipperFunc, l logger.Logger) echo.MiddlewareFunc {
+func forwardedClientCertMiddlewareEcho(cfg config.ForwardedClientCertConfig, skipper probeSkipper, l logger.Logger) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
-			if skipper != nil && skipper(c.Request()) {
+			if skipper != nil && skipper(c) {
 				return next(c)
 			}
 

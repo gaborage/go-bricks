@@ -117,8 +117,9 @@ func TestShutdownStopsServerBeforeModules(t *testing.T) {
 // TestShutdownStopsSlotsBeforeModules pins that the stop walk is wired into Shutdown at
 // all, and that ADR-029's order survives: every kind's inbound work is halted before any
 // module is torn down, so no module receives fresh work while it is shutting down. The
+// server, whose Shutdown stops the probe listener last (ADR-120), stops before either. The
 // recording slots stand in for the real kinds because the property under test is the ORDER
-// of the two phases, not what either one does.
+// of the phases, not what any one does.
 func TestShutdownStopsSlotsBeforeModules(t *testing.T) {
 	order := []string{}
 	log := logger.New("error", false)
@@ -129,6 +130,9 @@ func TestShutdownStopsSlotsBeforeModules(t *testing.T) {
 		registry: NewModuleRegistry(&ModuleDeps{Logger: log, Config: cfg}),
 		closers:  []namedCloser{},
 	}
+	srv := newMockServer()
+	srv.onShutdown = func() { order = append(order, "shutdown:server") }
+	a.server = srv
 	a.slots = []resourceSlot{
 		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentMessaging}, order: &order},
 		&recordingSlot{sealedReadiness: sealedReadiness{kind: componentStreams}, order: &order},
@@ -139,7 +143,7 @@ func TestShutdownStopsSlotsBeforeModules(t *testing.T) {
 
 	require.NoError(t, a.Shutdown(context.Background()))
 
-	assert.Equal(t, []string{"stop:messaging", "stop:streams", "modules"}, order)
+	assert.Equal(t, []string{"shutdown:server", "stop:messaging", "stop:streams", "modules"}, order)
 }
 
 func TestShutdownTiming(t *testing.T) {
@@ -903,10 +907,11 @@ func TestCheckRouteConflictsAggregatesAndSkips(t *testing.T) {
 }
 
 // TestReadyCheckDowngradesCallerCancellationLog pins that a probe failure caused by the
-// caller abandoning its own request cannot mint ERROR lines: /ready is unauthenticated and
-// exempt from rate limiting, and wiki/cache.md tells operators to alert on that line. The
-// discriminator is the caller's own request context, not the probe error: a context.Canceled
-// raised while the caller is still waiting is an internal fault and must stay ERROR.
+// caller abandoning its own request cannot mint ERROR lines: /ready is unauthenticated
+// (inside the rate limiters only on the application listener; the probe listener has none,
+// ADR-120), and wiki/cache.md tells operators to alert on that line. The discriminator is
+// the caller's own request context, not the probe error: a context.Canceled raised while
+// the caller is still waiting is an internal fault and must stay ERROR.
 func TestReadyCheckDowngradesCallerCancellationLog(t *testing.T) {
 	tests := []struct {
 		name         string

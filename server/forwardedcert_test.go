@@ -339,7 +339,7 @@ func TestForwardedClientCertMiddleware(t *testing.T) {
 
 	t.Run("require_skips_health", func(t *testing.T) {
 		e := newTenantTestEcho()
-		skipper := CreateProbeSkipper("/health", "/ready")
+		skipper := newProbeSkipper("/health", "/ready")
 		e.Use(forwardedClientCertMiddlewareEcho(config.ForwardedClientCertConfig{Enabled: true, Require: true}, skipper, &testLogger{}))
 		e.GET("/health", func(c *echo.Context) error {
 			return c.String(http.StatusOK, "ok")
@@ -350,6 +350,20 @@ func TestForwardedClientCertMiddleware(t *testing.T) {
 		e.ServeHTTP(rec, req)
 
 		require.Equal(t, http.StatusOK, rec.Code, "ALB health checks carry no client certificate — Require must never take the target group down")
+	})
+
+	// The exemption above must not stretch to a request that merely reads as a probe: a
+	// percent-encoded spelling routes to a module route, so Require still applies to it.
+	t.Run("require_rejects_encoded_health_spelling", func(t *testing.T) {
+		e := newTenantTestEcho()
+		skipper := newProbeSkipper("/health", "/ready")
+		e.Use(forwardedClientCertMiddlewareEcho(config.ForwardedClientCertConfig{Enabled: true, Require: true}, skipper, &testLogger{}))
+		e.GET("/:id", func(c *echo.Context) error {
+			return c.String(http.StatusOK, "module")
+		})
+
+		assert.Equal(t, http.StatusUnauthorized, serveEngine(e, http.MethodGet, "/%68ealth").Code,
+			"a module route reached through an encoded probe spelling still needs the forwarded client certificate")
 	})
 
 	// client_supplied_headers_note pins the documented trust model (see

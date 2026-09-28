@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	echootel "github.com/labstack/echo-opentelemetry"
 	"github.com/labstack/echo/v5"
@@ -54,16 +53,15 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	// Gate it on observabilityEnabled (RequestID/RequestEnrich below stay
 	// unconditional so W3C trace propagation works regardless).
 	// Shared probe skipper: health/ready requests bypass the observability and
-	// identity-establishing middlewares below.
-	probeSkipper := CreateProbeSkipper(healthPath, readyPath)
+	// identity-establishing middlewares below. Keyed on the matched route template, so the
+	// exemption covers exactly the probe routes this server registered (see isProbeRequest).
+	skipProbe := newProbeSkipper(healthPath, readyPath)
 
 	if observabilityEnabled {
 		e.Use(echootel.NewMiddlewareWithConfig(echootel.Config{
 			ServerName:     cfg.App.Name,
 			TracerProvider: otel.GetTracerProvider(),
-			Skipper: func(c *echo.Context) bool {
-				return probeSkipper(c.Request())
-			},
+			Skipper:        middleware.Skipper(skipProbe),
 			MetricAttributes: func(c *echo.Context, v *echootel.Values) []attribute.KeyValue {
 				// echo-opentelemetry treats a non-empty MetricAttributes return as a
 				// REPLACEMENT for its default attribute set: Metrics.Record falls back to
@@ -78,9 +76,9 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 				// url.scheme from r.TLS alone; we additionally honor X-Forwarded-Proto.
 				// Appended after the defaults so our value wins attribute.Set's
 				// last-value-wins de-duplication (a duplicate url.scheme key is harmless).
-				scheme := "http"
-				if c.Request().TLS != nil || c.Request().Header.Get("X-Forwarded-Proto") == "https" {
-					scheme = "https"
+				scheme := schemeHTTP
+				if c.Request().TLS != nil || c.Request().Header.Get("X-Forwarded-Proto") == schemeHTTPS {
+					scheme = schemeHTTPS
 				}
 				attrs = append(attrs, attribute.String("url.scheme", scheme))
 
@@ -110,35 +108,14 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 		e.Use(ipPreGuardEcho(cfg.App.Rate.IPPreGuard.Threshold, log))
 	}
 
-	setupIdentityMiddlewares(e, log, cfg, probeSkipper)
+	setupIdentityMiddlewares(e, log, cfg, skipProbe)
 
 	// Logger middleware with zerolog
-	e.Use(loggerWithConfigEcho(log, LoggerConfig{
-		HealthPath:           healthPath,
-		ReadyPath:            readyPath,
-		SlowRequestThreshold: 1 * time.Second,
-	}))
+	e.Use(requestLoggerEcho(log, healthPath, readyPath))
 
-	// Recovery. DisableStackAll keeps the capture to the panicking goroutine:
-	// PanicStackError.Error() concatenates the stack, and that string becomes the
-	// OTel span's status description on every 500, so the default all-goroutine
-	// dump puts up to 4 KB of unrelated stacks on a hot-path attribute. The
-	// panicking goroutine is the one that identifies the site.
-	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{DisableStackAll: true}))
+	usePanicRecovery(e)
 
-	e.Use(sanitizePanicValue())
-
-	// Registered AFTER Recover, so it sits INSIDE it and sees the raw recovered
-	// value. Order matters and is the whole point — see sanitizePanicValue.
-
-	// Security headers
-	e.Use(middleware.SecureWithConfig(middleware.SecureConfig{
-		XSSProtection:         "1; mode=block",
-		ContentTypeNosniff:    "nosniff",
-		XFrameOptions:         "SAMEORIGIN",
-		HSTSMaxAge:            3600,
-		ContentSecurityPolicy: "default-src 'self'",
-	}))
+	e.Use(secureHeadersEcho())
 
 	// Timeout - add a request-scoped deadline without swapping the response writer.
 	// This prevents goroutine panics when the context is canceled mid-flight.
@@ -176,17 +153,68 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	}
 }
 
+// setupProbeMiddlewares registers the probe listener's chain (ADR-120): the application
+// chain's outermost recover, request ID, request logger, Recover + sanitizePanicValue,
+// Secure headers and middleware timeout, in the same order. Nothing that limits,
+// identifies or reshapes a request joins it — no rate limiter or IP pre-guard, and no
+// requestEnrich, OTel, CORS, tenant, forwarded client cert, body limit, gzip or timing.
+// No limiter may be added here: sharing the application's budget is what let a noisy
+// client push /ready to 429. Probes carry no trace context, and without requestEnrich's
+// lease scope a handle a probe borrows is released at once.
+func setupProbeMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healthPath, readyPath string) {
+	e.Use(outermostRecoverEcho(log, cfg))
+	e.Use(requestIDMiddlewareEcho())
+	e.Use(requestLoggerEcho(log, healthPath, readyPath))
+	usePanicRecovery(e)
+	e.Use(secureHeadersEcho())
+	e.Use(timeoutEcho(cfg.Server.Timeout.Middleware))
+}
+
+// requestLoggerEcho is the zerolog access logger, with its probe-path handling keyed on
+// the paths this engine serves the probes at.
+func requestLoggerEcho(log logger.Logger, healthPath, readyPath string) echo.MiddlewareFunc {
+	return loggerWithConfigEcho(log, LoggerConfig{
+		HealthPath:           healthPath,
+		ReadyPath:            readyPath,
+		SlowRequestThreshold: slowRequestThreshold,
+	})
+}
+
+// usePanicRecovery registers Echo's Recover, then sanitizePanicValue. Registered AFTER
+// Recover, sanitizePanicValue sits INSIDE it and sees the raw recovered value. Order
+// matters and is the whole point — see sanitizePanicValue.
+//
+// DisableStackAll keeps the capture to the panicking goroutine: PanicStackError.Error()
+// concatenates the stack, and that string becomes the OTel span's status description on
+// every 500, so the default all-goroutine dump puts up to 4 KB of unrelated stacks on a
+// hot-path attribute. The panicking goroutine is the one that identifies the site.
+func usePanicRecovery(e *echo.Echo) {
+	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{DisableStackAll: true}))
+	e.Use(sanitizePanicValue())
+}
+
+// secureHeadersEcho sets the security response headers.
+func secureHeadersEcho() echo.MiddlewareFunc {
+	return middleware.SecureWithConfig(middleware.SecureConfig{
+		XSSProtection:         "1; mode=block",
+		ContentTypeNosniff:    "nosniff",
+		XFrameOptions:         "SAMEORIGIN",
+		HSTSMaxAge:            3600,
+		ContentSecurityPolicy: "default-src 'self'",
+	})
+}
+
 // setupIdentityMiddlewares registers the identity-establishing middlewares
 // (tenant resolution, ALB forwarded-client-cert). Both run before the access
 // logger so their rejection paths can leave their own WARN trail, and both
 // honor the shared probe skipper.
-func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, probeSkipper SkipperFunc) {
+func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, skipProbe probeSkipper) {
 	// Multi-tenant tenant resolver middleware (if enabled)
 	if cfg.Multitenant.Enabled {
 		resolver := buildTenantResolver(cfg)
 		if resolver != nil {
 			// Use skipper-aware middleware to bypass tenant resolution for health probes
-			e.Use(tenantMiddlewareEcho(resolver, probeSkipper, log))
+			e.Use(tenantMiddlewareEcho(resolver, skipProbe, log))
 		} else {
 			log.Warn().Msg("Tenant resolver could not be constructed; skipping tenant middleware")
 		}
@@ -210,7 +238,7 @@ func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Confi
 				"require implies the middleware; enabling it (config.Validate rejects this combination, " +
 				"but this config path bypassed validation). Set enabled=true explicitly.")
 		}
-		e.Use(forwardedClientCertMiddlewareEcho(fcc, probeSkipper, log))
+		e.Use(forwardedClientCertMiddlewareEcho(fcc, skipProbe, log))
 	}
 }
 

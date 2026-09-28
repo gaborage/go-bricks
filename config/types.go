@@ -95,6 +95,8 @@ type ServerConfig struct {
 
 	TLS ServerTLSConfig `koanf:"tls" json:"tls" yaml:"tls" toml:"tls" mapstructure:"tls"`
 
+	Probes ProbesConfig `koanf:"probes" json:"probes" yaml:"probes" toml:"probes" mapstructure:"probes"`
+
 	ForwardedClientCert ForwardedClientCertConfig `koanf:"forwardedclientcert" json:"forwardedclientcert" yaml:"forwardedclientcert" toml:"forwardedclientcert" mapstructure:"forwardedclientcert"`
 
 	// TrustedProxies holds CIDR ranges of reverse proxies whose
@@ -136,6 +138,18 @@ type PathConfig struct {
 	Base   string `koanf:"base" json:"base" yaml:"base" toml:"base" mapstructure:"base"`
 	Health string `koanf:"health" json:"health" yaml:"health" toml:"health" mapstructure:"health"`
 	Ready  string `koanf:"ready" json:"ready" yaml:"ready" toml:"ready" mapstructure:"ready"`
+}
+
+// ProbesConfig opts /health and /ready onto an internal probe listener (ADR-120), served
+// without server.path.base; the application listener then answers 404 at those paths.
+type ProbesConfig struct {
+	// Port is the probe listener's port. 0, the default, disables the listener and keeps
+	// the probes on the application listener. Env: SERVER_PROBES_PORT.
+	Port int `koanf:"port" json:"port" yaml:"port" toml:"port" mapstructure:"port"`
+	// Host is the probe listener's bind host; unset takes server.host (see
+	// ServerConfig.EffectiveProbeHost). A delivered-empty value fails configuration
+	// resolution rather than widening a loopback bind. Env: SERVER_PROBES_HOST.
+	Host string `koanf:"host" json:"host" yaml:"host" toml:"host" mapstructure:"host"`
 }
 
 // GzipConfig holds HTTP response compression settings.

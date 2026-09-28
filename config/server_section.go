@@ -70,7 +70,64 @@ func checkServer(cfg *ServerConfig) error {
 		return err
 	}
 
+	if err := validateServerProbes(cfg); err != nil {
+		return err
+	}
+
 	return validateServerForwardedClientCert(&cfg.ForwardedClientCert)
+}
+
+// EffectiveProbeHost returns the host the probe listener binds: server.probes.host when
+// set, else server.host. Validation and server.New both read it, so a Go-assembled config
+// that skipped validation binds the address validation judged.
+func (c *ServerConfig) EffectiveProbeHost() string {
+	if c.Probes.Host != "" {
+		return c.Probes.Host
+	}
+	return c.Host
+}
+
+// CheckProbeCollision refuses an enabled probe listener on server.port when the two
+// effective hosts overlap: equal as strings, or either one unspecified. Distinct specific
+// hosts pass, aliases included (localhost and 127.0.0.1); an alias pair fails at bind with
+// the OS error only when the addresses the names resolve to overlap. server.Start
+// re-applies it before either bind, because a Go-assembled config skips validation and
+// darwin binds 0.0.0.0:P beside 127.0.0.1:P without error.
+func (c *ServerConfig) CheckProbeCollision() error {
+	if c.Probes.Port <= 0 || c.Probes.Port != c.Port {
+		return nil
+	}
+	probeHost := c.EffectiveProbeHost()
+	if probeHost != c.Host && !isUnspecifiedHost(probeHost) && !isUnspecifiedHost(c.Host) {
+		return nil
+	}
+	return &ConfigError{
+		Category: errCategoryInvalid,
+		Field:    fieldServerProbesPort,
+		Message: fmt.Sprintf("%d is also server.port, and the probe host %q overlaps the server host %q",
+			c.Probes.Port, probeHost, c.Host),
+		Action: "give server.probes.port its own port, or bind server.probes.host and server.host to distinct specific addresses",
+	}
+}
+
+// isUnspecifiedHost reports a bind host that listens on every interface.
+func isUnspecifiedHost(host string) bool {
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		return true
+	default:
+		return false
+	}
+}
+
+// validateServerProbes rejects a probe port outside 0..65535 (0 disables the listener)
+// and one that collides with the application listener.
+func validateServerProbes(cfg *ServerConfig) error {
+	if cfg.Probes.Port < 0 || cfg.Probes.Port > 65535 {
+		return NewInvalidFieldError(fieldServerProbesPort, fmt.Sprintf(errInvalidField, cfg.Probes.Port),
+			[]string{"0 (disabled)", portRange})
+	}
+	return cfg.CheckProbeCollision()
 }
 
 // Rejection reasons from ParseTrustedProxyCIDR. Unexported: only this package

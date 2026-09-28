@@ -247,6 +247,9 @@ const (
 
 	fieldServerTrustedProxies = "server.trustedproxies"
 
+	fieldServerProbesPort = "server.probes.port"
+	fieldServerProbesHost = "server.probes.host"
+
 	// actionListSpecificProxyRanges is the remedy for a default route on ANY of the three
 	// trusted-proxy keys. Shared so the three refusals cannot drift apart in wording.
 	actionListSpecificProxyRanges = "list the specific proxy ranges to trust instead of a default route"

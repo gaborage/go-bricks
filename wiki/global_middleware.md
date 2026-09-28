@@ -31,7 +31,7 @@ keystore-backed token verifier, a DB/cache handle, resolved config.
 | Runs once per request | Registered on the root echo chain (`e.Use`), compiled once, applied to every request. |
 | Cannot be skipped per-route | Registration is framework-controlled; no route-level opt-out exists. |
 | After tenant resolution | Lands after the built-in chain, so the tenant is already in `context.Context`. |
-| Skips health/ready | The framework wraps each with the health/ready probe skipper. |
+| Skips health/ready | The framework wraps each with the health/ready probe skipper: the exemption is keyed on the route the router matched, so it covers exactly the probe routes the server registered, on `GET`/`HEAD`. |
 | Deterministic ordering | Across modules, middleware composes in module-registration order. |
 
 ## Bearer authentication is not this seam
@@ -91,8 +91,14 @@ response, never both.
 ### Public-route exemptions
 
 Because no route can opt out, exemptions (login/token endpoints, public assets) live **inside
-the middleware body** — inspect `c.Request().URL.Path` or `c.RouteTemplate()`. The only
-framework-level exemption is the health/ready probes.
+the middleware body** — match on `c.RouteTemplate()`, the route the router actually matched.
+Do not key an exemption on `c.Request().URL.Path`: that is the *decoded* path, while the
+router matches the escaped form, so `/orders/%6cogin` decodes onto an exemption while routing
+to a different handler — and an earlier global middleware can rewrite that field outright.
+(A `server.SkipperFunc` only ever sees an `*http.Request`, but the template is still there:
+echo's router stamps it on `r.Pattern`, which is what `server.CreateProbeSkipper` reads, falling
+back to `r.URL.RawPath` only when no template was stamped.) The only framework-level exemption is
+the health/ready probes.
 
 ## Placement in the chain
 
