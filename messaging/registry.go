@@ -1088,9 +1088,15 @@ func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaratio
 func withAMQPReply(event logger.LogEvent, err error) logger.LogEvent {
 	var amqpErr *amqp.Error
 	if errors.As(err, &amqpErr) {
-		return event.Int("amqp_reply_code", amqpErr.Code).Str("amqp_reply_text", amqpErr.Reason)
+		return withBrokerReply(event, amqpErr.Code, amqpErr.Reason)
 	}
 	return event
+}
+
+// withBrokerReply adds a broker reply code and text to event under the keys every
+// messaging log line uses for them.
+func withBrokerReply(event logger.LogEvent, code int, text string) logger.LogEvent {
+	return event.Int("amqp_reply_code", code).Str("amqp_reply_text", text)
 }
 
 // channelGenerationer is the optional client capability the reconnect
