@@ -4552,11 +4552,11 @@ When `deps.MeterProvider`, `deps.Tracer`, and `deps.Logger` are wired (default w
 
 | Signal | Name | Attributes |
 |---|---|---|
-| Counter | `jose.failures.total` | `code` (e.g. `JOSE_DECRYPT_FAILED`), `direction` (`inbound`/`outbound`), `http.method`, `http.route` |
+| Counter | `jose.failures.total` | `code` (e.g. `JOSE_DECRYPT_FAILED`), `direction` (`inbound`/`outbound`), `http.method`, `http.route` (matched route template only — omitted when the engine reports no template: an unmatched path, or a middleware-bearing group's catch-all) |
 | Histogram | `jose.operation.duration` | `operation` (`decode_request`/`encode_response`) |
 | Span | `jose.decode_request` | `jose.direction`; `jose.error.code` on failure |
 | Span | `jose.encode_response` | `jose.direction`; `jose.error.code` on failure |
-| Log (ERROR) | structured | `code`, `direction`, `route` — **never** plaintext body or key material |
+| Log (ERROR) | structured | `code`, `direction`, `http.method`, `http.route` (same omit-when-no-template rule as the counter) — **never** plaintext body or key material |
 
 ### Outbound HTTP JOSE (calling a partner from your service)
 
@@ -5393,7 +5393,7 @@ When `observability.enabled: true`, the framework auto-emits:
 | Cache manager | `cache.manager.active_caches` | UpDownCounter | — |
 | Cache manager | `cache.manager.evictions` / `.idle_cleanups` / `.total_created` / `.errors` | Counter | — |
 | Go runtime | `process.runtime.go.{mem.*,goroutines,gc.*,sched.*}` | various | OTel runtime semconv |
-| JOSE | `jose.failures.total` | Counter | `code`, `direction`, `http.method`, `http.route` |
+| JOSE | `jose.failures.total` | Counter | `code`, `direction`, `http.method`, `http.route` (omitted when the engine reports no template: an unmatched path, or a middleware-bearing group's catch-all) |
 | JOSE | `jose.operation.duration` | Histogram | `operation` |
 
 **Auto-emitted logs** (zerolog → OTel logs bridge):

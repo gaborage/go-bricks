@@ -62,10 +62,11 @@ func (o *joseObservability) tracerOrNoop() trace.Tracer {
 	return o.tracer
 }
 
-// recordFailure emits the structured failure log AND increments the counter. Centralized
-// so audit-grade fields (route, kid, alg, enc, code, cause) are guaranteed to appear in
-// both surfaces simultaneously — divergence between log and metric surfaces is the kind
-// of inconsistency that bites operators during incidents.
+// recordFailure emits the structured failure log AND increments the counter. Centralized so
+// the two surfaces cannot drift: both carry code, direction and http.method, both carry
+// http.route under the same rule or omit it on both, and the log adds the rejection message.
+// Divergence between log and metric surfaces is the kind of inconsistency that bites
+// operators during incidents.
 func (o *joseObservability) recordFailure(ctx context.Context, c *echo.Context, direction string, apiErr IAPIError) {
 	if o == nil {
 		return
@@ -73,20 +74,29 @@ func (o *joseObservability) recordFailure(ctx context.Context, c *echo.Context, 
 	jaerr, _ := apiErr.(*joseAPIError)
 	code := apiErr.ErrorCode()
 	method := c.Request().Method
-	route := c.Path()
-	if route == "" {
-		route = c.Request().URL.Path
-	}
+	// Empty unless the engine matched a template — see matchedRouteTemplate
+	// (server/handler.go) for why a caller-chosen path must never reach a route-keyed
+	// surface. Omitting beats substituting here because the OTel HTTP semantic
+	// conventions make the attribute name a promise: http.route is a route template, so
+	// a concrete (and percent-decoded) path reported under it is wrong data, not merely
+	// high-cardinality data. Same SHAPE as the URL-path fallback v0.68.0 removed from
+	// requestLogger.shouldSkipPath for GHSA-h4jw-4c64-48mh, though unreachable through
+	// the framework's own routes: shouldSkipPath sits in a global middleware and so runs on
+	// every request, matched or not, whereas every recordFailure call site sits inside the
+	// handlerWrapper closure that routeGroup.addEcho registers, so it runs only once its
+	// own route matched (#1816).
+	route := matchedRouteTemplate(c)
 
 	if o.failureCount != nil {
-		o.failureCount.Add(ctx, 1,
-			metric.WithAttributes(
-				attribute.String("code", code),
-				attribute.String("direction", direction),
-				attribute.String("http.method", method),
-				attribute.String("http.route", route),
-			),
-		)
+		attrs := []attribute.KeyValue{
+			attribute.String("code", code),
+			attribute.String("direction", direction),
+			attribute.String("http.method", method),
+		}
+		if route != "" {
+			attrs = append(attrs, attribute.String("http.route", route))
+		}
+		o.failureCount.Add(ctx, 1, metric.WithAttributes(attrs...))
 	}
 
 	if o.logger == nil {
@@ -95,8 +105,10 @@ func (o *joseObservability) recordFailure(ctx context.Context, c *echo.Context, 
 	ev := o.logger.WithContext(ctx).Error().
 		Str("code", code).
 		Str("direction", direction).
-		Str("http.method", method).
-		Str("http.route", route)
+		Str("http.method", method)
+	if route != "" {
+		ev = ev.Str("http.route", route)
+	}
 	if jaerr != nil {
 		ev = ev.Str("message", jaerr.message)
 	}
@@ -153,7 +165,8 @@ func WithJOSEResolver(r jose.KeyResolver) HandlerRegistryOption {
 
 // WithJOSELogger attaches a logger used to emit structured ERROR records on JOSE
 // failure paths (decrypt failed, signature invalid, etc.). Records include code,
-// direction, route, and method — never plaintext payloads or key material. When
+// direction, method, and http.route when the engine reports a route template (omitted
+// when it reports none) — never plaintext payloads or key material. When
 // no logger is supplied, JOSE failures still flow through the IAPIError envelope to
 // the wire and to the framework's request logger; this option only adds the
 // dedicated audit-grade record.
