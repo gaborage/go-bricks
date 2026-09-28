@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,6 +31,15 @@ func returnTestClient(t *testing.T, ch *fakeChannel) *AMQPClientImpl {
 	return c
 }
 
+// ackRetries makes the fake ack every later publish itself, so a retry that only a
+// misrouted return could cause ends the publish at once, counted, instead of
+// waiting out a confirmation.
+func ackRetries(ch *fakeChannel) {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	ch.autoAck = true
+}
+
 // pendingKeys lists every key c still holds in pendingPublishes and in its
 // Mandatory index.
 func pendingKeys(c *AMQPClientImpl) []any {
@@ -43,6 +53,39 @@ func pendingKeys(c *AMQPClientImpl) []any {
 	return keys
 }
 
+// TestAMQPClientIgnoresAReturnFromATornDownGeneration feeds the old generation a
+// return naming the live publish's message id, plus an ack on the same tag the live
+// publish holds, and requires the live publish to still succeed on its own ack.
+func TestAMQPClientIgnoresAReturnFromATornDownGeneration(t *testing.T) {
+	ch1 := &fakeChannel{}
+	c := returnTestClient(t, ch1)
+	oldReturns, oldConfirms := ch1.returnListener(), c.notifyConfirm
+	require.NotNil(t, oldReturns, "the first generation must listen for returns")
+
+	ch2 := &fakeChannel{publishAttemptSignal: make(chan struct{}, 1)}
+	c.changeChannel(ch2)
+
+	result := make(chan error, 1)
+	go func() { result <- c.publishBytes(context.Background(), mandatoryOptions, []byte(returnTestBody)) }()
+	awaitPublishAttempt(t, ch2.publishAttemptSignal)
+	msg, ok := ch2.lastPublishedMessage()
+	require.True(t, ok)
+	ackRetries(ch2)
+
+	oldReturns <- amqp.Return{ReplyCode: amqp.NoRoute, MessageId: msg.MessageId}
+	oldConfirms <- amqp.Confirmation{DeliveryTag: 1, Ack: true}
+	awaitDrained(t, oldConfirms)
+	// A second ack is taken only after the first was fully routed.
+	oldConfirms <- amqp.Confirmation{DeliveryTag: 2, Ack: true}
+	awaitDrained(t, oldConfirms)
+	require.Empty(t, oldReturns, "the old generation's dispatcher must have read the return")
+
+	c.notifyConfirm <- amqp.Confirmation{DeliveryTag: 1, Ack: true}
+	require.NoError(t, awaitResult(t, result))
+	assert.Equal(t, uint64(1), atomic.LoadUint64(&ch2.publishAttempts),
+		"a return from a torn-down generation must not send a live publish round again")
+}
+
 // TestRecordReturnMarksOnlyItsOwnGeneration also requires a return that matches no
 // waiting publish to leave one DEBUG line naming the broker's reply, the message id
 // and the generation, and never the returned body.
@@ -54,7 +97,7 @@ func TestRecordReturnMarksOnlyItsOwnGeneration(t *testing.T) {
 	ret := &amqp.Return{ReplyCode: amqp.NoRoute, ReplyText: "NO_ROUTE", MessageId: "m", Body: []byte(returnTestBody)}
 
 	c.recordReturn(1, ret)
-	assert.Nil(t, live.returned, "a generation-1 return must not mark a generation-2 publish")
+	assert.Nil(t, live.returned.Load(), "a generation-1 return must not mark a generation-2 publish")
 	dropped := log.Line(t, "Dropped a broker return that matches no waiting publish")
 	assert.Equal(t, logger.LevelDebug, dropped.Level)
 	assert.Equal(t, []string{"312"}, dropped.Values("amqp_reply_code"))
@@ -66,7 +109,7 @@ func TestRecordReturnMarksOnlyItsOwnGeneration(t *testing.T) {
 	}
 
 	c.recordReturn(2, ret)
-	assert.Equal(t, &publishReturn{replyCode: amqp.NoRoute, replyText: "NO_ROUTE", messageID: "m"}, live.returned)
+	assert.Equal(t, &publishReturn{replyCode: amqp.NoRoute, replyText: "NO_ROUTE", messageID: "m"}, live.returned.Load())
 	assert.Len(t, log.Lines(), 1, "a matched return logs nothing")
 }
 
@@ -80,7 +123,7 @@ func TestUntrackPendingKeepsALaterPublishOfTheSameMessageID(t *testing.T) {
 	assert.Nil(t, c.untrackPending(confirmKey{generation: 1, tag: 1}), "an entry is untracked once")
 
 	c.recordReturn(1, &amqp.Return{ReplyCode: amqp.NoRoute, MessageId: "m"})
-	assert.NotNil(t, second.returned, "untracking the first publish must keep the second one's index entry")
+	assert.NotNil(t, second.returned.Load(), "untracking the first publish must keep the second one's index entry")
 }
 
 // TestDrainPendingPublishesWithNackUntracksOnlyItsGeneration requires the reconnect
@@ -132,6 +175,182 @@ func TestPublishAttemptUntracksACancelledOrShutDownMandatoryPublish(t *testing.T
 
 			require.ErrorIs(t, awaitResult(t, result), tt.wantErr)
 			assert.Empty(t, pendingKeys(c), "an attempt that stops waiting must drop the publish from both maps")
+		})
+	}
+}
+
+// TestPublisherPublishFailsUnroutableWhenEveryAttemptIsReturned is the #1794
+// regression: a Mandatory publish the broker returns and then acks used to report
+// success. It must now spend the configured attempts and fail unroutable, logging
+// one retry WARN per attempt that is retried: the last one is not.
+func TestPublisherPublishFailsUnroutableWhenEveryAttemptIsReturned(t *testing.T) {
+	ch := &fakeChannel{unroutableRemaining: 100}
+	c := returnTestClient(t, ch)
+	c.maxPublishAttempts = 3
+	log := newRecordingLogger()
+	c.log = log
+
+	pub := DeclareTypedPublisher[orderCreated](NewDeclarations(), &PublisherOptions{
+		Exchange: typedPubExchange, RoutingKey: typedPubRoutingKey, EventType: "OrderCreated", Mandatory: true,
+	})
+
+	err := pub.Publish(t.Context(), c, orderCreated{OrderID: 7})
+	require.ErrorIs(t, err, ErrPublishUnroutable, "a returned publish must not report success")
+	require.ErrorIs(t, err, ErrPublishRetriesExhausted)
+	assert.Equal(t, uint64(3), atomic.LoadUint64(&ch.publishAttempts), "every configured attempt is spent")
+	var warns int
+	for _, line := range log.Lines() {
+		if line.Msg == "Message returned by broker as unroutable, retrying..." {
+			warns++
+		}
+	}
+	assert.Equal(t, 2, warns, "one retry WARN per retried attempt, none for the last")
+}
+
+func TestPublishBytesRetriesAReturnedPublishUntilItRoutes(t *testing.T) {
+	ch := &fakeChannel{unroutableRemaining: 1, autoAck: true}
+	c := returnTestClient(t, ch)
+
+	require.NoError(t, c.publishBytes(t.Context(), mandatoryOptions, []byte(returnTestBody)))
+
+	sent := ch.publishedMessages()
+	require.Len(t, sent, 2, "the returned attempt plus the retry that routed")
+	assert.Equal(t, sent[0].MessageId, sent[1].MessageId, "the retry resends the same message")
+}
+
+// TestPublishBytesSucceedsForAnUnroutableNonMandatoryPublish pins what does not
+// change without Mandatory: the publish succeeds on its first attempt. The fake
+// returns it before acking it anyway, which no broker does, so only the client
+// ignoring a return for a publish that did not ask for one keeps it at one attempt.
+func TestPublishBytesSucceedsForAnUnroutableNonMandatoryPublish(t *testing.T) {
+	ch := &fakeChannel{unroutableRemaining: 1, returnNonMandatory: true, autoAck: true}
+	c := returnTestClient(t, ch)
+
+	require.NoError(t, c.publishBytes(t.Context(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte(returnTestBody)))
+	assert.Zero(t, ch.unroutableRemaining, "the fake must have returned the publish")
+	assert.Equal(t, uint64(1), atomic.LoadUint64(&ch.publishAttempts), "a return must not send a non-mandatory publish round again")
+}
+
+// TestPublishBytesIgnoresAReturnNamingANonMandatoryPublish shows a return can fail
+// only a Mandatory publish: not when it carries a non-mandatory publish's id, and
+// not when it carries no id at all.
+func TestPublishBytesIgnoresAReturnNamingANonMandatoryPublish(t *testing.T) {
+	ch := &fakeChannel{publishAttemptSignal: make(chan struct{}, 1)}
+	c := returnTestClient(t, ch)
+	returns := ch.returnListener()
+	require.NotNil(t, returns, "the client must listen for returns")
+
+	result := publishAsync(context.Background(), c)
+	awaitPublishAttempt(t, ch.publishAttemptSignal)
+	msg, ok := ch.lastPublishedMessage()
+	require.True(t, ok)
+	ackRetries(ch)
+
+	returns <- amqp.Return{ReplyCode: amqp.NoRoute, MessageId: msg.MessageId}
+	returns <- amqp.Return{ReplyCode: amqp.NoRoute}
+	awaitDrained(t, returns)
+	c.notifyConfirm <- amqp.Confirmation{DeliveryTag: 1, Ack: true}
+
+	require.NoError(t, awaitResult(t, result))
+	assert.Equal(t, uint64(1), atomic.LoadUint64(&ch.publishAttempts), "a non-mandatory publish must never be sent round again")
+}
+
+func TestPublishBytesLogsAReturnWithoutItsBody(t *testing.T) {
+	ch := &fakeChannel{unroutableRemaining: 1, autoAck: true}
+	c := returnTestClient(t, ch)
+	log := newRecordingLogger()
+	c.log = log
+
+	require.NoError(t, c.publishBytes(t.Context(), mandatoryOptions, []byte(returnTestBody)))
+
+	msg, ok := ch.lastPublishedMessage()
+	require.True(t, ok)
+	line := log.Line(t, "Message returned by broker as unroutable, retrying...")
+	assert.Equal(t, []string{msg.MessageId}, line.Values("message_id"))
+	assert.Equal(t, []string{"1"}, line.Values("delivery_tag"), "the WARN names the returned attempt's delivery tag")
+	for _, l := range log.Lines() {
+		for _, p := range l.Pairs {
+			assert.NotContains(t, p[1], returnTestBody, "%q logged the returned body under %q", l.Msg, p[0])
+		}
+	}
+}
+
+// TestPublishBytesLogsTheLastReturnedAttempt runs a single attempt, which no retry
+// WARN ever describes: the terminal WARN must carry its return, without its body.
+func TestPublishBytesLogsTheLastReturnedAttempt(t *testing.T) {
+	ch := &fakeChannel{unroutableRemaining: 1}
+	c := returnTestClient(t, ch)
+	c.maxPublishAttempts = 1
+	log := newRecordingLogger()
+	c.log = log
+
+	err := c.publishBytes(t.Context(), mandatoryOptions, []byte(returnTestBody))
+	require.ErrorIs(t, err, ErrPublishUnroutable)
+
+	msg, ok := ch.lastPublishedMessage()
+	require.True(t, ok)
+	line := log.Line(t, "Publish failed after its last attempt, giving up")
+	assert.Equal(t, []string{msg.MessageId}, line.Values("message_id"))
+	assert.Equal(t, []string{"1"}, line.Values("delivery_tag"))
+	assert.Equal(t, []string{"312"}, line.Values("amqp_reply_code"))
+	for _, l := range log.Lines() {
+		assert.NotEqual(t, "Message returned by broker as unroutable, retrying...", l.Msg, "a single attempt is never retried")
+		for _, p := range l.Pairs {
+			assert.NotContains(t, p[1], returnTestBody, "%q logged the returned body under %q", l.Msg, p[0])
+		}
+	}
+}
+
+// TestPublishBytesFailsUnroutableWhenTheChannelDropsAReturnedPublish tears the
+// channel down after the broker returned a publish but before its ack arrived: the
+// reconnect drain must answer it as returned, not NACKed. In the second case the
+// return is still buffered when both listeners close, so only the dispatcher's
+// exit drain can record it; tornDownListeners makes an exit without that drain
+// lose it with probability 1-2^-16.
+func TestPublishBytesFailsUnroutableWhenTheChannelDropsAReturnedPublish(t *testing.T) {
+	tests := []struct {
+		name   string
+		record func(c *AMQPClientImpl, ch *fakeChannel, gen uint64, ret amqp.Return)
+	}{
+		{
+			name: "return_recorded_before_teardown",
+			record: func(c *AMQPClientImpl, _ *fakeChannel, gen uint64, ret amqp.Return) {
+				c.recordReturn(gen, &ret)
+			},
+		},
+		{
+			name: "return_buffered_at_teardown",
+			record: func(c *AMQPClientImpl, ch *fakeChannel, gen uint64, ret amqp.Return) {
+				// The live dispatcher takes a return the moment it is sent, so it
+				// exits on its own emptied listeners and a dispatcher for the same
+				// generation meets the teardown with the return still buffered.
+				close(c.notifyConfirm)
+				close(ch.returnListener())
+				confirms, returns := tornDownListeners(&ret)
+				c.dispatchConfirms(confirms, returns, gen)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch := &fakeChannel{publishAttemptSignal: make(chan struct{}, 1)}
+			c := returnTestClient(t, ch)
+			c.maxPublishAttempts = 1
+			gen, ready := c.channelGeneration()
+			require.True(t, ready)
+
+			result := make(chan error, 1)
+			go func() { result <- c.publishBytes(context.Background(), mandatoryOptions, []byte(returnTestBody)) }()
+			awaitPublishAttempt(t, ch.publishAttemptSignal)
+			msg, ok := ch.lastPublishedMessage()
+			require.True(t, ok)
+
+			tt.record(c, ch, gen, amqp.Return{ReplyCode: amqp.NoRoute, ReplyText: "NO_ROUTE", MessageId: msg.MessageId})
+			c.changeChannel(&fakeChannel{})
+
+			err := awaitResult(t, result)
+			require.ErrorIs(t, err, ErrPublishUnroutable, "a drained publish the broker returned must fail unroutable")
+			assert.NotErrorIs(t, err, ErrPublishNacked)
 		})
 	}
 }
@@ -192,7 +411,7 @@ func TestDrainReturnsStopsAtAClosedListener(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("drainReturns kept reading a closed listener")
 	}
-	assert.NotNil(t, p.returned, "the return buffered before the close must be recorded")
+	assert.NotNil(t, p.returned.Load(), "the return buffered before the close must be recorded")
 }
 
 // tornDownListeners builds the listeners amqp091 leaves at channel teardown: both
@@ -233,5 +452,5 @@ func TestDispatchConfirmsRecordsTheReturnsBufferedAtTeardown(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("the dispatcher must exit once its confirm listener closes")
 	}
-	assert.NotNil(t, p.returned, "a return buffered at teardown must be recorded before the dispatcher exits")
+	assert.NotNil(t, p.returned.Load(), "a return buffered at teardown must be recorded before the dispatcher exits")
 }

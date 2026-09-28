@@ -128,7 +128,7 @@ func initAMQPMeter() {
 
 	amqpPublishRetries, err = amqpMeter.Int64Counter(
 		metricPublishRetries,
-		metric.WithDescription("Number of message publish retry attempts due to NACK or timeout"),
+		metric.WithDescription("Number of message publish retry attempts, by reason: publish_error, nack, returned or timeout"),
 		metric.WithUnit("{retry}"),
 	)
 	logMetricError(metricPublishRetries, err)
@@ -345,13 +345,15 @@ func RecordStreamPublish(ctx context.Context, streamName string, duration time.D
 }
 
 // RecordPublishRetry records a publish retry attempt in the retry counter.
-// This is called each time a publish operation is retried due to NACK, timeout, or error.
+// This is called each time a publish operation is retried after a publish error,
+// a broker NACK, a Mandatory publish the broker returned as unroutable, or a
+// confirmation timeout.
 //
 // Parameters:
 //   - ctx: Context for metrics recording
 //   - exchange: The AMQP exchange name (empty string for default exchange)
 //   - routingKey: The routing key used for message delivery
-//   - reason: The reason for the retry (e.g., "nack", "timeout", "publish_error")
+//   - reason: The reason for the retry: "publish_error", "nack", "returned" or "timeout"
 func RecordPublishRetry(ctx context.Context, exchange, routingKey, reason string) {
 	meter := getAMQPMeter()
 	if meter == nil {

@@ -1,16 +1,19 @@
 package messaging
 
 import (
+	"sync/atomic"
+
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 // pendingPublish is one in-flight publish waiting for its broker confirmation,
 // stored under its (generation, delivery tag). messageID is set for a Mandatory
-// publish only. returned is written and read only by its generation's dispatcher.
+// publish only. returned is written by its generation's dispatcher and read by it
+// or by the reconnect drain, which does not wait for that dispatcher to exit.
 type pendingPublish struct {
 	confirm   chan publishConfirm
 	messageID string
-	returned  *publishReturn
+	returned  atomic.Pointer[publishReturn]
 }
 
 // mandatoryKey finds a generation's pending Mandatory publish by message id, the
@@ -63,9 +66,9 @@ func (c *AMQPClientImpl) untrackPending(key confirmKey) *pendingPublish {
 }
 
 // recordReturn attaches ret to generation gen's pending Mandatory publish that
-// carries its message id, if one is still waiting. A return that matches none is
-// dropped with a DEBUG line naming the broker's reply and the message id; the
-// returned body and headers never reach it.
+// carries its message id, if one is still waiting (ADR-122). A return that
+// matches none is dropped with a DEBUG line naming the broker's reply and the
+// message id; the returned body and headers never reach it.
 func (c *AMQPClientImpl) recordReturn(gen uint64, ret *amqp.Return) {
 	v, ok := c.pendingMandatory.Load(mandatoryKey{generation: gen, messageID: ret.MessageId})
 	if !ok {
@@ -79,11 +82,11 @@ func (c *AMQPClientImpl) recordReturn(gen uint64, ret *amqp.Return) {
 	if !ok {
 		return
 	}
-	p.returned = &publishReturn{replyCode: ret.ReplyCode, replyText: ret.ReplyText, messageID: ret.MessageId}
+	p.returned.Store(&publishReturn{replyCode: ret.ReplyCode, replyText: ret.ReplyText, messageID: ret.MessageId})
 }
 
 // drainReturns records every buffered return without blocking, and answers nil
-// once returns is closed.
+// once returns is closed (ADR-122).
 func (c *AMQPClientImpl) drainReturns(gen uint64, returns <-chan amqp.Return) <-chan amqp.Return {
 	for {
 		select {

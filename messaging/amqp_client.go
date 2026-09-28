@@ -71,7 +71,7 @@ type AMQPClientImpl struct {
 	pendingPublishes sync.Map
 	// pendingMandatory indexes the Mandatory entries of pendingPublishes by
 	// mandatoryKey, so a basic.return finds its publish in one lookup.
-	// trackPending and untrackPending keep the two maps in step.
+	// trackPending and untrackPending keep the two maps in step (ADR-122).
 	pendingMandatory sync.Map
 
 	// generation rotates on every changeChannel() to scope pendingPublishes
@@ -107,8 +107,8 @@ type AMQPClientImpl struct {
 	// behavior) — kept so struct-literal test clients that don't set the field
 	// retain their old semantics.
 	maxPublishAttempts int
-	// nackBackoff is the cancelable delay inserted between NACK retries, replacing
-	// the old zero-delay hot-spin. Zero means no delay.
+	// nackBackoff is the cancelable delay before retrying a NACKed or returned
+	// publish, replacing the old zero-delay hot-spin. Zero means no delay.
 	nackBackoff time.Duration
 	// publishTimeout is the aggregate per-publish bound (messaging.publishtimeout):
 	// when > 0, publishBytes derives a context deadline of this duration covering the
@@ -180,10 +180,10 @@ const (
 	// covers the common case (broker handshake + channel init) without materially
 	// extending a caller's request budget. See issue #655.
 	defaultReadyTimeout = 5 * time.Second
-	// defaultNackBackoff is a small cancelable pause between NACK retries so a
-	// transiently-unroutable publish (e.g. a binding still being created) gets a
-	// few spaced attempts without busy-spinning, while staying well under a tight
-	// request deadline.
+	// defaultNackBackoff is a small cancelable pause before retrying a NACKed
+	// publish, or a Mandatory one the broker returned as unroutable (e.g. while a
+	// binding is still being declared), so either gets a few spaced attempts
+	// without busy-spinning, while staying well under a tight request deadline.
 	defaultNackBackoff = 100 * time.Millisecond
 	// defaultConfirmBufferSize sizes the channel that receives broker publish
 	// confirmations. Big enough to absorb a reasonable concurrent-publish burst
@@ -199,6 +199,7 @@ const (
 	operationPublish        = "publish"
 	contentTypeOctetStream  = "application/octet-stream"
 	eventPublishRetry       = "amqp.publish.retry"
+	eventPublishExhausted   = "amqp.publish.exhausted"
 	// attrMessagingRabbitMQExchange is the exchange attribute both the publish
 	// span and the receive span stamp; semconv ships no helper for it.
 	attrMessagingRabbitMQExchange = "messaging.rabbitmq.exchange"
@@ -213,7 +214,8 @@ var (
 	ErrShutdown = errors.New("AMQP client is shutting down")
 	// ErrPublishRetriesExhausted is returned by publishBytes once the bounded retry loop
 	// reaches maxPublishAttempts. It wraps the last attempt's cause (one of ErrPublishNacked,
-	// ErrPublishConfirmTimeout, or the raw publish error) so a caller can see WHY it gave up.
+	// ErrPublishUnroutable, ErrPublishConfirmTimeout, or the raw publish error) so a caller can
+	// see WHY it gave up.
 	ErrPublishRetriesExhausted = errors.New("amqp: publish retries exhausted")
 	// ErrPublishNacked is the cause when the broker negatively acknowledged a publish. A
 	// basic.nack on a publish-confirm is a transient broker condition (disk alarm, mirror
@@ -221,6 +223,12 @@ var (
 	// informational (logging / direct-publisher branching) — the outbox relay does NOT
 	// classify on them (see ADR-033); it retries every publish failure.
 	ErrPublishNacked = errors.New("amqp: publish nacked by broker")
+	// ErrPublishUnroutable is the cause when the broker returned a Mandatory publish
+	// (basic.return) because no queue was bound to receive it, and then acknowledged
+	// it. A returned message was never queued, so the retry loop resends it (ADR-122).
+	// A publish without Mandatory is never returned: the broker drops it and
+	// acknowledges it as a success.
+	ErrPublishUnroutable = errors.New("amqp: publish returned by broker as unroutable")
 	// ErrPublishConfirmTimeout is the cause when a confirmed publish never received an
 	// ACK/NACK within connectionTimeout.
 	ErrPublishConfirmTimeout = errors.New("amqp: publish confirmation timed out")
@@ -318,8 +326,8 @@ func WithReinitDelay(d time.Duration) ClientOption {
 }
 
 // WithResendDelay overrides the wait between retries after a channel-level
-// publish error only; broker NACKs retry on the fixed 100ms nackBackoff and
-// confirmation timeouts retry immediately.
+// publish error only; broker NACKs and returns retry on the fixed 100ms
+// nackBackoff and confirmation timeouts retry immediately.
 // Non-positive values are ignored, leaving the 5s default in place.
 func WithResendDelay(d time.Duration) ClientOption {
 	return func(c *AMQPClientImpl) {
@@ -639,9 +647,10 @@ func (c *AMQPClientImpl) publishBytes(ctx context.Context, options publishOption
 
 	retryCount := 0
 	// lastCause records why the most recent attempt failed (the raw publish error,
-	// ErrPublishNacked, or ErrPublishConfirmTimeout). It is wrapped into the terminal error on
-	// every exit path so a deadline/cancel that fires mid-retry still reports what was going
-	// wrong — for the caller's logging and for direct publishers that branch on the cause.
+	// ErrPublishNacked, ErrPublishUnroutable, or ErrPublishConfirmTimeout). It is
+	// wrapped into the terminal error on every exit path so a deadline/cancel that
+	// fires mid-retry still reports what was going wrong — for the caller's logging
+	// and for direct publishers that branch on the cause.
 	var lastCause error
 	for {
 		if err := c.publishAttemptGuard(ctx, options, publishStart, span, lastCause); err != nil {
@@ -669,12 +678,13 @@ func (c *AMQPClientImpl) publishBytes(ctx context.Context, options publishOption
 // wait before retrying. The metric and span vocabularies are independent by
 // design — neither string is derived from the other.
 type retryArm struct {
-	cause        error   // ErrPublishNacked, ErrPublishConfirmTimeout, or the raw publish error
-	logCause     error   // publish-error arm only: logged, and rendered by TYPE on the span (ADR-083)
-	deliveryTag  *uint64 // NACK arm only
+	cause        error          // ErrPublishNacked, ErrPublishUnroutable, ErrPublishConfirmTimeout, or the raw publish error
+	logCause     error          // publish-error arm only: logged, and rendered by TYPE on the span (ADR-083)
+	deliveryTag  *uint64        // NACK and returned arms only
+	returned     *publishReturn // returned arm only: logged, never on the span
 	logMsg       string
-	metricReason string // publish_error | nack | timeout
-	spanReason   string // publish error | message not acknowledged | confirmation timeout
+	metricReason string // publish_error | nack | returned | timeout
+	spanReason   string // publish error | message not acknowledged | message returned | confirmation timeout
 	backoff      time.Duration
 }
 
@@ -695,29 +705,38 @@ func (c *AMQPClientImpl) armPublishFailure(err error) *retryArm {
 	}
 }
 
-// armConfirmation returns the retry arm for a NACK, or nil for a publish the
-// broker ACKed.
+// armConfirmation returns the retry arm for a NACK, or for an ACK the broker
+// sent after returning the publish, or nil for a publish the broker accepted.
 func (c *AMQPClientImpl) armConfirmation(confirm *publishConfirm) *retryArm {
-	if confirm.Ack {
-		return nil
-	}
 	tag := confirm.DeliveryTag
+	if confirm.Ack {
+		if confirm.returned == nil {
+			return nil
+		}
+		return &retryArm{
+			cause:        ErrPublishUnroutable,
+			deliveryTag:  &tag,
+			returned:     confirm.returned,
+			logMsg:       "Message returned by broker as unroutable, retrying...",
+			metricReason: "returned",
+			spanReason:   "message returned",
+			backoff:      c.nackBackoff,
+		}
+	}
 	return &retryArm{
 		cause:        ErrPublishNacked,
 		deliveryTag:  &tag,
 		logMsg:       "Message publish not acknowledged, retrying...",
 		metricReason: "nack",
 		spanReason:   "message not acknowledged",
-		// nackBackoff spaces NACK retries — replacing the old zero-delay hot-spin
-		// so a transiently-unroutable publish gets a few spaced attempts without
-		// pinning a core.
-		backoff: c.nackBackoff,
+		backoff:      c.nackBackoff,
 	}
 }
 
 // publishAttempt sends one already-prepared publish, then waits for its
-// confirmation. It returns (nil, nil) once the broker ACKs, the failed attempt's retryArm when
-// the loop should retry, or a terminal error the caller must return.
+// confirmation. It returns (nil, nil) once the broker ACKs a publish it did not
+// return, the failed attempt's retryArm when the loop should retry, or a
+// terminal error the caller must return.
 func (c *AMQPClientImpl) publishAttempt(
 	ctx context.Context, options publishOptions, publishing *amqp.Publishing, publishStart time.Time, span trace.Span, lastCause error,
 ) (*retryArm, error) {
@@ -949,37 +968,35 @@ func (c *AMQPClientImpl) publishAttemptGuard(
 	return nil
 }
 
-// publishRetryEpilogue is the shared tail of every failed-attempt branch. It
-// records the arm on all three sinks (WARN log, retry metric, span event), applies
-// the attempt ceiling (returning a terminal ErrPublishRetriesExhausted once reached)
-// and, if the arm carries a backoff, a cancelable wait that still honors ctx cancel /
-// client shutdown. It returns a non-nil error the caller must RETURN from
-// publishBytes, or nil to CONTINUE the retry loop. (Only the failure arms reach it —
-// never the ACK path.)
+// publishRetryEpilogue is the shared tail of every failed-attempt branch, and of
+// an ACK that followed a return, which armConfirmation turns into the returned
+// arm. It applies the attempt ceiling first: the last attempt is not retried, so
+// it logs one terminal WARN and adds one amqp.publish.exhausted span event with
+// that attempt's details, and returns ErrPublishRetriesExhausted without touching
+// the retry sinks. Otherwise it records the arm on all three retry sinks (WARN
+// log, retry metric, amqp.publish.retry span event) and, if the arm carries a
+// backoff, runs a cancelable wait that still honors ctx cancel / client shutdown.
+// It returns a non-nil error the caller must RETURN from publishBytes, or nil to
+// CONTINUE the retry loop.
 func (c *AMQPClientImpl) publishRetryEpilogue(
 	ctx context.Context, options publishOptions, startTime time.Time, span trace.Span, retryCount int, arm *retryArm,
 ) error {
-	c.logRetry(arm, retryCount)
+	if c.maxPublishAttempts > 0 && retryCount >= c.maxPublishAttempts {
+		c.logExhausted(options, arm, retryCount)
+		// The terminal status records only the exhaustion wrapper's type; this
+		// event keeps the last attempt's typed cause on the trace.
+		span.AddEvent(eventPublishExhausted, trace.WithAttributes(
+			append(attemptSpanAttributes(arm), attribute.Int("attempts", retryCount))...))
+		return c.publishExhausted(ctx, options, startTime, span, retryCount, arm.cause)
+	}
+
+	c.logRetry(options, arm, retryCount)
 
 	tracking.RecordPublishRetry(ctx, options.Exchange, options.RoutingKey, arm.metricReason)
 
-	// SECURITY: the event's attributes are an off-platform sink, and a broker
-	// error's Reason is server-authored — type only, like every other span sink
-	// (ADR-083). The WARN above keeps the message.
-	attrs := []attribute.KeyValue{attribute.String("reason", arm.spanReason)}
-	if arm.logCause != nil {
-		attrs = append(attrs, attribute.String("error.type", fmt.Sprintf("%T", arm.logCause)))
-	}
-	if arm.deliveryTag != nil {
-		// #nosec G115 -- delivery tags are sequential and never overflow int in practice
-		attrs = append(attrs, semconv.MessagingRabbitMQMessageDeliveryTag(int(*arm.deliveryTag)))
-	}
-	attrs = append(attrs, attribute.Int("retry_count", retryCount))
-	span.AddEvent(eventPublishRetry, trace.WithAttributes(attrs...))
+	span.AddEvent(eventPublishRetry, trace.WithAttributes(
+		append(attemptSpanAttributes(arm), attribute.Int("retry_count", retryCount))...))
 
-	if c.maxPublishAttempts > 0 && retryCount >= c.maxPublishAttempts {
-		return c.publishExhausted(ctx, options, startTime, span, retryCount, arm.cause)
-	}
 	if arm.backoff <= 0 {
 		return nil
 	}
@@ -993,16 +1010,53 @@ func (c *AMQPClientImpl) publishRetryEpilogue(
 	}
 }
 
-// logRetry writes the WARN every failed attempt emits.
-func (c *AMQPClientImpl) logRetry(arm *retryArm, retryCount int) {
+// attemptSpanAttributes are a failed attempt's span-event attributes: its reason,
+// its cause's type and its delivery tag.
+func attemptSpanAttributes(arm *retryArm) []attribute.KeyValue {
+	// SECURITY: the event's attributes are an off-platform sink, and a broker
+	// error's Reason is server-authored — type only, like every other span sink
+	// (ADR-083). The WARN keeps the message.
+	attrs := []attribute.KeyValue{attribute.String("reason", arm.spanReason)}
+	if arm.logCause != nil {
+		attrs = append(attrs, attribute.String("error.type", fmt.Sprintf("%T", arm.logCause)))
+	}
+	if arm.deliveryTag != nil {
+		// #nosec G115 -- delivery tags are sequential and never overflow int in practice
+		attrs = append(attrs, semconv.MessagingRabbitMQMessageDeliveryTag(int(*arm.deliveryTag)))
+	}
+	return attrs
+}
+
+// logRetry writes the WARN every retried attempt emits.
+func (c *AMQPClientImpl) logRetry(options publishOptions, arm *retryArm, retryCount int) {
 	event := c.log.Warn()
 	if arm.logCause != nil {
 		event = event.Err(arm.logCause)
 	}
+	withAttempt(event, options, arm).Int("retry_count", retryCount).Msg(arm.logMsg)
+}
+
+// logExhausted writes the WARN for the attempt that exhausts the attempt limit,
+// which logRetry never sees: its cause, and the details logRetry would have logged.
+func (c *AMQPClientImpl) logExhausted(options publishOptions, arm *retryArm, attempts int) {
+	withAttempt(c.log.Warn().Err(arm.cause), options, arm).
+		Int("attempts", attempts).
+		Msg("Publish failed after its last attempt, giving up")
+}
+
+// withAttempt adds a failed attempt's delivery tag and, for a returned publish, the
+// broker's reply and the publish's address; its body never reaches the line.
+func withAttempt(event logger.LogEvent, options publishOptions, arm *retryArm) logger.LogEvent {
 	if arm.deliveryTag != nil {
 		event = event.Uint64("delivery_tag", *arm.deliveryTag)
 	}
-	event.Int("retry_count", retryCount).Msg(arm.logMsg)
+	if ret := arm.returned; ret != nil {
+		event = withBrokerReply(event, int(ret.replyCode), ret.replyText).
+			Str("exchange", options.Exchange).
+			Str("routing_key", options.RoutingKey).
+			Str("message_id", ret.messageID)
+	}
+	return event
 }
 
 // recordPublishFailure stamps the shared terminal metrics/span state for a publish that is
@@ -1036,7 +1090,8 @@ func (c *AMQPClientImpl) publishAbort(ctx context.Context, options publishOption
 
 // publishExhausted is the terminal return once the bounded retry loop reaches maxPublishAttempts.
 // The returned error wraps ErrPublishRetriesExhausted around the last attempt's cause (publish
-// error, ErrPublishNacked, or ErrPublishConfirmTimeout) so the caller can see why it gave up.
+// error, ErrPublishNacked, ErrPublishUnroutable, or ErrPublishConfirmTimeout) so the caller can
+// see why it gave up.
 func (c *AMQPClientImpl) publishExhausted(ctx context.Context, options publishOptions, startTime time.Time, span trace.Span, attempts int, cause error) error {
 	err := fmt.Errorf("%w after %d attempts: %w", ErrPublishRetriesExhausted, attempts, cause)
 	return c.recordPublishFailure(ctx, options, startTime, span, err)
@@ -1472,8 +1527,8 @@ func (c *AMQPClientImpl) changeChannel(channel amqpChannel) {
 	// goroutine drains it; the broker will block PublishWithContext if this
 	// fills up, providing natural backpressure.
 	c.notifyConfirm = make(chan amqp.Confirmation, defaultConfirmBufferSize)
-	// Sized like the confirm buffer, since amqp091's reader waits up to 5s for
-	// a listener to take each return.
+	// Sized like the confirm buffer: amqp091 abandons a return its listener has
+	// not taken within 5s, and a dropped return is a publish reported as routed.
 	returns := make(chan amqp.Return, defaultConfirmBufferSize)
 	channel.NotifyClose(c.notifyChanClose)
 	channel.NotifyPublish(c.notifyConfirm)
@@ -1490,7 +1545,9 @@ func (c *AMQPClientImpl) changeChannel(channel amqpChannel) {
 // generation that its confirmation will never arrive. Synthesizing a NACK
 // (rather than closing the channel) lets the publisher's existing retry
 // loop kick in cleanly — it captures a fresh DeliveryTag from the new
-// channel/generation and tries again.
+// channel/generation and tries again. A publish whose return was already
+// recorded is answered as the broker would have: the return, then an ACK, so
+// it classifies as unroutable rather than NACKed (ADR-122).
 func (c *AMQPClientImpl) drainPendingPublishesWithNack(gen uint64) {
 	c.pendingPublishes.Range(func(key, _ any) bool {
 		k, ok := key.(confirmKey)
@@ -1503,8 +1560,9 @@ func (c *AMQPClientImpl) drainPendingPublishesWithNack(gen uint64) {
 		}
 		// Non-blocking send: if the publisher already gave up via ctx.Done,
 		// nobody reads, and we'd otherwise block forever.
+		returned := p.returned.Load()
 		select {
-		case p.confirm <- publishConfirm{Confirmation: amqp.Confirmation{DeliveryTag: k.tag, Ack: false}}:
+		case p.confirm <- publishConfirm{Confirmation: amqp.Confirmation{DeliveryTag: k.tag, Ack: returned != nil}, returned: returned}:
 		default:
 		}
 		return true
@@ -1521,7 +1579,7 @@ func (c *AMQPClientImpl) drainPendingPublishesWithNack(gen uint64) {
 //
 // It takes each return off returns as it arrives, so amqp091's reader never
 // waits on the listener. It also drains the buffered returns before routing
-// each confirmation, so a returned publish's ACK carries its return.
+// each confirmation, so a returned publish's ACK carries its return (ADR-122).
 //
 // Exits when src is closed (channel teardown, after recording the returns still
 // buffered) OR when c.done is closed (full client shutdown). Unmatched
@@ -1562,7 +1620,7 @@ func (c *AMQPClientImpl) routeConfirm(gen uint64, confirm amqp.Confirmation) {
 	}
 	// Non-blocking send: publisher may have abandoned via ctx.Done.
 	select {
-	case p.confirm <- publishConfirm{Confirmation: confirm, returned: p.returned}:
+	case p.confirm <- publishConfirm{Confirmation: confirm, returned: p.returned.Load()}:
 	default:
 	}
 }
