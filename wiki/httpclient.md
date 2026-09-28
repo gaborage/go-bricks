@@ -736,13 +736,16 @@ if err != nil {
   another request holds the refresh lock at that moment; within the interval it resends the cached
   one. The read runs on the request path, in the one request that takes a lock, so concurrent
   requests at the boundary cause one read, and there is no background goroutine to stop. A request
-  that finds a re-read in progress is served the last good token; a stalled read holds only the
+  that finds another request holding the refresh lock, whether re-reading the file or only checking
+  that a re-read is not yet due, is served the last good token; a stalled read holds only the
   request performing it, which waits whatever its deadline, with nothing logged until the read
   returns. A read stalled past the token's own expiry keeps serving the expired token until it
   returns. A symlink swap (the kubelet's atomic writer) is picked up; so is an in-place write, but a
-  writer that truncates and then writes can be read half-way, and a truncated token that is still
-  visible ASCII is then served for an interval, so write a temporary file and rename it over the
-  path.
+  writer that truncates and then writes can be caught mid-write. A re-read that finds the file
+  empty then fails as a refresh (below): the last good token is kept, and the new token is picked
+  up only one full interval later. A re-read that finds a truncated token that is still visible
+  ASCII serves it for an interval. So write a temporary file in the same directory and rename it
+  over the path: a rename is atomic, as the kubelet's symlink swap is.
 - **Failed refresh.** A re-read that fails any check the eager read applies keeps the last good
   token and logs one WARN naming the path; the next re-read is one interval later. Deleting or
   emptying the file therefore does not revoke the cached token.

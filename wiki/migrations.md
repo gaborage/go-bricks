@@ -10782,7 +10782,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   client has its own `CheckRedirect`, a redirect from `https` to `http` that would carry the token
   is refused. Every attempt, retries included, carries the current token unless the request sets
   `Authorization` itself (`Request.Headers` or `Request.Auth`); the file is re-read at most once
-  per interval; a request that finds a re-read in progress is served the last good token, a stalled
+  per interval; a request that finds another request holding the refresh lock, whether re-reading
+  the file or only checking that a re-read is not yet due, is served the last good token, a stalled
   read holds only the request performing it (whatever its deadline, and unlogged until the read
   returns), and a read stalled past the token's own expiry keeps serving the expired token until it
   returns; a failed re-read keeps the last good token and logs
