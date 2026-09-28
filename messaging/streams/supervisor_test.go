@@ -200,6 +200,22 @@ func TestSupervisorNeverFlushesALostSuperStreamPosition(t *testing.T) {
 		"the skipped flush is reported, naming only the lost consumer's stream")
 }
 
+func TestStopSkipsTheFlushOfAHandleLostSinceTheLastPass(t *testing.T) {
+	m, log := supervisedManager()
+	fake := newFakeEnvironment()
+	startOnFake(t, m, fake, oneConsumerDecls())
+	consumer := fake.consumer(testStream)
+	consumer.deliver(testStream, 41, amqpMessage("before the loss"))
+	consumer.events.setStatus(ha.StatusClosed)
+
+	m.StopConsumers()
+
+	assert.NotContains(t, consumer.events.recorded(), "store:41",
+		"a handle lost before the stop is not flushed, even with no pass in between")
+	assert.Equal(t, []string{testStream}, log.warnStreams(msgLostFlushSkipped))
+	assert.Len(t, log.messagesAt("error"), 1, "the loss is reported once, by the stop")
+}
+
 func TestSupervisorExitsOnShutdown(t *testing.T) {
 	tests := []struct {
 		name string

@@ -46,7 +46,9 @@ default and this one does not.
   environment, and by then another replica may have re-created the stream under that name. A
   super-stream consumer whose client gave up on some partitions keeps delivering and committing on
   the others.
-- **An orderly shutdown is never reported.** `stopLocked` cancels the supervisor's context and
+- **An orderly shutdown is never reported.** `stopLocked` first runs one last pass, before it closes
+  anything, so a handle the client closed since the previous pass is reported and its flush
+  skipped. It then cancels the supervisor's context and
   empties the manager's consumer and publisher lists under the manager lock, before it releases it,
   so a pass that runs afterwards finds nothing to report. A pass also checks that context under the
   same lock, which keeps a supervisor that a stop gave up waiting for off the handles of a later

@@ -776,8 +776,12 @@ func (m *Manager) stop(flushCtx context.Context) (supervisorDone <-chan struct{}
 // stopLocked hands back the supervisor's exit signal, since waiting on it under
 // m.mu would deadlock.
 func (m *Manager) stopLocked(flushCtx context.Context) (supervisorDone <-chan struct{}) {
-	// First, so the supervisor stops before any handle it watches closes.
+	// First, so the supervisor stops before any handle it watches closes. A
+	// handle the client closed since the last pass is marked lost here, while
+	// every handle is still one the manager has not closed, so its flush is
+	// skipped too.
 	if m.cancel != nil {
+		m.reportClosedLocked()
 		m.cancel()
 		m.cancel = nil
 	}
