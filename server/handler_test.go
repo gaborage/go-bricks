@@ -3050,7 +3050,31 @@ const wideJSONOnlyRequestBody = `{"f1":"a","f2":"b","f3":"c","f4":"d","f5":"e","
 // through the addEcho seam (mirrors BenchmarkTypedHandlerPath's harness) with a wide
 // JSON-only request struct. It measures the whole request lifecycle (routing, allocation,
 // JSON decode, validation, response marshaling), so the binding-plan win is only a small
-// fraction of the number — BenchmarkBindRequestPlannedVsLegacy isolates that win directly.
+// fraction of the number.
+// BenchmarkBindRequestPlanned measures the binding step alone — plan replay over a wide
+// JSON-only struct, with routing, validation and response marshaling excluded. It is the
+// planned arm of the benchmark that compared this path against the deleted legacy one: the
+// comparison went with that path, but the repo still needs a micro-benchmark over binding,
+// because BenchmarkBindRequestJSONOnlyWideStruct's own comment says the binding win is only a
+// small fraction of its number, so a regression in plan replay would hide inside the rest of
+// the request. The require.Empty also pins that this fixture carries no binding tags, which is
+// what makes the measurement about replay rather than tag parsing.
+func BenchmarkBindRequestPlanned(b *testing.B) {
+	binder := NewRequestBinder()
+	plan := buildBindingPlan(reflect.TypeOf(wideJSONOnlyRequest{}))
+	require.Empty(b, plan, "wide JSON-only struct carries no binding tags")
+
+	e := echo.New()
+	b.ReportAllocs()
+	for range b.N {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", strings.NewReader(wideJSONOnlyRequestBody))
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		c := e.NewContext(req, httptest.NewRecorder())
+		var dst wideJSONOnlyRequest
+		_ = binder.bindRequestPlanned(c, &dst, plan, true)
+	}
+}
+
 func BenchmarkBindRequestJSONOnlyWideStruct(b *testing.B) {
 	e := echo.New()
 	e.Validator = NewValidator()
@@ -3073,7 +3097,7 @@ func BenchmarkBindRequestJSONOnlyWideStruct(b *testing.B) {
 
 // planBindingPinReq exercises all three tag sources (including a []string query and a
 // []string header), plus a tagged-but-unexported field and a fully untagged field, for
-// TestBindingPlanMatchesLegacyBehavior.
+// TestBindingPlanShapeAndBoundValues.
 type planBindingPinReq struct {
 	ID          int      `param:"id"`
 	Search      string   `query:"search"`
@@ -3084,13 +3108,13 @@ type planBindingPinReq struct {
 	Untagged    string
 }
 
-// TestBindingPlanMatchesLegacyBehavior pins buildBindingPlan's shape (unexported and
+// TestBindingPlanShapeAndBoundValues pins buildBindingPlan's shape (unexported and
 // untagged fields excluded; tagged fields appear once per tag, in declaration order,
 // param before query before header) and bindRequestPlanned's bound values against the
-// same expectations TestRequestBinderAdvancedBinding establishes for the legacy path
+// same expectations TestRequestBinderAdvancedBinding establishes end to end
 // (param binding, query scalar/slice binding, header scalar/slice binding with
 // comma-split + trim, missing/empty values left at zero).
-func TestBindingPlanMatchesLegacyBehavior(t *testing.T) {
+func TestBindingPlanShapeAndBoundValues(t *testing.T) {
 	reqType := reflect.TypeOf(planBindingPinReq{})
 	plan := buildBindingPlan(reqType)
 
@@ -3173,8 +3197,6 @@ type dualTagRequest struct {
 // TestBuildBindingPlanWithinFieldOrderAndLastWriteWins pins that a field carrying multiple
 // tags produces one plan entry per tag in param->query->header order, and that
 // bindRequestPlanned replays them so the last-applied source wins (header > query > param).
-// It also asserts the legacy path produces byte-identical results — a differential oracle
-// guarding against the two paths drifting apart.
 func TestBuildBindingPlanWithinFieldOrderAndLastWriteWins(t *testing.T) {
 	plan := buildBindingPlan(reflect.TypeOf(dualTagRequest{}))
 	require.Equal(t, []boundField{
@@ -3200,43 +3222,6 @@ func TestBuildBindingPlanWithinFieldOrderAndLastWriteWins(t *testing.T) {
 	require.NoError(t, binder.bindRequestPlanned(newCtx(), &planned, plan, true))
 	assert.Equal(t, "Q", planned.Val, "query is applied after param, so it wins")
 	assert.Equal(t, "H", planned.Triple, "header is applied last, so it wins")
-
-	var legacy dualTagRequest
-	require.NoError(t, binder.bindRequest(newCtx(), &legacy))
-	assert.Equal(t, planned, legacy, "legacy and planned binding must be byte-identical")
-}
-
-// TestLegacyBindPathMatchesPlanned is the differential oracle for the full tag surface:
-// it binds the same request through the legacy reflect-per-request path (bindRequest) and
-// the precomputed-plan path (bindRequestPlanned) and asserts identical results. This keeps
-// the retained legacy chain covered and pins that it can never silently diverge from the
-// planned path.
-func TestLegacyBindPathMatchesPlanned(t *testing.T) {
-	plan := buildBindingPlan(reflect.TypeOf(planBindingPinReq{}))
-	binder := NewRequestBinder()
-
-	newCtx := func() *echo.Context {
-		e := echo.New()
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/items/9", http.NoBody)
-		q := req.URL.Query()
-		q.Set("search", "widgets")
-		q.Add("tags", "a")
-		q.Add("tags", "b")
-		req.URL.RawQuery = q.Encode()
-		req.Header.Set("X-Accept", "json")
-		req.Header.Set("X-Accept-Multi", "a, b , c")
-		c := e.NewContext(req, httptest.NewRecorder())
-		c.SetPathValues(echo.PathValues{{Name: "id", Value: "9"}})
-		return c
-	}
-
-	var planned planBindingPinReq
-	require.NoError(t, binder.bindRequestPlanned(newCtx(), &planned, plan, true))
-
-	var legacy planBindingPinReq
-	require.NoError(t, binder.bindRequest(newCtx(), &legacy))
-
-	assert.Equal(t, planned, legacy, "legacy and planned binding must agree across all three sources")
 }
 
 type bindableReq struct {
@@ -3408,38 +3393,6 @@ func TestWrapHandlerRejectsNonStructRequestType(t *testing.T) {
 	})
 }
 
-// BenchmarkBindRequestPlannedVsLegacy isolates the refactor's win: the planned path (empty
-// plan -> zero per-request tag reflection) vs the legacy path (NumField loop + 3*StructTag.Get
-// per field) on the same wide JSON-only struct, with routing/validation/response marshaling
-// excluded from the measurement. Both sub-benchmarks pay the identical JSON decode, so the
-// delta is attributable to the binding step alone.
-func BenchmarkBindRequestPlannedVsLegacy(b *testing.B) {
-	binder := NewRequestBinder()
-	plan := buildBindingPlan(reflect.TypeOf(wideJSONOnlyRequest{}))
-	require.Empty(b, plan, "wide JSON-only struct carries no binding tags")
-
-	e := echo.New()
-	run := func(b *testing.B, bind func(*echo.Context, *wideJSONOnlyRequest) error) {
-		b.ReportAllocs()
-		for range b.N {
-			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", strings.NewReader(wideJSONOnlyRequestBody))
-			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-			c := e.NewContext(req, httptest.NewRecorder())
-			var dst wideJSONOnlyRequest
-			_ = bind(c, &dst)
-		}
-	}
-
-	b.Run("planned", func(b *testing.B) {
-		run(b, func(c *echo.Context, d *wideJSONOnlyRequest) error {
-			return binder.bindRequestPlanned(c, d, plan, true)
-		})
-	})
-	b.Run("legacy", func(b *testing.B) {
-		run(b, func(c *echo.Context, d *wideJSONOnlyRequest) error { return binder.bindRequest(c, d) })
-	})
-}
-
 // allocProbeRequestPtr pins the defined-pointer-type case for requestAllocator.
 // reflect.New yields the unnamed *allocProbeRequest, which is NOT assertable to the
 // named allocProbeRequestPtr — without the Convert the typed request comes back nil
@@ -3478,9 +3431,8 @@ type namedSliceReq struct {
 }
 
 // TestBindNamedStringSliceElementType pins that a slice whose element is a NAMED string type
-// binds from a header and from repeated query params, through both the precomputed-plan path
-// and the legacy reflect-per-request path. Before the fix the header cases panicked inside
-// reflect.Append, which middleware.Recover() turned into a per-request 500.
+// binds from a header and from repeated query params. Before the fix the header cases
+// panicked inside reflect.Append, which middleware.Recover() turned into a per-request 500.
 func TestBindNamedStringSliceElementType(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -3519,10 +3471,6 @@ func TestBindNamedStringSliceElementType(t *testing.T) {
 			var planned namedSliceReq
 			require.NoError(t, binder.bindRequestPlanned(newCtx(tc.setup), &planned, plan, true))
 			assert.Equal(t, tc.want, planned, "planned path must bind the named element type")
-
-			var legacy namedSliceReq
-			require.NoError(t, binder.bindRequest(newCtx(tc.setup), &legacy))
-			assert.Equal(t, tc.want, legacy, "legacy and planned paths must agree")
 		})
 	}
 }
