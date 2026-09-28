@@ -1935,6 +1935,24 @@ endpoint instead of an unauthenticated body.
 
 ---
 
+### [ADR-124: The Server Keeps the First Registration of a Route and Refuses to Start on a Duplicate](adr_124_server_level_duplicate_route_refusal.md)
+
+**Date:** 2026-09-27 | **Status:** Accepted | **Breaking:** a service built on `server.New` that registers one route twice now keeps the first handler and fails `Start`, where the later handler used to serve
+
+`echo.New()` sets `AllowOverwritingRoute`, so a second `Add` of one route replaced the handler
+under the kept template, and only `app` checked for duplicates. A duplicate method + full path is
+now never added on any engine, so the first registration keeps the route, and `Server.Start`
+refuses before either bind with a `*server.DuplicateRouteError` matching
+`server.ErrDuplicateRoute`. `app` keeps its registration-time check, so `PostRegisterRoutes`
+still runs after it. Building the engines with `AllowOverwritingRoute: false` was declined:
+echo's `*echo.AddRouteError` names the method and path but neither registrant, so naming both
+still needs the tracker. See [migrations.md](migrations.md) `[C69.3]`.
+
+**Key Benefits:** the probe exemption's template-identifies-handler invariant holds by
+construction, without `app`, and every duplicate is named in one boot.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2705,7 +2723,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-120) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-124) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

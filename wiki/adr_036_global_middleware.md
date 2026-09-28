@@ -46,12 +46,15 @@ routing to a module param or wildcard route; route registration is per method+pa
 own a non-probe method on a probe path; and a global middleware earlier in the chain can rewrite
 `r.URL.Path` outright. Because a global middleware is the documented seat for cross-cutting auth,
 each of those ran consumer code with the gate skipped. The template cannot be moved by any of the
-three, and it identifies the probe HANDLER because the duplicate-route check (`app.checkRouteConflicts`)
-refuses a module that claims a probe path. `CreateProbeSkipper` remains exported for consumer
+three, and it identifies the probe HANDLER because the server refuses a module that claims a
+probe path (see the amendment below). `CreateProbeSkipper` remains exported for consumer
 middleware built on `server.SkipperFunc`, and answers from the same key: echo stamps the matched
 template on the request as `r.Pattern`, with the raw path as the fallback when no template was
 stamped. Consumer exemptions written inside a middleware body follow the same rule — match
 `c.RouteTemplate()`, never `c.Request().URL.Path` (see [global_middleware.md](global_middleware.md)).
+
+**Amendment (2026-09-27, #1818).** That refusal now lives in the server itself, without `app`; see
+[ADR-124](adr_124_server_level_duplicate_route_refusal.md).
 
 Registration goes on the **raw root chain** (`s.echo.Use`), not a group. Echo's root `Use`
 recompiles the whole global chain (`buildRouterChains`) and applies to every request after

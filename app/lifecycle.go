@@ -175,27 +175,19 @@ func stopEach(ctx context.Context, slots []resourceSlot) {
 }
 
 // checkRouteConflicts fails startup when two registrations claimed the same
-// method+path: echo's router silently overwrites (last one wins), so the first
-// handler would be dead on arrival. Fail Fast: surface every collision at once.
-// Servers that don't expose conflict tracking (test fakes) are skipped.
+// method+path. The server itself keeps the first handler and refuses Start on any
+// conflict; this is the earlier check, at registration time, so a conflict aborts
+// before PostRegisterRoutes sees the route table. Fail Fast: surface every collision
+// at once. Servers that don't expose conflict tracking (test fakes) are skipped.
 func (a *App) checkRouteConflicts() error {
 	cs, ok := a.server.(interface{ RouteConflicts() []server.RouteConflict })
 	if !ok {
 		return nil
 	}
-	conflicts := cs.RouteConflicts()
-	if len(conflicts) == 0 {
-		return nil
+	if conflicts := cs.RouteConflicts(); len(conflicts) > 0 {
+		return &server.DuplicateRouteError{Conflicts: conflicts}
 	}
-	errs := make([]error, 0, len(conflicts)+1)
-	errs = append(errs, fmt.Errorf("duplicate route registration (%d conflict(s))", len(conflicts)))
-	for _, c := range conflicts {
-		errs = append(errs, fmt.Errorf("%s %s — first: %s (%s), duplicate: %s (%s)",
-			c.Method, c.Path,
-			c.First.HandlerName, c.First.Package,
-			c.Duplicate.HandlerName, c.Duplicate.Package))
-	}
-	return errors.Join(errs...)
+	return nil
 }
 
 // applyGlobalMiddleware registers module-contributed global middleware on the server. It

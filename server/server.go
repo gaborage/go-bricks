@@ -294,9 +294,9 @@ func newProbeEngine(app *echo.Echo, cfg *config.Config, log logger.Logger, healt
 }
 
 // registerProbeRoutes wires /health and /ready. They register directly on the engine
-// (not through a routeGroup), so they are recorded explicitly: a module claiming a probe
-// path must fail startup like any other collision, and the route table must list them
-// like any other route. The reservation at <base><path> holds whatever
+// (not through a routeGroup), so they are recorded explicitly. They record first, so a
+// module claiming a probe path is the refused duplicate like any other collision. The
+// route table lists them like any other route. The reservation at <base><path> holds whatever
 // server.probes.port says, so flipping it never changes which module routes are legal;
 // with the probe listener enabled the application engine answers 404 there, and the
 // probe engine serves the probes at their unprefixed paths. Then the route table lists
@@ -313,12 +313,15 @@ func (s *Server) registerProbeRoutes(healthPath, readyPath string) {
 		reg := RouteRegistrant{HandlerName: p.name, Package: serverPackagePath}
 		for _, method := range probeMethods {
 			if s.probeEcho == nil {
-				s.echo.Add(method, p.path, p.handler)
-				registerRoute(s.conflicts, method, p.path, reg)
+				if registerRoute(s.conflicts, method, p.path, reg) {
+					s.echo.Add(method, p.path, p.handler)
+				}
 				continue
 			}
+			if !s.conflicts.record(method, p.path, reg) {
+				continue // first wins on both engines
+			}
 			s.echo.Add(method, p.path, reservedProbeRoute)
-			s.conflicts.record(method, p.path, reg)
 			s.probeEcho.Add(method, p.route, p.probeHandler)
 			registerProbeListenerRoute(method, p.route, reg)
 		}
@@ -429,6 +432,9 @@ var ErrServerAlreadyStarted = goerrors.New("server: Start called more than once"
 // probe listener before Start returns. A TLS leaf the probe listener's
 // application-listener check cannot pin (no SAN) or verify against that pin (no serverAuth
 // use, outside its validity period) refuses Start before either bind.
+//
+// A duplicate method+path registration recorded on this server (RouteConflicts) refuses
+// Start before either bind with a *DuplicateRouteError, which matches ErrDuplicateRoute.
 func (s *Server) Start() error {
 	if !s.started.CompareAndSwap(false, true) {
 		return ErrServerAlreadyStarted
@@ -436,6 +442,10 @@ func (s *Server) Start() error {
 	if s.stopping.Load() {
 		s.closeProbeErrs()
 		return http.ErrServerClosed
+	}
+	if err := duplicateRouteError(s.RouteConflicts()); err != nil {
+		s.closeProbeErrs()
+		return err
 	}
 	addr := hostPort(s.cfg.Server.Host, s.cfg.Server.Port)
 

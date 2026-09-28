@@ -137,9 +137,9 @@ func requireProbeErrorsClosed(t *testing.T, srv *Server) {
 	}
 }
 
-// requireStartRefusedBeforeBind runs Start and fails unless it returns a config refusal
-// having bound neither listener and closed ProbeErrors; it returns that refusal.
-func requireStartRefusedBeforeBind(t *testing.T, srv *Server, fatalMsg string) *config.ConfigError {
+// requireStartRefusedBeforeBind runs Start and fails unless it returns an error having
+// bound neither listener and closed ProbeErrors; it returns that refusal.
+func requireStartRefusedBeforeBind(t *testing.T, srv *Server, fatalMsg string) error {
 	t.Helper()
 	var err error
 	select {
@@ -147,12 +147,11 @@ func requireStartRefusedBeforeBind(t *testing.T, srv *Server, fatalMsg string) *
 	case <-time.After(2 * time.Second):
 		t.Fatal(fatalMsg)
 	}
-	var cfgErr *config.ConfigError
-	require.ErrorAs(t, err, &cfgErr)
+	require.Error(t, err)
 	assert.Nil(t, srv.BoundAddr())
 	assert.Nil(t, srv.ProbeBoundAddr())
 	requireProbeErrorsClosed(t, srv)
-	return cfgErr
+	return err
 }
 
 // occupyPort holds a loopback port for the rest of the test.
@@ -422,7 +421,9 @@ func TestServerStartRefusesProbeCollision(t *testing.T) {
 	cfg.Server.Probes.Port = cfg.Server.Port
 	srv := New(cfg, &testLogger{})
 
-	cfgErr := requireStartRefusedBeforeBind(t, srv, "Start bound and served despite the probe listener colliding with the application listener")
+	err := requireStartRefusedBeforeBind(t, srv, "Start bound and served despite the probe listener colliding with the application listener")
+	var cfgErr *config.ConfigError
+	require.ErrorAs(t, err, &cfgErr)
 	assert.Equal(t, "server.probes.port", cfgErr.Field)
 }
 

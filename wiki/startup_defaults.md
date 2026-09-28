@@ -105,21 +105,22 @@ Every line carries `listener`: `application`, or `probes` for the probes when `s
 
 ## Duplicate Route Detection
 
-Startup fails when two registrations claim the same **exact method + full path**. The echo engine is constructed with `AllowOverwritingRoute: true`, so without this check the second registration silently wins and the first module's handler is dead on arrival — no error, no warning, unless the shadowed route happens to be exercised. This closes that gap at the framework's own registration seam (`server.RouteRegistrar`), covering both typed (`server.GET/POST`) and raw (`RouteRegistrar.Add`) routes, plus anything registered through nested `Group()`s.
+Startup fails when two registrations claim the same **exact method + full path**. Echo v5's router refuses a duplicate only when `AllowOverwritingRoute` is off; `echo.New()` turns it on, and go-bricks builds its engines with `echo.New()`, so `Add` overwrites the handler while keeping the route template — and a service built on `server.New` without `app` used to boot with the later registration serving and the first handler dead on arrival. The check now lives in the server, at its registration seam (`server.RouteRegistrar`): a duplicate is recorded and **not** added, so the first registration keeps the route, and `server.Start` refuses to serve while any conflict is recorded — no listener binds. It holds without `app`; `app` still fails earlier, at registration time, before the route table hook runs. It covers typed (`server.GET/POST`) and raw (`RouteRegistrar.Add`) routes, plus anything registered through nested `Group()`s.
 
 **Coverage notes:**
 
-- `health`/`ready` probes register directly on the HTTP engine (not through `RouteRegistrar`), but `server.New` records their method+path pairs in the conflict tracker (and a descriptor per method in `server.DefaultRouteRegistry` — at the unprefixed path on the probe listener when `server.probes.port` is set, with none for the reservation) explicitly, so a module claiming `GET /health` (or the configured probe paths) fails startup like any other collision.
-- Param-name-differing route templates (e.g. `/users/:id` vs `/users/:uid`) are **excluded** — these are distinct strings and are not detected as duplicates, even though they collide in echo's radix tree at request time; echo's own behavior governs there.
+- `health`/`ready` probes register directly on the HTTP engine (not through `RouteRegistrar`), but `server.New` records their method+path pairs in the conflict tracker (and a descriptor per method in `server.DefaultRouteRegistry` — at the unprefixed path on the probe listener when `server.probes.port` is set, with none for the reservation) explicitly and first, so a module claiming `GET /health` (or the configured probe paths) is the refused duplicate: the probe keeps its handler, and startup fails like any other collision. Deleting the probe is no exit: serve custom readiness through `Server.RegisterReadyHandler`, move the probe with `server.path.health`/`server.path.ready`, or move the module route.
+- `server.path.health` equal to `server.path.ready` is a duplicate too — nothing validates the pair, so readiness (`dispatchReady`) is the refused second registration and startup fails until the two paths differ.
+- Param-name-differing route templates (e.g. `/users/:id` vs `/users/:uid`) are **excluded** — the tracker compares the literal template strings, so these are not detected as duplicates, even though echo's router treats them as one route: both are added, and echo's overwrite governs there (the later handler serves).
 
-**Error shape:** startup aborts with one aggregate error naming every collision and both registrants (`HandlerName` + caller `Package`; the module name is not reported):
+**Error shape:** startup (`app` at registration, or `server.Start`) aborts with one aggregate error naming every collision and both registrants (`HandlerName` + caller `Package`; the module name is not reported):
 
 ```text
 duplicate route registration (1 conflict(s))
 GET /v1/events — first: createEvent (github.com/example/events), duplicate: legacyCreateEvent (github.com/example/legacy)
 ```
 
-The error is built with `errors.Join`, so the individual collisions can be traversed structurally (each child is a plain formatted error — there is no sentinel or typed error to match with `errors.Is`/`errors.As`).
+The error is a `*server.DuplicateRouteError`: `errors.As` recovers it and its `Conflicts` field lists every collision structurally, and `errors.Is(err, server.ErrDuplicateRoute)` matches the sentinel. Its `Unwrap() []error` still exposes the children — the head line (which wraps the sentinel), then one error per conflict line.
 
 There is no disable knob — a colliding route is always a startup-blocking bug, never a warning. Fix by removing or renaming the colliding route.
 

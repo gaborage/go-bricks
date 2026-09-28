@@ -33,11 +33,14 @@ func newTrackedRouteGroup(group *echo.Group, prefix string, cfg *config.Config, 
 
 // addEcho implements the unexported echoAdder seam: it registers a pre-built
 // echo.HandlerFunc directly, so the framework's typed-handler hot path pays no
-// per-request adapter cost (ADR-026).
+// per-request adapter cost (ADR-026). A duplicate is not added; see
+// routeConflictTracker.record.
 func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, reg RouteRegistrant) {
 	relative := rg.relativePath(path)
+	if !rg.tracker.record(method, rg.fullPathFromRelative(relative), reg) {
+		return
+	}
 	rg.group.Add(method, relative, h)
-	rg.tracker.record(method, rg.fullPathFromRelative(relative), reg)
 }
 
 // Add registers an echo-free Handler with optional flat middleware. The go-bricks→echo
@@ -49,22 +52,27 @@ func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, reg Route
 // typed handlers register through addEcho (which emits its own descriptor and never traverses
 // Add) — framework-registered routes are never double-counted. Only the fields derivable at this
 // seam are populated (method, full path, handler ID/name, caller package); type- and JOSE-related
-// fields stay zero-valued because raw handlers carry no request/response models.
+// fields stay zero-valued because raw handlers carry no request/response models. A duplicate
+// is not added; see routeConflictTracker.record.
 func (rg *routeGroup) Add(method, path string, handler Handler, middleware ...MiddlewareFunc) {
 	relative := rg.relativePath(path)
-	rg.group.Add(method, relative, adaptHandler(handler, rg.cfg), rg.adaptAll(middleware)...)
-
 	pkg := getCallerPackage(2) // getCallerPackage → Add → module (best-effort, as typed routes)
-	registerRoute(rg.tracker, method, rg.fullPathFromRelative(relative),
-		RouteRegistrant{HandlerName: extractHandlerName(handler), Package: pkg})
+	if !registerRoute(rg.tracker, method, rg.fullPathFromRelative(relative),
+		RouteRegistrant{HandlerName: extractHandlerName(handler), Package: pkg}) {
+		return
+	}
+	rg.group.Add(method, relative, adaptHandler(handler, rg.cfg), rg.adaptAll(middleware)...)
 }
 
 // registerRoute records a route that carries no request/response models in the conflict
 // tracker and in DefaultRouteRegistry: raw routes and, at server.probes.port 0, the
 // health/ready probes (with the probe listener enabled see registerProbeListenerRoute).
-func registerRoute(tracker *routeConflictTracker, method, fullPath string, reg RouteRegistrant) {
-	tracker.record(method, fullPath, reg)
+// It returns the tracker's verdict (see routeConflictTracker.record): false for a
+// duplicate, which the caller must not add.
+func registerRoute(tracker *routeConflictTracker, method, fullPath string, reg RouteRegistrant) bool {
+	isNew := tracker.record(method, fullPath, reg)
 	DefaultRouteRegistry.Register(modellessDescriptor(method, fullPath, reg))
+	return isNew
 }
 
 // registerProbeListenerRoute records a probe served on the probe listener in
