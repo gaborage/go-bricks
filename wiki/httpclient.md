@@ -723,11 +723,11 @@ if err != nil {
   FIFO or a device is refused unread), larger than 64 KiB, or empty after trimming, or when what
   is left holds a byte other than visible ASCII (`!` through `~`). That refuses an interior
   newline or space, a `Bearer` scheme copied into the file, and a UTF-8 byte order mark. The
-  error names the path and never the contents. A path that looks like a token passed in its place — one starting `eyJ` as a JWT does, or a bare name with
-  no directory and no extension — fails `Build()` before any read and is not echoed; write
-  `./token` for a file in the working directory. That check is a heuristic: an opaque token that
-  contains `/` or `.` passes it, so it is read as a path, and the startup error can quote it as
-  that path.
+  error names the path and never the contents. A path that looks like a token passed in its
+  place — one starting `eyJ` as a JWT does, or a bare name with no directory and no extension —
+  fails `Build()` before any read and is not echoed; write `./token` for a file in the working
+  directory. That check is a heuristic: an opaque token that contains `/` or `.` passes it, so it
+  is read as a path, and the startup error can quote it as that path.
 - **Refresh.** The token is served for `RefreshInterval` (zero means
   `DefaultBearerTokenRefreshInterval`, one minute — client-go's period for the same file; a
   negative value fails `Build()`), then the next attempt re-reads the file, so a retry carries a
@@ -737,8 +737,8 @@ if err != nil {
   the read cannot, so a stalled filesystem holds that one request. A symlink swap (the kubelet's
   atomic writer) and an in-place write are both picked up.
 - **Failed refresh.** A file that is missing, unreadable, not a regular file, larger than 64 KiB,
-  empty, or holding a byte other than visible ASCII at refresh time keeps the last good token and logs one WARN
-  naming the path; the next re-read is one interval later.
+  empty, or holding a byte other than visible ASCII at refresh time keeps the last good token and
+  logs one WARN naming the path; the next re-read is one interval later.
 - **Precedence.** An `Authorization` header the request sets itself — `Request.Headers`, any
   spelling of the key, even with an empty value, or `Request.Auth` — wins over the file. Request
   interceptors run after the token is set, so they see it and can still replace it.

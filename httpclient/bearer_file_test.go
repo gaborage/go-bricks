@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -83,6 +84,12 @@ func bearerBuilder(log logger.Logger, path string, opts BearerTokenFileOptions, 
 }
 
 func quietLogger() logger.Logger { return logger.New("error", false) }
+
+func mustGet(t *testing.T, c Client, url string) {
+	t.Helper()
+	_, err := c.Get(context.Background(), &Request{URL: url})
+	require.NoError(t, err)
+}
 
 func TestBuildBearerTokenFileRejectsUnusableInput(t *testing.T) {
 	dir := t.TempDir()
@@ -328,62 +335,16 @@ func TestBearerTokenFilePicksUpRotationAfterInterval(t *testing.T) {
 			clk := newFakeClock()
 			c, err := bearerBuilder(quietLogger(), path, BearerTokenFileOptions{RefreshInterval: tt.interval}, clk).Build()
 			require.NoError(t, err)
-			get := func() {
-				_, getErr := c.Get(context.Background(), &Request{URL: srv.URL})
-				require.NoError(t, getErr)
-			}
 
-			get()
+			// Rotated before the first request: Build's deadline, not the request, decides.
 			rotate("tok-v2")
+			mustGet(t, c, srv.URL)
 			clk.advance(tt.wantWait - time.Nanosecond)
-			get()
+			mustGet(t, c, srv.URL)
 			clk.advance(time.Nanosecond)
-			get()
+			mustGet(t, c, srv.URL)
 
 			assert.Equal(t, []string{"Bearer tok-v1", "Bearer tok-v1", "Bearer tok-v2"}, seen())
-		})
-	}
-}
-
-// TestBearerTokenFileBuildPinsDeadline pins the deadline the eager read sets: the
-// first re-read is due exactly one interval after Build, and a zero
-// RefreshInterval means one minute.
-func TestBearerTokenFileBuildPinsDeadline(t *testing.T) {
-	tests := []struct {
-		name     string
-		interval time.Duration
-		wantWait time.Duration
-	}{
-		{name: "explicit_interval", interval: bearerTestInterval, wantWait: bearerTestInterval},
-		{name: "zero_interval_means_one_minute", wantWait: time.Minute},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := writeTestFile(t, t.TempDir(), "token", []byte("tok-v1"))
-			srv, _ := authServer(t)
-			clk := newFakeClock()
-			var reads atomic.Int32
-			b := bearerBuilder(quietLogger(), path, BearerTokenFileOptions{RefreshInterval: tt.interval}, clk)
-			b.bearer.readFile = func(p string) ([]byte, error) {
-				reads.Add(1)
-				return readBearerTokenFile(p)
-			}
-			c, err := b.Build()
-			require.NoError(t, err)
-			require.Equal(t, int32(1), reads.Load(), "Build reads the file once")
-			get := func() {
-				_, getErr := c.Get(context.Background(), &Request{URL: srv.URL})
-				require.NoError(t, getErr)
-			}
-
-			get()
-			assert.Equal(t, int32(1), reads.Load(), "a request at Build's instant must not re-read")
-			clk.advance(tt.wantWait - time.Nanosecond)
-			get()
-			assert.Equal(t, int32(1), reads.Load(), "a request just short of the interval must not re-read")
-			clk.advance(time.Nanosecond)
-			get()
-			assert.Equal(t, int32(2), reads.Load(), "a request one interval after Build must re-read")
 		})
 	}
 }
@@ -435,46 +396,32 @@ func TestBearerTokenFileConcurrentRefreshReadsOnce(t *testing.T) {
 
 	var reads atomic.Int32
 	release := make(chan struct{})
-	var releaseOnce sync.Once
-	read := func(p string) ([]byte, error) {
-		// Hold the refresh read open until every worker has joined it, or long
-		// enough that none is still on its way.
-		n := reads.Add(1)
-		if n >= workers+1 {
-			releaseOnce.Do(func() { close(release) })
-		}
-		if n > 1 {
-			select {
-			case <-release:
-			case <-time.After(300 * time.Millisecond):
-			}
+	b := bearerBuilder(quietLogger(), path, BearerTokenFileOptions{RefreshInterval: bearerTestInterval}, clk)
+	b.bearer.readFile = func(p string) ([]byte, error) {
+		if reads.Add(1) > 1 {
+			<-release
 		}
 		return readBearerTokenFile(p)
 	}
-
-	b := bearerBuilder(quietLogger(), path, BearerTokenFileOptions{RefreshInterval: bearerTestInterval}, clk)
-	b.bearer.readFile = read
 	c, err := b.Build()
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(path, []byte("tok-v2"), 0o600))
 	clk.advance(bearerTestInterval)
 
 	var wg sync.WaitGroup
-	start := make(chan struct{})
-	errs := make(chan error, workers)
 	for range workers {
 		wg.Go(func() {
-			<-start
 			_, getErr := c.Get(context.Background(), &Request{URL: srv.URL})
-			errs <- getErr
+			assert.NoError(t, getErr)
 		})
 	}
-	close(start)
+	// One worker holds the lock inside the read; every other one must be parked
+	// on it before the read may finish.
+	require.Eventually(t, func() bool {
+		return testutil.ParkedInSelect("httpclient.(*bearerTokenFile).current(") == workers-1
+	}, 5*time.Second, time.Millisecond)
+	close(release)
 	wg.Wait()
-	close(errs)
-	for getErr := range errs {
-		require.NoError(t, getErr)
-	}
 
 	assert.Equal(t, int32(2), reads.Load(), "one read at Build plus exactly one refresh")
 	got := seen()
@@ -487,70 +434,37 @@ func TestBearerTokenFileConcurrentRefreshReadsOnce(t *testing.T) {
 func TestBearerTokenFileRefreshWaitHonorsRequestContext(t *testing.T) {
 	path := writeTestFile(t, t.TempDir(), "token", []byte("tok-v1"))
 	srv, seen := authServer(t)
-	clk := newFakeClock()
-
-	var reads atomic.Int32
-	inRefresh := make(chan struct{})
-	release := make(chan struct{})
-	var released atomic.Bool
-	releaseRefresh := sync.OnceFunc(func() {
-		released.Store(true)
-		close(release)
-	})
-	read := func(p string) ([]byte, error) {
-		if reads.Add(1) == 2 {
-			close(inRefresh)
-			<-release
-		}
-		return readBearerTokenFile(p)
-	}
-
-	b := bearerBuilder(quietLogger(), path, BearerTokenFileOptions{RefreshInterval: bearerTestInterval}, clk)
-	b.bearer.readFile = read
-	c, err := b.Build()
+	c, err := NewBuilder(quietLogger()).WithBearerTokenFile(path, BearerTokenFileOptions{}).Build()
 	require.NoError(t, err)
-	clk.advance(bearerTestInterval)
+	s := c.(*client).bearer
 
-	refreshed := make(chan error, 1)
-	go func() {
-		_, getErr := c.Get(context.Background(), &Request{URL: srv.URL})
-		refreshed <- getErr
-	}()
-	select {
-	case <-inRefresh:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the refresh read never started")
-	}
+	s.lock <- struct{}{} // a refresh in flight holds the lock
 	// Valve only: a wait that ignores its context would otherwise hang here.
-	valve := time.AfterFunc(2*time.Second, releaseRefresh)
-	defer valve.Stop()
+	valve := time.AfterFunc(2*time.Second, func() { <-s.lock })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err = c.Get(ctx, &Request{URL: srv.URL})
-	assert.False(t, released.Load(), "a request waiting on the refresh must give up at its own context")
+	require.True(t, valve.Stop(), "a request waiting on the refresh must give up at its own context")
+	<-s.lock
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Contains(t, err.Error(), "bearer token file: waiting for the token")
-
-	releaseRefresh()
-	require.NoError(t, <-refreshed)
-	assert.Equal(t, int32(2), reads.Load())
-	assert.Equal(t, []string{"Bearer tok-v1"}, seen())
+	assert.Empty(t, seen())
 }
 
 func TestBearerTokenFileFreeLockIgnoresDoneContext(t *testing.T) {
 	path := writeTestFile(t, t.TempDir(), "token", []byte("tok-v1"))
-	srv, _ := authServer(t)
 	c, err := NewBuilder(quietLogger()).WithBearerTokenFile(path, BearerTokenFileOptions{}).Build()
 	require.NoError(t, err)
+	s := c.(*client).bearer
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	// select picks among ready cases at random; repeating makes a lost order visible.
 	for range 32 {
-		_, getErr := c.Get(ctx, &Request{URL: srv.URL})
-		require.ErrorIs(t, getErr, context.Canceled)
-		require.NotContains(t, getErr.Error(), "bearer token file", "a free lock must be taken even under a done context")
+		header, getErr := s.current(ctx)
+		require.NoError(t, getErr, "a free lock must be taken even under a done context")
+		require.Equal(t, "Bearer tok-v1", header)
 	}
 }
 
@@ -574,15 +488,11 @@ func TestBearerTokenFileFailedRefreshKeepsCachedToken(t *testing.T) {
 			log := &fakeLogger{}
 			c, err := bearerBuilder(log, path, BearerTokenFileOptions{RefreshInterval: bearerTestInterval}, clk).Build()
 			require.NoError(t, err)
-			get := func() {
-				_, getErr := c.Get(context.Background(), &Request{URL: srv.URL})
-				require.NoError(t, getErr)
-			}
 
 			tt.spoil(t, path)
 			clk.advance(bearerTestInterval)
 			for range 3 {
-				get()
+				mustGet(t, c, srv.URL)
 			}
 
 			assert.Equal(t, []string{"Bearer tok-cached", "Bearer tok-cached", "Bearer tok-cached"}, seen())
@@ -595,7 +505,7 @@ func TestBearerTokenFileFailedRefreshKeepsCachedToken(t *testing.T) {
 
 			require.NoError(t, os.WriteFile(path, []byte("tok-healed"), 0o600))
 			clk.advance(bearerTestInterval)
-			get()
+			mustGet(t, c, srv.URL)
 			assert.Equal(t, "Bearer tok-healed", seen()[3])
 			assert.Len(t, log.eventsByLevel("warn"), 1)
 		})

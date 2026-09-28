@@ -38,12 +38,11 @@ type BearerTokenFileOptions struct {
 	RefreshInterval time.Duration
 }
 
-// bearerFileSpec is what WithBearerTokenFile records. It sits behind a pointer
-// on Builder because its func-typed test seams would make Builder incomparable.
+// bearerFileSpec is what WithBearerTokenFile records; nil means the option is
+// unset. The pointer also keeps Builder comparable despite the func test seams.
 type bearerFileSpec struct {
-	path string
-	opts BearerTokenFileOptions
-	// Test seams: nil means time.Now and readBearerTokenFile.
+	path     string
+	opts     BearerTokenFileOptions
 	now      func() time.Time
 	readFile func(string) ([]byte, error)
 }
@@ -69,11 +68,11 @@ type bearerFileSpec struct {
 // it. An Authorization header the request sets itself, through Request.Headers
 // or Request.Auth, wins over the file. The last call wins.
 func (b *Builder) WithBearerTokenFile(path string, opts BearerTokenFileOptions) *Builder {
-	b.bearer = &bearerFileSpec{path: path, opts: opts}
+	b.bearer = &bearerFileSpec{path: path, opts: opts, now: time.Now, readFile: readBearerTokenFile}
 	return b
 }
 
-// bearerTokenFile serves the cached token and re-reads the file once it is due.
+// bearerTokenFile serves the cached header value and re-reads the file once it is due.
 type bearerTokenFile struct {
 	path     string
 	interval time.Duration
@@ -82,9 +81,9 @@ type bearerTokenFile struct {
 	logger   logger.Logger
 
 	// lock is a one-slot mutex whose wait can give up on a request's context.
-	lock  chan struct{}
-	token string
-	next  time.Time
+	lock   chan struct{}
+	header string // "Bearer <token>"
+	next   time.Time
 }
 
 // newBearerTokenFile validates WithBearerTokenFile's input against the rest of
@@ -127,17 +126,11 @@ func (b *Builder) newBearerTokenFile() (*bearerTokenFile, error) {
 		logger:   b.logger,
 		lock:     make(chan struct{}, 1),
 	}
-	if s.now == nil {
-		s.now = time.Now
-	}
-	if s.readFile == nil {
-		s.readFile = readBearerTokenFile
-	}
 	token, err := s.read()
 	if err != nil {
 		return nil, err
 	}
-	s.token, s.next = token, s.now().Add(interval)
+	s.header, s.next = "Bearer "+token, s.now().Add(interval)
 	return s, nil
 }
 
@@ -203,7 +196,7 @@ func isVisibleASCII(v string) bool {
 	return true
 }
 
-// current returns the token to send, re-reading the file when it is due. The lock
+// current returns the header value to send, re-reading the file when it is due. The lock
 // is held across the read so concurrent requests at the boundary cause one read.
 // The first select takes a free lock even under a done ctx, as sync.Mutex did.
 func (s *bearerTokenFile) current(ctx context.Context) (string, error) {
@@ -219,7 +212,7 @@ func (s *bearerTokenFile) current(ctx context.Context) (string, error) {
 	defer func() { <-s.lock }()
 	now := s.now()
 	if now.Before(s.next) {
-		return s.token, nil
+		return s.header, nil
 	}
 	// Advanced before the read: a failure waits a full interval to retry, rather
 	// than re-reading and re-warning on every request until the file heals.
@@ -227,20 +220,20 @@ func (s *bearerTokenFile) current(ctx context.Context) (string, error) {
 	token, err := s.read()
 	if err != nil {
 		s.logger.Warn().Err(err).Msg("httpclient: bearer token file refresh failed; keeping the last good token")
-		return s.token, nil
+		return s.header, nil
 	}
-	s.token = token
-	return token, nil
+	s.header = "Bearer " + token
+	return s.header, nil
 }
 
 func (s *bearerTokenFile) apply(ctx context.Context, req *nethttp.Request) error {
 	if _, set := req.Header[headerAuthorization]; set {
 		return nil
 	}
-	token, err := s.current(ctx)
+	header, err := s.current(ctx)
 	if err != nil {
 		return fmt.Errorf("httpclient: bearer token file: waiting for the token: %w", err)
 	}
-	req.Header.Set(headerAuthorization, "Bearer "+token)
+	req.Header.Set(headerAuthorization, header)
 	return nil
 }
