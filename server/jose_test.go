@@ -17,10 +17,12 @@ import (
 	"github.com/labstack/echo/v5/middleware"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/jose"
 	jositest "github.com/gaborage/go-bricks/jose/testing"
+	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
 // joseFixture is the test-scoped state needed to exercise a JOSE-protected route:
@@ -116,10 +118,16 @@ func newJOSETestServer(t *testing.T, f *joseFixture, handler HandlerFunc[joseTok
 // response details (ADR-084).
 func newJOSETestServerWithConfig(t *testing.T, f *joseFixture, cfg *config.Config, handler HandlerFunc[joseTokenReq, joseTokenResp]) (*echo.Echo, echo.HandlerFunc) {
 	t.Helper()
+	return newJOSETestServerWithObs(t, f, cfg, newJOSEObservability(nil, nil, nil), handler)
+}
+
+// newJOSETestServerWithObs is newJOSETestServerWithConfig with the observability bundle
+// supplied by the caller, so a test can read what a failure left on the log and counter.
+func newJOSETestServerWithObs(t *testing.T, f *joseFixture, cfg *config.Config, obs *joseObservability, handler HandlerFunc[joseTokenReq, joseTokenResp]) (*echo.Echo, echo.HandlerFunc) {
+	t.Helper()
 	e := echo.New()
 	e.Validator = NewValidator()
 
-	obs := newJOSEObservability(nil, nil, nil)
 	joseCfg := &joseRouteConfig{Inbound: f.inbound, Outbound: f.outbound, Resolver: f.resolver, Obs: obs}
 	wrapped := wrapHandlerWithJOSE(handler, NewRequestBinder(), cfg, nil, false, joseCfg)
 	return e, wrapped
@@ -652,4 +660,197 @@ func TestJOSEInboundPreTrustFailures(t *testing.T) {
 			assert.Equal(t, tc.wantCode, envelope["code"])
 		})
 	}
+}
+
+const (
+	joseFailureCounter = "jose.failures.total"
+	joseRouteAttr      = "http.route"
+)
+
+// TestMatchedRouteTemplate pins the pure contract both JOSE failure surfaces read: which
+// routing shapes yield a registered route template and which yield nothing at all. wantPath
+// records what c.Path() reports for the same request, so the shapes where the two diverge —
+// echo v5.3.0's group catch-alls, auto-registered at BOTH "/api" and "/api/*" — read as the
+// reason the helper's RouteNotFound guard exists rather than as a bare expectation. A global
+// middleware is the capture seam: it runs after routing, and it runs on the requests no
+// route matched, which echo's own not-found handler serves.
+func TestMatchedRouteTemplate(t *testing.T) {
+	var (
+		gotTemplate string
+		gotPath     string
+		captured    bool
+	)
+
+	e := echo.New()
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(ec *echo.Context) error {
+			gotTemplate, gotPath, captured = matchedRouteTemplate(ec), ec.Path(), true
+			return next(ec)
+		}
+	})
+	noContent := func(ec *echo.Context) error { return ec.NoContent(http.StatusOK) }
+	e.POST("/widget/:id", noContent)
+	// The pass-through middleware is the whole point of the group: it is what makes echo
+	// auto-register the catch-alls (group.go Group.Use).
+	g := e.Group("/api", func(next echo.HandlerFunc) echo.HandlerFunc { return next })
+	g.POST("/tokens/:id", noContent)
+
+	tests := []struct {
+		name         string
+		method       string
+		target       string
+		wantStatus   int
+		wantTemplate string
+		wantPath     string
+	}{
+		{
+			name:         "matched_route_reports_its_template",
+			method:       http.MethodPost,
+			target:       "/api/tokens/42",
+			wantStatus:   http.StatusOK,
+			wantTemplate: "/api/tokens/:id",
+			wantPath:     "/api/tokens/:id",
+		},
+		{
+			// The bare group prefix hits the catch-all registered at "" — a distinct shape
+			// from the "/*" one below, and the one whose c.Path() looks most like a match.
+			name:         "bare_group_prefix_reports_nothing",
+			method:       http.MethodPost,
+			target:       "/api",
+			wantStatus:   http.StatusNotFound,
+			wantTemplate: "",
+			wantPath:     "/api",
+		},
+		{
+			name:         "group_catch_all_sub_path_reports_nothing",
+			method:       http.MethodPost,
+			target:       "/api/nope/x",
+			wantStatus:   http.StatusNotFound,
+			wantTemplate: "",
+			wantPath:     "/api/*",
+		},
+		{
+			name:         "global_404_reports_nothing",
+			method:       http.MethodPost,
+			target:       "/nothing/here",
+			wantStatus:   http.StatusNotFound,
+			wantTemplate: "",
+			wantPath:     "",
+		},
+		{
+			// The guard stays NARROW on purpose: a top-level wrong-method request keeps the
+			// engine's best-match template, a registered value and therefore bounded.
+			name:         "global_405_reports_best_match_template",
+			method:       http.MethodGet,
+			target:       "/widget/5",
+			wantStatus:   http.StatusMethodNotAllowed,
+			wantTemplate: "/widget/:id",
+			wantPath:     "/widget/:id",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotTemplate, gotPath, captured = "", "", false
+
+			req := httptest.NewRequestWithContext(context.Background(), tc.method, tc.target, http.NoBody)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			require.True(t, captured, "the global middleware must observe every request")
+			require.Equal(t, tc.wantStatus, rec.Code)
+
+			assert.Equal(t, tc.wantPath, gotPath, "c.Path() drifted; the case premise no longer holds")
+			assert.Equal(t, tc.wantTemplate, gotTemplate)
+		})
+	}
+}
+
+// TestJOSEFailureRecordsMatchedRouteOnBothSurfaces drives the PRODUCTION seam —
+// wrapHandlerWithJOSE → runJOSEInbound → recordFailure on a registered route — and pins the
+// contract only that seam can show: the failure log and the failure counter agree on whether
+// http.route is present and on its value. Which shapes yield a template is
+// matchedRouteTemplate's contract, pinned by TestMatchedRouteTemplate above; a JOSE-wrapped
+// typed handler only ever runs on a matched route, so this is the shape production reaches.
+func TestJOSEFailureRecordsMatchedRouteOnBothSurfaces(t *testing.T) {
+	const routeTmpl = "/tokens/:id"
+
+	f := newJOSEFixture(t)
+	mp := obtest.NewTestMeterProvider()
+	recLog := &recLogger{}
+	obs := newJOSEObservability(recLog, nil, mp)
+
+	e, h := newJOSETestServerWithObs(t, f, &config.Config{App: config.AppConfig{Env: "development"}}, obs,
+		func(_ joseTokenReq, _ HandlerContext) (joseTokenResp, IAPIError) {
+			t.Error("handler must not be invoked on a pre-trust failure")
+			return joseTokenResp{}, nil
+		})
+	e.POST(routeTmpl, h)
+
+	// A plaintext Content-Type is the cheapest pre-trust rejection, so the failure is
+	// recorded through runJOSEInbound before any crypto runs.
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens/42",
+		strings.NewReader(`{"pan":"4111111111111111"}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusUnsupportedMediaType, rec.Code)
+
+	m := obtest.FindMetric(mp.Collect(t), joseFailureCounter)
+	require.NotNil(t, m, "counter %s was never recorded", joseFailureCounter)
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected Sum[int64] data for %s, got %T", joseFailureCounter, m.Data)
+	require.Len(t, sum.DataPoints, 1, "expected exactly one failure series for %s", joseFailureCounter)
+	onCounter, onCounterPresent := sum.DataPoints[0].Attributes.Value(joseRouteAttr)
+
+	require.NotNil(t, recLog.last, "no failure log event was emitted")
+	inLog, inLogPresent := recLog.last.fields[joseRouteAttr]
+
+	require.Equal(t, onCounterPresent, inLogPresent,
+		"log and counter disagree on whether %s is present", joseRouteAttr)
+	require.True(t, onCounterPresent, "a matched route must report its template on both surfaces")
+	assert.Equal(t, routeTmpl, onCounter.AsString(), "counter must carry the route template")
+	assert.Equal(t, routeTmpl, inLog, "log must carry the same route template as the counter")
+}
+
+// TestJOSEFailureOmitsRouteWhenNoTemplate is the unit-level pin of the omit rule itself:
+// given a context that never routed, recordFailure must leave http.route off BOTH surfaces
+// rather than substituting the concrete URL path. It calls the unexported method directly
+// because production cannot reach this state — a JOSE-wrapped typed handler only ever runs
+// on a matched route, which is what TestJOSEFailureRecordsMatchedRouteOnBothSurfaces above
+// pins — and an unreachable state is exactly what no seam test can cover: without this case
+// nothing fails if the c.Request().URL.Path fallback comes back, or if the route != ""
+// guard is inverted so both surfaces stamp an empty template. The http.method assertions
+// are the positive control: they prove both surfaces were written and that http.route alone
+// was withheld.
+func TestJOSEFailureOmitsRouteWhenNoTemplate(t *testing.T) {
+	mp := obtest.NewTestMeterProvider()
+	recLog := &recLogger{}
+	obs := newJOSEObservability(recLog, nil, mp)
+
+	// Straight from NewContext, so the router never ran: no matched route, and a concrete
+	// request path that must not be substituted for the missing template.
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens/42", http.NoBody)
+	c := echo.New().NewContext(req, httptest.NewRecorder())
+	require.Empty(t, c.Path(), "premise: an unrouted context carries no route template")
+
+	obs.recordFailure(context.Background(), c, "inbound",
+		&joseAPIError{code: errCodeJOSEPlaintextRejected, message: "unrouted", status: http.StatusUnsupportedMediaType})
+
+	m := obtest.FindMetric(mp.Collect(t), joseFailureCounter)
+	require.NotNil(t, m, "counter %s was never recorded", joseFailureCounter)
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected Sum[int64] data for %s, got %T", joseFailureCounter, m.Data)
+	require.Len(t, sum.DataPoints, 1, "expected exactly one failure series for %s", joseFailureCounter)
+	require.NotNil(t, recLog.last, "no failure log event was emitted")
+
+	method, methodOnCounter := sum.DataPoints[0].Attributes.Value("http.method")
+	require.True(t, methodOnCounter, "positive control: the counter must still carry http.method")
+	require.Equal(t, http.MethodPost, method.AsString())
+	require.Equal(t, http.MethodPost, recLog.last.fields["http.method"],
+		"positive control: the log must still carry http.method")
+
+	_, onCounter := sum.DataPoints[0].Attributes.Value(joseRouteAttr)
+	assert.False(t, onCounter, "%s must be absent from the counter when no template matched", joseRouteAttr)
+	assert.NotContains(t, recLog.last.fields, joseRouteAttr,
+		"%s must be absent from the log when no template matched", joseRouteAttr)
 }

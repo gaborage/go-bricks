@@ -216,10 +216,33 @@ type PathParam struct {
 // to the group's implicit catch-all (a 404), so it returns "" rather than a
 // best-match template.
 func (c HandlerContext) RouteTemplate() string {
-	if c.ectx.RouteInfo().Method == echo.RouteNotFound {
-		return "" // group implicit catch-all (echo v5.3.0): unmatched, no template
+	return matchedRouteTemplate(c.ectx)
+}
+
+// matchedRouteTemplate reports the registered route template the engine matched for
+// this request, or "" when the engine reports no template — an unmatched path, or a
+// middleware-bearing group's catch-all. Two callers read it: RouteTemplate() above and
+// the JOSE failure recorder (server/jose.go). Both must carry a registered template or
+// nothing at all, because the concrete URL path is caller-chosen: falling back to it
+// stamps that string on a metric attribute, minting one time series per distinct unmatched
+// path (#1816). The per-request access log is the deliberate exception — it reads a bare
+// c.Path() (server/logger.go) because RouteInfo() clones its Parameters slice: 0 allocs on
+// a static route, but 1 alloc / 16 B on a single-param one, on a path that runs for every
+// request against the ADR-026 allocation ceiling.
+//
+// The RouteNotFound check is deliberately NARROWER than HandlerContext.isUnmatchedRoute
+// below, which covers echo v5.3.0's group catch-alls — auto-registered at both <prefix>
+// and <prefix>/*; see isUnmatchedRoute for their RouteInfo shape — and is also true on the
+// global 404/405 sentinels. Two reasons it cannot be reused here: on those catch-alls
+// c.Path() still returns the group's template although nothing matched, which is exactly
+// what this check suppresses; and on a top-level 405 the engine leaves the best-matching
+// route's template on the context — a registered, bounded value RouteTemplate() is pinned
+// to report, so folding isUnmatchedRoute in would flip that behavior.
+func matchedRouteTemplate(c *echo.Context) string {
+	if c.RouteInfo().Method == echo.RouteNotFound {
+		return ""
 	}
-	return c.ectx.Path()
+	return c.Path()
 }
 
 // isUnmatchedRoute reports whether the request did not resolve to a real
