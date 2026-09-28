@@ -55,6 +55,8 @@ func TestBuildBearerTokenFileRejectsUnusableInput(t *testing.T) {
 	dir := t.TempDir()
 	blank := writeTestFile(t, dir, "blank", []byte(" \t\v\f\u00a0\r\n"))
 	multiline := writeTestFile(t, dir, "multiline", []byte("tok-a\ntok-b\n"))
+	schemed := writeTestFile(t, dir, "schemed", []byte("Bearer tok-scheme\n"))
+	bom := writeTestFile(t, dir, "bom", []byte("\ufefftok-bom"))
 	oversized := writeTestFile(t, dir, "oversized", bytes.Repeat([]byte("a"), maxBearerTokenFileBytes+1))
 	subdir := filepath.Join(dir, "subdir")
 	require.NoError(t, os.Mkdir(subdir, 0o700))
@@ -70,10 +72,13 @@ func TestBuildBearerTokenFileRejectsUnusableInput(t *testing.T) {
 	}{
 		{name: "missing_file", path: missing, wantMsg: "read file", wantPath: true, isErr: fs.ErrNotExist},
 		{name: "whitespace_only_file", path: blank, wantMsg: "is empty", wantPath: true},
-		{name: "interior_newline", path: multiline, wantMsg: "is not a valid header value", wantPath: true},
+		{name: "interior_newline", path: multiline, wantMsg: "does not hold an RFC 6750 bearer token", wantPath: true},
+		{name: "scheme_copied_into_file", path: schemed, wantMsg: "does not hold an RFC 6750 bearer token", wantPath: true},
+		{name: "utf8_byte_order_mark", path: bom, wantMsg: "does not hold an RFC 6750 bearer token", wantPath: true},
 		{name: "directory", path: subdir, wantMsg: "not a regular file", wantPath: true, isErr: errNotRegularFile},
 		{name: "over_size_cap", path: oversized, wantMsg: "larger than 65536 bytes", wantPath: true, isErr: errTokenFileTooLarge},
 		{name: "empty_path", path: "", wantMsg: "requires a file path"},
+		{name: "whitespace_only_path", path: " \n", wantMsg: "requires a file path"},
 		{name: "swapped_jwt", path: "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJwcm9iZSJ9.c2lnbmF0dXJl", wantMsg: "looks like a token", pathSecret: true},
 		{name: "swapped_opaque_token", path: "opaque-probe-4d2f9a7c1e", wantMsg: "looks like a token", pathSecret: true},
 		{name: "swapped_jwt_with_surrounding_whitespace", path: " eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJwcm9iZSJ9.c2lnbmF0dXJl\n", wantMsg: "looks like a token", pathSecret: true},
@@ -94,7 +99,7 @@ func TestBuildBearerTokenFileRejectsUnusableInput(t *testing.T) {
 			if tt.isErr != nil {
 				require.ErrorIs(t, err, tt.isErr)
 			}
-			for _, content := range []string{"\v", `\v`, "\u00a0", "tok-a", "tok-b"} {
+			for _, content := range []string{"\v", `\v`, "\u00a0", "tok-a", "tok-b", "tok-scheme", "tok-bom"} {
 				assert.NotContains(t, err.Error(), content, "the error must never carry file contents")
 			}
 		})
@@ -107,7 +112,7 @@ func TestBuildBearerTokenFileAcceptsRelativePaths(t *testing.T) {
 	writeTestFile(t, dir, "partner.jwt", []byte("tok-relative"))
 	t.Chdir(dir)
 
-	for _, path := range []string{"./token", "partner.jwt"} {
+	for _, path := range []string{"./token", "partner.jwt", " ./token\n"} {
 		_, err := NewBuilder(quietLogger()).WithBearerTokenFile(path).Build()
 		require.NoError(t, err, path)
 	}
@@ -126,8 +131,7 @@ func TestLooksLikeTokenSeparatesTokensFromPaths(t *testing.T) {
 		path string
 		want bool
 	}{
-		{name: "leading_whitespace_jwt", path: " " + jwt, want: true},
-		{name: "trailing_newline_jwt", path: jwt + "\n", want: true},
+		{name: "jwt", path: jwt, want: true},
 		{name: "bare_word", path: "opaque-probe-4d2f9a7c1e", want: true},
 		{name: "file_name_with_extension", path: "partner.jwt", want: false},
 		{name: "relative_path", path: "./token", want: false},
@@ -137,6 +141,36 @@ func TestLooksLikeTokenSeparatesTokensFromPaths(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, looksLikeToken(tt.path))
+		})
+	}
+}
+
+func TestIsB64TokenFollowsRFC6750Grammar(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "lower_bounds", value: "az", want: true},
+		{name: "upper_bounds", value: "AZ", want: true},
+		{name: "digit_bounds", value: "09", want: true},
+		{name: "hyphen", value: "-", want: true},
+		{name: "punctuation", value: "._~+/", want: true},
+		{name: "trailing_padding", value: "ab==", want: true},
+		{name: "padding_only", value: "==", want: false},
+		{name: "interior_padding", value: "a=b", want: false},
+		{name: "before_lower", value: "`", want: false},
+		{name: "after_lower", value: "{", want: false},
+		{name: "before_upper", value: "@", want: false},
+		{name: "after_upper", value: "[", want: false},
+		{name: "after_digits", value: ":", want: false},
+		{name: "space", value: "a b", want: false},
+		{name: "quote", value: `a"b`, want: false},
+		{name: "obs_text", value: "a\x80b", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isB64Token(tt.value))
 		})
 	}
 }
@@ -196,6 +230,7 @@ func TestBearerTokenFilePerRequestAuthorizationWins(t *testing.T) {
 	}{
 		{name: "request_headers_lowercase_key", req: Request{Headers: map[string]string{"authorization": "Bearer per-request"}}, want: "Bearer per-request"},
 		{name: "request_basic_auth", req: Request{Auth: &BasicAuth{Username: "u", Password: "p"}}, want: "Basic dTpw"},
+		{name: "request_headers_empty_value", req: Request{Headers: map[string]string{"authorization": ""}}, want: ""},
 		{name: "no_per_request_authorization", req: Request{}, want: "Bearer tok-file"},
 	}
 	for _, tt := range tests {

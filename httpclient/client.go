@@ -652,6 +652,9 @@ func (b *Builder) Build() (Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	if bearer != nil && httpClient.CheckRedirect == nil {
+		httpClient.CheckRedirect = bearerCheckRedirect
+	}
 
 	if rt != nil {
 		httpClient.Transport = rt

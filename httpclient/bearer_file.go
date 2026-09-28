@@ -9,8 +9,6 @@ import (
 	"strings"
 	"syscall"
 
-	"golang.org/x/net/http/httpguts"
-
 	"github.com/gaborage/go-bricks/internal/secretfile"
 )
 
@@ -33,15 +31,17 @@ type bearerFileSpec struct {
 // every retry, reading the token from path once, at Build.
 //
 // Build reads the file eagerly, trims surrounding whitespace, and fails when it
-// is missing, unreadable, not a regular file, larger than 64 KiB, empty, or not a
-// valid header value (a control byte such as an interior newline); the error
-// names the path, never the contents. A path that looks like a token instead —
+// is missing, unreadable, not a regular file, larger than 64 KiB, empty, or not
+// an RFC 6750 b64token (letters, digits, "-._~+/", then optional trailing "=");
+// the error names the path, never the contents. The path is trimmed too. A path that looks like a token instead —
 // one starting "eyJ" as a JWT does, or a bare name with no directory and no
 // extension — fails Build without being read or echoed; write "./token" for a
 // file in the working directory.
 // Build also fails when this option is combined with WithBasicAuth or a default
-// Authorization header. An Authorization header the request sets itself, through
-// Request.Headers or Request.Auth, wins over the file. The last call wins.
+// Authorization header. Unless the client already has a CheckRedirect, Build
+// installs one that refuses a redirect from https to http. An Authorization
+// header the request sets itself, through Request.Headers or Request.Auth, wins
+// over the file. The last call wins.
 func (b *Builder) WithBearerTokenFile(path string) *Builder {
 	b.bearer = &bearerFileSpec{path: path}
 	return b
@@ -60,12 +60,13 @@ func (b *Builder) newBearerTokenFile() (*bearerTokenFile, error) {
 	if spec == nil {
 		return nil, nil
 	}
-	if spec.path == "" {
+	path := strings.TrimSpace(spec.path)
+	if path == "" {
 		return nil, errors.New("httpclient: WithBearerTokenFile requires a file path")
 	}
 	// Refused before any read: a read error would quote the value, and here the
 	// value may be the token itself.
-	if looksLikeToken(spec.path) {
+	if looksLikeToken(path) {
 		return nil, errors.New("httpclient: WithBearerTokenFile: the path looks like a token, not a file path; for a bare file name in the working directory, write ./<name>")
 	}
 	if b.config.BasicAuth != nil {
@@ -77,7 +78,7 @@ func (b *Builder) newBearerTokenFile() (*bearerTokenFile, error) {
 		}
 	}
 
-	s := &bearerTokenFile{path: spec.path}
+	s := &bearerTokenFile{path: path}
 	token, err := s.read()
 	if err != nil {
 		return nil, err
@@ -90,8 +91,7 @@ func (b *Builder) newBearerTokenFile() (*bearerTokenFile, error) {
 // token passed in its place: a compact JWS or JWE, whose JSON header encodes to
 // "eyJ", or a bare word with no directory and no extension.
 func looksLikeToken(path string) bool {
-	p := strings.TrimSpace(path)
-	return strings.HasPrefix(p, "eyJ") || !strings.ContainsAny(p, `/\.`)
+	return strings.HasPrefix(path, "eyJ") || !strings.ContainsAny(path, `/\.`)
 }
 
 // readBearerTokenFile reads a regular file of at most maxBearerTokenFileBytes.
@@ -131,10 +131,29 @@ func (s *bearerTokenFile) read() (string, error) {
 	if token == "" {
 		return "", fmt.Errorf("httpclient: bearer token file %s is empty", secretfile.SafeRef(s.path))
 	}
-	if !httpguts.ValidHeaderFieldValue(token) {
-		return "", fmt.Errorf("httpclient: bearer token file %s is not a valid header value", secretfile.SafeRef(s.path))
+	if !isB64Token(token) {
+		return "", fmt.Errorf("httpclient: bearer token file %s does not hold an RFC 6750 bearer token", secretfile.SafeRef(s.path))
 	}
 	return token, nil
+}
+
+// isB64Token reports whether v matches RFC 6750's b64token:
+// 1*( ALPHA / DIGIT / "-" / "." / "_" / "~" / "+" / "/" ) *"=".
+func isB64Token(v string) bool {
+	body := strings.TrimRight(v, "=")
+	if body == "" {
+		return false
+	}
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		case strings.IndexByte("-._~+/", c) >= 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (s *bearerTokenFile) apply(req *nethttp.Request) {

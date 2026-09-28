@@ -712,19 +712,20 @@ if err != nil {
 }
 ```
 
-- **Eager read.** `Build()` reads the file, trims surrounding whitespace, and fails when the file
+- **Eager read.** `Build()` trims the path, reads the file, trims surrounding whitespace, and fails when the file
   is missing, unreadable, not a regular file (checked on the opened file, after symlinks are
   followed and before any read; the open does not wait for a FIFO writer, so a FIFO or a device is
-  refused unread), larger than 64 KiB, or empty after trimming, or when what is left is not a
-  valid header value (a control byte such as an interior newline, which net/http would refuse to
-  send). The error names the path and never the contents. A path that
+  refused unread), larger than 64 KiB, or empty after trimming, or when what is left is not an
+  RFC 6750 `b64token`: letters, digits and `-._~+/`, then optional trailing `=`. That refuses an
+  interior newline or space, a `Bearer` scheme copied into the file, and a UTF-8 byte order mark.
+  The error names the path and never the contents. A path that
   looks like a token passed in its place — one starting `eyJ` as a JWT does, or a bare name with
   no directory and no extension — fails `Build()` before any read and is not echoed; write
   `./token` for a file in the working directory. That check is a heuristic: an opaque token that
   contains `/` or `.` passes it, so it is read as a path, and the startup error can quote it as
   that path.
 - **Precedence.** An `Authorization` header the request sets itself — `Request.Headers`, any
-  spelling of the key, or `Request.Auth` — wins over the file. Request interceptors run after the
+  spelling of the key, even with an empty value, or `Request.Auth` — wins over the file. Request interceptors run after the
   token is set, so they see it and can still replace it.
 - **Conflicts.** `Build()` fails when the option is combined with `WithBasicAuth` or a default
   `Authorization` header (`WithDefaultHeader`, any spelling): both would claim the same header.
@@ -733,9 +734,11 @@ if err != nil {
   request headers.
 - **Scope.** The token is bound to the client, not to a host: every request carries it, whatever
   URL it names. Use one client per counterparty, and never pass it a URL you did not build (a
-  pagination link, a callback URL). On a redirect, net/http forwards the header to the same
-  domain or a subdomain of it whatever the scheme, so an `https` to `http` redirect on the same
-  host sends it in cleartext.
+  pagination link, a callback URL).
+- **Redirects.** net/http forwards the header to the same domain or a subdomain of it, whatever
+  the scheme. Unless the `*http.Client` passed to `WithHTTPClient` has a `CheckRedirect` of its
+  own, `Build()` installs one that refuses a redirect from `https` to `http` and keeps net/http's
+  cap of 10 redirects.
 
 ## Metrics
 
