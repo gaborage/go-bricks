@@ -4,6 +4,19 @@
 **Date:** 2026-09-15
 **Issue:** #1666
 
+> **Amended (2026-09-28, [ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md)):** the
+> verdict decided here is untouched — `messaging.consumers.critical`, the WARN-constant threshold,
+> `Manager.AnyConsumerGivenUp()` and the `503` all stand. What moves is where an operator reads the
+> approach to it. `/ready` now answers `{"status":"ready"}` / `{"status":"not ready"}` only, so
+> `messaging_stats` is not on it: the "an operator can therefore watch an outage climb toward the
+> threshold" paragraph now means `/_sys/health-debug`, which still renders that whole map, plus the
+> new `messaging.consumer.max_fail_streak`, `.subscribed` and `.declared` gauges, which carry the
+> same bare numbers and still never say WHICH consumer. The manager-side door's reasoning — it keeps
+> coordinates out of the unauthenticated body — holds a fortiori: no body carries any coordinate now.
+> Superseded: "ADR-048 governs the body: … the slot declares no `PublicErr`, and the unauthenticated
+> `503` renders the default `messaging unavailable`". The `503` renders no error text at all, and
+> `PublicErr` is deleted from `HealthStatus`. See [migrations.md](migrations.md) `[C69.1]`, `[C69.2]`.
+
 ## Context
 
 The messaging kind's `/ready` probe leased the control-plane publisher and asked it `IsReady()`.

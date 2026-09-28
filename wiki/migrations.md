@@ -54,7 +54,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E66 | v0.65.0 → v0.66.0 | breaking (C66.1 — a PostgreSQL `connectionstring` whose resolved host is a unix-socket entry is now also refused when the TLS claim arrives through `PGSSLMODE`/`PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY`/`PGSSLNEGOTIATION` rather than the DSN text, matching pgx's env-under-DSN precedence; a present DSN key, empty included, still shadows env; same doors as C65.2, and `go-bricks-migrate` inherits through the exported seam) + breaking (C66.2 — a sealed DedupKey is admitted at the ledger only when it equals the key the sealed consume door stored on that delivery's context, so a retained key whose `<SignFamily>:<jti>` differs is refused with `ErrInvalidEventID` before the ledger where C65.7 admitted it; no signature moves) + breaking (C66.3 — a PostgreSQL `connectionstring` that resolves through a libpq service — any `service` key in the DSN, empty included, or a non-empty `PGSERVICE` when the DSN carries no `service` key — is refused ahead of C65.2's rules whatever `PGHOST` or a DSN host says, because pgx lets the service file's host shadow `PGHOST` and fill port, user and `sslmode`, and this seam never reads the file; same doors as C65.2, and `go-bricks-migrate` inherits through the exported seam) + breaking (C66.4 — `Declarations.Validate()` refuses an exchange whose `Type` is neither `direct`/`topic`/`fanout`/`headers` nor an `x-` plugin type, empty and wrong-case included, at startup where the broker refused it on declaration replay; API additions only) + breaking (C66.5 — a `migration.MigrateAll` result gains `NeverDispatched` plus `Listed()` and a `Verdict()` that reads an empty listing, or a run stopped before its first dispatch, as `ErrNothingAttempted` and never as clean, while `Results`, `Failed()` and the `(result, error)` shape do not move; and a parallel run under an already-done context now dispatches no tenant where it used to dispatch a random prefix) + breaking (C66.6 — every resolved cache key now travels as `<prefix>:<key>`, and a tenant cache's as `<prefix>:<tenantID>:<key>`, where the old layout wrote the caller's key verbatim and isolated tenants by a separate Redis database, which a cluster endpoint does not have; `cache.redis.keyprefix` is a tri-state `*string` with no koanf default, so an ABSENT key takes `app.name` and every existing deployment re-keys once on upgrade — one cold-cache cycle, and a `ttl == 0` entry was stored without expiration so it stays until an operator sweeps the old un-prefixed keys — while an explicit value is honored as written and an explicit `""` opts out at the root yet still yields `<tenantID>` under a tenant, because cross-tenant isolation is not optional; a prefix carrying whitespace, `*?[]`, `\`, `{}` or a `:` fails startup, as does an `app.name` that cannot be one segment wherever the default applies) + breaking (C66.7 — `RegisterExchange` gains the existence check `RegisterQueue` got in C56.7: a repeat declaration of one exchange name merges only when `Type` and the four flags agree and every shared `Args` key carries the same value, and an incompatible repeat keeps the FIRST declaration and fails `Validate()` at startup where the later one used to overwrite the earlier one silently — the reachable collision being `DeclareQueueWithDLQ`'s fanout DLX against a `DeclareTopicExchange`/`DeclareDirectExchange` of that name) | 7 | none for C66.1/C66.2/C66.3 — a runtime refusal on the connect seam for C66.1 and C66.3, no signature moves; C66.2 is a runtime equality check on `ValidateDedupKey`, and `IsSealedDelivery` keeps its exported signature; C66.4 is a startup refusal and adds API only; C66.5: only an unkeyed `MigrateAllResult` literal, and `Verdict()` is a new method nothing calls until you adopt it; C66.6 moves no signature and nothing in your build flags it — the key layout changes under you; C66.7 is a startup refusal and no signature moves | check every environment that process loads for `PGSSLMODE`/`PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY`/`PGSSLNEGOTIATION` beside a socket-host DSN the matching DSN key does not shadow, then unset EVERY variable the refusal names, since a non-empty `sslcert`/`sslkey`/`sslrootcert` claims like an `sslmode` and each claim refuses alone — or, where the environment is not yours to change, add a non-claiming value for each of those keys to the DSN, which shadows them — or move to a TCP host, the one exit that clears them all; do NOT drop a DSN key, since a match requires that key to be absent and dropping a present one exposes the variable (C66.1); and if a sealed handler retained a SEALED DedupKey from one delivery and passed it to `ProcessOnce` while handling another, that call is now refused unless the two spell the same `<SignFamily>:<jti>` — pass the current delivery's `meta.DedupKey()`; a key built with `WireDedupKey` is unaffected (C66.2); and grep static config for `service=` inside a PostgreSQL `connectionstring` and check every environment that process loads for `PGSERVICE`, then copy every key the service section sets from its `pg_service.conf` into the DSN, drop `service=` (an empty one too, which pgx resolves from a `[]` section) and unset `PGSERVICE` — dropping `service=` alone exposes a `PGSERVICE` it was shadowing (C66.3); and read the `Type` of every hand-built `ExchangeDeclaration` (`git grep -n 'ExchangeDeclaration' -- '*.go'`, plus a `Type` assigned after construction): an empty, wrong-case or misspelled type now fails startup, so set a `messaging.ExchangeType*` constant or use `DeclareTopicExchange`/`DeclareDirectExchange` (C66.4); and if a caller of `migration.MigrateAll` reads a nil error with an empty `Failed()` as a clean fleet, decide what a zero-tenant listing should do, then gate on `Verdict()` (C66.5); and decide the cache key layout BEFORE the bump: an absent `cache.redis.keyprefix` now takes `app.name`, so every existing deployment re-keys once and reads cold — set an explicit prefix, or `""` to keep the old un-prefixed root layout; where two services deliberately share a keyspace set the SAME explicit prefix on both, realign any Redis ACL or RBAC rule written against the old key shapes, and plan a sweep of the old keys, because a `ttl == 0` entry was stored without expiration and will not age out (C66.6); and grep for one exchange **name** declared from two places, remembering that `DeclareQueueWithDLQ` silently registers `DeadLetterSpec.Exchange` or `<queue>.dlx` as a FANOUT, so a `DeclareTopicExchange`/`DeclareDirectExchange` of that same name now aborts startup instead of letting registration order pick the broker's type — align the two call sites, or give the dead-letter exchange its own name, and note that a topic or direct DLX was silently dropping every dead-lettered message that carried a routing key (C66.7) |
 | E67 | v0.66.0 → v0.67.0 | breaking (C67.1 — `go-bricks-migrate` maps the run verdict onto three exit codes: 0 clean, 1 split fleet, 2 no tenant dispatched, where every failure used to exit 1 and an empty listing exited 0, and every misuse now exits 2 where it exited 1; the `--json` summary record keeps `total` and adds `listed`, `attempted`, `failed`, `not_attempted` and `verdict`, and is emitted on the exit-2 paths too) + silent-behavior (C67.2 — the ADR-113 redeclare pass gains a second driver: every publisher client the manager pools for a key, not only the registry's own, so a publisher-only service that never re-declared at all now repairs its topology on every reconnect, and a newly pooled publisher costs one pass on creation and on each re-creation after an eviction, though only clients that are or embed what `NewAMQPClient` returns can be sources at all; the added work is T registries × M pooled publishers of idempotent declares, off the publish path) | 1 | none — the CLI is a binary, so nothing a Go build catches; a pipeline that branches on the exit code or parses the summary record is the whole population; and nothing for C67.2, which moves no signature and changes only how often the framework re-declares | read every pipeline step that runs `go-bricks-migrate` and decide what a zero-tenant environment should do BEFORE the bump: it exits 2 where it exited 0; and for C67.2 size the declare traffic if your fleet is large, since a broker restart now costs one pass per registry AND per pooled publisher |
 | E68 | v0.67.0 → v0.68.0 | silent-behavior (C68.1 — the health/ready probe exemption is keyed on the route the ROUTER matched plus a GET/HEAD method check, where it compared the decoded `r.URL.Path` and ignored the method, so a non-GET/HEAD request on a probe path and a percent-encoded spelling of one are no longer exempt from tenant resolution, the forwarded-client-cert identity, OTel and module global middleware; `server.CreateProbeSkipper` moves to `server/probe_skip.go` and answers from `r.Pattern` with the raw path as fallback, its exported signature unmoved) | 1 | none — no signature moves; the exemption narrows under you, and it narrows fail-closed (middleware runs where it used to be skipped) | decide whether any probe or monitor of yours calls a probe path with a method other than GET or HEAD, since that request now runs the identity chain — under `multitenant` it answers 400 without a tenant header, under `forwardedclientcert.require` 401 without a client certificate — and if a custom `server.SkipperFunc` of yours exempts anything, key it on `r.Pattern` rather than `r.URL.Path` |
-| E69 | v0.68.0 → v0.69.0 | breaking (C69.3 — a service built on `server.New` without `app` that registers one method+path twice through `ModuleGroup`/`RootGroup` used to boot with the LATER handler serving; now the first handler keeps the route and `Server.Start` returns a `*server.DuplicateRouteError` matching `server.ErrDuplicateRoute` before either listener binds; the probes register first, so a module route at GET/HEAD `<base>/health` or `<base>/ready` that used to take the path over now never runs, and a `server.path.health` equal to `server.path.ready` that used to let readiness replace health now refuses `Start` with `dispatchReady` as the duplicate; templates differing only in a parameter or wildcard name (`/users/:id`, `/users/:uid`) now conflict, under `app` too, where an identical duplicate and both probe cases already failed startup) + silent-behavior (C69.6 — a stream or super stream the broker lost while the service ran is reported once at ERROR per consumer or publisher on it and keeps the non-critical `streams` component unhealthy until a restart, and a lost consumer's shutdown offset flush is skipped, so the restart replays what it handled since its last commit) | 2 | C69.3 only partially — `RouteConflict` gains a `FirstPath` field, so an unkeyed `server.RouteConflict{...}` literal stops compiling; the refusal itself surfaces at `Start`; none for C69.6 — no signature moves and no configuration key changes | on the current version, call `srv.RouteConflicts()` after every registration: non-empty means `Start` will refuse after the bump — remove or rename the duplicate it names; where the first registrant is a probe, serve custom readiness through `Server.RegisterReadyHandler`, move the probe with `server.path.health`/`server.path.ready` (two distinct values), or move the module route; also compare each method's templates with parameter and wildcard names erased; nothing for C69.6 |
+| E69 | v0.68.0 → v0.69.0 | breaking (C69.3 — a service built on `server.New` without `app` that registers one method+path twice through `ModuleGroup`/`RootGroup` used to boot with the LATER handler serving; now the first handler keeps the route and `Server.Start` returns a `*server.DuplicateRouteError` matching `server.ErrDuplicateRoute` before either listener binds; the probes register first, so a module route at GET/HEAD `<base>/health` or `<base>/ready` that used to take the path over now never runs, and a `server.path.health` equal to `server.path.ready` that used to let readiness replace health now refuses `Start` with `dispatchReady` as the duplicate; templates differing only in a parameter or wildcard name (`/users/:id`, `/users/:uid`) now conflict, under `app` too, where an identical duplicate and both probe cases already failed startup) + silent-behavior (C69.6 — a stream or super stream the broker lost while the service ran is reported once at ERROR per consumer or publisher on it and keeps the non-critical `streams` component unhealthy until a restart, and a lost consumer's shutdown offset flush is skipped, so the restart replays what it handled since its last commit) + breaking (C69.1 — `/ready` answers `{"status":"ready"}` on 200 and `{"status":"not ready"}` on 503 and nothing else, on the probe listener and the application listener alike: `time`, `app` (name/environment/version), every per-kind status key (`database`, `messaging`, `cache`, `streams`), every `<kind>_stats` object and ADR-048's `"<kind> unavailable"` error text all leave both bodies, where an orchestrator reading only the status code is unaffected and anything parsing the body loses every key but `status`) + compile-break (C69.2 — the exported field `HealthStatus.PublicErr` is deleted along with `publicProbeError`, so code that sets it stops compiling) | 4 | C69.3 only partially — `RouteConflict` gains a `FirstPath` field, so an unkeyed `server.RouteConflict{...}` literal stops compiling; the refusal itself surfaces at `Start`; none for C69.6 — no signature moves and no configuration key changes; and C69.2 — `go build ./... && go vet ./...` names every assignment, `_test.go` files included; nothing for C69.1, whose population is body readers OUTSIDE the Go build — a `map[string]any` read of a deleted key compiles and returns `nil`, and a dashboard panel or alert rule keyed on a vanished JSON path goes quiet instead of failing | on the current version, call `srv.RouteConflicts()` after every registration: non-empty means `Start` will refuse after the bump — remove or rename the duplicate it names; where the first registrant is a probe, serve custom readiness through `Server.RegisterReadyHandler`, move the probe with `server.path.health`/`server.path.ready` (two distinct values), or move the module route; also compare each method's templates with parameter and wildcard names erased; nothing for C69.6; and for C69.1, inventory every reader of the `/ready` BODY, as opposed to its status code — smoke tests, `jq` scrapes, synthetic monitors, dashboard panels, alert rules — and repoint it at `app.readiness.status`, the `messaging.consumer.*` / `messaging.streams.*` gauges, `db.client.connection.*`, `cache.manager.*` or `/_sys/health-debug` BEFORE the bump; the gauges ship in this same release, so the replacement signal exists the moment the body does not |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 
@@ -10416,7 +10416,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `CreateProbeSkipper`) ·
   [global_middleware.md](global_middleware.md#public-route-exemptions)
 
-## E69 · v0.68.0 → v0.69.0 — the server itself refuses a duplicate route, and the first registration keeps it + the streams lane reports a stream the broker lost
+## E69 · v0.68.0 → v0.69.0 — the server itself refuses a duplicate route, and the first registration keeps it + the streams lane reports a stream the broker lost + `/ready` answers status only, on either listener + the exported `HealthStatus.PublicErr` seam is deleted
 
 - gist: the duplicate method+path check lived only in `app`, so a service wiring `server.New` and
   `ModuleGroup()` itself got echo's silent overwrite — the later handler served under the kept route
@@ -10427,6 +10427,17 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - gist: a stream or super stream deleted on a live broker left its consumers and publisher closed
   for good, with only the stream client's own unstructured log line to show for it. A supervisor now
   reports each such handle once at ERROR (C69.6, ADR-123).
+- gist: the unauthenticated `/ready` 200 body named the service, its environment and version, every
+  backend kind it depended on and each one's pool and consumer counters, and the 503 body named the
+  blocking kind and served ADR-048's `"<kind> unavailable"`. Both are now one key:
+  `{"status":"ready"}` and `{"status":"not ready"}`, from `App.readyCheck` and from the
+  `server.readyCheck` fallback, on the probe listener and the application listener alike, at every
+  `server.probes.port`. The detail moved rather than vanished — the blocking kind and its full error
+  stay in the `Readiness check failed` log line, `/_sys/health-debug` still renders every kind
+  verbatim, and the counters OTel lacked ship in this same release as observable gauges
+  (`app.readiness.status`, `messaging.consumer.*`, `messaging.streams.*`) beside a WARN/INFO pair
+  for non-critical kinds. Deleting the last reader of the body's error text also deletes the
+  exported seam that fed it, `HealthStatus.PublicErr` (C69.1, C69.2, ADR-120, #1791).
 
 ### [C69.3] the server keeps the first registration and `Start` refuses a duplicate route · breaking · when: match
 
@@ -10517,6 +10528,116 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - ref: gaborage/go-bricks#1797 · [ADR-123](adr_123_streams_lost_topology_supervisor.md) ·
   `messaging/streams/supervisor.go` · `messaging/streams/manager.go` ·
   [streams.md](streams.md#a-lost-stream)
+
+### [C69.1] `/ready` answers `{"status":"ready"}` / `{"status":"not ready"}` and nothing else · breaking · when: match
+
+- detect: two greps, because the population straddles the build. Over your Go code and test
+  fixtures, `git grep -nE '(database|messaging|cache|streams)_stats|(database|messaging|cache|streams) unavailable|\[.(time|app|database|messaging|cache|streams).\]' -- '*.go'`
+  finds every read of an old body key and of ADR-048's error text — the bracket arm catches the
+  `body["time"]` / `body["cache"]` map-index shape that a key-name search alone misses. Keep the
+  pattern free of `\b`/`\s`/`\w`: `git grep -E` has no PCRE escapes, so a pattern carrying one
+  silently matches nothing and the gate reports "not affected". Then, over everything that probes
+  or scrapes, `git grep -niE '/ready' -- '*.yml' '*.yaml' '*.json' '*.tf' '*.sh' 'Dockerfile*'`
+  (add your dashboard and alert-rule sources — they are commonly outside the repository, and this
+  atom's population is exactly where they live). A hit is in the population only if it reads the
+  BODY: a `readinessProbe`, an ALB health check or any check that reads the status code alone is
+  not. Nothing in a Go build flags this atom — a `map[string]any` read of a deleted key compiles
+  and returns `nil`.
+- scope: `App.readyCheck` and the fallback `server.readyCheck` render exactly `{"status":"ready"}`
+  with `200`, and `{"status":"not ready"}` with `503` — the same body `dispatchReady` already
+  served while stopping — on the probe listener and the application listener alike, at every
+  `server.probes.port`. Gone from the `200`: `time`, `app` (`name`/`environment`/`version`), every
+  per-kind status key (`database`, `messaging`, `cache`, `streams`) and every `<kind>_stats`
+  object. Gone from the `503`: the blocking kind's own key and the `error` key carrying ADR-048's
+  `"<kind> unavailable"`. **Unchanged**: the status codes and every rule that decides them
+  (ADR-094's non-critical cache default, ADR-114's consumer verdict, ADR-066's ready-equivalent
+  status list, the stopping `503`), `/health` at `{"status":"ok"}`, a consumer
+  `RegisterReadyHandler` override's own body — the status-only rule binds the framework's handlers,
+  not yours — the `Readiness check failed` log line (`component=<kind>`, full error), and
+  everything `/_sys/health-debug` renders.
+- gate: match = anything reads the `/ready` body — a Go client, a smoke or contract test, a
+  `curl … | jq` step, a synthetic monitor, a dashboard panel or an alert rule. no-match = every
+  reader of `/ready` reads only its status code, which is what an orchestrator probe does, so the
+  probe configuration itself needs no change on this hop.
+- apply: migrate to metrics first. `app.readiness.status` (Int64 observable gauge, attributes
+  `readiness.kind` — one of `database`, `messaging`, `cache`, `streams` — and `readiness.critical`;
+  value `1` for healthy and `0` for unhealthy, with NO series at all for `disabled`,
+  `not_configured`, `per_tenant` or a kind not yet judged, so an unused kind never reads healthy
+  and a deploy never starts at `0`) replaces the per-kind status keys. The `_stats` counters OTel
+  lacked become `messaging.consumer.registries` / `.declared` / `.subscribed` / `.resubscribes` /
+  `.max_fail_streak` and `messaging.streams.consumers` / `.publishers`; the database pool and cache
+  manager counters already had `db.client.connection.*` and `cache.manager.*`. Every manager
+  counter with no gauge of its own — the messaging publisher pool, the database manager's
+  `removals`/`errors`, the cache manager's `removals`/`max_size`/`idle_ttl`, the streams offset
+  settings — stays on `/_sys/health-debug` only. The gauge reports the LAST verdict, so it is only as
+  fresh as the last judgment: alert on the probe's status code and read the gauge for WHICH kind.
+  For per-kind detail and full errors use `/_sys/health-debug`, which needs `debug.enabled: true`,
+  `debug.endpoints.health` (default `true`) and `debug.allowedips` or `debug.bearertoken` — it is
+  more sensitive than the old body, so behind an ALB set `debug.trustedproxies` to the ALB's
+  subnets, or every request's source reads as the ALB. In logs, a non-critical kind's outage now
+  shows as WARN `Readiness component unhealthy` on the transition into unhealthy and at most once a
+  minute while it lasts, with INFO `Readiness component recovered` on the way out; critical kinds
+  keep their ERROR line unchanged.
+- verify: `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:<port>/ready` answers the same
+  `200`/`503` it answered before the bump, and `curl -s http://127.0.0.1:<port>/ready` prints
+  exactly `{"status":"ready"}` — no `time`, no `app`, no kind name — with `{"status":"not ready"}`
+  and no `error` key on the `503`.
+- ref: gaborage/go-bricks#1791 ·
+  [ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md) ·
+  `app/readiness_render.go` (`readyBody`, `notReadyBody`), `app/lifecycle.go` (`App.readyCheck`),
+  `server/server.go` (`readyCheck`) ·
+  [ADR-066](adr_066_readiness_one_module.md) amendment 2026-09-28 (rule 3, replaced) ·
+  [ADR-048](adr_048_ready_sanitize_by_default.md) amendment 2026-09-28 (the `503` text, removed) ·
+  `[C69.2]` (the compile half) · `[C60.3]` (the previous move of this key set)
+
+### [C69.2] the exported field `HealthStatus.PublicErr` is deleted · compile-break · when: match
+
+- detect: `git grep -nE 'PublicErr' -- '*.go'` names every reference, comments included;
+  `go build ./... && go vet ./...` is the authoritative answer and type-checks `_test.go` files,
+  where a hand-built `app.HealthStatus` is most likely to live and where `go build ./...` alone
+  would never look.
+- scope: `PublicErr string` leaves `app.HealthStatus`. Its only reader, `publicProbeError`, is
+  deleted with the `503` body's `error` key (`[C69.1]`), so the field had become an exported
+  setting that silently did nothing — worse than a compile break with its own atom. Deleted
+  alongside it, all unexported and all for the same reason: `publicProjection`, `statsSuffix`, the
+  four `*PublicStats` allowlists, `probeDescription.publicStats` and `errorKey`. **Unchanged**:
+  every other `HealthStatus` field (`Name`, `Status`, `Details`, `Err`, `Critical`), the exported
+  `app.Prober` interface and its `Run(ctx) HealthStatus` signature, and where `Err` goes — the
+  `Readiness check failed` log line and `/_sys/health-debug`, both verbatim. `Name` is still
+  required to be a fixed component identifier and never a tenant, host or database name, now
+  because it names the debug entry and the `readiness.kind` attribute rather than because an
+  unauthenticated body interpolated it.
+- gate: match = `detect` returns a line that assigns or reads the field. Note what this can and
+  cannot be: there is no registration door for a foreign `Prober` (ADR-066 as amended), so a
+  `HealthStatus` you build never reaches the judge — the population is code that builds or copies
+  the struct anyway, a test double, a helper mirroring the shape, or your own health aggregator
+  that stores one. no-match = nothing of yours names `app.HealthStatus`, or it names the type
+  without the field.
+- apply: delete the assignment. There is nothing to replace it with, because no body renders a
+  probe error any more:
+
+  ```go
+  // before — stops compiling
+  return app.HealthStatus{
+      Name: "vault", Status: "unhealthy", Err: err, PublicErr: "vault unavailable", Critical: true,
+  }
+
+  // after
+  return app.HealthStatus{Name: "vault", Status: "unhealthy", Err: err, Critical: true}
+  ```
+
+  If the fixed wording mattered, it belonged to a body that no longer exists: put it in a log line
+  of your own, and read the kind's verdict from `app.readiness.status` and its error from
+  `/_sys/health-debug`.
+- verify: `go build ./... && go vet ./...`
+- ref: gaborage/go-bricks#1791 ·
+  [ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md) ·
+  `app/health.go` (`HealthStatus`, the `Name` and `Prober` SECURITY comments) · the deletion sites:
+  `app/readiness_render.go` (`publicProbeError`, `publicProjection`, `statsSuffix`),
+  `app/readiness.go` (the four `*PublicStats` allowlists, `probeDescription.publicStats`),
+  `app/slot.go` (the four `publicStats` call sites), `app/app.go` (`errorKey`) ·
+  [ADR-048](adr_048_ready_sanitize_by_default.md) amendment 2026-09-28 (the seam this removes) ·
+  `[C69.1]` · same shape as `[C65.5]`
 
 ---
 

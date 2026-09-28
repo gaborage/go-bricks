@@ -6,6 +6,21 @@
 ADR-046's `PublicErr` seam and its `cache.critical` decision untouched, and reverses only
 that ADR's "sanitization is per-probe, not a blanket rewrite of the shared branch" scoping.
 
+> **Amended (2026-09-28, [ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md)):**
+> the seam this ADR hardened is DELETED, and this ADR's own generalized rule is what took it.
+> `/ready` answers `{"status":"ready"}` / `{"status":"not ready"}` and nothing else, so there is
+> no `503` error text left to sanitize: `publicProbeError`, the body's `error` key and the
+> exported `HealthStatus.PublicErr` are all gone. Read the title, the Decision's synthesized
+> `"<name> unavailable"` with its code block, "No shipped probe changes its `503` body", and
+> "The field and its `HealthStatus.PublicErr` plumbing are kept as the in-package override
+> seam" as the record of the v0.57.0–v0.68.0 contract; note also that ADR-066's own later
+> amendment removed the foreign-`Prober` door, so after it the seam had no caller at all —
+> what breaks now is code that builds the struct anyway. What STANDS: the generalized rule
+> below — everything `/ready` returns is public at **any** status code — and `Err` untouched,
+> still reaching the `Readiness check failed` log line (`component=<kind>`, full error) and
+> `/_sys/health-debug` verbatim. Substitute those two for the `503` text. See
+> [migrations.md](migrations.md) `[C69.1]`, `[C69.2]`.
+>
 > **Amended (2026-08-16, [ADR-066](adr_066_readiness_one_module.md)):** `healthProbeFunc`
 > and its `publicErr` field no longer exist — every framework kind is a probe description
 > that carries no such field. `HealthStatus.PublicErr` remains the exported override seam

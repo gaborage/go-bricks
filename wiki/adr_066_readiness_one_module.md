@@ -6,6 +6,20 @@
 readiness), [ADR-048](adr_048_ready_sanitize_by_default.md) (sanitized `/ready` errors)
 — both preserved; this ADR changes where the readiness decision lives, not what it decides.
 
+> **Amended (2026-09-28, [ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md)):**
+> decision 3, the ONE BODY RULE, is REPLACED. `/ready` renders `{"status":"ready"}` on 200 and
+> `{"status":"not ready"}` on 503 — no `<name>` key, no `<name>_stats` object, no public
+> allowlist, no ADR-048 error text — so `publicProjection`, `statsSuffix`, the four
+> `*PublicStats` allowlists and `probeDescription.publicStats` are deleted. The rest of
+> decision 3 stands: the framework's own vocabulary (`database`, `messaging`, `cache`,
+> `streams`) still names the debug entries and the new `readiness.kind` metric attribute rather
+> than OTel semconv, and the debug detail view still carries status, error text and the full
+> unredacted statistics per kind. The **Watch** bullet's successor: anything pinning `/ready`'s
+> key set no longer drifts, it loses the keys outright — substitute the `app.readiness.status`
+> gauge and the `messaging.consumer.*` / `messaging.streams.*` gauges, or
+> `/_sys/health-debug`, per [migrations.md](migrations.md) `[C69.1]`. Decisions 1 and 2 — one
+> status vocabulary, one gate — are untouched, and `isReadyEquivalent` still decides the code.
+>
 > **Amended (2026-09-06):** readiness asks the SLOTS at judgement time. Each slot
 > seals its own probe description once, inside the `startSlots` walk, immediately after its
 > `start` returns without a fatal error; `readinessJudge` walks the slot list per request

@@ -1912,7 +1912,7 @@ duplicating the owner's declaration, and a dangling reference no longer reads as
 
 ### [ADR-120: Probes May Be Served on an Internal Listener, and `/ready` Answers Status Only](adr_120_internal_probe_listener_and_minimal_ready_body.md)
 
-**Date:** 2026-09-23 | **Status:** Proposed (Part 1 may ship under it; Part 2 flips it to Accepted) | **Breaking:** Part 2 — the `/ready` body and `HealthStatus.PublicErr`
+**Date:** 2026-09-23 | **Status:** Accepted | **Breaking:** `/ready` answers `{"status":"ready"}` / `{"status":"not ready"}` and nothing else — `time`, `app`, every per-kind status key, every `<kind>_stats` object and ADR-048's `"<kind> unavailable"` text leave both bodies — and the exported field `HealthStatus.PublicErr` is deleted
 
 `/health` and `/ready` shared the application's engine, port, base path and rate limiters, so an
 internet-facing service exposed its probes, and the `/ready` 200 body told an anonymous caller the

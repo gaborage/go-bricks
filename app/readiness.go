@@ -64,12 +64,13 @@ type probeDescription struct {
 	// judged when that key resolves to nothing (a per-tenant deployment, where judge
 	// short-circuits the lease to per_tenant).
 	live func(ctx context.Context) error
-	// stats snapshots the kind's counters for the access-controlled debug view, the one
-	// reader left since ADR-120 trimmed the /ready body. On every path that takes a lease it
-	// is called while that lease is held, so the entry the probe itself pooled is counted
-	// (the messaging manager publishes active_publishers: 0 beside a healthy verdict
-	// otherwise). A failing lease-independent live check returns before any lease exists, so
-	// its snapshot counts no probe-held entry.
+	// stats snapshots the kind's counters for its two readers since ADR-120 trimmed the
+	// /ready body: the access-controlled debug view, and observeSlotStats
+	// (readiness_metrics.go), which feeds the messaging.consumer.* and messaging.streams.*
+	// gauges. On every path that takes a lease it is called while that lease is held, so the
+	// entry the probe itself pooled is counted (the messaging manager publishes
+	// active_publishers: 0 beside a healthy verdict otherwise). A failing lease-independent
+	// live check returns before any lease exists, so its snapshot counts no probe-held entry.
 	stats func() map[string]any
 }
 
@@ -164,9 +165,9 @@ const cacheProbePingTimeout = 500 * time.Millisecond
 
 // The cache counter names, hoisted into constants because convertCacheStatsToMap below and
 // the tests that read its output must agree on the spelling. Every other kind's counters are
-// the manager's own map keys, built in database, messaging and streams and never respelled
-// here. Nothing in this package maps them any more: ADR-120 left the debug view as their one
-// reader, and it renders whatever the manager published.
+// the manager's own map keys, built in database, messaging and streams. The messaging and
+// streams ones are respelled once more in readiness_metrics.go, where the gauges read them by
+// name; the debug view renders whatever the manager published, without naming any of them.
 const (
 	statsActiveCachesKey = "active_caches"
 	statsTotalCreatedKey = "total_created"

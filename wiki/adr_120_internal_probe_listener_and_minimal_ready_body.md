@@ -1,7 +1,6 @@
 # ADR-120: Probes May Be Served on an Internal Listener, and `/ready` Answers Status Only
 
-**Status:** Proposed — Part 1 (non-breaking; the listener is opt-in) may ship under this status;
-the Part 2 PR flips it to Accepted, so the breaking change never ships under a Proposed ADR.
+**Status:** Accepted
 **Date:** 2026-09-23
 **Issue:** #1791
 **Breaking:** yes — the `/ready` body and `HealthStatus.PublicErr` (Part 2)
@@ -254,7 +253,7 @@ application listener's reservation key `<base><path>` in the conflict tracker. `
   exported field that silently does nothing is worse than a compile break with its own atom. The
   `Name` and `Prober` SECURITY comments in `app/health.go` are rewritten: no body carries `Name`.
 
-**Replacement signal, in the same PR.** The trim never lands without it.
+**Replacement signal, in the PR below this one (#1820).** The trim never lands without it.
 
 - **Readiness gauge.** `app.readiness.status` (Int64 observable gauge) reports each kind's **last
   verdict** — the status the most recent readiness judgment (`/ready` or `/_sys/health-debug`)
@@ -390,9 +389,10 @@ git grep -nE '(database|messaging|cache|streams)(_stats| unavailable)|/ready`? (
   ':!wiki/adr_*' ':!wiki/migrations.md' ':!wiki/architecture_decisions.md'
 ```
 
-It finds 23 files today: `app/`, `server/server_test.go`,
-`wiki/{cache,database,messaging,observability,streams,troubleshooting}.md`, `llms.txt`, the
-`SKILL.md` entries for ADR-047/048/094 and `.out-of-scope/readiness-contribution-door.md`. ADRs and
+It finds 9 files once the trim lands, all of them prose: `llms.txt`,
+`wiki/{cache,database,messaging,observability,streams,troubleshooting}.md`, the `SKILL.md` entries
+for ADR-047/048/094 and `.out-of-scope/readiness-contribution-door.md`. `app/` and `server/` leave
+the list with the symbols the trim deletes, and `README.md` matches nothing. ADRs and
 existing atoms get amendment blockquotes, not rewrites. Part 1 docs it cannot find:
 `wiki/startup_defaults.md` (`probes.port` as the `429` mitigation, with no exemption on the
 application listener, and the forwarded-client-cert probe line), `wiki/server_tls.md`, the `wiki/cache.md` probe
@@ -423,11 +423,15 @@ stack, bottom to top; it breaks nothing, so it may ship under Proposed:
 8. Coalescing: the singleflights for the check and for the framework judgment.
 9. Operator docs: the Part 1 list under **Inventory**.
 
-Part 2 is one PR, `fix(app)!: answer /ready with status only`, with the gauges and the non-critical
-WARN in the same diff. It adds amendment blockquotes to ADR-048, ADR-066, ADR-094 and ADR-114, the
-`wiki/migrations.md` atoms (the body; `PublicErr`), the breaking-changes `SKILL.md` entry and the
-inventory sweep, and flips this ADR to Accepted.
+Part 2 also ships as a stack, merged bottom-up, so the trim never lands without its replacement
+signal: first `feat(app): report readiness and manager counters as gauges` (#1820) —
+`app.readiness.status`, the manager gauges and the non-critical WARN/INFO pair, additive and
+breaking nothing — then `fix(app)!: answer /ready with status only` on top of it. That second PR
+adds the amendment blockquotes to ADR-048, ADR-066, ADR-094 and ADR-114, the `wiki/migrations.md`
+atoms (the body; `PublicErr`) and the breaking-changes `SKILL.md` entry, and flips this ADR to
+Accepted. The inventory sweep of the prose the grep above still finds follows above it, in a link
+that changes no code.
 
 The listener goes first because it closes the exposure independently of the body's shape, in a
-release that breaks nothing. The trim is the only break; last, its replacement signal, amendments
-and atoms land in one diff with the flip to Accepted.
+release that breaks nothing. The trim is the only break; last, its replacement signal lands under
+it, and the amendments, atoms and the flip to Accepted land with it, in one stack.

@@ -25,10 +25,10 @@ type HealthStatus struct {
 // descriptions (probeDescription) and by nothing else — there is no registration door for a
 // foreign Prober, and the judge only ever walks the slot list (ADR-066 as amended).
 // SECURITY: no field of HealthStatus reaches the unauthenticated /ready body, which carries
-// its verdict alone (ADR-120). Err, Details and Name go to the application log and to the
-// access-controlled <debug.pathprefix>/health-debug, so a probe may put the whole diagnostic
-// in Err — the connection identity a driver renders, the address a connector names — without
-// sanitizing it first.
+// its verdict alone (ADR-120). Err and Name go to the application log; Err, Details and Name
+// go to the access-controlled <debug.pathprefix>/health-debug. So a probe may put the whole
+// diagnostic in Err — the connection identity a driver renders, the address a connector names
+// — without sanitizing it first, but only ever behind one of those two.
 type Prober interface {
 	Run(ctx context.Context) HealthStatus
 }

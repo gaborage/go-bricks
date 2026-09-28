@@ -195,11 +195,13 @@ func readinessGaugeValue(status string) (value int64, ok bool) {
 }
 
 // observeSlotStats reports the manager counters through the slot list: a kind with a gauge group
-// hands over the same Stats() snapshot /ready renders. A kind that sealed no description — the
-// native streams lane that never started — contributes nothing, and so does a kind whose manager
-// was never built, whose disabled description carries no statistics at all. The group is
-// resolved before the snapshot is taken, so the kinds with no gauges (database, cache) never pay
-// for a Stats() call this callback would discard.
+// hands over a fresh call of its sealed probe description's stats hook — the same hook the
+// access-controlled debug view renders under details, taken here outside any lease and without a
+// judgment, and no longer rendered anywhere on the /ready body (ADR-120). A kind that sealed no
+// description — the native streams lane that never started — contributes nothing, and so does a
+// kind whose manager was never built, whose disabled description carries no statistics at all.
+// The group is resolved before the snapshot is taken, so the kinds with no gauges (database,
+// cache) never pay for a Stats() call this callback would discard.
 func observeSlotStats(observer metric.Observer, slots []resourceSlot, gauges map[string][]statGauge) {
 	for _, slot := range slots {
 		description := slot.readiness()
