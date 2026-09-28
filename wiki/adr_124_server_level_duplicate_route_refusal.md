@@ -13,6 +13,11 @@ The duplicate-route check lived only in `app` (`checkRouteConflicts`), which fai
 recorded conflict. A service wiring `server.New` and `ModuleGroup()` itself booted with the later
 handler serving and the first one dead on arrival.
 
+The tracker behind that check keyed a route on its literal template string. Echo keys a route on
+its router node, where a parameter's or wildcard's name is not part of the identity:
+`GET /users/:id` then `GET /users/:uid` is one route, and the second replaced the first silently
+even under `app`.
+
 The health/ready probe exemption is keyed on the route template the router matched
 (ADR-036, GHSA-h4jw follow-up). That template identifies the probe HANDLER only while no module
 can take over a probe path. An overwrite keeps the template and swaps the handler, so the
@@ -20,6 +25,12 @@ exemption rested on a check that `app` alone ran.
 
 ## Decision
 
+- **Key the tracker on echo's node identity.** `routeNodeKey` mirrors `DefaultRouter.Add`: a
+  missing leading slash is added, an unescaped `:` starts a parameter anywhere in the path and its
+  name (up to the next `/`) is dropped, an escaped `\:` is kept literally, and the first `*`
+  outside a parameter name ends the path. `RouteConflict.Path` stays the duplicate's literal
+  template; `RouteConflict.FirstPath` carries the first registration's, and the error line shows it
+  only when the two differ.
 - **The first registration wins for every route registered through the server's registrars and
   for the probe routes.** `routeConflictTracker.record` reports whether the route is new.
   `addEcho`, `RouteRegistrar.Add` and the probe wiring skip the engine `Add` for a duplicate.
@@ -29,7 +40,9 @@ exemption rested on a check that `app` alone ran.
   through `registerRoute`, which writes the descriptor before reporting the duplicate.
 - **`Server.Start` refuses before either bind.** Any recorded conflict fails `Start` with a
   `*server.DuplicateRouteError` (`errors.As` recovers `Conflicts`), which matches
-  `server.ErrDuplicateRoute` with `errors.Is`. Its text is the one `app` already printed.
+  `server.ErrDuplicateRoute` with `errors.Is`. For identical templates the text is the one `app`
+  already printed; a pair differing only in a parameter or wildcard name adds ` at <first path>` to
+  the first registrant.
 - **`app` keeps the earlier check.** It still fails at registration time, with the same error type,
   so a conflict aborts before `app.Options.PostRegisterRoutes` sees the route table.
 
@@ -40,7 +53,8 @@ refuse a duplicate with an `*echo.AddRouteError` that `Echo.AddRoute` and `Group
 (only the `Add` wrappers panic on it), but that error names the method and path, never either
 registrant's handler or package. Naming both, and reporting every conflict in one boot, needs a
 go-bricks-side table of first registrants, which is the tracker; with the tracker deciding before
-every `Add`, the router's guard adds nothing.
+every `Add`, the router's guard adds nothing. It would also miss the widened case: echo's guard
+compares the literal path, so `/users/:id` and `/users/:uid` would still overwrite.
 
 **Refuse only at `Start`, and leave `Add` overwriting.** Rejected. A route registered after
 `Start` would still replace a live handler, and the probe-template invariant would hold only
@@ -58,13 +72,14 @@ while a check runs, not by construction.
   `server.path.ready`, which nothing validates, used to let readiness replace health; now health
   keeps the path and `Start` refuses with `dispatchReady` as the duplicate. The exits are
   `Server.RegisterReadyHandler` for custom readiness, moving the probe with `server.path.health` /
-  `server.path.ready` (two distinct values), or moving the module route.
-- **`app` users see no behaviour change.** They already failed startup on a duplicate, the two
-  probe cases included, since both probes were already recorded in the tracker; the error now also
-  matches `server.ErrDuplicateRoute` and recovers as `*server.DuplicateRouteError`.
-- **The key is the literal method + full path.** Templates that differ only in a parameter or
-  wildcard name (`/users/:id`, `/users/:uid`) are one route to echo's router but two keys to the
-  tracker, so they stay undetected and echo's overwrite still governs them.
+  `server.path.ready` (two distinct values), or moving the module route. `app` already refused
+  both, since both probes were recorded in the tracker.
+- **Source-breaking for unkeyed `RouteConflict` literals.** `RouteConflict` gains `FirstPath`, so an
+  unkeyed `server.RouteConflict{...}` literal — typically a test fake's `RouteConflicts()` — stops
+  compiling until its fields are keyed.
+- **Param-name-differing templates are now conflicts under `app` too.** A service that registered
+  `/users/:id` and `/users/:uid` for one method used to boot with the second serving; it now fails
+  startup.
 - **A duplicate registered after `Start` is dropped.** It is visible only through
   `RouteConflicts()`; nothing returns an error, since `Start` already ran.
 - **Echo's own `RouteNotFound` catch-alls stay outside the tracker.** `Group.Use` registers them at
@@ -80,6 +95,6 @@ while a check runs, not by construction.
 
 - [ADR-036](adr_036_global_middleware.md): the probe exemption keyed on the matched template
 - [startup_defaults.md](startup_defaults.md#duplicate-route-detection): behaviour and error shape
-- `server/route_conflicts.go` (`DuplicateRouteError`, `routeConflictTracker.record`),
+- `server/route_conflicts.go` (`DuplicateRouteError`, `routeNodeKey`, `routeConflictTracker.record`),
   `server/route_registrar.go` (`addEcho`, `Add`), `server/server.go` (`Start`,
   `registerProbeRoutes`), `app/lifecycle.go` (`checkRouteConflicts`)

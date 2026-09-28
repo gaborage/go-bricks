@@ -1937,16 +1937,18 @@ endpoint instead of an unauthenticated body.
 
 ### [ADR-124: The Server Keeps the First Registration of a Route and Refuses to Start on a Duplicate](adr_124_server_level_duplicate_route_refusal.md)
 
-**Date:** 2026-09-27 | **Status:** Accepted | **Breaking:** a service built on `server.New` that registers one route twice now keeps the first handler and fails `Start`, where the later handler used to serve
+**Date:** 2026-09-27 | **Status:** Accepted | **Breaking:** a service built on `server.New` that registers one route twice now keeps the first handler and fails `Start`, where the later handler used to serve; templates differing only in a parameter or wildcard name now conflict under `app` too; `RouteConflict` gains `FirstPath`, so an unkeyed `server.RouteConflict{...}` literal no longer compiles
 
 `echo.New()` sets `AllowOverwritingRoute`, so a second `Add` of one route replaced the handler
-under the kept template, and only `app` checked for duplicates. A duplicate method + full path is
-now never added on any engine, so the first registration keeps the route, and `Server.Start`
-refuses before either bind with a `*server.DuplicateRouteError` matching
-`server.ErrDuplicateRoute`. `app` keeps its registration-time check, so `PostRegisterRoutes`
-still runs after it. Building the engines with `AllowOverwritingRoute: false` was declined:
-echo's `*echo.AddRouteError` names the method and path but neither registrant, so naming both
-still needs the tracker. See [migrations.md](migrations.md) `[C69.3]`.
+under the kept template, and only `app` checked for duplicates — by literal template string,
+while echo identifies a route by its router node, where parameter and wildcard names do not
+count. The tracker now keys on that node identity, a duplicate is never added on any engine so
+the first registration keeps the route, and `Server.Start` refuses before either bind with a
+`*server.DuplicateRouteError` matching `server.ErrDuplicateRoute`. `app` keeps its
+registration-time check, so `PostRegisterRoutes` still runs after it. Building the engines with
+`AllowOverwritingRoute: false` was declined: echo's `*echo.AddRouteError` names the method and
+path but neither registrant, so naming both still needs the tracker, and echo's guard compares
+literal paths. See [migrations.md](migrations.md) `[C69.3]`.
 
 **Key Benefits:** the probe exemption's template-identifies-handler invariant holds by
 construction, without `app`, and every duplicate is named in one boot.

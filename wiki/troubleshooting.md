@@ -361,7 +361,6 @@ on 1.27.
 # → The server recorded a duplicate method+path and kept the FIRST handler
 # → Start (app startup, earlier) fails with *server.DuplicateRouteError
 #   (errors.Is(err, server.ErrDuplicateRoute)), naming both registrants
-#   — see wiki/startup_defaults.md#duplicate-route-detection
-# → Only an identical method + full path is detected; templates differing only
-#   in a param/wildcard name (/users/:id, /users/:uid) are not
+# → Templates differing only in a param/wildcard name (/users/:id, /users/:uid)
+#   are duplicates too — see wiki/startup_defaults.md#duplicate-route-detection
 ```

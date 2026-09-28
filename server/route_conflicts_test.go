@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +23,7 @@ func TestRouteConflictTrackerRecordsDuplicate(t *testing.T) {
 	conflicts := tr.snapshot()
 	require.Len(t, conflicts, 1)
 	assert.Equal(t, RouteConflict{
-		Method: http.MethodGet, Path: "/users",
+		Method: http.MethodGet, Path: "/users", FirstPath: "/users",
 		First: first, Duplicate: dup,
 	}, conflicts[0])
 
@@ -114,7 +115,7 @@ func TestDuplicateRouteError(t *testing.T) {
 			name: "two_conflicts",
 			conflicts: []RouteConflict{
 				{
-					Method: http.MethodGet, Path: "/one",
+					Method: http.MethodGet, Path: "/one", FirstPath: "/one",
 					First:     RouteRegistrant{HandlerName: "a", Package: "pkg/a"},
 					Duplicate: RouteRegistrant{HandlerName: "b", Package: "pkg/b"},
 				},
@@ -127,6 +128,16 @@ func TestDuplicateRouteError(t *testing.T) {
 			wantMsg: "duplicate route registration (2 conflict(s))\n" +
 				"GET /one — first: a (pkg/a), duplicate: b (pkg/b)\n" +
 				"POST /two — first: c (pkg/c), duplicate: d (pkg/d)",
+		},
+		{
+			name: "first_path_differs",
+			conflicts: []RouteConflict{{
+				Method: http.MethodGet, Path: "/users/:uid", FirstPath: "/users/:id",
+				First:     RouteRegistrant{HandlerName: "a", Package: "pkg/a"},
+				Duplicate: RouteRegistrant{HandlerName: "b", Package: "pkg/b"},
+			}},
+			wantMsg: "duplicate route registration (1 conflict(s))\n" +
+				"GET /users/:uid — first: a (pkg/a) at /users/:id, duplicate: b (pkg/b)",
 		},
 	}
 	for _, tt := range tests {
@@ -151,6 +162,119 @@ func TestDuplicateRouteError(t *testing.T) {
 			}
 			assert.Equal(t, tt.wantMsg, strings.Join(lines, "\n"), "the children spell the error text")
 		})
+	}
+}
+
+// TestRouteNodeKey pins the tracker key to echo v5's node identity (DefaultRouter.Add).
+func TestRouteNodeKey(t *testing.T) {
+	tests := []struct {
+		name     string
+		a, b     string
+		sameNode bool
+	}{
+		{name: "param_name_differs", a: "/users/:id", b: "/users/:uid", sameNode: true},
+		{name: "mid_segment_param_name_differs", a: "/files/f:name/raw", b: "/files/f:n/raw", sameNode: true},
+		{name: "wildcard_name_differs", a: "/f/*", b: "/f/*x", sameNode: true},
+		{name: "wildcard_drops_suffix", a: "/f/*", b: "/f/*/ignored", sameNode: true},
+		{name: "star_inside_param_name", a: "/x/:a*/y", b: "/x/:b/y", sameNode: true},
+		{name: "missing_leading_slash", a: "users", b: "/users", sameNode: true},
+		{name: "empty_is_root", a: "", b: "/", sameNode: true},
+		{name: "param_vs_deeper_path", a: "/users/:id", b: "/users/:id/x"},
+		{name: "param_vs_static", a: "/users/:id", b: "/users/me"},
+		{name: "escaped_colon_vs_param", a: `/a\:b`, b: "/a:c"},
+		{name: "wildcard_vs_param", a: "/f/*", b: "/f/:id"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ka, kb := routeNodeKey(http.MethodGet, tt.a), routeNodeKey(http.MethodGet, tt.b)
+			if tt.sameNode {
+				assert.Equal(t, ka, kb)
+			} else {
+				assert.NotEqual(t, ka, kb)
+			}
+		})
+	}
+}
+
+// TestRouteNodeKeyAgreesWithEchoRouter checks routeNodeKey against the echo router itself, so an
+// echo bump that changes node identity fails here: both templates go on a fresh engine
+// (overwrite on, as echo.New sets it), and a request for the first reaching the second handler
+// means echo kept one node.
+func TestRouteNodeKeyAgreesWithEchoRouter(t *testing.T) {
+	tests := []struct {
+		name          string
+		first, second string
+		request       string
+	}{
+		{name: "identical", first: "/users", second: "/users", request: "/users"},
+		{name: "param_name_differs", first: "/users/:id", second: "/users/:uid", request: "/users/42"},
+		{name: "mid_segment_param_name_differs", first: "/a/x:id", second: "/a/x:uid", request: "/a/x42"},
+		{name: "wildcard_name_differs", first: "/f/*", second: "/f/*x", request: "/f/a/b"},
+		{name: "wildcard_drops_suffix", first: "/f/*", second: "/f/*/y", request: "/f/a"},
+		{name: "star_inside_param_name", first: "/x/:a*/y", second: "/x/:b/y", request: "/x/q/y"},
+		{name: "missing_leading_slash", first: "users", second: "/users", request: "/users"},
+		{name: "empty_is_root", first: "", second: "/", request: "/"},
+		// Only this order: echo v5.3.1 panics routing /a:b when the escaped template registers first.
+		{name: "param_vs_escaped_colon", first: "/a:c", second: `/a\:b`, request: "/aq"},
+		{name: "param_vs_static", first: "/users/:id", second: "/users/me", request: "/users/42"},
+		{name: "param_vs_deeper_path", first: "/users/:id", second: "/users/:id/x", request: "/users/42"},
+		{name: "wildcard_vs_param", first: "/f/*", second: "/f/:id", request: "/f/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := echo.New()
+			e.GET(tt.first, func(c *echo.Context) error { return c.String(http.StatusOK, "first") })
+			e.GET(tt.second, func(c *echo.Context) error { return c.String(http.StatusOK, "second") })
+
+			rec := serveEngine(e, http.MethodGet, tt.request)
+			require.Equal(t, http.StatusOK, rec.Code, "the request must reach one of the two handlers")
+			echoSameNode := rec.Body.String() == "second"
+			keySameNode := routeNodeKey(http.MethodGet, tt.first) == routeNodeKey(http.MethodGet, tt.second)
+			assert.Equal(t, echoSameNode, keySameNode, "routeNodeKey disagrees with echo's router")
+		})
+	}
+}
+
+// TestRouteConflictParamNameDiffers pins the case echo's router treats as one route while the
+// template strings differ: the second registration is a conflict and the first keeps serving.
+func TestRouteConflictParamNameDiffers(t *testing.T) {
+	tests := []struct {
+		name          string
+		first, second string
+		request       string
+	}{
+		{name: "param", first: "/users/:id", second: "/users/:uid", request: "/users/42"},
+		{name: "wildcard", first: "/f/*", second: "/f/*x", request: "/f/a/b"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer("", "", "")
+			mg := srv.ModuleGroup()
+			mg.Add(http.MethodGet, tt.first, func(c HandlerContext) error { return c.String(http.StatusOK, "first") })
+			mg.Add(http.MethodGet, tt.second, func(c HandlerContext) error { return c.String(http.StatusOK, "second") })
+
+			conflicts := srv.RouteConflicts()
+			require.Len(t, conflicts, 1)
+			assert.Equal(t, tt.second, conflicts[0].Path)
+			assert.Equal(t, tt.first, conflicts[0].FirstPath)
+			rec := serveEngine(srv.echo, http.MethodGet, tt.request)
+			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, "first", rec.Body.String())
+		})
+	}
+}
+
+// TestRouteConflictDistinctNodesCoexist pins that templates echo keeps apart are not conflicts.
+func TestRouteConflictDistinctNodesCoexist(t *testing.T) {
+	srv := newTestServer("", "", "")
+	mg := srv.ModuleGroup()
+	for _, p := range []string{"/users/:id", "/users/:id/x", "/users/me"} {
+		body := p
+		mg.Add(http.MethodGet, p, func(c HandlerContext) error { return c.String(http.StatusOK, body) })
+	}
+	assert.Empty(t, srv.RouteConflicts())
+	for req, want := range map[string]string{"/users/42": "/users/:id", "/users/42/x": "/users/:id/x", "/users/me": "/users/me"} {
+		assert.Equal(t, want, serveEngine(srv.echo, http.MethodGet, req).Body.String(), req)
 	}
 }
 

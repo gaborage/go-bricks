@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"github.com/gaborage/go-bricks/internal/pathutil"
 )
 
 // ErrDuplicateRoute is what every *DuplicateRouteError matches: two registrations claimed
@@ -23,10 +25,14 @@ type RouteRegistrant struct {
 	Package     string
 }
 
-// RouteConflict reports two registrations of the same method + full path.
+// RouteConflict reports two registrations of the same method + route node. Path is the
+// duplicate's literal path and FirstPath the first registration's; they differ when the two
+// templates name a path parameter or wildcard differently (/users/:id, /users/:uid), which
+// echo's router treats as one route.
 type RouteConflict struct {
 	Method    string
 	Path      string
+	FirstPath string
 	First     RouteRegistrant
 	Duplicate RouteRegistrant
 }
@@ -40,7 +46,7 @@ type DuplicateRouteError struct {
 }
 
 // Error renders a head with the conflict count, then one line per conflict naming both
-// registrants.
+// registrants; the first registration's path is shown only where it differs.
 func (e *DuplicateRouteError) Error() string {
 	var b strings.Builder
 	b.WriteString(e.head().Error())
@@ -67,10 +73,11 @@ func (e *DuplicateRouteError) head() error {
 
 // line renders one conflict as it appears in DuplicateRouteError's text.
 func (c *RouteConflict) line() string {
-	return fmt.Sprintf("%s %s — first: %s (%s), duplicate: %s (%s)",
-		c.Method, c.Path,
-		c.First.HandlerName, c.First.Package,
-		c.Duplicate.HandlerName, c.Duplicate.Package)
+	s := fmt.Sprintf("%s %s — first: %s (%s)", c.Method, c.Path, c.First.HandlerName, c.First.Package)
+	if c.FirstPath != "" && c.FirstPath != c.Path {
+		s += " at " + c.FirstPath
+	}
+	return s + fmt.Sprintf(", duplicate: %s (%s)", c.Duplicate.HandlerName, c.Duplicate.Package)
 }
 
 // duplicateRouteError returns nil for no conflicts, otherwise a *DuplicateRouteError.
@@ -86,15 +93,21 @@ func duplicateRouteError(conflicts []RouteConflict) error {
 // recording (bare newRouteGroup construction in tests).
 type routeConflictTracker struct {
 	mu        sync.Mutex
-	seen      map[string]RouteRegistrant // key: formatHandlerID(method, fullPath)
+	seen      map[string]seenRoute // key: routeNodeKey(method, fullPath)
 	conflicts []RouteConflict
 }
 
-func newRouteConflictTracker() *routeConflictTracker {
-	return &routeConflictTracker{seen: make(map[string]RouteRegistrant)}
+// seenRoute is the first registration of a route node, with its literal path.
+type seenRoute struct {
+	reg  RouteRegistrant
+	path string
 }
 
-// record reports whether method+fullPath is a new route. A duplicate is recorded as a conflict
+func newRouteConflictTracker() *routeConflictTracker {
+	return &routeConflictTracker{seen: make(map[string]seenRoute)}
+}
+
+// record reports whether method+fullPath names a new route node. A duplicate is recorded as a conflict
 // and reported false, so the caller skips the engine Add and the first handler keeps the
 // route. A nil tracker reports true: untracked groups register everything.
 func (t *routeConflictTracker) record(method, fullPath string, reg RouteRegistrant) bool {
@@ -103,15 +116,43 @@ func (t *routeConflictTracker) record(method, fullPath string, reg RouteRegistra
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	key := formatHandlerID(method, fullPath)
+	key := routeNodeKey(method, fullPath)
 	if first, dup := t.seen[key]; dup {
 		t.conflicts = append(t.conflicts, RouteConflict{
-			Method: method, Path: fullPath, First: first, Duplicate: reg,
+			Method: method, Path: fullPath, FirstPath: first.path, First: first.reg, Duplicate: reg,
 		})
 		return false
 	}
-	t.seen[key] = reg
+	t.seen[key] = seenRoute{reg: reg, path: fullPath}
 	return true
+}
+
+// routeNodeKey identifies the echo router node method+path lands on, mirroring
+// DefaultRouter.Add (echo v5): a missing leading slash is added; an unescaped ':' starts a
+// parameter anywhere in the path and its name runs to the next '/', so the name is dropped;
+// an escaped "\:" is a literal colon and is kept verbatim; the first '*' outside a parameter
+// name is the wildcard and ends the path, so anything after it is dropped. Two templates
+// with the same key are one route to echo, which would overwrite the first handler.
+func routeNodeKey(method, path string) string {
+	path = pathutil.EnsureLeadingSlash(path)
+	var b strings.Builder
+	b.WriteString(method)
+	b.WriteByte(' ')
+	for i := 0; i < len(path); i++ {
+		switch c := path[i]; {
+		case c == ':' && path[i-1] != '\\': // EnsureLeadingSlash made path[0] '/', so i >= 1 here
+			b.WriteByte(':')
+			for i+1 < len(path) && path[i+1] != '/' {
+				i++
+			}
+		case c == '*':
+			b.WriteByte('*')
+			return b.String()
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 func (t *routeConflictTracker) snapshot() []RouteConflict {
