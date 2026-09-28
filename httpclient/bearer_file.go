@@ -7,6 +7,7 @@ import (
 	nethttp "net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -81,8 +82,7 @@ type bearerTokenFile struct {
 	readFile func(string) ([]byte, error)
 	logger   logger.Logger
 
-	// lock is a one-slot mutex taken without waiting; next is read and written under it.
-	lock   chan struct{}
+	mu     sync.Mutex             // only ever tried; guards next
 	header atomic.Pointer[string] // "Bearer <token>"
 	next   time.Time
 }
@@ -125,14 +125,11 @@ func (b *Builder) newBearerTokenFile() (*bearerTokenFile, error) {
 		now:      spec.now,
 		readFile: spec.readFile,
 		logger:   b.logger,
-		lock:     make(chan struct{}, 1),
 	}
-	token, err := s.read()
-	if err != nil {
+	s.mu.Lock()
+	if err := s.refreshAndUnlock(); err != nil {
 		return nil, err
 	}
-	s.store(token)
-	s.next = s.now().Add(interval)
 	return s, nil
 }
 
@@ -203,21 +200,19 @@ func isVisibleASCII(v string) bool {
 // held is served the cached header rather than waiting. A failed read is logged
 // after the lock is released.
 func (s *bearerTokenFile) current() string {
-	select {
-	case s.lock <- struct{}{}:
-	default:
+	if !s.mu.TryLock() {
 		return *s.header.Load()
 	}
-	if err := s.refreshAndRelease(); err != nil {
+	if err := s.refreshAndUnlock(); err != nil {
 		s.logger.Warn().Err(err).Msg("httpclient: bearer token file refresh failed; keeping the last good token")
 	}
 	return *s.header.Load()
 }
 
-// refreshAndRelease runs with the lock held and releases it. A failed read keeps
-// the cached header and returns the read error.
-func (s *bearerTokenFile) refreshAndRelease() error {
-	defer func() { <-s.lock }()
+// refreshAndUnlock runs with mu held and unlocks it. A failed read keeps the
+// cached header and returns the read error.
+func (s *bearerTokenFile) refreshAndUnlock() error {
+	defer s.mu.Unlock()
 	now := s.now()
 	if now.Before(s.next) {
 		return nil
@@ -229,13 +224,9 @@ func (s *bearerTokenFile) refreshAndRelease() error {
 	if err != nil {
 		return err
 	}
-	s.store(token)
-	return nil
-}
-
-func (s *bearerTokenFile) store(token string) {
 	header := "Bearer " + token
 	s.header.Store(&header)
+	return nil
 }
 
 func (s *bearerTokenFile) apply(req *nethttp.Request) {

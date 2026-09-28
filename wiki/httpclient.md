@@ -717,17 +717,18 @@ if err != nil {
 }
 ```
 
-- **Eager read.** `Build()` trims the path, reads the file, trims surrounding whitespace, and
-  fails when the file is missing, unreadable, not a regular file (checked on the opened file,
-  after symlinks are followed and before any read; the open does not wait for a FIFO writer, so a
-  FIFO or a device is refused unread), larger than 64 KiB, or empty after trimming, or when what
-  is left holds a byte other than visible ASCII (`!` through `~`). That refuses an interior
-  newline or space, a `Bearer` scheme copied into the file, and a UTF-8 byte order mark. The
-  error names the path and never the contents. A path that looks like a token passed in its
-  place — one starting `eyJ` as a JWT does, or a bare name with no directory and no extension —
-  fails `Build()` before any read and is not echoed; write `./token` for a file in the working
-  directory. That check is a heuristic: an opaque token that contains `/` or `.` passes it, so it
-  is read as a path, and the startup error can quote it as that path.
+- **Eager read.** `Build()` trims the path, reads the file, trims surrounding whitespace, and fails when the file
+  is missing, unreadable, not a regular file (checked on the opened file, after symlinks are
+  followed and before any read; the open does not wait for a FIFO writer, so a FIFO or a device is
+  refused unread), larger than 64 KiB, or empty after trimming, or when what is left holds a
+  byte other than visible ASCII (`!` through `~`). That refuses an interior newline or space, a
+  `Bearer` scheme copied into the file, and a UTF-8 byte order mark.
+  The error names the path and never the contents. A path that
+  looks like a token passed in its place — one starting `eyJ` as a JWT does, or a bare name with
+  no directory and no extension — fails `Build()` before any read and is not echoed; write
+  `./token` for a file in the working directory. That check is a heuristic: an opaque token that
+  contains `/` or `.` passes it, so it is read as a path, and the startup error can quote it as
+  that path.
 - **Refresh.** The token is served for `RefreshInterval` (zero means
   `DefaultBearerTokenRefreshInterval`, one minute — client-go's period for the same file; a
   negative value fails `Build()`), then the next attempt re-reads the file. Each attempt checks,
@@ -736,17 +737,16 @@ if err != nil {
   one request that takes a lock, so concurrent requests at the boundary cause one read, and there
   is no background goroutine to stop. A request that finds a re-read in progress is served the
   last good token; a stalled read holds only the request performing it. A read stalled past the
-  token's own expiry keeps serving the expired token until it returns. A symlink swap (the kubelet's atomic writer) is
-  picked up; so is an in-place write, but a writer that truncates and then writes can be read
-  half-way, and a truncated token that is still visible ASCII is then served for an interval, so
-  write a temporary file and rename it over the path.
-- **Failed refresh.** A file that is missing, unreadable, not a regular file, larger than 64 KiB,
-  empty, or holding a byte other than visible ASCII at refresh time keeps the last good token and
-  logs one WARN naming the path; the next re-read is one interval later. Deleting or emptying the
-  file therefore does not revoke the cached token.
+  token's own expiry keeps serving the expired token until it returns. A symlink swap (the
+  kubelet's atomic writer) is picked up; so is an in-place write, but a writer that truncates and
+  then writes can be read half-way, and a truncated token that is still visible ASCII is then
+  served for an interval, so write a temporary file and rename it over the path.
+- **Failed refresh.** A re-read that fails any check the eager read applies keeps the last good
+  token and logs one WARN naming the path; the next re-read is one interval later. Deleting or
+  emptying the file therefore does not revoke the cached token.
 - **Precedence.** An `Authorization` header the request sets itself — `Request.Headers`, any
-  spelling of the key, even with an empty value, or `Request.Auth` — wins over the file. Request
-  interceptors run after the token is set, so they see it and can still replace it.
+  spelling of the key, even with an empty value, or `Request.Auth` — wins over the file. Request interceptors run after the
+  token is set, so they see it and can still replace it.
 - **Conflicts.** `Build()` fails when the option is combined with `WithBasicAuth` or a default
   `Authorization` header (`WithDefaultHeader`, any spelling): both would claim the same header.
 - **Logging.** Under `WithLogPayloads(true)` the header is masked by the logger's

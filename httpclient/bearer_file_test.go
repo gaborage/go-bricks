@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -394,14 +395,11 @@ func TestBearerTokenFileServesLastGoodTokenDuringRefresh(t *testing.T) {
 	clk := newFakeClock()
 
 	var reads atomic.Int32
-	parked, release := make(chan struct{}), make(chan struct{})
-	releaseReader := sync.OnceFunc(func() { close(release) })
-	t.Cleanup(releaseReader)
+	reader := testutil.NewBlockedCreate(t)
 	b := bearerBuilder(quietLogger(), path, BearerTokenFileOptions{RefreshInterval: bearerTestInterval}, clk)
 	b.bearer.readFile = func(p string) ([]byte, error) {
 		if reads.Add(1) == 2 {
-			close(parked)
-			<-release
+			reader.Arrive()
 		}
 		return readBearerTokenFile(p)
 	}
@@ -416,7 +414,7 @@ func TestBearerTokenFileServesLastGoodTokenDuringRefresh(t *testing.T) {
 		refresher <- getErr
 	}()
 	select {
-	case <-parked:
+	case <-reader.Started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the refresh never started")
 	}
@@ -443,7 +441,7 @@ func TestBearerTokenFileServesLastGoodTokenDuringRefresh(t *testing.T) {
 		assert.Equal(t, "Bearer tok-v1", h)
 	}
 
-	releaseReader()
+	reader.Release()
 	require.NoError(t, <-refresher)
 	mustGet(t, c, srv.URL)
 	assert.Equal(t, int32(2), reads.Load(), "one read at Build plus exactly one refresh")
@@ -451,15 +449,11 @@ func TestBearerTokenFileServesLastGoodTokenDuringRefresh(t *testing.T) {
 }
 
 // blockingWarnSink blocks the write of the refresh-failure WARN until released.
-type blockingWarnSink struct {
-	entered chan struct{}
-	release chan struct{}
-}
+type blockingWarnSink struct{ *testutil.BlockedCreate }
 
-func (w *blockingWarnSink) Write(p []byte) (int, error) {
+func (w blockingWarnSink) Write(p []byte) (int, error) {
 	if bytes.Contains(p, []byte("refresh failed")) {
-		close(w.entered)
-		<-w.release
+		w.Arrive()
 	}
 	return len(p), nil
 }
@@ -468,9 +462,7 @@ func TestBearerTokenFileWarnsAfterReleasingTheLock(t *testing.T) {
 	path := writeTestFile(t, t.TempDir(), "token", []byte("tok-v1"))
 	srv, seen := authServer(t)
 	clk := newFakeClock()
-	sink := &blockingWarnSink{entered: make(chan struct{}), release: make(chan struct{})}
-	releaseWarn := sync.OnceFunc(func() { close(sink.release) })
-	t.Cleanup(releaseWarn)
+	sink := blockingWarnSink{testutil.NewBlockedCreate(t)}
 	log := logger.New("warn", false).WithContext(zerolog.New(sink).WithContext(context.Background()))
 	c, err := bearerBuilder(log, path, BearerTokenFileOptions{RefreshInterval: bearerTestInterval}, clk).Build()
 	require.NoError(t, err)
@@ -483,7 +475,7 @@ func TestBearerTokenFileWarnsAfterReleasingTheLock(t *testing.T) {
 		failed <- getErr
 	}()
 	select {
-	case <-sink.entered:
+	case <-sink.Started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the failed refresh never logged")
 	}
@@ -493,7 +485,7 @@ func TestBearerTokenFileWarnsAfterReleasingTheLock(t *testing.T) {
 	clk.advance(bearerTestInterval)
 	mustGet(t, c, srv.URL)
 	assert.Equal(t, []string{"Bearer tok-healed"}, seen(), "a WARN written under the lock would leave this request the stale token")
-	releaseWarn()
+	sink.Release()
 	require.NoError(t, <-failed)
 }
 
