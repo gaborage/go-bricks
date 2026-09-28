@@ -715,9 +715,9 @@ if err != nil {
 - **Eager read.** `Build()` trims the path, reads the file, trims surrounding whitespace, and fails when the file
   is missing, unreadable, not a regular file (checked on the opened file, after symlinks are
   followed and before any read; the open does not wait for a FIFO writer, so a FIFO or a device is
-  refused unread), larger than 64 KiB, or empty after trimming, or when what is left is not an
-  RFC 6750 `b64token`: letters, digits and `-._~+/`, then optional trailing `=`. That refuses an
-  interior newline or space, a `Bearer` scheme copied into the file, and a UTF-8 byte order mark.
+  refused unread), larger than 64 KiB, or empty after trimming, or when what is left holds a
+  byte other than visible ASCII (`!` through `~`). That refuses an interior newline or space, a
+  `Bearer` scheme copied into the file, and a UTF-8 byte order mark.
   The error names the path and never the contents. A path that
   looks like a token passed in its place — one starting `eyJ` as a JWT does, or a bare name with
   no directory and no extension — fails `Build()` before any read and is not echoed; write
@@ -737,8 +737,8 @@ if err != nil {
   pagination link, a callback URL).
 - **Redirects.** net/http forwards the header to the same domain or a subdomain of it, whatever
   the scheme. Unless the `*http.Client` passed to `WithHTTPClient` has a `CheckRedirect` of its
-  own, `Build()` installs one that refuses a redirect from `https` to `http` and keeps net/http's
-  cap of 10 redirects.
+  own, `Build()` installs one that refuses a redirect from `https` to `http` that would carry an
+  `Authorization` header, without retrying, and keeps net/http's cap of 10 redirects.
 
 ## Metrics
 

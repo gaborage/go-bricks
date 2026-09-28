@@ -652,9 +652,7 @@ func (b *Builder) Build() (Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	if bearer != nil && httpClient.CheckRedirect == nil {
-		httpClient.CheckRedirect = bearerCheckRedirect
-	}
+	guardBearerRedirects(httpClient, bearer)
 
 	if rt != nil {
 		httpClient.Transport = rt
@@ -1068,7 +1066,8 @@ func (c *client) shouldRetryOnError(ctx context.Context, err error, attempt, max
 	// Terminal: the peer answered 2xx, so it already honored the request. A retry would
 	// re-send it — duplicating any non-idempotent side effect — and the verdict cannot
 	// change, since the response was refused for what it lacked, not for a transport fault.
-	if errors.Is(err, ErrJOSEPlaintextResponse) {
+	// A refused redirect downgrade is terminal too: every retry meets the same redirect.
+	if errors.Is(err, ErrJOSEPlaintextResponse) || errors.Is(err, errBearerRedirectDowngrade) {
 		return false, NewNetworkError(errMsgRequestExecutionFailed, err)
 	}
 	if c.isTimeout(err) {

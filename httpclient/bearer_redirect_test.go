@@ -4,47 +4,66 @@ import (
 	"context"
 	nethttp "net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// redirectTo answers every request with a 302 to target.
-func redirectTo(t *testing.T, target string) *httptest.Server {
+// redirectTo answers every request with a 302 to target and counts the requests.
+func redirectTo(t *testing.T, target string) (*httptest.Server, *atomic.Int64) {
 	t.Helper()
+	var hits atomic.Int64
 	srv := httptest.NewTLSServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		hits.Add(1)
 		nethttp.Redirect(w, r, target, nethttp.StatusFound)
 	}))
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, &hits
 }
 
-func TestBearerTokenFileRefusesRedirectDowngrade(t *testing.T) {
+func TestBearerTokenFileRefusesRedirectDowngradeWithoutRetry(t *testing.T) {
 	path := writeTestFile(t, t.TempDir(), "token", []byte("tok-redirect"))
 	plain, seen := authServer(t)
-	secure := redirectTo(t, plain.URL+"/landing")
+	secure, hits := redirectTo(t, plain.URL+"/landing")
 
-	c, err := NewBuilder(quietLogger()).WithHTTPClient(secure.Client()).WithBearerTokenFile(path).Build()
+	c, err := NewBuilder(quietLogger()).
+		WithHTTPClient(secure.Client()).
+		WithRetries(2, time.Millisecond).
+		WithBearerTokenFile(path).
+		Build()
 	require.NoError(t, err)
 
 	_, err = c.Get(context.Background(), &Request{URL: secure.URL})
 	require.ErrorIs(t, err, errBearerRedirectDowngrade)
 	assert.NotContains(t, err.Error(), "tok-redirect")
 	assert.Empty(t, seen(), "the http hop must never be requested")
+	assert.Equal(t, int64(1), hits.Load(), "a refused downgrade is terminal, not retried")
+}
+
+func TestBearerCheckRedirectAllowsDowngradeWithoutAuthorization(t *testing.T) {
+	first := &nethttp.Request{URL: &url.URL{Scheme: "https", Host: "api.example.com"}}
+	hop := &nethttp.Request{URL: &url.URL{Scheme: "http", Host: "cdn.example.net"}, Header: nethttp.Header{}}
+	require.NoError(t, bearerCheckRedirect(hop, []*nethttp.Request{first}), "net/http stripped Authorization, so nothing leaks")
+
+	hop.Header.Set(headerAuthorization, "Bearer x")
+	require.ErrorIs(t, bearerCheckRedirect(hop, []*nethttp.Request{first}), errBearerRedirectDowngrade)
 }
 
 func TestBearerTokenFileFollowsSameSchemeRedirect(t *testing.T) {
 	path := writeTestFile(t, t.TempDir(), "token", []byte("tok-redirect"))
-	var landed []string
+	var landed atomic.Value
 	secure := httptest.NewTLSServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 		if r.URL.Path == "/start" {
 			nethttp.Redirect(w, r, "/landing", nethttp.StatusFound)
 			return
 		}
-		landed = append(landed, r.Header.Get(headerAuthorization))
+		landed.Store(r.Header.Get(headerAuthorization))
 	}))
 	t.Cleanup(secure.Close)
 
@@ -54,13 +73,13 @@ func TestBearerTokenFileFollowsSameSchemeRedirect(t *testing.T) {
 	resp, err := c.Get(context.Background(), &Request{URL: secure.URL + "/start"})
 	require.NoError(t, err)
 	assert.Equal(t, nethttp.StatusOK, resp.StatusCode)
-	assert.Equal(t, []string{"Bearer tok-redirect"}, landed)
+	assert.Equal(t, "Bearer tok-redirect", landed.Load())
 }
 
 func TestBearerTokenFileKeepsCallerRedirectPolicy(t *testing.T) {
 	path := writeTestFile(t, t.TempDir(), "token", []byte("tok-redirect"))
 	plain, seen := authServer(t)
-	secure := redirectTo(t, plain.URL+"/landing")
+	secure, _ := redirectTo(t, plain.URL+"/landing")
 	custom := secure.Client()
 	custom.CheckRedirect = func(*nethttp.Request, []*nethttp.Request) error { return nil }
 

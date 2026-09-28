@@ -30,18 +30,18 @@ type bearerFileSpec struct {
 // WithBearerTokenFile sends "Authorization: Bearer <token>" on every request and
 // every retry, reading the token from path once, at Build.
 //
-// Build reads the file eagerly, trims surrounding whitespace, and fails when it
-// is missing, unreadable, not a regular file, larger than 64 KiB, empty, or not
-// an RFC 6750 b64token (letters, digits, "-._~+/", then optional trailing "=");
-// the error names the path, never the contents. The path is trimmed too. A path that looks like a token instead —
-// one starting "eyJ" as a JWT does, or a bare name with no directory and no
-// extension — fails Build without being read or echoed; write "./token" for a
-// file in the working directory.
+// Build trims the path, reads the file eagerly, trims surrounding whitespace,
+// and fails when the file is missing, unreadable, not a regular file, larger
+// than 64 KiB, empty, or holds anything but visible ASCII (a space, a control
+// byte or a byte order mark); the error names the path, never the contents. A
+// path that looks like a token instead — one starting "eyJ" as a JWT does, or a
+// bare name with no directory and no extension — fails Build without being read
+// or echoed; write "./token" for a file in the working directory.
 // Build also fails when this option is combined with WithBasicAuth or a default
 // Authorization header. Unless the client already has a CheckRedirect, Build
-// installs one that refuses a redirect from https to http. An Authorization
-// header the request sets itself, through Request.Headers or Request.Auth, wins
-// over the file. The last call wins.
+// installs one that refuses a redirect from https to http that would carry the
+// token. An Authorization header the request sets itself, through
+// Request.Headers or Request.Auth, wins over the file. The last call wins.
 func (b *Builder) WithBearerTokenFile(path string) *Builder {
 	b.bearer = &bearerFileSpec{path: path}
 	return b
@@ -131,25 +131,18 @@ func (s *bearerTokenFile) read() (string, error) {
 	if token == "" {
 		return "", fmt.Errorf("httpclient: bearer token file %s is empty", secretfile.SafeRef(s.path))
 	}
-	if !isB64Token(token) {
-		return "", fmt.Errorf("httpclient: bearer token file %s does not hold an RFC 6750 bearer token", secretfile.SafeRef(s.path))
+	if !isVisibleASCII(token) {
+		return "", fmt.Errorf("httpclient: bearer token file %s holds a byte other than visible ASCII", secretfile.SafeRef(s.path))
 	}
 	return token, nil
 }
 
-// isB64Token reports whether v matches RFC 6750's b64token:
-// 1*( ALPHA / DIGIT / "-" / "." / "_" / "~" / "+" / "/" ) *"=".
-func isB64Token(v string) bool {
-	body := strings.TrimRight(v, "=")
-	if body == "" {
-		return false
-	}
-	for i := 0; i < len(body); i++ {
-		c := body[i]
-		switch {
-		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
-		case strings.IndexByte("-._~+/", c) >= 0:
-		default:
+// isVisibleASCII reports whether every byte of v is VCHAR (0x21-0x7E). That is
+// stricter than a header value, which also allows spaces, tabs and obs-text,
+// and looser than RFC 6750's b64token, which some issued tokens break.
+func isVisibleASCII(v string) bool {
+	for i := 0; i < len(v); i++ {
+		if c := v[i]; c < '!' || c > '~' {
 			return false
 		}
 	}

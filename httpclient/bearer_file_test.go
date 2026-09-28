@@ -72,9 +72,9 @@ func TestBuildBearerTokenFileRejectsUnusableInput(t *testing.T) {
 	}{
 		{name: "missing_file", path: missing, wantMsg: "read file", wantPath: true, isErr: fs.ErrNotExist},
 		{name: "whitespace_only_file", path: blank, wantMsg: "is empty", wantPath: true},
-		{name: "interior_newline", path: multiline, wantMsg: "does not hold an RFC 6750 bearer token", wantPath: true},
-		{name: "scheme_copied_into_file", path: schemed, wantMsg: "does not hold an RFC 6750 bearer token", wantPath: true},
-		{name: "utf8_byte_order_mark", path: bom, wantMsg: "does not hold an RFC 6750 bearer token", wantPath: true},
+		{name: "interior_newline", path: multiline, wantMsg: "holds a byte other than visible ASCII", wantPath: true},
+		{name: "scheme_copied_into_file", path: schemed, wantMsg: "holds a byte other than visible ASCII", wantPath: true},
+		{name: "utf8_byte_order_mark", path: bom, wantMsg: "holds a byte other than visible ASCII", wantPath: true},
 		{name: "directory", path: subdir, wantMsg: "not a regular file", wantPath: true, isErr: errNotRegularFile},
 		{name: "over_size_cap", path: oversized, wantMsg: "larger than 65536 bytes", wantPath: true, isErr: errTokenFileTooLarge},
 		{name: "empty_path", path: "", wantMsg: "requires a file path"},
@@ -145,32 +145,22 @@ func TestLooksLikeTokenSeparatesTokensFromPaths(t *testing.T) {
 	}
 }
 
-func TestIsB64TokenFollowsRFC6750Grammar(t *testing.T) {
+func TestIsVisibleASCIIAcceptsOnlyVCHAR(t *testing.T) {
 	tests := []struct {
 		name  string
 		value string
 		want  bool
 	}{
-		{name: "lower_bounds", value: "az", want: true},
-		{name: "upper_bounds", value: "AZ", want: true},
-		{name: "digit_bounds", value: "09", want: true},
-		{name: "hyphen", value: "-", want: true},
-		{name: "punctuation", value: "._~+/", want: true},
-		{name: "trailing_padding", value: "ab==", want: true},
-		{name: "padding_only", value: "==", want: false},
-		{name: "interior_padding", value: "a=b", want: false},
-		{name: "before_lower", value: "`", want: false},
-		{name: "after_lower", value: "{", want: false},
-		{name: "before_upper", value: "@", want: false},
-		{name: "after_upper", value: "[", want: false},
-		{name: "after_digits", value: ":", want: false},
+		{name: "vchar_bounds", value: "!~", want: true},
+		{name: "vendor_token_shapes", value: "123|abc%2F:x=", want: true},
 		{name: "space", value: "a b", want: false},
-		{name: "quote", value: `a"b`, want: false},
+		{name: "tab", value: "a\tb", want: false},
+		{name: "del", value: "a\x7fb", want: false},
 		{name: "obs_text", value: "a\x80b", want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, isB64Token(tt.value))
+			assert.Equal(t, tt.want, isVisibleASCII(tt.value))
 		})
 	}
 }
