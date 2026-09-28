@@ -10774,12 +10774,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - note: New exported surface, all additive: `Builder.WithBearerTokenFile(path string, opts
   httpclient.BearerTokenFileOptions)`, `BearerTokenFileOptions{RefreshInterval}` and
   `DefaultBearerTokenRefreshInterval` (one minute). `Build()` reads the file, trims whitespace and
-  fails on a missing, unreadable, non-regular, over-64-KiB or empty file, or on content that is
-  not a valid header value (an interior newline, say), with an error that names the path and never
-  the contents; it refuses, unread and unechoed, a path shaped like a token (an `eyJ` prefix, or a
-  bare name with no directory and no extension — write `./token`); and it fails when the option is
-  combined with `WithBasicAuth` or a default `Authorization` header. Every attempt, retries
-  included, carries the current token unless the request sets `Authorization` itself
+  fails on a missing, unreadable, non-regular, over-64-KiB or empty file, or on content holding a
+  byte other than visible ASCII (an interior space or newline, say), with an error that names the
+  path and never the contents; it refuses, unread and unechoed, a path shaped like a token (an
+  `eyJ` prefix, or a bare name with no directory and no extension — write `./token`); and it fails
+  when the option is combined with `WithBasicAuth` or a default `Authorization` header. Unless the
+  client has its own `CheckRedirect`, a redirect from `https` to `http` that would carry the token
+  is refused. Every attempt, retries included, carries the current token unless the request sets `Authorization` itself
   (`Request.Headers` or `Request.Auth`); the file is re-read at most once per interval, a request
   waiting on that re-read gives up when its context is done, and a failed re-read keeps the last
   good token and logs one WARN. Code-only: no configuration key.
