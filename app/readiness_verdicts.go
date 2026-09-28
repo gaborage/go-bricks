@@ -27,6 +27,10 @@ const readinessWarnInterval = time.Minute
 // readinessFailure's `readiness` pseudo-kind never reaches this store: the judge synthesizes it
 // outside walk, so it is not a kind and never gets a series.
 type verdictStore struct {
+	// lineMu orders the transition lines, never the state: record holds it across its commit and
+	// the write that follows, so two judgments report their transitions in the order they
+	// committed them. The entries stay under mu alone.
+	lineMu  sync.Mutex
 	mu      sync.Mutex
 	entries map[string]verdictEntry
 	logger  logger.Logger
@@ -72,12 +76,16 @@ func newVerdictStore(log logger.Logger, now func() time.Time) *verdictStore {
 // readyCheck's ERROR line. A nil receiver records nothing, so a hand-built App without a store
 // still judges.
 //
-// The line is emitted after commit released the lock: a log write would otherwise serialize
-// every other judgment and the exporter's readings() behind it.
+// The line is emitted with commit's lock released, so the exporter's readings() never queues
+// behind a log write. lineMu is held across the pair instead: a judgment that commits second
+// cannot report its transition before the one that committed first.
 func (s *verdictStore) record(result *HealthStatus) {
 	if s == nil {
 		return
 	}
+
+	s.lineMu.Lock()
+	defer s.lineMu.Unlock()
 
 	switch s.commit(result) {
 	case unhealthyLine:

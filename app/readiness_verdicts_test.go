@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/logger"
 )
 
 const (
@@ -125,6 +127,65 @@ func TestVerdictStoreToleratesNoStore(t *testing.T) {
 
 	assert.NotPanics(t, func() { store.record(healthy(componentCache, false)) })
 	assert.Nil(t, store.readings())
+}
+
+// gatedVerdictLogger is the recorder with one rendezvous inside record's write path: the first
+// WARN parks in Warn(), where its commit has already returned, until the test opens the gate.
+type gatedVerdictLogger struct {
+	*recLogger
+	once    sync.Once
+	entered chan struct{} // closed as that WARN reaches the gate
+	gate    chan struct{} // closed by the test to let it write
+}
+
+func (l *gatedVerdictLogger) Warn() logger.LogEvent {
+	l.once.Do(func() { close(l.entered) })
+	<-l.gate
+	return l.recLogger.Warn()
+}
+
+// TestVerdictStoreOrdersItsTransitionLinesAcrossJudgments pins the emission order against the
+// commits behind it. full() bypasses /ready's singleflight, so one judgment can commit a
+// non-critical kind unhealthy while a second commits its recovery, and with the writes
+// unserialized the INFO lands before the WARN it followed — a log in which the incident ends
+// before it began. The gate holds the first write open, so an unserialized emitter inverts the
+// pair whenever the recovery is scheduled inside the grace; a serialized one keeps the second
+// judgment outside record entirely, so the wait below bounds the test's duration and never
+// decides its verdict.
+func TestVerdictStoreOrdersItsTransitionLinesAcrossJudgments(t *testing.T) {
+	rec := &recLogger{}
+	clock := &testClock{at: time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)}
+	gated := &gatedVerdictLogger{recLogger: rec, entered: make(chan struct{}), gate: make(chan struct{})}
+	store := newVerdictStore(gated, clock.now)
+
+	outage := make(chan struct{})
+	go func() {
+		defer close(outage)
+		store.record(unhealthy(componentCache, false, errors.New("connection refused")))
+	}()
+	select {
+	case <-gated.entered:
+	case <-time.After(time.Second):
+		t.Fatal("the unhealthy WARN never reached the gate")
+	}
+
+	recovery := make(chan struct{})
+	go func() {
+		defer close(recovery)
+		store.record(healthy(componentCache, false))
+	}()
+	select {
+	case <-recovery: // unserialized: the recovery committed and wrote its line already
+	case <-time.After(200 * time.Millisecond): // serialized: it is parked outside record
+	}
+	close(gated.gate)
+	<-outage
+	<-recovery
+
+	lines := rec.linesWith("Readiness component ")
+	require.Len(t, lines, 2, "one transition each: into unhealthy, then back out")
+	assert.Equal(t, warnUnhealthyMsg, lines[0].msg, "the outage is reported before the recovery that followed it")
+	assert.Equal(t, infoRecoveredMsg, lines[1].msg)
 }
 
 // TestConcurrentJudgmentsRecordSafely drives the two judgment entry points against one store the

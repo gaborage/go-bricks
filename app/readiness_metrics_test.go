@@ -379,6 +379,54 @@ func TestStartRuntimeGaugesToleratesAProviderlessApp(t *testing.T) {
 	assert.Nil(t, noObservability.unregisterGauges, "no provider, no callback")
 }
 
+// TestPrepareRuntimeRegistersTheGaugesOnlyOnceStartupCannotFail pins where the registration sits
+// in the startup order. Run hands a prepareRuntime failure straight back to its caller without a
+// Shutdown, so nothing would ever drop a callback registered before a later step failed, and it
+// would go on observing slots that never serve. The consumer veto is the last fallible step, so a
+// registration anywhere earlier fails the rejecting arm; the accepting arm is the control that
+// makes that absence mean something.
+func TestPrepareRuntimeRegistersTheGaugesOnlyOnceStartupCannotFail(t *testing.T) {
+	tests := []struct {
+		name       string
+		hookErr    error
+		registered bool
+	}{
+		{name: "hook_rejects_the_route_table", hookErr: assert.AnError, registered: false},
+		{name: "hook_accepts_the_route_table", hookErr: nil, registered: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
+				Multitenant: config.MultitenantConfig{Enabled: false},
+			}
+			a := newLifecycleCheckAppWithLogger(t, cfg, logger.New("error", false))
+			mp := obtest.NewTestMeterProvider()
+			store, _, _ := newTestVerdictStore()
+			store.record(healthy(componentDatabase, true))
+			a.observability, a.verdicts = meteredProvider{mp: mp}, store
+			a.postRegisterRoutes = func([]server.RouteDescriptor) error { return tt.hookErr }
+			t.Cleanup(a.stopRuntimeGauges)
+
+			err := a.prepareRuntime(context.Background())
+
+			if tt.hookErr == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, tt.hookErr)
+			}
+			assert.Equal(t, tt.registered, a.unregisterGauges != nil, "a callback outlives startup only when startup succeeded")
+			series := gaugeDataPoints(t, mp.Collect(t), metricReadinessStatus)
+			if tt.registered {
+				require.Len(t, series, 1, "the verdict recorded before startup is what a registered callback reports")
+				return
+			}
+			assert.Empty(t, series, "a failed startup leaves nothing observing the slots")
+		})
+	}
+}
+
 // TestStopRuntimeGaugesUnregistersOnce pins the teardown Shutdown performs before the slots stop:
 // the callback is dropped, and a second pass over an App already shut down does nothing.
 func TestStopRuntimeGaugesUnregistersOnce(t *testing.T) {

@@ -237,10 +237,10 @@ func int64Stat(stats map[string]any, key string) (int64, bool) {
 	}
 }
 
-// startRuntimeGauges registers the gauges once every kind has started, which is the point at
-// which the streams manager exists if it exists at all (app/streams_setup.go). Reported and
-// never fatal: a service that runs without publishing its readiness gauge is worse observed,
-// not broken.
+// startRuntimeGauges registers the gauges once every kind has started — the point at which the
+// streams manager exists if it exists at all (app/streams_setup.go) — and once no startup step
+// can still fail, which is why prepareRuntime calls it last. Reported and never fatal: a service
+// that runs without publishing its readiness gauge is worse observed, not broken.
 //
 // The absent provider is the only guard: it is a hand-built App, which the framework never
 // produces. Both observability.Provider implementations normalize their meter provider

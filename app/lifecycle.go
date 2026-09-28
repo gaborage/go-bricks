@@ -54,10 +54,6 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 		return err
 	}
 
-	// After the start walk and nowhere earlier: this is the first point at which the streams
-	// manager is written, if the lane runs at all.
-	a.startRuntimeGauges()
-
 	// Every route registered from here on belongs to this App.
 	routesStart := server.DefaultRouteRegistry.Count()
 
@@ -84,7 +80,16 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 	// at route registration), so the keystore's role log is complete.
 	warnDualRoleKeys(a.logger, a.registry.deps.KeyStore)
 
-	return a.runPostRegisterRoutes(routesStart)
+	if err := a.runPostRegisterRoutes(routesStart); err != nil {
+		return err
+	}
+
+	// Last, and nowhere earlier: after the start walk, the first point at which the streams
+	// manager is written, and after every fallible step, because Run returns a prepareRuntime
+	// failure without a Shutdown — a callback registered before one of them failed would keep
+	// observing slots that never serve.
+	a.startRuntimeGauges()
+	return nil
 }
 
 // runPostRegisterRoutes hands the consumer's hook this App's route table once every
