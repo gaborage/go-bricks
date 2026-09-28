@@ -65,7 +65,8 @@ type bearerFileSpec struct {
 // token. After Build the file is re-read at most once per RefreshInterval, on
 // the request path; a failed re-read keeps the last good token and logs one
 // WARN per interval. A request that finds a re-read in progress is served the
-// last good token; a stalled read holds only the request performing it, and a
+// last good token; a stalled read holds only the request performing it, which
+// waits whatever its deadline, with nothing logged until the read returns. A
 // read stalled past the token's own expiry keeps serving the expired token until
 // it returns. An Authorization header the request sets itself, through
 // Request.Headers or Request.Auth, wins over the file. The last call wins.

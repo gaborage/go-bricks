@@ -10783,8 +10783,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   is refused. Every attempt, retries included, carries the current token unless the request sets
   `Authorization` itself (`Request.Headers` or `Request.Auth`); the file is re-read at most once
   per interval; a request that finds a re-read in progress is served the last good token, a stalled
-  read holds only the request performing it, and a read stalled past the token's own expiry keeps
-  serving the expired token until it returns; a failed re-read keeps the last good token and logs
+  read holds only the request performing it (whatever its deadline, and unlogged until the read
+  returns), and a read stalled past the token's own expiry keeps serving the expired token until it
+  returns; a failed re-read keeps the last good token and logs
   one WARN. Code-only: no configuration key.
   Adopting it in place of a hand-written token-file interceptor means deleting that interceptor,
   since interceptors run after the option and would overwrite the header. Details:
