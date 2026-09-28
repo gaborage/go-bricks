@@ -13,7 +13,7 @@ import (
 // there is nothing to tune down to.
 const readinessWarnInterval = time.Minute
 
-// verdictStore remembers, per kind, the status the most recent readiness judgment recorded for
+// verdictStore remembers, per kind, the status the freshest readiness judgment observed for
 // it. It is the readiness gauge's only source: judging never reads it back, so a last verdict
 // is a view and never an input (ADR-120).
 //
@@ -42,6 +42,11 @@ type verdictStore struct {
 type verdictEntry struct {
 	status   string
 	critical bool
+	// observedAt is when the probe behind this verdict started (probeResult.startedAt), and it
+	// is what orders one judgment's verdict against another's. It comes from time.Now() and
+	// never leaves memory, so the comparison reads monotonic clocks and no wall-clock step can
+	// reorder two judgments. Zero means this kind has no verdict yet, which nothing precedes.
+	observedAt time.Time
 	// warnedAt is when this kind's unhealthy WARN last fired, and nothing else: only a fresh
 	// WARN moves it, so it survives the recovery and every healthy judgment after it. Zero
 	// means this kind has never warned — which is every critical kind, none of which reports.
@@ -71,15 +76,15 @@ func newVerdictStore(log logger.Logger, now func() time.Time) *verdictStore {
 	return &verdictStore{entries: make(map[string]verdictEntry), logger: log, now: now}
 }
 
-// record stores what one judgment decided about one kind, and logs the transitions a
-// non-critical kind's outage would otherwise leave unreported — a critical kind already carries
-// readyCheck's ERROR line. A nil receiver records nothing, so a hand-built App without a store
-// still judges.
+// record stores what one judgment observed about one kind at observedAt, and logs the
+// transitions a non-critical kind's outage would otherwise leave unreported — a critical kind
+// already carries readyCheck's ERROR line. A nil receiver records nothing, so a hand-built App
+// without a store still judges.
 //
 // The line is emitted with commit's lock released, so the exporter's readings() never queues
 // behind a log write. lineMu is held across the pair instead: a judgment that commits second
 // cannot report its transition before the one that committed first.
-func (s *verdictStore) record(result *HealthStatus) {
+func (s *verdictStore) record(result *HealthStatus, observedAt time.Time) {
 	if s == nil {
 		return
 	}
@@ -87,7 +92,7 @@ func (s *verdictStore) record(result *HealthStatus) {
 	s.lineMu.Lock()
 	defer s.lineMu.Unlock()
 
-	switch s.commit(result) {
+	switch s.commit(result, observedAt) {
 	case unhealthyLine:
 		s.logger.Warn().
 			Err(result.Err).
@@ -100,21 +105,33 @@ func (s *verdictStore) record(result *HealthStatus) {
 			Bool("critical", result.Critical).
 			Msg("Readiness component recovered")
 	case noLine:
-		// Nothing to report: the kind is critical, its status did not transition, or it is
-		// still inside its WARN interval.
+		// Nothing to report: the kind is critical, its status did not transition, it is still
+		// inside its WARN interval, or the commit was older than the stored verdict.
 	}
 }
 
-// commit stores one kind's verdict and returns the line its transition owes. Deciding under the
-// lock is what keeps the emitter single: full() bypasses /ready's singleflight
-// (app/debug_health.go), so two judgments can be in flight at once, and the committed warnedAt
-// is the arbiter — whichever commits second reads what the first wrote and stays quiet.
-func (s *verdictStore) commit(result *HealthStatus) readinessLine {
+// commit stores one kind's verdict and returns the line its transition owes. Two things are
+// decided here under the lock, because full() bypasses /ready's singleflight
+// (app/debug_health.go) and the two judgments can therefore be in flight at once:
+//
+// observedAt orders the verdicts. Commits are serialized, but nothing orders them against when
+// each probe ran, so a slow judgment can commit a reading it took before the verdict already
+// stored. Such a commit is dropped whole — it is no observation of anything current, so it
+// moves neither the gauge nor warnedAt and owes no line. Only the strictly older one is
+// dropped: a tie stores, which is what makes the first verdict for a kind store against a zero
+// observedAt.
+//
+// The committed warnedAt then rate-floors the WARN among the verdicts that do store: whichever
+// of two concurrent judgments commits second reads what the first wrote and stays quiet.
+func (s *verdictStore) commit(result *HealthStatus, observedAt time.Time) readinessLine {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	previous := s.entries[result.Name]
-	entry := verdictEntry{status: result.Status, critical: result.Critical}
+	if observedAt.Before(previous.observedAt) {
+		return noLine
+	}
+	entry := verdictEntry{status: result.Status, critical: result.Critical, observedAt: observedAt}
 	line := noLine
 	if !result.Critical {
 		line, entry.warnedAt = s.transition(result.Status, previous)

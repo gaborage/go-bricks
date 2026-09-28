@@ -47,7 +47,7 @@ func TestVerdictStoreWarnsOnTheTransitionThenOnceAMinute(t *testing.T) {
 	store, rec, clock := newTestVerdictStore()
 	probeErr := errors.New("dial tcp 10.0.0.5:6379: connection refused")
 
-	store.record(unhealthy(componentCache, false, probeErr))
+	store.record(unhealthy(componentCache, false, probeErr), clock.at)
 	require.Len(t, rec.linesWith(warnUnhealthyMsg), 1, "the transition into unhealthy is reported")
 
 	warn := rec.linesWith(warnUnhealthyMsg)[0]
@@ -57,12 +57,12 @@ func TestVerdictStoreWarnsOnTheTransitionThenOnceAMinute(t *testing.T) {
 	assert.Equal(t, probeErr.Error(), warn.err, "the log carries the full probe error")
 
 	clock.advance(readinessWarnInterval - time.Second)
-	store.record(unhealthy(componentCache, false, probeErr))
-	store.record(unhealthy(componentCache, false, probeErr))
+	store.record(unhealthy(componentCache, false, probeErr), clock.at)
+	store.record(unhealthy(componentCache, false, probeErr), clock.at)
 	assert.Len(t, rec.linesWith(warnUnhealthyMsg), 1, "no second line inside the minute")
 
 	clock.advance(time.Second)
-	store.record(unhealthy(componentCache, false, probeErr))
+	store.record(unhealthy(componentCache, false, probeErr), clock.at)
 	assert.Len(t, rec.linesWith(warnUnhealthyMsg), 2, "the line repeats once the interval elapses")
 }
 
@@ -70,19 +70,19 @@ func TestVerdictStoreWarnsOnTheTransitionThenOnceAMinute(t *testing.T) {
 // healthy, nothing while it stays healthy, and a re-armed WARN if it fails again inside the
 // same minute — a new outage is a transition, not a repeat.
 func TestVerdictStoreReportsRecoveryOnce(t *testing.T) {
-	store, rec, _ := newTestVerdictStore()
+	store, rec, clock := newTestVerdictStore()
 	probeErr := errors.New("connection refused")
 
-	store.record(unhealthy(componentCache, false, probeErr))
-	store.record(healthy(componentCache, false))
-	store.record(healthy(componentCache, false))
+	store.record(unhealthy(componentCache, false, probeErr), clock.at)
+	store.record(healthy(componentCache, false), clock.at)
+	store.record(healthy(componentCache, false), clock.at)
 
 	recovered := rec.linesWith(infoRecoveredMsg)
 	require.Len(t, recovered, 1, "recovery is reported once, not on every healthy judgment")
 	assert.Equal(t, "info", recovered[0].level)
 	assert.Equal(t, componentCache, recovered[0].str["component"])
 
-	store.record(unhealthy(componentCache, false, probeErr))
+	store.record(unhealthy(componentCache, false, probeErr), clock.at)
 	assert.Len(t, rec.linesWith(warnUnhealthyMsg), 2,
 		"failing again is a fresh transition, whatever the interval says")
 }
@@ -95,10 +95,10 @@ func TestVerdictStoreSaysNothingForACriticalKind(t *testing.T) {
 	store, rec, clock := newTestVerdictStore()
 	probeErr := errors.New("connection refused")
 
-	store.record(unhealthy(componentDatabase, true, probeErr))
+	store.record(unhealthy(componentDatabase, true, probeErr), clock.at)
 	clock.advance(2 * readinessWarnInterval)
-	store.record(unhealthy(componentDatabase, true, probeErr))
-	store.record(healthy(componentDatabase, true))
+	store.record(unhealthy(componentDatabase, true, probeErr), clock.at)
+	store.record(healthy(componentDatabase, true), clock.at)
 
 	assert.Empty(t, rec.linesWith(warnUnhealthyMsg), "a critical kind keeps readyCheck's ERROR line alone")
 	assert.Empty(t, rec.linesWith(infoRecoveredMsg), "and reports no recovery of its own")
@@ -108,11 +108,11 @@ func TestVerdictStoreSaysNothingForACriticalKind(t *testing.T) {
 // kind, carrying that kind's latest status and its critical setting. The order is the map's and
 // pinned nowhere — the SDK's own datapoint slice does not preserve observation order anyway.
 func TestVerdictStoreKeepsTheLastVerdictPerKind(t *testing.T) {
-	store, _, _ := newTestVerdictStore()
+	store, _, clock := newTestVerdictStore()
 
-	store.record(unhealthy(componentCache, false, errors.New("connection refused")))
-	store.record(healthy(componentDatabase, true))
-	store.record(healthy(componentCache, false))
+	store.record(unhealthy(componentCache, false, errors.New("connection refused")), clock.at)
+	store.record(healthy(componentDatabase, true), clock.at)
+	store.record(healthy(componentCache, false), clock.at)
 
 	assert.ElementsMatch(t, []verdictReading{
 		{kind: componentCache, status: healthyStatus, critical: false},
@@ -125,7 +125,7 @@ func TestVerdictStoreKeepsTheLastVerdictPerKind(t *testing.T) {
 func TestVerdictStoreToleratesNoStore(t *testing.T) {
 	var store *verdictStore
 
-	assert.NotPanics(t, func() { store.record(healthy(componentCache, false)) })
+	assert.NotPanics(t, func() { store.record(healthy(componentCache, false), time.Time{}) })
 	assert.Nil(t, store.readings())
 }
 
@@ -161,7 +161,7 @@ func TestVerdictStoreOrdersItsTransitionLinesAcrossJudgments(t *testing.T) {
 	outage := make(chan struct{})
 	go func() {
 		defer close(outage)
-		store.record(unhealthy(componentCache, false, errors.New("connection refused")))
+		store.record(unhealthy(componentCache, false, errors.New("connection refused")), clock.at)
 	}()
 	select {
 	case <-gated.entered:
@@ -172,7 +172,7 @@ func TestVerdictStoreOrdersItsTransitionLinesAcrossJudgments(t *testing.T) {
 	recovery := make(chan struct{})
 	go func() {
 		defer close(recovery)
-		store.record(healthy(componentCache, false))
+		store.record(healthy(componentCache, false), clock.at)
 	}()
 	select {
 	case <-recovery: // unserialized: the recovery committed and wrote its line already
@@ -186,6 +186,42 @@ func TestVerdictStoreOrdersItsTransitionLinesAcrossJudgments(t *testing.T) {
 	require.Len(t, lines, 2, "one transition each: into unhealthy, then back out")
 	assert.Equal(t, warnUnhealthyMsg, lines[0].msg, "the outage is reported before the recovery that followed it")
 	assert.Equal(t, infoRecoveredMsg, lines[1].msg)
+}
+
+// TestVerdictStoreDropsAStaleCommit pins the ordering serialized commits alone do not buy.
+// full() bypasses /ready's singleflight, so a slow debug judgment can probe a kind, spend the
+// rest of its budget on the kinds behind it, and commit after a later /ready flight already
+// committed a fresher verdict for that same kind. Storing it anyway would flip the gauge back to
+// 1 for a kind that is still down and report a recovery that never happened. Driving it through
+// readinessReport.record pins the plumbing too: a record stamped at commit time rather than
+// carrying the probe's startedAt would let the stale reading win.
+func TestVerdictStoreDropsAStaleCommit(t *testing.T) {
+	store, rec, clock := newTestVerdictStore()
+	probedAt := clock.at
+
+	// The debug judgment observed the kind healthy first; the /ready flight observed it
+	// unhealthy 400ms later and commits first.
+	fresh := readinessReport{{
+		status:    *unhealthy(componentMessaging, false, errors.New("connection refused")),
+		startedAt: probedAt.Add(400 * time.Millisecond),
+	}}
+	stale := readinessReport{{status: *healthy(componentMessaging, false), startedAt: probedAt}}
+
+	fresh.record(store)
+	require.Len(t, rec.linesWith(warnUnhealthyMsg), 1,
+		"a kind's first verdict has nothing to compare against and stores")
+
+	stale.record(store)
+
+	assert.Equal(t, []verdictReading{{kind: componentMessaging, status: unhealthyStatus}}, store.readings(),
+		"the older reading does not overwrite the fresher one")
+	assert.Empty(t, rec.linesWith(infoRecoveredMsg), "a dropped commit reports no recovery")
+	assert.Len(t, rec.linesWith(warnUnhealthyMsg), 1, "and no line of its own")
+
+	mp := registerTestGauges(t, gaugeSources{verdicts: store})
+	points := gaugeDataPoints(t, mp.Collect(t), metricReadinessStatus)
+	require.Len(t, points, 1)
+	assert.Equal(t, int64(0), points[0].Value, "the gauge still reports the kind down")
 }
 
 // TestConcurrentJudgmentsRecordSafely drives the two judgment entry points against one store the

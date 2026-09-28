@@ -157,9 +157,13 @@ func isReadyEquivalent(status string) bool {
 // view's full() — so recording is a step at the entry point rather than a side effect inside
 // the walk. The gate's short-circuit appends the blocking kind before it returns, so the
 // recorded set is the judged set either way.
+//
+// Each verdict carries the startedAt of the probe that produced it, which is what the store
+// orders two judgments' verdicts by: the entry points run concurrently, so a report's commit
+// time says nothing about when it observed what it carries.
 func (r readinessReport) record(s *verdictStore) {
 	for i := range r {
-		s.record(&r[i].status)
+		s.record(&r[i].status, r[i].startedAt)
 	}
 }
 

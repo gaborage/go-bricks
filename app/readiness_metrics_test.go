@@ -130,8 +130,8 @@ func TestReadinessStatusGaugeReportsTheLastVerdict(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			store, _, _ := newTestVerdictStore()
-			store.record(&HealthStatus{Name: componentDatabase, Status: tt.status, Critical: true})
+			store, _, clock := newTestVerdictStore()
+			store.record(&HealthStatus{Name: componentDatabase, Status: tt.status, Critical: true}, clock.at)
 			mp := registerTestGauges(t, gaugeSources{verdicts: store})
 
 			points := gaugeDataPoints(t, mp.Collect(t), metricReadinessStatus)
@@ -159,9 +159,9 @@ func TestReadinessStatusGaugeDropsUnjudgedKinds(t *testing.T) {
 // TestReadinessStatusGaugeAttributesNameTheKindAndItsCriticality pins the two attributes an
 // operator filters and alerts on, one series per judged kind.
 func TestReadinessStatusGaugeAttributesNameTheKindAndItsCriticality(t *testing.T) {
-	store, _, _ := newTestVerdictStore()
-	store.record(&HealthStatus{Name: componentDatabase, Status: healthyStatus, Critical: true})
-	store.record(&HealthStatus{Name: componentCache, Status: unhealthyStatus, Err: errors.New("connection refused")})
+	store, _, clock := newTestVerdictStore()
+	store.record(&HealthStatus{Name: componentDatabase, Status: healthyStatus, Critical: true}, clock.at)
+	store.record(&HealthStatus{Name: componentCache, Status: unhealthyStatus, Err: errors.New("connection refused")}, clock.at)
 	mp := registerTestGauges(t, gaugeSources{verdicts: store})
 
 	points := gaugeDataPoints(t, mp.Collect(t), metricReadinessStatus)
@@ -348,8 +348,8 @@ func (p meteredProvider) MeterProvider() metric.MeterProvider { return p.mp }
 // of a service that configures neither manager.
 func TestStartRuntimeGaugesRegistersAgainstTheAppsProvider(t *testing.T) {
 	mp := obtest.NewTestMeterProvider()
-	store, _, _ := newTestVerdictStore()
-	store.record(healthy(componentDatabase, true))
+	store, _, clock := newTestVerdictStore()
+	store.record(healthy(componentDatabase, true), clock.at)
 	app := &App{logger: logger.New("error", false), verdicts: store, observability: meteredProvider{mp: mp}}
 	installSlotList(app, disabledSlot(componentMessaging), unsealedSlot(componentStreams))
 
@@ -408,8 +408,8 @@ func TestRegisterRuntimeGaugesDropsTheRegistrationItFailsWith(t *testing.T) {
 		foreign:     mp.Meter(appMeterName + "/foreign"),
 		foreignName: metricStreamsPublishers,
 	}
-	store, _, _ := newTestVerdictStore()
-	store.record(healthy(componentDatabase, true))
+	store, _, clock := newTestVerdictStore()
+	store.record(healthy(componentDatabase, true), clock.at)
 
 	unregister, err := registerRuntimeGauges(meter, gaugeSources{verdicts: store})
 
@@ -456,8 +456,8 @@ func TestPrepareRuntimeRegistersTheGaugesOnlyOnceStartupCannotFail(t *testing.T)
 			}
 			a := newLifecycleCheckAppWithLogger(t, cfg, logger.New("error", false))
 			mp := obtest.NewTestMeterProvider()
-			store, _, _ := newTestVerdictStore()
-			store.record(healthy(componentDatabase, true))
+			store, _, clock := newTestVerdictStore()
+			store.record(healthy(componentDatabase, true), clock.at)
 			a.observability, a.verdicts = meteredProvider{mp: mp}, store
 			a.postRegisterRoutes = func([]server.RouteDescriptor) error { return tt.hookErr }
 			t.Cleanup(a.stopRuntimeGauges)
