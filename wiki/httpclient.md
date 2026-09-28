@@ -730,14 +730,16 @@ if err != nil {
   is read as a path, and the startup error can quote it as that path.
 - **Refresh.** The token is served for `RefreshInterval` (zero means
   `DefaultBearerTokenRefreshInterval`, one minute — client-go's period for the same file; a
-  negative value fails `Build()`), then the next attempt re-reads the file, so a retry carries a
-  token rotated after the attempt before it. The read runs on the request path under a lock, so
-  concurrent requests at the boundary cause one read, and there is no background goroutine to
-  stop. A request waiting on that read gives up when its context is done; the request performing
-  the read cannot, so a stalled filesystem holds that one request. The client `Timeout` bounds
-  neither, since it starts only once the request is sent: give a request that must not stall a
-  context with a deadline. A symlink swap (the kubelet's atomic writer) and an in-place write are
-  both picked up.
+  negative value fails `Build()`), then the next attempt re-reads the file. Each attempt checks,
+  so a retry that lands after the interval lapsed carries a token rotated since the attempt before
+  it; within the interval it resends the cached one. The read runs on the request path under a
+  lock, so concurrent requests at the boundary cause one read, and there is no background
+  goroutine to stop. A request waiting on that read gives up when its context is done, or with a
+  `TimeoutError` once the client `Timeout` passes; the request performing the read cannot, so a
+  stalled filesystem holds that one request. A symlink swap (the kubelet's atomic writer) is
+  picked up; so is an in-place write, but a writer that truncates and then writes can be read
+  half-way, and a truncated token that is still visible ASCII is then served for an interval, so
+  write a temporary file and rename it over the path.
 - **Failed refresh.** A file that is missing, unreadable, not a regular file, larger than 64 KiB,
   empty, or holding a byte other than visible ASCII at refresh time keeps the last good token and
   logs one WARN naming the path; the next re-read is one interval later. Deleting or emptying the

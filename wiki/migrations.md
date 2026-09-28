@@ -10780,10 +10780,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `eyJ` prefix, or a bare name with no directory and no extension — write `./token`); and it fails
   when the option is combined with `WithBasicAuth` or a default `Authorization` header. Unless the
   client has its own `CheckRedirect`, a redirect from `https` to `http` that would carry the token
-  is refused. Every attempt, retries included, carries the current token unless the request sets `Authorization` itself
-  (`Request.Headers` or `Request.Auth`); the file is re-read at most once per interval, a request
-  waiting on that re-read gives up when its context is done, and a failed re-read keeps the last
-  good token and logs one WARN. Code-only: no configuration key.
+  is refused. Every attempt, retries included, carries the current token unless the request sets
+  `Authorization` itself (`Request.Headers` or `Request.Auth`); the file is re-read at most once
+  per interval, a request waiting on that re-read gives up when its context is done or the client
+  `Timeout` passes, and a failed re-read keeps the last good token and logs one WARN. Code-only: no configuration key.
   Adopting it in place of a hand-written token-file interceptor means deleting that interceptor,
   since interceptors run after the option and would overwrite the header. Details:
   [httpclient.md](httpclient.md#bearer-token-from-a-rotating-file).

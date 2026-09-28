@@ -431,25 +431,120 @@ func TestBearerTokenFileConcurrentRefreshReadsOnce(t *testing.T) {
 	}
 }
 
-func TestBearerTokenFileRefreshWaitHonorsRequestContext(t *testing.T) {
+const bearerWaiterFrame = "httpclient.(*bearerTokenFile).acquire("
+
+// holdBearerLock builds a client on a token file and takes its refresh lock, as a
+// re-read in flight would; release frees it.
+func holdBearerLock(t *testing.T, b *Builder) (c Client, srvURL string, release func()) {
+	t.Helper()
 	path := writeTestFile(t, t.TempDir(), "token", []byte("tok-v1"))
-	srv, seen := authServer(t)
-	c, err := NewBuilder(quietLogger()).WithBearerTokenFile(path, BearerTokenFileOptions{}).Build()
+	srv, _ := authServer(t)
+	c, err := b.WithBearerTokenFile(path, BearerTokenFileOptions{}).Build()
 	require.NoError(t, err)
 	s := c.(*client).bearer
+	s.lock <- struct{}{}
+	release = sync.OnceFunc(func() { <-s.lock })
+	t.Cleanup(release)
+	return c, srv.URL, release
+}
 
-	s.lock <- struct{}{} // a refresh in flight holds the lock
-	// Valve only: a wait that ignores its context would otherwise hang here.
-	valve := time.AfterFunc(2*time.Second, func() { <-s.lock })
+func TestBearerTokenFileRefreshWaitHonorsRequestContext(t *testing.T) {
+	c, url, _ := holdBearerLock(t, NewBuilder(quietLogger()))
 
 	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Get(ctx, &Request{URL: url})
+		done <- err
+	}()
+	require.Eventually(t, func() bool { return testutil.ParkedInSelect(bearerWaiterFrame) == 1 }, 5*time.Second, time.Millisecond)
 	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Contains(t, err.Error(), "bearer token file: waiting for the token")
+	case <-time.After(5 * time.Second):
+		t.Fatal("a request waiting on the refresh must give up at its own context")
+	}
+}
+
+func TestBearerTokenFileRefreshWaitIsBoundedByClientTimeout(t *testing.T) {
+	const limit = 50 * time.Millisecond
+	c, url, _ := holdBearerLock(t, NewBuilder(quietLogger()).WithTimeout(limit))
+
+	start := time.Now()
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Get(context.Background(), &Request{URL: url})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		assert.True(t, IsErrorType(err, TimeoutError), "got %v", err)
+		assert.Contains(t, err.Error(), "timed out waiting for the token")
+		assert.GreaterOrEqual(t, time.Since(start), limit)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wait for the token must end at the client Timeout")
+	}
+}
+
+func TestBearerTokenFileRefreshWaitWithoutTimeoutWaitsForTheLock(t *testing.T) {
+	c, url, release := holdBearerLock(t, NewBuilder(quietLogger()).WithTimeout(0))
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Get(context.Background(), &Request{URL: url})
+		done <- err
+	}()
+	require.Eventually(t, func() bool { return testutil.ParkedInSelect(bearerWaiterFrame) == 1 }, 5*time.Second, time.Millisecond)
+	release()
+	require.NoError(t, <-done)
+}
+
+// blockingWarnSink blocks the write of the refresh-failure WARN until released.
+type blockingWarnSink struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (w *blockingWarnSink) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte("refresh failed")) {
+		close(w.entered)
+		<-w.release
+	}
+	return len(p), nil
+}
+
+func TestBearerTokenFileWarnsAfterReleasingTheLock(t *testing.T) {
+	path := writeTestFile(t, t.TempDir(), "token", []byte("tok-v1"))
+	srv, _ := authServer(t)
+	clk := newFakeClock()
+	sink := &blockingWarnSink{entered: make(chan struct{}), release: make(chan struct{})}
+	log := logger.New("warn", false).WithContext(zerolog.New(sink).WithContext(context.Background()))
+	c, err := bearerBuilder(log, path, BearerTokenFileOptions{RefreshInterval: bearerTestInterval}, clk).Build()
+	require.NoError(t, err)
+
+	require.NoError(t, os.Remove(path))
+	clk.advance(bearerTestInterval)
+	failed := make(chan error, 1)
+	go func() {
+		_, getErr := c.Get(context.Background(), &Request{URL: srv.URL})
+		failed <- getErr
+	}()
+	select {
+	case <-sink.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the failed refresh never logged")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	_, err = c.Get(ctx, &Request{URL: srv.URL})
-	require.True(t, valve.Stop(), "a request waiting on the refresh must give up at its own context")
-	<-s.lock
-	require.ErrorIs(t, err, context.Canceled)
-	assert.Contains(t, err.Error(), "bearer token file: waiting for the token")
-	assert.Empty(t, seen())
+	close(sink.release)
+	require.NoError(t, err, "a request must not wait for another request's WARN")
+	require.NoError(t, <-failed)
 }
 
 func TestBearerTokenFileFreeLockIgnoresDoneContext(t *testing.T) {
