@@ -45,13 +45,11 @@ func newProbeSkipper(healthPath, readyPath string) probeSkipper {
 // skipped while consumer code ran.
 //
 // The template identifies the probe HANDLER only because a module cannot end up owning a probe
-// path: echo's Add would silently overwrite the handler while keeping the template, and what
-// rejects that is the duplicate-route check — the tracker here records it and
-// app.checkRouteConflicts fails startup on it. A consumer wiring server.New and ModuleGroup
-// without that check (or a server fake that does not implement RouteConflicts) keeps the older,
-// wider hazard of a module-served probe path, which this decision cannot see. The method check
-// covers the one case where the template outlives the match, a top-level 405 (echo keeps the
-// best-match template there).
+// path: echo's Add would silently overwrite the handler while keeping the template, and the
+// server itself refuses that duplicate — the tracker keeps the first registration (the probes
+// register in New, before any module can) and Start refuses to serve with a conflict recorded.
+// The method check covers the one case where the template outlives the match, a top-level 405
+// (echo keeps the best-match template there).
 //
 // Reads two fields and compares strings, so the decision allocates nothing — which is what
 // keeps the default chain inside its ADR-026 ceiling. c.Path() is a plain field read;

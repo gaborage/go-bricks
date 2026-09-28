@@ -899,6 +899,7 @@ func TestCheckRouteConflictsAggregatesAndSkips(t *testing.T) {
 				return
 			}
 			require.Error(t, err)
+			require.ErrorIs(t, err, server.ErrDuplicateRoute)
 			for _, want := range tc.wantContains {
 				assert.Contains(t, err.Error(), want)
 			}

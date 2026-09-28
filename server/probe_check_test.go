@@ -435,7 +435,9 @@ func TestServerStartRefusesATLSLeafWithoutSAN(t *testing.T) {
 	cfg.Server.Probes.Port = testutil.ReserveFreePort(t)
 	srv := New(cfg, &testLogger{})
 
-	cfgErr := requireStartRefusedBeforeBind(t, srv, "Start bound and served despite a TLS leaf the check cannot pin")
+	err := requireStartRefusedBeforeBind(t, srv, "Start bound and served despite a TLS leaf the check cannot pin")
+	var cfgErr *config.ConfigError
+	require.ErrorAs(t, err, &cfgErr)
 	assert.Equal(t, "server.probes.port", cfgErr.Field)
 	assert.Contains(t, cfgErr.Error(), "server.tls")
 
@@ -472,7 +474,9 @@ func TestServerStartRefusesATLSLeafThePinCannotVerify(t *testing.T) {
 			cfg.Server.Probes.Port = testutil.ReserveFreePort(t)
 			srv := New(cfg, &testLogger{})
 
-			cfgErr := requireStartRefusedBeforeBind(t, srv, "Start bound and served despite a TLS leaf the pin cannot verify")
+			err := requireStartRefusedBeforeBind(t, srv, "Start bound and served despite a TLS leaf the pin cannot verify")
+			var cfgErr *config.ConfigError
+			require.ErrorAs(t, err, &cfgErr)
 			assert.Equal(t, "server.probes.port", cfgErr.Field)
 			assert.Contains(t, cfgErr.Error(), "server.tls")
 		})

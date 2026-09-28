@@ -355,8 +355,13 @@ on 1.27.
 
 # Handler registration panics
 # → Verify HandlerRegistry passed to RegisterRoutes()
-# → Check for duplicate route paths — startup fails with "duplicate route
-#   registration (N conflict(s))" naming both registrants (Echo itself
-#   silently overwrites, see wiki/startup_defaults.md#duplicate-route-detection)
 # → Ensure request struct has proper validation tags
+
+# "duplicate route registration (N conflict(s))"
+# → The server recorded a duplicate method+path and kept the FIRST handler
+# → Start (app startup, earlier) fails with *server.DuplicateRouteError
+#   (errors.Is(err, server.ErrDuplicateRoute)), naming both registrants
+#   — see wiki/startup_defaults.md#duplicate-route-detection
+# → Only an identical method + full path is detected; templates differing only
+#   in a param/wildcard name (/users/:id, /users/:uid) are not
 ```
