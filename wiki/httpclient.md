@@ -734,11 +734,14 @@ if err != nil {
   token rotated after the attempt before it. The read runs on the request path under a lock, so
   concurrent requests at the boundary cause one read, and there is no background goroutine to
   stop. A request waiting on that read gives up when its context is done; the request performing
-  the read cannot, so a stalled filesystem holds that one request. A symlink swap (the kubelet's
-  atomic writer) and an in-place write are both picked up.
+  the read cannot, so a stalled filesystem holds that one request. The client `Timeout` bounds
+  neither, since it starts only once the request is sent: give a request that must not stall a
+  context with a deadline. A symlink swap (the kubelet's atomic writer) and an in-place write are
+  both picked up.
 - **Failed refresh.** A file that is missing, unreadable, not a regular file, larger than 64 KiB,
   empty, or holding a byte other than visible ASCII at refresh time keeps the last good token and
-  logs one WARN naming the path; the next re-read is one interval later.
+  logs one WARN naming the path; the next re-read is one interval later. Deleting or emptying the
+  file therefore does not revoke the cached token.
 - **Precedence.** An `Authorization` header the request sets itself — `Request.Headers`, any
   spelling of the key, even with an empty value, or `Request.Auth` — wins over the file. Request
   interceptors run after the token is set, so they see it and can still replace it.
