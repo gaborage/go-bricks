@@ -57,11 +57,10 @@ type statGauge struct {
 	gauge       metric.Int64ObservableGauge
 }
 
-// statGaugeSpecs are the manager counters the /ready body will stop carrying (ADR-120) and no
-// other instrument
-// covers: the database pool and the cache manager already have their own
-// (db.client.connection.*, cache.manager.*), and the rest stay on the access-controlled debug
-// view (ADR-120).
+// statGaugeSpecs are the manager counters the /ready body stopped carrying (ADR-120) that no
+// other instrument covers: the cache manager already has cache.manager.*, and the driver's pool
+// has db.client.connection.* — which is not DbManager's resourcepool. That group, and the rest,
+// stay on the access-controlled debug view.
 //
 // Keyed by the kind whose sealed probe description carries the Stats() snapshot the group reads,
 // so the callback resolves a group by walking the slot list instead of holding a manager.
@@ -90,8 +89,8 @@ type gaugeSources struct {
 	slots    []resourceSlot
 }
 
-// registerRuntimeGauges publishes the signal that will replace the statistics the /ready body
-// still carries until ADR-120 trims it: each kind's last readiness verdict, and the manager
+// registerRuntimeGauges publishes the signal that replaces the statistics the /ready body
+// carried before ADR-120 trimmed it: each kind's last readiness verdict, and the manager
 // counters OTel lacks.
 //
 // The callback runs no probe and makes no I/O — it reads what a judgment already decided and
@@ -196,11 +195,13 @@ func readinessGaugeValue(status string) (value int64, ok bool) {
 }
 
 // observeSlotStats reports the manager counters through the slot list: a kind with a gauge group
-// hands over the same Stats() snapshot /ready renders. A kind that sealed no description — the
-// native streams lane that never started — contributes nothing, and so does a kind whose manager
-// was never built, whose disabled description carries no statistics at all. The group is
-// resolved before the snapshot is taken, so the kinds with no gauges (database, cache) never pay
-// for a Stats() call this callback would discard.
+// hands over a fresh call of its sealed probe description's stats hook — the same hook the
+// access-controlled debug view renders under details, taken here outside any lease and without a
+// judgment, and no longer rendered anywhere on the /ready body (ADR-120). A kind that sealed no
+// description — the native streams lane that never started — contributes nothing, and so does a
+// kind whose manager was never built, whose disabled description carries no statistics at all.
+// The group is resolved before the snapshot is taken, so the kinds with no gauges (database,
+// cache) never pay for a Stats() call this callback would discard.
 func observeSlotStats(observer metric.Observer, slots []resourceSlot, gauges map[string][]statGauge) {
 	for _, slot := range slots {
 		description := slot.readiness()

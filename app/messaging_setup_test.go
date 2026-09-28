@@ -89,7 +89,7 @@ func newFailingConsumerManager(t *testing.T, log logger.Logger, source messaging
 }
 
 // The coordinates of the one consumer declarationsWithConsumer declares. Named because the
-// readiness tests assert they never reach the unauthenticated /ready body.
+// readiness tests assert an outage naming them stays on the access-controlled debug view.
 const (
 	declaredQueue     = "orders.queue"
 	declaredConsumer  = "orders-consumer"

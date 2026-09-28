@@ -90,7 +90,6 @@ func (f *judgmentFlightFixture) ready(ctx context.Context) <-chan readyResponse 
 		if w.Body.Len() > 0 {
 			res.err = json.Unmarshal(w.Body.Bytes(), &res.body)
 		}
-		delete(res.body, timeKey)
 		done <- res
 	}()
 	return done
@@ -146,15 +145,16 @@ func receiveReady(t *testing.T, done <-chan readyResponse) readyResponse {
 }
 
 // requireAbandonedAnswer asserts the answer of a request that stopped waiting on the
-// judgment: a 503 naming readiness itself, with no kind's name or statistics.
-func requireAbandonedAnswer(t *testing.T, res readyResponse) {
+// judgment: the same 503 body every other failure serves (ADR-120), with readiness itself
+// named on the log line — the one place the abandoned path is still distinguishable from a
+// kind that is genuinely down, and therefore what has to be asserted here.
+func requireAbandonedAnswer(t *testing.T, log *recLogger, res readyResponse) {
 	t.Helper()
 	assert.Equal(t, http.StatusServiceUnavailable, res.code)
-	assert.Equal(t, map[string]any{
-		statusKey:          notReadyStatus,
-		componentReadiness: unhealthyStatus,
-		errorKey:           componentReadiness + " unavailable",
-	}, res.body)
+	assert.Equal(t, notReadyBodyMap, res.body)
+	event, ok := loggedEvent(log, readinessFailedMsg)
+	require.True(t, ok, "the abandoned request must log the failure its body no longer describes")
+	assert.Equal(t, componentReadiness, event.str["component"])
 }
 
 // TestReadyCheckCoalescesConcurrentJudgments pins the judgment flight (ADR-120): concurrent
@@ -169,7 +169,7 @@ func TestReadyCheckCoalescesConcurrentJudgments(t *testing.T) {
 
 	first := receiveReady(t, responses[0])
 	assert.Equal(t, http.StatusOK, first.code)
-	assert.Equal(t, healthyStatus, first.body[componentDatabase])
+	assert.Equal(t, readyBodyMap, first.body)
 	for _, done := range responses[1:] {
 		res := receiveReady(t, done)
 		assert.Equal(t, http.StatusOK, res.code)
@@ -198,7 +198,7 @@ func TestReadyCheckLeaderCancellationFailsNoFollower(t *testing.T) {
 	awaitJudgmentWaiters(t, followers+1)
 
 	cancelLeader()
-	requireAbandonedAnswer(t, receiveReady(t, leader))
+	requireAbandonedAnswer(t, f.log, receiveReady(t, leader))
 	f.release()
 
 	for _, done := range responses {
@@ -222,7 +222,7 @@ func TestReadyCheckCanceledFollowerLeavesTheJudgment(t *testing.T) {
 	awaitJudgmentWaiters(t, 2)
 
 	cancelFollower()
-	requireAbandonedAnswer(t, receiveReady(t, follower))
+	requireAbandonedAnswer(t, f.log, receiveReady(t, follower))
 	event, ok := loggedEvent(f.log, readinessFailedMsg)
 	require.True(t, ok)
 	assert.Equal(t, "warn", event.level)
@@ -280,11 +280,7 @@ func TestReadyCheckCoalescedFailureFailsEveryRequest(t *testing.T) {
 	for _, done := range responses {
 		res := receiveReady(t, done)
 		assert.Equal(t, http.StatusServiceUnavailable, res.code)
-		assert.Equal(t, map[string]any{
-			statusKey:         notReadyStatus,
-			componentDatabase: unhealthyStatus,
-			errorKey:          componentDatabase + " unavailable",
-		}, res.body)
+		assert.Equal(t, notReadyBodyMap, res.body)
 	}
 	assert.Equal(t, int32(1), f.calls.Load(), "concurrent requests share one judgment")
 	assert.Equal(t, slices.Repeat([]string{"error"}, requests), f.failureLevels())
@@ -292,8 +288,8 @@ func TestReadyCheckCoalescedFailureFailsEveryRequest(t *testing.T) {
 
 // TestReadyCheckLeaderDeadlineNamesTheBlockingKind pins that a request whose own deadline
 // expires mid-judgment waits for the verdict rather than leaving with readiness itself: the
-// flight ends with the leader's deadline, so a hung kind still reaches the ERROR line and the
-// body by name, as it did when the request judged on its own.
+// flight ends with the leader's deadline, so a hung kind still reaches the ERROR line by name,
+// as it did when the request judged on its own. The body names no kind (ADR-120).
 func TestReadyCheckLeaderDeadlineNamesTheBlockingKind(t *testing.T) {
 	const budget = 100 * time.Millisecond
 	cfg := &config.Config{App: config.AppConfig{Name: testApp}}
@@ -318,11 +314,7 @@ func TestReadyCheckLeaderDeadlineNamesTheBlockingKind(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-	assert.Equal(t, map[string]any{
-		statusKey:         notReadyStatus,
-		componentDatabase: unhealthyStatus,
-		errorKey:          componentDatabase + " unavailable",
-	}, body)
+	assert.Equal(t, notReadyBodyMap, body)
 	event, ok := loggedEvent(log, readinessFailedMsg)
 	require.True(t, ok)
 	assert.Equal(t, "error", event.level)

@@ -388,9 +388,9 @@ func TestPrepareRuntimeAbortsWhenDeclaredConsumersCannotStart(t *testing.T) {
 	require.ErrorIs(t, err, errBrokerLookupFailed)
 }
 
-// TestPrepareRuntimeSealsEachKindsReadinessAfterTheStartPhase pins the seal: /ready reports
-// nothing before prepareRuntime — an application that never started may not take traffic —
-// and one entry per kind that renders once every slot's start has returned.
+// TestPrepareRuntimeSealsEachKindsReadinessAfterTheStartPhase pins the seal: /ready fails
+// closed before prepareRuntime — an application that never started may not take traffic —
+// and judges one entry per kind once every slot's start has returned.
 func TestPrepareRuntimeSealsEachKindsReadinessAfterTheStartPhase(t *testing.T) {
 	cfg := &config.Config{
 		App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
@@ -401,14 +401,17 @@ func TestPrepareRuntimeSealsEachKindsReadinessAfterTheStartPhase(t *testing.T) {
 
 	before, beforeCode := runReadyCheck(t, a, cfg)
 	require.Equal(t, http.StatusServiceUnavailable, beforeCode, "no kind has sealed a description yet")
-	assert.Equal(t, notReadyStatus, before[statusKey])
+	assert.Equal(t, notReadyBodyMap, before)
 
 	require.NoError(t, a.prepareRuntime(context.Background()))
 
 	after, afterCode := runReadyCheck(t, a, cfg)
 	assert.Equal(t, http.StatusOK, afterCode)
+	assert.Equal(t, readyBodyMap, after)
+
+	components := judgedComponents(t, a)
 	for _, kind := range []string{componentDatabase, componentMessaging, componentCache} {
-		assert.Equal(t, disabledStatus, after[kind], "the start phase must be followed by a seal")
+		assert.Equal(t, disabledStatus, components[kind].Status, "the start phase must be followed by a seal")
 	}
 }
 
@@ -976,17 +979,19 @@ func TestReadyCheckWithholdsDatabaseIdentityFromBody(t *testing.T) {
 		body, code := runReadyCheck(t, app, cfg)
 
 		assert.Equal(t, http.StatusServiceUnavailable, code)
-		assert.Equal(t, databaseUnavailableBody, body[errorKey])
+		assert.Equal(t, notReadyBodyMap, body)
 
 		// The premise this test rests on: the raw error really does carry the identity,
-		// so the assertion above is withholding something rather than passing vacuously.
+		// so the assertion above is withholding something rather than passing vacuously —
+		// and the log is where it still has to land.
 		event, ok := loggedEvent(rec, "Readiness check failed")
 		require.True(t, ok)
+		assert.Equal(t, componentDatabase, event.str["component"])
 		assert.Contains(t, event.err, "user=app database=payments")
 		assert.Contains(t, event.err, "10.0.0.5:5432")
 	})
 
-	t.Run("probe_built_by_the_real_constructor_is_sanitized", func(t *testing.T) {
+	t.Run("real_constructor_identity_never_reaches_the_body_either", func(t *testing.T) {
 		// Same path, but the description comes from the database slot's own describe()
 		// rather than a hand-built one, so it covers that wiring reaching readyCheck.
 		cfg := &config.Config{App: config.AppConfig{Name: testApp}}
@@ -1000,20 +1005,20 @@ func TestReadyCheckWithholdsDatabaseIdentityFromBody(t *testing.T) {
 		body, code := runReadyCheck(t, app, cfg)
 
 		assert.Equal(t, http.StatusServiceUnavailable, code)
-		assert.Equal(t, databaseUnavailableBody, body[errorKey])
+		assert.Equal(t, notReadyBodyMap, body)
 		event, ok := loggedEvent(rec, "Readiness check failed")
 		require.True(t, ok)
-		assert.NotEmpty(t, event.err)
-		assert.NotEqual(t, event.err, body[errorKey], "the body must not simply echo the logged driver error")
+		assert.Equal(t, componentDatabase, event.str["component"])
+		assert.NotEmpty(t, event.err, "the driver error must reach the log, since it no longer reaches the body")
 	})
 }
 
-// TestReadyCheckSanitizesCriticalProbeWithoutPublicError is the assertion the inverted
-// default exists for. SECURITY: a critical probe that never declares a public string —
-// the omission the opt-in shape invited, and one no compiler catches — still cannot render
-// its raw error into the unauthenticated 503 body. The probe is deliberately not one of
-// the framework's own: it stands in for the probe someone adds next.
-func TestReadyCheckSanitizesCriticalProbeWithoutPublicError(t *testing.T) {
+// TestReadyCheckWithholdsAForeignProbesIdentityToo is the same withholding one step out from
+// the framework's own kinds. SECURITY: the probe is deliberately not one of GoBricks' —
+// it stands in for the kind someone adds next, and it declares nothing about disclosure at
+// all. Its raw error still cannot reach the unauthenticated body, because no probe's output
+// reaches that body any more (ADR-120).
+func TestReadyCheckWithholdsAForeignProbesIdentityToo(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: testApp}}
 	rec := &recLogger{}
 	app := &App{cfg: cfg, logger: rec}
@@ -1026,12 +1031,13 @@ func TestReadyCheckSanitizesCriticalProbeWithoutPublicError(t *testing.T) {
 	body, code := runReadyCheck(t, app, cfg)
 
 	assert.Equal(t, http.StatusServiceUnavailable, code)
-	assert.Equal(t, "vault unavailable", body[errorKey])
+	assert.Equal(t, notReadyBodyMap, body)
 
 	// The premise the assertion above rests on: the raw error really does carry the
 	// identity, so it is withholding something rather than passing vacuously.
 	event, ok := loggedEvent(rec, "Readiness check failed")
 	require.True(t, ok)
+	assert.Equal(t, "vault", event.str["component"])
 	assert.Contains(t, event.err, "user=app database=payments")
 	assert.Contains(t, event.err, "10.0.0.5:5432")
 }
@@ -1047,10 +1053,10 @@ func runReadyCheck(t *testing.T, app *App, cfg *config.Config) (body map[string]
 	return body, w.Code
 }
 
-// TestReadyCheckOmitsStreamsWhenNoneDeclared pins that a streams-free deployment renders
-// neither streams key: the streams slot seals no description while its manager does not
-// exist. The slots are the real ones, so the classic kinds render and the two assertions
-// below are not passing on an empty body.
+// TestReadyCheckOmitsStreamsWhenNoneDeclared pins that a streams-free deployment judges no
+// streams kind: the streams slot seals no description while its manager does not exist. The
+// slots are the real ones, so the classic kinds are judged and the assertion below is not
+// passing on an empty report.
 func TestReadyCheckOmitsStreamsWhenNoneDeclared(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
 	app := &App{cfg: cfg, logger: logger.New("error", false)}
@@ -1060,15 +1066,18 @@ func TestReadyCheckOmitsStreamsWhenNoneDeclared(t *testing.T) {
 	body, code := runReadyCheck(t, app, cfg)
 
 	assert.Equal(t, http.StatusOK, code)
-	assert.Equal(t, disabledStatus, body[componentDatabase])
-	assert.NotContains(t, body, componentStreams)
-	assert.NotContains(t, body, "streams_stats")
+	assert.Equal(t, readyBodyMap, body)
+
+	components := judgedComponents(t, app)
+	assert.Equal(t, disabledStatus, components[componentDatabase].Status)
+	assert.NotContains(t, components, componentStreams)
 }
 
-// TestReadyCheckWithoutConfigRendersAnEmptyAppBlock pins the nil-config guard: an App
-// assembled without a config (as some fixtures are) still answers 200 with an empty app
-// block instead of dereferencing nil, and a configured App renders its identity.
-func TestReadyCheckWithoutConfigRendersAnEmptyAppBlock(t *testing.T) {
+// TestReadyCheckWithoutConfigAnswersReady pins the nil-config guard: an App assembled
+// without a config (as some fixtures are) still answers 200 instead of dereferencing nil.
+// The App's identity used to ride along on the body and no longer does (ADR-120), so this is
+// the guard that is left — readinessFlightContext still reads cfg on the way through.
+func TestReadyCheckWithoutConfigAnswersReady(t *testing.T) {
 	app := &App{logger: logger.New("error", false)}
 	app.installSlots(slotInputs{})
 	sealAndJudge(app)
@@ -1076,23 +1085,18 @@ func TestReadyCheckWithoutConfigRendersAnEmptyAppBlock(t *testing.T) {
 	body, code := runReadyCheck(t, app, &config.Config{})
 
 	assert.Equal(t, http.StatusOK, code)
-	assert.Equal(t, map[string]any{"name": "", "environment": "", "version": ""}, body["app"])
-
-	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
-	app.cfg = cfg
-	body, _ = runReadyCheck(t, app, cfg)
-	assert.Equal(t, map[string]any{"name": testApp, "environment": "test", "version": "1.0.0"}, body["app"])
+	assert.Equal(t, readyBodyMap, body)
 }
 
 // TestReadyReportsStreamsOnceItsManagerExists is the other half: once the streams slot has
-// sealed a description, the component and its stats reach the body.
+// sealed a description, the kind is judged — and its offsets reach the access-controlled
+// debug view alone.
 func TestReadyReportsStreamsOnceItsManagerExists(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
 	app := &App{cfg: cfg, logger: logger.New("error", false)}
 	installSealedSlots(app, probeDescription{
-		name:        componentStreams,
-		publicStats: streamsPublicStats,
-		live:        func(context.Context) error { return nil },
+		name: componentStreams,
+		live: func(context.Context) error { return nil },
 		stats: func() map[string]any {
 			return map[string]any{
 				"consumers":      2,
@@ -1104,9 +1108,12 @@ func TestReadyReportsStreamsOnceItsManagerExists(t *testing.T) {
 	body, code := runReadyCheck(t, app, cfg)
 
 	assert.Equal(t, http.StatusOK, code)
-	assert.Equal(t, healthyStatus, body[componentStreams])
-	assert.Equal(t, map[string]any{statusKey: healthyStatus, "consumers": float64(2)}, body["streams_stats"])
-	assert.NotContains(t, body["streams_stats"], "stored_offsets")
+	assert.Equal(t, readyBodyMap, body, "a declared stream reaches no unauthenticated body")
+
+	streams := judgedComponents(t, app)[componentStreams]
+	assert.Equal(t, healthyStatus, streams.Status)
+	assert.Contains(t, streams.Details, "stored_offsets",
+		"the access-controlled view keeps the offsets /ready never published")
 }
 
 // recordingCloser records that its Close ran, so a test can prove the closer phase still

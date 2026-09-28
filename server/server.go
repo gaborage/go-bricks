@@ -732,10 +732,10 @@ func (s *Server) healthCheck(c *echo.Context) error {
 func (s *Server) readyCheck(c *echo.Context) error {
 	// App overrides this via RegisterReadyHandler with a probe-driven readiness check
 	// (DB, messaging, etc.); see app/lifecycle.go's App.readyCheck. This handler remains
-	// the fallback when no override is registered.
-	return c.JSON(http.StatusOK, map[string]any{
+	// the fallback when no override is registered, and answers the same verdict-only body
+	// as the override and as notReady (ADR-120).
+	return c.JSON(http.StatusOK, map[string]string{
 		fieldStatus: statusReady,
-		"time":      time.Now().Unix(),
 	})
 }
 

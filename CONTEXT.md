@@ -117,16 +117,18 @@ _Avoid_: resource kind (that is what fills a slot), manager wrapper, component
 **Probe description**:
 What a slot hands readiness so its kind can be judged: a fixed component name,
 whether the kind is critical, how to lease it, how to check it is live, and
-which of its statistics may appear on the unauthenticated `/ready` body.
+how to snapshot its statistics — read by the debug detail and the readiness
+gauges, never by the unauthenticated `/ready` body.
 _Avoid_: health check, prober (the exported interface), probe config
 
 **Readiness**:
 The single judgment of whether the application may take traffic, and the views
-of it — the `/ready` verdict and body, the debug detail, and the last verdict.
-All are produced from the probe descriptions each slot sealed once after its own
-start, asked of the slot list at judgment time and never cached as a set of
-their own, and from the same list of statuses that count as ready. These are
-the framework's views; a consumer may replace the `/ready` view with its own.
+of it — the `/ready` verdict, which is the whole of its body, the debug detail,
+and the last verdict. All are produced from the probe descriptions each slot
+sealed once after its own start, asked of the slot list at judgment time and
+never cached as a set of their own, and from the same list of statuses that
+count as ready. These are the framework's views; a consumer may replace the
+`/ready` view with its own.
 _Avoid_: health (as the noun for this), liveness, ready check, walk
 
 **Last verdict**:

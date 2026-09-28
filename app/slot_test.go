@@ -223,8 +223,9 @@ func TestCacheSlotContributesItsProbeAndCloser(t *testing.T) {
 }
 
 // TestStreamsSlotWithholdsItsDescriptionUntilItsManagerExists pins the one kind whose
-// description is withheld: sealing a disabled streams description would add "streams" and
-// "streams_stats" to every service's /ready body (ADR-066 rule 5), which nothing asked for.
+// description is withheld: sealing a disabled streams description would add a "streams" entry
+// to every service's debug health view and readiness report (ADR-066 rule 5), which nothing
+// asked for.
 func TestStreamsSlotWithholdsItsDescriptionUntilItsManagerExists(t *testing.T) {
 	a := newSlotTestApp(t, false, false)
 	require.Len(t, describedKinds(a), 3, "a streams-free service describes three kinds")
@@ -334,7 +335,7 @@ func TestDatabaseSlotPreInitSkipsUnconfiguredKind(t *testing.T) {
 	a.cfg.Database = config.DatabaseConfig{} // nothing configured
 
 	require.NoError(t, a.slots[0].preInit(context.Background()))
-	assert.Equal(t, 0, statsInt(t, a.dbManager.Stats(), statsActiveConnectionsKey),
+	assert.Equal(t, 0, statsInt(t, a.dbManager.Stats(), "active_connections"),
 		"the unconfigured arm must never open a connection")
 }
 

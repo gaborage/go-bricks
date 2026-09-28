@@ -633,7 +633,8 @@ func (a *App) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// readyCheck handles the readiness endpoint: one probe run, one gate, one body (ADR-066).
+// readyCheck handles the readiness endpoint: one probe run, one gate, one verdict (ADR-066,
+// ADR-120).
 // The run stops at the first failing critical kind, so an outage costs the probes ahead of
 // it and no more. Concurrent requests share one judgment (ADR-120), but each logs and
 // renders its own answer from the verdict, so the failure log fires once per request, as
@@ -664,20 +665,16 @@ func (a *App) readyCheck(c server.HandlerContext) error {
 			event = a.logger.Warn()
 		}
 		event.Err(blocking.Err).Str("component", blocking.Name).Msg("Readiness check failed")
-		return c.JSON(http.StatusServiceUnavailable, notReadyBody(blocking))
+		return c.JSON(http.StatusServiceUnavailable, notReadyBody())
 	}
 
-	app := &config.AppConfig{}
-	if a.cfg != nil {
-		app = &a.cfg.App
-	}
-	return c.JSON(http.StatusOK, verdict.report.readyBody(app, time.Now()))
+	return c.JSON(http.StatusOK, readyBody())
 }
 
 // readinessVerdict is one framework judgment: what a readiness flight shares with every
-// /ready request waiting on it.
+// /ready request waiting on it. The report stays inside the flight, which records it for the
+// readiness gauge; since ADR-120 no body is rendered from it, so no waiter needs it.
 type readinessVerdict struct {
-	report   readinessReport
 	blocking HealthStatus
 	found    bool
 }
@@ -749,7 +746,7 @@ func (a *App) readinessFlight(leaderCtx context.Context) (verdict readinessVerdi
 	// DoChan re-raises on a goroutine no recover reaches.
 	report.record(a.verdicts)
 	completed = true
-	return readinessVerdict{report: report, blocking: blocking, found: found}, nil
+	return readinessVerdict{blocking: blocking, found: found}, nil
 }
 
 // readinessFlightContext is a judgment's context: the leader's, detached from its

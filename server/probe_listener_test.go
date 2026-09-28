@@ -24,6 +24,7 @@ import (
 
 const (
 	probeTestBase         = "/api"
+	probeTestReadyBody    = `{"status":"ready"}`
 	probeTestNotReadyBody = `{"status":"not ready"}`
 	probeStopOverrunMsg   = "Probe listener did not drain within its stop budget; closing it"
 )
@@ -818,4 +819,54 @@ func TestProbeListenerStubRoutesKeepGlobalMiddleware(t *testing.T) {
 	// listener (ADR-120) and this server was never started.
 	assertServeCode(t, srv.probeEcho, http.MethodGet, healthRoute, http.StatusOK)
 	assertServeCode(t, srv.probeEcho, http.MethodGet, "/%68ealth", http.StatusNotFound)
+}
+
+// TestServerReadyBodiesAreVerdictOnlyOnEitherListener pins ADR-120's two bodies end to end on
+// both listeners: the fallback readyCheck's 200 and the drain's 503 carry the verdict and
+// nothing else — no "time", no component, no error text — whether /ready is served by the
+// application listener (no server.probes.port) or by the probe listener (port set), which is
+// where every probe lands once that key is configured. The 503 half is the drain itself: the
+// stopping latch answers ahead of the handler, so a caller cannot tell a draining pod from a
+// failing kind, which is the point of the trim.
+func TestServerReadyBodiesAreVerdictOnlyOnEitherListener(t *testing.T) {
+	tests := []struct {
+		name   string
+		serve  func(t *testing.T, srv *Server) *httptest.ResponseRecorder
+		server func(t *testing.T) *Server
+	}{
+		{
+			name:   "application_listener",
+			server: func(*testing.T) *Server { return newTestServer("", "", "") },
+			serve: func(_ *testing.T, srv *Server) *httptest.ResponseRecorder {
+				return serveEngine(srv.echo, http.MethodGet, testReadyRoute)
+			},
+		},
+		{
+			name: "probe_listener",
+			server: func(t *testing.T) *Server {
+				srv := newProbeTestServer(newProbeTestConfig(""), &testLogger{})
+				markProbeReadyInProcess(t, srv)
+				return srv
+			},
+			serve: func(_ *testing.T, srv *Server) *httptest.ResponseRecorder {
+				return serveEngine(srv.probeEcho, http.MethodGet, testReadyRoute)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := tt.server(t)
+
+			ready := tt.serve(t, srv)
+			assert.Equal(t, http.StatusOK, ready.Code)
+			assert.JSONEq(t, probeTestReadyBody, ready.Body.String())
+
+			require.NoError(t, srv.Shutdown(context.Background()))
+
+			draining := tt.serve(t, srv)
+			assert.Equal(t, http.StatusServiceUnavailable, draining.Code)
+			assert.JSONEq(t, probeTestNotReadyBody, draining.Body.String())
+		})
+	}
 }

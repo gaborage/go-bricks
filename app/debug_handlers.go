@@ -15,6 +15,13 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
+// The app-envelope keys of the debug info body below.
+const (
+	appNameKey    = "name"
+	appEnvKey     = "environment"
+	appVersionKey = "version"
+)
+
 // debugResponse represents a standard debug endpoint response
 type debugResponse struct {
 	Timestamp time.Time `json:"timestamp"`

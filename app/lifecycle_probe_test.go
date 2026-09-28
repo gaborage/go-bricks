@@ -3,9 +3,12 @@ package app
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -75,6 +78,38 @@ func probeTestConfig(probePort int) *config.Config {
 	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
 	cfg.Server.Probes.Port = probePort
 	return cfg
+}
+
+// probeRunConfig is probeTestConfig bound to a real loopback host, with timeouts a held
+// request outlives — what the tests that drive a live listener need.
+func probeRunConfig(probePort int) *config.Config {
+	cfg := probeTestConfig(probePort)
+	cfg.Server.Host = "127.0.0.1"
+	cfg.Server.Timeout.Read = 5 * time.Second
+	cfg.Server.Timeout.Write = 5 * time.Second
+	return cfg
+}
+
+// awaitReadyCommit blocks until the server has committed readiness: the probe listener binds
+// before that commit and gates /ready on it, so a probe sent earlier answers 503 on the gate
+// rather than on the judgment.
+func awaitReadyCommit(t *testing.T, srv *server.Server) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-srv.ReadyCh():
+			return true
+		default:
+			return false
+		}
+	}, probeRunDeadline, 10*time.Millisecond, "the server never committed readiness")
+}
+
+// probeRunClient keeps each request on its own connection, so no idle connection outlives a
+// test or holds a listener's drain open.
+func probeRunClient() *http.Client {
+	return &http.Client{Transport: &http.Transport{DisableKeepAlives: true}, Timeout: probeRunDeadline}
 }
 
 // newProbeRunApp builds a Run-able App around srv with a recording logger and a signal
@@ -488,23 +523,15 @@ func TestReceiveServeFailuresKeepsFailuresCollectedBeforeTimeout(t *testing.T) {
 // probe listener answers while Run serves, and a shutdown signal ends Run cleanly with
 // ProbeErrors closed, so the drain saw both senders finish rather than timing out.
 func TestRunServesRealProbeListenerUntilShutdown(t *testing.T) {
-	cfg := probeTestConfig(testutil.ReserveFreePort(t))
-	cfg.Server.Host = "127.0.0.1"
-	cfg.Server.Timeout.Read = 5 * time.Second
-	cfg.Server.Timeout.Write = 5 * time.Second
+	cfg := probeRunConfig(testutil.ReserveFreePort(t))
 	srv := server.New(cfg, &recLogger{})
 	a, sig := newProbeRunApp(t, cfg, srv)
 
 	done := runInBackground(a)
 	require.Eventually(t, func() bool { return srv.ProbeBoundAddr() != nil }, probeRunDeadline, 10*time.Millisecond)
 
-	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}, Timeout: probeRunDeadline}
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+srv.ProbeBoundAddr().String()+"/health", http.NoBody)
-	require.NoError(t, err)
-	resp, err := client.Do(req)
-	require.NoError(t, err)
-	require.NoError(t, resp.Body.Close())
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	code, _ := getOverHTTP(t, probeRunClient(), "http://"+srv.ProbeBoundAddr().String()+"/health")
+	assert.Equal(t, http.StatusOK, code)
 
 	sig.requestShutdown(t)
 	require.NoError(t, awaitRun(t, done))
@@ -556,4 +583,187 @@ func TestPostRegisterRoutesSeesProbeDescriptorsOnTheirListener(t *testing.T) {
 			assert.Equal(t, tt.want, listeners)
 		})
 	}
+}
+
+// readyOverHTTP serves one /ready against a real listener with App.readyCheck registered the
+// way Builder.RegisterReadyHandler registers it, and returns the answer off the wire. probe
+// selects which listener carries the probe: with server.probes.port set /ready lives on the
+// probe listener alone, otherwise on the application listener. liveErr, when non-nil, fails
+// the one critical kind the judge walks.
+func readyOverHTTP(t *testing.T, probe bool, liveErr error) (code int, body string) {
+	t.Helper()
+
+	probePort := 0
+	if probe {
+		probePort = testutil.ReserveFreePort(t)
+	}
+	cfg := probeRunConfig(probePort)
+
+	a := &App{cfg: cfg, logger: &recLogger{}}
+	installSealedSlots(a, describe(componentDatabase, true, liveErr, map[string]any{"active_connections": 2}))
+
+	srv := server.New(cfg, &recLogger{})
+	srv.RegisterReadyHandler(a.readyCheck)
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Start() }()
+	t.Cleanup(func() {
+		require.NoError(t, srv.Shutdown(context.Background()))
+		require.NoError(t, awaitRun(t, errCh))
+	})
+
+	awaitReadyCommit(t, srv)
+
+	addr := srv.BoundAddr()
+	if probe {
+		addr = srv.ProbeBoundAddr()
+	}
+	require.NotNil(t, addr)
+
+	return getOverHTTP(t, probeRunClient(), "http://"+addr.String()+"/ready")
+}
+
+// TestReadyAnswersStatusOnlyOnEitherListener is ADR-120's body contract read off the wire
+// rather than out of a renderer: a real listener, App.readyCheck behind it, and both verdicts
+// asserted on both listeners. The probe listener is not a formality — with server.probes.port
+// set it is the only place /ready answers, it runs no limiter and no tenant resolution, and
+// the trim has to hold there too. The kind-name sweep is the disclosure half: the failing row
+// really does have a database kind, and a body that named it would fail here.
+func TestReadyAnswersStatusOnlyOnEitherListener(t *testing.T) {
+	listeners := []struct {
+		name  string
+		probe bool
+	}{
+		{name: "application_listener"},
+		{name: "probe_listener", probe: true},
+	}
+	verdicts := []struct {
+		name     string
+		liveErr  error
+		wantCode int
+		wantBody string
+	}{
+		{name: "ready", wantCode: http.StatusOK, wantBody: readyBodyJSON},
+		{
+			name:     "not_ready",
+			liveErr:  errors.New(pgconnIdentityError),
+			wantCode: http.StatusServiceUnavailable,
+			wantBody: notReadyBodyJSON,
+		},
+	}
+
+	for _, listener := range listeners {
+		for _, verdict := range verdicts {
+			t.Run(listener.name+"_"+verdict.name, func(t *testing.T) {
+				code, body := readyOverHTTP(t, listener.probe, verdict.liveErr)
+
+				assert.Equal(t, verdict.wantCode, code)
+				assert.JSONEq(t, verdict.wantBody, body)
+				assertReadyBodyOmits(t, body,
+					componentDatabase, componentMessaging, componentCache, componentStreams, componentReadiness,
+					"active_connections")
+			})
+		}
+	}
+}
+
+// TestReadyAnswersNotReadyDuringTheApplicationDrain pins the drain on the listener a
+// deployment actually polls through one: the probe listener outlives the application
+// listener's drain, the stopping latch answers ahead of App.readyCheck — which never runs
+// again — and the body is the same 503 a failing kind serves. Before ADR-120 the two
+// differed, so an unauthenticated caller could tell a pod draining on purpose from one whose
+// database was down; now it cannot, and a draining pod still leaves the rotation.
+func TestReadyAnswersNotReadyDuringTheApplicationDrain(t *testing.T) {
+	cfg := probeRunConfig(testutil.ReserveFreePort(t))
+
+	a := &App{cfg: cfg, logger: &recLogger{}}
+	installSealedSlots(a, describe(componentDatabase, true, nil, nil))
+
+	var judged atomic.Int32
+	srv := server.New(cfg, &recLogger{})
+	srv.RegisterReadyHandler(func(c server.HandlerContext) error {
+		judged.Add(1)
+		return a.readyCheck(c)
+	})
+
+	arrived := make(chan struct{})
+	release := make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseOnce)
+	srv.ModuleGroup().Add(http.MethodGet, "/slow", func(c server.HandlerContext) error {
+		close(arrived)
+		<-release
+		return c.String(http.StatusOK, "slow")
+	})
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Start() }()
+	awaitReadyCommit(t, srv)
+
+	client := probeRunClient()
+	probeURL := "http://" + srv.ProbeBoundAddr().String() + "/ready"
+	code, body := getOverHTTP(t, client, probeURL)
+	require.Equal(t, http.StatusOK, code)
+	require.JSONEq(t, readyBodyJSON, body)
+	require.Equal(t, int32(1), judged.Load(), "the App's handler is what answered before the drain")
+
+	// Hold the application listener's drain open, so the probe listener is still serving
+	// while Shutdown is in flight — the window a load balancer polls.
+	type heldAnswer struct {
+		code int
+		err  error
+	}
+	held := make(chan heldAnswer, 1)
+	go func() {
+		slowCode, _, slowErr := fetch(client, "http://"+srv.BoundAddr().String()+"/slow")
+		held <- heldAnswer{code: slowCode, err: slowErr}
+	}()
+	<-arrived
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- srv.Shutdown(context.Background()) }()
+
+	var draining string
+	require.Eventually(t, func() bool {
+		drainingCode, drainingBody, drainingErr := fetch(client, probeURL)
+		if drainingErr != nil {
+			return false
+		}
+		draining = drainingBody
+		return drainingCode == http.StatusServiceUnavailable
+	}, probeRunDeadline, 10*time.Millisecond, "the probe listener must answer 503 while the application drains")
+	assert.JSONEq(t, notReadyBodyJSON, draining)
+	assert.Equal(t, int32(1), judged.Load(), "the stopping latch answers ahead of the App's handler")
+
+	releaseOnce()
+	slow := <-held
+	require.NoError(t, slow.err)
+	assert.Equal(t, http.StatusOK, slow.code, "the held application request finished its own drain")
+	require.NoError(t, <-shutdownDone)
+	require.NoError(t, awaitRun(t, errCh))
+}
+
+// fetch issues one GET and reports its failure to the caller rather than to t, so it is safe
+// from an Eventually condition and from a background goroutine, where require would abort a
+// goroutine that is not the test's.
+func fetch(client *http.Client, url string) (code int, body string, err error) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return 0, "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer func() { err = errors.Join(err, resp.Body.Close()) }()
+	raw, readErr := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(raw), readErr
+}
+
+// getOverHTTP is fetch for a call on the test goroutine: a failed request fails the test.
+func getOverHTTP(t *testing.T, client *http.Client, url string) (code int, body string) {
+	t.Helper()
+
+	code, body, err := fetch(client, url)
+	require.NoError(t, err)
+	return code, body
 }

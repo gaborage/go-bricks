@@ -4,17 +4,12 @@ import (
 	"context"
 	"errors"
 	"time"
-
-	"github.com/gaborage/go-bricks/config"
 )
 
-// The two readiness views — /ready's verdict and body, and the access-controlled debug
-// detail — are produced here from one probe run and one predicate, so they cannot disagree
-// (ADR-066, rules 2 and 3). One report feeds a third reader beside them: record hands each
-// judged kind's verdict to the store behind the readiness gauge (ADR-120).
-
-// statsSuffix turns a component name into its statistics key on the /ready 200 body.
-const statsSuffix = "_stats"
+// The readiness views are produced here from one probe run and one predicate, so they
+// cannot disagree (ADR-066 rule 2). /ready's own body carries the verdict alone since
+// ADR-120, so the report itself feeds two readers: the access-controlled debug detail, and
+// record, which hands each judged kind's verdict to the store behind the readiness gauge.
 
 const (
 	// notReadyStatus and criticalStatus complete the status vocabulary app.go opens: the
@@ -22,41 +17,19 @@ const (
 	// equal server's statusNotReady, the verdict /ready serves while the server is stopping.
 	notReadyStatus = "not ready"
 	criticalStatus = "critical"
-	// timeKey and the app-envelope keys of the /ready 200 body.
-	timeKey       = "time"
-	appNameKey    = "name"
-	appEnvKey     = "environment"
-	appVersionKey = "version"
 )
 
-// publicProjection copies the allowlisted counters out of a kind's details and stamps the
-// kind's own status, so <name>_stats mirrors <name> even for a kind that reports no details
-// at all. It copies rather than filtering in place because the debug view renders that same
-// map unredacted.
-func publicProjection(result *HealthStatus, allow []string) map[string]any {
-	public := make(map[string]any, len(allow))
-	for _, key := range allow {
-		if value, ok := result.Details[key]; ok {
-			public[key] = value
-		}
-	}
-	public[statusKey] = result.Status
-	return public
-}
-
-// probeResult is one probe's outcome, the allowlist of the description that produced it,
-// and the timing the debug view reports.
+// probeResult is one probe's outcome and the timing the debug view reports.
 type probeResult struct {
-	status      HealthStatus
-	publicStats []string
-	startedAt   time.Time
-	duration    time.Duration
+	status    HealthStatus
+	startedAt time.Time
+	duration  time.Duration
 }
 
-// readinessReport is every rendered kind's result, in slot order.
+// readinessReport is every judged kind's result, in slot order.
 type readinessReport []probeResult
 
-// readinessJudge is the one traversal behind both readiness views (ADR-066 rules 2 and 3,
+// readinessJudge is the one traversal behind both readiness views (ADR-066 rule 2,
 // ADR-067). It holds the slot list and, at judgement time, asks each slot for the probe
 // description that slot sealed after its start phase — no description is built and no
 // Prober is boxed per request.
@@ -98,9 +71,8 @@ func (j readinessJudge) walk(ctx context.Context, stopAtCritical bool) (report r
 		}
 		startedAt := time.Now()
 		result := probeResult{
-			status:      description.Run(ctx),
-			publicStats: description.publicStats,
-			startedAt:   startedAt,
+			status:    description.Run(ctx),
+			startedAt: startedAt,
 		}
 		result.duration = time.Since(startedAt)
 		report = append(report, result)
@@ -119,10 +91,9 @@ func notStartedResult() HealthStatus {
 
 // readinessFailure is a blocking result that names readiness itself, for a failure no kind
 // can carry: the judge asked before start, or a request canceled while it waited on the
-// shared judgment, before any kind was judged for it.
-//
-// SECURITY: componentReadiness is a fixed component identifier, like every other name that
-// reaches the unauthenticated /ready body (ADR-048).
+// shared judgment, before any kind was judged for it. Since ADR-120 that name reaches the
+// `Readiness check failed` log line alone — the 503 body carries the verdict and nothing
+// else — so it is what tells the two apart after the fact.
 func readinessFailure(err error) HealthStatus {
 	return HealthStatus{
 		Name:     componentReadiness,
@@ -151,12 +122,13 @@ func isReadyEquivalent(status string) bool {
 	}
 }
 
-// record is the third view of one report, beside readyBody and debugComponents: every judged
-// kind's verdict handed to the store the readiness gauge reads and the non-critical WARN is
+// record is the second view of one report, beside debugComponents: every judged kind's
+// verdict handed to the store the readiness gauge reads and the non-critical WARN is
 // emitted from. Both judgment entry points call it — the shared /ready flight and the debug
 // view's full() — so recording is a step at the entry point rather than a side effect inside
 // the walk. The gate's short-circuit appends the blocking kind before it returns, so the
-// recorded set is the judged set either way.
+// recorded set is the judged set either way. It is also what carries a kind's verdict out of
+// a /ready request at all, now that the body no longer does (ADR-120).
 //
 // Each verdict carries the startedAt of the probe that produced it, which is what the store
 // orders two judgments' verdicts by: the entry points run concurrently, so a report's commit
@@ -167,56 +139,28 @@ func (r readinessReport) record(s *verdictStore) {
 	}
 }
 
-// readyBody renders the unauthenticated 200 body: the fixed envelope, then every registered
-// kind's status under <name> and its public statistics under <name>_stats.
-func (r readinessReport) readyBody(app *config.AppConfig, now time.Time) map[string]any {
-	body := make(map[string]any)
-	body[statusKey] = readyStatus
-	body[timeKey] = now.Unix()
-	body["app"] = map[string]any{
-		appNameKey:    app.Name,
-		appEnvKey:     app.Env,
-		appVersionKey: app.Version,
-	}
-	for i := range r {
-		result := &r[i]
-		body[result.status.Name] = result.status.Status
-		body[result.status.Name+statsSuffix] = publicProjection(&result.status, result.publicStats)
-	}
-	return body
-}
-
-// notReadyBody renders the unauthenticated 503 body: the blocking kind's status and
-// ADR-048's sanitized error text, never its statistics and never any other kind's status.
-func notReadyBody(result *HealthStatus) map[string]any {
-	return map[string]any{
-		statusKey:   notReadyStatus,
-		result.Name: result.Status,
-		errorKey:    publicProbeError(result),
-	}
-}
-
-// publicProbeError picks the error text for the unauthenticated /ready body.
+// readyBody and notReadyBody are the whole unauthenticated /ready contract (ADR-120): one
+// verdict key, on either listener, for a caller that is only ever deciding whether to route
+// traffic here.
 //
-// SECURITY: probe errors carry connection identity — pgconn renders
-// `user=<username> database=<dbname>` plus the resolved host:port, and the cache probe's
-// connector names the Redis address, the dial IP and (on the cold path) the tenant key.
-// /ready has no authentication and no IP allowlist by design, so this never renders
-// result.Err: an empty PublicErr synthesizes "<name> unavailable", and PublicErr is only
-// an override for a probe that wants different fixed wording. The full error still reaches
-// the application log and, where debug is enabled and access-controlled, /_sys/health-debug
-// through HealthStatus.Err.
-// Err is deliberately not read here at all, so a nil one cannot panic this function
-// regardless of what a future caller does.
-func publicProbeError(result *HealthStatus) string {
-	if result.PublicErr != "" {
-		return result.PublicErr
-	}
-	return result.Name + " unavailable"
+// SECURITY: nothing derived from a probe reaches these bodies. /ready has no authentication
+// and no IP allowlist by design, and its throttles are two IP-keyed rate limits a
+// Go-assembled config leaves at zero entirely (ADR-049), so what it published was
+// enumerable: which kinds a service wires, their live counters, and — through the blocking
+// kind's name and ADR-048's "<kind> unavailable" text — which one is down. All of it now
+// lives on the `Readiness check failed` log line (component=<kind>, full error), the
+// access-controlled debug view, and the readiness gauge.
+func readyBody() map[string]string {
+	return map[string]string{statusKey: readyStatus}
+}
+
+func notReadyBody() map[string]string {
+	return map[string]string{statusKey: notReadyStatus}
 }
 
 // debugComponents renders the access-controlled debug view: one entry per registered kind,
-// carrying the full unredacted details the /ready projection withholds.
+// carrying the full unredacted details, which is where every counter and every error text
+// lives now that /ready answers its verdict alone (ADR-120).
 func (r readinessReport) debugComponents() map[string]componentHealth {
 	components := make(map[string]componentHealth, len(r))
 	for i := range r {

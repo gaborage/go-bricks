@@ -71,14 +71,14 @@ func sealAndJudge(a *App) {
 	a.judge = readinessJudge{slots: a.slots, started: true}
 }
 
-// TestReadyReportsEveryKindTheSlotsSealed pins the judgement path: /ready renders one entry
+// TestReadyReportsEveryKindTheSlotsSealed pins the judgement path: the run covers one entry
 // per kind whose slot sealed a description, in slot order, and nothing for a kind that
-// sealed none.
+// sealed none. The body is the verdict alone (ADR-120), so the report is where that is read.
 func TestReadyReportsEveryKindTheSlotsSealed(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
 	app := &App{cfg: cfg, logger: logger.New("error", false)}
 	installSealedSlots(app,
-		describe(componentDatabase, true, nil, nil, databasePublicStats),
+		describe(componentDatabase, true, nil, nil),
 		disabledProbe(componentCache),
 	)
 	// The streams kind before its manager exists: installed, sealing nothing.
@@ -87,10 +87,12 @@ func TestReadyReportsEveryKindTheSlotsSealed(t *testing.T) {
 	body, code := runReadyCheck(t, app, cfg)
 
 	require.Equal(t, 200, code)
-	assert.Equal(t, healthyStatus, body[componentDatabase])
-	assert.Equal(t, disabledStatus, body[componentCache])
-	assert.NotContains(t, body, componentStreams)
-	assert.NotContains(t, body, componentStreams+statsSuffix)
+	assert.Equal(t, readyBodyMap, body)
+
+	components := judgedComponents(t, app)
+	assert.Equal(t, healthyStatus, components[componentDatabase].Status)
+	assert.Equal(t, disabledStatus, components[componentCache].Status)
+	assert.NotContains(t, components, componentStreams)
 }
 
 // TestJudgeBeforeTheStartWalkFailsClosed pins the started fact rather than the empty-report

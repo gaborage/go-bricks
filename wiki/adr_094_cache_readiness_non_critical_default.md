@@ -10,6 +10,22 @@
   still aborts startup — that is a different question from reachability)
 - **Issue**: #1296 (split from #966, item 5); amended by #1316
 
+> **Amendment — 2026-09-28 (ADR-120, #1791).** The DECISION stands; two of its rendering
+> clauses do not. §1's "the outage is reported in the `/ready` `200` body
+> (`cache: "unhealthy"`, `cache_stats.errors` climbing)" and §2's "its sanitized body
+> (ADR-048)" describe a body that no longer exists:
+> [ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md) trims `/ready` to
+> `{"status":"ready"}` / `{"status":"not ready"}`, which names no kind at either status
+> code. Substitute the `app.readiness.status` gauge
+> (`readiness.kind=cache`, `readiness.critical=false`, `1` healthy / `0` unhealthy) and
+> `cache.manager.*` for the `200` body, and `/_sys/health-debug` for the per-kind detail.
+> Refining §1 rather than contradicting it: a non-critical outage is no longer silent in
+> logs — a WARN `Readiness component unhealthy` fires on the transition and at most once a
+> minute after it, with an INFO `Readiness component recovered` on the way out. No
+> `Readiness check failed` ERROR line is logged for it, exactly as §1 says; that line stays
+> critical-only. Untouched: the non-critical default, `critical: true` as the only way into
+> gating, the `503` when it is set. See [migrations.md](migrations.md) `[C69.1]`.
+>
 > **Amendment — 2026-09-02 (#1316).** Decision §4 is reversed: `CacheConfig.Critical`
 > is a plain `bool`, not a `*bool`. Under this ADR's own §1 an absent key and an
 > explicit `false` produce the same answer from `IsCacheCritical`, so the pointer's
