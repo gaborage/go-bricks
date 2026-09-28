@@ -101,6 +101,11 @@ func newTestRunnerWithLogger(t *testing.T, handler Handler, tracker *offsetTrack
 	}
 }
 
+// deliver drives one delivery through the runner as a handle opened now would.
+func (r *consumerRunner) deliver(streamName string, offset int64, message *amqp.Message, store offsetStorer) {
+	r.deliverer()(streamName, offset, message, store)
+}
+
 // bookOf wraps one prepared tracker in a book that hands it out for every stream,
 // which is how a plain single-stream consumer's bookkeeping behaves.
 func bookOf(tracker *offsetTracker) *offsetBook {
@@ -285,8 +290,8 @@ func TestOffsetBookFlushReportsAStreamWithNoStorer(t *testing.T) {
 	clock := newFakeClock()
 	book := newOffsetBook(func() *offsetTracker { return newOffsetTracker(1000, time.Hour, clock.Now) })
 	landing := &fakeStorer{}
-	require.NoError(t, book.trackerFor(testPartition0).record(7, nil, landing))
-	require.NoError(t, book.trackerFor(testPartition1).record(42, nil, landing))
+	require.NoError(t, book.trackerFor(0, testPartition0).record(7, nil, landing))
+	require.NoError(t, book.trackerFor(0, testPartition1).record(42, nil, landing))
 
 	failures := book.flush(storerByStream(map[string]offsetStorer{testPartition1: landing}))
 
@@ -319,6 +324,24 @@ func TestOffsetTrackerDefaultsToWallClock(t *testing.T) {
 	assert.WithinDuration(t, time.Now(), tracker.lastStoreAt, time.Minute)
 }
 
+func TestConsumerRunnerDropsWhatAHandleOpenedBeforeTheResetSettles(t *testing.T) {
+	book := newOffsetBook(func() *offsetTracker { return newOffsetTracker(1000, time.Hour, nil) })
+	runner := newTestRunnerWithBook(t, noopHandler, book)
+	replaced := runner.deliverer()
+	generation := book.currentGeneration()
+	book.reset()
+	require.Equal(t, generation+1, book.currentGeneration(), "a reset starts the next generation")
+	reopened := runner.deliverer()
+	storer := &fakeStorer{}
+
+	reopened(testStream, 3, amqpMessage("through the reopened handle"), storer)
+	replaced(testStream, 41, amqpMessage("settled late through the replaced handle"), storer)
+	failures := book.flush(storerByStream(map[string]offsetStorer{testStream: storer}))
+
+	assert.Empty(t, failures)
+	assert.Equal(t, []int64{3}, storer.offsets(), "only a handle opened after the reset is tracked")
+}
+
 func TestOffsetBookKeepsOneTrackerPerStream(t *testing.T) {
 	created := 0
 	book := newOffsetBook(func() *offsetTracker {
@@ -326,9 +349,9 @@ func TestOffsetBookKeepsOneTrackerPerStream(t *testing.T) {
 		return newOffsetTracker(1, time.Hour, nil)
 	})
 
-	first := book.trackerFor(testPartition0)
-	again := book.trackerFor(testPartition0)
-	other := book.trackerFor(testPartition1)
+	first := book.trackerFor(0, testPartition0)
+	again := book.trackerFor(0, testPartition0)
+	other := book.trackerFor(0, testPartition1)
 
 	assert.Same(t, first, again, "a stream keeps its tracker across deliveries")
 	assert.NotSame(t, first, other, "a second stream gets its own tracker")
@@ -359,8 +382,8 @@ func TestOffsetBookFlushCommitsEveryStream(t *testing.T) {
 	clock := newFakeClock()
 	book := newOffsetBook(func() *offsetTracker { return newOffsetTracker(1000, time.Hour, clock.Now) })
 	storer0, storer1 := &fakeStorer{}, &fakeStorer{}
-	require.NoError(t, book.trackerFor(testPartition0).record(7, nil, storer0))
-	require.NoError(t, book.trackerFor(testPartition1).record(42, nil, storer1))
+	require.NoError(t, book.trackerFor(0, testPartition0).record(7, nil, storer0))
+	require.NoError(t, book.trackerFor(0, testPartition1).record(42, nil, storer1))
 	require.Empty(t, storer0.offsets(), "the premise: nothing committed before the flush")
 
 	failures := book.flush(storerByStream(map[string]offsetStorer{
@@ -387,9 +410,9 @@ func TestOffsetBookFlushReportsEveryFailure(t *testing.T) {
 	failing0, failing2 := &fakeStorer{failErr: errPartition0}, &fakeStorer{failErr: errPartition2}
 	landing := &fakeStorer{}
 	// Below the count threshold, so no commit is attempted before the flush.
-	require.NoError(t, book.trackerFor(testPartition0).record(7, nil, failing0))
-	require.NoError(t, book.trackerFor(testPartition1).record(42, nil, landing))
-	require.NoError(t, book.trackerFor(testPartition2).record(99, nil, failing2))
+	require.NoError(t, book.trackerFor(0, testPartition0).record(7, nil, failing0))
+	require.NoError(t, book.trackerFor(0, testPartition1).record(42, nil, landing))
+	require.NoError(t, book.trackerFor(0, testPartition2).record(99, nil, failing2))
 
 	failures := book.flush(storerByStream(map[string]offsetStorer{
 		testPartition0: failing0,
@@ -415,9 +438,9 @@ func TestOffsetBookStoredOmitsStreamsWithoutACommit(t *testing.T) {
 	clock := newFakeClock()
 	book := newOffsetBook(func() *offsetTracker { return newOffsetTracker(1000, time.Hour, clock.Now) })
 	storer := &fakeStorer{}
-	book.trackerFor(testPartition0)
-	require.NoError(t, book.trackerFor(testPartition1).record(9, nil, storer))
-	require.NoError(t, book.trackerFor(testPartition1).flush(storer))
+	book.trackerFor(0, testPartition0)
+	require.NoError(t, book.trackerFor(0, testPartition1).record(9, nil, storer))
+	require.NoError(t, book.trackerFor(0, testPartition1).flush(storer))
 
 	assert.Equal(t, map[string]int64{testPartition1: 9}, book.stored(),
 		"a partition that never committed contributes no position")

@@ -37,7 +37,7 @@ type consumerDeclaration struct {
 	TenantOptional bool
 	// Screen rejects a message the consumer's handler could not have accepted,
 	// without running it. Only a typed declaration sets one; nil is "no screen",
-	// which is every hand-written Handler. See consumerRunner.deliver.
+	// which is every hand-written Handler. See consumerRunner.deliverFrom.
 	Screen func(*Message) error
 }
 
