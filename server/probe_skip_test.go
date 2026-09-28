@@ -199,3 +199,46 @@ func TestCreateProbeSkipperReadsPatternStampedByTheRouter(t *testing.T) {
 	assert.False(t, seen[probeSkipEncodedRdy], "a module route whose URL was rewritten to the probe path is not a probe")
 	assert.True(t, seen[""], "the genuine probe route is still a probe")
 }
+
+// TestRouterPath pins the helper to the router's own selection and, with the last two cases,
+// to the reason url.EscapedPath() cannot stand in for it: EscapedPath re-encodes Path when
+// RawPath is unset, and ignores a RawPath that fails its validity check even though echo's
+// router would still have matched on it.
+func TestRouterPath(t *testing.T) {
+	tests := []struct {
+		name          string
+		path, rawPath string
+		want          string
+		// escapedPathDiverges marks the cases that pin the non-equivalence: EscapedPath()
+		// answers something other than the path the router matched on.
+		escapedPathDiverges bool
+	}{
+		{name: "raw_path_set_wins", path: probeSkipHealth, rawPath: probeSkipEncodedHlth, want: probeSkipEncodedHlth},
+		{name: "no_raw_path_falls_back_to_path", path: probeSkipHealth, want: probeSkipHealth},
+		// EscapedPath() would return "/api/a%20b" here; the router matched the literal bytes.
+		{
+			name: "path_needing_encoding_is_not_re_encoded", path: probeSkipBase + "/a b",
+			want: probeSkipBase + "/a b", escapedPathDiverges: true,
+		},
+		// EscapedPath() discards this RawPath (it does not decode to Path); the router does not.
+		{
+			name: "invalid_raw_path_is_still_the_matched_path", path: probeSkipHealth,
+			rawPath: probeSkipReady, want: probeSkipReady, escapedPathDiverges: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Placeholder target, then assign: NewRequest panics on a target carrying a space,
+			// and no target can express a RawPath independently of Path.
+			r := httptest.NewRequestWithContext(context.Background(), http.MethodGet, probeSkipBase, http.NoBody)
+			r.URL.Path = tc.path
+			r.URL.RawPath = tc.rawPath
+
+			assert.Equal(t, tc.want, routerPath(r))
+			if tc.escapedPathDiverges {
+				assert.NotEqual(t, r.URL.EscapedPath(), routerPath(r),
+					"precondition: EscapedPath() diverges here, which is why it must not be substituted")
+			}
+		})
+	}
+}

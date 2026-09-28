@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	semconv "go.opentelemetry.io/otel/semconv/v1.39.0"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/config"
@@ -681,4 +682,40 @@ func TestOTelMiddlewareMetricAttributesProxyScheme(t *testing.T) {
 
 	assert.Equal(t, "https", attrs["url.scheme"], "X-Forwarded-Proto=https must override the default scheme")
 	assert.Equal(t, "GET", attrs["http.request.method"], "default attributes must still be present")
+}
+
+// TestOTelMiddlewareSpanURLPathIsTheRoutedPath pins the incoming-request span's url.path to the
+// path the router keyed on (routerPath), so it agrees with the http.route on the same span and
+// with the access log; echo-opentelemetry's own value is the decoded r.URL.Path (#1817).
+func TestOTelMiddlewareSpanURLPathIsTheRoutedPath(t *testing.T) {
+	e, exporter := setupTestServerWithTracing(t)
+
+	e.GET(probeSkipHealth, okEchoHandler)
+	e.GET(probeSkipModuleRoute, okEchoHandler)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, probeSkipEncodedHlth, http.NoBody)
+	require.Equal(t, probeSkipEncodedHlth, req.URL.RawPath, "precondition: the raw path keeps the encoding the router matches")
+	require.NotEqual(t, probeSkipEncodedHlth, req.URL.Path, "precondition: the decoded path differs, which is the trap")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+
+	var urlPaths []string
+	var route string
+	for _, attr := range spans[0].Attributes {
+		switch attr.Key {
+		case semconv.URLPathKey:
+			urlPaths = append(urlPaths, attr.Value.AsString())
+		case semconv.HTTPRouteKey:
+			route = attr.Value.AsString()
+		}
+	}
+
+	require.Len(t, urlPaths, 1, "the span carries exactly one url.path")
+	assert.Equal(t, probeSkipEncodedHlth, urlPaths[0], "url.path must be the path the router keyed on")
+	assert.NotEqual(t, req.URL.Path, urlPaths[0], "url.path must not name the route the decoded path would have matched")
+	assert.Equal(t, probeSkipModuleRoute, route, "http.route must be the template this same request matched")
 }
