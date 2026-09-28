@@ -369,6 +369,59 @@ func TestStartRuntimeGaugesRegistersAgainstTheAppsProvider(t *testing.T) {
 		"the registration Shutdown drops stops reporting")
 }
 
+// foreignGaugeMeter builds every instrument on its own meter except one name, which it takes
+// from a second meter of the same provider. Both are real SDK instruments; the SDK rejects the
+// foreign one at registration — an observable registered with a Meter other than the one that
+// built it — while it registers the rest, which is the (live registration, non-nil error) return
+// the error path must not leak. It records what RegisterCallback handed back, so the test pins
+// that pair rather than assuming the SDK produced it.
+type foreignGaugeMeter struct {
+	metric.Meter
+	foreign      metric.Meter
+	foreignName  string
+	registration metric.Registration
+	err          error
+}
+
+func (m *foreignGaugeMeter) Int64ObservableGauge(name string, opts ...metric.Int64ObservableGaugeOption) (metric.Int64ObservableGauge, error) {
+	if name == m.foreignName {
+		return m.foreign.Int64ObservableGauge(name, opts...)
+	}
+	return m.Meter.Int64ObservableGauge(name, opts...)
+}
+
+func (m *foreignGaugeMeter) RegisterCallback(f metric.Callback, instruments ...metric.Observable) (metric.Registration, error) {
+	m.registration, m.err = m.Meter.RegisterCallback(f, instruments...)
+	return m.registration, m.err
+}
+
+// TestRegisterRuntimeGaugesDropsTheRegistrationItFailsWith pins the callback leak the error path
+// would otherwise open. A partly rejected registration is still live, and registerRuntimeGauges
+// hands back no cleanup when it errors, so a registration left standing would observe the slots
+// for the rest of the process with nothing able to stop it. The verdict recorded below is the
+// leak indicator: it feeds a gauge the SDK accepted, so a series after the error means the
+// callback is still firing.
+func TestRegisterRuntimeGaugesDropsTheRegistrationItFailsWith(t *testing.T) {
+	mp := obtest.NewTestMeterProvider()
+	meter := &foreignGaugeMeter{
+		Meter:       mp.Meter(appMeterName),
+		foreign:     mp.Meter(appMeterName + "/foreign"),
+		foreignName: metricStreamsPublishers,
+	}
+	store, _, _ := newTestVerdictStore()
+	store.record(healthy(componentDatabase, true))
+
+	unregister, err := registerRuntimeGauges(meter, gaugeSources{verdicts: store})
+
+	require.Error(t, err)
+	assert.Nil(t, unregister, "a failed registration hands back no cleanup")
+	require.NotNil(t, meter.registration, "the premise: the SDK returned a registration alongside its error")
+	require.ErrorContains(t, meter.err, "invalid registration",
+		"the rejection must be the meter mismatch, not the empty aggregation the SDK filters out of its error")
+	assert.Empty(t, gaugeDataPoints(t, mp.Collect(t), metricReadinessStatus),
+		"the registration returned with the error keeps observing until it is unregistered")
+}
+
 // TestStartRuntimeGaugesToleratesAProviderlessApp pins that registration is skipped, never fatal
 // and never a panic, for the one shape that carries no meter provider: a hand-built App with no
 // observability at all.

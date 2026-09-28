@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 
@@ -130,6 +131,16 @@ func registerRuntimeGauges(meter metric.Meter, sources gaugeSources) (func() err
 
 	registration, err := meter.RegisterCallback(observe, observables...)
 	if err != nil {
+		// RegisterCallback hands back a LIVE registration alongside its error when it accepted
+		// some observables and rejected others: the accepted ones are already firing while the
+		// rejections are joined into err (sdk/metric/meter.go). This path returns no cleanup, so
+		// a registration left standing would go on observing the slots for the rest of the
+		// process — past Shutdown, which would have nothing to stop it with.
+		if registration != nil {
+			if unregisterErr := registration.Unregister(); unregisterErr != nil {
+				err = errors.Join(err, unregisterErr)
+			}
+		}
 		return nil, fmt.Errorf("app: register runtime gauges failed: %w", err)
 	}
 	return registration.Unregister, nil
