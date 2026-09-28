@@ -80,7 +80,16 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 	// at route registration), so the keystore's role log is complete.
 	warnDualRoleKeys(a.logger, a.registry.deps.KeyStore)
 
-	return a.runPostRegisterRoutes(routesStart)
+	if err := a.runPostRegisterRoutes(routesStart); err != nil {
+		return err
+	}
+
+	// Last, and nowhere earlier: after the start walk, the first point at which the streams
+	// manager is written, and after every fallible step, because Run returns a prepareRuntime
+	// failure without a Shutdown — a callback registered before one of them failed would keep
+	// observing slots that never serve.
+	a.startRuntimeGauges()
+	return nil
 }
 
 // runPostRegisterRoutes hands the consumer's hook this App's route table once every
@@ -583,11 +592,20 @@ func (a *App) Shutdown(ctx context.Context) error {
 		}, &errs)
 	}
 
-	// 2. Stop each kind's inbound work (connections are closed later, in step 5, via the
-	//    slots' closers). Done before module shutdown so the framework stops delivering fresh
-	//    messages to modules that are about to be torn down.
-	//    Deliberately unguarded, unlike prepareRuntime: teardown is best-effort and must not
-	//    fail on a hand-built App that never installed slots.
+	// 2. Stop the periodic and inbound work the kinds carry, before anything it reads is torn
+	//    down. The gauge callback goes first, because stopSlots is what it must not overlap:
+	//    shutdownStreamConsumers' StopConsumers holds the same exclusive manager mutex the
+	//    streams gauge takes, across offset-flush round trips bounded by a 5s budget
+	//    (messaging/streams/manager.go). A collection tick landing inside that hold blocks the
+	//    exporter goroutine for the rest of it — the callback ignores its context, and a mutex
+	//    acquire is uninterruptible. Accepted cost: step 4's final flush no longer carries the
+	//    last gauge readings.
+	//    Then each kind's inbound work (connections are closed later, in step 5, via the slots'
+	//    closers). Done before module shutdown so the framework stops delivering fresh messages
+	//    to modules that are about to be torn down.
+	//    Both deliberately unguarded, unlike prepareRuntime: teardown is best-effort and must
+	//    not fail on a hand-built App that never installed slots.
+	a.stopRuntimeGauges()
 	a.stopSlots(ctx)
 
 	// 3. Shut down modules — no new HTTP requests or AMQP deliveries are admitted at this
@@ -596,7 +614,9 @@ func (a *App) Shutdown(ctx context.Context) error {
 		return a.registry.Shutdown()
 	}, &errs)
 
-	// 4. Flush and shutdown observability (export pending telemetry).
+	// 4. Flush and shutdown observability (export pending telemetry). Once the provider is down
+	//    the pinned SDK makes any later collection impossible, so nothing can reach the gauges
+	//    step 2 already unregistered.
 	a.shutdownObservability(ctx)
 
 	// 5. Close remaining resources (DB pools, messaging connections, etc.). Each manager's
@@ -725,6 +745,9 @@ func (a *App) readinessFlight(leaderCtx context.Context) (verdict readinessVerdi
 	ctx, cancel := a.readinessFlightContext(leaderCtx)
 	defer cancel()
 	report, blocking, found := a.judge.gate(ctx)
+	// Inside the recovered scope, so a panic here is still this flight's error rather than one
+	// DoChan re-raises on a goroutine no recover reaches.
+	report.record(a.verdicts)
 	completed = true
 	return readinessVerdict{report: report, blocking: blocking, found: found}, nil
 }

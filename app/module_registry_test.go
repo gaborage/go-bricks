@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -29,13 +30,18 @@ type recEvent struct {
 	str   map[string]string
 	dur   map[string]time.Duration
 	ints  map[string]int
+	bools map[string]bool
 	level string
 	err   string
 	msg   string
 }
 
 func (l *recLogger) event(level string) logger.LogEvent {
-	return &recEvent{l: l, level: level, str: map[string]string{}, dur: map[string]time.Duration{}, ints: map[string]int{}}
+	return &recEvent{
+		l: l, level: level,
+		str: map[string]string{}, dur: map[string]time.Duration{},
+		ints: map[string]int{}, bools: map[string]bool{},
+	}
 }
 func (l *recLogger) Info() logger.LogEvent                     { return l.event("info") }
 func (l *recLogger) Error() logger.LogEvent                    { return l.event("error") }
@@ -45,16 +51,24 @@ func (l *recLogger) Fatal() logger.LogEvent                    { return l.event(
 func (l *recLogger) WithContext(_ any) logger.Logger           { return l }
 func (l *recLogger) WithFields(_ map[string]any) logger.Logger { return l }
 
-func (l *recLogger) routeRegisteredLines() []recEvent {
+// linesWith returns every recorded event whose terminal Msg contains substr, so a test asserts
+// on what was emitted rather than on where it landed in the stream. It is the one walk over the
+// recorder: loggedEvent, loggedMsgContains and loggedCount (debug_handlers_test.go) are all
+// projections of it.
+func (l *recLogger) linesWith(substr string) []recEvent {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	var out []recEvent
 	for _, e := range l.events {
-		if e.msg == "Route registered" {
+		if strings.Contains(e.msg, substr) {
 			out = append(out, e)
 		}
 	}
 	return out
+}
+
+func (l *recLogger) routeRegisteredLines() []recEvent {
+	return l.linesWith("Route registered")
 }
 
 func (e *recEvent) Msg(msg string) {
@@ -77,7 +91,7 @@ func (e *recEvent) Uint64(_ string, _ uint64) logger.LogEvent     { return e }
 func (e *recEvent) Dur(k string, v time.Duration) logger.LogEvent { e.dur[k] = v; return e }
 func (e *recEvent) Interface(_ string, _ any) logger.LogEvent     { return e }
 func (e *recEvent) Bytes(k string, v []byte) logger.LogEvent      { e.str[k] = string(v); return e }
-func (e *recEvent) Bool(_ string, _ bool) logger.LogEvent         { return e }
+func (e *recEvent) Bool(k string, v bool) logger.LogEvent         { e.bools[k] = v; return e }
 func (e *recEvent) Enabled() bool                                 { return true }
 
 // fakeRouteModule registers its descriptors straight into DefaultRouteRegistry

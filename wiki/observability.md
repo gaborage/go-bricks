@@ -4,9 +4,9 @@ GoBricks provides production-grade observability built on OpenTelemetry: distrib
 
 ## Observability
 
-**Key Features:** W3C traceparent propagation, OpenTelemetry metrics (database/HTTP/AMQP/Go runtime), health endpoints (`/health`, `/ready`), dual-mode logging with conditional sampling, batching and export timeouts gated on `observability.environment` (500ms/10s for `development`, 5s/60s otherwise — see "Export Timeout Configuration" below)
+**Key Features:** W3C traceparent propagation, OpenTelemetry metrics (database/HTTP/AMQP/readiness/Go runtime), health endpoints (`/health`, `/ready`), dual-mode logging with conditional sampling, batching and export timeouts gated on `observability.environment` (500ms/10s for `development`, 5s/60s otherwise — see "Export Timeout Configuration" below)
 
-**Per-Subsystem Instrumented Meters:** The framework ships three automatically-instrumented meters alongside the Go runtime meter. `go-bricks/database` records query durations and pool utilisation. `go-bricks/messaging` records AMQP publish and consume durations and `messaging.settlement.total` (`lane`, `outcome`). `go-bricks/httpclient` records five outbound HTTP instruments: `http.client.request.duration`, `http.client.active_requests`, `http.client.request.body.size`, `http.client.response.body.size`, and `http.client.retries.total`. When `observability.enabled` is false no metrics are emitted; the `database` meter additionally short-circuits before building any attributes (true zero overhead), while `messaging`/`httpclient` route into the global no-op provider (data discarded, attribute construction not yet skipped — a tracked follow-up). See [httpclient.md#metrics](httpclient.md#metrics) for the full attribute reference.
+**Per-Subsystem Instrumented Meters:** The framework ships four automatically-instrumented meters alongside the Go runtime meter. `go-bricks/database` records query durations and pool utilisation. `go-bricks/messaging` records AMQP publish and consume durations and `messaging.settlement.total` (`lane`, `outcome`). `go-bricks/httpclient` records five outbound HTTP instruments: `http.client.request.duration`, `http.client.active_requests`, `http.client.request.body.size`, `http.client.response.body.size`, and `http.client.retries.total`. `go-bricks/app` records the readiness and manager gauges (see "Readiness and Manager Gauges" below). When `observability.enabled` is false no metrics are emitted; the `database` meter additionally short-circuits before building any attributes (true zero overhead), while `messaging`/`httpclient` route into the global no-op provider (data discarded, attribute construction not yet skipped — a tracked follow-up). See [httpclient.md#metrics](httpclient.md#metrics) for the full attribute reference.
 
 **Per-Subsystem Instrumented Tracers:** The framework ships three OTel tracers under matching scopes. `go-bricks/database` emits CLIENT-kind spans per query. `go-bricks/messaging` emits PRODUCER/CONSUMER spans per AMQP publish/consume. `go-bricks/httpclient` emits CLIENT-kind spans per outbound HTTP call — one parent "Do" span (the logical request rollup) and one child attempt span per retry attempt — and injects `traceparent` headers via the OTel propagator so downstream services join the trace. When `observability.enabled` is false no spans are emitted; the `database` tracer additionally short-circuits before building any span attributes (true zero overhead), while `messaging`/`httpclient` route into the global no-op provider (spans dropped, attribute construction not yet skipped — a tracked follow-up). See [httpclient.md#tracing](httpclient.md#tracing) for the span tree, attribute reference, and status-mapping rules.
 
@@ -304,6 +304,28 @@ an exemplar on a hand-triggered job resolves to that job's own trace, not to the
 metrics flowing while every exemplar is silently dropped and `trace_id`/`span_id`
 vanish from log lines — leaving `correlation_id` as the only correlation
 anywhere. Nothing errors and nothing warns.
+
+## Readiness and Manager Gauges
+
+The `go-bricks/app` meter publishes eight Int64 observable gauges: each component's last readiness verdict, and the manager counters no other instrument covers. [ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md) will trim the `/ready` 200 body to `{"status":"ready"}`; these gauges ship first so the replacement is in place before the per-kind status and `<kind>_stats` keys go. Until that trim lands, `/ready` still carries those keys and these gauges report alongside them. They are registered once every resource slot has started — the first point at which the streams manager exists if the lane runs at all — and unregistered before those slots stop, so no collection can land inside a manager's own teardown. With `observability.enabled: false` they land on the no-op provider and export nothing; a failed registration is one WARN (`Readiness gauges unavailable`), never fatal.
+
+`app.readiness.status` reports each component's **last verdict** — the status the most recent readiness judgment (`/ready` or `/_sys/health-debug`) recorded for it — with attributes `readiness.kind` (`database`, `messaging`, `cache`, `streams`) and `readiness.critical` (that kind's critical setting). The value is `1` for `healthy` and `0` for `unhealthy`. A component has a series only while its last verdict is one of those two: `disabled`, `not_configured`, `per_tenant`, and a component no judgment has reached yet, have no series at all — so a dashboard never shows an unused component as healthy, and a deploy never starts at `0`.
+
+**⚠️ The last verdict is a view, never an input, so alerting keys on the probe itself and not on this series alone.** Judging never consults it and the callback never runs a probe — collection reads what a judgment already decided, adding no backend round-trip — which means the series is only as fresh as the last judgment: with nothing polling `/ready`, it holds a stale value indefinitely.
+
+The remaining seven gauges read their manager's in-memory `Stats()` at collection time:
+
+| Metric | Reports | `/ready` key it replaces |
+| --- | --- | --- |
+| `messaging.consumer.registries` | Tenant keys holding a consumer registry | `messaging_stats.consumer_registries` |
+| `messaging.consumer.declared` | Consumers declared across those registries | `messaging_stats.declared_consumers` |
+| `messaging.consumer.subscribed` | Declared consumers currently subscribed to their queue | `messaging_stats.subscribed_consumers` |
+| `messaging.consumer.resubscribes` | Re-subscribe attempts across those consumers since start | `messaging_stats.consumer_resubscribes` |
+| `messaging.consumer.max_fail_streak` | Largest current re-subscribe failure streak across those consumers | `messaging_stats.consumer_max_fail_streak` |
+| `messaging.streams.consumers` | Native stream consumers running on this process | `streams_stats.consumers` |
+| `messaging.streams.publishers` | Native stream publishers open on this process | `streams_stats.publishers` |
+
+A group reports nothing while its manager does not exist — messaging unconfigured, or the native streams lane never started — and, as with the verdict gauge, absent means **no series, not a zero**: a reported `0` would read as an idle consumer rather than an absent one. Database pool and cache manager counters already have their own instruments (`db.client.connection.*`, `cache.manager.*`), and the manager counters that no gauge covers stay on the IP-allowlisted `/_sys/health-debug`, which remains the place for per-component detail and full error text.
 
 ## Custom Metrics
 

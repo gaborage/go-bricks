@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -337,6 +338,10 @@ func (b *Builder) CreateHealthProbes() *Builder {
 	}
 
 	b.warnIfQueryParameterLogging()
+	// The store lives on App and nowhere else: the judge stays a pure slots → report walk, and
+	// each judgment entry point records the report it got (readinessReport.record). b.app.logger
+	// is b.logger, which CreateApp already required to exist.
+	b.app.verdicts = newVerdictStore(b.app.logger, time.Now)
 	b.app.judge = readinessJudge{slots: b.app.slots}
 
 	return b
