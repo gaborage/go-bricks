@@ -312,6 +312,7 @@ func (oneStreamDeclared) Stats() streamruntime.DeclStats { return streamruntime.
 func (r *stampRecordingRuntime) CollectDeclarations([]streamruntime.ModuleNamer, logger.Logger) (streamruntime.Declarations, error) {
 	return oneStreamDeclared{}, nil
 }
+
 func (r *stampRecordingRuntime) NewManager(*streamruntime.ManagerOptions) streamruntime.Handle {
 	return stampRecordingHandle{runtime: r}
 }

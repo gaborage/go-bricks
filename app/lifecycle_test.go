@@ -361,10 +361,14 @@ func TestMessagingDeclarationsGateAsksTheMessagingRow(t *testing.T) {
 		plan    resourcePlan
 		refuses bool
 	}{
-		{name: "messaging_absent_beside_a_database", refuses: true,
-			plan: resourcePlan{database: row(componentDatabase, keyPresent), messaging: row(componentMessaging, keyAbsent)}},
-		{name: "messaging_present_beside_no_database",
-			plan: resourcePlan{database: row(componentDatabase, keyAbsent), messaging: row(componentMessaging, keyPresent)}},
+		{
+			name: "messaging_absent_beside_a_database", refuses: true,
+			plan: resourcePlan{database: row(componentDatabase, keyPresent), messaging: row(componentMessaging, keyAbsent)},
+		},
+		{
+			name: "messaging_present_beside_no_database",
+			plan: resourcePlan{database: row(componentDatabase, keyAbsent), messaging: row(componentMessaging, keyPresent)},
+		},
 		{name: "multitenant_without_a_root_broker", plan: planned("mt")},
 		{name: "multitenant_shared_without_a_root_broker", plan: planned("mt shared")},
 		{name: "dynamic_store_without_a_root_broker", plan: planned("dynamic"), refuses: true},
