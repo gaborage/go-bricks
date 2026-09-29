@@ -351,7 +351,8 @@ func TestMessagingDeclarationsGateAsksTheMessagingRow(t *testing.T) {
 	publisherDeclaringModule{}.DeclareMessaging(decls)
 	row := func(kind string, presence keyPresence) kindPlan { return kindPlan{kind: kind, presence: presence} }
 	planned := func(spec string) resourcePlan {
-		in, _ := planMode{spec: spec}.inputs()
+		mode := planMode{spec: spec}
+		in, _ := mode.inputs()
 		return planResources(in.cfg, in.opts, in.store)
 	}
 
