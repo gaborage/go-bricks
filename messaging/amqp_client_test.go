@@ -69,6 +69,10 @@ type fakeChannel struct {
 	// unroutableRemaining answers that many successful Mandatory publishes with
 	// basic.return then basic.ack for the same tag, as a broker does.
 	unroutableRemaining int
+	// returnNonMandatory lets unroutableRemaining answer a non-mandatory publish
+	// with a return too, which no broker sends, so a test can prove the client
+	// ignores a return it did not ask for.
+	returnNonMandatory bool
 	// autoAck acks every other successful publish from inside the fake, so the
 	// external ack helpers must not also ack it.
 	autoAck bool
@@ -177,7 +181,7 @@ func (f *fakeChannel) PublishWithContext(ctx context.Context, exchange, key stri
 // hold f.mu.
 func (f *fakeChannel) answerLocked(msg *amqp.Publishing, exchange, key string, mandatory bool, tag uint64) {
 	ack := amqp.Confirmation{DeliveryTag: tag, Ack: true}
-	if mandatory && f.unroutableRemaining > 0 {
+	if (mandatory || f.returnNonMandatory) && f.unroutableRemaining > 0 {
 		f.unroutableRemaining--
 		if f.notifyReturnCh != nil {
 			f.notifyReturnCh <- amqp.Return{
@@ -2859,7 +2863,7 @@ func retryReasonsFromMetrics(t *testing.T, rm metricdata.ResourceMetrics) []stri
 // to each of the three failed-attempt arms: the arm's log message and its metric
 // and span-event reasons each reach their own sink, along with the log fields and
 // the span-event attribute keys in emission order, plus the NACK arm's delivery
-// tag on both the log and the span. The reason vocabularies themselves are pinned
+// tag on both the log and the span, which the returned arm carries too. The reason vocabularies themselves are pinned
 // against the production arms by TestPublishAttemptClassifiesTheOutcome.
 func TestPublishRetryEpilogueRecordsEveryArm(t *testing.T) {
 	publishErr := errors.New("boom")
@@ -2894,6 +2898,33 @@ func TestPublishRetryEpilogueRecordsEveryArm(t *testing.T) {
 				spanReason:   "message not acknowledged",
 			},
 			wantLogPairs: [][2]string{{"delivery_tag", "7"}, {"retry_count", "3"}},
+			wantAttrKeys: []string{
+				"reason",
+				string(semconv.MessagingRabbitMQMessageDeliveryTagKey),
+				"retry_count",
+			},
+			wantSpanTag: 7,
+		},
+		{
+			name: "returned_arm",
+			arm: &retryArm{
+				cause:        ErrPublishUnroutable,
+				deliveryTag:  &nackTag,
+				returned:     &publishReturn{replyCode: amqp.NoRoute, replyText: "NO_ROUTE", messageID: "m-1"},
+				logMsg:       "Message returned by broker as unroutable, retrying...",
+				metricReason: "returned",
+				spanReason:   "message returned",
+			},
+			wantLogPairs: [][2]string{
+				{"delivery_tag", "7"},
+				{"amqp_reply_code", "312"},
+				{"amqp_reply_text", "NO_ROUTE"},
+				{"exchange", "ex"},
+				{"routing_key", "rk"},
+				{"message_id", "m-1"},
+				{"retry_count", "3"},
+			},
+			// The broker's reply text stays off the span (ADR-083).
 			wantAttrKeys: []string{
 				"reason",
 				string(semconv.MessagingRabbitMQMessageDeliveryTagKey),
@@ -2945,8 +2976,71 @@ func TestPublishRetryEpilogueRecordsEveryArm(t *testing.T) {
 	}
 }
 
+// TestPublishRetryEpilogueRecordsNoRetryOnTheLastAttempt requires the attempt
+// that reaches the ceiling to skip every retry sink: no retry follows it, so a
+// "retrying..." WARN, a retry count or a retry span event would each over-count by
+// one. The epilogue is shared, so this holds for every arm. The span instead gets
+// one exhausted event carrying the attempt's reason and delivery tag, since the
+// terminal status records only the exhaustion wrapper's type.
+func TestPublishRetryEpilogueRecordsNoRetryOnTheLastAttempt(t *testing.T) {
+	exporter, cleanupTracing := setupTestTracing(t)
+	defer cleanupTracing()
+	mp, cleanupMetrics := setupConsumeMetrics(t)
+	defer cleanupMetrics()
+
+	log := newRecordingLogger()
+	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: log, done: make(chan bool), maxPublishAttempts: 2}
+	ctx, span := otel.Tracer("retry-epilogue-test").Start(context.Background(), "publish")
+	tag := uint64(7)
+	arm := &retryArm{
+		cause:        ErrPublishUnroutable,
+		deliveryTag:  &tag,
+		returned:     &publishReturn{replyCode: amqp.NoRoute, replyText: "NO_ROUTE", messageID: "m-1"},
+		logMsg:       "Message returned by broker as unroutable, retrying...",
+		metricReason: "returned",
+		spanReason:   "message returned",
+	}
+
+	err := c.publishRetryEpilogue(ctx, publishRetryTestOptions, time.Now(), span, 2, arm)
+	span.End()
+
+	require.ErrorIs(t, err, ErrPublishRetriesExhausted)
+	require.ErrorIs(t, err, ErrPublishUnroutable)
+	require.Len(t, log.Lines(), 1, "the last attempt must not log a retry")
+	// The last attempt's details are logged once, on the terminal WARN.
+	line := log.Line(t, "Publish failed after its last attempt, giving up")
+	assert.Equal(t, logger.LevelWarn, line.Level)
+	assert.Equal(t, []string{ErrPublishUnroutable.Error()}, line.Values("error"))
+	assert.Equal(t, []string{"2"}, line.Values("attempts"))
+	assert.Equal(t, []string{"7"}, line.Values("delivery_tag"))
+	assert.Equal(t, []string{"312"}, line.Values("amqp_reply_code"))
+	assert.Equal(t, []string{"NO_ROUTE"}, line.Values("amqp_reply_text"))
+	assert.Equal(t, []string{"m-1"}, line.Values("message_id"))
+	assert.Empty(t, line.Values("retry_count"), "the last attempt is not a retry")
+	assert.Nil(t, obtest.FindMetric(mp.Collect(t), "messaging.client.publish.retries"), "the last attempt must not count a retry")
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	var exhausted [][]attribute.KeyValue
+	for _, event := range spans[0].Events {
+		assert.NotEqual(t, eventPublishRetry, event.Name, "the last attempt must not add a retry event")
+		if event.Name == eventPublishExhausted {
+			exhausted = append(exhausted, event.Attributes)
+		}
+	}
+	require.Len(t, exhausted, 1, "the last attempt must add one exhausted event")
+	// The broker's reply text stays off the span (ADR-083).
+	assert.Equal(t, []string{
+		"reason",
+		string(semconv.MessagingRabbitMQMessageDeliveryTagKey),
+		"attempts",
+	}, attributeKeys(exhausted[0]))
+	assertAttributeValue(t, exhausted[0], "reason", "message returned")
+	assertAttribute(t, exhausted[0], string(semconv.MessagingRabbitMQMessageDeliveryTagKey), int64(7))
+	assertAttribute(t, exhausted[0], "attempts", int64(2))
+}
+
 // TestPublishRetryEpilogueCeilingAndBackoff pins the attempt ceiling and the
-// cancelable wait the epilogue applies after recording an arm.
+// cancelable wait the epilogue applies.
 func TestPublishRetryEpilogueCeilingAndBackoff(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -3082,9 +3176,11 @@ type publishAttemptCase struct {
 	name         string
 	publishErr   error
 	confirm      *amqp.Confirmation
+	unroutable   bool // the broker returns the publish before acking it
 	wantCause    error
 	wantLogCause bool
 	wantTag      uint64 // 0 when the arm carries no delivery tag
+	wantReturned bool
 	wantLogMsg   string
 	wantMetric   string
 	wantSpan     string
@@ -3143,6 +3239,17 @@ func TestPublishAttemptClassifiesTheOutcome(t *testing.T) {
 			wantBackoff: 7 * time.Millisecond,
 		},
 		{
+			name:         "returned_arm",
+			unroutable:   true,
+			wantCause:    ErrPublishUnroutable,
+			wantTag:      1,
+			wantReturned: true,
+			wantLogMsg:   "Message returned by broker as unroutable, retrying...",
+			wantMetric:   "returned",
+			wantSpan:     "message returned",
+			wantBackoff:  7 * time.Millisecond,
+		},
+		{
 			name:        "confirm_timeout_arm",
 			wantCause:   ErrPublishConfirmTimeout,
 			wantLogMsg:  "Publish confirmation timeout, retrying...",
@@ -3162,6 +3269,9 @@ func TestPublishAttemptClassifiesTheOutcome(t *testing.T) {
 			// Mandatory on every case, so every exit must also drop the index entry.
 			options := publishRetryTestOptions
 			options.Mandatory = true
+			if tt.unroutable {
+				ch.unroutableRemaining = 1
+			}
 			c := newClientWithFakeChannel(t, ch)
 			c.resendDelay = 5 * time.Millisecond
 			c.nackBackoff = 7 * time.Millisecond
@@ -3198,10 +3308,16 @@ func (tc *publishAttemptCase) assertArm(t *testing.T, arm *retryArm) {
 		require.NoError(t, arm.logCause, "only the publish-error arm logs a cause")
 	}
 	if tc.wantTag == 0 {
-		assert.Nil(t, arm.deliveryTag, "only the NACK arm carries a delivery tag")
+		assert.Nil(t, arm.deliveryTag, "only the NACK and returned arms carry a delivery tag")
 	} else {
 		require.NotNil(t, arm.deliveryTag)
 		assert.Equal(t, tc.wantTag, *arm.deliveryTag)
+	}
+	if tc.wantReturned {
+		require.NotNil(t, arm.returned)
+		assert.Equal(t, uint16(amqp.NoRoute), arm.returned.replyCode)
+	} else {
+		assert.Nil(t, arm.returned, "only the returned arm carries the broker's return")
 	}
 	assert.Equal(t, tc.wantLogMsg, arm.logMsg)
 	assert.Equal(t, tc.wantMetric, arm.metricReason)

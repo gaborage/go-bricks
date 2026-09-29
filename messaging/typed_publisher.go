@@ -128,7 +128,11 @@ var _ EventPublisher[struct{}] = (*Publisher[struct{}])(nil)
 //
 // An encode or seal failure is returned wrapped and publishes nothing. Every
 // other error is the client's own (ErrInvalidPublishDestination,
-// ErrPublishRetriesExhausted, ...) and is returned unwrapped.
+// ErrPublishRetriesExhausted, ...) and is returned unwrapped. The chain carries
+// the cause of the last attempt that failed only: for a handle declared
+// Mandatory it holds ErrPublishUnroutable when the broker returned that attempt
+// because no queue is bound to receive it, after the attempt limit or wrapped
+// under the deadline or shutdown that cut the retries short (ADR-122).
 //
 // Safe for concurrent use: the handle is never written after construction and
 // the client receives a fresh copy of the declared headers on every call.

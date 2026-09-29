@@ -733,7 +733,7 @@ messaging:
 ### Bounded publish retries (`reconnect.maxpublishattempts`)
 
 A publish through `Publisher[T].Publish` retries a failing publish — publish error,
-broker NACK, or confirmation timeout — but the loop is **bounded** by
+broker NACK, a `Mandatory` publish the broker returned, or confirmation timeout — but the loop is **bounded** by
 `reconnect.maxpublishattempts` (default 5). On exhaustion it returns
 `messaging.ErrPublishRetriesExhausted` **wrapping the last cause**, so callers can classify the
 failure.
@@ -748,7 +748,7 @@ full 5s `readytimeout`.
 A publish-error retry waits `reconnect.resenddelay` (default 5s) between attempts —
 up to `maxpublishattempts - 1` waits. At defaults that is 20s and does not outrun the
 150s timeout-path figure. Raise `resenddelay` above `connectiontimeout` and the
-publish-error path can exceed 150s/155s. NACK retries use the fixed 100ms
+publish-error path can exceed 150s/155s. NACK and return retries use the fixed 100ms
 `nackBackoff`, which is not configurable.
 
 When the caller's context carries a deadline and a confirmation timeout leaves less
@@ -801,7 +801,7 @@ guard. Size a hard end-to-end SLO with a transport-level control (a socket write
 deadline or connection heartbeat), not this key alone.
 
 Expiry surfaces as `context.DeadlineExceeded`, wrapping the last cause
-(`ErrPublishNacked` / `ErrPublishConfirmTimeout`) exactly as a caller-supplied deadline
+(`ErrPublishNacked` / `ErrPublishUnroutable` / `ErrPublishConfirmTimeout`) exactly as a caller-supplied deadline
 does, so nothing downstream has to distinguish the two.
 
 The outbox relay keeps its own `outbox.publishtimeout` per-record wrapper; the two bounds
@@ -809,8 +809,23 @@ nest and the shorter one wins.
 
 | Cause sentinel | Meaning |
 | --- | --- |
-| `messaging.ErrPublishNacked` | the broker received the message and returned `basic.nack` (a transient broker condition — disk alarm, mirror resync, failover; also how a missing exchange surfaces) |
+| `messaging.ErrPublishNacked` | the broker received the message and returned `basic.nack` (a transient broker condition — disk alarm, mirror resync, failover; also how a missing exchange surfaces, since the broker closes the channel with a 404 and the reconnect fails the in-flight publish with a synthetic NACK — never a return) |
+| `messaging.ErrPublishUnroutable` | a `Mandatory` publish the broker returned (`basic.return`) because no queue is bound to receive it, then ACKed |
 | `messaging.ErrPublishConfirmTimeout` | no ACK/NACK arrived within `connectiontimeout` |
+
+**A `Mandatory` publish the broker cannot route fails** (ADR-122). The broker answers it with
+`basic.return` and then `basic.ack`. The client listens for the return on every channel, matches it
+to the publish by `message_id`, retries the publish on `nackBackoff`, and after the last attempt
+returns `ErrPublishRetriesExhausted` wrapping `ErrPublishUnroutable`. The retries ride out a
+binding that a fresh channel's asynchronous redeclare (ADR-113) restores within the retry budget,
+about `(maxpublishattempts − 1) × (round trip + 100ms)`, roughly 0.4s at the defaults; a longer
+redeclare still fails the publish, and `reconnect.maxpublishattempts` is the key that widens the
+window. Before ADR-122 the return was discarded and the ack reported
+success. Each retry's WARN, metric reason and span event, and the terminal WARN and
+`amqp.publish.exhausted` span event the last attempt records instead, are listed in
+[ADR-122](adr_122_returned_mandatory_publish_fails.md). Without `Mandatory` (the default), the
+broker drops an unroutable message and ACKs it, and the publish succeeds as before. The outbox
+relay never publishes `Mandatory`.
 
 `messaging.ErrInvalidPublishDestination` is refused **before** any of this. The exchange and routing key (basic.publish's
 method frame) and every header key (the content-header frame beside
@@ -834,7 +849,7 @@ Cancel / shutdown / deadline returns are also wrapped with the last cause, so a 
 fires after a NACK still reports `ErrPublishNacked` — **match with `errors.Is`, not `==`**
 (use `errors.Is` for the raw `ErrNotConnected` sentinel too: it works on unwrapped errors, and
 it keeps working if a future version ever wraps it).
-Between NACK retries the client waits a small cancelable `nackBackoff` (100ms) rather than
+Between NACK or return retries the client waits a small cancelable `nackBackoff` (100ms) rather than
 busy-spinning. These causes are informational for logging/observability; the outbox relay treats
 **every** publish failure as a recoverable *connectivity* failure that retries and never parks —
 NACK included, and likewise a raw `ErrNotConnected`, though the relay rarely sees one: it checks

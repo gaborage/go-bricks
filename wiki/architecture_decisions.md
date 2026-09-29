@@ -1939,6 +1939,30 @@ endpoint instead of an unauthenticated body.
 
 ---
 
+### [ADR-122: A Returned Mandatory Publish Fails Instead of Reporting Success](adr_122_returned_mandatory_publish_fails.md)
+
+**Date:** 2026-09-27 | **Status:** Accepted | **Breaking:** a `Mandatory: true` publish the broker returns as unroutable fails with `ErrPublishRetriesExhausted` wrapping the new `ErrPublishUnroutable`, where it returned nil
+
+The broker answers a `Mandatory` publish that no queue is bound to receive with `basic.return` and
+then `basic.ack`. The client never registered a return listener, and amqp091 drops a return that
+has no listener, so the ack reported success. The client now registers a buffered return listener
+on every channel generation. Before routing each ack, the dispatcher drains the buffered returns
+without blocking; amqp091 delivers a publish's return before its ack, so the return is always
+recorded in time. A return is matched by `message_id` through an index of pending Mandatory
+publishes keyed by `(generation, message_id)`, so it costs one lookup, and a torn-down
+generation's return cannot reach a live publish. A returned publish is retried within the
+attempt limit on the NACK arm's 100ms backoff, which rides out a redeclare that finishes within
+the retry budget, and then fails as unroutable. The retry is counted as `returned`, and the WARN
+never carries the body. For every cause, the attempt that reaches the limit is no longer counted or
+logged as a retry.
+Non-mandatory publishes are unchanged, and the outbox relay is out of scope (#1819). The comments
+that described unroutable publishes as NACKed are corrected.
+
+**Key Benefits:** a publisher that asks the broker to refuse an unroutable message is finally told
+when it was refused, instead of being told it was delivered.
+
+---
+
 ### [ADR-123: The Streams Lane Reports a Stream the Broker Lost](adr_123_streams_lost_topology_supervisor.md)
 
 **Date:** 2026-09-27 | **Status:** Accepted
