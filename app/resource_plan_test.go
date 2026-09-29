@@ -25,112 +25,72 @@ type planMode struct {
 	want, rule [3]string
 }
 
-// planModes covers every mode of the fact base the build accepts; a # comment names the ones a
-// case stands for when their plan inputs coincide. The table is text, not struct literals, so
-// its rows read as one grid: see parsePlanModes for the grammar.
-var planModes = parsePlanModes(`
-st_root: db broker cache  # ST-root, ST-streams
-  want: st/present configured preinit prewarm | st/present configured preinit prewarm | st/present configured preinit
-  rule: - | - | st/present configured preinit prewarm
-st_db_cache_only: db cache
-  want: st/present configured preinit prewarm | st/absent unavailable prewarm | st/present configured preinit
-  rule: - | st/absent unavailable | st/present configured preinit prewarm
-st_noroot:  # ST-noroot
-  want: st/absent unavailable prewarm | st/absent unavailable prewarm | st/absent unavailable skip
-  rule: st/absent unavailable | st/absent unavailable | -
-st_shared_noroot: shared  # ST-shared-noroot: the ADR-041 env-parity no-op
-  want: st/absent unavailable prewarm | st/absent unavailable prewarm | st/absent unavailable skip
-  rule: st/absent unavailable | st/absent unavailable | -
-st_dynamic_noroot: dynamic  # ST-dynsrc-dynRS-noroot
-  want: st/runtime configured prewarm | st/runtime unavailable configured prewarm | st/runtime configured
-  rule: - | st/runtime configured prewarm | st/runtime configured prewarm
-st_dynamic_root: dynamic db broker cache
-  want: st/runtime configured prewarm | st/runtime configured prewarm | st/runtime configured
-  rule: - | - | st/runtime configured prewarm
-st_dynamic_cacheconn: dynamic cacheconn
-  want: st/runtime configured prewarm | st/runtime unavailable configured prewarm | st/runtime configured
-  rule: - | st/runtime configured prewarm | st/runtime configured prewarm
-st_caller_noroot: caller  # ST-staticRS-noroot, ST-customRS-noroot; rule: root-block reading
-  want: st/absent unavailable configured prewarm | st/absent unavailable configured prewarm | st/present configured preinit
-  rule: st/absent unavailable | st/absent unavailable | st/absent unavailable skip
-st_caller_root: caller db broker  # ST-staticRS-root; rule: root-block reading
-  want: st/present configured preinit prewarm | st/present configured preinit prewarm | st/present configured preinit
-  rule: - | - | st/absent unavailable skip
-st_cacheconn_noroot: cacheconn  # ST-cacheconn, ST-noroot-cacheconn
-  want: st/absent unavailable prewarm | st/absent unavailable prewarm | st/present configured preinit
-  rule: st/absent unavailable | st/absent unavailable | st/present configured preinit prewarm
-mt_noroot: mt  # MT-static-tenants, MT-static-notenants-noroot, MT-static-pt
-  want: pt/absent configured per_tenant | pt/absent configured per_tenant | pt/absent configured skip per_tenant
-mt_rootcache: mt cache  # MT-static-tenants-rootcache
-  want: pt/absent configured per_tenant | pt/absent configured per_tenant | pt/present configured per_tenant
-mt_root: mt db broker  # MT-static-notenants-rootdb, MT-notenants-pt-root
-  want: pt/present configured per_tenant | pt/present configured per_tenant | pt/absent configured skip per_tenant
-mt_dynamic: mt dynamic db  # MT-dynsrc, MT-dyn-pt
-  want: pt/runtime configured per_tenant | pt/runtime configured per_tenant | pt/runtime configured per_tenant
-mt_cacheconn: mt cacheconn  # MT-cacheconn
-  want: pt/absent configured per_tenant | pt/absent configured per_tenant | pt/present configured per_tenant
-mt_shared_root: mt shared broker  # MT-shared-root, MT-static-shared-root, MT-shared-streams
-  want: pt/absent configured per_tenant | shared/present configured prewarm per_tenant | pt/absent configured skip per_tenant
-  rule: - | shared/present configured preinit prewarm | -
-mt_shared_noroot: mt shared  # MT-shared-noroot, MT-static-shared-noroot
-  want: pt/absent configured per_tenant | shared/absent configured prewarm per_tenant | pt/absent configured skip per_tenant
-  rule: - | shared/absent unavailable | -
-mt_shared_dynamic: mt shared dynamic  # MT-dyn-shared-noroot
-  want: pt/runtime configured per_tenant | shared/runtime configured prewarm per_tenant | pt/runtime configured per_tenant
-  rule: - | shared/runtime configured prewarm | -
-mt_shared_caller_noroot: mt shared caller  # MT-customRS-shared-noroot; rule: root-block reading
-  want: pt/absent configured per_tenant | shared/absent configured prewarm per_tenant | pt/present configured per_tenant
-  rule: - | shared/absent unavailable | pt/absent configured skip per_tenant
-`)
+// Plan cells, spelled as renderPlan renders them: "<tenancy>/<presence>" then every yes answer.
+// asToday leaves a rule cell equal to today's.
+const (
+	asToday              = ""
+	stPresentPrewarm     = "st/present configured preinit prewarm"
+	stPresent            = "st/present configured preinit"
+	stAbsentPrewarm      = "st/absent unavailable prewarm"
+	stAbsent             = "st/absent unavailable"
+	stAbsentSkip         = "st/absent unavailable skip"
+	stAbsentConfigured   = "st/absent unavailable configured prewarm"
+	stRuntimePrewarm     = "st/runtime configured prewarm"
+	stRuntimeUnavailable = "st/runtime unavailable configured prewarm"
+	stRuntime            = "st/runtime configured"
+	ptAbsent             = "pt/absent configured per_tenant"
+	ptAbsentSkip         = "pt/absent configured skip per_tenant"
+	ptPresent            = "pt/present configured per_tenant"
+	ptRuntime            = "pt/runtime configured per_tenant"
+	sharedPresentPrewarm = "shared/present configured prewarm per_tenant"
+	sharedPresentPreinit = "shared/present configured preinit prewarm"
+	sharedAbsentPrewarm  = "shared/absent configured prewarm per_tenant"
+	sharedAbsent         = "shared/absent unavailable"
+	sharedRuntimePrewarm = "shared/runtime configured prewarm per_tenant"
+	sharedRuntime        = "shared/runtime configured prewarm"
+)
 
-// parsePlanModes reads the planModes grid. A mode opens with an unindented "name: spec" line;
-// indented "want:" (required) and "rule:" lines follow, each three "|"-separated cells in kind
-// order (database, messaging, cache), where "-" leaves a rule cell equal to want. "#" starts a
-// comment. A malformed table panics, failing the package's tests before any case runs.
-func parsePlanModes(table string) []planMode {
-	var modes []planMode
-	for _, raw := range strings.Split(table, "\n") {
-		line, _, _ := strings.Cut(raw, "#")
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
-		if !ok {
-			panic("planModes: no colon in " + raw)
-		}
-		value = strings.TrimSpace(value)
-		if !strings.HasPrefix(line, " ") {
-			modes = append(modes, planMode{name: key, spec: value})
-			continue
-		}
-		if len(modes) == 0 {
-			panic("planModes: cells before a mode in " + raw)
-		}
-		cells := strings.Split(value, "|")
-		if len(cells) != 3 {
-			panic("planModes: want three cells in " + raw)
-		}
-		var row [3]string
-		for i, cell := range cells {
-			if cell = strings.TrimSpace(cell); cell != "-" {
-				row[i] = cell
-			}
-		}
-		switch m := &modes[len(modes)-1]; key {
-		case "want":
-			m.want = row
-		case "rule":
-			m.rule = row
-		default:
-			panic("planModes: unknown row " + key)
-		}
-	}
-	for _, m := range modes {
-		if m.want == ([3]string{}) {
-			panic("planModes: no want row for " + m.name)
-		}
-	}
-	return modes
+// kinds holds one cell per kind: database, messaging, cache.
+type kinds = [3]string
+
+// planModes covers every mode of the fact base the build accepts; the comment names the ones a
+// case stands for when their plan inputs coincide.
+var planModes = []planMode{
+	// ST-root, ST-streams
+	{name: "st_root", spec: "db broker cache", want: kinds{stPresentPrewarm, stPresentPrewarm, stPresent}, rule: kinds{asToday, asToday, stPresentPrewarm}},
+	{name: "st_db_cache_only", spec: "db cache", want: kinds{stPresentPrewarm, stAbsentPrewarm, stPresent}, rule: kinds{asToday, stAbsent, stPresentPrewarm}},
+	// ST-noroot
+	{name: "st_noroot", spec: "", want: kinds{stAbsentPrewarm, stAbsentPrewarm, stAbsentSkip}, rule: kinds{stAbsent, stAbsent, asToday}},
+	// ST-shared-noroot: the ADR-041 env-parity no-op
+	{name: "st_shared_noroot", spec: "shared", want: kinds{stAbsentPrewarm, stAbsentPrewarm, stAbsentSkip}, rule: kinds{stAbsent, stAbsent, asToday}},
+	// ST-dynsrc-dynRS-noroot
+	{name: "st_dynamic_noroot", spec: "dynamic", want: kinds{stRuntimePrewarm, stRuntimeUnavailable, stRuntime}, rule: kinds{asToday, stRuntimePrewarm, stRuntimePrewarm}},
+	{name: "st_dynamic_root", spec: "dynamic db broker cache", want: kinds{stRuntimePrewarm, stRuntimePrewarm, stRuntime}, rule: kinds{asToday, asToday, stRuntimePrewarm}},
+	{name: "st_dynamic_cacheconn", spec: "dynamic cacheconn", want: kinds{stRuntimePrewarm, stRuntimeUnavailable, stRuntime}, rule: kinds{asToday, stRuntimePrewarm, stRuntimePrewarm}},
+	// ST-staticRS-noroot, ST-customRS-noroot; rule: root-block reading
+	{name: "st_caller_noroot", spec: "caller", want: kinds{stAbsentConfigured, stAbsentConfigured, stPresent}, rule: kinds{stAbsent, stAbsent, stAbsentSkip}},
+	// ST-staticRS-root; rule: root-block reading
+	{name: "st_caller_root", spec: "caller db broker", want: kinds{stPresentPrewarm, stPresentPrewarm, stPresent}, rule: kinds{asToday, asToday, stAbsentSkip}},
+	// ST-cacheconn, ST-noroot-cacheconn
+	{name: "st_cacheconn_noroot", spec: "cacheconn", want: kinds{stAbsentPrewarm, stAbsentPrewarm, stPresent}, rule: kinds{stAbsent, stAbsent, stPresentPrewarm}},
+	// MT-static-tenants, MT-static-notenants-noroot, MT-static-pt
+	{name: "mt_noroot", spec: "mt", want: kinds{ptAbsent, ptAbsent, ptAbsentSkip}},
+	// MT-static-tenants-rootcache
+	{name: "mt_rootcache", spec: "mt cache", want: kinds{ptAbsent, ptAbsent, ptPresent}},
+	// MT-static-notenants-rootdb, MT-notenants-pt-root
+	{name: "mt_root", spec: "mt db broker", want: kinds{ptPresent, ptPresent, ptAbsentSkip}},
+	// MT-dynsrc, MT-dyn-pt
+	{name: "mt_dynamic", spec: "mt dynamic db", want: kinds{ptRuntime, ptRuntime, ptRuntime}},
+	// MT-cacheconn
+	{name: "mt_cacheconn", spec: "mt cacheconn", want: kinds{ptAbsent, ptAbsent, ptPresent}},
+	// MT-shared-root, MT-static-shared-root, MT-shared-streams
+	{name: "mt_shared_root", spec: "mt shared broker", want: kinds{ptAbsent, sharedPresentPrewarm, ptAbsentSkip}, rule: kinds{asToday, sharedPresentPreinit, asToday}},
+	// MT-shared-noroot, MT-static-shared-noroot
+	{name: "mt_shared_noroot", spec: "mt shared", want: kinds{ptAbsent, sharedAbsentPrewarm, ptAbsentSkip}, rule: kinds{asToday, sharedAbsent, asToday}},
+	// MT-dyn-shared-noroot
+	{name: "mt_shared_dynamic", spec: "mt shared dynamic", want: kinds{ptRuntime, sharedRuntimePrewarm, ptRuntime}, rule: kinds{asToday, sharedRuntime, asToday}},
+	// MT-customRS-shared-noroot; rule: root-block reading
+	{name: "mt_shared_caller_noroot", spec: "mt shared caller", want: kinds{ptAbsent, sharedAbsentPrewarm, ptPresent}, rule: kinds{asToday, sharedAbsent, ptAbsentSkip}},
 }
 
 // inputs builds the mode's validated-shape config, Options (nil unless one is set) and the
