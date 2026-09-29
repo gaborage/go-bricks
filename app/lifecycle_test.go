@@ -344,16 +344,15 @@ func TestPrepareRuntimeAllowsEmptyDeclarationsWithMessagingUnconfigured(t *testi
 
 // TestMessagingDeclarationsGateAsksTheMessagingRow takes the plan as given: declarations are
 // refused exactly when the messaging row is unavailable, whatever the database row beside it
-// says, and the planned modes keep today's multi-tenant skip (D6) and root-broker test behind a
-// dynamic store (D7).
+// says. Shared messaging with no root broker resolves only on an absent "", so it refuses; a
+// dynamic store answers "" only at runtime, so it boots.
 func TestMessagingDeclarationsGateAsksTheMessagingRow(t *testing.T) {
 	decls := messaging.NewDeclarations()
 	publisherDeclaringModule{}.DeclareMessaging(decls)
 	row := func(kind string, presence keyPresence) kindPlan { return kindPlan{kind: kind, presence: presence} }
 	planned := func(spec string) resourcePlan {
 		mode := planMode{spec: spec}
-		in, _ := mode.inputs()
-		return planResources(in.cfg, in.opts, in.store)
+		return mode.inputs().plan(t)
 	}
 
 	tests := []struct {
@@ -370,8 +369,8 @@ func TestMessagingDeclarationsGateAsksTheMessagingRow(t *testing.T) {
 			plan: resourcePlan{database: row(componentDatabase, keyAbsent), messaging: row(componentMessaging, keyPresent)},
 		},
 		{name: "multitenant_without_a_root_broker", plan: planned("mt")},
-		{name: "multitenant_shared_without_a_root_broker", plan: planned("mt shared")},
-		{name: "dynamic_store_without_a_root_broker", plan: planned("dynamic"), refuses: true},
+		{name: "multitenant_shared_without_a_root_broker", plan: planned("mt shared"), refuses: true},
+		{name: "dynamic_store_without_a_root_broker", plan: planned("dynamic")},
 		{name: "dynamic_store_with_a_root_broker", plan: planned("dynamic broker")},
 	}
 	for _, tt := range tests {
@@ -509,6 +508,7 @@ func TestPrepareRuntimePropagatesContextToPreWarm(t *testing.T) {
 	cfg := &config.Config{
 		App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
 		Multitenant: config.MultitenantConfig{Enabled: false},
+		Database:    config.DatabaseConfig{Type: dbTypePostgres, Host: localHost},
 	}
 	a := newLifecycleCheckApp(t, cfg)
 
@@ -582,9 +582,12 @@ func TestPrepareRuntimeWarnsOnlyWhenPreWarmFails(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Root blocks, so the plan pre-warms both kinds; the managers below decide the outcome.
 			cfg := &config.Config{
 				App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
 				Multitenant: config.MultitenantConfig{Enabled: false},
+				Database:    config.DatabaseConfig{Type: dbTypePostgres, Host: localHost},
+				Messaging:   config.MessagingConfig{Broker: config.BrokerConfig{URL: "amqp://localhost"}},
 			}
 			rec := &recLogger{}
 			a := newLifecycleCheckAppWithLogger(t, cfg, rec)
@@ -624,6 +627,7 @@ func TestPrepareRuntimeSkipsPreWarmInMultiTenantMode(t *testing.T) {
 	cfg := &config.Config{
 		App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
 		Multitenant: config.MultitenantConfig{Enabled: true},
+		Database:    config.DatabaseConfig{Type: dbTypePostgres, Host: localHost}, // "" present: only the tenancy skips
 	}
 	rec := &recLogger{}
 	a := newLifecycleCheckAppWithLogger(t, cfg, rec)

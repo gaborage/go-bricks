@@ -2,9 +2,10 @@ package app
 
 import (
 	"context"
-	"slices"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,41 +15,93 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 )
 
+// answeringStore is a caller-supplied TenantStore whose answer for "" is set per kind: a kind
+// missing from answers is served, anything else is returned as the lookup's error. block makes
+// every lookup wait for its context instead. It records how often, and under what remaining
+// budget, each kind was asked.
+type answeringStore struct {
+	dynamic   bool
+	answers   map[string]error
+	block     bool
+	calls     map[string]int
+	remaining map[string]time.Duration
+}
+
+func (s *answeringStore) ask(ctx context.Context, kind string) error {
+	if s.calls == nil {
+		s.calls = map[string]int{}
+		s.remaining = map[string]time.Duration{}
+	}
+	s.calls[kind]++
+	if deadline, ok := ctx.Deadline(); ok {
+		s.remaining[kind] = time.Until(deadline)
+	}
+	if s.block {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return s.answers[kind]
+}
+
+func (s *answeringStore) DBConfig(ctx context.Context, _ string) (*config.DatabaseConfig, error) {
+	if err := s.ask(ctx, componentDatabase); err != nil {
+		return nil, err
+	}
+	return &config.DatabaseConfig{Type: config.PostgreSQL, Host: "db.internal"}, nil
+}
+
+func (s *answeringStore) BrokerURL(ctx context.Context, _ string) (string, error) {
+	if err := s.ask(ctx, componentMessaging); err != nil {
+		return "", err
+	}
+	return "amqp://broker/", nil
+}
+
+func (s *answeringStore) CacheConfig(ctx context.Context, _ string) (*config.CacheConfig, error) {
+	if err := s.ask(ctx, componentCache); err != nil {
+		return nil, err
+	}
+	return &config.CacheConfig{Enabled: true}, nil
+}
+
+func (s *answeringStore) IsDynamic() bool { return s.dynamic }
+
+func (s *answeringStore) asked() int {
+	return s.calls[componentDatabase] + s.calls[componentMessaging] + s.calls[componentCache]
+}
+
+// servesNothing answers not_configured for every kind's "".
+func servesNothing() map[string]error {
+	answers := map[string]error{}
+	for _, kind := range []string{componentDatabase, componentMessaging, componentCache} {
+		answers[kind] = config.NewNotConfiguredError(kind, "", "")
+	}
+	return answers
+}
+
 // planMode is one deployment mode the build accepts. spec switches inputs on: mt, shared
 // (messaging.tenancy), dynamic (source.type dynamic beside a dynamic store), caller (a static
-// Options.ResourceSource), cacheconn, the db, broker and cache root blocks, and dbconn (a root
-// database named by its connection string alone). want is today's
-// answer per kind (database, messaging, cache); rule is the rule's, where it differs. Beside a
-// caller store the rule cells are the root-block reading the plan can compute without a lookup;
-// ADR-127 decides those from what the store answers for "".
+// Options.ResourceSource answering not_configured for "") or serves (one serving ""),
+// cacheconn, the db, broker and cache root blocks, and dbconn (a root database named by its
+// connection string alone). want is the plan's answer per kind (database, messaging, cache).
 type planMode struct {
 	name, spec string
-	want, rule [3]string
+	want       [3]string
 }
 
 // Plan cells, spelled as renderPlan renders them: "<tenancy>/<presence>" then every yes answer.
-// asToday leaves a rule cell equal to today's.
 const (
-	asToday              = ""
-	stPresentPrewarm     = "st/present configured preinit prewarm"
-	stPresent            = "st/present configured preinit"
-	stAbsentPrewarm      = "st/absent unavailable prewarm"
-	stAbsent             = "st/absent unavailable"
-	stAbsentSkip         = "st/absent unavailable skip"
-	stAbsentConfigured   = "st/absent unavailable configured prewarm"
-	stRuntimePrewarm     = "st/runtime configured prewarm"
-	stRuntimeUnavailable = "st/runtime unavailable configured prewarm"
-	stRuntime            = "st/runtime configured"
-	ptAbsent             = "pt/absent configured per_tenant"
-	ptAbsentSkip         = "pt/absent configured skip per_tenant"
-	ptPresent            = "pt/present configured per_tenant"
-	ptRuntime            = "pt/runtime configured per_tenant"
-	sharedPresentPrewarm = "shared/present configured prewarm per_tenant"
-	sharedPresentPreinit = "shared/present configured preinit prewarm"
-	sharedAbsentPrewarm  = "shared/absent configured prewarm per_tenant"
-	sharedAbsent         = "shared/absent unavailable"
-	sharedRuntimePrewarm = "shared/runtime configured prewarm per_tenant"
-	sharedRuntime        = "shared/runtime configured prewarm"
+	stPresent     = "st/present preinit prewarm"
+	stAbsent      = "st/absent unavailable"
+	stAbsentSkip  = "st/absent unavailable skip"
+	stRuntime     = "st/runtime prewarm"
+	ptPresent     = "pt/present per_tenant"
+	ptAbsent      = "pt/absent per_tenant"
+	ptAbsentSkip  = "pt/absent skip per_tenant"
+	ptRuntime     = "pt/runtime per_tenant"
+	sharedPresent = "shared/present preinit prewarm"
+	sharedAbsent  = "shared/absent unavailable"
+	sharedRuntime = "shared/runtime prewarm"
 )
 
 // kinds holds one cell per kind: database, messaging, cache.
@@ -58,23 +111,26 @@ type kinds = [3]string
 // case stands for when their plan inputs coincide.
 var planModes = []planMode{
 	// ST-root, ST-streams
-	{name: "st_root", spec: "db broker cache", want: kinds{stPresentPrewarm, stPresentPrewarm, stPresent}, rule: kinds{asToday, asToday, stPresentPrewarm}},
-	{name: "st_db_cache_only", spec: "db cache", want: kinds{stPresentPrewarm, stAbsentPrewarm, stPresent}, rule: kinds{asToday, stAbsent, stPresentPrewarm}},
-	{name: "st_dbconn_only", spec: "dbconn", want: kinds{stPresentPrewarm, stAbsentPrewarm, stAbsentSkip}, rule: kinds{asToday, stAbsent, asToday}},
+	{name: "st_root", spec: "db broker cache", want: kinds{stPresent, stPresent, stPresent}},
+	{name: "st_db_cache_only", spec: "db cache", want: kinds{stPresent, stAbsent, stPresent}},
+	{name: "st_dbconn_only", spec: "dbconn", want: kinds{stPresent, stAbsent, stAbsentSkip}},
 	// ST-noroot
-	{name: "st_noroot", spec: "", want: kinds{stAbsentPrewarm, stAbsentPrewarm, stAbsentSkip}, rule: kinds{stAbsent, stAbsent, asToday}},
+	{name: "st_noroot", spec: "", want: kinds{stAbsent, stAbsent, stAbsentSkip}},
 	// ST-shared-noroot: the ADR-041 env-parity no-op
-	{name: "st_shared_noroot", spec: "shared", want: kinds{stAbsentPrewarm, stAbsentPrewarm, stAbsentSkip}, rule: kinds{stAbsent, stAbsent, asToday}},
+	{name: "st_shared_noroot", spec: "shared", want: kinds{stAbsent, stAbsent, stAbsentSkip}},
 	// ST-dynsrc-dynRS-noroot
-	{name: "st_dynamic_noroot", spec: "dynamic", want: kinds{stRuntimePrewarm, stRuntimeUnavailable, stRuntime}, rule: kinds{asToday, stRuntimePrewarm, stRuntimePrewarm}},
-	{name: "st_dynamic_root", spec: "dynamic db broker cache", want: kinds{stRuntimePrewarm, stRuntimePrewarm, stRuntime}, rule: kinds{asToday, asToday, stRuntimePrewarm}},
-	{name: "st_dynamic_cacheconn", spec: "dynamic cacheconn", want: kinds{stRuntimePrewarm, stRuntimeUnavailable, stRuntime}, rule: kinds{asToday, stRuntimePrewarm, stRuntimePrewarm}},
-	// ST-staticRS-noroot, ST-customRS-noroot; rule: root-block reading
-	{name: "st_caller_noroot", spec: "caller", want: kinds{stAbsentConfigured, stAbsentConfigured, stPresent}, rule: kinds{stAbsent, stAbsent, stAbsentSkip}},
-	// ST-staticRS-root; rule: root-block reading
-	{name: "st_caller_root", spec: "caller db broker", want: kinds{stPresentPrewarm, stPresentPrewarm, stPresent}, rule: kinds{asToday, asToday, stAbsentSkip}},
+	{name: "st_dynamic_noroot", spec: "dynamic", want: kinds{stRuntime, stRuntime, stRuntime}},
+	{name: "st_dynamic_root", spec: "dynamic db broker cache", want: kinds{stRuntime, stRuntime, stRuntime}},
+	{name: "st_dynamic_cacheconn", spec: "dynamic cacheconn", want: kinds{stRuntime, stRuntime, stRuntime}},
+	// ST-staticRS-noroot, a store not serving ""
+	{name: "st_caller_noroot", spec: "caller", want: kinds{stAbsent, stAbsent, stAbsentSkip}},
+	// ST-staticRS-root: the store decides "", not the root blocks
+	{name: "st_caller_root", spec: "caller db broker cache", want: kinds{stAbsent, stAbsent, stAbsentSkip}},
+	// ST-customRS-noroot
+	{name: "st_caller_serves_noroot", spec: "serves", want: kinds{stPresent, stPresent, stPresent}},
+	{name: "st_caller_cacheconn", spec: "caller cacheconn", want: kinds{stAbsent, stAbsent, stPresent}},
 	// ST-cacheconn, ST-noroot-cacheconn
-	{name: "st_cacheconn_noroot", spec: "cacheconn", want: kinds{stAbsentPrewarm, stAbsentPrewarm, stPresent}, rule: kinds{stAbsent, stAbsent, stPresentPrewarm}},
+	{name: "st_cacheconn_noroot", spec: "cacheconn", want: kinds{stAbsent, stAbsent, stPresent}},
 	// MT-static-tenants, MT-static-notenants-noroot, MT-static-pt
 	{name: "mt_noroot", spec: "mt", want: kinds{ptAbsent, ptAbsent, ptAbsentSkip}},
 	// MT-static-tenants-rootcache
@@ -86,18 +142,27 @@ var planModes = []planMode{
 	// MT-cacheconn
 	{name: "mt_cacheconn", spec: "mt cacheconn", want: kinds{ptAbsent, ptAbsent, ptPresent}},
 	// MT-shared-root, MT-static-shared-root, MT-shared-streams
-	{name: "mt_shared_root", spec: "mt shared broker", want: kinds{ptAbsent, sharedPresentPrewarm, ptAbsentSkip}, rule: kinds{asToday, sharedPresentPreinit, asToday}},
+	{name: "mt_shared_root", spec: "mt shared broker", want: kinds{ptAbsent, sharedPresent, ptAbsentSkip}},
 	// MT-shared-noroot, MT-static-shared-noroot
-	{name: "mt_shared_noroot", spec: "mt shared", want: kinds{ptAbsent, sharedAbsentPrewarm, ptAbsentSkip}, rule: kinds{asToday, sharedAbsent, asToday}},
+	{name: "mt_shared_noroot", spec: "mt shared", want: kinds{ptAbsent, sharedAbsent, ptAbsentSkip}},
 	// MT-dyn-shared-noroot
-	{name: "mt_shared_dynamic", spec: "mt shared dynamic", want: kinds{ptRuntime, sharedRuntimePrewarm, ptRuntime}, rule: kinds{asToday, sharedRuntime, asToday}},
-	// MT-customRS-shared-noroot; rule: root-block reading
-	{name: "mt_shared_caller_noroot", spec: "mt shared caller", want: kinds{ptAbsent, sharedAbsentPrewarm, ptPresent}, rule: kinds{asToday, sharedAbsent, ptAbsentSkip}},
+	{name: "mt_shared_dynamic", spec: "mt shared dynamic", want: kinds{ptRuntime, sharedRuntime, ptRuntime}},
+	// a store not serving ""
+	{name: "mt_shared_caller_noroot", spec: "mt shared caller", want: kinds{ptAbsent, sharedAbsent, ptAbsentSkip}},
+	// MT-customRS-shared-noroot
+	{name: "mt_shared_caller_serves", spec: "mt shared serves", want: kinds{ptPresent, sharedPresent, ptPresent}},
 }
 
-// inputs builds the mode's validated-shape config, Options (nil unless one is set) and the
-// store FactoryResolver serves, plus the caller's store so a test can count its lookups.
-func (m *planMode) inputs() (planInputs, *dynamicResourceSource) {
+// planModeInputs is what one mode hands planResources: a validated-shape config, Options (nil
+// unless one is set), the store FactoryResolver serves, and the caller's store when there is one.
+type planModeInputs struct {
+	cfg    *config.Config
+	opts   *Options
+	store  TenantStore
+	caller *answeringStore
+}
+
+func (m *planMode) inputs() planModeInputs {
 	on := map[string]bool{}
 	for _, word := range strings.Fields(m.spec) {
 		on[word] = true
@@ -121,9 +186,12 @@ func (m *planMode) inputs() (planInputs, *dynamicResourceSource) {
 	cfg.Cache.Enabled = on["cache"]
 
 	var opts *Options
-	var caller *dynamicResourceSource
-	if on["dynamic"] || on["caller"] {
-		caller = &dynamicResourceSource{dynamic: on["dynamic"]}
+	var caller *answeringStore
+	if on["dynamic"] || on["caller"] || on["serves"] {
+		caller = &answeringStore{dynamic: on["dynamic"]}
+		if on["caller"] {
+			caller.answers = servesNothing()
+		}
 		opts = &Options{ResourceSource: caller}
 	}
 	if on["dynamic"] {
@@ -135,7 +203,14 @@ func (m *planMode) inputs() (planInputs, *dynamicResourceSource) {
 		}
 		opts.CacheConnector = func(context.Context, string) (cache.Cache, error) { return nil, nil }
 	}
-	return planInputs{cfg: cfg, opts: opts, store: newFactoryResolverForConfig(opts, cfg).ResourceSource(cfg)}, caller
+	return planModeInputs{cfg: cfg, opts: opts, store: newFactoryResolverForConfig(opts, cfg).ResourceSource(cfg), caller: caller}
+}
+
+func (in planModeInputs) plan(t *testing.T) resourcePlan {
+	t.Helper()
+	plan, err := planResources(context.Background(), in.cfg, in.opts, in.store)
+	require.NoError(t, err)
+	return plan
 }
 
 // fixturePlan is the plan a fixture App built from cfg gets: cfg's built-in store beside a
@@ -145,7 +220,11 @@ func fixturePlan(cfg *config.Config) resourcePlan {
 		return resourcePlan{}
 	}
 	opts := &Options{CacheConnector: func(context.Context, string) (cache.Cache, error) { return nil, nil }}
-	return planResources(cfg, opts, config.NewTenantStore(cfg))
+	plan, err := planResources(context.Background(), cfg, opts, config.NewTenantStore(cfg))
+	if err != nil {
+		panic(err) // the built-in store answers "" with a configuration or not_configured only
+	}
+	return plan
 }
 
 var (
@@ -165,7 +244,6 @@ func renderPlan(p resourcePlan) [3]string {
 			yes  bool
 		}{
 			{"unavailable", k.unavailable()},
-			{"configured", k.configured()},
 			{"preinit", k.preInits()},
 			{"prewarm", k.preWarms()},
 			{"skip", probe.absent},
@@ -180,26 +258,29 @@ func renderPlan(p resourcePlan) [3]string {
 	return out
 }
 
-// TestResourcePlan pins today's answers in every mode, and the rule's under an empty drift
-// ledger, and that planning never asks a caller-supplied store for "".
+// TestResourcePlan pins the plan's answers in every mode, and who planning asks: a static caller
+// store once per kind (never for the cache behind a CacheConnector), a dynamic store never.
 func TestResourcePlan(t *testing.T) {
 	for _, m := range planModes {
 		t.Run(m.name, func(t *testing.T) {
-			in, caller := m.inputs()
+			in := m.inputs()
 
-			assert.Equal(t, m.want, renderPlan(planResources(in.cfg, in.opts, in.store)), "today")
+			assert.Equal(t, m.want, renderPlan(in.plan(t)))
 
-			rule := m.want
-			for i, cell := range m.rule {
-				if cell != "" {
-					rule[i] = cell
-				}
+			if in.caller == nil {
+				return
 			}
-			assert.Equal(t, rule, renderPlan(planUnder(driftLedger{}, in)), "rule")
-
-			if caller != nil {
-				assert.Zero(t, caller.dbCalls+caller.msgCalls+caller.cacheCalls, "a caller-supplied store is never asked")
+			if in.caller.dynamic {
+				assert.Zero(t, in.caller.asked(), "a dynamic store is never asked")
+				return
 			}
+			assert.Equal(t, 1, in.caller.calls[componentDatabase], "database")
+			assert.Equal(t, 1, in.caller.calls[componentMessaging], "messaging")
+			wantCache := 1
+			if in.opts.CacheConnector != nil {
+				wantCache = 0
+			}
+			assert.Equal(t, wantCache, in.caller.calls[componentCache], "cache")
 		})
 	}
 }
@@ -232,47 +313,10 @@ func TestResourcePlanDeploymentAnswers(t *testing.T) {
 	assert.True(t, kindPlan{}.probe(probeDescription{critical: true}).critical, "probe keeps the slot's fields")
 }
 
-// TestDriftLedgerRowsAreLoadBearing fails when a row changes no answer in any mode: a dead row
-// would claim a drift that no longer exists.
-func TestDriftLedgerRowsAreLoadBearing(t *testing.T) {
-	changesAnAnswer := func(ledger driftLedger) bool {
-		for _, m := range planModes {
-			in, _ := m.inputs()
-			if renderPlan(planUnder(ledger, in)) != renderPlan(planUnder(todaysLedger, in)) {
-				return true
-			}
-		}
-		return false
-	}
-
-	assert.True(t, changesAnAnswer(driftLedger{rows: todaysLedger.rows}), "D1 caller source exempts the cache")
-	for i, row := range todaysLedger.rows {
-		without := driftLedger{presence: todaysLedger.presence, rows: slices.Delete(slices.Clone(todaysLedger.rows), i, i+1)}
-		assert.True(t, changesAnAnswer(without), row.name)
-	}
-}
-
-// TestDriftLedgerRowsNeverOverlap fails when two rows pin one answer on one kind in one mode,
-// where the answer would hang on which pin resolve reads first.
-func TestDriftLedgerRowsNeverOverlap(t *testing.T) {
-	for _, m := range planModes {
-		in, _ := m.inputs()
-		for _, kind := range []string{componentDatabase, componentMessaging, componentCache} {
-			k := planKind(driftLedger{presence: todaysLedger.presence}, in, kind)
-			var pinned answer
-			for _, row := range todaysLedger.rows {
-				if row.when(in, k) {
-					assert.Zero(t, pinned&row.answer, "%s %s: %s pins an answer another row pins", m.name, kind, row.name)
-					pinned |= row.answer
-				}
-			}
-		}
-	}
-}
-
-// TestResourcePlanPresenceMatchesBuiltInStore is the presence property: with the built-in store
-// and no Options, each kind's presence is exactly that store's answer for "".
-func TestResourcePlanPresenceMatchesBuiltInStore(t *testing.T) {
+// TestResourcePlanPresenceMatchesTheStore is the presence property: wherever the store serving
+// "" is static and no CacheConnector speaks for the cache, each kind's presence is exactly that
+// store's answer for "".
+func TestResourcePlanPresenceMatchesTheStore(t *testing.T) {
 	ctx := context.Background()
 	asPresence := func(err error) keyPresence {
 		if err == nil {
@@ -282,23 +326,73 @@ func TestResourcePlanPresenceMatchesBuiltInStore(t *testing.T) {
 		return keyAbsent
 	}
 	for _, m := range planModes {
-		in, _ := m.inputs()
-		if in.opts != nil {
+		in := m.inputs()
+		if in.store.IsDynamic() {
 			continue
 		}
-		plan := planResources(in.cfg, nil, in.store)
+		plan := in.plan(t)
 		_, dbErr := in.store.DBConfig(ctx, "")
 		_, msgErr := in.store.BrokerURL(ctx, "")
-		_, cacheErr := in.store.CacheConfig(ctx, "")
 		assert.Equal(t, asPresence(dbErr), plan.database.presence, m.name)
 		assert.Equal(t, asPresence(msgErr), plan.messaging.presence, m.name)
-		assert.Equal(t, asPresence(cacheErr), plan.cache.presence, m.name)
+		if in.opts == nil || in.opts.CacheConnector == nil {
+			_, cacheErr := in.store.CacheConfig(ctx, "")
+			assert.Equal(t, asPresence(cacheErr), plan.cache.presence, m.name)
+		}
 	}
 }
 
+// TestResourcePlanLookupFailureFailsStartup pins that a lookup of "" failing for any reason but
+// not_configured fails planning, naming the kind and the key, and asks no later kind.
+func TestResourcePlanLookupFailureFailsStartup(t *testing.T) {
+	cause := errors.New("secrets backend unreachable")
+	tests := []struct {
+		kind   string
+		asked  [3]int
+		answer map[string]error
+	}{
+		{kind: componentDatabase, asked: [3]int{1, 0, 0}, answer: map[string]error{componentDatabase: cause}},
+		{kind: componentMessaging, asked: [3]int{1, 1, 0}, answer: map[string]error{componentMessaging: cause}},
+		{kind: componentCache, asked: [3]int{1, 1, 1}, answer: map[string]error{componentCache: cause}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			store := &answeringStore{answers: tt.answer}
+
+			plan, err := planResources(context.Background(), &config.Config{}, nil, store)
+
+			require.ErrorIs(t, err, cause)
+			assert.EqualError(t, err, "resource plan: "+tt.kind+` lookup of the control-plane key "": secrets backend unreachable`)
+			assert.Equal(t, resourcePlan{}, plan)
+			assert.Equal(t, tt.asked, [3]int{store.calls[componentDatabase], store.calls[componentMessaging], store.calls[componentCache]})
+		})
+	}
+}
+
+// TestResourcePlanLookupHonoursTheKindBudget pins that each kind's lookup runs under its own
+// app.startup budget, and that a store outlasting it fails startup.
+func TestResourcePlanLookupHonoursTheKindBudget(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.App.Startup = config.StartupConfig{Database: time.Hour, Messaging: 2 * time.Hour, Cache: 3 * time.Hour}
+	store := &answeringStore{}
+
+	_, err := planResources(context.Background(), cfg, nil, store)
+
+	require.NoError(t, err)
+	for kind, budget := range map[string]time.Duration{componentDatabase: time.Hour, componentMessaging: 2 * time.Hour, componentCache: 3 * time.Hour} {
+		assert.InDelta(t, budget.Seconds(), store.remaining[kind].Seconds(), 60, kind)
+	}
+
+	cfg.App.Startup.Database = 20 * time.Millisecond
+	blocking := &answeringStore{block: true}
+	_, err = planResources(context.Background(), cfg, nil, blocking)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.ErrorContains(t, err, `resource plan: database lookup of the control-plane key ""`)
+}
+
 // TestNewWithConfigCarriesTheResourcePlan pins the wiring: the Builder plans from its Options
-// and the store it hands the managers, App carries that plan, and ModuleDeps' flags are its
-// configured answers.
+// and the store it hands the managers, App carries that plan, and ModuleDeps' flags read
+// configured unless the plan says unavailable.
 func TestNewWithConfigCarriesTheResourcePlan(t *testing.T) {
 	cacheConnector := func(context.Context, string) (cache.Cache, error) { return nil, nil }
 	tests := []struct {
@@ -310,11 +404,11 @@ func TestNewWithConfigCarriesTheResourcePlan(t *testing.T) {
 	}{
 		{name: "built_in_store", presence: [3]keyPresence{keyAbsent, keyAbsent, keyAbsent}},
 		{
-			name: "caller_static_store", opts: &Options{ResourceSource: &dynamicResourceSource{}},
-			presence: [3]keyPresence{keyAbsent, keyAbsent, keyPresent}, configured: [3]bool{true, true, true},
+			name: "caller_static_store", opts: &Options{ResourceSource: &answeringStore{answers: servesNothing()}},
+			presence: [3]keyPresence{keyAbsent, keyAbsent, keyAbsent},
 		},
 		{
-			name: "dynamic_store", dynamicSource: true, opts: &Options{ResourceSource: &dynamicResourceSource{dynamic: true}},
+			name: "dynamic_store", dynamicSource: true, opts: &Options{ResourceSource: &answeringStore{dynamic: true}},
 			configured: [3]bool{true, true, true},
 		},
 		{
@@ -337,7 +431,9 @@ func TestNewWithConfigCarriesTheResourcePlan(t *testing.T) {
 
 			app := newConfiguredApp(t, cfg, tt.opts)
 
-			assert.Equal(t, planResources(cfg, tt.opts, store), app.plan)
+			want, err := planResources(context.Background(), cfg, tt.opts, store)
+			require.NoError(t, err)
+			assert.Equal(t, want, app.plan)
 			gotPresence := [3]keyPresence{app.plan.database.presence, app.plan.messaging.presence, app.plan.cache.presence}
 			assert.Equal(t, tt.presence, gotPresence)
 			deps := app.registry.deps
@@ -345,4 +441,16 @@ func TestNewWithConfigCarriesTheResourcePlan(t *testing.T) {
 			assert.Equal(t, tt.configured, gotConfigured)
 		})
 	}
+}
+
+// TestNewWithConfigFailsOnAControlPlaneLookupError pins that a failed lookup of "" aborts the
+// build.
+func TestNewWithConfigFailsOnAControlPlaneLookupError(t *testing.T) {
+	store := &answeringStore{answers: map[string]error{componentMessaging: errors.New("vault sealed")}}
+
+	_, _, err := NewWithConfig(defaultTestConfig(), &Options{ResourceSource: store})
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, `resource plan: messaging lookup of the control-plane key "": vault sealed`)
+	assert.Zero(t, store.calls[componentCache], "planning stops at the first failed kind")
 }

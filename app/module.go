@@ -71,8 +71,11 @@ type GlobalMiddlewareRegisterer interface {
 // This exists because an empty database: block carries no intent: it is byte-identical
 // whether the service is deliberately database-free or its configuration failed to
 // reach the process (a dropped secret mount). No amount of config inspection separates
-// those, so the module supplies the missing fact. Deployments that resolve database
-// config at runtime are exempt — the Resource plan decides that set (ADR-126).
+// those, so the module supplies the missing fact. "None is configured" is the Resource
+// plan's verdict (ADR-127): the database resolves on the control-plane key "" and the
+// store serving "" answered not_configured for it at build. Multi-tenancy, where the
+// database resolves per tenant, and a dynamic store, whose "" is knowable only at
+// runtime, never abort.
 //
 // Implementing the interface is not itself the declaration: RequiresDatabase may
 // return false, so a module can gate the requirement on its own construction-time
@@ -319,13 +322,15 @@ type ModuleDeps struct {
 	// function whose every call returns an error satisfying config.IsNotConfigured
 	// (Scheduler, Outbox, Inbox and KeyStore differ: they are nil when absent).
 	//
-	// The flags speak for the ROOT config, which is the only thing knowable before a
-	// request carries a tenant. False is definitive: the framework's own root resolver
-	// would fail every call. True means the root is wired, or that the answer is per key
-	// at runtime — multi-tenant, a dynamic config source, a caller-supplied
-	// ResourceSource, a custom CacheConnector. In every per-key mode the accessor can
-	// still return IsNotConfigured for the tenant in hand, so a true flag never replaces
-	// the error path; it only spares a throwaway resolve when the answer is already no.
+	// A flag is false exactly when the kind resolves on the control-plane key "" and ""
+	// is known absent: the store serving "" (Options.ResourceSource, or the built-in one
+	// over the root blocks) answered not_configured for it at build (ADR-127). False is
+	// definitive: every call would fail. True means "" was served at build, or a
+	// CacheConnector dials the cache, or the answer is per key at runtime — the kind
+	// resolves per tenant (the database and cache under multi-tenancy, messaging under
+	// messaging.tenancy: per-tenant) or the store is dynamic. The accessor can still
+	// return IsNotConfigured for the tenant in hand, so a true flag never replaces the
+	// error path; it only spares a throwaway resolve when the answer is already no.
 	DBConfigured        bool
 	MessagingConfigured bool
 	CacheConfigured     bool

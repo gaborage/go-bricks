@@ -35,6 +35,13 @@ func newPrewarmMockClient() *testmocks.MockAMQPClient {
 	return client
 }
 
+// withRootBroker gives cfg the root broker newPrewarmTestManager serves, so the plan's
+// messaging row reads "" present and pre-warms.
+func withRootBroker(cfg *config.Config) *config.Config {
+	cfg.Messaging.Broker.URL = "amqp://localhost"
+	return cfg
+}
+
 // newPrewarmTestManager wires a mock-backed *messaging.Manager for pre-warm tests.
 func newPrewarmTestManager(log logger.Logger, client *testmocks.MockAMQPClient) *messaging.Manager {
 	factory := func(string, logger.Logger) messaging.AMQPClient { return client }
@@ -139,7 +146,7 @@ func TestMessagingSlotStartAwaitsPublisherReadiness(t *testing.T) {
 	manager := newPrewarmTestManager(log, client)
 	defer func() { _ = manager.Close() }()
 
-	a := newMinimalMessagingApp(log, manager, &config.Config{})
+	a := newMinimalMessagingApp(log, manager, withRootBroker(&config.Config{}))
 
 	go func() {
 		time.Sleep(150 * time.Millisecond)
@@ -164,9 +171,9 @@ func TestMessagingSlotStartContinuesWhenPublisherNeverReady(t *testing.T) {
 
 	// A short operator budget (messaging.reconnect.readytimeout) so the genuine
 	// timeout branch fires without waiting out the 5s fallback.
-	a := newMinimalMessagingApp(log, manager, &config.Config{
+	a := newMinimalMessagingApp(log, manager, withRootBroker(&config.Config{
 		Messaging: config.MessagingConfig{Reconnect: config.ReconnectConfig{ReadyTimeout: 200 * time.Millisecond}},
-	})
+	}))
 
 	start := time.Now()
 	err, fatal := slotOf(t, a, componentMessaging).start(context.Background())
@@ -186,7 +193,7 @@ func TestMessagingSlotStartPropagatesContextCancellation(t *testing.T) {
 	manager := newPrewarmTestManager(log, client)
 	defer func() { _ = manager.Close() }()
 
-	a := newMinimalMessagingApp(log, manager, &config.Config{})
+	a := newMinimalMessagingApp(log, manager, withRootBroker(&config.Config{}))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -207,10 +214,10 @@ func TestMessagingSlotStartPropagatesContextCancellation(t *testing.T) {
 // even though multitenant.enabled is true — while the database, resolved per
 // tenant in the same deployment, must not be warmed on the "" key.
 func TestPreWarmGateIsPerKind(t *testing.T) {
-	sharedMT := &config.Config{
+	sharedMT := withRootBroker(&config.Config{
 		Multitenant: config.MultitenantConfig{Enabled: true},
 		Messaging:   config.MessagingConfig{Tenancy: config.TenancyShared},
-	}
+	})
 	perTenantMT := &config.Config{
 		Multitenant: config.MultitenantConfig{Enabled: true},
 		Messaging:   config.MessagingConfig{Tenancy: config.TenancyPerTenant},
@@ -351,7 +358,7 @@ func TestMessagingSlotStartBootstrapsConsumersOnce(t *testing.T) {
 	manager := newPrewarmTestManager(rec, client)
 	defer func() { _ = manager.Close() }()
 
-	a := newMinimalMessagingApp(rec, manager, &config.Config{})
+	a := newMinimalMessagingApp(rec, manager, withRootBroker(&config.Config{}))
 	a.messagingDeclarations = declaredConsumerFixture(t)
 
 	advisory, fatal := slotOf(t, a, componentMessaging).start(context.Background())

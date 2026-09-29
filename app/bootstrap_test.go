@@ -1120,7 +1120,8 @@ func TestMarkConfiguredMirrorsRootResolver(t *testing.T) {
 			name: "dynamic_resource_source_reads_true", cfg: withCfg(func(c *config.Config) { c.Source.Type = config.SourceTypeDynamic }),
 			opts: &Options{ResourceSource: &dynamicResourceSource{dynamic: true}}, wantDB: true, wantMessaging: true, wantCache: true,
 		},
-		{name: "caller_resource_source_reads_true", cfg: &config.Config{}, opts: &Options{ResourceSource: &dynamicResourceSource{dynamic: false}}, wantDB: true, wantMessaging: true, wantCache: true},
+		// A static caller store is asked for "": this one serves the database and broker, not the cache.
+		{name: "caller_resource_source_reads_its_answers", cfg: &config.Config{}, opts: &Options{ResourceSource: &dynamicResourceSource{dynamic: false}}, wantDB: true, wantMessaging: true},
 		{name: "nil_config_reads_true", cfg: nil, wantDB: true, wantMessaging: true, wantCache: true},
 	}
 
@@ -1129,7 +1130,7 @@ func TestMarkConfiguredMirrorsRootResolver(t *testing.T) {
 			deps := &ModuleDeps{}
 			plan := resourcePlan{} // a nil config reaches only a directly built App: the inert plan
 			if tt.cfg != nil {
-				plan = planResources(tt.cfg, tt.opts, newFactoryResolverForConfig(tt.opts, tt.cfg).ResourceSource(tt.cfg))
+				plan = planModeInputs{cfg: tt.cfg, opts: tt.opts, store: newFactoryResolverForConfig(tt.opts, tt.cfg).ResourceSource(tt.cfg)}.plan(t)
 			}
 			markConfigured(deps, plan)
 

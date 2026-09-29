@@ -100,7 +100,10 @@ func closeManagersOnDependencyError(dbManager *database.DbManager, messagingMana
 func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBundle, error) {
 	resolver := newFactoryResolverForConfig(b.opts, b.cfg)
 	resourceSource := resolver.ResourceSource(b.cfg)
-	plan := planResources(b.cfg, b.opts, resourceSource)
+	plan, err := planResources(startupCtx, b.cfg, b.opts, resourceSource)
+	if err != nil {
+		return nil, err
+	}
 	configBuilder := newManagerConfigBuilderFromConfig(b.cfg, plan)
 	factory := NewResourceManagerFactory(resolver, configBuilder, b.log)
 
@@ -178,12 +181,12 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBund
 	}, nil
 }
 
-// markConfigured sets the three flags from the Resource plan (ADR-126). See
-// ModuleDeps.DBConfigured for the contract.
+// markConfigured sets the three flags from the Resource plan: a kind is configured unless it
+// is unavailable (ADR-127). See ModuleDeps.DBConfigured for the contract.
 func markConfigured(deps *ModuleDeps, plan resourcePlan) {
-	deps.DBConfigured = plan.database.configured()
-	deps.MessagingConfigured = plan.messaging.configured()
-	deps.CacheConfigured = plan.cache.configured()
+	deps.DBConfigured = !plan.database.unavailable()
+	deps.MessagingConfigured = !plan.messaging.unavailable()
+	deps.CacheConfigured = !plan.cache.unavailable()
 }
 
 // warnIfDatabaseAbsent emits one advisory startup WARN for a database-free service.

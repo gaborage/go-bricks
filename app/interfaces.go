@@ -41,11 +41,16 @@ type TenantStore interface {
 	// IsDynamic returns true if this store loads tenant configurations dynamically
 	// from external sources (e.g., AWS Secrets Manager, Vault). Returns false for
 	// stores that use static YAML configuration. It must agree with source.type —
-	// true exactly when source.type is dynamic — or the build fails (ADR-125). A
-	// single-tenant dynamic store skips startup pre-initialization and exempts an
-	// empty root database: block from the absence WARN and the DatabaseRequirer
-	// abort; under multitenant.enabled the builder skips both already, and a
-	// per-tenant outbox or inbox rejects dynamic, so such a store reports false.
+	// true exactly when source.type is dynamic — or the build fails (ADR-125).
+	//
+	// A static store (false) is asked for the control-plane key "" once per kind at
+	// build, a config lookup under that kind's app.startup budget: not_configured
+	// reads the kind absent, any other error fails startup, and a kind that resolves
+	// on "" is then pre-initialized, or reported unavailable (ADR-127). A dynamic
+	// store (true) is never asked: its "" is knowable only at runtime, so nothing is
+	// pre-initialized and nothing is unavailable. A per-tenant outbox or inbox
+	// rejects dynamic under multitenant.enabled, so such a store reports false and
+	// must answer "" with a configuration or not_configured.
 	IsDynamic() bool
 }
 
