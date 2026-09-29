@@ -238,8 +238,23 @@ _Avoid_: root key, empty key, default tenant, shared key
 **Tenancy**:
 Which key a resource kind is resolved and replayed under when multitenant is
 enabled: `per-tenant` (the resolved tenant) or `shared` (the control-plane
-key). The ledgers carry one; the messaging kind carries one.
+key). The ledgers carry one; the messaging kind carries one. The database and
+cache kinds carry none: under multitenant a module always resolves them per
+tenant, while the framework's own readiness probe and a shared ledger still
+reach the control-plane key.
 _Avoid_: mode, scope, isolation, tenant model
+
+**Resource plan**:
+What the deployment says about each resource kind, fixed once when the
+application is built: the kind's Tenancy, and whether the control-plane key
+holds that kind — known present, known absent, or knowable only at runtime.
+Presence is whatever the source that serves the control-plane key answers; a
+source that can only answer at runtime makes it unknown, never assumed. A kind
+is unavailable when it resolves on the control-plane key and that key is known
+absent. Everything at startup that must know where a kind resolves or whether
+it is configured reads the plan; nothing re-derives it.
+_Avoid_: tenancy verdict (a Verdict is a database section's), posture, mode,
+tenancy table
 
 **Replay**:
 Applying validated declarations to one key — declare infrastructure, start

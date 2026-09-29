@@ -1127,7 +1127,10 @@ func TestMarkConfiguredMirrorsRootResolver(t *testing.T) {
 		})},
 		{name: "custom_cache_connector_is_wired", cfg: &config.Config{}, opts: &Options{CacheConnector: func(context.Context, string) (cache.Cache, error) { return nil, nil }}, wantCache: true},
 		{name: "multi_tenant_reads_true_for_every_kind", cfg: withCfg(func(c *config.Config) { c.Multitenant.Enabled = true }), wantDB: true, wantMessaging: true, wantCache: true},
-		{name: "dynamic_config_source_reads_true", cfg: withCfg(func(c *config.Config) { c.Source.Type = config.SourceTypeDynamic }), wantDB: true, wantMessaging: true, wantCache: true},
+		{
+			name: "dynamic_resource_source_reads_true", cfg: withCfg(func(c *config.Config) { c.Source.Type = config.SourceTypeDynamic }),
+			opts: &Options{ResourceSource: &dynamicResourceSource{dynamic: true}}, wantDB: true, wantMessaging: true, wantCache: true,
+		},
 		{name: "caller_resource_source_reads_true", cfg: &config.Config{}, opts: &Options{ResourceSource: &dynamicResourceSource{dynamic: false}}, wantDB: true, wantMessaging: true, wantCache: true},
 		{name: "nil_config_reads_true", cfg: nil, wantDB: true, wantMessaging: true, wantCache: true},
 	}
@@ -1135,7 +1138,11 @@ func TestMarkConfiguredMirrorsRootResolver(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			deps := &ModuleDeps{}
-			markConfigured(deps, tt.cfg, tt.opts)
+			plan := resourcePlan{} // a nil config reaches only a directly built App: the inert plan
+			if tt.cfg != nil {
+				plan = planResources(tt.cfg, tt.opts, newFactoryResolverForConfig(tt.opts, tt.cfg).ResourceSource(tt.cfg))
+			}
+			markConfigured(deps, plan)
 
 			assert.Equal(t, tt.wantDB, deps.DBConfigured, "DBConfigured")
 			assert.Equal(t, tt.wantMessaging, deps.MessagingConfigured, "MessagingConfigured")

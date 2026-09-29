@@ -90,6 +90,10 @@ type App struct {
 	// Observability
 	observability observability.Provider
 
+	// plan is the Resource plan the Builder computed (ADR-126); the zero value, for an App
+	// built without one, is inert.
+	plan resourcePlan
+
 	// Unified managers
 	dbManager        *database.DbManager
 	messagingManager *messaging.Manager

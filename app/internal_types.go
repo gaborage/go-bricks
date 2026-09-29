@@ -15,6 +15,7 @@ type namedCloser struct {
 
 // dependencyBundle holds the created resource managers and dependencies
 type dependencyBundle struct {
+	plan             resourcePlan // computed once, before any manager (ADR-126)
 	deps             *ModuleDeps
 	dbManager        *database.DbManager
 	messagingManager *messaging.Manager

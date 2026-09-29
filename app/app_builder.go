@@ -216,6 +216,7 @@ func (b *Builder) CreateApp() *Builder {
 		messagingManager: b.bundle.messagingManager,
 		cacheManager:     b.bundle.cacheManager,
 		resourceProvider: b.bundle.provider,
+		plan:             b.bundle.plan,
 	}
 	if b.opts != nil && b.opts.PostRegisterRoutes != nil {
 		b.app.postRegisterRoutes = b.opts.PostRegisterRoutes
