@@ -113,7 +113,7 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBund
 
 	// Create managers using the factory
 	dbManager := factory.CreateDatabaseManager(resourceSource)
-	b.warnIfDatabaseAbsent()
+	b.warnIfDatabaseAbsent(plan.database)
 	messagingManager := factory.CreateMessagingManager(resourceSource)
 	cacheManager, err := factory.CreateCacheManager(resourceSource)
 	if err != nil {
@@ -186,50 +186,12 @@ func markConfigured(deps *ModuleDeps, plan resourcePlan) {
 	deps.CacheConfigured = plan.cache.configured()
 }
 
-// rootDatabaseAbsent reports whether a deployment that expects a root database: block
-// has none. Two modes legitimately leave that block empty, because they resolve
-// database config per tenant at runtime instead: multi-tenant (config validation
-// rejects a root block alongside static tenants) and a dynamic source, which the build
-// has made agree with a dynamic Options.ResourceSource (ADR-125). Keep this set in step
-// with ConfigureRuntimeHelpers' skipPreInit, which enumerates the same modes.
-//
-// This is the single home for the exemption set — see DatabaseRequirer in module.go
-// for why absence needs interpreting at all.
-func rootDatabaseAbsent(cfg *config.Config) bool {
-	if cfg == nil || cfg.Multitenant.Enabled || cfg.Source.Type == config.SourceTypeDynamic {
-		return false
-	}
-	return !config.IsDatabaseConfigured(&cfg.Database)
-}
-
-// rootCacheAbsent reports whether the probe's fixed "" key can never resolve a cache, so
-// leasing one every poll is guaranteed-doomed work whose failure the pool counts as an
-// error. CacheConfig("") reads the ROOT cache block on the framework's own TenantStore
-// even in multi-tenant mode, so multi-tenancy is not an exemption here (unlike
-// rootDatabaseAbsent) — a deployment whose caches live only under
-// multitenant.tenants.<id>.cache genuinely has nothing under "".
-//
-// Diverges from rootDatabaseAbsent in one more way, deliberately: ANY caller-supplied
-// ResourceSource is an exemption, not only a dynamic one. rootDatabaseAbsent gates a
-// startup WARN; this gates whether a probe runs at all, and a false positive would hide a
-// live cache from readiness forever. Options.CacheConnector is exempt because it never
-// reads cache.enabled.
-func rootCacheAbsent(cfg *config.Config, opts *Options) bool {
-	if cfg == nil || cfg.Cache.Enabled || cfg.Source.Type == config.SourceTypeDynamic {
-		return false
-	}
-	if opts != nil && (opts.CacheConnector != nil || opts.ResourceSource != nil) {
-		return false
-	}
-	return true
-}
-
 // warnIfDatabaseAbsent emits one advisory startup WARN for a database-free service.
 // It is the backstop for modules that declare no DatabaseRequirer: without a
 // declaration this line is the only production-visible signal that distinguishes a
 // deliberately database-free service from one whose config never arrived.
-func (b *appBootstrap) warnIfDatabaseAbsent() {
-	if !rootDatabaseAbsent(b.cfg) {
+func (b *appBootstrap) warnIfDatabaseAbsent(database kindPlan) {
+	if !database.unavailable() {
 		return
 	}
 

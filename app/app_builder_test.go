@@ -728,36 +728,36 @@ func TestAppBuilderInitializeRegistryErrors(t *testing.T) {
 	})
 }
 
-// TestAppBuilderInitializeRegistryWiresDatabaseVerdict pins the one wiring step that
-// arms ModuleRegistry's DatabaseRequirer gate. The gate's zero value is inert, so
-// dropping this assignment would silently disable it with no compile error — this test
-// is what notices.
-func TestAppBuilderInitializeRegistryWiresDatabaseVerdict(t *testing.T) {
-	tests := []struct {
-		name         string
-		mutate       func(cfg *config.Config)
-		wantDBAbsent bool
-	}{
-		{name: "absent_database_arms_the_gate", wantDBAbsent: true, mutate: func(*config.Config) {}},
-		{name: "configured_database_leaves_it_disarmed", wantDBAbsent: false, mutate: func(cfg *config.Config) {
-			cfg.Database.Type = "postgresql"
-		}},
+// TestAppBuilderConfigureRuntimeHelpersAnnouncesARuntimeKeyedPlan pins the two INFO lines a
+// dynamic store prints: both, once each, exactly when the plan's "" is knowable only at runtime.
+func TestAppBuilderConfigureRuntimeHelpersAnnouncesARuntimeKeyedPlan(t *testing.T) {
+	lines := []string{
+		"Dynamic source type detected - skipping pre-initialization",
+		"Dynamic resource store detected - skipping pre-initialization",
 	}
-
-	for _, tt := range tests {
+	for _, tt := range []struct {
+		name     string
+		presence keyPresence
+		want     int
+	}{
+		{name: "runtime_keyed_plan_announces", presence: keyAtRuntime, want: 1},
+		{name: "build_time_keyed_plan_stays_silent", presence: keyPresent, want: 0},
+	} {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.Config{}
-			tt.mutate(cfg)
-			builder := &Builder{
-				cfg:    cfg,
-				app:    &App{},
-				bundle: &dependencyBundle{deps: &ModuleDeps{Config: cfg}},
+			rec := &recLogger{}
+			app := &App{}
+			app.installSlots(resourcePlan{database: kindPlan{kind: componentDatabase, presence: tt.presence}})
+			builder := &Builder{cfg: &config.Config{}, logger: rec, app: app}
+
+			require.NoError(t, builder.ConfigureRuntimeHelpers().err)
+
+			for _, line := range lines {
+				got := rec.linesWith(line)
+				require.Len(t, got, tt.want, line)
+				for _, e := range got {
+					assert.Equal(t, "info", e.level, line)
+				}
 			}
-
-			result := builder.InitializeRegistry()
-
-			require.NoError(t, result.err)
-			assert.Equal(t, tt.wantDBAbsent, result.app.registry.rootDBAbsent)
 		})
 	}
 }
@@ -863,14 +863,16 @@ func TestAppBuilderConfigureRuntimeHelpersGuardsRecognizedSchemeWithoutValidatio
 func TestAppBuilderConfigureRuntimeHelpersExemptsCustomConnector(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Database.ConnectionString = unrecognizedSchemeDSN
-	cfg.Multitenant.Enabled = true // skip pre-initialization; only the guard is under test
+	cfg.Multitenant.Enabled = true // no row pre-inits; only the guard is under test
 
 	opts := &Options{
 		DatabaseConnector: func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
 			return &testmocks.MockDatabase{}, nil
 		},
 	}
-	builder := &Builder{cfg: cfg, opts: opts, logger: logger.New("error", false), app: &App{}}
+	app := &App{}
+	app.installSlots(fixturePlan(cfg))
+	builder := &Builder{cfg: cfg, opts: opts, logger: logger.New("error", false), app: app}
 	result := builder.ConfigureRuntimeHelpers()
 
 	require.NoError(t, result.err)
@@ -912,7 +914,7 @@ func TestAppBuilderConfigureRuntimeHelpersIgnoresTenantsWhenMultitenantDisabled(
 	// Empty bundle: single-tenant static config runs pre-initialization, which no-ops
 	// on nil managers.
 	app := &App{}
-	app.installSlots(slotInputs{})
+	app.installSlots(resourcePlan{})
 	builder := &Builder{cfg: cfg, logger: logger.New("error", false), app: app, bundle: &dependencyBundle{}}
 	result := builder.ConfigureRuntimeHelpers()
 
@@ -936,7 +938,7 @@ func TestAppBuilderCreateHealthProbesErrors(t *testing.T) {
 
 func TestAppBuilderCreateHealthProbesInstallsTheJudgeOverEverySlot(t *testing.T) {
 	app := &App{cfg: defaultTestConfig(), cacheManager: createTestCacheManager(t)}
-	app.installSlots(slotInputs{})
+	app.installSlots(fixturePlan(app.cfg))
 	builder := &Builder{logger: logger.New("error", false), app: app}
 
 	result := builder.CreateHealthProbes()
@@ -962,7 +964,7 @@ func TestAppBuilderCreateHealthProbesAppliesCacheCritical(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			app := &App{cfg: tc.cfg, cacheManager: createTestCacheManager(t)}
 			// CreateApp installs the slots CreateHealthProbes walks; this builder skips it.
-			app.installSlots(slotInputs{})
+			app.installSlots(fixturePlan(app.cfg))
 			builder := &Builder{
 				logger: logger.New("error", false),
 				app:    app,
@@ -1004,7 +1006,7 @@ func TestAppBuilderExplicitFalseCacheCriticalIsSilent(t *testing.T) {
 			rec := &recLogger{}
 			app := &App{cfg: &config.Config{Cache: tc.cache}, cacheManager: cacheManager}
 			// CreateApp installs the slots CreateHealthProbes walks; this builder skips it.
-			app.installSlots(slotInputs{})
+			app.installSlots(fixturePlan(app.cfg))
 			builder := &Builder{logger: rec, opts: tc.opts, app: app}
 			require.NoError(t, builder.CreateHealthProbes().err)
 
@@ -1071,7 +1073,7 @@ func TestAppBuilderWarnsOnQueryParameterLogging(t *testing.T) {
 			rec := &recLogger{}
 			app := &App{cfg: cfg}
 			// CreateApp installs the slots CreateHealthProbes walks; this builder skips it.
-			app.installSlots(slotInputs{})
+			app.installSlots(fixturePlan(app.cfg))
 			builder := &Builder{
 				logger: rec,
 				app:    app,

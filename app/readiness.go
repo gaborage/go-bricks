@@ -48,7 +48,7 @@ type probeDescription struct {
 	critical bool
 	// disabled marks a kind with no manager at all: reported as disabled, nothing is leased.
 	disabled bool
-	// absent marks a kind whose fixed "" key can never resolve (see rootCacheAbsent):
+	// absent marks a kind whose fixed "" key can never resolve (see kindPlan.probe):
 	// reported as not_configured (or per_tenant) without attempting a lease.
 	absent bool
 	// perTenant relabels a not-configured verdict as per_tenant: a multi-tenant deployment

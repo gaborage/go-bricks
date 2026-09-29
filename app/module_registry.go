@@ -18,7 +18,7 @@ type ModuleRegistry struct {
 	deps            *ModuleDeps
 	logger          logger.Logger
 	registeredNames map[string]Module // Tracks registered modules to prevent duplicates
-	// rootDBAbsent records the builder's rootDatabaseAbsent verdict, gating the
+	// rootDBAbsent records the Resource plan's database unavailable() answer, gating the
 	// DatabaseRequirer check. Zero value (false) leaves that check inert.
 	rootDBAbsent bool
 	// routeSpans are the per-module registration spans of the last RegisterRoutes (no
@@ -133,10 +133,10 @@ func (r *ModuleRegistry) Register(module Module) error {
 // deployment with no database. It runs before Init so the module never sees a
 // dependency it declared as mandatory and cannot get.
 //
-// rootDBAbsent is supplied by the builder, which is the only place that holds the
-// validated config rootDatabaseAbsent evaluates. Its zero value disables the check, so a
-// registry built directly — outside the builder, with no config to consult — stays
-// inert rather than aborting on a verdict it cannot reach.
+// rootDBAbsent is supplied by the builder from the Resource plan, which only the builder
+// holds. Its zero value disables the check, so a registry built directly — outside the
+// builder, with no plan to consult — stays inert rather than aborting on a verdict it
+// cannot reach.
 func (r *ModuleRegistry) checkDatabaseRequirement(module Module) error {
 	requirer, ok := module.(DatabaseRequirer)
 	if !ok || !requirer.RequiresDatabase() || !r.rootDBAbsent {

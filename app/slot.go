@@ -70,23 +70,18 @@ var (
 	_ resourceSlot = (*streamsSlot)(nil)
 )
 
-// slotInputs carries the verdicts a slot cannot reach from App alone. Only one qualifies:
-// the cache's absence under the fixed "" key reads Options (rootCacheAbsent), which the
-// Builder holds and App does not.
-type slotInputs struct {
-	cacheAbsent bool
-}
-
 // installSlots builds the one slot list every lifecycle phase walks, in the one
 // registration order: database → messaging → cache → streams. Close stays FIFO over the
 // same order. Each slot holds the App rather than a snapshot of its managers, so a manager
 // swapped in later (the streams manager, which only exists after start) is seen by the next
-// walk without rebuilding the list.
-func (a *App) installSlots(inputs slotInputs) {
+// walk without rebuilding the list. It is the one writer of App.plan, and hands each
+// slot its own kind's row of it.
+func (a *App) installSlots(plan resourcePlan) {
+	a.plan = plan
 	a.slots = []resourceSlot{
-		&databaseSlot{sealedReadiness: sealedReadiness{kind: componentDatabase}, app: a},
-		&messagingSlot{sealedReadiness: sealedReadiness{kind: componentMessaging}, app: a},
-		&cacheSlot{sealedReadiness: sealedReadiness{kind: componentCache}, app: a, absent: inputs.cacheAbsent},
+		&databaseSlot{sealedReadiness: sealedReadiness{kind: componentDatabase}, app: a, plan: plan.database},
+		&messagingSlot{sealedReadiness: sealedReadiness{kind: componentMessaging}, app: a, plan: plan.messaging},
+		&cacheSlot{sealedReadiness: sealedReadiness{kind: componentCache}, app: a, plan: plan.cache},
 		&streamsSlot{sealedReadiness: sealedReadiness{kind: componentStreams}, app: a},
 	}
 }
@@ -159,20 +154,20 @@ func (s *sealedReadiness) readiness() *probeDescription { return s.description }
 // databaseSlot owns the database kind.
 type databaseSlot struct {
 	sealedReadiness
-	app *App
+	app  *App
+	plan kindPlan
 }
 
 // describe builds the database kind's description: critical, leased through the fixed ""
-// key, live when the leased connection's Health passes. perTenant only relabels a
-// not-configured verdict — the lease is always attempted (probeDescription.perTenant).
+// key, live when the leased connection's Health passes. The plan's probe always leases and
+// only relabels a not-configured verdict (probeDescription.perTenant).
 func (s *databaseSlot) describe() (probeDescription, bool) {
 	m := s.app.dbManager
 	if m == nil {
 		return disabledProbe(s.kind), true
 	}
-	return probeDescription{
-		critical:  true,
-		perTenant: s.app.multiTenant(),
+	return s.plan.probe(probeDescription{
+		critical: true,
 		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
 			conn, release, err := m.Get(ctx, "")
 			if err != nil {
@@ -181,7 +176,7 @@ func (s *databaseSlot) describe() (probeDescription, bool) {
 			return conn.Health, release, nil
 		},
 		stats: m.Stats,
-	}, true
+	}), true
 }
 
 func (s *databaseSlot) preInitFatal() bool { return true }
@@ -192,8 +187,7 @@ func (s *databaseSlot) preInit(ctx context.Context) error {
 	if s.app.dbManager == nil {
 		return nil
 	}
-	return s.app.preInitLease(ctx, s.name(),
-		config.IsDatabaseConfigured(&s.app.cfg.Database), s.app.cfg.App.Startup.Database,
+	return s.app.preInitLease(ctx, s.plan, s.name(), s.app.cfg.App.Startup.Database,
 		func(ctx context.Context) (func(), error) {
 			_, release, err := s.app.dbManager.Get(ctx, "")
 			return release, err
@@ -204,8 +198,8 @@ func (s *databaseSlot) preInit(ctx context.Context) error {
 // Advisory only: a cold database is a runtime condition, and pre-init has already made a
 // *misconfigured* one fatal.
 func (s *databaseSlot) start(ctx context.Context) (advisory, fatal error) {
-	return s.app.preWarmKind(ctx, s.name(), "database connection",
-		kindPresent(s.app.dbManager != nil), kindPerTenant(s.app.multiTenant()), s.app.preWarmDatabase), nil
+	return s.app.preWarmKind(ctx, s.plan, s.name(), "database connection",
+		kindPresent(s.app.dbManager != nil), s.app.preWarmDatabase), nil
 }
 
 func (s *databaseSlot) stop(context.Context) {
@@ -219,7 +213,8 @@ func (s *databaseSlot) closer() (namedCloser, bool) {
 // messagingSlot owns the AMQP kind.
 type messagingSlot struct {
 	sealedReadiness
-	app *App
+	app  *App
+	plan kindPlan
 }
 
 // describe builds the messaging kind's description: leased through the fixed "" key, live when
@@ -271,8 +266,7 @@ func (s *messagingSlot) preInit(ctx context.Context) error {
 	if s.app.messagingManager == nil {
 		return nil
 	}
-	return s.app.preInitLease(ctx, s.name(),
-		config.IsMessagingConfigured(&s.app.cfg.Messaging), s.app.cfg.App.Startup.Messaging,
+	return s.app.preInitLease(ctx, s.plan, s.name(), s.app.cfg.App.Startup.Messaging,
 		func(ctx context.Context) (func(), error) {
 			_, release, err := s.app.messagingManager.Publisher(ctx, "")
 			return release, err
@@ -290,9 +284,8 @@ func (s *messagingSlot) start(ctx context.Context) (advisory, fatal error) {
 		return nil, err
 	}
 
-	return s.app.preWarmKind(ctx, s.name(), componentMessaging,
-		kindPresent(s.app.messagingManager != nil), kindPerTenant(s.app.perTenantMessaging()),
-		s.app.preWarmMessaging), nil
+	return s.app.preWarmKind(ctx, s.plan, s.name(), componentMessaging,
+		kindPresent(s.app.messagingManager != nil), s.app.preWarmMessaging), nil
 }
 
 func (s *messagingSlot) stop(context.Context) { s.app.shutdownConsumers() }
@@ -304,25 +297,21 @@ func (s *messagingSlot) closer() (namedCloser, bool) {
 // cacheSlot owns the cache kind.
 type cacheSlot struct {
 	sealedReadiness
-	app *App
-	// absent is the Builder's rootCacheAbsent verdict, captured once at installSlots because
-	// it reads Options, which App does not hold.
-	absent bool
+	app  *App
+	plan kindPlan
 }
 
 // describe builds the cache kind's description: critical per config (ADR-094), absent when
-// the fixed "" key can never resolve (rootCacheAbsent), live when a bounded PING of the
-// leased instance passes — a pooled instance is returned without a round trip, so it is
-// pinged explicitly.
+// the plan knows the fixed "" key holds no cache, live when a bounded PING of the leased
+// instance passes — a pooled instance is returned without a round trip, so it is pinged
+// explicitly.
 func (s *cacheSlot) describe() (probeDescription, bool) {
 	m := s.app.cacheManager
 	if m == nil {
 		return disabledProbe(s.kind), true
 	}
-	return probeDescription{
-		critical:  s.app.cfg.IsCacheCritical(),
-		absent:    s.absent,
-		perTenant: s.app.multiTenant(),
+	return s.plan.probe(probeDescription{
+		critical: s.app.cfg.IsCacheCritical(),
 		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
 			instance, release, err := m.Get(ctx, "")
 			if err != nil {
@@ -335,20 +324,20 @@ func (s *cacheSlot) describe() (probeDescription, bool) {
 			}, release, nil
 		},
 		stats: func() map[string]any { return convertCacheStatsToMap(m.Stats()) },
-	}, true
+	}), true
 }
 
 func (s *cacheSlot) preInitFatal() bool { return false }
 
-// preInit leases the fixed "" key under app.startup.cache, unless that key can never
-// resolve (absent). Best-effort: reaching the cache is a runtime concern, distinct from the
-// manager-creation contract, which already failed closed at CreateCacheManager. A lease that
-// reports not-configured is a silent skip, not a failure.
+// preInit leases the fixed "" key under app.startup.cache when the plan says so.
+// Best-effort: reaching the cache is a runtime concern, distinct from the manager-creation
+// contract, which already failed closed at CreateCacheManager. A lease that reports
+// not-configured is a silent skip, not a failure.
 func (s *cacheSlot) preInit(ctx context.Context) error {
-	if s.app.cacheManager == nil || s.absent {
+	if s.app.cacheManager == nil {
 		return nil
 	}
-	err := s.app.preInitLease(ctx, s.name(), true, s.app.cfg.App.Startup.Cache,
+	err := s.app.preInitLease(ctx, s.plan, s.name(), s.app.cfg.App.Startup.Cache,
 		func(ctx context.Context) (func(), error) {
 			_, release, err := s.app.cacheManager.Get(ctx, "")
 			return release, err
@@ -360,9 +349,12 @@ func (s *cacheSlot) preInit(ctx context.Context) error {
 	return err
 }
 
-// start is a no-op: the cache has no runtime bootstrap and no single-tenant pre-warm —
-// preInit already leased the fixed "" key during Builder construction.
-func (s *cacheSlot) start(context.Context) (advisory, fatal error) { return nil, nil }
+// start pre-warms the fixed "" key when the plan says so. The cache has no runtime
+// bootstrap.
+func (s *cacheSlot) start(ctx context.Context) (advisory, fatal error) {
+	return s.app.preWarmKind(ctx, s.plan, s.name(), "cache connection",
+		kindPresent(s.app.cacheManager != nil), s.app.preWarmCache), nil
+}
 
 func (s *cacheSlot) stop(context.Context) {
 	// no runtime teardown: the manager is released by the FIFO close list, via closer()
@@ -446,32 +438,19 @@ func slotCloser[T any, P interface {
 // mistake — the two would otherwise be interchangeable positional strings.
 type preWarmSubject string
 
-// preWarmKind is the arm the two single-tenant pre-warming kinds share. subject names the
-// thing warmed in the two operator-facing lines, which is not the kind's own name for the
-// database ("database connection" vs "messaging"); present is the kind's manager-built
-// verdict, which only the slot can read. Multi-tenant deployments resolve per tenant, so
-// the fixed "" key is never warmed; a not-configured kind is a silent skip; anything else
-// is advisory, never fatal.
-// kindPresent reports whether the kind's manager was built at all, and kindPerTenant
-// whether the kind resolves per tenant rather than on the control-plane key. They are
-// distinct types because they are adjacent arguments of the same underlying type with
-// opposite meanings: as plain bools a transposed pair compiles silently and inverts
-// warm-vs-skip.
-type (
-	kindPresent   bool
-	kindPerTenant bool
-)
+// kindPresent reports whether the kind's manager was built at all, which only the slot can
+// read.
+type kindPresent bool
 
-// preWarmKind opens the kind's fixed-key resource once at startup so the first
-// request does not pay the dial. It warms only a kind resolved on the control-plane
-// key: a per-tenant kind has no fixed key to warm, and which of the two a kind is
-// no longer follows from the deployment being multi-tenant — under
-// messaging.tenancy: shared the messaging kind resolves on the control-plane key
-// while the database beside it still resolves per tenant.
-func (a *App) preWarmKind(ctx context.Context, kind string, subject preWarmSubject, present kindPresent,
-	perTenant kindPerTenant, warm func(context.Context) error,
+// preWarmKind opens the kind's fixed-key resource once at startup so the first request does
+// not pay the dial, when the kind's row says it pre-warms. subject names the thing warmed in
+// the two operator-facing lines, which is not the kind's own name for the database
+// ("database connection" vs "messaging"). A not-configured kind is a silent skip; anything
+// else is advisory, never fatal.
+func (a *App) preWarmKind(ctx context.Context, plan kindPlan, kind string, subject preWarmSubject,
+	present kindPresent, warm func(context.Context) error,
 ) error {
-	if perTenant {
+	if !plan.preWarms() {
 		return nil
 	}
 	if !present {
@@ -492,14 +471,14 @@ func (a *App) preWarmKind(ctx context.Context, kind string, subject preWarmSubje
 	return nil
 }
 
-// preInitLease is the arm the two startup-fatal kinds share: an unconfigured kind is skipped
-// without leasing, and a configured one leases the fixed "" key under its own budget and
+// preInitLease is the arm the leasing kinds share: a kind whose row does not pre-init is
+// skipped without leasing, and one that does leases the fixed "" key under its own budget and
 // releases it at once. It returns the raw lease failure; preInitFatal grades it.
-func (a *App) preInitLease(ctx context.Context, kind string, configured bool, timeout time.Duration,
+func (a *App) preInitLease(ctx context.Context, plan kindPlan, kind string, timeout time.Duration,
 	lease func(context.Context) (func(), error),
 ) error {
-	if !configured {
-		a.logger.Debug().Msgf("Skipping %s pre-initialization: not configured", kind)
+	if !plan.preInits() {
+		a.logger.Debug().Msgf("Skipping %s pre-initialization: %s, control-plane key %s", kind, plan.tenancy, plan.presence)
 		return nil
 	}
 

@@ -8,6 +8,11 @@
 > **Amended (2026-09-06, [ADR-066](adr_066_readiness_one_module.md) as amended):** the
 > `databaseProbe` constructor named below now lives in the database slot's `describe()`
 > (`app/slot.go`).
+>
+> **Amended (2026-09-29, [ADR-126](adr_126_resource_plan.md)):** `rootDatabaseAbsent`, named
+> below, is deleted. The `DatabaseRequirer` exemption set it held now lives in the Resource plan
+> (`app/resource_plan.go`): the absence WARN and the `DatabaseRequirer` abort both read the
+> database row's `unavailable()` answer.
 
 ## Context
 

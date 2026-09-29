@@ -356,16 +356,27 @@ func (m *fakeDBRequiringModule) Init(_ *ModuleDeps) error { m.inited = true; ret
 func (m *fakeDBRequiringModule) Shutdown() error          { return nil }
 func (m *fakeDBRequiringModule) RequiresDatabase() bool   { return m.requires }
 
-func newDBRequirementRegistry(rootDBAbsent bool) *ModuleRegistry {
-	reg := NewModuleRegistry(&ModuleDeps{Logger: &recLogger{}, Config: &config.Config{}})
-	reg.rootDBAbsent = rootDBAbsent
-	return reg
+// registryUnderPlan builds the registry the way the Builder does, from a database row given
+// as is. The gate's zero value is inert, so a dropped wiring step fails the rejection below.
+func registryUnderPlan(t *testing.T, database kindPlan) *ModuleRegistry {
+	t.Helper()
+	builder := &Builder{app: &App{}, bundle: &dependencyBundle{
+		plan: resourcePlan{database: database},
+		deps: &ModuleDeps{Logger: &recLogger{}, Config: &config.Config{}},
+	}}
+	require.NoError(t, builder.InitializeRegistry().err)
+	return builder.app.registry
 }
+
+var (
+	unavailableDatabase = kindPlan{kind: componentDatabase, presence: keyAbsent}
+	presentDatabase     = kindPlan{kind: componentDatabase, presence: keyPresent}
+)
 
 func TestRegisterRejectsDatabaseRequirerWhenDatabaseAbsent(t *testing.T) {
 	mod := &fakeDBRequiringModule{name: "payments", requires: true}
 
-	err := newDBRequirementRegistry(true).Register(mod)
+	err := registryUnderPlan(t, unavailableDatabase).Register(mod)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "payments", "the error must name the offending module")
@@ -384,29 +395,29 @@ func TestRegisterRejectsDatabaseRequirerWhenDatabaseAbsent(t *testing.T) {
 
 func TestRegisterAcceptsModulesWhenDatabaseRequirementDoesNotApply(t *testing.T) {
 	tests := []struct {
-		name         string
-		module       Module
-		rootDBAbsent bool
+		name     string
+		module   Module
+		database kindPlan
 	}{
 		{
-			name: "requirer_with_database_present", rootDBAbsent: false,
+			name: "requirer_with_database_present", database: presentDatabase,
 			module: &fakeDBRequiringModule{name: "payments", requires: true},
 		},
 		// A module may implement the interface and still decline, gating the
 		// requirement on its own construction-time config.
 		{
-			name: "requirer_declines_requirement", rootDBAbsent: true,
+			name: "requirer_declines_requirement", database: unavailableDatabase,
 			module: &fakeDBRequiringModule{name: "payments", requires: false},
 		},
 		{
-			name: "module_never_declares_requirement", rootDBAbsent: true,
+			name: "module_never_declares_requirement", database: unavailableDatabase,
 			module: &minimalModule{name: "forwarder"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.NoError(t, newDBRequirementRegistry(tt.rootDBAbsent).Register(tt.module))
+			require.NoError(t, registryUnderPlan(t, tt.database).Register(tt.module))
 		})
 	}
 }

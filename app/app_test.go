@@ -493,7 +493,7 @@ func newTestAppFixture(t *testing.T, opts ...fixtureOption) *testAppFixture {
 		opt(fixture)
 	}
 
-	fixture.app.installSlots(slotInputs{})
+	fixture.app.installSlots(fixturePlan(fixture.app.cfg))
 	fixture.rebuildLifecycle()
 	fixture.server.RegisterReadyHandler(fixture.app.readyCheck)
 
@@ -811,7 +811,7 @@ func TestSlotCriticalityFromLoadedConfig(t *testing.T) {
 			app := &App{cfg: loadConfigFromYAML(t, minimumValidConfig+tc.yaml), logger: logger.New("error", false)}
 			tc.wire(t, app)
 
-			app.installSlots(slotInputs{})
+			app.installSlots(fixturePlan(app.cfg))
 
 			status := slotDescription(t, app, tc.component).Run(context.Background())
 			assert.Equal(t, tc.component, status.Name)

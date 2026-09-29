@@ -29,11 +29,24 @@ func describingApp(perTenant bool) *App {
 	return &App{cfg: &config.Config{Multitenant: config.MultitenantConfig{Enabled: perTenant}}}
 }
 
+// describedRow is the row a kind's description is asked under: per-tenant or single-tenant,
+// with "" known absent or known present.
+func describedRow(kind string, perTenant, absent bool) kindPlan {
+	row := kindPlan{kind: kind, presence: keyPresent}
+	if perTenant {
+		row.tenancy = perTenantTenancy
+	}
+	if absent {
+		row.presence = keyAbsent
+	}
+	return row
+}
+
 func databaseDescription(t *testing.T, m *database.DbManager, perTenant bool) probeDescription {
 	t.Helper()
 	a := describingApp(perTenant)
 	a.dbManager = m
-	a.installSlots(slotInputs{})
+	a.installSlots(resourcePlan{database: describedRow(componentDatabase, perTenant, false)})
 	return slotDescription(t, a, componentDatabase)
 }
 
@@ -41,7 +54,7 @@ func messagingDescription(t *testing.T, m *messaging.Manager, perTenant bool) pr
 	t.Helper()
 	a := describingApp(perTenant)
 	a.messagingManager = m
-	a.installSlots(slotInputs{})
+	a.installSlots(fixturePlan(a.cfg))
 	return slotDescription(t, a, componentMessaging)
 }
 
@@ -50,7 +63,7 @@ func cacheDescription(t *testing.T, m *cache.CacheManager, critical, absent, per
 	a := describingApp(perTenant)
 	a.cfg.Cache.Critical = critical
 	a.cacheManager = m
-	a.installSlots(slotInputs{cacheAbsent: absent})
+	a.installSlots(resourcePlan{cache: describedRow(componentCache, perTenant, absent)})
 	return slotDescription(t, a, componentCache)
 }
 
@@ -58,7 +71,7 @@ func streamsDescription(t *testing.T, m streamHandle) probeDescription {
 	t.Helper()
 	a := describingApp(false)
 	a.streamsManager = m
-	a.installSlots(slotInputs{})
+	a.installSlots(fixturePlan(a.cfg))
 	return slotDescription(t, a, componentStreams)
 }
 

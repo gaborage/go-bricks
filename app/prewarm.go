@@ -24,7 +24,7 @@ const defaultPreWarmReadinessTimeout = 5 * time.Second
 const preWarmReadinessPollInterval = 100 * time.Millisecond
 
 // preWarmDatabase leases the fixed "" key to verify connectivity and releases it
-// immediately. databaseSlot.start holds the manager nil check and the deployment-mode gate.
+// immediately. databaseSlot.start holds the manager nil check and the plan's gate.
 func (a *App) preWarmDatabase(ctx context.Context) error {
 	_, release, err := a.dbManager.Get(ctx, "")
 	if err != nil {
@@ -34,10 +34,21 @@ func (a *App) preWarmDatabase(ctx context.Context) error {
 	return nil
 }
 
+// preWarmCache leases the fixed "" key to verify connectivity and releases it immediately.
+// cacheSlot.start holds the manager nil check and the plan's gate.
+func (a *App) preWarmCache(ctx context.Context) error {
+	_, release, err := a.cacheManager.Get(ctx, "")
+	if err != nil {
+		return err
+	}
+	release()
+	return nil
+}
+
 // preWarmMessaging waits, bounded, for the fixed "" key's publisher to report ready. It
 // verifies publisher connectivity only: the consumer bootstrap lives once, in
 // prepareRuntimeConsumers, which the messaging slot's start runs before this.
-// messagingSlot.start holds the manager nil check and the deployment-mode gate.
+// messagingSlot.start holds the manager nil check and the plan's gate.
 func (a *App) preWarmMessaging(ctx context.Context) error {
 	client, release, err := a.messagingManager.Publisher(ctx, "")
 	if err != nil {

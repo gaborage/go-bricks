@@ -1213,7 +1213,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   ```
 
 - verify: `go build ./... && go test ./...`
-- ref: `app/module.go` (`DatabaseRequirer`) · `app/module_registry.go` (`checkDatabaseRequirement`) · `app/bootstrap.go` (`rootDatabaseAbsent`, `warnIfDatabaseAbsent`) · #872
+- ref: `app/module.go` (`DatabaseRequirer`) · `app/module_registry.go` (`checkDatabaseRequirement`) · `app/bootstrap.go` (`warnIfDatabaseAbsent`) · `app/resource_plan.go` (`kindPlan.unavailable`) · #872
 
 ### [C56.14] A partially configured database now fails startup · breaking · when: match
 

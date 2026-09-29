@@ -232,7 +232,7 @@ func TestPrepareRuntimeWithScheduler(t *testing.T) {
 		server:   mockSrv,
 		closers:  []namedCloser{},
 	}
-	app.installSlots(slotInputs{})
+	app.installSlots(fixturePlan(app.cfg))
 	app.judge = readinessJudge{slots: app.slots} // Builder.CreateHealthProbes' step
 
 	// Call prepareRuntime
@@ -283,7 +283,7 @@ func newLifecycleCheckAppWithLogger(t *testing.T, cfg *config.Config, log logger
 		server:   newMockServer(),
 		closers:  []namedCloser{},
 	}
-	a.installSlots(slotInputs{})
+	a.installSlots(fixturePlan(a.cfg))
 	// Mirrors Builder.CreateHealthProbes, which prepareRuntime now demands ran.
 	a.judge = readinessJudge{slots: a.slots}
 	return a
@@ -939,7 +939,7 @@ func TestReadyCheckDowngradesCallerCancellationLog(t *testing.T) {
 			cfg := &config.Config{App: config.AppConfig{Name: testApp}, Cache: config.CacheConfig{Critical: true}}
 			rec := &recLogger{}
 			app := &App{cfg: cfg, logger: rec, cacheManager: createTestCacheManagerWithGetError(t, tc.probeErr)}
-			app.installSlots(slotInputs{})
+			app.installSlots(fixturePlan(app.cfg))
 			sealAndJudge(app)
 
 			reqCtx := context.Background()
@@ -999,7 +999,7 @@ func TestReadyCheckWithholdsDatabaseIdentityFromBody(t *testing.T) {
 		cfg.Database.Host = "control-plane.internal"
 		rec := &recLogger{}
 		app := &App{cfg: cfg, logger: rec, dbManager: newRealConnectorDBManager(cfg)}
-		app.installSlots(slotInputs{})
+		app.installSlots(fixturePlan(app.cfg))
 		sealAndJudge(app)
 
 		body, code := runReadyCheck(t, app, cfg)
@@ -1060,7 +1060,7 @@ func runReadyCheck(t *testing.T, app *App, cfg *config.Config) (body map[string]
 func TestReadyCheckOmitsStreamsWhenNoneDeclared(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
 	app := &App{cfg: cfg, logger: logger.New("error", false)}
-	app.installSlots(slotInputs{})
+	app.installSlots(fixturePlan(app.cfg))
 	sealAndJudge(app)
 
 	body, code := runReadyCheck(t, app, cfg)
@@ -1079,7 +1079,7 @@ func TestReadyCheckOmitsStreamsWhenNoneDeclared(t *testing.T) {
 // the guard that is left — readinessFlightContext still reads cfg on the way through.
 func TestReadyCheckWithoutConfigAnswersReady(t *testing.T) {
 	app := &App{logger: logger.New("error", false)}
-	app.installSlots(slotInputs{})
+	app.installSlots(resourcePlan{})
 	sealAndJudge(app)
 
 	body, code := runReadyCheck(t, app, &config.Config{})
