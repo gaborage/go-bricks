@@ -17,8 +17,9 @@ import (
 // planMode is one deployment mode the build accepts. spec switches inputs on: mt, shared
 // (messaging.tenancy), dynamic (source.type dynamic beside a dynamic store), caller (a static
 // Options.ResourceSource), cacheconn, and the db, broker and cache root blocks. want is today's
-// answer per kind (database, messaging, cache); rule is the rule's, where it differs — the
-// cells ADR-127 flips.
+// answer per kind (database, messaging, cache); rule is the rule's, where it differs. Beside a
+// caller store the rule cells are the root-block reading the plan can compute without a lookup;
+// ADR-127 decides those from what the store answers for "".
 type planMode struct {
 	name, spec string
 	want, rule [3]string
@@ -45,10 +46,13 @@ var planModes = []planMode{
 	{name: "st_dynamic_root", spec: "dynamic db broker cache",
 		want: [3]string{"st/runtime configured prewarm", "st/runtime configured prewarm", "st/runtime configured"},
 		rule: [3]string{"", "", "st/runtime configured prewarm"}},
-	{name: "st_caller_noroot", spec: "caller", // ST-staticRS-noroot, ST-customRS-noroot
+	{name: "st_dynamic_cacheconn", spec: "dynamic cacheconn",
+		want: [3]string{"st/runtime configured prewarm", "st/runtime unavailable configured prewarm", "st/runtime configured"},
+		rule: [3]string{"", "st/runtime configured prewarm", "st/runtime configured prewarm"}},
+	{name: "st_caller_noroot", spec: "caller", // ST-staticRS-noroot, ST-customRS-noroot; rule: root-block reading
 		want: [3]string{"st/absent unavailable configured prewarm", "st/absent unavailable configured prewarm", "st/present configured preinit"},
 		rule: [3]string{"st/absent unavailable", "st/absent unavailable", "st/absent unavailable skip"}},
-	{name: "st_caller_root", spec: "caller db broker", // ST-staticRS-root
+	{name: "st_caller_root", spec: "caller db broker", // ST-staticRS-root; rule: root-block reading
 		want: [3]string{"st/present configured preinit prewarm", "st/present configured preinit prewarm", "st/present configured preinit"},
 		rule: [3]string{"", "", "st/absent unavailable skip"}},
 	{name: "st_cacheconn_noroot", spec: "cacheconn", // ST-cacheconn, ST-noroot-cacheconn
@@ -73,7 +77,7 @@ var planModes = []planMode{
 	{name: "mt_shared_dynamic", spec: "mt shared dynamic", // MT-dyn-shared-noroot
 		want: [3]string{"pt/runtime configured per_tenant", "shared/runtime configured prewarm per_tenant", "pt/runtime configured per_tenant"},
 		rule: [3]string{"", "shared/runtime configured prewarm", ""}},
-	{name: "mt_shared_caller_noroot", spec: "mt shared caller", // MT-customRS-shared-noroot
+	{name: "mt_shared_caller_noroot", spec: "mt shared caller", // MT-customRS-shared-noroot; rule: root-block reading
 		want: [3]string{"pt/absent configured per_tenant", "shared/absent configured prewarm per_tenant", "pt/present configured per_tenant"},
 		rule: [3]string{"", "shared/absent unavailable", "pt/absent configured skip per_tenant"}},
 }
@@ -109,7 +113,10 @@ func (m planMode) inputs() (planInputs, *dynamicResourceSource) {
 		cfg.Source.Type = config.SourceTypeDynamic
 	}
 	if on["cacheconn"] {
-		opts = &Options{CacheConnector: func(context.Context, string) (cache.Cache, error) { return nil, nil }}
+		if opts == nil {
+			opts = &Options{}
+		}
+		opts.CacheConnector = func(context.Context, string) (cache.Cache, error) { return nil, nil }
 	}
 	return planInputs{cfg: cfg, opts: opts, store: newFactoryResolverForConfig(opts, cfg).ResourceSource(cfg)}, caller
 }
@@ -211,6 +218,24 @@ func TestDriftLedgerRowsAreLoadBearing(t *testing.T) {
 	for i, row := range todaysLedger.rows {
 		without := driftLedger{presence: todaysLedger.presence, rows: slices.Delete(slices.Clone(todaysLedger.rows), i, i+1)}
 		assert.True(t, changesAnAnswer(without), row.name)
+	}
+}
+
+// TestDriftLedgerRowsNeverOverlap fails when two rows pin one answer on one kind in one mode,
+// where the answer would hang on which pin resolve reads first.
+func TestDriftLedgerRowsNeverOverlap(t *testing.T) {
+	for _, m := range planModes {
+		in, _ := m.inputs()
+		for _, kind := range []string{componentDatabase, componentMessaging, componentCache} {
+			k := planKind(driftLedger{presence: todaysLedger.presence}, in, kind)
+			var pinned answer
+			for _, row := range todaysLedger.rows {
+				if row.when(in, k) {
+					assert.Zero(t, pinned&row.answer, "%s %s: %s pins an answer another row pins", m.name, kind, row.name)
+					pinned |= row.answer
+				}
+			}
+		}
 	}
 }
 
@@ -329,18 +354,45 @@ func planAnswers(p resourcePlan) map[string]any {
 	return answers
 }
 
-// TestNewWithConfigCarriesTheResourcePlan pins the wiring: the Builder plans from the store it
-// hands the managers, App carries that plan, and ModuleDeps' flags are its configured answers.
+// TestNewWithConfigCarriesTheResourcePlan pins the wiring: the Builder plans from its Options
+// and the store it hands the managers, App carries that plan, and ModuleDeps' flags are its
+// configured answers.
 func TestNewWithConfigCarriesTheResourcePlan(t *testing.T) {
-	cfg := defaultTestConfig()
-	cfg.Database = config.DatabaseConfig{}
-	cfg.Messaging = config.MessagingConfig{}
+	cacheConnector := func(context.Context, string) (cache.Cache, error) { return nil, nil }
+	tests := []struct {
+		name          string
+		dynamicSource bool
+		opts          *Options
+		presence      [3]keyPresence
+		configured    [3]bool
+	}{
+		{name: "built_in_store", presence: [3]keyPresence{keyAbsent, keyAbsent, keyAbsent}},
+		{name: "caller_static_store", opts: &Options{ResourceSource: &dynamicResourceSource{}},
+			presence: [3]keyPresence{keyAbsent, keyAbsent, keyPresent}, configured: [3]bool{true, true, true}},
+		{name: "dynamic_store", dynamicSource: true, opts: &Options{ResourceSource: &dynamicResourceSource{dynamic: true}},
+			configured: [3]bool{true, true, true}},
+		{name: "cache_connector", opts: &Options{CacheConnector: cacheConnector},
+			presence: [3]keyPresence{keyAbsent, keyAbsent, keyPresent}, configured: [3]bool{false, false, true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := defaultTestConfig()
+			cfg.Database = config.DatabaseConfig{}
+			cfg.Messaging = config.MessagingConfig{}
+			if tt.dynamicSource {
+				cfg.Source.Type = config.SourceTypeDynamic
+			}
+			var store TenantStore = config.NewTenantStore(cfg)
+			if tt.opts != nil && tt.opts.ResourceSource != nil {
+				store = tt.opts.ResourceSource
+			}
 
-	app, _, err := NewWithConfig(cfg, nil)
-	require.NoError(t, err)
+			app := newConfiguredApp(t, cfg, tt.opts)
 
-	assert.Equal(t, planResources(cfg, nil, config.NewTenantStore(cfg)), app.plan)
-	assert.Equal(t, keyAbsent, app.plan.database.presence)
-	deps := app.registry.deps
-	assert.Equal(t, []bool{false, false, false}, []bool{deps.DBConfigured, deps.MessagingConfigured, deps.CacheConfigured})
+			assert.Equal(t, planResources(cfg, tt.opts, store), app.plan)
+			assert.Equal(t, tt.presence, [3]keyPresence{app.plan.database.presence, app.plan.messaging.presence, app.plan.cache.presence})
+			deps := app.registry.deps
+			assert.Equal(t, tt.configured, [3]bool{deps.DBConfigured, deps.MessagingConfigured, deps.CacheConfigured})
+		})
+	}
 }
