@@ -390,7 +390,8 @@ func TestResourcePlanLookupHonorsTheKindBudget(t *testing.T) {
 	plan, err := planResources(context.Background(), cfg, nil, store)
 
 	require.NoError(t, err)
-	for kind, budget := range map[string]time.Duration{componentDatabase: time.Hour, componentMessaging: 2 * time.Hour, componentCache: 3 * time.Hour} {
+	startup := cfg.App.Startup
+	for kind, budget := range map[string]time.Duration{componentDatabase: startup.Database, componentMessaging: startup.Messaging, componentCache: startup.Cache} {
 		assert.InDelta(t, budget.Seconds(), store.remaining[kind].Seconds(), 60, kind)
 	}
 	assert.Equal(t, [3]keyPresence{keyPresent, keyAbsent, keyPresent},

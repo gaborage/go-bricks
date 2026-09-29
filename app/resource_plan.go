@@ -148,13 +148,15 @@ func (p resourcePlan) sealTenancy() messaging.SealTenancy {
 // before any manager exists.
 func planResources(ctx context.Context, cfg *config.Config, opts *Options, store TenantStore) (resourcePlan, error) {
 	var plan resourcePlan
-	rows := []*kindPlan{&plan.database, &plan.messaging, &plan.cache}
-	for i, kind := range []string{componentDatabase, componentMessaging, componentCache} {
-		presence, err := presenceOf(ctx, cfg, opts, store, kind)
+	for _, row := range []struct {
+		kind string
+		dst  *kindPlan
+	}{{componentDatabase, &plan.database}, {componentMessaging, &plan.messaging}, {componentCache, &plan.cache}} {
+		presence, err := presenceOf(ctx, cfg, opts, store, row.kind)
 		if err != nil {
 			return resourcePlan{}, err
 		}
-		*rows[i] = kindPlan{kind: kind, tenancy: tenancyOf(cfg, kind), presence: presence}
+		*row.dst = kindPlan{kind: row.kind, tenancy: tenancyOf(cfg, row.kind), presence: presence}
 	}
 	return plan, nil
 }
