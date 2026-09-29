@@ -34,6 +34,7 @@ func TestConfigureSealingMapsTenancyAndFacts(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			a := &App{cfg: tc.cfg}
+			a.installSlots(fixturePlan(tc.cfg))
 			a.configureSealing()
 			rt := messaging.SealingRuntime()
 			require.NotNil(t, rt)

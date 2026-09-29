@@ -69,7 +69,7 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 		Logger:              a.logger,
 		Hold:                hold,
 	})
-	mgr.SetTenantStamps(a.multiTenant() && a.sharedMessaging())
+	mgr.SetTenantStamps(a.plan.tenantStamps())
 
 	// A service that declared streams and cannot start them would serve HTTP while
 	// consuming nothing and publishing nowhere, so startup fails rather than
@@ -114,7 +114,7 @@ func (a *App) streamsURIConfigured() bool {
 // handlers against one shared Environment with no tenant in context, which is
 // precisely what the gate exists to prevent.
 func (a *App) assertStreamsNotPerTenant() error {
-	if !a.perTenantMessaging() {
+	if !a.plan.refusesStreams() {
 		return nil
 	}
 	return errors.New("messaging.streams needs single-tenant mode or messaging.tenancy: shared; " +

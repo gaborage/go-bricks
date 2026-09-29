@@ -271,8 +271,8 @@ func callerSource(in planInputs) bool { return in.opts != nil && in.opts.Resourc
 // todaysLedger pins every answer where a reader differs from the rule today, each row naming
 // the reader it reproduces, so planning under it changes no behavior (ADR-126).
 var todaysLedger = driftLedger{
-	// D1: read through presenceOf (resource_plan.go:162) by cacheSlot.describe (slot.go:308)
-	// and cacheSlot.preInit (slot.go:336); reproduces the cache's absence verdict exempting
+	// D1: read through presenceOf (resource_plan.go:162) by cacheSlot.describe (slot.go:307)
+	// and cacheSlot.preInit (slot.go:335); reproduces the cache's absence verdict exempting
 	// ANY caller-supplied ResourceSource, so both lease "" whatever cache.enabled says.
 	presence: func(in planInputs, kind string) (keyPresence, bool) {
 		return keyPresent, kind == componentCache && callerSource(in)
@@ -283,35 +283,36 @@ var todaysLedger = driftLedger{
 		{name: "D2 per-key flags", answer: answerConfigured, to: true, when: func(in planInputs, k kindPlan) bool {
 			return k.tenancy != singleTenant || callerSource(in)
 		}},
-		// D3: read by preInitLease (slot.go:480) for all three slots; reproduces the former
+		// D3: read by preInitLease (slot.go:479) for all three slots; reproduces the former
 		// wholesale pre-init skip under multitenant, messaging under shared tenancy included.
 		{name: "D3 pre-init skips multitenant", answer: answerPreInit, to: false, when: func(_ planInputs, k kindPlan) bool {
 			return k.tenancy != singleTenant
 		}},
-		// D4: read by preWarmKind (slot.go:453) from databaseSlot.start and
+		// D4: read by preWarmKind (slot.go:452) from databaseSlot.start and
 		// messagingSlot.start; reproduces their pre-warm on the tenancy alone, leasing a
 		// known-absent "" for a Debug skip.
 		{name: "D4 pre-warm ignores absence", answer: answerPreWarm, to: true, when: func(_ planInputs, k kindPlan) bool {
 			return k.kind != componentCache && k.tenancy != perTenantTenancy && k.presence == keyAbsent
 		}},
-		// D5: read by cacheSlot.start (slot.go:354) through preWarmKind; reproduces its
+		// D5: read by cacheSlot.start (slot.go:353) through preWarmKind; reproduces its
 		// former no-op.
 		{name: "D5 cache never pre-warms", answer: answerPreWarm, to: false, when: func(_ planInputs, k kindPlan) bool {
 			return k.kind == componentCache
 		}},
-		// D6: assertMessagingConfiguredIfDeclared skips on multitenant.enabled (lifecycle.go:245),
-		// shared tenancy included.
+		// D6: read by assertMessagingConfiguredIfDeclared (lifecycle.go:242) through
+		// unavailable(); reproduces the #366 gate's skip on multitenant.enabled, shared tenancy
+		// included.
 		{name: "D6 messaging gate skips multitenant", answer: answerUnavailable, to: false, when: func(_ planInputs, k kindPlan) bool {
 			return k.kind == componentMessaging && k.tenancy != singleTenant
 		}},
-		// D7: the same gate tests the root broker URL, never the store (lifecycle.go:248), so
-		// it refuses a dynamic store that serves "".
+		// D7: read by the same gate (lifecycle.go:242); reproduces its test of the root broker
+		// URL, never the store, so it refuses a dynamic store that serves "".
 		{name: "D7 messaging gate reads the root broker", answer: answerUnavailable, to: true, when: func(in planInputs, k kindPlan) bool {
 			return k.kind == componentMessaging && k.tenancy == singleTenant && k.presence == keyAtRuntime &&
 				!config.IsMessagingConfigured(&in.cfg.Messaging)
 		}},
-		// D8: messagingSlot.describe labels per_tenant on multitenant.enabled (slot.go:232),
-		// shared tenancy included.
+		// D8: read by messagingSlot.describe (slot.go:230) through probe(); reproduces its
+		// per_tenant label on multitenant.enabled, shared tenancy included.
 		{name: "D8 messaging label follows multitenant", answer: answerPerTenantLabel, to: true, when: func(_ planInputs, k kindPlan) bool {
 			return k.kind == componentMessaging && k.tenancy == sharedTenancy
 		}},

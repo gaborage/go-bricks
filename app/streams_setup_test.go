@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/streamruntime"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/streams"
 )
@@ -248,6 +249,7 @@ func TestPrepareStreamConsumersRejectsMultiTenantBypass(t *testing.T) {
 	a := newStreamsApp(t, config.StreamsConfig{URI: unreachableStreamURI},
 		&streamModule{name: "orders", declaration: declareOneConsumer})
 	a.cfg.Multitenant.Enabled = true
+	a.installSlots(fixturePlan(a.cfg))
 
 	err := a.prepareStreamConsumers(context.Background())
 
@@ -262,6 +264,7 @@ func TestPrepareStreamConsumersRejectsMultiTenantBypass(t *testing.T) {
 func TestPrepareStreamConsumersAllowsSingleTenant(t *testing.T) {
 	a := newStreamsApp(t, config.StreamsConfig{}, &minimalModule{name: "plain"})
 	a.cfg.Multitenant.Enabled = false
+	a.installSlots(fixturePlan(a.cfg))
 
 	require.NoError(t, a.assertStreamsNotPerTenant())
 }
@@ -274,8 +277,62 @@ func TestPrepareStreamConsumersAdmitsSharedTenancy(t *testing.T) {
 	a := newStreamsApp(t, config.StreamsConfig{}, &minimalModule{name: "plain"})
 	a.cfg.Multitenant.Enabled = true
 	a.cfg.Messaging.Tenancy = config.TenancyShared
+	a.installSlots(fixturePlan(a.cfg))
 
 	require.NoError(t, a.assertStreamsNotPerTenant())
+}
+
+// stampRecordingRuntime is a linked stream lane whose one manager records the tenant-stamp
+// switch and starts without a broker.
+type stampRecordingRuntime struct{ stamps []bool }
+
+type oneStreamDeclared struct{}
+
+func (oneStreamDeclared) IsEmpty() bool                  { return false }
+func (oneStreamDeclared) Stats() streamruntime.DeclStats { return streamruntime.DeclStats{Streams: 1} }
+
+func (r *stampRecordingRuntime) CollectDeclarations([]streamruntime.ModuleNamer, logger.Logger) (streamruntime.Declarations, error) {
+	return oneStreamDeclared{}, nil
+}
+func (r *stampRecordingRuntime) NewManager(*streamruntime.ManagerOptions) streamruntime.Handle {
+	return stampRecordingHandle{runtime: r}
+}
+func (r *stampRecordingRuntime) CanDrainHold() bool { return false }
+
+type stampRecordingHandle struct{ runtime *stampRecordingRuntime }
+
+func (stampRecordingHandle) Start(context.Context, streamruntime.Declarations) error { return nil }
+func (stampRecordingHandle) Close() error                                            { return nil }
+func (stampRecordingHandle) StopConsumers()                                          {}
+func (h stampRecordingHandle) SetTenantStamps(enabled bool) {
+	h.runtime.stamps = append(h.runtime.stamps, enabled)
+}
+func (stampRecordingHandle) Ready() bool           { return true }
+func (stampRecordingHandle) Stats() map[string]any { return nil }
+
+// TestPrepareStreamConsumersStampsFromThePlan takes the plan as given: the stream lane reads the
+// tenant stamp exactly when the messaging row is shared, the answer the AMQP lane reads too.
+func TestPrepareStreamConsumersStampsFromThePlan(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		tenancy kindTenancy
+		want    bool
+	}{
+		{name: "shared_row_stamps", tenancy: sharedTenancy, want: true},
+		{name: "single_tenant_row_does_not", tenancy: singleTenant},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			rt := &stampRecordingRuntime{}
+			prev := swapStreamRuntime(rt)
+			t.Cleanup(func() { swapStreamRuntime(prev) })
+			a := newStreamsApp(t, config.StreamsConfig{URI: unreachableStreamURI})
+			a.installSlots(resourcePlan{messaging: kindPlan{kind: componentMessaging, tenancy: tt.tenancy}})
+
+			require.NoError(t, a.prepareStreamConsumers(context.Background()))
+
+			assert.Equal(t, []bool{tt.want}, rt.stamps)
+		})
+	}
 }
 
 func TestWarnIfPlaintextStreamURI(t *testing.T) {

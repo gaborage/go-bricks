@@ -151,7 +151,7 @@ func TestBuildMessagingOptionsTenantStamps(t *testing.T) {
 				Messaging:   config.MessagingConfig{Tenancy: tt.tenancy},
 			}
 
-			got := newManagerConfigBuilderFromConfig(cfg).BuildMessagingOptions().TenantStamps
+			got := newManagerConfigBuilderFromConfig(cfg, fixturePlan(cfg)).BuildMessagingOptions().TenantStamps
 
 			assert.Equal(t, tt.want, got)
 		})

@@ -394,9 +394,8 @@ func TestPrepareRuntimeConsumersHonorsACancelableContextDuringTheWait(t *testing
 
 // TestPrepareRuntimeConsumersWaitsUnderSharedTenancy pins the arm three doc
 // pages now promise: messaging.tenancy: shared makes a multi-tenant deployment
-// run the control-plane startup pass, so the wait applies there too.
-// perTenantMessaging() is multiTenant() && !sharedMessaging(), and only the
-// per-tenant half returns early.
+// run the control-plane startup pass, so the wait applies there too. Only a
+// per-tenant messaging row returns early.
 func TestPrepareRuntimeConsumersWaitsUnderSharedTenancy(t *testing.T) {
 	source := &scriptedBrokerURLProvider{succeedAfter: 2, err: errExternalExchangeMissing}
 	log := logger.New("debug", true)

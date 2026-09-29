@@ -342,6 +342,49 @@ func TestPrepareRuntimeAllowsEmptyDeclarationsWithMessagingUnconfigured(t *testi
 	require.NoError(t, app.prepareRuntime(context.Background()))
 }
 
+// TestMessagingDeclarationsGateAsksTheMessagingRow takes the plan as given: declarations are
+// refused exactly when the messaging row is unavailable, whatever the database row beside it
+// says, and the planned modes keep today's multi-tenant skip (D6) and root-broker test behind a
+// dynamic store (D7).
+func TestMessagingDeclarationsGateAsksTheMessagingRow(t *testing.T) {
+	decls := messaging.NewDeclarations()
+	publisherDeclaringModule{}.DeclareMessaging(decls)
+	row := func(kind string, presence keyPresence) kindPlan { return kindPlan{kind: kind, presence: presence} }
+	planned := func(spec string) resourcePlan {
+		in, _ := planMode{spec: spec}.inputs()
+		return planResources(in.cfg, in.opts, in.store)
+	}
+
+	tests := []struct {
+		name    string
+		plan    resourcePlan
+		refuses bool
+	}{
+		{name: "messaging_absent_beside_a_database", refuses: true,
+			plan: resourcePlan{database: row(componentDatabase, keyPresent), messaging: row(componentMessaging, keyAbsent)}},
+		{name: "messaging_present_beside_no_database",
+			plan: resourcePlan{database: row(componentDatabase, keyAbsent), messaging: row(componentMessaging, keyPresent)}},
+		{name: "multitenant_without_a_root_broker", plan: planned("mt")},
+		{name: "multitenant_shared_without_a_root_broker", plan: planned("mt shared")},
+		{name: "dynamic_store_without_a_root_broker", plan: planned("dynamic"), refuses: true},
+		{name: "dynamic_store_with_a_root_broker", plan: planned("dynamic broker")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &App{}
+			a.installSlots(tt.plan)
+
+			err := a.assertMessagingConfiguredIfDeclared(decls)
+
+			if tt.refuses {
+				require.ErrorContains(t, err, "messaging is not configured")
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 // TestStartSlotsStopsAlreadyStartedKindsOnFatal pins the unwind on a failed start phase.
 // The kinds that came up own live inbound work — the messaging slot's consumers run under
 // context.WithoutCancel, so the aborting startup context never stops them — and Run returns

@@ -17,7 +17,6 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
-	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
@@ -236,16 +235,11 @@ func (a *App) requireProbeSeam() error {
 
 var _ probeRunner = (*server.Server)(nil)
 
-// assertMessagingConfiguredIfDeclared fails-fast in single-tenant mode when
-// a module has declared messaging infrastructure but no broker URL is set —
-// without this check the declarations would be silently dropped (issue #366).
-// Multi-tenant mode resolves messaging per-tenant via the resource source, so
-// the static check is skipped there.
+// assertMessagingConfiguredIfDeclared fails fast when a module has declared messaging
+// infrastructure but the messaging row of the Resource plan is unavailable — without this check
+// the declarations would be silently dropped (issue #366).
 func (a *App) assertMessagingConfiguredIfDeclared(decls *messaging.Declarations) error {
-	if a.cfg.Multitenant.Enabled || decls == nil || decls.IsEmpty() {
-		return nil
-	}
-	if config.IsMessagingConfigured(&a.cfg.Messaging) {
+	if decls == nil || decls.IsEmpty() || !a.plan.messaging.unavailable() {
 		return nil
 	}
 	s := decls.Stats()

@@ -221,15 +221,14 @@ type messagingSlot struct {
 // the leased client reports ready and, under messaging.consumers.critical, when no declared
 // consumer has given up re-subscribing. The knob decides criticality once, here (ADR-066); see
 // ADR-114 for what it covers. The consumer arm is a lease-independent live check, so it applies
-// in every tenancy mode.
+// in every tenancy mode. The row's probe always leases and owns the per_tenant relabel.
 func (s *messagingSlot) describe() (probeDescription, bool) {
 	m := s.app.messagingManager
 	if m == nil {
 		return disabledProbe(s.kind), true
 	}
-	description := probeDescription{
-		critical:  s.app.cfg.IsMessagingConsumersCritical(),
-		perTenant: s.app.multiTenant(),
+	description := s.plan.probe(probeDescription{
+		critical: s.app.cfg.IsMessagingConsumersCritical(),
 		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
 			client, release, err := m.Publisher(ctx, "")
 			if err != nil {
@@ -243,7 +242,7 @@ func (s *messagingSlot) describe() (probeDescription, bool) {
 			}, release, nil
 		},
 		stats: m.Stats,
-	}
+	})
 	if description.critical {
 		// Installed only when the knob is on. An absent arm is how the judge is told there is
 		// nothing lease-independent to check, so the closure never has to re-test the knob and
