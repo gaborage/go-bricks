@@ -133,6 +133,9 @@ Every flip, by deployment mode (ST single-tenant, MT multi-tenant; "built-in" is
   poll; it still reads `per_tenant`.
 - **Unchanged:** every MT per-tenant answer for the database and messaging, every flag under MT
   except shared messaging's, the INFO and WARN texts, the Builder's step names.
+- **Unchanged:** the outbox and inbox #366 broker checks still read only root config, so with a
+  static caller store serving the broker and an empty root messaging block, outbox Init still
+  aborts where the app now boots (#1853).
 
 The amended ADRs:
 
