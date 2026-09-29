@@ -99,17 +99,18 @@ func TestAppBuilderWithConfigRejectsNilConfig(t *testing.T) {
 }
 
 // TestNewWithConfigRequiresSourceTypeAgreement pins ADR-125: source.type is dynamic exactly
-// when Options.ResourceSource reports IsDynamic(), and a disagreement fails the build naming
-// both before any resource is dialed. The static row with nil Options and the dynamic row with
-// empty Options each turn a nil guard's mutant into a nil dereference.
+// when Options.ResourceSource reports IsDynamic(), and a disagreement fails the build at its
+// WithConfig step, before any logger or manager exists, naming both. The static row with nil
+// Options and the dynamic row with empty Options each turn a nil guard's mutant into a nil
+// dereference.
 func TestNewWithConfigRequiresSourceTypeAgreement(t *testing.T) {
 	tests := []struct {
 		name       string
 		sourceType string
 		nilOptions bool
 		source     TenantStore
-		preInit    bool   // the build dials: the positive control for the refused rows' zero
-		wantErr    string // the direction fragment; empty when the build is accepted
+		preInit    bool   // an accepted build pre-initializes (dials)
+		wantErr    string // the direction fragment of the message; empty when the build is accepted
 	}{
 		{name: "static_without_options_accepted", sourceType: config.SourceTypeStatic, nilOptions: true},
 		{name: "static_with_static_resource_source_accepted", sourceType: config.SourceTypeStatic, source: &dynamicResourceSource{}, preInit: true},
@@ -154,14 +155,15 @@ func TestNewWithConfigRequiresSourceTypeAgreement(t *testing.T) {
 			}
 			var cfgErr *config.ConfigError
 			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, "invalid", cfgErr.Category)
 			assert.Equal(t, "source.type", cfgErr.Field)
 			assert.Contains(t, err.Error(), "Options.ResourceSource")
-			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.Contains(t, cfgErr.Message, tt.wantErr)
 			assert.Nil(t, app)
-			assert.Zero(t, dials, "a refused build must not dial")
-			if stub, ok := tt.source.(*dynamicResourceSource); ok {
-				assert.Zero(t, stub.dbCalls+stub.msgCalls+stub.cacheCalls, "a refused build must not read the resource source")
-			}
+
+			var stepErr *config.ConfigError
+			require.ErrorAs(t, NewAppBuilder().WithConfig(cfg, opts).Error(), &stepErr, "WithConfig itself must refuse")
+			assert.Equal(t, "source.type", stepErr.Field)
 		})
 	}
 }

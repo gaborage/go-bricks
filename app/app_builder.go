@@ -83,12 +83,10 @@ func checkSourceAgreement(cfg *config.Config, opts *Options) error {
 	case source == nil:
 		store = "Options.ResourceSource is nil, so the built-in static store serves every key"
 	}
-	return &config.ConfigError{
-		Category: "invalid",
-		Field:    "source.type",
-		Message:  fmt.Sprintf("is %q but %s", cfg.Source.Type, store),
-		Action:   "use source.type: dynamic with an Options.ResourceSource whose IsDynamic() is true, and source.type: static otherwise",
-	}
+	err := config.NewValidationError("source.type", fmt.Sprintf("is %q but %s", cfg.Source.Type, store))
+	err.Action = "use source.type: dynamic with an Options.ResourceSource whose IsDynamic() is true, and source.type: static otherwise; " +
+		"under multitenant.enabled with a per-tenant outbox or inbox, which rejects dynamic, keep static and have the store report false"
+	return err
 }
 
 // CreateLogger creates and configures the application logger.

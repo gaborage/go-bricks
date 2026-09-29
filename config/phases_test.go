@@ -376,3 +376,23 @@ func TestValidateRefusesOutOfEnumSourceType(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadReadsDeliveredEmptySourceTypeAsStatic pins that a delivered-empty SOURCE_TYPE=
+// reads static in every mode; multi-tenant used to fail Load. It stays fail-closed: the
+// app build refuses a dynamic resource source beside it (ADR-125).
+func TestLoadReadsDeliveredEmptySourceTypeAsStatic(t *testing.T) {
+	for name, enabled := range map[string]string{"single_tenant": "false", "multitenant": "true"} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := loadConfigFixture(t, nil, map[string]string{
+				"APP_NAME":                  "a",
+				"MULTITENANT_ENABLED":       enabled,
+				"MULTITENANT_RESOLVER_TYPE": "header",
+				"SOURCE_TYPE":               "",
+			})
+
+			require.NoError(t, err)
+			assert.Equal(t, enabled == "true", cfg.Multitenant.Enabled)
+			assert.Equal(t, SourceTypeStatic, cfg.Source.Type)
+		})
+	}
+}

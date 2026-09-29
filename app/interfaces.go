@@ -42,8 +42,10 @@ type TenantStore interface {
 	// from external sources (e.g., AWS Secrets Manager, Vault). Returns false for
 	// stores that use static YAML configuration. It must agree with source.type —
 	// true exactly when source.type is dynamic — or the build fails (ADR-125). A
-	// dynamic store skips startup pre-initialization and exempts an empty root
-	// database: block from the absence WARN and the DatabaseRequirer abort.
+	// single-tenant dynamic store skips startup pre-initialization and exempts an
+	// empty root database: block from the absence WARN and the DatabaseRequirer
+	// abort; under multitenant.enabled the builder skips both already, and a
+	// per-tenant outbox or inbox rejects dynamic, so such a store reports false.
 	IsDynamic() bool
 }
 

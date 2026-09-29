@@ -262,8 +262,9 @@ func checkTenantCache(tenantID string, cache *CacheConfig) error {
 	return QualifyCacheConfigErrorForKey(checkCache(cache), tenantID)
 }
 
-// normalizeSource defaults an absent source.type — a hand-built Config, which
-// koanf's default never reaches — to static, in every mode (ADR-125).
+// normalizeSource defaults an empty source.type — a hand-built Config, which
+// koanf's default never reaches, or a delivered-empty SOURCE_TYPE= — to static,
+// in every mode (ADR-125). The agreement check at build keeps that fail-closed.
 func normalizeSource(cfg *SourceConfig) {
 	if cfg.Type == "" {
 		cfg.Type = SourceTypeStatic

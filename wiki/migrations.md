@@ -10827,9 +10827,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `Init` probed `""` while the app exempted it). Separately, `config.Validate` refuses a
   single-tenant `source.type` outside `static`/`dynamic` (a typo such as `dynmic` booted and read
   as static); the error is the one multi-tenant deployments already got, now wrapped
-  `source config:` in both modes where multi-tenant read `multitenant config: source:`. An absent
-  `source.type` — a hand-built `config.Config` with an empty `Source` — reads `static` in every
-  mode, so under `multitenant.enabled` it validates where it used to fail. Unchanged: no
+  `source config:` in both modes where multi-tenant read `multitenant config: source:`. An empty
+  `source.type` — a hand-built `config.Config` with an empty `Source`, or a delivered-empty
+  `SOURCE_TYPE=` or `type: ""` — reads `static` in every mode, so under `multitenant.enabled` it
+  validates where it used to fail (the delivered one at `config.Load`). Unchanged: no
   `source.type` and no resource source (the default), `static` beside a store reporting false,
   `dynamic` beside a store reporting true, and everything each exemption does in those three.
 - gate: match = any environment sets `source.type` to anything but `static`, or your code passes an

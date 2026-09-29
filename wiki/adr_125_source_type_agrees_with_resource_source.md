@@ -44,8 +44,9 @@ A single-tenant typo such as `source.type: dynmic` read as not-dynamic everywher
 
 ## Decision
 
-1. **An absent `source.type` is `static`, in every mode.** Config's normalize phase fills an empty
-   `source.type` (a hand-built `*config.Config`, which the koanf default never reaches) with
+1. **An empty `source.type` is `static`, in every mode.** Config's normalize phase fills an empty
+   `source.type` (a hand-built `*config.Config`, which the koanf default never reaches, or a
+   delivered-empty value such as `SOURCE_TYPE=` from an unset template value or `type: ""`) with
    `static`, before the multitenant section, whose static-tenant gate reads it. This is the pattern
    `messaging.tenancy` follows. Since normalize now owns the fill, the koanf default for
    `source.type` is derived from it instead of written a second time; the value is unchanged.
@@ -105,14 +106,20 @@ comparison, and each new reader would reopen it.
   inbox fans out per tenant, have the store report `IsDynamic()` false instead, since those modules
   reject dynamic multi-tenant sources and, under multi-tenancy, `IsDynamic()` changes nothing in the
   app builder.
-- **A hand-built config with an empty `Source` validates in multi-tenant mode.** It used to fail the
-  enum check there; it now reads `static` and its tenant map is validated and normalized.
+- **An empty `source.type` validates in multi-tenant mode.** A hand-built config with an empty
+  `Source`, and a delivered-empty `SOURCE_TYPE=` or `type: ""`, used to fail the enum check there
+  (the delivered one at `config.Load`); both now read `static`, and the tenant map is validated and
+  normalized. The empty value does not join the delivered-empty refusals, which admit only keys
+  whose empty value fails open: here it fails closed, because the build refuses a dynamic store
+  beside the `static` it reads as.
 - **The two inputs are redundant for the app.** Because they always agree, a later change can have
   the app builder read the resource source's `IsDynamic()` alone without moving any verdict, while
   config and the ledger modules keep reading `source.type`.
 - **`TenantStore.IsDynamic` has a stated contract.** Its godoc and
   [MULTI_TENANT.md](../MULTI_TENANT.md#custom-tenant-store-implementation) say it must agree with
-  `source.type` and what it controls: the pre-init skip and the root-database absence exemption.
+  `source.type` and what it controls: in single-tenant, the pre-init skip and the root-database
+  absence exemption; under multi-tenancy, nothing in the app builder, which is why a store behind a
+  per-tenant outbox or inbox reports `false`. The agreement error's action names that exit too.
 
 ## References
 
