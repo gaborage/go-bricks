@@ -19,7 +19,7 @@ A plain `vX.Y.Z` is your current node. `=>` a local path (dev `replace`) means t
 **3 — Select the hop chain** on the Ladder: every edge strictly to the right of CURRENT, up to and including TARGET. Never apply an edge at/left of CURRENT.
 
 ```text
-v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0 ─E55─ v0.55.0 ─E56─ v0.56.0 ─E57─ v0.57.0 ─E58─ v0.58.0 ─E581─ v0.58.1 ─E59─ v0.59.0 ─E60─ v0.60.0 ─E61─ v0.61.0 ─E62─ v0.62.0 ─E63─ v0.63.0 ─E64─ v0.64.0 ─E65─ v0.65.0 ─E66─ v0.66.0 ─E67─ v0.67.0 ─E68─ v0.68.0 ─E69─ v0.69.0
+v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0 ─E55─ v0.55.0 ─E56─ v0.56.0 ─E57─ v0.57.0 ─E58─ v0.58.0 ─E581─ v0.58.1 ─E59─ v0.59.0 ─E60─ v0.60.0 ─E61─ v0.61.0 ─E62─ v0.62.0 ─E63─ v0.63.0 ─E64─ v0.64.0 ─E65─ v0.65.0 ─E66─ v0.66.0 ─E67─ v0.67.0 ─E68─ v0.68.0 ─E69─ v0.69.0 ─E70─ v0.70.0
 ```
 
 > v0.46.0–v0.48.0 shipped additive-only changes (route template/path-param accessors, raw-route descriptors, module-contributed global middleware — adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0.
@@ -55,6 +55,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E67 | v0.66.0 → v0.67.0 | breaking (C67.1 — `go-bricks-migrate` maps the run verdict onto three exit codes: 0 clean, 1 split fleet, 2 no tenant dispatched, where every failure used to exit 1 and an empty listing exited 0, and every misuse now exits 2 where it exited 1; the `--json` summary record keeps `total` and adds `listed`, `attempted`, `failed`, `not_attempted` and `verdict`, and is emitted on the exit-2 paths too) + silent-behavior (C67.2 — the ADR-113 redeclare pass gains a second driver: every publisher client the manager pools for a key, not only the registry's own, so a publisher-only service that never re-declared at all now repairs its topology on every reconnect, and a newly pooled publisher costs one pass on creation and on each re-creation after an eviction, though only clients that are or embed what `NewAMQPClient` returns can be sources at all; the added work is T registries × M pooled publishers of idempotent declares, off the publish path) | 1 | none — the CLI is a binary, so nothing a Go build catches; a pipeline that branches on the exit code or parses the summary record is the whole population; and nothing for C67.2, which moves no signature and changes only how often the framework re-declares | read every pipeline step that runs `go-bricks-migrate` and decide what a zero-tenant environment should do BEFORE the bump: it exits 2 where it exited 0; and for C67.2 size the declare traffic if your fleet is large, since a broker restart now costs one pass per registry AND per pooled publisher |
 | E68 | v0.67.0 → v0.68.0 | silent-behavior (C68.1 — the health/ready probe exemption is keyed on the route the ROUTER matched plus a GET/HEAD method check, where it compared the decoded `r.URL.Path` and ignored the method, so a non-GET/HEAD request on a probe path and a percent-encoded spelling of one are no longer exempt from tenant resolution, the forwarded-client-cert identity, OTel and module global middleware; `server.CreateProbeSkipper` moves to `server/probe_skip.go` and answers from `r.Pattern` with the raw path as fallback, its exported signature unmoved) | 1 | none — no signature moves; the exemption narrows under you, and it narrows fail-closed (middleware runs where it used to be skipped) | decide whether any probe or monitor of yours calls a probe path with a method other than GET or HEAD, since that request now runs the identity chain — under `multitenant` it answers 400 without a tenant header, under `forwardedclientcert.require` 401 without a client certificate — and if a custom `server.SkipperFunc` of yours exempts anything, key it on `r.Pattern` rather than `r.URL.Path` |
 | E69 | v0.68.0 → v0.69.0 | breaking (C69.3 — a service built on `server.New` without `app` that registers one method+path twice through `ModuleGroup`/`RootGroup` used to boot with the LATER handler serving; now the first handler keeps the route and `Server.Start` returns a `*server.DuplicateRouteError` matching `server.ErrDuplicateRoute` before either listener binds; the probes register first, so a module route at GET/HEAD `<base>/health` or `<base>/ready` that used to take the path over now never runs, and a `server.path.health` equal to `server.path.ready` that used to let readiness replace health now refuses `Start` with `dispatchReady` as the duplicate; templates differing only in a parameter or wildcard name (`/users/:id`, `/users/:uid`) now conflict, under `app` too, where an identical duplicate and both probe cases already failed startup) + breaking (C69.5 — a `Mandatory: true` publish the broker returns as unroutable now fails with `ErrPublishRetriesExhausted` wrapping the new `ErrPublishUnroutable` after `reconnect.maxpublishattempts`, where the client discarded the `basic.return` and reported the `basic.ack` that followed it as a success; non-mandatory publishes and the outbox relay are unchanged) + silent-behavior (C69.6 — a stream or super stream the broker lost while the service ran is reported once at ERROR per consumer or publisher on it and keeps the non-critical `streams` component unhealthy until a restart, and a lost consumer's shutdown offset flush is skipped, so the restart replays what it handled since its last commit) + breaking (C69.1 — `/ready` answers `{"status":"ready"}` on 200 and `{"status":"not ready"}` on 503 and nothing else, on the probe listener and the application listener alike: `time`, `app` (name/environment/version), every per-kind status key (`database`, `messaging`, `cache`, `streams`), every `<kind>_stats` object and ADR-048's `"<kind> unavailable"` error text all leave both bodies, where an orchestrator reading only the status code is unaffected and anything parsing the body loses every key but `status`) + compile-break (C69.2 — the exported field `HealthStatus.PublicErr` is deleted along with `publicProbeError`, so code that sets it stops compiling) + breaking (C69.4 — a typed handler whose request type, after one pointer level, is not a struct, or is `time.Time` or a type convertible to it, panics at registration naming the method, the full path and the type, where it used to boot and then fail every request to that route: most kinds panicked inside the tag binder into a 500 (a 400 when echo's JSON binder rejected the body first), and `time.Time` answered 400; `server.WrapHandler` panics the same way when the wrapper is built) + additive-optional (C69.7 — `Builder.WithBearerTokenFile` sends `Authorization: Bearer` read from a file that rotates on disk, re-read on an interval; a client that does not call it is unchanged) | 7 | C69.3 only partially — `RouteConflict` gains a `FirstPath` field, so an unkeyed `server.RouteConflict{...}` literal stops compiling; the refusal itself surfaces at `Start`; none for C69.5 — no signature moves, and a call that returned nil now returns an error; none for C69.6 — no signature moves and no configuration key changes; and C69.2 — `go build ./... && go vet ./...` names every assignment, `_test.go` files included; nothing for C69.1, whose population is body readers OUTSIDE the Go build — a `map[string]any` read of a deleted key compiles and returns `nil`, and a dashboard panel or alert rule keyed on a vanished JSON path goes quiet instead of failing; none — the request type is inferred from the handler signature, so the build passes and the panic surfaces at startup; nothing for C69.7, which only adds API | on the current version, call `srv.RouteConflicts()` after every registration: non-empty means `Start` will refuse after the bump — remove or rename the duplicate it names; where the first registrant is a probe, serve custom readiness through `Server.RegisterReadyHandler`, move the probe with `server.path.health`/`server.path.ready` (two distinct values), or move the module route; also compare each method's templates with parameter and wildcard names erased; for C69.5, grep your publisher declarations for a `Mandatory` set to anything but a literal `false`, assigned after construction included, and before the bump confirm that every binding those publishes rely on exists in every environment, since a publish that was silently dropped now fails the caller; nothing for C69.6; and for C69.1, inventory every reader of the `/ready` BODY, as opposed to its status code — smoke tests, `jq` scrapes, synthetic monitors, dashboard panels, alert rules — and repoint it at `app.readiness.status`, the `messaging.consumer.*` / `messaging.streams.*` gauges, `cache.manager.*` or `/_sys/health-debug` BEFORE the bump — `db.client.connection.*` is the DRIVER's pool and NOT a replacement for `database_stats`, whose `DbManager` resourcepool counters no instrument covers and which therefore stay on the debug view; the gauges ship in this same release, so the replacement signal exists the moment the body does not; and boot every service once before rolling the bump out: a refused route aborts startup with `server: handler registration failed for <METHOD> <path>: request type <T> must be a struct…`, and the fix is to wrap the value in a struct field; and for C69.7, nothing unless you adopt it in place of a hand-written token-file interceptor — then delete that interceptor, since interceptors run after the option and would overwrite the header |
+| E70 | v0.69.0 → v0.70.0 | breaking (C70.1 — construction fails when `source.type` is `dynamic` without an `app.Options.ResourceSource` whose `IsDynamic()` is true, or is `static` beside one whose `IsDynamic()` is true, where all three booted; a single-tenant `source.type` outside `static`/`dynamic` fails `config.Validate`, where it booted reading as static) | 1 | none | if any environment sets `source.type` or your code passes `app.Options.ResourceSource`, make them agree before the bump: `dynamic` exactly when the resource source's `IsDynamic()` returns true (C70.1) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 
@@ -10793,6 +10794,72 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   [httpclient.md](httpclient.md#bearer-token-from-a-rotating-file).
 - ref: gaborage/go-bricks#1815 · `httpclient/bearer_file.go` (`WithBearerTokenFile`,
   `newBearerTokenFile`, `bearerTokenFile.current`)
+
+## E70 · v0.69.0 → v0.70.0 — `source.type` must agree with the resource source
+
+- gist: `source.type` and `app.Options.ResourceSource.IsDynamic()` both say whether the resource
+  keys resolve at runtime, and nothing made them agree. The outbox and inbox modules can read only
+  `source.type`; the app builder reads both; the store that serves the keys is the resource source,
+  or the static built-in one when there is none. So `source.type: dynamic` with no resource source
+  booted green while every `deps.DB`/`deps.Cache` call on an empty root block failed, and a dynamic
+  store behind a static `source.type` was probed by the outbox/inbox `Init` but exempted by the
+  app. Construction now refuses any disagreement before anything is dialed, and `source.type` is
+  enum-checked in every mode (C70.1, ADR-125).
+
+### [C70.1] `source.type` must agree with `Options.ResourceSource`, and is enum-checked in every mode · breaking · when: match
+
+- detect: two greps, because the value lives in deployment config and the store lives in code.
+  `git grep -nE '^source:|SOURCE_TYPE' -- '*.yaml' '*.yml' '*.env'`, then read every environment's
+  Helm values, manifests and env for `SOURCE_TYPE` or a top-level `source:` block with `type:`. And
+  `git grep -nE 'ResourceSource|IsDynamic|Source[.]Type|SourceConfig[{]' -- '*.go'` for the
+  resource source you pass, what its `IsDynamic()` returns, and any hand-built `config.Config` that
+  sets `Source`.
+- scope: `app.New`, `NewWithOptions`, `NewWithConfig` and `Builder.WithConfig` fail, right after
+  `config.Validate` and before any logger, manager or connection exists, unless `source.type` is
+  `dynamic` exactly when `Options.ResourceSource` is non-nil and its `IsDynamic()` returns true.
+  The error is a `*config.ConfigError` (category `invalid`, `Field` `source.type`) reading
+  `invalid configuration: config_invalid: source.type is "<value>" but Options.ResourceSource …`.
+  Three shapes that booted now fail: `source.type: dynamic` with no resource source (the built-in
+  static store served every key, while every exemption — the pre-init skip, the absence WARN, the
+  `DatabaseRequirer` abort, `ModuleDeps.*Configured` — treated them as runtime-resolved);
+  `source.type: dynamic` beside a store whose `IsDynamic()` is false; and a store whose
+  `IsDynamic()` is true behind `source.type: static` or no `source.type` at all (the outbox/inbox
+  `Init` probed `""` while the app exempted it). Separately, `config.Validate` refuses a
+  single-tenant `source.type` outside `static`/`dynamic` (a typo such as `dynmic` booted and read
+  as static); the error is the one multi-tenant deployments already got, now wrapped
+  `source config:` in both modes where multi-tenant read `multitenant config: source:`. An absent
+  `source.type` — a hand-built `config.Config` with an empty `Source` — reads `static` in every
+  mode, so under `multitenant.enabled` it validates where it used to fail. Unchanged: no
+  `source.type` and no resource source (the default), `static` beside a store reporting false,
+  `dynamic` beside a store reporting true, and everything each exemption does in those three.
+- gate: match = any environment sets `source.type` to anything but `static`, or your code passes an
+  `Options.ResourceSource` whose `IsDynamic()` returns true, or code or a test matches the text
+  `multitenant config: source:`.
+  no-match = no `source.type` anywhere (or `static`) and either no resource source or one whose
+  `IsDynamic()` returns false. Nothing changes for them.
+- apply: make the two agree, by deployment shape.
+  - A dynamic store behind a static or absent `source.type`, single-tenant or `tenancy: shared`:
+    set `source.type: dynamic`. The outbox/inbox `Init` probe then skips `""`, as the app's
+    pre-init already did. `[C57.4]`'s opt-out ("set `source.type: dynamic`") now needs this store.
+  - The same store under `multitenant.enabled` with an outbox or inbox fanning out per tenant:
+    return `false` from `IsDynamic()` instead, because those modules reject dynamic multi-tenant
+    sources, and under multi-tenancy `IsDynamic()` changes nothing in the app builder, which already
+    skips pre-init and the root-database check there.
+  - `source.type: dynamic` with no resource source: delete the key, since the built-in static store
+    is what served the keys all along (a root `database:` block then gets pre-init and the absence
+    checks it skipped), or pass the dynamic store you meant to.
+  - `source.type: dynamic` beside a store whose `IsDynamic()` is false: return `true` if the store
+    resolves at runtime, or set `source.type: static`.
+  - A single-tenant value outside the enum: spell it `static` or `dynamic`, or remove it.
+  - A match on `multitenant config: source:`: use `errors.As` for `*config.ConfigError` and compare
+    `Field` with `source.type`.
+- verify: boot every environment. A disagreement fails construction with an error naming both
+  `source.type` and `Options.ResourceSource`; a boot that passes needs nothing more.
+- ref: [ADR-125](adr_125_source_type_agrees_with_resource_source.md) ·
+  `app/app_builder.go` (`WithConfig`, `checkSourceAgreement`) · `config/phases.go` (`normalize`,
+  `check`) · `config/multitenant_section.go` (`normalizeSource`, `validateSourceConfig`) ·
+  [outbox.md](outbox.md#startup-verification) ·
+  [MULTI_TENANT.md](../MULTI_TENANT.md#custom-tenant-store-implementation)
 
 ---
 

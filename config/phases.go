@@ -57,6 +57,9 @@ func normalize(cfg *Config) error {
 
 	normalizeKeyStore(&cfg.KeyStore)
 
+	// Before normalizeMultitenant: its static-tenant gate reads source.type.
+	normalizeSource(&cfg.Source)
+
 	if err := normalizeMultitenant(&cfg.Multitenant, &cfg.Source); err != nil {
 		return fmt.Errorf("multitenant config: %w", err)
 	}
@@ -99,6 +102,10 @@ func check(cfg *Config) error {
 
 	if err := checkScheduler(&cfg.Scheduler); err != nil {
 		return fmt.Errorf("scheduler config: %w", err)
+	}
+
+	if err := validateSourceConfig(&cfg.Source); err != nil {
+		return fmt.Errorf("source config: %w", err)
 	}
 
 	if err := checkMultitenant(&cfg.Multitenant, &cfg.Database, &cfg.Messaging, &cfg.Source); err != nil {

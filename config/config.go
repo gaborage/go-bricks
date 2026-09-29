@@ -445,6 +445,7 @@ var derivedDefaultKeys = []string{
 	"scheduler.timeout.shutdown",
 	"scheduler.timeout.slowjob",
 	"server.bodylimit",
+	"source.type",
 }
 
 // derivationDeniedPrefixes are key spaces that must never be DERIVED, whatever the allowlist
@@ -682,9 +683,6 @@ func koanfOnlyDefaults() map[string]any {
 		"debug.endpoints.gc":         true,
 		"debug.endpoints.health":     true,
 		"debug.endpoints.info":       true,
-
-		// Source configuration defaults
-		"source.type": SourceTypeStatic,
 
 		// Scheduler defaults. The timeout keys are DERIVED — see derivedDefaultKeys — so only
 		// the keys normalize does not own are written here.

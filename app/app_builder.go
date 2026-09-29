@@ -51,10 +51,44 @@ func (b *Builder) WithConfig(cfg *config.Config, opts *Options) *Builder {
 		b.err = fmt.Errorf("invalid configuration: %w", err)
 		return b
 	}
+	if err := checkSourceAgreement(cfg, opts); err != nil {
+		b.err = fmt.Errorf("invalid configuration: %w", err)
+		return b
+	}
 
 	b.cfg = cfg
 	b.opts = opts
 	return b
+}
+
+// checkSourceAgreement refuses a build whose source.type disagrees with the store that
+// serves the resource keys (ADR-125). The ledger modules can read only source.type, while
+// app reads Options.ResourceSource.IsDynamic(); requiring them to agree keeps both
+// truthful. It runs on a validated cfg, so an absent source.type already reads static,
+// and before any resource is dialed.
+func checkSourceAgreement(cfg *config.Config, opts *Options) error {
+	var source TenantStore
+	if opts != nil {
+		source = opts.ResourceSource
+	}
+	storeDynamic := source != nil && source.IsDynamic()
+	if (cfg.Source.Type == config.SourceTypeDynamic) == storeDynamic {
+		return nil
+	}
+
+	store := "Options.ResourceSource reports IsDynamic() false"
+	switch {
+	case storeDynamic:
+		store = "Options.ResourceSource reports IsDynamic() true"
+	case source == nil:
+		store = "Options.ResourceSource is nil, so the built-in static store serves every key"
+	}
+	return &config.ConfigError{
+		Category: "invalid",
+		Field:    "source.type",
+		Message:  fmt.Sprintf("is %q but %s", cfg.Source.Type, store),
+		Action:   "use source.type: dynamic with an Options.ResourceSource whose IsDynamic() is true, and source.type: static otherwise",
+	}
 }
 
 // CreateLogger creates and configures the application logger.

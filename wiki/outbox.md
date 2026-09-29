@@ -480,13 +480,14 @@ Three further consequences of running the check inside `Init`:
   inbox probe is the cleanup job's `DELETE`, it does **not** prove `ProcessOnce`'s `INSERT`, so a
   role granted `DELETE` but not `INSERT` still passes `Init` and fails at the first processed
   event. The outbox probe has no such gap — `FetchPending` is exactly what the relay reads.
-- A **custom dynamic `Options.ResourceSource` behind a static `source.type`** is NOT exempt, although
-  the app builder's own pre-init and `/ready` database probe both skip it. The module sees only
-  `*config.Config`, so it cannot detect that resource source; such a deployment is probed at startup
-  where it previously wasn't. Set `source.type: dynamic` to opt out until the exemption is threaded
-  down to modules — that opt-out is open to single-tenant and `tenancy: shared` deployments only. A
-  per-tenant fan-out deployment is already exempt by the rule above and must **not** set it: the
-  outbox relay (and the inbox cleanup job) reject dynamic multi-tenant sources outright.
+- A **custom dynamic `Options.ResourceSource`** is exempt through `source.type`, which the module
+  reads because it sees only `*config.Config`: the app build refuses a resource source whose
+  `IsDynamic()` disagrees with `source.type` ([ADR-125](adr_125_source_type_agrees_with_resource_source.md)),
+  so every dynamic deployment carries `source.type: dynamic`. The app builder's pre-init skips the
+  same deployments; its `/ready` database probe does not, and leases `""` in every mode. A per-tenant
+  fan-out deployment is exempt by the rule above and cannot take this route, because the outbox relay
+  (and the inbox cleanup job) reject dynamic multi-tenant sources outright: its resource source must
+  report `IsDynamic()` false, which under multi-tenancy changes nothing in the app builder.
 - With `outbox.autocreatetable`/`inbox.autocreatetable` enabled, the `""` key's table DDL now runs at
   `Init` rather than on the first publish or poll — the probe initializes that store, which is what
   creates the table. The exempt modes above run no probe, so their DDL still waits for first use.
@@ -516,7 +517,8 @@ outbox/inbox: shared mode does not need an enumerable tenant set at all.
 multitenant:
   enabled: true
 source:
-  type: dynamic          # or static — shared mode works with either
+  type: dynamic          # or static — shared mode works with either; dynamic needs a dynamic
+                         # app.Options.ResourceSource that resolves "" (ADR-125)
 database:                 # root block: the control-plane database
   host: control-plane-db
   # ...

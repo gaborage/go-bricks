@@ -2021,6 +2021,26 @@ construction, without `app`, and every duplicate is named in one boot.
 
 ---
 
+### [ADR-125: `source.type` Must Agree with the Resource Source](adr_125_source_type_agrees_with_resource_source.md)
+
+**Date:** 2026-09-28 | **Status:** Accepted | **Breaking:** the build fails when `source.type` is `dynamic` without an `Options.ResourceSource` reporting `IsDynamic()`, or `static` with one that does; a single-tenant `source.type` outside `static`/`dynamic` fails `config.Validate`
+
+`source.type` and `Options.ResourceSource.IsDynamic()` both say whether the resource keys resolve at
+runtime, and nothing made them agree. The ledger modules can read only `source.type`, the app
+builder reads both, and the store that serves the keys is the resource source, or the static
+built-in one when there is none. `source.type: dynamic` with no resource source booted green
+while every accessor failed, and a dynamic store behind `source.type: static` was probed by the
+outbox and inbox `Init` but exempted by the app. An absent `source.type` now normalizes to
+`static` in every mode, a delivered value outside the enum is refused in every mode, and
+`Builder.WithConfig` refuses any disagreement with a `*config.ConfigError` naming both inputs,
+before anything is dialed. The readers are unchanged. See [migrations.md](migrations.md)
+`[C70.1]`.
+
+**Key Benefits:** the two inputs cannot disagree, so every reader's answer is the same whichever
+one it reads.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2791,7 +2811,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-124) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-125) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
