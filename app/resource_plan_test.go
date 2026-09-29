@@ -285,8 +285,7 @@ func legacyAnswers(in planInputs) map[string]any {
 	dbAbsent := b.InitializeRegistry().app.registry.rootDBAbsent // the WARN's predicate, as wired
 	decls := messaging.NewDeclarations()
 	decls.RegisterExchange(&messaging.ExchangeDeclaration{Name: "orders", Type: "topic"})
-	skipPreInit := cfg.Multitenant.Enabled || cfg.Source.Type == config.SourceTypeDynamic ||
-		(opts != nil && opts.ResourceSource != nil && opts.ResourceSource.IsDynamic()) // ConfigureRuntimeHelpers
+	skipPreInit := cfg.Multitenant.Enabled || cfg.Source.Type == config.SourceTypeDynamic // ConfigureRuntimeHelpers
 	perKey := cfg.Multitenant.Enabled || cfg.Source.Type == config.SourceTypeDynamic ||
 		(opts != nil && opts.ResourceSource != nil) // markConfigured before ADR-126
 	seal := messaging.SealTenancyDisabled // configureSealing
