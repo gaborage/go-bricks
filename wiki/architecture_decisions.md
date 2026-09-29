@@ -2030,8 +2030,8 @@ runtime, and nothing made them agree. The ledger modules can read only `source.t
 builder reads both, and the store that serves the keys is the resource source, or the static
 built-in one when there is none. `source.type: dynamic` with no resource source booted green
 while every accessor failed, and a dynamic store behind `source.type: static` was probed by the
-outbox and inbox `Init` but exempted by the app. An absent `source.type` now normalizes to
-`static` in every mode, a delivered value outside the enum is refused in every mode, and
+outbox and inbox `Init` but exempted by the app. An empty `source.type` (hand-built, or delivered
+empty) now normalizes to `static` in every mode, a delivered value outside the enum is refused in every mode, and
 `Builder.WithConfig` refuses any disagreement with a `*config.ConfigError` naming both inputs,
 before anything is dialed. The readers are unchanged. See [migrations.md](migrations.md)
 `[C70.1]`.
