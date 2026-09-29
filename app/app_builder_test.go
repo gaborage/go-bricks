@@ -728,13 +728,11 @@ func TestAppBuilderInitializeRegistryErrors(t *testing.T) {
 	})
 }
 
-// TestAppBuilderConfigureRuntimeHelpersAnnouncesARuntimeKeyedPlan pins the two INFO lines a
-// dynamic store prints: both, once each, exactly when the plan's "" is knowable only at runtime.
+// TestAppBuilderConfigureRuntimeHelpersAnnouncesARuntimeKeyedPlan pins the INFO line a dynamic
+// store prints: once, exactly when the plan's "" is knowable only at runtime. The duplicate
+// "Dynamic resource store detected" line stays gone (ADR-125 made it unreachable).
 func TestAppBuilderConfigureRuntimeHelpersAnnouncesARuntimeKeyedPlan(t *testing.T) {
-	lines := []string{
-		"Dynamic source type detected - skipping pre-initialization",
-		"Dynamic resource store detected - skipping pre-initialization",
-	}
+	const line = "Dynamic source type detected - skipping pre-initialization"
 	for _, tt := range []struct {
 		name     string
 		presence keyPresence
@@ -751,13 +749,12 @@ func TestAppBuilderConfigureRuntimeHelpersAnnouncesARuntimeKeyedPlan(t *testing.
 
 			require.NoError(t, builder.ConfigureRuntimeHelpers().err)
 
-			for _, line := range lines {
-				got := rec.linesWith(line)
-				require.Len(t, got, tt.want, line)
-				for _, e := range got {
-					assert.Equal(t, "info", e.level, line)
-				}
+			got := rec.linesWith(line)
+			require.Len(t, got, tt.want)
+			for _, e := range got {
+				assert.Equal(t, "info", e.level)
 			}
+			assert.Empty(t, rec.linesWith("Dynamic resource store detected"))
 		})
 	}
 }

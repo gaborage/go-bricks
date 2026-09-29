@@ -276,7 +276,6 @@ func (b *Builder) ConfigureRuntimeHelpers() *Builder {
 	// row can, so every kind is skipped; source.type: dynamic always comes with one (ADR-125).
 	if b.app.plan.keyedAtRuntime() {
 		b.logger.Info().Msg("Dynamic source type detected - skipping pre-initialization")
-		b.logger.Info().Msg("Dynamic resource store detected - skipping pre-initialization")
 	}
 	b.performPreInitialization()
 
