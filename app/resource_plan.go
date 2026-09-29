@@ -134,7 +134,6 @@ func (p resourcePlan) refusesStreams() bool { return p.messaging.tenancy == perT
 
 // sealTenancy maps the messaging row onto ADR-097's three seal tenancies.
 func (p resourcePlan) sealTenancy() messaging.SealTenancy {
-	// ==, not a tagged switch: a switch yields zero gremlins mutants, hiding this decision from the mutation gate.
 	if p.messaging.tenancy == perTenantTenancy {
 		return messaging.SealTenancyPerTenant
 	}
@@ -181,7 +180,6 @@ func presenceOf(ledger driftLedger, in planInputs, kind string) keyPresence {
 // rootBlockPresence is config.TenantStore's answer for "": the content tests it applies before
 // answering not_configured.
 func rootBlockPresence(cfg *config.Config, kind string) keyPresence {
-	// ==, not a tagged switch: a switch yields zero gremlins mutants, hiding this decision from the mutation gate.
 	present := cfg.Cache.Enabled
 	if kind == componentDatabase {
 		present = config.IsDatabaseConfigured(&cfg.Database)
@@ -274,7 +272,7 @@ func callerSource(in planInputs) bool { return in.opts != nil && in.opts.Resourc
 // todaysLedger pins every answer where a reader differs from the rule today, each row naming
 // the reader it reproduces, so planning under it changes no behavior (ADR-126).
 var todaysLedger = driftLedger{
-	// D1: read through presenceOf (resource_plan.go:166) by cacheSlot.describe (slot.go:307)
+	// D1: read through presenceOf (resource_plan.go:165) by cacheSlot.describe (slot.go:307)
 	// and cacheSlot.preInit (slot.go:335); reproduces the cache's absence verdict exempting
 	// ANY caller-supplied ResourceSource, so both lease "" whatever cache.enabled says.
 	presence: func(in planInputs, kind string) (keyPresence, bool) {
