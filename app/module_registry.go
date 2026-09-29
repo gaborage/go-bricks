@@ -133,10 +133,10 @@ func (r *ModuleRegistry) Register(module Module) error {
 // deployment with no database. It runs before Init so the module never sees a
 // dependency it declared as mandatory and cannot get.
 //
-// rootDBAbsent is supplied by the builder, which is the only place that can see both
-// the config and the Options needed to evaluate rootDatabaseAbsent. Its zero value
-// disables the check, so a registry built directly — outside the builder, with no
-// Options to consult — stays inert rather than aborting on a verdict it cannot reach.
+// rootDBAbsent is supplied by the builder, which is the only place that holds the
+// validated config rootDatabaseAbsent evaluates. Its zero value disables the check, so a
+// registry built directly — outside the builder, with no config to consult — stays
+// inert rather than aborting on a verdict it cannot reach.
 func (r *ModuleRegistry) checkDatabaseRequirement(module Module) error {
 	requirer, ok := module.(DatabaseRequirer)
 	if !ok || !requirer.RequiresDatabase() || !r.rootDBAbsent {

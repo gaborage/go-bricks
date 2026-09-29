@@ -243,7 +243,7 @@ func (b *Builder) InitializeRegistry() *Builder {
 	registry := NewModuleRegistry(b.bundle.deps)
 	// Set post-construction: NewModuleRegistry is shipped API and must keep its
 	// signature byte-identical (apidiff gate).
-	registry.rootDBAbsent = rootDatabaseAbsent(b.cfg, b.opts)
+	registry.rootDBAbsent = rootDatabaseAbsent(b.cfg)
 	b.app.registry = registry
 	return b
 }
@@ -276,16 +276,11 @@ func (b *Builder) ConfigureRuntimeHelpers() *Builder {
 	// Skip for multi-tenant mode (resources loaded per-tenant)
 	skipPreInit := b.cfg.Multitenant.Enabled
 
-	// Skip for dynamic source configuration
+	// Skip for dynamic source configuration; WithConfig made source.type agree with
+	// Options.ResourceSource.IsDynamic() (ADR-125), so this also covers a dynamic store.
 	if b.cfg.Source.Type == config.SourceTypeDynamic {
 		skipPreInit = true
 		b.logger.Info().Msg("Dynamic source type detected - skipping pre-initialization")
-	}
-
-	// Skip if custom resource source declares itself as dynamic
-	if b.opts != nil && b.opts.ResourceSource != nil && b.opts.ResourceSource.IsDynamic() {
-		skipPreInit = true
-		b.logger.Info().Msg("Dynamic resource store detected - skipping pre-initialization")
 	}
 
 	// Only pre-initialize for single-tenant mode with static configuration

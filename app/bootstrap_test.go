@@ -879,7 +879,6 @@ func TestRootDatabaseAbsent(t *testing.T) {
 	tests := []struct {
 		name   string
 		cfg    func() *config.Config
-		opts   *Options
 		absent bool
 	}{
 		{name: "no_database_configured", absent: true, cfg: func() *config.Config {
@@ -895,7 +894,7 @@ func TestRootDatabaseAbsent(t *testing.T) {
 			cfg.Database.Host = "db.internal"
 			return cfg
 		}},
-		// The three exempt modes below resolve database config at runtime, so an empty
+		// The two exempt modes below resolve database config at runtime, so an empty
 		// root block is correct there and must not read as absence.
 		{name: "multi_tenant_exempt", absent: false, cfg: func() *config.Config {
 			cfg := &config.Config{}
@@ -907,25 +906,12 @@ func TestRootDatabaseAbsent(t *testing.T) {
 			cfg.Source.Type = config.SourceTypeDynamic
 			return cfg
 		}},
-		{
-			name:   "dynamic_resource_source_exempt",
-			absent: false,
-			cfg:    func() *config.Config { return &config.Config{} },
-			opts:   &Options{ResourceSource: &dynamicResourceSource{dynamic: true}},
-		},
-		// A supplied but static resource source is not an exemption.
-		{
-			name:   "static_resource_source_not_exempt",
-			absent: true,
-			cfg:    func() *config.Config { return &config.Config{} },
-			opts:   &Options{ResourceSource: &dynamicResourceSource{dynamic: false}},
-		},
 		{name: "nil_config_tolerated", absent: false, cfg: func() *config.Config { return nil }},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.absent, rootDatabaseAbsent(tt.cfg(), tt.opts))
+			assert.Equal(t, tt.absent, rootDatabaseAbsent(tt.cfg()))
 		})
 	}
 }
@@ -970,12 +956,6 @@ func TestRootCacheAbsent(t *testing.T) {
 			absent: false,
 			cfg:    func() *config.Config { return &config.Config{} },
 			opts:   &Options{ResourceSource: &dynamicResourceSource{dynamic: false}},
-		},
-		{
-			name:   "dynamic_resource_source_exempt",
-			absent: false,
-			cfg:    func() *config.Config { return &config.Config{} },
-			opts:   &Options{ResourceSource: &dynamicResourceSource{dynamic: true}},
 		},
 		{name: "nil_config_tolerated", absent: false, cfg: func() *config.Config { return nil }},
 	}
