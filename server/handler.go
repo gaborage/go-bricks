@@ -446,9 +446,7 @@ const (
 
 // boundField is one precomputed tag-binding instruction for a request struct field.
 // Built once per route (buildBindingPlan); replayed per request without re-parsing
-// struct tags. isSlice is only meaningful for query/header sources and mirrors
-// isStringSliceField, computed here from the static field type instead of a runtime
-// reflect.Value.
+// struct tags. isSlice is only meaningful for query/header sources.
 type boundField struct {
 	index   int
 	source  bindSource
@@ -459,10 +457,9 @@ type boundField struct {
 // buildBindingPlan walks a request struct type once at route-registration time and
 // captures, per exported field, which of the param/query/header tags are present and
 // what each needs at bind time. Fields are visited in declaration order and, within a
-// field, instructions are appended param, then query, then header — matching
-// bindFieldFromTags's precedence so replay order is unchanged. Unexported fields are
-// skipped (equivalent to today's per-request CanSet skip). Anonymous/embedded fields
-// are treated as a single field, same as today — no recursion. t must be a struct kind
+// field, instructions are appended param, then query, then header, so on replay the
+// last-applied source wins. Unexported fields are skipped. Anonymous/embedded fields
+// are treated as a single field — no recursion. t must be a struct kind
 // (requestStructType).
 func buildBindingPlan(t reflect.Type) []boundField {
 	var plan []boundField
@@ -779,25 +776,6 @@ func wrapHandlerWithJOSE[T any, R any](
 	return wrapper.wrap(handlerFunc)
 }
 
-// bindRequest binds request data from various sources to the target struct, reflecting
-// over its tags per request. No request path calls it: every typed request binds through
-// bindRequestPlanned, whose tests use this as their differential oracle. It binds
-// body-then-tags in the same order, so the source-precedence note on bindRequestPlanned
-// applies here too. Its decode-summary gate is fixed at true, the value those tests pass
-// to bindRequestPlanned.
-func (rb *RequestBinder) bindRequest(c *echo.Context, target any) error {
-	targetValue := reflect.ValueOf(target).Elem()
-	targetType := targetValue.Type()
-
-	// Bind JSON body if present
-	if err := rb.bindJSONBody(c, target, true); err != nil {
-		return err
-	}
-
-	// Bind struct field tags (param, query, header)
-	return rb.bindStructFields(c, targetType, targetValue)
-}
-
 // bindRequestPlanned binds request data using a precomputed binding plan (buildBindingPlan),
 // avoiding per-request struct-tag reflection. When plan is empty — the common case, e.g. a
 // JSON-body-only struct — only bindJSONBody runs.
@@ -853,48 +831,7 @@ func (rb *RequestBinder) bindJSONBody(c *echo.Context, target any, fieldPathIsSc
 	return nil
 }
 
-// bindStructFields binds path parameters, query parameters, and headers using struct tags
-func (rb *RequestBinder) bindStructFields(c *echo.Context, targetType reflect.Type, targetValue reflect.Value) error {
-	for i := 0; i < targetType.NumField(); i++ {
-		field := targetType.Field(i)
-		fieldValue := targetValue.Field(i)
-
-		if !fieldValue.CanSet() {
-			continue
-		}
-
-		if err := rb.bindFieldFromTags(c, &field, fieldValue); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// bindFieldFromTags binds a single field from various tag sources
-func (rb *RequestBinder) bindFieldFromTags(c *echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
-	if err := rb.bindParamTag(c, field, fieldValue); err != nil {
-		return err
-	}
-	if err := rb.bindQueryTag(c, field, fieldValue); err != nil {
-		return err
-	}
-	if err := rb.bindHeaderTag(c, field, fieldValue); err != nil {
-		return err
-	}
-	return nil
-}
-
-// bindParamTag binds path parameters using the "param" tag
-func (rb *RequestBinder) bindParamTag(c *echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
-	paramName := field.Tag.Get("param")
-	if paramName == "" {
-		return nil
-	}
-	return rb.bindParamValue(c, paramName, fieldValue)
-}
-
-// bindParamValue is the value-setting core shared by bindParamTag (legacy, tag-parsing)
-// and bindRequestPlanned (precomputed name from buildBindingPlan).
+// bindParamValue binds one path parameter into fieldValue for a bindRequestPlanned entry.
 func (rb *RequestBinder) bindParamValue(c *echo.Context, paramName string, fieldValue reflect.Value) error {
 	value := c.Param(paramName)
 	if value != "" {
@@ -905,17 +842,7 @@ func (rb *RequestBinder) bindParamValue(c *echo.Context, paramName string, field
 	return nil
 }
 
-// bindQueryTag binds query parameters using the "query" tag
-func (rb *RequestBinder) bindQueryTag(c *echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
-	queryName := field.Tag.Get("query")
-	if queryName == "" {
-		return nil
-	}
-	return rb.bindQueryValue(c, queryName, rb.isStringSliceField(fieldValue), fieldValue)
-}
-
-// bindQueryValue is the value-setting core shared by bindQueryTag (legacy, tag-parsing)
-// and bindRequestPlanned (precomputed name/isSlice from buildBindingPlan).
+// bindQueryValue binds one query parameter into fieldValue for a bindRequestPlanned entry.
 func (rb *RequestBinder) bindQueryValue(c *echo.Context, queryName string, isSlice bool, fieldValue reflect.Value) error {
 	// Support []string binding from repeated query parameters
 	if isSlice {
@@ -944,17 +871,7 @@ func (rb *RequestBinder) bindQueryStringSlice(c *echo.Context, queryName string,
 	return nil
 }
 
-// bindHeaderTag binds headers using the "header" tag
-func (rb *RequestBinder) bindHeaderTag(c *echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
-	headerName := field.Tag.Get("header")
-	if headerName == "" {
-		return nil
-	}
-	return rb.bindHeaderValue(c, headerName, rb.isStringSliceField(fieldValue), fieldValue)
-}
-
-// bindHeaderValue is the value-setting core shared by bindHeaderTag (legacy, tag-parsing)
-// and bindRequestPlanned (precomputed name/isSlice from buildBindingPlan).
+// bindHeaderValue binds one header into fieldValue for a bindRequestPlanned entry.
 func (rb *RequestBinder) bindHeaderValue(c *echo.Context, headerName string, isSlice bool, fieldValue reflect.Value) error {
 	values := c.Request().Header.Values(headerName)
 	if len(values) == 0 {
@@ -994,13 +911,8 @@ func (rb *RequestBinder) bindHeaderStringSlice(values []string, fieldValue refle
 	return nil
 }
 
-// isStringSliceField checks if a field is a []string slice
-func (rb *RequestBinder) isStringSliceField(fieldValue reflect.Value) bool {
-	return isStringSliceType(fieldValue.Type())
-}
-
-// isStringSliceType is isStringSliceField's build-time twin: same check, driven by the
-// static field type (buildBindingPlan) instead of a runtime reflect.Value.
+// isStringSliceType reports whether t is a slice of a string kind, which query and header
+// entries bind from repeated or comma-separated values.
 func isStringSliceType(t reflect.Type) bool {
 	return t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.String
 }
@@ -1057,7 +969,7 @@ func setFieldValue(fieldValue reflect.Value, value string) error {
 	}
 
 	if kind == reflect.Slice {
-		// Slice assignment from single string not supported here; handled by bindRequest for []string
+		// String-kind slices bind through bindQueryValue/bindHeaderValue's isSlice branch, not here
 		return fmt.Errorf("unsupported assignment to slice from string for kind: %s", kind)
 	}
 

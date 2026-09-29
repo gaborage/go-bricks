@@ -28,7 +28,7 @@ Two facts were verified at compile level, from outside package `server`:
 1. **Mutation has no public channel.** `Set()`, `SetRequestContext()`, and
    the stdlib `Request().SetPathValue()` are all invisible to `Param(name)`
    and to the `param:"x"` struct-tag binder — the binder read site
-   (`bindParamTag` in `server/handler.go`) reads echo's internal `pathValues`
+   (`bindParamValue` in `server/handler.go`) reads echo's internal `pathValues`
    exclusively.
    The only channel that actually works is `reflect` + `unsafe` against the
    unexported `ectx` field — i.e., leaving this unfixed guarantees downstream
