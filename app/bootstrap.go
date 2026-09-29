@@ -46,7 +46,7 @@ func (b *appBootstrap) coreComponents() (SignalHandler, TimeoutProvider, ServerR
 // newManagerConfigBuilderFromConfig copies every operator-tunable manager setting
 // from validated config into the builder — the seam where a key silently reverts
 // to validated-but-ignored if an assignment is dropped or cross-wired (#662).
-func newManagerConfigBuilderFromConfig(cfg *config.Config) *ManagerConfigBuilder {
+func newManagerConfigBuilderFromConfig(cfg *config.Config, plan resourcePlan) *ManagerConfigBuilder {
 	configBuilder := NewManagerConfigBuilder(cfg.Multitenant.Enabled, cfg.Multitenant.Limits.Tenants)
 	configBuilder.connectionTimeout = cfg.Messaging.Reconnect.ConnectionTimeout
 	configBuilder.maxPublishAttempts = cfg.Messaging.Reconnect.MaxPublishAttempts
@@ -57,7 +57,7 @@ func newManagerConfigBuilderFromConfig(cfg *config.Config) *ManagerConfigBuilder
 	configBuilder.reInitDelay = cfg.Messaging.Reconnect.ReinitDelay
 	configBuilder.resendDelay = cfg.Messaging.Reconnect.ResendDelay
 	configBuilder.appName = cfg.App.Name
-	configBuilder.tenantStamps = cfg.Multitenant.Enabled && cfg.Messaging.Tenancy == config.TenancyShared
+	configBuilder.tenantStamps = plan.tenantStamps()
 	configBuilder.publisherConfig = cfg.Messaging.Publisher
 	configBuilder.cacheConfig = cfg.Cache.Manager
 	configBuilder.dbConfig = cfg.Database.Manager
@@ -101,7 +101,7 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBund
 	resolver := newFactoryResolverForConfig(b.opts, b.cfg)
 	resourceSource := resolver.ResourceSource(b.cfg)
 	plan := planResources(b.cfg, b.opts, resourceSource)
-	configBuilder := newManagerConfigBuilderFromConfig(b.cfg)
+	configBuilder := newManagerConfigBuilderFromConfig(b.cfg, plan)
 	factory := NewResourceManagerFactory(resolver, configBuilder, b.log)
 
 	factory.LogFactoryInfo()
@@ -127,9 +127,9 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBund
 
 	// Create appropriate resource provider based on mode
 	var provider ResourceProvider
-	if b.cfg.Multitenant.Enabled {
+	if plan.multitenant() {
 		mtProvider := NewMultiTenantResourceProvider(dbManager, messagingManager, cacheManager, nil)
-		mtProvider.SetMessagingTenancy(b.cfg.Messaging.Tenancy)
+		mtProvider.SetMessagingTenancy(plan.messaging.tenancy.String())
 		provider = mtProvider
 	} else {
 		provider = NewSingleTenantResourceProvider(dbManager, messagingManager, cacheManager, nil)

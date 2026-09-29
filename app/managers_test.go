@@ -151,11 +151,24 @@ func TestBuildMessagingOptionsTenantStamps(t *testing.T) {
 				Messaging:   config.MessagingConfig{Tenancy: tt.tenancy},
 			}
 
-			got := newManagerConfigBuilderFromConfig(cfg).BuildMessagingOptions().TenantStamps
+			got := newManagerConfigBuilderFromConfig(cfg, fixturePlan(cfg)).BuildMessagingOptions().TenantStamps
 
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// TestBuildMessagingOptionsTenantStampsFollowThePlan takes the plan as given: the stamp switch
+// reads the messaging row, not the config the builder is also handed.
+func TestBuildMessagingOptionsTenantStampsFollowThePlan(t *testing.T) {
+	sharedRow := resourcePlan{messaging: kindPlan{kind: componentMessaging, tenancy: sharedTenancy}}
+	mtShared := &config.Config{
+		Multitenant: config.MultitenantConfig{Enabled: true},
+		Messaging:   config.MessagingConfig{Tenancy: config.TenancyShared},
+	}
+
+	assert.True(t, newManagerConfigBuilderFromConfig(&config.Config{}, sharedRow).BuildMessagingOptions().TenantStamps)
+	assert.False(t, newManagerConfigBuilderFromConfig(mtShared, resourcePlan{}).BuildMessagingOptions().TenantStamps)
 }
 
 func TestManagerConfigBuilderPassesValidatedValuesThrough(t *testing.T) {

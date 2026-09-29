@@ -833,7 +833,7 @@ func TestNewManagerConfigBuilderFromConfig(t *testing.T) {
 		Database: config.DatabaseConfig{Manager: config.DatabaseManagerConfig{MaxSize: 15}},
 	}
 
-	b := newManagerConfigBuilderFromConfig(cfg)
+	b := newManagerConfigBuilderFromConfig(cfg, resourcePlan{})
 
 	assert.True(t, b.multiTenantEnabled)
 	assert.Equal(t, 42, b.tenantLimit)
@@ -852,7 +852,7 @@ func TestNewManagerConfigBuilderFromConfig(t *testing.T) {
 
 	// Single-tenant: leftover tenants entries must not count (StaticTenantCount contract).
 	cfg.Multitenant.Enabled = false
-	assert.Zero(t, newManagerConfigBuilderFromConfig(cfg).staticTenantCount)
+	assert.Zero(t, newManagerConfigBuilderFromConfig(cfg, resourcePlan{}).staticTenantCount)
 }
 
 // TestNewManagerConfigBuilderFromConfigCarriesAppName pins the first hop of ADR-105's
@@ -860,7 +860,7 @@ func TestNewManagerConfigBuilderFromConfig(t *testing.T) {
 func TestNewManagerConfigBuilderFromConfigCarriesAppName(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: "orders-api"}}
 
-	b := newManagerConfigBuilderFromConfig(cfg)
+	b := newManagerConfigBuilderFromConfig(cfg, resourcePlan{})
 
 	assert.Equal(t, "orders-api", b.appName)
 	assert.Equal(t, "orders-api", b.BuildMessagingOptions().AppName)
@@ -960,6 +960,38 @@ func TestDependenciesWarnsFromTheDatabaseRow(t *testing.T) {
 			t.Cleanup(func() { (&Builder{bundle: bundle}).closeBundleManagers() })
 
 			assert.Equal(t, tt.wantWarn, loggedCount(rec, "No database configured"))
+		})
+	}
+}
+
+// TestDependenciesChoosesTheProviderFromThePlan pins the provider choice and the messaging
+// tenancy handed to a multi-tenant provider: both read the plan's messaging row, which under
+// shared tenancy differs from the database row beside it.
+func TestDependenciesChoosesTheProviderFromThePlan(t *testing.T) {
+	tests := []struct {
+		name, tenancy string
+		multitenant   bool
+	}{
+		{name: "single_tenant_shared_is_a_no_op", tenancy: config.TenancyShared},
+		{name: "multitenant_per_tenant", multitenant: true, tenancy: config.TenancyPerTenant},
+		{name: "multitenant_shared", multitenant: true, tenancy: config.TenancyShared},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := defaultTestConfig()
+			cfg.Multitenant.Enabled = tt.multitenant
+			cfg.Messaging.Tenancy = tt.tenancy
+
+			bundle, err := newAppBootstrap(cfg, logger.New("error", false), nil).dependencies(context.Background())
+			require.NoError(t, err)
+			t.Cleanup(func() { (&Builder{bundle: bundle}).closeBundleManagers() })
+
+			mtProvider, ok := bundle.provider.(*MultiTenantResourceProvider)
+			require.Equal(t, tt.multitenant, ok)
+			if ok {
+				assert.Equal(t, tt.tenancy, mtProvider.messagingTenancy)
+			}
 		})
 	}
 }

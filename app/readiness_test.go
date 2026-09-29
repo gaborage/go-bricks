@@ -25,8 +25,8 @@ import (
 // stood: each kind's description is now built by its own slot (ADR-067 locality), so the
 // tests ask the slot for it with exactly the inputs the constructor used to take.
 
-func describingApp(perTenant bool) *App {
-	return &App{cfg: &config.Config{Multitenant: config.MultitenantConfig{Enabled: perTenant}}}
+func describingApp() *App {
+	return &App{cfg: &config.Config{}}
 }
 
 // describedRow is the row a kind's description is asked under: per-tenant or single-tenant,
@@ -44,7 +44,7 @@ func describedRow(kind string, perTenant, absent bool) kindPlan {
 
 func databaseDescription(t *testing.T, m *database.DbManager, perTenant bool) probeDescription {
 	t.Helper()
-	a := describingApp(perTenant)
+	a := describingApp()
 	a.dbManager = m
 	a.installSlots(resourcePlan{database: describedRow(componentDatabase, perTenant, false)})
 	return slotDescription(t, a, componentDatabase)
@@ -52,15 +52,15 @@ func databaseDescription(t *testing.T, m *database.DbManager, perTenant bool) pr
 
 func messagingDescription(t *testing.T, m *messaging.Manager, perTenant bool) probeDescription {
 	t.Helper()
-	a := describingApp(perTenant)
+	a := describingApp()
 	a.messagingManager = m
-	a.installSlots(fixturePlan(a.cfg))
+	a.installSlots(resourcePlan{messaging: describedRow(componentMessaging, perTenant, false)})
 	return slotDescription(t, a, componentMessaging)
 }
 
 func cacheDescription(t *testing.T, m *cache.CacheManager, critical, absent, perTenant bool) probeDescription {
 	t.Helper()
-	a := describingApp(perTenant)
+	a := describingApp()
 	a.cfg.Cache.Critical = critical
 	a.cacheManager = m
 	a.installSlots(resourcePlan{cache: describedRow(componentCache, perTenant, absent)})
@@ -69,7 +69,7 @@ func cacheDescription(t *testing.T, m *cache.CacheManager, critical, absent, per
 
 func streamsDescription(t *testing.T, m streamHandle) probeDescription {
 	t.Helper()
-	a := describingApp(false)
+	a := describingApp()
 	a.streamsManager = m
 	a.installSlots(fixturePlan(a.cfg))
 	return slotDescription(t, a, componentStreams)
@@ -342,6 +342,34 @@ func TestMessagingProbeReportsPerTenantWhenDefaultKeyIsUnconfigured(t *testing.T
 	assert.Equal(t, perTenantStatus, got.Status)
 	assert.Equal(t, perTenantStatus, got.Details[statusKey])
 	assert.NoError(t, got.Err)
+}
+
+// TestMessagingProbeLabelFollowsItsRow takes the row as given: a not-configured "" reads
+// per_tenant only where the messaging row relabels it, which under shared tenancy is D8.
+func TestMessagingProbeLabelFollowsItsRow(t *testing.T) {
+	sharedMT := &config.Config{
+		Multitenant: config.MultitenantConfig{Enabled: true},
+		Messaging:   config.MessagingConfig{Tenancy: config.TenancyShared},
+	}
+	for _, tt := range []struct {
+		name string
+		row  kindPlan
+		want string
+	}{
+		{name: "single_tenant_row", row: describedRow(componentMessaging, false, false), want: notConfiguredStatus},
+		{name: "shared_row", row: fixturePlan(sharedMT).messaging, want: perTenantStatus},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			a := describingApp()
+			a.messagingManager = newMessagingManagerWithSourceError(t,
+				config.NewNotConfiguredError("messaging", "MESSAGING_BROKER_URL", "messaging.broker.url"))
+			a.installSlots(resourcePlan{messaging: tt.row})
+
+			got := slotDescription(t, a, componentMessaging).Run(context.Background())
+
+			assert.Equal(t, tt.want, got.Status)
+		})
+	}
 }
 
 // TestCacheProbeBoundsTheWarmPathPing pins the sub-budget on the warm-path PING: a pooled

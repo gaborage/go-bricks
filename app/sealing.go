@@ -13,15 +13,9 @@ import "github.com/gaborage/go-bricks/messaging"
 // dynamic-config and per-tenant deployments read the same facts (#1306: per-tenant
 // keys are forbidden in v1).
 func (a *App) configureSealing() {
-	rt := messaging.SealRuntime{Tenancy: messaging.SealTenancyDisabled}
+	rt := messaging.SealRuntime{Tenancy: a.plan.sealTenancy()}
 	if a.cfg != nil {
 		rt.Active = a.cfg.Messaging.Seal.Active
-		switch {
-		case a.perTenantMessaging():
-			rt.Tenancy = messaging.SealTenancyPerTenant
-		case a.multiTenant():
-			rt.Tenancy = messaging.SealTenancyShared
-		}
 	}
 	if a.registry != nil && a.registry.deps != nil {
 		if a.registry.deps.KeyStore != nil {

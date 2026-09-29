@@ -131,26 +131,6 @@ type App struct {
 	unregisterGauges func() error
 }
 
-// multiTenant reports whether this deployment resolves its resources per tenant. Nil-guarded
-// because a directly-constructed App may carry no config.
-func (a *App) multiTenant() bool {
-	return a.cfg != nil && a.cfg.Multitenant.Enabled
-}
-
-// sharedMessaging reports whether the messaging kind resolves and replays on the
-// control-plane key rather than per tenant. It is deliberately independent of
-// multiTenant: under multitenant.enabled: false the two branches are the same one
-// (ADR-041 env-parity), so shared is a no-op there rather than an error.
-func (a *App) sharedMessaging() bool {
-	return a.cfg != nil && a.cfg.Messaging.Tenancy == config.TenancyShared
-}
-
-// perTenantMessaging reports whether messaging is resolved per tenant — the only
-// case in which startup defers consumer replay to the first request for a tenant.
-func (a *App) perTenantMessaging() bool {
-	return a.multiTenant() && !a.sharedMessaging()
-}
-
 func (a *App) buildMessagingDeclarations() error {
 	if a.messagingDeclarations != nil {
 		return nil
