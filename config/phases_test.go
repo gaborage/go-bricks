@@ -331,3 +331,68 @@ func TestCheckSeesNormalizedValues(t *testing.T) {
 	assert.Contains(t, err.Error(), "messaging.reconnect.maxdelay")
 	assert.Contains(t, err.Error(), "must be >= messaging.reconnect.delay")
 }
+
+// TestValidateNormalizesAbsentSourceType pins ADR-125's presence rule: an absent
+// source.type validates exactly as a delivered static one, in both modes. The
+// multitenant pair also proves the default lands before the static tenant map is
+// normalized, since that walk is gated on source.type.
+func TestValidateNormalizesAbsentSourceType(t *testing.T) {
+	for name, fixture := range map[string]func() *Config{
+		"single_tenant": singleTenantFixture,
+		"multitenant":   staticMultitenantFixture,
+	} {
+		t.Run(name, func(t *testing.T) {
+			absent := fixture()
+			absent.Source = SourceConfig{}
+			static := fixture()
+			static.Source = SourceConfig{Type: SourceTypeStatic}
+
+			require.NoError(t, Validate(absent))
+			require.NoError(t, Validate(static))
+
+			assert.Equal(t, SourceTypeStatic, absent.Source.Type)
+			require.Equal(t, static, absent)
+		})
+	}
+}
+
+// TestValidateRefusesOutOfEnumSourceType pins that a delivered source.type outside
+// {static, dynamic} is refused in every mode; single-tenant used to accept any string.
+func TestValidateRefusesOutOfEnumSourceType(t *testing.T) {
+	for name, fixture := range map[string]func() *Config{
+		"single_tenant": singleTenantFixture,
+		"multitenant":   staticMultitenantFixture,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := fixture()
+			cfg.Source = SourceConfig{Type: "vault"}
+
+			err := Validate(cfg)
+
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, "source.type", cfgErr.Field)
+			assert.Contains(t, err.Error(), "'vault' is not supported")
+		})
+	}
+}
+
+// TestLoadReadsDeliveredEmptySourceTypeAsStatic pins that a delivered-empty SOURCE_TYPE=
+// reads static in every mode; multi-tenant used to fail Load. It stays fail-closed: the
+// app build refuses a dynamic resource source beside it (ADR-125).
+func TestLoadReadsDeliveredEmptySourceTypeAsStatic(t *testing.T) {
+	for name, enabled := range map[string]string{"single_tenant": "false", "multitenant": "true"} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := loadConfigFixture(t, nil, map[string]string{
+				"APP_NAME":                  "a",
+				"MULTITENANT_ENABLED":       enabled,
+				"MULTITENANT_RESOLVER_TYPE": "header",
+				"SOURCE_TYPE":               "",
+			})
+
+			require.NoError(t, err)
+			assert.Equal(t, enabled == "true", cfg.Multitenant.Enabled)
+			assert.Equal(t, SourceTypeStatic, cfg.Source.Type)
+		})
+	}
+}

@@ -98,6 +98,76 @@ func TestAppBuilderWithConfigRejectsNilConfig(t *testing.T) {
 	assert.NotNil(t, log)
 }
 
+// TestNewWithConfigRequiresSourceTypeAgreement pins ADR-125: source.type is dynamic exactly
+// when Options.ResourceSource reports IsDynamic(), and a disagreement fails the build at its
+// WithConfig step, before any logger or manager exists, naming both. The static row with nil
+// Options and the dynamic row with empty Options each turn a nil guard's mutant into a nil
+// dereference.
+func TestNewWithConfigRequiresSourceTypeAgreement(t *testing.T) {
+	tests := []struct {
+		name       string
+		sourceType string
+		nilOptions bool
+		source     TenantStore
+		preInit    bool   // an accepted build pre-initializes (dials)
+		wantErr    string // the direction fragment of the message; empty when the build is accepted
+	}{
+		{name: "static_without_options_accepted", sourceType: config.SourceTypeStatic, nilOptions: true},
+		{name: "static_with_static_resource_source_accepted", sourceType: config.SourceTypeStatic, source: &dynamicResourceSource{}, preInit: true},
+		{name: "dynamic_with_dynamic_resource_source_accepted", sourceType: config.SourceTypeDynamic, source: &dynamicResourceSource{dynamic: true}},
+		{name: "dynamic_without_resource_source_refused", sourceType: config.SourceTypeDynamic, wantErr: "is nil"},
+		{name: "dynamic_with_static_resource_source_refused", sourceType: config.SourceTypeDynamic, source: &dynamicResourceSource{}, wantErr: "IsDynamic() false"},
+		{name: "static_with_dynamic_resource_source_refused", sourceType: config.SourceTypeStatic, source: &dynamicResourceSource{dynamic: true}, wantErr: "IsDynamic() true"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := defaultTestConfig()
+			cfg.Source.Type = tt.sourceType
+
+			var dials int
+			var opts *Options
+			if tt.nilOptions {
+				// Without connectors the built-in ones would dial for real.
+				cfg.Database = config.DatabaseConfig{}
+				cfg.Messaging = config.MessagingConfig{}
+			} else {
+				opts = &Options{
+					ResourceSource: tt.source,
+					DatabaseConnector: func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+						dials++
+						return &testmocks.MockDatabase{}, nil
+					},
+					MessagingClientFactory: func(string, logger.Logger) messaging.AMQPClient {
+						dials++
+						return testmocks.NewMockAMQPClient()
+					},
+				}
+			}
+
+			app, _, err := NewWithConfig(cfg, opts)
+
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				assert.NotNil(t, app)
+				assert.Equal(t, tt.preInit, dials > 0, "pre-initialization dials")
+				return
+			}
+			var cfgErr *config.ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, "invalid", cfgErr.Category)
+			assert.Equal(t, "source.type", cfgErr.Field)
+			assert.Contains(t, err.Error(), "Options.ResourceSource")
+			assert.Contains(t, cfgErr.Message, tt.wantErr)
+			assert.Nil(t, app)
+
+			var stepErr *config.ConfigError
+			require.ErrorAs(t, NewAppBuilder().WithConfig(cfg, opts).Error(), &stepErr, "WithConfig itself must refuse")
+			assert.Equal(t, "source.type", stepErr.Field)
+		})
+	}
+}
+
 func TestAppBuilderCreateLoggerErrors(t *testing.T) {
 	t.Run("missing configuration", func(t *testing.T) {
 		builder := NewAppBuilder()

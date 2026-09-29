@@ -37,8 +37,9 @@ func hasStaticTenants(source *SourceConfig, mt *MultitenantConfig) bool {
 }
 
 // checkMultitenant rejects a normalized multitenant section without changing
-// it: resolver and limits enumerations, source type, and (static source only)
-// the tenant map's key rules and its conflicts with single-tenant config.
+// it: resolver and limits enumerations and (static source only) the tenant
+// map's key rules and its conflicts with single-tenant config. source.type is
+// check's own step, in every mode.
 func checkMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *MessagingConfig, source *SourceConfig) error {
 	if !mt.Enabled {
 		return nil
@@ -50,10 +51,6 @@ func checkMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *MessagingC
 
 	if err := checkMultitenantLimits(&mt.Limits); err != nil {
 		return fmt.Errorf("limits: %w", err)
-	}
-
-	if err := validateSourceConfig(source); err != nil {
-		return fmt.Errorf("source: %w", err)
 	}
 
 	// For static sources, validate tenants if provided (optional but must be valid if present)
@@ -265,7 +262,17 @@ func checkTenantCache(tenantID string, cache *CacheConfig) error {
 	return QualifyCacheConfigErrorForKey(checkCache(cache), tenantID)
 }
 
-// validateSourceConfig validates the source configuration type
+// normalizeSource defaults an empty source.type — a hand-built Config, which
+// koanf's default never reaches, or a delivered-empty SOURCE_TYPE= — to static,
+// in every mode (ADR-125). The agreement check at build keeps that fail-closed.
+func normalizeSource(cfg *SourceConfig) {
+	if cfg.Type == "" {
+		cfg.Type = SourceTypeStatic
+	}
+}
+
+// validateSourceConfig refuses a delivered source.type outside the enum, in
+// every mode (ADR-125).
 func validateSourceConfig(cfg *SourceConfig) error {
 	if cfg.Type != SourceTypeStatic && cfg.Type != SourceTypeDynamic {
 		return NewInvalidFieldError("source.type", fmt.Sprintf(errNotSupportedFmt, cfg.Type), []string{"static", "dynamic"})

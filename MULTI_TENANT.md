@@ -57,9 +57,9 @@ Implement the `app.TenantStore` interface to integrate with external systems lik
 - `DBConfig(ctx context.Context, key string) (*config.DatabaseConfig, error)` - Returns database configuration for a specific tenant
 - `BrokerURL(ctx context.Context, key string) (string, error)` - Returns the tenant's messaging broker connection URL
 - `CacheConfig(ctx context.Context, key string) (*config.CacheConfig, error)` - Returns the tenant's cache configuration (nil when no cache is configured)
-- `IsDynamic() bool` - Returns true if tenant configuration can change at runtime (dynamic) or false if static
+- `IsDynamic() bool` - Returns true if the store resolves configuration at runtime from an external source, false if it serves static configuration
 
-The `IsDynamic()` flag controls framework behavior for caching and configuration refresh. Dynamic stores (external sources like AWS Secrets Manager) return `true`, while static stores (YAML-based) return `false`. The framework handles connection pooling, caching, and lifecycle management automatically once the store implementation returns the configuration.
+`IsDynamic()` must agree with `source.type`: return `true` exactly when `source.type: dynamic` is set. The app build refuses a disagreement, including `source.type: dynamic` with no `app.Options.ResourceSource` at all, before any resource is dialed ([ADR-125](wiki/adr_125_source_type_agrees_with_resource_source.md)). In a single-tenant deployment they decide whether the root key `""` is resolved at runtime: a dynamic store skips startup pre-initialization and exempts an empty root `database:` block from the absence WARN and the `app.DatabaseRequirer` abort, and `source.type: dynamic` is what the outbox and inbox modules read for the same answer. Under `multitenant.enabled` the app builder already skips both for every deployment, so `IsDynamic()` changes nothing there beyond the agreement itself. An outbox or inbox fanning out per tenant rejects `source.type: dynamic` and enumerates the static `multitenant.tenants` keys, so behind one keep `source.type: static`, list the tenant IDs, and have the store return `false` from `IsDynamic()`, even when it resolves each tenant's configuration from an external source. The flag does not control caching or refresh: the framework pools connections per key either way.
 
 ## Tenant Resolution Strategies
 

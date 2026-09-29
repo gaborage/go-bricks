@@ -162,11 +162,10 @@ const defaultStartupTimeout = 10 * time.Second
 // StartupCheckApplies reports whether the "" key is statically resolvable at
 // Init time: single-tenant, or shared-ledger tenancy, both with a static
 // source. Per-tenant fan-out resolves databases per tenant at runtime, and
-// dynamic sources resolve "" at runtime. The app builder's skipPreInit and
-// app.rootDatabaseAbsent exempt a third mode this predicate cannot see: a
-// dynamic Options.ResourceSource behind a static source.type, which is
-// invisible from config alone and is therefore probed here. Shared by the
-// outbox and inbox modules' Init so the predicate cannot drift between them.
+// dynamic sources resolve "" at runtime. Reading source.type alone sees every
+// dynamic deployment: it always agrees with the resource source's IsDynamic(),
+// which the app build enforces (ADR-125). Shared by the outbox and inbox
+// modules' Init so the predicate cannot drift between them.
 func StartupCheckApplies(cfg *config.Config, sharedLedger bool) bool {
 	return cfg != nil &&
 		cfg.Source.Type != config.SourceTypeDynamic &&

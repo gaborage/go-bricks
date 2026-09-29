@@ -51,10 +51,42 @@ func (b *Builder) WithConfig(cfg *config.Config, opts *Options) *Builder {
 		b.err = fmt.Errorf("invalid configuration: %w", err)
 		return b
 	}
+	if err := checkSourceAgreement(cfg, opts); err != nil {
+		b.err = fmt.Errorf("invalid configuration: %w", err)
+		return b
+	}
 
 	b.cfg = cfg
 	b.opts = opts
 	return b
+}
+
+// checkSourceAgreement refuses a build whose source.type disagrees with the store that
+// serves the resource keys (ADR-125). The ledger modules can read only source.type, while
+// app reads Options.ResourceSource.IsDynamic(); requiring them to agree keeps both
+// truthful. It runs on a validated cfg, so an absent source.type already reads static,
+// and before any resource is dialed.
+func checkSourceAgreement(cfg *config.Config, opts *Options) error {
+	var source TenantStore
+	if opts != nil {
+		source = opts.ResourceSource
+	}
+	storeDynamic := source != nil && source.IsDynamic()
+	if (cfg.Source.Type == config.SourceTypeDynamic) == storeDynamic {
+		return nil
+	}
+
+	store := "Options.ResourceSource reports IsDynamic() false"
+	switch {
+	case storeDynamic:
+		store = "Options.ResourceSource reports IsDynamic() true"
+	case source == nil:
+		store = "Options.ResourceSource is nil, so the built-in static store serves every key"
+	}
+	err := config.NewValidationError("source.type", fmt.Sprintf("is %q but %s", cfg.Source.Type, store))
+	err.Action = "use source.type: dynamic with an Options.ResourceSource whose IsDynamic() is true, and source.type: static otherwise; " +
+		"under multitenant.enabled with a per-tenant outbox or inbox, which rejects dynamic, keep static and have the store report false"
+	return err
 }
 
 // CreateLogger creates and configures the application logger.
@@ -211,7 +243,7 @@ func (b *Builder) InitializeRegistry() *Builder {
 	registry := NewModuleRegistry(b.bundle.deps)
 	// Set post-construction: NewModuleRegistry is shipped API and must keep its
 	// signature byte-identical (apidiff gate).
-	registry.rootDBAbsent = rootDatabaseAbsent(b.cfg, b.opts)
+	registry.rootDBAbsent = rootDatabaseAbsent(b.cfg)
 	b.app.registry = registry
 	return b
 }
@@ -244,16 +276,11 @@ func (b *Builder) ConfigureRuntimeHelpers() *Builder {
 	// Skip for multi-tenant mode (resources loaded per-tenant)
 	skipPreInit := b.cfg.Multitenant.Enabled
 
-	// Skip for dynamic source configuration
+	// Skip for dynamic source configuration; WithConfig made source.type agree with
+	// Options.ResourceSource.IsDynamic() (ADR-125), so this also covers a dynamic store.
 	if b.cfg.Source.Type == config.SourceTypeDynamic {
 		skipPreInit = true
 		b.logger.Info().Msg("Dynamic source type detected - skipping pre-initialization")
-	}
-
-	// Skip if custom resource source declares itself as dynamic
-	if b.opts != nil && b.opts.ResourceSource != nil && b.opts.ResourceSource.IsDynamic() {
-		skipPreInit = true
-		b.logger.Info().Msg("Dynamic resource store detected - skipping pre-initialization")
 	}
 
 	// Only pre-initialize for single-tenant mode with static configuration

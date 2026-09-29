@@ -1663,6 +1663,7 @@ func TestDerivedDefaultsRenderTheSameValuesAsTheOldLiteral(t *testing.T) {
 		"scheduler.timeout.shutdown":  "30s",
 		"scheduler.timeout.slowjob":   "25s",
 		"server.bodylimit":            int64(10485760),
+		"source.type":                 SourceTypeStatic,
 	}
 
 	got, err := derivedDefaults()
@@ -1681,6 +1682,7 @@ func TestDerivedDefaultsDecodeToTypedFields(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 10*time.Second, cfg.App.Startup.Timeout)
+	assert.Equal(t, SourceTypeStatic, cfg.Source.Type)
 	assert.Equal(t, "standalone", cfg.Cache.Redis.Mode)
 	assert.Equal(t, 6379, cfg.Cache.Redis.Port)
 	assert.Equal(t, 10, cfg.Cache.Redis.PoolSize)
