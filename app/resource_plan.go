@@ -262,8 +262,9 @@ func callerSource(in planInputs) bool { return in.opts != nil && in.opts.Resourc
 // todaysLedger pins every answer where a reader differs from the rule today, each row naming
 // the reader it reproduces, so planning under it changes no behaviour (ADR-126).
 var todaysLedger = driftLedger{
-	// D1: rootCacheAbsent (bootstrap.go:220-228) exempts ANY caller-supplied ResourceSource,
-	// so the cache probe and pre-init lease "" through it whatever cache.enabled says.
+	// D1: rootCacheAbsent, installed as cacheSlot.absent (app_builder.go:228), exempts ANY
+	// caller-supplied ResourceSource, so the cache probe and pre-init lease "" through it
+	// whatever cache.enabled says.
 	presence: func(in planInputs, kind string) (keyPresence, bool) {
 		return keyPresent, kind == componentCache && callerSource(in)
 	},

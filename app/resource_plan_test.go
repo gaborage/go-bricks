@@ -256,6 +256,8 @@ func TestResourcePlanMatchesLegacyPredicates(t *testing.T) {
 func legacyAnswers(in planInputs) map[string]any {
 	cfg, opts := in.cfg, in.opts
 	a := &App{cfg: cfg}
+	b := &Builder{cfg: cfg, opts: opts, bundle: &dependencyBundle{deps: &ModuleDeps{}}, app: &App{}}
+	dbAbsent := b.InitializeRegistry().app.registry.rootDBAbsent // the WARN's predicate, as wired
 	decls := messaging.NewDeclarations()
 	decls.RegisterExchange(&messaging.ExchangeDeclaration{Name: "orders", Type: "topic"})
 	skipPreInit := cfg.Multitenant.Enabled || cfg.Source.Type == config.SourceTypeDynamic ||
@@ -271,8 +273,8 @@ func legacyAnswers(in planInputs) map[string]any {
 	}
 	// The slots' describe, preInit and start conditions, transcribed; the #366 gate, asked.
 	answers := map[string]any{
-		"database.unavailable":             rootDatabaseAbsent(cfg),
-		"database.configured":              perKey || !rootDatabaseAbsent(cfg),
+		"database.unavailable":             dbAbsent,
+		"database.configured":              perKey || !dbAbsent,
 		"database.preInits":                !skipPreInit && config.IsDatabaseConfigured(&cfg.Database),
 		"database.preWarms":                !a.multiTenant(),
 		"database.probe":                   probeDescription{perTenant: a.multiTenant()},
