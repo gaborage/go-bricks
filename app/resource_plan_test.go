@@ -15,10 +15,13 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 )
 
+var errLookupOutlastedTest = errors.New("lookup outlasted the test's one-second bound")
+
 // answeringStore is a caller-supplied TenantStore whose answer for "" is set per kind: a kind
 // missing from answers is served, anything else is returned as the lookup's error. block makes
-// every lookup wait for its context instead. It records how often, and under what remaining
-// budget, each kind was asked.
+// every lookup wait for its context instead, and give up with errLookupOutlastedTest after a
+// second so an unbounded lookup fails the test rather than hanging it. It records how often,
+// and under what remaining budget, each kind was asked.
 type answeringStore struct {
 	dynamic   bool
 	answers   map[string]error
@@ -37,8 +40,12 @@ func (s *answeringStore) ask(ctx context.Context, kind string) error {
 		s.remaining[kind] = time.Until(deadline)
 	}
 	if s.block {
-		<-ctx.Done()
-		return ctx.Err()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+			return errLookupOutlastedTest
+		}
 	}
 	return s.answers[kind]
 }
@@ -369,21 +376,26 @@ func TestResourcePlanLookupFailureFailsStartup(t *testing.T) {
 	}
 }
 
-// TestResourcePlanLookupHonorsTheKindBudget pins that each kind's lookup runs under its own
-// app.startup budget, and that a store outlasting it fails startup.
+// TestResourcePlanLookupHonorsTheKindBudget pins that each kind's lookup asks its own store
+// method under its own app.startup budget and lands on its own row, and that a store
+// outlasting the budget fails startup.
 func TestResourcePlanLookupHonorsTheKindBudget(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.App.Startup = config.StartupConfig{Database: time.Hour, Messaging: 2 * time.Hour, Cache: 3 * time.Hour}
-	store := &answeringStore{}
+	store := &answeringStore{answers: map[string]error{
+		componentMessaging: config.NewNotConfiguredError(componentMessaging, "", ""),
+	}}
 
-	_, err := planResources(context.Background(), cfg, nil, store)
+	plan, err := planResources(context.Background(), cfg, nil, store)
 
 	require.NoError(t, err)
 	for kind, budget := range map[string]time.Duration{componentDatabase: time.Hour, componentMessaging: 2 * time.Hour, componentCache: 3 * time.Hour} {
 		assert.InDelta(t, budget.Seconds(), store.remaining[kind].Seconds(), 60, kind)
 	}
+	assert.Equal(t, [3]keyPresence{keyPresent, keyAbsent, keyPresent},
+		[3]keyPresence{plan.database.presence, plan.messaging.presence, plan.cache.presence})
 
-	cfg.App.Startup.Database = 20 * time.Millisecond
+	cfg.App.Startup = config.StartupConfig{Database: 20 * time.Millisecond, Messaging: 20 * time.Millisecond, Cache: 20 * time.Millisecond}
 	blocking := &answeringStore{block: true}
 	_, err = planResources(context.Background(), cfg, nil, blocking)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
