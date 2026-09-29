@@ -282,6 +282,24 @@ func TestPrepareStreamConsumersAdmitsSharedTenancy(t *testing.T) {
 	require.NoError(t, a.assertStreamsNotPerTenant())
 }
 
+// TestStreamsRefusalReadsTheMessagingRow takes the plan as given: the runtime re-check refuses
+// exactly a per-tenant messaging row, whatever the App's config says.
+func TestStreamsRefusalReadsTheMessagingRow(t *testing.T) {
+	t.Run("single_tenant_config_per_tenant_row_refuses", func(t *testing.T) {
+		a := newStreamsApp(t, config.StreamsConfig{}, &minimalModule{name: "plain"})
+		a.installSlots(resourcePlan{messaging: kindPlan{kind: componentMessaging, tenancy: perTenantTenancy}})
+
+		require.ErrorContains(t, a.assertStreamsNotPerTenant(), "single-tenant mode or messaging.tenancy: shared")
+	})
+	t.Run("per_tenant_config_single_tenant_row_admits", func(t *testing.T) {
+		a := newStreamsApp(t, config.StreamsConfig{}, &minimalModule{name: "plain"})
+		a.cfg.Multitenant.Enabled = true
+		a.installSlots(resourcePlan{})
+
+		require.NoError(t, a.assertStreamsNotPerTenant())
+	})
+}
+
 // stampRecordingRuntime is a linked stream lane whose one manager records the tenant-stamp
 // switch and starts without a broker.
 type stampRecordingRuntime struct{ stamps []bool }

@@ -214,6 +214,34 @@ func TestPrepareRuntimeConsumersUnderSharedTenancy(t *testing.T) {
 	})
 }
 
+// TestPrepareRuntimeConsumersReadTheMessagingRow takes the plan as given: the control-plane
+// replay runs exactly when the installed messaging row resolves on "", whatever the config says.
+func TestPrepareRuntimeConsumersReadTheMessagingRow(t *testing.T) {
+	mtPerTenant := &config.Config{
+		Multitenant: config.MultitenantConfig{Enabled: true},
+		Messaging:   config.MessagingConfig{Tenancy: config.TenancyPerTenant},
+	}
+	for _, tt := range []struct {
+		name    string
+		cfg     *config.Config
+		tenancy kindTenancy
+		lookups int
+	}{
+		{name: "single_tenant_config_per_tenant_row_skips", cfg: &config.Config{}, tenancy: perTenantTenancy},
+		{name: "per_tenant_config_single_tenant_row_replays", cfg: mtPerTenant, tenancy: singleTenant, lookups: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			log := logger.New("debug", true)
+			source := &scriptedBrokerURLProvider{}
+			a := newMinimalMessagingApp(log, newFailingConsumerManager(t, log, source), tt.cfg)
+			a.installSlots(resourcePlan{messaging: kindPlan{kind: componentMessaging, tenancy: tt.tenancy}})
+
+			require.NoError(t, a.prepareRuntimeConsumers(context.Background(), messaging.NewDeclarations()))
+			assert.Equal(t, tt.lookups, source.callCount())
+		})
+	}
+}
+
 func TestPrepareRuntimeConsumersSucceedsSingleTenant(t *testing.T) {
 	log := logger.New("debug", true)
 	client := testmocks.NewMockAMQPClient()

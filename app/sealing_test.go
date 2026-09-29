@@ -44,6 +44,32 @@ func TestConfigureSealingMapsTenancyAndFacts(t *testing.T) {
 	}
 }
 
+// TestConfigureSealingReadsTheMessagingRow takes the plan as given: the seal tenancy follows the
+// installed messaging row even where the App's config says otherwise.
+func TestConfigureSealingReadsTheMessagingRow(t *testing.T) {
+	mtShared := &config.Config{Multitenant: config.MultitenantConfig{Enabled: true}, Messaging: config.MessagingConfig{Tenancy: config.TenancyShared}}
+	cases := []struct {
+		name    string
+		cfg     *config.Config
+		tenancy kindTenancy
+		want    messaging.SealTenancy
+	}{
+		{name: "single_tenant_config_shared_row", cfg: &config.Config{}, tenancy: sharedTenancy, want: messaging.SealTenancyShared},
+		{name: "single_tenant_config_per_tenant_row", cfg: &config.Config{}, tenancy: perTenantTenancy, want: messaging.SealTenancyPerTenant},
+		{name: "multitenant_config_single_tenant_row", cfg: mtShared, tenancy: singleTenant, want: messaging.SealTenancyDisabled},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &App{cfg: tc.cfg}
+			a.installSlots(resourcePlan{messaging: kindPlan{kind: componentMessaging, tenancy: tc.tenancy}})
+			a.configureSealing()
+			rt := messaging.SealingRuntime()
+			require.NotNil(t, rt)
+			assert.Equal(t, tc.want, rt.Tenancy)
+		})
+	}
+}
+
 func TestConfigureSealingCarriesKeyStoreActiveAndMeter(t *testing.T) {
 	ks := fakeKeyStore{}
 	mp := metricnoop.NewMeterProvider()
