@@ -367,6 +367,39 @@ func TestDatabaseSlotPreInitFollowsItsRow(t *testing.T) {
 	}
 }
 
+// TestMessagingSlotPreInitFollowsItsRow pins that the messaging slot asks its own row: the
+// database row always says the opposite, so a slot reading it leases a broker-less "" or skips
+// a present one. The provider refuses and counts every lookup.
+func TestMessagingSlotPreInitFollowsItsRow(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		absent  bool
+		lookups int
+		wantErr error
+	}{
+		{name: "row_says_no", absent: true},
+		{name: "row_says_yes", lookups: 1, wantErr: errBrokerLookupFailed},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			log := logger.New("error", false)
+			source := &scriptedBrokerURLProvider{}
+			manager := newFailingConsumerManager(t, log, source)
+			t.Cleanup(func() { assert.NoError(t, manager.Close()) })
+
+			a := &App{cfg: defaultTestConfig(), logger: log, messagingManager: manager}
+			a.installSlots(resourcePlan{
+				database:  describedRow(componentDatabase, false, !tt.absent),
+				messaging: describedRow(componentMessaging, false, tt.absent),
+			})
+
+			err := slotOf(t, a, componentMessaging).preInit(context.Background())
+
+			assert.ErrorIs(t, err, tt.wantErr)
+			assert.Equal(t, tt.lookups, source.callCount())
+		})
+	}
+}
+
 // TestDatabaseSlotPreInitReportsLeaseFailure pins that the raw failure reaches the caller,
 // which is what performPreInitialization turns into the fatal startup error.
 func TestDatabaseSlotPreInitReportsLeaseFailure(t *testing.T) {

@@ -249,19 +249,16 @@ func TestPreWarmGateIsPerKind(t *testing.T) {
 	})
 
 	t.Run("database_pre_warm_ignores_the_messaging_tenancy", func(t *testing.T) {
-		rec := &recLogger{}
-		client := newPrewarmMockClient()
-		client.SetReady(true)
-		manager := newPrewarmTestManager(rec, client)
-		defer func() { _ = manager.Close() }()
-		a := newMinimalMessagingApp(rec, manager, sharedMT)
+		// The provider refuses "", so a lease would surface as an advisory; the messaging row
+		// beside it is shared and present, so it pre-warms.
+		a := newRefusingDBSlotApp(t, true)
+		a.cfg.Messaging.Tenancy = config.TenancyShared
+		a.installSlots(fixturePlan(a.cfg))
 
 		advisory, fatal := slotOf(t, a, componentDatabase).start(context.Background())
 
 		require.NoError(t, fatal)
-		require.NoError(t, advisory)
-		assert.Zero(t, loggedCount(rec, "Pre-warmed control-plane database connection"),
-			"the database is still resolved per tenant when only messaging is shared")
+		assert.NoError(t, advisory, "the database is still resolved per tenant when only messaging is shared")
 	})
 }
 

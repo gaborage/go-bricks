@@ -16,7 +16,8 @@ import (
 
 // planMode is one deployment mode the build accepts. spec switches inputs on: mt, shared
 // (messaging.tenancy), dynamic (source.type dynamic beside a dynamic store), caller (a static
-// Options.ResourceSource), cacheconn, and the db, broker and cache root blocks. want is today's
+// Options.ResourceSource), cacheconn, the db, broker and cache root blocks, and dbconn (a root
+// database named by its connection string alone). want is today's
 // answer per kind (database, messaging, cache); rule is the rule's, where it differs. Beside a
 // caller store the rule cells are the root-block reading the plan can compute without a lookup;
 // ADR-127 decides those from what the store answers for "".
@@ -59,6 +60,7 @@ var planModes = []planMode{
 	// ST-root, ST-streams
 	{name: "st_root", spec: "db broker cache", want: kinds{stPresentPrewarm, stPresentPrewarm, stPresent}, rule: kinds{asToday, asToday, stPresentPrewarm}},
 	{name: "st_db_cache_only", spec: "db cache", want: kinds{stPresentPrewarm, stAbsentPrewarm, stPresent}, rule: kinds{asToday, stAbsent, stPresentPrewarm}},
+	{name: "st_dbconn_only", spec: "dbconn", want: kinds{stPresentPrewarm, stAbsentPrewarm, stAbsentSkip}, rule: kinds{asToday, stAbsent, asToday}},
 	// ST-noroot
 	{name: "st_noroot", spec: "", want: kinds{stAbsentPrewarm, stAbsentPrewarm, stAbsentSkip}, rule: kinds{stAbsent, stAbsent, asToday}},
 	// ST-shared-noroot: the ADR-041 env-parity no-op
@@ -108,6 +110,10 @@ func (m *planMode) inputs() (planInputs, *dynamicResourceSource) {
 	}
 	if on["db"] {
 		cfg.Database.Host = "db.internal"
+	}
+	if on["dbconn"] {
+		cfg.Database.Type = config.PostgreSQL
+		cfg.Database.ConnectionString = "postgres://db.internal/app"
 	}
 	if on["broker"] {
 		cfg.Messaging.Broker.URL = "amqp://broker/"

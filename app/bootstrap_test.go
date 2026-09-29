@@ -917,6 +917,47 @@ func TestWarnIfDatabaseAbsent(t *testing.T) {
 	}
 }
 
+// TestDependenciesWarnsFromTheDatabaseRow pins the row dependencies() hands
+// warnIfDatabaseAbsent: in both modes the database row disagrees with the other two, so a
+// call site reading either of them WARNs or stays silent the wrong way.
+func TestDependenciesWarnsFromTheDatabaseRow(t *testing.T) {
+	tests := []struct {
+		name     string
+		mutate   func(*config.Config)
+		wantWarn int
+	}{
+		{name: "database_without_broker_or_cache_stays_silent", mutate: func(c *config.Config) {
+			c.Messaging = config.MessagingConfig{}
+		}},
+		{name: "broker_and_cache_without_database_warns", wantWarn: 1, mutate: func(c *config.Config) {
+			c.Database = config.DatabaseConfig{}
+			c.Cache.Enabled = true
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := defaultTestConfig()
+			tt.mutate(cfg)
+			rec := &recLogger{}
+			opts := &Options{
+				DatabaseConnector: func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+					return &testmocks.MockDatabase{}, nil
+				},
+				MessagingClientFactory: func(string, logger.Logger) messaging.AMQPClient {
+					return testmocks.NewMockAMQPClient()
+				},
+			}
+
+			bundle, err := newAppBootstrap(cfg, rec, opts).dependencies(context.Background())
+			require.NoError(t, err)
+			t.Cleanup(func() { (&Builder{bundle: bundle}).closeBundleManagers() })
+
+			assert.Equal(t, tt.wantWarn, loggedCount(rec, "No database configured"))
+		})
+	}
+}
+
 // TestCloseManagersOnDependencyErrorStopsCleanup pins the ADR-067 leak fix's building
 // block: Close is the only externally-observable side effect available — DbManager and
 // messaging.Manager expose no Closed() accessor — so this drives both managers through

@@ -509,6 +509,13 @@ func (f *testAppFixture) rebuildLifecycle() {
 	f.app.registerSlotClosers()
 }
 
+// replan re-plans the fixture after a test edited its cfg: each slot holds the row planned at
+// install, so an edit the plan reads is invisible to the slots until this runs.
+func (f *testAppFixture) replan() {
+	f.app.installSlots(fixturePlan(f.app.cfg))
+	f.rebuildLifecycle()
+}
+
 func withSignalHandler(handler SignalHandler) fixtureOption {
 	return func(f *testAppFixture) {
 		f.app.signalHandler = handler
@@ -862,6 +869,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 			name: "database not configured",
 			prepare: func(f *testAppFixture) {
 				f.app.cfg.Database = config.DatabaseConfig{}
+				f.replan()
 				f.messaging.SetReady(true)
 			},
 			expectedStatus: http.StatusOK,
@@ -1261,6 +1269,7 @@ func perTenantMessagingFixture(t *testing.T, client messaging.AMQPClient) *testA
 	f.db.On(methodHealth, mock.Anything).Return(nil)
 	f.app.cfg.Multitenant.Enabled = true
 	f.app.cfg.Messaging.Consumers.Critical = true
+	f.replan()
 	f.useMessagingManager(t, messagingManagerOn(t, &tenantOnlyBrokerSource{}, client), testTenantID)
 
 	return f
