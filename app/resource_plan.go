@@ -5,6 +5,10 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 )
 
+// Every plan DECISION in this file is written as ==/!= comparisons, never a tagged switch: gremlins
+// derives no mutant from a tagged switch, so a decision spelled as one is invisible to the
+// mutation gate. Display-only String methods may stay switches.
+
 // resourcePlan is the Resource plan (CONTEXT.md, ADR-126): for each resource kind, its Tenancy
 // and what the control-plane key "" holds for it, fixed once when the application is built.
 // Startup readers ask its answers instead of re-deriving them from config and Options. It is
@@ -130,14 +134,14 @@ func (p resourcePlan) refusesStreams() bool { return p.messaging.tenancy == perT
 
 // sealTenancy maps the messaging row onto ADR-097's three seal tenancies.
 func (p resourcePlan) sealTenancy() messaging.SealTenancy {
-	switch p.messaging.tenancy {
-	case perTenantTenancy:
+	// ==, not a tagged switch: a switch yields zero gremlins mutants, hiding this decision from the mutation gate.
+	if p.messaging.tenancy == perTenantTenancy {
 		return messaging.SealTenancyPerTenant
-	case sharedTenancy:
-		return messaging.SealTenancyShared
-	default:
-		return messaging.SealTenancyDisabled
 	}
+	if p.messaging.tenancy == sharedTenancy {
+		return messaging.SealTenancyShared
+	}
+	return messaging.SealTenancyDisabled
 }
 
 // planResources plans from a validated cfg, opts (may be nil) and store, the instance
@@ -177,14 +181,13 @@ func presenceOf(ledger driftLedger, in planInputs, kind string) keyPresence {
 // rootBlockPresence is config.TenantStore's answer for "": the content tests it applies before
 // answering not_configured.
 func rootBlockPresence(cfg *config.Config, kind string) keyPresence {
-	var present bool
-	switch kind {
-	case componentDatabase:
+	// ==, not a tagged switch: a switch yields zero gremlins mutants, hiding this decision from the mutation gate.
+	present := cfg.Cache.Enabled
+	if kind == componentDatabase {
 		present = config.IsDatabaseConfigured(&cfg.Database)
-	case componentMessaging:
+	}
+	if kind == componentMessaging {
 		present = config.IsMessagingConfigured(&cfg.Messaging)
-	default:
-		present = cfg.Cache.Enabled
 	}
 	if present {
 		return keyPresent
@@ -271,7 +274,7 @@ func callerSource(in planInputs) bool { return in.opts != nil && in.opts.Resourc
 // todaysLedger pins every answer where a reader differs from the rule today, each row naming
 // the reader it reproduces, so planning under it changes no behavior (ADR-126).
 var todaysLedger = driftLedger{
-	// D1: read through presenceOf (resource_plan.go:162) by cacheSlot.describe (slot.go:307)
+	// D1: read through presenceOf (resource_plan.go:166) by cacheSlot.describe (slot.go:307)
 	// and cacheSlot.preInit (slot.go:335); reproduces the cache's absence verdict exempting
 	// ANY caller-supplied ResourceSource, so both lease "" whatever cache.enabled says.
 	presence: func(in planInputs, kind string) (keyPresence, bool) {
