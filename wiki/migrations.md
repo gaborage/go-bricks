@@ -55,7 +55,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E67 | v0.66.0 → v0.67.0 | breaking (C67.1 — `go-bricks-migrate` maps the run verdict onto three exit codes: 0 clean, 1 split fleet, 2 no tenant dispatched, where every failure used to exit 1 and an empty listing exited 0, and every misuse now exits 2 where it exited 1; the `--json` summary record keeps `total` and adds `listed`, `attempted`, `failed`, `not_attempted` and `verdict`, and is emitted on the exit-2 paths too) + silent-behavior (C67.2 — the ADR-113 redeclare pass gains a second driver: every publisher client the manager pools for a key, not only the registry's own, so a publisher-only service that never re-declared at all now repairs its topology on every reconnect, and a newly pooled publisher costs one pass on creation and on each re-creation after an eviction, though only clients that are or embed what `NewAMQPClient` returns can be sources at all; the added work is T registries × M pooled publishers of idempotent declares, off the publish path) | 1 | none — the CLI is a binary, so nothing a Go build catches; a pipeline that branches on the exit code or parses the summary record is the whole population; and nothing for C67.2, which moves no signature and changes only how often the framework re-declares | read every pipeline step that runs `go-bricks-migrate` and decide what a zero-tenant environment should do BEFORE the bump: it exits 2 where it exited 0; and for C67.2 size the declare traffic if your fleet is large, since a broker restart now costs one pass per registry AND per pooled publisher |
 | E68 | v0.67.0 → v0.68.0 | silent-behavior (C68.1 — the health/ready probe exemption is keyed on the route the ROUTER matched plus a GET/HEAD method check, where it compared the decoded `r.URL.Path` and ignored the method, so a non-GET/HEAD request on a probe path and a percent-encoded spelling of one are no longer exempt from tenant resolution, the forwarded-client-cert identity, OTel and module global middleware; `server.CreateProbeSkipper` moves to `server/probe_skip.go` and answers from `r.Pattern` with the raw path as fallback, its exported signature unmoved) | 1 | none — no signature moves; the exemption narrows under you, and it narrows fail-closed (middleware runs where it used to be skipped) | decide whether any probe or monitor of yours calls a probe path with a method other than GET or HEAD, since that request now runs the identity chain — under `multitenant` it answers 400 without a tenant header, under `forwardedclientcert.require` 401 without a client certificate — and if a custom `server.SkipperFunc` of yours exempts anything, key it on `r.Pattern` rather than `r.URL.Path` |
 | E69 | v0.68.0 → v0.69.0 | breaking (C69.3 — a service built on `server.New` without `app` that registers one method+path twice through `ModuleGroup`/`RootGroup` used to boot with the LATER handler serving; now the first handler keeps the route and `Server.Start` returns a `*server.DuplicateRouteError` matching `server.ErrDuplicateRoute` before either listener binds; the probes register first, so a module route at GET/HEAD `<base>/health` or `<base>/ready` that used to take the path over now never runs, and a `server.path.health` equal to `server.path.ready` that used to let readiness replace health now refuses `Start` with `dispatchReady` as the duplicate; templates differing only in a parameter or wildcard name (`/users/:id`, `/users/:uid`) now conflict, under `app` too, where an identical duplicate and both probe cases already failed startup) + breaking (C69.5 — a `Mandatory: true` publish the broker returns as unroutable now fails with `ErrPublishRetriesExhausted` wrapping the new `ErrPublishUnroutable` after `reconnect.maxpublishattempts`, where the client discarded the `basic.return` and reported the `basic.ack` that followed it as a success; non-mandatory publishes and the outbox relay are unchanged) + silent-behavior (C69.6 — a stream or super stream the broker lost while the service ran is reported once at ERROR per consumer or publisher on it and keeps the non-critical `streams` component unhealthy until a restart, and a lost consumer's shutdown offset flush is skipped, so the restart replays what it handled since its last commit) + breaking (C69.1 — `/ready` answers `{"status":"ready"}` on 200 and `{"status":"not ready"}` on 503 and nothing else, on the probe listener and the application listener alike: `time`, `app` (name/environment/version), every per-kind status key (`database`, `messaging`, `cache`, `streams`), every `<kind>_stats` object and ADR-048's `"<kind> unavailable"` error text all leave both bodies, where an orchestrator reading only the status code is unaffected and anything parsing the body loses every key but `status`) + compile-break (C69.2 — the exported field `HealthStatus.PublicErr` is deleted along with `publicProbeError`, so code that sets it stops compiling) + breaking (C69.4 — a typed handler whose request type, after one pointer level, is not a struct, or is `time.Time` or a type convertible to it, panics at registration naming the method, the full path and the type, where it used to boot and then fail every request to that route: most kinds panicked inside the tag binder into a 500 (a 400 when echo's JSON binder rejected the body first), and `time.Time` answered 400; `server.WrapHandler` panics the same way when the wrapper is built) + additive-optional (C69.7 — `Builder.WithBearerTokenFile` sends `Authorization: Bearer` read from a file that rotates on disk, re-read on an interval; a client that does not call it is unchanged) | 7 | C69.3 only partially — `RouteConflict` gains a `FirstPath` field, so an unkeyed `server.RouteConflict{...}` literal stops compiling; the refusal itself surfaces at `Start`; none for C69.5 — no signature moves, and a call that returned nil now returns an error; none for C69.6 — no signature moves and no configuration key changes; and C69.2 — `go build ./... && go vet ./...` names every assignment, `_test.go` files included; nothing for C69.1, whose population is body readers OUTSIDE the Go build — a `map[string]any` read of a deleted key compiles and returns `nil`, and a dashboard panel or alert rule keyed on a vanished JSON path goes quiet instead of failing; none — the request type is inferred from the handler signature, so the build passes and the panic surfaces at startup; nothing for C69.7, which only adds API | on the current version, call `srv.RouteConflicts()` after every registration: non-empty means `Start` will refuse after the bump — remove or rename the duplicate it names; where the first registrant is a probe, serve custom readiness through `Server.RegisterReadyHandler`, move the probe with `server.path.health`/`server.path.ready` (two distinct values), or move the module route; also compare each method's templates with parameter and wildcard names erased; for C69.5, grep your publisher declarations for a `Mandatory` set to anything but a literal `false`, assigned after construction included, and before the bump confirm that every binding those publishes rely on exists in every environment, since a publish that was silently dropped now fails the caller; nothing for C69.6; and for C69.1, inventory every reader of the `/ready` BODY, as opposed to its status code — smoke tests, `jq` scrapes, synthetic monitors, dashboard panels, alert rules — and repoint it at `app.readiness.status`, the `messaging.consumer.*` / `messaging.streams.*` gauges, `cache.manager.*` or `/_sys/health-debug` BEFORE the bump — `db.client.connection.*` is the DRIVER's pool and NOT a replacement for `database_stats`, whose `DbManager` resourcepool counters no instrument covers and which therefore stay on the debug view; the gauges ship in this same release, so the replacement signal exists the moment the body does not; and boot every service once before rolling the bump out: a refused route aborts startup with `server: handler registration failed for <METHOD> <path>: request type <T> must be a struct…`, and the fix is to wrap the value in a struct field; and for C69.7, nothing unless you adopt it in place of a hand-written token-file interceptor — then delete that interceptor, since interceptors run after the option and would overwrite the header |
-| E70 | v0.69.0 → v0.70.0 | breaking (C70.1 — construction fails when `source.type` is `dynamic` without an `app.Options.ResourceSource` whose `IsDynamic()` is true, or is `static` beside one whose `IsDynamic()` is true, where all three booted; a single-tenant `source.type` outside `static`/`dynamic` fails `config.Validate`, where it booted reading as static) | 1 | none | if any environment sets `source.type` or your code passes `app.Options.ResourceSource`, make them agree before the bump: `dynamic` exactly when the resource source's `IsDynamic()` returns true (C70.1) |
+| E70 | v0.69.0 → v0.70.0 | breaking (C70.1 — construction fails when `source.type` is `dynamic` without an `app.Options.ResourceSource` whose `IsDynamic()` is true, or is `static` beside one whose `IsDynamic()` is true, where all three booted; a single-tenant `source.type` outside `static`/`dynamic` fails `config.Validate`, where it booted reading as static) + breaking (C70.2 — a resource source whose `IsDynamic()` is false is asked for `""` once per kind at build under `app.startup.<kind>`, and a lookup error other than not-configured fails construction) + breaking (C70.3 — beside such a store, its answer for `""`, not the root blocks, decides the absence WARN, the `DatabaseRequirer` abort, the #366 declarations gate, the fatal pre-init and `ModuleDeps.*Configured`) + breaking (C70.4 — multi-tenant `messaging.tenancy: shared` pre-initializes the control-plane broker at build, and without one reads `MessagingConfigured` false, refuses its declarations and reports `not_configured` where it reported `per_tenant`) + silent-behavior (C70.5 — a single-tenant dynamic store's messaging declarations no longer abort on an empty root broker) + silent-behavior (C70.6 — the single-tenant cache pre-warms, and a `""` known absent is no longer pre-warmed) | 6 | none | if any environment sets `source.type` or your code passes `app.Options.ResourceSource`, make them agree before the bump: `dynamic` exactly when the resource source's `IsDynamic()` returns true (C70.1); if the store reports `false`, make it answer `""` with a configuration or a not-configured error, within `app.startup.<kind>` (C70.2), and read what that answer now decides (C70.3); and under multi-tenant `messaging.tenancy: shared`, confirm the control-plane broker is set and reachable at startup, or that no module declares messaging (C70.4) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 
@@ -1197,7 +1197,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   database config at runtime rather than from the root block: multi-tenant (config
   validation rejects a root block alongside static tenants), a dynamic config source
   (`source.type: dynamic`), and a caller-supplied `Options.ResourceSource` that reports
-  `IsDynamic()`. Declaring nothing leaves behavior byte-for-byte unchanged, so this is
+  `IsDynamic()`. *(Superseded by `[C70.3]`, ADR-127: the abort and the WARN fire exactly
+  when the database resolves on `""` and the store serving `""` answered not-configured at
+  build — multi-tenant and dynamic-store deployments never fire them, and a static caller
+  store's answer decides, not the root block.)* Declaring nothing leaves behavior byte-for-byte unchanged, so this is
   adopt-only. The abort is a `*config.ConfigError` in the `missing` category — not
   `not_configured`, so the framework's own skip-and-degrade idiom
   (`config.IsNotConfigured`) cannot swallow it.
@@ -10795,7 +10798,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - ref: gaborage/go-bricks#1815 · `httpclient/bearer_file.go` (`WithBearerTokenFile`,
   `newBearerTokenFile`, `bearerTokenFile.current`)
 
-## E70 · v0.69.0 → v0.70.0 — `source.type` must agree with the resource source
+## E70 · v0.69.0 → v0.70.0 — `source.type` must agree with the resource source + what the control-plane key holds decides every startup gate, flag and lease
 
 - gist: `source.type` and `app.Options.ResourceSource.IsDynamic()` both say whether the resource
   keys resolve at runtime, and nothing made them agree. The outbox and inbox modules can read only
@@ -10805,6 +10808,16 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   store behind a static `source.type` was probed by the outbox/inbox `Init` but exempted by the
   app. Construction now refuses any disagreement before anything is dialed, and `source.type` is
   enum-checked in every mode (C70.1, ADR-125).
+- gist: each startup reader — the database-absence WARN, the `DatabaseRequirer` abort, the #366
+  declarations gate, `ModuleDeps.*Configured`, pre-init, pre-warm and the readiness label — kept
+  its own exemption set, and the sets disagreed. One rule now decides them all from each kind's
+  Tenancy and what the control-plane key `""` holds: unavailable when the kind resolves on `""`
+  and `""` is known absent, pre-initialized when `""` is known present, pre-warmed unless `""` is
+  known absent. What `""` holds is the answer of the store serving it, so a static
+  `Options.ResourceSource` is now asked at build and a lookup error fails startup (C70.2); its
+  answer, not the root blocks, decides availability (C70.3); shared messaging is pre-initialized,
+  or unavailable without a control-plane broker (C70.4); a dynamic store's messaging declarations
+  no longer abort on an empty root broker (C70.5); and the cache pre-warms (C70.6). ADR-127.
 
 ### [C70.1] `source.type` must agree with `Options.ResourceSource`, and is enum-checked in every mode · breaking · when: match
 
@@ -10844,8 +10857,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
     pre-init already did. `[C57.4]`'s opt-out ("set `source.type: dynamic`") now needs this store.
   - The same store under `multitenant.enabled` with an outbox or inbox fanning out per tenant:
     return `false` from `IsDynamic()` instead, because those modules reject dynamic multi-tenant
-    sources, and under multi-tenancy `IsDynamic()` changes nothing in the app builder, which already
-    skips pre-init and the root-database check there.
+    sources. The build then asks the store for `""`, so answer it as `[C70.2]` requires.
   - `source.type: dynamic` with no resource source: delete the key, since the built-in static store
     is what served the keys all along (a root `database:` block then gets pre-init and the absence
     checks it skipped), or pass the dynamic store you meant to.
@@ -10861,6 +10873,130 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `check`) · `config/multitenant_section.go` (`normalizeSource`, `validateSourceConfig`) ·
   [outbox.md](outbox.md#startup-verification) ·
   [MULTI_TENANT.md](../MULTI_TENANT.md#custom-tenant-store-implementation)
+
+### [C70.2] a static `Options.ResourceSource` is asked for `""` at build, and a lookup error fails startup · breaking · when: match
+
+- detect: `git grep -nE 'ResourceSource[[:space:]]*:' -- '*.go'` for the store you pass, then
+  `git grep -nE 'IsDynamic\(\)[[:space:]]*bool' -- '*.go'` and read what that store's
+  `IsDynamic()` returns.
+- scope: construction now calls a store whose `IsDynamic()` returns false for the control-plane
+  key `""`: `DBConfig(ctx, "")`, `BrokerURL(ctx, "")` and `CacheConfig(ctx, "")`, once each, in
+  every mode, before any manager exists (`CacheConfig` is skipped beside an
+  `Options.CacheConnector`). Each call runs under its kind's `app.startup.database`,
+  `app.startup.messaging` or `app.startup.cache` budget (10s, 10s, 5s by default, or
+  `app.startup.timeout` when set). A nil error reads the kind present; an error satisfying
+  `config.IsNotConfigured` reads it absent; any other error, a spent budget included, fails
+  construction with `dependency resolution failed: resource plan: <kind> lookup of the
+  control-plane key "": <cause>`, where the store was never called at build. Unchanged: no
+  resource source (the built-in store's answers are the root-block tests it always applied), and
+  a store reporting true, which is never asked.
+- gate: match = your code passes an `Options.ResourceSource` whose `IsDynamic()` returns false.
+  no-match = no resource source, or one whose `IsDynamic()` returns true.
+- apply: make the store's answer for `""` honest, per kind: a configuration where it serves the
+  kind on `""`, `config.NewNotConfiguredError(...)` where it does not — never a tenant-not-found
+  error, and never an empty configuration with a nil error, which reads present and is then
+  leased at build (`[C70.3]`). Honour `ctx`. A lookup that needs a network round trip must fit its
+  `app.startup.<kind>` budget; raise the budget, or report `IsDynamic()` true with
+  `source.type: dynamic` (`[C70.1]`) if `""` is genuinely knowable only at runtime.
+- verify: boot every environment. A failure names the kind and the key; a boot that passes needs
+  nothing more.
+- ref: [ADR-127](adr_127_resource_plan_rule.md) · `app/resource_plan.go` (`planResources`,
+  `presenceOf`, `lookupControlPlaneKey`) · `app/bootstrap.go` (`dependencies`) ·
+  [MULTI_TENANT.md](../MULTI_TENANT.md#custom-tenant-store-implementation)
+
+### [C70.3] a static caller store's answer for `""`, not the root blocks, decides whether a kind is available · breaking · when: match
+
+- detect: as `[C70.2]`, then `git grep -nE 'RequiresDatabase|DBConfigured|MessagingConfigured|CacheConfigured|DeclareMessaging' -- '*.go'`
+  for what reads the answer.
+- scope: beside a store whose `IsDynamic()` returns false, a kind that resolves on `""` —
+  every kind in single-tenant mode, messaging under `messaging.tenancy: shared` — is available
+  exactly when the store served its `""` at build, where the database and messaging were judged
+  from the root `database:` and `messaging.broker.url` blocks and the cache always read present.
+  A store serving `""` beside an empty root block: the WARN `No database configured - …` is
+  gone, a `DatabaseRequirer` module registers, messaging declarations boot, and the database and
+  messaging pre-init lease `""` at build and fail startup (`<kind> connection failed during
+  startup`) when it cannot be reached. A store not serving `""`: `DBConfigured`,
+  `MessagingConfigured` and `CacheConfigured` read false where they read true, and the cache
+  probe and pre-init stop leasing `""` (both already read not-configured); where the root blocks
+  are set, the database pre-init no longer fails startup on the store's not-configured `""` —
+  the service boots with the absence WARN, a `DatabaseRequirer` module aborts registration, and
+  messaging declarations abort startup. Under `multitenant.enabled` the database and cache resolve
+  per tenant, so only the cache probe's lease changes.
+- gate: match = `[C70.2]` matches and the service runs single-tenant or with
+  `messaging.tenancy: shared`. no-match = otherwise.
+- apply: decide, per environment, what the store answers for `""` — that answer is now the whole
+  truth, and the root blocks beside it are ignored. A store meant to serve the control plane
+  serves `""`; one that does not, leaves `DatabaseRequirer` modules and messaging declarations
+  out of that deployment. Code that branched on a `*Configured` flag being true beside the store
+  keeps working only where the store serves `""`.
+- verify: boot every environment and read the startup log: the absence WARN and the flags now
+  match the store's answer.
+- ref: [ADR-127](adr_127_resource_plan_rule.md) · `app/resource_plan.go` (`kindPlan.unavailable`,
+  `kindPlan.preInits`) · `app/bootstrap.go` (`markConfigured`, `warnIfDatabaseAbsent`) ·
+  `app/module.go` (`ModuleDeps.DBConfigured`, `DatabaseRequirer`)
+
+### [C70.4] shared messaging is pre-initialized, and without a control-plane broker it is unavailable · breaking · when: match
+
+- detect: `git grep -nE 'tenancy:[[:space:]]*shared|MESSAGING_TENANCY' -- '*.yaml' '*.yml' '*.env'`
+  in the `messaging:` section, beside `multitenant.enabled: true` (env `MULTITENANT_ENABLED`).
+- scope: under `multitenant.enabled` with `messaging.tenancy: shared`, messaging resolves on `""`,
+  and the rule now treats it so. With a control-plane broker (`messaging.broker.url`, or a static
+  store serving `""`): the publisher for `""` is leased at build under `app.startup.messaging`, so
+  an unreachable broker fails startup (`messaging connection failed during startup`) where it
+  booted and reconnected. Without one: `MessagingConfigured` reads false where it read true; any
+  messaging declarations abort startup with `messaging declarations were registered … but
+  messaging is not configured`, where a set with no consumer booted with the WARN `Failed to start
+  consumers on the control-plane key` and a consumer set aborted with `failed to start consumers
+  on the control-plane key`; and the messaging readiness status, on `/_sys/health-debug` and the
+  `app.readiness.status` gauge under `readiness.kind=messaging`, reads `not_configured` where it
+  read `per_tenant`. Behind a dynamic store, a `""` it answers not-configured at runtime reads
+  `not_configured` too.
+- gate: match = `multitenant.enabled: true` and `messaging.tenancy: shared`. no-match = otherwise
+  (single-tenant `shared` is the ADR-041 no-op and moves only as `[C70.3]` says).
+- apply: give the control plane its broker — `messaging.broker.url`, or the store's `""` — and
+  make it reachable at startup, or raise `app.startup.messaging`. A deployment with no broker at
+  all removes its messaging declarations. Repoint an alert or dashboard that expected
+  `per_tenant` for messaging at `not_configured`.
+- verify: boot; with declarations and no broker the startup error names messaging; with a broker
+  the startup log shows the pre-init.
+- ref: [ADR-127](adr_127_resource_plan_rule.md) (amends ADR-066 rule 1) · `app/slot.go`
+  (`messagingSlot.preInit`, `messagingSlot.describe`) · `app/lifecycle.go`
+  (`assertMessagingConfiguredIfDeclared`)
+
+### [C70.5] a single-tenant dynamic store's messaging declarations no longer abort on an empty root broker · silent-behavior · when: match
+
+- detect: `[C70.2]`'s detect, for a store whose `IsDynamic()` returns true, beside no
+  `messaging.broker.url` (env `MESSAGING_BROKER_URL`) in single-tenant mode.
+- scope: the #366 gate read the root broker URL, never the store, so it refused declarations the
+  dynamic store could serve. It now reads the plan, where a dynamic store's `""` is knowable only
+  at runtime, so startup passes it. Declared consumers still replay on `""` through the store at
+  startup and abort (`failed to start consumers on the control-plane key`) when it does not serve
+  `""`; a set with no consumer boots and resolves `""` on first publish.
+- gate: match = single-tenant, a dynamic store, messaging declarations, and no root broker URL.
+  no-match = otherwise.
+- apply: nothing, unless the abort served as your "broker configuration missing" check: then
+  have the store fail loudly on `""`, or declare the consumer that makes startup replay it.
+- verify: boot with the store serving `""`: startup passes the gate.
+- ref: [ADR-127](adr_127_resource_plan_rule.md) · `app/lifecycle.go`
+  (`assertMessagingConfiguredIfDeclared`)
+
+### [C70.6] the cache pre-warms at startup, and a `""` known absent is no longer pre-warmed · silent-behavior · when: match
+
+- detect: `git grep -nE 'CACHE_ENABLED|CacheConnector' -- '*.go' '*.yaml' '*.yml' '*.env'`, and a
+  `cache:` block with `enabled: true`.
+- scope: in single-tenant mode, a cache whose `""` is not known absent — root `cache.enabled`, an
+  `Options.CacheConnector`, a static store serving it, or a dynamic store — is leased once more in
+  `prepareRuntime`, after pre-init: the INFO `Pre-warmed control-plane cache connection`, or a
+  failure folded into the advisory WARN `Pre-warming completed with warnings`, never fatal. The
+  database and messaging pre-warm stop leasing a `""` already known absent; only a Debug line
+  goes, and the pools' failed-create counts on `/_sys/health-debug` no longer grow by one at
+  startup.
+- gate: match = single-tenant with a cache. no-match = no cache, or multi-tenant.
+- apply: none. Expect the new INFO line and one more cache round trip at startup; an alert keyed
+  on the pre-warm WARN now also fires on a cache unreachable at startup.
+- verify: boot; the startup log carries the cache pre-warm line.
+- ref: [ADR-127](adr_127_resource_plan_rule.md) · `app/slot.go` (`cacheSlot.start`) ·
+  `app/slot.go` (`preWarmKind`)
 
 ---
 

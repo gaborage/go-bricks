@@ -128,13 +128,14 @@ function whose every call returns a `*config.ConfigError` satisfying
 `config.IsNotConfigured`, so `if deps.Cache == nil` is dead code. Test the error when you
 have already resolved, or read `deps.CacheConfigured` when you only need the answer (the
 `DB` and `Messaging` accessors share the contract and the flag shape: `DBConfigured`,
-`MessagingConfigured`). The flags speak for the ROOT config, which is the only thing knowable
-before a request carries a tenant. False is definitive: the root resolver would fail every call.
-True means the root cache is wired, or that the answer is per key at runtime — multi-tenant, a
-dynamic config source, a caller-supplied `ResourceSource`, a custom `CacheConnector`. In every
-per-key mode a resolve can still return `IsNotConfigured` for the tenant in hand, so the flag
-never replaces the accessor's error path — it only spares you a throwaway resolve when the
-answer is already no.
+`MessagingConfigured`). A flag is false exactly when the kind resolves on the control-plane key
+`""` and the store serving `""` — a static `Options.ResourceSource`, or the built-in one over the
+root blocks — answered not_configured for it at build ([ADR-127](adr_127_resource_plan_rule.md)).
+False is definitive: every call would fail. True means `""` was served at build, a custom
+`CacheConnector` dials the cache, or the answer is per key at runtime — the kind resolves per
+tenant under multi-tenancy, or the store is dynamic. A resolve can still return
+`IsNotConfigured` for the tenant in hand, so the flag never replaces the accessor's error path —
+it only spares you a throwaway resolve when the answer is already no.
 
 ## Key Operations
 

@@ -415,9 +415,10 @@ func (m *UserModule) Init(deps *app.ModuleDeps) error {
 // at first query. Returning false opts out, letting a module gate the requirement
 // on its own construction-time config.
 //
-// Exempt: deployments that resolve database config at runtime rather than from the
-// root block — multi-tenant, source.type: dynamic, and a caller-supplied
-// Options.ResourceSource reporting IsDynamic(). The check never fires there.
+// "No database" means the store serving the control-plane key "" (the root block,
+// or a static Options.ResourceSource) answered not_configured for it at build
+// (ADR-127). Multi-tenant (per-tenant databases) and a dynamic store (IsDynamic(),
+// "" knowable only at runtime) never fire it.
 func (m *UserModule) RequiresDatabase() bool { return true }
 ```
 
@@ -2100,8 +2101,9 @@ type Module struct {
 func (m *Module) Init(deps *app.ModuleDeps) error {
     // deps.Cache is never nil: with no cache configured every call returns an error
     // satisfying config.IsNotConfigured, so `deps.Cache == nil` never fires. Ask the
-    // flag when you only need to know (false is definitive; true can still fail per
-    // tenant), and keep the error path below.
+    // flag when you only need to know (false is definitive: "" resolves the cache and
+    // the store answered not_configured at build; true can still fail per tenant or
+    // at runtime), and keep the error path below.
     if !deps.CacheConfigured {
         deps.Logger.Warn().Msg("No cache configured; user lookups hit the database every time")
     }
@@ -2551,7 +2553,7 @@ func (s *UserService) fetchAndCache(ctx context.Context, c cache.Cache, id int64
 | `cache.ErrInvalidTTL` | Negative TTL provided (zero is valid — it means no expiration) | Fix code - TTL must be non-negative |
 | `cache.OperationError` | Network/Redis error | Log error, fallback to database |
 | `context.DeadlineExceeded` | Operation timeout | Skip cache, continue with database |
-| `config.ConfigError` (category `not_configured`, check with `config.IsNotConfigured(err)`) | Cache not enabled, or no cache for this tenant | Disable cache features gracefully. `deps.CacheConfigured` answers for the ROOT config only — it can be true while this resolve fails for a tenant or runtime-resolved key, so keep handling the error |
+| `config.ConfigError` (category `not_configured`, check with `config.IsNotConfigured(err)`) | Cache not enabled, or no cache for this tenant | Disable cache features gracefully. `deps.CacheConfigured` is false only when `""` resolves the cache and was known absent at build — it can be true while this resolve fails for a tenant or runtime-resolved key, so keep handling the error |
 
 **Health Checks & Monitoring:**
 

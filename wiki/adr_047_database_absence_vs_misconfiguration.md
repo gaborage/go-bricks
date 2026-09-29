@@ -13,6 +13,14 @@
 > below, is deleted. The `DatabaseRequirer` exemption set it held now lives in the Resource plan
 > (`app/resource_plan.go`): the absence WARN and the `DatabaseRequirer` abort both read the
 > database row's `unavailable()` answer.
+>
+> **Amended (2026-09-29, [ADR-127](adr_127_resource_plan_rule.md)):** the exemption set named
+> below — multi-tenant mode, a dynamic config source, a dynamic resource source — is replaced by
+> one rule. The WARN and the `DatabaseRequirer` abort fire exactly when the database resolves on
+> `""` (single-tenant) and the store serving `""` — a static `Options.ResourceSource`, or the
+> built-in store over the root block — answered not_configured for it at build. A caller store
+> serving `""` beside an empty root block no longer WARNs or aborts, and one not serving `""`
+> beside a set root block does. §4 and §5 stand.
 
 ## Context
 

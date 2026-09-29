@@ -6,6 +6,11 @@
 readiness), [ADR-048](adr_048_ready_sanitize_by_default.md) (sanitized `/ready` errors)
 — both preserved; this ADR changes where the readiness decision lives, not what it decides.
 
+> **Amended (2026-09-29, [ADR-127](adr_127_resource_plan_rule.md)):** rule 1's `per_tenant`
+> applies to a kind whose Tenancy is per-tenant, not to every leased kind in a multi-tenant
+> deployment. Messaging under `messaging.tenancy: shared` resolves on `""`, so a not-configured
+> `""` reads `not_configured` there, and the `app.readiness.status` gauge with it.
+>
 > **Amended (2026-09-28, [ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md)):**
 > decision 3, the ONE BODY RULE, is REPLACED. `/ready` renders `{"status":"ready"}` on 200 and
 > `{"status":"not ready"}` on 503 — no `<name>` key, no `<name>_stats` object, no public

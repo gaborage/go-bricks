@@ -1,6 +1,8 @@
 # ADR-041: Shared (Control-Plane) Ledger Tenancy for Outbox/Inbox
 
 > **Extended by [ADR-087](adr_087_messaging_tenancy_and_tenant_stamp.md) (2026-08-30):** §4's deferred consumer half now exists as `messaging.tenancy: shared`, with the tenant carried as an `x-tenant-id` stamp.
+>
+> **Corrected (2026-09-29, [ADR-127](adr_127_resource_plan_rule.md)):** the trade-offs below that rest on "no synchronous external call during startup" and on a pre-warmer that runs only in single-tenant mode no longer hold. The app asks a static `Options.ResourceSource` for `""` at build, once per kind; shared messaging is pre-initialized at build and pre-warmed; and the pre-warm and the shared consumer replay reach `""` through a dynamic store. Custom sources still own `""`.
 
 **Status:** Accepted
 **Date:** 2026-07-23
